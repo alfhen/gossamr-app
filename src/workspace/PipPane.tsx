@@ -25,6 +25,7 @@ import { inWorkstreamPane } from "../lib/proposals";
 import { conversationTitle, usePaneWorkstream } from "./workstreamsStore";
 import { stageText } from "../lib/workstreamStage";
 import { WorkstreamControls } from "./WorkstreamControls";
+import { HeaderStatus } from "./StatusPill";
 import { workstreamSuggestionScene } from "./pipHomeLogic";
 import { TimelineView } from "./Timeline";
 import { useNeedsYou } from "./useNeeds";
@@ -194,22 +195,26 @@ export function usePipChips(workstream: WorkstreamView | null = null) {
 /** The line naming the conversation: "General", or "Workstream: <title> · <Stage>" with only the title cut short. */
 export function ConversationLine({ conversation, workstream }: { conversation: string; workstream: WorkstreamView | null }) {
   return (
-    <p
-      data-pip-conversation={conversation}
-      data-waiting-for-pr={workstream?.waitingForPr || undefined}
-      title={workstream ? `This workstream's own conversation with Pip. ${conversationTitle(workstream)}` : "Pip's conversation for everything that isn't in a workstream"}
-      className="m-0 flex min-w-0 text-sm font-semibold text-ws-ink2"
-    >
-      {workstream ? (
-        <>
-          {/* Only the title is cut: where the workstream stands is what the person most needs to see. */}
-          <span className="min-w-0 truncate">Workstream: {workstream.workstream.title}</span>
-          <span className="shrink-0 whitespace-pre">{` · ${stageText(workstream.stage, workstream.waitingForPr, workstream.reviewBlocking)}`}</span>
-        </>
-      ) : (
-        <span className="truncate">{conversationTitle(null)}</span>
-      )}
-    </p>
+    // The status pill sits beside the line, not in it: the line's own words stay "Workstream: <title> · <Stage>".
+    <div className="flex min-w-0 items-baseline gap-2">
+      <p
+        data-pip-conversation={conversation}
+        data-waiting-for-pr={workstream?.waitingForPr || undefined}
+        title={workstream ? `This workstream's own conversation with Pip. ${conversationTitle(workstream)}` : "Pip's conversation for everything that isn't in a workstream"}
+        className="m-0 flex min-w-0 text-sm font-semibold text-ws-ink2"
+      >
+        {workstream ? (
+          <>
+            {/* Only the title is cut: where the workstream stands is what the person most needs to see. */}
+            <span className="min-w-0 truncate">Workstream: {workstream.workstream.title}</span>
+            <span className="shrink-0 whitespace-pre">{` · ${stageText(workstream.stage, workstream.waitingForPr, workstream.reviewBlocking)}`}</span>
+          </>
+        ) : (
+          <span className="truncate">{conversationTitle(null)}</span>
+        )}
+      </p>
+      {workstream && <HeaderStatus view={workstream} />}
+    </div>
   );
 }
 

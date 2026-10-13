@@ -7,6 +7,7 @@ import type { WorkstreamWither } from "../lib/workstreamWither";
 import { useWorkspace } from "../workspaceStore";
 import { openTicketByKey } from "./jump";
 import { openNeed } from "./needsActions";
+import { showPlanMyWeek } from "./planActions";
 import { usePipHome } from "./pipHomeStore";
 import { usePrefs } from "./prefs";
 import { useTabs } from "./tabsStore";
@@ -101,13 +102,18 @@ export function DayLineView({ line }: { line: DayLine }) {
 }
 
 /** The card itself: pure of the stores, so a test can render it. */
-export function StartMyDayView({ day, onDone, onSent }: { day: StartMyDay; onDone(): void; onSent(): void }) {
+export function StartMyDayView({ day, onDone, onSent, onPlan }: { day: StartMyDay; onDone(): void; onSent(): void; onPlan?(): void }) {
   return (
     <section data-start-my-day aria-labelledby="start-my-day" tabIndex={-1} className="grid max-h-[40vh] shrink-0 gap-2 overflow-y-auto border-b border-ws-sep bg-ws-bar px-3 py-2 outline-none">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
         <h2 id="start-my-day" className="m-0 min-w-0 flex-1 text-sm font-semibold text-ws-ink">
           Start my day
         </h2>
+        {onPlan && (
+          <button type="button" data-day-plan onClick={onPlan} className={`${button} border-transparent text-ws-ink2 underline`}>
+            Plan my week
+          </button>
+        )}
         <button type="button" data-day-sent onClick={onSent} className={`${button} border-transparent text-ws-ink2 underline`}>
           What Jira saw from me
         </button>
@@ -140,5 +146,5 @@ export function StartMyDayCard({ needs, withers, now }: { needs: readonly Need[]
 /** The card with its day worked out, only while it shows: set aside, the tickets are not read at all. */
 function LiveStartMyDay({ needs, withers, now }: { needs: readonly Need[]; withers: Readonly<Record<string, WorkstreamWither>>; now: number }) {
   const day = useStartMyDay(needs, withers, now);
-  return <StartMyDayView day={day} onDone={() => doneForNow(new Date(now))} onSent={() => useTabs.getState().setRoute("sent")} />;
+  return <StartMyDayView day={day} onDone={() => doneForNow(new Date(now))} onSent={() => useTabs.getState().setRoute("sent")} onPlan={showPlanMyWeek} />;
 }

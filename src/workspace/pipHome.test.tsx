@@ -88,8 +88,9 @@ describe("the workstream list on Pip home", () => {
     expect(quiet).toContain("cobweb");
     // The words are in the row for a screen reader, and the web is not.
     expect(quiet).toContain(`<span data-workstream-wither="true" class="sr-only">${text(5)}</span>`);
-    // The meaning is on the row itself too, not only on hover: a short line, hidden from a screen reader that has the sentence.
-    expect(quiet).toContain('<span data-workstream-wither-short="true" aria-hidden="true" class="truncate text-xs text-ws-ink3">No Jira update · 5d</span>');
+    // The meaning is on the row itself too, not only on hover: the status pill says Quiet and its one detail says how long.
+    expect(quiet).toContain('<span data-status="quiet"');
+    expect(quiet).toMatch(/data-workstream-wither-short="" class="min-w-0 truncate">· No Jira update · 5d<\/span>/);
     // With a Jira draft already waiting, the tooltip says where it is.
     const waiting = list({ wither: { [first.workstream.id]: { ...web(3, 5), draftWaiting: true } } });
     expect(waiting).toContain(`title="${text(5)}. A draft is waiting in Needs you."`);

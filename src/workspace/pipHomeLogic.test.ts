@@ -5,8 +5,9 @@ import { HELD_ALL, HELD_BUDGET, HELD_DAILY, HELD_PERSON, HELD_QUOTA, HELD_RESTAR
 import type { CodeChange, Intent, ItemRef, Proposal, ProposalState, Run, RunKind, RunState, WorkstreamStage, WorkstreamView } from "../types";
 import { agentSummary } from "../backend/mockPip";
 import { needs } from "../lib/needs";
+import { workstreamStatus } from "../lib/workstreamStatus";
 import { NO_FILTERS, groupRuns, laneCount, laneOf, summaryLine } from "./agentsLogic";
-import { planRewriteDraft, batchable, composerFooter, draftStep, workstreamSuggestionScene, FIX_ROUNDS, lastHeldAt, nextStep, retiredStepDrafts, shortHeld, stepChips, stepDrafts, STEP_KINDS, workstreamStatus } from "./pipHomeLogic";
+import { planRewriteDraft, batchable, composerFooter, draftStep, workstreamSuggestionScene, FIX_ROUNDS, lastHeldAt, nextStep, retiredStepDrafts, shortHeld, stepChips, stepDrafts, STEP_KINDS } from "./pipHomeLogic";
 
 const NOW = Date.parse("2026-09-30T12:00:00Z");
 const iso = (minutesAgo: number) => new Date(NOW - minutesAgo * 60_000).toISOString();
@@ -98,66 +99,13 @@ describe("shortHeld and lastHeldAt", () => {
     for (const reason of reasons) {
       expect(heldText(reason, ["description"])).not.toMatch(/tripwire/i);
       expect(shortHeld(reason, ["description"])).not.toMatch(/tripwire/i);
-      expect(workstreamStatus(view("ws-1", "CA-401", { heldReason: reason }), [])).not.toMatch(/tripwire/i);
+      expect(workstreamStatus(view("ws-1", "CA-401", { heldReason: reason }), []).detail ?? "").not.toMatch(/tripwire/i);
     }
   });
 
   it("takes the last hold in the audit", () => {
     expect(lastHeldAt([{ action: "opened", at: iso(9) }])).toBeNull();
     expect(lastHeldAt([{ action: "held", at: iso(9) }, { action: "resumed", at: iso(8) }, { action: "held", at: iso(3) }])).toBe(iso(3));
-  });
-});
-
-describe("workstreamStatus", () => {
-  const all = ["r1", "r2", "r3"];
-  const status = (runs: Run[], over: Parameters<typeof view>[2] = {}) => workstreamStatus(view("ws-1", "CA-401", { runs: all, ...over }), runs);
-
-  it("puts a hold first, then waiting for the PR, then the furthest run going", () => {
-    const going = [run("r1", "plan", "working"), run("r2", "build", "queued")];
-    expect(status(going, { heldReason: HELD_BUDGET, waitingForPr: "r1" })).toBe("Held: budget");
-    expect(status(going, { heldReason: HELD_PERSON })).toBe("Held by you");
-    expect(status(going, { waitingForPr: "r1" })).toBe("waiting for PR");
-    expect(status(going)).toBe("Plan running");
-    expect(status([run("r1", "plan", "launching"), run("r2", "review", "working")])).toBe("Review running");
-  });
-
-  it("says it waits on the reporter once nothing is running or queued, ahead of Needs you and Idle", () => {
-    const waiting = { ...view("ws-1", "CA-401", { runs: all, stage: "triage" }), waitingOnReporter: { since: iso(60) } };
-    expect(workstreamStatus(waiting, [run("r1", "triage", "done")])).toBe("Waiting on the reporter");
-    expect(workstreamStatus(waiting, [run("r1", "triage", "working")])).toBe("Triage running");
-    expect(workstreamStatus({ ...waiting, workstream: { ...waiting.workstream, heldReason: HELD_PERSON } }, [])).toBe("Held by you");
-    expect(workstreamStatus(waiting, [], 1)).toBe("Waiting on the reporter");
-  });
-
-  it("says queued, then Needs you, then a failure, then Idle or Done", () => {
-    expect(status([run("r1", "build", "queued"), run("r2", "plan", "needsAnswer")])).toBe("Build queued");
-    expect(status([run("r1", "plan", "needsPermission"), run("r2", "investigate", "failed")])).toBe("Needs you");
-    expect(status([run("r1", "investigate", "done", { queuedAt: iso(60) }), run("r2", "triage", "failed", { queuedAt: iso(30) })])).toBe("Triage failed");
-    expect(status([run("r1", "investigate", "failed", { queuedAt: iso(60) }), run("r2", "triage", "done", { queuedAt: iso(30) })], { stage: "triage" })).toBe("Idle");
-    expect(status([run("r1", "review", "done")], { stage: "done" })).toBe("Done");
-    expect(status([])).toBe("Idle");
-  });
-
-  it("says Needs you, not Idle or Done, while a draft or anything else waits on the person in it", () => {
-    expect(status([run("r1", "plan", "done")], { stage: "plan" })).toBe("Idle");
-    expect(workstreamStatus(view("ws-1", "CA-401", { runs: all, stage: "plan" }), [run("r1", "plan", "done")], 2)).toBe("Needs you");
-    expect(workstreamStatus(view("ws-1", "CA-401", { runs: all, stage: "done" }), [run("r1", "review", "done")], 1)).toBe("Needs you");
-    // A run going still says so first.
-    expect(workstreamStatus(view("ws-1", "CA-401", { runs: all }), [run("r1", "build", "working")], 1)).toBe("Build running");
-  });
-
-  it("says changes are needed, never Done, while the newest finished review is blocking, even with its draft waiting", () => {
-    const reviewed = [run("r1", "build", "done", { queuedAt: iso(60) }), run("r2", "review", "done", { queuedAt: iso(30) })];
-    expect(status(reviewed, { stage: "review", reviewBlocking: true })).toBe("Review · changes needed");
-    expect(workstreamStatus(view("ws-1", "CA-401", { runs: all, stage: "review", reviewBlocking: true }), reviewed, 1)).toBe("Review · changes needed");
-    expect(status(reviewed, { stage: "review" })).toBe("Idle");
-    expect(status(reviewed, { stage: "done" })).toBe("Done");
-    // A fix round going says so first.
-    expect(status([...reviewed, run("r3", "build", "working")], { stage: "review", reviewBlocking: true })).toBe("Build running");
-  });
-
-  it("only reads the workstream's own runs", () => {
-    expect(workstreamStatus(view("ws-1", "CA-401", { runs: ["r1"] }), [run("r9", "build", "working")])).toBe("Idle");
   });
 });
 

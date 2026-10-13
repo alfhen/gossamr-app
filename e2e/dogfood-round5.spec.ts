@@ -100,7 +100,9 @@ test.describe("the cobweb says what it is (G4)", () => {
     await openPipHome(page);
     await homeSettled(page);
     const row = workstreamRow(page, "CA-402");
-    await expect(row.locator("[data-workstream-wither-short]")).toHaveText(/^No Jira update · 6d$/);
+    // The sample's runs are going, and Running ranks above Quiet; the cobweb itself (drawn, titled, said) is unchanged.
+    await expect(row.locator("[data-status]")).toHaveText("Running");
+    await expect(row.locator("[data-workstream-wither]")).toHaveText(/^No Jira update for 6 days/);
     await expect(row).toHaveAttribute("title", /^No Jira update for 6 days/);
   });
 });

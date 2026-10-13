@@ -25,7 +25,8 @@ test("a description edited in Jira holds the managed workstream and says why; Re
 
   await editTicket(page, "CA-401", { description: "Someone rewrote the welcome flow: three emails, not two." });
   // The row, the Needs you tray and the rail all say why, and the rail says to read the ticket first.
-  await expect(row.locator("[data-status]")).toHaveText(`· ${DESCRIPTION_HELD}`);
+  await expect(row.locator("[data-status]")).toHaveText("Needs you");
+  await expect(row.locator("[data-status-detail]")).toHaveText(`· ${DESCRIPTION_HELD}`);
   await expect(needOfKind(page, "hold")).toContainText(DESCRIPTION_HELD);
   await expect(banner(page)).toHaveAttribute("data-held-banner", "tripwire:basis_drift");
   await expect(banner(page)).toContainText("Held: the ticket's description changed in Jira");
@@ -42,7 +43,7 @@ test("a description edited in Jira holds the managed workstream and says why; Re
   await expect(stepRail(page).getByRole("switch", { name: "Manage this workstream" })).toHaveAttribute("aria-checked", "true");
   const actions = (await workstreamEvents(page)).map((e) => e.action);
   expect(actions.slice(actions.lastIndexOf("resumed"))).toContain("basis_captured");
-  await expect(row.locator("[data-status]")).not.toContainText("Held");
+  await expect(row.locator("[data-status]")).not.toHaveText("Needs you");
 
   // A run finishes, and Pip's wake about it says once that the ticket changed while it was held.
   await askPip(page, "investigate this");
@@ -57,7 +58,10 @@ test("a description edited in Jira holds the managed workstream and says why; Re
 
   // The basis was taken again, so only a second edit holds it again, and once.
   await editTicket(page, "CA-401", { description: "And rewritten again." });
-  await expect(row.locator("[data-status]")).toHaveText(`· ${DESCRIPTION_HELD}`);
+  await expect(row.locator("[data-status]")).toHaveText("Needs you");
+  // The finished investigation waits to be read too, so the row counts the two; the hold's banner says why.
+  await expect(row.locator("[data-status-detail]")).toHaveText("· 2 waiting");
+  await expect(banner(page)).toHaveAttribute("data-held-banner", "tripwire:basis_drift");
   expect(await driftedLines(page)).toEqual(["description", "description"]);
   expect(await jiraWrites(page)).toEqual([]);
 });
@@ -74,10 +78,11 @@ test("moving a workstream's ticket to another status leaves it be; moving it to 
   expect((await workstreamEvents(page)).filter((e) => e.action === "tripwire")).toEqual([]);
   await expect(pipHome(page).getByRole("listbox", { name: "Workstreams" })).toBeVisible();
   await expect(banner(page)).toHaveCount(0);
-  await expect(row.locator("[data-status]")).not.toContainText("Held");
+  await expect(row.locator("[data-status]")).not.toHaveText("Needs you");
 
   await editTicket(page, "CA-402", { statusId: "Sent" });
-  await expect(row.locator("[data-status]")).toHaveText("· Held: the ticket was moved to Done");
+  await expect(row.locator("[data-status]")).toHaveText("Needs you");
+  await expect(row.locator("[data-status-detail]")).toHaveText("· Held: the ticket was moved to Done");
   await expect(needsYouRow(page, "CA-402")).toContainText("Held: the ticket was moved to Done");
   await expect(banner(page)).toContainText("Held: the ticket was moved to Done");
   await noTripwireText(page);

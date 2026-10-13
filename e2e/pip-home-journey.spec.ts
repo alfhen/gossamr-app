@@ -89,7 +89,8 @@ test("intake to review on Pip home: the person talks to Pip, starts the investig
   await homeSettled(page);
   await expect(homeRunCards(page, "CA-401")).toHaveCount(1);
   await expect(stepChip(page, "investigate").locator("[data-step-needs-you]")).toHaveText("1 needs you");
-  await expect(row.locator("[data-needs-you-badge]")).toHaveText("1 needs you");
+  await expect(row.locator("[data-status]")).toHaveText("Needs you");
+  await expect(row.locator("[data-status-detail]")).toHaveText("· 1 waiting");
   await expect(needsYouTray(page).locator("[data-needs-you-count]")).toHaveText("1");
 
   // Read in place and started there: no sheet, still Pip home.
@@ -245,7 +246,8 @@ test("the Needs you list ranks a hold ahead of a draft to approve, opens each in
   await homeConversationRegion(page).getByRole("button", { name: "Investigate CA-401", exact: true }).click();
   await homeSettled(page);
   await holdBySystem(page, "CA-401", "restart");
-  await expect(row.locator("[data-needs-you-badge]")).toHaveText("2 need you");
+  await expect(row.locator("[data-status]")).toHaveText("Needs you");
+  await expect(row.locator("[data-status-detail]")).toHaveText("· 2 waiting");
   // One row for the workstream; what is stuck (the hold) ranks ahead of a draft to approve, however old each is (R2).
   await expect(needsYouTray(page).locator("[data-needs-you-row]")).toHaveCount(1);
   await expandNeedsYou(page, "CA-401");
@@ -259,7 +261,8 @@ test("the Needs you list ranks a hold ahead of a draft to approve, opens each in
   await expect(needsPane(page)).toContainText("drafted an Investigate agent for CA-401");
   await needsPane(page).getByRole("button", { name: "Skip" }).click();
   await expect(needRow(page, "Start Investigate")).toHaveCount(0);
-  await expect(row.locator("[data-needs-you-badge]")).toHaveText("1 needs you");
+  await expect(row.locator("[data-status]")).toHaveText("Needs you");
+  await expect(row.locator("[data-status-detail]")).toHaveText("· Held after a restart");
 
   // The pane moved on to the hold, with its card focused (no key lands on Resume by accident); Resume clears the need and the badge.
   await expect(needsPane(page)).toHaveAttribute("data-kind", "hold");
@@ -267,7 +270,7 @@ test("the Needs you list ranks a hold ahead of a draft to approve, opens each in
   await expect(needsPane(page)).toBeFocused();
   await resume.click();
   await expect(needsYouCount(page)).toHaveText("0");
-  await expect(row.locator("[data-needs-you-badge]")).toHaveCount(0);
+  await expect(row.locator('[data-status="needs-you"]')).toHaveCount(0);
   await expect(needsYouTray(page)).toContainText("Nothing needs you.");
 });
 
