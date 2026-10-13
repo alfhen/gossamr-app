@@ -666,32 +666,32 @@ describe("a triage that found its ticket not ready to plan", () => {
   const person = (action: string, runId: string, actor: WorkstreamEvent["actor"] = "person"): WorkstreamEvent => ({ workstreamId: "ws-1", seq: 1, at: "2026-09-30T11:00:00Z", actor, action, runId, proposalId: null, digest: null, detail: null });
 
   it("waits for the person, as readiness_of: the newest triage on a ticket, done, not ready, with nothing chosen and no plan since", () => {
-    expect(readinessOf(ws, [triage], notReady, [])).toEqual({ triageRun: "t1", triageLabel: "R1", questions: ["What does done look like?"], at: triage.endedAt });
-    expect(readinessOf(ws, [triage], () => ({ ready: true, questions: [] }), [])).toBeNull();
-    expect(readinessOf(ws, [triage], () => null, [])).toBeNull();
-    expect(readinessOf({ ...ws, mode: "advise" }, [triage], notReady, [])).toBeNull();
-    expect(readinessOf({ ...ws, closedAt: "2026-09-30T12:00:00Z" }, [triage], notReady, [])).toBeNull();
-    expect(readinessOf({ ...ws, heldReason: "person" }, [triage], notReady, [])).not.toBeNull();
-    expect(readinessOf(ws, [{ ...triage, item: null }], notReady, [])).toBeNull();
-    expect(readinessOf(ws, [{ ...triage, state: "working" }], notReady, [])).toBeNull();
+    expect(readinessOf(ws, [triage], notReady, [], [])).toEqual({ triageRun: "t1", triageLabel: "R1", questions: ["What does done look like?"], at: triage.endedAt });
+    expect(readinessOf(ws, [triage], () => ({ ready: true, questions: [] }), [], [])).toBeNull();
+    expect(readinessOf(ws, [triage], () => null, [], [])).toBeNull();
+    expect(readinessOf({ ...ws, mode: "advise" }, [triage], notReady, [], [])).toBeNull();
+    expect(readinessOf({ ...ws, closedAt: "2026-09-30T12:00:00Z" }, [triage], notReady, [], [])).toBeNull();
+    expect(readinessOf({ ...ws, heldReason: "person" }, [triage], notReady, [], [])).not.toBeNull();
+    expect(readinessOf(ws, [{ ...triage, item: null }], notReady, [], [])).toBeNull();
+    expect(readinessOf(ws, [{ ...triage, state: "working" }], notReady, [], [])).toBeNull();
   });
 
   it("is settled by the person's asking, answering or overriding for that triage, and by nobody else's line", () => {
     for (const action of ["readiness_asked", "readiness_answered", "readiness_overridden"]) {
-      expect(readinessOf(ws, [triage], notReady, [person(action, "t1")]), action).toBeNull();
-      expect(readinessOf(ws, [triage], notReady, [person(action, "t1", "pip")]), `${action} by Pip`).not.toBeNull();
-      expect(readinessOf(ws, [triage], notReady, [person(action, "t1", "supervisor")]), `${action} by the supervisor`).not.toBeNull();
-      expect(readinessOf(ws, [triage], notReady, [person(action, "t0")]), `${action} for another triage`).not.toBeNull();
+      expect(readinessOf(ws, [triage], notReady, [], [person(action, "t1")]), action).toBeNull();
+      expect(readinessOf(ws, [triage], notReady, [], [person(action, "t1", "pip")]), `${action} by Pip`).not.toBeNull();
+      expect(readinessOf(ws, [triage], notReady, [], [person(action, "t1", "supervisor")]), `${action} by the supervisor`).not.toBeNull();
+      expect(readinessOf(ws, [triage], notReady, [], [person(action, "t0")]), `${action} for another triage`).not.toBeNull();
     }
   });
 
   it("is replaced by a newer triage, and taken away by a plan started since", () => {
     const newer = run("t2", "triage", 30);
-    expect(readinessOf(ws, [triage, { ...newer, state: "working" }], notReady, [])).toBeNull();
-    expect(readinessOf(ws, [triage, newer], (r) => (r.id === "t2" ? { ready: true, questions: [] } : notReady()), [])).toBeNull();
-    expect(readinessOf(ws, [triage, newer], (r) => (r.id === "t2" ? { ready: false, questions: ["Q?"] } : { ready: true, questions: [] }), [])?.triageRun).toBe("t2");
-    expect(readinessOf(ws, [triage, run("p1", "plan", 40)], notReady, [])).toBeNull();
-    expect(readinessOf(ws, [triage, run("p0", "plan", 1)], notReady, [])).not.toBeNull();
+    expect(readinessOf(ws, [triage, { ...newer, state: "working" }], notReady, [], [])).toBeNull();
+    expect(readinessOf(ws, [triage, newer], (r) => (r.id === "t2" ? { ready: true, questions: [] } : notReady()), [], [])).toBeNull();
+    expect(readinessOf(ws, [triage, newer], (r) => (r.id === "t2" ? { ready: false, questions: ["Q?"] } : { ready: true, questions: [] }), [], [])?.triageRun).toBe("t2");
+    expect(readinessOf(ws, [triage, run("p1", "plan", 40)], notReady, [], [])).toBeNull();
+    expect(readinessOf(ws, [triage, run("p0", "plan", 1)], notReady, [], [])).not.toBeNull();
   });
 
   it("only exists in the view of a managed workstream, and the choices are refused once it doesn't", async () => {

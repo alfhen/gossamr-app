@@ -133,6 +133,12 @@ describe("a workstream waiting on the reporter", () => {
     expect(workstreamWither(post(2), [], NOW)).toMatchObject({ level: 1, text: "Reporter hasn't answered for 2 days" });
   });
 
+  it("is not the reporter's silence once they replied on the ticket, which the audit doesn't say", () => {
+    const events = [line("opened", ago(9)), line("readiness_asked", ago(8), { proposalId: "q" }), line("draft_approved", ago(5, 2), { proposalId: "q" })];
+    const w = workstreamWither(events, [], NOW, { draft: drafts({ q: draft("comment") }), replied: true });
+    expect(w.reporter).toBeUndefined();
+  });
+
   it("is the ordinary cobweb again once the wait is over", () => {
     const events = [line("opened", ago(9)), line("readiness_asked", ago(8), { proposalId: "q" }), line("draft_approved", ago(6), { proposalId: "q" }), line("readiness_answered", ago(5))];
     const w = workstreamWither(events, [run(ago(4))], NOW, { draft: drafts({ q: draft("comment") }) });

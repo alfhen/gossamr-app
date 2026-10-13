@@ -672,7 +672,7 @@ export class MockSupervisor {
         fixRounds,
         planApproved: src.spec.kind === "plan" && runs.planApprovedOf(src.id),
         readinessOverridden: src.spec.kind === "triage" && readinessOverridden(events, src.id),
-        waitingOnReporter: !!reporterFollow(events).waiting,
+        waitingOnReporter: !!reporterFollow(events, workstreams.repliesOf(ws)).waiting,
         pr,
         reviewed: linked.filter((r) => r.spec.kind === "review" && r.spec.buildFromRun === src.id).map((r) => r.spec.prSha ?? null),
         already: already(src, report.verdict, linked, events, pr),

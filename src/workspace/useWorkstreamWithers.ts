@@ -28,7 +28,7 @@ export function withersOf(open: readonly WorkstreamView[], { events, byTicket, r
       events[id] ?? NONE,
       runs.filter((r) => r.spec.workstream === id),
       new Date(now),
-      { draft: (pid) => proposals[pid], turns: turns && turns.length ? turns : null, openedAt: v.workstream.createdAt },
+      { draft: (pid) => proposals[pid], turns: turns && turns.length ? turns : null, openedAt: v.workstream.createdAt, replied: !!v.reporterReplied },
     );
     const draftWaiting = Object.values(proposals).some((p) => !!p && p.state.type === "pending" && isJiraWrite(p.intent) && inWorkstreamPane(p, v.workstream));
     if (w.level > 0) out[id] = { ...w, draftWaiting };

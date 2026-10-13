@@ -947,6 +947,8 @@ export interface WorkstreamView {
   waitingOnReporter?: ReporterWait | null;
   /** The ticket changed (a basis drift) while the workstream waited on the reporter, and the person hasn't chosen since: the held banner says so. */
   changedWhileWaiting?: boolean;
+  /** The wait on the reporter ended with their reply on the ticket (a comment from someone else) and the person hasn't chosen since. Always with `changedWhileWaiting`. */
+  reporterReplied?: boolean;
   budget: BudgetView;
 }
 
@@ -973,6 +975,8 @@ export interface ReadinessStop {
   at: string;
   /** The person asked the reporter and then the ticket changed while they waited: the question is back as "changed: plan now?". */
   changed?: boolean;
+  /** The wait ended with the reporter's reply on the ticket: the question is back as "<KEY>: the reporter replied, plan now?". Always with `changed`. */
+  replied?: boolean;
 }
 
 /**

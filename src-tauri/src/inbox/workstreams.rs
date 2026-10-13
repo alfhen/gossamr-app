@@ -91,6 +91,10 @@ pub struct WorkstreamView {
     /// held banner says so, and Resume leads to the plan decision.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub changed_while_waiting: bool,
+    /// The wait on the reporter ended with their reply on the ticket (a comment from someone else) and the person hasn't
+    /// chosen since. Always with `changed_while_waiting`.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub reporter_replied: bool,
     pub budget: BudgetView,
 }
 
@@ -116,38 +120,68 @@ pub struct ReporterFollow {
     /// then the ticket hasn't changed (`basis_drifted`) and the person hasn't chosen to answer or plan anyway
     /// (`readiness_answered`, `readiness_overridden`) or resumed.
     pub waiting: Option<chrono::DateTime<Utc>>,
-    /// The wait ended because the ticket changed, and the person hasn't chosen since: the readiness question comes back.
+    /// The wait ended because the ticket changed, or because the reporter replied (`replied`), and the person hasn't chosen
+    /// since: the readiness question comes back.
     pub changed: bool,
+    /// The wait ended with a comment on the ticket from someone other than the person, newer than the wait's start: the
+    /// reporter's usual way of answering, which leaves no audit line. Implies `changed`.
+    pub replied: bool,
 }
 
 /// `ReporterFollow` of the audit `events`. Only the person's own lines count as asking, approving, answering, planning
-/// anyway or resuming, and only the supervisor's as the ticket changing.
-pub fn reporter_follow(events: &[WorkstreamEvent]) -> ReporterFollow {
+/// anyway or resuming, and only the supervisor's as the ticket changing. `replies` are the times of the cached ticket's
+/// comments from anyone but the signed-in person (`ticket_replies`), oldest first or not: a Jira comment leaves no audit
+/// line, so one newer than the wait's start ends the wait too, as the reporter's reply. A reply is placed among the audit
+/// lines by its time, so a later choice of the person settles it.
+pub fn reporter_follow(events: &[WorkstreamEvent], replies: &[chrono::DateTime<Utc>]) -> ReporterFollow {
     let mut asked: HashSet<&str> = HashSet::new();
     let mut now = ReporterFollow::default();
+    let mut replies: Vec<chrono::DateTime<Utc>> = replies.to_vec();
+    replies.sort();
+    let mut next = 0;
+    let reply = |now: &mut ReporterFollow, at: chrono::DateTime<Utc>| {
+        if now.waiting.is_some_and(|since| at > since) {
+            *now = ReporterFollow { waiting: None, changed: true, replied: true };
+        }
+    };
     for e in events {
+        while next < replies.len() && replies[next] < e.at {
+            reply(&mut now, replies[next]);
+            next += 1;
+        }
         let person = e.actor == Actor::Person;
         match e.action.as_str() {
             "readiness_asked" | "clarity_asked" if person => {
                 asked.extend(e.proposal_id.as_deref());
                 now.changed = false;
+                now.replied = false;
             }
             "draft_approved" if person && e.proposal_id.as_deref().is_some_and(|p| asked.contains(p)) => {
-                now = ReporterFollow { waiting: Some(e.at), changed: false };
+                now = ReporterFollow { waiting: Some(e.at), changed: false, replied: false };
             }
             "readiness_answered" | "readiness_overridden" if person => now = ReporterFollow::default(),
-            "basis_drifted" if e.actor == Actor::Supervisor && now.waiting.is_some() => now = ReporterFollow { waiting: None, changed: true },
+            "basis_drifted" if e.actor == Actor::Supervisor && now.waiting.is_some() => now = ReporterFollow { waiting: None, changed: true, replied: false },
             "resumed" if person => now.waiting = None,
             _ => {}
         }
     }
+    for at in &replies[next..] {
+        reply(&mut now, *at);
+    }
     now
+}
+
+/// The times of the comments on the cached ticket `t` that someone other than `me` (an account id) wrote, oldest first.
+pub fn replies_of(t: &crate::model::CachedTicket, me: &str) -> Vec<chrono::DateTime<Utc>> {
+    let mut at: Vec<chrono::DateTime<Utc>> = t.comments.iter().filter(|c| c.author.account_id != me).filter_map(|c| chrono::DateTime::parse_from_rfc3339(&c.created).ok()).map(|d| d.with_timezone(&Utc)).collect();
+    at.sort();
+    at
 }
 
 /// The clarity notice of `ws`, if it should show: the ticket is cached and reads thin (`gaps`), no Triage ran in the
 /// workstream (its verdict is the authority), the person hasn't dismissed or asked about it (unless the ticket changed
 /// since they asked), and nothing is waiting on the reporter.
-pub fn clarity_of(ws: &Workstream, runs: &[Run], gaps: &[ClarityGap], events: &[WorkstreamEvent]) -> Option<Clarity> {
+pub fn clarity_of(ws: &Workstream, runs: &[Run], gaps: &[ClarityGap], replies: &[chrono::DateTime<Utc>], events: &[WorkstreamEvent]) -> Option<Clarity> {
     if ws.closed_at.is_some() || ws.item_key.is_none() || gaps.is_empty() {
         return None;
     }
@@ -155,7 +189,7 @@ pub fn clarity_of(ws: &Workstream, runs: &[Run], gaps: &[ClarityGap], events: &[
     if runs.iter().filter(mine).any(|r| r.spec.kind == RunKind::Triage) {
         return None;
     }
-    let follow = reporter_follow(events);
+    let follow = reporter_follow(events, replies);
     let said = |action: &str| events.iter().any(|e| e.actor == Actor::Person && e.action == action);
     if said("clarity_dismissed") || follow.waiting.is_some() || (said("clarity_asked") && !follow.changed) {
         return None;
@@ -253,6 +287,10 @@ pub struct ReadinessStop {
     /// plan now?", with the choices Plan now and Still unclear (ask again).
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub changed: bool,
+    /// The wait ended with the reporter's reply on the ticket (`ReporterFollow::replied`): the question is back as "<KEY>:
+    /// the reporter replied, plan now?". Always with `changed`, and with the same choices.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub replied: bool,
 }
 
 /// The readiness stop of `ws`, if its newest Triage on a ticket is Done and said `Ready to plan: no`: the workstream is
@@ -261,7 +299,7 @@ pub struct ReadinessStop {
 /// ready, takes it away, as does a Plan the person started by hand. `readiness` is what a Triage's report resolves to.
 /// A choice to ask the reporter is undone by the ticket changing while the person waited (`ReporterFollow::changed`): the
 /// stop comes back, flagged `changed`.
-pub fn readiness_of(ws: &Workstream, runs: &[Run], readiness: impl Fn(&Run) -> Option<Readiness>, events: &[WorkstreamEvent]) -> Option<ReadinessStop> {
+pub fn readiness_of(ws: &Workstream, runs: &[Run], readiness: impl Fn(&Run) -> Option<Readiness>, replies: &[chrono::DateTime<Utc>], events: &[WorkstreamEvent]) -> Option<ReadinessStop> {
     if ws.closed_at.is_some() || ws.mode != Mode::Manage {
         return None;
     }
@@ -273,7 +311,8 @@ pub fn readiness_of(ws: &Workstream, runs: &[Run], readiness: impl Fn(&Run) -> O
     let found = readiness(triage).filter(|r| !r.ready)?;
     let chosen = |e: &WorkstreamEvent| e.actor == Actor::Person && matches!(e.action.as_str(), "readiness_asked" | "readiness_answered" | "readiness_overridden") && e.run_id.as_deref() == Some(triage.id.as_str());
     let since = triage.ended_at.unwrap_or(triage.queued_at);
-    let changed = reporter_follow(events).changed;
+    let follow = reporter_follow(events, replies);
+    let changed = follow.changed;
     if (events.iter().any(chosen) && !changed) || runs.iter().filter(mine).any(|r| r.spec.kind == RunKind::Plan && r.queued_at >= since) {
         return None;
     }
@@ -284,6 +323,7 @@ pub fn readiness_of(ws: &Workstream, runs: &[Run], readiness: impl Fn(&Run) -> O
         questions: found.questions,
         at: since,
         changed,
+        replied: follow.replied,
     })
 }
 
@@ -377,6 +417,7 @@ impl WorkstreamView {
             clarity: None,
             waiting_on_reporter: None,
             changed_while_waiting: false,
+            reporter_replied: false,
         }
     }
 }
@@ -398,11 +439,21 @@ fn escalation_events(db: &Db, ws: &Workstream) -> Result<Vec<WorkstreamEvent>> {
     Ok(all.into_iter().filter(kept).collect())
 }
 
-/// The clarity gaps of the ticket workstream `ws` is on, as its description reads in the cache; none without a ticket,
-/// a cached one, or when the workstream is closed.
-fn ticket_gaps(db: &Db, scope: &Scope, ws: &Workstream) -> Result<Vec<ClarityGap>> {
-    let Some(key) = ws.item_key.as_deref().filter(|_| ws.closed_at.is_none()) else { return Ok(Vec::new()) };
-    Ok(db.item(&Core::item(scope, key))?.map(|work| clarity_gaps(&work.body.plain_text())).unwrap_or_default())
+/// What the cached ticket of a workstream says that its view needs: its clarity gaps, and when someone other than the
+/// signed-in person commented on it (`replies_of`).
+#[derive(Clone, Debug, Default)]
+struct TicketFacts {
+    gaps: Vec<ClarityGap>,
+    replies: Vec<chrono::DateTime<Utc>>,
+}
+
+/// The `TicketFacts` of the ticket workstream `ws` is on, as it reads in the cache; none without a ticket, a cached one,
+/// or when the workstream is closed.
+fn ticket_facts(db: &Db, scope: &Scope, ws: &Workstream) -> Result<TicketFacts> {
+    let Some(key) = ws.item_key.as_deref().filter(|_| ws.closed_at.is_none()) else { return Ok(TicketFacts::default()) };
+    let Some(work) = db.item(&Core::item(scope, key))? else { return Ok(TicketFacts::default()) };
+    let replies = serde_json::from_value::<crate::model::CachedTicket>(work.extra.clone()).map(|t| replies_of(&t, &scope.account_id)).unwrap_or_default();
+    Ok(TicketFacts { gaps: clarity_gaps(&work.body.plain_text()), replies })
 }
 
 /// The `escalation_posted` line for workstream `ws_id` when review draft `posted`, just posted to GitHub, is the one its
@@ -660,27 +711,30 @@ impl Core {
                 let verdicts = verdicts_of(db, &runs)?;
                 let readiness = readiness_verdicts(db, &runs)?;
                 let events = escalation_events(db, &ws)?;
-                let gaps = ticket_gaps(db, scope, &ws)?;
-                Ok(Some((ws, runs, Verdicts { reviews: verdicts, readiness }, events, pending_reviews(db)?, gaps)))
+                let ticket = ticket_facts(db, scope, &ws)?;
+                Ok(Some((ws, runs, Verdicts { reviews: verdicts, readiness }, events, pending_reviews(db)?, ticket)))
             })
             .await?;
-        found.map(|(ws, runs, verdicts, events, drafts, gaps)| self.view_of(ws, &runs, &verdicts, &events, &drafts, &gaps)).transpose()
+        found.map(|(ws, runs, verdicts, events, drafts, ticket)| self.view_of(ws, &runs, &verdicts, &events, &drafts, &ticket)).transpose()
     }
 
     /// A workstream's view from its runs, with the build still waiting for its pull request and the review that still
     /// blocks after the fix rounds. The pull request is read from the code cache, so it is looked up outside the
     /// account's database.
-    fn view_of(&self, workstream: Workstream, runs: &[Run], verdicts: &Verdicts, events: &[WorkstreamEvent], drafts: &[Proposal], gaps: &[ClarityGap]) -> Result<WorkstreamView> {
+    fn view_of(&self, workstream: Workstream, runs: &[Run], verdicts: &Verdicts, events: &[WorkstreamEvent], drafts: &[Proposal], ticket: &TicketFacts) -> Result<WorkstreamView> {
         let escalation = escalation_of(&workstream, runs, |r| verdicts.reviews.get(&r.id).copied(), events, drafts);
-        let readiness = readiness_of(&workstream, runs, |r| verdicts.readiness.get(&r.id).cloned(), events);
-        let clarity = clarity_of(&workstream, runs, gaps, events);
-        let waiting = reporter_follow(events).waiting.filter(|_| workstream.closed_at.is_none()).map(|since| ReporterWait { since });
+        let readiness = readiness_of(&workstream, runs, |r| verdicts.readiness.get(&r.id).cloned(), &ticket.replies, events);
+        let clarity = clarity_of(&workstream, runs, &ticket.gaps, &ticket.replies, events);
+        let follow = reporter_follow(events, &ticket.replies);
+        let waiting = follow.waiting.filter(|_| workstream.closed_at.is_none()).map(|since| ReporterWait { since });
         let mut view = WorkstreamView::of(workstream, runs, &verdicts.reviews);
         view.escalation = escalation;
         view.readiness = readiness;
         view.clarity = clarity;
         view.waiting_on_reporter = waiting;
-        view.changed_while_waiting = reporter_follow(events).changed && view.workstream.closed_at.is_none();
+        let open = view.workstream.closed_at.is_none();
+        view.changed_while_waiting = follow.changed && open;
+        view.reporter_replied = follow.replied && open;
         if let Some(build) = pushed_build(runs) {
             view.waiting_for_pr = waiting_for(build, self.pull_request_of(build));
         }
@@ -690,19 +744,19 @@ impl Core {
     /// `scope`'s workstreams, newest first, each with its stage; closed ones only when asked for.
     pub async fn workstreams(&self, scope: &Scope, include_closed: bool) -> Result<Vec<WorkstreamView>> {
         let connection_id = Connection::jira_id(scope);
-        let (workstreams, runs, verdicts, mut events, drafts, mut gaps) = self
+        let (workstreams, runs, verdicts, mut events, drafts, mut tickets) = self
             .with_db_for(scope, |db| {
                 let runs = db.runs(&RunQuery { connection_id: Some(connection_id.clone()), ..Default::default() })?;
                 let linked: Vec<Run> = runs.iter().filter(|r| r.spec.workstream.is_some()).cloned().collect();
                 let verdicts = Verdicts { reviews: verdicts_of(db, &linked)?, readiness: readiness_verdicts(db, &linked)? };
                 let workstreams = db.workstreams(&connection_id, include_closed)?;
                 let mut events = HashMap::new();
-                let mut gaps = HashMap::new();
+                let mut tickets = HashMap::new();
                 for ws in &workstreams {
                     events.insert(ws.id.clone(), escalation_events(db, ws)?);
-                    gaps.insert(ws.id.clone(), ticket_gaps(db, scope, ws)?);
+                    tickets.insert(ws.id.clone(), ticket_facts(db, scope, ws)?);
                 }
-                Ok((workstreams, runs, verdicts, events, pending_reviews(db)?, gaps))
+                Ok((workstreams, runs, verdicts, events, pending_reviews(db)?, tickets))
             })
             .await?;
         workstreams
@@ -710,8 +764,8 @@ impl Core {
             .map(|ws| {
                 let linked: Vec<Run> = runs.iter().filter(|r| r.spec.workstream.as_deref() == Some(ws.id.as_str())).cloned().collect();
                 let events = events.remove(&ws.id).unwrap_or_default();
-                let gaps = gaps.remove(&ws.id).unwrap_or_default();
-                self.view_of(ws, &linked, &verdicts, &events, &drafts, &gaps)
+                let ticket = tickets.remove(&ws.id).unwrap_or_default();
+                self.view_of(ws, &linked, &verdicts, &events, &drafts, &ticket)
             })
             .collect()
     }
@@ -1273,6 +1327,12 @@ impl Core {
         .await
     }
 
+    /// The times of the comments on `ws`'s cached ticket from anyone but the signed-in person: what the reporter's reply
+    /// is read from (`reporter_follow`). Empty without a cached ticket.
+    pub async fn ticket_replies(&self, scope: &Scope, ws: &Workstream) -> Result<Vec<chrono::DateTime<Utc>>> {
+        self.with_db_for(scope, |db| Ok(ticket_facts(db, scope, ws)?.replies)).await
+    }
+
     /// Appends `event` to the audit of one of `scope`'s workstreams; its `seq` is given here.
     pub async fn record_workstream_event(&self, scope: &Scope, event: WorkstreamEvent) -> Result<WorkstreamEvent> {
         let connection_id = Connection::jira_id(scope);
@@ -1409,40 +1469,40 @@ mod tests {
         async fn a_triage_that_said_not_ready_waits_for_the_person_until_they_choose_or_something_newer_happens() {
             let fx = fixture().await;
             let (ws, runs) = triaged(&fx).await;
-            let stop = readiness_of(&ws, &runs, said(false), &[]).expect("a stop");
+            let stop = readiness_of(&ws, &runs, said(false), &[], &[]).expect("a stop");
             assert_eq!((stop.triage_run.as_str(), stop.triage_label.as_str(), stop.questions.clone()), ("t1", "R1", vec!["What does done look like?".to_string()]));
             assert_eq!(stop.at, runs[0].ended_at.unwrap());
             let json = serde_json::to_value(&stop).unwrap();
             assert_eq!((json["triageRun"].as_str(), json["questions"][0].as_str()), (Some("t1"), Some("What does done look like?")));
 
-            assert_eq!(readiness_of(&ws, &runs, said(true), &[]), None, "ready");
-            assert_eq!(readiness_of(&ws, &runs, |_| None, &[]), None, "no verdict reads as ready");
-            assert_eq!(readiness_of(&Workstream { mode: Mode::Advise, ..ws.clone() }, &runs, said(false), &[]), None, "in Advise nothing starts on its own, so nothing is stopped");
-            assert_eq!(readiness_of(&Workstream { closed_at: Some(Utc::now()), ..ws.clone() }, &runs, said(false), &[]), None, "closed");
-            assert!(readiness_of(&Workstream { held_reason: Some(HELD_PERSON.into()), ..ws.clone() }, &runs, said(false), &[]).is_some(), "a hold doesn't hide the question");
+            assert_eq!(readiness_of(&ws, &runs, said(true), &[], &[]), None, "ready");
+            assert_eq!(readiness_of(&ws, &runs, |_| None, &[], &[]), None, "no verdict reads as ready");
+            assert_eq!(readiness_of(&Workstream { mode: Mode::Advise, ..ws.clone() }, &runs, said(false), &[], &[]), None, "in Advise nothing starts on its own, so nothing is stopped");
+            assert_eq!(readiness_of(&Workstream { closed_at: Some(Utc::now()), ..ws.clone() }, &runs, said(false), &[], &[]), None, "closed");
+            assert!(readiness_of(&Workstream { held_reason: Some(HELD_PERSON.into()), ..ws.clone() }, &runs, said(false), &[], &[]).is_some(), "a hold doesn't hide the question");
 
             for action in ["readiness_asked", "readiness_answered", "readiness_overridden"] {
-                assert_eq!(readiness_of(&ws, &runs, said(false), &[by(Actor::Person, action, "t1")]), None, "{action} settles it");
-                assert!(readiness_of(&ws, &runs, said(false), &[by(Actor::Pip, action, "t1")]).is_some(), "{action} by Pip settles nothing");
-                assert!(readiness_of(&ws, &runs, said(false), &[by(Actor::Supervisor, action, "t1")]).is_some(), "{action} by the supervisor settles nothing");
-                assert!(readiness_of(&ws, &runs, said(false), &[by(Actor::Person, action, "t0")]).is_some(), "{action} about another triage");
+                assert_eq!(readiness_of(&ws, &runs, said(false), &[], &[by(Actor::Person, action, "t1")]), None, "{action} settles it");
+                assert!(readiness_of(&ws, &runs, said(false), &[], &[by(Actor::Pip, action, "t1")]).is_some(), "{action} by Pip settles nothing");
+                assert!(readiness_of(&ws, &runs, said(false), &[], &[by(Actor::Supervisor, action, "t1")]).is_some(), "{action} by the supervisor settles nothing");
+                assert!(readiness_of(&ws, &runs, said(false), &[], &[by(Actor::Person, action, "t0")]).is_some(), "{action} about another triage");
             }
 
             let mut later = runs.clone();
             later.push(Run { id: "t2".into(), state: RunState::Working, queued_at: runs[0].queued_at + chrono::Duration::seconds(5), ..runs[0].clone() });
-            assert_eq!(readiness_of(&ws, &later, said(false), &[]), None, "a newer triage is under way");
+            assert_eq!(readiness_of(&ws, &later, said(false), &[], &[]), None, "a newer triage is under way");
             later[1].state = RunState::Done;
             let newest_ready = |r: &Run| if r.id == "t2" { Some(Readiness { ready: true, questions: vec![] }) } else { Some(Readiness { ready: false, questions: vec![] }) };
-            assert_eq!(readiness_of(&ws, &later, newest_ready, &[]), None, "a later triage that says ready takes it away");
+            assert_eq!(readiness_of(&ws, &later, newest_ready, &[], &[]), None, "a later triage that says ready takes it away");
             let newest_not = |r: &Run| Some(Readiness { ready: r.id == "t1", questions: vec!["Q?".into()] });
-            assert_eq!(readiness_of(&ws, &later, newest_not, &[]).map(|s| s.triage_run), Some("t2".to_string()), "the newest triage is the one that counts");
+            assert_eq!(readiness_of(&ws, &later, newest_not, &[], &[]).map(|s| s.triage_run), Some("t2".to_string()), "the newest triage is the one that counts");
 
             let mut planned = runs.clone();
             planned.push(Run { id: "p1".into(), spec: RunSpec { kind: RunKind::Plan, ..runs[0].spec.clone() }, queued_at: runs[0].queued_at + chrono::Duration::seconds(100), ..runs[0].clone() });
-            assert_eq!(readiness_of(&ws, &planned, said(false), &[]), None, "a plan the person started by hand answers it");
+            assert_eq!(readiness_of(&ws, &planned, said(false), &[], &[]), None, "a plan the person started by hand answers it");
             let mut ticketless = runs.clone();
             ticketless[0].item = None;
-            assert_eq!(readiness_of(&ws, &ticketless, said(false), &[]), None, "only a triage on a ticket");
+            assert_eq!(readiness_of(&ws, &ticketless, said(false), &[], &[]), None, "only a triage on a ticket");
         }
 
         #[tokio::test]
@@ -1607,18 +1667,67 @@ mod tests {
             }
         }
 
+        fn follow_of(events: &[WorkstreamEvent]) -> ReporterFollow {
+            reporter_follow(events, &[])
+        }
+
+        fn at(seq: u32) -> chrono::DateTime<Utc> {
+            chrono::DateTime::from_timestamp(1_800_000_000 + i64::from(seq) * 60, 0).unwrap()
+        }
+
+        #[test]
+        fn a_comment_from_someone_else_newer_than_the_wait_ends_it_and_brings_the_question_back_as_a_reply() {
+            let asked = line(1, Actor::Person, "readiness_asked", Some("d1"));
+            let posted = line(2, Actor::Person, "draft_approved", Some("d1"));
+            let events = [asked.clone(), posted.clone()];
+            let waiting = reporter_follow(&events, &[]);
+            assert_eq!((waiting.waiting, waiting.changed, waiting.replied), (Some(posted.at), false, false));
+            // The caller leaves the person's own comments out, so a newer comment from me is simply not among the replies.
+            assert_eq!(reporter_follow(&events, &[]), waiting, "my own newer comment: still waiting");
+            assert_eq!(reporter_follow(&events, &[at(1)]), waiting, "a comment older than the wait's start doesn't end it");
+            assert_eq!(reporter_follow(&events, &[posted.at]), waiting, "nor one at the very moment it began");
+            assert_eq!(reporter_follow(&events, &[at(1), at(5)]), ReporterFollow { waiting: None, changed: true, replied: true }, "a newer comment from someone else ends it");
+            // Not yet waiting: a comment says nothing.
+            assert_eq!(reporter_follow(&events[..1], &[at(9)]), ReporterFollow::default());
+            assert_eq!(reporter_follow(&[], &[at(9)]), ReporterFollow::default());
+            // The question stays until the person chooses; their choice settles it, and a new ask waits for a newer reply.
+            let ended = [&events[..], &[line(6, Actor::Person, "resumed", None)]].concat();
+            assert!(reporter_follow(&ended, &[at(5)]).replied, "resuming doesn't answer it");
+            let chosen = [&events[..], &[line(6, Actor::Person, "readiness_overridden", None)]].concat();
+            assert_eq!(reporter_follow(&chosen, &[at(5)]), ReporterFollow::default(), "the reply came before the choice");
+            assert_eq!(reporter_follow(&chosen, &[at(7)]), ReporterFollow::default(), "and one after it, with nobody waiting, says nothing");
+            let again = [&events[..], &[line(6, Actor::Person, "readiness_asked", Some("d2")), line(7, Actor::Person, "draft_approved", Some("d2"))]].concat();
+            assert_eq!(reporter_follow(&again, &[at(5)]).waiting, Some(at(7)), "the old reply doesn't end the new wait");
+            assert!(reporter_follow(&again, &[at(5), at(8)]).replied, "a newer one does");
+            let asked_again = [&events[..], &[line(6, Actor::Person, "readiness_asked", Some("d2"))]].concat();
+            assert!(!reporter_follow(&asked_again, &[at(5)]).changed, "asking again clears the old reply while the new comment is not posted");
+            // The ticket changing still ends the wait, as itself.
+            let drifted = [&events[..], &[line(3, Actor::Supervisor, "basis_drifted", None)]].concat();
+            assert_eq!(reporter_follow(&drifted, &[at(5)]), ReporterFollow { waiting: None, changed: true, replied: false });
+        }
+
+        #[test]
+        fn replies_are_the_comments_of_the_cached_ticket_from_anyone_but_me() {
+            let mut t = crate::tracker::testing::sample_ticket();
+            let person = |id: &str| crate::model::Person { account_id: id.into(), name: id.into(), avatar_url: None };
+            let comment = |id: &str, by: &str, at: &str| crate::model::Comment { id: id.into(), author: person(by), created: at.into(), body: String::new(), mentions: vec![], mentioned: vec![], doc: None };
+            t.comments = vec![comment("1", "me", "2026-10-01T10:00:00Z"), comment("2", "kim", "2026-10-02T10:00:00Z"), comment("3", "sam", "2026-10-01T12:00:00Z"), comment("4", "kim", "not a time")];
+            let found = replies_of(&t, "me");
+            assert_eq!(found.iter().map(|d| d.to_rfc3339()).collect::<Vec<_>>(), ["2026-10-01T12:00:00+00:00", "2026-10-02T10:00:00+00:00"]);
+        }
+
         #[test]
         fn the_wait_starts_when_the_asked_comment_is_approved_and_ends_at_the_first_of_a_change_a_choice_or_a_resume() {
             let asked = line(1, Actor::Person, "readiness_asked", Some("d1"));
             let posted = line(2, Actor::Person, "draft_approved", Some("d1"));
-            assert_eq!(reporter_follow(std::slice::from_ref(&asked)), ReporterFollow::default(), "asked is not posted");
-            let waiting = reporter_follow(&[asked.clone(), posted.clone()]);
+            assert_eq!(follow_of(std::slice::from_ref(&asked)), ReporterFollow::default(), "asked is not posted");
+            let waiting = follow_of(&[asked.clone(), posted.clone()]);
             assert_eq!((waiting.waiting, waiting.changed), (Some(posted.at), false));
-            assert_eq!(reporter_follow(&[asked.clone(), line(2, Actor::Person, "draft_approved", Some("other"))]), ReporterFollow::default(), "another draft's approval");
-            assert_eq!(reporter_follow(&[asked.clone(), line(2, Actor::Pip, "draft_approved", Some("d1"))]), ReporterFollow::default(), "only the person's approval");
+            assert_eq!(follow_of(&[asked.clone(), line(2, Actor::Person, "draft_approved", Some("other"))]), ReporterFollow::default(), "another draft's approval");
+            assert_eq!(follow_of(&[asked.clone(), line(2, Actor::Pip, "draft_approved", Some("d1"))]), ReporterFollow::default(), "only the person's approval");
 
-            let ended = |e: WorkstreamEvent| reporter_follow(&[asked.clone(), posted.clone(), e]);
-            assert_eq!(ended(line(3, Actor::Supervisor, "basis_drifted", None)), ReporterFollow { waiting: None, changed: true }, "the ticket changed");
+            let ended = |e: WorkstreamEvent| follow_of(&[asked.clone(), posted.clone(), e]);
+            assert_eq!(ended(line(3, Actor::Supervisor, "basis_drifted", None)), ReporterFollow { waiting: None, changed: true, replied: false }, "the ticket changed");
             assert_eq!(ended(line(3, Actor::Person, "basis_drifted", None)), waiting, "only the supervisor says the ticket changed");
             assert_eq!(ended(line(3, Actor::Person, "readiness_answered", None)), ReporterFollow::default());
             assert_eq!(ended(line(3, Actor::Person, "readiness_overridden", None)), ReporterFollow::default());
@@ -1627,13 +1736,13 @@ mod tests {
 
             // After a change the question stays until the person chooses; asking again begins a new wait with the next post.
             let changed = [asked.clone(), posted.clone(), line(3, Actor::Supervisor, "basis_drifted", None)];
-            assert!(reporter_follow(&[&changed[..], &[line(4, Actor::Person, "resumed", None)]].concat()).changed, "resuming doesn't answer it");
-            assert!(!reporter_follow(&[&changed[..], &[line(4, Actor::Person, "readiness_asked", Some("d2"))]].concat()).changed);
-            let again = reporter_follow(&[&changed[..], &[line(4, Actor::Person, "readiness_asked", Some("d2")), line(5, Actor::Person, "draft_approved", Some("d2"))]].concat());
+            assert!(follow_of(&[&changed[..], &[line(4, Actor::Person, "resumed", None)]].concat()).changed, "resuming doesn't answer it");
+            assert!(!follow_of(&[&changed[..], &[line(4, Actor::Person, "readiness_asked", Some("d2"))]].concat()).changed);
+            let again = follow_of(&[&changed[..], &[line(4, Actor::Person, "readiness_asked", Some("d2")), line(5, Actor::Person, "draft_approved", Some("d2"))]].concat());
             assert!(again.waiting.is_some() && !again.changed);
-            assert!(reporter_follow(&[line(1, Actor::Person, "clarity_asked", Some("c1")), line(2, Actor::Person, "draft_approved", Some("c1"))]).waiting.is_some(), "the clarity ask waits too");
+            assert!(follow_of(&[line(1, Actor::Person, "clarity_asked", Some("c1")), line(2, Actor::Person, "draft_approved", Some("c1"))]).waiting.is_some(), "the clarity ask waits too");
             // A change with nobody waiting is not "changed while waiting".
-            assert_eq!(reporter_follow(&[line(1, Actor::Supervisor, "basis_drifted", None)]), ReporterFollow::default());
+            assert_eq!(follow_of(&[line(1, Actor::Supervisor, "basis_drifted", None)]), ReporterFollow::default());
         }
 
         #[tokio::test]
@@ -1644,14 +1753,14 @@ mod tests {
             let triage = insert_at(&fx, "t1", &ws.id, RunKind::Triage, RunState::Done, 10, |r| (r.result, r.result_complete) = (Some("Small.\n\nFor Jira:\nReady to plan: no\nOpen questions:\n- What does done look like?".into()), true)).await;
             let said = |_: &Run| Some(Readiness { ready: false, questions: vec!["Q?".into()] });
             let mut events = vec![line(1, Actor::Person, "readiness_asked", Some("d1")).run(&triage.id), line(2, Actor::Person, "draft_approved", Some("d1"))];
-            assert_eq!(readiness_of(&ws, std::slice::from_ref(&triage), said, &events), None, "asked and waiting: no question");
+            assert_eq!(readiness_of(&ws, std::slice::from_ref(&triage), said, &[], &events), None, "asked and waiting: no question");
             events.push(line(3, Actor::Supervisor, "basis_drifted", None));
-            let back = readiness_of(&ws, std::slice::from_ref(&triage), said, &events).expect("the ticket changed while they waited");
+            let back = readiness_of(&ws, std::slice::from_ref(&triage), said, &[], &events).expect("the ticket changed while they waited");
             assert!(back.changed);
             assert_eq!(serde_json::to_value(&back).unwrap()["changed"], true);
             events.push(line(4, Actor::Person, "readiness_overridden", None).run(&triage.id));
-            assert_eq!(readiness_of(&ws, std::slice::from_ref(&triage), said, &events), None, "Plan now settles it");
-            let unchanged = readiness_of(&ws, std::slice::from_ref(&triage), said, &[]).unwrap();
+            assert_eq!(readiness_of(&ws, std::slice::from_ref(&triage), said, &[], &events), None, "Plan now settles it");
+            let unchanged = readiness_of(&ws, std::slice::from_ref(&triage), said, &[], &[]).unwrap();
             assert!(!unchanged.changed && serde_json::to_value(&unchanged).unwrap().get("changed").is_none(), "an ordinary stop says nothing of a change");
         }
 
@@ -1694,13 +1803,47 @@ mod tests {
             assert!(!flagged().await.changed_while_waiting, "choosing settles it");
         }
 
+        #[tokio::test]
+        async fn the_view_ends_the_wait_on_a_cached_comment_from_someone_else_but_not_on_mine_or_an_older_one() {
+            let fx = fixture().await;
+            let ws = fx.core.open_workstream(&fx.scope, Some(fx.item("CA-1")), None).await.unwrap();
+            let draft = fx.core.ask_reporter_now(&fx.scope, &ws.id).await.unwrap();
+            fx.core.approve_proposal(&draft.id).await.unwrap();
+            let view = || async { fx.core.workstream(&fx.scope, &ws.id).await.unwrap().unwrap() };
+            let comment = |by: &str, at: chrono::DateTime<Utc>| serde_json::json!({ "id": format!("n-{by}-{}", at.timestamp()), "author": { "accountId": by, "name": by, "avatarUrl": null }, "created": at.to_rfc3339(), "body": "hello" });
+            let comment_by = |by: String, at: chrono::DateTime<Utc>| {
+                let c = comment(&by, at);
+                let fx = &fx;
+                async move {
+                    fx.edit_item("CA-1", |w| {
+                        let all = w.extra["comments"].as_array_mut().expect("comments");
+                        all.push(c);
+                    })
+                    .await
+                }
+            };
+            assert!(view().await.waiting_on_reporter.is_some());
+            comment_by(fx.scope.account_id.clone(), Utc::now() + chrono::Duration::hours(1)).await;
+            comment_by("kim".into(), Utc::now() - chrono::Duration::days(30)).await;
+            let still = view().await;
+            assert!(still.waiting_on_reporter.is_some() && !still.reporter_replied, "my own and an older comment end nothing");
+            comment_by("kim".into(), Utc::now() + chrono::Duration::hours(1)).await;
+            let ended = view().await;
+            assert!(ended.waiting_on_reporter.is_none() && ended.changed_while_waiting && ended.reporter_replied, "the reporter replied");
+            assert_eq!(serde_json::to_value(&ended).unwrap()["reporterReplied"], true);
+            let listed = fx.core.workstreams(&fx.scope, false).await.unwrap().into_iter().find(|v| v.workstream.id == ws.id).unwrap();
+            assert!(listed.reporter_replied && listed.waiting_on_reporter.is_none(), "the list agrees");
+            fx.core.record_workstream_event(&fx.scope, WorkstreamEvent::new(&ws.id, Actor::Person, "readiness_overridden", Utc::now() + chrono::Duration::hours(2))).await.unwrap();
+            assert!(!view().await.reporter_replied, "choosing settles it");
+        }
+
         #[test]
         fn the_clarity_notice_shows_for_a_thin_ticket_until_a_triage_a_dismissal_or_an_ask_and_comes_back_when_the_ticket_changed_after_one() {
             let ws: Workstream = serde_json::from_value(serde_json::json!({ "id": "w", "connectionId": "c", "title": "t", "createdAt": "2026-10-01T10:00:00Z", "itemKey": "CA-1" })).unwrap();
             let gaps = [ClarityGap::Short, ClarityGap::Done];
-            let shown = |ws: &Workstream, runs: &[Run], events: &[WorkstreamEvent]| clarity_of(ws, runs, &gaps, events);
+            let shown = |ws: &Workstream, runs: &[Run], events: &[WorkstreamEvent]| clarity_of(ws, runs, &gaps, &[], events);
             assert_eq!(shown(&ws, &[], &[]), Some(Clarity { gaps: gaps.to_vec() }));
-            assert_eq!(clarity_of(&ws, &[], &[], &[]), None, "nothing missing");
+            assert_eq!(clarity_of(&ws, &[], &[], &[], &[]), None, "nothing missing");
             assert_eq!(shown(&Workstream { item_key: None, ..ws.clone() }, &[], &[]), None, "no ticket");
             assert_eq!(shown(&Workstream { closed_at: Some(Utc::now()), ..ws.clone() }, &[], &[]), None, "closed");
             assert!(shown(&Workstream { mode: Mode::Manage, ..ws.clone() }, &[], &[]).is_some(), "not a need: every mode");
