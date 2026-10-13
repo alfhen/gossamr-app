@@ -88,6 +88,11 @@ describe("the workstream list on Pip home", () => {
     expect(quiet).toContain("cobweb");
     // The words are in the row for a screen reader, and the web is not.
     expect(quiet).toContain(`<span data-workstream-wither="true" class="sr-only">${text(5)}</span>`);
+    // The meaning is on the row itself too, not only on hover: a short line, hidden from a screen reader that has the sentence.
+    expect(quiet).toContain('<span data-workstream-wither-short="true" aria-hidden="true" class="truncate text-xs text-ws-ink3">No Jira update · 5d</span>');
+    // With a Jira draft already waiting, the tooltip says where it is.
+    const waiting = list({ wither: { [first.workstream.id]: { ...web(3, 5), draftWaiting: true } } });
+    expect(waiting).toContain(`title="${text(5)}. A draft is waiting in Needs you."`);
     // A first stage only dries the row out, as a ticket's does; the web comes with the second.
     const dry = row(second.workstream.id);
     expect(dry).toMatch(/\bws-wither ws-wither-1\b/);
@@ -265,9 +270,9 @@ describe("Pip home's keys with no workstream, and its footer", () => {
   it("says a needs Enter to confirm and a skip can be undone, and lists the draft keys once (R6)", () => {
     const decide = pipHomeHints().find((h) => h.id === "decide")!;
     expect(decide.keys).toEqual(["a", "e", "d", "s"]);
-    expect(decide.text).toBe("on a draft: approve (then ↵), edit, skip; skips undo");
+    expect(decide.text).toBe("on a draft: approve (then ↵), edit, skip (Ctrl+Z undoes)");
     const html = renderToStaticMarkup(<ShortcutHint view="list" hints={pipHomeHints()} />);
-    expect(html).toContain("on a draft: approve (then ↵), edit, skip; skips undo");
+    expect(html).toContain("on a draft: approve (then ↵), edit, skip (Ctrl+Z undoes)");
     expect(html).not.toContain("a opens a run draft");
   });
 });

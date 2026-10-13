@@ -29,7 +29,7 @@ import { isTypingTarget } from "./pipHomeKeys";
 import { usePipHome } from "./pipHomeStore";
 import { useReviewVerdicts } from "./reviewVerdicts";
 import { useRuns } from "./runsStore";
-import { TIMELINE_ENTRY, followsEnd, nearBottom, stepIndex, timelineKeyAction, timelineStop } from "./timelineKeys";
+import { ENTRY_FOCUS, TIMELINE_ENTRY, followsEnd, nearBottom, revealEntry, stepIndex, timelineKeyAction, timelineStop } from "./timelineKeys";
 import { PipRunCard } from "./PipRunCard";
 import { TimelineFilterBar, TimelineScopeToggle, showTimeline } from "./TimelineFilterBar";
 import { useWorkstreams } from "./workstreamsStore";
@@ -393,7 +393,8 @@ export function TimelineView({
                 data-waiting={e.needKey ?? undefined}
                 tabIndex={-1}
                 aria-label={e.kind === "said" || e.kind === "pip" ? undefined : e.scopeLabel ? `${e.scopeLabel}: ${e.text}` : e.text}
-                className="grid min-w-0 gap-1 rounded-md outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip"
+                onFocus={revealEntry}
+                className={`grid min-w-0 gap-1 rounded-md ${ENTRY_FOCUS}`}
               >
                 <ScopeLabel entry={e} />
                 {body(e)}

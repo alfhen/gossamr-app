@@ -31,6 +31,17 @@ describe("the undo state machine", () => {
     expect(told).toEqual([["The draft is back.", "info"]]);
   });
 
+  it("shows what came back once it is undone, and not when the undo failed; a failing show leaves the undo standing", async () => {
+    const { log } = setup();
+    const shown = vi.fn();
+    expect(await log.run(log.offer({ text: "x", undo: async () => {}, restored: shown }))).toBe("undone");
+    expect(shown).toHaveBeenCalledTimes(1);
+    const never = vi.fn();
+    expect(await log.run(log.offer({ text: "y", undo: async () => false, restored: never }))).toBe("failed");
+    expect(never).not.toHaveBeenCalled();
+    expect(await log.run(log.offer({ text: "z", undo: async () => {}, restored: () => { throw new Error("no pane"); } }))).toBe("undone");
+  });
+
   it("says plain 'Undone.' when the offer gave no words", async () => {
     const { log, told } = setup();
     await log.run(log.offer({ text: "Held CA-401.", undo: async () => {} }));

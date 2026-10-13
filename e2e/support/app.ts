@@ -477,10 +477,21 @@ export async function expandAllNeeds(page: Page) {
   while (await folded.count()) await folded.first().click();
 }
 
+/** Folds every group in the Needs you list to its header: its top need's why, and "+N more". Pip home opens a group by default while the needs fit. */
+export async function foldAllNeeds(page: Page) {
+  const open = needsYouTray(page).locator('[data-needs-you-more][aria-expanded="true"]');
+  while (await open.count()) await open.first().click();
+}
+
 /** Expands the group of workstream `key` (or General) in the Needs you list, so each need in it is a row of its own. */
 export async function expandNeedsYou(page: Page, key = "General") {
   const more = needsYouRow(page, key).locator("[data-needs-you-more]");
-  if ((await more.getAttribute("aria-expanded")) !== "true") await more.click();
+  // Pip home opens a group by itself while the needs fit, and folds it again once more arrive; opened by hand it stays.
+  if ((await more.getAttribute("aria-expanded")) === "true") {
+    await more.click();
+    await expect(more).toHaveAttribute("aria-expanded", "false");
+  }
+  await more.click();
   await expect(more).toHaveAttribute("aria-expanded", "true");
 }
 

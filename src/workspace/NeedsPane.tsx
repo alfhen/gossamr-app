@@ -89,9 +89,25 @@ export function firstDecision(root: HTMLElement): HTMLElement | null {
   if (choice) return choice;
   const answer = root.querySelector<HTMLElement>(`${body} textarea:not(:disabled)`);
   if (answer) return answer;
+  // A draft: its card, not its post button, so that approving is the key's a and then Enter, never a second Enter by accident.
+  const card = root.querySelector<HTMLElement>(`${body} [data-draft][tabindex="0"]`);
+  if (card) return card;
   const draft = Array.from(root.querySelectorAll<HTMLElement>(`${body} [data-draft-actions] button:not(:disabled)`)).pop();
   if (draft) return draft;
   return root.querySelector<HTMLElement>(`${body} button:not(:disabled), ${body} input:not(:disabled)`);
+}
+
+/** The box an edit is typed in: a draft's text, or a rewrite's title (an input with no type). */
+export const EDIT_FIELD = "[data-needs-pane-body] textarea, [data-needs-pane-body] input:not([type]), [data-needs-pane-body] input[type=text]";
+
+/** A draft card's button that ends its edit, if the pane holds a card being edited. */
+const doneEditing = (root: ParentNode) => Array.from(root.querySelectorAll<HTMLButtonElement>("[data-needs-pane-body] button")).find((b) => b.textContent?.trim() === "Done editing" && !b.disabled);
+
+/** Esc in the pane while a card is being edited ends the edit (keeping what was typed) instead of closing the decision; false when none is. */
+export function endEditing(root: ParentNode): boolean {
+  const done = doneEditing(root);
+  done?.click();
+  return !!done;
 }
 
 function PermissionBody({ run }: { run: Run }) {
@@ -393,14 +409,26 @@ function NeedDecision({ need }: { need: Need }) {
     const intent = takePaneIntent();
     let frame = 0;
     let tries = 0;
+    let clicked = false;
     const go = () => {
       const el = root.current;
       if (!el) return;
+      if (intent === "card") {
+        el.focus({ preventScroll: true });
+        return;
+      }
       if (intent === "edit") {
-        const edit = Array.from(el.querySelectorAll<HTMLButtonElement>("[data-needs-pane-body] button")).find((b) => b.textContent?.trim() === "Edit" && !b.disabled);
+        const edit = clicked ? undefined : Array.from(el.querySelectorAll<HTMLButtonElement>("[data-needs-pane-body] button")).find((b) => b.textContent?.trim() === "Edit" && !b.disabled);
         if (edit) {
           edit.click();
-          frame = requestAnimationFrame(() => (el.querySelector<HTMLElement>("[data-needs-pane-body] textarea, [data-needs-pane-body] input") ?? firstDecision(el))?.focus({ preventScroll: true }));
+          clicked = true;
+        }
+        // The field only exists once the edit has rendered, which may be a few frames on.
+        if (clicked) {
+          const field = el.querySelector<HTMLElement>(EDIT_FIELD);
+          if (field) return void field.focus({ preventScroll: true });
+          if (++tries < 60) frame = requestAnimationFrame(go);
+          else firstDecision(el)?.focus({ preventScroll: true });
           return;
         }
       }
@@ -424,6 +452,8 @@ function NeedDecision({ need }: { need: Need }) {
     ev.preventDefault();
     // In a field, Esc leaves the field first, so a half-written answer is not lost to a second key.
     if (/^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName)) return void root.current?.focus();
+    // A card being edited ends its edit first: closing the decision would drop what was typed.
+    if (root.current && endEditing(root.current)) return void root.current.focus({ preventScroll: true });
     close();
   };
   return (

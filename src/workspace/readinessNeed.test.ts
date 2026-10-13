@@ -77,10 +77,12 @@ describe("a ticket the triage found not clear enough to plan", () => {
     expect(readinessNeed()).toBeUndefined();
     const asked = Object.values(useWorkspace.getState().proposals).find((p) => p.label === "Questions for the reporter")!;
     expect(asked).toMatchObject({ state: { type: "pending" }, intent: { type: "comment" }, origin: { type: "run", runId: triage.id, workstream: id } });
-    expect(texts()).toContain("Drafted a comment to the reporter with the open questions. It is posted only when you approve it.");
+    expect(texts()).toContain("Here is the comment to the reporter. Nothing is posted until you press Post comment.");
     // It goes through the normal approval: it is a draft to approve in Needs you now, and nothing was written.
     expect(currentNeeds().find((n) => n.key === `draft:${asked.id}`)).toMatchObject({ group: "approve", kind: "draft", workstreamId: id });
     expect(backend.proposals.writes).toEqual([]);
+    // The decision pane shows the new draft, not whichever need came next.
+    expect(usePipHome.getState()).toMatchObject({ deciding: `draft:${asked.id}`, selected: id });
   });
 
   it("I'll answer settles the need and opens the workstream's conversation with the questions quoted in the composer", async () => {

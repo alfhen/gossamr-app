@@ -29,6 +29,10 @@ export interface WorkstreamSuggestionScene {
   woke?: boolean;
   /** The run at work, by its label ("R2"). */
   running?: string | null;
+  /** The triage found the ticket unclear and the person has not chosen yet: no plan starts until they do. */
+  unclear?: boolean;
+  /** Work has happened but Jira has not heard for days (the workstream's cobweb), and no Jira draft is waiting. */
+  cobweb?: boolean;
 }
 
 export interface SuggestionScene {
@@ -56,6 +60,12 @@ const NEXT_AFTER_INVESTIGATION: Partial<Record<WorkstreamStage, string[]>> = { i
 /** The chip that shows the plan's description update waiting for the person, where they read and approve it. */
 export const PLAN_UPDATE_CHIP = "Show me the plan update";
 
+/** The chip that asks Pip what the triage found unclear, in place of "Plan this" while the ticket waits for the person's choice. */
+export const UNCLEAR_CHIP = "What is unclear about this ticket?";
+
+/** The chip that asks Pip for a Jira update to post, for a workstream whose cobweb says Jira has not heard for days. */
+export const JIRA_UPDATE_CHIP = "Draft a Jira update";
+
 /** Something a chip does on the page itself instead of asking Pip: bring the plan's description update into view. */
 export type ChipPageAction = "showPlanUpdate";
 
@@ -77,7 +87,9 @@ export function workstreamChips(w: WorkstreamSuggestionScene): string[] {
     ...(w.woke ? ["What happened while I was away?"] : []),
     ...(w.running ? [`What is ${w.running} doing?`] : []),
     ...(w.stage === "intake" && w.key && !w.investigated && !w.hasPendingStartDraft ? [`Investigate ${w.key}`] : []),
-    ...(w.investigated && !w.hasPendingStartDraft && !w.running ? (NEXT_AFTER_INVESTIGATION[w.stage] ?? []) : []),
+    // A ticket stopped as unclear is not planned: the chip asks what is unclear instead of offering the Plan.
+    ...(w.investigated && !w.hasPendingStartDraft && !w.running ? (w.unclear ? (w.stage === "triage" ? [UNCLEAR_CHIP] : []) : (NEXT_AFTER_INVESTIGATION[w.stage] ?? [])) : []),
+    ...(w.cobweb ? [JIRA_UPDATE_CHIP] : []),
   ];
   return chips.slice(0, MOST);
 }

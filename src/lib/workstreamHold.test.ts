@@ -19,7 +19,7 @@ describe("heldText", () => {
     const budget = (autoTurns: [number, number], wakes: [number, number]): BudgetView => ({ autoTurns: { used: autoTurns[0], limit: autoTurns[1] }, wakes: { used: wakes[0], limit: wakes[1] }, level: "spent" });
     // One unit, whichever counter is nearer its limit; neither is named.
     expect(heldText(HELD_BUDGET, null, budget([3, 3], [3, 12]))).toBe("Held: automatic steps used up. Resume to give it 3 more");
-    expect(heldText(HELD_BUDGET, null, budget([2, 6], [12, 12]))).toBe("Held: automatic steps used up. Resume to give it 12 more");
+    expect(heldText(HELD_BUDGET, null, budget([2, 6], [12, 12]))).toBe("Held: automatic steps used up. Resume to give it 6 more");
     expect(heldText(HELD_BUDGET, null, budget([6, 6], [12, 12]))).toBe("Held: automatic steps used up. Resume to give it 6 more");
     expect(heldText(HELD_DAILY)).toBe("Held: today's Pip turns are used up");
     expect(heldText(HELD_QUOTA)).toBe("Paused: quota");
@@ -142,5 +142,14 @@ describe("stepsLeftText", () => {
     expect(stepsLeftText(budget(11, 11))).toBe("0 of 11 automatic steps left");
     expect(stepsLeftText(budget(13, 11))).toBe("0 of 11 automatic steps left");
     expect(stepsLeftText(budget(1, 6))).toBe("5 of 6 automatic steps left");
+  });
+
+  it("keeps the turns' limit as the total when the wakes become the nearer counter", () => {
+    // After a message of the person's the turns are zero while the wakes have used one: 11 of 11 would read as 11 of 12 before.
+    const wakes = (turns: number, used: number): BudgetView => ({ autoTurns: { used: turns, limit: 11 }, wakes: { used, limit: 12 }, level: "ok" });
+    expect(stepsLeftText(wakes(0, 0))).toBe("11 of 11 automatic steps left");
+    expect(stepsLeftText(wakes(0, 2))).toBe("10 of 11 automatic steps left");
+    expect(stepsLeftText(wakes(3, 2))).toBe("8 of 11 automatic steps left");
+    expect(stepsLeftText(wakes(0, 12))).toBe("0 of 11 automatic steps left");
   });
 });

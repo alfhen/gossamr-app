@@ -64,7 +64,7 @@ test.describe("keyboard, copy and focus fixes (R6, R10, R12, R14)", () => {
     await openApp(page);
     await openPipHome(page);
     const hints = page.locator("[data-pip-home-hints]");
-    await expect(hints).toContainText("on a draft: approve (then ↵), edit, skip; skips undo");
+    await expect(hints).toContainText("on a draft: approve (then ↵), edit, skip (Ctrl+Z undoes)");
     await expect(hints).not.toContainText("a opens a run draft");
   });
 });

@@ -349,6 +349,14 @@ export function timeline(input: TimelineInput): TimelineEntry[] {
     if (e.action === "fix_round_sent") rounds++;
     if (TOLD_ELSEWHERE.has(e.action)) continue;
     const draft = e.proposalId ? byDraft.get(e.proposalId) : undefined;
+    // An approval, or a review posted, that its draft's own entry already says ("You approved a comment: posted") is that entry's.
+    if (draft && (e.action === "draft_approved" || e.action === "review_posted") && (draft.state.type === "applied" || draft.state.type === "applying")) {
+      const entry = out.find((x) => x.key === `draft:${draft.id}`);
+      if (entry) {
+        if (e.actor === "person") entry.decision = true;
+        continue;
+      }
+    }
     const text = (e.proposalId ? draftLine(e, who(e.actor), draft) : null) ?? eventText(e, label, rounds);
     if (!text) continue;
     // A line about something still waiting on the person opens its need: the hold that still holds, the escalation still open.

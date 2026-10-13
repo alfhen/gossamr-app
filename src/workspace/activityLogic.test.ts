@@ -148,6 +148,12 @@ describe("the Pip & agents chip", () => {
     expect(toWorkstreamEntries({ w1: [allowed] }, [ws]).map((e) => e.text)).toEqual(["You allowed 5 more automatic steps"]);
   });
 
+  it("says a message of the person's gave the automatic steps back, rather than that they reset the budget", () => {
+    const texts = (detail: string | null) => toWorkstreamEntries({ w1: [ev(1, "person", "budget_reset", null, detail)] }, [ws]).map((e) => e.text);
+    expect(texts("message")).toEqual(["Your message gave Pip its automatic steps back"]);
+    expect(texts(null)).toEqual(["You reset the budget"]);
+  });
+
   it("words the person's three choices on a ticket that isn't clear enough to plan, naming the triage", () => {
     const lines = [ev(1, "person", "readiness_asked", "r3", null), ev(2, "person", "readiness_answered", "r3", null), ev(3, "person", "readiness_overridden", "r3", null)];
     expect(toWorkstreamEntries({ w1: lines }, [ws]).map((e) => e.text).reverse()).toEqual([

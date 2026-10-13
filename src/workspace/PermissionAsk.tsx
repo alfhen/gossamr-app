@@ -53,8 +53,8 @@ export function PermissionExplainer({ allow, onDismiss = () => usePrefs.getState
     requestAnimationFrame(() => ask?.querySelector<HTMLElement>("[data-permission-decisions] button:not(:disabled)")?.focus({ preventScroll: true }));
   };
   return (
-    <section ref={box} data-permission-explainer aria-label="What Allow once and Deny do" className="grid gap-1 rounded-md border border-ws-sep bg-ws-bar px-2.5 py-2 text-sm text-ws-ink2">
-      <p className="m-0 font-semibold text-ws-ink">First permission prompt? What the buttons do</p>
+    <section ref={box} data-permission-explainer aria-label={allow ? "What Allow once and Deny do" : "What Deny does"} className="grid gap-1 rounded-md border border-ws-sep bg-ws-bar px-2.5 py-2 text-sm text-ws-ink2">
+      <p className="m-0 font-semibold text-ws-ink">First permission prompt? {allow ? "What the buttons do" : "What Deny does"}</p>
       {allow && <p className="m-0">{EXPLAINER_ALLOW}</p>}
       <p className="m-0">{EXPLAINER_DENY}</p>
       <div>
@@ -99,7 +99,7 @@ export function StopRunConfirm({ name, onStop, onKeep }: { name: string; onStop(
 }
 
 /** What a card asks before Deny tells the agent no: unlike Allow once, nothing else follows it. */
-export const DENY_QUESTION = "Tell Claude no? It carries on without it.";
+export const DENY_QUESTION = "Deny this?";
 
 /** The card's confirm step for Deny, as `StopRunConfirm` is for Stop. Escape keeps it waiting. */
 export function DenyConfirm({ onDeny, onKeep }: { onDeny(): void; onKeep(): void }) {
@@ -188,7 +188,7 @@ export function PermissionAsk({ run, onAttach, onStop, label, answered: given, c
         {denying ? (
           <DenyConfirm onDeny={() => (setDenying(false), deny())} onKeep={() => setDenying(false)} />
         ) : (
-          <Btn tone={offer.allow === "readOnly" || offer.allow === "forbidden" ? "primary" : "plain"} icon="x" disabled={busy || !command} aria-describedby={note} onClick={() => setDenying(true)}>
+          <Btn tone={offer.allow === "readOnly" || offer.allow === "forbidden" ? "primary" : "plain"} icon="x" disabled={busy || !command} aria-describedby={explained ? undefined : note} onClick={() => setDenying(true)}>
             Deny
           </Btn>
         )}
@@ -210,9 +210,12 @@ export function PermissionAsk({ run, onAttach, onStop, label, answered: given, c
           {READ_ONLY_STEP_NOTE}
         </p>
       )}
-      <p id={note} className="m-0 text-xs text-ws-ink3">
-        Deny: {DENY_NOTE}
-      </p>
+      {/* The explainer says it already, above. */}
+      {!explained && (
+        <p id={note} className="m-0 text-xs text-ws-ink3">
+          Deny: {DENY_NOTE}
+        </p>
+      )}
     </div>
   );
 }

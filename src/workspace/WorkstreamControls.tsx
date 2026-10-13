@@ -3,7 +3,7 @@ import { Switch } from "../components/Switch";
 import type { Need } from "../lib/needs";
 import { nextStep, type NextStep } from "../lib/nextStep";
 import { RULE_SWITCH, STEP_HELP, isHeldByYou, budgetNote, heldBanner, ruleText, stepsLeftText, stepsOf } from "../lib/workstreamHold";
-import { HELD_BUDGET, TRIPWIRE, WORKSTREAM_RULES, type AutoStartSwitches, type Proposal, type Run, type WorkstreamRule, type WorkstreamRules, type WorkstreamView } from "../types";
+import { HELD_BUDGET, TRIPWIRE, WORKSTREAM_RULES, type AutoStartSwitches, type Proposal, type Run, type WorkstreamEvent, type WorkstreamRule, type WorkstreamRules, type WorkstreamView } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { Btn } from "./AgentSheet";
 import { paneHas, useDecisionShown } from "./decisionShown";
@@ -289,9 +289,11 @@ export function WorkstreamControlsView({ view, globals, actions, confirmingStop,
  * The Next line's step, or null (the line stays hidden) while Settings' switches are unread: guessing from the defaults could
  * promise a step the person's saved settings switched off.
  */
-export function nextStepOnceKnown(view: WorkstreamView, runs: Run[], proposals: Proposal[], needs: Need[], globals: AutoStartSwitches | null): NextStep | null {
-  return globals ? nextStep(view, runs, proposals, needs, globals) : null;
+export function nextStepOnceKnown(view: WorkstreamView, runs: Run[], proposals: Proposal[], needs: Need[], globals: AutoStartSwitches | null, events: readonly WorkstreamEvent[] = []): NextStep | null {
+  return globals ? nextStep(view, runs, proposals, needs, globals, events) : null;
 }
+
+const NO_EVENTS: readonly WorkstreamEvent[] = [];
 
 /** `WorkstreamControlsView` for workstream `view`, wired to workstreamsStore. */
 export function WorkstreamControls({ view }: { view: WorkstreamView }) {
@@ -302,6 +304,7 @@ export function WorkstreamControls({ view }: { view: WorkstreamView }) {
   const runs = useRuns((s) => s.runs);
   const proposals = useWorkspace((s) => s.proposals);
   const needs = useNeedsYou();
-  const next = useMemo(() => nextStepOnceKnown(view, runs, Object.values(proposals), needs, globals), [view, runs, proposals, needs, globals]);
+  const events = useWorkstreams((s) => s.events[id]) ?? NO_EVENTS;
+  const next = useMemo(() => nextStepOnceKnown(view, runs, Object.values(proposals), needs, globals, events), [view, runs, proposals, needs, globals, events]);
   return <WorkstreamControlsView view={view} globals={globals} actions={actions} confirmingStop={confirmingStop} onConfirmStop={setConfirmingStop} next={next} />;
 }

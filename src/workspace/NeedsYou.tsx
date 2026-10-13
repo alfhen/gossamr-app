@@ -13,10 +13,16 @@ const CHIP: Record<NeedGroupKind, string> = {
   approve: "bg-ws-accent-soft text-ws-accent",
 };
 
+const CHIP_TITLE: Record<NeedGroupKind, string> = {
+  decide: "Decide: a choice only you can make",
+  unblock: "Unblock: something is stuck until you answer or allow it",
+  approve: "Approve: a draft that waits for your go-ahead before anything is posted",
+};
+
 /** What kind of ask a need is: Decide, Unblock or Approve. */
 export function GroupChip({ group }: { group: NeedGroupKind }) {
   return (
-    <span data-needs-you-chip={group} className={`shrink-0 rounded-full px-1.5 text-[10px] leading-4 font-semibold ${CHIP[group]}`}>
+    <span data-needs-you-chip={group} title={CHIP_TITLE[group]} className={`shrink-0 rounded-full px-1.5 text-[10px] leading-4 font-semibold ${CHIP[group]}`}>
       {GROUP_LABEL[group]}
     </span>
   );
@@ -106,9 +112,12 @@ function NeedRow({ need, gid, now, onPick, showTicket, top }: { need: Need; gid:
   );
 }
 
-function GroupRow({ group: g, now, onPick }: { group: NeedGroup; now: number; onPick?(need: Need): void }) {
+/** Pip home's list opens its groups by default while this many needs or fewer wait, so each shows once, under its group. */
+const OPEN_BY_DEFAULT = 8;
+
+function GroupRow({ group: g, now, onPick, openByDefault }: { group: NeedGroup; now: number; onPick?(need: Need): void; openByDefault: boolean }) {
   const gid = groupId(g.workstreamId);
-  const open = usePipHome((s) => s.expanded.has(gid));
+  const open = usePipHome((s) => s.expanded.has(gid) || (openByDefault && !s.collapsed.has(gid)));
   const deciding = usePipHome((s) => s.deciding === g.top.key);
   const text = groupText(g, now);
   const list = `needs-you-group-${gid}`;
@@ -138,24 +147,33 @@ function GroupRow({ group: g, now, onPick }: { group: NeedGroup; now: number; on
           <span data-needs-you-head className="line-clamp-2 min-w-0 flex-1 [overflow-wrap:anywhere] text-ws-ink">
             {g.title}
           </span>
-          <GroupChip group={g.top.group} />
+          {/* Open, the group is only its name and count: the needs under it say the rest, each once. */}
+          {expanded ? (
+            <span data-needs-you-count-chip className="shrink-0 text-xs text-ws-ink3">
+              {g.count} waiting
+            </span>
+          ) : (
+            <GroupChip group={g.top.group} />
+          )}
         </span>
+        {!expanded && (
         <span data-needs-you-why className="line-clamp-2 text-xs text-ws-ink2 [overflow-wrap:anywhere]">
           {/* General holds needs about any ticket, so its row names the top one's. */}
           {g.workstreamId === null && g.top.ticketKey && <b className="font-mono font-semibold text-ws-ink">{g.top.ticketKey} </b>}
           {g.top.why}
         </span>
-        <Asking need={g.top} />
+        )}
+        {!expanded && <Asking need={g.top} />}
       </button>
       <div className="flex items-center gap-1.5 px-2 pb-0.5 text-xs text-ws-ink3">
-        <span data-needs-you-age>{age(g.top, now)}</span>
+        {!expanded && <span data-needs-you-age>{age(g.top, now)}</span>}
         {g.count > 1 && (
           <button
             type="button"
             data-needs-you-more
             aria-expanded={expanded}
             aria-controls={list}
-            onClick={() => usePipHome.getState().setExpanded(gid, !open)}
+            onClick={() => usePipHome.getState().setExpanded(gid, !expanded)}
             className="rounded px-1 font-semibold text-ws-accent hover:underline focus-visible:outline-2 focus-visible:outline-ws-pip"
           >
             {expanded ? "Show less" : `+${g.count - 1} more`}
@@ -208,7 +226,7 @@ export function NeedsYouList({ needs, compact = false, main = false, onPick, now
       ) : (
         <ul className="m-0 grid list-none gap-1 p-0">
           {groups.map((g) => (
-            <GroupRow key={groupId(g.workstreamId)} group={g} now={now} onPick={onPick} />
+            <GroupRow key={groupId(g.workstreamId)} group={g} now={now} onPick={onPick} openByDefault={main && needs.length <= OPEN_BY_DEFAULT} />
           ))}
         </ul>
       )}

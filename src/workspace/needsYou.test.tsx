@@ -153,6 +153,28 @@ describe("the Needs you list", () => {
     expect(html).not.toContain(`aria-label="${groupText(g, NOW)}"`);
   });
 
+  it("opens each group by default on Pip home's own list while its needs fit, with the group's header only its name and count", () => {
+    const html = renderToStaticMarkup(<NeedsYouList needs={list} now={NOW} main />);
+    // The 8 needs fit: ws-1 shows its six, once each, and no why line is repeated on its header.
+    expect([...html.matchAll(/data-needs-you-need="([^"]+)"/g)].map((m) => m[1])).toEqual(["run:r-perm", "run:r-q", "run:r-fail", "draft:c1", "draft:c2", "draft:c3"]);
+    const ws1 = html.slice(html.indexOf('data-needs-you-row="ws-1"')).split("</li></ul>")[0];
+    expect(ws1).toContain("6 waiting");
+    expect(ws1.split('<ul id="needs-you-group-ws-1"')[0]).not.toContain("data-needs-you-why");
+    // The person's fold is kept, and a longer list stays folded as before.
+    seed(usePipHome, { collapsed: new Set(["ws-1"]) });
+    const folded = renderToStaticMarkup(<NeedsYouList needs={list} now={NOW} main />);
+    expect(folded).not.toContain("data-needs-you-need=");
+    expect(folded).toContain("+5 more");
+    unseed();
+    expect(renderToStaticMarkup(<NeedsYouList needs={list} now={NOW} />)).not.toContain("data-needs-you-need=");
+  });
+
+  it("explains Decide, Unblock and Approve on the chips", () => {
+    const html = renderToStaticMarkup(<NeedsYouList needs={list} now={NOW} />);
+    expect(html).toMatch(/data-needs-you-chip="unblock" title="Unblock: [^"]+"/);
+    expect(html).toMatch(/data-needs-you-chip="approve" title="Approve: [^"]+"/);
+  });
+
   it("keeps a group folded until it is expanded, then lists every need in it, the top one first", () => {
     const folded = renderToStaticMarkup(<NeedsYouList needs={list} now={NOW} />);
     expect(folded).toContain('aria-expanded="false"');

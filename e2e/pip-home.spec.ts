@@ -15,6 +15,7 @@ import {
   needOfKind,
   needsPane,
   needsYouCount,
+  foldAllNeeds,
   needsYouTray,
   openApp,
   openPipHome,
@@ -277,6 +278,7 @@ test("Needs you from the board: the rail's Pip home popover lists the same rows 
   await askPip(page, "investigate this");
   await settled(page);
   await holdBySystem(page, "CA-401", "restart");
+  await foldAllNeeds(page);
   const onHome = await needsYouTray(page).locator("[data-needs-you-group]").allTextContents();
   expect(onHome).toHaveLength(1);
   expect(onHome[0]).toContain("Held after a restart");

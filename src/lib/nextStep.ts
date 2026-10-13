@@ -1,9 +1,9 @@
 import { decideAutostart, ruleOn, type AutostartInput, type ReviewFinding } from "../backend/mockSupervisor";
 import { slotPosition, slotQueue, ordinal } from "../workspace/agentsLogic";
-import { ALLOW_MORE_STEPS, AUTOSTART_DEFAULTS, HELD_BUDGET, type AutoStartSwitches, type Proposal, type Run, type RunKind, type WorkstreamRule, type WorkstreamView } from "../types";
+import { ALLOW_MORE_STEPS, AUTOSTART_DEFAULTS, HELD_BUDGET, type AutoStartSwitches, type Proposal, type Run, type RunKind, type WorkstreamEvent, type WorkstreamRule, type WorkstreamView } from "../types";
 import { byRank, type Need } from "./needs";
 import { shortHeld, stepsLeftText, ruleText } from "./workstreamHold";
-import { byQueue, STAGE_LABEL } from "./workstreamStage";
+import { byQueue, reviewPosted, STAGE_LABEL } from "./workstreamStage";
 
 /**
  * What happens next in a workstream, and why, as one line for its header ("Next: when R5 (Build) finishes, a review
@@ -109,7 +109,7 @@ function whyNothing(run: Run, view: WorkstreamView, globals: Partial<AutoStartSw
  * slot; the chain finished; Advise; the automatic budget spent; then what the rules start after the running step, or after
  * the last one that finished.
  */
-export function nextStep(view: WorkstreamView, runs: readonly Run[], proposals: readonly Proposal[], needs: readonly Need[], globals: Partial<AutoStartSwitches> = AUTOSTART_DEFAULTS): NextStep | null {
+export function nextStep(view: WorkstreamView, runs: readonly Run[], proposals: readonly Proposal[], needs: readonly Need[], globals: Partial<AutoStartSwitches> = AUTOSTART_DEFAULTS, events: readonly AuditLine[] = []): NextStep | null {
   const ws = view.workstream;
   if (ws.closedAt) return null;
   const step = (kind: NextStepKind, text: string, need: Need | null = null): NextStep => ({ kind, text: `Next: ${text}`, need });
@@ -131,13 +131,13 @@ export function nextStep(view: WorkstreamView, runs: readonly Run[], proposals: 
   const blocking = own.find((n) => n.group !== "approve");
   if (blocking) return step("waiting", `waiting on you. ${blocking.why}`, blocking);
   const approve = own[0];
-  const line = chain(view, runs, proposals, globals, mine, going, step);
+  const line = chain(view, runs, proposals, globals, mine, going, step, events);
   if (approve && line.kind !== "slot" && line.kind !== "auto" && line.kind !== "depends") return step("waiting", `waiting on you. ${approve.why}`, approve);
   return line;
 }
 
 /** The line once nothing is waiting on the person: a slot, the chain finished, Advise, the budget, then what the rules start. */
-function chain(view: WorkstreamView, runs: readonly Run[], proposals: readonly Proposal[], globals: Partial<AutoStartSwitches>, mine: readonly Run[], going: readonly Run[], step: Step): NextStep {
+function chain(view: WorkstreamView, runs: readonly Run[], proposals: readonly Proposal[], globals: Partial<AutoStartSwitches>, mine: readonly Run[], going: readonly Run[], step: Step, events: readonly AuditLine[]): NextStep {
   const ws = view.workstream;
   const queue = slotQueue(runs, [view]);
   const waiter = going.find((r) => r.state === "queued" && r.slotWaitSince);
@@ -161,8 +161,11 @@ function chain(view: WorkstreamView, runs: readonly Run[], proposals: readonly P
 
   const last = mine[mine.length - 1];
   if (!last) return step("idle", "nothing is running. Ask Pip, or start a step yourself.");
-  return afterFinished(last, view, mine, proposals, globals, left, step);
+  return afterFinished(last, view, mine, proposals, globals, left, step, events);
 }
+
+/** The parts of an audit line the line reads: fix rounds sent and reviews posted. */
+type AuditLine = Pick<WorkstreamEvent, "action" | "actor" | "runId" | "detail" | "at">;
 
 type Step = (kind: NextStepKind, text: string, need?: Need | null) => NextStep;
 
@@ -202,7 +205,7 @@ function afterRunning(src: Run, view: WorkstreamView, globals: Partial<AutoStart
 }
 
 /** The line with nothing running: what the rules are about to start after the newest run, or why nothing is. */
-function afterFinished(last: Run, view: WorkstreamView, mine: readonly Run[], proposals: readonly Proposal[], globals: Partial<AutoStartSwitches>, left: string, step: Step): NextStep {
+function afterFinished(last: Run, view: WorkstreamView, mine: readonly Run[], proposals: readonly Proposal[], globals: Partial<AutoStartSwitches>, left: string, step: Step, events: readonly AuditLine[]): NextStep {
   const name = nameOf(last, view);
   if (last.state !== "done") return step("manual", `nothing starts on its own after ${name} ${last.state === "failed" ? "failed" : "stopped"}. Your click starts the next step.`);
   const kind = last.spec.kind;
@@ -214,11 +217,16 @@ function afterFinished(last: Run, view: WorkstreamView, mine: readonly Run[], pr
   if (kind === "plan") known.planApproved = proposals.some((p) => p.origin.type === "run" && p.origin.runId === last.id && p.intent.type === "rewrite" && p.state.type === "applied");
   if (kind === "review") {
     known.report = view.reviewBlocking ? { verdict: "blocking", findings: SOME_FINDING } : { verdict: "pass" };
-    known.fixRounds = 0;
+    // The rounds the supervisor already sent for this review's build, counted as it counts them.
+    const build = last.spec.buildFromRun ?? null;
+    known.fixRounds = build ? events.filter((e) => e.action === "autostart" && e.runId === build && !!e.detail?.startsWith("fix_round after ")).length : 0;
+    // A review the person posted to GitHub: nothing follows it on its own, whatever it said.
+    if (view.reviewBlocking && reviewPosted(events, last)) return step("manual", `the review is posted; nothing starts on its own. Your click starts the next step.`);
     known.reviewed = mine.filter((r) => r.spec.kind === "review").map((r) => r.spec.prSha ?? null);
   }
   const result = probe(last, view, globals, known);
   if (result?.decision === "start") return step("auto", `${A_STEP[result.kind]} starts automatically after ${name}${left}.`);
+  if (result?.decision === "exhausted") return step("manual", `${shortOf(last, view)}'s review still blocks after ${known.fixRounds} fix rounds and no fix round starts on its own. Your click starts the next step.`);
   if (result?.decision === "fixRound") return step("auto", `a fix round starts automatically after ${name}${left}.`);
   if (kind === "review" && view.reviewBlocking) return step("manual", `${shortOf(last, view)}'s review blocks and no fix round starts on its own: ${whyNothing(last, view, globals)}. Your click starts the next step.`);
   return step("manual", `nothing starts on its own after ${name}: ${whyNothing(last, view, globals)}. Your click starts the next step.`);

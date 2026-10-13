@@ -255,7 +255,7 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
     edit: !open
       ? undefined
       : intent.type === "comment" || rewrite
-        ? () => (setEditing(true), focusField("textarea, input[type=text]"))
+        ? () => (setEditing(true), focusField("textarea, input:not([type]), input[type=text]"))
         : followUp
           ? () => focusField(`#follow-up-${p.id}`)
           : reply

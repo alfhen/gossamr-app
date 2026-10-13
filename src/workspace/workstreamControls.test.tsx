@@ -14,7 +14,7 @@ import { DecisionShownContext, decisionShown } from "./decisionShown";
 import { MODE_LINE, NextStepLine, nextStepOnceKnown } from "./WorkstreamControls";
 import { AutomaticStepsPanel, StopConfirm, WorkstreamControlsView, choiceValue, controlActions, ruleChoice, type ControlActions } from "./WorkstreamControls";
 import { holdAllVisible, useWorkstreams } from "./workstreamsStore";
-import { DRAFT_OPEN, EscalationCardView, EscalationSent, FIX_ROUND_HELP, NO_REVIEW_DRAFT, POST_AS_IS_HELP, TAKE_OVER_HELP, TAKEN_OVER, draftOpen, escalationActions, escalationShown, fixRoundSent, postingReview } from "./EscalationCard";
+import { CONNECT_TO_POST, DRAFT_OPEN, EscalationCardView, EscalationSent, FIX_ROUND_HELP, NO_REVIEW_DRAFT, POST_AS_IS_HELP, TAKE_OVER_HELP, TAKEN_OVER, draftOpen, escalationActions, escalationShown, fixRoundSent, postingReview } from "./EscalationCard";
 import { ESCALATION_GONE } from "../backend/mockWorkstreams";
 import type { Escalation, Proposal } from "../types";
 import type { WatchState } from "../types";
@@ -190,7 +190,7 @@ describe("the workstream's controls", () => {
     const amber = render(viewOf({ spent: { autoTurns: 9, wakes: 9, tokens: 0 } }));
     expect(amber).toContain('data-budget="amber"');
     expect(amber).toContain("9 of 11 automatic steps used");
-    expect(render(viewOf({ spent: { autoTurns: 1, wakes: 10, tokens: 0 } }))).toContain("10 of 12 automatic steps used");
+    expect(render(viewOf({ spent: { autoTurns: 1, wakes: 10, tokens: 0 } }))).toContain("9 of 11 automatic steps used");
     // A workstream's own limit counts, and its banner says what to do once spent; the line isn't said twice.
     const own = viewOf({ budget: { autoTurns: 2, wakes: null, tokens: null }, spent: { autoTurns: 2, wakes: 2, tokens: 0 }, heldReason: HELD_BUDGET });
     expect(own.budget.level).toBe("spent");
@@ -199,7 +199,7 @@ describe("the workstream's controls", () => {
     expect(render(own)).toContain("data-step-help");
     // Held because the wakes ran out: it still says automatic steps, never a second unit.
     const wakes = render(viewOf({ spent: { autoTurns: 1, wakes: 12, tokens: 0 }, heldReason: HELD_BUDGET }));
-    expect(wakes).toContain("Held: automatic steps used up. Resume to give it 12 more");
+    expect(wakes).toContain("Held: automatic steps used up. Resume to give it 11 more");
     expect(wakes).not.toMatch(/wakes|turns|write to Pip/);
     // Spent, but held for something else: the line says so.
     expect(render({ ...own, workstream: { ...own.workstream, heldReason: HELD_PERSON } })).toContain('data-budget="spent"');
@@ -278,6 +278,20 @@ describe("a review that still blocks after the fix rounds", () => {
   it("can't post a review that has no draft waiting, and waits while a choice is on its way", () => {
     expect(buttons(card({ ...escalation, reviewDraft: null }))[2]).toEqual({ text: "Post the review as is", disabled: true, title: NO_REVIEW_DRAFT });
     expect(buttons(card(escalation, true)).every((b) => b.disabled)).toBe(true);
+  });
+
+  it("says why Post the review as is is greyed out, in place of what it would do", () => {
+    const view = (over: Partial<Parameters<typeof EscalationCardView>[0]>) => renderToStaticMarkup(<EscalationCardView escalation={{ ...escalation, reviewDraft: null }} busy={false} onFixRound={vi.fn()} onTakeOver={vi.fn()} onPost={vi.fn()} {...over} />);
+    const noDraft = view({});
+    expect(noDraft).toContain(NO_REVIEW_DRAFT);
+    expect(noDraft).not.toContain(POST_AS_IS_HELP);
+    expect(noDraft).not.toContain("Connect GitHub");
+    const offline = view({ github: false, onConnect: vi.fn() });
+    expect(offline).toContain(CONNECT_TO_POST);
+    expect(offline).toContain("data-escalation-connect");
+    expect(offline).not.toContain(POST_AS_IS_HELP);
+    // With a draft there is nothing to explain.
+    expect(view({ github: false, escalation })).toContain(POST_AS_IS_HELP.replace(/'/g, "&#x27;"));
   });
 
   it("on Pip home's decision pane, holds the choices once Post the review as is was pressed, until the draft is posted or goes", () => {

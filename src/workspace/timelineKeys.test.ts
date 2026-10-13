@@ -6,7 +6,7 @@ import type { Proposal, Run, WorkstreamView } from "../types";
 import { pipHomeHints } from "./footerHints";
 import { HINTS, keyHint } from "./keyMap";
 import { timelineDrafts, timelineRuns } from "./Timeline";
-import { followsEnd, nearBottom, stepIndex, timelineKeyAction, timelineStop, upToTimeline } from "./timelineKeys";
+import { ENTRY_FOCUS, followsEnd, nearBottom, revealEntry, stepIndex, timelineKeyAction, timelineStop, upToTimeline } from "./timelineKeys";
 import { usePipHome } from "./pipHomeStore";
 import { useTabs } from "./tabsStore";
 import { TimelineFilterBar, TimelineScopeToggle, showTimeline } from "./TimelineFilterBar";
@@ -180,5 +180,22 @@ describe("following the timeline's end", () => {
     expect(followsEnd(false, 2, [user, user, wake])).toBe(false);
     expect(followsEnd(false, 2, [user, user, {}])).toBe(true);
     expect(followsEnd(false, 0, [user])).toBe(true);
+  });
+});
+
+describe("an entry's focus ring and reveal", () => {
+  it("draws the ring with a solid style and clears the chips row below", () => {
+    expect(ENTRY_FOCUS).toContain("focus-visible:outline-solid");
+    expect(ENTRY_FOCUS).toContain("scroll-mb-14");
+  });
+
+  it("scrolls an entry that took focus itself into view, and leaves a card or button inside it to scroll itself", () => {
+    const scrollIntoView = vi.fn();
+    const li = { scrollIntoView };
+    revealEntry({ target: li, currentTarget: li });
+    expect(scrollIntoView).toHaveBeenCalledWith({ block: "nearest" });
+    scrollIntoView.mockClear();
+    revealEntry({ target: {}, currentTarget: li });
+    expect(scrollIntoView).not.toHaveBeenCalled();
   });
 });

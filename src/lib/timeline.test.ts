@@ -119,13 +119,12 @@ describe("timeline: one list, oldest first", () => {
       labels,
       ticketKey: "CA-401",
     });
-    expect(keys(list)).toEqual(["turn:q1", "audit:ws-1:0", "run:r1", "draft:d1", "audit:ws-1:1", "turn:q2", "run:r2"]);
+    expect(keys(list)).toEqual(["turn:q1", "audit:ws-1:0", "run:r1", "draft:d1", "turn:q2", "run:r2"]);
     expect(list.map((e) => e.text)).toEqual([
       "You: question q1",
       "You let Pip manage the workstream",
       "Investigate R1 finished",
       "You approved a comment on CA-401, drafted by an agent: posted",
-      "You approved a comment on CA-401",
       "You: question q2",
       "Build R2 started",
     ]);
@@ -388,14 +387,15 @@ describe("timeline: cause before effect", () => {
 
   it("puts the review run, the review it left and its posting in that order when they share a moment", () => {
     const list = timeline({ runs: [run("r2", "review", "done", 20, { queuedAt: iso(20) })], drafts: [posted(20)], events: [line("review_posted", 20, { proposalId: "d1" })], labels });
-    expect(list.map((e) => e.kind)).toEqual(["run", "draft", "audit"]);
-    expect(list[2].text).toBe("You posted a GitHub review on CA-401");
+    // The review's own entry says it was posted, so the audit line that repeats it is left out.
+    expect(list.map((e) => e.kind)).toEqual(["run", "draft"]);
+    expect(list[1].draftState).toBe("applied");
   });
 
   it("never puts a posted review before the review run it came of, whatever the clocks say", () => {
     // The review's draft and its posting are stamped before the run is, as two stores' clocks may differ.
     const list = timeline({ runs: [run("r2", "review", "done", 20)], drafts: [posted(25)], events: [line("review_posted", 24, { proposalId: "d1" })], labels });
-    expect(keys(list)).toEqual(["run:r2", "draft:d1", "audit:ws-1:0"]);
+    expect(keys(list)).toEqual(["run:r2", "draft:d1"]);
     // The entries keep the time each was stamped.
     expect(list[1].at).toBe(iso(25));
   });
@@ -407,7 +407,7 @@ describe("timeline: cause before effect", () => {
       events: [line("held", 20), line("review_posted", 10, { proposalId: "d1" }), line("resumed", 12)],
       labels,
     });
-    expect(list.map((e) => e.key)).toEqual(["audit:ws-1:0", "run:r2", "draft:d1", "audit:ws-1:2", "audit:ws-1:1"]);
+    expect(list.map((e) => e.key)).toEqual(["audit:ws-1:0", "run:r2", "draft:d1", "audit:ws-1:2"]);
   });
 
   it("keeps a workstream's cause before its effect when workstreams are merged by time", () => {
@@ -551,12 +551,33 @@ describe("timeline: the audit", () => {
     const list = timeline({
       runs: [run("r1", "build", "stopped", 30)],
       drafts: [draft("d1", comment("CA-401"), 20, { state: { type: "applied" } })],
-      events: [line("run_stopped", 15, { runId: "r1" }), line("draft_approved", 10, { proposalId: "d1" }), line("run_answered", 5, { runId: "gone" })],
+      events: [line("run_stopped", 15, { runId: "r1" }), line("draft_skipped", 10, { proposalId: "d1" }), line("run_answered", 5, { runId: "gone" })],
       labels,
     });
     const audit = list.filter((e) => e.kind === "audit");
     expect(audit.map((e) => e.target)).toEqual([{ type: "run", id: "r1" }, { type: "draft", id: "d1" }, null]);
     expect(audit[2].text).toBe("You answered run gone");
+  });
+});
+
+describe("timeline: one line for one post", () => {
+  it("drops the approval line of a draft shown as applied, and moves the decision to the draft", () => {
+    const list = timeline({ drafts: [draft("d1", comment("CA-408"), 20, { state: { type: "applied" } })], events: [line("draft_approved", 10, { proposalId: "d1" })], labels });
+    expect(keys(list)).toEqual(["draft:d1"]);
+    expect(list[0].decision).toBe(true);
+    expect(filterCounts(list).decisions).toBe(1);
+  });
+
+  it("drops it for a draft still applying, too", () => {
+    const list = timeline({ drafts: [draft("d1", comment("CA-408"), 20, { state: { type: "applying" } })], events: [line("draft_approved", 10, { proposalId: "d1" })], labels });
+    expect(keys(list)).toEqual(["draft:d1"]);
+  });
+
+  it("keeps it when the draft is not on the timeline, or is not applied", () => {
+    const events = [line("draft_approved", 10, { proposalId: "gone" })];
+    expect(timeline({ events, labels }).map((e) => e.text)).toEqual(["You approved a draft"]);
+    const pending = timeline({ drafts: [draft("d1", comment("CA-408"), 20)], events: [line("review_posted", 10, { proposalId: "d1" })], labels });
+    expect(pending.map((e) => e.kind)).toEqual(["draft", "audit"]);
   });
 });
 

@@ -69,9 +69,9 @@ const view = (runs: Run[], over: Over = {}): WorkstreamView => {
 };
 
 const needsOf = (v: WorkstreamView, runs: Run[], proposals: Proposal[] = []): Need[] => buildNeeds({ workstreams: [v], runs, proposals, dismissed: new Set(), now: NOW });
-const next = (runs: Run[], over: Over = {}, proposals: Proposal[] = [], globals = AUTOSTART_DEFAULTS) => {
+const next = (runs: Run[], over: Over = {}, proposals: Proposal[] = [], globals = AUTOSTART_DEFAULTS, events: Parameters<typeof nextStep>[5] = []) => {
   const v = view(runs, over);
-  return nextStep(v, runs, proposals, needsOf(v, runs, proposals), globals);
+  return nextStep(v, runs, proposals, needsOf(v, runs, proposals), globals, events);
 };
 const text = (runs: Run[], over: Over = {}, proposals: Proposal[] = []) => next(runs, over, proposals)?.text;
 
@@ -303,6 +303,20 @@ describe("nextStep after the last run finished", () => {
     const blocking = run("r", "review", "done", { spec: { ...base.spec, kind: "review", workstream: "ws-1", buildFromRun: "b" } });
     expect(next([run("b", "build", "done"), blocking], { stage: "review", reviewBlocking: true })).toMatchObject({ kind: "auto", text: "Next: a fix round starts automatically after R2 (Review)." });
     expect(next([run("b", "build", "done"), blocking], { stage: "review", reviewBlocking: true, rules: { fix_round: false } })?.kind).toBe("manual");
+  });
+
+  it("says no fix round starts once the automatic rounds ran out, counting them as the supervisor does", () => {
+    const blocking = run("r", "review", "done", { spec: { ...base.spec, kind: "review", workstream: "ws-1", buildFromRun: "b" } });
+    const sent = (n: number) => ({ at: iso(30 - n), actor: "supervisor" as const, action: "autostart", runId: "b", detail: `fix_round after r${n}` });
+    const runs = [run("b", "build", "done"), blocking];
+    expect(next(runs, { stage: "review", reviewBlocking: true }, [], AUTOSTART_DEFAULTS, [sent(1)])?.kind).toBe("auto");
+    expect(next(runs, { stage: "review", reviewBlocking: true }, [], AUTOSTART_DEFAULTS, [sent(1), sent(2)])).toMatchObject({ kind: "manual", text: "Next: R2's review still blocks after 2 fix rounds and no fix round starts on its own. Your click starts the next step." });
+  });
+
+  it("says nothing starts on its own once the person posted a blocking review", () => {
+    const blocking = run("r", "review", "done", { spec: { ...base.spec, kind: "review", workstream: "ws-1", buildFromRun: "b" } });
+    const posted = { at: iso(2), actor: "person" as const, action: "review_posted", runId: null, detail: null };
+    expect(next([run("b", "build", "done"), blocking], { stage: "review", reviewBlocking: true }, [], AUTOSTART_DEFAULTS, [posted])).toMatchObject({ kind: "manual", text: "Next: the review is posted; nothing starts on its own. Your click starts the next step." });
   });
 
   it("says nothing starts after a triage that did not lead to a plan", () => {

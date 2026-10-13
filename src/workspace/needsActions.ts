@@ -5,7 +5,7 @@ import { useWorkspace } from "../workspaceStore";
 import { draftKeyAction } from "./draftKeys";
 import { draftDecisions } from "./DraftPreview";
 import { inlineStartable, useInlineStarts } from "./InlineStart";
-import { usePipHome } from "./pipHomeStore";
+import { setPaneIntent, takePaneIntent, usePipHome } from "./pipHomeStore";
 import { useRuns } from "./runsStore";
 import { useTabs } from "./tabsStore";
 import { useWorkstreams } from "./workstreamsStore";
@@ -131,11 +131,4 @@ export function disarm() {
   if (usePipHome.getState().asking) usePipHome.getState().ask(null);
 }
 
-/** What the pane does on opening for the key that opened it: press its Edit, where it has one. */
-let paneIntent: "edit" | null = null;
-export const setPaneIntent = (intent: "edit" | null) => void (paneIntent = intent);
-export function takePaneIntent(): "edit" | null {
-  const was = paneIntent;
-  paneIntent = null;
-  return was;
-}
+export { setPaneIntent, takePaneIntent };

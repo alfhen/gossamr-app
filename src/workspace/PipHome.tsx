@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useClaude } from "../claudeStore";
 import { stageText } from "../lib/workstreamStage";
 import { witherClass } from "../lib/views";
-import type { WorkstreamWither } from "../lib/workstreamWither";
+import { witherShort, witherTitle, type WorkstreamWither } from "../lib/workstreamWither";
 import { Cobweb } from "../components/Cobweb";
 import { useWorkstreamWithers } from "./useWorkstreamWithers";
 import type { Run, WorkstreamView } from "../types";
@@ -22,6 +22,7 @@ import { NeedsYouList } from "./NeedsYou";
 import { useNeedsYou } from "./useNeeds";
 import { NeedsPane, firstDecision } from "./NeedsPane";
 import { arm, confirmArmed, disarm, groupId, keyPlan, openNeed, setPaneIntent } from "./needsActions";
+import { undoLog } from "./undo";
 import { composerFooter, workstreamStatus } from "./pipHomeLogic";
 import { PIP_HOME_REGIONS, columnRegion, regionColumn, usePipHome, type PipHomeColumn, type PipHomeFocus, type PipHomeRegion } from "./pipHomeStore";
 import { useRuns } from "./runsStore";
@@ -122,7 +123,7 @@ export function WorkstreamList({ list, closed, showClosed, selected, onSelect, o
         {open.map((v) => {
           const web = wither[v.workstream.id];
           return (
-            <li key={v.workstream.id} data-workstream-row={v.workstream.id} data-wither={web ? web.level : undefined} title={web?.text} {...option(v.workstream.id, web?.level)}>
+            <li key={v.workstream.id} data-workstream-row={v.workstream.id} data-wither={web ? web.level : undefined} title={web ? witherTitle(web) : undefined} {...option(v.workstream.id, web?.level)}>
               {web && <Cobweb level={web.level} />}
               <span className="flex min-w-0 items-center gap-1.5">
                 {v.workstream.itemKey && <b className="shrink-0 font-mono font-semibold text-ws-ink">{v.workstream.itemKey}</b>}
@@ -132,9 +133,14 @@ export function WorkstreamList({ list, closed, showClosed, selected, onSelect, o
               <RowStatus view={v} runs={runs} waiting={needsIn(needsYou, v.workstream.id)} />
               {/* After the row's own words, so its name still starts with the ticket's key. */}
               {web && (
-                <span data-workstream-wither className="sr-only">
-                  {web.text}
-                </span>
+                <>
+                  <span data-workstream-wither-short aria-hidden className="truncate text-xs text-ws-ink3">
+                    {witherShort(web)}
+                  </span>
+                  <span data-workstream-wither className="sr-only">
+                    {web.text}
+                  </span>
+                </>
               )}
             </li>
           );
@@ -487,6 +493,11 @@ function usePipHomeKeys(needsYou: readonly Need[]) {
           // Skipping or dismissing acts at once and offers Undo; the row keeps the keyboard, or hands it on as it leaves.
           if (plan.type === "do") return setPaneIntent(null), plan.run();
           return openNeed(need, { edit: plan.edit });
+        }
+        case "undo": {
+          // The toast offering it goes with it (`undoLog`'s settled hook).
+          const last = undoLog.latest();
+          return void (last && undoLog.run(last.id));
         }
         case "confirm":
           return confirmArmed();

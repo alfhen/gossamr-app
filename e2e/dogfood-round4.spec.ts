@@ -24,7 +24,7 @@ test.describe("Deny on a permission prompt asks first (F1)", () => {
     const { run, pane } = await onPermission(page);
     await pane.getByRole("button", { name: "Deny", exact: true }).click();
     const confirm = pane.getByRole("group", { name: "Deny this request" });
-    await expect(confirm).toContainText("Tell Claude no? It carries on without it.");
+    await expect(confirm).toContainText("Deny this?");
     expect(await stateOf(page, run.id)).toBe("needsPermission");
 
     await confirm.getByRole("button", { name: "Keep waiting" }).click();

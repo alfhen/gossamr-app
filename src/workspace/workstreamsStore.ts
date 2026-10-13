@@ -7,7 +7,7 @@ import { budgetView } from "../lib/workstreamHold";
 import { HELD_PERSON, type AutoStartSwitches, type ItemRef, type Run, type ScreenContext, type Workstream, type WorkstreamEvent, type WorkstreamMode, type WorkstreamRule, type WorkstreamUndo, type WorkstreamView } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { PIP_INPUT_ID } from "./draftKeys";
-import { keepSelectionOpen, usePipHome } from "./pipHomeStore";
+import { keepSelectionOpen, setPaneIntent, usePipHome } from "./pipHomeStore";
 import { usePip } from "./pipStore";
 import { usePrefs } from "./prefs";
 import { useRuns, type RunSheetTarget } from "./runsStore";
@@ -278,8 +278,18 @@ export const useWorkstreams = create<WorkstreamsState>()((set, get) => {
       const stop = readinessOf(get().list, id);
       if (!stop) return stale();
       const done = await act("Couldn't draft the comment to the reporter", (b) => b.workstreamsReadinessAsk(id, stop.triageRun));
-      if (done.ok) useToasts.getState().push("Drafted a comment to the reporter with the open questions. It is posted only when you approve it.", "info");
-      return done.ok;
+      if (!done.ok) return false;
+      // The readiness need is gone: the pane would fall to the next need. It shows the new draft instead, its card focused so Post comment is not one keypress away.
+      await useWorkspace.getState().refreshProposals();
+      const home = usePipHome.getState();
+      const key = `draft:${done.value.id}`;
+      setPaneIntent("card");
+      // The advance after the answered need may have opened this very draft already, with its Post button focused: remount it to read the intent.
+      const open = home.deciding === key;
+      home.decide(key, id);
+      if (open) home.redecide();
+      useToasts.getState().push("Here is the comment to the reporter. Nothing is posted until you press Post comment.", "info");
+      return true;
     },
 
     async answerSelf(id) {

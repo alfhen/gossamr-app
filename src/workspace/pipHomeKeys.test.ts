@@ -86,6 +86,16 @@ describe("pipHomeKey: plain keys stay out of fields and overlays", () => {
     expect(pipHomeKey(key("k", { shiftKey: true }), at())).toBeNull();
   });
 
+  it("Ctrl+Z and Cmd+Z undo, outside fields and overlays, and only plain with the modifier", () => {
+    expect(pipHomeKey(key("z", { ctrlKey: true }), at())).toEqual({ type: "undo" });
+    expect(pipHomeKey(key("Z", { metaKey: true }), at({ column: "conversation" }))).toEqual({ type: "undo" });
+    expect(pipHomeKey(key("z"), at())).toBeNull();
+    expect(pipHomeKey(key("z", { ctrlKey: true, shiftKey: true }), at())).toBeNull();
+    expect(pipHomeKey(key("z", { ctrlKey: true, altKey: true }), at())).toBeNull();
+    expect(pipHomeKey(key("z", { ctrlKey: true, target: el("TEXTAREA") }), at())).toBeNull();
+    expect(pipHomeKey(key("z", { ctrlKey: true }), at({ overlay: true }))).toBeNull();
+  });
+
   it("tells typing targets apart", () => {
     expect(isTypingTarget(el("INPUT"))).toBe(true);
     expect(isTypingTarget(el("textarea"))).toBe(true);

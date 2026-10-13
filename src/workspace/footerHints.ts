@@ -41,7 +41,7 @@ export function footerHints(view: ViewMode, pipHome = false): FooterHint[] {
 export function pipHomeHints(onNeed = false, onTimeline = false): FooterHint[] {
   const decide: FooterHint = onNeed
     ? { id: "needs", rank: 1, keys: ["a", "e", "d", "s"], text: "approve or allow (then ↵), edit, dismiss or deny, skip" }
-    : { id: "decide", rank: 2, keys: ["a", "e", "d", "s"], text: "on a draft: approve (then ↵), edit, skip; skips undo" };
+    : { id: "decide", rank: 2, keys: ["a", "e", "d", "s"], text: "on a draft: approve (then ↵), edit, skip (Ctrl+Z undoes)" };
   const [walk, open] = HINTS.timeline;
   const move: FooterHint = onTimeline && !onNeed ? { id: "timeline", rank: 0, keys: walk[0].split(" "), text: walk[1] } : { id: "move", rank: 0, keys: ["j", "k"], text: "move" };
   return [

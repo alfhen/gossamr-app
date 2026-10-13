@@ -115,9 +115,14 @@ describe("the run sheet, by state", () => {
       // It sits above the decision buttons, and says what the one line under the command used to.
       expect(html.indexOf("data-permission-explainer")).toBeLessThan(html.indexOf("data-permission-decisions"));
       expect(html).not.toContain("Claude Code takes a yes only in its own prompt.");
+      // Deny's effect is said once: the line under the buttons waits for the explainer to go.
+      expect(html).not.toContain("Claude is told you said no and carries on without it.");
+      expect(explainer).toContain("What the buttons do");
       // A run that can't be allowed has no Allow once to explain: only Deny.
       const ro = sheet(run("needsPermission", { needs: "approve Bash: rm -rf node_modules", spec: { ...build("x").spec, kind: "investigate" } }));
       expect(ro).toContain("Deny tells the agent no");
+      expect(ro).toContain("What Deny does");
+      expect(ro).not.toContain("What the buttons do");
       expect(ro).not.toContain("records your choice");
     });
 
@@ -125,6 +130,7 @@ describe("the run sheet, by state", () => {
       const html = sheet(build("approve Bash: mkdir -p dist"));
       expect(html).not.toContain("data-permission-explainer");
       expect(html).toContain("Claude Code takes a yes only in its own prompt.");
+      expect(html).toContain("Claude is told you said no and carries on without it.");
     });
 
     it("on a Build asking for a command Gossamr can't check, offers no Allow: it says why and opens Terminal instead", () => {

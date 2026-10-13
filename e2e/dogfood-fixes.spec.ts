@@ -602,7 +602,7 @@ test.describe("draft cards: click, Esc, a and s (D2, D7, D23, D28)", () => {
 
   test("a on a run draft opens its review scrolled into view with the keyboard in it; Tab reaches Start, Esc hides it and keeps the card", async ({ page }) => {
     const card = await generalRunDraft(page);
-    await expect(pipHome(page).locator("[data-pip-home-hints]")).toContainText("on a draft: approve (then ↵), edit, skip; skips undo");
+    await expect(pipHome(page).locator("[data-pip-home-hints]")).toContainText("on a draft: approve (then ↵), edit, skip (Ctrl+Z undoes)");
     await page.locator(PIP_INPUT).focus();
     await page.keyboard.press("ArrowUp");
     await expect(card).toBeFocused();

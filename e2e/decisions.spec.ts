@@ -4,6 +4,7 @@ import {
   askPermission,
   askPip,
   expandAllNeeds,
+  foldAllNeeds,
   expectToast,
   githubWrites,
   jiraWrites,
@@ -133,7 +134,7 @@ test("Allow once on a Build opens it in Terminal for that exact command, and a p
   await askPermission(page, build.id, `approve Bash: ${push}`);
 
   await openPipHome(page);
-  await expandAllNeeds(page);
+  await foldAllNeeds(page);
   const item = needOfKind(page, "permission");
   await expect(item).toContainText("R4 wants to run `git push -u origin");
   await item.click();
@@ -285,7 +286,7 @@ test("a review that still blocks after two fix rounds comes to the person with t
   expect(await lines(page, "fix_round_sent")).toHaveLength(2);
 
   await openPipHome(page);
-  await expandAllNeeds(page);
+  await foldAllNeeds(page);
   await expect(escalationItem(page)).toHaveCount(1);
   await expect(escalationItem(page)).toContainText("The review still blocks after 2 fix rounds.");
   await escalationItem(page).click();

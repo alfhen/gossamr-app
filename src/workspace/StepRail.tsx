@@ -318,7 +318,9 @@ export function PlanApproval({ questions }: { questions: readonly string[] }) {
 export function StepRailView({ view, runs, events, verdicts, changes = NO_CHANGES, proposals, now, titleOf, onOpenRun, approve, onOpenPr = (url) => void openOnGithub(url), onPullView = pullViewOrGithub, initialOpen = [], reveal = null }: StepRailViewProps) {
   const [open, setOpen] = useState<ReadonlySet<StepGroup>>(() => new Set(initialOpen));
   const chips = useMemo(() => stepChips([...runs], events, verdicts, proposals, { now, waitingForPr: view.waitingForPr, changes }), [runs, events, verdicts, proposals, now, view.waitingForPr, changes]);
-  const next = nextStep(chips);
+  // A ticket stopped as unclear is not planned until the person chooses: Plan is not what comes next.
+  const unclear = !!view.readiness;
+  const next = unclear && nextStep(chips) === "plan" ? null : nextStep(chips);
   const revealIn = reveal ? (runs.find((r) => r.id === reveal)?.spec.kind ?? null) : null;
   useEffect(() => {
     if (revealIn) setOpen((was) => (was.has(revealIn) ? was : new Set([...was, revealIn])));
@@ -378,6 +380,11 @@ export function StepRailView({ view, runs, events, verdicts, changes = NO_CHANGE
                   {isNext && (
                     <span data-step-next-tag className="rounded-full bg-ws-pip-soft px-1.5 text-[10px] leading-4 font-semibold text-ws-pip">
                       {chip.newest && chip.newest.state !== "done" ? "Now" : "Next"}
+                    </span>
+                  )}
+                  {unclear && chip.kind === "plan" && !chip.newest && (
+                    <span data-step-unclear-tag className="rounded-full bg-ws-warn/15 px-1.5 text-[10px] leading-4 font-semibold text-ws-warn">
+                      Waiting for your choice: ticket unclear
                     </span>
                   )}
                   {chip.needsYou > 0 && (

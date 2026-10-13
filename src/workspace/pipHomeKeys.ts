@@ -48,7 +48,9 @@ export type PipHomeKeyAction =
   | { type: "confirm" }
   | { type: "cancel" }
   /** Esc on a Needs you row while a decision is open. */
-  | { type: "closePane" };
+  | { type: "closePane" }
+  /** Ctrl/Cmd+Z outside a field: takes back the newest skip, dismissal or hold still on offer. */
+  | { type: "undo" };
 
 export interface PipHomeKeyEvent {
   key: string;
@@ -96,6 +98,7 @@ function columnStep(ev: PipHomeKeyEvent): 1 | -1 | 0 {
 export function pipHomeKey(ev: PipHomeKeyEvent, state: PipHomeKeyState): PipHomeKeyAction | null {
   const by = columnStep(ev);
   if (by) return state.overlay || (isTypingTarget(ev.target) && (ev.target as { id?: unknown }).id !== PIP_INPUT_ID) ? null : { type: "region", to: stepRegion(state.region ?? columnRegion(state.column), by, state.regions) };
+  if ((ev.metaKey || ev.ctrlKey) && !ev.altKey && !ev.shiftKey && ev.key.toLowerCase() === "z") return state.overlay || isTypingTarget(ev.target) ? null : { type: "undo" };
   if (ev.metaKey || ev.ctrlKey || ev.altKey || ev.shiftKey) return null;
   if (state.overlay || isTypingTarget(ev.target)) return null;
   // Inside the open decision the same keys act on the need it shows; the pane is in the conversation column, so this comes first.

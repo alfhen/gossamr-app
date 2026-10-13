@@ -350,8 +350,9 @@ test.describe("D1: Pip speaks up when a ticket is unclear", () => {
     expect(await newest(page, "plan")).toBeNull();
     expect((await actions(page, "autostart")).map((e) => e.detail)).toEqual([expect.stringMatching(/^investigate_triage after /)]);
 
-    const need = needOfKind(page, "readiness");
-    await expect(need).toContainText("R2 left these questions open: What does done look like for CA-408?");
+    const need = needRow(page, "isn't clear enough to plan");
+    // Open by default, the group's row is its name and count; the need under it says what it is.
+    await expect(need).toContainText("CA-408 isn't clear enough to plan");
     await expect(need).toHaveAttribute("data-group", "decide");
     await expect(needsYouRow(page, VAGUE).locator("[data-needs-you-chip]").first()).toHaveText("Decide");
     await need.click();
@@ -373,7 +374,7 @@ test.describe("D1: Pip speaks up when a ticket is unclear", () => {
     await unclear(page);
     await needOfKind(page, "readiness").click();
     await needsPane(page).getByRole("button", { name: "Ask the reporter" }).click();
-    await expect(toast(page)).toContainText("Drafted a comment to the reporter with the open questions. It is posted only when you approve it.");
+    await expect(toast(page)).toContainText("Here is the comment to the reporter. Nothing is posted until you press Post comment.");
     await expect(needOfKind(page, "readiness")).toHaveCount(0);
     expect(await jiraWrites(page)).toEqual([]);
     expect(await newest(page, "plan")).toBeNull();
@@ -563,9 +564,9 @@ test.describe("B1: Needs you is the main left column on Pip home", () => {
     await expect(timelineBody(page)).toBeVisible();
 
     // A title wraps to two lines rather than being cut to one (the existing two-line clamp).
-    const clamp = await needsYouRow(page, "General").locator("[data-needs-you-head]").evaluate((el) => getComputedStyle(el).getPropertyValue("-webkit-line-clamp"));
+    const clamp = await needsYouRow(page, "General").locator("[data-needs-you-head]").first().evaluate((el) => getComputedStyle(el).getPropertyValue("-webkit-line-clamp"));
     expect(clamp).toBe("2");
-    const nowrap = await needsYouRow(page, "General").locator("[data-needs-you-head]").evaluate((el) => getComputedStyle(el).whiteSpace);
+    const nowrap = await needsYouRow(page, "General").locator("[data-needs-you-head]").first().evaluate((el) => getComputedStyle(el).whiteSpace);
     expect(nowrap).not.toBe("nowrap");
   });
 
@@ -861,6 +862,8 @@ test.describe("B5: j and k move row by row through the visible rows, and a colla
     await twoDrafts(page);
     const group = needsYouRow(page, "CA-401").locator("[data-needs-you-group]");
     const key = (await group.getAttribute("data-need-key"))!;
+    // Pip home opens a group by default while its needs fit: fold this one first.
+    await needsYouRow(page, "CA-401").locator("[data-needs-you-more]").click();
     const focusedKey = () => page.evaluate(() => document.activeElement?.getAttribute("data-need-key") ?? null);
     await group.focus();
     await expect(group).toHaveAttribute("aria-expanded", "false");
@@ -940,7 +943,7 @@ test.describe("B8: one label for approving drafts together, and its preview open
   test("'Approve N safe drafts' opens the preview and its one confirm in the pane, not inside the list; Cancel and Esc keep the drafts", async ({ page }) => {
     await twoDrafts(page);
     const ws = needsYouRow(page, "CA-401");
-    await ws.locator("[data-needs-you-more]").click();
+    await expandNeedsYou(page, "CA-401");
     const batch = ws.getByRole("button", { name: "Approve 2 safe drafts" });
     await expect(batch).toHaveCount(1);
     await expect(pipHome(page).getByRole("button", { name: /^Approve these/ })).toHaveCount(0);

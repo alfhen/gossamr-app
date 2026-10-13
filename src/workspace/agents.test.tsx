@@ -258,7 +258,7 @@ describe("cards", () => {
     const html = renderToStaticMarkup(<DenyConfirm onDeny={vi.fn()} onKeep={vi.fn()} />);
     expect(html).toContain('role="group" aria-label="Deny this request"');
     expect(html).toContain(DENY_QUESTION);
-    expect(DENY_QUESTION).toBe("Tell Claude no? It carries on without it.");
+    expect(DENY_QUESTION).toBe("Deny this?");
     expect(buttonsOf(html)).toEqual(["Yes, deny", "Keep waiting"]);
   });
 

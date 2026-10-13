@@ -3,7 +3,7 @@ import {
   advanceRuns,
   askPermission,
   askPip,
-  expandAllNeeds,
+  foldAllNeeds,
   homeComposer,
   homeConversationRegion,
   homeSettled,
@@ -316,7 +316,7 @@ test("Cmd/Ctrl+K on a focused permission need offers Allow once and Deny, and De
   const build = await workingBuild(page);
   await askPermission(page, build.id, `approve Bash: git push -u origin worktree-${build.name}`);
   await openPipHome(page);
-  await expandAllNeeds(page);
+  await foldAllNeeds(page);
   const need: Locator = needOfKind(page, "permission");
   await expect(need).toContainText("R4 wants to run `git push -u origin");
   await need.focus();
