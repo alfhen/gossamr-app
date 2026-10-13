@@ -297,6 +297,13 @@ describe("the sample supervisor", () => {
       await expect(b.workstreamsReadinessAsk(ws, triage.id)).rejects.toThrow("isn't waiting for your choice");
     });
 
+    it("keeps the comment to the reporter out of the triage's status comment slot", async () => {
+      const { b, ws, triage } = await triaged();
+      const asked = await b.workstreamsReadinessAsk(ws, triage.id);
+      // Whatever the triage drafted on its own, the question to the reporter is never what the run's outcome calls its draft.
+      expect((await b.runsOutcome(triage.id)).draft?.id).not.toBe(asked.id);
+    });
+
     it("is resolved by a later triage that says ready, and a later one that says not ready replaces it", async () => {
       const { b, ws, triage, supervisor } = await triaged();
       const rerun = async (): Promise<Run> => {

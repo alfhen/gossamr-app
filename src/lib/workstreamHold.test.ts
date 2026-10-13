@@ -15,12 +15,7 @@ describe("heldText", () => {
     expect(heldText(HELD_RESTART)).toBe("Held after a restart");
     expect(heldText(HELD_PERSON)).toBe("Held by you");
     expect(heldText(HELD_ALL)).toBe("Held by you (Hold all)");
-    expect(heldText(HELD_BUDGET)).toBe("Held: automatic steps used up. Resume to give it 11 more");
-    const budget = (autoTurns: [number, number], wakes: [number, number]): BudgetView => ({ autoTurns: { used: autoTurns[0], limit: autoTurns[1] }, wakes: { used: wakes[0], limit: wakes[1] }, level: "spent" });
-    // One unit, whichever counter is nearer its limit; neither is named.
-    expect(heldText(HELD_BUDGET, null, budget([3, 3], [3, 12]))).toBe("Held: automatic steps used up. Resume to give it 3 more");
-    expect(heldText(HELD_BUDGET, null, budget([2, 6], [12, 12]))).toBe("Held: automatic steps used up. Resume to give it 6 more");
-    expect(heldText(HELD_BUDGET, null, budget([6, 6], [12, 12]))).toBe("Held: automatic steps used up. Resume to give it 6 more");
+    expect(heldText(HELD_BUDGET)).toBe("Held: automatic steps used up");
     expect(heldText(HELD_DAILY)).toBe("Held: today's Pip turns are used up");
     expect(heldText(HELD_QUOTA)).toBe("Paused: quota");
   });
@@ -64,7 +59,7 @@ describe("heldText", () => {
     // Any other hold says only why; the budget's says how many turns resuming gives.
     expect(tripwireResumeText(HELD_PERSON, null, "manage")).toBeNull();
     expect(heldBanner({ heldReason: HELD_PERSON })).toBe("Held by you");
-    expect(heldBanner({ heldReason: HELD_BUDGET })).toBe("Held: automatic steps used up. Resume to give it 11 more");
+    expect(heldBanner({ heldReason: HELD_BUDGET })).toBe("Held: automatic steps used up");
     // Manage switched back on while a tripwire holds it: Resume turns the automatic steps on, whatever resumeMode says.
     expect(heldBanner({ heldReason: drift, drifted: ["description"], resumeMode: null, mode: "manage" })).toBe("Held: the ticket's description changed in Jira. Automatic steps are paused. Resume turns them back on.");
     expect(tripwireResumeText(`${TRIPWIRE}marker`, null, "manage")).toBe("Automatic steps are paused. Resume turns them back on.");

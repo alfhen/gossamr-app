@@ -411,7 +411,7 @@ describe("holding and managing a mock workstream", () => {
     await expect(backend.workstreamsSetRule(ws.id, "fix_round", true)).rejects.toThrow("is closed");
   });
 
-  it("keeps an existing hold unless the person's replaces a restart, budget or quota one, and resuming from budget resets the spend", () => {
+  it("keeps an existing hold unless the person's replaces a restart, budget or quota one, and resuming from budget keeps the spend, which holds Manage for it again", () => {
     const store = new MockWorkstreams(() => [], () => "title", undefined, undefined, false);
     for (const reason of ["restart", "budget", "quota", "tripwire:marker", "hold_all"]) {
       const ws = store.open(null, reason);
@@ -428,15 +428,35 @@ describe("holding and managing a mock workstream", () => {
     // Spend as the supervisor will count it, straight in the store.
     (store as unknown as { all: { id: string; spent: object }[] }).all.find((w) => w.id === spent.id)!.spent = { autoTurns: 11, wakes: 9, tokens: 5 };
     expect(store.get(spent.id)?.budget).toEqual({ autoTurns: { used: 11, limit: 11 }, wakes: { used: 9, limit: 12 }, level: "spent" });
+    // Switch to Advise leaves the hold; Resume there lifts it and grants nothing.
+    store.setMode(spent.id, "manage");
+    store.setMode(spent.id, "advise");
+    expect(store.get(spent.id)?.workstream.heldReason).toBe("budget");
     const resumed = store.resume(spent.id);
-    expect(resumed.spent).toEqual({ autoTurns: 0, wakes: 0, tokens: 5 });
-    expect(store.events(spent.id).map((e) => [e.actor, e.action])).toEqual([
-      ["person", "opened"],
-      ["supervisor", "held"],
-      ["person", "resumed"],
-      ["person", "budget_reset"],
+    expect(resumed).toMatchObject({ heldReason: null, mode: "advise", spent: { autoTurns: 11, wakes: 9, tokens: 5 } });
+    expect(store.events(spent.id).map((e) => e.action)).not.toContain("budget_reset");
+    expect(store.get(spent.id)?.budget.level).toBe("spent");
+    // Back to Manage with the budget still spent: held again by the supervisor, so Allow 5 more is asked again.
+    const manage = store.setMode(spent.id, "manage");
+    expect(manage).toMatchObject({ heldReason: "budget", mode: "manage", spent: { autoTurns: 11, wakes: 9, tokens: 5 } });
+    expect(store.events(spent.id).slice(-2).map((e) => [e.actor, e.action, e.detail])).toEqual([
+      ["person", "mode_set", "manage"],
+      ["supervisor", "held", "budget"],
     ]);
-    expect(store.get(spent.id)?.budget.level).toBe("ok");
+    expect(store.allowMore(spent.id)).toMatchObject({ heldReason: null, spent: { autoTurns: 11, wakes: 9 } });
+
+    // With steps left, going back to Manage holds nothing.
+    const fresh = store.open(null, "fresh");
+    store.setMode(fresh.id, "advise");
+    expect(store.setMode(fresh.id, "manage").heldReason).toBeNull();
+    expect(store.events(fresh.id).map((e) => e.action)).not.toContain("held");
+
+    // A trip's Manage put back by Resume, on a spent budget, is held again.
+    const tripped = store.open(null, "tripped");
+    store.setMode(tripped.id, "manage");
+    store.trip(tripped.id, "marker", "r1");
+    (store as unknown as { all: { id: string; spent: object }[] }).all.find((w) => w.id === tripped.id)!.spent = { autoTurns: 11, wakes: 9, tokens: 0 };
+    expect(store.resume(tripped.id)).toMatchObject({ mode: "manage", heldReason: "budget" });
   });
 
   it("keeps a budget hold when the person writes while the wakes still use the budget up, and lifts it otherwise", () => {

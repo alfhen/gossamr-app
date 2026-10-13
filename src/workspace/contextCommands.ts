@@ -96,7 +96,7 @@ export function contextCommands(subject: Subject | null, data: ContextData, deps
       ...own,
       entry(`need:${need.key}:workstream`, openInWorkstreamLabel(need), () => deps.openInWorkstream(need), { icon: "→", keywords: "open workstream show where it lives" }),
       // "Open in workstream" above is already the way there; a second "Open the workstream on KEY" would be the same thing.
-      ...(view ? workstreamEntries(view, deps, view.workstream.itemKey ?? view.workstream.title).filter((c) => !c.id.startsWith("context:open:") && !(need.kind === "hold" && c.id.startsWith("context:resume:")) && !(need.kind === "budget" && c.id.startsWith("context:advise:"))) : []),
+      ...(view ? workstreamEntries(view, deps, view.workstream.itemKey ?? view.workstream.title).filter((c) => !c.id.startsWith("context:open:") && !((need.kind === "hold" || need.kind === "budget") && c.id.startsWith("context:resume:")) && !(need.kind === "budget" && c.id.startsWith("context:advise:"))) : []),
     ];
   }
   if (subject.type === "draft") {
