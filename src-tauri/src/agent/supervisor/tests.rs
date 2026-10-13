@@ -271,7 +271,8 @@ fn the_shared_wake_fixtures_pass() {
 #[test]
 fn the_shared_readiness_fixtures_pass() {
     use crate::runs::result::readiness;
-    for case in fixtures()["readiness"].as_array().unwrap() {
+    let all: Value = serde_json::from_str(include_str!("../../../../src/backend/readiness.fixtures.json")).unwrap();
+    for case in all["report"].as_array().unwrap() {
         let note = case["note"].as_str().unwrap();
         let expect = (!case["expect"].is_null()).then(|| serde_json::from_value::<crate::runs::result::Readiness>(case["expect"].clone()).unwrap());
         assert_eq!(readiness(note), expect, "{note:?}");
@@ -279,15 +280,40 @@ fn the_shared_readiness_fixtures_pass() {
 }
 
 #[test]
-fn the_shared_plan_recommended_and_budget_fixtures_pass() {
+fn the_shared_plan_recommended_fixtures_pass() {
     let all = fixtures();
     for case in all["planRecommended"].as_array().unwrap() {
         let note = case["note"].as_str().unwrap();
         assert_eq!(plan_recommended(note), case["expect"].as_bool(), "{note:?}");
     }
-    for case in all["budget"].as_array().unwrap() {
-        let ws = workstream_of(case);
-        assert_eq!(level_word(budget_level(&ws)), case["expect"].as_str().unwrap(), "{case}");
+}
+
+#[test]
+fn the_shared_free_wake_fixtures_pass() {
+    let all: Value = serde_json::from_str(include_str!("../../../../src/lib/workstreamHold.fixtures.json")).unwrap();
+    for case in all["free"].as_array().unwrap() {
+        let events: Vec<WorkstreamEvent> = case["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| {
+                let mut line = WorkstreamEvent::new("w1", Actor::Supervisor, e["action"].as_str().unwrap(), Utc::now());
+                line.run_id = e["runId"].as_str().map(Into::into);
+                line.detail = e["detail"].as_str().map(Into::into);
+                line
+            })
+            .collect();
+        let facts: Vec<WakeFact> = case["facts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|f| {
+                let mut fact = WakeFact::new(&Run::queued(f["run"].as_str().unwrap().into(), "p".into(), "c".into(), None, run_spec(), "f".into(), Utc::now()), WakeState::Done);
+                fact.fix_round = f["fixRound"].as_bool().unwrap_or(false).then(|| FixRoundSent { round: 1, build: "R1".into() });
+                fact
+            })
+            .collect();
+        assert_eq!(wake_is_free(&facts, &fix_round_builds(&events)), case["expect"].as_bool().unwrap(), "{}", case["name"]);
     }
 }
 

@@ -7,7 +7,11 @@ import { mockDigest } from "./mockRuns";
 import { ESCALATION_GONE, MOCK_WORKSTREAMS_KEY, MockWorkstreams, NOTES_LIMIT, basisOfItem, driftOf, escalationOf, lastTripOf, readinessOf, waitingForPr, type BasisTicket } from "./mockWorkstreams";
 import { driftLine } from "./mockPip";
 import fixtures from "./supervisor.fixtures.json";
+import readinessFixtures from "./readiness.fixtures.json";
+import holdFixtures from "../lib/workstreamHold.fixtures.json";
+import { readiness } from "./mockSupervisor";
 import { docFromText } from "../lib/docs";
+import { budgetView } from "../lib/workstreamHold";
 
 /** A browser's storage for this file, kept across new backends as across reloads of one page. */
 const saved = new Map<string, string>();
@@ -808,5 +812,65 @@ describe("a review that still blocks after the automatic fix rounds", () => {
     // Manage on again: the review the person took over stays theirs, so the tray and the card agree.
     live.setMode(id, "manage", "person");
     expect(live.get(id)?.escalation).toBeUndefined();
+  });
+});
+
+describe("the readiness stop in the shared cases the Rust side runs too (readiness.fixtures.json)", () => {
+  type Case = (typeof readinessFixtures.stop)[number];
+  const at = (iso: string | undefined) => (iso ?? null) as string | null;
+  it.each(readinessFixtures.stop.map((c) => [c.name, c] as const))("%s", (_, c: Case) => {
+    const shape = { mode: "manage", closed: false, held: null, ...("workstream" in c ? c.workstream : {}) } as { mode: string; closed: boolean; held: string | null };
+    const ws = { id: "w1", mode: shape.mode, closedAt: shape.closed ? "2026-10-12T20:00:00Z" : null, heldReason: shape.held } as Workstream;
+    const reports = new Map<string, string | undefined>();
+    const runs = c.runs.map((r) => {
+      const x = r as typeof r & { endedAt?: string; item?: boolean; workstream?: string; report?: string };
+      reports.set(x.id, x.report);
+      return { id: x.id, state: x.state, item: x.item === false ? null : CA401, queuedAt: x.queuedAt, endedAt: at(x.endedAt), spec: { kind: x.kind, workstream: x.workstream ?? "w1" } } as unknown as Run;
+    });
+    const events = c.events.map((e, i) => ({ workstreamId: "w1", seq: i + 1, runId: null, proposalId: null, digest: null, detail: null, ...e }) as WorkstreamEvent);
+    const got = readinessOf(ws, runs, (r) => {
+      const report = reports.get(r.id);
+      return report === undefined ? null : readiness(report);
+    }, events);
+    expect(got === null ? null : { triageRun: got.triageRun, questions: got.questions, at: got.at, ...(got.changed ? { changed: true } : {}) }).toEqual(c.expect);
+  });
+});
+
+describe("the budget's actions in the shared sequences the Rust side runs too (workstreamHold.fixtures.json)", () => {
+  type Step = { do: string; mode?: string; actor?: string; reason?: string; kind?: string; spent?: number[]; expect: { state: { mode: string; held: string | null; limits: number[]; level: string }; events: string[][]; error?: boolean } };
+  it.each(holdFixtures.sequences.map((c) => [c.name, c] as const))("%s", (_, c) => {
+    const store = new MockWorkstreams(() => [], () => "title", undefined, undefined, false);
+    const ws = store.open(null, "budgeted");
+    const start = c.start as { mode: string; held: string | null; closed?: boolean; spent: { autoTurns: number; wakes: number }; budget?: { autoTurns?: number; wakes?: number } };
+    const stored = (store as unknown as { all: Workstream[] }).all.find((w) => w.id === ws.id)!;
+    Object.assign(stored, { mode: start.mode, heldReason: start.held, closedAt: start.closed ? "2026-10-12T20:00:00Z" : null, spent: { ...start.spent, tokens: 0 }, budget: { autoTurns: start.budget?.autoTurns ?? null, wakes: start.budget?.wakes ?? null, tokens: null } });
+    for (const s of c.steps as Step[]) {
+      const before = store.events(ws.id).length;
+      const act = () => {
+        switch (s.do) {
+          case "setMode":
+            return store.setMode(ws.id, s.mode as "manage" | "advise", s.actor as "person" | "supervisor");
+          case "hold":
+            return store.hold(ws.id, s.reason, s.actor as "person" | "supervisor");
+          case "resume":
+            return store.resume(ws.id);
+          case "allowMore":
+            return store.allowMore(ws.id);
+          case "trip":
+            return store.trip(ws.id, s.kind!, "r1");
+          case "spend":
+            // Spend as the supervisor will count it, straight in the store.
+            return Object.assign((store as unknown as { all: Workstream[] }).all.find((w) => w.id === ws.id)!, { spent: { autoTurns: s.spent![0], wakes: s.spent![1], tokens: 0 } });
+          default:
+            throw new Error(`no action ${s.do}`);
+        }
+      };
+      if (s.expect.error) expect(act, s.do).toThrow();
+      else act();
+      const now = store.get(ws.id)!;
+      const view = budgetView(now.workstream);
+      expect({ mode: now.workstream.mode, held: now.workstream.heldReason, limits: [view.autoTurns.limit, view.wakes.limit], level: view.level }, s.do).toEqual(s.expect.state);
+      expect(store.events(ws.id).slice(before).map((e) => [e.actor, e.action, e.detail]), s.do).toEqual(s.expect.events);
+    }
   });
 });

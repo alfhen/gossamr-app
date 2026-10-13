@@ -16,6 +16,7 @@ export type FollowLine = Pick<WorkstreamEvent, "actor" | "action" | "proposalId"
  * `ReporterFollow` of the audit `events` (oldest first), as `reporter_follow`: the wait starts when the comment of a
  * `readiness_asked` or `clarity_asked` is approved, and ends at the first of the ticket changing (`basis_drifted`, the
  * supervisor's), the person choosing to answer or plan anyway, or resuming. Only the person's own lines count as theirs.
+ * Both sides run src/lib/reporterWait.fixtures.json.
  */
 export function reporterFollow(events: readonly FollowLine[]): ReporterFollow {
   const asked = new Set<string>();

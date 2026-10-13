@@ -212,7 +212,8 @@ pub fn budget_limits(ws: &Workstream) -> (u32, u32) {
 }
 
 /// The budget level of `ws`, from whichever of its automatic turns and wakes is nearer its limit. A limit of 0 allows
-/// none, so it is spent from the start.
+/// none, so it is spent from the start. Mirrored by `budgetLevel` in src/lib/workstreamHold.ts; both run `budget` in
+/// src/lib/workstreamHold.fixtures.json.
 pub fn budget_level(ws: &Workstream) -> BudgetLevel {
     let (turns, wakes) = budget_limits(ws);
     let level = |used: u32, limit: u32| {

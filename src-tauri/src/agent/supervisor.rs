@@ -675,6 +675,13 @@ fn fix_round_builds(events: &[WorkstreamEvent]) -> HashSet<String> {
     events.iter().filter(|e| e.action == "autostart" && e.detail.as_deref().is_some_and(|d| d.starts_with("fix_round after "))).filter_map(|e| e.run_id.clone()).collect()
 }
 
+/// Whether waking Pip about `fresh` is no automatic step: every fact is the review that sent a fix round or the build that
+/// went back for one (`fix_builds`, from `fix_round_builds`). Mirrored by `isFreeWake` in src/backend/mockSupervisor.ts; both
+/// run `free` in src/lib/workstreamHold.fixtures.json.
+fn wake_is_free(fresh: &[WakeFact], fix_builds: &HashSet<String>) -> bool {
+    fresh.iter().all(|f| f.fix_round.is_some() || fix_builds.contains(&f.run))
+}
+
 fn tripped_runs(events: &[WorkstreamEvent]) -> HashSet<&str> {
     events.iter().filter(|e| e.action == "tripwire").filter_map(|e| e.run_id.as_deref()).collect()
 }
@@ -992,7 +999,7 @@ impl Supervisor {
         let waiting = agent.has_waiting_wake(&conversation);
         // Telling Pip about a fix round the rules sent, or about the build that went back for one finishing, is no
         // automatic step of its own: the rounds are capped already (`autostart::FIX_ROUNDS_MAX`).
-        let free = fresh.iter().all(|f| f.fix_round.is_some() || fix_builds.contains(&f.run));
+        let free = wake_is_free(&fresh, fix_builds);
         let spend = !waiting && !free;
         let ask = WakeAdmission {
             spend,

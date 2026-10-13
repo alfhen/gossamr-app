@@ -1,0 +1,324 @@
+{
+  "about": "reporterFollow (src/lib/reporterWait.ts) and reporter_follow (src-tauri/src/inbox/workstreams.rs). `events` is the audit, oldest first. `comments` (ticket comments with author and at) and `me` (the person's own account) are not read yet: they are in the input so a rule that ends the wait on a newer reporter comment can be added to the cases. `expect` is waiting (the since time, or null), and changed (the wait ended because the ticket changed and the person has not chosen since).",
+  "cases": [
+    {
+      "name": "no audit is no wait",
+      "events": [],
+      "comments": [],
+      "me": null,
+      "expect": { "waiting": false, "since": null, "changed": false }
+    },
+    {
+      "name": "asked but the comment is not approved yet",
+      "events": [
+        {"actor": "person", "action": "readiness_asked", "proposalId": "d1", "at": "2026-10-12T10:01:00Z"}
+      ],
+      "comments": [],
+      "me": null,
+      "expect": { "waiting": false, "since": null, "changed": false }
+    },
+    {
+      "name": "the approved readiness comment starts the wait at its approval",
+      "events": [
+        {"actor": "person", "action": "readiness_asked", "proposalId": "d1", "at": "2026-10-12T10:01:00Z"},
+        {"actor": "person", "action": "draft_approved", "proposalId": "d1", "at": "2026-10-12T10:02:00Z"}
+      ],
+      "comments": [],
+      "me": null,
+      "expect": { "waiting": true, "since": "2026-10-12T10:02:00Z", "changed": false }
+    },
+    {
+      "name": "the approved clarity comment starts it too",
+      "events": [
+        {"actor": "person", "action": "clarity_asked", "proposalId": "c1", "at": "2026-10-12T10:01:00Z"},
+        {"actor": "person", "action": "draft_approved", "proposalId": "c1", "at": "2026-10-12T10:02:00Z"}
+      ],
+      "comments": [],
+      "me": null,
+      "expect": { "waiting": true, "since": "2026-10-12T10:02:00Z", "changed": false }
+    },
+    {
+      "name": "another draft being approved starts nothing",
+      "events": [
+        {"actor": "person", "action": "readiness_asked", "proposalId": "d1", "at": "2026-10-12T10:01:00Z"},
+        {"actor": "person", "action": "draft_approved", "proposalId": "other", "at": "2026-10-12T10:02:00Z"}
+      ],
+      "comments": [],
+      "me": null,
+      "expect": { "waiting": false, "since": null, "changed": false }
+    },
+    {
+      "name": "an approval by anyone but the person starts nothing",
+      "events": [
+        {"actor": "person", "action": "readiness_asked", "proposalId": "d1", "at": "2026-10-12T10:01:00Z"},
+        {"actor": "pip", "action": "draft_approved", "proposalId": "d1", "at": "2026-10-12T10:02:00Z"}
+      ],
+      "comments": [],
+      "me": null,
+      "expect": { "waiting": false, "since": null, "changed": false }
+    },
+    {
+      "name": "an ask by Pip is not the person's",
+      "events": [
+        {"actor": "pip", "action": "readiness_asked", "proposalId": "d1", "at": "2026-10-12T10:01:00Z"},
+        {"actor": "person", "action": "draft_approved", "proposalId": "d1", "at": "2026-10-12T10:02:00Z"}
+      ],
+      "comments": [],
+      "me": null,
+      "expect": { "waiting": false, "since": null, "changed": false }
+    },
+    {
+      "name": "an ask by the supervisor is not the person's",
+      "events": [
+        {"actor": "supervisor", "action": "clarity_asked", "proposalId": "d1", "at": "2026-10-12T10:01:00Z"},
+        {"actor": "person", "action": "draft_approved", "proposalId": "d1", "at": "2026-10-12T10:02:00Z"}
+      ],
+      "comments": [],
+      "me": null,
+      "expect": { "waiting": false, "since": null, "changed": false }
+    },
+    {
+      "name": "an ask that names no draft can never be approved",
+      "events": [
+        {"actor": "person", "action": "readiness_asked", "at": "2026-10-12T10:01:00Z"},
+        {"actor": "person", "action": "draft_approved", "at": "2026-10-12T10:02:00Z"}
+      ],
+      "comments": [],
+      "me": null,
+      "expect": { "waiting": false, "since": null, "changed": false }
+    },
+    {
+      "name": "approving a second time moves the start to the later approval",
+      "events": [
+        {"actor": "person", "action": "readiness_asked", "proposalId": "d1", "at": "2026-10-12T10:01:00Z"},
+        {"actor": "person", "action": "draft_approved", "proposalId": "d1", "at": "2026-10-12T10:02:00Z"},
+        {"actor": "person", "action": "draft_approved", "proposalId": "d1", "at": "2026-10-12T10:05:00Z"}
+      ],
+      "comments": [],
+      "me": null,
+      "expect": { "waiting": true, "since": "2026-10-12T10:05:00Z", "changed": false }
+    },
+    {
+      "name": "the ticket changing ends the wait and brings the question back",
+      "events": [
+        {"actor": "person", "action": "readiness_asked", "proposalId": "d1", "at": "2026-10-12T10:01:00Z"},
+        {"actor": "person", "action": "draft_approved", "proposalId": "d1", "at": "2026-10-12T10:02:00Z"},
+        {"actor": "supervisor", "action": "basis_drifted", "at": "2026-10-12T10:03:00Z"}
+      ],
+      "comments": [],
+      "me": null,
+      "expect": { "waiting": false, "since": null, "changed": true }
+    },
+    {
+      "name": "the person's own basis_drifted line is nothing",
+      "events": [
+        {"actor": "person", "action": "readiness_asked", "proposalId": "d1", "at": "2026-10-12T10:01:00Z"},
+        {"actor": "person", "action": "draft_approved", "proposalId": "d1", "at": "2026-10-12T10:02:00Z"},
+        {"actor": "person", "action": "basis_drifted", "at": "2026-10-12T10:03:00Z"}
+      ],
+      "comments": [],
+      "me": null,
+      "expect": { "waiting": true, "since": "2026-10-12T10:02:00Z", "changed": false }
+    },
+    {
+      "name": "a drift before anything is waited on changes nothing",
+      "events": [
+        {"actor": "supervisor", "action": "basis_drifted", "at": "2026-10-12T10:03:00Z"}
+      ],
+      "comments": [],
+      "me": null,
+      "expect": { "waiting": false, "since": null, "changed": false }
+    },
+    {
+      "name": "a drift before the comment is approved changes nothing",
+      "events": [
+        {"actor": "person", "action": "readiness_asked", "proposalId": "d1", "at": "2026-10-12T10:01:00Z"},
+        {"actor": "supervisor", "action": "basis_drifted", "at": "2026-10-12T10:03:00Z"},
+        {"actor": "person", "action": "draft_approved", "proposalId": "d1", "at": "2026-10-12T10:02:00Z"}
+      ],
+      "comments": [],
+      "me": null,
+      "expect": { "waiting": true, "since": "2026-10-12T10:02:00Z", "changed": false }
+    },
+    {
+      "name": "answering ends the wait",
+      "events": [
+        {"actor": "person", "action": "readiness_asked", "proposalId": "d1", "at": "2026-10-12T10:01:00Z"},
+        {"actor": "person", "action": "draft_approved", "proposalId": "d1", "at": "2026-10-12T10:02:00Z"},
+        {"actor": "person", "action": "readiness_answered", "at": "2026-10-12T10:03:00Z"}
+      ],
+      "comments": [],
+      "me": null,
+      "expect": { "waiting": false, "since": null, "changed": false }
+    },
+    {
+      "name": "planning anyway ends the wait",
+      "events": [
+        {"actor": "person", "action": "readiness_asked", "proposalId": "d1", "at": "2026-10-12T10:01:00Z"},
+        {"actor": "person", "action": "draft_approved", "proposalId": "d1", "at": "2026-10-12T10:02:00Z"},
+        {"actor": "person", "action": "readiness_overridden", "at": "2026-10-12T10:03:00Z"}
+      ],
+      "comments": [],
+      "me": null,
+      "expect": { "waiting": false, "since": null, "changed": false }
+    },
+    {
+      "name": "an answer by Pip is not the person's",
+      "events": [
+        {"actor": "person", "action": "readiness_asked", "proposalId": "d1", "at": "2026-10-12T10:01:00Z"},
+        {"actor": "person", "action": "draft_approved", "proposalId": "d1", "at": "2026-10-12T10:02:00Z"},
+        {"actor": "pip", "action": "readiness_answered", "at": "2026-10-12T10:03:00Z"}
+      ],
+      "comments": [],
+      "me": null,
+      "expect": { "waiting": true, "since": "2026-10-12T10:02:00Z", "changed": false }
+    },
+    {
+      "name": "an override by the supervisor is not the person's",
+      "events": [
+        {"actor": "person", "action": "readiness_asked", "proposalId": "d1", "at": "2026-10-12T10:01:00Z"},
+        {"actor": "person", "action": "draft_approved", "proposalId": "d1", "at": "2026-10-12T10:02:00Z"},
+        {"actor": "supervisor", "action": "readiness_overridden", "at": "2026-10-12T10:03:00Z"}
+      ],
+      "comments": [],
+      "me": null,
+      "expect": { "waiting": true, "since": "2026-10-12T10:02:00Z", "changed": false }
+    },
+    {
+      "name": "the person resuming ends the wait without bringing the question back",
+      "events": [
+        {"actor": "person", "action": "readiness_asked", "proposalId": "d1", "at": "2026-10-12T10:01:00Z"},
+        {"actor": "person", "action": "draft_approved", "proposalId": "d1", "at": "2026-10-12T10:02:00Z"},
+        {"actor": "person", "action": "resumed", "at": "2026-10-12T10:03:00Z"}
+      ],
+      "comments": [],
+      "me": null,
+      "expect": { "waiting": false, "since": null, "changed": false }
+    },
+    {
+      "name": "a resume by the supervisor is nothing",
+      "events": [
+        {"actor": "person", "action": "readiness_asked", "proposalId": "d1", "at": "2026-10-12T10:01:00Z"},
+        {"actor": "person", "action": "draft_approved", "proposalId": "d1", "at": "2026-10-12T10:02:00Z"},
+        {"actor": "supervisor", "action": "resumed", "at": "2026-10-12T10:03:00Z"}
+      ],
+      "comments": [],
+      "me": null,
+      "expect": { "waiting": true, "since": "2026-10-12T10:02:00Z", "changed": false }
+    },
+    {
+      "name": "after a change a resume keeps the question",
+      "events": [
+        {"actor": "person", "action": "readiness_asked", "proposalId": "d1", "at": "2026-10-12T10:01:00Z"},
+        {"actor": "person", "action": "draft_approved", "proposalId": "d1", "at": "2026-10-12T10:02:00Z"},
+        {"actor": "supervisor", "action": "basis_drifted", "at": "2026-10-12T10:03:00Z"},
+        {"actor": "person", "action": "resumed", "at": "2026-10-12T10:04:00Z"}
+      ],
+      "comments": [],
+      "me": null,
+      "expect": { "waiting": false, "since": null, "changed": true }
+    },
+    {
+      "name": "after a change answering settles it",
+      "events": [
+        {"actor": "person", "action": "readiness_asked", "proposalId": "d1", "at": "2026-10-12T10:01:00Z"},
+        {"actor": "person", "action": "draft_approved", "proposalId": "d1", "at": "2026-10-12T10:02:00Z"},
+        {"actor": "supervisor", "action": "basis_drifted", "at": "2026-10-12T10:03:00Z"},
+        {"actor": "person", "action": "readiness_answered", "at": "2026-10-12T10:04:00Z"}
+      ],
+      "comments": [],
+      "me": null,
+      "expect": { "waiting": false, "since": null, "changed": false }
+    },
+    {
+      "name": "after a change planning anyway settles it",
+      "events": [
+        {"actor": "person", "action": "readiness_asked", "proposalId": "d1", "at": "2026-10-12T10:01:00Z"},
+        {"actor": "person", "action": "draft_approved", "proposalId": "d1", "at": "2026-10-12T10:02:00Z"},
+        {"actor": "supervisor", "action": "basis_drifted", "at": "2026-10-12T10:03:00Z"},
+        {"actor": "person", "action": "readiness_overridden", "at": "2026-10-12T10:04:00Z"}
+      ],
+      "comments": [],
+      "me": null,
+      "expect": { "waiting": false, "since": null, "changed": false }
+    },
+    {
+      "name": "after a change a new ask settles it, and its approval starts a new wait",
+      "events": [
+        {"actor": "person", "action": "readiness_asked", "proposalId": "d1", "at": "2026-10-12T10:01:00Z"},
+        {"actor": "person", "action": "draft_approved", "proposalId": "d1", "at": "2026-10-12T10:02:00Z"},
+        {"actor": "supervisor", "action": "basis_drifted", "at": "2026-10-12T10:03:00Z"},
+        {"actor": "person", "action": "readiness_asked", "proposalId": "d2", "at": "2026-10-12T10:04:00Z"},
+        {"actor": "person", "action": "draft_approved", "proposalId": "d2", "at": "2026-10-12T10:05:00Z"}
+      ],
+      "comments": [],
+      "me": null,
+      "expect": { "waiting": true, "since": "2026-10-12T10:05:00Z", "changed": false }
+    },
+    {
+      "name": "after a change a new ask alone leaves no wait and no question",
+      "events": [
+        {"actor": "person", "action": "readiness_asked", "proposalId": "d1", "at": "2026-10-12T10:01:00Z"},
+        {"actor": "person", "action": "draft_approved", "proposalId": "d1", "at": "2026-10-12T10:02:00Z"},
+        {"actor": "supervisor", "action": "basis_drifted", "at": "2026-10-12T10:03:00Z"},
+        {"actor": "person", "action": "readiness_asked", "proposalId": "d2", "at": "2026-10-12T10:04:00Z"}
+      ],
+      "comments": [],
+      "me": null,
+      "expect": { "waiting": false, "since": null, "changed": false }
+    },
+    {
+      "name": "the old draft's approval after a new ask still counts, as it was asked",
+      "events": [
+        {"actor": "person", "action": "readiness_asked", "proposalId": "d1", "at": "2026-10-12T10:01:00Z"},
+        {"actor": "person", "action": "draft_approved", "proposalId": "d1", "at": "2026-10-12T10:02:00Z"},
+        {"actor": "supervisor", "action": "basis_drifted", "at": "2026-10-12T10:03:00Z"},
+        {"actor": "person", "action": "readiness_asked", "proposalId": "d2", "at": "2026-10-12T10:04:00Z"},
+        {"actor": "person", "action": "draft_approved", "proposalId": "d1", "at": "2026-10-12T10:05:00Z"}
+      ],
+      "comments": [],
+      "me": null,
+      "expect": { "waiting": true, "since": "2026-10-12T10:05:00Z", "changed": false }
+    },
+    {
+      "name": "a second change after a resume and a new wait brings the question back again",
+      "events": [
+        {"actor": "person", "action": "readiness_asked", "proposalId": "d1", "at": "2026-10-12T10:01:00Z"},
+        {"actor": "person", "action": "draft_approved", "proposalId": "d1", "at": "2026-10-12T10:02:00Z"},
+        {"actor": "supervisor", "action": "basis_drifted", "at": "2026-10-12T10:03:00Z"},
+        {"actor": "person", "action": "resumed", "at": "2026-10-12T10:04:00Z"},
+        {"actor": "person", "action": "readiness_asked", "proposalId": "d2", "at": "2026-10-12T10:05:00Z"},
+        {"actor": "person", "action": "draft_approved", "proposalId": "d2", "at": "2026-10-12T10:06:00Z"},
+        {"actor": "supervisor", "action": "basis_drifted", "at": "2026-10-12T10:07:00Z"}
+      ],
+      "comments": [],
+      "me": null,
+      "expect": { "waiting": false, "since": null, "changed": true }
+    },
+    {
+      "name": "a second drift with no wait to end changes nothing",
+      "events": [
+        {"actor": "person", "action": "readiness_asked", "proposalId": "d1", "at": "2026-10-12T10:01:00Z"},
+        {"actor": "person", "action": "draft_approved", "proposalId": "d1", "at": "2026-10-12T10:02:00Z"},
+        {"actor": "supervisor", "action": "basis_drifted", "at": "2026-10-12T10:03:00Z"},
+        {"actor": "supervisor", "action": "basis_drifted", "at": "2026-10-12T10:04:00Z"}
+      ],
+      "comments": [],
+      "me": null,
+      "expect": { "waiting": false, "since": null, "changed": true }
+    },
+    {
+      "name": "other audit lines are nothing",
+      "events": [
+        {"actor": "person", "action": "readiness_asked", "proposalId": "d1", "at": "2026-10-12T10:01:00Z"},
+        {"actor": "person", "action": "draft_approved", "proposalId": "d1", "at": "2026-10-12T10:02:00Z"},
+        {"actor": "pip", "action": "note", "at": "2026-10-12T10:03:00Z"},
+        {"actor": "supervisor", "action": "held", "at": "2026-10-12T10:03:00Z"},
+        {"actor": "person", "action": "held", "at": "2026-10-12T10:03:00Z"}
+      ],
+      "comments": [],
+      "me": null,
+      "expect": { "waiting": true, "since": "2026-10-12T10:02:00Z", "changed": false }
+    }
+  ]
+}
