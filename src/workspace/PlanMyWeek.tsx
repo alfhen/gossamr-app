@@ -37,7 +37,8 @@ export function findTicket(words: string, items: readonly WorkItem[], taken: rea
   const byKey = open.find((t) => t.item.key.toLowerCase() === q) ?? open.find((t) => t.item.key.toLowerCase() === q.split(/\s+/)[0]);
   const matches = byKey ? [byKey] : open.filter((t) => t.title.toLowerCase().includes(q));
   if (!matches.length) return { reason: "none" };
-  const free = matches.filter((t) => !taken.some((p) => p.ticketKey === t.item.key));
+  // The same key on another connection is another ticket; a pick kept before connections were stored blocks by key alone.
+  const free = matches.filter((t) => !taken.some((p) => p.ticketKey === t.item.key && (p.connectionId === undefined || p.connectionId === t.item.connectionId)));
   if (!free.length) return { reason: "taken", key: matches[0].item.key };
   if (free.length === 1) return { ticket: free[0] };
   const mine = (t: WorkItem) => !!t.assignee && me.some((m) => m.connectionId === t.assignee!.connectionId && m.accountId === t.assignee!.accountId);

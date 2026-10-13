@@ -128,6 +128,10 @@ describe("adding a ticket", () => {
     expect(findTicket("CA-2", tickets, [ticketPick(tickets[1])])).toEqual({ reason: "taken", key: "CA-2" });
     expect(findTicket("subject", tickets, [ticketPick(tickets[1])])).toEqual({ reason: "taken", key: "CA-2" });
     expect(findTicket("CA-99", tickets, [ticketPick(tickets[1])])).toEqual({ reason: "none" });
+    // The same key on another connection is another ticket, so it can still be added.
+    const other = { ...tickets[1], item: { ...tickets[1].item, connectionId: "d" } } as WorkItem;
+    const found = findTicket("CA-2", [other], [ticketPick(tickets[1])]);
+    expect("ticket" in found && found.ticket.item.connectionId).toBe("d");
   });
 });
 
