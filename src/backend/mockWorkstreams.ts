@@ -154,10 +154,10 @@ export function escalationOf(ws: Workstream, runs: readonly Run[], verdictOf: (r
  * is the authority), the person hasn't dismissed or asked about it (unless the ticket changed since they asked), and nothing
  * waits on the reporter. Never a need, so any mode shows it.
  */
-export function clarityOf(ws: Workstream, runs: readonly Run[], gaps: readonly ClarityGap[], events: readonly WorkstreamEvent[]): Clarity | null {
+export function clarityOf(ws: Workstream, runs: readonly Run[], gaps: readonly ClarityGap[], replies: readonly string[], events: readonly WorkstreamEvent[]): Clarity | null {
   if (ws.closedAt !== null || ws.itemKey === null || !gaps.length) return null;
   if (runs.some((r) => r.spec.workstream === ws.id && r.spec.kind === "triage")) return null;
-  const follow = reporterFollow(events);
+  const follow = reporterFollow(events, replies);
   const said = (action: string) => events.some((e) => e.actor === "person" && e.action === action);
   if (said("clarity_dismissed") || follow.waiting || (said("clarity_asked") && !follow.changed)) return null;
   return { gaps: [...gaps] };
@@ -180,7 +180,7 @@ export const READINESS_GONE = "This ticket isn't waiting for your choice about i
  * written answer resolves to; null is no verdict, which reads as ready. A choice to ask the reporter is undone by the ticket
  * changing while the person waited (`reporterFollow(...).changed`): the stop comes back, flagged `changed`.
  */
-export function readinessOf(ws: Workstream, runs: readonly Run[], readiness: (run: Run) => { ready: boolean; questions: string[] } | null, events: readonly WorkstreamEvent[]): ReadinessStop | null {
+export function readinessOf(ws: Workstream, runs: readonly Run[], readiness: (run: Run) => { ready: boolean; questions: string[] } | null, replies: readonly string[], events: readonly WorkstreamEvent[]): ReadinessStop | null {
   if (ws.closedAt !== null || ws.mode !== "manage") return null;
   const mine = runs.filter((r) => r.spec.workstream === ws.id);
   const triage = mine.filter((r) => r.spec.kind === "triage" && !!r.item).sort(byQueue).pop();
@@ -189,9 +189,10 @@ export function readinessOf(ws: Workstream, runs: readonly Run[], readiness: (ru
   if (!found || found.ready) return null;
   const chosen = events.some((e) => e.actor === "person" && ["readiness_asked", "readiness_answered", "readiness_overridden"].includes(e.action) && e.runId === triage.id);
   const since = triage.endedAt ?? triage.queuedAt;
-  const changed = reporterFollow(events).changed;
+  const follow = reporterFollow(events, replies);
+  const changed = follow.changed;
   if ((chosen && !changed) || mine.some((r) => r.spec.kind === "plan" && r.queuedAt >= since)) return null;
-  return { triageRun: triage.id, triageLabel: new Map(runLabels(mine)).get(triage.id) ?? "", questions: found.questions, at: since, ...(changed ? { changed } : {}) };
+  return { triageRun: triage.id, triageLabel: new Map(runLabels(mine)).get(triage.id) ?? "", questions: found.questions, at: since, ...(changed ? { changed } : {}), ...(follow.replied ? { replied: true } : {}) };
 }
 
 /** Why `id` can't be a workstream id at all, as `RunSpec::validate` refuses it; null when it can. */
@@ -273,6 +274,12 @@ export class MockWorkstreams {
   verdictOf: (run: Run) => ReviewVerdict | null = () => null;
   /** A cached ticket as it is now, by key, which a workstream's basis is taken from; set by the backend that owns the tickets. */
   ticketOf: (key: string) => BasisTicket | null = () => null;
+  /** The times of the comments on a ticket from anyone but the signed-in person, by key: the reporter's replies, which leave no audit line; set by the backend that owns the tickets. */
+  repliesTo: (key: string) => string[] = () => [];
+  /** The reporter's replies on `ws`'s ticket (`repliesTo`); none for a workstream without one. */
+  repliesOf(ws: Pick<Workstream, "itemKey" | "closedAt">): string[] {
+    return ws.itemKey && ws.closedAt === null ? this.repliesTo(ws.itemKey) : [];
+  }
   /** The pending drafts there are, of which an escalation offers a GitHub review to post as it is; set by the backend that owns the drafts. */
   pendingDrafts: () => readonly Proposal[] = () => [];
   /** A finished Triage's verdict on its ticket as its written answer gives it, null without one; set by the backend that owns the runs. */
@@ -342,13 +349,15 @@ export class MockWorkstreams {
     // The audit is read only for an open workstream, as `escalation_events` does; each reading checks the mode itself.
     const events = ws.closedAt === null ? this.audit.filter((e) => e.workstreamId === ws.id) : [];
     const escalation = events.length ? escalationOf(ws, linked, (r) => (r.spec.kind === "review" && r.state === "done" ? this.verdictOf(r) : null), events, this.pendingDrafts()) : null;
-    const readiness = events.length ? readinessOf(ws, linked, (r) => (r.spec.kind === "triage" && r.state === "done" ? this.readinessOfRun(r) : null), events) : null;
+    const replies = this.repliesOf(ws);
+    const readiness = events.length ? readinessOf(ws, linked, (r) => (r.spec.kind === "triage" && r.state === "done" ? this.readinessOfRun(r) : null), replies, events) : null;
     const ticket = ws.closedAt === null && ws.itemKey ? this.ticketOf(ws.itemKey) : null;
-    const clarity = ticket ? clarityOf(ws, linked, clarityGaps(docText(ticket.body)), events) : null;
-    const since = ws.closedAt === null ? reporterFollow(events).waiting : null;
-    const waitingOnReporter: ReporterWait | null = since ? { since } : null;
-    const changedWhileWaiting = ws.closedAt === null && reporterFollow(events).changed;
-    return { ...view, ...(waiting ? { waitingForPr: waiting } : {}), ...(reviewBlocking(judged) ? { reviewBlocking: true } : {}), ...(escalation ? { escalation } : {}), ...(readiness ? { readiness } : {}), ...(clarity ? { clarity } : {}), ...(waitingOnReporter ? { waitingOnReporter } : {}), ...(changedWhileWaiting ? { changedWhileWaiting } : {}) };
+    const clarity = ticket ? clarityOf(ws, linked, clarityGaps(docText(ticket.body)), replies, events) : null;
+    const follow = ws.closedAt === null ? reporterFollow(events, replies) : null;
+    const waitingOnReporter: ReporterWait | null = follow?.waiting ? { since: follow.waiting } : null;
+    const changedWhileWaiting = !!follow?.changed;
+    const reporterReplied = !!follow?.replied;
+    return { ...view, ...(waiting ? { waitingForPr: waiting } : {}), ...(reviewBlocking(judged) ? { reviewBlocking: true } : {}), ...(escalation ? { escalation } : {}), ...(readiness ? { readiness } : {}), ...(clarity ? { clarity } : {}), ...(waitingOnReporter ? { waitingOnReporter } : {}), ...(changedWhileWaiting ? { changedWhileWaiting } : {}), ...(reporterReplied ? { reporterReplied } : {}) };
   }
 
   /** Opens a workstream on a cached ticket, or with no ticket and a title. A ticket with an open one gets that one back, unchanged. */

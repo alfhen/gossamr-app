@@ -195,6 +195,8 @@ function announceFailedLaunches(get: () => RunsState, set: (patch: Partial<RunsS
   for (const id of launching) {
     const run = runs.find((r) => r.id === id);
     if (!run) continue;
+    // A run that waits for a slot is queued, not started: the "Nothing was started" note stays until it launches.
+    if (run.state === "launching" || run.state === "working") dismissCancelledNote();
     if (run.state === "queued" || run.state === "launching") {
       still.add(id);
       continue;

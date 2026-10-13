@@ -436,6 +436,8 @@ export class MockBackend implements Backend {
     this.workstreams.verdictOf = (run) => this.runs.resolvedOf(run.id)?.verdict ?? null;
     this.workstreams.readinessOfRun = (run) => triageReadiness(run);
     this.workstreams.ticketOf = (key) => this.connector.item(itemRef(key));
+    // The reporter replies on the ticket with a comment, which leaves no audit line: anyone's but the person's own.
+    this.workstreams.repliesTo = (key) => this.connector.comments(itemRef(key)).filter((c) => c.author.accountId !== this.connector.me.accountId).map((c) => c.created);
     // What the person just wrote is the workstream's basis now, so the supervisor doesn't take an approved write for drift.
     this.proposals.onWritten = (p) => {
       const ws = workstreamOf(p);
@@ -455,7 +457,7 @@ export class MockBackend implements Backend {
       workstreams: this.workstreams,
       proposals: this.proposals,
       pip: { hold: holdMockPip, idle: mockPipIdle },
-      tickets: { edit: (key, change) => this.editTicket(key, change) },
+      tickets: { edit: (key, change) => this.editTicket(key, change), comment: (key, text, by) => this.commentOnTicket(key, text, by) },
       github: { writes: this.github.writes, movePullHead: (repo, number) => this.movePullHead(repo, number), tried: () => this.github.tried, loseNextAnswer: (kept) => this.github.loseNextAnswer(kept) },
     });
     if (this.runs.pipRun) void this.runs.seedPipDraft(itemRef("CA-402"));
@@ -1034,6 +1036,12 @@ export class MockBackend implements Backend {
    */
   editTicket(key: string, change: TicketEdit) {
     this.connector.edit(itemRef(key), { title: change.summary, body: change.description === undefined ? undefined : docFromText(change.description), status: change.statusId });
+    this.workstreams.changed();
+  }
+
+  /** Someone else comments on sample ticket `key` in Jira, as its reporter would (`by` is a person's id in the sample, Mette by default); the workstreams tell their listeners. */
+  commentOnTicket(key: string, text: string, by = "mette") {
+    this.connector.commentBy(itemRef(key), by, text);
     this.workstreams.changed();
   }
 

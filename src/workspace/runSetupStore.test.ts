@@ -507,14 +507,34 @@ describe("the shared review-and-approve core", () => {
     expect(useTabs.getState().route).toBe("agents");
   });
 
-  it("takes a stale 'Cancelled: … Nothing was started.' note away once the run starts after all", () => {
+  const cancelledNote = async (what: string) => {
     usePrefs.setState({ agentsIntroSeen: false });
-    useRuns.getState().ensureAgentsIntro(vi.fn(), "Investigate CA-402");
+    useRuns.getState().ensureAgentsIntro(vi.fn(), what);
     useRuns.getState().closeSheet();
-    expect(useToasts.getState().toasts.map((t) => t.text)).toEqual(["Cancelled: Investigate CA-402. Nothing was started."]);
-    const started = { ...new MockBackend().runs.list()[0], id: "s", state: "working" as const };
+    expect(useToasts.getState().toasts.map((t) => t.text)).toEqual([`Cancelled: ${what}. Nothing was started.`]);
+  };
+  const base = () => new MockBackend().runs.list()[0];
+
+  it("takes a stale 'Cancelled: … Nothing was started.' note away once the launch watcher sees the run working", async () => {
+    await cancelledNote("Investigate CA-402");
+    const started = { ...base(), id: "s", state: "working" as const };
+    vi.spyOn(backend, "runsList").mockResolvedValue([started]);
     afterRunStarted(started, CA, { switchToAgents: false });
+    await settle();
     expect(useToasts.getState().toasts.map((t) => t.text)).toEqual(["Agent started on CA-401. It runs in the background."]);
+  });
+
+  it("keeps the 'Nothing was started' note while the run only waits for a slot, and takes it away once it launches", async () => {
+    await cancelledNote("Investigate CA-402");
+    const waiting = { ...base(), id: "q", state: "queued" as const, slotWaitSince: "2026-09-30T11:00:00Z" };
+    const list = vi.spyOn(backend, "runsList").mockResolvedValue([waiting]);
+    afterRunStarted(waiting, CA, { switchToAgents: false });
+    await settle();
+    const texts = () => useToasts.getState().toasts.map((t) => t.text);
+    expect(texts()).toContain("Cancelled: Investigate CA-402. Nothing was started.");
+    list.mockResolvedValue([{ ...waiting, state: "launching", slotWaitSince: undefined }]);
+    await useRuns.getState().reload();
+    expect(texts()).not.toContain("Cancelled: Investigate CA-402. Nothing was started.");
   });
 
   it("says an approval over the cap waits for a slot rather than that it started", () => {
