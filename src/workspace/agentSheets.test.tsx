@@ -14,10 +14,17 @@ import { focusDecision, READ_ONLY_STEP_NOTE } from "./PermissionAsk";
 import { RunSheetView, type RunSheetActions, type RunSheetViewProps } from "./RunSheet";
 import { MAY_TOUCH, SAFETY_SUMMARY, prChoices, sheetTopOn } from "./runSheetLogic";
 import { PipLauncher } from "./PipExtras";
+import { usePrefs } from "./prefs";
 import { useRuns } from "./runsStore";
 import { useRunSetup } from "./runSetupStore";
 import { placesOf } from "./RunWhere";
 import { offsetText } from "./RunTimeline";
+
+/** Server rendering reads a store's initial state, so the flag is set on both. */
+const explainerSeen = (seen: boolean) => {
+  usePrefs.setState({ permissionExplainerSeen: seen });
+  Object.assign(usePrefs.getInitialState(), { permissionExplainerSeen: seen });
+};
 
 const NOW = Date.parse("2026-09-30T12:00:00Z");
 const iso = (minutesAgo: number) => new Date(NOW - minutesAgo * 60_000).toISOString();
@@ -35,6 +42,8 @@ const buttons = (html: string) => [...html.matchAll(/<button[^>]*>([\s\S]*?)<\/b
 
 beforeEach(() => {
   vi.stubGlobal("localStorage", { getItem: () => null, setItem: () => {}, removeItem: () => {} });
+  // The permission prompt's one-time explainer is dismissed, so the cases below read the prompt itself; its own cases turn it back on.
+  explainerSeen(true);
 });
 
 describe("focus around the run sheet", () => {
@@ -94,6 +103,34 @@ describe("the run sheet, by state", () => {
       expect(html).toContain("Claude Code takes a yes only in its own prompt. Allow once opens this run in Terminal and copies the command: choose Yes there for this command only.");
       expect(html).toContain("Claude is told you said no and carries on without it.");
       for (const word of ["Open in Terminal", "Send answer", "don&#x27;t ask again", "Always"]) expect(asked(html)).not.toContain(word);
+    });
+
+    it("on the first prompt ever seen, explains Allow once and Deny above the buttons, with Got it; the Allow once note waits until then", () => {
+      explainerSeen(false);
+      const html = sheet(build("approve Bash: mkdir -p dist"), { label: "R3" });
+      const explainer = html.slice(html.indexOf("data-permission-explainer"), html.indexOf("data-permission-decisions"));
+      expect(explainer).toContain("Allow once in Terminal records your choice, opens this run in Terminal with the exact command copied, and you confirm there.");
+      expect(explainer).toContain("Deny tells the agent no, and it carries on without it.");
+      expect(buttons(explainer)).toEqual(["Got it"]);
+      // It sits above the decision buttons, and says what the one line under the command used to.
+      expect(html.indexOf("data-permission-explainer")).toBeLessThan(html.indexOf("data-permission-decisions"));
+      expect(html).not.toContain("Claude Code takes a yes only in its own prompt.");
+      // Deny's effect is said once: the line under the buttons waits for the explainer to go.
+      expect(html).not.toContain("Claude is told you said no and carries on without it.");
+      expect(explainer).toContain("What the buttons do");
+      // A run that can't be allowed has no Allow once to explain: only Deny.
+      const ro = sheet(run("needsPermission", { needs: "approve Bash: rm -rf node_modules", spec: { ...build("x").spec, kind: "investigate" } }));
+      expect(ro).toContain("Deny tells the agent no");
+      expect(ro).toContain("What Deny does");
+      expect(ro).not.toContain("What the buttons do");
+      expect(ro).not.toContain("records your choice");
+    });
+
+    it("says nothing of it once dismissed, and brings the Allow once note back", () => {
+      const html = sheet(build("approve Bash: mkdir -p dist"));
+      expect(html).not.toContain("data-permission-explainer");
+      expect(html).toContain("Claude Code takes a yes only in its own prompt.");
+      expect(html).toContain("Claude is told you said no and carries on without it.");
     });
 
     it("on a Build asking for a command Gossamr can't check, offers no Allow: it says why and opens Terminal instead", () => {

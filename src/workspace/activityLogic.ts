@@ -365,7 +365,8 @@ export function eventText(e: WorkstreamEvent, label: (id: string | null) => stri
     case "autostart_failed":
       return `An automatic step after ${label(e.runId)} couldn't start`;
     case "fix_round_sent":
-      return `Fix round ${rounds} sent to ${label(e.runId)}`;
+      // The rule's rounds say so; one the person chose ("Run another fix round") is theirs.
+      return `Fix round ${rounds} sent to ${label(e.runId)}${e.actor === "supervisor" ? " automatically" : ""}`;
     case "fix_rounds_exhausted":
       return `The review still blocks after ${e.detail ?? "2"} fix rounds`;
     case "escalation_taken":
@@ -397,7 +398,8 @@ export function eventText(e: WorkstreamEvent, label: (id: string | null) => stri
     case "notes_set":
       return "Pip updated its notes";
     case "budget_reset":
-      return `${who} reset the budget`;
+      // A message of the person's gives the automatic steps back (`personWrote`); it is not a button they pressed.
+      return e.detail === "message" ? "Your message gave Pip its automatic steps back" : `${who} reset the budget`;
     case "steps_allowed":
       return `${who} allowed ${e.detail ?? "5"} more automatic steps`;
     case "readiness_asked":

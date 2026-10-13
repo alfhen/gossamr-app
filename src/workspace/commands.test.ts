@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { MockBackend } from "../backend/mock";
 import { containerRef } from "../backend/mockConnector";
-import { SUGGESTED_TICKETS, START_WORKSTREAM, agentTicketChoices, askToPlanCommands, buildCommands, agentCommands, startWorkstreamCommands, timelineCommands, workstreamCommands, keyCommand, newTicketIntent, projectChoices, pullCommand, rankCommands, ticketCommands, unwatchCommands, watchCommands, withAskPip, type CommandActions } from "./commands";
+import { SUGGESTED_TICKETS, START_WORKSTREAM, namesCommand, agentTicketChoices, askToPlanCommands, buildCommands, agentCommands, startWorkstreamCommands, timelineCommands, workstreamCommands, keyCommand, newTicketIntent, projectChoices, pullCommand, rankCommands, searchOrder, ticketCommands, unwatchCommands, watchCommands, withAskPip, type CommandActions } from "./commands";
 import { BUILT_IN_VIEWS } from "./filters";
 import type { WorkItem } from "../types";
 
@@ -56,6 +56,42 @@ describe("palette commands", () => {
 
   it("matches nothing for gibberish", () => {
     expect(find("zzzqq")).toEqual([]);
+  });
+});
+
+describe("a command word outranks tickets", () => {
+  const a = actions();
+  const ctx = { project: null, view: "list" as const, unreadActivity: 0, github: false, agents: true, needsYou: 0, ticket: null, onPipHome: false, onAgents: false };
+  const commands = [...buildCommands(containers, BUILT_IN_VIEWS, a, ctx), ...timelineCommands({ filter: "all", scope: "workstream", shown: false }, a)];
+  const ticket = (key: string, title: string): WorkItem => ({ ...items[0], title, item: { ...items[0].item, key, externalId: key } });
+  const tickets = [ticket("CA-900", "Runs of the nightly sync fail"), ticket("CA-901", "Timeline of agents is blank"), ticket("CA-902", "Retry failed payment")];
+  const order = (q: string) => {
+    const o = searchOrder(ticketCommands(tickets, q, vi.fn()), rankCommands(commands, q), q);
+    return [...o.head, ...o.tickets, ...o.commands].map((c) => c.label);
+  };
+
+  it("names a command by a word of its title or keywords, whole or begun", () => {
+    const open = commands.find((c) => c.label === "Open Agents")!;
+    for (const q of ["runn", "agents", "oper", "stop all", "open agents"]) expect(namesCommand(open, q), q).toBe(true);
+    expect(namesCommand(open, "payment")).toBe(false);
+    expect(namesCommand(open, "ents")).toBe(false);
+    expect(namesCommand(open, "  ")).toBe(false);
+  });
+
+  it("puts the commands a command word names above the tickets it also matches", () => {
+    expect(order("runs")[0]).toBe("Timeline: Runs");
+    expect(order("runs").indexOf("Runs of the nightly sync fail")).toBeGreaterThan(order("runs").indexOf("Timeline: Runs"));
+    const timeline = order("timeline");
+    expect(timeline[0]).toMatch(/^Timeline/);
+    expect(timeline.indexOf("Timeline of agents is blank")).toBeGreaterThan(timeline.lastIndexOf("Timeline: Every workstream"));
+    const agents = order("agents");
+    expect(agents.indexOf("Open Agents")).toBeLessThan(agents.indexOf("Timeline of agents is blank"));
+  });
+
+  it("keeps fuzzy ticket search, and a ticket key typed first", () => {
+    expect(order("nightly")[0]).toBe("Runs of the nightly sync fail");
+    expect(order("retry fail")[0]).toBe("Retry failed payment");
+    expect(order("ca-901")[0]).toBe("Timeline of agents is blank");
   });
 });
 
@@ -345,6 +381,12 @@ describe("Pip home in the palette", () => {
     expect(a.openPipHome).toHaveBeenCalled();
   });
 
+  it("finds Open Agents as the operations view (what is running, capacity, Stop all), not as the runs timeline", () => {
+    const on = buildCommands(containers, BUILT_IN_VIEWS, actions(), { ...ctx, agents: true });
+    for (const q of ["capacity", "running", "operations"]) expect(rankCommands(on, q)[0]?.id).toBe("app:agents");
+    expect(on.find((c) => c.id === "app:agents")!.keywords).not.toContain("timeline");
+  });
+
   it("offers 'Open Agents' first for 'agents', ahead of Stop all, and not while on Agents", () => {
     const a = actions();
     const on = buildCommands(containers, BUILT_IN_VIEWS, a, { ...ctx, agents: true });
@@ -449,13 +491,13 @@ describe("timeline commands", () => {
     expect(a.showTimeline).toHaveBeenLastCalledWith("drafts", "every");
   });
 
-  it("marks what the timeline on screen shows as current, and says where Runs in every workstream goes", () => {
+  it("marks what the timeline on screen shows as current, and sends no combination to another screen", () => {
     const hints = (state: Parameters<typeof timelineCommands>[0]) => Object.fromEntries(timelineCommands(state, actions()).map((c) => [c.id, c.hint]));
     expect(hints({ filter: "drafts", scope: "workstream", shown: true })).toMatchObject({ "timeline:filter:drafts": "current", "timeline:scope:workstream": "current", "timeline:filter:runs": undefined, "timeline:scope:every": undefined });
-    // In every workstream, Runs is the Agents screen; with Runs on, so is Every workstream.
-    expect(hints({ filter: "all", scope: "every", shown: true })["timeline:filter:runs"]).toBe("Agents");
-    expect(hints({ filter: "runs", scope: "workstream", shown: true })["timeline:scope:every"]).toBe("Agents");
-    // On the Agents screen, Runs and Every workstream are what it shows.
+    // Runs in every workstream is a timeline like the rest: no hint sends it to Agents.
+    expect(hints({ filter: "all", scope: "every", shown: true })["timeline:filter:runs"]).toBeUndefined();
+    expect(hints({ filter: "runs", scope: "workstream", shown: true })["timeline:scope:every"]).toBeUndefined();
+    // With Runs and Every workstream on screen, both are current.
     expect(hints({ filter: "runs", scope: "every", shown: true })).toMatchObject({ "timeline:filter:runs": "current", "timeline:scope:every": "current" });
     // Off screen, nothing is current.
     expect(Object.values(hints({ filter: "all", scope: "workstream", shown: false })).filter((h) => h === "current")).toEqual([]);

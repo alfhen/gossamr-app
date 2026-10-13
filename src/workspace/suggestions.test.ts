@@ -15,6 +15,16 @@ describe("workstream-aware suggestion chips", () => {
     expect(suggestionsFor({ ...base, workstream: { ...ws, stage: "build", investigated: true } })).not.toContain("Plan this");
   });
 
+  it("asks what is unclear instead of offering the Plan while the ticket waits for the person's choice", () => {
+    expect(workstreamChips({ ...ws, stage: "triage", investigated: true, unclear: true })).toEqual(["What is unclear about this ticket?"]);
+    expect(workstreamChips({ ...ws, stage: "investigate", investigated: true, unclear: true })).not.toContain("Plan this");
+  });
+
+  it("offers a Jira update for a workstream with a cobweb", () => {
+    expect(workstreamChips({ ...ws, stage: "build", investigated: true, cobweb: true })).toEqual(["Draft a Jira update"]);
+    expect(workstreamChips({ ...ws, stage: "build", investigated: true })).not.toContain("Draft a Jira update");
+  });
+
   it("shows the plan update waiting, why it is held, what happened, and what a run is doing", () => {
     expect(workstreamChips({ ...ws, stage: "plan", investigated: true, hasPendingPlanRewrite: true })).toEqual(["Show me the plan update"]);
     expect(workstreamChips({ ...ws, stage: "plan", investigated: true, hasPendingPlanRewrite: true })).not.toContain("Approve the plan");

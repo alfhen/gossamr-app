@@ -28,6 +28,8 @@ import { WorkstreamControls } from "./WorkstreamControls";
 import { workstreamSuggestionScene } from "./pipHomeLogic";
 import { TimelineView } from "./Timeline";
 import { useNeedsYou } from "./useNeeds";
+import { useNow } from "./AgentsView";
+import { useWorkstreamWithers } from "./useWorkstreamWithers";
 
 export { AppliedCard, GENERAL_CONVERSATION, PIP_INPUT_ID, workstreamConversation } from "./PipConversation";
 
@@ -161,7 +163,12 @@ export function usePipChips(workstream: WorkstreamView | null = null) {
   const agentsOn = useAgentsEnabled();
   const hasRuns = runs.length > 0;
   const turns = useClaude((s) => (workstream ? s.byTicket[workstreamConversation(workstream.workstream.id)]?.turns : undefined)) ?? NO_TURNS;
-  const workstreamScene = useMemo(() => (agentsOn && workstream ? workstreamSuggestionScene(workstream, runs, Object.values(proposals), turns) : undefined), [agentsOn, workstream, runs, proposals, turns]);
+  const now = useNow();
+  const own = useMemo(() => (workstream ? [workstream] : []), [workstream]);
+  const cobweb = useWorkstreamWithers(own, now)[workstream?.workstream.id ?? ""];
+  // A Jira update is offered while none is waiting in Needs you.
+  const chaseJira = !!cobweb && !cobweb.draftWaiting;
+  const workstreamScene = useMemo(() => (agentsOn && workstream ? workstreamSuggestionScene(workstream, runs, Object.values(proposals), turns, chaseJira) : undefined), [agentsOn, workstream, runs, proposals, turns, chaseJira]);
   const base = suggestionsFor({
     route: screen.route,
     quote: quote !== null,

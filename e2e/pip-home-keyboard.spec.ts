@@ -83,10 +83,12 @@ test("keyboard only, intake to review on Pip home: columns with F6, rows and ste
   await setBudget(page, (await workstreamEvents(page))[0].workstreamId, { autoTurns: 12 });
   await page.keyboard.press("Escape");
 
-  // Pip home, with the keyboard in its composer; the list with Shift+F6 from there, then j to the workstream and Enter.
+  // Pip home, with the keyboard in its composer; the workstreams with Shift+F6 from there (by the timeline, which has no steps or decision after it in General), then j to the workstream and Enter.
   await press(page, "ControlOrMeta+0");
   await expect(homeConversation(page)).toHaveText("General");
   await expect(homeComposer(page)).toBeFocused();
+  await press(page, "Shift+F6");
+  await expect(homeConversationRegion(page).locator("[data-timeline]")).toBeFocused();
   await press(page, "Shift+F6");
   await expect(workstreamRow(page, "General")).toBeFocused();
   await press(page, "j");
@@ -132,10 +134,10 @@ test("keyboard only, intake to review on Pip home: columns with F6, rows and ste
   await finishOnHome(page, (await started(page, "plan")).id);
   await homeSettled(page);
 
-  // F6 to the rail, j to Plan, Enter opens it, j down to the description draft and Enter opens the peek.
+  // Shift+F6 from the composer to the rail (the region before it), j to Plan, Enter opens it, j down to the description draft and Enter opens the peek.
   await page.keyboard.press("ControlOrMeta+j");
   await expect(homeComposer(page)).toBeFocused();
-  await press(page, "F6");
+  await press(page, "Shift+F6");
   await expect(chipButton(page, "investigate")).toBeFocused();
   await pressUntil(page, "j", chipButton(page, "plan"));
   await press(page, "Enter");
@@ -183,14 +185,14 @@ test("keyboard only, intake to review on Pip home: columns with F6, rows and ste
   await homeSettled(page);
 
   // Back to the rail, k or j to Review, Enter. The second review's comment replaced the first's, so one comment draft is
-  // left (no 'Approve these' batch): j to it, Enter opens the peek, Tab to 'Post comment', Enter.
+  // left (no 'Approve N safe drafts' batch): j to it, Enter opens the peek, Tab to 'Post comment', Enter.
   await page.keyboard.press("ControlOrMeta+j");
   await expect(homeComposer(page)).toBeFocused();
-  await press(page, "F6");
+  await press(page, "Shift+F6");
   await pressUntil(page, "j", chipButton(page, "review"));
   await press(page, "Enter");
   await expect(chipButton(page, "review")).toHaveAttribute("aria-expanded", "true");
-  await expect(stepChip(page, "review").getByRole("button", { name: /^Approve these/ })).toHaveCount(0);
+  await expect(stepChip(page, "review").getByRole("button", { name: /safe drafts/ })).toHaveCount(0);
   const comment = stepChip(page, "review").locator('article[data-draft][data-state="pending"]:not([aria-label^="GitHub review of "])');
   await expect(comment).toHaveCount(1);
   const id = (await comment.getAttribute("data-draft"))!;
@@ -210,7 +212,7 @@ test("keyboard only, intake to review on Pip home: columns with F6, rows and ste
   await expect(peekSheet(page).locator(`article[data-draft="${id}"]`).getByRole("button", { name: "Post comment" })).toHaveCount(0);
 });
 
-test("j and k move through the list and the Needs you rows and stop at the ends; Enter on a Needs you row opens its decision", async ({ page }) => {
+test("j and k move through the Needs you rows and the workstream list, in the order they show, and stop at the ends; Enter on a Needs you row opens its decision", async ({ page }) => {
   await openApp(page, MANAGED);
   await agentsSettled(page);
   await palette(page, "CA-401", /CA-401/);
@@ -219,7 +221,8 @@ test("j and k move through the list and the Needs you rows and stop at the ends;
   await page.keyboard.press("ControlOrMeta+0");
   await expect(homeConversation(page)).toHaveText("General");
 
-  // Into the workstream from the list, and Pip drafts an investigation there; it waits in Needs you.
+  // Into the workstream from the list (two regions back from the composer: the timeline, then the workstreams), and Pip drafts an investigation there; it waits in Needs you.
+  await press(page, "Shift+F6");
   await press(page, "Shift+F6");
   await press(page, "j");
   await press(page, "Enter");
@@ -229,16 +232,27 @@ test("j and k move through the list and the Needs you rows and stop at the ends;
   const item = needsYouTray(page).locator("[data-needs-you-group]").first();
   await expect(item).toBeVisible();
 
-  // From the list: k stops at General, j runs on into Needs you and stops at its last row.
-  await press(page, "Shift+F6");
+  // From the list: j and k go in the order the column shows, Needs you's rows first and the workstreams under them, and
+  // both stop at the ends: k runs up through General into the Needs you row and stops there, j back down to the last workstream.
+  // F6 from the composer goes round to Needs you, and on to the workstreams, where the selected one has the keyboard.
+  await press(page, "F6");
+  await expect(item).toBeFocused();
+  await press(page, "F6");
+  await expect(workstreamRow(page, "CA-401")).toBeFocused();
+  await press(page, "k");
+  await expect(workstreamRow(page, "General")).toBeFocused();
+  await press(page, "k");
+  await expect(item).toBeFocused();
+  await press(page, "k");
+  await expect(item).toBeFocused();
+  await press(page, "j");
+  await expect(workstreamRow(page, "General")).toBeFocused();
+  await press(page, "j");
+  await expect(workstreamRow(page, "CA-401")).toBeFocused();
+  await press(page, "j");
   await expect(workstreamRow(page, "CA-401")).toBeFocused();
   await press(page, "k");
   await press(page, "k");
-  await expect(workstreamRow(page, "General")).toBeFocused();
-  await press(page, "j");
-  await press(page, "j");
-  await expect(item).toBeFocused();
-  await press(page, "j");
   await expect(item).toBeFocused();
   // Enter opens the need's decision in the middle column, and the keyboard goes into it.
   await page.keyboard.press("Enter");
@@ -246,11 +260,11 @@ test("j and k move through the list and the Needs you rows and stop at the ends;
   await expect(needsPane(page).getByRole("button", { name: "Review and start" })).toBeFocused();
   await expectVisibleFocus(page);
 
-  // The rail with Cmd/Ctrl+], wrapping round with Cmd/Ctrl+[ and ], and nothing moves while the palette is open.
+  // The regions with Cmd/Ctrl+] and [: from the open decision to the rail, on to the composer, and back; and nothing moves while the palette is open.
   await press(page, "ControlOrMeta+BracketRight");
   await expect(chipButton(page, "investigate")).toBeFocused();
   await press(page, "ControlOrMeta+BracketRight");
-  await expect(workstreamRow(page, "CA-401")).toBeFocused();
+  await expect(homeComposer(page)).toBeFocused();
   await press(page, "ControlOrMeta+BracketLeft");
   await expect(chipButton(page, "investigate")).toBeFocused();
   // Space opens a chip, and Enter closes it again.

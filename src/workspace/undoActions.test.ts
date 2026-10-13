@@ -7,7 +7,9 @@ import { HELD_ALL, HELD_BUDGET, HELD_PERSON } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { contextDeps } from "./contextActions";
 import { draftDecisions } from "./DraftPreview";
+import { usePipHome } from "./pipHomeStore";
 import { useRuns } from "./runsStore";
+import { useTabs } from "./tabsStore";
 import { useToasts } from "./toasts";
 import { undoLog } from "./undo";
 import { currentNeeds } from "./useNeeds";
@@ -52,6 +54,21 @@ describe("skipping a draft", () => {
     expect(texts()).toContain("The draft is back.");
     const audit = (await backend.workstreamsEvents(ws.id)).map((e) => e.action);
     expect(audit.slice(-2)).toEqual(["draft_skipped", "undone"]);
+  });
+
+  it("opens the restored draft in Pip home's pane, and only while Pip home is the screen", async () => {
+    const p = backend.proposals.draft(comment);
+    await useWorkspace.getState().refreshProposals();
+    await useWorkspace.getState().skip(p.id);
+    useTabs.setState({ route: "pip" });
+    usePipHome.getState().closeDecision();
+    await undoLog.run(undoLog.latest()!.id);
+    expect(usePipHome.getState().deciding).toBe(`draft:${p.id}`);
+    await useWorkspace.getState().skip(p.id);
+    useTabs.setState({ route: "workspace" });
+    usePipHome.getState().closeDecision();
+    await undoLog.run(undoLog.latest()!.id);
+    expect(usePipHome.getState().deciding).toBeNull();
   });
 
   it("is the same from the keys and buttons: draftDecisions().skip offers it too", async () => {

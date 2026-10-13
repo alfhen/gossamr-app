@@ -6,7 +6,7 @@ import type { Proposal, Run, WorkstreamView } from "../types";
 import { pipHomeHints } from "./footerHints";
 import { HINTS, keyHint } from "./keyMap";
 import { timelineDrafts, timelineRuns } from "./Timeline";
-import { followsEnd, nearBottom, stepIndex, timelineKeyAction, timelineStop, upToTimeline } from "./timelineKeys";
+import { ENTRY_FOCUS, followsEnd, nearBottom, revealEntry, stepIndex, timelineKeyAction, timelineStop, upToTimeline } from "./timelineKeys";
 import { usePipHome } from "./pipHomeStore";
 import { useTabs } from "./tabsStore";
 import { TimelineFilterBar, TimelineScopeToggle, showTimeline } from "./TimelineFilterBar";
@@ -107,13 +107,12 @@ describe("the filter bar", () => {
     expect(html).not.toContain("Timeline filter");
   });
 
-  it("presses the scope shown, and says Every workstream with Runs is the Agents screen", () => {
-    const html = renderToStaticMarkup(createElement(TimelineScopeToggle, { value: "workstream", filter: "runs", onChange: () => {} }));
+  it("presses the scope shown, with Runs as with any filter: no scope is another screen", () => {
+    const html = renderToStaticMarkup(createElement(TimelineScopeToggle, { value: "workstream", onChange: () => {} }));
     expect(html).toContain('aria-label="Timeline scope"');
     expect(html).toMatch(/aria-pressed="true"[^>]*data-scope="workstream"[^>]*>This workstream</);
-    expect(html).toMatch(/aria-pressed="false"[^>]*data-scope="every"[^>]*title="Runs in every workstream: the Agents screen"[^>]*>Every workstream</);
-    const all = renderToStaticMarkup(createElement(TimelineScopeToggle, { value: "every", filter: "all", onChange: () => {} }));
-    expect(all).not.toContain("Agents screen");
+    expect(html).toMatch(/aria-pressed="false"[^>]*data-scope="every"[^>]*>Every workstream</);
+    expect(html).not.toContain("Agents screen");
   });
 });
 
@@ -146,16 +145,17 @@ describe("what a conversation's timeline holds", () => {
 });
 
 describe("showing a filter in a scope", () => {
-  it("goes to Pip home's timeline with both, and to the Agents screen for Runs in every workstream", () => {
+  it("goes to Pip home's timeline with both, Runs in every workstream included", () => {
     usePipHome.getState().reset();
     useTabs.getState().setRoute("workspace");
     showTimeline("drafts", "every");
     expect(useTabs.getState().route).toBe("pip");
     expect(usePipHome.getState()).toMatchObject({ timelineFilter: "drafts", timelineScope: "every" });
+    useTabs.getState().setRoute("workspace");
     showTimeline("runs");
-    expect(useTabs.getState().route).toBe("agents");
-    // Pip home keeps what it showed, and the scope: leaving Agents by another filter stays in every workstream.
-    expect(usePipHome.getState()).toMatchObject({ timelineFilter: "drafts", timelineScope: "every" });
+    // Runs in every workstream stays on Pip home's timeline; it no longer redirects to the Agents screen.
+    expect(useTabs.getState().route).toBe("pip");
+    expect(usePipHome.getState()).toMatchObject({ timelineFilter: "runs", timelineScope: "every" });
     showTimeline("decisions");
     expect(useTabs.getState().route).toBe("pip");
     expect(usePipHome.getState()).toMatchObject({ timelineFilter: "decisions", timelineScope: "every" });
@@ -180,5 +180,22 @@ describe("following the timeline's end", () => {
     expect(followsEnd(false, 2, [user, user, wake])).toBe(false);
     expect(followsEnd(false, 2, [user, user, {}])).toBe(true);
     expect(followsEnd(false, 0, [user])).toBe(true);
+  });
+});
+
+describe("an entry's focus ring and reveal", () => {
+  it("draws the ring with a solid style and clears the chips row below", () => {
+    expect(ENTRY_FOCUS).toContain("focus-visible:outline-solid");
+    expect(ENTRY_FOCUS).toContain("scroll-mb-14");
+  });
+
+  it("scrolls an entry that took focus itself into view, and leaves a card or button inside it to scroll itself", () => {
+    const scrollIntoView = vi.fn();
+    const li = { scrollIntoView };
+    revealEntry({ target: li, currentTarget: li });
+    expect(scrollIntoView).toHaveBeenCalledWith({ block: "nearest" });
+    scrollIntoView.mockClear();
+    revealEntry({ target: {}, currentTarget: li });
+    expect(scrollIntoView).not.toHaveBeenCalled();
   });
 });

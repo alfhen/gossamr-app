@@ -12,6 +12,15 @@ import { WITHER_DAYS, witherLevel, type WitherLevel } from "./views";
 /** What a post to Jira writes: every kind of draft a tracker applies. A run, a follow-up or an answer reaches an agent, not Jira. */
 const JIRA_WRITES: ReadonlySet<Intent["type"]> = new Set(["comment", "transition", "subtasks", "rewrite", "create", "update", "link"]);
 
+/** Whether a draft of `intent` writes to Jira once approved. */
+export const isJiraWrite = (intent: Intent) => JIRA_WRITES.has(intent.type);
+
+/** The short line a workstream row shows for its cobweb: "No Jira update · 6d". */
+export const witherShort = (w: Pick<WorkstreamWither, "days">) => `No Jira update · ${w.days}d`;
+
+/** The row's tooltip: the full sentence, and where the update waits when a draft already does. */
+export const witherTitle = (w: Pick<WorkstreamWither, "text" | "draftWaiting">) => (w.draftWaiting ? `${w.text}. A draft is waiting in Needs you.` : w.text);
+
 /** The parts of a run the clock reads. */
 export type WitherRun = Pick<Run, "launchedAt" | "endedAt"> & Partial<Pick<Run, "id">>;
 
@@ -29,6 +38,8 @@ export interface WorkstreamWither {
   runs: number;
   /** How many Pip turns since. */
   turns: number;
+  /** A Jira write of this workstream's waits for the person, in Needs you; set by whoever holds the drafts (`withersOf`). */
+  draftWaiting?: boolean;
   /** The words for hover and for a screen reader: "No Jira update for 5 days (3 runs since)"; empty at level 0. */
   text: string;
 }

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { create } from "zustand";
 import { itemKey } from "../lib/filter";
 import { targetOf } from "../lib/proposals";
@@ -8,6 +8,7 @@ import { Icon } from "./AgentIcons";
 import { Btn } from "./AgentSheet";
 import { openLiveDraft } from "./DraftPreview";
 import { draftKey } from "./draftTicket";
+import { useGithubUi } from "./githubUi";
 import { usePipHome } from "./pipHomeStore";
 import { useTabs } from "./tabsStore";
 import { useWorkstreams } from "./workstreamsStore";
@@ -18,6 +19,8 @@ export const TAKE_OVER_HELP = "Switches this workstream to Advise. Nothing else 
 export const POST_AS_IS_HELP = "Opens the review draft. Nothing goes to GitHub until you use its own Post review; once it is posted, this card closes.";
 /** Why Post the review as is can't be pressed. */
 export const NO_REVIEW_DRAFT = "This review has no draft waiting.";
+/** What takes its place under the button while GitHub isn't connected: posting a review needs it. */
+export const CONNECT_TO_POST = "Connect GitHub to post a review.";
 
 /** Why every choice waits while the review draft it opened is open and not yet posted. */
 export const DRAFT_OPEN = "Review draft open: post it from the draft. These choices come back if you close or discard the draft.";
@@ -97,20 +100,26 @@ export interface EscalationCardViewProps {
   busy: boolean;
   /** The review draft it opened is open and not posted: the choices wait, and the card says why. */
   drafting?: boolean;
+  /** Says "R3 still blocks after 2 fix rounds. What next?" first. Left out where something above already says it (the decision pane's header). */
+  titled?: boolean;
   onFixRound(): void;
   onTakeOver(): void;
   onPost(): void;
+  /** Whether GitHub is connected; left out it is taken to be. Without it there is no review to post, and the card says to connect. */
+  github?: boolean;
+  /** Opens the connect flow, offered beside the reason GitHub isn't connected. */
+  onConnect?(): void;
 }
 
 /**
  * A review that still blocks after the automatic fix rounds, and the person's three choices, in this order: another fix
  * round, taking the workstream over, or posting the review as it is. Each is the person's alone.
  */
-export function EscalationCardView({ escalation: e, busy, drafting = false, onFixRound, onTakeOver, onPost }: EscalationCardViewProps) {
+export function EscalationCardView({ escalation: e, busy, drafting = false, titled = true, github = true, onFixRound, onTakeOver, onPost, onConnect }: EscalationCardViewProps) {
   const review = e.reviewLabel || "The review";
   const draft = e.reviewDraft ?? null;
   const why = `escalation-${e.reviewRun}-draft`;
-  const choice = (n: number, label: string, help: string, run: () => void, extra: { tone?: "primary" | "plain"; disabled?: boolean; title?: string } = {}) => (
+  const choice = (n: number, label: string, help: ReactNode, run: () => void, extra: { tone?: "primary" | "plain"; disabled?: boolean; title?: string } = {}) => (
     <li className="grid gap-0.5">
       <Btn
         tone={extra.tone ?? "plain"}
@@ -129,9 +138,11 @@ export function EscalationCardView({ escalation: e, busy, drafting = false, onFi
   );
   return (
     <div role="group" aria-label="Review still blocks" data-escalation={e.reviewRun} className="grid gap-1.5 rounded-md border border-ws-warn/40 bg-ws-warn/10 px-2.5 py-1.5 text-sm text-ws-ink">
-      <p className="m-0 font-semibold">
-        {review} still blocks after {e.rounds} fix rounds. What next?
-      </p>
+      {titled && (
+        <p className="m-0 font-semibold">
+          {review} still blocks after {e.rounds} fix rounds. What next?
+        </p>
+      )}
       {drafting && (
         <p id={why} role="status" data-escalation-draft-open className="m-0 text-xs font-semibold text-ws-ink">
           {DRAFT_OPEN}
@@ -140,7 +151,27 @@ export function EscalationCardView({ escalation: e, busy, drafting = false, onFi
       <ul className="m-0 grid list-none gap-1.5 p-0">
         {choice(1, "Run another fix round", FIX_ROUND_HELP, onFixRound, { tone: "primary" })}
         {choice(2, "I'll take it from here", TAKE_OVER_HELP, onTakeOver)}
-        {choice(3, "Post the review as is", POST_AS_IS_HELP, onPost, { disabled: !draft, title: draft ? undefined : NO_REVIEW_DRAFT })}
+        {choice(
+          3,
+          "Post the review as is",
+          // Greyed out, the reason stands where the help was.
+          draft ? (
+            POST_AS_IS_HELP
+          ) : !github ? (
+            <>
+              {CONNECT_TO_POST}{" "}
+              {onConnect && (
+                <button type="button" data-escalation-connect onClick={onConnect} className="rounded font-semibold text-ws-accent hover:underline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ws-pip">
+                  Connect GitHub
+                </button>
+              )}
+            </>
+          ) : (
+            NO_REVIEW_DRAFT
+          ),
+          onPost,
+          { disabled: !draft, title: draft ? undefined : !github ? CONNECT_TO_POST : NO_REVIEW_DRAFT },
+        )}
       </ul>
     </div>
   );
@@ -175,6 +206,7 @@ export function EscalationCard({ view }: { view: WorkstreamView }) {
   const opened = useEscalationDrafts((s) => s.opened);
   const proposals = useWorkspace((s) => s.proposals);
   const selected = useTabs((s) => s.selected);
+  const github = useWorkspace((s) => s.connections.some((c) => c.kind === "github"));
   const drafting = e ? draftOpen(e, opened, proposals, selected) !== null : false;
   // Once the draft has been open and isn't, the choice is spent: opening that ticket again for something else says nothing about it.
   const seen = useRef(false);
@@ -201,6 +233,8 @@ export function EscalationCard({ view }: { view: WorkstreamView }) {
         escalation={{ ...e, reviewDraft: offered }}
         busy={busy}
         drafting={drafting}
+        github={github}
+        onConnect={() => useGithubUi.getState().openConnect()}
         onFixRound={() => choose(actions.onFixRound, fixRoundSent(e.buildLabel), false)}
         onTakeOver={() => choose(actions.onTakeOver, TAKEN_OVER, true)}
         onPost={() => {

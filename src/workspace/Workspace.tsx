@@ -19,7 +19,7 @@ import { useActiveTab } from "./hooks";
 import { MAIN_ID, Palette } from "./Palette";
 import { PeekSheet } from "./PeekSheet";
 import { PullView } from "./PullView";
-import { FilterNote, LAUNCHER_CLEAR, PipLauncher, SelectionAsk, usePipView } from "./PipExtras";
+import { FilterNote, LAUNCHER_CLEAR, LAUNCHER_GUTTER, PipLauncher, SelectionAsk, usePipView } from "./PipExtras";
 import { GENERAL_CONVERSATION, PIP_INPUT_ID, PipPane } from "./PipPane";
 import { usePaneWidths } from "./PaneResizers";
 import { useAgentsEnabled, useAgentsFlag } from "./agentsFlag";
@@ -301,7 +301,7 @@ export function Workspace({ backend }: { backend: Backend }) {
         <main
           id={MAIN_ID}
           tabIndex={-1}
-          style={{ ["--ws-launcher-clear" as string]: `${launcherShown ? LAUNCHER_CLEAR : 0}px` }}
+          style={{ ["--ws-launcher-clear" as string]: `${launcherShown ? LAUNCHER_CLEAR : 0}px`, ["--ws-launcher-gutter" as string]: `${launcherShown ? LAUNCHER_GUTTER : 0}px` }}
           className="relative flex min-h-0 min-w-0 flex-col outline-none"
         >
           <div data-canvas-column style={{ paddingRight: room }} className="flex min-h-0 min-w-0 flex-1 flex-col motion-safe:transition-[padding] motion-safe:duration-200">

@@ -74,7 +74,7 @@ The owner's tickets are often not well defined, and Gossamr exists to make them 
 - One per workstream, plus General (null).
 - `{ workstreamId, title, top: Need, rest: Need[], count, safeBatch: Need[] }`.
 - `top` is the highest-ranked need.
-- `safeBatch` holds the batchable pending drafts (comment, transition, subtasks), offered as "Approve N" with one combined preview.
+- `safeBatch` holds the batchable pending drafts (comment, transition, subtasks), offered as "Approve N safe drafts" (the one label everywhere, here and on the step rail; `batchLabel` in `pipHomeLogic.ts`) with one combined preview.
 
 ### One count
 - `needsCount = needs.length`. One number everywhere:
@@ -85,14 +85,21 @@ The owner's tickets are often not well defined, and Gossamr exists to make them 
 - Badge accessible text: "N things need you".
 
 ## UI: the Needs-you list (replaces the tray, the Agents "Needs you" lane and the separate badges)
-- It lives where the tray is on Pip home, and also opens as the rail popover.
+- **Pip home** is the screen's name: a slim header with its one `h1`, "Pip home". Under it the layout is three columns (two below about 1100px):
+  - **Left: Needs you is the main column.** It takes the full column height (260-340px wide, so titles have room) and scrolls inside it, never under a cap of its own (`NeedsYouList` with `main`). The workstream list is a compact section under it (`WorkstreamList`: General and the open workstreams, "Start a workstream…" and "Show closed" in one row), at most 45% of the column, scrolling inside that, so both are usable at 1440x900 with a few workstreams and a few needs. Needs you is a region of its own ("Needs you"), not a part of the workstreams' navigation.
+  - **Middle:** the timeline and the composer, with the decision pane opening above the timeline.
+  - **Right:** the steps.
+  - A group's title wraps to two lines (`line-clamp-2`), as a need's and its reason do, instead of being cut to one.
+  - **F6 reaches every region**, in the order they sit on screen: Needs you, the workstreams, the timeline, the decision pane (only while one is open), the step rail (only while a workstream gives it steps) and the composer. Shift+F6 and Cmd/Ctrl+[ go back, Cmd/Ctrl+] forward, both wrapping (`PIP_HOME_REGIONS`, `stepRegion` in `pipHomeKeys.ts`). It lands on the first Needs you row (the open one first), the selected workstream, the newest timeline entry, the decision's own first button, where the rail was left, and the composer.
+  - **j/k go row by row through the visible rows** of the left column: the Needs you rows, then the workstreams'. A folded group is one row. An open group is its own row, then one row for each of its other needs: its top need is listed again under it, and j/k step past that second row (`data-needs-top`) so no need is stopped on twice. Enter or o (or →) on a group expands it and opens its top need; ← folds it. Esc closes. The `data-pip-home-column` and `data-needs-you-*` handles are as they were.
+- It also opens as the rail popover.
 - **Rows**: one per NeedGroup. Each row shows:
   - the ticket key and title
   - a group chip (Decide / Unblock / Approve)
   - `top.why`
   - an age
   - "+N more" when there is more than one need
-- **Expanding** a row (Enter or →) lists every need in the group, plus "Approve N safe drafts" when `safeBatch` has 2 or more.
+- **Expanding** a row (Enter or →) lists every need in the group, plus "Approve N safe drafts" when `safeBatch` has 2 or more. That button, and the palette's "Approve all safe drafts in …", open the combined preview in the decision pane like any other decision (`batch` in `pipHomeStore`, `BatchDecision` in `NeedsPane.tsx`): what each draft would do, fixed as it was when the pane opened, then one confirm ("Yes, approve N"). Cancel, ×, Esc or opening another decision keep every draft as it is; the outcome is said in the pane and in a toast.
 - **Decision pane**: selecting a need opens its decision inline in Pip home's middle column, reusing the existing components:
   - PermissionAsk
   - RunAnswer (question, limit-resume)
@@ -103,7 +110,13 @@ The owner's tickets are often not well defined, and Gossamr exists to make them 
   - the held banner Resume
   - PlanApproval
   - InlineStart (run start)
-- **Pane header**: `why` + `ifYouWait`, with a link "Open in workstream".
+- **Pane header**: `why` + `ifYouWait`, with a link "Open in workstream". It stays in view (sticky) while the decision under it scrolls.
+- **One decision, shown once.** A decision open in the pane is not repeated anywhere else on Pip home (`DecisionShownContext`, `decisionShown` in `src/workspace/decisionShown.ts`):
+  - An escalation's card is not on the rail while the pane has it, and its card in the pane leaves out its own "R3 still blocks after 2 fix rounds. What next?" line, since the header says it.
+  - A system hold's banner is not on the rail while the pane has it.
+  - A draft the pane shows (a draft need's, a question's reply draft, the review draft folded into an escalation) is not a card on the timeline (a line stands in, which opens the same need) or in the step rail. Closing the pane puts them back.
+  - The Pip pane (outside Pip home) and the ticket peek keep showing what they show; there is no pane to repeat.
+- **One scroll, nothing hidden.** The pane is the one scroll container in its place (at most 60% of the conversation column); nothing inside it scrolls. A draft's action bar is in the flow at the card's end there rather than sticky, so it never floats over the draft's text or the review comments under it. (On the timeline, the rail and the peek the bar stays sticky.)
 - **After a decision**: focus moves to the next need in rank order. When none are left: "Nothing needs you."
 - **Agents screen**: drops the "Needs you" lane. Runs that need the person show a pill "In Needs you", and pressing it opens that need.
 - **Other surfaces** keep showing their context (draft cards in the conversation, the step rail, the peek) but no longer count. Only the list counts.
@@ -117,6 +130,8 @@ The same keys mean the same thing in every list that holds actionable items (the
 - d: dismiss (a failure, a draft) or deny (a permission, which reaches the agent, so it keeps its Enter).
 - s: skip a draft. d and s on a draft, and d on a failure, act at once and offer Undo.
 - Esc: back.
+
+Global shortcuts: Cmd/Ctrl+0 goes to Pip home from anywhere, the Agents screen with a card's button focused included (a button on a card keeps plain keys from the list's own, but lets a Cmd/Ctrl shortcut through: `ownKey` in `agentKeys.ts`). It works from Pip's composer too, never from another field or behind the open palette. Cmd/Ctrl+K opens the palette, Cmd/Ctrl+J Pip.
 
 ## Undo (step 4)
 Reversible actions act at once and offer Undo in a toast for about 8 seconds (`src/workspace/undo.ts`): skipping a draft, dismissing a failed or stuck run, holding a workstream, switching it to Advise. Undo restores the exact previous state; when the action wrote an audit line the undo writes its own (`undone`). The backend allows an undo for 60 seconds, only while that change is the last line of the workstream's audit, so a stale toast can't undo over later changes. Anything that reached Jira, GitHub or an agent (post, approve, apply, Deny, Allow, Stop, Resume, start) keeps its confirm.
@@ -133,9 +148,11 @@ A workstream's story used to be spread over the conversation, the run strip, the
   - `target` is what opening it shows: a run id (its sheet), a draft id (its card), or a need key. An entry about something in Needs you always targets its need.
 - **A run is one entry**, updated in place: it stands where the audit says it was approved or started by a rule (else when it was queued), and its `phase` (queued, started, waiting, finished, failed, stopped, stopped at limit, unknown) and `lifecycle` change as it moves. A finished review says its verdict.
 - **A draft is one entry**, at when it was made, saying who made what and how it stands (waiting, posting, posted, sent, started, skipped, replaced, no longer needed).
+- **Fix rounds** each have a line, from the audit: "Fix round 1 sent to R3 automatically" for the rules' rounds, "Fix round 3 sent to R3" for one the person chose. It opens the build it went to.
+- **A failed run's heading is short** ("Build R4 failed"); what the run said went wrong is the entry's `detail`, in smaller type under it.
 - **Audit lines** are worded as Activity words them. The lines a run's or a draft's own entry already tells are left out (`run_approved`, `autostart`, `wake`, `draft_created`, `draft_retired`, `notes_set`). The same line repeated in a row collapses into one ("… (3 times)").
 - **Linking to Needs you**: a waiting run, a waiting draft, the hold the system made that still holds (and a used-up budget's question), and the open escalation carry the need's key. A hold the person chose has no need, so its line opens nothing.
-- **Ordering**: by time; a tie goes to what was said, then the audit, then runs, then drafts. Turns now carry `at` (the stored turn's `createdAt`, or when it was asked).
+- **Ordering**: by when things happened; a tie goes to what was said, then the audit, then runs, then drafts. Cause precedes effect whatever the clocks say: a draft a run left never stands before that run, and an audit line about a draft (approved, skipped, a review posted) never before the draft, nor before the run it came of. In Every workstream the parts' lists are merged, each keeping its own order. Turns now carry `at` (the stored turn's `createdAt`, or when it was asked).
 - **Filters**: All, Runs (`kind` run), Drafts (`kind` draft), Decisions (what the person did, what asks them to decide, and whatever waits in Needs you).
 
 ### UI
@@ -147,22 +164,35 @@ A workstream's story used to be spread over the conversation, the run strip, the
   - Lines for things in Needs you have an "In Needs you" pill and open their need with the same `openNeed`.
   - The composer, the Next line, the decision pane and the Needs you list are unchanged. General's timeline holds the runs and drafts in no workstream, plus every draft still waiting, as its old "Drafts waiting" did.
   - **The Pip pane** (outside Pip home) shows the same `TimelineView` for the pane's workstream (`pane`), under its header (Manage switch, Hold, what Pip sees) and over its composer, which are unchanged.
-    - Its filter is its own (a group named "Filter", not "Timeline filter"), so filtering the pane leaves Pip home's filter as it was. It has no scope toggle: the pane is one workstream. Its Runs filter links to Agents.
+    - Its filter is its own (a group named "Filter", not "Timeline filter"), so filtering the pane leaves Pip home's filter as it was. It has no scope toggle: the pane is one workstream. Its Runs filter has a link, "Runs in every workstream", to Pip home's Runs timeline in Every workstream.
     - Runs render with the pane's narrow `PipRunCard` (with its Open button), not the Agents row, so the Agents screen's row and its `agent-<id>` id stay the only ones on screen when both show. Enter on the card opens the entry (`timelineKeyAction(…, runOpensItself = false)`).
     - General's conversation in the pane is unchanged: it follows the screen, lists the runs going ("Your agents", "See all in Agents") and the drafts waiting with the ticket on screen first and the rest folded. On Pip home General is a timeline as before.
 - **Scope: This workstream / Every workstream.** Beside the filter, a toggle (group "Timeline scope") says whose timeline it is. It applies to every filter and lives in `pipHomeStore` (`timelineScope`) beside `timelineFilter`.
   - **Every workstream** is every open workstream's timeline plus General's, merged by time (`timelineAcross(everyWorkstreamParts(…))` in `src/lib/timeline.ts`, pure). Each part is the same `timeline()` its own workstream shows (its turns, its runs, the drafts its conversation shows, its audit), then General's. Something two parts both show (a draft waiting on a workstream's ticket, which General lists too) is one entry, in the workstream's part. Ties keep the order by kind, then the parts' order.
   - Each entry carries a small label (`data-timeline-workstream`): its ticket key, the workstream's title without one, or "General". Its accessible name starts with it.
   - While Every workstream is shown, every open workstream's conversation and audit are loaded. The composer stays the selected workstream's; the workstream intro shows only in This workstream.
-  - **Runs + Every workstream is the Agents screen** (`isAgentsView`, `showTimeline` in `TimelineFilterBar.tsx`): choosing Runs in Every workstream, or Every workstream with Runs, goes to Agents. The Agents screen has the same filter bar with Runs pressed and the scope toggle on Every workstream; choosing All, Drafts or Decisions goes to Pip home's timeline in Every workstream, and This workstream goes to Pip home's Runs for the selected workstream. Pip home keeps the scope it was last shown with. The rail's Agents button still lands on the Agents screen. Its selection, keys (`agentKeys.ts`), settings, banners, lanes and layouts are unchanged.
+  - **Runs + Every workstream is a timeline like the others.** Choosing Runs with Every workstream stays on Pip home and shows the runs of every open workstream and General, merged by time, each labelled with its workstream (`showTimeline` in `TimelineFilterBar.tsx` sets the filter and the scope and goes to Pip home; there is no redirect and no `isAgentsView`). The scope toggle has no title about another screen.
+  - **The Agents screen is the operations view**: what is running, the capacity, Stop all, Start an agent, and safety and settings. It is reached by the rail's Agents button and the "Open Agents" command in ⌘K (keywords: agents, running, capacity, operations, stop all). It has no timeline filter of its own; its header has a "Runs timeline" button that goes to Pip home's Runs in Every workstream. Its selection, keys (`agentKeys.ts`), settings, banners, lanes and layouts are unchanged, except that its list keeps clear of the floating Pip launcher like the other screens: room under the last row (`--ws-launcher-clear`) and a right gutter (`--ws-launcher-gutter`, `LAUNCHER_GUTTER`) so no card or "Show" link stands under it.
   - Asking Pip home to show a card (`focus`) sets the filter back to All and the scope back to This workstream.
-- **⌘K**: "Timeline: All", "Timeline: Runs", "Timeline: Drafts", "Timeline: Decisions", "Timeline: This workstream" and "Timeline: Every workstream" (`timelineCommands` in `commands.ts`, in the Workstreams group, while Agents are on). A filter keeps the scope and a scope keeps the filter, as the buttons do; from anywhere but Pip home or Agents they go to Pip home. The filter and scope on screen are marked current, and Runs in every workstream is marked "Agents".
+- **⌘K ranking**: a command the query names comes before any ticket or search result. A query names a command when each of its words is a word of the command's title or keywords, or the start of one ("runs", "timel", "agents", "stop all"); `namesCommand` and `searchOrder` in `commands.ts`. A ticket whose key starts with what was typed still leads, so typing a key finds the ticket, and fuzzy ticket search is unchanged after the commands the query names.
+- **⌘K**: "Timeline: All", "Timeline: Runs", "Timeline: Drafts", "Timeline: Decisions", "Timeline: This workstream" and "Timeline: Every workstream" (`timelineCommands` in `commands.ts`, in the Workstreams group, while Agents are on). A filter keeps the scope and a scope keeps the filter, as the buttons do; every one goes to Pip home. The filter and scope on screen are marked current, while Pip home is on screen; no combination is marked as another screen.
 - **Keyboard** (`src/workspace/timelineKeys.ts`, the `keyMap.ts` model):
   - j/k (or the arrows) move from entry to entry. An entry's stop is its draft card, its run row, or the entry itself.
   - Enter or o opens the target. A draft card keeps its own keys (a, e, d, s, Enter, o), and a run row opens on Enter.
   - ArrowUp from the empty composer reaches the newest draft waiting, else the newest entry.
   - The footer says "j k move through the timeline · ↵ o open what it is about" while the keyboard is on an entry.
   - Asking Pip home to show a card (`focus`) sets the filter back to All (and the scope to This workstream).
+
+## Explaining the modes and Allow once (dogfood B10)
+Two things the person was never told, said where they decide.
+- **The mode line.** One short line directly under the Manage switch, in the workstream header on Pip home's rail and in the Pip pane's header (`WorkstreamControlsView`, `MODE_LINE`, `data-mode-line`). It changes with the mode:
+  - Manage: "Pip manages: it starts the next step by itself and drafts what's next; nothing reaches Jira without you."
+  - Advise: "Pip advises: it answers when asked and starts nothing by itself."
+- **Allow once, said once.** On the first permission prompt the person ever sees, a one-time explainer sits above the buttons (`PermissionExplainer` in `PermissionAsk.tsx`, `data-permission-explainer`):
+  - Allow once in Terminal records your choice, opens this run in Terminal with the exact command copied, and you confirm there; nothing runs until you do. (Left out where the run can't be allowed, which has only Deny.)
+  - Deny tells the agent no, and it carries on without it.
+  - A "Got it" button dismisses it, and the keyboard lands on the prompt's first answer. Dismissal is kept in the prefs as `permissionExplainerSeen` (`src/workspace/prefs.ts`, the same store and the same way as the orientation card's `pipOrientationSeen`), so it never shows again. While it shows, the one-line Allow once note under the command is left out, since it says the same; it is back once dismissed.
+  - It shows wherever the prompt does until dismissed (the decision pane, a run's card, the run sheet). The e2e profile starts with it dismissed (`SEEDED_PREFS`), as with the orientation card.
 
 ## Workstream cobwebs: work is happening but Jira hasn't heard
 A ticket row withers when the ticket itself is untouched (`witherLevel`, `WITHER_DAYS`, the `Cobweb` component and the spider CSS). A workstream can be busy while its ticket is quiet: agents run and Pip takes turns, and nothing reaches Jira or GitHub, which is what other people read. So each workstream's row on Pip home gets the same cobweb, on a different clock.
@@ -176,6 +206,6 @@ A ticket row withers when the ticket itself is untouched (`witherLevel`, `WITHER
 
 ## Later steps (separate PRs)
 - **2.** Workstream header shows "Next: …" and "N of M automatic steps left". (The budget PR adds the numbers.)
-- **3.** Done: one timeline per workstream, with Agents as its Runs filter, a This workstream / Every workstream scope, the timeline in the Pip pane, and ⌘K commands for the filter and scope (see above).
+- **3.** Done: one timeline per workstream, with the Runs filter across every workstream (the Agents screen is now the operations view), a This workstream / Every workstream scope, the timeline in the Pip pane, and ⌘K commands for the filter and scope (see above).
 - **4.** Done: undo for reversible actions, one key model app-wide, and every action in ⌘K (see above).
 - **5.** Notifications per workstream state change ("CA-401 is waiting on you"), not per event, with an optional digest setting.

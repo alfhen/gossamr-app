@@ -1,13 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo } from "react";
 import { GROUP_LABEL, needGroups, type Need, type NeedGroup, type NeedGroupKind } from "../lib/needs";
 import { relativeTime } from "../lib/views";
 import { useWorkspace } from "../workspaceStore";
-import { draftSummary, draftTitle } from "./DraftCard";
 import { groupId, openNeed } from "./needsActions";
-import { freezeBatch, type BatchSnapshot } from "./pipHomeLogic";
+import { batchLabel } from "./pipHomeLogic";
 import { usePipHome } from "./pipHomeStore";
-import { BatchConfirm, confirmBatch } from "./StepRail";
-import { useToasts } from "./toasts";
 import { needsYouText } from "./useNeeds";
 
 const CHIP: Record<NeedGroupKind, string> = {
@@ -16,10 +13,16 @@ const CHIP: Record<NeedGroupKind, string> = {
   approve: "bg-ws-accent-soft text-ws-accent",
 };
 
+const CHIP_TITLE: Record<NeedGroupKind, string> = {
+  decide: "Decide: a choice only you can make",
+  unblock: "Unblock: something is stuck until you answer or allow it",
+  approve: "Approve: a draft that waits for your go-ahead before anything is posted",
+};
+
 /** What kind of ask a need is: Decide, Unblock or Approve. */
 export function GroupChip({ group }: { group: NeedGroupKind }) {
   return (
-    <span data-needs-you-chip={group} className={`shrink-0 rounded-full px-1.5 text-[10px] leading-4 font-semibold ${CHIP[group]}`}>
+    <span data-needs-you-chip={group} title={CHIP_TITLE[group]} className={`shrink-0 rounded-full px-1.5 text-[10px] leading-4 font-semibold ${CHIP[group]}`}>
       {GROUP_LABEL[group]}
     </span>
   );
@@ -47,89 +50,31 @@ function Asking({ need }: { need: Need }) {
 }
 
 /**
- * "Approve N safe drafts" under a group's needs, with what each would do in one combined preview, then a confirm: the
- * same step the step rail's "Approve these N" asks, over exactly the drafts it showed (`freezeBatch`, `confirmBatch`).
+ * "Approve N safe drafts" under a group's needs. It opens the combined preview of what each would do, with its confirm, in
+ * the decision pane like any other decision (`BatchDecision`): the same step the step rail's button asks.
  */
 function SafeBatch({ needs, gid }: { needs: readonly Need[]; gid: string }) {
   const proposals = useWorkspace((s) => s.proposals);
-  const drafts = needs.flatMap((n) => (n.target.type === "draft" && proposals[n.target.id] ? [proposals[n.target.id]] : []));
-  const [frozen, setFrozen] = useState<BatchSnapshot | null>(null);
-  const [outcome, setOutcome] = useState<{ text: string; failed: boolean } | null>(null);
-  const [busy, setBusy] = useState(false);
-  const ask = useRef<HTMLButtonElement>(null);
-  // The palette's "Approve all safe drafts in …" opens the same preview and its confirm; it approves nothing itself.
-  const asked = usePipHome((s) => s.batchPreview === gid);
-  const count = drafts.length;
-  useEffect(() => {
-    if (!asked) return;
-    usePipHome.setState({ batchPreview: null });
-    if (count >= 2) {
-      setOutcome(null);
-      setFrozen(freezeBatch(drafts));
-    }
-    // The preview is frozen from the drafts as they are when it opens.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [asked]);
-  if (drafts.length < 2 && !outcome) return null;
-  const confirm = async (covered: BatchSnapshot) => {
-    setFrozen(null);
-    setBusy(true);
-    try {
-      const done = await confirmBatch(covered, drafts, (id) => useWorkspace.getState().approve(id));
-      setOutcome(done);
-      // The drafts leave Needs you as they are approved, which can take this line with them.
-      useToasts.getState().push(done.text, done.failed ? "error" : "info");
-    } finally {
-      setBusy(false);
-    }
-  };
+  const open = usePipHome((s) => s.batch === gid);
+  const count = needs.filter((n) => n.target.type === "draft" && proposals[n.target.id]).length;
+  if (count < 2) return null;
   return (
     <li data-needs-you-batch className="grid gap-1.5 px-2 py-1">
-      {frozen ? (
-        <>
-          <ul data-needs-you-batch-preview aria-label="What approving these does" className="m-0 grid list-none gap-0.5 p-0 text-xs text-ws-ink2">
-            {drafts
-              .filter((p) => frozen.some((f) => f.id === p.id))
-              .map((p) => (
-                <li key={p.id} className="[overflow-wrap:anywhere]">
-                  <b className="font-semibold text-ws-ink">{draftTitle(p)}</b> · <span className="line-clamp-2">{draftSummary(p, null)}</span>
-                </li>
-              ))}
-          </ul>
-          <BatchConfirm
-            count={frozen.length}
-            onConfirm={() => void confirm(frozen)}
-            onCancel={() => {
-              setFrozen(null);
-              requestAnimationFrame(() => ask.current?.focus());
-            }}
-          />
-        </>
-      ) : (
-        drafts.length >= 2 && (
-          <div>
-            <button
-              ref={ask}
-              type="button"
-              disabled={busy}
-              onClick={() => (setOutcome(null), setFrozen(freezeBatch(drafts)))}
-              className="rounded-md border border-ws-sep2 px-2.5 py-px text-sm font-semibold text-ws-ink hover:bg-ws-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip disabled:opacity-45"
-            >
-              {busy ? "Approving…" : `Approve ${drafts.length} safe drafts`}
-            </button>
-          </div>
-        )
-      )}
-      {outcome && (
-        <p role="status" data-batch-outcome className={`m-0 text-sm [overflow-wrap:anywhere] ${outcome.failed ? "text-ws-blocked" : "text-ws-ink2"}`}>
-          {outcome.text}
-        </p>
-      )}
+      <div>
+        <button
+          type="button"
+          aria-current={open ? "true" : undefined}
+          onClick={() => usePipHome.getState().previewBatch(gid)}
+          className="rounded-md border border-ws-sep2 px-2.5 py-px text-sm font-semibold text-ws-ink hover:bg-ws-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip"
+        >
+          {batchLabel(count)}
+        </button>
+      </div>
     </li>
   );
 }
 
-function NeedRow({ need, gid, now, onPick, showTicket }: { need: Need; gid: string; now: number; onPick?(need: Need): void; showTicket: boolean }) {
+function NeedRow({ need, gid, now, onPick, showTicket, top }: { need: Need; gid: string; now: number; onPick?(need: Need): void; showTicket: boolean; top: boolean }) {
   const deciding = usePipHome((s) => s.deciding === need.key);
   const text = `${need.head ? `${need.head} · ` : ""}${need.title} · ${age(need, now)}`;
   return (
@@ -139,6 +84,8 @@ function NeedRow({ need, gid, now, onPick, showTicket }: { need: Need; gid: stri
         data-needs-you-need={need.key}
         data-need-key={need.key}
         data-gid={gid}
+        // The group's own row above is this need too: j and k step past it, so an open group is no longer than its needs.
+        data-needs-top={top ? "" : undefined}
         data-kind={need.kind}
         data-group={need.group}
         aria-current={deciding ? "true" : undefined}
@@ -165,9 +112,12 @@ function NeedRow({ need, gid, now, onPick, showTicket }: { need: Need; gid: stri
   );
 }
 
-function GroupRow({ group: g, now, onPick }: { group: NeedGroup; now: number; onPick?(need: Need): void }) {
+/** Pip home's list opens its groups by default while this many needs or fewer wait, so each shows once, under its group. */
+const OPEN_BY_DEFAULT = 8;
+
+function GroupRow({ group: g, now, onPick, openByDefault }: { group: NeedGroup; now: number; onPick?(need: Need): void; openByDefault: boolean }) {
   const gid = groupId(g.workstreamId);
-  const open = usePipHome((s) => s.expanded.has(gid));
+  const open = usePipHome((s) => s.expanded.has(gid) || (openByDefault && !s.collapsed.has(gid)));
   const deciding = usePipHome((s) => s.deciding === g.top.key);
   const text = groupText(g, now);
   const list = `needs-you-group-${gid}`;
@@ -192,29 +142,38 @@ function GroupRow({ group: g, now, onPick }: { group: NeedGroup; now: number; on
         }}
         className={`${ROW} ${deciding ? "bg-ws-sel" : ""}`}
       >
-        <span className="flex min-w-0 items-center gap-1.5">
+        <span className="flex min-w-0 items-start gap-1.5">
           {g.ticketKey && <b data-needs-you-key className="shrink-0 font-mono font-semibold text-ws-ink">{g.ticketKey}</b>}
-          <span data-needs-you-head className="min-w-0 flex-1 truncate text-ws-ink">
+          <span data-needs-you-head className="line-clamp-2 min-w-0 flex-1 [overflow-wrap:anywhere] text-ws-ink">
             {g.title}
           </span>
-          <GroupChip group={g.top.group} />
+          {/* Open, the group is only its name and count: the needs under it say the rest, each once. */}
+          {expanded ? (
+            <span data-needs-you-count-chip className="shrink-0 text-xs text-ws-ink3">
+              {g.count} waiting
+            </span>
+          ) : (
+            <GroupChip group={g.top.group} />
+          )}
         </span>
+        {!expanded && (
         <span data-needs-you-why className="line-clamp-2 text-xs text-ws-ink2 [overflow-wrap:anywhere]">
           {/* General holds needs about any ticket, so its row names the top one's. */}
           {g.workstreamId === null && g.top.ticketKey && <b className="font-mono font-semibold text-ws-ink">{g.top.ticketKey} </b>}
           {g.top.why}
         </span>
-        <Asking need={g.top} />
+        )}
+        {!expanded && <Asking need={g.top} />}
       </button>
       <div className="flex items-center gap-1.5 px-2 pb-0.5 text-xs text-ws-ink3">
-        <span data-needs-you-age>{age(g.top, now)}</span>
+        {!expanded && <span data-needs-you-age>{age(g.top, now)}</span>}
         {g.count > 1 && (
           <button
             type="button"
             data-needs-you-more
             aria-expanded={expanded}
             aria-controls={list}
-            onClick={() => usePipHome.getState().setExpanded(gid, !open)}
+            onClick={() => usePipHome.getState().setExpanded(gid, !expanded)}
             className="rounded px-1 font-semibold text-ws-accent hover:underline focus-visible:outline-2 focus-visible:outline-ws-pip"
           >
             {expanded ? "Show less" : `+${g.count - 1} more`}
@@ -224,7 +183,7 @@ function GroupRow({ group: g, now, onPick }: { group: NeedGroup; now: number; on
       {expanded && (
         <ul id={list} data-needs-you-needs aria-label={`Everything that needs you in ${g.title}`} className="m-0 grid list-none gap-0.5 border-l border-ws-sep pl-1.5 ml-2 p-0">
           {[g.top, ...g.rest].map((n) => (
-            <NeedRow key={n.key} need={n} gid={gid} now={now} onPick={onPick} showTicket={g.workstreamId === null || n.ticketKey !== g.ticketKey} />
+            <NeedRow key={n.key} need={n} gid={gid} now={now} onPick={onPick} top={n === g.top} showTicket={g.workstreamId === null || n.ticketKey !== g.ticketKey} />
           ))}
           <SafeBatch needs={g.safeBatch} gid={gid} />
         </ul>
@@ -237,6 +196,8 @@ export interface NeedsYouListProps {
   needs: readonly Need[];
   /** The rail popover's form: no border of its own, a shorter list. */
   compact?: boolean;
+  /** Pip home's form: the main left column, taking the height it is given and scrolling inside it. */
+  main?: boolean;
   /** Called with the need activated, before it opens; the popover closes itself with it. */
   onPick?(need: Need): void;
   /** The current time in ms, for the ages; a test passes its own. */
@@ -248,16 +209,16 @@ export interface NeedsYouListProps {
  * the highest-ranked need first, "+N more" for the rest. Activating a row opens its need's decision; expanding it lists
  * every need in it, with "Approve N safe drafts" over the drafts that may go together.
  */
-export function NeedsYouList({ needs, compact = false, onPick, now = Date.now() }: NeedsYouListProps) {
+export function NeedsYouList({ needs, compact = false, main = false, onPick, now = Date.now() }: NeedsYouListProps) {
   const groups = useMemo(() => needGroups(needs), [needs]);
   return (
-    <section aria-label="Needs you" data-needs-you className={`grid min-h-0 gap-1 overflow-y-auto ${compact ? "max-h-[min(400px,60vh)] p-2" : "max-h-[38vh] border-t border-ws-sep pt-2"}`}>
-      <h3 data-needs-you-title tabIndex={-1} className="sticky top-0 z-10 m-0 flex items-center gap-1.5 bg-ws-win px-1 outline-none text-xs font-semibold tracking-wide text-ws-ink3 uppercase">
+    <section aria-label="Needs you" data-needs-you className={`grid min-h-0 content-start gap-1 overflow-y-auto ${compact ? "max-h-[min(400px,60vh)] p-2" : main ? "flex-1 px-1.5 pb-2" : "max-h-[38vh] border-t border-ws-sep pt-2"}`}>
+      <h2 data-needs-you-title tabIndex={-1} className={`sticky top-0 z-10 m-0 flex items-center gap-1.5 px-1 outline-none font-semibold tracking-wide uppercase ${main ? "bg-ws-bar pt-2 pb-1 text-sm text-ws-ink2" : "bg-ws-win text-xs text-ws-ink3"}`}>
         Needs you
         <span data-needs-you-count aria-label={needsYouText(needs.length)} className={`rounded-full px-1.5 text-[10px] ${needs.length ? "bg-ws-pip text-ws-on-pip" : "bg-ws-hover text-ws-ink3"}`}>
           {needs.length}
         </span>
-      </h3>
+      </h2>
       {groups.length === 0 ? (
         <p data-needs-you-empty className="m-0 px-1 text-sm text-ws-ink3">
           Nothing needs you.
@@ -265,7 +226,7 @@ export function NeedsYouList({ needs, compact = false, onPick, now = Date.now() 
       ) : (
         <ul className="m-0 grid list-none gap-1 p-0">
           {groups.map((g) => (
-            <GroupRow key={groupId(g.workstreamId)} group={g} now={now} onPick={onPick} />
+            <GroupRow key={groupId(g.workstreamId)} group={g} now={now} onPick={onPick} openByDefault={main && needs.length <= OPEN_BY_DEFAULT} />
           ))}
         </ul>
       )}

@@ -3,9 +3,10 @@ import { Switch } from "../components/Switch";
 import type { Need } from "../lib/needs";
 import { nextStep, type NextStep } from "../lib/nextStep";
 import { RULE_SWITCH, STEP_HELP, asksBudget, isHeldByYou, budgetNote, heldBanner, ruleText, stepsLeftText, stepsOf } from "../lib/workstreamHold";
-import { ALLOW_MORE_STEPS, HELD_BUDGET, TRIPWIRE, WORKSTREAM_RULES, type AutoStartSwitches, type Proposal, type Run, type WorkstreamRule, type WorkstreamRules, type WorkstreamView } from "../types";
+import { ALLOW_MORE_STEPS, HELD_BUDGET, TRIPWIRE, WORKSTREAM_RULES, type AutoStartSwitches, type Proposal, type Run, type WorkstreamEvent, type WorkstreamRule, type WorkstreamRules, type WorkstreamView } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { Btn } from "./AgentSheet";
+import { paneHas, useDecisionShown } from "./decisionShown";
 import { EscalationCard } from "./EscalationCard";
 import { openNeed } from "./needsActions";
 import { usePopover } from "./Popover";
@@ -212,6 +213,12 @@ export interface ControlsViewProps {
   next?: NextStep | null;
 }
 
+/** What the mode switch means, one line under it: Manage starts and drafts by itself, Advise only answers. */
+export const MODE_LINE: Record<"manage" | "advise", string> = {
+  manage: "Pip manages: it starts the next step by itself and drafts what's next; nothing reaches Jira without you.",
+  advise: "Pip advises: it answers when asked and starts nothing by itself.",
+};
+
 /** The one line that says what happens next. When it is waiting on the person, the line opens the top need in the Needs-you pane. */
 export function NextStepLine({ next }: { next: NextStep }) {
   const { need } = next;
@@ -238,6 +245,8 @@ export function WorkstreamControlsView({ view, globals, actions, confirmingStop,
   const manage = ws.mode === "manage";
   const pausedId = useId();
   const box = useRef<HTMLDivElement>(null);
+  // A decision open in Pip home's pane is shown there, not here as well.
+  const shown = useDecisionShown();
   // Once the confirmation goes, focus goes back to the menu it came from rather than to nowhere.
   const closeConfirm = () => {
     onConfirmStop(false);
@@ -266,9 +275,12 @@ export function WorkstreamControlsView({ view, globals, actions, confirmingStop,
         </span>
         {confirmingStop && <StopConfirm onStop={() => (closeConfirm(), actions.onStop())} onKeep={closeConfirm} />}
       </div>
-      <HeldBanner view={view} actions={actions} />
+      <p data-mode-line={ws.mode} className="m-0 text-xs text-ws-ink2">
+        {MODE_LINE[ws.mode]}
+      </p>
+      {!paneHas(shown, "hold", ws.id) && <HeldBanner view={view} actions={actions} />}
       {/* A review that still blocks after the automatic fix rounds: the person chooses what happens next. */}
-      <EscalationCard key={ws.id} view={view} />
+      {!paneHas(shown, "escalation", ws.id) && <EscalationCard key={ws.id} view={view} />}
       {next && <NextStepLine next={next} />}
       {manage && (
         <p data-steps-left={stepsOf(view.budget).limit - stepsOf(view.budget).used} title={STEP_HELP} className="m-0 text-xs text-ws-ink2">
@@ -291,9 +303,11 @@ export function WorkstreamControlsView({ view, globals, actions, confirmingStop,
  * The Next line's step, or null (the line stays hidden) while Settings' switches are unread: guessing from the defaults could
  * promise a step the person's saved settings switched off.
  */
-export function nextStepOnceKnown(view: WorkstreamView, runs: Run[], proposals: Proposal[], needs: Need[], globals: AutoStartSwitches | null): NextStep | null {
-  return globals ? nextStep(view, runs, proposals, needs, globals) : null;
+export function nextStepOnceKnown(view: WorkstreamView, runs: Run[], proposals: Proposal[], needs: Need[], globals: AutoStartSwitches | null, events: readonly WorkstreamEvent[] = []): NextStep | null {
+  return globals ? nextStep(view, runs, proposals, needs, globals, events) : null;
 }
+
+const NO_EVENTS: readonly WorkstreamEvent[] = [];
 
 /** `WorkstreamControlsView` for workstream `view`, wired to workstreamsStore. */
 export function WorkstreamControls({ view }: { view: WorkstreamView }) {
@@ -304,6 +318,7 @@ export function WorkstreamControls({ view }: { view: WorkstreamView }) {
   const runs = useRuns((s) => s.runs);
   const proposals = useWorkspace((s) => s.proposals);
   const needs = useNeedsYou();
-  const next = useMemo(() => nextStepOnceKnown(view, runs, Object.values(proposals), needs, globals), [view, runs, proposals, needs, globals]);
+  const events = useWorkstreams((s) => s.events[id]) ?? NO_EVENTS;
+  const next = useMemo(() => nextStepOnceKnown(view, runs, Object.values(proposals), needs, globals, events), [view, runs, proposals, needs, globals, events]);
   return <WorkstreamControlsView view={view} globals={globals} actions={actions} confirmingStop={confirmingStop} onConfirmStop={setConfirmingStop} next={next} />;
 }

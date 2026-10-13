@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
-import { needAfter, type Need } from "../lib/needs";
+import { needAfter, needGroups, type Need } from "../lib/needs";
 import { ALLOW_MORE_STEPS, type Proposal, type Run, type WorkstreamView } from "../types";
 import { stepsOf } from "../lib/workstreamHold";
 import { useWorkspace } from "../workspaceStore";
@@ -8,6 +8,7 @@ import { Box, BoxTitle, Btn } from "./AgentSheet";
 import { planOpenQuestions, progressText, quietMinutes, quietText } from "./agentsLogic";
 import { draftSummary, draftTitle, LiveDraftCard } from "./DraftCard";
 import { draftDecisions } from "./DraftPreview";
+import { useGithubUi } from "./githubUi";
 import { escalationActions, EscalationCardView, fixRoundSent, postingReview, TAKEN_OVER } from "./EscalationCard";
 import { failureAction } from "./failureActions";
 import { failureHelp } from "./failureHelp";
@@ -22,7 +23,8 @@ import { RunContinuation } from "./RunContinuation";
 import { SignInBox } from "./RunSheet";
 import { resumable } from "./runSheetLogic";
 import { useRuns } from "./runsStore";
-import { PlanApproval, planResultFor } from "./StepRail";
+import { BatchConfirm, PlanApproval, confirmBatch, planResultFor } from "./StepRail";
+import { batchLabel, freezeBatch, type BatchSnapshot } from "./pipHomeLogic";
 import { useToasts } from "./toasts";
 import { useNow } from "./useNow";
 import { controlActions, HeldBanner } from "./WorkstreamControls";
@@ -79,7 +81,7 @@ function useAdvance(needs: readonly Need[]) {
 }
 
 /** The first thing the person decides with in the pane: a permission's buttons, an answer box, a draft's main button, else the first button. */
-function firstDecision(root: HTMLElement): HTMLElement | null {
+export function firstDecision(root: HTMLElement): HTMLElement | null {
   const body = '[data-needs-pane-body]';
   const decisions = root.querySelector<HTMLElement>(`${body} [data-permission-decisions] button:not(:disabled)`);
   if (decisions) return decisions;
@@ -88,9 +90,25 @@ function firstDecision(root: HTMLElement): HTMLElement | null {
   if (choice) return choice;
   const answer = root.querySelector<HTMLElement>(`${body} textarea:not(:disabled)`);
   if (answer) return answer;
+  // A draft: its card, not its post button, so that approving is the key's a and then Enter, never a second Enter by accident.
+  const card = root.querySelector<HTMLElement>(`${body} [data-draft][tabindex="0"]`);
+  if (card) return card;
   const draft = Array.from(root.querySelectorAll<HTMLElement>(`${body} [data-draft-actions] button:not(:disabled)`)).pop();
   if (draft) return draft;
   return root.querySelector<HTMLElement>(`${body} button:not(:disabled), ${body} input:not(:disabled)`);
+}
+
+/** The box an edit is typed in: a draft's text, or a rewrite's title (an input with no type). */
+export const EDIT_FIELD = "[data-needs-pane-body] textarea, [data-needs-pane-body] input:not([type]), [data-needs-pane-body] input[type=text]";
+
+/** A draft card's button that ends its edit, if the pane holds a card being edited. */
+const doneEditing = (root: ParentNode) => Array.from(root.querySelectorAll<HTMLButtonElement>("[data-needs-pane-body] button")).find((b) => b.textContent?.trim() === "Done editing" && !b.disabled);
+
+/** Esc in the pane while a card is being edited ends the edit (keeping what was typed) instead of closing the decision; false when none is. */
+export function endEditing(root: ParentNode): boolean {
+  const done = doneEditing(root);
+  done?.click();
+  return !!done;
 }
 
 function PermissionBody({ run }: { run: Run }) {
@@ -269,7 +287,7 @@ function ReadinessBody({ view, need }: { view: WorkstreamView; need: Need }) {
 }
 
 /** The three choices on a review that still blocks, and the review draft that folded into it, ready to post as it is. */
-function EscalationBody({ view }: { view: WorkstreamView }) {
+export function EscalationBody({ view }: { view: WorkstreamView }) {
   const e = view.escalation;
   const [busy, setBusy] = useState(false);
   // Post the review as is was pressed: the choices wait, as on the rail's card, until the draft is posted or goes.
@@ -277,6 +295,7 @@ function EscalationBody({ view }: { view: WorkstreamView }) {
   const draft = useWorkspace((s) => (e?.reviewDraft ? s.proposals[e.reviewDraft] : undefined));
   const review = useRef<HTMLDivElement>(null);
   const pending = draft?.state.type === "pending";
+  const github = useWorkspace((s) => s.connections.some((c) => c.kind === "github"));
   useEffect(() => {
     if (posting && !pending) setPosting(false);
   }, [posting, pending]);
@@ -294,6 +313,9 @@ function EscalationBody({ view }: { view: WorkstreamView }) {
         escalation={e}
         busy={busy}
         drafting={postingReview(posting, draft)}
+        titled={false}
+        github={github}
+        onConnect={() => useGithubUi.getState().openConnect()}
         onFixRound={() => choose(actions.onFixRound, fixRoundSent(e.buildLabel))}
         onTakeOver={() => choose(actions.onTakeOver, TAKEN_OVER)}
         onPost={() => {
@@ -397,14 +419,26 @@ function NeedDecision({ need }: { need: Need }) {
     const intent = takePaneIntent();
     let frame = 0;
     let tries = 0;
+    let clicked = false;
     const go = () => {
       const el = root.current;
       if (!el) return;
+      if (intent === "card") {
+        el.focus({ preventScroll: true });
+        return;
+      }
       if (intent === "edit") {
-        const edit = Array.from(el.querySelectorAll<HTMLButtonElement>("[data-needs-pane-body] button")).find((b) => b.textContent?.trim() === "Edit" && !b.disabled);
+        const edit = clicked ? undefined : Array.from(el.querySelectorAll<HTMLButtonElement>("[data-needs-pane-body] button")).find((b) => b.textContent?.trim() === "Edit" && !b.disabled);
         if (edit) {
           edit.click();
-          frame = requestAnimationFrame(() => (el.querySelector<HTMLElement>("[data-needs-pane-body] textarea, [data-needs-pane-body] input") ?? firstDecision(el))?.focus({ preventScroll: true }));
+          clicked = true;
+        }
+        // The field only exists once the edit has rendered, which may be a few frames on.
+        if (clicked) {
+          const field = el.querySelector<HTMLElement>(EDIT_FIELD);
+          if (field) return void field.focus({ preventScroll: true });
+          if (++tries < 60) frame = requestAnimationFrame(go);
+          else firstDecision(el)?.focus({ preventScroll: true });
           return;
         }
       }
@@ -428,6 +462,8 @@ function NeedDecision({ need }: { need: Need }) {
     ev.preventDefault();
     // In a field, Esc leaves the field first, so a half-written answer is not lost to a second key.
     if (/^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName)) return void root.current?.focus();
+    // A card being edited ends its edit first: closing the decision would drop what was typed.
+    if (root.current && endEditing(root.current)) return void root.current.focus({ preventScroll: true });
     close();
   };
   return (
@@ -439,9 +475,11 @@ function NeedDecision({ need }: { need: Need }) {
       data-kind={need.kind}
       data-group={need.group}
       onKeyDown={onKeyDown}
-      className="grid max-h-[60%] min-h-0 shrink-0 content-start gap-2 overflow-y-auto border-b border-ws-sep bg-ws-bar px-3 py-2.5 outline-none"
+      // The pane is the one thing that scrolls in its place. Its drafts' action bars stay where the card ends (a sticky one would float over the text and the review comments beneath it).
+      className="grid max-h-[60%] min-h-0 shrink-0 content-start gap-2 overflow-y-auto border-b border-ws-sep bg-ws-bar px-3 py-2.5 outline-none [&_[data-draft-actions]]:static"
     >
-      <header className="flex items-start gap-2">
+      {/* Kept in view while the decision under it scrolls: what is asked and why stays on screen. */}
+      <header className="sticky -top-2.5 z-[2] -mx-3 -mt-2.5 flex items-start gap-2 bg-ws-bar px-3 pt-2.5 pb-1">
         <div className="grid min-w-0 flex-1 gap-0.5">
           <div className="flex min-w-0 flex-wrap items-center gap-1.5 text-xs text-ws-ink3">
             {need.head && (
@@ -488,7 +526,111 @@ function NeedDecision({ need }: { need: Need }) {
 }
 
 /**
- * The Needs you decision, open inline above Pip home's conversation: the need chosen in the list (`deciding`) with what
+ * The combined preview of a group's safe drafts, open in the pane like any decision: what each would do, fixed as it was
+ * when the pane opened, then the one confirm (`BatchConfirm`). Cancel, Esc and × keep every draft as it is.
+ */
+function BatchDecision({ gid, needs }: { gid: string; needs: readonly Need[] }) {
+  const proposals = useWorkspace((s) => s.proposals);
+  const group = needGroups(needs).find((g) => groupId(g.workstreamId) === gid);
+  // The drafts and what the preview covers are those of the moment it opened.
+  const [ids] = useState(() => (group?.safeBatch ?? []).flatMap((n) => (n.target.type === "draft" ? [n.target.id] : [])));
+  const drafts = ids.flatMap((id) => (proposals[id] ? [proposals[id]] : []));
+  const [frozen, setFrozen] = useState<BatchSnapshot | null>(() => (drafts.length >= 2 ? freezeBatch(drafts) : null));
+  const [busy, setBusy] = useState(false);
+  const [outcome, setOutcome] = useState<{ text: string; failed: boolean } | null>(null);
+  const [title] = useState(() => group?.ticketKey ?? group?.title ?? "General");
+  const root = useRef<HTMLElement>(null);
+  const close = () => {
+    usePipHome.getState().closeDecision();
+    requestAnimationFrame(() => document.querySelector<HTMLElement>(`[data-pip-home-column="list"] [data-needs-you-group="${CSS.escape(gid)}"]`)?.focus());
+  };
+  const confirm = async (covered: BatchSnapshot) => {
+    setFrozen(null);
+    setBusy(true);
+    // The drafts as they are when Yes is pressed, not as the pane last drew them.
+    const now = useWorkspace.getState().proposals;
+    const done = await confirmBatch(covered, ids.flatMap((id) => (now[id] ? [now[id]] : [])), (id) => useWorkspace.getState().approve(id));
+    setBusy(false);
+    setOutcome(done);
+    // The drafts leave Needs you as they are approved.
+    useToasts.getState().push(done.text, done.failed ? "error" : "info");
+    requestAnimationFrame(() => root.current?.focus({ preventScroll: true }));
+  };
+  const onKeyDown = (ev: KeyboardEvent<HTMLElement>) => {
+    if (ev.key !== "Escape" || ev.defaultPrevented || ev.metaKey || ev.ctrlKey || ev.altKey) return;
+    if ((ev.target as HTMLElement).closest("[data-esc-local]")) return;
+    ev.preventDefault();
+    close();
+  };
+  const count = frozen?.length ?? ids.length;
+  return (
+    <section
+      ref={root}
+      tabIndex={-1}
+      aria-label="Decision"
+      data-needs-pane={`batch:${gid}`}
+      data-kind="batch"
+      data-group="approve"
+      onKeyDown={onKeyDown}
+      className="grid max-h-[60%] min-h-0 shrink-0 content-start gap-2 overflow-y-auto border-b border-ws-sep bg-ws-bar px-3 py-2.5 outline-none"
+    >
+      <header className="flex items-start gap-2">
+        <div className="grid min-w-0 flex-1 gap-0.5">
+          <div className="flex min-w-0 flex-wrap items-center gap-1.5 text-xs text-ws-ink3">
+            <b data-needs-pane-head className="min-w-0 truncate font-semibold text-ws-ink">
+              {title}
+            </b>
+            <GroupChip group="approve" />
+            <span data-needs-pane-title className="min-w-0 truncate">
+              {batchLabel(count)}
+            </span>
+          </div>
+          <p data-needs-why className="m-0 text-sm font-semibold text-ws-ink [overflow-wrap:anywhere]">
+            These drafts may go together. Each is written to Jira as its card shows it.
+          </p>
+          <p data-needs-if-you-wait className="m-0 text-sm text-ws-ink2 [overflow-wrap:anywhere]">
+            <span className="font-semibold">If you wait:</span> Nothing is posted until you choose.
+          </p>
+        </div>
+        <button
+          type="button"
+          aria-label="Back to the list"
+          title="Back to the list (Esc)"
+          onClick={close}
+          className="shrink-0 rounded px-1.5 text-ws-ink3 hover:bg-ws-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip"
+        >
+          ×
+        </button>
+      </header>
+      <div data-needs-pane-body className="grid gap-2">
+        {frozen && (
+          <>
+            <ul data-needs-you-batch-preview aria-label="What approving these does" className="m-0 grid list-none gap-1 p-0 text-sm text-ws-ink2">
+              {drafts
+                .filter((p) => frozen.some((f) => f.id === p.id))
+                .map((p) => (
+                  <li key={p.id} className="[overflow-wrap:anywhere]">
+                    <b className="font-semibold text-ws-ink">{draftTitle(p)}</b> · <span>{draftSummary(p, null)}</span>
+                  </li>
+                ))}
+            </ul>
+            <BatchConfirm count={frozen.length} onConfirm={() => void confirm(frozen)} onCancel={close} />
+          </>
+        )}
+        {busy && <p className="m-0 text-sm text-ws-ink2">Approving…</p>}
+        {!frozen && !busy && !outcome && <p className="m-0 text-sm text-ws-ink2">These drafts are no longer waiting together.</p>}
+        {outcome && (
+          <p role="status" data-batch-outcome className={`m-0 text-sm [overflow-wrap:anywhere] ${outcome.failed ? "text-ws-blocked" : "text-ws-ink2"}`}>
+            {outcome.text}
+          </p>
+        )}
+      </div>
+    </section>
+  );
+}
+
+/**
+ * The Needs you decision, open inline above Pip home's conversation: the need chosen in the list (`deciding`), or a group's "Approve N safe drafts" preview (`batch`), with what
  * it asks and what waiting does, decided with the same components the cards and the run sheet use. Once it is dealt with
  * the next need opens in its place; with none left the pane closes and the list says "Nothing needs you."
  */
@@ -496,6 +638,8 @@ export function NeedsPane({ needs }: { needs: readonly Need[] }) {
   const deciding = usePipHome((s) => s.deciding);
   const paneRev = usePipHome((s) => s.paneRev);
   useAdvance(needs);
+  const batch = usePipHome((s) => s.batch);
   const need = needs.find((n) => n.key === deciding);
+  if (batch !== null) return <BatchDecision key={batch} gid={batch} needs={needs} />;
   return need ? <NeedDecision key={`${need.key}:${paneRev}`} need={need} /> : null;
 }

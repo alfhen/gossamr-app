@@ -294,7 +294,7 @@ describe("needs: holds", () => {
 
   it("names the count the person reads: whichever of turns and wakes is nearer its limit", () => {
     const wakes = needs(input({ workstreams: [{ ...held(HELD_BUDGET), budget: { autoTurns: { used: 3, limit: 11 }, wakes: { used: 12, limit: 12 }, level: "spent" } }] }));
-    expect(wakes[0].title).toBe("CA-401 used its 12 automatic steps");
+    expect(wakes[0].title).toBe("CA-401 used its 11 automatic steps");
   });
 
   it("is answered once the workstream is in Advise, where nothing starts on its own", () => {

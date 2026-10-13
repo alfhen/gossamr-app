@@ -24,16 +24,13 @@ export const FILTER_LABEL: Record<TimelineFilter, string> = { all: "All", runs: 
 
 /**
  * Whose timeline the filter applies to: the selected workstream's, or every open workstream's and General's merged.
- * Runs in every workstream is the Agents screen.
+ * Runs in every workstream is the timeline's Runs filter in this scope, like the others; the Agents screen is the operations view.
  */
 export type TimelineScope = "workstream" | "every";
 
 export const TIMELINE_SCOPES: readonly TimelineScope[] = ["workstream", "every"];
 
 export const SCOPE_LABEL: Record<TimelineScope, string> = { workstream: "This workstream", every: "Every workstream" };
-
-/** Whether filter `f` in scope `scope` is the Agents screen rather than a timeline on Pip home. */
-export const isAgentsView = (f: TimelineFilter, scope: TimelineScope) => f === "runs" && scope === "every";
 
 /**
  * What opening an entry shows: a run's sheet, a draft's card, or the need in Needs you's decision pane. An entry about
@@ -60,6 +57,8 @@ export interface TimelineEntry {
   ticketKey: string | null;
   /** One short plain sentence. */
   text: string;
+  /** What the sentence leaves to smaller type under it: a failed run's own message, as the run gave it. */
+  detail?: string;
   target: TimelineTarget;
   /** The key of the need in Needs you this entry is about, while it waits on the person. */
   needKey: string | null;
@@ -184,7 +183,10 @@ export function runLifecycle(run: Run): { phase: RunPhase; at: string }[] {
   return out;
 }
 
-/** The sentence a run's entry says: "Build R2 finished", "Review R3 finished: changes needed", "Plan R1 is waiting on you: it asks a question". */
+/**
+ * The sentence a run's entry says: "Build R2 finished", "Review R3 finished: changes needed", "Plan R1 is waiting on you: it
+ * asks a question". A failure is as short ("Build R2 failed"); what the run said went wrong is the entry's `detail`.
+ */
 export function runSentence(run: Run, label: string | undefined, verdict: ReviewOutcome | undefined): string {
   const name = `${KIND_WORD[run.spec.kind]}${label ? ` ${label}` : ""}`;
   const auto = run.autoStart ? " automatically" : "";
@@ -198,7 +200,7 @@ export function runSentence(run: Run, label: string | undefined, verdict: Review
     case "finished":
       return verdict === "pass" ? `${name} finished: the review passes` : verdict === "blocking" ? `${name} finished: changes needed` : `${name} finished`;
     case "failed":
-      return `${name} failed${firstLine(run.error) ? `: ${firstLine(run.error)}` : ""}`;
+      return `${name} failed`;
     case "stopped":
       return `${name} was stopped`;
     case "limit":
@@ -263,6 +265,9 @@ const who = (actor: WorkstreamActor) => (actor === "person" ? "You" : actor === 
 /** Where entries of the same moment sort: what was said first, then what the audit says, then runs, then drafts. */
 const SOURCE_RANK: Record<TimelineKind, number> = { said: 0, pip: 0, audit: 1, run: 2, draft: 3 };
 
+/** An audit line about a draft (approved, skipped, a review posted) is what came of the draft, so it follows the draft at the same moment. */
+const AFTER_DRAFT = SOURCE_RANK.draft + 0.5;
+
 /**
  * The timeline: the conversation, the runs, the drafts and the audit merged into one list, oldest first. Entries at the
  * same moment keep their source's own order. A turn the page doesn't know the time of stands where the turn before it does.
@@ -273,7 +278,7 @@ export function timeline(input: TimelineInput): TimelineEntry[] {
   // A triage that found its ticket not clear enough to plan is what the readiness need (`readiness:<run>`) asks about.
   for (const n of needs) if (n.kind === "readiness") needOfRun.set(n.key.slice("readiness:".length), n);
   const needOfDraft = new Map(needs.flatMap((n) => (n.key.startsWith("draft:") ? [[n.key.slice("draft:".length), n] as const] : [])));
-  const out: (TimelineEntry & { order: number })[] = [];
+  const out: (TimelineEntry & { order: number; cause?: string })[] = [];
   let order = 0;
 
   // The conversation: a turn without a time stands with the one before it (or, first, the one after).
@@ -300,6 +305,7 @@ export function timeline(input: TimelineInput): TimelineEntry[] {
       updatedAt: lifecycle[lifecycle.length - 1].at,
       ticketKey: run.item?.key ?? ticketKey,
       text: runSentence(run, labels.get(run.id), verdicts[run.id]) + (need?.kind === "readiness" && runPhase(run) === "finished" ? ": the ticket isn't clear enough to plan" : ""),
+      ...(runPhase(run) === "failed" && firstLine(run.error) ? { detail: firstLine(run.error) } : {}),
       target: need ? { type: "need", key: need.key } : { type: "run", id: run.id },
       needKey: need?.key ?? null,
       decision: !!need,
@@ -325,6 +331,8 @@ export function timeline(input: TimelineInput): TimelineEntry[] {
       draftId: p.id,
       draftState: p.state.type,
       ...(p.origin.type === "chat" ? { turnId: p.origin.requestId } : {}),
+      // A draft a run left is what came of it.
+      ...(p.origin.type === "run" ? { cause: `run:${p.origin.runId}` } : {}),
       order: order++,
     });
   }
@@ -336,11 +344,19 @@ export function timeline(input: TimelineInput): TimelineEntry[] {
   const holdNeed = needs.find((n) => n.kind === "hold" || n.kind === "budget");
   const escalationNeed = needs.find((n) => n.kind === "escalation");
   let rounds = 0;
-  let previous: (TimelineEntry & { order: number }) | null = null;
+  let previous: (TimelineEntry & { order: number; cause?: string }) | null = null;
   for (const e of events) {
     if (e.action === "fix_round_sent") rounds++;
     if (TOLD_ELSEWHERE.has(e.action)) continue;
     const draft = e.proposalId ? byDraft.get(e.proposalId) : undefined;
+    // An approval, or a review posted, that its draft's own entry already says ("You approved a comment: posted") is that entry's.
+    if (draft && (e.action === "draft_approved" || e.action === "review_posted") && (draft.state.type === "applied" || draft.state.type === "applying")) {
+      const entry = out.find((x) => x.key === `draft:${draft.id}`);
+      if (entry) {
+        if (e.actor === "person") entry.decision = true;
+        continue;
+      }
+    }
     const text = (e.proposalId ? draftLine(e, who(e.actor), draft) : null) ?? eventText(e, label, rounds);
     if (!text) continue;
     // A line about something still waiting on the person opens its need: the hold that still holds, the escalation still open.
@@ -353,7 +369,7 @@ export function timeline(input: TimelineInput): TimelineEntry[] {
       previous.updatedAt = e.at;
       continue;
     }
-    const entry: TimelineEntry & { order: number } = {
+    const entry: TimelineEntry & { order: number; cause?: string } = {
       key: `audit:${e.workstreamId}:${e.seq}`,
       kind: "audit",
       at: e.at,
@@ -365,14 +381,34 @@ export function timeline(input: TimelineInput): TimelineEntry[] {
       decision: (e.actor === "person" && DECIDED.has(e.action)) || ASKS.has(e.action) || !!need,
       actor: e.actor,
       action: e.action,
+      ...(e.proposalId && draft ? { cause: `draft:${e.proposalId}` } : {}),
       order: order++,
     };
     out.push(entry);
     previous = entry;
   }
 
-  return out.sort((a, b) => byTime(a, b) || a.order - b.order).map(({ order: _order, ...e }) => e);
+  // When things happened, except that an effect never stands before its cause: a draft a run left, or what was done to a
+  // draft, is not earlier than the run, or the draft, it came of, whatever the clocks the stores read say.
+  const placed = new Map<string, { t: number; rank: number }>();
+  const place = (e: TimelineEntry & { cause?: string }) => {
+    const own = { t: when(e), rank: SOURCE_RANK[e.kind] };
+    const cause = e.cause ? placed.get(e.cause) : undefined;
+    placed.set(e.key, cause ? { t: Math.max(own.t, cause.t), rank: e.kind === "audit" ? AFTER_DRAFT : own.rank } : own);
+  };
+  // Causes first: runs, then drafts, then the lines about drafts and everything else.
+  for (const kind of ["run", "draft"] as const) for (const e of out) if (e.kind === kind) place(e);
+  for (const e of out) if (e.kind !== "run" && e.kind !== "draft") place(e);
+  return out
+    .sort((a, b) => {
+      const x = placed.get(a.key)!;
+      const y = placed.get(b.key)!;
+      return compare(x.t, y.t) || x.rank - y.rank || a.order - b.order;
+    })
+    .map(({ order: _order, cause: _cause, ...e }) => e);
 }
+
+const compare = (a: number, b: number) => (a < b ? -1 : a > b ? 1 : 0);
 
 /** An entry with no time sorts first, as the oldest it could be. */
 const when = (e: { at: string }) => {
@@ -382,10 +418,7 @@ const when = (e: { at: string }) => {
 
 /** Oldest first; at the same moment, what was said, then the audit, then runs, then drafts. 0 leaves the order as it was. */
 function byTime(a: Pick<TimelineEntry, "at" | "kind">, b: Pick<TimelineEntry, "at" | "kind">): number {
-  const ta = when(a);
-  const tb = when(b);
-  if (ta !== tb) return ta < tb ? -1 : 1;
-  return SOURCE_RANK[a.kind] - SOURCE_RANK[b.kind];
+  return compare(when(a), when(b)) || SOURCE_RANK[a.kind] - SOURCE_RANK[b.kind];
 }
 
 /** One workstream's part of Every workstream: its timeline's input, and the label its entries carry (its ticket, or "General"). */
@@ -403,16 +436,23 @@ export interface TimelinePart {
  */
 export function timelineAcross(parts: readonly TimelinePart[]): TimelineEntry[] {
   const seen = new Set<string>();
-  const out: TimelineEntry[] = [];
-  for (const part of parts) {
-    for (const e of timeline(part.input)) {
-      if (seen.has(e.key)) continue;
+  const lists = parts.map((part) =>
+    timeline(part.input).flatMap((e) => {
+      if (seen.has(e.key)) return [];
       seen.add(e.key);
-      out.push({ ...e, workstreamId: part.workstreamId, scopeLabel: part.label });
-    }
+      return [{ ...e, workstreamId: part.workstreamId, scopeLabel: part.label }];
+    }),
+  );
+  // A merge of the parts' own lists, which already put every cause before its effect: the earliest head goes next, and at
+  // the same moment the part that comes first.
+  const heads = lists.map(() => 0);
+  const out: TimelineEntry[] = [];
+  for (;;) {
+    let best = -1;
+    for (let i = 0; i < lists.length; i++) if (heads[i] < lists[i].length && (best < 0 || byTime(lists[i][heads[i]], lists[best][heads[best]]) < 0)) best = i;
+    if (best < 0) return out;
+    out.push(lists[best][heads[best]++]);
   }
-  // Array.prototype.sort is stable: ties keep the parts' order.
-  return out.sort(byTime);
 }
 
 /**

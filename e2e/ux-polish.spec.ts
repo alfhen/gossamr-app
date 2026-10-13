@@ -196,7 +196,9 @@ test.describe("no overlap", () => {
     await holdAll(page, "shortcut");
     await expect(toasts(page)).toContainText("+1 more");
     // The second note waits behind the first for the first's whole life, too long to still be news: it never shows.
-    await expect(toasts(page)).toHaveCount(0, { timeout: 8000 });
+    // A late-shown second note would keep a toast up until about twice the lifetime, so 12s still tells the two apart
+    // while leaving slack for timers that fire late under load.
+    await expect(toasts(page)).toHaveCount(0, { timeout: 12_000 });
   });
 
   test("(e2) the last row of the list scrolls clear of the floating Pip button and its bubble", async ({ page }) => {

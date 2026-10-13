@@ -22,11 +22,14 @@ export function driftText(drifted: readonly BasisField[] | null | undefined): st
 }
 
 /**
- * The one count of the budget the person reads, in automatic steps: whichever of the backend's two counters (automatic
- * turns and wakes) is nearer its limit, the turns when they are as near. Nothing on the page names the other.
+ * The one count of the budget the person reads, in automatic steps: what is left of whichever of the backend's two counters
+ * (automatic turns and wakes) is nearer its limit, out of the smaller of the two limits, so the total stays put when the
+ * other counter takes over (a message from the person zeroes the turns, not the wakes). Nothing on the page names the other.
  */
 export function stepsOf(budget: BudgetView): { used: number; limit: number } {
-  return budget.wakes.limit - budget.wakes.used < budget.autoTurns.limit - budget.autoTurns.used ? budget.wakes : budget.autoTurns;
+  const limit = Math.min(budget.autoTurns.limit, budget.wakes.limit);
+  const left = Math.max(0, Math.min(limit, budget.autoTurns.limit - budget.autoTurns.used, budget.wakes.limit - budget.wakes.used));
+  return { used: limit - left, limit };
 }
 
 /** Whether `reason` is a hold the person chose (Hold, Stop or Hold all), which is no need: only the holds the system makes ask them anything. */

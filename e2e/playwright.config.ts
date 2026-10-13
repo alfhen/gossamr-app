@@ -5,8 +5,8 @@ import process from "node:process";
 const port = Number(process.env.E2E_PORT ?? 4173);
 const url = `http://localhost:${port}`;
 
-/** Every spec starts with Pip home's orientation card dismissed (`pipOrientationSeen`, src/workspace/prefs.ts), so it takes no room in their locators. e2e/orientation.spec.ts starts without it. */
-export const SEEDED_PREFS = { name: "gossamr-prefs", value: JSON.stringify({ pipOrientationSeen: true }) };
+/** Every spec starts with Pip home's orientation card and the permission prompt's one-time explainer dismissed (`pipOrientationSeen`, `permissionExplainerSeen`, src/workspace/prefs.ts), so they take no room in their locators. e2e/orientation.spec.ts and e2e/recommendations.spec.ts start without them where they test them. */
+export const SEEDED_PREFS = { name: "gossamr-prefs", value: JSON.stringify({ pipOrientationSeen: true, permissionExplainerSeen: true }) };
 
 export default defineConfig({
   testDir: ".",

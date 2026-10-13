@@ -20,6 +20,8 @@ export interface UndoOffer {
   undone?: string;
   /** Puts it back. Rejects (or resolves false) when it can't: the offer is then spent and the person told. */
   undo(): Promise<boolean | void>;
+  /** Runs once it is back, to show the person what came back (open the restored draft); its failure is not the undo's. */
+  restored?(): void;
 }
 
 /** An offer's life: offered, being undone, then one of the three ends. */
@@ -90,6 +92,11 @@ export class UndoLog {
       const done = await entry.offer.undo();
       if (done === false) throw new Error("it has changed since");
       entry.state = "undone";
+      try {
+        entry.offer.restored?.();
+      } catch {
+        // Showing it is a courtesy: the undo stands.
+      }
       this.tell(entry.offer.undone ?? "Undone.", "info");
       return "undone";
     } catch (e) {

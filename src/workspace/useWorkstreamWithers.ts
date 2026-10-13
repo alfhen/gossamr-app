@@ -1,6 +1,7 @@
 import { useEffect, useMemo } from "react";
 import { useClaude } from "../claudeStore";
-import { workstreamWither, type WorkstreamWither } from "../lib/workstreamWither";
+import { inWorkstreamPane } from "../lib/proposals";
+import { isJiraWrite, workstreamWither, type WorkstreamWither } from "../lib/workstreamWither";
 import type { Proposal, Run, WorkstreamEvent, WorkstreamView } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { useRuns } from "./runsStore";
@@ -29,7 +30,8 @@ export function withersOf(open: readonly WorkstreamView[], { events, byTicket, r
       new Date(now),
       { draft: (pid) => proposals[pid], turns: turns && turns.length ? turns : null, openedAt: v.workstream.createdAt },
     );
-    if (w.level > 0) out[id] = w;
+    const draftWaiting = Object.values(proposals).some((p) => !!p && p.state.type === "pending" && isJiraWrite(p.intent) && inWorkstreamPane(p, v.workstream));
+    if (w.level > 0) out[id] = { ...w, draftWaiting };
   }
   return out;
 }

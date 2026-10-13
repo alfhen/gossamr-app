@@ -138,4 +138,13 @@ describe("stepsLeftText", () => {
     expect(stepsLeftText(budget(13, 11))).toBe("0 of 11 automatic steps left");
     expect(stepsLeftText(budget(1, 6))).toBe("5 of 6 automatic steps left");
   });
+
+  it("keeps the turns' limit as the total when the wakes become the nearer counter", () => {
+    // After a message of the person's the turns are zero while the wakes have used one: 11 of 11 would read as 11 of 12 before.
+    const wakes = (turns: number, used: number): BudgetView => ({ autoTurns: { used: turns, limit: 11 }, wakes: { used, limit: 12 }, level: "ok" });
+    expect(stepsLeftText(wakes(0, 0))).toBe("11 of 11 automatic steps left");
+    expect(stepsLeftText(wakes(0, 2))).toBe("10 of 11 automatic steps left");
+    expect(stepsLeftText(wakes(3, 2))).toBe("8 of 11 automatic steps left");
+    expect(stepsLeftText(wakes(0, 12))).toBe("0 of 11 automatic steps left");
+  });
 });

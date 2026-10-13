@@ -342,7 +342,7 @@ describe("workstreamSuggestionScene", () => {
     const ws = view("ws-1", "CA-401", { runs: ["r1", "r2"], stage: "triage" });
     const runs = [run("r1", "investigate", "done"), run("r2", "triage", "working")];
     const scene = workstreamSuggestionScene(ws, runs, [], [{ kind: "user" }, { kind: "wake" }]);
-    expect(scene).toEqual({ key: "CA-401", stage: "triage", mode: "manage", heldReason: null, hasPendingPlanRewrite: false, hasPendingStartDraft: false, investigated: true, woke: true, running: "R2" });
+    expect(scene).toEqual({ key: "CA-401", stage: "triage", mode: "manage", heldReason: null, hasPendingPlanRewrite: false, hasPendingStartDraft: false, investigated: true, woke: true, running: "R2", unclear: false, cobweb: false });
     expect(workstreamSuggestionScene(ws, runs, [], [{ kind: "wake" }, { kind: "user" }]).woke).toBe(false);
   });
 

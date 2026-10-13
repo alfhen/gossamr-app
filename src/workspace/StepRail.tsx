@@ -10,7 +10,7 @@ import { Btn } from "./AgentSheet";
 import { draftTitle } from "./DraftCard";
 import { LiveDraftPreview } from "./DraftPreview";
 import { PipRunCard } from "./PipRunCard";
-import { batchable, batchToApprove, freezeBatch, nextStep, retiredStepDrafts, stepChips, stepDrafts, type BatchSnapshot, type StepChip, type StepGroup } from "./pipHomeLogic";
+import { batchLabel, batchable, batchToApprove, freezeBatch, nextStep, retiredStepDrafts, stepChips, stepDrafts, type BatchSnapshot, type StepChip, type StepGroup } from "./pipHomeLogic";
 import { usePipHome } from "./pipHomeStore";
 import { openOnGithub } from "./githubUi";
 import { openPullView, usePullView } from "./pullViewStore";
@@ -18,6 +18,7 @@ import { useBuildChanges, useReviewVerdicts } from "./reviewVerdicts";
 import { useRuns } from "./runsStore";
 import { useToasts } from "./toasts";
 import { approveEach } from "./useCards";
+import { useDecisionShown } from "./decisionShown";
 import { WorkstreamControls } from "./WorkstreamControls";
 import { useWorkstreams } from "./workstreamsStore";
 
@@ -77,7 +78,7 @@ export async function confirmBatch(frozen: BatchSnapshot, drafts: readonly Propo
   }
 }
 
-/** A step's drafts, each as its card in the conversation, with "Approve these N" over two or more that may go together. */
+/** A step's drafts, each as its card in the conversation, with "Approve N safe drafts" over two or more that may go together. */
 export function StepDrafts({ step, drafts, approve, initialConfirming = false }: { step: StepGroup; drafts: readonly Proposal[]; approve(id: string): Promise<{ error?: string | null }>; initialConfirming?: boolean }) {
   /** The drafts the open confirm covers, fixed when it opened; null while it is closed. */
   const [frozen, setFrozen] = useState<BatchSnapshot | null>(() => (initialConfirming ? freezeBatch(drafts) : null));
@@ -124,7 +125,7 @@ export function StepDrafts({ step, drafts, approve, initialConfirming = false }:
               onClick={() => (setOutcome(null), setFrozen(freezeBatch(drafts)))}
               className="rounded-md border border-ws-sep2 px-2.5 py-px text-sm font-semibold text-ws-ink hover:bg-ws-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip disabled:opacity-45"
             >
-              {busy ? "Approving…" : `Approve these ${together.length}`}
+              {busy ? "Approving…" : batchLabel(together.length)}
             </button>
           </div>
         ))}
@@ -317,12 +318,16 @@ export function PlanApproval({ questions }: { questions: readonly string[] }) {
 export function StepRailView({ view, runs, events, verdicts, changes = NO_CHANGES, proposals, now, titleOf, onOpenRun, approve, onOpenPr = (url) => void openOnGithub(url), onPullView = pullViewOrGithub, initialOpen = [], reveal = null }: StepRailViewProps) {
   const [open, setOpen] = useState<ReadonlySet<StepGroup>>(() => new Set(initialOpen));
   const chips = useMemo(() => stepChips([...runs], events, verdicts, proposals, { now, waitingForPr: view.waitingForPr, changes }), [runs, events, verdicts, proposals, now, view.waitingForPr, changes]);
-  const next = nextStep(chips);
+  // A ticket stopped as unclear is not planned until the person chooses: Plan is not what comes next.
+  const unclear = !!view.readiness;
+  const next = unclear && nextStep(chips) === "plan" ? null : nextStep(chips);
   const revealIn = reveal ? (runs.find((r) => r.id === reveal)?.spec.kind ?? null) : null;
   useEffect(() => {
     if (revealIn) setOpen((was) => (was.has(revealIn) ? was : new Set([...was, revealIn])));
   }, [reveal, revealIn]);
-  const drafts = useMemo(() => stepDrafts(proposals, runs), [proposals, runs]);
+  // A draft open in Pip home's decision pane is not a card here as well.
+  const shown = useDecisionShown();
+  const drafts = useMemo(() => stepDrafts(shown.drafts.size ? proposals.filter((p) => !shown.drafts.has(p.id)) : proposals, runs), [proposals, runs, shown]);
   const retired = useMemo(() => retiredStepDrafts(proposals, runs), [proposals, runs]);
   const labels = useMemo(() => new Map(view.labels), [view.labels]);
   const id = view.workstream.id;
@@ -375,6 +380,11 @@ export function StepRailView({ view, runs, events, verdicts, changes = NO_CHANGE
                   {isNext && (
                     <span data-step-next-tag className="rounded-full bg-ws-pip-soft px-1.5 text-[10px] leading-4 font-semibold text-ws-pip">
                       {chip.newest && chip.newest.state !== "done" ? "Now" : "Next"}
+                    </span>
+                  )}
+                  {unclear && chip.kind === "plan" && !chip.newest && (
+                    <span data-step-unclear-tag className="rounded-full bg-ws-warn/15 px-1.5 text-[10px] leading-4 font-semibold text-ws-warn">
+                      Waiting for your choice: ticket unclear
                     </span>
                   )}
                   {chip.needsYou > 0 && (

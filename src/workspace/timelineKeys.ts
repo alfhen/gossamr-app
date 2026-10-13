@@ -18,6 +18,17 @@ export function timelineStop<T extends EntryLike>(entry: T): T {
   return (inner as T | null) ?? entry;
 }
 
+/**
+ * What every entry carries to show the keyboard is on it: the ring (`outline-solid`, as `outline-none` alone leaves the
+ * ring's style off) and a bottom scroll margin the height of the chips row under the timeline, so the last entry clears it.
+ */
+export const ENTRY_FOCUS = "outline-none focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-2 focus-visible:outline-ws-pip scroll-mb-14";
+
+/** Focus landing on an entry's own box (an audit line, a turn) brings it into view; a card or a row inside one scrolls itself. */
+export function revealEntry(ev: { target: unknown; currentTarget: { scrollIntoView?(o: { block: "nearest" }): void } }) {
+  if (ev.target === ev.currentTarget) ev.currentTarget.scrollIntoView?.({ block: "nearest" });
+}
+
 export type TimelineKeyAction = { type: "move"; by: 1 | -1 } | { type: "open" };
 
 interface KeyLike {

@@ -63,6 +63,12 @@ async function workstreamOnHome(page: Page) {
   await expect(homeConversation(page)).toHaveText(/^Workstream: CA-401 /);
 }
 
+/** Pip home opens a group by default while its needs fit: folds them all, for the tests that read the folded list. */
+async function foldAll(page: Page) {
+  const open = needsYouTray(page).locator('[data-needs-you-more][aria-expanded="true"]');
+  while (await open.count()) await open.first().click();
+}
+
 test("one row per workstream, with '+N more' for the rest, and one count on the rail, in the list and under the composer", async ({ page }) => {
   await openApp(page, MANAGED);
   await expect(agentsButton(page)).toHaveCount(1);
@@ -76,6 +82,10 @@ test("one row per workstream, with '+N more' for the rest, and one count on the 
   await expect(rows).toHaveCount(2);
   const ws = needsYouRow(page, "CA-401");
   await expect(ws).toHaveCount(1);
+  // Open by default: the group is its name and count, with every need listed once under it.
+  await expect(ws.locator("[data-needs-you-more]")).toHaveText("Show less");
+  await expect(ws.locator("[data-needs-you-need]")).toHaveCount(3);
+  await foldAll(page);
   await expect(ws.locator("[data-needs-you-more]")).toHaveText("+2 more");
   // The plan is a decision, which ranks above what is stuck and what waits for an approval.
   await expect(ws.locator("[data-needs-you-chip]")).toHaveText("Decide");
@@ -167,7 +177,7 @@ test("approving a draft from the pane writes it to Jira, and focus goes to the n
   await expect(needsYouCount(page)).toHaveText("2");
 
   const ws = needsYouRow(page, "CA-401");
-  await ws.locator("[data-needs-you-more]").click();
+  await expect(ws.locator("[data-needs-you-need]").first()).toBeVisible();
   await need(page, /Draft comment/).click();
   const pane = needsPane(page);
   await expect(pane).toContainText("drafted a comment on CA-401.");
@@ -211,22 +221,28 @@ test("'Approve N safe drafts' approves comments and moves together after one con
 
   const ws = needsYouRow(page, "CA-401");
   // Folded, there is no batch yet; expanded, it is offered with the number.
+  await foldAll(page);
   await expect(ws.getByRole("button", { name: /safe drafts/ })).toHaveCount(0);
   await ws.locator("[data-needs-you-more]").click();
   const batch = ws.getByRole("button", { name: "Approve 3 safe drafts" });
   await batch.click();
-  const preview = ws.locator("[data-needs-you-batch-preview] li");
+  // The preview opens in the decision pane like any other decision, not inside the cramped list.
+  const pane = needsPane(page);
+  await expect(pane).toHaveAttribute("data-kind", "batch");
+  await expect(needsYouTray(page).locator("[data-needs-you-batch-preview]")).toHaveCount(0);
+  const preview = pane.locator("[data-needs-you-batch-preview] li");
   await expect(preview).toHaveCount(3);
   await expect(preview.first()).toContainText(/Comment on CA-401|Move CA-401/);
   expect(await jiraWrites(page)).toEqual([]);
 
-  // Cancel keeps them all.
-  await ws.getByRole("button", { name: "Cancel" }).click();
+  // Cancel keeps them all, and closes the pane.
+  await pane.getByRole("button", { name: "Cancel" }).click();
+  await expect(pane).toHaveCount(0);
   expect(await jiraWrites(page)).toEqual([]);
   await expect(needsYouCount(page)).toHaveText("3");
 
   await batch.click();
-  await ws.getByRole("button", { name: "Yes, approve 3" }).click();
+  await pane.getByRole("button", { name: "Yes, approve 3" }).click();
   await expect.poll(async () => (await jiraWrites(page)).map((w) => w.type).sort()).toEqual(["comment", "comment", "transition"]);
   await expect(needsYouCount(page)).toHaveText("0");
   await expect(needsYouTray(page)).toContainText("Nothing needs you.");
@@ -342,13 +358,18 @@ test("the keyboard in the list: j and k move, Enter opens, ← folds, a asks for
   await expect(needsPane(page)).toHaveCount(0);
   await expect(group).toBeFocused();
 
-  // j walks the needs of the group; ← folds it again.
-  await page.keyboard.press("j");
-  await expect(need(page, /Held after a restart/)).toBeFocused();
+  // j walks the open group row by row: its own row is its top need's, so the next stop is the next need, not the same one again.
+  // ← folds the group again, and the keyboard is on its row.
   await page.keyboard.press("j");
   await expect(need(page, /Draft comment/).first()).toBeFocused();
+  await page.keyboard.press("j");
+  await expect(need(page, /Draft comment/).nth(1)).toBeFocused();
   await page.keyboard.press("k");
-  await expect(need(page, /Held after a restart/)).toBeFocused();
+  await expect(need(page, /Draft comment/).first()).toBeFocused();
+  await page.keyboard.press("k");
+  await expect(group).toBeFocused();
+  await page.keyboard.press("j");
+  await expect(need(page, /Draft comment/).first()).toBeFocused();
   await page.keyboard.press("ArrowLeft");
   await expect(group).toHaveAttribute("aria-expanded", "false");
   await expect(group).toBeFocused();
@@ -357,7 +378,6 @@ test("the keyboard in the list: j and k move, Enter opens, ← folds, a asks for
   await page.keyboard.press("ArrowRight");
   await expect(needsPane(page)).toBeVisible();
   await page.keyboard.press("Escape");
-  await page.keyboard.press("j");
   await page.keyboard.press("j");
   const first = need(page, /Draft comment/).first();
   await expect(first).toBeFocused();

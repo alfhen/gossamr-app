@@ -24,7 +24,7 @@ test.describe("Deny on a permission prompt asks first (F1)", () => {
     const { run, pane } = await onPermission(page);
     await pane.getByRole("button", { name: "Deny", exact: true }).click();
     const confirm = pane.getByRole("group", { name: "Deny this request" });
-    await expect(confirm).toContainText("Tell Claude no? It carries on without it.");
+    await expect(confirm).toContainText("Deny this?");
     expect(await stateOf(page, run.id)).toBe("needsPermission");
 
     await confirm.getByRole("button", { name: "Keep waiting" }).click();
@@ -116,7 +116,7 @@ test.describe("keys inside the open decision, the palette's Agents and Undo (F2,
     await page.keyboard.type("agents");
     await expect(palette(page).getByRole("option").first()).toContainText("Open Agents");
     await page.keyboard.press("Enter");
-    await expect(page.locator("[data-agents-scope]")).toBeVisible();
+    await expect(page.locator("main").getByRole("heading", { name: "Agents", exact: true })).toBeVisible();
   });
 
   test("a General run need's link says it opens the run", async ({ page }) => {

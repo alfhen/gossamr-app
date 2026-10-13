@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { FeedEntry, Proposal, WorkItem, WorkstreamEvent, WorkstreamView } from "../types";
-import { CHIPS, CHIP_LABEL, buildRows, chipsFor, toWorkstreamEntries, dayLabel, draftsFor, groupByDay, initials, queryFor, stepIndex, verb, withRead } from "./activityLogic";
+import { CHIPS, CHIP_LABEL, buildRows, chipsFor, eventText, toWorkstreamEntries, dayLabel, draftsFor, groupByDay, initials, queryFor, stepIndex, verb, withRead } from "./activityLogic";
 
 const entry = (id: string, at: string, over: Partial<FeedEntry> = {}): FeedEntry => ({
   id,
@@ -124,7 +124,7 @@ describe("the Pip & agents chip", () => {
     const ref = { connectionId: "c", externalId: "A-1", key: "A-1" };
     const entries = toWorkstreamEntries(events, [ws], () => ref);
     expect(entries.map((e) => e.text)).toEqual([
-      "Fix round 1 sent to R3",
+      "Fix round 1 sent to R3 automatically",
       "You resumed the workstream",
       "You held the workstream",
       "Triage R2 started automatically after R1",
@@ -137,9 +137,21 @@ describe("the Pip & agents chip", () => {
     expect(toWorkstreamEntries({}, [ws])).toEqual([]);
   });
 
+  it("says a fix round the rules sent was automatic, and one the person chose was not", () => {
+    const label = (id: string | null) => id ?? "a run";
+    expect(eventText(ev(1, "supervisor", "fix_round_sent", "R3"), label, 1)).toBe("Fix round 1 sent to R3 automatically");
+    expect(eventText(ev(2, "person", "fix_round_sent", "R3"), label, 3)).toBe("Fix round 3 sent to R3");
+  });
+
   it("words the person's Allow 5 more", () => {
     const allowed = ev(9, "person", "steps_allowed", null, "5");
     expect(toWorkstreamEntries({ w1: [allowed] }, [ws]).map((e) => e.text)).toEqual(["You allowed 5 more automatic steps"]);
+  });
+
+  it("says a message of the person's gave the automatic steps back, rather than that they reset the budget", () => {
+    const texts = (detail: string | null) => toWorkstreamEntries({ w1: [ev(1, "person", "budget_reset", null, detail)] }, [ws]).map((e) => e.text);
+    expect(texts("message")).toEqual(["Your message gave Pip its automatic steps back"]);
+    expect(texts(null)).toEqual(["You reset the budget"]);
   });
 
   it("words the person's three choices on a ticket that isn't clear enough to plan, naming the triage", () => {

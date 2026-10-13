@@ -153,6 +153,28 @@ describe("the Needs you list", () => {
     expect(html).not.toContain(`aria-label="${groupText(g, NOW)}"`);
   });
 
+  it("opens each group by default on Pip home's own list while its needs fit, with the group's header only its name and count", () => {
+    const html = renderToStaticMarkup(<NeedsYouList needs={list} now={NOW} main />);
+    // The 8 needs fit: ws-1 shows its six, once each, and no why line is repeated on its header.
+    expect([...html.matchAll(/data-needs-you-need="([^"]+)"/g)].map((m) => m[1])).toEqual(["run:r-perm", "run:r-q", "run:r-fail", "draft:c1", "draft:c2", "draft:c3"]);
+    const ws1 = html.slice(html.indexOf('data-needs-you-row="ws-1"')).split("</li></ul>")[0];
+    expect(ws1).toContain("6 waiting");
+    expect(ws1.split('<ul id="needs-you-group-ws-1"')[0]).not.toContain("data-needs-you-why");
+    // The person's fold is kept, and a longer list stays folded as before.
+    seed(usePipHome, { collapsed: new Set(["ws-1"]) });
+    const folded = renderToStaticMarkup(<NeedsYouList needs={list} now={NOW} main />);
+    expect(folded).not.toContain("data-needs-you-need=");
+    expect(folded).toContain("+5 more");
+    unseed();
+    expect(renderToStaticMarkup(<NeedsYouList needs={list} now={NOW} />)).not.toContain("data-needs-you-need=");
+  });
+
+  it("explains Decide, Unblock and Approve on the chips", () => {
+    const html = renderToStaticMarkup(<NeedsYouList needs={list} now={NOW} />);
+    expect(html).toMatch(/data-needs-you-chip="unblock" title="Unblock: [^"]+"/);
+    expect(html).toMatch(/data-needs-you-chip="approve" title="Approve: [^"]+"/);
+  });
+
   it("keeps a group folded until it is expanded, then lists every need in it, the top one first", () => {
     const folded = renderToStaticMarkup(<NeedsYouList needs={list} now={NOW} />);
     expect(folded).toContain('aria-expanded="false"');
@@ -171,7 +193,28 @@ describe("the Needs you list", () => {
 
   it("keeps the NEEDS YOU header in view while the list scrolls", () => {
     const html = renderToStaticMarkup(<NeedsYouList needs={list} now={NOW} />);
-    expect(html).toMatch(/<h3 data-needs-you-title[^>]*class="sticky top-0 /);
+    expect(html).toMatch(/<h2 data-needs-you-title[^>]*class="sticky top-0 /);
+  });
+
+  it("as Pip home's main column, takes the height it is given and scrolls inside it, not under a cap of its own", () => {
+    const html = renderToStaticMarkup(<NeedsYouList main needs={list} now={NOW} />);
+    const region = /<section aria-label="Needs you"[^>]*class="([^"]*)"/.exec(html)?.[1] ?? "";
+    expect(region).toContain("flex-1");
+    expect(region).toContain("overflow-y-auto");
+    expect(region).not.toMatch(/max-h-/);
+    // The popover's and the plain list keep their caps.
+    expect(renderToStaticMarkup(<NeedsYouList compact needs={list} now={NOW} />)).toMatch(/aria-label="Needs you"[^>]*max-h-\[min\(400px,60vh\)\]/);
+    expect(renderToStaticMarkup(<NeedsYouList needs={list} now={NOW} />)).toMatch(/aria-label="Needs you"[^>]*max-h-\[38vh\]/);
+  });
+
+  it("lets a group's title wrap to two lines instead of cutting it to one", () => {
+    const html = renderToStaticMarkup(<NeedsYouList main needs={list} now={NOW} />);
+    const heads = [...html.matchAll(/<span data-needs-you-head[^>]*class="([^"]*)"/g)].map((m) => m[1]);
+    expect(heads.length).toBeGreaterThan(0);
+    for (const c of heads) {
+      expect(c).toContain("line-clamp-2");
+      expect(c).not.toContain("truncate");
+    }
   });
 
   it("offers 'Approve N safe drafts' under an expanded group with two or more, with none for a lone draft", () => {
@@ -183,6 +226,30 @@ describe("the Needs you list", () => {
     // A group with a single batchable draft has no batch to offer.
     const lone = needs(input({ proposals: [draft("c1", comment("CA-401"), 30, "ws-1")] }));
     expect(renderToStaticMarkup(<NeedsYouList needs={lone} now={NOW} />)).not.toContain("safe drafts");
+  });
+
+  it("keeps the batch's preview out of the list: its button opens it in the pane", () => {
+    seed(useWorkspace, { proposals: Object.fromEntries(input().proposals.map((p) => [p.id, p])) });
+    seed(usePipHome, { expanded: new Set(["ws-1"]), batch: "ws-1" });
+    const html = renderToStaticMarkup(<NeedsYouList needs={list} now={NOW} />);
+    expect(html).toContain("Approve 3 safe drafts");
+    expect(html).not.toContain("data-needs-you-batch-preview");
+    expect(html).not.toContain("Yes, approve");
+    usePipHome.getState().previewBatch("ws-1");
+    expect(usePipHome.getState().batch).toBe("ws-1");
+  });
+
+  it("marks an open group's top need, listed again under it, so j and k step past it", () => {
+    seed(usePipHome, { expanded: new Set(["ws-1"]) });
+    const html = renderToStaticMarkup(<NeedsYouList needs={list} now={NOW} />);
+    const group = needGroups(list).find((g) => g.workstreamId === "ws-1")!;
+    expect([...html.matchAll(/data-needs-top=""/g)]).toHaveLength(1);
+    expect(html).toMatch(new RegExp(`data-needs-you-need="${group.top.key}"[^>]*data-needs-top=""`));
+    expect(html.match(/data-needs-you-need=/g)).toHaveLength(group.count);
+    // Folded, a group is its one row.
+    unseed();
+    const folded = renderToStaticMarkup(<NeedsYouList needs={list} now={NOW} />);
+    expect(folded).not.toContain("data-needs-top");
   });
 
   it("says so when nothing waits", () => {
@@ -342,6 +409,36 @@ describe("the decision pane", () => {
     expect(renderToStaticMarkup(<NeedsPane needs={list} />)).toBe("");
   });
 
+  it("opens a group's safe drafts as one decision: what each does, then the one confirm; a batch with fewer than two says so", () => {
+    const list = set();
+    seed(usePipHome, { batch: "ws-1" });
+    const html = renderToStaticMarkup(<NeedsPane needs={list} />);
+    expect(html).toContain('data-needs-pane="batch:ws-1"');
+    expect(html).toContain("Approve 3 safe drafts");
+    expect(html).toContain('data-needs-you-chip="approve"');
+    expect(html).toContain("Nothing is posted until you choose.");
+    expect(html.match(/<li class="\[overflow-wrap:anywhere\]">/g)).toHaveLength(3);
+    expect(html).toContain(">Yes, approve 3</button>");
+    expect(html).toContain('aria-label="Back to the list"');
+    // Cancel and Esc keep the drafts: the pane is the one confirm, and nothing was approved by opening it.
+    expect(useWorkspace.getState().proposals["c1"].state.type).toBe("pending");
+    seed(usePipHome, { batch: "general" });
+    expect(renderToStaticMarkup(<NeedsPane needs={list} />)).toContain("These drafts are no longer waiting together.");
+  });
+
+  it("a batch and a need's decision replace each other, and closing clears either", () => {
+    const home = usePipHome.getState();
+    home.decide("run:r-perm", "ws-1");
+    home.previewBatch("ws-1");
+    expect(usePipHome.getState()).toMatchObject({ deciding: null, batch: "ws-1" });
+    expect([...usePipHome.getState().expanded]).toContain("ws-1");
+    usePipHome.getState().decide("run:r-perm", "ws-1");
+    expect(usePipHome.getState()).toMatchObject({ deciding: "run:r-perm", batch: null });
+    usePipHome.getState().previewBatch("ws-1");
+    usePipHome.getState().closeDecision();
+    expect(usePipHome.getState()).toMatchObject({ deciding: null, batch: null });
+  });
+
   it("heads the decision with why and what waiting does, and a link to the workstream", () => {
     const list = set();
     const html = pane(list, "run:r-perm");
@@ -450,6 +547,24 @@ describe("the decision pane", () => {
     const plan = pane(list, "draft:plan");
     expect(plan).toContain("data-plan-approve");
     expect(list.map((n) => n.key)).not.toContain("draft:rd");
+  });
+
+  it("shows an escalation once in the pane: its header says the review still blocks, so the card doesn't say it again", () => {
+    const escalated: WorkstreamView = { ...view("ws-1", "CA-401", "CA-401 Welcome flow refresh", { runs: ["r-b", "r-rev"] }), escalation: { reviewRun: "r-rev", buildRun: "r-b", reviewLabel: "R2", buildLabel: "R1", rounds: 2, reviewDraft: "rd", at: ago(5) } } as WorkstreamView;
+    const review = draft("rd", { type: "githubReview", item: ref("CA-401"), connectionId: "github", repo: "acme/shop", number: 7, runId: "r-rev", summary: "Blocking", comments: [], commitSha: "abc" } as unknown as Intent, 5, "ws-1");
+    const list = set({ workstreams: [escalated], runs: [], proposals: [review], dismissed: new Set() });
+    const html = pane(list, "escalation:r-rev");
+    expect(html).toContain("The review still blocks after 2 fix rounds.");
+    expect(html).not.toContain("What next?");
+    expect(html).toContain('aria-label="Review still blocks"');
+  });
+
+  it("is the one thing that scrolls in its place: its header stays in view and its drafts' action bars are not sticky", () => {
+    const html = pane(set({ workstreams: [], runs: sample, proposals: [draft("c1", comment("CA-401"), 3)], dismissed: new Set() }), "draft:c1");
+    expect(html).toMatch(/<section[^>]*data-needs-pane="draft:c1"[^>]*class="[^"]*overflow-y-auto[^"]*\[&amp;_\[data-draft-actions\]\]:static/);
+    expect(html).toMatch(/<header class="sticky -top-2.5 /);
+    // The pane is the only scroller inside itself.
+    expect(html.match(/overflow-y-auto/g)).toHaveLength(1);
   });
 });
 

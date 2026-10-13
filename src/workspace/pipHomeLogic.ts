@@ -1,7 +1,7 @@
 import { BATCHABLE } from "../lib/needs";
 import { inWorkstreamPane } from "../lib/proposals";
 import { shortHeld } from "../lib/workstreamHold";
-import { byQueue, STAGE_LABEL, stageText } from "../lib/workstreamStage";
+import { byQueue, REVIEW_POSTED, reviewPosted, STAGE_LABEL, stageText } from "../lib/workstreamStage";
 import type { CodeChange, Proposal, ReviewView, Run, RunKind, WorkstreamEvent, WorkstreamView } from "../types";
 import { liveCounts, liveWords, needsPerson, stateView, stoppedAtLimit, type Tone } from "./agentsLogic";
 import { shownVerdict, verdictChip } from "./runSheetLogic";
@@ -85,12 +85,15 @@ export function retiredStepDrafts(proposals: readonly Proposal[], runs: readonly
   return groups;
 }
 
-/** The drafts of a step that "Approve these N" would approve, in order; it is offered only for two or more. */
+/** What the one action of approving N drafts together is called, in the step rail and in Needs you. */
+export const batchLabel = (count: number) => `Approve ${count} safe drafts`;
+
+/** The drafts of a step that "Approve N safe drafts" would approve, in order; it is offered only for two or more. */
 export function batchable(drafts: readonly Proposal[]): Proposal[] {
   return drafts.filter((p) => p.state.type === "pending" && BATCHABLE.has(p.intent.type));
 }
 
-/** What a step's "Approve these N" covers, fixed when its confirm opens: each draft by id, with the revision shown then. */
+/** What an "Approve N safe drafts" covers, fixed when its confirm opens: each draft by id, with the revision shown then. */
 export type BatchSnapshot = readonly { id: string; revision: number }[];
 
 /** The snapshot of `drafts` a confirm opening now covers: only the ones `batchable` lets go together. */
@@ -99,7 +102,7 @@ export function freezeBatch(drafts: readonly Proposal[]): BatchSnapshot {
 }
 
 /**
- * What a confirmed "Approve these N" approves, from the step's drafts now: exactly the ones its confirm covered, each
+ * What a confirmed "Approve N safe drafts" approves, from the step's drafts now: exactly the ones its confirm covered, each
  * still pending, batchable and as it was then. A draft that came in since isn't among them; null when one of them was
  * decided or revised meanwhile, so the person never approves what they didn't see.
  */
@@ -163,7 +166,7 @@ export function fixRoundChip(automatic: number, yours: number): string | null {
  * The six step chips of a workstream from its runs (`runs`, only the workstream's own), its audit (`events`, for the
  * fix rounds sent), the reviews' verdicts as read so far and its drafts (`proposals`, for what waits in each step).
  */
-export function stepChips(runs: readonly Run[], events: readonly Pick<WorkstreamEvent, "action" | "runId" | "actor">[], verdicts: Readonly<Record<string, ReviewView | null>>, proposals: readonly Proposal[], { now = Date.now(), waitingForPr = null, changes = {} }: StepChipOptions = {}): StepChip[] {
+export function stepChips(runs: readonly Run[], events: readonly (Pick<WorkstreamEvent, "action" | "runId" | "actor"> & Partial<Pick<WorkstreamEvent, "at">>)[], verdicts: Readonly<Record<string, ReviewView | null>>, proposals: readonly Proposal[], { now = Date.now(), waitingForPr = null, changes = {} }: StepChipOptions = {}): StepChip[] {
   const drafts = stepDrafts(proposals, runs);
   return STEP_KINDS.map((kind) => {
     const own = runs.filter((r) => r.spec.kind === kind).sort(byQueue);
@@ -186,7 +189,7 @@ export function stepChips(runs: readonly Run[], events: readonly Pick<Workstream
       state: waiting ? "waiting for PR" : (view?.label ?? null),
       tone: waiting ? "warn" : (view?.tone ?? null),
       auto: !!newest?.autoStart,
-      verdict: review ? verdictChip(review) : null,
+      verdict: review ? (review.verdict !== "pass" && newest && reviewPosted(events, newest) ? REVIEW_POSTED : verdictChip(review)) : null,
       fixRound: fixRoundChip(sent.length - yours, yours),
       needsYou: pending + own.filter((r) => (needsPerson(r) || stoppedAtLimit(r)) && !(r.state === "needsAnswer" && answered.has(r.id))).length,
       pr: kind === "build" ? buildPullRequest(own, changes) : null,
@@ -237,7 +240,7 @@ type SceneTurn = { kind?: "user" | "wake" };
  * description update or a run start waits, whether it was investigated, whether Pip was woken since the person last
  * wrote (`turns`, its conversation's, oldest first), and the run at work, by its label.
  */
-export function workstreamSuggestionScene(view: WorkstreamView, runs: readonly Run[], proposals: readonly Proposal[], turns: readonly SceneTurn[]): WorkstreamSuggestionScene {
+export function workstreamSuggestionScene(view: WorkstreamView, runs: readonly Run[], proposals: readonly Proposal[], turns: readonly SceneTurn[], cobweb = false): WorkstreamSuggestionScene {
   const own = runs.filter((r) => view.runs.includes(r.id) || r.spec.workstream === view.workstream.id);
   const pending = proposals.filter((p) => p.state.type === "pending" && inWorkstreamPane(p, view.workstream));
   const labels = new Map(view.labels);
@@ -253,5 +256,7 @@ export function workstreamSuggestionScene(view: WorkstreamView, runs: readonly R
     investigated: own.some((r) => r.spec.kind === "investigate" && r.state === "done"),
     woke: turns.slice(lastAsked + 1).some((t) => t.kind === "wake"),
     running: going ? (labels.get(going.id) ?? null) : null,
+    unclear: !!view.readiness,
+    cobweb,
   };
 }

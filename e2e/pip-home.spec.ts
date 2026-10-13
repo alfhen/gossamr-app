@@ -15,6 +15,7 @@ import {
   needOfKind,
   needsPane,
   needsYouCount,
+  foldAllNeeds,
   needsYouTray,
   openApp,
   openPipHome,
@@ -277,6 +278,7 @@ test("Needs you from the board: the rail's Pip home popover lists the same rows 
   await askPip(page, "investigate this");
   await settled(page);
   await holdBySystem(page, "CA-401", "restart");
+  await foldAllNeeds(page);
   const onHome = await needsYouTray(page).locator("[data-needs-you-group]").allTextContents();
   expect(onHome).toHaveLength(1);
   expect(onHome[0]).toContain("Held after a restart");
@@ -540,7 +542,7 @@ test("with Agents off, Activity has no 'Pip & agents' chip", async ({ page }) =>
   await expect(page.getByRole("group", { name: "Show" }).getByRole("button", { name: /Pip & agents/ })).toHaveCount(0);
 });
 
-test("the rail's 'Approve these 2' approves Pip's two comments and never the description update beside them, which still opens its diff", async ({ page }) => {
+test("the rail's 'Approve 2 safe drafts' approves Pip's two comments and never the description update beside them, which still opens its diff", async ({ page }) => {
   await openApp(page, "runs=empty");
   await agentsSettled(page, true);
   // Pip's drafts in the workstream's conversation, from the pane beside CA-401's peek: two comments and a description update.
@@ -561,12 +563,12 @@ test("the rail's 'Approve these 2' approves Pip's two comments and never the des
   const section = stepRail(page).getByRole("region", { name: "Pip's drafts" });
   const rewrite = section.getByRole("article", { name: "Update the description of CA-401" });
   await expect(rewrite).toHaveAttribute("data-state", "pending");
-  await section.getByRole("button", { name: "Approve these 2" }).click();
+  await section.getByRole("button", { name: "Approve 2 safe drafts" }).click();
   await section.getByRole("button", { name: "Yes, approve 2" }).click();
   await expect(section.locator("[data-batch-outcome]")).toHaveText("Approved 2.");
   await expect.poll(async () => (await jiraWrites(page)).map((w) => w.type)).toEqual(["comment", "comment"]);
   await expect(rewrite).toHaveAttribute("data-state", "pending");
-  await expect(section.getByRole("button", { name: /^Approve these/ })).toHaveCount(0);
+  await expect(section.getByRole("button", { name: /safe drafts/ })).toHaveCount(0);
 
   // The update is read in its diff, in the peek, and approved only there.
   await rewrite.getByRole("button", { name: "Review on CA-401 →" }).click();

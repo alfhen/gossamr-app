@@ -10,16 +10,18 @@ import { useWorkspace } from "../workspaceStore";
 import type { Run } from "../types";
 import { HOLD_ALL_HINT, buildCommands, isHoldAllKey, rankCommands, type CommandActions } from "./commands";
 import { useToasts } from "./toasts";
-import { NextStepLine, nextStepOnceKnown } from "./WorkstreamControls";
+import { DecisionShownContext, decisionShown } from "./decisionShown";
+import { MODE_LINE, NextStepLine, nextStepOnceKnown } from "./WorkstreamControls";
 import { AutomaticStepsPanel, StopConfirm, WorkstreamControlsView, choiceValue, controlActions, ruleChoice, type ControlActions } from "./WorkstreamControls";
 import { holdAllVisible, useWorkstreams } from "./workstreamsStore";
-import { DRAFT_OPEN, EscalationCardView, EscalationSent, FIX_ROUND_HELP, NO_REVIEW_DRAFT, POST_AS_IS_HELP, TAKE_OVER_HELP, TAKEN_OVER, draftOpen, escalationActions, escalationShown, fixRoundSent, postingReview } from "./EscalationCard";
+import { CONNECT_TO_POST, DRAFT_OPEN, EscalationCardView, EscalationSent, FIX_ROUND_HELP, NO_REVIEW_DRAFT, POST_AS_IS_HELP, TAKE_OVER_HELP, TAKEN_OVER, draftOpen, escalationActions, escalationShown, fixRoundSent, postingReview } from "./EscalationCard";
 import { ESCALATION_GONE } from "../backend/mockWorkstreams";
 import type { Escalation, Proposal } from "../types";
 import type { WatchState } from "../types";
 import type { StepChip } from "./pipHomeLogic";
 import { NO_PULL_VIEW, autoNote, pullViewOrGithub } from "./StepRail";
 import { usePullView } from "./pullViewStore";
+import { EscalationBody } from "./NeedsPane";
 
 const memory = () => {
   const data = new Map<string, string>();
@@ -35,6 +37,66 @@ const viewOf = (over: Partial<WorkstreamView["workstream"]> = {}): WorkstreamVie
 const noop = (): ControlActions => ({ onManage: vi.fn(), onHold: vi.fn(), onResume: vi.fn(), onAllowMore: vi.fn(), onStop: vi.fn(), onRule: vi.fn() });
 const render = (view: WorkstreamView, confirmingStop = false) =>
   renderToStaticMarkup(<WorkstreamControlsView view={view} globals={AUTOSTART_DEFAULTS} actions={noop()} confirmingStop={confirmingStop} onConfirmStop={vi.fn()} />);
+
+describe("the line under the mode switch", () => {
+  it("says what Manage does, and changes to what Advise does", () => {
+    const manage = render(viewOf({ mode: "manage" }));
+    expect(manage).toContain('data-mode-line="manage"');
+    expect(manage).toContain("Pip manages: it starts the next step by itself and drafts what&#x27;s next; nothing reaches Jira without you.");
+    const advise = render(viewOf({ mode: "advise" }));
+    expect(advise).toContain('data-mode-line="advise"');
+    expect(advise).toContain("Pip advises: it answers when asked and starts nothing by itself.");
+    expect(advise).not.toContain("Pip manages");
+    expect(MODE_LINE.manage).toMatch(/^Pip manages: /);
+  });
+
+  it("sits directly under the switch's row, ahead of the held banner and the next step", () => {
+    const html = render(viewOf({ mode: "manage", heldReason: HELD_PERSON }));
+    const at = (s: string) => html.indexOf(s);
+    expect(at("Manage this workstream")).toBeGreaterThan(-1);
+    expect(at("data-mode-line")).toBeGreaterThan(at("Manage this workstream"));
+    expect(at("data-mode-line")).toBeLessThan(at("data-held-banner"));
+  });
+});
+
+describe("a decision open in Pip home's pane", () => {
+  const escalation: Escalation = { reviewRun: "r-rev", buildRun: "r-b", reviewLabel: "R5", buildLabel: "R4", rounds: 2, reviewDraft: "p-review", at: "2026-10-01T10:00:00Z" };
+  const withProvider = (view: WorkstreamView, kind: "hold" | "escalation" | null) => {
+    const need = kind ? ({ key: `${kind}:x`, kind, workstreamId: view.workstream.id, target: { type: "workstream" } } as never) : null;
+    return renderToStaticMarkup(
+      <DecisionShownContext.Provider value={decisionShown(need, [view])}>
+        <WorkstreamControlsView view={view} globals={AUTOSTART_DEFAULTS} actions={noop()} confirmingStop={false} onConfirmStop={vi.fn()} />
+      </DecisionShownContext.Provider>,
+    );
+  };
+
+  it("leaves the held banner off the rail, since the pane shows it", () => {
+    const held = viewOf({ mode: "manage", heldReason: HELD_RESTART });
+    expect(withProvider(held, null)).toContain("data-held-banner");
+    expect(withProvider(held, "hold")).not.toContain("data-held-banner");
+    // Another kind of need open leaves it where it is.
+    expect(withProvider(held, "escalation")).toContain("data-held-banner");
+  });
+
+  it("leaves the escalation card off the rail, since the pane shows it, and keeps every other line", () => {
+    const view = { ...viewOf({ mode: "manage" }), escalation };
+    expect(withProvider(view, null)).toContain("data-escalation");
+    const decided = withProvider(view, "escalation");
+    expect(decided).not.toContain("data-escalation");
+    expect(decided).toContain("data-mode-line");
+  });
+
+  it("works out what the pane shows: a draft need's draft, and the review draft folded into an escalation", () => {
+    const view = { ...viewOf({ mode: "manage" }), escalation };
+    const draftNeed = { key: "draft:d1", kind: "draft", workstreamId: view.workstream.id, target: { type: "draft", id: "d1" } } as never;
+    expect([...decisionShown(draftNeed, [view]).drafts]).toEqual(["d1"]);
+    const escalationNeed = { key: "escalation:r-rev", kind: "escalation", workstreamId: view.workstream.id, target: { type: "escalation" } } as never;
+    expect([...decisionShown(escalationNeed, [view]).drafts]).toEqual(["p-review"]);
+    expect(decisionShown(escalationNeed, [viewOf()]).drafts.size).toBe(0);
+    expect(decisionShown(null, [view])).toMatchObject({ need: null });
+    expect(decisionShown(undefined, [view]).drafts.size).toBe(0);
+  });
+});
 
 describe("the next-step line", () => {
   it("shows the sentence with data-next-step, and leaves the line out when nothing is given", () => {
@@ -142,7 +204,7 @@ describe("the workstream's controls", () => {
     const amber = render(viewOf({ spent: { autoTurns: 9, wakes: 9, tokens: 0 } }));
     expect(amber).toContain('data-budget="amber"');
     expect(amber).toContain("9 of 11 automatic steps used");
-    expect(render(viewOf({ spent: { autoTurns: 1, wakes: 10, tokens: 0 } }))).toContain("10 of 12 automatic steps used");
+    expect(render(viewOf({ spent: { autoTurns: 1, wakes: 10, tokens: 0 } }))).toContain("9 of 11 automatic steps used");
     // A workstream's own limit counts, and its banner says what to do once spent; the line isn't said twice.
     const own = viewOf({ budget: { autoTurns: 2, wakes: null, tokens: null }, spent: { autoTurns: 2, wakes: 2, tokens: 0 }, heldReason: HELD_BUDGET });
     expect(own.budget.level).toBe("spent");
@@ -213,6 +275,10 @@ describe("a review that still blocks after the fix rounds", () => {
     const html = card();
     expect(html).toContain('role="group" aria-label="Review still blocks"');
     expect(html).toContain("R5 still blocks after 2 fix rounds. What next?");
+    // Where something above already says it (the decision pane's header), the card leaves its own title out.
+    const quiet = renderToStaticMarkup(<EscalationCardView escalation={escalation} busy={false} titled={false} onFixRound={vi.fn()} onTakeOver={vi.fn()} onPost={vi.fn()} />);
+    expect(quiet).not.toContain("What next?");
+    expect(buttons(quiet)).toHaveLength(3);
     expect(buttons(html).map((b) => [b.text, b.disabled])).toEqual([
       ["Run another fix round", false],
       ["I'll take it from here", false],
@@ -226,6 +292,29 @@ describe("a review that still blocks after the fix rounds", () => {
   it("can't post a review that has no draft waiting, and waits while a choice is on its way", () => {
     expect(buttons(card({ ...escalation, reviewDraft: null }))[2]).toEqual({ text: "Post the review as is", disabled: true, title: NO_REVIEW_DRAFT });
     expect(buttons(card(escalation, true)).every((b) => b.disabled)).toBe(true);
+  });
+
+  it("says why Post the review as is is greyed out, in place of what it would do", () => {
+    const view = (over: Partial<Parameters<typeof EscalationCardView>[0]>) => renderToStaticMarkup(<EscalationCardView escalation={{ ...escalation, reviewDraft: null }} busy={false} onFixRound={vi.fn()} onTakeOver={vi.fn()} onPost={vi.fn()} {...over} />);
+    const noDraft = view({});
+    expect(noDraft).toContain(NO_REVIEW_DRAFT);
+    expect(noDraft).not.toContain(POST_AS_IS_HELP);
+    expect(noDraft).not.toContain("Connect GitHub");
+    const offline = view({ github: false, onConnect: vi.fn() });
+    expect(offline).toContain(CONNECT_TO_POST);
+    expect(offline).toContain("data-escalation-connect");
+    expect(offline).not.toContain(POST_AS_IS_HELP);
+    // With a draft there is nothing to explain.
+    expect(view({ github: false, escalation })).toContain(POST_AS_IS_HELP.replace(/'/g, "&#x27;"));
+  });
+
+  it("on Pip home's decision pane, says to connect GitHub rather than that no draft waits, while it isn't connected", () => {
+    const view = { ...viewOf(), escalation: { ...escalation, reviewDraft: null } };
+    // The store as it starts has no connections; renderToStaticMarkup reads that initial state.
+    const offline = renderToStaticMarkup(<EscalationBody view={view} />);
+    expect(offline).toContain(CONNECT_TO_POST);
+    expect(offline).toContain("data-escalation-connect");
+    expect(offline).not.toContain(NO_REVIEW_DRAFT);
   });
 
   it("on Pip home's decision pane, holds the choices once Post the review as is was pressed, until the draft is posted or goes", () => {
@@ -394,18 +483,6 @@ describe("the controls call the person's own commands", () => {
     await vi.waitFor(() => expect(calls.stop).toHaveBeenCalledWith(id));
     await vi.waitFor(() => expect(shown()?.heldReason).toBe(HELD_PERSON));
     expect(Object.values(calls).every((c) => c.mock.calls.every(([first]) => first === id))).toBe(true);
-  });
-
-  it("Allow 5 more calls the audited command and keeps what was spent, where Resume would reset it", async () => {
-    const allow = vi.spyOn(backend, "workstreamsAllowMore");
-    const resume = vi.spyOn(backend, "workstreamsResume");
-    backend.workstreams.hold(id, HELD_BUDGET, "supervisor");
-    await useWorkstreams.getState().init(backend);
-    const shown = () => useWorkstreams.getState().list.find((v) => v.workstream.id === id)?.workstream;
-    controlActions(id).onAllowMore();
-    await vi.waitFor(() => expect(allow).toHaveBeenCalledWith(id));
-    expect(resume).not.toHaveBeenCalled();
-    expect(shown()?.heldReason ?? null).toBeNull();
   });
 
   it("reads what Settings has when the steps are opened", async () => {

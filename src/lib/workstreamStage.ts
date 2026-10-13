@@ -59,6 +59,19 @@ export function reviewBlocking(runs: readonly StagedRun[]): boolean {
   return stage(runs) === "review" && !runs.some((r) => inProgress(r.state)) && newestReview(runs)?.verdict === "blocking";
 }
 
+/** The parts of an audit line `reviewPosted` reads. */
+type PostEvent = { action: string; actor?: string; runId: string | null; at?: string };
+
+/**
+ * Whether the person posted a GitHub review for `review` (a finished review run) as it stood: a `review_posted` or
+ * `escalation_posted` of theirs for that run, or, for a line that names no run, made after it ended. A line that names
+ * another run is never this one's. The review still blocks, but it has gone to GitHub.
+ */
+export function reviewPosted(events: readonly PostEvent[], review: { id: string; launchedAt?: string | null; endedAt?: string | null }): boolean {
+  const since = Date.parse(review.endedAt ?? review.launchedAt ?? "");
+  return events.some((e) => e.actor === "person" && (e.action === "review_posted" || e.action === "escalation_posted") && (e.runId != null ? e.runId === review.id : e.at !== undefined && Date.parse(e.at) >= since));
+}
+
 /** Short names for the runs of a workstream, `R1` for the first queued: by queue time, ties by id. */
 export function runLabels(runs: readonly StagedRun[]): [string, string][] {
   return [...runs].sort(byQueue).map((r, n) => [r.id, `R${n + 1}`]);
@@ -76,6 +89,9 @@ export const WAITING_FOR_PR = "waiting for PR";
 
 /** Said after "Review" while the newest finished review asked for changes. */
 export const CHANGES_NEEDED = "changes needed";
+
+/** Said instead of the blocking verdict once the person posted the review to GitHub. */
+export const REVIEW_POSTED = "Review posted";
 
 /**
  * The stage as its chip says it: "Build", "Build · waiting for PR" while a build waits for its pull request to be found,

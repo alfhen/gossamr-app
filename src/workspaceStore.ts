@@ -2,12 +2,13 @@ import { useMemo } from "react";
 import { create } from "zustand";
 import type { Backend } from "./backend/types";
 import { ALL, compileFilter, containerKey, itemKey, usesCode, type FilterContext, type QueryLookup } from "./lib/filter";
-import { targetOf } from "./lib/proposals";
+import { targetOf, workstreamOf } from "./lib/proposals";
 import { movesAreOpaque } from "./workspace/boardLogic";
 import { workContainers } from "./workspace/domains";
 import { useDev } from "./workspace/devStore";
 import type { CodeSummary } from "./lib/devLinks";
 import { newStrays, strayText } from "./workspace/watchLogic";
+import { usePipHome } from "./workspace/pipHomeStore";
 import { useTabs } from "./workspace/tabsStore";
 import { messageOf, useToasts } from "./workspace/toasts";
 import { offerUndo } from "./workspace/undo";
@@ -442,7 +443,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     // A skip changes nothing outside the draft, so it is the one decision that can be taken back.
     if (was === "pending" && p.state.type === "skipped") {
       const on = targetOf(p.intent)?.key;
-      offerUndo({ text: `Skipped the draft${on ? ` on ${on}` : ""}.`, undone: "The draft is back.", undo: async () => void (await get().unskip(id)) });
+      offerUndo({ text: `Skipped the draft${on ? ` on ${on}` : ""}.`, undone: "The draft is back.", undo: async () => void (await get().unskip(id)), restored: () => openRestored(p) });
     }
     return p;
   },
@@ -484,6 +485,11 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     set({ ...empty });
   },
 }));
+
+/** An undone skip on Pip home opens the draft that came back in the pane, instead of leaving it on the need the pane had moved to. */
+function openRestored(p: Proposal) {
+  if (useTabs.getState().route === "pip") usePipHome.getState().decide(`draft:${p.id}`, workstreamOf(p));
+}
 
 function announceStrays(strays: Stray[]) {
   const first = strays[0];

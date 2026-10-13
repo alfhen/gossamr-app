@@ -2,14 +2,14 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useClaude } from "../claudeStore";
 import { stageText } from "../lib/workstreamStage";
 import { witherClass } from "../lib/views";
-import type { WorkstreamWither } from "../lib/workstreamWither";
+import { witherShort, witherTitle, type WorkstreamWither } from "../lib/workstreamWither";
 import { Cobweb } from "../components/Cobweb";
 import { useWorkstreamWithers } from "./useWorkstreamWithers";
 import type { Run, WorkstreamView } from "../types";
 import { PipAvatar } from "./PipAvatar";
 import { Composer, GENERAL_CONVERSATION, PIP_INPUT_ID, useAnswering, workstreamConversation } from "./PipConversation";
 import { TimelineView } from "./Timeline";
-import { TIMELINE_ENTRY } from "./timelineKeys";
+import { TIMELINE_ENTRY, timelineStop } from "./timelineKeys";
 import { lightboxOpen, useAttachments, useFileDrop } from "./PipImages";
 import { ConversationLine, escapeCancelsTurn, useConversationDrafts, usePipChips } from "./PipPane";
 import { popoverOpen } from "./Popover";
@@ -20,10 +20,11 @@ import { useTabs } from "./tabsStore";
 import { needsIn, type Need } from "../lib/needs";
 import { NeedsYouList } from "./NeedsYou";
 import { useNeedsYou } from "./useNeeds";
-import { NeedsPane } from "./NeedsPane";
+import { NeedsPane, firstDecision } from "./NeedsPane";
 import { arm, confirmArmed, disarm, groupId, keyPlan, openNeed, setPaneIntent } from "./needsActions";
+import { undoLog } from "./undo";
 import { composerFooter, workstreamStatus } from "./pipHomeLogic";
-import { usePipHome, type PipHomeColumn, type PipHomeFocus } from "./pipHomeStore";
+import { PIP_HOME_REGIONS, columnRegion, regionColumn, usePipHome, type PipHomeColumn, type PipHomeFocus, type PipHomeRegion } from "./pipHomeStore";
 import { useRuns } from "./runsStore";
 import { focusComposer, focusedConversation, useHomeWorkstream, useWorkstreams } from "./workstreamsStore";
 import { TABBABLE, pipHomeKey, wrapTab, type PipHomeItemKind } from "./pipHomeKeys";
@@ -33,6 +34,7 @@ import { useNow } from "./AgentsView";
 import { pipHomeHints } from "./footerHints";
 import { ShortcutHint } from "./ShortcutHint";
 import { PipOrientation } from "./PipOrientation";
+import { DecisionShownContext, decisionShown } from "./decisionShown";
 
 const PIP_HOME_HINTS = pipHomeHints();
 const NEEDS_HINTS = pipHomeHints(true);
@@ -78,8 +80,6 @@ export interface WorkstreamListProps {
   needsYou?: readonly Need[];
   /** The workstreams that have gone quiet in Jira while work went on, by id (`useWorkstreamWithers`): each row gets its cobweb. */
   wither?: Readonly<Record<string, WorkstreamWither>>;
-  /** The Needs you list, at the bottom of the column. */
-  tray?: ReactNode;
 }
 
 /** What the list says before there is any workstream: what one is, in a line. */
@@ -95,8 +95,12 @@ function NeedsBadge({ count, total }: { count: number; total: number }) {
   );
 }
 
-/** Pip home's left column: General pinned at the top, then each open workstream with where it stands; the closed ones behind a toggle, read-only. */
-export function WorkstreamList({ list, closed, showClosed, selected, onSelect, onShowClosed, runs = [], needsYou = [], wither = {}, tray }: WorkstreamListProps) {
+/**
+ * The workstreams, in a compact section under Needs you in Pip home's left column: General pinned at the top, then each
+ * open workstream with where it stands; the closed ones behind a toggle, read-only. It takes at most 45% of the column and
+ * scrolls inside that, so Needs you keeps the rest.
+ */
+export function WorkstreamList({ list, closed, showClosed, selected, onSelect, onShowClosed, runs = [], needsYou = [], wither = {} }: WorkstreamListProps) {
   const open = list.filter((v) => v.workstream.closedAt === null);
   const option = (id: string | null, level: WorkstreamWither["level"] = 0) => ({
     role: "option" as const,
@@ -106,8 +110,8 @@ export function WorkstreamList({ list, closed, showClosed, selected, onSelect, o
     className: `${ROW} ${selected === id ? "bg-ws-sel text-ws-ink" : "text-ws-ink2 hover:bg-ws-hover"} ${witherClass(level, "ws-")}`.trim(),
   });
   return (
-    <nav aria-label="Workstreams" tabIndex={-1} className="flex min-h-0 flex-col border-r border-ws-sep bg-ws-bar">
-      <h2 className="m-0 px-3 pt-3 pb-1.5 text-xs font-semibold tracking-wide text-ws-ink3 uppercase">Workstreams</h2>
+    <nav aria-label="Workstreams" tabIndex={-1} className="flex max-h-[45%] min-h-0 shrink-0 flex-col border-t border-ws-sep bg-ws-bar">
+      <h2 className="m-0 px-3 pt-2 pb-1 text-xs font-semibold tracking-wide text-ws-ink3 uppercase">Workstreams</h2>
       <ul role="listbox" aria-label="Workstreams" aria-keyshortcuts="j k ArrowDown ArrowUp Enter" className="m-0 grid min-h-0 list-none content-start gap-0.5 overflow-y-auto p-0 px-1.5">
         <li data-workstream-row="general" {...option(null)}>
           <span className="flex min-w-0 items-center gap-1.5">
@@ -119,7 +123,7 @@ export function WorkstreamList({ list, closed, showClosed, selected, onSelect, o
         {open.map((v) => {
           const web = wither[v.workstream.id];
           return (
-            <li key={v.workstream.id} data-workstream-row={v.workstream.id} data-wither={web ? web.level : undefined} title={web?.text} {...option(v.workstream.id, web?.level)}>
+            <li key={v.workstream.id} data-workstream-row={v.workstream.id} data-wither={web ? web.level : undefined} title={web ? witherTitle(web) : undefined} {...option(v.workstream.id, web?.level)}>
               {web && <Cobweb level={web.level} />}
               <span className="flex min-w-0 items-center gap-1.5">
                 {v.workstream.itemKey && <b className="shrink-0 font-mono font-semibold text-ws-ink">{v.workstream.itemKey}</b>}
@@ -129,21 +133,26 @@ export function WorkstreamList({ list, closed, showClosed, selected, onSelect, o
               <RowStatus view={v} runs={runs} waiting={needsIn(needsYou, v.workstream.id)} />
               {/* After the row's own words, so its name still starts with the ticket's key. */}
               {web && (
-                <span data-workstream-wither className="sr-only">
-                  {web.text}
-                </span>
+                <>
+                  <span data-workstream-wither-short aria-hidden className="truncate text-xs text-ws-ink3">
+                    {witherShort(web)}
+                  </span>
+                  <span data-workstream-wither className="sr-only">
+                    {web.text}
+                  </span>
+                </>
               )}
             </li>
           );
         })}
       </ul>
       {open.length === 0 && <p className="m-0 px-3 py-2 text-sm text-ws-ink3">{NO_WORKSTREAMS}</p>}
-      <div className="mt-auto grid gap-1 border-t border-ws-sep px-1.5 py-2">
+      <div className="mt-auto flex flex-wrap items-center gap-x-1 border-t border-ws-sep px-1.5 py-1">
         <button
           type="button"
           // The palette, already asking for a workstream: the person types the ticket, and its 'Start a workstream on' starts it.
           onClick={() => usePrefs.getState().setPaletteOpen(true, START_WORKSTREAM)}
-          className="rounded px-2 py-1 text-left text-sm text-ws-ink2 hover:bg-ws-hover focus-visible:outline-2 focus-visible:outline-ws-pip"
+          className="rounded px-2 py-0.5 text-left text-sm text-ws-ink2 hover:bg-ws-hover focus-visible:outline-2 focus-visible:outline-ws-pip"
         >
           Start a workstream…
         </button>
@@ -151,12 +160,12 @@ export function WorkstreamList({ list, closed, showClosed, selected, onSelect, o
           type="button"
           aria-pressed={showClosed}
           onClick={() => onShowClosed(!showClosed)}
-          className="rounded px-2 py-1 text-left text-sm text-ws-ink2 hover:bg-ws-hover focus-visible:outline-2 focus-visible:outline-ws-pip"
+          className="rounded px-2 py-0.5 text-left text-sm text-ws-ink2 hover:bg-ws-hover focus-visible:outline-2 focus-visible:outline-ws-pip"
         >
           {showClosed ? "Hide closed" : "Show closed"}
         </button>
         {showClosed && (
-          <ul aria-label="Closed workstreams" className="m-0 grid max-h-[30vh] list-none gap-0.5 overflow-y-auto p-0">
+          <ul aria-label="Closed workstreams" className="m-0 grid max-h-[30vh] w-full list-none gap-0.5 overflow-y-auto p-0">
             {closed.map((v) => (
               <li key={v.workstream.id} data-closed-workstream={v.workstream.id} className="grid gap-0.5 px-2.5 py-1 text-sm text-ws-ink3">
                 <span className="flex min-w-0 gap-1.5">
@@ -169,7 +178,6 @@ export function WorkstreamList({ list, closed, showClosed, selected, onSelect, o
             {closed.length === 0 && <li className="px-2.5 py-1 text-sm text-ws-ink3">No closed workstreams.</li>}
           </ul>
         )}
-        {tray}
       </div>
     </nav>
   );
@@ -293,7 +301,7 @@ function useTurnEscape() {
         popoverOpen: popoverOpen(),
         lightbox: lightboxOpen(),
         // An open Needs you decision closes first: the next Esc stops Pip.
-        paneOpen: usePipHome.getState().deciding !== null,
+        paneOpen: usePipHome.getState().deciding !== null || usePipHome.getState().batch !== null,
         // A confirmation that takes Esc itself, or a field being edited other than Pip's own input.
         handled: ev.defaultPrevented || (field instanceof HTMLElement && !!field.closest("[data-esc-local]")) || (editable && field?.id !== PIP_INPUT_ID),
         running: (useClaude.getState().byTicket[conversation]?.turns ?? []).some((t) => t.status === "running"),
@@ -307,9 +315,10 @@ function useTurnEscape() {
   }, []);
 }
 
-/** The items j and k step through in the workstream list (its rows, then the Needs you list's rows) and in the step rail (its chips, and the cards under the open ones). */
+/** The items j and k step through in the left column (the Needs you list's rows, then the workstreams') and in the step rail (its chips, and the cards under the open ones). */
 const COLUMN_ITEMS: Record<Exclude<PipHomeColumn, "conversation">, string> = {
-  list: '[data-pip-home-column="list"] [role="option"], [data-pip-home-column="list"] [data-needs-you-group], [data-pip-home-column="list"] [data-needs-you-need]',
+  // An open group's own row is its top need's; that need's row under it is not a second stop (`data-needs-top`).
+  list: '[data-pip-home-column="list"] [role="option"], [data-pip-home-column="list"] [data-needs-you-group], [data-pip-home-column="list"] [data-needs-you-need]:not([data-needs-top])',
   rail: '[data-pip-home-column="rail"] [data-step-chip], [data-pip-home-column="rail"] article[data-run-id], [data-pip-home-column="rail"] article[data-draft]',
 };
 
@@ -338,6 +347,31 @@ function overlayOpen(): boolean {
   );
 }
 
+/** What puts each of F6's regions on screen. The decision pane exists only while one is open, the step rail only while a workstream gives it steps. */
+const REGION_ON: Record<PipHomeRegion, string> = {
+  needs: "[data-pip-home] [data-needs-you]",
+  workstreams: '[data-pip-home] nav[aria-label="Workstreams"]',
+  timeline: "[data-pip-home] [data-timeline]",
+  pane: "[data-pip-home] [data-needs-pane]",
+  rail: '[data-pip-home-column="rail"] [data-step-rail]',
+  composer: `#${PIP_INPUT_ID}`,
+};
+
+const regionsOnScreen = () => PIP_HOME_REGIONS.filter((r) => document.querySelector(REGION_ON[r]));
+
+/** The region of Pip home `el` is in; null for nothing there (focus on the page itself). The timeline's filter bar and the conversation's header are the timeline's. */
+function regionOf(el: Element | null): PipHomeRegion | null {
+  if (!el || !el.closest("[data-pip-home]")) return null;
+  if (el.closest("[data-needs-pane]")) return "pane";
+  if (el.closest("[data-needs-you]")) return "needs";
+  if (el.closest('nav[aria-label="Workstreams"]')) return "workstreams";
+  if (el.closest('[data-pip-home-column="rail"]')) return "rail";
+  if (el.id === PIP_INPUT_ID) return "composer";
+  if (el.closest("[data-timeline-scope-shown], [data-pip-home-column=\"conversation\"] > section > header")) return "timeline";
+  // Anything else in the conversation column is the composer's: its attachments, its commands.
+  return el.closest('[data-pip-home-column="conversation"]') ? "composer" : el.closest('[data-pip-home-column="list"]') ? "workstreams" : null;
+}
+
 /** The page's Tab stops in order: enabled, shown and not taken out of the order. */
 const tabStops = () =>
   Array.from(document.querySelectorAll<HTMLElement>(TABBABLE)).filter((el) => el.tabIndex >= 0 && !(el as HTMLButtonElement).disabled && !el.closest("[hidden], [inert]") && el.getClientRects().length > 0);
@@ -357,8 +391,8 @@ function backToRow(need: Need) {
 }
 
 /**
- * Pip home's keyboard, as `pipHomeKey` decides: F6 or Cmd/Ctrl+] and [ move between the columns, wrapping; in the list
- * and the rail j and k (or the arrows) step and Enter or Space opens or toggles. It listens after everything nearer the
+ * Pip home's keyboard, as `pipHomeKey` decides: F6 or Cmd/Ctrl+] and [ move between the regions (Needs you, the workstreams, the timeline, the open decision, the steps, the
+ * composer), wrapping; in the left column and the rail j and k (or the arrows) step and Enter or Space opens or toggles. It listens after everything nearer the
  * key, so a card, a confirmation or a sheet that took the key keeps it.
  */
 function usePipHomeKeys(needsYou: readonly Need[]) {
@@ -388,6 +422,31 @@ function usePipHomeKeys(needsYou: readonly Need[]) {
       // A column with nothing to step through takes focus itself.
       if (!show(current)) show(document.querySelector<HTMLElement>(`[data-pip-home-column="${column}"] > *`));
     };
+    /** F6's stops: where the keyboard lands in a region, which is the first row of Needs you, the selected workstream, the newest entry of the timeline, the pane's decision, the rail as `enter` has it, or the composer. */
+    const enterRegion = (region: PipHomeRegion) => {
+      if (region === "rail" || region === "composer") return enter(regionColumn(region));
+      usePipHome.getState().setColumn(regionColumn(region));
+      const home = document.querySelector("[data-pip-home]");
+      const all = (sel: string) => Array.from(home?.querySelectorAll<HTMLElement>(sel) ?? []);
+      switch (region) {
+        case "needs": {
+          const rows = all("[data-needs-you-group]");
+          return void show(rows.find((r) => r.getAttribute("aria-current") === "true") ?? rows[0] ?? home?.querySelector<HTMLElement>("[data-needs-you-title]"));
+        }
+        case "workstreams": {
+          const rows = all('[role="option"]');
+          return void show(rows.find((r) => r.getAttribute("aria-selected") === "true") ?? rows[0] ?? home?.querySelector<HTMLElement>('nav[aria-label="Workstreams"]'));
+        }
+        case "timeline": {
+          const last = all("[data-timeline] " + TIMELINE_ENTRY).pop();
+          return void show(last ? timelineStop(last) : home?.querySelector<HTMLElement>("[data-timeline]"));
+        }
+        case "pane": {
+          const pane = home?.querySelector<HTMLElement>("[data-needs-pane]");
+          return void show(pane && (firstDecision(pane) ?? pane));
+        }
+      }
+    };
     const onKey = (ev: globalThis.KeyboardEvent) => {
       if (ev.defaultPrevented) return;
       if (ev.key === "Tab") {
@@ -401,15 +460,17 @@ function usePipHomeKeys(needsYou: readonly Need[]) {
       }
       const column = usePipHome.getState().column;
       const list = items(column);
-      const at = list.indexOf(document.activeElement as HTMLElement);
-      const steps = document.querySelector('[data-pip-home-column="rail"] [data-step-rail]') !== null;
+      const active = document.activeElement as HTMLElement | null;
+      let at = list.indexOf(active as HTMLElement);
+      // A group's top need, opened under its row, is that row's stop.
+      if (at < 0 && active?.hasAttribute("data-needs-top")) at = list.findIndex((e) => e.hasAttribute("data-needs-you-group") && e.getAttribute("data-need-key") === active.getAttribute("data-need-key"));
       const home = usePipHome.getState();
       const el = list[at];
       const needKey = el?.getAttribute("data-need-key") ?? null;
       // Focus inside the open decision: its keys act on the need it shows, not on a row.
       const inPane = document.activeElement instanceof HTMLElement && document.activeElement.closest("[data-needs-pane]") !== null;
       const need = needKey ? needsRef.current.find((n) => n.key === needKey) : inPane && home.deciding ? needsRef.current.find((n) => n.key === home.deciding) : undefined;
-      const action = pipHomeKey(ev, { column, overlay: overlayOpen(), count: list.length, at, kind: itemKind(el), steps, asking: !!home.asking && home.asking.key === needKey, pane: home.deciding !== null, inPane });
+      const action = pipHomeKey(ev, { column, overlay: overlayOpen(), count: list.length, at, kind: itemKind(el), region: regionOf(active) ?? columnRegion(column), regions: regionsOnScreen(), asking: !!home.asking && home.asking.key === needKey, pane: home.deciding !== null || home.batch !== null, inPane });
       if (!action) return;
       ev.preventDefault();
       switch (action.type) {
@@ -433,6 +494,11 @@ function usePipHomeKeys(needsYou: readonly Need[]) {
           if (plan.type === "do") return setPaneIntent(null), plan.run();
           return openNeed(need, { edit: plan.edit });
         }
+        case "undo": {
+          // The toast offering it goes with it (`undoLog`'s settled hook).
+          const last = undoLog.latest();
+          return void (last && undoLog.run(last.id));
+        }
         case "confirm":
           return confirmArmed();
         case "cancel":
@@ -442,8 +508,8 @@ function usePipHomeKeys(needsYou: readonly Need[]) {
           home.closeDecision();
           return void (back && backToRow(back));
         }
-        case "column":
-          return enter(action.to);
+        case "region":
+          return enterRegion(action.to);
         case "focus":
           return void show(list[action.index]);
         case "toggle":
@@ -488,8 +554,9 @@ function usePipHomeKeys(needsYou: readonly Need[]) {
 }
 
 /**
- * Pip home: the workstreams, the conversation with Pip in the selected one (or General), and its steps. Below about
- * 1100px the steps drop under the conversation.
+ * Pip home: Needs you as the main left column with the workstreams in a compact section under it, the timeline and
+ * composer of the selected workstream (or General) beside them, with the decision pane opening above the timeline, and
+ * the steps. Below about 1100px the steps drop under the conversation.
  */
 export function PipHome() {
   const list = useWorkstreams((s) => s.list);
@@ -499,6 +566,9 @@ export function PipHome() {
   const workstream = useHomeWorkstream();
   const runs = useRuns((s) => s.runs);
   const needsYou = useNeedsYou();
+  const deciding = usePipHome((s) => s.deciding);
+  // What the decision pane shows is not shown again in the timeline or on the rail.
+  const decided = useMemo(() => decisionShown(needsYou.find((n) => n.key === deciding), list), [needsYou, deciding, list]);
   // The same clock as the Agents view's, so a run gone quiet leaves "running" here when it does there.
   const now = useNow();
   const openList = useMemo(() => list.filter((v) => v.workstream.closedAt === null), [list]);
@@ -530,33 +600,42 @@ export function PipHome() {
   };
   return (
     <div data-pip-home className="flex h-full min-h-0 flex-col">
+      <header className="flex shrink-0 items-baseline gap-3 border-b border-ws-sep bg-ws-bar px-4 py-2">
+        <h1 className="m-0 text-base font-semibold">Pip home</h1>
+        <span className="min-w-0 truncate text-sm text-ws-ink3">What needs you, your workstreams, and what Pip and its agents are doing</span>
+      </header>
       {!orientationSeen && <PipOrientation />}
-      <div className="grid min-h-0 flex-1 grid-cols-[minmax(180px,250px)_minmax(0,1fr)] grid-rows-[minmax(0,1fr)_auto] overflow-hidden min-[1100px]:grid-cols-[minmax(200px,260px)_minmax(0,1fr)_minmax(240px,320px)] min-[1100px]:grid-rows-[minmax(0,1fr)]">
+      <div className="grid min-h-0 flex-1 grid-cols-[minmax(260px,340px)_minmax(0,1fr)] grid-rows-[minmax(0,1fr)_auto] overflow-hidden min-[1100px]:grid-cols-[minmax(280px,340px)_minmax(0,1fr)_minmax(240px,320px)] min-[1100px]:grid-rows-[minmax(0,1fr)]">
         <div data-pip-home-column="list" onFocusCapture={enter("list")} className="contents">
-          <WorkstreamList
-            list={list}
-            closed={closed}
-            showClosed={showClosed}
-            selected={workstream ? selected : null}
-            onSelect={(id) => (id ? usePipHome.getState().openWorkstream(id) : usePipHome.getState().openGeneral())}
-            onShowClosed={(on) => {
-              usePipHome.getState().setShowClosed(on);
-              if (on) void useWorkstreams.getState().loadClosed();
-            }}
-            runs={runs}
-            needsYou={needsYou}
-            wither={withers}
-            tray={<NeedsYouList needs={needsYou} now={now} />}
-          />
+          {/* The left column: Needs you takes the height, the workstreams are a compact section under it. */}
+          <div data-pip-home-left className="flex min-h-0 flex-col border-r border-ws-sep bg-ws-bar">
+            <NeedsYouList main needs={needsYou} now={now} />
+            <WorkstreamList
+              list={list}
+              closed={closed}
+              showClosed={showClosed}
+              selected={workstream ? selected : null}
+              onSelect={(id) => (id ? usePipHome.getState().openWorkstream(id) : usePipHome.getState().openGeneral())}
+              onShowClosed={(on) => {
+                usePipHome.getState().setShowClosed(on);
+                if (on) void useWorkstreams.getState().loadClosed();
+              }}
+              runs={runs}
+              needsYou={needsYou}
+              wither={withers}
+            />
+          </div>
         </div>
         {/* Run drafts that need nothing chosen are read and started in place here, in the conversation and the rail alike. */}
         <InlineStartContext.Provider value={true}>
-          <div data-pip-home-column="conversation" onFocusCapture={enter("conversation")} className="contents">
-            <HomeConversation workstream={workstream} footer={footer} needs={needsYou} pane={<NeedsPane needs={needsYou} />} />
-          </div>
-          <div data-pip-home-column="rail" onFocusCapture={enter("rail")} className="contents">
-            <StepsColumn workstream={workstream} />
-          </div>
+          <DecisionShownContext.Provider value={decided}>
+            <div data-pip-home-column="conversation" onFocusCapture={enter("conversation")} className="contents">
+              <HomeConversation workstream={workstream} footer={footer} needs={needsYou} pane={<NeedsPane needs={needsYou} />} />
+            </div>
+            <div data-pip-home-column="rail" onFocusCapture={enter("rail")} className="contents">
+              <StepsColumn workstream={workstream} />
+            </div>
+          </DecisionShownContext.Provider>
         </InlineStartContext.Provider>
       </div>
       <footer data-pip-home-hints className="@container flex h-8 shrink-0 items-center border-t border-ws-sep bg-ws-bar px-4 text-xs text-ws-ink3">

@@ -30,10 +30,11 @@ afterEach(() => {
 describe("Pip home's orientation card", () => {
   it("explains Pip, a workstream, a run and a worktree, and says nothing is posted without a click", () => {
     const html = renderToStaticMarkup(<PipOrientation />);
-    expect(ORIENTATION_TERMS.map((t) => t.term)).toEqual(["Pip", "Workstream", "Run", "Worktree"]);
+    expect(ORIENTATION_TERMS.map((t) => t.term)).toEqual(["Pip", "Workstream", "Run", "Cobweb", "Worktree"]);
     expect(html).toContain("One ticket&#x27;s work from start to pull request");
     expect(html).toContain("One Claude Code agent session doing a step: investigate, plan, build or review");
     expect(html).toContain("own checkout of your repository");
+    expect(html).toContain("Work has happened but Jira has not heard for days. Post an update to clear it.");
     expect(html).toContain(ORIENTATION_SAFETY);
     expect(ORIENTATION_SAFETY).toBe("Nothing is posted to Jira or GitHub until you click to approve it.");
     expect(html).toMatch(/<button type="button"[^>]*>Got it<\/button>/);

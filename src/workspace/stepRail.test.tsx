@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MockBackend } from "../backend/mock";
 import type { CodeChange, Intent, ItemRef, Proposal, ReviewView, Run, RunKind, RunState, WorkstreamEvent, WorkstreamView } from "../types";
+import { DecisionShownContext } from "./decisionShown";
 import { freezeBatch } from "./pipHomeLogic";
 import { approveBatch, BATCH_CHANGED, BatchConfirm, confirmBatch, EarlierStepDrafts, planResultFor, StepDrafts, StepRailView, type StepRailViewProps } from "./StepRail";
 
@@ -127,6 +128,22 @@ describe("the Plan step while its description update waits (N6)", () => {
   });
 });
 
+describe("a draft open in Pip home's decision pane", () => {
+  it("is not a card on the rail as well: its step lists no draft, and a step with others still does", () => {
+    const rail = (proposals: Proposal[], open: string[]) =>
+      renderToStaticMarkup(
+        <DecisionShownContext.Provider value={{ need: null, drafts: new Set(open) }}>
+          <StepRailView {...props({ proposals })} />
+        </DecisionShownContext.Provider>,
+      );
+    const one = [draft("d-pip", comment, 5)];
+    expect(rail(one, [])).toContain('data-step-drafts="pip"');
+    // Its card is open in the pane: Pip's drafts have none of their own on the rail.
+    expect(rail(one, ["d-pip"])).not.toContain("data-step-drafts");
+    expect(rail([...one, draft("d-other", transition, 6)], ["d-pip"])).toContain('data-step-drafts="pip"');
+  });
+});
+
 describe("the step rail", () => {
   it("shows Pip's notes, the workstream's controls, then the six steps in order", () => {
     const html = renderToStaticMarkup(<StepRailView {...props()} />);
@@ -152,6 +169,24 @@ describe("the step rail", () => {
     // A running investigation says so.
     const running = renderToStaticMarkup(<StepRailView {...props({ runs: [run("r1", "investigate", "working", 5)], view: { ...view, runs: ["r1"], labels: [["r1", "R1"]] } })} />);
     expect(stepOf(running, "investigate")).toMatch(/data-run-label="R1"[\s\S]*Working/);
+  });
+
+  it("says Review posted, not Blocking, once the person posted the blocking review", () => {
+    const verdicts: Record<string, ReviewView | null> = { r5: { verdict: "blocking", blocking: 1 } as ReviewView };
+    const posted: WorkstreamEvent = { ...event("review_posted", null), actor: "person", at: iso(1) };
+    const html = renderToStaticMarkup(<StepRailView {...props({ verdicts, events: [posted] })} />);
+    expect(stepOf(html, "review")).toMatch(/data-step-verdict[^>]*>· Review posted</);
+    expect(stepOf(html, "review")).not.toContain("Blocking");
+  });
+
+  it("does not mark Plan as next while the ticket is stopped as unclear, and says it waits for the person's choice", () => {
+    const two = { runs: [RUNS[0], RUNS[1]], view: { ...view, runs: ["r1", "r2"], labels: [["r1", "R1"], ["r2", "R2"]] as [string, string][], stage: "triage" as const } };
+    const open = renderToStaticMarkup(<StepRailView {...props(two)} />);
+    expect(stepOf(open, "plan")).toContain('data-step-next="plan"');
+    expect(stepOf(open, "plan")).not.toContain("data-step-unclear-tag");
+    const stopped = renderToStaticMarkup(<StepRailView {...props({ ...two, view: { ...two.view, readiness: { triageRun: "r2", triageLabel: "R2", questions: ["What is in scope?"], at: iso(5) } } })} />);
+    expect(stepOf(stopped, "plan")).not.toContain("data-step-next");
+    expect(stepOf(stopped, "plan")).toContain("Waiting for your choice: ticket unclear");
   });
 
   it("marks the next step and keeps the later steps nothing has reached to one quiet line each", () => {
@@ -229,13 +264,13 @@ describe("the step rail", () => {
     expect(stepOf(open, "investigate")).not.toContain("data-draft");
   });
 
-  it("offers 'Approve these N' for two or more comments, moves or subtasks, and never counts a rewrite", () => {
+  it("offers 'Approve N safe drafts' for two or more comments, moves or subtasks, and never counts a rewrite", () => {
     const approve = vi.fn();
     const two = renderToStaticMarkup(<StepDrafts step="review" drafts={[fromRun("c1", comment, "r5"), fromRun("t1", transition, "r5"), fromRun("rw", rewrite, "r5")]} approve={approve} />);
-    expect(two).toContain(">Approve these 2</button>");
+    expect(two).toContain(">Approve 2 safe drafts</button>");
     expect(two).toContain('data-draft="rw"');
     const one = renderToStaticMarkup(<StepDrafts step="review" drafts={[fromRun("c1", comment, "r5"), fromRun("rw", rewrite, "r5"), fromRun("rw2", rewrite, "r5")]} approve={approve} />);
-    expect(one).not.toContain("Approve these");
+    expect(one).not.toContain("safe drafts");
     expect(approve).not.toHaveBeenCalled();
   });
 
@@ -243,7 +278,7 @@ describe("the step rail", () => {
     const html = renderToStaticMarkup(<StepDrafts step="review" drafts={[fromRun("c1", comment, "r5"), fromRun("c2", comment, "r5")]} approve={vi.fn()} initialConfirming />);
     expect(html).toMatch(/role="group" aria-label="Approve 2 drafts" data-esc-local/);
     expect(html).toContain(">Yes, approve 2</button>");
-    expect(html).not.toContain("Approve these");
+    expect(html).not.toContain("safe drafts");
 
     const onConfirm = vi.fn();
     const onCancel = vi.fn();

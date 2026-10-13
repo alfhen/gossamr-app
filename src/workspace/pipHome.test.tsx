@@ -88,6 +88,11 @@ describe("the workstream list on Pip home", () => {
     expect(quiet).toContain("cobweb");
     // The words are in the row for a screen reader, and the web is not.
     expect(quiet).toContain(`<span data-workstream-wither="true" class="sr-only">${text(5)}</span>`);
+    // The meaning is on the row itself too, not only on hover: a short line, hidden from a screen reader that has the sentence.
+    expect(quiet).toContain('<span data-workstream-wither-short="true" aria-hidden="true" class="truncate text-xs text-ws-ink3">No Jira update · 5d</span>');
+    // With a Jira draft already waiting, the tooltip says where it is.
+    const waiting = list({ wither: { [first.workstream.id]: { ...web(3, 5), draftWaiting: true } } });
+    expect(waiting).toContain(`title="${text(5)}. A draft is waiting in Needs you."`);
     // A first stage only dries the row out, as a ticket's does; the web comes with the second.
     const dry = row(second.workstream.id);
     expect(dry).toMatch(/\bws-wither ws-wither-1\b/);
@@ -235,18 +240,19 @@ describe("Pip home's keys with no workstream, and its footer", () => {
   const key = (k: string, over: Partial<PipHomeKeyEvent> = {}): PipHomeKeyEvent => ({ key: k, metaKey: false, ctrlKey: false, altKey: false, shiftKey: false, target: null, ...over });
   const at = (over: Partial<PipHomeKeyState> = {}): PipHomeKeyState => ({ column: "list", overlay: false, count: 4, at: 1, kind: "row", ...over });
 
-  it("passes the Steps column by while no workstream gives it steps, both ways and with ⌘] and ⌘[", () => {
-    const none = (column: PipHomeKeyState["column"]) => at({ column, steps: false });
-    expect(pipHomeKey(key("F6"), none("conversation"))).toEqual({ type: "column", to: "list" });
-    expect(pipHomeKey(key("F6"), none("list"))).toEqual({ type: "column", to: "conversation" });
-    expect(pipHomeKey(key("F6", { shiftKey: true }), none("list"))).toEqual({ type: "column", to: "conversation" });
-    expect(pipHomeKey(key("]", { metaKey: true }), none("conversation"))).toEqual({ type: "column", to: "list" });
-    expect(pipHomeKey(key("[", { ctrlKey: true }), none("list"))).toEqual({ type: "column", to: "conversation" });
-    // Left in the Steps column somehow, the keys still leave it.
-    expect(pipHomeKey(key("F6"), none("rail"))).toEqual({ type: "column", to: "list" });
-    expect(pipHomeKey(key("F6", { shiftKey: true }), none("rail"))).toEqual({ type: "column", to: "conversation" });
+  it("passes the Steps region by while no workstream gives it steps, both ways and with ⌘] and ⌘[", () => {
+    const regions = ["needs", "workstreams", "timeline", "composer"] as const;
+    const none = (region: PipHomeKeyState["region"]) => at({ region, regions });
+    expect(pipHomeKey(key("F6"), none("timeline"))).toEqual({ type: "region", to: "composer" });
+    expect(pipHomeKey(key("F6"), none("composer"))).toEqual({ type: "region", to: "needs" });
+    expect(pipHomeKey(key("F6", { shiftKey: true }), none("needs"))).toEqual({ type: "region", to: "composer" });
+    expect(pipHomeKey(key("]", { metaKey: true }), none("timeline"))).toEqual({ type: "region", to: "composer" });
+    expect(pipHomeKey(key("[", { ctrlKey: true }), none("composer"))).toEqual({ type: "region", to: "timeline" });
+    // Left in the Steps region somehow, the keys still leave it.
+    expect(pipHomeKey(key("F6"), none("rail"))).toEqual({ type: "region", to: "composer" });
+    expect(pipHomeKey(key("F6", { shiftKey: true }), none("rail"))).toEqual({ type: "region", to: "timeline" });
     // With steps, the rail is a stop again.
-    expect(pipHomeKey(key("F6"), at({ column: "conversation", steps: true }))).toEqual({ type: "column", to: "rail" });
+    expect(pipHomeKey(key("F6"), at({ region: "timeline", regions: [...regions, "rail"] }))).toEqual({ type: "region", to: "rail" });
   });
 
   it("takes Tab from the last stop on Pip home round to the first stop on the page, and leaves every other Tab to the browser", () => {
@@ -264,9 +270,9 @@ describe("Pip home's keys with no workstream, and its footer", () => {
   it("says a needs Enter to confirm and a skip can be undone, and lists the draft keys once (R6)", () => {
     const decide = pipHomeHints().find((h) => h.id === "decide")!;
     expect(decide.keys).toEqual(["a", "e", "d", "s"]);
-    expect(decide.text).toBe("on a draft: approve (then ↵), edit, skip; skips undo");
+    expect(decide.text).toBe("on a draft: approve (then ↵), edit, skip (Ctrl+Z undoes)");
     const html = renderToStaticMarkup(<ShortcutHint view="list" hints={pipHomeHints()} />);
-    expect(html).toContain("on a draft: approve (then ↵), edit, skip; skips undo");
+    expect(html).toContain("on a draft: approve (then ↵), edit, skip (Ctrl+Z undoes)");
     expect(html).not.toContain("a opens a run draft");
   });
 });

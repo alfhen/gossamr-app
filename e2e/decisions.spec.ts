@@ -4,6 +4,7 @@ import {
   askPermission,
   askPip,
   expandAllNeeds,
+  foldAllNeeds,
   expectToast,
   githubWrites,
   jiraWrites,
@@ -94,6 +95,34 @@ async function workingBuild(page: Page) {
 
 const audited = async (page: Page, action: string) => (await workstreamEvents(page)).filter((e) => e.action === action).map((e) => ({ actor: e.actor, runId: e.runId, detail: e.detail }));
 
+test("the first permission prompt on a Build explains Allow once in Terminal above the buttons: what it records, copies and leaves to you", async ({ page }) => {
+  // The first prompt the person ever sees: the config's profile has the explainer dismissed, so this one starts without.
+  await page.addInitScript(() => {
+    if (sessionStorage.getItem("explainer-unseeded")) return;
+    sessionStorage.setItem("explainer-unseeded", "1");
+    localStorage.setItem("gossamr-prefs", JSON.stringify({ ...JSON.parse(localStorage.getItem("gossamr-prefs") ?? "{}"), permissionExplainerSeen: false }));
+  });
+  await openApp(page, MANAGED);
+  await startWorkstream(page, "CA-401");
+  const build = await workingBuild(page);
+  await askPermission(page, build.id, `approve Bash: git push -u origin worktree-${build.name}`);
+  await openPipHome(page);
+  await expandAllNeeds(page);
+  await needOfKind(page, "permission").click();
+  const explainer = asking(page).locator("[data-permission-explainer]");
+  await expect(explainer).toContainText("Allow once in Terminal records your choice, opens this run in Terminal with the exact command copied, and you confirm there.");
+  await expect(explainer).toContainText("Deny tells the agent no, and it carries on without it.");
+  const [e, d] = [(await explainer.boundingBox())!, (await asking(page).locator("[data-permission-decisions]").boundingBox())!];
+  expect(e.y + e.height).toBeLessThanOrEqual(d.y + 1);
+  // It says it once: the line under the command that said the same is not repeated beside it.
+  await expect(asking(page)).not.toContainText("Claude Code takes a yes only in its own prompt.");
+  await explainer.getByRole("button", { name: "Got it" }).click();
+  await expect(explainer).toHaveCount(0);
+  await expect(asking(page)).toContainText("Claude Code takes a yes only in its own prompt.");
+  // Nothing was answered by reading it.
+  expect(await mockAttached(page)).toEqual([]);
+});
+
 test("Allow once on a Build opens it in Terminal for that exact command, and a push Gossamr forbids offers no Allow", async ({ page, context }) => {
   await context.grantPermissions(["clipboard-read", "clipboard-write"]);
   await openApp(page, MANAGED);
@@ -105,7 +134,7 @@ test("Allow once on a Build opens it in Terminal for that exact command, and a p
   await askPermission(page, build.id, `approve Bash: ${push}`);
 
   await openPipHome(page);
-  await expandAllNeeds(page);
+  await foldAllNeeds(page);
   const item = needOfKind(page, "permission");
   await expect(item).toContainText("R4 wants to run `git push -u origin");
   await item.click();
@@ -257,12 +286,15 @@ test("a review that still blocks after two fix rounds comes to the person with t
   expect(await lines(page, "fix_round_sent")).toHaveLength(2);
 
   await openPipHome(page);
-  await expandAllNeeds(page);
+  await foldAllNeeds(page);
   await expect(escalationItem(page)).toHaveCount(1);
   await expect(escalationItem(page)).toContainText("The review still blocks after 2 fix rounds.");
   await escalationItem(page).click();
   const card = escalationCard(page);
-  await expect(card).toContainText(/R\d+ still blocks after 2 fix rounds\. What next\?/);
+  // The pane's header says it (and what waiting does); the card doesn't say it a second time, and isn't on the rail as well.
+  await expect(needsPane(page)).toContainText("The review still blocks after 2 fix rounds.");
+  await expect(card).not.toContainText("What next?");
+  await expect(pipHome(page).locator("[data-escalation]")).toHaveCount(1);
   await expect(card.getByRole("button")).toHaveText(["Run another fix round", "I'll take it from here", "Post the review as is"]);
   await expect(card.getByRole("button", { name: "Run another fix round" })).toBeFocused();
 
@@ -270,6 +302,8 @@ test("a review that still blocks after two fix rounds comes to the person with t
   const [waiting] = await pendingReviewDrafts(page);
   const draft = needsPane(page).locator(`article[data-draft="${waiting.id}"]`);
   await expect(draft).toBeVisible();
+  // And one card of it on the whole screen: the timeline and the rail don't show it as well.
+  await expect(pipHome(page).locator(`article[data-draft="${waiting.id}"]`)).toHaveCount(1);
   await expect(needsYouTray(page).locator("[data-needs-you-need][data-kind=\"review\"], [data-needs-you-group][data-kind=\"review\"]")).toHaveCount(0);
   // Post the review as is: nothing goes to GitHub until the draft's own Post review.
   await card.getByRole("button", { name: "Post the review as is" }).click();

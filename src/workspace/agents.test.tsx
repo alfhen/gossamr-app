@@ -10,9 +10,17 @@ import { AgentsBanners } from "./AgentsBanners";
 import { AgentsIntro } from "./AgentsEmpty";
 import { AgentsScreen, StopAll, keyAction, type AgentsActions, type AgentsScreenProps } from "./AgentsView";
 import { NO_FILTERS } from "./agentsLogic";
+import { LAUNCHER_GUTTER } from "./PipExtras";
 import { DENY_QUESTION, DenyConfirm, StopRunConfirm, stopRunQuestion } from "./PermissionAsk";
 import { Rail, railBadgeText } from "./Rail";
+import { usePrefs } from "./prefs";
 import { useRuns } from "./runsStore";
+
+/** Server rendering reads a store's initial state, so the flag is set on both. */
+const explainerSeen = (seen: boolean) => {
+  usePrefs.setState({ permissionExplainerSeen: seen });
+  Object.assign(usePrefs.getInitialState(), { permissionExplainerSeen: seen });
+};
 
 const NOW = Date.parse("2026-09-30T12:00:00Z");
 const iso = (minutesAgo: number) => new Date(NOW - minutesAgo * 60_000).toISOString();
@@ -75,6 +83,8 @@ const card = (r: Run, opened = false) =>
 
 beforeEach(() => {
   vi.stubGlobal("localStorage", { getItem: () => null, setItem: () => {}, removeItem: () => {} });
+  // The permission prompt's one-time explainer is dismissed here, so the cards read as the prompt itself.
+  explainerSeen(true);
 });
 
 const failures = () => new MockBackend({ runs: { seed: "failures" } }).runs.list();
@@ -211,6 +221,19 @@ describe("grouped by workstream", () => {
   });
 });
 
+describe("the Agents screen as the operations view", () => {
+  it("has no timeline filter of its own: what is running, the capacity and Stop all, with a way to the Runs timeline", () => {
+    const html = screen({ on: { ...on(), showTimeline: vi.fn() } });
+    expect(html).not.toContain("data-agents-scope");
+    expect(html).not.toContain("Timeline filter");
+    expect(html).not.toContain("Timeline scope");
+    expect(html).toMatch(/<button[^>]*data-agents-timeline[^>]*>(?:<[^>]+>)*Runs timeline/);
+    expect(html).toContain("Stop all");
+    // Without the way there (a screen that can't show Pip home), no button.
+    expect(screen()).not.toContain("data-agents-timeline");
+  });
+});
+
 describe("cards", () => {
   it("shows the exact command a permission prompt waits on, with Allow once only on a Build, Deny, and Stop said to abandon the run", () => {
     const asking = run("needsPermission", { needs: "approve Bash: git push -u origin worktree-ca-401-fix", shortId: "1000a000", readOnly: null });
@@ -235,7 +258,7 @@ describe("cards", () => {
     const html = renderToStaticMarkup(<DenyConfirm onDeny={vi.fn()} onKeep={vi.fn()} />);
     expect(html).toContain('role="group" aria-label="Deny this request"');
     expect(html).toContain(DENY_QUESTION);
-    expect(DENY_QUESTION).toBe("Tell Claude no? It carries on without it.");
+    expect(DENY_QUESTION).toBe("Deny this?");
     expect(buttonsOf(html)).toEqual(["Yes, deny", "Keep waiting"]);
   });
 
@@ -637,5 +660,19 @@ describe("publishing the shown order", () => {
   it("publishes it in a layout effect, which the native j and k listener cannot outrun", () => {
     expect(source).toMatch(/useLayoutEffect\(\(\) => onOrder\?\.\(order\)/);
     expect(source).not.toMatch(/useEffect\(\(\) => onOrder\?\.\(order\)/);
+  });
+});
+
+describe("clearance for the floating Pip launcher", () => {
+  it("keeps the Agents list's cards and its lanes' links out of the launcher's column and above its row", () => {
+    const html = screen();
+    expect(html).toContain("pr-[max(24px,var(--ws-launcher-gutter,0px))]");
+    expect(html).toContain("pb-[max(80px,var(--ws-launcher-clear,0px))]");
+  });
+
+  it("publishes the gutter beside the bottom clearance, at least the launcher's width and margin, only while the launcher shows", () => {
+    expect(LAUNCHER_GUTTER).toBeGreaterThanOrEqual(74 + 20);
+    const source = readFileSync(new URL("./Workspace.tsx", import.meta.url), "utf8");
+    expect(source).toContain("`${launcherShown ? LAUNCHER_GUTTER : 0}px`");
   });
 });

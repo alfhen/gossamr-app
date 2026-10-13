@@ -6,6 +6,19 @@ export const PIP_HOME_COLUMNS = ["list", "conversation", "rail"] as const;
 export type PipHomeColumn = (typeof PIP_HOME_COLUMNS)[number];
 
 /**
+ * The regions F6 steps through on Pip home, in the order they sit on screen: Needs you and the workstreams (the left
+ * column), the timeline, the decision pane (only while one is open), the step rail and the composer.
+ */
+export const PIP_HOME_REGIONS = ["needs", "workstreams", "timeline", "pane", "rail", "composer"] as const;
+export type PipHomeRegion = (typeof PIP_HOME_REGIONS)[number];
+
+/** The region of `column` the keyboard is taken to be in while focus is on none of them. */
+export const columnRegion = (column: PipHomeColumn): PipHomeRegion => (column === "list" ? "needs" : column === "rail" ? "rail" : "composer");
+
+/** The column j and k belong to while the keyboard is in `region`. */
+export const regionColumn = (region: PipHomeRegion): PipHomeColumn => (region === "needs" || region === "workstreams" ? "list" : region === "rail" ? "rail" : "conversation");
+
+/**
  * A card on Pip home something asked to bring into view: a draft, a run, or the selected workstream's held banner. A run
  * `where: "rail"` is its card on the step rail, whose step opens for it; otherwise the first card of it on Pip home.
  */
@@ -34,26 +47,28 @@ interface PipHomeState {
   paneRev: number;
   /** The workstreams (by id, "general" for General) whose row in the Needs you list is expanded to every need it holds. */
   expanded: ReadonlySet<string>;
+  /** The groups the person folded on Pip home's own list, which opens a group by default while its needs fit. */
+  collapsed: ReadonlySet<string>;
   /** The key press in the Needs you list that waits for Enter. */
   asking: NeedAsking | null;
   /**
-   * The group (its row id, "general" for General) whose "Approve N safe drafts" preview the palette asked to open: the list
-   * opens the group, shows the combined preview and clears this. It confirms nothing.
+   * The group (its row id, "general" for General) whose "Approve N safe drafts" preview is open in the middle column, in
+   * place of a need's decision. It confirms nothing; the person does.
    */
-  batchPreview: string | null;
+  batch: string | null;
   /** What the workstream's timeline shows: everything, its runs, its drafts or its decisions. Agents is Runs across every workstream. */
   timelineFilter: TimelineFilter;
   setTimelineFilter(filter: TimelineFilter): void;
   /** Whose timeline that is: the selected workstream's, or every open workstream's and General's merged. */
   timelineScope: TimelineScope;
   setTimelineScope(scope: TimelineScope): void;
-  /** Asks the list to open group `gid`'s combined preview of its safe drafts, for the person to confirm. */
+  /** Opens group `gid`'s combined preview of its safe drafts in the middle column, for the person to confirm. */
   previewBatch(gid: string): void;
   /** Opens need `key`'s decision in the middle column, for workstream `workstreamId` (null is General). */
   decide(key: string, workstreamId: string | null): void;
   /** Remounts the open decision. */
   redecide(): void;
-  /** Closes the decision. */
+  /** Closes the decision, or the batch preview. */
   closeDecision(): void;
   setExpanded(id: string, on: boolean): void;
   ask(asking: NeedAsking | null): void;
@@ -66,7 +81,7 @@ interface PipHomeState {
   reset(): void;
 }
 
-const BLANK = { selected: null, showClosed: false, column: "conversation", focusTarget: null, deciding: null, paneRev: 0, expanded: new Set<string>(), asking: null, batchPreview: null, timelineFilter: "all", timelineScope: "workstream" } as const;
+const BLANK = { selected: null, showClosed: false, column: "conversation", focusTarget: null, deciding: null, paneRev: 0, expanded: new Set<string>(), collapsed: new Set<string>(), asking: null, batch: null, timelineFilter: "all", timelineScope: "workstream" } as const;
 
 export const usePipHome = create<PipHomeState>((set) => ({
   ...BLANK,
@@ -75,12 +90,17 @@ export const usePipHome = create<PipHomeState>((set) => ({
   setShowClosed: (showClosed) => set({ showClosed }),
   setColumn: (column) => set({ column }),
   focus: (focusTarget) => set({ focusTarget }),
-  decide: (key, workstreamId) => set({ deciding: key, selected: workstreamId, asking: null, focusTarget: null }),
+  decide: (key, workstreamId) => set({ deciding: key, batch: null, selected: workstreamId, asking: null, focusTarget: null }),
   redecide: () => set((s) => ({ paneRev: s.paneRev + 1 })),
-  closeDecision: () => set({ deciding: null, asking: null }),
-  setExpanded: (id, on) => set((s) => (s.expanded.has(id) === on ? s : { expanded: new Set(on ? [...s.expanded, id] : [...s.expanded].filter((x) => x !== id)) })),
+  closeDecision: () => set({ deciding: null, batch: null, asking: null }),
+  setExpanded: (id, on) =>
+    set((s) =>
+      s.expanded.has(id) === on && s.collapsed.has(id) !== on
+        ? s
+        : { expanded: new Set(on ? [...s.expanded, id] : [...s.expanded].filter((x) => x !== id)), collapsed: new Set(on ? [...s.collapsed].filter((x) => x !== id) : [...s.collapsed, id]) },
+    ),
   ask: (asking) => set({ asking }),
-  previewBatch: (gid) => set((s) => ({ batchPreview: gid, expanded: new Set([...s.expanded, gid]) })),
+  previewBatch: (gid) => set((s) => ({ batch: gid, deciding: null, asking: null, expanded: new Set([...s.expanded, gid]), collapsed: new Set([...s.collapsed].filter((x) => x !== gid)) })),
   setTimelineFilter: (timelineFilter) => set({ timelineFilter }),
   setTimelineScope: (timelineScope) => set({ timelineScope }),
   reset: () => set({ ...BLANK }),
@@ -93,4 +113,18 @@ export const usePipHome = create<PipHomeState>((set) => ({
 export function keepSelectionOpen(openIds: readonly string[]) {
   const { selected, openGeneral } = usePipHome.getState();
   if (selected !== null && !openIds.includes(selected)) openGeneral();
+}
+
+/**
+ * What the pane does on opening for the key that opened it: press its Edit, where it has one ("edit"), or keep focus on
+ * the card itself rather than its main button ("card"), for a draft the person has not asked to act on yet.
+ */
+export type PaneIntent = "edit" | "card";
+let paneIntent: PaneIntent | null = null;
+export const setPaneIntent = (intent: PaneIntent | null) => void (paneIntent = intent);
+export function takePaneIntent(): PaneIntent | null {
+  const was = paneIntent;
+  // Let go once the current task is over, not at once: a mount effect that runs twice in a row (React's development check) reads it twice.
+  if (was) queueMicrotask(() => void (paneIntent === was && (paneIntent = null)));
+  return was;
 }
