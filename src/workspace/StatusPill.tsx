@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useId, useMemo } from "react";
 import { STATUS_HINT, workstreamStatus, type StatusTone, type WorkstreamStatus } from "../lib/workstreamStatus";
 import type { WorkstreamView } from "../types";
 import { useRuns } from "./runsStore";
@@ -16,13 +16,25 @@ const TONE: Record<StatusTone, string> = {
   done: "bg-ws-done-soft text-ws-done",
 };
 
-/** A workstream's one status word as a small pill (`data-status`, its state in `data-status-state`); its one short detail, if any, follows it. */
-export function StatusPill({ status, title, detail = false }: { status: WorkstreamStatus; title?: string; detail?: boolean }) {
+/**
+ * A workstream's one status word as a small pill (`data-status`, its state in `data-status-state`); its one short detail, if any, follows it.
+ * The hint is the mouse's `title` and, for everyone else, a visually hidden line beside the pill that the pill is described by: it is
+ * not a tab stop (the rows are walked with F6, j and k), so the row's own text carries it, as the cobweb's does. `describe` is false
+ * where the caller says the hint itself.
+ */
+export function StatusPill({ status, title, detail = false, describe = true }: { status: WorkstreamStatus; title?: string; detail?: boolean; describe?: boolean }) {
+  const hintId = useId();
+  const hint = title ?? STATUS_HINT[status.state];
   return (
     <>
-      <span data-status={status.state} title={title ?? STATUS_HINT[status.state]} className={`shrink-0 rounded-full px-1.5 text-[10px] leading-4 font-semibold whitespace-nowrap ${TONE[status.tone]}`}>
+      <span data-status={status.state} title={hint} aria-describedby={describe ? hintId : undefined} className={`shrink-0 rounded-full px-1.5 text-[10px] leading-4 font-semibold whitespace-nowrap ${TONE[status.tone]}`}>
         {status.word}
       </span>
+      {describe && (
+        <span id={hintId} data-status-hint className="sr-only">
+          {hint}
+        </span>
+      )}
       {detail && status.detail && (
         <span data-status-detail className="min-w-0 truncate text-xs text-ws-ink3">
           · {status.detail}
@@ -46,7 +58,10 @@ export function HeaderStatus({ view }: { view: WorkstreamView }) {
   const status = useWorkstreamStatus(view);
   return (
     <span data-header-status className="flex shrink-0 items-baseline gap-1" title={STATUS_HINT[status.state]}>
-      <StatusPill status={status} detail />
+      <StatusPill status={status} detail describe={false} />
+      <span data-status-hint className="sr-only">
+        {STATUS_HINT[status.state]}
+      </span>
     </span>
   );
 }

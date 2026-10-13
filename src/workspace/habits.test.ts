@@ -254,6 +254,26 @@ describe("what Looks fine teaches the clarity notice", () => {
     expect(events(id).find((e) => e.action === "clarity_reset")).toMatchObject({ detail: "CA" });
   });
 
+  it("says the soonest count when the gaps stand apart, and not that all of them stop", async () => {
+    usePrefs.setState({ clarityLearning: { CA: { short: 1 } } });
+    backend.editTicket("CA-402", { description: THIN });
+    await useWorkstreams.getState().looksFine(await open("CA-402"));
+    expect(texts()).toEqual(["Noted. After 1 more Looks fine on CA tickets like this, Gossamr stops flagging the first of them (Settings > Unclear tickets)."]);
+  });
+
+  it("clears the 'will stop flagging' notes only of the projects it reset, not one whose audit failed", async () => {
+    usePrefs.setState({ clarityLearning: { CA: { who: 3 }, WEB: { done: 4 } } });
+    await open("CA-402");
+    const say = useToasts.getState().push;
+    say("Gossamr will stop flagging CA tickets that don't say who asked for it. Give that back.", "info");
+    say("Gossamr will stop flagging WEB tickets that don't say what done looks like. Give that back.", "info");
+    vi.spyOn(backend, "workstreamsClarityNote").mockRejectedValue(new Error("down"));
+    expect(await giveBackClarity()).toBe(1);
+    expect(usePrefs.getState().clarityLearning).toEqual({ CA: { who: 3 } });
+    expect(texts().some((t) => t.startsWith("Gossamr will stop flagging CA "))).toBe(true);
+    expect(texts().some((t) => t.startsWith("Gossamr will stop flagging WEB "))).toBe(false);
+  });
+
   it("dismisses the notice but doesn't count it toward learning when the clarity_learned write fails", async () => {
     const [a, b, c] = await (async () => {
       const ids: string[] = [];

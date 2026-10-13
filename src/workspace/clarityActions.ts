@@ -45,7 +45,8 @@ export async function giveBackClarity(project?: string): Promise<number> {
   if (backend && reset.length) await ws.refresh().catch(() => {});
   const toasts = useToasts.getState();
   // What it said it learned is no longer so: a note still waiting to say it would contradict the one below.
-  for (const t of toasts.toasts.filter((x) => x.text.startsWith(`Gossamr will stop flagging ${project ? `${project} ` : ""}`))) toasts.dismiss(t.id);
+  // Only for the projects that were reset: one whose audit write failed still stands as learned.
+  for (const t of toasts.toasts.filter((x) => reset.some((p) => x.text.startsWith(`Gossamr will stop flagging ${p} `)))) toasts.dismiss(t.id);
   if (failed.length) toasts.push(`Couldn't note the reset in the audit, so ${failed.join(", ")} wasn't reset. Try again.`, "error");
   if (reset.length) toasts.push(project ? `Gossamr will flag unclear ${project} tickets as before.` : "Gossamr will flag unclear tickets as before in every project.", "info");
   return reset.length;
