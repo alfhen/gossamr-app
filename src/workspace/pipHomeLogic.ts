@@ -262,3 +262,15 @@ export function workstreamSuggestionScene(view: WorkstreamView, runs: readonly R
     cobweb,
   };
 }
+
+/**
+ * Where Pip home lands on its first load with nothing selected: the workstream of the top need in Needs you (`{ id }`;
+ * General's own, `{ id: null }`, when the top need is not in a workstream). Null while there is nothing to land on yet: no
+ * need, or its workstream is not among the `openIds` read so far.
+ */
+export function landingSelection(needsYou: readonly { workstreamId: string | null }[], openIds: readonly string[]): { id: string | null } | null {
+  const top = needsYou[0];
+  if (!top) return null;
+  if (top.workstreamId === null) return { id: null };
+  return openIds.includes(top.workstreamId) ? { id: top.workstreamId } : null;
+}

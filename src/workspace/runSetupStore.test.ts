@@ -507,6 +507,16 @@ describe("the shared review-and-approve core", () => {
     expect(useTabs.getState().route).toBe("agents");
   });
 
+  it("takes a stale 'Cancelled: … Nothing was started.' note away once the run starts after all", () => {
+    usePrefs.setState({ agentsIntroSeen: false });
+    useRuns.getState().ensureAgentsIntro(vi.fn(), "Investigate CA-402");
+    useRuns.getState().closeSheet();
+    expect(useToasts.getState().toasts.map((t) => t.text)).toEqual(["Cancelled: Investigate CA-402. Nothing was started."]);
+    const started = { ...new MockBackend().runs.list()[0], id: "s", state: "working" as const };
+    afterRunStarted(started, CA, { switchToAgents: false });
+    expect(useToasts.getState().toasts.map((t) => t.text)).toEqual(["Agent started on CA-401. It runs in the background."]);
+  });
+
   it("says an approval over the cap waits for a slot rather than that it started", () => {
     const waiting = { ...new MockBackend().runs.list()[0], id: "w", state: "queued" as const, slotWaitSince: "2026-09-30T11:00:00Z" };
     afterRunStarted(waiting, CA, { switchToAgents: false });

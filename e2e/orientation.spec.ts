@@ -54,6 +54,11 @@ test.describe("first-run orientation", () => {
     await expect(pipHome(page).getByRole("navigation", { name: "Workstreams" })).toBeVisible();
     const orientation = card(page);
     await expect(orientation).toBeVisible();
+    // One line, with the words behind More.
+    expect((await orientation.boundingBox())!.height).toBeLessThan(70);
+    await expect(orientation).not.toContainText("Worktree");
+    await orientation.getByRole("button", { name: "More" }).click();
+    await expect(orientation.getByRole("button", { name: "More" })).toHaveAttribute("aria-expanded", "true");
     await expect(orientation).toContainText("One ticket's work from start to pull request");
     await expect(orientation).toContainText("One Claude Code agent session doing a step: investigate, plan, build or review");
     await expect(orientation).toContainText("The run's own checkout of your repository");

@@ -44,6 +44,7 @@ import { useWorkstreams } from "./workstreamsStore";
 import { stableGroups } from "./stableOrder";
 import { useNow } from "./useNow";
 import { agentKey } from "./agentKeys";
+import { PIP_HOME_HINT } from "./commands";
 import { arm, confirmArmed, disarm, keyPlan, openNeed } from "./needsActions";
 import { usePipHome } from "./pipHomeStore";
 import { currentNeeds, useNeedsYou } from "./useNeeds";
@@ -427,7 +428,7 @@ export function AgentsScreen({ runs, status, error, environment, filters, select
           <kbd className={KBD}>j</kbd> <kbd className={KBD}>k</kbd> move · <kbd className={KBD}>↵</kbd> open · <kbd className={KBD}>n</kbd> start an agent · <kbd className={KBD}>Esc</kbd> clear
           <span className="hidden @xl:inline">
             {" "}
-            · <kbd className={KBD}>⌘K</kbd> jump · <kbd className={KBD}>⌘J</kbd> Pip
+            · <kbd className={KBD}>F6</kbd> regions · <kbd className={KBD}>⌘K</kbd> jump · <kbd className={KBD}>⌘J</kbd> Pip · <kbd className={KBD}>{PIP_HOME_HINT}</kbd> Pip home
           </span>
         </p>
         <span className="hidden shrink-0 @3xl:inline">Agents use your own Claude settings and account</span>

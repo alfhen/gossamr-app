@@ -41,7 +41,7 @@ export function ReadOnlyExtras({ readOnly }: { readOnly?: ReadOnly | null }) {
   return (
     <div data-read-only-extras className="grid gap-1.5">
       <p className="m-0 text-ws-ink2">
-        This step is read-only. Claude Code is started with <code className="font-mono">--permission-mode {readOnly.mode}</code>, so it refuses anything not allowed instead of asking you
+        This step is read-only. Claude Code is started with <code className="font-mono">--permission-mode {readOnly.mode}</code>, so it runs without asking you and refuses anything not allowed
         {readOnly.settingSources === "" && (
           <>
             , with <code className="font-mono">--setting-sources &apos;&apos;</code>, so none of your or the repository&apos;s Claude settings files apply

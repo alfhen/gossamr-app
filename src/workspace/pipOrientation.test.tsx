@@ -29,7 +29,7 @@ afterEach(() => {
 
 describe("Pip home's orientation card", () => {
   it("explains Pip, a workstream, a run and a worktree, and says nothing is posted without a click", () => {
-    const html = renderToStaticMarkup(<PipOrientation />);
+    const html = renderToStaticMarkup(<PipOrientation open />);
     expect(ORIENTATION_TERMS.map((t) => t.term)).toEqual(["Pip", "Workstream", "Run", "Cobweb", "Worktree"]);
     expect(html).toContain("One ticket&#x27;s work from start to pull request");
     expect(html).toContain("One Claude Code agent session doing a step: investigate, plan, build or review");
@@ -38,6 +38,15 @@ describe("Pip home's orientation card", () => {
     expect(html).toContain(ORIENTATION_SAFETY);
     expect(ORIENTATION_SAFETY).toBe("Nothing is posted to Jira or GitHub until you click to approve it.");
     expect(html).toMatch(/<button type="button"[^>]*>Got it<\/button>/);
+  });
+
+  it("is one line with a More button, and keeps the words behind it until it is opened", () => {
+    const html = renderToStaticMarkup(<PipOrientation />);
+    expect(html).toContain(ORIENTATION_SAFETY);
+    expect(html).toMatch(/<button type="button"[^>]*aria-expanded="false"[^>]*>More<\/button>/);
+    expect(html).toMatch(/<button type="button"[^>]*>Got it<\/button>/);
+    expect(html).not.toContain("<dl");
+    expect(html).not.toContain("Worktree");
   });
 
   it("takes no focus on load: nothing in it asks for it", () => {

@@ -41,6 +41,10 @@ interface PipHomeState {
   column: PipHomeColumn;
   /** The card to bring into view and focus once it renders; cleared by whoever focused it. */
   focusTarget: PipHomeFocus | null;
+  /** Whether Pip home has landed: chosen what to show on first load, or been told by the person. It lands once, on the workstream of the top need. */
+  landed: boolean;
+  /** Marks Pip home landed, so a later need never moves the selection. */
+  land(): void;
   /** The need whose decision is open in the middle column, by its key; null while none is. */
   deciding: string | null;
   /** Bumped to remount the open decision, so a pane intent set for the need already open is read. */
@@ -81,16 +85,17 @@ interface PipHomeState {
   reset(): void;
 }
 
-const BLANK = { selected: null, showClosed: false, column: "conversation", focusTarget: null, deciding: null, paneRev: 0, expanded: new Set<string>(), collapsed: new Set<string>(), asking: null, batch: null, timelineFilter: "all", timelineScope: "workstream" } as const;
+const BLANK = { selected: null, landed: false, showClosed: false, column: "conversation", focusTarget: null, deciding: null, paneRev: 0, expanded: new Set<string>(), collapsed: new Set<string>(), asking: null, batch: null, timelineFilter: "all", timelineScope: "workstream" } as const;
 
 export const usePipHome = create<PipHomeState>((set) => ({
   ...BLANK,
-  openWorkstream: (selected) => set((s) => (s.selected === selected ? s : { selected, focusTarget: null })),
-  openGeneral: () => set((s) => (s.selected === null ? s : { selected: null, focusTarget: null })),
+  land: () => set((s) => (s.landed ? s : { landed: true })),
+  openWorkstream: (selected) => set((s) => (s.selected === selected && s.landed ? s : { selected, landed: true, focusTarget: null })),
+  openGeneral: () => set((s) => (s.selected === null && s.landed ? s : { selected: null, landed: true, focusTarget: null })),
   setShowClosed: (showClosed) => set({ showClosed }),
   setColumn: (column) => set({ column }),
   focus: (focusTarget) => set({ focusTarget }),
-  decide: (key, workstreamId) => set({ deciding: key, batch: null, selected: workstreamId, asking: null, focusTarget: null }),
+  decide: (key, workstreamId) => set({ landed: true, deciding: key, batch: null, selected: workstreamId, asking: null, focusTarget: null }),
   redecide: () => set((s) => ({ paneRev: s.paneRev + 1 })),
   closeDecision: () => set({ deciding: null, batch: null, asking: null }),
   setExpanded: (id, on) =>

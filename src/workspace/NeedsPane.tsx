@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { docText } from "../lib/docs";
-import { needAfter, needGroups, type Need } from "../lib/needs";
+import { higherPriority, needAfter, needGroups, type Need } from "../lib/needs";
 import { ALLOW_MORE_STEPS, type Proposal, type Run, type WorkstreamView } from "../types";
 import { stepsOf } from "../lib/workstreamHold";
 import { useWorkspace } from "../workspaceStore";
@@ -15,7 +15,7 @@ import { failureAction } from "./failureActions";
 import { failureHelp } from "./failureHelp";
 import { inlineStartable, InlineStart, useInlineStarts } from "./InlineStart";
 import { GroupChip } from "./NeedsYou";
-import { groupId, openInWorkstream, takePaneIntent } from "./needsActions";
+import { groupId, openInWorkstream, openNeed, setPaneIntent, takePaneIntent } from "./needsActions";
 import { openInWorkstreamLabel } from "../lib/needs";
 import { PermissionAsk, StopRunConfirm } from "./PermissionAsk";
 import { usePipHome } from "./pipHomeStore";
@@ -42,8 +42,9 @@ function rowFor(need: Need): HTMLElement | null {
  * the one dealt with; from a row of the list it lands on the next row. With none left it lands on the list's title,
  * where "Nothing needs you." is said.
  */
-function useAdvance(needs: readonly Need[]) {
+function useAdvance(needs: readonly Need[], onAdvance: (done: Need, next: Need) => void) {
   const previous = useRef<string[]>([]);
+  const earlier = useRef<readonly Need[]>([]);
   const focused = useRef<string | null>(null);
   useEffect(() => {
     const onFocus = (ev: FocusEvent) => {
@@ -57,14 +58,21 @@ function useAdvance(needs: readonly Need[]) {
   useEffect(() => {
     const keys = needs.map((n) => n.key);
     const before = previous.current;
+    const was = earlier.current;
     previous.current = keys;
+    earlier.current = needs;
     const home = usePipHome.getState();
     const deciding = home.deciding;
     const lands = (next: Need | null) => requestAnimationFrame(() => (next ? rowFor(next) : document.querySelector<HTMLElement>('[data-pip-home-column="list"] [data-needs-you-title]'))?.focus());
     if (deciding && before.includes(deciding) && !keys.includes(deciding)) {
       const next = needAfter(before, deciding, needs);
-      if (next) home.decide(next.key, next.workstreamId);
-      else {
+      if (next) {
+        // The line says what was done and what is now open; the new pane's card takes the keyboard, so no key lands on a button by accident.
+        const done = was.find((n) => n.key === deciding);
+        if (done) onAdvance(done, next);
+        setPaneIntent("card");
+        home.decide(next.key, next.workstreamId);
+      } else {
         home.closeDecision();
         lands(null);
       }
@@ -79,6 +87,35 @@ function useAdvance(needs: readonly Need[]) {
       lands(needAfter(before, watched, needs));
     }
   }, [needs]);
+}
+
+/** The line over the pane once it moved on by itself: what was dealt with, and what is open now. */
+export const advancedText = (done: Pick<Need, "title">, next: Pick<Need, "title">) => `Done: ${done.title}. Now: ${next.title}`;
+
+/** How long the line saying the pane moved on stays. */
+export const ADVANCED_MS = 5000;
+
+/** The needs' keys as they were when `deciding` was opened, so a need that came in since can be told from one that was already there. */
+function useSeenAtOpen(needs: readonly Need[], deciding: string | null): ReadonlySet<string> {
+  const seen = useRef<{ key: string | null; keys: ReadonlySet<string> }>({ key: null, keys: new Set() });
+  if (seen.current.key !== deciding) seen.current = { key: deciding, keys: new Set(needs.map((n) => n.key)) };
+  return seen.current.keys;
+}
+
+/** The slim bar over the pane: a higher-ranked Decide or Unblock came in while another is open. It opens that need when pressed (Enter too); nothing switches by itself. */
+function HigherPriorityBar({ need }: { need: Need }) {
+  return (
+    <button
+      type="button"
+      data-needs-higher={need.key}
+      onClick={() => openNeed(need)}
+      className="flex w-full min-w-0 shrink-0 items-center gap-1.5 border-b border-ws-sep bg-ws-pip-soft px-3 py-1 text-left text-sm text-ws-ink focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-ws-pip"
+    >
+      <b className="shrink-0 font-semibold">Higher priority:</b>
+      <span className="min-w-0 truncate">{need.title}</span>
+      <span className="shrink-0 font-semibold text-ws-accent">· Open</span>
+    </button>
+  );
 }
 
 /** The first thing the person decides with in the pane: a permission's buttons, an answer box, a draft's main button, else the first button. */
@@ -680,9 +717,28 @@ function BatchDecision({ gid, needs }: { gid: string; needs: readonly Need[] }) 
 export function NeedsPane({ needs }: { needs: readonly Need[] }) {
   const deciding = usePipHome((s) => s.deciding);
   const paneRev = usePipHome((s) => s.paneRev);
-  useAdvance(needs);
+  const [advanced, setAdvanced] = useState<string | null>(null);
+  useAdvance(needs, (done, next) => setAdvanced(advancedText(done, next)));
+  useEffect(() => {
+    if (!advanced) return;
+    const timer = setTimeout(() => setAdvanced(null), ADVANCED_MS);
+    return () => clearTimeout(timer);
+  }, [advanced]);
   const batch = usePipHome((s) => s.batch);
   const need = needs.find((n) => n.key === deciding);
+  const seen = useSeenAtOpen(needs, deciding);
+  const higher = need && batch === null ? higherPriority(needs, need.key, seen) : null;
   if (batch !== null) return <BatchDecision key={batch} gid={batch} needs={needs} />;
-  return need ? <NeedDecision key={`${need.key}:${paneRev}`} need={need} /> : null;
+  if (!need) return null;
+  return (
+    <>
+      {advanced && (
+        <p role="status" data-needs-advanced className="m-0 shrink-0 border-b border-ws-sep bg-ws-bar px-3 py-1 text-sm text-ws-ink2 [overflow-wrap:anywhere]">
+          {advanced}
+        </p>
+      )}
+      {higher && <HigherPriorityBar need={higher} />}
+      <NeedDecision key={`${need.key}:${paneRev}`} need={need} />
+    </>
+  );
 }

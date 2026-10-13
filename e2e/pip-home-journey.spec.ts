@@ -261,10 +261,10 @@ test("the Needs you list ranks a hold ahead of a draft to approve, opens each in
   await expect(needRow(page, "Start Investigate")).toHaveCount(0);
   await expect(row.locator("[data-needs-you-badge]")).toHaveText("1 needs you");
 
-  // Focus moved on to the hold, whose decision is Resume; it clears the need and the badge.
+  // The pane moved on to the hold, with its card focused (no key lands on Resume by accident); Resume clears the need and the badge.
   await expect(needsPane(page)).toHaveAttribute("data-kind", "hold");
   const resume = needsPane(page).locator("[data-held-banner]").getByRole("button", { name: "Resume" });
-  await expect(resume).toBeFocused();
+  await expect(needsPane(page)).toBeFocused();
   await resume.click();
   await expect(needsYouCount(page)).toHaveText("0");
   await expect(row.locator("[data-needs-you-badge]")).toHaveCount(0);

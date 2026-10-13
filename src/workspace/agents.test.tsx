@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MockBackend } from "../backend/mock";
 import type { Run, RunState, WorkstreamView } from "../types";
-import { AgentCard, onActivate } from "./AgentCard";
+import { AgentCard, RunLabel, onActivate } from "./AgentCard";
 import { AgentRow } from "./AgentRow";
 import { FailureNext, OpenInTerminal } from "./AgentParts";
 import { AgentsBanners } from "./AgentsBanners";
@@ -231,6 +231,18 @@ describe("the Agents screen as the operations view", () => {
     expect(html).toContain("Stop all");
     // Without the way there (a screen that can't show Pip home), no button.
     expect(screen()).not.toContain("data-agents-timeline");
+  });
+
+  it("names F6 (the regions) and the Pip home key in its footer, beside j k, Enter and Esc", () => {
+    const footer = screen().match(/<footer[\s\S]*?<\/footer>/)![0].replace(/<[^>]+>/g, "").replace(/\s+/g, " ");
+    expect(footer).toContain("j k move");
+    expect(footer).toContain("F6 regions");
+    expect(footer).toContain("⌘0 Pip home");
+  });
+
+  it("explains a run's R badge with a tooltip", () => {
+    expect(renderToStaticMarkup(<RunLabel label="R2" />)).toContain('title="Run 2 in this workstream"');
+    expect(renderToStaticMarkup(<RunLabel />)).toBe("");
   });
 });
 

@@ -29,7 +29,7 @@ import { isTypingTarget } from "./pipHomeKeys";
 import { usePipHome } from "./pipHomeStore";
 import { useReviewVerdicts } from "./reviewVerdicts";
 import { useRuns } from "./runsStore";
-import { ENTRY_FOCUS, TIMELINE_ENTRY, followsEnd, nearBottom, revealEntry, stepIndex, timelineKeyAction, timelineStop } from "./timelineKeys";
+import { ENTRY_FOCUS, TIMELINE_ENTRY, anchoredScrollTop, followsEnd, nearBottom, readingAnchor, revealEntry, stepIndex, timelineKeyAction, timelineStop, type ReadingAnchor } from "./timelineKeys";
 import { PipRunCard } from "./PipRunCard";
 import { TimelineFilterBar, TimelineScopeToggle, showTimeline } from "./TimelineFilterBar";
 import { useWorkstreams } from "./workstreamsStore";
@@ -288,9 +288,45 @@ export function TimelineView({
     stickToBottom.current = true;
     el.scrollTo({ top: el.scrollHeight });
   }, [turns, shown.length]);
+  /** The entry the person was reading when they last scrolled, so a change of height above or in it (a draft approved and collapsing) keeps it in place. */
+  const anchor = useRef<ReadingAnchor | null>(null);
+  const markAnchor = (el: HTMLElement) => {
+    const top = el.getBoundingClientRect().top;
+    const rows = Array.from(el.querySelectorAll<HTMLElement>(TIMELINE_ENTRY)).map((li) => {
+      const box = li.getBoundingClientRect();
+      return { key: li.getAttribute("data-timeline-entry") ?? "", top: box.top, bottom: box.bottom };
+    });
+    anchor.current = readingAnchor(top, rows);
+  };
   const onScroll = (ev: UIEvent<HTMLDivElement>) => {
     stickToBottom.current = nearBottom(ev.currentTarget);
+    markAnchor(ev.currentTarget);
   };
+  // When the timeline's content changes height: at the end it stays at the end, elsewhere the entry being read stays where it was.
+  const hasEntries = shown.length > 0;
+  useEffect(() => {
+    const el = ref.current;
+    const list = el?.querySelector("ol");
+    if (!el || !list || typeof ResizeObserver === "undefined") return;
+    markAnchor(el);
+    const watch = new ResizeObserver(() => {
+      if (stickToBottom.current) {
+        el.scrollTop = el.scrollHeight;
+        return;
+      }
+      const at = anchor.current;
+      const li = at ? Array.from(el.querySelectorAll<HTMLElement>(TIMELINE_ENTRY)).find((x) => x.getAttribute("data-timeline-entry") === at.key) : undefined;
+      if (at && li) {
+        const next = anchoredScrollTop(el.scrollTop, at, li.getBoundingClientRect().top, el.getBoundingClientRect().top);
+        if (next !== el.scrollTop) el.scrollTop = next;
+      }
+      markAnchor(el);
+    });
+    watch.observe(list);
+    // The scroller itself too: the decision pane over it opening or closing resizes it.
+    watch.observe(el);
+    return () => watch.disconnect();
+  }, [hasEntries]);
 
   const onKeyDown = (ev: KeyboardEvent<HTMLDivElement>) => {
     if (ev.defaultPrevented || isTypingTarget(ev.target)) return;

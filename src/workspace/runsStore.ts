@@ -260,6 +260,15 @@ let seq = 0;
 /** The note when the one-time safety sheet is closed with × rather than Got it, continue: what was dropped, and that nothing ran. */
 export const introCancelled = (what: string) => `Cancelled: ${what}. Nothing was started.`;
 
+/** The note `closeSheet` pushed, while it may still be on screen or waiting: it goes the moment a run starts after all. */
+let cancelledNote: number | null = null;
+
+/** Takes the "Cancelled: … Nothing was started." note away: a run started since, so it would now say the opposite of what happened. */
+export function dismissCancelledNote() {
+  if (cancelledNote !== null) useToasts.getState().dismiss(cancelledNote);
+  cancelledNote = null;
+}
+
 /** A run start in words for that note: the draft's own kind and ticket when there is one ("Investigate CA-401"), else the kind and ticket asked for. */
 export function startWhat(p: Proposal | null | undefined, kind?: RunKind, item?: ItemRef | null): string {
   const draft = p?.intent.type === "startRun" ? p.intent : null;
@@ -356,7 +365,7 @@ export const useRuns = create<RunsState>((set, get) => ({
     // The one-time intro closed without Got it, continue: what it stood in for is dropped, and the person is told so.
     const dropped = get().afterIntro ? (get().afterIntroWhat ?? "Start an agent") : null;
     set({ sheet: null, afterIntro: null, afterIntroWhat: null, browseOrder: null });
-    if (dropped) useToasts.getState().push(introCancelled(dropped), "info");
+    if (dropped) cancelledNote = useToasts.getState().push(introCancelled(dropped), "info") ?? cancelledNote;
   },
 
   showDraft(item) {
@@ -374,6 +383,8 @@ export const useRuns = create<RunsState>((set, get) => ({
   continueIntro() {
     const then = get().afterIntro;
     set({ sheet: null, afterIntro: null, afterIntroWhat: null });
+    // What the person asked for goes ahead after all, so an earlier "Nothing was started" is no longer true.
+    if (then) dismissCancelledNote();
     then?.();
   },
 

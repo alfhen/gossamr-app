@@ -622,3 +622,14 @@ export function needAfter<T extends Pick<Need, "key">>(previous: readonly string
   }
   return current[0] ?? null;
 }
+
+/**
+ * The need to point the person at while they read `open`: the top-ranked need that ranks above it, came in after it was
+ * opened (is not in `seen`, the keys when it opened) and is a Decide or an Unblock. Null when there is none.
+ */
+export function higherPriority<T extends Pick<Need, "key" | "group" | "at">>(list: readonly T[], open: string, seen: ReadonlySet<string>): T | null {
+  const ranked = [...list].sort(byRank);
+  const at = ranked.findIndex((n) => n.key === open);
+  if (at < 0) return null;
+  return ranked.slice(0, at).find((n) => !seen.has(n.key) && (n.group === "decide" || n.group === "unblock")) ?? null;
+}
