@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { needAfter, type Need } from "../lib/needs";
-import type { Proposal, Run, WorkstreamView } from "../types";
+import { ALLOW_MORE_STEPS, type Proposal, type Run, type WorkstreamView } from "../types";
+import { stepsOf } from "../lib/workstreamHold";
 import { useWorkspace } from "../workspaceStore";
 import { OpenInTerminal, FailureNext } from "./AgentParts";
 import { Box, BoxTitle, Btn } from "./AgentSheet";
@@ -196,6 +197,77 @@ function UnknownBody({ run }: { run: Run }) {
   );
 }
 
+/** The choice a workstream that used its automatic steps asks for: allow more, or Advise, where nothing starts on its own. */
+function BudgetBody({ view }: { view: WorkstreamView }) {
+  const id = view.workstream.id;
+  const { used, limit } = stepsOf(view.budget);
+  const [busy, setBusy] = useState(false);
+  // One choice at a time: a second click on Allow 5 more would be refused (the hold is gone) and toast an error.
+  const choose = (call: () => Promise<boolean>) => {
+    setBusy(true);
+    void call().finally(() => setBusy(false));
+  };
+  const store = useWorkstreams.getState();
+  return (
+    <Box tone="warn" label="Automatic steps">
+      <BoxTitle icon="clock" tone="warn">
+        {used} of {limit} automatic steps used
+      </BoxTitle>
+      <p className="m-0 text-ws-ink2">Pip and the automatic steps are paused; its agents carry on. Allow {ALLOW_MORE_STEPS} more to carry on from here, or switch to Advise, where Pip suggests and you start.</p>
+      <div className="flex flex-wrap items-center gap-2">
+        <Btn tone="primary" disabled={busy} onClick={() => choose(() => store.allowMore(id))}>
+          Allow {ALLOW_MORE_STEPS} more
+        </Btn>
+        <Btn tone="plain" disabled={busy} onClick={() => choose(() => store.setMode(id, "advise"))}>
+          Switch to Advise
+        </Btn>
+      </div>
+    </Box>
+  );
+}
+
+/** The three choices on a ticket its triage found not clear enough to plan: ask the reporter, answer the questions, or plan anyway. */
+function ReadinessBody({ view, need }: { view: WorkstreamView; need: Need }) {
+  const r = view.readiness;
+  const id = view.workstream.id;
+  const [busy, setBusy] = useState(false);
+  if (!r) return null;
+  const key = view.workstream.itemKey ?? "the ticket";
+  const choose = (call: () => Promise<boolean>) => {
+    setBusy(true);
+    void call().finally(() => setBusy(false));
+  };
+  const store = useWorkstreams.getState();
+  return (
+    <Box tone="warn" label="Not ready to plan">
+      <BoxTitle icon="alert" tone="warn">
+        {need.title}
+      </BoxTitle>
+      {r.questions.length > 0 ? (
+        <ul data-readiness-questions className="m-0 grid gap-1 pl-5 text-ws-ink2">
+          {r.questions.map((q, i) => (
+            <li key={i}>{q}</li>
+          ))}
+        </ul>
+      ) : (
+        <p className="m-0 text-ws-ink2">The triage found {key} unclear but listed no questions.</p>
+      )}
+      <p className="m-0 text-ws-ink2">No plan starts until you choose. Asking the reporter drafts a Jira comment for you to approve; nothing is posted before that.</p>
+      <div className="flex flex-wrap items-center gap-2">
+        <Btn tone="primary" disabled={busy} onClick={() => choose(() => store.askReporter(id))}>
+          Ask the reporter
+        </Btn>
+        <Btn tone="plain" disabled={busy} onClick={() => choose(() => store.answerSelf(id))}>
+          I'll answer
+        </Btn>
+        <Btn tone="plain" disabled={busy} onClick={() => choose(() => store.planAnyway(id))}>
+          Plan anyway
+        </Btn>
+      </div>
+    </Box>
+  );
+}
+
 /** The three choices on a review that still blocks, and the review draft that folded into it, ready to post as it is. */
 function EscalationBody({ view }: { view: WorkstreamView }) {
   const e = view.escalation;
@@ -295,8 +367,12 @@ function Decision({ need }: { need: Need }) {
       return run ? <QuietBody run={run} /> : null;
     case "unknown":
       return run ? <UnknownBody run={run} /> : null;
+    case "budget":
+      return view ? <BudgetBody view={view} /> : null;
     case "hold":
-      return view ? <HeldBanner view={view} onResume={() => controlActions(view.workstream.id).onResume()} /> : null;
+      return view ? <HeldBanner view={view} actions={controlActions(view.workstream.id)} /> : null;
+    case "readiness":
+      return view ? <ReadinessBody view={view} need={need} /> : null;
     case "escalation":
       return view ? <EscalationBody view={view} /> : null;
     case "runStart":

@@ -34,7 +34,7 @@ pub use pip_runs::{PipRunAsk, NOT_ON_ITS_OWN, PR_MOVED};
 pub use pip_runs::VERIFY_UNPINNED;
 #[cfg(test)]
 pub(crate) use workstreams::{basis_of, drifted};
-pub use workstreams::{Admitted, Escalation, WakeAdmission, WorkstreamUndo, WorkstreamView, ESCALATION_GONE, NOTES_CLOSE, NOTES_LIMIT, NOTES_OPEN};
+pub use workstreams::{Admitted, Escalation, ReadinessStop, WakeAdmission, WorkstreamUndo, WorkstreamView, ESCALATION_GONE, NOTES_CLOSE, NOTES_LIMIT, NOTES_OPEN};
 pub use rewrites::TextSeen;
 mod watch;
 

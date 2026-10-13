@@ -316,10 +316,18 @@ export interface Backend {
   workstreamsFixRound(reviewRun: string): Promise<Run>;
   /** The person's "I'll take it from here" on review `reviewRun`: the workstream goes to Advise and nothing else changes. */
   workstreamsTakeOver(id: string, reviewRun: string): Promise<Workstream>;
+  /** The person's "Ask the reporter" on Triage `triageRun`, which found its ticket not ready to plan: a Jira comment to the reporter with its open questions, as a draft the person approves like any other. Refused when the stop isn't about that Triage any more. */
+  workstreamsReadinessAsk(id: string, triageRun: string): Promise<Proposal>;
+  /** The person's "I'll answer" on Triage `triageRun`: it settles the question and starts nothing. */
+  workstreamsReadinessAnswer(id: string, triageRun: string): Promise<Workstream>;
+  /** The person's "Plan anyway" on Triage `triageRun`: records the override and lets the Triage-to-Plan rule start the Plan under its own checks (Manage, not held, within budget). */
+  workstreamsReadinessOverride(id: string, triageRun: string): Promise<Workstream>;
   /** The person holds an open workstream: nothing wakes Pip or starts on its own in it; its runs carry on. */
   workstreamsHold(id: string): Promise<Workstream>;
-  /** The person lifts a workstream's hold; lifting a budget hold starts its budget again from zero. */
+  /** The person lifts a workstream's hold; what was spent is kept, so a budget hold lifted in Advise is held again on the way back to Manage. */
   workstreamsResume(id: string): Promise<Workstream>;
+  /** The person's "Allow 5 more" on a workstream held for its automatic steps: its allowance goes up by 5 and it resumes, keeping what was spent. Refused when it isn't held for its budget. */
+  workstreamsAllowMore(id: string): Promise<Workstream>;
   /**
    * The person's Undo of a hold or of a switch to Advise, a moment after it: the workstream goes back to how `undo` says it stood.
    * Allowed only while that change is the last line of the audit and under a minute old; it adds its own `undone` line.

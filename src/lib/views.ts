@@ -163,6 +163,9 @@ export function witherLevel(since: string, now: Date, stages: readonly number[])
   return stages.filter((d) => days >= d).length as WitherLevel;
 }
 
+/** The classes that dry a row out at `level`; `prefix` "ws-" for the workspace's own rows (src/workspace/board.css), none for the ticket list's (src/index.css). */
+export const witherClass = (level: WitherLevel, prefix = ""): string => (level ? `${prefix}wither ${prefix}wither-${Math.min(level, 3)}` : "");
+
 export type WorkSection = "In progress" | "To do" | "Done" | "Also worked on";
 const SECTIONS: WorkSection[] = ["In progress", "To do", "Done", "Also worked on"];
 

@@ -8,10 +8,11 @@ import { DENIED_MESSAGE, permissionOffer, readAs } from "../lib/permission";
 import { reviewText } from "./mockReviewDraft";
 import { followUpBlocker, followUpProblem } from "../workspace/followUp";
 import { docFromText, docText } from "../lib/docs";
-import { makerName, PLAN_COMMENT_LABEL } from "../lib/proposals";
+import { isReporterQuestions, makerName, PLAN_COMMENT_LABEL } from "../lib/proposals";
 import { revisedByPipUnedited, runAnswerProblem, type MockProposals } from "./mockProposals";
 import { ESCALATION_GONE, textDigest, type MockWorkstreams } from "./mockWorkstreams";
 import { fixRoundMessage, marked, type ReviewFinding } from "./mockSupervisor";
+import { UNCLEAR_TRIAGE_SUMMARY, thinDescription, unclearTriageResult } from "./mockReadiness";
 import { BUILD_ACCOUNT_LIMIT, BUILD_ACCOUNT_PREFACE, BUILD_NEEDS_PLAN, PIP_CHAIN_KINDS, REVIEW_NEEDS_BUILD, REVIEW_NO_FOCUS, WAITING_FOR_PR_HINT, FINDINGS_LIMIT, FINDINGS_PREFACE, INSTRUCTIONS, pipPrompt, NEW_TICKET_TAIL, PLAN_FOLLOW, PLAN_FOLLOW_UNEDITED, PLAN_LIMIT, PUSH_ALLOWED, TICKETLESS_STARTER, buildAccountLabel, checkoutParagraph, checksOutPr, readOnlyRules, testsParagraph, findingsLabel, planLabel, reportParagraph, reviewRefusal, specProblem, withoutMarkers } from "./mockRunKinds";
 
 /** Why a person's fix round isn't sent when none of the review's blocking findings cites a file and line, as `NOTHING_TO_FIX` in src-tauri/src/runs/follow_up.rs. */
@@ -944,11 +945,13 @@ export class MockRuns {
     const opened = to === "done" && run.spec.kind === "build" && run.spec.allowPush ? (this.newCommit(run) ?? this.draftPullRequest(run)) : null;
     if (to === "done") {
       const answered = (run.passes ?? 1) > 1 && run.spec.kind === "plan";
-      patch.result = !run.item && run.spec.project ? SCRIPTED_TICKET_RESULT : answered ? SCRIPTED_PLAN_ANSWERED : opened ? pushedResult(opened.url) : SCRIPTED_RESULT[run.spec.kind];
+      // A triage of a ticket whose description is one vague line can't size it, and says the ticket isn't ready to plan.
+      const unclear = run.spec.kind === "triage" && run.item && thinDescription(docText(this.ticketDoc(run.item) ?? { blocks: [] })) ? run.item : null;
+      patch.result = !run.item && run.spec.project ? SCRIPTED_TICKET_RESULT : answered ? SCRIPTED_PLAN_ANSWERED : opened ? pushedResult(opened.url) : unclear ? unclearTriageResult(unclear.key) : SCRIPTED_RESULT[run.spec.kind];
       const script = this.scripts.get(run.spec.kind)?.shift();
       if (script) patch.result = scriptedFinish(run.spec.kind, patch.result, script);
       if (opened) patch.branch = opened.headRef;
-      patch.summary = answered ? PLAN_ANSWERED_SUMMARY : opened ? PUSHED_SUMMARY : SCRIPTED_SUMMARY[run.spec.kind];
+      patch.summary = answered ? PLAN_ANSWERED_SUMMARY : opened ? PUSHED_SUMMARY : unclear ? UNCLEAR_TRIAGE_SUMMARY : SCRIPTED_SUMMARY[run.spec.kind];
       patch.resultComplete = true;
       patch.endedAt = at;
       this.scriptedReport(run, patch.result);
@@ -1288,7 +1291,7 @@ export class MockRuns {
   }
 
   private commentDrafts(runId: string): Proposal[] {
-    return this.proposals.list().filter((p) => p.origin.type === "run" && p.origin.runId === runId && p.intent.type === "comment" && !p.label?.startsWith(PLAN_LABEL));
+    return this.proposals.list().filter((p) => p.origin.type === "run" && p.origin.runId === runId && p.intent.type === "comment" && !p.label?.startsWith(PLAN_LABEL) && !isReporterQuestions(p));
   }
 
   private planCommentDrafts(runId: string): Proposal[] {

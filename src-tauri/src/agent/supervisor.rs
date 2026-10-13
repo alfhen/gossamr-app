@@ -128,6 +128,9 @@ pub struct WakeFact {
     pub mark: String,
     #[serde(default)]
     pub plan_recommended: Option<bool>,
+    /// A Triage that found its ticket not ready to plan: how many open questions it listed. `None` is ready, or no verdict.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub open_questions: Option<u32>,
     #[serde(default)]
     pub verdict: Option<ReviewVerdict>,
     #[serde(default)]
@@ -174,6 +177,7 @@ impl WakeFact {
             state,
             mark: mark(run, state),
             plan_recommended: None,
+            open_questions: None,
             verdict: None,
             blocking: 0,
             drafts: 0,
@@ -268,7 +272,7 @@ fn plural(n: u32, one: &str, many: &str) -> String {
     format!("{n} {}", if n == 1 { one } else { many })
 }
 
-/// `[Event] run abc12345 (triage) Done; plan recommended: yes; 2 drafts`
+/// `[Event] run abc12345 (triage) Done; plan recommended: yes; not ready to plan, 2 open questions; 2 drafts`
 fn fact_line(f: &WakeFact) -> String {
     let run = match shown_id(&f.run) {
         Some(id) => format!("run {id}"),
@@ -277,6 +281,11 @@ fn fact_line(f: &WakeFact) -> String {
     let mut line = format!("[Event] {run} ({}) {}", f.kind.as_str(), f.state.words());
     if let Some(yes) = f.plan_recommended {
         line.push_str(if yes { "; plan recommended: yes" } else { "; plan recommended: no" });
+    }
+    match f.open_questions {
+        Some(0) => line.push_str("; not ready to plan"),
+        Some(n) => line.push_str(&format!("; not ready to plan, {}", plural(n, "open question", "open questions"))),
+        None => {}
     }
     if let Some(verdict) = f.verdict {
         line.push_str(match verdict {
@@ -661,6 +670,11 @@ pub fn woken_in(events: &[WorkstreamEvent]) -> HashSet<(String, String)> {
 }
 
 /// The runs a tripwire named: what they wrote may be hostile, so no rule chains on them (`RuleInput::tripped`).
+/// The builds the rules sent a fix round, by the audit's `autostart` lines (`fix_round after <review>`, on the build).
+fn fix_round_builds(events: &[WorkstreamEvent]) -> HashSet<String> {
+    events.iter().filter(|e| e.action == "autostart" && e.detail.as_deref().is_some_and(|d| d.starts_with("fix_round after "))).filter_map(|e| e.run_id.clone()).collect()
+}
+
 fn tripped_runs(events: &[WorkstreamEvent]) -> HashSet<&str> {
     events.iter().filter(|e| e.action == "tripwire").filter_map(|e| e.run_id.as_deref()).collect()
 }
@@ -837,6 +851,7 @@ impl Supervisor {
         if let Ok(resolved) = self.core.resolved_of(run).await {
             let report = ReportFacts::of(run, &resolved);
             fact.plan_recommended = report.plan_recommended;
+            fact.open_questions = report.readiness.as_ref().filter(|r| !r.ready).map(|r| r.questions.len() as u32);
             if run.spec.kind == RunKind::Review {
                 fact.verdict = report.verdict;
                 fact.blocking = report.findings.iter().filter(|f| f.severity == crate::runs::report::Severity::Blocking).count() as u32;
@@ -943,7 +958,8 @@ impl Supervisor {
             let note = rules.notes.get(&f.run).filter(|_| f.state == WakeState::Done);
             f.with_note(note)
         }).collect();
-        self.wake_for(&agent, &scope, ws_id, &connection, fresh, retry, now).await;
+        let fix_builds = fix_round_builds(&events);
+        self.wake_for(&agent, &scope, ws_id, &connection, fresh, &fix_builds, retry, now).await;
         if rules.started {
             // Under the run service's own checks: a workstream the wake just held keeps what started waiting.
             if let Err(e) = self.core.launch_waiting().await {
@@ -966,14 +982,18 @@ impl Supervisor {
 
     /// Wakes Pip in `ws_id` with `fresh`, as far as the workstream's budget and today's cap allow.
     #[allow(clippy::too_many_arguments)]
-    async fn wake_for(&self, agent: &Arc<dyn WakeQueue>, scope: &Scope, ws_id: &str, connection: &str, fresh: Vec<WakeFact>, retry: bool, now: DateTime<Utc>) {
+    async fn wake_for(&self, agent: &Arc<dyn WakeQueue>, scope: &Scope, ws_id: &str, connection: &str, fresh: Vec<WakeFact>, fix_builds: &HashSet<String>, retry: bool, now: DateTime<Utc>) {
         if fresh.is_empty() {
             return;
         }
         let conversation = format!("ws:{ws_id}");
         let settings = (self.settings)();
         // Only a guess: whether it merges is the queue's to say, under its own lock, and the charge follows that.
-        let spend = !agent.has_waiting_wake(&conversation);
+        let waiting = agent.has_waiting_wake(&conversation);
+        // Telling Pip about a fix round the rules sent, or about the build that went back for one finishing, is no
+        // automatic step of its own: the rounds are capped already (`autostart::FIX_ROUNDS_MAX`).
+        let free = fresh.iter().all(|f| f.fix_round.is_some() || fix_builds.contains(&f.run));
+        let spend = !waiting && !free;
         let ask = WakeAdmission {
             spend,
             daily_cap: settings.manager_turns_per_day,
@@ -1008,7 +1028,7 @@ impl Supervisor {
         let sink = self.sink(&conversation, facts.clone());
         // A wake charged as a turn of its own stays one; one admitted to merge that found nothing waiting is charged now.
         match agent.wake(ws_id, facts.clone(), sink, !spend).await {
-            Ok(false) if !spend => match self.core.charge_wake(scope, ws_id, now).await {
+            Ok(false) if waiting && !free => match self.core.charge_wake(scope, ws_id, now).await {
                 Ok(true) => (self.changed)(connection),
                 Ok(false) => {}
                 Err(e) => eprintln!("couldn't count a wake in workstream {ws_id}: {e}"),
@@ -1058,6 +1078,7 @@ impl Supervisor {
                 settings: &settings,
                 fix_rounds,
                 plan_approved,
+                readiness_overridden: src.spec.kind == RunKind::Triage && autostart::readiness_overridden(events, &src.id),
                 pr: pr.clone(),
                 reviewed,
                 already: already(src, &report, runs, events, pr.as_ref()),

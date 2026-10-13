@@ -1,6 +1,6 @@
 import { useEffect, useRef, type DragEvent, type KeyboardEvent, type MouseEvent } from "react";
 import { Cobweb } from "../components/Cobweb";
-import type { WitherLevel } from "../lib/views";
+import { witherClass, type WitherLevel } from "../lib/views";
 import type { CodeSummary } from "../lib/devLinks";
 import type { StatusDef, WorkItem, WorkPriority } from "../types";
 import { daysQuiet } from "./boardLogic";
@@ -99,7 +99,7 @@ export function ItemCard(p: ItemCardProps) {
   };
 
   const tone = p.draft ? "ws-card-draft" : "";
-  const wither = p.wither ? `ws-wither ws-wither-${Math.min(3, p.wither)}` : "";
+  const wither = witherClass(p.wither, "ws-");
 
   return (
     <article

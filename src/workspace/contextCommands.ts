@@ -52,6 +52,11 @@ const NEED_ENTRY: Record<NeedActionId, { label?: string; keywords: string; icon:
   dismiss: { keywords: "dismiss skip discard hide remove", icon: "✕" },
   edit: { label: "Edit", keywords: "edit change revise", icon: "✎" },
   retry: { label: "Retry", keywords: "retry again launch", icon: "↻" },
+  allowMore: { label: "Allow 5 more", keywords: "allow more automatic steps budget continue", icon: "＋" },
+  advise: { label: "Switch to Advise", keywords: "advise manage mode pip stop managing", icon: "◇" },
+  askReporter: { label: "Ask the reporter", keywords: "ask reporter questions clear ticket comment draft unclear", icon: "✉" },
+  answerSelf: { label: "I'll answer", keywords: "answer myself questions unclear ticket pip conversation", icon: "↩" },
+  planAnyway: { label: "Plan anyway", keywords: "plan anyway override unclear ticket not ready", icon: "▶" },
   resume: { label: "Resume", keywords: "resume continue carry on lift hold", icon: "▶" },
   answer: { label: "Answer", keywords: "answer reply respond question", icon: "↩" },
   open: { keywords: "open show look", icon: "→" },
@@ -91,7 +96,7 @@ export function contextCommands(subject: Subject | null, data: ContextData, deps
       ...own,
       entry(`need:${need.key}:workstream`, openInWorkstreamLabel(need), () => deps.openInWorkstream(need), { icon: "→", keywords: "open workstream show where it lives" }),
       // "Open in workstream" above is already the way there; a second "Open the workstream on KEY" would be the same thing.
-      ...(view ? workstreamEntries(view, deps, view.workstream.itemKey ?? view.workstream.title).filter((c) => !c.id.startsWith("context:open:") && !(need.kind === "hold" && c.id.startsWith("context:resume:"))) : []),
+      ...(view ? workstreamEntries(view, deps, view.workstream.itemKey ?? view.workstream.title).filter((c) => !c.id.startsWith("context:open:") && !((need.kind === "hold" || need.kind === "budget") && c.id.startsWith("context:resume:")) && !(need.kind === "budget" && c.id.startsWith("context:advise:"))) : []),
     ];
   }
   if (subject.type === "draft") {

@@ -2,8 +2,8 @@ import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { Switch } from "../components/Switch";
 import type { Need } from "../lib/needs";
 import { nextStep, type NextStep } from "../lib/nextStep";
-import { RULE_SWITCH, TURN_HELP, budgetNote, heldBanner, ruleText, stepsLeftText } from "../lib/workstreamHold";
-import { HELD_BUDGET, TRIPWIRE, WORKSTREAM_RULES, type AutoStartSwitches, type Proposal, type Run, type WorkstreamRule, type WorkstreamRules, type WorkstreamView } from "../types";
+import { RULE_SWITCH, STEP_HELP, asksBudget, isHeldByYou, budgetNote, heldBanner, ruleText, stepsLeftText, stepsOf } from "../lib/workstreamHold";
+import { ALLOW_MORE_STEPS, HELD_BUDGET, TRIPWIRE, WORKSTREAM_RULES, type AutoStartSwitches, type Proposal, type Run, type WorkstreamRule, type WorkstreamRules, type WorkstreamView } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { Btn } from "./AgentSheet";
 import { EscalationCard } from "./EscalationCard";
@@ -27,6 +27,8 @@ export interface ControlActions {
   onManage(on: boolean): void;
   onHold(): void;
   onResume(): void;
+  /** "Allow 5 more", the person's answer to a spent budget: the audited way on from a budget hold, which Resume is not. */
+  onAllowMore(): void;
   onStop(): void;
   onRule(rule: WorkstreamRule, on: boolean | null): void;
   /** The steps popover opened: what "as in Settings" means is read again. */
@@ -40,6 +42,7 @@ export function controlActions(id: string): ControlActions {
     onManage: (on) => void ws().setMode(id, on ? "manage" : "advise"),
     onHold: () => void ws().hold(id),
     onResume: () => void ws().resume(id),
+    onAllowMore: () => void ws().allowMore(id),
     onStop: () => void ws().stop(id),
     onRule: (rule, on) => void ws().setRule(id, rule, on),
     onSteps: () => void ws().loadGlobals(),
@@ -147,22 +150,23 @@ export function StopConfirm({ onStop, onKeep }: { onStop(): void; onKeep(): void
   );
 }
 
-/** What counts as an automatic turn, under the budget's line or banner. */
-function TurnHelp() {
+/** What counts as an automatic step, under the budget's line or banner. */
+function StepHelp() {
   return (
-    <details data-turn-help className="text-xs text-ws-ink2">
-      <summary className="cursor-pointer">What&apos;s an automatic turn?</summary>
-      {TURN_HELP}
+    <details data-step-help className="text-xs text-ws-ink2">
+      <summary className="cursor-pointer">What&apos;s an automatic step?</summary>
+      {STEP_HELP}
     </details>
   );
 }
 
-/** Why the workstream is held, with its Resume; nothing while it isn't held. The Needs you decision for a hold shows the same banner. */
-export function HeldBanner({ view, onResume }: { view: WorkstreamView; onResume(): void }) {
+/** Why the workstream is held, with its Resume (for a budget hold in Manage, Allow 5 more and Switch to Advise instead, as the decision has them); nothing while it isn't held. A hold the system made is also in Needs you, and its decision shows the same banner; the person's own hold is not, so this banner is where it shows. */
+export function HeldBanner({ view, actions }: { view: WorkstreamView; actions: Pick<ControlActions, "onResume" | "onAllowMore" | "onManage"> }) {
   const ws = view.workstream;
-  const held = heldBanner(ws, view.budget);
+  const held = heldBanner(ws);
   if (!held) return null;
   const drift = ws.heldReason === `${TRIPWIRE}basis_drift`;
+  const byYou = isHeldByYou(ws.heldReason);
   return (
     <div role="status" data-held-banner={ws.heldReason} className="flex flex-wrap items-center gap-2 rounded-md border border-ws-warn/40 bg-ws-warn/10 px-2.5 py-1 text-sm text-ws-ink">
       <span className="min-w-0 flex-1">
@@ -172,11 +176,27 @@ export function HeldBanner({ view, onResume }: { view: WorkstreamView; onResume(
             Read {ws.itemKey ?? "the ticket"} as it is now before you resume: what Pip planned may no longer fit. Resuming takes it as the new starting point.
           </span>
         )}
-        {ws.heldReason === HELD_BUDGET && <TurnHelp />}
+        {byYou && (
+          <span data-held-by-you className="block text-xs text-ws-ink2">
+            You chose this, so it is not in Needs you. Nothing starts on its own and Pip takes no turns until you resume; its agents carry on.
+          </span>
+        )}
+        {ws.heldReason === HELD_BUDGET && <StepHelp />}
       </span>
-      <Btn tone="plain" onClick={onResume} className="px-2 py-0.5">
-        Resume
-      </Btn>
+      {asksBudget(ws) ? (
+        <>
+          <Btn tone="primary" onClick={actions.onAllowMore} className="px-2 py-0.5">
+            Allow {ALLOW_MORE_STEPS} more
+          </Btn>
+          <Btn tone="plain" onClick={() => actions.onManage(false)} className="px-2 py-0.5">
+            Switch to Advise
+          </Btn>
+        </>
+      ) : (
+        <Btn tone="plain" onClick={actions.onResume} className="px-2 py-0.5">
+          Resume
+        </Btn>
+      )}
     </div>
   );
 }
@@ -246,21 +266,21 @@ export function WorkstreamControlsView({ view, globals, actions, confirmingStop,
         </span>
         {confirmingStop && <StopConfirm onStop={() => (closeConfirm(), actions.onStop())} onKeep={closeConfirm} />}
       </div>
-      <HeldBanner view={view} onResume={actions.onResume} />
+      <HeldBanner view={view} actions={actions} />
       {/* A review that still blocks after the automatic fix rounds: the person chooses what happens next. */}
       <EscalationCard key={ws.id} view={view} />
       {next && <NextStepLine next={next} />}
       {manage && (
-        <p data-steps-left={view.budget.autoTurns.limit - view.budget.autoTurns.used} title={TURN_HELP} className="m-0 text-xs text-ws-ink2">
+        <p data-steps-left={stepsOf(view.budget).limit - stepsOf(view.budget).used} title={STEP_HELP} className="m-0 text-xs text-ws-ink2">
           {stepsLeftText(view.budget)}
         </p>
       )}
       {note && !(note.level === "spent" && ws.heldReason === HELD_BUDGET) && (
         <div className="grid gap-0.5">
-          <p data-budget={note.level} title={TURN_HELP} className={`m-0 text-sm ${note.level === "amber" ? "text-ws-warn" : "text-ws-blocked"}`}>
+          <p data-budget={note.level} title={STEP_HELP} className={`m-0 text-sm ${note.level === "amber" ? "text-ws-warn" : "text-ws-blocked"}`}>
             {note.text}
           </p>
-          <TurnHelp />
+          <StepHelp />
         </div>
       )}
     </div>

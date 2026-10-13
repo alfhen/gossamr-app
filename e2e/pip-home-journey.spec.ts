@@ -6,6 +6,7 @@ import {
   finishOnHome,
   githubWrites,
   homeConversation,
+  holdBySystem,
   homeConversationRegion,
   homeRunCards,
   homeSettled,
@@ -243,13 +244,13 @@ test("the Needs you list ranks a hold ahead of a draft to approve, opens each in
 
   await homeConversationRegion(page).getByRole("button", { name: "Investigate CA-401", exact: true }).click();
   await homeSettled(page);
-  await stepRail(page).getByRole("button", { name: "Hold", exact: true }).click();
+  await holdBySystem(page, "CA-401", "restart");
   await expect(row.locator("[data-needs-you-badge]")).toHaveText("2 need you");
   // One row for the workstream; what is stuck (the hold) ranks ahead of a draft to approve, however old each is (R2).
   await expect(needsYouTray(page).locator("[data-needs-you-row]")).toHaveCount(1);
   await expandNeedsYou(page, "CA-401");
   const titles = needsYouTray(page).locator("[data-needs-you-need-title]");
-  await expect(titles).toHaveText(["Held by you", "Start Investigate"]);
+  await expect(titles).toHaveText(["Held after a restart", "Start Investigate"]);
 
   // From General, the draft's need selects the workstream again and opens its decision; skipped there, it leaves.
   await workstreamRow(page, "General").click();

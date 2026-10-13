@@ -224,8 +224,14 @@ export function reviewSupersession(older: Proposal, newer: Proposal): "supersede
 /** The label of a comment draft that carries a plan run's whole plan, which no later comment replaces. As `PLAN_COMMENT_LABEL` in `proposals.rs`. */
 export const PLAN_COMMENT_LABEL = "Plan from agent run";
 
+/** The label of a comment draft that asks a ticket's reporter the questions a triage left open, which no run's comment replaces and which replaces none. As `READINESS_COMMENT_LABEL` in `proposals.rs`. */
+export const READINESS_COMMENT_LABEL = "Questions for the reporter";
+
+/** Whether `p` is the comment "Ask the reporter" drafted: Gossamr's words around the triage's open questions, from that triage run. */
+export const isReporterQuestions = (p: Proposal) => p.origin.type === "run" && p.intent.type === "comment" && p.label === READINESS_COMMENT_LABEL;
+
 /** Whether `p` is a comment an agent run left for its ticket, other than a plan's: what a finished run drafts on its own. As `is_run_comment`. */
-export const isRunComment = (p: Proposal) => p.origin.type === "run" && p.intent.type === "comment" && machineMade(p) && !p.label?.startsWith(PLAN_COMMENT_LABEL);
+export const isRunComment = (p: Proposal) => p.origin.type === "run" && p.intent.type === "comment" && machineMade(p) && !p.label?.startsWith(PLAN_COMMENT_LABEL) && p.label !== READINESS_COMMENT_LABEL;
 
 /**
  * What a new run comment does to an older pending one, as `run_comment_supersession` in `proposals.rs`: the same ticket in

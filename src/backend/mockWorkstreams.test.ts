@@ -4,7 +4,7 @@ import { MockBackend } from "./mock";
 import { itemRef } from "./mockConnector";
 import { mockPipTurns } from "./mockPipTurns";
 import { mockDigest } from "./mockRuns";
-import { ESCALATION_GONE, MOCK_WORKSTREAMS_KEY, MockWorkstreams, NOTES_LIMIT, basisOfItem, driftOf, escalationOf, lastTripOf, waitingForPr, type BasisTicket } from "./mockWorkstreams";
+import { ESCALATION_GONE, MOCK_WORKSTREAMS_KEY, MockWorkstreams, NOTES_LIMIT, basisOfItem, driftOf, escalationOf, lastTripOf, readinessOf, waitingForPr, type BasisTicket } from "./mockWorkstreams";
 import { driftLine } from "./mockPip";
 import fixtures from "./supervisor.fixtures.json";
 import { docFromText } from "../lib/docs";
@@ -411,7 +411,7 @@ describe("holding and managing a mock workstream", () => {
     await expect(backend.workstreamsSetRule(ws.id, "fix_round", true)).rejects.toThrow("is closed");
   });
 
-  it("keeps an existing hold unless the person's replaces a restart, budget or quota one, and resuming from budget resets the spend", () => {
+  it("keeps an existing hold unless the person's replaces a restart, budget or quota one, and resuming from budget keeps the spend, which holds Manage for it again", () => {
     const store = new MockWorkstreams(() => [], () => "title", undefined, undefined, false);
     for (const reason of ["restart", "budget", "quota", "tripwire:marker", "hold_all"]) {
       const ws = store.open(null, reason);
@@ -428,15 +428,35 @@ describe("holding and managing a mock workstream", () => {
     // Spend as the supervisor will count it, straight in the store.
     (store as unknown as { all: { id: string; spent: object }[] }).all.find((w) => w.id === spent.id)!.spent = { autoTurns: 11, wakes: 9, tokens: 5 };
     expect(store.get(spent.id)?.budget).toEqual({ autoTurns: { used: 11, limit: 11 }, wakes: { used: 9, limit: 12 }, level: "spent" });
+    // Switch to Advise leaves the hold; Resume there lifts it and grants nothing.
+    store.setMode(spent.id, "manage");
+    store.setMode(spent.id, "advise");
+    expect(store.get(spent.id)?.workstream.heldReason).toBe("budget");
     const resumed = store.resume(spent.id);
-    expect(resumed.spent).toEqual({ autoTurns: 0, wakes: 0, tokens: 5 });
-    expect(store.events(spent.id).map((e) => [e.actor, e.action])).toEqual([
-      ["person", "opened"],
-      ["supervisor", "held"],
-      ["person", "resumed"],
-      ["person", "budget_reset"],
+    expect(resumed).toMatchObject({ heldReason: null, mode: "advise", spent: { autoTurns: 11, wakes: 9, tokens: 5 } });
+    expect(store.events(spent.id).map((e) => e.action)).not.toContain("budget_reset");
+    expect(store.get(spent.id)?.budget.level).toBe("spent");
+    // Back to Manage with the budget still spent: held again by the supervisor, so Allow 5 more is asked again.
+    const manage = store.setMode(spent.id, "manage");
+    expect(manage).toMatchObject({ heldReason: "budget", mode: "manage", spent: { autoTurns: 11, wakes: 9, tokens: 5 } });
+    expect(store.events(spent.id).slice(-2).map((e) => [e.actor, e.action, e.detail])).toEqual([
+      ["person", "mode_set", "manage"],
+      ["supervisor", "held", "budget"],
     ]);
-    expect(store.get(spent.id)?.budget.level).toBe("ok");
+    expect(store.allowMore(spent.id)).toMatchObject({ heldReason: null, spent: { autoTurns: 11, wakes: 9 } });
+
+    // With steps left, going back to Manage holds nothing.
+    const fresh = store.open(null, "fresh");
+    store.setMode(fresh.id, "advise");
+    expect(store.setMode(fresh.id, "manage").heldReason).toBeNull();
+    expect(store.events(fresh.id).map((e) => e.action)).not.toContain("held");
+
+    // A trip's Manage put back by Resume, on a spent budget, is held again.
+    const tripped = store.open(null, "tripped");
+    store.setMode(tripped.id, "manage");
+    store.trip(tripped.id, "marker", "r1");
+    (store as unknown as { all: { id: string; spent: object }[] }).all.find((w) => w.id === tripped.id)!.spent = { autoTurns: 11, wakes: 9, tokens: 0 };
+    expect(store.resume(tripped.id)).toMatchObject({ mode: "manage", heldReason: "budget" });
   });
 
   it("keeps a budget hold when the person writes while the wakes still use the budget up, and lifts it otherwise", () => {
@@ -454,6 +474,47 @@ describe("holding and managing a mock workstream", () => {
     store.personWrote(ws.id);
     expect(store.get(ws.id)?.workstream.heldReason).toBeNull();
     expect(store.events(ws.id).map((e) => e.action)).toEqual(["opened", "held", "budget_reset", "resumed", "budget_reset"]);
+  });
+
+  it("allows 5 more steps: raises both allowances by 5, keeps what was spent, lifts the budget hold, and audits it as the person's", () => {
+    const store = new MockWorkstreams(() => [], () => "title", undefined, undefined, false);
+    const ws = store.open(null, "spent");
+    store.hold(ws.id, "budget", "supervisor");
+    (store as unknown as { all: { id: string; spent: object }[] }).all.find((w) => w.id === ws.id)!.spent = { autoTurns: 11, wakes: 11, tokens: 5 };
+    expect(store.get(ws.id)?.budget.level).toBe("spent");
+    const after = store.allowMore(ws.id);
+    expect(after).toMatchObject({ heldReason: null, budget: { autoTurns: 16, wakes: 17 }, spent: { autoTurns: 11, wakes: 11, tokens: 5 } });
+    expect(store.get(ws.id)?.budget).toEqual({ autoTurns: { used: 11, limit: 16 }, wakes: { used: 11, limit: 17 }, level: "ok" });
+    expect(store.events(ws.id).map((e) => [e.actor, e.action, e.detail])).toEqual([
+      ["person", "opened", null],
+      ["supervisor", "held", "budget"],
+      ["person", "steps_allowed", "5"],
+      ["person", "resumed", "budget"],
+    ]);
+    // A second time, and any other hold, is refused and changes nothing.
+    expect(() => store.allowMore(ws.id)).toThrow("isn't held for its automatic steps");
+    store.hold(ws.id, "person");
+    expect(() => store.allowMore(ws.id)).toThrow("isn't held for its automatic steps");
+    expect(store.events(ws.id).filter((e) => e.action === "steps_allowed")).toHaveLength(1);
+  });
+
+  it("allows more steps through the backend command, and resumes the workstream", async () => {
+    const backend = new MockBackend();
+    const ws = await backend.workstreamsOpen(CA401);
+    backend.workstreams.hold(ws.id, "budget", "supervisor");
+    const allowed = await backend.workstreamsAllowMore(ws.id);
+    expect(allowed).toMatchObject({ heldReason: null, budget: { autoTurns: 16, wakes: 17 } });
+    expect(await actions(backend, ws.id)).toEqual([["person", "opened"], ["supervisor", "held"], ["person", "steps_allowed"], ["person", "resumed"]]);
+    await expect(backend.workstreamsAllowMore(ws.id)).rejects.toThrow("isn't held for its automatic steps");
+  });
+
+  it("charges a wake that is no automatic step nothing, whatever it would have brought", () => {
+    const store = new MockWorkstreams(() => [], () => "title", undefined, undefined, false);
+    const ws = store.open(null, "free");
+    expect(store.admitWake(ws.id, [{ run: "r1", key: "done" }], { wake: true, hold: "budget" }, false)).toBe(true);
+    expect(store.get(ws.id)?.workstream).toMatchObject({ heldReason: null, spent: { autoTurns: 0, wakes: 0 } });
+    expect(store.admitWake(ws.id, [{ run: "r2", key: "done" }], { wake: true, hold: null }, true)).toBe(true);
+    expect(store.get(ws.id)?.workstream.spent).toMatchObject({ autoTurns: 1, wakes: 1 });
   });
 
   it("holds every open workstream on Hold all, once", async () => {
@@ -591,6 +652,55 @@ describe("a mock workstream's ticket drifting from its basis", () => {
     expect(lastTripOf(backend.workstreams.events(ws))).toEqual(trip);
     expect(driftLine({ kind: "basis_drift", fields: ["status"], at: "", resumedAt: "x" })).toBe("The ticket was moved to Done while I was held; I'll work from it as it reads now.");
     expect(driftLine({ kind: "marker", fields: [], at: "", resumedAt: "x" })).toBeNull();
+  });
+});
+
+describe("a triage that found its ticket not ready to plan", () => {
+  beforeEach(() => saved.clear());
+
+  const run = (id: string, kind: Run["spec"]["kind"], minute: number, over: Partial<Run> = {}) =>
+    ({ id, state: "done", item: CA401, queuedAt: `2026-09-30T10:${String(minute).padStart(2, "0")}:00Z`, endedAt: `2026-09-30T10:${String(minute + 5).padStart(2, "0")}:00Z`, spec: spec({ kind, workstream: "ws-1" }), ...over }) as Run;
+  const ws = { id: "ws-1", mode: "manage", closedAt: null, heldReason: null } as Workstream;
+  const triage = run("t1", "triage", 10);
+  const notReady = () => ({ ready: false, questions: ["What does done look like?"] });
+  const person = (action: string, runId: string, actor: WorkstreamEvent["actor"] = "person"): WorkstreamEvent => ({ workstreamId: "ws-1", seq: 1, at: "2026-09-30T11:00:00Z", actor, action, runId, proposalId: null, digest: null, detail: null });
+
+  it("waits for the person, as readiness_of: the newest triage on a ticket, done, not ready, with nothing chosen and no plan since", () => {
+    expect(readinessOf(ws, [triage], notReady, [])).toEqual({ triageRun: "t1", triageLabel: "R1", questions: ["What does done look like?"], at: triage.endedAt });
+    expect(readinessOf(ws, [triage], () => ({ ready: true, questions: [] }), [])).toBeNull();
+    expect(readinessOf(ws, [triage], () => null, [])).toBeNull();
+    expect(readinessOf({ ...ws, mode: "advise" }, [triage], notReady, [])).toBeNull();
+    expect(readinessOf({ ...ws, closedAt: "2026-09-30T12:00:00Z" }, [triage], notReady, [])).toBeNull();
+    expect(readinessOf({ ...ws, heldReason: "person" }, [triage], notReady, [])).not.toBeNull();
+    expect(readinessOf(ws, [{ ...triage, item: null }], notReady, [])).toBeNull();
+    expect(readinessOf(ws, [{ ...triage, state: "working" }], notReady, [])).toBeNull();
+  });
+
+  it("is settled by the person's asking, answering or overriding for that triage, and by nobody else's line", () => {
+    for (const action of ["readiness_asked", "readiness_answered", "readiness_overridden"]) {
+      expect(readinessOf(ws, [triage], notReady, [person(action, "t1")]), action).toBeNull();
+      expect(readinessOf(ws, [triage], notReady, [person(action, "t1", "pip")]), `${action} by Pip`).not.toBeNull();
+      expect(readinessOf(ws, [triage], notReady, [person(action, "t1", "supervisor")]), `${action} by the supervisor`).not.toBeNull();
+      expect(readinessOf(ws, [triage], notReady, [person(action, "t0")]), `${action} for another triage`).not.toBeNull();
+    }
+  });
+
+  it("is replaced by a newer triage, and taken away by a plan started since", () => {
+    const newer = run("t2", "triage", 30);
+    expect(readinessOf(ws, [triage, { ...newer, state: "working" }], notReady, [])).toBeNull();
+    expect(readinessOf(ws, [triage, newer], (r) => (r.id === "t2" ? { ready: true, questions: [] } : notReady()), [])).toBeNull();
+    expect(readinessOf(ws, [triage, newer], (r) => (r.id === "t2" ? { ready: false, questions: ["Q?"] } : { ready: true, questions: [] }), [])?.triageRun).toBe("t2");
+    expect(readinessOf(ws, [triage, run("p1", "plan", 40)], notReady, [])).toBeNull();
+    expect(readinessOf(ws, [triage, run("p0", "plan", 1)], notReady, [])).not.toBeNull();
+  });
+
+  it("only exists in the view of a managed workstream, and the choices are refused once it doesn't", async () => {
+    const backend = new MockBackend({ runs: { seed: "empty" }, wsManage: true });
+    backend.supervisor.dispose();
+    const vague = await backend.workstreamsOpen(itemRef("CA-408"));
+    expect((await backend.workstreamsGet(vague.id))?.readiness ?? null).toBeNull();
+    await expect(backend.workstreamsReadinessOverride(vague.id, "t1")).rejects.toThrow("isn't waiting for your choice");
+    await expect(backend.workstreamsReadinessAnswer("nope", "t1")).rejects.toThrow("there is no workstream nope");
   });
 });
 

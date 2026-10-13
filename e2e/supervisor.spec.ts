@@ -161,7 +161,7 @@ test("the plan waits for the person's approval, which is the only Jira write and
   await openApp(page, MANAGED);
   await startWorkstream(page, "CA-401");
   const ws = (await workstreamEvents(page))[0].workstreamId;
-  // Eight finishes with no message from the person: more than the six automatic turns a workstream has by default.
+  // Eight finishes with no message from the person: more than the automatic steps a workstream would have left, were fix rounds counted.
   await setBudget(page, ws, { autoTurns: 12 });
   await startInvestigation(page);
   await finish(page, (await newest(page, "investigate"))!.id);
@@ -237,7 +237,7 @@ test("a used-up budget holds the workstream, so nothing in it launches or wakes 
   await finish(page, triage.id);
   await expect(wakes(page)).toHaveCount(2);
   await expect.poll(async () => (await actions(page, "held")).map((e) => e.detail)).toEqual(["budget"]);
-  await expect(heldBanner(page)).toHaveText(/^Held: automatic turns used up\. Resume, or write to Pip, to give it \d+ more/);
+  await expect(heldBanner(page)).toHaveText(/^Held: automatic steps used up/);
 
   // The second wake used the budget up. The plan it reports had started already, but held, it never launches.
   const plan = await started(page, "plan");
@@ -285,22 +285,24 @@ test("the budget warns in amber before it runs out, then holds with what to say"
   await expect(wakes(page)).toHaveCount(3);
   await expect(amber).toHaveCount(0);
 
-  // The person's message counts the automatic turns from zero, never the wakes: the fourth is 80% of five. Pip
-  // finishes the last wake first, or the message would set it aside and ask it again behind itself.
+  // The person's message counts the automatic steps from zero, but not the wakes behind them: the fourth is 80% of five,
+  // and the page says "automatic steps" for whichever of the two is nearer its limit. Pip finishes the last wake first,
+  // or the message would set it aside and ask it again behind itself.
   await settled(page);
   await startInvestigation(page);
   await finish(page, (await newest(page, "investigate"))!.id);
   await expect(wakes(page)).toHaveCount(4);
-  await expect(amber).toHaveText("4 of 5 wakes used");
+  await expect(amber).toHaveText("4 of 5 automatic steps used");
   await expect(heldBanner(page)).toHaveCount(0);
 
   await finish(page, (await started(page, "triage", triage.id)).id);
   await expect(wakes(page)).toHaveCount(5);
-  // The wakes ran out, which a message to Pip doesn't reset: only Resume is offered.
-  await expect(heldBanner(page)).toHaveText(/^Held: wakes used up\. Resume to give it 5 more/);
-  await expect(heldBanner(page)).not.toContainText("write to Pip");
+  // The wakes ran out, which a message to Pip doesn't reset; the banner still says automatic steps, and asks for Allow 5 more, not Resume, which would reset the count.
+  await expect(heldBanner(page)).toHaveText(/^Held: automatic steps used up/);
+  await expect(heldBanner(page)).not.toContainText(/wakes|turns|write to Pip/);
   await expect(amber).toHaveCount(0);
-  await expect(pipPane(page).getByRole("button", { name: "Resume" })).toBeVisible();
+  await expect(heldBanner(page).getByRole("button", { name: "Allow 5 more" })).toBeVisible();
+  await expect(pipPane(page).getByRole("button", { name: "Resume" })).toHaveCount(0);
   expect(await jiraWrites(page)).toEqual([]);
 });
 
@@ -438,7 +440,7 @@ test("Hold all, from the rail or with its shortcut, stops a running wake and eve
   await expect(wakes(page)).toContainText("Set aside");
   await expect(pipPane(page).getByRole("button", { name: "Stop" })).toHaveCount(0);
   await holdPip(page, false);
-  await expect(heldBanner(page)).toHaveText(/^Held: Hold all/);
+  await expect(heldBanner(page)).toHaveText(/^Held by you \(Hold all\)/);
   expect((await actions(page, "held")).map((e) => e.detail)).toEqual(["hold_all", "hold_all"]);
 
   // Its agents carry on: CA-402's investigation finishes, but nobody is woken and nothing starts; the queued triage waits.
@@ -463,7 +465,7 @@ test("Hold all, from the rail or with its shortcut, stops a running wake and eve
 
   // The shortcut does the same while that wake runs.
   await holdAll(page, "shortcut");
-  await expect(heldBanner(page)).toHaveText(/^Held: Hold all/);
+  await expect(heldBanner(page)).toHaveText(/^Held by you \(Hold all\)/);
   await expect(wakes(page)).toContainText("Set aside");
   await holdPip(page, false);
   await settled(page);
@@ -486,7 +488,7 @@ test("the Hold all shortcut does nothing while the person types in Pip's input",
   expect((await workstreamEvents(page)).some((e) => e.action === "held")).toBe(false);
   // Away from the field, it holds.
   await holdAll(page, "shortcut");
-  await expect(heldBanner(page)).toHaveText(/^Held: Hold all/);
+  await expect(heldBanner(page)).toHaveText(/^Held by you \(Hold all\)/);
 });
 
 // The sample's runs don't outlive the tab, so Resume here has no finished run to wake Pip for; that each finished run

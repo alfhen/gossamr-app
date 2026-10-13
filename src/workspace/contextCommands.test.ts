@@ -82,6 +82,34 @@ describe("the palette's entries for the focused item", () => {
     expect(labels(entries)).toEqual(["Resume", "Open in workstream", "Switch CA-401 to Advise"]);
   });
 
+  it("a used-up budget offers Allow 5 more and Switch to Advise once, each calling the need's own button", () => {
+    const budget = need({ key: "budget:ws-1", kind: "budget", group: "decide", target: { type: "workstream" }, primary: spec("allowMore", "Allow 5 more"), secondary: [spec("advise", "Switch to Advise")] });
+    const d = deps();
+    const entries = contextCommands({ type: "need", key: budget.key }, data({ needs: [budget], workstreams: [view({ heldReason: "budget" })] }), d);
+    // The workstream's own Switch to Advise would say the same thing twice.
+    expect(labels(entries)).toEqual(["Allow 5 more", "Switch to Advise", "Open in workstream"]);
+    entries[0].run();
+    entries[1].run();
+    expect(d.needAct).toHaveBeenNthCalledWith(1, budget, "allowMore");
+    expect(d.needAct).toHaveBeenNthCalledWith(2, budget, "advise");
+    expect(labels(rankCommands(entries, "allow more"))[0]).toBe("Allow 5 more");
+  });
+
+  it("a ticket that isn't clear enough to plan offers its three choices, each calling the need's own button, and found by what a person would type", () => {
+    const unclear = need({ key: "readiness:r-t", kind: "readiness", group: "decide", target: { type: "workstream" }, primary: spec("askReporter", "Ask the reporter"), secondary: [spec("answerSelf", "I'll answer"), spec("planAnyway", "Plan anyway")] });
+    const d = deps();
+    const entries = contextCommands({ type: "need", key: unclear.key }, data({ needs: [unclear], workstreams: [view({})] }), d);
+    expect(labels(entries).slice(0, 3)).toEqual(["Ask the reporter", "I'll answer", "Plan anyway"]);
+    entries[0].run();
+    entries[1].run();
+    entries[2].run();
+    expect(d.needAct).toHaveBeenNthCalledWith(1, unclear, "askReporter");
+    expect(d.needAct).toHaveBeenNthCalledWith(2, unclear, "answerSelf");
+    expect(d.needAct).toHaveBeenNthCalledWith(3, unclear, "planAnyway");
+    expect(labels(rankCommands(entries, "plan anyway"))[0]).toBe("Plan anyway");
+    expect(labels(rankCommands(entries, "reporter"))[0]).toBe("Ask the reporter");
+  });
+
   it("a need in General says where its link goes; one in a workstream never lists a second open entry", () => {
     const general = need({ key: "run:r-9", workstreamId: null, kind: "failure", runId: "r-9", target: { type: "run", id: "r-9" }, primary: spec("retry", "Retry") });
     expect(labels(contextCommands({ type: "need", key: general.key }, data({ needs: [general], workstreams: [] }), deps()))).toEqual(["Retry", "Open the run"]);

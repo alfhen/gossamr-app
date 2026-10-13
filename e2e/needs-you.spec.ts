@@ -5,6 +5,7 @@ import {
   expandNeedsYou,
   homeConversation,
   homeConversationRegion,
+  holdBySystem,
   homeSettled,
   jiraWrites,
   loseRun,
@@ -66,8 +67,8 @@ test("one row per workstream, with '+N more' for the rest, and one count on the 
   await openApp(page, MANAGED);
   await expect(agentsButton(page)).toHaveCount(1);
   await workstreamOnHome(page);
-  // The sample leaves CA-401's plan to approve; the workstream gets a hold and a draft of Pip's: three needs, one row.
-  await pipHome(page).getByRole("button", { name: "Hold", exact: true }).click();
+  // The sample leaves CA-401's plan to approve; the workstream gets a hold (a restart's: the person's own Hold is no need) and a draft of Pip's: three needs, one row.
+  await holdBySystem(page, "CA-401", "restart");
   await askPip(page, "Draft a comment");
   await homeSettled(page);
 
@@ -88,7 +89,7 @@ test("one row per workstream, with '+N more' for the rest, and one count on the 
   await ws.locator("[data-needs-you-more]").click();
   await expect(ws.locator("[data-needs-you-need]")).toHaveCount(3);
   await expect(ws.locator("[data-needs-you-need]").nth(0)).toContainText("Approve the plan");
-  await expect(ws.locator("[data-needs-you-need]").nth(1)).toContainText("Held by you");
+  await expect(ws.locator("[data-needs-you-need]").nth(1)).toContainText("Held after a restart");
   await expect(ws.locator("[data-needs-you-need]").nth(2)).toContainText("Draft comment");
   await ws.locator("[data-needs-you-more]").click();
   await expect(ws.locator("[data-needs-you-need]")).toHaveCount(0);
@@ -162,7 +163,7 @@ test("approving a draft from the pane writes it to Jira, and focus goes to the n
   await workstreamOnHome(page);
   await askPip(page, "Draft a comment");
   await homeSettled(page);
-  await pipHome(page).getByRole("button", { name: "Hold", exact: true }).click();
+  await holdBySystem(page, "CA-401", "restart");
   await expect(needsYouCount(page)).toHaveText("2");
 
   const ws = needsYouRow(page, "CA-401");
@@ -323,7 +324,7 @@ test("the keyboard in the list: j and k move, Enter opens, ← folds, a asks for
   await homeSettled(page);
   await askPip(page, "Draft a comment");
   await homeSettled(page);
-  await pipHome(page).getByRole("button", { name: "Hold", exact: true }).click();
+  await holdBySystem(page, "CA-401", "restart");
   await expect(needsYouCount(page)).toHaveText("3");
 
   const group = needsYouRow(page, "CA-401").locator("[data-needs-you-group]");
@@ -343,11 +344,11 @@ test("the keyboard in the list: j and k move, Enter opens, ← folds, a asks for
 
   // j walks the needs of the group; ← folds it again.
   await page.keyboard.press("j");
-  await expect(need(page, /Held by you/)).toBeFocused();
+  await expect(need(page, /Held after a restart/)).toBeFocused();
   await page.keyboard.press("j");
   await expect(need(page, /Draft comment/).first()).toBeFocused();
   await page.keyboard.press("k");
-  await expect(need(page, /Held by you/)).toBeFocused();
+  await expect(need(page, /Held after a restart/)).toBeFocused();
   await page.keyboard.press("ArrowLeft");
   await expect(group).toHaveAttribute("aria-expanded", "false");
   await expect(group).toBeFocused();

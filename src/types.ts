@@ -862,6 +862,8 @@ export type Tripwire = (typeof TRIPWIRES)[number];
 /** Automatic Pip turns since the person last wrote, and wakes in all, that a workstream may have unless its budget says otherwise. */
 export const AUTO_TURNS_DEFAULT = 11;
 export const WAKES_DEFAULT = 12;
+/** What the person's "Allow 5 more" adds to a workstream's allowance of automatic steps. */
+export const ALLOW_MORE_STEPS = 5;
 
 /** Where a workstream is, derived from its runs and never stored. */
 export type WorkstreamStage = "intake" | "investigate" | "triage" | "plan" | "build" | "review" | "verify" | "done";
@@ -933,7 +935,22 @@ export interface WorkstreamView {
   reviewBlocking?: boolean;
   /** The newest review still blocks after the automatic fix rounds ran out: the person chooses what happens next. */
   escalation?: Escalation | null;
+  /** The newest Triage found the ticket not ready to plan, and the Plan after it waits for the person's choice. */
+  readiness?: ReadinessStop | null;
   budget: BudgetView;
+}
+
+/**
+ * A Triage that found its ticket not ready to plan, waiting for the person: ask the reporter, answer the questions
+ * themselves, or plan anyway. Only the person chooses. As `ReadinessStop` in src-tauri/src/inbox/workstreams.rs.
+ */
+export interface ReadinessStop {
+  triageRun: string;
+  triageLabel: string;
+  /** The open questions the Triage listed, the agent's words, cleaned and cut. May be empty. */
+  questions: string[];
+  /** When the Triage finished. */
+  at: string;
 }
 
 /**

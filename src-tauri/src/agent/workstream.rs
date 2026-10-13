@@ -13,7 +13,7 @@ use crate::auth::Scope;
 use crate::domain::workstream::{run_labels, Stage, BASIS_DESCRIPTION, BASIS_STATUS, BASIS_SUMMARY, TRIPWIRES};
 use crate::domain::{Actor, Proposal, ProposalQuery, Run, RunQuery, StateKind, Workstream, WorkstreamEvent};
 use crate::error::{Error, Result};
-use crate::inbox::{Core, Escalation, NOTES_CLOSE, NOTES_LIMIT, NOTES_OPEN};
+use crate::inbox::{Core, Escalation, ReadinessStop, NOTES_CLOSE, NOTES_LIMIT, NOTES_OPEN};
 
 pub(super) const NAMES: [&str; 3] = ["get_workstream", "list_workstreams", "set_workstream_notes"];
 
@@ -32,6 +32,9 @@ fn escalated_note(e: &Escalation) -> String {
     format!(" · review still blocks after {} fix rounds, the person decides", e.rounds)
 }
 
+/// Said in the list while a triage found the ticket not ready to plan and the person chooses what happens next.
+const NOT_READY_NOTE: &str = " · the ticket isn't ready to plan, the person decides";
+
 /// The line that tells Pip a review still blocks after the automatic fix rounds and the person chooses what happens
 /// next. Pip has no tool for any of the choices.
 pub fn escalation_line(e: &Escalation) -> String {
@@ -39,6 +42,20 @@ pub fn escalation_line(e: &Escalation) -> String {
     format!(
         "Waiting for the person: review {review} still blocks after {} fix rounds. They choose: run another fix round, take it from here (the workstream goes to Advise), or post the review draft as it is. Only they can choose: explain the options when asked; don't draft a fix round or a follow-up for it.",
         e.rounds
+    )
+}
+
+/// The line that tells Pip a triage found the ticket not ready to plan and the person chooses what happens next. It gives
+/// the count of open questions, never their text, which is an agent's. Pip has no tool for any of the choices.
+pub fn readiness_line(r: &ReadinessStop) -> String {
+    let triage = if r.triage_label.is_empty() { format!("run {}", r.triage_run) } else { r.triage_label.clone() };
+    let questions = match r.questions.len() {
+        0 => "it listed no questions".to_string(),
+        1 => "1 open question".to_string(),
+        n => format!("{n} open questions"),
+    };
+    format!(
+        "Waiting for the person: triage {triage} found the ticket not ready to plan ({questions}), so no plan starts. They choose: ask the reporter (Gossamr drafts the comment for them to approve), answer the questions themselves, or plan anyway. Only they can choose: explain the options when asked; don't draft a plan run for it."
     )
 }
 
@@ -63,6 +80,8 @@ pub struct WorkstreamContext {
     pub last_trip: Option<LastTrip>,
     /// The newest review still blocks after the automatic fix rounds and waits for the person's choice.
     pub escalation: Option<Escalation>,
+    /// The newest triage found the ticket not ready to plan and the person chooses what happens next.
+    pub readiness: Option<ReadinessStop>,
 }
 
 /// The last tripwire that held a workstream, as its audit has it: only kinds, field names and times, never ticket text.
@@ -153,7 +172,7 @@ pub async fn load(core: &Core, scope: &Scope, id: &str) -> Result<WorkstreamCont
     let last_trip = last_trip(&events);
     let mut recent: Vec<WorkstreamEvent> = events.into_iter().filter(|e| e.actor == Actor::Person).collect();
     recent.drain(..recent.len().saturating_sub(RECENT_ACTIONS));
-    Ok(WorkstreamContext { workstream, stage: view.stage, review_blocking: view.review_blocking, runs, drafts, recent_person_actions: recent, waiting_for_pr: view.waiting_for_pr, event: None, last_trip, escalation: view.escalation })
+    Ok(WorkstreamContext { workstream, stage: view.stage, review_blocking: view.review_blocking, runs, drafts, recent_person_actions: recent, waiting_for_pr: view.waiting_for_pr, event: None, last_trip, escalation: view.escalation, readiness: view.readiness })
 }
 
 /// The workstream a turn in its conversation works in. Refused, so the turn never runs, unless it is an open
@@ -208,6 +227,9 @@ fn action_line(e: &WorkstreamEvent, labels: &HashMap<&str, &str>) -> String {
         ("draft_created", _) => format!("made {draft}"),
         ("draft_approved", _) => format!("approved {draft}"),
         ("draft_skipped", _) => format!("skipped {draft}"),
+        ("readiness_asked", Some(r)) => format!("asked the reporter about {r}'s open questions ({draft})"),
+        ("readiness_answered", Some(r)) => format!("chose to answer {r}'s open questions themselves"),
+        ("readiness_overridden", Some(r)) => format!("chose to plan anyway after {r} found the ticket not ready"),
         ("undone", _) => match e.detail.as_deref() {
             Some("draft_skipped") => format!("undid skipping {draft}"),
             Some("held") => "undid holding this workstream".into(),
@@ -250,6 +272,9 @@ impl WorkstreamContext {
         }
         if let Some(e) = &self.escalation {
             out.push_str(&format!("{}\n", escalation_line(e)));
+        }
+        if let Some(r) = &self.readiness {
+            out.push_str(&format!("{}\n", readiness_line(r)));
         }
         if let Some(trip) = &self.last_trip {
             out.push_str(&format!("{}\n", trip_line(trip)));
@@ -353,7 +378,8 @@ async fn list(st: &McpState, pip: &PipRun) -> Reply {
         let waiting = v.waiting_for_pr.as_deref().map_or_else(String::new, |id| format!(" · waiting for the pull request of build run {id}"));
         let changes = if v.review_blocking { CHANGES_NEEDED } else { "" };
         let escalated = v.escalation.as_ref().map_or_else(String::new, escalated_note);
-        lines.push(format!("{} · {} · {ticket} · stage {:?}{changes}{waiting}{escalated} · {} runs{mine}", ws.id, ws.title, v.stage, v.runs.len()));
+        let unclear = if v.readiness.is_some() { NOT_READY_NOTE } else { "" };
+        lines.push(format!("{} · {} · {ticket} · stage {:?}{changes}{waiting}{escalated}{unclear} · {} runs{mine}", ws.id, ws.title, v.stage, v.runs.len()));
     }
     if lines.is_empty() {
         return Ok("No open workstreams.".into());
@@ -511,6 +537,24 @@ mod tests {
         assert!(reply.contains("\nWaiting for the person: review R2 still blocks after 2 fix rounds. They choose: run another fix round, take it from here (the workstream goes to Advise), or post the review draft as it is. Only they can choose: explain the options when asked; don't draft a fix round or a follow-up for it.\n"), "{reply}");
         let listed = r.ok("in-ws", "list_workstreams", json!({})).await;
         assert!(listed.contains("stage Review · the newest review asked for changes · review still blocks after 2 fix rounds, the person decides · 2 runs"), "{listed}");
+    }
+
+    #[tokio::test]
+    async fn a_triage_that_found_the_ticket_not_ready_is_named_as_the_person_s_choice_without_its_questions() {
+        let r = rig().await;
+        r.fx.core.set_workstream_mode(&r.fx.scope, &r.ws.id, crate::domain::workstream::Mode::Manage, Actor::Person).await.unwrap();
+        let mut triage = r.run("r-t", Some(&r.ws.id), RunKind::Triage, RunState::Done, 0).await;
+        (triage.result, triage.result_complete) = (Some("Small.\n\nFor Jira:\nReady to plan: no\nOpen questions:\n- What does SECRET-QUESTION-TEXT mean?\n- Who is waiting?".into()), true);
+        r.fx.core.save_run(&triage).await.unwrap();
+        let reply = r.ok("in-ws", "get_workstream", json!({})).await;
+        assert!(reply.contains("\nWaiting for the person: triage R1 found the ticket not ready to plan (2 open questions), so no plan starts. They choose: ask the reporter (Gossamr drafts the comment for them to approve), answer the questions themselves, or plan anyway. Only they can choose: explain the options when asked; don't draft a plan run for it.\n"), "{reply}");
+        assert!(!reply.contains("SECRET-QUESTION-TEXT"), "the agent's questions are not repeated to Pip: {reply}");
+        let listed = r.ok("in-ws", "list_workstreams", json!({})).await;
+        assert!(listed.contains("· the ticket isn't ready to plan, the person decides · 1 runs"), "{listed}");
+        r.fx.core.record_workstream_event(&r.fx.scope, WorkstreamEvent::new(&r.ws.id, Actor::Person, "readiness_overridden", Utc::now()).run("r-t")).await.unwrap();
+        let after = r.ok("in-ws", "get_workstream", json!({})).await;
+        assert!(!after.contains("Waiting for the person"), "{after}");
+        assert!(after.contains("the person chose to plan anyway after R1 found the ticket not ready"), "{after}");
     }
 
     #[tokio::test]

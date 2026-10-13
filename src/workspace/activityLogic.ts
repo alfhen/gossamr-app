@@ -398,6 +398,14 @@ export function eventText(e: WorkstreamEvent, label: (id: string | null) => stri
       return "Pip updated its notes";
     case "budget_reset":
       return `${who} reset the budget`;
+    case "steps_allowed":
+      return `${who} allowed ${e.detail ?? "5"} more automatic steps`;
+    case "readiness_asked":
+      return `${who} asked the reporter about ${label(e.runId)}'s open questions`;
+    case "readiness_answered":
+      return `${who} chose to answer ${label(e.runId)}'s open questions`;
+    case "readiness_overridden":
+      return `${who} chose to plan anyway after ${label(e.runId)} found the ticket not ready`;
     default:
       return null;
   }

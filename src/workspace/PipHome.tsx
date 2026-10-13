@@ -1,6 +1,10 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useClaude } from "../claudeStore";
 import { stageText } from "../lib/workstreamStage";
+import { witherClass } from "../lib/views";
+import type { WorkstreamWither } from "../lib/workstreamWither";
+import { Cobweb } from "../components/Cobweb";
+import { useWorkstreamWithers } from "./useWorkstreamWithers";
 import type { Run, WorkstreamView } from "../types";
 import { PipAvatar } from "./PipAvatar";
 import { Composer, GENERAL_CONVERSATION, PIP_INPUT_ID, useAnswering, workstreamConversation } from "./PipConversation";
@@ -72,6 +76,8 @@ export interface WorkstreamListProps {
   runs?: readonly Run[];
   /** What waits on the person, for each row's count. */
   needsYou?: readonly Need[];
+  /** The workstreams that have gone quiet in Jira while work went on, by id (`useWorkstreamWithers`): each row gets its cobweb. */
+  wither?: Readonly<Record<string, WorkstreamWither>>;
   /** The Needs you list, at the bottom of the column. */
   tray?: ReactNode;
 }
@@ -90,14 +96,14 @@ function NeedsBadge({ count, total }: { count: number; total: number }) {
 }
 
 /** Pip home's left column: General pinned at the top, then each open workstream with where it stands; the closed ones behind a toggle, read-only. */
-export function WorkstreamList({ list, closed, showClosed, selected, onSelect, onShowClosed, runs = [], needsYou = [], tray }: WorkstreamListProps) {
+export function WorkstreamList({ list, closed, showClosed, selected, onSelect, onShowClosed, runs = [], needsYou = [], wither = {}, tray }: WorkstreamListProps) {
   const open = list.filter((v) => v.workstream.closedAt === null);
-  const option = (id: string | null) => ({
+  const option = (id: string | null, level: WorkstreamWither["level"] = 0) => ({
     role: "option" as const,
     "aria-selected": selected === id,
     tabIndex: selected === id ? 0 : -1,
     onClick: () => onSelect(id),
-    className: `${ROW} ${selected === id ? "bg-ws-sel text-ws-ink" : "text-ws-ink2 hover:bg-ws-hover"}`,
+    className: `${ROW} ${selected === id ? "bg-ws-sel text-ws-ink" : "text-ws-ink2 hover:bg-ws-hover"} ${witherClass(level, "ws-")}`.trim(),
   });
   return (
     <nav aria-label="Workstreams" tabIndex={-1} className="flex min-h-0 flex-col border-r border-ws-sep bg-ws-bar">
@@ -110,16 +116,26 @@ export function WorkstreamList({ list, closed, showClosed, selected, onSelect, o
           </span>
           <span className="text-xs text-ws-ink3">Everything not in a workstream</span>
         </li>
-        {open.map((v) => (
-          <li key={v.workstream.id} data-workstream-row={v.workstream.id} {...option(v.workstream.id)}>
-            <span className="flex min-w-0 items-center gap-1.5">
-              {v.workstream.itemKey && <b className="shrink-0 font-mono font-semibold text-ws-ink">{v.workstream.itemKey}</b>}
-              <span className="min-w-0 truncate">{rowTitle(v.workstream)}</span>
-              <NeedsBadge count={needsIn(needsYou, v.workstream.id)} total={needsYou.length} />
-            </span>
-            <RowStatus view={v} runs={runs} waiting={needsIn(needsYou, v.workstream.id)} />
-          </li>
-        ))}
+        {open.map((v) => {
+          const web = wither[v.workstream.id];
+          return (
+            <li key={v.workstream.id} data-workstream-row={v.workstream.id} data-wither={web ? web.level : undefined} title={web?.text} {...option(v.workstream.id, web?.level)}>
+              {web && <Cobweb level={web.level} />}
+              <span className="flex min-w-0 items-center gap-1.5">
+                {v.workstream.itemKey && <b className="shrink-0 font-mono font-semibold text-ws-ink">{v.workstream.itemKey}</b>}
+                <span className="min-w-0 truncate">{rowTitle(v.workstream)}</span>
+                <NeedsBadge count={needsIn(needsYou, v.workstream.id)} total={needsYou.length} />
+              </span>
+              <RowStatus view={v} runs={runs} waiting={needsIn(needsYou, v.workstream.id)} />
+              {/* After the row's own words, so its name still starts with the ticket's key. */}
+              {web && (
+                <span data-workstream-wither className="sr-only">
+                  {web.text}
+                </span>
+              )}
+            </li>
+          );
+        })}
       </ul>
       {open.length === 0 && <p className="m-0 px-3 py-2 text-sm text-ws-ink3">{NO_WORKSTREAMS}</p>}
       <div className="mt-auto grid gap-1 border-t border-ws-sep px-1.5 py-2">
@@ -485,6 +501,8 @@ export function PipHome() {
   const needsYou = useNeedsYou();
   // The same clock as the Agents view's, so a run gone quiet leaves "running" here when it does there.
   const now = useNow();
+  const openList = useMemo(() => list.filter((v) => v.workstream.closedAt === null), [list]);
+  const withers = useWorkstreamWithers(openList, now);
   const footer = useMemo(() => composerFooter(runs, needsYou.length, now), [runs, needsYou.length, now]);
   const orientationSeen = usePrefs((s) => s.pipOrientationSeen);
   // The footer names the list's own keys while the keyboard is on one of its rows.
@@ -527,6 +545,7 @@ export function PipHome() {
             }}
             runs={runs}
             needsYou={needsYou}
+            wither={withers}
             tray={<NeedsYouList needs={needsYou} now={now} />}
           />
         </div>

@@ -34,6 +34,8 @@ impl Mode {
 pub const AUTO_TURNS_DEFAULT: u32 = 11;
 /// Wakes a workstream may have in all, unless its budget says otherwise.
 pub const WAKES_DEFAULT: u32 = 12;
+/// What the person's "Allow 5 more" adds to a workstream's automatic turns and wakes.
+pub const ALLOW_MORE_STEPS: u32 = 5;
 
 /// Why a workstream is held, as `held_reason` stores it. A tripwire is `tripwire:<kind>`, the kind one of `TRIPWIRES`.
 pub const HELD_RESTART: &str = "restart";

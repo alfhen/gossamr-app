@@ -14,6 +14,7 @@ import { heldText } from "../lib/workstreamHold";
 import { draftPhrase, runPhrase } from "../lib/runNames";
 import { statusId } from "./mockConnector";
 import type { LastTrip } from "./mockWorkstreams";
+import { gapsSentence, readinessGaps, thinDescription } from "./mockReadiness";
 
 /** What the scripted Pip does for one question. */
 export interface PipScript {
@@ -189,6 +190,23 @@ export interface PipWorkstream {
   drifted?: readonly BasisField[] | null;
   /** The last tripwire that held it, while Pip hasn't been told of it in a wake since the person resumed it. */
   lastTrip?: LastTrip | null;
+  /** Pip's first turn in this conversation, which opens with the readiness check of the ticket. */
+  first?: boolean;
+  /** The ticket's description as text, for that check; null when it has none or isn't known. */
+  ticketText?: string | null;
+}
+
+/**
+ * Pip's readiness check of a workstream's ticket in its first turn, as the Manager prompt asks (`MANAGER` in
+ * src-tauri/src/agent/context.rs): the one sentence naming what the ticket leaves out, e.g. "CA-408 doesn't say what done
+ * looks like, what's in or out of scope, or who is waiting on it." Null when it isn't the first turn, there is no ticket,
+ * or the sample finds nothing missing: it recognises a one-line description (`thinDescription`), the sample's stand-in for
+ * Pip's judgment.
+ */
+export function readinessLine(workstream: PipWorkstream | null): string | null {
+  if (!workstream?.first || !workstream.item || !thinDescription(workstream.ticketText)) return null;
+  const gaps = readinessGaps(workstream.ticketText ?? "");
+  return gaps.length ? gapsSentence(workstream.item.key, gaps) : null;
 }
 
 /**
@@ -485,8 +503,17 @@ function rewriteTarget(prompt: string, context: ScreenContext): ItemRef | null {
   return { connectionId: context.item?.connectionId ?? context.selection[0]?.connectionId ?? "mock", externalId: key, key };
 }
 
-/** The scripted assistant the browser build talks to; it decides from keywords and the screen context alone. */
+/**
+ * The scripted assistant the browser build talks to; it decides from keywords and the screen context alone. Its first
+ * turn in a workstream opens with the readiness check of the ticket, whatever it was asked (`readinessLine`).
+ */
 export function scriptPip(prompt: string, context: ScreenContext, images: ImageData[] = [], runs: readonly Run[] = [], now = Date.now(), drafts: readonly Proposal[] = [], discussed: string | null = null, workstream: PipWorkstream | null = null): PipScript {
+  const script = scriptTurn(prompt, context, images, runs, now, drafts, discussed, workstream);
+  const unclear = prompt.startsWith(EVENT) ? null : readinessLine(workstream);
+  return unclear ? { ...script, steps: ["Read the ticket", ...script.steps], text: `${unclear}\n\n${script.text}` } : script;
+}
+
+function scriptTurn(prompt: string, context: ScreenContext, images: ImageData[], runs: readonly Run[], now: number, drafts: readonly Proposal[], discussed: string | null, workstream: PipWorkstream | null): PipScript {
   if (prompt.startsWith(EVENT)) return wakeScript(prompt, runs, workstream);
   const q = prompt.toLowerCase();
   const foundIn = asksWhatRunFound.exec(prompt.trim());
@@ -796,6 +823,8 @@ export interface PipDrafter {
   pipRunDraft(item: ItemRef, kind: RunKind, fromRun: string | null, focus: string | null, requestId: string): Promise<unknown>;
   /** The ticket of workstream `id`, for a turn asked in its conversation. */
   pipWorkstreamItem(id: string): ItemRef | null;
+  /** The description of `item` as text, for Pip's readiness check in a workstream's first turn. */
+  pipTicketText?(item: ItemRef): string | null;
   /** Why workstream `id` is held, or null; only the scripted answer to "Why is this held?" reads it. */
   pipWorkstreamHeld(id: string): string | null;
   /** The ticket fields whose drift held workstream `id`, while it is held for that. */
@@ -859,9 +888,13 @@ export async function mockAsk(req: AskRequest, drafter: Partial<PipDrafter> | nu
   const meta = metaOf(req);
   const emit = (id: string, e: ClaudeEvent) => mockPipEvents.emit(id, e, meta);
   // Kept the way the app keeps a turn: the question now, steps as they come, the answer and its usage at the end.
-  mockPipTurns.begin(req.conversation ?? GENERAL_CONVERSATION, req.requestId, req.prompt, req.meta ?? { imageCount: req.images?.length ?? 0 }, "running", new Date(), undefined, req.kind ?? "user");
   const wsId = workstreamOfConversation(req.conversation);
-  const workstream = wsId ? { id: wsId, item: drafter?.pipWorkstreamItem?.(wsId) ?? null, heldReason: drafter?.pipWorkstreamHeld?.(wsId) ?? null, drifted: drafter?.pipWorkstreamDrifted?.(wsId) ?? null, lastTrip: drafter?.pipWorkstreamTrip?.(wsId) ?? null } : null;
+  // Pip's first turn in a workstream opens with the readiness check: no other turn is kept in its conversation (a turn waiting
+  // in the queue is kept already, so this one's own entry doesn't count).
+  const first = !!wsId && req.kind !== "wake" && mockPipTurns.turns(req.conversation ?? GENERAL_CONVERSATION).every((t) => t.requestId === req.requestId);
+  mockPipTurns.begin(req.conversation ?? GENERAL_CONVERSATION, req.requestId, req.prompt, req.meta ?? { imageCount: req.images?.length ?? 0 }, "running", new Date(), undefined, req.kind ?? "user");
+  const item = wsId ? (drafter?.pipWorkstreamItem?.(wsId) ?? null) : null;
+  const workstream = wsId ? { id: wsId, item, heldReason: drafter?.pipWorkstreamHeld?.(wsId) ?? null, drifted: drafter?.pipWorkstreamDrifted?.(wsId) ?? null, lastTrip: drafter?.pipWorkstreamTrip?.(wsId) ?? null, first, ticketText: item ? (drafter?.pipTicketText?.(item) ?? null) : null } : null;
   const script = scriptPip(req.prompt, req.context, req.images, drafter?.pipRuns?.() ?? [], Date.now(), drafter?.pipDrafts?.() ?? [], discussing.get(session) ?? null, workstream);
   if (script.discussed) discussing.set(session, script.discussed);
   emit(req.requestId, { type: "started", sessionId: session });

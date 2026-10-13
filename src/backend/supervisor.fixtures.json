@@ -63,6 +63,98 @@
       }
     },
     {
+      "name": "a triage not ready to plan says so with its open questions",
+      "workstream": {
+        "mode": "manage",
+        "held": null,
+        "closed": false,
+        "spent": {
+          "autoTurns": 0,
+          "wakes": 0
+        },
+        "budget": {}
+      },
+      "daily": {
+        "used": 0,
+        "cap": 40
+      },
+      "woken": false,
+      "fact": {
+        "run": "abc12345",
+        "kind": "triage",
+        "state": "done",
+        "planRecommended": true,
+        "openQuestions": 2,
+        "drafts": 1
+      },
+      "expect": {
+        "wake": true,
+        "hold": null,
+        "level": "ok",
+        "line": "[Event] run abc12345 (triage) Done; plan recommended: yes; not ready to plan, 2 open questions; 1 draft"
+      }
+    },
+    {
+      "name": "a triage not ready to plan with no questions listed says only that",
+      "workstream": {
+        "mode": "manage",
+        "held": null,
+        "closed": false,
+        "spent": {
+          "autoTurns": 0,
+          "wakes": 0
+        },
+        "budget": {}
+      },
+      "daily": {
+        "used": 0,
+        "cap": 40
+      },
+      "woken": false,
+      "fact": {
+        "run": "abc12345",
+        "kind": "triage",
+        "state": "done",
+        "openQuestions": 0
+      },
+      "expect": {
+        "wake": true,
+        "hold": null,
+        "level": "ok",
+        "line": "[Event] run abc12345 (triage) Done; not ready to plan"
+      }
+    },
+    {
+      "name": "a triage with one open question says question",
+      "workstream": {
+        "mode": "manage",
+        "held": null,
+        "closed": false,
+        "spent": {
+          "autoTurns": 0,
+          "wakes": 0
+        },
+        "budget": {}
+      },
+      "daily": {
+        "used": 0,
+        "cap": 40
+      },
+      "woken": false,
+      "fact": {
+        "run": "abc12345",
+        "kind": "triage",
+        "state": "done",
+        "openQuestions": 1
+      },
+      "expect": {
+        "wake": true,
+        "hold": null,
+        "level": "ok",
+        "line": "[Event] run abc12345 (triage) Done; not ready to plan, 1 open question"
+      }
+    },
+    {
       "name": "an advised workstream is not woken",
       "workstream": {
         "mode": "advise",
@@ -764,6 +856,78 @@
       "expect": true
     }
   ],
+  "readiness": [
+    {
+      "note": "Ready to plan: yes",
+      "expect": {
+        "ready": true,
+        "questions": []
+      }
+    },
+    {
+      "note": "For Jira:\n**Ready to plan:** No\nOpen questions:\n- What does done look like?\n- Who is waiting on it?",
+      "expect": {
+        "ready": false,
+        "questions": [
+          "What does done look like?",
+          "Who is waiting on it?"
+        ]
+      }
+    },
+    {
+      "note": "- ready to plan: no\n- Open questions: what is the goal?",
+      "expect": {
+        "ready": false,
+        "questions": [
+          "what is the goal?"
+        ]
+      }
+    },
+    {
+      "note": "## Ready to plan: no",
+      "expect": {
+        "ready": false,
+        "questions": []
+      }
+    },
+    {
+      "note": "Plan recommended: yes",
+      "expect": null
+    },
+    {
+      "note": "The ticket says:\n> Ready to plan: no\n> Open questions:\n> - who?",
+      "expect": null
+    },
+    {
+      "note": "```\nReady to plan: no\n```",
+      "expect": null
+    },
+    {
+      "note": "Ready to plan: no\nOn reflection:\nReady to plan: yes",
+      "expect": null
+    },
+    {
+      "note": "Ready to plan: maybe",
+      "expect": null
+    },
+    {
+      "note": "Ready to plan: no\n> Open questions:\n> - quoted",
+      "expect": {
+        "ready": false,
+        "questions": []
+      }
+    },
+    {
+      "note": "Ready to plan: no\nOpen questions:\n1. Is mobile in scope?\n2. **Who** asked?\n\nNext steps:\n- not a question",
+      "expect": {
+        "ready": false,
+        "questions": [
+          "Is mobile in scope?",
+          "Who asked?"
+        ]
+      }
+    }
+  ],
   "budget": [
     {
       "spent": {
@@ -1352,6 +1516,329 @@
         }
       },
       "expect": null
+    },
+    {
+      "name": "a triage recommending a plan but not ready to plan starts nothing",
+      "source": {
+        "kind": "triage",
+        "state": "done",
+        "ticket": true,
+        "allowPush": false,
+        "buildFromRun": null
+      },
+      "report": {
+        "planRecommended": true,
+        "ready": false
+      },
+      "workstream": {
+        "mode": "manage",
+        "held": null,
+        "closed": false,
+        "spent": {
+          "autoTurns": 0,
+          "wakes": 0
+        },
+        "rules": {}
+      },
+      "expect": null
+    },
+    {
+      "name": "a triage recommending a plan and ready to plan starts the plan",
+      "source": {
+        "kind": "triage",
+        "state": "done",
+        "ticket": true,
+        "allowPush": false,
+        "buildFromRun": null
+      },
+      "report": {
+        "planRecommended": true,
+        "ready": true
+      },
+      "workstream": {
+        "mode": "manage",
+        "held": null,
+        "closed": false,
+        "spent": {
+          "autoTurns": 0,
+          "wakes": 0
+        },
+        "rules": {}
+      },
+      "expect": {
+        "decision": "start",
+        "rule": "triage_plan",
+        "kind": "plan"
+      }
+    },
+    {
+      "name": "a triage not ready to plan and recommending no plan starts nothing",
+      "source": {
+        "kind": "triage",
+        "state": "done",
+        "ticket": true,
+        "allowPush": false,
+        "buildFromRun": null
+      },
+      "report": {
+        "planRecommended": false,
+        "ready": false
+      },
+      "workstream": {
+        "mode": "manage",
+        "held": null,
+        "closed": false,
+        "spent": {
+          "autoTurns": 0,
+          "wakes": 0
+        },
+        "rules": {}
+      },
+      "expect": null
+    },
+    {
+      "name": "Plan anyway after a triage not ready to plan starts the plan",
+      "source": {
+        "kind": "triage",
+        "state": "done",
+        "ticket": true,
+        "allowPush": false,
+        "buildFromRun": null
+      },
+      "report": {
+        "planRecommended": true,
+        "ready": false
+      },
+      "workstream": {
+        "mode": "manage",
+        "held": null,
+        "closed": false,
+        "spent": {
+          "autoTurns": 0,
+          "wakes": 0
+        },
+        "rules": {}
+      },
+      "readinessOverridden": true,
+      "expect": {
+        "decision": "start",
+        "rule": "triage_plan",
+        "kind": "plan"
+      }
+    },
+    {
+      "name": "Plan anyway starts the plan even when the triage recommended none",
+      "source": {
+        "kind": "triage",
+        "state": "done",
+        "ticket": true,
+        "allowPush": false,
+        "buildFromRun": null
+      },
+      "report": {
+        "planRecommended": false,
+        "ready": false
+      },
+      "workstream": {
+        "mode": "manage",
+        "held": null,
+        "closed": false,
+        "spent": {
+          "autoTurns": 0,
+          "wakes": 0
+        },
+        "rules": {}
+      },
+      "readinessOverridden": true,
+      "expect": {
+        "decision": "start",
+        "rule": "triage_plan",
+        "kind": "plan"
+      }
+    },
+    {
+      "name": "Plan anyway still waits for a hold",
+      "source": {
+        "kind": "triage",
+        "state": "done",
+        "ticket": true,
+        "allowPush": false,
+        "buildFromRun": null
+      },
+      "report": {
+        "planRecommended": true,
+        "ready": false
+      },
+      "workstream": {
+        "mode": "manage",
+        "held": "person",
+        "closed": false,
+        "spent": {
+          "autoTurns": 0,
+          "wakes": 0
+        },
+        "rules": {}
+      },
+      "readinessOverridden": true,
+      "expect": null
+    },
+    {
+      "name": "Plan anyway still waits for a hold the system made",
+      "source": {
+        "kind": "triage",
+        "state": "done",
+        "ticket": true,
+        "allowPush": false,
+        "buildFromRun": null
+      },
+      "report": {
+        "planRecommended": true,
+        "ready": false
+      },
+      "workstream": {
+        "mode": "manage",
+        "held": "restart",
+        "closed": false,
+        "spent": {
+          "autoTurns": 0,
+          "wakes": 0
+        },
+        "rules": {}
+      },
+      "readinessOverridden": true,
+      "expect": null
+    },
+    {
+      "name": "Plan anyway is refused when the budget is spent",
+      "source": {
+        "kind": "triage",
+        "state": "done",
+        "ticket": true,
+        "allowPush": false,
+        "buildFromRun": null
+      },
+      "report": {
+        "planRecommended": true,
+        "ready": false
+      },
+      "workstream": {
+        "mode": "manage",
+        "held": null,
+        "closed": false,
+        "spent": {
+          "autoTurns": 11,
+          "wakes": 11
+        },
+        "rules": {}
+      },
+      "readinessOverridden": true,
+      "expect": null
+    },
+    {
+      "name": "Plan anyway does nothing in Advise",
+      "source": {
+        "kind": "triage",
+        "state": "done",
+        "ticket": true,
+        "allowPush": false,
+        "buildFromRun": null
+      },
+      "report": {
+        "planRecommended": true,
+        "ready": false
+      },
+      "workstream": {
+        "mode": "advise",
+        "held": null,
+        "closed": false,
+        "spent": {
+          "autoTurns": 0,
+          "wakes": 0
+        },
+        "rules": {}
+      },
+      "readinessOverridden": true,
+      "expect": null
+    },
+    {
+      "name": "Plan anyway does nothing in a closed workstream",
+      "source": {
+        "kind": "triage",
+        "state": "done",
+        "ticket": true,
+        "allowPush": false,
+        "buildFromRun": null
+      },
+      "report": {
+        "planRecommended": true,
+        "ready": false
+      },
+      "workstream": {
+        "mode": "manage",
+        "held": null,
+        "closed": true,
+        "spent": {
+          "autoTurns": 0,
+          "wakes": 0
+        },
+        "rules": {}
+      },
+      "readinessOverridden": true,
+      "expect": null
+    },
+    {
+      "name": "Plan anyway does not chain on a run a tripwire named",
+      "source": {
+        "kind": "triage",
+        "state": "done",
+        "ticket": true,
+        "allowPush": false,
+        "buildFromRun": null
+      },
+      "report": {
+        "planRecommended": true,
+        "ready": false
+      },
+      "workstream": {
+        "mode": "manage",
+        "held": null,
+        "closed": false,
+        "spent": {
+          "autoTurns": 0,
+          "wakes": 0
+        },
+        "rules": {}
+      },
+      "readinessOverridden": true,
+      "expect": null,
+      "tripped": true
+    },
+    {
+      "name": "Plan anyway does not start the plan twice",
+      "source": {
+        "kind": "triage",
+        "state": "done",
+        "ticket": true,
+        "allowPush": false,
+        "buildFromRun": null
+      },
+      "report": {
+        "planRecommended": true,
+        "ready": false
+      },
+      "workstream": {
+        "mode": "manage",
+        "held": null,
+        "closed": false,
+        "spent": {
+          "autoTurns": 0,
+          "wakes": 0
+        },
+        "rules": {}
+      },
+      "readinessOverridden": true,
+      "expect": null,
+      "already": true
     },
     {
       "name": "a plan whose draft the person approved starts the build",

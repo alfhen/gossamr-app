@@ -1,6 +1,6 @@
 import { decideAutostart, ruleOn, type AutostartInput, type ReviewFinding } from "../backend/mockSupervisor";
 import { slotPosition, slotQueue, ordinal } from "../workspace/agentsLogic";
-import { AUTOSTART_DEFAULTS, type AutoStartSwitches, type Proposal, type Run, type RunKind, type WorkstreamRule, type WorkstreamView } from "../types";
+import { ALLOW_MORE_STEPS, AUTOSTART_DEFAULTS, HELD_BUDGET, type AutoStartSwitches, type Proposal, type Run, type RunKind, type WorkstreamRule, type WorkstreamView } from "../types";
 import { byRank, type Need } from "./needs";
 import { shortHeld, stepsLeftText, ruleText } from "./workstreamHold";
 import { byQueue, STAGE_LABEL } from "./workstreamStage";
@@ -39,7 +39,7 @@ export interface NextStep {
   kind: NextStepKind;
   /** One sentence, starting "Next: ". */
   text: string;
-  /** The need the line links to: the top one, for "waiting"; null for every other line. */
+  /** The need the line links to: the top one, for "waiting"; the budget's question, for a workstream held for its automatic steps; null for every other line. */
   need: Need | null;
 }
 
@@ -117,7 +117,12 @@ export function nextStep(view: WorkstreamView, runs: readonly Run[], proposals: 
   const going = mine.filter(inProgress);
 
   const held = shortHeld(ws.heldReason, ws.drifted) ?? (ws.heldReason ? "Held" : null);
-  if (held) return step("held", `${lower(held)}. Resume to continue.`);
+  if (held) {
+    // Running out of automatic steps is a question in Needs you; the line points at it rather than only saying "held".
+    const budget = ws.heldReason === HELD_BUDGET ? needs.find((n) => n.key === `budget:${ws.id}`) : undefined;
+    if (budget) return step("held", `the automatic steps are used up. Choose in Needs you: allow ${ALLOW_MORE_STEPS} more, or switch to Advise.`, budget);
+    return step("held", `${lower(held)}. Resume to continue.`);
+  }
 
   const own = needs.filter((n) => n.workstreamId === ws.id && n.kind !== "hold").sort(byRank);
   // Anything that decides or unblocks stops the line at once. A draft to approve does not: a step in hand or about to
@@ -148,7 +153,7 @@ function chain(view: WorkstreamView, runs: readonly Run[], proposals: readonly P
 
   if (ws.mode !== "manage") return step("advise", "nothing starts on its own in Advise. Pip suggests, you start.");
 
-  if (view.budget.level === "spent") return step("spent", "the automatic budget is used up. Your click starts the next step.");
+  if (view.budget.level === "spent") return step("spent", "the automatic steps are used up. Your click starts the next step.");
   const left = view.budget.level === "amber" ? ` (${stepsLeftText(view.budget).replace(/ automatic steps left$/, "")} automatic steps left)` : "";
 
   const src = going[0];
@@ -171,7 +176,7 @@ function afterRunning(src: Run, view: WorkstreamView, globals: Partial<AutoStart
     case "triage":
       // A plan follows only if the finished triage recommends one.
       result = probe(src, view, globals, { report: { planRecommended: true } });
-      unknown = `${shortOf(src, view)}'s triage: a plan starts automatically only if it recommends one`;
+      unknown = `${shortOf(src, view)}'s triage: a plan starts automatically only if it recommends one and finds the ticket ready to plan`;
       break;
     case "plan":
       // A build follows only once the person approves the plan.

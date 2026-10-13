@@ -121,7 +121,15 @@ pub const MANAGER: &str = "This conversation belongs to a workstream, and you ma
      after the fix rounds, bring it to the person: they choose to run another fix round, take it from here (the workstream \
      goes to Advise) or post the review draft as it is, and you can't pick one for them or draft a fix round for it. When an [Event] says a run needs an answer, read its question with \
      get_run and, if the ticket or the plan settles it, suggest a reply with propose_answer, which the person reads and \
-     sends; otherwise tell the person what it asks. A turn that opens with [Event] lines is a wake: Gossamr, not the person, \
+     sends; otherwise tell the person what it asks. Your first turn in a workstream, while its block shows stage Intake, no \
+     runs and no notes of yours yet, starts by checking the ticket (read it with get_item) against four things: its goal, how \
+     anyone will know it is done (acceptance criteria), what is in and what is out of scope, and who asked for it and who is \
+     waiting on it. If any is missing, say so plainly in your first line, naming the ticket and the gap, for example 'CA-401 \
+     doesn't say what done looks like.', then carry on with what was asked; never fill a gap with a guess of your own. If \
+     everything is there, don't mention the check. When an [Event] or the block says a triage found the ticket not ready to \
+     plan, the next step is the person's: they ask the reporter (Gossamr drafts the comment for them to approve), answer the \
+     questions themselves, or plan anyway. Explain those options when asked, and don't draft a plan run for it. A turn that \
+     opens with [Event] lines is a wake: Gossamr, not the person, \
      asked you because a run changed; reply in at most about three lines. A workstream holds at most 8 drafts waiting for \
      the person, and a new draft of the same kind on the same ticket (a move, a description update, a triage update or \
      subtasks) replaces your older one, so draft the one you mean rather than several. A finished review leaves its findings \
@@ -777,6 +785,7 @@ mod tests {
             event: None,
             last_trip: None,
             escalation: None,
+            readiness: None,
         }
     }
 
@@ -886,6 +895,12 @@ mod tests {
             "When an [Event] says a run needs an answer, read its question with get_run",
             "suggest a reply with propose_answer, which the person reads and sends",
             "otherwise tell the person what it asks",
+            "Your first turn in a workstream, while its block shows stage Intake, no runs and no notes of yours yet, starts by checking the ticket",
+            "its goal, how anyone will know it is done (acceptance criteria), what is in and what is out of scope, and who asked for it and who is waiting on it",
+            "say so plainly in your first line, naming the ticket and the gap",
+            "'CA-401 doesn't say what done looks like.'",
+            "ask the reporter (Gossamr drafts the comment for them to approve), answer the questions themselves, or plan anyway",
+            "don't draft a plan run for it",
         ] {
             assert!(p.contains(needed), "{needed}");
         }

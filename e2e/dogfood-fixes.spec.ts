@@ -194,7 +194,7 @@ test.describe("workstream stage and holds (D3, D10, D18)", () => {
     expect(await jiraWrites(page)).toEqual([]);
   });
 
-  test("a used-up budget says how many turns Resume gives, defines an automatic turn, and Resume lifts it", async ({ page }) => {
+  test("a used-up budget defines an automatic step, and Allow 5 more lifts it", async ({ page }) => {
     await openApp(page, MANAGED);
     await startWorkstream(page, "CA-401");
     await setBudget(page, (await workstreamEvents(page))[0].workstreamId, { autoTurns: 2 });
@@ -202,12 +202,12 @@ test.describe("workstream stage and holds (D3, D10, D18)", () => {
     await finish(page, (await newest(page, "investigate"))!.id);
     await finish(page, (await started(page, "triage")).id);
     await expect(heldBanner(page)).toHaveAttribute("data-held-banner", "budget");
-    await expect(heldBanner(page)).toContainText("Held: automatic turns used up. Resume, or write to Pip, to give it 2 more");
-    const help = heldBanner(page).locator("[data-turn-help]");
+    await expect(heldBanner(page)).toContainText("Held: automatic steps used up");
+    const help = heldBanner(page).locator("[data-step-help]");
     await help.locator("summary").click();
-    await expect(help).toContainText("An automatic turn is each time Pip acts without you asking, such as reading a finished run. Your next message resets the count of turns; only Resume resets the wakes.");
+    await expect(help).toContainText("An automatic step is each time Pip acts without you asking, such as reading a finished run. Automatic fix rounds don't count. When they run out you can allow 5 more, or switch to Advise.");
 
-    await heldBanner(page).getByRole("button", { name: "Resume" }).click();
+    await heldBanner(page).getByRole("button", { name: "Allow 5 more" }).click();
     await expect(heldBanner(page)).toHaveCount(0);
     expect((await workstreamEvents(page)).filter((e) => e.action === "resumed").map((e) => [e.actor, e.detail])).toEqual([["person", "budget"]]);
     expect(await jiraWrites(page)).toEqual([]);

@@ -6,7 +6,8 @@
 //! | When this finishes            | And                                              | This starts            |
 //! |-------------------------------|--------------------------------------------------|------------------------|
 //! | Investigate on a ticket       | Done                                             | Triage                 |
-//! | Triage                        | `plan recommended: yes`                          | Plan                   |
+//! | Triage                        | `plan recommended: yes` and not `ready to plan: no` | Plan                |
+//! | Triage                        | the person chose "Plan anyway" (`readiness_overridden`) | Plan             |
 //! | Plan                          | the person approved its Gossamr Plan draft       | Build (draft PR)       |
 //! | Build                         | its pull request was found at a commit no review read | Review            |
 //! | Review                        | `verdict: blocking`, fewer than 2 fix rounds     | a fix round to the Build |
@@ -17,13 +18,18 @@
 //! never starts anything. The same holds for the investigation a Triage carried, whose findings its Plan carries on
 //! (`carried`). What starts is the kind's own template with the
 //! handoffs Core fills; Pip's focus is never carried.
+//!
+//! A Triage that says `ready to plan: no` is a hard stop: nothing starts after it until the person answers or overrides
+//! it, and only the person's own audit line (`readiness_overridden`, actor person, naming that Triage) counts as the
+//! override, which still needs everything else above (Manage, not held, within budget, never a tripwire's run). A Triage
+//! with no verdict reads as ready.
 
 use crate::config::{rule_on, AgentSettings};
 use crate::domain::workstream::{starts_steps, Rule};
-use crate::domain::{default_instruction, ClonePlan, Run, RunKind, RunSpec, RunState, Workstream};
+use crate::domain::{default_instruction, Actor, ClonePlan, Run, RunKind, RunSpec, RunState, Workstream, WorkstreamEvent};
 use crate::runs::report::{Finding, ReviewVerdict, Severity};
 use crate::domain::has_markers;
-use crate::runs::result::{has_output_markers, scrub};
+use crate::runs::result::{has_output_markers, scrub, Readiness};
 
 /// Fix rounds a build is sent for one pull request before a review that still blocks goes to the person.
 pub const FIX_ROUNDS_MAX: u32 = 2;
@@ -39,6 +45,8 @@ pub const FIX_INSTRUCTION: &str = "Fix these findings in this pull request: comm
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ReportFacts {
     pub plan_recommended: Option<bool>,
+    /// A Triage's verdict on whether the ticket is clear enough to plan; `None` is ready (a Triage from before there was one).
+    pub readiness: Option<Readiness>,
     pub verdict: Option<ReviewVerdict>,
     pub findings: Vec<Finding>,
 }
@@ -50,6 +58,7 @@ impl ReportFacts {
         let mut facts = ReportFacts::default();
         if run.spec.kind == RunKind::Triage {
             facts.plan_recommended = resolved.plan_recommended;
+            facts.readiness = resolved.readiness.clone();
         }
         if run.spec.kind == RunKind::Review {
             facts.verdict = resolved.verdict;
@@ -57,6 +66,17 @@ impl ReportFacts {
         }
         facts
     }
+
+    /// Whether the ticket is clear enough to plan as far as the report says; no verdict is ready.
+    pub fn ready(&self) -> bool {
+        self.readiness.as_ref().is_none_or(|r| r.ready)
+    }
+}
+
+/// Whether the person chose "Plan anyway" on the Triage `run`: a `readiness_overridden` line of theirs naming it. A line
+/// by Pip, the supervisor or a run never counts.
+pub fn readiness_overridden(events: &[WorkstreamEvent], run: &str) -> bool {
+    events.iter().any(|e| e.actor == Actor::Person && e.action == "readiness_overridden" && e.run_id.as_deref() == Some(run))
 }
 
 /// The pull request a build opened as a sync cached it, and the commit at its head.
@@ -77,6 +97,8 @@ pub struct RuleInput<'a> {
     pub fix_rounds: u32,
     /// For a Plan: the person approved its Gossamr Plan draft (not skipped it).
     pub plan_approved: bool,
+    /// For a Triage: the person chose "Plan anyway" after it found the ticket not ready (`readiness_overridden`).
+    pub readiness_overridden: bool,
     /// For a Build: its pull request, once a sync found it.
     pub pr: Option<PullHead>,
     /// For a Build: the commit each review of it read.
@@ -117,7 +139,10 @@ pub fn decide(input: &RuleInput) -> Option<Decision> {
     let start = |rule, kind| Some(Decision::Start { rule, kind, from_run: src.id.clone() });
     match src.spec.kind {
         RunKind::Investigate if src.spec.project.is_none() && on(Rule::InvestigateTriage) => start(Rule::InvestigateTriage, RunKind::Triage),
-        RunKind::Triage if input.report.plan_recommended == Some(true) && on(Rule::TriagePlan) => start(Rule::TriagePlan, RunKind::Plan),
+        // A Triage that found the ticket not ready starts nothing; the person's own "Plan anyway" starts the Plan it was
+        // going to, even when the Triage didn't recommend one or the rule is off: they chose it.
+        RunKind::Triage if input.readiness_overridden => start(Rule::TriagePlan, RunKind::Plan),
+        RunKind::Triage if input.report.plan_recommended == Some(true) && input.report.ready() && on(Rule::TriagePlan) => start(Rule::TriagePlan, RunKind::Plan),
         RunKind::Plan if input.plan_approved && on(Rule::PlanBuild) => start(Rule::PlanBuild, RunKind::Build),
         RunKind::Build if src.spec.allow_push && on(Rule::BuildReview) => match &input.pr {
             None => Some(Decision::WaitingForPr { rule: Rule::BuildReview, build_run: src.id.clone() }),

@@ -269,6 +269,16 @@ fn the_shared_wake_fixtures_pass() {
 }
 
 #[test]
+fn the_shared_readiness_fixtures_pass() {
+    use crate::runs::result::readiness;
+    for case in fixtures()["readiness"].as_array().unwrap() {
+        let note = case["note"].as_str().unwrap();
+        let expect = (!case["expect"].is_null()).then(|| serde_json::from_value::<crate::runs::result::Readiness>(case["expect"].clone()).unwrap());
+        assert_eq!(readiness(note), expect, "{note:?}");
+    }
+}
+
+#[test]
 fn the_shared_plan_recommended_and_budget_fixtures_pass() {
     let all = fixtures();
     for case in all["planRecommended"].as_array().unwrap() {
@@ -283,7 +293,7 @@ fn the_shared_plan_recommended_and_budget_fixtures_pass() {
 
 #[test]
 fn merged_facts_give_one_line_each_and_the_request_names_no_ticket() {
-    let fact = |run: &str, kind, state| WakeFact { run: run.into(), kind, state, mark: String::new(), plan_recommended: None, verdict: None, blocking: 0, drafts: 0, started: None, fix_round: None, exhausted: false, waiting_for_pr: false };
+    let fact = |run: &str, kind, state| WakeFact { run: run.into(), kind, state, mark: String::new(), plan_recommended: None, open_questions: None, verdict: None, blocking: 0, drafts: 0, started: None, fix_round: None, exhausted: false, waiting_for_pr: false };
     let mut facts = WakeFacts { workstream: "w1".into(), facts: vec![fact("r1", RunKind::Investigate, WakeState::Done)] };
     facts.merge(&WakeFacts { workstream: "w1".into(), facts: vec![fact("r1", RunKind::Investigate, WakeState::Done), fact("r2", RunKind::Triage, WakeState::Failed)] });
     assert_eq!(event_line(&facts), "[Event] run r1 (investigate) Done\n[Event] run r2 (triage) Failed");
@@ -630,6 +640,61 @@ async fn a_wake_is_charged_for_the_turn_the_queue_made_of_it_whatever_it_saw_fir
     sup.clone().on_run(r3, Attention::Done).await;
     assert_eq!(spent(t.workstream().await), 2, "the turn that was made is counted");
     assert_eq!(*queue.asked.lock().unwrap(), [false, true, true]);
+}
+
+#[tokio::test]
+async fn a_fix_round_and_its_build_finishing_are_no_automatic_step_and_never_hold_the_budget() {
+    let t = setup().await;
+    let sup = Supervisor::new(CoreFacade::new(t.fx.core.clone()), Arc::new(AgentSettings::default), Arc::new(|_, _| {}), Arc::new(|_| {}));
+    let queue = Arc::new(Racing::default());
+    let agent: Arc<dyn WakeQueue> = queue.clone();
+    let connection = t.workstream().await.connection_id;
+    let round = |run: &Run| {
+        let mut fact = WakeFact::new(run, WakeState::Done);
+        fact.fix_round = Some(FixRoundSent { round: 1, build: "R1".into() });
+        fact
+    };
+    let wake = |facts: Vec<WakeFact>, builds: HashSet<String>| {
+        let (sup, agent, t, connection) = (&sup, &agent, &t, &connection);
+        async move { sup.wake_for(agent, &t.fx.scope, &t.ws, connection, facts, &builds, false, Utc::now()).await }
+    };
+    
+    // A turn of its own, but about a fix round: Pip is told, and nothing is charged.
+    let r1 = t.run("r1", RunKind::Review, RunState::Done, |_| {}).await;
+    wake(vec![round(&r1)], HashSet::new()).await;
+    let ws = t.workstream().await;
+    assert_eq!((ws.spent.auto_turns, ws.spent.wakes), (0, 0));
+    assert_eq!(t.wakes().await, [("r1".to_string(), "done".to_string())], "Pip is told all the same");
+    assert_eq!(*queue.asked.lock().unwrap(), [true]);
+
+    // Even the last step doesn't hold the workstream for it.
+    let mut nearly = t.workstream().await;
+    nearly.spent.auto_turns = 10;
+    t.fx.save_workstream(&nearly).await;
+    let r2 = t.run("r2", RunKind::Review, RunState::Done, |_| {}).await;
+    wake(vec![round(&r2)], HashSet::new()).await;
+    let ws = t.workstream().await;
+    assert_eq!((ws.held_reason, ws.spent.auto_turns), (None, 10));
+
+    // The build that went back for a fix round finishing is free too; another build finishing is a step.
+    let fix_build = t.run("b1", RunKind::Build, RunState::Done, |_| {}).await;
+    let builds = HashSet::from(["b1".to_string()]);
+    wake(vec![WakeFact::new(&fix_build, WakeState::Done)], builds.clone()).await;
+    assert_eq!(t.workstream().await.spent.auto_turns, 10);
+    let other = t.run("b2", RunKind::Build, RunState::Done, |_| {}).await;
+    wake(vec![WakeFact::new(&other, WakeState::Done)], builds.clone()).await;
+    assert_eq!(t.workstream().await.spent.auto_turns, 11, "no fix round was sent it");
+    let mut again = t.workstream().await;
+    again.spent.auto_turns = 10;
+    again.held_reason = None;
+    t.fx.save_workstream(&again).await;
+
+    // Mixed with another fact, it is a step like any other.
+    let r3 = t.run("r3", RunKind::Investigate, RunState::Done, |_| {}).await;
+    let r4 = t.run("r4", RunKind::Review, RunState::Done, |_| {}).await;
+    wake(vec![WakeFact::new(&r3, WakeState::Done), round(&r4)], HashSet::new()).await;
+    let ws = t.workstream().await;
+    assert_eq!((ws.held_reason.as_deref(), ws.spent.auto_turns), (Some(HELD_BUDGET), 11));
 }
 
 /// A wake queue whose wakes all fail with `error`, telling their sink first when `error` says a start failed, as
@@ -1409,6 +1474,96 @@ mod auto {
         assert_eq!((run.spec.findings_from_run, run.spec.findings), (None, None));
         let wrong = autostart::spec_for(&decision, &triage, clone, &Slots { findings_from_run: Some(triage.id.clone()), ..Slots::default() }).unwrap();
         assert!(core.autostart_run(scope, wrong, Rule::TriagePlan, &triage.id, &AgentSettings::default()).await.is_err());
+    }
+
+    const VAGUE: &str = "Small, one area.\n\nFor Jira:\nIt touches the cart only.\nReady to plan: no\nOpen questions:\n- What does done look like?\n- Who is waiting on it?\nPlan recommended: yes, two callers.";
+
+    /// An investigation, the triage the rule started after it, and that triage finished with `answer`.
+    async fn triaged(w: &World, answer: &str) -> Run {
+        let first = w.person_starts(1).await;
+        let first = w.finish(&first, FOUND).await;
+        w.sweep().await;
+        let triage = w.started(RunKind::Triage, Rule::InvestigateTriage, &first).await.unwrap();
+        let triage = w.finish(&triage, answer).await;
+        w.sweep().await;
+        triage
+    }
+
+    #[tokio::test]
+    async fn a_triage_that_is_not_ready_to_plan_starts_no_plan_and_pip_is_told_how_many_questions_are_open() {
+        let w = World::start().await;
+        w.pip.quiet.store(true, Ordering::SeqCst);
+        let triage = triaged(&w, VAGUE).await;
+        w.sweep().await;
+        assert!(w.of_kind(RunKind::Plan).await.is_empty(), "a hard stop, though the triage recommended a plan");
+        let view = w.rig.fx.core.workstream(&w.rig.fx.scope, &w.ws).await.unwrap().unwrap();
+        assert_eq!(view.readiness.as_ref().map(|r| (r.triage_run.as_str(), r.questions.len())), Some((triage.id.as_str(), 2)));
+        let turns = w.rig.fx.core.pip_turns(&format!("ws:{}", w.ws)).await.unwrap();
+        let line = format!("[Event] run {} (triage) Done; plan recommended: yes; not ready to plan, 2 open questions", triage.id);
+        assert!(turns.iter().any(|t| t.kind == "wake" && t.prompt.starts_with(&line)), "{:?}", turns.iter().map(|t| &t.prompt).collect::<Vec<_>>());
+        assert!(!w.events().await.iter().any(|e| e.action == "autostart" && e.detail.as_deref().is_some_and(|d| d.starts_with("triage_plan"))));
+    }
+
+    #[tokio::test]
+    async fn a_triage_with_no_verdict_or_one_that_says_ready_still_starts_the_plan_as_before() {
+        for (answer, ready) in [("Small.\n\nFor Jira:\nPlan recommended: yes, two callers.", "no verdict"), ("Small.\n\nFor Jira:\nReady to plan: yes\nPlan recommended: yes", "ready")] {
+            let w = World::start().await;
+            w.pip.quiet.store(true, Ordering::SeqCst);
+            let triage = triaged(&w, answer).await;
+            w.sweep().await;
+            w.started(RunKind::Plan, Rule::TriagePlan, &triage).await.unwrap_or_else(|e| panic!("{ready}: {e}"));
+            assert!(w.rig.fx.core.workstream(&w.rig.fx.scope, &w.ws).await.unwrap().unwrap().readiness.is_none(), "{ready}");
+        }
+    }
+
+    #[tokio::test]
+    async fn plan_anyway_starts_the_plan_only_for_the_person_s_own_line_and_under_every_other_check() {
+        let w = World::start().await;
+        w.pip.quiet.store(true, Ordering::SeqCst);
+        let (core, scope) = (&w.rig.fx.core, &w.rig.fx.scope);
+        let triage = triaged(&w, VAGUE).await;
+        let line = |actor, run: &str| WorkstreamEvent::new(&w.ws, actor, "readiness_overridden", Utc::now()).run(run);
+
+        // Nobody but the person can override: not Pip, not the supervisor, not a run; and not for another triage.
+        for actor in [Actor::Pip, Actor::Supervisor, Actor::Run] {
+            core.record_workstream_event(scope, line(actor, &triage.id)).await.unwrap();
+        }
+        core.record_workstream_event(scope, line(Actor::Person, "some-other-run")).await.unwrap();
+        w.sweep().await;
+        assert!(w.of_kind(RunKind::Plan).await.is_empty(), "only the person's line for this triage counts");
+
+        // A hold the person's line meets waits for the person to resume; the override stays on record.
+        core.hold_workstream(scope, &w.ws, crate::domain::workstream::HELD_PERSON, Actor::Person).await.unwrap();
+        core.record_workstream_event(scope, line(Actor::Person, &triage.id)).await.unwrap();
+        w.sweep().await;
+        assert!(w.of_kind(RunKind::Plan).await.is_empty(), "held");
+        core.resume_workstream(scope, &w.ws).await.unwrap();
+        w.sweep().await;
+        let plan = w.started(RunKind::Plan, Rule::TriagePlan, &triage).await.unwrap();
+        assert_eq!(plan.spec.findings_from_run, triage.spec.findings_from_run, "the plan carries what the triage carried, as the rule always does");
+        w.sweep().await;
+        assert_eq!(w.of_kind(RunKind::Plan).await.len(), 1, "once");
+    }
+
+    #[tokio::test]
+    async fn plan_anyway_is_not_a_way_past_a_used_up_budget() {
+        let w = World::start().await;
+        w.pip.quiet.store(true, Ordering::SeqCst);
+        let (core, scope) = (&w.rig.fx.core, &w.rig.fx.scope);
+        let triage = triaged(&w, VAGUE).await;
+        let mut spent = core.workstream(scope, &w.ws).await.unwrap().unwrap().workstream;
+        spent.spent.auto_turns = 50;
+        spent.spent.wakes = 50;
+        w.rig.fx.save_workstream(&spent).await;
+        core.record_workstream_event(scope, WorkstreamEvent::new(&w.ws, Actor::Person, "readiness_overridden", Utc::now()).run(&triage.id)).await.unwrap();
+        w.sweep().await;
+        assert!(w.of_kind(RunKind::Plan).await.is_empty(), "the automatic steps are used up");
+        // Allowing more steps is its own choice; the override on record then starts the plan.
+        let held = core.hold_workstream(scope, &w.ws, crate::domain::workstream::HELD_BUDGET, Actor::Supervisor).await;
+        assert!(held.is_ok());
+        core.allow_more_steps(scope, &w.ws).await.unwrap();
+        w.sweep().await;
+        w.started(RunKind::Plan, Rule::TriagePlan, &triage).await.unwrap();
     }
 
     /// A finished build in the workstream that pushes to its draft pull request, and a blocking review of it.

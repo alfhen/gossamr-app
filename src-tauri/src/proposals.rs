@@ -465,9 +465,16 @@ pub fn review_supersession(older: &Proposal, newer: &Proposal) -> Option<std::re
 /// The label of a comment draft that carries a plan run's whole plan, which no later comment replaces.
 pub const PLAN_COMMENT_LABEL: &str = "Plan from agent run";
 
-/// Whether `p` is a comment an agent run left for its ticket, other than a plan's: what a finished run drafts on its own.
+/// The label of a comment draft that asks a ticket's reporter the questions a triage left open (`Core::ask_reporter`),
+/// which no later comment of a run replaces and which replaces none: it is the person's choice, not a run's note.
+pub const READINESS_COMMENT_LABEL: &str = "Questions for the reporter";
+
+/// Whether `p` is a comment an agent run left for its ticket, other than a plan's or the questions to a reporter: what a
+/// finished run drafts on its own.
 fn is_run_comment(p: &Proposal) -> bool {
-    matches!((&p.origin, &p.intent), (Origin::Run { .. }, Intent::Comment { .. })) && machine_made(p) && !p.label.as_deref().is_some_and(|l| l.starts_with(PLAN_COMMENT_LABEL))
+    matches!((&p.origin, &p.intent), (Origin::Run { .. }, Intent::Comment { .. }))
+        && machine_made(p)
+        && !p.label.as_deref().is_some_and(|l| l.starts_with(PLAN_COMMENT_LABEL) || l == READINESS_COMMENT_LABEL)
 }
 
 /// The id of the run a run comment was made from.
@@ -947,6 +954,24 @@ mod tests {
         assert_eq!(verdict(&[("run-a", Investigate), ("run-b", Review)]), None, "another kind");
         assert_eq!(verdict(&[("run-b", Review)]), None, "the older run is gone");
         assert_eq!(verdict(&[("run-a", Review)]), None, "the newer run is gone");
+    }
+
+    #[test]
+    fn the_questions_to_a_reporter_replace_no_run_comment_and_no_run_comment_replaces_them() {
+        let db = Db::in_memory().unwrap();
+        let comment = |id: &str, run: &str, label: Option<&str>| {
+            let mut p = made(&db, comment_draft("1"));
+            p.id = id.into();
+            p.created_by = CreatedBy::Agent;
+            p.label = label.map(String::from);
+            p.origin = Origin::Run { run_id: run.into(), short_id: None, workstream: Some("w".into()) };
+            p
+        };
+        let kind_of = |_: &str| Some(crate::domain::RunKind::Triage);
+        let (note, asked) = (comment("note", "t1", None), comment("asked", "t1", Some(READINESS_COMMENT_LABEL)));
+        assert_eq!(run_comment_supersession(&note, &asked, kind_of), None, "the questions leave the triage's note");
+        assert_eq!(run_comment_supersession(&asked, &comment("again", "t2", None), kind_of), None, "a later triage's note leaves the questions");
+        assert_eq!(run_comment_supersession(&note, &comment("again", "t2", None), kind_of), Some(Ok(())), "while a later note still replaces an older one");
     }
 
     #[test]

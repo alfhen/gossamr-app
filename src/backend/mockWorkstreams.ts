@@ -3,8 +3,8 @@ import { workstreamOf } from "../lib/proposals";
 import { budgetLevel, budgetView } from "../lib/workstreamHold";
 import { byQueue, reviewBlocking, runLabels, stage } from "../lib/workstreamStage";
 import { readStored, writeStored } from "../workspace/storage";
-import { BASIS_FIELDS, HELD_ALL, HELD_BUDGET, HELD_DAILY, HELD_PERSON, HELD_QUOTA, HELD_RESTART, TRIPWIRE, TRIPWIRES, WORKSTREAM_RULES } from "../types";
-import type { BasisField, Escalation, ItemRef, Proposal, ReviewVerdict, Run, WorkItem, Workstream, WorkstreamActor, WorkstreamBasis, WorkstreamBudget, WorkstreamEvent, WorkstreamMode, WorkstreamRule, WorkstreamUndo, WorkstreamView, WorkstreamsChanged } from "../types";
+import { ALLOW_MORE_STEPS, BASIS_FIELDS, HELD_ALL, HELD_BUDGET, HELD_DAILY, HELD_PERSON, HELD_QUOTA, HELD_RESTART, TRIPWIRE, TRIPWIRES, WORKSTREAM_RULES } from "../types";
+import type { BasisField, Escalation, ItemRef, ReadinessStop, Proposal, ReviewVerdict, Run, WorkItem, Workstream, WorkstreamActor, WorkstreamBasis, WorkstreamBudget, WorkstreamEvent, WorkstreamMode, WorkstreamRule, WorkstreamUndo, WorkstreamView, WorkstreamsChanged } from "../types";
 import { startedFresh } from "./mockPipTurns";
 
 const CONNECTION = "mock";
@@ -147,6 +147,29 @@ export function escalationOf(ws: Workstream, runs: readonly Run[], verdictOf: (r
   };
 }
 
+/** Why a choice on a Triage that found its ticket not ready is refused, as `READINESS_GONE` in src-tauri/src/inbox/workstreams.rs. */
+export const READINESS_GONE = "This ticket isn't waiting for your choice about its open questions any more.";
+
+/**
+ * The readiness stop of `ws`, if its newest Triage on a ticket is done and said `Ready to plan: no`, as `readiness_of`: the
+ * workstream is open and in Manage, the person hasn't chosen yet (`readiness_asked`, `readiness_answered` or
+ * `readiness_overridden`, theirs, naming that Triage), and no Plan was started since it finished. A newer Triage, which
+ * is under way or says ready, takes it away, as does a Plan the person started by hand. `readiness` is what a Triage's
+ * written answer resolves to; null is no verdict, which reads as ready.
+ */
+export function readinessOf(ws: Workstream, runs: readonly Run[], readiness: (run: Run) => { ready: boolean; questions: string[] } | null, events: readonly WorkstreamEvent[]): ReadinessStop | null {
+  if (ws.closedAt !== null || ws.mode !== "manage") return null;
+  const mine = runs.filter((r) => r.spec.workstream === ws.id);
+  const triage = mine.filter((r) => r.spec.kind === "triage" && !!r.item).sort(byQueue).pop();
+  if (!triage || triage.state !== "done") return null;
+  const found = readiness(triage);
+  if (!found || found.ready) return null;
+  const chosen = events.some((e) => e.actor === "person" && ["readiness_asked", "readiness_answered", "readiness_overridden"].includes(e.action) && e.runId === triage.id);
+  const since = triage.endedAt ?? triage.queuedAt;
+  if (chosen || mine.some((r) => r.spec.kind === "plan" && r.queuedAt >= since)) return null;
+  return { triageRun: triage.id, triageLabel: new Map(runLabels(mine)).get(triage.id) ?? "", questions: found.questions, at: since };
+}
+
 /** Why `id` can't be a workstream id at all, as `RunSpec::validate` refuses it; null when it can. */
 export function workstreamIdProblem(id: string): string | null {
   if (!id || [...id].length > ID_LIMIT || /[\u0000-\u001f\u007f]/.test(id)) return "the workstream id must be 1 to 64 characters with no control characters";
@@ -169,6 +192,15 @@ function held(ws: Workstream, reason: string): Workstream | null {
   const replaces = reason === HELD_PERSON || reason.startsWith(TRIPWIRE);
   if (ws.heldReason !== null && !(replaces && [HELD_RESTART, HELD_BUDGET, HELD_QUOTA].includes(ws.heldReason))) return null;
   return { ...ws, heldReason: reason };
+}
+
+/**
+ * `ws` held for its budget when it is in Manage, open, not held and has used its automatic steps up, as `rehold_spent`
+ * does: Allow 5 more is the only way to grant more, so going back to Manage can't skip the question. Null otherwise.
+ */
+function reheldForBudget(ws: Workstream): Workstream | null {
+  if (ws.closedAt !== null || ws.mode !== "manage" || ws.heldReason !== null || budgetLevel(ws) !== "spent") return null;
+  return { ...ws, heldReason: HELD_BUDGET };
 }
 
 let restartTaken = false;
@@ -219,6 +251,8 @@ export class MockWorkstreams {
   ticketOf: (key: string) => BasisTicket | null = () => null;
   /** The pending drafts there are, of which an escalation offers a GitHub review to post as it is; set by the backend that owns the drafts. */
   pendingDrafts: () => readonly Proposal[] = () => [];
+  /** A finished Triage's verdict on its ticket as its written answer gives it, null without one; set by the backend that owns the runs. */
+  readinessOfRun: (run: Run) => { ready: boolean; questions: string[] } | null = () => null;
 
   /**
    * `runs` lists the runs there are, `titleOf` the title of a cached ticket (null when it isn't cached). `now` is the
@@ -284,7 +318,8 @@ export class MockWorkstreams {
     // The audit is read only for a workstream that can have an escalation, as `escalation_events` does.
     const events = ws.closedAt === null && ws.mode === "manage" ? this.audit.filter((e) => e.workstreamId === ws.id) : [];
     const escalation = events.length ? escalationOf(ws, linked, (r) => (r.spec.kind === "review" && r.state === "done" ? this.verdictOf(r) : null), events, this.pendingDrafts()) : null;
-    return { ...view, ...(waiting ? { waitingForPr: waiting } : {}), ...(reviewBlocking(judged) ? { reviewBlocking: true } : {}), ...(escalation ? { escalation } : {}) };
+    const readiness = events.length ? readinessOf(ws, linked, (r) => (r.spec.kind === "triage" && r.state === "done" ? this.readinessOfRun(r) : null), events) : null;
+    return { ...view, ...(waiting ? { waitingForPr: waiting } : {}), ...(reviewBlocking(judged) ? { reviewBlocking: true } : {}), ...(escalation ? { escalation } : {}), ...(readiness ? { readiness } : {}) };
   }
 
   /** Opens a workstream on a cached ticket, or with no ticket and a title. A ticket with an open one gets that one back, unchanged. */
@@ -399,7 +434,9 @@ export class MockWorkstreams {
 
   /**
    * Sets how much Pip may do on its own, as `set_workstream_mode` does; the same mode records nothing. The person setting
-   * it forgets the mode a tripwire took away (`resumeMode`), so resuming leaves their choice.
+   * it forgets the mode a tripwire took away (`resumeMode`), so resuming leaves their choice. Changing to Manage while not
+   * held and with the automatic steps used up holds it for its budget again (a supervisor `held` line), so Allow 5 more is
+   * asked again rather than skipped.
    */
   setMode(id: string, mode: WorkstreamMode, actor: WorkstreamActor = "person"): Workstream {
     let ws = this.openOne(id);
@@ -410,7 +447,10 @@ export class MockWorkstreams {
       this.save();
     }
     if (ws.mode === mode) return ws;
-    return this.changedTo({ ...ws, mode }, actor, "mode_set", { detail: mode });
+    const reheld = reheldForBudget({ ...ws, mode });
+    const changed = this.changedTo(reheld ?? { ...ws, mode }, actor, "mode_set", { detail: mode });
+    if (reheld) this.record(id, "supervisor", "held", { detail: HELD_BUDGET });
+    return changed;
   }
 
   /** The workstream and review whose escalation offers draft `draftId` to post as it is, or null: read before the post, while the draft is still pending. */
@@ -437,6 +477,40 @@ export class MockWorkstreams {
     return this.setMode(id, "advise", "person");
   }
 
+  /** The readiness stop of workstream `id` as it stands, refused with `READINESS_GONE` unless it is about `triage`, as `readiness_stop`. */
+  readinessStop(id: string, triage: string): ReadinessStop {
+    const view = this.get(id);
+    if (!view) throw new Error(`there is no workstream ${id}`);
+    if (view.readiness?.triageRun !== triage) throw new Error(READINESS_GONE);
+    return view.readiness;
+  }
+
+  /**
+   * The person's "I'll answer" on a Triage that found its ticket not ready, as `answer_readiness`: records
+   * `readiness_answered`, which settles the stop. Nothing starts. Refused with `READINESS_GONE` unless the stop is about `triage`.
+   */
+  answerReadiness(id: string, triage: string): Workstream {
+    this.readinessStop(id, triage);
+    this.record(id, "person", "readiness_answered", { runId: triage });
+    return this.owned(id);
+  }
+
+  /**
+   * The person's "Plan anyway" on a Triage that found its ticket not ready, as `override_readiness`: records
+   * `readiness_overridden`, the one line that lets the Triage-to-Plan rule start the Plan, which then still needs the
+   * workstream in Manage, not held, within budget. Refused with `READINESS_GONE` unless the stop is about `triage`.
+   */
+  overrideReadiness(id: string, triage: string): Workstream {
+    this.readinessStop(id, triage);
+    this.record(id, "person", "readiness_overridden", { runId: triage });
+    return this.owned(id);
+  }
+
+  /** Records `readiness_asked` (the person's, naming the Triage and the draft they asked for), as `ask_reporter` does after drafting. */
+  askedReporter(id: string, triage: string, proposalId: string) {
+    this.record(id, "person", "readiness_asked", { runId: triage, proposalId });
+  }
+
   /** Holds an open workstream, as `hold_workstream` does: an existing reason is kept unless the person's hold replaces a restart, budget or quota one. */
   hold(id: string, reason: string = HELD_PERSON, actor: WorkstreamActor = "person"): Workstream {
     if (!validHoldReason(reason)) throw new Error(`"${reason}" isn't a reason to hold a workstream`);
@@ -446,29 +520,45 @@ export class MockWorkstreams {
   }
 
   /**
-   * Lifts a workstream's hold, as `resume_workstream` does; lifting a budget hold also resets what was spent
-   * (`budget_reset`), and lifting a basis-drift hold takes the basis again from the ticket as it is now (`basis_captured`).
-   * Resuming puts back the mode a tripwire took away (`mode_set` by the person), whatever the hold, unless the person
-   * chose one meanwhile.
+   * Lifts a workstream's hold, as `resume_workstream` does; what was spent is kept, whatever the hold (a budget hold is
+   * lifted without granting steps, so Manage holds it again), and lifting a basis-drift hold takes the basis again from the
+   * ticket as it is now (`basis_captured`). Resuming puts back the mode a tripwire took away (`mode_set` by the person),
+   * whatever the hold, unless the person chose one meanwhile; a restored Manage on a spent budget is held again.
    */
   resume(id: string): Workstream {
     const ws = this.openOne(id);
     if (ws.heldReason === null) return ws;
-    const reset = ws.heldReason === HELD_BUDGET;
     const rebase = ws.heldReason === `${TRIPWIRE}basis_drift`;
     // Whatever the hold, as a trip can land while another is on.
     const restore = ws.resumeMode ?? null;
     const { resumeMode: _, ...kept } = ws;
-    let next: Workstream = { ...kept, heldReason: null, mode: restore ?? ws.mode, spent: reset ? { ...ws.spent, autoTurns: 0, wakes: 0 } : ws.spent };
+    let next: Workstream = { ...kept, heldReason: null, mode: restore ?? ws.mode };
     if (rebase) {
       const ticket = ws.itemKey ? this.ticketOf(ws.itemKey) : null;
       const { drifted: _, ...rest } = next;
       next = { ...rest, basis: ticket ? basisOfItem(ticket) : null };
     }
+    const reheld = reheldForBudget(next);
+    if (reheld) next = reheld;
     this.changedTo(next, "person", "resumed", { detail: ws.heldReason });
     if (restore) this.record(id, "person", "mode_set", { detail: restore });
-    if (reset) this.record(id, "person", "budget_reset");
     if (rebase && next.basis) this.record(id, "supervisor", "basis_captured");
+    if (reheld) this.record(id, "supervisor", "held", { detail: HELD_BUDGET });
+    return next;
+  }
+
+  /**
+   * The person's "Allow 5 more", as `allow_more_steps` does: raises the automatic turns and wakes allowance by
+   * `ALLOW_MORE_STEPS` and lifts the hold, keeping what was spent (`steps_allowed` and `resumed`, the person's). Refused
+   * unless the workstream is held for its budget, so a stale choice changes nothing.
+   */
+  allowMore(id: string): Workstream {
+    const ws = this.openOne(id);
+    if (ws.heldReason !== HELD_BUDGET) throw new Error("this workstream isn't held for its automatic steps");
+    const { autoTurns, wakes } = budgetView(ws);
+    const next: Workstream = { ...ws, heldReason: null, budget: { ...ws.budget, autoTurns: autoTurns.limit + ALLOW_MORE_STEPS, wakes: wakes.limit + ALLOW_MORE_STEPS } };
+    this.changedTo(next, "person", "steps_allowed", { detail: String(ALLOW_MORE_STEPS) });
+    this.record(id, "person", "resumed", { detail: HELD_BUDGET });
     return next;
   }
 
@@ -679,6 +769,30 @@ export class MockWorkstreams {
     this.save();
     this.changed();
     return event;
+  }
+
+  /**
+   * Adds an audit line to workstream `id` as of `at`, for the dev handle (`__gossamrMock.seedWorkstreamEvent`): the sample's
+   * clock is the browser's, which a test can't move, so what ages is seeded instead. Nothing here is a thing the person did.
+   */
+  seedEvent(id: string, actor: WorkstreamActor, action: string, at: string, extra: EventDetail = {}): WorkstreamEvent {
+    this.owned(id);
+    if (Number.isNaN(Date.parse(at))) throw new Error(`"${at}" isn't a time`);
+    const event = { ...this.append(id, actor, action, extra), at: new Date(at).toISOString() };
+    this.audit = this.audit.map((e) => (e.workstreamId === id && e.seq === event.seq ? event : e));
+    this.save();
+    this.changed();
+    return event;
+  }
+
+  /** Opens workstream `id` `days` days earlier than it did: its `createdAt` and its `opened` line move back, for the dev handle. */
+  backdate(id: string, days: number) {
+    const ws = this.owned(id);
+    const back = (iso: string) => new Date(Date.parse(iso) - days * 86_400_000).toISOString();
+    this.put({ ...ws, createdAt: back(ws.createdAt) });
+    this.audit = this.audit.map((e) => (e.workstreamId === id && e.action === "opened" ? { ...e, at: back(e.at) } : e));
+    this.save();
+    this.changed();
   }
 
   /** Whether the audit names run `id`. */

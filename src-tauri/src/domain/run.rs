@@ -163,8 +163,17 @@ macro_rules! plan_advice {
     };
 }
 
+/// Triage's verdict on whether the ticket is clear enough to plan, inside its status note. The parser in
+/// `runs/result.rs` (`readiness`) reads the `Ready to plan:` line and the `Open questions:` list; only a `no` stops the
+/// Plan a managed workstream would start next, and a note without the line counts as ready.
+macro_rules! readiness_check {
+    () => {
+        "Judge whether the ticket is clear enough to plan. It needs a goal, a way to tell when it is done (acceptance criteria), what is in and what is out of scope, and who asked for it and who is waiting on it. Say 'Ready to plan: yes' on a line of its own in your note when it has all of them. When any is missing, say 'Ready to plan: no' on a line of its own, then an 'Open questions:' list with one line per question that names what is missing, such as '- What does done look like?'. Don't guess what the ticket leaves out. "
+    };
+}
+
 pub const INVESTIGATE_INSTRUCTION: &str = concat!("Investigate this work. Read the code and logs you need, and change nothing. Report what you found, how sure you are, and what you would do next. ", status_note!());
-pub const TRIAGE_INSTRUCTION: &str = concat!("Triage this work. Size it, say how sure you are, and name the areas of the code it touches and who likely owns them, going by the code and its history. List any duplicates you can find in the code or its notes. Change nothing. ", breakdown!(), plan_advice!(), status_note!());
+pub const TRIAGE_INSTRUCTION: &str = concat!("Triage this work. Size it, say how sure you are, and name the areas of the code it touches and who likely owns them, going by the code and its history. List any duplicates you can find in the code or its notes. Change nothing. ", breakdown!(), plan_advice!(), readiness_check!(), status_note!());
 pub const VERIFY_INSTRUCTION: &str = concat!("Check that the change described here works. Read the code, and run the existing tests with the commands named below, or commands that only read. Say exactly what you ran and what you could not check. Change nothing. ", status_note!());
 pub const PLAN_INSTRUCTION: &str = concat!("Plan this work. Read the code you need and change nothing. Write an implementation plan that a person will read, edit and approve before anyone builds it: the approach in a few sentences; the files and areas to change, naming only paths you actually read; ordered steps, each small enough to check; a test plan; the risks; and the open questions that need a person's answer. Say what you are unsure of. Write the plan as plain Markdown that will be added to the ticket's description: a short heading for each part, numbered steps and bullet lists, and no tables, HTML or images. Make your note for the ticket a short summary of the plan that says the plan is attached to the run, and don't repeat the plan in it. ", status_note!());
 pub const BUILD_INSTRUCTION: &str = concat!("Make the change this work describes, on your worktree's branch. Keep it small and follow the repository's conventions. Run its tests and commit with a clear message; do not push and do not open a pull request unless a later sentence says you may. ", status_note!());
@@ -1245,7 +1254,7 @@ mod tests {
     fn the_default_prompts_of_every_kind_are_pinned() {
         let pinned = [
             (RunKind::Investigate, "312446c354f6f88f4f1f407b1e76b9c92daa262a3c197c4352a37cfd4d65febb"),
-            (RunKind::Triage, "2981657d5687135874b9adf7aae0e801ed7780fce0efe8960d15124d91cd5be8"),
+            (RunKind::Triage, "bdc428f1fd9ea100d06ba922d5394b64893b6c3dcef5fce564bd10a55776ce89"),
             (RunKind::Plan, "825ead7a4bb8dd2be2e29ca8ae84a771a0849d4a8832411b35c0b2229811581d"),
             (RunKind::Build, "f84cf09d7e585d6c48646d8bffa4dfcb42d133ad25213ada1e4ef48c38ff6002"),
             (RunKind::Review, "46bb9b3cafdbe3fbe3d002dc73a6bbeddc5c6560b8962e31447f125a7026afa8"),
@@ -1473,7 +1482,7 @@ mod tests {
     /// became adversarial and began ending with a verdict. All but Build (third) changed again in Phase 6, when the
     /// read-only launch restriction joined the digest.
     const GOLDEN_DIGESTS: [&str; 4] = [
-        "2981657d5687135874b9adf7aae0e801ed7780fce0efe8960d15124d91cd5be8",
+        "bdc428f1fd9ea100d06ba922d5394b64893b6c3dcef5fce564bd10a55776ce89",
         "384266b4b4d66e50a0e2e79f1b2208940f6a50098d2b63a9be2f835327000946",
         "f84cf09d7e585d6c48646d8bffa4dfcb42d133ad25213ada1e4ef48c38ff6002",
         "46bb9b3cafdbe3fbe3d002dc73a6bbeddc5c6560b8962e31447f125a7026afa8",
@@ -1560,7 +1569,7 @@ mod tests {
     /// launch restriction joined the digest.
     const REPORT_GOLDEN_DIGESTS: [&str; 6] = [
         "1ede9d0bd6055866e0248a7c16db74c91369dd2ff177c067703f45c152f88d79",
-        "e9b5a0aa569dec2e41fb68ec558cf0437961a122f355e75092af3d23faa775fd",
+        "c5f5edb63fec9a64244863c4499a6b17a5a16454ec16dff03468c2e5a15d9d04",
         "78db8d276294339dca1effe4d678a36f6cd7e8b49e80cd0774b8e1ba307e2cbf",
         "82adbcc9d3e4b5440720ef9f7ae906250667b098b42fa5625e4c4fb9ca7af210",
         "49358d23a3a37fb412717dd300a3a7f660f04a20e209ba51747d778e59f17a34",
@@ -1581,6 +1590,17 @@ mod tests {
             assert!(!default_instruction(kind).contains("Plan recommended"), "{kind:?}");
         }
         assert!(TRIAGE_INSTRUCTION.find("Plan recommended").unwrap() < TRIAGE_INSTRUCTION.find("'For Jira:'").unwrap());
+    }
+
+    #[test]
+    fn the_triage_asks_for_a_readiness_verdict_against_the_four_things_a_ticket_needs_and_no_other_kind_does() {
+        for part in ["a goal", "acceptance criteria", "in and what is out of scope", "who asked for it and who is waiting on it", "'Ready to plan: yes'", "'Ready to plan: no'", "'Open questions:'"] {
+            assert!(TRIAGE_INSTRUCTION.contains(part), "{part}");
+        }
+        assert!(TRIAGE_INSTRUCTION.find("Ready to plan").unwrap() < TRIAGE_INSTRUCTION.find("'For Jira:'").unwrap());
+        for kind in [RunKind::Investigate, RunKind::Plan, RunKind::Verify, RunKind::Build, RunKind::Review] {
+            assert!(!default_instruction(kind).contains("Ready to plan"), "{kind:?}");
+        }
     }
 
     fn with_plan(text: &str) -> RunSpec {
@@ -2169,7 +2189,7 @@ mod tests {
         assert_eq!(pre_phase_6_digest(&spec()), "7534d3cc2194330252913a230041a452e813b32198b0ceab89d01b20dae06b16");
         let old = [
             (RunKind::Investigate, "6c89585fd381a10794d310ed0a7decf5782976c3ab3beb5ad1ad1e95ae2e6a97"),
-            (RunKind::Triage, "31c9dfc17c9c42de8ea36f9320bd0b486ec16b41b026f1705edd2d15694bca49"),
+            (RunKind::Triage, "7242cf4004642780909307e51584ec08881daa7ec908189c7811e9e66dc9eee5"),
             (RunKind::Plan, "bdb56e13d98cd60352ec94826f3e16688b8602c4765127a50a5f9195b1dbc529"),
         ];
         for (kind, digest) in old {

@@ -1,4 +1,4 @@
-import { AUTO_WATCH_EVERYTHING_MAX, type ContainerRef, type Intent, type Proposal, type RunKind, type WatchChange, type WatchMode, type WatchRow, type WatchState } from "../types";
+import { AUTO_WATCH_EVERYTHING_MAX, type ContainerRef, type Intent, type Proposal, type RunKind, type WatchChange, type WatchMode, type WatchRow, type WatchState, type WorkstreamActor } from "../types";
 import type { GithubWrite } from "./mockGithub";
 import type { ScriptedFinish } from "./mockRunResult";
 import type { MockLaunch } from "./mockRuns";
@@ -129,8 +129,14 @@ export interface MockHandle {
   jiraWrites(): { proposalId: string; type: string; key: string | null }[];
   /** Every GitHub review draft, newest first: its pull request, the run it came from, its state, what replaced it and whether the person edited it. */
   reviewDrafts(): MockReviewDraft[];
+  /** Adds an audit line to the open workstream on ticket `key` as of `at` (an ISO time), the way to age what depends on the time since: the sample's clock is the browser's and can't be moved. */
+  seedWorkstreamEvent(key: string, event: { actor: string; action: string; at: string; runId?: string | null; proposalId?: string | null; detail?: string | null }): void;
+  /** Makes the open workstream on ticket `key` `days` days older: it opened that much earlier. */
+  backdateWorkstream(key: string, days: number): void;
   /** Sets workstream `id`'s own limits for automatic turns and wakes. */
   setBudget(id: string, budget: { autoTurns?: number | null; wakes?: number | null }): void;
+  /** Holds the open workstream on ticket `key` as the system would (`reason` is a restart, the budget, a tripwire...), not as the person: the holds that are in Needs you. */
+  holdWorkstream(key: string, reason: string): void;
   /** Makes the scripted Pip wait, answering, after starting each turn (true) until let go (false). */
   holdPip(on: boolean): void;
   /** Whether the scripted Pip has no turn running or waiting anywhere, a wake the supervisor queued included. */
@@ -167,7 +173,7 @@ export interface TicketEdit {
 /** The parts of the sample backend the handle reaches. */
 export interface MockClockParts {
   runs: { advance(id?: string): void; list(): { id: string; spec: { kind: string; prSha?: string | null; name: string }; state: string; passes?: number; item?: { key: string } | null; shortId?: string | null; digest: string }[]; surfacePullRequests(): boolean; launches(): MockLaunch[]; scriptNext(kind: RunKind, script: ScriptedFinish): void; ask(id: string, question: string): unknown; askPermission(id: string, needs: string): unknown; block(id: string): unknown; lose(id: string): unknown; stopAtLimit(id: string): unknown; readonly attached: readonly string[] };
-  workstreams?: { list(includeClosed?: boolean): { workstream: { id: string } }[]; events(id: string): MockHandleEvent[]; setBudget(id: string, budget: { autoTurns?: number | null; wakes?: number | null }): unknown };
+  workstreams?: { list(includeClosed?: boolean): { workstream: { id: string; itemKey: string | null; closedAt: string | null } }[]; events(id: string): MockHandleEvent[]; setBudget(id: string, budget: { autoTurns?: number | null; wakes?: number | null }): unknown; hold(id: string, reason: string, actor: "supervisor"): unknown; seedEvent(id: string, actor: WorkstreamActor, action: string, at: string, extra?: { runId?: string | null; proposalId?: string | null; detail?: string | null }): unknown; backdate(id: string, days: number): unknown };
   proposals?: { writes: readonly { proposalId: string; intent: Intent }[]; list(): Proposal[] };
   pip?: { hold(on: boolean): void; idle(): boolean };
   tickets?: { edit(key: string, change: TicketEdit): void };
@@ -210,7 +216,22 @@ export function exposeMockClock({ runs, workstreams, proposals, pip, tickets, gi
           ? [{ id: p.id, runId: p.intent.runId, pull: `${p.intent.repo.toLowerCase()}#${p.intent.number}`, state: p.state.type, supersededBy: p.supersededBy ?? null, edited: p.revisions.some((r) => r.note === "Edited") }]
           : [],
       ),
+    seedWorkstreamEvent: (key, { actor, action, at, runId, proposalId, detail }) => {
+      const ws = workstreams?.list().find((v) => v.workstream.itemKey === key && v.workstream.closedAt === null);
+      if (!ws) throw new Error(`no open workstream on ${key}`);
+      workstreams?.seedEvent(ws.workstream.id, actor as WorkstreamActor, action, at, { runId, proposalId, detail });
+    },
+    backdateWorkstream: (key, days) => {
+      const ws = workstreams?.list().find((v) => v.workstream.itemKey === key && v.workstream.closedAt === null);
+      if (!ws) throw new Error(`no open workstream on ${key}`);
+      workstreams?.backdate(ws.workstream.id, days);
+    },
     setBudget: (id, budget) => void workstreams?.setBudget(id, budget),
+    holdWorkstream: (key, reason) => {
+      const ws = workstreams?.list().find((v) => v.workstream.itemKey === key && v.workstream.closedAt === null);
+      if (!ws) throw new Error(`no open workstream on ${key}`);
+      workstreams?.hold(ws.workstream.id, reason, "supervisor");
+    },
     holdPip: (on) => pip?.hold(on),
     pipIdle: () => pip?.idle() ?? true,
     editTicket: (key, change) => tickets?.edit(key, change),

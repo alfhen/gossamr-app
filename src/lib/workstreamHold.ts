@@ -22,22 +22,24 @@ export function driftText(drifted: readonly BasisField[] | null | undefined): st
 }
 
 /**
- * What a budget hold says: which limit ran out and what lifts it. Resume starts both counts again; a message to Pip
- * starts only the automatic turns again, so it is offered only while the wakes are not what ran out. Without `budget`,
- * the default limits and Resume alone.
+ * The one count of the budget the person reads, in automatic steps: whichever of the backend's two counters (automatic
+ * turns and wakes) is nearer its limit, the turns when they are as near. Nothing on the page names the other.
  */
-function budgetHeldText(budget: BudgetView | undefined): string {
-  const turns = budget?.autoTurns.limit ?? AUTO_TURNS_DEFAULT;
-  if (budget && budget.wakes.used >= budget.wakes.limit) return `Held: wakes used up. Resume to give it ${budget.wakes.limit} more`;
-  return budget ? `Held: automatic turns used up. Resume, or write to Pip, to give it ${turns} more` : `Held: automatic turns used up. Resume to give it ${turns} more`;
+export function stepsOf(budget: BudgetView): { used: number; limit: number } {
+  return budget.wakes.limit - budget.wakes.used < budget.autoTurns.limit - budget.autoTurns.used ? budget.wakes : budget.autoTurns;
+}
+
+/** Whether `reason` is a hold the person chose (Hold, Stop or Hold all), which is no need: only the holds the system makes ask them anything. */
+export function isHeldByYou(reason: string | null | undefined): boolean {
+  return reason === HELD_PERSON || reason === HELD_ALL;
 }
 
 /**
  * What the page says about a workstream held for `reason` (`heldReason`); null when it isn't held. A basis-drift hold
- * says what changed when `drifted` names it, and a budget hold which limit ran out and what resuming gives (`budget`,
- * the workstream's budget view).
+ * says what changed when `drifted` names it. A budget hold says no more than that the steps are used up: what to do
+ * is Allow 5 more or Advise (the banner's buttons), never Resume: lifting the hold grants nothing, and Manage with the steps spent is held again.
  */
-export function heldText(reason: string | null | undefined, drifted?: readonly BasisField[] | null, budget?: BudgetView): string | null {
+export function heldText(reason: string | null | undefined, drifted?: readonly BasisField[] | null): string | null {
   if (!reason) return null;
   switch (reason) {
     case HELD_RESTART:
@@ -45,9 +47,9 @@ export function heldText(reason: string | null | undefined, drifted?: readonly B
     case HELD_PERSON:
       return "Held by you";
     case HELD_ALL:
-      return "Held: Hold all";
+      return "Held by you (Hold all)";
     case HELD_BUDGET:
-      return budgetHeldText(budget);
+      return "Held: automatic steps used up";
     case HELD_DAILY:
       return "Held: today's Pip turns are used up";
     case HELD_QUOTA:
@@ -74,15 +76,15 @@ export function tripwireResumeText(reason: string | null | undefined, resumeMode
   return mode === "manage" ? "Automatic steps are paused. Resume turns them back on." : "Resume only lifts the hold; Manage stays off.";
 }
 
-/** The whole held banner of `ws`: why it is held, then for a tripwire what Resume does. `budget` is its budget view. */
-export function heldBanner(ws: Pick<Workstream, "heldReason" | "drifted" | "resumeMode"> & { mode?: WorkstreamMode }, budget?: BudgetView): string | null {
-  const held = heldText(ws.heldReason, ws.drifted, budget);
+/** The whole held banner of `ws`: why it is held, then for a tripwire what Resume does. */
+export function heldBanner(ws: Pick<Workstream, "heldReason" | "drifted" | "resumeMode"> & { mode?: WorkstreamMode }): string | null {
+  const held = heldText(ws.heldReason, ws.drifted);
   const resume = tripwireResumeText(ws.heldReason, ws.resumeMode, ws.mode);
   return held && resume ? `${held}. ${resume}` : held;
 }
 
-/** What one automatic turn is, for the budget's meter and banner. */
-export const TURN_HELP = "An automatic turn is each time Pip acts without you asking, such as reading a finished run. Your next message resets the count of turns; only Resume resets the wakes.";
+/** What one automatic step is, for the budget's meter and banner. */
+export const STEP_HELP = "An automatic step is each time Pip acts without you asking, such as reading a finished run. Automatic fix rounds don't count. When they run out you can allow 5 more, or switch to Advise.";
 
 /** The short name of an auto-start rule, as switches show it. */
 export function ruleText(rule: WorkstreamRule): string {
@@ -118,9 +120,9 @@ export function budgetView(ws: Workstream): BudgetView {
   };
 }
 
-/** The budget's automatic turns as the person reads them up front: "11 of 11 automatic steps left". Never below none left. */
+/** The budget as the person reads it up front: "11 of 11 automatic steps left". Never below none left. */
 export function stepsLeftText(budget: BudgetView): string {
-  const { used, limit } = budget.autoTurns;
+  const { used, limit } = stepsOf(budget);
   return `${Math.max(0, limit - used)} of ${limit} automatic steps left`;
 }
 
@@ -134,16 +136,16 @@ export const RULE_SWITCH: Record<WorkstreamRule, keyof AutoStartSwitches> = {
   review_verify: "reviewVerify",
 };
 
-/**
- * The line the workstream's header shows about its budget: amber from 80% of either limit ("5 of 6 automatic turns
- * used"), spent at 100%; null while there is plenty left. It names the counter nearer its limit.
- */
+/** The line the workstream's header shows about its budget: amber from 80% of either limit ("5 of 6 automatic steps used"), spent at 100%; null while there is plenty left. */
 export function budgetNote(budget: BudgetView): { level: "amber" | "spent"; text: string } | null {
   if (budget.level === "ok") return null;
-  const { autoTurns, wakes } = budget;
-  const turns = autoTurns.used / Math.max(1, autoTurns.limit) >= wakes.used / Math.max(1, wakes.limit);
-  const text = turns ? `${autoTurns.used} of ${autoTurns.limit} automatic turns used` : `${wakes.used} of ${wakes.limit} wakes used`;
-  return { level: budget.level, text };
+  const { used, limit } = stepsOf(budget);
+  return { level: budget.level, text: `${used} of ${limit} automatic steps used` };
+}
+
+/** Whether the held banner of `ws` asks the budget question (Allow 5 more, Switch to Advise) instead of offering Resume: a budget hold in Manage. In Advise nothing starts on its own, so only the hold is left to lift. */
+export function asksBudget(ws: Pick<Workstream, "heldReason" | "mode">): boolean {
+  return ws.heldReason === HELD_BUDGET && ws.mode === "manage";
 }
 
 /**

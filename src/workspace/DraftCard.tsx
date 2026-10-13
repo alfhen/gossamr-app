@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { MentionTextarea } from "../components/MentionTextarea";
 import { docText } from "../lib/docs";
 import { autoLink, liveMentions, type Mention } from "../lib/mentions";
-import { targetOf, unreachable } from "../lib/proposals";
+import { isReporterQuestions, targetOf, unreachable } from "../lib/proposals";
 import { useBackend } from "../backend/useBackend";
 import type { Person, Proposal, ProposalEdit, ReviewAccess } from "../types";
 import { useRepoReviewAccess, useReviewAccess } from "./reviewAccess";
@@ -500,12 +500,12 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
         {p.origin.type === "run" && (
           <p data-provenance="run" className="m-0 text-sm text-ws-ink3">
             {p.createdBy === "agent" && (
-              <span data-created-by="agent" className="mr-2 rounded-full bg-ws-pip-soft px-2 text-xs font-semibold text-ws-pip">
-                Drafted by an agent
+              <span data-created-by={isReporterQuestions(p) ? "gossamr" : "agent"} className="mr-2 rounded-full bg-ws-pip-soft px-2 text-xs font-semibold text-ws-pip">
+                {isReporterQuestions(p) ? "Drafted by Gossamr" : "Drafted by an agent"}
               </span>
             )}
             <FromRun proposal={p} onOpen={onOpenRun ? () => onOpenRun((p.origin as { runId: string }).runId) : undefined} />
-            . The words are the agent&apos;s. Read and edit them before you approve.
+            {isReporterQuestions(p) ? ". Gossamr wrote this around the triage's open questions, which are the agent's words. Read and edit them before you approve." : ". The words are the agent's. Read and edit them before you approve."}
           </p>
         )}
         {p.state.type === "retired" && <p className="m-0 text-sm text-ws-ink3">{p.state.reason}</p>}

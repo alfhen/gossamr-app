@@ -8,6 +8,7 @@ use super::*;
 use crate::domain::fixtures::run_spec;
 use crate::domain::{render_prompt, ItemKind, Run, RunKind, RunSpec, REPORT_GUARD, REPORT_SERVER, REPORT_TOOL, REPORT_TOOL_VERSION};
 use crate::runs::redact::redact;
+use crate::runs::result::Readiness;
 
 fn ticket_run() -> Target {
     Target { kind: RunKind::Investigate, ticketless: false }
@@ -152,6 +153,20 @@ fn a_triage_s_plan_recommendation_comes_from_its_report_flag_else_its_unquoted_w
     assert_eq!(resolve(&triage_run(written, true), Some(&stored(Some(report("n")), false))).plan_recommended, Some(true), "a report without the flag leaves the written line");
     let review = Run { spec: RunSpec { kind: RunKind::Review, ..run_spec() }, ..finished(Some(written), true) };
     assert_eq!(resolve(&review, None).plan_recommended, None, "only a triage");
+}
+
+#[test]
+fn a_triage_s_readiness_comes_from_its_whole_written_answer_and_a_missing_verdict_stays_none() {
+    let vague = "Small.\n\nFor Jira:\nReady to plan: no\nOpen questions:\n- What does done look like?\n- Who asked for it?";
+    let triage_run = |text: &str, complete: bool| Run { spec: RunSpec { kind: RunKind::Triage, ..run_spec() }, ..finished(Some(text), complete) };
+    let asked = vec!["What does done look like?".to_string(), "Who asked for it?".to_string()];
+    assert_eq!(resolve(&triage_run(vague, true), None).readiness, Some(Readiness { ready: false, questions: asked.clone() }));
+    assert_eq!(resolve(&triage_run(vague, true), Some(&stored(Some(report("n")), false))).readiness.map(|r| r.questions), Some(asked), "a report through the tool leaves the written verdict");
+    assert_eq!(resolve(&triage_run("Ready to plan: yes", true), None).readiness, Some(Readiness { ready: true, questions: vec![] }));
+    assert_eq!(resolve(&triage_run("Small.\n\nPlan recommended: yes", true), None).readiness, None, "no verdict: whoever reads it treats it as ready");
+    assert_eq!(resolve(&triage_run(vague, false), None).readiness, None, "never from a summary");
+    let review = Run { spec: RunSpec { kind: RunKind::Review, ..run_spec() }, ..finished(Some(vague), true) };
+    assert_eq!(resolve(&review, None).readiness, None, "only a triage");
 }
 
 #[test]

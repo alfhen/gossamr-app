@@ -1136,22 +1136,22 @@ describe("the sample's workstreams, held and reviewed", () => {
     expect(store.get(ws.id)?.reviewBlocking).toBeUndefined();
   });
 
-  it("offers a message to Pip on a budget hold only when a message would lift it, as it does", () => {
+  it("says a used-up budget as steps whichever counter ran out, and a message lifts the hold only when the turns did", () => {
     const store = new MockWorkstreams(() => [], () => "title", undefined, undefined, false);
     const ws = store.open(null, "spent");
     store.hold(ws.id, "budget", "supervisor");
     const spend = (s: object) => {
       (store as unknown as { all: { id: string; spent: object }[] }).all.find((w) => w.id === ws.id)!.spent = s;
     };
-    const banner = () => heldText(store.get(ws.id)!.workstream.heldReason, null, store.get(ws.id)!.budget)!;
-    // The wakes ran out: a message resets only the turns, so the banner offers Resume alone, and a message keeps the hold.
+    const banner = () => heldText(store.get(ws.id)!.workstream.heldReason, null)!;
+    // The wakes ran out: a message resets only the turns, so a message keeps the hold. The banner says only "steps".
     spend({ autoTurns: 3, wakes: 12, tokens: 0 });
-    expect(banner()).toBe("Held: wakes used up. Resume to give it 12 more");
+    expect(banner()).toBe("Held: automatic steps used up");
     store.personWrote(ws.id);
     expect(store.get(ws.id)?.workstream.heldReason).toBe("budget");
-    // The turns ran out: the banner offers a message too, and a message lifts it.
+    // The turns ran out: a message lifts it.
     spend({ autoTurns: 11, wakes: 9, tokens: 0 });
-    expect(banner()).toBe("Held: automatic turns used up. Resume, or write to Pip, to give it 11 more");
+    expect(banner()).toBe("Held: automatic steps used up");
     store.personWrote(ws.id);
     expect(store.get(ws.id)?.workstream.heldReason).toBeNull();
   });

@@ -445,9 +445,12 @@ export function reportView(row: MockReportRow | null, asked: boolean, resolved: 
   };
 }
 
-/** What the next finishing run of a kind writes, as `MockHandle.scriptNext` sets it: a triage's plan recommendation, a review's verdict, or a data marker in its answer. */
+/** What the next finishing run of a kind writes, as `MockHandle.scriptNext` sets it: a triage's plan recommendation and readiness, a review's verdict, or a data marker in its answer. */
 export interface ScriptedFinish {
   planRecommended?: boolean;
+  /** A triage's verdict on its ticket: `false` finishes with `Ready to plan: no` and these open questions. */
+  ready?: boolean;
+  questions?: string[];
   verdict?: ReviewVerdict;
   marker?: boolean;
 }
@@ -471,6 +474,13 @@ export function scriptedFinish(kind: RunKind, base: string, script: ScriptedFini
   if (kind === "triage" && script.planRecommended !== undefined) {
     const line = `Plan recommended: ${script.planRecommended ? "yes" : "no"}`;
     text = /^Plan recommended: \w+$/m.test(text) ? text.replace(/^Plan recommended: \w+$/m, line) : beforeNote(text, line);
+  }
+  if (kind === "triage" && script.ready !== undefined) {
+    // The scripted verdict replaces whatever the usual answer said of it, so the answer never says both.
+    const clean = text.replace(/^Ready to plan: \w+\n/m, "").replace(/^Open questions:\n(?:- .*\n?)*\n?/m, "");
+    const questions = script.ready ? [] : (script.questions ?? ["What does done look like?"]);
+    const verdict = script.ready ? "Ready to plan: yes" : `Ready to plan: no\nOpen questions:\n${questions.map((q) => `- ${q}`).join("\n")}`;
+    text = beforeNote(clean, verdict);
   }
   if (kind === "review" && script.verdict === "pass") text = REVIEW_PASS_RESULT;
   if (script.marker) text = beforeNote(text, SMUGGLED);

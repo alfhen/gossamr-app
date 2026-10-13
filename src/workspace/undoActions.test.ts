@@ -5,10 +5,12 @@ import { docFromText } from "../lib/docs";
 import type { Intent, Run, WorkstreamView } from "../types";
 import { HELD_ALL, HELD_BUDGET, HELD_PERSON } from "../types";
 import { useWorkspace } from "../workspaceStore";
+import { contextDeps } from "./contextActions";
 import { draftDecisions } from "./DraftPreview";
 import { useRuns } from "./runsStore";
 import { useToasts } from "./toasts";
 import { undoLog } from "./undo";
+import { currentNeeds } from "./useNeeds";
 import { useWorkstreams } from "./workstreamsStore";
 
 const memory = () => {
@@ -131,6 +133,22 @@ describe("holding a workstream", () => {
     expect((await backend.workstreamsEvents(id)).map((e) => e.action).slice(-2)).toEqual(["held", "undone"]);
   });
 
+  it("makes no need of the hold, and Undo still lifts it", async () => {
+    const id = (await backend.workstreamsOpen(CA401)).id;
+    await useWorkstreams.getState().refresh();
+    expect(currentNeeds()).toEqual([]);
+    await useWorkstreams.getState().hold(id);
+    expect(stored(id).heldReason).toBe(HELD_PERSON);
+    expect(currentNeeds()).toEqual([]);
+    undoButton()!.run();
+    await vi.waitFor(() => expect(stored(id).heldReason).toBeNull());
+    expect(currentNeeds()).toEqual([]);
+    // Hold all is the person's too.
+    await useWorkstreams.getState().holdAll();
+    expect(stored(id).heldReason).toBe(HELD_ALL);
+    expect(currentNeeds()).toEqual([]);
+  });
+
   it("restores the hold the person's replaced, not just 'free'", async () => {
     const id = (await backend.workstreamsOpen(CA401)).id;
     backend.workstreams.hold(id, HELD_BUDGET, "supervisor");
@@ -168,6 +186,50 @@ describe("holding a workstream", () => {
     await useWorkstreams.getState().refresh();
     await useWorkstreams.getState().stop(id);
     expect(undoButton()).toBeUndefined();
+  });
+});
+
+describe("a workstream that used its automatic steps", () => {
+  const stored = (id: string) => useWorkstreams.getState().list.find((v) => v.workstream.id === id)!.workstream;
+
+  it("is a Decide need, and Allow 5 more raises the allowance, resumes it and answers the need", async () => {
+    const id = (await backend.workstreamsOpen(CA401)).id;
+    await useWorkstreams.getState().setMode(id, "manage");
+    backend.workstreams.hold(id, HELD_BUDGET, "supervisor");
+    await useWorkstreams.getState().refresh();
+    expect(currentNeeds().map((n) => [n.key, n.group, n.title])).toEqual([[`budget:${id}`, "decide", "CA-401 used its 11 automatic steps"]]);
+    expect(await useWorkstreams.getState().allowMore(id)).toBe(true);
+    expect(stored(id)).toMatchObject({ heldReason: null, budget: { autoTurns: 16 } });
+    expect(currentNeeds()).toEqual([]);
+    // Nothing is held for its budget now, so a second press is refused and says why.
+    expect(await useWorkstreams.getState().allowMore(id)).toBe(false);
+    expect(texts().join(" ")).toContain("isn't held for its automatic steps");
+  });
+
+  it("is answered from the palette with the same two choices", async () => {
+    const id = (await backend.workstreamsOpen(CA401)).id;
+    await useWorkstreams.getState().setMode(id, "manage");
+    backend.workstreams.hold(id, HELD_BUDGET, "supervisor");
+    await useWorkstreams.getState().refresh();
+    const [budget] = currentNeeds();
+    contextDeps.needAct(budget, "advise");
+    await vi.waitFor(() => expect(stored(id).mode).toBe("advise"));
+    await useWorkstreams.getState().setMode(id, "manage");
+    // Allow 5 more is asked for with Enter on the keyboard; the palette's own Enter is that step.
+    contextDeps.needAct(currentNeeds()[0], "allowMore");
+    await vi.waitFor(() => expect(stored(id).heldReason).toBeNull());
+    expect(stored(id).budget.autoTurns).toBe(16);
+  });
+
+  it("is answered by Switch to Advise, with the hold left for Resume", async () => {
+    const id = (await backend.workstreamsOpen(CA401)).id;
+    await useWorkstreams.getState().setMode(id, "manage");
+    backend.workstreams.hold(id, HELD_BUDGET, "supervisor");
+    await useWorkstreams.getState().refresh();
+    expect(currentNeeds()).toHaveLength(1);
+    await useWorkstreams.getState().setMode(id, "advise");
+    expect(currentNeeds()).toEqual([]);
+    expect(stored(id).heldReason).toBe(HELD_BUDGET);
   });
 });
 
