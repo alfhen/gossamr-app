@@ -395,13 +395,15 @@ describe("timeline: the audit", () => {
   });
 
   it("marks what the person did and what asks them to decide as decisions, and not the rest", () => {
-    const list = timeline({ events: [line("held", 10, { actor: "supervisor" }), line("waiting_for_pr", 9, { actor: "supervisor", runId: "r1" }), line("budget_reset", 8), line("fix_rounds_exhausted", 7, { actor: "supervisor", detail: "2" })] });
+    const list = timeline({ events: [line("held", 10, { actor: "supervisor" }), line("waiting_for_pr", 9, { actor: "supervisor", runId: "r1" }), line("budget_reset", 8), line("fix_rounds_exhausted", 7, { actor: "supervisor", detail: "2" }), line("escalation_taken", 6, { runId: "r9" })] });
     expect(list.map((e) => [e.action, e.decision])).toEqual([
       ["held", true],
       ["waiting_for_pr", false],
       ["budget_reset", true],
       ["fix_rounds_exhausted", true],
+      ["escalation_taken", true],
     ]);
+    expect(list.find((e) => e.action === "escalation_taken")?.text).toBe("You took the review of run r9 over from Pip");
   });
 
   it("leaves opening and closing the workstream and the notes out of the decisions", () => {

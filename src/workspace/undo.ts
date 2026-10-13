@@ -78,8 +78,8 @@ export class UndoLog {
     const state = this.get(id)?.state;
     const entry = this.entries.find((x) => x.id === id);
     if (!entry || !state) return "spent";
-    if (state !== "offered") this.settled(id);
     if (state === "expired") {
+      this.settled(id);
       this.tell("Too late to undo that.", "info");
       return "expired";
     }
