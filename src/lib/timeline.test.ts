@@ -707,3 +707,20 @@ describe("every workstream", () => {
     expect(filterTimeline(merged, "runs").map((e) => e.scopeLabel)).toEqual(["CA-401", "CA-402"]);
   });
 });
+
+describe("timeline: the reporter's reply on the ticket", () => {
+  it("is an entry of its own at the reply's time, since a comment leaves no audit line", () => {
+    const at = iso(30);
+    const got = timeline({ ticketKey: "CA-401", reporterRepliedAt: at });
+    expect(got).toHaveLength(1);
+    expect(got[0]).toMatchObject({ kind: "audit", at, text: "The reporter replied on the ticket", ticketKey: "CA-401", decision: false, target: null });
+  });
+
+  it("sits among the other entries by its time, and is absent without one", () => {
+    const turns: TimelineTurn[] = [{ requestId: "t1", at: iso(60), prompt: "hi", text: "", status: "done" }, { requestId: "t2", at: iso(10), prompt: "again", text: "", status: "done" }];
+    const texts = timeline({ turns, reporterRepliedAt: iso(30) }).map((e) => e.text);
+    expect(texts).toEqual(["You: hi", "The reporter replied on the ticket", "You: again"]);
+    expect(timeline({ turns }).map((e) => e.text)).toEqual(["You: hi", "You: again"]);
+    expect(timeline({ reporterRepliedAt: "not a time" })).toEqual([]);
+  });
+});

@@ -949,6 +949,8 @@ export interface WorkstreamView {
   changedWhileWaiting?: boolean;
   /** The wait on the reporter ended with their reply on the ticket (a comment from someone else) and the person hasn't chosen since. Always with `changedWhileWaiting`. */
   reporterReplied?: boolean;
+  /** When that reply was written (the first comment that ended the wait): the timeline says "The reporter replied on the ticket" then. As `reporter_replied_at` in src-tauri/src/inbox/workstreams.rs. */
+  reporterRepliedAt?: string;
   budget: BudgetView;
 }
 

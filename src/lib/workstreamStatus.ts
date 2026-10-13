@@ -1,4 +1,5 @@
 import type { Run, WorkstreamView } from "../types";
+import { flaggedGaps, projectOfKey, type ClarityLearning } from "./clarityLearning";
 import { needsIn, type Need } from "./needs";
 import { NUDGE_AFTER_DAYS, WAITING_STATUS, waitedDays } from "./reporterWait";
 import { isHeldByYou, shortHeld } from "./workstreamHold";
@@ -21,7 +22,8 @@ import { witherShort, type WorkstreamWither } from "./workstreamWither";
  * 5. `quiet`: nothing has happened for a while, or the cobweb has grown ("work is happening but Jira hasn't heard").
  *    Never for a closed workstream.
  * 6. `done`: closed, or its stage is done.
- * 7. `idle`: none of the above.
+ * 7. `idle`: none of the above. A word-check notice ("may be unclear", `view.clarity`) is not a need, so it stays Idle and says so in
+ *    the detail: the pill agrees with Needs you, which counts nothing for it.
  *
  * Pure: `now`, the runs, the cobweb and the quiet limit are given.
  */
@@ -46,7 +48,7 @@ export const STATUS_HINT: Record<StatusState, string> = {
   running: "A Claude Code run is working on a step, or is queued for a slot.",
   quiet: "Nothing has happened for a while, or work is happening that Jira has not heard about.",
   done: "The workstream is closed, or its work is finished.",
-  idle: "Nothing is running and nothing waits on you: nothing has started yet, or the last step finished.",
+  idle: "Nothing is running and nothing waits on you: nothing has started yet, or the last step finished. \"may be unclear\" is a quick check of the ticket's words, not a decision waiting for you.",
 };
 
 /** What the list says when a status filter matches no workstream. */
@@ -77,7 +79,12 @@ export interface StatusMore {
   now?: Date;
   /** Days without a run or a post before a workstream with no cobweb reads Quiet. */
   quietDays?: number;
+  /** What "Looks fine" taught the clarity notice: a notice with nothing left to say is not one. */
+  learning?: ClarityLearning;
 }
+
+/** The detail an Idle workstream carries while the word check finds its ticket thin (a notice, never a need). */
+export const UNCLEAR_DETAIL = "may be unclear";
 
 /** How many days with nothing happening make a workstream Quiet when it has no cobweb to say so. */
 export const QUIET_DAYS = 7;
@@ -101,7 +108,7 @@ function heldDetail(reason: string | null | undefined, view: WorkstreamView): st
 }
 
 export function workstreamStatus(view: WorkstreamView, needs: readonly Pick<Need, "workstreamId">[], more: StatusMore = {}): WorkstreamStatus {
-  const { runs = [], wither = null, now = new Date(), quietDays = QUIET_DAYS } = more;
+  const { runs = [], wither = null, now = new Date(), quietDays = QUIET_DAYS, learning = {} } = more;
   const ws = view.workstream;
   const make = (state: StatusState, detail: string | null = null, word = STATUS_WORD[state]): WorkstreamStatus => ({ state, word, tone: STATUS_TONE[state], detail });
   const own = runs.filter((r) => view.runs.includes(r.id));
@@ -122,7 +129,8 @@ export function workstreamStatus(view: WorkstreamView, needs: readonly Pick<Need
   }
   if (ws.closedAt || view.stage === "done") return make("done");
   const failed = [...own].sort((a, b) => a.queuedAt.localeCompare(b.queuedAt)).pop();
-  return make("idle", failed?.state === "failed" ? `${STAGE_LABEL[failed.spec.kind]} failed` : null);
+  const unclear = !!view.clarity && flaggedGaps(view.clarity.gaps, learning, projectOfKey(ws.itemKey ?? "")).length > 0;
+  return make("idle", failed?.state === "failed" ? `${STAGE_LABEL[failed.spec.kind]} failed` : unclear ? UNCLEAR_DETAIL : null);
 }
 
 /** Whether a status matches a filter word the palette takes: "waiting on reporter", "needs you", "held", "running", "quiet", "done", "idle". */

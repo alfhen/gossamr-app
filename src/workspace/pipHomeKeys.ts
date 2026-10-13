@@ -70,8 +70,8 @@ export function isTypingTarget(target: unknown): boolean {
   return typeof el.closest === "function" && !!el.closest("[contenteditable]:not([contenteditable=false])");
 }
 
-/** The region `by` from `region` among those `on` screen, wrapping around; the one the keyboard is in always counts. */
-export function stepRegion(region: PipHomeRegion, by: 1 | -1, on: readonly PipHomeRegion[] = PIP_HOME_REGIONS): PipHomeRegion {
+/** The region `by` from `region` among those `on` screen (every one but the toast, which only counts while shown, when none is said), wrapping around; the one the keyboard is in always counts. */
+export function stepRegion(region: PipHomeRegion, by: 1 | -1, on: readonly PipHomeRegion[] = PIP_HOME_REGIONS.filter((r) => r !== "toast")): PipHomeRegion {
   const regions = PIP_HOME_REGIONS.filter((r) => r === region || on.includes(r));
   const at = regions.indexOf(region);
   return regions[(at + by + regions.length) % regions.length];
@@ -175,10 +175,10 @@ export function wrapTab<T>(ev: Pick<PipHomeKeyEvent, "key" | "metaKey" | "ctrlKe
   return active !== null && stops[stops.length - 1] === active ? stops[0] : null;
 }
 
-/** The regions F6 steps through in the workspace layout, in the order they sit on screen: the main area, the peek over it, Pip's pane. */
-export type WorkspaceRegion = "main" | "peek" | "pip";
+/** The regions F6 steps through in the workspace layout, in the order they sit on screen: the main area, the peek over it, Pip's pane, and the toast while one is shown. */
+export type WorkspaceRegion = "main" | "peek" | "pip" | "toast";
 
-const REGION_ORDER: readonly WorkspaceRegion[] = ["main", "peek", "pip"];
+const REGION_ORDER: readonly WorkspaceRegion[] = ["main", "peek", "pip", "toast"];
 
 /**
  * Where F6 (`by` 1) or Shift+F6 (-1) goes from `current` among the regions `present` on screen, wrapping round, as Pip

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { HELD_ALL, HELD_BUDGET, HELD_DAILY, HELD_PERSON, HELD_QUOTA, HELD_RESTART, TRIPWIRE, TRIPWIRES } from "../types";
 import type { Run, WorkstreamView } from "../types";
 import { NUDGE_AFTER_DAYS } from "./reporterWait";
-import { EMPTY_FILTER, QUIET_DAYS, STATUS_HINT, STATUS_ORDER, statusFromWords, workstreamStatus, type StatusMore } from "./workstreamStatus";
+import { EMPTY_FILTER, QUIET_DAYS, STATUS_HINT, STATUS_ORDER, UNCLEAR_DETAIL, statusFromWords, workstreamStatus, type StatusMore } from "./workstreamStatus";
 import type { WorkstreamWither } from "./workstreamWither";
 
 const NOW = new Date("2026-10-13T09:00:00Z");
@@ -48,6 +48,19 @@ describe("workstreamStatus: every state", () => {
     expect(at(view(), [], { runs: [run("done")] }).state).toBe("idle");
     // Only the workstream's own runs.
     expect(at(view(), [], { runs: [run("working", "build", { id: "r9" })] }).state).toBe("idle");
+  });
+
+  it("Idle says it may be unclear while the word check notice stands: a notice, never a need, so the word stays Idle", () => {
+    const thin = view({ clarity: { gaps: ["short", "done"] } });
+    expect(at(thin)).toMatchObject({ state: "idle", word: "Idle", detail: UNCLEAR_DETAIL });
+    expect(UNCLEAR_DETAIL).toBe("may be unclear");
+    // What Looks fine taught away is not flagged, so the notice has nothing to say and neither does the pill.
+    expect(at(thin, [], { learning: { CA: { short: 3, done: 3 } } }).detail).toBeNull();
+    expect(at(thin, [], { learning: { CE: { short: 3, done: 3 } } }).detail).toBe("may be unclear");
+    // A need, a hold or a wait is still what the word says; a failed run's detail wins over the notice.
+    expect(at(thin, [need]).state).toBe("needs-you");
+    expect(at(view({ clarity: { gaps: ["short"] }, waitingOnReporter: { since: ago(1) } })).state).toBe("waiting");
+    expect(at(thin, [], { runs: [run("failed", "review", { endedAt: ago(0.2) })] }).detail).toBe("Review failed");
   });
 
   it("Quiet: a cobweb, or no activity for a while; never for a closed workstream", () => {

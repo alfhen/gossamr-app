@@ -1,6 +1,6 @@
 import type { PersonRef, Run, WorkItem, WorkPriority, WorkstreamView } from "../types";
 import { docText } from "./docs";
-import { clarityGaps, gapsPhrase } from "./ticketClarity";
+import { clarityGaps, clarityQuestions, gapsPhrase, type ClarityGap } from "./ticketClarity";
 import { flaggedGaps, projectOfKey, type ClarityLearning } from "./clarityLearning";
 import { byRank, type Need } from "./needs";
 import { workstreamStatus } from "./workstreamStatus";
@@ -31,6 +31,13 @@ export interface PlanPick {
   title: string;
   /** One line saying why it is on the list: "because 2 things need you here". */
   because: string;
+  /**
+   * `clarify` when the work is not building but asking the reporter: the ticket reads thin, so the pick says "Clarify CA-408
+   * with the reporter" and the week gets at most one of them (`planMyWeek`). Absent for any other work.
+   */
+  work?: "clarify";
+  /** The person took a ticked item back (`reopenItem`): it stays open however its workstream or ticket stands. Only a kept plan carries it. */
+  reopened?: boolean;
 }
 
 export interface PlanInput {
@@ -54,6 +61,13 @@ const DAY = 86_400_000;
 const GROUPS = ["decide", "unblock", "approve"];
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 const isMine = (item: WorkItem, me: readonly PersonRef[]) => !!item.assignee && me.some((m) => m.connectionId === item.assignee!.connectionId && m.accountId === item.assignee!.accountId);
+const ticketOf = (items: readonly WorkItem[], connectionId: string, key: string) => items.find((t) => t.item.connectionId === connectionId && t.item.key === key);
+/** What tells this ticket from the next on a line: its priority when it is not the middle one, and its age. "high priority, 9 days old"; empty when nothing is known. */
+function facts(t: WorkItem | undefined, now: Date): string {
+  if (!t) return "";
+  const age = days(t.created, now);
+  return [t.priority && t.priority !== "medium" ? `${t.priority} priority` : "", age > 0 ? `${plural(age, "day", "days")} old` : ""].filter(Boolean).join(", ");
+}
 const days = (iso: string | null | undefined, now: Date) => {
   const t = iso ? Date.parse(iso) : NaN;
   return Number.isNaN(t) ? 0 : Math.max(0, Math.floor((now.getTime() - t) / DAY));
@@ -68,6 +82,9 @@ interface Scored {
   at: string;
 }
 
+/** The because line of a pick that asks the reporter: what is thin, how many questions that is, and what tells it from another. */
+const clarifyLine = (lead: string, how: string, gaps: readonly ClarityGap[]) => `${lead}${how}, but it ${gapsPhrase(gaps)}; ask the reporter ${plural(clarityQuestions(gaps).length, "question", "questions")} before anyone builds on it.`;
+
 /** Every candidate, ranked: Needs you first (Needs you's own order: decide, unblock, approve, oldest first), then by score, then by key. Left out: closed, held, waiting on the reporter, done. */
 export function rankWeek(i: PlanInput): PlanPick[] {
   const scored: Scored[] = [];
@@ -75,7 +92,7 @@ export function rankWeek(i: PlanInput): PlanPick[] {
   // Needs in General that are about a ticket (workstreamId null, ticketKey set): a pending decision on a ticket still counts for it, workstream or not.
   const general = new Map<string, Need[]>();
   for (const n of [...i.needs].sort(byRank)) if (n.workstreamId === null && n.ticketKey) general.set(n.ticketKey, [...(general.get(n.ticketKey) ?? []), n]);
-  const needLine = (list: readonly Need[]) => `${plural(list.length, "thing needs", "things need")} you here: ${list[0].title}.`;
+  const needLine = (list: readonly Need[], t?: WorkItem) => `${plural(list.length, "thing needs", "things need")} you here: ${list[0].title}.${facts(t, i.now) ? ` It is ${facts(t, i.now)}.` : ""}`;
   const needScore = (n: Need) => 3 - GROUPS.indexOf(n.group);
   for (const v of i.workstreams) {
     const ws = v.workstream;
@@ -84,20 +101,28 @@ export function rankWeek(i: PlanInput): PlanPick[] {
     const mine = i.needs.filter((n) => n.workstreamId === ws.id).sort(byRank);
     const status = workstreamStatus(v, i.needs, { runs: i.runs, wither: i.withers?.[ws.id] ?? null, now: i.now });
     const name = ws.itemKey ? `${ws.itemKey} ${ws.title.startsWith(ws.itemKey) ? ws.title.slice(ws.itemKey.length).trim() || ws.title : ws.title}` : ws.title;
-    const pick = (because: string): PlanPick => ({ id: `ws:${ws.id}`, kind: "workstream", workstreamId: ws.id, ticketKey: ws.itemKey, title: name, because });
+    const t = ws.itemKey ? ticketOf(i.items, ws.connectionId, ws.itemKey) : undefined;
+    const pick = (because: string, work?: PlanPick["work"], title = name): PlanPick => ({ id: `ws:${ws.id}`, kind: "workstream", workstreamId: ws.id, ticketKey: ws.itemKey, title, because, ...(work ? { work } : {}) });
     if (status.state === "needs-you") {
-      scored.push({ pick: pick(`${plural(mine.length, "thing needs", "things need")} you here: ${mine[0]?.title ?? "a decision"}.`), tier: 0, score: 3 - GROUPS.indexOf(mine[0]?.group ?? "approve"), at: mine[0]?.at ?? ws.createdAt });
+      scored.push({ pick: pick(`${plural(mine.length, "thing needs", "things need")} you here: ${mine[0]?.title ?? "a decision"}.${facts(t, i.now) ? ` It is ${facts(t, i.now)}.` : ""}`), tier: 0, score: 3 - GROUPS.indexOf(mine[0]?.group ?? "approve"), at: mine[0]?.at ?? ws.createdAt });
       continue;
     }
     const loose = ws.itemKey ? general.get(ws.itemKey) : undefined;
     if (loose) {
-      scored.push({ pick: pick(needLine(loose)), tier: 0, score: needScore(loose[0]), at: loose[0].at });
+      scored.push({ pick: pick(needLine(loose, t)), tier: 0, score: needScore(loose[0]), at: loose[0].at });
       continue;
     }
     if (status.state === "held" || status.state === "waiting" || status.state === "done") continue;
     const age = days(ws.createdAt, i.now);
     let score = 8 + Math.min(age, 14) / 2;
-    let because = `${age === 0 ? "opened today" : `open for ${plural(age, "day", "days")}`}, nothing is moving it.`;
+    const urgent = t?.priority === "high" || t?.priority === "highest" ? `${t.priority} priority, ` : "";
+    let because = `${urgent}${age === 0 ? "opened today" : `open for ${plural(age, "day", "days")}`}, nothing is moving it.`;
+    // The word check still finds the ticket thin and nobody has asked or triaged: what it needs is a question, not a build. Ranked down less than a ticket with no workstream (-6): the person already opened it.
+    const gaps = status.state === "idle" && ws.itemKey ? flaggedGaps(v.clarity?.gaps ?? [], i.learning ?? {}, projectOfKey(ws.itemKey)) : [];
+    if (ws.itemKey && gaps.length) {
+      scored.push({ pick: pick(clarifyLine(urgent, `open for ${plural(age, "day", "days")}`, gaps), "clarify", `Clarify ${ws.itemKey} with the reporter`), tier: 1, score: score - 3, at: ws.createdAt });
+      continue;
+    }
     if (status.state === "running") (score += 5, (because = "work is already going; keep it moving."));
     else if (status.state === "quiet") (score += 10, (because = `${status.detail ?? "quiet"}; Jira has not heard from it.`.replace(/^No Jira update · (\d+)d;/, "no Jira update for $1 days;")));
     scored.push({ pick: pick(because), tier: 1, score, at: ws.createdAt });
@@ -107,23 +132,37 @@ export function rankWeek(i: PlanInput): PlanPick[] {
     const loose = general.get(t.item.key);
     if (!loose && !isMine(t, i.me)) continue;
     if (loose) {
-      scored.push({ pick: { id: `ticket:${t.item.key}`, kind: "ticket", workstreamId: null, ticketKey: t.item.key, title: `${t.item.key} ${t.title}`, because: needLine(loose) }, tier: 0, score: needScore(loose[0]), at: loose[0].at });
+      scored.push({ pick: { id: `ticket:${t.item.key}`, kind: "ticket", workstreamId: null, ticketKey: t.item.key, title: `${t.item.key} ${t.title}`, because: needLine(loose, t) }, tier: 0, score: needScore(loose[0]), at: loose[0].at });
       continue;
     }
     const age = days(t.created, i.now);
     const gaps = flaggedGaps(clarityGaps(docText(t.body)), i.learning ?? {}, projectOfKey(t.item.key));
     let score = (t.priority ? PRIORITY[t.priority] : 2) + Math.min(age, 30) / 5;
     let because = t.priority === "high" || t.priority === "highest" ? `${t.priority} priority, assigned to you, no workstream yet.` : `assigned to you ${age === 0 ? "today" : `for ${plural(age, "day", "days")}`}, no workstream yet.`;
-    if (gaps.length) (score -= 6, (because = `assigned to you, but it ${gapsPhrase(gaps)}; clear that up first.`));
-    scored.push({ pick: { id: `ticket:${t.item.key}`, kind: "ticket", workstreamId: null, ticketKey: t.item.key, title: `${t.item.key} ${t.title}`, because }, tier: 1, score, at: t.created });
+    // Unclear work is asking the reporter, not building: said as such, with what tells this ticket from the next.
+    const clarify = gaps.length > 0;
+    if (clarify) (score -= 6, (because = clarifyLine(t.priority === "high" || t.priority === "highest" ? `${t.priority} priority, ` : "", `assigned to you ${age === 0 ? "today" : `for ${plural(age, "day", "days")}`}`, gaps)));
+    scored.push({ pick: { id: `ticket:${t.item.key}`, kind: "ticket", workstreamId: null, ticketKey: t.item.key, title: clarify ? `Clarify ${t.item.key} with the reporter` : `${t.item.key} ${t.title}`, because, ...(clarify ? { work: "clarify" as const } : {}) }, tier: 1, score, at: t.created });
   }
   // Needs you first (its own order: the group that is asked most, then oldest); then by score, then oldest, then by id.
   const order = (a: Scored, b: Scored) => a.tier - b.tier || b.score - a.score || a.at.localeCompare(b.at) || (a.pick.id < b.pick.id ? -1 : a.pick.id > b.pick.id ? 1 : 0);
   return scored.sort(order).map((s) => s.pick);
 }
 
-/** The proposal: the first `count` of `rankWeek`. */
-export const planMyWeek = (i: PlanInput): PlanPick[] => rankWeek(i).slice(0, Math.max(0, i.count ?? WEEK_PICKS));
+/**
+ * The proposal: the first `count` of `rankWeek`, with at most one pick that asks a reporter (`work: "clarify"`): a week of
+ * questions is not a plan. Further unclear tickets come only when nothing else is left to fill the week.
+ */
+export function planMyWeek(i: PlanInput): PlanPick[] {
+  const count = Math.max(0, i.count ?? WEEK_PICKS);
+  const ranked = rankWeek(i);
+  const firstClarify = ranked.findIndex((p) => p.work === "clarify");
+  const rest = ranked.filter((p, n) => p.work !== "clarify" || n === firstClarify);
+  const picks = rest.slice(0, count);
+  // Only when nothing else exists: the extra unclear ones fill what is left of the week, in their order.
+  if (picks.length < count) picks.push(...ranked.filter((p) => !rest.includes(p)).slice(0, count - picks.length));
+  return picks;
+}
 
 /** ISO 8601 week of `d` in local time: "2026-W42" (weeks start on Monday; week 1 holds the year's first Thursday). */
 export function isoWeek(d: Date): string {
@@ -190,13 +229,29 @@ export function ticketPick(t: Pick<WorkItem, "item" | "title">): PlanPick {
   return { id: `ticket:${t.item.key}`, kind: "ticket", workstreamId: null, ticketKey: t.item.key, title: `${t.item.key} ${t.title}`, because: "you added it." };
 }
 
+/** Where a kept item stands: still `open`, `done` (its workstream closed and the ticket is Done in Jira, or the ticket is Done), or `closed` (its workstream closed but the ticket isn't Done: dropped, not finished). */
+export type ItemOutcome = "open" | "done" | "closed";
+
 /**
- * Whether a kept item is ticked: its workstream (or, for a ticket, a workstream opened on it since) has closed, or the
- * ticket itself is Done in Jira.
+ * Where a kept item stands. A workstream closed on a ticket that is not Done is `closed`, not `done`: closing a workstream
+ * is also how work is dropped, so it must not read as finished. A ticket the cache doesn't hold counts as not Done. An item the
+ * person reopened (`reopened`) is open, whatever else is true.
  */
-export function itemDone(item: PlanItem, workstreams: readonly WorkstreamView[], items: readonly WorkItem[]): boolean {
+export function itemOutcome(item: PlanItem, workstreams: readonly WorkstreamView[], items: readonly WorkItem[]): ItemOutcome {
+  if (item.reopened) return "open";
   const mine = workstreams.filter((v) => v.workstream.id === item.workstreamId || (!!item.ticketKey && v.workstream.itemKey === item.ticketKey));
-  if (mine.some((v) => v.workstream.closedAt === null)) return false;
-  if (mine.length) return true;
-  return !!item.ticketKey && items.some((t) => t.item.key === item.ticketKey && t.status.category === "done");
+  if (mine.some((v) => v.workstream.closedAt === null)) return "open";
+  const ticketDone = !!item.ticketKey && items.some((t) => t.item.key === item.ticketKey && t.status.category === "done");
+  if (mine.length) return ticketDone ? "done" : "closed";
+  return ticketDone ? "done" : "open";
+}
+
+/** Whether a kept item is ticked as finished: `itemOutcome` is `done`. */
+export const itemDone = (item: PlanItem, workstreams: readonly WorkstreamView[], items: readonly WorkItem[]): boolean => itemOutcome(item, workstreams, items) === "done";
+
+/** `plans` with item `id` of `week` taken back (`reopened`), so it is open again in the list; nothing else changes. */
+export function reopenItem(plans: WeekPlans, week: string, id: string): WeekPlans {
+  const plan = plans[week];
+  if (!plan || !plan.items.some((p) => p.id === id)) return plans;
+  return { ...plans, [week]: { ...plan, items: plan.items.map((p) => (p.id === id ? { ...p, reopened: true } : p)) } };
 }

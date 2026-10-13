@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Proposal, WorkstreamActor } from "../types";
 import { ANSWERS_COMMENT_LABEL, READINESS_COMMENT_LABEL } from "./proposals";
-import { agoText, answersDue, nudgeComment, nudgeOffered, nudgeText, NUDGE_AFTER_DAYS, planDue, reporterFollow, waitedDays, waitingOnReporterText } from "./reporterWait";
+import { agoText, answersDue, nudgeComment, nudgeOffered, nudgeText, NUDGE_AFTER_DAYS, followWithReply, planDue, reporterFollow, waitedDays, waitingOnReporterText } from "./reporterWait";
 import { NUDGE_COMMENT_LABEL } from "./proposals";
 import fixtures from "./reporterWait.fixtures.json";
 
@@ -11,8 +11,10 @@ const line = (minutes: number, actor: WorkstreamActor, action: string, proposalI
 describe("reporterFollow in the shared cases the Rust side runs too (reporterWait.fixtures.json)", () => {
   it.each(fixtures.cases.map((c) => [c.name, c] as const))("%s", (_, c) => {
     const replies = c.comments.filter((k) => k.author !== c.me).map((k) => k.at);
-    const got = reporterFollow(c.events.map((e) => ({ proposalId: null, ...e }) as Parameters<typeof reporterFollow>[0][number]), replies);
-    expect({ waiting: got.waiting !== null, since: got.waiting, changed: got.changed, replied: got.replied }).toEqual(c.expect);
+    const { follow: got, repliedAt } = followWithReply(c.events.map((e) => ({ proposalId: null, ...e }) as Parameters<typeof reporterFollow>[0][number]), replies);
+    const { repliedAt: expectedAt, ...expected } = c.expect as typeof c.expect & { repliedAt?: string | null };
+    expect({ waiting: got.waiting !== null, since: got.waiting, changed: got.changed, replied: got.replied }).toEqual(expected);
+    if (expectedAt !== undefined) expect(repliedAt).toBe(expectedAt);
   });
 });
 

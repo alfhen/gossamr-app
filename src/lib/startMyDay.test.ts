@@ -79,6 +79,19 @@ describe("Start my day", () => {
       expect(line(input({ workstreams: [closed] }), "unclear")).toBeUndefined();
     });
 
+    it("leaves a ticket out that already has a need: its group lists it, and the need comes first", () => {
+      const v = view("w1", "CA-408", { clarity: { gaps: ["short", "done"] } });
+      const other = view("w2", "CA-409", { clarity: { gaps: ["short"] } });
+      const needs = [need("d1", "decide", { workstreamId: "w1", ticketKey: "CA-408" })];
+      expect(line(input({ workstreams: [v, other], needs }), "unclear")!.entries.map((e) => e.key)).toEqual(["unclear:w2"]);
+      expect(line(input({ workstreams: [v], needs }), "decide")).toBeDefined();
+      expect(line(input({ workstreams: [v], needs }), "unclear")).toBeUndefined();
+      // A need in General about the ticket counts too, for a workstream and for a ticket with none.
+      const general = [need("g1", "unblock", { workstreamId: null, ticketKey: "CA-1" })];
+      expect(line(input({ items: [item("CA-1", THIN), item("CA-2", THIN)], needs: general }), "unclear")!.entries.map((e) => e.key)).toEqual(["unclear:CA-2"]);
+      expect(line(input({ workstreams: [v], needs: [need("g2", "unblock", { workstreamId: null, ticketKey: "CA-408" })] }), "unclear")).toBeUndefined();
+    });
+
     it("leaves out the gaps Looks fine taught away for the ticket's project, and a notice with nothing left", () => {
       const learning: ClarityLearning = { CA: { who: 3, done: 3 } };
       const v = view("w1", "CA-408", { clarity: { gaps: ["short", "done", "who"] } });
@@ -158,7 +171,7 @@ describe("Start my day", () => {
   it("keeps the lines in the order of the day: needs, unclear, reporter, cobwebs, drafts", () => {
     const v = view("w1", "CA-408", { clarity: { gaps: ["short"] }, waitingOnReporter: { since: ago(3) } });
     const w = view("w2", "CA-401");
-    const day = startMyDay(input({ needs: [need("u1", "unblock")], workstreams: [v, w], withers: { w2: wither(4) }, proposals: [comment("p1", "CA-401")] }));
+    const day = startMyDay(input({ needs: [need("u1", "unblock", { workstreamId: "w9", ticketKey: "CA-900" })], workstreams: [v, w], withers: { w2: wither(4) }, proposals: [comment("p1", "CA-401")] }));
     expect(day.lines.map((l) => l.kind)).toEqual(["unblock", "unclear", "reporter", "cobweb", "drafts"]);
     expect(day.empty).toBe(false);
   });

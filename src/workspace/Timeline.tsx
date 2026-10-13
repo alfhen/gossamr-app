@@ -56,7 +56,7 @@ export function useTimeline(conversation: string, view: WorkstreamView | null, p
   const labels = useMemo(() => labelsByRun(allRuns), [allRuns]);
   const verdicts = useMemo(() => Object.fromEntries(Object.entries(reviews).map(([k, v]) => [k, (v?.verdict ?? null) as ReviewOutcome])), [reviews]);
   const entries = useMemo(
-    () => timeline({ turns, runs, drafts, events: id ? events : NO_EVENTS, needs, labels, verdicts, ticketKey: view?.workstream.itemKey ?? null }),
+    () => timeline({ turns, runs, drafts, events: id ? events : NO_EVENTS, needs, labels, verdicts, ticketKey: view?.workstream.itemKey ?? null, reporterRepliedAt: view?.reporterRepliedAt ?? null }),
     [turns, runs, drafts, events, id, needs, labels, verdicts, view],
   );
   const byId = useMemo(

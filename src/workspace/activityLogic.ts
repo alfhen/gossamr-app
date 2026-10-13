@@ -420,7 +420,8 @@ export function eventText(e: WorkstreamEvent, label: (id: string | null) => stri
     case "clarity_learned":
       return `Gossamr stopped flagging ${learnedWords(e.detail)} after you said Looks fine ${LEARN_AFTER} times`;
     case "clarity_reset":
-      return `${who} gave back what Gossamr learned from Looks fine${e.detail ? ` for ${e.detail}` : ""}`;
+      // A gap given back alone says which (`who in CA`); all of a project's says the project.
+      return `${who} gave back what Gossamr learned from Looks fine${e.detail ? (/^\w+ in \S+$/.test(e.detail) ? ` for ${learnedWords(e.detail)}` : ` for ${e.detail}`) : ""}`;
     default:
       return null;
   }

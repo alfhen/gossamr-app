@@ -169,12 +169,13 @@ describe("the Pip & agents chip", () => {
   });
 
   it("words the nudge to the reporter and what Looks fine taught the notice, and how the person gave it back", () => {
-    const lines = [ev(1, "person", "reporter_nudged", null, null), ev(2, "person", "clarity_learned", null, "who in CA"), ev(3, "person", "clarity_reset", null, "CA"), ev(4, "person", "clarity_reset", null, null)];
+    const lines = [ev(1, "person", "reporter_nudged", null, null), ev(2, "person", "clarity_learned", null, "who in CA"), ev(3, "person", "clarity_reset", null, "CA"), ev(4, "person", "clarity_reset", null, null), ev(5, "person", "clarity_reset", null, "who in CA")];
     expect(toWorkstreamEntries({ w1: lines }, [ws]).map((e) => e.text).reverse()).toEqual([
       "You had Gossamr draft a nudge to the reporter",
       "Gossamr stopped flagging CA tickets that don't say who is waiting on them after you said Looks fine 3 times",
       "You gave back what Gossamr learned from Looks fine for CA",
       "You gave back what Gossamr learned from Looks fine",
+      "You gave back what Gossamr learned from Looks fine for CA tickets that don't say who is waiting on them",
     ]);
   });
 

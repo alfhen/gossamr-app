@@ -386,10 +386,10 @@ test.describe("D1: Pip speaks up when a ticket is unclear", () => {
     await askPip(page, "where do we stand?");
     await settled(page);
     await expect(pipPane(page)).toContainText(VAGUE_WORDS);
-    // Only its first turn does: the second doesn't say it again. (The notice above the conversation says it once more, in its own box.)
+    // Only its first turn does: the second doesn't say it again. (The notice above the conversation says it once more, in its own box, and the status pill's detail a third time.)
     await askPip(page, "where do we stand now?");
     await settled(page);
-    expect(((await pipPane(page).innerText()).match(/may be unclear/g) ?? []).length).toBe(2);
+    expect(((await pipPane(page).innerText()).match(/may be unclear/g) ?? []).length).toBe(3);
     await expect(pipPane(page).locator("[data-clarity-notice]")).toContainText("CA-408 may be unclear");
 
     // A ticket whose description says what done looks like, what is in scope and who is waiting is not remarked on.

@@ -21,11 +21,42 @@ export function toastPlacement(screen: string | null, clearRight: number): CSSPr
   };
 }
 
+/** Where the keyboard was before F6 took it to the toast, so dismissing it with Esc gives it back. */
+let before: HTMLElement | null = null;
+
+/** F6's stop at the toast on screen: remembers where the keyboard was and puts it on the toast. False when there is none. */
+export function focusToast(doc: Pick<Document, "querySelector" | "activeElement"> = document): boolean {
+  const el = doc.querySelector<HTMLElement>("[data-toast]");
+  if (!el) return false;
+  const active = doc.activeElement as HTMLElement | null;
+  if (active && typeof active.focus === "function" && !el.contains(active)) before = active;
+  el.focus();
+  return true;
+}
+
+/** Gives the keyboard back to where F6 took it from (when that is still on the page), else to the page's main area. */
+function leaveToast() {
+  const back = before?.isConnected ? before : typeof document === "undefined" ? null : document.getElementById("workspace-main");
+  before = null;
+  back?.focus();
+}
+
 export function ToastCard({ toast: t, waiting, onDismiss }: { toast: Toast; waiting: number; onDismiss(): void }) {
   return (
     <div
       data-toast
-      className={`pointer-events-auto flex items-start gap-2 rounded-lg border bg-ws-win px-3 py-2 text-sm shadow-ws-pop ${t.tone === "error" ? "border-ws-blocked text-ws-blocked" : "border-ws-sep2 text-ws-ink2"}`}
+      data-esc-local
+      tabIndex={-1}
+      aria-keyshortcuts="Escape F6"
+      onKeyDown={(ev) => {
+        // Esc on the focused toast dismisses it and hands the keyboard back; nothing else takes the key.
+        if (ev.key !== "Escape" || ev.defaultPrevented) return;
+        ev.preventDefault();
+        ev.stopPropagation();
+        onDismiss();
+        leaveToast();
+      }}
+      className={`pointer-events-auto flex items-start gap-2 rounded-lg border bg-ws-win px-3 py-2 text-sm shadow-ws-pop outline-none focus-visible:outline-2 focus-visible:outline-ws-pip ${t.tone === "error" ? "border-ws-blocked text-ws-blocked" : "border-ws-sep2 text-ws-ink2"}`}
     >
       <span className="min-w-0 [overflow-wrap:anywhere]">{t.text}</span>
       {waiting > 0 && (
@@ -46,7 +77,7 @@ export function ToastCard({ toast: t, waiting, onDismiss }: { toast: Toast; wait
           {t.action.label}
         </button>
       )}
-      <button type="button" aria-label="Dismiss" onClick={onDismiss} className="shrink-0 rounded px-1 text-lg leading-none opacity-70 hover:opacity-100">
+      <button type="button" aria-label="Dismiss" title="Dismiss (Esc when the toast has the keyboard)" onClick={onDismiss} className="shrink-0 rounded px-1 text-lg leading-none opacity-70 hover:opacity-100">
         ×
       </button>
     </div>

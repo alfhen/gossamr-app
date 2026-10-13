@@ -37,7 +37,7 @@ import { ConnectGithubDialog } from "./ConnectGithub";
 import { useGithubUi } from "./githubUi";
 import { FILTER_LIMIT, useDev } from "./devStore";
 import { ChooseWatch } from "./WatchPicker";
-import { ToastHost, toastPlacement } from "./ToastHost";
+import { ToastHost, focusToast, toastPlacement } from "./ToastHost";
 import { useTabs, type Route } from "./tabsStore";
 
 /** Matches no item, for a filter that has nothing to read. */
@@ -103,6 +103,7 @@ const typingElsewhere = (el: Element | null) => isTypingTarget(el) && el?.id !==
 
 /** The region of the workspace layout `el` is in: the peek, Pip's pane, or the main area around them. */
 function regionOf(el: Element | null): WorkspaceRegion {
+  if (el?.closest("[data-toast]")) return "toast";
   if (el?.closest("#peek-sheet")) return "peek";
   if (el?.closest("aside[data-pip-root]")) return "pip";
   return "main";
@@ -110,12 +111,14 @@ function regionOf(el: Element | null): WorkspaceRegion {
 
 /** Where the keyboard goes in `region`: the peek's title, or the peek itself when it has none (a draft's peek, whose title is a field), Pip's input, or the main area. */
 export function regionTarget(region: WorkspaceRegion, doc: Pick<Document, "querySelector" | "getElementById">): HTMLElement | null {
+  if (region === "toast") return doc.querySelector<HTMLElement>("[data-toast]");
   if (region === "peek") return doc.querySelector<HTMLElement>("#peek-sheet h2") ?? doc.getElementById("peek-sheet");
   return doc.getElementById(region === "pip" ? PIP_INPUT_ID : MAIN_ID);
 }
 
 /** Puts the keyboard in `region`, from where Tab goes on into it. */
 function enterRegion(region: WorkspaceRegion) {
+  if (region === "toast") return void focusToast();
   const el = regionTarget(region, document);
   if (!el) return;
   if (!el.hasAttribute("tabindex") && region === "peek") el.setAttribute("tabindex", "-1");
@@ -136,7 +139,7 @@ function useRegionKeys() {
     const onKey = (ev: KeyboardEvent) => {
       if (ev.defaultPrevented || useTabs.getState().route === "pip" || usePrefs.getState().paletteOpen || document.querySelector('[aria-modal="true"]')) return;
       const active = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-      const present: WorkspaceRegion[] = ["main", ...(document.getElementById("peek-sheet") ? (["peek"] as const) : []), ...(document.querySelector("aside[data-pip-root]") ? (["pip"] as const) : [])];
+      const present: WorkspaceRegion[] = ["main", ...(document.getElementById("peek-sheet") ? (["peek"] as const) : []), ...(document.querySelector("aside[data-pip-root]") ? (["pip"] as const) : []), ...(document.querySelector("[data-toast]") ? (["toast"] as const) : [])];
       // A KeyboardEvent's fields are getters on its prototype, so they are named, not spread.
       const by = regionStep({ key: ev.key, metaKey: ev.metaKey, ctrlKey: ev.ctrlKey, altKey: ev.altKey, shiftKey: ev.shiftKey, target: active });
       if (by) {

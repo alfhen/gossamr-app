@@ -7,7 +7,7 @@ import { readStored, writeStored } from "./storage";
 import { AGENTS_GROUPS, type AgentsGroup } from "./agentsLogic";
 import { dismissed, forget, parseLearning, type ClarityLearning } from "../lib/clarityLearning";
 import type { ClarityGap } from "../lib/ticketClarity";
-import { keepPlan, parseWeekPlans, type PlanItem, type WeekPlans } from "../lib/planMyWeek";
+import { keepPlan, parseWeekPlans, reopenItem, type PlanItem, type WeekPlans } from "../lib/planMyWeek";
 
 export const THEMES = ["auto", "light", "dark"] as const;
 export type ThemeMode = (typeof THEMES)[number];
@@ -70,10 +70,12 @@ interface Prefs {
   setStartMyDayDoneOn(day: string | null): void;
   /** Keeps `items` as the plan for the week `now` is in, replacing the one kept before. */
   keepWeekPlan(items: readonly PlanItem[], now?: Date): void;
+  /** Takes a ticked item of week `week`'s kept plan back: open again, kept. */
+  reopenWeekPlanItem(week: string, id: string): void;
   /** Counts one "Looks fine" on a ticket of `project` whose notice named `gaps`; returns the gaps that are no longer flagged there from now on. */
   recordClarityDismissal(project: string, gaps: readonly ClarityGap[]): ClarityGap[];
   /** Forgets what "Looks fine" taught, for one project or (with none) all of them. */
-  resetClarityLearning(project?: string): void;
+  resetClarityLearning(project?: string, gaps?: readonly ClarityGap[]): void;
 }
 
 const KEY = "gossamr-prefs";
@@ -127,12 +129,13 @@ export const usePrefs = create<Prefs>((set, get) => ({
   setStartOnPipHome: (startOnPipHome) => set({ startOnPipHome }),
   setStartMyDayDoneOn: (startMyDayDoneOn) => set({ startMyDayDoneOn }),
   keepWeekPlan: (items, now = new Date()) => set((s) => ({ weekPlans: keepPlan(s.weekPlans, items, now) })),
+  reopenWeekPlanItem: (week, id) => set((s) => ({ weekPlans: reopenItem(s.weekPlans, week, id) })),
   recordClarityDismissal: (project, gaps) => {
     const next = dismissed(get().clarityLearning, project, gaps);
     set({ clarityLearning: next.learning });
     return next.learned;
   },
-  resetClarityLearning: (project) => set((s) => ({ clarityLearning: forget(s.clarityLearning, project) })),
+  resetClarityLearning: (project, gaps) => set((s) => ({ clarityLearning: forget(s.clarityLearning, project, gaps) })),
 }));
 
 usePrefs.subscribe(({ ui, uiChosen, theme, pipOpen, peekWidth, pipWidth, columnOrder, agentsView, agentsGroup, agentsIntroSeen, pipOrientationSeen, permissionExplainerSeen, startOnPipHome, startMyDayDoneOn, clarityLearning, weekPlans }) =>

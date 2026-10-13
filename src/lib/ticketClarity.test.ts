@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { clarityGaps, clarityQuestions, clarityText, gapsPhrase, type ClarityGap } from "./ticketClarity";
+import { clarityGaps, clarityQuestions, clarityRepliedText, clarityText, gapsPhrase, type ClarityGap } from "./ticketClarity";
 import fixtures from "./ticketClarity.fixtures.json";
 
 describe("ticketClarity", () => {
@@ -19,6 +19,10 @@ describe("ticketClarity", () => {
     expect(clarityText("CA-408", ["short", "done", "scope", "who"])).toBe(
       "CA-408 may be unclear: it has a very short description, doesn't say what done looks like, doesn't say what's in or out of scope, and doesn't say who is waiting on it.",
     );
+  });
+
+  it("says the reporter replied instead of the gaps once they have", () => {
+    expect(clarityRepliedText("CA-408")).toBe("CA-408: the reporter replied; read it, then Looks fine or ask again.");
   });
 
   it("asks one question per gap, none twice, and all four for an empty description", () => {

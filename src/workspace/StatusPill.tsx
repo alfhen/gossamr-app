@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 import { STATUS_HINT, workstreamStatus, type StatusTone, type WorkstreamStatus } from "../lib/workstreamStatus";
 import type { WorkstreamView } from "../types";
+import { usePrefs } from "./prefs";
 import { useRuns } from "./runsStore";
 import { useNeedsYou } from "./useNeeds";
 import { useNow } from "./useNow";
@@ -36,9 +37,10 @@ export function StatusPill({ status, title, detail = false }: { status: Workstre
 export function useWorkstreamStatus(view: WorkstreamView): WorkstreamStatus {
   const runs = useRuns((s) => s.runs);
   const needs = useNeedsYou();
+  const learning = usePrefs((s) => s.clarityLearning);
   const now = useNow();
   const withers = useWorkstreamWithers(useMemo(() => [view], [view]), now);
-  return useMemo(() => workstreamStatus(view, needs, { runs, wither: withers[view.workstream.id] ?? null, now: new Date(now) }), [view, needs, runs, withers, now]);
+  return useMemo(() => workstreamStatus(view, needs, { runs, wither: withers[view.workstream.id] ?? null, now: new Date(now), learning }), [view, needs, runs, withers, now, learning]);
 }
 
 /** The header's pill: the word and its detail, for the workstream shown. */
