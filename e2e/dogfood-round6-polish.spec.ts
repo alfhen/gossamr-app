@@ -167,8 +167,8 @@ test.describe("This week: closed, not done (G18)", () => {
     await expect(item).not.toHaveAttribute("data-closed", /.*/);
     await expect(item.locator("[data-this-week-reopen]")).toHaveCount(0);
     await expect(thisWeek(page).getByRole("button", { name: /^CA-402/ })).toBeVisible();
-    const stored = await page.evaluate(() => Object.values(JSON.parse(localStorage.getItem("gossamr-prefs") ?? "{}").weekPlans ?? {}) as { items: { id: string; reopened?: boolean }[] }[]);
-    expect(stored[0].items.map((i) => [i.id, i.reopened])).toEqual([["ticket:CA-402", true]]);
+    const stored = await page.evaluate(() => Object.values(JSON.parse(localStorage.getItem("gossamr-prefs") ?? "{}").weekPlans ?? {}) as { items: { id: string; ticketKey: string | null; reopened?: boolean }[] }[]);
+    expect(stored[0].items.map((i) => [i.ticketKey, i.reopened])).toEqual([["CA-402", true]]);
     expect(await jiraWrites(page)).toEqual([]);
   });
 });
