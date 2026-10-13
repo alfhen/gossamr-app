@@ -561,14 +561,14 @@ export function needs({ workstreams, runs, proposals, dismissed, heldAt, titleOf
     const r = v.readiness;
     if (!r) continue;
     const key = v.workstream.itemKey;
-    // The ticket changed while the person waited on the reporter: the question is back, as a choice to plan now or ask again.
+    // The ticket changed, or the reporter replied, while the person waited: the question is back, as a choice to plan now or ask again.
     out.push({
       key: `readiness:${r.triageRun}`,
       group: "decide",
       kind: "readiness",
       ...where(v.workstream.id, key),
-      title: r.changed ? `${key ?? "This ticket"} changed: plan now?` : `${key ?? "This ticket"} isn't clear enough to plan`,
-      why: r.changed ? `${key ?? "The ticket"} changed while you waited for the reporter. ${readinessWhy(r)}` : readinessWhy(r),
+      title: r.replied ? `${key ?? "This ticket"}: the reporter replied, plan now?` : r.changed ? `${key ?? "This ticket"} changed: plan now?` : `${key ?? "This ticket"} isn't clear enough to plan`,
+      why: r.replied ? `The reporter replied on ${key ?? "the ticket"} while you waited. ${readinessWhy(r)}` : r.changed ? `${key ?? "The ticket"} changed while you waited for the reporter. ${readinessWhy(r)}` : readinessWhy(r),
       ifYouWait: "No plan starts until you choose; nothing is posted to Jira.",
       at: r.at,
       primary: r.changed ? action("planAnyway", "Plan now") : action("askReporter", "Ask the reporter"),

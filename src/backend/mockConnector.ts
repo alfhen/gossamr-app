@@ -607,6 +607,17 @@ export class MockConnector {
     this.onChange({ connectionId: MOCK_CONNECTION });
   }
 
+  /** Someone else, `by` (a person's id in the sample), comments on the item in Jira. Recorded as theirs, not the person's. */
+  commentBy(ref: ItemRef, by: string, text: string) {
+    const item = this.item(ref);
+    if (!item) throw new Error(`${ref.key} isn't in the sample data`);
+    if (!(by in PEOPLE)) throw new Error(`${by} isn't in the sample data`);
+    const at = new Date().toISOString();
+    this.items.set(ref.externalId, { ...item, commentCount: item.commentCount + 1, lastCommenter: personRef(by), updated: at });
+    this.record(ref.externalId, "commentAdded", by, at, { text });
+    this.onChange({ connectionId: MOCK_CONNECTION });
+  }
+
   /**
    * Someone else edits the item in Jira: its title, description and/or status (an id or a name in its workflow, any move
    * allowed, as an admin's would be). Recorded as theirs, not the person's.

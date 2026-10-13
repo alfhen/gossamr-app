@@ -11,8 +11,8 @@ describe("reporterFollow", () => {
   const posted = line(2, "person", "draft_approved", "d1");
 
   it("starts when the asked comment is approved, not when it is only asked or another draft is approved", () => {
-    expect(reporterFollow([asked])).toEqual({ waiting: null, changed: false });
-    expect(reporterFollow([asked, posted])).toEqual({ waiting: at(2), changed: false });
+    expect(reporterFollow([asked])).toEqual({ waiting: null, changed: false, replied: false });
+    expect(reporterFollow([asked, posted])).toEqual({ waiting: at(2), changed: false, replied: false });
     expect(reporterFollow([asked, line(2, "person", "draft_approved", "other")]).waiting).toBeNull();
     expect(reporterFollow([asked, line(2, "pip", "draft_approved", "d1")]).waiting).toBeNull();
     expect(reporterFollow([line(1, "person", "clarity_asked", "c1"), line(2, "person", "draft_approved", "c1")]).waiting).toBe(at(2));
@@ -20,11 +20,11 @@ describe("reporterFollow", () => {
 
   it("ends at the first of the ticket changing, the person answering or planning anyway, or resuming", () => {
     const ended = (e: ReturnType<typeof line>) => reporterFollow([asked, posted, e]);
-    expect(ended(line(3, "supervisor", "basis_drifted"))).toEqual({ waiting: null, changed: true });
+    expect(ended(line(3, "supervisor", "basis_drifted"))).toEqual({ waiting: null, changed: true, replied: false });
     expect(ended(line(3, "person", "basis_drifted")).waiting).toBe(at(2));
-    expect(ended(line(3, "person", "readiness_answered"))).toEqual({ waiting: null, changed: false });
-    expect(ended(line(3, "person", "readiness_overridden"))).toEqual({ waiting: null, changed: false });
-    expect(ended(line(3, "person", "resumed"))).toEqual({ waiting: null, changed: false });
+    expect(ended(line(3, "person", "readiness_answered"))).toEqual({ waiting: null, changed: false, replied: false });
+    expect(ended(line(3, "person", "readiness_overridden"))).toEqual({ waiting: null, changed: false, replied: false });
+    expect(ended(line(3, "person", "resumed"))).toEqual({ waiting: null, changed: false, replied: false });
     expect(ended(line(3, "supervisor", "resumed")).waiting).toBe(at(2));
   });
 
@@ -32,8 +32,34 @@ describe("reporterFollow", () => {
     const changed = [asked, posted, line(3, "supervisor", "basis_drifted")];
     expect(reporterFollow([...changed, line(4, "person", "resumed")]).changed).toBe(true);
     expect(reporterFollow([...changed, line(4, "person", "readiness_asked", "d2")]).changed).toBe(false);
-    expect(reporterFollow([...changed, line(4, "person", "readiness_asked", "d2"), line(5, "person", "draft_approved", "d2")])).toEqual({ waiting: at(5), changed: false });
-    expect(reporterFollow([line(1, "supervisor", "basis_drifted")])).toEqual({ waiting: null, changed: false });
+    expect(reporterFollow([...changed, line(4, "person", "readiness_asked", "d2"), line(5, "person", "draft_approved", "d2")])).toEqual({ waiting: at(5), changed: false, replied: false });
+    expect(reporterFollow([line(1, "supervisor", "basis_drifted")])).toEqual({ waiting: null, changed: false, replied: false });
+  });
+
+  it("ends at a comment from someone else newer than the wait's start, and not at an older one or one of the person's own", () => {
+    const events = [asked, posted];
+    const waiting = { waiting: at(2), changed: false, replied: false };
+    // The caller leaves the person's own comments out, so a newer comment of theirs is not among the replies.
+    expect(reporterFollow(events, [])).toEqual(waiting);
+    expect(reporterFollow(events, [at(1)])).toEqual(waiting);
+    expect(reporterFollow(events, [at(2)])).toEqual(waiting);
+    expect(reporterFollow(events, [at(1), at(5)])).toEqual({ waiting: null, changed: true, replied: true });
+    // Nobody waiting: a comment says nothing.
+    expect(reporterFollow([asked], [at(9)])).toEqual({ waiting: null, changed: false, replied: false });
+    expect(reporterFollow([], [at(9)])).toEqual({ waiting: null, changed: false, replied: false });
+    // A change in the ticket still ends it as itself.
+    expect(reporterFollow([...events, line(3, "supervisor", "basis_drifted")], [at(5)])).toEqual({ waiting: null, changed: true, replied: false });
+  });
+
+  it("keeps the reply's question until the person chooses, and a new ask waits for a newer reply", () => {
+    const events = [asked, posted];
+    expect(reporterFollow([...events, line(6, "person", "resumed")], [at(5)]).replied).toBe(true);
+    expect(reporterFollow([...events, line(6, "person", "readiness_overridden")], [at(5)])).toEqual({ waiting: null, changed: false, replied: false });
+    expect(reporterFollow([...events, line(6, "person", "readiness_overridden")], [at(7)])).toEqual({ waiting: null, changed: false, replied: false });
+    expect(reporterFollow([...events, line(6, "person", "readiness_asked", "d2")], [at(5)]).changed).toBe(false);
+    const again = [...events, line(6, "person", "readiness_asked", "d2"), line(7, "person", "draft_approved", "d2")];
+    expect(reporterFollow(again, [at(5)])).toEqual({ waiting: at(7), changed: false, replied: false });
+    expect(reporterFollow(again, [at(5), at(8)]).replied).toBe(true);
   });
 });
 

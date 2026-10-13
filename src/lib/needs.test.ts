@@ -352,6 +352,19 @@ describe("needs: a ticket the triage found not clear enough to plan", () => {
     });
   });
 
+  it("comes back as '<KEY>: the reporter replied, plan now?' with the same choices when the reporter commented while the person waited", () => {
+    const replied = unclear(["What does done look like?"], { readiness: { triageRun: "r-t", triageLabel: "R1", questions: ["What does done look like?"], at: iso(9), changed: true, replied: true } });
+    const [need] = needs(input({ workstreams: [replied], runs: [run("r-t", "triage", "done")] }));
+    expect(need).toMatchObject({
+      key: "readiness:r-t",
+      kind: "readiness",
+      title: "CA-401: the reporter replied, plan now?",
+      why: "The reporter replied on CA-401 while you waited. R1 left this question open: What does done look like?",
+      primary: { id: "planAnyway", label: "Plan now" },
+      secondary: [{ id: "askReporter", label: "Still unclear (ask again)" }],
+    });
+  });
+
   it("is counted once, ranks with the decisions ahead of what is stuck, and is not a run's need", () => {
     const list = needs(input({ workstreams: [unclear()], runs: [run("r-f", "build", "failed")] }));
     expect(kinds(list)).toEqual(["readiness", "failure"]);

@@ -2,6 +2,7 @@ import { expect, test, type Locator, type Page } from "@playwright/test";
 import {
   advanceRuns,
   askPip,
+  commentOnTicket,
   editTicket,
   expandNeedsYou,
   homeComposer,
@@ -221,6 +222,31 @@ test.describe("G14: waiting on the reporter", () => {
     await expect(needsYouTray(page)).not.toContainText("Waiting on the reporter");
     await expect(needOfKind(page, "readiness")).toHaveCount(0);
     expect(await newest(page, "plan")).toBeNull();
+  });
+
+  test("a comment from the reporter ends the wait, the row and the Next line stop saying so, and the question comes back as 'the reporter replied, plan now?'", async ({ page }) => {
+    test.setTimeout(120_000);
+    await unclear(page);
+    await askAndPost(page);
+    await expect(nextLine(page)).toContainText("Waiting on the reporter");
+    // The person's own comment on the ticket answers nothing.
+    await commentOnTicket(page, VAGUE, "Any news?", "me");
+    await expect(workstreamRow(page, VAGUE).locator("[data-status]")).toHaveText("· Waiting on the reporter");
+    await expect(needOfKind(page, "readiness")).toHaveCount(0);
+    // The reporter's reply is a Jira comment: no audit line, no hold.
+    await commentOnTicket(page, VAGUE, "Done means all three emails send in the sandbox. The CRM team is waiting.");
+    await expect(workstreamRow(page, VAGUE).locator("[data-status]")).not.toContainText("Waiting on the reporter");
+    await expect(nextLine(page)).not.toContainText("Waiting on the reporter");
+    const need = needRow(page, "the reporter replied, plan now?");
+    await expect(need).toContainText(`${VAGUE}: the reporter replied, plan now?`);
+    await need.click();
+    for (const name of ["Plan now", "Still unclear (ask again)"]) await expect(needsPane(page).getByRole("button", { name })).toBeVisible();
+    await expect(needsPane(page).getByRole("button", { name: "I'll answer" })).toHaveCount(0);
+    expect(await newest(page, "plan")).toBeNull();
+    expect((await workstreamEvents(page)).filter((e) => e.action === "basis_drifted")).toEqual([]);
+    await needsPane(page).getByRole("button", { name: "Plan now" }).click();
+    await expect(needOfKind(page, "readiness")).toHaveCount(0);
+    await started(page, "plan");
   });
 
   test("a reporter who hasn't answered for days grows the cobweb: 'Reporter hasn't answered for N days', and it is never a need", async ({ page }) => {
