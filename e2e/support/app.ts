@@ -448,8 +448,8 @@ export const workstreamRow = (page: Page, key: string) =>
     .getByRole("listbox", { name: "Workstreams" })
     .getByRole("option", { name: key === "General" ? /^General/ : new RegExp(`^${key}\\b`) });
 
-/** Pip home's Needs you list, at the bottom of its workstream list. */
-export const needsYouTray = (page: Page) => pipHome(page).getByRole("navigation", { name: "Workstreams" }).getByRole("region", { name: "Needs you" });
+/** Pip home's Needs you list: the main left column, with the workstream list under it. */
+export const needsYouTray = (page: Page) => pipHome(page).getByRole("region", { name: "Needs you" });
 
 /** The Needs you list's one count, as its pill says it. */
 export const needsYouCount = (page: Page) => needsYouTray(page).locator("[data-needs-you-count]");

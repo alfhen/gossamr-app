@@ -18,6 +18,7 @@ import { useBuildChanges, useReviewVerdicts } from "./reviewVerdicts";
 import { useRuns } from "./runsStore";
 import { useToasts } from "./toasts";
 import { approveEach } from "./useCards";
+import { useDecisionShown } from "./decisionShown";
 import { WorkstreamControls } from "./WorkstreamControls";
 import { useWorkstreams } from "./workstreamsStore";
 
@@ -322,7 +323,9 @@ export function StepRailView({ view, runs, events, verdicts, changes = NO_CHANGE
   useEffect(() => {
     if (revealIn) setOpen((was) => (was.has(revealIn) ? was : new Set([...was, revealIn])));
   }, [reveal, revealIn]);
-  const drafts = useMemo(() => stepDrafts(proposals, runs), [proposals, runs]);
+  // A draft open in Pip home's decision pane is not a card here as well.
+  const shown = useDecisionShown();
+  const drafts = useMemo(() => stepDrafts(shown.drafts.size ? proposals.filter((p) => !shown.drafts.has(p.id)) : proposals, runs), [proposals, runs, shown]);
   const retired = useMemo(() => retiredStepDrafts(proposals, runs), [proposals, runs]);
   const labels = useMemo(() => new Map(view.labels), [view.labels]);
   const id = view.workstream.id;

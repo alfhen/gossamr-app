@@ -7,7 +7,7 @@ import { parsePullRef, pullLabel, type PullRef } from "../lib/githubUrl";
 import { isWorkConnection } from "./domains";
 import { ticketKeyOf } from "./watchLogic";
 import { VIEW_LABEL, VIEW_MODES, type ViewMode } from "./tabsStore";
-import { FILTER_LABEL, SCOPE_LABEL, TIMELINE_FILTERS, TIMELINE_SCOPES, isAgentsView, type TimelineFilter, type TimelineScope } from "../lib/timeline";
+import { FILTER_LABEL, SCOPE_LABEL, TIMELINE_FILTERS, TIMELINE_SCOPES, type TimelineFilter, type TimelineScope } from "../lib/timeline";
 
 export type CommandGroup = "Create" | "Projects" | "Views" | "Layout" | "Go to" | "Filters" | "Theme" | "App" | "Tickets" | "GitHub" | "Agents" | "Workstreams" | "Ask Pip" | "This item";
 
@@ -68,7 +68,7 @@ export interface CommandActions {
   askPipToPlan(item: WorkItem): void;
   /** Starts a workstream on `item` and shows its conversation where the person is: on Pip home, or in the Pip pane. */
   startWorkstreamOn(item: WorkItem): void;
-  /** Shows the timeline with `filter` in `scope` on Pip home; Runs in every workstream is the Agents screen. */
+  /** Shows the timeline with `filter` in `scope` on Pip home. */
   showTimeline(filter: TimelineFilter, scope: TimelineScope): void;
 }
 
@@ -144,7 +144,7 @@ export function buildCommands(containers: readonly WorkContainer[], savedViews: 
     { id: "app:settings", group: "Go to", icon: "⚙", label: "Open settings", keywords: "preferences autopilot", run: a.openSettings },
     ...(ctx.agents && !ctx.onPipHome ? [{ id: "app:pip-home", group: "Go to" as const, icon: "✦", label: "Open Pip home", hint: PIP_HOME_HINT, keywords: "pip workstreams conversation agents manager needs you", run: a.openPipHome }] : []),
     // Before "Stop all agents…" in the list, so the query "agents" lands here first.
-    ...(ctx.agents && !ctx.onAgents ? [{ id: "app:agents", group: "Go to" as const, icon: "→", label: "Open Agents", keywords: "agents runs every workstream timeline", run: a.openAgents }] : []),
+    ...(ctx.agents && !ctx.onAgents ? [{ id: "app:agents", group: "Go to" as const, icon: "→", label: "Open Agents", keywords: "agents running capacity operations stop all", run: a.openAgents }] : []),
     ...FILTERS.map(
       (f): Command => ({ id: `filter:${f.id}`, group: "Filters", icon: "⏷", label: `Filter: ${f.label}`, keywords: f.keywords, run: () => a.addFilter(f.filter) }),
     ),
@@ -316,11 +316,11 @@ const SCOPE_WORDS: Record<TimelineScope, string> = {
 
 /**
  * The timeline's filters and scopes as palette entries: "Timeline: Runs", "Timeline: Every workstream". A filter keeps
- * the scope and a scope keeps the filter (`state`), as the buttons do; Runs in every workstream says it is Agents. While
+ * the scope and a scope keeps the filter (`state`), as the buttons do; every combination is a timeline on Pip home. While
  * the timeline is on screen, the filter and scope it shows are marked current.
  */
 export function timelineCommands(state: TimelineState, a: Pick<CommandActions, "showTimeline">): Command[] {
-  const hint = (filter: TimelineFilter, scope: TimelineScope, current: boolean) => (state.shown && current ? "current" : isAgentsView(filter, scope) ? "Agents" : undefined);
+  const hint = (current: boolean) => (state.shown && current ? "current" : undefined);
   return [
     ...TIMELINE_FILTERS.map(
       (f): Command => ({
@@ -328,7 +328,7 @@ export function timelineCommands(state: TimelineState, a: Pick<CommandActions, "
         group: "Workstreams",
         icon: "☰",
         label: `Timeline: ${FILTER_LABEL[f]}`,
-        hint: hint(f, state.scope, state.filter === f),
+        hint: hint(state.filter === f),
         keywords: `timeline filter show ${FILTER_WORDS[f]}`,
         run: () => a.showTimeline(f, state.scope),
       }),
@@ -339,7 +339,7 @@ export function timelineCommands(state: TimelineState, a: Pick<CommandActions, "
         group: "Workstreams",
         icon: "☰",
         label: `Timeline: ${SCOPE_LABEL[s]}`,
-        hint: hint(state.filter, s, state.scope === s),
+        hint: hint(state.scope === s),
         keywords: `timeline scope ${SCOPE_WORDS[s]}`,
         run: () => a.showTimeline(state.filter, s),
       }),

@@ -171,7 +171,28 @@ describe("the Needs you list", () => {
 
   it("keeps the NEEDS YOU header in view while the list scrolls", () => {
     const html = renderToStaticMarkup(<NeedsYouList needs={list} now={NOW} />);
-    expect(html).toMatch(/<h3 data-needs-you-title[^>]*class="sticky top-0 /);
+    expect(html).toMatch(/<h2 data-needs-you-title[^>]*class="sticky top-0 /);
+  });
+
+  it("as Pip home's main column, takes the height it is given and scrolls inside it, not under a cap of its own", () => {
+    const html = renderToStaticMarkup(<NeedsYouList main needs={list} now={NOW} />);
+    const region = /<section aria-label="Needs you"[^>]*class="([^"]*)"/.exec(html)?.[1] ?? "";
+    expect(region).toContain("flex-1");
+    expect(region).toContain("overflow-y-auto");
+    expect(region).not.toMatch(/max-h-/);
+    // The popover's and the plain list keep their caps.
+    expect(renderToStaticMarkup(<NeedsYouList compact needs={list} now={NOW} />)).toMatch(/aria-label="Needs you"[^>]*max-h-\[min\(400px,60vh\)\]/);
+    expect(renderToStaticMarkup(<NeedsYouList needs={list} now={NOW} />)).toMatch(/aria-label="Needs you"[^>]*max-h-\[38vh\]/);
+  });
+
+  it("lets a group's title wrap to two lines instead of cutting it to one", () => {
+    const html = renderToStaticMarkup(<NeedsYouList main needs={list} now={NOW} />);
+    const heads = [...html.matchAll(/<span data-needs-you-head[^>]*class="([^"]*)"/g)].map((m) => m[1]);
+    expect(heads.length).toBeGreaterThan(0);
+    for (const c of heads) {
+      expect(c).toContain("line-clamp-2");
+      expect(c).not.toContain("truncate");
+    }
   });
 
   it("offers 'Approve N safe drafts' under an expanded group with two or more, with none for a lone draft", () => {
@@ -450,6 +471,24 @@ describe("the decision pane", () => {
     const plan = pane(list, "draft:plan");
     expect(plan).toContain("data-plan-approve");
     expect(list.map((n) => n.key)).not.toContain("draft:rd");
+  });
+
+  it("shows an escalation once in the pane: its header says the review still blocks, so the card doesn't say it again", () => {
+    const escalated: WorkstreamView = { ...view("ws-1", "CA-401", "CA-401 Welcome flow refresh", { runs: ["r-b", "r-rev"] }), escalation: { reviewRun: "r-rev", buildRun: "r-b", reviewLabel: "R2", buildLabel: "R1", rounds: 2, reviewDraft: "rd", at: ago(5) } } as WorkstreamView;
+    const review = draft("rd", { type: "githubReview", item: ref("CA-401"), connectionId: "github", repo: "acme/shop", number: 7, runId: "r-rev", summary: "Blocking", comments: [], commitSha: "abc" } as unknown as Intent, 5, "ws-1");
+    const list = set({ workstreams: [escalated], runs: [], proposals: [review], dismissed: new Set() });
+    const html = pane(list, "escalation:r-rev");
+    expect(html).toContain("The review still blocks after 2 fix rounds.");
+    expect(html).not.toContain("What next?");
+    expect(html).toContain('aria-label="Review still blocks"');
+  });
+
+  it("is the one thing that scrolls in its place: its header stays in view and its drafts' action bars are not sticky", () => {
+    const html = pane(set({ workstreams: [], runs: sample, proposals: [draft("c1", comment("CA-401"), 3)], dismissed: new Set() }), "draft:c1");
+    expect(html).toMatch(/<section[^>]*data-needs-pane="draft:c1"[^>]*class="[^"]*overflow-y-auto[^"]*\[&amp;_\[data-draft-actions\]\]:static/);
+    expect(html).toMatch(/<header class="sticky -top-2.5 /);
+    // The pane is the only scroller inside itself.
+    expect(html.match(/overflow-y-auto/g)).toHaveLength(1);
   });
 });
 

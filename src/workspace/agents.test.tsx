@@ -12,7 +12,14 @@ import { AgentsScreen, StopAll, keyAction, type AgentsActions, type AgentsScreen
 import { NO_FILTERS } from "./agentsLogic";
 import { DENY_QUESTION, DenyConfirm, StopRunConfirm, stopRunQuestion } from "./PermissionAsk";
 import { Rail, railBadgeText } from "./Rail";
+import { usePrefs } from "./prefs";
 import { useRuns } from "./runsStore";
+
+/** Server rendering reads a store's initial state, so the flag is set on both. */
+const explainerSeen = (seen: boolean) => {
+  usePrefs.setState({ permissionExplainerSeen: seen });
+  Object.assign(usePrefs.getInitialState(), { permissionExplainerSeen: seen });
+};
 
 const NOW = Date.parse("2026-09-30T12:00:00Z");
 const iso = (minutesAgo: number) => new Date(NOW - minutesAgo * 60_000).toISOString();
@@ -75,6 +82,8 @@ const card = (r: Run, opened = false) =>
 
 beforeEach(() => {
   vi.stubGlobal("localStorage", { getItem: () => null, setItem: () => {}, removeItem: () => {} });
+  // The permission prompt's one-time explainer is dismissed here, so the cards read as the prompt itself.
+  explainerSeen(true);
 });
 
 const failures = () => new MockBackend({ runs: { seed: "failures" } }).runs.list();
@@ -208,6 +217,19 @@ describe("grouped by workstream", () => {
   it("labels the run in list mode too", () => {
     const out = screen({ runs: [linked()], group: "workstream", workstreams: [ws], view: "list" });
     expect(out).toContain('data-run-label="R1"');
+  });
+});
+
+describe("the Agents screen as the operations view", () => {
+  it("has no timeline filter of its own: what is running, the capacity and Stop all, with a way to the Runs timeline", () => {
+    const html = screen({ on: { ...on(), showTimeline: vi.fn() } });
+    expect(html).not.toContain("data-agents-scope");
+    expect(html).not.toContain("Timeline filter");
+    expect(html).not.toContain("Timeline scope");
+    expect(html).toMatch(/<button[^>]*data-agents-timeline[^>]*>(?:<[^>]+>)*Runs timeline/);
+    expect(html).toContain("Stop all");
+    // Without the way there (a screen that can't show Pip home), no button.
+    expect(screen()).not.toContain("data-agents-timeline");
   });
 });
 

@@ -105,7 +105,7 @@ test.describe("keys inside the open decision, the palette's Agents and Undo (F2,
     await page.keyboard.type("agents");
     await expect(palette(page).getByRole("option").first()).toContainText("Open Agents");
     await page.keyboard.press("Enter");
-    await expect(page.locator("[data-agents-scope]")).toBeVisible();
+    await expect(page.locator("main").getByRole("heading", { name: "Agents", exact: true })).toBeVisible();
   });
 
   test("a General run need's link says it opens the run", async ({ page }) => {

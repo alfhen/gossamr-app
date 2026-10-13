@@ -21,6 +21,7 @@ import { labelsByRun } from "../lib/workstreamStage";
 import type { Proposal, Run, WorkstreamEvent, WorkstreamView } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { AgentRow } from "./AgentRow";
+import { useDecisionShown } from "./decisionShown";
 import { LiveDraftPreview, openLiveDraft } from "./DraftPreview";
 import { GENERAL_INTRO, IntroAction, TurnView, workstreamIntro } from "./PipConversation";
 import { openNeed } from "./needsActions";
@@ -30,7 +31,7 @@ import { useReviewVerdicts } from "./reviewVerdicts";
 import { useRuns } from "./runsStore";
 import { TIMELINE_ENTRY, followsEnd, nearBottom, stepIndex, timelineKeyAction, timelineStop } from "./timelineKeys";
 import { PipRunCard } from "./PipRunCard";
-import { TimelineFilterBar, TimelineScopeToggle, showAllRuns, showTimeline } from "./TimelineFilterBar";
+import { TimelineFilterBar, TimelineScopeToggle, showTimeline } from "./TimelineFilterBar";
 import { useWorkstreams } from "./workstreamsStore";
 
 const NO_TURNS: Turn[] = [];
@@ -236,7 +237,7 @@ function ScopeLabel({ entry }: { entry: TimelineEntry }) {
  * opens what one is about; an entry about something waiting on the person opens its need.
  *
  * On Pip home (the default) the filter and the scope are Pip home's: in Every workstream it is every open workstream's
- * and General's timeline merged, each entry labelled with its ticket, and Runs there is the Agents screen. In the Pip
+ * and General's timeline merged, each entry labelled with its ticket, Runs included. In the Pip
  * pane (`pane`) it is the pane's workstream alone, with a filter of its own that leaves Pip home's as it was.
  */
 export function TimelineView({
@@ -309,6 +310,7 @@ export function TimelineView({
     stop.focus();
   };
 
+  const decided = useDecisionShown();
   const body = (e: TimelineEntry): ReactNode => {
     const open = () => openEntry(e, byId, ref.current);
     switch (e.kind) {
@@ -326,6 +328,8 @@ export function TimelineView({
         if (!p) return null;
         // A draft waiting, one Pip made answering here, or one retired after it waited here: its card. Any other decided one: its line.
         const card = p.state.type === "pending" || p.state.type === "applying" || (e.turnId !== undefined && byId.turns.has(e.turnId)) || (p.state.type === "retired" && seenWaiting.current.has(p.id));
+        // The one open in Pip home's decision pane is there, not here as well: its line stands in.
+        if (card && decided.drafts.has(p.id)) return <Line entry={e} onOpen={open} />;
         return card ? <LiveDraftPreview proposal={p} /> : <Line entry={e} onOpen={() => openLiveDraft(p, { inline: true })} />;
       }
       case "audit":
@@ -333,9 +337,10 @@ export function TimelineView({
     }
   };
 
-  const toAgents = (
-    <button type="button" data-all-runs onClick={showAllRuns} className="text-sm font-semibold text-ws-accent hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip">
-      Runs in every workstream (Agents)
+  // The pane is one workstream's; the runs of every workstream are the timeline's Runs filter on Pip home.
+  const toAllRuns = (
+    <button type="button" data-all-runs onClick={() => showTimeline("runs", "every")} className="text-sm font-semibold text-ws-accent hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip">
+      Runs in every workstream
     </button>
   );
   const empty = turns.length === 0;
@@ -343,13 +348,13 @@ export function TimelineView({
     <div data-timeline-scope-shown={scope} className="flex min-h-0 flex-1 flex-col">
       <div className="border-b border-ws-sep px-3 py-1.5">
         {pane ? (
-          <TimelineFilterBar label="Filter" value={filter} counts={counts} onChange={setPaneFilter} after={filter === "runs" && toAgents} />
+          <TimelineFilterBar label="Filter" value={filter} counts={counts} onChange={setPaneFilter} after={filter === "runs" && toAllRuns} />
         ) : (
           <TimelineFilterBar
             value={filter}
             counts={counts}
             onChange={(f) => showTimeline(f, scope)}
-            after={<TimelineScopeToggle value={scope} filter={filter} onChange={(s) => showTimeline(filter, s)} />}
+            after={<TimelineScopeToggle value={scope} onChange={(s) => showTimeline(filter, s)} />}
           />
         )}
       </div>

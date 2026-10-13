@@ -1,18 +1,21 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 import {
   advanceRuns,
   askPip,
   backdateWorkstream,
+  expandAllNeeds,
   expandNeedsYou,
   heldBanner,
   holdAll,
   holdBySystem,
   homeComposer,
+  homeConversationRegion,
   homeRunCards,
   homeSettled,
   inlineStart,
   jiraWrites,
   mockRuns,
+  manageSwitch,
   needOfKind,
   needRow,
   needsPane,
@@ -30,6 +33,7 @@ import {
   scriptNextRun,
   seedWorkstreamEvent,
   setBudget,
+  stepRail,
   startWorkstream,
   surfacePullRequests,
   wakes,
@@ -522,5 +526,256 @@ test.describe("D2: a workstream where work is happening but Jira hasn't heard", 
     await expect(web).toHaveCount(0);
     await expect(workstreamRow(page, "CA-402")).not.toHaveAttribute("data-wither", /.+/);
     await expect(workstreamWebText(page, "CA-402")).toHaveCount(0);
+  });
+});
+
+// Layout and explanations (dogfood B1, B4, B6, B10): Needs you is Pip home's main left column and the screen is named; a
+// decision shows once, in the pane, which scrolls alone and never hides text behind its action bar; Runs across every
+// workstream stays in the timeline; and the mode switch and the first permission prompt explain themselves.
+
+const home = (page: Page) => pipHome(page);
+const boxOf = async (loc: Locator) => (await loc.boundingBox())!;
+const timelineBody = (page: Page) => homeConversationRegion(page).locator("[data-timeline]");
+
+test.describe("B1: Needs you is the main left column on Pip home", () => {
+  test("the screen is named, Needs you takes the column with the workstreams compact under it, and both are usable at 1440x900", async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await openApp(page, "runs=kinds&prSurface=manual&wsManage=1");
+    await openPipHome(page);
+    await expect(home(page).getByRole("heading", { level: 1, name: "Pip home" })).toBeVisible();
+    await expect(page.getByRole("heading", { level: 1 })).toHaveCount(1);
+
+    const needs = needsYouTray(page);
+    const list = home(page).getByRole("navigation", { name: "Workstreams" });
+    // Needs you is a region of its own, no longer inside the workstreams' navigation.
+    await expect(list.getByRole("region", { name: "Needs you" })).toHaveCount(0);
+    const [n, w, c] = [await boxOf(needs), await boxOf(list), await boxOf(homeConversationRegion(page))];
+    expect(n.y + n.height).toBeLessThanOrEqual(w.y + 1);
+    expect(n.height).toBeGreaterThan(w.height);
+    expect(n.x + n.width).toBeLessThanOrEqual(c.x + 1);
+    expect(n.width).toBeGreaterThanOrEqual(280);
+    expect(w.y + w.height).toBeLessThanOrEqual(900);
+    // Both are usable: a need row and a workstream row are on screen, and the timeline sits beside them.
+    await expect(needsYouRow(page, "General")).toBeVisible();
+    await expect(workstreamRow(page, "General")).toBeVisible();
+    await expect(timelineBody(page)).toBeVisible();
+
+    // A title wraps to two lines rather than being cut to one (the existing two-line clamp).
+    const clamp = await needsYouRow(page, "General").locator("[data-needs-you-head]").evaluate((el) => getComputedStyle(el).getPropertyValue("-webkit-line-clamp"));
+    expect(clamp).toBe("2");
+    const nowrap = await needsYouRow(page, "General").locator("[data-needs-you-head]").evaluate((el) => getComputedStyle(el).whiteSpace);
+    expect(nowrap).not.toBe("nowrap");
+  });
+
+  test("the list keeps its keys: F6 between regions, j and k, Enter opens the decision, Esc closes it", async ({ page }) => {
+    await openApp(page, "runs=kinds&prSurface=manual&wsManage=1");
+    await openPipHome(page);
+    const first = needsYouTray(page).locator("[data-needs-you-group]").first();
+    await first.focus();
+    const inList = () => page.evaluate(() => !!document.activeElement?.closest('[data-pip-home-column="list"]'));
+    await page.keyboard.press("j");
+    expect(await inList()).toBe(true);
+    await expect(first).not.toBeFocused();
+    await page.keyboard.press("k");
+    await expect(first).toBeFocused();
+    await page.keyboard.press("Enter");
+    await expect(needsPane(page)).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(needsPane(page)).toHaveCount(0);
+    await first.focus();
+    await page.keyboard.press("F6");
+    await expect(homeComposer(page)).toBeFocused();
+  });
+});
+
+test.describe("B4: a decision shows once", () => {
+  test("a draft open in the pane is not a card on the timeline as well, and is one again when the pane closes", async ({ page }) => {
+    await openApp(page, "runs=kinds&prSurface=manual&wsManage=1");
+    await openPipHome(page);
+    await needsYouRow(page, "General").locator("[data-needs-you-group]").click();
+    const pane = needsPane(page);
+    await expect(pane).toBeVisible();
+    const card = pane.locator("article[data-draft]").first();
+    await expect(card).toBeVisible();
+    const id = (await card.getAttribute("data-draft"))!;
+    // One card of it on the whole screen: in the pane. The timeline says it in a line, and the rail has none.
+    await expect(home(page).locator(`article[data-draft="${id}"]`)).toHaveCount(1);
+    await expect(timelineBody(page).locator(`article[data-draft="${id}"]`)).toHaveCount(0);
+    await expect(timelineBody(page).locator(`[data-timeline-entry="draft:${id}"]`)).toHaveCount(1);
+    await expect(stepRail(page).locator(`[data-draft="${id}"]`)).toHaveCount(0);
+    await page.keyboard.press("Escape");
+    await expect(pane).toHaveCount(0);
+    await expect(home(page).locator(`article[data-draft="${id}"]`)).toHaveCount(1);
+    await expect(timelineBody(page).locator(`article[data-draft="${id}"]`)).toHaveCount(1);
+  });
+
+  test("the pane is the only scroller in its place, and the draft's action bar is in the flow, never over the text", async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await openApp(page, "runs=kinds&prSurface=manual&wsManage=1");
+    await openPipHome(page);
+    await needsYouRow(page, "General").locator("[data-needs-you-group]").click();
+    const pane = needsPane(page);
+    const bar = pane.locator("[data-draft-actions]").first();
+    await expect(bar).toBeVisible();
+    // Long enough to scroll, and scrolled to the middle: a sticky bar would sit over the draft's text.
+    await pane.evaluate((el) => (el.scrollTop = Math.max(0, (el.scrollHeight - el.clientHeight) / 2)));
+    const overlaps = await pane.evaluate((el) => {
+      const actions = el.querySelector<HTMLElement>("[data-draft-actions]")!;
+      const before = actions.previousElementSibling as HTMLElement | null;
+      return { position: getComputedStyle(actions).position, gap: before ? actions.getBoundingClientRect().top - before.getBoundingClientRect().bottom : 0 };
+    });
+    expect(overlaps.position).toBe("static");
+    expect(overlaps.gap).toBeGreaterThanOrEqual(-1);
+    // No scroller inside the pane but the pane.
+    const nested = await pane.evaluate((el) => Array.from(el.querySelectorAll("*")).filter((e) => /auto|scroll/.test(getComputedStyle(e).overflowY) && e.scrollHeight > e.clientHeight + 1).length);
+    expect(nested).toBe(0);
+    // The last of the draft is reachable above its bar: scrolled to the end, the bar is the pane's last line.
+    await pane.evaluate((el) => (el.scrollTop = el.scrollHeight));
+    const [p, b] = [await boxOf(pane), await boxOf(bar)];
+    expect(b.y + b.height).toBeLessThanOrEqual(p.y + p.height + 1);
+  });
+
+  test("a hold the system made is the pane's banner alone, not the rail's as well, and the header stays in view", async ({ page }) => {
+    await openApp(page, "wsManage=1&runs=empty");
+    await workstreamOnHome(page);
+    await holdBySystem(page, "CA-401", "restart");
+    await expect(home(page).locator("[data-held-banner]")).toHaveCount(1);
+    await expect(stepRail(page).locator("[data-held-banner]")).toHaveCount(1);
+    await needOfKind(page, "hold").click();
+    await expect(needsPane(page).locator("[data-held-banner]")).toHaveCount(1);
+    await expect(home(page).locator("[data-held-banner]")).toHaveCount(1);
+    await expect(stepRail(page).locator("[data-held-banner]")).toHaveCount(0);
+    // Closed, the rail shows it again.
+    await page.keyboard.press("Escape");
+    await expect(stepRail(page).locator("[data-held-banner]")).toHaveCount(1);
+  });
+});
+
+test.describe("B6: Runs across every workstream stays in the timeline", () => {
+  test("Runs with Every workstream lists runs from every workstream on Pip home, labelled, and never swaps to Agents", async ({ page }) => {
+    test.setTimeout(90_000);
+    await openApp(page, "prSurface=manual&wsManage=1&pipPace=1");
+    await startWorkstream(page, "CA-401");
+    await startInvestigation(page);
+    const run = (await newest(page, "investigate"))!;
+    await openPipHome(page);
+    await workstreamRow(page, "CA-401").click();
+    const filter = (name: string) => home(page).getByRole("group", { name: "Timeline filter" }).getByRole("button", { name: new RegExp(`^${name}\\b`) });
+    const scope = (name: string) => home(page).getByRole("group", { name: "Timeline scope" }).getByRole("button", { name });
+    await filter("Runs").click();
+    await scope("Every workstream").click();
+    // Still Pip home: the heading is Pip home's, there is no Agents screen, both buttons are pressed.
+    await expect(page.getByRole("heading", { level: 1, name: "Pip home" })).toBeVisible();
+    await expect(page.locator("main").getByRole("heading", { name: "Agents", exact: true })).toHaveCount(0);
+    await expect(filter("Runs")).toHaveAttribute("aria-pressed", "true");
+    await expect(scope("Every workstream")).toHaveAttribute("aria-pressed", "true");
+    // Runs from every workstream and General: this workstream's, and the sample's own in General.
+    const entries = timelineBody(page).locator('[data-timeline-entry][data-kind="run"]');
+    await expect(entries.first()).toBeVisible();
+    expect(await entries.count()).toBeGreaterThan(1);
+    await expect(timelineBody(page).locator(`article[data-run-id="${run.id}"]`)).toBeVisible();
+    await expect(entries.locator("[data-timeline-workstream]", { hasText: /^CA-401$/ }).first()).toBeVisible();
+    await expect(entries.locator('[data-timeline-workstream="general"]').first()).toBeVisible();
+    // The scope is what the person left it: the Pip pane's link says the same without leaving Pip home.
+    await scope("This workstream").click();
+    await expect(timelineBody(page).locator('[data-timeline-workstream="general"]')).toHaveCount(0);
+  });
+
+  test("the Agents screen stays reachable, by its tab and by ⌘K, as the operations view", async ({ page }) => {
+    await openApp(page, "prSurface=manual");
+    await openPipHome(page);
+    await page.getByRole("button", { name: "Agents", exact: true }).click();
+    const main = page.locator("main");
+    await expect(main.getByRole("heading", { name: "Agents", exact: true })).toBeVisible();
+    await expect(main.getByRole("button", { name: /^Stop all/ })).toBeVisible();
+    await expect(main.locator("[data-agents-scope]")).toHaveCount(0);
+    // ⌘K: Open Agents from Pip home.
+    await openPipHome(page);
+    await expect(main.getByRole("heading", { name: "Agents", exact: true })).toHaveCount(0);
+    await page.keyboard.press("ControlOrMeta+k");
+    await page.keyboard.type("agents");
+    const dialog = page.getByRole("dialog", { name: /Search|Jump|command/i }).or(page.getByRole("dialog")).first();
+    await expect(dialog.getByRole("option").first()).toContainText("Open Agents");
+    await page.keyboard.press("Enter");
+    await expect(main.getByRole("heading", { name: "Agents", exact: true })).toBeVisible();
+    // And ⌘K's timeline commands stay on Pip home, with no hint sending Runs elsewhere.
+    await page.keyboard.press("ControlOrMeta+k");
+    await page.keyboard.type("Timeline: Runs");
+    const option = page.getByRole("option", { name: /^Timeline: Runs/ });
+    await expect(option).toBeVisible();
+    await expect(option).not.toContainText("Agents");
+    await page.keyboard.press("Enter");
+    await expect(page.getByRole("heading", { level: 1, name: "Pip home" })).toBeVisible();
+    await expect(page.getByRole("group", { name: "Timeline filter" }).getByRole("button", { name: /^Runs\b/ })).toHaveAttribute("aria-pressed", "true");
+  });
+});
+
+test.describe("B10: the switch and the first permission prompt explain themselves", () => {
+  test("a line under the Manage switch says what the mode does, and changes with it, on Pip home's header and the Pip pane's", async ({ page }) => {
+    await openApp(page, "wsManage=1&runs=empty");
+    await workstreamOnHome(page);
+    const MANAGE = "Pip manages: it starts the next step by itself and drafts what's next; nothing reaches Jira without you.";
+    const ADVISE = "Pip advises: it answers when asked and starts nothing by itself.";
+    const homeLine = stepRail(page).locator("[data-mode-line]");
+    await expect(homeLine).toHaveText(MANAGE);
+    // Directly under the switch's row.
+    const row = stepRail(page).getByRole("switch", { name: "Manage this workstream" });
+    // The line follows the row that holds the switch, before anything else of the header, and is below it on screen.
+    expect(await homeLine.evaluate((el, sw) => !!el.previousElementSibling?.contains(document.evaluate(sw, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue), '//*[@role="switch"][@aria-label="Manage this workstream"]')).toBe(true);
+    const [r, l] = [await boxOf(row), await boxOf(homeLine)];
+    expect(l.y).toBeGreaterThanOrEqual(r.y + r.height - 2);
+    await row.click();
+    await expect(homeLine).toHaveText(ADVISE);
+    await expect(homeLine).toHaveAttribute("data-mode-line", "advise");
+    await row.click();
+    await expect(homeLine).toHaveText(MANAGE);
+
+    // The same in the Pip pane's header, on the workspace.
+    await page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "All projects" }).click();
+    await peekTicket(page, "CA-401");
+    const paneLine = pipPane(page).locator("[data-mode-line]");
+    await expect(paneLine).toHaveText(MANAGE);
+    await manageSwitch(page).click();
+    await expect(paneLine).toHaveText(ADVISE);
+  });
+
+  test.describe("Allow once and Deny", () => {
+    // The first prompt the person ever sees: the config's seeded profile has it dismissed, so this one starts without.
+    test.beforeEach(async ({ page }) => {
+      await page.addInitScript(() => {
+        if (sessionStorage.getItem("explainer-unseeded")) return;
+        sessionStorage.setItem("explainer-unseeded", "1");
+        const prefs = JSON.parse(localStorage.getItem("gossamr-prefs") ?? "{}");
+        localStorage.setItem("gossamr-prefs", JSON.stringify({ ...prefs, permissionExplainerSeen: false }));
+      });
+    });
+
+    test("the first permission prompt explains both buttons above them with a Got it that is kept, and no later prompt repeats it", async ({ page }) => {
+      await openApp(page, "runs=kinds&prSurface=manual");
+      await openPipHome(page);
+      await expandAllNeeds(page);
+      await needOfKind(page, "permission").click();
+      const ask = needsPane(page).locator("[data-permission-ask]");
+      await expect(ask).toBeVisible();
+      const explainer = ask.locator("[data-permission-explainer]");
+      await expect(explainer).toBeVisible();
+      await expect(explainer).toContainText("Deny tells the agent no, and it carries on without it.");
+      // Above the buttons it explains.
+      const [e, d] = [await boxOf(explainer), await boxOf(ask.locator("[data-permission-decisions]"))];
+      expect(e.y + e.height).toBeLessThanOrEqual(d.y + 1);
+      // Got it dismisses it; the keyboard lands on the prompt's own first answer.
+      await explainer.getByRole("button", { name: "Got it" }).click();
+      await expect(explainer).toHaveCount(0);
+      await expect(ask.locator("[data-permission-decisions] button").first()).toBeFocused();
+      // It stays dismissed across a reload.
+      await page.reload();
+      await expect(page.getByText("CA-401", { exact: true }).first()).toBeVisible();
+      await openPipHome(page);
+      await expandAllNeeds(page);
+      await needOfKind(page, "permission").click();
+      await expect(needsPane(page).locator("[data-permission-ask]")).toBeVisible();
+      await expect(page.locator("[data-permission-explainer]")).toHaveCount(0);
+      expect(await page.evaluate(() => JSON.parse(localStorage.getItem("gossamr-prefs") ?? "{}").permissionExplainerSeen)).toBe(true);
+    });
   });
 });

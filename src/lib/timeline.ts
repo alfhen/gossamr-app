@@ -24,16 +24,13 @@ export const FILTER_LABEL: Record<TimelineFilter, string> = { all: "All", runs: 
 
 /**
  * Whose timeline the filter applies to: the selected workstream's, or every open workstream's and General's merged.
- * Runs in every workstream is the Agents screen.
+ * Runs in every workstream is the timeline's Runs filter in this scope, like the others; the Agents screen is the operations view.
  */
 export type TimelineScope = "workstream" | "every";
 
 export const TIMELINE_SCOPES: readonly TimelineScope[] = ["workstream", "every"];
 
 export const SCOPE_LABEL: Record<TimelineScope, string> = { workstream: "This workstream", every: "Every workstream" };
-
-/** Whether filter `f` in scope `scope` is the Agents screen rather than a timeline on Pip home. */
-export const isAgentsView = (f: TimelineFilter, scope: TimelineScope) => f === "runs" && scope === "every";
 
 /**
  * What opening an entry shows: a run's sheet, a draft's card, or the need in Needs you's decision pane. An entry about

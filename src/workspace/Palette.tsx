@@ -220,10 +220,9 @@ export function appActions(): CommandActions {
   };
 }
 
-/** What the timeline shows: Pip home's filter and scope, or, on the Agents screen, Runs in every workstream. */
+/** What the timeline shows: Pip home's filter and scope, current only while Pip home is on screen. */
 export function timelineState(): TimelineState {
   const route = useTabs.getState().route;
-  if (route === "agents") return { filter: "runs", scope: "every", shown: true };
   const { timelineFilter, timelineScope } = usePipHome.getState();
   return { filter: timelineFilter, scope: timelineScope, shown: route === "pip" };
 }

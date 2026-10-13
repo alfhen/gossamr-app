@@ -345,6 +345,12 @@ describe("Pip home in the palette", () => {
     expect(a.openPipHome).toHaveBeenCalled();
   });
 
+  it("finds Open Agents as the operations view (what is running, capacity, Stop all), not as the runs timeline", () => {
+    const on = buildCommands(containers, BUILT_IN_VIEWS, actions(), { ...ctx, agents: true });
+    for (const q of ["capacity", "running", "operations"]) expect(rankCommands(on, q)[0]?.id).toBe("app:agents");
+    expect(on.find((c) => c.id === "app:agents")!.keywords).not.toContain("timeline");
+  });
+
   it("offers 'Open Agents' first for 'agents', ahead of Stop all, and not while on Agents", () => {
     const a = actions();
     const on = buildCommands(containers, BUILT_IN_VIEWS, a, { ...ctx, agents: true });
@@ -449,13 +455,13 @@ describe("timeline commands", () => {
     expect(a.showTimeline).toHaveBeenLastCalledWith("drafts", "every");
   });
 
-  it("marks what the timeline on screen shows as current, and says where Runs in every workstream goes", () => {
+  it("marks what the timeline on screen shows as current, and sends no combination to another screen", () => {
     const hints = (state: Parameters<typeof timelineCommands>[0]) => Object.fromEntries(timelineCommands(state, actions()).map((c) => [c.id, c.hint]));
     expect(hints({ filter: "drafts", scope: "workstream", shown: true })).toMatchObject({ "timeline:filter:drafts": "current", "timeline:scope:workstream": "current", "timeline:filter:runs": undefined, "timeline:scope:every": undefined });
-    // In every workstream, Runs is the Agents screen; with Runs on, so is Every workstream.
-    expect(hints({ filter: "all", scope: "every", shown: true })["timeline:filter:runs"]).toBe("Agents");
-    expect(hints({ filter: "runs", scope: "workstream", shown: true })["timeline:scope:every"]).toBe("Agents");
-    // On the Agents screen, Runs and Every workstream are what it shows.
+    // Runs in every workstream is a timeline like the rest: no hint sends it to Agents.
+    expect(hints({ filter: "all", scope: "every", shown: true })["timeline:filter:runs"]).toBeUndefined();
+    expect(hints({ filter: "runs", scope: "workstream", shown: true })["timeline:scope:every"]).toBeUndefined();
+    // With Runs and Every workstream on screen, both are current.
     expect(hints({ filter: "runs", scope: "every", shown: true })).toMatchObject({ "timeline:filter:runs": "current", "timeline:scope:every": "current" });
     // Off screen, nothing is current.
     expect(Object.values(hints({ filter: "all", scope: "workstream", shown: false })).filter((h) => h === "current")).toEqual([]);

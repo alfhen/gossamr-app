@@ -6,6 +6,7 @@ import { RULE_SWITCH, STEP_HELP, isHeldByYou, budgetNote, heldBanner, ruleText, 
 import { HELD_BUDGET, TRIPWIRE, WORKSTREAM_RULES, type AutoStartSwitches, type Proposal, type Run, type WorkstreamRule, type WorkstreamRules, type WorkstreamView } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { Btn } from "./AgentSheet";
+import { paneHas, useDecisionShown } from "./decisionShown";
 import { EscalationCard } from "./EscalationCard";
 import { openNeed } from "./needsActions";
 import { usePopover } from "./Popover";
@@ -198,6 +199,12 @@ export interface ControlsViewProps {
   next?: NextStep | null;
 }
 
+/** What the mode switch means, one line under it: Manage starts and drafts by itself, Advise only answers. */
+export const MODE_LINE: Record<"manage" | "advise", string> = {
+  manage: "Pip manages: it starts the next step by itself and drafts what's next; nothing reaches Jira without you.",
+  advise: "Pip advises: it answers when asked and starts nothing by itself.",
+};
+
 /** The one line that says what happens next. When it is waiting on the person, the line opens the top need in the Needs-you pane. */
 export function NextStepLine({ next }: { next: NextStep }) {
   const { need } = next;
@@ -224,6 +231,8 @@ export function WorkstreamControlsView({ view, globals, actions, confirmingStop,
   const manage = ws.mode === "manage";
   const pausedId = useId();
   const box = useRef<HTMLDivElement>(null);
+  // A decision open in Pip home's pane is shown there, not here as well.
+  const shown = useDecisionShown();
   // Once the confirmation goes, focus goes back to the menu it came from rather than to nowhere.
   const closeConfirm = () => {
     onConfirmStop(false);
@@ -252,9 +261,12 @@ export function WorkstreamControlsView({ view, globals, actions, confirmingStop,
         </span>
         {confirmingStop && <StopConfirm onStop={() => (closeConfirm(), actions.onStop())} onKeep={closeConfirm} />}
       </div>
-      <HeldBanner view={view} onResume={actions.onResume} />
+      <p data-mode-line={ws.mode} className="m-0 text-xs text-ws-ink2">
+        {MODE_LINE[ws.mode]}
+      </p>
+      {!paneHas(shown, "hold", ws.id) && <HeldBanner view={view} onResume={actions.onResume} />}
       {/* A review that still blocks after the automatic fix rounds: the person chooses what happens next. */}
-      <EscalationCard key={ws.id} view={view} />
+      {!paneHas(shown, "escalation", ws.id) && <EscalationCard key={ws.id} view={view} />}
       {next && <NextStepLine next={next} />}
       {manage && (
         <p data-steps-left={stepsOf(view.budget).limit - stepsOf(view.budget).used} title={STEP_HELP} className="m-0 text-xs text-ws-ink2">

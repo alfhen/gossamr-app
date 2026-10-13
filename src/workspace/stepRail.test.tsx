@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MockBackend } from "../backend/mock";
 import type { CodeChange, Intent, ItemRef, Proposal, ReviewView, Run, RunKind, RunState, WorkstreamEvent, WorkstreamView } from "../types";
+import { DecisionShownContext } from "./decisionShown";
 import { freezeBatch } from "./pipHomeLogic";
 import { approveBatch, BATCH_CHANGED, BatchConfirm, confirmBatch, EarlierStepDrafts, planResultFor, StepDrafts, StepRailView, type StepRailViewProps } from "./StepRail";
 
@@ -124,6 +125,22 @@ describe("the Plan step while its description update waits (N6)", () => {
   it("says nothing of approving for a rewrite of the title alone: there is no description update", () => {
     const html = renderToStaticMarkup(<StepRailView {...props({ proposals: [fromRun("d-title", rewrite, "r3")] })} />);
     expect(html).not.toContain("data-plan-approve");
+  });
+});
+
+describe("a draft open in Pip home's decision pane", () => {
+  it("is not a card on the rail as well: its step lists no draft, and a step with others still does", () => {
+    const rail = (proposals: Proposal[], open: string[]) =>
+      renderToStaticMarkup(
+        <DecisionShownContext.Provider value={{ need: null, drafts: new Set(open) }}>
+          <StepRailView {...props({ proposals })} />
+        </DecisionShownContext.Provider>,
+      );
+    const one = [draft("d-pip", comment, 5)];
+    expect(rail(one, [])).toContain('data-step-drafts="pip"');
+    // Its card is open in the pane: Pip's drafts have none of their own on the rail.
+    expect(rail(one, ["d-pip"])).not.toContain("data-step-drafts");
+    expect(rail([...one, draft("d-other", transition, 6)], ["d-pip"])).toContain('data-step-drafts="pip"');
   });
 });
 

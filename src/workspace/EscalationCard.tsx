@@ -97,6 +97,8 @@ export interface EscalationCardViewProps {
   busy: boolean;
   /** The review draft it opened is open and not posted: the choices wait, and the card says why. */
   drafting?: boolean;
+  /** Says "R3 still blocks after 2 fix rounds. What next?" first. Left out where something above already says it (the decision pane's header). */
+  titled?: boolean;
   onFixRound(): void;
   onTakeOver(): void;
   onPost(): void;
@@ -106,7 +108,7 @@ export interface EscalationCardViewProps {
  * A review that still blocks after the automatic fix rounds, and the person's three choices, in this order: another fix
  * round, taking the workstream over, or posting the review as it is. Each is the person's alone.
  */
-export function EscalationCardView({ escalation: e, busy, drafting = false, onFixRound, onTakeOver, onPost }: EscalationCardViewProps) {
+export function EscalationCardView({ escalation: e, busy, drafting = false, titled = true, onFixRound, onTakeOver, onPost }: EscalationCardViewProps) {
   const review = e.reviewLabel || "The review";
   const draft = e.reviewDraft ?? null;
   const why = `escalation-${e.reviewRun}-draft`;
@@ -129,9 +131,11 @@ export function EscalationCardView({ escalation: e, busy, drafting = false, onFi
   );
   return (
     <div role="group" aria-label="Review still blocks" data-escalation={e.reviewRun} className="grid gap-1.5 rounded-md border border-ws-warn/40 bg-ws-warn/10 px-2.5 py-1.5 text-sm text-ws-ink">
-      <p className="m-0 font-semibold">
-        {review} still blocks after {e.rounds} fix rounds. What next?
-      </p>
+      {titled && (
+        <p className="m-0 font-semibold">
+          {review} still blocks after {e.rounds} fix rounds. What next?
+        </p>
+      )}
       {drafting && (
         <p id={why} role="status" data-escalation-draft-open className="m-0 text-xs font-semibold text-ws-ink">
           {DRAFT_OPEN}

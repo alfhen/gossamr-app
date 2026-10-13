@@ -288,6 +288,7 @@ function EscalationBody({ view }: { view: WorkstreamView }) {
         escalation={e}
         busy={busy}
         drafting={postingReview(posting, draft)}
+        titled={false}
         onFixRound={() => choose(actions.onFixRound, fixRoundSent(e.buildLabel))}
         onTakeOver={() => choose(actions.onTakeOver, TAKEN_OVER)}
         onPost={() => {
@@ -433,9 +434,11 @@ function NeedDecision({ need }: { need: Need }) {
       data-kind={need.kind}
       data-group={need.group}
       onKeyDown={onKeyDown}
-      className="grid max-h-[60%] min-h-0 shrink-0 content-start gap-2 overflow-y-auto border-b border-ws-sep bg-ws-bar px-3 py-2.5 outline-none"
+      // The pane is the one thing that scrolls in its place. Its drafts' action bars stay where the card ends (a sticky one would float over the text and the review comments beneath it).
+      className="grid max-h-[60%] min-h-0 shrink-0 content-start gap-2 overflow-y-auto border-b border-ws-sep bg-ws-bar px-3 py-2.5 outline-none [&_[data-draft-actions]]:static"
     >
-      <header className="flex items-start gap-2">
+      {/* Kept in view while the decision under it scrolls: what is asked and why stays on screen. */}
+      <header className="sticky -top-2.5 z-[2] -mx-3 -mt-2.5 flex items-start gap-2 bg-ws-bar px-3 pt-2.5 pb-1">
         <div className="grid min-w-0 flex-1 gap-0.5">
           <div className="flex min-w-0 flex-wrap items-center gap-1.5 text-xs text-ws-ink3">
             {need.head && (

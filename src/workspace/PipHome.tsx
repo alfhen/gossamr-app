@@ -33,6 +33,7 @@ import { useNow } from "./AgentsView";
 import { pipHomeHints } from "./footerHints";
 import { ShortcutHint } from "./ShortcutHint";
 import { PipOrientation } from "./PipOrientation";
+import { DecisionShownContext, decisionShown } from "./decisionShown";
 
 const PIP_HOME_HINTS = pipHomeHints();
 const NEEDS_HINTS = pipHomeHints(true);
@@ -78,8 +79,6 @@ export interface WorkstreamListProps {
   needsYou?: readonly Need[];
   /** The workstreams that have gone quiet in Jira while work went on, by id (`useWorkstreamWithers`): each row gets its cobweb. */
   wither?: Readonly<Record<string, WorkstreamWither>>;
-  /** The Needs you list, at the bottom of the column. */
-  tray?: ReactNode;
 }
 
 /** What the list says before there is any workstream: what one is, in a line. */
@@ -95,8 +94,12 @@ function NeedsBadge({ count, total }: { count: number; total: number }) {
   );
 }
 
-/** Pip home's left column: General pinned at the top, then each open workstream with where it stands; the closed ones behind a toggle, read-only. */
-export function WorkstreamList({ list, closed, showClosed, selected, onSelect, onShowClosed, runs = [], needsYou = [], wither = {}, tray }: WorkstreamListProps) {
+/**
+ * The workstreams, in a compact section under Needs you in Pip home's left column: General pinned at the top, then each
+ * open workstream with where it stands; the closed ones behind a toggle, read-only. It takes at most 45% of the column and
+ * scrolls inside that, so Needs you keeps the rest.
+ */
+export function WorkstreamList({ list, closed, showClosed, selected, onSelect, onShowClosed, runs = [], needsYou = [], wither = {} }: WorkstreamListProps) {
   const open = list.filter((v) => v.workstream.closedAt === null);
   const option = (id: string | null, level: WorkstreamWither["level"] = 0) => ({
     role: "option" as const,
@@ -106,8 +109,8 @@ export function WorkstreamList({ list, closed, showClosed, selected, onSelect, o
     className: `${ROW} ${selected === id ? "bg-ws-sel text-ws-ink" : "text-ws-ink2 hover:bg-ws-hover"} ${witherClass(level, "ws-")}`.trim(),
   });
   return (
-    <nav aria-label="Workstreams" tabIndex={-1} className="flex min-h-0 flex-col border-r border-ws-sep bg-ws-bar">
-      <h2 className="m-0 px-3 pt-3 pb-1.5 text-xs font-semibold tracking-wide text-ws-ink3 uppercase">Workstreams</h2>
+    <nav aria-label="Workstreams" tabIndex={-1} className="flex max-h-[45%] min-h-0 shrink-0 flex-col border-t border-ws-sep bg-ws-bar">
+      <h2 className="m-0 px-3 pt-2 pb-1 text-xs font-semibold tracking-wide text-ws-ink3 uppercase">Workstreams</h2>
       <ul role="listbox" aria-label="Workstreams" aria-keyshortcuts="j k ArrowDown ArrowUp Enter" className="m-0 grid min-h-0 list-none content-start gap-0.5 overflow-y-auto p-0 px-1.5">
         <li data-workstream-row="general" {...option(null)}>
           <span className="flex min-w-0 items-center gap-1.5">
@@ -138,12 +141,12 @@ export function WorkstreamList({ list, closed, showClosed, selected, onSelect, o
         })}
       </ul>
       {open.length === 0 && <p className="m-0 px-3 py-2 text-sm text-ws-ink3">{NO_WORKSTREAMS}</p>}
-      <div className="mt-auto grid gap-1 border-t border-ws-sep px-1.5 py-2">
+      <div className="mt-auto flex flex-wrap items-center gap-x-1 border-t border-ws-sep px-1.5 py-1">
         <button
           type="button"
           // The palette, already asking for a workstream: the person types the ticket, and its 'Start a workstream on' starts it.
           onClick={() => usePrefs.getState().setPaletteOpen(true, START_WORKSTREAM)}
-          className="rounded px-2 py-1 text-left text-sm text-ws-ink2 hover:bg-ws-hover focus-visible:outline-2 focus-visible:outline-ws-pip"
+          className="rounded px-2 py-0.5 text-left text-sm text-ws-ink2 hover:bg-ws-hover focus-visible:outline-2 focus-visible:outline-ws-pip"
         >
           Start a workstream…
         </button>
@@ -151,12 +154,12 @@ export function WorkstreamList({ list, closed, showClosed, selected, onSelect, o
           type="button"
           aria-pressed={showClosed}
           onClick={() => onShowClosed(!showClosed)}
-          className="rounded px-2 py-1 text-left text-sm text-ws-ink2 hover:bg-ws-hover focus-visible:outline-2 focus-visible:outline-ws-pip"
+          className="rounded px-2 py-0.5 text-left text-sm text-ws-ink2 hover:bg-ws-hover focus-visible:outline-2 focus-visible:outline-ws-pip"
         >
           {showClosed ? "Hide closed" : "Show closed"}
         </button>
         {showClosed && (
-          <ul aria-label="Closed workstreams" className="m-0 grid max-h-[30vh] list-none gap-0.5 overflow-y-auto p-0">
+          <ul aria-label="Closed workstreams" className="m-0 grid max-h-[30vh] w-full list-none gap-0.5 overflow-y-auto p-0">
             {closed.map((v) => (
               <li key={v.workstream.id} data-closed-workstream={v.workstream.id} className="grid gap-0.5 px-2.5 py-1 text-sm text-ws-ink3">
                 <span className="flex min-w-0 gap-1.5">
@@ -169,7 +172,6 @@ export function WorkstreamList({ list, closed, showClosed, selected, onSelect, o
             {closed.length === 0 && <li className="px-2.5 py-1 text-sm text-ws-ink3">No closed workstreams.</li>}
           </ul>
         )}
-        {tray}
       </div>
     </nav>
   );
@@ -488,8 +490,9 @@ function usePipHomeKeys(needsYou: readonly Need[]) {
 }
 
 /**
- * Pip home: the workstreams, the conversation with Pip in the selected one (or General), and its steps. Below about
- * 1100px the steps drop under the conversation.
+ * Pip home: Needs you as the main left column with the workstreams in a compact section under it, the timeline and
+ * composer of the selected workstream (or General) beside them, with the decision pane opening above the timeline, and
+ * the steps. Below about 1100px the steps drop under the conversation.
  */
 export function PipHome() {
   const list = useWorkstreams((s) => s.list);
@@ -499,6 +502,9 @@ export function PipHome() {
   const workstream = useHomeWorkstream();
   const runs = useRuns((s) => s.runs);
   const needsYou = useNeedsYou();
+  const deciding = usePipHome((s) => s.deciding);
+  // What the decision pane shows is not shown again in the timeline or on the rail.
+  const decided = useMemo(() => decisionShown(needsYou.find((n) => n.key === deciding), list), [needsYou, deciding, list]);
   // The same clock as the Agents view's, so a run gone quiet leaves "running" here when it does there.
   const now = useNow();
   const openList = useMemo(() => list.filter((v) => v.workstream.closedAt === null), [list]);
@@ -530,33 +536,42 @@ export function PipHome() {
   };
   return (
     <div data-pip-home className="flex h-full min-h-0 flex-col">
+      <header className="flex shrink-0 items-baseline gap-3 border-b border-ws-sep bg-ws-bar px-4 py-2">
+        <h1 className="m-0 text-base font-semibold">Pip home</h1>
+        <span className="min-w-0 truncate text-sm text-ws-ink3">What needs you, your workstreams, and what Pip and its agents are doing</span>
+      </header>
       {!orientationSeen && <PipOrientation />}
-      <div className="grid min-h-0 flex-1 grid-cols-[minmax(180px,250px)_minmax(0,1fr)] grid-rows-[minmax(0,1fr)_auto] overflow-hidden min-[1100px]:grid-cols-[minmax(200px,260px)_minmax(0,1fr)_minmax(240px,320px)] min-[1100px]:grid-rows-[minmax(0,1fr)]">
+      <div className="grid min-h-0 flex-1 grid-cols-[minmax(260px,340px)_minmax(0,1fr)] grid-rows-[minmax(0,1fr)_auto] overflow-hidden min-[1100px]:grid-cols-[minmax(280px,340px)_minmax(0,1fr)_minmax(240px,320px)] min-[1100px]:grid-rows-[minmax(0,1fr)]">
         <div data-pip-home-column="list" onFocusCapture={enter("list")} className="contents">
-          <WorkstreamList
-            list={list}
-            closed={closed}
-            showClosed={showClosed}
-            selected={workstream ? selected : null}
-            onSelect={(id) => (id ? usePipHome.getState().openWorkstream(id) : usePipHome.getState().openGeneral())}
-            onShowClosed={(on) => {
-              usePipHome.getState().setShowClosed(on);
-              if (on) void useWorkstreams.getState().loadClosed();
-            }}
-            runs={runs}
-            needsYou={needsYou}
-            wither={withers}
-            tray={<NeedsYouList needs={needsYou} now={now} />}
-          />
+          {/* The left column: Needs you takes the height, the workstreams are a compact section under it. */}
+          <div data-pip-home-left className="flex min-h-0 flex-col border-r border-ws-sep bg-ws-bar">
+            <NeedsYouList main needs={needsYou} now={now} />
+            <WorkstreamList
+              list={list}
+              closed={closed}
+              showClosed={showClosed}
+              selected={workstream ? selected : null}
+              onSelect={(id) => (id ? usePipHome.getState().openWorkstream(id) : usePipHome.getState().openGeneral())}
+              onShowClosed={(on) => {
+                usePipHome.getState().setShowClosed(on);
+                if (on) void useWorkstreams.getState().loadClosed();
+              }}
+              runs={runs}
+              needsYou={needsYou}
+              wither={withers}
+            />
+          </div>
         </div>
         {/* Run drafts that need nothing chosen are read and started in place here, in the conversation and the rail alike. */}
         <InlineStartContext.Provider value={true}>
-          <div data-pip-home-column="conversation" onFocusCapture={enter("conversation")} className="contents">
-            <HomeConversation workstream={workstream} footer={footer} needs={needsYou} pane={<NeedsPane needs={needsYou} />} />
-          </div>
-          <div data-pip-home-column="rail" onFocusCapture={enter("rail")} className="contents">
-            <StepsColumn workstream={workstream} />
-          </div>
+          <DecisionShownContext.Provider value={decided}>
+            <div data-pip-home-column="conversation" onFocusCapture={enter("conversation")} className="contents">
+              <HomeConversation workstream={workstream} footer={footer} needs={needsYou} pane={<NeedsPane needs={needsYou} />} />
+            </div>
+            <div data-pip-home-column="rail" onFocusCapture={enter("rail")} className="contents">
+              <StepsColumn workstream={workstream} />
+            </div>
+          </DecisionShownContext.Provider>
         </InlineStartContext.Provider>
       </div>
       <footer data-pip-home-hints className="@container flex h-8 shrink-0 items-center border-t border-ws-sep bg-ws-bar px-4 text-xs text-ws-ink3">

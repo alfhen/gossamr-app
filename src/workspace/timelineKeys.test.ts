@@ -107,13 +107,12 @@ describe("the filter bar", () => {
     expect(html).not.toContain("Timeline filter");
   });
 
-  it("presses the scope shown, and says Every workstream with Runs is the Agents screen", () => {
-    const html = renderToStaticMarkup(createElement(TimelineScopeToggle, { value: "workstream", filter: "runs", onChange: () => {} }));
+  it("presses the scope shown, with Runs as with any filter: no scope is another screen", () => {
+    const html = renderToStaticMarkup(createElement(TimelineScopeToggle, { value: "workstream", onChange: () => {} }));
     expect(html).toContain('aria-label="Timeline scope"');
     expect(html).toMatch(/aria-pressed="true"[^>]*data-scope="workstream"[^>]*>This workstream</);
-    expect(html).toMatch(/aria-pressed="false"[^>]*data-scope="every"[^>]*title="Runs in every workstream: the Agents screen"[^>]*>Every workstream</);
-    const all = renderToStaticMarkup(createElement(TimelineScopeToggle, { value: "every", filter: "all", onChange: () => {} }));
-    expect(all).not.toContain("Agents screen");
+    expect(html).toMatch(/aria-pressed="false"[^>]*data-scope="every"[^>]*>Every workstream</);
+    expect(html).not.toContain("Agents screen");
   });
 });
 
@@ -146,16 +145,17 @@ describe("what a conversation's timeline holds", () => {
 });
 
 describe("showing a filter in a scope", () => {
-  it("goes to Pip home's timeline with both, and to the Agents screen for Runs in every workstream", () => {
+  it("goes to Pip home's timeline with both, Runs in every workstream included", () => {
     usePipHome.getState().reset();
     useTabs.getState().setRoute("workspace");
     showTimeline("drafts", "every");
     expect(useTabs.getState().route).toBe("pip");
     expect(usePipHome.getState()).toMatchObject({ timelineFilter: "drafts", timelineScope: "every" });
+    useTabs.getState().setRoute("workspace");
     showTimeline("runs");
-    expect(useTabs.getState().route).toBe("agents");
-    // Pip home keeps what it showed, and the scope: leaving Agents by another filter stays in every workstream.
-    expect(usePipHome.getState()).toMatchObject({ timelineFilter: "drafts", timelineScope: "every" });
+    // Runs in every workstream stays on Pip home's timeline; it no longer redirects to the Agents screen.
+    expect(useTabs.getState().route).toBe("pip");
+    expect(usePipHome.getState()).toMatchObject({ timelineFilter: "runs", timelineScope: "every" });
     showTimeline("decisions");
     expect(useTabs.getState().route).toBe("pip");
     expect(usePipHome.getState()).toMatchObject({ timelineFilter: "decisions", timelineScope: "every" });

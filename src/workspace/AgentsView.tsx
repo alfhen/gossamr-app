@@ -48,7 +48,7 @@ import { arm, confirmArmed, disarm, keyPlan, openNeed } from "./needsActions";
 import { usePipHome } from "./pipHomeStore";
 import { currentNeeds, useNeedsYou } from "./useNeeds";
 import type { TimelineFilter, TimelineScope } from "../lib/timeline";
-import { TimelineFilterBar, TimelineScopeToggle, showTimeline } from "./TimelineFilterBar";
+import { showTimeline } from "./TimelineFilterBar";
 
 const KBD = "font-sans text-[11px] rounded border border-ws-sep2 bg-ws-bar px-1";
 const BUTTON = "inline-flex items-center gap-1.5 rounded-md border border-ws-sep2 px-2.5 py-px text-sm leading-normal whitespace-nowrap hover:bg-ws-hover disabled:cursor-not-allowed disabled:opacity-45";
@@ -153,10 +153,7 @@ export interface AgentsActions {
   openSafety(): void;
   /** Opens a need on Pip home, from a run's "In Needs you" pill. */
   openNeed?(need: Need): void;
-  /**
-   * Another of the timeline's filters or scopes: All, Drafts or Decisions in every workstream, or Runs in the selected
-   * workstream, on Pip home.
-   */
+  /** Pip home's timeline with a filter and scope: the Runs timeline across every workstream, from the header's link. */
   showTimeline?(filter: TimelineFilter, scope: TimelineScope): void;
 }
 
@@ -373,6 +370,12 @@ export function AgentsScreen({ runs, status, error, environment, filters, select
           {summaryLine(runs, now, needsYou)}
         </span>
         <span className="flex-1" />
+        {/* This screen is the operations view; what each run did, in order, is the timeline's Runs filter on Pip home. */}
+        {on.showTimeline && (
+          <button type="button" data-agents-timeline onClick={() => on.showTimeline?.("runs", "every")} className={BUTTON}>
+            Runs timeline
+          </button>
+        )}
         <button type="button" onClick={on.startAgent} className={`${BUTTON} border-ws-pip bg-ws-pip font-semibold text-ws-on-pip hover:bg-ws-pip hover:brightness-110`}>
           <Icon name="play" />
           Start an agent
@@ -383,16 +386,6 @@ export function AgentsScreen({ runs, status, error, environment, filters, select
         </button>
         <StopAll count={stoppable(runs).length} waiting={slotWaiters(runs).length} busy={stopping} onStop={on.stopAll} />
       </header>
-      {/* Agents is the timeline's Runs filter across every workstream; the other filters and This workstream are timelines on Pip home. */}
-      {on.showTimeline && (
-        <div data-agents-scope className="border-b border-ws-sep px-6 py-1.5">
-          <TimelineFilterBar
-            value="runs"
-            onChange={(f) => f !== "runs" && on.showTimeline?.(f, "every")}
-            after={<TimelineScopeToggle value="every" filter="runs" onChange={(s) => s !== "every" && on.showTimeline?.("runs", s)} />}
-          />
-        </div>
-      )}
       <Toolbar runs={runs} filters={filters} view={view} group={group} introShown={introShown} on={on} />
       <div className="min-h-0 flex-1 overflow-y-auto px-6 pt-5 pb-[max(80px,var(--ws-launcher-clear,0px))]">
         <div

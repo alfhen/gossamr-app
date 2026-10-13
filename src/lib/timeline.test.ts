@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { MockBackend } from "../backend/mock";
 import type { Intent, ItemRef, Proposal, ProposalState, Run, RunKind, RunState, WorkstreamActor, WorkstreamEvent, WorkstreamView } from "../types";
 import { needs, type Need } from "./needs";
-import { EMPTY_FILTER, FILTER_LABEL, SCOPE_LABEL, TIMELINE_FILTERS, TIMELINE_SCOPES, draftSentence, everyWorkstreamParts, isAgentsView, timelineAcross, workstreamLabel, filterCounts, filterTimeline, runLifecycle, runPhase, runSentence, shows, timeline, type TimelineEntry, type TimelineTurn } from "./timeline";
+import { EMPTY_FILTER, FILTER_LABEL, SCOPE_LABEL, TIMELINE_FILTERS, TIMELINE_SCOPES, draftSentence, everyWorkstreamParts, timelineAcross, workstreamLabel, filterCounts, filterTimeline, runLifecycle, runPhase, runSentence, shows, timeline, type TimelineEntry, type TimelineTurn } from "./timeline";
 
 const NOW = Date.parse("2026-10-12T12:00:00Z");
 const iso = (minutesAgo: number) => new Date(NOW - minutesAgo * 60_000).toISOString();
@@ -596,7 +596,7 @@ describe("every workstream", () => {
     expect(workstreamLabel(view("ws-2", null))).toBe("Loose ends");
   });
 
-  it("filters the same way in either scope; Runs in every workstream is the Agents screen", () => {
+  it("filters the same way in either scope; Runs in every workstream is a timeline like the others", () => {
     const merged = timelineAcross([
       { workstreamId: "ws-1", label: "CA-401", input: { runs: [inWs("r1", "ws-1", 40)], events: [line("held", 10)] } },
       { workstreamId: "ws-2", label: "CA-402", input: { runs: [inWs("r2", "ws-2", 30)], drafts: [draft("d2", comment("CA-402"), 20)] } },
@@ -605,6 +605,8 @@ describe("every workstream", () => {
     expect(keys(filterTimeline(merged, "drafts"))).toEqual(["draft:d2"]);
     expect(filterCounts(merged)).toEqual({ all: 4, runs: 2, drafts: 1, decisions: 1 });
     expect(TIMELINE_SCOPES.map((s) => SCOPE_LABEL[s])).toEqual(["This workstream", "Every workstream"]);
-    expect(TIMELINE_FILTERS.flatMap((f) => TIMELINE_SCOPES.filter((s) => isAgentsView(f, s)).map((s) => `${f}/${s}`))).toEqual(["runs/every"]);
+    // Every filter shows in every scope: runs from every workstream, merged by time, with their workstream's label.
+    expect(TIMELINE_FILTERS.length * TIMELINE_SCOPES.length).toBe(8);
+    expect(filterTimeline(merged, "runs").map((e) => e.scopeLabel)).toEqual(["CA-401", "CA-402"]);
   });
 });

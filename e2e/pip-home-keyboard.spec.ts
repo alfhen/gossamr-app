@@ -210,7 +210,7 @@ test("keyboard only, intake to review on Pip home: columns with F6, rows and ste
   await expect(peekSheet(page).locator(`article[data-draft="${id}"]`).getByRole("button", { name: "Post comment" })).toHaveCount(0);
 });
 
-test("j and k move through the list and the Needs you rows and stop at the ends; Enter on a Needs you row opens its decision", async ({ page }) => {
+test("j and k move through the Needs you rows and the workstream list, in the order they show, and stop at the ends; Enter on a Needs you row opens its decision", async ({ page }) => {
   await openApp(page, MANAGED);
   await agentsSettled(page);
   await palette(page, "CA-401", /CA-401/);
@@ -229,16 +229,24 @@ test("j and k move through the list and the Needs you rows and stop at the ends;
   const item = needsYouTray(page).locator("[data-needs-you-group]").first();
   await expect(item).toBeVisible();
 
-  // From the list: k stops at General, j runs on into Needs you and stops at its last row.
+  // From the list: j and k go in the order the column shows, Needs you's rows first and the workstreams under them, and
+  // both stop at the ends: k runs up through General into the Needs you row and stops there, j back down to the last workstream.
   await press(page, "Shift+F6");
   await expect(workstreamRow(page, "CA-401")).toBeFocused();
   await press(page, "k");
-  await press(page, "k");
   await expect(workstreamRow(page, "General")).toBeFocused();
-  await press(page, "j");
-  await press(page, "j");
+  await press(page, "k");
+  await expect(item).toBeFocused();
+  await press(page, "k");
   await expect(item).toBeFocused();
   await press(page, "j");
+  await expect(workstreamRow(page, "General")).toBeFocused();
+  await press(page, "j");
+  await expect(workstreamRow(page, "CA-401")).toBeFocused();
+  await press(page, "j");
+  await expect(workstreamRow(page, "CA-401")).toBeFocused();
+  await press(page, "k");
+  await press(page, "k");
   await expect(item).toBeFocused();
   // Enter opens the need's decision in the middle column, and the keyboard goes into it.
   await page.keyboard.press("Enter");

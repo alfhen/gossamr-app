@@ -34,7 +34,7 @@ async function twoWorkstreams(page: Page) {
   await expect(scope(page, "This workstream")).toHaveAttribute("aria-pressed", "true");
 }
 
-test("Every workstream merges each open workstream's timeline and General's by time, each entry labelled; Runs there is Agents", async ({ page }) => {
+test("Every workstream merges each open workstream's timeline and General's by time, each entry labelled; Runs there stays in the timeline", async ({ page }) => {
   await twoWorkstreams(page);
   // This workstream: CA-401's own entries, unlabelled.
   const own = await entries(page).count();
@@ -63,13 +63,15 @@ test("Every workstream merges each open workstream's timeline and General's by t
   await expect(scope(page, "Every workstream")).toHaveAttribute("aria-pressed", "true");
   expect((await labelsShown(page)).every((l) => l !== null)).toBe(true);
 
-  // Runs in every workstream is the Agents screen, with Every workstream pressed there.
+  // Runs in every workstream is a timeline like the rest: the screen stays Pip home, with Every workstream still pressed.
   await filter(page, "Runs").click();
-  const main = page.locator("main");
-  await expect(main.getByRole("heading", { name: "Agents", exact: true })).toBeVisible();
+  await expect(page.locator("main").getByRole("heading", { name: "Agents", exact: true })).toHaveCount(0);
+  await expect(pipHome(page)).toBeVisible();
   await expect(filter(page, "Runs")).toHaveAttribute("aria-pressed", "true");
   await expect(scope(page, "Every workstream")).toHaveAttribute("aria-pressed", "true");
-  // This workstream from there: CA-401's runs on Pip home.
+  await expect.poll(async () => (await entries(page).evaluateAll((els) => els.map((e) => e.getAttribute("data-kind")))).every((k) => k === "run")).toBe(true);
+  expect((await labelsShown(page)).every((l) => l !== null)).toBe(true);
+  // This workstream from there: CA-401's runs.
   await scope(page, "This workstream").click();
   await expect(pipHome(page)).toBeVisible();
   await expect(filter(page, "Runs")).toHaveAttribute("aria-pressed", "true");
@@ -122,7 +124,7 @@ test("the Pip pane shows the workstream's timeline over its composer, with a fil
   await expect(timeline(page).locator('[data-timeline-entry][data-kind="said"]', { hasText: "investigate this" })).toHaveCount(1);
 });
 
-test("⌘K switches the timeline's filter and scope, and Runs in every workstream goes to Agents", async ({ page }) => {
+test("⌘K switches the timeline's filter and scope, and Runs in every workstream stays on Pip home", async ({ page }) => {
   await twoWorkstreams(page);
   await palette(page, "Timeline: Decisions");
   await expect(filter(page, "Decisions")).toHaveAttribute("aria-pressed", "true");
@@ -133,7 +135,9 @@ test("⌘K switches the timeline's filter and scope, and Runs in every workstrea
   await expect(filter(page, "Decisions")).toHaveAttribute("aria-pressed", "true");
 
   await palette(page, "Timeline: Runs");
-  await expect(page.locator("main").getByRole("heading", { name: "Agents", exact: true })).toBeVisible();
+  await expect(page.locator("main").getByRole("heading", { name: "Agents", exact: true })).toHaveCount(0);
+  await expect(filter(page, "Runs")).toHaveAttribute("aria-pressed", "true");
+  await expect(scope(page, "Every workstream")).toHaveAttribute("aria-pressed", "true");
 
   await palette(page, "Timeline: This workstream");
   await expect(pipHome(page)).toBeVisible();

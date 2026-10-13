@@ -192,9 +192,9 @@ function GroupRow({ group: g, now, onPick }: { group: NeedGroup; now: number; on
         }}
         className={`${ROW} ${deciding ? "bg-ws-sel" : ""}`}
       >
-        <span className="flex min-w-0 items-center gap-1.5">
+        <span className="flex min-w-0 items-start gap-1.5">
           {g.ticketKey && <b data-needs-you-key className="shrink-0 font-mono font-semibold text-ws-ink">{g.ticketKey}</b>}
-          <span data-needs-you-head className="min-w-0 flex-1 truncate text-ws-ink">
+          <span data-needs-you-head className="line-clamp-2 min-w-0 flex-1 [overflow-wrap:anywhere] text-ws-ink">
             {g.title}
           </span>
           <GroupChip group={g.top.group} />
@@ -237,6 +237,8 @@ export interface NeedsYouListProps {
   needs: readonly Need[];
   /** The rail popover's form: no border of its own, a shorter list. */
   compact?: boolean;
+  /** Pip home's form: the main left column, taking the height it is given and scrolling inside it. */
+  main?: boolean;
   /** Called with the need activated, before it opens; the popover closes itself with it. */
   onPick?(need: Need): void;
   /** The current time in ms, for the ages; a test passes its own. */
@@ -248,16 +250,16 @@ export interface NeedsYouListProps {
  * the highest-ranked need first, "+N more" for the rest. Activating a row opens its need's decision; expanding it lists
  * every need in it, with "Approve N safe drafts" over the drafts that may go together.
  */
-export function NeedsYouList({ needs, compact = false, onPick, now = Date.now() }: NeedsYouListProps) {
+export function NeedsYouList({ needs, compact = false, main = false, onPick, now = Date.now() }: NeedsYouListProps) {
   const groups = useMemo(() => needGroups(needs), [needs]);
   return (
-    <section aria-label="Needs you" data-needs-you className={`grid min-h-0 gap-1 overflow-y-auto ${compact ? "max-h-[min(400px,60vh)] p-2" : "max-h-[38vh] border-t border-ws-sep pt-2"}`}>
-      <h3 data-needs-you-title tabIndex={-1} className="sticky top-0 z-10 m-0 flex items-center gap-1.5 bg-ws-win px-1 outline-none text-xs font-semibold tracking-wide text-ws-ink3 uppercase">
+    <section aria-label="Needs you" data-needs-you className={`grid min-h-0 content-start gap-1 overflow-y-auto ${compact ? "max-h-[min(400px,60vh)] p-2" : main ? "flex-1 px-1.5 pb-2" : "max-h-[38vh] border-t border-ws-sep pt-2"}`}>
+      <h2 data-needs-you-title tabIndex={-1} className={`sticky top-0 z-10 m-0 flex items-center gap-1.5 px-1 outline-none font-semibold tracking-wide uppercase ${main ? "bg-ws-bar pt-2 pb-1 text-sm text-ws-ink2" : "bg-ws-win text-xs text-ws-ink3"}`}>
         Needs you
         <span data-needs-you-count aria-label={needsYouText(needs.length)} className={`rounded-full px-1.5 text-[10px] ${needs.length ? "bg-ws-pip text-ws-on-pip" : "bg-ws-hover text-ws-ink3"}`}>
           {needs.length}
         </span>
-      </h3>
+      </h2>
       {groups.length === 0 ? (
         <p data-needs-you-empty className="m-0 px-1 text-sm text-ws-ink3">
           Nothing needs you.

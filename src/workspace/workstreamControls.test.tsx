@@ -10,7 +10,8 @@ import { useWorkspace } from "../workspaceStore";
 import type { Run } from "../types";
 import { HOLD_ALL_HINT, buildCommands, isHoldAllKey, rankCommands, type CommandActions } from "./commands";
 import { useToasts } from "./toasts";
-import { NextStepLine, nextStepOnceKnown } from "./WorkstreamControls";
+import { DecisionShownContext, decisionShown } from "./decisionShown";
+import { MODE_LINE, NextStepLine, nextStepOnceKnown } from "./WorkstreamControls";
 import { AutomaticStepsPanel, StopConfirm, WorkstreamControlsView, choiceValue, controlActions, ruleChoice, type ControlActions } from "./WorkstreamControls";
 import { holdAllVisible, useWorkstreams } from "./workstreamsStore";
 import { DRAFT_OPEN, EscalationCardView, EscalationSent, FIX_ROUND_HELP, NO_REVIEW_DRAFT, POST_AS_IS_HELP, TAKE_OVER_HELP, TAKEN_OVER, draftOpen, escalationActions, escalationShown, fixRoundSent, postingReview } from "./EscalationCard";
@@ -35,6 +36,66 @@ const viewOf = (over: Partial<WorkstreamView["workstream"]> = {}): WorkstreamVie
 const noop = (): ControlActions => ({ onManage: vi.fn(), onHold: vi.fn(), onResume: vi.fn(), onStop: vi.fn(), onRule: vi.fn() });
 const render = (view: WorkstreamView, confirmingStop = false) =>
   renderToStaticMarkup(<WorkstreamControlsView view={view} globals={AUTOSTART_DEFAULTS} actions={noop()} confirmingStop={confirmingStop} onConfirmStop={vi.fn()} />);
+
+describe("the line under the mode switch", () => {
+  it("says what Manage does, and changes to what Advise does", () => {
+    const manage = render(viewOf({ mode: "manage" }));
+    expect(manage).toContain('data-mode-line="manage"');
+    expect(manage).toContain("Pip manages: it starts the next step by itself and drafts what&#x27;s next; nothing reaches Jira without you.");
+    const advise = render(viewOf({ mode: "advise" }));
+    expect(advise).toContain('data-mode-line="advise"');
+    expect(advise).toContain("Pip advises: it answers when asked and starts nothing by itself.");
+    expect(advise).not.toContain("Pip manages");
+    expect(MODE_LINE.manage).toMatch(/^Pip manages: /);
+  });
+
+  it("sits directly under the switch's row, ahead of the held banner and the next step", () => {
+    const html = render(viewOf({ mode: "manage", heldReason: HELD_PERSON }));
+    const at = (s: string) => html.indexOf(s);
+    expect(at("Manage this workstream")).toBeGreaterThan(-1);
+    expect(at("data-mode-line")).toBeGreaterThan(at("Manage this workstream"));
+    expect(at("data-mode-line")).toBeLessThan(at("data-held-banner"));
+  });
+});
+
+describe("a decision open in Pip home's pane", () => {
+  const escalation: Escalation = { reviewRun: "r-rev", buildRun: "r-b", reviewLabel: "R5", buildLabel: "R4", rounds: 2, reviewDraft: "p-review", at: "2026-10-01T10:00:00Z" };
+  const withProvider = (view: WorkstreamView, kind: "hold" | "escalation" | null) => {
+    const need = kind ? ({ key: `${kind}:x`, kind, workstreamId: view.workstream.id, target: { type: "workstream" } } as never) : null;
+    return renderToStaticMarkup(
+      <DecisionShownContext.Provider value={decisionShown(need, [view])}>
+        <WorkstreamControlsView view={view} globals={AUTOSTART_DEFAULTS} actions={noop()} confirmingStop={false} onConfirmStop={vi.fn()} />
+      </DecisionShownContext.Provider>,
+    );
+  };
+
+  it("leaves the held banner off the rail, since the pane shows it", () => {
+    const held = viewOf({ mode: "manage", heldReason: HELD_RESTART });
+    expect(withProvider(held, null)).toContain("data-held-banner");
+    expect(withProvider(held, "hold")).not.toContain("data-held-banner");
+    // Another kind of need open leaves it where it is.
+    expect(withProvider(held, "escalation")).toContain("data-held-banner");
+  });
+
+  it("leaves the escalation card off the rail, since the pane shows it, and keeps every other line", () => {
+    const view = { ...viewOf({ mode: "manage" }), escalation };
+    expect(withProvider(view, null)).toContain("data-escalation");
+    const decided = withProvider(view, "escalation");
+    expect(decided).not.toContain("data-escalation");
+    expect(decided).toContain("data-mode-line");
+  });
+
+  it("works out what the pane shows: a draft need's draft, and the review draft folded into an escalation", () => {
+    const view = { ...viewOf({ mode: "manage" }), escalation };
+    const draftNeed = { key: "draft:d1", kind: "draft", workstreamId: view.workstream.id, target: { type: "draft", id: "d1" } } as never;
+    expect([...decisionShown(draftNeed, [view]).drafts]).toEqual(["d1"]);
+    const escalationNeed = { key: "escalation:r-rev", kind: "escalation", workstreamId: view.workstream.id, target: { type: "escalation" } } as never;
+    expect([...decisionShown(escalationNeed, [view]).drafts]).toEqual(["p-review"]);
+    expect(decisionShown(escalationNeed, [viewOf()]).drafts.size).toBe(0);
+    expect(decisionShown(null, [view])).toMatchObject({ need: null });
+    expect(decisionShown(undefined, [view]).drafts.size).toBe(0);
+  });
+});
 
 describe("the next-step line", () => {
   it("shows the sentence with data-next-step, and leaves the line out when nothing is given", () => {
@@ -200,6 +261,10 @@ describe("a review that still blocks after the fix rounds", () => {
     const html = card();
     expect(html).toContain('role="group" aria-label="Review still blocks"');
     expect(html).toContain("R5 still blocks after 2 fix rounds. What next?");
+    // Where something above already says it (the decision pane's header), the card leaves its own title out.
+    const quiet = renderToStaticMarkup(<EscalationCardView escalation={escalation} busy={false} titled={false} onFixRound={vi.fn()} onTakeOver={vi.fn()} onPost={vi.fn()} />);
+    expect(quiet).not.toContain("What next?");
+    expect(buttons(quiet)).toHaveLength(3);
     expect(buttons(html).map((b) => [b.text, b.disabled])).toEqual([
       ["Run another fix round", false],
       ["I'll take it from here", false],
