@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import type { Backend } from "../backend/types";
-import { flaggedGaps, gapWords, ignoredGaps, learnedDetail, projectOfKey } from "../lib/clarityLearning";
+import { dismissed, flaggedGaps, gapWords, ignoredGaps, learnedDetail, projectOfKey } from "../lib/clarityLearning";
 import { GENERAL_CONVERSATION, workstreamConversation, workstreamOfConversation } from "../lib/conversations";
 import { readinessPrompt } from "../lib/needs";
 import { ofItem, runWorkstream, stageText } from "../lib/workstreamStage";
@@ -336,11 +336,24 @@ export const useWorkstreams = create<WorkstreamsState>()((set, get) => {
       const shown = flaggedGaps(view.clarity.gaps, usePrefs.getState().clarityLearning, project);
       if (!(await ok("Couldn't dismiss the notice", (b) => b.workstreamsClarityDismiss(id)))) return false;
       const backend = get().backend ?? useWorkspace.getState().backend;
-      const learned = usePrefs.getState().recordClarityDismissal(project, shown);
-      if (learned.length) {
+      // The dismissal stands either way: it is the person's answer to this notice and is audited as `clarity_dismissed`.
+      // What is not worth keeping without its audit line is the teaching: it changes what the page flags from now on, so it
+      // is counted only once its `clarity_learned` lines are written. A failed write leaves the count where it was.
+      const next = dismissed(usePrefs.getState().clarityLearning, project, shown);
+      if (next.learned.length) {
+        try {
+          if (!backend) throw new Error("No backend");
+          for (const gap of next.learned) await backend.workstreamsClarityNote(id, "clarity_learned", learnedDetail(gap, project));
+        } catch {
+          useToasts.getState().push("Dismissed the notice, but couldn't note what Gossamr learned from it in the audit, so it wasn't counted. Try Looks fine again on another ticket.", "error");
+          void get().loadEvents(id);
+          return true;
+        }
+      }
+      usePrefs.getState().recordClarityDismissal(project, shown);
+      if (next.learned.length) {
         // One word for what it learned, one audit line for each gap.
-        useToasts.getState().push(`Gossamr will stop flagging ${project} tickets that ${learned.map(gapWords).join(", or that ")}. Give that back in Settings, or from ⌘K.`, "info");
-        for (const gap of learned) await backend?.workstreamsClarityNote(id, "clarity_learned", learnedDetail(gap, project)).catch(() => {});
+        useToasts.getState().push(`Gossamr will stop flagging ${project} tickets that ${next.learned.map(gapWords).join(", or that ")}. Give that back in Settings, or from ⌘K.`, "info");
         void get().loadEvents(id);
       }
       return true;

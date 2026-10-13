@@ -104,11 +104,15 @@ export const nextAdvanced = (previous: Advanced | null, text: string): Advanced 
 /** How long the line saying the pane moved on stays. */
 export const ADVANCED_MS = 5000;
 
-/** The needs' keys as they were when `deciding` was opened, so a need that came in since can be told from one that was already there. */
-function useSeenAtOpen(needs: readonly Need[], deciding: string | null): ReadonlySet<string> {
-  const seen = useRef<{ key: string | null; keys: ReadonlySet<string> }>({ key: null, keys: new Set() });
-  if (seen.current.key !== deciding) seen.current = { key: deciding, keys: new Set(needs.map((n) => n.key)) };
-  return seen.current.keys;
+/**
+ * The slim bar's owner. Its snapshot of the needs' keys as they were when `need` was opened (so a need that came in since can
+ * be told from one that was already there) is state, not a ref written in render: a discarded render drops it, so a new need
+ * is never marked seen by mistake. The pane keys it by the open need, so each decision takes its own snapshot.
+ */
+export function HigherPriority({ needs, need }: { needs: readonly Need[]; need: Need }) {
+  const [seen] = useState<ReadonlySet<string>>(() => new Set(needs.map((n) => n.key)));
+  const higher = higherPriority(needs, need.key, seen);
+  return higher ? <HigherPriorityBar need={higher} /> : null;
 }
 
 /** The slim bar over the pane: a higher-ranked Decide or Unblock came in while another is open. It opens that need when pressed (Enter too); nothing switches by itself. */
@@ -737,8 +741,6 @@ export function NeedsPane({ needs }: { needs: readonly Need[] }) {
   }, [advanced]);
   const batch = usePipHome((s) => s.batch);
   const need = needs.find((n) => n.key === deciding);
-  const seen = useSeenAtOpen(needs, deciding);
-  const higher = need && batch === null ? higherPriority(needs, need.key, seen) : null;
   if (batch !== null) return <BatchDecision key={batch} gid={batch} needs={needs} />;
   if (!need) return null;
   return (
@@ -748,7 +750,7 @@ export function NeedsPane({ needs }: { needs: readonly Need[] }) {
           {advanced.text}
         </p>
       )}
-      {higher && <HigherPriorityBar need={higher} />}
+      <HigherPriority key={need.key} needs={needs} need={need} />
       <NeedDecision key={`${need.key}:${paneRev}`} need={need} />
     </>
   );
