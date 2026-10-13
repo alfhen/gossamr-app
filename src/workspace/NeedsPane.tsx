@@ -9,6 +9,7 @@ import { Box, BoxTitle, Btn } from "./AgentSheet";
 import { planOpenQuestions, progressText, quietMinutes, quietText } from "./agentsLogic";
 import { draftSummary, draftTitle, LiveDraftCard } from "./DraftCard";
 import { draftDecisions } from "./DraftPreview";
+import { useGithubUi } from "./githubUi";
 import { escalationActions, EscalationCardView, fixRoundSent, postingReview, TAKEN_OVER } from "./EscalationCard";
 import { failureAction } from "./failureActions";
 import { failureHelp } from "./failureHelp";
@@ -329,7 +330,7 @@ function ReadinessBody({ view, need }: { view: WorkstreamView; need: Need }) {
 }
 
 /** The three choices on a review that still blocks, and the review draft that folded into it, ready to post as it is. */
-function EscalationBody({ view }: { view: WorkstreamView }) {
+export function EscalationBody({ view }: { view: WorkstreamView }) {
   const e = view.escalation;
   const [busy, setBusy] = useState(false);
   // Post the review as is was pressed: the choices wait, as on the rail's card, until the draft is posted or goes.
@@ -337,6 +338,7 @@ function EscalationBody({ view }: { view: WorkstreamView }) {
   const draft = useWorkspace((s) => (e?.reviewDraft ? s.proposals[e.reviewDraft] : undefined));
   const review = useRef<HTMLDivElement>(null);
   const pending = draft?.state.type === "pending";
+  const github = useWorkspace((s) => s.connections.some((c) => c.kind === "github"));
   useEffect(() => {
     if (posting && !pending) setPosting(false);
   }, [posting, pending]);
@@ -355,6 +357,8 @@ function EscalationBody({ view }: { view: WorkstreamView }) {
         busy={busy}
         drafting={postingReview(posting, draft)}
         titled={false}
+        github={github}
+        onConnect={() => useGithubUi.getState().openConnect()}
         onFixRound={() => choose(actions.onFixRound, fixRoundSent(e.buildLabel))}
         onTakeOver={() => choose(actions.onTakeOver, TAKEN_OVER)}
         onPost={() => {
@@ -586,7 +590,9 @@ function BatchDecision({ gid, needs }: { gid: string; needs: readonly Need[] }) 
   const confirm = async (covered: BatchSnapshot) => {
     setFrozen(null);
     setBusy(true);
-    const done = await confirmBatch(covered, drafts, (id) => useWorkspace.getState().approve(id));
+    // The drafts as they are when Yes is pressed, not as the pane last drew them.
+    const now = useWorkspace.getState().proposals;
+    const done = await confirmBatch(covered, ids.flatMap((id) => (now[id] ? [now[id]] : [])), (id) => useWorkspace.getState().approve(id));
     setBusy(false);
     setOutcome(done);
     // The drafts leave Needs you as they are approved.
