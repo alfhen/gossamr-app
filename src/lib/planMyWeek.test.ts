@@ -120,6 +120,36 @@ describe("planMyWeek: the ranking", () => {
   });
 });
 
+describe("planMyWeek: needs in General that name a ticket", () => {
+  const loose = (key: string, over: Partial<Need> = {}) => need(null as unknown as string, { ticketKey: key, key: `g-${key}`, title: "Draft comment", ...over });
+
+  it("ranks an assigned ticket with such a need first, and its line names the need instead of a clarity gap", () => {
+    const thin = ticket("CA-1", {}, "Fix it.");
+    const plain = ticket("CA-2", { priority: "highest" });
+    const out = planMyWeek(input({ items: [plain, thin], needs: [loose("CA-1")] }));
+    expect(out.map((p) => p.id)).toEqual(["ticket:CA-1", "ticket:CA-2"]);
+    expect(out[0].because).toBe("1 thing needs you here: Draft comment.");
+    expect(out[0].because).not.toContain("clear that up first");
+  });
+
+  it("still proposes an unassigned ticket that has one, and counts several", () => {
+    const out = planMyWeek(input({ items: [ticket("CA-3", { assignee: OTHER })], needs: [loose("CA-3"), loose("CA-3", { key: "g2", title: "Move to Done" })] }));
+    expect(out).toHaveLength(1);
+    expect(out[0].because).toMatch(/^2 things need you here: /);
+  });
+
+  it("puts an open workstream on that ticket in the first tier too, and leaves out a need with no ticket", () => {
+    const out = rankWeek(input({ workstreams: [ws("w1", "CA-4"), ws("w2", "CA-5")], items: [ticket("CA-6")], needs: [loose("CA-5"), loose("CA-9", { ticketKey: undefined })] }));
+    expect(out.map((p) => p.id)).toEqual(["ws:w2", "ws:w1", "ticket:CA-6"]);
+    expect(out[0].because).toContain("thing needs you here");
+  });
+
+  it("keeps a ticket with gaps and no need on its current line", () => {
+    const out = planMyWeek(input({ items: [ticket("CA-7", {}, "Fix it.")] }));
+    expect(out[0].because).toContain("clear that up first");
+  });
+});
+
 describe("reordering and adding", () => {
   const list = ["a", "b", "c"];
   it("moves an item, clamps, and leaves the list itself alone", () => {

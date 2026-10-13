@@ -1,6 +1,6 @@
 import type { Run, WorkstreamView } from "../types";
 import { needsIn, type Need } from "./needs";
-import { WAITING_STATUS, waitedDays } from "./reporterWait";
+import { NUDGE_AFTER_DAYS, WAITING_STATUS, waitedDays } from "./reporterWait";
 import { isHeldByYou, shortHeld } from "./workstreamHold";
 import { STAGE_LABEL } from "./workstreamStage";
 import { witherShort, type WorkstreamWither } from "./workstreamWither";
@@ -37,6 +37,28 @@ export const STATUS_TONE: Record<StatusState, StatusTone> = { "needs-you": "pip"
 
 /** The words a state is shown with; a hold the person chose says so ("Held by you"). */
 export const STATUS_WORD: Record<StatusState, string> = { "needs-you": "Needs you", held: "Held", waiting: "Waiting on reporter", running: "Running", quiet: "Quiet", done: "Done", idle: "Idle" };
+
+/** What each word means, for the pill's tooltip and the glossary: what is going on, and what ends it. */
+export const STATUS_HINT: Record<StatusState, string> = {
+  "needs-you": "Something in this workstream waits on a decision from you. Open it in Needs you.",
+  held: "No wakes and no automatic steps until the hold is lifted: Resume it when you are ready.",
+  waiting: `You asked the reporter on the ticket. A comment there ends the wait; after ${NUDGE_AFTER_DAYS} days Gossamr offers a nudge.`,
+  running: "A Claude Code run is working on a step, or is queued for a slot.",
+  quiet: "Nothing has happened for a while, or work is happening that Jira has not heard about.",
+  done: "The workstream is closed, or its work is finished.",
+  idle: "Nothing is running and nothing waits on you: nothing has started yet, or the last step finished.",
+};
+
+/** What the list says when a status filter matches no workstream. */
+export const EMPTY_FILTER: Record<StatusState, string> = {
+  "needs-you": "No workstream needs you.",
+  held: "No workstream is held.",
+  waiting: "No workstream is waiting on the reporter.",
+  running: "No workstream is running.",
+  quiet: "No workstream is quiet.",
+  done: "No workstream is done.",
+  idle: "No workstream is idle.",
+};
 
 export interface WorkstreamStatus {
   state: StatusState;

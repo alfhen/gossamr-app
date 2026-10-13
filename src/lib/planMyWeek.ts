@@ -72,6 +72,11 @@ interface Scored {
 export function rankWeek(i: PlanInput): PlanPick[] {
   const scored: Scored[] = [];
   const opened = new Set<string>();
+  // Needs in General that are about a ticket (workstreamId null, ticketKey set): a pending decision on a ticket still counts for it, workstream or not.
+  const general = new Map<string, Need[]>();
+  for (const n of [...i.needs].sort(byRank)) if (n.workstreamId === null && n.ticketKey) general.set(n.ticketKey, [...(general.get(n.ticketKey) ?? []), n]);
+  const needLine = (list: readonly Need[]) => `${plural(list.length, "thing needs", "things need")} you here: ${list[0].title}.`;
+  const needScore = (n: Need) => 3 - GROUPS.indexOf(n.group);
   for (const v of i.workstreams) {
     const ws = v.workstream;
     if (ws.closedAt !== null) continue;
@@ -84,6 +89,11 @@ export function rankWeek(i: PlanInput): PlanPick[] {
       scored.push({ pick: pick(`${plural(mine.length, "thing needs", "things need")} you here: ${mine[0]?.title ?? "a decision"}.`), tier: 0, score: 3 - GROUPS.indexOf(mine[0]?.group ?? "approve"), at: mine[0]?.at ?? ws.createdAt });
       continue;
     }
+    const loose = ws.itemKey ? general.get(ws.itemKey) : undefined;
+    if (loose) {
+      scored.push({ pick: pick(needLine(loose)), tier: 0, score: needScore(loose[0]), at: loose[0].at });
+      continue;
+    }
     if (status.state === "held" || status.state === "waiting" || status.state === "done") continue;
     const age = days(ws.createdAt, i.now);
     let score = 8 + Math.min(age, 14) / 2;
@@ -93,7 +103,13 @@ export function rankWeek(i: PlanInput): PlanPick[] {
     scored.push({ pick: pick(because), tier: 1, score, at: ws.createdAt });
   }
   for (const t of i.items) {
-    if (t.status.category === "done" || !isMine(t, i.me) || opened.has(`${t.item.connectionId}:${t.item.key}`)) continue;
+    if (t.status.category === "done" || opened.has(`${t.item.connectionId}:${t.item.key}`)) continue;
+    const loose = general.get(t.item.key);
+    if (!loose && !isMine(t, i.me)) continue;
+    if (loose) {
+      scored.push({ pick: { id: `ticket:${t.item.key}`, kind: "ticket", workstreamId: null, ticketKey: t.item.key, title: `${t.item.key} ${t.title}`, because: needLine(loose) }, tier: 0, score: needScore(loose[0]), at: loose[0].at });
+      continue;
+    }
     const age = days(t.created, i.now);
     const gaps = flaggedGaps(clarityGaps(docText(t.body)), i.learning ?? {}, projectOfKey(t.item.key));
     let score = (t.priority ? PRIORITY[t.priority] : 2) + Math.min(age, 30) / 5;

@@ -526,7 +526,7 @@ describe("timeline: the audit", () => {
     });
     const audit = list.filter((e) => e.kind === "audit");
     expect(audit.map((e) => [e.text, e.decision])).toEqual([
-      ["You asked the reporter about R1's open questions", true],
+      ["You chose to ask the reporter about R1's open questions; drafted for you to post", true],
       ["You chose to answer R1's open questions", true],
       ["You chose to plan anyway after R1 found the ticket not ready", true],
     ]);

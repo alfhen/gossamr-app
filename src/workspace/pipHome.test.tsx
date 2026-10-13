@@ -153,6 +153,29 @@ describe("Pip home", () => {
     expect(html).toMatch(/aria-label="Steps" class="col-span-2 [^"]*min-\[1100px\]:col-span-1/);
   });
 
+  it("shows Start my day on General only, and not while Plan my week is open", () => {
+    // Static rendering reads the stores' initial state, so that is where the case is set up, and put back.
+    const home = usePipHome.getInitialState();
+    const streams = useWorkstreams.getInitialState();
+    try {
+      expect(renderToStaticMarkup(<PipHome />)).toContain("data-start-my-day");
+      Object.assign(home, { planOpen: true });
+      const planning = renderToStaticMarkup(<PipHome />);
+      expect(planning).toContain("data-plan-my-week");
+      expect(planning).not.toContain("data-start-my-day");
+      // One wrapper holds whichever is shown, capped so the timeline and its filter bar keep their room.
+      expect(planning).toMatch(/data-pip-home-day="true" class="max-h-\[45vh\] shrink-0 overflow-y-auto/);
+      Object.assign(home, { planOpen: false, selected: open[0].workstream.id, landed: true });
+      Object.assign(streams, { list: open, loaded: true });
+      const own = renderToStaticMarkup(<PipHome />);
+      expect(own).toContain(`data-pip-conversation="ws:${open[0].workstream.id}"`);
+      expect(own).not.toContain("data-start-my-day");
+    } finally {
+      Object.assign(home, { planOpen: false, selected: null, landed: false });
+      Object.assign(streams, { list: [], loaded: false });
+    }
+  });
+
   it("with no workstream, has nothing to Tab to after the composer, so Tab from its last control wraps round to the page's first", () => {
     const html = renderToStaticMarkup(<PipHome />);
     const steps = html.slice(html.indexOf('aria-label="Steps"'));

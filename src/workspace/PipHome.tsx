@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useClaude } from "../claudeStore";
 import { stageText } from "../lib/workstreamStage";
-import { STATUS_WORD, workstreamStatus, type StatusState, type WorkstreamStatus } from "../lib/workstreamStatus";
+import { EMPTY_FILTER, STATUS_HINT, STATUS_WORD, workstreamStatus, type StatusState, type WorkstreamStatus } from "../lib/workstreamStatus";
 import { StatusPill } from "./StatusPill";
 import { PlanMyWeek, ThisWeek } from "./PlanMyWeek";
 import { witherClass } from "../lib/views";
@@ -153,7 +153,7 @@ export function WorkstreamList({ list, closed, showClosed, selected, onSelect, o
                 {v.workstream.itemKey && <b className="shrink-0 font-mono font-semibold text-ws-ink">{v.workstream.itemKey}</b>}
                 <span className="min-w-0 truncate">{rowTitle(v.workstream)}</span>
                 <span className="ml-auto flex shrink-0">
-                  <StatusPill status={status} title={status.state === "needs-you" ? `${needsIn(needsYou, v.workstream.id)} of the ${needsYou.length} in Needs you ${needsIn(needsYou, v.workstream.id) === 1 ? "is" : "are"} here` : undefined} />
+                  <StatusPill status={status} title={status.state === "needs-you" ? `${needsIn(needsYou, v.workstream.id)} of the ${needsYou.length} in Needs you ${needsIn(needsYou, v.workstream.id) === 1 ? "is" : "are"} here. ${STATUS_HINT[status.state]}` : undefined} />
                 </span>
               </span>
               <RowStatus status={status} view={v} nudge={nudgeDue?.has(v.workstream.id)} />
@@ -177,7 +177,7 @@ export function WorkstreamList({ list, closed, showClosed, selected, onSelect, o
           </button>
         </p>
       )}
-      {open.length === 0 && <p className="m-0 px-3 py-2 text-sm text-ws-ink3">{statusFilter ? `No workstream is ${STATUS_WORD[statusFilter].toLowerCase()}.` : NO_WORKSTREAMS}</p>}
+      {open.length === 0 && <p className="m-0 px-3 py-2 text-sm text-ws-ink3">{statusFilter ? EMPTY_FILTER[statusFilter] : NO_WORKSTREAMS}</p>}
       <div className="mt-auto flex flex-wrap items-center gap-x-1 border-t border-ws-sep px-1.5 py-1">
         <button
           type="button"
@@ -383,6 +383,7 @@ function overlayOpen(): boolean {
 const REGION_ON: Record<PipHomeRegion, string> = {
   needs: "[data-pip-home] [data-needs-you]",
   workstreams: '[data-pip-home] nav[aria-label="Workstreams"]',
+  day: "[data-pip-home] [data-plan-my-week], [data-pip-home] [data-start-my-day]",
   timeline: "[data-pip-home] [data-timeline]",
   pane: "[data-pip-home] [data-needs-pane]",
   rail: '[data-pip-home-column="rail"] [data-step-rail]',
@@ -395,6 +396,7 @@ const regionsOnScreen = () => PIP_HOME_REGIONS.filter((r) => document.querySelec
 function regionOf(el: Element | null): PipHomeRegion | null {
   if (!el || !el.closest("[data-pip-home]")) return null;
   if (el.closest("[data-needs-pane]")) return "pane";
+  if (el.closest("[data-plan-my-week], [data-start-my-day]")) return "day";
   if (el.closest("[data-needs-you]")) return "needs";
   if (el.closest('nav[aria-label="Workstreams"]')) return "workstreams";
   if (el.closest('[data-pip-home-column="rail"]')) return "rail";
@@ -469,6 +471,8 @@ function usePipHomeKeys(needsYou: readonly Need[]) {
           const rows = all('[role="option"]');
           return void show(rows.find((r) => r.getAttribute("aria-selected") === "true") ?? rows[0] ?? home?.querySelector<HTMLElement>('nav[aria-label="Workstreams"]'));
         }
+        case "day":
+          return void show(home?.querySelector<HTMLElement>("[data-plan-my-week]") ?? home?.querySelector<HTMLElement>("[data-start-my-day]"));
         case "timeline": {
           const last = all("[data-timeline] " + TIMELINE_ENTRY).pop();
           return void show(last ? timelineStop(last) : home?.querySelector<HTMLElement>("[data-timeline]"));
@@ -689,10 +693,11 @@ export function PipHome() {
           <DecisionShownContext.Provider value={decided}>
             <div data-pip-home-column="conversation" onFocusCapture={enter("conversation")} className="contents">
               <HomeConversation workstream={workstream} footer={footer} needs={needsYou} day={
-                  <>
+                  <div data-pip-home-day className="max-h-[45vh] shrink-0 overflow-y-auto empty:hidden">
                     {planOpen && <PlanMyWeek needs={needsYou} withers={withers} now={now} />}
-                    <StartMyDayCard needs={needsYou} withers={withers} now={now} />
-                  </>
+                    {/* The plan is opened from the card and its Close brings it back; the card is General's summary, not a workstream's. */}
+                    {!planOpen && workstream === null && <StartMyDayCard needs={needsYou} withers={withers} now={now} />}
+                  </div>
                 } pane={<NeedsPane needs={needsYou} />} />
             </div>
             <div data-pip-home-column="rail" onFocusCapture={enter("rail")} className="contents">

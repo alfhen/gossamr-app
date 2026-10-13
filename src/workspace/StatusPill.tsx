@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { STATUS_WORD, workstreamStatus, type StatusTone, type WorkstreamStatus } from "../lib/workstreamStatus";
+import { STATUS_HINT, workstreamStatus, type StatusTone, type WorkstreamStatus } from "../lib/workstreamStatus";
 import type { WorkstreamView } from "../types";
 import { useRuns } from "./runsStore";
 import { useNeedsYou } from "./useNeeds";
@@ -20,7 +20,7 @@ const TONE: Record<StatusTone, string> = {
 export function StatusPill({ status, title, detail = false }: { status: WorkstreamStatus; title?: string; detail?: boolean }) {
   return (
     <>
-      <span data-status={status.state} title={title} className={`shrink-0 rounded-full px-1.5 text-[10px] leading-4 font-semibold whitespace-nowrap ${TONE[status.tone]}`}>
+      <span data-status={status.state} title={title ?? STATUS_HINT[status.state]} className={`shrink-0 rounded-full px-1.5 text-[10px] leading-4 font-semibold whitespace-nowrap ${TONE[status.tone]}`}>
         {status.word}
       </span>
       {detail && status.detail && (
@@ -45,7 +45,7 @@ export function useWorkstreamStatus(view: WorkstreamView): WorkstreamStatus {
 export function HeaderStatus({ view }: { view: WorkstreamView }) {
   const status = useWorkstreamStatus(view);
   return (
-    <span data-header-status className="flex shrink-0 items-baseline gap-1" title={STATUS_WORD[status.state]}>
+    <span data-header-status className="flex shrink-0 items-baseline gap-1" title={STATUS_HINT[status.state]}>
       <StatusPill status={status} detail />
     </span>
   );
