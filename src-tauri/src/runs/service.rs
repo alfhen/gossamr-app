@@ -353,10 +353,10 @@ impl RunService {
         if clone.canonicalize().ok().as_ref() != Some(clone) {
             return Err(Failure::NoClone(format!("{} isn't its real path any more; edit the draft and review it again", clone.display())));
         }
-        match Git::new(tc.env.clone()).origin(clone).await {
-            Some(url) if origin_matches(&url, &spec.repo) => {}
-            Some(_) => return Err(Failure::NoClone(format!("{} isn't a clone of {}: its origin is another repository", clone.display(), spec.repo))),
-            None => return Err(Failure::NoClone(format!("Git couldn't read the origin of {}", clone.display()))),
+        match Git::new(tc.env.clone()).origin_or_why(clone).await {
+            Ok(url) if origin_matches(&url, &spec.repo) => {}
+            Ok(_) => return Err(Failure::NoClone(format!("{} isn't a clone of {}: its origin is another repository", clone.display(), spec.repo))),
+            Err(why) => return Err(Failure::NoClone(format!("Git couldn't read the origin of {} ({why})", clone.display()))),
         }
         let auth = tc.cli.auth_status().await.map_err(|e| Failure::from_cli(e, clone))?;
         if !auth.logged_in {

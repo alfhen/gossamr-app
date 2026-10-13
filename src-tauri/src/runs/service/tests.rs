@@ -442,7 +442,8 @@ async fn problems_found_before_launching_fail_the_run_with_the_reason_and_start_
     let rig = rig_with(|_| {}).await;
     let run = rig.queued(1).await;
     std::fs::remove_file(rig.clone.join(".fake-origin")).unwrap();
-    assert_fails_without_launching(&rig, &run, "couldn't read the origin", RunFailure::NoClone).await;
+    assert_fails_without_launching(&rig, &run, "couldn't read the origin of", RunFailure::NoClone).await;
+    assert!(rig.get(&run).await.error.unwrap().contains("(git exit status: "), "the reason git gave is kept, so a failure on a busy machine names its cause");
 
     let rig = rig_with(|_| {}).await;
     let run = rig.queued(1).await;
