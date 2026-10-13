@@ -23,7 +23,7 @@ export const PLAN_EMPTY = "Nothing to propose: no open workstream or ticket assi
 export function findTicket(words: string, items: readonly WorkItem[], taken: readonly PlanItem[]): WorkItem | null {
   const q = words.trim().toLowerCase();
   if (!q) return null;
-  const open = items.filter((t) => t.status.category !== "done" && !taken.some((p) => p.ticketKey === t.item.key));
+  const open = items.filter((t) => t.status.category !== "done" && !taken.some((p) => p.ticketKey === t.item.key && (p.connectionId === undefined || p.connectionId === t.item.connectionId)));
   return open.find((t) => t.item.key.toLowerCase() === q) ?? open.find((t) => t.item.key.toLowerCase() === q.split(/\s+/)[0]) ?? open.find((t) => t.title.toLowerCase().includes(q)) ?? null;
 }
 

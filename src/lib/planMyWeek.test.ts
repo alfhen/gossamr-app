@@ -92,7 +92,7 @@ describe("planMyWeek: the ranking", () => {
 
   it("only takes the person's own open tickets, and none that already has an open workstream", () => {
     const items = [ticket("CA-1", { assignee: OTHER }), ticket("CA-2", { assignee: null }), ticket("CA-3", { status: { id: "9", name: "Done", category: "done" } }), ticket("CA-4"), ticket("CA-5")];
-    expect(ids(input({ items, workstreams: [ws("w5", "CA-5")] })).sort()).toEqual(["ticket:CA-4", "ws:w5"]);
+    expect(ids(input({ items, workstreams: [ws("w5", "CA-5")] })).sort()).toEqual(["ticket:c:CA-4", "ws:w5"]);
   });
 
   it("puts a workstream whose cobweb grew, or that has a run going, ahead of a bare one, and says so", () => {
@@ -111,7 +111,7 @@ describe("planMyWeek: the ranking", () => {
     const picks = planMyWeek(input({ workstreams: [ws("w1", "CA-1")], items: [ticket("CA-2")] }));
     for (const p of picks) expect(p.because).toMatch(/^[^\n]+\.$/);
     expect(picks[0]).toMatchObject({ kind: "workstream", workstreamId: "w1", ticketKey: "CA-1", title: "CA-1 Work on w1" });
-    expect(picks[1]).toMatchObject({ kind: "ticket", workstreamId: null, ticketKey: "CA-2", id: "ticket:CA-2" });
+    expect(picks[1]).toMatchObject({ kind: "ticket", workstreamId: null, ticketKey: "CA-2", id: "ticket:c:CA-2" });
   });
 
   it("is empty when there is nothing free, and rankWeek lists every candidate", () => {
@@ -130,7 +130,7 @@ describe("reordering and adding", () => {
     expect(list).toEqual(["a", "b", "c"]);
   });
   it("makes a pick of a ticket added by hand", () => {
-    expect(ticketPick(ticket("CA-7"))).toEqual({ id: "ticket:CA-7", kind: "ticket", workstreamId: null, ticketKey: "CA-7", connectionId: "c", title: "CA-7 Title of CA-7", because: "you added it." });
+    expect(ticketPick(ticket("CA-7"))).toEqual({ id: "ticket:c:CA-7", kind: "ticket", workstreamId: null, ticketKey: "CA-7", connectionId: "c", title: "CA-7 Title of CA-7", because: "you added it." });
   });
 });
 
@@ -202,6 +202,8 @@ describe("the kept plan", () => {
     expect(itemDone(picked, [ws("w1", "CA-1")], [])).toBe(false);
     // A stored item from before connections were kept still matches by key alone.
     const { connectionId: _, ...old } = mine;
+    // Picks are told apart by connection too, so removing or reordering one never touches the other.
+    expect(ticketPick(elsewhere("CA-2")).id).not.toBe(mine.id);
     expect(itemDone(old, [], [elsewhere("CA-2", done)])).toBe(true);
   });
   it("keeps the connection through storage, and drops an item whose connection is not text", () => {
@@ -209,6 +211,6 @@ describe("the kept plan", () => {
     const kept = JSON.parse(JSON.stringify(keepPlan({}, [withConn], NOW)));
     expect(parseWeekPlans(kept)["2026-W42"].items[0].connectionId).toBe("c");
     kept["2026-W42"].items.push({ ...withConn, id: "ticket:CA-9", connectionId: 4 });
-    expect(parseWeekPlans(kept)["2026-W42"].items.map((p) => p.id)).toEqual(["ticket:CA-1"]);
+    expect(parseWeekPlans(kept)["2026-W42"].items.map((p) => p.id)).toEqual(["ticket:c:CA-1"]);
   });
 });

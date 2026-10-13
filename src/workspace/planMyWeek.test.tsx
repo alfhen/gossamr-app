@@ -74,6 +74,9 @@ describe("adding a ticket", () => {
     expect(findTicket("checkout", tickets, [])?.item.key).toBe("CA-1");
     expect(findTicket("old thing", tickets, [])).toBeNull();
     expect(findTicket("CA-2", tickets, [ticketPick(tickets[1])])).toBeNull();
+    // The same key on another connection is another ticket, so it can still be added.
+    const other = { ...tickets[1], item: { ...tickets[1].item, connectionId: "d" } } as WorkItem;
+    expect(findTicket("CA-2", [other], [ticketPick(tickets[1])])?.item.connectionId).toBe("d");
     expect(findTicket("  ", tickets, [])).toBeNull();
   });
 });
