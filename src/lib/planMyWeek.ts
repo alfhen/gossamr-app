@@ -22,7 +22,7 @@ import type { WorkstreamWither } from "./workstreamWither";
 export const WEEK_PICKS = 3;
 
 export interface PlanPick {
-  /** Stable: `ws:<workstream id>` or `ticket:<KEY>`. */
+  /** Stable: `ws:<workstream id>` or `ticket:<connection>:<KEY>` (the same key on two connections is two tickets; plans kept before this hold `ticket:<KEY>`). */
   id: string;
   kind: "workstream" | "ticket";
   workstreamId: string | null;
@@ -109,7 +109,7 @@ export function rankWeek(i: PlanInput): PlanPick[] {
     const loose = general.get(t.item.key);
     if (!loose && !isMine(t, i.me)) continue;
     if (loose) {
-      scored.push({ pick: { id: `ticket:${t.item.key}`, kind: "ticket", workstreamId: null, ticketKey: t.item.key, title: `${t.item.key} ${t.title}`, because: needLine(loose) }, tier: 0, score: needScore(loose[0]), at: loose[0].at });
+      scored.push({ pick: { id: `ticket:${t.item.connectionId}:${t.item.key}`, kind: "ticket", workstreamId: null, ticketKey: t.item.key, connectionId: t.item.connectionId, title: `${t.item.key} ${t.title}`, because: needLine(loose) }, tier: 0, score: needScore(loose[0]), at: loose[0].at });
       continue;
     }
     const age = days(t.created, i.now);
@@ -117,7 +117,7 @@ export function rankWeek(i: PlanInput): PlanPick[] {
     let score = (t.priority ? PRIORITY[t.priority] : 2) + Math.min(age, 30) / 5;
     let because = t.priority === "high" || t.priority === "highest" ? `${t.priority} priority, assigned to you, no workstream yet.` : `assigned to you ${age === 0 ? "today" : `for ${plural(age, "day", "days")}`}, no workstream yet.`;
     if (gaps.length) (score -= 6, (because = `assigned to you, but it ${gapsPhrase(gaps)}; clear that up first.`));
-    scored.push({ pick: { id: `ticket:${t.item.key}`, kind: "ticket", workstreamId: null, ticketKey: t.item.key, connectionId: t.item.connectionId, title: `${t.item.key} ${t.title}`, because }, tier: 1, score, at: t.created });
+    scored.push({ pick: { id: `ticket:${t.item.connectionId}:${t.item.key}`, kind: "ticket", workstreamId: null, ticketKey: t.item.key, connectionId: t.item.connectionId, title: `${t.item.key} ${t.title}`, because }, tier: 1, score, at: t.created });
   }
   // Needs you first (its own order: the group that is asked most, then oldest); then by score, then oldest, then by id.
   const order = (a: Scored, b: Scored) => a.tier - b.tier || b.score - a.score || a.at.localeCompare(b.at) || (a.pick.id < b.pick.id ? -1 : a.pick.id > b.pick.id ? 1 : 0);
@@ -189,7 +189,7 @@ export function movePick<T>(list: readonly T[], from: number, to: number): T[] {
 
 /** A pick for a ticket the person adds by hand. */
 export function ticketPick(t: Pick<WorkItem, "item" | "title">): PlanPick {
-  return { id: `ticket:${t.item.key}`, kind: "ticket", workstreamId: null, ticketKey: t.item.key, connectionId: t.item.connectionId, title: `${t.item.key} ${t.title}`, because: "you added it." };
+  return { id: `ticket:${t.item.connectionId}:${t.item.key}`, kind: "ticket", workstreamId: null, ticketKey: t.item.key, connectionId: t.item.connectionId, title: `${t.item.key} ${t.title}`, because: "you added it." };
 }
 
 /**

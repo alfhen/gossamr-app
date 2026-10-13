@@ -29,7 +29,8 @@ export function findTicket(words: string, items: readonly WorkItem[], taken: rea
   const open = items.filter((t) => t.status.category !== "done");
   const ticket = open.find((t) => t.item.key.toLowerCase() === q) ?? open.find((t) => t.item.key.toLowerCase() === q.split(/\s+/)[0]) ?? open.find((t) => t.title.toLowerCase().includes(q));
   if (!ticket) return { reason: "none" };
-  return taken.some((p) => p.ticketKey === ticket.item.key) ? { reason: "taken", key: ticket.item.key } : { ticket };
+  // The same key on another connection is another ticket; a pick kept before connections were stored blocks by key alone.
+  return taken.some((p) => p.ticketKey === ticket.item.key && (p.connectionId === undefined || p.connectionId === ticket.item.connectionId)) ? { reason: "taken", key: ticket.item.key } : { ticket };
 }
 
 /** The pick the keyboard goes to once the one at `index` is removed from `picks` (as they are after): the one now at that index, else the one before it; null when none is left (the add box takes it). */
