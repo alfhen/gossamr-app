@@ -443,6 +443,22 @@ export function startWorkstreamCommands(items: readonly WorkItem[], query: strin
     .slice(0, limit);
 }
 
+/**
+ * What the workstream step says when nothing matches: for a typed ticket key, why that one can't be started (Done, a
+ * workstream open already, or not loaded here), else that no ticket matches the words.
+ */
+export function noStartableTicket(items: readonly WorkItem[], query: string, open: readonly WorkstreamView[]): string {
+  const q = query.trim();
+  if (!q) return "Every open ticket has a workstream already.";
+  const key = ticketKeyOf(q);
+  if (!key) return `No ticket without a workstream matches “${q}”.`;
+  const found = items.find((i) => i.item.key.toUpperCase() === key);
+  if (!found) return `No open ticket ${key} here. It may be Done, already have a workstream, or not be loaded.`;
+  if (found.status.category === "done") return `${found.item.key} is Done in Jira.`;
+  const taken = open.some((v) => v.workstream.closedAt === null && v.workstream.itemKey === found.item.key && v.workstream.connectionId === found.item.connectionId);
+  return taken ? `${found.item.key} has a workstream already.` : `No ticket without a workstream matches “${q}”.`;
+}
+
 /** How many tickets 'Start a workstream…' offers before anything is typed. */
 export const SUGGESTED_TICKETS = 5;
 

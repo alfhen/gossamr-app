@@ -3,7 +3,7 @@ import { GROUP_LABEL, needGroups, type Need, type NeedGroup, type NeedGroupKind 
 import { relativeTime } from "../lib/views";
 import { useWorkspace } from "../workspaceStore";
 import { groupId, openNeed } from "./needsActions";
-import { batchLabel } from "./pipHomeLogic";
+import { BATCH_TITLE, batchLabel } from "./pipHomeLogic";
 import { usePipHome } from "./pipHomeStore";
 import { needsYouText } from "./useNeeds";
 
@@ -64,6 +64,7 @@ function SafeBatch({ needs, gid }: { needs: readonly Need[]; gid: string }) {
         <button
           type="button"
           aria-current={open ? "true" : undefined}
+          title={BATCH_TITLE}
           onClick={() => usePipHome.getState().previewBatch(gid)}
           className="rounded-md border border-ws-sep2 px-2.5 py-px text-sm font-semibold text-ws-ink hover:bg-ws-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip"
         >

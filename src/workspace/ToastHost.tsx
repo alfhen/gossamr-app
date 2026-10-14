@@ -48,6 +48,11 @@ export function ToastCard({ toast: t, waiting, onDismiss }: { toast: Toast; wait
       data-esc-local
       tabIndex={-1}
       aria-keyshortcuts="Escape F6"
+      // Held while read: the pointer or the keyboard on it stops its clock; leaving starts the whole lifetime again.
+      onMouseEnter={() => useToasts.getState().hold(t.id)}
+      onMouseLeave={() => useToasts.getState().release(t.id)}
+      onFocus={() => useToasts.getState().hold(t.id)}
+      onBlur={() => useToasts.getState().release(t.id)}
       onKeyDown={(ev) => {
         // Esc on the focused toast dismisses it and hands the keyboard back; nothing else takes the key.
         if (ev.key !== "Escape" || ev.defaultPrevented) return;

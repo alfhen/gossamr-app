@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { MockBackend } from "../backend/mock";
 import { containerRef } from "../backend/mockConnector";
-import { SUGGESTED_TICKETS, START_WORKSTREAM, namesCommand, agentTicketChoices, askToPlanCommands, buildCommands, agentCommands, startWorkstreamCommands, timelineCommands, workstreamCommands, keyCommand, newTicketIntent, projectChoices, pullCommand, rankCommands, searchOrder, ticketCommands, unwatchCommands, watchCommands, withAskPip, type CommandActions } from "./commands";
+import { SUGGESTED_TICKETS, START_WORKSTREAM, noStartableTicket, namesCommand, agentTicketChoices, askToPlanCommands, buildCommands, agentCommands, startWorkstreamCommands, timelineCommands, workstreamCommands, keyCommand, newTicketIntent, projectChoices, pullCommand, rankCommands, searchOrder, ticketCommands, unwatchCommands, watchCommands, withAskPip, type CommandActions } from "./commands";
 import { BUILT_IN_VIEWS } from "./filters";
 import type { WorkItem } from "../types";
 
@@ -426,6 +426,17 @@ describe("Pip home in the palette", () => {
     expect(on.some((c) => c.id === "app:pip-home")).toBe(false);
     expect(on.find((c) => c.id === "app:pip")?.label).toBe("Go to Pip's composer");
     expect(buildCommands(containers, BUILT_IN_VIEWS, actions(), { ...ctx, agents: true }).find((c) => c.id === "app:pip")?.label).toBe("Toggle Pip");
+  });
+
+  it("says why the workstream step has nothing for a key: Done, taken, or not loaded", () => {
+    const ca401 = items.find((i) => i.item.key === "CA-401")!;
+    const done = { ...ca401, item: { ...ca401.item, key: "CA-9" }, status: { ...ca401.status, category: "done" as const } };
+    const open = [{ ...view("w1", "CA-401"), workstream: { ...view("w1", "CA-401").workstream, connectionId: ca401.item.connectionId } }] as Parameters<typeof noStartableTicket>[2];
+    expect(noStartableTicket([...items, done], "ca-9", [])).toBe("CA-9 is Done in Jira.");
+    expect(noStartableTicket(items, "ca-401", open)).toBe("CA-401 has a workstream already.");
+    expect(noStartableTicket(items, "ca-377", [])).toBe("No open ticket CA-377 here. It may be Done, already have a workstream, or not be loaded.");
+    expect(noStartableTicket(items, "zzz nothing", [])).toBe("No ticket without a workstream matches “zzz nothing”.");
+    expect(noStartableTicket(items, "  ", [])).toBe("Every open ticket has a workstream already.");
   });
 
   it("starts a workstream on a ticket the query names, with no ticket peeked, and never one whose workstream is open", () => {

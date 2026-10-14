@@ -1,0 +1,40 @@
+/**
+ * What makes the person pause before posting words they edited: a broad mention (@everyone, @here, Jira's @all) or text that looks
+ * like a secret. A mention of one person is never a reason. It is a confirm step the person can pass, not a block.
+ */
+export type Risk = "broadcast" | "secret";
+
+const BROADCAST = /(^|[^\w@.])@(everyone|here|channel|all)(?![\w-])/i;
+
+/** Credentials by their shape: a private key block, a cloud or API key, a token, a JWT, a "password: …" line. */
+const SECRETS: RegExp[] = [
+  /-----BEGIN [A-Z ]*PRIVATE KEY-----/,
+  /\bAKIA[0-9A-Z]{16}\b/,
+  /\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})/,
+  /\bxox[abprs]-[A-Za-z0-9-]{10,}/,
+  /\bsk-[A-Za-z0-9_-]{20,}/,
+  /\bATATT[A-Za-z0-9_=-]{20,}/,
+  /\beyJ[\w-]{10,}\.[\w-]{10,}\.[\w-]{5,}/,
+  /\bBearer\s+[A-Za-z0-9._~+/-]{20,}/i,
+  /\b(?:password|passwd|pwd|passphrase|secret|token|api[ _-]?key|access[ _-]?key|client[ _-]?secret)\s*(?:is\s*)?[:=]\s*["']?[^\s"']{4,}/i,
+];
+
+/** The risks `text` carries. */
+export function risksIn(text: string): Risk[] {
+  const found: Risk[] = [];
+  if (BROADCAST.test(text)) found.push("broadcast");
+  if (SECRETS.some((re) => re.test(text))) found.push("secret");
+  return found;
+}
+
+/** The risks an edit adds: those of `edited` that `original` (what the draft said) did not already carry. */
+export const newRisks = (original: string, edited: string): Risk[] => {
+  const had = risksIn(original);
+  return risksIn(edited).filter((r) => !had.includes(r));
+};
+
+/** What the pause says, in the person's words: what it found, then that nothing is lost by stopping. */
+export function riskNote(risks: readonly Risk[]): string {
+  const what = risks.map((r) => (r === "broadcast" ? "mentions everyone (@everyone, @here or @all), not a person" : "looks like a password, key or token")).join(" and ");
+  return `Your edit ${what}. Everyone on the ticket would see it once it is posted. Post it anyway, or keep editing?`;
+}

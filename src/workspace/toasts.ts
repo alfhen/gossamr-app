@@ -43,6 +43,12 @@ interface ToastState {
   /** Returns the new toast's id, or null when the same words are already waiting. */
   push(text: string, tone?: ToastTone, action?: ToastAction, options?: ToastOptions): number | null;
   dismiss(id: number): void;
+  /** Stops the shown toast's clock while the pointer or the keyboard is on it, so it is not taken away mid-read. */
+  hold(id: number): void;
+  /** Starts a held toast's clock again, for its whole lifetime. */
+  release(id: number): void;
+  /** On leaving a screen: drops the notes waiting behind the one on screen. An error or an offer to undo stays. */
+  dropWaitingNotes(): void;
   clear(): void;
 }
 
@@ -59,7 +65,9 @@ export const STALE_MS = 4000;
 export const MAX_QUEUED = 10;
 let seq = 0;
 /** The toast whose clock is running, and its timer: only the shown one counts down. */
-let timed: { id: number; timer: ReturnType<typeof setTimeout> } | null = null;
+let timed: { id: number; timer: ReturnType<typeof setTimeout> | null } | null = null;
+/** The toast the pointer or keyboard is on: its clock does not run. */
+let held: number | null = null;
 
 /** Whether a note's subject is still as it said; a check that throws counts as moved on. */
 function stillNews(t: Toast): boolean {
@@ -78,8 +86,8 @@ export const useToasts = create<ToastState>((set, get) => {
     if (!get().toasts.every(fresh)) set((s) => ({ toasts: s.toasts.filter(fresh) }));
     const head = get().toasts[0];
     if (timed && timed.id === head?.id) return;
-    if (timed) clearTimeout(timed.timer);
-    timed = head ? { id: head.id, timer: setTimeout(() => get().dismiss(head.id), head.lifetime ?? LIFETIME_MS[head.tone]) } : null;
+    if (timed?.timer) clearTimeout(timed.timer);
+    timed = head ? { id: head.id, timer: head.id === held ? null : setTimeout(() => get().dismiss(head.id), head.lifetime ?? LIFETIME_MS[head.tone]) } : null;
   };
   return {
     toasts: [],
@@ -111,6 +119,23 @@ export const useToasts = create<ToastState>((set, get) => {
 
     dismiss(id) {
       set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) }));
+      arm();
+    },
+    hold(id) {
+      held = id;
+      if (timed?.id !== id || !timed.timer) return;
+      clearTimeout(timed.timer);
+      timed = { id, timer: null };
+    },
+    release(id) {
+      if (held !== id) return;
+      held = null;
+      const head = get().toasts[0];
+      if (!head || head.id !== id || timed?.timer) return;
+      timed = { id, timer: setTimeout(() => get().dismiss(id), head.lifetime ?? LIFETIME_MS[head.tone]) };
+    },
+    dropWaitingNotes() {
+      set((s) => ({ toasts: s.toasts.filter((t, i) => i === 0 || t.tone === "error" || t.keep) }));
       arm();
     },
     clear() {

@@ -292,7 +292,7 @@ describe("the sample supervisor", () => {
       expect(result).toContain("## Open questions the plan assumes answers to");
       for (const q of questions) expect(result).toMatch(new RegExp(`- ${q.replace(/[?.]/g, "\\$&")} Assumed: \\S`));
       // Each is stated as the question and the answer the plan assumed, and the summary says the plan rests on them.
-      const line = `Assumes answers to ${questions.length} open questions from triage (listed at the end).`;
+      const line = `Assumes answers to ${questions.length} open questions about the ticket (listed at the end).`;
       expect(result.startsWith(line)).toBe(true);
       expect(result).toContain(`For Jira:\n${line}`);
       expect(b.runs.get(plan.id)!.summary).toContain(line);

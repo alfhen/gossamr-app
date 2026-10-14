@@ -1,6 +1,7 @@
-import type { Intent, Proposal, WorkstreamEvent, WorkstreamView } from "../types";
+import type { Intent, ItemRef, Proposal, WorkstreamEvent, WorkstreamView } from "../types";
 import { docText } from "./docs";
 import { isReporterFollowUp, isReporterNudge, isReporterQuestions, makerName, targetOf, workstreamOf } from "./proposals";
+import { diffLines, withGaps } from "./textDiff";
 import { isJiraWrite } from "./workstreamWither";
 
 /**
@@ -62,8 +63,16 @@ const short = (text: string) => {
 
 const lines = (text: string) => text.split("\n").map((l) => l.trimEnd()).filter((l, i, all) => l !== "" || (i > 0 && all[i - 1] !== ""));
 
-/** What a Jira write said, short and whole. Null for an intent that isn't a Jira write. */
-export function sentWhat(intent: Intent, label: string | null): { kind: SentKind; summary: string; detail: string[] } | null {
+/** A description's change as lines for the disclosure: what was removed ("− "), added ("+ ") and a little around it, as drafted. */
+function descriptionDiff(from: string, to: string): string[] {
+  return withGaps(diffLines(from, to)).map((r) => (r.kind === "gap" ? `… ${r.count} unchanged lines` : `${r.kind === "del" ? "− " : r.kind === "add" ? "+ " : "  "}${r.text}`));
+}
+
+/**
+ * What a Jira write said, short and whole. Null for an intent that isn't a Jira write. `created` are the keys of the
+ * tickets it made (`Proposal.created`): a subtasks entry names each, entry `i` for summary `i`.
+ */
+export function sentWhat(intent: Intent, label: string | null, created: readonly ItemRef[] = []): { kind: SentKind; summary: string; detail: string[] } | null {
   switch (intent.type) {
     case "comment": {
       const text = docText(intent.body);
@@ -72,13 +81,15 @@ export function sentWhat(intent: Intent, label: string | null): { kind: SentKind
     case "transition":
       return { kind: "transition", summary: `Moved to ${label ?? intent.to}`, detail: [`Moved to ${label ?? intent.to}`] };
     case "rewrite": {
-      const parts = [intent.title && `Title: ${intent.title.from} → ${intent.title.to}`, intent.body && "New description:"].filter((x): x is string => !!x);
-      const body = intent.body ? lines(intent.body.toText) : [];
+      const parts = [intent.title && `Title: ${intent.title.from} → ${intent.title.to}`, intent.body && "Description, as it read and as it now reads:"].filter((x): x is string => !!x);
+      const body = intent.body ? descriptionDiff(intent.body.fromText, intent.body.toText) : [];
       const summary = intent.body ? `Description rewritten${intent.title ? " and title changed" : ""}` : `Title changed to ${intent.title?.to ?? ""}`;
       return { kind: "description", summary, detail: [...parts, ...body] };
     }
-    case "subtasks":
-      return { kind: "subtasks", summary: `${intent.summaries.length} ${intent.summaries.length === 1 ? "subtask" : "subtasks"}: ${short(intent.summaries.join("; "))}`, detail: intent.summaries.map((s) => `• ${s}`) };
+    case "subtasks": {
+      const named = intent.summaries.map((s, i) => (created[i] ? `${created[i].key} ${s}` : s));
+      return { kind: "subtasks", summary: `${intent.summaries.length} ${intent.summaries.length === 1 ? "subtask" : "subtasks"}: ${short(named.join("; "))}`, detail: named.map((s) => `• ${s}`) };
+    }
     case "create":
       return { kind: "ticket", summary: `Created “${intent.fields.title}”`, detail: [intent.fields.title, ...lines(docText(intent.fields.body))] };
     case "update": {
@@ -117,7 +128,7 @@ export function jiraSent({ proposals, events, workstreams }: SentInput): SentEnt
   const out: SentEntry[] = [];
   for (const p of proposals) {
     if (p.state.type !== "applied" || !isJiraWrite(p.intent)) continue;
-    const what = sentWhat(p.intent, p.label);
+    const what = sentWhat(p.intent, p.label, p.created);
     if (!what) continue;
     const approved = approvals.get(p.id);
     const workstreamId = workstreamOf(p) ?? approved?.workstreamId ?? null;

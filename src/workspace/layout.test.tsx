@@ -330,6 +330,41 @@ describe("the toast queue", () => {
       expect(texts()).toEqual([]);
     });
 
+    it("keeps the toast on screen while the pointer or keyboard is on it, and gives it a whole lifetime after", () => {
+      const id = useToasts.getState().push("Noted for short description", "info")!;
+      vi.advanceTimersByTime(LIFETIME_MS.info - 100);
+      useToasts.getState().hold(id);
+      vi.advanceTimersByTime(LIFETIME_MS.info * 3);
+      expect(shown()).toBe("Noted for short description");
+      useToasts.getState().release(id);
+      vi.advanceTimersByTime(LIFETIME_MS.info - 1);
+      expect(shown()).toBe("Noted for short description");
+      vi.advanceTimersByTime(1);
+      expect(texts()).toEqual([]);
+    });
+
+    it("lets the next note come up on its clock once the held one is dismissed", () => {
+      const first = useToasts.getState().push("first", "info")!;
+      useToasts.getState().push("second", "info");
+      useToasts.getState().hold(first);
+      useToasts.getState().dismiss(first);
+      useToasts.getState().release(first);
+      expect(shown()).toBe("second");
+      vi.advanceTimersByTime(LIFETIME_MS.info);
+      expect(texts()).toEqual([]);
+    });
+
+    it("drops the notes waiting behind the one on screen when the person leaves for another screen, but never an error or an offer to undo", () => {
+      useToasts.getState().push("on screen", "info");
+      useToasts.getState().push("note", "info");
+      useToasts.getState().push("another note", "info");
+      useToasts.getState().push("Couldn't post it");
+      useToasts.getState().push("Skipped the draft. Undo", "info", undefined, { keep: true });
+      useToasts.getState().dropWaitingNotes();
+      // The offer to undo came to the front, so it is the one on screen; the notes behind it went, the error stayed.
+      expect(texts()).toEqual(["Skipped the draft. Undo", "Couldn't post it"]);
+    });
+
     it("drops a note that waited too long behind another rather than show it late, but never an error", () => {
       useToasts.getState().push("Watching 4 repositories", "info");
       useToasts.getState().push("Agent started on CA-402", "info");

@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { listenToClaude, useClaude } from "../claudeStore";
 import type { Backend } from "../backend/types";
 import { TicketLinksContext } from "../components/ticketLinks";
@@ -38,6 +38,7 @@ import { useGithubUi } from "./githubUi";
 import { FILTER_LIMIT, useDev } from "./devStore";
 import { ChooseWatch } from "./WatchPicker";
 import { ToastHost, focusToast, toastPlacement } from "./ToastHost";
+import { useToasts } from "./toasts";
 import { useTabs, type Route } from "./tabsStore";
 
 /** Matches no item, for a filter that has nothing to read. */
@@ -211,6 +212,14 @@ export function Workspace({ backend }: { backend: Backend }) {
   const room = canvasRoom(route, peekOpen, peekWidth);
 
   useEffect(() => listenToClaude(), []);
+
+  // Notes waiting behind the one on screen were about the screen just left: they don't follow the person to the next.
+  const lastScreen = useRef(screen);
+  useEffect(() => {
+    if (lastScreen.current === screen) return;
+    lastScreen.current = screen;
+    useToasts.getState().dropWaitingNotes();
+  }, [screen]);
 
   // Once the backend answers, Pip's conversation comes back from where it is kept, so it outlives a reload.
   const ready = status === "ready";

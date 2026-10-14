@@ -32,7 +32,24 @@ describe("What Jira saw from me", () => {
     ]);
     expect(out.map((e) => e.summary)).toEqual(["2 subtasks: Write tests; Update docs", "Description rewritten and title changed", "Moved to In Review", "Investigated: the cache key is wrong."]);
     expect(out[3].detail).toEqual(["Investigated: the cache key is wrong.", "", "Fix is one line."]);
-    expect(out[1].detail).toEqual(["Title: Old → New", "New description:", "A better description.", "", "With detail."]);
+    // The old text is shown beside the new: "a" (as drafted) is replaced by the new two paragraphs.
+    expect(out[1].detail).toEqual(["Title: Old → New", "Description, as it read and as it now reads:", "− a", "+ A better description.", "+ ", "+ With detail."]);
+  });
+
+  it("shows what a description rewrite replaced, with unchanged lines folded", () => {
+    const rewrite = (fromText: string, toText: string): Intent => ({ type: "rewrite", item: ref("CA-402"), title: null, body: { from: doc("a"), to: doc("b"), fromText, toText }, flattened: [] });
+    const many = ["one", "two", "three", "four", "five", "six", "seven"].join("\n");
+    const detail = sentWhat(rewrite(many, many.replace("seven", "7")), null)!.detail;
+    expect(detail).toEqual(["Description, as it read and as it now reads:", "… 4 unchanged lines", "  five", "  six", "− seven", "+ 7"]);
+  });
+
+  it("names the keys a subtasks draft created, one for each title", () => {
+    const intent: Intent = { type: "subtasks", parent: ref("CA-403"), summaries: ["Write tests", "Update docs"] };
+    expect(sentWhat(intent, null, [ref("CA-501"), ref("CA-502")])).toMatchObject({ summary: "2 subtasks: CA-501 Write tests; CA-502 Update docs", detail: ["• CA-501 Write tests", "• CA-502 Update docs"] });
+    // Without keys (a draft from before they were kept) it lists the titles alone.
+    expect(sentWhat(intent, null)!.detail).toEqual(["• Write tests", "• Update docs"]);
+    const out = jiraSent({ proposals: [draft("s1", intent, { created: [ref("CA-501"), ref("CA-502")] })], events: {}, workstreams: [] });
+    expect(out[0].detail).toEqual(["• CA-501 Write tests", "• CA-502 Update docs"]);
   });
 
   it("leaves out what Jira never saw: waiting, skipped, retired and approving-in-progress drafts, runs and GitHub reviews", () => {

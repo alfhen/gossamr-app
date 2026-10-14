@@ -35,6 +35,8 @@ export interface ControlActions {
   /** "Allow 5 more", the person's answer to a spent budget: the audited way on from a budget hold, which Resume is not. */
   onAllowMore(): void;
   onStop(): void;
+  /** Closes the workstream once the person confirmed: its conversation goes back to General, its agents and drafts are kept. */
+  onClose?(): void;
   onRule(rule: WorkstreamRule, on: boolean | null): void;
   /** The steps popover opened: what "as in Settings" means is read again. */
   onSteps?(): void;
@@ -49,6 +51,7 @@ export function controlActions(id: string): ControlActions {
     onResume: () => void ws().resume(id),
     onAllowMore: () => void ws().allowMore(id),
     onStop: () => void ws().stop(id),
+    onClose: () => void ws().close(id),
     onRule: (rule, on) => void ws().setRule(id, rule, on),
     onSteps: () => void ws().loadGlobals(),
   };
@@ -153,6 +156,29 @@ export function StopConfirm({ onStop, onKeep }: { onStop(): void; onKeep(): void
       </Btn>
       <Btn tone="ghost" onClick={onKeep} className="px-2 py-0.5">
         Keep going
+      </Btn>
+    </div>
+  );
+}
+
+/** Asks before Close: the workstream goes, its agents and drafts stay. */
+export function CloseConfirm({ onClose, onKeep }: { onClose(): void; onKeep(): void }) {
+  return (
+    <div
+      role="group"
+      aria-label="Close this workstream"
+      data-esc-local
+      className="flex basis-full flex-wrap items-center gap-2 text-sm"
+      onKeyDown={(ev) => {
+        if (ev.key === "Escape") (ev.stopPropagation(), onKeep());
+      }}
+    >
+      <span className="text-ws-ink2">Close it? Its conversation goes back to General; its agents and drafts are kept.</span>
+      <Btn tone="primary" autoFocus onClick={onClose} className="px-2 py-0.5">
+        Close workstream
+      </Btn>
+      <Btn tone="ghost" onClick={onKeep} className="px-2 py-0.5">
+        Keep
       </Btn>
     </div>
   );
@@ -276,6 +302,9 @@ export interface ControlsViewProps {
   /** Stop was pressed and waits for the person to confirm. */
   confirmingStop: boolean;
   onConfirmStop(on: boolean): void;
+  /** Close was pressed and waits for the person to confirm; left out where a workstream can't be closed from here. */
+  confirmingClose?: boolean;
+  onConfirmClose?(on: boolean): void;
   /** What comes next, from `nextStep`; absent where it isn't known (the line is left out). */
   next?: NextStep | null;
 }
@@ -318,7 +347,7 @@ export function NextStepLine({ next, workstreamId }: { next: NextStep; workstrea
  * Under the workstream's line in the Pip pane: the Manage switch, why it is held with Resume, a review that still blocks
  * after the fix rounds with the person's choices, the budget once it runs low, Hold and Stop, and the automatic steps. Everything comes from the workstream's view, the same in the app and the sample.
  */
-export function WorkstreamControlsView({ view, globals, actions, confirmingStop, onConfirmStop, next }: ControlsViewProps) {
+export function WorkstreamControlsView({ view, globals, actions, confirmingStop, onConfirmStop, confirmingClose = false, onConfirmClose, next }: ControlsViewProps) {
   const ws = view.workstream;
   const note = budgetNote(view.budget);
   const manage = ws.mode === "manage";
@@ -350,9 +379,15 @@ export function WorkstreamControlsView({ view, globals, actions, confirmingStop,
               Hold
             </Btn>
           )}
+          {onConfirmClose && (
+            <Btn tone="ghost" data-close-workstream onClick={() => onConfirmClose(true)} title="Its conversation goes back to General; its agents and drafts are kept" className="px-1.5 py-0.5">
+              Close…
+            </Btn>
+          )}
           <MoreMenu onStop={() => onConfirmStop(true)} />
         </span>
         {confirmingStop && <StopConfirm onStop={() => (closeConfirm(), actions.onStop())} onKeep={closeConfirm} />}
+        {confirmingClose && onConfirmClose && <CloseConfirm onClose={() => actions.onClose?.()} onKeep={() => onConfirmClose(false)} />}
       </div>
       <p data-mode-line={ws.mode} className="m-0 text-xs text-ws-ink2">
         {MODE_LINE[ws.mode]}
@@ -399,6 +434,7 @@ export function WorkstreamControls({ view }: { view: WorkstreamView }) {
   const proposals = useWorkspace((s) => s.proposals);
   const needs = useNeedsYou();
   const events = useWorkstreams((s) => s.events[id]) ?? NO_EVENTS;
+  const confirmingClose = useWorkstreams((s) => s.confirmingClose === id);
   const next = useMemo(() => nextStepOnceKnown(view, runs, Object.values(proposals), needs, globals, events), [view, runs, proposals, needs, globals, events]);
-  return <WorkstreamControlsView view={view} globals={globals} actions={actions} confirmingStop={confirmingStop} onConfirmStop={setConfirmingStop} next={next} />;
+  return <WorkstreamControlsView view={view} globals={globals} actions={actions} confirmingStop={confirmingStop} onConfirmStop={setConfirmingStop} confirmingClose={confirmingClose} onConfirmClose={(on) => useWorkstreams.getState().askClose(on ? id : null)} next={next} />;
 }

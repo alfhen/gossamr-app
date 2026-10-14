@@ -12,7 +12,7 @@ import { HOLD_ALL_HINT, buildCommands, isHoldAllKey, rankCommands, type CommandA
 import { useToasts } from "./toasts";
 import { DecisionShownContext, decisionShown } from "./decisionShown";
 import { MODE_LINE, NextStepLine, nextStepOnceKnown } from "./WorkstreamControls";
-import { AUTO_STEPS_HELP, AutomaticStepsPanel, StopConfirm, WorkstreamControlsView, choiceValue, controlActions, ruleChoice, type ControlActions } from "./WorkstreamControls";
+import { AUTO_STEPS_HELP, AutomaticStepsPanel, CloseConfirm, StopConfirm, WorkstreamControlsView, choiceValue, controlActions, ruleChoice, type ControlActions } from "./WorkstreamControls";
 import { holdAllVisible, useWorkstreams } from "./workstreamsStore";
 import { CONNECT_TO_POST, DRAFT_OPEN, EscalationCardView, EscalationSent, FIX_ROUND_HELP, NO_REVIEW_DRAFT, POST_AS_IS_HELP, TAKE_OVER_HELP, TAKEN_OVER, draftOpen, escalationActions, escalationShown, fixRoundSent, postingReview } from "./EscalationCard";
 import { ESCALATION_GONE } from "../backend/mockWorkstreams";
@@ -154,6 +154,23 @@ describe("the workstream's controls", () => {
   it("shows the Manage switch as the workstream's mode", () => {
     expect(render(viewOf({ mode: "advise" }))).toMatch(/role="switch" aria-checked="false"[^>]*aria-label="Manage this workstream"/);
     expect(render(viewOf({ mode: "manage" }))).toMatch(/role="switch" aria-checked="true"[^>]*aria-label="Manage this workstream"/);
+  });
+
+  it("shows Close beside Hold, not only behind the menu, and asks before closing", () => {
+    const at = (view: WorkstreamView, closing = false) =>
+      renderToStaticMarkup(<WorkstreamControlsView view={view} globals={AUTOSTART_DEFAULTS} actions={noop()} confirmingStop={false} onConfirmStop={vi.fn()} confirmingClose={closing} onConfirmClose={vi.fn()} />);
+    const idle = at(viewOf());
+    expect(idle).toContain("data-close-workstream");
+    expect(idle.indexOf(">Hold</button>")).toBeLessThan(idle.indexOf("data-close-workstream"));
+    expect(idle).not.toContain('aria-label="Close this workstream"');
+    // Held, there is no Hold, but Close stays.
+    expect(at(viewOf({ heldReason: HELD_PERSON }))).toContain("data-close-workstream");
+    const asking = at(viewOf(), true);
+    expect(asking).toContain('aria-label="Close this workstream"');
+    expect(asking).toContain("Its conversation goes back to General; its agents and drafts are kept.");
+    // Where a workstream can't be closed from (no handler), there is no button.
+    expect(render(viewOf())).not.toContain("data-close-workstream");
+    expect(renderToStaticMarkup(<CloseConfirm onClose={vi.fn()} onKeep={vi.fn()} />)).toContain("Keep");
   });
 
   it("offers Hold while not held, and for every held reason a banner in its words with Resume instead", () => {
