@@ -1,0 +1,52 @@
+{
+  "self": "https://your-domain.atlassian.net/rest/api/3/project/search?startAt=0&maxResults=50&expand=insight",
+  "maxResults": 50,
+  "startAt": 0,
+  "total": 3,
+  "isLast": true,
+  "values": [
+    {
+      "expand": "description,lead,issueTypes,url,projectKeys,permissions,insight",
+      "self": "https://your-domain.atlassian.net/rest/api/3/project/10000",
+      "id": "10000",
+      "key": "EX",
+      "name": "Example",
+      "avatarUrls": {
+        "48x48": "https://your-domain.atlassian.net/secure/projectavatar?size=large&pid=10000",
+        "24x24": "https://your-domain.atlassian.net/secure/projectavatar?size=small&pid=10000",
+        "16x16": "https://your-domain.atlassian.net/secure/projectavatar?size=xsmall&pid=10000",
+        "32x32": "https://your-domain.atlassian.net/secure/projectavatar?size=medium&pid=10000"
+      },
+      "projectTypeKey": "software",
+      "simplified": false,
+      "style": "classic",
+      "isPrivate": false,
+      "properties": {},
+      "entityId": "b9a5ad3f-5ba8-4b3c-8a79-7e2e3c8d1b8a",
+      "uuid": "b9a5ad3f-5ba8-4b3c-8a79-7e2e3c8d1b8a",
+      "insight": { "totalIssueCount": 100, "lastIssueUpdateTime": "2021-04-22T05:37:05.000+0000" }
+    },
+    {
+      "expand": "description,lead,issueTypes,url,projectKeys,permissions,insight",
+      "self": "https://your-domain.atlassian.net/rest/api/3/project/10001",
+      "id": "10001",
+      "key": "OLD",
+      "name": "Old stuff",
+      "projectTypeKey": "business",
+      "simplified": true,
+      "style": "next-gen",
+      "isPrivate": true,
+      "archived": true,
+      "properties": {},
+      "insight": null
+    },
+    {
+      "self": "https://your-domain.atlassian.net/rest/api/3/project/10002",
+      "id": "10002",
+      "key": "SVC",
+      "name": "Service desk",
+      "projectTypeKey": "service_desk",
+      "insight": { "totalIssueCount": 0, "lastIssueUpdateTime": null }
+    }
+  ]
+}

@@ -244,7 +244,7 @@ async fn a_deleted_or_unreadable_issue_reads_as_gone_not_as_raw_json() {
     let server = serve(vec![("/ex/jira/site/rest/api/3/issue/CA-9", vec![Reply::status(404, body)])]).await;
     let err = tracker(&server).item(&item("CA-9"), "2026-01-01T00:00:00Z").await.unwrap_err();
     let Error::Api { status: 404, message } = err else { panic!("{err}") };
-    assert_eq!(message, "CA-9 doesn't exist, or you can no longer see it");
+    assert_eq!(message, "CA-9 doesn't exist, or you can no longer see it (GET issue/CA-9: Issue does not exist or you do not have permission to see it.)");
 }
 
 #[tokio::test]

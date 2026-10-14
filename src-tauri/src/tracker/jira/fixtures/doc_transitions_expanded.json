@@ -1,0 +1,205 @@
+{
+  "expand": "transitions",
+  "transitions": [
+    {
+      "id": "2",
+      "name": "Close Issue",
+      "to": {
+        "self": "https://your-domain.atlassian.net/rest/api/3/status/10000",
+        "description": "The issue is closed.",
+        "iconUrl": "https://your-domain.atlassian.net/images/icons/statuses/closed.png",
+        "name": "Closed",
+        "id": "10000",
+        "statusCategory": {
+          "self": "https://your-domain.atlassian.net/rest/api/3/statuscategory/9",
+          "id": 9,
+          "key": "done",
+          "colorName": "green",
+          "name": "Done"
+        }
+      },
+      "hasScreen": false,
+      "isGlobal": false,
+      "isInitial": false,
+      "isAvailable": true,
+      "isConditional": false,
+      "isLooped": false
+    },
+    {
+      "id": "711",
+      "name": "QA Review",
+      "to": {
+        "self": "https://your-domain.atlassian.net/rest/api/3/status/5",
+        "description": "",
+        "iconUrl": "https://your-domain.atlassian.net/images/icons/statuses/generic.png",
+        "name": "In QA",
+        "id": "5",
+        "statusCategory": {
+          "self": "https://your-domain.atlassian.net/rest/api/3/statuscategory/4",
+          "id": 4,
+          "key": "indeterminate",
+          "colorName": "yellow",
+          "name": "In Progress"
+        }
+      },
+      "hasScreen": true,
+      "isGlobal": false,
+      "isInitial": false,
+      "isAvailable": true,
+      "isConditional": false,
+      "fields": {
+        "summary": {
+          "required": false,
+          "schema": {
+            "type": "string",
+            "system": "summary"
+          },
+          "name": "Summary",
+          "fieldId": "summary",
+          "operations": [
+            "set"
+          ]
+        },
+        "colour": {
+          "required": true,
+          "schema": {
+            "type": "string",
+            "custom": "com.atlassian.jira.plugin.system.customfieldtypes:select",
+            "customId": 10010
+          },
+          "name": "Colour",
+          "fieldId": "customfield_10010",
+          "operations": [
+            "set"
+          ],
+          "allowedValues": [
+            {
+              "self": "https://your-domain.atlassian.net/rest/api/3/customFieldOption/10112",
+              "value": "Red",
+              "id": "10112"
+            },
+            {
+              "self": "https://your-domain.atlassian.net/rest/api/3/customFieldOption/10113",
+              "value": "Blue",
+              "id": "10113"
+            }
+          ]
+        },
+        "resolution": {
+          "required": true,
+          "schema": {
+            "type": "resolution",
+            "system": "resolution"
+          },
+          "name": "Resolution",
+          "fieldId": "resolution",
+          "operations": [
+            "set"
+          ],
+          "allowedValues": [
+            {
+              "self": "https://your-domain.atlassian.net/rest/api/3/resolution/10000",
+              "id": "10000",
+              "description": "Work has been completed on this issue.",
+              "name": "Done"
+            },
+            {
+              "self": "https://your-domain.atlassian.net/rest/api/3/resolution/10001",
+              "id": "10001",
+              "name": "Won't Do"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "712",
+      "name": "Back to open",
+      "to": {
+        "id": "10000",
+        "name": "Closed",
+        "statusCategory": {
+          "id": 9,
+          "key": "done"
+        }
+      },
+      "hasScreen": true,
+      "isAvailable": true,
+      "fields": {
+        "resolution": {
+          "required": true,
+          "hasDefaultValue": true,
+          "schema": {
+            "type": "resolution",
+            "system": "resolution"
+          },
+          "name": "Resolution",
+          "fieldId": "resolution",
+          "operations": [
+            "set"
+          ],
+          "allowedValues": []
+        }
+      }
+    },
+    {
+      "id": "713",
+      "name": "Resolve",
+      "to": {
+        "self": "https://your-domain.atlassian.net/rest/api/3/status/6",
+        "description": "",
+        "iconUrl": "https://your-domain.atlassian.net/images/icons/statuses/resolved.png",
+        "name": "Resolved",
+        "id": "6",
+        "statusCategory": {
+          "id": 3,
+          "key": "done",
+          "colorName": "green",
+          "name": "Done"
+        }
+      },
+      "hasScreen": true,
+      "isAvailable": true,
+      "isConditional": false,
+      "fields": {
+        "resolution": {
+          "required": true,
+          "schema": {
+            "type": "resolution",
+            "system": "resolution"
+          },
+          "name": "Resolution",
+          "fieldId": "resolution",
+          "operations": [
+            "set"
+          ],
+          "allowedValues": [
+            {
+              "self": "https://your-domain.atlassian.net/rest/api/3/resolution/10001",
+              "id": "10001",
+              "name": "Won't Do"
+            },
+            {
+              "self": "https://your-domain.atlassian.net/rest/api/3/resolution/10000",
+              "id": "10000",
+              "description": "Work has been completed on this issue.",
+              "name": "Done"
+            }
+          ]
+        },
+        "comment": {
+          "required": false,
+          "schema": {
+            "type": "comments-page",
+            "system": "comment"
+          },
+          "name": "Comment",
+          "fieldId": "comment",
+          "operations": [
+            "add"
+          ]
+        }
+      }
+    }
+  ]
+}
