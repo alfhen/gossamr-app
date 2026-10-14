@@ -229,6 +229,33 @@ export function WorkstreamList({ list, closed, showClosed, selected, onSelect, o
   );
 }
 
+/**
+ * The F6 stop above the conversation that holds Start my day or Plan my week: a labelled region that scrolls when the card is
+ * taller than its share, with a fade at the foot while something is cut off, so the scroll is not hidden.
+ */
+export function DayScroll({ label, children }: { label: string; children: ReactNode }) {
+  const box = useRef<HTMLDivElement>(null);
+  const [more, setMore] = useState(false);
+  useEffect(() => {
+    const el = box.current;
+    if (!el) return;
+    const measure = () => setMore(el.scrollHeight - el.scrollTop - el.clientHeight > 4);
+    measure();
+    el.addEventListener("scroll", measure, { passive: true });
+    const watch = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure);
+    watch?.observe(el);
+    for (const c of Array.from(el.children)) watch?.observe(c);
+    return () => (el.removeEventListener("scroll", measure), watch?.disconnect());
+  });
+  return (
+    // Focusable so the keyboard can scroll it when it overflows: a scroller with no focusable child is out of the arrow keys' reach.
+    <div ref={box} data-pip-home-day role="region" aria-label={label} tabIndex={0} className="relative max-h-[45vh] shrink-0 overflow-y-auto outline-none empty:hidden focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-ws-pip">
+      {children}
+      {more && <div data-day-fade aria-hidden="true" className="pointer-events-none sticky bottom-0 -mt-6 h-6 bg-gradient-to-t from-ws-bar to-transparent" />}
+    </div>
+  );
+}
+
 /** The right column: the selected workstream's step rail, or a word for General. */
 export function StepsColumn({ workstream }: { workstream: WorkstreamView | null }) {
   return (
@@ -712,11 +739,11 @@ export function PipHome() {
           <DecisionShownContext.Provider value={decided}>
             <div data-pip-home-column="conversation" onFocusCapture={enter("conversation")} className="contents">
               <HomeConversation workstream={workstream} footer={footer} needs={needsYou} day={
-                  <div data-pip-home-day className="max-h-[45vh] shrink-0 overflow-y-auto empty:hidden">
+                  <DayScroll label={planOpen ? "Plan my week" : "Start my day"}>
                     {planOpen && <PlanMyWeek key={isoWeek(new Date(now))} needs={needsYou} withers={withers} now={now} />}
                     {/* The plan is opened from the card and its Close brings it back; the card is General's summary, not a workstream's. */}
                     {!planOpen && workstream === null && <StartMyDayCard needs={needsYou} withers={withers} now={now} />}
-                  </div>
+                  </DayScroll>
                 } pane={<NeedsPane needs={needsYou} />} />
             </div>
             <div data-pip-home-column="rail" onFocusCapture={enter("rail")} className="contents">

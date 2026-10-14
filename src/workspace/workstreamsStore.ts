@@ -13,7 +13,7 @@ import { usePip } from "./pipStore";
 import { usePrefs } from "./prefs";
 import { useRuns, type RunSheetTarget } from "./runsStore";
 import { useTabs } from "./tabsStore";
-import { messageOf, useToasts } from "./toasts";
+import { messageOf, pushLearning, useToasts } from "./toasts";
 import { offerUndo } from "./undo";
 
 interface WorkstreamsState {
@@ -354,9 +354,7 @@ export const useWorkstreams = create<WorkstreamsState>()((set, get) => {
       if (next.learned.length) {
         // One word for what it learned, one audit line for each gap.
         // No longer news once it is given back, so it never comes up after (or over) the "as before" note.
-        useToasts.getState().push(`Gossamr will stop flagging ${project} tickets that ${next.learned.map(gapWords).join(", or that ")}. Give that back in Settings, or from ⌘K.`, "info", undefined, {
-          current: () => ignoredGaps(usePrefs.getState().clarityLearning, project).length > 0,
-        });
+        pushLearning(project, `Gossamr will stop flagging ${project} tickets that ${next.learned.map(gapWords).join(", or that ")}. Give that back in Settings, or from ⌘K.`, () => ignoredGaps(usePrefs.getState().clarityLearning, project).length > 0);
         void get().loadEvents(id);
       } else if (shown.length) {
         // The first and second Looks fine count silently otherwise: say how far it is from Gossamr stopping.
@@ -365,7 +363,10 @@ export const useWorkstreams = create<WorkstreamsState>()((set, get) => {
         const left = Math.min(...lefts);
         // The gaps may stand at different counts: the number is for the first to stop, so say it is not all of them.
         const them = lefts.every((n) => n === left) ? "them" : "the first of them";
-        useToasts.getState().push(`Noted. After ${left} more Looks fine on ${project} tickets like this, Gossamr stops flagging ${them} (Settings > Unclear tickets).`, "info");
+        // Out of date once the count moves (another Looks fine) or is given back: the newer note replaces it, never waits behind it.
+        const at = JSON.stringify(shown.map((g) => counts[g] ?? 0));
+        const standing = () => JSON.stringify(shown.map((g) => usePrefs.getState().clarityLearning[project]?.[g] ?? 0)) === at;
+        pushLearning(project, `Noted. After ${left} more Looks fine on ${project} tickets like this, Gossamr stops flagging ${them} (Settings > Unclear tickets).`, standing);
       }
       return true;
     },

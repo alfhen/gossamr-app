@@ -85,6 +85,8 @@ export interface StatusMore {
 
 /** The detail an Idle workstream carries while the word check finds its ticket thin (a notice, never a need). */
 export const UNCLEAR_DETAIL = "may be unclear";
+/** What an idle row says once the reporter has answered on the ticket and the person has not chosen yet: the answer is the news. */
+export const REPLIED_DETAIL = "reporter replied";
 
 /** How many days with nothing happening make a workstream Quiet when it has no cobweb to say so. */
 export const QUIET_DAYS = 7;
@@ -130,7 +132,7 @@ export function workstreamStatus(view: WorkstreamView, needs: readonly Pick<Need
   if (ws.closedAt || view.stage === "done") return make("done");
   const failed = [...own].sort((a, b) => a.queuedAt.localeCompare(b.queuedAt)).pop();
   const unclear = !!view.clarity && flaggedGaps(view.clarity.gaps, learning, projectOfKey(ws.itemKey ?? "")).length > 0;
-  return make("idle", failed?.state === "failed" ? `${STAGE_LABEL[failed.spec.kind]} failed` : unclear ? UNCLEAR_DETAIL : null);
+  return make("idle", failed?.state === "failed" ? `${STAGE_LABEL[failed.spec.kind]} failed` : view.reporterReplied ? REPLIED_DETAIL : unclear ? UNCLEAR_DETAIL : null);
 }
 
 /** Whether a status matches a filter word the palette takes: "waiting on reporter", "needs you", "held", "running", "quiet", "done", "idle". */

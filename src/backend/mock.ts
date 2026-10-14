@@ -570,7 +570,7 @@ export class MockBackend implements Backend {
     const item = run.item;
     const reporter = this.connector.item(item)?.reporter ?? null;
     const name = reporter ? (this.connector.people.find((p) => p.accountId === reporter.accountId)?.name ?? null) : null;
-    const body = reporterDoc(reporterComment(item.key, name, stop.questions), reporter && name ? { person: reporter, name } : null);
+    const body = reporterDoc(reporterComment(item.key, name, stop.questions, !!this.workstreams.get(id)?.reporterReplied), reporter && name ? { person: reporter, name } : null);
     const proposal = this.proposals.fromRun({ type: "comment", item, body }, READINESS_LABEL, { type: "run", runId: run.id, shortId: run.shortId, workstream: run.spec.workstream ?? null });
     this.workstreams.askedReporter(id, triageRun, proposal.id);
     return proposal;
@@ -590,7 +590,7 @@ export class MockBackend implements Backend {
     const item = itemRef(key);
     const reporter = this.connector.item(item)?.reporter ?? null;
     const name = reporter ? (this.connector.people.find((p) => p.accountId === reporter.accountId)?.name ?? null) : null;
-    const body = reporterDoc(reporterComment(key, name, clarityQuestions(gaps)), reporter && name ? { person: reporter, name } : null);
+    const body = reporterDoc(reporterComment(key, name, clarityQuestions(gaps), !!this.workstreams.get(id)?.reporterReplied), reporter && name ? { person: reporter, name } : null);
     const proposal = this.proposals.askedFor({ type: "comment", item, body }, READINESS_LABEL, id);
     this.workstreams.askedClarity(id, proposal.id);
     return proposal;

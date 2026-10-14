@@ -8,7 +8,7 @@ import { RULE_SWITCH, STEP_HELP, asksBudget, isHeldByYou, budgetNote, heldBanner
 import { ALLOW_MORE_STEPS, HELD_BUDGET, TRIPWIRE, WORKSTREAM_RULES, type AutoStartSwitches, type Proposal, type Run, type WorkstreamEvent, type WorkstreamRule, type WorkstreamRules, type WorkstreamView } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { Btn } from "./AgentSheet";
-import { giveBackClarity } from "./clarityActions";
+import { giveBackClarity, settleClarityFocus } from "./clarityActions";
 import { paneHas, useDecisionShown } from "./decisionShown";
 import { EscalationCard } from "./EscalationCard";
 import { openNeed } from "./needsActions";
@@ -227,7 +227,7 @@ export function ClarityNotice({ view }: { view: WorkstreamView }) {
   const id = view.workstream.id;
   const choose = (call: () => Promise<boolean>) => {
     setBusy(true);
-    void call().finally(() => setBusy(false));
+    void call().finally(() => (setBusy(false), settleClarityFocus(id)));
   };
   const store = useWorkstreams.getState();
   return (
@@ -257,7 +257,7 @@ export function QuietClarity({ view, project, gaps, inside = false }: { view: Wo
       <span>
         Not flagged: you said Looks fine to {gaps.map((g) => SHORT_GAP[g]).join(" and ")} in {project} tickets.
       </span>
-      <button type="button" disabled={busy} onClick={() => (setBusy(true), void giveBackClarity(project, gaps).finally(() => setBusy(false)))} className="rounded px-1 underline hover:bg-ws-hover focus-visible:outline-2 focus-visible:outline-ws-pip">
+      <button type="button" disabled={busy} onClick={() => (setBusy(true), void giveBackClarity(project, gaps).finally(() => (setBusy(false), settleClarityFocus(view.workstream.id))))} className="rounded px-1 underline hover:bg-ws-hover focus-visible:outline-2 focus-visible:outline-ws-pip">
         Flag again
       </button>
     </p>

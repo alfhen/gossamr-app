@@ -75,6 +75,15 @@ const days = (iso: string | null | undefined, now: Date) => {
   return Number.isNaN(t) ? 0 : Math.max(0, Math.floor((now.getTime() - t) / DAY));
 };
 
+/** Why a need asks for the person, in one clause: its own `why` cut to the first sentence; empty when it says nothing beyond the title. */
+function whyClause(n: Need): string {
+  const first = n.why.split(/(?<=[.!?])\s/)[0]?.trim() ?? "";
+  return first && first.replace(/[.!?]$/, "") !== n.title ? ` ${first.endsWith(".") ? first : `${first}.`}` : "";
+}
+
+/** The because line of a pick with needs: how many, the top one and why, how many more, and what tells the ticket from the next. */
+const needsLine = (list: readonly Need[], t: WorkItem | undefined, now: Date) => `${plural(list.length, "thing needs", "things need")} you here: ${list[0].title}.${whyClause(list[0])}${list.length > 1 ? ` (+${list.length - 1} more)` : ""}${facts(t, now) ? ` The ticket is ${facts(t, now)}.` : ""}`;
+
 interface Scored {
   pick: PlanPick;
   /** 0 for a workstream with a need in it, else 1. */
@@ -88,7 +97,10 @@ interface Scored {
 const clarifyLine = (lead: string, how: string, gaps: readonly ClarityGap[]) => `${lead}${how}, but it ${gapsPhrase(gaps)}; ask the reporter ${plural(clarityQuestions(gaps).length, "question", "questions")} before anyone builds on it.`;
 
 /** Every candidate, ranked: Needs you first (Needs you's own order: decide, unblock, approve, oldest first), then by score, then by key. Left out: closed, held, waiting on the reporter, done. */
-export function rankWeek(i: PlanInput): PlanPick[] {
+export const rankWeek = (i: PlanInput): PlanPick[] => scoreWeek(i).map((s) => s.pick);
+
+/** `rankWeek` with each candidate's tier and score. */
+function scoreWeek(i: PlanInput): Scored[] {
   const scored: Scored[] = [];
   const opened = new Set<string>();
   // Needs in General that are about a ticket (workstreamId null, ticketKey set): a pending decision on a ticket still counts for it, workstream or not.
@@ -106,7 +118,7 @@ export function rankWeek(i: PlanInput): PlanPick[] {
     const conn = (n.runId && runConnection.get(n.runId)) || (connections.get(n.ticketKey)?.size === 1 ? [...connections.get(n.ticketKey)!][0] : undefined);
     if (conn) general.set(`${conn}:${n.ticketKey}`, [...(general.get(`${conn}:${n.ticketKey}`) ?? []), n]);
   }
-  const needLine = (list: readonly Need[], t?: WorkItem) => `${plural(list.length, "thing needs", "things need")} you here: ${list[0].title}.${facts(t, i.now) ? ` It is ${facts(t, i.now)}.` : ""}`;
+  const needLine = (list: readonly Need[], t?: WorkItem) => needsLine(list, t, i.now);
   const needScore = (n: Need) => 3 - GROUPS.indexOf(n.group);
   for (const v of i.workstreams) {
     const ws = v.workstream;
@@ -118,7 +130,7 @@ export function rankWeek(i: PlanInput): PlanPick[] {
     const t = ws.itemKey ? ticketOf(i.items, ws.connectionId, ws.itemKey) : undefined;
     const pick = (because: string, work?: PlanPick["work"], title = name): PlanPick => ({ id: `ws:${ws.id}`, kind: "workstream", workstreamId: ws.id, ticketKey: ws.itemKey, connectionId: ws.connectionId, title, because, ...(work ? { work } : {}) });
     if (status.state === "needs-you") {
-      scored.push({ pick: pick(`${plural(mine.length, "thing needs", "things need")} you here: ${mine[0]?.title ?? "a decision"}.${facts(t, i.now) ? ` It is ${facts(t, i.now)}.` : ""}`), tier: 0, score: 3 - GROUPS.indexOf(mine[0]?.group ?? "approve"), at: mine[0]?.at ?? ws.createdAt });
+      scored.push({ pick: pick(mine.length ? needLine(mine, t) : `1 thing needs you here: a decision.${facts(t, i.now) ? ` The ticket is ${facts(t, i.now)}.` : ""}`), tier: 0, score: 3 - GROUPS.indexOf(mine[0]?.group ?? "approve"), at: mine[0]?.at ?? ws.createdAt });
       continue;
     }
     if (status.state === "held" || status.state === "waiting" || status.state === "done") continue;
@@ -160,7 +172,7 @@ export function rankWeek(i: PlanInput): PlanPick[] {
   }
   // Needs you first (its own order: the group that is asked most, then oldest); then by score, then oldest, then by id.
   const order = (a: Scored, b: Scored) => a.tier - b.tier || b.score - a.score || a.at.localeCompare(b.at) || (a.pick.id < b.pick.id ? -1 : a.pick.id > b.pick.id ? 1 : 0);
-  return scored.sort(order).map((s) => s.pick);
+  return scored.sort(order);
 }
 
 /**
@@ -169,13 +181,30 @@ export function rankWeek(i: PlanInput): PlanPick[] {
  */
 export function planMyWeek(i: PlanInput): PlanPick[] {
   const count = Math.max(0, i.count ?? WEEK_PICKS);
-  const ranked = rankWeek(i);
+  const scored = scoreWeek(i);
+  const ranked = scored.map((s) => s.pick);
   const firstClarify = ranked.findIndex((p) => p.work === "clarify");
   const rest = ranked.filter((p, n) => p.work !== "clarify" || n === firstClarify);
   const picks = rest.slice(0, count);
   // Only when nothing else exists: the extra unclear ones fill what is left of the week, in their order.
   if (picks.length < count) picks.push(...ranked.filter((p) => !rest.includes(p)).slice(0, count - picks.length));
+  // Needs you outrank every ask, so a week of three needs would never offer one: unclear work gets one place, the last other pick's.
+  // A one-pick week keeps its pick: there is no other place to give, and a need outranks an ask.
+  if (firstClarify >= 0 && count > 1 && !picks.some((p) => p.work === "clarify")) {
+    const tierOf = (p: PlanPick) => scored.find((s) => s.pick === p)?.tier ?? 1;
+    const at = picks.map(tierOf).lastIndexOf(1);
+    picks[at >= 0 ? at : picks.length - 1] = ranked[firstClarify];
+  }
   return picks;
+}
+
+/** "week of 12 Oct" for an ISO week code ("2026-W42"): the Monday it starts on; the code itself when it does not parse. */
+export function weekLabel(week: string): string {
+  const m = /^(\d{4})-W(\d{2})$/.exec(week);
+  if (!m) return week;
+  const jan4 = new Date(Date.UTC(Number(m[1]), 0, 4));
+  const monday = new Date(jan4.getTime() + (-((jan4.getUTCDay() || 7) - 1) + (Number(m[2]) - 1) * 7) * DAY);
+  return `week of ${monday.getUTCDate()} ${["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][monday.getUTCMonth()]}`;
 }
 
 /** ISO 8601 week of `d` in local time: "2026-W42" (weeks start on Monday; week 1 holds the year's first Thursday). */
@@ -256,10 +285,13 @@ export function itemOutcome(item: PlanItem, workstreams: readonly WorkstreamView
   // The same key on another connection is another ticket; an item kept before connections were stored matches by key alone.
   const own = (connectionId: string) => item.connectionId === undefined || item.connectionId === connectionId;
   const mine = workstreams.filter((v) => v.workstream.id === item.workstreamId || (!!item.ticketKey && v.workstream.itemKey === item.ticketKey && own(v.workstream.connectionId)));
+  // A workstream pick kept before connections were stored knows its ticket's connection through the workstream.
+  const via = item.connectionId ?? workstreams.find((v) => v.workstream.id === item.workstreamId)?.workstream.connectionId;
+  const ticketDone = !!item.ticketKey && items.some((t) => t.item.key === item.ticketKey && (via === undefined || via === t.item.connectionId) && t.status.category === "done");
+  // A ticket that is Done is finished work, whether or not its workstream is still open.
+  if (ticketDone) return "done";
   if (mine.some((v) => v.workstream.closedAt === null)) return "open";
-  const ticketDone = !!item.ticketKey && items.some((t) => t.item.key === item.ticketKey && own(t.item.connectionId) && t.status.category === "done");
-  if (mine.length) return ticketDone ? "done" : "closed";
-  return ticketDone ? "done" : "open";
+  return mine.length ? "closed" : "open";
 }
 
 /** Whether a kept item is ticked as finished: `itemOutcome` is `done`. */

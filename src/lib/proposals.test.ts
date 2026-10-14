@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Intent, Proposal, RunKind, RunSpec } from "../types";
-import { ANSWERS_COMMENT_LABEL, answersSupersession, READINESS_COMMENT_LABEL, draftsForTurn, earlierDrafts, inWorkstreamPane, isAnswersDraft, isReporterQuestions, reporterSupersession, supersession, supersessionKey, targetOf, withoutRunDrafts } from "./proposals";
+import { ANSWERS_COMMENT_LABEL, isReporterFollowUp, answersSupersession, READINESS_COMMENT_LABEL, draftsForTurn, earlierDrafts, inWorkstreamPane, isAnswersDraft, isReporterQuestions, reporterSupersession, supersession, supersessionKey, targetOf, withoutRunDrafts } from "./proposals";
 import fixtures from "./draftHygiene.fixtures.json";
 import { isRunPlanRewrite } from "../backend/mockProposals";
 
@@ -173,6 +173,14 @@ describe("the comments about a ticket's open questions", () => {
     expect(isReporterQuestions(proposal("3", comment("A-1"), { label: READINESS_COMMENT_LABEL }))).toBe(false);
     expect(isReporterQuestions(fromRun("4", "t1"))).toBe(false);
     expect(isReporterQuestions(proposal("5", subtasks("A-1"), { createdBy: "user", label: READINESS_COMMENT_LABEL }))).toBe(false);
+  });
+
+  it("is a follow-up when the asked questions open with the thanks for the reporter's answer, and still the reporter's questions", () => {
+    const body = (text: string) => ({ type: "comment", item: ref("A-1"), body: { blocks: [{ type: "paragraph", content: [{ type: "text", text, marks: [] }] }] } }) as unknown as Intent;
+    const follow = proposal("1", body("Hi,\n\nThanks for your answer above. Before A-1 can be planned, a few things are still open:"), { label: READINESS_COMMENT_LABEL, createdBy: "user" });
+    const first = proposal("2", body("Hi,\n\nBefore A-1 can be planned we need a few things cleared up:"), { label: READINESS_COMMENT_LABEL, createdBy: "user" });
+    expect([isReporterFollowUp(follow), isReporterQuestions(follow)]).toEqual([true, true]);
+    expect([isReporterFollowUp(first), isReporterQuestions(first)]).toEqual([false, true]);
   });
 
   it("is Pip's comment with the person's answers only when Pip made it", () => {

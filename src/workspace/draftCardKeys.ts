@@ -1,4 +1,4 @@
-import { useState, type FocusEvent, type KeyboardEvent } from "react";
+import { useRef, useState, type FocusEvent, type KeyboardEvent, type PointerEvent } from "react";
 import type { Proposal } from "../types";
 import { draftKeyHint, draftKeyShortcuts, onDraftCardKey, stepDraftCards, type Asking } from "./draftKeys";
 
@@ -25,6 +25,20 @@ export interface CardKeyActs {
 }
 
 /**
+ * Runs `after` once the press that began now is over (pointerup or pointercancel) and the click it makes has been dispatched,
+ * which follows in the same task: a timer queued then runs after it.
+ */
+export function holdWhilePressed(win: Pick<Window, "addEventListener" | "removeEventListener">, after: () => void, defer: (run: () => void) => unknown = (run) => setTimeout(run, 0)) {
+  const done = () => {
+    win.removeEventListener("pointerup", done, true);
+    win.removeEventListener("pointercancel", done, true);
+    defer(after);
+  };
+  win.addEventListener("pointerup", done, true);
+  win.addEventListener("pointercancel", done, true);
+}
+
+/**
  * The one key model (`keyMap.ts`) on a full draft card, the kind Activity's Drafts, the ticket peek and Needs you's decision
  * pane show: the card takes focus, j and k move to the card before or after it, a approves after Enter, e edits, d and s skip
  * (with Undo), Enter and o open. Returns the props for the card's element and the line it shows about its keys while it has the keyboard.
@@ -32,6 +46,9 @@ export interface CardKeyActs {
 export function useCardKeys(p: Proposal, acts: CardKeyActs) {
   const [asking, setAsking] = useState<Asking | null>(null);
   const [focused, setFocused] = useState(false);
+  // A press on one of the card's buttons moves focus off the card and would take its key line away mid-click, shifting the buttons
+  // up from under the pointer so that the click lands beside them: the line stays until the press is over.
+  const pressing = useRef(false);
   const canApprove = acts.canApprove ?? p.intent.type !== "githubReview";
   const props = {
     tabIndex: 0,
@@ -44,8 +61,16 @@ export function useCardKeys(p: Proposal, acts: CardKeyActs) {
     },
     onBlur(ev: FocusEvent<HTMLElement>) {
       if (ev.target !== ev.currentTarget) return;
-      setFocused(false);
+      if (!pressing.current) setFocused(false);
       setAsking(null);
+    },
+    onPointerDownCapture(ev: PointerEvent<HTMLElement>) {
+      const card = ev.currentTarget;
+      pressing.current = true;
+      holdWhilePressed(window, () => {
+        pressing.current = false;
+        if (card.isConnected && document.activeElement !== card) setFocused(false);
+      });
     },
     onKeyDown(ev: KeyboardEvent<HTMLElement>) {
       if (ev.defaultPrevented) return;

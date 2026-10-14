@@ -48,6 +48,8 @@ export interface DayLine {
   entries: DayEntry[];
   /** `count` less the entries listed. */
   more: number;
+  /** The entries past the first few, which "Show more" lists in place. */
+  rest?: DayEntry[];
 }
 
 export interface StartMyDayInput {
@@ -80,7 +82,7 @@ const GROUP_TITLE: Record<NeedGroupKind, (n: number) => string> = {
   approve: (n) => `${n} to approve`,
 };
 
-const line = (kind: DayKind, title: (n: number) => string, entries: DayEntry[]): DayLine | null => (entries.length ? { kind, title: title(entries.length), count: entries.length, entries: entries.slice(0, DAY_ENTRIES), more: Math.max(0, entries.length - DAY_ENTRIES) } : null);
+const line = (kind: DayKind, title: (n: number) => string, entries: DayEntry[]): DayLine | null => (entries.length ? { kind, title: title(entries.length), count: entries.length, entries: entries.slice(0, DAY_ENTRIES), more: Math.max(0, entries.length - DAY_ENTRIES), rest: entries.slice(DAY_ENTRIES) } : null);
 
 const isMine = (item: WorkItem, me: readonly PersonRef[]) => !!item.assignee && me.some((m) => m.connectionId === item.assignee!.connectionId && m.accountId === item.assignee!.accountId);
 
@@ -172,10 +174,11 @@ export function startMyDay(i: StartMyDayInput): StartMyDay {
   );
   const lines = [
     ...groups,
+    // The drafts wait on the person's click, so they come before the lines that only inform, and a short box does not cut them off.
+    line("drafts", (n) => `${plural(n, "Jira draft", "Jira drafts")} waiting to be posted`, draftEntries(i)),
     line("unclear", (n) => `${plural(n, "ticket", "tickets")} may be unclear`, unclearEntries(i)),
     line("reporter", (n) => `${n} waiting on the reporter`, reporterEntries(i)),
     line("cobweb", (n) => `${plural(n, "workstream", "workstreams")} gone quiet in Jira`, cobwebEntries(i)),
-    line("drafts", (n) => `${plural(n, "Jira draft", "Jira drafts")} waiting to be posted`, draftEntries(i)),
   ].filter((l): l is DayLine => l !== null);
   return { lines, empty: lines.length === 0 };
 }

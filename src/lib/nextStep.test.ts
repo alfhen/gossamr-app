@@ -180,6 +180,33 @@ describe("nextStep when the person is waited on", () => {
     expect(result?.text).toContain("R1 asks");
   });
 
+  it("names the plan approval that unblocks Build before an older need, and counts the others", () => {
+    const rewrite = (id: string, from: string | null, ago: number): Proposal => ({ ...applied(id, from ?? "x"), createdAt: iso(ago), state: { type: "pending" } as const, origin: from ? { type: "run", runId: from, shortId: null } : { type: "chat", requestId: "q", workstream: "ws-1" } } as Proposal);
+    const runs = [run("t", "triage", "done"), run("p", "plan", "done")];
+    const v = view(runs);
+    const list = needsOf(v, runs, [rewrite("d-old", "t", 500), rewrite("d-plan", "p", 5)]);
+    const result = nextStep(v, runs, [], list);
+    expect(result?.need?.kind).toBe("plan");
+    expect(result?.text).toMatch(/wrote the plan.* \(\+1 more waiting\)\.?$/);
+  });
+
+  it("says the reporter replied, and when, once their answer ended the wait and the person has not chosen", () => {
+    const runs = [run("t", "triage", "done")];
+    const v = { ...view(runs), reporterReplied: true, reporterRepliedAt: iso(180) } as WorkstreamView;
+    const result = nextStep(v, runs, [], [], AUTOSTART_DEFAULTS, [], new Date(NOW));
+    expect(result).toMatchObject({ kind: "reporter", need: null, text: "Next: the reporter replied 3 hours ago; read it, then Looks fine or ask again." });
+    expect(nextStep({ ...v, reporterRepliedAt: undefined } as WorkstreamView, runs, [], [], AUTOSTART_DEFAULTS, [], new Date(NOW))?.text).toBe("Next: the reporter replied; read it, then Looks fine or ask again.");
+    // A need still comes first, and a step in hand carries on.
+    const going = [run("b", "build", "working")];
+    expect(nextStep({ ...view(going), reporterReplied: true } as WorkstreamView, going, [], [], AUTOSTART_DEFAULTS, [], new Date(NOW))?.kind).not.toBe("reporter");
+    expect(nextStep(view(runs), runs, [], [], AUTOSTART_DEFAULTS, [], new Date(NOW))?.kind).not.toBe("reporter");
+  });
+
+  it("adds no count when the person is waited on for one thing only", () => {
+    const runs = [run("b", "build", "needsPermission", { needs: "git push origin ca-401" })];
+    expect(next(runs)?.text).not.toContain("more waiting");
+  });
+
   it("outranks a run that works: the person is the one being waited on", () => {
     const runs = [run("b", "build", "working"), run("q", "review", "needsAnswer", { needs: "Which file?" })];
     expect(next(runs)?.kind).toBe("waiting");

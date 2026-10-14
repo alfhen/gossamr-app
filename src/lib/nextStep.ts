@@ -2,7 +2,7 @@ import { decideAutostart, ruleOn, type AutostartInput, type ReviewFinding } from
 import { slotPosition, slotQueue, ordinal } from "../workspace/agentsLogic";
 import { ALLOW_MORE_STEPS, AUTOSTART_DEFAULTS, HELD_BUDGET, type AutoStartSwitches, type Proposal, type Run, type RunKind, type WorkstreamEvent, type WorkstreamRule, type WorkstreamView } from "../types";
 import { byRank, type Need } from "./needs";
-import { nudgeOffered, nudgeText, waitedDays, waitingOnReporterText } from "./reporterWait";
+import { agoText, nudgeOffered, nudgeText, waitedDays, waitingOnReporterText } from "./reporterWait";
 import { shortHeld, stepsLeftText, ruleText } from "./workstreamHold";
 import { byQueue, reviewPosted, STAGE_LABEL } from "./workstreamStage";
 
@@ -133,17 +133,21 @@ export function nextStep(view: WorkstreamView, runs: readonly Run[], proposals: 
   // Anything that decides or unblocks stops the line at once. A draft to approve does not: a step in hand or about to
   // start (queued, or one a rule is about to start) comes first, and the draft is what the person waits on only once
   // nothing is going to happen on its own.
-  const blocking = own.find((n) => n.group !== "approve");
-  if (blocking) return step("waiting", `waiting on you. ${blocking.why}`, blocking);
+  // The plan's approval is what unblocks Build, so it is named before any other need, then the order of Needs you.
+  const blocking = own.find((n) => n.kind === "plan") ?? own.find((n) => n.group !== "approve");
+  const more = own.length > 1 ? ` (+${own.length - 1} more waiting)` : "";
+  if (blocking) return step("waiting", `waiting on you. ${blocking.why}${more}`, blocking);
   // Asked and posted: nothing starts on its own until the reporter answers, the ticket changes or the person chooses. A step in hand carries on first.
   if (view.waitingOnReporter && going.length === 0) {
     const nudge = nudgeOffered(view.waitingOnReporter, now, proposals, ws.id);
     const said = waitingOnReporterText(view.waitingOnReporter.since, now);
     return { ...step("reporter", nudge ? `${said} ${nudgeText(waitedDays(view.waitingOnReporter.since, now))}` : said), ...(nudge ? { nudge } : {}) };
   }
+  // The reporter answered and the person has not chosen since: the answer is what the line says, not "nothing starts on its own".
+  if (view.reporterReplied && going.length === 0) return step("reporter", `the reporter replied${view.reporterRepliedAt ? ` ${agoText(view.reporterRepliedAt, now)}` : ""}; read it, then Looks fine or ask again.`);
   const approve = own[0];
   const line = chain(view, runs, proposals, globals, mine, going, step, events);
-  if (approve && line.kind !== "slot" && line.kind !== "auto" && line.kind !== "depends") return step("waiting", `waiting on you. ${approve.why}`, approve);
+  if (approve && line.kind !== "slot" && line.kind !== "auto" && line.kind !== "depends") return step("waiting", `waiting on you. ${approve.why}${more}`, approve);
   return line;
 }
 

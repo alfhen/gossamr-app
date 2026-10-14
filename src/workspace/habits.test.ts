@@ -11,7 +11,7 @@ import { useWorkspace } from "../workspaceStore";
 import { giveBackClarity } from "./clarityActions";
 import { usePipHome } from "./pipHomeStore";
 import { usePrefs } from "./prefs";
-import { useToasts } from "./toasts";
+import { pushLearning, useToasts } from "./toasts";
 import { currentNeeds } from "./useNeeds";
 import { useWorkstreams } from "./workstreamsStore";
 
@@ -152,9 +152,8 @@ describe("what Looks fine teaches the clarity notice", () => {
     await useWorkstreams.getState().looksFine(a);
     await useWorkstreams.getState().looksFine(b);
     expect(usePrefs.getState().clarityLearning).toEqual({ CA: { short: 2, done: 2, scope: 2, who: 2 } });
-    // The first and second say how many more it takes.
+    // The first and second say how many more it takes; the second replaces the first, which is out of date.
     expect(texts()).toEqual([
-      "Noted. After 2 more Looks fine on CA tickets like this, Gossamr stops flagging them (Settings > Unclear tickets).",
       "Noted. After 1 more Looks fine on CA tickets like this, Gossamr stops flagging them (Settings > Unclear tickets).",
     ]);
     useToasts.getState().clear();
@@ -183,7 +182,39 @@ describe("what Looks fine teaches the clarity notice", () => {
     expect(texts()).toHaveLength(1);
     expect(texts()[0]).toMatch(/^Gossamr will stop flagging CA /);
     expect(await giveBackClarity("CA")).toBe(1);
-    expect(texts()).toEqual(["Gossamr will flag unclear CA tickets as before."]);
+    expect(texts()).toEqual(["Gossamr will flag new unclear CA tickets as before."]);
+  });
+
+  it("three Looks fine in a row leave 'stopped flagging' on screen, never the 'After N more' counters", async () => {
+    const ids = await dismissAll(thinTickets);
+    for (const id of ids) await useWorkstreams.getState().looksFine(id);
+    expect(texts()).toHaveLength(1);
+    expect(texts()[0]).toMatch(/^Gossamr will stop flagging CA /);
+  });
+
+  it("Give back all retires the 'After N more' counter that was on screen, and says what stays dismissed", async () => {
+    const [a] = await dismissAll(thinTickets);
+    await useWorkstreams.getState().looksFine(a);
+    expect(texts()[0]).toMatch(/^Noted\. After 2 more/);
+    usePrefs.setState({ clarityLearning: { CA: { who: 3 } } });
+    expect(await giveBackClarity()).toBe(1);
+    expect(texts()).toEqual(["Gossamr will flag new unclear tickets as before in every project."]);
+  });
+
+  it("a note about giving back several projects is replaced by a later note about any one of them", () => {
+    pushLearning(["CA", "WEB"], "Gossamr will flag new unclear tickets as before in every project.");
+    pushLearning("WEB", "Noted. After 2 more Looks fine on WEB tickets like this, Gossamr stops flagging it.");
+    expect(texts()).toEqual(["Noted. After 2 more Looks fine on WEB tickets like this, Gossamr stops flagging it."]);
+  });
+
+  it("a counter is not news once the count moved on", async () => {
+    const [a, b] = await dismissAll(thinTickets);
+    await useWorkstreams.getState().looksFine(a);
+    const first = useToasts.getState().toasts[0];
+    expect(first.current?.()).toBe(true);
+    usePrefs.setState({ clarityLearning: {} });
+    expect(first.current?.()).toBe(false);
+    void b;
   });
 
   it("applies to the project only: another project's ticket is still flagged, and the learned ones' notice is left out by the page", async () => {
@@ -227,7 +258,7 @@ describe("what Looks fine teaches the clarity notice", () => {
     expect(await giveBackClarity("CA")).toBe(1);
     expect(usePrefs.getState().clarityLearning).toEqual({ WEB: { done: 4 }, SUP: { scope: 1 } });
     expect(events(id).find((e) => e.action === "clarity_reset")).toMatchObject({ actor: "person", detail: "CA" });
-    expect(texts()).toEqual(["Gossamr will flag unclear CA tickets as before."]);
+    expect(texts()).toEqual(["Gossamr will flag new unclear CA tickets as before."]);
     // WEB has no open workstream: given back, with no audit line to write it in.
     expect(await giveBackClarity()).toBe(1);
     expect(usePrefs.getState().clarityLearning).toEqual({});
@@ -260,6 +291,9 @@ describe("what Looks fine teaches the clarity notice", () => {
     useToasts.getState().clear();
     expect(await giveBackClarity()).toBe(1);
     expect(usePrefs.getState().clarityLearning).toEqual({ CA: { who: 3 } });
+    // It names the project it reset, not "every project": CA still has its learning.
+    expect(texts()).toContain("Gossamr will flag new unclear WEB tickets as before.");
+    expect(texts().some((t) => t.includes("every project"))).toBe(false);
     note.mockRestore();
     useToasts.getState().clear();
     expect(await giveBackClarity("CA")).toBe(1);
@@ -277,9 +311,8 @@ describe("what Looks fine teaches the clarity notice", () => {
   it("clears the 'will stop flagging' notes only of the projects it reset, not one whose audit failed", async () => {
     usePrefs.setState({ clarityLearning: { CA: { who: 3 }, WEB: { done: 4 } } });
     await open("CA-402");
-    const say = useToasts.getState().push;
-    say("Gossamr will stop flagging CA tickets that don't say who asked for it. Give that back.", "info");
-    say("Gossamr will stop flagging WEB tickets that don't say what done looks like. Give that back.", "info");
+    pushLearning("CA", "Gossamr will stop flagging CA tickets that don't say who asked for it. Give that back.");
+    pushLearning("WEB", "Gossamr will stop flagging WEB tickets that don't say what done looks like. Give that back.");
     vi.spyOn(backend, "workstreamsClarityNote").mockRejectedValue(new Error("down"));
     expect(await giveBackClarity()).toBe(1);
     expect(usePrefs.getState().clarityLearning).toEqual({ CA: { who: 3 } });

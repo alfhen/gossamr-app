@@ -3,7 +3,10 @@ import { editedWords, jiraSent, SENT_LABEL, type SentEntry } from "../lib/jiraSe
 import { useWorkspace } from "../workspaceStore";
 import { DayHeading, EmptyNote } from "./ActivityView";
 import { groupByDay } from "./activityLogic";
+import { useAgentsFlag } from "./agentsFlag";
+import { useEscToPipHome } from "./escHome";
 import { workspaceTicketLinks } from "./jump";
+import { useTabs } from "./tabsStore";
 import { openOnPipHome, useWorkstreams } from "./workstreamsStore";
 
 const link = "rounded px-1 text-ws-ink2 underline decoration-ws-sep2 underline-offset-2 hover:bg-ws-hover focus-visible:outline-2 focus-visible:outline-ws-pip";
@@ -74,6 +77,7 @@ export function SentRow({ entry: e, onTicket, onWorkstream }: { entry: SentEntry
  * drafts and the workstreams' audit (`jiraSent`). It reads and writes nothing else.
  */
 export function JiraSentView() {
+  useEscToPipHome(useAgentsFlag((s) => s.enabled));
   const proposals = useWorkspace((s) => s.proposals);
   const open = useWorkstreams((s) => s.list);
   const closed = useWorkstreams((s) => s.closed);
@@ -92,6 +96,9 @@ export function JiraSentView() {
   return (
     <div data-jira-sent className="flex h-full min-h-0 flex-col">
       <header className="flex flex-wrap items-baseline gap-x-4 gap-y-1 border-b border-ws-sep px-6 py-2.5">
+        <button type="button" data-sent-back onClick={() => useTabs.getState().setRoute("pip")} className={`${link} text-sm`}>
+          ← Pip home
+        </button>
         <h2 className="m-0 text-base font-semibold">What Jira saw from me</h2>
         <p className="m-0 text-sm text-ws-ink3">Everything Gossamr posted to Jira after you approved it. This page only shows it; it posts nothing.</p>
       </header>

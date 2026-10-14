@@ -71,7 +71,7 @@ describe("What Jira saw from me", () => {
     const out = jiraSent({ proposals: [edited, pipOnly], events: {}, workstreams: [] });
     expect(Object.fromEntries(out.map((e) => [e.id, e.edited]))).toEqual({ a: true, b: false });
     expect(editedWords({ madeBy: "Pip", edited: true })).toBe("Pip drafted it; you edited it before approving");
-    expect(editedWords({ madeBy: "Pip", edited: false })).toBe("Pip drafted it; posted as drafted");
+    expect(editedWords({ madeBy: "Pip", edited: false })).toBe("Pip drafted it; posted without changes");
     expect(editedWords({ madeBy: "You", edited: false })).toBe("You wrote it");
     expect(editedWords({ madeBy: "You", edited: true })).toBe("You wrote it and edited it before approving");
   });
@@ -90,5 +90,24 @@ describe("What Jira saw from me", () => {
     const update = draft("u", { type: "update", item: ref("CA-3"), patch: { assignee: null, parent: null, priority: "high" } });
     const out = Object.fromEntries(jiraSent({ proposals: [create, link, update], events: {}, workstreams: [] }).map((e) => [e.id, [e.kind, e.summary, e.ticketKey]]));
     expect(out).toEqual({ n: ["ticket", "Created “Fix it”", "CA-500"], l: ["link", "Linked CA-1 blocks CA-2", "CA-1"], u: ["change", "Changed the priority to high", "CA-3"] });
+  });
+});
+
+describe("what the row shows of a comment to the reporter", () => {
+  const asked = (id: string, text: string) => draft(id, comment("CA-401", text), { createdBy: "user", label: "Questions for the reporter", updatedAt: ago(Number(id.slice(1))) });
+  const first = "Hi Mette,\n\nBefore CA-401 can be planned we need a few things cleared up:\n\n- What is the goal?";
+  const again = "Hi Mette,\n\nThanks for your answer above. Before CA-401 can be planned, a few things are still open:\n\n- What is in scope?";
+
+  it("skips the greeting line in the short preview and keeps it in the whole", () => {
+    const [e] = jiraSent({ proposals: [asked("a1", first)], events: {}, workstreams: [] });
+    expect(e.summary).toBe("Before CA-401 can be planned we need a few things cleared up:");
+    expect(e.detail[0]).toBe("Hi Mette,");
+    expect(sentWhat(comment("CA-401", "Hi,"), null)!.summary).toBe("Hi,");
+    expect(sentWhat(comment("CA-401", "Hello there, I moved this."), null)!.summary).toBe("Hello there, I moved this.");
+  });
+
+  it("calls a second ask after a reply a follow-up, not the same row twice", () => {
+    const out = jiraSent({ proposals: [asked("a8", first), asked("a2", again)], events: {}, workstreams: [] });
+    expect(out.map((e) => e.label)).toEqual(["Follow-up questions to the reporter", "Questions to the reporter"]);
   });
 });

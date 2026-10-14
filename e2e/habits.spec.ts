@@ -230,7 +230,7 @@ test.describe("What Jira saw from me", () => {
     await expect(rows.nth(0)).toHaveAttribute("data-sent-kind", "comment");
     await expect(rows.nth(0).locator("[data-sent-edited]")).toHaveText("Gossamr drafted it; you edited it before approving");
     await expect(rows.nth(0).locator("[data-sent-edited]")).toHaveAttribute("data-sent-edited", "yes");
-    await expect(rows.nth(1).locator("[data-sent-edited]")).toHaveText("Gossamr drafted it; posted as drafted");
+    await expect(rows.nth(1).locator("[data-sent-edited]")).toHaveText("Gossamr drafted it; posted without changes");
     await expect(rows.nth(1).locator("[data-sent-edited]")).toHaveAttribute("data-sent-edited", "no");
     await expect(rows.nth(0).locator("[data-sent-from]")).toContainText("in the workstream CA-409");
 
@@ -295,7 +295,7 @@ test.describe("the clarity notice learns from Looks fine", () => {
     await expect(learned.locator('[data-clarity-project="CA"]')).toContainText("short description");
     await learned.locator('[data-clarity-project="CA"]').getByRole("button", { name: "Give back all" }).click();
     await expect(learned).toContainText("Nothing learned yet.");
-    await expectToast(page, "Gossamr will flag unclear CA tickets as before.");
+    await expectToast(page, "Gossamr will flag new unclear CA tickets as before.");
     expect((await actions(page, "clarity_reset")).map((e) => [e.actor, e.detail])).toEqual([["person", "CA"]]);
     // CA-208's notice is back, since the gaps are flagged again.
     await openPipHome(page);

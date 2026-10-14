@@ -713,7 +713,7 @@ describe("timeline: the reporter's reply on the ticket", () => {
     const at = iso(30);
     const got = timeline({ ticketKey: "CA-401", reporterRepliedAt: at });
     expect(got).toHaveLength(1);
-    expect(got[0]).toMatchObject({ kind: "audit", at, text: "The reporter replied on the ticket", ticketKey: "CA-401", decision: false, target: null });
+    expect(got[0]).toMatchObject({ kind: "audit", at, text: "The reporter replied on the ticket", ticketKey: "CA-401", decision: false, attention: true, target: null });
   });
 
   it("sits among the other entries by its time, and is absent without one", () => {

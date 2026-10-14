@@ -64,6 +64,8 @@ export interface TimelineEntry {
   needKey: string | null;
   /** Something the person decided, or is asked to decide: what the Decisions filter shows. */
   decision: boolean;
+  /** News that waits on the person's reading, not a decision: drawn in the accent of the person's own lines. */
+  attention?: boolean;
   /** The turn's request id, for `said` and `pip`; for a draft Pip made answering a question, that question's. */
   turnId?: string;
   /** The run's id, for `run`. */
@@ -392,7 +394,7 @@ export function timeline(input: TimelineInput): TimelineEntry[] {
 
   // A reporter answers on the ticket, which leaves no audit line: the wait's end is told from the comment's time.
   if (reporterRepliedAt && Number.isFinite(time(reporterRepliedAt))) {
-    out.push({ key: `audit:reply:${reporterRepliedAt}`, kind: "audit", at: reporterRepliedAt, updatedAt: reporterRepliedAt, ticketKey, text: "The reporter replied on the ticket", target: null, needKey: null, decision: false, actor: "supervisor", action: "reporter_replied", order: order++ });
+    out.push({ key: `audit:reply:${reporterRepliedAt}`, kind: "audit", at: reporterRepliedAt, updatedAt: reporterRepliedAt, ticketKey, text: "The reporter replied on the ticket", target: null, needKey: null, decision: false, attention: true, actor: "supervisor", action: "reporter_replied", order: order++ });
   }
 
   // When things happened, except that an effect never stands before its cause: a draft a run left, or what was done to a

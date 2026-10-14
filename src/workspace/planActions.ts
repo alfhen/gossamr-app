@@ -10,7 +10,7 @@ export function showPlanMyWeek() {
   let tries = 0;
   const focus = () => {
     const card = document.querySelector<HTMLElement>("[data-plan-my-week]");
-    if (card) return card.focus();
+    if (card) return (card.querySelector<HTMLElement>("[data-plan-pick]") ?? card).focus();
     if (++tries < 60) requestAnimationFrame(focus);
   };
   requestAnimationFrame(focus);

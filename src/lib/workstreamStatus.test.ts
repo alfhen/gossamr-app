@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { HELD_ALL, HELD_BUDGET, HELD_DAILY, HELD_PERSON, HELD_QUOTA, HELD_RESTART, TRIPWIRE, TRIPWIRES } from "../types";
 import type { Run, WorkstreamView } from "../types";
 import { NUDGE_AFTER_DAYS } from "./reporterWait";
-import { EMPTY_FILTER, QUIET_DAYS, STATUS_HINT, STATUS_ORDER, UNCLEAR_DETAIL, statusFromWords, workstreamStatus, type StatusMore } from "./workstreamStatus";
+import { EMPTY_FILTER, QUIET_DAYS, REPLIED_DETAIL, STATUS_HINT, STATUS_ORDER, UNCLEAR_DETAIL, statusFromWords, workstreamStatus, type StatusMore } from "./workstreamStatus";
 import type { WorkstreamWither } from "./workstreamWither";
 
 const NOW = new Date("2026-10-13T09:00:00Z");
@@ -57,6 +57,13 @@ describe("workstreamStatus: every state", () => {
     expect(at(view(), [], { runs: [run("done")] }).state).toBe("idle");
     // Only the workstream's own runs.
     expect(at(view(), [], { runs: [run("working", "build", { id: "r9" })] }).state).toBe("idle");
+  });
+
+  it("Idle says the reporter replied once they have, in place of 'may be unclear'", () => {
+    const thin = view({ clarity: { gaps: ["short"] }, reporterReplied: true } as Partial<WorkstreamView>);
+    expect(at(thin)).toMatchObject({ state: "idle", detail: REPLIED_DETAIL });
+    expect(REPLIED_DETAIL).toBe("reporter replied");
+    expect(at(view({ clarity: { gaps: ["short"] } } as Partial<WorkstreamView>)).detail).toBe(UNCLEAR_DETAIL);
   });
 
   it("Idle says it may be unclear while the word check notice stands: a notice, never a need, so the word stays Idle", () => {

@@ -53,6 +53,12 @@ describe("the comment to the reporter", () => {
     for (const part of ["- What is the goal?", "acceptance criteria", "in scope, and what is out", "who is waiting on it"]) expect(none).toContain(part);
   });
 
+  it("thanks the reporter and says what is still open once they have replied, the same words Rust drafts", () => {
+    const again = reporterComment("CA-401", "Kim Ode", questions, true);
+    expect(again).toBe("Hi @Kim Ode,\n\nThanks for your answer above. Before CA-401 can be planned, a few things are still open:\n\n- What does done look like?\n- Who is waiting on it?\n\nCould you answer these here on the ticket? Thanks.");
+    expect(again).not.toBe(reporterComment("CA-401", "Kim Ode", questions));
+  });
+
   it("makes the reporter's greeting a real mention when they are known", () => {
     const person = { connectionId: "mock", accountId: "mette" };
     const doc = reporterDoc(reporterComment("CA-401", "Mette Lund", questions), { person, name: "Mette Lund" });

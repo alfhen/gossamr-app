@@ -352,14 +352,18 @@ pub fn readiness_of(ws: &Workstream, runs: &[Run], readiness: impl Fn(&Run) -> O
 pub const READINESS_LABEL: &str = proposals::READINESS_COMMENT_LABEL;
 
 /// The comment `ask_reporter` drafts: a fixed frame around the questions the Triage listed, or around the four things a
-/// ticket needs when it listed none.
-pub fn reporter_comment(key: &str, reporter: Option<&str>, questions: &[String]) -> String {
+/// ticket needs when it listed none. When the reporter has answered since the last ask (`replied`), the frame thanks them
+/// for it and says what is still open, instead of repeating the first ask word for word.
+pub fn reporter_comment(key: &str, reporter: Option<&str>, questions: &[String], replied: bool) -> String {
     let hello = reporter.map_or_else(|| "Hi,".to_string(), |name| format!("Hi @{name},"));
     let asks = if questions.is_empty() {
         "- What is the goal?\n- How will we know it is done (the acceptance criteria)?\n- What is in scope, and what is out?\n- Who asked for it, and who is waiting on it?".to_string()
     } else {
         questions.iter().map(|q| format!("- {q}")).collect::<Vec<_>>().join("\n")
     };
+    if replied {
+        return format!("{hello}\n\nThanks for your answer above. Before {key} can be planned, a few things are still open:\n\n{asks}\n\nCould you answer these here on the ticket? Thanks.");
+    }
     format!("{hello}\n\nBefore {key} can be planned we need a few things cleared up:\n\n{asks}\n\nCould you answer them here on the ticket? Thanks.")
 }
 
@@ -928,7 +932,8 @@ impl Core {
         // The reporter is mentioned when the cache knows them; without, the comment is addressed to nobody in particular.
         let reporter = self.ticket_for_pip(scope, &item.key).await.ok().and_then(|(t, _)| t.reporter);
         let people: Vec<_> = reporter.iter().map(|p| (crate::domain::PersonRef { connection_id: item.connection_id.clone(), account_id: p.account_id.clone() }, p.name.clone())).collect();
-        let body = crate::tracker::comment_doc(&reporter_comment(&item.key, reporter.as_ref().map(|p| p.name.as_str()), &stop.questions), &people);
+        let replied = self.workstream(scope, id).await?.is_some_and(|v| v.reporter_replied);
+        let body = crate::tracker::comment_doc(&reporter_comment(&item.key, reporter.as_ref().map(|p| p.name.as_str()), &stop.questions, replied), &people);
         let proposal = self.draft_from_run(&run, Intent::Comment { item, body }, READINESS_LABEL.into()).await?;
         self.record_workstream_event(scope, WorkstreamEvent::new(id, Actor::Person, "readiness_asked", Utc::now()).run(triage).proposal(&proposal.id)).await?;
         Ok(proposal)
@@ -980,7 +985,8 @@ impl Core {
         let item = Core::item(scope, &key);
         let reporter = self.ticket_for_pip(scope, &key).await.ok().and_then(|(t, _)| t.reporter);
         let people: Vec<_> = reporter.iter().map(|p| (crate::domain::PersonRef { connection_id: item.connection_id.clone(), account_id: p.account_id.clone() }, p.name.clone())).collect();
-        let body = crate::tracker::comment_doc(&reporter_comment(&key, reporter.as_ref().map(|p| p.name.as_str()), &clarity_questions(&gaps)), &people);
+        let replied = self.workstream(scope, id).await?.is_some_and(|v| v.reporter_replied);
+        let body = crate::tracker::comment_doc(&reporter_comment(&key, reporter.as_ref().map(|p| p.name.as_str()), &clarity_questions(&gaps), replied), &people);
         let draft = proposals::Draft { origin: Origin::Chat { request_id: format!("clarity:{id}"), workstream: Some(id.to_string()) }, created_by: CreatedBy::User, intent: Intent::Comment { item, body }, label: Some(READINESS_LABEL.into()), basis: None };
         let proposal = self.propose(scope, draft).await?;
         self.record_workstream_event(scope, WorkstreamEvent::new(id, Actor::Person, "clarity_asked", Utc::now()).proposal(&proposal.id)).await?;
@@ -1718,11 +1724,21 @@ mod tests {
         fn the_reporter_comment_is_a_fixed_frame_around_the_questions_or_around_the_four_things_when_there_are_none() {
             let questions = vec!["What does done look like?".to_string(), "Who is waiting on it?".to_string()];
             assert_eq!(
-                reporter_comment("CA-401", Some("Kim Ode"), &questions),
+                reporter_comment("CA-401", Some("Kim Ode"), &questions, false),
                 "Hi @Kim Ode,\n\nBefore CA-401 can be planned we need a few things cleared up:\n\n- What does done look like?\n- Who is waiting on it?\n\nCould you answer them here on the ticket? Thanks."
             );
-            let none = reporter_comment("CA-401", None, &[]);
+            let none = reporter_comment("CA-401", None, &[], false);
             assert!(none.starts_with("Hi,\n") && none.contains("- What is the goal?") && none.contains("acceptance criteria") && none.contains("in scope, and what is out") && none.contains("who is waiting on it"), "{none}");
+        }
+
+        #[test]
+        fn after_a_reply_the_reporter_comment_thanks_them_and_says_what_is_still_open() {
+            let questions = vec!["What does done look like?".to_string()];
+            assert_eq!(
+                reporter_comment("CA-401", Some("Kim Ode"), &questions, true),
+                "Hi @Kim Ode,\n\nThanks for your answer above. Before CA-401 can be planned, a few things are still open:\n\n- What does done look like?\n\nCould you answer these here on the ticket? Thanks."
+            );
+            assert_ne!(reporter_comment("CA-401", None, &questions, true), reporter_comment("CA-401", None, &questions, false));
         }
     }
 
