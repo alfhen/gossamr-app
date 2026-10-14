@@ -122,6 +122,15 @@ async function toBuild(page: Page) {
 }
 
 /** A workstream on CA-401 allowed `steps` automatic steps, which the investigation and its triage use up: held for its budget. */
+/** The toasts, the open pane, the hold and the audit, as text: what a failed Allow 5 more leaves behind for its log. */
+async function budgetState(page: Page): Promise<string> {
+  const toasts = await page.locator("[data-toast]").allInnerTexts();
+  const pane = await needsPane(page).innerText({ timeout: 1_000 }).catch(() => "(no pane)");
+  const held = await pipHome(page).locator("[data-held-banner]").getAttribute("data-held-banner", { timeout: 1_000 }).catch(() => null);
+  const events = (await workstreamEvents(page)).map((e) => `${e.actor} ${e.action} ${e.detail ?? ""}`.trim());
+  return [`toasts: ${JSON.stringify(toasts)}`, `held banner: ${held ?? "none"}`, `pane: ${JSON.stringify(pane)}`, `audit: ${JSON.stringify(events)}`].join("\n");
+}
+
 async function spent(page: Page, steps = 2) {
   await openApp(page, MANAGED);
   await startWorkstream(page, "CA-401");
@@ -278,7 +287,12 @@ test.describe("B3: one budget unit, and running out becomes a question", () => {
     const before = Number(await needsYouCount(page).innerText());
     await needsPane(page).getByRole("button", { name: "Allow 5 more" }).click();
 
-    await expect(needOfKind(page, "budget")).toHaveCount(0);
+    // This has failed twice in CI and never locally; when it does, the log says what the page held, since CI's traces can't be read from here.
+    await expect(needOfKind(page, "budget"))
+      .toHaveCount(0)
+      .catch(async (e: Error) => {
+        throw new Error(`${e.message}\n\nWhat the page held when the budget need stayed:\n${await budgetState(page)}`);
+      });
     await expect(pipHome(page).locator("[data-held-banner]")).toHaveCount(0);
     await expect(needsYouCount(page)).toHaveText(String(before - 1));
     const events = await workstreamEvents(page);
