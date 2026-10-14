@@ -420,10 +420,16 @@ export async function holdAll(page: Page, by: "button" | "shortcut" = "button") 
 /** Pip home (src/workspace/PipHome.tsx): the workstreams, the conversation and the steps. */
 export const pipHome = (page: Page) => page.locator("[data-pip-home]");
 
-/** Opens Pip home with Cmd/Ctrl+0 and waits for its workstream list. */
+/**
+ * Opens Pip home with Cmd/Ctrl+0 and waits for its workstream list. Just after a load the key does nothing until the
+ * settings that enable agents have arrived, so it is pressed again until the list shows; it only ever opens Pip home.
+ */
 export async function openPipHome(page: Page) {
-  await page.keyboard.press("ControlOrMeta+0");
-  await expect(pipHome(page).getByRole("navigation", { name: "Workstreams" })).toBeVisible();
+  const list = pipHome(page).getByRole("navigation", { name: "Workstreams" });
+  await expect(async () => {
+    await page.keyboard.press("ControlOrMeta+0");
+    await expect(list).toBeVisible({ timeout: 1_000 });
+  }).toPass({ timeout: 10_000 });
 }
 
 /** The line at the head of Pip home's conversation naming it: "General", or "Workstream: <title> · <Stage>". */
