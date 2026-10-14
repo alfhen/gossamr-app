@@ -3,7 +3,7 @@ import { HELD_PERSON } from "../types";
 import type { PersonRef, WorkItem, WorkstreamView } from "../types";
 import type { Need } from "./needs";
 import { docFromText } from "./docs";
-import { WEEKS_KEPT, WEEK_PICKS, weekLabel, isoWeek, itemDone, itemOutcome, keepPlan, movePick, parseWeekPlans, planMyWeek, rankWeek, reopenItem, reopenedWithoutWorkstream, ticketPick, type PlanInput, type PlanItem } from "./planMyWeek";
+import { WEEKS_KEPT, WEEK_PICKS, weekLabel, isoWeek, itemDone, itemOutcome, keepPlan, movePick, parseWeekPlans, planMyWeek, rankWeek, liveWorkstreamOf, reopenItem, reopenedWithoutWorkstream, ticketPick, type PlanInput, type PlanItem } from "./planMyWeek";
 
 const NOW = new Date("2026-10-13T09:00:00Z");
 const ago = (days: number) => new Date(NOW.getTime() - days * 86_400_000).toISOString();
@@ -339,6 +339,16 @@ describe("the kept plan", () => {
     expect(reopenedWithoutWorkstream({ ...pick, reopened: false }, [closed])).toBe(false);
     expect(reopenedWithoutWorkstream(pick, [closed, ws("w9", "CA-1")])).toBe(false);
     expect(reopenedWithoutWorkstream(pick, [])).toBe(false);
+  });
+  it("leads an item to the open workstream on its ticket once its own closed, so Open goes where the work is", () => {
+    const pick: PlanItem = { id: "ws:w1", kind: "workstream", workstreamId: "w1", ticketKey: "CA-1", connectionId: "c", title: "CA-1 Thing", because: "x." };
+    expect(liveWorkstreamOf(pick, [ws("w1", "CA-1")])).toBe("w1");
+    // Its own is preferred while open, even with another on the ticket.
+    expect(liveWorkstreamOf(pick, [ws("w9", "CA-1"), ws("w1", "CA-1")])).toBe("w1");
+    expect(liveWorkstreamOf(pick, [ws("w1", "CA-1", {}, { closedAt: ago(1) }), ws("w9", "CA-1")])).toBe("w9");
+    expect(liveWorkstreamOf(pick, [ws("w1", "CA-1", {}, { closedAt: ago(1) })])).toBeNull();
+    // The same key on another connection is another ticket.
+    expect(liveWorkstreamOf(pick, [ws("w1", "CA-1", {}, { closedAt: ago(1) }), ws("w9", "CA-1", {}, { connectionId: "d" })])).toBeNull();
   });
   it("ticks only for the item's own connection: the same key on another connection is another ticket", () => {
     const done = { status: { id: "9", name: "Done", category: "done" } } as const;

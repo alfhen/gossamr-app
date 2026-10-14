@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Need } from "../lib/needs";
-import { WEEK_PICKS, isoWeek, itemOutcome, movePick, planMyWeek, reopenedWithoutWorkstream, ticketPick, weekLabel, type PlanItem } from "../lib/planMyWeek";
+import { WEEK_PICKS, isoWeek, itemOutcome, liveWorkstreamOf, movePick, planMyWeek, reopenedWithoutWorkstream, ticketPick, weekLabel, type PlanItem } from "../lib/planMyWeek";
 import type { WorkstreamWither } from "../lib/workstreamWither";
 import type { PersonRef, WorkItem } from "../types";
 import { useWorkspace } from "../workspaceStore";
@@ -337,8 +337,10 @@ export function PlanMyWeek({ needs, withers, now }: { needs: readonly Need[]; wi
   );
 }
 
-/** Opens what a kept item points at: its workstream while it is open, else its ticket. */
+/** Opens what a kept item points at: its workstream while it is open (or the open one on its ticket, once its own closed), else its ticket. */
 function openItem(item: PlanItem, done: boolean) {
+  const live = done ? null : liveWorkstreamOf(item, useWorkstreams.getState().list);
+  if (live) return openOnPipHome(live);
   if (item.workstreamId && !done) return openOnPipHome(item.workstreamId);
   if (item.ticketKey) return runDayAction({ type: "ticket", key: item.ticketKey });
   if (item.workstreamId) openOnPipHome(item.workstreamId);
@@ -417,7 +419,7 @@ export function ThisWeekView({
                   <span data-this-week-stopped className="shrink-0 text-xs text-ws-ink3">
                     workstream closed
                   </span>
-                  {onStart && (
+                  {onStart && p.ticketKey && (
                     <button type="button" data-this-week-start aria-label={`Start a workstream on ${p.title}`} onClick={() => onStart(p)} className="shrink-0 rounded px-1 text-xs text-ws-ink2 underline hover:bg-ws-hover focus-visible:outline-2 focus-visible:outline-ws-pip">
                       Start again
                     </button>

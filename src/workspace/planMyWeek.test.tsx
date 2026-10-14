@@ -194,6 +194,13 @@ describe("the This week list", () => {
     expect(renderToStaticMarkup(<ThisWeekView week="2026-W42" items={items} done={new Set()} onOpen={noop} onEdit={noop} onStart={noop} />)).not.toContain("data-this-week-stopped");
   });
 
+  it("does not offer Start again for a workstream without a ticket: there is nothing to start it on", () => {
+    const ticketless: PlanItem[] = [{ id: "ws:w5", kind: "workstream", workstreamId: "w5", ticketKey: null, title: "Spike on caching", because: "x.", reopened: true }];
+    const html = renderToStaticMarkup(<ThisWeekView week="2026-W42" items={ticketless} done={new Set()} stopped={new Set(["ws:w5"])} onOpen={noop} onEdit={noop} onStart={noop} />);
+    expect(html).toContain("workstream closed");
+    expect(html).not.toContain("data-this-week-start");
+  });
+
   it("lets a closed title wrap in a readable colour, and caps the section so Workstreams keeps room (G22)", () => {
     const html = renderToStaticMarkup(<ThisWeekView week="2026-W42" items={items} done={new Set()} closed={new Set(["ws:w2"])} onOpen={noop} onEdit={noop} />);
     const closedTitle = /<button[^>]*aria-label="Closed, not done: CA-2 Something"[^>]*>/.exec(html)![0];

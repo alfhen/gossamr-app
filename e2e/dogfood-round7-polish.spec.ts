@@ -77,8 +77,8 @@ test.describe("the reporter's questions and reply (G15, G24, G26, G29)", () => {
     // G29: the second ask is a line of its own, not "(2 times)".
     await askAndPost(page, 2);
     await expect(timeline(page)).not.toContainText(/\(\d+ times\)/);
-    const asks = timeline(page).locator("[data-timeline-line]", { hasText: /asked the reporter|reporter/i });
-    expect(await asks.count()).toBeGreaterThanOrEqual(2);
+    const asks = timeline(page).locator("[data-timeline-line]").filter({ hasNotText: "The reporter replied" }).filter({ hasText: /reporter/i });
+    await expect.poll(() => asks.count()).toBeGreaterThanOrEqual(2);
   });
 });
 
@@ -202,6 +202,7 @@ test.describe("the Decide pane moves on (G19)", () => {
     await expect(homeConversation(page)).toHaveText(/^Workstream: CA-401 /);
     await expect(needsPane(page)).toHaveCount(0);
     await expect(workstreamRow(page, "CA-401")).toHaveAttribute("aria-selected", "true");
+    await expect(workstreamRow(page, "CA-401")).toBeFocused();
   });
 });
 

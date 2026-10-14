@@ -38,6 +38,13 @@ function rowFor(need: Need): HTMLElement | null {
   return document.querySelector<HTMLElement>(`${list} [data-need-key="${CSS.escape(need.key)}"]`) ?? document.querySelector<HTMLElement>(`${list} [data-needs-you-group="${groupId(need.workstreamId)}"]`);
 }
 
+/** "Now: <workstream>" on the Done line: closes the decision, opens that workstream on Pip home and puts the keyboard on its row once it shows. */
+function backTo(workstreamId: string) {
+  usePipHome.getState().closeDecision();
+  openOnPipHome(workstreamId);
+  requestAnimationFrame(() => document.querySelector<HTMLElement>(`[data-workstream-row="${CSS.escape(workstreamId)}"]`)?.focus());
+}
+
 /**
  * Where the keyboard goes once a need is dealt with: the next need in rank order opens in the pane when the pane was on
  * the one dealt with; from a row of the list it lands on the next row. With none left it lands on the list's title,
@@ -770,7 +777,7 @@ export function NeedsPane({ needs }: { needs: readonly Need[] }) {
         <p key={advanced.id} role="status" data-needs-advanced className="m-0 shrink-0 border-b border-ws-sep bg-ws-bar px-3 py-1 text-sm text-ws-ink2 [overflow-wrap:anywhere]">
           {advanced.back ? (
             <>
-              <button type="button" data-needs-advanced-back onClick={() => (usePipHome.getState().closeDecision(), openOnPipHome(advanced.back!.workstreamId))} className="rounded text-left underline underline-offset-2 hover:text-ws-pip focus-visible:outline-2 focus-visible:outline-ws-pip">
+              <button type="button" data-needs-advanced-back onClick={() => backTo(advanced.back!.workstreamId)} className="rounded text-left underline underline-offset-2 hover:text-ws-pip focus-visible:outline-2 focus-visible:outline-ws-pip">
                 {advanced.back.label}
               </button>
               {advanced.text.slice(advanced.back.label.length)}

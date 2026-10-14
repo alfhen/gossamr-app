@@ -311,6 +311,12 @@ export function reopenedWithoutWorkstream(item: PlanItem, workstreams: readonly 
   return mine.length > 0 && mine.every((v) => v.workstream.closedAt !== null);
 }
 
+/** The open workstream a kept item leads to: its own while that is open, else another open one on its ticket (the item's own closed and one was started again), else none. */
+export function liveWorkstreamOf(item: PlanItem, workstreams: readonly WorkstreamView[]): string | null {
+  const open = workstreamsOf(item, workstreams).filter((v) => v.workstream.closedAt === null);
+  return (open.find((v) => v.workstream.id === item.workstreamId) ?? open[0])?.workstream.id ?? null;
+}
+
 /** `plans` with item `id` of `week` taken back (`reopened`), so it is open again in the list; nothing else changes. */
 export function reopenItem(plans: WeekPlans, week: string, id: string): WeekPlans {
   const plan = plans[week];
