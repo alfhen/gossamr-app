@@ -47,8 +47,6 @@ interface ToastState {
   hold(id: number): void;
   /** Starts a held toast's clock again, for its whole lifetime. */
   release(id: number): void;
-  /** On leaving a screen: drops the notes waiting behind the one on screen. An error or an offer to undo stays. */
-  dropWaitingNotes(): void;
   clear(): void;
 }
 
@@ -133,10 +131,6 @@ export const useToasts = create<ToastState>((set, get) => {
       const head = get().toasts[0];
       if (!head || head.id !== id || timed?.timer) return;
       timed = { id, timer: setTimeout(() => get().dismiss(id), head.lifetime ?? LIFETIME_MS[head.tone]) };
-    },
-    dropWaitingNotes() {
-      set((s) => ({ toasts: s.toasts.filter((t, i) => i === 0 || t.tone === "error" || t.keep) }));
-      arm();
     },
     clear() {
       set({ toasts: [] });

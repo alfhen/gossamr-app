@@ -354,17 +354,6 @@ describe("the toast queue", () => {
       expect(texts()).toEqual([]);
     });
 
-    it("drops the notes waiting behind the one on screen when the person leaves for another screen, but never an error or an offer to undo", () => {
-      useToasts.getState().push("on screen", "info");
-      useToasts.getState().push("note", "info");
-      useToasts.getState().push("another note", "info");
-      useToasts.getState().push("Couldn't post it");
-      useToasts.getState().push("Skipped the draft. Undo", "info", undefined, { keep: true });
-      useToasts.getState().dropWaitingNotes();
-      // The offer to undo came to the front, so it is the one on screen; the notes behind it went, the error stayed.
-      expect(texts()).toEqual(["Skipped the draft. Undo", "Couldn't post it"]);
-    });
-
     it("drops a note that waited too long behind another rather than show it late, but never an error", () => {
       useToasts.getState().push("Watching 4 repositories", "info");
       useToasts.getState().push("Agent started on CA-402", "info");
