@@ -14,7 +14,7 @@ export function escIsElsewhere(ev: Pick<KeyboardEvent, "key" | "defaultPrevented
 export const escTarget = (agentsEnabled: boolean): Route => (agentsEnabled ? "pip" : "workspace");
 
 /** Esc on a full page (Sent, Settings) goes back to `escTarget`, wherever the keyboard is on the page (including <body>). */
-export function useEscToPipHome(agentsEnabled = true) {
+export function useEscToPipHome(agentsEnabled: boolean) {
   useEffect(() => {
     const onKey = (ev: KeyboardEvent) => {
       if (escIsElsewhere(ev)) return;
