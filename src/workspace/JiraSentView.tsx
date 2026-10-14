@@ -3,6 +3,7 @@ import { editedWords, jiraSent, SENT_LABEL, type SentEntry } from "../lib/jiraSe
 import { useWorkspace } from "../workspaceStore";
 import { DayHeading, EmptyNote } from "./ActivityView";
 import { groupByDay } from "./activityLogic";
+import { useAgentsFlag } from "./agentsFlag";
 import { useEscToPipHome } from "./escHome";
 import { workspaceTicketLinks } from "./jump";
 import { useTabs } from "./tabsStore";
@@ -76,7 +77,7 @@ export function SentRow({ entry: e, onTicket, onWorkstream }: { entry: SentEntry
  * drafts and the workstreams' audit (`jiraSent`). It reads and writes nothing else.
  */
 export function JiraSentView() {
-  useEscToPipHome();
+  useEscToPipHome(useAgentsFlag((s) => s.enabled));
   const proposals = useWorkspace((s) => s.proposals);
   const open = useWorkstreams((s) => s.list);
   const closed = useWorkstreams((s) => s.closed);

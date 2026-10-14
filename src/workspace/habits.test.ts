@@ -201,6 +201,12 @@ describe("what Looks fine teaches the clarity notice", () => {
     expect(texts()).toEqual(["Gossamr will flag new unclear tickets as before in every project."]);
   });
 
+  it("a note about giving back several projects is replaced by a later note about any one of them", () => {
+    pushLearning(["CA", "WEB"], "Gossamr will flag new unclear tickets as before in every project.");
+    pushLearning("WEB", "Noted. After 2 more Looks fine on WEB tickets like this, Gossamr stops flagging it.");
+    expect(texts()).toEqual(["Noted. After 2 more Looks fine on WEB tickets like this, Gossamr stops flagging it."]);
+  });
+
   it("a counter is not news once the count moved on", async () => {
     const [a, b] = await dismissAll(thinTickets);
     await useWorkstreams.getState().looksFine(a);
