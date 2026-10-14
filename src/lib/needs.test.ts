@@ -660,10 +660,10 @@ describe("needGroups", () => {
 
 describe("needAfter", () => {
   const key = (k: string) => ({ key: k });
-  it("goes to the need that followed the one dealt with, else the one before it, else the first", () => {
+  it("goes to the need that followed the one dealt with, else the top one left, else the first", () => {
     const before = ["a", "b", "c", "d"];
     expect(needAfter(before, "b", [key("a"), key("c"), key("d")])?.key).toBe("c");
-    expect(needAfter(before, "d", [key("a"), key("b"), key("c")])?.key).toBe("c");
+    expect(needAfter(before, "d", [key("a"), key("b"), key("c")])?.key).toBe("a");
     expect(needAfter(before, "b", [key("c"), key("a")])?.key).toBe("c");
     expect(needAfter(before, "x", [key("z"), key("a")])?.key).toBe("z");
     expect(needAfter(before, "a", [])).toBeNull();

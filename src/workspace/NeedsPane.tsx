@@ -98,13 +98,22 @@ function useAdvance(needs: readonly Need[], onAdvance: (done: Need, next: Need) 
 }
 
 /** The line over the pane once it moved on by itself: what was dealt with, and what is open now. */
-export const advancedText = (done: Pick<Need, "title" | "ticketKey" | "workstreamTitle">, next: Pick<Need, "title">, waitsOn?: string | null) => `${doneText(done)}${waitsOn ? ` ${waitsOn}.` : ""} Now: ${next.title}`;
+export const advancedText = (done: Pick<Need, "title" | "ticketKey" | "workstreamTitle">, next: Pick<Need, "title" | "ticketKey">, waitsOn?: string | null, posted = false) =>
+  `${doneText(done, posted)}${waitsOn ? ` ${waitsOn}.` : ""} Now: ${next.ticketKey ? `${next.ticketKey} · ` : ""}${next.title}`;
 
 /** What was done and in which workstream: "Done: Questions for the reporter on CA-408." The pane moved on, so the line is what says where it happened. */
-export const doneText = (done: Pick<Need, "title" | "ticketKey" | "workstreamTitle">) => {
+export const doneText = (done: Pick<Need, "title" | "ticketKey" | "workstreamTitle">, posted = false) => {
   const where = done.ticketKey ?? done.workstreamTitle;
-  return `Done: ${done.title}${where ? ` on ${where}` : ""}.`;
+  return `${posted ? "Posted to Jira" : "Done"}: ${done.title}${where ? ` on ${where}` : ""}.`;
 };
+
+const JIRA_WRITES: ReadonlySet<string> = new Set(["comment", "rewrite", "transition", "subtasks", "create", "link"]);
+
+/** Whether `done` was a draft that is applied (or applying) and writes to Jira, so the line says it was posted there, not just done. */
+export function postedToJira(done: Pick<Need, "target">, proposals: Readonly<Record<string, Proposal>>): boolean {
+  const p = done.target.type === "draft" ? proposals[done.target.id] : undefined;
+  return !!p && JIRA_WRITES.has(p.intent.type) && (p.state.type === "applied" || p.state.type === "applying");
+}
 
 /**
  * What posting `done` started, when it was the questions or the nudge for the reporter (posted, not skipped): the wait, so the
@@ -759,7 +768,7 @@ export function NeedsPane({ needs }: { needs: readonly Need[] }) {
   const [advanced, setAdvanced] = useState<Advanced | null>(null);
   const lastId = useRef(0);
   useAdvance(needs, (done, next) =>
-    setAdvanced((prev) => nextAdvanced(prev ?? { id: lastId.current, text: "" }, advancedText(done, next, waitStarted(done, useWorkspace.getState().proposals)), done.workstreamId ? { workstreamId: done.workstreamId, label: doneText(done) } : undefined)),
+    setAdvanced((prev) => nextAdvanced(prev ?? { id: lastId.current, text: "" }, advancedText(done, next, waitStarted(done, useWorkspace.getState().proposals), postedToJira(done, useWorkspace.getState().proposals)), done.workstreamId ? { workstreamId: done.workstreamId, label: doneText(done, postedToJira(done, useWorkspace.getState().proposals)) } : undefined)),
   );
   useEffect(() => {
     if (!advanced) return;

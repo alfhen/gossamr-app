@@ -471,7 +471,7 @@
       "expect": { "waiting": false, "since": null, "changed": false, "replied": false }
     },
     {
-      "name": "the reply's time is that of the first comment from someone else after the wait began",
+      "name": "the reply's time is that of the first comment from someone else after the wait began; a reply of several lines ends with an ellipsis",
       "events": [
         {"actor": "person", "action": "readiness_asked", "proposalId": "d1", "at": "2026-10-12T10:01:00Z"},
         {"actor": "person", "action": "draft_approved", "proposalId": "d1", "at": "2026-10-12T10:02:00Z"}
@@ -483,7 +483,24 @@
         {"author": "kim", "at": "2026-10-12T10:09:00Z", "id": "c4", "text": "Later still."}
       ],
       "me": "me",
-      "expect": { "waiting": false, "since": null, "changed": true, "replied": true, "repliedAt": "2026-10-12T10:05:00Z", "reply": { "id": "c3", "excerpt": "It happens" } }
+      "expect": { "waiting": false, "since": null, "changed": true, "replied": true, "repliedAt": "2026-10-12T10:05:00Z", "reply": { "id": "c3", "excerpt": "It happens…" }, "replies": [{ "id": "c3", "excerpt": "It happens…", "at": "2026-10-12T10:05:00Z" }, { "id": "c4", "excerpt": "Later still.", "at": "2026-10-12T10:09:00Z" }] }
+    },
+    {
+      "name": "asking again ends the wait the reply ended, but the reply is still listed, in time order",
+      "events": [
+        {"actor": "person", "action": "readiness_asked", "proposalId": "d1", "at": "2026-10-12T10:01:00Z"},
+        {"actor": "person", "action": "draft_approved", "proposalId": "d1", "at": "2026-10-12T10:02:00Z"},
+        {"actor": "person", "action": "reporter_nudged", "proposalId": "d2", "at": "2026-10-12T10:20:00Z"},
+        {"actor": "person", "action": "draft_approved", "proposalId": "d2", "at": "2026-10-12T10:21:00Z"}
+      ],
+      "comments": [
+        {"author": "kim", "at": "2026-10-12T10:00:30Z", "id": "c0", "text": "Before the question."},
+        {"author": "kim", "at": "2026-10-12T10:25:00Z", "id": "c8", "text": "Second answer."},
+        {"author": "kim", "at": "2026-10-12T10:05:00Z", "id": "c7", "text": "First answer."},
+        {"author": "me", "at": "2026-10-12T10:06:00Z", "id": "c6", "text": "Mine."}
+      ],
+      "me": "me",
+      "expect": { "waiting": false, "since": null, "changed": true, "replied": true, "repliedAt": "2026-10-12T10:25:00Z", "reply": { "id": "c8", "excerpt": "Second answer." }, "replies": [{ "id": "c7", "excerpt": "First answer.", "at": "2026-10-12T10:05:00Z" }, { "id": "c8", "excerpt": "Second answer.", "at": "2026-10-12T10:25:00Z" }] }
     },
     {
       "name": "a long first line is cut to a short quote with an ellipsis",

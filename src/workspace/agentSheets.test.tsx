@@ -876,7 +876,7 @@ describe("the safety sheet as the one-time intro", () => {
     expect(lines[1]).not.toMatch(/only when you allow it|until you approve/);
     // Nothing enforces it, as the detail below says: the line can't promise a lock.
     expect(lines[1]).toContain("both are requests, not locks");
-    expect(lines[2]).toBe("Gossamr posts nothing to Jira or GitHub until you approve it.");
+    expect(lines[2]).toBe("Gossamr itself posts nothing to Jira or GitHub until you approve it. A Build runs as you, so your Claude settings, not Gossamr, decide whether it can reach Jira or GitHub.");
     expect(html.indexOf("data-safety-summary")).toBeLessThan(html.indexOf("What a Build may touch"));
   });
 

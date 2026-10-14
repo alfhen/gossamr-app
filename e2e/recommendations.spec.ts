@@ -599,7 +599,7 @@ const boxOf = async (loc: Locator) => (await loc.boundingBox())!;
 const timelineBody = (page: Page) => homeConversationRegion(page).locator("[data-timeline]");
 
 test.describe("B1: Needs you is the main left column on Pip home", () => {
-  test("the screen is named, Needs you takes the column with the workstreams compact under it, and both are usable at 1440x900", async ({ page }) => {
+  test("the screen is named, Needs you heads the column with the workstreams under it, and both are usable at 1440x900", async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await openApp(page, "runs=kinds&prSurface=manual&wsManage=1");
     await openPipHome(page);
@@ -612,7 +612,8 @@ test.describe("B1: Needs you is the main left column on Pip home", () => {
     await expect(list.getByRole("region", { name: "Needs you" })).toHaveCount(0);
     const [n, w, c] = [await boxOf(needs), await boxOf(list), await boxOf(homeConversationRegion(page))];
     expect(n.y + n.height).toBeLessThanOrEqual(w.y + 1);
-    expect(n.height).toBeGreaterThan(w.height);
+    // Needs you comes first and shows every need it has without scrolling; the workstreams take what it leaves (G7 in round 8).
+    expect(await needs.evaluate((el) => el.scrollHeight - el.clientHeight)).toBeLessThanOrEqual(4);
     expect(n.x + n.width).toBeLessThanOrEqual(c.x + 1);
     expect(n.width).toBeGreaterThanOrEqual(280);
     expect(w.y + w.height).toBeLessThanOrEqual(900);

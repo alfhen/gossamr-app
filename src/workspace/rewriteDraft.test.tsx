@@ -3,7 +3,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MockBackend } from "../backend/mock";
 import { itemRef } from "../backend/mockConnector";
 import { bodyChange, docFromMarkdown } from "../backend/mockMarkdown";
-import type { Proposal } from "../types";
+import { AUTOSTART_DEFAULTS, type Proposal, type Run, type WorkstreamView } from "../types";
+import { useRuns } from "./runsStore";
+import { useWorkstreams } from "./workstreamsStore";
 import { DraftCard, draftSummary, draftTitle } from "./DraftCard";
 import { DraftPreview, draftPreviewBody } from "./DraftPreview";
 import { ONLY_SPACING, changedPairs, diffWords, oneLine, rewriteBlocked, rewriteEdit, rewriteFields, RewriteView, takesBackendText, type Rewrite } from "./RewriteDiff";
@@ -245,5 +247,40 @@ describe("a changed line's words (D31)", () => {
     expect(lines(html, "del")).toEqual(["Drafted by an agent run (1000addd) on 2026-10-11. A person read and approved it in Gossamr before it was added here."]);
     expect(lines(html, "add")).toEqual(["Drafted by the CA-401 plan on 2026-10-11. A person read and approved it in Gossamr before it was added here."]);
     expect(html).toContain("data-word-changed");
+  });
+});
+
+describe("the plan's description draft says it also starts a Build (G3)", () => {
+  const plan = { ...new MockBackend().runs.list()[0], id: "plan-1" } as Run;
+  plan.spec = { ...plan.spec, kind: "plan", workstream: "ws-1" };
+  const ws = (mode: "manage" | "advise", rules = {}) =>
+    ({ workstream: { id: "ws-1", mode, rules, closedAt: null, heldReason: null }, runs: ["plan-1"], labels: [], stage: "plan" }) as unknown as WorkstreamView;
+  const fromPlan = draft(intent(), { origin: { type: "run", runId: "plan-1", shortId: null, workstream: "ws-1" } });
+  const html = (view: WorkstreamView, globals: typeof AUTOSTART_DEFAULTS | null = AUTOSTART_DEFAULTS, p = fromPlan) => {
+    // Static rendering reads the stores' initial state, so that is where the case is set up, and put back.
+    const runs = useRuns.getInitialState();
+    const streams = useWorkstreams.getInitialState();
+    Object.assign(runs, { runs: [plan] });
+    Object.assign(streams, { list: [view], globals });
+    try {
+      return renderToStaticMarkup(<DraftCard {...props(p)} />);
+    } finally {
+      Object.assign(runs, { runs: [] });
+      Object.assign(streams, { list: [], globals: null });
+    }
+  };
+  beforeEach(() => {
+    vi.stubGlobal("localStorage", { getItem: () => null, setItem: () => {}, removeItem: () => {} });
+  });
+  it("shows the line, linking to Agents settings, in Manage with the rule on", () => {
+    const out = html(ws("manage"));
+    expect(out).toContain("Approving this also starts a Build: it changes code in its own worktree and runs with your Claude settings.");
+    expect(out).toContain("Agents settings");
+  });
+  it("says nothing in Advise, with the rule off, for a draft from chat, or before Settings is read", () => {
+    expect(html(ws("advise"))).not.toContain("data-approval-starts-build");
+    expect(html(ws("manage", { plan_build: false }))).not.toContain("data-approval-starts-build");
+    expect(html(ws("manage"), null)).not.toContain("data-approval-starts-build");
+    expect(html(ws("manage"), AUTOSTART_DEFAULTS, draft())).not.toContain("data-approval-starts-build");
   });
 });

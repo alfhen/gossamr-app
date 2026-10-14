@@ -109,6 +109,10 @@ pub struct WorkstreamView {
     /// That reply's comment on the ticket and how it starts, while `reporter_replied`: the timeline and the notice quote it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reporter_reply: Option<ReporterReply>,
+    /// Every reply from someone but the person on the ticket since the first reporter ask was posted, oldest first, whether
+    /// or not the wait it ended was asked again: the timeline tells each (`reporter_replies`).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub reporter_replies: Vec<ReporterReplyAt>,
     pub budget: BudgetView,
 }
 
@@ -118,6 +122,15 @@ pub struct WorkstreamView {
 pub struct ReporterReply {
     pub id: String,
     pub excerpt: String,
+}
+
+/// A reply with the time it was written (`reporter_replies`).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReporterReplyAt {
+    pub id: String,
+    pub excerpt: String,
+    pub at: chrono::DateTime<Utc>,
 }
 
 /// What the clarity check found missing in a ticket's description.
@@ -205,15 +218,49 @@ pub fn reporter_follow_at(events: &[WorkstreamEvent], replies: &[chrono::DateTim
 /// How many characters of a reply the quote keeps. As `REPLY_EXCERPT` in src/lib/reporterWait.ts.
 const REPLY_EXCERPT: usize = 140;
 
-/// The first line of a comment's text with its spacing made even, cut to `REPLY_EXCERPT` characters with "…". Mirrored by
-/// `replyExcerpt` in src/lib/reporterWait.ts.
+/// The first line of a comment's text with its spacing made even, cut to `REPLY_EXCERPT` characters with "…"; the "…" is
+/// also there when more lines follow, so a reply of several lines does not read as complete. Mirrored by `replyExcerpt` in
+/// src/lib/reporterWait.ts.
 pub fn reply_excerpt(text: &str) -> String {
-    let line = text.lines().map(|l| l.split_whitespace().collect::<Vec<_>>().join(" ")).find(|l| !l.is_empty()).unwrap_or_default();
-    if line.chars().count() <= REPLY_EXCERPT {
+    let mut lines = text.lines().map(|l| l.split_whitespace().collect::<Vec<_>>().join(" ")).filter(|l| !l.is_empty());
+    let line = lines.next().unwrap_or_default();
+    if line.chars().count() <= REPLY_EXCERPT && lines.next().is_none() {
         return line;
     }
     let cut: String = line.chars().take(REPLY_EXCERPT - 1).collect();
     format!("{}…", cut.trim_end())
+}
+
+/// Every comment of the cached ticket `t` from someone other than `me` that came after the first reporter ask was posted (the
+/// approval of the comment of a `readiness_asked`, `clarity_asked` or `reporter_nudged`), oldest first, each as its quote.
+/// A comment that says nothing is left out. Mirrored by `reporterReplies` in src/lib/reporterWait.ts; both run the `replies`
+/// of src/lib/reporterWait.fixtures.json.
+pub fn reporter_replies(events: &[WorkstreamEvent], t: &crate::model::CachedTicket, me: &str) -> Vec<ReporterReplyAt> {
+    let mut asked: HashSet<&str> = HashSet::new();
+    let mut first = None;
+    for e in events.iter().filter(|e| e.actor == Actor::Person) {
+        match e.action.as_str() {
+            "readiness_asked" | "clarity_asked" | "reporter_nudged" => asked.extend(e.proposal_id.as_deref()),
+            "draft_approved" if e.proposal_id.as_deref().is_some_and(|p| asked.contains(p)) => {
+                first = Some(e.at);
+                break;
+            }
+            _ => {}
+        }
+    }
+    let Some(first) = first else { return Vec::new() };
+    let mut found: Vec<ReporterReplyAt> = t
+        .comments
+        .iter()
+        .filter(|c| c.author.account_id != me)
+        .filter_map(|c| {
+            let at = chrono::DateTime::parse_from_rfc3339(&c.created).ok()?.with_timezone(&Utc);
+            let excerpt = reply_excerpt(&c.body);
+            (at > first && !excerpt.is_empty()).then(|| ReporterReplyAt { id: c.id.clone(), excerpt, at })
+        })
+        .collect();
+    found.sort_by_key(|r| r.at);
+    found
 }
 
 /// The comment of the cached ticket `t` that someone other than `me` wrote at `at`, as the view's `reporter_reply`: the one
@@ -485,6 +532,7 @@ impl WorkstreamView {
             reporter_replied: false,
             reporter_replied_at: None,
             reporter_reply: None,
+            reporter_replies: Vec::new(),
         }
     }
 }
@@ -809,6 +857,9 @@ impl Core {
         view.reporter_replied = follow.replied && open;
         view.reporter_replied_at = replied_at.filter(|_| open);
         view.reporter_reply = replied_at.filter(|_| open).and_then(|at| ticket.ticket.as_ref().and_then(|t| reply_to(t, &ticket.me, at)));
+        if open {
+            view.reporter_replies = ticket.ticket.as_ref().map(|t| reporter_replies(events, t, &ticket.me)).unwrap_or_default();
+        }
         if let Some(build) = pushed_build(runs) {
             view.waiting_for_pr = waiting_for(build, self.pull_request_of(build));
         }
@@ -1851,12 +1902,28 @@ mod tests {
                     let want = reply.as_object().map(|r| ReporterReply { id: r["id"].as_str().unwrap().into(), excerpt: r["excerpt"].as_str().unwrap().into() });
                     assert_eq!(found, want, "{}", case["name"]);
                 }
+                if let Some(want) = expect.get("replies") {
+                    let mut t = crate::tracker::testing::sample_ticket();
+                    t.comments = case["comments"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .map(|c| {
+                            let person = crate::model::Person { account_id: c["author"].as_str().unwrap().into(), name: "n".into(), avatar_url: None };
+                            crate::model::Comment { id: c["id"].as_str().unwrap_or("").into(), author: person, created: c["at"].as_str().unwrap().into(), body: c["text"].as_str().unwrap_or("").into(), mentions: vec![], mentioned: vec![], doc: None }
+                        })
+                        .collect();
+                    let got = serde_json::to_value(reporter_replies(&audit_of(case), &t, case["me"].as_str().unwrap_or(""))).unwrap();
+                    let want: Vec<serde_json::Value> = want.as_array().unwrap().iter().map(|r| serde_json::json!({ "id": r["id"], "excerpt": r["excerpt"], "at": r["at"].as_str().unwrap().parse::<chrono::DateTime<Utc>>().unwrap() })).collect();
+                    assert_eq!(got, serde_json::Value::Array(want), "{}", case["name"]);
+                }
             }
         }
 
         #[test]
         fn a_reply_is_quoted_by_its_first_line() {
-            assert_eq!(reply_excerpt("  Hi,\n second"), "Hi,");
+            assert_eq!(reply_excerpt("  Hi,\n second"), "Hi,…", "more lines follow");
+            assert_eq!(reply_excerpt("  Hi,\n\n  \t"), "Hi,");
             assert_eq!(reply_excerpt("\n\n  a   b \t c"), "a b c");
             assert_eq!(reply_excerpt(""), "");
             assert_eq!(reply_excerpt(&"x".repeat(500)).chars().count(), REPLY_EXCERPT);

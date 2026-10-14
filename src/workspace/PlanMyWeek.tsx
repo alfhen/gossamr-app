@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Need } from "../lib/needs";
-import { WEEK_PICKS, isoWeek, itemOutcome, liveWorkstreamOf, movePick, planMyWeek, reopenedWithoutWorkstream, ticketPick, weekLabel, type PlanItem } from "../lib/planMyWeek";
+import { WEEK_PICKS, isoWeek, itemOutcome, liveWorkstreamOf, movePick, planMyWeek, reopenedWithoutWorkstream, ticketDone, ticketPick, weekLabel, type PlanItem } from "../lib/planMyWeek";
 import type { WorkstreamWither } from "../lib/workstreamWither";
 import type { PersonRef, WorkItem } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { usePipHome } from "./pipHomeStore";
 import { usePrefs } from "./prefs";
 import { useRuns } from "./runsStore";
+import { focusPeekOf } from "./PeekSheet";
 import { runDayAction } from "./StartMyDay";
 import { showPlanMyWeek } from "./planActions";
 import { useToasts } from "./toasts";
@@ -59,6 +60,9 @@ export function afterMove(part: "up" | "down", index: number, count: number): "u
   const off = (p: "up" | "down") => (p === "up" ? index === 0 : index === count - 1);
   return !off(part) ? part : !off(part === "up" ? "down" : "up") ? (part === "up" ? "down" : "up") : "row";
 }
+
+/** Brings the choice list into view in the day scroller it sits in, clear of the sticky Keep row (the list's scroll margin). */
+export const revealChoices = (group: Pick<HTMLElement, "scrollIntoView"> | null | undefined) => group?.scrollIntoView({ block: "nearest" });
 
 /** The card itself: pure of the stores, so a test can render it. */
 export function PlanMyWeekView({
@@ -128,7 +132,9 @@ export function PlanMyWeekView({
   };
   // The list appears under the field, and the keyboard goes to its first choice.
   useEffect(() => {
-    if (choices) root.current?.querySelector<HTMLElement>("[data-plan-choice]")?.focus();
+    if (!choices) return;
+    root.current?.querySelector<HTMLElement>("[data-plan-choice]")?.focus();
+    revealChoices(root.current?.querySelector<HTMLElement>("[data-plan-choices]"));
   }, [choices]);
   return (
     <section
@@ -266,11 +272,11 @@ export function PlanMyWeekView({
             ev.preventDefault();
             list[Math.max(0, Math.min(list.length - 1, to))].focus();
           }}
-          className="grid gap-0.5 rounded-md border border-ws-sep p-1 text-sm"
+          className="grid max-h-48 scroll-mb-12 gap-0.5 overflow-y-auto rounded-md border border-ws-sep p-1 text-sm"
         >
           <p className="m-0 px-1 text-xs text-ws-ink3">Several tickets match “{adding.trim()}”. Choose one (↑ ↓ and Enter; Esc cancels).</p>
           {choices.map((t) => (
-            <button key={t.item.key} type="button" data-plan-choice={t.item.key} onClick={() => addTicket(t)} className="flex min-w-0 items-baseline gap-2 rounded px-1.5 py-0.5 text-left text-ws-ink2 hover:bg-ws-hover focus-visible:outline-2 focus-visible:outline-ws-pip">
+            <button key={t.item.key} type="button" data-plan-choice={t.item.key} onClick={() => addTicket(t)} className="flex scroll-mb-12 min-w-0 items-baseline gap-2 rounded px-1.5 py-0.5 text-left text-ws-ink2 hover:bg-ws-hover focus-visible:outline-2 focus-visible:outline-ws-pip">
               <b className="shrink-0 font-mono font-semibold text-ws-ink">{t.item.key}</b>
               <span className="min-w-0 truncate">{t.title}</span>
               {t.assignee && me?.some((m) => m.connectionId === t.assignee!.connectionId && m.accountId === t.assignee!.accountId) && <span className="ml-auto shrink-0 text-xs text-ws-ink3">assigned to you</span>}
@@ -337,12 +343,18 @@ export function PlanMyWeek({ needs, withers, now }: { needs: readonly Need[]; wi
   );
 }
 
+/** Shows a ticket in the peek and hands the keyboard to it, so the next Tab is the peek's own. */
+export function openTicketItem(key: string) {
+  runDayAction({ type: "ticket", key });
+  focusPeekOf(key);
+}
+
 /** Opens what a kept item points at: its workstream while it is open (or the open one on its ticket, once its own closed), else its ticket. */
 function openItem(item: PlanItem, done: boolean) {
   const live = done ? null : liveWorkstreamOf(item, useWorkstreams.getState().list);
   if (live) return openOnPipHome(live);
   if (item.workstreamId && !done) return openOnPipHome(item.workstreamId);
-  if (item.ticketKey) return runDayAction({ type: "ticket", key: item.ticketKey });
+  if (item.ticketKey) return openTicketItem(item.ticketKey);
   if (item.workstreamId) openOnPipHome(item.workstreamId);
 }
 
@@ -364,6 +376,7 @@ export function ThisWeekView({
   done,
   closed = new Set<string>(),
   stopped = new Set<string>(),
+  jiraDone = new Set<string>(),
   onOpen,
   onEdit,
   onReopen,
@@ -377,6 +390,8 @@ export function ThisWeekView({
   closed?: ReadonlySet<string>;
   /** Reopened items whose workstream is closed: open in the list, with no workstream to go to. */
   stopped?: ReadonlySet<string>;
+  /** Reopened items whose ticket is Done in Jira: the closed workstream is no unfinished work, so they say so and offer no new start. */
+  jiraDone?: ReadonlySet<string>;
   onOpen(item: PlanItem): void;
   onEdit(): void;
   /** Takes a done or closed item back to open; the list shows no button without it. */
@@ -417,9 +432,9 @@ export function ThisWeekView({
               {!isDone && !isClosed && stopped.has(p.id) && (
                 <>
                   <span data-this-week-stopped className="shrink-0 text-xs text-ws-ink3">
-                    workstream closed
+                    {jiraDone.has(p.id) ? "Done in Jira" : "workstream closed"}
                   </span>
-                  {onStart && p.ticketKey && (
+                  {onStart && p.ticketKey && !jiraDone.has(p.id) && (
                     <button type="button" data-this-week-start aria-label={`Start a workstream on ${p.title}`} onClick={() => onStart(p)} className="shrink-0 rounded px-1 text-xs text-ws-ink2 underline hover:bg-ws-hover focus-visible:outline-2 focus-visible:outline-ws-pip">
                       Start again
                     </button>
@@ -451,13 +466,17 @@ export function ThisWeek() {
   useEffect(() => {
     if (has) void useWorkstreams.getState().loadClosed();
   }, [has, list.length]);
-  const { done, dropped } = useMemo(() => {
+  const { done, dropped, jiraDone } = useMemo(() => {
     const views = [...list, ...closed];
     const tickets = Object.values(items);
     const outcomes = (plan?.items ?? []).map((p) => [p.id, itemOutcome(p, views, tickets)] as const);
-    return { done: new Set(outcomes.filter(([, o]) => o === "done").map(([id]) => id)), dropped: new Set(outcomes.filter(([, o]) => o === "closed").map(([id]) => id)) };
+    return {
+      done: new Set(outcomes.filter(([, o]) => o === "done").map(([id]) => id)),
+      dropped: new Set(outcomes.filter(([, o]) => o === "closed").map(([id]) => id)),
+      jiraDone: new Set((plan?.items ?? []).filter((p) => ticketDone(p, views, tickets)).map((p) => p.id)),
+    };
   }, [plan, list, closed, items]);
   if (!plan || !has) return null;
   const stopped = new Set(plan.items.filter((p) => reopenedWithoutWorkstream(p, [...list, ...closed])).map((p) => p.id));
-  return <ThisWeekView week={week} items={plan.items} done={done} closed={dropped} stopped={stopped} onStart={startAgain} onOpen={(p) => openItem(p, done.has(p.id) || dropped.has(p.id))} onEdit={showPlanMyWeek} onReopen={(p) => usePrefs.getState().reopenWeekPlanItem(week, p.id)} />;
+  return <ThisWeekView week={week} items={plan.items} done={done} closed={dropped} stopped={stopped} jiraDone={jiraDone} onStart={startAgain} onOpen={(p) => openItem(p, done.has(p.id) || dropped.has(p.id))} onEdit={showPlanMyWeek} onReopen={(p) => usePrefs.getState().reopenWeekPlanItem(week, p.id)} />;
 }

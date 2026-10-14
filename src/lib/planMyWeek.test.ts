@@ -3,7 +3,7 @@ import { HELD_PERSON } from "../types";
 import type { PersonRef, WorkItem, WorkstreamView } from "../types";
 import type { Need } from "./needs";
 import { docFromText } from "./docs";
-import { WEEKS_KEPT, WEEK_PICKS, weekLabel, isoWeek, itemDone, itemOutcome, keepPlan, movePick, parseWeekPlans, planMyWeek, rankWeek, liveWorkstreamOf, reopenItem, reopenedWithoutWorkstream, ticketPick, type PlanInput, type PlanItem } from "./planMyWeek";
+import { WEEKS_KEPT, WEEK_PICKS, weekLabel, isoWeek, itemDone, itemOutcome, keepPlan, movePick, parseWeekPlans, planMyWeek, rankWeek, liveWorkstreamOf, reopenItem, reopenedWithoutWorkstream, ticketDone, ticketPick, type PlanInput, type PlanItem } from "./planMyWeek";
 
 const NOW = new Date("2026-10-13T09:00:00Z");
 const ago = (days: number) => new Date(NOW.getTime() - days * 86_400_000).toISOString();
@@ -304,6 +304,15 @@ describe("the kept plan", () => {
     expect(itemOutcome(pick, [ws("w1", "CA-1")], [ticket("CA-1", { status: DONE })])).toBe("done");
     expect(itemOutcome(pick, [ws("w1", "CA-1")], [ticket("CA-1")])).toBe("open");
     expect(itemOutcome({ ...pick, reopened: true }, [ws("w1", "CA-1")], [ticket("CA-1", { status: DONE })])).toBe("open");
+  });
+  it("tells a Done ticket apart from the item's outcome: a reopened item on a Done ticket is open, its ticket still Done (G14)", () => {
+    const pick: PlanItem = { id: "ws:w1", kind: "workstream", workstreamId: "w1", ticketKey: "CA-1", title: "CA-1 Thing", because: "x.", reopened: true };
+    const closed = ws("w1", "CA-1", {}, { closedAt: ago(1) });
+    expect(itemOutcome(pick, [closed], [ticket("CA-1", { status: DONE })])).toBe("open");
+    expect(reopenedWithoutWorkstream(pick, [closed])).toBe(true);
+    expect(ticketDone(pick, [closed], [ticket("CA-1", { status: DONE })])).toBe(true);
+    expect(ticketDone(pick, [closed], [ticket("CA-1")])).toBe(false);
+    expect(ticketDone(pick, [closed], [])).toBe(false);
   });
   it("calls a workstream closed on a ticket that is not Done closed, not done: dropped work isn't finished work", () => {
     const pick: PlanItem = { id: "ws:w1", kind: "workstream", workstreamId: "w1", ticketKey: "CA-1", title: "CA-1 Thing", because: "x." };

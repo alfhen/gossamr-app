@@ -613,14 +613,15 @@ export function needGroups(list: readonly Need[]): NeedGroup[] {
 
 /**
  * Where the person's attention goes once the need `removed` is dealt with: the need that followed it in `previous` (the
- * keys as the list ordered them), else the one before it, else the highest-ranked need left; null when none is left.
+ * keys as the list ordered them), else the top of the list that is left (the list wraps); null when none is left.
  */
 export function needAfter<T extends Pick<Need, "key">>(previous: readonly string[], removed: string, current: readonly T[]): T | null {
   const now = new Map(current.map((n) => [n.key, n]));
   const at = previous.indexOf(removed);
   if (at >= 0) {
     for (let i = at + 1; i < previous.length; i++) if (now.has(previous[i])) return now.get(previous[i])!;
-    for (let i = at - 1; i >= 0; i--) if (now.has(previous[i])) return now.get(previous[i])!;
+    const first = previous.find((k) => now.has(k));
+    if (first !== undefined) return now.get(first)!;
   }
   return current[0] ?? null;
 }

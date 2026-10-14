@@ -3,7 +3,7 @@ import { MockBackend } from "../backend/mock";
 import { AUTOSTART_DEFAULTS, HELD_BUDGET, HELD_PERSON, HELD_RESTART, TRIPWIRE } from "../types";
 import type { Intent, ItemRef, Proposal, Run, RunKind, RunState, WorkstreamRule, WorkstreamStage, WorkstreamView } from "../types";
 import { needs as buildNeeds, type Need } from "./needs";
-import { nextStep } from "./nextStep";
+import { approvalStartsBuild, nextStep } from "./nextStep";
 import { budgetView } from "./workstreamHold";
 
 const NOW = Date.parse("2026-09-30T12:00:00Z");
@@ -414,5 +414,27 @@ describe("nextStep while the workstream waits on the reporter", () => {
 
   it("is gone once the wait is", () => {
     expect(line(view([]), [])?.kind).not.toBe("reporter");
+  });
+});
+
+describe("approvalStartsBuild: the plan's description draft (G3)", () => {
+  const plan = run("r1", "plan", "done");
+  const pending = { ...applied("d1", "r1"), state: { type: "pending" } } as Proposal;
+  it("says approving starts a Build only in Manage with the rule on, for a rewrite from a plan run", () => {
+    expect(approvalStartsBuild(pending, plan, view([plan]), AUTOSTART_DEFAULTS)).toBe(true);
+    expect(approvalStartsBuild(pending, plan, view([plan], { mode: "advise" }), AUTOSTART_DEFAULTS)).toBe(false);
+    expect(approvalStartsBuild(pending, plan, view([plan], { rules: { plan_build: false } }), AUTOSTART_DEFAULTS)).toBe(false);
+    expect(approvalStartsBuild(pending, plan, view([plan]), { ...AUTOSTART_DEFAULTS, planBuild: false })).toBe(false);
+    expect(approvalStartsBuild(pending, plan, view([plan], { rules: { plan_build: true } }), { ...AUTOSTART_DEFAULTS, planBuild: false })).toBe(true);
+  });
+  it("says nothing for another kind of run or draft, a closed workstream, a settled draft or unread settings", () => {
+    const triage = run("r1", "triage", "done");
+    expect(approvalStartsBuild(pending, triage, view([triage]), AUTOSTART_DEFAULTS)).toBe(false);
+    expect(approvalStartsBuild({ ...pending, intent: { type: "comment" } } as unknown as Proposal, plan, view([plan]), AUTOSTART_DEFAULTS)).toBe(false);
+    expect(approvalStartsBuild(pending, plan, view([plan], { closedAt: iso(5) }), AUTOSTART_DEFAULTS)).toBe(false);
+    expect(approvalStartsBuild({ ...pending, state: { type: "applied" } } as Proposal, plan, view([plan]), AUTOSTART_DEFAULTS)).toBe(false);
+    expect(approvalStartsBuild(pending, plan, view([plan]), null)).toBe(false);
+    expect(approvalStartsBuild(pending, undefined, view([plan]), AUTOSTART_DEFAULTS)).toBe(false);
+    expect(approvalStartsBuild(pending, plan, undefined, AUTOSTART_DEFAULTS)).toBe(false);
   });
 });

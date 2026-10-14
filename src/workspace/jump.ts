@@ -29,6 +29,15 @@ export function revealInPeek() {
   setTimeout(() => drafts.classList.remove("ws-pulse"), PULSE_MS);
 }
 
+/** Hands the keyboard to comment `id` in the peek, so the next Tab is the peek's own; false when it isn't shown. */
+export function focusComment(id: string): boolean {
+  const el = document.getElementById(commentDomId(id));
+  if (!el) return false;
+  if (!el.hasAttribute("tabindex")) el.setAttribute("tabindex", "-1");
+  el.focus({ preventScroll: true });
+  return true;
+}
+
 /**
  * Opens the ticket in the peek and brings comment `id` of it into view, outlined (`showComment`): the reporter's reply the
  * timeline quotes. The sheet may still be reading the comments when it opens, so it looks for a moment; a comment that
@@ -37,7 +46,10 @@ export function revealInPeek() {
 export async function openComment(ticketKey: string, id: string) {
   if (!(await openTicketByKey(ticketKey))) return;
   for (let tries = 0; tries < 20; tries++) {
-    if (document.getElementById(commentDomId(id))) return showComment(id);
+    if (document.getElementById(commentDomId(id))) {
+      showComment(id);
+      return focusComment(id);
+    }
     await new Promise((r) => setTimeout(r, 50));
   }
 }

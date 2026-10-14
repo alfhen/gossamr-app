@@ -190,12 +190,12 @@ test.describe("G13: Pip speaks up when a workstream opens on a vague ticket", ()
     await expect(note).toHaveCount(1);
     const count = (scope: Locator, filter: string) => scope.locator(`[data-filter="${filter}"] [data-filter-count]`).first();
     const lines = (scope: Locator) => scope.locator("[data-timeline-line]");
-    await expect(lines(pipHome(page)).filter({ hasText: "You approved a comment" })).toHaveCount(0);
+    await expect(lines(pipHome(page)).filter({ hasText: "You posted the questions for the reporter" })).toHaveCount(0);
     await needsPane(page).getByRole("article", { name: `Comment on ${VAGUE}` }).getByRole("button", { name: "Post comment" }).click();
     await expect.poll(async () => (await jiraWrites(page)).length).toBe(1);
     await expect(note).toHaveCount(0);
     // The posting is in the timeline's lines at once, and the Drafts count counts it as a draft decided.
-    await expect(lines(pipHome(page)).filter({ hasText: "You approved a comment" })).toHaveCount(1);
+    await expect(lines(pipHome(page)).filter({ hasText: "You posted the questions for the reporter" })).toHaveCount(1);
     await expect(count(pipHome(page), "all")).toHaveText("3");
     await expect(count(pipHome(page), "drafts")).toHaveText("1");
     await expect(count(pipHome(page), "decisions")).toHaveText("2");

@@ -1,5 +1,5 @@
 import { docText } from "../lib/docs";
-import { followWithReply, NUDGE_GONE, nudgeOffered, reporterFollow } from "../lib/reporterWait";
+import { followWithReply, NUDGE_GONE, nudgeOffered, reporterFollow, reporterReplies as reporterRepliesOf } from "../lib/reporterWait";
 import { clarityGaps, type ClarityGap } from "../lib/ticketClarity";
 import { workstreamOf } from "../lib/proposals";
 import { budgetLevel, budgetView } from "../lib/workstreamHold";
@@ -278,6 +278,8 @@ export class MockWorkstreams {
   repliesTo: (key: string) => string[] = () => [];
   /** The comment on a ticket written at `at` (one of `repliesTo`'s times) as the view's `reporterReply`; set by the backend that owns the tickets. */
   replyAt: (key: string, at: string) => ReporterReply | null = () => null;
+  /** The comments on a ticket from anyone but the signed-in person, with their ids, times and plain text; set by the backend that owns the tickets. */
+  replyCommentsOf: (key: string) => { id: string; at: string; text: string }[] = () => [];
   /** The reporter's replies on `ws`'s ticket (`repliesTo`); none for a workstream without one. */
   repliesOf(ws: Pick<Workstream, "itemKey" | "closedAt">): string[] {
     return ws.itemKey && ws.closedAt === null ? this.repliesTo(ws.itemKey) : [];
@@ -360,7 +362,8 @@ export class MockWorkstreams {
     const changedWhileWaiting = !!follow?.changed;
     const reporterReplied = !!follow?.replied;
     const reporterReply = reporterReplied && repliedAt && ws.itemKey ? this.replyAt(ws.itemKey, repliedAt) : null;
-    return { ...view, ...(waiting ? { waitingForPr: waiting } : {}), ...(reviewBlocking(judged) ? { reviewBlocking: true } : {}), ...(escalation ? { escalation } : {}), ...(readiness ? { readiness } : {}), ...(clarity ? { clarity } : {}), ...(waitingOnReporter ? { waitingOnReporter } : {}), ...(changedWhileWaiting ? { changedWhileWaiting } : {}), ...(reporterReplied ? { reporterReplied } : {}), ...(reporterReplied && repliedAt ? { reporterRepliedAt: repliedAt } : {}), ...(reporterReply ? { reporterReply } : {}) };
+    const reporterReplies = ws.closedAt === null && ws.itemKey ? reporterRepliesOf(events, this.replyCommentsOf(ws.itemKey)) : [];
+    return { ...view, ...(waiting ? { waitingForPr: waiting } : {}), ...(reviewBlocking(judged) ? { reviewBlocking: true } : {}), ...(escalation ? { escalation } : {}), ...(readiness ? { readiness } : {}), ...(clarity ? { clarity } : {}), ...(waitingOnReporter ? { waitingOnReporter } : {}), ...(changedWhileWaiting ? { changedWhileWaiting } : {}), ...(reporterReplied ? { reporterReplied } : {}), ...(reporterReplied && repliedAt ? { reporterRepliedAt: repliedAt } : {}), ...(reporterReply ? { reporterReply } : {}), ...(reporterReplies.length ? { reporterReplies } : {}) };
   }
 
   /** Opens a workstream on a cached ticket, or with no ticket and a title. A ticket with an open one gets that one back, unchanged. */

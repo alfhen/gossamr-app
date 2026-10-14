@@ -5,7 +5,7 @@ import { MockBackend } from "../backend/mock";
 import type { Proposal, Run, WorkstreamView } from "../types";
 import { pipHomeHints } from "./footerHints";
 import { HINTS, keyHint } from "./keyMap";
-import { timelineDrafts, timelineRuns } from "./Timeline";
+import { entryLabel, timelineDrafts, timelineRuns } from "./Timeline";
 import { ENTRY_FOCUS, anchoredScrollTop, followsEnd, nearBottom, firstShowing, readingAnchor, revealEntry, stepIndex, timelineKeyAction, timelineStop, upToTimeline } from "./timelineKeys";
 import { usePipHome } from "./pipHomeStore";
 import { useTabs } from "./tabsStore";
@@ -232,5 +232,15 @@ describe("firstShowing", () => {
     expect(firstShowing(5, (i) => bottoms[i], -1)).toBe(0);
     expect(firstShowing(5, (i) => bottoms[i], 50)).toBe(5);
     expect(firstShowing(0, () => 0, 0)).toBe(0);
+  });
+});
+
+describe("entryLabel", () => {
+  const base = { kind: "audit", scopeLabel: undefined, text: "The reporter replied on the ticket" } as const;
+  it("tells the reply entry what Enter does, and leaves other entries as their sentence", () => {
+    expect(entryLabel({ ...base, target: { type: "comment", ticketKey: "CA-1", id: "c1" } })).toBe("The reporter replied on the ticket. Enter opens the comment");
+    expect(entryLabel({ ...base, scopeLabel: "CA-1", target: { type: "comment", ticketKey: "CA-1", id: "c1" } })).toBe("CA-1: The reporter replied on the ticket. Enter opens the comment");
+    expect(entryLabel({ ...base, target: null })).toBe("The reporter replied on the ticket");
+    expect(entryLabel({ ...base, kind: "said", target: null })).toBeUndefined();
   });
 });

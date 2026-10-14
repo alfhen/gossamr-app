@@ -308,7 +308,7 @@ describe("timeline: drafts", () => {
   it("says a run draft was started and an answer sent", () => {
     expect(draftSentence(draft("d1", answer("r1"), 5, { state: { type: "applied" } }))).toBe("You approved an answer on CA-401, drafted by an agent: sent");
     const start = { type: "startRun", item: ref("CA-401"), spec: { ...base.spec } } as unknown as Intent;
-    expect(draftSentence(draft("d2", start, 5, { createdBy: "pip", state: { type: "applied" } }))).toBe("You started the investigate run Pip drafted on CA-401");
+    expect(draftSentence(draft("d2", start, 5, { createdBy: "pip", state: { type: "applied" } }))).toBe("You started the investigate run that Pip drafted on CA-401");
     expect(draftSentence(draft("d3", comment("CA-401"), 5, { state: { type: "retired", reason: "gone" } }))).toBe("An agent drafted a comment on CA-401: no longer needed");
   });
 
@@ -329,8 +329,32 @@ describe("timeline: drafts", () => {
   it("says Gossamr drafted the comment to a reporter, and still an agent for the triage's own note", () => {
     const asked = { ...draft("d1", comment("CA-401"), 5), label: "Questions for the reporter" } as Proposal;
     expect(timeline({ drafts: [asked] })[0].text).toBe("Gossamr drafted a comment on CA-401");
-    expect(timeline({ drafts: [{ ...asked, state: { type: "applied" } } as Proposal] })[0].text).toBe("You approved a comment on CA-401, drafted by Gossamr: posted");
+    expect(timeline({ drafts: [{ ...asked, state: { type: "applied" } } as Proposal] })[0].text).toBe("You posted the questions for the reporter on CA-401");
     expect(timeline({ drafts: [draft("d2", comment("CA-401"), 5)] })[0].text).toBe("An agent drafted a comment on CA-401");
+  });
+
+  it("says a run a rule started was started by Gossamr, with the plan's approval when that is what started it (G2)", () => {
+    const start = { type: "startRun", item: ref("CA-401"), spec: { ...base.spec, kind: "build" } } as unknown as Intent;
+    const d = draft("d1", start, 5, { createdBy: "pip", state: { type: "applied" } });
+    expect(draftSentence(d, { auto: { afterPlan: false } })).toBe("Gossamr started the build run automatically on CA-401");
+    expect(draftSentence(d, { auto: { afterPlan: true } })).toBe("Gossamr started the build run automatically on CA-401 after you approved the plan");
+    const rule = (detail: string) => timeline({ drafts: [d], events: [line("autostart", 6, { actor: "supervisor", proposalId: "d1", detail })] })[0].text;
+    expect(rule("plan_build after r1")).toBe("Gossamr started the build run automatically on CA-401 after you approved the plan");
+    expect(rule("triage_plan after r1")).toBe("Gossamr started the build run automatically on CA-401");
+    expect(timeline({ drafts: [d] })[0].text).toBe("You started the build run that Pip drafted on CA-401");
+  });
+
+  it("tells the first ask, the follow-up and the nudge apart (G13)", () => {
+    const asked = (id: string, label: string, over: Partial<Proposal> = {}) => ({ ...draft(id, comment("CA-408"), 5, { state: { type: "applied" } }), label, ...over }) as Proposal;
+    const questions = asked("d1", "Questions for the reporter");
+    expect(draftSentence(questions)).toBe("You posted the questions for the reporter on CA-408");
+    expect(draftSentence(asked("d2", "Nudge for the reporter"))).toBe("You posted the nudge to the reporter on CA-408");
+    expect(draftSentence(questions, { followUp: true })).toBe("You posted the follow-up questions for the reporter on CA-408");
+    expect(draftSentence({ ...questions, revisions: [{}] } as unknown as Proposal)).toBe("You posted the questions for the reporter on CA-408, edited by you");
+    // An earlier ask posted on the workstream makes the next one a follow-up.
+    const second = asked("d3", "Questions for the reporter", { createdAt: iso(10), updatedAt: iso(10) });
+    const list = timeline({ drafts: [{ ...questions, createdAt: iso(30), updatedAt: iso(30) } as Proposal, second] });
+    expect(list.map((e) => e.text)).toEqual(["You posted the questions for the reporter on CA-408", "You posted the follow-up questions for the reporter on CA-408"]);
   });
 
   it("opens the draft's card, or its need while it waits", () => {
@@ -713,6 +737,25 @@ describe("every workstream", () => {
     // Every filter shows in every scope: runs from every workstream, merged by time, with their workstream's label.
     expect(TIMELINE_FILTERS.length * TIMELINE_SCOPES.length).toBe(8);
     expect(filterTimeline(merged, "runs").map((e) => e.scopeLabel)).toEqual(["CA-401", "CA-402"]);
+  });
+});
+
+describe("timeline: the reporter's replies on the ticket (G1)", () => {
+  it("keeps a reply once the person asks again, in time order between the two asks", () => {
+    const asked = (id: string, minutes: number) => ({ ...draft(id, comment("CA-408"), minutes, { state: { type: "applied" } }), label: "Questions for the reporter", createdAt: iso(minutes), updatedAt: iso(minutes) }) as Proposal;
+    const list = timeline({
+      ticketKey: "CA-408",
+      drafts: [asked("d1", 50), asked("d2", 10)],
+      // The wait the reply ended was asked again, so the view has no reply pending any more.
+      reporterReplies: [{ id: "c1", excerpt: "It happens on checkout…", at: iso(30) }],
+    });
+    expect(list.map((e) => e.text)).toEqual(["You posted the questions for the reporter on CA-408", "The reporter replied on the ticket", "You posted the follow-up questions for the reporter on CA-408"]);
+    expect(list[1]).toMatchObject({ key: "audit:reply:c1", detail: "“It happens on checkout…”", attention: false, target: { type: "comment", ticketKey: "CA-408", id: "c1" } });
+  });
+
+  it("asks for attention on the reply the person has not settled, and tells each reply by its comment", () => {
+    const list = timeline({ ticketKey: "CA-408", reporterRepliedAt: iso(30), reporterReplies: [{ id: "c1", excerpt: "One", at: iso(40) }, { id: "c2", excerpt: "Two", at: iso(30) }] });
+    expect(list.map((e) => [e.key, e.attention])).toEqual([["audit:reply:c1", false], ["audit:reply:c2", true]]);
   });
 });
 
