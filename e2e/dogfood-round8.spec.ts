@@ -55,7 +55,7 @@ async function started(page: Page, kind: string) {
 }
 
 test.describe("the plan's description draft and the build it starts (G3, G2)", () => {
-  test("says approving also starts a Build, and the timeline then says Gossamr started it after the plan's approval", async ({ page }) => {
+  test("says approving can start a Build, and the timeline then says Gossamr started it after the plan's approval", async ({ page }) => {
     test.setTimeout(180_000);
     await page.setViewportSize({ width: 1440, height: 900 });
     await openApp(page, SUPERVISED);
@@ -77,7 +77,7 @@ test.describe("the plan's description draft and the build it starts (G3, G2)", (
     await page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "All projects" }).click();
     await peekTicket(page, "CA-401");
     const draft = peekSheet(page).getByRole("article", { name: "Update the description of CA-401" });
-    await expect(draft.locator("[data-approval-starts-build]")).toContainText("Approving this also starts a Build: it changes code in its own worktree and runs with your Claude settings.");
+    await expect(draft.locator("[data-approval-starts-build]")).toContainText("Approving this can start a Build: it changes code in its own worktree and runs with your Claude settings.");
     await draft.getByRole("button", { name: "Update description" }).click();
     await expect(draft).toHaveCount(0);
     await started(page, "build");
