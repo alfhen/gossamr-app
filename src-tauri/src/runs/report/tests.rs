@@ -499,7 +499,20 @@ async fn an_oversized_or_malformed_body_is_refused_before_anything_reads_it() {
     let t = live("body", Reply::Unchanged).await;
     let token = new_token().unwrap();
     let huge = json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": { "name": "report_result", "arguments": { "status": "done", "note": "x".repeat(200_000) } } });
-    assert_eq!(t.post("run1", Some(&token)).json(&huge).send().await.unwrap().status(), 413);
+    // The server answers 413 and closes once the body passes the limit, while the client may still be writing the rest of
+    // it: that client sees the connection reset instead of the answer. A reset while sending is that race, so it tries again.
+    let mut status = None;
+    for _ in 0..5 {
+        match t.post("run1", Some(&token)).json(&huge).send().await {
+            Ok(reply) => {
+                status = Some(reply.status());
+                break;
+            }
+            Err(e) if e.is_request() => continue,
+            Err(e) => panic!("{e}"),
+        }
+    }
+    assert_eq!(status.expect("an answer within five tries"), 413);
     assert_eq!(t.post("run1", Some(&token)).body("{ not json").send().await.unwrap().status(), 400);
     assert_eq!(t.post("run1", Some(&token)).body("[1,2]").send().await.unwrap().status(), 400);
     let notification = json!({ "jsonrpc": "2.0", "method": "notifications/initialized" });
