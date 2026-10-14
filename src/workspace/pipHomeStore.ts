@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import type { TimelineFilter, TimelineScope } from "../lib/timeline";
+import type { StatusState } from "../lib/workstreamStatus";
 
 /** The three columns of Pip home, left to right. */
 export const PIP_HOME_COLUMNS = ["list", "conversation", "rail"] as const;
@@ -7,9 +8,9 @@ export type PipHomeColumn = (typeof PIP_HOME_COLUMNS)[number];
 
 /**
  * The regions F6 steps through on Pip home, in the order they sit on screen: Needs you and the workstreams (the left
- * column), the timeline, the decision pane (only while one is open), the step rail and the composer.
+ * column), the day card (Plan my week, Start my day: only while one is shown), the timeline, the decision pane (only while one is open), the step rail, the composer and the toast (only while one is on screen).
  */
-export const PIP_HOME_REGIONS = ["needs", "workstreams", "timeline", "pane", "rail", "composer"] as const;
+export const PIP_HOME_REGIONS = ["needs", "workstreams", "day", "timeline", "pane", "rail", "composer", "toast"] as const;
 export type PipHomeRegion = (typeof PIP_HOME_REGIONS)[number];
 
 /** The region of `column` the keyboard is taken to be in while focus is on none of them. */
@@ -66,6 +67,12 @@ interface PipHomeState {
   /** Whose timeline that is: the selected workstream's, or every open workstream's and General's merged. */
   timelineScope: TimelineScope;
   setTimelineScope(scope: TimelineScope): void;
+  /** Only the workstreams in this state are listed (⌘K "Show workstreams waiting on reporter"); null lists them all. */
+  statusFilter: StatusState | null;
+  setStatusFilter(state: StatusState | null): void;
+  /** Plan my week is open above the timeline. */
+  planOpen: boolean;
+  setPlanOpen(open: boolean): void;
   /** Opens group `gid`'s combined preview of its safe drafts in the middle column, for the person to confirm. */
   previewBatch(gid: string): void;
   /** Opens need `key`'s decision in the middle column, for workstream `workstreamId` (null is General). */
@@ -85,7 +92,7 @@ interface PipHomeState {
   reset(): void;
 }
 
-const BLANK = { selected: null, landed: false, showClosed: false, column: "conversation", focusTarget: null, deciding: null, paneRev: 0, expanded: new Set<string>(), collapsed: new Set<string>(), asking: null, batch: null, timelineFilter: "all", timelineScope: "workstream" } as const;
+const BLANK = { selected: null, landed: false, showClosed: false, column: "conversation", focusTarget: null, deciding: null, paneRev: 0, expanded: new Set<string>(), collapsed: new Set<string>(), asking: null, batch: null, timelineFilter: "all", timelineScope: "workstream", statusFilter: null, planOpen: false } as const;
 
 export const usePipHome = create<PipHomeState>((set) => ({
   ...BLANK,
@@ -108,6 +115,8 @@ export const usePipHome = create<PipHomeState>((set) => ({
   previewBatch: (gid) => set((s) => ({ batch: gid, deciding: null, asking: null, expanded: new Set([...s.expanded, gid]), collapsed: new Set([...s.collapsed].filter((x) => x !== gid)) })),
   setTimelineFilter: (timelineFilter) => set({ timelineFilter }),
   setTimelineScope: (timelineScope) => set({ timelineScope }),
+  setStatusFilter: (statusFilter) => set({ statusFilter }),
+  setPlanOpen: (planOpen) => set({ planOpen }),
   reset: () => set({ ...BLANK }),
 }));
 

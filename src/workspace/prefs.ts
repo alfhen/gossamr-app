@@ -7,6 +7,7 @@ import { readStored, writeStored } from "./storage";
 import { AGENTS_GROUPS, type AgentsGroup } from "./agentsLogic";
 import { dismissed, forget, parseLearning, type ClarityLearning } from "../lib/clarityLearning";
 import type { ClarityGap } from "../lib/ticketClarity";
+import { keepPlan, parseWeekPlans, reopenItem, type PlanItem, type WeekPlans } from "../lib/planMyWeek";
 
 export const THEMES = ["auto", "light", "dark"] as const;
 export type ThemeMode = (typeof THEMES)[number];
@@ -45,6 +46,8 @@ interface Prefs {
   startMyDayDoneOn: string | null;
   /** What "Looks fine" has taught the clarity notice: how often each gap was dismissed, per Jira project (`src/lib/clarityLearning.ts`). */
   clarityLearning: ClarityLearning;
+  /** The plans the person kept in Plan my week, by ISO week (`src/lib/planMyWeek.ts`). Local to this app; nothing of it goes to Jira. */
+  weekPlans: WeekPlans;
   /** Open on Pip home rather than the workspace, while Agents are on. On until the person turns it off. */
   startOnPipHome: boolean;
   setUi(ui: UiMode): void;
@@ -65,15 +68,19 @@ interface Prefs {
   setStartOnPipHome(on: boolean): void;
   /** Marks Start my day done for `day`, or open again with null. */
   setStartMyDayDoneOn(day: string | null): void;
+  /** Keeps `items` as the plan for the week `now` is in, replacing the one kept before. */
+  keepWeekPlan(items: readonly PlanItem[], now?: Date): void;
+  /** Takes a ticked item of week `week`'s kept plan back: open again, kept. */
+  reopenWeekPlanItem(week: string, id: string): void;
   /** Counts one "Looks fine" on a ticket of `project` whose notice named `gaps`; returns the gaps that are no longer flagged there from now on. */
   recordClarityDismissal(project: string, gaps: readonly ClarityGap[]): ClarityGap[];
   /** Forgets what "Looks fine" taught, for one project or (with none) all of them. */
-  resetClarityLearning(project?: string): void;
+  resetClarityLearning(project?: string, gaps?: readonly ClarityGap[]): void;
 }
 
 const KEY = "gossamr-prefs";
 
-export function loadPrefs(): Pick<Prefs, "ui" | "uiChosen" | "theme" | "pipOpen" | "peekWidth" | "pipWidth" | "columnOrder" | "agentsView" | "agentsGroup" | "agentsIntroSeen" | "pipOrientationSeen" | "permissionExplainerSeen" | "startOnPipHome" | "startMyDayDoneOn" | "clarityLearning"> {
+export function loadPrefs(): Pick<Prefs, "ui" | "uiChosen" | "theme" | "pipOpen" | "peekWidth" | "pipWidth" | "columnOrder" | "agentsView" | "agentsGroup" | "agentsIntroSeen" | "pipOrientationSeen" | "permissionExplainerSeen" | "startOnPipHome" | "startMyDayDoneOn" | "clarityLearning" | "weekPlans"> {
   const raw = readStored(KEY) as Partial<Record<keyof Prefs, unknown>> | null;
   return {
     // Installs from before the workspace was the default stored "classic" without anyone choosing it.
@@ -93,6 +100,7 @@ export function loadPrefs(): Pick<Prefs, "ui" | "uiChosen" | "theme" | "pipOpen"
     startOnPipHome: raw?.startOnPipHome !== false,
     startMyDayDoneOn: typeof raw?.startMyDayDoneOn === "string" ? raw.startMyDayDoneOn : null,
     clarityLearning: parseLearning(raw?.clarityLearning),
+    weekPlans: parseWeekPlans(raw?.weekPlans),
   };
 }
 
@@ -120,16 +128,18 @@ export const usePrefs = create<Prefs>((set, get) => ({
   setPermissionExplainerSeen: (permissionExplainerSeen) => set({ permissionExplainerSeen }),
   setStartOnPipHome: (startOnPipHome) => set({ startOnPipHome }),
   setStartMyDayDoneOn: (startMyDayDoneOn) => set({ startMyDayDoneOn }),
+  keepWeekPlan: (items, now = new Date()) => set((s) => ({ weekPlans: keepPlan(s.weekPlans, items, now) })),
+  reopenWeekPlanItem: (week, id) => set((s) => ({ weekPlans: reopenItem(s.weekPlans, week, id) })),
   recordClarityDismissal: (project, gaps) => {
     const next = dismissed(get().clarityLearning, project, gaps);
     set({ clarityLearning: next.learning });
     return next.learned;
   },
-  resetClarityLearning: (project) => set((s) => ({ clarityLearning: forget(s.clarityLearning, project) })),
+  resetClarityLearning: (project, gaps) => set((s) => ({ clarityLearning: forget(s.clarityLearning, project, gaps) })),
 }));
 
-usePrefs.subscribe(({ ui, uiChosen, theme, pipOpen, peekWidth, pipWidth, columnOrder, agentsView, agentsGroup, agentsIntroSeen, pipOrientationSeen, permissionExplainerSeen, startOnPipHome, startMyDayDoneOn, clarityLearning }) =>
-  writeStored(KEY, { ui, uiChosen, theme, pipOpen, peekWidth, pipWidth, columnOrder, agentsView, agentsGroup, agentsIntroSeen, pipOrientationSeen, permissionExplainerSeen, startOnPipHome, startMyDayDoneOn, clarityLearning }),
+usePrefs.subscribe(({ ui, uiChosen, theme, pipOpen, peekWidth, pipWidth, columnOrder, agentsView, agentsGroup, agentsIntroSeen, pipOrientationSeen, permissionExplainerSeen, startOnPipHome, startMyDayDoneOn, clarityLearning, weekPlans }) =>
+  writeStored(KEY, { ui, uiChosen, theme, pipOpen, peekWidth, pipWidth, columnOrder, agentsView, agentsGroup, agentsIntroSeen, pipOrientationSeen, permissionExplainerSeen, startOnPipHome, startMyDayDoneOn, clarityLearning, weekPlans }),
 );
 
 /** The browser build has no classic inbox to fall back to, so it always shows the workspace. */

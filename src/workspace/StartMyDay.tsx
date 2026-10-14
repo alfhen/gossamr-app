@@ -7,12 +7,17 @@ import type { WorkstreamWither } from "../lib/workstreamWither";
 import { useWorkspace } from "../workspaceStore";
 import { openTicketByKey } from "./jump";
 import { openNeed } from "./needsActions";
+import { showPlanMyWeek } from "./planActions";
 import { usePipHome } from "./pipHomeStore";
 import { usePrefs } from "./prefs";
 import { useTabs } from "./tabsStore";
 import { openOnPipHome, useWorkstreams } from "./workstreamsStore";
 
 const button = "rounded-md border border-ws-sep2 px-2.5 py-px text-sm leading-normal whitespace-nowrap hover:bg-ws-hover focus-visible:outline-2 focus-visible:outline-ws-pip";
+
+/** What the card is, and what Done for now does. */
+export const DAY_ABOUT = "Once a day: what needs you, what is stuck and what may be unclear. Nothing is posted. Done for now hides it until tomorrow; ⌘K brings it back.";
+export const DONE_HINT = "Hides Start my day until tomorrow. ⌘K brings it back.";
 
 /** What the card says when there is nothing to start with. */
 export const DAY_EMPTY = "Nothing needs you, no reporter is silent, and nothing has gone quiet in Jira.";
@@ -101,20 +106,28 @@ export function DayLineView({ line }: { line: DayLine }) {
 }
 
 /** The card itself: pure of the stores, so a test can render it. */
-export function StartMyDayView({ day, onDone, onSent }: { day: StartMyDay; onDone(): void; onSent(): void }) {
+export function StartMyDayView({ day, onDone, onSent, onPlan }: { day: StartMyDay; onDone(): void; onSent(): void; onPlan?(): void }) {
   return (
-    <section data-start-my-day aria-labelledby="start-my-day" tabIndex={-1} className="grid max-h-[40vh] shrink-0 gap-2 overflow-y-auto border-b border-ws-sep bg-ws-bar px-3 py-2 outline-none">
+    <section data-start-my-day aria-labelledby="start-my-day" tabIndex={-1} className="grid gap-2 border-b border-ws-sep bg-ws-bar px-3 py-2 outline-none">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
         <h2 id="start-my-day" className="m-0 min-w-0 flex-1 text-sm font-semibold text-ws-ink">
           Start my day
         </h2>
+        {onPlan && (
+          <button type="button" data-day-plan onClick={onPlan} className={`${button} border-transparent text-ws-ink2 underline`}>
+            Plan my week
+          </button>
+        )}
         <button type="button" data-day-sent onClick={onSent} className={`${button} border-transparent text-ws-ink2 underline`}>
           What Jira saw from me
         </button>
-        <button type="button" data-day-done onClick={onDone} className={button}>
+        <button type="button" data-day-done title={DONE_HINT} onClick={onDone} className={button}>
           Done for now
         </button>
       </div>
+      <p data-day-about className="m-0 text-sm text-ws-ink3">
+        {DAY_ABOUT}
+      </p>
       {day.empty ? (
         <p data-day-empty className="m-0 text-sm text-ws-ink3">
           {DAY_EMPTY}
@@ -140,5 +153,5 @@ export function StartMyDayCard({ needs, withers, now }: { needs: readonly Need[]
 /** The card with its day worked out, only while it shows: set aside, the tickets are not read at all. */
 function LiveStartMyDay({ needs, withers, now }: { needs: readonly Need[]; withers: Readonly<Record<string, WorkstreamWither>>; now: number }) {
   const day = useStartMyDay(needs, withers, now);
-  return <StartMyDayView day={day} onDone={() => doneForNow(new Date(now))} onSent={() => useTabs.getState().setRoute("sent")} />;
+  return <StartMyDayView day={day} onDone={() => doneForNow(new Date(now))} onSent={() => useTabs.getState().setRoute("sent")} onPlan={showPlanMyWeek} />;
 }

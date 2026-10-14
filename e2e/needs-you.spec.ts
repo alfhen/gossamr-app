@@ -111,7 +111,8 @@ test("one row per workstream, with '+N more' for the rest, and one count on the 
   await expect(footer(page)).toHaveText(/ · 7 need you$/);
   await expect(page.getByRole("button", { name: "Agents", exact: true })).toHaveCount(1);
   await expect(agentsButton(page).locator("span[aria-label]")).toHaveCount(0);
-  await expect(workstreamRow(page, "CA-401").locator("[data-needs-you-badge]")).toHaveText("3 need you");
+  await expect(workstreamRow(page, "CA-401").locator("[data-status]")).toHaveText("Needs you");
+  await expect(workstreamRow(page, "CA-401").locator("[data-status-detail]")).toHaveText("· 3 waiting");
 });
 
 test("deciding a permission from the pane: Deny, then focus is on the next need", async ({ page }) => {

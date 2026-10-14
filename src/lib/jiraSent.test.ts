@@ -60,7 +60,9 @@ describe("What Jira saw from me", () => {
     const asked = draft("d", comment("CA-401", "x"), { createdBy: "user", label: "Questions for the reporter" });
     const nudge = draft("e", comment("CA-401", "x"), { createdBy: "user", label: "Nudge for the reporter" });
     const out = Object.fromEntries(jiraSent({ proposals: [pip, run, board, asked, nudge], events: {}, workstreams: [view("w1", "CA-401")] }).map((e) => [e.id, [e.madeBy, e.from]]));
-    expect(out).toEqual({ a: ["Pip", "Pip's conversation"], b: ["An agent run", "run R3"], c: ["You", "the board"], d: ["Gossamr", "Gossamr, for the workstream"], e: ["Gossamr", "Gossamr, for the workstream"] });
+    expect(out).toEqual({ a: ["Pip", "Pip's conversation"], b: ["An agent run", "run R3"], c: ["You", "the board"], d: ["Gossamr", "Gossamr"], e: ["Gossamr", "Gossamr"] });
+    const labels = Object.fromEntries(jiraSent({ proposals: [pip, asked, nudge], events: {}, workstreams: [view("w1", "CA-401")] }).map((e) => [e.id, [e.kind, e.label]]));
+    expect(labels).toEqual({ a: ["comment", undefined], d: ["comment", "Questions to the reporter"], e: ["comment", "Nudge to the reporter"] });
   });
 
   it("says whether the person edited the draft before approving it", () => {

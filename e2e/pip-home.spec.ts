@@ -212,7 +212,7 @@ test("Needs you: Pip's investigation draft waits in the list and on its row, ope
   await agentsSettled(page, true);
   await homeWorkstream(page);
   const row = workstreamRow(page, "CA-401");
-  await expect(row.locator("[data-needs-you-badge]")).toHaveCount(0);
+  await expect(row.locator('[data-status="needs-you"]')).toHaveCount(0);
 
   await askPip(page, "investigate this");
   await settled(page);
@@ -220,7 +220,8 @@ test("Needs you: Pip's investigation draft waits in the list and on its row, ope
   await expect(item).toHaveCount(1);
   await expect(item).toContainText("drafted an Investigate agent for CA-401");
   await expect(item.locator("[data-needs-you-chip]")).toHaveText("Approve");
-  await expect(row.locator("[data-needs-you-badge]")).toHaveText("1 needs you");
+  await expect(row.locator("[data-status]")).toHaveText("Needs you");
+  await expect(row.locator("[data-status-detail]")).toHaveText("· 1 waiting");
 
   // From General, the need selects the workstream again and opens its decision, with the draft's own Skip.
   await workstreamRow(page, "General").click();
@@ -233,7 +234,7 @@ test("Needs you: Pip's investigation draft waits in the list and on its row, ope
   // Skipped there, it leaves the list and the badge, and the pane has nothing left to open.
   await needsPane(page).getByRole("button", { name: "Skip" }).click();
   await expect(item).toHaveCount(0);
-  await expect(row.locator("[data-needs-you-badge]")).toHaveCount(0);
+  await expect(row.locator('[data-status="needs-you"]')).toHaveCount(0);
   await expect(needsPane(page)).toHaveCount(0);
   await expect(needsYouTray(page)).toContainText("Nothing needs you.");
 });
@@ -251,8 +252,8 @@ test("Needs you: a hold the person chose is no need, so the header says 'Held by
   await expect(banner).toContainText("Held by you");
   await expect(banner).toContainText("You chose this, so it is not in Needs you.");
   await expect(held).toHaveCount(0);
-  await expect(row.locator("[data-status]")).toHaveText("· Held by you");
-  await expect(row.locator("[data-needs-you-badge]")).toHaveCount(0);
+  await expect(row.locator("[data-status]")).toHaveText("Held by you");
+  await expect(row.locator('[data-status="needs-you"]')).toHaveCount(0);
   await expect(needsYouTray(page)).toContainText("Nothing needs you.");
   await banner.getByRole("button", { name: "Resume" }).click();
   await expect(banner).toHaveCount(0);
@@ -261,14 +262,15 @@ test("Needs you: a hold the person chose is no need, so the header says 'Held by
   await holdBySystem(page, "CA-401", "restart");
   await expect(held).toHaveCount(1);
   await expect(held).toContainText("Held after a restart");
-  await expect(row.locator("[data-needs-you-badge]")).toHaveText("1 needs you");
+  await expect(row.locator("[data-status]")).toHaveText("Needs you");
+  await expect(row.locator("[data-status-detail]")).toHaveText("· Held after a restart");
   await workstreamRow(page, "General").click();
   await held.click();
   const resume = needsPane(page).locator("[data-held-banner]").getByRole("button", { name: "Resume" });
   await expect(resume).toBeFocused();
   await page.keyboard.press("Enter");
   await expect(held).toHaveCount(0);
-  await expect(row.locator("[data-needs-you-badge]")).toHaveCount(0);
+  await expect(row.locator('[data-status="needs-you"]')).toHaveCount(0);
 });
 
 test("Needs you from the board: the rail's Pip home popover lists the same rows and opens their decisions on Pip home", async ({ page }) => {

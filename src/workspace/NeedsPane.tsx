@@ -3,6 +3,7 @@ import { docText } from "../lib/docs";
 import { higherPriority, needAfter, needGroups, type Need } from "../lib/needs";
 import { ALLOW_MORE_STEPS, type Proposal, type Run, type WorkstreamView } from "../types";
 import { stepsOf } from "../lib/workstreamHold";
+import { isReporterNudge, isReporterQuestions } from "../lib/proposals";
 import { useWorkspace } from "../workspaceStore";
 import { OpenInTerminal, FailureNext } from "./AgentParts";
 import { Box, BoxTitle, Btn } from "./AgentSheet";
@@ -90,7 +91,17 @@ function useAdvance(needs: readonly Need[], onAdvance: (done: Need, next: Need) 
 }
 
 /** The line over the pane once it moved on by itself: what was dealt with, and what is open now. */
-export const advancedText = (done: Pick<Need, "title">, next: Pick<Need, "title">) => `Done: ${done.title}. Now: ${next.title}`;
+export const advancedText = (done: Pick<Need, "title">, next: Pick<Need, "title">, waitsOn?: string | null) => `Done: ${done.title}.${waitsOn ? ` ${waitsOn}.` : ""} Now: ${next.title}`;
+
+/**
+ * What posting `done` started, when it was the questions or the nudge for the reporter (posted, not skipped): the wait, so the
+ * person who is moved on to the next need still hears that the workstream waits and nothing starts on its own. Null otherwise.
+ */
+export function waitStarted(done: Pick<Need, "target" | "ticketKey">, proposals: Readonly<Record<string, Proposal>>): string | null {
+  const p = done.target.type === "draft" ? proposals[done.target.id] : undefined;
+  if (!p || !(isReporterQuestions(p) || isReporterNudge(p)) || (p.state.type !== "applied" && p.state.type !== "applying")) return null;
+  return `${done.ticketKey ?? "The workstream"} now waits on the reporter; nothing starts on its own`;
+}
 
 /** The line with an id of its own: two advances with the same words (drafts with one title) are still two, so the line shows again and its timer restarts. */
 export interface Advanced {
@@ -732,7 +743,7 @@ export function NeedsPane({ needs }: { needs: readonly Need[] }) {
   const paneRev = usePipHome((s) => s.paneRev);
   const [advanced, setAdvanced] = useState<Advanced | null>(null);
   const lastId = useRef(0);
-  useAdvance(needs, (done, next) => setAdvanced((prev) => nextAdvanced(prev ?? { id: lastId.current, text: "" }, advancedText(done, next))));
+  useAdvance(needs, (done, next) => setAdvanced((prev) => nextAdvanced(prev ?? { id: lastId.current, text: "" }, advancedText(done, next, waitStarted(done, useWorkspace.getState().proposals)))));
   useEffect(() => {
     if (!advanced) return;
     lastId.current = advanced.id;

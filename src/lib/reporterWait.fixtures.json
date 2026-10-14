@@ -1,5 +1,5 @@
 {
-  "about": "reporterFollow (src/lib/reporterWait.ts) and reporter_follow (src-tauri/src/inbox/workstreams.rs). `events` is the audit, oldest first. `comments` (ticket comments with author and at) and `me` (the person's own account, or null): both sides pass as `replies` the times of the comments whose author is not `me`. `expect` is waiting (the since time, or null), changed (the wait ended because the ticket changed or the reporter replied, and the person has not chosen since), and replied (it ended with a reply, which implies changed).",
+  "about": "reporterFollow (src/lib/reporterWait.ts) and reporter_follow (src-tauri/src/inbox/workstreams.rs). `events` is the audit, oldest first. `comments` (ticket comments with author and at) and `me` (the person's own account, or null): both sides pass as `replies` the times of the comments whose author is not `me`. `expect` is waiting (the since time, or null), changed (the wait ended because the ticket changed or the reporter replied, and the person has not chosen since), and replied (it ended with a reply, which implies changed). `repliedAt`, where a case names it, is the time of the comment that ended the wait (`followWithReply`, `reporter_follow_at`), null without a reply.",
   "cases": [
     {
       "name": "no audit is no wait",
@@ -446,7 +446,7 @@
       ],
       "comments": [{"author": "kim", "at": "2026-10-12T10:05:00Z"},{"author": "kim", "at": "2026-10-12T10:08:00Z"}],
       "me": "me",
-      "expect": { "waiting": false, "since": null, "changed": true, "replied": true }
+      "expect": { "waiting": false, "since": null, "changed": true, "replied": true, "repliedAt": "2026-10-12T10:08:00Z" }
     },
     {
       "name": "a choice after a reply clears the question",
@@ -469,6 +469,38 @@
       "comments": [{"author": "kim", "at": "2026-10-12T10:05:00Z"},{"author": "kim", "at": "2026-10-12T10:09:00Z"}],
       "me": "me",
       "expect": { "waiting": false, "since": null, "changed": false, "replied": false }
+    },
+    {
+      "name": "the reply's time is that of the first comment from someone else after the wait began",
+      "events": [
+        {"actor": "person", "action": "readiness_asked", "proposalId": "d1", "at": "2026-10-12T10:01:00Z"},
+        {"actor": "person", "action": "draft_approved", "proposalId": "d1", "at": "2026-10-12T10:02:00Z"}
+      ],
+      "comments": [{"author": "kim", "at": "2026-10-12T10:00:30Z"},{"author": "me", "at": "2026-10-12T10:03:00Z"},{"author": "kim", "at": "2026-10-12T10:05:00Z"},{"author": "kim", "at": "2026-10-12T10:09:00Z"}],
+      "me": "me",
+      "expect": { "waiting": false, "since": null, "changed": true, "replied": true, "repliedAt": "2026-10-12T10:05:00Z" }
+    },
+    {
+      "name": "resuming keeps the reply's time, since the question stays",
+      "events": [
+        {"actor": "person", "action": "readiness_asked", "proposalId": "d1", "at": "2026-10-12T10:01:00Z"},
+        {"actor": "person", "action": "draft_approved", "proposalId": "d1", "at": "2026-10-12T10:02:00Z"},
+        {"actor": "person", "action": "resumed", "at": "2026-10-12T10:06:00Z"}
+      ],
+      "comments": [{"author": "kim", "at": "2026-10-12T10:05:00Z"}],
+      "me": "me",
+      "expect": { "waiting": false, "since": null, "changed": true, "replied": true, "repliedAt": "2026-10-12T10:05:00Z" }
+    },
+    {
+      "name": "no reply, no time",
+      "events": [
+        {"actor": "person", "action": "readiness_asked", "proposalId": "d1", "at": "2026-10-12T10:01:00Z"},
+        {"actor": "person", "action": "draft_approved", "proposalId": "d1", "at": "2026-10-12T10:02:00Z"},
+        {"actor": "supervisor", "action": "basis_drifted", "at": "2026-10-12T10:06:00Z"}
+      ],
+      "comments": [],
+      "me": "me",
+      "expect": { "waiting": false, "since": null, "changed": true, "replied": false, "repliedAt": null }
     }
   ]
 }

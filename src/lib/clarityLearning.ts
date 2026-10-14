@@ -55,12 +55,29 @@ export function dismissed(learning: ClarityLearning, project: string, gaps: read
   return { learning: { ...learning, [project]: counts }, learned };
 }
 
-/** The learning with `project`'s (or everything's, with none named) counts forgotten. */
-export function forget(learning: ClarityLearning, project?: string): ClarityLearning {
+/** The learning with `project`'s (or everything's, with none named) counts forgotten; with `gaps`, only those gaps' counts of `project`. */
+export function forget(learning: ClarityLearning, project?: string, gaps?: readonly ClarityGap[]): ClarityLearning {
   if (!project) return {};
-  const { [project]: _gone, ...rest } = learning;
-  return rest;
+  const { [project]: counts, ...rest } = learning;
+  if (!gaps || !counts) return rest;
+  const kept = Object.fromEntries(Object.entries(counts).filter(([g]) => !gaps.includes(g as ClarityGap)));
+  return Object.keys(kept).length ? { ...rest, [project]: kept } : rest;
 }
+
+/** The gaps among `gaps` that are not flagged for `project` because "Looks fine" taught them away: what a workstream's quiet "Not flagged" note names. */
+export const ignoredAmong = (gaps: readonly ClarityGap[], learning: ClarityLearning, project: string): ClarityGap[] => {
+  const skip = ignoredGaps(learning, project);
+  return gaps.filter((g) => skip.includes(g));
+};
+
+/** Each gap in a few words, for Settings and the "Not flagged" note, where the long `gapWords` don't fit. */
+export const SHORT_GAP: Record<ClarityGap, string> = {
+  empty: "no description",
+  short: "short description",
+  done: "no \"done\" criteria",
+  scope: "no scope",
+  who: "no \"who is waiting\"",
+};
 
 /** The projects that have something learned, with what: for Settings, which offers to give each back. */
 export function learnedList(learning: ClarityLearning): { project: string; gaps: ClarityGap[] }[] {

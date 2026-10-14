@@ -1,8 +1,12 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useClaude } from "../claudeStore";
 import { stageText } from "../lib/workstreamStage";
+import { EMPTY_FILTER, STATUS_HINT, STATUS_WORD, workstreamStatus, type StatusState, type WorkstreamStatus } from "../lib/workstreamStatus";
+import { StatusPill } from "./StatusPill";
+import { PlanMyWeek, ThisWeek } from "./PlanMyWeek";
+import { isoWeek } from "../lib/planMyWeek";
 import { witherClass } from "../lib/views";
-import { witherShort, witherTitle, type WorkstreamWither } from "../lib/workstreamWither";
+import { witherTitle, type WorkstreamWither } from "../lib/workstreamWither";
 import { Cobweb } from "../components/Cobweb";
 import { useWorkstreamWithers } from "./useWorkstreamWithers";
 import type { Run, WorkstreamView } from "../types";
@@ -14,6 +18,7 @@ import { lightboxOpen, useAttachments, useFileDrop } from "./PipImages";
 import { ConversationLine, escapeCancelsTurn, useConversationDrafts, usePipChips } from "./PipPane";
 import { popoverOpen } from "./Popover";
 import { START_WORKSTREAM } from "./commands";
+import type { ClarityLearning } from "../lib/clarityLearning";
 import { usePrefs } from "./prefs";
 import { useRunSetup } from "./runSetupStore";
 import { useTabs } from "./tabsStore";
@@ -26,7 +31,8 @@ import { NeedsPane, firstDecision } from "./NeedsPane";
 import { StartMyDayCard } from "./StartMyDay";
 import { arm, confirmArmed, disarm, groupId, keyPlan, openNeed, setPaneIntent } from "./needsActions";
 import { undoLog } from "./undo";
-import { composerFooter, landingSelection, workstreamStatus } from "./pipHomeLogic";
+import { composerFooter, landingSelection } from "./pipHomeLogic";
+import { focusToast } from "./ToastHost";
 import { PIP_HOME_REGIONS, columnRegion, regionColumn, usePipHome, type PipHomeColumn, type PipHomeFocus, type PipHomeRegion } from "./pipHomeStore";
 import { useRuns } from "./runsStore";
 import { focusComposer, focusedConversation, useHomeWorkstream, useWorkstreams } from "./workstreamsStore";
@@ -54,18 +60,17 @@ export function rowTitle(ws: WorkstreamView["workstream"]): string {
 
 const ROW = "grid w-full gap-0.5 rounded-lg px-2.5 py-1.5 text-left outline-none focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-[-2px] focus-visible:outline-ws-pip";
 
-/** A row's stage, then its short status unless the stage already says it ("Build · waiting for PR"). */
-function RowStatus({ view, runs, waiting, nudge = false }: { view: WorkstreamView; runs: readonly Run[]; waiting: number; nudge?: boolean }) {
+/** A row's stage, then its one short detail ("3d", "Build") after the status pill, and "nudge due" once the reporter has been silent for days. */
+function RowStatus({ status, view, nudge = false }: { status: WorkstreamStatus; view: WorkstreamView; nudge?: boolean }) {
   const stage = stageText(view.stage, view.waitingForPr, view.reviewBlocking);
-  const status = workstreamStatus(view, runs, waiting);
   return (
     <span className="flex min-w-0 gap-1 text-xs text-ws-ink3">
       <span data-stage className="shrink-0">
         {stage}
       </span>
-      {!stage.endsWith(status) && (
-        <span data-status className="min-w-0 truncate">
-          · {status}
+      {status.detail && (
+        <span data-status-detail data-workstream-wither-short={status.state === "quiet" ? "" : undefined} className="min-w-0 truncate">
+          · {status.detail}
         </span>
       )}
       {/* The reporter has been silent for days: the Next line (and Start my day) offer "Draft a nudge". */}
@@ -94,6 +99,13 @@ export interface WorkstreamListProps {
   wither?: Readonly<Record<string, WorkstreamWither>>;
   /** The workstreams (by id) whose reporter has been silent long enough that a nudge is offered: their row says so. */
   nudgeDue?: ReadonlySet<string>;
+  /** Only the workstreams in this state are listed; null lists every one. */
+  statusFilter?: StatusState | null;
+  onStatusFilter?(state: StatusState | null): void;
+  /** The clock for each row's status; the time of the call when absent. */
+  now?: number;
+  /** What "Looks fine" taught the clarity notice (a row says "may be unclear" only for a gap still flagged); the prefs' when absent. */
+  learning?: ClarityLearning;
 }
 
 /** What the list says before there is any workstream: what one is, in a line. */
@@ -114,14 +126,21 @@ function NeedsBadge({ count, total }: { count: number; total: number }) {
  * open workstream with where it stands; the closed ones behind a toggle, read-only. It takes at most 45% of the column and
  * scrolls inside that, so Needs you keeps the rest.
  */
-export function WorkstreamList({ list, closed, showClosed, selected, onSelect, onShowClosed, runs = [], needsYou = [], wither = {}, nudgeDue }: WorkstreamListProps) {
-  const open = list.filter((v) => v.workstream.closedAt === null);
-  const option = (id: string | null, level: WorkstreamWither["level"] = 0) => ({
+export function WorkstreamList({ list, closed, showClosed, selected, onSelect, onShowClosed, runs = [], needsYou = [], wither = {}, nudgeDue, statusFilter = null, onStatusFilter, now, learning: given }: WorkstreamListProps) {
+  const stored = usePrefs((s) => s.clarityLearning);
+  const learning = given ?? stored;
+  const statuses = new Map(list.filter((v) => v.workstream.closedAt === null).map((v) => [v.workstream.id, workstreamStatus(v, needsYou, { runs, wither: wither[v.workstream.id] ?? null, now: new Date(now ?? Date.now()), learning })]));
+  const everyOpen = list.filter((v) => v.workstream.closedAt === null);
+  const matches = (v: WorkstreamView) => !statusFilter || statuses.get(v.workstream.id)?.state === statusFilter;
+  // The open workstream stays listed when the filter leaves it out (dimmed, with a note), since its conversation is what is shown.
+  const open = everyOpen.filter((v) => matches(v) || v.workstream.id === selected);
+  const matching = everyOpen.filter(matches).length;
+  const option = (id: string | null, level: WorkstreamWither["level"] = 0, dim = false) => ({
     role: "option" as const,
     "aria-selected": selected === id,
     tabIndex: selected === id ? 0 : -1,
     onClick: () => onSelect(id),
-    className: `${ROW} ${selected === id ? "bg-ws-sel text-ws-ink" : "text-ws-ink2 hover:bg-ws-hover"} ${witherClass(level, "ws-")}`.trim(),
+    className: `${ROW} ${selected === id ? "bg-ws-sel text-ws-ink" : "text-ws-ink2 hover:bg-ws-hover"} ${witherClass(level, "ws-")} ${dim ? "opacity-60" : ""}`.trim(),
   });
   return (
     <nav aria-label="Workstreams" tabIndex={-1} className="flex max-h-[45%] min-h-0 shrink-0 flex-col border-t border-ws-sep bg-ws-bar">
@@ -136,31 +155,44 @@ export function WorkstreamList({ list, closed, showClosed, selected, onSelect, o
         </li>
         {open.map((v) => {
           const web = wither[v.workstream.id];
+          const status = statuses.get(v.workstream.id)!;
           return (
-            <li key={v.workstream.id} data-workstream-row={v.workstream.id} data-wither={web ? web.level : undefined} title={web ? witherTitle(web) : undefined} {...option(v.workstream.id, web?.level)}>
+            <li key={v.workstream.id} data-workstream-row={v.workstream.id} data-wither={web ? web.level : undefined} data-filtered-out={matches(v) ? undefined : "" } title={web ? witherTitle(web) : undefined} {...option(v.workstream.id, web?.level, !matches(v))}>
               {web && <Cobweb level={web.level} />}
               <span className="flex min-w-0 items-center gap-1.5">
                 {v.workstream.itemKey && <b className="shrink-0 font-mono font-semibold text-ws-ink">{v.workstream.itemKey}</b>}
                 <span className="min-w-0 truncate">{rowTitle(v.workstream)}</span>
-                <NeedsBadge count={needsIn(needsYou, v.workstream.id)} total={needsYou.length} />
+                <span className="ml-auto flex shrink-0">
+                  <StatusPill status={status} title={status.state === "needs-you" ? `${needsIn(needsYou, v.workstream.id)} of the ${needsYou.length} in Needs you ${needsIn(needsYou, v.workstream.id) === 1 ? "is" : "are"} here. ${STATUS_HINT[status.state]}` : undefined} />
+                </span>
               </span>
-              <RowStatus view={v} runs={runs} waiting={needsIn(needsYou, v.workstream.id)} nudge={nudgeDue?.has(v.workstream.id)} />
+              <RowStatus status={status} view={v} nudge={nudgeDue?.has(v.workstream.id)} />
+              {!matches(v) && statusFilter && (
+                <span data-filter-shown className="text-xs text-ws-ink3">
+                  Shown because it is open; not {STATUS_WORD[statusFilter]}
+                </span>
+              )}
               {/* After the row's own words, so its name still starts with the ticket's key. */}
               {web && (
-                <>
-                  <span data-workstream-wither-short aria-hidden className="truncate text-xs text-ws-ink3">
-                    {witherShort(web)}
-                  </span>
-                  <span data-workstream-wither className="sr-only">
-                    {web.text}
-                  </span>
-                </>
+                <span data-workstream-wither className="sr-only">
+                  {web.text}
+                </span>
               )}
             </li>
           );
         })}
       </ul>
-      {open.length === 0 && <p className="m-0 px-3 py-2 text-sm text-ws-ink3">{NO_WORKSTREAMS}</p>}
+      {statusFilter && (
+        <p data-status-filter={statusFilter} className="m-0 flex items-baseline gap-2 px-3 pb-1 text-xs text-ws-ink2">
+          <span>
+            Showing {STATUS_WORD[statusFilter]}: {matching}
+          </span>
+          <button type="button" onClick={() => onStatusFilter?.(null)} className="rounded px-1 text-ws-ink2 underline hover:bg-ws-hover focus-visible:outline-2 focus-visible:outline-ws-pip">
+            Show all
+          </button>
+        </p>
+      )}
+      {matching === 0 && <p className="m-0 px-3 py-2 text-sm text-ws-ink3">{statusFilter ? EMPTY_FILTER[statusFilter] : NO_WORKSTREAMS}</p>}
       <div className="mt-auto flex flex-wrap items-center gap-x-1 border-t border-ws-sep px-1.5 py-1">
         <button
           type="button"
@@ -366,18 +398,23 @@ function overlayOpen(): boolean {
 const REGION_ON: Record<PipHomeRegion, string> = {
   needs: "[data-pip-home] [data-needs-you]",
   workstreams: '[data-pip-home] nav[aria-label="Workstreams"]',
+  day: "[data-pip-home] [data-plan-my-week], [data-pip-home] [data-start-my-day]",
   timeline: "[data-pip-home] [data-timeline]",
   pane: "[data-pip-home] [data-needs-pane]",
   rail: '[data-pip-home-column="rail"] [data-step-rail]',
   composer: `#${PIP_INPUT_ID}`,
+  toast: "[data-toast]",
 };
 
 const regionsOnScreen = () => PIP_HOME_REGIONS.filter((r) => document.querySelector(REGION_ON[r]));
 
 /** The region of Pip home `el` is in; null for nothing there (focus on the page itself). The timeline's filter bar and the conversation's header are the timeline's. */
 function regionOf(el: Element | null): PipHomeRegion | null {
+  // The toast sits over the page, outside Pip home's columns.
+  if (el?.closest("[data-toast]")) return "toast";
   if (!el || !el.closest("[data-pip-home]")) return null;
   if (el.closest("[data-needs-pane]")) return "pane";
+  if (el.closest("[data-plan-my-week], [data-start-my-day]")) return "day";
   if (el.closest("[data-needs-you]")) return "needs";
   if (el.closest('nav[aria-label="Workstreams"]')) return "workstreams";
   if (el.closest('[data-pip-home-column="rail"]')) return "rail";
@@ -440,6 +477,7 @@ function usePipHomeKeys(needsYou: readonly Need[]) {
     /** F6's stops: where the keyboard lands in a region, which is the first row of Needs you, the selected workstream, the newest entry of the timeline, the pane's decision, the rail as `enter` has it, or the composer. */
     const enterRegion = (region: PipHomeRegion) => {
       if (region === "rail" || region === "composer") return enter(regionColumn(region));
+      if (region === "toast") return void focusToast();
       usePipHome.getState().setColumn(regionColumn(region));
       const home = document.querySelector("[data-pip-home]");
       const all = (sel: string) => Array.from(home?.querySelectorAll<HTMLElement>(sel) ?? []);
@@ -452,6 +490,8 @@ function usePipHomeKeys(needsYou: readonly Need[]) {
           const rows = all('[role="option"]');
           return void show(rows.find((r) => r.getAttribute("aria-selected") === "true") ?? rows[0] ?? home?.querySelector<HTMLElement>('nav[aria-label="Workstreams"]'));
         }
+        case "day":
+          return void show(home?.querySelector<HTMLElement>("[data-plan-my-week]") ?? home?.querySelector<HTMLElement>("[data-start-my-day]"));
         case "timeline": {
           const last = all("[data-timeline] " + TIMELINE_ENTRY).pop();
           return void show(last ? timelineStop(last) : home?.querySelector<HTMLElement>("[data-timeline]"));
@@ -579,6 +619,8 @@ export function PipHome() {
   const loaded = useWorkstreams((s) => s.loaded);
   const selected = usePipHome((s) => s.selected);
   const showClosed = usePipHome((s) => s.showClosed);
+  const statusFilter = usePipHome((s) => s.statusFilter);
+  const planOpen = usePipHome((s) => s.planOpen);
   const workstream = useHomeWorkstream();
   const runs = useRuns((s) => s.runs);
   const needsYou = useNeedsYou();
@@ -644,6 +686,7 @@ export function PipHome() {
           {/* The left column: Needs you takes the height, the workstreams are a compact section under it. */}
           <div data-pip-home-left className="flex min-h-0 flex-col border-r border-ws-sep bg-ws-bar">
             <NeedsYouList main needs={needsYou} now={now} />
+            <ThisWeek />
             <WorkstreamList
               list={list}
               closed={closed}
@@ -658,6 +701,9 @@ export function PipHome() {
               needsYou={needsYou}
               wither={withers}
               nudgeDue={nudgeDue}
+              statusFilter={statusFilter}
+              onStatusFilter={(state) => usePipHome.getState().setStatusFilter(state)}
+              now={now}
             />
           </div>
         </div>
@@ -665,7 +711,13 @@ export function PipHome() {
         <InlineStartContext.Provider value={true}>
           <DecisionShownContext.Provider value={decided}>
             <div data-pip-home-column="conversation" onFocusCapture={enter("conversation")} className="contents">
-              <HomeConversation workstream={workstream} footer={footer} needs={needsYou} day={<StartMyDayCard needs={needsYou} withers={withers} now={now} />} pane={<NeedsPane needs={needsYou} />} />
+              <HomeConversation workstream={workstream} footer={footer} needs={needsYou} day={
+                  <div data-pip-home-day className="max-h-[45vh] shrink-0 overflow-y-auto empty:hidden">
+                    {planOpen && <PlanMyWeek key={isoWeek(new Date(now))} needs={needsYou} withers={withers} now={now} />}
+                    {/* The plan is opened from the card and its Close brings it back; the card is General's summary, not a workstream's. */}
+                    {!planOpen && workstream === null && <StartMyDayCard needs={needsYou} withers={withers} now={now} />}
+                  </div>
+                } pane={<NeedsPane needs={needsYou} />} />
             </div>
             <div data-pip-home-column="rail" onFocusCapture={enter("rail")} className="contents">
               <StepsColumn workstream={workstream} />
