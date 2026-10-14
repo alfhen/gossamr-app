@@ -1791,7 +1791,7 @@ mod tests {
         use crate::domain::CodeChangeState;
         use crate::inbox::testing::fixture_watching_with;
 
-        const PLAN: &str = "## Approach\n\nRound in one place.\n\n## Steps\n\n1. Fix the rounding.\n2. Add a test.\n\nFor Jira:\nPlan attached to the run.";
+        const PLAN: &str = "## Approach\n\nRound in one place.\n\n## Steps\n\n1. Fix the rounding.\n2. Add a test.\n\nFor Jira:\nRound once, in cart.rs, then test it. The plan is in the description.";
         const BUILT: &str = "Fixed the rounding in cart.rs and added a test.\n\nFor Jira:\nDraft PR opened: https://github.com/acme/webshop/pull/12";
         const FOUND: &str = "I read the consumer.\n\nFor Jira:\nThe cart rounds twice, in cart.rs and in checkout.rs.";
         const EXTRA: &str = "Marker: also check the refund path.";

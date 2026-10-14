@@ -140,6 +140,18 @@ describe("an adversarial review", () => {
     expect(INSTRUCTIONS.review).toContain("not ready");
   });
 
+  it("and every other kind end with the same note sentence, which tells the agent to write for people who do not use the app", () => {
+    for (const kind of ["investigate", "triage", "plan", "verify", "build", "review"] as const) {
+      expect(INSTRUCTIONS[kind].endsWith(note), kind).toBe(true);
+      for (const rule of ["for people who do not use Gossamr", "name no runs, workstreams, worktrees, Pip, Gossamr or other app internals", "point at nothing only the app holds", "a neutral voice without 'I' or 'we'", "say only what is new since the last comment on the ticket"]) {
+        expect(INSTRUCTIONS[kind].split(rule).length - 1, `${kind}: ${rule}`).toBe(1);
+      }
+    }
+    const plan = /pub const PLAN_INSTRUCTION: &str = concat!\("((?:[^"\\]|\\.)*)", status_note!\(\)\);/.exec(rust)![1].replace(/\\"/g, '"');
+    expect(INSTRUCTIONS.plan).toBe(`${plan}${note}`);
+    expect(INSTRUCTIONS.plan).not.toContain("attached to the run");
+  });
+
   it("is asked for a verdict and findings in the report paragraph, as report_paragraph is, and no other kind is", () => {
     const fields = [...rust.slice(rust.indexOf("fn report_paragraph"), rust.indexOf("/// The exact text handed to the agent")).matchAll(/fields\.push\("([^"]*)"\.into\(\)\)/g)].map((m) => m[1]);
     const verdict = fields.find((f) => f.startsWith("verdict ("))!;
