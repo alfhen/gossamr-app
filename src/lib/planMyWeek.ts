@@ -74,6 +74,23 @@ interface Scored {
 export function rankWeek(i: PlanInput): PlanPick[] {
   const scored: Scored[] = [];
   const opened = new Set<string>();
+  // Needs in General that are about a ticket (workstreamId null, ticketKey set): a pending decision on a ticket still counts for it, workstream or not.
+  // A need carries a key and no connection, but a run's need can be placed through its run; one with no run (a draft) is matched
+  // only where that key is on one connection among the candidates, since the same key on two is two tickets.
+  const connections = new Map<string, Set<string>>();
+  const seen = (conn: string, key: string) => connections.set(key, (connections.get(key) ?? new Set()).add(conn));
+  for (const v of i.workstreams) if (v.workstream.closedAt === null && v.workstream.itemKey) seen(v.workstream.connectionId, v.workstream.itemKey);
+  // Done tickets are never picked, so they cannot make a key ambiguous.
+  for (const t of i.items) if (t.status.category !== "done") seen(t.item.connectionId, t.item.key);
+  const runConnection = new Map(i.runs.map((r) => [r.id, r.item?.connectionId ?? r.connectionId]));
+  const general = new Map<string, Need[]>();
+  for (const n of [...i.needs].sort(byRank)) {
+    if (n.workstreamId !== null || !n.ticketKey) continue;
+    const conn = (n.runId && runConnection.get(n.runId)) || (connections.get(n.ticketKey)?.size === 1 ? [...connections.get(n.ticketKey)!][0] : undefined);
+    if (conn) general.set(`${conn}:${n.ticketKey}`, [...(general.get(`${conn}:${n.ticketKey}`) ?? []), n]);
+  }
+  const needLine = (list: readonly Need[]) => `${plural(list.length, "thing needs", "things need")} you here: ${list[0].title}.`;
+  const needScore = (n: Need) => 3 - GROUPS.indexOf(n.group);
   for (const v of i.workstreams) {
     const ws = v.workstream;
     if (ws.closedAt !== null) continue;
@@ -87,6 +104,11 @@ export function rankWeek(i: PlanInput): PlanPick[] {
       continue;
     }
     if (status.state === "held" || status.state === "waiting" || status.state === "done") continue;
+    const loose = ws.itemKey ? general.get(`${ws.connectionId}:${ws.itemKey}`) : undefined;
+    if (loose) {
+      scored.push({ pick: pick(needLine(loose)), tier: 0, score: needScore(loose[0]), at: loose[0].at });
+      continue;
+    }
     const age = days(ws.createdAt, i.now);
     let score = 8 + Math.min(age, 14) / 2;
     let because = `${age === 0 ? "opened today" : `open for ${plural(age, "day", "days")}`}, nothing is moving it.`;
@@ -95,7 +117,13 @@ export function rankWeek(i: PlanInput): PlanPick[] {
     scored.push({ pick: pick(because), tier: 1, score, at: ws.createdAt });
   }
   for (const t of i.items) {
-    if (t.status.category === "done" || !isMine(t, i.me) || opened.has(`${t.item.connectionId}:${t.item.key}`)) continue;
+    if (t.status.category === "done" || opened.has(`${t.item.connectionId}:${t.item.key}`)) continue;
+    const loose = general.get(`${t.item.connectionId}:${t.item.key}`);
+    if (!loose && !isMine(t, i.me)) continue;
+    if (loose) {
+      scored.push({ pick: { id: `ticket:${t.item.connectionId}:${t.item.key}`, kind: "ticket", workstreamId: null, ticketKey: t.item.key, connectionId: t.item.connectionId, title: `${t.item.key} ${t.title}`, because: needLine(loose) }, tier: 0, score: needScore(loose[0]), at: loose[0].at });
+      continue;
+    }
     const age = days(t.created, i.now);
     const gaps = flaggedGaps(clarityGaps(docText(t.body)), i.learning ?? {}, projectOfKey(t.item.key));
     let score = (t.priority ? PRIORITY[t.priority] : 2) + Math.min(age, 30) / 5;

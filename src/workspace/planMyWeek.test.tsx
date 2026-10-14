@@ -6,7 +6,7 @@ import { isoWeek, ticketPick, type PlanItem } from "../lib/planMyWeek";
 import type { WorkItem, WorkstreamView } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { buildCommands, rankCommands, type CommandActions } from "./commands";
-import { PLAN_EMPTY, PlanMyWeek, PlanMyWeekView, ThisWeekView, findTicket } from "./PlanMyWeek";
+import { PLAN_EMPTY, PlanMyWeek, PlanMyWeekView, afterMove, afterRemove, ThisWeekView, findTicket } from "./PlanMyWeek";
 import { WorkstreamList } from "./PipHome";
 import { usePipHome } from "./pipHomeStore";
 import { loadPrefs, usePrefs } from "./prefs";
@@ -65,19 +65,55 @@ describe("the Plan my week card", () => {
   });
 });
 
+describe("where the keyboard goes after a remove or a move", () => {
+  const three = [pick("CA-1"), pick("CA-2"), pick("CA-3")];
+  it("lands on the pick now in the removed one's place, else the one before it, else the add box", () => {
+    // Middle row removed: CA-3 moved up into its index.
+    expect(afterRemove([three[0], three[2]], 1)).toBe("ticket:CA-3");
+    // Last row removed: the one before it.
+    expect(afterRemove([three[0], three[1]], 2)).toBe("ticket:CA-2");
+    expect(afterRemove([], 0)).toBeNull();
+  });
+
+  it("follows a moved row to the same button, the other one at the end of the list, else the row", () => {
+    expect(afterMove("down", 1, 3)).toBe("down");
+    expect(afterMove("up", 1, 3)).toBe("up");
+    // Moved down to the last place: its down is off, so the up takes it.
+    expect(afterMove("down", 2, 3)).toBe("up");
+    expect(afterMove("up", 0, 3)).toBe("down");
+    expect(afterMove("up", 0, 1)).toBe("row");
+  });
+
+  it("marks the move buttons the focus follows", () => {
+    const html = renderToStaticMarkup(<PlanMyWeekView week="2026-W42" picks={three} kept={false} tickets={[]} onChange={noop} onKeep={noop} onClose={noop} onPropose={noop} />);
+    expect(html.match(/data-plan-move="up"/g)).toHaveLength(3);
+    expect(html.match(/data-plan-move="down"/g)).toHaveLength(3);
+  });
+});
+
 describe("adding a ticket", () => {
   const t = (key: string, title: string, category: "todo" | "done" = "todo") => ({ item: { connectionId: "c", externalId: key, key }, title, status: { id: "1", name: "x", category } }) as unknown as WorkItem;
   const tickets = [t("CA-1", "Fix the checkout total"), t("CA-2", "Subject line variants"), t("CA-3", "Old thing", "done")];
-  it("finds a ticket by key or words, never one that is Done or already in the plan", () => {
-    expect(findTicket("ca-2", tickets, [])?.item.key).toBe("CA-2");
-    expect(findTicket("CA-2 subject", tickets, [])?.item.key).toBe("CA-2");
-    expect(findTicket("checkout", tickets, [])?.item.key).toBe("CA-1");
-    expect(findTicket("old thing", tickets, [])).toBeNull();
-    expect(findTicket("CA-2", tickets, [ticketPick(tickets[1])])).toBeNull();
+  it("finds a ticket by key or words, never one that is Done", () => {
+    const key = (words: string, taken: Parameters<typeof findTicket>[2] = []) => {
+      const f = findTicket(words, tickets, taken);
+      return "ticket" in f ? f.ticket.item.key : f;
+    };
+    expect(key("ca-2")).toBe("CA-2");
+    expect(key("CA-2 subject")).toBe("CA-2");
+    expect(key("checkout")).toBe("CA-1");
+    expect(key("old thing")).toEqual({ reason: "none" });
+    expect(key("  ")).toEqual({ reason: "none" });
+  });
+
+  it("tells a ticket that is in the plan already from one that does not match", () => {
+    expect(findTicket("CA-2", tickets, [ticketPick(tickets[1])])).toEqual({ reason: "taken", key: "CA-2" });
+    expect(findTicket("subject", tickets, [ticketPick(tickets[1])])).toEqual({ reason: "taken", key: "CA-2" });
+    expect(findTicket("CA-99", tickets, [ticketPick(tickets[1])])).toEqual({ reason: "none" });
     // The same key on another connection is another ticket, so it can still be added.
     const other = { ...tickets[1], item: { ...tickets[1].item, connectionId: "d" } } as WorkItem;
-    expect(findTicket("CA-2", [other], [ticketPick(tickets[1])])?.item.connectionId).toBe("d");
-    expect(findTicket("  ", tickets, [])).toBeNull();
+    const found = findTicket("CA-2", [other], [ticketPick(tickets[1])]);
+    expect("ticket" in found && found.ticket.item.connectionId).toBe("d");
   });
 });
 
@@ -200,6 +236,6 @@ describe("the workstream list's status", () => {
     expect(only).toContain("Showing Held: 1");
     expect(only).toContain("Show all");
     expect([...only.matchAll(/data-workstream-row="([^"]+)" role="option"/g)].map((m) => m[1])).toEqual(["general", open[1].workstream.id]);
-    expect(html({ statusFilter: "waiting" })).toContain("No workstream is waiting on reporter.");
+    expect(html({ statusFilter: "waiting" })).toContain("No workstream is waiting on the reporter.");
   });
 });

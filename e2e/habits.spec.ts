@@ -79,7 +79,8 @@ test.describe("Start my day", () => {
     await page.keyboard.press("Escape");
     await expect(needsPane(page)).toHaveCount(0);
 
-    // It is the first thing in the conversation column, a region of its own.
+    // It is General's card, the first thing in the conversation column, a region of its own.
+    await workstreamRow(page, "General").click();
     await expect(card(page)).toBeVisible();
     await expect(homeConversationRegion(page).locator("[data-start-my-day]")).toBeVisible();
     await expect(card(page).getByRole("heading", { name: "Start my day" })).toBeVisible();
@@ -98,12 +99,17 @@ test.describe("Start my day", () => {
     await expect(workstreamRow(page, "CA-409")).toHaveAttribute("aria-selected", "true");
     await expect(notice(pipHome(page))).toContainText("CA-409 may be unclear");
 
+    // The workstream has no card of its own: Start my day is General's.
+    await expect(card(page)).toHaveCount(0);
+    await workstreamRow(page, "General").click();
+
     // The draft waiting: its decision opens in the pane, and the card gives the room.
     await line(page, "drafts").getByRole("button", { name: /^Review: CA-402/ }).click();
     await expect(needsPane(page).getByRole("article", { name: "Comment on CA-402" })).toBeVisible();
     await expect(card(page)).toHaveCount(0);
     await page.keyboard.press("Escape");
     await expect(needsPane(page)).toHaveCount(0);
+    await workstreamRow(page, "General").click();
     await expect(card(page)).toBeVisible();
     expect(await jiraWrites(page)).toEqual([]);
 
@@ -143,6 +149,7 @@ test.describe("Start my day", () => {
     expect((await actions(page, "reporter_nudged")).map((e) => e.actor)).toEqual(["person"]);
     // The card gave the room to the decision; once it closes, the line says a nudge is drafted and offers none.
     await page.keyboard.press("Escape");
+    await workstreamRow(page, "General").click();
     await expect(line(page, "reporter")).toContainText("a nudge is drafted");
     await expect(line(page, "reporter").getByRole("button", { name: /Draft a nudge/ })).toHaveCount(0);
     await expect(line(page, "reporter").getByRole("button", { name: /^Open workstream/ })).toBeVisible();
@@ -219,7 +226,8 @@ test.describe("What Jira saw from me", () => {
     // Newest first.
     await expect(rows.nth(0)).toContainText("CA-409");
     await expect(rows.nth(1)).toContainText("CA-408");
-    await expect(rows.nth(0).locator("[data-sent-label]")).toHaveText("Comment");
+    await expect(rows.nth(0).locator("[data-sent-label]")).toHaveText("Questions to the reporter");
+    await expect(rows.nth(0)).toHaveAttribute("data-sent-kind", "comment");
     await expect(rows.nth(0).locator("[data-sent-edited]")).toHaveText("Gossamr drafted it; you edited it before approving");
     await expect(rows.nth(0).locator("[data-sent-edited]")).toHaveAttribute("data-sent-edited", "yes");
     await expect(rows.nth(1).locator("[data-sent-edited]")).toHaveText("Gossamr drafted it; posted as drafted");

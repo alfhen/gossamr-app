@@ -8,9 +8,9 @@ export type PipHomeColumn = (typeof PIP_HOME_COLUMNS)[number];
 
 /**
  * The regions F6 steps through on Pip home, in the order they sit on screen: Needs you and the workstreams (the left
- * column), the timeline, the decision pane (only while one is open), the step rail and the composer.
+ * column), the day card (Plan my week, Start my day: only while one is shown), the timeline, the decision pane (only while one is open), the step rail and the composer.
  */
-export const PIP_HOME_REGIONS = ["needs", "workstreams", "timeline", "pane", "rail", "composer"] as const;
+export const PIP_HOME_REGIONS = ["needs", "workstreams", "day", "timeline", "pane", "rail", "composer"] as const;
 export type PipHomeRegion = (typeof PIP_HOME_REGIONS)[number];
 
 /** The region of `column` the keyboard is taken to be in while focus is on none of them. */

@@ -386,7 +386,7 @@ export function TimelineView({
   );
   const empty = turns.length === 0;
   return (
-    <div data-timeline-scope-shown={scope} className="flex min-h-0 flex-1 flex-col">
+    <div data-timeline-scope-shown={scope} className="flex min-h-[8rem] flex-1 flex-col">
       <div className="border-b border-ws-sep px-3 py-1.5">
         {pane ? (
           <TimelineFilterBar label="Filter" value={filter} counts={counts} onChange={setPaneFilter} after={filter === "runs" && toAllRuns} />

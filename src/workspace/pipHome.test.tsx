@@ -103,7 +103,18 @@ describe("the workstream list on Pip home", () => {
     expect(clear).not.toMatch(/wither|<svg/);
     const only = list({ wither: { [first.workstream.id]: web(3, 5) } });
     expect(only.slice(only.indexOf(`data-workstream-row="${second.workstream.id}"`)).split("</li>")[0]).not.toMatch(/ws-wither|data-wither|<svg/);
-    expect(list()).not.toMatch(/ws-wither|data-wither|<svg|sr-only/);
+    expect(list()).not.toMatch(/ws-wither|data-wither|<svg|data-workstream-wither/);
+  });
+
+  it("gives each status pill its hint as text for a screen reader, the pill described by it, and no extra tab stop", () => {
+    const html = list();
+    const row = html.slice(html.indexOf(`data-workstream-row="${open[0].workstream.id}"`)).split("</li>")[0];
+    const id = /<span data-status="[^"]+"[^>]*aria-describedby="([^"]+)"/.exec(row)?.[1];
+    expect(id).toBeTruthy();
+    expect(row).toMatch(new RegExp(`<span id="${id}" data-status-hint="true" class="sr-only">[^<]+</span>`));
+    expect(row).toMatch(/<span data-status="[^"]+" title="[^"]+"/);
+    // The row stays the one stop: nothing inside it is focusable.
+    expect(row.slice(row.indexOf(">") + 1)).not.toContain("tabindex");
   });
 
   it("lists the closed workstreams behind the toggle, read-only", () => {
@@ -151,6 +162,29 @@ describe("Pip home", () => {
     expect(html).not.toContain("Manage this workstream");
     // The steps drop below the conversation on a narrow window, across both columns.
     expect(html).toMatch(/aria-label="Steps" class="col-span-2 [^"]*min-\[1100px\]:col-span-1/);
+  });
+
+  it("shows Start my day on General only, and not while Plan my week is open", () => {
+    // Static rendering reads the stores' initial state, so that is where the case is set up, and put back.
+    const home = usePipHome.getInitialState();
+    const streams = useWorkstreams.getInitialState();
+    try {
+      expect(renderToStaticMarkup(<PipHome />)).toContain("data-start-my-day");
+      Object.assign(home, { planOpen: true });
+      const planning = renderToStaticMarkup(<PipHome />);
+      expect(planning).toContain("data-plan-my-week");
+      expect(planning).not.toContain("data-start-my-day");
+      // One wrapper holds whichever is shown, capped so the timeline and its filter bar keep their room.
+      expect(planning).toMatch(/data-pip-home-day="true" class="max-h-\[45vh\] shrink-0 overflow-y-auto/);
+      Object.assign(home, { planOpen: false, selected: open[0].workstream.id, landed: true });
+      Object.assign(streams, { list: open, loaded: true });
+      const own = renderToStaticMarkup(<PipHome />);
+      expect(own).toContain(`data-pip-conversation="ws:${open[0].workstream.id}"`);
+      expect(own).not.toContain("data-start-my-day");
+    } finally {
+      Object.assign(home, { planOpen: false, selected: null, landed: false });
+      Object.assign(streams, { list: [], loaded: false });
+    }
   });
 
   it("with no workstream, has nothing to Tab to after the composer, so Tab from its last control wraps round to the page's first", () => {

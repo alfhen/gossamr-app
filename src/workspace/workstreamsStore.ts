@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import type { Backend } from "../backend/types";
-import { dismissed, flaggedGaps, gapWords, ignoredGaps, learnedDetail, projectOfKey } from "../lib/clarityLearning";
+import { dismissed, flaggedGaps, gapWords, ignoredGaps, learnedDetail, LEARN_AFTER, projectOfKey } from "../lib/clarityLearning";
 import { GENERAL_CONVERSATION, workstreamConversation, workstreamOfConversation } from "../lib/conversations";
 import { readinessPrompt } from "../lib/needs";
 import { ofItem, runWorkstream, stageText } from "../lib/workstreamStage";
@@ -353,8 +353,19 @@ export const useWorkstreams = create<WorkstreamsState>()((set, get) => {
       usePrefs.getState().recordClarityDismissal(project, shown);
       if (next.learned.length) {
         // One word for what it learned, one audit line for each gap.
-        useToasts.getState().push(`Gossamr will stop flagging ${project} tickets that ${next.learned.map(gapWords).join(", or that ")}. Give that back in Settings, or from ⌘K.`, "info");
+        // No longer news once it is given back, so it never comes up after (or over) the "as before" note.
+        useToasts.getState().push(`Gossamr will stop flagging ${project} tickets that ${next.learned.map(gapWords).join(", or that ")}. Give that back in Settings, or from ⌘K.`, "info", undefined, {
+          current: () => ignoredGaps(usePrefs.getState().clarityLearning, project).length > 0,
+        });
         void get().loadEvents(id);
+      } else if (shown.length) {
+        // The first and second Looks fine count silently otherwise: say how far it is from Gossamr stopping.
+        const counts = usePrefs.getState().clarityLearning[project] ?? {};
+        const lefts = shown.map((g) => LEARN_AFTER - (counts[g] ?? 0));
+        const left = Math.min(...lefts);
+        // The gaps may stand at different counts: the number is for the first to stop, so say it is not all of them.
+        const them = lefts.every((n) => n === left) ? "them" : "the first of them";
+        useToasts.getState().push(`Noted. After ${left} more Looks fine on ${project} tickets like this, Gossamr stops flagging ${them} (Settings > Unclear tickets).`, "info");
       }
       return true;
     },

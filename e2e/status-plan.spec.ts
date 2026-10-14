@@ -120,9 +120,11 @@ test.describe("Plan my week", () => {
     await picks(page).nth(1).locator("[data-plan-remove]").click();
     await expect(picks(page)).toHaveCount(2);
     await expect(plan(page).locator(`[data-plan-pick="${second}"]`)).toHaveCount(0);
+    // The keyboard lands on the pick that took its place, not on the page.
+    await expect(picks(page).nth(1)).toBeFocused();
     await plan(page).locator("[data-plan-add]").fill("CA-999");
     await plan(page).locator("[data-plan-add-go]").click();
-    await expect(plan(page).locator("[data-plan-missing]")).toBeVisible();
+    await expect(plan(page).locator("[data-plan-missing]")).toHaveText("No open ticket matches that.");
     await plan(page).locator("[data-plan-add]").fill("CA-208");
     await plan(page).locator("[data-plan-add-go]").click();
     await expect(picks(page)).toHaveCount(3);
@@ -134,6 +136,8 @@ test.describe("Plan my week", () => {
     await expectToast(page, /Kept your plan for \d{4}-W\d{2}\. Nothing was sent to Jira\./);
     await expect(plan(page)).toHaveCount(0);
     await expect(thisWeek(page).locator("[data-this-week-item]")).toHaveCount(3);
+    // Keeping hands the keyboard to the list that appeared.
+    await expect.poll(() => page.evaluate(() => !!document.activeElement?.closest("[data-this-week]"))).toBe(true);
     await expect(thisWeek(page)).toContainText("CA-402");
     await expect(thisWeek(page)).toContainText("CA-208");
     expect(await jiraWrites(page)).toEqual([]);

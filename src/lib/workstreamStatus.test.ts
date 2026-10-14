@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { HELD_ALL, HELD_BUDGET, HELD_DAILY, HELD_PERSON, HELD_QUOTA, HELD_RESTART, TRIPWIRE, TRIPWIRES } from "../types";
 import type { Run, WorkstreamView } from "../types";
-import { QUIET_DAYS, STATUS_ORDER, statusFromWords, workstreamStatus, type StatusMore } from "./workstreamStatus";
+import { NUDGE_AFTER_DAYS } from "./reporterWait";
+import { EMPTY_FILTER, QUIET_DAYS, STATUS_HINT, STATUS_ORDER, statusFromWords, workstreamStatus, type StatusMore } from "./workstreamStatus";
 import type { WorkstreamWither } from "./workstreamWither";
 
 const NOW = new Date("2026-10-13T09:00:00Z");
@@ -113,5 +114,18 @@ describe("statusFromWords", () => {
     expect(statusFromWords("quiet")).toBe("quiet");
     expect(statusFromWords("nonsense")).toBeNull();
     expect(statusFromWords("")).toBeNull();
+  });
+});
+
+describe("status hints and empty filters", () => {
+  it("explains every state, and the waiting hint names what ends the wait and when a nudge comes", () => {
+    for (const s of STATUS_ORDER) expect(STATUS_HINT[s].length).toBeGreaterThan(20);
+    expect(STATUS_HINT.waiting).toContain(`after ${NUDGE_AFTER_DAYS} days`);
+  });
+
+  it("has a sentence for every filter that reads naturally", () => {
+    for (const s of STATUS_ORDER) expect(EMPTY_FILTER[s]).toMatch(/^No workstream .+\.$/);
+    expect(EMPTY_FILTER["needs-you"]).toBe("No workstream needs you.");
+    expect(EMPTY_FILTER.waiting).toBe("No workstream is waiting on the reporter.");
   });
 });

@@ -31,6 +31,8 @@ export interface SentEntry {
   /** The ticket it went to; null for a new ticket that was created. */
   ticketKey: string | null;
   kind: SentKind;
+  /** What the pill says in place of the kind's label, for a comment that is more specific than "Comment": "Questions to the reporter". */
+  label?: string;
   /** One short line: what was posted. */
   summary: string;
   /** The whole of it, a line per paragraph or item, for the disclosure. */
@@ -90,7 +92,7 @@ export function sentWhat(intent: Intent, label: string | null): { kind: SentKind
 /** Where a draft came from, in a few words. `labels` are the runs' short names of its workstream (`[runId, "R3"]`). */
 function fromWords(p: Proposal, labels: readonly (readonly [string, string])[]): string {
   if (p.origin.type === "run") return `run ${labels.find(([id]) => id === (p.origin as { runId: string }).runId)?.[1] ?? (p.origin.shortId ?? "an agent run")}`;
-  if (p.origin.type === "chat") return p.createdBy === "pip" ? "Pip's conversation" : workstreamOf(p) ? "Gossamr, for the workstream" : "the conversation";
+  if (p.origin.type === "chat") return p.createdBy === "pip" ? "Pip's conversation" : workstreamOf(p) ? "Gossamr" : "the conversation";
   return p.origin.type === "autopilot" ? "the autopilot" : "the board";
 }
 
@@ -121,6 +123,7 @@ export function jiraSent({ proposals, events, workstreams }: SentInput): SentEnt
       at: approved?.at ?? p.updatedAt,
       ticketKey: targetOf(p.intent)?.key ?? p.created[0]?.key ?? null,
       ...what,
+      ...(isReporterQuestions(p) ? { label: "Questions to the reporter" } : isReporterNudge(p) ? { label: "Nudge to the reporter" } : {}),
       workstreamId,
       workstream: view ? (view.workstream.itemKey ?? view.workstream.title) : null,
       madeBy: isReporterQuestions(p) || isReporterNudge(p) ? "Gossamr" : makerName(p.createdBy),

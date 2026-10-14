@@ -7,6 +7,7 @@ export const ORIENTATION_TERMS: readonly { term: string; text: string }[] = [
   { term: "Workstream", text: "One ticket's work from start to pull request. Each has its own conversation with Pip, its steps and its drafts." },
   { term: "Run", text: "One Claude Code agent session doing a step: investigate, plan, build or review." },
   { term: "Cobweb", text: "Work has happened but Jira has not heard for days. Post an update to clear it." },
+  { term: "Status", text: "Each workstream's one word: Needs you, Held, Waiting on reporter, Running, Quiet, Done or Idle. Hover a word for what it means." },
   { term: "Worktree", text: "The run's own checkout of your repository, so runs don't step on each other or on your files." },
 ];
 
