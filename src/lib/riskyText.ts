@@ -29,9 +29,10 @@ export function risksIn(text: string): Risk[] {
 
 /** The text in `text` that carries each risk: every broad mention and every secret-shaped run, as written. */
 function matchesIn(text: string): Record<Risk, Set<string>> {
-  const all = (re: RegExp) => [...text.matchAll(new RegExp(re.source, re.flags.includes("g") ? re.flags : `${re.flags}g`))].map((m) => m[0].trim().toLowerCase());
-  // A broad mention's match takes the character before the @ too; the mention itself is from the @ on.
-  return { broadcast: new Set(all(BROADCAST).map((m) => m.slice(m.indexOf("@")))), secret: new Set(SECRETS.flatMap(all)) };
+  const all = (re: RegExp) => [...text.matchAll(new RegExp(re.source, re.flags.includes("g") ? re.flags : `${re.flags}g`))].map((m) => m[0].trim());
+  // A broad mention's match takes the character before the @ too; the mention itself is from the @ on, in any case. A secret
+  // keeps its case: a password that differs only in case is another password.
+  return { broadcast: new Set(all(BROADCAST).map((m) => m.slice(m.indexOf("@")).toLowerCase())), secret: new Set(SECRETS.flatMap(all)) };
 }
 
 /**

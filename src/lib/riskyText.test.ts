@@ -26,6 +26,8 @@ describe("the pause before posting edited text", () => {
     expect(newRisks("cc @here", "cc @here and @everyone")).toEqual(["broadcast"]);
     expect(newRisks("Password: hunter22\nThanks", "Thanks.\nPassword: hunter22")).toEqual([]);
     expect(newRisks("(@everyone) see below", "See below, @everyone")).toEqual([]);
+    expect(newRisks("Password: Abcd1234", "Password: abcd1234")).toEqual(["secret"]);
+    expect(newRisks("cc @Here", "cc @here")).toEqual([]);
   });
 
   it("says what it found in the person's words", () => {
