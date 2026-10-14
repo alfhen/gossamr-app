@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useClaude } from "../claudeStore";
 import { stageText } from "../lib/workstreamStage";
-import { EMPTY_FILTER, STATUS_HINT, STATUS_WORD, workstreamStatus, type StatusState, type WorkstreamStatus } from "../lib/workstreamStatus";
+import { EMPTY_FILTER, byStatusRank, STATUS_HINT, STATUS_WORD, workstreamStatus, type StatusState, type WorkstreamStatus } from "../lib/workstreamStatus";
 import { StatusPill } from "./StatusPill";
 import { PlanMyWeek, ThisWeek } from "./PlanMyWeek";
 import { isoWeek } from "../lib/planMyWeek";
@@ -130,7 +130,8 @@ export function WorkstreamList({ list, closed, showClosed, selected, onSelect, o
   const stored = usePrefs((s) => s.clarityLearning);
   const learning = given ?? stored;
   const statuses = new Map(list.filter((v) => v.workstream.closedAt === null).map((v) => [v.workstream.id, workstreamStatus(v, needsYou, { runs, wither: wither[v.workstream.id] ?? null, now: new Date(now ?? Date.now()), learning })]));
-  const everyOpen = list.filter((v) => v.workstream.closedAt === null);
+  // Ordered by what needs the person, not newest first: the rows are what j/k and the arrows step through.
+  const everyOpen = byStatusRank(list.filter((v) => v.workstream.closedAt === null), (v) => statuses.get(v.workstream.id)!.state);
   const matches = (v: WorkstreamView) => !statusFilter || statuses.get(v.workstream.id)?.state === statusFilter;
   // The open workstream stays listed when the filter leaves it out (dimmed, with a note), since its conversation is what is shown.
   const open = everyOpen.filter((v) => matches(v) || v.workstream.id === selected);

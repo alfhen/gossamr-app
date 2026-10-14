@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MockBackend } from "../backend/mock";
 import { itemRef } from "../backend/mockConnector";
 import { useClaude } from "../claudeStore";
+import type { Need } from "../lib/needs";
 import type { WorkstreamView } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { isPipHomeKey } from "./commands";
@@ -64,6 +65,16 @@ describe("the workstream list on Pip home", () => {
     }
     expect(html.match(/data-stage[^>]*>Intake</g)).toHaveLength(open.length);
     expect(html).not.toContain("CA-403");
+  });
+
+  it("orders the open workstreams by what needs you, newest first inside a group, with General above them all", () => {
+    const [newest, oldest] = open.map((v) => v.workstream.id);
+    expect(options(list())).toEqual(["general", newest, oldest]);
+    // The older one has a decision waiting, so it moves above the newer one.
+    expect(options(list({ needsYou: [{ workstreamId: oldest } as Need] }))).toEqual(["general", oldest, newest]);
+    // A status filter keeps the order, and the open one it would hide stays in its place, dimmed.
+    const filtered = list({ needsYou: [{ workstreamId: oldest } as Need], selected: newest, statusFilter: "needs-you" });
+    expect([...filtered.matchAll(/data-workstream-row="([^"]+)"/g)].map((m) => m[1])).toEqual(["general", oldest, newest]);
   });
 
   it("marks the selection: General when nothing is selected, the workstream once one is", () => {
