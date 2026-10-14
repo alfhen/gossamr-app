@@ -57,7 +57,7 @@ export function useTimeline(conversation: string, view: WorkstreamView | null, p
   const labels = useMemo(() => labelsByRun(allRuns), [allRuns]);
   const verdicts = useMemo(() => Object.fromEntries(Object.entries(reviews).map(([k, v]) => [k, (v?.verdict ?? null) as ReviewOutcome])), [reviews]);
   const entries = useMemo(
-    () => timeline({ turns, runs, drafts, events: id ? events : NO_EVENTS, needs, labels, verdicts, ticketKey: view?.workstream.itemKey ?? null, reporterRepliedAt: view?.reporterRepliedAt ?? null, reporterReply: view?.reporterReply ?? null }),
+    () => timeline({ turns, runs, drafts, events: id ? events : NO_EVENTS, needs, labels, verdicts, ticketKey: view?.workstream.itemKey ?? null, reporterRepliedAt: view?.reporterRepliedAt ?? null, reporterReply: view?.reporterReply ?? null, reporterReplies: view?.reporterReplies ?? [] }),
     [turns, runs, drafts, events, id, needs, labels, verdicts, view],
   );
   const byId = useMemo(
@@ -142,6 +142,16 @@ export function openEntry(e: Pick<TimelineEntry, "target">, byId: Lookup, root: 
   }
   const p = byId.drafts.get(t.id);
   if (p) openLiveDraft(p, { inline: true });
+}
+
+/** What the reply entry says of Enter, as the entry is read and hovered. */
+export const OPENS_COMMENT = "Enter opens the comment";
+
+/** The spoken name of a timeline entry: none for what is said in the conversation, the sentence otherwise, and for a reply that opens a comment, what Enter does. */
+export function entryLabel(e: Pick<TimelineEntry, "kind" | "scopeLabel" | "text" | "target">): string | undefined {
+  if (e.kind === "said" || e.kind === "pip") return undefined;
+  const text = e.scopeLabel ? `${e.scopeLabel}: ${e.text}` : e.text;
+  return e.target?.type === "comment" ? `${text}. ${OPENS_COMMENT}` : text;
 }
 
 const clock = (iso: string) => {
@@ -430,7 +440,8 @@ export function TimelineView({
                 data-phase={e.phase}
                 data-waiting={e.needKey ?? undefined}
                 tabIndex={-1}
-                aria-label={e.kind === "said" || e.kind === "pip" ? undefined : e.scopeLabel ? `${e.scopeLabel}: ${e.text}` : e.text}
+                aria-label={entryLabel(e)}
+                title={e.target?.type === "comment" ? OPENS_COMMENT : undefined}
                 onFocus={revealEntry}
                 className={`grid min-w-0 gap-1 rounded-md ${ENTRY_FOCUS}`}
               >

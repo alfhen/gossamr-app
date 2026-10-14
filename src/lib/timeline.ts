@@ -1,8 +1,8 @@
-import type { Intent, Proposal, ProposalMaker, ReporterReply, Run, RunKind, WorkstreamActor, WorkstreamEvent, WorkstreamView } from "../types";
+import type { Intent, Proposal, ProposalMaker, ReporterReply, ReporterReplyAt, Run, RunKind, WorkstreamActor, WorkstreamEvent, WorkstreamView } from "../types";
 import { eventText } from "../workspace/activityLogic";
 import { GENERAL_CONVERSATION, workstreamConversation } from "./conversations";
 import type { Need } from "./needs";
-import { inWorkstreamPane, isReporterNudge, isReporterQuestions, targetOf, workstreamOf } from "./proposals";
+import { inWorkstreamPane, isReporterFollowUp, isReporterNudge, isReporterQuestions, targetOf, workstreamOf } from "./proposals";
 
 /**
  * One timeline per workstream (docs/needs-you.md, step 3): what Pip said, what the person said, each run from start to end
@@ -119,6 +119,8 @@ export interface TimelineInput {
   reporterRepliedAt?: string | null;
   /** That reply's comment (`WorkstreamView.reporterReply`): its entry quotes it and opens it on the ticket. */
   reporterReply?: ReporterReply | null;
+  /** Every reply since the first reporter ask was posted (`WorkstreamView.reporterReplies`): each is an entry, so a reply stays once the person asks again. */
+  reporterReplies?: readonly ReporterReplyAt[];
 }
 
 const KIND_WORD: Record<RunKind, string> = { investigate: "Investigate", triage: "Triage", plan: "Plan", build: "Build", review: "Review", verify: "Verify" };
@@ -222,19 +224,37 @@ export function runSentence(run: Run, label: string | undefined, verdict: Review
 /** Whose draft it was, for a sentence about the person's decision on it: "Pip", "an agent", "you". */
 const makerWord = (p: Proposal) => (isReporterQuestions(p) || isReporterNudge(p) ? "Gossamr" : p.createdBy === "agent" ? "an agent" : p.createdBy === "user" ? "you" : MAKER[p.createdBy]);
 
+/** What the supervisor's own doing, or an earlier ask, changes in how a draft's entry reads (see `timeline`). */
+export interface DraftWording {
+  /** A rule started this run: the supervisor's `autostart`, as its audit says; `afterPlan` when it was the plan's approval that started it. */
+  auto?: { afterPlan: boolean };
+  /** The reporter was asked on this workstream before: this ask is the follow-up. */
+  followUp?: boolean;
+}
+
+/** Whether the draft's own words are the follow-up's (`isReporterFollowUp`); a body that is not a document reads as the first ask's. */
+const followUpWorded = (p: Proposal) => p.intent.type === "comment" && typeof p.intent.body === "object" && Array.isArray(p.intent.body?.blocks) && isReporterFollowUp(p);
+
 /** What an applied draft says: the person's decision, and for a review or a run what it came to. */
-function appliedSentence(p: Proposal, on: string): string {
+function appliedSentence(p: Proposal, on: string, wording: DraftWording = {}): string {
   const i = p.intent;
   if (i.type === "githubReview") {
     const n = i.comments.length;
     return `You posted ${p.createdBy === "user" ? "your" : `${makerWord(p)}'s`} GitHub review on ${i.repo}#${i.number}: ${n} inline comment${n === 1 ? "" : "s"}${p.revisions.length ? ", edited by you" : ""}`;
   }
-  if (i.type === "startRun") return `You started the ${KIND_WORD[i.spec.kind].toLowerCase()} run ${makerWord(p)} drafted${on}`;
+  if (i.type === "startRun") {
+    const kind = KIND_WORD[i.spec.kind].toLowerCase();
+    return wording.auto ? `Gossamr started the ${kind} run automatically${on}${wording.auto.afterPlan ? " after you approved the plan" : ""}` : `You started the ${kind} run that ${makerWord(p)} drafted${on}`;
+  }
+  // The reporter's drafts are told by what they are, so the first ask, the follow-up and the nudge don't read alike.
+  const edited = p.revisions.length ? ", edited by you" : "";
+  if (isReporterNudge(p)) return `You posted the nudge to the reporter${on}${edited}`;
+  if (isReporterQuestions(p)) return `You posted the ${wording.followUp || followUpWorded(p) ? "follow-up " : ""}questions for the reporter${on}${edited}`;
   return `You approved ${DRAFT_WORDS[i.type]}${on}${p.createdBy === "user" ? "" : `, drafted by ${makerWord(p)}`}: ${i.type === "runAnswer" ? "sent" : "posted"}`;
 }
 
 /** The sentence a draft's entry says: who made what on which ticket, then how it stands. */
-export function draftSentence(p: Proposal): string {
+export function draftSentence(p: Proposal, wording: DraftWording = {}): string {
   const target = targetOf(p.intent);
   const on = target ? ` on ${target.key}` : "";
   const made = `${isReporterQuestions(p) || isReporterNudge(p) ? "Gossamr" : MAKER[p.createdBy]} drafted ${DRAFT_WORDS[p.intent.type]}${on}`;
@@ -244,7 +264,7 @@ export function draftSentence(p: Proposal): string {
     case "applying":
       return `${made}: posting`;
     case "applied":
-      return appliedSentence(p, on);
+      return appliedSentence(p, on, wording);
     case "skipped":
       return `${made}: skipped`;
     case "retired":
@@ -282,7 +302,7 @@ const AFTER_DRAFT = SOURCE_RANK.draft + 0.5;
  * same moment keep their source's own order. A turn the page doesn't know the time of stands where the turn before it does.
  */
 export function timeline(input: TimelineInput): TimelineEntry[] {
-  const { turns = [], runs = [], drafts = [], events = [], needs = [], labels = new Map(), verdicts = {}, ticketKey = null, reporterRepliedAt = null, reporterReply = null } = input;
+  const { turns = [], runs = [], drafts = [], events = [], needs = [], labels = new Map(), verdicts = {}, ticketKey = null, reporterRepliedAt = null, reporterReply = null, reporterReplies = [] } = input;
   const needOfRun = new Map(needs.flatMap((n) => (n.runId ? [[n.runId, n] as const] : [])));
   // A triage that found its ticket not clear enough to plan is what the readiness need (`readiness:<run>`) asks about.
   for (const n of needs) if (n.kind === "readiness") needOfRun.set(n.key.slice("readiness:".length), n);
@@ -325,6 +345,10 @@ export function timeline(input: TimelineInput): TimelineEntry[] {
     });
   }
 
+  // A run a rule started (the supervisor's `autostart`, which carries the draft) is not one the person started.
+  const autoStarted = new Map(events.filter((e) => e.actor === "supervisor" && e.action === "autostart" && e.proposalId).map((e) => [e.proposalId!, { afterPlan: (e.detail ?? "").startsWith("plan_build") }]));
+  // The reporter was asked before when another ask of theirs on this workstream was posted earlier.
+  const askedBefore = (p: Proposal) => isReporterQuestions(p) && drafts.some((q) => q.id !== p.id && isReporterQuestions(q) && q.state.type === "applied" && time(q.updatedAt) < time(p.updatedAt));
   for (const p of drafts) {
     const need = needOfDraft.get(p.id);
     out.push({
@@ -333,7 +357,7 @@ export function timeline(input: TimelineInput): TimelineEntry[] {
       at: p.createdAt,
       updatedAt: p.state.type === "pending" ? p.createdAt : p.updatedAt,
       ticketKey: targetOf(p.intent)?.key ?? ticketKey,
-      text: draftSentence(p),
+      text: draftSentence(p, { auto: autoStarted.get(p.id), followUp: askedBefore(p) }),
       target: need ? { type: "need", key: need.key } : { type: "draft", id: p.id },
       needKey: need?.key ?? null,
       decision: !!need,
@@ -397,8 +421,13 @@ export function timeline(input: TimelineInput): TimelineEntry[] {
     previous = entry;
   }
 
-  // A reporter answers on the ticket, which leaves no audit line: the wait's end is told from the comment's time.
-  if (reporterRepliedAt && Number.isFinite(time(reporterRepliedAt))) {
+  // A reporter answers on the ticket, which leaves no audit line: each reply is told from its comment's time, and stays once the person asks again.
+  for (const r of reporterReplies) {
+    if (!Number.isFinite(time(r.at))) continue;
+    out.push({ key: `audit:reply:${r.id}`, kind: "audit", at: r.at, updatedAt: r.at, ticketKey, text: "The reporter replied on the ticket", detail: `“${r.excerpt}”`, target: ticketKey ? { type: "comment", ticketKey, id: r.id } : null, needKey: null, decision: false, attention: r.at === reporterRepliedAt, actor: "supervisor", action: "reporter_replied", order: order++ });
+  }
+  // Without the list (a view that has none), the one reply that ended the wait is told alone.
+  if (!reporterReplies.length && reporterRepliedAt && Number.isFinite(time(reporterRepliedAt))) {
     out.push({ key: `audit:reply:${reporterRepliedAt}`, kind: "audit", at: reporterRepliedAt, updatedAt: reporterRepliedAt, ticketKey, text: "The reporter replied on the ticket", ...(reporterReply ? { detail: `“${reporterReply.excerpt}”` } : {}), target: reporterReply && ticketKey ? { type: "comment", ticketKey, id: reporterReply.id } : null, needKey: null, decision: false, attention: true, actor: "supervisor", action: "reporter_replied", order: order++ });
   }
 
@@ -522,6 +551,7 @@ export function everyWorkstreamParts(d: EveryWorkstreamData): TimelinePart[] {
       ticketKey: v.workstream.itemKey,
       reporterRepliedAt: v.reporterRepliedAt ?? null,
       reporterReply: v.reporterReply ?? null,
+      reporterReplies: v.reporterReplies ?? [],
     },
   }));
   const general = d.turns[GENERAL_CONVERSATION] ?? [];

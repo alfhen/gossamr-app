@@ -1,4 +1,4 @@
-import type { Proposal, ReporterReply, WorkstreamEvent } from "../types";
+import type { Proposal, ReporterReply, ReporterReplyAt, WorkstreamEvent } from "../types";
 import { isAnswersDraft, isReporterNudge, workstreamOf } from "./proposals";
 import { WITHER_DAYS } from "./views";
 
@@ -59,11 +59,40 @@ export function followWithReply(events: readonly FollowLine[], replies: readonly
 /** How many characters of a reply the quote keeps. As `REPLY_EXCERPT` in src-tauri/src/inbox/workstreams.rs. */
 export const REPLY_EXCERPT = 140;
 
-/** The first line of a comment's text with its spacing made even, cut to `REPLY_EXCERPT` characters with "…". As `reply_excerpt` in src-tauri/src/inbox/workstreams.rs. */
+/** The first line of a comment's text with its spacing made even, cut to `REPLY_EXCERPT` characters with "…", which is also there when more lines follow. As `reply_excerpt` in src-tauri/src/inbox/workstreams.rs. */
 export function replyExcerpt(text: string): string {
-  const line = text.split(/\n/).map((l) => l.split(/\s+/).filter(Boolean).join(" ")).find((l) => l) ?? "";
+  const [line = "", ...rest] = text.split(/\n/).map((l) => l.split(/\s+/).filter(Boolean).join(" ")).filter((l) => l);
   const chars = Array.from(line);
-  return chars.length > REPLY_EXCERPT ? `${chars.slice(0, REPLY_EXCERPT - 1).join("").trimEnd()}…` : line;
+  return chars.length > REPLY_EXCERPT || rest.length > 0 ? `${chars.slice(0, REPLY_EXCERPT - 1).join("").trimEnd()}…` : line;
+}
+
+/**
+ * Every comment on the ticket from someone but the person that came after the first reporter ask was posted on the workstream
+ * (the approval of a `readiness_asked`, `clarity_asked` or `reporter_nudged` comment), oldest first, each as its quote: the
+ * replies the timeline keeps telling after the person asks again, which ends the wait they ended. A comment that says nothing is
+ * left out. As `reporter_replies` in src-tauri/src/inbox/workstreams.rs; both run the `replies` of src/lib/reporterWait.fixtures.json.
+ */
+export function reporterReplies(events: readonly FollowLine[], comments: readonly { id: string; at: string; text: string }[]): ReporterReplyAt[] {
+  const asked = new Set<string>();
+  let first: number | null = null;
+  for (const e of events) {
+    if (e.actor !== "person") continue;
+    if (e.action === "readiness_asked" || e.action === "clarity_asked" || e.action === "reporter_nudged") {
+      if (e.proposalId) asked.add(e.proposalId);
+    } else if (e.action === "draft_approved" && e.proposalId && asked.has(e.proposalId)) {
+      first = Date.parse(e.at);
+      break;
+    }
+  }
+  if (first === null || Number.isNaN(first)) return [];
+  return comments
+    .map((c) => ({ c, t: Date.parse(c.at) }))
+    .filter(({ t }) => !Number.isNaN(t) && t > first!)
+    .sort((a, b) => a.t - b.t)
+    .flatMap(({ c }) => {
+      const excerpt = replyExcerpt(c.text);
+      return excerpt ? [{ id: c.id, excerpt, at: c.at }] : [];
+    });
 }
 
 /**

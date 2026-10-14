@@ -196,12 +196,13 @@ describe("the Needs you list", () => {
     expect(html).toMatch(/<h2 data-needs-you-title[^>]*class="sticky top-0 /);
   });
 
-  it("as Pip home's main column, takes the height it is given and scrolls inside it, not under a cap of its own", () => {
+  it("as Pip home's main column, sizes to its content up to half the column and scrolls inside it (G7)", () => {
     const html = renderToStaticMarkup(<NeedsYouList main needs={list} now={NOW} />);
     const region = /<section aria-label="Needs you"[^>]*class="([^"]*)"/.exec(html)?.[1] ?? "";
-    expect(region).toContain("flex-1");
+    expect(region).toContain("shrink");
+    expect(region).not.toContain("flex-1");
     expect(region).toContain("overflow-y-auto");
-    expect(region).not.toMatch(/max-h-/);
+    expect(region).toContain("max-h-1/2");
     // The popover's and the plain list keep their caps.
     expect(renderToStaticMarkup(<NeedsYouList compact needs={list} now={NOW} />)).toMatch(/aria-label="Needs you"[^>]*max-h-\[min\(400px,60vh\)\]/);
     expect(renderToStaticMarkup(<NeedsYouList needs={list} now={NOW} />)).toMatch(/aria-label="Needs you"[^>]*max-h-\[38vh\]/);

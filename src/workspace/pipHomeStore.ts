@@ -10,14 +10,14 @@ export type PipHomeColumn = (typeof PIP_HOME_COLUMNS)[number];
  * The regions F6 steps through on Pip home, in the order they sit on screen: Needs you and the workstreams (the left
  * column), the day card (Plan my week, Start my day: only while one is shown), the timeline, the decision pane (only while one is open), the clarity notice at the top of the steps column (only while one is shown, so its Looks fine is a stop away rather than deep in the controls), the step rail, the composer and the toast (only while one is on screen).
  */
-export const PIP_HOME_REGIONS = ["needs", "workstreams", "day", "timeline", "pane", "notice", "rail", "composer", "toast"] as const;
+export const PIP_HOME_REGIONS = ["needs", "week", "workstreams", "day", "timeline", "pane", "notice", "rail", "composer", "toast"] as const;
 export type PipHomeRegion = (typeof PIP_HOME_REGIONS)[number];
 
 /** The region of `column` the keyboard is taken to be in while focus is on none of them. */
 export const columnRegion = (column: PipHomeColumn): PipHomeRegion => (column === "list" ? "needs" : column === "rail" ? "rail" : "composer");
 
 /** The column j and k belong to while the keyboard is in `region`. */
-export const regionColumn = (region: PipHomeRegion): PipHomeColumn => (region === "needs" || region === "workstreams" ? "list" : region === "rail" ? "rail" : "conversation");
+export const regionColumn = (region: PipHomeRegion): PipHomeColumn => (region === "needs" || region === "week" || region === "workstreams" ? "list" : region === "rail" ? "rail" : "conversation");
 
 /**
  * A card on Pip home something asked to bring into view: a draft, a run, or the selected workstream's held banner. A run

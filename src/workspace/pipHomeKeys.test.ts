@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { pipHomeHints } from "./footerHints";
 import { isTypingTarget, nextRegion, pipHomeKey, regionStep, type PipHomeKeyEvent, type PipHomeKeyState } from "./pipHomeKeys";
+import { regionColumn } from "./pipHomeStore";
 import { ShortcutHint } from "./ShortcutHint";
 
 const key = (k: string, over: Partial<PipHomeKeyEvent> = {}): PipHomeKeyEvent => ({ key: k, metaKey: false, ctrlKey: false, altKey: false, shiftKey: false, target: null, ...over });
@@ -11,16 +12,25 @@ const at = (over: Partial<PipHomeKeyState> = {}): PipHomeKeyState => ({ column: 
 /** A stand-in for an element: its tag, and whether it sits inside something editable. */
 const el = (tagName: string, editable = false) => ({ tagName, isContentEditable: editable, closest: (s: string) => (editable && s.includes("contenteditable") ? {} : null) });
 
-const ALL = ["needs", "workstreams", "day", "timeline", "pane", "rail", "composer"] as const;
+const ALL = ["needs", "week", "workstreams", "day", "timeline", "pane", "rail", "composer"] as const;
 const SHOWN = ["needs", "workstreams", "timeline", "rail", "composer"] as const;
 const f6 = (region: PipHomeKeyState["region"], over: Partial<PipHomeKeyEvent> = {}, state: Partial<PipHomeKeyState> = {}) => pipHomeKey(key("F6", over), at({ region, regions: ALL, ...state }));
 
 describe("pipHomeKey: regions", () => {
   it("F6 goes through Needs you, the workstreams, the day card, the timeline, the decision pane, the steps and the composer, wrapping around", () => {
-    const order = ["needs", "workstreams", "day", "timeline", "pane", "rail", "composer", "needs"] as const;
+    const order = ["needs", "week", "workstreams", "day", "timeline", "pane", "rail", "composer", "needs"] as const;
     for (let i = 0; i < order.length - 1; i++) expect(f6(order[i])).toEqual({ type: "region", to: order[i + 1] });
     for (let i = order.length - 1; i > 0; i--) expect(f6(order[i], { shiftKey: true })).toEqual({ type: "region", to: order[i - 1] });
     expect(f6("needs", { shiftKey: true })).toEqual({ type: "region", to: "composer" });
+  });
+
+  it("This week is a stop between Needs you and the workstreams while it is shown, and passed by while it is not", () => {
+    expect(f6("needs")).toEqual({ type: "region", to: "week" });
+    expect(f6("week")).toEqual({ type: "region", to: "workstreams" });
+    expect(f6("workstreams", { shiftKey: true })).toEqual({ type: "region", to: "week" });
+    expect(f6("needs", {}, { regions: SHOWN })).toEqual({ type: "region", to: "workstreams" });
+    expect(f6("week", {}, { regions: SHOWN })).toEqual({ type: "region", to: "workstreams" });
+    expect(regionColumn("week")).toBe("list");
   });
 
   it("passes the decision pane by while none is open, and the steps while a workstream gives none", () => {
@@ -46,13 +56,13 @@ describe("pipHomeKey: regions", () => {
   });
 
   it("starts from the column's own region when none is given", () => {
-    expect(pipHomeKey(key("F6"), at({ column: "list" }))).toEqual({ type: "region", to: "workstreams" });
+    expect(pipHomeKey(key("F6"), at({ column: "list" }))).toEqual({ type: "region", to: "week" });
     expect(pipHomeKey(key("F6"), at({ column: "conversation" }))).toEqual({ type: "region", to: "needs" });
     expect(pipHomeKey(key("F6"), at({ column: "rail" }))).toEqual({ type: "region", to: "composer" });
   });
 
   it("Cmd+] and Ctrl+] go on, Cmd+[ and Ctrl+[ back", () => {
-    expect(pipHomeKey(key("]", { metaKey: true }), at({ region: "needs", regions: ALL }))).toEqual({ type: "region", to: "workstreams" });
+    expect(pipHomeKey(key("]", { metaKey: true }), at({ region: "needs", regions: ALL }))).toEqual({ type: "region", to: "week" });
     expect(pipHomeKey(key("]", { ctrlKey: true }), at({ region: "rail", regions: ALL }))).toEqual({ type: "region", to: "composer" });
     expect(pipHomeKey(key("[", { metaKey: true }), at({ region: "timeline", regions: ALL }))).toEqual({ type: "region", to: "day" });
     expect(pipHomeKey(key("[", { ctrlKey: true }), at({ region: "needs", regions: ALL }))).toEqual({ type: "region", to: "composer" });

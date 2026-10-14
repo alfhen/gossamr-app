@@ -2,7 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MockBackend } from "../backend/mock";
 import { useWorkspace } from "../workspaceStore";
-import { PipHome } from "./PipHome";
+import { PipHome, fadeScroll, hasMoreBelow } from "./PipHome";
 import { loadPrefs, usePrefs } from "./prefs";
 import { loadTabs, useTabs } from "./tabsStore";
 import { useWorkstreams } from "./workstreamsStore";
@@ -42,13 +42,26 @@ describe("Pip home's layout", () => {
     // Needs you is a section of its own, no longer inside the workstreams' navigation.
     const nav = left.slice(left.indexOf('<nav aria-label="Workstreams"'));
     expect(nav).not.toContain('aria-label="Needs you"');
-    expect(nav).toMatch(/^<nav[^>]*max-h-\[45%\]/);
-    // The main list takes the column's height.
-    expect(left).toMatch(/<section aria-label="Needs you"[^>]*flex-1/);
+    expect(nav).toMatch(/^<nav[^>]*min-h-0 flex-1/);
+    // The main list sizes to its content up to half the column; the workstreams take the rest.
+    expect(left).toMatch(/<section aria-label="Needs you"[^>]*max-h-1\/2 shrink/);
+  });
+
+  it("shows a 'more below' cue only when a scroller is cut off by more than a few pixels", () => {
+    expect(hasMoreBelow({ scrollHeight: 444, scrollTop: 0, clientHeight: 301 })).toBe(true);
+    expect(hasMoreBelow({ scrollHeight: 444, scrollTop: 143, clientHeight: 301 })).toBe(false);
+    expect(hasMoreBelow({ scrollHeight: 303, scrollTop: 0, clientHeight: 301 })).toBe(false);
   });
 
   it("keeps the handles the keyboard and the tests find the regions by", () => {
     const out = html();
     for (const attr of ['data-pip-home-column="list"', 'data-pip-home-column="conversation"', 'data-pip-home-column="rail"', "data-needs-you-title", "data-needs-you-count", 'role="listbox"']) expect(out).toContain(attr);
+  });
+});
+
+describe("the day card's fade", () => {
+  it("scrolls most of a page, and jumps instead of gliding when the person asked for less motion", () => {
+    expect(fadeScroll(200, false)).toEqual({ top: 160, behavior: "smooth" });
+    expect(fadeScroll(200, true)).toEqual({ top: 160, behavior: "auto" });
   });
 });

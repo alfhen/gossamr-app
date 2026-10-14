@@ -56,8 +56,8 @@ test.describe("the reporter's questions and reply (G15, G24, G26, G29)", () => {
     await commentOnTicket(page, "CA-408", "It should send three emails.\nOne to the shopper, two to support.");
     const entry = timeline(page).locator("[data-timeline-line]", { hasText: "The reporter replied on the ticket" });
     // G15: the quote is in the timeline entry and the notice.
-    await expect(entry.locator("[data-timeline-detail]")).toHaveText("“It should send three emails.”");
-    await expect(notice(pipHome(page)).locator("[data-clarity-reply]")).toHaveText("They wrote: “It should send three emails.”");
+    await expect(entry.locator("[data-timeline-detail]")).toHaveText("“It should send three emails.…”");
+    await expect(notice(pipHome(page)).locator("[data-clarity-reply]")).toHaveText("They wrote: “It should send three emails.…”");
 
     // G26: F6 stops on the notice, so Looks fine is not a long Tab away.
     const onNotice = () => page.evaluate(() => !!document.activeElement?.closest("[data-clarity-notice]"));
@@ -197,7 +197,7 @@ test.describe("the Decide pane moves on (G19)", () => {
     await expect(needsYouRow(page, "CA-401")).toContainText("Held after a restart");
     await needsPane(page).getByRole("button", { name: "Post comment" }).click();
     const line = page.locator("[data-needs-advanced]");
-    await expect(line).toHaveText(/^Done: Draft comment on CA-401\. Now: Held after a restart$/);
+    await expect(line).toHaveText(/^Posted to Jira: Draft comment on CA-401\. Now: CA-401 · Held after a restart$/);
     await line.locator("[data-needs-advanced-back]").click();
     await expect(homeConversation(page)).toHaveText(/^Workstream: CA-401 /);
     await expect(needsPane(page)).toHaveCount(0);

@@ -64,6 +64,21 @@ const RULES_AFTER: Record<RunKind, readonly WorkstreamRule[]> = {
 /** Findings that would make a fix round possible, for asking `decideAutostart` what a blocking review leads to. */
 const SOME_FINDING: ReviewFinding[] = [{ severity: "blocking", text: "src/a.ts:1 a defect" }];
 
+/** The line the plan's description-update draft shows: approving it is what lets the plan_build rule start a Build, unless one already came of this plan (a later result of the same plan drafts again). */
+export const APPROVAL_STARTS_BUILD = "Approving this can start a Build: it changes code in its own worktree and runs with your Claude settings.";
+
+/**
+ * Whether approving draft `p` also starts a Build: a description rewrite that came of a finished plan run, in a workstream that
+ * is open, not held, with automatic steps left and in Manage, with the "Plan approved → Build" rule on (its own switch, else the global one in `globals`, which
+ * must be read: guessing from the defaults could promise a step Settings switched off).
+ */
+export function approvalStartsBuild(p: Proposal, run: Pick<Run, "spec"> | undefined, view: WorkstreamView | undefined, globals: Partial<AutoStartSwitches> | null): boolean {
+  if (!globals || !view || !run || p.intent.type !== "rewrite" || p.origin.type !== "run" || p.state.type !== "pending") return false;
+  const ws = view.workstream;
+  // A held workstream, or one whose automatic steps are used up, starts nothing by itself: the person's click does.
+  return run.spec.kind === "plan" && ws.mode === "manage" && !ws.closedAt && !ws.heldReason && view.budget.level !== "spent" && ruleOn(globals, ws.rules, "plan_build");
+}
+
 /** "R5 (Build)": the run as the header names it, by its short name in the workstream and its step. */
 function nameOf(run: Run, view: WorkstreamView): string {
   const label = view.labels.find(([id]) => id === run.id)?.[1];

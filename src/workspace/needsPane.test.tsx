@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import type { Need } from "../lib/needs";
-import { HigherPriority, EDIT_FIELD, advancedText, doneText, waitStarted, nextAdvanced, endEditing, firstDecision } from "./NeedsPane";
+import { HigherPriority, EDIT_FIELD, advancedText, doneText, postedToJira, waitStarted, nextAdvanced, endEditing, firstDecision } from "./NeedsPane";
 
 /** A stand-in for the pane: each selector it is asked for answers with what the test put there. */
 const pane = (found: Record<string, unknown[]>) =>
@@ -75,6 +75,22 @@ describe("the line names the workstream the done need was in (G19)", () => {
   it("carries the way back to that workstream", () => {
     expect(nextAdvanced(null, "t", { workstreamId: "w1", label: "Done: x on CA-1." }).back).toEqual({ workstreamId: "w1", label: "Done: x on CA-1." });
     expect(nextAdvanced(null, "t")).not.toHaveProperty("back");
+  });
+});
+
+describe("the line says what was posted to Jira and where the next need is (G5)", () => {
+  const draft = (type: string, state: string) => ({ id: "d1", intent: { type }, state: { type: state } }) as unknown as Parameters<typeof postedToJira>[1][string];
+  const done = { target: { type: "draft", id: "d1" } } as Parameters<typeof postedToJira>[0];
+  it("says Posted to Jira for an applied Jira write, else Done", () => {
+    expect(doneText({ title: "Draft comment", ticketKey: "CA-1" }, true)).toBe("Posted to Jira: Draft comment on CA-1.");
+    expect(postedToJira(done, { d1: draft("comment", "applied") })).toBe(true);
+    expect(postedToJira(done, { d1: draft("transition", "applying") })).toBe(true);
+    expect(postedToJira(done, { d1: draft("comment", "skipped") })).toBe(false);
+    expect(postedToJira(done, { d1: draft("githubReview", "applied") })).toBe(false);
+    expect(postedToJira(done, {})).toBe(false);
+  });
+  it("names the next need's ticket", () => {
+    expect(advancedText({ title: "Reply" }, { title: "Next", ticketKey: "SUP-9" }, null, true)).toBe("Posted to Jira: Reply. Now: SUP-9 · Next");
   });
 });
 

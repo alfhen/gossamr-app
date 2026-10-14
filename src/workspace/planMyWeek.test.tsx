@@ -6,7 +6,7 @@ import { isoWeek, ticketPick, type PlanItem } from "../lib/planMyWeek";
 import type { WorkItem, WorkstreamView } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { buildCommands, rankCommands, type CommandActions } from "./commands";
-import { PLAN_EMPTY, PlanMyWeek, PlanMyWeekView, afterMove, afterRemove, ThisWeekView, findTicket, rowStep, CHOICES } from "./PlanMyWeek";
+import { PLAN_EMPTY, PlanMyWeek, PlanMyWeekView, afterMove, afterRemove, ThisWeekView, findTicket, rowStep, CHOICES, revealChoices } from "./PlanMyWeek";
 import { WorkstreamList } from "./PipHome";
 import { usePipHome } from "./pipHomeStore";
 import { loadPrefs, usePrefs } from "./prefs";
@@ -194,6 +194,20 @@ describe("the This week list", () => {
     expect(renderToStaticMarkup(<ThisWeekView week="2026-W42" items={items} done={new Set()} onOpen={noop} onEdit={noop} onStart={noop} />)).not.toContain("data-this-week-stopped");
   });
 
+  it("says Done in Jira, with no Start again, for a reopened item whose ticket is Done (G14)", () => {
+    const html = renderToStaticMarkup(<ThisWeekView week="2026-W42" items={items} done={new Set()} stopped={new Set(["ws:w2"])} jiraDone={new Set(["ws:w2"])} onOpen={noop} onEdit={noop} onStart={noop} />);
+    expect(html).toContain("Done in Jira");
+    expect(html).not.toContain("workstream closed");
+    expect(html).not.toContain("data-this-week-start");
+  });
+
+  it("scrolls the choice list into view, with scroll margin for the Keep row (G10)", () => {
+    const scrollIntoView = vi.fn();
+    revealChoices({ scrollIntoView });
+    expect(scrollIntoView).toHaveBeenCalledWith({ block: "nearest" });
+    expect(() => revealChoices(null)).not.toThrow();
+  });
+
   it("does not offer Start again for a workstream without a ticket: there is nothing to start it on", () => {
     const ticketless: PlanItem[] = [{ id: "ws:w5", kind: "workstream", workstreamId: "w5", ticketKey: null, title: "Spike on caching", because: "x.", reopened: true }];
     const html = renderToStaticMarkup(<ThisWeekView week="2026-W42" items={ticketless} done={new Set()} stopped={new Set(["ws:w5"])} onOpen={noop} onEdit={noop} onStart={noop} />);
@@ -364,5 +378,22 @@ describe("the workstream list's status", () => {
     expect(html({ list: thin })).not.toContain('data-status="needs-you"');
     expect(html({ list: thin, learning: { CA: { short: 3 } } })).not.toMatch(detail);
     expect(html({ list: thin, learning: { WEB: { short: 3 } } })).toMatch(detail);
+  });
+});
+
+describe("opening a This week item", () => {
+  it("shows the ticket and hands the keyboard to its peek", async () => {
+    vi.resetModules();
+    const runDayAction = vi.fn();
+    vi.doMock("./StartMyDay", () => ({ runDayAction, StartMyDay: () => null }));
+    const focusPeekOf = vi.fn();
+    vi.doMock("./PeekSheet", () => ({ focusPeekOf }));
+    const { openTicketItem } = await import("./PlanMyWeek");
+    openTicketItem("CA-1");
+    expect(runDayAction).toHaveBeenCalledWith({ type: "ticket", key: "CA-1" });
+    expect(focusPeekOf).toHaveBeenCalledWith("CA-1");
+    vi.doUnmock("./StartMyDay");
+    vi.doUnmock("./PeekSheet");
+    vi.resetModules();
   });
 });

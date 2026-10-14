@@ -953,6 +953,8 @@ export interface WorkstreamView {
   reporterRepliedAt?: string;
   /** That reply's comment on the ticket and how it starts, while `reporterReplied`: the timeline and the notice quote it, and the timeline opens the comment. As `reporter_reply` in src-tauri/src/inbox/workstreams.rs. */
   reporterReply?: ReporterReply;
+  /** Every reply from someone but the person on the ticket since the first reporter ask was posted, oldest first, whether or not the wait they ended was asked again: the timeline tells each. As `reporter_replies` in src-tauri/src/inbox/workstreams.rs. */
+  reporterReplies?: ReporterReplyAt[];
   budget: BudgetView;
 }
 
@@ -964,6 +966,11 @@ export interface Clarity {
 /** A workstream waiting on the ticket's reporter. `since` is when the comment with the questions was posted. */
 export interface ReporterWait {
   since: string;
+}
+
+/** A reply with the time it was written, as `ReporterReplyAt` in src-tauri/src/inbox/workstreams.rs. */
+export interface ReporterReplyAt extends ReporterReply {
+  at: string;
 }
 
 /** The reporter's reply: which comment on the ticket it is and how it starts (`excerpt`, a short first line). As `ReporterReply` in src-tauri/src/inbox/workstreams.rs. */

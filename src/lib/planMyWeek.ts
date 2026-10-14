@@ -289,13 +289,17 @@ export type ItemOutcome = "open" | "done" | "closed";
 export function itemOutcome(item: PlanItem, workstreams: readonly WorkstreamView[], items: readonly WorkItem[]): ItemOutcome {
   if (item.reopened) return "open";
   const mine = workstreamsOf(item, workstreams);
-  // A workstream pick kept before connections were stored knows its ticket's connection through the workstream.
-  const via = item.connectionId ?? workstreams.find((v) => v.workstream.id === item.workstreamId)?.workstream.connectionId;
-  const ticketDone = !!item.ticketKey && items.some((t) => t.item.key === item.ticketKey && (via === undefined || via === t.item.connectionId) && t.status.category === "done");
   // A ticket that is Done is finished work, whether or not its workstream is still open.
-  if (ticketDone) return "done";
+  if (ticketDone(item, workstreams, items)) return "done";
   if (mine.some((v) => v.workstream.closedAt === null)) return "open";
   return mine.length ? "closed" : "open";
+}
+
+/** Whether the item's ticket is Done in Jira, whatever the item's own outcome says (a reopened item is open though its ticket is Done). */
+export function ticketDone(item: PlanItem, workstreams: readonly WorkstreamView[], items: readonly WorkItem[]): boolean {
+  // A workstream pick kept before connections were stored knows its ticket's connection through the workstream.
+  const via = item.connectionId ?? workstreams.find((v) => v.workstream.id === item.workstreamId)?.workstream.connectionId;
+  return !!item.ticketKey && items.some((t) => t.item.key === item.ticketKey && (via === undefined || via === t.item.connectionId) && t.status.category === "done");
 }
 
 /** Whether a kept item is ticked as finished: `itemOutcome` is `done`. */

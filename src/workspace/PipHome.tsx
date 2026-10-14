@@ -135,6 +135,7 @@ export function WorkstreamList({ list, closed, showClosed, selected, onSelect, o
   // The open workstream stays listed when the filter leaves it out (dimmed, with a note), since its conversation is what is shown.
   const open = everyOpen.filter((v) => matches(v) || v.workstream.id === selected);
   const matching = everyOpen.filter(matches).length;
+  const [listRef, more] = useMoreBelow<HTMLUListElement>();
   const option = (id: string | null, level: WorkstreamWither["level"] = 0, dim = false) => ({
     role: "option" as const,
     "aria-selected": selected === id,
@@ -143,9 +144,9 @@ export function WorkstreamList({ list, closed, showClosed, selected, onSelect, o
     className: `${ROW} ${selected === id ? "bg-ws-sel text-ws-ink" : "text-ws-ink2 hover:bg-ws-hover"} ${witherClass(level, "ws-")} ${dim ? "opacity-60" : ""}`.trim(),
   });
   return (
-    <nav aria-label="Workstreams" tabIndex={-1} className="flex max-h-[45%] min-h-0 shrink-0 flex-col border-t border-ws-sep bg-ws-bar">
+    <nav aria-label="Workstreams" tabIndex={-1} className="flex min-h-0 flex-1 flex-col border-t border-ws-sep bg-ws-bar">
       <h2 className="m-0 px-3 pt-2 pb-1 text-xs font-semibold tracking-wide text-ws-ink3 uppercase">Workstreams</h2>
-      <ul role="listbox" aria-label="Workstreams" aria-keyshortcuts="j k ArrowDown ArrowUp Enter" className="m-0 grid min-h-0 list-none content-start gap-0.5 overflow-y-auto p-0 px-1.5">
+      <ul ref={listRef} role="listbox" aria-label="Workstreams" aria-keyshortcuts="j k ArrowDown ArrowUp Enter" className="m-0 grid min-h-0 list-none content-start gap-0.5 overflow-y-auto p-0 px-1.5">
         <li data-workstream-row="general" {...option(null)}>
           <span className="flex min-w-0 items-center gap-1.5">
             <span className="font-semibold text-ws-ink">General</span>
@@ -182,6 +183,11 @@ export function WorkstreamList({ list, closed, showClosed, selected, onSelect, o
           );
         })}
       </ul>
+      {more && (
+        <p data-list-more aria-hidden="true" className="m-0 border-t border-ws-sep/60 bg-ws-bar px-3 py-0.5 text-center text-xs text-ws-ink3">
+          More below ↓
+        </p>
+      )}
       {statusFilter && (
         <p data-status-filter={statusFilter} className="m-0 flex items-baseline gap-2 px-3 pb-1 text-xs text-ws-ink2">
           <span>
@@ -229,17 +235,23 @@ export function WorkstreamList({ list, closed, showClosed, selected, onSelect, o
   );
 }
 
-/**
- * The F6 stop above the conversation that holds Start my day or Plan my week: a labelled region that scrolls when the card is
- * taller than its share, with a fade at the foot while something is cut off, so the scroll is not hidden.
- */
-export function DayScroll({ label, children }: { label: string; children: ReactNode }) {
-  const box = useRef<HTMLDivElement>(null);
+/** Whether the person asked for less motion: the fade's scroll then jumps instead of gliding. */
+const reducedMotion = () => !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+
+/** How far, and how, the fade scrolls a box `clientHeight` tall: most of a page, gliding unless the person asked for less motion. */
+export const fadeScroll = (clientHeight: number, reduced: boolean): ScrollToOptions => ({ top: clientHeight * 0.8, behavior: reduced ? "auto" : "smooth" });
+
+/** Whether a scroller with these measures has more below what shows (a few pixels of slack are not more). */
+export const hasMoreBelow = (el: Pick<HTMLElement, "scrollHeight" | "scrollTop" | "clientHeight">) => el.scrollHeight - el.scrollTop - el.clientHeight > 4;
+
+/** Whether the scroller on `ref` has more below what shows, kept up to date as it scrolls and resizes. */
+export function useMoreBelow<T extends HTMLElement>() {
+  const ref = useRef<T>(null);
   const [more, setMore] = useState(false);
   useEffect(() => {
-    const el = box.current;
+    const el = ref.current;
     if (!el) return;
-    const measure = () => setMore(el.scrollHeight - el.scrollTop - el.clientHeight > 4);
+    const measure = () => setMore(hasMoreBelow(el));
     measure();
     el.addEventListener("scroll", measure, { passive: true });
     const watch = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure);
@@ -247,11 +259,24 @@ export function DayScroll({ label, children }: { label: string; children: ReactN
     for (const c of Array.from(el.children)) watch?.observe(c);
     return () => (el.removeEventListener("scroll", measure), watch?.disconnect());
   });
+  return [ref, more] as const;
+}
+
+/**
+ * The F6 stop above the conversation that holds Start my day or Plan my week: a labelled region that scrolls when the card is
+ * taller than its share, with a fade at the foot while something is cut off, so the scroll is not hidden.
+ */
+export function DayScroll({ label, children }: { label: string; children: ReactNode }) {
+  const [box, more] = useMoreBelow<HTMLDivElement>();
   return (
     // Focusable so the keyboard can scroll it when it overflows: a scroller with no focusable child is out of the arrow keys' reach.
-    <div ref={box} data-pip-home-day role="region" aria-label={label} tabIndex={0} className="relative max-h-[45vh] shrink-0 overflow-y-auto outline-none empty:hidden focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-ws-pip">
+    <div ref={box} data-pip-home-day role="region" aria-label={label} tabIndex={0} className="relative max-h-[45vh] shrink-0 overflow-y-auto border-b border-ws-sep/60 outline-none empty:hidden focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-ws-pip">
       {children}
-      {more && <div data-day-fade aria-hidden="true" className="pointer-events-none sticky bottom-0 -mt-6 h-6 bg-gradient-to-t from-ws-bar to-transparent" />}
+      {more && (
+        <div data-day-fade aria-hidden="true" onClick={() => box.current?.scrollBy(fadeScroll(box.current.clientHeight, reducedMotion()))} className="sticky bottom-0 -mt-7 cursor-pointer bg-gradient-to-t from-ws-bar via-ws-bar/90 to-transparent pt-4 pb-0.5 text-center text-xs text-ws-ink3">
+          More below ↓
+        </div>
+      )}
     </div>
   );
 }
@@ -424,6 +449,7 @@ function overlayOpen(): boolean {
 /** What puts each of F6's regions on screen. The decision pane exists only while one is open, the step rail only while a workstream gives it steps. */
 const REGION_ON: Record<PipHomeRegion, string> = {
   needs: "[data-pip-home] [data-needs-you]",
+  week: "[data-pip-home] [data-this-week]",
   workstreams: '[data-pip-home] nav[aria-label="Workstreams"]',
   day: "[data-pip-home] [data-plan-my-week], [data-pip-home] [data-start-my-day]",
   notice: "[data-pip-home] [data-clarity-notice]",
@@ -445,6 +471,7 @@ function regionOf(el: Element | null): PipHomeRegion | null {
   if (el.closest("[data-plan-my-week], [data-start-my-day]")) return "day";
   if (el.closest("[data-needs-you]")) return "needs";
   if (el.closest("[data-clarity-notice]")) return "notice";
+  if (el.closest("[data-this-week]")) return "week";
   if (el.closest('nav[aria-label="Workstreams"]')) return "workstreams";
   if (el.closest('[data-pip-home-column="rail"]')) return "rail";
   if (el.id === PIP_INPUT_ID) return "composer";
@@ -515,6 +542,8 @@ function usePipHomeKeys(needsYou: readonly Need[]) {
           const rows = all("[data-needs-you-group]");
           return void show(rows.find((r) => r.getAttribute("aria-current") === "true") ?? rows[0] ?? home?.querySelector<HTMLElement>("[data-needs-you-title]"));
         }
+        case "week":
+          return void show(home?.querySelector<HTMLElement>("[data-this-week-item] button") ?? home?.querySelector<HTMLElement>("[data-this-week-edit]") ?? home?.querySelector<HTMLElement>("[data-this-week]"));
         case "workstreams": {
           const rows = all('[role="option"]');
           return void show(rows.find((r) => r.getAttribute("aria-selected") === "true") ?? rows[0] ?? home?.querySelector<HTMLElement>('nav[aria-label="Workstreams"]'));

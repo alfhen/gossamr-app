@@ -251,7 +251,7 @@ test.describe("agent intro continues (D1, D25)", () => {
     await expect(summary.nth(1)).toHaveText(/^Build changes code in its own worktree and runs with your own Claude settings, which decide whether it can push.*requests, not locks/);
     // The detail further down says the same about pushing.
     await expect(sheet.locator('li[data-tone="ask"]', { hasText: "Pushing a branch" })).toContainText("your Claude settings decide");
-    await expect(summary.nth(2)).toHaveText("Gossamr posts nothing to Jira or GitHub until you approve it.");
+    await expect(summary.nth(2)).toHaveText("Gossamr itself posts nothing to Jira or GitHub until you approve it. A Build runs as you, so your Claude settings, not Gossamr, decide whether it can reach Jira or GitHub.");
     await sheet.getByRole("button", { name: "Got it, continue" }).click();
     await expect(sheet).toHaveCount(0);
     // No second click: the review is open in place.
