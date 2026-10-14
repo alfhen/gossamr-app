@@ -97,7 +97,8 @@ export function rankWeek(i: PlanInput): PlanPick[] {
   const connections = new Map<string, Set<string>>();
   const seen = (conn: string, key: string) => connections.set(key, (connections.get(key) ?? new Set()).add(conn));
   for (const v of i.workstreams) if (v.workstream.closedAt === null && v.workstream.itemKey) seen(v.workstream.connectionId, v.workstream.itemKey);
-  for (const t of i.items) seen(t.item.connectionId, t.item.key);
+  // Done tickets are never picked, so they cannot make a key ambiguous.
+  for (const t of i.items) if (t.status.category !== "done") seen(t.item.connectionId, t.item.key);
   const runConnection = new Map(i.runs.map((r) => [r.id, r.item?.connectionId ?? r.connectionId]));
   const general = new Map<string, Need[]>();
   for (const n of [...i.needs].sort(byRank)) {
