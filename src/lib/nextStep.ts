@@ -69,13 +69,14 @@ export const APPROVAL_STARTS_BUILD = "Approving this also starts a Build: it cha
 
 /**
  * Whether approving draft `p` also starts a Build: a description rewrite that came of a finished plan run, in a workstream that
- * is open and in Manage, with the "Plan approved → Build" rule on (its own switch, else the global one in `globals`, which
+ * is open, not held, with automatic steps left and in Manage, with the "Plan approved → Build" rule on (its own switch, else the global one in `globals`, which
  * must be read: guessing from the defaults could promise a step Settings switched off).
  */
 export function approvalStartsBuild(p: Proposal, run: Pick<Run, "spec"> | undefined, view: WorkstreamView | undefined, globals: Partial<AutoStartSwitches> | null): boolean {
   if (!globals || !view || !run || p.intent.type !== "rewrite" || p.origin.type !== "run" || p.state.type !== "pending") return false;
   const ws = view.workstream;
-  return run.spec.kind === "plan" && ws.mode === "manage" && !ws.closedAt && ruleOn(globals, ws.rules, "plan_build");
+  // A held workstream, or one whose automatic steps are used up, starts nothing by itself: the person's click does.
+  return run.spec.kind === "plan" && ws.mode === "manage" && !ws.closedAt && !ws.heldReason && view.budget.level !== "spent" && ruleOn(globals, ws.rules, "plan_build");
 }
 
 /** "R5 (Build)": the run as the header names it, by its short name in the workstream and its step. */

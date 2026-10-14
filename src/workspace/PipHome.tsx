@@ -235,6 +235,12 @@ export function WorkstreamList({ list, closed, showClosed, selected, onSelect, o
   );
 }
 
+/** Whether the person asked for less motion: the fade's scroll then jumps instead of gliding. */
+const reducedMotion = () => !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+
+/** How far, and how, the fade scrolls a box `clientHeight` tall: most of a page, gliding unless the person asked for less motion. */
+export const fadeScroll = (clientHeight: number, reduced: boolean): ScrollToOptions => ({ top: clientHeight * 0.8, behavior: reduced ? "auto" : "smooth" });
+
 /** Whether a scroller with these measures has more below what shows (a few pixels of slack are not more). */
 export const hasMoreBelow = (el: Pick<HTMLElement, "scrollHeight" | "scrollTop" | "clientHeight">) => el.scrollHeight - el.scrollTop - el.clientHeight > 4;
 
@@ -267,7 +273,7 @@ export function DayScroll({ label, children }: { label: string; children: ReactN
     <div ref={box} data-pip-home-day role="region" aria-label={label} tabIndex={0} className="relative max-h-[45vh] shrink-0 overflow-y-auto border-b border-ws-sep/60 outline-none empty:hidden focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-ws-pip">
       {children}
       {more && (
-        <div data-day-fade aria-hidden="true" onClick={() => box.current?.scrollBy({ top: box.current.clientHeight * 0.8, behavior: "smooth" })} className="sticky bottom-0 -mt-7 cursor-pointer bg-gradient-to-t from-ws-bar via-ws-bar/90 to-transparent pt-4 pb-0.5 text-center text-xs text-ws-ink3">
+        <div data-day-fade aria-hidden="true" onClick={() => box.current?.scrollBy(fadeScroll(box.current.clientHeight, reducedMotion()))} className="sticky bottom-0 -mt-7 cursor-pointer bg-gradient-to-t from-ws-bar via-ws-bar/90 to-transparent pt-4 pb-0.5 text-center text-xs text-ws-ink3">
           More below ↓
         </div>
       )}

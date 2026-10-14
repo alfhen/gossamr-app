@@ -2,7 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MockBackend } from "../backend/mock";
 import { useWorkspace } from "../workspaceStore";
-import { PipHome, hasMoreBelow } from "./PipHome";
+import { PipHome, fadeScroll, hasMoreBelow } from "./PipHome";
 import { loadPrefs, usePrefs } from "./prefs";
 import { loadTabs, useTabs } from "./tabsStore";
 import { useWorkstreams } from "./workstreamsStore";
@@ -56,5 +56,12 @@ describe("Pip home's layout", () => {
   it("keeps the handles the keyboard and the tests find the regions by", () => {
     const out = html();
     for (const attr of ['data-pip-home-column="list"', 'data-pip-home-column="conversation"', 'data-pip-home-column="rail"', "data-needs-you-title", "data-needs-you-count", 'role="listbox"']) expect(out).toContain(attr);
+  });
+});
+
+describe("the day card's fade", () => {
+  it("scrolls most of a page, and jumps instead of gliding when the person asked for less motion", () => {
+    expect(fadeScroll(200, false)).toEqual({ top: 160, behavior: "smooth" });
+    expect(fadeScroll(200, true)).toEqual({ top: 160, behavior: "auto" });
   });
 });

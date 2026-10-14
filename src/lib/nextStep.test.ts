@@ -437,4 +437,9 @@ describe("approvalStartsBuild: the plan's description draft (G3)", () => {
     expect(approvalStartsBuild(pending, undefined, view([plan]), AUTOSTART_DEFAULTS)).toBe(false);
     expect(approvalStartsBuild(pending, plan, undefined, AUTOSTART_DEFAULTS)).toBe(false);
   });
+  it("says nothing while the workstream is held or its automatic steps are used up: then the person's click starts the Build", () => {
+    expect(approvalStartsBuild(pending, plan, view([plan], { heldReason: "held_by_person" }), AUTOSTART_DEFAULTS)).toBe(false);
+    expect(approvalStartsBuild(pending, plan, view([plan], { spent: { autoTurns: 11, wakes: 0 } }), AUTOSTART_DEFAULTS)).toBe(false);
+    expect(approvalStartsBuild(pending, plan, view([plan], { spent: { autoTurns: 9, wakes: 0 } }), AUTOSTART_DEFAULTS)).toBe(true);
+  });
 });

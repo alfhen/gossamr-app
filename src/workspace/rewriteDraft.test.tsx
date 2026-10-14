@@ -254,7 +254,7 @@ describe("the plan's description draft says it also starts a Build (G3)", () => 
   const plan = { ...new MockBackend().runs.list()[0], id: "plan-1" } as Run;
   plan.spec = { ...plan.spec, kind: "plan", workstream: "ws-1" };
   const ws = (mode: "manage" | "advise", rules = {}) =>
-    ({ workstream: { id: "ws-1", mode, rules, closedAt: null, heldReason: null }, runs: ["plan-1"], labels: [], stage: "plan" }) as unknown as WorkstreamView;
+    ({ workstream: { id: "ws-1", mode, rules, closedAt: null, heldReason: null }, runs: ["plan-1"], labels: [], stage: "plan", budget: { level: "ok" } }) as unknown as WorkstreamView;
   const fromPlan = draft(intent(), { origin: { type: "run", runId: "plan-1", shortId: null, workstream: "ws-1" } });
   const html = (view: WorkstreamView, globals: typeof AUTOSTART_DEFAULTS | null = AUTOSTART_DEFAULTS, p = fromPlan) => {
     // Static rendering reads the stores' initial state, so that is where the case is set up, and put back.
