@@ -260,7 +260,11 @@ test("j and k move through the Needs you rows and the workstream list, in the or
   await expect(needsPane(page).getByRole("button", { name: "Review and start" })).toBeFocused();
   await expectVisibleFocus(page);
 
-  // The regions with Cmd/Ctrl+] and [: from the open decision to the rail, on to the composer, and back; and nothing moves while the palette is open.
+  // The regions with Cmd/Ctrl+] and [: from the open decision to the clarity notice (CA-401's thin description shows one, a stop
+  // of its own), the rail, on to the composer, and back; and nothing moves while the palette is open.
+  const notice = pipHome(page).locator("[data-clarity-notice]");
+  await press(page, "ControlOrMeta+BracketRight");
+  await expect.poll(() => notice.evaluate((n) => n.contains(document.activeElement))).toBe(true);
   await press(page, "ControlOrMeta+BracketRight");
   await expect(chipButton(page, "investigate")).toBeFocused();
   await press(page, "ControlOrMeta+BracketRight");
