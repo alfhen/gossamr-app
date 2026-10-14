@@ -79,6 +79,12 @@ export const SHORT_GAP: Record<ClarityGap, string> = {
   who: "no \"who is waiting\"",
 };
 
+/** `gaps` in `SHORT_GAP` words as one phrase: "short description", "short description and no scope", "a, b and c". */
+export function gapList(gaps: readonly ClarityGap[]): string {
+  const words = gaps.map((g) => SHORT_GAP[g]);
+  return words.length < 2 ? words.join("") : `${words.slice(0, -1).join(", ")} and ${words[words.length - 1]}`;
+}
+
 /** The projects that have something learned, with what: for Settings, which offers to give each back. */
 export function learnedList(learning: ClarityLearning): { project: string; gaps: ClarityGap[] }[] {
   return Object.keys(learning)

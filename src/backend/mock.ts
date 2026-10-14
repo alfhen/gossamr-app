@@ -60,7 +60,7 @@ import { MockSupervisor, triageReadiness } from "./mockSupervisor";
 import { READINESS_LABEL, reporterComment, reporterDoc } from "./mockReadiness";
 import { clarityQuestions, type ClarityGap } from "../lib/ticketClarity";
 import { nudgeComment } from "../lib/reporterWait";
-import { answersDue, planDue } from "../lib/reporterWait";
+import { answersDue, planDue, replyComment } from "../lib/reporterWait";
 import { mockCancelTurns, mockCancelWakes, mockHasWaitingWake, mockPipIdle, mockQueueWake } from "./mockPipQueue";
 import { holdMockPip } from "./mockPip";
 import { MockProposals } from "./mockProposals";
@@ -438,6 +438,8 @@ export class MockBackend implements Backend {
     this.workstreams.ticketOf = (key) => this.connector.item(itemRef(key));
     // The reporter replies on the ticket with a comment, which leaves no audit line: anyone's but the person's own.
     this.workstreams.repliesTo = (key) => this.connector.comments(itemRef(key)).filter((c) => c.author.accountId !== this.connector.me.accountId).map((c) => c.created);
+    // The reply that ended a wait, by when it was written: which comment it is and how it starts.
+    this.workstreams.replyAt = (key, at) => replyComment(this.connector.comments(itemRef(key)).filter((c) => c.author.accountId !== this.connector.me.accountId).map((c) => ({ id: c.id, at: c.created, text: docText(c.body) })), at);
     // What the person just wrote is the workstream's basis now, so the supervisor doesn't take an approved write for drift.
     this.proposals.onWritten = (p) => {
       const ws = workstreamOf(p);

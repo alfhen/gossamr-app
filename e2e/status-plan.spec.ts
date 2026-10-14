@@ -48,7 +48,7 @@ test.describe("one status word per workstream", () => {
     const waiting = workstreamRow(page, "CA-408");
     const idle = workstreamRow(page, "CA-402");
     await expect(waiting.locator("[data-status]")).toHaveText("Waiting on reporter");
-    await expect(waiting.locator("[data-status-detail]")).toHaveText("· 3d");
+    await expect(waiting.locator("[data-status-detail]")).toHaveText("· asked 3 days ago");
     await expect(waiting.locator("[data-status]")).toHaveAttribute("data-status", "waiting");
     await expect(idle.locator("[data-status]")).toHaveText("Idle");
     // Its ticket has no description, which the word check says in the detail (a notice, never a need: the word stays Idle).

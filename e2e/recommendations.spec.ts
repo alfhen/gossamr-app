@@ -853,6 +853,7 @@ const regionNow = (page: Page) =>
     if (!a) return null;
     if (a.closest("[data-needs-pane]")) return "pane";
     if (a.closest("[data-needs-you]")) return "needs";
+    if (a.closest("[data-clarity-notice]")) return "notice";
     if (a.closest('nav[aria-label="Workstreams"]')) return "workstreams";
     if (a.closest("[data-timeline-scope-shown]")) return "timeline";
     if (a.closest('[data-pip-home-column="rail"]')) return "rail";
@@ -886,10 +887,11 @@ test.describe("B5: F6 reaches every region of Pip home", () => {
     await expect(needsPane(page)).toBeVisible();
     await expect.poll(() => regionNow(page)).toBe("pane");
 
-    for (const region of ["rail", "composer", "needs", "workstreams", "timeline", "pane"]) await pressTo(page, "F6", region);
-    for (const region of ["timeline", "workstreams", "needs", "composer", "rail", "pane"]) await pressTo(page, "Shift+F6", region);
+    // CA-401's thin description shows the clarity notice, which is a stop of its own at the top of the steps column.
+    for (const region of ["notice", "rail", "composer", "needs", "workstreams", "timeline", "pane"]) await pressTo(page, "F6", region);
+    for (const region of ["timeline", "workstreams", "needs", "composer", "rail", "notice", "pane"]) await pressTo(page, "Shift+F6", region);
     // The same with the bracket keys, and the timeline lands on an entry (or the timeline itself while it has none).
-    await pressTo(page, "ControlOrMeta+BracketRight", "rail");
+    await pressTo(page, "ControlOrMeta+BracketRight", "notice");
     await pressTo(page, "ControlOrMeta+BracketLeft", "pane");
     await pressTo(page, "Shift+F6", "timeline");
     await expect(page.locator("[data-timeline]")).toHaveCount(1);
@@ -904,7 +906,7 @@ test.describe("B5: F6 reaches every region of Pip home", () => {
     await page.keyboard.press("Escape");
     await expect(needsPane(page)).toHaveCount(0);
     await expect.poll(() => regionNow(page)).toBe("needs");
-    for (const region of ["workstreams", "timeline", "rail", "composer", "needs"]) await pressTo(page, "F6", region);
+    for (const region of ["workstreams", "timeline", "notice", "rail", "composer", "needs"]) await pressTo(page, "F6", region);
   });
 
   test("with no workstream there is no steps region and no decision, and the timeline is still a stop", async ({ page }) => {

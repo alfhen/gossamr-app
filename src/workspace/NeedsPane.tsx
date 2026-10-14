@@ -30,12 +30,19 @@ import { batchLabel, freezeBatch, type BatchSnapshot } from "./pipHomeLogic";
 import { useToasts } from "./toasts";
 import { useNow } from "./useNow";
 import { controlActions, HeldBanner } from "./WorkstreamControls";
-import { useWorkstreams } from "./workstreamsStore";
+import { openOnPipHome, useWorkstreams } from "./workstreamsStore";
 
 /** The row of `need` in Pip home's list: its own when the group is expanded, else its group's. */
 function rowFor(need: Need): HTMLElement | null {
   const list = '[data-pip-home-column="list"]';
   return document.querySelector<HTMLElement>(`${list} [data-need-key="${CSS.escape(need.key)}"]`) ?? document.querySelector<HTMLElement>(`${list} [data-needs-you-group="${groupId(need.workstreamId)}"]`);
+}
+
+/** "Now: <workstream>" on the Done line: closes the decision, opens that workstream on Pip home and puts the keyboard on its row once it shows. */
+function backTo(workstreamId: string) {
+  usePipHome.getState().closeDecision();
+  openOnPipHome(workstreamId);
+  requestAnimationFrame(() => document.querySelector<HTMLElement>(`[data-workstream-row="${CSS.escape(workstreamId)}"]`)?.focus());
 }
 
 /**
@@ -91,7 +98,13 @@ function useAdvance(needs: readonly Need[], onAdvance: (done: Need, next: Need) 
 }
 
 /** The line over the pane once it moved on by itself: what was dealt with, and what is open now. */
-export const advancedText = (done: Pick<Need, "title">, next: Pick<Need, "title">, waitsOn?: string | null) => `Done: ${done.title}.${waitsOn ? ` ${waitsOn}.` : ""} Now: ${next.title}`;
+export const advancedText = (done: Pick<Need, "title" | "ticketKey" | "workstreamTitle">, next: Pick<Need, "title">, waitsOn?: string | null) => `${doneText(done)}${waitsOn ? ` ${waitsOn}.` : ""} Now: ${next.title}`;
+
+/** What was done and in which workstream: "Done: Questions for the reporter on CA-408." The pane moved on, so the line is what says where it happened. */
+export const doneText = (done: Pick<Need, "title" | "ticketKey" | "workstreamTitle">) => {
+  const where = done.ticketKey ?? done.workstreamTitle;
+  return `Done: ${done.title}${where ? ` on ${where}` : ""}.`;
+};
 
 /**
  * What posting `done` started, when it was the questions or the nudge for the reporter (posted, not skipped): the wait, so the
@@ -107,10 +120,12 @@ export function waitStarted(done: Pick<Need, "target" | "ticketKey">, proposals:
 export interface Advanced {
   id: number;
   text: string;
+  /** The workstream the done need was in, which the line's `Done: …` part opens; absent for a need outside any (General). */
+  back?: { workstreamId: string; label: string };
 }
 
 /** The line for a new advance after `previous`, whose id is never the same. */
-export const nextAdvanced = (previous: Advanced | null, text: string): Advanced => ({ id: (previous?.id ?? 0) + 1, text });
+export const nextAdvanced = (previous: Advanced | null, text: string, back?: Advanced["back"]): Advanced => ({ id: (previous?.id ?? 0) + 1, text, ...(back ? { back } : {}) });
 
 /** How long the line saying the pane moved on stays. */
 export const ADVANCED_MS = 5000;
@@ -743,7 +758,9 @@ export function NeedsPane({ needs }: { needs: readonly Need[] }) {
   const paneRev = usePipHome((s) => s.paneRev);
   const [advanced, setAdvanced] = useState<Advanced | null>(null);
   const lastId = useRef(0);
-  useAdvance(needs, (done, next) => setAdvanced((prev) => nextAdvanced(prev ?? { id: lastId.current, text: "" }, advancedText(done, next, waitStarted(done, useWorkspace.getState().proposals)))));
+  useAdvance(needs, (done, next) =>
+    setAdvanced((prev) => nextAdvanced(prev ?? { id: lastId.current, text: "" }, advancedText(done, next, waitStarted(done, useWorkspace.getState().proposals)), done.workstreamId ? { workstreamId: done.workstreamId, label: doneText(done) } : undefined)),
+  );
   useEffect(() => {
     if (!advanced) return;
     lastId.current = advanced.id;
@@ -758,7 +775,16 @@ export function NeedsPane({ needs }: { needs: readonly Need[] }) {
     <>
       {advanced && (
         <p key={advanced.id} role="status" data-needs-advanced className="m-0 shrink-0 border-b border-ws-sep bg-ws-bar px-3 py-1 text-sm text-ws-ink2 [overflow-wrap:anywhere]">
-          {advanced.text}
+          {advanced.back ? (
+            <>
+              <button type="button" data-needs-advanced-back onClick={() => backTo(advanced.back!.workstreamId)} className="rounded text-left underline underline-offset-2 hover:text-ws-pip focus-visible:outline-2 focus-visible:outline-ws-pip">
+                {advanced.back.label}
+              </button>
+              {advanced.text.slice(advanced.back.label.length)}
+            </>
+          ) : (
+            advanced.text
+          )}
         </p>
       )}
       <HigherPriority key={need.key} needs={needs} need={need} />

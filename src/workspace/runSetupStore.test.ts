@@ -524,6 +524,17 @@ describe("the shared review-and-approve core", () => {
     expect(useToasts.getState().toasts.map((t) => t.text)).toEqual(["Cancelled: Investigate CA-402. Nothing was started.", "Agent started on CA-401. It runs in the background."]);
   });
 
+  it("takes the note away when Review and start opens the setup sheet again for what it cancelled, and keeps one about something else", async () => {
+    await cancelledNote("Investigate CA-401");
+    await s().begin({ item: CA });
+    expect(s().open).toBe(true);
+    expect(useToasts.getState().toasts.map((t) => t.text)).toEqual([]);
+    useRunSetup.getState().close();
+    await cancelledNote("Investigate CA-402");
+    await s().begin({ item: CA });
+    expect(useToasts.getState().toasts.map((t) => t.text)).toEqual(["Cancelled: Investigate CA-402. Nothing was started."]);
+  });
+
   it("takes the note away once a run matching what it cancelled (same kind, same ticket) is working", async () => {
     await cancelledNote("Investigate CA-401");
     const b = base();

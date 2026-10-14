@@ -5,6 +5,7 @@ import { useWorkspace } from "../workspaceStore";
 import { useRuns } from "./runsStore";
 import { workConnections, workWatch } from "./domains";
 import { cardId } from "./ItemCard";
+import { commentDomId, showComment } from "./PeekParts";
 import { useTabs } from "./tabsStore";
 import { useToasts } from "./toasts";
 import { jumpToItem } from "./Palette";
@@ -26,6 +27,19 @@ export function revealInPeek() {
   drafts.scrollIntoView({ block: "start", behavior });
   drafts.classList.add("ws-pulse");
   setTimeout(() => drafts.classList.remove("ws-pulse"), PULSE_MS);
+}
+
+/**
+ * Opens the ticket in the peek and brings comment `id` of it into view, outlined (`showComment`): the reporter's reply the
+ * timeline quotes. The sheet may still be reading the comments when it opens, so it looks for a moment; a comment that
+ * never shows (deleted since) leaves the ticket open at its top.
+ */
+export async function openComment(ticketKey: string, id: string) {
+  if (!(await openTicketByKey(ticketKey))) return;
+  for (let tries = 0; tries < 20; tries++) {
+    if (document.getElementById(commentDomId(id))) return showComment(id);
+    await new Promise((r) => setTimeout(r, 50));
+  }
 }
 
 /** Selects the item, switching the tab's filter if it isn't shown, then brings its card into view and pulses it. With `peek`, the open details scroll to the item's drafts too. */

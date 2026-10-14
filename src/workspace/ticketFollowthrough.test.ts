@@ -157,6 +157,8 @@ describe("a reporter's reply comment ends the wait", () => {
     expect(stored(id).waitingOnReporter ?? null).toBeNull();
     expect(stored(id)).toMatchObject({ reporterReplied: true, changedWhileWaiting: true });
     expect(Number.isNaN(Date.parse(stored(id).reporterRepliedAt ?? ""))).toBe(false);
+    // The view says which comment it was and how it starts (G15).
+    expect(stored(id).reporterReply).toEqual({ id: expect.any(String), excerpt: "It should send three emails." });
     expect(stored(id).workstream.heldReason).toBeNull();
     expect(workstreamStatus(stored(id), []).word).not.toBe("Waiting on reporter");
     expect(withersOf([stored(id)], { events: { [id]: events(id) }, byTicket: {}, runs: [], proposals: {} }, Date.now() + 5 * 86_400_000)[id]?.reporter).toBeUndefined();

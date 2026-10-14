@@ -6,7 +6,7 @@ import { budgetLevel, budgetView } from "../lib/workstreamHold";
 import { byQueue, reviewBlocking, runLabels, stage } from "../lib/workstreamStage";
 import { readStored, writeStored } from "../workspace/storage";
 import { ALLOW_MORE_STEPS, BASIS_FIELDS, HELD_ALL, HELD_BUDGET, HELD_DAILY, HELD_PERSON, HELD_QUOTA, HELD_RESTART, TRIPWIRE, TRIPWIRES, WORKSTREAM_RULES } from "../types";
-import type { BasisField, Clarity, Escalation, ItemRef, ReadinessStop, ReporterWait, Proposal, ReviewVerdict, Run, WorkItem, Workstream, WorkstreamActor, WorkstreamBasis, WorkstreamBudget, WorkstreamEvent, WorkstreamMode, WorkstreamRule, WorkstreamUndo, WorkstreamView, WorkstreamsChanged } from "../types";
+import type { BasisField, Clarity, Escalation, ItemRef, ReadinessStop, ReporterReply, ReporterWait, Proposal, ReviewVerdict, Run, WorkItem, Workstream, WorkstreamActor, WorkstreamBasis, WorkstreamBudget, WorkstreamEvent, WorkstreamMode, WorkstreamRule, WorkstreamUndo, WorkstreamView, WorkstreamsChanged } from "../types";
 import { startedFresh } from "./mockPipTurns";
 
 const CONNECTION = "mock";
@@ -276,6 +276,8 @@ export class MockWorkstreams {
   ticketOf: (key: string) => BasisTicket | null = () => null;
   /** The times of the comments on a ticket from anyone but the signed-in person, by key: the reporter's replies, which leave no audit line; set by the backend that owns the tickets. */
   repliesTo: (key: string) => string[] = () => [];
+  /** The comment on a ticket written at `at` (one of `repliesTo`'s times) as the view's `reporterReply`; set by the backend that owns the tickets. */
+  replyAt: (key: string, at: string) => ReporterReply | null = () => null;
   /** The reporter's replies on `ws`'s ticket (`repliesTo`); none for a workstream without one. */
   repliesOf(ws: Pick<Workstream, "itemKey" | "closedAt">): string[] {
     return ws.itemKey && ws.closedAt === null ? this.repliesTo(ws.itemKey) : [];
@@ -357,7 +359,8 @@ export class MockWorkstreams {
     const waitingOnReporter: ReporterWait | null = follow?.waiting ? { since: follow.waiting } : null;
     const changedWhileWaiting = !!follow?.changed;
     const reporterReplied = !!follow?.replied;
-    return { ...view, ...(waiting ? { waitingForPr: waiting } : {}), ...(reviewBlocking(judged) ? { reviewBlocking: true } : {}), ...(escalation ? { escalation } : {}), ...(readiness ? { readiness } : {}), ...(clarity ? { clarity } : {}), ...(waitingOnReporter ? { waitingOnReporter } : {}), ...(changedWhileWaiting ? { changedWhileWaiting } : {}), ...(reporterReplied ? { reporterReplied } : {}), ...(reporterReplied && repliedAt ? { reporterRepliedAt: repliedAt } : {}) };
+    const reporterReply = reporterReplied && repliedAt && ws.itemKey ? this.replyAt(ws.itemKey, repliedAt) : null;
+    return { ...view, ...(waiting ? { waitingForPr: waiting } : {}), ...(reviewBlocking(judged) ? { reviewBlocking: true } : {}), ...(escalation ? { escalation } : {}), ...(readiness ? { readiness } : {}), ...(clarity ? { clarity } : {}), ...(waitingOnReporter ? { waitingOnReporter } : {}), ...(changedWhileWaiting ? { changedWhileWaiting } : {}), ...(reporterReplied ? { reporterReplied } : {}), ...(reporterReplied && repliedAt ? { reporterRepliedAt: repliedAt } : {}), ...(reporterReply ? { reporterReply } : {}) };
   }
 
   /** Opens a workstream on a cached ticket, or with no ticket and a title. A ticket with an open one gets that one back, unchanged. */

@@ -279,6 +279,16 @@ export function dismissCancelledNote(run?: Pick<Run, "spec" | "item">) {
   cancelledNote = null;
 }
 
+/**
+ * Takes the note away when the setup sheet opens again for what it cancelled (Review and start on the same draft): over
+ * the sheet it would read as if the launch was dropped. A note about something else stays.
+ */
+export function dismissCancelledNoteFor(what: string) {
+  if (!cancelledNote || cancelledNote.what !== what) return;
+  useToasts.getState().dismiss(cancelledNote.id);
+  cancelledNote = null;
+}
+
 /** A run start in words for that note: the draft's own kind and ticket when there is one ("Investigate CA-401"), else the kind and ticket asked for. */
 export function startWhat(p: Proposal | null | undefined, kind?: RunKind, item?: ItemRef | null): string {
   const draft = p?.intent.type === "startRun" ? p.intent : null;

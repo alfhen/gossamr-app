@@ -322,6 +322,9 @@ test("on a window about 900px wide the steps drop below the conversation, nothin
   await page.keyboard.press("F6");
   await expect(conversation.locator("[data-timeline]")).toHaveCount(1);
   expect(await page.evaluate(() => !!document.activeElement?.closest("[data-timeline]"))).toBe(true);
+  // CA-401's thin description shows the clarity notice, a stop of its own just above the steps.
+  await page.keyboard.press("F6");
+  expect(await page.evaluate(() => !!document.activeElement?.closest("[data-clarity-notice]"))).toBe(true);
   await page.keyboard.press("F6");
   await expect(stepChip(page, "investigate").locator("[data-step-chip]")).toBeFocused();
   await page.keyboard.press("F6");

@@ -24,6 +24,13 @@ describe("pipHomeKey: regions", () => {
   });
 
   it("passes the decision pane by while none is open, and the steps while a workstream gives none", () => {
+    // The clarity notice is a stop of its own while one is shown, at the top of the steps column (G26), and skipped otherwise.
+    const noticed = ["needs", "workstreams", "timeline", "notice", "rail", "composer"] as const;
+    expect(f6("timeline", {}, { regions: noticed })).toEqual({ type: "region", to: "notice" });
+    expect(f6("notice", {}, { regions: noticed })).toEqual({ type: "region", to: "rail" });
+    expect(f6("rail", { shiftKey: true }, { regions: noticed })).toEqual({ type: "region", to: "notice" });
+    expect(f6("notice", { shiftKey: true }, { regions: noticed })).toEqual({ type: "region", to: "timeline" });
+    expect(f6("workstreams", {}, { regions: SHOWN })).toEqual({ type: "region", to: "timeline" });
     expect(f6("timeline", {}, { regions: SHOWN })).toEqual({ type: "region", to: "rail" });
     expect(f6("rail", { shiftKey: true }, { regions: SHOWN })).toEqual({ type: "region", to: "timeline" });
     expect(f6("timeline", {}, { regions: ["needs", "workstreams", "timeline", "composer"] })).toEqual({ type: "region", to: "composer" });

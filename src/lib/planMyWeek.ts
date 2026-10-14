@@ -272,6 +272,12 @@ export function ticketPick(t: Pick<WorkItem, "item" | "title">): PlanPick {
   return { id: `ticket:${t.item.connectionId}:${t.item.key}`, kind: "ticket", workstreamId: null, ticketKey: t.item.key, connectionId: t.item.connectionId, title: `${t.item.key} ${t.title}`, because: "you added it." };
 }
 
+/** The workstreams a kept item points at: its own by id, or any on its ticket. The same key on another connection is another ticket; an item kept before connections were stored matches by key alone. */
+function workstreamsOf(item: PlanItem, workstreams: readonly WorkstreamView[]): WorkstreamView[] {
+  const own = (connectionId: string) => item.connectionId === undefined || item.connectionId === connectionId;
+  return workstreams.filter((v) => v.workstream.id === item.workstreamId || (!!item.ticketKey && v.workstream.itemKey === item.ticketKey && own(v.workstream.connectionId)));
+}
+
 /** Where a kept item stands: still `open`, `done` (its workstream closed and the ticket is Done in Jira, or the ticket is Done), or `closed` (its workstream closed but the ticket isn't Done: dropped, not finished). */
 export type ItemOutcome = "open" | "done" | "closed";
 
@@ -282,9 +288,7 @@ export type ItemOutcome = "open" | "done" | "closed";
  */
 export function itemOutcome(item: PlanItem, workstreams: readonly WorkstreamView[], items: readonly WorkItem[]): ItemOutcome {
   if (item.reopened) return "open";
-  // The same key on another connection is another ticket; an item kept before connections were stored matches by key alone.
-  const own = (connectionId: string) => item.connectionId === undefined || item.connectionId === connectionId;
-  const mine = workstreams.filter((v) => v.workstream.id === item.workstreamId || (!!item.ticketKey && v.workstream.itemKey === item.ticketKey && own(v.workstream.connectionId)));
+  const mine = workstreamsOf(item, workstreams);
   // A workstream pick kept before connections were stored knows its ticket's connection through the workstream.
   const via = item.connectionId ?? workstreams.find((v) => v.workstream.id === item.workstreamId)?.workstream.connectionId;
   const ticketDone = !!item.ticketKey && items.some((t) => t.item.key === item.ticketKey && (via === undefined || via === t.item.connectionId) && t.status.category === "done");
@@ -296,6 +300,22 @@ export function itemOutcome(item: PlanItem, workstreams: readonly WorkstreamView
 
 /** Whether a kept item is ticked as finished: `itemOutcome` is `done`. */
 export const itemDone = (item: PlanItem, workstreams: readonly WorkstreamView[], items: readonly WorkItem[]): boolean => itemOutcome(item, workstreams, items) === "done";
+
+/**
+ * Whether a reopened item has no workstream any more: reopening takes the item back, not its workstream, so one whose
+ * workstream closed is open in the list with nothing to open. The list says so and offers to start one again.
+ */
+export function reopenedWithoutWorkstream(item: PlanItem, workstreams: readonly WorkstreamView[]): boolean {
+  if (!item.reopened) return false;
+  const mine = workstreamsOf(item, workstreams);
+  return mine.length > 0 && mine.every((v) => v.workstream.closedAt !== null);
+}
+
+/** The open workstream a kept item leads to: its own while that is open, else another open one on its ticket (the item's own closed and one was started again), else none. */
+export function liveWorkstreamOf(item: PlanItem, workstreams: readonly WorkstreamView[]): string | null {
+  const open = workstreamsOf(item, workstreams).filter((v) => v.workstream.closedAt === null);
+  return (open.find((v) => v.workstream.id === item.workstreamId) ?? open[0])?.workstream.id ?? null;
+}
 
 /** `plans` with item `id` of `week` taken back (`reopened`), so it is open again in the list; nothing else changes. */
 export function reopenItem(plans: WeekPlans, week: string, id: string): WeekPlans {

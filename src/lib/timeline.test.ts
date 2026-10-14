@@ -460,6 +460,14 @@ describe("timeline: the audit", () => {
     ]);
   });
 
+  it("keeps each ask of the reporter as a line of its own, however alike (G29)", () => {
+    for (const action of ["readiness_asked", "clarity_asked", "reporter_nudged"]) {
+      const list = timeline({ events: [line(action, 10), line(action, 9)] });
+      expect(list).toHaveLength(2);
+      expect(list.some((e) => e.count !== undefined || / times\)$/.test(e.text))).toBe(false);
+    }
+  });
+
   it("collapses the same line again and again into one that says how many", () => {
     const list = timeline({ events: [line("rule_set", 10), line("rule_set", 9), line("rule_set", 8), line("held", 7), line("rule_set", 6)] });
     expect(list.map((e) => e.text)).toEqual(["You changed an automatic step (3 times)", "You held the workstream", "You changed an automatic step"]);
@@ -714,6 +722,14 @@ describe("timeline: the reporter's reply on the ticket", () => {
     const got = timeline({ ticketKey: "CA-401", reporterRepliedAt: at });
     expect(got).toHaveLength(1);
     expect(got[0]).toMatchObject({ kind: "audit", at, text: "The reporter replied on the ticket", ticketKey: "CA-401", decision: false, attention: true, target: null });
+  });
+
+  it("quotes the reply and opens its comment on the ticket, when the view says which it was (G15)", () => {
+    const got = timeline({ ticketKey: "CA-401", reporterRepliedAt: iso(30), reporterReply: { id: "c7", excerpt: "It should send three emails." } });
+    expect(got[0]).toMatchObject({ text: "The reporter replied on the ticket", detail: "“It should send three emails.”", target: { type: "comment", ticketKey: "CA-401", id: "c7" } });
+    // Without a ticket key there is nothing to open, but the quote stays.
+    expect(timeline({ reporterRepliedAt: iso(30), reporterReply: { id: "c7", excerpt: "Yes." } })[0]).toMatchObject({ detail: "“Yes.”", target: null });
+    expect(timeline({ ticketKey: "CA-401", reporterRepliedAt: iso(30) })[0].detail).toBeUndefined();
   });
 
   it("sits among the other entries by its time, and is absent without one", () => {

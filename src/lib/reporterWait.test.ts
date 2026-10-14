@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Proposal, WorkstreamActor } from "../types";
 import { ANSWERS_COMMENT_LABEL, READINESS_COMMENT_LABEL } from "./proposals";
-import { agoText, answersDue, nudgeComment, nudgeOffered, nudgeText, NUDGE_AFTER_DAYS, followWithReply, planDue, reporterFollow, waitedDays, waitingOnReporterText } from "./reporterWait";
+import { agoText, answersDue, nudgeComment, nudgeOffered, nudgeText, NUDGE_AFTER_DAYS, followWithReply, planDue, replyComment, replyExcerpt, REPLY_EXCERPT, reporterFollow, waitedDays, waitingOnReporterText } from "./reporterWait";
 import { NUDGE_COMMENT_LABEL } from "./proposals";
 import fixtures from "./reporterWait.fixtures.json";
 
@@ -12,9 +12,27 @@ describe("reporterFollow in the shared cases the Rust side runs too (reporterWai
   it.each(fixtures.cases.map((c) => [c.name, c] as const))("%s", (_, c) => {
     const replies = c.comments.filter((k) => k.author !== c.me).map((k) => k.at);
     const { follow: got, repliedAt } = followWithReply(c.events.map((e) => ({ proposalId: null, ...e }) as Parameters<typeof reporterFollow>[0][number]), replies);
-    const { repliedAt: expectedAt, ...expected } = c.expect as typeof c.expect & { repliedAt?: string | null };
+    const { repliedAt: expectedAt, reply, ...expected } = c.expect as typeof c.expect & { repliedAt?: string | null; reply?: { id: string; excerpt: string } | null };
     expect({ waiting: got.waiting !== null, since: got.waiting, changed: got.changed, replied: got.replied }).toEqual(expected);
     if (expectedAt !== undefined) expect(repliedAt).toBe(expectedAt);
+    if (reply !== undefined) expect(replyComment(c.comments.filter((k) => k.author !== c.me).map((k) => ({ id: "", text: "", ...k })), repliedAt)).toEqual(reply);
+  });
+});
+
+describe("the reporter's reply as a quote (G15)", () => {
+  it("is the first line, evened out, short enough to read at a glance", () => {
+    expect(replyExcerpt("  Hi,\n second")).toBe("Hi,");
+    expect(replyExcerpt("\n\n  a   b \t c")).toBe("a b c");
+    expect(replyExcerpt("")).toBe("");
+    expect(Array.from(replyExcerpt("x".repeat(500)))).toHaveLength(REPLY_EXCERPT);
+    expect(replyExcerpt("x".repeat(REPLY_EXCERPT))).toBe("x".repeat(REPLY_EXCERPT));
+  });
+
+  it("finds the comment written when the wait ended, and none without one", () => {
+    const comments = [{ id: "a", at: at(5), text: "First" }, { id: "b", at: at(9), text: "Second" }];
+    expect(replyComment(comments, at(9))).toEqual({ id: "b", excerpt: "Second" });
+    expect(replyComment(comments, at(7))).toBeNull();
+    expect(replyComment(comments, null)).toBeNull();
   });
 });
 

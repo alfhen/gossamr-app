@@ -235,6 +235,11 @@ export function ClarityNotice({ view }: { view: WorkstreamView }) {
       <p data-clarity-text className="m-0">
         {view.reporterReplied ? clarityRepliedText(view.workstream.itemKey ?? "This ticket") : clarityText(view.workstream.itemKey ?? "This ticket", gaps)}
       </p>
+      {view.reporterReply && (
+        <p data-clarity-reply className="m-0 text-sm text-ws-ink2 [overflow-wrap:anywhere]">
+          {`They wrote: “${view.reporterReply.excerpt}”`}
+        </p>
+      )}
       <p className="m-0 text-xs text-ws-ink2">This is a quick check of the words, not a verdict. It holds nothing up; the triage still decides whether the ticket is ready to plan.</p>
       <div className="flex flex-wrap items-center gap-2">
         <Btn tone="plain" disabled={busy} onClick={() => choose(() => store.askReporterNow(id))} className="px-2 py-0.5">
@@ -253,12 +258,12 @@ export function ClarityNotice({ view }: { view: WorkstreamView }) {
 export function QuietClarity({ view, project, gaps, inside = false }: { view: WorkstreamView; project: string; gaps: readonly ClarityGap[]; inside?: boolean }) {
   const [busy, setBusy] = useState(false);
   return (
-    <p data-clarity-quiet={view.workstream.id} className={`m-0 flex flex-wrap items-baseline gap-x-2 text-xs text-ws-ink3 ${inside ? "" : "px-1"}`}>
+    <p data-clarity-quiet={view.workstream.id} className={`m-0 flex flex-wrap items-baseline gap-x-2 text-xs text-ws-ink2 ${inside ? "" : "px-1"}`}>
       <span>
         Not flagged: you said Looks fine to {gaps.map((g) => SHORT_GAP[g]).join(" and ")} in {project} tickets.
       </span>
-      <button type="button" disabled={busy} onClick={() => (setBusy(true), void giveBackClarity(project, gaps).finally(() => (setBusy(false), settleClarityFocus(view.workstream.id))))} className="rounded px-1 underline hover:bg-ws-hover focus-visible:outline-2 focus-visible:outline-ws-pip">
-        Flag again
+      <button type="button" disabled={busy} onClick={() => (setBusy(true), void giveBackClarity(project, gaps).finally(() => (setBusy(false), settleClarityFocus(view.workstream.id))))} className="rounded px-1 font-medium text-ws-ink underline hover:bg-ws-hover focus-visible:outline-2 focus-visible:outline-ws-pip">
+        {`Flag again in ${project}`}
       </button>
     </p>
   );

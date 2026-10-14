@@ -106,7 +106,18 @@ pub struct WorkstreamView {
     /// When that reply was written (the first comment that ended the wait): the timeline's "The reporter replied on the ticket".
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reporter_replied_at: Option<chrono::DateTime<Utc>>,
+    /// That reply's comment on the ticket and how it starts, while `reporter_replied`: the timeline and the notice quote it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reporter_reply: Option<ReporterReply>,
     pub budget: BudgetView,
+}
+
+/// The reporter's reply: which comment on the ticket it is, and its first line cut short (`reply_excerpt`).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReporterReply {
+    pub id: String,
+    pub excerpt: String,
 }
 
 /// What the clarity check found missing in a ticket's description.
@@ -189,6 +200,29 @@ pub fn reporter_follow_at(events: &[WorkstreamEvent], replies: &[chrono::DateTim
         reply(&mut now, &mut replied_at, *at);
     }
     (now, replied_at.filter(|_| now.replied))
+}
+
+/// How many characters of a reply the quote keeps. As `REPLY_EXCERPT` in src/lib/reporterWait.ts.
+const REPLY_EXCERPT: usize = 140;
+
+/// The first line of a comment's text with its spacing made even, cut to `REPLY_EXCERPT` characters with "…". Mirrored by
+/// `replyExcerpt` in src/lib/reporterWait.ts.
+pub fn reply_excerpt(text: &str) -> String {
+    let line = text.lines().map(|l| l.split_whitespace().collect::<Vec<_>>().join(" ")).find(|l| !l.is_empty()).unwrap_or_default();
+    if line.chars().count() <= REPLY_EXCERPT {
+        return line;
+    }
+    let cut: String = line.chars().take(REPLY_EXCERPT - 1).collect();
+    format!("{}…", cut.trim_end())
+}
+
+/// The comment of the cached ticket `t` that someone other than `me` wrote at `at`, as the view's `reporter_reply`: the one
+/// that ended the wait (`reporter_follow_at`). None when no such comment is there or it says nothing. Mirrored by
+/// `replyComment` in src/lib/reporterWait.ts; both run the `reply` of src/lib/reporterWait.fixtures.json.
+pub fn reply_to(t: &crate::model::CachedTicket, me: &str, at: chrono::DateTime<Utc>) -> Option<ReporterReply> {
+    let c = t.comments.iter().filter(|c| c.author.account_id != me).find(|c| chrono::DateTime::parse_from_rfc3339(&c.created).is_ok_and(|d| d.with_timezone(&Utc) == at))?;
+    let excerpt = reply_excerpt(&c.body);
+    (!excerpt.is_empty()).then(|| ReporterReply { id: c.id.clone(), excerpt })
 }
 
 /// The times of the comments on the cached ticket `t` that someone other than `me` (an account id) wrote, oldest first.
@@ -450,6 +484,7 @@ impl WorkstreamView {
             changed_while_waiting: false,
             reporter_replied: false,
             reporter_replied_at: None,
+            reporter_reply: None,
         }
     }
 }
@@ -477,6 +512,10 @@ fn escalation_events(db: &Db, ws: &Workstream) -> Result<Vec<WorkstreamEvent>> {
 struct TicketFacts {
     gaps: Vec<ClarityGap>,
     replies: Vec<chrono::DateTime<Utc>>,
+    /// The cached ticket itself, from which the reply that ended a wait is quoted (`reply_to`).
+    ticket: Option<crate::model::CachedTicket>,
+    /// The signed-in person's account id, whose comments are not the reporter's.
+    me: String,
 }
 
 /// The `TicketFacts` of the ticket workstream `ws` is on, as it reads in the cache; none without a ticket, a cached one,
@@ -484,8 +523,9 @@ struct TicketFacts {
 fn ticket_facts(db: &Db, scope: &Scope, ws: &Workstream) -> Result<TicketFacts> {
     let Some(key) = ws.item_key.as_deref().filter(|_| ws.closed_at.is_none()) else { return Ok(TicketFacts::default()) };
     let Some(work) = db.item(&Core::item(scope, key))? else { return Ok(TicketFacts::default()) };
-    let replies = serde_json::from_value::<crate::model::CachedTicket>(work.extra.clone()).map(|t| replies_of(&t, &scope.account_id)).unwrap_or_default();
-    Ok(TicketFacts { gaps: clarity_gaps(&work.body.plain_text()), replies })
+    let cached = serde_json::from_value::<crate::model::CachedTicket>(work.extra.clone()).ok();
+    let replies = cached.as_ref().map(|t| replies_of(t, &scope.account_id)).unwrap_or_default();
+    Ok(TicketFacts { gaps: clarity_gaps(&work.body.plain_text()), replies, ticket: cached, me: scope.account_id.clone() })
 }
 
 /// The `escalation_posted` line for workstream `ws_id` when review draft `posted`, just posted to GitHub, is the one its
@@ -768,6 +808,7 @@ impl Core {
         view.changed_while_waiting = follow.changed && open;
         view.reporter_replied = follow.replied && open;
         view.reporter_replied_at = replied_at.filter(|_| open);
+        view.reporter_reply = replied_at.filter(|_| open).and_then(|at| ticket.ticket.as_ref().and_then(|t| reply_to(t, &ticket.me, at)));
         if let Some(build) = pushed_build(runs) {
             view.waiting_for_pr = waiting_for(build, self.pull_request_of(build));
         }
@@ -1794,7 +1835,32 @@ mod tests {
                     assert_eq!(reporter_follow_at(&audit_of(case), &replies_of_case(case)).1, want, "{}", case["name"]);
                 }
                 assert_eq!(got.waiting.is_some(), expect["waiting"].as_bool().unwrap(), "{}", case["name"]);
+                if let Some(reply) = expect.get("reply") {
+                    let mut t = crate::tracker::testing::sample_ticket();
+                    t.comments = case["comments"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .map(|c| {
+                            let person = crate::model::Person { account_id: c["author"].as_str().unwrap().into(), name: "n".into(), avatar_url: None };
+                            crate::model::Comment { id: c["id"].as_str().unwrap_or("").into(), author: person, created: c["at"].as_str().unwrap().into(), body: c["text"].as_str().unwrap_or("").into(), mentions: vec![], mentioned: vec![], doc: None }
+                        })
+                        .collect();
+                    let replied_at = reporter_follow_at(&audit_of(case), &replies_of_case(case)).1;
+                    let found = replied_at.and_then(|at| reply_to(&t, case["me"].as_str().unwrap_or(""), at));
+                    let want = reply.as_object().map(|r| ReporterReply { id: r["id"].as_str().unwrap().into(), excerpt: r["excerpt"].as_str().unwrap().into() });
+                    assert_eq!(found, want, "{}", case["name"]);
+                }
             }
+        }
+
+        #[test]
+        fn a_reply_is_quoted_by_its_first_line() {
+            assert_eq!(reply_excerpt("  Hi,\n second"), "Hi,");
+            assert_eq!(reply_excerpt("\n\n  a   b \t c"), "a b c");
+            assert_eq!(reply_excerpt(""), "");
+            assert_eq!(reply_excerpt(&"x".repeat(500)).chars().count(), REPLY_EXCERPT);
+            assert_eq!(reply_excerpt(&"x".repeat(REPLY_EXCERPT)), "x".repeat(REPLY_EXCERPT));
         }
 
         fn follow_of(events: &[WorkstreamEvent]) -> ReporterFollow {
@@ -1964,11 +2030,18 @@ mod tests {
             assert!(ended.reporter_replied_at.is_some(), "the view carries when the reporter replied");
             assert!(serde_json::to_value(&ended).unwrap()["reporterRepliedAt"].is_string());
             assert!(still.reporter_replied_at.is_none());
+            // The view quotes the comment that ended the wait: its id and its first line.
+            let reply = ended.reporter_reply.clone().expect("the view carries the reply");
+            assert_eq!(reply.excerpt, "hello");
+            assert!(reply.id.starts_with("n-kim-"));
+            assert_eq!(serde_json::to_value(&ended).unwrap()["reporterReply"], serde_json::json!({ "id": reply.id, "excerpt": "hello" }));
+            assert!(still.reporter_reply.is_none() && serde_json::to_value(&still).unwrap().get("reporterReply").is_none());
             let listed = fx.core.workstreams(&fx.scope, false).await.unwrap().into_iter().find(|v| v.workstream.id == ws.id).unwrap();
             assert!(listed.reporter_replied && listed.waiting_on_reporter.is_none(), "the list agrees");
             fx.core.record_workstream_event(&fx.scope, WorkstreamEvent::new(&ws.id, Actor::Person, "readiness_overridden", Utc::now() + chrono::Duration::hours(2))).await.unwrap();
             assert!(!view().await.reporter_replied, "choosing settles it");
             assert!(view().await.reporter_replied_at.is_none(), "and takes the reply's time with it");
+            assert!(view().await.reporter_reply.is_none(), "and its quote");
         }
 
         #[test]

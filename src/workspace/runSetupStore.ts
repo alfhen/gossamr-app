@@ -4,7 +4,7 @@ import { itemKey } from "../lib/filter";
 import type { CloneChoice, ContainerRef, ItemRef, Preflight, Proposal, ProposalEdit, Run, RunKind, RunReview, RunSpec } from "../types";
 import { allContainers, useWorkspace } from "../workspaceStore";
 import { defaultProject, defaultRepo, findRunDraft, kindBlock, linkedRepo, prChoices, repoChoices, ticketlessShape, type PrChoice } from "./runSheetLogic";
-import { startWhat, useRuns } from "./runsStore";
+import { dismissCancelledNoteFor, startWhat, useRuns } from "./runsStore";
 import { readStored, writeStored } from "./storage";
 import { useTabs } from "./tabsStore";
 import { messageOf, useToasts } from "./toasts";
@@ -286,7 +286,10 @@ export const useRunSetup = create<SetupState>((set, get) => {
     async begin(options) {
       const { item = null, proposalId, kind = "investigate", pr, repo: wanted, planFromRun = null, buildFromRun = null } = options;
       const backend = useWorkspace.getState().backend;
-      if (!backend || !useRuns.getState().ensureAgentsIntro(() => void get().begin(options), startWhat(proposalId ? useWorkspace.getState().proposals[proposalId] : null, kind, item))) return;
+      const what = startWhat(proposalId ? useWorkspace.getState().proposals[proposalId] : null, kind, item);
+      if (!backend || !useRuns.getState().ensureAgentsIntro(() => void get().begin(options), what)) return;
+      // The first-run sheet was closed with × earlier and the person is back for the same start: its "Nothing was started" is old.
+      dismissCancelledNoteFor(what);
       const mine = ++run;
       useRuns.getState().closeSheet();
       const reportAvailable = !!(await backend.runsSettings().catch(() => null))?.reportResult;

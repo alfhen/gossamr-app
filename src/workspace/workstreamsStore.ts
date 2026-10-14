@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import type { Backend } from "../backend/types";
-import { dismissed, flaggedGaps, gapWords, ignoredGaps, learnedDetail, LEARN_AFTER, projectOfKey } from "../lib/clarityLearning";
+import { dismissed, flaggedGaps, gapList, gapWords, ignoredGaps, learnedDetail, LEARN_AFTER, projectOfKey } from "../lib/clarityLearning";
 import { GENERAL_CONVERSATION, workstreamConversation, workstreamOfConversation } from "../lib/conversations";
 import { readinessPrompt } from "../lib/needs";
 import { ofItem, runWorkstream, stageText } from "../lib/workstreamStage";
@@ -366,7 +366,7 @@ export const useWorkstreams = create<WorkstreamsState>()((set, get) => {
         // Out of date once the count moves (another Looks fine) or is given back: the newer note replaces it, never waits behind it.
         const at = JSON.stringify(shown.map((g) => counts[g] ?? 0));
         const standing = () => JSON.stringify(shown.map((g) => usePrefs.getState().clarityLearning[project]?.[g] ?? 0)) === at;
-        pushLearning(project, `Noted. After ${left} more Looks fine on ${project} tickets like this, Gossamr stops flagging ${them} (Settings > Unclear tickets).`, standing);
+        pushLearning(project, `Noted for ${gapList(shown)}. After ${left} more Looks fine on ${project} tickets like this, Gossamr stops flagging ${them} (Settings > Unclear tickets).`, standing);
       }
       return true;
     },

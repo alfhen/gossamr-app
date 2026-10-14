@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import type { Need } from "../lib/needs";
-import { HigherPriority, EDIT_FIELD, advancedText, waitStarted, nextAdvanced, endEditing, firstDecision } from "./NeedsPane";
+import { HigherPriority, EDIT_FIELD, advancedText, doneText, waitStarted, nextAdvanced, endEditing, firstDecision } from "./NeedsPane";
 
 /** A stand-in for the pane: each selector it is asked for answers with what the test put there. */
 const pane = (found: Record<string, unknown[]>) =>
@@ -61,6 +61,20 @@ describe("the line when the pane moves on", () => {
     expect(advancedText({ title: "Questions for the reporter" }, { title: "R2 asks a question" }, "CA-408 now waits on the reporter; nothing starts on its own")).toBe(
       "Done: Questions for the reporter. CA-408 now waits on the reporter; nothing starts on its own. Now: R2 asks a question",
     );
+  });
+});
+
+describe("the line names the workstream the done need was in (G19)", () => {
+  it("says it by the ticket, else the workstream's title, and leaves it out for General", () => {
+    expect(doneText({ title: "Questions for the reporter", ticketKey: "DEVOPS-490", workstreamTitle: "Fix the deploy" })).toBe("Done: Questions for the reporter on DEVOPS-490.");
+    expect(doneText({ title: "Reply", workstreamTitle: "Fix the deploy" })).toBe("Done: Reply on Fix the deploy.");
+    expect(doneText({ title: "Reply" })).toBe("Done: Reply.");
+    expect(advancedText({ title: "Questions", ticketKey: "CA-408" }, { title: "R2 asks a question" }, "CA-408 now waits on the reporter")).toBe("Done: Questions on CA-408. CA-408 now waits on the reporter. Now: R2 asks a question");
+  });
+
+  it("carries the way back to that workstream", () => {
+    expect(nextAdvanced(null, "t", { workstreamId: "w1", label: "Done: x on CA-1." }).back).toEqual({ workstreamId: "w1", label: "Done: x on CA-1." });
+    expect(nextAdvanced(null, "t")).not.toHaveProperty("back");
   });
 });
 

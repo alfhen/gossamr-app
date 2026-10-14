@@ -46,8 +46,9 @@ describe("workstreamStatus: every state", () => {
   });
 
   it("Waiting on reporter, with the days", () => {
-    expect(at(view({ waitingOnReporter: { since: ago(3) } }))).toMatchObject({ state: "waiting", word: "Waiting on reporter", detail: "3d" });
-    expect(at(view({ waitingOnReporter: { since: ago(0.2) } })).detail).toBe("0d");
+    expect(at(view({ waitingOnReporter: { since: ago(3) } }))).toMatchObject({ state: "waiting", word: "Waiting on reporter", detail: "asked 3 days ago" });
+    expect(at(view({ waitingOnReporter: { since: ago(0.2) } })).detail).toBe("asked today");
+    expect(at(view({ waitingOnReporter: { since: ago(1.2) } })).detail).toBe("asked yesterday");
   });
 
   it("Running: a run going, or queued for a slot, named by its kind", () => {
