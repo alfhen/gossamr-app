@@ -36,16 +36,33 @@ impl Git {
 
     /// Trimmed stdout, or `None` when git fails, times out or can't start.
     async fn out(&self, dir: &Path, args: &[&str]) -> Option<String> {
+        self.out_or_why(dir, args).await.ok()
+    }
+
+    /// Like `out`, but says why it failed: git couldn't start, ran past the limit, or exited with this last stderr line.
+    async fn out_or_why(&self, dir: &Path, args: &[&str]) -> Result<String, String> {
         let mut cmd = Command::new(&self.program);
         cmd.args(["-c", "core.hooksPath=/dev/null", "-C"]).arg(dir).arg("--no-optional-locks").args(args);
         self.env.apply(cmd.as_std_mut());
-        let child = cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null()).kill_on_drop(true).spawn().ok()?;
-        let out = tokio::time::timeout(GIT_TIMEOUT, child.wait_with_output()).await.ok()?.ok()?;
-        out.status.success().then(|| String::from_utf8_lossy(&out.stdout).trim().to_owned())
+        let child = cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true).spawn().map_err(|e| format!("{} didn't start: {e}", self.program.display()))?;
+        let out = tokio::time::timeout(GIT_TIMEOUT, child.wait_with_output())
+            .await
+            .map_err(|_| format!("git took longer than {} seconds", GIT_TIMEOUT.as_secs()))?
+            .map_err(|e| format!("git couldn't be waited for: {e}"))?;
+        if out.status.success() {
+            return Ok(String::from_utf8_lossy(&out.stdout).trim().to_owned());
+        }
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        let last = stderr.lines().rev().map(str::trim).find(|l| !l.is_empty()).unwrap_or("no message");
+        Err(format!("git {}: {last}", out.status))
     }
 
     pub async fn origin(&self, dir: &Path) -> Option<String> {
-        self.out(dir, &["remote", "get-url", "origin"]).await
+        self.origin_or_why(dir).await.ok()
+    }
+
+    pub async fn origin_or_why(&self, dir: &Path) -> Result<String, String> {
+        self.out_or_why(dir, &["remote", "get-url", "origin"]).await
     }
 
     pub(super) fn git_program(&self) -> &Path {
