@@ -285,6 +285,9 @@ describe("what Looks fine teaches the clarity notice", () => {
     useToasts.getState().clear();
     expect(await giveBackClarity()).toBe(1);
     expect(usePrefs.getState().clarityLearning).toEqual({ CA: { who: 3 } });
+    // It names the project it reset, not "every project": CA still has its learning.
+    expect(texts()).toContain("Gossamr will flag new unclear WEB tickets as before.");
+    expect(texts().some((t) => t.includes("every project"))).toBe(false);
     note.mockRestore();
     useToasts.getState().clear();
     expect(await giveBackClarity("CA")).toBe(1);

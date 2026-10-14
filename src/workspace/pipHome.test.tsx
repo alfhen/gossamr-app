@@ -175,7 +175,8 @@ describe("Pip home", () => {
       expect(planning).toContain("data-plan-my-week");
       expect(planning).not.toContain("data-start-my-day");
       // One wrapper holds whichever is shown, capped so the timeline and its filter bar keep their room.
-      expect(planning).toMatch(/data-pip-home-day="true" role="region" aria-label="Plan my week" class="relative max-h-\[45vh\] shrink-0 overflow-y-auto/);
+      // Focusable, so the keyboard can scroll it when the card is taller than its share.
+      expect(planning).toMatch(/data-pip-home-day="true" role="region" aria-label="Plan my week" tabindex="0" class="relative max-h-\[45vh\] shrink-0 overflow-y-auto/);
       // The wrapper is a named stop for F6: Start my day when the plan is closed.
       Object.assign(home, { planOpen: false });
       expect(renderToStaticMarkup(<PipHome />)).toMatch(/data-pip-home-day="true" role="region" aria-label="Start my day"/);

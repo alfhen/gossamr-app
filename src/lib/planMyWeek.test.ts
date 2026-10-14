@@ -361,6 +361,10 @@ describe("the kept plan", () => {
     // Picks are told apart by connection too, so removing or reordering one never touches the other.
     expect(ticketPick(elsewhere("CA-2")).id).not.toBe(mine.id);
     expect(itemDone(old, [], [elsewhere("CA-2", done)])).toBe(true);
+    // An old workstream pick knows its ticket's connection through its workstream: the same key Done elsewhere is not its ticket.
+    const { connectionId: __, ...oldPick } = picked;
+    expect(itemDone(oldPick, [ws("w1", "CA-1")], [elsewhere("CA-1", done)])).toBe(false);
+    expect(itemDone(oldPick, [ws("w1", "CA-1")], [ticket("CA-1", done)])).toBe(true);
   });
   it("keeps the connection through storage, and drops an item whose connection is not text", () => {
     const withConn: PlanItem = { ...ticketPick(ticket("CA-1")) };
@@ -392,6 +396,12 @@ describe("planMyWeek: one ask among many needs", () => {
     expect(out).toHaveLength(3);
     expect(out.map((p) => p.id)).toEqual(["ws:w1", "ws:w2", "ticket:c:CA-9"]);
     expect(out[2].work).toBe("clarify");
+  });
+
+  it("keeps a one-pick week's need rather than giving its only place to an ask", () => {
+    const thin = ticket("CA-9", {}, "Fix it.");
+    const i = input({ workstreams: [ws("w1", "CA-1")], items: [thin], needs: [need("w1")], count: 1 });
+    expect(ids(i)).toEqual(["ws:w1"]);
   });
 
   it("changes nothing when no unclear work exists", () => {

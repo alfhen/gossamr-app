@@ -73,6 +73,7 @@ export async function giveBackClarity(project?: string, gaps?: readonly ClarityG
   retireLearning(reset);
   if (failed.length) useToasts.getState().push(`Couldn't note the reset in the audit, so ${failed.join(", ")} wasn't reset. Try again.`, "error");
   if (reset.length && gaps && project) pushLearning(project, `Gossamr will flag ${project} tickets with ${gaps.map((g) => SHORT_GAP[g]).join(" or ")} as before.`);
-  else if (reset.length) pushLearning(reset[0], project ? `Gossamr will flag new unclear ${project} tickets as before.` : "Gossamr will flag new unclear tickets as before in every project.");
+  // "Every project" only when every project was reset: one whose audit write failed keeps what it learned.
+  else if (reset.length) pushLearning(reset[0], project ? `Gossamr will flag new unclear ${project} tickets as before.` : failed.length ? `Gossamr will flag new unclear ${reset.join(", ")} tickets as before.` : "Gossamr will flag new unclear tickets as before in every project.");
   return reset.length;
 }

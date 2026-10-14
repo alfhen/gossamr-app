@@ -189,7 +189,8 @@ export function planMyWeek(i: PlanInput): PlanPick[] {
   // Only when nothing else exists: the extra unclear ones fill what is left of the week, in their order.
   if (picks.length < count) picks.push(...ranked.filter((p) => !rest.includes(p)).slice(0, count - picks.length));
   // Needs you outrank every ask, so a week of three needs would never offer one: unclear work gets one place, the last other pick's.
-  if (firstClarify >= 0 && count > 0 && !picks.some((p) => p.work === "clarify")) {
+  // A one-pick week keeps its pick: there is no other place to give, and a need outranks an ask.
+  if (firstClarify >= 0 && count > 1 && !picks.some((p) => p.work === "clarify")) {
     const tierOf = (p: PlanPick) => scored.find((s) => s.pick === p)?.tier ?? 1;
     const at = picks.map(tierOf).lastIndexOf(1);
     picks[at >= 0 ? at : picks.length - 1] = ranked[firstClarify];
@@ -287,9 +288,10 @@ export type ItemOutcome = "open" | "done" | "closed";
  */
 export function itemOutcome(item: PlanItem, workstreams: readonly WorkstreamView[], items: readonly WorkItem[]): ItemOutcome {
   if (item.reopened) return "open";
-  const own = (connectionId: string) => item.connectionId === undefined || item.connectionId === connectionId;
   const mine = workstreamsOf(item, workstreams);
-  const ticketDone = !!item.ticketKey && items.some((t) => t.item.key === item.ticketKey && own(t.item.connectionId) && t.status.category === "done");
+  // A workstream pick kept before connections were stored knows its ticket's connection through the workstream.
+  const via = item.connectionId ?? workstreams.find((v) => v.workstream.id === item.workstreamId)?.workstream.connectionId;
+  const ticketDone = !!item.ticketKey && items.some((t) => t.item.key === item.ticketKey && (via === undefined || via === t.item.connectionId) && t.status.category === "done");
   // A ticket that is Done is finished work, whether or not its workstream is still open.
   if (ticketDone) return "done";
   if (mine.some((v) => v.workstream.closedAt === null)) return "open";
