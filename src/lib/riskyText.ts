@@ -27,10 +27,21 @@ export function risksIn(text: string): Risk[] {
   return found;
 }
 
-/** The risks an edit adds: those of `edited` that `original` (what the draft said) did not already carry. */
+/** The text in `text` that carries each risk: every broad mention and every secret-shaped run, as written. */
+function matchesIn(text: string): Record<Risk, Set<string>> {
+  const all = (re: RegExp) => [...text.matchAll(new RegExp(re.source, re.flags.includes("g") ? re.flags : `${re.flags}g`))].map((m) => m[0].trim().toLowerCase());
+  // A broad mention's match takes the character before the @ too; the mention itself is from the @ on.
+  return { broadcast: new Set(all(BROADCAST).map((m) => m.slice(m.indexOf("@")))), secret: new Set(SECRETS.flatMap(all)) };
+}
+
+/**
+ * The risks an edit adds: those of `edited` carried by text that `original` (what the draft said) did not hold. A risk the
+ * draft already had counts again when the edit brings new text for it, so a placeholder replaced by a real password pauses.
+ */
 export const newRisks = (original: string, edited: string): Risk[] => {
-  const had = risksIn(original);
-  return risksIn(edited).filter((r) => !had.includes(r));
+  const had = matchesIn(original);
+  const now = matchesIn(edited);
+  return (["broadcast", "secret"] as const).filter((r) => [...now[r]].some((m) => !had[r].has(m)));
 };
 
 /** What the pause says, in the person's words: what it found, then that nothing is lost by stopping. */

@@ -360,6 +360,11 @@ export function WorkstreamControlsView({ view, globals, actions, confirmingStop,
     onConfirmStop(false);
     requestAnimationFrame(() => box.current?.querySelector<HTMLElement>('[aria-label="More for this workstream"][data-popover-trigger]')?.focus());
   };
+  // Keep, or Esc, takes the question away with the button that had the keyboard: it goes back to Close, as Stop's does to its menu.
+  const keepOpen = () => {
+    onConfirmClose?.(false);
+    requestAnimationFrame(() => box.current?.querySelector<HTMLElement>("[data-close-workstream]")?.focus());
+  };
   return (
     <div ref={box} data-workstream-controls={ws.id} data-mode={ws.mode} data-held={ws.heldReason ?? undefined} className="grid gap-1.5">
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
@@ -387,7 +392,7 @@ export function WorkstreamControlsView({ view, globals, actions, confirmingStop,
           <MoreMenu onStop={() => onConfirmStop(true)} />
         </span>
         {confirmingStop && <StopConfirm onStop={() => (closeConfirm(), actions.onStop())} onKeep={closeConfirm} />}
-        {confirmingClose && onConfirmClose && <CloseConfirm onClose={() => actions.onClose?.()} onKeep={() => onConfirmClose(false)} />}
+        {confirmingClose && onConfirmClose && <CloseConfirm onClose={() => actions.onClose?.()} onKeep={keepOpen} />}
       </div>
       <p data-mode-line={ws.mode} className="m-0 text-xs text-ws-ink2">
         {MODE_LINE[ws.mode]}

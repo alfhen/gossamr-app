@@ -438,7 +438,8 @@ export function startWorkstreamCommands(items: readonly WorkItem[], query: strin
   return ticketCommands(items, rest, () => {}, limit + taken.size)
     .flatMap((c) => {
       const item = byKey.get(c.id.slice("ticket:".length));
-      return item && free(item) ? [start(item)] : [];
+      // A Done ticket is not started from here either, typed or not: the step says why instead.
+      return item && item.status.category !== "done" && free(item) ? [start(item)] : [];
     })
     .slice(0, limit);
 }

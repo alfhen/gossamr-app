@@ -343,6 +343,23 @@ describe("the toast queue", () => {
       expect(texts()).toEqual([]);
     });
 
+    it("keeps the toast held until both the pointer and the keyboard have left it, in either order", () => {
+      for (const [first, second] of [["pointer", "focus"], ["focus", "pointer"]] as const) {
+        useToasts.getState().clear();
+        const id = useToasts.getState().push(`read by ${first} then ${second}`, "info")!;
+        useToasts.getState().hold(id, "focus");
+        useToasts.getState().hold(id, "pointer");
+        useToasts.getState().release(id, first);
+        vi.advanceTimersByTime(LIFETIME_MS.info * 3);
+        expect(shown()).toBe(`read by ${first} then ${second}`);
+        useToasts.getState().release(id, second);
+        vi.advanceTimersByTime(LIFETIME_MS.info - 1);
+        expect(shown()).toBe(`read by ${first} then ${second}`);
+        vi.advanceTimersByTime(1);
+        expect(texts()).toEqual([]);
+      }
+    });
+
     it("lets the next note come up on its clock once the held one is dismissed", () => {
       const first = useToasts.getState().push("first", "info")!;
       useToasts.getState().push("second", "info");

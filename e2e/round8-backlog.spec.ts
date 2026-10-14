@@ -86,6 +86,13 @@ test.describe("Close beside Hold (G21)", () => {
     // Keep takes it back; Close goes through.
     await ask.getByRole("button", { name: "Keep" }).click();
     await expect(ask).toHaveCount(0);
+    // The keyboard goes back to Close, so Esc does as well.
+    await expect(controls.getByRole("button", { name: "Close…" })).toBeFocused();
+    await page.keyboard.press("Enter");
+    await expect(ask).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(ask).toHaveCount(0);
+    await expect(controls.getByRole("button", { name: "Close…" })).toBeFocused();
     await controls.getByRole("button", { name: "Close…" }).click();
     await controls.getByRole("button", { name: "Close workstream" }).click();
     await expect(workstreamRow(page, "CA-401")).toHaveCount(0);

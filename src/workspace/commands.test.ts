@@ -454,6 +454,16 @@ describe("Pip home in the palette", () => {
     expect(startWorkstreamCommands(items, "start a workstream on ca-401", [], a)).toHaveLength(1);
   });
 
+  it("never offers to start a workstream on a Done ticket, typed by key or by its words", () => {
+    const a = actions();
+    const ca401 = items.find((i) => i.item.key === "CA-401")!;
+    const done = { ...ca401, item: { ...ca401.item, key: "CA-9" }, title: "Archive the old welcome flow", status: { ...ca401.status, category: "done" as const } };
+    expect(startWorkstreamCommands([...items, done], "start a workstream on ca-9", [], a)).toEqual([]);
+    expect(startWorkstreamCommands([...items, done], "workstream archive the old welcome", [], a).some((c) => c.label === "Start a workstream on CA-9")).toBe(false);
+    // So the step has nothing to offer, and says why.
+    expect(noStartableTicket([...items, done], "ca-9", [])).toBe("CA-9 is Done in Jira.");
+  });
+
   it("asked for a workstream with no ticket yet, offers the person's open tickets first, then the newest open ones, never one with an open workstream", () => {
     const a = actions();
     const me = { connectionId: "mock", accountId: "me" };

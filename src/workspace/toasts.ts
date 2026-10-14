@@ -37,16 +37,19 @@ export interface ToastAction {
   run(): void;
 }
 
+/** What holds a toast still: the pointer moving on it, or the keyboard on it. Each lets go on its own. */
+export type ToastHold = "pointer" | "focus";
+
 interface ToastState {
   /** Only the head is on screen; the rest wait their turn, errors ahead of notes, each kind oldest first. */
   toasts: Toast[];
   /** Returns the new toast's id, or null when the same words are already waiting. */
   push(text: string, tone?: ToastTone, action?: ToastAction, options?: ToastOptions): number | null;
   dismiss(id: number): void;
-  /** Stops the shown toast's clock while the pointer or the keyboard is on it, so it is not taken away mid-read. */
-  hold(id: number): void;
-  /** Starts a held toast's clock again, for its whole lifetime. */
-  release(id: number): void;
+  /** Stops the shown toast's clock while the pointer or the keyboard (`by`) is on it, so it is not taken away mid-read. */
+  hold(id: number, by?: ToastHold): void;
+  /** Lets go of one hold; once neither the pointer nor the keyboard holds it, its clock starts again, for its whole lifetime. */
+  release(id: number, by?: ToastHold): void;
   clear(): void;
 }
 
@@ -64,8 +67,8 @@ export const MAX_QUEUED = 10;
 let seq = 0;
 /** The toast whose clock is running, and its timer: only the shown one counts down. */
 let timed: { id: number; timer: ReturnType<typeof setTimeout> | null } | null = null;
-/** The toast the pointer or keyboard is on: its clock does not run. */
-let held: number | null = null;
+/** The toast the pointer or keyboard is on, and which of them: its clock does not run while either does. */
+let held: { id: number; by: Set<ToastHold> } | null = null;
 
 /** Whether a note's subject is still as it said; a check that throws counts as moved on. */
 function stillNews(t: Toast): boolean {
@@ -85,7 +88,7 @@ export const useToasts = create<ToastState>((set, get) => {
     const head = get().toasts[0];
     if (timed && timed.id === head?.id) return;
     if (timed?.timer) clearTimeout(timed.timer);
-    timed = head ? { id: head.id, timer: head.id === held ? null : setTimeout(() => get().dismiss(head.id), head.lifetime ?? LIFETIME_MS[head.tone]) } : null;
+    timed = head ? { id: head.id, timer: head.id === held?.id ? null : setTimeout(() => get().dismiss(head.id), head.lifetime ?? LIFETIME_MS[head.tone]) } : null;
   };
   return {
     toasts: [],
@@ -119,14 +122,16 @@ export const useToasts = create<ToastState>((set, get) => {
       set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) }));
       arm();
     },
-    hold(id) {
-      held = id;
+    hold(id, by = "pointer") {
+      held = held?.id === id ? { id, by: new Set([...held.by, by]) } : { id, by: new Set([by]) };
       if (timed?.id !== id || !timed.timer) return;
       clearTimeout(timed.timer);
       timed = { id, timer: null };
     },
-    release(id) {
-      if (held !== id) return;
+    release(id, by = "pointer") {
+      if (held?.id !== id) return;
+      held.by.delete(by);
+      if (held.by.size > 0) return;
       held = null;
       const head = get().toasts[0];
       if (!head || head.id !== id || timed?.timer) return;

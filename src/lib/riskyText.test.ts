@@ -20,6 +20,14 @@ describe("the pause before posting edited text", () => {
     expect(newRisks("x", "cc @Mette")).toEqual([]);
   });
 
+  it("pauses when the edit brings new text for a risk the draft already had, and not when that text is only moved", () => {
+    expect(newRisks("Password: redacted", "Password: hunter22")).toEqual(["secret"]);
+    expect(newRisks("token=ghp_aaaaaaaaaaaaaaaaaaaaaaaa", "token=ghp_bbbbbbbbbbbbbbbbbbbbbbbb")).toEqual(["secret"]);
+    expect(newRisks("cc @here", "cc @here and @everyone")).toEqual(["broadcast"]);
+    expect(newRisks("Password: hunter22\nThanks", "Thanks.\nPassword: hunter22")).toEqual([]);
+    expect(newRisks("(@everyone) see below", "See below, @everyone")).toEqual([]);
+  });
+
   it("says what it found in the person's words", () => {
     expect(riskNote(["broadcast"])).toMatch(/^Your edit mentions everyone .*Post it anyway, or keep editing\?$/);
     expect(riskNote(["broadcast", "secret"])).toContain("and looks like a password, key or token");
