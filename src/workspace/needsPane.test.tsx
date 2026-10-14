@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import type { Need } from "../lib/needs";
-import { HigherPriority, EDIT_FIELD, advancedText, nextAdvanced, endEditing, firstDecision } from "./NeedsPane";
+import { HigherPriority, EDIT_FIELD, advancedText, waitStarted, nextAdvanced, endEditing, firstDecision } from "./NeedsPane";
 
 /** A stand-in for the pane: each selector it is asked for answers with what the test put there. */
 const pane = (found: Record<string, unknown[]>) =>
@@ -58,6 +58,9 @@ describe("Esc while a card is being edited", () => {
 describe("the line when the pane moves on", () => {
   it("says what was done and what is open now", () => {
     expect(advancedText({ title: "Draft comment" }, { title: "R2 asks a question" })).toBe("Done: Draft comment. Now: R2 asks a question");
+    expect(advancedText({ title: "Questions for the reporter" }, { title: "R2 asks a question" }, "CA-408 now waits on the reporter; nothing starts on its own")).toBe(
+      "Done: Questions for the reporter. CA-408 now waits on the reporter; nothing starts on its own. Now: R2 asks a question",
+    );
   });
 });
 
@@ -85,5 +88,24 @@ describe("the higher-priority bar's snapshot", () => {
     // Two separate mounts stand for two decisions (the pane keys it by the open need): each has its own snapshot.
     expect(renderToStaticMarkup(<HigherPriority needs={[open]} need={open} />)).toBe("");
     expect(renderToStaticMarkup(<HigherPriority needs={[open, early]} need={open} />)).toBe("");
+  });
+});
+
+describe("what posting to the reporter starts, said when Pip moves on", () => {
+  const draft = (label: string, state: string, createdBy = "agent") => ({ id: "d1", label, createdBy, intent: { type: "comment" }, state: { type: state } }) as unknown as Parameters<typeof waitStarted>[1][string];
+  const done = { target: { type: "draft", id: "d1" }, ticketKey: "CA-408" } as Parameters<typeof waitStarted>[0];
+
+  it("names the wait after the questions or the nudge were posted", () => {
+    expect(waitStarted(done, { d1: draft("Questions for the reporter", "applied") })).toBe("CA-408 now waits on the reporter; nothing starts on its own");
+    expect(waitStarted(done, { d1: draft("Nudge for the reporter", "applying") })).toBe("CA-408 now waits on the reporter; nothing starts on its own");
+    expect(waitStarted({ ...done, ticketKey: undefined }, { d1: draft("Questions for the reporter", "applied") })).toMatch(/^The workstream now waits/);
+  });
+
+  it("says nothing for a skipped draft, another comment, a need that is no draft, or a draft it can't find", () => {
+    expect(waitStarted(done, { d1: draft("Questions for the reporter", "skipped") })).toBeNull();
+    expect(waitStarted(done, { d1: draft("Draft comment", "applied") })).toBeNull();
+    expect(waitStarted(done, { d1: draft("Questions for the reporter", "applied", "pip") })).toBeNull();
+    expect(waitStarted({ ...done, target: { type: "run", id: "r1" } } as Parameters<typeof waitStarted>[0], { d1: draft("Questions for the reporter", "applied") })).toBeNull();
+    expect(waitStarted(done, {})).toBeNull();
   });
 });

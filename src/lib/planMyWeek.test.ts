@@ -3,7 +3,7 @@ import { HELD_PERSON } from "../types";
 import type { PersonRef, WorkItem, WorkstreamView } from "../types";
 import type { Need } from "./needs";
 import { docFromText } from "./docs";
-import { WEEKS_KEPT, WEEK_PICKS, isoWeek, itemDone, keepPlan, movePick, parseWeekPlans, planMyWeek, rankWeek, ticketPick, type PlanInput, type PlanItem } from "./planMyWeek";
+import { WEEKS_KEPT, WEEK_PICKS, isoWeek, itemDone, itemOutcome, keepPlan, movePick, parseWeekPlans, planMyWeek, rankWeek, reopenItem, ticketPick, type PlanInput, type PlanItem } from "./planMyWeek";
 
 const NOW = new Date("2026-10-13T09:00:00Z");
 const ago = (days: number) => new Date(NOW.getTime() - days * 86_400_000).toISOString();
@@ -79,15 +79,16 @@ describe("planMyWeek: the ranking", () => {
     const items = [ticket("CA-1", { created: ago(10) }, "Fix it."), ticket("CA-2", { created: ago(10) })];
     const picks = planMyWeek(input({ items }));
     expect(picks.map((p) => p.ticketKey)).toEqual(["CA-2", "CA-1"]);
-    expect(picks[1].because).toMatch(/^assigned to you, but it .*; clear that up first\.$/);
+    expect(picks[1].because).toMatch(/^assigned to you for 10 days, but it .*; ask the reporter \d questions? before anyone builds on it\.$/);
   });
 
   it("stops flagging a gap the person taught away, as the clarity notice does", () => {
     const thin = ticket("CA-1", { created: ago(10) }, "Fix it.");
     const flagged = planMyWeek(input({ items: [thin] }))[0].because;
     const learning = { CA: { empty: 3, short: 3, done: 3, scope: 3, who: 3 } };
-    expect(flagged).toMatch(/clear that up first/);
-    expect(planMyWeek(input({ items: [thin], learning }))[0].because).not.toMatch(/clear that up first/);
+    expect(flagged).toMatch(/ask the reporter/);
+    expect(planMyWeek(input({ items: [thin], learning }))[0].because).not.toMatch(/ask the reporter/);
+    expect(planMyWeek(input({ items: [thin], learning }))[0].work).toBeUndefined();
   });
 
   it("only takes the person's own open tickets, and none that already has an open workstream", () => {
@@ -128,8 +129,8 @@ describe("planMyWeek: needs in General that name a ticket", () => {
     const plain = ticket("CA-2", { priority: "highest" });
     const out = planMyWeek(input({ items: [plain, thin], needs: [loose("CA-1")] }));
     expect(out.map((p) => p.id)).toEqual(["ticket:c:CA-1", "ticket:c:CA-2"]);
-    expect(out[0].because).toBe("1 thing needs you here: Draft comment.");
-    expect(out[0].because).not.toContain("clear that up first");
+    expect(out[0].because).toBe("1 thing needs you here: Draft comment. It is 2 days old.");
+    expect(out[0].because).not.toContain("ask the reporter");
   });
 
   it("still proposes an unassigned ticket that has one, and counts several", () => {
@@ -175,7 +176,57 @@ describe("planMyWeek: needs in General that name a ticket", () => {
 
   it("keeps a ticket with gaps and no need on its current line", () => {
     const out = planMyWeek(input({ items: [ticket("CA-7", {}, "Fix it.")] }));
-    expect(out[0].because).toContain("clear that up first");
+    expect(out[0]).toMatchObject({ work: "clarify", title: "Clarify CA-7 with the reporter" });
+    expect(out[0].because).toContain("ask the reporter");
+  });
+});
+
+describe("planMyWeek: unclear tickets are asking work, and at most one of them", () => {
+  const thin = (key: string, over: Partial<WorkItem> = {}) => ticket(key, over, "Fix it.");
+
+  it("proposes an unclear ticket as clarify work, titled for the reporter, not as building", () => {
+    const [p] = planMyWeek(input({ items: [thin("CA-1", { created: ago(12), priority: "high" })] }));
+    expect(p).toMatchObject({ kind: "ticket", ticketKey: "CA-1", work: "clarify", title: "Clarify CA-1 with the reporter", id: "ticket:c:CA-1" });
+    expect(p.because).toBe("high priority, assigned to you for 12 days, but it has a very short description, doesn't say what done looks like, doesn't say what's in or out of scope, and doesn't say who is waiting on it; ask the reporter 4 questions before anyone builds on it.");
+  });
+
+  it("takes only one unclear pick while anything else is there, and the best ranked of them", () => {
+    const items = [thin("CA-1", { created: ago(5) }), thin("CA-2", { created: ago(30) }), thin("CA-3", { created: ago(9) }), ticket("CA-4", { created: ago(1) }), ticket("CA-5", { created: ago(2) })];
+    const picks = planMyWeek(input({ items }));
+    expect(picks.map((p) => p.ticketKey)).toEqual(["CA-5", "CA-4", "CA-2"]);
+    expect(picks.filter((p) => p.work === "clarify")).toHaveLength(1);
+    expect(planMyWeek(input({ items, count: 9 })).filter((p) => p.work === "clarify").length).toBe(3);
+  });
+
+  it("fills the week with more unclear ones only when nothing else exists", () => {
+    const items = [thin("CA-1", { created: ago(5) }), thin("CA-2", { created: ago(30) }), thin("CA-3", { created: ago(9) })];
+    expect(planMyWeek(input({ items })).map((p) => p.ticketKey)).toEqual(["CA-2", "CA-3", "CA-1"]);
+    expect(planMyWeek(input({ items, count: 2 })).filter((p) => p.work === "clarify")).toHaveLength(1 + 1);
+    const one = [...items, ticket("CA-4")];
+    expect(planMyWeek(input({ items: one, count: 3 })).map((p) => p.ticketKey)).toEqual(["CA-4", "CA-2", "CA-3"]);
+  });
+
+  it("gives every pick its own because line, saying what sets this ticket apart", () => {
+    const items = [thin("CA-1", { created: ago(5) }), ticket("CA-2", { created: ago(30) }), ticket("CA-3", { created: ago(9), priority: "highest" }), ticket("CA-4", { created: ago(3) })];
+    const lines = planMyWeek(input({ items, count: 4 })).map((p) => p.because);
+    expect(new Set(lines).size).toBe(lines.length);
+  });
+
+  it("proposes an idle workstream whose ticket reads thin as clarify work too, until a Triage or Looks fine", () => {
+    const w = ws("w1", "CA-8", { clarity: { gaps: ["done", "who"] } }, { createdAt: ago(4) });
+    const [p] = planMyWeek(input({ workstreams: [w] }));
+    expect(p).toMatchObject({ kind: "workstream", workstreamId: "w1", work: "clarify", title: "Clarify CA-8 with the reporter" });
+    expect(p.because).toBe("open for 4 days, but it doesn't say what done looks like and doesn't say who is waiting on it; ask the reporter 2 questions before anyone builds on it.");
+    expect(planMyWeek(input({ workstreams: [ws("w1", "CA-8", {}, { createdAt: ago(4) })] }))[0].work).toBeUndefined();
+    expect(planMyWeek(input({ workstreams: [w], learning: { CA: { done: 3, who: 3 } } }))[0].work).toBeUndefined();
+    // A need in it still comes first, and says so.
+    expect(planMyWeek(input({ workstreams: [w], needs: [need("w1")] }))[0].work).toBeUndefined();
+  });
+
+  it("tells a need's line which ticket it is: its priority and age, when the ticket is known", () => {
+    const i = input({ workstreams: [ws("w1", "CA-1")], items: [ticket("CA-1", { priority: "highest", created: ago(9) })], needs: [need("w1", { title: "Approve the plan" })] });
+    expect(planMyWeek(i)[0].because).toBe("1 thing needs you here: Approve the plan. It is highest priority, 9 days old.");
+    expect(planMyWeek(input({ workstreams: [ws("w1", "CA-1")], items: [ticket("CA-1", { priority: "highest" })], needs: [] }))[0].because).toBe("highest priority, open for 2 days, nothing is moving it.");
   });
 });
 
@@ -230,21 +281,49 @@ describe("the kept plan", () => {
       "2026-W42": { week: "2026-W42", keptAt: NOW.toISOString(), items: [item("ticket:CA-1")] },
     });
   });
-  it("ticks an item when its workstream closes, not before", () => {
+  const DONE = { id: "9", name: "Done", category: "done" } as WorkItem["status"];
+  it("ticks an item when its workstream closes on a ticket that is Done, not before", () => {
     const pick: PlanItem = { id: "ws:w1", kind: "workstream", workstreamId: "w1", ticketKey: "CA-1", title: "CA-1 Thing", because: "x." };
+    const closed = ws("w1", "CA-1", {}, { closedAt: ago(1) });
     expect(itemDone(pick, [ws("w1", "CA-1")], [])).toBe(false);
-    expect(itemDone(pick, [ws("w1", "CA-1", {}, { closedAt: ago(1) })], [])).toBe(true);
+    expect(itemDone(pick, [closed], [ticket("CA-1", { status: DONE })])).toBe(true);
     // The workstream is gone from the lists: not ticked by absence.
     expect(itemDone(pick, [], [])).toBe(false);
     // A closed one and a newer open one for the same ticket: still going.
-    expect(itemDone(pick, [ws("w1", "CA-1", {}, { closedAt: ago(1) }), ws("w2", "CA-1")], [])).toBe(false);
+    expect(itemDone(pick, [closed, ws("w2", "CA-1")], [ticket("CA-1", { status: DONE })])).toBe(false);
   });
-  it("ticks a ticket item when a workstream opened on it closes, or the ticket is Done in Jira", () => {
+  it("ticks a ticket item when a workstream opened on it closes with the ticket Done, or the ticket is Done in Jira", () => {
     const pick: PlanItem = ticketPick(ticket("CA-2"));
     expect(itemDone(pick, [], [ticket("CA-2")])).toBe(false);
     expect(itemDone(pick, [ws("w2", "CA-2")], [])).toBe(false);
-    expect(itemDone(pick, [ws("w2", "CA-2", {}, { closedAt: ago(1) })], [])).toBe(true);
-    expect(itemDone(pick, [], [ticket("CA-2", { status: { id: "9", name: "Done", category: "done" } })])).toBe(true);
+    expect(itemDone(pick, [ws("w2", "CA-2", {}, { closedAt: ago(1) })], [ticket("CA-2", { status: DONE })])).toBe(true);
+    expect(itemDone(pick, [], [ticket("CA-2", { status: DONE })])).toBe(true);
+  });
+  it("calls a workstream closed on a ticket that is not Done closed, not done: dropped work isn't finished work", () => {
+    const pick: PlanItem = { id: "ws:w1", kind: "workstream", workstreamId: "w1", ticketKey: "CA-1", title: "CA-1 Thing", because: "x." };
+    const closed = ws("w1", "CA-1", {}, { closedAt: ago(1) });
+    expect(itemOutcome(pick, [closed], [ticket("CA-1")])).toBe("closed");
+    // A ticket the cache doesn't hold can't be told Done.
+    expect(itemOutcome(pick, [closed], [])).toBe("closed");
+    expect(itemDone(pick, [closed], [ticket("CA-1")])).toBe(false);
+    expect(itemOutcome(pick, [closed], [ticket("CA-1", { status: DONE })])).toBe("done");
+    expect(itemOutcome(pick, [ws("w1", "CA-1")], [ticket("CA-1")])).toBe("open");
+    expect(itemOutcome(ticketPick(ticket("CA-2")), [ws("w2", "CA-2", {}, { closedAt: ago(1) })], [ticket("CA-2")])).toBe("closed");
+  });
+  it("keeps a reopened item open, and reopening changes only that item of that week", () => {
+    const pick: PlanItem = { id: "ws:w1", kind: "workstream", workstreamId: "w1", ticketKey: "CA-1", title: "CA-1 Thing", because: "x." };
+    const other: PlanItem = ticketPick(ticket("CA-3"));
+    const closed = ws("w1", "CA-1", {}, { closedAt: ago(1) });
+    const plans = keepPlan({}, [pick, other], NOW);
+    const after = reopenItem(plans, "2026-W42", "ws:w1");
+    expect(after["2026-W42"].items[0]).toEqual({ ...pick, reopened: true });
+    expect(after["2026-W42"].items[1]).toEqual(other);
+    expect(plans["2026-W42"].items[0]).toEqual(pick);
+    expect(itemOutcome(after["2026-W42"].items[0], [closed], [ticket("CA-1", { status: DONE })])).toBe("open");
+    expect(reopenItem(plans, "2026-W42", "nope")).toBe(plans);
+    expect(reopenItem(plans, "2026-W10", "ws:w1")).toBe(plans);
+    // It is stored with the plan, and read back with it.
+    expect(parseWeekPlans(JSON.parse(JSON.stringify(after)))).toEqual(after);
   });
   it("ticks only for the item's own connection: the same key on another connection is another ticket", () => {
     const done = { status: { id: "9", name: "Done", category: "done" } } as const;
@@ -253,7 +332,10 @@ describe("the kept plan", () => {
     expect(mine.connectionId).toBe("c");
     expect(itemDone(mine, [], [elsewhere("CA-2", done)])).toBe(false);
     expect(itemDone(mine, [ws("w9", "CA-2", {}, { connectionId: "d", closedAt: ago(1) })], [])).toBe(false);
-    expect(itemDone(mine, [ws("w2", "CA-2", {}, { closedAt: ago(1) })], [])).toBe(true);
+    // Its own connection's workstream closing counts (closed, not done, until the ticket is Done); the other connection's does not.
+    expect(itemOutcome(mine, [ws("w2", "CA-2", {}, { closedAt: ago(1) })], [])).toBe("closed");
+    expect(itemOutcome(mine, [ws("w9", "CA-2", {}, { connectionId: "d", closedAt: ago(1) })], [])).toBe("open");
+    expect(itemDone(mine, [ws("w2", "CA-2", {}, { closedAt: ago(1) })], [ticket("CA-2", done)])).toBe(true);
     expect(itemDone(mine, [], [ticket("CA-2", done)])).toBe(true);
     // A workstream pick carries its connection too; the other one's closing leaves it, and a workstream is found by id.
     const picked = planMyWeek(input({ workstreams: [ws("w1", "CA-1")] }))[0];

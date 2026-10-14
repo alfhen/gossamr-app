@@ -156,6 +156,7 @@ describe("a reporter's reply comment ends the wait", () => {
     await useWorkstreams.getState().refresh();
     expect(stored(id).waitingOnReporter ?? null).toBeNull();
     expect(stored(id)).toMatchObject({ reporterReplied: true, changedWhileWaiting: true });
+    expect(Number.isNaN(Date.parse(stored(id).reporterRepliedAt ?? ""))).toBe(false);
     expect(stored(id).workstream.heldReason).toBeNull();
     expect(workstreamStatus(stored(id), []).word).not.toBe("Waiting on reporter");
     expect(withersOf([stored(id)], { events: { [id]: events(id) }, byTicket: {}, runs: [], proposals: {} }, Date.now() + 5 * 86_400_000)[id]?.reporter).toBeUndefined();

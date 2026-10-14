@@ -18,6 +18,7 @@ import { lightboxOpen, useAttachments, useFileDrop } from "./PipImages";
 import { ConversationLine, escapeCancelsTurn, useConversationDrafts, usePipChips } from "./PipPane";
 import { popoverOpen } from "./Popover";
 import { START_WORKSTREAM } from "./commands";
+import type { ClarityLearning } from "../lib/clarityLearning";
 import { usePrefs } from "./prefs";
 import { useRunSetup } from "./runSetupStore";
 import { useTabs } from "./tabsStore";
@@ -31,6 +32,7 @@ import { StartMyDayCard } from "./StartMyDay";
 import { arm, confirmArmed, disarm, groupId, keyPlan, openNeed, setPaneIntent } from "./needsActions";
 import { undoLog } from "./undo";
 import { composerFooter, landingSelection } from "./pipHomeLogic";
+import { focusToast } from "./ToastHost";
 import { PIP_HOME_REGIONS, columnRegion, regionColumn, usePipHome, type PipHomeColumn, type PipHomeFocus, type PipHomeRegion } from "./pipHomeStore";
 import { useRuns } from "./runsStore";
 import { focusComposer, focusedConversation, useHomeWorkstream, useWorkstreams } from "./workstreamsStore";
@@ -102,6 +104,8 @@ export interface WorkstreamListProps {
   onStatusFilter?(state: StatusState | null): void;
   /** The clock for each row's status; the time of the call when absent. */
   now?: number;
+  /** What "Looks fine" taught the clarity notice (a row says "may be unclear" only for a gap still flagged); the prefs' when absent. */
+  learning?: ClarityLearning;
 }
 
 /** What the list says before there is any workstream: what one is, in a line. */
@@ -122,16 +126,21 @@ function NeedsBadge({ count, total }: { count: number; total: number }) {
  * open workstream with where it stands; the closed ones behind a toggle, read-only. It takes at most 45% of the column and
  * scrolls inside that, so Needs you keeps the rest.
  */
-export function WorkstreamList({ list, closed, showClosed, selected, onSelect, onShowClosed, runs = [], needsYou = [], wither = {}, nudgeDue, statusFilter = null, onStatusFilter, now }: WorkstreamListProps) {
-  const statuses = new Map(list.filter((v) => v.workstream.closedAt === null).map((v) => [v.workstream.id, workstreamStatus(v, needsYou, { runs, wither: wither[v.workstream.id] ?? null, now: new Date(now ?? Date.now()) })]));
+export function WorkstreamList({ list, closed, showClosed, selected, onSelect, onShowClosed, runs = [], needsYou = [], wither = {}, nudgeDue, statusFilter = null, onStatusFilter, now, learning: given }: WorkstreamListProps) {
+  const stored = usePrefs((s) => s.clarityLearning);
+  const learning = given ?? stored;
+  const statuses = new Map(list.filter((v) => v.workstream.closedAt === null).map((v) => [v.workstream.id, workstreamStatus(v, needsYou, { runs, wither: wither[v.workstream.id] ?? null, now: new Date(now ?? Date.now()), learning })]));
   const everyOpen = list.filter((v) => v.workstream.closedAt === null);
-  const open = statusFilter ? everyOpen.filter((v) => statuses.get(v.workstream.id)?.state === statusFilter) : everyOpen;
-  const option = (id: string | null, level: WorkstreamWither["level"] = 0) => ({
+  const matches = (v: WorkstreamView) => !statusFilter || statuses.get(v.workstream.id)?.state === statusFilter;
+  // The open workstream stays listed when the filter leaves it out (dimmed, with a note), since its conversation is what is shown.
+  const open = everyOpen.filter((v) => matches(v) || v.workstream.id === selected);
+  const matching = everyOpen.filter(matches).length;
+  const option = (id: string | null, level: WorkstreamWither["level"] = 0, dim = false) => ({
     role: "option" as const,
     "aria-selected": selected === id,
     tabIndex: selected === id ? 0 : -1,
     onClick: () => onSelect(id),
-    className: `${ROW} ${selected === id ? "bg-ws-sel text-ws-ink" : "text-ws-ink2 hover:bg-ws-hover"} ${witherClass(level, "ws-")}`.trim(),
+    className: `${ROW} ${selected === id ? "bg-ws-sel text-ws-ink" : "text-ws-ink2 hover:bg-ws-hover"} ${witherClass(level, "ws-")} ${dim ? "opacity-60" : ""}`.trim(),
   });
   return (
     <nav aria-label="Workstreams" tabIndex={-1} className="flex max-h-[45%] min-h-0 shrink-0 flex-col border-t border-ws-sep bg-ws-bar">
@@ -148,7 +157,7 @@ export function WorkstreamList({ list, closed, showClosed, selected, onSelect, o
           const web = wither[v.workstream.id];
           const status = statuses.get(v.workstream.id)!;
           return (
-            <li key={v.workstream.id} data-workstream-row={v.workstream.id} data-wither={web ? web.level : undefined} title={web ? witherTitle(web) : undefined} {...option(v.workstream.id, web?.level)}>
+            <li key={v.workstream.id} data-workstream-row={v.workstream.id} data-wither={web ? web.level : undefined} data-filtered-out={matches(v) ? undefined : "" } title={web ? witherTitle(web) : undefined} {...option(v.workstream.id, web?.level, !matches(v))}>
               {web && <Cobweb level={web.level} />}
               <span className="flex min-w-0 items-center gap-1.5">
                 {v.workstream.itemKey && <b className="shrink-0 font-mono font-semibold text-ws-ink">{v.workstream.itemKey}</b>}
@@ -158,6 +167,11 @@ export function WorkstreamList({ list, closed, showClosed, selected, onSelect, o
                 </span>
               </span>
               <RowStatus status={status} view={v} nudge={nudgeDue?.has(v.workstream.id)} />
+              {!matches(v) && statusFilter && (
+                <span data-filter-shown className="text-xs text-ws-ink3">
+                  Shown because it is open; not {STATUS_WORD[statusFilter]}
+                </span>
+              )}
               {/* After the row's own words, so its name still starts with the ticket's key. */}
               {web && (
                 <span data-workstream-wither className="sr-only">
@@ -171,14 +185,14 @@ export function WorkstreamList({ list, closed, showClosed, selected, onSelect, o
       {statusFilter && (
         <p data-status-filter={statusFilter} className="m-0 flex items-baseline gap-2 px-3 pb-1 text-xs text-ws-ink2">
           <span>
-            Showing {STATUS_WORD[statusFilter]}: {open.length}
+            Showing {STATUS_WORD[statusFilter]}: {matching}
           </span>
           <button type="button" onClick={() => onStatusFilter?.(null)} className="rounded px-1 text-ws-ink2 underline hover:bg-ws-hover focus-visible:outline-2 focus-visible:outline-ws-pip">
             Show all
           </button>
         </p>
       )}
-      {open.length === 0 && <p className="m-0 px-3 py-2 text-sm text-ws-ink3">{statusFilter ? EMPTY_FILTER[statusFilter] : NO_WORKSTREAMS}</p>}
+      {matching === 0 && <p className="m-0 px-3 py-2 text-sm text-ws-ink3">{statusFilter ? EMPTY_FILTER[statusFilter] : NO_WORKSTREAMS}</p>}
       <div className="mt-auto flex flex-wrap items-center gap-x-1 border-t border-ws-sep px-1.5 py-1">
         <button
           type="button"
@@ -389,12 +403,15 @@ const REGION_ON: Record<PipHomeRegion, string> = {
   pane: "[data-pip-home] [data-needs-pane]",
   rail: '[data-pip-home-column="rail"] [data-step-rail]',
   composer: `#${PIP_INPUT_ID}`,
+  toast: "[data-toast]",
 };
 
 const regionsOnScreen = () => PIP_HOME_REGIONS.filter((r) => document.querySelector(REGION_ON[r]));
 
 /** The region of Pip home `el` is in; null for nothing there (focus on the page itself). The timeline's filter bar and the conversation's header are the timeline's. */
 function regionOf(el: Element | null): PipHomeRegion | null {
+  // The toast sits over the page, outside Pip home's columns.
+  if (el?.closest("[data-toast]")) return "toast";
   if (!el || !el.closest("[data-pip-home]")) return null;
   if (el.closest("[data-needs-pane]")) return "pane";
   if (el.closest("[data-plan-my-week], [data-start-my-day]")) return "day";
@@ -460,6 +477,7 @@ function usePipHomeKeys(needsYou: readonly Need[]) {
     /** F6's stops: where the keyboard lands in a region, which is the first row of Needs you, the selected workstream, the newest entry of the timeline, the pane's decision, the rail as `enter` has it, or the composer. */
     const enterRegion = (region: PipHomeRegion) => {
       if (region === "rail" || region === "composer") return enter(regionColumn(region));
+      if (region === "toast") return void focusToast();
       usePipHome.getState().setColumn(regionColumn(region));
       const home = document.querySelector("[data-pip-home]");
       const all = (sel: string) => Array.from(home?.querySelectorAll<HTMLElement>(sel) ?? []);

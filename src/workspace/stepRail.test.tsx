@@ -5,7 +5,7 @@ import { MockBackend } from "../backend/mock";
 import type { CodeChange, Intent, ItemRef, Proposal, ReviewView, Run, RunKind, RunState, WorkstreamEvent, WorkstreamView } from "../types";
 import { DecisionShownContext } from "./decisionShown";
 import { freezeBatch } from "./pipHomeLogic";
-import { approveBatch, BATCH_CHANGED, BatchConfirm, confirmBatch, EarlierStepDrafts, planResultFor, StepDrafts, StepRailView, type StepRailViewProps } from "./StepRail";
+import { approveBatch, BATCH_CHANGED, BatchConfirm, confirmBatch, NOTES_HELP, EarlierStepDrafts, planResultFor, StepDrafts, StepRailView, type StepRailViewProps } from "./StepRail";
 
 const memory = () => {
   const data = new Map<string, string>();
@@ -152,6 +152,14 @@ describe("the step rail", () => {
     const order = [...html.matchAll(/data-step="(\w+)"/g)].map((m) => m[1]);
     expect(order).toEqual(["investigate", "triage", "plan", "build", "review", "verify"]);
     expect(html.indexOf("Manage this workstream")).toBeLessThan(html.indexOf('data-step="investigate"'));
+  });
+
+  it("says what Pip's notes are under their heading", () => {
+    const html = renderToStaticMarkup(<StepRailView {...props()} />);
+    expect(html).toContain("data-notes-help");
+    expect(html).toContain(NOTES_HELP);
+    expect(html.indexOf("Pip&#x27;s notes")).toBeLessThan(html.indexOf(NOTES_HELP.slice(0, 20)));
+    expect(NOTES_HELP).toContain("Nothing here goes to Jira.");
   });
 
   it("derives each chip from the runs: label and state, started automatically, the verdict and the fix round", () => {

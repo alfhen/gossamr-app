@@ -233,6 +233,19 @@ describe("what Looks fine teaches the clarity notice", () => {
     expect(usePrefs.getState().clarityLearning).toEqual({});
   });
 
+  it("gives back one gap of a project, audited with its own detail, and keeps the project's others learned", async () => {
+    usePrefs.setState({ clarityLearning: { CA: { who: 3, scope: 4 }, WEB: { who: 3 } } });
+    const id = await open("CA-402");
+    expect(await giveBackClarity("CA", ["who"])).toBe(1);
+    expect(usePrefs.getState().clarityLearning).toEqual({ CA: { scope: 4 }, WEB: { who: 3 } });
+    expect(events(id).filter((e) => e.action === "clarity_reset").map((e) => e.detail)).toEqual(["who in CA"]);
+    expect(texts()).toEqual(["Gossamr will flag CA tickets with no \"who is waiting\" as before."]);
+    // A gap that isn't learned there gives back nothing.
+    useToasts.getState().clear();
+    expect(await giveBackClarity("CA", ["who"])).toBe(0);
+    expect(usePrefs.getState().clarityLearning).toEqual({ CA: { scope: 4 }, WEB: { who: 3 } });
+  });
+
   it("does not give the learning back when its audit line can't be written, and says so", async () => {
     usePrefs.setState({ clarityLearning: { CA: { who: 3 }, WEB: { done: 4 } } });
     const id = await open("CA-402");

@@ -1,5 +1,5 @@
 import { docText } from "../lib/docs";
-import { NUDGE_GONE, nudgeOffered, reporterFollow } from "../lib/reporterWait";
+import { followWithReply, NUDGE_GONE, nudgeOffered, reporterFollow } from "../lib/reporterWait";
 import { clarityGaps, type ClarityGap } from "../lib/ticketClarity";
 import { workstreamOf } from "../lib/proposals";
 import { budgetLevel, budgetView } from "../lib/workstreamHold";
@@ -353,11 +353,11 @@ export class MockWorkstreams {
     const readiness = events.length ? readinessOf(ws, linked, (r) => (r.spec.kind === "triage" && r.state === "done" ? this.readinessOfRun(r) : null), replies, events) : null;
     const ticket = ws.closedAt === null && ws.itemKey ? this.ticketOf(ws.itemKey) : null;
     const clarity = ticket ? clarityOf(ws, linked, clarityGaps(docText(ticket.body)), replies, events) : null;
-    const follow = ws.closedAt === null ? reporterFollow(events, replies) : null;
+    const { follow, repliedAt } = ws.closedAt === null ? followWithReply(events, replies) : { follow: null, repliedAt: null };
     const waitingOnReporter: ReporterWait | null = follow?.waiting ? { since: follow.waiting } : null;
     const changedWhileWaiting = !!follow?.changed;
     const reporterReplied = !!follow?.replied;
-    return { ...view, ...(waiting ? { waitingForPr: waiting } : {}), ...(reviewBlocking(judged) ? { reviewBlocking: true } : {}), ...(escalation ? { escalation } : {}), ...(readiness ? { readiness } : {}), ...(clarity ? { clarity } : {}), ...(waitingOnReporter ? { waitingOnReporter } : {}), ...(changedWhileWaiting ? { changedWhileWaiting } : {}), ...(reporterReplied ? { reporterReplied } : {}) };
+    return { ...view, ...(waiting ? { waitingForPr: waiting } : {}), ...(reviewBlocking(judged) ? { reviewBlocking: true } : {}), ...(escalation ? { escalation } : {}), ...(readiness ? { readiness } : {}), ...(clarity ? { clarity } : {}), ...(waitingOnReporter ? { waitingOnReporter } : {}), ...(changedWhileWaiting ? { changedWhileWaiting } : {}), ...(reporterReplied ? { reporterReplied } : {}), ...(reporterReplied && repliedAt ? { reporterRepliedAt: repliedAt } : {}) };
   }
 
   /** Opens a workstream on a cached ticket, or with no ticket and a title. A ticket with an open one gets that one back, unchanged. */

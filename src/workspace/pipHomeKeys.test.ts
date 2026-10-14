@@ -222,6 +222,24 @@ describe("Pip home's footer hint", () => {
   });
 });
 
+describe("the toast as an F6 stop", () => {
+  it("comes after the composer on Pip home, and F6 from it goes back to the first region; passed by while no toast shows", () => {
+    expect(f6("composer", {}, { regions: ["needs", "workstreams", "timeline", "rail", "composer", "toast"] })).toEqual({ type: "region", to: "toast" });
+    expect(f6("toast", {}, { regions: ["needs", "workstreams", "timeline", "rail", "composer", "toast"] })).toEqual({ type: "region", to: "needs" });
+    expect(f6("needs", { shiftKey: true }, { regions: ["needs", "workstreams", "timeline", "rail", "composer", "toast"] })).toEqual({ type: "region", to: "toast" });
+    expect(f6("composer", {}, { regions: SHOWN })).toEqual({ type: "region", to: "needs" });
+  });
+
+  it("is a stop in the workspace layout too, after Pip's pane, only while a toast is shown", () => {
+    const all = ["main", "peek", "pip", "toast"] as const;
+    expect(nextRegion(all, "pip", 1)).toBe("toast");
+    expect(nextRegion(all, "toast", 1)).toBe("main");
+    expect(nextRegion(all, "main", -1)).toBe("toast");
+    expect(nextRegion(["main", "pip"], "pip", 1)).toBe("main");
+    expect(nextRegion(["main", "toast"], "main", 1)).toBe("toast");
+  });
+});
+
 describe("the workspace layout's regions (D29)", () => {
   it("steps main, peek and Pip in order with F6, back with Shift+F6, wrapping and passing what isn't open", () => {
     const all = ["main", "peek", "pip"] as const;

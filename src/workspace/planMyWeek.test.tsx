@@ -6,7 +6,7 @@ import { isoWeek, ticketPick, type PlanItem } from "../lib/planMyWeek";
 import type { WorkItem, WorkstreamView } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { buildCommands, rankCommands, type CommandActions } from "./commands";
-import { PLAN_EMPTY, PlanMyWeek, PlanMyWeekView, afterMove, afterRemove, ThisWeekView, findTicket } from "./PlanMyWeek";
+import { PLAN_EMPTY, PlanMyWeek, PlanMyWeekView, afterMove, afterRemove, ThisWeekView, findTicket, rowStep, CHOICES } from "./PlanMyWeek";
 import { WorkstreamList } from "./PipHome";
 import { usePipHome } from "./pipHomeStore";
 import { loadPrefs, usePrefs } from "./prefs";
@@ -106,6 +106,24 @@ describe("adding a ticket", () => {
     expect(key("  ")).toEqual({ reason: "none" });
   });
 
+  it("shows several matches to choose from instead of picking one: the person's own first, at most five, taken ones left out", () => {
+    const ME = { connectionId: "c", accountId: "me" };
+    const mine = (x: WorkItem) => ({ ...x, assignee: ME }) as WorkItem;
+    const stock = [t("CA-10", "Stock sync"), mine(t("CA-11", "Restock alert")), t("CA-12", "Stock levels"), t("CA-13", "Old stock", "done")];
+    const found = findTicket("stock", stock, [], [ME]);
+    expect("choices" in found && found.choices.map((x) => x.item.key)).toEqual(["CA-11", "CA-10", "CA-12"]);
+    const taken = [ticketPick(stock[0])];
+    expect("choices" in findTicket("stock", stock, taken, [ME]) && (findTicket("stock", stock, taken, [ME]) as { choices: WorkItem[] }).choices.map((x) => x.item.key)).toEqual(["CA-11", "CA-12"]);
+    // One left after the taken ones is that ticket, outright.
+    expect(findTicket("stock", stock, [ticketPick(stock[0]), ticketPick(stock[1])], [ME])).toEqual({ ticket: stock[2] });
+    expect(findTicket("stock", stock, stock.slice(0, 3).map(ticketPick), [ME])).toEqual({ reason: "taken", key: "CA-10" });
+    // A key is never a list.
+    expect(findTicket("CA-10", stock, [], [ME])).toEqual({ ticket: stock[0] });
+    const many = Array.from({ length: 8 }, (_, n) => t(`CA-${20 + n}`, `Stock item ${n}`));
+    expect((findTicket("stock", many, []) as { choices: WorkItem[] }).choices).toHaveLength(CHOICES);
+    expect(CHOICES).toBe(5);
+  });
+
   it("tells a ticket that is in the plan already from one that does not match", () => {
     expect(findTicket("CA-2", tickets, [ticketPick(tickets[1])])).toEqual({ reason: "taken", key: "CA-2" });
     expect(findTicket("subject", tickets, [ticketPick(tickets[1])])).toEqual({ reason: "taken", key: "CA-2" });
@@ -114,6 +132,18 @@ describe("adding a ticket", () => {
     const other = { ...tickets[1], item: { ...tickets[1].item, connectionId: "d" } } as WorkItem;
     const found = findTicket("CA-2", [other], [ticketPick(tickets[1])]);
     expect("ticket" in found && found.ticket.item.connectionId).toBe("d");
+  });
+});
+
+describe("moving between the plan's rows", () => {
+  const ev = (key: string, over: Partial<Parameters<typeof rowStep>[0]> = {}) => ({ key, altKey: false, ctrlKey: false, metaKey: false, shiftKey: false, ...over });
+  it("steps on with ArrowDown or j and back with ArrowUp or k, and leaves modified keys and others alone", () => {
+    expect([ev("ArrowDown"), ev("j")].map(rowStep)).toEqual([1, 1]);
+    expect([ev("ArrowUp"), ev("k")].map(rowStep)).toEqual([-1, -1]);
+    expect(rowStep(ev("ArrowDown", { altKey: true }))).toBe(0);
+    expect(rowStep(ev("j", { metaKey: true }))).toBe(0);
+    expect(rowStep(ev("ArrowUp", { shiftKey: true }))).toBe(0);
+    expect(rowStep(ev("Enter"))).toBe(0);
   });
 });
 
@@ -127,6 +157,25 @@ describe("the This week list", () => {
     expect(html).toMatch(/data-this-week-item="ws:w2" data-done="true"[^>]*><span aria-hidden="true" class="text-ws-done">✓/);
     expect(html).toContain('aria-label="Done: CA-2 Something"');
     expect(html).toContain('aria-label="CA-1 Something"');
+  });
+
+  it("marks a closed-not-done item apart from a done one: a muted mark, a title, its own words", () => {
+    const html = renderToStaticMarkup(<ThisWeekView week="2026-W42" items={items} done={new Set()} closed={new Set(["ws:w2"])} onOpen={noop} onEdit={noop} />);
+    expect(html).toMatch(/data-this-week-item="ws:w2" data-closed="true" title="[^"]*isn&#x27;t Done in Jira[^"]*"/);
+    expect(html).toMatch(/data-closed="true"[^>]*><span aria-hidden="true" class="text-ws-ink3">⊘/);
+    expect(html).not.toContain("✓");
+    expect(html).toContain('aria-label="Closed, not done: CA-2 Something"');
+    expect(html).toContain("closed, not done");
+    expect(html).not.toContain("data-done");
+  });
+
+  it("offers Reopen on a done or closed item, and only when it can be reopened", () => {
+    const some = <ThisWeekView week="2026-W42" items={items} done={new Set(["ticket:CA-1"])} closed={new Set(["ws:w2"])} onOpen={noop} onEdit={noop} onReopen={noop} />;
+    const html = renderToStaticMarkup(some);
+    expect(html.match(/data-this-week-reopen/g)).toHaveLength(2);
+    expect(html).toContain('aria-label="Reopen CA-1 Something"');
+    expect(renderToStaticMarkup(<ThisWeekView week="2026-W42" items={items} done={new Set(["ticket:CA-1"])} onOpen={noop} onEdit={noop} />)).not.toContain("data-this-week-reopen");
+    expect(renderToStaticMarkup(<ThisWeekView week="2026-W42" items={items} done={new Set()} onOpen={noop} onEdit={noop} onReopen={noop} />)).not.toContain("data-this-week-reopen");
   });
 });
 
@@ -148,6 +197,15 @@ describe("the stored plan", () => {
     const stored = loadPrefs().weekPlans;
     expect(stored[isoWeek(now)].items.map((p) => p.id)).toEqual(["ticket:CA-3"]);
     expect(stored["2026-W43"].items.map((p) => p.id)).toEqual(["ticket:CA-4"]);
+  });
+  it("keeps a reopened item reopened across a reload, and no other", () => {
+    const now = new Date("2026-10-13T09:00:00Z");
+    usePrefs.getState().keepWeekPlan([pick("CA-1"), pick("CA-2")], now);
+    usePrefs.getState().reopenWeekPlanItem("2026-W42", "ticket:CA-1");
+    const items = loadPrefs().weekPlans["2026-W42"].items;
+    expect(items.map((p) => [p.id, p.reopened ?? false])).toEqual([["ticket:CA-1", true], ["ticket:CA-2", false]]);
+    usePrefs.getState().reopenWeekPlanItem("2026-W42", "nope");
+    expect(usePrefs.getState().weekPlans["2026-W42"].items).toHaveLength(2);
   });
   it("writes nothing to Jira: keeping touches only the prefs", async () => {
     const backend = new MockBackend({ runs: { seed: "empty" } });
@@ -237,5 +295,33 @@ describe("the workstream list's status", () => {
     expect(only).toContain("Show all");
     expect([...only.matchAll(/data-workstream-row="([^"]+)" role="option"/g)].map((m) => m[1])).toEqual(["general", open[1].workstream.id]);
     expect(html({ statusFilter: "waiting" })).toContain("No workstream is waiting on the reporter.");
+  });
+
+  it("keeps the open workstream listed, dimmed and said so, when the filter leaves it out, and counts only the matching", () => {
+    const idle = open[0].workstream.id;
+    const out = html({ statusFilter: "held", selected: idle });
+    expect([...out.matchAll(/data-workstream-row="([^"]+)"/g)].map((m) => m[1])).toEqual(["general", idle, open[1].workstream.id]);
+    expect(out).toContain("Showing Held: 1");
+    expect(out).toMatch(new RegExp(`data-workstream-row="${idle}"[^>]*data-filtered-out`));
+    expect(out).toContain("opacity-60");
+    expect(out).toContain("Shown because it is open; not Held");
+    expect(out.match(/data-filter-shown/g)).toHaveLength(1);
+    // Nothing matches: the empty line still says so, with the open one still shown.
+    const none = html({ statusFilter: "waiting", selected: idle });
+    expect(none).toContain("No workstream is waiting on the reporter.");
+    expect(none).toContain("Showing Waiting on reporter: 0");
+    expect(none).toContain("data-filter-shown");
+    // Without a filter, or with the open one in it, no note.
+    expect(html({ selected: idle })).not.toContain("data-filter-shown");
+    expect(html({ statusFilter: "held", selected: open[1].workstream.id })).not.toContain("data-filter-shown");
+  });
+
+  it("says an idle workstream may be unclear while its notice stands, and not once Looks fine taught the gaps away", () => {
+    const thin = [{ ...open[0], clarity: { gaps: ["short" as const] } }, open[1]];
+    const detail = /data-status-detail[^>]*>· may be unclear</;
+    expect(html({ list: thin })).toMatch(detail);
+    expect(html({ list: thin })).not.toContain('data-status="needs-you"');
+    expect(html({ list: thin, learning: { CA: { short: 3 } } })).not.toMatch(detail);
+    expect(html({ list: thin, learning: { WEB: { short: 3 } } })).toMatch(detail);
   });
 });

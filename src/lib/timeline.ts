@@ -113,6 +113,8 @@ export interface TimelineInput {
   verdicts?: Readonly<Record<string, ReviewOutcome | undefined>>;
   /** The workstream's ticket, for the entries that name none of their own. */
   ticketKey?: string | null;
+  /** When the reporter replied on the ticket, while the wait it ended is undecided (`WorkstreamView.reporterRepliedAt`): a comment leaves no audit line, so the entry is made here. */
+  reporterRepliedAt?: string | null;
 }
 
 const KIND_WORD: Record<RunKind, string> = { investigate: "Investigate", triage: "Triage", plan: "Plan", build: "Build", review: "Review", verify: "Verify" };
@@ -273,7 +275,7 @@ const AFTER_DRAFT = SOURCE_RANK.draft + 0.5;
  * same moment keep their source's own order. A turn the page doesn't know the time of stands where the turn before it does.
  */
 export function timeline(input: TimelineInput): TimelineEntry[] {
-  const { turns = [], runs = [], drafts = [], events = [], needs = [], labels = new Map(), verdicts = {}, ticketKey = null } = input;
+  const { turns = [], runs = [], drafts = [], events = [], needs = [], labels = new Map(), verdicts = {}, ticketKey = null, reporterRepliedAt = null } = input;
   const needOfRun = new Map(needs.flatMap((n) => (n.runId ? [[n.runId, n] as const] : [])));
   // A triage that found its ticket not clear enough to plan is what the readiness need (`readiness:<run>`) asks about.
   for (const n of needs) if (n.kind === "readiness") needOfRun.set(n.key.slice("readiness:".length), n);
@@ -386,6 +388,11 @@ export function timeline(input: TimelineInput): TimelineEntry[] {
     };
     out.push(entry);
     previous = entry;
+  }
+
+  // A reporter answers on the ticket, which leaves no audit line: the wait's end is told from the comment's time.
+  if (reporterRepliedAt && Number.isFinite(time(reporterRepliedAt))) {
+    out.push({ key: `audit:reply:${reporterRepliedAt}`, kind: "audit", at: reporterRepliedAt, updatedAt: reporterRepliedAt, ticketKey, text: "The reporter replied on the ticket", target: null, needKey: null, decision: false, actor: "supervisor", action: "reporter_replied", order: order++ });
   }
 
   // When things happened, except that an effect never stands before its cause: a draft a run left, or what was done to a
@@ -506,6 +513,7 @@ export function everyWorkstreamParts(d: EveryWorkstreamData): TimelinePart[] {
       drafts: d.proposals.filter((p) => inWorkstreamPane(p, v.workstream)),
       events: d.events[v.workstream.id] ?? [],
       ticketKey: v.workstream.itemKey,
+      reporterRepliedAt: v.reporterRepliedAt ?? null,
     },
   }));
   const general = d.turns[GENERAL_CONVERSATION] ?? [];

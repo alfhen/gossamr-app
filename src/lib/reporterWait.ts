@@ -24,12 +24,22 @@ export type FollowLine = Pick<WorkstreamEvent, "actor" | "action" | "proposalId"
  * audit line, so one newer than the wait's start ends it, placed among the audit lines by its time.
  */
 export function reporterFollow(events: readonly FollowLine[], replies: readonly string[] = []): ReporterFollow {
+  return followWithReply(events, replies).follow;
+}
+
+/**
+ * `reporterFollow` and, while the reporter's reply is what ended the wait (`follow.replied`), the time of the first comment
+ * that did: what the timeline's "The reporter replied on the ticket" is placed by. As `reporter_follow_at` in src-tauri/src/inbox/workstreams.rs.
+ */
+export function followWithReply(events: readonly FollowLine[], replies: readonly string[] = []): { follow: ReporterFollow; repliedAt: string | null } {
   const asked = new Set<string>();
+  let repliedAt: string | null = null;
   let now: ReporterFollow = { waiting: null, changed: false, replied: false };
-  const times = replies.map((r) => Date.parse(r)).filter((t) => !Number.isNaN(t)).sort((a, b) => a - b);
+  const stamped = replies.map((r) => ({ t: Date.parse(r), iso: r })).filter((r) => !Number.isNaN(r.t)).sort((a, b) => a.t - b.t);
+  const times = stamped.map((r) => r.t);
   let next = 0;
   const reply = (t: number) => {
-    if (now.waiting && t > Date.parse(now.waiting)) now = { waiting: null, changed: true, replied: true };
+    if (now.waiting && t > Date.parse(now.waiting)) (now = { waiting: null, changed: true, replied: true }), (repliedAt = stamped.find((r) => r.t === t)!.iso);
   };
   for (const e of events) {
     while (next < times.length && times[next] < Date.parse(e.at)) reply(times[next++]);
@@ -43,7 +53,7 @@ export function reporterFollow(events: readonly FollowLine[], replies: readonly 
     else if (person && e.action === "resumed") now = { ...now, waiting: null };
   }
   while (next < times.length) reply(times[next++]);
-  return now;
+  return { follow: now, repliedAt: now.replied ? repliedAt : null };
 }
 
 /**

@@ -51,7 +51,8 @@ test.describe("one status word per workstream", () => {
     await expect(waiting.locator("[data-status-detail]")).toHaveText("· 3d");
     await expect(waiting.locator("[data-status]")).toHaveAttribute("data-status", "waiting");
     await expect(idle.locator("[data-status]")).toHaveText("Idle");
-    await expect(idle.locator("[data-status-detail]")).toHaveCount(0);
+    // Its ticket has no description, which the word check says in the detail (a notice, never a need: the word stays Idle).
+    await expect(idle.locator("[data-status-detail]")).toHaveText("· may be unclear");
     // One word per row, and the stage stays as it was.
     await expect(waiting.locator("[data-status]")).toHaveCount(1);
     await expect(waiting.locator("[data-stage]")).toHaveText("Intake");
@@ -71,7 +72,9 @@ test.describe("one status word per workstream", () => {
     await runCommand(page, "show workstreams waiting on reporter", "Show workstreams waiting on reporter");
     await expect(pipHome(page).locator('[data-status-filter="waiting"]')).toContainText("Showing Waiting on reporter: 1");
     await expect(workstreamRow(page, "CA-408")).toBeVisible();
-    await expect(workstreamRow(page, "CA-402")).toHaveCount(0);
+    // The workstream open in the conversation stays listed, dimmed and said so, though it isn't waiting (G21).
+    await expect(workstreamRow(page, "CA-402")).toHaveAttribute("data-filtered-out", "");
+    await expect(workstreamRow(page, "CA-402").locator("[data-filter-shown]")).toContainText("Shown because it is open");
     await runCommand(page, "show workstreams held", "Show held workstreams");
     await expect(workstreamRow(page, "CA-402")).toBeVisible();
     await expect(workstreamRow(page, "CA-408")).toHaveCount(0);
@@ -150,18 +153,19 @@ test.describe("Plan my week", () => {
     await page.reload();
     await openPipHome(page);
     await expect(thisWeek(page).locator("[data-this-week-item]")).toHaveCount(3);
-    await thisWeek(page).getByRole("button", { name: /^CA-402/ }).click();
+    await thisWeek(page).getByRole("button", { name: /CA-402/ }).click();
     await expect(workstreamRow(page, "CA-402")).toHaveAttribute("aria-selected", "true");
     await expect(thisWeek(page).locator("[data-done]")).toHaveCount(0);
 
-    // Closing the workstream ticks its item.
+    // Closing the workstream on a ticket that is not Done marks its item closed, not done (G18).
     await allProjects(page);
     await peekTicket(page, "CA-402");
     await peekSheet(page).getByRole("button", { name: "Close…" }).click();
     await peekSheet(page).getByRole("group", { name: "Close this workstream" }).getByRole("button", { name: "Close workstream" }).click();
     await openPipHome(page);
-    await expect(thisWeek(page).locator("[data-done]")).toHaveCount(1);
-    await expect(thisWeek(page).getByRole("button", { name: /^Done: CA-402/ })).toBeVisible();
+    await expect(thisWeek(page).locator("[data-closed]")).toHaveCount(1);
+    await expect(thisWeek(page).locator("[data-done]")).toHaveCount(0);
+    await expect(thisWeek(page).getByRole("button", { name: /^Closed, not done: .*CA-402/ })).toBeVisible();
 
     // ⌘K opens it again, with the kept plan to edit; nothing was written to Jira.
     await runCommand(page, "plan my week", "Plan my week");

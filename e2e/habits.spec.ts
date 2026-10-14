@@ -292,8 +292,8 @@ test.describe("the clarity notice learns from Looks fine", () => {
     // Settings says what it learned and gives it back for the project.
     await page.locator("aside", { has: page.getByRole("navigation", { name: "Workspace" }) }).getByRole("button", { name: "Settings" }).click();
     const learned = page.locator("[data-clarity-learning]");
-    await expect(learned.locator('[data-clarity-project="CA"]')).toContainText("CA tickets that have a very short description");
-    await learned.locator('[data-clarity-project="CA"]').getByRole("button", { name: "Give back" }).click();
+    await expect(learned.locator('[data-clarity-project="CA"]')).toContainText("short description");
+    await learned.locator('[data-clarity-project="CA"]').getByRole("button", { name: "Give back all" }).click();
     await expect(learned).toContainText("Nothing learned yet.");
     await expectToast(page, "Gossamr will flag unclear CA tickets as before.");
     expect((await actions(page, "clarity_reset")).map((e) => [e.actor, e.detail])).toEqual([["person", "CA"]]);

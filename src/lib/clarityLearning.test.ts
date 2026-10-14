@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { dismissed, flaggedGaps, forget, ignoredGaps, learnedDetail, learnedList, learnedWords, LEARN_AFTER, parseLearning, projectOfKey, type ClarityLearning } from "./clarityLearning";
+import { dismissed, flaggedGaps, forget, ignoredAmong, ignoredGaps, learnedDetail, learnedList, learnedWords, LEARN_AFTER, parseLearning, projectOfKey, SHORT_GAP, type ClarityLearning } from "./clarityLearning";
 
 describe("what Looks fine teaches the clarity notice", () => {
   it("counts each gap the notice named, per Jira project, and learns it on the third time", () => {
@@ -47,6 +47,23 @@ describe("what Looks fine teaches the clarity notice", () => {
       { project: "CE", gaps: ["scope"] },
     ]);
     expect(learnedList({ CA: { who: 2 } })).toEqual([]);
+  });
+
+  it("gives back one gap of a project and leaves its other gaps, other projects and an emptied project right", () => {
+    const taught: ClarityLearning = { CA: { who: 3, scope: 4, done: 1 }, CE: { scope: 4 } };
+    expect(forget(taught, "CA", ["who"])).toEqual({ CA: { scope: 4, done: 1 }, CE: { scope: 4 } });
+    expect(forget(taught, "CA", ["who", "scope"])).toEqual({ CA: { done: 1 }, CE: { scope: 4 } });
+    expect(forget({ CE: { scope: 4 } }, "CE", ["scope"])).toEqual({});
+    expect(forget(taught, "WEB", ["who"])).toEqual(taught);
+    expect(taught.CA).toEqual({ who: 3, scope: 4, done: 1 });
+  });
+
+  it("names the gaps of a ticket that are taught away, and says each gap in a few words", () => {
+    const taught: ClarityLearning = { CA: { who: 3, scope: 2, done: 5 } };
+    expect(ignoredAmong(["short", "done", "scope", "who"], taught, "CA")).toEqual(["done", "who"]);
+    expect(ignoredAmong(["short", "done"], taught, "CE")).toEqual([]);
+    expect(Object.keys(SHORT_GAP).sort()).toEqual(["done", "empty", "scope", "short", "who"]);
+    for (const g of Object.values(SHORT_GAP)) expect(g.length).toBeLessThan(26);
   });
 
   it("reads a ticket's project from its key, and a stored value defensively", () => {

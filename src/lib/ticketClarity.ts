@@ -70,6 +70,9 @@ export function gapsPhrase(gaps: readonly ClarityGap[]): string {
 /** What the notice on a workstream says: `CA-408 may be unclear: it has a very short description and doesn't say …`. */
 export const clarityText = (key: string, gaps: readonly ClarityGap[]) => `${key} may be unclear: it ${gapsPhrase(gaps)}.`;
 
+/** What the notice says once the reporter answered on the ticket (`WorkstreamView.reporterReplied`) and the thin description is still thin: the answer, not the gaps, is news. */
+export const clarityRepliedText = (key: string) => `${key}: the reporter replied; read it, then Looks fine or ask again.`;
+
 /** What "Ask the reporter now" asks: one question per gap, none twice; an empty description asks all four things a ticket needs. */
 export function clarityQuestions(gaps: readonly ClarityGap[]): string[] {
   const wanted: readonly ClarityGap[] = gaps.includes("empty") ? ["short", "done", "scope", "who"] : gaps;

@@ -2,12 +2,13 @@ import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { Switch } from "../components/Switch";
 import type { Need } from "../lib/needs";
 import { nextStep, type NextStep } from "../lib/nextStep";
-import { flaggedGaps, projectOfKey } from "../lib/clarityLearning";
-import { clarityText } from "../lib/ticketClarity";
+import { flaggedGaps, ignoredAmong, projectOfKey, SHORT_GAP } from "../lib/clarityLearning";
+import { clarityRepliedText, clarityText, type ClarityGap } from "../lib/ticketClarity";
 import { RULE_SWITCH, STEP_HELP, asksBudget, isHeldByYou, budgetNote, heldBanner, ruleText, stepsLeftText, stepsOf } from "../lib/workstreamHold";
 import { ALLOW_MORE_STEPS, HELD_BUDGET, TRIPWIRE, WORKSTREAM_RULES, type AutoStartSwitches, type Proposal, type Run, type WorkstreamEvent, type WorkstreamRule, type WorkstreamRules, type WorkstreamView } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { Btn } from "./AgentSheet";
+import { giveBackClarity } from "./clarityActions";
 import { paneHas, useDecisionShown } from "./decisionShown";
 import { EscalationCard } from "./EscalationCard";
 import { openNeed } from "./needsActions";
@@ -93,11 +94,14 @@ export function AutomaticStepsPanel({ rules, globals, onRule }: { rules: Workstr
   );
 }
 
+/** What the Automatic steps button opens, for its tooltip: the routine next steps and who starts them. */
+export const AUTO_STEPS_HELP = "Which routine next steps (a review after a build, a plan after a triage) start by themselves in this workstream. Switch any of them off here.";
+
 function AutomaticSteps({ rules, globals, actions }: { rules: WorkstreamRules; globals: AutoStartSwitches | null; actions: ControlActions }) {
   const { open, setOpen, root } = usePopover();
   return (
     <div ref={root} className="relative">
-      <Btn tone="ghost" data-popover-trigger aria-expanded={open} onClick={() => (open || actions.onSteps?.(), setOpen(!open))} className="px-1.5 py-0.5">
+      <Btn tone="ghost" data-popover-trigger aria-expanded={open} title={AUTO_STEPS_HELP} onClick={() => (open || actions.onSteps?.(), setOpen(!open))} className="px-1.5 py-0.5">
         Automatic steps
       </Btn>
       {open && <AutomaticStepsPanel rules={rules} globals={globals} onRule={actions.onRule} />}
@@ -215,9 +219,11 @@ export function ClarityNotice({ view }: { view: WorkstreamView }) {
   const learning = usePrefs((s) => s.clarityLearning);
   const [busy, setBusy] = useState(false);
   if (!c) return null;
-  // What "Looks fine" taught Gossamr to leave out for the ticket's project is not said; a notice with nothing left is not shown.
-  const gaps = flaggedGaps(c.gaps, learning, projectOfKey(view.workstream.itemKey ?? ""));
-  if (!gaps.length) return null;
+  // What "Looks fine" taught Gossamr to leave out for the ticket's project is not said in the notice; a notice with nothing left is not shown.
+  const project = projectOfKey(view.workstream.itemKey ?? "");
+  const gaps = flaggedGaps(c.gaps, learning, project);
+  const quiet = ignoredAmong(c.gaps, learning, project);
+  if (!gaps.length) return quiet.length ? <QuietClarity view={view} project={project} gaps={quiet} /> : null;
   const id = view.workstream.id;
   const choose = (call: () => Promise<boolean>) => {
     setBusy(true);
@@ -227,7 +233,7 @@ export function ClarityNotice({ view }: { view: WorkstreamView }) {
   return (
     <div role="status" data-clarity-notice={id} className="grid gap-1 rounded-md border border-ws-warn/40 bg-ws-warn/10 px-2.5 py-1.5 text-sm text-ws-ink">
       <p data-clarity-text className="m-0">
-        {clarityText(view.workstream.itemKey ?? "This ticket", gaps)}
+        {view.reporterReplied ? clarityRepliedText(view.workstream.itemKey ?? "This ticket") : clarityText(view.workstream.itemKey ?? "This ticket", gaps)}
       </p>
       <p className="m-0 text-xs text-ws-ink2">This is a quick check of the words, not a verdict. It holds nothing up; the triage still decides whether the ticket is ready to plan.</p>
       <div className="flex flex-wrap items-center gap-2">
@@ -238,7 +244,23 @@ export function ClarityNotice({ view }: { view: WorkstreamView }) {
           Looks fine
         </Btn>
       </div>
+      {quiet.length > 0 && <QuietClarity view={view} project={project} gaps={quiet} inside />}
     </div>
+  );
+}
+
+/** What the notice leaves out because of what "Looks fine" taught: said quietly, with a way to flag it again. Alone when nothing else is flagged, else under the notice. */
+export function QuietClarity({ view, project, gaps, inside = false }: { view: WorkstreamView; project: string; gaps: readonly ClarityGap[]; inside?: boolean }) {
+  const [busy, setBusy] = useState(false);
+  return (
+    <p data-clarity-quiet={view.workstream.id} className={`m-0 flex flex-wrap items-baseline gap-x-2 text-xs text-ws-ink3 ${inside ? "" : "px-1"}`}>
+      <span>
+        Not flagged: you said Looks fine to {gaps.map((g) => SHORT_GAP[g]).join(" and ")} in {project} tickets.
+      </span>
+      <button type="button" disabled={busy} onClick={() => (setBusy(true), void giveBackClarity(project, gaps).finally(() => setBusy(false)))} className="rounded px-1 underline hover:bg-ws-hover focus-visible:outline-2 focus-visible:outline-ws-pip">
+        Flag again
+      </button>
+    </p>
   );
 }
 
