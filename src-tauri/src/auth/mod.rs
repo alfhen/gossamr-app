@@ -254,8 +254,8 @@ pub async fn json_or_error<T: DeserializeOwned>(res: reqwest::Response) -> Resul
     if status.is_success() {
         return Ok(res.json().await?);
     }
-    let mut message = res.text().await.unwrap_or_default();
-    message.truncate(300);
+    // Not `String::truncate`, which panics when byte 300 falls inside a character.
+    let message: String = res.text().await.unwrap_or_default().chars().take(300).collect();
     Err(Error::Api { status: status.as_u16(), message })
 }
 

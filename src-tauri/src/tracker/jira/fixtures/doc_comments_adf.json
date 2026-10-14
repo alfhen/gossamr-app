@@ -1,0 +1,90 @@
+{
+  "startAt": 0,
+  "maxResults": 1048576,
+  "total": 3,
+  "comments": [
+    {
+      "self": "https://your-domain.atlassian.net/rest/api/3/issue/10010/comment/10000",
+      "id": "10000",
+      "author": {
+        "self": "https://your-domain.atlassian.net/rest/api/3/user?accountId=5b10a2844c20165700ede21g",
+        "accountId": "5b10a2844c20165700ede21g",
+        "emailAddress": "mia@example.com",
+        "avatarUrls": { "48x48": "https://avatar-management--avatars.us-west-2.prod.public.atl-paas.net/5b10a2844c20165700ede21g/48", "24x24": "https://avatar-management--avatars.us-west-2.prod.public.atl-paas.net/5b10a2844c20165700ede21g/24" },
+        "displayName": "Mia Krystof",
+        "active": true,
+        "timeZone": "Europe/Copenhagen",
+        "accountType": "atlassian"
+      },
+      "body": {
+        "type": "doc",
+        "version": 1,
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              { "type": "text", "text": "Hi " },
+              { "type": "mention", "attrs": { "id": "5b109f2e9729b51b54dc274d", "text": "@Carolyn", "accessLevel": "", "userType": "DEFAULT" } },
+              { "type": "text", "text": ", this is " },
+              { "type": "text", "text": "important", "marks": [{ "type": "strong" }, { "type": "textColor", "attrs": { "color": "#ff5630" } }] },
+              { "type": "text", "text": " and " },
+              { "type": "text", "text": "see the docs", "marks": [{ "type": "link", "attrs": { "href": "https://example.com/docs", "title": "Docs" } }, { "type": "strong" }] },
+              { "type": "text", "text": " " },
+              { "type": "text", "text": "x", "marks": [{ "type": "subsup", "attrs": { "type": "sup" } }, { "type": "underline" }, { "type": "em" }] },
+              { "type": "hardBreak" },
+              { "type": "emoji", "attrs": { "shortName": ":thumbsup:", "id": "1f44d", "text": "👍" } },
+              { "type": "text", "text": " " },
+              { "type": "inlineCard", "attrs": { "url": "https://your-domain.atlassian.net/browse/EX-12" } }
+            ]
+          },
+          {
+            "type": "codeBlock",
+            "attrs": { "language": "rust" },
+            "content": [{ "type": "text", "text": "fn main() {\n    println!(\"hi\");\n}" }]
+          },
+          { "type": "codeBlock", "attrs": {}, "content": [{ "type": "text", "text": "no language" }] },
+          {
+            "type": "panel",
+            "attrs": { "panelType": "info" },
+            "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "Heads up from the panel" }] }]
+          },
+          {
+            "type": "mediaSingle",
+            "attrs": { "layout": "center" },
+            "content": [{ "type": "media", "attrs": { "id": "6e7b5c1d-0e0f-4a39-9f06-2b0c1d2e3f40", "type": "file", "collection": "", "width": 1280, "height": 720 } }]
+          },
+          {
+            "type": "orderedList",
+            "attrs": { "order": 1 },
+            "content": [
+              { "type": "listItem", "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "first" }] }] },
+              { "type": "listItem", "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "second" }] }, { "type": "bulletList", "content": [{ "type": "listItem", "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "nested" }] }] }] }] }
+            ]
+          },
+          { "type": "blockquote", "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "quoted" }] }] },
+          { "type": "rule" }
+        ]
+      },
+      "updateAuthor": { "accountId": "5b10a2844c20165700ede21g", "displayName": "Mia Krystof", "active": true },
+      "created": "2021-01-17T12:34:00.000+0000",
+      "updated": "2021-01-18T23:45:00.000+0000",
+      "visibility": { "type": "role", "value": "Administrators", "identifier": "Administrators" }
+    },
+    {
+      "self": "https://your-domain.atlassian.net/rest/api/3/issue/10010/comment/10001",
+      "id": "10001",
+      "author": { "accountId": "5b109f2e9729b51b54dc274d", "displayName": "Carolyn", "active": false, "accountType": "atlassian" },
+      "body": { "type": "doc", "version": 1, "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "Thanks, done." }] }] },
+      "created": "2021-01-19T08:00:00.000+0100",
+      "updated": "2021-01-19T08:00:00.000+0100",
+      "jsdPublic": true
+    },
+    {
+      "self": "https://your-domain.atlassian.net/rest/api/3/issue/10010/comment/10002",
+      "id": "10002",
+      "author": null,
+      "body": { "type": "doc", "version": 1, "content": [] },
+      "created": "2021-01-20T08:00:00.000+0000"
+    }
+  ]
+}
