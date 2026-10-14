@@ -245,6 +245,9 @@ test("the Needs you list ranks a hold ahead of a draft to approve, opens each in
 
   await homeConversationRegion(page).getByRole("button", { name: "Investigate CA-401", exact: true }).click();
   await homeSettled(page);
+  // Pip can still be idle just after the click, before its turn starts; a hold then would cancel the turn before it drafts.
+  // The draft's need being there is the sign the turn is done.
+  await expect(needsYouCount(page)).toHaveText("1");
   await holdBySystem(page, "CA-401", "restart");
   await expect(row.locator("[data-status]")).toHaveText("Needs you");
   await expect(row.locator("[data-status-detail]")).toHaveText("· 2 waiting");
