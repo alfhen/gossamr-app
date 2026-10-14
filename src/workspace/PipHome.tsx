@@ -425,6 +425,7 @@ const REGION_ON: Record<PipHomeRegion, string> = {
   needs: "[data-pip-home] [data-needs-you]",
   workstreams: '[data-pip-home] nav[aria-label="Workstreams"]',
   day: "[data-pip-home] [data-plan-my-week], [data-pip-home] [data-start-my-day]",
+  notice: "[data-pip-home] [data-clarity-notice]",
   timeline: "[data-pip-home] [data-timeline]",
   pane: "[data-pip-home] [data-needs-pane]",
   rail: '[data-pip-home-column="rail"] [data-step-rail]',
@@ -442,6 +443,7 @@ function regionOf(el: Element | null): PipHomeRegion | null {
   if (el.closest("[data-needs-pane]")) return "pane";
   if (el.closest("[data-plan-my-week], [data-start-my-day]")) return "day";
   if (el.closest("[data-needs-you]")) return "needs";
+  if (el.closest("[data-clarity-notice]")) return "notice";
   if (el.closest('nav[aria-label="Workstreams"]')) return "workstreams";
   if (el.closest('[data-pip-home-column="rail"]')) return "rail";
   if (el.id === PIP_INPUT_ID) return "composer";
@@ -518,6 +520,8 @@ function usePipHomeKeys(needsYou: readonly Need[]) {
         }
         case "day":
           return void show(home?.querySelector<HTMLElement>("[data-plan-my-week]") ?? home?.querySelector<HTMLElement>("[data-start-my-day]"));
+        case "notice":
+          return void show(home?.querySelector<HTMLElement>("[data-clarity-notice] button:not(:disabled)") ?? home?.querySelector<HTMLElement>("[data-clarity-notice]"));
         case "timeline": {
           const last = all("[data-timeline] " + TIMELINE_ENTRY).pop();
           return void show(last ? timelineStop(last) : home?.querySelector<HTMLElement>("[data-timeline]"));

@@ -25,6 +25,7 @@ import { useDecisionShown } from "./decisionShown";
 import { LiveDraftPreview, openLiveDraft } from "./DraftPreview";
 import { GENERAL_INTRO, IntroAction, TurnView, workstreamIntro } from "./PipConversation";
 import { openNeed } from "./needsActions";
+import { openComment } from "./jump";
 import { isTypingTarget } from "./pipHomeKeys";
 import { usePipHome } from "./pipHomeStore";
 import { useReviewVerdicts } from "./reviewVerdicts";
@@ -56,7 +57,7 @@ export function useTimeline(conversation: string, view: WorkstreamView | null, p
   const labels = useMemo(() => labelsByRun(allRuns), [allRuns]);
   const verdicts = useMemo(() => Object.fromEntries(Object.entries(reviews).map(([k, v]) => [k, (v?.verdict ?? null) as ReviewOutcome])), [reviews]);
   const entries = useMemo(
-    () => timeline({ turns, runs, drafts, events: id ? events : NO_EVENTS, needs, labels, verdicts, ticketKey: view?.workstream.itemKey ?? null, reporterRepliedAt: view?.reporterRepliedAt ?? null }),
+    () => timeline({ turns, runs, drafts, events: id ? events : NO_EVENTS, needs, labels, verdicts, ticketKey: view?.workstream.itemKey ?? null, reporterRepliedAt: view?.reporterRepliedAt ?? null, reporterReply: view?.reporterReply ?? null }),
     [turns, runs, drafts, events, id, needs, labels, verdicts, view],
   );
   const byId = useMemo(
@@ -132,6 +133,7 @@ export function openEntry(e: Pick<TimelineEntry, "target">, byId: Lookup, root: 
     if (need) openNeed(need);
     return;
   }
+  if (t.type === "comment") return void openComment(t.ticketKey, t.id);
   if (t.type === "run") return useRuns.getState().openRun(t.id, { stay: true });
   const card = root?.querySelector<HTMLElement>(`article[data-draft="${CSS.escape(t.id)}"]`);
   if (card) {

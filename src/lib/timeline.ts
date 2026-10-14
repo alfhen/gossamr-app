@@ -1,4 +1,4 @@
-import type { Intent, Proposal, ProposalMaker, Run, RunKind, WorkstreamActor, WorkstreamEvent, WorkstreamView } from "../types";
+import type { Intent, Proposal, ProposalMaker, ReporterReply, Run, RunKind, WorkstreamActor, WorkstreamEvent, WorkstreamView } from "../types";
 import { eventText } from "../workspace/activityLogic";
 import { GENERAL_CONVERSATION, workstreamConversation } from "./conversations";
 import type { Need } from "./needs";
@@ -37,7 +37,7 @@ export const SCOPE_LABEL: Record<TimelineScope, string> = { workstream: "This wo
  * something waiting on the person always opens its need, the same as its row in Needs you. Null for an entry with
  * nothing more to show (a question and its answer, a line about the workstream itself).
  */
-export type TimelineTarget = { type: "run"; id: string } | { type: "draft"; id: string } | { type: "need"; key: string } | null;
+export type TimelineTarget = { type: "run"; id: string } | { type: "draft"; id: string } | { type: "need"; key: string } | { type: "comment"; ticketKey: string; id: string } | null;
 
 /** Where a run is in its life, as its one entry says it. */
 export type RunPhase = "queued" | "started" | "waiting" | "finished" | "failed" | "stopped" | "limit" | "unknown";
@@ -117,6 +117,8 @@ export interface TimelineInput {
   ticketKey?: string | null;
   /** When the reporter replied on the ticket, while the wait it ended is undecided (`WorkstreamView.reporterRepliedAt`): a comment leaves no audit line, so the entry is made here. */
   reporterRepliedAt?: string | null;
+  /** That reply's comment (`WorkstreamView.reporterReply`): its entry quotes it and opens it on the ticket. */
+  reporterReply?: ReporterReply | null;
 }
 
 const KIND_WORD: Record<RunKind, string> = { investigate: "Investigate", triage: "Triage", plan: "Plan", build: "Build", review: "Review", verify: "Verify" };
@@ -143,6 +145,9 @@ const TOLD_ELSEWHERE = new Set(["run_approved", "autostart", "wake", "draft_crea
 
 /** Audit lines that ask the person to decide something, whoever wrote them. */
 const ASKS = new Set(["fix_rounds_exhausted", "held"]);
+
+/** What the person does to ask the reporter: each is its own line, never merged into "(2 times)", since a second ask is news. */
+const REPORTER_ASKS = new Set(["readiness_asked", "clarity_asked", "reporter_nudged"]);
 
 /** What the person did that counts as deciding something. Opening or closing a workstream and the notes are bookkeeping, not decisions. */
 const DECIDED = new Set(["draft_approved", "draft_skipped", "review_posted", "held", "resumed", "mode_set", "rule_set", "fix_round_sent", "escalation_taken", "dismissed", "undone", "run_stopped", "run_answered", "run_retried", "budget_reset", "steps_allowed", "readiness_asked", "readiness_answered", "readiness_overridden", "clarity_asked", "clarity_dismissed", "reporter_nudged", "clarity_learned", "clarity_reset"]);
@@ -277,7 +282,7 @@ const AFTER_DRAFT = SOURCE_RANK.draft + 0.5;
  * same moment keep their source's own order. A turn the page doesn't know the time of stands where the turn before it does.
  */
 export function timeline(input: TimelineInput): TimelineEntry[] {
-  const { turns = [], runs = [], drafts = [], events = [], needs = [], labels = new Map(), verdicts = {}, ticketKey = null, reporterRepliedAt = null } = input;
+  const { turns = [], runs = [], drafts = [], events = [], needs = [], labels = new Map(), verdicts = {}, ticketKey = null, reporterRepliedAt = null, reporterReply = null } = input;
   const needOfRun = new Map(needs.flatMap((n) => (n.runId ? [[n.runId, n] as const] : [])));
   // A triage that found its ticket not clear enough to plan is what the readiness need (`readiness:<run>`) asks about.
   for (const n of needs) if (n.kind === "readiness") needOfRun.set(n.key.slice("readiness:".length), n);
@@ -367,7 +372,7 @@ export function timeline(input: TimelineInput): TimelineEntry[] {
     const need = (e.action === "held" || (e.action === "undone" && e.detail === "held")) && e === lastHeld && holdNeed ? holdNeed : e.action === "fix_rounds_exhausted" && escalationNeed ? escalationNeed : e.runId ? needOfRun.get(e.runId) : undefined;
     const target: TimelineTarget = need ? { type: "need", key: need.key } : e.proposalId && draft ? { type: "draft", id: e.proposalId } : e.runId && runs.some((r) => r.id === e.runId) ? { type: "run", id: e.runId } : null;
     // The same line again and again (a rule switched back and forth) is one entry that says how many.
-    if (previous && previous.text.replace(/ \(\d+ times\)$/, "") === text && previous.actor === e.actor && previous.action === e.action && !need) {
+    if (previous && previous.text.replace(/ \(\d+ times\)$/, "") === text && previous.actor === e.actor && previous.action === e.action && !need && !REPORTER_ASKS.has(e.action)) {
       previous.count = (previous.count ?? 1) + 1;
       previous.text = `${text} (${previous.count} times)`;
       previous.updatedAt = e.at;
@@ -394,7 +399,7 @@ export function timeline(input: TimelineInput): TimelineEntry[] {
 
   // A reporter answers on the ticket, which leaves no audit line: the wait's end is told from the comment's time.
   if (reporterRepliedAt && Number.isFinite(time(reporterRepliedAt))) {
-    out.push({ key: `audit:reply:${reporterRepliedAt}`, kind: "audit", at: reporterRepliedAt, updatedAt: reporterRepliedAt, ticketKey, text: "The reporter replied on the ticket", target: null, needKey: null, decision: false, attention: true, actor: "supervisor", action: "reporter_replied", order: order++ });
+    out.push({ key: `audit:reply:${reporterRepliedAt}`, kind: "audit", at: reporterRepliedAt, updatedAt: reporterRepliedAt, ticketKey, text: "The reporter replied on the ticket", ...(reporterReply ? { detail: `“${reporterReply.excerpt}”` } : {}), target: reporterReply && ticketKey ? { type: "comment", ticketKey, id: reporterReply.id } : null, needKey: null, decision: false, attention: true, actor: "supervisor", action: "reporter_replied", order: order++ });
   }
 
   // When things happened, except that an effect never stands before its cause: a draft a run left, or what was done to a
@@ -516,6 +521,7 @@ export function everyWorkstreamParts(d: EveryWorkstreamData): TimelinePart[] {
       events: d.events[v.workstream.id] ?? [],
       ticketKey: v.workstream.itemKey,
       reporterRepliedAt: v.reporterRepliedAt ?? null,
+      reporterReply: v.reporterReply ?? null,
     },
   }));
   const general = d.turns[GENERAL_CONVERSATION] ?? [];

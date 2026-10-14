@@ -265,7 +265,7 @@ test.describe("G14: waiting on the reporter", () => {
     await expect(row.locator("[data-status]")).toHaveText("Waiting on reporter");
     await expect(row).toHaveAttribute("data-wither", "2");
     await expect(workstreamWebText(page, VAGUE)).toHaveText("Reporter hasn't answered for 3 days");
-    await expect(row.locator("[data-status-detail]")).toHaveText("· 3d");
+    await expect(row.locator("[data-status-detail]")).toHaveText("· asked 3 days ago");
     await expect(row).toHaveAttribute("title", /^Reporter hasn't answered for 3 days/);
     await expect(nextLine(page)).toContainText("Waiting on the reporter since 3 days ago; nothing starts on its own.");
     await expect(needsYouCount(page)).toHaveText("0");

@@ -154,7 +154,7 @@ describe("what Looks fine teaches the clarity notice", () => {
     expect(usePrefs.getState().clarityLearning).toEqual({ CA: { short: 2, done: 2, scope: 2, who: 2 } });
     // The first and second say how many more it takes; the second replaces the first, which is out of date.
     expect(texts()).toEqual([
-      "Noted. After 1 more Looks fine on CA tickets like this, Gossamr stops flagging them (Settings > Unclear tickets).",
+      "Noted for short description, no \"done\" criteria, no scope and no \"who is waiting\". After 1 more Looks fine on CA tickets like this, Gossamr stops flagging them (Settings > Unclear tickets).",
     ]);
     useToasts.getState().clear();
     await useWorkstreams.getState().looksFine(c);
@@ -195,7 +195,7 @@ describe("what Looks fine teaches the clarity notice", () => {
   it("Give back all retires the 'After N more' counter that was on screen, and says what stays dismissed", async () => {
     const [a] = await dismissAll(thinTickets);
     await useWorkstreams.getState().looksFine(a);
-    expect(texts()[0]).toMatch(/^Noted\. After 2 more/);
+    expect(texts()[0]).toMatch(/^Noted for .*\. After 2 more/);
     usePrefs.setState({ clarityLearning: { CA: { who: 3 } } });
     expect(await giveBackClarity()).toBe(1);
     expect(texts()).toEqual(["Gossamr will flag new unclear tickets as before in every project."]);
@@ -296,7 +296,7 @@ describe("what Looks fine teaches the clarity notice", () => {
     usePrefs.setState({ clarityLearning: { CA: { short: 1 } } });
     backend.editTicket("CA-402", { description: THIN });
     await useWorkstreams.getState().looksFine(await open("CA-402"));
-    expect(texts()).toEqual(["Noted. After 1 more Looks fine on CA tickets like this, Gossamr stops flagging the first of them (Settings > Unclear tickets)."]);
+    expect(texts()).toEqual(["Noted for short description, no \"done\" criteria, no scope and no \"who is waiting\". After 1 more Looks fine on CA tickets like this, Gossamr stops flagging the first of them (Settings > Unclear tickets)."]);
   });
 
   it("clears the 'will stop flagging' notes only of the projects it reset, not one whose audit failed", async () => {

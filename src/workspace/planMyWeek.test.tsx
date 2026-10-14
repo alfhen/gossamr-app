@@ -38,6 +38,10 @@ describe("the Plan my week card", () => {
     expect(view([pick("CA-1")], { kept: true })).toContain("Kept on this device for the week of 12 Oct");
   });
 
+  it("keeps Keep this plan in sight when the card scrolls: its row is sticky at the bottom (G21)", () => {
+    expect(view([pick("CA-1")])).toMatch(/data-plan-keep-row="true" class="[^"]*\bsticky bottom-0\b[^"]*"/);
+  });
+
   it("lists each pick in order with its one-line because, and says nothing goes to Jira", () => {
     const html = view([pick("CA-1"), pick("CA-2", { because: "2 things need you here: Draft comment." })]);
     expect(html).toContain("Plan my week");
@@ -178,6 +182,25 @@ describe("the This week list", () => {
     expect(html).toContain('aria-label="Closed, not done: CA-2 Something"');
     expect(html).toContain("closed, not done");
     expect(html).not.toContain("data-done");
+  });
+
+  it("says a reopened item's workstream is closed and offers to start one again, only when it can (G16)", () => {
+    const html = renderToStaticMarkup(<ThisWeekView week="2026-W42" items={items} done={new Set()} stopped={new Set(["ws:w2"])} onOpen={noop} onEdit={noop} onStart={noop} />);
+    expect(html).toContain("data-this-week-stopped");
+    expect(html).toContain("workstream closed");
+    expect(html).toContain('aria-label="Start a workstream on CA-2 Something"');
+    expect(html.match(/data-this-week-stopped/g)).toHaveLength(1);
+    expect(renderToStaticMarkup(<ThisWeekView week="2026-W42" items={items} done={new Set()} stopped={new Set(["ws:w2"])} onOpen={noop} onEdit={noop} />)).not.toContain("data-this-week-start");
+    expect(renderToStaticMarkup(<ThisWeekView week="2026-W42" items={items} done={new Set()} onOpen={noop} onEdit={noop} onStart={noop} />)).not.toContain("data-this-week-stopped");
+  });
+
+  it("lets a closed title wrap in a readable colour, and caps the section so Workstreams keeps room (G22)", () => {
+    const html = renderToStaticMarkup(<ThisWeekView week="2026-W42" items={items} done={new Set()} closed={new Set(["ws:w2"])} onOpen={noop} onEdit={noop} />);
+    const closedTitle = /<button[^>]*aria-label="Closed, not done: CA-2 Something"[^>]*>/.exec(html)![0];
+    expect(closedTitle).not.toContain("truncate");
+    expect(closedTitle).not.toContain("opacity-70");
+    expect(closedTitle).toContain("text-ws-ink2");
+    expect(html).toContain("max-h-[25%]");
   });
 
   it("offers Reopen on a done or closed item, and only when it can be reopened", () => {

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Need } from "../lib/needs";
-import { WEEK_PICKS, isoWeek, itemOutcome, movePick, planMyWeek, ticketPick, weekLabel, type PlanItem } from "../lib/planMyWeek";
+import { WEEK_PICKS, isoWeek, itemOutcome, movePick, planMyWeek, reopenedWithoutWorkstream, ticketPick, weekLabel, type PlanItem } from "../lib/planMyWeek";
 import type { WorkstreamWither } from "../lib/workstreamWither";
 import type { PersonRef, WorkItem } from "../types";
 import { useWorkspace } from "../workspaceStore";
@@ -278,7 +278,8 @@ export function PlanMyWeekView({
           ))}
         </div>
       )}
-      <div className="flex items-center gap-2">
+      {/* Sticky: the card scrolls in a box of its own, and an open choice list would otherwise push Keep out of sight. */}
+      <div data-plan-keep-row className="sticky bottom-0 z-10 flex items-center gap-2 border-t border-ws-sep bg-ws-bar py-1.5">
         <button type="button" data-plan-keep onClick={onKeep} className={`${button} border-ws-pip bg-ws-pip font-semibold text-ws-on-pip`}>
           Keep this plan
         </button>
@@ -343,6 +344,13 @@ function openItem(item: PlanItem, done: boolean) {
   if (item.workstreamId) openOnPipHome(item.workstreamId);
 }
 
+/** Starts a workstream again on a reopened item's ticket, which opens it on Pip home; an item whose ticket isn't cached opens the ticket instead. */
+function startAgain(item: PlanItem) {
+  const ticket = Object.values(useWorkspace.getState().items).find((t) => t.item.key === item.ticketKey && (item.connectionId === undefined || t.item.connectionId === item.connectionId));
+  if (ticket) void useWorkstreams.getState().start(ticket.item);
+  else if (item.ticketKey) runDayAction({ type: "ticket", key: item.ticketKey });
+}
+
 /** What a ticked item says about itself, for its tooltip and its name: a closed workstream whose ticket isn't Done is dropped work, not finished work. */
 export const CLOSED_NOT_DONE = "Closed, not done";
 const CLOSED_TITLE = "The workstream was closed but the ticket isn't Done in Jira, so this isn't ticked as finished.";
@@ -353,9 +361,11 @@ export function ThisWeekView({
   items,
   done,
   closed = new Set<string>(),
+  stopped = new Set<string>(),
   onOpen,
   onEdit,
   onReopen,
+  onStart,
 }: {
   week: string;
   items: readonly PlanItem[];
@@ -363,20 +373,24 @@ export function ThisWeekView({
   done: ReadonlySet<string>;
   /** Items whose workstream closed with the ticket not Done: muted, with another mark. */
   closed?: ReadonlySet<string>;
+  /** Reopened items whose workstream is closed: open in the list, with no workstream to go to. */
+  stopped?: ReadonlySet<string>;
   onOpen(item: PlanItem): void;
   onEdit(): void;
   /** Takes a done or closed item back to open; the list shows no button without it. */
   onReopen?(item: PlanItem): void;
+  /** Starts a workstream on a reopened item whose workstream is closed; the list shows no button without it. */
+  onStart?(item: PlanItem): void;
 }) {
   return (
-    <section data-this-week={week} aria-label="This week" className="grid shrink-0 gap-0.5 border-t border-ws-sep bg-ws-bar px-3 py-1.5">
+    <section data-this-week={week} aria-label="This week" className="grid max-h-[25%] min-h-0 shrink-0 grid-rows-[auto_minmax(0,1fr)] gap-0.5 border-t border-ws-sep bg-ws-bar px-3 py-1.5">
       <div className="flex items-baseline gap-2">
         <h2 className="m-0 flex-1 text-xs font-semibold tracking-wide text-ws-ink3 uppercase">This week</h2>
         <button type="button" data-this-week-edit onClick={onEdit} className="rounded px-1 text-xs text-ws-ink2 underline hover:bg-ws-hover focus-visible:outline-2 focus-visible:outline-ws-pip">
           Edit
         </button>
       </div>
-      <ul className="m-0 grid max-h-24 list-none gap-0 overflow-y-auto p-0 text-sm">
+      <ul className="m-0 grid max-h-28 min-h-0 list-none gap-0 overflow-y-auto p-0 text-sm">
         {items.map((p) => {
           const isDone = done.has(p.id);
           const isClosed = !isDone && closed.has(p.id);
@@ -389,7 +403,7 @@ export function ThisWeekView({
                 type="button"
                 onClick={() => onOpen(p)}
                 aria-label={`${isDone ? "Done: " : isClosed ? `${CLOSED_NOT_DONE}: ` : ""}${p.title}`}
-                className={`min-w-0 truncate rounded text-left hover:underline focus-visible:outline-2 focus-visible:outline-ws-pip ${isDone ? "text-ws-ink3 line-through" : isClosed ? "text-ws-ink3 italic opacity-70" : "text-ws-ink2"}`}
+                className={`min-w-0 rounded text-left hover:underline focus-visible:outline-2 focus-visible:outline-ws-pip ${isDone ? "truncate text-ws-ink3 line-through" : isClosed ? "text-ws-ink2 italic [overflow-wrap:anywhere]" : "truncate text-ws-ink2"}`}
               >
                 {p.title}
               </button>
@@ -397,6 +411,18 @@ export function ThisWeekView({
                 <span data-this-week-closed className="shrink-0 text-xs text-ws-ink3">
                   closed, not done
                 </span>
+              )}
+              {!isDone && !isClosed && stopped.has(p.id) && (
+                <>
+                  <span data-this-week-stopped className="shrink-0 text-xs text-ws-ink3">
+                    workstream closed
+                  </span>
+                  {onStart && (
+                    <button type="button" data-this-week-start aria-label={`Start a workstream on ${p.title}`} onClick={() => onStart(p)} className="shrink-0 rounded px-1 text-xs text-ws-ink2 underline hover:bg-ws-hover focus-visible:outline-2 focus-visible:outline-ws-pip">
+                      Start again
+                    </button>
+                  )}
+                </>
               )}
               {(isDone || isClosed) && onReopen && (
                 <button type="button" data-this-week-reopen aria-label={`Reopen ${p.title}`} onClick={() => onReopen(p)} className="shrink-0 rounded px-1 text-xs text-ws-ink2 underline hover:bg-ws-hover focus-visible:outline-2 focus-visible:outline-ws-pip">
@@ -430,5 +456,6 @@ export function ThisWeek() {
     return { done: new Set(outcomes.filter(([, o]) => o === "done").map(([id]) => id)), dropped: new Set(outcomes.filter(([, o]) => o === "closed").map(([id]) => id)) };
   }, [plan, list, closed, items]);
   if (!plan || !has) return null;
-  return <ThisWeekView week={week} items={plan.items} done={done} closed={dropped} onOpen={(p) => openItem(p, done.has(p.id) || dropped.has(p.id))} onEdit={showPlanMyWeek} onReopen={(p) => usePrefs.getState().reopenWeekPlanItem(week, p.id)} />;
+  const stopped = new Set(plan.items.filter((p) => reopenedWithoutWorkstream(p, [...list, ...closed])).map((p) => p.id));
+  return <ThisWeekView week={week} items={plan.items} done={done} closed={dropped} stopped={stopped} onStart={startAgain} onOpen={(p) => openItem(p, done.has(p.id) || dropped.has(p.id))} onEdit={showPlanMyWeek} onReopen={(p) => usePrefs.getState().reopenWeekPlanItem(week, p.id)} />;
 }

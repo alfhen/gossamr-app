@@ -21,6 +21,12 @@ describe("the clarity notice", () => {
     expect(html).toContain("Ask the reporter now");
   });
 
+  it("quotes the reporter's reply once there is one (G15)", () => {
+    const replied = view({ reporterReplied: true, changedWhileWaiting: true, reporterReply: { id: "c1", excerpt: "It should send three emails." } });
+    expect(renderToStaticMarkup(<ClarityNotice view={replied} />)).toContain("They wrote: “It should send three emails.”");
+    expect(renderToStaticMarkup(<ClarityNotice view={view({ reporterReplied: true, changedWhileWaiting: true })} />)).not.toContain("They wrote");
+  });
+
   it("is not shown without a notice", () => {
     expect(renderToStaticMarkup(<ClarityNotice view={view({ clarity: null })} />)).toBe("");
   });
@@ -31,6 +37,8 @@ describe("the quiet note for what Looks fine taught away", () => {
     const html = renderToStaticMarkup(<QuietClarity view={view()} project="CA" gaps={["who", "scope"]} />);
     expect(html).toContain('data-clarity-quiet="w1"');
     expect(html).toContain('Not flagged: you said Looks fine to no &quot;who is waiting&quot; and no scope in CA tickets.');
-    expect(html).toContain("Flag again");
+    // It resets the gaps for every ticket of the project, so the link says the project, and the note is not the faintest grey.
+    expect(html).toContain("Flag again in CA");
+    expect(html).not.toContain("text-ws-ink3");
   });
 });

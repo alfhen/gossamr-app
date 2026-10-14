@@ -67,7 +67,7 @@ export interface WorkstreamStatus {
   /** The one word: "Needs you", "Held by you", "Waiting on reporter". */
   word: string;
   tone: StatusTone;
-  /** At most one short detail after the word: "3d", "2 waiting", "Build", "automatic steps used up"; null when the word says it all. */
+  /** At most one short detail after the word: "asked 3 days ago", "2 waiting", "Build", "automatic steps used up"; null when the word says it all. */
   detail: string | null;
 }
 
@@ -87,6 +87,9 @@ export interface StatusMore {
 export const UNCLEAR_DETAIL = "may be unclear";
 /** What an idle row says once the reporter has answered on the ticket and the person has not chosen yet: the answer is the news. */
 export const REPLIED_DETAIL = "reporter replied";
+
+/** How long ago the reporter was asked, as the pill's detail: a bare "0d" does not say what it counts. */
+const askedText = (days: number) => (days === 0 ? "asked today" : days === 1 ? "asked yesterday" : `asked ${days} days ago`);
 
 /** How many days with nothing happening make a workstream Quiet when it has no cobweb to say so. */
 export const QUIET_DAYS = 7;
@@ -120,7 +123,7 @@ export function workstreamStatus(view: WorkstreamView, needs: readonly Pick<Need
   // A hold the system made is one of the needs; when it is the only one the one thing worth saying is why (the hold's own words), else the count.
   if (waiting > 0) return make("needs-you", waiting === 1 && ws.heldReason && !byYou ? (shortHeld(ws.heldReason, ws.drifted) ?? `${waiting} waiting`) : `${waiting} waiting`);
   if (ws.heldReason) return byYou ? make("held", null, shortHeld(ws.heldReason) ?? "Held by you") : make("held", heldDetail(ws.heldReason, view));
-  if (view.waitingOnReporter) return make("waiting", `${waitedDays(view.waitingOnReporter.since, now)}d`);
+  if (view.waitingOnReporter) return make("waiting", askedText(waitedDays(view.waitingOnReporter.since, now)));
   const furthest = (pick: (r: Run) => boolean) => own.filter(pick).sort((a, b) => a.queuedAt.localeCompare(b.queuedAt)).pop();
   const going = furthest((r) => RUNNING.has(r.state)) ?? furthest((r) => r.state === "queued");
   if (going) return make("running", `${STAGE_LABEL[going.spec.kind]}${going.state === "queued" ? " queued" : ""}`);

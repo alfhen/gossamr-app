@@ -1,4 +1,4 @@
-import type { Proposal, WorkstreamEvent } from "../types";
+import type { Proposal, ReporterReply, WorkstreamEvent } from "../types";
 import { isAnswersDraft, isReporterNudge, workstreamOf } from "./proposals";
 import { WITHER_DAYS } from "./views";
 
@@ -54,6 +54,27 @@ export function followWithReply(events: readonly FollowLine[], replies: readonly
   }
   while (next < times.length) reply(times[next++]);
   return { follow: now, repliedAt: now.replied ? repliedAt : null };
+}
+
+/** How many characters of a reply the quote keeps. As `REPLY_EXCERPT` in src-tauri/src/inbox/workstreams.rs. */
+export const REPLY_EXCERPT = 140;
+
+/** The first line of a comment's text with its spacing made even, cut to `REPLY_EXCERPT` characters with "…". As `reply_excerpt` in src-tauri/src/inbox/workstreams.rs. */
+export function replyExcerpt(text: string): string {
+  const line = text.split(/\n/).map((l) => l.split(/\s+/).filter(Boolean).join(" ")).find((l) => l) ?? "";
+  const chars = Array.from(line);
+  return chars.length > REPLY_EXCERPT ? `${chars.slice(0, REPLY_EXCERPT - 1).join("").trimEnd()}…` : line;
+}
+
+/**
+ * The comment that ended the wait: the one written at `repliedAt` among `comments` (the ticket's comments from anyone but
+ * the person, with their `at` times and plain text), as the view's `reporterReply`. Null without a reply or a comment at that time, or when it says nothing.
+ * As `reply_to` in src-tauri/src/inbox/workstreams.rs; both run the `reply` of src/lib/reporterWait.fixtures.json.
+ */
+export function replyComment(comments: readonly { id: string; at: string; text: string }[], repliedAt: string | null): ReporterReply | null {
+  const c = repliedAt ? comments.find((k) => k.at === repliedAt) : undefined;
+  const excerpt = c ? replyExcerpt(c.text) : "";
+  return c && excerpt ? { id: c.id, excerpt } : null;
 }
 
 /**

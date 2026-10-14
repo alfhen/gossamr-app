@@ -3,7 +3,7 @@ import { HELD_PERSON } from "../types";
 import type { PersonRef, WorkItem, WorkstreamView } from "../types";
 import type { Need } from "./needs";
 import { docFromText } from "./docs";
-import { WEEKS_KEPT, WEEK_PICKS, weekLabel, isoWeek, itemDone, itemOutcome, keepPlan, movePick, parseWeekPlans, planMyWeek, rankWeek, reopenItem, ticketPick, type PlanInput, type PlanItem } from "./planMyWeek";
+import { WEEKS_KEPT, WEEK_PICKS, weekLabel, isoWeek, itemDone, itemOutcome, keepPlan, movePick, parseWeekPlans, planMyWeek, rankWeek, reopenItem, reopenedWithoutWorkstream, ticketPick, type PlanInput, type PlanItem } from "./planMyWeek";
 
 const NOW = new Date("2026-10-13T09:00:00Z");
 const ago = (days: number) => new Date(NOW.getTime() - days * 86_400_000).toISOString();
@@ -330,6 +330,15 @@ describe("the kept plan", () => {
     expect(reopenItem(plans, "2026-W10", "ws:w1")).toBe(plans);
     // It is stored with the plan, and read back with it.
     expect(parseWeekPlans(JSON.parse(JSON.stringify(after)))).toEqual(after);
+  });
+  it("tells a reopened item whose workstream is closed: reopening does not reopen the workstream (G16)", () => {
+    const pick: PlanItem = { id: "ws:w1", kind: "workstream", workstreamId: "w1", ticketKey: "CA-1", title: "CA-1 Thing", because: "x.", reopened: true };
+    const closed = ws("w1", "CA-1", {}, { closedAt: ago(1) });
+    expect(reopenedWithoutWorkstream(pick, [closed])).toBe(true);
+    // Not reopened: that is the closed mark's business. A live workstream on the ticket, or none known at all, leaves nothing to say.
+    expect(reopenedWithoutWorkstream({ ...pick, reopened: false }, [closed])).toBe(false);
+    expect(reopenedWithoutWorkstream(pick, [closed, ws("w9", "CA-1")])).toBe(false);
+    expect(reopenedWithoutWorkstream(pick, [])).toBe(false);
   });
   it("ticks only for the item's own connection: the same key on another connection is another ticket", () => {
     const done = { status: { id: "9", name: "Done", category: "done" } } as const;

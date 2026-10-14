@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { dismissed, flaggedGaps, forget, ignoredAmong, ignoredGaps, learnedDetail, learnedList, learnedWords, LEARN_AFTER, parseLearning, projectOfKey, SHORT_GAP, type ClarityLearning } from "./clarityLearning";
+import { dismissed, flaggedGaps, forget, gapList, ignoredAmong, ignoredGaps, learnedDetail, learnedList, learnedWords, LEARN_AFTER, parseLearning, projectOfKey, SHORT_GAP, type ClarityLearning } from "./clarityLearning";
 
 describe("what Looks fine teaches the clarity notice", () => {
   it("counts each gap the notice named, per Jira project, and learns it on the third time", () => {
@@ -80,5 +80,14 @@ describe("what Looks fine teaches the clarity notice", () => {
     expect(learnedWords("short in CE")).toBe("CE tickets that have a very short description");
     expect(learnedWords("garbage")).toBe("a gap");
     expect(learnedWords(null)).toBe("a gap");
+  });
+});
+
+describe("gapList", () => {
+  it("names the gaps as one phrase", () => {
+    expect(gapList([])).toBe("");
+    expect(gapList(["short"])).toBe("short description");
+    expect(gapList(["short", "scope"])).toBe("short description and no scope");
+    expect(gapList(["short", "done", "who"])).toBe('short description, no "done" criteria and no "who is waiting"');
   });
 });
