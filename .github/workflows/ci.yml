@@ -41,12 +41,17 @@ jobs:
   # the mock paces its answers on timers.
   e2e:
     runs-on: ubuntu-latest
+    # It runs the pull request's own code, so its token can only read and checkout keeps no credential on disk.
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
         shard: [1, 2, 3, 4]
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
