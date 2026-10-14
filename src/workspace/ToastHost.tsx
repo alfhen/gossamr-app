@@ -77,7 +77,16 @@ export function ToastCard({ toast: t, waiting, onDismiss }: { toast: Toast; wait
           {t.action.label}
         </button>
       )}
-      <button type="button" aria-label="Dismiss" title="Dismiss (Esc when the toast has the keyboard)" onClick={onDismiss} className="shrink-0 rounded px-1 text-lg leading-none opacity-70 hover:opacity-100">
+      <button
+        type="button"
+        aria-label="Dismiss"
+        title="Dismiss (Esc when the toast has the keyboard)"
+        onClick={() => {
+          onDismiss();
+          // Reached with F6 then Tab, the button hands the keyboard back as Esc does; a click that never came through F6 leaves focus alone.
+          if (before) leaveToast();
+        }}
+        className="shrink-0 rounded px-1 text-lg leading-none opacity-70 hover:opacity-100">
         ×
       </button>
     </div>

@@ -46,4 +46,18 @@ describe("a toast takes the keyboard", () => {
     expect(focus).toHaveBeenCalledTimes(1);
     expect(focusToast({ querySelector: () => null, activeElement: null })).toBe(false);
   });
+
+  it("hands the keyboard back when its × is used after F6 took the keyboard there, as Esc does", () => {
+    const dismiss = vi.fn();
+    const back = { focus: vi.fn(), isConnected: true };
+    focusToast({ querySelector: () => ({ focus: vi.fn(), contains: () => false }) as unknown as HTMLElement, activeElement: back as unknown as Element });
+    const card = ToastCard({ toast, waiting: 0, onDismiss: dismiss }) as ReactElement<{ children: unknown[] }>;
+    const x = (card.props.children as ReactElement<{ "aria-label"?: string; onClick(): void }>[]).find((c) => isValidElement(c) && (c.props as { "aria-label"?: string })["aria-label"] === "Dismiss")!;
+    x.props.onClick();
+    expect(dismiss).toHaveBeenCalledTimes(1);
+    expect(back.focus).toHaveBeenCalledTimes(1);
+    // A second click, not through F6, dismisses and moves nothing.
+    x.props.onClick();
+    expect(back.focus).toHaveBeenCalledTimes(1);
+  });
 });
