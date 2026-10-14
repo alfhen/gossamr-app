@@ -32,6 +32,18 @@ export type StatusState = "needs-you" | "held" | "waiting" | "running" | "quiet"
 /** The states from most to least urgent: the order `workstreamStatus` picks in, and the order a filter lists them. */
 export const STATUS_ORDER: readonly StatusState[] = ["needs-you", "held", "waiting", "running", "quiet", "done", "idle"];
 
+/** How far down the workstream list a state sits: what needs the person first, then what is held or waits on someone else, then what moves, then what does not. Held and Waiting on reporter share a rank. */
+const LIST_RANK: Record<StatusState, number> = { "needs-you": 0, held: 1, waiting: 1, running: 2, idle: 3, quiet: 4, done: 5 };
+
+/**
+ * The workstreams in the order the list shows them: by their status (Needs you, then Held and Waiting on reporter, then
+ * Running, then Idle, Quiet and Done), each group in the order it was given (newest first, as the store keeps them). Pure
+ * and stable; `items` is left as it is.
+ */
+export function byStatusRank<T>(items: readonly T[], stateOf: (item: T) => StatusState): T[] {
+  return items.map((item, at) => ({ item, at, rank: LIST_RANK[stateOf(item)] })).sort((a, b) => a.rank - b.rank || a.at - b.at).map((x) => x.item);
+}
+
 /** Colour tokens a state is drawn with (`ws-*` in theme.css); `ink` is the quiet grey. */
 export type StatusTone = "pip" | "warn" | "review" | "accent" | "ink" | "done";
 

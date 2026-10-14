@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { HELD_ALL, HELD_BUDGET, HELD_DAILY, HELD_PERSON, HELD_QUOTA, HELD_RESTART, TRIPWIRE, TRIPWIRES } from "../types";
 import type { Run, WorkstreamView } from "../types";
 import { NUDGE_AFTER_DAYS } from "./reporterWait";
-import { EMPTY_FILTER, QUIET_DAYS, REPLIED_DETAIL, STATUS_HINT, STATUS_ORDER, UNCLEAR_DETAIL, statusFromWords, workstreamStatus, type StatusMore } from "./workstreamStatus";
+import { EMPTY_FILTER, QUIET_DAYS, REPLIED_DETAIL, STATUS_HINT, STATUS_ORDER, UNCLEAR_DETAIL, byStatusRank, statusFromWords, workstreamStatus, type StatusMore } from "./workstreamStatus";
 import type { WorkstreamWither } from "./workstreamWither";
 
 const NOW = new Date("2026-10-13T09:00:00Z");
@@ -123,6 +123,33 @@ describe("workstreamStatus: priority", () => {
     expect(at(view({}, { heldReason: `${TRIPWIRE}basis_drift`, drifted: ["status"] }), [need]).detail).toBe("Held: the ticket was moved to Done");
     expect(at(view({}, { heldReason: HELD_PERSON }), [need, need])).toMatchObject({ state: "needs-you", detail: "2 waiting" });
     expect(at(view({}, { heldReason: HELD_RESTART }), [need, need]).detail).toBe("2 waiting");
+  });
+});
+
+describe("byStatusRank", () => {
+  const states = (items: { state: (typeof STATUS_ORDER)[number] }[]) => byStatusRank(items, (i) => i.state).map((i) => i.state);
+
+  it("puts Needs you first, then Held and Waiting on reporter (as given), Running, Idle, Quiet and Done", () => {
+    expect(states(["done", "quiet", "idle", "running", "waiting", "held", "needs-you"].map((state) => ({ state }) as { state: (typeof STATUS_ORDER)[number] }))).toEqual(["needs-you", "waiting", "held", "running", "idle", "quiet", "done"]);
+  });
+
+  it("keeps the order it was given inside a group, and Held and Waiting on reporter are one group", () => {
+    const items = [
+      { state: "idle", id: 1 },
+      { state: "waiting", id: 2 },
+      { state: "needs-you", id: 3 },
+      { state: "held", id: 4 },
+      { state: "idle", id: 5 },
+      { state: "needs-you", id: 6 },
+    ] as const;
+    expect(byStatusRank(items, (i) => i.state).map((i) => i.id)).toEqual([3, 6, 2, 4, 1, 5]);
+  });
+
+  it("leaves what it was given as it was, and an Idle row that may be unclear stays with the Idle ones", () => {
+    const given = [{ state: "quiet" }, { state: "needs-you" }] as const;
+    byStatusRank(given, (i) => i.state);
+    expect(given.map((i) => i.state)).toEqual(["quiet", "needs-you"]);
+    expect(at(view({ clarity: { gaps: [] } as never }), [], {}).state).toBe("idle");
   });
 });
 

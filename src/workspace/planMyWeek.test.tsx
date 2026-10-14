@@ -338,8 +338,9 @@ describe("the workstream list's status", () => {
     const out = html();
     const rows = out.split('data-workstream-row="').slice(2);
     expect(rows).toHaveLength(2);
-    expect(rows[0]).toMatch(/data-status="idle"[^>]*>Idle</);
-    expect(rows[1]).toMatch(/data-status="held"[^>]*>Held by you</);
+    // Held by you is listed above Idle.
+    expect(rows[0]).toMatch(/data-status="held"[^>]*>Held by you</);
+    expect(rows[1]).toMatch(/data-status="idle"[^>]*>Idle</);
     expect(rows.every((r) => (r.match(/data-status=/g) ?? []).length === 1)).toBe(true);
   });
 
@@ -355,7 +356,7 @@ describe("the workstream list's status", () => {
   it("keeps the open workstream listed, dimmed and said so, when the filter leaves it out, and counts only the matching", () => {
     const idle = open[0].workstream.id;
     const out = html({ statusFilter: "held", selected: idle });
-    expect([...out.matchAll(/data-workstream-row="([^"]+)"/g)].map((m) => m[1])).toEqual(["general", idle, open[1].workstream.id]);
+    expect([...out.matchAll(/data-workstream-row="([^"]+)"/g)].map((m) => m[1])).toEqual(["general", open[1].workstream.id, idle]);
     expect(out).toContain("Showing Held: 1");
     expect(out).toMatch(new RegExp(`data-workstream-row="${idle}"[^>]*data-filtered-out`));
     expect(out).toContain("opacity-60");

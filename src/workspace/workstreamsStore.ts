@@ -18,7 +18,7 @@ import { offerUndo } from "./undo";
 
 interface WorkstreamsState {
   backend: Backend | null;
-  /** The open workstreams, newest first, each with the stage its runs give it. */
+  /** The open workstreams, newest first, each with the stage its runs give it; Pip home sorts them for display (`byStatusRank`). */
   list: WorkstreamView[];
   /** Whether the first read of the open list has landed; false until then, so an empty `list` is not mistaken for "no workstreams". */
   loaded: boolean;

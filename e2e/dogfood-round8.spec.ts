@@ -156,3 +156,36 @@ test.describe("This week is a keyboard stop (G8, G9)", () => {
     await expect.poll(() => page.evaluate(() => !!document.activeElement?.closest("#peek-sheet"))).toBe(true);
   });
 });
+
+test.describe("the workstream list is ordered by what needs you (G15)", () => {
+  test("a Needs you workstream is listed above an Idle one that is newer, and j and k follow the order shown", async ({ page }) => {
+    test.setTimeout(120_000);
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await openApp(page, "runs=empty");
+    // CA-401 is the older workstream; CA-402 is newer and has nothing for the person to do.
+    await startWorkstream(page, "CA-401");
+    await startWorkstream(page, "CA-402");
+    await openPipHome(page);
+    await homeSettled(page);
+    const rows = pipHome(page).getByRole("listbox", { name: "Workstreams" }).getByRole("option");
+    await expect(rows.filter({ hasText: /CA-40[12]/ })).toHaveCount(2);
+    await expect(workstreamRow(page, "CA-401")).toContainText("Idle");
+    // Newest first while neither needs the person.
+    await expect(rows).toContainText([/^General/, /^CA-402/, /^CA-401/]);
+    // A hold the system made is a need: the older workstream moves above the newer one, General stays first.
+    await holdBySystem(page, "CA-401", "restart");
+    await expect(workstreamRow(page, "CA-401")).toContainText("Needs you");
+    await expect(workstreamRow(page, "CA-402")).toContainText("Idle");
+    await expect(rows).toContainText([/^General/, /^CA-401/, /^CA-402/]);
+    // j and k go in the order the list shows.
+    await workstreamRow(page, "General").focus();
+    await page.keyboard.press("j");
+    await expect(workstreamRow(page, "CA-401")).toBeFocused();
+    await page.keyboard.press("j");
+    await expect(workstreamRow(page, "CA-402")).toBeFocused();
+    await page.keyboard.press("k");
+    await expect(workstreamRow(page, "CA-401")).toBeFocused();
+    await page.keyboard.press("k");
+    await expect(workstreamRow(page, "General")).toBeFocused();
+  });
+});
