@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import { isTypingTarget } from "./pipHomeKeys";
 import { usePrefs } from "./prefs";
-import { useTabs } from "./tabsStore";
+import { useTabs, type Route } from "./tabsStore";
 
 /** Whether Esc is for something else: a field, a control that takes Esc itself, an open dialog or the palette. */
 export function escIsElsewhere(ev: Pick<KeyboardEvent, "key" | "defaultPrevented" | "target">): boolean {
@@ -10,16 +10,18 @@ export function escIsElsewhere(ev: Pick<KeyboardEvent, "key" | "defaultPrevented
   return isTypingTarget(ev.target) || (typeof el?.closest === "function" && !!el.closest("[data-esc-local], [role=dialog], [role=menu], [role=listbox]"));
 }
 
-/** Esc on a full page (Sent, Settings) goes back to Pip home, as Ctrl+0 does, wherever the keyboard is on the page (including <body>). */
-export function useEscToPipHome(enabled = true) {
+/** Where Esc on a full page goes: Pip home, as Ctrl+0 does, or the tickets while Agents are off and there is no Pip home. */
+export const escTarget = (agentsEnabled: boolean): Route => (agentsEnabled ? "pip" : "workspace");
+
+/** Esc on a full page (Sent, Settings) goes back to `escTarget`, wherever the keyboard is on the page (including <body>). */
+export function useEscToPipHome(agentsEnabled = true) {
   useEffect(() => {
-    if (!enabled) return;
     const onKey = (ev: KeyboardEvent) => {
       if (escIsElsewhere(ev)) return;
       ev.preventDefault();
-      useTabs.getState().setRoute("pip");
+      useTabs.getState().setRoute(escTarget(agentsEnabled));
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [enabled]);
+  }, [agentsEnabled]);
 }

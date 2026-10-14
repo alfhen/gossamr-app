@@ -248,7 +248,8 @@ export function DayScroll({ label, children }: { label: string; children: ReactN
     return () => (el.removeEventListener("scroll", measure), watch?.disconnect());
   });
   return (
-    <div ref={box} data-pip-home-day role="region" aria-label={label} className="relative max-h-[45vh] shrink-0 overflow-y-auto empty:hidden">
+    // Focusable so the keyboard can scroll it when it overflows: a scroller with no focusable child is out of the arrow keys' reach.
+    <div ref={box} data-pip-home-day role="region" aria-label={label} tabIndex={0} className="relative max-h-[45vh] shrink-0 overflow-y-auto outline-none empty:hidden focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-ws-pip">
       {children}
       {more && <div data-day-fade aria-hidden="true" className="pointer-events-none sticky bottom-0 -mt-6 h-6 bg-gradient-to-t from-ws-bar to-transparent" />}
     </div>
