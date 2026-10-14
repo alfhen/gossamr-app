@@ -8,6 +8,8 @@ mod convert;
 mod intent;
 mod jql;
 #[cfg(test)]
+mod contract_tests;
+#[cfg(test)]
 mod http_tests;
 
 use std::sync::Arc;

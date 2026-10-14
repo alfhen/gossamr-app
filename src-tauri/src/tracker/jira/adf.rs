@@ -431,6 +431,9 @@ fn inlines(content: &[Inline]) -> Vec<Value> {
             Inline::Text { text, .. } | Inline::Link { text, .. } if text.is_empty() => None,
             Inline::Text { text, marks } => {
                 let mut node = json!({ "type": "text", "text": text });
+                // ADF lets `code` stand beside a link only, so other marks are dropped from code.
+                let code_only = [Mark::Code];
+                let marks = if marks.contains(&Mark::Code) { &code_only[..] } else { marks.as_slice() };
                 if !marks.is_empty() {
                     let names = marks.iter().map(|m| {
                         json!({ "type": match m { Mark::Bold => "strong", Mark::Italic => "em", Mark::Strike => "strike", Mark::Code => "code" } })
@@ -561,7 +564,7 @@ mod tests {
     fn a_doc_survives_a_round_trip_through_adf() {
         let doc = Doc {
             blocks: vec![
-                Block::Heading { level: 3, content: vec![Inline::Text { text: "T".into(), marks: vec![Mark::Italic, Mark::Code] }] },
+                Block::Heading { level: 3, content: vec![Inline::Text { text: "T".into(), marks: vec![Mark::Italic] }] },
                 Block::List { ordered: false, items: vec![vec![Block::Paragraph { content: vec![Inline::Link { href: "https://a.test".into(), text: "a".into() }] }]] },
                 Block::Quote { content: vec![Block::Paragraph { content: vec![Inline::Text { text: "q".into(), marks: vec![] }, Inline::LineBreak] }] },
                 Block::Code { language: None, text: "x".into() },

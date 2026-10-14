@@ -1,0 +1,52 @@
+{
+  "maxResults": 50,
+  "startAt": 0,
+  "total": 4,
+  "issueTypes": [
+    {
+      "self": "https://your-domain.atlassian.net/rest/api/3/issuetype/10000",
+      "id": "10000",
+      "description": "A big user story that needs to be broken down. Created by Jira Software - do not edit or delete.",
+      "iconUrl": "https://your-domain.atlassian.net/rest/api/3/universal_avatar/view/type/issuetype/avatar/10307?size=medium",
+      "name": "Epic",
+      "untranslatedName": "Epic",
+      "subtask": false,
+      "avatarId": 10307,
+      "hierarchyLevel": 1
+    },
+    {
+      "self": "https://your-domain.atlassian.net/rest/api/3/issuetype/10001",
+      "id": "10001",
+      "description": "A small, distinct piece of work.",
+      "iconUrl": "https://your-domain.atlassian.net/rest/api/3/universal_avatar/view/type/issuetype/avatar/10318?size=medium",
+      "name": "Task",
+      "untranslatedName": "Task",
+      "subtask": false,
+      "avatarId": 10318,
+      "hierarchyLevel": 0,
+      "scope": { "type": "PROJECT", "project": { "id": "10000" } }
+    },
+    {
+      "self": "https://your-domain.atlassian.net/rest/api/3/issuetype/10002",
+      "id": "10002",
+      "description": "A problem or error.",
+      "iconUrl": "https://your-domain.atlassian.net/rest/api/3/universal_avatar/view/type/issuetype/avatar/10303?size=medium",
+      "name": "Bug",
+      "untranslatedName": "Bug",
+      "subtask": false,
+      "avatarId": 10303,
+      "hierarchyLevel": 0
+    },
+    {
+      "self": "https://your-domain.atlassian.net/rest/api/3/issuetype/10003",
+      "id": "10003",
+      "description": "A small piece of work that's part of a larger task.",
+      "iconUrl": "https://your-domain.atlassian.net/rest/api/3/universal_avatar/view/type/issuetype/avatar/10316?size=medium",
+      "name": "Sub-task",
+      "untranslatedName": "Sub-task",
+      "subtask": true,
+      "avatarId": null,
+      "hierarchyLevel": -1
+    }
+  ]
+}

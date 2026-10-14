@@ -8,7 +8,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use super::adf;
-use crate::auth::{json_or_error, Auth, Scope};
+use crate::auth::{Auth, Scope};
 use crate::error::{Error, Result};
 use crate::domain::StatusDef;
 use crate::model::{Attachment, CachedTicket, Comment, History, HistoryItem, ParentRef, Person, Status, SubtaskRef, TicketLink, Uploaded};
@@ -34,6 +34,8 @@ const API_BASE: &str = "https://api.atlassian.com";
 const RATE_RETRIES: u32 = 3;
 /// A `Retry-After` longer than this is reported instead of waited out, so a sync never hangs on it.
 const MAX_INLINE_WAIT_SECS: u64 = 20;
+/// Longest stretch of Jira's own error text shown to the person.
+const ERROR_TEXT_CHARS: usize = 400;
 
 /// A transition as Jira lists it: its own id, and the status it leads to.
 pub(super) struct RawTransition {
@@ -125,7 +127,7 @@ impl Jira {
             }
             if let Some(wait) = rate_limit_wait(&res, limited) {
                 if limited >= RATE_RETRIES || wait > MAX_INLINE_WAIT_SECS {
-                    return Err(Error::RateLimited { message: format!("Jira is limiting requests; try again in {wait} seconds."), retry_after_secs: wait });
+                    return Err(Error::RateLimited { message: format!("Jira is limiting requests ({} {}); try again in {wait} seconds.", method, bare_path(path)), retry_after_secs: wait });
                 }
                 limited += 1;
                 tokio::time::sleep(std::time::Duration::from_secs(wait)).await;
@@ -137,13 +139,13 @@ impl Jira {
 
     async fn call<T: DeserializeOwned>(&self, scope: &Scope, method: Method, path: &str, body: Option<&Value>) -> Result<T> {
         let res = self
-            .send(&self.http, scope, method, path, |req| match body {
+            .send(&self.http, scope, method.clone(), path, |req| match body {
                 Some(b) => req.json(b),
                 None => req,
             })
             .await?;
         if !res.status().is_success() {
-            return json_or_error(res).await;
+            return Err(failed(&method, path, res).await);
         }
         decode(&res.bytes().await?)
     }
@@ -191,7 +193,7 @@ impl Jira {
             .call(scope, Method::GET, &format!("issue/{key}?fields={}&expand=changelog", FIELDS.join(",")), None)
             .await
             .map_err(|e| match e {
-                Error::Api { status: 404 | 410, .. } => Error::Api { status: 404, message: format!("{key} doesn't exist, or you can no longer see it") },
+                Error::Api { status: 404 | 410, message } => Error::Api { status: 404, message: format!("{key} doesn't exist, or you can no longer see it ({message})") },
                 other => other,
             })?;
         let t = parse_issue(&raw).ok_or_else(|| Error::Api { status: 200, message: format!("couldn't read {key}") })?;
@@ -311,14 +313,18 @@ impl Jira {
     /// Uploads a file to `key`, then looks up its media id so a comment can show it inline.
     pub(super) async fn attach(&self, scope: &Scope, key: &str, filename: &str, mime_type: &str, bytes: Vec<u8>) -> Result<Uploaded> {
         let mime_type = if Part::bytes(Vec::new()).mime_str(mime_type).is_ok() { mime_type } else { "application/octet-stream" };
+        let path = format!("issue/{key}/attachments");
         let res = self
-            .send(&self.http, scope, Method::POST, &format!("issue/{key}/attachments"), |req| {
+            .send(&self.http, scope, Method::POST, &path, |req| {
                 let part = Part::bytes(bytes.clone()).file_name(filename.to_string()).mime_str(mime_type).expect("checked above");
                 // Required by Jira for multipart uploads, as protection against cross-site requests.
                 req.header("X-Atlassian-Token", "no-check").multipart(Form::new().part("file", part))
             })
             .await?;
-        let created: Vec<Value> = json_or_error(res).await?;
+        if !res.status().is_success() {
+            return Err(failed(&Method::POST, &path, res).await);
+        }
+        let created: Vec<Value> = res.json().await?;
         let a = created.first().ok_or_else(|| Error::Api { status: 200, message: "Jira didn't return the upload".into() })?;
         let id = a["id"].as_str().map(String::from).or_else(|| a["id"].as_u64().map(|n| n.to_string())).unwrap_or_default();
         let media_id = self.media_id(scope, &id).await.unwrap_or(None);
@@ -347,7 +353,7 @@ impl Jira {
     pub(super) async fn download(&self, scope: &Scope, id: &str) -> Result<(String, Vec<u8>)> {
         let res = self.send(&self.http, scope, Method::GET, &format!("attachment/content/{id}"), |r| r).await?;
         if !res.status().is_success() {
-            return Err(Error::Api { status: res.status().as_u16(), message: format!("couldn't download attachment {id}") });
+            return Err(failed(&Method::GET, &format!("attachment/content/{id}"), res).await);
         }
         let mime = res
             .headers()
@@ -480,6 +486,69 @@ impl Jira {
         self.call::<Value>(scope, Method::POST, "issueLink", Some(body)).await?;
         Ok(())
     }
+}
+
+/// The path without its query string, which can hold search text and is never needed to tell calls apart.
+fn bare_path(path: &str) -> &str {
+    path.split('?').next().unwrap_or(path)
+}
+
+/// The error for a failed call: what was asked (method and path, no query) and what Jira said, in the words the
+/// person sees. The access token and `Authorization` header never get this far; `redact` covers a body that echoes one.
+async fn failed(method: &Method, path: &str, res: reqwest::Response) -> Error {
+    let status = res.status().as_u16();
+    let body = res.text().await.unwrap_or_default();
+    failure(method, path, status, &body)
+}
+
+fn failure(method: &Method, path: &str, status: u16, body: &str) -> Error {
+    Error::Api { status, message: format!("{method} {}: {}", bare_path(path), jira_text(body)) }
+}
+
+/// Jira's own explanation from an error body: `errorMessages`, then each field's entry in `errors`
+/// (`{"errorMessages":[...],"errors":{"summary":"..."}}`), else the gateway's `message`. Anything that isn't JSON
+/// (an HTML error page) is shown as plain text. Trimmed to `ERROR_TEXT_CHARS`.
+fn jira_text(body: &str) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    let parsed = serde_json::from_str::<Value>(body);
+    let is_json = matches!(parsed, Ok(Value::Object(_) | Value::Array(_)));
+    match parsed {
+        Ok(Value::Object(o)) => {
+            let strings = |v: Option<&Value>| -> Vec<String> { v.and_then(Value::as_array).into_iter().flatten().filter_map(|m| m.as_str().map(String::from)).collect() };
+            parts.extend(strings(o.get("errorMessages")));
+            if let Some(Value::Object(errors)) = o.get("errors") {
+                parts.extend(errors.iter().map(|(field, m)| format!("{field}: {}", m.as_str().map_or_else(|| m.to_string(), String::from))));
+            }
+            if parts.is_empty() {
+                parts.extend(["message", "errorMessage", "error_description", "error"].iter().filter_map(|k| o.get(*k)?.as_str().map(String::from)).take(1));
+            }
+        }
+        Ok(Value::Array(a)) => parts.extend(a.iter().filter_map(|m| m.as_str().map(String::from))),
+        _ => {}
+    }
+    let text = if parts.is_empty() && is_json { String::new() } else if parts.is_empty() { body.split_whitespace().collect::<Vec<_>>().join(" ") } else { parts.join("; ") };
+    let text = redact(&text);
+    if text.is_empty() {
+        return "no explanation in the response".into();
+    }
+    match text.char_indices().nth(ERROR_TEXT_CHARS) {
+        Some((end, _)) => format!("{}…", &text[..end]),
+        None => text,
+    }
+}
+
+/// Replaces anything after `Bearer ` with `[hidden]`, in case a body echoes the request's header.
+fn redact(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(at) = rest.to_ascii_lowercase().find("bearer ") {
+        let (head, tail) = rest.split_at(at + "bearer ".len());
+        out.push_str(head);
+        out.push_str("[hidden]");
+        rest = tail.trim_start_matches(|c: char| !c.is_whitespace() && c != '"' && c != '\'');
+    }
+    out.push_str(rest);
+    out
 }
 
 /// A success body as `T`. Several Jira writes answer 201 or 204 with nothing (`issueLink`, transitions, updates),
@@ -826,6 +895,45 @@ pub(in crate::tracker) mod tests {
                 "items": [{"field": "status", "fromString": "In Progress", "toString": "In Review", "to": "3"}]
             }]}
         })
+    }
+
+    #[test]
+    fn a_failure_names_the_call_and_jiras_own_words() {
+        let body = r#"{"errorMessages":["Issue does not exist or you do not have permission to see it."],"errors":{"summary":"You must specify a summary of the issue.","customfield_10010":"Epic Name is required."}}"#;
+        let e = failure(&Method::POST, "issue?updateHistory=true&token=sekrit", 400, body);
+        assert_eq!(
+            e.to_string(),
+            "Jira returned 400: POST issue: Issue does not exist or you do not have permission to see it.; customfield_10010: Epic Name is required.; summary: You must specify a summary of the issue."
+        );
+        let e = failure(&Method::PUT, "issue/CA-1", 403, r#"{"message":"Forbidden"}"#);
+        assert_eq!(e.to_string(), "Jira returned 403: PUT issue/CA-1: Forbidden");
+        let e = failure(&Method::POST, "issueLink", 404, r#"["No issue link type with name 'Blocks' found."]"#);
+        assert_eq!(e.to_string(), "Jira returned 404: POST issueLink: No issue link type with name 'Blocks' found.");
+    }
+
+    #[test]
+    fn a_failure_without_json_shows_the_text_or_says_there_is_none() {
+        let e = failure(&Method::GET, "project/CA/statuses", 502, "<html>\n  <body>Bad   gateway</body>\n</html>");
+        assert_eq!(e.to_string(), "Jira returned 502: GET project/CA/statuses: <html> <body>Bad gateway</body> </html>");
+        assert!(failure(&Method::GET, "issue/CA-1", 500, "").to_string().ends_with("GET issue/CA-1: no explanation in the response"));
+        assert!(failure(&Method::GET, "issue/CA-1", 500, "{}").to_string().ends_with("no explanation in the response"));
+    }
+
+    #[test]
+    fn long_text_is_trimmed_on_a_character_boundary() {
+        let body = json!({ "errorMessages": ["å".repeat(1000)] }).to_string();
+        let Error::Api { message, .. } = failure(&Method::GET, "issue/CA-1", 400, &body) else { panic!() };
+        assert!(message.ends_with('…'));
+        assert_eq!(message.chars().count(), "GET issue/CA-1: ".len() + ERROR_TEXT_CHARS + 1);
+    }
+
+    #[test]
+    fn no_token_or_authorization_header_reaches_the_text() {
+        let body = r#"{"errorMessages":["bad header Authorization: Bearer eyJhbGciOi.secret.sig for you"]}"#;
+        let text = failure(&Method::GET, "user/viewissue/search?issueKey=CA-1&query=eyJhbGciOi", 401, body).to_string();
+        assert!(!text.contains("eyJhbGciOi") && !text.contains("secret"), "{text}");
+        assert!(text.contains("Bearer [hidden] for you"), "{text}");
+        assert!(!failure(&Method::GET, "issue/CA-1", 401, r#"{"message":"Unauthorized"}"#).to_string().contains("Authorization"));
     }
 
     #[test]

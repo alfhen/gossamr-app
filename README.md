@@ -51,7 +51,7 @@ The app opens in the workspace, a board, list and age view over everything synce
 
 ### Not yet verified against a live Jira site
 
-The Jira adapter was written against the REST v3 documentation and tested with response bodies shaped like the documented ones. It has not been exercised on a real site, so these are the places to look first if something misbehaves:
+The Jira adapter was written against the REST v3 documentation and tested with response bodies shaped like the documented ones. It has not been exercised on a real site, so these are the places to look first if something misbehaves. [docs/real-jira-trial.md](docs/real-jira-trial.md) is the checklist for trying them on a real site, in a safe order:
 
 - Creating an issue, updating fields, linking issues and creating sub-tasks (`issue/createmeta/{project}/issuetypes`, `issueLink`). Link direction follows Atlassian's own convention (the blocking issue is the inward one).
 - Reading a project's statuses (`project/{key}/statuses`) and the project list (`project/search`) for board columns.
