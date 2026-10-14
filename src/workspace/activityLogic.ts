@@ -405,21 +405,23 @@ export function eventText(e: WorkstreamEvent, label: (id: string | null) => stri
     case "steps_allowed":
       return `${who} allowed ${e.detail ?? "5"} more automatic steps`;
     case "readiness_asked":
-      return `${who} asked the reporter about ${label(e.runId)}'s open questions`;
+      // The wait starts when the comment is posted (`draft_approved`), not when it is drafted here.
+      return `${who} chose to ask the reporter about ${label(e.runId)}'s open questions; drafted for you to post`;
     case "readiness_answered":
       return `${who} chose to answer ${label(e.runId)}'s open questions`;
     case "readiness_overridden":
       return `${who} chose to plan anyway after ${label(e.runId)} found the ticket not ready`;
     case "clarity_asked":
-      return `${who} asked the reporter about what the ticket leaves unclear`;
+      return `${who} chose to ask the reporter; Gossamr drafted the questions for you to post`;
     case "clarity_dismissed":
       return `${who} said the ticket looks clear enough`;
     case "reporter_nudged":
-      return `${who} asked for a nudge to the reporter`;
+      return `${who} had Gossamr draft a nudge to the reporter`;
     case "clarity_learned":
       return `Gossamr stopped flagging ${learnedWords(e.detail)} after you said Looks fine ${LEARN_AFTER} times`;
     case "clarity_reset":
-      return `${who} gave back what Gossamr learned from Looks fine${e.detail ? ` for ${e.detail}` : ""}`;
+      // A gap given back alone says which (`who in CA`); all of a project's says the project.
+      return `${who} gave back what Gossamr learned from Looks fine${e.detail ? (/^\w+ in \S+$/.test(e.detail) ? ` for ${learnedWords(e.detail)}` : ` for ${e.detail}`) : ""}`;
     default:
       return null;
   }

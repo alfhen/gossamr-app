@@ -12,7 +12,7 @@ import { HOLD_ALL_HINT, buildCommands, isHoldAllKey, rankCommands, type CommandA
 import { useToasts } from "./toasts";
 import { DecisionShownContext, decisionShown } from "./decisionShown";
 import { MODE_LINE, NextStepLine, nextStepOnceKnown } from "./WorkstreamControls";
-import { AutomaticStepsPanel, StopConfirm, WorkstreamControlsView, choiceValue, controlActions, ruleChoice, type ControlActions } from "./WorkstreamControls";
+import { AUTO_STEPS_HELP, AutomaticStepsPanel, StopConfirm, WorkstreamControlsView, choiceValue, controlActions, ruleChoice, type ControlActions } from "./WorkstreamControls";
 import { holdAllVisible, useWorkstreams } from "./workstreamsStore";
 import { CONNECT_TO_POST, DRAFT_OPEN, EscalationCardView, EscalationSent, FIX_ROUND_HELP, NO_REVIEW_DRAFT, POST_AS_IS_HELP, TAKE_OVER_HELP, TAKEN_OVER, draftOpen, escalationActions, escalationShown, fixRoundSent, postingReview } from "./EscalationCard";
 import { ESCALATION_GONE } from "../backend/mockWorkstreams";
@@ -591,5 +591,15 @@ describe("the Review step's PR view with no GitHub connection (D17)", () => {
     expect(usePullView.getState().target).toEqual({ connectionId: "github:ada", repo: "acme/storefront", number: 519, proposalId: null });
     expect(useToasts.getState().toasts).toEqual([]);
     expect(openUrl).not.toHaveBeenCalled();
+  });
+});
+
+describe("what the Steps column's words mean", () => {
+  it("explains Automatic steps in a tooltip, naming the steps and that they can be switched off", () => {
+    const html = render(viewOf());
+    expect(html).toContain(`title="${AUTO_STEPS_HELP}"`);
+    expect(AUTO_STEPS_HELP).toMatch(/routine next steps/);
+    expect(AUTO_STEPS_HELP).toMatch(/Switch any of them off/);
+    expect(html).toContain("data-mode-line");
   });
 });

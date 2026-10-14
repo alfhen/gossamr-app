@@ -157,7 +157,7 @@ describe("the Pip & agents chip", () => {
   it("words the person's three choices on a ticket that isn't clear enough to plan, naming the triage", () => {
     const lines = [ev(1, "person", "readiness_asked", "r3", null), ev(2, "person", "readiness_answered", "r3", null), ev(3, "person", "readiness_overridden", "r3", null)];
     expect(toWorkstreamEntries({ w1: lines }, [ws]).map((e) => e.text).reverse()).toEqual([
-      "You asked the reporter about R3's open questions",
+      "You chose to ask the reporter about R3's open questions; drafted for you to post",
       "You chose to answer R3's open questions",
       "You chose to plan anyway after R3 found the ticket not ready",
     ]);
@@ -165,16 +165,17 @@ describe("the Pip & agents chip", () => {
 
   it("words the clarity notice's two choices", () => {
     const lines = [ev(1, "person", "clarity_asked", null, null), ev(2, "person", "clarity_dismissed", null, null)];
-    expect(toWorkstreamEntries({ w1: lines }, [ws]).map((e) => e.text).reverse()).toEqual(["You asked the reporter about what the ticket leaves unclear", "You said the ticket looks clear enough"]);
+    expect(toWorkstreamEntries({ w1: lines }, [ws]).map((e) => e.text).reverse()).toEqual(["You chose to ask the reporter; Gossamr drafted the questions for you to post", "You said the ticket looks clear enough"]);
   });
 
   it("words the nudge to the reporter and what Looks fine taught the notice, and how the person gave it back", () => {
-    const lines = [ev(1, "person", "reporter_nudged", null, null), ev(2, "person", "clarity_learned", null, "who in CA"), ev(3, "person", "clarity_reset", null, "CA"), ev(4, "person", "clarity_reset", null, null)];
+    const lines = [ev(1, "person", "reporter_nudged", null, null), ev(2, "person", "clarity_learned", null, "who in CA"), ev(3, "person", "clarity_reset", null, "CA"), ev(4, "person", "clarity_reset", null, null), ev(5, "person", "clarity_reset", null, "who in CA")];
     expect(toWorkstreamEntries({ w1: lines }, [ws]).map((e) => e.text).reverse()).toEqual([
-      "You asked for a nudge to the reporter",
+      "You had Gossamr draft a nudge to the reporter",
       "Gossamr stopped flagging CA tickets that don't say who is waiting on them after you said Looks fine 3 times",
       "You gave back what Gossamr learned from Looks fine for CA",
       "You gave back what Gossamr learned from Looks fine",
+      "You gave back what Gossamr learned from Looks fine for CA tickets that don't say who is waiting on them",
     ]);
   });
 

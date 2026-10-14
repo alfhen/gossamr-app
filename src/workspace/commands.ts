@@ -7,6 +7,7 @@ import { parsePullRef, pullLabel, type PullRef } from "../lib/githubUrl";
 import { isWorkConnection } from "./domains";
 import { ticketKeyOf } from "./watchLogic";
 import { VIEW_LABEL, VIEW_MODES, type ViewMode } from "./tabsStore";
+import { STATUS_ORDER, STATUS_WORD, type StatusState } from "../lib/workstreamStatus";
 import { FILTER_LABEL, SCOPE_LABEL, TIMELINE_FILTERS, TIMELINE_SCOPES, type TimelineFilter, type TimelineScope } from "../lib/timeline";
 
 export type CommandGroup = "Create" | "Projects" | "Views" | "Layout" | "Go to" | "Filters" | "Theme" | "App" | "Tickets" | "GitHub" | "Agents" | "Workstreams" | "Ask Pip" | "This item";
@@ -74,6 +75,10 @@ export interface CommandActions {
   startMyDay(): void;
   /** Opens "What Jira saw from me": everything Gossamr posted to Jira. */
   openJiraSent(): void;
+  /** Opens Plan my week on Pip home: a short proposal of what to work on this week, to reorder, trim and keep. */
+  planMyWeek(): void;
+  /** Lists only the workstreams in `state` on Pip home; null lists them all again. */
+  showWorkstreamStatus(state: StatusState | null): void;
   /** Gives back what "Looks fine" taught the clarity notice, in every project. */
   giveBackClarity(): void;
 }
@@ -96,6 +101,8 @@ export interface CommandContext {
   onAgents?: boolean;
   /** How many projects "Looks fine" has taught the clarity notice to leave a gap out for, for "Give back what Looks fine learned". */
   clarityLearned?: number;
+  /** The state Pip home's workstream list is narrowed to, if any. */
+  statusFilter?: StatusState | null;
 }
 
 /** The shortcut for Hold all workstreams, as the rail and the palette show it. */
@@ -127,6 +134,25 @@ const FILTERS: { id: string; label: string; keywords: string; filter: WorkFilter
   { id: "open", label: "Not done", keywords: "open", filter: { type: "open" } },
 ];
 
+/** What each state's entry says: "Show workstreams waiting on reporter". */
+const STATUS_ENTRY: Record<StatusState, string> = {
+  "needs-you": "Show workstreams that need you",
+  held: "Show held workstreams",
+  waiting: "Show workstreams waiting on reporter",
+  running: "Show running workstreams",
+  quiet: "Show quiet workstreams",
+  done: "Show done workstreams",
+  idle: "Show idle workstreams",
+};
+
+/** Narrows Pip home's workstream list to one status word, and back ("Show all workstreams" while it is narrowed). */
+function statusCommands(a: Pick<CommandActions, "showWorkstreamStatus">, current: StatusState | null): Command[] {
+  return [
+    ...STATUS_ORDER.map((state): Command => ({ id: `workstreams:status:${state}`, group: "Workstreams", icon: "◇", label: STATUS_ENTRY[state], hint: current === state ? "showing" : undefined, keywords: `workstreams status filter list ${STATUS_WORD[state]}`, run: () => a.showWorkstreamStatus(state) })),
+    ...(current ? [{ id: "workstreams:status:all", group: "Workstreams" as const, icon: "◇", label: "Show all workstreams", keywords: "workstreams status filter clear list", run: () => a.showWorkstreamStatus(null) }] : []),
+  ];
+}
+
 export function buildCommands(containers: readonly WorkContainer[], savedViews: readonly SavedView[], a: CommandActions, ctx: CommandContext = NO_CONTEXT): Command[] {
   return [
     { id: "create:ticket", group: "Create", icon: "＋", label: "New ticket (Pip drafts it)", keywords: "create new ticket bug task file", stay: true, run: a.newTicket },
@@ -152,9 +178,12 @@ export function buildCommands(containers: readonly WorkContainer[], savedViews: 
     { id: "app:jira-sent", group: "Go to", icon: "→", label: "What Jira saw from me", keywords: "posted sent wrote comments moves transitions descriptions subtasks audit history", run: a.openJiraSent },
     { id: "app:settings", group: "Go to", icon: "⚙", label: "Open settings", keywords: "preferences autopilot", run: a.openSettings },
     ...(ctx.agents ? [{ id: "app:start-my-day", group: "Go to" as const, icon: "☀", label: "Start my day", keywords: "morning today summary needs you unclear reporter waiting cobweb drafts", run: a.startMyDay }] : []),
+    ...(ctx.agents ? [{ id: "app:plan-my-week", group: "Go to" as const, icon: "☷", label: "Plan my week", keywords: "plan week this week priorities what to work on focus", run: a.planMyWeek }] : []),
     ...(ctx.agents && !ctx.onPipHome ? [{ id: "app:pip-home", group: "Go to" as const, icon: "✦", label: "Open Pip home", hint: PIP_HOME_HINT, keywords: "pip workstreams conversation agents manager needs you", run: a.openPipHome }] : []),
     // Before "Stop all agents…" in the list, so the query "agents" lands here first.
     ...(ctx.agents && !ctx.onAgents ? [{ id: "app:agents", group: "Go to" as const, icon: "→", label: "Open Agents", keywords: "agents running capacity operations stop all", run: a.openAgents }] : []),
+    // After "Open Agents", so the query "running" still lands there first.
+    ...(ctx.agents ? statusCommands(a, ctx.statusFilter ?? null) : []),
     ...FILTERS.map(
       (f): Command => ({ id: `filter:${f.id}`, group: "Filters", icon: "⏷", label: `Filter: ${f.label}`, keywords: f.keywords, run: () => a.addFilter(f.filter) }),
     ),

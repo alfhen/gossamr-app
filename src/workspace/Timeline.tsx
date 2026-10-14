@@ -56,7 +56,7 @@ export function useTimeline(conversation: string, view: WorkstreamView | null, p
   const labels = useMemo(() => labelsByRun(allRuns), [allRuns]);
   const verdicts = useMemo(() => Object.fromEntries(Object.entries(reviews).map(([k, v]) => [k, (v?.verdict ?? null) as ReviewOutcome])), [reviews]);
   const entries = useMemo(
-    () => timeline({ turns, runs, drafts, events: id ? events : NO_EVENTS, needs, labels, verdicts, ticketKey: view?.workstream.itemKey ?? null }),
+    () => timeline({ turns, runs, drafts, events: id ? events : NO_EVENTS, needs, labels, verdicts, ticketKey: view?.workstream.itemKey ?? null, reporterRepliedAt: view?.reporterRepliedAt ?? null }),
     [turns, runs, drafts, events, id, needs, labels, verdicts, view],
   );
   const byId = useMemo(
@@ -386,7 +386,7 @@ export function TimelineView({
   );
   const empty = turns.length === 0;
   return (
-    <div data-timeline-scope-shown={scope} className="flex min-h-0 flex-1 flex-col">
+    <div data-timeline-scope-shown={scope} className="flex min-h-[8rem] flex-1 flex-col">
       <div className="border-b border-ws-sep px-3 py-1.5">
         {pane ? (
           <TimelineFilterBar label="Filter" value={filter} counts={counts} onChange={setPaneFilter} after={filter === "runs" && toAllRuns} />

@@ -11,7 +11,7 @@ import { usePip } from "./pipStore";
 import { usePipHome } from "./pipHomeStore";
 import { useToasts } from "./toasts";
 import { currentNeeds } from "./useNeeds";
-import { workstreamStatus } from "./pipHomeLogic";
+import { workstreamStatus } from "../lib/workstreamStatus";
 import { heldBanner } from "../lib/workstreamHold";
 import { useWorkstreams } from "./workstreamsStore";
 import { withersOf } from "./useWorkstreamWithers";
@@ -124,7 +124,7 @@ describe("a workstream that waits on the reporter", () => {
     await backend.proposalsApprove(asked.id);
     await useWorkstreams.getState().refresh();
     expect(stored(id).waitingOnReporter?.since).toBeTruthy();
-    expect(workstreamStatus(stored(id), [])).toBe("Waiting on the reporter");
+    expect(workstreamStatus(stored(id), []).word).toBe("Waiting on reporter");
     expect(currentNeeds().filter((n) => n.workstreamId === id && n.kind !== "draft")).toEqual([]);
     expect(stored(id).clarity ?? null).toBeNull();
     // Holding and resuming is the person resuming: the wait is over.
@@ -156,8 +156,9 @@ describe("a reporter's reply comment ends the wait", () => {
     await useWorkstreams.getState().refresh();
     expect(stored(id).waitingOnReporter ?? null).toBeNull();
     expect(stored(id)).toMatchObject({ reporterReplied: true, changedWhileWaiting: true });
+    expect(Number.isNaN(Date.parse(stored(id).reporterRepliedAt ?? ""))).toBe(false);
     expect(stored(id).workstream.heldReason).toBeNull();
-    expect(workstreamStatus(stored(id), [])).not.toBe("Waiting on the reporter");
+    expect(workstreamStatus(stored(id), []).word).not.toBe("Waiting on reporter");
     expect(withersOf([stored(id)], { events: { [id]: events(id) }, byTicket: {}, runs: [], proposals: {} }, Date.now() + 5 * 86_400_000)[id]?.reporter).toBeUndefined();
   });
 });

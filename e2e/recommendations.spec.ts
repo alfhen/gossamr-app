@@ -147,8 +147,8 @@ test.describe("B2: a hold the person chose is not a need", () => {
     await expect(needsYouCount(page)).toHaveText("0");
     await expect(needsYouTray(page)).toContainText("Nothing needs you.");
     await expect(homeButton(page)).toHaveAccessibleName("Pip home");
-    await expect(workstreamRow(page, "CA-401").locator("[data-status]")).toHaveText("· Held by you");
-    await expect(workstreamRow(page, "CA-401").locator("[data-needs-you-badge]")).toHaveCount(0);
+    await expect(workstreamRow(page, "CA-401").locator("[data-status]")).toHaveText("Held by you");
+    await expect(workstreamRow(page, "CA-401").locator('[data-status="needs-you"]')).toHaveCount(0);
 
     // Undo of the hold works as before.
     await expect(toast(page)).toContainText("Held CA-401.");
@@ -386,10 +386,10 @@ test.describe("D1: Pip speaks up when a ticket is unclear", () => {
     await askPip(page, "where do we stand?");
     await settled(page);
     await expect(pipPane(page)).toContainText(VAGUE_WORDS);
-    // Only its first turn does: the second doesn't say it again. (The notice above the conversation says it once more, in its own box.)
+    // Only its first turn does: the second doesn't say it again. (The notice above the conversation says it once more, in its own box, the status pill's detail a third time, and the pill's hint for screen readers, which explains the phrase, a fourth.)
     await askPip(page, "where do we stand now?");
     await settled(page);
-    expect(((await pipPane(page).innerText()).match(/may be unclear/g) ?? []).length).toBe(2);
+    expect(((await pipPane(page).innerText()).match(/may be unclear/g) ?? []).length).toBe(4);
     await expect(pipPane(page).locator("[data-clarity-notice]")).toContainText("CA-408 may be unclear");
 
     // A ticket whose description says what done looks like, what is in scope and who is waiting is not remarked on.

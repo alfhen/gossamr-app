@@ -103,6 +103,9 @@ pub struct WorkstreamView {
     /// chosen since. Always with `changed_while_waiting`.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub reporter_replied: bool,
+    /// When that reply was written (the first comment that ended the wait): the timeline's "The reporter replied on the ticket".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reporter_replied_at: Option<chrono::DateTime<Utc>>,
     pub budget: BudgetView,
 }
 
@@ -143,19 +146,27 @@ pub struct ReporterFollow {
 /// line, so one newer than the wait's start ends the wait too, as the reporter's reply. A reply is placed among the audit
 /// lines by its time, so a later choice of the person settles it.
 pub fn reporter_follow(events: &[WorkstreamEvent], replies: &[chrono::DateTime<Utc>]) -> ReporterFollow {
+    reporter_follow_at(events, replies).0
+}
+
+/// `reporter_follow` and, while the reporter's reply is what ended the wait (`replied`), the time of the first comment that did:
+/// where the timeline places "The reporter replied on the ticket". Mirrored by `followWithReply` in src/lib/reporterWait.ts.
+pub fn reporter_follow_at(events: &[WorkstreamEvent], replies: &[chrono::DateTime<Utc>]) -> (ReporterFollow, Option<chrono::DateTime<Utc>>) {
+    let mut replied_at = None;
     let mut asked: HashSet<&str> = HashSet::new();
     let mut now = ReporterFollow::default();
     let mut replies: Vec<chrono::DateTime<Utc>> = replies.to_vec();
     replies.sort();
     let mut next = 0;
-    let reply = |now: &mut ReporterFollow, at: chrono::DateTime<Utc>| {
+    let reply = |now: &mut ReporterFollow, replied_at: &mut Option<chrono::DateTime<Utc>>, at: chrono::DateTime<Utc>| {
         if now.waiting.is_some_and(|since| at > since) {
             *now = ReporterFollow { waiting: None, changed: true, replied: true };
+            *replied_at = Some(at);
         }
     };
     for e in events {
         while next < replies.len() && replies[next] < e.at {
-            reply(&mut now, replies[next]);
+            reply(&mut now, &mut replied_at, replies[next]);
             next += 1;
         }
         let person = e.actor == Actor::Person;
@@ -175,9 +186,9 @@ pub fn reporter_follow(events: &[WorkstreamEvent], replies: &[chrono::DateTime<U
         }
     }
     for at in &replies[next..] {
-        reply(&mut now, *at);
+        reply(&mut now, &mut replied_at, *at);
     }
-    now
+    (now, replied_at.filter(|_| now.replied))
 }
 
 /// The times of the comments on the cached ticket `t` that someone other than `me` (an account id) wrote, oldest first.
@@ -434,6 +445,7 @@ impl WorkstreamView {
             waiting_on_reporter: None,
             changed_while_waiting: false,
             reporter_replied: false,
+            reporter_replied_at: None,
         }
     }
 }
@@ -741,7 +753,7 @@ impl Core {
         let escalation = escalation_of(&workstream, runs, |r| verdicts.reviews.get(&r.id).copied(), events, drafts);
         let readiness = readiness_of(&workstream, runs, |r| verdicts.readiness.get(&r.id).cloned(), &ticket.replies, events);
         let clarity = clarity_of(&workstream, runs, &ticket.gaps, &ticket.replies, events);
-        let follow = reporter_follow(events, &ticket.replies);
+        let (follow, replied_at) = reporter_follow_at(events, &ticket.replies);
         let waiting = follow.waiting.filter(|_| workstream.closed_at.is_none()).map(|since| ReporterWait { since });
         let mut view = WorkstreamView::of(workstream, runs, &verdicts.reviews);
         view.escalation = escalation;
@@ -751,6 +763,7 @@ impl Core {
         let open = view.workstream.closed_at.is_none();
         view.changed_while_waiting = follow.changed && open;
         view.reporter_replied = follow.replied && open;
+        view.reporter_replied_at = replied_at.filter(|_| open);
         if let Some(build) = pushed_build(runs) {
             view.waiting_for_pr = waiting_for(build, self.pull_request_of(build));
         }
@@ -1760,6 +1773,10 @@ mod tests {
                 let since = expect["since"].as_str().map(|s| s.parse::<chrono::DateTime<Utc>>().unwrap());
                 assert_eq!((got.waiting, got.changed), (since, expect["changed"].as_bool().unwrap()), "{}", case["name"]);
                 assert_eq!(got.replied, expect["replied"].as_bool().unwrap(), "{}", case["name"]);
+                if let Some(at) = expect.get("repliedAt") {
+                    let want = at.as_str().map(|s| s.parse::<chrono::DateTime<Utc>>().unwrap());
+                    assert_eq!(reporter_follow_at(&audit_of(case), &replies_of_case(case)).1, want, "{}", case["name"]);
+                }
                 assert_eq!(got.waiting.is_some(), expect["waiting"].as_bool().unwrap(), "{}", case["name"]);
             }
         }
@@ -1928,10 +1945,14 @@ mod tests {
             let ended = view().await;
             assert!(ended.waiting_on_reporter.is_none() && ended.changed_while_waiting && ended.reporter_replied, "the reporter replied");
             assert_eq!(serde_json::to_value(&ended).unwrap()["reporterReplied"], true);
+            assert!(ended.reporter_replied_at.is_some(), "the view carries when the reporter replied");
+            assert!(serde_json::to_value(&ended).unwrap()["reporterRepliedAt"].is_string());
+            assert!(still.reporter_replied_at.is_none());
             let listed = fx.core.workstreams(&fx.scope, false).await.unwrap().into_iter().find(|v| v.workstream.id == ws.id).unwrap();
             assert!(listed.reporter_replied && listed.waiting_on_reporter.is_none(), "the list agrees");
             fx.core.record_workstream_event(&fx.scope, WorkstreamEvent::new(&ws.id, Actor::Person, "readiness_overridden", Utc::now() + chrono::Duration::hours(2))).await.unwrap();
             assert!(!view().await.reporter_replied, "choosing settles it");
+            assert!(view().await.reporter_replied_at.is_none(), "and takes the reply's time with it");
         }
 
         #[test]

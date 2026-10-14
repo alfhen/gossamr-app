@@ -11,13 +11,13 @@ const at = (over: Partial<PipHomeKeyState> = {}): PipHomeKeyState => ({ column: 
 /** A stand-in for an element: its tag, and whether it sits inside something editable. */
 const el = (tagName: string, editable = false) => ({ tagName, isContentEditable: editable, closest: (s: string) => (editable && s.includes("contenteditable") ? {} : null) });
 
-const ALL = ["needs", "workstreams", "timeline", "pane", "rail", "composer"] as const;
+const ALL = ["needs", "workstreams", "day", "timeline", "pane", "rail", "composer"] as const;
 const SHOWN = ["needs", "workstreams", "timeline", "rail", "composer"] as const;
 const f6 = (region: PipHomeKeyState["region"], over: Partial<PipHomeKeyEvent> = {}, state: Partial<PipHomeKeyState> = {}) => pipHomeKey(key("F6", over), at({ region, regions: ALL, ...state }));
 
 describe("pipHomeKey: regions", () => {
-  it("F6 goes through Needs you, the workstreams, the timeline, the decision pane, the steps and the composer, wrapping around", () => {
-    const order = ["needs", "workstreams", "timeline", "pane", "rail", "composer", "needs"] as const;
+  it("F6 goes through Needs you, the workstreams, the day card, the timeline, the decision pane, the steps and the composer, wrapping around", () => {
+    const order = ["needs", "workstreams", "day", "timeline", "pane", "rail", "composer", "needs"] as const;
     for (let i = 0; i < order.length - 1; i++) expect(f6(order[i])).toEqual({ type: "region", to: order[i + 1] });
     for (let i = order.length - 1; i > 0; i--) expect(f6(order[i], { shiftKey: true })).toEqual({ type: "region", to: order[i - 1] });
     expect(f6("needs", { shiftKey: true })).toEqual({ type: "region", to: "composer" });
@@ -32,6 +32,12 @@ describe("pipHomeKey: regions", () => {
     expect(f6("pane", { shiftKey: true }, { regions: SHOWN })).toEqual({ type: "region", to: "timeline" });
   });
 
+  it("passes the day card by while neither Plan my week nor Start my day is shown", () => {
+    expect(f6("workstreams", {}, { regions: SHOWN })).toEqual({ type: "region", to: "timeline" });
+    expect(f6("timeline", { shiftKey: true }, { regions: SHOWN })).toEqual({ type: "region", to: "workstreams" });
+    expect(f6("workstreams")).toEqual({ type: "region", to: "day" });
+  });
+
   it("starts from the column's own region when none is given", () => {
     expect(pipHomeKey(key("F6"), at({ column: "list" }))).toEqual({ type: "region", to: "workstreams" });
     expect(pipHomeKey(key("F6"), at({ column: "conversation" }))).toEqual({ type: "region", to: "needs" });
@@ -41,7 +47,7 @@ describe("pipHomeKey: regions", () => {
   it("Cmd+] and Ctrl+] go on, Cmd+[ and Ctrl+[ back", () => {
     expect(pipHomeKey(key("]", { metaKey: true }), at({ region: "needs", regions: ALL }))).toEqual({ type: "region", to: "workstreams" });
     expect(pipHomeKey(key("]", { ctrlKey: true }), at({ region: "rail", regions: ALL }))).toEqual({ type: "region", to: "composer" });
-    expect(pipHomeKey(key("[", { metaKey: true }), at({ region: "timeline", regions: ALL }))).toEqual({ type: "region", to: "workstreams" });
+    expect(pipHomeKey(key("[", { metaKey: true }), at({ region: "timeline", regions: ALL }))).toEqual({ type: "region", to: "day" });
     expect(pipHomeKey(key("[", { ctrlKey: true }), at({ region: "needs", regions: ALL }))).toEqual({ type: "region", to: "composer" });
   });
 
@@ -213,6 +219,24 @@ describe("Pip home's footer hint", () => {
     expect(html).toContain("<kbd");
     expect(html).toContain("next region");
     expect(html).not.toContain("Drag a card");
+  });
+});
+
+describe("the toast as an F6 stop", () => {
+  it("comes after the composer on Pip home, and F6 from it goes back to the first region; passed by while no toast shows", () => {
+    expect(f6("composer", {}, { regions: ["needs", "workstreams", "timeline", "rail", "composer", "toast"] })).toEqual({ type: "region", to: "toast" });
+    expect(f6("toast", {}, { regions: ["needs", "workstreams", "timeline", "rail", "composer", "toast"] })).toEqual({ type: "region", to: "needs" });
+    expect(f6("needs", { shiftKey: true }, { regions: ["needs", "workstreams", "timeline", "rail", "composer", "toast"] })).toEqual({ type: "region", to: "toast" });
+    expect(f6("composer", {}, { regions: SHOWN })).toEqual({ type: "region", to: "needs" });
+  });
+
+  it("is a stop in the workspace layout too, after Pip's pane, only while a toast is shown", () => {
+    const all = ["main", "peek", "pip", "toast"] as const;
+    expect(nextRegion(all, "pip", 1)).toBe("toast");
+    expect(nextRegion(all, "toast", 1)).toBe("main");
+    expect(nextRegion(all, "main", -1)).toBe("toast");
+    expect(nextRegion(["main", "pip"], "pip", 1)).toBe("main");
+    expect(nextRegion(["main", "toast"], "main", 1)).toBe("toast");
   });
 });
 

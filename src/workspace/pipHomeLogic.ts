@@ -1,8 +1,7 @@
 import { safeToBatch } from "../lib/needs";
-import { WAITING_STATUS } from "../lib/reporterWait";
 import { inWorkstreamPane } from "../lib/proposals";
 import { shortHeld } from "../lib/workstreamHold";
-import { byQueue, REVIEW_POSTED, reviewPosted, STAGE_LABEL, stageText } from "../lib/workstreamStage";
+import { byQueue, REVIEW_POSTED, reviewPosted, STAGE_LABEL } from "../lib/workstreamStage";
 import type { CodeChange, Proposal, ReviewView, Run, RunKind, WorkstreamEvent, WorkstreamView } from "../types";
 import { liveCounts, liveWords, needsPerson, stateView, stoppedAtLimit, type Tone } from "./agentsLogic";
 import { shownVerdict, verdictChip } from "./runSheetLogic";
@@ -12,34 +11,7 @@ import type { WorkstreamSuggestionScene } from "./suggestions";
 
 export { shortHeld };
 
-/** Kinds in the order a workstream goes through them, for the furthest run. */
-const RANK: Record<Run["spec"]["kind"], number> = { investigate: 0, triage: 1, plan: 2, build: 3, review: 4, verify: 5 };
-
 const RUNNING = new Set<Run["state"]>(["launching", "working"]);
-
-/**
- * A row's short status, the first that applies: why it is held; waiting for the build's pull request; the furthest
- * run going ("Plan running") or waiting its turn ("Build queued"); "Review · changes needed" while the newest finished
- * review is blocking; "Needs you" while a run asks something or anything else waits on the person in it (`waiting`, its
- * drafts among them); the last run queued failed ("Review failed"); else "Done" or "Idle".
- */
-export function workstreamStatus(view: WorkstreamView, runs: readonly Run[], waiting = 0): string {
-  const held = shortHeld(view.workstream.heldReason, view.workstream.drifted);
-  if (held) return held;
-  if (view.waitingForPr) return "waiting for PR";
-  const own = runs.filter((r) => view.runs.includes(r.id));
-  const furthest = (pick: (r: Run) => boolean) => own.filter(pick).sort((a, b) => RANK[a.spec.kind] - RANK[b.spec.kind] || byQueue(a, b)).pop();
-  const going = furthest((r) => RUNNING.has(r.state));
-  if (going) return `${STAGE_LABEL[going.spec.kind]} running`;
-  const queued = furthest((r) => r.state === "queued");
-  if (queued) return `${STAGE_LABEL[queued.spec.kind]} queued`;
-  if (view.waitingOnReporter) return WAITING_STATUS;
-  if (view.reviewBlocking) return stageText(view.stage, null, true);
-  if (waiting > 0 || own.some((r) => needsPerson(r) || stoppedAtLimit(r))) return "Needs you";
-  const last = [...own].sort(byQueue).pop();
-  if (last?.state === "failed") return `${STAGE_LABEL[last.spec.kind]} failed`;
-  return view.stage === "done" ? "Done" : "Idle";
-}
 
 /** When a workstream was last held, from its audit (`events`, oldest first); null when the audit never says. */
 export function lastHeldAt(events: readonly Pick<WorkstreamEvent, "action" | "at">[]): string | null {

@@ -24,6 +24,7 @@ import { undoLog } from "./undo";
 import { usePipHome } from "./pipHomeStore";
 import { showAllRuns, showTimeline } from "./TimelineFilterBar";
 import { showStartMyDay } from "./StartMyDay";
+import { showPlanMyWeek } from "./planActions";
 import { giveBackClarity } from "./clarityActions";
 import { learnedList } from "../lib/clarityLearning";
 
@@ -221,6 +222,12 @@ export function appActions(): CommandActions {
     startWorkstreamOn: (item) => void useWorkstreams.getState().start(item.item),
     showTimeline,
     startMyDay: showStartMyDay,
+    planMyWeek: showPlanMyWeek,
+    showWorkstreamStatus: (state) => {
+      usePipHome.getState().setStatusFilter(state);
+      if (state) usePipHome.getState().closeDecision();
+      useTabs.getState().setRoute("pip");
+    },
     openJiraSent: () => tabs.setRoute("sent"),
     giveBackClarity: () => void giveBackClarity(),
   };
@@ -349,6 +356,7 @@ export function Palette() {
       onPipHome: useTabs.getState().route === "pip",
       onAgents: useTabs.getState().route === "agents",
       clarityLearned: learnedList(clarityLearning).length,
+      statusFilter: usePipHome.getState().statusFilter,
     };
     const commands = buildCommands(sorted, allSavedViews({ savedViews }), actions, ctx);
     const all = Object.values(items);

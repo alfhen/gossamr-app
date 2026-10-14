@@ -94,19 +94,24 @@ const needText = (n: Need) => `${n.ticketKey ?? "General"} · ${n.title}`;
  */
 export const inClarityScope = isMine;
 
-/** The unclear tickets: every open workstream whose notice still names a gap the person hasn't taught away, then the person's own tickets with no workstream. */
+/**
+ * The unclear tickets: every open workstream whose notice still names a gap the person hasn't taught away, then the person's own tickets with no workstream.
+ * A ticket that already has a need is left out: it is listed under its Needs you group, and the need is the thing to do first.
+ */
 function unclearEntries(i: StartMyDayInput): DayEntry[] {
   const out: DayEntry[] = [];
   const opened = new Set<string>();
+  const needWs = new Set(i.needs.flatMap((n) => (n.workstreamId ? [n.workstreamId] : [])));
+  const needKeys = new Set(i.needs.flatMap((n) => (n.ticketKey ? [n.ticketKey] : [])));
   for (const v of i.workstreams) {
     const key = v.workstream.itemKey;
     if (!key || v.workstream.closedAt) continue;
     opened.add(`${v.workstream.connectionId}:${key}`);
     const gaps = flaggedGaps(v.clarity?.gaps ?? [], i.learning, projectOfKey(key));
-    if (v.clarity && gaps.length) out.push({ key: `unclear:${v.workstream.id}`, text: `${key} may be unclear: it ${gapsPhrase(gaps)}.`, label: "Open workstream", action: { type: "workstream", id: v.workstream.id } });
+    if (v.clarity && gaps.length && !needWs.has(v.workstream.id) && !needKeys.has(key)) out.push({ key: `unclear:${v.workstream.id}`, text: `${key} may be unclear: it ${gapsPhrase(gaps)}.`, label: "Open workstream", action: { type: "workstream", id: v.workstream.id } });
   }
   const own = i.items
-    .filter((t) => t.status.category !== "done" && isMine(t, i.me) && !opened.has(`${t.item.connectionId}:${t.item.key}`))
+    .filter((t) => t.status.category !== "done" && isMine(t, i.me) && !opened.has(`${t.item.connectionId}:${t.item.key}`) && !needKeys.has(t.item.key))
     .sort((a, b) => b.updated.localeCompare(a.updated))
     .flatMap((t): DayEntry[] => {
       const gaps: ClarityGap[] = flaggedGaps(clarityGaps(docText(t.body)), i.learning, projectOfKey(t.item.key));

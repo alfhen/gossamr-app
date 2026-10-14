@@ -56,6 +56,8 @@ describe("the Start my day card", () => {
     expect(html).toContain("and 2 more");
     expect(html).toMatch(/<button[^>]*data-day-done[^>]*>Done for now<\/button>/);
     expect(html).toMatch(/<button[^>]*data-day-sent[^>]*>What Jira saw from me<\/button>/);
+    expect(html).toContain("Once a day: what needs you, what is stuck and what may be unclear. Nothing is posted.");
+    expect(html).toMatch(/<button[^>]*data-day-done[^>]*title="Hides Start my day until tomorrow/);
     // It only shows; the card has no button that posts, approves or sends anything.
     expect(html).not.toMatch(/Post comment|Approve|Send/);
   });

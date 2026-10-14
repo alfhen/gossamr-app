@@ -79,7 +79,8 @@ test.describe("Start my day", () => {
     await page.keyboard.press("Escape");
     await expect(needsPane(page)).toHaveCount(0);
 
-    // It is the first thing in the conversation column, a region of its own.
+    // It is General's card, the first thing in the conversation column, a region of its own.
+    await workstreamRow(page, "General").click();
     await expect(card(page)).toBeVisible();
     await expect(homeConversationRegion(page).locator("[data-start-my-day]")).toBeVisible();
     await expect(card(page).getByRole("heading", { name: "Start my day" })).toBeVisible();
@@ -98,12 +99,17 @@ test.describe("Start my day", () => {
     await expect(workstreamRow(page, "CA-409")).toHaveAttribute("aria-selected", "true");
     await expect(notice(pipHome(page))).toContainText("CA-409 may be unclear");
 
+    // The workstream has no card of its own: Start my day is General's.
+    await expect(card(page)).toHaveCount(0);
+    await workstreamRow(page, "General").click();
+
     // The draft waiting: its decision opens in the pane, and the card gives the room.
     await line(page, "drafts").getByRole("button", { name: /^Review: CA-402/ }).click();
     await expect(needsPane(page).getByRole("article", { name: "Comment on CA-402" })).toBeVisible();
     await expect(card(page)).toHaveCount(0);
     await page.keyboard.press("Escape");
     await expect(needsPane(page)).toHaveCount(0);
+    await workstreamRow(page, "General").click();
     await expect(card(page)).toBeVisible();
     expect(await jiraWrites(page)).toEqual([]);
 
@@ -143,6 +149,7 @@ test.describe("Start my day", () => {
     expect((await actions(page, "reporter_nudged")).map((e) => e.actor)).toEqual(["person"]);
     // The card gave the room to the decision; once it closes, the line says a nudge is drafted and offers none.
     await page.keyboard.press("Escape");
+    await workstreamRow(page, "General").click();
     await expect(line(page, "reporter")).toContainText("a nudge is drafted");
     await expect(line(page, "reporter").getByRole("button", { name: /Draft a nudge/ })).toHaveCount(0);
     await expect(line(page, "reporter").getByRole("button", { name: /^Open workstream/ })).toBeVisible();
@@ -157,7 +164,7 @@ test.describe("the reporter nudge", () => {
     await openPipHome(page);
     await workstreamRow(page, "CA-408").click();
     await waitingOn(page, 1.5);
-    await expect(workstreamRow(page, "CA-408").locator("[data-status]")).toHaveText("· Waiting on the reporter");
+    await expect(workstreamRow(page, "CA-408").locator("[data-status]")).toHaveText("Waiting on reporter");
     // Under two days: said, and no offer.
     await expect(nextLine(page)).toHaveText("Next: Waiting on the reporter since yesterday; nothing starts on its own.");
     await expect(nextLine(page).getByRole("button", { name: "Draft a nudge" })).toHaveCount(0);
@@ -219,7 +226,8 @@ test.describe("What Jira saw from me", () => {
     // Newest first.
     await expect(rows.nth(0)).toContainText("CA-409");
     await expect(rows.nth(1)).toContainText("CA-408");
-    await expect(rows.nth(0).locator("[data-sent-label]")).toHaveText("Comment");
+    await expect(rows.nth(0).locator("[data-sent-label]")).toHaveText("Questions to the reporter");
+    await expect(rows.nth(0)).toHaveAttribute("data-sent-kind", "comment");
     await expect(rows.nth(0).locator("[data-sent-edited]")).toHaveText("Gossamr drafted it; you edited it before approving");
     await expect(rows.nth(0).locator("[data-sent-edited]")).toHaveAttribute("data-sent-edited", "yes");
     await expect(rows.nth(1).locator("[data-sent-edited]")).toHaveText("Gossamr drafted it; posted as drafted");
@@ -284,8 +292,8 @@ test.describe("the clarity notice learns from Looks fine", () => {
     // Settings says what it learned and gives it back for the project.
     await page.locator("aside", { has: page.getByRole("navigation", { name: "Workspace" }) }).getByRole("button", { name: "Settings" }).click();
     const learned = page.locator("[data-clarity-learning]");
-    await expect(learned.locator('[data-clarity-project="CA"]')).toContainText("CA tickets that have a very short description");
-    await learned.locator('[data-clarity-project="CA"]').getByRole("button", { name: "Give back" }).click();
+    await expect(learned.locator('[data-clarity-project="CA"]')).toContainText("short description");
+    await learned.locator('[data-clarity-project="CA"]').getByRole("button", { name: "Give back all" }).click();
     await expect(learned).toContainText("Nothing learned yet.");
     await expectToast(page, "Gossamr will flag unclear CA tickets as before.");
     expect((await actions(page, "clarity_reset")).map((e) => [e.actor, e.detail])).toEqual([["person", "CA"]]);
