@@ -186,7 +186,7 @@ I read all four. I did not open the Klaviyo flow definitions, which live outside
 - Should the second email keep its two-day delay, or does design want it changed with this?
 
 For Jira:
-Three emails move to the shared layout, subjects and delays come from one config, six steps, tests included. Two questions need an answer before building: whether Klaviyo sets its own subjects, and whether the second email keeps its delay. The full plan is in the description.`;
+Three emails move to the shared layout, subjects and delays come from one config, six steps, tests included. Two questions need an answer before building: whether Klaviyo sets its own subjects, and whether the second email keeps its delay.`;
 
 /** What the sample plan run writes on its second pass, once the person has sent it back with the open questions. */
 export const SCRIPTED_PLAN_ANSWERED = `${SCRIPTED_PLAN_RESULT.split("## Open questions for a person")[0]}## Decisions on the open questions
@@ -195,7 +195,7 @@ export const SCRIPTED_PLAN_ANSWERED = `${SCRIPTED_PLAN_RESULT.split("## Open que
 - Second email: it keeps its two-day delay; the config reads it from one place.
 
 For Jira:
-Both open questions are settled: Klaviyo keeps its own subjects and the second email keeps its two-day delay. The plan in the description is updated to match.`;
+Both open questions are settled: Klaviyo keeps its own subjects and the second email keeps its two-day delay. The plan now builds on both answers.`;
 
 const PLAN_ANSWERED_SUMMARY = "Plan updated: both questions are settled and the plan follows the decisions";
 
