@@ -157,6 +157,11 @@ describe("planMyWeek: needs in General that name a ticket", () => {
     const me = [ME, { connectionId: "c2", accountId: "me" }];
     expect(planMyWeek(input({ items: two, me, needs: [loose("CA-1")] })).some((p) => p.because.includes("needs you here"))).toBe(false);
     expect(planMyWeek(input({ items: [two[0]], needs: [loose("CA-1")] }))[0].because).toContain("thing needs you here");
+    // A Done ticket with the key on the other connection is never picked, so it leaves the open one unambiguous.
+    const doneElsewhere = ticket("CA-1", { item: { connectionId: "c2", externalId: "CA-1", key: "CA-1" }, status: { id: "9", name: "Done", category: "done" } } as Partial<WorkItem>);
+    const out = planMyWeek(input({ items: [two[0], doneElsewhere], me, needs: [loose("CA-1")] }));
+    expect(out[0]).toMatchObject({ id: "ticket:c:CA-1" });
+    expect(out[0].because).toContain("thing needs you here");
   });
 
   it("leaves out a held or waiting workstream even when a need in General names its ticket, and keeps an eligible one", () => {
