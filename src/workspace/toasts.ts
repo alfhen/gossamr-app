@@ -121,3 +121,23 @@ export const useToasts = create<ToastState>((set, get) => {
 });
 
 export const messageOf = (e: unknown): string => (e instanceof Error ? e.message : typeof e === "string" ? e : JSON.stringify(e));
+
+/** The notes about what Looks fine taught, and the project each is about: only the newest of them is worth showing. */
+const learning = new Map<number, string>();
+
+/** Takes down the learning notes (on screen or waiting) about these projects: what they said is no longer so. */
+export function retireLearning(projects: readonly string[]) {
+  for (const [id, project] of [...learning]) {
+    if (!projects.includes(project)) continue;
+    learning.delete(id);
+    useToasts.getState().dismiss(id);
+  }
+}
+
+/** A note about what Looks fine taught in a project: it replaces an older one about it, on screen or waiting, so the newest says what stands. */
+export function pushLearning(project: string, text: string, current?: () => boolean): number | null {
+  retireLearning([project]);
+  const id = useToasts.getState().push(text, "info", undefined, { current });
+  if (id !== null) learning.set(id, project);
+  return id;
+}

@@ -5,9 +5,9 @@ import { itemRef } from "../backend/mockConnector";
 import type { StartMyDay } from "../lib/startMyDay";
 import type { Intent, Proposal } from "../types";
 import { useWorkspace } from "../workspaceStore";
-import { SentRow } from "./JiraSentView";
+import { JiraSentView, SentRow } from "./JiraSentView";
 import { jiraSent } from "../lib/jiraSent";
-import { DAY_EMPTY, StartMyDayView, doneForNow, runDayAction, showStartMyDay } from "./StartMyDay";
+import { DAY_EMPTY, DayLineView, StartMyDayView, doneForNow, runDayAction, showStartMyDay } from "./StartMyDay";
 import { usePipHome } from "./pipHomeStore";
 import { usePrefs } from "./prefs";
 import { loadTabs, useTabs } from "./tabsStore";
@@ -60,6 +60,17 @@ describe("the Start my day card", () => {
     expect(html).toMatch(/<button[^>]*data-day-done[^>]*title="Hides Start my day until tomorrow/);
     // It only shows; the card has no button that posts, approves or sends anything.
     expect(html).not.toMatch(/Post comment|Approve|Send/);
+  });
+
+  it("turns 'and N more' into a button that lists the rest in place, when the line holds them", () => {
+    const more = (n: number) => entry(`x${n}`, `CA-${n} · Draft comment`, "Open", { type: "workstream", id: `w${n}` });
+    const line = { kind: "approve" as const, title: "5 to approve", count: 5, more: 2, entries: [more(1), more(2), more(3)], rest: [more(4), more(5)] };
+    const html = renderToStaticMarkup(<DayLineView line={line} />);
+    expect(html).toMatch(/<button[^>]*data-day-more[^>]*aria-expanded="false"[^>]*>Show 2 more<\/button>/);
+    expect(html).not.toContain("CA-4 ");
+    const open = renderToStaticMarkup(<DayLineView line={line} initiallyOpen />);
+    expect(open.match(/data-day-entry=/g)).toHaveLength(5);
+    expect(open).toMatch(/aria-expanded="true"[^>]*>Show fewer</);
   });
 
   it("says what a quiet day looks like instead of an empty box", () => {
@@ -116,5 +127,12 @@ describe("a row of What Jira saw from me", () => {
     expect(html).toMatch(/aria-expanded="false"[^>]*>Show all</);
     expect(html).not.toContain("data-sent-detail");
     expect(html).not.toContain("Second paragraph.");
+  });
+});
+
+describe("What Jira saw from me: the way back", () => {
+  it("has a back link to Pip home in its header", () => {
+    const html = renderToStaticMarkup(<JiraSentView />);
+    expect(html).toMatch(/<button[^>]*data-sent-back[^>]*>← Pip home<\/button>/);
   });
 });

@@ -1,6 +1,6 @@
 import type { Intent, Proposal, WorkstreamEvent, WorkstreamView } from "../types";
 import { docText } from "./docs";
-import { isReporterNudge, isReporterQuestions, makerName, targetOf, workstreamOf } from "./proposals";
+import { isReporterFollowUp, isReporterNudge, isReporterQuestions, makerName, targetOf, workstreamOf } from "./proposals";
 import { isJiraWrite } from "./workstreamWither";
 
 /**
@@ -50,9 +50,13 @@ export interface SentEntry {
 
 const SHORT = 120;
 
-/** The first line of `text`, cut to `SHORT` characters. */
+/** A line that only greets ("Hi @Mette Lund,"): it says nothing about what was posted. */
+const GREETING = /^(hi|hello|hey|hej|dear)\b[^\n]{0,60}$/i;
+
+/** The first line of `text` that says something, cut to `SHORT` characters: a leading greeting is skipped. */
 const short = (text: string) => {
-  const first = text.trim().split("\n")[0] ?? "";
+  const all = text.trim().split("\n").map((l) => l.trim()).filter(Boolean);
+  const first = (all.length > 1 && GREETING.test(all[0]) ? all[1] : all[0]) ?? "";
   return first.length > SHORT ? `${first.slice(0, SHORT - 1).trimEnd()}…` : first;
 };
 
@@ -123,7 +127,7 @@ export function jiraSent({ proposals, events, workstreams }: SentInput): SentEnt
       at: approved?.at ?? p.updatedAt,
       ticketKey: targetOf(p.intent)?.key ?? p.created[0]?.key ?? null,
       ...what,
-      ...(isReporterQuestions(p) ? { label: "Questions to the reporter" } : isReporterNudge(p) ? { label: "Nudge to the reporter" } : {}),
+      ...(isReporterFollowUp(p) ? { label: "Follow-up questions to the reporter" } : isReporterQuestions(p) ? { label: "Questions to the reporter" } : isReporterNudge(p) ? { label: "Nudge to the reporter" } : {}),
       workstreamId,
       workstream: view ? (view.workstream.itemKey ?? view.workstream.title) : null,
       madeBy: isReporterQuestions(p) || isReporterNudge(p) ? "Gossamr" : makerName(p.createdBy),
@@ -134,8 +138,8 @@ export function jiraSent({ proposals, events, workstreams }: SentInput): SentEnt
   return out.sort((a, b) => b.at.localeCompare(a.at) || (a.id < b.id ? 1 : -1));
 }
 
-/** How the entry reads on its line about the draft: "Pip drafted it, you edited it", "Pip drafted it; posted as drafted". */
+/** How the entry reads on its line about the draft: "Pip drafted it, you edited it", "Pip drafted it; posted without changes". */
 export function editedWords(e: Pick<SentEntry, "madeBy" | "edited">): string {
   if (e.madeBy === "You") return e.edited ? "You wrote it and edited it before approving" : "You wrote it";
-  return e.edited ? `${e.madeBy} drafted it; you edited it before approving` : `${e.madeBy} drafted it; posted as drafted`;
+  return e.edited ? `${e.madeBy} drafted it; you edited it before approving` : `${e.madeBy} drafted it; posted without changes`;
 }

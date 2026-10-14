@@ -48,13 +48,16 @@ export const READINESS_LABEL = READINESS_COMMENT_LABEL;
 
 /**
  * The comment "Ask the reporter" drafts, as `reporter_comment` in src-tauri/src/inbox/workstreams.rs: a fixed frame around
- * the questions the Triage listed, or around the four things a ticket needs when it listed none.
+ * the questions the Triage listed, or around the four things a ticket needs when it listed none. `replied`: the reporter has
+ * answered since the last ask, so the frame thanks them and says what is still open.
  */
-export function reporterComment(key: string, reporter: string | null, questions: readonly string[]): string {
+export function reporterComment(key: string, reporter: string | null, questions: readonly string[], replied = false): string {
   const hello = reporter ? `Hi @${reporter},` : "Hi,";
   const asks = questions.length
     ? questions.map((q) => `- ${q}`).join("\n")
     : "- What is the goal?\n- How will we know it is done (the acceptance criteria)?\n- What is in scope, and what is out?\n- Who asked for it, and who is waiting on it?";
+  // The reporter has answered since the last ask: thank them and say what is still open, rather than repeat the first ask.
+  if (replied) return `${hello}\n\nThanks for your answer above. Before ${key} can be planned, a few things are still open:\n\n${asks}\n\nCould you answer these here on the ticket? Thanks.`;
   return `${hello}\n\nBefore ${key} can be planned we need a few things cleared up:\n\n${asks}\n\nCould you answer them here on the ticket? Thanks.`;
 }
 

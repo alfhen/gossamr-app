@@ -168,11 +168,11 @@ describe("Start my day", () => {
     });
   });
 
-  it("keeps the lines in the order of the day: needs, unclear, reporter, cobwebs, drafts", () => {
+  it("keeps the lines in the order of the day: needs, the drafts waiting on you, unclear, reporter, cobwebs", () => {
     const v = view("w1", "CA-408", { clarity: { gaps: ["short"] }, waitingOnReporter: { since: ago(3) } });
     const w = view("w2", "CA-401");
     const day = startMyDay(input({ needs: [need("u1", "unblock", { workstreamId: "w9", ticketKey: "CA-900" })], workstreams: [v, w], withers: { w2: wither(4) }, proposals: [comment("p1", "CA-401")] }));
-    expect(day.lines.map((l) => l.kind)).toEqual(["unblock", "unclear", "reporter", "cobweb", "drafts"]);
+    expect(day.lines.map((l) => l.kind)).toEqual(["unblock", "drafts", "unclear", "reporter", "cobweb"]);
     expect(day.empty).toBe(false);
   });
 });
@@ -188,5 +188,13 @@ describe("once a day", () => {
     expect(startMyDayShown(dayKey(morning), tomorrow)).toBe(true);
     // A day later than today (a clock turned back) holds it too.
     expect(startMyDayShown("2026-10-20", morning)).toBe(false);
+  });
+});
+
+describe("the order of the lines", () => {
+  it("lists the entries past the first few in `rest`, so the card can show them", () => {
+    const needs = Array.from({ length: 5 }, (_, i) => need(`a${i}`, "approve", { at: `2026-10-12T0${i}:00:00Z` }));
+    const l = line(input({ needs }), "approve")!;
+    expect(l.rest!.map((e) => e.key)).toEqual(["a3", "a4"]);
   });
 });

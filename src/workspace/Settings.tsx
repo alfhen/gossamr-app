@@ -15,6 +15,7 @@ import { workContainers } from "./domains";
 import { WatchingSection } from "./WatchSettings";
 import { gapWords, learnedList, LEARN_AFTER, SHORT_GAP } from "../lib/clarityLearning";
 import { giveBackClarity } from "./clarityActions";
+import { useEscToPipHome } from "./escHome";
 
 export function connectionsOf(containers: { ref: { connectionId: string } }[]): { id: string; name: string; projects: number }[] {
   const counts = new Map<string, number>();
@@ -249,6 +250,7 @@ function ClaritySection() {
           ))}
         </ul>
       )}
+      <p data-clarity-giveback-note className="m-0 text-ws-ink3">Tickets you already said Looks fine to stay unflagged; Flag again on a ticket brings its notice back.</p>
     </div>
   );
 }
@@ -258,6 +260,7 @@ export function Settings() {
   const setTheme = usePrefs((s) => s.setTheme);
   const setUi = usePrefs((s) => s.setUi);
   const agents = useAgentsFlag();
+  useEscToPipHome(agents.enabled);
   const containers = useWorkspace((s) => s.containers);
   const connections = useWorkspace((s) => s.connections);
   const section = useTabs((s) => s.settingsSection);

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Need } from "../lib/needs";
-import { WEEK_PICKS, isoWeek, itemOutcome, movePick, planMyWeek, ticketPick, type PlanItem } from "../lib/planMyWeek";
+import { WEEK_PICKS, isoWeek, itemOutcome, movePick, planMyWeek, ticketPick, weekLabel, type PlanItem } from "../lib/planMyWeek";
 import type { WorkstreamWither } from "../lib/workstreamWither";
 import type { PersonRef, WorkItem } from "../types";
 import { useWorkspace } from "../workspaceStore";
@@ -112,7 +112,10 @@ export function PlanMyWeekView({
     onChange(movePick(picks, from, to));
   };
   const addTicket = (t: WorkItem) => {
-    onChange([...picks, ticketPick(t)]);
+    const pick = ticketPick(t);
+    onChange([...picks, pick]);
+    // The choice button (or the Add button) that was focused is gone or behind: the keyboard goes to the new row.
+    setFocus({ id: pick.id, part: "row" });
     setNote({ ok: true, text: `Added ${t.item.key} ${t.title}` });
     setAdding("");
     setChoices(null);
@@ -141,7 +144,7 @@ export function PlanMyWeekView({
     >
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
         <h2 id="plan-my-week" className="m-0 min-w-0 flex-1 text-sm font-semibold text-ws-ink">
-          Plan my week <span className="font-normal text-ws-ink3">· {week}</span>
+          Plan my week <span className="font-normal text-ws-ink3">· {weekLabel(week)}</span>
         </h2>
         <button type="button" data-plan-propose onClick={onPropose} className={`${button} border-transparent text-ws-ink2 underline`}>
           {kept ? "Start over" : "Propose again"}
@@ -158,7 +161,7 @@ export function PlanMyWeekView({
           {PLAN_EMPTY}
         </p>
       ) : (
-        <ol aria-label="This week's plan" aria-keyshortcuts="ArrowUp ArrowDown j k Alt+ArrowUp Alt+ArrowDown" className="m-0 grid list-none gap-1 p-0 text-sm">
+        <ol aria-label="This week's plan" aria-keyshortcuts="ArrowUp ArrowDown j k Alt+ArrowUp Alt+ArrowDown Delete" className="m-0 grid list-none gap-1 p-0 text-sm">
           {picks.map((p, n) => (
             <li
               key={p.id}
@@ -182,6 +185,12 @@ export function PlanMyWeekView({
                   ev.stopPropagation();
                   const rows = Array.from(root.current?.querySelectorAll<HTMLElement>("[data-plan-pick]") ?? []);
                   return void rows[Math.max(0, Math.min(rows.length - 1, n + step))]?.focus();
+                }
+                // Delete or Backspace on the row removes it, as its Remove button does.
+                if (ev.target === ev.currentTarget && !ev.altKey && !ev.ctrlKey && !ev.metaKey && (ev.key === "Delete" || ev.key === "Backspace")) {
+                  ev.preventDefault();
+                  ev.stopPropagation();
+                  return (onChange(picks.filter((x) => x.id !== p.id)), setFocus({ removed: n }));
                 }
                 if (!ev.altKey || (ev.key !== "ArrowUp" && ev.key !== "ArrowDown")) return;
                 ev.preventDefault();
@@ -273,7 +282,9 @@ export function PlanMyWeekView({
         <button type="button" data-plan-keep onClick={onKeep} className={`${button} border-ws-pip bg-ws-pip font-semibold text-ws-on-pip`}>
           Keep this plan
         </button>
-        <span className="text-sm text-ws-ink3">Kept on this device for {week}; it shows as This week on Pip home.</span>
+        <span className="text-sm text-ws-ink3">
+          {kept ? `Kept on this device for the ${weekLabel(week)}; it shows as This week on Pip home.` : "Keep this plan to see it as This week on Pip home; it stays on this device."}
+        </span>
       </div>
     </section>
   );
@@ -317,7 +328,7 @@ export function PlanMyWeek({ needs, withers, now }: { needs: readonly Need[]; wi
       onPropose={() => (setPicks(propose()), setFresh(true))}
       onKeep={() => {
         usePrefs.getState().keepWeekPlan(picks, new Date(now));
-        useToasts.getState().push(`Kept your plan for ${week}. Nothing was sent to Jira.`, "info");
+        useToasts.getState().push(`Kept your plan for the ${weekLabel(week)}. Nothing was sent to Jira.`, "info");
         close(true);
       }}
       onClose={() => close()}

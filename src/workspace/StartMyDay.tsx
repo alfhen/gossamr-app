@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { itemKey } from "../lib/filter";
 import type { Need } from "../lib/needs";
 import { dayKey } from "./activityLogic";
@@ -91,15 +91,27 @@ function Entry({ entry }: { entry: DayEntry }) {
   );
 }
 
-export function DayLineView({ line }: { line: DayLine }) {
+export function DayLineView({ line, initiallyOpen = false }: { line: DayLine; initiallyOpen?: boolean }) {
+  // "and N more" is a button, so what the card cuts off is reachable by keyboard too.
+  const [open, setOpen] = useState(initiallyOpen);
+  const entries = open ? [...line.entries, ...(line.rest ?? [])] : line.entries;
   return (
     <section data-day-line={line.kind} aria-label={line.title} className="grid gap-0.5">
       <h3 className="m-0 text-sm font-semibold text-ws-ink">{line.title}</h3>
       <ul className="m-0 grid list-none gap-0.5 p-0 text-sm">
-        {line.entries.map((e) => (
+        {entries.map((e) => (
           <Entry key={e.key} entry={e} />
         ))}
-        {line.more > 0 && <li className="text-ws-ink3">and {line.more} more</li>}
+        {line.more > 0 &&
+          (line.rest?.length ? (
+            <li>
+              <button type="button" data-day-more aria-expanded={open} onClick={() => setOpen(!open)} className="rounded px-1 text-ws-ink2 underline hover:bg-ws-hover focus-visible:outline-2 focus-visible:outline-ws-pip">
+                {open ? "Show fewer" : `Show ${line.more} more`}
+              </button>
+            </li>
+          ) : (
+            <li className="text-ws-ink3">and {line.more} more</li>
+          ))}
       </ul>
     </section>
   );

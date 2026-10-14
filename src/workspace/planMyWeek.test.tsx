@@ -32,16 +32,27 @@ describe("the Plan my week card", () => {
   const view = (picks: PlanItem[], over: Partial<Parameters<typeof PlanMyWeekView>[0]> = {}) =>
     renderToStaticMarkup(<PlanMyWeekView week="2026-W42" picks={picks} kept={false} tickets={[]} onChange={noop} onKeep={noop} onClose={noop} onPropose={noop} {...over} />);
 
+  it("says the plan is kept only once it is: before, what keeping does", () => {
+    expect(view([pick("CA-1")])).toContain("Keep this plan to see it as This week on Pip home; it stays on this device.");
+    expect(view([pick("CA-1")])).not.toContain("Kept on this device");
+    expect(view([pick("CA-1")], { kept: true })).toContain("Kept on this device for the week of 12 Oct");
+  });
+
   it("lists each pick in order with its one-line because, and says nothing goes to Jira", () => {
     const html = view([pick("CA-1"), pick("CA-2", { because: "2 things need you here: Draft comment." })]);
     expect(html).toContain("Plan my week");
-    expect(html).toContain("2026-W42");
+    expect(html).toContain("week of 12 Oct");
+    expect(html).not.toContain("2026-W42");
     expect(html.indexOf("CA-1 Something")).toBeLessThan(html.indexOf("CA-2 Something"));
     expect(html).toContain("Because assigned to you for 4 days, no workstream yet.");
     expect(html).toContain("Because 2 things need you here: Draft comment.");
     expect(html).toContain("Nothing is written to Jira.");
     expect(html).toContain("Keep this plan");
     expect(html).toContain('aria-label="Remove CA-1 Something"');
+  });
+
+  it("says Delete removes a row", () => {
+    expect(view([pick("CA-1")])).toContain("Alt+ArrowDown Delete");
   });
 
   it("offers up and down, with the first's up and the last's down off, and says Alt and the arrows move a row", () => {
@@ -227,8 +238,8 @@ describe("the card across a week boundary", () => {
   });
   it("a card mounted after the boundary is the new week's: its title and Keep target the week of the clock it got", () => {
     const card = (now: number) => renderToStaticMarkup(<PlanMyWeek key={isoWeek(new Date(now))} needs={[]} withers={{}} now={now} />);
-    expect(card(new Date(2026, 9, 18, 23, 59).getTime())).toContain("2026-W42");
-    expect(card(new Date(2026, 9, 19, 0, 1).getTime())).toContain("2026-W43");
+    expect(card(new Date(2026, 9, 18, 23, 59).getTime())).toContain("week of 12 Oct");
+    expect(card(new Date(2026, 9, 19, 0, 1).getTime())).toContain("week of 19 Oct");
   });
 });
 

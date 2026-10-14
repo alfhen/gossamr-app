@@ -213,6 +213,11 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
   const remaining = summaries.filter((_, i) => i >= made && picked[i]).length;
   const revision = p.revisions[p.revisions.length - 1];
   const shownError = error ?? p.error;
+  // A refusal above the fold of a tall diff is brought into view, not left for the person to find.
+  const errorLine = useRef<HTMLParagraphElement>(null);
+  useEffect(() => {
+    if (shownError) errorLine.current?.scrollIntoView?.({ block: "nearest" });
+  }, [shownError]);
 
   const edit = (): ProposalEdit | null => {
     if (intent.type === "comment" && edited.current) return { type: "comment", body, mentions: liveMentions(body, mentions) };
@@ -527,7 +532,7 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
         {p.state.type === "retired" && <p className="m-0 text-sm text-ws-ink3">{p.state.reason}</p>}
         {open && revision && !shownError && <p className="m-0 text-sm text-ws-ink3">{revision.note}</p>}
         {shownError && (
-          <p role="alert" className="m-0 text-sm text-ws-blocked">
+          <p ref={errorLine} role="alert" className="m-0 text-sm text-ws-blocked">
             {shownError}
           </p>
         )}

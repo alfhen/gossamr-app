@@ -1,3 +1,4 @@
+import { docText } from "./docs";
 import type { BasisField, Intent, ItemRef, Proposal, ProposalMaker, ReviewComment, RunKind } from "../types";
 
 /** Fails to compile when a switch over a union misses a case, and throws if one slips through at run time. */
@@ -229,6 +230,12 @@ export const READINESS_COMMENT_LABEL = "Questions for the reporter";
 
 /** Whether `p` is the comment "Ask the reporter" (or "Ask the reporter now") drafted: Gossamr's words around the open questions, never one Pip made, whatever it is labelled. As `is_reporter_questions`. */
 export const isReporterQuestions = (p: Proposal) => p.intent.type === "comment" && p.label === READINESS_COMMENT_LABEL && p.createdBy !== "pip";
+
+/** What the second ask to a reporter says in place of the first's frame, once they have answered: the mark of a follow-up. As `reporter_comment` in `workstreams.rs`. */
+export const FOLLOW_UP_MARK = "Thanks for your answer above.";
+
+/** Whether `p` is a reporter's questions asked again after a reply (`isReporterQuestions`, worded as the follow-up). */
+export const isReporterFollowUp = (p: Proposal) => isReporterQuestions(p) && p.intent.type === "comment" && docText(p.intent.body).includes(FOLLOW_UP_MARK);
 
 /** The label of the follow-up comment "Draft a nudge" drafts when the reporter has been silent for days: short and polite, never in the safe batch. As `NUDGE_COMMENT_LABEL` in `proposals.rs`. */
 export const NUDGE_COMMENT_LABEL = "Nudge for the reporter";

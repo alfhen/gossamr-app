@@ -101,7 +101,7 @@ test.describe("Plan my week", () => {
     // From the Start my day card.
     await pipHome(page).locator("[data-start-my-day]").getByRole("button", { name: "Plan my week" }).click();
     await expect(plan(page)).toBeVisible();
-    await expect(plan(page)).toBeFocused();
+    await expect(picks(page).first()).toBeFocused();
     await expect(plan(page)).toContainText("Nothing is written to Jira.");
     await expect(picks(page)).toHaveCount(3);
     // The open workstream first; the one waiting on the reporter is left out; each pick says why.
@@ -136,7 +136,7 @@ test.describe("Plan my week", () => {
 
     // Keep it: This week lists the three, the card goes, and nothing went to Jira.
     await plan(page).getByRole("button", { name: "Keep this plan" }).click();
-    await expectToast(page, /Kept your plan for \d{4}-W\d{2}\. Nothing was sent to Jira\./);
+    await expectToast(page, /Kept your plan for the week of \d{1,2} \w{3}\. Nothing was sent to Jira\./);
     await expect(plan(page)).toHaveCount(0);
     await expect(thisWeek(page).locator("[data-this-week-item]")).toHaveCount(3);
     // Keeping hands the keyboard to the list that appeared.
@@ -169,7 +169,7 @@ test.describe("Plan my week", () => {
 
     // ⌘K opens it again, with the kept plan to edit; nothing was written to Jira.
     await runCommand(page, "plan my week", "Plan my week");
-    await expect(plan(page)).toBeFocused();
+    await expect(picks(page).first()).toBeFocused();
     await expect(picks(page)).toHaveCount(3);
     await page.keyboard.press("Escape");
     await expect(plan(page)).toHaveCount(0);

@@ -2,8 +2,27 @@ import { learnedDetail, learnedList, projectOfKey, SHORT_GAP } from "../lib/clar
 import type { ClarityGap } from "../lib/ticketClarity";
 import { useWorkspace } from "../workspaceStore";
 import { usePrefs } from "./prefs";
-import { useToasts } from "./toasts";
+import { pushLearning, retireLearning, useToasts } from "./toasts";
 import { useWorkstreams } from "./workstreamsStore";
+
+/**
+ * The clarity notice unmounts with the button that was pressed (Looks fine, Ask the reporter now, Flag again) and the keyboard
+ * would fall to <body>. Once the page has settled, when it has, the keyboard goes to what is left of the notice: the quiet
+ * note's Flag again, a notice that came back, else the workstream's controls. Focus that already moved on is left alone.
+ */
+export function settleClarityFocus(workstreamId: string) {
+  let frames = 0;
+  const settle = () => {
+    const at = document.activeElement;
+    if (at && at !== document.body && at.isConnected) return;
+    const id = CSS.escape(workstreamId);
+    const box = document.querySelector<HTMLElement>(`[data-workstream-controls="${id}"]`);
+    const next = document.querySelector<HTMLElement>(`[data-clarity-quiet="${id}"] button, [data-clarity-notice="${id}"] button`) ?? box?.querySelector<HTMLElement>("button, [role=switch], input");
+    if (next) next.focus();
+    else if (++frames < 3) requestAnimationFrame(settle);
+  };
+  requestAnimationFrame(() => requestAnimationFrame(settle));
+}
 
 /**
  * Gives back what "Looks fine" taught the clarity notice: for one Jira project, or (with none named) all of them. The page
@@ -49,12 +68,11 @@ export async function giveBackClarity(project?: string, gaps?: readonly ClarityG
   else if (!failed.length) prefs.resetClarityLearning(project);
   else for (const p of reset) prefs.resetClarityLearning(p);
   if (backend && reset.length) await ws.refresh().catch(() => {});
-  const toasts = useToasts.getState();
   // What it said it learned is no longer so: a note still waiting to say it would contradict the one below.
   // Only for the projects that were reset: one whose audit write failed still stands as learned.
-  for (const t of toasts.toasts.filter((x) => reset.some((p) => x.text.startsWith(`Gossamr will stop flagging ${p} `)))) toasts.dismiss(t.id);
-  if (failed.length) toasts.push(`Couldn't note the reset in the audit, so ${failed.join(", ")} wasn't reset. Try again.`, "error");
-  if (reset.length && gaps && project) toasts.push(`Gossamr will flag ${project} tickets with ${gaps.map((g) => SHORT_GAP[g]).join(" or ")} as before.`, "info");
-  else if (reset.length) toasts.push(project ? `Gossamr will flag unclear ${project} tickets as before.` : "Gossamr will flag unclear tickets as before in every project.", "info");
+  retireLearning(reset);
+  if (failed.length) useToasts.getState().push(`Couldn't note the reset in the audit, so ${failed.join(", ")} wasn't reset. Try again.`, "error");
+  if (reset.length && gaps && project) pushLearning(project, `Gossamr will flag ${project} tickets with ${gaps.map((g) => SHORT_GAP[g]).join(" or ")} as before.`);
+  else if (reset.length) pushLearning(reset[0], project ? `Gossamr will flag new unclear ${project} tickets as before.` : "Gossamr will flag new unclear tickets as before in every project.");
   return reset.length;
 }

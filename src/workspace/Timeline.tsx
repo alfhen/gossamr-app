@@ -164,7 +164,7 @@ function Line({ entry, onOpen, children }: { entry: TimelineEntry; onOpen?: () =
   const waiting = !!entry.needKey;
   return (
     <p data-timeline-line className="m-0 flex min-w-0 flex-wrap items-baseline gap-x-1.5 text-sm text-ws-ink2">
-      <span aria-hidden className={`size-1.5 shrink-0 self-center rounded-full ${waiting ? "bg-ws-pip" : entry.decision ? "bg-ws-accent" : "bg-ws-sep2"}`} />
+      <span aria-hidden className={`size-1.5 shrink-0 self-center rounded-full ${waiting ? "bg-ws-pip" : entry.decision || entry.attention ? "bg-ws-accent" : "bg-ws-sep2"}`} />
       <When at={entry.at} />
       {onOpen && entry.target ? (
         <button type="button" tabIndex={-1} data-timeline-open={entry.target.type} onClick={onOpen} className={LINK}>

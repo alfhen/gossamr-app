@@ -175,7 +175,11 @@ describe("Pip home", () => {
       expect(planning).toContain("data-plan-my-week");
       expect(planning).not.toContain("data-start-my-day");
       // One wrapper holds whichever is shown, capped so the timeline and its filter bar keep their room.
-      expect(planning).toMatch(/data-pip-home-day="true" class="max-h-\[45vh\] shrink-0 overflow-y-auto/);
+      expect(planning).toMatch(/data-pip-home-day="true" role="region" aria-label="Plan my week" class="relative max-h-\[45vh\] shrink-0 overflow-y-auto/);
+      // The wrapper is a named stop for F6: Start my day when the plan is closed.
+      Object.assign(home, { planOpen: false });
+      expect(renderToStaticMarkup(<PipHome />)).toMatch(/data-pip-home-day="true" role="region" aria-label="Start my day"/);
+      Object.assign(home, { planOpen: true });
       Object.assign(home, { planOpen: false, selected: open[0].workstream.id, landed: true });
       Object.assign(streams, { list: open, loaded: true });
       const own = renderToStaticMarkup(<PipHome />);

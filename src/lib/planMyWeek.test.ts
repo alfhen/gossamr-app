@@ -3,7 +3,7 @@ import { HELD_PERSON } from "../types";
 import type { PersonRef, WorkItem, WorkstreamView } from "../types";
 import type { Need } from "./needs";
 import { docFromText } from "./docs";
-import { WEEKS_KEPT, WEEK_PICKS, isoWeek, itemDone, itemOutcome, keepPlan, movePick, parseWeekPlans, planMyWeek, rankWeek, reopenItem, ticketPick, type PlanInput, type PlanItem } from "./planMyWeek";
+import { WEEKS_KEPT, WEEK_PICKS, weekLabel, isoWeek, itemDone, itemOutcome, keepPlan, movePick, parseWeekPlans, planMyWeek, rankWeek, reopenItem, ticketPick, type PlanInput, type PlanItem } from "./planMyWeek";
 
 const NOW = new Date("2026-10-13T09:00:00Z");
 const ago = (days: number) => new Date(NOW.getTime() - days * 86_400_000).toISOString();
@@ -129,7 +129,7 @@ describe("planMyWeek: needs in General that name a ticket", () => {
     const plain = ticket("CA-2", { priority: "highest" });
     const out = planMyWeek(input({ items: [plain, thin], needs: [loose("CA-1")] }));
     expect(out.map((p) => p.id)).toEqual(["ticket:c:CA-1", "ticket:c:CA-2"]);
-    expect(out[0].because).toBe("1 thing needs you here: Draft comment. It is 2 days old.");
+    expect(out[0].because).toBe("1 thing needs you here: Draft comment. The ticket is 2 days old.");
     expect(out[0].because).not.toContain("ask the reporter");
   });
 
@@ -225,7 +225,7 @@ describe("planMyWeek: unclear tickets are asking work, and at most one of them",
 
   it("tells a need's line which ticket it is: its priority and age, when the ticket is known", () => {
     const i = input({ workstreams: [ws("w1", "CA-1")], items: [ticket("CA-1", { priority: "highest", created: ago(9) })], needs: [need("w1", { title: "Approve the plan" })] });
-    expect(planMyWeek(i)[0].because).toBe("1 thing needs you here: Approve the plan. It is highest priority, 9 days old.");
+    expect(planMyWeek(i)[0].because).toBe("1 thing needs you here: Approve the plan. The ticket is highest priority, 9 days old.");
     expect(planMyWeek(input({ workstreams: [ws("w1", "CA-1")], items: [ticket("CA-1", { priority: "highest" })], needs: [] }))[0].because).toBe("highest priority, open for 2 days, nothing is moving it.");
   });
 });
@@ -290,7 +290,7 @@ describe("the kept plan", () => {
     // The workstream is gone from the lists: not ticked by absence.
     expect(itemDone(pick, [], [])).toBe(false);
     // A closed one and a newer open one for the same ticket: still going.
-    expect(itemDone(pick, [closed, ws("w2", "CA-1")], [ticket("CA-1", { status: DONE })])).toBe(false);
+    expect(itemDone(pick, [closed, ws("w2", "CA-1")], [ticket("CA-1")])).toBe(false);
   });
   it("ticks a ticket item when a workstream opened on it closes with the ticket Done, or the ticket is Done in Jira", () => {
     const pick: PlanItem = ticketPick(ticket("CA-2"));
@@ -298,6 +298,12 @@ describe("the kept plan", () => {
     expect(itemDone(pick, [ws("w2", "CA-2")], [])).toBe(false);
     expect(itemDone(pick, [ws("w2", "CA-2", {}, { closedAt: ago(1) })], [ticket("CA-2", { status: DONE })])).toBe(true);
     expect(itemDone(pick, [], [ticket("CA-2", { status: DONE })])).toBe(true);
+  });
+  it("ticks an item whose ticket is Done while its workstream is still open, unless the person reopened it", () => {
+    const pick: PlanItem = { id: "ws:w1", kind: "workstream", workstreamId: "w1", ticketKey: "CA-1", title: "CA-1 Thing", because: "x." };
+    expect(itemOutcome(pick, [ws("w1", "CA-1")], [ticket("CA-1", { status: DONE })])).toBe("done");
+    expect(itemOutcome(pick, [ws("w1", "CA-1")], [ticket("CA-1")])).toBe("open");
+    expect(itemOutcome({ ...pick, reopened: true }, [ws("w1", "CA-1")], [ticket("CA-1", { status: DONE })])).toBe("open");
   });
   it("calls a workstream closed on a ticket that is not Done closed, not done: dropped work isn't finished work", () => {
     const pick: PlanItem = { id: "ws:w1", kind: "workstream", workstreamId: "w1", ticketKey: "CA-1", title: "CA-1 Thing", because: "x." };
@@ -353,5 +359,34 @@ describe("the kept plan", () => {
     expect(parseWeekPlans(kept)["2026-W42"].items[0].connectionId).toBe("c");
     kept["2026-W42"].items.push({ ...withConn, id: "ticket:CA-9", connectionId: 4 });
     expect(parseWeekPlans(kept)["2026-W42"].items.map((p) => p.id)).toEqual(["ticket:c:CA-1"]);
+  });
+});
+
+describe("planMyWeek: the because line and the week label", () => {
+  it("says what the top need is about, and how many more wait", () => {
+    const i = input({ workstreams: [ws("w1", "CA-1")], items: [ticket("CA-1", { created: ago(37) })], needs: [need("w1", { title: "R2 triage · comment", why: "R2 triage drafted a comment on CA-1; it is posted only when you approve it.", at: ago(3) }), need("w1", { title: "Draft move" })] });
+    expect(planMyWeek(i)[0].because).toBe("2 things need you here: R2 triage · comment. R2 triage drafted a comment on CA-1; it is posted only when you approve it. (+1 more) The ticket is 37 days old.");
+  });
+
+  it("names a week by the Monday it starts on", () => {
+    expect(weekLabel("2026-W42")).toBe("week of 12 Oct");
+    expect(weekLabel("2026-W01")).toBe("week of 29 Dec");
+    expect(weekLabel("nonsense")).toBe("nonsense");
+  });
+});
+
+describe("planMyWeek: one ask among many needs", () => {
+  it("gives a week of three needs and an unclear assigned ticket two needs and one clarify", () => {
+    const thin = ticket("CA-9", {}, "Fix it.");
+    const i = input({ workstreams: [ws("w1", "CA-1"), ws("w2", "CA-2"), ws("w3", "CA-3")], items: [thin], needs: [need("w1"), need("w2"), need("w3")] });
+    const out = planMyWeek(i);
+    expect(out).toHaveLength(3);
+    expect(out.map((p) => p.id)).toEqual(["ws:w1", "ws:w2", "ticket:c:CA-9"]);
+    expect(out[2].work).toBe("clarify");
+  });
+
+  it("changes nothing when no unclear work exists", () => {
+    const i = input({ workstreams: [ws("w1", "CA-1"), ws("w2", "CA-2"), ws("w3", "CA-3")], needs: [need("w1"), need("w2"), need("w3")] });
+    expect(ids(i)).toEqual(["ws:w1", "ws:w2", "ws:w3"]);
   });
 });
