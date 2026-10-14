@@ -689,3 +689,23 @@ export async function expectToast(page: Page, text: string | RegExp) {
     )
     .toBe(true);
 }
+
+/**
+ * Waits until `locator` has stopped moving: the same box on three reads in a row. A pane that opens moves its buttons for a
+ * few frames as the column around it settles, and a click aimed in a pause of that can land where the button was.
+ */
+export async function still(locator: Locator) {
+  let last = "";
+  let same = 0;
+  await expect
+    .poll(
+      async () => {
+        const box = JSON.stringify(await locator.boundingBox());
+        same = box === last && box !== "null" ? same + 1 : 0;
+        last = box;
+        return same >= 2;
+      },
+      { intervals: [50], message: "the element stopped moving" },
+    )
+    .toBe(true);
+}

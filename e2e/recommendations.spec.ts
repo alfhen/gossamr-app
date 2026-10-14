@@ -45,6 +45,7 @@ import {
   workstreamWeb,
   workstreamWebText,
   expectToast,
+  still,
 } from "./support/app";
 
 // Two product decisions (docs/needs-you.md): a hold the person chose is not a need, and the automatic budget is one unit,
@@ -129,6 +130,12 @@ async function budgetState(page: Page): Promise<string> {
   const held = await pipHome(page).locator("[data-held-banner]").getAttribute("data-held-banner", { timeout: 1_000 }).catch(() => null);
   const events = (await workstreamEvents(page)).map((e) => `${e.actor} ${e.action} ${e.detail ?? ""}`.trim());
   return [`toasts: ${JSON.stringify(toasts)}`, `held banner: ${held ?? "none"}`, `pane: ${JSON.stringify(pane)}`, `audit: ${JSON.stringify(events)}`].join("\n");
+}
+
+/** Opens the budget question from the Next line and waits for the pane to stop moving, so a click lands on its button. */
+async function openBudgetNeed(page: Page) {
+  await nextLine(page).getByRole("button").click();
+  await still(needsPane(page).getByRole("button", { name: "Allow 5 more" }));
 }
 
 async function spent(page: Page, steps = 2) {
@@ -283,11 +290,11 @@ test.describe("B3: one budget unit, and running out becomes a question", () => {
 
   test("Allow 5 more raises the allowance by 5, resumes the workstream and writes the person's audit line", async ({ page }) => {
     await spent(page);
-    await nextLine(page).getByRole("button").click();
+    await openBudgetNeed(page);
     const before = Number(await needsYouCount(page).innerText());
     await needsPane(page).getByRole("button", { name: "Allow 5 more" }).click();
 
-    // This has failed twice in CI and never locally; when it does, the log says what the page held, since CI's traces can't be read from here.
+    // If this fails in CI, the log says what the page held, since CI's traces can't be read from here.
     await expect(needOfKind(page, "budget"))
       .toHaveCount(0)
       .catch(async (e: Error) => {
@@ -311,7 +318,7 @@ test.describe("B3: one budget unit, and running out becomes a question", () => {
 
   test("Switch to Advise answers the question without lifting the hold or allowing anything", async ({ page }) => {
     await spent(page);
-    await nextLine(page).getByRole("button").click();
+    await openBudgetNeed(page);
     await needsPane(page).getByRole("button", { name: "Switch to Advise" }).click();
     await expect(needOfKind(page, "budget")).toHaveCount(0);
     expect((await actions(page, "mode_set")).map((e) => [e.actor, e.detail]).pop()).toEqual(["person", "advise"]);
@@ -366,7 +373,7 @@ test.describe("B3: one budget unit, and running out becomes a question", () => {
 
   test("a double click on Allow 5 more allows once and shows no error", async ({ page }) => {
     await spent(page);
-    await nextLine(page).getByRole("button").click();
+    await openBudgetNeed(page);
     await needsPane(page).getByRole("button", { name: "Allow 5 more" }).dblclick();
     await expect(needOfKind(page, "budget")).toHaveCount(0);
     expect((await actions(page, "steps_allowed")).length).toBe(1);
