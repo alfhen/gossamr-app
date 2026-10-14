@@ -64,8 +64,8 @@ const RULES_AFTER: Record<RunKind, readonly WorkstreamRule[]> = {
 /** Findings that would make a fix round possible, for asking `decideAutostart` what a blocking review leads to. */
 const SOME_FINDING: ReviewFinding[] = [{ severity: "blocking", text: "src/a.ts:1 a defect" }];
 
-/** The line the plan's description-update draft shows: approving it is what lets the plan_build rule start a Build. */
-export const APPROVAL_STARTS_BUILD = "Approving this also starts a Build: it changes code in its own worktree and runs with your Claude settings.";
+/** The line the plan's description-update draft shows: approving it is what lets the plan_build rule start a Build, unless one already came of this plan (a later result of the same plan drafts again). */
+export const APPROVAL_STARTS_BUILD = "Approving this can start a Build: it changes code in its own worktree and runs with your Claude settings.";
 
 /**
  * Whether approving draft `p` also starts a Build: a description rewrite that came of a finished plan run, in a workstream that

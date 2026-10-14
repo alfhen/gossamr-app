@@ -250,7 +250,7 @@ describe("a changed line's words (D31)", () => {
   });
 });
 
-describe("the plan's description draft says it also starts a Build (G3)", () => {
+describe("the plan's description draft says it can start a Build (G3)", () => {
   const plan = { ...new MockBackend().runs.list()[0], id: "plan-1" } as Run;
   plan.spec = { ...plan.spec, kind: "plan", workstream: "ws-1" };
   const ws = (mode: "manage" | "advise", rules = {}) =>
@@ -274,7 +274,7 @@ describe("the plan's description draft says it also starts a Build (G3)", () => 
   });
   it("shows the line, linking to Agents settings, in Manage with the rule on", () => {
     const out = html(ws("manage"));
-    expect(out).toContain("Approving this also starts a Build: it changes code in its own worktree and runs with your Claude settings.");
+    expect(out).toContain("Approving this can start a Build: it changes code in its own worktree and runs with your Claude settings.");
     expect(out).toContain("Agents settings");
   });
   it("says nothing in Advise, with the rule off, for a draft from chat, or before Settings is read", () => {
