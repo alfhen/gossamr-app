@@ -23,6 +23,7 @@ import {
   startWorkstream,
   workstreamEvents,
   workstreamRow,
+  expectToast,
 } from "./support/app";
 
 // Step 4 of the UX overhaul: less ceremony. Reversible actions (skipping a draft, dismissing a failure, holding a
@@ -65,14 +66,14 @@ test("s skips a draft at once, with an Undo that brings it back, and the audit s
   await expect(card.getByRole("status")).toHaveText("a approve · e edit · d s skip · ↵ open");
   await page.keyboard.press("s");
   await expect(card).toHaveAttribute("data-state", "skipped");
-  await expect(toast(page)).toContainText("Skipped the draft on CA-401.");
+  await expectToast(page, "Skipped the draft on CA-401.");
   await expect(undo(page)).toBeVisible();
   expect(await jiraWrites(page)).toEqual([]);
 
   // Undo puts the exact draft back, pending, and its audit keeps both lines.
   await undo(page).click();
   await expect(card).toHaveAttribute("data-state", "pending");
-  await expect(toast(page)).toContainText("The draft is back.");
+  await expectToast(page, "The draft is back.");
   const actions = await actionsOf(page);
   expect(actions.slice(actions.indexOf("draft_skipped"))).toEqual(["draft_skipped", "undone"]);
   expect((await workstreamEvents(page)).find((e) => e.action === "undone")).toMatchObject({ actor: "person", detail: "draft_skipped" });
@@ -113,11 +114,11 @@ test("holding a workstream offers Undo, and so does switching it to Advise", asy
 
   await hold.click();
   await expect(banner).toBeVisible();
-  await expect(toast(page)).toContainText("Held CA-401.");
+  await expectToast(page, "Held CA-401.");
   await undo(page).click();
   await expect(banner).toHaveCount(0);
   await expect(hold).toBeVisible();
-  await expect(toast(page)).toContainText("CA-401 is free again.");
+  await expectToast(page, "CA-401 is free again.");
   const held = await actionsOf(page);
   expect(held.slice(held.indexOf("held"))).toEqual(["held", "undone"]);
 
@@ -134,7 +135,7 @@ test("holding a workstream offers Undo, and so does switching it to Advise", asy
   await expect(manage).toBeChecked();
   await manage.click();
   await expect(manage).not.toBeChecked();
-  await expect(toast(page)).toContainText("Switched CA-401 to Advise.");
+  await expectToast(page, "Switched CA-401 to Advise.");
   await undo(page).click();
   await expect(manage).toBeChecked();
   const modes = (await workstreamEvents(page)).filter((e) => e.action === "mode_set" || e.action === "undone");
@@ -165,7 +166,7 @@ test("the Agents list takes the same keys: o opens, d dismisses a failure at onc
   await failed.focus();
   await page.keyboard.press("d");
   await expect(failed.locator("[data-in-needs-you]")).toHaveCount(0);
-  await expect(toast(page)).toContainText(/Dismissed .* from Needs you\./);
+  await expectToast(page, /Dismissed .* from Needs you\./);
   await undo(page).click();
   await expect(failed.locator("[data-in-needs-you]")).toHaveCount(1);
 
@@ -212,7 +213,7 @@ test("draft cards in the conversation: j and k move, d skips at once and Undo re
   await page.keyboard.press("j");
   await page.keyboard.press("d");
   await expect(second).toHaveAttribute("data-state", "skipped");
-  await expect(toast(page)).toContainText("Skipped the draft on CA-401.");
+  await expectToast(page, "Skipped the draft on CA-401.");
   await undo(page).click();
   await expect(second).toHaveAttribute("data-state", "pending");
   await expect(first).toHaveAttribute("data-state", "pending");
@@ -255,7 +256,7 @@ test("the Activity Drafts list and the ticket's peek take the same keys on their
   await expect(drafts.first()).toBeFocused();
   await page.keyboard.press("d");
   await expect(drafts).toHaveCount(1);
-  await expect(toast(page)).toContainText("Skipped the draft on CA-401.");
+  await expectToast(page, "Skipped the draft on CA-401.");
   await undo(page).click();
   await expect(drafts).toHaveCount(2);
   // a asks for Enter on these too: it writes to Jira.
@@ -361,7 +362,7 @@ test("Cmd/Ctrl+K reaches Hold and Advise for the selected workstream, and 'Appro
   await page.keyboard.type("hold");
   await palette.getByRole("option", { name: /Hold the workstream on CA-401/ }).click();
   await expect(pipHome(page).locator("[data-held-banner]")).toBeVisible();
-  await expect(toast(page)).toContainText("Held CA-401.");
+  await expectToast(page, "Held CA-401.");
   await undo(page).click();
   await expect(pipHome(page).locator("[data-held-banner]")).toHaveCount(0);
 
