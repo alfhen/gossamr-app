@@ -26,6 +26,7 @@ import {
   workstreamEvents,
   workstreamRow,
   workstreamWebText,
+  expectToast,
 } from "./support/app";
 
 // What Pip does with a vague ticket after it speaks up: a free word check says so when the workstream opens (a notice, not a
@@ -155,7 +156,7 @@ test.describe("G13: Pip speaks up when a workstream opens on a vague ticket", ()
     await openPipHome(page);
     await workstreamRow(page, VAGUE).click();
     await notice(pipHome(page)).getByRole("button", { name: "Ask the reporter now" }).click();
-    await expect(toast(page)).toContainText("Here is the comment to the reporter. Nothing is posted until you press Post comment.");
+    await expectToast(page, "Here is the comment to the reporter. Nothing is posted until you press Post comment.");
     await expect(notice(pipHome(page))).toHaveCount(0);
     expect(await jiraWrites(page)).toEqual([]);
     const draft = needsPane(page).getByRole("article", { name: `Comment on ${VAGUE}` });
@@ -314,7 +315,7 @@ test.describe("G14: waiting on the reporter", () => {
     await pipHome(page).locator("[data-held-banner]").getByRole("button", { name: "Resume" }).click();
     await needOfKind(page, "readiness").click();
     await needsPane(page).getByRole("button", { name: "Still unclear (ask again)" }).click();
-    await expect(toast(page)).toContainText("Here is the comment to the reporter.");
+    await expectToast(page, "Here is the comment to the reporter.");
     await expect(needOfKind(page, "readiness")).toHaveCount(0);
     expect((await actions(page, "readiness_asked")).length).toBe(2);
     await expect(workstreamRow(page, VAGUE).locator("[data-status]")).not.toContainText("Waiting on reporter");

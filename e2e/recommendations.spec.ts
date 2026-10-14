@@ -44,6 +44,7 @@ import {
   workstreamRow,
   workstreamWeb,
   workstreamWebText,
+  expectToast,
 } from "./support/app";
 
 // Two product decisions (docs/needs-you.md): a hold the person chose is not a need, and the automatic budget is one unit,
@@ -151,7 +152,7 @@ test.describe("B2: a hold the person chose is not a need", () => {
     await expect(workstreamRow(page, "CA-401").locator('[data-status="needs-you"]')).toHaveCount(0);
 
     // Undo of the hold works as before.
-    await expect(toast(page)).toContainText("Held CA-401.");
+    await expectToast(page, "Held CA-401.");
     await undo(page).click();
     await expect(banner).toHaveCount(0);
     expect((await workstreamEvents(page)).map((e) => e.action).slice(-2)).toEqual(["held", "undone"]);
@@ -303,7 +304,7 @@ test.describe("B3: one budget unit, and running out becomes a question", () => {
     // The hold stays for Resume, which the header offers; nothing was allowed.
     await expect(pipHome(page).locator("[data-held-banner]")).toContainText("Held: automatic steps used up");
     expect(await actions(page, "steps_allowed")).toEqual([]);
-    await expect(toast(page)).toContainText("CA-401 to Advise");
+    await expectToast(page, "CA-401 to Advise");
   });
 
   test("the header's banner for a budget hold offers Allow 5 more and Switch to Advise, never Resume", async ({ page }) => {
@@ -431,7 +432,7 @@ test.describe("D1: Pip speaks up when a ticket is unclear", () => {
     await unclear(page);
     await needOfKind(page, "readiness").click();
     await needsPane(page).getByRole("button", { name: "Ask the reporter" }).click();
-    await expect(toast(page)).toContainText("Here is the comment to the reporter. Nothing is posted until you press Post comment.");
+    await expectToast(page, "Here is the comment to the reporter. Nothing is posted until you press Post comment.");
     await expect(needOfKind(page, "readiness")).toHaveCount(0);
     expect(await jiraWrites(page)).toEqual([]);
     expect(await newest(page, "plan")).toBeNull();

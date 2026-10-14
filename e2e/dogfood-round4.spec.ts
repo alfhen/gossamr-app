@@ -98,14 +98,14 @@ test.describe("keys inside the open decision, the palette's Agents and Undo (F2,
     // Focus is inside the pane, not on a row; the keys still act on the need it shows.
     await expect.poll(() => page.evaluate(() => !!document.activeElement?.closest("[data-needs-pane]"))).toBe(true);
     await page.keyboard.press("s");
-    await expect(toast(page)).toContainText("Skipped the draft on CA-401.");
+    await expectToast(page, "Skipped the draft on CA-401.");
 
     // Undo from the palette: the offer's toast goes, the result is told.
     await page.keyboard.press("ControlOrMeta+k");
     await expect(palette(page)).toBeVisible();
     await page.keyboard.type("undo");
     await palette(page).getByRole("option", { name: /Undo: Skipped the draft on CA-401/ }).click();
-    await expect(toast(page)).toContainText("The draft is back.");
+    await expectToast(page, "The draft is back.");
     await expect(toast(page).filter({ hasText: "Skipped the draft on CA-401." })).toHaveCount(0);
   });
 
