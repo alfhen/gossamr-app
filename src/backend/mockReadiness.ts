@@ -37,7 +37,7 @@ export function unclearTriageResult(key: string): string {
     "Plan recommended: yes",
     "",
     "For Jira:",
-    "Triage could not size this: the description is one line. Three questions are open before it can be planned.",
+    "The ticket cannot be sized yet: the description is one line. Three questions need an answer before it can be planned.",
   ].join("\n");
 }
 

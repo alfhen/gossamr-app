@@ -186,7 +186,7 @@ I read all four. I did not open the Klaviyo flow definitions, which live outside
 - Should the second email keep its two-day delay, or does design want it changed with this?
 
 For Jira:
-Plan for the welcome flow refresh: three emails move to the shared layout, subjects and delays come from one config, six steps, tests included. Two questions need an answer before building: whether Klaviyo sets its own subjects, and whether the second email keeps its delay. The full plan is attached to the run.`;
+Three emails move to the shared layout, subjects and delays come from one config, six steps, tests included. Two questions need an answer before building: whether Klaviyo sets its own subjects, and whether the second email keeps its delay.`;
 
 /** What the sample plan run writes on its second pass, once the person has sent it back with the open questions. */
 export const SCRIPTED_PLAN_ANSWERED = `${SCRIPTED_PLAN_RESULT.split("## Open questions for a person")[0]}## Decisions on the open questions
@@ -195,7 +195,7 @@ export const SCRIPTED_PLAN_ANSWERED = `${SCRIPTED_PLAN_RESULT.split("## Open que
 - Second email: it keeps its two-day delay; the config reads it from one place.
 
 For Jira:
-Plan for the welcome flow refresh, second pass: the open questions are settled (Klaviyo keeps its own subjects, the second email keeps its two-day delay) and the plan is updated to match.`;
+Both open questions are settled: Klaviyo keeps its own subjects and the second email keeps its two-day delay. The plan now builds on both answers.`;
 
 const PLAN_ANSWERED_SUMMARY = "Plan updated: both questions are settled and the plan follows the decisions";
 
@@ -275,12 +275,12 @@ const REPORT_SEEDS: Seed[] = [
 
 /** What a sample run writes when it finishes, for each kind: an answer that ends in a `For Jira:` section. */
 export const SCRIPTED_RESULT: Record<RunKind, string> = {
-  investigate: "The lag comes from one consumer that retries without backoff.\n\nFor Jira:\nThe consumer retries failed messages immediately, which is what builds the lag. It needs a backoff. I am fairly sure; I did not run it against production traffic.",
+  investigate: "The lag comes from one consumer that retries without backoff.\n\nFor Jira:\nThe consumer retries failed messages immediately, which is what builds the lag. It needs a backoff. This comes from reading the code; it was not run against production traffic.",
   plan: SCRIPTED_PLAN_RESULT,
   triage:
     "About three days. It touches the estimate module, the checkout summary and the carrier lookup.\n\nSubtasks:\n- Cache the carrier rates the estimate asks for\n- Show the estimate in the checkout summary\n- Fall back to a flat rate when the carrier is slow\n- Cover the estimate with tests\n\nPlan recommended: yes\n\nFor Jira:\nSize 8, too big for one piece, so a breakdown into four subtasks is proposed. The checkout team owns the estimate module and the summary. No duplicates found.",
   verify: "The fix works for percentage coupons.\n\nFor Jira:\nChecked percentage coupons: the totals are right and the tests pass. Fixed-amount coupons were not checked because they need the payment sandbox.",
-  build: "Cached the category tree and committed it on the run's branch.\n\nFor Jira:\nThe category tree is now cached and the change is committed on the run's branch. It is not pushed. A person needs to review it and open the pull request.",
+  build: "Cached the category tree and committed it on the run's branch.\n\nFor Jira:\nThe category tree is now cached and the change is committed on a local branch. It is not pushed. A person needs to review it and open the pull request.",
   review:
     "I checked out the pull request's head in my own worktree and ran the existing tests with `npm test`; they pass, so I looked for what they miss.\n\n- [blocking] src/consumer/retry.ts:42: the retry loop never backs off, so a slow upstream gets hammered; the ticket asks for a growing delay between tries.\n- [should-fix] src/consumer/retry.test.ts: no test covers the timeout path.\n- [nit] src/consumer/retry.ts:17: the constant name `MAX` doesn't say what it limits.\n\nVerdict: blocking\n\nFor Jira:\nReviewed the pull request: not ready. One blocking issue: the retry loop never backs off (src/consumer/retry.ts:42). The timeout path has no test. The author needs to fix the blocking issue before it can merge.",
 };

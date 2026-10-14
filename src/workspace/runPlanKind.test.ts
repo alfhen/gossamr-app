@@ -42,7 +42,7 @@ describe("a plan run in the mock", () => {
     expect(plan.spec.instruction).not.toMatch(/push/i);
     const outcome = await backend.runsOutcome(plan.id);
     expect(outcome.note).toMatchObject({ fromMarker: true });
-    expect(outcome.note!.text).toContain("The full plan is attached to the run.");
+    expect(outcome.note!.text).not.toMatch(/in the description|attached to the run/);
     expect(outcome.draft).toBeNull();
     expect(outcome.planDraft).toBeNull();
   });
