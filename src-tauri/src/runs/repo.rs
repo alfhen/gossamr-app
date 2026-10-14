@@ -17,7 +17,10 @@ use tokio::task::JoinSet;
 
 use super::env::RunEnv;
 
-const GIT_TIMEOUT: Duration = Duration::from_secs(5);
+/// How long one git command may take. The app runs them one repository at a time, where 5 seconds is generous; the test
+/// suite runs hundreds of tests at once on a loaded CI runner, where a plain `git remote get-url` has taken longer, so tests wait
+/// longer rather than fail on the machine's load.
+const GIT_TIMEOUT: Duration = if cfg!(test) { Duration::from_secs(30) } else { Duration::from_secs(5) };
 const CACHE_TTL: Duration = Duration::from_secs(600);
 const PARALLEL_GIT: usize = 8;
 const WORD_LIMIT: usize = 16;
