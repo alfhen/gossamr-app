@@ -221,26 +221,19 @@ export function readinessLine(workstream: PipWorkstream | null): string | null {
  * and what the person wrote. Null when no answers are due, or there is no ticket.
  */
 /**
- * A reply's numbered answers 1 to `n`, markers dropped, or null when it doesn't number exactly that many. The list starts
- * at a "1." opening the reply or a line, after any preamble. It is read back from the last "n.", then the last "n-1." before
- * that, and so on, so a number inside an answer ("Use version 2. Then deploy") stays answer text.
+ * A reply's numbered answers 1 to `n`, markers dropped, or null unless the reply numbers them plainly: the list starts at
+ * a "1." opening the reply or a line, after any preamble, and then "2." to "n." each appear once, in order, with no
+ * "n+1.". Anything else (a repeated number, a number inside an answer such as "version 2.", more answers than questions)
+ * is kept as written rather than guessed at.
  */
 export function numberedAnswers(answer: string, n: number): string[] | null {
   const first = answer.match(/(?:^|\n)\s*1[.)]\s+/);
   if (!first || n < 2) return null;
-  let rest = answer.slice((first.index ?? 0) + first[0].length);
-  const items: string[] = [];
-  for (let k = n; k >= 2; k--) {
-    const marks = [...rest.matchAll(new RegExp(`(?:^|\\s)${k}[.)]\\s+`, "g"))];
-    const last = marks[marks.length - 1];
-    if (!last) return null;
-    const item = rest.slice(last.index + last[0].length);
-    // An answer numbered past `n` means the reply has more answers than questions.
-    if (k === n && new RegExp(`(?:^|\\s)${n + 1}[.)]\\s+`).test(item)) return null;
-    items.unshift(item.trim());
-    rest = rest.slice(0, last.index);
-  }
-  items.unshift(rest.trim());
+  const rest = answer.slice((first.index ?? 0) + first[0].length);
+  // Every "k." or "k)" after a space or line start; k is a number the app counts, so the pattern is fixed.
+  const marks = [...rest.matchAll(/(?:^|\s)(\d+)[.)]\s+/g)].map((m) => ({ k: Number(m[1]), at: m.index, end: m.index + m[0].length }));
+  if (marks.length !== n - 1 || marks.some((m, i) => m.k !== i + 2)) return null;
+  const items = [rest.slice(0, marks[0].at), ...marks.map((m, i) => rest.slice(m.end, marks[i + 1]?.at ?? rest.length))].map((s) => s.trim());
   return items.every(Boolean) ? items : null;
 }
 
