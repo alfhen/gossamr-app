@@ -333,16 +333,20 @@ describe("the comment with the person's answers (G3)", () => {
   it("pairs a numbered reply only when 1 to n each appear once, in order; anything else is kept as written", () => {
     expect(numberedAnswers("1. a\n2. move to v3. now\n3. c", 3)).toEqual(["a", "move to v3. now", "c"]);
     expect(numberedAnswers("1) a 2) b", 2)).toEqual(["a", "b"]);
-    // A repeated number, whether a second "2." or one inside an answer, is not guessed at.
+    // A repeated number is not guessed at; a number inside an answer stays answer text.
     expect(numberedAnswers("1. A 2. B 2. C", 2)).toBeNull();
-    expect(numberedAnswers("1. Use version 2. Then deploy. 2. Only the CRM export. 3. Support.", 3)).toBeNull();
+    expect(numberedAnswers("1. Use version 2. Then deploy. 2. Only the CRM export. 3. Support.", 3)).toEqual(["Use version 2. Then deploy.", "Only the CRM export.", "Support."]);
     expect(numberedAnswers("1. a 2. b 3. c 4. d", 3)).toBeNull();
     expect(numberedAnswers("2. a 3. b", 2)).toBeNull();
     expect(numberedAnswers("1. a 3. b", 2)).toBeNull();
     expect(numberedAnswers("1. a 3. c 2. b", 3)).toBeNull();
+    // A "2." inside prose is not a marker; one after the end of a sentence is.
+    expect(numberedAnswers("1. We ship version 2. Then deploy.", 2)).toBeNull();
+    expect(numberedAnswers("1. We ship version 2. Then deploy. 2. Support.", 2)).toEqual(["We ship version 2. Then deploy.", "Support."]);
     const body = text("1. Use version 2. Then deploy. 2. Only the CRM export. 3. Support.");
-    expect(body).not.toContain("Answer: ");
-    expect(answersPaired(body)).toBe(false);
+    expect(body).toContain("\u201cWhat does done mean?\u201d\nAnswer: Use version 2. Then deploy.");
+    expect(body).toContain("\u201cWho owns it?\u201d\nAnswer: Support.");
+    expect(answersPaired(body)).toBe(true);
   });
 
   it("numbers the questions and answers once, and says so, when the answers don't pair", () => {

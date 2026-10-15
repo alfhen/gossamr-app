@@ -223,15 +223,20 @@ export function readinessLine(workstream: PipWorkstream | null): string | null {
 /**
  * A reply's numbered answers 1 to `n`, markers dropped, or null unless the reply numbers them plainly: the list starts at
  * a "1." opening the reply or a line, after any preamble, and then "2." to "n." each appear once, in order, with no
- * "n+1.". Anything else (a repeated number, a number inside an answer such as "version 2.", more answers than questions)
+ * "n+1.", each opening a line or following the end of a sentence (or written "2)"). Anything else (a repeated number, a number inside an answer such as "version 2.", more answers than questions)
  * is kept as written rather than guessed at.
  */
 export function numberedAnswers(answer: string, n: number): string[] | null {
   const first = answer.match(/(?:^|\n)\s*1[.)]\s+/);
   if (!first || n < 2) return null;
   const rest = answer.slice((first.index ?? 0) + first[0].length);
-  // Every "k." or "k)" after a space or line start; k is a number the app counts, so the pattern is fixed.
-  const marks = [...rest.matchAll(/(?:^|\s)(\d+)[.)]\s+/g)].map((m) => ({ k: Number(m[1]), at: m.index, end: m.index + m[0].length }));
+  // A marker opens a line, or follows the end of a sentence ("... done. 2. Only"), or is a "k)" after a space; a "2." in
+  // the middle of prose ("We ship version 2. Then") is not one.
+  const marks = [...rest.matchAll(/(?:^|\n)\s*(\d+)[.)]\s+|(?<=[.!?])\s+(\d+)\.\s+|(?<=\s)(\d+)\)\s+/g)].map((m) => ({
+    k: Number(m[1] ?? m[2] ?? m[3]),
+    at: m.index,
+    end: m.index + m[0].length,
+  }));
   if (marks.length !== n - 1 || marks.some((m, i) => m.k !== i + 2)) return null;
   const items = [rest.slice(0, marks[0].at), ...marks.map((m, i) => rest.slice(m.end, marks[i + 1]?.at ?? rest.length))].map((s) => s.trim());
   return items.every(Boolean) ? items : null;
