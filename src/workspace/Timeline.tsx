@@ -22,6 +22,7 @@ import type { Proposal, Run, WorkstreamEvent, WorkstreamView } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { AgentRow } from "./AgentRow";
 import { dayBreaks } from "./activityLogic";
+import { useToday } from "./useNow";
 import { useDecisionShown } from "./decisionShown";
 import { LiveDraftPreview, openLiveDraft } from "./DraftPreview";
 import { GENERAL_INTRO, IntroAction, TurnView, workstreamIntro } from "./PipConversation";
@@ -285,7 +286,9 @@ export function TimelineView({
   const shown = useMemo(() => filterTimeline(entries, filter), [entries, filter]);
   const counts = useMemo(() => filterCounts(entries), [entries]);
   // Entries from earlier days sit under a date, so a clock time is never the only thing saying when.
-  const days = useMemo(() => dayBreaks(shown, new Date()), [shown]);
+  // They move on at midnight too: a timeline left open overnight relabels yesterday's "Today".
+  const today = useToday();
+  const days = useMemo(() => dayBreaks(shown, new Date()), [shown, today]);
   const ref = useRef<HTMLDivElement>(null);
   /** The drafts this timeline has shown waiting: one retired since keeps its card, collapsed with why, rather than vanishing. */
   const seenWaiting = useRef(new Set<string>());
