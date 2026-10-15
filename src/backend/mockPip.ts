@@ -581,7 +581,7 @@ const NUDGES = ["Checking in on this one. Is it still on track, or does anything
 
 /** The check-in wording for the next draft on `item`: the first the ticket's waiting drafts don't use yet, so two never say the same. */
 function nudgeText(drafts: readonly Proposal[], item: ItemRef): string {
-  const waiting = new Set(drafts.filter((d) => d.state.type === "pending" && d.intent.type === "comment" && d.intent.item.externalId === item.externalId).map((d) => (d.intent.type === "comment" ? docText(d.intent.body) : "")));
+  const waiting = new Set(drafts.filter((d) => d.state.type === "pending" && d.intent.type === "comment" && d.intent.item.connectionId === item.connectionId && d.intent.item.externalId === item.externalId).map((d) => (d.intent.type === "comment" ? docText(d.intent.body) : "")));
   return NUDGES.find((n) => !waiting.has(n)) ?? NUDGES[0];
 }
 

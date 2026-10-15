@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { itemKey } from "../lib/filter";
-import { repeatedComments, REPEATED_COMMENT_NOTE } from "../lib/needs";
+import { leftOutLabel, repeatedComments, REPEATED_COMMENT_NOTE } from "../lib/needs";
 import { inWorkstreamPane } from "../lib/proposals";
 import type { CodeChange, Proposal, ReviewView, Run, WorkstreamEvent, WorkstreamView } from "../types";
 import { useWorkspace } from "../workspaceStore";
@@ -119,7 +119,7 @@ export function StepDrafts({ step, drafts, approve, initialConfirming = false }:
           <BatchConfirm count={frozen.length} onConfirm={() => void confirm(frozen)} onCancel={cancel} />
           {repeatedComments(drafts).length > 0 && (
             <p data-batch-left-out className="m-0 text-sm text-ws-ink2">
-              {REPEATED_COMMENT_NOTE}: {repeatedComments(drafts).map((p) => draftTitle(p)).join(", ")}.
+              {REPEATED_COMMENT_NOTE}: {repeatedComments(drafts).map((p) => leftOutLabel(p, draftTitle(p))).join(", ")}.
             </p>
           )}
         </>

@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { MockBackend } from "../backend/mock";
+import { docFromText } from "./docs";
 import { HELD_ALL, HELD_BUDGET, HELD_DAILY, HELD_PERSON, HELD_QUOTA, HELD_RESTART, TRIPWIRE } from "../types";
 import type { Intent, ItemRef, Proposal, ProposalState, Run, RunKind, RunState, WorkstreamStage, WorkstreamView } from "../types";
-import { BATCHABLE, GROUP_RANK, byRank, escalationReason, higherPriority, needAfter, needGroups, needs, needsIn, readinessPrompt, readinessWhy, titleFromTicketBlock, type Need, type NeedKind, type NeedsInput } from "./needs";
+import { BATCHABLE, GROUP_RANK, byRank, escalationReason, higherPriority, needAfter, needGroups, needs, needsIn, leftOutLabel, readinessPrompt, readinessWhy, repeatedComments, titleFromTicketBlock, type Need, type NeedKind, type NeedsInput } from "./needs";
 
 const NOW = Date.parse("2026-09-30T12:00:00Z");
 const iso = (minutesAgo: number) => new Date(NOW - minutesAgo * 60_000).toISOString();
@@ -710,5 +711,31 @@ describe("review nits", () => {
       }),
     );
     expect(list.map((n) => n.key)).toEqual(["run:r-a", "run:r-b"]);
+  });
+});
+
+describe("repeatedComments", () => {
+  const said = (key: string, text: string): Intent => ({ type: "comment", item: ref(key), body: docFromText(text), mentions: [] }) as unknown as Intent;
+
+  it("leaves a superseded pending comment out of what counts as seen, so its visible replacement still batches", () => {
+    const old = draft("old", said("CA-401", "Checking in"), 9, { supersededBy: "new" });
+    const next = draft("new", said("CA-401", "Checking in"), 5);
+    expect(repeatedComments([old, next])).toEqual([]);
+    const copy = draft("copy", said("CA-401", "checking  in"), 3);
+    expect(repeatedComments([old, next, copy]).map((p) => p.id)).toEqual(["copy"]);
+  });
+});
+
+describe("leftOutLabel", () => {
+  const said = (text: string) => draft("c", { type: "comment", item: ref("CA-401"), body: docFromText(text), mentions: [] } as unknown as Intent, 5);
+
+  it("quotes the first 40 characters of the comment after its title, with an ellipsis only when cut", () => {
+    expect(leftOutLabel(said("Is it still on track?"), "Comment on CA-401")).toBe("Comment on CA-401 “Is it still on track?”");
+    expect(leftOutLabel(said("a".repeat(40)), "T")).toBe(`T “${"a".repeat(40)}”`);
+    expect(leftOutLabel(said(`${"word ".repeat(10)}end`), "T")).toBe(`T “${"word ".repeat(8).trimEnd()}…”`);
+  });
+
+  it("is the title alone for a draft with no comment text", () => {
+    expect(leftOutLabel(draft("t", transition("CA-401"), 5), "Move CA-401")).toBe("Move CA-401");
   });
 });

@@ -45,6 +45,7 @@ describe("the pause before posting edited text", () => {
     expect(newRiskQuote("Looks good", "token=ghp_abcdefghijklmnopqrstuvwxyz0123")).toEqual({ secret: "gh…" });
     expect(newRiskQuote("Looks good", "x AKIAIOSFODNN7EXAMPLE")).toEqual({ secret: "AK…" });
     expect(newRiskQuote("x", "postgres://admin:secret@db/prod")).toEqual({ secret: "se…" });
+    expect(newRiskQuote("x", "postgres://admin:pw@db/prod")).toEqual({ secret: "pw…" });
     expect(newRiskQuote("x", "Adgangskoden er solsikke99")).toEqual({ secret: "so…" });
     expect(newRiskQuote("x", "mit password er: Kaffe123")).toEqual({ secret: "Ka…" });
     // Both risks are quoted, and only what is new.
@@ -52,6 +53,14 @@ describe("the pause before posting edited text", () => {
     expect(newRiskQuote("x", "@here, then Password: hunter2")).toEqual({ broadcast: "@here", secret: "hu…" });
     expect(newRiskQuote("cc @everyone", "cc @everyone, thanks")).toEqual({});
     expect(newRiskQuote("x", "cc @Mette")).toEqual({});
+  });
+
+  it("stops a URL's userinfo at the authority boundary, so a query or path with a colon and an @ is not a credential", () => {
+    expect(risksIn("postgres://admin:pw@db/prod")).toEqual(["secret"]);
+    for (const t of ["https://example.com?next=abc:secret@host", "https://example.com/a:b@c", "https://example.com#a:b@c"]) {
+      expect(risksIn(t), t).toEqual([]);
+      expect(newRiskQuote("x", t), t).toEqual({});
+    }
   });
 
   it("never lets the rest of a secret into the note", () => {

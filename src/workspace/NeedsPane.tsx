@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { docText } from "../lib/docs";
-import { higherPriority, needAfter, needGroups, repeatedComments, REPEATED_COMMENT_NOTE, type Need } from "../lib/needs";
+import { higherPriority, needAfter, leftOutLabel, needGroups, repeatedComments, REPEATED_COMMENT_NOTE, type Need } from "../lib/needs";
 import { ALLOW_MORE_STEPS, type Proposal, type Run, type WorkstreamView } from "../types";
 import { stepsOf } from "../lib/workstreamHold";
 import { isReporterNudge, isReporterQuestions } from "../lib/proposals";
@@ -755,7 +755,7 @@ function BatchDecision({ gid, needs }: { gid: string; needs: readonly Need[] }) 
             </ul>
             {leftOut.length > 0 && (
               <p data-batch-left-out className="m-0 text-sm text-ws-ink2 [overflow-wrap:anywhere]">
-                {REPEATED_COMMENT_NOTE}: {leftOut.map((p) => draftTitle(p)).join(", ")}.
+                {REPEATED_COMMENT_NOTE}: {leftOut.map((p) => leftOutLabel(p, draftTitle(p))).join(", ")}.
               </p>
             )}
             <BatchConfirm count={frozen.length} onConfirm={() => void confirm(frozen)} onCancel={close} />

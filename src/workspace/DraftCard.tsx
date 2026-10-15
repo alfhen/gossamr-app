@@ -284,6 +284,12 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
     setPause(null);
     onApprove(edit());
   };
+  /** Keep editing: the pause goes, the text stays and the field has the keyboard. */
+  const keepEditing = () => {
+    setPause(null);
+    setEditing(true);
+    focusField("textarea, input:not([type]), input[type=text]");
+  };
   // Another edit takes the pause back: it said what the earlier words held.
   useEffect(() => setPause(null), [body, newTitle, newText]);
 
@@ -632,13 +638,11 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
               if (ev.key !== "Escape" || ev.defaultPrevented) return;
               ev.preventDefault();
               ev.stopPropagation();
-              setPause(null);
-              setEditing(true);
-              focusField("textarea, input:not([type]), input[type=text]");
+              keepEditing();
             }}
           >
             {riskNote(pause.risks, pause.quote)}{" "}
-            <button type="button" data-post-pause-keep onClick={() => (setPause(null), setEditing(true), focusField("textarea, input:not([type]), input[type=text]"))} className="rounded font-semibold underline hover:bg-ws-hover focus-visible:outline-2 focus-visible:outline-ws-pip">
+            <button type="button" data-post-pause-keep onClick={keepEditing} className="rounded font-semibold underline hover:bg-ws-hover focus-visible:outline-2 focus-visible:outline-ws-pip">
               Keep editing
             </button>
           </p>
@@ -685,6 +689,13 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
                     type="button"
                     disabled={working || state === "applying" || (intent.type === "comment" && !body.trim()) || (intent.type === "subtasks" && remaining === 0) || rewriteBlock}
                     onClick={approve}
+                    onKeyDown={(ev) => {
+                      // While paused this button reads "Post anyway": Esc is Keep editing from here too, and only here, so typing in the fields stays theirs.
+                      if (!pause || ev.key !== "Escape" || ev.defaultPrevented) return;
+                      ev.preventDefault();
+                      ev.stopPropagation();
+                      keepEditing();
+                    }}
                     className={primary}
                   >
                     {working || state === "applying" ? "Working…" : pause ? "Post anyway" : action}

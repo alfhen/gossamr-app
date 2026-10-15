@@ -143,7 +143,8 @@ export const safeToBatch = (p: Proposal) => BATCHABLE.has(p.intent.type) && !isR
 export function repeatedComments(drafts: readonly Proposal[]): Proposal[] {
   const seen = new Set<string>();
   return drafts.filter((p) => {
-    if (p.state.type !== "pending" || p.intent.type !== "comment" || !safeToBatch(p)) return false;
+    // A superseded draft is not in the batch and its replacement is the one shown, so its text must not count as seen.
+    if (p.state.type !== "pending" || p.supersededBy || p.intent.type !== "comment" || !safeToBatch(p)) return false;
     const words = (p.intent.body?.blocks ? docText(p.intent.body) : "").replace(/\s+/g, " ").trim().toLowerCase();
     if (!words) return false;
     const key = `${p.intent.item.connectionId}:${p.intent.item.externalId}\n${words}`;
@@ -151,6 +152,14 @@ export function repeatedComments(drafts: readonly Proposal[]): Proposal[] {
     seen.add(key);
     return again;
   });
+}
+
+/** A left-out comment as the confirm names it: its title, then the first words of its text quoted, since comments on one ticket share a title. */
+export function leftOutLabel(p: Proposal, title: string): string {
+  const text = p.intent.type === "comment" && p.intent.body?.blocks ? docText(p.intent.body).replace(/\s+/g, " ").trim() : "";
+  if (!text) return title;
+  const words = [...text];
+  return `${title} “${words.length > 40 ? `${words.slice(0, 40).join("").trimEnd()}…` : text}”`;
 }
 
 /** What the batch confirm says of a comment it left out because an earlier one has the same text. */

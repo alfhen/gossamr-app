@@ -16,8 +16,8 @@ const SECRETS: RegExp[] = [
   /\bATATT[A-Za-z0-9_=-]{20,}/,
   /\beyJ[\w-]{10,}\.[\w-]{10,}\.[\w-]{5,}/,
   /\bBearer\s+[A-Za-z0-9._~+/-]{20,}/i,
-  // A credential inside a URL: scheme://user:pass@host.
-  /\b[a-z][a-z0-9+.-]*:\/\/[^\s:/@]+:[^\s@/]{3,}@/i,
+  // A credential inside a URL: scheme://user:pass@host. The userinfo ends at the authority boundary (/, ? or #), so "?next=a:b@c" is a query.
+  /\b[a-z][a-z0-9+.-]*:\/\/[^\s:/?#@]+:[^\s@/?#]+@/i,
   /\b(?:password(?:et)?|passwd|pwd|passphrase|adgangskode(?:n|t)?|kodeord(?:et)?|secret|token|api[ _-]?key|access[ _-]?key|client[ _-]?secret)\s*(?:(?:is|er)\s*)?[:=]\s*["']?[^\s"']{4,}/i,
   // Without a colon ("password is hunter22", "kodeord Hunter2xyz"): only a value that looks like a credential, so "password reset flow" passes.
   /\b(?:password(?:et)?|passwd|pwd|passphrase|pass|adgangskode(?:n|t)?|kodeord(?:et)?)\s+(?:(?:is|er)\s+)?["']?(?=[^\s"']*\d)(?=[^\s"']*[A-Za-z])[^\s"']{6,}/i,
@@ -66,7 +66,7 @@ export const newRisks = (original: string, edited: string): Risk[] => {
 
 /** The part of a secret-shaped match that is the secret: the token after "Bearer ", the value after "password:" or "kodeord ", the password of a URL, else the whole run. */
 const secretPart = (match: string): string =>
-  /^[a-z][a-z0-9+.-]*:\/\/[^\s:/@]+:([^\s@/]+)@$/i.exec(match)?.[1] ??
+  /^[a-z][a-z0-9+.-]*:\/\/[^\s:/?#@]+:([^\s@/?#]+)@$/i.exec(match)?.[1] ??
   /^Bearer\s+(.+)$/i.exec(match)?.[1] ??
   /^[A-Za-z][A-Za-z _-]*?\s*(?:(?:is|er)\s*)?[:=]\s*["']?(.+)$/i.exec(match)?.[1] ??
   /^(?:password(?:et)?|passwd|pwd|passphrase|pass|adgangskode(?:n|t)?|kodeord(?:et)?)\s+(?:(?:is|er)\s+)?["']?(.+)$/i.exec(match)?.[1] ??

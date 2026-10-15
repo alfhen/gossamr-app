@@ -143,6 +143,30 @@ test.describe("Esc on the posting pause (G1)", () => {
     await expect(text).toHaveValue(/cc @everyone/);
     expect(await jiraWrites(page)).toEqual([]);
   });
+
+  test("is Keep editing from Post anyway too, with the edited text kept and editing open", async ({ page }) => {
+    test.setTimeout(120_000);
+    await openApp(page, "runs=empty");
+    await allProjects(page);
+    await startWorkstream(page, "CA-408");
+    await openPipHome(page);
+    await workstreamRow(page, "CA-408").click();
+    await pipHome(page).locator("[data-clarity-notice]").getByRole("button", { name: "Ask the reporter now" }).click();
+    const draft = needsPane(page).getByRole("article", { name: "Comment on CA-408" });
+    await draft.getByRole("button", { name: "Edit" }).click();
+    const text = needsPane(page).locator("textarea").first();
+    await text.fill(`${await text.inputValue()}\n\ncc @everyone`);
+    await draft.getByRole("button", { name: "Done editing" }).click();
+    await draft.getByRole("button", { name: "Post comment" }).click();
+    await expect(draft.locator("[data-post-pause]")).toBeVisible();
+    const anyway = draft.getByRole("button", { name: "Post anyway" });
+    await anyway.focus();
+    await page.keyboard.press("Escape");
+    await expect(draft.locator("[data-post-pause]")).toHaveCount(0);
+    await expect(text).toBeFocused();
+    await expect(text).toHaveValue(/cc @everyone/);
+    expect(await jiraWrites(page)).toEqual([]);
+  });
 });
 
 test.describe("F6 to a toast with Undo (G12)", () => {
