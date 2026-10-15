@@ -384,7 +384,8 @@ export function WorkstreamControlsView({ view, globals, actions, confirmingStop,
               Hold
             </Btn>
           )}
-          {onConfirmClose && (
+          {/* Both, or nothing: a Close whose confirm could close nothing is not offered. */}
+          {onConfirmClose && actions.onClose && (
             <Btn tone="ghost" data-close-workstream onClick={() => onConfirmClose(true)} title="Its conversation goes back to General; its agents and drafts are kept" className="px-1.5 py-0.5">
               Close…
             </Btn>
@@ -392,7 +393,7 @@ export function WorkstreamControlsView({ view, globals, actions, confirmingStop,
           <MoreMenu onStop={() => onConfirmStop(true)} />
         </span>
         {confirmingStop && <StopConfirm onStop={() => (closeConfirm(), actions.onStop())} onKeep={closeConfirm} />}
-        {confirmingClose && onConfirmClose && <CloseConfirm onClose={() => actions.onClose?.()} onKeep={keepOpen} />}
+        {confirmingClose && onConfirmClose && actions.onClose && <CloseConfirm onClose={actions.onClose} onKeep={keepOpen} />}
       </div>
       <p data-mode-line={ws.mode} className="m-0 text-xs text-ws-ink2">
         {MODE_LINE[ws.mode]}

@@ -157,8 +157,8 @@ describe("the workstream's controls", () => {
   });
 
   it("shows Close beside Hold, not only behind the menu, and asks before closing", () => {
-    const at = (view: WorkstreamView, closing = false) =>
-      renderToStaticMarkup(<WorkstreamControlsView view={view} globals={AUTOSTART_DEFAULTS} actions={noop()} confirmingStop={false} onConfirmStop={vi.fn()} confirmingClose={closing} onConfirmClose={vi.fn()} />);
+    const at = (view: WorkstreamView, closing = false, actions: ControlActions = { ...noop(), onClose: vi.fn() }) =>
+      renderToStaticMarkup(<WorkstreamControlsView view={view} globals={AUTOSTART_DEFAULTS} actions={actions} confirmingStop={false} onConfirmStop={vi.fn()} confirmingClose={closing} onConfirmClose={vi.fn()} />);
     const idle = at(viewOf());
     expect(idle).toContain("data-close-workstream");
     expect(idle.indexOf(">Hold</button>")).toBeLessThan(idle.indexOf("data-close-workstream"));
@@ -170,6 +170,9 @@ describe("the workstream's controls", () => {
     expect(asking).toContain("Its conversation goes back to General; its agents and drafts are kept.");
     // Where a workstream can't be closed from (no handler), there is no button.
     expect(render(viewOf())).not.toContain("data-close-workstream");
+    // Nor where it could ask but has nothing to close with: neither the button nor its question.
+    expect(at(viewOf(), false, noop())).not.toContain("data-close-workstream");
+    expect(at(viewOf(), true, noop())).not.toContain('aria-label="Close this workstream"');
     expect(renderToStaticMarkup(<CloseConfirm onClose={vi.fn()} onKeep={vi.fn()} />)).toContain("Keep");
   });
 
