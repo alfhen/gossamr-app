@@ -12,8 +12,11 @@ import { openOnPipHome, useWorkstreams } from "./workstreamsStore";
 
 const link = "rounded px-1 text-ws-ink2 underline decoration-ws-sep2 underline-offset-2 hover:bg-ws-hover focus-visible:outline-2 focus-visible:outline-ws-pip";
 
+/** What the view says about GitHub: the reviews Gossamr posts there are not on this page, and where they are. */
+export const GITHUB_NOT_LISTED = "GitHub reviews Gossamr posted are not listed here; each shows in its workstream's timeline as “You posted an agent's GitHub review”.";
+
 /** What the view says before Gossamr has posted anything. */
-export const SENT_EMPTY = "Nothing has been posted to Jira from Gossamr yet. What you approve shows up here, with what Pip drafted and what you changed.";
+export const SENT_EMPTY = `Nothing has been posted to Jira from Gossamr yet. What you approve shows up here, with what Pip drafted and what you changed. ${GITHUB_NOT_LISTED}`;
 
 const time = (at: string) => new Date(at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 
@@ -102,7 +105,7 @@ export function JiraSentView() {
           ← Pip home
         </button>
         <h2 className="m-0 text-base font-semibold">What Jira saw from me</h2>
-        <p className="m-0 text-sm text-ws-ink3">Everything Gossamr posted to Jira after you approved it. This page only shows it; it posts nothing. It lists only what Gossamr posted. An agent run with your Claude settings could reach Jira on its own; see Agent safety.</p>
+        <p className="m-0 text-sm text-ws-ink3">Everything Gossamr posted to Jira after you approved it. This page only shows it; it posts nothing. {GITHUB_NOT_LISTED} It lists only what Gossamr posted. An agent run with your Claude settings could reach Jira on its own; see Agent safety.</p>
       </header>
       <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-[max(32px,var(--ws-launcher-clear,0px))]">
         <div className="mx-auto max-w-[780px]">

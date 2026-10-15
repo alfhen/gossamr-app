@@ -121,6 +121,19 @@ export const PIP_HOME_HINT = "⌘0";
 /** Whether a key press opens Pip home: Cmd/Ctrl+0 and nothing else held. A plain 0 stays the map's. */
 export const isPipHomeKey = (ev: Pick<KeyboardEvent, "key" | "metaKey" | "ctrlKey" | "shiftKey" | "altKey">) => (ev.metaKey || ev.ctrlKey) && !ev.shiftKey && !ev.altKey && ev.key === "0";
 
+/** What Cmd/Ctrl+0 says while it is off, because the composer holds a message that opening General would leave behind. */
+export const GENERAL_KEY_OFF = "Ctrl+0 is off while you type; clear or send the message first";
+
+/**
+ * What Cmd/Ctrl+0 does on Pip home inside a workstream: it goes on to General, also from Pip's composer while that is
+ * empty; with text in it the key is left off (and says so), so a half-written message is not taken away. `composer` is
+ * the composer's value, null when the keyboard is not in it.
+ */
+export const generalKeyOutcome = (composer: string | null): "open" | "off" => (composer !== null && composer.trim() !== "" ? "off" : "open");
+
+/** Whether the keyboard has no place after a page change: on the body, or on an element that went away with it. */
+export const focusLost = (active: Pick<Element, "isConnected"> | null, body: unknown): boolean => !active || active === body || !active.isConnected;
+
 const NO_CONTEXT: CommandContext = { project: null, view: null, unreadActivity: 0 };
 
 const sameProject = (a: ContainerRef | null, b: ContainerRef) => !!a && a.connectionId === b.connectionId && a.externalId === b.externalId;

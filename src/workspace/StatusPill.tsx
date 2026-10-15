@@ -21,10 +21,11 @@ const TONE: Record<StatusTone, string> = {
  * A workstream's one status word as a small pill (`data-status`, its state in `data-status-state`); its one short detail, if any, follows it.
  * The hint is the mouse's `title` and, for everyone else, a visually hidden line beside the pill that the pill is described by: it is
  * not a tab stop (the rows are walked with F6, j and k), so the row's own text carries it, as the cobweb's does. `describe` is false
- * where the caller says the hint itself.
+ * where the caller says the hint itself; `hintId` names the hint's line for a row that is described by it.
  */
-export function StatusPill({ status, title, detail = false, describe = true }: { status: WorkstreamStatus; title?: string; detail?: boolean; describe?: boolean }) {
-  const hintId = useId();
+export function StatusPill({ status, title, detail = false, describe = true, hintId: given }: { status: WorkstreamStatus; title?: string; detail?: boolean; describe?: boolean; hintId?: string }) {
+  const own = useId();
+  const hintId = given ?? own;
   const hint = title ?? STATUS_HINT[status.state];
   return (
     <>

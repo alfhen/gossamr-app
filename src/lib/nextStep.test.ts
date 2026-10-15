@@ -3,7 +3,7 @@ import { MockBackend } from "../backend/mock";
 import { AUTOSTART_DEFAULTS, HELD_BUDGET, HELD_PERSON, HELD_RESTART, TRIPWIRE } from "../types";
 import type { Intent, ItemRef, Proposal, Run, RunKind, RunState, WorkstreamRule, WorkstreamStage, WorkstreamView } from "../types";
 import { needs as buildNeeds, type Need } from "./needs";
-import { approvalStartsBuild, nextStep } from "./nextStep";
+import { approvalStartsBuild, fixRoundOnPost, nextStep, reviewPostFixRound } from "./nextStep";
 import { budgetView } from "./workstreamHold";
 
 const NOW = Date.parse("2026-09-30T12:00:00Z");
@@ -441,5 +441,30 @@ describe("approvalStartsBuild: the plan's description draft (G3)", () => {
     expect(approvalStartsBuild(pending, plan, view([plan], { heldReason: "held_by_person" }), AUTOSTART_DEFAULTS)).toBe(false);
     expect(approvalStartsBuild(pending, plan, view([plan], { spent: { autoTurns: 11, wakes: 0 } }), AUTOSTART_DEFAULTS)).toBe(false);
     expect(approvalStartsBuild(pending, plan, view([plan], { spent: { autoTurns: 9, wakes: 0 } }), AUTOSTART_DEFAULTS)).toBe(true);
+  });
+});
+
+describe("what posting a review draft also does (G6)", () => {
+  const build = run("r-b", "build", "done");
+  const rev = run("r-rev", "review", "done", { spec: { ...base.spec, kind: "review", workstream: "ws-1", buildFromRun: "r-b" } });
+  const blocked = (over: Over = {}) => view([build, rev], { reviewBlocking: true, ...over });
+  const fixed = (n: number) => Array.from({ length: n }, () => ({ action: "autostart" as const, runId: "r-b", detail: "fix_round after r-rev" }));
+
+  it("says fix round 1 goes to the build when a blocking review is posted in Manage with the rule on", () => {
+    const f = reviewPostFixRound(rev, blocked(), AUTOSTART_DEFAULTS, []);
+    expect(f).toEqual({ round: 1, build: "R1" });
+    expect(fixRoundOnPost(f!)).toBe("Posting also sends fix round 1 to build R1, which pushes to its branch.");
+    expect(reviewPostFixRound(rev, blocked(), AUTOSTART_DEFAULTS, fixed(1))?.round).toBe(2);
+    expect(fixRoundOnPost({ round: null, build: null })).toBe("Posting also sends a fix round to the build, which pushes to its branch.");
+  });
+
+  it("says nothing when the rules would not send one", () => {
+    expect(reviewPostFixRound(rev, view([build, rev]), AUTOSTART_DEFAULTS, [])).toBeNull();
+    expect(reviewPostFixRound(rev, blocked({ mode: "advise" }), AUTOSTART_DEFAULTS, [])).toBeNull();
+    expect(reviewPostFixRound(rev, blocked({ rules: { fix_round: false } }), AUTOSTART_DEFAULTS, [])).toBeNull();
+    expect(reviewPostFixRound(rev, blocked({ heldReason: HELD_PERSON }), AUTOSTART_DEFAULTS, [])).toBeNull();
+    expect(reviewPostFixRound(rev, blocked(), AUTOSTART_DEFAULTS, fixed(2))).toBeNull();
+    expect(reviewPostFixRound(rev, blocked(), null, [])).toBeNull();
+    expect(reviewPostFixRound(run("r-x", "review", "done"), blocked(), AUTOSTART_DEFAULTS, [])).toBeNull();
   });
 });

@@ -27,6 +27,14 @@ describe("the clarity notice", () => {
     expect(renderToStaticMarkup(<ClarityNotice view={view({ reporterReplied: true, changedWhileWaiting: true })} />)).not.toContain("They wrote");
   });
 
+  it("is a labelled group, not a live region that reads its buttons; a short status line says what appeared (G10)", () => {
+    const html = renderToStaticMarkup(<ClarityNotice view={view()} />);
+    expect(html).toContain('<span role="status" data-clarity-status="true" class="sr-only">CA-408 may be unclear</span>');
+    expect(html).toMatch(/<div role="group" aria-label="Ticket wording check" data-clarity-notice="w1"/);
+    for (const m of html.matchAll(/<(\w+)[^>]*role="status"[^>]*>(.*?)<\/\1>/g)) expect(m[2]).not.toContain("<button");
+    expect(renderToStaticMarkup(<ClarityNotice view={view({ reporterReplied: true })} />)).toContain("CA-408: the reporter replied</span>");
+  });
+
   it("is not shown without a notice", () => {
     expect(renderToStaticMarkup(<ClarityNotice view={view({ clarity: null })} />)).toBe("");
   });

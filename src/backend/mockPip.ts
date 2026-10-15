@@ -227,13 +227,13 @@ export function answersScript(prompt: string, runs: readonly Run[], workstream: 
   const asked = at >= 0 ? prompt.slice(0, at) : "";
   const questions = [...asked.matchAll(/\u201c([^\u201d]*)\u201d/g)].map((m) => m[1].trim()).filter((q) => q && q !== "(it listed no questions)");
   const answer = (at >= 0 ? prompt.slice(at + "My answers:".length) : prompt).trim();
-  // As many lines, or else as many sentences, as questions pair them up; any other shape gets every question, then the answer as it was written.
-  const parts = [answer.split(/\n+/), answer.split(/(?<=[.!?])\s+/)].map((p) => p.map((l) => l.trim()).filter(Boolean));
+  // As many numbered items (their markers dropped), or lines, or else sentences, as questions pair them up; any other shape gets every question, numbered, then the answer as it was written.
+  const parts = [answer.split(/(?:^|\s)\d+[.)]\s+/), answer.split(/\n+/), answer.split(/(?<=[.!?])\s+/)].map((p) => p.map((l) => l.trim()).filter(Boolean));
   const split = questions.length > 1 ? parts.find((p) => p.length === questions.length) : undefined;
   const body = [ANSWERS_OPENING, ""];
   if (split) questions.forEach((q, i) => body.push(`\u201c${q}\u201d`, `Answer: ${split[i]}`, ""));
   else {
-    questions.forEach((q) => body.push(`\u201c${q}\u201d`));
+    questions.forEach((q, i) => body.push(questions.length > 1 ? `${i + 1}. \u201c${q}\u201d` : `\u201c${q}\u201d`));
     if (questions.length) body.push("");
     body.push(questions.length === 1 ? `Answer: ${answer}` : `Answers: ${answer}`);
   }
@@ -242,7 +242,7 @@ export function answersScript(prompt: string, runs: readonly Run[], workstream: 
     .sort((a, b) => (b.endedAt ?? b.queuedAt).localeCompare(a.endedAt ?? a.queuedAt))[0];
   return {
     steps: ["Read the open questions", "Drafted a comment with your answers"],
-    text: `I drafted a comment on **${item.key}** with your answers, each under its question. It goes to the ticket as a comment, not a change to the description, and nothing is posted until you approve it.${triage ? " Once you post the answers, I'll draft the plan." : ""}`,
+    text: `I drafted a comment on **${item.key}** with your answers, ${split ? "each under its question" : "the questions first, then your answers as you wrote them"}. It goes to the ticket as a comment, not a change to the description, and nothing is posted until you approve it.${triage ? " Once you post the answers, I'll draft the plan." : ""}`,
     filter: null,
     draft: { intent: { type: "comment", item, body: docFromText(body.join("\n").trim()) }, label: ANSWERS_COMMENT_LABEL },
   };

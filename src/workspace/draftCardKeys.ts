@@ -38,6 +38,10 @@ export function holdWhilePressed(win: Pick<Window, "addEventListener" | "removeE
   win.addEventListener("pointercancel", done, true);
 }
 
+/** What Esc in a card's text field is while the posting pause shows: whether it leaves the editor and takes the pause with it (G14). */
+export const escLeavesPause = (ev: { key: string; defaultPrevented: boolean; target: { tagName?: string; type?: string } | null }, paused: boolean, editing: boolean): boolean =>
+  paused && editing && ev.key === "Escape" && !ev.defaultPrevented && (ev.target?.tagName === "TEXTAREA" || (ev.target?.tagName === "INPUT" && (ev.target.type === "text" || !ev.target.type)));
+
 /**
  * The one key model (`keyMap.ts`) on a full draft card, the kind Activity's Drafts, the ticket peek and Needs you's decision
  * pane show: the card takes focus, j and k move to the card before or after it, a approves after Enter, e edits, d and s skip

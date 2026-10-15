@@ -254,16 +254,24 @@ export const isAnswersDraft = (p: Proposal) => p.intent.type === "comment" && p.
 /** How much of the reply the provenance line quotes. */
 const REPLY_QUOTED = 80;
 
+/** Whether an answers comment's text puts an "Answer:" under every question it quotes (numbered or not), rather than quoting them and answering once. */
+export function answersPaired(body: string): boolean {
+  const lines = body.split("\n").map((l) => l.trim());
+  const questions = lines.filter((l) => /^(?:\d+[.)]\s+)?\u201c/.test(l)).length;
+  return questions > 0 && lines.filter((l) => /^Answer:/i.test(l)).length === questions;
+}
+
 /**
  * The line under the answers draft's card that says which reply it was made from: the start of what the person wrote after "My answers:"
  * in the message `prompt` (null when that turn is no longer at hand, then the line names the reply without quoting it). Shown in the app
- * only; the comment that goes to Jira has none of it.
+ * only; the comment that goes to Jira has none of it. Given the comment's text (`body`), it says "each answer under its question" only when
+ * the text does that (`answersPaired`); otherwise the questions and then the answers as written.
  */
-export function answersProvenance(prompt: string | null): string {
+export function answersProvenance(prompt: string | null, body?: string): string {
   const at = prompt?.indexOf("My answers:") ?? -1;
   const reply = (at >= 0 ? prompt!.slice(at + "My answers:".length) : (prompt ?? "")).replace(/\s+/g, " ").trim();
   const quoted = reply ? ` “${[...reply].length > REPLY_QUOTED ? `${[...reply].slice(0, REPLY_QUOTED).join("").trimEnd()}…` : reply}”` : "";
-  return `Drafted from your reply${quoted} in this conversation, each answer under its question. Read and edit it before you approve.`;
+  return `Drafted from your reply${quoted} in this conversation, ${body === undefined || answersPaired(body) ? "each answer under its question" : "the questions, then your answers as written"}. Read and edit it before you approve.`;
 }
 
 /**

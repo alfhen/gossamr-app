@@ -1,4 +1,4 @@
-import { decideAutostart, ruleOn, type AutostartInput, type ReviewFinding } from "../backend/mockSupervisor";
+import { decideAutostart, FIX_ROUNDS_MAX, ruleOn, type AutostartInput, type ReviewFinding } from "../backend/mockSupervisor";
 import { slotPosition, slotQueue, ordinal } from "../workspace/agentsLogic";
 import { ALLOW_MORE_STEPS, AUTOSTART_DEFAULTS, HELD_BUDGET, type AutoStartSwitches, type Proposal, type Run, type RunKind, type WorkstreamEvent, type WorkstreamRule, type WorkstreamView } from "../types";
 import { byRank, type Need } from "./needs";
@@ -78,6 +78,24 @@ export function approvalStartsBuild(p: Proposal, run: Pick<Run, "spec"> | undefi
   // A held workstream, or one whose automatic steps are used up, starts nothing by itself: the person's click does.
   return run.spec.kind === "plan" && ws.mode === "manage" && !ws.closedAt && !ws.heldReason && view.budget.level !== "spent" && ruleOn(globals, ws.rules, "plan_build");
 }
+
+/**
+ * What posting a GitHub review draft of `run` also does: sends a fix round to the build it reviewed, when the rules would. That is a blocking review in
+ * Manage (open, not held, automatic steps left) with the "Review blocking → fix round" rule on, as `decideAutostart` has it, and rounds left. `round` is
+ * the one it would be, counted from the audit `events` (null while they aren't loaded); `build` is the build's short name.
+ */
+export function reviewPostFixRound(run: Pick<Run, "spec"> | undefined, view: WorkstreamView | undefined, globals: Partial<AutoStartSwitches> | null, events?: readonly Pick<WorkstreamEvent, "action" | "runId" | "detail">[]): { round: number | null; build: string | null } | null {
+  const build = run?.spec.buildFromRun;
+  if (!globals || !view || !run || run.spec.kind !== "review" || !build || !view.reviewBlocking || view.escalation) return null;
+  const ws = view.workstream;
+  if (ws.mode !== "manage" || ws.closedAt || ws.heldReason || view.budget.level === "spent" || !ruleOn(globals, ws.rules, "fix_round")) return null;
+  const round = events ? events.filter((e) => e.action === "autostart" && e.runId === build && !!e.detail?.startsWith("fix_round after ")).length + 1 : null;
+  if (round !== null && round > FIX_ROUNDS_MAX) return null;
+  return { round, build: view.labels.find(([id]) => id === build)?.[1] ?? null };
+}
+
+/** The line beside Post review when posting also sends a fix round (`reviewPostFixRound`). */
+export const fixRoundOnPost = (f: { round: number | null; build: string | null }): string => `Posting also sends ${f.round === null ? "a fix round" : `fix round ${f.round}`} to ${f.build ? `build ${f.build}` : "the build"}, which pushes to its branch.`;
 
 /** "R5 (Build)": the run as the header names it, by its short name in the workstream and its step. */
 function nameOf(run: Run, view: WorkstreamView): string {

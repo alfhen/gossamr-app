@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { Switch } from "../components/Switch";
 import type { Need } from "../lib/needs";
 import { nextStep, type NextStep } from "../lib/nextStep";
@@ -11,6 +11,7 @@ import { Btn } from "./AgentSheet";
 import { giveBackClarity, settleClarityFocus } from "./clarityActions";
 import { paneHas, useDecisionShown } from "./decisionShown";
 import { EscalationCard } from "./EscalationCard";
+import { focusLost } from "./commands";
 import { openNeed } from "./needsActions";
 import { usePopover } from "./Popover";
 import { useRuns } from "./runsStore";
@@ -30,8 +31,9 @@ export const choiceValue = (choice: RuleChoice): boolean | null => (choice === "
 /** The person's controls on one workstream, each a user-only backend command; Pip has a tool for none of them. */
 export interface ControlActions {
   onManage(on: boolean): void;
-  onHold(): void;
-  onResume(): void;
+  /** Hold and Resume give back what they wait on, so focus can settle once the banner and the button have swapped. */
+  onHold(): void | Promise<unknown>;
+  onResume(): void | Promise<unknown>;
   /** "Allow 5 more", the person's answer to a spent budget: the audited way on from a budget hold, which Resume is not. */
   onAllowMore(): void;
   onStop(): void;
@@ -47,8 +49,8 @@ export function controlActions(id: string): ControlActions {
   const ws = () => useWorkstreams.getState();
   return {
     onManage: (on) => void ws().setMode(id, on ? "manage" : "advise"),
-    onHold: () => void ws().hold(id),
-    onResume: () => void ws().resume(id),
+    onHold: () => ws().hold(id),
+    onResume: () => ws().resume(id),
     onAllowMore: () => void ws().allowMore(id),
     onStop: () => void ws().stop(id),
     onClose: () => void ws().close(id),
@@ -56,6 +58,25 @@ export function controlActions(id: string): ControlActions {
     onSteps: () => void ws().loadGlobals(),
   };
 }
+
+/**
+ * Where the keyboard goes once Hold or Resume swapped the button for the other: Hold's button is replaced by the banner's
+ * Resume, and Resume's by Hold; either way the Manage switch is the fallback (a hold shown in the decision pane has no banner here).
+ */
+export const holdFocusTarget = (root: Pick<ParentNode, "querySelector">, after: "hold" | "resume"): HTMLElement | null =>
+  root.querySelector<HTMLElement>(after === "hold" ? "[data-ws-resume]" : "[data-ws-hold]") ?? root.querySelector<HTMLElement>('[aria-label="Manage this workstream"]');
+
+/** Once `done` resolves and the page has swapped the buttons, puts the keyboard where `holdFocusTarget` says, if it fell to the page. */
+function settleHoldFocus(done: void | Promise<unknown>, after: "hold" | "resume") {
+  void Promise.resolve(done).then(() =>
+    requestAnimationFrame(() => {
+      if (focusLost(document.activeElement, document.body)) holdFocusTarget(document, after)?.focus();
+    }),
+  );
+}
+
+/** The next stop for Tab (or Shift+Tab) among `count` buttons it is kept inside, wrapping at both ends; -1 for any other key. */
+export const tabWithin = (ev: Pick<KeyboardEvent, "key" | "shiftKey">, at: number, count: number): number => (ev.key !== "Tab" || count === 0 ? -1 : (at + (ev.shiftKey ? -1 : 1) + count) % count);
 
 const CHOICES: { choice: RuleChoice; label: (global: boolean | null) => string }[] = [
   { choice: "on", label: () => "On" },
@@ -161,19 +182,28 @@ export function StopConfirm({ onStop, onKeep }: { onStop(): void; onKeep(): void
   );
 }
 
-/** Asks before Close: the workstream goes, its agents and drafts stay. */
+/** Asks before Close: the workstream goes, its agents and drafts stay. Tab stays between its two buttons while it is open. */
 export function CloseConfirm({ onClose, onKeep }: { onClose(): void; onKeep(): void }) {
+  const question = useId();
+  const detail = useId();
   return (
     <div
       role="group"
       aria-label="Close this workstream"
+      aria-describedby={`${question} ${detail}`}
+      data-close-confirm
       data-esc-local
       className="flex basis-full flex-wrap items-center gap-2 text-sm"
       onKeyDown={(ev) => {
-        if (ev.key === "Escape") (ev.stopPropagation(), onKeep());
+        if (ev.key === "Escape") return void (ev.stopPropagation(), onKeep());
+        const buttons = Array.from(ev.currentTarget.querySelectorAll<HTMLElement>("button"));
+        const to = tabWithin(ev, buttons.indexOf(document.activeElement as HTMLElement), buttons.length);
+        if (to >= 0) (ev.preventDefault(), buttons[to].focus());
       }}
     >
-      <span className="text-ws-ink2">Close it? Its conversation goes back to General; its agents and drafts are kept.</span>
+      <span className="text-ws-ink2">
+        <span id={question}>Close it?</span> <span id={detail}>Its conversation goes back to General; its agents and drafts are kept.</span>
+      </span>
       <Btn tone="primary" onClick={onClose} className="px-2 py-0.5">
         Close workstream
       </Btn>
@@ -202,7 +232,7 @@ export function HeldBanner({ view, actions }: { view: WorkstreamView; actions: P
   const drift = ws.heldReason === `${TRIPWIRE}basis_drift`;
   const byYou = isHeldByYou(ws.heldReason);
   return (
-    <div role="status" data-held-banner={ws.heldReason} className="flex flex-wrap items-center gap-2 rounded-md border border-ws-warn/40 bg-ws-warn/10 px-2.5 py-1 text-sm text-ws-ink">
+    <div role="group" aria-label="Why this workstream is held" data-held-banner={ws.heldReason} className="flex flex-wrap items-center gap-2 rounded-md border border-ws-warn/40 bg-ws-warn/10 px-2.5 py-1 text-sm text-ws-ink">
       <span className="min-w-0 flex-1">
         {held}
         {drift && (
@@ -227,7 +257,7 @@ export function HeldBanner({ view, actions }: { view: WorkstreamView; actions: P
           </Btn>
         </>
       ) : (
-        <Btn tone="plain" onClick={actions.onResume} className="px-2 py-0.5">
+        <Btn tone="plain" data-ws-resume onClick={() => settleHoldFocus(actions.onResume(), "resume")} className="px-2 py-0.5">
           Resume
         </Btn>
       )}
@@ -257,7 +287,12 @@ export function ClarityNotice({ view }: { view: WorkstreamView }) {
   };
   const store = useWorkstreams.getState();
   return (
-    <div role="status" data-clarity-notice={id} className="grid gap-1 rounded-md border border-ws-warn/40 bg-ws-warn/10 px-2.5 py-1.5 text-sm text-ws-ink">
+    <>
+    {/* The toast announces what started; the notice itself is a group, so its buttons are not read as a status. */}
+    <span role="status" data-clarity-status className="sr-only">
+      {view.reporterReplied ? `${view.workstream.itemKey ?? "This ticket"}: the reporter replied` : `${view.workstream.itemKey ?? "This ticket"} may be unclear`}
+    </span>
+    <div role="group" aria-label="Ticket wording check" data-clarity-notice={id} className="grid gap-1 rounded-md border border-ws-warn/40 bg-ws-warn/10 px-2.5 py-1.5 text-sm text-ws-ink">
       <p data-clarity-text className="m-0">
         {view.reporterReplied ? clarityRepliedText(view.workstream.itemKey ?? "This ticket") : clarityText(view.workstream.itemKey ?? "This ticket", gaps)}
       </p>
@@ -277,6 +312,7 @@ export function ClarityNotice({ view }: { view: WorkstreamView }) {
       </div>
       {quiet.length > 0 && <QuietClarity view={view} project={project} gaps={quiet} inside />}
     </div>
+    </>
   );
 }
 
@@ -380,7 +416,7 @@ export function WorkstreamControlsView({ view, globals, actions, confirmingStop,
         <AutomaticSteps rules={ws.rules} globals={globals} actions={actions} />
         <span className="ml-auto flex items-center gap-1">
           {!ws.heldReason && (
-            <Btn tone="ghost" data-ws-hold onClick={actions.onHold} title="No wakes and no automatic steps; its agents carry on" className="px-1.5 py-0.5">
+            <Btn tone="ghost" data-ws-hold onClick={() => settleHoldFocus(actions.onHold(), "hold")} title="No wakes and no automatic steps; its agents carry on" className="px-1.5 py-0.5">
               Hold
             </Btn>
           )}

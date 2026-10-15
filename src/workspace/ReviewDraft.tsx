@@ -5,13 +5,17 @@ import { useAutoHeight } from "../components/autoHeight";
 import { parseBlocks, plainMarkdown } from "../lib/markdown";
 import { hunkLinesAround } from "../lib/diffHunks";
 import { KEPT_EDITED, keptOlderReviews, REVIEW_OUTDATED_NOTE, reviewEditProblem } from "../lib/proposals";
+import { newRiskQuote, newRisks, riskNote, type Risk, type RiskQuotes } from "../lib/riskyText";
 import type { ChangedFile, DiffSide, Proposal, ProposalEdit, ReviewComment } from "../types";
-import type { DraftCardProps } from "./DraftCard";
+import { showPause, type DraftCardProps } from "./DraftCard";
 import { useCardKeys } from "./draftCardKeys";
 import { PEEK_DRAFT_MARGIN, peekFocusAfterLeaving } from "./peekDrafts";
 import { openPullView, sameCommit, usePullDiff, type PullDiffState } from "./pullViewStore";
 import { takesBackendText } from "./RewriteDiff";
 import { FromRun } from "./RunProvenance";
+import { fixRoundOnPost, reviewPostFixRound } from "../lib/nextStep";
+import { useRuns } from "./runsStore";
+import { useWorkstreams } from "./workstreamsStore";
 import { useWorkspace } from "../workspaceStore";
 
 type Review = Extract<Proposal["intent"], { type: "githubReview" }>;
@@ -72,6 +76,22 @@ export function reviewEdit(review: Review, summary: string, comments: readonly H
   const commentsChanged = kept.length !== review.comments.length || kept.some((c, i) => keyOf(c) !== keyOf(review.comments[i]) || c.body !== review.comments[i].body);
   if (!summaryChanged && !commentsChanged) return null;
   return { type: "githubReview", ...(summaryChanged ? { summary: summary.trim() } : {}), ...(commentsChanged ? { comments: kept } : {}) };
+}
+
+/**
+ * What the person's edit of a review adds that would reach everyone or leak a secret: the summary and each kept comment are
+ * checked against what the draft said (`newRisks`, the rules the other drafts' pause uses). A comment that is dropped isn't posted, so it isn't checked.
+ */
+export function reviewRisks(review: Review, summary: string, comments: readonly Held[]): { risks: Risk[]; quote: RiskQuotes } {
+  const was = new Map(review.comments.map((c) => [keyOf(c), c.body]));
+  const pairs = [{ was: review.summary, now: summary }, ...comments.filter((c) => !c.dropped).map((c) => ({ was: was.get(keyOf(c)) ?? "", now: c.body }))];
+  const risks = new Set<Risk>();
+  const quote: RiskQuotes = {};
+  for (const { was: before, now } of pairs) {
+    for (const r of newRisks(before, now)) risks.add(r);
+    for (const [r, q] of Object.entries(newRiskQuote(before, now)) as [Risk, string][]) quote[r] ??= q;
+  }
+  return { risks: (["broadcast", "secret"] as const).filter((r) => risks.has(r)), quote };
 }
 
 /** What 'Discuss with Pip' asks about a review draft: read it and the pull request's comments, change it only when asked, and it stays a draft. */
@@ -219,6 +239,13 @@ export function ReviewDraft({
   const stored = useWorkspace((s) => s.proposals);
   const olderKept = p.state.type === "pending" ? keptOlderNote(p, givenDrafts ?? Object.values(stored)) : null;
   const title = `GitHub review of ${review.repo}#${review.number}`;
+  // Posting a blocking review in Manage also sends a fix round to the build, by the same rule the supervisor follows: said beside Post review.
+  const reviewRun = useRuns((s) => s.runs.find((r) => r.id === review.runId));
+  const reviewWs = reviewRun?.spec.workstream ?? null;
+  const reviewView = useWorkstreams((s) => (reviewWs ? s.list.find((v) => v.workstream.id === reviewWs) : undefined));
+  const globals = useWorkstreams((s) => s.globals);
+  const reviewEvents = useWorkstreams((s) => (reviewWs ? s.events[reviewWs] : undefined));
+  const fixRound = p.state.type === "pending" ? reviewPostFixRound(reviewRun, reviewView, globals, reviewEvents) : null;
   const [summary, setSummary] = useState(initial?.summary ?? review.summary);
   const [comments, setComments] = useState<Held[]>(() => initial?.comments ?? held(review));
   const edited = useRef(false);
@@ -316,10 +343,31 @@ export function ReviewDraft({
       });
   };
   const hint = `review-markdown-${p.id}`;
+  // Edited words that mention everyone or look like a secret wait for a second press, as on the other drafts: a confirm the person can pass, never a block.
+  const [pause, setPause] = useState<{ risks: Risk[]; quote: RiskQuotes } | null>(null);
+  /** The step Post review, Post anyway and Enter take: pauses once for edited text that would reach everyone, else approves. */
+  const post = (opts?: { postAnyway?: boolean }) => {
+    const found = reviewRisks(review, summary, comments);
+    if (found.risks.length && !pause) {
+      setPause(found);
+      // The keyboard goes to the safe choice, not to a Post button that now reads "Post it anyway".
+      requestAnimationFrame(() => showPause(card.current));
+      return;
+    }
+    setPause(null);
+    onApprove(edit, opts);
+  };
+  /** Keep editing: the pause goes, the text stays and the summary has the keyboard. */
+  const keepEditing = () => {
+    setPause(null);
+    requestAnimationFrame(() => card.current?.querySelector<HTMLElement>("textarea")?.focus());
+  };
+  // Another edit takes the pause back: it said what the earlier words held.
+  useEffect(() => setPause(null), [summary, JSON.stringify(comments)]);
   const approvable = open && !working && state !== "applying" && !problem;
   const keys = useCardKeys(p, {
     // Posting by key is the Post review button's step, asked for Enter first, and only where the token can post.
-    approve: canPost && approvable ? () => onApprove(edit) : undefined,
+    approve: canPost && approvable ? () => post() : undefined,
     skip: open && !working ? onSkip : undefined,
     edit: open ? () => requestAnimationFrame(() => card.current?.querySelector<HTMLElement>("textarea")?.focus()) : undefined,
     open: pullView,
@@ -470,6 +518,11 @@ export function ReviewDraft({
             {postsWhat(kept.length)} Nothing goes to GitHub until you post it here.
           </p>
         )}
+        {open && fixRound && canPost && (
+          <p data-review-fix-round role="note" className="m-0 text-sm text-ws-ink2">
+            {fixRoundOnPost(fixRound)}
+          </p>
+        )}
         {open && p.maybePosted && (
           <p data-review-maybe-posted role="note" className="m-0 rounded-md border border-ws-sep2 bg-ws-bar px-2 py-1 text-sm text-ws-ink2">
             This review may already be on GitHub: Gossamr sent it at {p.maybePosted.commitSha.slice(0, 8)} and got no answer. Post review looks for it on the pull request first and sends nothing while it can&apos;t be sure.
@@ -498,6 +551,25 @@ export function ReviewDraft({
             {shownError ?? problem}
           </p>
         )}
+        {pause && open && (
+          <p
+            role="alert"
+            data-post-pause={pause.risks.join(" ")}
+            className="m-0 text-sm text-ws-warn"
+            onKeyDown={(ev) => {
+              // Esc here is Keep editing, not the peek closing over the unsaved text.
+              if (ev.key !== "Escape" || ev.defaultPrevented) return;
+              ev.preventDefault();
+              ev.stopPropagation();
+              keepEditing();
+            }}
+          >
+            {riskNote(pause.risks, pause.quote, "the pull request")}{" "}
+            <button type="button" data-post-pause-keep onClick={keepEditing} className="rounded font-semibold underline hover:bg-ws-hover focus-visible:outline-2 focus-visible:outline-ws-pip">
+              Keep editing
+            </button>
+          </p>
+        )}
         <div data-draft-actions className="sticky bottom-0 z-[1] -mx-3 -mb-2.5 flex flex-wrap items-center justify-end gap-2 border-t border-ws-sep bg-ws-win px-3 py-2">
           <button
             type="button"
@@ -520,13 +592,23 @@ export function ReviewDraft({
                 Discard
               </button>
               {canPost && p.maybePosted?.checkedAt && (
-                <button type="button" data-review-post-anyway disabled={working || state === "applying" || !!problem} title={problem ?? "Sends this review though it may already be on GitHub."} onClick={() => onApprove(edit, { postAnyway: true })} className={button}>
+                <button type="button" data-review-post-anyway disabled={working || state === "applying" || !!problem} title={problem ?? "Sends this review though it may already be on GitHub."} onClick={() => post({ postAnyway: true })} className={button}>
                   Post anyway
                 </button>
               )}
               {canPost && (
-                <button type="button" disabled={working || state === "applying" || !!problem} title={problem ?? undefined} onClick={() => onApprove(edit)} className={primary}>
-                  {working || state === "applying" ? "Posting…" : postLabel(kept.length)}
+                <button type="button" disabled={working || state === "applying" || !!problem} title={problem ?? undefined}
+                  onClick={() => post()}
+                  onKeyDown={(ev) => {
+                    // While paused this button reads "Post it anyway": Esc is Keep editing from here too, and only here.
+                    if (!pause || ev.key !== "Escape" || ev.defaultPrevented) return;
+                    ev.preventDefault();
+                    ev.stopPropagation();
+                    keepEditing();
+                  }}
+                  className={primary}
+                >
+                  {working || state === "applying" ? "Posting…" : pause ? "Post it anyway" : postLabel(kept.length)}
                 </button>
               )}
             </>

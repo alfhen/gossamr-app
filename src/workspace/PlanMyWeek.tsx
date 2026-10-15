@@ -1,6 +1,6 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { Need } from "../lib/needs";
-import { WEEK_PICKS, isoWeek, itemOutcome, liveWorkstreamOf, movePick, planMyWeek, reopenedWithoutWorkstream, ticketDone, ticketPick, weekLabel, type PlanItem } from "../lib/planMyWeek";
+import { WEEK_PICKS, isoWeek, itemOutcome, liveWorkstreamOf, movePick, planMyWeek, reopenedWithoutWorkstream, ticketDone, ticketPick, weekLabel, type PlanItem, type PlanPick } from "../lib/planMyWeek";
 import type { WorkstreamWither } from "../lib/workstreamWither";
 import type { PersonRef, WorkItem } from "../types";
 import { useWorkspace } from "../workspaceStore";
@@ -14,6 +14,9 @@ import { useToasts } from "./toasts";
 import { offerUndo, withdrawUndo } from "./undo";
 import { useNow } from "./useNow";
 import { openOnPipHome, useWorkstreams } from "./workstreamsStore";
+
+/** What is said once a pick moved to `to` (0-based) of `total`: its key, or its title for a workstream, and where it is now. */
+export const movedText = (pick: Pick<PlanPick, "ticketKey" | "title">, to: number, total: number) => `${pick.ticketKey ?? pick.title} moved to position ${to + 1} of ${total}`;
 
 const button = "rounded-md border border-ws-sep2 px-2.5 py-px text-sm leading-normal whitespace-nowrap hover:bg-ws-hover focus-visible:outline-2 focus-visible:outline-ws-pip";
 const small = "rounded px-1.5 text-sm leading-normal text-ws-ink2 hover:bg-ws-hover focus-visible:outline-2 focus-visible:outline-ws-pip disabled:opacity-40";
@@ -107,6 +110,9 @@ export function PlanMyWeekView({
 }) {
   const [adding, setAdding] = useState("");
   const [note, setNote] = useState<{ ok: boolean; text: string } | null>(null);
+  /** What a move said to a screen reader: the reorder has no other sign for it. */
+  const [moved, setMoved] = useState("");
+  const because = useId();
   const [drag, setDrag] = useState<number | null>(null);
   /** Several tickets matched the words: the person chooses one. */
   const [choices, setChoices] = useState<WorkItem[] | null>(null);
@@ -140,6 +146,7 @@ export function PlanMyWeekView({
   const move = (from: number, to: number) => {
     if (to < 0 || to >= picks.length || from === to) return;
     onChange(movePick(picks, from, to));
+    setMoved(movedText(picks[from], to, picks.length));
   };
   /** Takes the pick at `index` out, with an Undo for it (the Remove button and Delete or Backspace on its row alike). */
   const remove = (index: number) => {
@@ -220,7 +227,9 @@ export function PlanMyWeekView({
               data-plan-pick={p.id}
               tabIndex={0}
               draggable
-              aria-label={`${n + 1}. ${p.title}. ${p.because} Alt and the arrow keys move it.`}
+              aria-label={`${n + 1}. ${p.title}`}
+              aria-describedby={`${because}-${p.id}`}
+              aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown"
               onDragStart={() => setDrag(n)}
               onDragOver={(ev) => drag !== null && ev.preventDefault()}
               onDrop={(ev) => {
@@ -257,7 +266,7 @@ export function PlanMyWeekView({
               </span>
               <span className="grid min-w-0 flex-1">
                 <span data-plan-title className="truncate font-semibold text-ws-ink">{p.title}</span>
-                <span data-plan-because className="text-ws-ink2">
+                <span id={`${because}-${p.id}`} data-plan-because className="text-ws-ink2">
                   Because {p.because}
                 </span>
               </span>
@@ -274,6 +283,9 @@ export function PlanMyWeekView({
           ))}
         </ol>
       )}
+      <p role="status" data-plan-moved className="sr-only">
+        {moved}
+      </p>
       <form
         className="flex flex-wrap items-center gap-2"
         onSubmit={(ev) => {
@@ -449,7 +461,7 @@ export function ThisWeekView({
     <section data-this-week={week} aria-label="This week" className="grid max-h-[25%] min-h-0 shrink-0 grid-rows-[auto_minmax(0,1fr)] gap-0.5 border-t border-ws-sep bg-ws-bar px-3 py-1.5">
       <div className="flex items-baseline gap-2">
         <h2 className="m-0 flex-1 text-xs font-semibold tracking-wide text-ws-ink3 uppercase">This week</h2>
-        <button type="button" data-this-week-edit onClick={onEdit} className="rounded px-1 text-xs text-ws-ink2 underline hover:bg-ws-hover focus-visible:outline-2 focus-visible:outline-ws-pip">
+        <button type="button" data-this-week-edit aria-label="Edit this week's plan" onClick={onEdit} className="rounded px-1 text-xs text-ws-ink2 underline hover:bg-ws-hover focus-visible:outline-2 focus-visible:outline-ws-pip">
           Edit
         </button>
       </div>

@@ -27,9 +27,9 @@ import { useAgentsEnabled, useAgentsFlag } from "./agentsFlag";
 import { applyTheme, usePrefs } from "./prefs";
 import { useRuns } from "./runsStore";
 import { togglePip, useWorkstreams } from "./workstreamsStore";
-import { PipHome } from "./PipHome";
+import { PipHome, settleGeneralFocus } from "./PipHome";
 import { Rail } from "./Rail";
-import { isHoldAllKey, isPipHomeKey } from "./commands";
+import { GENERAL_KEY_OFF, generalKeyOutcome, isHoldAllKey, isPipHomeKey } from "./commands";
 import { TABBABLE, nextRegion, regionStep, wrapTab, type WorkspaceRegion } from "./pipHomeKeys";
 import { Settings } from "./Settings";
 import { Header } from "./Header";
@@ -38,6 +38,7 @@ import { useGithubUi } from "./githubUi";
 import { FILTER_LIMIT, useDev } from "./devStore";
 import { ChooseWatch } from "./WatchPicker";
 import { ToastHost, focusToast, toastPlacement } from "./ToastHost";
+import { useToasts } from "./toasts";
 import { useTabs, type Route } from "./tabsStore";
 import { usePipHome } from "./pipHomeStore";
 
@@ -170,8 +171,16 @@ function useGlobalKeys(agentsEnabled: boolean) {
       // comment) or behind the open palette.
       if (agentsEnabled && isPipHomeKey(ev) && !typingElsewhere(document.activeElement) && !usePrefs.getState().paletteOpen) {
         ev.preventDefault();
-        // Already on Pip home inside a workstream, it goes on to General; not from Pip's composer, where the person is typing.
-        if (useTabs.getState().route === "pip" && document.activeElement?.id !== PIP_INPUT_ID) usePipHome.getState().openGeneral();
+        // Already on Pip home inside a workstream, it goes on to General. From Pip's composer it does so while the composer is
+        // empty; with a message in it the key is off, and says so rather than doing nothing.
+        if (useTabs.getState().route === "pip") {
+          const active = document.activeElement;
+          const typed = active?.id === PIP_INPUT_ID ? (active as HTMLTextAreaElement).value : null;
+          if (generalKeyOutcome(typed) === "open") {
+            usePipHome.getState().openGeneral();
+            settleGeneralFocus();
+          } else useToasts.getState().push(GENERAL_KEY_OFF, "info");
+        }
         useTabs.getState().setRoute("pip");
         return;
       }

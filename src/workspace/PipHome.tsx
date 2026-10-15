@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { useClaude } from "../claudeStore";
 import { isHeldByYou } from "../lib/workstreamHold";
 import { stageText } from "../lib/workstreamStage";
@@ -18,7 +18,7 @@ import { TIMELINE_ENTRY, timelineStop } from "./timelineKeys";
 import { lightboxOpen, useAttachments, useFileDrop } from "./PipImages";
 import { ConversationLine, escapeCancelsTurn, useConversationDrafts, usePipChips } from "./PipPane";
 import { popoverOpen } from "./Popover";
-import { START_WORKSTREAM } from "./commands";
+import { START_WORKSTREAM, focusLost } from "./commands";
 import type { ClarityLearning } from "../lib/clarityLearning";
 import { usePrefs } from "./prefs";
 import { useRunSetup } from "./runSetupStore";
@@ -85,6 +85,9 @@ function RowStatus({ status, view, nudge = false }: { status: WorkstreamStatus; 
   );
 }
 
+/** A workstream row's name: its key and title, then its status word and detail ("DEVOPS-490 Fix login, Idle, may be unclear"). */
+export const optionName = (...parts: (string | null | undefined)[]) => parts.filter(Boolean).join(", ");
+
 export interface WorkstreamListProps {
   list: readonly WorkstreamView[];
   closed: readonly WorkstreamView[];
@@ -142,10 +145,14 @@ export function WorkstreamList({ list, closed, showClosed, selected, onSelect, o
   const owned = new Set(list.flatMap((v) => v.runs));
   const generalRunning = liveCounts(runs.filter((r) => !owned.has(r.id) && !r.spec.workstream), now ?? Date.now()).running;
   const [listRef, more] = useMoreBelow<HTMLUListElement>();
-  const option = (id: string | null, level: WorkstreamWither["level"] = 0, dim = false) => ({
+  const hints = useId();
+  const option = (id: string | null, label: string, describedBy?: string, level: WorkstreamWither["level"] = 0, dim = false) => ({
     role: "option" as const,
     "aria-selected": selected === id,
     tabIndex: selected === id ? 0 : -1,
+    // The name is the short line j and k read; the sentence that explains the status is its description.
+    "aria-label": label,
+    "aria-describedby": describedBy,
     onClick: () => onSelect(id),
     className: `${ROW} ${selected === id ? "bg-ws-sel text-ws-ink" : "text-ws-ink2 hover:bg-ws-hover"} ${witherClass(level, "ws-")} ${dim ? "opacity-60" : ""}`.trim(),
   });
@@ -153,7 +160,7 @@ export function WorkstreamList({ list, closed, showClosed, selected, onSelect, o
     <nav aria-label="Workstreams" tabIndex={-1} className="flex min-h-0 flex-1 flex-col border-t border-ws-sep bg-ws-bar">
       <h2 className="m-0 px-3 pt-2 pb-1 text-xs font-semibold tracking-wide text-ws-ink3 uppercase">Workstreams</h2>
       <ul ref={listRef} role="listbox" aria-label="Workstreams" aria-keyshortcuts="j k ArrowDown ArrowUp Enter" className="m-0 grid min-h-0 list-none content-start gap-0.5 overflow-y-auto p-0 px-1.5">
-        <li data-workstream-row="general" {...option(null)}>
+        <li data-workstream-row="general" {...option(null, optionName("General", needsIn(needsYou, null) > 0 ? `${needsIn(needsYou, null)} in Needs you` : null))}>
           <span className="flex min-w-0 items-center gap-1.5">
             <span className="font-semibold text-ws-ink">General</span>
             <NeedsBadge count={needsIn(needsYou, null)} total={needsYou.length} />
@@ -164,13 +171,13 @@ export function WorkstreamList({ list, closed, showClosed, selected, onSelect, o
           const web = wither[v.workstream.id];
           const status = statuses.get(v.workstream.id)!;
           return (
-            <li key={v.workstream.id} data-workstream-row={v.workstream.id} data-wither={web ? web.level : undefined} data-filtered-out={matches(v) ? undefined : "" } title={web ? witherTitle(web) : undefined} {...option(v.workstream.id, web?.level, !matches(v))}>
+            <li key={v.workstream.id} data-workstream-row={v.workstream.id} data-wither={web ? web.level : undefined} data-filtered-out={matches(v) ? undefined : "" } title={web ? witherTitle(web) : undefined} {...option(v.workstream.id, optionName(`${v.workstream.itemKey ? `${v.workstream.itemKey} ` : ""}${rowTitle(v.workstream)}`, status.word, status.detail), web ? `${hints}-${v.workstream.id} ${hints}-${v.workstream.id}-web` : `${hints}-${v.workstream.id}`, web?.level, !matches(v))}>
               {web && <Cobweb level={web.level} />}
               <span className="flex min-w-0 items-center gap-1.5">
                 {v.workstream.itemKey && <b className="shrink-0 font-mono font-semibold text-ws-ink">{v.workstream.itemKey}</b>}
                 <span className="min-w-0 truncate">{rowTitle(v.workstream)}</span>
                 <span className="ml-auto flex shrink-0">
-                  <StatusPill status={status} title={status.state === "needs-you" ? `${needsIn(needsYou, v.workstream.id)} of the ${needsYou.length} in Needs you ${needsIn(needsYou, v.workstream.id) === 1 ? "is" : "are"} here. ${STATUS_HINT[status.state]}` : undefined} />
+                  <StatusPill status={status} hintId={`${hints}-${v.workstream.id}`} title={status.state === "needs-you" ? `${needsIn(needsYou, v.workstream.id)} of the ${needsYou.length} in Needs you ${needsIn(needsYou, v.workstream.id) === 1 ? "is" : "are"} here. ${STATUS_HINT[status.state]}` : undefined} />
                 </span>
               </span>
               <RowStatus status={status} view={v} nudge={nudgeDue?.has(v.workstream.id)} />
@@ -181,7 +188,7 @@ export function WorkstreamList({ list, closed, showClosed, selected, onSelect, o
               )}
               {/* After the row's own words, so its name still starts with the ticket's key. */}
               {web && (
-                <span data-workstream-wither className="sr-only">
+                <span data-workstream-wither id={`${hints}-${v.workstream.id}-web`} className="sr-only">
                   {web.text}
                 </span>
               )}
@@ -239,6 +246,17 @@ export function WorkstreamList({ list, closed, showClosed, selected, onSelect, o
       </div>
     </nav>
   );
+}
+
+/**
+ * After Cmd/Ctrl+0 opened General, the workstream's rail (and what had the keyboard in it) is gone: on the next frame, if the
+ * keyboard fell to the page, it goes to the selected General row, where F6 and j/k carry on.
+ */
+export function settleGeneralFocus() {
+  requestAnimationFrame(() => {
+    if (!focusLost(document.activeElement, document.body)) return;
+    document.querySelector<HTMLElement>('[data-pip-home] [data-workstream-row="general"]')?.focus();
+  });
 }
 
 /** Whether the person asked for less motion: the fade's scroll then jumps instead of gliding. */

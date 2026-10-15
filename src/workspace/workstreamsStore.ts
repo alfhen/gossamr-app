@@ -416,7 +416,8 @@ export const useWorkstreams = create<WorkstreamsState>()((set, get) => {
       const stop = readinessOf(get().list, id);
       if (!stop) return stale();
       const done = await act("Couldn't plan anyway", (b) => b.workstreamsReadinessOverride(id, stop.triageRun));
-      if (done.ok) useToasts.getState().push("Planning anyway. The plan starts as soon as the workstream's checks allow.", "info");
+      const said = stop.replied ? "Planning now with the reporter's reply on the ticket. The plan starts as soon as the workstream's checks allow." : stop.changed ? "Planning now with the ticket as it is. The plan starts as soon as the workstream's checks allow." : "Planning anyway. The plan starts as soon as the workstream's checks allow.";
+      if (done.ok) useToasts.getState().push(said, "info");
       return done.ok;
     },
 

@@ -165,6 +165,24 @@ describe("a reporter's reply comment ends the wait", () => {
   });
 });
 
+describe("Plan now after the reporter replied (G4)", () => {
+  it("toasts that it plans with their reply on the ticket, and keeps 'Planning anyway' for a plain stop", async () => {
+    const id = await open("CA-408");
+    const spec: RunSpec = { kind: "triage", repo: "acme/storefront", clonePath: "/Users/sample/Code/storefront", base: "main", name: "ca-408-triage", instruction: "", focus: null, focusFromRun: null, ticketBlock: null, workstream: id };
+    const draft = await backend.runsDraft(spec, CA408);
+    const triage = await backend.runsApprove(draft.id, (await backend.runsReview(draft.id)).digest);
+    finish(triage.id);
+    await useWorkstreams.getState().refresh();
+    const stop = stored(id).readiness!;
+    const was = useWorkstreams.getState().list;
+    const replied = was.map((v) => (v.workstream.id === id ? { ...v, readiness: { ...stop, changed: true, replied: true } } : v));
+    useWorkstreams.setState({ list: replied });
+    expect(await useWorkstreams.getState().planAnyway(id)).toBe(true);
+    expect(texts()).toContain("Planning now with the reporter's reply on the ticket. The plan starts as soon as the workstream's checks allow.");
+    expect(texts().some((t) => t.startsWith("Planning anyway"))).toBe(false);
+  });
+});
+
 describe("what the page says when the ticket changed while it waited on the reporter", () => {
   /** A workstream on CA-408 whose questions to the reporter were posted, so it waits. */
   async function waiting() {

@@ -1,6 +1,8 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { INTERRUPTED, MOCK_TURN_DAYS, NEVER_RAN, SHOWN_MAX_CHARS, freshStart, mockUsage, openMockPipTurns, shownLine } from "./mockPipTurns";
-import { mockAsk } from "./mockPip";
+import { answersScript, mockAsk } from "./mockPip";
+import { docText } from "../lib/docs";
+import { answersPaired, answersProvenance } from "../lib/proposals";
 import type { ScreenContext } from "../types";
 
 const KEY = "gossamr-mock-pip-turns";
@@ -287,5 +289,40 @@ describe("mockAsk", () => {
     expect(kept?.text.length).toBeGreaterThan(0);
     expect(kept?.usage).toEqual(mockUsage("hello there", kept!.text));
     expect(events[events.length - 1]).toMatchObject({ type: "done", ok: true, usage: kept?.usage });
+  });
+});
+
+describe("the comment with the person's answers (G3)", () => {
+  const item = { connectionId: "mock", externalId: "CA-408", key: "CA-408" };
+  const ws = { id: "w1", item, answersDue: true };
+  const asked = "R2's open questions about CA-408: \u201cWhat does done mean?\u201d \u201cWhich export?\u201d \u201cWho owns it?\u201d\n\nMy answers: ";
+  const script = (answers: string) => answersScript(`${asked}${answers}`, [], ws)!;
+  const text = (answers: string) => {
+    const d = script(answers).draft!.intent;
+    return d.type === "comment" ? docText(d.body) : "";
+  };
+
+  it("pairs numbered answers, one per question, with the markers dropped", () => {
+    const body = text("1. Done means all three emails send. 2. Only the CRM export. 3. The support team.");
+    expect(body).toContain("\u201cWhat does done mean?\u201d\nAnswer: Done means all three emails send.");
+    expect(body).toContain("\u201cWhich export?\u201d\nAnswer: Only the CRM export.");
+    expect(body).toContain("\u201cWho owns it?\u201d\nAnswer: The support team.");
+    expect(answersPaired(body)).toBe(true);
+    expect(script("1) a\n2) b\n3) c").text).toContain("each under its question");
+  });
+
+  it("numbers the questions and answers once, and says so, when the answers don't pair", () => {
+    const body = text("It is all about winback.");
+    expect(body).toContain("1. \u201cWhat does done mean?\u201d\n2. \u201cWhich export?\u201d\n3. \u201cWho owns it?\u201d\n\nAnswers: It is all about winback.");
+    expect(answersPaired(body)).toBe(false);
+    const said = script("It is all about winback.").text;
+    expect(said).not.toContain("each under its question");
+    expect(said).toContain("the questions first, then your answers as you wrote them");
+  });
+
+  it("the provenance line claims pairing only when the comment's text has it", () => {
+    expect(answersProvenance("My answers: x", "\u201cQ?\u201d\nAnswer: x")).toContain("each answer under its question");
+    expect(answersProvenance("My answers: x", "1. \u201cQ?\u201d\n2. \u201cR?\u201d\n\nAnswers: x")).toContain("the questions, then your answers as written");
+    expect(answersProvenance("My answers: x")).toContain("each answer under its question");
   });
 });
