@@ -25,29 +25,35 @@ export function toastPlacement(screen: string | null, clearRight: number): CSSPr
 let before: HTMLElement | null = null;
 
 /**
- * Where the person was when they started pressing F6, and where the last F6 landed. The toast is the last stop of the round, so
- * the element focused just before it is the composer's, not the place the person was working: a press that starts where the
- * last one landed continues the round; one from anywhere else begins a new one there.
+ * Where the person was when they started pressing F6. The toast is the last stop of the round, so the element focused just
+ * before it is the composer's, not the place the person was working. A round is the run of F6 presses with no other key or
+ * click between them; it is told by the presses themselves, not by where focus landed, which a region may move a frame late.
  */
-const round: { start: HTMLElement | null; landed: Element | null } = { start: null, landed: null };
+const round: { start: HTMLElement | null; on: boolean } = { start: null, on: false };
 
-/** Where the round of F6 presses began, after one more press from `active`: the same place while it goes on from where the last one landed, else `active` itself (null for the page). */
-export function roundStart<T>(active: T | null, landed: T | null, start: T | null, page: T | null = null): T | null {
-  if (landed && active === landed) return start;
+/** Where the round of F6 presses began, after one more press from `active`: the same place while the round goes on, else `active` itself (null for the page). */
+export function roundStart<T>(active: T | null, going: boolean, start: T | null, page: T | null = null): T | null {
+  if (going) return start;
   return active && active !== page ? active : null;
 }
+
+/** Keys that are held with another, not pressed on their own: they don't end a round of F6. */
+const MODIFIERS = new Set(["Shift", "Control", "Alt", "Meta"]);
 
 if (typeof window !== "undefined") {
   window.addEventListener(
     "keydown",
     (ev) => {
-      if (ev.key !== "F6") return;
-      round.start = roundStart<Element>(document.activeElement, round.landed, round.start, document.body) as HTMLElement | null;
-      // After the page's own handler has moved the keyboard.
-      setTimeout(() => (round.landed = document.activeElement), 0);
+      if (ev.key !== "F6") {
+        if (!MODIFIERS.has(ev.key)) round.on = false;
+        return;
+      }
+      round.start = roundStart<Element>(document.activeElement, round.on, round.start, document.body) as HTMLElement | null;
+      round.on = true;
     },
     true,
   );
+  window.addEventListener("pointerdown", () => void (round.on = false), true);
 }
 
 /** F6's stop at the toast on screen: remembers where the keyboard was and puts it on the toast. False when there is none. */
@@ -67,6 +73,7 @@ function leaveToast() {
   const back = before?.isConnected ? before : typeof document === "undefined" ? null : document.getElementById("workspace-main");
   before = null;
   round.start = null;
+  round.on = false;
   back?.focus();
 }
 

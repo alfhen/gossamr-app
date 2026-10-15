@@ -64,14 +64,14 @@ describe("a toast takes the keyboard", () => {
 
 describe("where Esc on the toast gives the keyboard back (G21)", () => {
   it("is the place the round of F6 began, not the composer the round passed on its way to the toast", () => {
-    // First press from the plan row: the round begins there. Later presses start from where the last landed, so it stays.
-    expect(roundStart("row", null, null)).toBe("row");
-    expect(roundStart("notice", "notice", "row")).toBe("row");
-    expect(roundStart("composer", "composer", "row")).toBe("row");
-    // The person moved the keyboard themselves between presses: a new round, from there.
-    expect(roundStart("field", "composer", "row")).toBe("field");
+    // First press from the plan row: the round begins there. Later presses in the same round keep it, wherever focus is by then.
+    expect(roundStart("row", false, null)).toBe("row");
+    expect(roundStart("notice", true, "row")).toBe("row");
+    expect(roundStart("row", true, "row")).toBe("row");
+    // Another key or a click ended the round: the next F6 begins a new one, from there.
+    expect(roundStart("field", false, "row")).toBe("field");
     // The page itself is no place to go back to.
-    expect(roundStart("body", null, null, "body")).toBeNull();
+    expect(roundStart("body", false, null, "body")).toBeNull();
   });
 
   it("falls back to where the keyboard is when F6 reaches the toast, when no round was noted", () => {
