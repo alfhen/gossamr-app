@@ -62,8 +62,12 @@ export const newRisks = (original: string, edited: string): Risk[] => {
   return (["broadcast", "secret"] as const).filter((r) => [...now[r]].some((m) => !had[r].has(m)));
 };
 
-/** The part of a secret-shaped match that is the secret: the value after "password:" or "kodeord ", else the whole run. */
-const secretPart = (match: string): string => /^[A-Za-z][A-Za-z _-]*?\s*(?:(?:is|er)\s*)?[:=]\s*["']?(.+)$/i.exec(match)?.[1] ?? /^(?:password|passwd|pwd|passphrase|pass|adgangskode|kodeord)\s+(?:(?:is|er)\s+)?["']?(.+)$/i.exec(match)?.[1] ?? match;
+/** The part of a secret-shaped match that is the secret: the token after "Bearer ", the value after "password:" or "kodeord ", else the whole run. */
+const secretPart = (match: string): string =>
+  /^Bearer\s+(.+)$/i.exec(match)?.[1] ??
+  /^[A-Za-z][A-Za-z _-]*?\s*(?:(?:is|er)\s*)?[:=]\s*["']?(.+)$/i.exec(match)?.[1] ??
+  /^(?:password|passwd|pwd|passphrase|pass|adgangskode|kodeord)\s+(?:(?:is|er)\s+)?["']?(.+)$/i.exec(match)?.[1] ??
+  match;
 
 /** A secret for the note: its first two characters and an ellipsis, never the rest. */
 export const maskSecret = (secret: string): string => `${[...secret].slice(0, 2).join("")}…`;

@@ -1,4 +1,5 @@
 import { AUTO_WATCH_EVERYTHING_MAX, type ContainerRef, type Intent, type Proposal, type RunKind, type WatchChange, type WatchMode, type WatchRow, type WatchState, type WorkstreamActor } from "../types";
+import { docText } from "../lib/docs";
 import type { GithubWrite } from "./mockGithub";
 import type { ScriptedFinish } from "./mockRunResult";
 import type { MockLaunch } from "./mockRuns";
@@ -126,7 +127,8 @@ export interface MockHandle {
   /** The run ids Terminal was opened on (`runsAttach`, Allow once among them), oldest first. */
   attached(): string[];
   /** Every write the sample tracker made, oldest first, with the draft the person approved for it. */
-  jiraWrites(): { proposalId: string; type: string; key: string | null }[];
+  /** What was written to Jira, oldest first: the draft, the kind of write, its ticket and, for a comment, its text as posted. */
+  jiraWrites(): { proposalId: string; type: string; key: string | null; text?: string }[];
   /** Every GitHub review draft, newest first: its pull request, the run it came from, its state, what replaced it and whether the person edited it. */
   reviewDrafts(): MockReviewDraft[];
   /** Adds an audit line to the open workstream on ticket `key` as of `at` (an ISO time), the way to age what depends on the time since: the sample's clock is the browser's and can't be moved. */
@@ -211,7 +213,7 @@ export function exposeMockClock({ runs, workstreams, proposals, pip, tickets, gi
     loseRun: (id) => void runs.lose(id),
     stopRunAtLimit: (id) => void runs.stopAtLimit(id),
     attached: () => [...runs.attached],
-    jiraWrites: () => (proposals?.writes ?? []).map((w) => ({ proposalId: w.proposalId, type: w.intent.type, key: writtenKey(w.intent) })),
+    jiraWrites: () => (proposals?.writes ?? []).map((w) => ({ proposalId: w.proposalId, type: w.intent.type, key: writtenKey(w.intent), ...(w.intent.type === "comment" ? { text: docText(w.intent.body) } : {}) })),
     reviewDrafts: () =>
       (proposals?.list() ?? []).flatMap((p) =>
         p.intent.type === "githubReview"

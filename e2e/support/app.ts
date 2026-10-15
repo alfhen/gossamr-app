@@ -123,7 +123,7 @@ interface Handle {
   loseRun(id: string): void;
   stopRunAtLimit(id: string): void;
   attached(): string[];
-  jiraWrites(): { proposalId: string; type: string; key: string | null }[];
+  jiraWrites(): { proposalId: string; type: string; key: string | null; text?: string }[];
   reviewDrafts(): ReviewDraftRow[];
   setBudget(id: string, budget: { autoTurns?: number | null; wakes?: number | null }): void;
   seedWorkstreamEvent(key: string, event: { actor: string; action: string; at: string; runId?: string | null; proposalId?: string | null; detail?: string | null }): void;

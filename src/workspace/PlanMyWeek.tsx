@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { Need } from "../lib/needs";
 import { WEEK_PICKS, isoWeek, itemOutcome, liveWorkstreamOf, movePick, planMyWeek, reopenedWithoutWorkstream, ticketDone, ticketPick, weekLabel, type PlanItem } from "../lib/planMyWeek";
 import type { WorkstreamWither } from "../lib/workstreamWither";
@@ -113,8 +113,11 @@ export function PlanMyWeekView({
   const [focus, setFocus] = useState<{ id: string; part: "row" | "up" | "down" } | { removed: number } | null>(null);
   const root = useRef<HTMLElement>(null);
   // What Undo puts back goes into the plan as it is by then, which the closure of the press that removed the row cannot see.
+  // Set once the render commits, never during it: a render React throws away must not leave Undo its picks.
   const latest = useRef({ picks, onChange });
-  latest.current = { picks, onChange };
+  useLayoutEffect(() => {
+    latest.current = { picks, onChange };
+  });
   const offered = useRef<number[]>([]);
   // The plan is only on this card until it is kept: once it goes, an Undo offered for it has nothing to put back into.
   useEffect(() => () => offered.current.forEach((id) => withdrawUndo(id)), []);

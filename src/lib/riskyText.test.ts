@@ -39,6 +39,8 @@ describe("the pause before posting edited text", () => {
     expect(newRiskQuote("Looks good", "Looks good, cc @Everyone")).toBe("@Everyone");
     expect(newRiskQuote("Looks good", "Password: hunter2")).toBe("hu…");
     expect(newRiskQuote("Looks good", "kodeord Hunter2xyz")).toBe("Hu…");
+    // A bearer token is quoted by the token, not by the word in front of it.
+    expect(newRiskQuote("Looks good", "Bearer abcdefghijklmnopqrstuvwxyz")).toBe("ab…");
     expect(newRiskQuote("Looks good", "token=ghp_abcdefghijklmnopqrstuvwxyz0123")).toBe("gh…");
     expect(newRiskQuote("Looks good", "x AKIAIOSFODNN7EXAMPLE")).toBe("AK…");
     // The first by where it stands in the edit, and only what is new.
