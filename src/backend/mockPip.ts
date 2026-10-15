@@ -228,7 +228,9 @@ export function answersScript(prompt: string, runs: readonly Run[], workstream: 
   const questions = [...asked.matchAll(/\u201c([^\u201d]*)\u201d/g)].map((m) => m[1].trim()).filter((q) => q && q !== "(it listed no questions)");
   const answer = (at >= 0 ? prompt.slice(at + "My answers:".length) : prompt).trim();
   // As many numbered items (their markers dropped), or lines, or else sentences, as questions pair them up; any other shape gets every question, numbered, then the answer as it was written.
-  const parts = [answer.split(/(?:^|\s)\d+[.)]\s+/), answer.split(/\n+/), answer.split(/(?<=[.!?])\s+/)].map((p) => p.map((l) => l.trim()).filter(Boolean));
+  // A reply that numbers its answers is paired only by those numbers: a count that doesn't match keeps it as written, as lines or sentences would then shift the answers.
+  const numbered = /(?:^|\s)\d+[.)]\s+/.test(answer);
+  const parts = [answer.split(/(?:^|\s)\d+[.)]\s+/), ...(numbered ? [] : [answer.split(/\n+/), answer.split(/(?<=[.!?])\s+/)])].map((p) => p.map((l) => l.trim()).filter(Boolean));
   const split = questions.length > 1 ? parts.find((p) => p.length === questions.length) : undefined;
   const body = [ANSWERS_OPENING, ""];
   if (split) questions.forEach((q, i) => body.push(`\u201c${q}\u201d`, `Answer: ${split[i]}`, ""));

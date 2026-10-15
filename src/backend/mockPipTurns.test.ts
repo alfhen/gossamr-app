@@ -311,6 +311,15 @@ describe("the comment with the person's answers (G3)", () => {
     expect(script("1) a\n2) b\n3) c").text).toContain("each under its question");
   });
 
+  it("keeps numbered answers as written when their count doesn't match, rather than pairing them by lines", () => {
+    const reply = "1. All three emails send.\n2. Only the CRM export. 3. Support.\n4. And Ops reviews it.";
+    const body = text(reply);
+    expect(body).not.toContain("Answer: ");
+    expect(body).toContain("Answers: ");
+    expect(answersPaired(body)).toBe(false);
+    expect(script(reply).text).toContain("the questions first, then your answers as you wrote them");
+  });
+
   it("numbers the questions and answers once, and says so, when the answers don't pair", () => {
     const body = text("It is all about winback.");
     expect(body).toContain("1. \u201cWhat does done mean?\u201d\n2. \u201cWhich export?\u201d\n3. \u201cWho owns it?\u201d\n\nAnswers: It is all about winback.");
