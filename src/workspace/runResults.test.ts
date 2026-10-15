@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MockBackend } from "../backend/mock";
 import { itemRef } from "../backend/mockConnector";
-import { commentText, jiraNote, ticketFromAnswer, ticketKeys, ticketProposal } from "../backend/mockRunResult";
+import { commentText, jiraNote, namesUrl, ticketFromAnswer, ticketKeys, ticketProposal } from "../backend/mockRunResult";
 import results from "../../src-tauri/test-fixtures/agents/results.json";
 import tickets from "../../src-tauri/test-fixtures/agents/ticket-results.json";
 import type { CodeChange, Run } from "../types";
@@ -254,6 +254,11 @@ describe("drafting from a run", () => {
     const said = commentText({ text: `Opened ${pr.url}.`, fromMarker: true }, pr, "build");
     expect(said.split(pr.url)).toHaveLength(2);
     expect(said).not.toContain("Pull request:");
+    // Another pull request whose link starts with this one's is not this one: the link is still given.
+    expect(commentText({ text: "Follows https://github.com/acme/webshop/pull/70.", fromMarker: true }, pr, "build")).toContain(`Pull request: ${pr.url}`);
+    expect(namesUrl(`See ${pr.url}/files`, pr.url)).toBe(true);
+    expect(namesUrl(`See ${pr.url}7`, pr.url)).toBe(false);
+    expect(namesUrl("anything", "")).toBe(false);
   });
 });
 

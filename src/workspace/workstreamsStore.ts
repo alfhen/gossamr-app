@@ -148,9 +148,14 @@ export const useWorkstreams = create<WorkstreamsState>()((set, get) => {
   }
   /** The offer of Undo for each workstream's hold, so Resume, Allow more steps or Close can take it back: it would undo what they just settled. */
   const holdOffers = new Map<string, number>();
+  /** Hold all's one offer and the workstreams it would still free: one resumed, allowed more or closed since leaves it, and with none left the offer goes. */
+  let batchOffer: { offer: number; ids: Set<string> } | null = null;
   const withdrawHold = (id: string) => {
     withdrawUndo(holdOffers.get(id));
     holdOffers.delete(id);
+    if (!batchOffer?.ids.delete(id) || batchOffer.ids.size) return;
+    withdrawUndo(batchOffer.offer);
+    batchOffer = null;
   };
   const undoAll = async (ids: readonly string[]) => {
     const results = await Promise.allSettled(ids.map((id) => undoChange(id, { type: "hold", was: null })));
@@ -424,7 +429,11 @@ export const useWorkstreams = create<WorkstreamsState>()((set, get) => {
       const open = get().list.length;
       const said = n ? `Held ${workstreams(n)}. ${n === 1 ? "Its" : "Their"} agents carry on; nothing starts on its own until you resume.` : open ? "Every open workstream is held already." : "There are no open workstreams to hold.";
       // Each one it held was free before, so each goes back to free; Pip's turns it cancelled are not restarted.
-      if (n) offerUndo({ text: said, undone: `${workstreams(n)} ${n === 1 ? "is" : "are"} free again.`, undo: () => undoAll(done.value.map((w) => w.id)) });
+      if (n) {
+        const ids = new Set(done.value.map((w) => w.id));
+        if (batchOffer) withdrawUndo(batchOffer.offer);
+        batchOffer = { ids, offer: offerUndo({ text: said, undone: `${workstreams(n)} ${n === 1 ? "is" : "are"} free again.`, undo: () => undoAll([...ids]) }) };
+      }
       else useToasts.getState().push(said, "info");
       return n;
     },

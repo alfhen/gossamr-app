@@ -162,6 +162,12 @@ fn intro(kind: RunKind) -> &'static str {
 }
 
 /// The comment as it is first drafted. The person edits it before posting.
+/// Whether `text` names `url` itself, not a longer one it starts ("/pull/7" is not in ".../pull/70"). Mirrored by `namesUrl`
+/// in src/backend/mockRunResult.ts.
+fn names_url(text: &str, url: &str) -> bool {
+    !url.is_empty() && text.match_indices(url).any(|(at, _)| !text[at + url.len()..].starts_with(|c: char| c.is_alphanumeric() || c == '_' || c == '-'))
+}
+
 pub fn comment_text(run: &Run, resolved: &Resolved, note: &JiraNote, change: Option<&CodeChange>) -> String {
     let mut parts = vec![intro(run.spec.kind).to_string()];
     if resolved.status == Some(ReportStatus::Blocked) {
@@ -174,7 +180,7 @@ pub fn comment_text(run: &Run, resolved: &Resolved, note: &JiraNote, change: Opt
     }
     parts.push(note.text.clone());
     // A build's note often names its pull request already: the link is not said twice.
-    if let Some(pull) = change.filter(|c| c.kind == CodeChangeKind::PullRequest && !note.text.contains(&c.url)) {
+    if let Some(pull) = change.filter(|c| c.kind == CodeChangeKind::PullRequest && !names_url(&note.text, &c.url)) {
         parts.push(format!("Pull request: {}", pull.url));
     }
     parts.join("\n\n")
@@ -878,6 +884,27 @@ pub(in crate::inbox) mod tests {
         let text = body_of(&fx.core.draft_run_comment(&run.id).await.unwrap());
         assert_eq!(text.matches("https://github.com/acme/webshop/pull/7").count(), 1, "{text}");
         assert!(!text.contains("Pull request:"), "{text}");
+    }
+
+    #[test]
+    fn a_url_is_named_only_whole() {
+        let url = "https://github.com/acme/webshop/pull/7";
+        assert!(names_url("Built it: https://github.com/acme/webshop/pull/7", url));
+        assert!(names_url("See https://github.com/acme/webshop/pull/7.", url));
+        assert!(names_url("See https://github.com/acme/webshop/pull/7/files", url));
+        assert!(!names_url("See https://github.com/acme/webshop/pull/70", url));
+        assert!(!names_url("See https://github.com/acme/webshop/pull/7a", url));
+        assert!(!names_url("Nothing here", url));
+        assert!(!names_url("anything", ""));
+    }
+
+    #[tokio::test]
+    async fn the_pull_request_link_is_still_added_when_the_note_names_another_pull_request_it_starts() {
+        let fx = fixture_watching(&["acme/webshop"]).await;
+        let run = run_with(&fx, |r| r.result = Some("Done.\n\nFor Jira:\nFollows https://github.com/acme/webshop/pull/70".into())).await;
+        cache_change(&fx, pull(7, &format!("worktree-{}", run.spec.name), CodeChangeState::Open)).await;
+        let text = body_of(&fx.core.draft_run_comment(&run.id).await.unwrap());
+        assert!(text.contains("Pull request: https://github.com/acme/webshop/pull/7"), "{text}");
     }
 
     #[tokio::test]

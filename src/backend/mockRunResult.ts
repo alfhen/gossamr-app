@@ -264,6 +264,15 @@ export const ticketBody = (t: TicketProposal) => (t.body ? `${t.body}\n\n${FOUND
 
 export const ticketKeys = (text: string): string[] => [...new Set((text.match(KEY) ?? []).map((k) => k.toUpperCase()))];
 
+/** Whether `text` names `url` itself, not a longer one it starts ("/pull/7" is not in ".../pull/70"), as `names_url` in src-tauri/src/inbox/run_results.rs. */
+export function namesUrl(text: string, url: string): boolean {
+  if (!url) return false;
+  for (let at = text.indexOf(url); at >= 0; at = text.indexOf(url, at + 1)) {
+    if (!/^[\p{L}\p{N}_-]/u.test(text.slice(at + url.length))) return true;
+  }
+  return false;
+}
+
 /** The comment as the backend first drafts it, for the sample data. */
 export function commentText(note: JiraNote, change: CodeChange | null, kind: RunKind = "investigate", summaryOnly = false, blocked = false): string {
   const intro: Partial<Record<RunKind, string>> = {
@@ -277,7 +286,7 @@ export function commentText(note: JiraNote, change: CodeChange | null, kind: Run
   else if (!note.fromMarker) parts.push("The agent didn't mark anything for Jira, so this is its whole answer, shortened:");
   parts.push(note.text);
   // A build's note often names its pull request already: the link is not said twice.
-  if (change?.kind === "pullRequest" && !note.text.includes(change.url)) parts.push(`Pull request: ${change.url}`);
+  if (change?.kind === "pullRequest" && !namesUrl(note.text, change.url)) parts.push(`Pull request: ${change.url}`);
   return parts.join("\n\n");
 }
 
