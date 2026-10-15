@@ -125,7 +125,7 @@ test.describe("what the palette and the reporter draft say (G31)", () => {
     const draft = needsPane(page).getByRole("article", { name: "Comment on CA-408" });
     await expect(draft).toBeVisible();
     await expect(draft).toContainText("@");
-    await expect(draft.locator("[data-mention-note]")).toHaveText(/^Mentions .+ in the posted comment; Jira notifies mentioned people unless their settings say otherwise\.$/);
+    await expect(draft.locator("[data-mention-note]")).toHaveText(/^Mentions .+ in the posted comment\.$/);
     expect(await jiraWrites(page)).toEqual([]);
   });
 });

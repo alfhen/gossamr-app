@@ -28,9 +28,9 @@ describe("round 10 backlog", () => {
 
   it("G31: a reporter question that mentions people says who it mentions, without promising a notification", () => {
     expect(mentionNote([])).toBeNull();
-    expect(mentionNote([{ name: "Mette Lund" }])).toBe("Mentions Mette Lund in the posted comment; Jira notifies mentioned people unless their settings say otherwise.");
-    expect(mentionNote([{ name: "Mette Lund" }, { name: "Jens" }, { name: "Mette Lund" }])).toBe("Mentions Mette Lund and Jens in the posted comment; Jira notifies mentioned people unless their settings say otherwise.");
-    expect(mentionNote([{ name: "A" }, { name: "B" }, { name: "C" }])).toBe("Mentions A, B and C in the posted comment; Jira notifies mentioned people unless their settings say otherwise.");
+    expect(mentionNote([{ name: "Mette Lund" }])).toBe("Mentions Mette Lund in the posted comment.");
+    expect(mentionNote([{ name: "Mette Lund" }, { name: "Jens" }, { name: "Mette Lund" }])).toBe("Mentions Mette Lund and Jens in the posted comment.");
+    expect(mentionNote([{ name: "A" }, { name: "B" }, { name: "C" }])).toBe("Mentions A, B and C in the posted comment.");
   });
 
   it("G31: the palette's workstream step says it starts no agent and posts nothing; other steps have no such line", () => {
