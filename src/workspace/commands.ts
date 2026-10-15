@@ -122,12 +122,12 @@ export const PIP_HOME_HINT = "⌘0";
 export const isPipHomeKey = (ev: Pick<KeyboardEvent, "key" | "metaKey" | "ctrlKey" | "shiftKey" | "altKey">) => (ev.metaKey || ev.ctrlKey) && !ev.shiftKey && !ev.altKey && ev.key === "0";
 
 /** What Cmd/Ctrl+0 says while it is off, because the composer holds a message that opening General would leave behind. */
-export const GENERAL_KEY_OFF = "Ctrl+0 is off while you type; clear or send the message first";
+export const GENERAL_KEY_OFF = "Ctrl+0 is off while Pip's composer holds a message; clear or send it first";
 
 /**
  * What Cmd/Ctrl+0 does on Pip home inside a workstream: it goes on to General, also from Pip's composer while that is
  * empty; with text in it the key is left off (and says so), so a half-written message is not taken away. `composer` is
- * the composer's value, null when the keyboard is not in it.
+ * the composer's value wherever the keyboard is, null when there is no composer.
  */
 export const generalKeyOutcome = (composer: string | null): "open" | "off" => (composer !== null && composer.trim() !== "" ? "off" : "open");
 

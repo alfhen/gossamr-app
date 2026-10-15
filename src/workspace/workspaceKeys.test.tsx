@@ -10,7 +10,7 @@ describe("Ctrl+0 inside a workstream (G7)", () => {
 
   it("is off while the composer holds a message, and says so", () => {
     expect(generalKeyOutcome("half a thought")).toBe("off");
-    expect(GENERAL_KEY_OFF).toBe("Ctrl+0 is off while you type; clear or send the message first");
+    expect(GENERAL_KEY_OFF).toBe("Ctrl+0 is off while Pip's composer holds a message; clear or send it first");
   });
 });
 

@@ -232,7 +232,11 @@ test.describe("Ctrl+0 inside a workstream (G7, G8)", () => {
     // Typed words keep the key off, and it says so.
     await homeComposer(page).fill("half a thought");
     await page.keyboard.press("ControlOrMeta+0");
-    await expect(page.locator("[data-toast]")).toContainText("Ctrl+0 is off while you type; clear or send the message first");
+    await expect(page.locator("[data-toast]")).toContainText("Ctrl+0 is off while Pip's composer holds a message; clear or send it first");
+    await expect(general).toHaveAttribute("aria-selected", "false");
+    // Tabbing away from the message keeps it off too.
+    await pipHome(page).locator("[data-workstream-controls] button").first().focus();
+    await page.keyboard.press("ControlOrMeta+0");
     await expect(general).toHaveAttribute("aria-selected", "false");
     // Empty (G7), it goes on to General from the composer itself.
     await homeComposer(page).fill("");

@@ -171,11 +171,12 @@ function useGlobalKeys(agentsEnabled: boolean) {
       // comment) or behind the open palette.
       if (agentsEnabled && isPipHomeKey(ev) && !typingElsewhere(document.activeElement) && !usePrefs.getState().paletteOpen) {
         ev.preventDefault();
-        // Already on Pip home inside a workstream, it goes on to General. From Pip's composer it does so while the composer is
-        // empty; with a message in it the key is off, and says so rather than doing nothing.
+        // Already on Pip home inside a workstream, it goes on to General while Pip's composer is empty; with a message in it
+        // the key is off, and says so rather than doing nothing.
         if (useTabs.getState().route === "pip") {
-          const active = document.activeElement;
-          const typed = active?.id === PIP_INPUT_ID ? (active as HTMLTextAreaElement).value : null;
+          // Read wherever the keyboard is: tabbing away from a half-written message doesn't make it safe to leave.
+          const composer = document.getElementById(PIP_INPUT_ID) as HTMLTextAreaElement | null;
+          const typed = composer ? composer.value : null;
           if (generalKeyOutcome(typed) === "open") {
             usePipHome.getState().openGeneral();
             settleGeneralFocus();
