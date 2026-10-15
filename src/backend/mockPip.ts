@@ -576,6 +576,15 @@ export function scriptPip(prompt: string, context: ScreenContext, images: ImageD
   return unclear ? { ...script, steps: ["Read the ticket", ...script.steps], text: `${unclear}\n\n${script.text}` } : script;
 }
 
+/** The ways Pip words a check-in comment, one for each that already waits on the ticket. */
+const NUDGES = ["Checking in on this one. Is it still on track, or does anything need to move?", "Following up here. Has anything changed since the last update?", "One more look at this. Is anything holding it up that we could clear?"];
+
+/** The check-in wording for the next draft on `item`: the first the ticket's waiting drafts don't use yet, so two never say the same. */
+function nudgeText(drafts: readonly Proposal[], item: ItemRef): string {
+  const waiting = new Set(drafts.filter((d) => d.state.type === "pending" && d.intent.type === "comment" && d.intent.item.externalId === item.externalId).map((d) => (d.intent.type === "comment" ? docText(d.intent.body) : "")));
+  return NUDGES.find((n) => !waiting.has(n)) ?? NUDGES[0];
+}
+
 function scriptTurn(prompt: string, context: ScreenContext, images: ImageData[], runs: readonly Run[], now: number, drafts: readonly Proposal[], discussed: string | null, workstream: PipWorkstream | null): PipScript {
   if (prompt.startsWith(EVENT)) return wakeScript(prompt, runs, workstream);
   const answers = answersScript(prompt, runs, workstream);
@@ -796,7 +805,8 @@ function scriptTurn(prompt: string, context: ScreenContext, images: ImageData[],
       text: `I drafted a short comment on **${item.key}**. It isn't posted; approve, edit or skip it below.`,
       filter: null,
       draft: {
-        intent: { type: "comment", item, body: docFromText("Checking in on this one. Is it still on track, or does anything need to move?") },
+        // A comment asked for while one of these waits on the ticket says it in other words, so two drafts in a row don't post the same text twice.
+        intent: { type: "comment", item, body: docFromText(nudgeText(drafts, item)) },
         label: null,
       },
     };

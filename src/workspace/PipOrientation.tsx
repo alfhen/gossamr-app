@@ -8,10 +8,14 @@ export const ORIENTATION_TERMS: readonly { term: string; text: string }[] = [
   { term: "Run", text: "One Claude Code agent session doing a step: investigate, plan, build or review." },
   { term: "Cobweb", text: "Work has happened but Jira has not heard for days. Post an update to clear it." },
   { term: "Status", text: "Each workstream's one word: Needs you, Held, Waiting on reporter, Running, Quiet, Done or Idle. Hover a word for what it means." },
+  { term: "Intake", text: "The first stage of a workstream, before there is a plan." },
+  { term: "Advise", text: "Pip answers when asked and starts nothing." },
+  { term: "Decide", text: "A draft or a choice waits on you." },
+  { term: "Unblock", text: "An agent is stopped until you answer." },
   { term: "Worktree", text: "The run's own checkout of your repository, so runs don't step on each other or on your files." },
 ];
 
-export const ORIENTATION_SAFETY = "Nothing is posted to Jira until you click to approve it. On GitHub, a build only pushes its own branch to a draft pull request.";
+export const ORIENTATION_SAFETY = "Nothing is posted to Jira until you click to approve it. On GitHub, a build is told to push only its own branch to a draft pull request.";
 
 /** Where focus goes when the card closes from its button, so the keyboard stays on Pip home: the list's current row. */
 function focusList() {
@@ -25,9 +29,14 @@ export function dismissOrientation() {
   if (hadFocus) requestAnimationFrame(focusList);
 }
 
-/** What Pip home's words mean, until the person says Got it: one line, with the words behind More (`open` starts it expanded). It never takes focus by itself. */
-export function PipOrientation({ onDismiss = dismissOrientation, open = false }: { onDismiss?(): void; open?: boolean }) {
-  const [more, setMore] = useState(open);
+/**
+ * What Pip home's words mean, until the person says Got it: one line, with the words behind More (`open` starts it expanded).
+ * It never takes focus by itself. `compact` keeps it to its one line, for while Plan my week needs the room; the person's More is
+ * remembered and comes back with the words.
+ */
+export function PipOrientation({ onDismiss = dismissOrientation, open = false, compact = false }: { onDismiss?(): void; open?: boolean; compact?: boolean }) {
+  const [asked, setMore] = useState(open);
+  const more = asked && !compact;
   const button = "rounded-md border border-ws-sep2 px-2.5 py-px text-sm leading-normal whitespace-nowrap hover:bg-ws-hover focus-visible:outline-2 focus-visible:outline-ws-pip";
   return (
     <section data-pip-orientation aria-labelledby="pip-orientation" className="grid max-h-[40vh] shrink-0 gap-1.5 overflow-y-auto border-b border-ws-sep bg-ws-bar px-4 py-1.5">

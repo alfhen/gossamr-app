@@ -16,6 +16,7 @@ import { WatchingSection } from "./WatchSettings";
 import { gapWords, learnedList, LEARN_AFTER, SHORT_GAP } from "../lib/clarityLearning";
 import { giveBackClarity } from "./clarityActions";
 import { useEscToPipHome } from "./escHome";
+import { GITHUB_SAFETY } from "./githubSafety";
 
 export function connectionsOf(containers: { ref: { connectionId: string } }[]): { id: string; name: string; projects: number }[] {
   const counts = new Map<string, number>();
@@ -198,7 +199,7 @@ export function ConnectGithubCard({ connected }: { connected: boolean }) {
     <li className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-xl border border-dashed border-ws-sep2 p-4">
       <div className="min-w-0 flex-1">
         <div className="font-semibold">{connected ? "Connect another GitHub account" : "Connect GitHub"}</div>
-        <div className="text-sm text-ws-ink3">See the pull requests, branches and checks behind each ticket. Read-only: Gossamr never comments, merges or pushes.</div>
+        <div className="text-sm text-ws-ink3">See the pull requests, branches and checks behind each ticket. {GITHUB_SAFETY}</div>
       </div>
       <button type="button" onClick={() => useGithubUi.getState().openConnect()} className="shrink-0 rounded-lg bg-ws-accent px-3.5 py-1.5 font-semibold text-white">
         Connect GitHub

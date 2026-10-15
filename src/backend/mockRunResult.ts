@@ -278,6 +278,7 @@ export function commentText(note: JiraNote, change: CodeChange | null, kind: Run
   const intro: Partial<Record<RunKind, string>> = {
     investigate: "Investigated with an agent.",
     plan: "Planned with an agent.",
+    triage: "Triaged with an agent.",
     build: "Built with an agent.",
   };
   const parts = [intro[kind] ?? "Worked on with an agent."];
@@ -485,6 +486,9 @@ function beforeNote(text: string, line: string): string {
  */
 export const assumptionsSummaryLine = (n: number) => `Assumes answers to ${n} open ${n === 1 ? "question" : "questions"} about the ticket (listed at the end).`;
 
+/** The line a plan's `For Jira:` note starts with when it assumes `n` answers, followed by each question and its assumed answer, as `assumptions_jira_line` in src-tauri/src/domain/run.rs. */
+export const assumptionsJiraLine = (n: number) => `Assumes answers to ${n} open ${n === 1 ? "question" : "questions"} about the ticket:`;
+
 /** The working answer the sample plan assumes for an open question: what a real plan would write after "Assumed:". */
 export function assumedAnswer(question: string): string {
   const q = question.toLowerCase();
@@ -499,13 +503,14 @@ export function assumedAnswer(question: string): string {
  * A plan's answer with the open questions it was started to assume answers to listed at the end of the plan, before its
  * `For Jira:` note, each as the question and "Assumed: <the working answer>", so the plan's description draft shows them
  * (the real plan run is told to, `ASSUMPTIONS_PREFACE` in domain/run.rs). The plan opens with a line saying it assumes
- * them, and its `For Jira:` note starts with the same line.
+ * them, and its `For Jira:` note starts with its own line and carries each question and answer, so the comment stands apart from the plan.
  */
 export function withAssumptions(plan: string, assumptions: readonly string[]): string {
   if (!assumptions.length) return plan;
   const block = `## Open questions the plan assumes answers to\n\nThe person chose to plan without answers to these, so the plan assumes them settled as the plan reads:\n\n${assumptions.map((q) => `- ${q} Assumed: ${assumedAnswer(q)}`).join("\n")}`;
   const at = plan.search(/^For Jira:\n/m);
-  const noted = at < 0 ? plan : `${plan.slice(0, at)}For Jira:\n${assumptionsSummaryLine(assumptions.length)} ${plan.slice(at + "For Jira:\n".length)}`;
+  const list = `${assumptionsJiraLine(assumptions.length)}\n${assumptions.map((q) => `- ${q} Assumed: ${assumedAnswer(q)}`).join("\n")}`;
+  const noted = at < 0 ? plan : `${plan.slice(0, at)}For Jira:\n${list}\n\n${plan.slice(at + "For Jira:\n".length)}`;
   return beforeNote(`${assumptionsSummaryLine(assumptions.length)}\n\n${noted}`, block);
 }
 

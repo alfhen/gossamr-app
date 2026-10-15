@@ -62,7 +62,7 @@ test.describe("first-run orientation", () => {
     await expect(orientation).toContainText("One ticket's work from start to pull request");
     await expect(orientation).toContainText("One Claude Code agent session doing a step: investigate, plan, build or review");
     await expect(orientation).toContainText("The run's own checkout of your repository");
-    await expect(orientation).toContainText("Nothing is posted to Jira until you click to approve it. On GitHub, a build only pushes its own branch to a draft pull request.");
+    await expect(orientation).toContainText("Nothing is posted to Jira until you click to approve it. On GitHub, a build is told to push only its own branch to a draft pull request.");
 
     // It takes no focus, and Pip home's keys and footer hints are as they were.
     await expect(orientation.getByRole("button", { name: "Got it" })).not.toBeFocused();

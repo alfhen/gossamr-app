@@ -30,14 +30,14 @@ afterEach(() => {
 describe("Pip home's orientation card", () => {
   it("explains Pip, a workstream, a run and a worktree, and says nothing is posted without a click", () => {
     const html = renderToStaticMarkup(<PipOrientation open />);
-    expect(ORIENTATION_TERMS.map((t) => t.term)).toEqual(["Pip", "Workstream", "Run", "Cobweb", "Status", "Worktree"]);
+    expect(ORIENTATION_TERMS.map((t) => t.term)).toEqual(["Pip", "Workstream", "Run", "Cobweb", "Status", "Intake", "Advise", "Decide", "Unblock", "Worktree"]);
     expect(html).toContain("One ticket&#x27;s work from start to pull request");
     expect(html).toContain("One Claude Code agent session doing a step: investigate, plan, build or review");
     expect(html).toContain("own checkout of your repository");
     expect(html).toContain("Work has happened but Jira has not heard for days. Post an update to clear it.");
     expect(html).toContain("Each workstream&#x27;s one word: Needs you, Held, Waiting on reporter, Running, Quiet, Done or Idle.");
     expect(html).toContain(ORIENTATION_SAFETY);
-    expect(ORIENTATION_SAFETY).toBe("Nothing is posted to Jira until you click to approve it. On GitHub, a build only pushes its own branch to a draft pull request.");
+    expect(ORIENTATION_SAFETY).toBe("Nothing is posted to Jira until you click to approve it. On GitHub, a build is told to push only its own branch to a draft pull request.");
     expect(html).toMatch(/<button type="button"[^>]*>Got it<\/button>/);
   });
 
@@ -48,6 +48,13 @@ describe("Pip home's orientation card", () => {
     expect(html).toMatch(/<button type="button"[^>]*>Got it<\/button>/);
     expect(html).not.toContain("<dl");
     expect(html).not.toContain("Worktree");
+  });
+
+  it("keeps to its one line while Plan my week is open, even when More was opened", () => {
+    expect(renderToStaticMarkup(<PipOrientation open />)).toContain("Worktree");
+    const compact = renderToStaticMarkup(<PipOrientation open compact />);
+    expect(compact).not.toContain("<dl");
+    expect(compact).toMatch(/aria-expanded="false"[^>]*>More</);
   });
 
   it("takes no focus on load: nothing in it asks for it", () => {

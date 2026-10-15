@@ -7,6 +7,7 @@ import { useWorkspace } from "../workspaceStore";
 import { availableMethods, connectReducer, countdown, splitLinks, START, type ConnectMethod, type ConnectState } from "./connectFlow";
 import { openOnGithub, refreshAfterGithubChange, useGithubUi } from "./githubUi";
 import { useTabs } from "./tabsStore";
+import { GITHUB_SAFETY } from "./githubSafety";
 import { messageOf, useToasts } from "./toasts";
 
 const button = "rounded-lg px-3 py-1.5 font-semibold disabled:opacity-45";
@@ -234,7 +235,7 @@ function DeviceStep({ state, now, copied, onCopy, onOpen, onBack, onRetry }: Pic
 }
 
 const SUBTITLE: Record<ConnectState["step"], string> = {
-  choose: "Gossamr reads your pull requests, branches and commits to show the code behind each ticket. It is read-only: it never comments, merges or pushes.",
+  choose: `Gossamr reads your pull requests, branches and commits to show the code behind each ticket. ${GITHUB_SAFETY}`,
   token: "",
   cli: "",
   device: "",

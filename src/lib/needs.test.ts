@@ -646,6 +646,13 @@ describe("needGroups", () => {
     expect(list.filter((n) => n.batchable).map((n) => n.key).sort()).toEqual(["draft:c1", "draft:c2", "draft:c3", "draft:g1", "draft:o1"]);
   });
 
+  it("leaves a comment with the text of an earlier one on its ticket out of the safe batch", () => {
+    const said = (key: string, text: string): Intent => ({ type: "comment", item: ref(key), body: { blocks: [{ type: "paragraph", content: [{ type: "text", text, marks: [] }] }] }, mentions: [] }) as unknown as Intent;
+    const [g] = needGroups(needs(input({ workstreams: [ws1], proposals: [draft("a", said("CA-401", "All good."), 9), draft("b", said("CA-401", "all  good."), 8), draft("c", said("CA-401", "Also this."), 7)] })));
+    expect(g.safeBatch.map((n) => n.key)).toEqual(["draft:a", "draft:c"]);
+    expect(g.count).toBe(3);
+  });
+
   it("gives General a group of its own with each need's ticket in its head", () => {
     const general = needGroups(list).find((g) => g.workstreamId === null)!;
     expect(general.top.head).toBe("CA-500");

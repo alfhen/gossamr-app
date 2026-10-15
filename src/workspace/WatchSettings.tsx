@@ -7,6 +7,7 @@ import { useToasts } from "./toasts";
 import { ArchivedBadge, Badge, CatalogError, ChooseWatch, OfflineNote, PermissionBadge, RepoName, ScrollSentinel, SearchBox } from "./WatchPicker";
 import { useCatalog, type Catalog } from "./useCatalog";
 import { codeWatch, workWatch } from "./domains";
+import { GITHUB_SAFETY } from "./githubSafety";
 import { activityHint, agoText, count, graceDaysLeft, graceLine, matchesQuery, nounFor, repoParts, settingsRows, suggestionChips, type Noun, type SettingsRow } from "./watchLogic";
 
 const seg = "rounded-md px-2 py-px text-xs font-semibold";
@@ -262,7 +263,7 @@ export function WatchCardView(p: WatchCardViewProps) {
       {p.confirm && <ModeConfirm to={p.confirm} noun={p.noun} onConfirm={p.onConfirm} onCancel={p.onCancelConfirm} />}
       <p className="m-0 text-sm text-ws-ink3">
         {selected
-          ? `Watching ${count(watched, p.noun)}. Only these sync, show up and are visible to Pip.${code ? " Gossamr only reads from GitHub; it never comments, merges or pushes." : " You can still open any ticket by its key."}`
+          ? `Watching ${count(watched, p.noun)}. Only these sync, show up and are visible to Pip.${code ? ` ${GITHUB_SAFETY}` : " You can still open any ticket by its key."}`
           : `Watching every ${p.noun.one} you can see (${watched} synced so far). Switch to selected ${p.noun.many} to keep Gossamr to the ones you use.`}
       </p>
       {selected && <SuggestionChips chips={p.chips} noun={p.noun} onWatch={p.onChip} />}

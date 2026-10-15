@@ -156,6 +156,7 @@ fn intro(kind: RunKind) -> &'static str {
     match kind {
         RunKind::Investigate => "Investigated with an agent.",
         RunKind::Plan => "Planned with an agent.",
+        RunKind::Triage => "Triaged with an agent.",
         RunKind::Build => "Built with an agent.",
         _ => "Worked on with an agent.",
     }
@@ -1287,6 +1288,13 @@ pub(in crate::inbox) mod tests {
         assert_eq!(fx.core.run(&run.id).await.unwrap().unwrap().created_item, None);
         fx.core.run_outcome(&run.id).await.unwrap();
         assert_eq!(fx.core.run(&run.id).await.unwrap().unwrap().created_item, Some(made));
+    }
+
+    #[test]
+    fn a_triage_note_opens_by_saying_it_was_triaged_not_worked_on() {
+        assert_eq!(intro(RunKind::Triage), "Triaged with an agent.");
+        assert_eq!(intro(RunKind::Plan), "Planned with an agent.");
+        assert_eq!(intro(RunKind::Review), "Worked on with an agent.");
     }
 
     const BREAKDOWN: &str = "Large.\n\nSubtasks:\n- Add a backoff\n- Report the lag\n- Survive a restart\n\nFor Jira:\nA breakdown is proposed.";

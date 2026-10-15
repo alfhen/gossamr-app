@@ -8,7 +8,7 @@ import type { Intent, Proposal, Run, WorkstreamView } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { Launcher } from "./PipExtras";
 import { NeedsPane } from "./NeedsPane";
-import { NeedsYouList, groupText } from "./NeedsYou";
+import { NeedsYouList, firstText, groupText } from "./NeedsYou";
 import { NO_FILTERS, groupRuns, slotWaiters, stopAllLabel, stoppable, summaryLine, yourAgents } from "./agentsLogic";
 import { arm, confirmArmed, disarm, keyPlan, openInWorkstream, openNeed } from "./needsActions";
 import { BATCH_TITLE, composerFooter } from "./pipHomeLogic";
@@ -253,7 +253,20 @@ describe("the Needs you list", () => {
     // Folded, a group is its one row.
     unseed();
     const folded = renderToStaticMarkup(<NeedsYouList needs={list} now={NOW} />);
-    expect(folded).not.toContain("data-needs-top");
+    expect(folded).not.toContain("data-needs-top=\"\"");
+  });
+
+  it("names the top need on an open group's row, which j and k step past (G11)", () => {
+    seed(usePipHome, { expanded: new Set(["ws-1"]) });
+    const group = needGroups(list).find((g) => g.workstreamId === "ws-1")!;
+    const label = firstText(group);
+    expect(label).toContain(`${group.count} waiting. First: `);
+    expect(label).toContain(group.top.title);
+    expect(label).toContain("Enter decides it.");
+    const html = renderToStaticMarkup(<NeedsYouList needs={list} now={NOW} />);
+    expect(html).toContain(`aria-label="${label.replace(/'/g, "&#x27;")}"`);
+    unseed();
+    expect(renderToStaticMarkup(<NeedsYouList needs={list} now={NOW} />)).not.toContain("Enter decides it.");
   });
 
   it("says so when nothing waits", () => {
@@ -567,8 +580,9 @@ describe("the decision pane", () => {
     const html = pane(set({ workstreams: [], runs: sample, proposals: [draft("c1", comment("CA-401"), 3)], dismissed: new Set() }), "draft:c1");
     expect(html).toMatch(/<section[^>]*data-needs-pane="draft:c1"[^>]*class="[^"]*overflow-y-auto[^"]*\[&amp;_\[data-draft-actions\]\]:static/);
     expect(html).toMatch(/<header class="sticky -top-2.5 /);
-    // The pane is the only scroller inside itself.
-    expect(html.match(/overflow-y-auto/g)).toHaveLength(1);
+    // The pane is the only scroller inside itself, bar a long diff, which scrolls in a box of its own so the actions under it stay in view.
+    expect(html.match(/[ "]overflow-y-auto[ "]/g)).toHaveLength(1);
+    expect(html).toMatch(/class="[^"]*\[&amp;_\[data-diff\]\]:max-h-\[min\(50vh,28rem\)\] \[&amp;_\[data-diff\]\]:overflow-y-auto/);
   });
 });
 

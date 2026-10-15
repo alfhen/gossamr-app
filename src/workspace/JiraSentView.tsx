@@ -102,7 +102,7 @@ export function JiraSentView() {
           ← Pip home
         </button>
         <h2 className="m-0 text-base font-semibold">What Jira saw from me</h2>
-        <p className="m-0 text-sm text-ws-ink3">Everything Gossamr posted to Jira after you approved it. This page only shows it; it posts nothing.</p>
+        <p className="m-0 text-sm text-ws-ink3">Everything Gossamr posted to Jira after you approved it. This page only shows it; it posts nothing. It lists only what Gossamr posted. An agent run with your Claude settings could reach Jira on its own; see Agent safety.</p>
       </header>
       <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-[max(32px,var(--ws-launcher-clear,0px))]">
         <div className="mx-auto max-w-[780px]">

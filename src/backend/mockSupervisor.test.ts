@@ -294,8 +294,12 @@ describe("the sample supervisor", () => {
       // Each is stated as the question and the answer the plan assumed, and the summary says the plan rests on them.
       const line = `Assumes answers to ${questions.length} open questions about the ticket (listed at the end).`;
       expect(result.startsWith(line)).toBe(true);
-      expect(result).toContain(`For Jira:\n${line}`);
-      expect(b.runs.get(plan.id)!.summary).toContain(line);
+      // The note for Jira carries the list itself, so the comment is whole without the plan.
+      const jiraLine = `Assumes answers to ${questions.length} open questions about the ticket:`;
+      const note = result.slice(result.indexOf("For Jira:\n"));
+      expect(note).toContain(`For Jira:\n${jiraLine}\n- ${questions[0]} Assumed: `);
+      for (const q of questions) expect(note).toContain(`- ${q} Assumed: `);
+      expect(note).not.toContain("listed at the end");
       expect(result.indexOf("## Open questions the plan assumes answers to")).toBeGreaterThan(result.indexOf("## Risks"));
       // The plan's description draft is made from that answer, so the person reads the assumptions where they approve it.
       const rewrite = b.proposals.list({ states: ["pending"] }).find((p) => p.intent.type === "rewrite" && p.origin.type === "run" && p.origin.runId === plan.id);

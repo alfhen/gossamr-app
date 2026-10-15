@@ -36,6 +36,11 @@ export function groupText(g: NeedGroup, now: number): string {
   return `${g.ticketKey ? `${g.ticketKey} · ` : ""}${g.title} · ${GROUP_LABEL[g.top.group]} · ${g.top.why} · ${age(g.top, now)}${more}`;
 }
 
+/** An open group's row stands for its top need, which is listed under it; says so, since j and k step past that one. */
+export function firstText(g: NeedGroup): string {
+  return `${g.title}, ${g.count} waiting. First: ${g.top.ticketKey ? `${g.top.ticketKey} ` : ""}${g.top.title}. Enter decides it.`;
+}
+
 const ROW = "grid w-full rounded px-2 py-1 text-left text-sm leading-snug text-ws-ink2 hover:bg-ws-hover focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-ws-pip";
 
 /** The line a row shows while a key waits for Enter. */
@@ -124,7 +129,7 @@ function GroupRow({ group: g, now, onPick, openByDefault }: { group: NeedGroup; 
   const list = `needs-you-group-${gid}`;
   const expanded = g.count > 1 && open;
   return (
-    <li data-needs-you-row={gid} className="grid">
+    <li data-needs-you-row={gid} className="grid has-[[data-needs-you-group]:focus-visible]:[&_[data-needs-top]]:outline-2 has-[[data-needs-you-group]:focus-visible]:[&_[data-needs-top]]:outline-dashed has-[[data-needs-you-group]:focus-visible]:[&_[data-needs-top]]:outline-offset-[-2px] has-[[data-needs-you-group]:focus-visible]:[&_[data-needs-top]]:outline-ws-pip">
       <button
         type="button"
         data-needs-you-group={gid}
@@ -135,7 +140,8 @@ function GroupRow({ group: g, now, onPick, openByDefault }: { group: NeedGroup; 
         aria-expanded={g.count > 1 ? expanded : undefined}
         aria-controls={g.count > 1 ? list : undefined}
         aria-current={deciding ? "true" : undefined}
-        title={text}
+        title={expanded ? firstText(g) : text}
+        aria-label={expanded ? firstText(g) : undefined}
         onClick={() => {
           onPick?.(g.top);
           if (g.count > 1) usePipHome.getState().setExpanded(gid, true);

@@ -47,6 +47,18 @@ describe("a toast takes the keyboard", () => {
     expect(focusToast({ querySelector: () => null, activeElement: null })).toBe(false);
   });
 
+  it("puts the keyboard on the toast's Undo, so Enter runs it, and on the toast itself when it has none (G12)", () => {
+    const undo = { focus: vi.fn() };
+    const el = { focus: vi.fn(), contains: () => false, querySelector: vi.fn(() => undo) };
+    expect(focusToast({ querySelector: () => el as unknown as HTMLElement, activeElement: null })).toBe(true);
+    expect(el.querySelector).toHaveBeenCalledWith("[data-toast-action]:not(:disabled)");
+    expect(undo.focus).toHaveBeenCalledTimes(1);
+    expect(el.focus).not.toHaveBeenCalled();
+    el.querySelector.mockReturnValue(null as never);
+    focusToast({ querySelector: () => el as unknown as HTMLElement, activeElement: null });
+    expect(el.focus).toHaveBeenCalledTimes(1);
+  });
+
   it("hands the keyboard back when its × is used after F6 took the keyboard there, as Esc does", () => {
     const dismiss = vi.fn();
     const back = { focus: vi.fn(), isConnected: true };

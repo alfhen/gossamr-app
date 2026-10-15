@@ -28,7 +28,7 @@ import { RetiredDraft } from "./RetiredDraft";
 import { answerProblem, MAX_ANSWER } from "../lib/answer";
 import { answerTitle, editThenSend, isSendKey, NOT_WAITING, useAnswerRun, type AnswerRun } from "./runAnswer";
 import { bodyChangeSize, RewriteView, rewriteBlocked, rewriteEdit, rewriteFields, rewriteWhat, takesBackendText } from "./RewriteDiff";
-import { newRiskQuote, newRisks, riskNote, type Risk } from "../lib/riskyText";
+import { newRiskQuote, newRisks, riskNote, type Risk, type RiskQuotes } from "../lib/riskyText";
 import { FromRun, RunName, useFromRunName } from "./RunProvenance";
 
 const BADGE: Record<Proposal["state"]["type"], string> = {
@@ -262,15 +262,15 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
   };
 
   // Edited words that mention everyone or look like a secret wait for a second press: a confirm the person can pass, never a block.
-  const [pause, setPause] = useState<{ risks: Risk[]; quote: string | null } | null>(null);
-  const risks = (): { risks: Risk[]; quote: string | null } => {
+  const [pause, setPause] = useState<{ risks: Risk[]; quote: RiskQuotes } | null>(null);
+  const risks = (): { risks: Risk[]; quote: RiskQuotes } => {
     if (intent.type === "comment" && edited.current) return { risks: newRisks(linked.text, body), quote: newRiskQuote(linked.text, body) };
     if (rewrite && rewriteEdited.current) {
       const was = `${rewriteFields(rewrite).title}\n${rewriteFields(rewrite).text}`;
       const now = `${newTitle}\n${newText}`;
       return { risks: newRisks(was, now), quote: newRiskQuote(was, now) };
     }
-    return { risks: [], quote: null };
+    return { risks: [], quote: {} };
   };
   /** The step the Post button and Enter take: pauses once for edited text that would reach everyone, else approves. */
   const approve = () => {
@@ -623,7 +623,20 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
           </p>
         )}
         {pause && open && (
-          <p role="alert" data-post-pause={pause.risks.join(" ")} className="m-0 text-sm text-ws-warn">
+          <p
+            role="alert"
+            data-post-pause={pause.risks.join(" ")}
+            className="m-0 text-sm text-ws-warn"
+            onKeyDown={(ev) => {
+              // Esc here is Keep editing, not the peek closing over the unsaved text.
+              if (ev.key !== "Escape" || ev.defaultPrevented) return;
+              ev.preventDefault();
+              ev.stopPropagation();
+              setPause(null);
+              setEditing(true);
+              focusField("textarea, input:not([type]), input[type=text]");
+            }}
+          >
             {riskNote(pause.risks, pause.quote)}{" "}
             <button type="button" data-post-pause-keep onClick={() => (setPause(null), setEditing(true), focusField("textarea, input:not([type]), input[type=text]"))} className="rounded font-semibold underline hover:bg-ws-hover focus-visible:outline-2 focus-visible:outline-ws-pip">
               Keep editing

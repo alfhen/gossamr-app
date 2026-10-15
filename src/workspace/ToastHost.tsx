@@ -64,7 +64,8 @@ export function focusToast(doc: Pick<Document, "querySelector" | "activeElement"
   // The place the round of F6 began, while it is still on the page; else where the keyboard is now.
   const origin = round.start?.isConnected && !el.contains(round.start) ? round.start : active;
   if (origin && typeof origin.focus === "function" && !el.contains(origin)) before = origin;
-  el.focus();
+  // A toast that offers an action (Undo) puts the keyboard on it, so Enter runs it; the container otherwise.
+  (el.querySelector?.<HTMLElement>("[data-toast-action]:not(:disabled)") ?? el).focus();
   return true;
 }
 
