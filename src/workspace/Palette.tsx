@@ -6,7 +6,7 @@ import { useNeedsYou } from "./useNeeds";
 import { askPip } from "./askPip";
 import { useToasts } from "./toasts";
 import { useActivity } from "./activityStore";
-import { SUGGESTED_TICKETS, START_WORKSTREAM, buildCommands, agentCommands, askToPlanCommands, startWorkstreamCommands, workstreamCommands, keyCommand, newTicketIntent, projectChoices, pullCommand, rankCommands, searchOrder, ticketCommands, timelineCommands, unwatchCommands, watchCommands, withAskPip, type Command, type CommandActions, type CommandContext, type TimelineState } from "./commands";
+import { SUGGESTED_TICKETS, START_WORKSTREAM, buildCommands, agentCommands, askToPlanCommands, startWorkstreamCommands, noStartableTicket, workstreamCommands, keyCommand, newTicketIntent, projectChoices, pullCommand, rankCommands, searchOrder, ticketCommands, timelineCommands, unwatchCommands, watchCommands, withAskPip, type Command, type CommandActions, type CommandContext, type TimelineState } from "./commands";
 import { workContainers } from "./domains";
 import { projectOf, withProject } from "./filters";
 import { useAgentsEnabled } from "./agentsFlag";
@@ -388,7 +388,7 @@ export function Palette() {
       results={results}
       active={Math.min(active, Math.max(0, results.length - 1))}
       placeholder={step.type === "project" ? "Which project is the ticket for?" : step.type === "title" ? `Title of the new ${step.container.name} ticket` : step.type === "workstream" ? "Start a workstream: type a ticket key or words" : undefined}
-      empty={step.type === "title" ? "Type a title, then press Enter. Pip drafts it; you approve it." : step.type === "workstream" ? (query.trim() ? `No ticket without a workstream matches “${query}”.` : "Every open ticket has a workstream already.") : undefined}
+      empty={step.type === "title" ? "Type a title, then press Enter. Pip drafts it; you approve it." : step.type === "workstream" ? noStartableTicket(Object.values(items), query, workstreams) : undefined}
       hints={prompting ? ["↑↓ move", "↵ select", "esc back"] : undefined}
       onQuery={(q) => (setQuery(q), setActive(0))}
       onActive={setActive}

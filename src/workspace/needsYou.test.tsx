@@ -11,7 +11,7 @@ import { NeedsPane } from "./NeedsPane";
 import { NeedsYouList, groupText } from "./NeedsYou";
 import { NO_FILTERS, groupRuns, slotWaiters, stopAllLabel, stoppable, summaryLine, yourAgents } from "./agentsLogic";
 import { arm, confirmArmed, disarm, keyPlan, openInWorkstream, openNeed } from "./needsActions";
-import { composerFooter } from "./pipHomeLogic";
+import { BATCH_TITLE, composerFooter } from "./pipHomeLogic";
 import { usePipHome } from "./pipHomeStore";
 import { PipRunStripView } from "./PipRunCard";
 import { railBadgeText } from "./Rail";
@@ -224,6 +224,9 @@ describe("the Needs you list", () => {
     const html = renderToStaticMarkup(<NeedsYouList needs={list} now={NOW} />);
     expect(html).toContain("Approve 3 safe drafts");
     expect(html.match(/Approve \d+ safe drafts/g)).toHaveLength(1);
+    // The button says what makes a draft safe, and what is left to approve one by one.
+    expect(html).toContain(`title="${BATCH_TITLE}"`);
+    expect(BATCH_TITLE).toMatch(/comments, status moves and subtasks[^.]*\. A description rewrite, a question to the reporter/);
     // A group with a single batchable draft has no batch to offer.
     const lone = needs(input({ proposals: [draft("c1", comment("CA-401"), 30, "ws-1")] }));
     expect(renderToStaticMarkup(<NeedsYouList needs={lone} now={NOW} />)).not.toContain("safe drafts");

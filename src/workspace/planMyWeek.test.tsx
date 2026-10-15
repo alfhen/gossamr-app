@@ -121,6 +121,13 @@ describe("adding a ticket", () => {
     expect(key("  ")).toEqual({ reason: "none" });
   });
 
+  it("says a ticket named by its key is Done in Jira rather than that none matches", () => {
+    expect(findTicket("ca-3", tickets, [])).toEqual({ reason: "done", key: "CA-3" });
+    expect(findTicket("CA-3 the old thing", tickets, [])).toEqual({ reason: "done", key: "CA-3" });
+    // Words alone, or a key nobody has, are still just "none".
+    expect(findTicket("CA-9", tickets, [])).toEqual({ reason: "none" });
+  });
+
   it("shows several matches to choose from instead of picking one: the person's own first, at most five, taken ones left out", () => {
     const ME = { connectionId: "c", accountId: "me" };
     const mine = (x: WorkItem) => ({ ...x, assignee: ME }) as WorkItem;

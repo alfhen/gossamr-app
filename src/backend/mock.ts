@@ -615,7 +615,7 @@ export class MockBackend implements Backend {
     const item = itemRef(key);
     const reporter = this.connector.item(item)?.reporter ?? null;
     const name = reporter ? (this.connector.people.find((p) => p.accountId === reporter.accountId)?.name ?? null) : null;
-    const body = reporterDoc(nudgeComment(key, name), reporter && name ? { person: reporter, name } : null);
+    const body = reporterDoc(nudgeComment(key, name, !!this.workstreams.get(id)?.reporterReplies?.length), reporter && name ? { person: reporter, name } : null);
     const proposal = this.proposals.askedFor({ type: "comment", item, body }, NUDGE_COMMENT_LABEL, id, "nudge");
     this.workstreams.nudged(id, proposal.id);
     return proposal;

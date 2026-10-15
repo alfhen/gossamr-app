@@ -502,7 +502,7 @@ test.describe("G17: Plan anyway hands the plan the open questions", () => {
     await expect(pane).toContainText("Open questions the plan assumes answers to");
     for (const q of ["What does done look like for CA-408?", "What is in scope and what is out?", "Who asked for this, and who is waiting on it?"]) await expect(pane).toContainText(q);
     // The plan's summary says it rests on assumed answers, and each is stated with what the plan assumed.
-    await expect(pane).toContainText("Assumes answers to 3 open questions from triage (listed at the end).");
+    await expect(pane).toContainText("Assumes answers to 3 open questions about the ticket (listed at the end).");
     expect((await pane.innerText()).match(/Assumed:/g)).toHaveLength(3);
     expect(await jiraWrites(page)).toEqual([]);
   });

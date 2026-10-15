@@ -472,7 +472,7 @@ function beforeNote(text: string, line: string): string {
  * The line a plan that assumes `n` answers puts in its summary, so its approval says so, as `assumptions_summary_line` in
  * src-tauri/src/domain/run.rs.
  */
-export const assumptionsSummaryLine = (n: number) => `Assumes answers to ${n} open ${n === 1 ? "question" : "questions"} from triage (listed at the end).`;
+export const assumptionsSummaryLine = (n: number) => `Assumes answers to ${n} open ${n === 1 ? "question" : "questions"} about the ticket (listed at the end).`;
 
 /** The working answer the sample plan assumes for an open question: what a real plan would write after "Assumed:". */
 export function assumedAnswer(question: string): string {

@@ -448,10 +448,13 @@ pub fn reporter_comment(key: &str, reporter: Option<&str>, questions: &[String],
     format!("{hello}\n\nBefore {key} can be planned we need a few things cleared up:\n\n{asks}\n\nCould you answer them here on the ticket? Thanks.")
 }
 
-/// The comment `nudge_reporter` drafts: a short, polite follow-up on the questions already asked on the ticket.
-pub fn nudge_comment(key: &str, reporter: Option<&str>) -> String {
+/// The comment `nudge_reporter` drafts: a short, polite follow-up on the questions already asked on the ticket. When the
+/// reporter has replied before the ask now open (`replied`), it is a nudge on the follow-up questions. Jira's words: no
+/// "we", nothing of Gossamr's. Mirrored by `nudgeComment` in src/lib/reporterWait.ts.
+pub fn nudge_comment(key: &str, reporter: Option<&str>, replied: bool) -> String {
     let hello = reporter.map_or_else(|| "Hi,".to_string(), |name| format!("Hi @{name},"));
-    format!("{hello}\n\nA gentle nudge on the questions above; we can't plan {key} until they are cleared up. Could you answer them here on the ticket when you have a moment? Thanks.")
+    let questions = if replied { "follow-up questions" } else { "questions" };
+    format!("{hello}\n\nA gentle nudge on the {questions} above; {key} can't be planned until they are cleared up. Could you answer them here on the ticket when you have a moment? Thanks.")
 }
 
 /// One counter of a workstream's budget: how much is used of how much it may use.
@@ -1113,7 +1116,7 @@ impl Core {
         let item = Core::item(scope, &key);
         let reporter = self.ticket_for_pip(scope, &key).await.ok().and_then(|(t, _)| t.reporter);
         let people: Vec<_> = reporter.iter().map(|p| (crate::domain::PersonRef { connection_id: item.connection_id.clone(), account_id: p.account_id.clone() }, p.name.clone())).collect();
-        let body = crate::tracker::comment_doc(&nudge_comment(&key, reporter.as_ref().map(|p| p.name.as_str())), &people);
+        let body = crate::tracker::comment_doc(&nudge_comment(&key, reporter.as_ref().map(|p| p.name.as_str()), !view.reporter_replies.is_empty()), &people);
         let draft = proposals::Draft { origin: Origin::Chat { request_id: format!("nudge:{id}"), workstream: Some(id.to_string()) }, created_by: CreatedBy::User, intent: Intent::Comment { item, body }, label: Some(proposals::NUDGE_COMMENT_LABEL.into()), basis: None };
         let proposal = self.propose(scope, draft).await?;
         self.record_workstream_event(scope, WorkstreamEvent::new(id, Actor::Person, "reporter_nudged", Utc::now()).proposal(&proposal.id)).await?;
@@ -2203,9 +2206,12 @@ mod tests {
 
         #[test]
         fn the_nudge_comment_is_short_polite_and_names_the_ticket() {
-            let text = nudge_comment("CA-1", Some("Mette"));
+            let text = nudge_comment("CA-1", Some("Mette"), false);
             assert!(text.starts_with("Hi @Mette,") && text.contains("A gentle nudge on the questions above") && text.contains("CA-1"), "{text}");
-            assert!(nudge_comment("CA-1", None).starts_with("Hi,"));
+            assert!(nudge_comment("CA-1", None, false).starts_with("Hi,"));
+            assert!(!text.contains("we ") && !text.to_lowercase().contains("gossamr"), "{text}");
+            let again = nudge_comment("CA-1", Some("Mette"), true);
+            assert!(again.contains("A gentle nudge on the follow-up questions above") && again.contains("CA-1"), "{again}");
             assert!(text.len() < 300, "short");
         }
 

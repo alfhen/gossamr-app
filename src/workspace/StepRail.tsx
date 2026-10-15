@@ -10,7 +10,7 @@ import { Btn } from "./AgentSheet";
 import { draftTitle } from "./DraftCard";
 import { LiveDraftPreview } from "./DraftPreview";
 import { PipRunCard } from "./PipRunCard";
-import { batchLabel, batchable, batchToApprove, freezeBatch, nextStep, retiredStepDrafts, stepChips, stepDrafts, type BatchSnapshot, type StepChip, type StepGroup } from "./pipHomeLogic";
+import { BATCH_TITLE, batchLabel, batchable, batchToApprove, freezeBatch, nextStep, retiredStepDrafts, stepChips, stepDrafts, type BatchSnapshot, type StepChip, type StepGroup } from "./pipHomeLogic";
 import { usePipHome } from "./pipHomeStore";
 import { openOnGithub } from "./githubUi";
 import { openPullView, usePullView } from "./pullViewStore";
@@ -122,6 +122,7 @@ export function StepDrafts({ step, drafts, approve, initialConfirming = false }:
               ref={ask}
               type="button"
               disabled={busy}
+              title={BATCH_TITLE}
               onClick={() => (setOutcome(null), setFrozen(freezeBatch(drafts)))}
               className="rounded-md border border-ws-sep2 px-2.5 py-px text-sm font-semibold text-ws-ink hover:bg-ws-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip disabled:opacity-45"
             >

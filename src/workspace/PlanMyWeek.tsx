@@ -24,12 +24,12 @@ export const PLAN_EMPTY = "Nothing to propose: no open workstream or ticket assi
 export const CHOICES = 5;
 
 /** What the words name: the ticket, several tickets to choose from (the person's own first), a ticket that is in the plan already (its key), or nothing open. */
-export type TicketFound = { ticket: WorkItem } | { choices: WorkItem[] } | { reason: "taken"; key: string } | { reason: "none" };
+export type TicketFound = { ticket: WorkItem } | { choices: WorkItem[] } | { reason: "taken"; key: string } | { reason: "done"; key: string } | { reason: "none" };
 
 /**
  * The open ticket the words name: its key, or else the tickets whose title contains them. One match is that ticket; several are
  * a list of up to `CHOICES` to choose from, those assigned to one of `me` first (as the list holds them otherwise), never a silent pick of one.
- * Says so when the only matches are in the plan already, apart from when none matches.
+ * Says so when the only matches are in the plan already, or when the key names a ticket that is Done in Jira, apart from when none matches.
  */
 export function findTicket(words: string, items: readonly WorkItem[], taken: readonly PlanItem[], me: readonly PersonRef[] = []): TicketFound {
   const q = words.trim().toLowerCase();
@@ -37,7 +37,11 @@ export function findTicket(words: string, items: readonly WorkItem[], taken: rea
   const open = items.filter((t) => t.status.category !== "done");
   const byKey = open.find((t) => t.item.key.toLowerCase() === q) ?? open.find((t) => t.item.key.toLowerCase() === q.split(/\s+/)[0]);
   const matches = byKey ? [byKey] : open.filter((t) => t.title.toLowerCase().includes(q));
-  if (!matches.length) return { reason: "none" };
+  if (!matches.length) {
+    // A Done ticket is never planned, but "no open ticket" would leave the person wondering whether the key is wrong.
+    const done = items.find((t) => t.status.category === "done" && (t.item.key.toLowerCase() === q || t.item.key.toLowerCase() === q.split(/\s+/)[0]));
+    return done ? { reason: "done", key: done.item.key } : { reason: "none" };
+  }
   // The same key on another connection is another ticket; a pick kept before connections were stored blocks by key alone.
   const free = matches.filter((t) => !taken.some((p) => p.ticketKey === t.item.key && (p.connectionId === undefined || p.connectionId === t.item.connectionId)));
   if (!free.length) return { reason: "taken", key: matches[0].item.key };
@@ -127,7 +131,7 @@ export function PlanMyWeekView({
   const add = () => {
     const found = findTicket(adding, tickets, picks, me);
     if ("choices" in found) return (setNote(null), setChoices(found.choices));
-    if (!("ticket" in found)) return setNote({ ok: false, text: found.reason === "taken" ? `${found.key} is in the plan already.` : "No open ticket matches that." });
+    if (!("ticket" in found)) return setNote({ ok: false, text: found.reason === "taken" ? `${found.key} is in the plan already.` : found.reason === "done" ? `${found.key} is Done in Jira.` : "No open ticket matches that." });
     addTicket(found.ticket);
   };
   // The list appears under the field, and the keyboard goes to its first choice.
@@ -329,7 +333,7 @@ export function PlanMyWeek({ needs, withers, now }: { needs: readonly Need[]; wi
       week={week}
       picks={picks}
       kept={!!keptPlan && !fresh}
-      tickets={tickets.filter((t) => t.status.category !== "done")}
+      tickets={tickets}
       me={me}
       onChange={setPicks}
       onPropose={() => (setPicks(propose()), setFresh(true))}

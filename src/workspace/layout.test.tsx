@@ -330,6 +330,47 @@ describe("the toast queue", () => {
       expect(texts()).toEqual([]);
     });
 
+    it("keeps the toast on screen while the pointer or keyboard is on it, and gives it a whole lifetime after", () => {
+      const id = useToasts.getState().push("Noted for short description", "info")!;
+      vi.advanceTimersByTime(LIFETIME_MS.info - 100);
+      useToasts.getState().hold(id);
+      vi.advanceTimersByTime(LIFETIME_MS.info * 3);
+      expect(shown()).toBe("Noted for short description");
+      useToasts.getState().release(id);
+      vi.advanceTimersByTime(LIFETIME_MS.info - 1);
+      expect(shown()).toBe("Noted for short description");
+      vi.advanceTimersByTime(1);
+      expect(texts()).toEqual([]);
+    });
+
+    it("keeps the toast held until both the pointer and the keyboard have left it, in either order", () => {
+      for (const [first, second] of [["pointer", "focus"], ["focus", "pointer"]] as const) {
+        useToasts.getState().clear();
+        const id = useToasts.getState().push(`read by ${first} then ${second}`, "info")!;
+        useToasts.getState().hold(id, "focus");
+        useToasts.getState().hold(id, "pointer");
+        useToasts.getState().release(id, first);
+        vi.advanceTimersByTime(LIFETIME_MS.info * 3);
+        expect(shown()).toBe(`read by ${first} then ${second}`);
+        useToasts.getState().release(id, second);
+        vi.advanceTimersByTime(LIFETIME_MS.info - 1);
+        expect(shown()).toBe(`read by ${first} then ${second}`);
+        vi.advanceTimersByTime(1);
+        expect(texts()).toEqual([]);
+      }
+    });
+
+    it("lets the next note come up on its clock once the held one is dismissed", () => {
+      const first = useToasts.getState().push("first", "info")!;
+      useToasts.getState().push("second", "info");
+      useToasts.getState().hold(first);
+      useToasts.getState().dismiss(first);
+      useToasts.getState().release(first);
+      expect(shown()).toBe("second");
+      vi.advanceTimersByTime(LIFETIME_MS.info);
+      expect(texts()).toEqual([]);
+    });
+
     it("drops a note that waited too long behind another rather than show it late, but never an error", () => {
       useToasts.getState().push("Watching 4 repositories", "info");
       useToasts.getState().push("Agent started on CA-402", "info");

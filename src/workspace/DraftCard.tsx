@@ -26,6 +26,7 @@ import { RetiredDraft } from "./RetiredDraft";
 import { answerProblem, MAX_ANSWER } from "../lib/answer";
 import { answerTitle, editThenSend, isSendKey, NOT_WAITING, useAnswerRun, type AnswerRun } from "./runAnswer";
 import { bodyChangeSize, RewriteView, rewriteBlocked, rewriteEdit, rewriteFields, rewriteWhat, takesBackendText } from "./RewriteDiff";
+import { newRisks, riskNote, type Risk } from "../lib/riskyText";
 import { FromRun, RunName, useFromRunName } from "./RunProvenance";
 
 const BADGE: Record<Proposal["state"]["type"], string> = {
@@ -246,6 +247,23 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
     return null;
   };
 
+  // Edited words that mention everyone or look like a secret wait for a second press: a confirm the person can pass, never a block.
+  const [pause, setPause] = useState<Risk[] | null>(null);
+  const risks = (): Risk[] => {
+    if (intent.type === "comment" && edited.current) return newRisks(linked.text, body);
+    if (rewrite && rewriteEdited.current) return newRisks(`${rewriteFields(rewrite).title}\n${rewriteFields(rewrite).text}`, `${newTitle}\n${newText}`);
+    return [];
+  };
+  /** The step the Post button and Enter take: pauses once for edited text that would reach everyone, else approves. */
+  const approve = () => {
+    const found = risks();
+    if (found.length && !pause) return setPause(found);
+    setPause(null);
+    onApprove(edit());
+  };
+  // Another edit takes the pause back: it said what the earlier words held.
+  useEffect(() => setPause(null), [body, newTitle, newText]);
+
   const runDraft = intent.type === "startRun";
   const sendAnswer = () => {
     if (!reply || working || state !== "pending" || replyBlock) return;
@@ -264,13 +282,15 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
           : sendAnswer
         : intent.type === "comment"
           ? body.trim()
-            ? () => onApprove(edit())
+            ? approve
             : undefined
           : intent.type === "subtasks"
             ? remaining > 0
               ? () => onApprove(edit())
               : undefined
-            : () => onApprove(edit()),
+            : rewrite
+              ? approve
+              : () => onApprove(edit()),
     skip: open && !working ? onSkip : undefined,
     edit: !open
       ? undefined
@@ -566,6 +586,14 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
             </button>
           </p>
         )}
+        {pause && open && (
+          <p role="alert" data-post-pause={pause.join(" ")} className="m-0 text-sm text-ws-warn">
+            {riskNote(pause)}{" "}
+            <button type="button" data-post-pause-keep onClick={() => (setPause(null), setEditing(true), focusField("textarea, input:not([type]), input[type=text]"))} className="rounded font-semibold underline hover:bg-ws-hover focus-visible:outline-2 focus-visible:outline-ws-pip">
+              Keep editing
+            </button>
+          </p>
+        )}
         {(open || onShow) && (
           <div data-draft-actions className="sticky bottom-0 z-[1] -mx-3 -mb-2.5 flex flex-wrap items-center justify-end gap-2 border-t border-ws-sep bg-ws-win px-3 py-2">
             {onShow && (
@@ -607,10 +635,10 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
                   <button
                     type="button"
                     disabled={working || state === "applying" || (intent.type === "comment" && !body.trim()) || (intent.type === "subtasks" && remaining === 0) || rewriteBlock}
-                    onClick={() => onApprove(edit())}
+                    onClick={approve}
                     className={primary}
                   >
-                    {working || state === "applying" ? "Working…" : action}
+                    {working || state === "applying" ? "Working…" : pause ? "Post anyway" : action}
                   </button>
                 )}
               </>
