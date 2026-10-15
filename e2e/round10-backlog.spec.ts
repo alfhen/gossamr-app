@@ -114,7 +114,7 @@ test.describe("what the palette and the reporter draft say (G31)", () => {
     await expect(dialog.locator("[data-palette-note]")).toHaveCount(0);
   });
 
-  test("a question to a reporter that @mentions them says they are notified when it is posted; nothing is written before approval", async ({ page }) => {
+  test("a question to a reporter that @mentions them says who it mentions; nothing is written before approval", async ({ page }) => {
     test.setTimeout(120_000);
     await openApp(page, "runs=empty");
     await editTicket(page, "CA-408", { description: THIN });
@@ -125,7 +125,7 @@ test.describe("what the palette and the reporter draft say (G31)", () => {
     const draft = needsPane(page).getByRole("article", { name: "Comment on CA-408" });
     await expect(draft).toBeVisible();
     await expect(draft).toContainText("@");
-    await expect(draft.locator("[data-mention-note]")).toHaveText(/^Mentions .+, who is notified when it is posted\.$/);
+    await expect(draft.locator("[data-mention-note]")).toHaveText(/^Mentions .+ in the posted comment; Jira notifies mentioned people unless their settings say otherwise\.$/);
     expect(await jiraWrites(page)).toEqual([]);
   });
 });
