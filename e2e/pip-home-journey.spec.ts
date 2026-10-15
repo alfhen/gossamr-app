@@ -120,7 +120,7 @@ test("intake to review on Pip home: the person talks to Pip, starts the investig
   const turns = await homeConversationRegion(page).locator("[data-turn-kind]").count();
   await advanceRuns(page, 2, r2.id);
   await expect(chipState(page, "triage")).toHaveText("Working");
-  await expect(homeConversationRegion(page).locator("[data-composer-footer]")).toHaveText(/^1 running · /);
+  await expect(homeConversationRegion(page).locator("[data-composer-footer]")).toHaveText(/^1 agent running · /);
   expect(await homeConversationRegion(page).locator("[data-turn-kind]").count()).toBe(turns);
   await finishOnHome(page, r2.id);
   await expect(wakes).toHaveCount(2);

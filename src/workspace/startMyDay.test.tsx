@@ -119,7 +119,7 @@ describe("a row of What Jira saw from me", () => {
     expect(html).toContain('data-sent-edited="yes"');
     expect(html).toContain("Pip drafted it; you edited it before approving");
     expect(html).toMatch(/data-sent-workstream="w1"[^>]*>CA-401</);
-    expect(html).toContain("from Pip&#x27;s conversation");
+    expect(html).toContain("from Pip, on CA-401");
   });
 
   it("keeps the rest behind a Show all that is closed to begin with", () => {

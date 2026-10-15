@@ -176,6 +176,18 @@ describe("holding a workstream", () => {
     await vi.waitFor(() => expect(stored(id).heldReason).toBe(HELD_BUDGET));
   });
 
+  it("takes the Held toast and its Undo away once the workstream is resumed, and from the palette too", async () => {
+    const id = (await backend.workstreamsOpen(CA401)).id;
+    await useWorkstreams.getState().refresh();
+    await useWorkstreams.getState().hold(id);
+    expect(undoButton()).toBeDefined();
+    expect(undoLog.latest()).not.toBeNull();
+    await useWorkstreams.getState().resume(id);
+    expect(undoButton()).toBeUndefined();
+    expect(texts()).toEqual([]);
+    expect(undoLog.latest()).toBeNull();
+  });
+
   it("offers nothing when the workstream was held by the person already, and resuming never offers Undo", async () => {
     const id = (await backend.workstreamsOpen(CA401)).id;
     await useWorkstreams.getState().refresh();

@@ -14,7 +14,7 @@ import { usePrefs } from "./prefs";
 import { useRuns, type RunSheetTarget } from "./runsStore";
 import { useTabs } from "./tabsStore";
 import { messageOf, pushLearning, useToasts } from "./toasts";
-import { offerUndo } from "./undo";
+import { offerUndo, withdrawUndo } from "./undo";
 
 interface WorkstreamsState {
   backend: Backend | null;
@@ -146,6 +146,12 @@ export const useWorkstreams = create<WorkstreamsState>()((set, get) => {
     await backend.workstreamsUndo(id, undo);
     if (get().backend === backend) await get().refresh();
   }
+  /** The offer of Undo for each workstream's hold, so Resume, Allow more steps or Close can take it back: it would undo what they just settled. */
+  const holdOffers = new Map<string, number>();
+  const withdrawHold = (id: string) => {
+    withdrawUndo(holdOffers.get(id));
+    holdOffers.delete(id);
+  };
   const undoAll = async (ids: readonly string[]) => {
     const results = await Promise.allSettled(ids.map((id) => undoChange(id, { type: "hold", was: null })));
     const failed = results.filter((r) => r.status === "rejected");
@@ -250,6 +256,7 @@ export const useWorkstreams = create<WorkstreamsState>()((set, get) => {
       }
       try {
         const ws = await backend.workstreamsClose(id);
+        withdrawHold(id);
         if (get().backend === backend) await get().refresh();
         useToasts.getState().push(`Closed the workstream on ${ws.itemKey ?? ws.title}. Its agents and drafts are kept.`, "info");
         return true;
@@ -297,14 +304,23 @@ export const useWorkstreams = create<WorkstreamsState>()((set, get) => {
       // Only a hold that changed something is offered back; Pip's turn it cancelled is not restarted, only the hold is lifted.
       if (before && before.heldReason !== done.value.heldReason && done.value.heldReason === HELD_PERSON) {
         const name = before.itemKey ?? before.title;
-        offerUndo({ text: `Held ${name}.`, undone: `${name} is free again.`, undo: () => undoChange(id, { type: "hold", was: before.heldReason }) });
+        withdrawHold(id);
+        holdOffers.set(id, offerUndo({ text: `Held ${name}.`, undone: `${name} is free again.`, undo: () => undoChange(id, { type: "hold", was: before.heldReason }) }));
       }
       return true;
     },
 
-    resume: (id) => ok("Couldn't resume the workstream", (b) => b.workstreamsResume(id)),
+    async resume(id) {
+      const done = await ok("Couldn't resume the workstream", (b) => b.workstreamsResume(id));
+      if (done) withdrawHold(id);
+      return done;
+    },
 
-    allowMore: (id) => ok("Couldn't allow more steps", (b) => b.workstreamsAllowMore(id)),
+    async allowMore(id) {
+      const done = await ok("Couldn't allow more steps", (b) => b.workstreamsAllowMore(id));
+      if (done) withdrawHold(id);
+      return done;
+    },
 
     async askReporter(id) {
       const stop = readinessOf(get().list, id);

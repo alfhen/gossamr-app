@@ -1,6 +1,7 @@
-import type { Intent, ItemRef, Proposal, WorkstreamEvent, WorkstreamView } from "../types";
+import type { Intent, ItemRef, Proposal, Run, WorkstreamEvent, WorkstreamView } from "../types";
 import { docText } from "./docs";
 import { isReporterFollowUp, isReporterNudge, isReporterQuestions, makerName, targetOf, workstreamOf } from "./proposals";
+import { fromRunPhrase } from "./runNames";
 import { diffLines, withGaps } from "./textDiff";
 import { isJiraWrite } from "./workstreamWither";
 
@@ -104,12 +105,25 @@ export function sentWhat(intent: Intent, label: string | null, created: readonly
   }
 }
 
-/** Where a draft came from, in a few words. `labels` are the runs' short names of its workstream (`[runId, "R3"]`). */
-function fromWords(p: Proposal, labels: readonly (readonly [string, string])[]): string {
-  if (p.origin.type === "run") return `run ${labels.find(([id]) => id === (p.origin as { runId: string }).runId)?.[1] ?? (p.origin.shortId ?? "an agent run")}`;
-  if (p.origin.type === "chat") return p.createdBy === "pip" ? "Pip's conversation" : workstreamOf(p) ? "Gossamr" : "the conversation";
+/**
+ * Where a draft came from, in a few words. `labels` are the runs' short names of its workstream (`[runId, "R3"]`); a run
+ * outside them is named as the rest of the app does ("the CA-401 plan"), never by its id.
+ */
+function fromWords(p: Proposal, labels: readonly (readonly [string, string])[], runs: readonly RunNamed[]): string {
+  if (p.origin.type === "run") {
+    const id = p.origin.runId;
+    const label = labels.find(([l]) => l === id)?.[1];
+    return label ? `run ${label}` : fromRunPhrase(p, runs.find((r) => r.id === id));
+  }
+  if (p.origin.type === "chat") {
+    const key = p.createdBy === "pip" ? (targetOf(p.intent)?.key ?? null) : null;
+    return p.createdBy === "pip" ? (key ? `Pip, on ${key}` : "Pip's conversation") : workstreamOf(p) ? "Gossamr" : "the conversation";
+  }
   return p.origin.type === "autopilot" ? "the autopilot" : "the board";
 }
+
+/** What names a run outside a workstream's labels: its step and ticket. */
+type RunNamed = Pick<Run, "id" | "spec" | "item">;
 
 export interface SentInput {
   proposals: readonly Proposal[];
@@ -117,10 +131,12 @@ export interface SentInput {
   events: Readonly<Record<string, readonly WorkstreamEvent[] | undefined>>;
   /** The workstreams, open and closed, for their names and their runs' short names. */
   workstreams: readonly WorkstreamView[];
+  /** The runs, to name those a draft came from that no workstream's label list holds. */
+  runs?: readonly RunNamed[];
 }
 
 /** Everything Jira was written, newest first. A draft still waiting, skipped, retired or one that starts a run isn't. */
-export function jiraSent({ proposals, events, workstreams }: SentInput): SentEntry[] {
+export function jiraSent({ proposals, events, workstreams, runs = [] }: SentInput): SentEntry[] {
   const approvals = new Map<string, { at: string; workstreamId: string }>();
   for (const [id, list] of Object.entries(events)) {
     for (const e of list ?? []) if (e.action === "draft_approved" && e.actor === "person" && e.proposalId) approvals.set(e.proposalId, { at: e.at, workstreamId: id });
@@ -142,7 +158,7 @@ export function jiraSent({ proposals, events, workstreams }: SentInput): SentEnt
       workstreamId,
       workstream: view ? (view.workstream.itemKey ?? view.workstream.title) : null,
       madeBy: isReporterQuestions(p) || isReporterNudge(p) ? "Gossamr" : makerName(p.createdBy),
-      from: fromWords(p, view?.labels ?? []),
+      from: fromWords(p, view?.labels ?? [], runs),
       edited: p.revisions.some((r) => r.note === "Edited"),
     });
   }

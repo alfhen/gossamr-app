@@ -360,19 +360,17 @@ describe("a plan's description update, on its card", () => {
   const backend = new MockBackend({ runs: { seed: "kinds", epoch: Date.parse("2026-09-30T12:00:00Z"), planDescription: true } });
   const plan: Run = backend.runs.list().find((r) => r.spec.kind === "plan")!;
 
-  it("names the run by ticket and step on the card, while the description that goes to Jira keeps the run's id", () => {
+  it("writes the same intro on the card and to Jira: no run id and no app name", () => {
     const draft = backend.proposals.list({ states: ["pending"] }).find((p) => p.intent.type === "rewrite" && p.origin.type === "run" && p.origin.runId === plan.id)!;
     expect(draft).toBeTruthy();
     const written = draft.intent.type === "rewrite" ? draft.intent.body!.toText : "";
-    // The audit trail in Jira: the run's id stays in what is written.
-    expect(written).toContain(`Drafted by an agent run (${plan.shortId})`);
+    expect(written).toContain("Drafted by an agent on 2026-09-30. A person read and approved it before it was added here.");
+    expect(written).not.toContain(plan.shortId!);
     const props = { statusName: null, people: [], working: false, error: null, onApprove: vi.fn(), onSkip: vi.fn() };
     const html = renderToStaticMarkup(<DraftCard proposal={draft} {...props} />);
-    expect(html).toContain("Drafted by the CA-401 run on ");
+    expect(html).toContain("Drafted by an agent on 2026-09-30. A person read and approved it before it was added here.");
     expect(html).not.toContain(plan.shortId!);
     expect(html).not.toContain("Drafted by an agent run");
-    // Every other line is shown as written.
-    expect(html).toContain("A person read and approved it in Gossamr before it was added here.");
   });
 
   it("puts the run's name where Gossamr's text gives its id, and changes nothing else", () => {

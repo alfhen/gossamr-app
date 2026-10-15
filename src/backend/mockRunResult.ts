@@ -267,15 +267,17 @@ export const ticketKeys = (text: string): string[] => [...new Set((text.match(KE
 /** The comment as the backend first drafts it, for the sample data. */
 export function commentText(note: JiraNote, change: CodeChange | null, kind: RunKind = "investigate", summaryOnly = false, blocked = false): string {
   const intro: Partial<Record<RunKind, string>> = {
-    investigate: "Looked into this with an agent (it was asked to only read code and change nothing).",
-    plan: "Planned this with an agent (it was asked to only read code and change nothing).",
+    investigate: "Investigated with an agent.",
+    plan: "Planned with an agent.",
+    build: "Built with an agent.",
   };
-  const parts = [intro[kind] ?? "An agent worked on this."];
+  const parts = [intro[kind] ?? "Worked on with an agent."];
   if (blocked) parts.push("The agent reports it could not finish.");
   if (summaryOnly) parts.push(SUMMARY_ONLY);
   else if (!note.fromMarker) parts.push("The agent didn't mark anything for Jira, so this is its whole answer, shortened:");
   parts.push(note.text);
-  if (change?.kind === "pullRequest") parts.push(`Pull request: ${change.url}`);
+  // A build's note often names its pull request already: the link is not said twice.
+  if (change?.kind === "pullRequest" && !note.text.includes(change.url)) parts.push(`Pull request: ${change.url}`);
   return parts.join("\n\n");
 }
 

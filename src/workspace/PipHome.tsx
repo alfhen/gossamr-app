@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useClaude } from "../claudeStore";
 import { stageText } from "../lib/workstreamStage";
-import { EMPTY_FILTER, byStatusRank, STATUS_HINT, STATUS_WORD, workstreamStatus, type StatusState, type WorkstreamStatus } from "../lib/workstreamStatus";
+import { byStatusRank, emptyFilterText, STATUS_HINT, STATUS_WORD, workstreamStatus, type StatusState, type WorkstreamStatus } from "../lib/workstreamStatus";
 import { StatusPill } from "./StatusPill";
 import { PlanMyWeek, ThisWeek } from "./PlanMyWeek";
 import { isoWeek } from "../lib/planMyWeek";
@@ -31,6 +31,7 @@ import { NeedsPane, firstDecision } from "./NeedsPane";
 import { StartMyDayCard } from "./StartMyDay";
 import { arm, confirmArmed, disarm, groupId, keyPlan, openNeed, setPaneIntent } from "./needsActions";
 import { undoLog } from "./undo";
+import { liveCounts } from "./agentsLogic";
 import { composerFooter, landingSelection } from "./pipHomeLogic";
 import { focusToast } from "./ToastHost";
 import { PIP_HOME_REGIONS, columnRegion, regionColumn, usePipHome, type PipHomeColumn, type PipHomeFocus, type PipHomeRegion } from "./pipHomeStore";
@@ -136,6 +137,9 @@ export function WorkstreamList({ list, closed, showClosed, selected, onSelect, o
   // The open workstream stays listed when the filter leaves it out (dimmed, with a note), since its conversation is what is shown.
   const open = everyOpen.filter((v) => matches(v) || v.workstream.id === selected);
   const matching = everyOpen.filter(matches).length;
+  // The live runs no workstream owns are General's, which the Running filter does not list: the empty text says so.
+  const owned = new Set(list.flatMap((v) => v.runs));
+  const generalRunning = liveCounts(runs.filter((r) => !owned.has(r.id) && !r.spec.workstream), now ?? Date.now()).running;
   const [listRef, more] = useMoreBelow<HTMLUListElement>();
   const option = (id: string | null, level: WorkstreamWither["level"] = 0, dim = false) => ({
     role: "option" as const,
@@ -199,7 +203,7 @@ export function WorkstreamList({ list, closed, showClosed, selected, onSelect, o
           </button>
         </p>
       )}
-      {matching === 0 && <p className="m-0 px-3 py-2 text-sm text-ws-ink3">{statusFilter ? EMPTY_FILTER[statusFilter] : NO_WORKSTREAMS}</p>}
+      {matching === 0 && <p className="m-0 px-3 py-2 text-sm text-ws-ink3">{statusFilter ? emptyFilterText(statusFilter, generalRunning) : NO_WORKSTREAMS}</p>}
       <div className="mt-auto flex flex-wrap items-center gap-x-1 border-t border-ws-sep px-1.5 py-1">
         <button
           type="button"

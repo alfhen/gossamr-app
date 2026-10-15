@@ -154,9 +154,10 @@ fn state_words(state: &ProposalState) -> &'static str {
 
 fn intro(kind: RunKind) -> &'static str {
     match kind {
-        RunKind::Investigate => "Looked into this with an agent (it was asked to only read code and change nothing).",
-        RunKind::Plan => "Planned this with an agent (it was asked to only read code and change nothing).",
-        _ => "An agent worked on this.",
+        RunKind::Investigate => "Investigated with an agent.",
+        RunKind::Plan => "Planned with an agent.",
+        RunKind::Build => "Built with an agent.",
+        _ => "Worked on with an agent.",
     }
 }
 
@@ -172,7 +173,8 @@ pub fn comment_text(run: &Run, resolved: &Resolved, note: &JiraNote, change: Opt
         _ => {}
     }
     parts.push(note.text.clone());
-    if let Some(pull) = change.filter(|c| c.kind == CodeChangeKind::PullRequest) {
+    // A build's note often names its pull request already: the link is not said twice.
+    if let Some(pull) = change.filter(|c| c.kind == CodeChangeKind::PullRequest && !note.text.contains(&c.url)) {
         parts.push(format!("Pull request: {}", pull.url));
     }
     parts.join("\n\n")
@@ -812,7 +814,7 @@ pub(in crate::inbox) mod tests {
         assert_eq!((p.state.clone(), p.created_by), (crate::domain::ProposalState::Pending, CreatedBy::Agent));
         assert_eq!(p.origin, Origin::of_run(&run));
         assert_eq!(p.label, Some(format!("From agent run {}", run.short_id.as_ref().unwrap())));
-        assert_eq!(body_of(&p), "Looked into this with an agent (it was asked to only read code and change nothing).\nAdd a backoff to the consumer.");
+        assert_eq!(body_of(&p), "Investigated with an agent.\nAdd a backoff to the consumer.");
         assert!(matches!(&p.intent, Intent::Comment { item, .. } if *item == fx.item("CA-1")));
         assert!(fx.tracker.intents().is_empty(), "a draft writes nothing");
     }
@@ -866,6 +868,16 @@ pub(in crate::inbox) mod tests {
         assert_eq!(fx.core.auto_draft_run_ticket(&loose.id).await.unwrap(), None);
         let full = ticketless(&fx, TICKET_RESULT, |_| {}).await;
         assert!(fx.core.auto_draft_run_ticket(&full.id).await.unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn the_pull_request_link_is_not_said_twice_when_the_note_has_it_already() {
+        let fx = fixture_watching(&["acme/webshop"]).await;
+        let run = run_with(&fx, |r| r.result = Some("Done.\n\nFor Jira:\nBuilt it: https://github.com/acme/webshop/pull/7".into())).await;
+        cache_change(&fx, pull(7, &format!("worktree-{}", run.spec.name), CodeChangeState::Open)).await;
+        let text = body_of(&fx.core.draft_run_comment(&run.id).await.unwrap());
+        assert_eq!(text.matches("https://github.com/acme/webshop/pull/7").count(), 1, "{text}");
+        assert!(!text.contains("Pull request:"), "{text}");
     }
 
     #[tokio::test]
@@ -1025,7 +1037,7 @@ pub(in crate::inbox) mod tests {
         let auto = fx.core.auto_draft_run_comment(&run.id).await.unwrap().unwrap();
         assert_eq!((auto.state.clone(), auto.created_by), (crate::domain::ProposalState::Pending, CreatedBy::Agent));
         assert_eq!(auto.origin, Origin::of_run(&run));
-        assert_eq!(body_of(&auto), "Looked into this with an agent (it was asked to only read code and change nothing).\nAdd a backoff to the consumer.");
+        assert_eq!(body_of(&auto), "Investigated with an agent.\nAdd a backoff to the consumer.");
         assert!(fx.tracker.intents().is_empty());
         assert_eq!(fx.core.run_outcome(&run.id).await.unwrap().draft, Some(RunDraft { id: auto.id.clone(), state: crate::domain::ProposalState::Pending }));
 
@@ -1549,7 +1561,7 @@ pub(in crate::inbox) mod tests {
         let text = spec.plan.clone().unwrap();
         assert!(spec.plan_approved);
         assert!(text.contains("Round in one place.") && text.contains("1. Fix the rounding.") && text.ends_with("2. Add a test.\n\nAlso check the refund path."), "{text}");
-        assert!(!text.contains("Drafted by an agent run") && !text.contains("A person read and approved it") && !text.contains("For Jira") && !text.contains("forged"), "{text}");
+        assert!(!text.contains("Drafted by an agent") && !text.contains("A person read and approved it") && !text.contains("For Jira") && !text.contains("forged"), "{text}");
         let review = fx.core.runs_review(&p.id).await.unwrap();
         assert!(review.prompt.contains("A person read, edited and approved the plan below."));
         assert!(review.prompt.contains(&format!("Plan from run {}:\n<<<PLAN\n{text}\nPLAN>>>", plan.id)), "exactly the settled text: {}", review.prompt);
@@ -1715,7 +1727,7 @@ pub(in crate::inbox) mod tests {
         let fx = fixture_watching(&["acme/webshop"]).await;
         let plan = plan_with(&fx, PLAN).await;
         let status = fx.core.auto_draft_run_comment(&plan.id).await.unwrap().unwrap();
-        assert!(body_of(&status).starts_with("Planned this with an agent") && body_of(&status).contains("Plan attached to the run"), "{}", body_of(&status));
+        assert!(body_of(&status).starts_with("Planned with an agent.") && body_of(&status).contains("Plan attached to the run"), "{}", body_of(&status));
 
         let made = fx.core.draft_run_plan_comment(&plan.id).await.unwrap();
         assert!(!made.cut);

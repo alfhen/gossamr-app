@@ -38,6 +38,12 @@ function rowFor(need: Need): HTMLElement | null {
   return document.querySelector<HTMLElement>(`${list} [data-need-key="${CSS.escape(need.key)}"]`) ?? document.querySelector<HTMLElement>(`${list} [data-needs-you-group="${groupId(need.workstreamId)}"]`);
 }
 
+/** Where Esc from a decision puts the keyboard: what opened it (Start my day's Open, say) while that is still on the page and outside the pane, else the need's own row. */
+export function closeTarget(opener: HTMLElement | null, pane: Pick<Node, "contains"> | null, row: () => HTMLElement | null): HTMLElement | null {
+  if (opener && opener.tagName !== "BODY" && opener.isConnected && !pane?.contains(opener)) return opener;
+  return row();
+}
+
 /** "Now: <workstream>" on the Done line: closes the decision, opens that workstream on Pip home and puts the keyboard on its row once it shows. */
 function backTo(workstreamId: string) {
   usePipHome.getState().closeDecision();
@@ -538,9 +544,12 @@ function Decision({ need }: { need: Need }) {
 /** The pane's frame: what is asked and why, what waiting does, a way to the workstream and back, then the decision. */
 function NeedDecision({ need }: { need: Need }) {
   const root = useRef<HTMLElement>(null);
+  // What had the keyboard when the pane opened: Esc gives it back there, which is not Needs you's row when the need came from Start my day.
+  const opener = useRef<HTMLElement | null>(null);
+  if (opener.current === null && typeof document !== "undefined") opener.current = document.activeElement as HTMLElement | null;
   const close = () => {
     usePipHome.getState().closeDecision();
-    requestAnimationFrame(() => rowFor(need)?.focus());
+    requestAnimationFrame(() => closeTarget(opener.current, root.current, () => rowFor(need))?.focus());
   };
   // Opened, the keyboard goes to the decision: its answer box or its main button; "e" opens an edit where the card has one.
   useEffect(() => {

@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import type { Need } from "../lib/needs";
-import { HigherPriority, EDIT_FIELD, advancedText, doneText, postedToJira, waitStarted, nextAdvanced, endEditing, firstDecision } from "./NeedsPane";
+import { closeTarget, HigherPriority, EDIT_FIELD, advancedText, doneText, postedToJira, waitStarted, nextAdvanced, endEditing, firstDecision } from "./NeedsPane";
 
 /** A stand-in for the pane: each selector it is asked for answers with what the test put there. */
 const pane = (found: Record<string, unknown[]>) =>
@@ -137,5 +137,24 @@ describe("what posting to the reporter starts, said when Pip moves on", () => {
     expect(waitStarted(done, { d1: draft("Questions for the reporter", "applied", "pip") })).toBeNull();
     expect(waitStarted({ ...done, target: { type: "run", id: "r1" } } as Parameters<typeof waitStarted>[0], { d1: draft("Questions for the reporter", "applied") })).toBeNull();
     expect(waitStarted(done, {})).toBeNull();
+  });
+});
+
+describe("Esc from a decision (G7)", () => {
+  const el = (over: Record<string, unknown> = {}) => ({ tagName: "BUTTON", isConnected: true, ...over }) as unknown as HTMLElement;
+  const row = el({ id: "row" });
+  const paneOf = (inside: unknown[]) => ({ contains: (n: unknown) => inside.includes(n) });
+
+  it("gives the keyboard back to what opened the need, such as Start my day's Open", () => {
+    const open = el();
+    expect(closeTarget(open, paneOf([]), () => row)).toBe(open);
+  });
+
+  it("goes to the need's row when the opener is gone, inside the pane, or was the page itself", () => {
+    const inside = el();
+    expect(closeTarget(el({ isConnected: false }), paneOf([]), () => row)).toBe(row);
+    expect(closeTarget(inside, paneOf([inside]), () => row)).toBe(row);
+    expect(closeTarget(el({ tagName: "BODY" }), paneOf([]), () => row)).toBe(row);
+    expect(closeTarget(null, null, () => row)).toBe(row);
   });
 });

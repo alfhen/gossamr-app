@@ -13,7 +13,7 @@ import { useRuns } from "./runsStore";
 import { nextPass } from "./followUp";
 import { useRepoReviewAccess, useReviewAccess } from "./reviewAccess";
 import { openPullView, sameCommit, usePullDiff } from "./pullViewStore";
-import { FROM_INPUT, PIP_INPUT_ID, PIP_ROOT, draftKeyHint, draftKeyShortcuts, escapeCollapses, focusAfterLeaving, onDraftCardKey, type Asking } from "./draftKeys";
+import { FROM_INPUT, PIP_INPUT_ID, PIP_ROOT, draftKeyHint, draftKeyShortcuts, escapeCollapses, focusAfterLeaving, onDraftCardKey, setDraftEditIntent, type Asking } from "./draftKeys";
 import { usePip } from "./pipStore";
 import { InlineStart, InlineStartContext, inlineStartId, inlineStartKey, inlineStartable, useInlineStarts } from "./InlineStart";
 import { focusPeekDraft } from "./peekDrafts";
@@ -276,7 +276,7 @@ function DraftPreviewCard({ proposal: p, statusName, targetTitle, pass, answer =
         if (!armed) return;
         const fromInput = ev.target === ev.currentTarget && ev.currentTarget.hasAttribute(FROM_INPUT);
         if (ev.target === ev.currentTarget) ev.currentTarget.removeAttribute(FROM_INPUT);
-        onDraftCardKey(ev, p, asking, { approve: canApprove ? decide(onApprove) : undefined, skip: decide(onSkip), open: onOpen, ask: setAsking, type: typeIntoInput, fromInput, canApprove });
+        onDraftCardKey(ev, p, asking, { approve: canApprove ? decide(onApprove) : undefined, skip: decide(onSkip), open: onOpen, edit: () => (setDraftEditIntent(p.id), onOpen()), ask: setAsking, type: typeIntoInput, fromInput, canApprove });
       }}
       onFocus={(ev) => {
         const byPointer = pointer.current;

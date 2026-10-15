@@ -240,6 +240,13 @@ describe("a changed line's words (D31)", () => {
     expect(ONLY_SPACING).toBe("only spacing changed");
   });
 
+  it("shows the new intro as it will be written, with no run to name, so the card and Jira agree", () => {
+    const intro = "Drafted by an agent on 2026-10-11. A person read and approved it before it was added here.";
+    const html = view(body("## Gossamr Plan\n\nOld.", `## Gossamr Plan\n\n${intro}`), "the CA-401 plan");
+    expect(lines(html, "add").join(" ")).toContain(intro);
+    expect(html).not.toContain("the CA-401 plan");
+  });
+
   it("names this draft's run only in the new text, so a plan's re-drafted intro no longer reads the same on both sides", () => {
     const was = "## Gossamr Plan\n\nDrafted by an agent run (1000addd) on 2026-10-11. A person read and approved it in Gossamr before it was added here.";
     const now = "## Gossamr Plan\n\nDrafted by an agent run (2000beef) on 2026-10-11. A person read and approved it in Gossamr before it was added here.";

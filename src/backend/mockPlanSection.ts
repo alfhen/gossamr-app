@@ -60,19 +60,19 @@ export interface RunLike {
   result: string | null;
 }
 
-/** How `planIntro` starts; an approved section's intro is matched by this, as `INTRO_START` in `inbox/plan_description.rs`. */
-const INTRO_START = "Drafted by an agent run";
+/** How `planIntro` starts, and how it started before it stopped naming the run; an approved section's intro is matched by these, as `INTRO_STARTS` in `inbox/plan_description.rs`. */
+const INTRO_STARTS = ["Drafted by an agent on", "Drafted by an agent run"];
 
 /** A description's plan section as Markdown without the intro paragraph Gossamr put at its top, as `plan_text_of` in `inbox/plan_description.rs`. */
 export function approvedPlanText(section: WorkDoc): string {
   const [first, ...rest] = section.blocks;
-  const intro = first?.type === "paragraph" && headingText(first.content).trimStart().startsWith(INTRO_START);
+  const intro = first?.type === "paragraph" && INTRO_STARTS.some((s) => headingText(first.content).trimStart().startsWith(s));
   return markdownOf({ blocks: intro ? rest : section.blocks }).trim();
 }
 
-export function planIntro(run: Pick<RunLike, "shortId" | "endedAt" | "queuedAt">): string {
+export function planIntro(run: Pick<RunLike, "endedAt" | "queuedAt">): string {
   const date = new Date(run.endedAt ?? run.queuedAt).toISOString().slice(0, 10);
-  return `Drafted by an agent run${run.shortId ? ` (${run.shortId})` : ""} on ${date}. A person read and approved it in Gossamr before it was added here.`;
+  return `Drafted by an agent on ${date}. A person read and approved it before it was added here.`;
 }
 
 /** The description with the plan in it, or why that can't be done; the plan is cut to what the description has room for. */

@@ -290,10 +290,10 @@ test.describe("agent intro continues (D1, D25)", () => {
     await expect(safety(page)).toHaveCount(0);
   });
 
-  test("Pip's intro says nothing is posted to Jira or GitHub until the person approves", async ({ page }) => {
+  test("Pip's intro says nothing is posted to Jira until the person approves", async ({ page }) => {
     await openApp(page);
     await openPip(page);
-    await expect(pipPane(page)).toContainText("Nothing is posted to Jira or GitHub until you approve.");
+    await expect(pipPane(page)).toContainText("Nothing is posted to Jira until you approve it. On GitHub, a build only pushes its own branch to a draft pull request.");
     await expect(pipPane(page)).not.toContainText("Nothing changes until you approve");
   });
 });
@@ -953,7 +953,7 @@ test.describe("description diff (D31)", () => {
     return (await mockRuns(page)).find((r) => r.id === run.id)!;
   }
 
-  test("a second plan's description update marks the words that changed, not two lines that look the same", async ({ page }) => {
+  test("a second plan that reads as the first offers no description update: the intro names no run, so nothing differs", async ({ page }) => {
     await openWatching(page);
     await peekTicket(page, "CA-401");
     const first = await planFromPeek(page);
@@ -962,15 +962,12 @@ test.describe("description diff (D31)", () => {
     await expect(update).toHaveCount(0);
 
     const second = await planFromPeek(page);
-    await expect(update).toHaveCount(1);
-    const removed = update.locator('[data-diff="description"] [data-line="del"]').filter({ hasText: "Drafted by" });
-    const added = update.locator('[data-diff="description"] [data-line="add"]').filter({ hasText: "Drafted by" });
-    // The old line names the run that wrote it; the new one, this plan. They read differently, and the words that changed are marked.
-    await expect(removed).toContainText(`Drafted by an agent run (${first.shortId})`);
-    await expect(added).toContainText("Drafted by the CA-401 plan");
     expect(first.shortId).not.toBe(second.shortId);
-    await expect(removed.locator("mark[data-word-changed]").first()).toBeVisible();
-    await expect(added.locator("mark[data-word-changed]").first()).toBeVisible();
-    expect(await removed.textContent()).not.toBe(await added.textContent());
+    // The second plan's note to the ticket is drafted, so the plan has finished and its drafts are on the peek.
+    await expect(peekSheet(page).getByRole("article", { name: "Comment on CA-401" }).first()).toBeVisible();
+    // The intro says who and when, not which run, and this plan reads as the first did: the description has nothing to change,
+    // so no update is offered, rather than one whose only difference is a run id.
+    await expect(update).toHaveCount(0);
+    await expect(peekSheet(page)).not.toContainText(`agent run (${second.shortId})`);
   });
 });

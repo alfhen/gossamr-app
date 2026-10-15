@@ -179,9 +179,9 @@ export const nudgeText = (days: number) => `The reporter hasn't answered for ${p
 
 /**
  * What the nudge comment says, as `nudge_comment` in src-tauri/src/inbox/workstreams.rs. Once the reporter has replied before
- * the ask now open (`replied`), it follows up on that ask rather than the first. Jira's words: no "we", nothing of Gossamr's.
+ * the ask now open (`replied`), it follows up on that ask rather than the first. Jira's words, in a neutral voice: no "I" or "we", no stage words, nothing of Gossamr's, no "above".
  */
 export function nudgeComment(key: string, reporter: string | null, replied = false): string {
   const hello = reporter ? `Hi @${reporter},` : "Hi,";
-  return `${hello}\n\nA gentle nudge on the ${replied ? "follow-up questions" : "questions"} above; ${key} can't be planned until they are cleared up. Could you answer them here on the ticket when you have a moment? Thanks.`;
+  return `${hello}\n\nA gentle nudge on the ${replied ? "follow-up questions" : "earlier questions"}; work on ${key} can't start until they are cleared up. Could you answer them here on the ticket when you have a moment? Thanks.`;
 }

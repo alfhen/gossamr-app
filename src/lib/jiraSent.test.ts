@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { Intent, Proposal, WorkDoc, WorkstreamEvent, WorkstreamView } from "../types";
+import type { Intent, Proposal, Run, WorkDoc, WorkstreamEvent, WorkstreamView } from "../types";
 import { editedWords, jiraSent, sentWhat } from "./jiraSent";
 
 const ago = (hours: number) => new Date(Date.parse("2026-10-13T12:00:00Z") - hours * 3_600_000).toISOString();
@@ -70,6 +70,16 @@ describe("What Jira saw from me", () => {
     expect(other[0]).toMatchObject({ at: ago(1), workstreamId: null, workstream: null });
   });
 
+  it("names a run outside the workstream's labels as the app does, never by its hex id", () => {
+    const from = (runId: string, shortId: string | null, runs: Parameters<typeof jiraSent>[0]["runs"]) =>
+      jiraSent({ proposals: [draft("g", comment("CA-401", "x"), { origin: { type: "run", runId, shortId, workstream: null }, createdBy: "agent" })], events: {}, workstreams: [view("w1", "CA-401")], runs })[0].from;
+    const plan = { id: "r9", item: ref("CA-401"), spec: { kind: "plan" } } as unknown as Run;
+    expect(from("r9", "1000addd", [plan])).toBe("the CA-401 plan");
+    // Not known here: the draft's own ticket names it.
+    expect(from("r8", "1000addd", [plan])).toBe("the CA-401 run");
+    expect(from("r8", "1000addd", undefined)).not.toContain("1000addd");
+  });
+
   it("says where the draft came from and who made it", () => {
     const pip = draft("a", comment("CA-401", "x"));
     const run = draft("b", comment("CA-401", "x"), { origin: { type: "run", runId: "r3", shortId: null, workstream: "w1" }, createdBy: "agent" });
@@ -77,7 +87,10 @@ describe("What Jira saw from me", () => {
     const asked = draft("d", comment("CA-401", "x"), { createdBy: "user", label: "Questions for the reporter" });
     const nudge = draft("e", comment("CA-401", "x"), { createdBy: "user", label: "Nudge for the reporter" });
     const out = Object.fromEntries(jiraSent({ proposals: [pip, run, board, asked, nudge], events: {}, workstreams: [view("w1", "CA-401")] }).map((e) => [e.id, [e.madeBy, e.from]]));
-    expect(out).toEqual({ a: ["Pip", "Pip's conversation"], b: ["An agent run", "run R3"], c: ["You", "the board"], d: ["Gossamr", "Gossamr"], e: ["Gossamr", "Gossamr"] });
+    expect(out).toEqual({ a: ["Pip", "Pip, on CA-401"], b: ["An agent run", "run R3"], c: ["You", "the board"], d: ["Gossamr", "Gossamr"], e: ["Gossamr", "Gossamr"] });
+    // Pip's chat draft with no ticket to name stays "Pip's conversation".
+    const bare = draft("f", { type: "create", container: { connectionId: "c", externalId: "P", key: "P" }, fields: { title: "T", body: { blocks: [] } } } as unknown as Intent);
+    expect(jiraSent({ proposals: [bare], events: {}, workstreams: [] })[0].from).toBe("Pip's conversation");
     const labels = Object.fromEntries(jiraSent({ proposals: [pip, asked, nudge], events: {}, workstreams: [view("w1", "CA-401")] }).map((e) => [e.id, [e.kind, e.label]]));
     expect(labels).toEqual({ a: ["comment", undefined], d: ["comment", "Questions to the reporter"], e: ["comment", "Nudge to the reporter"] });
   });
@@ -112,12 +125,12 @@ describe("What Jira saw from me", () => {
 
 describe("what the row shows of a comment to the reporter", () => {
   const asked = (id: string, text: string) => draft(id, comment("CA-401", text), { createdBy: "user", label: "Questions for the reporter", updatedAt: ago(Number(id.slice(1))) });
-  const first = "Hi Mette,\n\nBefore CA-401 can be planned we need a few things cleared up:\n\n- What is the goal?";
-  const again = "Hi Mette,\n\nThanks for your answer above. Before CA-401 can be planned, a few things are still open:\n\n- What is in scope?";
+  const first = "Hi Mette,\n\nBefore work on CA-401 starts, a few things need clearing up:\n\n- What is the goal?";
+  const again = "Hi Mette,\n\nThanks for your answer above. Before work on CA-401 starts, a few things are still open:\n\n- What is in scope?";
 
   it("skips the greeting line in the short preview and keeps it in the whole", () => {
     const [e] = jiraSent({ proposals: [asked("a1", first)], events: {}, workstreams: [] });
-    expect(e.summary).toBe("Before CA-401 can be planned we need a few things cleared up:");
+    expect(e.summary).toBe("Before work on CA-401 starts, a few things need clearing up:");
     expect(e.detail[0]).toBe("Hi Mette,");
     expect(sentWhat(comment("CA-401", "Hi,"), null)!.summary).toBe("Hi,");
     expect(sentWhat(comment("CA-401", "Hello there, I moved this."), null)!.summary).toBe("Hello there, I moved this.");

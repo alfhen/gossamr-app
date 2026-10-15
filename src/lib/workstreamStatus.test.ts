@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { HELD_ALL, HELD_BUDGET, HELD_DAILY, HELD_PERSON, HELD_QUOTA, HELD_RESTART, TRIPWIRE, TRIPWIRES } from "../types";
 import type { Run, WorkstreamView } from "../types";
 import { NUDGE_AFTER_DAYS } from "./reporterWait";
-import { EMPTY_FILTER, QUIET_DAYS, REPLIED_DETAIL, STATUS_HINT, STATUS_ORDER, UNCLEAR_DETAIL, byStatusRank, statusFromWords, workstreamStatus, type StatusMore } from "./workstreamStatus";
+import { EMPTY_FILTER, emptyFilterText, QUIET_DAYS, REPLIED_DETAIL, STATUS_HINT, STATUS_ORDER, UNCLEAR_DETAIL, byStatusRank, statusFromWords, workstreamStatus, type StatusMore } from "./workstreamStatus";
 import type { WorkstreamWither } from "./workstreamWither";
 
 const NOW = new Date("2026-10-13T09:00:00Z");
@@ -175,5 +175,12 @@ describe("status hints and empty filters", () => {
     for (const s of STATUS_ORDER) expect(EMPTY_FILTER[s]).toMatch(/^No workstream .+\.$/);
     expect(EMPTY_FILTER["needs-you"]).toBe("No workstream needs you.");
     expect(EMPTY_FILTER.waiting).toBe("No workstream is waiting on the reporter.");
+  });
+
+  it("says where the live runs are when the Running filter is empty but General has some", () => {
+    expect(emptyFilterText("running")).toBe("No workstream is running.");
+    expect(emptyFilterText("running", 1)).toBe("No workstream is running. 1 agent is running under General.");
+    expect(emptyFilterText("running", 2)).toBe("No workstream is running. 2 agents are running under General.");
+    expect(emptyFilterText("held", 2)).toBe(EMPTY_FILTER.held);
   });
 });

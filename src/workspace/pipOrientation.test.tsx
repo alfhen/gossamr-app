@@ -37,7 +37,7 @@ describe("Pip home's orientation card", () => {
     expect(html).toContain("Work has happened but Jira has not heard for days. Post an update to clear it.");
     expect(html).toContain("Each workstream&#x27;s one word: Needs you, Held, Waiting on reporter, Running, Quiet, Done or Idle.");
     expect(html).toContain(ORIENTATION_SAFETY);
-    expect(ORIENTATION_SAFETY).toBe("Nothing is posted to Jira or GitHub until you click to approve it.");
+    expect(ORIENTATION_SAFETY).toBe("Nothing is posted to Jira until you click to approve it. On GitHub, a build only pushes its own branch to a draft pull request.");
     expect(html).toMatch(/<button type="button"[^>]*>Got it<\/button>/);
   });
 

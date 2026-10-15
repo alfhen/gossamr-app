@@ -84,7 +84,7 @@ describe("Draft a nudge", () => {
     expect(nudge).toMatchObject({ state: { type: "pending" }, createdBy: "user", intent: { type: "comment" }, origin: { type: "chat", workstream: id } });
     const text = docText(nudge.intent.type === "comment" ? nudge.intent.body : { blocks: [] });
     expect(text).toMatch(/^Hi @Mette Lund,/);
-    expect(text).toContain("A gentle nudge on the questions above");
+    expect(text).toContain("A gentle nudge on the earlier questions");
     expect(text).toContain("CA-408");
     expect(text.length).toBeLessThan(300);
     expect(backend.proposals.writes).toEqual([]);

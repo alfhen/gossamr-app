@@ -252,15 +252,15 @@ describe("composerFooter", () => {
     const runs = [run("a", "investigate", "working", fresh), run("b", "triage", "queued"), run("c", "plan", "launching"), run("d", "build", "done"), run("x", "plan", "working", { ...fresh, item: ref("CA-999"), spec: { ...base.spec, kind: "plan", workstream: null } })];
     const waiting = needs({ workstreams: [ws], runs: [], proposals: [draft("p1", comment("CA-401"), 5), draft("p2", comment("CA-401"), 4)], dismissed: new Set(), now: NOW }).length;
     // "Running", the word the Agents view's lane uses for runs at work.
-    expect(composerFooter(runs, waiting, NOW)).toBe("3 running · 1 queued · 2 need you");
-    expect(composerFooter([runs[0]], 1, NOW)).toBe("1 running · 1 needs you");
+    expect(composerFooter(runs, waiting, NOW)).toBe("3 agents running · 1 queued · 2 need you");
+    expect(composerFooter([runs[0]], 1, NOW)).toBe("1 agent running · 1 needs you");
     // A run outside any workstream is working as much as one in it.
-    expect(composerFooter([runs[4]], 0, NOW)).toBe("1 running · nothing needs you");
+    expect(composerFooter([runs[4]], 0, NOW)).toBe("1 agent running · nothing needs you");
     // Waiting at the cap is not working.
     expect(composerFooter([runs[1]], 0, NOW)).toBe("Nothing running · 1 queued · nothing needs you");
     expect(composerFooter([run("w", "plan", "queued", { slotWaitSince: iso(2) })], 0, NOW)).toBe("Nothing running · 1 waiting for a slot · nothing needs you");
     // A run with no progress for a while is quiet, as the Agents view says, not running.
-    expect(composerFooter([runs[0], run("q", "plan", "working", { lastProgressAt: iso(60) })], 0, NOW)).toBe("1 running · 1 quiet · nothing needs you");
+    expect(composerFooter([runs[0], run("q", "plan", "working", { lastProgressAt: iso(60) })], 0, NOW)).toBe("1 agent running · 1 quiet · nothing needs you");
     expect(composerFooter([], 0, NOW)).toBe("Nothing running · nothing needs you");
   });
 
@@ -276,7 +276,7 @@ describe("composerFooter", () => {
       run("d", "build", "done"),
       run("f", "review", "failed"),
     ];
-    const counts = (line: string) => Object.fromEntries(["running", "quiet", "queued", "waiting for a slot"].map((w) => [w, Number(new RegExp(`(\\d+) ${w}`).exec(line)?.[1] ?? 0)]));
+    const counts = (line: string) => Object.fromEntries(["running", "quiet", "queued", "waiting for a slot"].map((w) => [w, Number(new RegExp(`(\\d+) (?:agents? )?${w}`).exec(line)?.[1] ?? 0)]));
     const footer = composerFooter(runs, 0, NOW);
     expect(counts(footer)).toEqual({ running: 3, quiet: 1, queued: 1, "waiting for a slot": 1 });
     expect(counts(footer)).toEqual(counts(summaryLine(runs, NOW)));
@@ -294,7 +294,7 @@ describe("composerFooter", () => {
     const later = NOW + 40 * 60_000;
     const runs = [run("a", "investigate", "working", { lastProgressAt: iso(1) })];
     for (const [at, running] of [[NOW, 1], [later, 0]] as const) {
-      const n = (line: string) => Number(/(\d+) running/.exec(line)?.[1] ?? 0);
+      const n = (line: string) => Number(/(\d+) (?:agents? )?running/.exec(line)?.[1] ?? 0);
       expect([n(composerFooter(runs, 0, at)), n(summaryLine(runs, at)), n(laneCount("running", runs.filter((r) => laneOf(r, at) === "running"), at))]).toEqual([running, running, running]);
     }
   });

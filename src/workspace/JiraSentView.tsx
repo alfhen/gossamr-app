@@ -3,6 +3,7 @@ import { editedWords, jiraSent, SENT_LABEL, type SentEntry } from "../lib/jiraSe
 import { useWorkspace } from "../workspaceStore";
 import { DayHeading, EmptyNote } from "./ActivityView";
 import { groupByDay } from "./activityLogic";
+import { useRuns } from "./runsStore";
 import { useAgentsFlag } from "./agentsFlag";
 import { useEscToPipHome } from "./escHome";
 import { workspaceTicketLinks } from "./jump";
@@ -82,6 +83,7 @@ export function JiraSentView() {
   const open = useWorkstreams((s) => s.list);
   const closed = useWorkstreams((s) => s.closed);
   const events = useWorkstreams((s) => s.events);
+  const runs = useRuns((s) => s.runs);
   const workstreams = useMemo(() => [...open, ...closed], [open, closed]);
   // The audit says when a draft was approved and in which workstream; read it for every workstream a draft was made in.
   const ids = useMemo(() => [...new Set(Object.values(proposals).flatMap((p) => (p.state.type === "applied" && p.origin.type !== "board" && "workstream" in p.origin && p.origin.workstream ? [p.origin.workstream] : [])))].sort().join(" "), [proposals]);
@@ -91,7 +93,7 @@ export function JiraSentView() {
   useEffect(() => {
     for (const id of ids.split(" ").filter(Boolean)) void useWorkstreams.getState().loadEvents(id);
   }, [ids]);
-  const entries = useMemo(() => jiraSent({ proposals: Object.values(proposals), events, workstreams }), [proposals, events, workstreams]);
+  const entries = useMemo(() => jiraSent({ proposals: Object.values(proposals), events, workstreams, runs }), [proposals, events, workstreams, runs]);
   const groups = useMemo(() => groupByDay(entries, new Date()), [entries]);
   return (
     <div data-jira-sent className="flex h-full min-h-0 flex-col">

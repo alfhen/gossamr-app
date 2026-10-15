@@ -56,7 +56,8 @@ describe("a finished plan run in the sample build", () => {
     if (draft.intent.type !== "rewrite" || !draft.intent.body) throw new Error("a description rewrite");
     const to = draft.intent.body.toText;
     expect(to).toContain("## Gossamr Plan");
-    expect(to).toContain("Drafted by an agent run");
+    expect(to).toContain("Drafted by an agent on");
+    expect(to).not.toMatch(/Gossamr Plan\n\n[^\n]*(\([0-9a-f]{8}\)|in Gossamr)/);
     expect(to).toContain("### Approach");
     expect(to).toContain("Do the Klaviyo flows read the subject lines");
     expect(to).not.toContain("For Jira");
@@ -193,9 +194,12 @@ describe("Pip and a plan's description draft", () => {
 
 describe("the plan a build takes from an approved description", () => {
   it("is the section without the intro Gossamr wrote, whatever its date or run, and keeps the person's own lines", () => {
-    const intro = planIntro({ shortId: "ab12cd34", endedAt: "2026-09-29T10:00:00Z", queuedAt: "2026-09-29T09:00:00Z" });
+    const intro = planIntro({ endedAt: "2026-09-29T10:00:00Z", queuedAt: "2026-09-29T09:00:00Z" });
+    expect(intro).toBe("Drafted by an agent on 2026-09-29. A person read and approved it before it was added here.");
     const doc = withPlanSection(docFromMarkdown("Intro"), intro, docFromMarkdown("# Approach\n\nRound once.\n\nA line the person added."));
     expect(approvedPlanText(planSectionOf(doc)!)).toBe("### Approach\n\nRound once.\n\nA line the person added.");
+    const earlier = withPlanSection(docFromMarkdown(""), "Drafted by an agent run (1000addd) on 2025-01-01. A person read and approved it in Gossamr before it was added here.", docFromMarkdown("Step."));
+    expect(approvedPlanText(planSectionOf(earlier)!)).toBe("Step.");
     const older = withPlanSection(docFromMarkdown(""), "Drafted by an agent run on 2025-01-01. Something else.", docFromMarkdown("Step."));
     expect(approvedPlanText(planSectionOf(older)!)).toBe("Step.");
     expect(approvedPlanText(planSectionOf(docFromMarkdown("## Gossamr Plan\n\nThe person removed the intro."))!)).toBe("The person removed the intro.");
