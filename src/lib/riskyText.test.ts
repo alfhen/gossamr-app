@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { newRisks, riskNote, risksIn } from "./riskyText";
+import { maskSecret, newRiskQuote, newRisks, riskNote, risksIn } from "./riskyText";
 
 describe("the pause before posting edited text", () => {
   it("finds a broad mention, and never a mention of a person", () => {
@@ -33,5 +33,32 @@ describe("the pause before posting edited text", () => {
   it("says what it found in the person's words", () => {
     expect(riskNote(["broadcast"])).toMatch(/^Your edit mentions everyone .*Post anyway, or keep editing\?$/);
     expect(riskNote(["broadcast", "secret"])).toContain("and looks like a password, key or token");
+  });
+
+  it("quotes the first new match: a broad mention as written, a secret masked to its first two characters", () => {
+    expect(newRiskQuote("Looks good", "Looks good, cc @Everyone")).toBe("@Everyone");
+    expect(newRiskQuote("Looks good", "Password: hunter2")).toBe("hu…");
+    expect(newRiskQuote("Looks good", "kodeord Hunter2xyz")).toBe("Hu…");
+    expect(newRiskQuote("Looks good", "token=ghp_abcdefghijklmnopqrstuvwxyz0123")).toBe("gh…");
+    expect(newRiskQuote("Looks good", "x AKIAIOSFODNN7EXAMPLE")).toBe("AK…");
+    // The first by where it stands in the edit, and only what is new.
+    expect(newRiskQuote("cc @everyone", "cc @everyone\nPassword: hunter2 and @here")).toBe("hu…");
+    expect(newRiskQuote("x", "@here, then Password: hunter2")).toBe("@here");
+    expect(newRiskQuote("cc @everyone", "cc @everyone, thanks")).toBeNull();
+    expect(newRiskQuote("x", "cc @Mette")).toBeNull();
+  });
+
+  it("never lets the rest of a secret into the note", () => {
+    for (const secret of ["hunter2", "ghp_abcdefghijklmnopqrstuvwxyz0123", "s3cr3tvalue"]) {
+      expect(maskSecret(secret)).toBe(`${secret.slice(0, 2)}…`);
+      expect(newRiskQuote("x", `Password: ${secret}`) ?? "").not.toContain(secret.slice(2));
+    }
+    expect(maskSecret("é")).toBe("é…");
+  });
+
+  it("puts the quote in the note", () => {
+    expect(riskNote(["broadcast"], "@everyone")).toBe("Your edit mentions everyone (@everyone, @here or @all), not a person, at “@everyone”. Everyone on the ticket would see it once it is posted. Post anyway, or keep editing?");
+    expect(riskNote(["secret"], "hu…")).toContain("looks like a password, key or token, at “hu…”.");
+    expect(riskNote(["secret"])).not.toContain("“");
   });
 });

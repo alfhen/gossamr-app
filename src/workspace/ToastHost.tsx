@@ -24,12 +24,40 @@ export function toastPlacement(screen: string | null, clearRight: number): CSSPr
 /** Where the keyboard was before F6 took it to the toast, so dismissing it with Esc gives it back. */
 let before: HTMLElement | null = null;
 
+/**
+ * Where the person was when they started pressing F6, and where the last F6 landed. The toast is the last stop of the round, so
+ * the element focused just before it is the composer's, not the place the person was working: a press that starts where the
+ * last one landed continues the round; one from anywhere else begins a new one there.
+ */
+const round: { start: HTMLElement | null; landed: Element | null } = { start: null, landed: null };
+
+/** Where the round of F6 presses began, after one more press from `active`: the same place while it goes on from where the last one landed, else `active` itself (null for the page). */
+export function roundStart<T>(active: T | null, landed: T | null, start: T | null, page: T | null = null): T | null {
+  if (landed && active === landed) return start;
+  return active && active !== page ? active : null;
+}
+
+if (typeof window !== "undefined") {
+  window.addEventListener(
+    "keydown",
+    (ev) => {
+      if (ev.key !== "F6") return;
+      round.start = roundStart<Element>(document.activeElement, round.landed, round.start, document.body) as HTMLElement | null;
+      // After the page's own handler has moved the keyboard.
+      setTimeout(() => (round.landed = document.activeElement), 0);
+    },
+    true,
+  );
+}
+
 /** F6's stop at the toast on screen: remembers where the keyboard was and puts it on the toast. False when there is none. */
 export function focusToast(doc: Pick<Document, "querySelector" | "activeElement"> = document): boolean {
   const el = doc.querySelector<HTMLElement>("[data-toast]");
   if (!el) return false;
   const active = doc.activeElement as HTMLElement | null;
-  if (active && typeof active.focus === "function" && !el.contains(active)) before = active;
+  // The place the round of F6 began, while it is still on the page; else where the keyboard is now.
+  const origin = round.start?.isConnected && !el.contains(round.start) ? round.start : active;
+  if (origin && typeof origin.focus === "function" && !el.contains(origin)) before = origin;
   el.focus();
   return true;
 }
@@ -38,6 +66,7 @@ export function focusToast(doc: Pick<Document, "querySelector" | "activeElement"
 function leaveToast() {
   const back = before?.isConnected ? before : typeof document === "undefined" ? null : document.getElementById("workspace-main");
   before = null;
+  round.start = null;
   back?.focus();
 }
 

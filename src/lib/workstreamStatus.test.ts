@@ -145,6 +145,26 @@ describe("byStatusRank", () => {
     expect(byStatusRank(items, (i) => i.state).map((i) => i.id)).toEqual([3, 6, 2, 4, 1, 5]);
   });
 
+  it("puts a hold the system made above the person's own hold, and the person's own hold above Running", () => {
+    const items = [
+      { state: "held", mine: true, id: 1 },
+      { state: "running", mine: false, id: 2 },
+      { state: "held", mine: false, id: 3 },
+      { state: "waiting", mine: false, id: 4 },
+      { state: "held", mine: true, id: 5 },
+      { state: "held", mine: false, id: 6 },
+    ] as const;
+    expect(byStatusRank(items, (i) => i.state, (i) => i.mine).map((i) => i.id)).toEqual([3, 4, 6, 1, 5, 2]);
+    // Without the predicate every hold is the system's, so the order is as it was given.
+    expect(byStatusRank(items, (i) => i.state).map((i) => i.id)).toEqual([1, 3, 4, 5, 6, 2]);
+  });
+
+  it("draws the person's own hold in the quiet grey, and a hold the system made in amber", () => {
+    expect(at(view({}, { heldReason: HELD_PERSON })).tone).toBe("ink");
+    expect(at(view({}, { heldReason: HELD_ALL })).tone).toBe("ink");
+    expect(at(view({}, { heldReason: HELD_RESTART })).tone).toBe("warn");
+  });
+
   it("leaves what it was given as it was, and an Idle row that may be unclear stays with the Idle ones", () => {
     const given = [{ state: "quiet" }, { state: "needs-you" }] as const;
     byStatusRank(given, (i) => i.state);
