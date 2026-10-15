@@ -38,7 +38,7 @@ export function groupText(g: NeedGroup, now: number): string {
 
 /** An open group's row stands for its top need, which is listed under it; says so, since j and k step past that one. */
 export function firstText(g: NeedGroup): string {
-  return `${g.title}, ${g.count} waiting. First: ${g.top.ticketKey ? `${g.top.ticketKey} ` : ""}${g.top.title}. Enter decides it.`;
+  return `${g.title}, ${g.count} waiting here. First: ${g.top.ticketKey ? `${g.top.ticketKey} ` : ""}${g.top.title}. Enter decides it.`;
 }
 
 const ROW = "grid w-full rounded px-2 py-1 text-left text-sm leading-snug text-ws-ink2 hover:bg-ws-hover focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-ws-pip";
@@ -156,8 +156,8 @@ function GroupRow({ group: g, now, onPick, openByDefault }: { group: NeedGroup; 
           </span>
           {/* Open, the group is only its name and count: the needs under it say the rest, each once. */}
           {expanded ? (
-            <span data-needs-you-count-chip className="shrink-0 text-xs text-ws-ink3">
-              {g.count} waiting
+            <span data-needs-you-count-chip title={`${g.count} waiting in ${g.workstreamId === null ? "General" : "this workstream"}; the count above is the total`} className="shrink-0 text-xs text-ws-ink3">
+              {g.count} here
             </span>
           ) : (
             <GroupChip group={g.top.group} />

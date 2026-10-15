@@ -421,10 +421,11 @@ function useTurnEscape() {
 }
 
 /** The items j and k step through in the left column (the Needs you list's rows, then the workstreams') and in the step rail (its chips, and the cards under the open ones). */
-const COLUMN_ITEMS: Record<Exclude<PipHomeColumn, "conversation">, string> = {
+export const COLUMN_ITEMS: Record<Exclude<PipHomeColumn, "conversation">, string> = {
   // An open group's own row is its top need's; that need's row under it is not a second stop (`data-needs-top`).
   list: '[data-pip-home-column="list"] [role="option"], [data-pip-home-column="list"] [data-needs-you-group], [data-pip-home-column="list"] [data-needs-you-need]:not([data-needs-top])',
-  rail: '[data-pip-home-column="rail"] [data-step-chip], [data-pip-home-column="rail"] article[data-run-id], [data-pip-home-column="rail"] article[data-draft]',
+  // The workstream's controls (Manage, Hold, Close) come first on the rail, as they sit above its steps.
+  rail: '[data-pip-home-column="rail"] [data-workstream-controls] [role="switch"][aria-label="Manage this workstream"], [data-pip-home-column="rail"] [data-workstream-controls] [data-ws-hold], [data-pip-home-column="rail"] [data-workstream-controls] [data-close-workstream], [data-pip-home-column="rail"] [data-step-chip], [data-pip-home-column="rail"] article[data-run-id], [data-pip-home-column="rail"] article[data-draft]',
 };
 
 function itemKind(el: Element | undefined): PipHomeItemKind | null {

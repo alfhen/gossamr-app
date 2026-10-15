@@ -168,11 +168,11 @@ describe("Start my day", () => {
     });
   });
 
-  it("keeps the lines in the order of the day: needs, the drafts waiting on you, unclear, reporter, cobwebs", () => {
+  it("keeps the lines in the order of the day: needs, unclear (so it is not below the fold), the drafts waiting on you, reporter, cobwebs", () => {
     const v = view("w1", "CA-408", { clarity: { gaps: ["short"] }, waitingOnReporter: { since: ago(3) } });
     const w = view("w2", "CA-401");
     const day = startMyDay(input({ needs: [need("u1", "unblock", { workstreamId: "w9", ticketKey: "CA-900" })], workstreams: [v, w], withers: { w2: wither(4) }, proposals: [comment("p1", "CA-401")] }));
-    expect(day.lines.map((l) => l.kind)).toEqual(["unblock", "drafts", "unclear", "reporter", "cobweb"]);
+    expect(day.lines.map((l) => l.kind)).toEqual(["unblock", "unclear", "drafts", "reporter", "cobweb"]);
     expect(day.empty).toBe(false);
   });
 });

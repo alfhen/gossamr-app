@@ -39,6 +39,7 @@ import { FILTER_LIMIT, useDev } from "./devStore";
 import { ChooseWatch } from "./WatchPicker";
 import { ToastHost, focusToast, toastPlacement } from "./ToastHost";
 import { useTabs, type Route } from "./tabsStore";
+import { usePipHome } from "./pipHomeStore";
 
 /** Matches no item, for a filter that has nothing to read. */
 const NOTHING: WorkFilter = { type: "items", items: [] };
@@ -169,6 +170,8 @@ function useGlobalKeys(agentsEnabled: boolean) {
       // comment) or behind the open palette.
       if (agentsEnabled && isPipHomeKey(ev) && !typingElsewhere(document.activeElement) && !usePrefs.getState().paletteOpen) {
         ev.preventDefault();
+        // Already on Pip home inside a workstream, it goes on to General; not from Pip's composer, where the person is typing.
+        if (useTabs.getState().route === "pip" && document.activeElement?.id !== PIP_INPUT_ID) usePipHome.getState().openGeneral();
         useTabs.getState().setRoute("pip");
         return;
       }

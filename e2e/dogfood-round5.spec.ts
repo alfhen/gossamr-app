@@ -55,7 +55,7 @@ test.describe("Needs you on Pip home (G5)", () => {
     await expect(group.locator("[data-needs-you-need]").first()).toBeVisible();
     // Open, the header does not say the top need's why again.
     await expect(group.locator("[data-needs-you-why]")).toHaveCount(0);
-    await expect(group.locator("[data-needs-you-count-chip]")).toContainText("waiting");
+    await expect(group.locator("[data-needs-you-count-chip]")).toContainText(/\d+ here/);
     // The person's fold is kept.
     await more.click();
     await expect(more).toHaveAttribute("aria-expanded", "false");

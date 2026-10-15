@@ -20,6 +20,7 @@ import {
   scriptNextRun,
   setBudget,
   stepChip,
+  stepRail,
   surfacePullRequests,
   workstreamEvents,
   workstreamRow,
@@ -138,7 +139,9 @@ test("keyboard only, intake to review on Pip home: columns with F6, rows and ste
   await page.keyboard.press("ControlOrMeta+j");
   await expect(homeComposer(page)).toBeFocused();
   await press(page, "Shift+F6");
-  await expect(chipButton(page, "investigate")).toBeFocused();
+  // The rail's stop starts with the workstream's controls (Manage, Hold, Close), then its steps.
+  await expect(stepRail(page).getByRole("switch", { name: "Manage this workstream" })).toBeFocused();
+  await pressUntil(page, "j", chipButton(page, "investigate"));
   await pressUntil(page, "j", chipButton(page, "plan"));
   await press(page, "Enter");
   await expect(chipButton(page, "plan")).toHaveAttribute("aria-expanded", "true");
@@ -266,11 +269,13 @@ test("j and k move through the Needs you rows and the workstream list, in the or
   await press(page, "ControlOrMeta+BracketRight");
   await expect.poll(() => notice.evaluate((n) => n.contains(document.activeElement))).toBe(true);
   await press(page, "ControlOrMeta+BracketRight");
-  await expect(chipButton(page, "investigate")).toBeFocused();
+  await expect(stepRail(page).getByRole("switch", { name: "Manage this workstream" })).toBeFocused();
   await press(page, "ControlOrMeta+BracketRight");
   await expect(homeComposer(page)).toBeFocused();
   await press(page, "ControlOrMeta+BracketLeft");
-  await expect(chipButton(page, "investigate")).toBeFocused();
+  // Back on the rail, where the person left it: the Manage switch, then j to the first step.
+  await expect(stepRail(page).getByRole("switch", { name: "Manage this workstream" })).toBeFocused();
+  await pressUntil(page, "j", chipButton(page, "investigate"));
   // Space opens a chip, and Enter closes it again.
   await press(page, "Space");
   await expect(chipButton(page, "investigate")).toHaveAttribute("aria-expanded", "true");

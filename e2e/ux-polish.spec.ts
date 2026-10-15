@@ -180,8 +180,11 @@ test.describe("no overlap", () => {
     await clearOf(page, [...controls(page), launcher]);
 
     // On Pip home it is clear of the Needs you tray, the conversation's header, the Steps heading and the home composer too.
+    // The one up (it offers no Undo) goes with the page, so another is made there.
     await openPipHome(page);
     await expect(needsYouTray(page)).toBeVisible();
+    await expect(toasts(page)).toHaveCount(0);
+    await holdAll(page, "shortcut");
     await clearOf(page, [needsYouTray(page), homeConversationRegion(page).locator("header").first(), stepRail(page).getByRole("heading", { name: "Steps" }), page.locator(PIP_INPUT), page.locator("[data-pip-home-hints]")]);
 
     // An info toast goes away by itself.

@@ -158,7 +158,8 @@ describe("the Needs you list", () => {
     // The 8 needs fit: ws-1 shows its six, once each, and no why line is repeated on its header.
     expect([...html.matchAll(/data-needs-you-need="([^"]+)"/g)].map((m) => m[1])).toEqual(["run:r-perm", "run:r-q", "run:r-fail", "draft:c1", "draft:c2", "draft:c3"]);
     const ws1 = html.slice(html.indexOf('data-needs-you-row="ws-1"')).split("</li></ul>")[0];
-    expect(ws1).toContain("6 waiting");
+    expect(ws1).toContain("6 here");
+    expect(ws1).toContain("6 waiting in this workstream");
     expect(ws1.split('<ul id="needs-you-group-ws-1"')[0]).not.toContain("data-needs-you-why");
     // The person's fold is kept, and a longer list stays folded as before.
     seed(usePipHome, { collapsed: new Set(["ws-1"]) });
@@ -260,7 +261,7 @@ describe("the Needs you list", () => {
     seed(usePipHome, { expanded: new Set(["ws-1"]) });
     const group = needGroups(list).find((g) => g.workstreamId === "ws-1")!;
     const label = firstText(group);
-    expect(label).toContain(`${group.count} waiting. First: `);
+    expect(label).toContain(`${group.count} waiting here. First: `);
     expect(label).toContain(group.top.title);
     expect(label).toContain("Enter decides it.");
     const html = renderToStaticMarkup(<NeedsYouList needs={list} now={NOW} />);

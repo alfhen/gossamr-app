@@ -385,7 +385,7 @@ test.describe("G15: the person's answers go to Jira as a comment", () => {
     await row.click();
     await expect(needsPane(page)).toContainText("Pip drafted a comment on CA-408 with your answers to the open questions; it is posted only when you approve it.");
     const draft = needsPane(page).getByRole("article", { name: `Comment on ${VAGUE}` });
-    await expect(draft).toContainText("Answers to the open questions");
+    await expect(draft).toContainText("Open questions from triage, with answers:");
     await expect(draft).toContainText("“What does done look like for CA-408? Which behaviour or number should change?”");
     // Three sentences for three questions: each answer sits under its question.
     await expect(draft).toContainText("“What does done look like for CA-408? Which behaviour or number should change?” Answer: Done means the winback mail goes to lapsed customers.");

@@ -380,7 +380,7 @@ export function WorkstreamControlsView({ view, globals, actions, confirmingStop,
         <AutomaticSteps rules={ws.rules} globals={globals} actions={actions} />
         <span className="ml-auto flex items-center gap-1">
           {!ws.heldReason && (
-            <Btn tone="ghost" onClick={actions.onHold} title="No wakes and no automatic steps; its agents carry on" className="px-1.5 py-0.5">
+            <Btn tone="ghost" data-ws-hold onClick={actions.onHold} title="No wakes and no automatic steps; its agents carry on" className="px-1.5 py-0.5">
               Hold
             </Btn>
           )}

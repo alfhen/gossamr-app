@@ -326,7 +326,8 @@ test("on a window about 900px wide the steps drop below the conversation, nothin
   await page.keyboard.press("F6");
   expect(await page.evaluate(() => !!document.activeElement?.closest("[data-clarity-notice]"))).toBe(true);
   await page.keyboard.press("F6");
-  await expect(stepChip(page, "investigate").locator("[data-step-chip]")).toBeFocused();
+  // The steps' stop starts with the workstream's controls (G27).
+  await expect(steps.getByRole("switch", { name: "Manage this workstream" })).toBeFocused();
   await page.keyboard.press("F6");
   await expect(pipHome(page).locator("#pip-input")).toBeFocused();
   await page.keyboard.press("F6");

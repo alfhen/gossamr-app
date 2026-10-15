@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { MentionTextarea } from "../components/MentionTextarea";
 import { docText } from "../lib/docs";
-import { autoLink, liveMentions, type Mention } from "../lib/mentions";
+import { autoLink, liveMentions, mentionNote, type Mention } from "../lib/mentions";
 import { answersProvenance, isAnswersDraft, isReporterNudge, isReporterQuestions, targetOf, unreachable } from "../lib/proposals";
 import { APPROVAL_STARTS_BUILD, approvalStartsBuild } from "../lib/nextStep";
 import { useClaude } from "../claudeStore";
@@ -397,6 +397,11 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
           ) : (
             <p className="m-0 whitespace-pre-wrap [overflow-wrap:anywhere]">{body}</p>
           ))}
+        {intent.type === "comment" && isReporterQuestions(p) && open && mentionNote(liveMentions(body, mentions)) && (
+          <p data-mention-note className="m-0 text-sm text-ws-ink3">
+            {mentionNote(liveMentions(body, mentions))}
+          </p>
+        )}
         {intent.type === "transition" && (
           <p className="m-0">
             Move <b className="font-mono">{key}</b> to <b>{statusName ?? p.label ?? intent.to}</b>

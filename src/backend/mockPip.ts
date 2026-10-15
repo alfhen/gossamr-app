@@ -1,5 +1,5 @@
 import { and } from "../lib/filter";
-import { ANSWERS_COMMENT_LABEL, REVIEW_IS_THE_USERS, WORKSTREAM_PENDING_CAP, capRefusal, isRunDraft, leftByRun, targetOf } from "../lib/proposals";
+import { ANSWERS_COMMENT_LABEL, ANSWERS_OPENING, REVIEW_IS_THE_USERS, WORKSTREAM_PENDING_CAP, capRefusal, isRunDraft, leftByRun, targetOf } from "../lib/proposals";
 import { followUpBlocker } from "../workspace/followUp";
 import { docFromText, docText } from "../lib/docs";
 import type { BasisField, Intent, ItemRef, Proposal, ReviewComment, Run, RunKind, ScreenContext, WorkFilter } from "../types";
@@ -230,7 +230,7 @@ export function answersScript(prompt: string, runs: readonly Run[], workstream: 
   // As many lines, or else as many sentences, as questions pair them up; any other shape gets every question, then the answer as it was written.
   const parts = [answer.split(/\n+/), answer.split(/(?<=[.!?])\s+/)].map((p) => p.map((l) => l.trim()).filter(Boolean));
   const split = questions.length > 1 ? parts.find((p) => p.length === questions.length) : undefined;
-  const body = [ANSWERS_COMMENT_LABEL, ""];
+  const body = [ANSWERS_OPENING, ""];
   if (split) questions.forEach((q, i) => body.push(`\u201c${q}\u201d`, `Answer: ${split[i]}`, ""));
   else {
     questions.forEach((q) => body.push(`\u201c${q}\u201d`));

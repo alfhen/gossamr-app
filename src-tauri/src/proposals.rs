@@ -472,6 +472,8 @@ pub const READINESS_COMMENT_LABEL: &str = "Questions for the reporter";
 /// The label of a comment Pip drafts once the person chose "I'll answer" on a triage's open questions: each question with
 /// the person's answer, for the ticket. Pip sets it by starting the comment with these words (`Core::propose_comment`).
 pub const ANSWERS_COMMENT_LABEL: &str = "Answers to the open questions";
+/// The first line of that comment, so a Jira reader knows the triage's questions are answered below. Jira's words, in a neutral voice; mirrored by `ANSWERS_OPENING` in src/lib/proposals.ts.
+pub const ANSWERS_OPENING: &str = "Open questions from triage, with answers:";
 
 /// Whether `p` is the comment Gossamr drafted to ask a ticket's reporter (`Core::ask_reporter`, `Core::ask_reporter_now`):
 /// never one Pip made, whatever it is labelled.
@@ -2091,6 +2093,7 @@ mod tests {
         assert!(is_answers_draft(&labelled(ANSWERS_COMMENT_LABEL, CreatedBy::Pip, chat())));
         assert!(!is_answers_draft(&labelled(ANSWERS_COMMENT_LABEL, CreatedBy::Agent, run())), "only Pip's");
         assert!(!is_answers_draft(&labelled(READINESS_COMMENT_LABEL, CreatedBy::Pip, chat())));
+        assert!(ANSWERS_OPENING.ends_with(':') && !ANSWERS_OPENING.contains("Gossamr") && !ANSWERS_OPENING.contains(" we ") && !ANSWERS_OPENING.contains("I "), "a neutral voice");
         // The nudge is its own kind: Gossamr's follow-up, never the questions, never Pip's, and no run's comment.
         let nudge = labelled(NUDGE_COMMENT_LABEL, CreatedBy::User, chat());
         assert!(is_reporter_nudge(&nudge) && !is_reporter_questions(&nudge) && !is_answers_draft(&nudge));
