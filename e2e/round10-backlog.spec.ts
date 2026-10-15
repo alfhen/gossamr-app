@@ -39,8 +39,9 @@ test.describe("Start my day puts the unclear tickets above the lines that follow
     const kinds = await card.locator("[data-day-line]").evaluateAll((els) => els.map((el) => el.getAttribute("data-day-line")));
     expect(kinds).toContain("drafts");
     const unclear = kinds.indexOf("unclear");
-    if (unclear >= 0) for (const later of ["drafts", "reporter", "cobweb"]) if (kinds.includes(later)) expect(unclear, kinds.join()).toBeLessThan(kinds.indexOf(later));
-    expect(kinds.filter((k) => k === "unclear").length).toBeLessThanOrEqual(1);
+    expect(unclear, kinds.join()).toBeGreaterThanOrEqual(0);
+    for (const later of ["drafts", "reporter", "cobweb"]) if (kinds.includes(later)) expect(unclear, kinds.join()).toBeLessThan(kinds.indexOf(later));
+    expect(kinds.filter((k) => k === "unclear")).toHaveLength(1);
   });
 });
 
@@ -78,6 +79,10 @@ test.describe("Ctrl+0 on Pip home inside a workstream goes on to General (G28)",
     await begin(page, "CA-408");
     await openPipHome(page);
     await workstreamRow(page, "CA-408").click();
+    await expect(workstreamRow(page, "CA-408")).toHaveAttribute("aria-selected", "true");
+    // Not from Pip's composer: the person is typing there, so the workstream stays.
+    await page.locator("#pip-input").focus();
+    await page.keyboard.press("ControlOrMeta+0");
     await expect(workstreamRow(page, "CA-408")).toHaveAttribute("aria-selected", "true");
     await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
     await page.keyboard.press("ControlOrMeta+0");

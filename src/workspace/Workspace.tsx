@@ -170,8 +170,8 @@ function useGlobalKeys(agentsEnabled: boolean) {
       // comment) or behind the open palette.
       if (agentsEnabled && isPipHomeKey(ev) && !typingElsewhere(document.activeElement) && !usePrefs.getState().paletteOpen) {
         ev.preventDefault();
-        // Already on Pip home inside a workstream, it goes on to General.
-        if (useTabs.getState().route === "pip") usePipHome.getState().openGeneral();
+        // Already on Pip home inside a workstream, it goes on to General; not from Pip's composer, where the person is typing.
+        if (useTabs.getState().route === "pip" && document.activeElement?.id !== PIP_INPUT_ID) usePipHome.getState().openGeneral();
         useTabs.getState().setRoute("pip");
         return;
       }

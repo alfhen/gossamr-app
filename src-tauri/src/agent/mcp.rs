@@ -1042,7 +1042,7 @@ mod tests {
         let r = rig().await;
         let plain = r.ok("propose_comment", json!({ "key": "CA-1", "body": "Looks good" })).await;
         assert_eq!(r.stored(&id_in(&plain)).await.label, None, "an ordinary comment has no label");
-        let answers = r.ok("propose_comment", json!({ "key": "CA-1", "body": "Open questions from triage, answered by the assignee:\n\n\u{201c}Who asked?\u{201d}\nAnswer: Mette." })).await;
+        let answers = r.ok("propose_comment", json!({ "key": "CA-1", "body": "Open questions from triage, with answers:\n\n\u{201c}Who asked?\u{201d}\nAnswer: Mette." })).await;
         let stored = r.stored(&id_in(&answers)).await;
         assert_eq!(stored.label.as_deref(), Some(crate::proposals::ANSWERS_COMMENT_LABEL), "which keeps it out of the safe batch");
         assert!(crate::proposals::is_answers_draft(&stored) && !crate::proposals::is_reporter_questions(&stored));

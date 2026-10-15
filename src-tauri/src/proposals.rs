@@ -472,8 +472,8 @@ pub const READINESS_COMMENT_LABEL: &str = "Questions for the reporter";
 /// The label of a comment Pip drafts once the person chose "I'll answer" on a triage's open questions: each question with
 /// the person's answer, for the ticket. Pip sets it by starting the comment with these words (`Core::propose_comment`).
 pub const ANSWERS_COMMENT_LABEL: &str = "Answers to the open questions";
-/// The first line of that comment, so a Jira reader knows whose answers follow. Jira's words, in a neutral voice; mirrored by `ANSWERS_OPENING` in src/lib/proposals.ts.
-pub const ANSWERS_OPENING: &str = "Open questions from triage, answered by the assignee:";
+/// The first line of that comment, so a Jira reader knows the triage's questions are answered below. Jira's words, in a neutral voice; mirrored by `ANSWERS_OPENING` in src/lib/proposals.ts.
+pub const ANSWERS_OPENING: &str = "Open questions from triage, with answers:";
 
 /// Whether `p` is the comment Gossamr drafted to ask a ticket's reporter (`Core::ask_reporter`, `Core::ask_reporter_now`):
 /// never one Pip made, whatever it is labelled.

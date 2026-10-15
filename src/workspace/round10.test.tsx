@@ -20,8 +20,8 @@ describe("round 10 backlog", () => {
     expect(COLUMN_ITEMS.list).not.toContain("data-workstream-controls");
   });
 
-  it("G24: the answers comment opens with a line saying whose answers they are, in a neutral voice", () => {
-    expect(ANSWERS_OPENING).toBe("Open questions from triage, answered by the assignee:");
+  it("G24: the answers comment opens with a line saying it answers the triage's questions, in a neutral voice, naming no one", () => {
+    expect(ANSWERS_OPENING).toBe("Open questions from triage, with answers:");
     expect(ANSWERS_OPENING).not.toMatch(/\b(I|we|Pip|Gossamr|runs?|workstreams?)\b/);
     expect(ANSWERS_OPENING).not.toBe(ANSWERS_COMMENT_LABEL);
   });
