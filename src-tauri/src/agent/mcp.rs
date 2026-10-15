@@ -494,7 +494,7 @@ async fn run_tool(st: &McpState, run: &PipRun, run_id: &str, name: &str, args: &
             // A comment that opens with the answers' heading is the person's answers to a triage's open questions: it is
             // labelled so, which keeps it out of the safe batch (the person reads and approves it on its own).
             let first = body.lines().next().unwrap_or_default().trim().trim_matches(|c: char| c == '#' || c == '*' || c.is_whitespace()).trim_end_matches(':');
-            let label = first.eq_ignore_ascii_case(crate::proposals::ANSWERS_COMMENT_LABEL).then(|| crate::proposals::ANSWERS_COMMENT_LABEL.to_string());
+            let label = (first.eq_ignore_ascii_case(crate::proposals::ANSWERS_COMMENT_LABEL) || first.eq_ignore_ascii_case(crate::proposals::ANSWERS_OPENING.trim_end_matches(':'))).then(|| crate::proposals::ANSWERS_COMMENT_LABEL.to_string());
             let intent = Intent::Comment { item: item_ref(scope, key), body: Doc::from_text(body, &[]) };
             propose(st, run, run_id, intent, label).await
         }
@@ -1042,10 +1042,12 @@ mod tests {
         let r = rig().await;
         let plain = r.ok("propose_comment", json!({ "key": "CA-1", "body": "Looks good" })).await;
         assert_eq!(r.stored(&id_in(&plain)).await.label, None, "an ordinary comment has no label");
-        let answers = r.ok("propose_comment", json!({ "key": "CA-1", "body": "Answers to the open questions\n\n\u{201c}Who asked?\u{201d}\nAnswer: Mette." })).await;
+        let answers = r.ok("propose_comment", json!({ "key": "CA-1", "body": "Open questions from triage, answered by the assignee:\n\n\u{201c}Who asked?\u{201d}\nAnswer: Mette." })).await;
         let stored = r.stored(&id_in(&answers)).await;
         assert_eq!(stored.label.as_deref(), Some(crate::proposals::ANSWERS_COMMENT_LABEL), "which keeps it out of the safe batch");
         assert!(crate::proposals::is_answers_draft(&stored) && !crate::proposals::is_reporter_questions(&stored));
+        let old_heading = r.ok("propose_comment", json!({ "key": "CA-1", "body": "Answers to the open questions\nAnswer: ok" })).await;
+        assert_eq!(r.stored(&id_in(&old_heading)).await.label.as_deref(), Some(crate::proposals::ANSWERS_COMMENT_LABEL), "the earlier heading still counts");
         let headed = r.ok("propose_comment", json!({ "key": "CA-1", "body": "## Answers to the open questions:\nAnswer: ok" })).await;
         assert_eq!(r.stored(&id_in(&headed)).await.label.as_deref(), Some(crate::proposals::ANSWERS_COMMENT_LABEL), "through a heading and a colon");
         let elsewhere = r.ok("propose_comment", json!({ "key": "CA-1", "body": "Notes: Answers to the open questions are below" })).await;

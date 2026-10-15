@@ -174,9 +174,10 @@ export function startMyDay(i: StartMyDayInput): StartMyDay {
   );
   const lines = [
     ...groups,
-    // The drafts wait on the person's click, so they come before the lines that only inform, and a short box does not cut them off.
-    line("drafts", (n) => `${plural(n, "Jira draft", "Jira drafts")} waiting to be posted`, draftEntries(i)),
+    // Tickets that may be unclear come right after the lines that need a decision (a long list is one line, with More), so a short box does not cut them off below its fold.
     line("unclear", (n) => `${plural(n, "ticket", "tickets")} may be unclear`, unclearEntries(i)),
+    // The drafts wait on the person's click, so they come before the lines that only inform.
+    line("drafts", (n) => `${plural(n, "Jira draft", "Jira drafts")} waiting to be posted`, draftEntries(i)),
     line("reporter", (n) => `${n} waiting on the reporter`, reporterEntries(i)),
     line("cobweb", (n) => `${plural(n, "workstream", "workstreams")} gone quiet in Jira`, cobwebEntries(i)),
   ].filter((l): l is DayLine => l !== null);

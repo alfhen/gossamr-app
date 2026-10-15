@@ -245,6 +245,8 @@ export const isReporterNudge = (p: Proposal) => p.intent.type === "comment" && p
 
 /** The label of a comment Pip drafts once the person chose "I'll answer" on a triage's open questions: each question with their answer, for the ticket. As `ANSWERS_COMMENT_LABEL` in `proposals.rs`. */
 export const ANSWERS_COMMENT_LABEL = "Answers to the open questions";
+/** The first line of that comment, so a Jira reader knows whose answers follow. Neutral voice; as `ANSWERS_OPENING` in `proposals.rs`. */
+export const ANSWERS_OPENING = "Open questions from triage, answered by the assignee:";
 
 /** Whether `p` is the comment Pip drafted with the person's answers to the open questions. As `is_answers_draft`. */
 export const isAnswersDraft = (p: Proposal) => p.intent.type === "comment" && p.label === ANSWERS_COMMENT_LABEL && p.createdBy === "pip";

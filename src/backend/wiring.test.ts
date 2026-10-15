@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { NUDGE_COMMENT_LABEL, REVIEW_CHANGED, REVIEW_MAYBE_POSTED_NOTE, REVIEW_NOT_FOUND_NOTE, REVIEW_OUTDATED_NOTE } from "../lib/proposals";
+import { ANSWERS_OPENING, NUDGE_COMMENT_LABEL, REVIEW_CHANGED, REVIEW_MAYBE_POSTED_NOTE, REVIEW_NOT_FOUND_NOTE, REVIEW_OUTDATED_NOTE } from "../lib/proposals";
 import { NUDGE_AFTER_DAYS, NUDGE_GONE, nudgeComment } from "../lib/reporterWait";
 import { CLARITY_NOTES } from "./mockWorkstreams";
 
@@ -47,8 +47,9 @@ describe("the desktop backend's wiring", () => {
     expect(rust).toContain(`pub const NUDGE_AFTER_DAYS: i64 = ${NUDGE_AFTER_DAYS};`);
     expect(rust).toContain(`pub const CLARITY_NOTES: [&str; 2] = [${CLARITY_NOTES.map((n) => `"${n}"`).join(", ")}];`);
     // The comment is the same words around the greeting and the ticket's key.
-    expect(rust).toContain(nudgeComment("{key}", null).replace("Hi,", "{hello}").replace("on the earlier questions", "on the {questions}").replace(/\n/g, "\\n"));
+    expect(rust).toContain(nudgeComment("{key}", null).replace("Hi,", "{hello}").replace("The earlier questions", "The {questions}").replace(/\n/g, "\\n"));
     expect(rust).toContain('let questions = if replied { "follow-up questions" } else { "earlier questions" };');
+    expect(read("../../src-tauri/src/proposals.rs")).toContain(`pub const ANSWERS_OPENING: &str = "${ANSWERS_OPENING}";`);
     expect(read("../../src-tauri/src/proposals.rs")).toContain(`pub const NUDGE_COMMENT_LABEL: &str = "${NUDGE_COMMENT_LABEL}";`);
   });
 });

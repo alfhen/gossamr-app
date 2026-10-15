@@ -259,7 +259,7 @@ describe("I'll answer, then the person's answers", () => {
     const answers = drafts.find((p) => p.label === "Answers to the open questions")!;
     expect(answers).toMatchObject({ state: { type: "pending" }, createdBy: "pip", intent: { type: "comment" } });
     const text = docText(answers.intent.type === "comment" ? answers.intent.body : { blocks: [] });
-    expect(text.startsWith("Answers to the open questions")).toBe(true);
+    expect(text.startsWith("Open questions from triage, answered by the assignee:")).toBe(true);
     expect(text).toContain("“What does done look like for CA-408? Which behaviour or number should change?”\nAnswer: Done means the winback mail goes to lapsed customers");
     expect(text).toContain("“What is in scope and what is out?”\nAnswer: We only touch the winback flow");
     expect(text).toContain("“Who asked for this, and who is waiting on it?”\nAnswer: The CRM team asked for it");

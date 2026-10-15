@@ -183,5 +183,5 @@ export const nudgeText = (days: number) => `The reporter hasn't answered for ${p
  */
 export function nudgeComment(key: string, reporter: string | null, replied = false): string {
   const hello = reporter ? `Hi @${reporter},` : "Hi,";
-  return `${hello}\n\nA gentle nudge on the ${replied ? "follow-up questions" : "earlier questions"}; work on ${key} can't start until they are cleared up. Could you answer them here on the ticket when you have a moment? Thanks.`;
+  return `${hello}\n\nThe ${replied ? "follow-up questions" : "earlier questions"} are still open, and work on ${key} can't start until they are cleared up. Could you answer them here on the ticket when you have a moment? Thanks.`;
 }

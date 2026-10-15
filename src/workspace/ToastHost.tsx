@@ -1,4 +1,5 @@
-import type { CSSProperties } from "react";
+import { useEffect, type CSSProperties } from "react";
+import { useTabs } from "./tabsStore";
 import { useToasts, type Toast } from "./toasts";
 
 /** How far a toast on Pip home rises to clear the composer, its suggestion chips and the line under it. */
@@ -20,6 +21,12 @@ export function toastPlacement(screen: string | null, clearRight: number): CSSPr
     maxWidth: `min(420px, calc(100% - ${clearRight}px - 2.5rem))`,
   };
 }
+
+/** A toast pushed this close to a route change is about where the person lands ("Drafted a new ticket" as Drafts opens), so it stays. */
+export const ROUTE_GRACE_MS = 500;
+
+/** What a change of route at `now` takes away: the toasts that offer no action (Undo stays, as its offer outlives the page it was made on), unless they came with the change. */
+export const goneOnRouteChange = (toasts: readonly Pick<Toast, "id" | "action" | "at">[], now = Date.now()): number[] => toasts.filter((t) => !t.action && now - t.at > ROUTE_GRACE_MS).map((t) => t.id);
 
 /** Where the keyboard was before F6 took it to the toast, so dismissing it with Esc gives it back. */
 let before: HTMLElement | null = null;
@@ -144,6 +151,16 @@ export function ToastHost({ placement }: { placement?: CSSProperties }) {
   const toasts = useToasts((s) => s.toasts);
   const dismiss = useToasts((s) => s.dismiss);
   const head = toasts[0];
+  // A note about the page the person has left goes with it.
+  useEffect(
+    () =>
+      useTabs.subscribe((s, was) => {
+        if (s.route === was.route) return;
+        const { toasts: now, dismiss: drop } = useToasts.getState();
+        goneOnRouteChange(now).forEach(drop);
+      }),
+    [],
+  );
   return (
     <div
       role="status"

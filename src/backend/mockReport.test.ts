@@ -140,6 +140,24 @@ describe("an adversarial review", () => {
     expect(INSTRUCTIONS.review).toContain("not ready");
   });
 
+  const earlier = /macro_rules! earlier_notes \{\s*\(\) => \{\s*"([^"]*)"/.exec(rust)![1];
+  const triageForm = /macro_rules! triage_form \{\s*\(\) => \{\s*"([^"]*)"/.exec(rust)![1];
+
+  it("tells the investigation, triage and plan notes to cover only what earlier notes on the ticket do not, and no other kind", () => {
+    for (const kind of ["investigate", "triage", "plan"] as const) expect(INSTRUCTIONS[kind].endsWith(`${earlier}${note}`), kind).toBe(true);
+    for (const kind of ["verify", "build", "review"] as const) expect(INSTRUCTIONS[kind], kind).not.toContain("compared with them");
+    expect(earlier).toContain("cover only what is new compared with them");
+  });
+
+  it("asks a triage for its size as story points with a plain meaning and for the open questions it mentions by name, and no other kind", () => {
+    expect(INSTRUCTIONS.triage).toContain(triageForm);
+    expect(triageForm).toContain("'Size: 8 points (about a week)', never a bare 'Size 8'");
+    expect(triageForm).toContain("list each one by name");
+    for (const kind of ["investigate", "plan", "verify", "build", "review"] as const) expect(INSTRUCTIONS[kind], kind).not.toContain("story points");
+    expect(SCRIPTED_RESULT.triage).toContain("Size: 8 points (about a week)");
+    expect(SCRIPTED_RESULT.triage).not.toMatch(/Size 8/);
+  });
+
   it("and every other kind end with the same note sentence, which tells the agent to write for people who do not use the app", () => {
     for (const kind of ["investigate", "triage", "plan", "verify", "build", "review"] as const) {
       expect(INSTRUCTIONS[kind].endsWith(note), kind).toBe(true);
@@ -147,8 +165,8 @@ describe("an adversarial review", () => {
         expect(INSTRUCTIONS[kind].split(rule).length - 1, `${kind}: ${rule}`).toBe(1);
       }
     }
-    const plan = /pub const PLAN_INSTRUCTION: &str = concat!\("((?:[^"\\]|\\.)*)", status_note!\(\)\);/.exec(rust)![1].replace(/\\"/g, '"');
-    expect(INSTRUCTIONS.plan).toBe(`${plan}${note}`);
+    const plan = /pub const PLAN_INSTRUCTION: &str = concat!\("((?:[^"\\]|\\.)*)", earlier_notes!\(\), status_note!\(\)\);/.exec(rust)![1].replace(/\\"/g, '"');
+    expect(INSTRUCTIONS.plan).toBe(`${plan}${earlier}${note}`);
     expect(INSTRUCTIONS.plan).not.toContain("attached to the run");
   });
 

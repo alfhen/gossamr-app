@@ -178,13 +178,14 @@ describe("the nudge", () => {
   });
 
   it("is short and polite, names the reporter when known, and says what the Rust side says", () => {
-    expect(nudgeComment("CA-408", "Mette Lund")).toBe("Hi @Mette Lund,\n\nA gentle nudge on the earlier questions; work on CA-408 can't start until they are cleared up. Could you answer them here on the ticket when you have a moment? Thanks.");
+    expect(nudgeComment("CA-408", "Mette Lund")).toBe("Hi @Mette Lund,\n\nThe earlier questions are still open, and work on CA-408 can't start until they are cleared up. Could you answer them here on the ticket when you have a moment? Thanks.");
     expect(nudgeComment("CA-408", null).startsWith("Hi,\n")).toBe(true);
+    expect(nudgeComment("CA-408", null)).not.toContain("gentle");
   });
 
   it("follows up on the follow-up questions once the reporter has replied before, and never says we, above, planned or Gossamr", () => {
     const again = nudgeComment("CA-408", "Mette Lund", true);
-    expect(again).toContain("A gentle nudge on the follow-up questions; work on CA-408 can't start");
+    expect(again).toContain("The follow-up questions are still open, and work on CA-408 can't start");
     for (const text of [again, nudgeComment("CA-408", null)]) expect(text).not.toMatch(/\b(we|above|planned|Gossamr|Pip)\b/);
   });
 

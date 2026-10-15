@@ -33,6 +33,9 @@ export const MAIN_ID = "workspace-main";
 
 const KBD = "rounded border border-ws-sep2 bg-ws-win px-1 font-sans text-[11px]";
 
+/** The footer line of "Start a workstream": what picking a ticket there does and does not do. */
+export const START_WORKSTREAM_NOTE = "Opens a workstream; starts no agent and posts nothing.";
+
 export function PaletteView({
   query,
   results,
@@ -40,6 +43,7 @@ export function PaletteView({
   placeholder = "Switch project, change view, jump to a ticket, or ask Pip…",
   empty,
   hints = ["↑↓ move", "↵ select", "esc close"],
+  note,
   onQuery,
   onActive,
   onRun,
@@ -53,6 +57,8 @@ export function PaletteView({
   empty?: string;
   /** Key hints for the footer, each "key label". */
   hints?: string[];
+  /** A line under the list, above the key hints: what picking a result does. */
+  note?: string;
   onQuery(q: string): void;
   onActive(i: number): void;
   onRun(c: Command): void;
@@ -127,7 +133,12 @@ export function PaletteView({
           ))}
           {!results.length && <li role="presentation" className="px-3 py-3 text-ws-ink3">{empty ?? `Nothing matches “${query}”.`}</li>}
         </ul>
-        <div className="flex gap-3.5 border-t border-ws-sep bg-ws-bar px-3.5 py-2 text-xs text-ws-ink3">
+        {note && (
+          <p data-palette-note className="m-0 border-t border-ws-sep bg-ws-bar px-3.5 pt-2 text-xs text-ws-ink3">
+            {note}
+          </p>
+        )}
+        <div className={`flex gap-3.5 bg-ws-bar px-3.5 py-2 text-xs text-ws-ink3 ${note ? "" : "border-t border-ws-sep"}`}>
           {hints.map((h) => {
             const [key, ...label] = h.split(" ");
             return (
@@ -390,6 +401,7 @@ export function Palette() {
       placeholder={step.type === "project" ? "Which project is the ticket for?" : step.type === "title" ? `Title of the new ${step.container.name} ticket` : step.type === "workstream" ? "Start a workstream: type a ticket key or words" : undefined}
       empty={step.type === "title" ? "Type a title, then press Enter. Pip drafts it; you approve it." : step.type === "workstream" ? noStartableTicket(Object.values(items), query, workstreams) : undefined}
       hints={prompting ? ["↑↓ move", "↵ select", "esc back"] : undefined}
+      note={step.type === "workstream" ? START_WORKSTREAM_NOTE : undefined}
       onQuery={(q) => (setQuery(q), setActive(0))}
       onActive={setActive}
       onRun={(c) => (c.stay ? c.run() : (close(false), c.run()))}

@@ -1,0 +1,51 @@
+import { renderToStaticMarkup } from "react-dom/server";
+import { describe, expect, it, vi } from "vitest";
+import { mentionNote } from "../lib/mentions";
+import { ANSWERS_OPENING, ANSWERS_COMMENT_LABEL } from "../lib/proposals";
+import { PaletteView, START_WORKSTREAM_NOTE } from "./Palette";
+import { COLUMN_ITEMS } from "./PipHome";
+import { goneOnRouteChange } from "./ToastHost";
+
+describe("round 10 backlog", () => {
+  it("G27: the steps rail's stop starts with Manage, Hold and Close, then the chips and cards", () => {
+    const stops = COLUMN_ITEMS.rail.split(", ");
+    expect(stops.slice(0, 3)).toEqual([
+      '[data-pip-home-column="rail"] [data-workstream-controls] [role="switch"][aria-label="Manage this workstream"]',
+      '[data-pip-home-column="rail"] [data-workstream-controls] [data-ws-hold]',
+      '[data-pip-home-column="rail"] [data-workstream-controls] [data-close-workstream]',
+    ]);
+    expect(stops.slice(3).map((s) => s.replace('[data-pip-home-column="rail"] ', ""))).toEqual(["[data-step-chip]", "article[data-run-id]", "article[data-draft]"]);
+    // Every stop is on the rail, and the list column's stops are untouched.
+    expect(stops.every((s) => s.startsWith('[data-pip-home-column="rail"] '))).toBe(true);
+    expect(COLUMN_ITEMS.list).not.toContain("data-workstream-controls");
+  });
+
+  it("G24: the answers comment opens with a line saying whose answers they are, in a neutral voice", () => {
+    expect(ANSWERS_OPENING).toBe("Open questions from triage, answered by the assignee:");
+    expect(ANSWERS_OPENING).not.toMatch(/\b(I|we|Pip|Gossamr|runs?|workstreams?)\b/);
+    expect(ANSWERS_OPENING).not.toBe(ANSWERS_COMMENT_LABEL);
+  });
+
+  it("G31: a reporter question that mentions people says who is notified", () => {
+    expect(mentionNote([])).toBeNull();
+    expect(mentionNote([{ name: "Mette Lund" }])).toBe("Mentions Mette Lund, who is notified when it is posted.");
+    expect(mentionNote([{ name: "Mette Lund" }, { name: "Jens" }, { name: "Mette Lund" }])).toBe("Mentions Mette Lund and Jens, who are notified when it is posted.");
+    expect(mentionNote([{ name: "A" }, { name: "B" }, { name: "C" }])).toBe("Mentions A, B and C, who are notified when it is posted.");
+  });
+
+  it("G31: the palette's workstream step says it starts no agent and posts nothing; other steps have no such line", () => {
+    const view = (note?: string) => renderToStaticMarkup(<PaletteView query="" results={[]} active={0} note={note} onQuery={vi.fn()} onActive={vi.fn()} onRun={vi.fn()} onClose={vi.fn()} />);
+    expect(START_WORKSTREAM_NOTE).toBe("Opens a workstream; starts no agent and posts nothing.");
+    expect(view(START_WORKSTREAM_NOTE)).toContain(`data-palette-note="true" class=`);
+    expect(view(START_WORKSTREAM_NOTE)).toContain(START_WORKSTREAM_NOTE);
+    expect(view()).not.toContain("data-palette-note");
+  });
+
+  it("G32: a route change takes away the toasts that offer no Undo and keeps the ones that do", () => {
+    const undo = { label: "Undo", run: () => {} };
+    expect(goneOnRouteChange([{ id: 1, at: 0 }, { id: 2, at: 0, action: undo }, { id: 3, at: 0 }], 10_000)).toEqual([1, 3]);
+    expect(goneOnRouteChange([], 10_000)).toEqual([]);
+    // One pushed with the change, as "Drafted a new ticket" is as Drafts opens, is about the page it lands on.
+    expect(goneOnRouteChange([{ id: 1, at: 9_900 }, { id: 2, at: 1_000 }], 10_000)).toEqual([2]);
+  });
+});
