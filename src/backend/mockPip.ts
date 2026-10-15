@@ -220,6 +220,30 @@ export function readinessLine(workstream: PipWorkstream | null): string | null {
  * (`planAfterAnswers`). The message is the composer's prefill (`readinessPrompt`): the questions quoted, then "My answers:"
  * and what the person wrote. Null when no answers are due, or there is no ticket.
  */
+/**
+ * A reply's numbered answers 1 to `n`, markers dropped, or null when it doesn't number exactly that many. The list starts
+ * at a "1." opening the reply or a line, after any preamble. It is read back from the last "n.", then the last "n-1." before
+ * that, and so on, so a number inside an answer ("Use version 2. Then deploy") stays answer text.
+ */
+export function numberedAnswers(answer: string, n: number): string[] | null {
+  const first = answer.match(/(?:^|\n)\s*1[.)]\s+/);
+  if (!first || n < 2) return null;
+  let rest = answer.slice((first.index ?? 0) + first[0].length);
+  const items: string[] = [];
+  for (let k = n; k >= 2; k--) {
+    const marks = [...rest.matchAll(new RegExp(`(?:^|\\s)${k}[.)]\\s+`, "g"))];
+    const last = marks[marks.length - 1];
+    if (!last) return null;
+    const item = rest.slice(last.index + last[0].length);
+    // An answer numbered past `n` means the reply has more answers than questions.
+    if (k === n && new RegExp(`(?:^|\\s)${n + 1}[.)]\\s+`).test(item)) return null;
+    items.unshift(item.trim());
+    rest = rest.slice(0, last.index);
+  }
+  items.unshift(rest.trim());
+  return items.every(Boolean) ? items : null;
+}
+
 export function answersScript(prompt: string, runs: readonly Run[], workstream: PipWorkstream | null): PipScript | null {
   const item = workstream?.item;
   if (!workstream?.answersDue || !item) return null;
@@ -228,12 +252,10 @@ export function answersScript(prompt: string, runs: readonly Run[], workstream: 
   const questions = [...asked.matchAll(/\u201c([^\u201d]*)\u201d/g)].map((m) => m[1].trim()).filter((q) => q && q !== "(it listed no questions)");
   const answer = (at >= 0 ? prompt.slice(at + "My answers:".length) : prompt).trim();
   // As many numbered items (their markers dropped), or lines, or else sentences, as questions pair them up; any other shape gets every question, numbered, then the answer as it was written.
-  // A reply that numbers its answers is paired only by those numbers: a count that doesn't match keeps it as written, as lines or sentences would then shift the answers.
-  // The list starts at a marker opening the reply or a line (after any preamble); a number inside prose ("version 2. Then") is not one.
-  const firstMarker = answer.match(/(?:^|\n)\s*\d+[.)]\s+/);
-  const listed = firstMarker ? answer.slice((firstMarker.index ?? 0) + firstMarker[0].length) : null;
-  const parts = (listed !== null ? [listed.split(/(?:^|\s)\d+[.)]\s+/)] : [answer.split(/\n+/), answer.split(/(?<=[.!?])\s+/)]).map((p) => p.map((l) => l.trim()).filter(Boolean));
-  const split = questions.length > 1 ? parts.find((p) => p.length === questions.length) : undefined;
+  // A reply that numbers its answers (a marker opening it or a line) is paired only by those numbers, as lines or sentences would then shift the answers.
+  const numbered = /(?:^|\n)\s*\d+[.)]\s+/.test(answer);
+  const parts = numbered ? [] : [answer.split(/\n+/), answer.split(/(?<=[.!?])\s+/)].map((p) => p.map((l) => l.trim()).filter(Boolean));
+  const split = questions.length < 2 ? undefined : numbered ? (numberedAnswers(answer, questions.length) ?? undefined) : parts.find((p) => p.length === questions.length);
   const body = [ANSWERS_OPENING, ""];
   if (split) questions.forEach((q, i) => body.push(`\u201c${q}\u201d`, `Answer: ${split[i]}`, ""));
   else {

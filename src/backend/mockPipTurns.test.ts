@@ -1,6 +1,6 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { INTERRUPTED, MOCK_TURN_DAYS, NEVER_RAN, SHOWN_MAX_CHARS, freshStart, mockUsage, openMockPipTurns, shownLine } from "./mockPipTurns";
-import { answersScript, mockAsk } from "./mockPip";
+import { answersScript, mockAsk, numberedAnswers } from "./mockPip";
 import { docText } from "../lib/docs";
 import { answersPaired, answersProvenance } from "../lib/proposals";
 import type { ScreenContext } from "../types";
@@ -328,6 +328,17 @@ describe("the comment with the person's answers (G3)", () => {
     expect(prose).toContain("\u201cWhat does done mean?\u201d\nAnswer: We ship version 2.");
     expect(prose).toContain("\u201cWhich export?\u201d\nAnswer: Then the CRM export.");
     expect(answersPaired(prose)).toBe(true);
+  });
+
+  it("keeps a number inside a numbered answer as answer text", () => {
+    const body = text("1. Use version 2. Then deploy. 2. Only the CRM export. 3. Support.");
+    expect(body).toContain("\u201cWhat does done mean?\u201d\nAnswer: Use version 2. Then deploy.");
+    expect(body).toContain("\u201cWhich export?\u201d\nAnswer: Only the CRM export.");
+    expect(body).toContain("\u201cWho owns it?\u201d\nAnswer: Support.");
+    expect(numberedAnswers("1. a\n2. move to v3. now\n3. c", 3)).toEqual(["a", "move to v3. now", "c"]);
+    expect(numberedAnswers("1. a 2. b 3. c 4. d", 3)).toBeNull();
+    expect(numberedAnswers("2. a 3. b", 2)).toBeNull();
+    expect(numberedAnswers("1. a 3. b", 2)).toBeNull();
   });
 
   it("numbers the questions and answers once, and says so, when the answers don't pair", () => {
