@@ -142,6 +142,8 @@ test.describe("toasts leave with the page and clear the launcher (G32)", () => {
     await rail.getByRole("button", { name: "Close workstream" }).click();
     await expect(toast(page)).toContainText("Closed the workstream on CA-408");
     await expect(toast(page).getByRole("button", { name: "Undo" })).toHaveCount(0);
+    // A toast younger than the route grace (500 ms) is taken to come with the change and stays; leave it older than that.
+    await page.waitForTimeout(700);
     await allProjects(page);
     await expect(pipHome(page)).toHaveCount(0);
     await expect(toast(page)).toHaveCount(0);
