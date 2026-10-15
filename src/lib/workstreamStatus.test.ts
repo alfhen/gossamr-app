@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { HELD_ALL, HELD_BUDGET, HELD_DAILY, HELD_PERSON, HELD_QUOTA, HELD_RESTART, TRIPWIRE, TRIPWIRES } from "../types";
 import type { Run, WorkstreamView } from "../types";
 import { NUDGE_AFTER_DAYS } from "./reporterWait";
-import { EMPTY_FILTER, emptyFilterText, QUIET_DAYS, REPLIED_DETAIL, STATUS_HINT, STATUS_ORDER, UNCLEAR_DETAIL, byStatusRank, statusFromWords, workstreamStatus, type StatusMore } from "./workstreamStatus";
+import { EMPTY_FILTER, OWED_DETAIL, ON_REPORTER_DETAIL, answersOwed, emptyFilterText, QUIET_DAYS, REPLIED_DETAIL, STATUS_HINT, STATUS_ORDER, UNCLEAR_DETAIL, byStatusRank, statusFromWords, workstreamStatus, type StatusMore } from "./workstreamStatus";
 import type { WorkstreamWither } from "./workstreamWither";
 
 const NOW = new Date("2026-10-13T09:00:00Z");
@@ -20,6 +20,28 @@ describe("workstreamStatus: every state", () => {
   it("Needs you: a need in this workstream, counted in the detail, and another workstream's need is not", () => {
     expect(at(view(), [need, need])).toMatchObject({ state: "needs-you", word: "Needs you", detail: "2 waiting" });
     expect(at(view(), [{ workstreamId: "w2" }, { workstreamId: null }]).state).toBe("idle");
+  });
+
+  it("Needs you: says after the count that the reporter has been asked too, and that the person owes answers (G23)", () => {
+    const asked = view({ waitingOnReporter: { since: ago(2) } });
+    expect(at(asked, [need])).toMatchObject({ state: "needs-you", detail: `1 waiting · ${ON_REPORTER_DETAIL}` });
+    expect(at(view(), [need], { answersOwed: true })).toMatchObject({ state: "needs-you", detail: `1 waiting · ${OWED_DETAIL}` });
+    expect(at(asked, [need, need], { answersOwed: true }).detail).toBe(`2 waiting · ${ON_REPORTER_DETAIL} · ${OWED_DETAIL}`);
+    expect(ON_REPORTER_DETAIL).toBe("waiting on reporter");
+    expect(OWED_DETAIL).toBe("your answers owed");
+  });
+
+  it("Idle: the person who chose I'll answer sees their answers are owed, unless something failed", () => {
+    expect(at(view(), [], { answersOwed: true })).toMatchObject({ state: "idle", detail: OWED_DETAIL });
+    expect(at(view(), [], { runs: [run("failed", "plan")], answersOwed: true }).detail).toBe("Plan failed");
+    expect(at(view(), []).detail).toBeNull();
+  });
+
+  it("answersOwed reads the audit and the drafts: I'll answer with no answers drafted since", () => {
+    const events = [{ actor: "person", action: "readiness_answered", at: "2026-10-12T10:00:00Z" }] as never;
+    expect(answersOwed("w1", events, [])).toBe(true);
+    expect(answersOwed("w1", undefined, [])).toBe(false);
+    expect(answersOwed("w1", [{ actor: "person", action: "readiness_asked", at: "2026-10-12T10:00:00Z" }] as never, [])).toBe(false);
   });
 
   it("Needs you: a system hold that has no words of its own falls back to the count", async () => {

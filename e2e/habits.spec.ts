@@ -119,7 +119,7 @@ test.describe("Start my day", () => {
     // What Jira saw from me is one click away, and it is empty: nothing was posted.
     await card(page).getByRole("button", { name: "What Jira saw from me" }).click();
     await expect(page.locator("[data-jira-sent]").getByRole("heading", { name: "What Jira saw from me" })).toBeVisible();
-    await expect(page.locator("[data-jira-sent]")).toContainText("Nothing has been posted to Jira from Gossamr yet.");
+    await expect(page.locator("[data-jira-sent]")).toContainText("No posts to Jira from Gossamr are on record here.");
     await openPipHome(page);
 
     // Done for now: gone for the day, and gone after a reload.
@@ -237,9 +237,10 @@ test.describe("What Jira saw from me", () => {
     await expect(rows.nth(1).locator("[data-sent-edited]")).toHaveAttribute("data-sent-edited", "no");
     await expect(rows.nth(0).locator("[data-sent-from]")).toContainText("in the workstream CA-409");
 
-    // Short on its line, whole behind Show all.
+    // Short on its line with the line after the opener under it, whole behind Show the posted text.
     await expect(rows.nth(0).locator("[data-sent-detail]")).toHaveCount(0);
-    await rows.nth(0).getByRole("button", { name: "Show all" }).click();
+    await expect(rows.nth(0).locator("[data-sent-second]")).toContainText("- ");
+    await rows.nth(0).getByRole("button", { name: "Show the posted text" }).click();
     await expect(rows.nth(0).locator("[data-sent-detail]")).toContainText("The Black Friday send is next week.");
     await expect(rows.nth(0).locator("[data-sent-detail]")).toContainText("Before work on CA-409 starts");
     await rows.nth(0).getByRole("button", { name: "Show less" }).click();
@@ -259,7 +260,7 @@ test.describe("What Jira saw from me", () => {
     await openApp(page, "runs=empty");
     await openPipHome(page);
     await runCommand(page, "what jira saw", "What Jira saw from me");
-    await expect(page.locator("[data-jira-sent]")).toContainText("Nothing has been posted to Jira from Gossamr yet.");
+    await expect(page.locator("[data-jira-sent]")).toContainText("No posts to Jira from Gossamr are on record here.");
     await expect(page.locator("[data-sent-entry]")).toHaveCount(0);
   });
 });

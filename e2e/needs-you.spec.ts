@@ -13,6 +13,7 @@ import {
   mockRuns,
   needRow,
   needsPane,
+  needsPaneHeading,
   needsYouCount,
   needsYouRow,
   needsYouTray,
@@ -158,7 +159,7 @@ test("answering a question from the pane sends it to the run, which leaves Needs
   expect(await stateOf(page, run.id)).toBe("needsAnswer");
 
   const answer = pane.getByRole("textbox", { name: "Your answer" });
-  await expect(answer).toBeFocused();
+  await expect(needsPaneHeading(page)).toBeFocused();
   await answer.fill("Yes, keep the old rounding.");
   await pane.getByRole("button", { name: "Send answer" }).click();
   await expect.poll(() => stateOf(page, run.id)).toBe("working");
@@ -300,7 +301,7 @@ test("a run Gossamr stopped at its limit appears in Needs you, with Resume, and 
   const pane = needsPane(page);
   await expect(pane).toContainText("was stopped at its limit");
   await expect(pane).toContainText("It stays stopped; its conversation and worktree are kept.");
-  await expect(pane.getByRole("textbox", { name: "What to tell it" })).toBeFocused();
+  await expect(needsPaneHeading(page)).toBeFocused();
   await pane.getByRole("button", { name: "Resume" }).click();
   await expect.poll(() => stateOf(page, run.id)).toBe("working");
   await expect(need(page, /WEB-108/)).toHaveCount(0);

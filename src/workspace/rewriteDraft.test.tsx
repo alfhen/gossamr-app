@@ -8,7 +8,7 @@ import { useRuns } from "./runsStore";
 import { useWorkstreams } from "./workstreamsStore";
 import { DraftCard, draftSummary, draftTitle } from "./DraftCard";
 import { DraftPreview, draftPreviewBody } from "./DraftPreview";
-import { ONLY_SPACING, changedPairs, diffWords, oneLine, rewriteBlocked, rewriteEdit, rewriteFields, RewriteView, takesBackendText, type Rewrite } from "./RewriteDiff";
+import { ONLY_SPACING, changedPairs, diffSummary, diffWords, oneLine, rewriteBlocked, rewriteEdit, rewriteFields, RewriteView, takesBackendText, type Rewrite } from "./RewriteDiff";
 import { diffLines } from "../lib/textDiff";
 import { targetOf } from "../lib/proposals";
 
@@ -219,6 +219,16 @@ describe("a changed line's words (D31)", () => {
 
   const body = (from: string, to: string): Rewrite => intent({ title: null, body: bodyChange(docFromMarkdown(from), to) });
   const view = (i: Rewrite, runName: string | null = null) => renderToStaticMarkup(<RewriteView intent={i} title="" body={i.body!.toText} editing={false} onTitle={vi.fn()} onBody={vi.fn()} runName={runName} />);
+
+  it("says in one line for a screen reader how much changed, and the diff is described by it (G29)", () => {
+    const html = view(body("One.\nTwo.\nThree.", "One.\n2.\nThree.\nFour."));
+    expect(html).toMatch(/data-diff-summary[^>]*>Description changes: 2 lines added, 1 line removed\./);
+    expect(html).toMatch(/<div[^>]*role="group"[^>]*aria-describedby="([^"]+)"/);
+    const id = /aria-describedby="([^"]+)"/.exec(html)![1];
+    expect(html).toContain(`id="${id}"`);
+    expect(diffSummary(diffLines("a", "a"), "description")).toBe("Description changes: no lines changed.");
+    expect(diffSummary(diffLines("a", "a\nb"), "title")).toBe("Title changes: 1 line added.");
+  });
 
   it("highlights the changed words of a removed and added pair", () => {
     const html = view(body("Retries back off.", "Retries back off quickly."));

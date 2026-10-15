@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { FeedEntry, Proposal, WorkItem, WorkstreamEvent, WorkstreamView } from "../types";
-import { CHIPS, CHIP_LABEL, buildRows, chipsFor, eventText, toWorkstreamEntries, dayLabel, draftsFor, groupByDay, initials, queryFor, stepIndex, verb, withRead } from "./activityLogic";
+import { CHIPS, CHIP_LABEL, buildRows, chipsFor, eventText, toWorkstreamEntries, dayBreaks, dayLabel, draftsFor, groupByDay, initials, queryFor, stepIndex, verb, withRead } from "./activityLogic";
 
 const entry = (id: string, at: string, over: Partial<FeedEntry> = {}): FeedEntry => ({
   id,
@@ -189,5 +189,26 @@ describe("the Pip & agents chip", () => {
     expect(buildRows({ ...input, chip: "all" }).map((r) => r.source)).toEqual(["jira"]);
     // Narrowed to a project through the workstream's ticket.
     expect(buildRows({ ...input, chip: "pip", container: { connectionId: "c", externalId: "OTHER" }, containerOf: () => ({ connectionId: "c", externalId: "P" }) })).toEqual([]);
+  });
+});
+
+describe("dayBreaks (G22)", () => {
+  const now = new Date(2026, 9, 14, 15, 0);
+  const at = (day: number, hour: number) => new Date(2026, 9, day, hour, 0).toISOString();
+  const e = (key: string, iso: string) => ({ key, at: iso });
+
+  it("is empty while every entry is from today, where the clock times say enough", () => {
+    expect(dayBreaks([e("a", at(14, 9)), e("b", at(14, 11))], now).size).toBe(0);
+    expect(dayBreaks([], now).size).toBe(0);
+  });
+
+  it("labels the first entry of each day once an earlier day is in the list, today included", () => {
+    const out = dayBreaks([e("a", at(13, 9)), e("b", at(13, 17)), e("c", at(14, 8)), e("d", at(14, 9))], now);
+    expect([...out]).toEqual([["a", "Yesterday"], ["c", "Today"]]);
+    expect([...dayBreaks([e("a", at(2, 9)), e("b", at(14, 9))], now).values()]).toEqual([dayLabel(new Date(at(2, 9)), now), "Today"]);
+  });
+
+  it("passes an entry with no readable time by", () => {
+    expect([...dayBreaks([e("x", "never"), e("a", at(13, 9))], now)]).toEqual([["a", "Yesterday"]]);
   });
 });

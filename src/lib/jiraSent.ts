@@ -37,6 +37,8 @@ export interface SentEntry {
   label?: string;
   /** One short line: what was posted. */
   summary: string;
+  /** A second line for a comment or a description edit, whose summary alone is thin: what follows the opener, or what was added. */
+  second?: string;
   /** The whole of it, a line per paragraph or item, for the disclosure. */
   detail: string[];
   /** The workstream it came from, by id, and its name ("CA-401"), when it came from one. */
@@ -62,6 +64,13 @@ const short = (text: string) => {
   return first.length > SHORT ? `${first.slice(0, SHORT - 1).trimEnd()}…` : first;
 };
 
+/** The line after the one `short` picks: a comment's opener is often the same ("Before work starts…"), what follows it is not. */
+const after = (text: string) => {
+  const all = text.trim().split("\n").map((l) => l.trim()).filter(Boolean);
+  const next = all[all.length > 1 && GREETING.test(all[0]) ? 2 : 1] ?? "";
+  return next.length > SHORT ? `${next.slice(0, SHORT - 1).trimEnd()}…` : next;
+};
+
 const lines = (text: string) => text.split("\n").map((l) => l.trimEnd()).filter((l, i, all) => l !== "" || (i > 0 && all[i - 1] !== ""));
 
 /** A description's change as lines for the disclosure: what was removed ("− "), added ("+ ") and a little around it, as drafted. */
@@ -73,11 +82,12 @@ function descriptionDiff(from: string, to: string): string[] {
  * What a Jira write said, short and whole. Null for an intent that isn't a Jira write. `created` are the keys of the
  * tickets it made (`Proposal.created`): a subtasks entry names each, entry `i` for summary `i`.
  */
-export function sentWhat(intent: Intent, label: string | null, created: readonly ItemRef[] = []): { kind: SentKind; summary: string; detail: string[] } | null {
+export function sentWhat(intent: Intent, label: string | null, created: readonly ItemRef[] = []): { kind: SentKind; summary: string; second?: string; detail: string[] } | null {
   switch (intent.type) {
     case "comment": {
       const text = docText(intent.body);
-      return { kind: "comment", summary: short(text), detail: lines(text) };
+      const second = after(text);
+      return { kind: "comment", summary: short(text), ...(second ? { second } : {}), detail: lines(text) };
     }
     case "transition":
       return { kind: "transition", summary: `Moved to ${label ?? intent.to}`, detail: [`Moved to ${label ?? intent.to}`] };
@@ -94,7 +104,10 @@ export function sentWhat(intent: Intent, label: string | null, created: readonly
             ? [`Added to the description${intent.title ? " and title changed" : ""}`, "Added to the description:"]
             : [`Description rewritten${intent.title ? " and title changed" : ""}`, "Description, as it read and as it now reads:"];
       const parts = [intent.title && `Title: ${intent.title.from} → ${intent.title.to}`, lead].filter((x): x is string => !!x);
-      return { kind: "description", summary, detail: [...parts, ...body] };
+      // What the edit put in: the first line it added, which says more than "Description added".
+      const added = body.find((l) => l.startsWith("+ ") && l.slice(2).trim())?.slice(2).trim() ?? "";
+      const second = added.length > SHORT ? `${added.slice(0, SHORT - 1).trimEnd()}…` : added;
+      return { kind: "description", summary, ...(second ? { second } : {}), detail: [...parts, ...body] };
     }
     case "subtasks": {
       const named = intent.summaries.map((s, i) => (created[i] ? `${created[i].key} ${s}` : s));

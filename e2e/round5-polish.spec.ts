@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { askPip, holdBySystem, homeSettled, needsPane, needsYouCount, needsYouRow, needsYouTray, openApp, openPipHome, startWorkstream, workstreamRow } from "./support/app";
+import { askPip, holdBySystem, homeSettled, needsPane, needsPaneHeading, needsYouCount, needsYouRow, needsYouTray, openApp, openPipHome, startWorkstream, workstreamRow } from "./support/app";
 
 // Fixes from the fifth dogfood round's backlog (G18 to G24): a higher-ranked need waits behind a bar instead of taking the
 // decision pane, Pip home lands on the workstream that needs the person, the pane says when it moved on by itself, the
@@ -46,7 +46,7 @@ test("G19: Pip home opens on the workstream of the top need, not on General", as
   await expect(workstreamRow(page, "General")).toHaveAttribute("aria-selected", "false");
 });
 
-test("G20: when the pane moves on by itself it says so for a few seconds, and the new pane's card has the keyboard", async ({ page }) => {
+test("G20: when the pane moves on by itself it says so for a few seconds, and the new pane's heading has the keyboard", async ({ page }) => {
   await draftOpen(page);
   await holdBySystem(page, "CA-401", "restart");
   await expect(needsYouRow(page, "CA-401")).toContainText("Held after a restart");
@@ -55,7 +55,7 @@ test("G20: when the pane moves on by itself it says so for a few seconds, and th
   await expect(pane).toHaveAttribute("data-kind", "hold");
   const line = page.locator("[data-needs-advanced]");
   await expect(line).toHaveText(/^Posted to Jira: Draft comment on CA-401\. Now: CA-401 · Held after a restart$/);
-  await expect(pane).toBeFocused();
+  await expect(needsPaneHeading(page)).toBeFocused();
   // Not a stop for the keyboard, and it goes by itself.
   await expect(line).toHaveAttribute("role", "status");
   await expect(line).toHaveCount(0, { timeout: 9000 });

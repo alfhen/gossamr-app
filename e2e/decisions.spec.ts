@@ -12,6 +12,7 @@ import {
   mockRuns,
   needOfKind,
   needsPane,
+  needsPaneHeading,
   needsYouTray,
   openApp,
   openPipHome,
@@ -296,7 +297,7 @@ test("a review that still blocks after two fix rounds comes to the person with t
   await expect(card).not.toContainText("What next?");
   await expect(pipHome(page).locator("[data-escalation]")).toHaveCount(1);
   await expect(card.getByRole("button")).toHaveText(["Run another fix round", "I'll take it from here", "Post the review as is"]);
-  await expect(card.getByRole("button", { name: "Run another fix round" })).toBeFocused();
+  await expect(needsPaneHeading(page)).toBeFocused();
 
   // The review draft folded into this need is under the choices, not a second need in the list.
   const [waiting] = await pendingReviewDrafts(page);

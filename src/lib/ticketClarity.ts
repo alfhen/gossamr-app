@@ -54,7 +54,7 @@ const PHRASE: Record<ClarityGap, string> = {
 const QUESTION: Record<ClarityGap, string> = {
   empty: "What is the goal?",
   short: "What is the goal?",
-  done: "How will we know it is done (the acceptance criteria)?",
+  done: "What has to be true for this to be done (the acceptance criteria)?",
   scope: "What is in scope, and what is out?",
   who: "Who asked for it, and who is waiting on it?",
 };

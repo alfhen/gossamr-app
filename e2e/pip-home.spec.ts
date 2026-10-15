@@ -14,6 +14,7 @@ import {
   mockRuns,
   needOfKind,
   needsPane,
+  needsPaneHeading,
   needsYouCount,
   foldAllNeeds,
   needsYouTray,
@@ -267,7 +268,8 @@ test("Needs you: a hold the person chose is no need, so the header says 'Held by
   await workstreamRow(page, "General").click();
   await held.click();
   const resume = needsPane(page).locator("[data-held-banner]").getByRole("button", { name: "Resume" });
-  await expect(resume).toBeFocused();
+  await expect(needsPaneHeading(page)).toBeFocused();
+  await resume.focus();
   await page.keyboard.press("Enter");
   await expect(held).toHaveCount(0);
   await expect(row.locator('[data-status="needs-you"]')).toHaveCount(0);

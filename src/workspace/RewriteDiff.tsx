@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { changedLines, diffLines, withGaps, type DiffRow } from "../lib/textDiff";
 import { withRunNamed } from "../lib/runNames";
 import type { Intent, ProposalEdit } from "../types";
@@ -110,8 +110,18 @@ function Words({ parts, kind }: { parts: WordPart[]; kind: "add" | "del" }) {
 /** What the foot of a diff that scrolls in a box of its own says while more of it is below. */
 export const SCROLL_FOR_DIFF = "Scroll for the whole diff";
 
+/** One line for a screen reader before the rows: how much changed, so the diff need not be read to be sized. */
+export function diffSummary(rows: readonly DiffRow[], what: string): string {
+  const n = (kind: string) => rows.filter((r) => r.kind === kind).length;
+  const [added, removed] = [n("add"), n("del")];
+  const part = (count: number, verb: string) => `${count} ${count === 1 ? "line" : "lines"} ${verb}`;
+  const said = [added && part(added, "added"), removed && part(removed, "removed")].filter(Boolean).join(", ");
+  return `${what[0].toUpperCase()}${what.slice(1)} changes: ${said || "no lines changed"}.`;
+}
+
 function Rows({ rows, what }: { rows: DiffRow[]; what: string }) {
   const pairs = useMemo(() => changedPairs(rows), [rows]);
+  const summaryId = useId();
   // In the Decision pane the diff is capped (see NeedsPane) so the actions under it stay in view; a fade says there is more of it.
   const box = useRef<HTMLDivElement>(null);
   const [more, setMore] = useState(false);
@@ -127,7 +137,10 @@ function Rows({ rows, what }: { rows: DiffRow[]; what: string }) {
   }, [rows]);
   return (
     <div className="relative">
-      <div ref={box} role="group" aria-label={`${what} changes`} data-diff={what} className="overflow-hidden rounded-md border border-ws-sep bg-ws-win font-mono text-[12.5px] leading-snug">
+      <p id={summaryId} data-diff-summary className="sr-only">
+        {diffSummary(rows, what)}
+      </p>
+      <div ref={box} role="group" aria-label={`${what} changes`} aria-describedby={summaryId} data-diff={what} className="overflow-hidden rounded-md border border-ws-sep bg-ws-win font-mono text-[12.5px] leading-snug">
         {rows.map((r, i) =>
           r.kind === "gap" ? (
             <div key={i} data-gap={r.count} className="border-y border-dashed border-ws-sep bg-ws-bar px-2 py-0.5 text-center text-xs text-ws-ink3">

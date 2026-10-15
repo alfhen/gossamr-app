@@ -16,6 +16,7 @@ import {
   expandNeedsYou,
   needRow,
   needsPane,
+  needsPaneHeading,
   needsYouCount,
   needsYouTray,
   openApp,
@@ -267,10 +268,10 @@ test("the Needs you list ranks a hold ahead of a draft to approve, opens each in
   await expect(row.locator("[data-status]")).toHaveText("Needs you");
   await expect(row.locator("[data-status-detail]")).toHaveText("· Held after a restart");
 
-  // The pane moved on to the hold, with its card focused (no key lands on Resume by accident); Resume clears the need and the badge.
+  // The pane moved on to the hold, with its heading focused (no key lands on Resume by accident); Resume clears the need and the badge.
   await expect(needsPane(page)).toHaveAttribute("data-kind", "hold");
   const resume = needsPane(page).locator("[data-held-banner]").getByRole("button", { name: "Resume" });
-  await expect(needsPane(page)).toBeFocused();
+  await expect(needsPaneHeading(page)).toBeFocused();
   await resume.click();
   await expect(needsYouCount(page)).toHaveText("0");
   await expect(row.locator('[data-status="needs-you"]')).toHaveCount(0);

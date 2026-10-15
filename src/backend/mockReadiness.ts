@@ -51,11 +51,16 @@ export const READINESS_LABEL = READINESS_COMMENT_LABEL;
  * the questions the Triage listed, or around the four things a ticket needs when it listed none. `replied`: the reporter has
  * answered since the last ask, so the frame thanks them and says what is still open.
  */
+/** A listed question that holds several ("What is done? Which number changes?") as one each, so the reporter answers one thing per bullet; as `one_question_each` in src-tauri/src/inbox/workstreams.rs. */
+export function oneQuestionEach(questions: readonly string[]): string[] {
+  return questions.flatMap((q) => q.trim().split(/(?<=\?)\s+(?=\p{Lu})/u)).filter((q) => q !== "");
+}
+
 export function reporterComment(key: string, reporter: string | null, questions: readonly string[], replied = false): string {
   const hello = reporter ? `Hi @${reporter},` : "Hi,";
   const asks = questions.length
-    ? questions.map((q) => `- ${q}`).join("\n")
-    : "- What is the goal?\n- How will we know it is done (the acceptance criteria)?\n- What is in scope, and what is out?\n- Who asked for it, and who is waiting on it?";
+    ? oneQuestionEach(questions).map((q) => `- ${q}`).join("\n")
+    : "- What is the goal?\n- What has to be true for this to be done (the acceptance criteria)?\n- What is in scope, and what is out?\n- Who asked for it, and who is waiting on it?";
   // The reporter has answered since the last ask: thank them and say what is still open, rather than repeat the first ask.
   if (replied) return `${hello}\n\nThanks for your answer above. Before work on ${key} starts, a few things are still open:\n\n${asks}\n\nCould you answer these here on the ticket? Thanks.`;
   return `${hello}\n\nBefore work on ${key} starts, a few things need clearing up:\n\n${asks}\n\nCould you answer them here on the ticket? Thanks.`;

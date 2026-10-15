@@ -138,11 +138,15 @@ describe("a row of What Jira saw from me", () => {
     expect(html).toContain("from Pip, on CA-401");
   });
 
-  it("keeps the rest behind a Show all that is closed to begin with", () => {
+  it("keeps the whole text behind a Show the posted text that is closed to begin with, under a second line of its own (G25)", () => {
     const html = renderToStaticMarkup(<SentRow entry={sent()} onTicket={() => {}} onWorkstream={() => {}} />);
-    expect(html).toMatch(/aria-expanded="false"[^>]*>Show all</);
+    expect(html).toMatch(/aria-expanded="false"[^>]*>Show the posted text</);
     expect(html).not.toContain("data-sent-detail");
-    expect(html).not.toContain("Second paragraph.");
+    expect(html).toMatch(/data-sent-second[^>]*>Second paragraph\./);
+  });
+
+  it("shows no second line for an entry that has none", () => {
+    expect(renderToStaticMarkup(<SentRow entry={{ ...sent(), second: undefined }} onTicket={() => {}} onWorkstream={() => {}} />)).not.toContain("data-sent-second");
   });
 });
 
@@ -157,5 +161,10 @@ describe("What Jira saw from me: the way back", () => {
     expect(html).toContain("GitHub reviews Gossamr posted are not listed here");
     expect(GITHUB_NOT_LISTED).toContain("You posted an agent's GitHub review");
     expect(SENT_EMPTY).toContain(GITHUB_NOT_LISTED);
+  });
+
+  it("does not say how long Gossamr has been posting when it has no posts on record (G22)", () => {
+    expect(SENT_EMPTY).toMatch(/^No posts to Jira from Gossamr are on record here\./);
+    expect(SENT_EMPTY).not.toMatch(/yet|never|today|this week/i);
   });
 });

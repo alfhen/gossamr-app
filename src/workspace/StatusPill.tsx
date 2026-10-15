@@ -1,10 +1,12 @@
 import { useId, useMemo } from "react";
-import { STATUS_HINT, workstreamStatus, type StatusTone, type WorkstreamStatus } from "../lib/workstreamStatus";
+import { STATUS_HINT, answersOwed, workstreamStatus, type StatusTone, type WorkstreamStatus } from "../lib/workstreamStatus";
 import type { WorkstreamView } from "../types";
 import { usePrefs } from "./prefs";
 import { useRuns } from "./runsStore";
 import { useNeedsYou } from "./useNeeds";
 import { useNow } from "./useNow";
+import { useWorkspace } from "../workspaceStore";
+import { useWorkstreams } from "./workstreamsStore";
 import { useWorkstreamWithers } from "./useWorkstreamWithers";
 
 /** The pill's colours, from the theme's tokens: filled for what is the person's, soft for the rest, grey for what asks nothing. */
@@ -53,7 +55,12 @@ export function useWorkstreamStatus(view: WorkstreamView): WorkstreamStatus {
   const learning = usePrefs((s) => s.clarityLearning);
   const now = useNow();
   const withers = useWorkstreamWithers(useMemo(() => [view], [view]), now);
-  return useMemo(() => workstreamStatus(view, needs, { runs, wither: withers[view.workstream.id] ?? null, now: new Date(now), learning }), [view, needs, runs, withers, now, learning]);
+  const events = useWorkstreams((s) => s.events[view.workstream.id]);
+  const drafts = useWorkspace((s) => s.proposals);
+  return useMemo(
+    () => workstreamStatus(view, needs, { runs, wither: withers[view.workstream.id] ?? null, now: new Date(now), learning, answersOwed: answersOwed(view.workstream.id, events, Object.values(drafts)) }),
+    [view, needs, runs, withers, now, learning, events, drafts],
+  );
 }
 
 /** The header's pill: the word and its detail, for the workstream shown. */

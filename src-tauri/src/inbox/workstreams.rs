@@ -432,15 +432,41 @@ pub fn readiness_of(ws: &Workstream, runs: &[Run], readiness: impl Fn(&Run) -> O
 /// What the approve button of the reporter comment says.
 pub const READINESS_LABEL: &str = proposals::READINESS_COMMENT_LABEL;
 
+/// A listed question that holds several ("What is done? Which number changes?") as one each, so the reporter answers one thing per bullet; as `oneQuestionEach` in src/backend/mockReadiness.ts.
+fn one_question_each(questions: &[String]) -> Vec<String> {
+    let mut out = Vec::new();
+    for q in questions {
+        let chars: Vec<char> = q.trim().chars().collect();
+        let mut start = 0;
+        for i in 0..chars.len() {
+            // A "?" that ends a sentence: whitespace follows, then a capital letter starts the next question.
+            if chars[i] != '?' {
+                continue;
+            }
+            let rest = &chars[i + 1..];
+            let gap = rest.iter().take_while(|c| c.is_whitespace()).count();
+            if gap > 0 && rest.get(gap).is_some_and(|c| c.is_uppercase()) {
+                out.push(chars[start..=i].iter().collect::<String>());
+                start = i + 1 + gap;
+            }
+        }
+        let last: String = chars[start..].iter().collect();
+        if !last.is_empty() {
+            out.push(last);
+        }
+    }
+    out
+}
+
 /// The comment `ask_reporter` drafts: a fixed frame around the questions the Triage listed, or around the four things a
 /// ticket needs when it listed none. When the reporter has answered since the last ask (`replied`), the frame thanks them
 /// for it and says what is still open, instead of repeating the first ask word for word.
 pub fn reporter_comment(key: &str, reporter: Option<&str>, questions: &[String], replied: bool) -> String {
     let hello = reporter.map_or_else(|| "Hi,".to_string(), |name| format!("Hi @{name},"));
     let asks = if questions.is_empty() {
-        "- What is the goal?\n- How will we know it is done (the acceptance criteria)?\n- What is in scope, and what is out?\n- Who asked for it, and who is waiting on it?".to_string()
+        "- What is the goal?\n- What has to be true for this to be done (the acceptance criteria)?\n- What is in scope, and what is out?\n- Who asked for it, and who is waiting on it?".to_string()
     } else {
-        questions.iter().map(|q| format!("- {q}")).collect::<Vec<_>>().join("\n")
+        one_question_each(questions).iter().map(|q| format!("- {q}")).collect::<Vec<_>>().join("\n")
     };
     if replied {
         return format!("{hello}\n\nThanks for your answer above. Before work on {key} starts, a few things are still open:\n\n{asks}\n\nCould you answer these here on the ticket? Thanks.");
@@ -1827,6 +1853,18 @@ mod tests {
         }
 
         #[test]
+        fn the_reporter_comment_puts_one_question_on_each_bullet() {
+            let questions = vec!["What does done look like for CA-408? Which behaviour or number should change?".to_string(), "Who is waiting on it?".to_string()];
+            assert_eq!(
+                reporter_comment("CA-408", None, &questions, false),
+                "Hi,\n\nBefore work on CA-408 starts, a few things need clearing up:\n\n- What does done look like for CA-408?\n- Which behaviour or number should change?\n- Who is waiting on it?\n\nCould you answer them here on the ticket? Thanks."
+            );
+            // A question mark inside a sentence, or before a lower-case word, does not split; and the fallback frame says no "we".
+            assert_eq!(one_question_each(&["Is v2? or v3 meant?".to_string(), "Done?".to_string()]), vec!["Is v2? or v3 meant?", "Done?"]);
+            assert!(!reporter_comment("CA-1", None, &[], false).to_lowercase().contains(" we "));
+        }
+
+        #[test]
         fn after_a_reply_the_reporter_comment_thanks_them_and_says_what_is_still_open() {
             let questions = vec!["What does done look like?".to_string()];
             assert_eq!(
@@ -2150,7 +2188,7 @@ mod tests {
             let Intent::Comment { item, body } = &draft.intent else { panic!("a comment: {:?}", draft.intent) };
             assert_eq!(item.key, "CA-1");
             let text = body.plain_text();
-            for part in ["Before work on CA-1 starts", "- What is the goal?", "- How will we know it is done", "- What is in scope, and what is out?", "- Who asked for it, and who is waiting on it?"] {
+            for part in ["Before work on CA-1 starts", "- What is the goal?", "- What has to be true for this to be done", "- What is in scope, and what is out?", "- Who asked for it, and who is waiting on it?"] {
                 assert!(text.contains(part), "{part} in {text}");
             }
             assert!(fx.tracker.intents().is_empty(), "nothing is posted before the person approves");
@@ -2188,7 +2226,7 @@ mod tests {
             let draft = fx.core.ask_reporter_now(&fx.scope, &ws.id, &[ClarityGap::Who, ClarityGap::Short]).await.unwrap();
             let Intent::Comment { body, .. } = &draft.intent else { panic!("a comment") };
             let text = body.plain_text();
-            assert!(text.contains("How will we know it is done") && text.contains("What is in scope"), "{text}");
+            assert!(text.contains("What has to be true for this to be done") && text.contains("What is in scope"), "{text}");
             assert!(!text.contains("Who asked for it"), "{text}");
         }
 

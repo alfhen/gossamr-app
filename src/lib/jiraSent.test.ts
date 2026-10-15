@@ -131,6 +131,34 @@ describe("What Jira saw from me", () => {
   });
 });
 
+describe("the second line of a row (G25)", () => {
+  const rewrite = (from: string, to: string): Intent => ({ type: "rewrite", item: ref("CA-402"), title: null, body: { from: doc(from), to: doc(to), fromText: from, toText: to }, flattened: [] }) as Intent;
+
+  it("is the line after the opener for a comment, so two openers that read alike still differ", () => {
+    expect(sentWhat(comment("CA-401", "Investigated the cache.\n\nThe key is built before the locale is known."), null)).toMatchObject({ summary: "Investigated the cache.", second: "The key is built before the locale is known." });
+    // A greeting is skipped by the opener, so the second line is the one after it.
+    expect(sentWhat(comment("CA-401", "Hi Mette,\n\nBefore work starts, a few things need clearing up:\n\n- What is the goal?"), null)).toMatchObject({ summary: "Before work starts, a few things need clearing up:", second: "- What is the goal?" });
+  });
+
+  it("is left out of a one-line comment, and cut short like the summary", () => {
+    expect(sentWhat(comment("CA-401", "Done."), null)!.second).toBeUndefined();
+    const long = sentWhat(comment("CA-401", `Opener.\n\n${"B".repeat(300)}`), null)!;
+    expect(long.second!.length).toBeLessThanOrEqual(120);
+    expect(long.second!.endsWith("…")).toBe(true);
+  });
+
+  it("is the first line a description edit added, so 'Description added' says what was added", () => {
+    expect(sentWhat(rewrite("", "Fresh text.\n\nMore."), null)).toMatchObject({ summary: "Description added", second: "Fresh text." });
+    expect(sentWhat(rewrite("Line one", "Line one\nLine two"), null)).toMatchObject({ summary: "Added to the description", second: "Line two" });
+    expect(sentWhat(rewrite("Line one", "Line 1"), null)).toMatchObject({ summary: "Description rewritten", second: "Line 1" });
+  });
+
+  it("is left out of a move, a link and a title-only change", () => {
+    expect(sentWhat({ type: "transition", item: ref("CA-401"), to: "31" }, "Done")!.second).toBeUndefined();
+    expect(sentWhat({ type: "rewrite", item: ref("CA-402"), title: { from: "Old", to: "New" }, body: null, flattened: [] } as Intent, null)!.second).toBeUndefined();
+  });
+});
+
 describe("what the row shows of a comment to the reporter", () => {
   const asked = (id: string, text: string) => draft(id, comment("CA-401", text), { createdBy: "user", label: "Questions for the reporter", updatedAt: ago(Number(id.slice(1))) });
   const first = "Hi Mette,\n\nBefore work on CA-401 starts, a few things need clearing up:\n\n- What is the goal?";

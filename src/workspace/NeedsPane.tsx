@@ -82,7 +82,7 @@ function useAdvance(needs: readonly Need[], onAdvance: (done: Need, next: Need) 
     if (deciding && before.includes(deciding) && !keys.includes(deciding)) {
       const next = needAfter(before, deciding, needs);
       if (next) {
-        // The line says what was done and what is now open; the new pane's card takes the keyboard, so no key lands on a button by accident.
+        // The line says what was done and what is now open; the new pane's heading takes the keyboard, so no key lands on a button by accident.
         const done = was.find((n) => n.key === deciding);
         if (done) onAdvance(done, next);
         setPaneIntent("card");
@@ -569,7 +569,7 @@ function NeedDecision({ need }: { need: Need }) {
     usePipHome.getState().closeDecision();
     requestAnimationFrame(() => closeTarget(opener.current, root.current, () => rowFor(need))?.focus());
   };
-  // Opened, the keyboard goes to the decision: its answer box or its main button; "e" opens an edit where the card has one.
+  // Opened, the keyboard goes to the pane's heading, whatever kind of need it is, so a screen reader hears what was opened and Tab reaches the decision; "e" opens an edit where the card has one.
   useEffect(() => {
     const intent = takePaneIntent();
     let frame = 0;
@@ -578,8 +578,8 @@ function NeedDecision({ need }: { need: Need }) {
     const go = () => {
       const el = root.current;
       if (!el) return;
-      if (intent === "card") {
-        el.focus({ preventScroll: true });
+      if (intent !== "edit") {
+        (el.querySelector<HTMLElement>("[data-needs-pane-title]") ?? el).focus({ preventScroll: true });
         return;
       }
       if (intent === "edit") {
@@ -643,7 +643,7 @@ function NeedDecision({ need }: { need: Need }) {
               </b>
             )}
             <GroupChip group={need.group} label={chipLabel(need)} />
-            <span data-needs-pane-title className="min-w-0 truncate">
+            <span data-needs-pane-title role="heading" aria-level={2} tabIndex={-1} className="min-w-0 truncate rounded focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip">
               {need.title}
             </span>
           </div>

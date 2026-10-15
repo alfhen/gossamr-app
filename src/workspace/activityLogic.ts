@@ -76,6 +76,25 @@ export function groupByDay<T extends { at: string }>(entries: readonly T[], now:
   return groups;
 }
 
+/**
+ * Where a list in time order starts a new day, by the key of the first entry of that day, with the day's label ("Yesterday",
+ * "Monday", "3 October"). Empty while every entry is from today: the clock times alone say enough then.
+ */
+export function dayBreaks<T extends { key: string; at: string }>(entries: readonly T[], now: Date): Map<string, string> {
+  const out = new Map<string, string>();
+  const dated = entries.map((e) => ({ key: e.key, at: new Date(e.at) })).filter((e) => !Number.isNaN(e.at.getTime()));
+  const today = dayKey(now);
+  if (dated.every((e) => dayKey(e.at) === today)) return out;
+  let last = "";
+  for (const e of dated) {
+    const day = dayKey(e.at);
+    if (day === last) continue;
+    last = day;
+    out.set(e.key, dayLabel(e.at, now));
+  }
+  return out;
+}
+
 export function verb(e: Pick<FeedEntry, "kind" | "mention">): string {
   switch (e.kind) {
     case "commentAdded":
