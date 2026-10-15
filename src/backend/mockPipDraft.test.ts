@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { docFromText, docText } from "../lib/docs";
 import { MockBackend } from "./mock";
 import { mockAsk, mockPipEvents, openQuestions, scriptPip, suggestedAnswer } from "./mockPip";
 import { eventLine } from "./mockSupervisor";
@@ -388,5 +389,23 @@ describe("mock Pip discussing and revising a GitHub review draft, as revise_prop
     const theirs = b.proposals.fromRun(draft.intent, null, { type: "run", runId: "run-other", shortId: null, workstream: "ws-other" } as never);
     expect(() => b.proposals.pipRevise(theirs.id, { body: "hijacked" }, null)).toThrow("that draft belongs to another workstream");
     expect(() => b.proposals.pipRevise(theirs.id, { body: "fine" }, "ws-other")).not.toThrow();
+  });
+});
+
+describe("mock Pip's check-in wording", () => {
+  const item = { connectionId: "mock", externalId: "CA-401", key: "CA-401" };
+  const waiting = (connectionId: string, text: string) => ({ id: `d-${connectionId}`, state: { type: "pending" }, intent: { type: "comment", item: { ...item, connectionId }, body: docFromText(text) } }) as unknown as Proposal;
+  const wording = (drafts: Proposal[]) => {
+    const turn = scriptPip("Draft a comment", { screen: "board", item } as unknown as ScreenContext, [], [], NOW, drafts);
+    return turn.draft?.intent.type === "comment" ? docText(turn.draft.intent.body) : "";
+  };
+  const first = wording([]);
+
+  it("moves on from the wording a draft on the same ticket already uses", () => {
+    expect(wording([waiting("mock", first)])).not.toBe(first);
+  });
+
+  it("is not moved by a draft on another connection that has the same external id", () => {
+    expect(wording([waiting("other", first)])).toBe(first);
   });
 });

@@ -2,7 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MockBackend } from "../backend/mock";
 import { useWorkspace } from "../workspaceStore";
-import { PipHome, fadeScroll, hasMoreBelow } from "./PipHome";
+import { DayScroll, PipHome, fadeScroll, hasMoreBelow } from "./PipHome";
 import { loadPrefs, usePrefs } from "./prefs";
 import { loadTabs, useTabs } from "./tabsStore";
 import { useWorkstreams } from "./workstreamsStore";
@@ -63,5 +63,14 @@ describe("the day card's fade", () => {
   it("scrolls most of a page, and jumps instead of gliding when the person asked for less motion", () => {
     expect(fadeScroll(200, false)).toEqual({ top: 160, behavior: "smooth" });
     expect(fadeScroll(200, true)).toEqual({ top: 160, behavior: "auto" });
+  });
+});
+
+describe("the day region's room", () => {
+  it("gives Plan my week nearly half the window, so its three picks show, and Start my day a third", () => {
+    expect(renderToStaticMarkup(<DayScroll label="Plan my week" tall>x</DayScroll>)).toContain("max-h-[min(45vh,26rem)]");
+    const start = renderToStaticMarkup(<DayScroll label="Start my day">x</DayScroll>);
+    expect(start).toContain("max-h-[30vh]");
+    expect(start).not.toContain("45vh");
   });
 });

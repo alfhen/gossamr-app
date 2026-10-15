@@ -270,13 +270,13 @@ export function useMoreBelow<T extends HTMLElement>() {
 
 /**
  * The F6 stop above the conversation that holds Start my day or Plan my week: a labelled region that scrolls when the card is
- * taller than its share (a third of the window at most, so the timeline and an open decision keep their room), with a fade at the foot while something is cut off, so the scroll is not hidden.
+ * taller than its share (a third of the window at most, or nearly half for Plan my week, whose three picks should show, so the timeline and an open decision keep their room), with a fade at the foot while something is cut off, so the scroll is not hidden.
  */
-export function DayScroll({ label, children }: { label: string; children: ReactNode }) {
+export function DayScroll({ label, children, tall = false }: { label: string; children: ReactNode; tall?: boolean }) {
   const [box, more] = useMoreBelow<HTMLDivElement>();
   return (
     // Focusable so the keyboard can scroll it when it overflows: a scroller with no focusable child is out of the arrow keys' reach.
-    <div ref={box} data-pip-home-day role="region" aria-label={label} tabIndex={0} className="relative max-h-[30vh] shrink-0 overflow-y-auto border-b border-ws-sep/60 outline-none empty:hidden focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-ws-pip">
+    <div ref={box} data-pip-home-day role="region" aria-label={label} tabIndex={0} className={`relative ${tall ? "max-h-[min(45vh,26rem)]" : "max-h-[30vh]"} shrink-0 overflow-y-auto border-b border-ws-sep/60 outline-none empty:hidden focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-ws-pip`}>
       {children}
       {more && (
         <div data-day-fade aria-hidden="true" onClick={() => box.current?.scrollBy(fadeScroll(box.current.clientHeight, reducedMotion()))} className="sticky bottom-0 -mt-7 cursor-pointer bg-gradient-to-t from-ws-bar via-ws-bar/90 to-transparent pt-4 pb-0.5 text-center text-xs text-ws-ink3">
@@ -746,7 +746,7 @@ export function PipHome() {
         <h1 className="m-0 text-base font-semibold">Pip home</h1>
         <span className="min-w-0 truncate text-sm text-ws-ink3">What needs you, your workstreams, and what Pip and its agents are doing</span>
       </header>
-      {!orientationSeen && <PipOrientation />}
+      {!orientationSeen && <PipOrientation compact={planOpen} />}
       <div className="grid min-h-0 flex-1 grid-cols-[minmax(260px,340px)_minmax(0,1fr)] grid-rows-[minmax(0,1fr)_auto] overflow-hidden min-[1100px]:grid-cols-[minmax(280px,340px)_minmax(0,1fr)_minmax(240px,320px)] min-[1100px]:grid-rows-[minmax(0,1fr)]">
         <div data-pip-home-column="list" onFocusCapture={enter("list")} className="contents">
           {/* The left column: Needs you takes the height, the workstreams are a compact section under it. */}
@@ -778,7 +778,7 @@ export function PipHome() {
           <DecisionShownContext.Provider value={decided}>
             <div data-pip-home-column="conversation" onFocusCapture={enter("conversation")} className="contents">
               <HomeConversation workstream={workstream} footer={footer} needs={needsYou} day={
-                  <DayScroll label={planOpen ? "Plan my week" : "Start my day"}>
+                  <DayScroll label={planOpen ? "Plan my week" : "Start my day"} tall={planOpen}>
                     {planOpen && <PlanMyWeek key={isoWeek(new Date(now))} needs={needsYou} withers={withers} now={now} />}
                     {/* The plan is opened from the card and its Close brings it back; the card is General's summary, not a workstream's. */}
                     {!planOpen && workstream === null && <StartMyDayCard needs={needsYou} withers={withers} now={now} />}

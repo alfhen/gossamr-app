@@ -1,6 +1,7 @@
 import { ALLOW_MORE_STEPS, HELD_BUDGET, type Intent, type Proposal, type ReadinessStop, type Run, type WorkstreamView } from "../types";
 import { quietMinutes, stoppedAtLimit } from "../workspace/agentsLogic";
 import { failureHelp } from "../workspace/failureHelp";
+import { docText } from "./docs";
 import { parsePermission, permissionOffer, readAs } from "./permission";
 import { inWorkstreamPane, isAnswersDraft, isReporterNudge, isReporterQuestions, targetOf, workstreamOf } from "./proposals";
 import { humanDuration } from "./runNames";
@@ -133,6 +134,36 @@ export const BATCHABLE: ReadonlySet<Intent["type"]> = new Set(["comment", "trans
  * reporter, the nudge that follows them up, or Pip's comment with the person's answers, which are read and approved on their own before they reach Jira.
  */
 export const safeToBatch = (p: Proposal) => BATCHABLE.has(p.intent.type) && !isReporterQuestions(p) && !isReporterNudge(p) && !isAnswersDraft(p);
+
+/**
+ * The pending comments among `drafts` (in order) that say what an earlier one already says on the same ticket, as the same
+ * words once spacing and case are set aside. Posting both would put one comment on the ticket twice, so a batch takes the
+ * first and leaves these to be decided one by one.
+ */
+export function repeatedComments(drafts: readonly Proposal[]): Proposal[] {
+  const seen = new Set<string>();
+  return drafts.filter((p) => {
+    // A superseded draft is not in the batch and its replacement is the one shown, so its text must not count as seen.
+    if (p.state.type !== "pending" || p.supersededBy || p.intent.type !== "comment" || !safeToBatch(p)) return false;
+    const words = (p.intent.body?.blocks ? docText(p.intent.body) : "").replace(/\s+/g, " ").trim().toLowerCase();
+    if (!words) return false;
+    const key = `${p.intent.item.connectionId}:${p.intent.item.externalId}\n${words}`;
+    const again = seen.has(key);
+    seen.add(key);
+    return again;
+  });
+}
+
+/** A left-out comment as the confirm names it: its title, then the first words of its text quoted, since comments on one ticket share a title. */
+export function leftOutLabel(p: Proposal, title: string): string {
+  const text = p.intent.type === "comment" && p.intent.body?.blocks ? docText(p.intent.body).replace(/\s+/g, " ").trim() : "";
+  if (!text) return title;
+  const words = [...text];
+  return `${title} “${words.length > 40 ? `${words.slice(0, 40).join("").trimEnd()}…` : text}”`;
+}
+
+/** What the batch confirm says of a comment it left out because an earlier one has the same text. */
+export const REPEATED_COMMENT_NOTE = "Same text as the comment above, left out";
 
 /** What the list says of a review that still blocks after the automatic fix rounds. */
 export const escalationReason = (rounds: number) => `Review still blocks after ${rounds} fix ${rounds === 1 ? "round" : "rounds"}`;
@@ -296,6 +327,7 @@ export function needs({ workstreams, runs, proposals, dismissed, heldAt, titleOf
   // A review that still blocks carries its review draft, so the draft is not a second need.
   for (const v of open) if (v.escalation?.reviewDraft) carried.add(v.escalation.reviewDraft);
 
+  const repeated = new Set(repeatedComments([...proposals].sort((a, b) => a.createdAt.localeCompare(b.createdAt) || (a.id < b.id ? -1 : 1))).map((p) => p.id));
   for (const p of proposals) {
     if (!live(p) || carried.has(p.id)) continue;
     const workstreamId = draftWorkstream(p, open);
@@ -362,7 +394,7 @@ export function needs({ workstreams, runs, proposals, dismissed, heldAt, titleOf
       ifYouWait: review ? "Nothing is posted to GitHub until you choose." : "Nothing is written to Jira until you approve it.",
       primary: action("approve", review ? "Post review" : p.intent.type === "runAnswer" ? "Send answer" : p.intent.type === "followUp" ? "Send back" : "Approve"),
       secondary: [...edit, action("dismiss", "Skip")],
-      batchable: safeToBatch(p),
+      batchable: safeToBatch(p) && !repeated.has(p.id),
     });
   }
 

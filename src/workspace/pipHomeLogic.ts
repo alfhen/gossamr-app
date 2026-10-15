@@ -1,4 +1,4 @@
-import { safeToBatch } from "../lib/needs";
+import { repeatedComments, safeToBatch } from "../lib/needs";
 import { inWorkstreamPane } from "../lib/proposals";
 import { shortHeld } from "../lib/workstreamHold";
 import { byQueue, REVIEW_POSTED, reviewPosted, STAGE_LABEL } from "../lib/workstreamStage";
@@ -65,9 +65,13 @@ export const batchLabel = (count: number) => `Approve ${count} safe drafts`;
 /** What the batch button's tooltip says makes a draft safe: it is a comment, a move or subtasks, read in full before anything is posted. */
 export const BATCH_TITLE = "Safe drafts are comments, status moves and subtasks that only add to Jira. A description rewrite, a question to the reporter and the like are approved one by one. You see every draft before anything is posted.";
 
-/** The drafts of a step that "Approve N safe drafts" would approve, in order; it is offered only for two or more. */
+/**
+ * The drafts of a step that "Approve N safe drafts" would approve, in order; it is offered only for two or more. A comment
+ * with the same text as an earlier one on its ticket is left to be decided on its own (see `repeatedComments`).
+ */
 export function batchable(drafts: readonly Proposal[]): Proposal[] {
-  return drafts.filter((p) => p.state.type === "pending" && safeToBatch(p));
+  const repeated = new Set(repeatedComments(drafts).map((p) => p.id));
+  return drafts.filter((p) => p.state.type === "pending" && safeToBatch(p) && !repeated.has(p.id));
 }
 
 /** What an "Approve N safe drafts" covers, fixed when its confirm opens: each draft by id, with the revision shown then. */

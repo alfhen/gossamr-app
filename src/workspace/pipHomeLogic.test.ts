@@ -7,7 +7,8 @@ import { agentSummary } from "../backend/mockPip";
 import { needs } from "../lib/needs";
 import { workstreamStatus } from "../lib/workstreamStatus";
 import { NO_FILTERS, groupRuns, laneCount, laneOf, summaryLine } from "./agentsLogic";
-import { planRewriteDraft, batchable, composerFooter, draftStep, workstreamSuggestionScene, FIX_ROUNDS, lastHeldAt, nextStep, retiredStepDrafts, shortHeld, stepChips, stepDrafts, STEP_KINDS } from "./pipHomeLogic";
+import { repeatedComments } from "../lib/needs";
+import { planRewriteDraft, batchable, freezeBatch, composerFooter, draftStep, workstreamSuggestionScene, FIX_ROUNDS, lastHeldAt, nextStep, retiredStepDrafts, shortHeld, stepChips, stepDrafts, STEP_KINDS } from "./pipHomeLogic";
 
 const NOW = Date.parse("2026-09-30T12:00:00Z");
 const iso = (minutesAgo: number) => new Date(NOW - minutesAgo * 60_000).toISOString();
@@ -235,6 +236,19 @@ describe("drafts by step", () => {
   it("are approved together only when pending comments, moves and subtasks; never a rewrite or a run", () => {
     const drafts = [fromRun("c1", comment("CA-401"), "r5"), fromRun("rw", rewrite, "r5"), fromRun("t1", transition, "r5"), fromRun("s1", subtasks, "r5"), draft("run", startRun("CA-401", "review", "ws-1"), 3), { ...fromRun("c2", comment("CA-401"), "r5"), state: { type: "applying" } } as Proposal];
     expect(batchable(drafts).map((p) => p.id)).toEqual(["c1", "t1", "s1"]);
+  });
+
+  it("cover two identical comments on a ticket once, and leave the later one to be decided on its own", () => {
+    const text = (t: string): Intent => ({ type: "comment", item: { connectionId: "c", externalId: "CA-401", key: "CA-401" }, body: { blocks: [{ type: "paragraph", content: [{ type: "text", text: t, marks: [] }] }] } }) as unknown as Intent;
+    const first = draft("a", text("Looks good  to me."), 5);
+    const same = draft("b", text("looks good to me."), 4);
+    const other = draft("c", text("Something else."), 3);
+    expect(batchable([first, same, other]).map((p) => p.id)).toEqual(["a", "c"]);
+    expect(freezeBatch([first, same, other]).map((f) => f.id)).toEqual(["a", "c"]);
+    expect(repeatedComments([first, same, other]).map((p) => p.id)).toEqual(["b"]);
+    // The same words on another ticket are another comment.
+    const elsewhere = draft("d", { ...text("Looks good to me."), item: { connectionId: "c", externalId: "CA-402", key: "CA-402" } } as Intent, 2);
+    expect(batchable([first, elsewhere]).map((p) => p.id)).toEqual(["a", "d"]);
   });
 
   it("leave out the questions to a reporter and Pip's comment with the person's answers, which are read and approved on their own", () => {

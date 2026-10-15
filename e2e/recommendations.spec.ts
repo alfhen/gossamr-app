@@ -709,8 +709,8 @@ test.describe("B4: a decision shows once", () => {
     });
     expect(overlaps.position).toBe("static");
     expect(overlaps.gap).toBeGreaterThanOrEqual(-1);
-    // No scroller inside the pane but the pane.
-    const nested = await pane.evaluate((el) => Array.from(el.querySelectorAll("*")).filter((e) => /auto|scroll/.test(getComputedStyle(e).overflowY) && e.scrollHeight > e.clientHeight + 1).length);
+    // No scroller inside the pane but the pane, bar a long diff, which scrolls in a box of its own so the bar under it stays in view (round 10, G10).
+    const nested = await pane.evaluate((el) => Array.from(el.querySelectorAll("*")).filter((e) => !e.matches("[data-diff]") && /auto|scroll/.test(getComputedStyle(e).overflowY) && e.scrollHeight > e.clientHeight + 1).length);
     expect(nested).toBe(0);
     // The last of the draft is reachable above its bar: scrolled to the end, the bar is the pane's last line.
     await pane.evaluate((el) => (el.scrollTop = el.scrollHeight));

@@ -48,7 +48,8 @@ test.describe("Plan my week and Start my day keep room for the rest (G19)", () =
     }
     await expect(picks(page)).toHaveCount(4);
     const day = pipHome(page).locator("[data-pip-home-day]");
-    expect((await box(day)).height).toBeLessThanOrEqual(900 * 0.3 + 2);
+    // Plan my week gets nearly half the window (G13), so its three picks show; a fourth makes it scroll.
+    expect((await box(day)).height).toBeLessThanOrEqual(900 * 0.45 + 2);
     expect(await day.evaluate((el) => el.scrollHeight > el.clientHeight)).toBe(true);
     // The timeline is not squeezed to a sliver, and Keep is inside the box without scrolling it.
     expect((await box(pipHome(page).locator("[data-timeline]"))).height).toBeGreaterThanOrEqual(150);
@@ -189,7 +190,8 @@ test.describe("the keyboard odds and ends (G21)", () => {
     await expect(near).toBeFocused();
     // F6 goes round the regions to the toast; the composer is the stop before it.
     for (let n = 0; n < 12 && !(await toast(page).evaluate((el) => el.contains(document.activeElement))); n++) await page.keyboard.press("F6");
-    await expect(toast(page)).toBeFocused();
+    // The toast offers Undo, so F6 puts the keyboard on it (G12 of round 10).
+    await expect(toast(page).getByRole("button", { name: "Undo" })).toBeFocused();
     await page.keyboard.press("Escape");
     await expect(toast(page)).toHaveCount(0);
     await expect(near).toBeFocused();
@@ -280,7 +282,7 @@ test.describe("the pause names what tripped it (G23)", () => {
     await text.fill(`${original}\n\nPassword: hunter2`);
     await draft.getByRole("button", { name: "Done editing" }).click();
     await draft.getByRole("button", { name: "Post comment" }).click();
-    await expect(pause).toContainText("looks like a password, key or token, at “hu…”");
+    await expect(pause).toContainText("looks like a password, key or token at “hu…”");
     await expect(pause).not.toContainText("hunter2");
     expect(await jiraWrites(page)).toEqual([]);
   });

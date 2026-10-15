@@ -2,7 +2,7 @@ import { AUTOSTART_DEFAULTS, DIGEST_MINUTES, SUMMARY_ONLY, type AgentSettings, t
 import { containerRef, itemRef } from "./mockConnector";
 import { approvedPlanText, assemblePlan, planSectionOf } from "./mockPlanSection";
 import { docFromMarkdown, markdownOf } from "./mockMarkdown";
-import { PLAN_COMMENT_LIMIT, commentText, fit, jiraNote, planAnswer, planWithoutNote, reportView, resolveResult, reviewVerdict, reviewView, scriptedFinish, withAssumptions, assumptionsSummaryLine, subtaskProposals, ticketBody, ticketFromAnswer, ticketProposal, type MockReport, type MockReportRow, type Resolved, type ScriptedFinish } from "./mockRunResult";
+import { PLAN_COMMENT_LIMIT, commentText, fit, jiraNote, planAnswer, planWithoutNote, reportView, resolveResult, reviewVerdict, reviewView, scriptedFinish, withAssumptions, assumptionsSummaryLine, assumptionsJiraLine, subtaskProposals, ticketBody, ticketFromAnswer, ticketProposal, type MockReport, type MockReportRow, type Resolved, type ScriptedFinish } from "./mockRunResult";
 import { answerProblem } from "../lib/answer";
 import { DENIED_MESSAGE, permissionOffer, readAs } from "../lib/permission";
 import { reviewText } from "./mockReviewDraft";
@@ -86,7 +86,7 @@ export function renderPrompt(spec: RunSpec): string {
   if ((spec.kind === "triage" || spec.kind === "plan") && spec.findings?.trim() && spec.findingsFromRun) parts.push(FINDINGS_PREFACE, `${findingsLabel(spec.findingsFromRun)}:\n<<<FINDINGS\n${withoutMarkers(spec.findings.trim())}\nFINDINGS>>>`);
   if (spec.kind === "plan" && spec.assumptions?.length) {
     const lines = spec.assumptions.map((a) => `- ${withoutMarkers(a.trim())}`);
-    parts.push(ASSUMPTIONS_PREFACE, `<<<ASSUMPTIONS\n${lines.join("\n")}\nASSUMPTIONS>>>`, `Put this line as the first line of your plan and in your summary under 'For Jira:', so the approval of the plan says it rests on assumed answers: "${assumptionsSummaryLine(lines.length)}"`);
+    parts.push(ASSUMPTIONS_PREFACE, `<<<ASSUMPTIONS\n${lines.join("\n")}\nASSUMPTIONS>>>`, `Put this line as the first line of your plan, so the approval of the plan says it rests on assumed answers: "${assumptionsSummaryLine(lines.length)}" Start your note under 'For Jira:' with this line: "${assumptionsJiraLine(lines.length)}" Then list each of those questions with its 'Assumed:' answer as a bullet, because the note is posted on its own, apart from the plan.`);
   }
   if (spec.kind === "build" && spec.plan?.trim() && spec.planFromRun) parts.push(spec.planApproved ? PLAN_FOLLOW : PLAN_FOLLOW_UNEDITED, `${planLabel(spec.planFromRun)}:\n<<<PLAN\n${withoutMarkers(spec.plan.trim())}\nPLAN>>>`);
   if (spec.kind === "review" && spec.buildAccount?.trim() && spec.buildFromRun) parts.push(BUILD_ACCOUNT_PREFACE, `${buildAccountLabel(spec.buildFromRun)}:\n<<<BUILD\n${withoutMarkers(spec.buildAccount.trim())}\nBUILD>>>`);

@@ -43,6 +43,14 @@ describe("What Jira saw from me", () => {
     expect(detail).toEqual(["Description, as it read and as it now reads:", "… 4 unchanged lines", "  five", "  six", "− seven", "+ 7"]);
   });
 
+  it("calls an edit that only adds an addition, and one on an empty description a new description", () => {
+    const rewrite = (fromText: string, toText: string, title: { from: string; to: string } | null = null): Intent => ({ type: "rewrite", item: ref("CA-402"), title, body: { from: doc("a"), to: doc("b"), fromText, toText }, flattened: [] });
+    expect(sentWhat(rewrite("Line one", "Line one\nLine two"), null)).toMatchObject({ summary: "Added to the description", detail: ["Added to the description:", "  Line one", "+ Line two"] });
+    expect(sentWhat(rewrite("Line one", "Line one\nLine two", { from: "A", to: "B" }), null)!.summary).toBe("Added to the description and title changed");
+    expect(sentWhat(rewrite("", "Fresh text"), null)).toMatchObject({ summary: "Description added", detail: ["The new description:", "+ Fresh text"] });
+    expect(sentWhat(rewrite("Line one", "Line 1"), null)!.summary).toBe("Description rewritten");
+  });
+
   it("names the keys a subtasks draft created, one for each title", () => {
     const intent: Intent = { type: "subtasks", parent: ref("CA-403"), summaries: ["Write tests", "Update docs"] };
     expect(sentWhat(intent, null, [ref("CA-501"), ref("CA-502")])).toMatchObject({ summary: "2 subtasks: CA-501 Write tests; CA-502 Update docs", detail: ["• CA-501 Write tests", "• CA-502 Update docs"] });

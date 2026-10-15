@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { docText } from "../lib/docs";
-import { higherPriority, needAfter, needGroups, type Need } from "../lib/needs";
+import { higherPriority, needAfter, leftOutLabel, needGroups, repeatedComments, REPEATED_COMMENT_NOTE, type Need } from "../lib/needs";
 import { ALLOW_MORE_STEPS, type Proposal, type Run, type WorkstreamView } from "../types";
 import { stepsOf } from "../lib/workstreamHold";
 import { isReporterNudge, isReporterQuestions } from "../lib/proposals";
@@ -612,8 +612,8 @@ function NeedDecision({ need }: { need: Need }) {
       data-kind={need.kind}
       data-group={need.group}
       onKeyDown={onKeyDown}
-      // The pane is the one thing that scrolls in its place. Its drafts' action bars stay where the card ends (a sticky one would float over the text and the review comments beneath it).
-      className="grid max-h-[60%] min-h-0 shrink-0 content-start gap-2 overflow-y-auto border-b border-ws-sep bg-ws-bar px-3 py-2.5 outline-none [&_[data-draft-actions]]:static"
+      // The pane scrolls in its place. Its drafts' action bars stay where the card ends (a sticky one would float over the text and the review comments beneath it), so a long diff scrolls in a box of its own and the bar sits right under it.
+      className="grid max-h-[60%] min-h-0 shrink-0 content-start gap-2 overflow-y-auto border-b border-ws-sep bg-ws-bar px-3 py-2.5 outline-none [&_[data-draft-actions]]:static [&_[data-diff]]:max-h-[min(50vh,28rem)] [&_[data-diff]]:overflow-y-auto"
     >
       {/* Kept in view while the decision under it scrolls: what is asked and why stays on screen. */}
       <header className="sticky -top-2.5 z-[2] -mx-3 -mt-2.5 flex items-start gap-2 bg-ws-bar px-3 pt-2.5 pb-1">
@@ -675,6 +675,8 @@ function BatchDecision({ gid, needs }: { gid: string; needs: readonly Need[] }) 
   const [frozen, setFrozen] = useState<BatchSnapshot | null>(() => (drafts.length >= 2 ? freezeBatch(drafts) : null));
   const [busy, setBusy] = useState(false);
   const [outcome, setOutcome] = useState<{ text: string; failed: boolean } | null>(null);
+  // Comments with the text of an earlier one in the group are not in the batch; the confirm says so.
+  const [leftOut] = useState(() => repeatedComments([group?.top, ...(group?.rest ?? [])].flatMap((n) => (n?.target.type === "draft" && proposals[n.target.id] ? [proposals[n.target.id]] : [])).sort((a, b) => a.createdAt.localeCompare(b.createdAt) || (a.id < b.id ? -1 : 1))));
   const [title] = useState(() => group?.ticketKey ?? group?.title ?? "General");
   const root = useRef<HTMLElement>(null);
   const close = () => {
@@ -751,6 +753,11 @@ function BatchDecision({ gid, needs }: { gid: string; needs: readonly Need[] }) 
                   </li>
                 ))}
             </ul>
+            {leftOut.length > 0 && (
+              <p data-batch-left-out className="m-0 text-sm text-ws-ink2 [overflow-wrap:anywhere]">
+                {REPEATED_COMMENT_NOTE}: {leftOut.map((p) => leftOutLabel(p, draftTitle(p))).join(", ")}.
+              </p>
+            )}
             <BatchConfirm count={frozen.length} onConfirm={() => void confirm(frozen)} onCancel={close} />
           </>
         )}

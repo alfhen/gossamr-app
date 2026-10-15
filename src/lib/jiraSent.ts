@@ -82,9 +82,18 @@ export function sentWhat(intent: Intent, label: string | null, created: readonly
     case "transition":
       return { kind: "transition", summary: `Moved to ${label ?? intent.to}`, detail: [`Moved to ${label ?? intent.to}`] };
     case "rewrite": {
-      const parts = [intent.title && `Title: ${intent.title.from} → ${intent.title.to}`, intent.body && "Description, as it read and as it now reads:"].filter((x): x is string => !!x);
       const body = intent.body ? descriptionDiff(intent.body.fromText, intent.body.toText) : [];
-      const summary = intent.body ? `Description rewritten${intent.title ? " and title changed" : ""}` : `Title changed to ${intent.title?.to ?? ""}`;
+      // An edit that only adds is said as an addition, and one on an empty description as a new description.
+      const empty = !intent.body?.fromText.trim();
+      const onlyAdds = !body.some((l) => l.startsWith("− "));
+      const [summary, lead] = !intent.body
+        ? [`Title changed to ${intent.title?.to ?? ""}`, null]
+        : empty
+          ? [`Description added${intent.title ? " and title changed" : ""}`, "The new description:"]
+          : onlyAdds
+            ? [`Added to the description${intent.title ? " and title changed" : ""}`, "Added to the description:"]
+            : [`Description rewritten${intent.title ? " and title changed" : ""}`, "Description, as it read and as it now reads:"];
+      const parts = [intent.title && `Title: ${intent.title.from} → ${intent.title.to}`, lead].filter((x): x is string => !!x);
       return { kind: "description", summary, detail: [...parts, ...body] };
     }
     case "subtasks": {

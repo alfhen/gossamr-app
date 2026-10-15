@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { changedLines, diffLines, withGaps, type DiffRow } from "../lib/textDiff";
 import { withRunNamed } from "../lib/runNames";
 import type { Intent, ProposalEdit } from "../types";
@@ -107,18 +107,41 @@ function Words({ parts, kind }: { parts: WordPart[]; kind: "add" | "del" }) {
   );
 }
 
+/** What the foot of a diff that scrolls in a box of its own says while more of it is below. */
+export const SCROLL_FOR_DIFF = "Scroll for the whole diff";
+
 function Rows({ rows, what }: { rows: DiffRow[]; what: string }) {
   const pairs = useMemo(() => changedPairs(rows), [rows]);
+  // In the Decision pane the diff is capped (see NeedsPane) so the actions under it stay in view; a fade says there is more of it.
+  const box = useRef<HTMLDivElement>(null);
+  const [more, setMore] = useState(false);
+  useEffect(() => {
+    const el = box.current;
+    if (!el) return;
+    const measure = () => setMore(el.scrollHeight - el.scrollTop - el.clientHeight > 4);
+    measure();
+    el.addEventListener("scroll", measure, { passive: true });
+    const watch = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure);
+    watch?.observe(el);
+    return () => (el.removeEventListener("scroll", measure), watch?.disconnect());
+  }, [rows]);
   return (
-    <div role="group" aria-label={`${what} changes`} data-diff={what} className="overflow-hidden rounded-md border border-ws-sep bg-ws-win font-mono text-[12.5px] leading-snug">
-      {rows.map((r, i) =>
-        r.kind === "gap" ? (
-          <div key={i} data-gap={r.count} className="border-y border-dashed border-ws-sep bg-ws-bar px-2 py-0.5 text-center text-xs text-ws-ink3">
-            {r.count} unchanged lines
-          </div>
-        ) : (
-          <Line key={i} row={r} pair={pairs.has(i) ? (rows[pairs.get(i)!] as { text: string }).text : null} />
-        ),
+    <div className="relative">
+      <div ref={box} role="group" aria-label={`${what} changes`} data-diff={what} className="overflow-hidden rounded-md border border-ws-sep bg-ws-win font-mono text-[12.5px] leading-snug">
+        {rows.map((r, i) =>
+          r.kind === "gap" ? (
+            <div key={i} data-gap={r.count} className="border-y border-dashed border-ws-sep bg-ws-bar px-2 py-0.5 text-center text-xs text-ws-ink3">
+              {r.count} unchanged lines
+            </div>
+          ) : (
+            <Line key={i} row={r} pair={pairs.has(i) ? (rows[pairs.get(i)!] as { text: string }).text : null} />
+          ),
+        )}
+      </div>
+      {more && (
+        <p data-diff-more aria-hidden="true" className="pointer-events-none absolute inset-x-px bottom-px m-0 rounded-b-md bg-gradient-to-t from-ws-win via-ws-win/90 to-transparent pt-5 pb-0.5 text-center font-sans text-xs text-ws-ink3">
+          {SCROLL_FOR_DIFF} ↓
+        </p>
       )}
     </div>
   );
