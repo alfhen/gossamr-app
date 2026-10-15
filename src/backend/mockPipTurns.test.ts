@@ -320,6 +320,16 @@ describe("the comment with the person's answers (G3)", () => {
     expect(script(reply).text).toContain("the questions first, then your answers as you wrote them");
   });
 
+  it("starts the numbered list at a marker opening the reply or a line, after any preamble, not at a number in prose", () => {
+    const listed = text("Here they are:\n1. All three emails send.\n2. Only the CRM export.\n3. Support.");
+    expect(listed).toContain("\u201cWhat does done mean?\u201d\nAnswer: All three emails send.");
+    expect(listed).toContain("\u201cWho owns it?\u201d\nAnswer: Support.");
+    const prose = text("We ship version 2. Then the CRM export. Support owns it.");
+    expect(prose).toContain("\u201cWhat does done mean?\u201d\nAnswer: We ship version 2.");
+    expect(prose).toContain("\u201cWhich export?\u201d\nAnswer: Then the CRM export.");
+    expect(answersPaired(prose)).toBe(true);
+  });
+
   it("numbers the questions and answers once, and says so, when the answers don't pair", () => {
     const body = text("It is all about winback.");
     expect(body).toContain("1. \u201cWhat does done mean?\u201d\n2. \u201cWhich export?\u201d\n3. \u201cWho owns it?\u201d\n\nAnswers: It is all about winback.");
