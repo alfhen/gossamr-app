@@ -73,6 +73,22 @@ describe("the Start my day card", () => {
     expect(open).toMatch(/aria-expanded="true"[^>]*>Show fewer</);
   });
 
+  it("collapses a long unclear list to its count and a More button that lists them all, and leaves a short one open (G19)", () => {
+    const unclear = (n: number) => entry(`u${n}`, `CA-${n} may be unclear: it has a very short description.`, "Open workstream", { type: "workstream", id: `w${n}` });
+    const long = { kind: "unclear" as const, title: "5 tickets may be unclear", count: 5, more: 2, entries: [unclear(1), unclear(2), unclear(3)], rest: [unclear(4), unclear(5)] };
+    const closed = renderToStaticMarkup(<DayLineView line={long} />);
+    expect(closed).toContain("5 tickets may be unclear");
+    expect(closed).not.toContain("data-day-entry=");
+    expect(closed).toMatch(/<button[^>]*data-day-more[^>]*aria-expanded="false"[^>]*>More<\/button>/);
+    const open = renderToStaticMarkup(<DayLineView line={long} initiallyOpen />);
+    expect(open.match(/data-day-entry=/g)).toHaveLength(5);
+    expect(open).toMatch(/aria-expanded="true"[^>]*>Show fewer</);
+    const short = { kind: "unclear" as const, title: "2 tickets may be unclear", count: 2, more: 0, entries: [unclear(1), unclear(2)], rest: [] };
+    const html = renderToStaticMarkup(<DayLineView line={short} />);
+    expect(html.match(/data-day-entry=/g)).toHaveLength(2);
+    expect(html).not.toContain("data-day-more");
+  });
+
   it("says what a quiet day looks like instead of an empty box", () => {
     const html = renderToStaticMarkup(<StartMyDayView day={{ lines: [], empty: true }} onDone={() => {}} onSent={() => {}} />);
     expect(html).toContain(DAY_EMPTY);

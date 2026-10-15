@@ -249,6 +249,21 @@ export const ANSWERS_COMMENT_LABEL = "Answers to the open questions";
 /** Whether `p` is the comment Pip drafted with the person's answers to the open questions. As `is_answers_draft`. */
 export const isAnswersDraft = (p: Proposal) => p.intent.type === "comment" && p.label === ANSWERS_COMMENT_LABEL && p.createdBy === "pip";
 
+/** How much of the reply the provenance line quotes. */
+const REPLY_QUOTED = 80;
+
+/**
+ * The line under the answers draft's card that says which reply it was made from: the start of what the person wrote after "My answers:"
+ * in the message `prompt` (null when that turn is no longer at hand, then the line names the reply without quoting it). Shown in the app
+ * only; the comment that goes to Jira has none of it.
+ */
+export function answersProvenance(prompt: string | null): string {
+  const at = prompt?.indexOf("My answers:") ?? -1;
+  const reply = (at >= 0 ? prompt!.slice(at + "My answers:".length) : (prompt ?? "")).replace(/\s+/g, " ").trim();
+  const quoted = reply ? ` “${[...reply].length > REPLY_QUOTED ? `${[...reply].slice(0, REPLY_QUOTED).join("").trimEnd()}…` : reply}”` : "";
+  return `Drafted from your reply${quoted} in this conversation, each answer under its question. Read and edit it before you approve.`;
+}
+
 /**
  * What the questions to a reporter made from a triage do to an older pending draft: the triage's own comment, which repeats
  * them, is replaced, so "Approve N safe drafts" can't post both; the person's edit keeps it. Null when `older` is none of

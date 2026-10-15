@@ -89,6 +89,9 @@ test.describe("Start my day", () => {
     await expect(line(page, "reporter")).toContainText("CA-408 · waiting 3 days");
     await expect(line(page, "reporter").getByRole("button", { name: /^Draft a nudge/ })).toBeVisible();
     await expect(line(page, "drafts").getByRole("heading")).toHaveText("1 Jira draft waiting to be posted");
+    // A long list of unclear tickets is a count; More lists them.
+    await expect(line(page, "unclear").getByRole("heading")).toContainText("may be unclear");
+    await line(page, "unclear").getByRole("button", { name: "More" }).click();
     await expect(line(page, "unclear")).toContainText("CA-409 may be unclear: it has no description.");
     // It counts nowhere and writes nothing.
     await expect(needsYouCount(page)).toHaveText("1");

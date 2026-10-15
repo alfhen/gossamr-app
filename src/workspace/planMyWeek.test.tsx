@@ -6,7 +6,7 @@ import { isoWeek, ticketPick, type PlanItem } from "../lib/planMyWeek";
 import type { WorkItem, WorkstreamView } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { buildCommands, rankCommands, type CommandActions } from "./commands";
-import { PLAN_EMPTY, PlanMyWeek, PlanMyWeekView, afterMove, afterRemove, ThisWeekView, findTicket, rowStep, CHOICES, revealChoices } from "./PlanMyWeek";
+import { PLAN_EMPTY, PLAN_LEFT_OUT, PlanMyWeek, PlanMyWeekView, afterMove, afterRemove, restorePick, ThisWeekView, findTicket, rowStep, CHOICES, revealChoices } from "./PlanMyWeek";
 import { WorkstreamList } from "./PipHome";
 import { usePipHome } from "./pipHomeStore";
 import { loadPrefs, usePrefs } from "./prefs";
@@ -55,6 +55,13 @@ describe("the Plan my week card", () => {
     expect(html).toContain('aria-label="Remove CA-1 Something"');
   });
 
+  it("says in one line that needs waiting on others are answered in Needs you, not planned (G20)", () => {
+    const html = view([pick("CA-1")]);
+    expect(html).toMatch(/<span data-plan-left-out="true">It proposes 3; more that needs you stays in Needs you, where it is answered rather than planned\.<\/span>/);
+    expect(PLAN_LEFT_OUT.split(/(?<=\.)\s/)).toHaveLength(1);
+    expect(html).toContain("leaving out what is waiting or held.");
+  });
+
   it("says Delete removes a row", () => {
     expect(view([pick("CA-1")])).toContain("Alt+ArrowDown Delete");
   });
@@ -77,6 +84,21 @@ describe("the Plan my week card", () => {
   it("says Start over once the week has a kept plan", () => {
     expect(view([pick("CA-1")], { kept: true })).toContain("Start over");
     expect(view([pick("CA-1")])).toContain("Propose again");
+  });
+});
+
+describe("Undo after removing a pick (G21)", () => {
+  const [a, b, c] = [pick("CA-1"), pick("CA-2"), pick("CA-3")];
+
+  it("puts the pick back where it was, or at the end when the plan is shorter by now", () => {
+    expect(restorePick([a, c], b, 1)).toEqual([a, b, c]);
+    expect(restorePick([c], b, 1)).toEqual([c, b]);
+    expect(restorePick([], a, 0)).toEqual([a]);
+    expect(restorePick([c], a, 5)).toEqual([c, a]);
+  });
+
+  it("puts nothing back once the pick is in the plan again, so Undo says it has changed", () => {
+    expect(restorePick([a, b], b, 0)).toBeNull();
   });
 });
 

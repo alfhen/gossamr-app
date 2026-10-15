@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useClaude } from "../claudeStore";
+import { isHeldByYou } from "../lib/workstreamHold";
 import { stageText } from "../lib/workstreamStage";
 import { byStatusRank, emptyFilterText, STATUS_HINT, STATUS_WORD, workstreamStatus, type StatusState, type WorkstreamStatus } from "../lib/workstreamStatus";
 import { StatusPill } from "./StatusPill";
@@ -132,7 +133,7 @@ export function WorkstreamList({ list, closed, showClosed, selected, onSelect, o
   const learning = given ?? stored;
   const statuses = new Map(list.filter((v) => v.workstream.closedAt === null).map((v) => [v.workstream.id, workstreamStatus(v, needsYou, { runs, wither: wither[v.workstream.id] ?? null, now: new Date(now ?? Date.now()), learning })]));
   // Ordered by what needs the person, not newest first: the rows are what j/k and the arrows step through.
-  const everyOpen = byStatusRank(list.filter((v) => v.workstream.closedAt === null), (v) => statuses.get(v.workstream.id)!.state);
+  const everyOpen = byStatusRank(list.filter((v) => v.workstream.closedAt === null), (v) => statuses.get(v.workstream.id)!.state, (v) => isHeldByYou(v.workstream.heldReason));
   const matches = (v: WorkstreamView) => !statusFilter || statuses.get(v.workstream.id)?.state === statusFilter;
   // The open workstream stays listed when the filter leaves it out (dimmed, with a note), since its conversation is what is shown.
   const open = everyOpen.filter((v) => matches(v) || v.workstream.id === selected);
@@ -269,13 +270,13 @@ export function useMoreBelow<T extends HTMLElement>() {
 
 /**
  * The F6 stop above the conversation that holds Start my day or Plan my week: a labelled region that scrolls when the card is
- * taller than its share, with a fade at the foot while something is cut off, so the scroll is not hidden.
+ * taller than its share (a third of the window at most, so the timeline and an open decision keep their room), with a fade at the foot while something is cut off, so the scroll is not hidden.
  */
 export function DayScroll({ label, children }: { label: string; children: ReactNode }) {
   const [box, more] = useMoreBelow<HTMLDivElement>();
   return (
     // Focusable so the keyboard can scroll it when it overflows: a scroller with no focusable child is out of the arrow keys' reach.
-    <div ref={box} data-pip-home-day role="region" aria-label={label} tabIndex={0} className="relative max-h-[45vh] shrink-0 overflow-y-auto border-b border-ws-sep/60 outline-none empty:hidden focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-ws-pip">
+    <div ref={box} data-pip-home-day role="region" aria-label={label} tabIndex={0} className="relative max-h-[30vh] shrink-0 overflow-y-auto border-b border-ws-sep/60 outline-none empty:hidden focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-ws-pip">
       {children}
       {more && (
         <div data-day-fade aria-hidden="true" onClick={() => box.current?.scrollBy(fadeScroll(box.current.clientHeight, reducedMotion()))} className="sticky bottom-0 -mt-7 cursor-pointer bg-gradient-to-t from-ws-bar via-ws-bar/90 to-transparent pt-4 pb-0.5 text-center text-xs text-ws-ink3">

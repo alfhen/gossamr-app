@@ -2,8 +2,9 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { MentionTextarea } from "../components/MentionTextarea";
 import { docText } from "../lib/docs";
 import { autoLink, liveMentions, type Mention } from "../lib/mentions";
-import { isReporterNudge, isReporterQuestions, targetOf, unreachable } from "../lib/proposals";
+import { answersProvenance, isAnswersDraft, isReporterNudge, isReporterQuestions, targetOf, unreachable } from "../lib/proposals";
 import { APPROVAL_STARTS_BUILD, approvalStartsBuild } from "../lib/nextStep";
+import { useClaude } from "../claudeStore";
 import { useWorkstreams } from "./workstreamsStore";
 import { useTabs } from "./tabsStore";
 import { useBackend } from "../backend/useBackend";
@@ -27,7 +28,7 @@ import { RetiredDraft } from "./RetiredDraft";
 import { answerProblem, MAX_ANSWER } from "../lib/answer";
 import { answerTitle, editThenSend, isSendKey, NOT_WAITING, useAnswerRun, type AnswerRun } from "./runAnswer";
 import { bodyChangeSize, RewriteView, rewriteBlocked, rewriteEdit, rewriteFields, rewriteWhat, takesBackendText } from "./RewriteDiff";
-import { newRisks, riskNote, type Risk } from "../lib/riskyText";
+import { newRiskQuote, newRisks, riskNote, type Risk } from "../lib/riskyText";
 import { FromRun, RunName, useFromRunName } from "./RunProvenance";
 
 const BADGE: Record<Proposal["state"]["type"], string> = {
@@ -184,6 +185,9 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
   const rewrite = intent.type === "rewrite" ? intent : null;
   const startsBuild = useApprovalStartsBuild(p);
   const runName = useFromRunName(p);
+  // The message the answers draft was made from, for its provenance line: the person's reply in the conversation that asked Pip.
+  const replyRequest = p.origin.type === "chat" && isAnswersDraft(p) ? p.origin.requestId : null;
+  const replyPrompt = useClaude((s) => (replyRequest ? (Object.values(s.byTicket).flatMap((c) => c.turns).find((t) => t.requestId === replyRequest)?.prompt ?? null) : null));
   const [newTitle, setNewTitle] = useState(rewriteFields(rewrite).title);
   const [newText, setNewText] = useState(rewriteFields(rewrite).text);
   const rewriteEdited = useRef(false);
@@ -258,16 +262,20 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
   };
 
   // Edited words that mention everyone or look like a secret wait for a second press: a confirm the person can pass, never a block.
-  const [pause, setPause] = useState<Risk[] | null>(null);
-  const risks = (): Risk[] => {
-    if (intent.type === "comment" && edited.current) return newRisks(linked.text, body);
-    if (rewrite && rewriteEdited.current) return newRisks(`${rewriteFields(rewrite).title}\n${rewriteFields(rewrite).text}`, `${newTitle}\n${newText}`);
-    return [];
+  const [pause, setPause] = useState<{ risks: Risk[]; quote: string | null } | null>(null);
+  const risks = (): { risks: Risk[]; quote: string | null } => {
+    if (intent.type === "comment" && edited.current) return { risks: newRisks(linked.text, body), quote: newRiskQuote(linked.text, body) };
+    if (rewrite && rewriteEdited.current) {
+      const was = `${rewriteFields(rewrite).title}\n${rewriteFields(rewrite).text}`;
+      const now = `${newTitle}\n${newText}`;
+      return { risks: newRisks(was, now), quote: newRiskQuote(was, now) };
+    }
+    return { risks: [], quote: null };
   };
   /** The step the Post button and Enter take: pauses once for edited text that would reach everyone, else approves. */
   const approve = () => {
     const found = risks();
-    if (found.length && !pause) {
+    if (found.risks.length && !pause) {
       setPause(found);
       // The keyboard goes to the safe choice, not to a Post button that now reads "Post anyway"; the note and the actions come into view with it.
       requestAnimationFrame(() => showPause(card.current));
@@ -584,6 +592,14 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
             Gossamr wrote this follow-up because the reporter hasn&apos;t answered for days. Read and edit it before you approve.
           </p>
         )}
+        {p.origin.type === "chat" && isAnswersDraft(p) && (
+          <p data-provenance="pip" className="m-0 text-sm text-ws-ink3">
+            <span data-created-by="pip" className="mr-2 rounded-full bg-ws-pip-soft px-2 text-xs font-semibold text-ws-pip">
+              Drafted by Pip
+            </span>
+            {answersProvenance(replyPrompt)}
+          </p>
+        )}
         {p.state.type === "retired" && <p className="m-0 text-sm text-ws-ink3">{p.state.reason}</p>}
         {open && revision && !shownError && <p className="m-0 text-sm text-ws-ink3">{revision.note}</p>}
         {shownError && (
@@ -607,8 +623,8 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
           </p>
         )}
         {pause && open && (
-          <p role="alert" data-post-pause={pause.join(" ")} className="m-0 text-sm text-ws-warn">
-            {riskNote(pause)}{" "}
+          <p role="alert" data-post-pause={pause.risks.join(" ")} className="m-0 text-sm text-ws-warn">
+            {riskNote(pause.risks, pause.quote)}{" "}
             <button type="button" data-post-pause-keep onClick={() => (setPause(null), setEditing(true), focusField("textarea, input:not([type]), input[type=text]"))} className="rounded font-semibold underline hover:bg-ws-hover focus-visible:outline-2 focus-visible:outline-ws-pip">
               Keep editing
             </button>

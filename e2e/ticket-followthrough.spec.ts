@@ -402,6 +402,10 @@ test.describe("G15: the person's answers go to Jira as a comment", () => {
     await expect(needRow(page, "Start Plan")).toHaveCount(0);
     await draft.getByRole("button", { name: "Post comment" }).click();
     await expect.poll(async () => (await jiraWrites(page)).map((w) => [w.type, w.key])).toEqual([["comment", VAGUE]]);
+    // What Jira got is the answers alone: the card's "Drafted from your reply" line is the app's, never posted.
+    const posted = (await jiraWrites(page))[0].text ?? "";
+    expect(posted).toContain("Answer: Done means the winback mail goes to lapsed customers.");
+    expect(posted).not.toMatch(/Drafted|your reply|Pip/);
     // Pip's next turn proposes the plan, which does not start by itself.
     await askPip(page, "where do we stand?");
     await homeSettled(page);

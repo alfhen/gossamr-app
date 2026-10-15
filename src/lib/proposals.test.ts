@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Intent, Proposal, RunKind, RunSpec } from "../types";
-import { ANSWERS_COMMENT_LABEL, isReporterFollowUp, answersSupersession, READINESS_COMMENT_LABEL, draftsForTurn, earlierDrafts, inWorkstreamPane, isAnswersDraft, isReporterQuestions, reporterSupersession, supersession, supersessionKey, targetOf, withoutRunDrafts } from "./proposals";
+import { answersProvenance, ANSWERS_COMMENT_LABEL, isReporterFollowUp, answersSupersession, READINESS_COMMENT_LABEL, draftsForTurn, earlierDrafts, inWorkstreamPane, isAnswersDraft, isReporterQuestions, reporterSupersession, supersession, supersessionKey, targetOf, withoutRunDrafts } from "./proposals";
 import fixtures from "./draftHygiene.fixtures.json";
 import { isRunPlanRewrite } from "../backend/mockProposals";
 
@@ -215,5 +215,17 @@ describe("the comments about a ticket's open questions", () => {
     expect(answersSupersession(fromRun("7", "t1", { origin: { type: "run", runId: "t1", shortId: null, workstream: "ws-2" } }), answers, kindOf)).toBeNull();
     expect(answersSupersession(asked("8", "t1"), answers, kindOf), "the questions to the reporter stay").toBeNull();
     expect(answersSupersession(fromRun("10", "t1"), fromRun("11", "t1"), kindOf), "only the answers draft supersedes").toBeNull();
+  });
+});
+
+describe("answersProvenance", () => {
+  it("quotes the start of the reply after My answers:, and is words for the app, never for Jira", () => {
+    const line = answersProvenance("CA-401's open questions: “Who is it for?”. My answers:   It is for\nthe winback team. ");
+    expect(line).toBe("Drafted from your reply “It is for the winback team.” in this conversation, each answer under its question. Read and edit it before you approve.");
+    expect(answersProvenance("My answers: " + "word ".repeat(40))).toContain("word word…”");
+  });
+
+  it("names the reply without quoting it when that turn is no longer at hand", () => {
+    expect(answersProvenance(null)).toBe("Drafted from your reply in this conversation, each answer under its question. Read and edit it before you approve.");
   });
 });

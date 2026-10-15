@@ -32,16 +32,24 @@ export type StatusState = "needs-you" | "held" | "waiting" | "running" | "quiet"
 /** The states from most to least urgent: the order `workstreamStatus` picks in, and the order a filter lists them. */
 export const STATUS_ORDER: readonly StatusState[] = ["needs-you", "held", "waiting", "running", "quiet", "done", "idle"];
 
-/** How far down the workstream list a state sits: what needs the person first, then what is held or waits on someone else, then what moves, then what does not. Held and Waiting on reporter share a rank. */
+/** How far down the workstream list a state sits: what needs the person first, then what is held or waits on someone else, then what moves, then what does not. Held and Waiting on reporter share a rank (the person's own hold comes after them: `byStatusRank`). */
 const LIST_RANK: Record<StatusState, number> = { "needs-you": 0, held: 1, waiting: 1, running: 2, idle: 3, quiet: 4, done: 5 };
 
+/** Where the person's own hold sits: under the holds the system made (they ask something of the person), before what is running. */
+const HELD_BY_YOU_RANK = 1.5;
+
 /**
- * The workstreams in the order the list shows them: by their status (Needs you, then Held and Waiting on reporter, then
- * Running, then Idle, Quiet and Done), each group in the order it was given (newest first, as the store keeps them). Pure
- * and stable; `items` is left as it is.
+ * The workstreams in the order the list shows them: by their status (Needs you, then Held by the system and Waiting on
+ * reporter, then Held by you, then Running, then Idle, Quiet and Done), each group in the order it was given (newest first, as
+ * the store keeps them). `heldByYou` tells the person's own hold from one the system made; without it every hold is the system's.
+ * Pure and stable; `items` is left as it is.
  */
-export function byStatusRank<T>(items: readonly T[], stateOf: (item: T) => StatusState): T[] {
-  return items.map((item, at) => ({ item, at, rank: LIST_RANK[stateOf(item)] })).sort((a, b) => a.rank - b.rank || a.at - b.at).map((x) => x.item);
+export function byStatusRank<T>(items: readonly T[], stateOf: (item: T) => StatusState, heldByYou: (item: T) => boolean = () => false): T[] {
+  const rankOf = (item: T) => {
+    const state = stateOf(item);
+    return state === "held" && heldByYou(item) ? HELD_BY_YOU_RANK : LIST_RANK[state];
+  };
+  return items.map((item, at) => ({ item, at, rank: rankOf(item) })).sort((a, b) => a.rank - b.rank || a.at - b.at).map((x) => x.item);
 }
 
 /** Colour tokens a state is drawn with (`ws-*` in theme.css); `ink` is the quiet grey. */
@@ -144,7 +152,8 @@ export function workstreamStatus(view: WorkstreamView, needs: readonly Pick<Need
 
   // A hold the system made is one of the needs; when it is the only one the one thing worth saying is why (the hold's own words), else the count.
   if (waiting > 0) return make("needs-you", waiting === 1 && ws.heldReason && !byYou ? (shortHeld(ws.heldReason, ws.drifted) ?? `${waiting} waiting`) : `${waiting} waiting`);
-  if (ws.heldReason) return byYou ? make("held", null, shortHeld(ws.heldReason) ?? "Held by you") : make("held", heldDetail(ws.heldReason, view));
+  // The person's own hold is quieter than one the system made: it asks nothing, so it is grey, not amber.
+  if (ws.heldReason) return byYou ? { ...make("held", null, shortHeld(ws.heldReason) ?? "Held by you"), tone: "ink" } : make("held", heldDetail(ws.heldReason, view));
   if (view.waitingOnReporter) return make("waiting", askedText(waitedDays(view.waitingOnReporter.since, now)));
   const furthest = (pick: (r: Run) => boolean) => own.filter(pick).sort((a, b) => a.queuedAt.localeCompare(b.queuedAt)).pop();
   const going = furthest((r) => RUNNING.has(r.state)) ?? furthest((r) => r.state === "queued");

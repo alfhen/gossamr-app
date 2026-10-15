@@ -1,7 +1,7 @@
 import { isValidElement, type ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
-import { ToastCard, focusToast } from "./ToastHost";
+import { ToastCard, focusToast, roundStart } from "./ToastHost";
 import type { Toast } from "./toasts";
 
 const toast: Toast = { id: 1, text: "Kept your plan for 2026-W42.", tone: "info", at: 0 };
@@ -59,5 +59,27 @@ describe("a toast takes the keyboard", () => {
     // A second click, not through F6, dismisses and moves nothing.
     x.props.onClick();
     expect(back.focus).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("where Esc on the toast gives the keyboard back (G21)", () => {
+  it("is the place the round of F6 began, not the composer the round passed on its way to the toast", () => {
+    // First press from the plan row: the round begins there. Later presses in the same round keep it, wherever focus is by then.
+    expect(roundStart("row", false, null)).toBe("row");
+    expect(roundStart("notice", true, "row")).toBe("row");
+    expect(roundStart("row", true, "row")).toBe("row");
+    // Another key or a click ended the round: the next F6 begins a new one, from there.
+    expect(roundStart("field", false, "row")).toBe("field");
+    // The page itself is no place to go back to.
+    expect(roundStart("body", false, null, "body")).toBeNull();
+  });
+
+  it("falls back to where the keyboard is when F6 reaches the toast, when no round was noted", () => {
+    const composer = { focus: vi.fn(), isConnected: true };
+    const found = { focus: vi.fn(), contains: () => false };
+    focusToast({ querySelector: () => found as unknown as HTMLElement, activeElement: composer as unknown as Element });
+    props().onKeyDown(esc());
+    // No window here, so no round was noted.
+    expect(composer.focus).toHaveBeenCalledTimes(1);
   });
 });

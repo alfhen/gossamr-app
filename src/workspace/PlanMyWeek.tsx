@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { Need } from "../lib/needs";
 import { WEEK_PICKS, isoWeek, itemOutcome, liveWorkstreamOf, movePick, planMyWeek, reopenedWithoutWorkstream, ticketDone, ticketPick, weekLabel, type PlanItem } from "../lib/planMyWeek";
 import type { WorkstreamWither } from "../lib/workstreamWither";
@@ -11,6 +11,7 @@ import { focusPeekOf } from "./PeekSheet";
 import { runDayAction } from "./StartMyDay";
 import { showPlanMyWeek } from "./planActions";
 import { useToasts } from "./toasts";
+import { offerUndo, withdrawUndo } from "./undo";
 import { useNow } from "./useNow";
 import { openOnPipHome, useWorkstreams } from "./workstreamsStore";
 
@@ -19,6 +20,10 @@ const small = "rounded px-1.5 text-sm leading-normal text-ws-ink2 hover:bg-ws-ho
 
 /** What the card says when there is nothing to propose. */
 export const PLAN_EMPTY = "Nothing to propose: no open workstream or ticket assigned to you is free to work on. You can add a ticket below.";
+
+/** What the proposal's intro says about what it does not plan, in one line: what waits on others is answered in Needs you. */
+/** Why a need can be missing from the picks: there are only so many, and the rest are answered where they wait. */
+export const PLAN_LEFT_OUT = `It proposes ${WEEK_PICKS}; more that needs you stays in Needs you, where it is answered rather than planned.`;
 
 /** How many matches the choice list shows at most. */
 export const CHOICES = 5;
@@ -61,6 +66,12 @@ export function rowStep(ev: Pick<KeyboardEvent, "key" | "altKey" | "ctrlKey" | "
 /** The pick the keyboard goes to once the one at `index` is removed from `picks` (as they are after): the one now at that index, else the one before it; null when none is left (the add box takes it). */
 export const afterRemove = (picks: readonly PlanItem[], index: number): string | null => (picks[index] ?? picks[index - 1])?.id ?? null;
 
+/** The plan with `pick` put back at `index` (or the end, when the plan is shorter by now): what Undo does after a removal. Null when the pick is in the plan again, so there is nothing to put back. */
+export function restorePick(picks: readonly PlanItem[], pick: PlanItem, index: number): PlanItem[] | null {
+  if (picks.some((x) => x.id === pick.id)) return null;
+  return [...picks.slice(0, index), pick, ...picks.slice(index)];
+}
+
 /** Where the keyboard goes once a pick moved by its ↑ or ↓ button: the same button in its new row, the other one when that is off at the end of the list, else the row. */
 export function afterMove(part: "up" | "down", index: number, count: number): "up" | "down" | "row" {
   const off = (p: "up" | "down") => (p === "up" ? index === 0 : index === count - 1);
@@ -101,6 +112,15 @@ export function PlanMyWeekView({
   const [choices, setChoices] = useState<WorkItem[] | null>(null);
   const [focus, setFocus] = useState<{ id: string; part: "row" | "up" | "down" } | { removed: number } | null>(null);
   const root = useRef<HTMLElement>(null);
+  // What Undo puts back goes into the plan as it is by then, which the closure of the press that removed the row cannot see.
+  // Set once the render commits, never during it: a render React throws away must not leave Undo its picks.
+  const latest = useRef({ picks, onChange });
+  useLayoutEffect(() => {
+    latest.current = { picks, onChange };
+  });
+  const offered = useRef<number[]>([]);
+  // The plan is only on this card until it is kept: once it goes, an Undo offered for it has nothing to put back into.
+  useEffect(() => () => offered.current.forEach((id) => withdrawUndo(id)), []);
   // After a move or a remove the row has remounted in its new place or gone: the keyboard follows the row (its own button, when a button moved it), or lands on the pick that took the removed one's place.
   useEffect(() => {
     if (!focus || !root.current) return;
@@ -120,6 +140,26 @@ export function PlanMyWeekView({
   const move = (from: number, to: number) => {
     if (to < 0 || to >= picks.length || from === to) return;
     onChange(movePick(picks, from, to));
+  };
+  /** Takes the pick at `index` out, with an Undo for it (the Remove button and Delete or Backspace on its row alike). */
+  const remove = (index: number) => {
+    const gone = picks[index];
+    if (!gone) return;
+    onChange(picks.filter((x) => x.id !== gone.id));
+    setFocus({ removed: index });
+    offered.current.push(
+      offerUndo({
+        text: `Removed ${gone.title} from the plan.`,
+        undone: `Put ${gone.title} back in the plan.`,
+        async undo() {
+          // Added again meanwhile: nothing to put back.
+          const back = restorePick(latest.current.picks, gone, index);
+          if (!back) return false;
+          latest.current.onChange(back);
+        },
+        restored: () => setFocus({ id: gone.id, part: "row" }),
+      }),
+    );
   };
   const addTicket = (t: WorkItem) => {
     const pick = ticketPick(t);
@@ -165,8 +205,8 @@ export function PlanMyWeekView({
           Close
         </button>
       </div>
-      <p className="m-0 text-sm text-ws-ink3">
-        Pip's proposal from your open workstreams and the tickets assigned to you: what needs you first, then the oldest and most pressing, leaving out what is waiting or held. Nothing is written to Jira.
+      <p data-plan-intro className="m-0 text-sm text-ws-ink3">
+        Pip's proposal from your open workstreams and the tickets assigned to you: what needs you first, then the oldest and most pressing, leaving out what is waiting or held. <span data-plan-left-out>{PLAN_LEFT_OUT}</span> Nothing is written to Jira.
       </p>
       {picks.length === 0 ? (
         <p data-plan-empty className="m-0 text-sm text-ws-ink3">
@@ -198,11 +238,11 @@ export function PlanMyWeekView({
                   const rows = Array.from(root.current?.querySelectorAll<HTMLElement>("[data-plan-pick]") ?? []);
                   return void rows[Math.max(0, Math.min(rows.length - 1, n + step))]?.focus();
                 }
-                // Delete or Backspace on the row removes it, as its Remove button does.
+                // Delete or Backspace on the row removes it, as its Remove button does, with the same Undo.
                 if (ev.target === ev.currentTarget && !ev.altKey && !ev.ctrlKey && !ev.metaKey && (ev.key === "Delete" || ev.key === "Backspace")) {
                   ev.preventDefault();
                   ev.stopPropagation();
-                  return (onChange(picks.filter((x) => x.id !== p.id)), setFocus({ removed: n }));
+                  return remove(n);
                 }
                 if (!ev.altKey || (ev.key !== "ArrowUp" && ev.key !== "ArrowDown")) return;
                 ev.preventDefault();
@@ -227,7 +267,7 @@ export function PlanMyWeekView({
               <button type="button" data-plan-move="down" aria-label={`Move ${p.title} down`} disabled={n === picks.length - 1} onClick={() => (move(n, n + 1), setFocus({ id: p.id, part: "down" }))} className={small}>
                 ↓
               </button>
-              <button type="button" data-plan-remove aria-label={`Remove ${p.title}`} onClick={() => (onChange(picks.filter((x) => x.id !== p.id)), setFocus({ removed: n }))} className={small}>
+              <button type="button" data-plan-remove aria-label={`Remove ${p.title}`} onClick={() => remove(n)} className={small}>
                 Remove
               </button>
             </li>

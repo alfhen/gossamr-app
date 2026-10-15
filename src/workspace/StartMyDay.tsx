@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { itemKey } from "../lib/filter";
 import type { Need } from "../lib/needs";
 import { dayKey } from "./activityLogic";
-import { startMyDay, startMyDayShown, type DayAction, type DayEntry, type DayLine, type StartMyDay } from "../lib/startMyDay";
+import { DAY_ENTRIES, startMyDay, startMyDayShown, type DayAction, type DayEntry, type DayLine, type StartMyDay } from "../lib/startMyDay";
 import type { WorkstreamWither } from "../lib/workstreamWither";
 import { useWorkspace } from "../workspaceStore";
 import { openTicketByKey } from "./jump";
@@ -94,7 +94,10 @@ function Entry({ entry }: { entry: DayEntry }) {
 export function DayLineView({ line, initiallyOpen = false }: { line: DayLine; initiallyOpen?: boolean }) {
   // "and N more" is a button, so what the card cuts off is reachable by keyboard too.
   const [open, setOpen] = useState(initiallyOpen);
-  const entries = open ? [...line.entries, ...(line.rest ?? [])] : line.entries;
+  const all = [...line.entries, ...(line.rest ?? [])];
+  // A long list of tickets that may be unclear is a notice, not a decision: its title carries the count and More lists them, so it does not push the lines that need the person off the card.
+  const collapsed = line.kind === "unclear" && line.count > DAY_ENTRIES;
+  const entries = open ? all : collapsed ? [] : line.entries;
   return (
     <section data-day-line={line.kind} aria-label={line.title} className="grid gap-0.5">
       <h3 className="m-0 text-sm font-semibold text-ws-ink">{line.title}</h3>
@@ -102,11 +105,11 @@ export function DayLineView({ line, initiallyOpen = false }: { line: DayLine; in
         {entries.map((e) => (
           <Entry key={e.key} entry={e} />
         ))}
-        {line.more > 0 &&
-          (line.rest?.length ? (
+        {(collapsed || line.more > 0) &&
+          (collapsed || line.rest?.length ? (
             <li>
               <button type="button" data-day-more aria-expanded={open} onClick={() => setOpen(!open)} className="rounded px-1 text-ws-ink2 underline hover:bg-ws-hover focus-visible:outline-2 focus-visible:outline-ws-pip">
-                {open ? "Show fewer" : `Show ${line.more} more`}
+                {open ? "Show fewer" : collapsed ? "More" : `Show ${line.more} more`}
               </button>
             </li>
           ) : (
