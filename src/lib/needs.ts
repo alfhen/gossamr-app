@@ -126,6 +126,9 @@ export const GROUP_RANK: Record<NeedGroupKind, number> = { decide: 0, unblock: 1
 
 export const GROUP_LABEL: Record<NeedGroupKind, string> = { decide: "Decide", unblock: "Unblock", approve: "Approve" };
 
+/** The chip on one need's row: its group's name, except a GitHub review draft, which is posted rather than approved ("Post"). The group stays Approve. */
+export const chipLabel = (need: Pick<Need, "group" | "kind">): string => (need.kind === "review" && need.group === "approve" ? "Post" : GROUP_LABEL[need.group]);
+
 /** Drafts that may be approved together: pending comments, moves and subtasks. A description rewrite is read in its diff first, and a run or follow-up after its prompt or message, so never. */
 export const BATCHABLE: ReadonlySet<Intent["type"]> = new Set(["comment", "transition", "subtasks"]);
 

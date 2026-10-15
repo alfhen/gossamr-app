@@ -12,7 +12,7 @@ import { HOLD_ALL_HINT, buildCommands, isHoldAllKey, rankCommands, type CommandA
 import { useToasts } from "./toasts";
 import { DecisionShownContext, decisionShown } from "./decisionShown";
 import { MODE_LINE, NextStepLine, nextStepOnceKnown } from "./WorkstreamControls";
-import { AUTO_STEPS_HELP, AutomaticStepsPanel, CloseConfirm, StopConfirm, WorkstreamControlsView, choiceValue, controlActions, ruleChoice, type ControlActions } from "./WorkstreamControls";
+import { AUTO_STEPS_HELP, AutomaticStepsPanel, CloseConfirm, StopConfirm, WorkstreamControlsView, choiceValue, controlActions, holdFocusTarget, ruleChoice, tabWithin, type ControlActions } from "./WorkstreamControls";
 import { holdAllVisible, useWorkstreams } from "./workstreamsStore";
 import { CONNECT_TO_POST, DRAFT_OPEN, EscalationCardView, EscalationSent, FIX_ROUND_HELP, NO_REVIEW_DRAFT, POST_AS_IS_HELP, TAKE_OVER_HELP, TAKEN_OVER, draftOpen, escalationActions, escalationShown, fixRoundSent, postingReview } from "./EscalationCard";
 import { ESCALATION_GONE } from "../backend/mockWorkstreams";
@@ -174,6 +174,38 @@ describe("the workstream's controls", () => {
     expect(at(viewOf(), false, noop())).not.toContain("data-close-workstream");
     expect(at(viewOf(), true, noop())).not.toContain('aria-label="Close this workstream"');
     expect(renderToStaticMarkup(<CloseConfirm onClose={vi.fn()} onKeep={vi.fn()} />)).toContain("Keep");
+  });
+
+  it("describes the Close confirm by its question and detail, and keeps Tab between its two buttons (G13)", () => {
+    const html = renderToStaticMarkup(<CloseConfirm onClose={vi.fn()} onKeep={vi.fn()} />);
+    const [, q, d] = /aria-describedby="(\S+) (\S+)"/.exec(html)!;
+    expect(html).toContain(`<span id="${q}">Close it?</span>`);
+    expect(html).toContain(`<span id="${d}">Its conversation goes back to General; its agents and drafts are kept.</span>`);
+    // Two buttons: Tab from Keep (the second) goes to Close workstream, not out to Resume; Shift+Tab from Close wraps to Keep.
+    expect(tabWithin({ key: "Tab", shiftKey: false }, 1, 2)).toBe(0);
+    expect(tabWithin({ key: "Tab", shiftKey: false }, 0, 2)).toBe(1);
+    expect(tabWithin({ key: "Tab", shiftKey: true }, 0, 2)).toBe(1);
+    expect(tabWithin({ key: "Enter", shiftKey: false }, 0, 2)).toBe(-1);
+  });
+
+  it("keeps the held banner out of the live regions, so Hold's toast is the one announcement (G10)", () => {
+    const html = render(viewOf({ heldReason: HELD_PERSON }));
+    expect(html).toMatch(/<div role="group" aria-label="Why this workstream is held" data-held-banner=/);
+    for (const m of html.matchAll(/<(\w+)[^>]*role="status"[^>]*>(.*?)<\/\1>/g)) expect(m[2]).not.toContain("<button");
+    expect(html).toContain("data-ws-resume");
+  });
+
+  it("puts the keyboard on Resume after Hold and on Hold after Resume, and on the Manage switch when neither is there (G9)", () => {
+    const el = (name: string) => ({ name }) as unknown as HTMLElement;
+    const root = (found: Record<string, HTMLElement>) => ({ querySelector: (sel: string) => found[sel] ?? null }) as unknown as Pick<ParentNode, "querySelector">;
+    const resume = el("resume");
+    const hold = el("hold");
+    const manage = el("manage");
+    const both = root({ "[data-ws-resume]": resume, "[data-ws-hold]": hold, '[aria-label="Manage this workstream"]': manage });
+    expect(holdFocusTarget(both, "hold")).toBe(resume);
+    expect(holdFocusTarget(both, "resume")).toBe(hold);
+    expect(holdFocusTarget(root({ '[aria-label="Manage this workstream"]': manage }), "hold")).toBe(manage);
+    expect(holdFocusTarget(root({}), "resume")).toBeNull();
   });
 
   it("offers Hold while not held, and for every held reason a banner in its words with Resume instead", () => {

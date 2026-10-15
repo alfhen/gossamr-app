@@ -1,6 +1,8 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { INTERRUPTED, MOCK_TURN_DAYS, NEVER_RAN, SHOWN_MAX_CHARS, freshStart, mockUsage, openMockPipTurns, shownLine } from "./mockPipTurns";
-import { mockAsk } from "./mockPip";
+import { answersScript, mockAsk, numberedAnswers } from "./mockPip";
+import { docText } from "../lib/docs";
+import { answersPaired, answersProvenance } from "../lib/proposals";
 import type { ScreenContext } from "../types";
 
 const KEY = "gossamr-mock-pip-turns";
@@ -287,5 +289,78 @@ describe("mockAsk", () => {
     expect(kept?.text.length).toBeGreaterThan(0);
     expect(kept?.usage).toEqual(mockUsage("hello there", kept!.text));
     expect(events[events.length - 1]).toMatchObject({ type: "done", ok: true, usage: kept?.usage });
+  });
+});
+
+describe("the comment with the person's answers (G3)", () => {
+  const item = { connectionId: "mock", externalId: "CA-408", key: "CA-408" };
+  const ws = { id: "w1", item, answersDue: true };
+  const asked = "R2's open questions about CA-408: \u201cWhat does done mean?\u201d \u201cWhich export?\u201d \u201cWho owns it?\u201d\n\nMy answers: ";
+  const script = (answers: string) => answersScript(`${asked}${answers}`, [], ws)!;
+  const text = (answers: string) => {
+    const d = script(answers).draft!.intent;
+    return d.type === "comment" ? docText(d.body) : "";
+  };
+
+  it("pairs numbered answers, one per question, with the markers dropped", () => {
+    const body = text("1. Done means all three emails send. 2. Only the CRM export. 3. The support team.");
+    expect(body).toContain("\u201cWhat does done mean?\u201d\nAnswer: Done means all three emails send.");
+    expect(body).toContain("\u201cWhich export?\u201d\nAnswer: Only the CRM export.");
+    expect(body).toContain("\u201cWho owns it?\u201d\nAnswer: The support team.");
+    expect(answersPaired(body)).toBe(true);
+    expect(script("1) a\n2) b\n3) c").text).toContain("each under its question");
+  });
+
+  it("keeps numbered answers as written when their count doesn't match, rather than pairing them by lines", () => {
+    const reply = "1. All three emails send.\n2. Only the CRM export. 3. Support.\n4. And Ops reviews it.";
+    const body = text(reply);
+    expect(body).not.toContain("Answer: ");
+    expect(body).toContain("Answers: ");
+    expect(answersPaired(body)).toBe(false);
+    expect(script(reply).text).toContain("the questions first, then your answers as you wrote them");
+  });
+
+  it("starts the numbered list at a marker opening the reply or a line, after any preamble, not at a number in prose", () => {
+    const listed = text("Here they are:\n1. All three emails send.\n2. Only the CRM export.\n3. Support.");
+    expect(listed).toContain("\u201cWhat does done mean?\u201d\nAnswer: All three emails send.");
+    expect(listed).toContain("\u201cWho owns it?\u201d\nAnswer: Support.");
+    const prose = text("We ship version 2. Then the CRM export. Support owns it.");
+    expect(prose).toContain("\u201cWhat does done mean?\u201d\nAnswer: We ship version 2.");
+    expect(prose).toContain("\u201cWhich export?\u201d\nAnswer: Then the CRM export.");
+    expect(answersPaired(prose)).toBe(true);
+  });
+
+  it("pairs a numbered reply only when 1 to n each appear once, in order; anything else is kept as written", () => {
+    expect(numberedAnswers("1. a\n2. move to v3. now\n3. c", 3)).toEqual(["a", "move to v3. now", "c"]);
+    expect(numberedAnswers("1) a 2) b", 2)).toEqual(["a", "b"]);
+    // A repeated number is not guessed at; a number inside an answer stays answer text.
+    expect(numberedAnswers("1. A 2. B 2. C", 2)).toBeNull();
+    expect(numberedAnswers("1. Use version 2. Then deploy. 2. Only the CRM export. 3. Support.", 3)).toEqual(["Use version 2. Then deploy.", "Only the CRM export.", "Support."]);
+    expect(numberedAnswers("1. a 2. b 3. c 4. d", 3)).toBeNull();
+    expect(numberedAnswers("2. a 3. b", 2)).toBeNull();
+    expect(numberedAnswers("1. a 3. b", 2)).toBeNull();
+    expect(numberedAnswers("1. a 3. c 2. b", 3)).toBeNull();
+    // A "2." inside prose is not a marker; one after the end of a sentence is.
+    expect(numberedAnswers("1. We ship version 2. Then deploy.", 2)).toBeNull();
+    expect(numberedAnswers("1. We ship version 2. Then deploy. 2. Support.", 2)).toEqual(["We ship version 2. Then deploy.", "Support."]);
+    const body = text("1. Use version 2. Then deploy. 2. Only the CRM export. 3. Support.");
+    expect(body).toContain("\u201cWhat does done mean?\u201d\nAnswer: Use version 2. Then deploy.");
+    expect(body).toContain("\u201cWho owns it?\u201d\nAnswer: Support.");
+    expect(answersPaired(body)).toBe(true);
+  });
+
+  it("numbers the questions and answers once, and says so, when the answers don't pair", () => {
+    const body = text("It is all about winback.");
+    expect(body).toContain("1. \u201cWhat does done mean?\u201d\n2. \u201cWhich export?\u201d\n3. \u201cWho owns it?\u201d\n\nAnswers: It is all about winback.");
+    expect(answersPaired(body)).toBe(false);
+    const said = script("It is all about winback.").text;
+    expect(said).not.toContain("each under its question");
+    expect(said).toContain("the questions first, then your answers as you wrote them");
+  });
+
+  it("the provenance line claims pairing only when the comment's text has it", () => {
+    expect(answersProvenance("My answers: x", "\u201cQ?\u201d\nAnswer: x")).toContain("each answer under its question");
+    expect(answersProvenance("My answers: x", "1. \u201cQ?\u201d\n2. \u201cR?\u201d\n\nAnswers: x")).toContain("the questions, then your answers as written");
+    expect(answersProvenance("My answers: x")).toContain("each answer under its question");
   });
 });

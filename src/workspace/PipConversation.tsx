@@ -25,6 +25,7 @@ import { useAgentsEnabled } from "./agentsFlag";
 import { usePipHome } from "./pipHomeStore";
 import { contextFor, useWorkstreams } from "./workstreamsStore";
 import { useWorkspace } from "../workspaceStore";
+import { BUILD_ON_GITHUB } from "./githubSafety";
 
 export { PIP_INPUT_ID };
 /** The Pip pane's conversation when no workstream is in focus, and each workstream's own (`ws:<id>`). */
@@ -348,7 +349,7 @@ export function IntroAction({ conversation, text }: { conversation: string; text
 }
 
 /** What General's empty conversation opens with. */
-export const GENERAL_INTRO = "I follow along as you move around. Tell me what to show, or ask about what is on screen. I can filter this view and draft comments, moves and subtasks. Nothing is posted to Jira until you approve it. On GitHub, a build is told to push only its own branch to a draft pull request.";
+export const GENERAL_INTRO = `I follow along as you move around. Tell me what to show, or ask about what is on screen. I can filter this view and draft comments, moves and subtasks. Nothing is posted to Jira until you approve it. ${BUILD_ON_GITHUB}`;
 
 /**
  * The conversation itself: running agents, drafts left from before, then each question with its answer. Up and down move

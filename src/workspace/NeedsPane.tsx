@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { docText } from "../lib/docs";
 import { higherPriority, needAfter, leftOutLabel, needGroups, repeatedComments, REPEATED_COMMENT_NOTE, type Need } from "../lib/needs";
-import { ALLOW_MORE_STEPS, type Proposal, type Run, type WorkstreamView } from "../types";
+import { ALLOW_MORE_STEPS, type Proposal, type ReporterReply, type Run, type WorkstreamView } from "../types";
 import { stepsOf } from "../lib/workstreamHold";
 import { isReporterNudge, isReporterQuestions } from "../lib/proposals";
 import { useWorkspace } from "../workspaceStore";
@@ -11,13 +11,14 @@ import { planOpenQuestions, progressText, quietMinutes, quietText } from "./agen
 import { draftSummary, draftTitle, LiveDraftCard } from "./DraftCard";
 import { draftDecisions } from "./DraftPreview";
 import { useGithubUi } from "./githubUi";
+import { openComment } from "./jump";
 import { escalationActions, EscalationCardView, fixRoundSent, postingReview, TAKEN_OVER } from "./EscalationCard";
 import { failureAction } from "./failureActions";
 import { failureHelp } from "./failureHelp";
 import { inlineStartable, InlineStart, useInlineStarts } from "./InlineStart";
 import { GroupChip } from "./NeedsYou";
 import { groupId, openInWorkstream, openNeed, setPaneIntent, takePaneIntent } from "./needsActions";
-import { openInWorkstreamLabel } from "../lib/needs";
+import { chipLabel, openInWorkstreamLabel } from "../lib/needs";
 import { PermissionAsk, StopRunConfirm } from "./PermissionAsk";
 import { usePipHome } from "./pipHomeStore";
 import { RunAnswer } from "./RunAnswer";
@@ -358,6 +359,22 @@ export function TicketNow({ text }: { text: string }) {
   );
 }
 
+/** The reporter's reply as the decision quotes it: how it starts, and a link that opens the whole comment on the ticket. Nothing without a reply. */
+export function ReporterReplyQuote({ reply, ticketKey }: { reply?: ReporterReply | null; ticketKey?: string | null }) {
+  if (!reply) return null;
+  return (
+    <div data-reporter-reply className="grid gap-1">
+      <p className="m-0 text-xs font-semibold text-ws-ink2">The reporter replied</p>
+      <p className="m-0 whitespace-pre-wrap text-ws-ink2 [overflow-wrap:anywhere]">{`“${reply.excerpt}”`}</p>
+      {ticketKey && (
+        <button type="button" data-reporter-reply-open className="w-fit cursor-pointer border-0 bg-transparent p-0 text-xs font-semibold text-ws-ink2 underline" onClick={() => void openComment(ticketKey, reply.id)}>
+          Open their comment
+        </button>
+      )}
+    </div>
+  );
+}
+
 /** The three choices on a ticket its triage found not clear enough to plan: ask the reporter, answer the questions, or plan anyway. */
 function ReadinessBody({ view, need }: { view: WorkstreamView; need: Need }) {
   const r = view.readiness;
@@ -389,8 +406,9 @@ function ReadinessBody({ view, need }: { view: WorkstreamView; need: Need }) {
       )}
       {r.changed ? (
         <>
+          {r.replied && <ReporterReplyQuote reply={view.reporterReply} ticketKey={view.workstream.itemKey} />}
           <TicketNow text={description} />
-          <p className="m-0 text-ws-ink2">No plan starts until you choose. Read the ticket as it is now, then plan, or ask the reporter again; asking drafts a Jira comment for you to approve, and nothing is posted before that.</p>
+          <p className="m-0 text-ws-ink2">{`No plan starts until you choose. ${r.replied && view.reporterReply ? "Read their reply and the ticket, then plan or ask again" : "Read the ticket as it is now, then plan, or ask the reporter again"};`} asking drafts a Jira comment for you to approve, and nothing is posted before that.</p>
           <div className="flex flex-wrap items-center gap-2">
             <Btn tone="primary" disabled={busy} onClick={() => choose(() => store.planAnyway(id))}>
               Plan now
@@ -624,7 +642,7 @@ function NeedDecision({ need }: { need: Need }) {
                 {need.head}
               </b>
             )}
-            <GroupChip group={need.group} />
+            <GroupChip group={need.group} label={chipLabel(need)} />
             <span data-needs-pane-title className="min-w-0 truncate">
               {need.title}
             </span>

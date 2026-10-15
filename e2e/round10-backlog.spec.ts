@@ -80,10 +80,11 @@ test.describe("Ctrl+0 on Pip home inside a workstream goes on to General (G28)",
     await openPipHome(page);
     await workstreamRow(page, "CA-408").click();
     await expect(workstreamRow(page, "CA-408")).toHaveAttribute("aria-selected", "true");
-    // Not from Pip's composer: the person is typing there, so the workstream stays.
-    await page.locator("#pip-input").focus();
+    // Not from Pip's composer while a message is typed in it: the workstream stays (G7 says so in a toast).
+    await page.locator("#pip-input").fill("a message");
     await page.keyboard.press("ControlOrMeta+0");
     await expect(workstreamRow(page, "CA-408")).toHaveAttribute("aria-selected", "true");
+    await page.locator("#pip-input").fill("");
     await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
     await page.keyboard.press("ControlOrMeta+0");
     await expect(workstreamRow(page, "General")).toHaveAttribute("aria-selected", "true");

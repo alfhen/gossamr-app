@@ -3,7 +3,7 @@ import { MockBackend } from "../backend/mock";
 import { docFromText } from "./docs";
 import { HELD_ALL, HELD_BUDGET, HELD_DAILY, HELD_PERSON, HELD_QUOTA, HELD_RESTART, TRIPWIRE } from "../types";
 import type { Intent, ItemRef, Proposal, ProposalState, Run, RunKind, RunState, WorkstreamStage, WorkstreamView } from "../types";
-import { BATCHABLE, GROUP_RANK, byRank, escalationReason, higherPriority, needAfter, needGroups, needs, needsIn, leftOutLabel, readinessPrompt, readinessWhy, repeatedComments, titleFromTicketBlock, type Need, type NeedKind, type NeedsInput } from "./needs";
+import { BATCHABLE, GROUP_RANK, chipLabel, byRank, escalationReason, higherPriority, needAfter, needGroups, needs, needsIn, leftOutLabel, readinessPrompt, readinessWhy, repeatedComments, titleFromTicketBlock, type Need, type NeedKind, type NeedsInput } from "./needs";
 
 const NOW = Date.parse("2026-09-30T12:00:00Z");
 const iso = (minutesAgo: number) => new Date(NOW - minutesAgo * 60_000).toISOString();
@@ -737,5 +737,16 @@ describe("leftOutLabel", () => {
 
   it("is the title alone for a draft with no comment text", () => {
     expect(leftOutLabel(draft("t", transition("CA-401"), 5), "Move CA-401")).toBe("Move CA-401");
+  });
+});
+
+describe("the chip on a row (G6)", () => {
+  it("is Post for a GitHub review draft and the group's word for every other need, the group staying Approve", () => {
+    expect(chipLabel({ group: "approve", kind: "review" })).toBe("Post");
+    expect(chipLabel({ group: "approve", kind: "draft" })).toBe("Approve");
+    expect(chipLabel({ group: "decide", kind: "readiness" })).toBe("Decide");
+    const list = needs(input({ proposals: [draft("d-review", review(), 26)] }));
+    expect(list[0]).toMatchObject({ kind: "review", group: "approve" });
+    expect(chipLabel(list[0])).toBe("Post");
   });
 });

@@ -10,7 +10,7 @@ import { isPipHomeKey } from "./commands";
 import { footerHints, pipHomeHints } from "./footerHints";
 import { pipHomeKey, wrapTab, type PipHomeKeyEvent, type PipHomeKeyState } from "./pipHomeKeys";
 import { ShortcutHint } from "./ShortcutHint";
-import { HomeConversation, NO_WORKSTREAMS, PipHome, StepsColumn, WorkstreamList, rowTitle, type WorkstreamListProps } from "./PipHome";
+import { HomeConversation, NO_WORKSTREAMS, PipHome, StepsColumn, WorkstreamList, optionName, rowTitle, type WorkstreamListProps } from "./PipHome";
 import { usePipHome } from "./pipHomeStore";
 import { loadPrefs, usePrefs } from "./prefs";
 import { loadTabs, useTabs } from "./tabsStore";
@@ -85,6 +85,29 @@ describe("the workstream list on Pip home", () => {
     expect(html).toContain('data-workstream-row="general" role="option" aria-selected="false" tabindex="-1"');
   });
 
+  it("names each row by its key, title and status, with the status's sentence as its description rather than its name (G12)", () => {
+    const html = list();
+    const row = (id: string) => html.slice(html.indexOf(`data-workstream-row="${id}"`)).split("</li>")[0];
+    expect(html).toContain('data-workstream-row="general" role="option" aria-selected="true" tabindex="0" aria-label="General"');
+    for (const v of open) {
+      const tag = /^[^>]*>/.exec(row(v.workstream.id))![0];
+      const name = /aria-label="([^"]+)"/.exec(tag)![1];
+      expect(name.startsWith(`${v.workstream.itemKey} `)).toBe(true);
+      expect(name).toMatch(/, Idle(, may be unclear)?$/);
+      expect(name.length).toBeLessThan(120);
+      // The long sentence is read as the description, not the name.
+      const hint = /aria-describedby="([^"]+)"/.exec(tag)![1];
+      expect(row(v.workstream.id)).toContain(`id="${hint}" data-status-hint="true" class="sr-only"`);
+      expect(name).not.toContain("Nothing is running");
+    }
+  });
+
+  it("says in the name that a ticket may be unclear, and how many of Needs you wait in General (G12)", () => {
+    expect(optionName("DEVOPS-490 Fix login", "Idle", "may be unclear")).toBe("DEVOPS-490 Fix login, Idle, may be unclear");
+    expect(optionName("General", null)).toBe("General");
+    expect(optionName("General", "2 in Needs you")).toBe("General, 2 in Needs you");
+  });
+
   it("gives a row the cobweb of a workstream gone quiet in Jira while work went on, with its words for hover and a screen reader", () => {
     const [first, second] = open;
     const text = (days: number) => `No Jira update for ${days} days (3 runs since)`;
@@ -98,7 +121,7 @@ describe("the workstream list on Pip home", () => {
     expect(quiet).toContain('<svg aria-hidden="true"');
     expect(quiet).toContain("cobweb");
     // The words are in the row for a screen reader, and the web is not.
-    expect(quiet).toContain(`<span data-workstream-wither="true" class="sr-only">${text(5)}</span>`);
+    expect(quiet).toMatch(new RegExp(`<span data-workstream-wither="true" id="[^"]+" class="sr-only">${text(5).replace(/[()]/g, "\\$&")}<\\/span>`));
     // The meaning is on the row itself too, not only on hover: the status pill says Quiet and its one detail says how long.
     expect(quiet).toContain('<span data-status="quiet"');
     expect(quiet).toMatch(/data-workstream-wither-short="" class="min-w-0 truncate">· No Jira update · 5d<\/span>/);

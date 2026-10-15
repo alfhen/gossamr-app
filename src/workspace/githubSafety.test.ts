@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { GITHUB_SAFETY } from "./githubSafety";
+import { BUILD_ON_GITHUB, GITHUB_SAFETY } from "./githubSafety";
 import { GENERAL_INTRO } from "./PipConversation";
 import { ORIENTATION_SAFETY } from "./PipOrientation";
 
@@ -22,8 +22,14 @@ describe("what the app says it does on GitHub (G5, G6)", () => {
   });
 
   it("calls the build's branch rule a request, in the orientation and Pip's intro", () => {
-    expect(ORIENTATION_SAFETY).toContain("a build is told to push only its own branch");
-    expect(GENERAL_INTRO).toContain("a build is told to push only its own branch");
+    for (const text of [ORIENTATION_SAFETY, GENERAL_INTRO]) {
+      expect(text).toContain(BUILD_ON_GITHUB);
+      expect(text).not.toContain("is told to push");
+    }
+    // As the safety sheet says it: runs as the person, only when Pushing is ticked, a request and not a lock.
+    expect(BUILD_ON_GITHUB).toContain("runs as you");
+    expect(BUILD_ON_GITHUB).toContain("when Pushing is ticked");
+    expect(BUILD_ON_GITHUB).toContain("That is a request, not a lock");
   });
 
   it("says What Jira saw lists only what Gossamr posted", () => {

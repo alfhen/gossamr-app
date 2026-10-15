@@ -220,6 +220,28 @@ export function readinessLine(workstream: PipWorkstream | null): string | null {
  * (`planAfterAnswers`). The message is the composer's prefill (`readinessPrompt`): the questions quoted, then "My answers:"
  * and what the person wrote. Null when no answers are due, or there is no ticket.
  */
+/**
+ * A reply's numbered answers 1 to `n`, markers dropped, or null unless the reply numbers them plainly: the list starts at
+ * a "1." opening the reply or a line, after any preamble, and then "2." to "n." each appear once, in order, with no
+ * "n+1.", each opening a line or following the end of a sentence (or written "2)"). Anything else (a repeated number, a number inside an answer such as "version 2.", more answers than questions)
+ * is kept as written rather than guessed at.
+ */
+export function numberedAnswers(answer: string, n: number): string[] | null {
+  const first = answer.match(/(?:^|\n)\s*1[.)]\s+/);
+  if (!first || n < 2) return null;
+  const rest = answer.slice((first.index ?? 0) + first[0].length);
+  // A marker opens a line, or follows the end of a sentence ("... done. 2. Only"), or is a "k)" after a space; a "2." in
+  // the middle of prose ("We ship version 2. Then") is not one.
+  const marks = [...rest.matchAll(/(?:^|\n)\s*(\d+)[.)]\s+|(?<=[.!?])\s+(\d+)\.\s+|(?<=\s)(\d+)\)\s+/g)].map((m) => ({
+    k: Number(m[1] ?? m[2] ?? m[3]),
+    at: m.index,
+    end: m.index + m[0].length,
+  }));
+  if (marks.length !== n - 1 || marks.some((m, i) => m.k !== i + 2)) return null;
+  const items = [rest.slice(0, marks[0].at), ...marks.map((m, i) => rest.slice(m.end, marks[i + 1]?.at ?? rest.length))].map((s) => s.trim());
+  return items.every(Boolean) ? items : null;
+}
+
 export function answersScript(prompt: string, runs: readonly Run[], workstream: PipWorkstream | null): PipScript | null {
   const item = workstream?.item;
   if (!workstream?.answersDue || !item) return null;
@@ -227,13 +249,15 @@ export function answersScript(prompt: string, runs: readonly Run[], workstream: 
   const asked = at >= 0 ? prompt.slice(0, at) : "";
   const questions = [...asked.matchAll(/\u201c([^\u201d]*)\u201d/g)].map((m) => m[1].trim()).filter((q) => q && q !== "(it listed no questions)");
   const answer = (at >= 0 ? prompt.slice(at + "My answers:".length) : prompt).trim();
-  // As many lines, or else as many sentences, as questions pair them up; any other shape gets every question, then the answer as it was written.
-  const parts = [answer.split(/\n+/), answer.split(/(?<=[.!?])\s+/)].map((p) => p.map((l) => l.trim()).filter(Boolean));
-  const split = questions.length > 1 ? parts.find((p) => p.length === questions.length) : undefined;
+  // As many numbered items (their markers dropped), or lines, or else sentences, as questions pair them up; any other shape gets every question, numbered, then the answer as it was written.
+  // A reply that numbers its answers (a marker opening it or a line) is paired only by those numbers, as lines or sentences would then shift the answers.
+  const numbered = /(?:^|\n)\s*\d+[.)]\s+/.test(answer);
+  const parts = numbered ? [] : [answer.split(/\n+/), answer.split(/(?<=[.!?])\s+/)].map((p) => p.map((l) => l.trim()).filter(Boolean));
+  const split = questions.length < 2 ? undefined : numbered ? (numberedAnswers(answer, questions.length) ?? undefined) : parts.find((p) => p.length === questions.length);
   const body = [ANSWERS_OPENING, ""];
   if (split) questions.forEach((q, i) => body.push(`\u201c${q}\u201d`, `Answer: ${split[i]}`, ""));
   else {
-    questions.forEach((q) => body.push(`\u201c${q}\u201d`));
+    questions.forEach((q, i) => body.push(questions.length > 1 ? `${i + 1}. \u201c${q}\u201d` : `\u201c${q}\u201d`));
     if (questions.length) body.push("");
     body.push(questions.length === 1 ? `Answer: ${answer}` : `Answers: ${answer}`);
   }
@@ -242,7 +266,7 @@ export function answersScript(prompt: string, runs: readonly Run[], workstream: 
     .sort((a, b) => (b.endedAt ?? b.queuedAt).localeCompare(a.endedAt ?? a.queuedAt))[0];
   return {
     steps: ["Read the open questions", "Drafted a comment with your answers"],
-    text: `I drafted a comment on **${item.key}** with your answers, each under its question. It goes to the ticket as a comment, not a change to the description, and nothing is posted until you approve it.${triage ? " Once you post the answers, I'll draft the plan." : ""}`,
+    text: `I drafted a comment on **${item.key}** with your answers, ${split ? "each under its question" : "the questions first, then your answers as you wrote them"}. It goes to the ticket as a comment, not a change to the description, and nothing is posted until you approve it.${triage ? " Once you post the answers, I'll draft the plan." : ""}`,
     filter: null,
     draft: { intent: { type: "comment", item, body: docFromText(body.join("\n").trim()) }, label: ANSWERS_COMMENT_LABEL },
   };

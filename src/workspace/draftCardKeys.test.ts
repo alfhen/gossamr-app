@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { holdWhilePressed } from "./draftCardKeys";
+import { escLeavesPause, holdWhilePressed } from "./draftCardKeys";
 import { setDraftEditIntent, takeDraftEditIntent } from "./draftKeys";
 import { showPause } from "./DraftCard";
 
@@ -67,5 +67,22 @@ describe("the posting pause (G5)", () => {
 
   it("does nothing once the pause is gone", () => {
     expect(() => showPause({ querySelector: () => null } as unknown as ParentNode)).not.toThrow();
+  });
+});
+
+describe("Esc in the editor while the posting pause shows (G14)", () => {
+  const esc = (target: { tagName?: string; type?: string } | null = { tagName: "TEXTAREA" }, over: { key?: string; defaultPrevented?: boolean } = {}) => ({ key: "Escape", defaultPrevented: false, target, ...over });
+  it("leaves the editor and takes the pause with it, from the text box or a text input", () => {
+    expect(escLeavesPause(esc(), true, true)).toBe(true);
+    expect(escLeavesPause(esc({ tagName: "INPUT", type: "text" }), true, true)).toBe(true);
+  });
+  it("leaves everything else alone: no pause, no editing, another key, a key someone took, another control", () => {
+    expect(escLeavesPause(esc(), false, true)).toBe(false);
+    expect(escLeavesPause(esc(), true, false)).toBe(false);
+    expect(escLeavesPause(esc(undefined, { key: "Enter" }), true, true)).toBe(false);
+    expect(escLeavesPause(esc(undefined, { defaultPrevented: true }), true, true)).toBe(false);
+    expect(escLeavesPause(esc({ tagName: "BUTTON" }), true, true)).toBe(false);
+    expect(escLeavesPause(esc({ tagName: "INPUT", type: "checkbox" }), true, true)).toBe(false);
+    expect(escLeavesPause(esc(null), true, true)).toBe(false);
   });
 });

@@ -5,13 +5,14 @@ import { hunkLinesAround } from "../lib/diffHunks";
 import { REVIEW_NOT_FOUND_NOTE, REVIEW_OUTDATED_NOTE } from "../lib/proposals";
 import type { Proposal, ReviewAccess } from "../types";
 import { DraftCard, type DraftCardProps } from "./DraftCard";
+import { riskNote } from "../lib/riskyText";
 import { docFromText } from "../lib/docs";
 import { draftPreviewBody } from "./DraftPreview";
 import { usePullView, type PullDiffState } from "./pullViewStore";
 import { sample } from "./reviewSample";
 import { scriptPip } from "../backend/mockPip";
 import type { ScreenContext } from "../types";
-import { editThenPost, editThenPullView, settlesEdit, followDraft, hasMarkdown, keptOlderNote, SUMMARY, MARKDOWN_HINT, postedLine, postedWith, postLabel, postsWhat, pullViewOf, ReviewDraft, reviewEdit, ReviewHunk, reviewWithPipPrompt, toggleDropped, type Held } from "./ReviewDraft";
+import { editThenPost, editThenPullView, settlesEdit, followDraft, hasMarkdown, keptOlderNote, SUMMARY, MARKDOWN_HINT, postedLine, postedWith, postLabel, postsWhat, pullViewOf, ReviewDraft, reviewEdit, reviewRisks, ReviewHunk, reviewWithPipPrompt, toggleDropped, type Held } from "./ReviewDraft";
 
 vi.mock("../components/autoHeight", async (original) => ({ ...(await original<typeof import("../components/autoHeight")>()), useAutoHeight: vi.fn() }));
 
@@ -381,5 +382,35 @@ describe("the Markdown preview under the review's text boxes", () => {
     expect(posted).not.toContain("data-review-preview");
     expect(posted).toContain('<b class="font-semibold">Blocking:</b>');
     expect(posted).not.toContain("**Blocking:**");
+  });
+});
+
+describe("the pause before a review with risky edits is posted (G1)", () => {
+  const unchanged = intent.comments.map((c) => ({ ...c, dropped: false }));
+
+  it("finds nothing in the draft as it is, or in an edit that adds no risk", () => {
+    expect(reviewRisks(intent, intent.summary, unchanged)).toEqual({ risks: [], quote: {} });
+    expect(reviewRisks(intent, `${intent.summary} Thanks, @maria.`, unchanged).risks).toEqual([]);
+  });
+
+  it("finds a broad mention added to the summary", () => {
+    expect(reviewRisks(intent, `${intent.summary} cc @everyone`, unchanged)).toEqual({ risks: ["broadcast"], quote: { broadcast: "@everyone" } });
+  });
+
+  it("finds a secret added to an inline comment, and masks it in the quote", () => {
+    const comments = [{ ...unchanged[0], body: `${unchanged[0].body} password: hunter22x` }, unchanged[1]];
+    const found = reviewRisks(intent, intent.summary, comments);
+    expect(found.risks).toEqual(["secret"]);
+    expect(found.quote.secret).toBe("hu…");
+  });
+
+  it("joins the risks of the summary and the comments, and ignores a dropped comment", () => {
+    const comments = [{ ...unchanged[0], body: "cc @here" }, { ...unchanged[1], body: "token: abcdef123456", dropped: true }];
+    expect(reviewRisks(intent, `${intent.summary} cc @all`, comments).risks).toEqual(["broadcast"]);
+    expect(reviewRisks(intent, intent.summary, [comments[0], { ...comments[1], dropped: false }]).risks).toEqual(["broadcast", "secret"]);
+  });
+
+  it("says everyone on the pull request would see it, not the ticket", () => {
+    expect(riskNote(["broadcast"], { broadcast: "@everyone" }, "the pull request")).toBe("Your edit mentions everyone at “@everyone”. Everyone on the pull request would see it once it is posted.");
   });
 });

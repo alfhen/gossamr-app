@@ -5,7 +5,7 @@ import { itemRef } from "../backend/mockConnector";
 import type { StartMyDay } from "../lib/startMyDay";
 import type { Intent, Proposal } from "../types";
 import { useWorkspace } from "../workspaceStore";
-import { JiraSentView, SentRow } from "./JiraSentView";
+import { GITHUB_NOT_LISTED, JiraSentView, SENT_EMPTY, SentRow } from "./JiraSentView";
 import { jiraSent } from "../lib/jiraSent";
 import { DAY_EMPTY, DayLineView, StartMyDayView, doneForNow, runDayAction, showStartMyDay } from "./StartMyDay";
 import { usePipHome } from "./pipHomeStore";
@@ -150,5 +150,12 @@ describe("What Jira saw from me: the way back", () => {
   it("has a back link to Pip home in its header", () => {
     const html = renderToStaticMarkup(<JiraSentView />);
     expect(html).toMatch(/<button[^>]*data-sent-back[^>]*>← Pip home<\/button>/);
+  });
+
+  it("says in its header and its empty note that GitHub reviews are not listed, and where they show (G2)", () => {
+    const html = renderToStaticMarkup(<JiraSentView />).replace(/&#x27;/g, "'").replace(/&quot;/g, '"');
+    expect(html).toContain("GitHub reviews Gossamr posted are not listed here");
+    expect(GITHUB_NOT_LISTED).toContain("You posted an agent's GitHub review");
+    expect(SENT_EMPTY).toContain(GITHUB_NOT_LISTED);
   });
 });

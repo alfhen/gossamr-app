@@ -20,7 +20,7 @@ import { useRunSetup } from "./runSetupStore";
 import { useRuns } from "./runsStore";
 import { useWorkspace, workflowOfItem } from "../workspaceStore";
 import { PEEK_DRAFT_MARGIN, peekFocusAfterLeaving } from "./peekDrafts";
-import { useCardKeys } from "./draftCardKeys";
+import { escLeavesPause, useCardKeys } from "./draftCardKeys";
 import { takeDraftEditIntent } from "./draftKeys";
 import { itemKey } from "../lib/filter";
 import { FOLLOW_UP_LIMIT, followUpProblem, followUpTitle, nextPass } from "./followUp";
@@ -290,6 +290,12 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
     setEditing(true);
     focusField("textarea, input:not([type]), input[type=text]");
   };
+  /** Esc in the editor while the pause shows: the editor closes with the text kept, the pause goes with it (the next Approve checks the words again) and the Edit button has the keyboard. */
+  const leaveEditing = () => {
+    setPause(null);
+    setEditing(false);
+    focusField("[data-draft-edit]");
+  };
   // Another edit takes the pause back: it said what the earlier words held.
   useEffect(() => setPause(null), [body, newTitle, newText]);
 
@@ -378,7 +384,15 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
         {draftTitle(p, answer?.label)}
         <span className="ml-auto font-normal text-ws-ink3">{BADGE[state]}</span>
       </div>
-      <div className="grid gap-2 px-3 py-2.5">
+      <div
+        className="grid gap-2 px-3 py-2.5"
+        onKeyDown={(ev) => {
+          if (!escLeavesPause({ key: ev.key, defaultPrevented: ev.defaultPrevented, target: ev.target as HTMLInputElement }, !!pause, editing)) return;
+          ev.preventDefault();
+          ev.stopPropagation();
+          leaveEditing();
+        }}
+      >
         {intent.type === "comment" &&
           (editing && open ? (
             <MentionTextarea
@@ -608,7 +622,7 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
             <span data-created-by="pip" className="mr-2 rounded-full bg-ws-pip-soft px-2 text-xs font-semibold text-ws-pip">
               Drafted by Pip
             </span>
-            {answersProvenance(replyPrompt)}
+            {answersProvenance(replyPrompt, intent.type === "comment" ? body : undefined)}
           </p>
         )}
         {p.state.type === "retired" && <p className="m-0 text-sm text-ws-ink3">{p.state.reason}</p>}
@@ -667,7 +681,7 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
                   </button>
                 )}
                 {(intent.type === "comment" || rewrite) && (
-                  <button type="button" disabled={working} onClick={() => setEditing(!editing)} className={button}>
+                  <button type="button" data-draft-edit disabled={working} onClick={() => setEditing(!editing)} className={button}>
                     {editing ? "Done editing" : "Edit"}
                   </button>
                 )}

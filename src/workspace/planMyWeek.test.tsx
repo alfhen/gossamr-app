@@ -6,7 +6,7 @@ import { isoWeek, ticketPick, type PlanItem } from "../lib/planMyWeek";
 import type { WorkItem, WorkstreamView } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { buildCommands, rankCommands, type CommandActions } from "./commands";
-import { PLAN_EMPTY, PLAN_LEFT_OUT, PlanMyWeek, PlanMyWeekView, afterMove, afterRemove, restorePick, ThisWeekView, findTicket, rowStep, CHOICES, revealChoices } from "./PlanMyWeek";
+import { PLAN_EMPTY, PLAN_LEFT_OUT, PlanMyWeek, PlanMyWeekView, afterMove, afterRemove, restorePick, ThisWeekView, findTicket, rowStep, CHOICES, revealChoices, movedText } from "./PlanMyWeek";
 import { WorkstreamList } from "./PipHome";
 import { usePipHome } from "./pipHomeStore";
 import { loadPrefs, usePrefs } from "./prefs";
@@ -71,8 +71,24 @@ describe("the Plan my week card", () => {
     expect(html).toMatch(/aria-label="Move CA-1 Something up" disabled/);
     expect(html).toMatch(/aria-label="Move CA-2 Something down" disabled/);
     expect(html).not.toMatch(/aria-label="Move CA-1 Something down" disabled/);
-    expect(html).toContain("Alt and the arrow keys move it.");
+    expect(html).toContain('aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown"');
     expect(html).toContain('draggable="true"');
+  });
+
+  it("names a row by its position and title, with the because line as its description rather than in its name (G11)", () => {
+    const html = view([pick("CA-1"), pick("CA-2", { because: "2 things need you here: Draft comment." })]);
+    const row = (key: string) => new RegExp(`<li data-plan-pick="[^"]*${key}"[^>]*>`).exec(html)![0];
+    expect(row("CA-2")).toContain('aria-label="2. CA-2 Something"');
+    expect(row("CA-2")).not.toContain("because");
+    expect(row("CA-2")).not.toContain("Alt and the arrow");
+    const described = /aria-describedby="([^"]+)"/.exec(row("CA-2"))![1];
+    expect(html).toContain(`id="${described}" data-plan-because="true"`);
+    expect(html).toContain('role="status" data-plan-moved="true" class="sr-only"');
+  });
+
+  it("says where a pick went after a move (G11)", () => {
+    expect(movedText({ ticketKey: "CA-2", title: "CA-2 Something" }, 0, 3)).toBe("CA-2 moved to position 1 of 3");
+    expect(movedText({ ticketKey: null, title: "Fix login" }, 2, 3)).toBe("Fix login moved to position 3 of 3");
   });
 
   it("says so when nothing is free, and keeps the add field", () => {
@@ -210,6 +226,8 @@ describe("the This week list", () => {
     expect(html).toMatch(/data-this-week-item="ws:w2" data-done="true"[^>]*><span aria-hidden="true" class="text-ws-done">✓/);
     expect(html).toContain('aria-label="Done: CA-2 Something"');
     expect(html).toContain('aria-label="CA-1 Something"');
+    // The header's button says whose plan it edits (G11).
+    expect(html).toContain('data-this-week-edit="true" aria-label="Edit this week&#x27;s plan"');
   });
 
   it("marks a closed-not-done item apart from a done one: a muted mark, a title, its own words", () => {

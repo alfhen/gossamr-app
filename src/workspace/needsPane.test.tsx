@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import type { Need } from "../lib/needs";
-import { closeTarget, HigherPriority, EDIT_FIELD, advancedText, doneText, postedToJira, waitStarted, nextAdvanced, endEditing, firstDecision } from "./NeedsPane";
+import { ReporterReplyQuote, closeTarget, HigherPriority, EDIT_FIELD, advancedText, doneText, postedToJira, waitStarted, nextAdvanced, endEditing, firstDecision } from "./NeedsPane";
 
 /** A stand-in for the pane: each selector it is asked for answers with what the test put there. */
 const pane = (found: Record<string, unknown[]>) =>
@@ -156,5 +156,19 @@ describe("Esc from a decision (G7)", () => {
     expect(closeTarget(inside, paneOf([inside]), () => row)).toBe(row);
     expect(closeTarget(el({ tagName: "BODY" }), paneOf([]), () => row)).toBe(row);
     expect(closeTarget(null, null, () => row)).toBe(row);
+  });
+});
+
+describe("the reporter's reply in the decision (G4)", () => {
+  it("quotes the reply and offers to open the comment", () => {
+    const html = renderToStaticMarkup(<ReporterReplyQuote reply={{ id: "c1", excerpt: "It should send three emails." }} ticketKey="CA-408" />);
+    expect(html).toContain("The reporter replied");
+    expect(html).toContain("“It should send three emails.”");
+    expect(html).toContain("Open their comment");
+  });
+
+  it("shows nothing without a reply, and no link without a ticket", () => {
+    expect(renderToStaticMarkup(<ReporterReplyQuote reply={undefined} ticketKey="CA-408" />)).toBe("");
+    expect(renderToStaticMarkup(<ReporterReplyQuote reply={{ id: "c1", excerpt: "Yes." }} ticketKey={null} />)).not.toContain("Open their comment");
   });
 });

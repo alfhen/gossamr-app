@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { BUILD_ON_GITHUB } from "./githubSafety";
 import { usePrefs } from "./prefs";
 
 /** The first-run orientation on Pip home, in the app's own words for each term. Kept apart so a test can read the copy. */
@@ -15,7 +16,7 @@ export const ORIENTATION_TERMS: readonly { term: string; text: string }[] = [
   { term: "Worktree", text: "The run's own checkout of your repository, so runs don't step on each other or on your files." },
 ];
 
-export const ORIENTATION_SAFETY = "Nothing is posted to Jira until you click to approve it. On GitHub, a build is told to push only its own branch to a draft pull request.";
+export const ORIENTATION_SAFETY = `Nothing is posted to Jira until you click to approve it. ${BUILD_ON_GITHUB}`;
 
 /** Where focus goes when the card closes from its button, so the keyboard stays on Pip home: the list's current row. */
 function focusList() {

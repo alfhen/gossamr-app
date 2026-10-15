@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { GROUP_LABEL, needGroups, type Need, type NeedGroup, type NeedGroupKind } from "../lib/needs";
+import { chipLabel, GROUP_LABEL, needGroups, type Need, type NeedGroup, type NeedGroupKind } from "../lib/needs";
 import { relativeTime } from "../lib/views";
 import { useWorkspace } from "../workspaceStore";
 import { groupId, openNeed } from "./needsActions";
@@ -20,10 +20,10 @@ const CHIP_TITLE: Record<NeedGroupKind, string> = {
 };
 
 /** What kind of ask a need is: Decide, Unblock or Approve. */
-export function GroupChip({ group }: { group: NeedGroupKind }) {
+export function GroupChip({ group, label }: { group: NeedGroupKind; /** The chip's word when it isn't the group's (a review draft's "Post"). */ label?: string }) {
   return (
     <span data-needs-you-chip={group} title={CHIP_TITLE[group]} className={`shrink-0 rounded-full px-1.5 text-[10px] leading-4 font-semibold ${CHIP[group]}`}>
-      {GROUP_LABEL[group]}
+      {label ?? GROUP_LABEL[group]}
     </span>
   );
 }
@@ -33,7 +33,7 @@ const age = (need: Pick<Need, "at">, now: number) => relativeTime(need.at, new D
 /** A group's whole line, for its name and tooltip: the ticket, what is asked, why, how long it has waited, and how many more. */
 export function groupText(g: NeedGroup, now: number): string {
   const more = g.count > 1 ? ` · +${g.count - 1} more` : "";
-  return `${g.ticketKey ? `${g.ticketKey} · ` : ""}${g.title} · ${GROUP_LABEL[g.top.group]} · ${g.top.why} · ${age(g.top, now)}${more}`;
+  return `${g.ticketKey ? `${g.ticketKey} · ` : ""}${g.title} · ${chipLabel(g.top)} · ${g.top.why} · ${age(g.top, now)}${more}`;
 }
 
 /** An open group's row stands for its top need, which is listed under it; says so, since j and k step past that one. */
@@ -109,7 +109,7 @@ function NeedRow({ need, gid, now, onPick, showTicket, top }: { need: Need; gid:
           <span data-needs-you-need-title title={need.title} className="line-clamp-2 min-w-0 flex-1 [overflow-wrap:anywhere] text-ws-ink">
             {need.title}
           </span>
-          <GroupChip group={need.group} />
+          <GroupChip group={need.group} label={chipLabel(need)} />
           <span className="shrink-0 text-xs text-ws-ink3">{age(need, now)}</span>
         </span>
         <Asking need={need} />
@@ -160,7 +160,7 @@ function GroupRow({ group: g, now, onPick, openByDefault }: { group: NeedGroup; 
               {g.count} here
             </span>
           ) : (
-            <GroupChip group={g.top.group} />
+            <GroupChip group={g.top.group} label={chipLabel(g.top)} />
           )}
         </span>
         {!expanded && (
