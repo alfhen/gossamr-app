@@ -348,7 +348,7 @@ export function IntroAction({ conversation, text }: { conversation: string; text
 }
 
 /** What General's empty conversation opens with. */
-export const GENERAL_INTRO = "I follow along as you move around. Tell me what to show, or ask about what is on screen. I can filter this view and draft comments, moves and subtasks. Nothing is posted to Jira or GitHub until you approve.";
+export const GENERAL_INTRO = "I follow along as you move around. Tell me what to show, or ask about what is on screen. I can filter this view and draft comments, moves and subtasks. Nothing is posted to Jira until you approve it. On GitHub, a build only pushes its own branch to a draft pull request.";
 
 /**
  * The conversation itself: running agents, drafts left from before, then each question with its answer. Up and down move

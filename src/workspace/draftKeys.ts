@@ -129,6 +129,20 @@ export function escapeCollapses(ev: Pick<KeyEventLike, "key" | "metaKey" | "ctrl
 /** Letters the conversation steps between cards with; they are never typing. */
 const STEPS = new Set(["j", "k"]);
 
+/** How long a press of e on a compact card waits for the full card to mount, which a peek opening can take a few frames to do. */
+const EDIT_INTENT_MS = 3000;
+let editIntent: { id: string; at: number } | null = null;
+/** e on a compact card: the full card of draft `id`, once it shows, starts in its editing. */
+export const setDraftEditIntent = (id: string, now = Date.now()) => void (editIntent = { id, at: now });
+/** Whether draft `id`'s card was opened for editing: once, so a card shown later is not. */
+export function takeDraftEditIntent(id: string, now = Date.now()): boolean {
+  const was = editIntent;
+  if (!was || was.id !== id || now - was.at > EDIT_INTENT_MS) return false;
+  // Let go once the current task is over: a mount effect that runs twice in a row (React's development check) reads it twice.
+  queueMicrotask(() => void (editIntent === was && (editIntent = null)));
+  return true;
+}
+
 interface CardActs {
   approve?(): void;
   /** Skips at once and offers Undo; there is nothing to confirm. */

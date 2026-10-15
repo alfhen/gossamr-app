@@ -117,7 +117,7 @@ describe("adding a ticket", () => {
     expect(key("ca-2")).toBe("CA-2");
     expect(key("CA-2 subject")).toBe("CA-2");
     expect(key("checkout")).toBe("CA-1");
-    expect(key("old thing")).toEqual({ reason: "none" });
+    expect(key("old thing")).toEqual({ reason: "done", key: "CA-3" });
     expect(key("  ")).toEqual({ reason: "none" });
   });
 
@@ -126,6 +126,15 @@ describe("adding a ticket", () => {
     expect(findTicket("CA-3 the old thing", tickets, [])).toEqual({ reason: "done", key: "CA-3" });
     // Words alone, or a key nobody has, are still just "none".
     expect(findTicket("CA-9", tickets, [])).toEqual({ reason: "none" });
+  });
+
+  it("says so when the words match only Done tickets: one by its key, several together", () => {
+    expect(findTicket("old thing", tickets, [])).toEqual({ reason: "done", key: "CA-3" });
+    const more = [...tickets, t("CA-4", "Old banner", "done")];
+    expect(findTicket("old", more, [])).toEqual({ reason: "doneMany" });
+    // An open match still wins over a Done one.
+    expect(findTicket("old", [...more, t("CA-5", "Old cart")], [])).toEqual({ ticket: expect.objectContaining({ title: "Old cart" }) });
+    expect(findTicket("nothing like it", more, [])).toEqual({ reason: "none" });
   });
 
   it("shows several matches to choose from instead of picking one: the person's own first, at most five, taken ones left out", () => {

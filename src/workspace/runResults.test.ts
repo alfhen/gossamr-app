@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MockBackend } from "../backend/mock";
 import { itemRef } from "../backend/mockConnector";
-import { commentText, jiraNote, ticketFromAnswer, ticketKeys, ticketProposal } from "../backend/mockRunResult";
+import { commentText, jiraNote, namesUrl, ticketFromAnswer, ticketKeys, ticketProposal } from "../backend/mockRunResult";
 import results from "../../src-tauri/test-fixtures/agents/results.json";
 import tickets from "../../src-tauri/test-fixtures/agents/ticket-results.json";
 import type { CodeChange, Run } from "../types";
@@ -244,6 +244,21 @@ describe("drafting from a run", () => {
     expect(other.change?.kind).toBe("branch");
     expect(commentText(other.note!, other.change)).toContain("didn't mark anything for Jira");
     expect(commentText(other.note!, other.change)).not.toContain("Pull request:");
+    // One short opener, no word about the sandbox, and the pull request's link only once.
+    expect(commentText(other.note!, null)).toMatch(/^Investigated with an agent\.\n\n/);
+    expect(commentText(other.note!, null, "plan")).toMatch(/^Planned with an agent\.\n\n/);
+    expect(commentText(other.note!, null, "build")).toMatch(/^Built with an agent\.\n\n/);
+    expect(commentText(other.note!, null)).not.toContain("only read code");
+    const pr = { kind: "pullRequest", url: "https://github.com/acme/webshop/pull/7" } as CodeChange;
+    expect(commentText({ text: "Opened it.", fromMarker: true }, pr, "build")).toMatch(/Opened it\.\n\nPull request: https:\/\/github.com\/acme\/webshop\/pull\/7$/);
+    const said = commentText({ text: `Opened ${pr.url}.`, fromMarker: true }, pr, "build");
+    expect(said.split(pr.url)).toHaveLength(2);
+    expect(said).not.toContain("Pull request:");
+    // Another pull request whose link starts with this one's is not this one: the link is still given.
+    expect(commentText({ text: "Follows https://github.com/acme/webshop/pull/70.", fromMarker: true }, pr, "build")).toContain(`Pull request: ${pr.url}`);
+    expect(namesUrl(`See ${pr.url}/files`, pr.url)).toBe(true);
+    expect(namesUrl(`See ${pr.url}7`, pr.url)).toBe(false);
+    expect(namesUrl("anything", "")).toBe(false);
   });
 });
 

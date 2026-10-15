@@ -177,8 +177,8 @@ describe("the comments about a ticket's open questions", () => {
 
   it("is a follow-up when the asked questions open with the thanks for the reporter's answer, and still the reporter's questions", () => {
     const body = (text: string) => ({ type: "comment", item: ref("A-1"), body: { blocks: [{ type: "paragraph", content: [{ type: "text", text, marks: [] }] }] } }) as unknown as Intent;
-    const follow = proposal("1", body("Hi,\n\nThanks for your answer above. Before A-1 can be planned, a few things are still open:"), { label: READINESS_COMMENT_LABEL, createdBy: "user" });
-    const first = proposal("2", body("Hi,\n\nBefore A-1 can be planned we need a few things cleared up:"), { label: READINESS_COMMENT_LABEL, createdBy: "user" });
+    const follow = proposal("1", body("Hi,\n\nThanks for your answer above. Before work on A-1 starts, a few things are still open:"), { label: READINESS_COMMENT_LABEL, createdBy: "user" });
+    const first = proposal("2", body("Hi,\n\nBefore work on A-1 starts, a few things need clearing up:"), { label: READINESS_COMMENT_LABEL, createdBy: "user" });
     expect([isReporterFollowUp(follow), isReporterQuestions(follow)]).toEqual([true, true]);
     expect([isReporterFollowUp(first), isReporterQuestions(first)]).toEqual([false, true]);
   });

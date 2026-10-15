@@ -1924,7 +1924,7 @@ mod tests {
             assert_eq!((spec.plan_from_run.as_deref(), spec.plan_approved, spec.allow_push), (Some(plan.id.as_str()), true, true));
             assert_eq!((spec.focus.as_deref(), spec.focus_from_run.as_deref(), spec.workstream.as_deref()), (Some("Keep the diff small"), Some(plan.id.as_str()), Some(ws.as_str())));
             let text = spec.plan.clone().unwrap();
-            assert!(text.contains("Round in one place.") && text.ends_with(EXTRA) && !text.contains("Drafted by an agent run"), "{text}");
+            assert!(text.contains("Round in one place.") && text.ends_with(EXTRA) && !text.contains("Drafted by an agent"), "{text}");
             assert!(draft.basis.is_some());
 
             let review = r.fx.core.runs_review(&draft.id).await.unwrap();

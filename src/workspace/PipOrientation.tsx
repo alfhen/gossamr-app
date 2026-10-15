@@ -11,7 +11,7 @@ export const ORIENTATION_TERMS: readonly { term: string; text: string }[] = [
   { term: "Worktree", text: "The run's own checkout of your repository, so runs don't step on each other or on your files." },
 ];
 
-export const ORIENTATION_SAFETY = "Nothing is posted to Jira or GitHub until you click to approve it.";
+export const ORIENTATION_SAFETY = "Nothing is posted to Jira until you click to approve it. On GitHub, a build only pushes its own branch to a draft pull request.";
 
 /** Where focus goes when the card closes from its button, so the keyboard stays on Pip home: the list's current row. */
 function focusList() {

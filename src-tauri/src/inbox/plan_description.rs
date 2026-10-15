@@ -33,14 +33,19 @@ fn refuse(message: impl Into<String>) -> Error {
     Error::Proposal(message.into())
 }
 
-/// How the intro paragraph `intro` writes starts. An approved section is matched by this, not by the whole sentence, so
-/// a draft written on another day or before the run had a short id is still recognised.
-const INTRO_START: &str = "Drafted by an agent run";
+/// How the intro paragraph `intro` writes starts, and how it started before it stopped naming the run ("Drafted by an agent
+/// run (1000addd) on ..."). An approved section is matched by these, not by the whole sentence, so a draft written on
+/// another day, or by an earlier version, is still recognised and replaced.
+const INTRO_STARTS: [&str; 2] = ["Drafted by an agent on", "Drafted by an agent run"];
+
+/// Whether `text` is the intro paragraph Gossamr put at the top of a plan section, in this version's words or an earlier one's.
+fn is_intro(text: &str) -> bool {
+    INTRO_STARTS.iter().any(|s| text.trim_start().starts_with(s))
+}
 
 fn intro(run: &Run) -> String {
     let date = run.ended_at.unwrap_or(run.queued_at).format("%Y-%m-%d");
-    let which = run.short_id.as_ref().map(|s| format!(" ({s})")).unwrap_or_default();
-    format!("Drafted by an agent run{which} on {date}. A person read and approved it in Gossamr before it was added here.")
+    format!("Drafted by an agent on {date}. A person read and approved it before it was added here.")
 }
 
 /// The description with the plan in its `Gossamr Plan` section, and whether the plan had to be cut to fit. The
@@ -91,7 +96,7 @@ fn plan_text_of(p: &Proposal) -> Option<String> {
     let Intent::Rewrite { body: Some(b), .. } = &p.intent else { return None };
     let mut section = b.to.plan_section()?;
     let first = section.blocks.first().map(|b| Doc { blocks: vec![b.clone()] }.plain_text());
-    if first.is_some_and(|text| text.trim_start().starts_with(INTRO_START)) {
+    if first.is_some_and(|text| is_intro(&text)) {
         section.blocks.remove(0);
     }
     Some(section.to_markdown().trim().to_string())
@@ -306,14 +311,21 @@ mod tests {
         assert_eq!(
             to.to_markdown(),
             format!(
-                "Hi\n\n## Gossamr Plan\n\nDrafted by an agent run ({}) on {date}. A person read and approved it in Gossamr before it was added here.\n\n### Approach\n\nRound in one place.\n\n### Files\n\n- src/cart.rs\n\n### Steps\n\n1. Fix the rounding.\n2. Add a test.",
-                run.short_id.as_ref().unwrap()
+                "Hi\n\n## Gossamr Plan\n\nDrafted by an agent on {date}. A person read and approved it before it was added here.\n\n### Approach\n\nRound in one place.\n\n### Files\n\n- src/cart.rs\n\n### Steps\n\n1. Fix the rounding.\n2. Add a test."
             )
         );
         assert!(!to.to_markdown().contains("For Jira"), "the closing note goes to the ticket on its own");
         assert!(fx.tracker.intents().is_empty(), "a draft writes nothing");
         let status = fx.core.auto_draft_run_comment(&run.id).await.unwrap();
         assert!(status.is_some(), "the status comment is still drafted");
+    }
+
+    #[test]
+    fn the_intro_names_neither_the_run_nor_the_app_and_the_old_one_is_still_recognised() {
+        assert!(is_intro("Drafted by an agent on 2026-10-11. A person read and approved it before it was added here."));
+        assert!(is_intro("  Drafted by an agent run (1000addd) on 2026-10-11. A person read and approved it in Gossamr before it was added here."));
+        assert!(is_intro("Drafted by an agent run on 2025-01-01. Something else."));
+        assert!(!is_intro("Drafted by someone else."));
     }
 
     #[tokio::test]
@@ -343,7 +355,7 @@ mod tests {
         let (_, to) = rewrite_of(&two);
         let md = to.to_markdown();
         assert_eq!(md.matches("Gossamr Plan").count(), 1, "{md}");
-        assert!(md.starts_with("Intro\n\n## Gossamr Plan\n\nDrafted by an agent run") && md.contains("1. Better idea.") && md.ends_with("## Notes\n\nKeep me."), "{md}");
+        assert!(md.starts_with("Intro\n\n## Gossamr Plan\n\nDrafted by an agent on") && !md.contains("(") && md.contains("1. Better idea.") && md.ends_with("## Notes\n\nKeep me."), "{md}");
         assert!(!md.contains("Old plan") && !md.contains("First idea"));
         let now = fx.core.proposal(&one.id).await.unwrap().unwrap();
         assert!(matches!(now.state, ProposalState::Retired(_)), "{:?}", now.state);

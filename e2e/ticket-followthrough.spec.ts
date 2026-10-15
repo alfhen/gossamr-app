@@ -162,7 +162,7 @@ test.describe("G13: Pip speaks up when a workstream opens on a vague ticket", ()
     const draft = needsPane(page).getByRole("article", { name: `Comment on ${VAGUE}` });
     await expect(draft.locator('[data-created-by="gossamr"]')).toHaveText("Drafted by Gossamr");
     await expect(draft).toContainText("@Mette Lund");
-    await expect(draft).toContainText(`Before ${VAGUE} can be planned`);
+    await expect(draft).toContainText(`Before work on ${VAGUE} starts`);
     for (const q of ["What is the goal?", "How will we know it is done (the acceptance criteria)?", "What is in scope, and what is out?", "Who asked for it, and who is waiting on it?"]) await expect(draft).toContainText(q);
     expect((await actions(page, "clarity_asked")).map((e) => e.actor)).toEqual(["person"]);
     // Not waiting yet: the comment has not been posted.

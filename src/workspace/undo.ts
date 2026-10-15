@@ -24,8 +24,8 @@ export interface UndoOffer {
   restored?(): void;
 }
 
-/** An offer's life: offered, being undone, then one of the three ends. */
-export type UndoState = "offered" | "undoing" | "undone" | "failed" | "expired";
+/** An offer's life: offered, being undone, then one of the ends; "withdrawn" is when the person did something else that makes it moot (Resume after Hold). */
+export type UndoState = "offered" | "undoing" | "undone" | "failed" | "expired" | "withdrawn";
 
 export interface UndoEntry {
   id: number;
@@ -106,6 +106,14 @@ export class UndoLog {
     }
   }
 
+  /** Takes offer `id` back when what it would undo has been settled another way: it is spent, and what showed it goes. No-op once it is no longer on offer. */
+  withdraw(id: number) {
+    const entry = this.entries.find((x) => x.id === id);
+    if (!entry || entry.state !== "offered") return;
+    entry.state = "withdrawn";
+    this.settled(id);
+  }
+
   /** Forgets every offer, as when another account is shown. */
   clear() {
     this.entries = [];
@@ -137,3 +145,8 @@ export function offerUndo(offer: UndoOffer): number {
   if (toast !== null) toastOf.set(id, toast);
   return id;
 }
+
+/** Withdraws offer `id` (see `UndoLog.withdraw`), taking its toast down. */
+export const withdrawUndo = (id: number | undefined) => {
+  if (id !== undefined) undoLog.withdraw(id);
+};

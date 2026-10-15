@@ -174,10 +174,10 @@ export function CloseConfirm({ onClose, onKeep }: { onClose(): void; onKeep(): v
       }}
     >
       <span className="text-ws-ink2">Close it? Its conversation goes back to General; its agents and drafts are kept.</span>
-      <Btn tone="primary" autoFocus onClick={onClose} className="px-2 py-0.5">
+      <Btn tone="primary" onClick={onClose} className="px-2 py-0.5">
         Close workstream
       </Btn>
-      <Btn tone="ghost" onClick={onKeep} className="px-2 py-0.5">
+      <Btn tone="ghost" autoFocus onClick={onKeep} className="px-2 py-0.5">
         Keep
       </Btn>
     </div>

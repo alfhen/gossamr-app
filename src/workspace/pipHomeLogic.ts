@@ -190,14 +190,14 @@ export function nextStep(chips: readonly Pick<StepChip, "kind" | "newest">[]): R
 }
 
 /**
- * Pip home's composer footer: "2 running · 1 quiet · 1 queued · 2 need you", counting every run in a workstream or not
+ * Pip home's composer footer: "2 agents running · 1 quiet · 1 queued · 2 need you", counting every run in a workstream or not
  * as the Agents view's summary does (`liveCounts`), so the two never disagree on how many are running, then how many things
  * need the person (`needsYou`, the one count). It is told under the input, never in the conversation.
  */
 export function composerFooter(runs: readonly Run[], needsYou: number, now: number = Date.now()): string {
   const live = liveCounts(runs, now);
   const rest = liveWords({ ...live, running: 0 });
-  const agents = [live.running ? `${live.running} running` : "Nothing running", ...(live.quiet ? [`${live.quiet} quiet`] : []), ...rest];
+  const agents = [live.running ? `${live.running} ${live.running === 1 ? "agent" : "agents"} running` : "Nothing running", ...(live.quiet ? [`${live.quiet} quiet`] : []), ...rest];
   const n = needsYou;
   return [...agents, n === 0 ? "nothing needs you" : `${n} ${n === 1 ? "needs" : "need"} you`].join(" · ");
 }

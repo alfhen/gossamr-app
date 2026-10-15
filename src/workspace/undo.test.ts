@@ -20,6 +20,20 @@ describe("the undo state machine", () => {
     expect(settled.mock.calls).toEqual([[id]]);
   });
 
+  it("withdraws an offer once: it is spent, settled once, and cannot be undone", async () => {
+    const settled = vi.fn();
+    const log = new UndoLog(() => 1_000, () => {}, UNDO_VALID_MS, settled);
+    const undo = vi.fn(async () => {});
+    const id = log.offer({ text: "Held CA-401.", undo });
+    log.withdraw(id);
+    log.withdraw(id);
+    expect(log.get(id)?.state).toBe("withdrawn");
+    expect(log.latest()).toBeNull();
+    expect(await log.run(id)).toBe("spent");
+    expect(undo).not.toHaveBeenCalled();
+    expect(settled.mock.calls).toEqual([[id]]);
+  });
+
   it("offers, undoes once, and says so", async () => {
     const { log, told } = setup();
     const undo = vi.fn(async () => {});

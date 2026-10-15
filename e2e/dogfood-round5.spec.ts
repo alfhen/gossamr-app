@@ -82,7 +82,7 @@ test.describe("a ticket stopped as unclear (G2, G3)", () => {
     await expect(needOfKind(page, "readiness")).toHaveCount(0);
     const pane = needsPane(page);
     await expect(pane).toHaveAttribute("data-kind", "draft");
-    await expect(pane).toContainText("Before CA-408 can be planned");
+    await expect(pane).toContainText("Before work on CA-408 starts");
     // The card has focus, not Post comment, so one more key cannot post it.
     await expect(pane).toBeFocused();
   });

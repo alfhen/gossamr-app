@@ -176,6 +176,18 @@ describe("holding a workstream", () => {
     await vi.waitFor(() => expect(stored(id).heldReason).toBe(HELD_BUDGET));
   });
 
+  it("takes the Held toast and its Undo away once the workstream is resumed, and from the palette too", async () => {
+    const id = (await backend.workstreamsOpen(CA401)).id;
+    await useWorkstreams.getState().refresh();
+    await useWorkstreams.getState().hold(id);
+    expect(undoButton()).toBeDefined();
+    expect(undoLog.latest()).not.toBeNull();
+    await useWorkstreams.getState().resume(id);
+    expect(undoButton()).toBeUndefined();
+    expect(texts()).toEqual([]);
+    expect(undoLog.latest()).toBeNull();
+  });
+
   it("offers nothing when the workstream was held by the person already, and resuming never offers Undo", async () => {
     const id = (await backend.workstreamsOpen(CA401)).id;
     await useWorkstreams.getState().refresh();
@@ -196,6 +208,26 @@ describe("holding a workstream", () => {
     expect([stored(a).heldReason, stored(b).heldReason]).toEqual([HELD_ALL, HELD_ALL]);
     undoButton()!.run();
     await vi.waitFor(() => expect([stored(a).heldReason, stored(b).heldReason]).toEqual([null, null]));
+  });
+
+  it("Hold all's Undo leaves out a workstream resumed since, and goes once none is left to free", async () => {
+    const a = (await backend.workstreamsOpen(CA401)).id;
+    const b = (await backend.workstreamsOpen(itemRef("CA-402"))).id;
+    await useWorkstreams.getState().refresh();
+    expect(await useWorkstreams.getState().holdAll()).toBe(2);
+    const first = undoLog.latest()!.id;
+    await useWorkstreams.getState().resume(a);
+    await useWorkstreams.getState().hold(a);
+    // a is held by the person now: Hold all's Undo frees b only, and leaves a as the person left it.
+    expect(await undoLog.run(first)).toBe("undone");
+    await vi.waitFor(() => expect(stored(b).heldReason).toBeNull());
+    expect(stored(a).heldReason).toBe(HELD_PERSON);
+
+    expect(await useWorkstreams.getState().holdAll()).toBe(1);
+    const second = undoLog.latest()!.id;
+    await useWorkstreams.getState().resume(b);
+    // b was its only workstream: nothing is left to free, so the offer is withdrawn.
+    expect(undoLog.get(second)?.state).toBe("withdrawn");
   });
 
   it("Stop keeps its confirm and offers no Undo: it reached the agents", async () => {

@@ -8,9 +8,9 @@ describe("the pause before posting edited text", () => {
   });
 
   it("finds what looks like a secret by its shape, and leaves ordinary words alone", () => {
-    const secrets = ["Password: hunter2", "the token = abcd1234", "api_key: sk_live_x", "AKIAIOSFODNN7EXAMPLE", "ghp_abcdefghijklmnopqrstuvwxyz0123456789", "-----BEGIN RSA PRIVATE KEY-----", "Authorization: Bearer abcdefghijklmnopqrstuvwxyz", "sk-ant-api03-abcdefghijklmnopqrstu", "eyJhbGciOiJIUzI1.eyJzdWIiOiIxMjM0.SflKxwRJSMeKKF2QT4"];
+    const secrets = ["Password: hunter2", "the token = abcd1234", "api_key: sk_live_x", "AKIAIOSFODNN7EXAMPLE", "ghp_abcdefghijklmnopqrstuvwxyz0123456789", "-----BEGIN RSA PRIVATE KEY-----", "Authorization: Bearer abcdefghijklmnopqrstuvwxyz", "sk-ant-api03-abcdefghijklmnopqrstu", "eyJhbGciOiJIUzI1.eyJzdWIiOiIxMjM0.SflKxwRJSMeKKF2QT4", "adgangskode: x1y2z3", "password is hunter22", "kodeord Hunter2xyz", "adgangskode Hunter2xyz", "the pass is hunter22", "my password hunter22"];
     for (const t of secrets) expect(risksIn(t), t).toEqual(["secret"]);
-    for (const t of ["The password reset flow is broken", "Reset the token on login", "No secret here", "Mette will update the docs"]) expect(risksIn(t), t).toEqual([]);
+    for (const t of ["The password reset flow is broken", "Reset the token on login", "No secret here", "the token expired", "password reset flow", "kodeord er ikke sat", "Mette will update the docs"]) expect(risksIn(t), t).toEqual([]);
   });
 
   it("asks only about what an edit adds, so a draft that already said it is not stopped again", () => {
@@ -31,7 +31,7 @@ describe("the pause before posting edited text", () => {
   });
 
   it("says what it found in the person's words", () => {
-    expect(riskNote(["broadcast"])).toMatch(/^Your edit mentions everyone .*Post it anyway, or keep editing\?$/);
+    expect(riskNote(["broadcast"])).toMatch(/^Your edit mentions everyone .*Post anyway, or keep editing\?$/);
     expect(riskNote(["broadcast", "secret"])).toContain("and looks like a password, key or token");
   });
 });

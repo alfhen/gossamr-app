@@ -20,6 +20,7 @@ import { useRuns } from "./runsStore";
 import { useWorkspace, workflowOfItem } from "../workspaceStore";
 import { PEEK_DRAFT_MARGIN, peekFocusAfterLeaving } from "./peekDrafts";
 import { useCardKeys } from "./draftCardKeys";
+import { takeDraftEditIntent } from "./draftKeys";
 import { itemKey } from "../lib/filter";
 import { FOLLOW_UP_LIMIT, followUpProblem, followUpTitle, nextPass } from "./followUp";
 import { RetiredDraft } from "./RetiredDraft";
@@ -104,6 +105,15 @@ export function draftSummary(p: Proposal, statusName: string | null): string {
     default:
       return unreachable(i);
   }
+}
+
+/** Brings the posting pause into view and puts the keyboard on its Keep editing, with the actions row it sits above. */
+export function showPause(card: Pick<ParentNode, "querySelector"> | null) {
+  const keep = card?.querySelector<HTMLElement>("[data-post-pause-keep]");
+  if (!keep) return;
+  keep.focus({ preventScroll: true });
+  keep.scrollIntoView?.({ block: "nearest" });
+  card?.querySelector<HTMLElement>("[data-draft-actions]")?.scrollIntoView?.({ block: "nearest" });
 }
 
 /** Whether approving `p` also starts a Build (`approvalStartsBuild`), read from the runs, the workstream and Settings' switches. */
@@ -257,7 +267,12 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
   /** The step the Post button and Enter take: pauses once for edited text that would reach everyone, else approves. */
   const approve = () => {
     const found = risks();
-    if (found.length && !pause) return setPause(found);
+    if (found.length && !pause) {
+      setPause(found);
+      // The keyboard goes to the safe choice, not to a Post button that now reads "Post anyway"; the note and the actions come into view with it.
+      requestAnimationFrame(() => showPause(card.current));
+      return;
+    }
     setPause(null);
     onApprove(edit());
   };
@@ -272,6 +287,23 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
   /** The field of the card the keyboard goes to for e: a text box, or the first choice. */
   const focusField = (selector: string) => requestAnimationFrame(() => card.current?.querySelector<HTMLElement>(selector)?.focus());
   const approvable = open && !working && state !== "applying";
+  const startEditing = !open
+    ? undefined
+    : intent.type === "comment" || rewrite
+      ? () => (setEditing(true), focusField("textarea, input:not([type]), input[type=text]"))
+      : followUp
+        ? () => focusField(`#follow-up-${p.id}`)
+        : reply
+          ? () => focusField(`#run-answer-${p.id}`)
+          : intent.type === "subtasks"
+            ? () => focusField("input[type=checkbox]")
+            : runDraft && onReview
+              ? onReview
+              : undefined;
+  // Opened by e on the compact card (in the peek, after it): it starts in editing, as e on this card would.
+  useEffect(() => {
+    if (takeDraftEditIntent(p.id)) startEditing?.();
+  }, []);
   const keys = useCardKeys(p, {
     // Approving by key is the same step the button takes, asked for Enter first; what needs reading first has no key.
     approve: !approvable
@@ -292,19 +324,7 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
               ? approve
               : () => onApprove(edit()),
     skip: open && !working ? onSkip : undefined,
-    edit: !open
-      ? undefined
-      : intent.type === "comment" || rewrite
-        ? () => (setEditing(true), focusField("textarea, input:not([type]), input[type=text]"))
-        : followUp
-          ? () => focusField(`#follow-up-${p.id}`)
-          : reply
-            ? () => focusField(`#run-answer-${p.id}`)
-            : intent.type === "subtasks"
-              ? () => focusField("input[type=checkbox]")
-              : runDraft && onReview
-                ? onReview
-                : undefined,
+    edit: startEditing,
     open: onShow,
     primary: () => focusField("[data-draft-actions] button:not(:disabled):last-of-type"),
   });

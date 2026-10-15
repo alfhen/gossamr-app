@@ -16,7 +16,9 @@ const SECRETS: RegExp[] = [
   /\bATATT[A-Za-z0-9_=-]{20,}/,
   /\beyJ[\w-]{10,}\.[\w-]{10,}\.[\w-]{5,}/,
   /\bBearer\s+[A-Za-z0-9._~+/-]{20,}/i,
-  /\b(?:password|passwd|pwd|passphrase|secret|token|api[ _-]?key|access[ _-]?key|client[ _-]?secret)\s*(?:is\s*)?[:=]\s*["']?[^\s"']{4,}/i,
+  /\b(?:password|passwd|pwd|passphrase|adgangskode|kodeord|secret|token|api[ _-]?key|access[ _-]?key|client[ _-]?secret)\s*(?:is\s*)?[:=]\s*["']?[^\s"']{4,}/i,
+  // Without a colon ("password is hunter22", "kodeord Hunter2xyz"): only a value that looks like a credential, so "password reset flow" passes.
+  /\b(?:password|passwd|pwd|passphrase|pass|adgangskode|kodeord)\s+(?:(?:is|er)\s+)?["']?(?=[^\s"']*\d)(?=[^\s"']*[A-Za-z])[^\s"']{6,}/i,
 ];
 
 /** The risks `text` carries. */
@@ -48,5 +50,5 @@ export const newRisks = (original: string, edited: string): Risk[] => {
 /** What the pause says, in the person's words: what it found, then that nothing is lost by stopping. */
 export function riskNote(risks: readonly Risk[]): string {
   const what = risks.map((r) => (r === "broadcast" ? "mentions everyone (@everyone, @here or @all), not a person" : "looks like a password, key or token")).join(" and ");
-  return `Your edit ${what}. Everyone on the ticket would see it once it is posted. Post it anyway, or keep editing?`;
+  return `Your edit ${what}. Everyone on the ticket would see it once it is posted. Post anyway, or keep editing?`;
 }

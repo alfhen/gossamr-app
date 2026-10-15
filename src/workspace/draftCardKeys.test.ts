@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { holdWhilePressed } from "./draftCardKeys";
+import { setDraftEditIntent, takeDraftEditIntent } from "./draftKeys";
+import { showPause } from "./DraftCard";
 
 /** A window that only keeps its listeners, so a test can fire them. */
 const fakeWindow = () => {
@@ -38,5 +40,32 @@ describe("holdWhilePressed", () => {
     win.fire("pointercancel");
     expect(queued.length).toBe(1);
     expect(win.count()).toBe(0);
+  });
+});
+
+describe("e on a compact card (G8)", () => {
+  it("is taken once by the full card of that draft, and not by another or a late one", async () => {
+    setDraftEditIntent("d1", 1000);
+    expect(takeDraftEditIntent("d2", 1100)).toBe(false);
+    expect(takeDraftEditIntent("d1", 1100)).toBe(true);
+    expect(takeDraftEditIntent("d1", 1100)).toBe(true);
+    await Promise.resolve();
+    expect(takeDraftEditIntent("d1", 1100)).toBe(false);
+    setDraftEditIntent("d1", 1000);
+    expect(takeDraftEditIntent("d1", 9000)).toBe(false);
+  });
+});
+
+describe("the posting pause (G5)", () => {
+  it("puts the keyboard on Keep editing and brings the note and the actions into view", () => {
+    const seen: string[] = [];
+    const node = (name: string) => ({ focus: () => seen.push(`focus ${name}`), scrollIntoView: () => seen.push(`scroll ${name}`) });
+    const nodes: Record<string, unknown> = { "[data-post-pause-keep]": node("keep"), "[data-draft-actions]": node("actions") };
+    showPause({ querySelector: (s: string) => nodes[s] ?? null } as unknown as ParentNode);
+    expect(seen).toEqual(["focus keep", "scroll keep", "scroll actions"]);
+  });
+
+  it("does nothing once the pause is gone", () => {
+    expect(() => showPause({ querySelector: () => null } as unknown as ParentNode)).not.toThrow();
   });
 });

@@ -483,7 +483,7 @@ test("a wake turn is compact, names its run as a button that opens it on the rai
   // Launching and working: the rail and the footer follow; the conversation doesn't.
   await advanceRuns(page, 2, r1.id);
   await expect(stepChip(page, "investigate").locator("[data-step-state]")).toHaveText("Working");
-  await expect(footer).toHaveText("1 running · nothing needs you");
+  await expect(footer).toHaveText("1 agent running · nothing needs you");
   await expect(turns).toHaveCount(before);
 
   await advanceRuns(page, 1, r1.id);

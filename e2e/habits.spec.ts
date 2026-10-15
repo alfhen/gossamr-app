@@ -143,7 +143,7 @@ test.describe("Start my day", () => {
     await expect(line(page, "reporter")).toContainText("CA-408 · waiting 4 days");
     await line(page, "reporter").getByRole("button", { name: /^Draft a nudge/ }).click();
     const nudge = needsPane(page).getByRole("article", { name: "Comment on CA-408" });
-    await expect(nudge).toContainText("A gentle nudge on the questions above");
+    await expect(nudge).toContainText("A gentle nudge on the earlier questions");
     await expect(nudge.locator('[data-created-by="gossamr"]')).toHaveText("Drafted by Gossamr");
     expect(await jiraWrites(page)).toEqual([]);
     expect((await actions(page, "reporter_nudged")).map((e) => e.actor)).toEqual(["person"]);
@@ -180,7 +180,7 @@ test.describe("the reporter nudge", () => {
     await nextLine(page).getByRole("button", { name: "Draft a nudge" }).click();
     const draft = needsPane(page).getByRole("article", { name: "Comment on CA-408" });
     await expect(draft).toContainText("@Mette Lund");
-    await expect(draft).toContainText("A gentle nudge on the questions above");
+    await expect(draft).toContainText("A gentle nudge on the earlier questions");
     await expect(draft.locator('[data-created-by="gossamr"]')).toHaveText("Drafted by Gossamr");
     expect(await jiraWrites(page)).toEqual([]);
     // One at a time: no second offer while it waits, and it is a draft in Needs you, never in a safe batch.
@@ -238,7 +238,7 @@ test.describe("What Jira saw from me", () => {
     await expect(rows.nth(0).locator("[data-sent-detail]")).toHaveCount(0);
     await rows.nth(0).getByRole("button", { name: "Show all" }).click();
     await expect(rows.nth(0).locator("[data-sent-detail]")).toContainText("The Black Friday send is next week.");
-    await expect(rows.nth(0).locator("[data-sent-detail]")).toContainText("Before CA-409 can be planned");
+    await expect(rows.nth(0).locator("[data-sent-detail]")).toContainText("Before work on CA-409 starts");
     await rows.nth(0).getByRole("button", { name: "Show less" }).click();
     await expect(rows.nth(0).locator("[data-sent-detail]")).toHaveCount(0);
 

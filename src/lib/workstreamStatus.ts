@@ -74,6 +74,16 @@ export const EMPTY_FILTER: Record<StatusState, string> = {
   idle: "No workstream is idle.",
 };
 
+/**
+ * What the list says when the `state` filter matches no workstream. Runs that belong to General are no workstream's, so for
+ * Running it adds where they are: "No workstream is running. 2 agents are running under General."
+ */
+export function emptyFilterText(state: StatusState, generalRunning = 0): string {
+  const base = EMPTY_FILTER[state];
+  if (state !== "running" || generalRunning <= 0) return base;
+  return `${base} ${generalRunning === 1 ? "1 agent is" : `${generalRunning} agents are`} running under General.`;
+}
+
 export interface WorkstreamStatus {
   state: StatusState;
   /** The one word: "Needs you", "Held by you", "Waiting on reporter". */

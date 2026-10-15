@@ -62,7 +62,7 @@ describe("a plan run in the mock", () => {
     const outcome = await backend.runsOutcome(done.id);
     expect(outcome.draft).toMatchObject({ state: { type: "pending" } });
     const status = (await backend.proposalsList()).find((p) => p.id === outcome.draft!.id)!;
-    expect(status.intent.type === "comment" && JSON.stringify(status.intent.body)).toContain("Planned this with an agent");
+    expect(status.intent.type === "comment" && JSON.stringify(status.intent.body)).toContain("Planned with an agent.");
   });
 });
 
