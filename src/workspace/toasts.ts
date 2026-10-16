@@ -117,7 +117,11 @@ export const useToasts = create<ToastState>((set, get) => {
         if (now && !keep) {
           // A note on screen gives way; an error or an offer stays, and the answer comes right behind it.
           const yields = !head || (head.tone !== "error" && !head.keep);
-          return { toasts: yields ? [toast, ...queue.slice(1)] : [head, toast, ...queue.slice(1)] };
+          // Errors and offers already waiting still come first; the answer goes ahead of the ordinary notes.
+          const rest = yields ? queue.slice(1) : queue;
+          const from = yields ? 0 : 1;
+          const at = rest.findIndex((t, i) => i >= from && t.tone === "info" && !t.keep);
+          return { toasts: at < 0 ? [...rest, toast] : [...rest.slice(0, at), toast, ...rest.slice(at)] };
         }
         const front = keep && (!head || (head.tone !== "error" && !head.keep));
         const at = tone === "error" ? queue.findIndex((t, i) => i > 0 && t.tone === "info") : -1;
