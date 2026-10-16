@@ -147,7 +147,7 @@ test.describe("Start my day", () => {
     await expect(line(page, "reporter")).toContainText("CA-408 · waiting 4 days");
     await line(page, "reporter").getByRole("button", { name: /^Draft a nudge/ }).click();
     const nudge = needsPane(page).getByRole("article", { name: "Comment on CA-408" });
-    await expect(nudge).toContainText("The earlier questions are still open");
+    await expect(nudge).toContainText("The earlier questions about CA-408 are still open");
     await expect(nudge.locator('[data-created-by="gossamr"]')).toHaveText("Drafted by Gossamr");
     expect(await jiraWrites(page)).toEqual([]);
     expect((await actions(page, "reporter_nudged")).map((e) => e.actor)).toEqual(["person"]);
@@ -184,7 +184,7 @@ test.describe("the reporter nudge", () => {
     await nextLine(page).getByRole("button", { name: "Draft a nudge" }).click();
     const draft = needsPane(page).getByRole("article", { name: "Comment on CA-408" });
     await expect(draft).toContainText("@Mette Lund");
-    await expect(draft).toContainText("The earlier questions are still open");
+    await expect(draft).toContainText("The earlier questions about CA-408 are still open");
     await expect(draft.locator('[data-created-by="gossamr"]')).toHaveText("Drafted by Gossamr");
     expect(await jiraWrites(page)).toEqual([]);
     // One at a time: no second offer while it waits, and it is a draft in Needs you, never in a safe batch.

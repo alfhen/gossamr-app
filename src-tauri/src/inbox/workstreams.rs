@@ -480,7 +480,7 @@ pub fn reporter_comment(key: &str, reporter: Option<&str>, questions: &[String],
 pub fn nudge_comment(key: &str, reporter: Option<&str>, replied: bool) -> String {
     let hello = reporter.map_or_else(|| "Hi,".to_string(), |name| format!("Hi @{name},"));
     let questions = if replied { "follow-up questions" } else { "earlier questions" };
-    format!("{hello}\n\nThe {questions} are still open, and work on {key} can't start until they are cleared up. Could you answer them here on the ticket when you have a moment? Thanks.")
+    format!("{hello}\n\nThe {questions} about {key} are still open. Could you answer them here on the ticket when you have a moment? Thanks.")
 }
 
 /// One counter of a workstream's budget: how much is used of how much it may use.
@@ -2296,11 +2296,11 @@ mod tests {
         #[test]
         fn the_nudge_comment_is_short_polite_and_names_the_ticket() {
             let text = nudge_comment("CA-1", Some("Mette"), false);
-            assert!(text.starts_with("Hi @Mette,") && text.contains("The earlier questions are still open") && !text.contains("gentle") && text.contains("CA-1"), "{text}");
+            assert!(text.starts_with("Hi @Mette,") && text.contains("The earlier questions about CA-1 are still open") && !text.contains("can't start") && !text.contains("gentle") && text.contains("CA-1"), "{text}");
             assert!(nudge_comment("CA-1", None, false).starts_with("Hi,"));
             assert!(!text.contains("we ") && !text.contains(" I ") && !text.contains(" my ") && !text.to_lowercase().contains("gossamr"), "{text}");
             let again = nudge_comment("CA-1", Some("Mette"), true);
-            assert!(again.contains("The follow-up questions are still open") && again.contains("CA-1"), "{again}");
+            assert!(again.contains("The follow-up questions about CA-1 are still open") && again.contains("CA-1"), "{again}");
             assert!(text.len() < 300, "short");
         }
 
@@ -2323,7 +2323,7 @@ mod tests {
             assert!(matches!(&nudge.origin, Origin::Chat { workstream, .. } if workstream.as_deref() == Some(ws.id.as_str())), "in this workstream");
             let Intent::Comment { item, body } = &nudge.intent else { panic!("a comment: {:?}", nudge.intent) };
             assert_eq!(item.key, "CA-1");
-            assert!(body.plain_text().contains("The earlier questions are still open"));
+            assert!(body.plain_text().contains("The earlier questions about CA-1 are still open"));
             assert_eq!(fx.tracker.intents().len(), posted, "nothing is posted before the person approves it");
             let events = fx.core.workstream_events(&fx.scope, &ws.id).await.unwrap();
             let line = events.iter().find(|e| e.action == "reporter_nudged").expect("audited");
