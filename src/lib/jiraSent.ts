@@ -134,7 +134,7 @@ function sentWhatOf(intent: Intent, label: string | null, created: readonly Item
       // What the edit put in: the first line it added, which says more than "Description added".
       // A heading or rule is no summary of it: the first added line with words of its own, else the heading's text.
       const addedLines = body.filter((l) => l.startsWith("+ ") && l.slice(2).trim()).map((l) => l.slice(2).trim());
-      const plain = (l: string) => l.replace(/^[#>\-*\s]+/, "").trim();
+      const plain = (l: string) => l.replace(/^(?:[#>\-*\s]+|\+\s+|\d+[.)]\s+)+/, "").trim();
       const isHeadingOrRule = (l: string) => /^#{1,6}(\s|$)/.test(l) || /^([-*_])(\s*\1){2,}$/.test(l);
       const added = plain(addedLines.find((l) => !isHeadingOrRule(l) && plain(l)) ?? addedLines.find((l) => plain(l)) ?? "");
       const second = added.length > SHORT ? `${added.slice(0, SHORT - 1).trimEnd()}…` : added;
