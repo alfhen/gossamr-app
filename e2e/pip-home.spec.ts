@@ -251,7 +251,7 @@ test("Needs you: a hold the person chose is no need, so the header says 'Held by
   await pipHome(page).getByRole("button", { name: "Hold", exact: true }).click();
   const banner = pipHome(page).locator("[data-held-banner]");
   await expect(banner).toContainText("Held by you");
-  await expect(banner).toContainText("You chose this, so it is not in Needs you.");
+  await expect(banner).toContainText("You chose this, so the hold itself is not in Needs you.");
   await expect(held).toHaveCount(0);
   await expect(row.locator("[data-status]")).toHaveText("Held by you");
   await expect(row.locator('[data-status="needs-you"]')).toHaveCount(0);

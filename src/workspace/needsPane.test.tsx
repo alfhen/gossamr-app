@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import type { Need } from "../lib/needs";
-import { ReporterReplyQuote, closeTarget, HigherPriority, EDIT_FIELD, advancedText, doneText, postedToJira, waitStarted, nextAdvanced, advancedUndone, endEditing, firstDecision, paneStop } from "./NeedsPane";
+import { ReporterReplyQuote, closeTarget, HigherPriority, EDIT_FIELD, advancedText, closedText, doneText, postedToJira, waitStarted, nextAdvanced, advancedUndone, endEditing, firstDecision, paneStop } from "./NeedsPane";
 
 /** A stand-in for the pane: each selector it is asked for answers with what the test put there. */
 const pane = (found: Record<string, unknown[]>) =>
@@ -201,5 +201,16 @@ describe("the reporter's reply in the decision (G4)", () => {
   it("shows nothing without a reply, and no link without a ticket", () => {
     expect(renderToStaticMarkup(<ReporterReplyQuote reply={undefined} ticketKey="CA-408" />)).toBe("");
     expect(renderToStaticMarkup(<ReporterReplyQuote reply={{ id: "c1", excerpt: "Yes." }} ticketKey={null} />)).not.toContain("Open their comment");
+  });
+});
+
+describe("the last need decided from the pane (G6)", () => {
+  it("says what was posted and the wait it started, since no pane line is left to say it", () => {
+    expect(closedText({ title: "Questions for the reporter", ticketKey: "CA-408" }, "CA-408 now waits on the reporter; nothing starts on its own", true)).toBe(
+      "Posted to Jira: Questions for the reporter on CA-408. CA-408 now waits on the reporter; nothing starts on its own.",
+    );
+  });
+  it("is the Done line alone when nothing was posted or started", () => {
+    expect(closedText({ title: "Draft comment" })).toBe("Done: Draft comment.");
   });
 });

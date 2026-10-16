@@ -36,6 +36,9 @@ describe("Pip home's orientation card", () => {
     expect(html).toContain("own checkout of your repository");
     expect(html).toContain("Work has happened but Jira has not heard for days. Post an update to clear it.");
     expect(html).toContain("Each workstream&#x27;s one word: Needs you, Held, Waiting on reporter, Running, Quiet, Done or Idle.");
+    // The status words are not tab stops: the line says what the keyboard and a screen reader get, not "hover" alone (G14).
+    expect(html).toContain("Each status word has a short explanation: hover it, or select its row and a screen reader reads it with the row.");
+    expect(html).not.toContain("Hover a word");
     expect(html).toContain(ORIENTATION_SAFETY);
     expect(html).toContain(ORIENTATION_PURPOSE);
     expect(ORIENTATION_PURPOSE).toBe("Pip works through your Jira tickets with coding agents and drafts every Jira and GitHub write for you to read and approve; nothing posts until you do.");

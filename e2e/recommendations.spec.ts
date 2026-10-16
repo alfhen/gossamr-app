@@ -157,7 +157,7 @@ test.describe("B2: a hold the person chose is not a need", () => {
 
     await pipHome(page).getByRole("button", { name: "Hold", exact: true }).click();
     await expect(banner).toContainText("Held by you");
-    await expect(banner).toContainText("You chose this, so it is not in Needs you.");
+    await expect(banner).toContainText("You chose this, so the hold itself is not in Needs you.");
     await expect(banner.getByRole("button", { name: "Resume" })).toBeVisible();
     // Nothing waits on the person: no row, no count anywhere, and the list says so.
     await expect(needOfKind(page, "hold")).toHaveCount(0);

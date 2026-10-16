@@ -32,7 +32,12 @@ import { answerTitle, editThenSend, isSendKey, NOT_WAITING, useAnswerRun, type A
 import { bodyChangeSize, RewriteView, rewriteBlocked, rewriteEdit, rewriteFields, rewriteWhat, takesBackendText } from "./RewriteDiff";
 import { newRiskQuote, newRisks, type Risk, type RiskQuotes } from "../lib/riskyText";
 import { PostingPause } from "./PostingPause";
+import { setLiveDraft } from "./draftLive";
+import { focusWhenDrawn } from "./focusDrawn";
+
 import { FromRun, RunName, useFromRunName } from "./RunProvenance";
+
+export { focusWhenDrawn };
 
 const BADGE: Record<Proposal["state"]["type"], string> = {
   pending: "Needs your approval",
@@ -135,15 +140,6 @@ export function postedNote(p: Proposal, done: Proposal | null): string | null {
   return `${doneText({ title, ticketKey: undefined, workstreamTitle: "" }, true)}${waits ? ` ${waits}.` : ""}`;
 }
 
-/** Puts the keyboard on the element `find` returns once the page has drawn it, trying again for a few frames while focus is not on it (a button re-rendered in place may not be there yet, or may lose the focus to its section). */
-export function focusWhenDrawn(find: () => Pick<HTMLElement, "focus"> | null, active: () => unknown, frame: (run: () => void) => unknown = requestAnimationFrame, tries = 3) {
-  frame(() => {
-    const el = find();
-    el?.focus();
-    if (tries > 1 && (!el || active() !== el)) focusWhenDrawn(find, active, frame, tries - 1);
-  });
-}
-
 /** Whether approving `p` also starts a Build (`approvalStartsBuild`), read from the runs, the workstream and Settings' switches. */
 export function useApprovalStartsBuild(p: Proposal): boolean {
   const runId = p.origin.type === "run" ? p.origin.runId : null;
@@ -189,6 +185,11 @@ export interface DraftCardProps {
 
 const button = "rounded-md border border-ws-sep2 px-2.5 py-1 text-sm hover:bg-ws-hover disabled:opacity-45";
 const primary = "rounded-md bg-ws-pip px-3.5 py-1.5 text-sm font-semibold text-ws-on-pip shadow-sm hover:brightness-110 disabled:opacity-45";
+
+/** What an answers draft's text would put in front of everyone: checked against nothing, since none of it was on the ticket before the person typed it in the composer. */
+export function answersRisks(text: string): { risks: Risk[]; quote: RiskQuotes } {
+  return { risks: newRisks("", text), quote: newRiskQuote("", text) };
+}
 
 export function DraftCard(props: DraftCardProps) {
   const p = props.proposal;
@@ -355,6 +356,10 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
   // Edited words that mention everyone or look like a secret wait for a second press: a confirm the person can pass, never a block.
   const [pause, setPause] = useState<{ risks: Risk[]; quote: RiskQuotes } | null>(null);
   const risks = (): { risks: Risk[]; quote: RiskQuotes } => {
+    // An answers draft is the person's own reply put into a comment: what they pasted into the composer is new to the ticket, so all of it is checked, edited or not.
+    if (intent.type === "comment" && isAnswersDraft(p)) {
+      return answersRisks(edited.current ? body : linked.text);
+    }
     if (intent.type === "comment" && edited.current) return { risks: newRisks(linked.text, body), quote: newRiskQuote(linked.text, body) };
     if (rewrite && rewriteEdited.current) {
       const was = `${rewriteFields(rewrite).title}\n${rewriteFields(rewrite).text}`;
@@ -363,6 +368,11 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
     }
     return { risks: [], quote: {} };
   };
+  // The keyboard route from Needs you's list reads this: an edit or a pause waiting means "a, Enter" opens the card and doesn't approve the stored text (G1).
+  useEffect(() => {
+    setLiveDraft(p.id, p.state.type === "pending" ? { edited: Object.keys(typed()).length > 0 || edit() !== null, risky: risks().risks.length > 0 } : null);
+  });
+  useEffect(() => () => setLiveDraft(p.id, null), [p.id]);
   /** The step the Post button and Enter take: pauses once for edited text that would reach everyone, else approves. */
   const approve = () => {
     const found = risks();

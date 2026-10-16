@@ -14,6 +14,7 @@ import { activeTab, loadTabs, useTabs } from "./tabsStore";
 import { contextFor, conversationTitle, focusComposer, focusedConversation, paneConversation, paneWorkstream, useWorkstreams, workstreamTicket } from "./workstreamsStore";
 import { usePipHome } from "./pipHomeStore";
 import { undoLog } from "./undo";
+import { HELD_PERSON } from "../types";
 import { useToasts } from "./toasts";
 import type { WorkstreamView } from "../types";
 import { GENERAL_CONVERSATION, workstreamConversation } from "../lib/conversations";
@@ -382,5 +383,55 @@ describe("closing, reopening and bringing a ticket's runs here (G23, G17)", () =
     // Nothing left to bring: the person is told, and no Undo is offered.
     await backend.workstreamsAdopt(ws.workstream.id);
     expect(await useWorkstreams.getState().adopt(ws.workstream.id)).toBe(false);
+  });
+});
+
+describe("Undo offers that outlive what they undo (G4, G5)", () => {
+  const draftInGeneral = async () => {
+    const draft = await backend.runsDraft({ kind: "investigate", repo: "acme/storefront", clonePath: "/Users/sample/Code/storefront", base: "main", name: "ca-401-adopt-1a2b", instruction: "" }, CA401);
+    await backend.runsApprove(draft.id, (await backend.runsReview(draft.id)).digest);
+  };
+
+  it("takes the close offer back once a new workstream starts on the same ticket", async () => {
+    undoLog.clear();
+    useToasts.getState().clear();
+    const ws = (await useWorkstreams.getState().start(CA401))!;
+    await useWorkstreams.getState().close(ws.workstream.id);
+    const offer = undoLog.latest()!;
+    expect(useToasts.getState().toasts.map((t) => t.text)).toContain(offer.text);
+    await useWorkstreams.getState().start(CA401);
+    expect(undoLog.get(offer.id)?.state).toBe("withdrawn");
+    expect(useToasts.getState().toasts.map((t) => t.text)).not.toContain(offer.text);
+  });
+
+  for (const how of ["asked", "held", "closed"] as const) {
+    it(`takes the adoption offer back once the workstream is ${how === "asked" ? "waiting on the reporter" : how}`, async () => {
+      undoLog.clear();
+      useToasts.getState().clear();
+      await draftInGeneral();
+      const ws = (await useWorkstreams.getState().start(CA401))!;
+      expect(await useWorkstreams.getState().adopt(ws.workstream.id)).toBe(true);
+      const offer = undoLog.latest()!;
+      expect(undoLog.get(offer.id)?.state).toBe("offered");
+      if (how === "asked") {
+        const real = backend.workstreamsList.bind(backend);
+        const spy = vi.spyOn(backend, "workstreamsList").mockImplementation(async (all) => (await real(all)).map((v) => ({ ...v, waitingOnReporter: { since: new Date().toISOString() } })));
+        await useWorkstreams.getState().refresh();
+        spy.mockRestore();
+      } else if (how === "held") await useWorkstreams.getState().hold(ws.workstream.id);
+      else await useWorkstreams.getState().close(ws.workstream.id);
+      expect(undoLog.get(offer.id)?.state).toBe("withdrawn");
+      expect(useToasts.getState().toasts.map((t) => t.text)).not.toContain(offer.text);
+    });
+  }
+
+  it("says in the reopen note that the hold the person chose is still theirs", async () => {
+    const ws = (await useWorkstreams.getState().start(CA401))!;
+    await useWorkstreams.getState().hold(ws.workstream.id);
+    await useWorkstreams.getState().close(ws.workstream.id);
+    useToasts.getState().clear();
+    expect(await useWorkstreams.getState().reopen(ws.workstream.id)).toBe(true);
+    expect(useWorkstreams.getState().forItem("CA-401")?.workstream.heldReason).toBe(HELD_PERSON);
+    expect(useToasts.getState().toasts.map((t) => t.text)).toContain("Reopened the workstream on CA-401. It is still held by you; Resume it to carry on.");
   });
 });

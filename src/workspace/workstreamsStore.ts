@@ -9,6 +9,7 @@ import { adoptCount, adoptedText, adoptUndoneText } from "../lib/workstreamAdopt
 import { HELD_PERSON, type AutoStartSwitches, type ItemRef, type Run, type ScreenContext, type Workstream, type WorkstreamEvent, type WorkstreamMode, type WorkstreamRule, type WorkstreamUndo, type WorkstreamView } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { PIP_INPUT_ID } from "./draftKeys";
+import { focusAdopted, focusAdoptButton, focusWorkstreamRow } from "./focusDrawn";
 import { keepSelectionOpen, setPaneIntent, usePipHome } from "./pipHomeStore";
 import { usePip } from "./pipStore";
 import { usePrefs } from "./prefs";
@@ -157,6 +158,11 @@ export const useWorkstreams = create<WorkstreamsState>()((set, get) => {
     await backend.workstreamsReopen(id);
     if (get().backend === backend) await get().refresh();
   }
+  /** Where the keyboard goes once a closed workstream is back: it opens, and its row has the keyboard. */
+  const showWorkstreamRow = (id: string) => {
+    usePipHome.getState().openWorkstream(id);
+    focusWorkstreamRow(id);
+  };
   /** The offer of Undo for each workstream's hold, so Resume, Allow more steps or Close can take it back: it would undo what they just settled. */
   const holdOffers = new Map<string, number>();
   /** Hold all's one offer and the workstreams it would still free: one resumed, allowed more or closed since leaves it, and with none left the offer goes. */
@@ -167,6 +173,23 @@ export const useWorkstreams = create<WorkstreamsState>()((set, get) => {
     if (!batchOffer?.ids.delete(id) || batchOffer.ids.size) return;
     withdrawUndo(batchOffer.offer);
     batchOffer = null;
+  };
+  /** The offer of Undo for each workstream's adoption: the backend allows it only while it is the last thing in the audit, so once the workstream moved on the offer is dead. */
+  const adoptOffers = new Map<string, number>();
+  /** The offer of Undo for each close, with its ticket: a new workstream on that ticket makes Reopen refuse, so starting one takes the offer back. */
+  const closeOffers = new Map<string, { offer: number; itemKey: string | null }>();
+  const withdrawClose = (id: string) => {
+    withdrawUndo(closeOffers.get(id)?.offer);
+    closeOffers.delete(id);
+  };
+  /** Takes back the adoption offers of workstreams that have moved on since: questions posted (waiting on the reporter), held, or closed (gone from the open list). */
+  const settleAdoptions = (list: readonly WorkstreamView[]) => {
+    for (const [id, offer] of [...adoptOffers]) {
+      const v = list.find((x) => x.workstream.id === id);
+      if (v && !v.waitingOnReporter && !v.workstream.heldReason) continue;
+      withdrawUndo(offer);
+      adoptOffers.delete(id);
+    }
   };
   const undoAll = async (ids: readonly string[]) => {
     const results = await Promise.allSettled(ids.map((id) => undoChange(id, { type: "hold", was: null })));
@@ -218,6 +241,7 @@ export const useWorkstreams = create<WorkstreamsState>()((set, get) => {
       const list = await backend.workstreamsList().catch(() => null);
       if (!list || mine !== seq || get().backend !== backend) return;
       set({ list, loaded: true });
+      settleAdoptions(list);
       keepSelectionOpen(list.filter((v) => v.workstream.closedAt === null).map((v) => v.workstream.id));
       // What Pip home lists as closed follows the open list: one closed meanwhile moves across.
       if (usePipHome.getState().showClosed) void get().loadClosed();
@@ -252,6 +276,7 @@ export const useWorkstreams = create<WorkstreamsState>()((set, get) => {
       }
       try {
         const ws = await backend.workstreamsOpen(item);
+        for (const [id, c] of [...closeOffers]) if (c.itemKey !== null && c.itemKey === ws.itemKey) withdrawClose(id);
         if (get().backend === backend) await get().refresh();
         focusPip(ws.id);
         return get().list.find((v) => v.workstream.id === ws.id) ?? { workstream: ws, stage: "intake", runs: [], labels: [], budget: budgetView(ws) };
@@ -273,10 +298,13 @@ export const useWorkstreams = create<WorkstreamsState>()((set, get) => {
       try {
         const ws = await backend.workstreamsClose(id);
         withdrawHold(id);
+        withdrawUndo(adoptOffers.get(id));
+        adoptOffers.delete(id);
         if (get().backend === backend) await get().refresh();
         // Close is one click and a confirmation away from the person's work: Undo reopens it as it stood.
         const name = ws.itemKey ?? ws.title;
-        offerUndo({ text: `Closed the workstream on ${name}. Its agents and drafts are kept in General.`, undone: `Reopened the workstream on ${name}.`, undo: () => reopenIt(id) });
+        withdrawClose(id);
+        closeOffers.set(id, { offer: offerUndo({ text: `Closed the workstream on ${name}. Its agents and drafts are kept in General.`, undone: `Reopened the workstream on ${name}.`, undo: () => reopenIt(id), refocus: () => showWorkstreamRow(id) }), itemKey: ws.itemKey ?? null });
         return true;
       } catch (e) {
         useToasts.getState().push(`Couldn't close the workstream. ${messageOf(e)}`);
@@ -287,7 +315,11 @@ export const useWorkstreams = create<WorkstreamsState>()((set, get) => {
     async reopen(id) {
       const done = await act("Couldn't reopen the workstream", (b) => b.workstreamsReopen(id));
       if (!done.ok) return false;
-      useToasts.getState().push(`Reopened the workstream on ${done.value.itemKey ?? done.value.title}.`, "info");
+      withdrawClose(id);
+      showWorkstreamRow(id);
+      const name = done.value.itemKey ?? done.value.title;
+      // It comes back as it stood: a hold the person chose is still theirs to lift.
+      useToasts.getState().push(done.value.heldReason === HELD_PERSON ? `Reopened the workstream on ${name}. It is still held by you; Resume it to carry on.` : `Reopened the workstream on ${name}.`, "info");
       return true;
     },
 
@@ -298,7 +330,9 @@ export const useWorkstreams = create<WorkstreamsState>()((set, get) => {
       const moved = done.value;
       const key = ws?.itemKey ?? ws?.title ?? "the ticket";
       const count = adoptCount(moved.runs.length, moved.drafts.length);
-      offerUndo({ text: adoptedText(count, key), undone: adoptUndoneText(count, key), undo: () => undoChange(id, { type: "adopt", ...moved }) });
+      withdrawUndo(adoptOffers.get(id));
+      adoptOffers.set(id, offerUndo({ text: adoptedText(count, key), undone: adoptUndoneText(count, key), undo: () => undoChange(id, { type: "adopt", ...moved }), refocus: () => focusAdoptButton(id) }));
+      focusAdopted();
       return true;
     },
 

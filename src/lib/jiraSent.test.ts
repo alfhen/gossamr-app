@@ -47,6 +47,9 @@ describe("What Jira saw from me", () => {
     const rewrite = (fromText: string, toText: string, title: { from: string; to: string } | null = null): Intent => ({ type: "rewrite", item: ref("CA-402"), title, body: { from: doc("a"), to: doc("b"), fromText, toText }, flattened: [] });
     expect(sentWhat(rewrite("Line one", "Line one\nLine two"), null)).toMatchObject({ summary: "Added to the description", detail: ["Added to the description:", "  Line one", "+ Line two"] });
     expect(sentWhat(rewrite("Line one", "Line one\nLine two", { from: "A", to: "B" }), null)!.summary).toBe("Added to the description and title changed");
+    // A plan's first added line is its heading: the preview says what the plan holds, without markdown (G9).
+    expect(sentWhat(rewrite("Line one", "Line one\n\n## Gossamr Plan\n\n---\n- Fix the login redirect\n- Add a test"), null)!.second).toBe("Fix the login redirect");
+    expect(sentWhat(rewrite("Line one", "Line one\n\n## Gossamr Plan"), null)!.second).toBe("Gossamr Plan");
     expect(sentWhat(rewrite("", "Fresh text"), null)).toMatchObject({ summary: "Description added", detail: ["The new description:", "+ Fresh text"] });
     expect(sentWhat(rewrite("Line one", "Line 1"), null)!.summary).toBe("Description rewritten");
   });

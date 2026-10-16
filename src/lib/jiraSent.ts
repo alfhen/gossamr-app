@@ -117,7 +117,11 @@ export function sentWhat(intent: Intent, label: string | null, created: readonly
             : [`Description rewritten${intent.title ? " and title changed" : ""}`, "Description, as it read and as it now reads:", "Description rewrite"];
       const parts = [intent.title && `Title: ${intent.title.from} → ${intent.title.to}`, lead].filter((x): x is string => !!x);
       // What the edit put in: the first line it added, which says more than "Description added".
-      const added = body.find((l) => l.startsWith("+ ") && l.slice(2).trim())?.slice(2).trim() ?? "";
+      // A heading or rule is no summary of it: the first added line with words of its own, else the heading's text.
+      const addedLines = body.filter((l) => l.startsWith("+ ") && l.slice(2).trim()).map((l) => l.slice(2).trim());
+      const plain = (l: string) => l.replace(/^[#>\-*\s]+/, "").trim();
+      const isHeadingOrRule = (l: string) => /^#{1,6}(\s|$)/.test(l) || /^([-*_])(\s*\1){2,}$/.test(l);
+      const added = plain(addedLines.find((l) => !isHeadingOrRule(l) && plain(l)) ?? addedLines.find((l) => plain(l)) ?? "");
       const second = added.length > SHORT ? `${added.slice(0, SHORT - 1).trimEnd()}…` : added;
       return { kind: "description", label: pill, summary, ...(second ? { second } : {}), detail: [...parts, ...body] };
     }

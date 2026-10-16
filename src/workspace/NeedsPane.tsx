@@ -57,7 +57,7 @@ function backTo(workstreamId: string) {
  * the one dealt with; from a row of the list it lands on the next row. With none left it lands on the list's title,
  * where "Nothing needs you." is said.
  */
-function useAdvance(needs: readonly Need[], onAdvance: (done: Need, next: Need) => void) {
+function useAdvance(needs: readonly Need[], onAdvance: (done: Need, next: Need) => void, onLast: (done: Need) => void) {
   const previous = useRef<string[]>([]);
   const earlier = useRef<readonly Need[]>([]);
   const focused = useRef<string | null>(null);
@@ -88,6 +88,9 @@ function useAdvance(needs: readonly Need[], onAdvance: (done: Need, next: Need) 
         setPaneIntent("card");
         home.decide(next.key, next.workstreamId);
       } else {
+        // Nothing comes next, so no pane line says what was done: it is said where a screen reader hears it (G6).
+        const done = was.find((n) => n.key === deciding);
+        if (done) onLast(done);
         home.closeDecision();
         lands(null);
       }
@@ -107,6 +110,9 @@ function useAdvance(needs: readonly Need[], onAdvance: (done: Need, next: Need) 
 /** The line over the pane once it moved on by itself: what was dealt with, and what is open now. */
 export const advancedText = (done: Pick<Need, "title" | "ticketKey" | "workstreamTitle">, next: Pick<Need, "title" | "ticketKey">, waitsOn?: string | null, posted = false) =>
   `${doneText(done, posted)}${waitsOn ? ` ${waitsOn}.` : ""} Now: ${next.ticketKey ? `${next.ticketKey} · ` : ""}${next.title}`;
+
+/** What is said when the need decided was the last one and the pane closes: what was done, and the wait it started. */
+export const closedText = (done: Pick<Need, "title" | "ticketKey" | "workstreamTitle">, waitsOn?: string | null, posted = false) => `${doneText(done, posted)}${waitsOn ? ` ${waitsOn}.` : ""}`;
 
 /** What was done and in which workstream: "Done: Questions for the reporter on CA-408." The pane moved on, so the line is what says where it happened. */
 export const doneText = (done: Pick<Need, "title" | "ticketKey" | "workstreamTitle">, posted = false) => {
@@ -819,6 +825,10 @@ export function NeedsPane({ needs }: { needs: readonly Need[] }) {
   const lastId = useRef(0);
   useAdvance(needs, (done, next) =>
     setAdvanced((prev) => nextAdvanced(prev ?? { id: lastId.current, text: "" }, advancedText(done, next, waitStarted(done, useWorkspace.getState().proposals), postedToJira(done, useWorkspace.getState().proposals)), done.workstreamId ? { workstreamId: done.workstreamId, label: doneText(done, postedToJira(done, useWorkspace.getState().proposals)) } : undefined, done.key)),
+    (done) => {
+      const proposals = useWorkspace.getState().proposals;
+      useToasts.getState().push(closedText(done, waitStarted(done, proposals), postedToJira(done, proposals)), "info");
+    },
   );
   useEffect(() => {
     if (advancedUndone(advanced, needs)) setAdvanced(null);

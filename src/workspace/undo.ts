@@ -22,6 +22,8 @@ export interface UndoOffer {
   undo(): Promise<boolean | void>;
   /** Runs once it is back, to show the person what came back (open the restored draft); its failure is not the undo's. */
   restored?(): void;
+  /** Runs once it is back, to put the keyboard where the person was working: the toast's Undo took it away with the toast. */
+  refocus?(): void;
 }
 
 /** An offer's life: offered, being undone, then one of the ends; "withdrawn" is when the person did something else that makes it moot (Resume after Hold). */
@@ -96,6 +98,11 @@ export class UndoLog {
         entry.offer.restored?.();
       } catch {
         // Showing it is a courtesy: the undo stands.
+      }
+      try {
+        entry.offer.refocus?.();
+      } catch {
+        // As above.
       }
       this.tell(entry.offer.undone ?? "Undone.", "info");
       return "undone";

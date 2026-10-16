@@ -117,9 +117,12 @@ export function ToastCard({ toast: t, waiting, onDismiss }: { toast: Toast; wait
       {t.action && (
         <button
           type="button"
-          onClick={() => {
+          onClick={(ev) => {
+            // The keyboard was on the toast, which goes now: it goes back where it came from, and the action may place it better once it is done (an offer's refocus).
+            const inToast = !!ev.currentTarget.closest("[data-toast]")?.contains(document.activeElement);
             t.action!.run();
             onDismiss();
+            if (inToast) leaveToast();
           }}
           data-toast-action={t.action.label}
           aria-label={`${t.action.label}: ${t.text}`}

@@ -1220,7 +1220,7 @@ describe("answering a permission prompt, as runs/permission.rs", () => {
     await expect(ro.b.runsAllowPermissionOnce(ro.run.id, "ls")).rejects.toThrow("This run is read-only: Claude Code refuses this.");
     const { b, ws, run } = await working();
     b.runs.askPermission(run.id, "approve Bash: git push origin main");
-    await expect(b.runsAllowPermissionOnce(run.id, "git push origin main")).rejects.toThrow("A Build pushes only its own branch, worktree-ca-401-fix, to origin: Gossamr doesn't allow this.");
+    await expect(b.runsAllowPermissionOnce(run.id, "git push origin main")).rejects.toThrow("A Build may push only its own branch, worktree-ca-401-fix, to origin, without force: Gossamr doesn't allow this push.");
     await expect(b.runsAllowPermissionOnce(run.id, PUSH)).rejects.toThrow("The request changed after you read it. Read it again.");
     await expect(b.runsDenyPermission(run.id, PUSH)).rejects.toThrow("The request changed after you read it. Read it again.");
     for (const r of [ro, { b, ws, run }]) {

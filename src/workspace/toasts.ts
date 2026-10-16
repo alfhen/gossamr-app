@@ -17,7 +17,7 @@ export interface Toast {
   /** How long it stays once on screen, when not the tone's (`LIFETIME_MS`). An Undo offer stays `UNDO_LIFETIME_MS`. */
   lifetime?: number;
   /**
-   * A note the person may still need to act on, as an Undo: it comes to the front of the notes waiting (an error still goes
+   * A note the person may still need to act on, as an Undo: it comes to the front of the notes waiting, ahead of an older offer (an error still goes
    * before it), is never dropped for waiting, and a second one with the same words replaces the first.
    */
   keep?: boolean;
@@ -108,11 +108,11 @@ export const useToasts = create<ToastState>((set, get) => {
       const id = ++seq;
       set((s) => {
         const toast: Toast = { id, text, tone, action, at: Date.now(), current: options?.current, lifetime: options?.lifetime, keep, now };
-        // The same offer again (a second Hold of the same workstream) replaces the one waiting; the one on screen stays.
-        const queue = keep ? s.toasts.filter((t, i) => i === 0 || t.text !== text) : s.toasts;
+        // The same offer again (a second Hold of the same workstream) replaces the one before it, on screen or waiting (an error on screen stays).
+        const queue = keep ? s.toasts.filter((t, i) => (i === 0 && t.tone === "error") || t.text !== text) : s.toasts;
         // An error goes ahead of the notes waiting, behind the one on screen and any errors before it. An offer to undo goes
         // to the front: it is a few seconds long, and what it undoes is what the person just did. It takes the screen from a
-        // note, never from an error or another offer, which it queues behind.
+        // note or an older offer (which waits behind it, still reachable), never from an error, which it queues behind.
         const head = queue[0];
         if (now && !keep) {
           // A note on screen gives way; an error or an offer stays, and the answer comes right behind it.
@@ -123,9 +123,11 @@ export const useToasts = create<ToastState>((set, get) => {
           const at = rest.findIndex((t, i) => i >= from && t.tone === "info" && !t.keep);
           return { toasts: at < 0 ? [...rest, toast] : [...rest.slice(0, at), toast, ...rest.slice(at)] };
         }
-        const front = keep && (!head || (head.tone !== "error" && !head.keep));
+        const front = keep && (!head || head.tone !== "error");
         const at = tone === "error" ? queue.findIndex((t, i) => i > 0 && t.tone === "info") : -1;
-        const toasts = front ? [toast, ...queue] : at > 0 ? [...queue.slice(0, at), toast, ...queue.slice(at)] : [...queue, toast];
+        // Behind errors, an offer still comes ahead of an older offer: the first one up is always the newest action's.
+        const past = keep && !front ? queue.findIndex((t) => t.tone !== "error") : -1;
+        const toasts = front ? [toast, ...queue] : keep ? (past < 0 ? [...queue, toast] : [...queue.slice(0, past), toast, ...queue.slice(past)]) : at > 0 ? [...queue.slice(0, at), toast, ...queue.slice(at)] : [...queue, toast];
         if (toasts.length <= MAX_QUEUED) return { toasts };
         // Over the cap, the oldest note waiting gives way, or with none waiting the oldest error.
         const note = toasts.findIndex((t, i) => i > 0 && t.tone === "info");

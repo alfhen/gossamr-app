@@ -387,7 +387,7 @@ export function needs({ workstreams, runs, proposals, dismissed, heldAt, titleOf
         group: "decide",
         kind: plan ? "plan" : "description",
         title: plan ? "Approve the plan" : title,
-        why: plan ? `${by} wrote the plan${key ? ` for ${key}` : ""}; approving its description update is how the plan is approved.` : drafted,
+        why: plan ? `${label ? "An agent" : by} wrote the plan${key ? ` for ${key}` : ""}${label ? ` (run ${label})` : ""}; approving its description update is how the plan is approved.` : drafted,
         ifYouWait: plan ? "Build doesn't start until the plan is approved; nothing is written to Jira." : "Nothing is written to Jira until you approve it.",
         primary: action("approve", "Approve"),
         secondary: [...edit, action("dismiss", "Skip")],

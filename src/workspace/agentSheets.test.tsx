@@ -145,7 +145,7 @@ describe("the run sheet, by state", () => {
 
     it("on a Build asking for a command Gossamr can't check, offers no Allow: it says why and opens Terminal instead", () => {
       const html = sheet(build("approve Bash: pnpm test"));
-      expect(html).toContain("Gossamr offers Allow once only for plain commands it can check, such as git, ls or cat.");
+      expect(html).toContain("Gossamr offers Allow once only for commands it can check are safe, such as git status or ls inside the run&#x27;s folder. It can&#x27;t check this one.");
       expect(buttons(asked(html))).toEqual(["Copy", "Deny", "Open in Terminal", "Stop the run (abandons it)"]);
       expect(primary(html)).toEqual(["Open in Terminal"]);
     });
@@ -160,7 +160,7 @@ describe("the run sheet, by state", () => {
 
     it("on a push Gossamr forbids, gives the rule and no Allow; on a request it can't read whole, Open in Terminal", () => {
       const forbidden = sheet(build("approve Bash: git push origin main"));
-      expect(forbidden).toContain("A Build pushes only its own branch, worktree-ca-401-fix, to origin: Gossamr doesn&#x27;t allow this.");
+      expect(forbidden).toContain("A Build may push only its own branch, worktree-ca-401-fix, to origin, without force: Gossamr doesn&#x27;t allow this push.");
       expect(buttons(asked(forbidden))).toEqual(["Copy", "Deny", "Stop the run (abandons it)"]);
       const odd = sheet(build("Claude wants to do something"));
       expect(odd).toContain("Claude is asking permission:");

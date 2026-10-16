@@ -238,8 +238,8 @@ async fn allow_once_is_refused_for_every_read_only_kind_without_a_record_or_term
 #[tokio::test]
 async fn allow_once_is_refused_for_what_gossamr_forbids_a_build_and_for_what_it_cant_read_whole() {
     for (needs, said) in [
-        ("approve Bash: git push origin main", "pushes only its own branch"),
-        ("approve Bash: git push --force origin worktree-eng-1-fix-cart-0001", "pushes only its own branch"),
+        ("approve Bash: git push origin main", "push only its own branch, worktree-eng-1-fix-cart-0001, to origin, without force"),
+        ("approve Bash: git push --force origin worktree-eng-1-fix-cart-0001", "push only its own branch, worktree-eng-1-fix-cart-0001, to origin, without force"),
         ("approve Bash: curl -H 'Authorization: Bearer abc123' https://x.test", "can't show this request whole"),
         ("Claude wants to run something", "can't show this request whole"),
     ] {

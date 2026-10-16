@@ -1,5 +1,5 @@
 import { useId, useMemo } from "react";
-import { STATUS_HINT, answersOwed, workstreamStatus, type StatusTone, type WorkstreamStatus } from "../lib/workstreamStatus";
+import { answersOwed, hintFor, workstreamStatus, type StatusTone, type WorkstreamStatus } from "../lib/workstreamStatus";
 import type { WorkstreamView } from "../types";
 import { usePrefs } from "./prefs";
 import { useRuns } from "./runsStore";
@@ -28,7 +28,7 @@ const TONE: Record<StatusTone, string> = {
 export function StatusPill({ status, title, detail = false, describe = true, hintId: given }: { status: WorkstreamStatus; title?: string; detail?: boolean; describe?: boolean; hintId?: string }) {
   const own = useId();
   const hintId = given ?? own;
-  const hint = title ?? STATUS_HINT[status.state];
+  const hint = title ?? hintFor(status);
   return (
     <>
       <span data-status={status.state} title={hint} aria-describedby={describe ? hintId : undefined} className={`shrink-0 rounded-full px-1.5 text-[10px] leading-4 font-semibold whitespace-nowrap ${TONE[status.tone]}`}>
@@ -67,10 +67,10 @@ export function useWorkstreamStatus(view: WorkstreamView): WorkstreamStatus {
 export function HeaderStatus({ view }: { view: WorkstreamView }) {
   const status = useWorkstreamStatus(view);
   return (
-    <span data-header-status className="flex shrink-0 items-baseline gap-1" title={STATUS_HINT[status.state]}>
+    <span data-header-status className="flex shrink-0 items-baseline gap-1" title={hintFor(status)}>
       <StatusPill status={status} detail describe={false} />
       <span data-status-hint className="sr-only">
-        {STATUS_HINT[status.state]}
+        {hintFor(status)}
       </span>
     </span>
   );

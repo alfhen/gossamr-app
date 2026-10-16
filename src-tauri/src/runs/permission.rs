@@ -56,11 +56,11 @@ pub const GITHUB_READS_ONLY: &str = "A Build only reads GitHub, besides opening 
 pub const NO_GIT_SETTINGS: &str = "A Build never changes its repository's git settings, remotes or hooks: Gossamr doesn't allow this.";
 pub const HAS_ESCAPES: &str = "This command has escaped characters, so Gossamr can't check what it runs: Gossamr doesn't allow this.";
 /// Why Allow isn't offered for a Build's command that isn't one of the plain ones Gossamr can check.
-pub const UNCHECKED: &str = "Gossamr offers Allow once only for plain commands it can check, such as git, ls or cat. Open the run in Terminal to read this one and answer it there.";
+pub const UNCHECKED: &str = "Gossamr offers Allow once only for commands it can check are safe, such as git status or ls inside the run's folder. It can't check this one. Open the run in Terminal to read it and answer it there.";
 
-/// Why a push other than the Build's own branch is refused, naming the branch.
+/// Why a push other than the Build's own branch, or a force push, is refused: the whole rule, naming the branch.
 pub fn own_branch_only(name: &str) -> String {
-    format!("A Build pushes only its own branch, worktree-{name}, to origin: Gossamr doesn't allow this.")
+    format!("A Build may push only its own branch, worktree-{name}, to origin, without force: Gossamr doesn't allow this push.")
 }
 
 /// What the agent asked to run: `approve <Tool>: <command>`, as the listing words it (`permissionRequest` in

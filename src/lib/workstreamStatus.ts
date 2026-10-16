@@ -69,8 +69,11 @@ export const STATUS_HINT: Record<StatusState, string> = {
   running: "A Claude Code run is working on a step, or is queued for a slot.",
   quiet: "Nothing has happened for a while, or work is happening that Jira has not heard about.",
   done: "The workstream is closed, or its work is finished.",
-  idle: "Nothing is running and nothing waits on you: nothing has started yet, or the last step finished. \"may be unclear\" is a quick check of the ticket's words, not a decision waiting for you.",
+  idle: "Nothing is running and nothing waits on you.",
 };
+
+/** What "may be unclear" means, added to the Idle hint only where the pill carries that detail. */
+export const UNCLEAR_HINT = "\"may be unclear\" is a quick check of the ticket's words, not a decision waiting for you.";
 
 /** What the list says when a status filter matches no workstream. */
 export const EMPTY_FILTER: Record<StatusState, string> = {
@@ -127,6 +130,8 @@ export function answersOwed(id: string, events: readonly WorkstreamEvent[] | und
 
 /** The detail an Idle workstream carries while the word check finds its ticket thin (a notice, never a need). */
 export const UNCLEAR_DETAIL = "may be unclear";
+/** The pill's hint: the state's own, and for an Idle workstream flagged "may be unclear", what that means. */
+export const hintFor = (status: Pick<WorkstreamStatus, "state" | "detail">): string => (status.state === "idle" && status.detail === UNCLEAR_DETAIL ? `${STATUS_HINT.idle} ${UNCLEAR_HINT}` : STATUS_HINT[status.state]);
 /** What an idle row says once the reporter has answered on the ticket and the person has not chosen yet: the answer is the news. */
 export const REPLIED_DETAIL = "reporter replied";
 
