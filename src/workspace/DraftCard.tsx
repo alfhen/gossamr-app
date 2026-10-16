@@ -377,9 +377,11 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
   useEffect(() => {
     setLiveDraft(p.id, p.state.type === "pending" ? { edited: Object.keys(typed()).length > 0 || edit() !== null, risky: risks().risks.length > 0 } : null);
   });
-  // The latest typed edits and state, for the cleanup below to read as the card goes.
+  // The latest committed edits and state, for the cleanup below to read as the card goes; set after each commit, never in render.
   const leaving = useRef({ state: p.state.type, edits: typed() });
-  leaving.current = { state: p.state.type, edits: typed() };
+  useEffect(() => {
+    leaving.current = { state: p.state.type, edits: typed() };
+  });
   useEffect(
     () => () => {
       keepEditsOnLeave(p.id, leaving.current.state, leaving.current.edits);

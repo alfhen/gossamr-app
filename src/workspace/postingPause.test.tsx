@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { PostingPause } from "./PostingPause";
+import { PAUSE_NAME, PostingPause } from "./PostingPause";
 
 const render = (anyway = "Post anyway") => renderToStaticMarkup(<PostingPause risks={["secret"]} quote={{ secret: ["hu…", "gh…"] }} anyway={anyway} onKeep={() => {}} onPost={() => {}} />);
 
@@ -10,7 +10,9 @@ describe("the posting pause (G26)", () => {
     const alert = /<div role="group"[^>]*>([\s\S]*)<\/div>$/.exec(html)?.[1] ?? "";
     const id = /<p id="([^"]+)" role="alert"/.exec(html)?.[1];
     expect(id).toBeTruthy();
-    expect(html).toContain(`aria-labelledby="${id}"`);
+    // The group has a short name of its own, not the note, so the note is not read a third time (CodeRabbit on #180).
+    expect(html).toContain(`aria-label="${PAUSE_NAME}"`);
+    expect(html).not.toContain("aria-labelledby");
     expect(html.match(/role="alert"/g)).toHaveLength(1);
     expect(html.match(new RegExp(`aria-describedby="${id}"`, "g"))).toHaveLength(2);
     expect(alert).toContain("Keep editing");
