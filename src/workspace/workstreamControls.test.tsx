@@ -11,7 +11,7 @@ import type { Run } from "../types";
 import { HOLD_ALL_HINT, buildCommands, isHoldAllKey, rankCommands, type CommandActions } from "./commands";
 import { useToasts } from "./toasts";
 import { DecisionShownContext, decisionShown } from "./decisionShown";
-import { CLOSE_HINT, HOLD_HINT, MANAGE_STATE, MODE_LINE, MORE_HINT, NextStepLine, nextStepOnceKnown } from "./WorkstreamControls";
+import { CLOSE_HINT, HeldBanner, HOLD_HINT, MANAGE_STATE, MODE_LINE, MORE_HINT, NextStepLine, nextStepOnceKnown } from "./WorkstreamControls";
 import { AUTO_STEPS_HELP, AutomaticStepsPanel, CloseConfirm, StopConfirm, WorkstreamControlsView, choiceValue, controlActions, holdFocusTarget, ruleChoice, tabWithin, type ControlActions } from "./WorkstreamControls";
 import { holdAllVisible, useWorkstreams } from "./workstreamsStore";
 import { CONNECT_TO_POST, DRAFT_OPEN, EscalationCardView, EscalationSent, FIX_ROUND_HELP, NO_REVIEW_DRAFT, POST_AS_IS_HELP, TAKE_OVER_HELP, TAKEN_OVER, draftOpen, escalationActions, escalationShown, fixRoundSent, postingReview } from "./EscalationCard";
@@ -243,10 +243,13 @@ describe("the workstream's controls", () => {
     for (const reason of [HELD_PERSON, HELD_ALL]) {
       const html = render(viewOf({ heldReason: reason }));
       expect(html).toContain("data-held-by-you");
-      expect(html).toContain("You chose this, so it is not in Needs you.");
+      expect(html).toContain("You chose this, so the hold itself is not in Needs you. Nothing starts");
       expect(html).toContain(">Resume</button>");
     }
     expect(render(viewOf({ heldReason: HELD_PERSON }))).toContain("Held by you");
+    // Drafts already waiting are in Needs you whatever the hold: the banner says so only then (G10).
+    const withDrafts = renderToStaticMarkup(<HeldBanner view={viewOf({ heldReason: HELD_PERSON })} actions={{ onResume: vi.fn(), onAllowMore: vi.fn(), onManage: vi.fn() }} waiting={2} />);
+    expect(withDrafts).toContain("the hold itself is not in Needs you; drafts already waiting stay there. Nothing starts");
     expect(render(viewOf({ heldReason: HELD_ALL }))).toContain("Held by you (Hold all)");
     for (const reason of [HELD_RESTART, HELD_BUDGET, HELD_DAILY, HELD_QUOTA, `${TRIPWIRE}basis_drift`]) expect(render(viewOf({ heldReason: reason })), reason).not.toContain("data-held-by-you");
   });

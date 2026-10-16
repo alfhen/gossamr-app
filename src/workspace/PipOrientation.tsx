@@ -8,7 +8,7 @@ export const ORIENTATION_TERMS: readonly { term: string; text: string }[] = [
   { term: "Workstream", text: "One ticket's work from start to pull request. Each has its own conversation with Pip, its steps and its drafts." },
   { term: "Run", text: "One Claude Code agent session doing a step: investigate, plan, build or review." },
   { term: "Cobweb", text: "Work has happened but Jira has not heard for days. Post an update to clear it." },
-  { term: "Status", text: "Each workstream's one word: Needs you, Held, Waiting on reporter, Running, Quiet, Done or Idle. Hover a word for what it means." },
+  { term: "Status", text: "Each workstream's one word: Needs you, Held, Waiting on reporter, Running, Quiet, Done or Idle. Each status word has a short explanation: hover it, or select its row and a screen reader reads it with the row." },
   { term: "Intake", text: "The first stage of a workstream, before there is a plan." },
   { term: "Advise", text: "Pip answers when asked and starts nothing." },
   { term: "Manage", text: "Pip is woken when a step finishes and starts the routine next one on its own, within the workstream's allowance. Advise or Hold stops it." },

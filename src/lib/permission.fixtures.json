@@ -42,7 +42,7 @@
     "tool": "Bash",
     "command": "git push origin HEAD",
     "allow": "forbidden",
-    "reason": "A Build pushes only its own branch, worktree-ca-401-fix, to origin: Gossamr doesn't allow this."
+    "reason": "A Build may push only its own branch, worktree-ca-401-fix, to origin, without force: Gossamr doesn't allow this push."
   },
   {
     "case": "bare push, to whatever the branch tracks",
@@ -54,7 +54,7 @@
     "tool": "Bash",
     "command": "git push",
     "allow": "forbidden",
-    "reason": "A Build pushes only its own branch, worktree-ca-401-fix, to origin: Gossamr doesn't allow this."
+    "reason": "A Build may push only its own branch, worktree-ca-401-fix, to origin, without force: Gossamr doesn't allow this push."
   },
   {
     "case": "push to main",
@@ -66,7 +66,7 @@
     "tool": "Bash",
     "command": "git push origin main",
     "allow": "forbidden",
-    "reason": "A Build pushes only its own branch, worktree-ca-401-fix, to origin: Gossamr doesn't allow this."
+    "reason": "A Build may push only its own branch, worktree-ca-401-fix, to origin, without force: Gossamr doesn't allow this push."
   },
   {
     "case": "force push of its own branch",
@@ -78,7 +78,7 @@
     "tool": "Bash",
     "command": "git push --force origin worktree-ca-401-fix",
     "allow": "forbidden",
-    "reason": "A Build pushes only its own branch, worktree-ca-401-fix, to origin: Gossamr doesn't allow this."
+    "reason": "A Build may push only its own branch, worktree-ca-401-fix, to origin, without force: Gossamr doesn't allow this push."
   },
   {
     "case": "forced refspec",
@@ -90,7 +90,7 @@
     "tool": "Bash",
     "command": "git push origin +worktree-ca-401-fix",
     "allow": "forbidden",
-    "reason": "A Build pushes only its own branch, worktree-ca-401-fix, to origin: Gossamr doesn't allow this."
+    "reason": "A Build may push only its own branch, worktree-ca-401-fix, to origin, without force: Gossamr doesn't allow this push."
   },
   {
     "case": "push of its branch onto main",
@@ -102,7 +102,7 @@
     "tool": "Bash",
     "command": "git push origin worktree-ca-401-fix:main",
     "allow": "forbidden",
-    "reason": "A Build pushes only its own branch, worktree-ca-401-fix, to origin: Gossamr doesn't allow this."
+    "reason": "A Build may push only its own branch, worktree-ca-401-fix, to origin, without force: Gossamr doesn't allow this push."
   },
   {
     "case": "push to another branch",
@@ -114,7 +114,7 @@
     "tool": "Bash",
     "command": "git push origin worktree-other",
     "allow": "forbidden",
-    "reason": "A Build pushes only its own branch, worktree-ca-401-fix, to origin: Gossamr doesn't allow this."
+    "reason": "A Build may push only its own branch, worktree-ca-401-fix, to origin, without force: Gossamr doesn't allow this push."
   },
   {
     "case": "push to another remote",
@@ -126,7 +126,7 @@
     "tool": "Bash",
     "command": "git push upstream worktree-ca-401-fix",
     "allow": "forbidden",
-    "reason": "A Build pushes only its own branch, worktree-ca-401-fix, to origin: Gossamr doesn't allow this."
+    "reason": "A Build may push only its own branch, worktree-ca-401-fix, to origin, without force: Gossamr doesn't allow this push."
   },
   {
     "case": "push with git options first",
@@ -138,7 +138,7 @@
     "tool": "Bash",
     "command": "git -C . push origin worktree-ca-401-fix",
     "allow": "forbidden",
-    "reason": "A Build pushes only its own branch, worktree-ca-401-fix, to origin: Gossamr doesn't allow this."
+    "reason": "A Build may push only its own branch, worktree-ca-401-fix, to origin, without force: Gossamr doesn't allow this push."
   },
   {
     "case": "push of its own branch when it wasn't approved to push",
@@ -245,7 +245,7 @@
     "tool": "Bash",
     "command": "cd src && git push origin main",
     "allow": "forbidden",
-    "reason": "A Build pushes only its own branch, worktree-ca-401-fix, to origin: Gossamr doesn't allow this."
+    "reason": "A Build may push only its own branch, worktree-ca-401-fix, to origin, without force: Gossamr doesn't allow this push."
   },
   {
     "case": "push to main after a pipe",
@@ -257,7 +257,7 @@
     "tool": "Bash",
     "command": "true | git push origin main",
     "allow": "forbidden",
-    "reason": "A Build pushes only its own branch, worktree-ca-401-fix, to origin: Gossamr doesn't allow this."
+    "reason": "A Build may push only its own branch, worktree-ca-401-fix, to origin, without force: Gossamr doesn't allow this push."
   },
   {
     "case": "push to main in a subshell",
@@ -269,7 +269,7 @@
     "tool": "Bash",
     "command": "(git push origin main)",
     "allow": "forbidden",
-    "reason": "A Build pushes only its own branch, worktree-ca-401-fix, to origin: Gossamr doesn't allow this."
+    "reason": "A Build may push only its own branch, worktree-ca-401-fix, to origin, without force: Gossamr doesn't allow this push."
   },
   {
     "case": "push to main through another shell",
@@ -281,7 +281,7 @@
     "tool": "Bash",
     "command": "bash -c \"git push origin main\"",
     "allow": "forbidden",
-    "reason": "A Build pushes only its own branch, worktree-ca-401-fix, to origin: Gossamr doesn't allow this."
+    "reason": "A Build may push only its own branch, worktree-ca-401-fix, to origin, without force: Gossamr doesn't allow this push."
   },
   {
     "case": "command substitution",
@@ -329,7 +329,7 @@
     "tool": "Bash",
     "command": "git status; git push origin worktree-ca-401-fix",
     "allow": "forbidden",
-    "reason": "A Build pushes only its own branch, worktree-ca-401-fix, to origin: Gossamr doesn't allow this."
+    "reason": "A Build may push only its own branch, worktree-ca-401-fix, to origin, without force: Gossamr doesn't allow this push."
   },
   {
     "case": "a plain command",
@@ -549,7 +549,7 @@
     "tool": "Bash",
     "command": "python3 -c \"import os; os.system('git push origin main')\"",
     "allow": "forbidden",
-    "reason": "A Build pushes only its own branch, worktree-ca-401-fix, to origin: Gossamr doesn't allow this."
+    "reason": "A Build may push only its own branch, worktree-ca-401-fix, to origin, without force: Gossamr doesn't allow this push."
   },
   {
     "case": "a push inside a node one-liner",
@@ -561,7 +561,7 @@
     "tool": "Bash",
     "command": "node -e \"require('child_process').execSync('git push origin main')\"",
     "allow": "forbidden",
-    "reason": "A Build pushes only its own branch, worktree-ca-401-fix, to origin: Gossamr doesn't allow this."
+    "reason": "A Build may push only its own branch, worktree-ca-401-fix, to origin, without force: Gossamr doesn't allow this push."
   },
   {
     "case": "a push spelled with a backslash",
@@ -573,7 +573,7 @@
     "tool": "Bash",
     "command": "g\\it push origin main",
     "allow": "forbidden",
-    "reason": "A Build pushes only its own branch, worktree-ca-401-fix, to origin: Gossamr doesn't allow this."
+    "reason": "A Build may push only its own branch, worktree-ca-401-fix, to origin, without force: Gossamr doesn't allow this push."
   },
   {
     "case": "a push through eval and an escaped space",
@@ -585,7 +585,7 @@
     "tool": "Bash",
     "command": "eval git\\ push origin main",
     "allow": "forbidden",
-    "reason": "A Build pushes only its own branch, worktree-ca-401-fix, to origin: Gossamr doesn't allow this."
+    "reason": "A Build may push only its own branch, worktree-ca-401-fix, to origin, without force: Gossamr doesn't allow this push."
   },
   {
     "case": "a push spelled with empty quotes",
@@ -597,7 +597,7 @@
     "tool": "Bash",
     "command": "git pu''sh origin main",
     "allow": "forbidden",
-    "reason": "A Build pushes only its own branch, worktree-ca-401-fix, to origin: Gossamr doesn't allow this."
+    "reason": "A Build may push only its own branch, worktree-ca-401-fix, to origin, without force: Gossamr doesn't allow this push."
   },
   {
     "case": "a push through an empty variable",
@@ -609,7 +609,7 @@
     "tool": "Bash",
     "command": "git pu${x}sh origin main",
     "allow": "forbidden",
-    "reason": "A Build pushes only its own branch, worktree-ca-401-fix, to origin: Gossamr doesn't allow this."
+    "reason": "A Build may push only its own branch, worktree-ca-401-fix, to origin, without force: Gossamr doesn't allow this push."
   },
   {
     "case": "a push whose words come down a pipe",
@@ -621,7 +621,7 @@
     "tool": "Bash",
     "command": "echo push | xargs git",
     "allow": "forbidden",
-    "reason": "A Build pushes only its own branch, worktree-ca-401-fix, to origin: Gossamr doesn't allow this."
+    "reason": "A Build may push only its own branch, worktree-ca-401-fix, to origin, without force: Gossamr doesn't allow this push."
   },
   {
     "case": "a push to main with the tool name in lower case",
@@ -633,7 +633,7 @@
     "tool": "bash",
     "command": "git push origin main",
     "allow": "forbidden",
-    "reason": "A Build pushes only its own branch, worktree-ca-401-fix, to origin: Gossamr doesn't allow this."
+    "reason": "A Build may push only its own branch, worktree-ca-401-fix, to origin, without force: Gossamr doesn't allow this push."
   },
   {
     "case": "a commit message that mentions push, by a Build not approved to push",

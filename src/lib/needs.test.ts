@@ -130,6 +130,8 @@ describe("needs: every kind", () => {
     });
     expect(list).toHaveLength(16);
     expect(by("plan")[0].target).toEqual({ type: "draft", id: "d-plan" });
+    // The run's label is a parenthesis, not the subject: "R1 plan wrote the plan" reads wrong once the run is brought into a workstream (G12).
+    expect(by("plan")[0].why).toMatch(/^An agent wrote the plan for CA-401 \(run R\d+\); approving/);
     expect(by("description")[0].title).toBe("Draft rewrite");
     expect(by("escalation")[0].title).toBe("Review still blocks after 2 fix rounds");
     expect(by("hold")[0]).toMatchObject({ title: "Held after a restart", workstreamId: "ws-2", target: { type: "workstream" } });

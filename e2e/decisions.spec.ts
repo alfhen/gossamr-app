@@ -170,7 +170,7 @@ test("Allow once on a Build opens it in Terminal for that exact command, and a p
   // It asks for a push Gossamr forbids a Build: the rule, and no Allow.
   await askPermission(page, build.id, "approve Bash: git push origin main");
   await expect(asking(page).locator("code")).toHaveText("git push origin main");
-  await expect(asking(page)).toContainText(`A Build pushes only its own branch, worktree-${build.name}, to origin: Gossamr doesn't allow this.`);
+  await expect(asking(page)).toContainText(`A Build may push only its own branch, worktree-${build.name}, to origin, without force: Gossamr doesn't allow this push.`);
   await expect(asking(page).getByRole("button", { name: /Allow/ })).toHaveCount(0);
   await expect(asking(page).getByRole("button", { name: "Deny" })).toBeVisible();
   await expect(needsPane(page)).toContainText("R4 wants to run `git push origin main`.");

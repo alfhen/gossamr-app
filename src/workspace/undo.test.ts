@@ -206,11 +206,31 @@ describe("the Undo toast", () => {
     expect(useToasts.getState().toasts.map((t) => t.text)).toEqual(["Held CA-401."]);
   });
 
-  it("queues a second offer behind the first rather than taking its screen, and replaces one with the same words", () => {
+  it("shows the newest offer first with the older one behind it (G3), and replaces one with the same words", () => {
     offerUndo({ text: "Skipped the draft.", undo: async () => {} });
     offerUndo({ text: "Dismissed R1 from Needs you.", undo: async () => {} });
-    expect(useToasts.getState().toasts.map((t) => t.text)).toEqual(["Skipped the draft.", "Dismissed R1 from Needs you."]);
+    expect(useToasts.getState().toasts.map((t) => t.text)).toEqual(["Dismissed R1 from Needs you.", "Skipped the draft."]);
     offerUndo({ text: "Dismissed R1 from Needs you.", undo: async () => {} });
-    expect(useToasts.getState().toasts.map((t) => t.text)).toEqual(["Skipped the draft.", "Dismissed R1 from Needs you."]);
+    expect(useToasts.getState().toasts.map((t) => t.text)).toEqual(["Dismissed R1 from Needs you.", "Skipped the draft."]);
+  });
+});
+
+describe("refocus once an Undo is done (G7)", () => {
+  it("runs after the thing is back, so the keyboard the toast took away lands somewhere", async () => {
+    const { log } = setup();
+    const seen: string[] = [];
+    const id = log.offer({ text: "Closed.", undo: async () => void seen.push("undo"), restored: () => seen.push("restored"), refocus: () => seen.push("refocus") });
+    expect(await log.run(id)).toBe("undone");
+    expect(seen).toEqual(["undo", "restored", "refocus"]);
+  });
+
+  it("does not run when the undo failed, and its own failure does not undo the undo", async () => {
+    const { log } = setup();
+    const seen: string[] = [];
+    const bad = log.offer({ text: "A", undo: async () => false, refocus: () => seen.push("refocus") });
+    expect(await log.run(bad)).toBe("failed");
+    const ok = log.offer({ text: "B", undo: async () => {}, refocus: () => { throw new Error("gone"); } });
+    expect(await log.run(ok)).toBe("undone");
+    expect(seen).toEqual([]);
   });
 });

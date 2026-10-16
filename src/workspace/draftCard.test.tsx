@@ -5,7 +5,7 @@ import { docFromText } from "../lib/docs";
 import type { Proposal, RunSpec } from "../types";
 import { READINESS_COMMENT_LABEL } from "../lib/proposals";
 import { useToasts } from "./toasts";
-import { DraftCard, postedNote, keepEditsOfDraft, keptEditsOfDraft, settleKeptEdits } from "./DraftCard";
+import { DraftCard, answersRisks, postedNote, keepEditsOfDraft, keptEditsOfDraft, settleKeptEdits } from "./DraftCard";
 import { draftPreviewBody } from "./DraftPreview";
 
 const spec: RunSpec = { kind: "investigate", repo: "acme/web", clonePath: "/Users/sample/Code/web", base: "main", name: "ca-412-fix-ab12", instruction: "Investigate this work." };
@@ -120,5 +120,13 @@ describe("a comment draft's edit field and provenance (G4)", () => {
     const asked: Proposal = { ...commentDraft("g4b"), origin: { type: "chat", requestId: "r1" }, label: READINESS_COMMENT_LABEL, intent: { type: "comment", item: itemRef("CA-408"), body: docFromText("Hi") } };
     const html = renderToStaticMarkup(<DraftCard proposal={asked} statusName={null} people={[]} working={false} error={null} onApprove={vi.fn()} onSkip={vi.fn()} />);
     expect(html).toMatch(/Drafted by Gossamr<\/span> Gossamr wrote/);
+  });
+});
+
+describe("an answers draft built from the person's reply (G2)", () => {
+  it("pauses for a pasted secret or @everyone even when unedited, and a clean one posts at once", () => {
+    expect(answersRisks("1. \u201cWhich env?\u201d\nAnswer: token=ghp_abcdefghijklmnopqrstuvwxyz0123456789").risks).toEqual(["secret"]);
+    expect(answersRisks("Answer: @everyone please check").risks).toEqual(["broadcast"]);
+    expect(answersRisks("Answer: the staging environment, as in the ticket").risks).toEqual([]);
   });
 });

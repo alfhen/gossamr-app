@@ -1,6 +1,6 @@
 import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { Switch } from "../components/Switch";
-import type { Need } from "../lib/needs";
+import { needsIn, type Need } from "../lib/needs";
 import { nextStep, type NextStep } from "../lib/nextStep";
 import { flaggedGaps, ignoredAmong, projectOfKey, SHORT_GAP } from "../lib/clarityLearning";
 import { clarityRepliedText, clarityText, type ClarityGap } from "../lib/ticketClarity";
@@ -239,8 +239,10 @@ function StepHelp() {
 }
 
 /** Why the workstream is held, with its Resume (for a budget hold in Manage, Allow 5 more and Switch to Advise instead, as the decision has them); nothing while it isn't held. A hold the system made is also in Needs you, and its decision shows the same banner; the person's own hold is not, so this banner is where it shows. */
-export function HeldBanner({ view, actions }: { view: WorkstreamView; actions: Pick<ControlActions, "onResume" | "onAllowMore" | "onManage"> }) {
+export function HeldBanner({ view, actions, waiting: given }: { view: WorkstreamView; actions: Pick<ControlActions, "onResume" | "onAllowMore" | "onManage">; /** How many drafts of this workstream wait in Needs you; read from the store when absent. */ waiting?: number }) {
   const ws = view.workstream;
+  const inNeeds = needsIn(useNeedsYou(), ws.id);
+  const waiting = given ?? inNeeds;
   const held = heldBanner(ws, view.changedWhileWaiting);
   if (!held) return null;
   const drift = ws.heldReason === `${TRIPWIRE}basis_drift`;
@@ -256,7 +258,7 @@ export function HeldBanner({ view, actions }: { view: WorkstreamView; actions: P
         )}
         {byYou && (
           <span data-held-by-you className="block text-xs text-ws-ink2">
-            You chose this, so it is not in Needs you. Nothing starts on its own and Pip takes no turns until you resume; its agents carry on.
+            You chose this, so the hold itself is not in Needs you{waiting > 0 ? "; drafts already waiting stay there" : ""}. Nothing starts on its own and Pip takes no turns until you resume; its agents carry on.
           </span>
         )}
         {ws.heldReason === HELD_BUDGET && <StepHelp />}

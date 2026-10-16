@@ -3,6 +3,11 @@ import type { Need } from "../lib/needs";
 import { ALLOW_MORE_STEPS } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { draftKeyAction } from "./draftKeys";
+import { docText } from "../lib/docs";
+import { isAnswersDraft } from "../lib/proposals";
+import { newRisks } from "../lib/riskyText";
+import { liveDraft } from "./draftLive";
+import { keptEditsOfDraft } from "./DraftCard";
 import { draftDecisions } from "./DraftPreview";
 import { inlineStartable, useInlineStarts } from "./InlineStart";
 import { setPaneIntent, takePaneIntent, usePipHome } from "./pipHomeStore";
@@ -60,6 +65,18 @@ export type KeyPlan = { type: "ask"; text: string; run(): void } | { type: "do";
 const proposalOf = (need: Need) => (need.target.type === "draft" ? useWorkspace.getState().proposals[need.target.id] : undefined);
 const runOf = (need: Need) => (need.runId ? useRuns.getState().runs.find((r) => r.id === need.runId) : undefined);
 
+/**
+ * Whether approving `p` from the list would skip what its card shows: the card holds an edit the draft doesn't, or the words
+ * would stop at the posting pause. A card not on screen counts its kept edits, and an answers draft's words are checked here, as the card checks them.
+ */
+function needsCard(p: NonNullable<ReturnType<typeof proposalOf>>): boolean {
+  const live = liveDraft(p.id);
+  if (live) return live.edited || live.risky;
+  // Words typed into a card that has since closed are kept for it, and only the card posts them.
+  if (keptEditsOfDraft(p.id)) return true;
+  return p.intent.type === "comment" && isAnswersDraft(p) && newRisks("", docText(p.intent.body)).length > 0;
+}
+
 /** "this comment", "this move": what an approval would approve, for the line that asks for Enter. */
 const thing = (need: Need) => (need.kind === "question" ? "this reply" : need.kind === "review" ? "this review" : "this draft");
 
@@ -77,8 +94,8 @@ export function keyPlan(need: Need, which: NeedKey): KeyPlan | null {
   if (which === "approve") {
     switch (need.primary.id) {
       case "approve":
-        // A draft its card approves in place; a rewrite, a review the token can't be known to post and the rest open.
-        if (p && draftKeyAction(p, "a") === "approve") {
+        // A draft its card approves in place (unless the card holds an edit or a pause, which only the card's own Post handles); a rewrite, a review the token can't be known to post and the rest open.
+        if (p && draftKeyAction(p, "a") === "approve" && !needsCard(p)) {
           const decide = draftDecisions(p.id, p);
           return { type: "ask", text: `${need.kind === "question" ? "send" : "approve"} ${thing(need)}`, run: decide.approve };
         }

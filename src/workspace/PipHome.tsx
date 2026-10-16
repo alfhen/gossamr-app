@@ -2,7 +2,7 @@ import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "rea
 import { useClaude } from "../claudeStore";
 import { isHeldByYou } from "../lib/workstreamHold";
 import { stageText } from "../lib/workstreamStage";
-import { answersOwed, byStatusRank, emptyFilterText, STATUS_HINT, STATUS_WORD, workstreamStatus, type StatusState, type WorkstreamStatus } from "../lib/workstreamStatus";
+import { answersOwed, byStatusRank, emptyFilterText, hintFor, STATUS_WORD, workstreamStatus, type StatusState, type WorkstreamStatus } from "../lib/workstreamStatus";
 import { StatusPill } from "./StatusPill";
 import { PlanMyWeek, ThisWeek } from "./PlanMyWeek";
 import { isoWeek } from "../lib/planMyWeek";
@@ -38,7 +38,7 @@ import { focusToast } from "./ToastHost";
 import { PIP_HOME_REGIONS, columnRegion, regionColumn, usePipHome, type PipHomeColumn, type PipHomeFocus, type PipHomeRegion } from "./pipHomeStore";
 import { useRuns } from "./runsStore";
 import { focusComposer, focusedConversation, useHomeWorkstream, useWorkstreams } from "./workstreamsStore";
-import { TABBABLE, pipHomeKey, wrapTab, type PipHomeItemKind } from "./pipHomeKeys";
+import { NOTICE, TABBABLE, pipHomeKey, wrapTab, type PipHomeItemKind } from "./pipHomeKeys";
 import { InlineStartContext } from "./InlineStart";
 import { StepRail } from "./StepRail";
 import { useNow } from "./AgentsView";
@@ -179,7 +179,7 @@ export function WorkstreamList({ list, closed, showClosed, selected, onSelect, o
                 {v.workstream.itemKey && <b className="shrink-0 font-mono font-semibold text-ws-ink">{v.workstream.itemKey}</b>}
                 <span className="min-w-0 truncate">{rowTitle(v.workstream)}</span>
                 <span className="ml-auto flex shrink-0">
-                  <StatusPill status={status} hintId={`${hints}-${v.workstream.id}`} title={status.state === "needs-you" ? `${needsIn(needsYou, v.workstream.id)} of the ${needsYou.length} in Needs you ${needsIn(needsYou, v.workstream.id) === 1 ? "is" : "are"} here. ${STATUS_HINT[status.state]}` : undefined} />
+                  <StatusPill status={status} hintId={`${hints}-${v.workstream.id}`} title={status.state === "needs-you" ? `${needsIn(needsYou, v.workstream.id)} of the ${needsYou.length} in Needs you ${needsIn(needsYou, v.workstream.id) === 1 ? "is" : "are"} here. ${hintFor(status)}` : undefined} />
                 </span>
               </span>
               <RowStatus status={status} view={v} nudge={nudgeDue?.has(v.workstream.id)} />
@@ -233,26 +233,38 @@ export function WorkstreamList({ list, closed, showClosed, selected, onSelect, o
         </button>
         {showClosed && (
           <ul aria-label="Closed workstreams" className="m-0 grid max-h-[30vh] w-full list-none gap-0.5 overflow-y-auto p-0">
-            {closed.map((v) => (
-              <li key={v.workstream.id} data-closed-workstream={v.workstream.id} className="grid gap-0.5 px-2.5 py-1 text-sm text-ws-ink3">
-                <span className="flex min-w-0 gap-1.5">
-                  {v.workstream.itemKey && <b className="shrink-0 font-mono font-semibold">{v.workstream.itemKey}</b>}
-                  <span className="min-w-0 truncate">{rowTitle(v.workstream)}</span>
-                </span>
-                <span className="flex items-baseline gap-2 text-xs">
-                  Closed
-                  <button
-                    type="button"
-                    data-reopen-workstream={v.workstream.id}
-                    aria-label={`Reopen ${v.workstream.itemKey ?? rowTitle(v.workstream)}`}
-                    onClick={() => void useWorkstreams.getState().reopen(v.workstream.id)}
-                    className="rounded px-1 font-medium text-ws-ink2 underline hover:bg-ws-hover focus-visible:outline-2 focus-visible:outline-ws-pip"
-                  >
-                    Reopen
-                  </button>
-                </span>
-              </li>
-            ))}
+            {closed.map((v) => {
+              const key = v.workstream.itemKey;
+              // The backend refuses a reopen while the ticket has another open workstream: say so instead of pressing a button that does nothing.
+              const blocked = key ? everyOpen.some((o) => o.workstream.itemKey === key) : false;
+              return (
+                <li key={v.workstream.id} data-closed-workstream={v.workstream.id} className="grid gap-0.5 px-2.5 py-1 text-sm text-ws-ink3">
+                  <span className="flex min-w-0 gap-1.5">
+                    {key && <b className="shrink-0 font-mono font-semibold">{key}</b>}
+                    <span className="min-w-0 truncate">{rowTitle(v.workstream)}</span>
+                  </span>
+                  <span className="flex flex-wrap items-baseline gap-x-2 text-xs">
+                    Closed
+                    <button
+                      type="button"
+                      data-reopen-workstream={v.workstream.id}
+                      aria-label={`Reopen ${key ?? rowTitle(v.workstream)}`}
+                      aria-disabled={blocked || undefined}
+                      aria-describedby={blocked ? `reopen-blocked-${v.workstream.id}` : undefined}
+                      onClick={() => !blocked && void useWorkstreams.getState().reopen(v.workstream.id)}
+                      className={`rounded px-1 font-medium underline focus-visible:outline-2 focus-visible:outline-ws-pip ${blocked ? "cursor-not-allowed text-ws-ink3" : "text-ws-ink2 hover:bg-ws-hover"}`}
+                    >
+                      Reopen
+                    </button>
+                    {blocked && (
+                      <span id={`reopen-blocked-${v.workstream.id}`} data-reopen-blocked>
+                        {key} already has an open workstream
+                      </span>
+                    )}
+                  </span>
+                </li>
+              );
+            })}
             {closed.length === 0 && <li className="px-2.5 py-1 text-sm text-ws-ink3">No closed workstreams.</li>}
           </ul>
         )}
@@ -492,7 +504,7 @@ const REGION_ON: Record<PipHomeRegion, string> = {
   week: "[data-pip-home] [data-this-week]",
   workstreams: '[data-pip-home] nav[aria-label="Workstreams"]',
   day: "[data-pip-home] [data-plan-my-week], [data-pip-home] [data-start-my-day]",
-  notice: "[data-pip-home] [data-clarity-notice]",
+  notice: `[data-pip-home] ${NOTICE}`,
   timeline: "[data-pip-home] [data-timeline]",
   pane: "[data-pip-home] [data-needs-pane]",
   rail: '[data-pip-home-column="rail"] [data-step-rail]',
@@ -510,7 +522,7 @@ function regionOf(el: Element | null): PipHomeRegion | null {
   if (el.closest("[data-needs-pane]")) return "pane";
   if (el.closest("[data-plan-my-week], [data-start-my-day]")) return "day";
   if (el.closest("[data-needs-you]")) return "needs";
-  if (el.closest("[data-clarity-notice]")) return "notice";
+  if (el.closest(NOTICE)) return "notice";
   if (el.closest("[data-this-week]")) return "week";
   if (el.closest('nav[aria-label="Workstreams"]')) return "workstreams";
   if (el.closest('[data-pip-home-column="rail"]')) return "rail";
@@ -591,7 +603,7 @@ function usePipHomeKeys(needsYou: readonly Need[]) {
         case "day":
           return void show(home?.querySelector<HTMLElement>("[data-plan-my-week]") ?? home?.querySelector<HTMLElement>("[data-start-my-day]"));
         case "notice":
-          return void show(home?.querySelector<HTMLElement>("[data-clarity-notice] button:not(:disabled)") ?? home?.querySelector<HTMLElement>("[data-clarity-notice]"));
+          return void show(home?.querySelector<HTMLElement>(`${NOTICE} button:not(:disabled)`) ?? home?.querySelector<HTMLElement>(NOTICE));
         case "timeline": {
           const last = all("[data-timeline] " + TIMELINE_ENTRY).pop();
           return void show(last ? timelineStop(last) : home?.querySelector<HTMLElement>("[data-timeline]"));

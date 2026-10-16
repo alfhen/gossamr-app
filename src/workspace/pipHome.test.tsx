@@ -162,6 +162,18 @@ describe("the workstream list on Pip home", () => {
     expect(list({ showClosed: true, closed: [] })).toContain("No closed workstreams.");
   });
 
+  it("disables Reopen, with the reason showing, while the ticket has another open workstream (G5)", () => {
+    const html = list({ showClosed: true });
+    const reopen = html.slice(html.indexOf("data-closed-workstream"));
+    expect(reopen).toContain("data-reopen-workstream");
+    expect(reopen).not.toContain("aria-disabled");
+    expect(reopen).not.toContain("already has an open workstream");
+    const twin = { ...closed[0], workstream: { ...closed[0].workstream, itemKey: "CA-401" } };
+    const blocked = list({ showClosed: true, closed: [twin] });
+    expect(blocked).toMatch(/data-reopen-workstream="[^"]+"[^>]*aria-disabled="true"/);
+    expect(blocked).toContain("CA-401 already has an open workstream");
+  });
+
   it("offers to start a workstream, opening the palette already asking for one; with none open it says what one is", async () => {
     const { START_WORKSTREAM } = await import("./commands");
     expect(list()).toMatch(/<button type="button"[^>]*>Start a workstream…<\/button>/);

@@ -171,6 +171,9 @@ export function pipHomeKey(ev: PipHomeKeyEvent, state: PipHomeKeyState): PipHome
 }
 
 /** What may take Tab, before the ones that are disabled, hidden or taken out of the order are left out. */
+/** F6's notice stop over the steps: the Under General offer ("Bring them here") and the clarity notice, whichever is shown. */
+export const NOTICE = ":is([data-adopt-notice], [data-clarity-notice])";
+
 export const TABBABLE = 'a[href], button, input, select, textarea, summary, [tabindex]:not([tabindex="-1"])';
 
 /**

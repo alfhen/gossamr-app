@@ -2,7 +2,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { pipHomeHints } from "./footerHints";
-import { isTypingTarget, nextRegion, pipHomeKey, regionStep, type PipHomeKeyEvent, type PipHomeKeyState } from "./pipHomeKeys";
+import { NOTICE, isTypingTarget, nextRegion, pipHomeKey, regionStep, type PipHomeKeyEvent, type PipHomeKeyState } from "./pipHomeKeys";
 import { regionColumn } from "./pipHomeStore";
 import { ShortcutHint } from "./ShortcutHint";
 
@@ -287,5 +287,11 @@ describe("the workspace layout's regions (D29)", () => {
     expect(regionStep(key("F6", { shiftKey: true, target: { tagName: "INPUT" } }))).toBe(-1);
     expect(regionStep(key("F6", { ctrlKey: true }))).toBe(0);
     expect(regionStep(key("Tab"))).toBe(0);
+  });
+});
+
+describe("F6's notice stop (G7)", () => {
+  it("covers the Under General offer as well as the clarity notice", () => {
+    expect(NOTICE).toBe(":is([data-adopt-notice], [data-clarity-notice])");
   });
 });
