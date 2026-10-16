@@ -127,7 +127,7 @@ test.describe("what the palette and the reporter draft say (G31)", () => {
     const draft = needsPane(page).getByRole("article", { name: "Comment on CA-408" });
     await expect(draft).toBeVisible();
     await expect(draft).toContainText("@");
-    await expect(draft.locator("[data-mention-note]")).toHaveText(/^Mentions .+ in the posted comment\.$/);
+    await expect(draft.locator("[data-mention-note]")).toHaveText(/^Posts as you; Jira notifies .+\.$/);
     expect(await jiraWrites(page)).toEqual([]);
   });
 });
@@ -143,6 +143,9 @@ test.describe("toasts leave with the page and clear the launcher (G32)", () => {
     await rail.getByRole("button", { name: "Close…" }).click();
     await rail.getByRole("button", { name: "Close workstream" }).click();
     await expect(toast(page)).toContainText("Closed the workstream on CA-408");
+    // Close has an Undo now (round 13, G23); the toast that says it was undone has none.
+    await toast(page).getByRole("button", { name: "Undo" }).click();
+    await expect(toast(page)).toContainText("Reopened the workstream on CA-408");
     await expect(toast(page).getByRole("button", { name: "Undo" })).toHaveCount(0);
     // A toast younger than the route grace (500 ms) is taken to come with the change and stays; leave it older than that.
     await page.waitForTimeout(700);

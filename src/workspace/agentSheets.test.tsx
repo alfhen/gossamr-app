@@ -95,6 +95,14 @@ describe("the run sheet, by state", () => {
       expect(sheet(build("approve Bash: ls"))).not.toContain("data-permission-read-only");
     });
 
+    it("says what Deny does right under the refusal, before the buttons (G24)", () => {
+      const html = asked(sheet(investigate("approve Bash: ls")));
+      expect(html.indexOf("data-permission-refusal")).toBeGreaterThan(-1);
+      expect(html.indexOf("data-permission-read-only")).toBeGreaterThan(html.indexOf("data-permission-refusal"));
+      expect(html.indexOf("data-permission-read-only")).toBeLessThan(html.indexOf("data-permission-decisions"));
+      expect(html).toContain("Deny lets it carry on without it.");
+    });
+
     it("on a Build, says plainly what it wants to run and offers Allow once as the one primary button, then Deny and Stop", () => {
       const html = sheet(build("approve Bash: mkdir -p dist && echo 'done'"), { label: "R3" });
       expect(html).toContain("R3 wants to run this command:");
@@ -906,7 +914,7 @@ describe("the safety sheet as the one-time intro", () => {
     expect(lines[1]).not.toMatch(/only when you allow it|until you approve/);
     // Nothing enforces it, as the detail below says: the line can't promise a lock.
     expect(lines[1]).toContain("both are requests, not locks");
-    expect(lines[2]).toBe("Gossamr posts to Jira or GitHub only what you approve. An agent run with your Claude settings, which a Build is, could reach Jira or GitHub on its own: your Claude settings, not Gossamr, decide that.");
+    expect(lines[2]).toBe("Gossamr posts to Jira or GitHub only what you approve. A Build runs with your Claude settings and could reach Jira or GitHub on its own: your Claude settings, not Gossamr, decide that.");
     expect(html.indexOf("data-safety-summary")).toBeLessThan(html.indexOf("What a Build may touch"));
   });
 

@@ -410,6 +410,20 @@ describe("Pip home in the palette", () => {
     expect(workstreamCommands(list, "  ", a)).toEqual([]);
   });
 
+  it("ranks a command that does something new above one that only brings a card back, for the same words (G31)", () => {
+    const all = buildCommands(containers, BUILT_IN_VIEWS, actions(), { ...ctx, agents: true });
+    const labels = rankCommands(all, "start").map((c) => c.label);
+    expect(labels.indexOf("Start a workstream…")).toBeGreaterThanOrEqual(0);
+    expect(labels.indexOf("Start a workstream…")).toBeLessThan(labels.indexOf("Start my day"));
+    expect(all.find((c) => c.id === "app:start-my-day")?.refocus).toBe(true);
+    // Only a tie is broken: a closer match still wins, and equal matches of the same kind keep their order.
+    const a = { id: "a", group: "Go to" as const, label: "Start my day", refocus: true, run: () => {} };
+    const b = { id: "b", group: "Go to" as const, label: "Begin: start here", run: () => {} };
+    const c = { id: "c", group: "Go to" as const, label: "Start over", run: () => {} };
+    expect(rankCommands([a, b, c], "start").map((x) => x.id)).toEqual(["c", "a", "b"]);
+    expect(rankCommands([a, c], "start").map((x) => x.id)).toEqual(["c", "a"]);
+  });
+
   it("asks Pip to plan the ticket a query starting with 'plan' names", () => {
     const a = actions();
     const ca401 = items.find((i) => i.item.key === "CA-401")!;
@@ -437,6 +451,17 @@ describe("Pip home in the palette", () => {
     expect(noStartableTicket(items, "ca-377", [])).toBe("No open ticket CA-377 here. It may be Done, already have a workstream, or not be loaded.");
     expect(noStartableTicket(items, "zzz nothing", [])).toBe("No ticket without a workstream matches “zzz nothing”.");
     expect(noStartableTicket(items, "  ", [])).toBe("Every open ticket has a workstream already.");
+  });
+
+  it("names the one real reason for a Done ticket the watched items lack, from the full cache or a live read (G30)", () => {
+    const ca401 = items.find((i) => i.item.key === "CA-401")!;
+    const done = { ...ca401, item: { ...ca401.item, key: "ZZ-478" }, status: { ...ca401.status, category: "done" as const } };
+    expect(noStartableTicket(items, "zz-478", [])).toMatch(/^No open ticket ZZ-478 here\. It may be Done/);
+    expect(noStartableTicket(items, "zz-478", [], done)).toBe("ZZ-478 is Done in Jira.");
+    // Only the ticket that was typed: another key, an open ticket, or nothing read keeps the general answer.
+    expect(noStartableTicket(items, "zz-479", [], done)).toMatch(/^No open ticket ZZ-479 here\. It may be Done/);
+    expect(noStartableTicket(items, "zz-478", [], { ...done, status: { ...done.status, category: "active" as const } })).toMatch(/^No open ticket ZZ-478 here/);
+    expect(noStartableTicket(items, "zz-478", [], null)).toMatch(/^No open ticket ZZ-478 here/);
   });
 
   it("starts a workstream on a ticket the query names, with no ticket peeked, and never one whose workstream is open", () => {

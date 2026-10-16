@@ -75,29 +75,47 @@ const secretPart = (match: string): string =>
 /** A secret for the note: its first two characters and an ellipsis, never the rest. */
 export const maskSecret = (secret: string): string => `${[...secret].slice(0, 2).join("")}…`;
 
-/** What the pause quotes for each new risk: a broad mention as written ("@everyone"), a secret masked ("hu…"). */
-export type RiskQuotes = Partial<Record<Risk, string>>;
+/** What the pause quotes for each new risk, in the order they stand in the text: a broad mention as written ("@everyone"), a secret masked ("hu…"). */
+export type RiskQuotes = Partial<Record<Risk, string[]>>;
 
 /**
- * The first piece of text, by where it stands in `edited`, that makes the edit risky for each risk (see `newRisks`), as the
- * pause quotes it. Empty when the edit adds none.
+ * Every piece of text, by where it stands in `edited`, that makes the edit risky for each risk (see `newRisks`), as the
+ * pause quotes it: each distinct mention as written, each distinct secret by its first two characters. Empty when the edit adds none.
  */
 export function newRiskQuote(original: string, edited: string): RiskQuotes {
   const had = matchesIn(original);
   const quotes: RiskQuotes = {};
-  for (const f of occurrences(edited)) {
-    if (quotes[f.risk] !== undefined || had[f.risk].has(f.risk === "broadcast" ? f.text.toLowerCase() : f.text)) continue;
-    quotes[f.risk] = f.risk === "broadcast" ? f.text : maskSecret(secretPart(f.text));
+  const seen = new Set<string>();
+  // Two shapes can match the same run ("token=ghp_…" is a token line and a GitHub token): the first, longest one is the quote.
+  let covered = -1;
+  for (const f of occurrences(edited).sort((a, b) => a.at - b.at || b.text.length - a.text.length)) {
+    if (f.risk === "secret" && f.at < covered) continue;
+    if (f.risk === "secret") covered = f.at + f.text.length;
+    const same = f.risk === "broadcast" ? f.text.toLowerCase() : f.text;
+    if (had[f.risk].has(same) || seen.has(`${f.risk}:${same}`)) continue;
+    seen.add(`${f.risk}:${same}`);
+    (quotes[f.risk] ??= []).push(f.risk === "broadcast" ? f.text : maskSecret(secretPart(f.text)));
   }
   return quotes;
+}
+
+/** How many quotes the pause lists before it says how many more there are. */
+const QUOTES_SHOWN = 3;
+
+/** “a”, “b” and “c”; past `QUOTES_SHOWN`, “a”, “b”, “c” and 2 more. */
+function quoted(quotes: readonly string[]): string {
+  const shown = quotes.slice(0, QUOTES_SHOWN).map((q) => `“${q}”`);
+  const more = quotes.length - shown.length;
+  if (more > 0) return `${shown.join(", ")} and ${more} more`;
+  return shown.length > 1 ? `${shown.slice(0, -1).join(", ")} and ${shown[shown.length - 1]}` : shown[0];
 }
 
 /** What the pause says, in the person's words: one sentence for each risk it found (with the text that tripped it, when `quotes` has it), then who would see it. The buttons carry the choice. */
 export function riskNote(risks: readonly Risk[], quotes: RiskQuotes = {}, where = "the ticket"): string {
   const sentence = (r: Risk, i: number) => {
-    const at = quotes[r];
-    if (r === "broadcast") return `${i ? "It also mentions" : "Your edit mentions"} everyone ${at ? `at “${at}”` : "(@everyone, @here or @all), not a person"}.`;
-    return `${i ? "It also looks" : "Your edit looks"} like a password, key or token${at ? ` at “${at}”` : ""}.`;
+    const at = quotes[r]?.length ? quoted(quotes[r]!) : null;
+    if (r === "broadcast") return `${i ? "It also mentions" : "Your edit mentions"} everyone ${at ? `at ${at}` : "(@everyone, @here or @all), not a person"}.`;
+    return `${i ? "It also looks" : "Your edit looks"} like a password, key or token${at ? ` at ${at}` : ""}.`;
   };
   return `${risks.map(sentence).join(" ")} Everyone on ${where} would see it once it is posted.`;
 }

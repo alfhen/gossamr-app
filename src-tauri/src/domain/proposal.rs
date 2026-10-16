@@ -423,6 +423,28 @@ impl Proposal {
         })
     }
 
+    /// Whether the draft can be put in a workstream after it was made: one Pip or a run made records its workstream in
+    /// its origin, and one that starts a run in the run's spec. A board or autopilot draft of anything else has no place
+    /// to record one.
+    pub fn can_join_workstream(&self) -> bool {
+        matches!(self.origin, Origin::Chat { .. } | Origin::Run { .. }) || matches!(self.intent, Intent::StartRun { .. })
+    }
+
+    /// Puts the draft in workstream `id`, or back in General with `None`, wherever it records one (`workstream`). Returns
+    /// false, changing nothing, when it can't (`can_join_workstream`).
+    pub fn set_workstream(&mut self, id: Option<&str>) -> bool {
+        if !self.can_join_workstream() {
+            return false;
+        }
+        if let Origin::Chat { workstream, .. } | Origin::Run { workstream, .. } = &mut self.origin {
+            *workstream = id.map(Into::into);
+        }
+        if let Intent::StartRun { spec, .. } = &mut self.intent {
+            spec.workstream = id.map(Into::into);
+        }
+        true
+    }
+
     /// Applies a reconcile verdict. Only a pending proposal changes, and never to `Applied`.
     pub fn absorb(&mut self, verdict: Verdict, at: DateTime<Utc>) {
         if self.state != ProposalState::Pending {
@@ -925,6 +947,28 @@ mod tests {
         assert_eq!((start.workstream(), start.origin.kind()), (Some("w2"), "board"));
         let query: ProposalQuery = serde_json::from_value(serde_json::json!({ "workstream": "w1" })).unwrap();
         assert_eq!(query.workstream.as_deref(), Some("w1"));
+    }
+
+    #[test]
+    fn a_draft_is_put_in_a_workstream_and_back_wherever_it_records_one_and_a_board_comment_cannot() {
+        let item = work_item("1", "todo");
+        let mut chat = comment_on(&item);
+        chat.origin = Origin::chat("q");
+        assert!(chat.set_workstream(Some("w1")));
+        assert_eq!(chat.workstream(), Some("w1"));
+        assert!(chat.set_workstream(None));
+        assert_eq!(chat.workstream(), None);
+        let mut start = proposal(Intent::StartRun { connection_id: "c".into(), item: None, spec: run_spec() }, &item);
+        start.origin = Origin::Board;
+        assert!(start.can_join_workstream() && start.set_workstream(Some("w2")));
+        assert_eq!((start.workstream(), start.origin.workstream()), (Some("w2"), None));
+        assert!(start.set_workstream(None));
+        assert_eq!(start.workstream(), None);
+        let mut board = comment_on(&item);
+        board.origin = Origin::Board;
+        let before = board.clone();
+        assert!(!board.can_join_workstream() && !board.set_workstream(Some("w1")));
+        assert_eq!(board, before);
     }
 
     fn review(repo: &str, number: u64) -> Intent {

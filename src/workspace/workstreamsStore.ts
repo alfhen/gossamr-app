@@ -5,6 +5,7 @@ import { GENERAL_CONVERSATION, workstreamConversation, workstreamOfConversation 
 import { readinessPrompt } from "../lib/needs";
 import { ofItem, runWorkstream, stageText } from "../lib/workstreamStage";
 import { budgetView } from "../lib/workstreamHold";
+import { adoptCount, adoptedText, adoptUndoneText } from "../lib/workstreamAdopt";
 import { HELD_PERSON, type AutoStartSwitches, type ItemRef, type Run, type ScreenContext, type Workstream, type WorkstreamEvent, type WorkstreamMode, type WorkstreamRule, type WorkstreamUndo, type WorkstreamView } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { PIP_INPUT_ID } from "./draftKeys";
@@ -43,6 +44,10 @@ interface WorkstreamsState {
   askClose(id: string | null): void;
   /** Closes workstream `id`; its runs and drafts stay as they are, and its ticket's conversation is General again. False when it couldn't. */
   close(id: string): Promise<boolean>;
+  /** Reopens closed workstream `id` as it stood, from a closed row's Reopen. False when it couldn't (its ticket may have another one open by now). */
+  reopen(id: string): Promise<boolean>;
+  /** The person's "Bring them here": the runs and drafts on the workstream's ticket that sit under General move into it, with an Undo that puts them back. False when nothing moved. */
+  adopt(id: string): Promise<boolean>;
   /** The global auto-start switches, as Settings has them, for what "as in Settings" means; null until read. */
   globals: AutoStartSwitches | null;
   /** Reads the global auto-start switches again. */
@@ -144,6 +149,12 @@ export const useWorkstreams = create<WorkstreamsState>()((set, get) => {
     const backend = get().backend ?? useWorkspace.getState().backend;
     if (!backend) throw new Error("Not connected yet.");
     await backend.workstreamsUndo(id, undo);
+    if (get().backend === backend) await get().refresh();
+  }
+  async function reopenIt(id: string): Promise<void> {
+    const backend = get().backend ?? useWorkspace.getState().backend;
+    if (!backend) throw new Error("Not connected yet.");
+    await backend.workstreamsReopen(id);
     if (get().backend === backend) await get().refresh();
   }
   /** The offer of Undo for each workstream's hold, so Resume, Allow more steps or Close can take it back: it would undo what they just settled. */
@@ -263,12 +274,32 @@ export const useWorkstreams = create<WorkstreamsState>()((set, get) => {
         const ws = await backend.workstreamsClose(id);
         withdrawHold(id);
         if (get().backend === backend) await get().refresh();
-        useToasts.getState().push(`Closed the workstream on ${ws.itemKey ?? ws.title}. Its agents and drafts are kept.`, "info");
+        // Close is one click and a confirmation away from the person's work: Undo reopens it as it stood.
+        const name = ws.itemKey ?? ws.title;
+        offerUndo({ text: `Closed the workstream on ${name}. Its agents and drafts are kept in General.`, undone: `Reopened the workstream on ${name}.`, undo: () => reopenIt(id) });
         return true;
       } catch (e) {
         useToasts.getState().push(`Couldn't close the workstream. ${messageOf(e)}`);
         return false;
       }
+    },
+
+    async reopen(id) {
+      const done = await act("Couldn't reopen the workstream", (b) => b.workstreamsReopen(id));
+      if (!done.ok) return false;
+      useToasts.getState().push(`Reopened the workstream on ${done.value.itemKey ?? done.value.title}.`, "info");
+      return true;
+    },
+
+    async adopt(id) {
+      const ws = get().list.find((v) => v.workstream.id === id)?.workstream;
+      const done = await act("Couldn't bring them here", (b) => b.workstreamsAdopt(id));
+      if (!done.ok) return false;
+      const moved = done.value;
+      const key = ws?.itemKey ?? ws?.title ?? "the ticket";
+      const count = adoptCount(moved.runs.length, moved.drafts.length);
+      offerUndo({ text: adoptedText(count, key), undone: adoptUndoneText(count, key), undo: () => undoChange(id, { type: "adopt", ...moved }) });
+      return true;
     },
 
     async loadGlobals() {

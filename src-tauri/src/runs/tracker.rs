@@ -511,7 +511,8 @@ impl RunService {
             touched |= self.core.append_run_events(run_id, &[event]).await? > 0;
         }
         if run != before {
-            self.core.save_run(&run).await?;
+            // Where the run is filed is the person's to change while this poll looked (Bring them here, its Undo).
+            self.core.save_observed_run(&run).await?;
             touched = true;
         }
         // An answer Pip suggested has nothing left to answer once the run finished or stopped without one, or moved on

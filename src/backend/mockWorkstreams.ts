@@ -2,11 +2,12 @@ import { docText } from "../lib/docs";
 import { followWithReply, NUDGE_GONE, nudgeOffered, reporterFollow, reporterReplies as reporterRepliesOf } from "../lib/reporterWait";
 import { clarityGaps, type ClarityGap } from "../lib/ticketClarity";
 import { workstreamOf } from "../lib/proposals";
+import { adoptableOf, adoptWords, NOTHING_TO_ADOPT } from "../lib/workstreamAdopt";
 import { budgetLevel, budgetView } from "../lib/workstreamHold";
 import { byQueue, reviewBlocking, runLabels, stage } from "../lib/workstreamStage";
 import { readStored, writeStored } from "../workspace/storage";
 import { ALLOW_MORE_STEPS, BASIS_FIELDS, HELD_ALL, HELD_BUDGET, HELD_DAILY, HELD_PERSON, HELD_QUOTA, HELD_RESTART, TRIPWIRE, TRIPWIRES, WORKSTREAM_RULES } from "../types";
-import type { BasisField, Clarity, Escalation, ItemRef, ReadinessStop, ReporterReply, ReporterWait, Proposal, ReviewVerdict, Run, WorkItem, Workstream, WorkstreamActor, WorkstreamBasis, WorkstreamBudget, WorkstreamEvent, WorkstreamMode, WorkstreamRule, WorkstreamUndo, WorkstreamView, WorkstreamsChanged } from "../types";
+import type { Adoptable, BasisField, Clarity, Escalation, ItemRef, ReadinessStop, ReporterReply, ReporterWait, Proposal, ReviewVerdict, Run, WorkItem, Workstream, WorkstreamActor, WorkstreamBasis, WorkstreamBudget, WorkstreamEvent, WorkstreamMode, WorkstreamRule, WorkstreamUndo, WorkstreamView, WorkstreamsChanged } from "../types";
 import { startedFresh } from "./mockPipTurns";
 
 const CONNECTION = "mock";
@@ -300,6 +301,10 @@ export class MockWorkstreams {
   }
   /** The pending drafts there are, of which an escalation offers a GitHub review to post as it is; set by the backend that owns the drafts. */
   pendingDrafts: () => readonly Proposal[] = () => [];
+  /** Puts run `id` in workstream `workstream`, or back in General with null; set by the backend that owns the runs. */
+  moveRun: (id: string, workstream: string | null) => void = () => {};
+  /** The same for draft `id`; set by the backend that owns the drafts. */
+  moveDraft: (id: string, workstream: string | null) => void = () => {};
   /** A finished Triage's verdict on its ticket as its written answer gives it, null without one; set by the backend that owns the runs. */
   readinessOfRun: (run: Run) => { ready: boolean; questions: string[] } | null = () => null;
 
@@ -377,7 +382,8 @@ export class MockWorkstreams {
     const reporterReplied = !!follow?.replied;
     const reporterReply = reporterReplied && repliedAt && ws.itemKey ? this.replyAt(ws.itemKey, repliedAt) : null;
     const reporterReplies = ws.closedAt === null && ws.itemKey ? reporterRepliesOf(events, this.replyCommentsOf(ws.itemKey)) : [];
-    return { ...view, ...(waiting ? { waitingForPr: waiting } : {}), ...(reviewBlocking(judged) ? { reviewBlocking: true } : {}), ...(escalation ? { escalation } : {}), ...(readiness ? { readiness } : {}), ...(clarity ? { clarity } : {}), ...(waitingOnReporter ? { waitingOnReporter } : {}), ...(changedWhileWaiting ? { changedWhileWaiting } : {}), ...(reporterReplied ? { reporterReplied } : {}), ...(reporterReplied && repliedAt ? { reporterRepliedAt: repliedAt } : {}), ...(reporterReply ? { reporterReply } : {}), ...(reporterReplies.length ? { reporterReplies } : {}) };
+    const adoptable = ws.closedAt === null && ws.itemKey ? adoptableOf(ws, runs.filter((r) => r.item?.key === ws.itemKey), this.pendingDrafts()) : null;
+    return { ...view, ...(adoptable && (adoptable.runs.length || adoptable.drafts.length) ? { adoptable } : {}), ...(waiting ? { waitingForPr: waiting } : {}), ...(reviewBlocking(judged) ? { reviewBlocking: true } : {}), ...(escalation ? { escalation } : {}), ...(readiness ? { readiness } : {}), ...(clarity ? { clarity } : {}), ...(waitingOnReporter ? { waitingOnReporter } : {}), ...(changedWhileWaiting ? { changedWhileWaiting } : {}), ...(reporterReplied ? { reporterReplied } : {}), ...(reporterReplied && repliedAt ? { reporterRepliedAt: repliedAt } : {}), ...(reporterReply ? { reporterReply } : {}), ...(reporterReplies.length ? { reporterReplies } : {}) };
   }
 
   /** Opens a workstream on a cached ticket, or with no ticket and a title. A ticket with an open one gets that one back, unchanged. */
@@ -454,6 +460,30 @@ export class MockWorkstreams {
     this.save();
     this.changed();
     return next;
+  }
+
+  /** Reopens a closed workstream as it stood, as `reopen_workstream`: refused when its ticket has another open one by now; an open one is returned as it is. */
+  reopen(id: string): Workstream {
+    const ws = this.owned(id);
+    if (ws.closedAt === null) return ws;
+    if (ws.itemKey && this.forItem(ws.itemKey)) throw new Error(`${ws.itemKey} has another workstream open, so this one can't be reopened`);
+    const { closedAt: _, ...rest } = ws;
+    return this.changedTo({ ...rest, closedAt: null }, "person", "reopened");
+  }
+
+  /**
+   * The person's "Bring them here", as `adopt_into_workstream`: the runs and pending drafts on the ticket that are in no
+   * workstream become this one's, with one `adopted` line by the person. Returns what moved; refused when there is nothing.
+   */
+  adopt(id: string): Adoptable {
+    const ws = this.openOne(id);
+    if (!ws.itemKey) throw new Error("a workstream with no ticket has nothing to bring in");
+    const found = adoptableOf(ws, this.runs().filter((r) => r.item?.key === ws.itemKey), this.pendingDrafts());
+    if (!found.runs.length && !found.drafts.length) throw new Error(NOTHING_TO_ADOPT);
+    found.runs.forEach((r) => this.moveRun(r, ws.id));
+    found.drafts.forEach((d) => this.moveDraft(d, ws.id));
+    this.record(id, "person", "adopted", { detail: adoptWords(found) });
+    return found;
   }
 
   /** Replaces the notes of an open workstream, as `Core::set_workstream_notes` does: markers refused, scrubbed, at most 2 KB; blank clears. Only the digest and size are audited. */
@@ -674,6 +704,14 @@ export class MockWorkstreams {
     const last = events[events.length - 1];
     const gone = () => new Error("That change can't be undone any more: something else happened since, or it was a while ago.");
     const fresh = !!last && last.actor === "person" && this.now().getTime() - Date.parse(last.at) <= UNDO_WINDOW_MS;
+    if (undo.type === "adopt") {
+      if (!fresh || last!.action !== "adopted") throw gone();
+      const mine = new Set(this.runs().filter((r) => r.spec.workstream === id).map((r) => r.id));
+      const pending = new Map(this.pendingDrafts().map((p) => [p.id, p] as const));
+      undo.runs.filter((r) => mine.has(r)).forEach((r) => this.moveRun(r, null));
+      undo.drafts.filter((d) => pending.has(d) && workstreamOf(pending.get(d)!) === id).forEach((d) => this.moveDraft(d, null));
+      return this.changedTo(ws, "person", "undone", { detail: "adopted" });
+    }
     if (undo.type === "hold") {
       if (!fresh || last!.action !== "held" || !last!.detail || last!.detail !== ws.heldReason) throw gone();
       if ((undo.was !== null && !validHoldReason(undo.was)) || undo.was === ws.heldReason) throw new Error("That isn't a hold to go back to.");

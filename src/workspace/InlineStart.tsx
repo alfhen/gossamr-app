@@ -107,7 +107,7 @@ interface Revealable {
 
 /**
  * Brings a review just opened to the top of what scrolls it and puts the keyboard in it: on the review itself, where Enter
- * does nothing, so only ⌘↵ or the Start button starts; Tab from there goes to Start. Only that one box scrolls, never
+ * does nothing, so only ⌘↵ or the Start button starts; Tab from there goes through the disclosures first. Only that one box scrolls, never
  * Pip home around it, as `scrollIntoView` would once the box can't scroll far enough.
  */
 export function revealReview(panel: Revealable, focus = true) {
@@ -116,13 +116,6 @@ export function revealReview(panel: Revealable, focus = true) {
   if (!box) return;
   const to = scrollTopFor(panel.getBoundingClientRect(), box.getBoundingClientRect(), box.scrollTop, "start");
   if (to !== null) box.scrollTop = Math.max(0, to - REVIEW_MARGIN);
-}
-
-/** Tab on the review itself goes straight to Start, past the prompt and the checks, while Start is on; true when it went. */
-export function tabToStart(ev: { key: string; shiftKey: boolean; metaKey: boolean; ctrlKey: boolean; altKey: boolean; target: unknown; currentTarget: unknown }, start: { disabled: boolean; focus(): void } | null): boolean {
-  if (ev.key !== "Tab" || ev.shiftKey || ev.metaKey || ev.ctrlKey || ev.altKey || ev.target !== ev.currentTarget || !start || start.disabled) return false;
-  start.focus();
-  return true;
 }
 
 /** The newest request for each draft, from one counter, so an answer for an earlier open, close or start never lands. */
@@ -335,7 +328,6 @@ export function InlineStartView({ id, entry, on }: { id: string; entry: InlineEn
       data-inline-start={phase}
       // ⌘↵ starts from anywhere in the review, on the same terms as the Start button.
       onKeyDown={(ev) => {
-        if (tabToStart(ev, ev.currentTarget.querySelector<HTMLButtonElement>("[data-inline-start-button]"))) return void ev.preventDefault();
         const key = inlineStartKey(ev, entry);
         if (!key) return;
         ev.preventDefault();

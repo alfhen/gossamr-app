@@ -178,6 +178,12 @@ export function PermissionAsk({ run, onAttach, onStop, label, answered: given, c
           {offer.reason}
         </p>
       )}
+      {/* The refusal says Claude Code won't; what Deny then does is said next to it, not under the buttons. */}
+      {offer.allow === "readOnly" && !allowed && (
+        <p data-permission-read-only className="m-0 text-sm text-ws-ink2">
+          {READ_ONLY_STEP_NOTE}
+        </p>
+      )}
       {/* The card behind takes a click or Enter as opening the run; these buttons are answers of their own. */}
       <div data-permission-decisions className="flex flex-wrap items-center gap-2" onClick={(ev) => ev.stopPropagation()} onKeyDown={(ev) => (ev.key === "Enter" || ev.key === " ") && ev.stopPropagation()}>
         {offer.allow === "offered" && !allowed && (
@@ -205,11 +211,6 @@ export function PermissionAsk({ run, onAttach, onStop, label, answered: given, c
           </Btn>
         )}
       </div>
-      {offer.allow === "readOnly" && (
-        <p data-permission-read-only className="m-0 text-xs text-ws-ink3">
-          {READ_ONLY_STEP_NOTE}
-        </p>
-      )}
       {/* The explainer says it already, above. */}
       {!explained && (
         <p id={note} className="m-0 text-xs text-ws-ink3">

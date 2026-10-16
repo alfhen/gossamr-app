@@ -5,7 +5,8 @@ import { useAutoHeight } from "../components/autoHeight";
 import { parseBlocks, plainMarkdown } from "../lib/markdown";
 import { hunkLinesAround } from "../lib/diffHunks";
 import { KEPT_EDITED, keptOlderReviews, REVIEW_OUTDATED_NOTE, reviewEditProblem } from "../lib/proposals";
-import { newRiskQuote, newRisks, riskNote, type Risk, type RiskQuotes } from "../lib/riskyText";
+import { newRiskQuote, newRisks, type Risk, type RiskQuotes } from "../lib/riskyText";
+import { PostingPause } from "./PostingPause";
 import type { ChangedFile, DiffSide, Proposal, ProposalEdit, ReviewComment } from "../types";
 import { showPause, type DraftCardProps } from "./DraftCard";
 import { useCardKeys } from "./draftCardKeys";
@@ -89,7 +90,7 @@ export function reviewRisks(review: Review, summary: string, comments: readonly 
   const quote: RiskQuotes = {};
   for (const { was: before, now } of pairs) {
     for (const r of newRisks(before, now)) risks.add(r);
-    for (const [r, q] of Object.entries(newRiskQuote(before, now)) as [Risk, string][]) quote[r] ??= q;
+    for (const [r, found] of Object.entries(newRiskQuote(before, now)) as [Risk, string[]][]) quote[r] = [...new Set([...(quote[r] ?? []), ...found])];
   }
   return { risks: (["broadcast", "secret"] as const).filter((r) => risks.has(r)), quote };
 }
@@ -551,25 +552,7 @@ export function ReviewDraft({
             {shownError ?? problem}
           </p>
         )}
-        {pause && open && (
-          <p
-            role="alert"
-            data-post-pause={pause.risks.join(" ")}
-            className="m-0 scroll-mb-12 text-sm text-ws-warn"
-            onKeyDown={(ev) => {
-              // Esc here is Keep editing, not the peek closing over the unsaved text.
-              if (ev.key !== "Escape" || ev.defaultPrevented) return;
-              ev.preventDefault();
-              ev.stopPropagation();
-              keepEditing();
-            }}
-          >
-            {riskNote(pause.risks, pause.quote, "the pull request")}{" "}
-            <button type="button" data-post-pause-keep onClick={keepEditing} className="rounded font-semibold underline hover:bg-ws-hover focus-visible:outline-2 focus-visible:outline-ws-pip">
-              Keep editing
-            </button>
-          </p>
-        )}
+        {pause && open && <PostingPause risks={pause.risks} quote={pause.quote} where="the pull request" anyway="Post it anyway" working={working || state === "applying" || !!problem} onKeep={keepEditing} onPost={() => post()} />}
         <div data-draft-actions className="sticky bottom-0 z-[1] -mx-3 -mb-2.5 flex flex-wrap items-center justify-end gap-2 border-t border-ws-sep bg-ws-win px-3 py-2">
           <button
             type="button"
@@ -596,19 +579,10 @@ export function ReviewDraft({
                   Post anyway
                 </button>
               )}
-              {canPost && (
-                <button type="button" disabled={working || state === "applying" || !!problem} title={problem ?? undefined}
-                  onClick={() => post()}
-                  onKeyDown={(ev) => {
-                    // While paused this button reads "Post it anyway": Esc is Keep editing from here too, and only here.
-                    if (!pause || ev.key !== "Escape" || ev.defaultPrevented) return;
-                    ev.preventDefault();
-                    ev.stopPropagation();
-                    keepEditing();
-                  }}
-                  className={primary}
-                >
-                  {working || state === "applying" ? "Posting…" : pause ? "Post it anyway" : postLabel(kept.length)}
+              {/* While the pause shows, its own Post it anyway stands in for this button, beside Keep editing. */}
+              {canPost && !pause && (
+                <button type="button" disabled={working || state === "applying" || !!problem} title={problem ?? undefined} onClick={() => post()} className={primary}>
+                  {working || state === "applying" ? "Posting…" : postLabel(kept.length)}
                 </button>
               )}
             </>

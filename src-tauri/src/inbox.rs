@@ -34,7 +34,7 @@ pub use pip_runs::{PipRunAsk, NOT_ON_ITS_OWN, PR_MOVED};
 pub use pip_runs::VERIFY_UNPINNED;
 #[cfg(test)]
 pub(crate) use workstreams::{basis_of, drifted};
-pub use workstreams::{reporter_follow, Admitted, Escalation, ReadinessStop, WakeAdmission, WorkstreamUndo, WorkstreamView, ESCALATION_GONE, NOTES_CLOSE, NOTES_LIMIT, NOTES_OPEN};
+pub use workstreams::{reporter_follow, Adoptable, Admitted, Escalation, ReadinessStop, WakeAdmission, WorkstreamUndo, WorkstreamView, ESCALATION_GONE, NOTES_CLOSE, NOTES_LIMIT, NOTES_OPEN};
 pub use rewrites::TextSeen;
 mod watch;
 
@@ -306,6 +306,11 @@ impl Core {
             *guard = Some((connection.id.clone(), db));
         }
         f(&guard.as_ref().expect("opened above").1)
+    }
+
+    /// `with_db_for` as one transaction: everything `f` writes (a change and its audit line) lands together, or nothing does.
+    async fn with_db_atomically_for<T>(&self, scope: &Scope, f: impl FnOnce(&Db) -> Result<T>) -> Result<T> {
+        self.with_db_for(scope, |db| db.atomically(f)).await
     }
 
     pub fn close_db(&self) {

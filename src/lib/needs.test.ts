@@ -759,4 +759,12 @@ describe("the chip on a row (G6)", () => {
     expect(chipLabel({ group: "approve", kind: "draft", primary: { label: "Approve" } })).toBe("Approve");
     expect(chipLabel({ group: "unblock", kind: "question", primary: { label: "Send answer" } })).toBe("Unblock");
   });
+
+  it("is Post for a comment draft, whose button says Post comment (G25)", () => {
+    const list = needs(input({ proposals: [draft("d-comment", comment("CA-401"), 5)] }));
+    const need = list.find((n) => n.kind === "draft")!;
+    expect(need.primary.label).toBe("Post comment");
+    expect(chipLabel(need)).toBe("Post");
+    expect(need.group).toBe("approve");
+  });
 });

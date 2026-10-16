@@ -1,6 +1,7 @@
 import type { Mention } from "../lib/mentions";
 import type { ClarityGap } from "../lib/ticketClarity";
 import type {
+  Adoptable,
   AssignedElsewhere,
   CacheChanged,
   CatalogPage,
@@ -307,6 +308,10 @@ export interface Backend {
   workstreamsList(includeClosed?: boolean): Promise<WorkstreamView[]>;
   /** Closes a workstream; its runs and drafts stay as they are. */
   workstreamsClose(id: string): Promise<Workstream>;
+  /** Reopens a closed workstream as it stood (the Undo of Close, and a closed row's Reopen). Refused when its ticket has another open one by now. */
+  workstreamsReopen(id: string): Promise<Workstream>;
+  /** The person's "Bring them here": the runs and pending drafts on the workstream's ticket that are in no workstream move into it, audited as `adopted`. Returns what moved, for `workstreamsUndo`. Refused when there are none. */
+  workstreamsAdopt(id: string): Promise<Adoptable>;
   /** Replaces the notes of an open workstream; blank clears them. At most 2 KB, and no data markers. */
   workstreamsSetNotes(id: string, notes: string): Promise<Workstream>;
   /** A workstream's append-only audit, oldest first. */

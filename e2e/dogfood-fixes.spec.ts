@@ -252,7 +252,7 @@ test.describe("agent intro continues (D1, D25)", () => {
     await expect(summary.nth(1)).toHaveText(/^Build changes code in its own worktree and runs with your own Claude settings, which decide whether it can push.*requests, not locks/);
     // The detail further down says the same about pushing.
     await expect(sheet.locator('li[data-tone="ask"]', { hasText: "Pushing a branch" })).toContainText("your Claude settings decide");
-    await expect(summary.nth(2)).toHaveText("Gossamr posts to Jira or GitHub only what you approve. An agent run with your Claude settings, which a Build is, could reach Jira or GitHub on its own: your Claude settings, not Gossamr, decide that.");
+    await expect(summary.nth(2)).toHaveText("Gossamr posts to Jira or GitHub only what you approve. A Build runs with your Claude settings and could reach Jira or GitHub on its own: your Claude settings, not Gossamr, decide that.");
     await sheet.getByRole("button", { name: "Got it, continue" }).click();
     await expect(sheet).toHaveCount(0);
     // No second click: the review is open in place.
@@ -294,7 +294,7 @@ test.describe("agent intro continues (D1, D25)", () => {
   test("Pip's intro says nothing is posted to Jira until the person approves", async ({ page }) => {
     await openApp(page);
     await openPip(page);
-    await expect(pipPane(page)).toContainText("Nothing is posted to Jira until you approve it. On GitHub, a build runs as you: when Pushing is ticked its prompt asks it to push only its own branch to a draft pull request. That is a request, not a lock; see Agent safety.");
+    await expect(pipPane(page)).toContainText("Nothing is posted to Jira until you approve it. On GitHub, a Build runs as you: when Pushing is ticked its prompt asks it to push only its own branch to a draft pull request. That is a request, not a lock; see Agent safety.");
     await expect(pipPane(page)).not.toContainText("Nothing changes until you approve");
   });
 });
@@ -631,7 +631,8 @@ test.describe("draft cards: click, Esc, a and s (D2, D7, D23, D28)", () => {
     const start = review.getByRole("button", { name: "Start agent" });
     await expect(start).toBeEnabled();
     await expect.poll(async () => (await review.evaluate((el) => el === document.activeElement)) || (await start.evaluate((el) => el === document.activeElement))).toBe(true);
-    if (!(await start.evaluate((el) => el === document.activeElement))) await page.keyboard.press("Tab");
+    // Tab goes through the disclosures first (round 13, G27) and then reaches Start.
+    for (let i = 0; i < 20 && !(await start.evaluate((el) => el === document.activeElement)); i++) await page.keyboard.press("Tab");
     await expect(start).toBeFocused();
     await page.keyboard.press("Escape");
     await expect(review).toHaveCount(0);

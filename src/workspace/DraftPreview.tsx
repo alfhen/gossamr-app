@@ -88,7 +88,7 @@ function Expandable({ id, text }: { id: string; text: string }) {
         {text}
       </div>
       {long && (
-        <button type="button" aria-expanded={open} aria-controls={id} onClick={() => setOpen(!open)} className="mt-1 rounded text-sm font-semibold text-ws-pip hover:underline">
+        <button type="button" aria-expanded={open} aria-controls={id} aria-label={open ? "Show less of the draft text" : "Show more of the draft text"} onClick={() => setOpen(!open)} className="mt-1 rounded text-sm font-semibold text-ws-pip hover:underline">
           {open ? "Show less" : "Show more"}
         </button>
       )}

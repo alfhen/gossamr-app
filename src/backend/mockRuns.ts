@@ -13,6 +13,7 @@ import { revisedByPipUnedited, runAnswerProblem, type MockProposals } from "./mo
 import { ESCALATION_GONE, textDigest, type MockWorkstreams } from "./mockWorkstreams";
 import { fixRoundMessage, marked, type ReviewFinding } from "./mockSupervisor";
 import { UNCLEAR_TRIAGE_SUMMARY, thinDescription, unclearTriageResult } from "./mockReadiness";
+import { withWorkstream } from "../lib/workstreamAdopt";
 import { BUILD_ACCOUNT_LIMIT, BUILD_ACCOUNT_PREFACE, BUILD_NEEDS_PLAN, PIP_CHAIN_KINDS, REVIEW_NEEDS_BUILD, REVIEW_NO_FOCUS, WAITING_FOR_PR_HINT, ASSUMPTIONS_PREFACE, FINDINGS_LIMIT, FINDINGS_PREFACE, INSTRUCTIONS, pipPrompt, NEW_TICKET_TAIL, PLAN_FOLLOW, PLAN_FOLLOW_UNEDITED, PLAN_LIMIT, PUSH_ALLOWED, TICKETLESS_STARTER, buildAccountLabel, checkoutParagraph, checksOutPr, readOnlyRules, testsParagraph, findingsLabel, planLabel, reportParagraph, reviewRefusal, specProblem, withoutMarkers } from "./mockRunKinds";
 
 /** Why a person's fix round isn't sent when none of the review's blocking findings cites a file and line, as `NOTHING_TO_FIX` in src-tauri/src/runs/follow_up.rs. */
@@ -621,6 +622,14 @@ export class MockRuns {
 
   private changed() {
     this.listeners.forEach((l) => l({ connectionId: CONNECTION }));
+  }
+
+  /** Files run `id` under workstream `workstream`, or back in General with null; only the person's "Bring them here" and its Undo do. */
+  setWorkstream(id: string, workstream: string | null) {
+    const run = this.runs.find((r) => r.id === id);
+    if (!run) return;
+    this.runs = this.runs.map((r) => (r.id === id ? { ...r, spec: withWorkstream(r.spec, workstream) } : r));
+    this.changed();
   }
 
   /** The ticket an approved draft of this run created, which the backend keeps on the run. */

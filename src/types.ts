@@ -828,9 +828,16 @@ export type WorkstreamMode = "advise" | "manage";
 
 /**
  * Mirrors `WorkstreamUndo` in src-tauri/src/inbox/workstreams.rs. What the person's Undo takes back, with how the workstream
- * stood before: a hold (`was`: the hold it replaced, if any) or a switch of mode (`was`, and the mode a tripwire had kept).
+ * stood before: a hold (`was`: the hold it replaced, if any), a switch of mode (`was`, and the mode a tripwire had kept), or
+ * "Bring them here" (the runs and drafts it moved, which go back to General).
  */
-export type WorkstreamUndo = { type: "hold"; was: string | null } | { type: "mode"; was: WorkstreamMode; resumeMode: WorkstreamMode | null };
+export type WorkstreamUndo = { type: "hold"; was: string | null } | { type: "mode"; was: WorkstreamMode; resumeMode: WorkstreamMode | null } | { type: "adopt"; runs: string[]; drafts: string[] };
+
+/** Runs and pending drafts on a workstream's ticket that belong to no workstream (they sit under General), by id; also what bringing them in moved. As `Adoptable` in src-tauri/src/inbox/workstreams.rs. */
+export interface Adoptable {
+  runs: string[];
+  drafts: string[];
+}
 
 /** An auto-start rule: which finished run may start which successor on its own. */
 export type WorkstreamRule = "investigate_triage" | "triage_plan" | "plan_build" | "build_review" | "fix_round" | "review_verify";
@@ -955,6 +962,8 @@ export interface WorkstreamView {
   reporterReply?: ReporterReply;
   /** Every reply from someone but the person on the ticket since the first reporter ask was posted, oldest first, whether or not the wait they ended was asked again: the timeline tells each. As `reporter_replies` in src-tauri/src/inbox/workstreams.rs. */
   reporterReplies?: ReporterReplyAt[];
+  /** Runs and pending drafts on the ticket that are in no workstream, while the workstream is open: the view offers to bring them here (`workstreamsAdopt`), never moves them on its own. As `adoptable` in src-tauri/src/inbox/workstreams.rs. */
+  adoptable?: Adoptable | null;
   budget: BudgetView;
 }
 

@@ -22,6 +22,8 @@ export interface Command {
   stay?: boolean;
   /** Extra words that should find the command. */
   keywords?: string;
+  /** It only brings back something already there (a card to show again), where another command of the same name does something new: among equal matches it comes after. */
+  refocus?: boolean;
   run(): void;
 }
 
@@ -192,7 +194,7 @@ export function buildCommands(containers: readonly WorkContainer[], savedViews: 
     { id: "app:drafts", group: "Go to", icon: "→", label: "Open drafts", keywords: "pip proposals review waiting", run: a.openDrafts },
     { id: "app:jira-sent", group: "Go to", icon: "→", label: "What Jira saw from me", keywords: "posted sent wrote comments moves transitions descriptions subtasks audit history", run: a.openJiraSent },
     { id: "app:settings", group: "Go to", icon: "⚙", label: "Open settings", keywords: "preferences autopilot", run: a.openSettings },
-    ...(ctx.agents ? [{ id: "app:start-my-day", group: "Go to" as const, icon: "☀", label: "Start my day", keywords: "morning today summary needs you unclear reporter waiting cobweb drafts", run: a.startMyDay }] : []),
+    ...(ctx.agents ? [{ id: "app:start-my-day", group: "Go to" as const, icon: "☀", label: "Start my day", keywords: "morning today summary needs you unclear reporter waiting cobweb drafts", refocus: true, run: a.startMyDay }] : []),
     ...(ctx.agents ? [{ id: "app:plan-my-week", group: "Go to" as const, icon: "☷", label: "Plan my week", keywords: "plan week this week priorities what to work on focus", run: a.planMyWeek }] : []),
     ...(ctx.agents && !ctx.onPipHome ? [{ id: "app:pip-home", group: "Go to" as const, icon: "✦", label: "Open Pip home", hint: PIP_HOME_HINT, keywords: "pip workstreams conversation agents manager needs you", run: a.openPipHome }] : []),
     // Before "Stop all agents…" in the list, so the query "agents" lands here first.
@@ -280,7 +282,8 @@ export function rankCommands(commands: readonly Command[], query: string): Comma
     const perWord = words.map((w) => Math.min(...fields.map((f) => score(f, w) ?? Infinity)));
     if (perWord.every(Number.isFinite)) ranked.push({ command, rank: perWord.reduce((a, b) => a + b, 0) });
   }
-  return ranked.sort((x, y) => x.rank - y.rank).map((r) => r.command);
+  // Equal matches keep their order, except that one that only refocuses follows one that does something new ("start": Start a workstream… before Start my day).
+  return ranked.sort((x, y) => x.rank - y.rank || Number(!!x.command.refocus) - Number(!!y.command.refocus)).map((r) => r.command);
 }
 
 /**
@@ -462,15 +465,17 @@ export function startWorkstreamCommands(items: readonly WorkItem[], query: strin
 
 /**
  * What the workstream step says when nothing matches: for a typed ticket key, why that one can't be started (Done, a
- * workstream open already, or not loaded here), else that no ticket matches the words.
+ * workstream open already, or not loaded here), else that no ticket matches the words. `known` is the ticket as the full
+ * cache, or a live read, has it when `items` (what the person watches) lacks it: a Done ticket of an unwatched project is
+ * still said to be Done, not one of three possible reasons.
  */
-export function noStartableTicket(items: readonly WorkItem[], query: string, open: readonly WorkstreamView[]): string {
+export function noStartableTicket(items: readonly WorkItem[], query: string, open: readonly WorkstreamView[], known: Pick<WorkItem, "item" | "status"> | null = null): string {
   const q = query.trim();
   if (!q) return "Every open ticket has a workstream already.";
   const key = ticketKeyOf(q);
   if (!key) return `No ticket without a workstream matches “${q}”.`;
   const found = items.find((i) => i.item.key.toUpperCase() === key);
-  if (!found) return `No open ticket ${key} here. It may be Done, already have a workstream, or not be loaded.`;
+  if (!found) return known?.item.key.toUpperCase() === key && known.status.category === "done" ? `${known.item.key} is Done in Jira.` : `No open ticket ${key} here. It may be Done, already have a workstream, or not be loaded.`;
   if (found.status.category === "done") return `${found.item.key} is Done in Jira.`;
   const taken = open.some((v) => v.workstream.closedAt === null && v.workstream.itemKey === found.item.key && v.workstream.connectionId === found.item.connectionId);
   return taken ? `${found.item.key} has a workstream already.` : `No ticket without a workstream matches “${q}”.`;

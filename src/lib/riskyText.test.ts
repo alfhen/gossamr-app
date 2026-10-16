@@ -37,22 +37,34 @@ describe("the pause before posting edited text", () => {
   });
 
   it("quotes the first new match of each risk: a broad mention as written, a secret masked to its first two characters", () => {
-    expect(newRiskQuote("Looks good", "Looks good, cc @Everyone")).toEqual({ broadcast: "@Everyone" });
-    expect(newRiskQuote("Looks good", "Password: hunter2")).toEqual({ secret: "hu…" });
-    expect(newRiskQuote("Looks good", "kodeord Hunter2xyz")).toEqual({ secret: "Hu…" });
+    expect(newRiskQuote("Looks good", "Looks good, cc @Everyone")).toEqual({ broadcast: ["@Everyone"] });
+    expect(newRiskQuote("Looks good", "Password: hunter2")).toEqual({ secret: ["hu…"] });
+    expect(newRiskQuote("Looks good", "kodeord Hunter2xyz")).toEqual({ secret: ["Hu…"] });
     // A bearer token is quoted by the token, not by the word in front of it; a URL by its password.
-    expect(newRiskQuote("Looks good", "Bearer abcdefghijklmnopqrstuvwxyz")).toEqual({ secret: "ab…" });
-    expect(newRiskQuote("Looks good", "token=ghp_abcdefghijklmnopqrstuvwxyz0123")).toEqual({ secret: "gh…" });
-    expect(newRiskQuote("Looks good", "x AKIAIOSFODNN7EXAMPLE")).toEqual({ secret: "AK…" });
-    expect(newRiskQuote("x", "postgres://admin:secret@db/prod")).toEqual({ secret: "se…" });
-    expect(newRiskQuote("x", "postgres://admin:pw@db/prod")).toEqual({ secret: "pw…" });
-    expect(newRiskQuote("x", "Adgangskoden er solsikke99")).toEqual({ secret: "so…" });
-    expect(newRiskQuote("x", "mit password er: Kaffe123")).toEqual({ secret: "Ka…" });
+    expect(newRiskQuote("Looks good", "Bearer abcdefghijklmnopqrstuvwxyz")).toEqual({ secret: ["ab…"] });
+    expect(newRiskQuote("Looks good", "token=ghp_abcdefghijklmnopqrstuvwxyz0123")).toEqual({ secret: ["gh…"] });
+    expect(newRiskQuote("Looks good", "x AKIAIOSFODNN7EXAMPLE")).toEqual({ secret: ["AK…"] });
+    expect(newRiskQuote("x", "postgres://admin:secret@db/prod")).toEqual({ secret: ["se…"] });
+    expect(newRiskQuote("x", "postgres://admin:pw@db/prod")).toEqual({ secret: ["pw…"] });
+    expect(newRiskQuote("x", "Adgangskoden er solsikke99")).toEqual({ secret: ["so…"] });
+    expect(newRiskQuote("x", "mit password er: Kaffe123")).toEqual({ secret: ["Ka…"] });
     // Both risks are quoted, and only what is new.
-    expect(newRiskQuote("cc @everyone", "cc @everyone\nPassword: hunter2 and @here")).toEqual({ secret: "hu…", broadcast: "@here" });
-    expect(newRiskQuote("x", "@here, then Password: hunter2")).toEqual({ broadcast: "@here", secret: "hu…" });
+    expect(newRiskQuote("cc @everyone", "cc @everyone\nPassword: hunter2 and @here")).toEqual({ secret: ["hu…"], broadcast: ["@here"] });
+    expect(newRiskQuote("x", "@here, then Password: hunter2")).toEqual({ broadcast: ["@here"], secret: ["hu…"] });
     expect(newRiskQuote("cc @everyone", "cc @everyone, thanks")).toEqual({});
     expect(newRiskQuote("x", "cc @Mette")).toEqual({});
+  });
+
+  it("quotes each secret, not only the first, each by its first two characters, and each broad mention once (G26)", () => {
+    const edited = "Password: hunter2\nand token=ghp_abcdefghijklmnopqrstuvwxyz0123\ncc @here @everyone @HERE";
+    expect(newRiskQuote("x", edited)).toEqual({ secret: ["hu…", "gh…"], broadcast: ["@here", "@everyone"] });
+    const note = riskNote(["broadcast", "secret"], newRiskQuote("x", edited));
+    expect(note).toBe("Your edit mentions everyone at “@here” and “@everyone”. It also looks like a password, key or token at “hu…” and “gh…”. Everyone on the ticket would see it once it is posted.");
+    for (const rest of ["nter2", "abcdefghij"]) expect(note).not.toContain(rest);
+    // A secret that was already in the draft is not quoted again; a long list says how many more.
+    expect(newRiskQuote("Password: hunter2", edited).secret).toEqual(["gh…"]);
+    const many = riskNote(["secret"], { secret: ["aa…", "bb…", "cc…", "dd…", "ee…"] });
+    expect(many).toBe("Your edit looks like a password, key or token at “aa…”, “bb…”, “cc…” and 2 more. Everyone on the ticket would see it once it is posted.");
   });
 
   it("stops a URL's userinfo at the authority boundary, so a query or path with a colon and an @ is not a credential", () => {
@@ -66,15 +78,15 @@ describe("the pause before posting edited text", () => {
   it("never lets the rest of a secret into the note", () => {
     for (const secret of ["hunter2", "ghp_abcdefghijklmnopqrstuvwxyz0123", "s3cr3tvalue"]) {
       expect(maskSecret(secret)).toBe(`${secret.slice(0, 2)}…`);
-      expect(newRiskQuote("x", `Password: ${secret}`).secret ?? "").not.toContain(secret.slice(2));
+      expect(newRiskQuote("x", `Password: ${secret}`).secret?.join(" ") ?? "").not.toContain(secret.slice(2));
     }
     expect(maskSecret("é")).toBe("é…");
   });
 
   it("puts the quote in the note", () => {
-    expect(riskNote(["broadcast"], { broadcast: "@everyone" })).toBe("Your edit mentions everyone at “@everyone”. Everyone on the ticket would see it once it is posted.");
-    expect(riskNote(["secret"], { secret: "hu…" })).toBe("Your edit looks like a password, key or token at “hu…”. Everyone on the ticket would see it once it is posted.");
-    expect(riskNote(["broadcast", "secret"], { broadcast: "@here", secret: "hu…" })).toBe("Your edit mentions everyone at “@here”. It also looks like a password, key or token at “hu…”. Everyone on the ticket would see it once it is posted.");
+    expect(riskNote(["broadcast"], { broadcast: ["@everyone"] })).toBe("Your edit mentions everyone at “@everyone”. Everyone on the ticket would see it once it is posted.");
+    expect(riskNote(["secret"], { secret: ["hu…"] })).toBe("Your edit looks like a password, key or token at “hu…”. Everyone on the ticket would see it once it is posted.");
+    expect(riskNote(["broadcast", "secret"], { broadcast: ["@here"], secret: ["hu…"] })).toBe("Your edit mentions everyone at “@here”. It also looks like a password, key or token at “hu…”. Everyone on the ticket would see it once it is posted.");
     expect(riskNote(["secret"])).not.toContain("“");
   });
 });

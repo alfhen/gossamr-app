@@ -167,7 +167,7 @@ describe("the workstream's controls", () => {
     expect(at(viewOf({ heldReason: HELD_PERSON }))).toContain("data-close-workstream");
     const asking = at(viewOf(), true);
     expect(asking).toContain('aria-label="Close this workstream"');
-    expect(asking).toContain("Its conversation goes back to General; its agents and drafts are kept.");
+    expect(asking).toContain("Its conversation goes back to General; its agents and drafts are kept in General.");
     // Where a workstream can't be closed from (no handler), there is no button.
     expect(render(viewOf())).not.toContain("data-close-workstream");
     // Nor where it could ask but has nothing to close with: neither the button nor its question.
@@ -180,7 +180,7 @@ describe("the workstream's controls", () => {
     const html = renderToStaticMarkup(<CloseConfirm onClose={vi.fn()} onKeep={vi.fn()} />);
     const [, q, d] = /aria-describedby="(\S+) (\S+)"/.exec(html)!;
     expect(html).toContain(`<span id="${q}">Close it?</span>`);
-    expect(html).toContain(`<span id="${d}">Its conversation goes back to General; its agents and drafts are kept.</span>`);
+    expect(html).toContain(`<span id="${d}">Its conversation goes back to General; its agents and drafts are kept in General.</span>`);
     // Two buttons: Tab from Keep (the second) goes to Close workstream, not out to Resume; Shift+Tab from Close wraps to Keep.
     expect(tabWithin({ key: "Tab", shiftKey: false }, 1, 2)).toBe(0);
     expect(tabWithin({ key: "Tab", shiftKey: false }, 0, 2)).toBe(1);
@@ -697,5 +697,20 @@ describe("focus after Close workstream (G5)", () => {
     controlActions("w1").onClose?.();
     await vi.waitFor(() => expect(row.focus).toHaveBeenCalledTimes(1));
     close.mockRestore();
+  });
+});
+
+describe("the offer to bring a ticket's runs and drafts here (G17)", () => {
+  it("says what sits under General in one line with a button, and shows nothing without them or when closed", () => {
+    const offered = { ...viewOf(), adoptable: { runs: ["r1", "r2"], drafts: ["d1"] } };
+    const html = render(offered);
+    expect(html).toContain("data-adopt-notice=");
+    expect(html).toContain("2 runs and 1 draft on CA-401 are under General.");
+    expect(html).toMatch(/<button[^>]*data-adopt[^>]*>Bring them here<\/button>/);
+    expect(render({ ...viewOf(), adoptable: { runs: ["r1"], drafts: [] } })).toContain("1 run on CA-401 is under General.");
+    expect(render(viewOf())).not.toContain("data-adopt-notice");
+    expect(render({ ...viewOf(), adoptable: { runs: [], drafts: [] } })).not.toContain("data-adopt-notice");
+    // It comes before the clarity notice and the next step, right under the held banner.
+    expect(html.indexOf("data-adopt-notice")).toBeGreaterThan(html.indexOf("data-mode-line"));
   });
 });

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { focusComment } from "./jump";
+import type { ConnectionInfo, WatchState } from "../types";
+import { connectionOfKeys, focusComment } from "./jump";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -16,5 +17,16 @@ describe("focusComment", () => {
   it("does nothing for a comment that isn't shown", () => {
     vi.stubGlobal("document", { getElementById: () => null });
     expect(focusComment("gone")).toBe(false);
+  });
+});
+
+describe("connectionOfKeys", () => {
+  const conn = (id: string, kind: string) => ({ id, kind }) as ConnectionInfo;
+  const ws = (connections: ConnectionInfo[], watch: Pick<WatchState, "connectionId">[] = []) => ({ connections, watch }) as Parameters<typeof connectionOfKeys>[0];
+
+  it("is nothing until a work connection or a watched work ticket is there, which is what the palette's lookup waits for", () => {
+    expect(connectionOfKeys(ws([conn("github:me", "github")]))).toBeUndefined();
+    expect(connectionOfKeys(ws([conn("github:me", "github")], [{ connectionId: "jira:acme" }]))).toBe("jira:acme");
+    expect(connectionOfKeys(ws([conn("github:me", "github"), conn("jira:acme", "jira")]))).toBe("jira:acme");
   });
 });

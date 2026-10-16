@@ -63,6 +63,48 @@ pub enum WorkstreamUndo {
     /// Takes back a switch of mode: `was` again, with the mode a tripwire had taken away (`resume_mode`) still kept for resuming.
     #[serde(rename_all = "camelCase")]
     Mode { was: Mode, resume_mode: Option<Mode> },
+    /// Takes back "Bring them here": each run and draft listed goes back to General, if it is still in this workstream.
+    Adopt { runs: Vec<String>, drafts: Vec<String> },
+}
+
+/// The runs and pending drafts on a workstream's ticket that belong to no workstream (they sit under General), which
+/// the person may bring into it; also what bringing them in moved, by id.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct Adoptable {
+    pub runs: Vec<String>,
+    pub drafts: Vec<String>,
+}
+
+impl Adoptable {
+    pub fn is_empty(&self) -> bool {
+        self.runs.is_empty() && self.drafts.is_empty()
+    }
+
+    /// "2 runs, 1 draft": what the audit line says was brought in.
+    fn words(&self) -> String {
+        let part = |n: usize, one: &str| format!("{n} {one}{}", if n == 1 { "" } else { "s" });
+        match (self.runs.len(), self.drafts.len()) {
+            (r, 0) => part(r, "run"),
+            (0, d) => part(d, "draft"),
+            (r, d) => format!("{}, {}", part(r, "run"), part(d, "draft")),
+        }
+    }
+}
+
+/// Why bringing a ticket's runs and drafts in is refused when there are none (any more).
+pub const NOTHING_TO_ADOPT: &str = "There is nothing on this ticket to bring into the workstream.";
+
+/// What an open workstream on a ticket could take in: the ticket's runs in `item_runs` and the pending drafts in
+/// `pending` that are in no workstream. A draft with nowhere to record a workstream (`can_join_workstream`) stays in General.
+pub fn adoptable_of(ws: &Workstream, item_runs: &[Run], pending: &[Proposal]) -> Adoptable {
+    let Some(key) = ws.item_key.as_deref().filter(|_| ws.closed_at.is_none()) else { return Adoptable::default() };
+    let runs = item_runs.iter().filter(|r| r.connection_id == ws.connection_id && r.spec.workstream.is_none() && r.item.as_ref().is_some_and(|i| i.key == key)).map(|r| r.id.clone()).collect();
+    let drafts = pending
+        .iter()
+        .filter(|p| p.state == ProposalState::Pending && p.workstream().is_none() && p.can_join_workstream() && p.target().is_some_and(|t| t.connection_id == ws.connection_id && t.key == key))
+        .map(|p| p.id.clone())
+        .collect();
+    Adoptable { runs, drafts }
 }
 
 /// A workstream as the page and Pip read it: with the stage its runs give it, their ids (newest first) and their
@@ -113,6 +155,10 @@ pub struct WorkstreamView {
     /// or not the wait it ended was asked again: the timeline tells each (`reporter_replies`).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub reporter_replies: Vec<ReporterReplyAt>,
+    /// Runs and pending drafts on the ticket that are in no workstream, while the workstream is open: the page offers to
+    /// bring them here. Never moved without the person asking (`adopt_into_workstream`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub adoptable: Option<Adoptable>,
     pub budget: BudgetView,
 }
 
@@ -562,6 +608,7 @@ impl WorkstreamView {
             reporter_replied_at: None,
             reporter_reply: None,
             reporter_replies: Vec::new(),
+            adoptable: None,
         }
     }
 }
@@ -598,6 +645,8 @@ struct TicketFacts {
     me: String,
     /// The connection's runs on the ticket, in any workstream or in General (`clarity_of`); filled by the caller, which has the runs.
     item_runs: Vec<Run>,
+    /// What the workstream could take in from the ticket (`adoptable_of`); filled by the caller, as `item_runs` is.
+    adoptable: Adoptable,
 }
 
 /// The `TicketFacts` of the ticket workstream `ws` is on, as it reads in the cache; none without a ticket, a cached one,
@@ -607,7 +656,7 @@ fn ticket_facts(db: &Db, scope: &Scope, ws: &Workstream) -> Result<TicketFacts> 
     let Some(work) = db.item(&Core::item(scope, key))? else { return Ok(TicketFacts::default()) };
     let cached = serde_json::from_value::<crate::model::CachedTicket>(work.extra.clone()).ok();
     let replies = cached.as_ref().map(|t| replies_of(t, &scope.account_id)).unwrap_or_default();
-    Ok(TicketFacts { gaps: clarity_gaps(&work.body.plain_text()), replies, ticket: cached, me: scope.account_id.clone(), item_runs: Vec::new() })
+    Ok(TicketFacts { gaps: clarity_gaps(&work.body.plain_text()), replies, ticket: cached, me: scope.account_id.clone(), item_runs: Vec::new(), adoptable: Adoptable::default() })
 }
 
 /// The `escalation_posted` line for workstream `ws_id` when review draft `posted`, just posted to GitHub, is the one its
@@ -626,8 +675,12 @@ pub(crate) fn escalation_posted_event(db: &Db, ws_id: &str, posted: &Proposal, a
 
 /// The account's pending GitHub review drafts, which an escalation offers to post as they are.
 fn pending_reviews(db: &Db) -> Result<Vec<Proposal>> {
-    let pending = db.proposals(&ProposalQuery { states: Some(vec![StateKind::Pending]), ..Default::default() })?;
-    Ok(pending.into_iter().filter(|p| matches!(p.intent, Intent::GithubReview { .. })).collect())
+    Ok(pending_drafts(db)?.into_iter().filter(|p| matches!(p.intent, Intent::GithubReview { .. })).collect())
+}
+
+/// The account's pending drafts of every kind, which `adoptable_of` picks from.
+fn pending_drafts(db: &Db) -> Result<Vec<Proposal>> {
+    db.proposals(&ProposalQuery { states: Some(vec![StateKind::Pending]), ..Default::default() })
 }
 
 /// Holds `ws` with `reason` unless it is closed or already held. An existing reason is kept, except that the person's own
@@ -818,7 +871,7 @@ impl Core {
         let title = title.map(|t| flat(&t)).filter(|t| !t.is_empty());
         let id = proposals::new_id()?;
         let at = Utc::now();
-        self.with_db_for(scope, |db| {
+        self.with_db_atomically_for(scope, |db| {
             let (item_key, title, basis) = match &item {
                 Some(item) => {
                     if let Some(open) = db.open_workstream_for_item(&connection_id, &item.key)? {
@@ -866,11 +919,16 @@ impl Core {
                 let readiness = readiness_verdicts(db, &runs)?;
                 let events = escalation_events(db, &ws)?;
                 let ticket = ticket_facts(db, scope, &ws)?;
+                let pending = pending_drafts(db)?;
                 let ticket = match ws.item_key.as_deref() {
-                    Some(key) => TicketFacts { item_runs: db.runs(&RunQuery { connection_id: Some(connection_id.clone()), ..Default::default() })?.into_iter().filter(|r| r.item.as_ref().is_some_and(|i| i.key == key)).collect(), ..ticket },
+                    Some(key) => {
+                        let item_runs: Vec<Run> = db.runs(&RunQuery { connection_id: Some(connection_id.clone()), ..Default::default() })?.into_iter().filter(|r| r.item.as_ref().is_some_and(|i| i.key == key)).collect();
+                        TicketFacts { adoptable: adoptable_of(&ws, &item_runs, &pending), item_runs, ..ticket }
+                    }
                     None => ticket,
                 };
-                Ok(Some((ws, runs, Verdicts { reviews: verdicts, readiness }, events, pending_reviews(db)?, ticket)))
+                let reviews: Vec<Proposal> = pending.into_iter().filter(|p| matches!(p.intent, Intent::GithubReview { .. })).collect();
+                Ok(Some((ws, runs, Verdicts { reviews: verdicts, readiness }, events, reviews, ticket)))
             })
             .await?;
         found.map(|(ws, runs, verdicts, events, drafts, ticket)| self.view_of(ws, &runs, &verdicts, &events, &drafts, &ticket)).transpose()
@@ -891,6 +949,7 @@ impl Core {
         view.clarity = clarity;
         view.waiting_on_reporter = waiting;
         let open = view.workstream.closed_at.is_none();
+        view.adoptable = Some(ticket.adoptable.clone()).filter(|a| open && !a.is_empty());
         view.changed_while_waiting = follow.changed && open;
         view.reporter_replied = follow.replied && open;
         view.reporter_replied_at = replied_at.filter(|_| open);
@@ -907,7 +966,7 @@ impl Core {
     /// `scope`'s workstreams, newest first, each with its stage; closed ones only when asked for.
     pub async fn workstreams(&self, scope: &Scope, include_closed: bool) -> Result<Vec<WorkstreamView>> {
         let connection_id = Connection::jira_id(scope);
-        let (workstreams, runs, verdicts, mut events, drafts, mut tickets) = self
+        let (workstreams, runs, verdicts, mut events, pending, mut tickets) = self
             .with_db_for(scope, |db| {
                 let runs = db.runs(&RunQuery { connection_id: Some(connection_id.clone()), ..Default::default() })?;
                 let linked: Vec<Run> = runs.iter().filter(|r| r.spec.workstream.is_some()).cloned().collect();
@@ -919,9 +978,10 @@ impl Core {
                     events.insert(ws.id.clone(), escalation_events(db, ws)?);
                     tickets.insert(ws.id.clone(), ticket_facts(db, scope, ws)?);
                 }
-                Ok((workstreams, runs, verdicts, events, pending_reviews(db)?, tickets))
+                Ok((workstreams, runs, verdicts, events, pending_drafts(db)?, tickets))
             })
             .await?;
+        let drafts: Vec<Proposal> = pending.iter().filter(|p| matches!(p.intent, Intent::GithubReview { .. })).cloned().collect();
         workstreams
             .into_iter()
             .map(|ws| {
@@ -929,6 +989,7 @@ impl Core {
                 let events = events.remove(&ws.id).unwrap_or_default();
                 let mut ticket = tickets.remove(&ws.id).unwrap_or_default();
                 ticket.item_runs = runs.iter().filter(|r| ws.item_key.as_deref().is_some_and(|key| r.item.as_ref().is_some_and(|i| i.key == key))).cloned().collect();
+                ticket.adoptable = adoptable_of(&ws, &ticket.item_runs, &pending);
                 self.view_of(ws, &linked, &verdicts, &events, &drafts, &ticket)
             })
             .collect()
@@ -944,7 +1005,7 @@ impl Core {
     pub async fn close_workstream(&self, scope: &Scope, id: &str) -> Result<Workstream> {
         let connection_id = Connection::jira_id(scope);
         let at = Utc::now();
-        self.with_db_for(scope, |db| {
+        self.with_db_atomically_for(scope, |db| {
             let mut ws = owned(db, &connection_id, id)?;
             if ws.closed_at.is_none() {
                 ws.closed_at = Some(at);
@@ -952,6 +1013,59 @@ impl Core {
                 db.append_workstream_event(&WorkstreamEvent::new(&ws.id, Actor::Person, "closed", at))?;
             }
             Ok(ws)
+        })
+        .await
+    }
+
+    /// Reopens a closed workstream, as it stood: its mode, hold and notes are kept, and the `reopened` line says so. Refused
+    /// when its ticket has another open workstream by now; reopening an open one changes nothing.
+    pub async fn reopen_workstream(&self, scope: &Scope, id: &str) -> Result<Workstream> {
+        let connection_id = Connection::jira_id(scope);
+        let at = Utc::now();
+        self.with_db_atomically_for(scope, |db| {
+            let mut ws = owned(db, &connection_id, id)?;
+            if ws.closed_at.is_some() {
+                if let Some(key) = ws.item_key.as_deref() {
+                    if db.open_workstream_for_item(&connection_id, key)?.is_some() {
+                        return Err(refuse(format!("{key} has another workstream open, so this one can't be reopened")));
+                    }
+                }
+                ws.closed_at = None;
+                db.save_workstream(&ws)?;
+                db.append_workstream_event(&WorkstreamEvent::new(&ws.id, Actor::Person, "reopened", at))?;
+            }
+            Ok(ws)
+        })
+        .await
+    }
+
+    /// The person's "Bring them here": the runs and pending drafts on the workstream's ticket that belong to no workstream
+    /// become its own, so its stage, timeline and Needs show them. Only ever on that ask, never when a workstream opens. One
+    /// `adopted` line by the person says how many. Returns what moved, by id, for `WorkstreamUndo::Adopt`; refused when
+    /// there is nothing to move. A run's approval digest stays what the person read; only where it is filed changes.
+    pub async fn adopt_into_workstream(&self, scope: &Scope, id: &str) -> Result<Adoptable> {
+        let connection_id = Connection::jira_id(scope);
+        let at = Utc::now();
+        self.with_db_atomically_for(scope, |db| {
+            let ws = open(db, &connection_id, id)?;
+            let key = ws.item_key.clone().ok_or_else(|| refuse("a workstream with no ticket has nothing to bring in"))?;
+            let runs: Vec<Run> = db.runs(&RunQuery { connection_id: Some(connection_id.clone()), ..Default::default() })?.into_iter().filter(|r| r.item.as_ref().is_some_and(|i| i.key == key)).collect();
+            let found = adoptable_of(&ws, &runs, &pending_drafts(db)?);
+            if found.is_empty() {
+                return Err(refuse(NOTHING_TO_ADOPT));
+            }
+            for run in runs.into_iter().filter(|r| found.runs.contains(&r.id)) {
+                db.save_run(&Run { spec: crate::domain::RunSpec { workstream: Some(ws.id.clone()), ..run.spec.clone() }, ..run })?;
+            }
+            for draft in &found.drafts {
+                if let Some(mut p) = db.proposal(draft)? {
+                    if p.set_workstream(Some(&ws.id)) {
+                        db.save_proposal(&p)?;
+                    }
+                }
+            }
+            db.append_workstream_event(&WorkstreamEvent::new(&ws.id, Actor::Person, "adopted", at).detail(found.words()))?;
+            Ok(found)
         })
         .await
     }
@@ -972,7 +1086,7 @@ impl Core {
         }
         let connection_id = Connection::jira_id(scope);
         let at = Utc::now();
-        self.with_db_for(scope, |db| {
+        self.with_db_atomically_for(scope, |db| {
             let mut ws = owned(db, &connection_id, id)?;
             if ws.closed_at.is_some() {
                 return Err(refuse(format!("workstream {id} is closed")));
@@ -995,7 +1109,7 @@ impl Core {
     /// it changes nothing the person or Pip decided.
     pub async fn set_workstream_session(&self, scope: &Scope, id: &str, session: &str) -> Result<()> {
         let connection_id = Connection::jira_id(scope);
-        self.with_db_for(scope, |db| {
+        self.with_db_atomically_for(scope, |db| {
             let mut ws = owned(db, &connection_id, id)?;
             if ws.closed_at.is_none() && ws.pip_session.as_deref() != Some(session) {
                 ws.pip_session = Some(session.to_string());
@@ -1013,7 +1127,7 @@ impl Core {
     pub async fn set_workstream_mode(&self, scope: &Scope, id: &str, mode: Mode, actor: Actor) -> Result<Workstream> {
         let connection_id = Connection::jira_id(scope);
         let at = Utc::now();
-        self.with_db_for(scope, |db| {
+        self.with_db_atomically_for(scope, |db| {
             let mut ws = open(db, &connection_id, id)?;
             // The person choosing a mode while a tripwire holds it wins over the mode resuming would put back.
             let chosen = actor == Actor::Person && ws.resume_mode.take().is_some();
@@ -1178,7 +1292,7 @@ impl Core {
         }
         let connection_id = Connection::jira_id(scope);
         let at = Utc::now();
-        self.with_db_for(scope, |db| {
+        self.with_db_atomically_for(scope, |db| {
             let mut ws = open(db, &connection_id, id)?;
             if hold(&mut ws, reason) {
                 db.save_workstream(&ws)?;
@@ -1198,7 +1312,7 @@ impl Core {
     pub async fn resume_workstream(&self, scope: &Scope, id: &str) -> Result<Workstream> {
         let connection_id = Connection::jira_id(scope);
         let at = Utc::now();
-        self.with_db_for(scope, |db| {
+        self.with_db_atomically_for(scope, |db| {
             let mut ws = open(db, &connection_id, id)?;
             let Some(reason) = ws.held_reason.take() else { return Ok(ws) };
             let restore = ws.resume_mode.take();
@@ -1238,7 +1352,7 @@ impl Core {
     pub async fn allow_more_steps(&self, scope: &Scope, id: &str) -> Result<Workstream> {
         let connection_id = Connection::jira_id(scope);
         let at = Utc::now();
-        self.with_db_for(scope, |db| {
+        self.with_db_atomically_for(scope, |db| {
             let mut ws = open(db, &connection_id, id)?;
             if ws.held_reason.as_deref() != Some(HELD_BUDGET) {
                 return Err(refuse("this workstream isn't held for its automatic steps"));
@@ -1266,7 +1380,7 @@ impl Core {
 
     async fn undo_workstream_at(&self, scope: &Scope, id: &str, undo: &WorkstreamUndo, at: chrono::DateTime<Utc>) -> Result<Workstream> {
         let connection_id = Connection::jira_id(scope);
-        self.with_db_for(scope, |db| {
+        self.with_db_atomically_for(scope, |db| {
             let mut ws = open(db, &connection_id, id)?;
             let events = db.workstream_events(&ws.id)?;
             let last = events.last().filter(|e| e.actor == Actor::Person);
@@ -1290,6 +1404,22 @@ impl Core {
                     ws.resume_mode = *resume_mode;
                     ("undone", "mode_set")
                 }
+                WorkstreamUndo::Adopt { runs, drafts } => {
+                    last.filter(|e| e.action == "adopted" && fresh(e)).ok_or_else(gone)?;
+                    for run in runs {
+                        if let Some(mut r) = db.run(run)?.filter(|r| r.spec.workstream.as_deref() == Some(ws.id.as_str())) {
+                            r.spec.workstream = None;
+                            db.save_run(&r)?;
+                        }
+                    }
+                    for draft in drafts {
+                        if let Some(mut p) = db.proposal(draft)?.filter(|p| p.state == ProposalState::Pending && p.workstream() == Some(ws.id.as_str())) {
+                            p.set_workstream(None);
+                            db.save_proposal(&p)?;
+                        }
+                    }
+                    ("undone", "adopted")
+                }
             };
             db.save_workstream(&ws)?;
             db.append_workstream_event(&WorkstreamEvent::new(&ws.id, Actor::Person, action, at).detail(detail))?;
@@ -1302,7 +1432,7 @@ impl Core {
     pub async fn set_workstream_rule(&self, scope: &Scope, id: &str, rule: Rule, on: Option<bool>) -> Result<Workstream> {
         let connection_id = Connection::jira_id(scope);
         let at = Utc::now();
-        self.with_db_for(scope, |db| {
+        self.with_db_atomically_for(scope, |db| {
             let mut ws = open(db, &connection_id, id)?;
             if ws.rules.get(rule) != on {
                 ws.rules.set(rule, on);
@@ -1323,7 +1453,7 @@ impl Core {
     pub async fn hold_all_workstreams(&self, scope: &Scope) -> Result<Vec<Workstream>> {
         let connection_id = Connection::jira_id(scope);
         let at = Utc::now();
-        self.with_db_for(scope, |db| {
+        self.with_db_atomically_for(scope, |db| {
             let mut held = Vec::new();
             for mut ws in db.workstreams(&connection_id, false)? {
                 if hold(&mut ws, HELD_ALL) {
@@ -1343,7 +1473,7 @@ impl Core {
     pub async fn person_wrote_in_workstream(&self, scope: &Scope, id: &str) -> Result<()> {
         let connection_id = Connection::jira_id(scope);
         let at = Utc::now();
-        self.with_db_for(scope, |db| {
+        self.with_db_atomically_for(scope, |db| {
             let Ok(mut ws) = open(db, &connection_id, id) else { return Ok(()) };
             let reset = ws.spent.auto_turns > 0;
             ws.spent.auto_turns = 0;
@@ -1374,7 +1504,7 @@ impl Core {
     pub async fn admit_wake(&self, scope: &Scope, id: &str, facts: &[WakeFact], ask: &WakeAdmission) -> Result<Admitted> {
         let connection_id = Connection::jira_id(scope);
         let today = ask.today.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
-        self.with_db_for(scope, |db| {
+        self.with_db_atomically_for(scope, |db| {
             let Ok(mut ws) = open(db, &connection_id, id) else { return Ok(Admitted::default()) };
             let events = db.workstream_events(id)?;
             let woken = crate::agent::supervisor::woken_in(&events);
@@ -1434,7 +1564,7 @@ impl Core {
         }
         let connection_id = Connection::jira_id(scope);
         let at = Utc::now();
-        self.with_db_for(scope, |db| {
+        self.with_db_atomically_for(scope, |db| {
             let mut ws = open(db, &connection_id, id)?;
             let mut event = WorkstreamEvent::new(&ws.id, Actor::Supervisor, "tripwire", at).detail(kind);
             if let Some(run) = run {
@@ -1466,7 +1596,7 @@ impl Core {
     pub async fn lift_workstream_hold(&self, scope: &Scope, id: &str, reason: &str, actor: Actor) -> Result<Option<Workstream>> {
         let connection_id = Connection::jira_id(scope);
         let at = Utc::now();
-        self.with_db_for(scope, |db| {
+        self.with_db_atomically_for(scope, |db| {
             let Ok(mut ws) = open(db, &connection_id, id) else { return Ok(None) };
             if ws.held_reason.as_deref() != Some(reason) {
                 return Ok(None);
@@ -1486,7 +1616,7 @@ impl Core {
     pub async fn capture_workstream_basis(&self, scope: &Scope, id: &str, after_write: bool) -> Result<Option<WorkstreamBasis>> {
         let connection_id = Connection::jira_id(scope);
         let at = Utc::now();
-        self.with_db_for(scope, |db| {
+        self.with_db_atomically_for(scope, |db| {
             let Ok(mut ws) = open(db, &connection_id, id) else { return Ok(None) };
             let Some(key) = ws.item_key.clone() else { return Ok(None) };
             if ws.basis.as_ref().is_some_and(|b| !after_write || b.changing.is_empty()) {
@@ -1545,7 +1675,7 @@ impl Core {
     /// Appends `event` to the audit of one of `scope`'s workstreams; its `seq` is given here.
     pub async fn record_workstream_event(&self, scope: &Scope, event: WorkstreamEvent) -> Result<WorkstreamEvent> {
         let connection_id = Connection::jira_id(scope);
-        self.with_db_for(scope, |db| {
+        self.with_db_atomically_for(scope, |db| {
             owned(db, &connection_id, &event.workstream_id)?;
             db.append_workstream_event(&event)
         })
@@ -2575,6 +2705,165 @@ mod tests {
         let view = fx.core.workstream(&fx.scope, &ws.id).await.unwrap().unwrap();
         assert_eq!((view.stage, view.runs.len()), (Stage::Intake, 0));
         assert!(fx.tracker.intents().is_empty(), "nothing is written to Jira");
+    }
+
+    #[tokio::test]
+    async fn reopening_puts_a_closed_workstream_back_once_unless_its_ticket_has_another() {
+        let fx = fixture().await;
+        let ws = fx.core.open_workstream(&fx.scope, Some(fx.item("CA-1")), None).await.unwrap();
+        fx.core.close_workstream(&fx.scope, &ws.id).await.unwrap();
+        let back = fx.core.reopen_workstream(&fx.scope, &ws.id).await.unwrap();
+        assert_eq!(back, Workstream { closed_at: None, ..ws.clone() });
+        assert_eq!(fx.core.reopen_workstream(&fx.scope, &ws.id).await.unwrap(), back, "reopening an open one changes nothing");
+        assert_eq!(fx.core.workstreams(&fx.scope, false).await.unwrap().len(), 1);
+        assert_eq!(actions(&fx.core.workstream_events(&fx.scope, &ws.id).await.unwrap()), [(Actor::Person, "opened"), (Actor::Person, "closed"), (Actor::Person, "reopened")]);
+
+        fx.core.close_workstream(&fx.scope, &ws.id).await.unwrap();
+        let fresh = fx.core.open_workstream(&fx.scope, Some(fx.item("CA-1")), None).await.unwrap();
+        let err = fx.core.reopen_workstream(&fx.scope, &ws.id).await.unwrap_err().to_string();
+        assert!(err.contains("another workstream open"), "{err}");
+        assert!(fx.core.reopen_workstream(&fx.scope, "ws-404").await.is_err());
+        assert_eq!(fx.core.workstream(&fx.scope, &fresh.id).await.unwrap().unwrap().workstream.closed_at, None);
+    }
+
+    /// A comment draft on CA-1 from `origin`, pending.
+    async fn draft_on_ca1(fx: &Fixture, origin: Origin) -> Proposal {
+        use crate::domain::{Doc, Intent};
+        let draft = proposals::Draft { origin, created_by: CreatedBy::Pip, intent: Intent::Comment { item: fx.item("CA-1"), body: Doc::paragraph("hello") }, label: None, basis: None };
+        fx.core.propose(&fx.scope, draft).await.unwrap()
+    }
+
+    async fn workstream_of_run(fx: &Fixture, id: &str) -> Option<String> {
+        fx.core.with_db_for(&fx.scope, |db| db.run(id)).await.unwrap().unwrap().spec.workstream
+    }
+
+    async fn workstream_of_draft(fx: &Fixture, id: &str) -> Option<String> {
+        fx.core.with_db_for(&fx.scope, |db| db.proposal(id)).await.unwrap().unwrap().workstream().map(Into::into)
+    }
+
+    #[tokio::test]
+    async fn opening_leaves_a_tickets_runs_and_drafts_in_general_and_the_view_offers_them() {
+        let fx = fixture().await;
+        let general = insert_run(&fx, "r1", None, RunKind::Plan, RunState::Done).await;
+        insert_run(&fx, "r2", None, RunKind::Build, RunState::Working).await;
+        let draft = draft_on_ca1(&fx, Origin::chat("q1")).await;
+        let ws = fx.core.open_workstream(&fx.scope, Some(fx.item("CA-1")), None).await.unwrap();
+        assert_eq!(workstream_of_run(&fx, &general.id).await, None, "opening moves nothing");
+        assert_eq!(workstream_of_draft(&fx, &draft.id).await, None);
+        assert!(fx.core.workstream_events(&fx.scope, &ws.id).await.unwrap().iter().all(|e| e.action != "adopted"));
+
+        let view = fx.core.workstream(&fx.scope, &ws.id).await.unwrap().unwrap();
+        let offer = view.adoptable.clone().expect("the view offers what is in General");
+        assert_eq!((offer.runs.len(), offer.drafts), (2, vec![draft.id.clone()]));
+        assert_eq!((view.stage, view.runs.len()), (Stage::Intake, 0));
+        let listed = fx.core.workstreams(&fx.scope, false).await.unwrap().into_iter().find(|v| v.workstream.id == ws.id).unwrap();
+        assert_eq!(listed.adoptable, view.adoptable, "the list and the single view agree");
+    }
+
+    #[tokio::test]
+    async fn bringing_them_here_moves_only_what_is_in_general_audits_it_and_the_view_then_reads_them() {
+        let fx = fixture().await;
+        let plan = insert_run(&fx, "r1", None, RunKind::Plan, RunState::Done).await;
+        insert_run(&fx, "elsewhere", Some("ws-other"), RunKind::Build, RunState::Done).await;
+        let chat = draft_on_ca1(&fx, Origin::chat("q1")).await;
+        let board = draft_on_ca1(&fx, Origin::Board).await;
+        let ws = fx.core.open_workstream(&fx.scope, Some(fx.item("CA-1")), None).await.unwrap();
+
+        let moved = fx.core.adopt_into_workstream(&fx.scope, &ws.id).await.unwrap();
+        assert_eq!((moved.runs.clone(), moved.drafts.clone()), (vec![plan.id.clone()], vec![chat.id.clone()]));
+        assert_eq!(workstream_of_run(&fx, &plan.id).await.as_deref(), Some(ws.id.as_str()));
+        assert_eq!(workstream_of_run(&fx, "elsewhere").await.as_deref(), Some("ws-other"), "a run of another workstream stays");
+        assert_eq!(workstream_of_draft(&fx, &chat.id).await.as_deref(), Some(ws.id.as_str()));
+        assert_eq!(workstream_of_draft(&fx, &board.id).await, None, "a draft with nowhere to record a workstream stays in General");
+        let in_ws = fx.core.proposals_in(&fx.scope, &ProposalQuery { workstream: Some(ws.id.clone()), ..Default::default() }).await.unwrap();
+        assert_eq!(in_ws.iter().map(|p| p.id.as_str()).collect::<Vec<_>>(), [chat.id.as_str()], "the column the list narrows on follows");
+
+        let events = fx.core.workstream_events(&fx.scope, &ws.id).await.unwrap();
+        assert_eq!(actions(&events), [(Actor::Person, "opened"), (Actor::Person, "adopted")]);
+        assert_eq!(events[1].detail.as_deref(), Some("1 run, 1 draft"));
+        let view = fx.core.workstream(&fx.scope, &ws.id).await.unwrap().unwrap();
+        assert_eq!((view.stage, view.runs), (Stage::Plan, vec![plan.id.clone()]));
+        assert_eq!(view.adoptable, None, "nothing is left to offer");
+        let err = fx.core.adopt_into_workstream(&fx.scope, &ws.id).await.unwrap_err().to_string();
+        assert_eq!(err, NOTHING_TO_ADOPT);
+        assert!(fx.tracker.intents().is_empty(), "nothing is written to Jira");
+    }
+
+    #[tokio::test]
+    async fn a_change_whose_audit_line_cannot_be_written_is_not_made_either() {
+        let fx = fixture().await;
+        let ws = fx.core.open_workstream(&fx.scope, Some(fx.item("CA-1")), None).await.unwrap();
+        fx.core.close_workstream(&fx.scope, &ws.id).await.unwrap();
+        let refuse_audit = "CREATE TRIGGER no_audit BEFORE INSERT ON workstream_events BEGIN SELECT RAISE(ABORT, 'audit down'); END;";
+        fx.core.with_db_for(&fx.scope, |db| db.execute_batch(refuse_audit)).await.unwrap();
+        assert!(fx.core.reopen_workstream(&fx.scope, &ws.id).await.is_err());
+        let after = fx.core.with_db_for(&fx.scope, |db| db.workstream(&ws.id)).await.unwrap().unwrap();
+        assert!(after.closed_at.is_some(), "still closed, so reopening again is not a no-op that skips its line");
+        fx.core.with_db_for(&fx.scope, |db| db.execute_batch("DROP TRIGGER no_audit;")).await.unwrap();
+        assert!(fx.core.reopen_workstream(&fx.scope, &ws.id).await.unwrap().closed_at.is_none());
+        let events = fx.core.with_db_for(&fx.scope, |db| db.workstream_events(&ws.id)).await.unwrap();
+        assert_eq!(events.iter().filter(|e| e.action == "reopened").count(), 1);
+    }
+
+    #[tokio::test]
+    async fn what_the_tracker_saw_while_a_run_was_brought_in_keeps_it_where_it_was_put() {
+        let fx = fixture().await;
+        let run = insert_run(&fx, "r1", None, RunKind::Plan, RunState::Working).await;
+        let ws = fx.core.open_workstream(&fx.scope, Some(fx.item("CA-1")), None).await.unwrap();
+        // The tracker read the run before the person brought it in, and saves what it saw after.
+        let seen = Run { state: RunState::Done, ..run.clone() };
+        fx.core.adopt_into_workstream(&fx.scope, &ws.id).await.unwrap();
+        fx.core.save_observed_run(&seen).await.unwrap();
+        assert_eq!(workstream_of_run(&fx, &run.id).await.as_deref(), Some(ws.id.as_str()), "the move stands");
+        let stored = fx.core.with_db_for(&fx.scope, |db| db.run(&run.id)).await.unwrap().unwrap();
+        assert_eq!(stored.state, RunState::Done, "and what the tracker saw is saved");
+    }
+
+    #[tokio::test]
+    async fn only_an_open_workstream_on_a_ticket_offers_or_takes_them() {
+        let fx = fixture().await;
+        insert_run(&fx, "r1", None, RunKind::Plan, RunState::Done).await;
+        let ticketless = fx.core.open_workstream(&fx.scope, None, Some("Why is it slow?".into())).await.unwrap();
+        assert!(fx.core.workstream(&fx.scope, &ticketless.id).await.unwrap().unwrap().adoptable.is_none());
+        assert!(fx.core.adopt_into_workstream(&fx.scope, &ticketless.id).await.unwrap_err().to_string().contains("no ticket"));
+        let ws = fx.core.open_workstream(&fx.scope, Some(fx.item("CA-1")), None).await.unwrap();
+        fx.core.close_workstream(&fx.scope, &ws.id).await.unwrap();
+        assert!(fx.core.workstream(&fx.scope, &ws.id).await.unwrap().unwrap().adoptable.is_none(), "a closed one offers nothing");
+        assert!(fx.core.adopt_into_workstream(&fx.scope, &ws.id).await.is_err());
+        assert!(fx.core.adopt_into_workstream(&fx.scope, "ws-404").await.is_err());
+        assert_eq!(workstream_of_run(&fx, "r1").await, None);
+    }
+
+    #[tokio::test]
+    async fn undoing_bringing_them_here_puts_them_back_in_general_only_right_after() {
+        let fx = fixture().await;
+        let plan = insert_run(&fx, "r1", None, RunKind::Plan, RunState::Done).await;
+        let chat = draft_on_ca1(&fx, Origin::chat("q1")).await;
+        let ws = fx.core.open_workstream(&fx.scope, Some(fx.item("CA-1")), None).await.unwrap();
+        let moved = fx.core.adopt_into_workstream(&fx.scope, &ws.id).await.unwrap();
+        let undo = WorkstreamUndo::Adopt { runs: moved.runs.clone(), drafts: moved.drafts.clone() };
+        fx.core.undo_workstream(&fx.scope, &ws.id, &undo).await.unwrap();
+        assert_eq!(workstream_of_run(&fx, &plan.id).await, None);
+        assert_eq!(workstream_of_draft(&fx, &chat.id).await, None);
+        let events = fx.core.workstream_events(&fx.scope, &ws.id).await.unwrap();
+        assert_eq!(last(&events), (Actor::Person, "undone", Some("adopted")));
+        let offer = fx.core.workstream(&fx.scope, &ws.id).await.unwrap().unwrap().adoptable.unwrap();
+        assert_eq!((offer.runs.len(), offer.drafts.len()), (1, 1), "the offer is back");
+        assert!(fx.core.undo_workstream(&fx.scope, &ws.id, &undo).await.is_err(), "a second undo is refused: the undo is the last line");
+
+        // Anything else in the audit since, or an old line, and the move stands.
+        fx.core.adopt_into_workstream(&fx.scope, &ws.id).await.unwrap();
+        fx.core.hold_workstream(&fx.scope, &ws.id, HELD_PERSON, Actor::Person).await.unwrap();
+        assert!(fx.core.undo_workstream(&fx.scope, &ws.id, &undo).await.is_err());
+        assert_eq!(workstream_of_run(&fx, &plan.id).await.as_deref(), Some(ws.id.as_str()));
+        fx.core.resume_workstream(&fx.scope, &ws.id).await.unwrap();
+        let other = insert_run(&fx, "r2", None, RunKind::Build, RunState::Done).await;
+        let again = fx.core.adopt_into_workstream(&fx.scope, &ws.id).await.unwrap();
+        assert_eq!(again.runs, std::slice::from_ref(&other.id));
+        let late = Utc::now() + chrono::Duration::seconds(UNDO_WINDOW_SECS + 5);
+        let undo = WorkstreamUndo::Adopt { runs: again.runs, drafts: again.drafts };
+        assert!(fx.core.undo_workstream_at(&fx.scope, &ws.id, &undo, late).await.is_err(), "after the window it stands");
+        assert_eq!(workstream_of_run(&fx, &other.id).await.as_deref(), Some(ws.id.as_str()));
     }
 
     #[tokio::test]

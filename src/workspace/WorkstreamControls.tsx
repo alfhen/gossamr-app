@@ -4,6 +4,7 @@ import type { Need } from "../lib/needs";
 import { nextStep, type NextStep } from "../lib/nextStep";
 import { flaggedGaps, ignoredAmong, projectOfKey, SHORT_GAP } from "../lib/clarityLearning";
 import { clarityRepliedText, clarityText, type ClarityGap } from "../lib/ticketClarity";
+import { adoptOfferText } from "../lib/workstreamAdopt";
 import { RULE_SWITCH, STEP_HELP, asksBudget, isHeldByYou, budgetNote, heldBanner, ruleText, stepsLeftText, stepsOf } from "../lib/workstreamHold";
 import { ALLOW_MORE_STEPS, HELD_BUDGET, TRIPWIRE, WORKSTREAM_RULES, type AutoStartSwitches, type Proposal, type Run, type WorkstreamEvent, type WorkstreamRule, type WorkstreamRules, type WorkstreamView } from "../types";
 import { useWorkspace } from "../workspaceStore";
@@ -128,7 +129,7 @@ export function AutomaticStepsPanel({ rules, globals, onRule }: { rules: Workstr
 
 /** What Hold, Close… and ⋯ do, as the short hints on their buttons say (title for the pointer, aria-description for the screen reader). */
 export const HOLD_HINT = "No wakes and no automatic steps; its agents carry on";
-export const CLOSE_HINT = "Its conversation goes back to General; its agents and drafts are kept";
+export const CLOSE_HINT = "Its conversation goes back to General; its agents and drafts are kept in General";
 export const MORE_HINT = "More: stop the workstream";
 
 /** What the Automatic steps button opens, for its tooltip: the routine next steps and who starts them. */
@@ -215,7 +216,7 @@ export function CloseConfirm({ onClose, onKeep }: { onClose(): void; onKeep(): v
       }}
     >
       <span className="text-ws-ink2">
-        <span id={question}>Close it?</span> <span id={detail}>Its conversation goes back to General; its agents and drafts are kept.</span>
+        <span id={question}>Close it?</span> <span id={detail}>Its conversation goes back to General; its agents and drafts are kept in General.</span>
       </span>
       <Btn tone="primary" onClick={onClose} className="px-2 py-0.5">
         Close workstream
@@ -274,6 +275,27 @@ export function HeldBanner({ view, actions }: { view: WorkstreamView; actions: P
           Resume
         </Btn>
       )}
+    </div>
+  );
+}
+
+/**
+ * Runs and pending drafts on the workstream's ticket that sit under General: one line that says so, with a button that
+ * brings them in. Never done on its own; the toast that follows has an Undo.
+ */
+export function AdoptNotice({ view }: { view: WorkstreamView }) {
+  const a = view.adoptable;
+  const [busy, setBusy] = useState(false);
+  if (!a || (!a.runs.length && !a.drafts.length)) return null;
+  const id = view.workstream.id;
+  return (
+    <div role="group" aria-label="Under General" data-adopt-notice={id} className="flex flex-wrap items-baseline gap-x-2 gap-y-1 rounded-md border border-ws-sep bg-ws-bar px-2.5 py-1.5 text-sm text-ws-ink2">
+      <p data-adopt-text className="m-0">
+        {adoptOfferText(view.workstream.itemKey ?? "this ticket", a.runs.length, a.drafts.length)}
+      </p>
+      <Btn tone="plain" data-adopt disabled={busy} onClick={() => (setBusy(true), void useWorkstreams.getState().adopt(id).finally(() => setBusy(false)))} className="px-2 py-0.5">
+        Bring them here
+      </Btn>
     </div>
   );
 }
@@ -460,6 +482,7 @@ export function WorkstreamControlsView({ view, globals, actions, confirmingStop,
       {!paneHas(shown, "hold", ws.id) && <HeldBanner view={view} actions={actions} />}
       {/* A review that still blocks after the automatic fix rounds: the person chooses what happens next. */}
       {!paneHas(shown, "escalation", ws.id) && <EscalationCard key={ws.id} view={view} />}
+      <AdoptNotice view={view} />
       <ClarityNotice view={view} />
       {next && <NextStepLine next={next} workstreamId={ws.id} />}
       {manage && (
