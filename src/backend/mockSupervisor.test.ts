@@ -256,9 +256,9 @@ describe("the sample supervisor", () => {
       expect(newest(b, ws, "plan")).toBeUndefined();
       expect(supervisorLines(b, ws).filter((l) => l.startsWith("autostart") && l.includes("triage_plan"))).toEqual([]);
       expect(b.workstreams.get(ws)?.readiness).toMatchObject({ triageRun: triage.id, triageLabel: "R2" });
-      expect(b.workstreams.get(ws)?.readiness?.questions).toHaveLength(3);
-      expect(last(wakes).facts[0]).toMatchObject({ run: triage.id, planRecommended: true, openQuestions: 3 });
-      expect(eventLine(last(wakes).facts)).toBe(`[Event] run ${triage.id} (triage) Done; plan recommended: yes; not ready to plan, 3 open questions; 1 draft`);
+      expect(b.workstreams.get(ws)?.readiness?.questions).toHaveLength(4);
+      expect(last(wakes).facts[0]).toMatchObject({ run: triage.id, planRecommended: true, openQuestions: 4 });
+      expect(eventLine(last(wakes).facts)).toBe(`[Event] run ${triage.id} (triage) Done; plan recommended: yes; not ready to plan, 4 open questions; 1 draft`);
     });
 
     it("is not what the usual sample tickets do: their triage says nothing of readiness, which reads as ready, and the plan starts", async () => {

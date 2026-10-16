@@ -117,6 +117,22 @@ test.describe("dates in the timeline and What Jira saw from me (G22)", () => {
     // Walking the entries with j and k does not stop on a header.
     expect(await timeline.locator("[data-timeline-day][tabindex]").count()).toBe(0);
   });
+
+  test("a timeline left open over local midnight puts today's entries under Yesterday, though no entry changed", async ({ page }) => {
+    const now = new Date();
+    await page.clock.install({ time: new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 57) });
+    await openApp(page, MANAGED);
+    await startWorkstream(page, VAGUE);
+    await openPipHome(page);
+    await workstreamRow(page, VAGUE).click();
+    const timeline = pipHome(page).locator("[data-timeline]");
+    await expect(timeline.locator("[data-timeline-entry]").first()).toBeVisible();
+    await expect(timeline.locator("[data-timeline-day]")).toHaveCount(0);
+    const entries = await timeline.locator("[data-timeline-entry]").count();
+    await page.clock.runFor(5 * 60_000);
+    await expect(timeline.locator("[data-timeline-day]").first()).toHaveText("Yesterday");
+    expect(await timeline.locator("[data-timeline-entry]").count()).toBe(entries);
+  });
 });
 
 test.describe("an unclear ticket (G23, G24, G25, G27)", () => {

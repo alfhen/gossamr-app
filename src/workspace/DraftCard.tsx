@@ -20,6 +20,7 @@ import { useRunSetup } from "./runSetupStore";
 import { useRuns } from "./runsStore";
 import { useWorkspace, workflowOfItem } from "../workspaceStore";
 import { PEEK_DRAFT_MARGIN, peekFocusAfterLeaving } from "./peekDrafts";
+import { useToasts } from "./toasts";
 import { escLeavesPause, useCardKeys } from "./draftCardKeys";
 import { takeDraftEditIntent } from "./draftKeys";
 import { itemKey } from "../lib/filter";
@@ -108,13 +109,25 @@ export function draftSummary(p: Proposal, statusName: string | null): string {
   }
 }
 
-/** Brings the posting pause into view and puts the keyboard on its Keep editing, with the actions row it sits above. */
+/** Brings the posting pause into view and puts the keyboard on its Keep editing. The actions row is scrolled first and the note last, so the note is what the last scroll leaves in view (its scroll margin clears a sticky footer). */
 export function showPause(card: Pick<ParentNode, "querySelector"> | null) {
   const keep = card?.querySelector<HTMLElement>("[data-post-pause-keep]");
   if (!keep) return;
   keep.focus({ preventScroll: true });
-  keep.scrollIntoView?.({ block: "nearest" });
   card?.querySelector<HTMLElement>("[data-draft-actions]")?.scrollIntoView?.({ block: "nearest" });
+  (keep.closest?.<HTMLElement>("[data-post-pause]") ?? keep).scrollIntoView?.({ block: "nearest" });
+}
+
+/** What Esc at the posting pause tells a screen reader: the editor closed and the words are still there. */
+export const EDIT_KEPT_NOTE = "Edit kept. Nothing was posted.";
+
+/** Puts the keyboard on the element `find` returns once the page has drawn it, trying again for a few frames while focus is not on it (a button re-rendered in place may not be there yet, or may lose the focus to its section). */
+export function focusWhenDrawn(find: () => Pick<HTMLElement, "focus"> | null, active: () => unknown, frame: (run: () => void) => unknown = requestAnimationFrame, tries = 3) {
+  frame(() => {
+    const el = find();
+    el?.focus();
+    if (tries > 1 && (!el || active() !== el)) focusWhenDrawn(find, active, frame, tries - 1);
+  });
 }
 
 /** Whether approving `p` also starts a Build (`approvalStartsBuild`), read from the runs, the workstream and Settings' switches. */
@@ -173,24 +186,45 @@ export function DraftCard(props: DraftCardProps) {
   );
 }
 
+/** What was typed into a draft's fields when it was skipped, so Undo brings the draft back with the edit still in them. */
+export interface KeptEdits {
+  body?: { text: string; mentions: Mention[] };
+  rewrite?: { title: string; text: string };
+  message?: string;
+}
+const keptEdits = new Map<string, KeptEdits>();
+
+/** Remember the unsaved `edits` of draft `id`, until the card is shown again. */
+export function keepEditsOfDraft(id: string, edits: KeptEdits): void {
+  if (edits.body || edits.rewrite || edits.message !== undefined) keptEdits.set(id, edits);
+}
+
+/** The edits kept for draft `id`, if any (they stay until the card has taken them). */
+export function keptEditsOfDraft(id: string): KeptEdits | undefined {
+  return keptEdits.get(id);
+}
+
 function DraftCardBody({ proposal: p, statusName, people, working, error, onApprove, onSkip, onReview, onShow, onOpenRun, onDiscuss, pass, onSendBack, answer, onSendAnswer }: DraftCardProps) {
   const intent = p.intent;
   const key = targetOf(intent)?.key ?? "";
   const stored = intent.type === "comment" ? docText(intent.body) : "";
   const linked = useMemo(() => autoLink(stored, people), [stored, people]);
-  const [body, setBody] = useState(linked.text);
-  const [mentions, setMentions] = useState<Mention[]>(linked.mentions);
-  const [editing, setEditing] = useState(false);
-  const edited = useRef(false);
+  // A card that comes back after Skip (Undo) starts from what was typed in it, in edit mode.
+  const [kept] = useState(() => keptEditsOfDraft(p.id));
+  useEffect(() => void keptEdits.delete(p.id), []);
+  const [body, setBody] = useState(kept?.body?.text ?? linked.text);
+  const [mentions, setMentions] = useState<Mention[]>(kept?.body?.mentions ?? linked.mentions);
+  const [editing, setEditing] = useState(!!kept);
+  const edited = useRef(!!kept?.body);
   const rewrite = intent.type === "rewrite" ? intent : null;
   const startsBuild = useApprovalStartsBuild(p);
   const runName = useFromRunName(p);
   // The message the answers draft was made from, for its provenance line: the person's reply in the conversation that asked Pip.
   const replyRequest = p.origin.type === "chat" && isAnswersDraft(p) ? p.origin.requestId : null;
   const replyPrompt = useClaude((s) => (replyRequest ? (Object.values(s.byTicket).flatMap((c) => c.turns).find((t) => t.requestId === replyRequest)?.prompt ?? null) : null));
-  const [newTitle, setNewTitle] = useState(rewriteFields(rewrite).title);
-  const [newText, setNewText] = useState(rewriteFields(rewrite).text);
-  const rewriteEdited = useRef(false);
+  const [newTitle, setNewTitle] = useState(kept?.rewrite?.title ?? rewriteFields(rewrite).title);
+  const [newText, setNewText] = useState(kept?.rewrite?.text ?? rewriteFields(rewrite).text);
+  const rewriteEdited = useRef(!!kept?.rewrite);
   const card = useRef<HTMLElement>(null);
   /** The keyboard was in the card, and hasn't gone anywhere else since: a button disabled while it works drops it on the page. */
   const hadFocus = useRef(false);
@@ -217,8 +251,8 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
   const followUp = intent.type === "followUp" ? intent : null;
   const reply = intent.type === "runAnswer" ? intent : null;
   const sentMessage = followUp?.message ?? reply?.message ?? "";
-  const [message, setMessage] = useState(sentMessage);
-  const messageEdited = useRef(false);
+  const [message, setMessage] = useState(kept?.message ?? sentMessage);
+  const messageEdited = useRef(kept?.message !== undefined);
   useEffect(() => {
     if (!takesBackendText(messageEdited.current, attempting.current)) return;
     messageEdited.current = false;
@@ -248,6 +282,16 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
   useEffect(() => {
     if (shownError) errorLine.current?.scrollIntoView?.({ block: "nearest" });
   }, [shownError]);
+
+  /** Skip, taking what was typed along, so Undo shows it again. */
+  const skip = () => {
+    keepEditsOfDraft(p.id, {
+      ...(intent.type === "comment" && edited.current ? { body: { text: body, mentions } } : {}),
+      ...(rewrite && rewriteEdited.current ? { rewrite: { title: newTitle, text: newText } } : {}),
+      ...((followUp || reply) && messageEdited.current ? { message } : {}),
+    });
+    onSkip();
+  };
 
   const edit = (): ProposalEdit | null => {
     if (intent.type === "comment" && edited.current) return { type: "comment", body, mentions: liveMentions(body, mentions) };
@@ -294,7 +338,8 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
   const leaveEditing = () => {
     setPause(null);
     setEditing(false);
-    focusField("[data-draft-edit]");
+    focusWhenDrawn(() => card.current?.querySelector<HTMLElement>("[data-draft-edit]") ?? null, () => document.activeElement);
+    useToasts.getState().push(EDIT_KEPT_NOTE, "info");
   };
   // Another edit takes the pause back: it said what the earlier words held.
   useEffect(() => setPause(null), [body, newTitle, newText]);
@@ -343,7 +388,7 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
             : rewrite
               ? approve
               : () => onApprove(edit()),
-    skip: open && !working ? onSkip : undefined,
+    skip: open && !working ? skip : undefined,
     edit: startEditing,
     open: onShow,
     primary: () => focusField("[data-draft-actions] button:not(:disabled):last-of-type"),
@@ -485,7 +530,7 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
                 <b className="font-semibold text-ws-pip">Focus from Pip{intent.spec.focusFromRun ? `, after reading run ${intent.spec.focusFromRun}` : ""}:</b> {intent.spec.focus.trim()}
               </p>
             )}
-            <p className="m-0 text-sm text-ws-ink3">Runs as you, with your Claude settings, in a new worktree of {intent.spec.clonePath}. Read the exact prompt and checks, then start it. Nothing runs before that.</p>
+            <p className="m-0 text-sm text-ws-ink3">Runs as you, with your Claude settings, in a new worktree of {intent.spec.clonePath}. {state === "applied" ? "Started: see its run in the steps." : "Read the exact prompt and checks, then start it. Nothing runs before that."}</p>
           </div>
         )}
         {followUp && (
@@ -651,7 +696,7 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
           <p
             role="alert"
             data-post-pause={pause.risks.join(" ")}
-            className="m-0 text-sm text-ws-warn"
+            className="m-0 scroll-mb-12 text-sm text-ws-warn"
             onKeyDown={(ev) => {
               // Esc here is Keep editing, not the peek closing over the unsaved text.
               if (ev.key !== "Escape" || ev.defaultPrevented) return;
@@ -685,7 +730,7 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
                     {editing ? "Done editing" : "Edit"}
                   </button>
                 )}
-                <button type="button" disabled={working} onClick={onSkip} className={button}>
+                <button type="button" disabled={working} onClick={skip} className={button}>
                   Skip
                 </button>
                 {runDraft && onReview && (

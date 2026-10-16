@@ -4,7 +4,7 @@ import { useAutoHeight } from "../components/autoHeight";
 import { hunkLinesAround } from "../lib/diffHunks";
 import { REVIEW_NOT_FOUND_NOTE, REVIEW_OUTDATED_NOTE } from "../lib/proposals";
 import type { Proposal, ReviewAccess } from "../types";
-import { DraftCard, type DraftCardProps } from "./DraftCard";
+import { DraftCard, EDIT_KEPT_NOTE, focusWhenDrawn, showPause, type DraftCardProps } from "./DraftCard";
 import { riskNote } from "../lib/riskyText";
 import { docFromText } from "../lib/docs";
 import { draftPreviewBody } from "./DraftPreview";
@@ -412,5 +412,42 @@ describe("the pause before a review with risky edits is posted (G1)", () => {
 
   it("says everyone on the pull request would see it, not the ticket", () => {
     expect(riskNote(["broadcast"], { broadcast: "@everyone" }, "the pull request")).toBe("Your edit mentions everyone at “@everyone”. Everyone on the pull request would see it once it is posted.");
+  });
+});
+
+describe("the posting pause's scroll and focus (G4, G11)", () => {
+  const fake = () => {
+    const order: string[] = [];
+    const el = (name: string, extra: object = {}) => ({ focus: vi.fn(() => void order.push(`focus ${name}`)), scrollIntoView: vi.fn(() => void order.push(`scroll ${name}`)), ...extra });
+    const note = el("note");
+    const keep = el("keep", { closest: (sel: string) => (sel === "[data-post-pause]" ? note : null) });
+    const actions = el("actions");
+    const card = { querySelector: (sel: string) => (sel === "[data-post-pause-keep]" ? keep : sel === "[data-draft-actions]" ? actions : null) };
+    return { order, card: card as unknown as ParentNode };
+  };
+
+  it("scrolls the actions first and the note itself last, with the focus on Keep editing", () => {
+    const { order, card } = fake();
+    showPause(card);
+    expect(order).toEqual(["focus keep", "scroll actions", "scroll note"]);
+    expect(() => showPause(null)).not.toThrow();
+  });
+
+  it("retries the focus for a few frames until the Edit button has it, and announces that nothing was posted", () => {
+    const queue: (() => void)[] = [];
+    const frame = (run: () => void) => void queue.push(run);
+    const button = { focus: vi.fn() };
+    let active: unknown = null;
+    let drawn = false;
+    focusWhenDrawn(() => (drawn ? button : null), () => active, frame);
+    queue.shift()!();
+    expect(button.focus).not.toHaveBeenCalled();
+    drawn = true;
+    queue.shift()!();
+    expect(button.focus).toHaveBeenCalledTimes(1);
+    active = button;
+    queue.shift()!();
+    expect(queue).toEqual([]);
+    expect(EDIT_KEPT_NOTE).toBe("Edit kept. Nothing was posted.");
   });
 });

@@ -7,7 +7,7 @@ import type { Intent, Proposal, RunSpec, WorkstreamView, Run, WorkContainer, Wor
 import { useWorkspace } from "../workspaceStore";
 import { draftDecisions } from "./DraftPreview";
 import { DRAFT_CARD, onDraftCardKey, stepDraftCards, upToNewestDraft } from "./draftKeys";
-import { CommandsList, Composer, GENERAL_RUN_REF_NOTE, commandHelp, ComposerFooter, GENERAL_CONVERSATION, MANAGE_NOTE, PipConversation, draftsForTicket, otherTicketsRow, VerbNote, showPlanUpdate, composerVerb, inputAfterCommand, openWakeRun, outcomeBelongs, wakeHeader, wakeIsLong, wakeParts, workstreamConversation, workstreamIntro } from "./PipConversation";
+import { CommandsList, Composer, GENERAL_RUN_REF_NOTE, commandHelp, ComposerFooter, GENERAL_CONVERSATION, MANAGE_NOTE, PipConversation, draftsForTicket, otherTicketsRow, VerbNote, showPlanUpdate, composerVerb, inputAfterCommand, openWakeRun, outcomeBelongs, keepUnsentInput, unsentInputOf, wakeHeader, wakeIsLong, wakeParts, workstreamConversation, workstreamIntro } from "./PipConversation";
 import { usePipHome } from "./pipHomeStore";
 import { useTabs } from "./tabsStore";
 import { useRuns } from "./runsStore";
@@ -290,6 +290,27 @@ describe("PipConversation", () => {
     expect(general).not.toContain("R1 is a run in this workstream");
     expect(general).not.toContain('data-command="hold"');
     expect(general).not.toContain('data-command="resume"');
+  });
+
+  it("keeps unsent text per conversation so one workstream's draft never shows in another", () => {
+    const attached = { images: [], add: async () => {}, remove: () => {}, take: () => [] } as unknown as Parameters<typeof Composer>[0]["attached"];
+    const a = workstreamConversation("ws-a");
+    const b = workstreamConversation("ws-b");
+    const render = (conversation: string) => renderToStaticMarkup(<Composer conversation={conversation} attached={attached} chips={[]} looking="the board" scene={{ itemKey: null, route: "pip", runOpen: false, workstream: true }} />);
+    try {
+      keepUnsentInput(a, "half a thought about A");
+      expect(render(a)).toContain('value="half a thought about A"');
+      expect(render(b)).not.toContain("half a thought");
+      expect(unsentInputOf(b)).toBe("");
+      keepUnsentInput(b, "B's own");
+      expect(render(b)).toContain("B&#x27;s own");
+      expect(unsentInputOf(a)).toBe("half a thought about A");
+      keepUnsentInput(a, "");
+      expect(unsentInputOf(a)).toBe("");
+    } finally {
+      keepUnsentInput(a, "");
+      keepUnsentInput(b, "");
+    }
   });
 
   it("offers the Commands button beside the input only while Agents are on", () => {

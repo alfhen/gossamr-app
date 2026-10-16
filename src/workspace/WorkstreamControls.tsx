@@ -44,6 +44,14 @@ export interface ControlActions {
   onSteps?(): void;
 }
 
+/** Once a workstream closed, its confirm, its controls and its row are gone and the conversation is General's: if the keyboard fell to the page, it goes to General's row, where F6 and j/k carry on. */
+export function settleClosedFocus() {
+  requestAnimationFrame(() => {
+    if (!focusLost(document.activeElement, document.body)) return;
+    document.querySelector<HTMLElement>('[data-pip-home] [data-workstream-row="general"]')?.focus();
+  });
+}
+
 /** The controls of workstream `id`, through workstreamsStore. */
 export function controlActions(id: string): ControlActions {
   const ws = () => useWorkstreams.getState();
@@ -53,7 +61,7 @@ export function controlActions(id: string): ControlActions {
     onResume: () => ws().resume(id),
     onAllowMore: () => void ws().allowMore(id),
     onStop: () => void ws().stop(id),
-    onClose: () => void ws().close(id),
+    onClose: () => void ws().close(id).then((closed) => closed && settleClosedFocus()),
     onRule: (rule, on) => void ws().setRule(id, rule, on),
     onSteps: () => void ws().loadGlobals(),
   };

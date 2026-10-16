@@ -374,7 +374,7 @@ test.describe("G15: the person's answers go to Jira as a comment", () => {
     await needsPane(page).getByRole("button", { name: "I'll answer" }).click();
     await expect(homeComposer(page)).toHaveValue(/My answers: $/);
     const prefill = await homeComposer(page).inputValue();
-    await homeComposer(page).fill(`${prefill}Done means the winback mail goes to lapsed customers. We only touch the winback flow. The CRM team asked for it.`);
+    await homeComposer(page).fill(`${prefill}Done means the winback mail goes to lapsed customers. The open rate should rise. We only touch the winback flow. The CRM team asked for it.`);
     await homeComposer(page).press("Enter");
     await homeSettled(page);
 
@@ -386,9 +386,10 @@ test.describe("G15: the person's answers go to Jira as a comment", () => {
     await expect(needsPane(page)).toContainText("Pip drafted a comment on CA-408 with your answers to the open questions; it is posted only when you approve it.");
     const draft = needsPane(page).getByRole("article", { name: `Comment on ${VAGUE}` });
     await expect(draft).toContainText("Open questions from triage, with answers:");
-    await expect(draft).toContainText("“What does done look like for CA-408? Which behaviour or number should change?”");
-    // Three sentences for three questions: each answer sits under its question.
-    await expect(draft).toContainText("“What does done look like for CA-408? Which behaviour or number should change?” Answer: Done means the winback mail goes to lapsed customers.");
+    await expect(draft).toContainText("“What does done look like for CA-408?”");
+    // Four sentences for four questions: each answer sits under its question.
+    await expect(draft).toContainText("“What does done look like for CA-408?” Answer: Done means the winback mail goes to lapsed customers.");
+    await expect(draft).toContainText("“Which behaviour or number should change?” Answer: The open rate should rise.");
     await expect(draft).toContainText("“What is in scope and what is out?” Answer: We only touch the winback flow.");
     await expect(draft).toContainText("“Who asked for this, and who is waiting on it?” Answer: The CRM team asked for it.");
     await expect(draft).not.toContainText("Answers:");
@@ -504,10 +505,10 @@ test.describe("G17: Plan anyway hands the plan the open questions", () => {
     await needOfKind(page, "plan").click();
     const pane = needsPane(page);
     await expect(pane).toContainText("Open questions the plan assumes answers to");
-    for (const q of ["What does done look like for CA-408?", "What is in scope and what is out?", "Who asked for this, and who is waiting on it?"]) await expect(pane).toContainText(q);
+    for (const q of ["What does done look like for CA-408?", "Which behaviour or number should change?", "What is in scope and what is out?", "Who asked for this, and who is waiting on it?"]) await expect(pane).toContainText(q);
     // The plan's summary says it rests on assumed answers, and each is stated with what the plan assumed.
-    await expect(pane).toContainText("Assumes answers to 3 open questions about the ticket (listed at the end).");
-    expect((await pane.innerText()).match(/Assumed:/g)).toHaveLength(3);
+    await expect(pane).toContainText("Assumes answers to 4 open questions about the ticket (listed at the end).");
+    expect((await pane.innerText()).match(/Assumed:/g)).toHaveLength(4);
     expect(await jiraWrites(page)).toEqual([]);
   });
 });

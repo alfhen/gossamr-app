@@ -111,6 +111,13 @@ export const advancedText = (done: Pick<Need, "title" | "ticketKey" | "workstrea
 /** What was done and in which workstream: "Done: Questions for the reporter on CA-408." The pane moved on, so the line is what says where it happened. */
 export const doneText = (done: Pick<Need, "title" | "ticketKey" | "workstreamTitle">, posted = false) => {
   const where = done.ticketKey ?? done.workstreamTitle;
+  // A title that already names the ticket is not repeated, and a question is not quoted as if it were what was done.
+  const key = done.ticketKey;
+  if (key && done.title.startsWith(key)) {
+    const rest = done.title.slice(key.length).replace(/^\s*[:·-]\s*/, "");
+    if (rest.endsWith("?")) return `${posted ? "Posted to Jira" : "Done"}: decided "${rest}" on ${key}.`;
+    return `${posted ? "Posted to Jira" : "Done"}: ${done.title}.`;
+  }
   return `${posted ? "Posted to Jira" : "Done"}: ${done.title}${where ? ` on ${where}` : ""}.`;
 };
 

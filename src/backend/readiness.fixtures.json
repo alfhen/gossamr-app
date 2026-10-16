@@ -3,6 +3,7 @@
   "report": [
     { "note": "Ready to plan: yes", "expect": {"ready": true, "questions": []} },
     { "note": "For Jira:\n**Ready to plan:** No\nOpen questions:\n- What does done look like?\n- Who is waiting on it?", "expect": {"ready": false, "questions": ["What does done look like?", "Who is waiting on it?"]} },
+    { "note": "Ready to plan: no\nOpen questions:\n- What does done look like? Which behaviour or number should change?\n- Who is waiting on it?", "expect": {"ready": false, "questions": ["What does done look like?", "Which behaviour or number should change?", "Who is waiting on it?"]} },
     { "note": "- ready to plan: no\n- Open questions: what is the goal?", "expect": {"ready": false, "questions": ["what is the goal?"]} },
     { "note": "## Ready to plan: no", "expect": {"ready": false, "questions": []} },
     { "note": "Plan recommended: yes", "expect": null },

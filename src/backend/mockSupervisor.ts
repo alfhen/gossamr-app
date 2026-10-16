@@ -5,6 +5,7 @@ import { reporterFollow } from "../lib/reporterWait";
 import { byQueue, runLabels } from "../lib/workstreamStage";
 import { runRef } from "../lib/composerVerbs";
 import { withoutMarkers } from "./mockRunKinds";
+import { oneQuestionEach } from "./mockReadiness";
 import { MARKERS, textDigest, type MockWorkstreams } from "./mockWorkstreams";
 import type { MockRuns } from "./mockRuns";
 import type { MockProposals } from "./mockProposals";
@@ -242,7 +243,7 @@ export function readiness(result: string): Readiness | null {
       .filter(Boolean)
       .join(" ")
       .replace(/^[*_`\s]+|[*_`\s]+$/g, "");
-  return { ready, questions: questions.map(flat).filter((q) => q !== "").slice(0, QUESTIONS_MAX).map((q) => cut(q, QUESTION_LIMIT)) };
+  return { ready, questions: oneQuestionEach(questions.map(flat).filter((q) => q !== "")).slice(0, QUESTIONS_MAX).map((q) => cut(q, QUESTION_LIMIT)) };
 }
 
 /** What a finished Triage on a ticket says about a plan, from its whole written answer, as `Resolved.plan_recommended`. */

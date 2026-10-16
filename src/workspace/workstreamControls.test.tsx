@@ -655,3 +655,24 @@ describe("what the Steps column's words mean", () => {
     expect(html).toContain("data-mode-line");
   });
 });
+
+describe("focus after Close workstream (G5)", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("goes to General's row once the close went through, and not when it failed", async () => {
+    const row = { focus: vi.fn() };
+    const body = {};
+    vi.stubGlobal("document", { body, activeElement: body, querySelector: (sel: string) => (sel === '[data-pip-home] [data-workstream-row="general"]' ? row : null) });
+    vi.stubGlobal("requestAnimationFrame", (run: () => void) => void run());
+    const close = vi.spyOn(useWorkstreams.getState(), "close");
+    close.mockResolvedValueOnce(false);
+    controlActions("w1").onClose?.();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(row.focus).not.toHaveBeenCalled();
+    close.mockResolvedValueOnce(true);
+    controlActions("w1").onClose?.();
+    await vi.waitFor(() => expect(row.focus).toHaveBeenCalledTimes(1));
+    close.mockRestore();
+  });
+});

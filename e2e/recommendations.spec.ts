@@ -439,7 +439,7 @@ test.describe("D1: Pip speaks up when a ticket is unclear", () => {
     await expect(pane).toHaveAttribute("data-kind", "readiness");
     await expect(pane).toContainText("CA-408 isn't clear enough to plan");
     const questions = pane.locator("[data-readiness-questions] li");
-    await expect(questions).toHaveCount(3);
+    await expect(questions).toHaveCount(4);
     await expect(questions.nth(0)).toContainText("What does done look like for CA-408?");
     await expect(pane).toContainText("No plan starts until you choose.");
     for (const name of ["Ask the reporter", "I'll answer", "Plan anyway"]) await expect(pane.getByRole("button", { name })).toBeVisible();

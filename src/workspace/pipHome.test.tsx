@@ -350,3 +350,12 @@ describe("Pip home's keys with no workstream, and its footer", () => {
     expect(html).not.toContain("a opens a run draft");
   });
 });
+
+describe("the conversation's name is a heading (G10)", () => {
+  it("names General, and a workstream, as an h2 inside the Conversation region", async () => {
+    const general = renderToStaticMarkup(<HomeConversation workstream={null} />);
+    expect(general).toMatch(/<h2 [^>]*data-pip-conversation="general"[^>]*>.*General/);
+    const view = (await backend.workstreamsList()).find((v) => v.workstream.itemKey === "CA-401")!;
+    expect(renderToStaticMarkup(<HomeConversation workstream={view} />)).toMatch(/<h2 [^>]*data-pip-conversation="ws:[^"]+"[^>]*>.*Workstream: CA-401/);
+  });
+});

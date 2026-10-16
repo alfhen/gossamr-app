@@ -159,8 +159,21 @@ export function clarityOf(ws: Workstream, runs: readonly Run[], gaps: readonly C
   if (runs.some((r) => r.spec.workstream === ws.id && r.spec.kind === "triage")) return null;
   const follow = reporterFollow(events, replies);
   const said = (action: string) => events.some((e) => e.actor === "person" && e.action === action);
-  if (said("clarity_dismissed") || follow.waiting || (said("clarity_asked") && !follow.changed)) return null;
+  // An ask whose draft was skipped or retired was never posted, so it doesn't settle the notice.
+  const asked = events.some((e) => e.actor === "person" && e.action === "clarity_asked" && !(e.proposalId && draftLapsed(events, e.proposalId)));
+  if (said("clarity_dismissed") || follow.waiting || (asked && !follow.changed)) return null;
   return { gaps: [...gaps] };
+}
+
+/** Whether the draft `id` was last skipped (and not brought back by Undo) or retired, so it won't be posted. */
+function draftLapsed(events: readonly WorkstreamEvent[], id: string): boolean {
+  let lapsed = false;
+  for (const e of events) {
+    if (e.proposalId !== id) continue;
+    if (e.action === "draft_skipped" || e.action === "draft_retired") lapsed = true;
+    else if (e.action === "undone" && e.detail === "draft_skipped") lapsed = false;
+  }
+  return lapsed;
 }
 
 /** Why asking the reporter, or saying a ticket looks fine, is refused when its clarity notice isn't showing, as `CLARITY_GONE`. */

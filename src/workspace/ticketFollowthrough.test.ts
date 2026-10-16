@@ -272,13 +272,14 @@ describe("I'll answer, then the person's answers", () => {
     const { id, triage } = await answering();
     const prompt = usePip.getState().prefill!.text;
     expect(prompt).toMatch(/My answers: $/);
-    await ask(id, "a1", `${prompt}Done means the winback mail goes to lapsed customers\nWe only touch the winback flow\nThe CRM team asked for it`);
+    await ask(id, "a1", `${prompt}Done means the winback mail goes to lapsed customers\nThe open rate should rise\nWe only touch the winback flow\nThe CRM team asked for it`);
     const drafts = backend.proposals.list({ workstream: id });
     const answers = drafts.find((p) => p.label === "Answers to the open questions")!;
     expect(answers).toMatchObject({ state: { type: "pending" }, createdBy: "pip", intent: { type: "comment" } });
     const text = docText(answers.intent.type === "comment" ? answers.intent.body : { blocks: [] });
     expect(text.startsWith("Open questions from triage, with answers:")).toBe(true);
-    expect(text).toContain("“What does done look like for CA-408? Which behaviour or number should change?”\nAnswer: Done means the winback mail goes to lapsed customers");
+    expect(text).toContain("“What does done look like for CA-408?”\nAnswer: Done means the winback mail goes to lapsed customers");
+    expect(text).toContain("“Which behaviour or number should change?”\nAnswer: The open rate should rise");
     expect(text).toContain("“What is in scope and what is out?”\nAnswer: We only touch the winback flow");
     expect(text).toContain("“Who asked for this, and who is waiting on it?”\nAnswer: The CRM team asked for it");
     expect(drafts.some((p) => p.intent.type === "rewrite")).toBe(false);
@@ -307,10 +308,11 @@ describe("I'll answer, then the person's answers", () => {
 
   it("pairs each answer with its question when the message splits into as many sentences as there are questions", async () => {
     const { id } = await answering();
-    await ask(id, "a1", `${usePip.getState().prefill!.text}Done means the winback mail goes out. We only touch the winback flow. The CRM team asked for it.`);
+    await ask(id, "a1", `${usePip.getState().prefill!.text}Done means the winback mail goes out. The open rate should rise. We only touch the winback flow. The CRM team asked for it.`);
     const answers = backend.proposals.list({ workstream: id }).find((p) => p.label === "Answers to the open questions")!;
     const text = docText(answers.intent.type === "comment" ? answers.intent.body : { blocks: [] });
-    expect(text).toContain("“What does done look like for CA-408? Which behaviour or number should change?”\nAnswer: Done means the winback mail goes out.");
+    expect(text).toContain("“What does done look like for CA-408?”\nAnswer: Done means the winback mail goes out.");
+    expect(text).toContain("“Which behaviour or number should change?”\nAnswer: The open rate should rise.");
     expect(text).toContain("“What is in scope and what is out?”\nAnswer: We only touch the winback flow.");
     expect(text).toContain("“Who asked for this, and who is waiting on it?”\nAnswer: The CRM team asked for it.");
     expect(text).not.toContain("Answers:");

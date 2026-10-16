@@ -10,7 +10,7 @@ const items = await new MockBackend().cacheSearch({ type: "and", filters: [] });
 
 const actions = () => {
   const a = Object.fromEntries(
-    ["goToProject", "openSavedView", "setView", "addFilter", "clearFilters", "setTheme", "openSettings", "manageProjects", "watch", "openTicket", "openActivity", "openDrafts", "newTab", "newTicket", "togglePip", "startAgent", "startAgentOn", "showNeedsYou", "openAgentSafety", "startWorkstream", "closeWorkstream", "jumpToItem", "askPip", "openPipHome", "openAgents", "openWorkstream", "askPipToPlan", "startWorkstreamOn", "showTimeline", "startMyDay", "openJiraSent", "giveBackClarity"].map((k) => [k, vi.fn()]),
+    ["goToProject", "openSavedView", "setView", "addFilter", "clearFilters", "setTheme", "openSettings", "manageProjects", "watch", "openTicket", "openActivity", "openDrafts", "newTab", "newTicket", "chooseWorkstream", "togglePip", "startAgent", "startAgentOn", "showNeedsYou", "openAgentSafety", "startWorkstream", "closeWorkstream", "jumpToItem", "askPip", "openPipHome", "openAgents", "openWorkstream", "askPipToPlan", "startWorkstreamOn", "showTimeline", "startMyDay", "openJiraSent", "giveBackClarity"].map((k) => [k, vi.fn()]),
   );
   return a as unknown as CommandActions & Record<keyof CommandActions, ReturnType<typeof vi.fn>>;
 };
@@ -569,5 +569,21 @@ describe("the habits in the palette", () => {
     expect(two.hint).toBe("2 projects");
     two.run();
     expect(a.giveBackClarity).toHaveBeenCalled();
+  });
+});
+
+describe("Start a workstream… in the palette (G14)", () => {
+  it("is found by 'start', asks for the ticket in the palette itself, and Start an agent says how it differs", () => {
+    const a = actions();
+    const found = buildCommands([], [], a, { project: null, view: null, unreadActivity: 0, agents: true });
+    const entry = found.find((c) => c.label === "Start a workstream…")!;
+    expect(entry.group).toBe("Workstreams");
+    expect(entry.hint).toBe("starts no agent and posts nothing");
+    expect(entry.stay).toBe(true);
+    expect(rankCommands(found, "start").map((c) => c.label)).toEqual(expect.arrayContaining(["Start a workstream…", "Start an agent…"]));
+    entry.run();
+    expect(a.chooseWorkstream).toHaveBeenCalled();
+    expect(found.find((c) => c.label === "Start an agent…")!.hint).toContain("runs Claude");
+    expect(buildCommands([], [], a, { project: null, view: null, unreadActivity: 0, agents: false }).some((c) => c.label === "Start a workstream…")).toBe(false);
   });
 });
