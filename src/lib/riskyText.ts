@@ -8,7 +8,8 @@ const BROADCAST = /(^|[^\w@.])@(everyone|here|channel|all)(?![\w-])/i;
 
 /** Credentials by their shape: a private key block, a cloud or API key, a token, a JWT, a "password: …" line. */
 const SECRETS: RegExp[] = [
-  /-----BEGIN [A-Z ]*PRIVATE KEY-----/,
+  // The key's body too, to its END line, or as much of it as was pasted: the header alone would leave the key itself showing.
+  /-----BEGIN [A-Z ]*PRIVATE KEY-----(?:[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----|[A-Za-z0-9+/=\s]*)/,
   /\bAKIA[0-9A-Z]{16}\b/,
   /\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})/,
   /\bxox[abprs]-[A-Za-z0-9-]{10,}/,
@@ -66,6 +67,7 @@ export const newRisks = (original: string, edited: string): Risk[] => {
 
 /** The part of a secret-shaped match that is the secret: the token after "Bearer ", the value after "password:" or "kodeord ", the password of a URL, else the whole run. */
 const secretPart = (match: string): string =>
+  (/^-----BEGIN [A-Z ]*PRIVATE KEY-----/.test(match) ? match : null) ??
   /^[a-z][a-z0-9+.-]*:\/\/[^\s:/?#@]+:([^\s@/?#]+)@$/i.exec(match)?.[1] ??
   /^Bearer\s+(.+)$/i.exec(match)?.[1] ??
   /^[A-Za-z][A-Za-z _-]*?\s*(?:(?:is|er)\s*)?[:=]\s*["']?(.+)$/i.exec(match)?.[1] ??

@@ -96,4 +96,17 @@ describe("the pause before posting edited text", () => {
     expect(maskSecrets("clone https://bob:s3cretpw@host/repo")).toBe("clone https://bob:s3…@host/repo");
     expect(maskSecrets("The password reset flow is slow. @everyone")).toBe("The password reset flow is slow. @everyone");
   });
+
+  it("masks a private key's body with its header, whole or only partly pasted (G6)", () => {
+    const body = "MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7\nVJTUt9Us8cKjMzEfYyjiWA4R4/M2bS1GB4t7NXp98C3SC6dVMvDas5";
+    const header = "-----BEGIN PRIVATE KEY-----";
+    expect(maskSecrets(`key: ${header}\n${body}`)).toBe("key: --…");
+    expect(maskSecrets(`${header} MIIEvQIBADANBg`)).toBe("--…");
+    expect(maskSecrets(`${header}\n${body}\n-----END PRIVATE KEY-----\nthanks`)).toBe("--…\nthanks");
+    expect(maskSecrets(header)).toBe("--…");
+    // One item in the pause, never the header and the body as two.
+    expect(newRiskQuote("x", `${header}\n${body}\n-----END PRIVATE KEY-----`)).toEqual({ secret: ["--…"] });
+    expect(newRiskQuote("x", `${header}\n${body}`)).toEqual({ secret: ["--…"] });
+    expect(risksIn(`${header}\n${body}`)).toEqual(["secret"]);
+  });
 });
