@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { MockBackend } from "../backend/mock";
-import { docFromText } from "./docs";
 import { HELD_ALL, HELD_BUDGET, HELD_DAILY, HELD_PERSON, HELD_QUOTA, HELD_RESTART, TRIPWIRE } from "../types";
 import type { Intent, ItemRef, Proposal, ProposalState, Run, RunKind, RunState, WorkstreamStage, WorkstreamView } from "../types";
-import { BATCHABLE, GROUP_RANK, chipLabel, byRank, escalationReason, higherPriority, needAfter, needGroups, needs, needsIn, leftOutLabel, readinessPrompt, readinessWhy, repeatedComments, titleFromTicketBlock, type Need, type NeedKind, type NeedsInput } from "./needs";
+import { docFromText } from "./docs";
+import { BATCHABLE, GROUP_RANK, chipLabel, byRank, escalationReason, higherPriority, needAfter, needGroups, needs, needsIn, quietKey, leftOutLabel, readinessPrompt, readinessWhy, repeatedComments, titleFromTicketBlock, type Need, type NeedKind, type NeedsInput } from "./needs";
 
 const NOW = Date.parse("2026-09-30T12:00:00Z");
 const iso = (minutesAgo: number) => new Date(NOW - minutesAgo * 60_000).toISOString();
@@ -67,7 +67,7 @@ const draft = (id: string, intent: Intent, minutesAgo: number, over: { state?: P
     ...(over.supersededBy ? { supersededBy: over.supersededBy } : {}),
   }) as Proposal;
 
-const comment = (key: string): Intent => ({ type: "comment", item: ref(key), body: "Looks good", mentions: [] }) as unknown as Intent;
+const comment = (key: string): Intent => ({ type: "comment", item: ref(key), body: docFromText("Looks good"), mentions: [] }) as unknown as Intent;
 const transition = (key: string): Intent => ({ type: "transition", item: ref(key), to: "done" }) as unknown as Intent;
 const subtasks = (key: string): Intent => ({ type: "subtasks", parent: ref(key), summaries: ["a", "b"] }) as unknown as Intent;
 const rewrite = (key: string): Intent => ({ type: "rewrite", item: ref(key), title: null, body: { from: {}, to: {}, fromText: "a", toText: "b" } }) as unknown as Intent;
@@ -317,6 +317,18 @@ describe("needs: a ticket the triage found not clear enough to plan", () => {
     ...over,
   });
 
+  it("says the reporter was asked and nudged, and offers Ask again, once they have not answered", () => {
+    const asked = { "ws-1": { asked: iso(2 * 24 * 60), nudged: iso(60) } };
+    const [n] = needs(input({ workstreams: [unclear()], runs: [run("r-t", "triage", "done")], asked }));
+    expect(n.why).toBe("You asked the reporter 2 days ago and nudged 1 hour ago; they have not answered. R1 left these questions open: What does done look like? · Who is waiting on it?");
+    expect(n.primary).toEqual({ id: "askReporter", label: "Ask again" });
+    expect(needs(input({ workstreams: [unclear()], runs: [run("r-t", "triage", "done")], asked: { "ws-1": { asked: iso(60), nudged: null } } }))[0].why).toMatch(/^You asked the reporter 1 hour ago; they have not answered\. /);
+    // Without an ask, or once they replied, nothing is said about one.
+    expect(needs(input({ workstreams: [unclear()], runs: [run("r-t", "triage", "done")] }))[0].primary.label).toBe("Ask the reporter");
+    const replied = unclear(["Q?"], { readiness: { triageRun: "r-t", triageLabel: "R1", questions: ["Q?"], at: iso(9), changed: true, replied: true } });
+    expect(needs(input({ workstreams: [replied], asked }))[0].why).not.toContain("You asked");
+  });
+
   it("is a Decide question with the open questions as its reason and the three choices", () => {
     const list = needs(input({ workstreams: [unclear()], runs: [run("r-t", "triage", "done")] }));
     expect(list).toHaveLength(1);
@@ -532,6 +544,19 @@ describe("needs: stopped at the limit, quiet, unknown and possible continuation"
     expect(only(run("r1", "build", "working", { lastProgressAt: iso(30) }), { dismissed: new Set(["r1"]) })).toHaveLength(1);
   });
 
+  it("lets the person keep waiting on a quiet run, for that quiet spell only", () => {
+    const quiet = run("r1", "build", "working", { lastProgressAt: iso(30) });
+    const [n] = only(quiet);
+    expect(n.secondary).toEqual([{ id: "dismiss", label: "Keep waiting" }]);
+    expect(only(quiet, { dismissed: new Set([quietKey(quiet)]) })).toEqual([]);
+    // It made progress and went quiet again: a new spell, so the need is back.
+    const again = { ...quiet, lastProgressAt: iso(35) };
+    expect(only(again, { dismissed: new Set([quietKey(quiet)]) })).toHaveLength(1);
+    // A failure of the same run after the dismissal still needs the person.
+    const failed = { ...quiet, state: "failed" as const };
+    expect(kinds(only(failed, { dismissed: new Set([quietKey(quiet)]) }))).toEqual(["failure"]);
+  });
+
   it("includes an unclear run until it is dismissed or found again", () => {
     const unknown = run("r1", "build", "unknown");
     expect(kinds(only(unknown))).toEqual(["unknown"]);
@@ -592,9 +617,24 @@ describe("needs: where a need is", () => {
   it("labels a draft a run left with the run and its step", () => {
     const ws = view("ws-1", "CA-401", { runs: ["r1", "r2"] });
     const fromRun = (id: string, runId: string, minutesAgo: number): Proposal => ({ ...draft(id, comment("CA-401"), minutesAgo), origin: { type: "run", runId, shortId: null, workstream: "ws-1" } }) as Proposal;
-    expect(needs(input({ workstreams: [ws], proposals: [fromRun("c1", "r1", 5), fromRun("c2", "r2", 4), draft("c3", comment("CA-401"), 3, { workstream: "ws-1" })] })).map((n) => n.title)).toEqual(["R1 comment", "R2 comment", "Draft comment"]);
+    expect(needs(input({ workstreams: [ws], proposals: [fromRun("c1", "r1", 5), fromRun("c2", "r2", 4), draft("c3", comment("CA-401"), 3, { workstream: "ws-1" })] })).map((n) => n.title)).toEqual(["R1 comment", "R2 comment", "Draft comment: “Looks good”"]);
     const runs = [run("r1", "review", "done"), run("r2", "plan", "done")];
     expect(needs(input({ workstreams: [ws], runs, proposals: [fromRun("c1", "r1", 5), fromRun("c2", "r2", 4), fromRun("c4", "gone", 3)] })).map((n) => n.title)).toEqual(["R1 review · comment", "R2 plan · comment", "Draft comment"]);
+  });
+
+  it("keeps the step in a run's draft title once its workstream is closed, and says a Pip comment's first words", () => {
+    const fromRun = (id: string, runId: string): Proposal => ({ ...draft(id, comment("CA-401"), 5), origin: { type: "run", runId, shortId: null, workstream: null } }) as Proposal;
+    const runs = [run("r9", "investigate", "done")];
+    expect(needs(input({ runs, proposals: [fromRun("c1", "r9")] }))[0].title).toBe("Investigate · comment");
+    // A Review run's GitHub review doesn't read "Review · review".
+    const reviewed = { ...draft("g1", review(), 5), origin: { type: "run", runId: "r-rev", shortId: null, workstream: null } } as Proposal;
+    expect(needs(input({ runs: [run("r-rev", "review", "done")], proposals: [reviewed] }))[0].title).toBe("Review · GitHub review");
+    const long = { type: "comment", item: ref("CA-401"), body: docFromText("Thanks for the report, the export times out after ten rows."), mentions: [] } as unknown as Intent;
+    expect(needs(input({ proposals: [draft("c2", long, 4)] }))[0].title).toBe("Draft comment: “Thanks for the report, the export…”");
+    const secret = { ...long, body: docFromText(`ghp_${"a".repeat(36)} is the token`) } as unknown as Intent;
+    const title = needs(input({ proposals: [draft("c3", secret, 3)] }))[0].title;
+    expect(title).toContain("gh…");
+    expect(title).not.toContain("ghp_");
   });
 
   it("labels a tripwire hold the short way, and a used-up budget as the question it is", () => {

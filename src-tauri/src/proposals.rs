@@ -473,7 +473,10 @@ pub const READINESS_COMMENT_LABEL: &str = "Questions for the reporter";
 /// the person's answer, for the ticket. Pip sets it by starting the comment with these words (`Core::propose_comment`).
 pub const ANSWERS_COMMENT_LABEL: &str = "Answers to the open questions";
 /// The first line of that comment, so a Jira reader knows the triage's questions are answered below. Jira's words, in a neutral voice; mirrored by `ANSWERS_OPENING` in src/lib/proposals.ts.
-pub const ANSWERS_OPENING: &str = "Open questions from triage, with answers:";
+pub const ANSWERS_OPENING: &str = "Answers to the open questions on this ticket:";
+/// The first line the answers comment had before it named the ticket instead of a triage the Jira reader never saw: a draft or
+/// a session made under the old prompt may still open with it, and is labelled as an answers draft all the same.
+pub const ANSWERS_OPENING_BEFORE: &str = "Open questions from triage, with answers:";
 
 /// Whether `p` is the comment Gossamr drafted to ask a ticket's reporter (`Core::ask_reporter`, `Core::ask_reporter_now`):
 /// never one Pip made, whatever it is labelled.

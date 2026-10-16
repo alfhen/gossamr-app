@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { HELD_ALL, HELD_BUDGET, HELD_DAILY, HELD_PERSON, HELD_QUOTA, HELD_RESTART, TRIPWIRE, TRIPWIRES } from "../types";
 import type { Run, WorkstreamView } from "../types";
 import { NUDGE_AFTER_DAYS } from "./reporterWait";
-import { EMPTY_FILTER, OWED_DETAIL, ON_REPORTER_DETAIL, answersOwed, emptyFilterText, QUIET_DAYS, REPLIED_DETAIL, STATUS_HINT, UNCLEAR_HINT, hintFor, STATUS_ORDER, UNCLEAR_DETAIL, byStatusRank, statusFromWords, workstreamStatus, type StatusMore } from "./workstreamStatus";
+import { EMPTY_FILTER, OWED_DETAIL, ON_REPORTER_DETAIL, answersOwed, emptyFilterText, QUIET_DAYS, REPLIED_DETAIL, REPLIED_HINT, STATUS_HINT, UNCLEAR_HINT, hintFor, STATUS_ORDER, UNCLEAR_DETAIL, byStatusRank, statusFromWords, workstreamStatus, type StatusMore } from "./workstreamStatus";
 import type { WorkstreamWither } from "./workstreamWither";
 
 const NOW = new Date("2026-10-13T09:00:00Z");
@@ -220,6 +220,10 @@ describe("status hints and empty filters", () => {
     expect(hintFor({ state: "idle", detail: null })).toBe(STATUS_HINT.idle);
     expect(hintFor({ state: "idle", detail: UNCLEAR_DETAIL })).toBe(`${STATUS_HINT.idle} ${UNCLEAR_HINT}`);
     expect(hintFor({ state: "running", detail: UNCLEAR_DETAIL })).toBe(STATUS_HINT.running);
+    // Once the reporter has answered, the hint no longer says nothing waits on the person (G10).
+    expect(hintFor({ state: "idle", detail: REPLIED_DETAIL })).toBe(REPLIED_HINT);
+    expect(REPLIED_HINT).not.toContain("nothing waits on you");
+    expect(hintFor({ state: "running", detail: REPLIED_DETAIL })).toBe(STATUS_HINT.running);
   });
 
   it("has a sentence for every filter that reads naturally", () => {

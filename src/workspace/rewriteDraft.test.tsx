@@ -8,9 +8,10 @@ import { useRuns } from "./runsStore";
 import { useWorkstreams } from "./workstreamsStore";
 import { DraftCard, draftSummary, draftTitle } from "./DraftCard";
 import { DraftPreview, draftPreviewBody } from "./DraftPreview";
-import { ONLY_SPACING, changedPairs, diffSummary, diffWords, oneLine, rewriteBlocked, rewriteEdit, rewriteFields, RewriteView, startsBlock, takesBackendText, type Rewrite } from "./RewriteDiff";
+import { ONLY_SPACING, bodyChangeSize, changedPairs, diffSummary, diffWords, oneLine, rewriteBlocked, rewriteEdit, rewriteFields, RewriteView, startsBlock, takesBackendText, type Rewrite } from "./RewriteDiff";
 import { diffLines } from "../lib/textDiff";
 import { targetOf } from "../lib/proposals";
+import { rewriteNote } from "../lib/mentions";
 
 const OLD = "Retries back off.\n\nBackoff starts at two seconds.\n\nOpen question: who owns the alert?";
 const NEW = "Retries back off and cap at five attempts.\n\nBackoff starts at two seconds.\n\n## Scope\n\n- In: webhooks\n- Out: queue replay";
@@ -60,9 +61,19 @@ describe("a description edit draft", () => {
   });
 
   it("summarises the title change and how many lines of the description change", () => {
-    expect(draftSummary(draft(), null)).toBe("Title: Retry failed payment webhooks → Retry failed payment webhooks with a cap; Description: 5 added, 2 removed");
+    expect(draftSummary(draft(), null)).toBe("Title: Retry failed payment webhooks → Retry failed payment webhooks with a cap; Description: 4 lines added, 2 removed");
     const preview = draftPreviewBody(draft(), null);
-    expect(preview.split("\n")).toEqual(["Title: Retry failed payment webhooks → Retry failed payment webhooks with a cap", "Description: 5 added, 2 removed"]);
+    expect(preview.split("\n")).toEqual(["Title: Retry failed payment webhooks → Retry failed payment webhooks with a cap", "Description: 4 lines added, 2 removed"]);
+  });
+
+  it("counts the lines of the description as the diff says them, leaving blank lines out (G7)", () => {
+    const size = bodyChangeSize(OLD, NEW);
+    expect(size).toEqual({ added: 4, removed: 2 });
+    const body = intent().body!;
+    expect(diffSummary(diffLines(body.fromText, body.toText), "description")).toBe("Description changes: 4 lines added, 2 lines removed.");
+    expect(bodyChangeSize("a", "a\n\n\nb")).toEqual({ added: 1, removed: 0 });
+    const one = intent({ title: null, body: bodyChange(docFromMarkdown("a"), "a\n\nb") });
+    expect(draftSummary(draft(one), null)).toBe("Description: 1 line added, 0 removed");
   });
 
   it("shows the old lines removed and the new ones added, for the title and the description", () => {
@@ -113,6 +124,16 @@ describe("a description edit draft", () => {
     expect(renderToStaticMarkup(<DraftCard {...props(draft(intent({ body: null, flattened: ["tables"] })))} />)).not.toContain("data-flattened");
   });
 
+  it("says it changes the ticket in Jira as the person and who is notified, before Update (G8)", () => {
+    const both = renderToStaticMarkup(<DraftCard {...props(draft())} />);
+    expect(both).toContain("data-rewrite-note");
+    expect(both).toContain("Changes the ticket&#x27;s title and description in Jira as you; Jira notifies its watchers.");
+    expect(rewriteNote("description")).toBe("Changes the ticket's description in Jira as you; Jira notifies its watchers.");
+    expect(renderToStaticMarkup(<DraftCard {...props(draft(intent({ title: null })))} />)).toContain("Changes the ticket&#x27;s description in Jira as you");
+    expect(renderToStaticMarkup(<DraftCard {...props(draft(intent({ body: null })))} />)).toContain("Changes the ticket&#x27;s title in Jira as you");
+    expect(renderToStaticMarkup(<DraftCard {...props(draft(intent(), { state: { type: "applied" } }))} />)).not.toContain("data-rewrite-note");
+  });
+
   it("shows why the last approval was refused, and offers no approve once decided", () => {
     const refused = "DEVOPS-471 changed since this was drafted, so nothing was written. Skip this draft and ask Pip to draft it again from the current text.";
     const html = renderToStaticMarkup(<DraftCard {...props(draft(intent(), { error: refused }))} />);
@@ -128,7 +149,7 @@ describe("a description edit draft", () => {
   it("appears in the conversation with its change and where to review it", () => {
     const html = renderToStaticMarkup(<DraftPreview proposal={draft()} statusName={null} targetTitle="Retry failed payment webhooks" onOpen={() => {}} />);
     expect(html).toContain("Update the title and description of DEVOPS-471");
-    expect(html).toContain("Description: 5 added, 2 removed");
+    expect(html).toContain("Description: 4 lines added, 2 removed");
     expect(html).toContain("Review on DEVOPS-471 →");
   });
 });

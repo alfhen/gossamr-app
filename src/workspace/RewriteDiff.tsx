@@ -225,7 +225,7 @@ export function rewriteBlocked(i: Rewrite, title: string, body: string): boolean
 
 /** How many lines of a description would be added and removed, for a one-line summary. */
 export function bodyChangeSize(from: string, to: string): { added: number; removed: number } {
-  const lines = diffLines(from, to);
+  const lines = diffLines(from, to).filter((l) => l.text.trim() !== "");
   return { added: lines.filter((l) => l.kind === "add").length, removed: lines.filter((l) => l.kind === "del").length };
 }
 

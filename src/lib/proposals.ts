@@ -1,4 +1,5 @@
 import { docText } from "./docs";
+import { maskSecrets } from "./riskyText";
 import type { BasisField, Intent, ItemRef, Proposal, ProposalMaker, ReviewComment, RunKind } from "../types";
 
 /** Fails to compile when a switch over a union misses a case, and throws if one slips through at run time. */
@@ -245,8 +246,8 @@ export const isReporterNudge = (p: Proposal) => p.intent.type === "comment" && p
 
 /** The label of a comment Pip drafts once the person chose "I'll answer" on a triage's open questions: each question with their answer, for the ticket. As `ANSWERS_COMMENT_LABEL` in `proposals.rs`. */
 export const ANSWERS_COMMENT_LABEL = "Answers to the open questions";
-/** The first line of that comment, so a Jira reader knows the triage's questions are answered below. Neutral voice; as `ANSWERS_OPENING` in `proposals.rs`. */
-export const ANSWERS_OPENING = "Open questions from triage, with answers:";
+/** The first line of that comment, so a Jira reader knows the open questions on the ticket are answered below. Neutral voice; as `ANSWERS_OPENING` in `proposals.rs`. */
+export const ANSWERS_OPENING = "Answers to the open questions on this ticket:";
 
 /** Whether `p` is the comment Pip drafted with the person's answers to the open questions. As `is_answers_draft`. */
 export const isAnswersDraft = (p: Proposal) => p.intent.type === "comment" && p.label === ANSWERS_COMMENT_LABEL && p.createdBy === "pip";
@@ -269,7 +270,8 @@ export function answersPaired(body: string): boolean {
  */
 export function answersProvenance(prompt: string | null, body?: string): string {
   const at = prompt?.indexOf("My answers:") ?? -1;
-  const reply = (at >= 0 ? prompt!.slice(at + "My answers:".length) : (prompt ?? "")).replace(/\s+/g, " ").trim();
+  // A secret the person pasted is masked before the cut, so the line never shows it and the cut counts what is shown.
+  const reply = maskSecrets((at >= 0 ? prompt!.slice(at + "My answers:".length) : (prompt ?? "")).replace(/\s+/g, " ").trim());
   const quoted = reply ? ` “${[...reply].length > REPLY_QUOTED ? `${[...reply].slice(0, REPLY_QUOTED).join("").trimEnd()}…` : reply}”` : "";
   return `Drafted from your reply${quoted} in this conversation, ${body === undefined || answersPaired(body) ? "each answer under its question" : "the questions, then your answers as written"}. Read and edit it before you approve.`;
 }

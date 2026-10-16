@@ -1315,6 +1315,16 @@ describe("the comment drafted from a run opens by saying what the agent did, as 
     const note = jiraNote("For Jira:\nSmall change.");
     expect(commentText(note, null, "triage")).toMatch(/^Triaged with an agent\.\n\n/);
     expect(commentText(note, null, "plan")).toMatch(/^Planned with an agent\./);
-    expect(commentText(note, null, "review")).toMatch(/^Worked on with an agent\./);
+    expect(commentText(note, null, "review")).toMatch(/^Reviewed with an agent\./);
+    expect(commentText(note, null, "verify")).toMatch(/^Worked on with an agent\./);
+  });
+
+  it("names the pull request a review read, unless the note does, as comment_text does (G3)", () => {
+    const note = jiraNote("For Jira:\nTwo findings.");
+    expect(commentText(note, null, "review", false, false, 7)).toBe("Reviewed with an agent.\n\nTwo findings.\n\nPull request #7");
+    expect(commentText(jiraNote("For Jira:\nFine in #7."), null, "review", false, false, 7)).not.toContain("Pull request #7");
+    expect(commentText(jiraNote("For Jira:\nFollows #70."), null, "review", false, false, 7)).toContain("Pull request #7");
+    expect(commentText(note, null, "review")).not.toContain("Pull request");
+    expect(commentText(note, null, "investigate", false, false, 7)).not.toContain("Pull request");
   });
 });

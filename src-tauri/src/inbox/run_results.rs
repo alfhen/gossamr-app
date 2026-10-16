@@ -158,6 +158,7 @@ fn intro(kind: RunKind) -> &'static str {
         RunKind::Plan => "Planned with an agent.",
         RunKind::Triage => "Triaged with an agent.",
         RunKind::Build => "Built with an agent.",
+        RunKind::Review => "Reviewed with an agent.",
         _ => "Worked on with an agent.",
     }
 }
@@ -183,6 +184,13 @@ pub fn comment_text(run: &Run, resolved: &Resolved, note: &JiraNote, change: Opt
     // A build's note often names its pull request already: the link is not said twice.
     if let Some(pull) = change.filter(|c| c.kind == CodeChangeKind::PullRequest && !names_url(&note.text, &c.url)) {
         parts.push(format!("Pull request: {}", pull.url));
+    } else if let (RunKind::Review, Some(n)) = (run.spec.kind, run.spec.pr) {
+        // A review opened no pull request, but the Jira reader should know which one it read: its link when known, else its number.
+        let url = change.filter(|c| c.kind == CodeChangeKind::PullRequest && c.number == Some(n)).map(|c| c.url.as_str());
+        let named = names_url(&note.text, &format!("#{n}")) || names_url(&note.text, &format!("/pull/{n}")) || url.is_some_and(|u| names_url(&note.text, u));
+        if !named {
+            parts.push(url.map_or_else(|| format!("Pull request #{n}"), |u| format!("Pull request: {u}")));
+        }
     }
     parts.join("\n\n")
 }
@@ -887,6 +895,43 @@ pub(in crate::inbox) mod tests {
         assert!(!text.contains("Pull request:"), "{text}");
     }
 
+    #[tokio::test]
+    async fn a_review_note_says_it_is_a_review_and_names_the_pull_request_it_read() {
+        let fx = fixture_watching(&["acme/webshop"]).await;
+        let run = run_with(&fx, |r| {
+            r.spec.kind = RunKind::Review;
+            r.spec.pr = Some(7);
+        })
+        .await;
+        let text = body_of(&fx.core.draft_run_comment(&run.id).await.unwrap());
+        assert!(text.starts_with("Reviewed with an agent."), "{text}");
+        assert!(text.ends_with("Pull request #7"), "{text}");
+        assert!(!text.contains("Worked on"), "{text}");
+
+        let fx = fixture_watching(&["acme/webshop"]).await;
+        let named = run_with(&fx, |r| {
+            r.spec.kind = RunKind::Review;
+            r.spec.pr = Some(7);
+            r.result = Some("Done.\n\nFor Jira:\nLooks fine in #7.".into());
+        })
+        .await;
+        let text = body_of(&fx.core.draft_run_comment(&named.id).await.unwrap());
+        assert!(!text.contains("Pull request #7"), "the note names it already: {text}");
+
+        let fx = fixture_watching(&["acme/webshop"]).await;
+        let other = run_with(&fx, |r| {
+            r.spec.kind = RunKind::Review;
+            r.spec.pr = Some(7);
+            r.result = Some("Done.\n\nFor Jira:\nFollows #70.".into());
+        })
+        .await;
+        assert!(body_of(&fx.core.draft_run_comment(&other.id).await.unwrap()).ends_with("Pull request #7"), "#70 is not #7");
+
+        let fx = fixture_watching(&["acme/webshop"]).await;
+        let plain = run_with(&fx, |r| r.spec.kind = RunKind::Review).await;
+        assert!(!body_of(&fx.core.draft_run_comment(&plain.id).await.unwrap()).contains("Pull request"), "no pull request, no line");
+    }
+
     #[test]
     fn a_url_is_named_only_whole() {
         let url = "https://github.com/acme/webshop/pull/7";
@@ -1294,7 +1339,8 @@ pub(in crate::inbox) mod tests {
     fn a_triage_note_opens_by_saying_it_was_triaged_not_worked_on() {
         assert_eq!(intro(RunKind::Triage), "Triaged with an agent.");
         assert_eq!(intro(RunKind::Plan), "Planned with an agent.");
-        assert_eq!(intro(RunKind::Review), "Worked on with an agent.");
+        assert_eq!(intro(RunKind::Review), "Reviewed with an agent.");
+        assert_eq!(intro(RunKind::Investigate), "Investigated with an agent.");
     }
 
     const BREAKDOWN: &str = "Large.\n\nSubtasks:\n- Add a backoff\n- Report the lag\n- Survive a restart\n\nFor Jira:\nA breakdown is proposed.";

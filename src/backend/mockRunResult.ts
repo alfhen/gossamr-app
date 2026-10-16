@@ -274,12 +274,13 @@ export function namesUrl(text: string, url: string): boolean {
 }
 
 /** The comment as the backend first drafts it, for the sample data. */
-export function commentText(note: JiraNote, change: CodeChange | null, kind: RunKind = "investigate", summaryOnly = false, blocked = false): string {
+export function commentText(note: JiraNote, change: CodeChange | null, kind: RunKind = "investigate", summaryOnly = false, blocked = false, pr: number | null = null): string {
   const intro: Partial<Record<RunKind, string>> = {
     investigate: "Investigated with an agent.",
     plan: "Planned with an agent.",
     triage: "Triaged with an agent.",
     build: "Built with an agent.",
+    review: "Reviewed with an agent.",
   };
   const parts = [intro[kind] ?? "Worked on with an agent."];
   if (blocked) parts.push("The agent reports it could not finish.");
@@ -288,6 +289,12 @@ export function commentText(note: JiraNote, change: CodeChange | null, kind: Run
   parts.push(note.text);
   // A build's note often names its pull request already: the link is not said twice.
   if (change?.kind === "pullRequest" && !namesUrl(note.text, change.url)) parts.push(`Pull request: ${change.url}`);
+  else if (kind === "review" && pr != null) {
+    // A review opened no pull request, but the Jira reader should know which one it read: its link when known, else its number.
+    const url = change?.kind === "pullRequest" && change.number === pr ? change.url : null;
+    const named = namesUrl(note.text, `#${pr}`) || namesUrl(note.text, `/pull/${pr}`) || (url !== null && namesUrl(note.text, url));
+    if (!named) parts.push(url ? `Pull request: ${url}` : `Pull request #${pr}`);
+  }
   return parts.join("\n\n");
 }
 

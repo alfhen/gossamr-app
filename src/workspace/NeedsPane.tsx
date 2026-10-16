@@ -18,7 +18,7 @@ import { failureHelp } from "./failureHelp";
 import { inlineStartable, InlineStart, useInlineStarts } from "./InlineStart";
 import { GroupChip } from "./NeedsYou";
 import { groupId, openInWorkstream, openNeed, setPaneIntent, takePaneIntent } from "./needsActions";
-import { chipLabel, openInWorkstreamLabel } from "../lib/needs";
+import { chipLabel, openInWorkstreamLabel, quietKey } from "../lib/needs";
 import { PermissionAsk, StopRunConfirm } from "./PermissionAsk";
 import { usePipHome } from "./pipHomeStore";
 import { RunAnswer } from "./RunAnswer";
@@ -321,6 +321,9 @@ function QuietBody({ run }: { run: Run }) {
             Stop the run
           </Btn>
         )}
+        <Btn tone="plain" icon="x" onClick={() => store.dismiss(quietKey(run))} title="Takes it out of Needs you until it makes progress and goes quiet again. Nothing is stopped.">
+          Keep waiting
+        </Btn>
       </div>
     </Box>
   );

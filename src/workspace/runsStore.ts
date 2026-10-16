@@ -528,10 +528,13 @@ export const useRuns = create<RunsState>((set, get) => ({
     const kept = new Set([...before, id].slice(-DISMISSED_KEPT));
     writeStored(DISMISSED_KEY, [...kept]);
     set({ dismissed: kept });
-    const run = get().runs.find((r) => r.id === id);
-    const name = labelsByRun(get().runs).get(id) ?? run?.item?.key ?? "the run";
+    // A quiet spell is remembered as `quiet:<run id>@<last progress>`; the run is the part between.
+    const quiet = id.startsWith("quiet:");
+    const runId = quiet ? id.slice("quiet:".length).split("@")[0] : id;
+    const run = get().runs.find((r) => r.id === runId);
+    const name = labelsByRun(get().runs).get(runId) ?? run?.item?.key ?? "the run";
     // Local only: nothing reached the run, so it can be put back exactly.
-    offerUndo({ text: `Dismissed ${name} from Needs you.`, undone: `${name} is back in Needs you.`, undo: async () => get().undismiss(id, before) });
+    offerUndo({ text: quiet ? `Waiting on ${name}; it is out of Needs you for now.` : `Dismissed ${name} from Needs you.`, undone: `${name} is back in Needs you.`, undo: async () => get().undismiss(id, before) });
   },
 
   undismiss(id, before) {

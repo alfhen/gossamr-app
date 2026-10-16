@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { MentionTextarea } from "../components/MentionTextarea";
 import { docText } from "../lib/docs";
-import { autoLink, liveMentions, mentionNote, type Mention } from "../lib/mentions";
+import { autoLink, liveMentions, mentionNote, rewriteNote, type Mention } from "../lib/mentions";
 import { answersProvenance, isAnswersDraft, isReporterNudge, isReporterQuestions, targetOf, unreachable } from "../lib/proposals";
 import { APPROVAL_STARTS_BUILD, approvalStartsBuild } from "../lib/nextStep";
 import { useClaude } from "../claudeStore";
@@ -99,7 +99,7 @@ export function draftSummary(p: Proposal, statusName: string | null): string {
       return "Change fields";
     case "rewrite": {
       const size = i.body ? bodyChangeSize(i.body.fromText, i.body.toText) : null;
-      return [i.title ? `Title: ${i.title.from} → ${i.title.to}` : null, size ? `Description: ${size.added} added, ${size.removed} removed` : null].filter(Boolean).join("; ");
+      return [i.title ? `Title: ${i.title.from} → ${i.title.to}` : null, size ? `Description: ${size.added} ${size.added === 1 ? "line" : "lines"} added, ${size.removed} removed` : null].filter(Boolean).join("; ");
     }
     case "link":
       return linkSentence(i);
@@ -222,6 +222,11 @@ export function keepEditsOfDraft(id: string, edits: KeptEdits): void {
 /** The edits kept for draft `id`, if any. They stay while the draft can still be shown, so leaving a restored card before posting it doesn't lose them. */
 export function keptEditsOfDraft(id: string): KeptEdits | undefined {
   return keptEdits.get(id);
+}
+
+/** A card going away with its draft still pending keeps what was typed in it (G1), so the card that comes back shows it and "a, Enter" opens the card and doesn't post the stored text. */
+export function keepEditsOnLeave(id: string, state: ProposalStateKind, edits: KeptEdits): void {
+  if (state === "pending") keepEditsOfDraft(id, edits);
 }
 
 /** Forget the kept edits of draft `id` once it is posted or retired: nothing will show them again. */
@@ -372,7 +377,18 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
   useEffect(() => {
     setLiveDraft(p.id, p.state.type === "pending" ? { edited: Object.keys(typed()).length > 0 || edit() !== null, risky: risks().risks.length > 0 } : null);
   });
-  useEffect(() => () => setLiveDraft(p.id, null), [p.id]);
+  // The latest committed edits and state, for the cleanup below to read as the card goes; set after each commit, never in render.
+  const leaving = useRef({ state: p.state.type, edits: typed() });
+  useEffect(() => {
+    leaving.current = { state: p.state.type, edits: typed() };
+  });
+  useEffect(
+    () => () => {
+      keepEditsOnLeave(p.id, leaving.current.state, leaving.current.edits);
+      setLiveDraft(p.id, null);
+    },
+    [p.id],
+  );
   /** The step the Post button and Enter take: pauses once for edited text that would reach everyone, else approves. */
   const approve = () => {
     const found = risks();
@@ -546,6 +562,11 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
             runName={p.origin.type === "run" ? runName : null}
             headingLevel={headingLevel}
           />
+        )}
+        {rewrite && open && (
+          <p data-rewrite-note className="m-0 text-sm text-ws-ink3">
+            {rewriteNote(rewriteWhat(rewrite))}
+          </p>
         )}
         {intent.type === "link" && (
           <p className="m-0">

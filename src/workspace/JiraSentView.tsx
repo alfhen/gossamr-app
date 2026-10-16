@@ -29,7 +29,7 @@ export function SentRow({ entry: e, onTicket, onWorkstream }: { entry: SentEntry
     <article data-sent-entry={e.id} data-sent-kind={e.kind} aria-label={`${e.label ?? SENT_LABEL[e.kind]}${e.ticketKey ? ` on ${e.ticketKey}` : ""}`} className="grid gap-1 border-b border-ws-sep px-2 py-2.5">
       <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
         {e.ticketKey && (
-          <button type="button" data-sent-ticket onClick={() => onTicket(e.ticketKey!)} className="rounded font-mono font-semibold text-ws-ink hover:bg-ws-hover focus-visible:outline-2 focus-visible:outline-ws-pip">
+          <button type="button" data-sent-ticket aria-label={`Open ${e.ticketKey} in Gossamr`} onClick={() => onTicket(e.ticketKey!)} className="rounded font-mono font-semibold text-ws-ink hover:bg-ws-hover focus-visible:outline-2 focus-visible:outline-ws-pip">
             {e.ticketKey}
           </button>
         )}
@@ -68,18 +68,18 @@ export function SentRow({ entry: e, onTicket, onWorkstream }: { entry: SentEntry
         </div>
       )}
       <p className="m-0 flex flex-wrap items-baseline gap-x-1.5 text-xs text-ws-ink3">
-        <span data-sent-edited={e.edited ? "yes" : "no"}>{editedWords(e)}</span>
-        <span aria-hidden>·</span>
+        <span data-sent-edited={e.edited ? "yes" : "no"}>{editedWords(e)}.</span>
         <span data-sent-from>
-          from {e.from}
+          Made from {e.from}
           {e.workstream && e.workstreamId ? (
             <>
-              , in the workstream{" "}
-              <button type="button" data-sent-workstream={e.workstreamId} onClick={() => onWorkstream(e.workstreamId!)} className={link}>
+              {", in the workstream "}
+              <button type="button" data-sent-workstream={e.workstreamId} aria-label={`Open the workstream ${e.workstream}`} onClick={() => onWorkstream(e.workstreamId!)} className={link}>
                 {e.workstream}
               </button>
             </>
           ) : null}
+          .
         </span>
       </p>
     </article>

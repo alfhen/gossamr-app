@@ -137,14 +137,14 @@ test.describe("the answers draft says which reply it came from (G20)", () => {
     await homeSettled(page);
     await needRow(page, "Answers to the open questions").click();
     const card = needsPane(page).getByRole("article", { name: "Comment on CA-408" });
-    await expect(card).toContainText("Open questions from triage, with answers:");
+    await expect(card).toContainText("Answers to the open questions on this ticket:");
     const line = card.locator('[data-provenance="pip"]');
     await expect(line).toContainText("Drafted by Pip");
     await expect(line).toContainText("Drafted from your reply “1. Done means all three emails send.");
     // What is posted is the answers alone.
     await card.getByRole("button", { name: "Edit" }).click();
     const text = await card.locator("textarea").first().inputValue();
-    expect(text).toContain("Open questions from triage, with answers:");
+    expect(text).toContain("Answers to the open questions on this ticket:");
     expect(text).not.toMatch(/Drafted|your reply|Pip/);
     await card.getByRole("button", { name: "Done editing" }).click();
     expect(await jiraWrites(page)).toEqual([]);

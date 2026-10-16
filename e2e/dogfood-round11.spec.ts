@@ -210,7 +210,7 @@ test.describe("the chip on a GitHub review draft (G6)", () => {
     await peekSheet(page).getByRole("button", { name: "Close" }).first().click().catch(() => undefined);
     await openPipHome(page);
     await expandAllNeeds(page);
-    const row = needRow(page, "Draft review");
+    const row = needRow(page, "GitHub review");
     await expect(row).toHaveCount(1);
     await expect(row).toHaveAttribute("data-group", "approve");
     await expect(row.locator("[data-needs-you-chip]")).toHaveText("Post");

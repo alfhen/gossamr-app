@@ -54,7 +54,7 @@ test("G20: when the pane moves on by itself it says so for a few seconds, and th
   await pane.getByRole("button", { name: "Post comment" }).click();
   await expect(pane).toHaveAttribute("data-kind", "hold");
   const line = page.locator("[data-needs-advanced]");
-  await expect(line).toHaveText(/^Posted to Jira: Draft comment on CA-401\. Now: CA-401 · Held after a restart$/);
+  await expect(line).toHaveText(/^Posted to Jira: Draft comment: “[^”]+” on CA-401\. Now: CA-401 · Held after a restart$/);
   await expect(needsPaneHeading(page)).toBeFocused();
   // Not a stop for the keyboard, and it goes by itself.
   await expect(line).toHaveAttribute("role", "status");

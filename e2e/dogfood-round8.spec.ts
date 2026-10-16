@@ -17,7 +17,7 @@ test.describe("the Decide pane's Done line (G5)", () => {
     await holdBySystem(page, "CA-401", "restart");
     await expect(needsYouRow(page, "CA-401")).toContainText("Held after a restart");
     await needsPane(page).getByRole("button", { name: "Post comment" }).click();
-    await expect(page.locator("[data-needs-advanced]")).toHaveText(/^Posted to Jira: Draft comment on CA-401\. Now: CA-401 · Held after a restart$/);
+    await expect(page.locator("[data-needs-advanced]")).toHaveText(/^Posted to Jira: Draft comment: “[^”]+” on CA-401\. Now: CA-401 · Held after a restart$/);
   });
 });
 

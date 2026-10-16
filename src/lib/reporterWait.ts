@@ -56,6 +56,32 @@ export function followWithReply(events: readonly FollowLine[], replies: readonly
   return { follow: now, repliedAt: now.replied ? repliedAt : null };
 }
 
+/** When the reporter was asked on a workstream, and when nudged after that ask; what the readiness decision says the person already did. */
+export interface ReporterAsk {
+  asked: string;
+  nudged: string | null;
+}
+
+/**
+ * The newest ask to the reporter among the audit `events` (oldest first), as its approval time, and the nudge approved after
+ * it, if any. Unlike `reporterFollow` it outlives the reporter's reply or the ticket changing, and ends only when the person
+ * chooses to answer or plan anyway. Null when the reporter was not asked.
+ */
+export function reporterAsk(events: readonly FollowLine[]): ReporterAsk | null {
+  const kinds = new Map<string, "ask" | "nudge">();
+  let now = null as ReporterAsk | null;
+  for (const e of events) {
+    if (e.actor !== "person") continue;
+    if (e.action === "readiness_asked" || e.action === "clarity_asked" || e.action === "reporter_nudged") {
+      if (e.proposalId) kinds.set(e.proposalId, e.action === "reporter_nudged" ? "nudge" : "ask");
+    } else if (e.action === "draft_approved" && e.proposalId && kinds.has(e.proposalId)) {
+      if (kinds.get(e.proposalId) === "ask") now = { asked: e.at, nudged: null };
+      else if (now) now = { ...now, nudged: e.at };
+    } else if (e.action === "readiness_answered" || e.action === "readiness_overridden") now = null;
+  }
+  return now;
+}
+
 /** How many characters of a reply the quote keeps. As `REPLY_EXCERPT` in src-tauri/src/inbox/workstreams.rs. */
 export const REPLY_EXCERPT = 140;
 

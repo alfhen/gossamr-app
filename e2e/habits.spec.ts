@@ -232,9 +232,9 @@ test.describe("What Jira saw from me", () => {
     await expect(rows.nth(1)).toContainText("CA-408");
     await expect(rows.nth(0).locator("[data-sent-label]")).toHaveText("Questions to the reporter");
     await expect(rows.nth(0)).toHaveAttribute("data-sent-kind", "comment");
-    await expect(rows.nth(0).locator("[data-sent-edited]")).toHaveText("Gossamr drafted it; you edited it before approving");
+    await expect(rows.nth(0).locator("[data-sent-edited]")).toHaveText("Gossamr drafted it; you edited it before approving.");
     await expect(rows.nth(0).locator("[data-sent-edited]")).toHaveAttribute("data-sent-edited", "yes");
-    await expect(rows.nth(1).locator("[data-sent-edited]")).toHaveText("Gossamr drafted it; posted without changes");
+    await expect(rows.nth(1).locator("[data-sent-edited]")).toHaveText("Gossamr drafted it; posted without changes.");
     await expect(rows.nth(1).locator("[data-sent-edited]")).toHaveAttribute("data-sent-edited", "no");
     await expect(rows.nth(0).locator("[data-sent-from]")).toContainText("in the workstream CA-409");
 

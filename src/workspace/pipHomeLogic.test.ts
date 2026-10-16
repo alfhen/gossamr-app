@@ -5,6 +5,7 @@ import { HELD_ALL, HELD_BUDGET, HELD_DAILY, HELD_PERSON, HELD_QUOTA, HELD_RESTAR
 import type { CodeChange, Intent, ItemRef, Proposal, ProposalState, Run, RunKind, RunState, WorkstreamStage, WorkstreamView } from "../types";
 import { agentSummary } from "../backend/mockPip";
 import { needs } from "../lib/needs";
+import { docFromText } from "../lib/docs";
 import { workstreamStatus } from "../lib/workstreamStatus";
 import { NO_FILTERS, groupRuns, laneCount, laneOf, summaryLine } from "./agentsLogic";
 import { repeatedComments } from "../lib/needs";
@@ -71,7 +72,7 @@ const draft = (id: string, intent: Intent, minutesAgo: number, over: { state?: P
     run: null,
   }) as Proposal;
 
-const comment = (key: string): Intent => ({ type: "comment", item: ref(key), body: "Looks good", mentions: [] }) as unknown as Intent;
+const comment = (key: string): Intent => ({ type: "comment", item: ref(key), body: docFromText("Looks good"), mentions: [] }) as unknown as Intent;
 const startRun = (key: string, kind: RunKind, workstream: string | null): Intent => ({ type: "startRun", item: ref(key), spec: { ...base.spec, kind, workstream } }) as unknown as Intent;
 
 describe("shortHeld and lastHeldAt", () => {
