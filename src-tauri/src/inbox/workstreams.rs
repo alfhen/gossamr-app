@@ -2790,6 +2790,20 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn what_the_tracker_saw_while_a_run_was_brought_in_keeps_it_where_it_was_put() {
+        let fx = fixture().await;
+        let run = insert_run(&fx, "r1", None, RunKind::Plan, RunState::Working).await;
+        let ws = fx.core.open_workstream(&fx.scope, Some(fx.item("CA-1")), None).await.unwrap();
+        // The tracker read the run before the person brought it in, and saves what it saw after.
+        let seen = Run { state: RunState::Done, ..run.clone() };
+        fx.core.adopt_into_workstream(&fx.scope, &ws.id).await.unwrap();
+        fx.core.save_observed_run(&seen).await.unwrap();
+        assert_eq!(workstream_of_run(&fx, &run.id).await.as_deref(), Some(ws.id.as_str()), "the move stands");
+        let stored = fx.core.with_db_for(&fx.scope, |db| db.run(&run.id)).await.unwrap().unwrap();
+        assert_eq!(stored.state, RunState::Done, "and what the tracker saw is saved");
+    }
+
+    #[tokio::test]
     async fn only_an_open_workstream_on_a_ticket_offers_or_takes_them() {
         let fx = fixture().await;
         insert_run(&fx, "r1", None, RunKind::Plan, RunState::Done).await;

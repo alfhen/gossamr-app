@@ -76,10 +76,14 @@ export function showMe(ref: ItemRef, opts: { peek?: boolean } = {}) {
 const cachedByKey = (key: string) => Object.values(useWorkspace.getState().items).find((i) => i.item.key === key);
 
 /** The work connection a ticket key typed by hand is read from, if one is connected. */
+export const connectionOfKeys = (ws: ReturnType<typeof useWorkspace.getState>): string | undefined => workConnections(ws.connections)[0]?.id ?? workWatch(ws.watch)[0]?.connectionId;
+
 export function keyConnectionId(): string | undefined {
-  const ws = useWorkspace.getState();
-  return workConnections(ws.connections)[0]?.id ?? workWatch(ws.watch)[0]?.connectionId;
+  return connectionOfKeys(useWorkspace.getState());
 }
+
+/** The same connection, as a subscription, so a lookup waiting on a connection runs once it's there. */
+export const useKeyConnectionId = (): string | undefined => useWorkspace(connectionOfKeys);
 
 /**
  * Opens a ticket by key in whichever project it is: the synced one if there is one, otherwise a live read-only
