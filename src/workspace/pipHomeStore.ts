@@ -8,9 +8,9 @@ export type PipHomeColumn = (typeof PIP_HOME_COLUMNS)[number];
 
 /**
  * The regions F6 steps through on Pip home, in the order they sit on screen: Needs you and the workstreams (the left
- * column), the day card (Plan my week, Start my day: only while one is shown), the timeline, the decision pane (only while one is open), the clarity notice at the top of the steps column (only while one is shown, so its Looks fine is a stop away rather than deep in the controls), the step rail, the composer and the toast (only while one is on screen).
+ * column), the day card (Plan my week, Start my day: only while one is shown), the decision pane (only while one is open, above the timeline as it sits on screen), the timeline, the clarity notice at the top of the steps column (only while one is shown, so its Looks fine is a stop away rather than deep in the controls), the step rail, the composer and the toast (only while one is on screen).
  */
-export const PIP_HOME_REGIONS = ["needs", "week", "workstreams", "day", "timeline", "pane", "notice", "rail", "composer", "toast"] as const;
+export const PIP_HOME_REGIONS = ["needs", "week", "workstreams", "day", "pane", "timeline", "notice", "rail", "composer", "toast"] as const;
 export type PipHomeRegion = (typeof PIP_HOME_REGIONS)[number];
 
 /** The region of `column` the keyboard is taken to be in while focus is on none of them. */
@@ -131,7 +131,7 @@ export function keepSelectionOpen(openIds: readonly string[]) {
 
 /**
  * What the pane does on opening for the key that opened it: press its Edit, where it has one ("edit"), or keep focus on
- * the card itself rather than its main button ("card"), for a draft the person has not asked to act on yet.
+ * the pane's heading ("card"), for a draft the person has not asked to act on yet.
  */
 export type PaneIntent = "edit" | "card";
 let paneIntent: PaneIntent | null = null;

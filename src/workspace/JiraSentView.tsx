@@ -16,7 +16,7 @@ const link = "rounded px-1 text-ws-ink2 underline decoration-ws-sep2 underline-o
 export const GITHUB_NOT_LISTED = "GitHub reviews Gossamr posted are not listed here; each shows in its workstream's timeline as “You posted an agent's GitHub review”.";
 
 /** What the view says before Gossamr has posted anything. */
-export const SENT_EMPTY = `Nothing has been posted to Jira from Gossamr yet. What you approve shows up here, with what Pip drafted and what you changed. ${GITHUB_NOT_LISTED}`;
+export const SENT_EMPTY = `No posts to Jira from Gossamr are on record here. What you approve shows up here, with what Pip drafted and what you changed. ${GITHUB_NOT_LISTED}`;
 
 const time = (at: string) => new Date(at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 
@@ -41,10 +41,15 @@ export function SentRow({ entry: e, onTicket, onWorkstream }: { entry: SentEntry
       <p data-sent-summary className="m-0 text-ws-ink">
         {e.summary}
       </p>
+      {e.second && (
+        <p data-sent-second className="m-0 text-sm text-ws-ink2">
+          {e.second}
+        </p>
+      )}
       {more && (
         <div className="grid gap-1">
           <button type="button" aria-expanded={open} onClick={() => setOpen(!open)} className={`justify-self-start text-sm ${link}`}>
-            {open ? "Show less" : "Show all"}
+            {open ? "Show less" : "Show the posted text"}
           </button>
           {open && (
             <div data-sent-detail className="grid gap-0.5 rounded-md bg-ws-bar px-2.5 py-1.5 text-sm text-ws-ink2">
@@ -104,7 +109,7 @@ export function JiraSentView() {
         <button type="button" data-sent-back onClick={() => useTabs.getState().setRoute("pip")} className={`${link} text-sm`}>
           ← Pip home
         </button>
-        <h2 className="m-0 text-base font-semibold">What Jira saw from me</h2>
+        <h1 className="m-0 text-base font-semibold">What Jira saw from me</h1>
         <p className="m-0 text-sm text-ws-ink3">Everything Gossamr posted to Jira after you approved it. This page only shows it; it posts nothing. {GITHUB_NOT_LISTED} It lists only what Gossamr posted. An agent run with your Claude settings could reach Jira on its own; see Agent safety.</p>
       </header>
       <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-[max(32px,var(--ws-launcher-clear,0px))]">

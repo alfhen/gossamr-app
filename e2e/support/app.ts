@@ -516,6 +516,9 @@ export async function expandNeedsYou(page: Page, key = "General") {
 /** The decision open in Pip home's middle column. */
 export const needsPane = (page: Page) => pipHome(page).getByRole("region", { name: "Decision" });
 
+/** The decision pane's heading: where the keyboard lands whenever a need is opened (G28). */
+export const needsPaneHeading = (page: Page) => needsPane(page).locator("[data-needs-pane-title]");
+
 /** Pip home's conversation column, where its cards are. */
 export const homeConversationRegion = (page: Page) => pipHome(page).getByRole("region", { name: "Conversation" });
 

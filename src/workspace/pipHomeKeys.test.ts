@@ -12,16 +12,22 @@ const at = (over: Partial<PipHomeKeyState> = {}): PipHomeKeyState => ({ column: 
 /** A stand-in for an element: its tag, and whether it sits inside something editable. */
 const el = (tagName: string, editable = false) => ({ tagName, isContentEditable: editable, closest: (s: string) => (editable && s.includes("contenteditable") ? {} : null) });
 
-const ALL = ["needs", "week", "workstreams", "day", "timeline", "pane", "rail", "composer"] as const;
+const ALL = ["needs", "week", "workstreams", "day", "pane", "timeline", "rail", "composer"] as const;
 const SHOWN = ["needs", "workstreams", "timeline", "rail", "composer"] as const;
 const f6 = (region: PipHomeKeyState["region"], over: Partial<PipHomeKeyEvent> = {}, state: Partial<PipHomeKeyState> = {}) => pipHomeKey(key("F6", over), at({ region, regions: ALL, ...state }));
 
 describe("pipHomeKey: regions", () => {
-  it("F6 goes through Needs you, the workstreams, the day card, the timeline, the decision pane, the steps and the composer, wrapping around", () => {
-    const order = ["needs", "week", "workstreams", "day", "timeline", "pane", "rail", "composer", "needs"] as const;
+  it("F6 goes through Needs you, the workstreams, the day card, the decision pane, the timeline, the steps and the composer, wrapping around", () => {
+    const order = ["needs", "week", "workstreams", "day", "pane", "timeline", "rail", "composer", "needs"] as const;
     for (let i = 0; i < order.length - 1; i++) expect(f6(order[i])).toEqual({ type: "region", to: order[i + 1] });
     for (let i = order.length - 1; i > 0; i--) expect(f6(order[i], { shiftKey: true })).toEqual({ type: "region", to: order[i - 1] });
     expect(f6("needs", { shiftKey: true })).toEqual({ type: "region", to: "composer" });
+  });
+
+  it("meets the decision before the timeline, the order they sit on screen (G28)", () => {
+    expect(f6("day")).toEqual({ type: "region", to: "pane" });
+    expect(f6("pane")).toEqual({ type: "region", to: "timeline" });
+    expect(f6("timeline", { shiftKey: true })).toEqual({ type: "region", to: "pane" });
   });
 
   it("This week is a stop between Needs you and the workstreams while it is shown, and passed by while it is not", () => {
@@ -45,8 +51,8 @@ describe("pipHomeKey: regions", () => {
     expect(f6("rail", { shiftKey: true }, { regions: SHOWN })).toEqual({ type: "region", to: "timeline" });
     expect(f6("timeline", {}, { regions: ["needs", "workstreams", "timeline", "composer"] })).toEqual({ type: "region", to: "composer" });
     // Left in a region that is not on screen, the keys still leave it.
-    expect(f6("pane", {}, { regions: SHOWN })).toEqual({ type: "region", to: "rail" });
-    expect(f6("pane", { shiftKey: true }, { regions: SHOWN })).toEqual({ type: "region", to: "timeline" });
+    expect(f6("pane", {}, { regions: SHOWN })).toEqual({ type: "region", to: "timeline" });
+    expect(f6("pane", { shiftKey: true }, { regions: SHOWN })).toEqual({ type: "region", to: "workstreams" });
   });
 
   it("passes the day card by while neither Plan my week nor Start my day is shown", () => {
@@ -64,7 +70,7 @@ describe("pipHomeKey: regions", () => {
   it("Cmd+] and Ctrl+] go on, Cmd+[ and Ctrl+[ back", () => {
     expect(pipHomeKey(key("]", { metaKey: true }), at({ region: "needs", regions: ALL }))).toEqual({ type: "region", to: "week" });
     expect(pipHomeKey(key("]", { ctrlKey: true }), at({ region: "rail", regions: ALL }))).toEqual({ type: "region", to: "composer" });
-    expect(pipHomeKey(key("[", { metaKey: true }), at({ region: "timeline", regions: ALL }))).toEqual({ type: "region", to: "day" });
+    expect(pipHomeKey(key("[", { metaKey: true }), at({ region: "timeline", regions: ALL }))).toEqual({ type: "region", to: "pane" });
     expect(pipHomeKey(key("[", { ctrlKey: true }), at({ region: "needs", regions: ALL }))).toEqual({ type: "region", to: "composer" });
   });
 

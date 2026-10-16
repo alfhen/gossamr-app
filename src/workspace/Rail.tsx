@@ -315,7 +315,7 @@ export function Rail() {
   const noun = nounFor(kind);
 
   return (
-    <aside className="group/rail relative flex min-h-0 flex-col items-center gap-2 border-r border-ws-sep bg-ws-side pt-10 pb-2.5">
+    <aside data-rail className="group/rail relative flex min-h-0 flex-col items-center gap-2 border-r border-ws-sep bg-ws-side pt-10 pb-2.5">
       <div data-tauri-drag-region className="absolute inset-x-0 top-0 h-10" />
       <nav aria-label="Workspace" className="flex min-h-0 w-full flex-1 flex-col items-center gap-2">
         <RailButton label="Search and jump" hint="⌘K" onClick={() => setPaletteOpen(true)} className={`text-lg ${plain(false)}`}>

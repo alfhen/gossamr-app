@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode, type UIEvent } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode, type UIEvent } from "react";
 import { useClaude, type Turn } from "../claudeStore";
 import { GENERAL_CONVERSATION, workstreamConversation } from "../lib/conversations";
 import { itemKey } from "../lib/filter";
@@ -21,6 +21,8 @@ import { labelsByRun } from "../lib/workstreamStage";
 import type { Proposal, Run, WorkstreamEvent, WorkstreamView } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { AgentRow } from "./AgentRow";
+import { dayBreaks } from "./activityLogic";
+import { useToday } from "./useNow";
 import { useDecisionShown } from "./decisionShown";
 import { LiveDraftPreview, openLiveDraft } from "./DraftPreview";
 import { GENERAL_INTRO, IntroAction, TurnView, workstreamIntro } from "./PipConversation";
@@ -283,6 +285,10 @@ export function TimelineView({
   const { entries, byId, labels, turns, behind } = every ? across : own;
   const shown = useMemo(() => filterTimeline(entries, filter), [entries, filter]);
   const counts = useMemo(() => filterCounts(entries), [entries]);
+  // Entries from earlier days sit under a date, so a clock time is never the only thing saying when.
+  // They move on at midnight too: a timeline left open overnight relabels yesterday's "Today".
+  const today = useToday();
+  const days = useMemo(() => dayBreaks(shown, new Date()), [shown, today]);
   const ref = useRef<HTMLDivElement>(null);
   /** The drafts this timeline has shown waiting: one retired since keeps its card, collapsed with why, rather than vanishing. */
   const seenWaiting = useRef(new Set<string>());
@@ -433,8 +439,13 @@ export function TimelineView({
         {shown.length > 0 && (
           <ol aria-label="Timeline" className="m-0 grid list-none gap-4 p-0">
             {shown.map((e) => (
+              <Fragment key={e.key}>
+              {days.has(e.key) && (
+                <li data-timeline-day={days.get(e.key)} className="m-0 -mb-2 border-b border-ws-sep/60 pb-0.5 text-xs font-semibold tracking-wide text-ws-ink3 uppercase">
+                  <h3 className="m-0 text-xs font-semibold">{days.get(e.key)}</h3>
+                </li>
+              )}
               <li
-                key={e.key}
                 data-timeline-entry={e.key}
                 data-kind={e.kind}
                 data-phase={e.phase}
@@ -448,6 +459,7 @@ export function TimelineView({
                 <ScopeLabel entry={e} />
                 {body(e)}
               </li>
+              </Fragment>
             ))}
           </ol>
         )}

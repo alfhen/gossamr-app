@@ -366,7 +366,7 @@ export function AgentsScreen({ runs, status, error, environment, filters, select
   return (
     <div className="@container flex h-full min-h-0 flex-col">
       <header className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-ws-sep bg-ws-bar px-6 py-2.5">
-        <h2 className="m-0 text-base font-semibold">Agents</h2>
+        <h1 className="m-0 text-base font-semibold">Agents</h1>
         <span aria-live="polite" className="text-sm text-ws-ink3">
           {summaryLine(runs, now, needsYou)}
         </span>

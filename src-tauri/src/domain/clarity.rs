@@ -46,7 +46,7 @@ impl ClarityGap {
     pub fn question(self) -> &'static str {
         match self {
             ClarityGap::Empty | ClarityGap::Short => "What is the goal?",
-            ClarityGap::Done => "How will we know it is done (the acceptance criteria)?",
+            ClarityGap::Done => "What has to be true for this to be done (the acceptance criteria)?",
             ClarityGap::Scope => "What is in scope, and what is out?",
             ClarityGap::Who => "Who asked for it, and who is waiting on it?",
         }
@@ -172,7 +172,7 @@ mod tests {
             gaps_phrase(&[ClarityGap::Short, ClarityGap::Done, ClarityGap::Scope]),
             "has a very short description, doesn't say what done looks like, and doesn't say what's in or out of scope"
         );
-        assert_eq!(clarity_questions(&[ClarityGap::Short, ClarityGap::Done]), vec!["What is the goal?", "How will we know it is done (the acceptance criteria)?"]);
+        assert_eq!(clarity_questions(&[ClarityGap::Short, ClarityGap::Done]), vec!["What is the goal?", "What has to be true for this to be done (the acceptance criteria)?"]);
         assert_eq!(clarity_questions(&[ClarityGap::Empty]).len(), 4);
     }
 }

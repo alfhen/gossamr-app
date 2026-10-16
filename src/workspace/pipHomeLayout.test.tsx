@@ -73,4 +73,11 @@ describe("the day region's room", () => {
     expect(start).toContain("max-h-[30vh]");
     expect(start).not.toContain("45vh");
   });
+  it("gives Start my day most of the window when the conversation below has nothing in it", () => {
+    const roomy = renderToStaticMarkup(<DayScroll label="Start my day" roomy>x</DayScroll>);
+    expect(roomy).toContain("max-h-[min(60vh,34rem)]");
+    expect(roomy).not.toContain("max-h-[30vh]");
+    // Plan my week keeps its own cap.
+    expect(renderToStaticMarkup(<DayScroll label="Plan my week" tall roomy>x</DayScroll>)).toContain("45vh");
+  });
 });

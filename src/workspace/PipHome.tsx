@@ -2,7 +2,7 @@ import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "rea
 import { useClaude } from "../claudeStore";
 import { isHeldByYou } from "../lib/workstreamHold";
 import { stageText } from "../lib/workstreamStage";
-import { byStatusRank, emptyFilterText, STATUS_HINT, STATUS_WORD, workstreamStatus, type StatusState, type WorkstreamStatus } from "../lib/workstreamStatus";
+import { answersOwed, byStatusRank, emptyFilterText, STATUS_HINT, STATUS_WORD, workstreamStatus, type StatusState, type WorkstreamStatus } from "../lib/workstreamStatus";
 import { StatusPill } from "./StatusPill";
 import { PlanMyWeek, ThisWeek } from "./PlanMyWeek";
 import { isoWeek } from "../lib/planMyWeek";
@@ -134,7 +134,9 @@ function NeedsBadge({ count, total }: { count: number; total: number }) {
 export function WorkstreamList({ list, closed, showClosed, selected, onSelect, onShowClosed, runs = [], needsYou = [], wither = {}, nudgeDue, statusFilter = null, onStatusFilter, now, learning: given }: WorkstreamListProps) {
   const stored = usePrefs((s) => s.clarityLearning);
   const learning = given ?? stored;
-  const statuses = new Map(list.filter((v) => v.workstream.closedAt === null).map((v) => [v.workstream.id, workstreamStatus(v, needsYou, { runs, wither: wither[v.workstream.id] ?? null, now: new Date(now ?? Date.now()), learning })]));
+  const events = useWorkstreams((s) => s.events);
+  const drafts = useWorkspace((s) => s.proposals);
+  const statuses = new Map(list.filter((v) => v.workstream.closedAt === null).map((v) => [v.workstream.id, workstreamStatus(v, needsYou, { runs, wither: wither[v.workstream.id] ?? null, now: new Date(now ?? Date.now()), learning, answersOwed: answersOwed(v.workstream.id, events[v.workstream.id], Object.values(drafts)) })]));
   // Ordered by what needs the person, not newest first: the rows are what j/k and the arrows step through.
   const everyOpen = byStatusRank(list.filter((v) => v.workstream.closedAt === null), (v) => statuses.get(v.workstream.id)!.state, (v) => isHeldByYou(v.workstream.heldReason));
   const matches = (v: WorkstreamView) => !statusFilter || statuses.get(v.workstream.id)?.state === statusFilter;
@@ -288,13 +290,15 @@ export function useMoreBelow<T extends HTMLElement>() {
 
 /**
  * The F6 stop above the conversation that holds Start my day or Plan my week: a labelled region that scrolls when the card is
- * taller than its share (a third of the window at most, or nearly half for Plan my week, whose three picks should show, so the timeline and an open decision keep their room), with a fade at the foot while something is cut off, so the scroll is not hidden.
+ * taller than its share (a third of the window at most, or nearly half for Plan my week, whose three picks should show, so the timeline and an open decision keep their room; with nothing in the conversation below to keep room for (`roomy`) Start my day takes most of it, so its lines show without scrolling), with a fade at the foot while something is cut off, so the scroll is not hidden.
  */
-export function DayScroll({ label, children, tall = false }: { label: string; children: ReactNode; tall?: boolean }) {
+export const DAY_CAP = { start: "max-h-[30vh]", tall: "max-h-[min(45vh,26rem)]", roomy: "max-h-[min(60vh,34rem)]" } as const;
+
+export function DayScroll({ label, children, tall = false, roomy = false }: { label: string; children: ReactNode; tall?: boolean; roomy?: boolean }) {
   const [box, more] = useMoreBelow<HTMLDivElement>();
   return (
     // Focusable so the keyboard can scroll it when it overflows: a scroller with no focusable child is out of the arrow keys' reach.
-    <div ref={box} data-pip-home-day role="region" aria-label={label} tabIndex={0} className={`relative ${tall ? "max-h-[min(45vh,26rem)]" : "max-h-[30vh]"} shrink-0 overflow-y-auto border-b border-ws-sep/60 outline-none empty:hidden focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-ws-pip`}>
+    <div ref={box} data-pip-home-day role="region" aria-label={label} tabIndex={0} className={`relative ${tall ? DAY_CAP.tall : roomy ? DAY_CAP.roomy : DAY_CAP.start} shrink-0 overflow-y-auto border-b border-ws-sep/60 outline-none empty:hidden focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-ws-pip`}>
       {children}
       {more && (
         <div data-day-fade aria-hidden="true" onClick={() => box.current?.scrollBy(fadeScroll(box.current.clientHeight, reducedMotion()))} className="sticky bottom-0 -mt-7 cursor-pointer bg-gradient-to-t from-ws-bar via-ws-bar/90 to-transparent pt-4 pb-0.5 text-center text-xs text-ws-ink3">
@@ -707,6 +711,8 @@ export function PipHome() {
   const statusFilter = usePipHome((s) => s.statusFilter);
   const planOpen = usePipHome((s) => s.planOpen);
   const workstream = useHomeWorkstream();
+  // General with nothing said yet: the conversation under Start my day has nothing in it to keep room for.
+  const quiet = useClaude((s) => (s.byTicket[GENERAL_CONVERSATION]?.turns.length ?? 0) === 0);
   const runs = useRuns((s) => s.runs);
   const needsYou = useNeedsYou();
   const deciding = usePipHome((s) => s.deciding);
@@ -797,7 +803,7 @@ export function PipHome() {
           <DecisionShownContext.Provider value={decided}>
             <div data-pip-home-column="conversation" onFocusCapture={enter("conversation")} className="contents">
               <HomeConversation workstream={workstream} footer={footer} needs={needsYou} day={
-                  <DayScroll label={planOpen ? "Plan my week" : "Start my day"} tall={planOpen}>
+                  <DayScroll label={planOpen ? "Plan my week" : "Start my day"} tall={planOpen} roomy={quiet}>
                     {planOpen && <PlanMyWeek key={isoWeek(new Date(now))} needs={needsYou} withers={withers} now={now} />}
                     {/* The plan is opened from the card and its Close brings it back; the card is General's summary, not a workstream's. */}
                     {!planOpen && workstream === null && <StartMyDayCard needs={needsYou} withers={withers} now={now} />}

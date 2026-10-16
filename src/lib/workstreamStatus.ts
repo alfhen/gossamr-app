@@ -1,7 +1,8 @@
-import type { Run, WorkstreamView } from "../types";
+import type { Proposal, Run, WorkstreamEvent, WorkstreamView } from "../types";
 import { flaggedGaps, projectOfKey, type ClarityLearning } from "./clarityLearning";
 import { needsIn, type Need } from "./needs";
-import { NUDGE_AFTER_DAYS, WAITING_STATUS, waitedDays } from "./reporterWait";
+import { workstreamOf } from "./proposals";
+import { NUDGE_AFTER_DAYS, WAITING_STATUS, answersDue, waitedDays } from "./reporterWait";
 import { isHeldByYou, shortHeld } from "./workstreamHold";
 import { STAGE_LABEL } from "./workstreamStage";
 import { witherShort, type WorkstreamWither } from "./workstreamWither";
@@ -111,6 +112,17 @@ export interface StatusMore {
   quietDays?: number;
   /** What "Looks fine" taught the clarity notice: a notice with nothing left to say is not one. */
   learning?: ClarityLearning;
+  /** The person chose "I'll answer" and has not drafted their answers since (`answersOwed`): the detail says the answers are theirs to give. */
+  answersOwed?: boolean;
+}
+
+/** What the pill adds to a detail when the workstream also waits on someone: "waiting on reporter", "your answers owed". */
+export const OWED_DETAIL = "your answers owed";
+export const ON_REPORTER_DETAIL = "waiting on reporter";
+
+/** Whether the person owes answers in workstream `id`, from its audit (when loaded) and the drafts: `answersDue`, for the pill. */
+export function answersOwed(id: string, events: readonly WorkstreamEvent[] | undefined, proposals: readonly Proposal[]): boolean {
+  return !!events && answersDue(events, proposals.filter((p) => workstreamOf(p) === id));
 }
 
 /** The detail an Idle workstream carries while the word check finds its ticket thin (a notice, never a need). */
@@ -143,7 +155,7 @@ function heldDetail(reason: string | null | undefined, view: WorkstreamView): st
 }
 
 export function workstreamStatus(view: WorkstreamView, needs: readonly Pick<Need, "workstreamId">[], more: StatusMore = {}): WorkstreamStatus {
-  const { runs = [], wither = null, now = new Date(), quietDays = QUIET_DAYS, learning = {} } = more;
+  const { runs = [], wither = null, now = new Date(), quietDays = QUIET_DAYS, learning = {}, answersOwed: owed = false } = more;
   const ws = view.workstream;
   const make = (state: StatusState, detail: string | null = null, word = STATUS_WORD[state]): WorkstreamStatus => ({ state, word, tone: STATUS_TONE[state], detail });
   const own = runs.filter((r) => view.runs.includes(r.id));
@@ -151,7 +163,8 @@ export function workstreamStatus(view: WorkstreamView, needs: readonly Pick<Need
   const byYou = isHeldByYou(ws.heldReason);
 
   // A hold the system made is one of the needs; when it is the only one the one thing worth saying is why (the hold's own words), else the count.
-  if (waiting > 0) return make("needs-you", waiting === 1 && ws.heldReason && !byYou ? (shortHeld(ws.heldReason, ws.drifted) ?? `${waiting} waiting`) : `${waiting} waiting`);
+  // What else the workstream waits on follows the count, so "1 waiting" does not hide that the reporter has been asked too.
+  if (waiting > 0) return make("needs-you", [waiting === 1 && ws.heldReason && !byYou ? (shortHeld(ws.heldReason, ws.drifted) ?? `${waiting} waiting`) : `${waiting} waiting`, view.waitingOnReporter && ON_REPORTER_DETAIL, owed && OWED_DETAIL].filter(Boolean).join(" · "));
   // The person's own hold is quieter than one the system made: it asks nothing, so it is grey, not amber.
   if (ws.heldReason) return byYou ? { ...make("held", null, shortHeld(ws.heldReason) ?? "Held by you"), tone: "ink" } : make("held", heldDetail(ws.heldReason, view));
   if (view.waitingOnReporter) return make("waiting", askedText(waitedDays(view.waitingOnReporter.since, now)));
@@ -166,7 +179,7 @@ export function workstreamStatus(view: WorkstreamView, needs: readonly Pick<Need
   if (ws.closedAt || view.stage === "done") return make("done");
   const failed = [...own].sort((a, b) => a.queuedAt.localeCompare(b.queuedAt)).pop();
   const unclear = !!view.clarity && flaggedGaps(view.clarity.gaps, learning, projectOfKey(ws.itemKey ?? "")).length > 0;
-  return make("idle", failed?.state === "failed" ? `${STAGE_LABEL[failed.spec.kind]} failed` : view.reporterReplied ? REPLIED_DETAIL : unclear ? UNCLEAR_DETAIL : null);
+  return make("idle", failed?.state === "failed" ? `${STAGE_LABEL[failed.spec.kind]} failed` : owed ? OWED_DETAIL : view.reporterReplied ? REPLIED_DETAIL : unclear ? UNCLEAR_DETAIL : null);
 }
 
 /** Whether a status matches a filter word the palette takes: "waiting on reporter", "needs you", "held", "running", "quiet", "done", "idle". */

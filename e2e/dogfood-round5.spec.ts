@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { advanceRuns, askPip, backdateWorkstream, expandNeedsYou, expectVisibleFocus, holdBySystem, homeSettled, jiraWrites, mockRuns, needOfKind, needRow, needsPane, needsYouRow, needsYouTray, openApp, openPipHome, paneSettled as settled, pipHome, seedWorkstreamEvent, startWorkstream, stepChip, workstreamRow } from "./support/app";
+import { advanceRuns, askPip, backdateWorkstream, expandNeedsYou, expectVisibleFocus, holdBySystem, homeSettled, jiraWrites, mockRuns, needOfKind, needRow, needsPane, needsPaneHeading, needsYouRow, needsYouTray, openApp, openPipHome, paneSettled as settled, pipHome, seedWorkstreamEvent, startWorkstream, stepChip, workstreamRow } from "./support/app";
 
 // Fixes from the fifth dogfood round: Needs you on Pip home shows each need once, an unclear ticket's "Ask the reporter" lands
 // on the new draft, Plan is not "Next" while the ticket waits for a choice, and a cobweb says what it is on the row.
@@ -83,8 +83,8 @@ test.describe("a ticket stopped as unclear (G2, G3)", () => {
     const pane = needsPane(page);
     await expect(pane).toHaveAttribute("data-kind", "draft");
     await expect(pane).toContainText("Before work on CA-408 starts");
-    // The card has focus, not Post comment, so one more key cannot post it.
-    await expect(pane).toBeFocused();
+    // The pane's heading has focus, not Post comment, so one more key cannot post it.
+    await expect(needsPaneHeading(page)).toBeFocused();
   });
 });
 
@@ -144,14 +144,13 @@ test.describe("undoing a skip by key (G6)", () => {
 });
 
 test.describe("the decision pane's keys (G7)", () => {
-  test("opening a draft lands on its card, so approving takes a and then Enter; e goes into the text; Esc ends the edit before it closes the pane", async ({ page }) => {
+  test("opening a draft lands on the pane's heading, so approving takes a and then Enter; e goes into the text; Esc ends the edit before it closes the pane", async ({ page }) => {
     await draftNeed(page);
     const row = needRow(page, /Draft comment/);
     await row.focus();
     await page.keyboard.press("Enter");
     const pane = needsPane(page);
-    const card = pane.locator("article[data-draft]");
-    await expect(card).toBeFocused();
+    await expect(needsPaneHeading(page)).toBeFocused();
     expect(await jiraWrites(page)).toEqual([]);
 
     // e (from the row) opens the edit with the text focused.

@@ -4,7 +4,7 @@ import type { ScreenContext } from "../types";
 import { MockBackend } from "./mock";
 import { itemRef } from "./mockConnector";
 import { readinessLine, scriptPip, type PipWorkstream } from "./mockPip";
-import { THIN_LIMIT, reporterComment, reporterDoc, thinDescription, unclearTriageResult } from "./mockReadiness";
+import { THIN_LIMIT, oneQuestionEach, reporterComment, reporterDoc, thinDescription, unclearTriageResult } from "./mockReadiness";
 import { readiness } from "./mockSupervisor";
 
 describe("a thin description", () => {
@@ -51,6 +51,18 @@ describe("the comment to the reporter", () => {
     const none = reporterComment("CA-401", null, []);
     expect(none.startsWith("Hi,\n")).toBe(true);
     for (const part of ["- What is the goal?", "acceptance criteria", "in scope, and what is out", "who is waiting on it"]) expect(none).toContain(part);
+  });
+
+  it("puts one question on each bullet, even when a listed question holds two (G24)", () => {
+    expect(oneQuestionEach(["What does done look like for CA-408? Which behaviour or number should change?", "Who is waiting on it?"])).toEqual(["What does done look like for CA-408?", "Which behaviour or number should change?", "Who is waiting on it?"]);
+    // A question mark inside a sentence, or before a lower-case word, does not split.
+    expect(oneQuestionEach(["Is v2? or v3 meant?", "Done?"])).toEqual(["Is v2? or v3 meant?", "Done?"]);
+    const text = reporterComment("CA-408", null, ["What is done? Who is waiting?"]);
+    expect(text).toContain("\n\n- What is done?\n- Who is waiting?\n\n");
+  });
+
+  it("speaks neutrally in the frame it falls back on: no 'we'", () => {
+    expect(reporterComment("CA-401", null, [])).not.toMatch(/\bwe\b/i);
   });
 
   it("thanks the reporter and says what is still open once they have replied, the same words Rust drafts", () => {

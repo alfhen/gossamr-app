@@ -199,7 +199,7 @@ test.describe("What Jira saw from me and GitHub reviews (G2)", () => {
     const sent = page.locator("[data-jira-sent]");
     await expect(sent.getByRole("heading", { name: "What Jira saw from me" })).toBeVisible();
     await expect(sent).toContainText("GitHub reviews Gossamr posted are not listed here; each shows in its workstream's timeline as “You posted an agent's GitHub review”.");
-    await expect(sent).toContainText("Nothing has been posted to Jira from Gossamr yet.");
+    await expect(sent).toContainText("No posts to Jira from Gossamr are on record here.");
   });
 });
 

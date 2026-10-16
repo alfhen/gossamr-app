@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { listenToClaude, useClaude } from "../claudeStore";
 import type { Backend } from "../backend/types";
 import { TicketLinksContext } from "../components/ticketLinks";
@@ -40,6 +40,7 @@ import { ChooseWatch } from "./WatchPicker";
 import { ToastHost, focusToast, toastPlacement } from "./ToastHost";
 import { useToasts } from "./toasts";
 import { useTabs, type Route } from "./tabsStore";
+import { ROUTE_NAME, routeHeading, routeTitle } from "./routeTitle";
 import { usePipHome } from "./pipHomeStore";
 
 /** Matches no item, for a filter that has nothing to read. */
@@ -201,6 +202,32 @@ function useGlobalKeys(agentsEnabled: boolean) {
   }, [agentsEnabled]);
 }
 
+/**
+ * The browser tab says which screen is open, and when the person moves to another one from the rail or the palette its heading
+ * takes the keyboard, so a screen reader hears where it is. The keyboard is left alone where the person already put it.
+ */
+function useRouteAnnounce(screen: Route | null) {
+  useEffect(() => {
+    if (screen) document.title = routeTitle(screen);
+  }, [screen]);
+  const before = useRef(screen);
+  useEffect(() => {
+    if (before.current === screen) return;
+    before.current = screen;
+    const sel = screen && routeHeading(screen);
+    if (!sel) return;
+    const frame = requestAnimationFrame(() => {
+      const at = document.activeElement;
+      if (at && at !== document.body && at.id !== MAIN_ID && !at.closest("[data-rail]")) return;
+      const heading = document.querySelector<HTMLElement>(sel);
+      if (!heading) return;
+      heading.tabIndex = -1;
+      heading.focus({ preventScroll: true });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [screen]);
+}
+
 export function Workspace({ backend }: { backend: Backend }) {
   const status = useWorkspace((s) => s.status);
   const error = useWorkspace((s) => s.error);
@@ -219,6 +246,7 @@ export function Workspace({ backend }: { backend: Backend }) {
   useRegionKeys();
   usePipView();
   const screen = mainScreen(route, agentsEnabled);
+  useRouteAnnounce(screen);
   const paneShown = showsPipPane(route, agentsEnabled, pipOpen);
   const launcherShown = !pipOpen && screen !== "pip";
   const room = canvasRoom(route, peekOpen, peekWidth);
@@ -317,6 +345,7 @@ export function Workspace({ backend }: { backend: Backend }) {
         <Rail />
         <main
           id={MAIN_ID}
+          aria-label={screen ? ROUTE_NAME[screen] : undefined}
           tabIndex={-1}
           style={{ ["--ws-launcher-clear" as string]: `${launcherShown ? LAUNCHER_CLEAR : 0}px`, ["--ws-launcher-gutter" as string]: `${launcherShown ? LAUNCHER_GUTTER : 0}px` }}
           className="relative flex min-h-0 min-w-0 flex-col outline-none"

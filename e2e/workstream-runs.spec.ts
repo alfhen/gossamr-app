@@ -167,7 +167,7 @@ test("Agents groups runs by workstream, with its stage and R1, and the rest unde
 
   // j and k walk the runs in group order: the workstream's run first, then No workstream's.
   const order = await page.locator("main [data-workstream-group] [data-run-id]").evaluateAll((els) => els.map((e) => e.getAttribute("data-run-id")));
-  await page.locator("main h2", { hasText: "Agents" }).click();
+  await page.locator("main h1", { hasText: "Agents" }).click();
   // Starting the run selected it, and it is first in group order: k stays on it, j goes on to No workstream's newest.
   await expect(page.locator(`main [data-run-id="${order[0]}"]`)).toHaveAttribute("aria-current", "true");
   await page.keyboard.press("k");

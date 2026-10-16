@@ -26,7 +26,7 @@ describe("ticketClarity", () => {
   });
 
   it("asks one question per gap, none twice, and all four for an empty description", () => {
-    expect(clarityQuestions(["short", "done"])).toEqual(["What is the goal?", "How will we know it is done (the acceptance criteria)?"]);
+    expect(clarityQuestions(["short", "done"])).toEqual(["What is the goal?", "What has to be true for this to be done (the acceptance criteria)?"]);
     expect(clarityQuestions(["empty"])).toHaveLength(4);
     const gaps: ClarityGap[] = ["short", "done", "scope", "who"];
     expect(clarityQuestions(gaps)).toEqual(clarityQuestions(["empty"]));

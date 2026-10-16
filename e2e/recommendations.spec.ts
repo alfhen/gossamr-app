@@ -910,13 +910,13 @@ test.describe("B5: F6 reaches every region of Pip home", () => {
     await expect.poll(() => regionNow(page)).toBe("pane");
 
     // CA-401's thin description shows the clarity notice, which is a stop of its own at the top of the steps column.
-    for (const region of ["notice", "rail", "composer", "needs", "workstreams", "timeline", "pane"]) await pressTo(page, "F6", region);
-    for (const region of ["timeline", "workstreams", "needs", "composer", "rail", "notice", "pane"]) await pressTo(page, "Shift+F6", region);
+    // The decision sits above the timeline on screen, so F6 meets it first (G28).
+    for (const region of ["timeline", "notice", "rail", "composer", "needs", "workstreams", "pane"]) await pressTo(page, "F6", region);
+    for (const region of ["workstreams", "needs", "composer", "rail", "notice", "timeline", "pane"]) await pressTo(page, "Shift+F6", region);
     // The same with the bracket keys, and the timeline lands on an entry (or the timeline itself while it has none).
-    await pressTo(page, "ControlOrMeta+BracketRight", "notice");
-    await pressTo(page, "ControlOrMeta+BracketLeft", "pane");
-    await pressTo(page, "Shift+F6", "timeline");
+    await pressTo(page, "ControlOrMeta+BracketRight", "timeline");
     await expect(page.locator("[data-timeline]")).toHaveCount(1);
+    await pressTo(page, "ControlOrMeta+BracketLeft", "pane");
 
     // The workstreams land on the selected one, Needs you on the row open in the pane.
     await pressTo(page, "Shift+F6", "workstreams");

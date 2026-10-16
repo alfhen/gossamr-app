@@ -13,6 +13,7 @@ import {
   jiraWrites,
   mockRuns,
   needsPane,
+  needsPaneHeading,
   needsYouTray,
   openApp,
   peekSheet,
@@ -257,15 +258,18 @@ test("j and k move through the Needs you rows and the workstream list, in the or
   await press(page, "k");
   await press(page, "k");
   await expect(item).toBeFocused();
-  // Enter opens the need's decision in the middle column, and the keyboard goes into it.
+  // Enter opens the need's decision in the middle column, and the keyboard goes to its heading.
   await page.keyboard.press("Enter");
   await expect(needsPane(page)).toBeVisible();
-  await expect(needsPane(page).getByRole("button", { name: "Review and start" })).toBeFocused();
+  await expect(needsPaneHeading(page)).toBeFocused();
   await expectVisibleFocus(page);
 
-  // The regions with Cmd/Ctrl+] and [: from the open decision to the clarity notice (CA-401's thin description shows one, a stop
-  // of its own), the rail, on to the composer, and back; and nothing moves while the palette is open.
+  // The regions with Cmd/Ctrl+] and [: from the open decision to the timeline below it, the clarity notice (CA-401's thin
+  // description shows one, a stop of its own), the rail, on to the composer, and back; and nothing moves while the palette is open.
   const notice = pipHome(page).locator("[data-clarity-notice]");
+  await press(page, "ControlOrMeta+BracketRight");
+  await expect.poll(() => notice.evaluate((n) => n.contains(document.activeElement))).toBe(false);
+  await expect.poll(() => needsPane(page).evaluate((n) => n.contains(document.activeElement))).toBe(false);
   await press(page, "ControlOrMeta+BracketRight");
   await expect.poll(() => notice.evaluate((n) => n.contains(document.activeElement))).toBe(true);
   await press(page, "ControlOrMeta+BracketRight");

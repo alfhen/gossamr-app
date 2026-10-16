@@ -236,7 +236,7 @@ describe("what Looks fine teaches the clarity notice", () => {
     const asked = proposals().find((p) => p.label === "Questions for the reporter")!;
     const text = docText(asked.intent.type === "comment" ? asked.intent.body : { blocks: [] });
     expect(text).toContain("What is the goal?");
-    expect(text).toContain("How will we know it is done");
+    expect(text).toContain("What has to be true for this to be done");
     expect(text).not.toContain("What is in scope");
     expect(text).not.toContain("Who asked for it");
 
