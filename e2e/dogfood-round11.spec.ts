@@ -110,7 +110,7 @@ test.describe("numbered answers (G3)", () => {
     await needOfKind(page, "readiness").click();
     await needsPane(page).getByRole("button", { name: "I'll answer" }).click();
     const prefill = await homeComposer(page).inputValue();
-    await homeComposer(page).fill(`${prefill}1. Done means the winback mail goes to lapsed customers. 2. Only the winback flow. 3. The CRM team.`);
+    await homeComposer(page).fill(`${prefill}1. Done means the winback mail goes to lapsed customers. 2. The open rate should rise. 3. Only the winback flow. 4. The CRM team.`);
     await homeComposer(page).press("Enter");
     await homeSettled(page);
     await expandNeedsYou(page, VAGUE);

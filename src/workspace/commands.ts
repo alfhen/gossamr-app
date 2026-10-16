@@ -45,6 +45,8 @@ export interface CommandActions {
   openPull(ref: PullRef): void;
   newTab(): void;
   newTicket(): void;
+  /** Asks which ticket to start a workstream on, in the palette itself (the step Pip home's 'Start a workstream…' opens). */
+  chooseWorkstream(): void;
   togglePip(): void;
   startAgent(): void;
   startAgentOn(item: WorkItem, kind: RunKind): void;
@@ -211,7 +213,8 @@ export function buildCommands(containers: readonly WorkContainer[], savedViews: 
     ...THEMES.map((t): Command => ({ id: `theme:${t}`, group: "Theme", icon: "◐", label: `Theme: ${THEME_LABEL[t]}`, keywords: "appearance colours", run: () => a.setTheme(t) })),
     ...(ctx.agents
       ? [
-          { id: "agents:start", group: "Agents" as const, icon: ">_", label: "Start an agent…", hint: "n", keywords: "run claude investigate background task", run: a.startAgent },
+          { id: "workstream:choose", group: "Workstreams" as const, icon: "◇", label: "Start a workstream…", hint: "starts no agent and posts nothing", keywords: "start new workstream ticket conversation", stay: true, run: a.chooseWorkstream },
+          { id: "agents:start", group: "Agents" as const, icon: ">_", label: "Start an agent…", hint: "n · runs Claude on a ticket", keywords: "run claude investigate background task", run: a.startAgent },
           { id: "agents:needs", group: "Agents" as const, icon: "✋", label: "Show what needs me", hint: ctx.needsYou ? `${ctx.needsYou} waiting` : undefined, keywords: "needs you agents waiting permission question blocked failed drafts approve decide", run: a.showNeedsYou },
           { id: "agents:stop", group: "Agents" as const, icon: "■", label: "Stop all agents…", keywords: "agents halt kill end everything", run: a.openAgentSafety },
           { id: "agents:safety", group: "Agents" as const, icon: "⛨", label: "Agent safety and settings", keywords: "agents touch permissions", run: a.openAgentSafety },

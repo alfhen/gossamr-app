@@ -7,7 +7,7 @@ import { useWorkspace } from "../workspaceStore";
 import { PeekView } from "./PeekSheet";
 import { ProjectsMenuPanel } from "./Rail";
 import { PeekBanner, StrayList } from "./WatchNotices";
-import { WatchPickerView, type WatchPickerViewProps } from "./WatchPicker";
+import { WatchPickerView, focusPickerHeading, type WatchPickerViewProps } from "./WatchPicker";
 import { ModeConfirm, SettingsRowView, WatchCardView, type WatchCardViewProps } from "./WatchSettings";
 import { settingsRows, type SettingsRow } from "./watchLogic";
 
@@ -299,5 +299,15 @@ describe("items assigned elsewhere", () => {
 
   it("renders nothing when there are none", () => {
     expect(list([])).toBe("");
+  });
+});
+
+describe("the chooser's heading (G12)", () => {
+  it("can take the keyboard, and does once the chooser is up", () => {
+    expect(picker()).toMatch(/<h1 tabindex="-1"[^>]*>Choose what to watch<\/h1>/);
+    const h1 = { focus: vi.fn() };
+    focusPickerHeading(h1);
+    expect(h1.focus).toHaveBeenCalledWith({ preventScroll: true });
+    expect(() => focusPickerHeading(null)).not.toThrow();
   });
 });

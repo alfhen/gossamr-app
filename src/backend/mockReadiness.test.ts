@@ -30,11 +30,11 @@ describe("a thin description", () => {
 });
 
 describe("the sample triage of a vague ticket", () => {
-  it("says Ready to plan: no with three open questions, and still recommends a plan, so only the stop holds it", () => {
+  it("says Ready to plan: no with the open questions one to a bullet, and still recommends a plan, so only the stop holds it", () => {
     const text = unclearTriageResult("CA-408");
     expect(readiness(text)).toEqual({
       ready: false,
-      questions: ["What does done look like for CA-408? Which behaviour or number should change?", "What is in scope and what is out?", "Who asked for this, and who is waiting on it?"],
+      questions: ["What does done look like for CA-408?", "Which behaviour or number should change?", "What is in scope and what is out?", "Who asked for this, and who is waiting on it?"],
     });
     expect(text).toContain("Plan recommended: yes");
     expect(text).toContain("For Jira:");

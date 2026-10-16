@@ -547,6 +547,20 @@ export function outcomeBelongs(asked: string, shown: string): boolean {
   return asked === shown;
 }
 
+/** Text typed but not sent, per conversation, so moving to another workstream neither carries it along nor loses it. */
+const unsentInput = new Map<string, string>();
+
+/** Remember what is typed in `conversation`; an empty input leaves nothing behind. */
+export function keepUnsentInput(conversation: string, text: string): void {
+  if (text) unsentInput.set(conversation, text);
+  else unsentInput.delete(conversation);
+}
+
+/** What was left unsent in `conversation`, empty if nothing. */
+export function unsentInputOf(conversation: string): string {
+  return unsentInput.get(conversation) ?? "";
+}
+
 export function Composer({ conversation, attached, chips, looking, scene, footer = null }: ComposerProps) {
   const sessionId = useClaude((s) => s.byTicket[conversation]?.sessionId ?? null);
   const running = useAnswering(conversation);
@@ -554,7 +568,21 @@ export function Composer({ conversation, attached, chips, looking, scene, footer
   const quote = usePip((s) => s.quote);
   const prefill = usePip((s) => s.prefill);
   const agentsOn = useAgentsEnabled();
-  const [input, setInput] = useState("");
+  const [input, setInput] = useState(() => unsentInputOf(conversation));
+  // What the input holds as last drawn on screen: set after the render commits, so a render React throws away saves nothing.
+  const inputNow = useRef(input);
+  useEffect(() => {
+    inputNow.current = input;
+  }, [input]);
+  const inputOf = useRef(conversation);
+  // The input is about the conversation it was typed in: keep it there and show what the new one left unsent.
+  useEffect(() => {
+    if (inputOf.current === conversation) return;
+    keepUnsentInput(inputOf.current, inputNow.current);
+    inputOf.current = conversation;
+    setInput(unsentInputOf(conversation));
+  }, [conversation]);
+  useEffect(() => () => keepUnsentInput(inputOf.current, inputNow.current), []);
   /** What the last command typed here came to, under the input. */
   const [note, setNote] = useState<VerbOutcome | null>(null);
   // A note is about the conversation it was typed in.

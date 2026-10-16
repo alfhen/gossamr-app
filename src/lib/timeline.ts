@@ -393,7 +393,7 @@ export function timeline(input: TimelineInput): TimelineEntry[] {
     const text = (e.proposalId ? draftLine(e, who(e.actor), draft) : null) ?? eventText(e, label, rounds);
     if (!text) continue;
     // A line about something still waiting on the person opens its need: the hold that still holds, the escalation still open.
-    const need = (e.action === "held" || (e.action === "undone" && e.detail === "held")) && e === lastHeld && holdNeed ? holdNeed : e.action === "fix_rounds_exhausted" && escalationNeed ? escalationNeed : e.runId ? needOfRun.get(e.runId) : undefined;
+    const need = (e.action === "held" || (e.action === "undone" && e.detail === "held")) && e === lastHeld && holdNeed ? holdNeed : e.action === "fix_rounds_exhausted" && escalationNeed ? escalationNeed : e.runId && !REPORTER_ASKS.has(e.action) ? needOfRun.get(e.runId) : undefined;
     const target: TimelineTarget = need ? { type: "need", key: need.key } : e.proposalId && draft ? { type: "draft", id: e.proposalId } : e.runId && runs.some((r) => r.id === e.runId) ? { type: "run", id: e.runId } : null;
     // The same line again and again (a rule switched back and forth) is one entry that says how many.
     if (previous && previous.text.replace(/ \(\d+ times\)$/, "") === text && previous.actor === e.actor && previous.action === e.action && !need && !REPORTER_ASKS.has(e.action)) {
@@ -414,7 +414,8 @@ export function timeline(input: TimelineInput): TimelineEntry[] {
       decision: (e.actor === "person" && DECIDED.has(e.action)) || ASKS.has(e.action) || !!need,
       actor: e.actor,
       action: e.action,
-      ...(e.proposalId && draft ? { cause: `draft:${e.proposalId}` } : {}),
+      // A choice to ask the reporter is told when it was made, not moved after the draft it made.
+      ...(e.proposalId && draft && !REPORTER_ASKS.has(e.action) ? { cause: `draft:${e.proposalId}` } : {}),
       order: order++,
     };
     out.push(entry);

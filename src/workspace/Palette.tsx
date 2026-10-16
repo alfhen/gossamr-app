@@ -198,6 +198,7 @@ export function appActions(): CommandActions {
     openPull: (ref) => void openPull(ref),
     newTab: () => void tabs.openTab(),
     newTicket: () => {},
+    chooseWorkstream: () => {},
     togglePip,
     startAgent: () => useRuns.getState().setPicking(true),
     startAgentOn: (item, kind) => void useRunSetup.getState().begin({ item: item.item, kind }),
@@ -353,7 +354,7 @@ export function Palette() {
       const { container } = step;
       return title ? [{ id: "new:create", group: "Create" as const, icon: "＋", label: `Draft “${title}” in ${container.name}`, hint: "↵", run: () => void draftTicket(container, title) }] : [];
     }
-    const actions = { ...appActions(), newTicket: () => go({ type: "project" }) };
+    const actions = { ...appActions(), newTicket: () => go({ type: "project" }), chooseWorkstream: () => go({ type: "workstream" }) };
     if (step.type === "workstream") return startWorkstreamCommands(Object.values(items), START_WORKSTREAM + query, workstreams, actions, SUGGESTED_TICKETS, me);
     const ticket = peekedTicket();
     const ctx: CommandContext = {

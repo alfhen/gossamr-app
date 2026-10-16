@@ -197,7 +197,7 @@ export function ConversationLine({ conversation, workstream }: { conversation: s
   return (
     // The status pill sits beside the line, not in it: the line's own words stay "Workstream: <title> · <Stage>".
     <div className="flex min-w-0 items-baseline gap-2">
-      <p
+      <h2
         data-pip-conversation={conversation}
         data-waiting-for-pr={workstream?.waitingForPr || undefined}
         title={workstream ? `This workstream's own conversation with Pip. ${conversationTitle(workstream)}` : "Pip's conversation for everything that isn't in a workstream"}
@@ -212,7 +212,7 @@ export function ConversationLine({ conversation, workstream }: { conversation: s
         ) : (
           <span className="truncate">{conversationTitle(null)}</span>
         )}
-      </p>
+      </h2>
       {workstream && <HeaderStatus view={workstream} />}
     </div>
   );

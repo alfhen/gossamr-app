@@ -454,3 +454,14 @@ describe("opening a This week item", () => {
     vi.resetModules();
   });
 });
+
+describe("the add field and the Keep row (G3)", () => {
+  it("gives the add row scroll margin to clear the sticky Keep row, and the field reveals itself on focus", () => {
+    const html = renderToStaticMarkup(<PlanMyWeekView week="2026-W42" picks={[pick("CA-1")]} kept={false} tickets={[]} onChange={noop} onKeep={noop} onClose={noop} onPropose={noop} />);
+    expect(html).toMatch(/<form class="[^"]*scroll-mb-12[^"]*"/);
+    expect(html).toMatch(/<input[^>]*data-plan-add[^>]*class="[^"]*scroll-mb-12/);
+    const scrollIntoView = vi.fn();
+    revealChoices({ scrollIntoView });
+    expect(scrollIntoView).toHaveBeenCalledWith({ block: "nearest" });
+  });
+});

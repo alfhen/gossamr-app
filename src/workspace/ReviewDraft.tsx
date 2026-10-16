@@ -555,7 +555,7 @@ export function ReviewDraft({
           <p
             role="alert"
             data-post-pause={pause.risks.join(" ")}
-            className="m-0 text-sm text-ws-warn"
+            className="m-0 scroll-mb-12 text-sm text-ws-warn"
             onKeyDown={(ev) => {
               // Esc here is Keep editing, not the peek closing over the unsaved text.
               if (ev.key !== "Escape" || ev.defaultPrevented) return;

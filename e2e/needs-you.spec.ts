@@ -380,6 +380,9 @@ test("the keyboard in the list: j and k move, Enter opens, ← folds, a asks for
   await page.keyboard.press("ArrowRight");
   await expect(needsPane(page)).toBeVisible();
   await page.keyboard.press("Escape");
+  // The keyboard comes back to the group's row a frame after the pane closes: j before then has nowhere to go.
+  await expect(needsPane(page)).toHaveCount(0);
+  await expect(group).toBeFocused();
   await page.keyboard.press("j");
   const first = need(page, /Draft comment/).first();
   await expect(first).toBeFocused();

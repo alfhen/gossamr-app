@@ -17,7 +17,7 @@ use crate::domain::{clarity_gaps, clarity_questions, has_markers, Actor, Clarity
 use crate::error::{Error, Result};
 use crate::proposals;
 use crate::runs::report::{resolve, ReviewVerdict};
-use crate::runs::result::Readiness;
+use crate::runs::result::{one_question_each, Readiness};
 use crate::tracker::Connection;
 
 /// Pip's notes are kept up to this many bytes, after scrubbing.
@@ -292,10 +292,26 @@ pub fn clarity_of(ws: &Workstream, runs: &[Run], gaps: &[ClarityGap], replies: &
     }
     let follow = reporter_follow(events, replies);
     let said = |action: &str| events.iter().any(|e| e.actor == Actor::Person && e.action == action);
-    if said("clarity_dismissed") || follow.waiting.is_some() || (said("clarity_asked") && !follow.changed) {
+    // An ask whose draft was skipped or retired was never posted, so it doesn't settle the notice.
+    let asked = events.iter().any(|e| e.actor == Actor::Person && e.action == "clarity_asked" && !e.proposal_id.as_deref().is_some_and(|id| draft_lapsed(events, id)));
+    if said("clarity_dismissed") || follow.waiting.is_some() || (asked && !follow.changed) {
         return None;
     }
     Some(Clarity { gaps: gaps.to_vec() })
+}
+
+/// Whether the draft `id` was last skipped (and not brought back by Undo) or retired, so it won't be posted.
+fn draft_lapsed(events: &[WorkstreamEvent], id: &str) -> bool {
+    events
+        .iter()
+        .filter(|e| e.proposal_id.as_deref() == Some(id))
+        .filter_map(|e| match (e.action.as_str(), e.detail.as_deref()) {
+            ("draft_skipped" | "draft_retired", _) => Some(true),
+            ("undone", Some("draft_skipped")) => Some(false),
+            _ => None,
+        })
+        .next_back()
+        .unwrap_or(false)
 }
 
 /// A review that still blocks after `autostart::FIX_ROUNDS_MAX` automatic fix rounds, waiting for the person: run another
@@ -432,32 +448,6 @@ pub fn readiness_of(ws: &Workstream, runs: &[Run], readiness: impl Fn(&Run) -> O
 /// What the approve button of the reporter comment says.
 pub const READINESS_LABEL: &str = proposals::READINESS_COMMENT_LABEL;
 
-/// A listed question that holds several ("What is done? Which number changes?") as one each, so the reporter answers one thing per bullet; as `oneQuestionEach` in src/backend/mockReadiness.ts.
-fn one_question_each(questions: &[String]) -> Vec<String> {
-    let mut out = Vec::new();
-    for q in questions {
-        let chars: Vec<char> = q.trim().chars().collect();
-        let mut start = 0;
-        for i in 0..chars.len() {
-            // A "?" that ends a sentence: whitespace follows, then a capital letter starts the next question.
-            if chars[i] != '?' {
-                continue;
-            }
-            let rest = &chars[i + 1..];
-            let gap = rest.iter().take_while(|c| c.is_whitespace()).count();
-            if gap > 0 && rest.get(gap).is_some_and(|c| c.is_uppercase()) {
-                out.push(chars[start..=i].iter().collect::<String>());
-                start = i + 1 + gap;
-            }
-        }
-        let last: String = chars[start..].iter().collect();
-        if !last.is_empty() {
-            out.push(last);
-        }
-    }
-    out
-}
-
 /// The comment `ask_reporter` drafts: a fixed frame around the questions the Triage listed, or around the four things a
 /// ticket needs when it listed none. When the reporter has answered since the last ask (`replied`), the frame thanks them
 /// for it and says what is still open, instead of repeating the first ask word for word.
@@ -578,6 +568,9 @@ fn escalation_events(db: &Db, ws: &Workstream) -> Result<Vec<WorkstreamEvent>> {
     let kept = |e: &WorkstreamEvent| match e.action.as_str() {
         "fix_rounds_exhausted" | "fix_round_person" | "escalation_taken" | "escalation_posted" | "readiness_asked" | "readiness_answered" | "readiness_overridden" | "clarity_asked" | "clarity_dismissed" | "reporter_nudged" | "basis_drifted" | "resumed" => true,
         "draft_approved" => e.proposal_id.as_ref().is_some_and(|p| asked.contains(p)),
+        // A skipped or retired ask was never posted, which `clarity_of` reads through `draft_lapsed`, and so is an Undo of the skip.
+        "draft_skipped" | "draft_retired" => e.proposal_id.as_ref().is_some_and(|p| asked.contains(p)),
+        "undone" => e.detail.as_deref() == Some("draft_skipped") && e.proposal_id.as_ref().is_some_and(|p| asked.contains(p)),
         _ => false,
     };
     Ok(all.into_iter().filter(kept).collect())
@@ -2170,6 +2163,12 @@ mod tests {
             assert_eq!(shown(&ws, &[], &posted), None, "waiting");
             let changed = [posted[0].clone(), posted[1].clone(), line(3, Actor::Supervisor, "basis_drifted", None)];
             assert!(shown(&ws, &[], &changed).is_some(), "the ticket changed after they were asked");
+            let skipped = [asked[0].clone(), line(2, Actor::Person, "draft_skipped", Some("c1"))];
+            assert!(shown(&ws, &[], &skipped).is_some(), "the ask was skipped, so the ticket still may be unclear");
+            let retired = [asked[0].clone(), line(2, Actor::Pip, "draft_retired", Some("c1"))];
+            assert!(shown(&ws, &[], &retired).is_some(), "retired too");
+            let undone = [skipped[0].clone(), skipped[1].clone(), WorkstreamEvent { detail: Some("draft_skipped".into()), ..line(3, Actor::Person, "undone", Some("c1")) }];
+            assert_eq!(shown(&ws, &[], &undone), None, "Undo brought the ask back");
         }
 
         #[tokio::test]
@@ -2200,6 +2199,19 @@ mod tests {
 
             let other = fx.core.open_workstream(&fx.scope, None, Some("Other".into())).await.unwrap();
             assert!(matches!(fx.core.ask_reporter_now(&fx.scope, &other.id, &[]).await.unwrap_err(), Error::Proposal(why) if why == CLARITY_GONE), "no ticket, no notice");
+        }
+
+        #[tokio::test]
+        async fn a_skipped_ask_brings_the_notice_back_in_the_workstream_view_and_its_undo_takes_it_away_again() {
+            let fx = fixture().await;
+            let ws = fx.core.open_workstream(&fx.scope, Some(fx.item("CA-1")), None).await.unwrap();
+            let draft = fx.core.ask_reporter_now(&fx.scope, &ws.id, &[]).await.unwrap();
+            assert_eq!(fx.core.workstream(&fx.scope, &ws.id).await.unwrap().unwrap().clarity, None, "asked");
+            fx.core.skip_proposal(&draft.id).await.unwrap();
+            assert!(fx.core.workstream(&fx.scope, &ws.id).await.unwrap().unwrap().clarity.is_some(), "the skipped ask was never posted, so the ticket still may be unclear");
+            assert!(fx.core.workstreams(&fx.scope, false).await.unwrap().iter().any(|v| v.workstream.id == ws.id && v.clarity.is_some()), "the list reads the same");
+            fx.core.unskip_proposal(&draft.id).await.unwrap();
+            assert_eq!(fx.core.workstream(&fx.scope, &ws.id).await.unwrap().unwrap().clarity, None, "Undo brought the ask back");
         }
 
         #[tokio::test]

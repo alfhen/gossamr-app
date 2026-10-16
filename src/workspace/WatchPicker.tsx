@@ -189,8 +189,14 @@ export interface WatchPickerViewProps {
   onCancel?(): void;
 }
 
+/** Puts the keyboard on the chooser's heading, without scrolling. */
+export const focusPickerHeading = (h: Pick<HTMLElement, "focus"> | null) => void h?.focus({ preventScroll: true });
+
 export function WatchPickerView(p: WatchPickerViewProps) {
   const { noun, catalog, selected } = p;
+  // Like the routed screens, the chooser's heading has the keyboard once it is on screen, so a screen reader hears where it is.
+  const heading = useRef<HTMLHeadingElement>(null);
+  useEffect(() => focusPickerHeading(heading.current), []);
   const searching = p.query.trim() !== "";
   const fp = new Map(p.suggested.list.map((f) => [f.container.externalId, f]));
   const suggested = searching ? [] : p.suggested.list;
@@ -212,7 +218,9 @@ export function WatchPickerView(p: WatchPickerViewProps) {
   );
   return (
     <div className="mx-auto flex h-full min-h-0 w-full max-w-[780px] flex-col px-8 pt-12 pb-6">
-      <h1 className="m-0 text-2xl font-bold">Choose what to watch</h1>
+      <h1 ref={heading} tabIndex={-1} className="m-0 text-2xl font-bold outline-none">
+        Choose what to watch
+      </h1>
       <p className="mt-1 mb-4 max-w-[620px] text-ws-ink2">
         Gossamr only syncs, shows and lets Pip read the {noun.many} you watch in {p.workspace}. {code ? "Anything else isn't read at all." : "Anything else is one search away and is never stored."} You can change this any time in Settings.
       </p>

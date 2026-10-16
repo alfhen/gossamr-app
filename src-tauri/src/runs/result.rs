@@ -319,8 +319,34 @@ pub fn readiness(result: &str) -> Option<Readiness> {
             }
         }
     }
-    let questions = questions.iter().map(|q| one_line(unchecked(q))).filter(|q| !q.is_empty()).take(QUESTIONS_MAX).map(|q| cut(&q, QUESTION_LIMIT)).collect();
+    let questions = one_question_each(&questions.iter().map(|q| one_line(unchecked(q))).filter(|q| !q.is_empty()).collect::<Vec<_>>()).into_iter().take(QUESTIONS_MAX).map(|q| cut(&q, QUESTION_LIMIT)).collect();
     Some(Readiness { ready, questions })
+}
+
+/// A listed question that holds several ("What is done? Which number changes?") as one each, so the reporter answers one thing per bullet; as `oneQuestionEach` in src/backend/mockReadiness.ts. Applied when the questions are read from a triage's note, so every reader sees the same list.
+pub fn one_question_each(questions: &[String]) -> Vec<String> {
+    let mut out = Vec::new();
+    for q in questions {
+        let chars: Vec<char> = q.trim().chars().collect();
+        let mut start = 0;
+        for i in 0..chars.len() {
+            // A "?" that ends a sentence: whitespace follows, then a capital letter starts the next question.
+            if chars[i] != '?' {
+                continue;
+            }
+            let rest = &chars[i + 1..];
+            let gap = rest.iter().take_while(|c| c.is_whitespace()).count();
+            if gap > 0 && rest.get(gap).is_some_and(|c| c.is_uppercase()) {
+                out.push(chars[start..=i].iter().collect::<String>());
+                start = i + 1 + gap;
+            }
+        }
+        let last: String = chars[start..].iter().collect();
+        if !last.is_empty() {
+            out.push(last);
+        }
+    }
+    out
 }
 
 fn verdict_word(rest: &str) -> Option<ReviewVerdict> {

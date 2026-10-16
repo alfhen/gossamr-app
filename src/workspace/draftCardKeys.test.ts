@@ -62,7 +62,7 @@ describe("the posting pause (G5)", () => {
     const node = (name: string) => ({ focus: () => seen.push(`focus ${name}`), scrollIntoView: () => seen.push(`scroll ${name}`) });
     const nodes: Record<string, unknown> = { "[data-post-pause-keep]": node("keep"), "[data-draft-actions]": node("actions") };
     showPause({ querySelector: (s: string) => nodes[s] ?? null } as unknown as ParentNode);
-    expect(seen).toEqual(["focus keep", "scroll keep", "scroll actions"]);
+    expect(seen).toEqual(["focus keep", "scroll actions", "scroll keep"]);
   });
 
   it("does nothing once the pause is gone", () => {

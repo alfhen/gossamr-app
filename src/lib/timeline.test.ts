@@ -492,6 +492,21 @@ describe("timeline: the audit", () => {
     }
   });
 
+  it("tells the choice to ask the reporter before the post it made, and without the need it settled (G7)", () => {
+    const base = needs({ workstreams: [view({ heldReason: "restart" })], runs: [], proposals: [], dismissed: new Set(), now: NOW, heldAt: { "ws-1": iso(5) } }).find((n) => n.kind === "hold")!;
+    const open: Need = { ...base, key: "readiness:r1", kind: "readiness", runId: "r1" };
+    const list = timeline({
+      drafts: [draft("d1", comment("CA-401"), 4, { state: { type: "applied" }, updatedAgo: 2 })],
+      events: [line("readiness_asked", 5, { runId: "r1", proposalId: "d1" }), line("draft_approved", 2, { proposalId: "d1" })],
+      needs: [open],
+    });
+    const texts = list.map((e) => e.text);
+    const asked = list.find((e) => e.action === "readiness_asked")!;
+    expect(texts.indexOf(asked.text)).toBeLessThan(texts.findIndex((t) => t.includes("approved a comment")));
+    expect(asked.needKey).toBeNull();
+    expect(asked.target).toEqual({ type: "draft", id: "d1" });
+  });
+
   it("collapses the same line again and again into one that says how many", () => {
     const list = timeline({ events: [line("rule_set", 10), line("rule_set", 9), line("rule_set", 8), line("held", 7), line("rule_set", 6)] });
     expect(list.map((e) => e.text)).toEqual(["You changed an automatic step (3 times)", "You held the workstream", "You changed an automatic step"]);

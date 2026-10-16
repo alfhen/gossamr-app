@@ -81,7 +81,7 @@ export function afterMove(part: "up" | "down", index: number, count: number): "u
   return !off(part) ? part : !off(part === "up" ? "down" : "up") ? (part === "up" ? "down" : "up") : "row";
 }
 
-/** Brings the choice list into view in the day scroller it sits in, clear of the sticky Keep row (the list's scroll margin). */
+/** Brings the choice list, or the add field, into view in the day scroller it sits in, clear of the sticky Keep row (their scroll margin). */
 export const revealChoices = (group: Pick<HTMLElement, "scrollIntoView"> | null | undefined) => group?.scrollIntoView({ block: "nearest" });
 
 /** The card itself: pure of the stores, so a test can render it. */
@@ -287,7 +287,7 @@ export function PlanMyWeekView({
         {moved}
       </p>
       <form
-        className="flex flex-wrap items-center gap-2"
+        className="flex scroll-mb-12 flex-wrap items-center gap-2"
         onSubmit={(ev) => {
           ev.preventDefault();
           add();
@@ -300,7 +300,8 @@ export function PlanMyWeekView({
           placeholder="Add a ticket: key or words"
           value={adding}
           onChange={(ev) => (setAdding(ev.target.value), setNote(null), setChoices(null))}
-          className="min-w-[10rem] flex-1 rounded-md border border-ws-sep2 bg-ws-win px-2 py-0.5 text-sm text-ws-ink focus-visible:outline-2 focus-visible:outline-ws-pip"
+          onFocus={(ev) => revealChoices(ev.currentTarget)}
+          className="min-w-[10rem] scroll-mb-12 flex-1 rounded-md border border-ws-sep2 bg-ws-win px-2 py-0.5 text-sm text-ws-ink focus-visible:outline-2 focus-visible:outline-ws-pip"
         />
         <button type="submit" data-plan-add-go className={button}>
           Add
