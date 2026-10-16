@@ -210,7 +210,7 @@ test.describe("the permission panel says what Deny does once (G11)", () => {
     });
   });
 
-  test("with the explainer up the note under the buttons is gone; the confirm is only 'Deny this?'", async ({ page }) => {
+  test("with the explainer up the note under the buttons is gone; a read-only run's Deny needs no confirm", async ({ page }) => {
     await openApp(page);
     await openPipHome(page);
     await expandNeedsYou(page, "General");
@@ -219,6 +219,7 @@ test.describe("the permission panel says what Deny does once (G11)", () => {
     await expect(pane.locator("[data-permission-explainer]")).toContainText("What Deny does");
     await expect(pane.locator("[data-permission-ask]")).not.toContainText("Claude is told you said no");
     await pane.getByRole("button", { name: "Deny", exact: true }).click();
-    await expect(pane.getByRole("group", { name: "Deny this request" })).toContainText("Deny this?");
+    await expect(pane.getByRole("group", { name: "Deny this request" })).toHaveCount(0);
+    await expect(pane.locator("[data-permission-explainer]")).toHaveCount(0);
   });
 });

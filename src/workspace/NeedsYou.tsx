@@ -1,12 +1,12 @@
 import { useMemo } from "react";
-import { chipLabel, GROUP_LABEL, needGroups, type Need, type NeedGroup, type NeedGroupKind } from "../lib/needs";
+import { chipLabel, editedTitle, GROUP_LABEL, needGroups, type Need, type NeedGroup, type NeedGroupKind } from "../lib/needs";
 import { relativeTime } from "../lib/views";
 import { isAnswersDraft } from "../lib/proposals";
 import { useWorkspace } from "../workspaceStore";
+import { useEditedDraft } from "./DraftCard";
 import { groupId, openNeed } from "./needsActions";
 import { BATCH_ASIDE, BATCH_TITLE, batchLabel } from "./pipHomeLogic";
 import { usePipHome } from "./pipHomeStore";
-import { needsYouText } from "./useNeeds";
 
 const CHIP: Record<NeedGroupKind, string> = {
   decide: "bg-ws-pip text-ws-on-pip",
@@ -92,7 +92,10 @@ function SafeBatch({ needs, gid, aside }: { needs: readonly Need[]; gid: string;
 
 function NeedRow({ need, gid, now, onPick, showTicket, top }: { need: Need; gid: string; now: number; onPick?(need: Need): void; showTicket: boolean; top: boolean }) {
   const deciding = usePipHome((s) => s.deciding === need.key);
-  const text = `${need.head ? `${need.head} · ` : ""}${need.title} · ${age(need, now)}`;
+  // A draft the person edited and has not posted says so, and a comment's title follows the words as edited.
+  const { edited, text: typed } = useEditedDraft(need.target.type === "draft" ? need.target.id : "");
+  const title = editedTitle(need.title, typed);
+  const text = `${need.head ? `${need.head} · ` : ""}${title}${edited ? " · edited" : ""} · ${age(need, now)}`;
   return (
     <li>
       <button
@@ -116,9 +119,14 @@ function NeedRow({ need, gid, now, onPick, showTicket, top }: { need: Need; gid:
           </span>
         )}
         <span className="flex min-w-0 items-center gap-1.5">
-          <span data-needs-you-need-title title={need.title} className="line-clamp-2 min-w-0 flex-1 [overflow-wrap:anywhere] text-ws-ink">
-            {need.title}
+          <span data-needs-you-need-title title={title} className="line-clamp-2 min-w-0 flex-1 [overflow-wrap:anywhere] text-ws-ink">
+            {title}
           </span>
+          {edited && (
+            <span data-needs-you-edited className="shrink-0 text-xs font-semibold text-ws-pip">
+              edited
+            </span>
+          )}
           <GroupChip group={need.group} label={chipLabel(need)} />
           <span className="shrink-0 text-xs text-ws-ink3">{age(need, now)}</span>
         </span>
@@ -139,6 +147,8 @@ function GroupRow({ group: g, now, onPick, openByDefault }: { group: NeedGroup; 
   const list = `needs-you-group-${gid}`;
   const expanded = g.count > 1 && open;
   const proposals = useWorkspace((s) => s.proposals);
+  // The top need's draft, edited and not posted, says so; open, the need's own row does.
+  const { edited } = useEditedDraft(g.top.target.type === "draft" ? g.top.target.id : "");
   const asideCount = [g.top, ...g.rest].filter((n) => n.target.type === "draft" && proposals[n.target.id] && isAnswersDraft(proposals[n.target.id])).length;
   return (
     <li data-needs-you-row={gid} className="grid has-[[data-needs-you-group]:focus-visible]:[&_[data-needs-top]]:outline-2 has-[[data-needs-you-group]:focus-visible]:[&_[data-needs-top]]:outline-dashed has-[[data-needs-you-group]:focus-visible]:[&_[data-needs-top]]:outline-offset-[-2px] has-[[data-needs-you-group]:focus-visible]:[&_[data-needs-top]]:outline-ws-pip">
@@ -186,6 +196,11 @@ function GroupRow({ group: g, now, onPick, openByDefault }: { group: NeedGroup; 
       </button>
       <div className="flex items-center gap-1.5 px-2 pb-0.5 text-xs text-ws-ink3">
         {!expanded && <span data-needs-you-age>{age(g.top, now)}</span>}
+        {!expanded && edited && (
+          <span data-needs-you-edited className="font-semibold text-ws-pip">
+            edited
+          </span>
+        )}
         {g.count > 1 && (
           <button
             type="button"
@@ -235,7 +250,7 @@ export function NeedsYouList({ needs, compact = false, main = false, onPick, now
     <section aria-label="Needs you" data-needs-you className={`grid min-h-0 content-start gap-1 overflow-y-auto ${compact ? "max-h-[min(400px,60vh)] p-2" : main ? "max-h-1/2 shrink px-1.5 pb-2" : "max-h-[38vh] border-t border-ws-sep pt-2"}`}>
       <h2 data-needs-you-title tabIndex={-1} className={`sticky top-0 z-10 m-0 flex items-center gap-1.5 px-1 outline-none font-semibold tracking-wide uppercase ${main ? "bg-ws-bar pt-2 pb-1 text-sm text-ws-ink2" : "bg-ws-win text-xs text-ws-ink3"}`}>
         Needs you
-        <span data-needs-you-count aria-label={needsYouText(needs.length)} className={`rounded-full px-1.5 text-[10px] ${needs.length ? "bg-ws-pip text-ws-on-pip" : "bg-ws-hover text-ws-ink3"}`}>
+        <span data-needs-you-count aria-label={`${needs.length} waiting`} className={`rounded-full px-1.5 text-[10px] ${needs.length ? "bg-ws-pip text-ws-on-pip" : "bg-ws-hover text-ws-ink3"}`}>
           {needs.length}
         </span>
       </h2>

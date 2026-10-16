@@ -152,7 +152,7 @@ describe("the run sheet, by state", () => {
 
     it("on a read-only run, says Claude Code refuses it and renders no Allow at all: Deny is the primary answer", () => {
       const html = sheet(investigate("approve Bash: rm -rf node_modules"));
-      expect(html).toContain("This run is read-only: Claude Code refuses this.");
+      expect(html).toContain("This run is read-only, so this command would be refused anyway.");
       expect(html).not.toContain("Allow");
       expect(buttons(asked(html))).toEqual(["Copy", "Deny", "Stop the run (abandons it)"]);
       expect(primary(html)).toEqual(["Deny"]);

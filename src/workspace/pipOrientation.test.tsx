@@ -30,7 +30,7 @@ afterEach(() => {
 describe("Pip home's orientation card", () => {
   it("explains Pip, a workstream, a run and a worktree, and says nothing is posted without a click", () => {
     const html = renderToStaticMarkup(<PipOrientation open />);
-    expect(ORIENTATION_TERMS.map((t) => t.term)).toEqual(["Pip", "Workstream", "Run", "Cobweb", "Status", "Intake", "Advise", "Manage", "Hold", "Allow once", "Decide", "Unblock", "Worktree"]);
+    expect(ORIENTATION_TERMS.map((t) => t.term)).toEqual(["Pip", "Workstream", "Run", "Cobweb", "Status", "Intake", "Triage", "Plan", "Build", "Review", "Pushing", "Held", "Quiet", "Idle", "Advise", "Manage", "Hold", "Allow once", "Decide", "Unblock", "Worktree"]);
     expect(html).toContain("One ticket&#x27;s work from start to pull request");
     expect(html).toContain("One Claude Code agent session doing a step: investigate, plan, build or review");
     expect(html).toContain("own checkout of your repository");

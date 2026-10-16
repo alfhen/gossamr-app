@@ -370,6 +370,10 @@ describe("the card across a week boundary", () => {
     expect(card(new Date(2026, 9, 18, 23, 59).getTime())).toContain("week of 12 Oct");
     expect(card(new Date(2026, 9, 19, 0, 1).getTime())).toContain("week of 19 Oct");
   });
+  it("says it covers all the person's tickets, since it may be opened from one workstream's pane (G30)", () => {
+    const html = renderToStaticMarkup(<PlanMyWeek key="w" needs={[]} withers={{}} now={new Date(2026, 9, 18, 12).getTime()} />);
+    expect(html).toMatch(/data-plan-scope[^>]*>· all your tickets, not only this workstream&#x27;s</);
+  });
 });
 
 describe("the palette", () => {

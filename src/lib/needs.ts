@@ -308,9 +308,15 @@ const EDITABLE: ReadonlySet<Intent["type"]> = new Set(["comment", "rewrite", "cr
 
 /** A comment draft with no run behind it, told apart by its first words (a secret masked first): `Draft comment: “Thanks for the…”`. */
 function commentTitle(body: Parameters<typeof docText>[0]): string {
-  const words = maskSecrets(docText(body)).trim().split(/\s+/).filter(Boolean);
-  return words.length ? `${DRAFT_TEXT.comment}: “${words.slice(0, COMMENT_WORDS).join(" ")}${words.length > COMMENT_WORDS ? "…" : ""}”` : DRAFT_TEXT.comment;
+  return commentTitleOf(docText(body));
 }
+
+/** `commentTitle` of text as it stands, and a Needs you row's title with the comment's words as edited: only a comment with no run behind it is titled by them. */
+export const commentTitleOf = (text: string): string => {
+  const words = maskSecrets(text).trim().split(/\s+/).filter(Boolean);
+  return words.length ? `${DRAFT_TEXT.comment}: “${words.slice(0, COMMENT_WORDS).join(" ")}${words.length > COMMENT_WORDS ? "…" : ""}”` : DRAFT_TEXT.comment;
+};
+export const editedTitle = (title: string, text: string | undefined): string => (text !== undefined && title.startsWith(DRAFT_TEXT.comment) ? commentTitleOf(text) : title);
 const COMMENT_WORDS = 6;
 
 /**

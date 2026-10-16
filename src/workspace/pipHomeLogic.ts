@@ -62,6 +62,9 @@ export function retiredStepDrafts(proposals: readonly Proposal[], runs: readonly
 /** What the one action of approving N drafts together is called, in the step rail and in Needs you. */
 export const batchLabel = (count: number) => `Approve ${count} safe drafts`;
 
+/** What the step rail's batch button is called: the same action as Needs you's, named by the smaller scope it covers. */
+export const stepBatchLabel = (step: StepGroup, count: number) => (step === "pip" ? `Approve ${count} of Pip's drafts` : `Approve ${count} of this step's drafts`);
+
 /** What the batch button's tooltip says makes a draft safe: it is a comment, a move or subtasks, read in full before anything is posted. */
 export const BATCH_TITLE = "Safe drafts are comments, status moves and subtasks that only add to Jira. A description rewrite, a question to the reporter and the like are approved one by one. You see every draft before anything is posted.";
 

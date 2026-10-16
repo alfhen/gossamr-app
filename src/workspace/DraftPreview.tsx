@@ -5,7 +5,7 @@ import { REVIEW_OUTDATED_NOTE, targetOf, unreachable } from "../lib/proposals";
 import type { Proposal } from "../types";
 import { useWorkspace, workflowOfItem } from "../workspaceStore";
 import { draftStatus } from "./boardLogic";
-import { draftSummary, draftTitle, linkSentence } from "./DraftCard";
+import { draftSummary, draftTitle, linkSentence, useEditedDraft } from "./DraftCard";
 import { collapsible, draftFacts, isCreate, showDraft } from "./draftTicket";
 import { showMe } from "./jump";
 import { useRunSetup } from "./runSetupStore";
@@ -18,6 +18,7 @@ import { usePip } from "./pipStore";
 import { InlineStart, InlineStartContext, inlineStartId, inlineStartKey, inlineStartable, useInlineStarts } from "./InlineStart";
 import { focusPeekDraft } from "./peekDrafts";
 import { plainMarkdown } from "../lib/markdown";
+import { maskSecrets } from "../lib/riskyText";
 import { useTabs } from "./tabsStore";
 import { RetiredDraft } from "./RetiredDraft";
 import { NOT_WAITING, useAnswerRun, type AnswerRun } from "./runAnswer";
@@ -170,12 +171,12 @@ function AnswerBody({ intent, answer, pending, byPip }: { intent: Extract<Propos
     <div data-run-answer className="grid gap-1.5 px-2.5 py-2">
       {question && (
         <blockquote data-question className="m-0 rounded-md border-l-2 border-ws-sep2 bg-ws-sel px-2 py-1 text-sm whitespace-pre-wrap text-ws-ink2 [overflow-wrap:anywhere]">
-          <b className="font-semibold">{answer?.label ?? "The agent"} asks:</b> {question}
+          <b className="font-semibold">{answer?.label ?? "The agent"} asks:</b> {maskSecrets(question)}
         </blockquote>
       )}
       <span className="text-xs font-semibold text-ws-ink3">{pending ? (byPip ? "Pip suggests this reply" : "Suggested reply") : "Reply"}</span>
       <p data-reply className="m-0 whitespace-pre-wrap [overflow-wrap:anywhere]">
-        {intent.message}
+        {maskSecrets(intent.message)}
       </p>
       {pending && answer && !answer.waiting && (
         <p data-not-waiting className="m-0 text-sm font-semibold text-ws-blocked">
@@ -216,7 +217,11 @@ function DraftPreviewCard({ proposal: p, statusName, targetTitle, pass, answer =
   const toPullView = p.intent.type === "githubReview" && !canPost && !!onPullView;
   const go = pending ? (p.intent.type === "githubReview" ? (toPullView ? "Open PR view →" : "Review and post →") : p.intent.type === "startRun" ? (expander ? "Review and start" : "Review and start →") : p.intent.type === "followUp" ? "Review and send back →" : p.intent.type === "runAnswer" ? (stale ? "" : "Review and answer →") : target ? `Review on ${target.key} →` : "Review draft →") : (target ?? made) ? `Open ${(target ?? made)!.key} →` : "";
   const create = isCreate(p) ? p : null;
-  const body = create ? docText(create.intent.fields.body) || "No description." : draftPreviewBody(p, statusName, pass);
+  // A secret in a draft's text shows masked on the card, as on What Jira saw from me; the card being edited keeps the real text.
+  // A comment the person edited and has not posted shows its words as edited, with a note that it is.
+  const { edited, text: typed } = useEditedDraft(p.id);
+  const changed = pending && edited;
+  const body = maskSecrets(create ? docText(create.intent.fields.body) || "No description." : p.intent.type === "comment" && changed && typed !== undefined ? typed : draftPreviewBody(p, statusName, pass));
   const decide = (run?: () => void) =>
     run &&
     (() => {
@@ -297,11 +302,14 @@ function DraftPreviewCard({ proposal: p, statusName, targetTitle, pass, answer =
         <div className={`flex items-center gap-2 px-2.5 py-1.5 text-sm font-semibold ${HEADER[state]}`}>
           <span aria-hidden>{ICON[p.intent.type]}</span>
           <span className="min-w-0 truncate">{title}</span>
-          <span className="ml-auto shrink-0 font-medium text-ws-ink3">{STATE[state]}</span>
+          <span className="ml-auto shrink-0 font-medium text-ws-ink3">
+            {STATE[state]}
+            {changed && <span data-draft-edited> · edited</span>}
+          </span>
         </div>
         {create && (
           <>
-            <p className="m-0 px-2.5 pt-2 font-semibold [overflow-wrap:anywhere]">{create.intent.fields.title}</p>
+            <p className="m-0 px-2.5 pt-2 font-semibold [overflow-wrap:anywhere]">{maskSecrets(create.intent.fields.title)}</p>
             <p className="m-0 px-2.5 pt-0.5 text-sm text-ws-ink2">{draftFacts(create).join(" · ")}</p>
           </>
         )}

@@ -279,6 +279,16 @@ describe("which run drafts start in place", () => {
     expect(begin).not.toHaveBeenCalled();
   });
 
+  it("leads with a plain summary and keeps Start agent and Hide in the flow, never pinned over the text (G27, B4)", () => {
+    const html = renderToStaticMarkup(<InlineStartView id="p-plain" entry={{ ...CLOSED_INLINE, phase: "loading" }} on={noop} />);
+    expect(html).toContain("data-start-summary");
+    expect(html).toContain("This agent can change code, in its own copy of the repository and not in your own.");
+    expect(html).toContain("Nothing runs before that.");
+    expect(html.indexOf("data-start-summary")).toBeLessThan(html.indexOf("What agents can do"));
+    expect(html).toContain("data-inline-start-actions");
+    expect(html).not.toMatch(/<div[^>]*data-inline-start-actions[^>]*sticky/);
+  });
+
   it("shows the review under the card once open, and hides the card's own 'Review and start' meanwhile", () => {
     const p = runDraft("plan");
     const panel = <InlineStartView id={p.id} entry={{ ...CLOSED_INLINE, phase: "loading" }} on={noop} />;

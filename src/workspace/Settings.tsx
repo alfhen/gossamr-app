@@ -93,7 +93,8 @@ function ConnectionRow({ c, projects }: { c: ConnectionInfo; projects: number })
           <div className="flex items-center gap-2">
             <span className={`size-2 shrink-0 rounded-full ${DOT[line.tone]}`} aria-hidden />
             <span className="truncate font-semibold">{c.workspace}</span>
-            <span className="rounded-full bg-ws-sel px-1.5 text-xs text-ws-ink2">{sample ? "Sample data" : "Jira"}</span>
+            {/* A sample connection is already named "Sample data": the badge is not read as it again. */}
+            <span aria-hidden={sample && c.workspace === "Sample data" ? true : undefined} className="rounded-full bg-ws-sel px-1.5 text-xs text-ws-ink2">{sample ? "Sample data" : "Jira"}</span>
           </div>
           <div className="truncate text-sm text-ws-ink3">{sample ? "Built-in sample tickets. Nothing is sent anywhere." : c.account}</div>
         </div>

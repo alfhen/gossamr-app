@@ -1217,7 +1217,7 @@ describe("answering a permission prompt, as runs/permission.rs", () => {
   it("refuses Allow once on a read-only run, a forbidden push and a request that changed, recording nothing", async () => {
     const ro = await working("investigate");
     ro.b.runs.askPermission(ro.run.id, "approve Bash: ls");
-    await expect(ro.b.runsAllowPermissionOnce(ro.run.id, "ls")).rejects.toThrow("This run is read-only: Claude Code refuses this.");
+    await expect(ro.b.runsAllowPermissionOnce(ro.run.id, "ls")).rejects.toThrow("This run is read-only, so this command would be refused anyway.");
     const { b, ws, run } = await working();
     b.runs.askPermission(run.id, "approve Bash: git push origin main");
     await expect(b.runsAllowPermissionOnce(run.id, "git push origin main")).rejects.toThrow("A Build may push only its own branch, worktree-ca-401-fix, to origin, without force: Gossamr doesn't allow this push.");

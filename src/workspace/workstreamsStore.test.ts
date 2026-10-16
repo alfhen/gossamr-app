@@ -45,6 +45,26 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+describe("starting a workstream from a ticket's peek (G24)", () => {
+  it("is the one Pip home shows when it is open, and says it started", async () => {
+    const { startFromPeek } = await import("./PeekSheet");
+    useTabs.getState().setRoute("pip");
+    usePipHome.getState().openGeneral();
+    await startFromPeek(CA401);
+    const id = useWorkstreams.getState().forItem("CA-401")!.workstream.id;
+    expect(usePipHome.getState().selected).toBe(id);
+    expect(useToasts.getState().toasts.map((t) => t.text)).toContain("Started a workstream on CA-401.");
+  });
+
+  it("says nothing from the workspace, where the Pip pane shows the workstream itself", async () => {
+    const { startFromPeek } = await import("./PeekSheet");
+    useToasts.getState().clear();
+    useTabs.getState().setRoute("workspace");
+    await startFromPeek(CA401);
+    expect(useToasts.getState().toasts).toEqual([]);
+  });
+});
+
 describe("the workstreams store", () => {
   it("starts a workstream on a ticket, lists it with its stage and opens Pip", async () => {
     usePrefs.getState().setPipOpen(false);

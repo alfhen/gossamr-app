@@ -127,7 +127,7 @@ describe("the Needs you list", () => {
     const html = renderToStaticMarkup(<NeedsYouList needs={list} now={NOW} />);
     expect(html).toContain('<section aria-label="Needs you"');
     expect(html).toMatch(/data-needs-you-count[^>]*>8</);
-    expect(html).toContain('aria-label="8 things need you"');
+    expect(html).toContain('aria-label="8 waiting"');
     // The hold is the oldest of what is stuck, so its workstream's row leads.
     const rows = [...html.matchAll(/data-needs-you-row="([^"]+)"/g)].map((m) => m[1]);
     expect(rows).toEqual(["ws-2", "ws-1", "general"]);
