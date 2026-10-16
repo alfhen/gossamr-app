@@ -306,9 +306,14 @@ export function AdoptNotice({ view }: { view: WorkstreamView }) {
 export const changedLine = (opened: string, line: string): string => (line && line !== opened ? line : "");
 
 function useChangedLine(scope: string, line: string): string {
-  const first = useRef({ scope, line });
-  if (first.current.scope !== scope) first.current = { scope, line };
-  return changedLine(first.current.line, line);
+  // State, not a ref: a render React throws away can't leave another workstream's opening line behind. Switching
+  // workstreams resets it during render, which React supports, and that render (an opening) announces nothing.
+  const [first, setFirst] = useState({ scope, line });
+  if (first.scope !== scope) {
+    setFirst({ scope, line });
+    return "";
+  }
+  return changedLine(first.line, line);
 }
 
 /**
