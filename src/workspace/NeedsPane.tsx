@@ -114,6 +114,18 @@ export const advancedText = (done: Pick<Need, "title" | "ticketKey" | "workstrea
 /** What is said when the need decided was the last one and the pane closes: what was done, and the wait it started. */
 export const closedText = (done: Pick<Need, "title" | "ticketKey" | "workstreamTitle">, waitsOn?: string | null, posted = false) => `${doneText(done, posted)}${waitsOn ? ` ${waitsOn}.` : ""}`;
 
+/**
+ * The note for the last need decided from the pane, or null when its draft went without being posted: a Skip says so in
+ * its own Undo note, and "Done:" would claim it was dealt with.
+ */
+export function lastNeedText(done: Need, proposals: Readonly<Record<string, Proposal>>): string | null {
+  if (done.target.type === "draft") {
+    const state = proposals[done.target.id]?.state.type;
+    if (state !== "applied" && state !== "applying") return null;
+  }
+  return closedText(done, waitStarted(done, proposals), postedToJira(done, proposals));
+}
+
 /** What was done and in which workstream: "Done: Questions for the reporter on CA-408." The pane moved on, so the line is what says where it happened. */
 export const doneText = (done: Pick<Need, "title" | "ticketKey" | "workstreamTitle">, posted = false) => {
   const where = done.ticketKey ?? done.workstreamTitle;
@@ -829,8 +841,8 @@ export function NeedsPane({ needs }: { needs: readonly Need[] }) {
   useAdvance(needs, (done, next) =>
     setAdvanced((prev) => nextAdvanced(prev ?? { id: lastId.current, text: "" }, advancedText(done, next, waitStarted(done, useWorkspace.getState().proposals), postedToJira(done, useWorkspace.getState().proposals)), done.workstreamId ? { workstreamId: done.workstreamId, label: doneText(done, postedToJira(done, useWorkspace.getState().proposals)) } : undefined, done.key)),
     (done) => {
-      const proposals = useWorkspace.getState().proposals;
-      useToasts.getState().push(closedText(done, waitStarted(done, proposals), postedToJira(done, proposals)), "info");
+      const text = lastNeedText(done, useWorkspace.getState().proposals);
+      if (text) useToasts.getState().push(text, "info");
     },
   );
   useEffect(() => {
