@@ -38,6 +38,21 @@ describe("a note that answers a keypress (G30)", () => {
     expect(texts()).toEqual(["Skipped the draft.", GENERAL_KEY_OFF]);
   });
 
+  it("waits behind errors already queued, so a second error is not held up by it", () => {
+    const toasts = useToasts.getState();
+    toasts.push("Couldn't post", "error");
+    toasts.push("Couldn't sync", "error");
+    toasts.push("A note", "info");
+    toasts.push(GENERAL_KEY_OFF, "info", undefined, { now: true });
+    expect(texts()).toEqual(["Couldn't post", "Couldn't sync", GENERAL_KEY_OFF, "A note"]);
+    useToasts.getState().clear();
+    // A note on screen gives way, but an error waiting behind it still goes first.
+    toasts.push("Agent started on CA-402", "info");
+    toasts.push("Couldn't sync", "error");
+    toasts.push(GENERAL_KEY_OFF, "info", undefined, { now: true });
+    expect(texts()).toEqual(["Couldn't sync", GENERAL_KEY_OFF]);
+  });
+
   it("is on the clock of its own once it is the one on screen", () => {
     const toasts = useToasts.getState();
     toasts.push("Agent started on CA-402", "info");
