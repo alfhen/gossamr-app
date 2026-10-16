@@ -104,6 +104,10 @@ describe("the pause before posting edited text", () => {
     expect(maskSecrets(`${header} MIIEvQIBADANBg`)).toBe("--…");
     expect(maskSecrets(`${header}\n${body}\n-----END PRIVATE KEY-----\nthanks`)).toBe("--…\nthanks");
     expect(maskSecrets(header)).toBe("--…");
+    // Without an END line the prose after the pasted body stays.
+    expect(maskSecrets(`${header}\n${body}\nthanks for looking`)).toBe("--…\nthanks for looking");
+    expect(maskSecrets(`${header} MIIEvQIBADANBg please rotate it`)).toBe("--… please rotate it");
+    expect(maskSecrets(`${header}\nMIIEvQIBADANBgkqhkiG9w0B\nAQEFAASC==\n\nThanks, Mette`)).toBe("--…\n\nThanks, Mette");
     // One item in the pause, never the header and the body as two.
     expect(newRiskQuote("x", `${header}\n${body}\n-----END PRIVATE KEY-----`)).toEqual({ secret: ["--…"] });
     expect(newRiskQuote("x", `${header}\n${body}`)).toEqual({ secret: ["--…"] });
