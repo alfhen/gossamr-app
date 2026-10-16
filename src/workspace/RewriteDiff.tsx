@@ -110,13 +110,26 @@ function Words({ parts, kind }: { parts: WordPart[]; kind: "add" | "del" }) {
 /** What the foot of a diff that scrolls in a box of its own says while more of it is below. */
 export const SCROLL_FOR_DIFF = "Scroll for the whole diff";
 
-/** One line for a screen reader before the rows: how much changed, so the diff need not be read to be sized. */
+/** Whether a row says nothing to a reader: a line with no text in it. A screen reader skips it; the eye still sees the gap. */
+const blank = (r: DiffRow) => r.kind !== "gap" && r.text.trim() === "";
+
+/** One line for a screen reader before the rows: how much changed (blank lines left out), so the diff need not be read to be sized. */
 export function diffSummary(rows: readonly DiffRow[], what: string): string {
-  const n = (kind: string) => rows.filter((r) => r.kind === kind).length;
+  const n = (kind: string) => rows.filter((r) => r.kind === kind && !blank(r)).length;
   const [added, removed] = [n("add"), n("del")];
   const part = (count: number, verb: string) => `${count} ${count === 1 ? "line" : "lines"} ${verb}`;
   const said = [added && part(added, "added"), removed && part(removed, "removed")].filter(Boolean).join(", ");
   return `${what[0].toUpperCase()}${what.slice(1)} changes: ${said || "no lines changed"}.`;
+}
+
+/** Whether the row at `i` is the first of a block of one kind: "Added:" is said once for the block, not before each line. Blank lines do not break a block. */
+export function startsBlock(rows: readonly DiffRow[], i: number): boolean {
+  if (blank(rows[i])) return false;
+  for (let k = i - 1; k >= 0; k--) {
+    if (blank(rows[k])) continue;
+    return rows[k].kind !== rows[i].kind;
+  }
+  return true;
 }
 
 function Rows({ rows, what }: { rows: DiffRow[]; what: string }) {
@@ -147,7 +160,7 @@ function Rows({ rows, what }: { rows: DiffRow[]; what: string }) {
               {r.count} unchanged lines
             </div>
           ) : (
-            <Line key={i} row={r} pair={pairs.has(i) ? (rows[pairs.get(i)!] as { text: string }).text : null} />
+            <Line key={i} row={r} pair={pairs.has(i) ? (rows[pairs.get(i)!] as { text: string }).text : null} said={startsBlock(rows, i)} />
           ),
         )}
       </div>
@@ -160,16 +173,16 @@ function Rows({ rows, what }: { rows: DiffRow[]; what: string }) {
   );
 }
 
-/** One line of a diff; a removed or added line paired with its other version marks the words that changed, or says only spacing did. */
-function Line({ row: r, pair }: { row: Exclude<DiffRow, { kind: "gap" }>; pair: string | null }) {
+/** One line of a diff, with its kind said for a screen reader only when it starts a block (`said`); a removed or added line paired with its other version marks the words that changed, or says only spacing did. */
+function Line({ row: r, pair, said }: { row: Exclude<DiffRow, { kind: "gap" }>; pair: string | null; said: boolean }) {
   const words = useMemo(() => (r.kind !== "same" && pair !== null ? diffWords(r.kind === "del" ? r.text : pair, r.kind === "del" ? pair : r.text) : null), [r.kind, r.text, pair]);
   return (
-    <div data-line={r.kind} className={`flex gap-2 px-2 py-px ${TONE[r.kind]}`}>
+    <div data-line={r.kind} aria-hidden={r.text.trim() === "" ? true : undefined} className={`flex gap-2 px-2 py-px ${TONE[r.kind]}`}>
       <span aria-hidden className="w-3 shrink-0 select-none text-center">
         {MARK[r.kind]}
       </span>
       <span className="min-w-0 whitespace-pre-wrap [overflow-wrap:anywhere]">
-        <span className="sr-only">{SAID[r.kind]}</span>
+        {said && <span className="sr-only">{SAID[r.kind]}</span>}
         {words && r.kind !== "same" && !words.spacingOnly ? <Words parts={r.kind === "del" ? words.from : words.to} kind={r.kind} /> : r.text || " "}
         {words?.spacingOnly && r.kind === "add" && (
           <span data-spacing-only className="ml-2 font-sans text-xs text-ws-ink3">

@@ -749,4 +749,14 @@ describe("the chip on a row (G6)", () => {
     expect(list[0]).toMatchObject({ kind: "review", group: "approve" });
     expect(chipLabel(list[0])).toBe("Post");
   });
+
+  it("is the verb of the need's main button in Approve, so the tag and the button agree (G34)", () => {
+    expect(chipLabel({ group: "approve", kind: "runStart" })).toBe("Review");
+    const start = needs(input({ proposals: [draft("d-start", startRun("CA-401", "investigate", "ws-1"), 5)] })).find((n) => n.kind === "runStart")!;
+    expect(start.primary.label).toBe("Review and start");
+    expect(chipLabel(start)).toBe("Review");
+    expect(chipLabel({ group: "approve", kind: "draft", primary: { label: "Send answer" } })).toBe("Send");
+    expect(chipLabel({ group: "approve", kind: "draft", primary: { label: "Approve" } })).toBe("Approve");
+    expect(chipLabel({ group: "unblock", kind: "question", primary: { label: "Send answer" } })).toBe("Unblock");
+  });
 });

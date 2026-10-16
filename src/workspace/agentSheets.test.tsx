@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MockBackend } from "../backend/mock";
 import { itemRef } from "../backend/mockConnector";
 import { renderPrompt } from "../backend/mockRuns";
-import type { AgentSettings, CodeChange, ItemRef, Preflight, Run, RunEvent, RunReview, RunSpec, RunState, WorkstreamView } from "../types";
+import type { AgentSettings, CodeChange, ItemRef, Preflight, ReadOnly, Run, RunEvent, RunReview, RunSpec, RunState, WorkstreamView } from "../types";
 import { AgentMenuView, TicketAgentRows, TicketAgentsView } from "./AgentMenu";
 import { AgentsIntro } from "./AgentsEmpty";
 import { AgentsSettingsView, type CleanupOffer } from "./AgentsSettings";
@@ -511,6 +511,34 @@ describe("the setup sheet", () => {
     expect(setup({ review: reviewOf() })).not.toContain("Focus · written by Pip");
   });
 
+  it("leads with what the agent can do, and keeps the technical checks and the command behind a closed Technical details (G22)", () => {
+    const green: Preflight = { rows: [{ level: "green", text: "Agents run as you, in your permission mode: auto" }], blocking: false };
+    const html = setup({ preflight: green });
+    const details = html.indexOf("Technical details");
+    expect(details).toBeGreaterThan(-1);
+    // What it may do comes before the prompt and before the checks, and the details stay closed while every check is fine.
+    expect(html.indexOf("What agents can do")).toBeLessThan(html.indexOf("The prompt"));
+    expect(html.indexOf("What agents can do")).toBeLessThan(details);
+    expect(html).toMatch(/<details class="group"[^>]*><summary[^>]*>[^]*?Technical details/);
+    expect(/<details class="group" open=""[^>]*><summary[^>]*>(?:(?!<\/summary>)[^])*Technical details/.test(html)).toBe(false);
+    // The checks and the command are still in the page, inside it.
+    const inside = html.slice(details);
+    expect(inside).toContain('aria-label="Checks before you approve"');
+    expect(inside).toContain("Agents run as you, in your permission mode: auto");
+    expect(inside).toContain("Show the exact command");
+    const redRow: Preflight = { rows: [{ level: "red", text: "Not signed in to Claude." }], blocking: true };
+    // A row that blocks or warns opens it, so nothing to act on is hidden.
+    expect(setup({ preflight: redRow })).toMatch(/<details class="group" open=""[^>]*><summary[^>]*>(?:(?!<\/summary>)[^])*Technical details/);
+  });
+
+  it("puts the read-only line first in what agents can do (G22)", () => {
+    const readOnly: ReadOnly = { mode: "dontAsk", allow: ["Read"], deny: ["Edit"], guard: "g", settingSources: "", strictMcpConfig: true };
+    const html = setup({ review: { ...reviewOf(), readOnly } });
+    const box = html.slice(html.indexOf("What agents can do"));
+    expect(box.indexOf("data-read-only")).toBeGreaterThan(-1);
+    expect(box.indexOf("data-read-only")).toBeLessThan(box.indexOf("signed in as you"));
+  });
+
   it("turns Start off, with the red row as the reason, and leaves it on for amber rows", () => {
     expect(disabled(setup(), "Start agent")).toBe(false);
     const red: Preflight = { rows: [{ level: "red", text: "3 agents are running, the most Gossamr starts at once (3)." }], blocking: true };
@@ -876,7 +904,7 @@ describe("the safety sheet as the one-time intro", () => {
     expect(lines[1]).not.toMatch(/only when you allow it|until you approve/);
     // Nothing enforces it, as the detail below says: the line can't promise a lock.
     expect(lines[1]).toContain("both are requests, not locks");
-    expect(lines[2]).toBe("Gossamr itself posts nothing to Jira or GitHub until you approve it. A Build runs as you, so your Claude settings, not Gossamr, decide whether it can reach Jira or GitHub.");
+    expect(lines[2]).toBe("Gossamr posts to Jira or GitHub only what you approve. An agent run with your Claude settings, which a Build is, could reach Jira or GitHub on its own: your Claude settings, not Gossamr, decide that.");
     expect(html.indexOf("data-safety-summary")).toBeLessThan(html.indexOf("What a Build may touch"));
   });
 

@@ -37,7 +37,7 @@ export interface SentEntry {
   label?: string;
   /** One short line: what was posted. */
   summary: string;
-  /** A second line for a comment or a description edit, whose summary alone is thin: what follows the opener, or what was added. */
+  /** A second line for a comment or a description edit, whose summary alone is thin: what follows the opener, or what was added. "(+N more)" ends it when more lines of a comment follow. */
   second?: string;
   /** The whole of it, a line per paragraph or item, for the disclosure. */
   detail: string[];
@@ -64,11 +64,14 @@ const short = (text: string) => {
   return first.length > SHORT ? `${first.slice(0, SHORT - 1).trimEnd()}…` : first;
 };
 
-/** The line after the one `short` picks: a comment's opener is often the same ("Before work starts…"), what follows it is not. */
+/** The line after the one `short` picks: a comment's opener is often the same ("Before work starts…"), what follows it is not. A reply of more lines says how many are not shown: "(+N more)". */
 const after = (text: string) => {
   const all = text.trim().split("\n").map((l) => l.trim()).filter(Boolean);
-  const next = all[all.length > 1 && GREETING.test(all[0]) ? 2 : 1] ?? "";
-  return next.length > SHORT ? `${next.slice(0, SHORT - 1).trimEnd()}…` : next;
+  const at = all.length > 1 && GREETING.test(all[0]) ? 2 : 1;
+  const next = all[at] ?? "";
+  const cut = next.length > SHORT ? `${next.slice(0, SHORT - 1).trimEnd()}…` : next;
+  const more = all.length - at - 1;
+  return cut && more > 0 ? `${cut} (+${more} more)` : cut;
 };
 
 const lines = (text: string) => text.split("\n").map((l) => l.trimEnd()).filter((l, i, all) => l !== "" || (i > 0 && all[i - 1] !== ""));

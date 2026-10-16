@@ -136,6 +136,8 @@ describe("the second line of a row (G25)", () => {
 
   it("is the line after the opener for a comment, so two openers that read alike still differ", () => {
     expect(sentWhat(comment("CA-401", "Investigated the cache.\n\nThe key is built before the locale is known."), null)).toMatchObject({ summary: "Investigated the cache.", second: "The key is built before the locale is known." });
+    // More lines than the two shown are counted, so a numbered reply doesn't read as one item.
+    expect(sentWhat(comment("CA-401", "Before work starts:\n\n1. Goal?\n2. Scope?\n3. Owner?"), null)).toMatchObject({ summary: "Before work starts:", second: "1. Goal? (+2 more)" });
     // A greeting is skipped by the opener, so the second line is the one after it.
     expect(sentWhat(comment("CA-401", "Hi Mette,\n\nBefore work starts, a few things need clearing up:\n\n- What is the goal?"), null)).toMatchObject({ summary: "Before work starts, a few things need clearing up:", second: "- What is the goal?" });
   });

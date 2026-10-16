@@ -182,6 +182,8 @@ describe("the watching card", () => {
   it("shows the sync line, the mode switch, suggestion chips, the watched list and what can be added", () => {
     const out = card("selected");
     expect(out).toContain("Last synced 3m ago");
+    // The connection's row is the live region for the sync line; the card under it shows it quietly (G31).
+    expect(out).toMatch(/<div data-watch-sync="true" class="[^"]*">Last synced 3m ago<\/div>/);
     expect(out).toContain('aria-label="What to watch"');
     expect(out).toContain("Suggested from your last 90 days");
     expect(out).toContain('aria-label="Watch CA project"');

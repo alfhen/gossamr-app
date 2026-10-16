@@ -35,6 +35,13 @@ describe("the clarity notice", () => {
     expect(renderToStaticMarkup(<ClarityNotice view={view({ reporterReplied: true })} />)).toContain("CA-408: the reporter replied</span>");
   });
 
+  it("has one live region for what it says, whichever way the ticket is flagged (G31)", () => {
+    for (const html of [renderToStaticMarkup(<ClarityNotice view={view()} />), renderToStaticMarkup(<ClarityNotice view={view({ reporterReplied: true })} />)]) {
+      expect(html.match(/role="status"/g)).toHaveLength(1);
+      expect(html).not.toContain("aria-live");
+    }
+  });
+
   it("is not shown without a notice", () => {
     expect(renderToStaticMarkup(<ClarityNotice view={view({ clarity: null })} />)).toBe("");
   });

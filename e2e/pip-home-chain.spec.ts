@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { advanceRuns, askPip, expectPeekInPlace, expectToast, homeConversation, homeConversationRegion, homeSettled, mockRuns, needOfKind, openApp, openPipHome, peekSheet, peekTicket, pipHome, startWorkstream, stepChip, stepRail, workstreamRow } from "./support/app";
+import { advanceRuns, askPip, expectPeekInPlace, expectToast, homeConversation, homeConversationRegion, homeSettled, mockRuns, needOfKind, openApp, openPipHome, openTechnical, peekSheet, peekTicket, pipHome, startWorkstream, stepChip, stepRail, workstreamRow } from "./support/app";
 
 // A workstream in Manage mode, with pull requests shown only when a test says: the setting the phase's scenarios share.
 const MANAGED = "runs=empty&prSurface=manual&wsManage=1";
@@ -80,6 +80,7 @@ test("an investigation is reviewed and started in place on Pip home: the exact p
   // The prompt as the backend renders it, read-only, the checks, and the safety lines.
   await expect(review.locator("[data-inline-prompt]")).toContainText("The prompt, the focus note and the ticket text below are exactly what the agent receives.");
   await expect(review.locator("textarea")).toHaveCount(0);
+  await openTechnical(review);
   const rows = review.getByRole("group", { name: "Checks before you approve" }).locator("li[data-level]");
   expect(await rows.count()).toBeGreaterThan(0);
   await expect(rows.first()).toBeVisible();

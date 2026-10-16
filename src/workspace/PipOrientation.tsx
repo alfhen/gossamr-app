@@ -16,7 +16,13 @@ export const ORIENTATION_TERMS: readonly { term: string; text: string }[] = [
   { term: "Worktree", text: "The run's own checkout of your repository, so runs don't step on each other or on your files." },
 ];
 
-export const ORIENTATION_SAFETY = `Nothing is posted to Jira until you click to approve it. ${BUILD_ON_GITHUB}`;
+/** What the app is for, said first: the glossary behind its button only names the words. */
+export const ORIENTATION_PURPOSE = "Pip works through your Jira tickets with coding agents and drafts every Jira and GitHub write for you to read and approve; nothing posts until you do.";
+
+export const ORIENTATION_SAFETY = `Gossamr posts only what you approve; an agent run with your Claude settings could reach Jira or GitHub on its own. ${BUILD_ON_GITHUB}`;
+
+/** The glossary's button, named apart from the other More buttons on Pip home. */
+export const ORIENTATION_WORDS = "What the words mean";
 
 /** Where focus goes when the card closes from its button, so the keyboard stays on Pip home: the list's current row. */
 function focusList() {
@@ -31,8 +37,8 @@ export function dismissOrientation() {
 }
 
 /**
- * What Pip home's words mean, until the person says Got it: one line, with the words behind More (`open` starts it expanded).
- * It never takes focus by itself. `compact` keeps it to its one line, for while Plan my week needs the room; the person's More is
+ * What Pip home's words mean, until the person says Got it: one line, with the words behind What the words mean (`open` starts it expanded).
+ * It never takes focus by itself. `compact` keeps it to its one line, for while Plan my week needs the room; the person's choice to open the words is
  * remembered and comes back with the words.
  */
 export function PipOrientation({ onDismiss = dismissOrientation, open = false, compact = false }: { onDismiss?(): void; open?: boolean; compact?: boolean }) {
@@ -46,10 +52,10 @@ export function PipOrientation({ onDismiss = dismissOrientation, open = false, c
           <b id="pip-orientation" className="font-semibold text-ws-ink">
             New here?
           </b>{" "}
-          {ORIENTATION_SAFETY}
+          {ORIENTATION_PURPOSE} {ORIENTATION_SAFETY}
         </p>
         <button type="button" aria-expanded={more} aria-controls="pip-orientation-more" onClick={() => setMore(!more)} className={button}>
-          More
+          {ORIENTATION_WORDS}
         </button>
         <button type="button" onClick={onDismiss} className={button}>
           Got it

@@ -1068,7 +1068,7 @@ test.describe("B8: one label for approving drafts together, and its preview open
 
 test.describe("B9: the timeline's fix rounds, failure headings and order", () => {
   const minutesAgo = (m: number) => new Date(Date.now() - m * 60_000).toISOString();
-  const entryTexts = (page: Page) => page.locator("[data-timeline-entry]").evaluateAll((els) => els.map((e) => e.getAttribute("aria-label") ?? ""));
+  const entryTexts = (page: Page) => page.locator("[data-timeline-entry]").evaluateAll((els) => els.map((e) => (e.getAttribute("aria-label") ?? "").replace(/^[A-Z][A-Z0-9]*-\d+: /, "")));
 
   test("each fix round has a line of its own: the rules' say 'automatically', the person's does not", async ({ page }) => {
     await openApp(page, MANAGED);
@@ -1088,7 +1088,8 @@ test.describe("B9: the timeline's fix rounds, failure headings and order", () =>
     await openPipHome(page);
     const failed = homeConversationRegion(page).locator('[data-timeline-entry][data-kind="run"][data-phase="failed"]').first();
     await expect(failed).toBeVisible();
-    const heading = await failed.getAttribute("aria-label");
+    // The row's name starts with its ticket (G32); the heading is what follows it.
+    const heading = ((await failed.getAttribute("aria-label")) ?? "").replace(/^[A-Z][A-Z0-9]*-\d+: /, "");
     expect(heading).toMatch(/^Investigate( R\d+)? failed$/);
     const detail = failed.locator("[data-timeline-detail]");
     await expect(detail).toHaveCount(1);

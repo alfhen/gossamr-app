@@ -712,3 +712,14 @@ export async function still(locator: Locator) {
     )
     .toBe(true);
 }
+
+/** Opens the review's Technical details (its checks and the launch command) in `scope`, a sheet or an inline card, and returns it; one that opened itself over a check that needs the person stays as it is. */
+export async function openTechnical(scope: Locator) {
+  const details = scope.locator("[data-technical-details] > details");
+  if ((await details.getAttribute("open")) === null) await details.locator("> summary").click();
+  await expect(details).toHaveAttribute("open", "");
+  return details;
+}
+
+/** The `<details>` of `scope` whose own summary says `summary`: not one around it. */
+export const detailsOf = (scope: Locator, summary: string) => scope.locator(`xpath=.//details[summary[contains(., "${summary}")]]`);

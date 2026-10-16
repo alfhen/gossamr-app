@@ -291,7 +291,7 @@ test("a failed run waits in the list under General, opens its decision, and stay
   await expect(workstreamRow(page, "General")).toHaveAttribute("aria-selected", "true");
   await expect(needsPane(page)).toContainText("Trust this folder in Terminal");
   // Its link opens the run's sheet over Pip home.
-  await needsPane(page).getByRole("link", { name: "Open the run" }).click();
+  await needsPane(page).getByRole("button", { name: "Open the run" }).click();
   const sheet = page.getByRole("dialog").filter({ hasText: "SUP-9" });
   await expect(sheet.first()).toBeVisible();
   await expect(pipHome(page)).toBeVisible();

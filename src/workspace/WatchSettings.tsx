@@ -254,7 +254,8 @@ export function WatchCardView(p: WatchCardViewProps) {
             <span className="font-semibold">{p.title}</span> <span className="text-ws-ink3">{p.account}</span>
             {code && <span className="ml-2 rounded-full bg-ws-sel px-1.5 text-xs text-ws-ink2">GitHub</span>}
           </div>
-          <div role="status" className={`text-sm [overflow-wrap:anywhere] ${TONE[p.sync.tone]}`}>
+          {/* The connection's own row, above, is the live region for this line; saying it twice would announce each sync twice. */}
+          <div data-watch-sync className={`text-sm [overflow-wrap:anywhere] ${TONE[p.sync.tone]}`}>
             {p.sync.text}
           </div>
         </div>

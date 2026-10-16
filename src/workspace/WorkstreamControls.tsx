@@ -126,6 +126,11 @@ export function AutomaticStepsPanel({ rules, globals, onRule }: { rules: Workstr
   );
 }
 
+/** What Hold, Close… and ⋯ do, as the short hints on their buttons say (title for the pointer, aria-description for the screen reader). */
+export const HOLD_HINT = "No wakes and no automatic steps; its agents carry on";
+export const CLOSE_HINT = "Its conversation goes back to General; its agents and drafts are kept";
+export const MORE_HINT = "More: stop the workstream";
+
 /** What the Automatic steps button opens, for its tooltip: the routine next steps and who starts them. */
 export const AUTO_STEPS_HELP = "Which routine next steps (a review after a build, a plan after a triage) start by themselves in this workstream. Switch any of them off here.";
 
@@ -153,7 +158,7 @@ function MoreMenu({ onStop }: { onStop(): void }) {
   }, [open, root]);
   return (
     <div ref={root} className="relative">
-      <Btn tone="ghost" aria-label="More for this workstream" aria-haspopup="menu" aria-expanded={open} data-popover-trigger onClick={() => setOpen(!open)} className="px-1.5 py-0.5">
+      <Btn tone="ghost" aria-label="More for this workstream" title={MORE_HINT} aria-description={MORE_HINT} aria-haspopup="menu" aria-expanded={open} data-popover-trigger onClick={() => setOpen(!open)} className="px-1.5 py-0.5">
         ⋯
       </Btn>
       {open && (
@@ -305,7 +310,7 @@ export function ClarityNotice({ view }: { view: WorkstreamView }) {
         {view.reporterReplied ? clarityRepliedText(view.workstream.itemKey ?? "This ticket") : clarityText(view.workstream.itemKey ?? "This ticket", gaps)}
       </p>
       {view.reporterReply && (
-        <p data-clarity-reply className="m-0 text-sm text-ws-ink2 [overflow-wrap:anywhere]">
+        <p data-clarity-reply className="m-0 text-sm whitespace-pre-line text-ws-ink2 [overflow-wrap:anywhere]">
           {`They wrote: “${view.reporterReply.excerpt}”`}
         </p>
       )}
@@ -353,6 +358,12 @@ export interface ControlsViewProps {
   next?: NextStep | null;
 }
 
+/** What the Manage switch does when it is on and when it is off, for its visible text and its description. */
+export const MANAGE_STATE: Record<"on" | "off", string> = {
+  on: "on: Pip starts the next steps",
+  off: "off: Pip only answers",
+};
+
 /** What the mode switch means, one line under it: Manage starts and drafts by itself, Advise only answers. */
 export const MODE_LINE: Record<"manage" | "advise", string> = {
   manage: "Pip manages: it starts the next step by itself and drafts what's next; nothing reaches Jira without you.",
@@ -396,6 +407,7 @@ export function WorkstreamControlsView({ view, globals, actions, confirmingStop,
   const note = budgetNote(view.budget);
   const manage = ws.mode === "manage";
   const pausedId = useId();
+  const modeLineId = useId();
   const box = useRef<HTMLDivElement>(null);
   // A decision open in Pip home's pane is shown there, not here as well.
   const shown = useDecisionShown();
@@ -413,8 +425,11 @@ export function WorkstreamControlsView({ view, globals, actions, confirmingStop,
     <div ref={box} data-workstream-controls={ws.id} data-mode={ws.mode} data-held={ws.heldReason ?? undefined} className="grid gap-1.5">
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
         <label className="flex items-center gap-1.5" title="In Manage, Pip is woken when a run finishes and the routine next steps start on their own. Pip itself still starts nothing.">
-          <Switch checked={manage} aria-label="Manage this workstream" aria-describedby={ws.resumeMode === "manage" ? pausedId : undefined} onChange={actions.onManage} />
+          <Switch checked={manage} aria-label="Manage this workstream" aria-describedby={ws.resumeMode === "manage" ? `${pausedId} ${modeLineId}` : modeLineId} onChange={actions.onManage} />
           <span className="font-semibold text-ws-ink2">Manage</span>
+          <span data-manage-state={manage ? "on" : "off"} className="text-xs text-ws-ink3">
+            {manage ? MANAGE_STATE.on : MANAGE_STATE.off}
+          </span>
           {ws.resumeMode === "manage" && (
             <span id={pausedId} data-manage-paused className="text-xs text-ws-ink3">
               paused<span className="sr-only"> until Resume</span>
@@ -424,13 +439,13 @@ export function WorkstreamControlsView({ view, globals, actions, confirmingStop,
         <AutomaticSteps rules={ws.rules} globals={globals} actions={actions} />
         <span className="ml-auto flex items-center gap-1">
           {!ws.heldReason && (
-            <Btn tone="ghost" data-ws-hold onClick={() => settleHoldFocus(actions.onHold(), "hold")} title="No wakes and no automatic steps; its agents carry on" className="px-1.5 py-0.5">
+            <Btn tone="ghost" data-ws-hold onClick={() => settleHoldFocus(actions.onHold(), "hold")} title={HOLD_HINT} aria-description={HOLD_HINT} className="px-1.5 py-0.5">
               Hold
             </Btn>
           )}
           {/* Both, or nothing: a Close whose confirm could close nothing is not offered. */}
           {onConfirmClose && actions.onClose && (
-            <Btn tone="ghost" data-close-workstream onClick={() => onConfirmClose(true)} title="Its conversation goes back to General; its agents and drafts are kept" className="px-1.5 py-0.5">
+            <Btn tone="ghost" data-close-workstream onClick={() => onConfirmClose(true)} title={CLOSE_HINT} aria-description={CLOSE_HINT} className="px-1.5 py-0.5">
               Close…
             </Btn>
           )}
@@ -439,7 +454,7 @@ export function WorkstreamControlsView({ view, globals, actions, confirmingStop,
         {confirmingStop && <StopConfirm onStop={() => (closeConfirm(), actions.onStop())} onKeep={closeConfirm} />}
         {confirmingClose && onConfirmClose && actions.onClose && <CloseConfirm onClose={actions.onClose} onKeep={keepOpen} />}
       </div>
-      <p data-mode-line={ws.mode} className="m-0 text-xs text-ws-ink2">
+      <p id={modeLineId} data-mode-line={ws.mode} className="m-0 text-xs text-ws-ink2">
         {MODE_LINE[ws.mode]}
       </p>
       {!paneHas(shown, "hold", ws.id) && <HeldBanner view={view} actions={actions} />}

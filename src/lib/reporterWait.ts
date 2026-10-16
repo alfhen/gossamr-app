@@ -59,11 +59,22 @@ export function followWithReply(events: readonly FollowLine[], replies: readonly
 /** How many characters of a reply the quote keeps. As `REPLY_EXCERPT` in src-tauri/src/inbox/workstreams.rs. */
 export const REPLY_EXCERPT = 140;
 
-/** The first line of a comment's text with its spacing made even, cut to `REPLY_EXCERPT` characters with "…", which is also there when more lines follow. As `reply_excerpt` in src-tauri/src/inbox/workstreams.rs. */
+/** How many lines of a reply the quote keeps. As `REPLY_LINES` in src-tauri/src/inbox/workstreams.rs. */
+export const REPLY_LINES = 2;
+
+/**
+ * The first two lines of a comment's text with their spacing made even, each cut to `REPLY_EXCERPT` characters with "…", on
+ * two lines of their own, and " (+N more)" after them when N more lines follow, so a numbered reply doesn't read as one item.
+ * As `reply_excerpt` in src-tauri/src/inbox/workstreams.rs.
+ */
 export function replyExcerpt(text: string): string {
-  const [line = "", ...rest] = text.split(/\n/).map((l) => l.split(/\s+/).filter(Boolean).join(" ")).filter((l) => l);
-  const chars = Array.from(line);
-  return chars.length > REPLY_EXCERPT || rest.length > 0 ? `${chars.slice(0, REPLY_EXCERPT - 1).join("").trimEnd()}…` : line;
+  const lines = text.split(/\n/).map((l) => l.split(/\s+/).filter(Boolean).join(" ")).filter((l) => l);
+  const shown = lines.slice(0, REPLY_LINES).map((line) => {
+    const chars = Array.from(line);
+    return chars.length > REPLY_EXCERPT ? `${chars.slice(0, REPLY_EXCERPT - 1).join("").trimEnd()}…` : line;
+  });
+  const more = lines.length - shown.length;
+  return `${shown.join("\n")}${more > 0 ? ` (+${more} more)` : ""}`;
 }
 
 /**

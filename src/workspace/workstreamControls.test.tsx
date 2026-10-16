@@ -11,7 +11,7 @@ import type { Run } from "../types";
 import { HOLD_ALL_HINT, buildCommands, isHoldAllKey, rankCommands, type CommandActions } from "./commands";
 import { useToasts } from "./toasts";
 import { DecisionShownContext, decisionShown } from "./decisionShown";
-import { MODE_LINE, NextStepLine, nextStepOnceKnown } from "./WorkstreamControls";
+import { CLOSE_HINT, HOLD_HINT, MANAGE_STATE, MODE_LINE, MORE_HINT, NextStepLine, nextStepOnceKnown } from "./WorkstreamControls";
 import { AUTO_STEPS_HELP, AutomaticStepsPanel, CloseConfirm, StopConfirm, WorkstreamControlsView, choiceValue, controlActions, holdFocusTarget, ruleChoice, tabWithin, type ControlActions } from "./WorkstreamControls";
 import { holdAllVisible, useWorkstreams } from "./workstreamsStore";
 import { CONNECT_TO_POST, DRAFT_OPEN, EscalationCardView, EscalationSent, FIX_ROUND_HELP, NO_REVIEW_DRAFT, POST_AS_IS_HELP, TAKE_OVER_HELP, TAKEN_OVER, draftOpen, escalationActions, escalationShown, fixRoundSent, postingReview } from "./EscalationCard";
@@ -291,13 +291,36 @@ describe("the workstream's controls", () => {
     expect(render(viewOf())).not.toContain("data-step-help");
   });
 
+  it("says in words what Manage on and off do, beside the switch, and describes the switch with the mode line (G24)", () => {
+    const off = render(viewOf({ mode: "advise" }));
+    expect(off).toContain('data-manage-state="off"');
+    expect(off).toContain(MANAGE_STATE.off);
+    expect(MANAGE_STATE.off).toBe("off: Pip only answers");
+    const on = render(viewOf({ mode: "manage" }));
+    expect(on).toContain('data-manage-state="on"');
+    expect(on).toContain(MANAGE_STATE.on);
+    // The switch's description is the line that says what the mode means.
+    for (const html of [off, on]) {
+      const ids = /role="switch"[^>]*aria-describedby="([^"]+)"/.exec(html)![1].split(" ");
+      expect(html).toMatch(new RegExp(`<p id="${ids[ids.length - 1]}" data-mode-line=`));
+    }
+  });
+
+  it("gives Hold, Close… and the ⋯ menu a short hint, as a title and a description (G24)", () => {
+    const html = render(viewOf({}), false);
+    const withClose = renderToStaticMarkup(<WorkstreamControlsView view={viewOf({})} globals={AUTOSTART_DEFAULTS} actions={{ ...noop(), onClose: vi.fn() }} confirmingStop={false} onConfirmStop={vi.fn()} onConfirmClose={vi.fn()} />);
+    for (const hint of [HOLD_HINT, MORE_HINT]) expect(html).toContain(`title="${hint}" aria-description="${hint}"`);
+    expect(withClose).toContain(`title="${CLOSE_HINT}" aria-description="${CLOSE_HINT}"`);
+    expect(HOLD_HINT).toBe("No wakes and no automatic steps; its agents carry on");
+  });
+
   it("says for a tripwire that took Manage away that automatic steps are paused and Resume turns them back on, and marks Manage paused", () => {
     const paused = render(viewOf({ heldReason: `${TRIPWIRE}basis_drift`, drifted: ["description"], resumeMode: "manage", mode: "advise" }));
     expect(paused).toContain("Held: the ticket&#x27;s description changed in Jira. Automatic steps are paused. Resume turns them back on.");
     expect(paused).toContain("data-manage-paused");
     expect(paused).toMatch(/role="switch" aria-checked="false"/);
     // A screen reader hears that Manage is paused, not only that it is off.
-    const described = /aria-describedby="([^"]+)"/.exec(paused)![1];
+    const described = /aria-describedby="([^" ]+)/.exec(paused)![1];
     expect(paused).toMatch(new RegExp(`id="${described}" data-manage-paused[^>]*>paused<span class="sr-only"> until Resume</span>`));
     // Manage switched back on during the hold: Resume starts the automatic steps again, so the banner can't say it stays off.
     const switchedOn = render(viewOf({ heldReason: `${TRIPWIRE}basis_drift`, drifted: ["description"], resumeMode: null, mode: "manage" }));

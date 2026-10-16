@@ -45,9 +45,10 @@ function useNow() {
   return now;
 }
 
+/** The sync line, as the connection's row and the watch card under it show it: a live region only while syncing or failing, so "Last synced 3 minutes ago" ticking over is not read out, and only the connection's row speaks (`WatchSettings` shows the same line quietly). */
 function SyncStatus({ line }: { line: ReturnType<typeof syncLine> }) {
   return (
-    <p role="status" className={`m-0 text-sm [overflow-wrap:anywhere] ${line.tone === "error" ? "text-ws-blocked" : "text-ws-ink3"}`}>
+    <p role={line.tone === "ok" ? undefined : "status"} className={`m-0 text-sm [overflow-wrap:anywhere] ${line.tone === "error" ? "text-ws-blocked" : "text-ws-ink3"}`}>
       {line.text}
     </p>
   );

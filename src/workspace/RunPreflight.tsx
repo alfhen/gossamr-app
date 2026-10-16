@@ -1,6 +1,9 @@
-import type { Preflight, PreflightRow } from "../types";
+import type { ReactNode } from "react";
+import type { Preflight, PreflightRow, ReadOnly } from "../types";
 import { Icon, type IconName } from "./AgentIcons";
-import { Box, Btn } from "./AgentSheet";
+import { Box, Btn, Details } from "./AgentSheet";
+import { ReadOnlyLine } from "./RunPrompt";
+import { COPY, readOnlyNote, runAsYou } from "./runSheetLogic";
 
 const LOOK: Record<PreflightRow["level"], { icon: IconName; tone: string; word: string }> = {
   green: { icon: "check", tone: "text-ws-done", word: "Fine" },
@@ -53,5 +56,44 @@ export function RunPreflight({ preflight, checking, steps }: { preflight: Prefli
         })}
       </ul>
     </Box>
+  );
+}
+
+/** What the agent reads and does and whether it can change anything, for the top of the review: the read-only line leads, then the rest. */
+export function WhatAgentsCanDo({ readOnly }: { readOnly?: ReadOnly | null }) {
+  return (
+    <Box label="What agents can do">
+      {readOnly ? (
+        <>
+          <ReadOnlyLine readOnly={readOnly} />
+          <p className="m-0 text-ws-ink">{runAsYou(readOnly)}</p>
+          <p className="m-0 text-ws-ink2">{readOnlyNote(readOnly)}</p>
+        </>
+      ) : (
+        <>
+          <p className="m-0 text-ws-ink">{runAsYou(readOnly)}</p>
+          <p className="m-0 text-ws-ink2">{COPY.notALock}</p>
+        </>
+      )}
+    </Box>
+  );
+}
+
+/** Whether a check wants the person's eyes before Start: no result, or any row that isn't fine. */
+export const checksNeedAttention = (preflight: Preflight | null) => !preflight || preflight.rows.some((r) => r.level !== "green");
+
+/**
+ * The technical checks (permission mode, MCP servers, agent slots, worktree, what runs, the shell environment) and whatever else
+ * is for the technical reader (`children`: the launch command), behind a closed Technical details. It opens by itself when a
+ * check blocks or warns, so nothing the person must act on is hidden.
+ */
+export function TechnicalDetails({ preflight, checking, steps, children }: { preflight: Preflight | null; checking: boolean; steps?: PreflightSteps; children?: ReactNode }) {
+  return (
+    <div data-technical-details>
+      <Details summary="Technical details" open={checksNeedAttention(preflight) && !checking ? true : undefined}>
+        <RunPreflight preflight={preflight} checking={checking} steps={steps} />
+        {children}
+      </Details>
+    </div>
   );
 }

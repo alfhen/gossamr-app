@@ -56,8 +56,8 @@ test.describe("the reporter's questions and reply (G15, G24, G26, G29)", () => {
     await commentOnTicket(page, "CA-408", "It should send three emails.\nOne to the shopper, two to support.");
     const entry = timeline(page).locator("[data-timeline-line]", { hasText: "The reporter replied on the ticket" });
     // G15: the quote is in the timeline entry and the notice.
-    await expect(entry.locator("[data-timeline-detail]")).toHaveText("“It should send three emails.…”");
-    await expect(notice(pipHome(page)).locator("[data-clarity-reply]")).toHaveText("They wrote: “It should send three emails.…”");
+    await expect(entry.locator("[data-timeline-detail]")).toHaveText("“It should send three emails. One to the shopper, two to support.”");
+    await expect(notice(pipHome(page)).locator("[data-clarity-reply]")).toHaveText("They wrote: “It should send three emails. One to the shopper, two to support.”");
 
     // G26: F6 stops on the notice, so Looks fine is not a long Tab away.
     const onNotice = () => page.evaluate(() => !!document.activeElement?.closest("[data-clarity-notice]"));

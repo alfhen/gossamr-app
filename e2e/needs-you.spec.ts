@@ -128,7 +128,7 @@ test("deciding a permission from the pane: Deny, then focus is on the next need"
   await expect(pane).toContainText("wants to run `git push origin HEAD`.");
   await expect(pane).toContainText("If you wait:");
   await expect(pane).toContainText("The run stays paused; nothing else in DEVOPS-471 moves.");
-  await expect(pane.getByRole("link", { name: "Open the run" })).toBeVisible();
+  await expect(pane.getByRole("button", { name: "Open the run" })).toBeVisible();
   await expect(pane.locator("[data-permission-ask]")).toBeVisible();
   const first = (await pane.getAttribute("data-needs-pane"))!;
   // The decision has the keyboard as it opens.

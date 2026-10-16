@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { advanceRuns, askPip, openApp, paneSettled as settled, peekSheet, peekTicket, pipConversation, pipPane, startWorkstream, surfacePullRequests } from "./support/app";
+import { advanceRuns, askPip, detailsOf, openApp, openTechnical, paneSettled as settled, peekSheet, peekTicket, pipConversation, pipPane, startWorkstream, surfacePullRequests } from "./support/app";
 
 // Pip's refusals, as BUILD_NEEDS_PLAN and REVIEW_NEEDS_BUILD in src-tauri/src/agent/runs.rs.
 const BUILD_NEEDS_PLAN = "A build can only follow a finished plan run: pass from_run with the plan run's id from list_runs. Pip can't propose a build or review on its own.";
@@ -143,8 +143,9 @@ test("in one workstream Pip drafts investigate, triage with findings, plan, a bu
   await openNewestDraft(page);
   await expect(setup(page).locator("[data-pip-chain]")).toHaveText(id ?? "");
   // A Build launches as before: the exact command carries no read-only flag.
-  await setup(page).locator("summary", { hasText: "Show the exact command" }).click();
-  const command = setup(page).locator("details", { has: page.locator("summary", { hasText: "Show the exact command" }) });
+  await openTechnical(setup(page));
+  await detailsOf(setup(page), "Show the exact command").locator("> summary").click();
+  const command = detailsOf(setup(page), "Show the exact command");
   await expect(command).toContainText("claude --bg --name");
   await expect(command).not.toContainText("--permission-mode");
   await expect(command).not.toContainText("--setting-sources");

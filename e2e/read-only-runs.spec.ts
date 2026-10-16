@@ -21,6 +21,8 @@ import {
   workstreamEvents,
   workstreamRow,
   type MockLaunch,
+  detailsOf,
+  openTechnical,
 } from "./support/app";
 
 // Phase 6: Investigate, Triage, Plan, Review and Verify launch with a restriction Claude Code itself enforces
@@ -68,7 +70,9 @@ async function launch(page: Page, id: string): Promise<MockLaunch> {
 
 /** Opens a closed `<details>` by its summary inside `scope`. */
 async function openDetails(scope: Locator, summary: string) {
-  const details = scope.locator("details", { has: scope.page().locator("summary", { hasText: summary }) });
+  // The launch command sits inside the review's Technical details.
+  if (summary === "Show the exact command" && (await scope.locator("[data-technical-details]").count())) await openTechnical(scope);
+  const details = detailsOf(scope, summary);
   await details.locator("summary").click();
   await expect(details).toHaveAttribute("open", "");
   return details;

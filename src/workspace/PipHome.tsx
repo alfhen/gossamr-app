@@ -28,7 +28,7 @@ import { NeedsYouList } from "./NeedsYou";
 import { useNeedsYou } from "./useNeeds";
 import { nudgeOffered } from "../lib/reporterWait";
 import { useWorkspace } from "../workspaceStore";
-import { NeedsPane, firstDecision } from "./NeedsPane";
+import { NeedsPane, paneStop } from "./NeedsPane";
 import { StartMyDayCard } from "./StartMyDay";
 import { arm, confirmArmed, disarm, groupId, keyPlan, openNeed, setPaneIntent } from "./needsActions";
 import { undoLog } from "./undo";
@@ -559,7 +559,7 @@ function usePipHomeKeys(needsYou: readonly Need[]) {
       // A column with nothing to step through takes focus itself.
       if (!show(current)) show(document.querySelector<HTMLElement>(`[data-pip-home-column="${column}"] > *`));
     };
-    /** F6's stops: where the keyboard lands in a region, which is the first row of Needs you, the selected workstream, the newest entry of the timeline, the pane's decision, the rail as `enter` has it, or the composer. */
+    /** F6's stops: where the keyboard lands in a region, which is the first row of Needs you, the selected workstream, the newest entry of the timeline, the pane's heading, the rail as `enter` has it, or the composer. */
     const enterRegion = (region: PipHomeRegion) => {
       if (region === "rail" || region === "composer") return enter(regionColumn(region));
       if (region === "toast") return void focusToast();
@@ -587,7 +587,7 @@ function usePipHomeKeys(needsYou: readonly Need[]) {
         }
         case "pane": {
           const pane = home?.querySelector<HTMLElement>("[data-needs-pane]");
-          return void show(pane && (firstDecision(pane) ?? pane));
+          return void show(pane && paneStop(pane));
         }
       }
     };

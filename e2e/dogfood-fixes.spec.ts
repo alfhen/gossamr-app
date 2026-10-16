@@ -40,6 +40,7 @@ import {
   workstreamRow,
   PIP_INPUT,
   pipHome,
+  openTechnical,
 } from "./support/app";
 
 // New workstreams open in Manage, so the sample supervisor starts the routine next steps; pull requests show only when a test says.
@@ -175,7 +176,7 @@ test.describe("workstream stage and holds (D3, D10, D18)", () => {
     await expect(banner).toContainText("Held: the ticket's description changed in Jira. Automatic steps are paused. Resume turns them back on.");
     await expect(manage).toHaveAttribute("aria-checked", "false");
     await expect(stepRail(page).locator("[data-manage-paused]")).toHaveText("paused until Resume");
-    await expect(manage).toHaveAccessibleDescription("paused until Resume");
+    await expect(manage).toHaveAccessibleDescription(/^paused until Resume/);
     await expect(stepChip(page, "triage").locator("[data-step-auto]")).toHaveText("· waits for Resume");
     // Held, the queued triage doesn't launch.
     await advanceRuns(page, 1, triage.id);
@@ -251,7 +252,7 @@ test.describe("agent intro continues (D1, D25)", () => {
     await expect(summary.nth(1)).toHaveText(/^Build changes code in its own worktree and runs with your own Claude settings, which decide whether it can push.*requests, not locks/);
     // The detail further down says the same about pushing.
     await expect(sheet.locator('li[data-tone="ask"]', { hasText: "Pushing a branch" })).toContainText("your Claude settings decide");
-    await expect(summary.nth(2)).toHaveText("Gossamr itself posts nothing to Jira or GitHub until you approve it. A Build runs as you, so your Claude settings, not Gossamr, decide whether it can reach Jira or GitHub.");
+    await expect(summary.nth(2)).toHaveText("Gossamr posts to Jira or GitHub only what you approve. An agent run with your Claude settings, which a Build is, could reach Jira or GitHub on its own: your Claude settings, not Gossamr, decide that.");
     await sheet.getByRole("button", { name: "Got it, continue" }).click();
     await expect(sheet).toHaveCount(0);
     // No second click: the review is open in place.
@@ -354,7 +355,7 @@ test.describe("answering and retry (D11, D14, D15)", () => {
     // The decision's own link opens the run, with its sheet over Pip home.
     await expandNeedsYou(page);
     await needRow(page, /CA-409.*asks a question/).click();
-    await needsPane(page).getByRole("link", { name: "Open the run" }).click();
+    await needsPane(page).getByRole("button", { name: "Open the run" }).click();
     await expect(runSheet(page)).toBeVisible();
     await expect(runSheet(page).locator("[data-state]").first()).toHaveAttribute("data-state", "needsAnswer");
     const place = (await sheetHint(page).textContent())?.match(/(\d+) of (\d+)$/)?.slice(1);
@@ -402,7 +403,7 @@ test.describe("answering and retry (D11, D14, D15)", () => {
     // The sheet is where a failed run's command is shown to copy; the decision's link opens it.
     await expandNeedsYou(page);
     await needRow(page, /SUP-9.*needs its folder trusted/).click();
-    await needsPane(page).getByRole("link", { name: "Open the run" }).click();
+    await needsPane(page).getByRole("button", { name: "Open the run" }).click();
     const retry = runSheet(page).getByRole("button", { name: "Retry", exact: true });
     await expect(retry).toBeDisabled();
     // Select the command's text and copy it with the keyboard; the Copy button is never pressed.
@@ -440,6 +441,7 @@ test.describe("agent counts and tray (D4, D27)", () => {
     await page.getByRole("menuitem", { name: /^Investigate this ticket/ }).click();
     await safety(page).getByRole("button", { name: "Got it, continue" }).click();
     await setupSheet(page).getByRole("combobox", { name: "Repository" }).selectOption("acme/webshop");
+    await openTechnical(setupSheet(page));
     await expect(setupSheet(page).locator("[data-level]", { hasText: /\d+ of \d+ agent slots in use \(including ones waiting on you\)$/ })).toBeVisible();
   });
 

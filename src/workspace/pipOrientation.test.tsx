@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MockBackend } from "../backend/mock";
 import { useWorkspace } from "../workspaceStore";
 import { PipHome } from "./PipHome";
-import { ORIENTATION_SAFETY, ORIENTATION_TERMS, PipOrientation, dismissOrientation } from "./PipOrientation";
+import { ORIENTATION_PURPOSE, ORIENTATION_SAFETY, ORIENTATION_WORDS, ORIENTATION_TERMS, PipOrientation, dismissOrientation } from "./PipOrientation";
 import { loadPrefs, usePrefs } from "./prefs";
 import { loadTabs, useTabs } from "./tabsStore";
 import { useWorkstreams } from "./workstreamsStore";
@@ -37,14 +37,17 @@ describe("Pip home's orientation card", () => {
     expect(html).toContain("Work has happened but Jira has not heard for days. Post an update to clear it.");
     expect(html).toContain("Each workstream&#x27;s one word: Needs you, Held, Waiting on reporter, Running, Quiet, Done or Idle.");
     expect(html).toContain(ORIENTATION_SAFETY);
-    expect(ORIENTATION_SAFETY).toBe("Nothing is posted to Jira until you click to approve it. On GitHub, a build runs as you: when Pushing is ticked its prompt asks it to push only its own branch to a draft pull request. That is a request, not a lock; see Agent safety.");
+    expect(html).toContain(ORIENTATION_PURPOSE);
+    expect(ORIENTATION_PURPOSE).toBe("Pip works through your Jira tickets with coding agents and drafts every Jira and GitHub write for you to read and approve; nothing posts until you do.");
+    expect(ORIENTATION_SAFETY).toBe("Gossamr posts only what you approve; an agent run with your Claude settings could reach Jira or GitHub on its own. On GitHub, a build runs as you: when Pushing is ticked its prompt asks it to push only its own branch to a draft pull request. That is a request, not a lock; see Agent safety.");
     expect(html).toMatch(/<button type="button"[^>]*>Got it<\/button>/);
   });
 
   it("is one line with a More button, and keeps the words behind it until it is opened", () => {
     const html = renderToStaticMarkup(<PipOrientation />);
     expect(html).toContain(ORIENTATION_SAFETY);
-    expect(html).toMatch(/<button type="button"[^>]*aria-expanded="false"[^>]*>More<\/button>/);
+    expect(html).toMatch(/<button type="button"[^>]*aria-expanded="false"[^>]*>What the words mean<\/button>/);
+    expect(ORIENTATION_WORDS).toBe("What the words mean");
     expect(html).toMatch(/<button type="button"[^>]*>Got it<\/button>/);
     expect(html).not.toContain("<dl");
     expect(html).not.toContain("Worktree");
@@ -54,7 +57,7 @@ describe("Pip home's orientation card", () => {
     expect(renderToStaticMarkup(<PipOrientation open />)).toContain("Worktree");
     const compact = renderToStaticMarkup(<PipOrientation open compact />);
     expect(compact).not.toContain("<dl");
-    expect(compact).toMatch(/aria-expanded="false"[^>]*>More</);
+    expect(compact).toMatch(/aria-expanded="false"[^>]*>What the words mean</);
   });
 
   it("takes no focus on load: nothing in it asks for it", () => {
