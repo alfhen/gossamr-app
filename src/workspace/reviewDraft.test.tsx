@@ -411,7 +411,7 @@ describe("the pause before a review with risky edits is posted (G1)", () => {
   });
 
   it("says everyone on the pull request would see it, not the ticket", () => {
-    expect(riskNote(["broadcast"], { broadcast: ["@everyone"] }, "the pull request")).toBe("Your edit mentions everyone at “@everyone”. Everyone on the pull request would see it once it is posted.");
+    expect(riskNote(["broadcast"], { broadcast: ["@everyone"] }, "the pull request", "Your edit")).toBe("Your edit mentions everyone at “@everyone”. Everyone on the pull request would see it once it is posted.");
   });
 });
 

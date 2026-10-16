@@ -281,6 +281,19 @@ describe("cards", () => {
     expect(buttonsOf(html)).toEqual(["Yes, deny", "Keep waiting"]);
   });
 
+  it("names each Draft comment button by its ticket, or by the card's title without one (G9)", () => {
+    const withDraft = (r: Run) =>
+      renderToStaticMarkup(<AgentCard run={r} now={NOW} selected={false} position={1} total={1} ticketTitle={null} onOpen={vi.fn()} onAttach={vi.fn()} onDraftComment={vi.fn()} failure={{ opened: false, on: { act: vi.fn(), retry: vi.fn(), copied: vi.fn() } }} />);
+    const name = (html: string) => html.match(/aria-label="(Draft comment on [^"]*)"/)?.[1];
+    const base = run("done", { id: "a" });
+    const one = name(withDraft({ ...base, item: { ...base.item!, key: "CA-1" } }));
+    const two = name(withDraft({ ...base, id: "b", item: { ...base.item!, key: "CA-2" } }));
+    expect(one).toBe("Draft comment on CA-1");
+    expect(two).toBe("Draft comment on CA-2");
+    expect(buttonsOf(withDraft(base))).toContain("Draft comment");
+    expect(name(withDraft({ ...base, item: null }))).toMatch(/^Draft comment on \S/);
+  });
+
   it("offers Resume on a run stopped at its limit, only when the person can act on it, and says it stopped at its limit", () => {
     const limit = run("stopped", { stoppedByLimit: true, error: "Stopped by Gossamr: it passed the 60 minute limit" });
     const resume = vi.fn();

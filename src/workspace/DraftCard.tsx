@@ -541,7 +541,7 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
           ) : (
             <p className="m-0 whitespace-pre-wrap [overflow-wrap:anywhere]">{body}</p>
           ))}
-        {intent.type === "comment" && isReporterQuestions(p) && open && mentionNote(liveMentions(body, mentions)) && (
+        {intent.type === "comment" && (isReporterQuestions(p) || isReporterNudge(p)) && open && mentionNote(liveMentions(body, mentions)) && (
           <p data-mention-note className="m-0 text-sm text-ws-ink3">
             {mentionNote(liveMentions(body, mentions))}
           </p>
@@ -783,7 +783,7 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
             </button>
           </p>
         )}
-        {pause && open && <PostingPause risks={pause.risks} quote={pause.quote} anyway="Post anyway" working={working || state === "applying"} onKeep={keepEditing} onPost={approve} />}
+        {pause && open && <PostingPause risks={pause.risks} quote={pause.quote} subject={edited.current ? "Your edit" : intent.type === "comment" && isAnswersDraft(p) ? "Your reply" : "This draft"} anyway="Post anyway" working={working || state === "applying"} onKeep={keepEditing} onPost={approve} />}
         {(open || onShow) && (
           <div data-draft-actions className="sticky bottom-0 z-[1] -mx-3 -mb-2.5 flex flex-wrap items-center justify-end gap-2 border-t border-ws-sep bg-ws-win px-3 py-2">
             {onShow && (

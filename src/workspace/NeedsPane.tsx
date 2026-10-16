@@ -27,7 +27,7 @@ import { SignInBox } from "./RunSheet";
 import { resumable } from "./runSheetLogic";
 import { useRuns } from "./runsStore";
 import { BatchConfirm, PlanApproval, confirmBatch, planResultFor } from "./StepRail";
-import { batchLabel, freezeBatch, type BatchSnapshot } from "./pipHomeLogic";
+import { batchLabel, EDITED_ASIDE, editedPending, freezeBatch, type BatchSnapshot } from "./pipHomeLogic";
 import { useToasts } from "./toasts";
 import { useNow } from "./useNow";
 import { controlActions, HeldBanner } from "./WorkstreamControls";
@@ -180,10 +180,28 @@ export interface Advanced {
   back?: { workstreamId: string; label: string };
   /** The key of the need that was done: when Undo brings it back the line is stale. */
   doneKey?: string;
+  /** The key of the need the pane moved on to: opening another one makes the line stale. */
+  nextKey?: string;
+  /** Whether the line says the workstream now waits on the reporter: their reply makes that stale. */
+  waits?: boolean;
 }
 
 /** The line for a new advance after `previous`, whose id is never the same. */
-export const nextAdvanced = (previous: Advanced | null, text: string, back?: Advanced["back"], doneKey?: string): Advanced => ({ id: (previous?.id ?? 0) + 1, text, ...(back ? { back } : {}), ...(doneKey ? { doneKey } : {}) });
+export const nextAdvanced = (previous: Advanced | null, text: string, back?: Advanced["back"], doneKey?: string, nextKey?: string, waits?: boolean): Advanced => ({
+  id: (previous?.id ?? 0) + 1,
+  text,
+  ...(back ? { back } : {}),
+  ...(doneKey ? { doneKey } : {}),
+  ...(nextKey ? { nextKey } : {}),
+  ...(waits ? { waits } : {}),
+});
+
+/** Whether the line is stale: the person opened another need than the one it says is open now, or it says the reporter is awaited and they have since replied. */
+export const advancedStale = (advanced: Advanced | null, deciding: string | null, list: readonly Pick<WorkstreamView, "workstream" | "reporterReplied">[]): boolean => {
+  if (!advanced) return false;
+  if (advanced.nextKey && deciding !== advanced.nextKey) return true;
+  return !!advanced.waits && !!advanced.back && reporterAnswered(list, advanced.back.workstreamId);
+};
 
 /** Whether the line is stale because the need it says was done is back in `needs` (Undo brought it back). */
 export const advancedUndone = (advanced: Advanced | null, needs: readonly Pick<Need, "key">[]): boolean => !!advanced?.doneKey && needs.some((n) => n.key === advanced.doneKey);
@@ -741,7 +759,10 @@ function BatchDecision({ gid, needs }: { gid: string; needs: readonly Need[] }) 
   // The drafts and what the preview covers are those of the moment it opened.
   const [ids] = useState(() => (group?.safeBatch ?? []).flatMap((n) => (n.target.type === "draft" ? [n.target.id] : [])));
   const drafts = ids.flatMap((id) => (proposals[id] ? [proposals[id]] : []));
-  const [frozen, setFrozen] = useState<BatchSnapshot | null>(() => (drafts.length >= 2 ? freezeBatch(drafts) : null));
+  const [frozen, setFrozen] = useState<BatchSnapshot | null>(() => {
+    const snap = freezeBatch(drafts);
+    return snap.length >= 2 ? snap : null;
+  });
   const [busy, setBusy] = useState(false);
   const [outcome, setOutcome] = useState<{ text: string; failed: boolean } | null>(null);
   // Comments with the text of an earlier one in the group are not in the batch; the confirm says so.
@@ -827,6 +848,11 @@ function BatchDecision({ gid, needs }: { gid: string; needs: readonly Need[] }) 
                 {REPEATED_COMMENT_NOTE}: {leftOut.map((p) => leftOutLabel(p, draftTitle(p))).join(", ")}.
               </p>
             )}
+            {editedPending(drafts).length > 0 && (
+              <p data-batch-left-out="edited" className="m-0 text-sm text-ws-ink2 [overflow-wrap:anywhere]">
+                {EDITED_ASIDE}
+              </p>
+            )}
             <BatchConfirm count={frozen.length} onConfirm={() => void confirm(frozen)} onCancel={close} />
           </>
         )}
@@ -853,7 +879,7 @@ export function NeedsPane({ needs }: { needs: readonly Need[] }) {
   const [advanced, setAdvanced] = useState<Advanced | null>(null);
   const lastId = useRef(0);
   useAdvance(needs, (done, next) =>
-    setAdvanced((prev) => nextAdvanced(prev ?? { id: lastId.current, text: "" }, advancedText(done, next, waitStarted(done, useWorkspace.getState().proposals), postedToJira(done, useWorkspace.getState().proposals)), done.workstreamId ? { workstreamId: done.workstreamId, label: doneText(done, postedToJira(done, useWorkspace.getState().proposals)) } : undefined, done.key)),
+    setAdvanced((prev) => nextAdvanced(prev ?? { id: lastId.current, text: "" }, advancedText(done, next, waitStarted(done, useWorkspace.getState().proposals), postedToJira(done, useWorkspace.getState().proposals)), done.workstreamId ? { workstreamId: done.workstreamId, label: doneText(done, postedToJira(done, useWorkspace.getState().proposals)) } : undefined, done.key, next.key, !!waitStarted(done, useWorkspace.getState().proposals))),
     (done) => {
       const proposals = useWorkspace.getState().proposals;
       const text = lastNeedText(done, proposals);
@@ -862,9 +888,10 @@ export function NeedsPane({ needs }: { needs: readonly Need[] }) {
       else useToasts.getState().push(text, "info");
     },
   );
+  const list = useWorkstreams((s) => s.list);
   useEffect(() => {
-    if (advancedUndone(advanced, needs)) setAdvanced(null);
-  }, [advanced, needs]);
+    if (advancedUndone(advanced, needs) || advancedStale(advanced, deciding, list)) setAdvanced(null);
+  }, [advanced, needs, deciding, list]);
   useEffect(() => {
     if (!advanced) return;
     lastId.current = advanced.id;

@@ -4,8 +4,9 @@ import { relativeTime } from "../lib/views";
 import { isAnswersDraft } from "../lib/proposals";
 import { useWorkspace } from "../workspaceStore";
 import { useEditedDraft } from "./DraftCard";
+import { useDraftsRev } from "./draftLive";
 import { groupId, openNeed } from "./needsActions";
-import { BATCH_ASIDE, BATCH_TITLE, batchLabel } from "./pipHomeLogic";
+import { BATCH_ASIDE, BATCH_TITLE, EDITED_ASIDE, batchLabel, draftEdited } from "./pipHomeLogic";
 import { usePipHome } from "./pipHomeStore";
 
 const CHIP: Record<NeedGroupKind, string> = {
@@ -62,10 +63,15 @@ function Asking({ need }: { need: Need }) {
 function SafeBatch({ needs, gid, aside }: { needs: readonly Need[]; gid: string; aside: number }) {
   const proposals = useWorkspace((s) => s.proposals);
   const open = usePipHome((s) => s.batch === gid);
-  const count = needs.filter((n) => n.target.type === "draft" && proposals[n.target.id]).length;
+  useDraftsRev();
+  const drafts = needs.filter((n) => n.target.type === "draft" && proposals[n.target.id]);
+  // A draft the person edited is posted from its card, so it is not counted in the batch.
+  const edited = drafts.filter((n) => n.target.type === "draft" && draftEdited(n.target.id)).length;
+  const count = drafts.length - edited;
   // The drafts from the person's own reply are never in the batch; with the button gone for want of a second draft, the note says why.
   const note = aside > 0 && count + aside >= 2;
-  if (count < 2 && !note) return null;
+  const editedNote = edited > 0 && count + edited >= 2;
+  if (count < 2 && !note && !editedNote) return null;
   return (
     <li data-needs-you-batch className="grid gap-1.5 px-2 py-1">
       {count >= 2 && (
@@ -84,6 +90,11 @@ function SafeBatch({ needs, gid, aside }: { needs: readonly Need[]; gid: string;
       {note && (
         <p data-batch-aside className="m-0 text-xs text-ws-ink3">
           {BATCH_ASIDE}
+        </p>
+      )}
+      {editedNote && (
+        <p data-batch-aside="edited" className="m-0 text-xs text-ws-ink3">
+          {EDITED_ASIDE}
         </p>
       )}
     </li>

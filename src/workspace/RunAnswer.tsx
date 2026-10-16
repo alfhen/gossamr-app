@@ -69,7 +69,7 @@ export function RunAnswer({ run, answering, on }: { run: Run; answering: boolean
       <p className="m-0 text-xs text-ws-ink3">
         {limit
           ? "Gossamr wakes the agent with the words above, which takes a few seconds. After a resume the limits no longer stop this run."
-          : "Gossamr stops the agent and wakes it with your answer, which takes a few seconds. Its conversation is kept."}
+          : "Gossamr stops the agent and wakes it with your answer, which takes a few seconds. Its conversation is kept. Only the agent sees your answer; nothing goes to Jira."}
       </p>
     </Box>
   );

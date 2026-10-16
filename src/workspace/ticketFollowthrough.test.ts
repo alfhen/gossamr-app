@@ -285,7 +285,7 @@ describe("I'll answer, then the person's answers", () => {
     expect(drafts.some((p) => p.intent.type === "rewrite")).toBe(false);
     // The plan is not drafted beside a comment nobody posted: Pip says it will once the answers are posted.
     expect(drafts.some(planDraft)).toBe(false);
-    expect(mockPipTurns.turns(`ws:${id}`).find((t) => t.requestId === "a1")?.text).toContain("Once you post the answers, I'll draft the plan.");
+    expect(mockPipTurns.turns(`ws:${id}`).find((t) => t.requestId === "a1")?.text).toContain("Once the answers are posted, Plan this starts the plan.");
     expect(triage.id).toBeTruthy();
     // It needs approval like any Jira write, and is never in the safe batch.
     expect(backend.proposals.writes).toEqual([]);

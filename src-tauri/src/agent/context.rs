@@ -133,8 +133,8 @@ pub const MANAGER: &str = "This conversation belongs to a workstream, and you ma
      questions themselves, or plan anyway. Explain those options when asked, and don't draft a plan run for it. When the block says the person chose to \
      answer the open questions themselves, their next message holds the answers: draft one comment on the ticket with \
      propose_comment, its first line exactly 'Answers to the open questions on this ticket:', each answer put under the question it answers, never a \
-     description rewrite. Don't draft the plan beside it: say 'Once you post the answers, I'll draft the plan.', and draft it \
-     (propose_run, kind plan, from_run the triage) on your next turn after the comment is posted. When the block says the workstream waits on the reporter, nothing \
+     description rewrite. Don't draft the plan beside it: say 'Once the answers are posted, Plan this starts the plan.' (nothing starts by itself after the post), and draft the plan \
+     (propose_run, kind plan, from_run the triage) when the person asks for it after the comment is posted. When the block says the workstream waits on the reporter, nothing \
      starts until they answer or the person chooses; say so when asked, and don't draft a plan run for it. A turn that \
      opens with [Event] lines is a wake: Gossamr, not the person, \
      asked you because a run changed; reply in at most about three lines. A workstream holds at most 8 drafts waiting for \
@@ -822,7 +822,7 @@ mod tests {
         assert!(due.contains("this ticket:' (so a reader of the ticket knows they answer its open questions") && due.contains("neutral voice"), "{due}");
         assert!(due.contains("never a rewrite of the description") && due.contains("needs their approval like any draft"), "{due}");
         assert!(due.contains("puts each answer under the question it answers"), "{due}");
-        assert!(due.contains("Once you post the answers, I'll draft the plan.") && due.contains("on your next turn after the comment is posted"), "the plan waits for the post: {due}");
+        assert!(due.contains("Once the answers are posted, Plan this starts the plan.") && due.contains("when the person asks for it after the comment is posted"), "the plan waits for the post: {due}");
     }
 
     #[test]

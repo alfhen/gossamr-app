@@ -31,8 +31,8 @@ describe("the pause before posting edited text", () => {
   });
 
   it("says what it found in the person's words, one sentence for each risk", () => {
-    expect(riskNote(["broadcast"])).toBe("Your edit mentions everyone (@everyone, @here or @all), not a person. Everyone on the ticket would see it once it is posted.");
-    expect(riskNote(["broadcast", "secret"])).toBe("Your edit mentions everyone (@everyone, @here or @all), not a person. It also looks like a password, key or token. Everyone on the ticket would see it once it is posted.");
+    expect(riskNote(["broadcast"])).toBe("This draft mentions everyone (@everyone, @here or @all), not a person. Everyone on the ticket would see it once it is posted.");
+    expect(riskNote(["broadcast", "secret"])).toBe("This draft mentions everyone (@everyone, @here or @all), not a person. It also looks like a password, key or token. Everyone on the ticket would see it once it is posted.");
     expect(riskNote(["broadcast", "secret"])).not.toMatch(/keep editing|and looks like/i);
   });
 
@@ -59,12 +59,12 @@ describe("the pause before posting edited text", () => {
     const edited = "Password: hunter2\nand token=ghp_abcdefghijklmnopqrstuvwxyz0123\ncc @here @everyone @HERE";
     expect(newRiskQuote("x", edited)).toEqual({ secret: ["hu…", "gh…"], broadcast: ["@here", "@everyone"] });
     const note = riskNote(["broadcast", "secret"], newRiskQuote("x", edited));
-    expect(note).toBe("Your edit mentions everyone at “@here” and “@everyone”. It also looks like a password, key or token at “hu…” and “gh…”. Everyone on the ticket would see it once it is posted.");
+    expect(note).toBe("This draft mentions everyone at “@here” and “@everyone”. It also looks like a password, key or token at “hu…” and “gh…”. Everyone on the ticket would see it once it is posted.");
     for (const rest of ["nter2", "abcdefghij"]) expect(note).not.toContain(rest);
     // A secret that was already in the draft is not quoted again; a long list says how many more.
     expect(newRiskQuote("Password: hunter2", edited).secret).toEqual(["gh…"]);
     const many = riskNote(["secret"], { secret: ["aa…", "bb…", "cc…", "dd…", "ee…"] });
-    expect(many).toBe("Your edit looks like a password, key or token at “aa…”, “bb…”, “cc…” and 2 more. Everyone on the ticket would see it once it is posted.");
+    expect(many).toBe("This draft looks like a password, key or token at “aa…”, “bb…”, “cc…” and 2 more. Everyone on the ticket would see it once it is posted.");
   });
 
   it("stops a URL's userinfo at the authority boundary, so a query or path with a colon and an @ is not a credential", () => {
@@ -84,9 +84,9 @@ describe("the pause before posting edited text", () => {
   });
 
   it("puts the quote in the note", () => {
-    expect(riskNote(["broadcast"], { broadcast: ["@everyone"] })).toBe("Your edit mentions everyone at “@everyone”. Everyone on the ticket would see it once it is posted.");
-    expect(riskNote(["secret"], { secret: ["hu…"] })).toBe("Your edit looks like a password, key or token at “hu…”. Everyone on the ticket would see it once it is posted.");
-    expect(riskNote(["broadcast", "secret"], { broadcast: ["@here"], secret: ["hu…"] })).toBe("Your edit mentions everyone at “@here”. It also looks like a password, key or token at “hu…”. Everyone on the ticket would see it once it is posted.");
+    expect(riskNote(["broadcast"], { broadcast: ["@everyone"] })).toBe("This draft mentions everyone at “@everyone”. Everyone on the ticket would see it once it is posted.");
+    expect(riskNote(["secret"], { secret: ["hu…"] })).toBe("This draft looks like a password, key or token at “hu…”. Everyone on the ticket would see it once it is posted.");
+    expect(riskNote(["broadcast", "secret"], { broadcast: ["@here"], secret: ["hu…"] })).toBe("This draft mentions everyone at “@here”. It also looks like a password, key or token at “hu…”. Everyone on the ticket would see it once it is posted.");
     expect(riskNote(["secret"])).not.toContain("“");
   });
 
@@ -112,5 +112,13 @@ describe("the pause before posting edited text", () => {
     expect(newRiskQuote("x", `${header}\n${body}\n-----END PRIVATE KEY-----`)).toEqual({ secret: ["--…"] });
     expect(newRiskQuote("x", `${header}\n${body}`)).toEqual({ secret: ["--…"] });
     expect(risksIn(`${header}\n${body}`)).toEqual(["secret"]);
+  });
+});
+
+describe("who the pause speaks of (G5)", () => {
+  it("names the subject: This draft by default, Your edit for typed text, Your reply for a chat reply", () => {
+    expect(riskNote(["secret"])).toMatch(/^This draft looks like a password/);
+    expect(riskNote(["secret"], {}, "the ticket", "Your edit")).toMatch(/^Your edit looks like a password/);
+    expect(riskNote(["broadcast", "secret"], {}, "the ticket", "Your reply")).toMatch(/^Your reply mentions everyone .* It also looks like/);
   });
 });

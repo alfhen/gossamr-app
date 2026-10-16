@@ -266,7 +266,7 @@ export function answersScript(prompt: string, runs: readonly Run[], workstream: 
     .sort((a, b) => (b.endedAt ?? b.queuedAt).localeCompare(a.endedAt ?? a.queuedAt))[0];
   return {
     steps: ["Read the open questions", "Drafted a comment with your answers"],
-    text: `I drafted a comment on **${item.key}** with your answers, ${split ? "each under its question" : "the questions first, then your answers as you wrote them"}. It goes to the ticket as a comment, not a change to the description, and nothing is posted until you approve it.${triage ? " Once you post the answers, I'll draft the plan." : ""}`,
+    text: `I drafted a comment on **${item.key}** with your answers, ${split ? "each under its question" : "the questions first, then your answers as you wrote them"}. It goes to the ticket as a comment, not a change to the description, and nothing is posted until you approve it.${triage ? " Once the answers are posted, Plan this starts the plan." : ""}`,
     filter: null,
     draft: { intent: { type: "comment", item, body: docFromText(body.join("\n").trim()) }, label: ANSWERS_COMMENT_LABEL },
   };

@@ -94,11 +94,14 @@ interface PipHomeState {
 
 const BLANK = { selected: null, landed: false, showClosed: false, column: "conversation", focusTarget: null, deciding: null, paneRev: 0, expanded: new Set<string>(), collapsed: new Set<string>(), asking: null, batch: null, timelineFilter: "all", timelineScope: "workstream", statusFilter: null, planOpen: false } as const;
 
+/** An open decision, batch preview or question belongs to the workstream it was opened for: moving to another one drops them. */
+const ELSEWHERE = { deciding: null, batch: null, asking: null } as const;
+
 export const usePipHome = create<PipHomeState>((set) => ({
   ...BLANK,
   land: () => set((s) => (s.landed ? s : { landed: true })),
-  openWorkstream: (selected) => set((s) => (s.selected === selected && s.landed ? s : { selected, landed: true, focusTarget: null })),
-  openGeneral: () => set((s) => (s.selected === null && s.landed ? s : { selected: null, landed: true, focusTarget: null })),
+  openWorkstream: (selected) => set((s) => (s.selected === selected ? (s.landed ? s : { landed: true, focusTarget: null }) : { selected, landed: true, focusTarget: null, ...ELSEWHERE })),
+  openGeneral: () => set((s) => (s.selected === null ? (s.landed ? s : { landed: true, focusTarget: null }) : { selected: null, landed: true, focusTarget: null, ...ELSEWHERE })),
   setShowClosed: (showClosed) => set({ showClosed }),
   setColumn: (column) => set({ column }),
   focus: (focusTarget) => set({ focusTarget }),

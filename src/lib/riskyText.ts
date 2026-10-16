@@ -129,11 +129,11 @@ function quoted(quotes: readonly string[]): string {
 }
 
 /** What the pause says, in the person's words: one sentence for each risk it found (with the text that tripped it, when `quotes` has it), then who would see it. The buttons carry the choice. */
-export function riskNote(risks: readonly Risk[], quotes: RiskQuotes = {}, where = "the ticket"): string {
+export function riskNote(risks: readonly Risk[], quotes: RiskQuotes = {}, where = "the ticket", subject = "This draft"): string {
   const sentence = (r: Risk, i: number) => {
     const at = quotes[r]?.length ? quoted(quotes[r]!) : null;
-    if (r === "broadcast") return `${i ? "It also mentions" : "Your edit mentions"} everyone ${at ? `at ${at}` : "(@everyone, @here or @all), not a person"}.`;
-    return `${i ? "It also looks" : "Your edit looks"} like a password, key or token${at ? ` at ${at}` : ""}.`;
+    if (r === "broadcast") return `${i ? "It also mentions" : `${subject} mentions`} everyone ${at ? `at ${at}` : "(@everyone, @here or @all), not a person"}.`;
+    return `${i ? "It also looks" : `${subject} looks`} like a password, key or token${at ? ` at ${at}` : ""}.`;
   };
   return `${risks.map(sentence).join(" ")} Everyone on ${where} would see it once it is posted.`;
 }
