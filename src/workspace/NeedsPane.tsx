@@ -115,7 +115,7 @@ export const doneText = (done: Pick<Need, "title" | "ticketKey" | "workstreamTit
   const key = done.ticketKey;
   // The title names the ticket only when the key ends there: CA-40 is not the start of "CA-408: …".
   if (key && done.title.startsWith(key) && (done.title.length === key.length || /^[\s:·-]/.test(done.title.slice(key.length)))) {
-    const rest = done.title.slice(key.length).replace(/^\s*[:·-]\s*/, "");
+    const rest = done.title.slice(key.length).replace(/^\s+/, "").replace(/^[:·-]\s*/, "");
     if (rest.endsWith("?")) return `${posted ? "Posted to Jira" : "Done"}: decided "${rest}" on ${key}.`;
     return `${posted ? "Posted to Jira" : "Done"}: ${done.title}.`;
   }
