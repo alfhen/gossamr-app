@@ -1047,25 +1047,28 @@ impl Core {
         let connection_id = Connection::jira_id(scope);
         let at = Utc::now();
         self.with_db_for(scope, |db| {
-            let ws = open(db, &connection_id, id)?;
-            let key = ws.item_key.clone().ok_or_else(|| refuse("a workstream with no ticket has nothing to bring in"))?;
-            let runs: Vec<Run> = db.runs(&RunQuery { connection_id: Some(connection_id.clone()), ..Default::default() })?.into_iter().filter(|r| r.item.as_ref().is_some_and(|i| i.key == key)).collect();
-            let found = adoptable_of(&ws, &runs, &pending_drafts(db)?);
-            if found.is_empty() {
-                return Err(refuse(NOTHING_TO_ADOPT));
-            }
-            for run in runs.into_iter().filter(|r| found.runs.contains(&r.id)) {
-                db.save_run(&Run { spec: crate::domain::RunSpec { workstream: Some(ws.id.clone()), ..run.spec.clone() }, ..run })?;
-            }
-            for draft in &found.drafts {
-                if let Some(mut p) = db.proposal(draft)? {
-                    if p.set_workstream(Some(&ws.id)) {
-                        db.save_proposal(&p)?;
+            // The moves and their audit line land together or not at all.
+            db.atomically(|db| {
+                let ws = open(db, &connection_id, id)?;
+                let key = ws.item_key.clone().ok_or_else(|| refuse("a workstream with no ticket has nothing to bring in"))?;
+                let runs: Vec<Run> = db.runs(&RunQuery { connection_id: Some(connection_id.clone()), ..Default::default() })?.into_iter().filter(|r| r.item.as_ref().is_some_and(|i| i.key == key)).collect();
+                let found = adoptable_of(&ws, &runs, &pending_drafts(db)?);
+                if found.is_empty() {
+                    return Err(refuse(NOTHING_TO_ADOPT));
+                }
+                for run in runs.into_iter().filter(|r| found.runs.contains(&r.id)) {
+                    db.save_run(&Run { spec: crate::domain::RunSpec { workstream: Some(ws.id.clone()), ..run.spec.clone() }, ..run })?;
+                }
+                for draft in &found.drafts {
+                    if let Some(mut p) = db.proposal(draft)? {
+                        if p.set_workstream(Some(&ws.id)) {
+                            db.save_proposal(&p)?;
+                        }
                     }
                 }
-            }
-            db.append_workstream_event(&WorkstreamEvent::new(&ws.id, Actor::Person, "adopted", at).detail(found.words()))?;
-            Ok(found)
+                db.append_workstream_event(&WorkstreamEvent::new(&ws.id, Actor::Person, "adopted", at).detail(found.words()))?;
+                Ok(found)
+            })
         })
         .await
     }
@@ -1381,49 +1384,52 @@ impl Core {
     async fn undo_workstream_at(&self, scope: &Scope, id: &str, undo: &WorkstreamUndo, at: chrono::DateTime<Utc>) -> Result<Workstream> {
         let connection_id = Connection::jira_id(scope);
         self.with_db_for(scope, |db| {
-            let mut ws = open(db, &connection_id, id)?;
-            let events = db.workstream_events(&ws.id)?;
-            let last = events.last().filter(|e| e.actor == Actor::Person);
-            let fresh = |e: &WorkstreamEvent| at.signed_duration_since(e.at).num_seconds() <= UNDO_WINDOW_SECS;
-            let gone = || refuse("That change can't be undone any more: something else happened since, or it was a while ago.");
-            let (action, detail) = match undo {
-                WorkstreamUndo::Hold { was } => {
-                    last.filter(|e| e.action == "held" && fresh(e) && e.detail.is_some() && e.detail == ws.held_reason).ok_or_else(gone)?;
-                    if was.as_deref().is_some_and(|w| !valid_hold_reason(w)) || was == &ws.held_reason {
-                        return Err(refuse("That isn't a hold to go back to."));
-                    }
-                    ws.held_reason = was.clone();
-                    ("undone", "held")
-                }
-                WorkstreamUndo::Mode { was, resume_mode } => {
-                    last.filter(|e| e.action == "mode_set" && fresh(e) && e.detail.as_deref() == Some(ws.mode.as_str())).ok_or_else(gone)?;
-                    if *was == ws.mode {
-                        return Err(refuse("The workstream is in that mode already."));
-                    }
-                    ws.mode = *was;
-                    ws.resume_mode = *resume_mode;
-                    ("undone", "mode_set")
-                }
-                WorkstreamUndo::Adopt { runs, drafts } => {
-                    last.filter(|e| e.action == "adopted" && fresh(e)).ok_or_else(gone)?;
-                    for run in runs {
-                        if let Some(mut r) = db.run(run)?.filter(|r| r.spec.workstream.as_deref() == Some(ws.id.as_str())) {
-                            r.spec.workstream = None;
-                            db.save_run(&r)?;
+            // What it puts back and its `undone` line land together, so a failed write leaves the change and its Undo as they were.
+            db.atomically(|db| {
+                let mut ws = open(db, &connection_id, id)?;
+                let events = db.workstream_events(&ws.id)?;
+                let last = events.last().filter(|e| e.actor == Actor::Person);
+                let fresh = |e: &WorkstreamEvent| at.signed_duration_since(e.at).num_seconds() <= UNDO_WINDOW_SECS;
+                let gone = || refuse("That change can't be undone any more: something else happened since, or it was a while ago.");
+                let (action, detail) = match undo {
+                    WorkstreamUndo::Hold { was } => {
+                        last.filter(|e| e.action == "held" && fresh(e) && e.detail.is_some() && e.detail == ws.held_reason).ok_or_else(gone)?;
+                        if was.as_deref().is_some_and(|w| !valid_hold_reason(w)) || was == &ws.held_reason {
+                            return Err(refuse("That isn't a hold to go back to."));
                         }
+                        ws.held_reason = was.clone();
+                        ("undone", "held")
                     }
-                    for draft in drafts {
-                        if let Some(mut p) = db.proposal(draft)?.filter(|p| p.state == ProposalState::Pending && p.workstream() == Some(ws.id.as_str())) {
-                            p.set_workstream(None);
-                            db.save_proposal(&p)?;
+                    WorkstreamUndo::Mode { was, resume_mode } => {
+                        last.filter(|e| e.action == "mode_set" && fresh(e) && e.detail.as_deref() == Some(ws.mode.as_str())).ok_or_else(gone)?;
+                        if *was == ws.mode {
+                            return Err(refuse("The workstream is in that mode already."));
                         }
+                        ws.mode = *was;
+                        ws.resume_mode = *resume_mode;
+                        ("undone", "mode_set")
                     }
-                    ("undone", "adopted")
-                }
-            };
-            db.save_workstream(&ws)?;
-            db.append_workstream_event(&WorkstreamEvent::new(&ws.id, Actor::Person, action, at).detail(detail))?;
-            Ok(ws)
+                    WorkstreamUndo::Adopt { runs, drafts } => {
+                        last.filter(|e| e.action == "adopted" && fresh(e)).ok_or_else(gone)?;
+                        for run in runs {
+                            if let Some(mut r) = db.run(run)?.filter(|r| r.spec.workstream.as_deref() == Some(ws.id.as_str())) {
+                                r.spec.workstream = None;
+                                db.save_run(&r)?;
+                            }
+                        }
+                        for draft in drafts {
+                            if let Some(mut p) = db.proposal(draft)?.filter(|p| p.state == ProposalState::Pending && p.workstream() == Some(ws.id.as_str())) {
+                                p.set_workstream(None);
+                                db.save_proposal(&p)?;
+                            }
+                        }
+                        ("undone", "adopted")
+                    }
+                };
+                db.save_workstream(&ws)?;
+                db.append_workstream_event(&WorkstreamEvent::new(&ws.id, Actor::Person, action, at).detail(detail))?;
+                Ok(ws)
+            })
         })
         .await
     }

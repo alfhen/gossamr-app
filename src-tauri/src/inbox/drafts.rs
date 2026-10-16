@@ -663,7 +663,6 @@ impl Core {
         self.with_proposals(|db| db.append_events(run_id, events)).await
     }
 
-    /// Stores a run's new state. Only the run service writes runs after approval.
     /// Saves what the tracker observed of `run` (its state, timings, results), keeping the workstream the stored run has
     /// now: a run brought into a workstream (or taken back by Undo) while the tracker was looking stays where it was put.
     /// The read and the write are one database operation.
@@ -685,6 +684,7 @@ impl Core {
         }
     }
 
+    /// Stores a run's new state. Only the run service writes runs after approval.
     pub async fn save_run(&self, run: &Run) -> Result<()> {
         let stored = self.with_proposals(|db| db.save_run(run)).await?;
         if stored {
