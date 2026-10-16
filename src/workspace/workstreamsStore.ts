@@ -129,9 +129,11 @@ export const useWorkstreams = create<WorkstreamsState>()((set, get) => {
     home.decide(key, id);
     if (open) home.redecide();
     // Its words stop being true once the draft is posted or skipped: the note goes then, not after its own few seconds.
-    const waiting = () => useWorkspace.getState().proposals[draftId]?.state.type === "pending";
+    // Nor does it hold once the workstream is closed: Undo of the close brings the workstream back, not this note.
+    const waiting = () => useWorkspace.getState().proposals[draftId]?.state.type === "pending" && !get().list.some((v) => v.workstream.id === id && v.workstream.closedAt !== null);
     const toast = useToasts.getState().push("Here is the comment to the reporter. Nothing is posted until you press Post comment.", "info", undefined, { current: waiting });
     if (toast === null) return;
+    reporterNotes.set(id, toast);
     const off = useWorkspace.subscribe(() => {
       if (waiting()) return;
       off();
@@ -163,6 +165,8 @@ export const useWorkstreams = create<WorkstreamsState>()((set, get) => {
     usePipHome.getState().openWorkstream(id);
     focusWorkstreamRow(id);
   };
+  /** The note saying a comment to the reporter is ready, by workstream, so closing the workstream takes it back. */
+  const reporterNotes = new Map<string, number>();
   /** The offer of Undo for each workstream's hold, so Resume, Allow more steps or Close can take it back: it would undo what they just settled. */
   const holdOffers = new Map<string, number>();
   /** Hold all's one offer and the workstreams it would still free: one resumed, allowed more or closed since leaves it, and with none left the offer goes. */
@@ -300,6 +304,9 @@ export const useWorkstreams = create<WorkstreamsState>()((set, get) => {
         withdrawHold(id);
         withdrawUndo(adoptOffers.get(id));
         adoptOffers.delete(id);
+        const note = reporterNotes.get(id);
+        if (note !== undefined) useToasts.getState().dismiss(note);
+        reporterNotes.delete(id);
         if (get().backend === backend) await get().refresh();
         // Close is one click and a confirmation away from the person's work: Undo reopens it as it stood.
         const name = ws.itemKey ?? ws.title;

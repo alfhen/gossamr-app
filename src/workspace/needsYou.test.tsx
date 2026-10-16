@@ -2,6 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MockBackend } from "../backend/mock";
 import { docFromText } from "../lib/docs";
+import { ANSWERS_COMMENT_LABEL } from "../lib/proposals";
 import { needGroups, needs, type Need, type NeedsInput } from "../lib/needs";
 import { HELD_BUDGET, HELD_PERSON, HELD_RESTART } from "../types";
 import type { Intent, Proposal, Run, WorkstreamView } from "../types";
@@ -11,7 +12,7 @@ import { NeedsPane } from "./NeedsPane";
 import { NeedsYouList, firstText, groupText } from "./NeedsYou";
 import { NO_FILTERS, groupRuns, slotWaiters, stopAllLabel, stoppable, summaryLine, yourAgents } from "./agentsLogic";
 import { arm, confirmArmed, disarm, keyPlan, openInWorkstream, openNeed } from "./needsActions";
-import { BATCH_TITLE, composerFooter } from "./pipHomeLogic";
+import { BATCH_ASIDE, BATCH_TITLE, composerFooter } from "./pipHomeLogic";
 import { usePipHome } from "./pipHomeStore";
 import { PipRunStripView } from "./PipRunCard";
 import { railBadgeText } from "./Rail";
@@ -231,6 +232,19 @@ describe("the Needs you list", () => {
     // A group with a single batchable draft has no batch to offer.
     const lone = needs(input({ proposals: [draft("c1", comment("CA-401"), 30, "ws-1")] }));
     expect(renderToStaticMarkup(<NeedsYouList needs={lone} now={NOW} />)).not.toContain("safe drafts");
+  });
+
+  it("says why there is no batch when a draft from the person's reply is waiting beside one safe draft (G27)", () => {
+    const answers = { ...draft("a1", comment("CA-401", "Answers: a, b."), 20, "ws-1"), label: ANSWERS_COMMENT_LABEL };
+    const proposals = [draft("c1", comment("CA-401"), 30, "ws-1"), answers];
+    seed(useWorkspace, { proposals: Object.fromEntries(proposals.map((p) => [p.id, p])) });
+    seed(usePipHome, { expanded: new Set(["ws-1"]) });
+    const html = renderToStaticMarkup(<NeedsYouList needs={needs(input({ proposals }))} now={NOW} />);
+    expect(html).not.toContain("safe drafts");
+    expect(html).toContain(`data-batch-aside`);
+    expect(html).toContain(BATCH_ASIDE);
+    // Nothing is said when there is no answers draft, or when it is the only draft.
+    expect(renderToStaticMarkup(<NeedsYouList needs={needs(input({ proposals: [draft("c1", comment("CA-401"), 30, "ws-1")] }))} now={NOW} />)).not.toContain("data-batch-aside");
   });
 
   it("keeps the batch's preview out of the list: its button opens it in the pane", () => {

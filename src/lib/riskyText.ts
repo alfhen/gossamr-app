@@ -8,7 +8,9 @@ const BROADCAST = /(^|[^\w@.])@(everyone|here|channel|all)(?![\w-])/i;
 
 /** Credentials by their shape: a private key block, a cloud or API key, a token, a JWT, a "password: …" line. */
 const SECRETS: RegExp[] = [
-  /-----BEGIN [A-Z ]*PRIVATE KEY-----/,
+  // The key's body too, to its END line, or as much of it as was pasted: the header alone would leave the key itself showing.
+  // Without an END line only base64-looking runs count (a digit, + / =, or a capital after the first letter), so the prose after stays.
+  /-----BEGIN [A-Z ]*PRIVATE KEY-----(?:[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----|(?:\s+(?=[A-Za-z0-9+/=]*(?:[0-9+/=]|[A-Za-z][A-Z]))[A-Za-z0-9+/=]+)*)/,
   /\bAKIA[0-9A-Z]{16}\b/,
   /\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})/,
   /\bxox[abprs]-[A-Za-z0-9-]{10,}/,
@@ -66,6 +68,7 @@ export const newRisks = (original: string, edited: string): Risk[] => {
 
 /** The part of a secret-shaped match that is the secret: the token after "Bearer ", the value after "password:" or "kodeord ", the password of a URL, else the whole run. */
 const secretPart = (match: string): string =>
+  (/^-----BEGIN [A-Z ]*PRIVATE KEY-----/.test(match) ? match : null) ??
   /^[a-z][a-z0-9+.-]*:\/\/[^\s:/?#@]+:([^\s@/?#]+)@$/i.exec(match)?.[1] ??
   /^Bearer\s+(.+)$/i.exec(match)?.[1] ??
   /^[A-Za-z][A-Za-z _-]*?\s*(?:(?:is|er)\s*)?[:=]\s*["']?(.+)$/i.exec(match)?.[1] ??
@@ -74,6 +77,21 @@ const secretPart = (match: string): string =>
 
 /** A secret for the note: its first two characters and an ellipsis, never the rest. */
 export const maskSecret = (secret: string): string => `${[...secret].slice(0, 2).join("")}…`;
+
+/** `text` with each secret-shaped run's secret part masked (see `maskSecret`) and the rest kept; text without one comes back as it was. */
+export function maskSecrets(text: string): string {
+  let out = "";
+  let from = 0;
+  // Overlapping shapes ("token=ghp_…") are one run: the first, longest one is masked.
+  for (const f of occurrences(text).filter((o) => o.risk === "secret").sort((a, b) => a.at - b.at || b.text.length - a.text.length)) {
+    if (f.at < from) continue;
+    const secret = secretPart(f.text);
+    const start = f.at + f.text.lastIndexOf(secret);
+    out += text.slice(from, start) + maskSecret(secret);
+    from = start + secret.length;
+  }
+  return out + text.slice(from);
+}
 
 /** What the pause quotes for each new risk, in the order they stand in the text: a broad mention as written ("@everyone"), a secret masked ("hu…"). */
 export type RiskQuotes = Partial<Record<Risk, string[]>>;

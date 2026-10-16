@@ -2,6 +2,7 @@ import type { Intent, ItemRef, Proposal, Run, WorkstreamEvent, WorkstreamView } 
 import { docText } from "./docs";
 import { isReporterFollowUp, isReporterNudge, isReporterQuestions, makerName, targetOf, workstreamOf } from "./proposals";
 import { fromRunPhrase } from "./runNames";
+import { maskSecrets } from "./riskyText";
 import { diffLines, withGaps } from "./textDiff";
 import { isJiraWrite } from "./workstreamWither";
 
@@ -50,6 +51,8 @@ export interface SentEntry {
   from: string;
   /** The person changed Pip's (or an agent's) words before approving. */
   edited: boolean;
+  /** Part of the posted text looked like a secret: it is masked here, though Jira holds it in full. */
+  masked: boolean;
 }
 
 const SHORT = 120;
@@ -93,29 +96,41 @@ function descriptionDiff(from: string, to: string): string[] {
  * What a Jira write said, short and whole. Null for an intent that isn't a Jira write. `created` are the keys of the
  * tickets it made (`Proposal.created`): a subtasks entry names each, entry `i` for summary `i`.
  */
-export function sentWhat(intent: Intent, label: string | null, created: readonly ItemRef[] = []): { kind: SentKind; label?: string; summary: string; second?: string; detail: string[] } | null {
+export function sentWhat(intent: Intent, label: string | null, created: readonly ItemRef[] = []): { kind: SentKind; label?: string; summary: string; second?: string; detail: string[]; masked: boolean } | null {
+  let masked = false;
+  // Text that looks like a secret is masked from the first read on, so no summary, second line or detail shows it.
+  const hide = (text: string) => {
+    const out = maskSecrets(text);
+    if (out !== text) masked = true;
+    return out;
+  };
+  const what = sentWhatOf(intent, label, created, hide);
+  return what && { ...what, masked };
+}
+
+function sentWhatOf(intent: Intent, label: string | null, created: readonly ItemRef[], hide: (text: string) => string): { kind: SentKind; label?: string; summary: string; second?: string; detail: string[] } | null {
   switch (intent.type) {
     case "comment": {
-      const text = docText(intent.body);
+      const text = hide(docText(intent.body));
       const second = after(text);
       return { kind: "comment", summary: short(text), ...(second ? { second } : {}), detail: lines(text) };
     }
     case "transition":
       return { kind: "transition", summary: `Moved to ${label ?? intent.to}`, detail: [`Moved to ${label ?? intent.to}`] };
     case "rewrite": {
-      const body = intent.body ? descriptionDiff(intent.body.fromText, intent.body.toText) : [];
+      const body = intent.body ? descriptionDiff(hide(intent.body.fromText), hide(intent.body.toText)) : [];
       // An edit that only adds is said as an addition, and one on an empty description as a new description.
       const empty = !intent.body?.fromText.trim();
       const onlyAdds = !body.some((l) => l.startsWith("− "));
       // The pill says the same kind of change the summary does: "Description edit" over "Description added" was two words for one thing.
       const [summary, lead, pill] = !intent.body
-        ? [`Title changed to ${intent.title?.to ?? ""}`, null, "Title change"]
+        ? [`Title changed to ${hide(intent.title?.to ?? "")}`, null, "Title change"]
         : empty
           ? [`Description added${intent.title ? " and title changed" : ""}`, "The new description:", "New description"]
           : onlyAdds
             ? [`Added to the description${intent.title ? " and title changed" : ""}`, "Added to the description:", "Description addition"]
             : [`Description rewritten${intent.title ? " and title changed" : ""}`, "Description, as it read and as it now reads:", "Description rewrite"];
-      const parts = [intent.title && `Title: ${intent.title.from} → ${intent.title.to}`, lead].filter((x): x is string => !!x);
+      const parts = [intent.title && `Title: ${hide(intent.title.from)} → ${hide(intent.title.to)}`, lead].filter((x): x is string => !!x);
       // What the edit put in: the first line it added, which says more than "Description added".
       // A heading or rule is no summary of it: the first added line with words of its own, else the heading's text.
       const addedLines = body.filter((l) => l.startsWith("+ ") && l.slice(2).trim()).map((l) => l.slice(2).trim());
@@ -126,11 +141,11 @@ export function sentWhat(intent: Intent, label: string | null, created: readonly
       return { kind: "description", label: pill, summary, ...(second ? { second } : {}), detail: [...parts, ...body] };
     }
     case "subtasks": {
-      const named = intent.summaries.map((s, i) => (created[i] ? `${created[i].key} ${s}` : s));
+      const named = intent.summaries.map((s, i) => (created[i] ? `${created[i].key} ${hide(s)}` : hide(s)));
       return { kind: "subtasks", summary: `${intent.summaries.length} ${intent.summaries.length === 1 ? "subtask" : "subtasks"}: ${short(named.join("; "))}`, detail: named.map((s) => `• ${s}`) };
     }
     case "create":
-      return { kind: "ticket", summary: `Created “${intent.fields.title}”`, detail: [intent.fields.title, ...lines(docText(intent.fields.body))] };
+      return { kind: "ticket", summary: `Created “${hide(intent.fields.title)}”`, detail: [hide(intent.fields.title), ...lines(hide(docText(intent.fields.body)))] };
     case "update": {
       const p = intent.patch;
       const changes = [p.assignee && "the assignee", p.priority && `the priority to ${p.priority}`, p.parent && `the parent to ${p.parent.key}`].filter((x): x is string => !!x);

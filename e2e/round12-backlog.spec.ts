@@ -153,7 +153,8 @@ test.describe("the workstream controls (G24, G31, G32)", () => {
     await startWorkstream(page, VAGUE);
     await openPipHome(page);
     await workstreamRow(page, VAGUE).click();
-    await expect(pipHome(page).locator("[data-clarity-status]")).toHaveText(`${VAGUE} may be unclear`);
+    // Opening a workstream announces nothing from the notice (G28); the live region only speaks when its line changes.
+    await expect(pipHome(page).locator("[data-clarity-status]")).toHaveText("");
     const live = await page.locator('[role="status"], [aria-live]').evaluateAll((els) => els.map((e) => (e.textContent ?? "").trim()).filter(Boolean));
     expect(new Set(live).size).toBe(live.length);
     // The composer's footer is text, not a second announcer of what the toasts and the list already say.

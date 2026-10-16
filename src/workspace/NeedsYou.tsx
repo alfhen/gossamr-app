@@ -1,9 +1,10 @@
 import { useMemo } from "react";
 import { chipLabel, GROUP_LABEL, needGroups, type Need, type NeedGroup, type NeedGroupKind } from "../lib/needs";
 import { relativeTime } from "../lib/views";
+import { isAnswersDraft } from "../lib/proposals";
 import { useWorkspace } from "../workspaceStore";
 import { groupId, openNeed } from "./needsActions";
-import { BATCH_TITLE, batchLabel } from "./pipHomeLogic";
+import { BATCH_ASIDE, BATCH_TITLE, batchLabel } from "./pipHomeLogic";
 import { usePipHome } from "./pipHomeStore";
 import { needsYouText } from "./useNeeds";
 
@@ -58,24 +59,33 @@ function Asking({ need }: { need: Need }) {
  * "Approve N safe drafts" under a group's needs. It opens the combined preview of what each would do, with its confirm, in
  * the decision pane like any other decision (`BatchDecision`): the same step the step rail's button asks.
  */
-function SafeBatch({ needs, gid }: { needs: readonly Need[]; gid: string }) {
+function SafeBatch({ needs, gid, aside }: { needs: readonly Need[]; gid: string; aside: number }) {
   const proposals = useWorkspace((s) => s.proposals);
   const open = usePipHome((s) => s.batch === gid);
   const count = needs.filter((n) => n.target.type === "draft" && proposals[n.target.id]).length;
-  if (count < 2) return null;
+  // The drafts from the person's own reply are never in the batch; with the button gone for want of a second draft, the note says why.
+  const note = aside > 0 && count + aside >= 2;
+  if (count < 2 && !note) return null;
   return (
     <li data-needs-you-batch className="grid gap-1.5 px-2 py-1">
-      <div>
-        <button
-          type="button"
-          aria-current={open ? "true" : undefined}
-          title={BATCH_TITLE}
-          onClick={() => usePipHome.getState().previewBatch(gid)}
-          className="rounded-md border border-ws-sep2 px-2.5 py-px text-sm font-semibold text-ws-ink hover:bg-ws-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip"
-        >
-          {batchLabel(count)}
-        </button>
-      </div>
+      {count >= 2 && (
+        <div>
+          <button
+            type="button"
+            aria-current={open ? "true" : undefined}
+            title={BATCH_TITLE}
+            onClick={() => usePipHome.getState().previewBatch(gid)}
+            className="rounded-md border border-ws-sep2 px-2.5 py-px text-sm font-semibold text-ws-ink hover:bg-ws-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip"
+          >
+            {batchLabel(count)}
+          </button>
+        </div>
+      )}
+      {note && (
+        <p data-batch-aside className="m-0 text-xs text-ws-ink3">
+          {BATCH_ASIDE}
+        </p>
+      )}
     </li>
   );
 }
@@ -128,6 +138,8 @@ function GroupRow({ group: g, now, onPick, openByDefault }: { group: NeedGroup; 
   const text = groupText(g, now);
   const list = `needs-you-group-${gid}`;
   const expanded = g.count > 1 && open;
+  const proposals = useWorkspace((s) => s.proposals);
+  const asideCount = [g.top, ...g.rest].filter((n) => n.target.type === "draft" && proposals[n.target.id] && isAnswersDraft(proposals[n.target.id])).length;
   return (
     <li data-needs-you-row={gid} className="grid has-[[data-needs-you-group]:focus-visible]:[&_[data-needs-top]]:outline-2 has-[[data-needs-you-group]:focus-visible]:[&_[data-needs-top]]:outline-dashed has-[[data-needs-you-group]:focus-visible]:[&_[data-needs-top]]:outline-offset-[-2px] has-[[data-needs-you-group]:focus-visible]:[&_[data-needs-top]]:outline-ws-pip">
       <button
@@ -193,7 +205,7 @@ function GroupRow({ group: g, now, onPick, openByDefault }: { group: NeedGroup; 
           {[g.top, ...g.rest].map((n) => (
             <NeedRow key={n.key} need={n} gid={gid} now={now} onPick={onPick} top={n === g.top} showTicket={g.workstreamId === null || n.ticketKey !== g.ticketKey} />
           ))}
-          <SafeBatch needs={g.safeBatch} gid={gid} />
+          <SafeBatch needs={g.safeBatch} gid={gid} aside={asideCount} />
         </ul>
       )}
     </li>

@@ -46,6 +46,11 @@ export function SentRow({ entry: e, onTicket, onWorkstream }: { entry: SentEntry
           {e.second}
         </p>
       )}
+      {e.masked && (
+        <p data-sent-masked className="m-0 text-xs text-ws-ink3">
+          Part of this looked like a password, key or token and is hidden here. Jira holds the text as it was posted.
+        </p>
+      )}
       {more && (
         <div className="grid gap-1">
           <button type="button" aria-expanded={open} aria-label={`${open ? "Show less" : "Show the posted text"}: ${e.summary}`} onClick={() => setOpen(!open)} className={`justify-self-start text-sm ${link}`}>

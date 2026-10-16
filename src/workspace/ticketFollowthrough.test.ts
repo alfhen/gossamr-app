@@ -322,7 +322,7 @@ describe("I'll answer, then the person's answers", () => {
     const { id, triage } = await answering();
     const note = backend.proposals.list({ workstream: id }).find((p) => p.origin.type === "run" && p.origin.runId === triage.id && p.intent.type === "comment")!;
     expect(note.state).toMatchObject({ type: "retired", reason: "Replaced by your answers to the open questions" });
-    expect(docText(note.intent.type === "comment" ? note.intent.body : { blocks: [] })).toContain("Three questions need an answer");
+    expect(docText(note.intent.type === "comment" ? note.intent.body : { blocks: [] })).toContain("it needs an answer on what done looks like");
     expect(events(id).filter((e) => e.action === "draft_superseded" && e.proposalId === note.id)).toMatchObject([{ actor: "person" }]);
     // Nothing of it is left to approve, or to batch.
     await useWorkspace.getState().refreshProposals();

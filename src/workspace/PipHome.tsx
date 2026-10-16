@@ -232,7 +232,7 @@ export function WorkstreamList({ list, closed, showClosed, selected, onSelect, o
           {showClosed ? "Hide closed" : "Show closed"}
         </button>
         {showClosed && (
-          <ul aria-label="Closed workstreams" className="m-0 grid max-h-[30vh] w-full list-none gap-0.5 overflow-y-auto p-0">
+          <ul aria-label="Closed workstreams" className="m-0 grid max-h-[min(30vh,12rem)] min-h-16 w-full list-none content-start gap-0.5 overflow-y-auto p-0">
             {closed.map((v) => {
               const key = v.workstream.itemKey;
               // The backend refuses a reopen while the ticket has another open workstream: say so instead of pressing a button that does nothing.

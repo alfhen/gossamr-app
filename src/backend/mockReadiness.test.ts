@@ -39,6 +39,13 @@ describe("the sample triage of a vague ticket", () => {
     expect(text).toContain("Plan recommended: yes");
     expect(text).toContain("For Jira:");
   });
+
+  it("names what is open in its For Jira note and gives no count, which the app's one-question-each split would contradict (G18)", () => {
+    const note = unclearTriageResult("CA-408").split("For Jira:\n")[1];
+    expect(note).toContain("what done looks like");
+    expect(note).not.toMatch(/\b(one|two|three|four|five|\d+) questions?\b/i);
+    expect(note).not.toMatch(/\b(I|we)\b/);
+  });
 });
 
 describe("the comment to the reporter", () => {

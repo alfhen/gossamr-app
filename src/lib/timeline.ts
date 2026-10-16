@@ -307,7 +307,7 @@ export function timeline(input: TimelineInput): TimelineEntry[] {
   // A triage that found its ticket not clear enough to plan is what the readiness need (`readiness:<run>`) asks about.
   for (const n of needs) if (n.kind === "readiness") needOfRun.set(n.key.slice("readiness:".length), n);
   const needOfDraft = new Map(needs.flatMap((n) => (n.key.startsWith("draft:") ? [[n.key.slice("draft:".length), n] as const] : [])));
-  const out: (TimelineEntry & { order: number; cause?: string })[] = [];
+  const out: (TimelineEntry & { order: number; cause?: string; before?: string })[] = [];
   let order = 0;
 
   // The conversation: a turn without a time stands with the one before it (or, first, the one after).
@@ -377,7 +377,7 @@ export function timeline(input: TimelineInput): TimelineEntry[] {
   const holdNeed = needs.find((n) => n.kind === "hold" || n.kind === "budget");
   const escalationNeed = needs.find((n) => n.kind === "escalation");
   let rounds = 0;
-  let previous: (TimelineEntry & { order: number; cause?: string }) | null = null;
+  let previous: (TimelineEntry & { order: number; cause?: string; before?: string }) | null = null;
   for (const e of events) {
     if (e.action === "fix_round_sent") rounds++;
     if (TOLD_ELSEWHERE.has(e.action)) continue;
@@ -402,7 +402,7 @@ export function timeline(input: TimelineInput): TimelineEntry[] {
       previous.updatedAt = e.at;
       continue;
     }
-    const entry: TimelineEntry & { order: number; cause?: string } = {
+    const entry: TimelineEntry & { order: number; cause?: string; before?: string } = {
       key: `audit:${e.workstreamId}:${e.seq}`,
       kind: "audit",
       at: e.at,
@@ -416,6 +416,8 @@ export function timeline(input: TimelineInput): TimelineEntry[] {
       action: e.action,
       // A choice to ask the reporter is told when it was made, not moved after the draft it made.
       ...(e.proposalId && draft && !REPORTER_ASKS.has(e.action) ? { cause: `draft:${e.proposalId}` } : {}),
+      // ... and the choice is the cause of the draft: recorded a moment after drafting, it still stands before the draft and what follows it.
+      ...(e.proposalId && draft && REPORTER_ASKS.has(e.action) ? { before: `draft:${e.proposalId}` } : {}),
       order: order++,
     };
     out.push(entry);
@@ -435,8 +437,9 @@ export function timeline(input: TimelineInput): TimelineEntry[] {
   // When things happened, except that an effect never stands before its cause: a draft a run left, or what was done to a
   // draft, is not earlier than the run, or the draft, it came of, whatever the clocks the stores read say.
   const placed = new Map<string, { t: number; rank: number }>();
-  const place = (e: TimelineEntry & { cause?: string }) => {
-    const own = { t: when(e), rank: SOURCE_RANK[e.kind] };
+  const place = (e: TimelineEntry & { cause?: string; before?: string }) => {
+    const effect = e.before ? placed.get(e.before) : undefined;
+    const own = { t: effect ? Math.min(when(e), effect.t) : when(e), rank: SOURCE_RANK[e.kind] };
     const cause = e.cause ? placed.get(e.cause) : undefined;
     placed.set(e.key, cause ? { t: Math.max(own.t, cause.t), rank: e.kind === "audit" ? AFTER_DRAFT : own.rank } : own);
   };
@@ -449,7 +452,7 @@ export function timeline(input: TimelineInput): TimelineEntry[] {
       const y = placed.get(b.key)!;
       return compare(x.t, y.t) || x.rank - y.rank || a.order - b.order;
     })
-    .map(({ order: _order, cause: _cause, ...e }) => e);
+    .map(({ order: _order, cause: _cause, before: _before, ...e }) => e);
 }
 
 const compare = (a: number, b: number) => (a < b ? -1 : a > b ? 1 : 0);

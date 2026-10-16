@@ -85,6 +85,16 @@ describe("a ticket the triage found not clear enough to plan", () => {
     expect(usePipHome.getState()).toMatchObject({ deciding: `draft:${asked.id}`, selected: id });
   });
 
+  it("takes the note about the comment back when the workstream is closed, so Undo of the close does not bring it up again (G30)", async () => {
+    const { id } = await stopped();
+    expect(await useWorkstreams.getState().askReporter(id)).toBe(true);
+    const note = "Here is the comment to the reporter. Nothing is posted until you press Post comment.";
+    expect(texts()).toContain(note);
+    expect(await useWorkstreams.getState().close(id)).toBe(true);
+    expect(texts()).not.toContain(note);
+    expect(texts().some((t) => t.startsWith("Closed the workstream on CA-408"))).toBe(true);
+  });
+
   it("I'll answer settles the need and opens the workstream's conversation with the questions quoted in the composer", async () => {
     const { id } = await stopped();
     const stop = stored(id).readiness!;

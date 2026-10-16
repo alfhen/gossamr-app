@@ -65,6 +65,9 @@ export const batchLabel = (count: number) => `Approve ${count} safe drafts`;
 /** What the batch button's tooltip says makes a draft safe: it is a comment, a move or subtasks, read in full before anything is posted. */
 export const BATCH_TITLE = "Safe drafts are comments, status moves and subtasks that only add to Jira. A description rewrite, a question to the reporter and the like are approved one by one. You see every draft before anything is posted.";
 
+/** What a group says under its needs when drafts from the person's own reply are left out of "Approve N safe drafts". */
+export const BATCH_ASIDE = "Not in the batch: drafts from your reply are read on their own.";
+
 /**
  * The drafts of a step that "Approve N safe drafts" would approve, in order; it is offered only for two or more. A comment
  * with the same text as an earlier one on its ticket is left to be decided on its own (see `repeatedComments`).
