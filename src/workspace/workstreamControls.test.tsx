@@ -12,7 +12,7 @@ import { HOLD_ALL_HINT, buildCommands, isHoldAllKey, rankCommands, type CommandA
 import { useToasts } from "./toasts";
 import { DecisionShownContext, decisionShown } from "./decisionShown";
 import { CLOSE_HINT, HeldBanner, HOLD_HINT, MANAGE_STATE, MODE_LINE, MORE_HINT, NextStepLine, nextStepOnceKnown } from "./WorkstreamControls";
-import { AUTO_STEPS_HELP, AutomaticStepsPanel, CloseConfirm, StopConfirm, WorkstreamControlsView, choiceValue, controlActions, holdFocusTarget, ruleChoice, tabWithin, type ControlActions } from "./WorkstreamControls";
+import { AUTO_STEPS_HELP, CLOSE_RUNS_NOTE, AutomaticStepsPanel, CloseConfirm, StopConfirm, WorkstreamControlsView, choiceValue, controlActions, holdFocusTarget, ruleChoice, tabWithin, type ControlActions } from "./WorkstreamControls";
 import { holdAllVisible, useWorkstreams } from "./workstreamsStore";
 import { CONNECT_TO_POST, DRAFT_OPEN, EscalationCardView, EscalationSent, FIX_ROUND_HELP, NO_REVIEW_DRAFT, POST_AS_IS_HELP, TAKE_OVER_HELP, TAKEN_OVER, draftOpen, escalationActions, escalationShown, fixRoundSent, postingReview } from "./EscalationCard";
 import { ESCALATION_GONE } from "../backend/mockWorkstreams";
@@ -151,6 +151,17 @@ describe("the next-step line before Settings' switches are read", () => {
 });
 
 describe("the workstream's controls", () => {
+  it("draws Automatic steps, Hold, Close… and ⋯ as buttons with a border, not as text (G30)", () => {
+    const html = renderToStaticMarkup(<WorkstreamControlsView view={viewOf()} globals={AUTOSTART_DEFAULTS} actions={{ ...noop(), onClose: vi.fn() }} confirmingStop={false} onConfirmStop={vi.fn()} confirmingClose={false} onConfirmClose={vi.fn()} />);
+    for (const hook of ["data-ws-hold", "data-close-workstream", "data-popover-trigger"]) {
+      for (const tag of html.match(new RegExp(`<button[^>]*${hook}[^>]*>`, "g")) ?? []) {
+        expect(tag).toContain("border-ws-sep2");
+        expect(tag).not.toContain("border-transparent");
+      }
+    }
+    expect(html.match(/<button[^>]*data-popover-trigger[^>]*>/g)).toHaveLength(2);
+  });
+
   it("shows the Manage switch as the workstream's mode", () => {
     expect(render(viewOf({ mode: "advise" }))).toMatch(/role="switch" aria-checked="false"[^>]*aria-label="Manage this workstream"/);
     expect(render(viewOf({ mode: "manage" }))).toMatch(/role="switch" aria-checked="true"[^>]*aria-label="Manage this workstream"/);
@@ -168,6 +179,9 @@ describe("the workstream's controls", () => {
     const asking = at(viewOf(), true);
     expect(asking).toContain('aria-label="Close this workstream"');
     expect(asking).toContain("Its conversation goes back to General; its agents and drafts are kept in General.");
+    // What Close does to an agent still running or queued is said too (G24): the supervisor leaves a running one alone and never starts a queued one of a closed workstream.
+    expect(asking).toContain(CLOSE_RUNS_NOTE);
+    expect(CLOSE_RUNS_NOTE).toBe("Agents already running carry on; one still queued does not start while it is closed.");
     // Where a workstream can't be closed from (no handler), there is no button.
     expect(render(viewOf())).not.toContain("data-close-workstream");
     // Nor where it could ask but has nothing to close with: neither the button nor its question.
@@ -180,7 +194,9 @@ describe("the workstream's controls", () => {
     const html = renderToStaticMarkup(<CloseConfirm onClose={vi.fn()} onKeep={vi.fn()} />);
     const [, q, d] = /aria-describedby="(\S+) (\S+)"/.exec(html)!;
     expect(html).toContain(`<span id="${q}">Close it?</span>`);
-    expect(html).toContain(`<span id="${d}">Its conversation goes back to General; its agents and drafts are kept in General.</span>`);
+    expect(html).toContain(`<span id="${d}">Its conversation goes back to General; its agents and drafts are kept in General. ${CLOSE_RUNS_NOTE}</span>`);
+    // Keep, which has the keyboard, is described by them too, so it is read with the question (G34).
+    expect(html).toMatch(new RegExp(`<button[^>]*aria-describedby="${q} ${d}"[^>]*>Keep</button>`));
     // Two buttons: Tab from Keep (the second) goes to Close workstream, not out to Resume; Shift+Tab from Close wraps to Keep.
     expect(tabWithin({ key: "Tab", shiftKey: false }, 1, 2)).toBe(0);
     expect(tabWithin({ key: "Tab", shiftKey: false }, 0, 2)).toBe(1);

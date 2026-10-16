@@ -54,12 +54,12 @@ import { docFromText, docText } from "../lib/docs";
 import { ticketBlockText } from "./mockTicket";
 import { bodyChange, markdownOf } from "./mockMarkdown";
 import { MOCK_CONNECTION, MockConnector, PEOPLE, itemRef } from "./mockConnector";
-import { ANSWERED_REASON, basisFieldsOf, NUDGE_COMMENT_LABEL, OVERRIDDEN_REASON, targetOf, workstreamOf } from "../lib/proposals";
+import { ANSWERED_REASON, basisFieldsOf, isReporterQuestions, NUDGE_COMMENT_LABEL, OVERRIDDEN_REASON, targetOf, workstreamOf } from "../lib/proposals";
 import { workstreamConversation, workstreamOfConversation } from "../lib/conversations";
 import { MockSupervisor, triageReadiness } from "./mockSupervisor";
 import { READINESS_LABEL, reporterComment, reporterDoc } from "./mockReadiness";
 import { clarityQuestions, type ClarityGap } from "../lib/ticketClarity";
-import { nudgeComment } from "../lib/reporterWait";
+import { askedQuestions, nudgeComment } from "../lib/reporterWait";
 import { answersDue, planDue, replyComment } from "../lib/reporterWait";
 import { mockCancelTurns, mockCancelWakes, mockHasWaitingWake, mockPipIdle, mockQueueWake } from "./mockPipQueue";
 import { holdMockPip } from "./mockPip";
@@ -584,7 +584,7 @@ export class MockBackend implements Backend {
     const item = run.item;
     const reporter = this.connector.item(item)?.reporter ?? null;
     const name = reporter ? (this.connector.people.find((p) => p.accountId === reporter.accountId)?.name ?? null) : null;
-    const body = reporterDoc(reporterComment(item.key, name, stop.questions, !!this.workstreams.get(id)?.reporterReplied), reporter && name ? { person: reporter, name } : null);
+    const body = reporterDoc(reporterComment(name, stop.questions, !!this.workstreams.get(id)?.reporterReplied), reporter && name ? { person: reporter, name } : null);
     const proposal = this.proposals.fromRun({ type: "comment", item, body }, READINESS_LABEL, { type: "run", runId: run.id, shortId: run.shortId, workstream: run.spec.workstream ?? null });
     this.workstreams.askedReporter(id, triageRun, proposal.id);
     return proposal;
@@ -604,7 +604,7 @@ export class MockBackend implements Backend {
     const item = itemRef(key);
     const reporter = this.connector.item(item)?.reporter ?? null;
     const name = reporter ? (this.connector.people.find((p) => p.accountId === reporter.accountId)?.name ?? null) : null;
-    const body = reporterDoc(reporterComment(key, name, clarityQuestions(gaps), !!this.workstreams.get(id)?.reporterReplied), reporter && name ? { person: reporter, name } : null);
+    const body = reporterDoc(reporterComment(name, clarityQuestions(gaps), !!this.workstreams.get(id)?.reporterReplied), reporter && name ? { person: reporter, name } : null);
     const proposal = this.proposals.askedFor({ type: "comment", item, body }, READINESS_LABEL, id);
     this.workstreams.askedClarity(id, proposal.id);
     return proposal;
@@ -625,7 +625,10 @@ export class MockBackend implements Backend {
     const item = itemRef(key);
     const reporter = this.connector.item(item)?.reporter ?? null;
     const name = reporter ? (this.connector.people.find((p) => p.accountId === reporter.accountId)?.name ?? null) : null;
-    const body = reporterDoc(nudgeComment(key, name, !!this.workstreams.get(id)?.reporterReplies?.length), reporter && name ? { person: reporter, name } : null);
+    // The questions still open are the ones of the newest ask on the ticket, as the person left them.
+    const ask = this.proposals.list({ workstream: id }).filter(isReporterQuestions).sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
+    const open = ask?.intent.type === "comment" ? askedQuestions(docText(ask.intent.body)) : [];
+    const body = reporterDoc(nudgeComment(key, name, !!this.workstreams.get(id)?.reporterReplies?.length, open), reporter && name ? { person: reporter, name } : null);
     const proposal = this.proposals.askedFor({ type: "comment", item, body }, NUDGE_COMMENT_LABEL, id, "nudge");
     this.workstreams.nudged(id, proposal.id);
     return proposal;

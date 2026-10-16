@@ -7,7 +7,7 @@ import { useWorkspace } from "../workspaceStore";
 import { DraftPreview, KEY_HINT, KEY_HINT_ROOM, LiveDraftPreview, collapseReview, openLiveDraft } from "./DraftPreview";
 import { escapeCollapses } from "./draftKeys";
 import { focusPeekOf } from "./PeekSheet";
-import { CLOSED_INLINE, InlineStartContext, InlineStartView, inlineStartBlock, inlineStartKey, inlineStartable, revealReview, useInlineStarts, type InlineActions } from "./InlineStart";
+import { AFTER_INTRO_NOTE, CLOSED_INLINE, InlineStartContext, InlineStartView, inlineStartBlock, inlineStartKey, inlineStartable, revealReview, useInlineStarts, type InlineActions } from "./InlineStart";
 import { usePrefs } from "./prefs";
 import { COPY } from "./runSheetLogic";
 import { useRunSetup } from "./runSetupStore";
@@ -218,6 +218,12 @@ describe("reviewing and starting a run draft in place", () => {
     expect(useRuns.getState().sheet).toBeNull();
     await vi.waitFor(() => expect(inline().entries[id]?.phase).toBe("shown"));
     expect(inline().entries[id]?.review).not.toBeNull();
+    // Nothing started with the press, and the review says so (G28); a review the person opens themselves has no such note.
+    expect(inline().entries[id]?.afterIntro).toBe(true);
+    expect(render(id)).toContain(AFTER_INTRO_NOTE);
+    inline().close(id);
+    await inline().open(id);
+    expect(render(id)).not.toContain("data-after-intro");
   });
 
   it("opens the setup sheet the person asked for once they continue past the safety sheet, as asked", async () => {

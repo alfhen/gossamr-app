@@ -14,6 +14,8 @@ const KEPT = 20;
 
 /** What an action offers: the words, and the one thing that puts it back. */
 export interface UndoOffer {
+  /** What Undo would undo, in a few words, for the button: "keep waiting" makes it "Undo keep waiting". */
+  what?: string;
   /** What happened, as the toast says it: "Skipped the draft on CA-401." */
   text: string;
   /** What the toast says once undone; "Undone." when not given. */
@@ -148,7 +150,7 @@ export const undoLog = new UndoLog(
  */
 export function offerUndo(offer: UndoOffer): number {
   const id = undoLog.offer(offer);
-  const toast = useToasts.getState().push(offer.text, "info", { label: "Undo", run: () => void undoLog.run(id) }, { lifetime: UNDO_LIFETIME_MS, keep: true });
+  const toast = useToasts.getState().push(offer.text, "info", { label: "Undo", what: offer.what, run: () => void undoLog.run(id) }, { lifetime: UNDO_LIFETIME_MS, keep: true });
   if (toast !== null) toastOf.set(id, toast);
   return id;
 }

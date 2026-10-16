@@ -1,6 +1,6 @@
 import { useEffect, type CSSProperties } from "react";
 import { useTabs } from "./tabsStore";
-import { useToasts, type Toast } from "./toasts";
+import { actionName, useToasts, type Toast } from "./toasts";
 
 /** How far a toast on Pip home rises to clear the composer, its suggestion chips and the line under it. */
 export const COMPOSER_CLEAR = 128;
@@ -125,10 +125,10 @@ export function ToastCard({ toast: t, waiting, onDismiss }: { toast: Toast; wait
             if (inToast) leaveToast();
           }}
           data-toast-action={t.action.label}
-          aria-label={`${t.action.label}: ${t.text}`}
+          aria-label={`${actionName(t.action)}: ${t.text}`}
           className="shrink-0 font-semibold text-ws-accent underline"
         >
-          {t.action.label}
+          {actionName(t.action)}
         </button>
       )}
       <button

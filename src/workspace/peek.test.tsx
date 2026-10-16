@@ -6,6 +6,7 @@ import type { Proposal, StatusDef } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { DraftCard, draftSummary, draftTitle, type DraftCardProps } from "./DraftCard";
 import { PeekView, WorkstreamControl, type PeekViewProps } from "./PeekSheet";
+import { CLOSE_RUNS_NOTE } from "./WorkstreamControls";
 import { PipAvatar } from "./PipAvatar";
 import { FilterNote, Launcher, Nudge, PipFilterNote } from "./PipExtras";
 import { ContextChip } from "./PipPane";
@@ -287,6 +288,8 @@ describe("the workstream control", () => {
     const confirming = renderToStaticMarkup(<WorkstreamControl item={item} workstream={view} onStart={noop} onOpen={noop} confirmingClose onAskClose={noop} onClose={noop} />);
     expect(confirming).toContain('aria-label="Close this workstream"');
     expect(confirming).toContain("Its agents and drafts are kept in General.");
+    // And what Close does to an agent that is running or still queued (G24).
+    expect(confirming).toContain(CLOSE_RUNS_NOTE);
     expect(confirming).toContain("Close workstream");
     expect(confirming).toContain("Keep");
     expect(renderToStaticMarkup(<WorkstreamControl item={item} workstream={null} onStart={noop} onOpen={noop} onAskClose={noop} />)).toContain("Start a workstream");

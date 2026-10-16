@@ -19,7 +19,7 @@ test.describe("the ask of the reporter (G11, G12)", () => {
     await workstreamRow(page, "CA-408").click();
     await pipHome(page).locator("[data-clarity-notice]").getByRole("button", { name: "Ask the reporter now" }).click();
     const draft = needsPane(page).getByRole("article", { name: /^Comment on CA-/ });
-    await expect(draft).toContainText(/A few things about CA-40[28] need clearing up/);
+    await expect(draft).toContainText(/A few things need clearing up so the work can be planned/);
     await expect(draft).not.toContainText("Before work on");
     await draft.getByRole("button", { name: "Skip" }).click();
     await expect(page.locator("[data-needs-advanced]")).toContainText("Now:");

@@ -50,7 +50,7 @@ test.describe("the ask to the reporter (G3)", () => {
     await workstreamRow(page, "CA-408").click();
     await pipHome(page).locator("[data-clarity-notice]").getByRole("button", { name: "Ask the reporter now" }).click();
     const card = needsPane(page).getByRole("article", { name: "Comment on CA-408" });
-    await expect(card).toContainText("A few things about CA-408 need clearing up:");
+    await expect(card).toContainText("A few things need clearing up so the work can be planned:");
     await expect(card).not.toContainText("can be planned");
     await expect(card).not.toContainText(/Before I |we need|I can.t/);
   });

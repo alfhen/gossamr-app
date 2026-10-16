@@ -91,6 +91,9 @@ function Entry({ entry }: { entry: DayEntry }) {
   );
 }
 
+/** Under a collapsed "N tickets may be unclear": what to do next, since the count alone grows with no step. */
+export const UNCLEAR_NEXT = "More lists them. Open one to read it and ask its reporter if it needs more.";
+
 export function DayLineView({ line, initiallyOpen = false }: { line: DayLine; initiallyOpen?: boolean }) {
   // "and N more" is a button, so what the card cuts off is reachable by keyboard too.
   const [open, setOpen] = useState(initiallyOpen);
@@ -103,6 +106,11 @@ export function DayLineView({ line, initiallyOpen = false }: { line: DayLine; in
   return (
     <section data-day-line={line.kind} aria-label={line.title} className="grid gap-0.5">
       <h3 className="m-0 text-sm font-semibold text-ws-ink">{line.title}</h3>
+      {collapsed && !open && (
+        <p data-day-next className="m-0 text-xs text-ws-ink3">
+          {UNCLEAR_NEXT}
+        </p>
+      )}
       <ul className="m-0 grid list-none gap-0.5 p-0 text-sm">
         {entries.map((e) => (
           <Entry key={e.key} entry={e} />

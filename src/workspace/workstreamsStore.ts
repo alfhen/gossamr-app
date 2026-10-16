@@ -100,6 +100,12 @@ const readinessOf = (list: readonly WorkstreamView[], id: string) => list.find((
 /** "1 workstream", "2 workstreams". */
 const workstreams = (n: number) => `${n} ${n === 1 ? "workstream" : "workstreams"}`;
 
+/** Workstreams whose readiness question the person just settled with Plan anyway, until the Done line that says so has been written (`takePlannedAnyway`). */
+const plannedAnyway = new Set<string>();
+
+/** Whether `id`'s readiness question was just settled with Plan anyway; asking forgets it, so a later question on the workstream reads for itself. */
+export const takePlannedAnyway = (id: string | null) => (id !== null && plannedAnyway.delete(id));
+
 export const useWorkstreams = create<WorkstreamsState>()((set, get) => {
   /** Calls the backend for one of the person's controls, then reads the list again; a refusal is told in a toast as `failed`. */
   async function act<T>(failed: string, call: (backend: Backend) => Promise<T>): Promise<{ ok: true; value: T } | { ok: false }> {
@@ -311,7 +317,7 @@ export const useWorkstreams = create<WorkstreamsState>()((set, get) => {
         // Close is one click and a confirmation away from the person's work: Undo reopens it as it stood.
         const name = ws.itemKey ?? ws.title;
         withdrawClose(id);
-        closeOffers.set(id, { offer: offerUndo({ text: `Closed the workstream on ${name}. Its agents and drafts are kept in General.`, undone: `Reopened the workstream on ${name}.`, undo: () => reopenIt(id), refocus: () => showWorkstreamRow(id) }), itemKey: ws.itemKey ?? null });
+        closeOffers.set(id, { offer: offerUndo({ what: "close", text: `Closed the workstream on ${name}. Its agents and drafts are kept in General.`, undone: `Reopened the workstream on ${name}.`, undo: () => reopenIt(id), refocus: () => showWorkstreamRow(id) }), itemKey: ws.itemKey ?? null });
         return true;
       } catch (e) {
         useToasts.getState().push(`Couldn't close the workstream. ${messageOf(e)}`);
@@ -382,7 +388,7 @@ export const useWorkstreams = create<WorkstreamsState>()((set, get) => {
       if (before && before.heldReason !== done.value.heldReason && done.value.heldReason === HELD_PERSON) {
         const name = before.itemKey ?? before.title;
         withdrawHold(id);
-        holdOffers.set(id, offerUndo({ text: `Held ${name}.`, undone: `${name} is free again.`, undo: () => undoChange(id, { type: "hold", was: before.heldReason }) }));
+        holdOffers.set(id, offerUndo({ what: "hold", text: `Held ${name}.`, undone: `${name} is free again.`, undo: () => undoChange(id, { type: "hold", was: before.heldReason }) }));
       }
       return true;
     },
@@ -487,7 +493,10 @@ export const useWorkstreams = create<WorkstreamsState>()((set, get) => {
     async planAnyway(id) {
       const stop = readinessOf(get().list, id);
       if (!stop) return stale();
+      // Marked before the call: the list that refreshes in it is what makes the question go, and its Done line reads the mark.
+      plannedAnyway.add(id);
       const done = await act("Couldn't plan anyway", (b) => b.workstreamsReadinessOverride(id, stop.triageRun));
+      if (!done.ok) plannedAnyway.delete(id);
       const said = stop.replied ? "Planning now with the reporter's reply on the ticket. The plan starts as soon as the workstream's checks allow." : stop.changed ? "Planning now with the ticket as it is. The plan starts as soon as the workstream's checks allow." : "Planning anyway. The plan starts as soon as the workstream's checks allow.";
       if (done.ok) useToasts.getState().push(said, "info");
       return done.ok;
@@ -505,7 +514,7 @@ export const useWorkstreams = create<WorkstreamsState>()((set, get) => {
       if (n) {
         const ids = new Set(done.value.map((w) => w.id));
         if (batchOffer) withdrawUndo(batchOffer.offer);
-        batchOffer = { ids, offer: offerUndo({ text: said, undone: `${workstreams(n)} ${n === 1 ? "is" : "are"} free again.`, undo: () => undoAll([...ids]) }) };
+        batchOffer = { ids, offer: offerUndo({ what: "hold", text: said, undone: `${workstreams(n)} ${n === 1 ? "is" : "are"} free again.`, undo: () => undoAll([...ids]) }) };
       }
       else useToasts.getState().push(said, "info");
       return n;

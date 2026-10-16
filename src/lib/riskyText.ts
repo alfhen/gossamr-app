@@ -93,12 +93,16 @@ export function maskSecrets(text: string): string {
   return out + text.slice(from);
 }
 
-/** What the pause quotes for each new risk, in the order they stand in the text: a broad mention as written ("@everyone"), a secret masked ("hu…"). */
+/** Between a quote and the line it stands on, in a quote of a draft of several lines: `hu…\t4` is "hu…" on line 4. */
+const AT_LINE = "\t";
+
+/** What the pause quotes for each new risk, in the order they stand in the text: a broad mention as written ("@everyone"), a secret masked ("hu…") or named by its kind ("a private key"), each with its line when the text has several. */
 export type RiskQuotes = Partial<Record<Risk, string[]>>;
 
 /**
  * Every piece of text, by where it stands in `edited`, that makes the edit risky for each risk (see `newRisks`), as the
- * pause quotes it: each distinct mention as written, each distinct secret by its first two characters. Empty when the edit adds none.
+ * pause quotes it: each distinct mention as written, each distinct secret by its first two characters (a private key as
+ * "a private key", its first two characters being only dashes), and in a text of several lines the line each stands on. Empty when the edit adds none.
  */
 export function newRiskQuote(original: string, edited: string): RiskQuotes {
   const had = matchesIn(original);
@@ -112,7 +116,10 @@ export function newRiskQuote(original: string, edited: string): RiskQuotes {
     const same = f.risk === "broadcast" ? f.text.toLowerCase() : f.text;
     if (had[f.risk].has(same) || seen.has(`${f.risk}:${same}`)) continue;
     seen.add(`${f.risk}:${same}`);
-    (quotes[f.risk] ??= []).push(f.risk === "broadcast" ? f.text : maskSecret(secretPart(f.text)));
+    const said = f.risk === "broadcast" ? f.text : f.text.startsWith("-----BEGIN") ? "a private key" : maskSecret(secretPart(f.text));
+    // Where it stands, so the culprit can be found in a long draft: only for text of several lines, where it is of use.
+    const line = edited.includes("\n") ? `${AT_LINE}${edited.slice(0, f.at).split("\n").length}` : "";
+    (quotes[f.risk] ??= []).push(said + line);
   }
   return quotes;
 }
@@ -120,9 +127,12 @@ export function newRiskQuote(original: string, edited: string): RiskQuotes {
 /** How many quotes the pause lists before it says how many more there are. */
 const QUOTES_SHOWN = 3;
 
-/** “a”, “b” and “c”; past `QUOTES_SHOWN`, “a”, “b”, “c” and 2 more. */
+/** “a”, “b” and “c” (each with “(line 4)” when it has one); past `QUOTES_SHOWN`, “a”, “b”, “c” and 2 more. */
 function quoted(quotes: readonly string[]): string {
-  const shown = quotes.slice(0, QUOTES_SHOWN).map((q) => `“${q}”`);
+  const shown = quotes.slice(0, QUOTES_SHOWN).map((q) => {
+    const [text, line] = q.split(AT_LINE);
+    return `“${text}”${line ? ` (line ${line})` : ""}`;
+  });
   const more = quotes.length - shown.length;
   if (more > 0) return `${shown.join(", ")} and ${more} more`;
   return shown.length > 1 ? `${shown.slice(0, -1).join(", ")} and ${shown[shown.length - 1]}` : shown[0];

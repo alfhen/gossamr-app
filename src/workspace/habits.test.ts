@@ -93,6 +93,25 @@ describe("Draft a nudge", () => {
     expect(usePipHome.getState()).toMatchObject({ deciding: `draft:${nudge.id}`, selected: id });
   });
 
+  it("lists the questions the posted ask carried, as bullets, so the reporter need not scroll up (G20)", async () => {
+    backend.editTicket("CA-408", { description: THIN });
+    const id = await open("CA-408");
+    const ask = await backend.workstreamsClarityAsk(id);
+    const asked = (ask.intent.type === "comment" ? docText(ask.intent.body) : "").split("\n").filter((l) => l.startsWith("- ")).map((l) => l.slice(2));
+    expect(asked.length).toBeGreaterThan(0);
+    await backend.proposalsApprove(ask.id);
+    // The wait began long enough ago: the audit's approval of the ask is moved back.
+    backend.workstreams.seedEvent(id, "person", "draft_approved", ago(3), { proposalId: ask.id });
+    await useWorkstreams.getState().refresh();
+    expect(await useWorkstreams.getState().nudgeReporter(id)).toBe(true);
+    await useWorkspace.getState().refreshProposals();
+    const [nudge] = nudges();
+    const text = docText(nudge.intent.type === "comment" ? nudge.intent.body : { blocks: [] });
+    expect(text).toContain("are still open:\n\n- ");
+    for (const q of asked) expect(text).toContain(`- ${q}`);
+    expect(text).not.toMatch(/\b(we|I|runs?|workstreams?|Pip|Gossamr)\b/);
+  });
+
   it("is a draft in Needs you like the questions, and never one of the safe batch", async () => {
     const id = await waitedOn(3);
     await useWorkstreams.getState().nudgeReporter(id);

@@ -7,7 +7,7 @@ import type { Intent, Proposal } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { GITHUB_NOT_LISTED, JiraSentView, SENT_EMPTY, SentRow } from "./JiraSentView";
 import { jiraSent } from "../lib/jiraSent";
-import { DAY_EMPTY, DayLineView, StartMyDayView, doneForNow, runDayAction, showStartMyDay } from "./StartMyDay";
+import { DAY_EMPTY, DayLineView, UNCLEAR_NEXT, StartMyDayView, doneForNow, runDayAction, showStartMyDay } from "./StartMyDay";
 import { usePipHome } from "./pipHomeStore";
 import { usePrefs } from "./prefs";
 import { loadTabs, useTabs } from "./tabsStore";
@@ -84,6 +84,10 @@ describe("the Start my day card", () => {
     const open = renderToStaticMarkup(<DayLineView line={long} initiallyOpen />);
     expect(open.match(/data-day-entry=/g)).toHaveLength(5);
     expect(open).toMatch(/aria-expanded="true"[^>]*>Show fewer</);
+    // The collapsed line says what to do next, so the growing count is not the end of it (G27); open, the entries are the next step.
+    expect(closed).toContain(`data-day-next`);
+    expect(closed).toContain(UNCLEAR_NEXT);
+    expect(open).not.toContain("data-day-next");
     const short = { kind: "unclear" as const, title: "2 tickets may be unclear", count: 2, more: 0, entries: [unclear(1), unclear(2)], rest: [] };
     const html = renderToStaticMarkup(<DayLineView line={short} />);
     expect(html.match(/data-day-entry=/g)).toHaveLength(2);

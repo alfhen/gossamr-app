@@ -505,9 +505,10 @@ pub fn readiness_of(ws: &Workstream, runs: &[Run], readiness: impl Fn(&Run) -> O
 pub const READINESS_LABEL: &str = proposals::READINESS_COMMENT_LABEL;
 
 /// The comment `ask_reporter` drafts: a fixed frame around the questions the Triage listed, or around the four things a
-/// ticket needs when it listed none. When the reporter has answered since the last ask (`replied`), the frame thanks them
-/// for it and says what is still open, instead of repeating the first ask word for word.
-pub fn reporter_comment(key: &str, reporter: Option<&str>, questions: &[String], replied: bool) -> String {
+/// ticket needs when it listed none. The ticket's key is left out (the comment is on the ticket) and one line says why the
+/// questions are asked. When the reporter has answered since the last ask (`replied`), the frame thanks them
+/// for it and says what is still open, instead of repeating the first ask word for word. Mirrored by `reporterComment` in src/backend/mockReadiness.ts.
+pub fn reporter_comment(reporter: Option<&str>, questions: &[String], replied: bool) -> String {
     let hello = reporter.map_or_else(|| "Hi,".to_string(), |name| format!("Hi @{name},"));
     let asks = if questions.is_empty() {
         "- What is the goal?\n- What has to be true for this to be done (the acceptance criteria)?\n- What is in scope, and what is out?\n- Who asked for it, and who is waiting on it?".to_string()
@@ -515,18 +516,28 @@ pub fn reporter_comment(key: &str, reporter: Option<&str>, questions: &[String],
         one_question_each(questions).iter().map(|q| format!("- {q}")).collect::<Vec<_>>().join("\n")
     };
     if replied {
-        return format!("{hello}\n\nThanks for your answer above. A few things about {key} are still open:\n\n{asks}\n\nCould you answer these here on the ticket? Thanks.");
+        return format!("{hello}\n\nThanks for your answer above. A few things are still open before the work can be planned:\n\n{asks}\n\nCould you answer these here on the ticket? Thanks.");
     }
-    format!("{hello}\n\nA few things about {key} need clearing up:\n\n{asks}\n\nCould you answer them here on the ticket? Thanks.")
+    format!("{hello}\n\nA few things need clearing up so the work can be planned:\n\n{asks}\n\nCould you answer them here on the ticket? Thanks.")
 }
 
-/// The comment `nudge_reporter` drafts: a short, polite follow-up on the questions already asked on the ticket. When the
-/// reporter has replied before the ask now open (`replied`), it is a nudge on the follow-up questions. Jira's words, in a neutral voice
+/// The questions an ask comment lists: its bullet lines, as the person left them, without the dash.
+pub fn asked_questions(ask: &str) -> Vec<String> {
+    ask.lines().filter_map(|l| l.trim().strip_prefix("- ")).map(|q| q.trim().to_string()).filter(|q| !q.is_empty()).collect()
+}
+
+/// The comment `nudge_reporter` drafts: a short, polite follow-up on the questions already asked on the ticket, with the
+/// ones still open (`open`, the bullets of the newest ask) listed under it. When the reporter has replied before the ask now
+/// open (`replied`), it is a nudge on the follow-up questions. Jira's words, in a neutral voice
 /// (no "I" or "we", no stage words, nothing of Gossamr's, and no "above": other comments may have landed since). Mirrored by `nudgeComment` in src/lib/reporterWait.ts.
-pub fn nudge_comment(key: &str, reporter: Option<&str>, replied: bool) -> String {
+pub fn nudge_comment(key: &str, reporter: Option<&str>, replied: bool, open: &[String]) -> String {
     let hello = reporter.map_or_else(|| "Hi,".to_string(), |name| format!("Hi @{name},"));
     let questions = if replied { "follow-up questions" } else { "earlier questions" };
-    format!("{hello}\n\nThe {questions} about {key} are still open. Could you answer them here on the ticket when you have a moment? Thanks.")
+    if open.is_empty() {
+        return format!("{hello}\n\nThe {questions} about {key} are still open. Could you answer them here on the ticket when you have a moment? Thanks.");
+    }
+    let bullets = open.iter().map(|q| format!("- {q}")).collect::<Vec<_>>().join("\n");
+    format!("{hello}\n\nThe {questions} about {key} are still open:\n\n{bullets}\n\nCould you answer them here on the ticket when you have a moment? Thanks.")
 }
 
 /// One counter of a workstream's budget: how much is used of how much it may use.
@@ -1178,7 +1189,7 @@ impl Core {
         let reporter = self.ticket_for_pip(scope, &item.key).await.ok().and_then(|(t, _)| t.reporter);
         let people: Vec<_> = reporter.iter().map(|p| (crate::domain::PersonRef { connection_id: item.connection_id.clone(), account_id: p.account_id.clone() }, p.name.clone())).collect();
         let replied = self.workstream(scope, id).await?.is_some_and(|v| v.reporter_replied);
-        let body = crate::tracker::comment_doc(&reporter_comment(&item.key, reporter.as_ref().map(|p| p.name.as_str()), &stop.questions, replied), &people);
+        let body = crate::tracker::comment_doc(&reporter_comment(reporter.as_ref().map(|p| p.name.as_str()), &stop.questions, replied), &people);
         let proposal = self.draft_from_run(&run, Intent::Comment { item, body }, READINESS_LABEL.into()).await?;
         self.record_workstream_event(scope, WorkstreamEvent::new(id, Actor::Person, "readiness_asked", Utc::now()).run(triage).proposal(&proposal.id)).await?;
         Ok(proposal)
@@ -1231,7 +1242,7 @@ impl Core {
         let reporter = self.ticket_for_pip(scope, &key).await.ok().and_then(|(t, _)| t.reporter);
         let people: Vec<_> = reporter.iter().map(|p| (crate::domain::PersonRef { connection_id: item.connection_id.clone(), account_id: p.account_id.clone() }, p.name.clone())).collect();
         let replied = self.workstream(scope, id).await?.is_some_and(|v| v.reporter_replied);
-        let body = crate::tracker::comment_doc(&reporter_comment(&key, reporter.as_ref().map(|p| p.name.as_str()), &clarity_questions(&gaps), replied), &people);
+        let body = crate::tracker::comment_doc(&reporter_comment(reporter.as_ref().map(|p| p.name.as_str()), &clarity_questions(&gaps), replied), &people);
         let draft = proposals::Draft { origin: Origin::Chat { request_id: format!("clarity:{id}"), workstream: Some(id.to_string()) }, created_by: CreatedBy::User, intent: Intent::Comment { item, body }, label: Some(READINESS_LABEL.into()), basis: None };
         let proposal = self.propose(scope, draft).await?;
         self.record_workstream_event(scope, WorkstreamEvent::new(id, Actor::Person, "clarity_asked", Utc::now()).proposal(&proposal.id)).await?;
@@ -1266,7 +1277,12 @@ impl Core {
         let item = Core::item(scope, &key);
         let reporter = self.ticket_for_pip(scope, &key).await.ok().and_then(|(t, _)| t.reporter);
         let people: Vec<_> = reporter.iter().map(|p| (crate::domain::PersonRef { connection_id: item.connection_id.clone(), account_id: p.account_id.clone() }, p.name.clone())).collect();
-        let body = crate::tracker::comment_doc(&nudge_comment(&key, reporter.as_ref().map(|p| p.name.as_str()), !view.reporter_replies.is_empty()), &people);
+        // The questions still open are the ones of the newest ask on the ticket, as the person left them.
+        let open = self.proposals(&ProposalQuery { workstream: Some(id.to_string()), ..Default::default() }).await?.iter().filter(|p| proposals::is_reporter_questions(p)).max_by_key(|p| p.created_at).and_then(|p| match &p.intent {
+            Intent::Comment { body, .. } => Some(asked_questions(&body.plain_text())),
+            _ => None,
+        });
+        let body = crate::tracker::comment_doc(&nudge_comment(&key, reporter.as_ref().map(|p| p.name.as_str()), !view.reporter_replies.is_empty(), &open.unwrap_or_default()), &people);
         let draft = proposals::Draft { origin: Origin::Chat { request_id: format!("nudge:{id}"), workstream: Some(id.to_string()) }, created_by: CreatedBy::User, intent: Intent::Comment { item, body }, label: Some(proposals::NUDGE_COMMENT_LABEL.into()), basis: None };
         let proposal = self.propose(scope, draft).await?;
         self.record_workstream_event(scope, WorkstreamEvent::new(id, Actor::Person, "reporter_nudged", Utc::now()).proposal(&proposal.id)).await?;
@@ -1883,7 +1899,7 @@ mod tests {
             let Intent::Comment { item, body } = &draft.intent else { panic!("a comment: {:?}", draft.intent) };
             assert_eq!(item.key, "CA-1");
             let text = body.plain_text();
-            for part in ["Hi @Kim Ode,", "A few things about CA-1 need clearing up", "- What does done look like?", "- Who is waiting on it?", "answer them here on the ticket"] {
+            for part in ["Hi @Kim Ode,", "A few things need clearing up so the work can be planned", "- What does done look like?", "- Who is waiting on it?", "answer them here on the ticket"] {
                 assert!(text.contains(part), "{part} in {text}");
             }
             assert!(format!("{body:?}").contains("rep-1"), "the reporter is mentioned, not just named");
@@ -1985,10 +2001,10 @@ mod tests {
         fn the_reporter_comment_is_a_fixed_frame_around_the_questions_or_around_the_four_things_when_there_are_none() {
             let questions = vec!["What does done look like?".to_string(), "Who is waiting on it?".to_string()];
             assert_eq!(
-                reporter_comment("CA-401", Some("Kim Ode"), &questions, false),
-                "Hi @Kim Ode,\n\nA few things about CA-401 need clearing up:\n\n- What does done look like?\n- Who is waiting on it?\n\nCould you answer them here on the ticket? Thanks."
+                reporter_comment(Some("Kim Ode"), &questions, false),
+                "Hi @Kim Ode,\n\nA few things need clearing up so the work can be planned:\n\n- What does done look like?\n- Who is waiting on it?\n\nCould you answer them here on the ticket? Thanks."
             );
-            let none = reporter_comment("CA-401", None, &[], false);
+            let none = reporter_comment(None, &[], false);
             assert!(none.starts_with("Hi,\n") && none.contains("- What is the goal?") && none.contains("acceptance criteria") && none.contains("in scope, and what is out") && none.contains("who is waiting on it"), "{none}");
         }
 
@@ -1996,22 +2012,22 @@ mod tests {
         fn the_reporter_comment_puts_one_question_on_each_bullet() {
             let questions = vec!["What does done look like for CA-408? Which behaviour or number should change?".to_string(), "Who is waiting on it?".to_string()];
             assert_eq!(
-                reporter_comment("CA-408", None, &questions, false),
-                "Hi,\n\nA few things about CA-408 need clearing up:\n\n- What does done look like for CA-408?\n- Which behaviour or number should change?\n- Who is waiting on it?\n\nCould you answer them here on the ticket? Thanks."
+                reporter_comment(None, &questions, false),
+                "Hi,\n\nA few things need clearing up so the work can be planned:\n\n- What does done look like for CA-408?\n- Which behaviour or number should change?\n- Who is waiting on it?\n\nCould you answer them here on the ticket? Thanks."
             );
             // A question mark inside a sentence, or before a lower-case word, does not split; and the fallback frame says no "we".
             assert_eq!(one_question_each(&["Is v2? or v3 meant?".to_string(), "Done?".to_string()]), vec!["Is v2? or v3 meant?", "Done?"]);
-            assert!(!reporter_comment("CA-1", None, &[], false).to_lowercase().contains(" we "));
+            assert!(!reporter_comment(None, &[], false).to_lowercase().contains(" we "));
         }
 
         #[test]
         fn after_a_reply_the_reporter_comment_thanks_them_and_says_what_is_still_open() {
             let questions = vec!["What does done look like?".to_string()];
             assert_eq!(
-                reporter_comment("CA-401", Some("Kim Ode"), &questions, true),
-                "Hi @Kim Ode,\n\nThanks for your answer above. A few things about CA-401 are still open:\n\n- What does done look like?\n\nCould you answer these here on the ticket? Thanks."
+                reporter_comment(Some("Kim Ode"), &questions, true),
+                "Hi @Kim Ode,\n\nThanks for your answer above. A few things are still open before the work can be planned:\n\n- What does done look like?\n\nCould you answer these here on the ticket? Thanks."
             );
-            assert_ne!(reporter_comment("CA-401", None, &questions, true), reporter_comment("CA-401", None, &questions, false));
+            assert_ne!(reporter_comment(None, &questions, true), reporter_comment(None, &questions, false));
         }
     }
 
@@ -2356,7 +2372,7 @@ mod tests {
             let Intent::Comment { item, body } = &draft.intent else { panic!("a comment: {:?}", draft.intent) };
             assert_eq!(item.key, "CA-1");
             let text = body.plain_text();
-            for part in ["A few things about CA-1 need clearing up", "- What is the goal?", "- What has to be true for this to be done", "- What is in scope, and what is out?", "- Who asked for it, and who is waiting on it?"] {
+            for part in ["A few things need clearing up so the work can be planned", "- What is the goal?", "- What has to be true for this to be done", "- What is in scope, and what is out?", "- Who asked for it, and who is waiting on it?"] {
                 assert!(text.contains(part), "{part} in {text}");
             }
             assert!(fx.tracker.intents().is_empty(), "nothing is posted before the person approves");
@@ -2425,13 +2441,24 @@ mod tests {
 
         #[test]
         fn the_nudge_comment_is_short_polite_and_names_the_ticket() {
-            let text = nudge_comment("CA-1", Some("Mette"), false);
+            let text = nudge_comment("CA-1", Some("Mette"), false, &[]);
             assert!(text.starts_with("Hi @Mette,") && text.contains("The earlier questions about CA-1 are still open") && !text.contains("can't start") && !text.contains("gentle") && text.contains("CA-1"), "{text}");
-            assert!(nudge_comment("CA-1", None, false).starts_with("Hi,"));
+            assert!(nudge_comment("CA-1", None, false, &[]).starts_with("Hi,"));
             assert!(!text.contains("we ") && !text.contains(" I ") && !text.contains(" my ") && !text.to_lowercase().contains("gossamr"), "{text}");
-            let again = nudge_comment("CA-1", Some("Mette"), true);
+            let again = nudge_comment("CA-1", Some("Mette"), true, &[]);
             assert!(again.contains("The follow-up questions about CA-1 are still open") && again.contains("CA-1"), "{again}");
             assert!(text.len() < 300, "short");
+        }
+
+        #[test]
+        fn the_nudge_lists_the_questions_still_open_and_the_ask_is_read_back_into_them() {
+            let ask = reporter_comment(Some("Kim"), &["What does done look like?".to_string(), "Who is waiting on it?".to_string()], false);
+            let open = asked_questions(&ask);
+            assert_eq!(open, vec!["What does done look like?", "Who is waiting on it?"]);
+            let text = nudge_comment("CA-1", Some("Kim"), false, &open);
+            assert_eq!(text, "Hi @Kim,\n\nThe earlier questions about CA-1 are still open:\n\n- What does done look like?\n- Who is waiting on it?\n\nCould you answer them here on the ticket when you have a moment? Thanks.");
+            assert!(!ask.contains("CA-1") && !ask.contains("Gossamr"), "{ask}");
+            assert!(asked_questions("Hi,\n\nNo bullets here.").is_empty());
         }
 
         #[tokio::test]
@@ -2453,7 +2480,7 @@ mod tests {
             assert!(matches!(&nudge.origin, Origin::Chat { workstream, .. } if workstream.as_deref() == Some(ws.id.as_str())), "in this workstream");
             let Intent::Comment { item, body } = &nudge.intent else { panic!("a comment: {:?}", nudge.intent) };
             assert_eq!(item.key, "CA-1");
-            assert!(body.plain_text().contains("The earlier questions about CA-1 are still open"));
+            assert!(body.plain_text().contains("The earlier questions about CA-1 are still open:\n- What is the goal?\n- What has to be true"), "the open questions are listed: {}", body.plain_text());
             assert_eq!(fx.tracker.intents().len(), posted, "nothing is posted before the person approves it");
             let events = fx.core.workstream_events(&fx.scope, &ws.id).await.unwrap();
             let line = events.iter().find(|e| e.action == "reporter_nudged").expect("audited");

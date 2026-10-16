@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Intent, Proposal, Run, WorkDoc, WorkstreamEvent, WorkstreamView } from "../types";
-import { editedWords, jiraSent, sentWhat } from "./jiraSent";
+import { cutWords, editedWords, jiraSent, sentWhat } from "./jiraSent";
 
 const ago = (hours: number) => new Date(Date.parse("2026-10-13T12:00:00Z") - hours * 3_600_000).toISOString();
 const ref = (key: string) => ({ connectionId: "c", externalId: key, key });
@@ -138,6 +138,17 @@ describe("What Jira saw from me", () => {
     expect(editedWords({ madeBy: "Pip", edited: false })).toBe("Pip drafted it; posted without changes");
     expect(editedWords({ madeBy: "You", edited: false })).toBe("You wrote it");
     expect(editedWords({ madeBy: "You", edited: true })).toBe("You wrote it and edited it before approving");
+  });
+
+  it("cuts a long line at a word, not in the middle of one (G32)", () => {
+    const words = "Before work starts a few things need clearing up so that the plan matches what the reporter actually has in mind for the export";
+    const what = sentWhat(comment("CA-401", words), null)!;
+    expect(what.summary).toBe("Before work starts a few things need clearing up so that the plan matches what the reporter actually has in mind for…");
+    expect(what.summary.length).toBeLessThanOrEqual(120);
+    // A word that ends right at the cut is kept whole; a run with no spaces is still cut at the limit.
+    expect(cutWords("x".repeat(119) + " tail")).toBe(`${"x".repeat(119)}…`);
+    expect(cutWords("y".repeat(300))).toBe(`${"y".repeat(119)}…`);
+    expect(cutWords("short")).toBe("short");
   });
 
   it("keeps a long comment short on its line and whole behind the disclosure", () => {
