@@ -5,7 +5,7 @@ import { MockBackend } from "../backend/mock";
 import type { Proposal, Run, WorkstreamView } from "../types";
 import { pipHomeHints } from "./footerHints";
 import { HINTS, keyHint } from "./keyMap";
-import { entryLabel, timelineDrafts, timelineRuns } from "./Timeline";
+import { entryLabel, timelineDrafts, timelineRuns, withTicket } from "./Timeline";
 import { ENTRY_FOCUS, anchoredScrollTop, followsEnd, nearBottom, firstShowing, readingAnchor, revealEntry, stepIndex, timelineKeyAction, timelineStop, upToTimeline } from "./timelineKeys";
 import { usePipHome } from "./pipHomeStore";
 import { useTabs } from "./tabsStore";
@@ -242,5 +242,12 @@ describe("entryLabel", () => {
     expect(entryLabel({ ...base, scopeLabel: "CA-1", target: { type: "comment", ticketKey: "CA-1", id: "c1" } })).toBe("CA-1: The reporter replied on the ticket. Enter opens the comment");
     expect(entryLabel({ ...base, target: null })).toBe("The reporter replied on the ticket");
     expect(entryLabel({ ...base, kind: "said", target: null })).toBeUndefined();
+  });
+
+  it("names the ticket, so a row read alone is not a bare sentence (G32)", () => {
+    expect(entryLabel({ ...base, ticketKey: "CA-1", target: null })).toBe("CA-1: The reporter replied on the ticket");
+    expect(entryLabel({ ...base, ticketKey: "CA-1", scopeLabel: "CA-1", target: null })).toBe("CA-1: The reporter replied on the ticket");
+    expect(entryLabel({ ...base, ticketKey: null, target: null })).toBe("The reporter replied on the ticket");
+    expect(withTicket("Agent R1 started on CA-1", "CA-1")).toBe("Agent R1 started on CA-1");
   });
 });

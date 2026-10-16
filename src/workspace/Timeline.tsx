@@ -149,10 +149,13 @@ export function openEntry(e: Pick<TimelineEntry, "target">, byId: Lookup, root: 
 /** What the reply entry says of Enter, as the entry is read and hovered. */
 export const OPENS_COMMENT = "Enter opens the comment";
 
-/** The spoken name of a timeline entry: none for what is said in the conversation, the sentence otherwise, and for a reply that opens a comment, what Enter does. */
-export function entryLabel(e: Pick<TimelineEntry, "kind" | "scopeLabel" | "text" | "target">): string | undefined {
+/** `text` with the ticket it is about in front, unless it says so already: a row read alone ("The reporter replied on the ticket") names its ticket. */
+export const withTicket = (text: string, ticketKey: string | null | undefined) => (ticketKey && !text.includes(ticketKey) ? `${ticketKey}: ${text}` : text);
+
+/** The spoken name of a timeline entry: none for what is said in the conversation, the sentence with its ticket otherwise, and for a reply that opens a comment, what Enter does. */
+export function entryLabel(e: Pick<TimelineEntry, "kind" | "scopeLabel" | "text" | "target"> & { ticketKey?: string | null }): string | undefined {
   if (e.kind === "said" || e.kind === "pip") return undefined;
-  const text = e.scopeLabel ? `${e.scopeLabel}: ${e.text}` : e.text;
+  const text = e.scopeLabel ? withTicket(`${e.scopeLabel}: ${e.text}`, e.ticketKey) : withTicket(e.text, e.ticketKey);
   return e.target?.type === "comment" ? `${text}. ${OPENS_COMMENT}` : text;
 }
 
@@ -181,7 +184,7 @@ function Line({ entry, onOpen, children }: { entry: TimelineEntry; onOpen?: () =
       <span aria-hidden className={`size-1.5 shrink-0 self-center rounded-full ${waiting ? "bg-ws-pip" : entry.decision || entry.attention ? "bg-ws-accent" : "bg-ws-sep2"}`} />
       <When at={entry.at} />
       {onOpen && entry.target ? (
-        <button type="button" tabIndex={-1} data-timeline-open={entry.target.type} onClick={onOpen} className={LINK}>
+        <button type="button" tabIndex={-1} data-timeline-open={entry.target.type} aria-label={withTicket(entry.text, entry.ticketKey)} onClick={onOpen} className={LINK}>
           {entry.text}
         </button>
       ) : (
@@ -193,7 +196,7 @@ function Line({ entry, onOpen, children }: { entry: TimelineEntry; onOpen?: () =
         </button>
       )}
       {entry.detail && (
-        <span data-timeline-detail className="line-clamp-2 basis-full min-w-0 pl-3 text-xs text-ws-ink3 [overflow-wrap:anywhere]">
+        <span data-timeline-detail className="line-clamp-3 basis-full min-w-0 pl-3 text-xs whitespace-pre-line text-ws-ink3 [overflow-wrap:anywhere]">
           {entry.detail}
         </span>
       )}

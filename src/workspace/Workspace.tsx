@@ -181,7 +181,7 @@ function useGlobalKeys(agentsEnabled: boolean) {
           if (generalKeyOutcome(typed) === "open") {
             usePipHome.getState().openGeneral();
             settleGeneralFocus();
-          } else useToasts.getState().push(GENERAL_KEY_OFF, "info");
+          } else useToasts.getState().push(GENERAL_KEY_OFF, "info", undefined, { now: true });
         }
         useTabs.getState().setRoute("pip");
         return;

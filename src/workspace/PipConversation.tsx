@@ -421,10 +421,13 @@ export function VerbNote({ outcome }: { outcome: VerbOutcome | null }) {
   );
 }
 
-/** What the agents are doing, under the composer: updated as runs move, and never a turn in the conversation. */
+/**
+ * What the agents are doing, under the composer: updated as runs move, and never a turn in the conversation. It is not a live
+ * region: it changes with every run that moves, which the toasts and Needs you already say once, and a screen reader reads it where it is.
+ */
 export function ComposerFooter({ text }: { text: string }) {
   return (
-    <p role="status" data-composer-footer className="m-0 -mt-1 px-3 pb-2 text-xs text-ws-ink3">
+    <p data-composer-footer className="m-0 -mt-1 px-3 pb-2 text-xs text-ws-ink3">
       {text}
     </p>
   );

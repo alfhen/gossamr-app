@@ -21,8 +21,10 @@ describe("reporterFollow in the shared cases the Rust side runs too (reporterWai
 });
 
 describe("the reporter's reply as a quote (G15)", () => {
-  it("is the first line, evened out, short enough to read at a glance", () => {
-    expect(replyExcerpt("  Hi,\n second")).toBe("Hi,…");
+  it("is the first two lines, evened out, short enough to read at a glance", () => {
+    expect(replyExcerpt("  Hi,\n second")).toBe("Hi,\nsecond");
+    expect(replyExcerpt("1. a\n2. b\n3. c\n\n4. d")).toBe("1. a\n2. b (+2 more)");
+    expect(replyExcerpt("1. a\n2. b\n3. c")).toBe("1. a\n2. b (+1 more)");
     expect(replyExcerpt("\n\n  a   b \t c")).toBe("a b c");
     expect(replyExcerpt("  Hi,\n \n ")).toBe("Hi,");
     expect(replyExcerpt("")).toBe("");

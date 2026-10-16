@@ -973,7 +973,7 @@ export interface ReporterReplyAt extends ReporterReply {
   at: string;
 }
 
-/** The reporter's reply: which comment on the ticket it is and how it starts (`excerpt`, a short first line). As `ReporterReply` in src-tauri/src/inbox/workstreams.rs. */
+/** The reporter's reply: which comment on the ticket it is and how it starts (`excerpt`, its first two lines and how many more follow). As `ReporterReply` in src-tauri/src/inbox/workstreams.rs. */
 export interface ReporterReply {
   id: string;
   excerpt: string;

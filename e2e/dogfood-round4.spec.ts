@@ -121,7 +121,7 @@ test.describe("keys inside the open decision, the palette's Agents and Undo (F2,
 
   test("a General run need's link says it opens the run", async ({ page }) => {
     const { pane } = await onPermission(page);
-    await expect(pane.getByRole("link", { name: "Open the run" })).toBeVisible();
-    await expect(pane.getByRole("link", { name: "Open in workstream" })).toHaveCount(0);
+    await expect(pane.getByRole("button", { name: "Open the run" })).toBeVisible();
+    await expect(pane.getByRole("button", { name: "Open in workstream" })).toHaveCount(0);
   });
 });

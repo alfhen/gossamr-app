@@ -1,5 +1,5 @@
 {
-  "about": "reporterFollow (src/lib/reporterWait.ts) and reporter_follow (src-tauri/src/inbox/workstreams.rs). `events` is the audit, oldest first. `comments` (ticket comments with author and at) and `me` (the person's own account, or null): both sides pass as `replies` the times of the comments whose author is not `me`. `expect` is waiting (the since time, or null), changed (the wait ended because the ticket changed or the reporter replied, and the person has not chosen since), and replied (it ended with a reply, which implies changed). `repliedAt`, where a case names it, is the time of the comment that ended the wait (`followWithReply`, `reporter_follow_at`), null without a reply. `reply`, where a case names it, is that comment as `{ id, excerpt }` (`replyComment`, `reply_to`): its first line, evened out and cut to 140 characters; comments then carry `id` and `text`.",
+  "about": "reporterFollow (src/lib/reporterWait.ts) and reporter_follow (src-tauri/src/inbox/workstreams.rs). `events` is the audit, oldest first. `comments` (ticket comments with author and at) and `me` (the person's own account, or null): both sides pass as `replies` the times of the comments whose author is not `me`. `expect` is waiting (the since time, or null), changed (the wait ended because the ticket changed or the reporter replied, and the person has not chosen since), and replied (it ended with a reply, which implies changed). `repliedAt`, where a case names it, is the time of the comment that ended the wait (`followWithReply`, `reporter_follow_at`), null without a reply. `reply`, where a case names it, is that comment as `{ id, excerpt }` (`replyComment`, `reply_to`): its first two lines, evened out, each cut to 140 characters, and how many more follow; comments then carry `id` and `text`.",
   "cases": [
     {
       "name": "no audit is no wait",
@@ -471,7 +471,7 @@
       "expect": { "waiting": false, "since": null, "changed": false, "replied": false }
     },
     {
-      "name": "the reply's time is that of the first comment from someone else after the wait began; a reply of several lines ends with an ellipsis",
+      "name": "the reply's time is that of the first comment from someone else after the wait began; a reply of several lines keeps two and says how many more",
       "events": [
         {"actor": "person", "action": "readiness_asked", "proposalId": "d1", "at": "2026-10-12T10:01:00Z"},
         {"actor": "person", "action": "draft_approved", "proposalId": "d1", "at": "2026-10-12T10:02:00Z"}
@@ -483,7 +483,7 @@
         {"author": "kim", "at": "2026-10-12T10:09:00Z", "id": "c4", "text": "Later still."}
       ],
       "me": "me",
-      "expect": { "waiting": false, "since": null, "changed": true, "replied": true, "repliedAt": "2026-10-12T10:05:00Z", "reply": { "id": "c3", "excerpt": "It happens…" }, "replies": [{ "id": "c3", "excerpt": "It happens…", "at": "2026-10-12T10:05:00Z" }, { "id": "c4", "excerpt": "Later still.", "at": "2026-10-12T10:09:00Z" }] }
+      "expect": { "waiting": false, "since": null, "changed": true, "replied": true, "repliedAt": "2026-10-12T10:05:00Z", "reply": { "id": "c3", "excerpt": "It happens\non every checkout. (+1 more)" }, "replies": [{ "id": "c3", "excerpt": "It happens\non every checkout. (+1 more)", "at": "2026-10-12T10:05:00Z" }, { "id": "c4", "excerpt": "Later still.", "at": "2026-10-12T10:09:00Z" }] }
     },
     {
       "name": "asking again ends the wait the reply ended, but the reply is still listed, in time order",

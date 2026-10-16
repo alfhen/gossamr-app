@@ -4,9 +4,9 @@ import { Icon, KIND_ICON } from "./AgentIcons";
 import { Box, BoxTitle, Btn, CodeBox, Details, MONO_BLOCK, Sec, SheetFrame, pickerOpen } from "./AgentSheet";
 import { KIND_LABEL } from "./agentsLogic";
 import { PrPicker } from "./PrPicker";
-import { PromptParts, ReadOnlyExtras, ReadOnlyLine, ReportExtras } from "./RunPrompt";
-import { RunPreflight } from "./RunPreflight";
-import { COPY, commandShown, homeShort, kindBlock, launchCommand, permissionMode, readOnlyNote, repoShortage, runAsYou, savedAsTyped, startBlock, startSteps, ticketlessShape, worktreeBranch, type RepoShortage } from "./runSheetLogic";
+import { PromptParts, ReadOnlyExtras, ReportExtras } from "./RunPrompt";
+import { TechnicalDetails, WhatAgentsCanDo } from "./RunPreflight";
+import { COPY, commandShown, homeShort, kindBlock, launchCommand, permissionMode, repoShortage, savedAsTyped, startBlock, startSteps, ticketlessShape, worktreeBranch, type RepoShortage } from "./runSheetLogic";
 import { containerKey } from "../lib/filter";
 import { useRunSetup, type PrSearch, type RunEditFields, type SetupPhase } from "./runSetupStore";
 import { useTabs } from "./tabsStore";
@@ -476,6 +476,8 @@ export function RunSetupView(p: SetupViewProps) {
         </p>
       )}
 
+      <WhatAgentsCanDo readOnly={review?.readOnly} />
+
       {p.ticketless ? (
         <ProjectPicker p={p} />
       ) : (
@@ -539,18 +541,9 @@ export function RunSetupView(p: SetupViewProps) {
       </Sec>
 
       <Sec title="Before you approve">
-        <RunPreflight preflight={preflight} checking={phase === "preparing" || p.busy} steps={p.on.trustFolder && p.on.recheck ? { trust: p.on.trustFolder, recheck: p.on.recheck, rechecking: !!p.rechecking } : undefined} />
-        <Box label="What agents can do">
-          <p className="m-0 text-ws-ink">{runAsYou(review?.readOnly)}</p>
-          {review?.readOnly ? (
-            <>
-              <ReadOnlyLine readOnly={review.readOnly} />
-              <p className="m-0 text-ws-ink2">{readOnlyNote(review.readOnly)}</p>
-            </>
-          ) : (
-            <p className="m-0 text-ws-ink2">{COPY.notALock}</p>
-          )}
-        </Box>
+        <TechnicalDetails preflight={preflight} checking={phase === "preparing" || p.busy} steps={p.on.trustFolder && p.on.recheck ? { trust: p.on.trustFolder, recheck: p.on.recheck, rechecking: !!p.rechecking } : undefined}>
+          {review && <LaunchCommand review={review} itemKey={p.item?.key ?? null} />}
+        </TechnicalDetails>
       </Sec>
 
       <Sec title="What happens when you press Start">
@@ -564,7 +557,6 @@ export function RunSetupView(p: SetupViewProps) {
             </li>
           ))}
         </Steps>
-        {review && <LaunchCommand review={review} itemKey={p.item?.key ?? null} />}
       </Sec>
     </SheetFrame>
   );

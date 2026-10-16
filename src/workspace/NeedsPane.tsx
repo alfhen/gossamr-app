@@ -180,6 +180,9 @@ function HigherPriorityBar({ need }: { need: Need }) {
   );
 }
 
+/** Where the keyboard lands when a decision is reached by F6 as well as by Enter on its row: the pane's heading, so a screen reader hears what is open and Tab goes on to the decision. The pane itself when it has none. */
+export const paneStop = (pane: HTMLElement): HTMLElement => pane.querySelector<HTMLElement>("[data-needs-pane-title]") ?? pane;
+
 /** The first thing the person decides with in the pane: a permission's buttons, an answer box, a draft's main button, else the first button. */
 export function firstDecision(root: HTMLElement): HTMLElement | null {
   const body = '[data-needs-pane-body]';
@@ -586,7 +589,7 @@ function NeedDecision({ need }: { need: Need }) {
       const el = root.current;
       if (!el) return;
       if (intent !== "edit") {
-        (el.querySelector<HTMLElement>("[data-needs-pane-title]") ?? el).focus({ preventScroll: true });
+        paneStop(el).focus({ preventScroll: true });
         return;
       }
       if (intent === "edit") {
@@ -662,13 +665,13 @@ function NeedDecision({ need }: { need: Need }) {
           </p>
         </div>
         <span className="flex shrink-0 items-center gap-2 text-sm">
-          <a
-            href="#open-in-workstream"
-            onClick={(ev) => (ev.preventDefault(), openInWorkstream(need))}
+          <button
+            type="button"
+            onClick={() => openInWorkstream(need)}
             className="rounded font-semibold text-ws-accent hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip"
           >
             {openInWorkstreamLabel(need)}
-          </a>
+          </button>
           <button
             type="button"
             aria-label="Back to the list"
@@ -745,7 +748,7 @@ function BatchDecision({ gid, needs }: { gid: string; needs: readonly Need[] }) 
               {title}
             </b>
             <GroupChip group="approve" />
-            <span data-needs-pane-title className="min-w-0 truncate">
+            <span data-needs-pane-title role="heading" aria-level={2} tabIndex={-1} className="min-w-0 truncate rounded focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip">
               {batchLabel(count)}
             </span>
           </div>

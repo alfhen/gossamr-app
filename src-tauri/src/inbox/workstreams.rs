@@ -218,17 +218,22 @@ pub fn reporter_follow_at(events: &[WorkstreamEvent], replies: &[chrono::DateTim
 /// How many characters of a reply the quote keeps. As `REPLY_EXCERPT` in src/lib/reporterWait.ts.
 const REPLY_EXCERPT: usize = 140;
 
-/// The first line of a comment's text with its spacing made even, cut to `REPLY_EXCERPT` characters with "…"; the "…" is
-/// also there when more lines follow, so a reply of several lines does not read as complete. Mirrored by `replyExcerpt` in
-/// src/lib/reporterWait.ts.
+/// How many lines of a reply the quote keeps. As `REPLY_LINES` in src/lib/reporterWait.ts.
+const REPLY_LINES: usize = 2;
+
+/// The first two lines of a comment's text with their spacing made even, each cut to `REPLY_EXCERPT` characters with "…", on
+/// two lines of their own, and " (+N more)" after them when N more lines follow, so a numbered reply does not read as one
+/// item. Mirrored by `replyExcerpt` in src/lib/reporterWait.ts.
 pub fn reply_excerpt(text: &str) -> String {
-    let mut lines = text.lines().map(|l| l.split_whitespace().collect::<Vec<_>>().join(" ")).filter(|l| !l.is_empty());
-    let line = lines.next().unwrap_or_default();
-    if line.chars().count() <= REPLY_EXCERPT && lines.next().is_none() {
-        return line;
-    }
-    let cut: String = line.chars().take(REPLY_EXCERPT - 1).collect();
-    format!("{}…", cut.trim_end())
+    let lines: Vec<String> = text.lines().map(|l| l.split_whitespace().collect::<Vec<_>>().join(" ")).filter(|l| !l.is_empty()).collect();
+    let shown: Vec<String> = lines
+        .iter()
+        .take(REPLY_LINES)
+        .map(|line| if line.chars().count() > REPLY_EXCERPT { format!("{}…", line.chars().take(REPLY_EXCERPT - 1).collect::<String>().trim_end()) } else { line.clone() })
+        .collect();
+    let more = lines.len() - shown.len();
+    let tail = if more > 0 { format!(" (+{more} more)") } else { String::new() };
+    format!("{}{tail}", shown.join("\n"))
 }
 
 /// Every comment of the cached ticket `t` from someone other than `me` that came after the first reporter ask was posted (the
@@ -1952,8 +1957,9 @@ mod tests {
         }
 
         #[test]
-        fn a_reply_is_quoted_by_its_first_line() {
-            assert_eq!(reply_excerpt("  Hi,\n second"), "Hi,…", "more lines follow");
+        fn a_reply_is_quoted_by_its_first_two_lines() {
+            assert_eq!(reply_excerpt("  Hi,\n second"), "Hi,\nsecond", "two lines are kept");
+            assert_eq!(reply_excerpt("1. a\n2. b\n3. c\n\n4. d"), "1. a\n2. b (+2 more)");
             assert_eq!(reply_excerpt("  Hi,\n\n  \t"), "Hi,");
             assert_eq!(reply_excerpt("\n\n  a   b \t c"), "a b c");
             assert_eq!(reply_excerpt(""), "");

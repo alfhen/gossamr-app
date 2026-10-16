@@ -3,9 +3,9 @@ import { create } from "zustand";
 import type { Preflight, Proposal, Run, RunKind, RunReview } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { Box, BoxTitle, Btn, Details, MONO_BLOCK } from "./AgentSheet";
-import { PromptParts, ReadOnlyExtras, ReadOnlyLine, ReportExtras } from "./RunPrompt";
-import { RunPreflight } from "./RunPreflight";
-import { COPY, readOnlyNote, runAsYou, startBlock } from "./runSheetLogic";
+import { PromptParts, ReadOnlyExtras, ReportExtras } from "./RunPrompt";
+import { TechnicalDetails, WhatAgentsCanDo } from "./RunPreflight";
+import { COPY, startBlock } from "./runSheetLogic";
 import { DRAFT_CARD, PIP_INPUT_ID } from "./draftKeys";
 import { scrollTopFor } from "./peekDrafts";
 import { afterRunStarted, approveRunDraft, readRunDraft } from "./runSetupStore";
@@ -362,6 +362,7 @@ export function InlineStartView({ id, entry, on }: { id: string; entry: InlineEn
           {entry.error}
         </p>
       )}
+      <WhatAgentsCanDo readOnly={review?.readOnly} />
       {review ? (
         <>
           <div data-inline-prompt={review.digest}>
@@ -382,18 +383,7 @@ export function InlineStartView({ id, entry, on }: { id: string; entry: InlineEn
           </p>
         )
       )}
-      <RunPreflight preflight={preflight} checking={phase === "loading"} steps={{ trust: on.trustFolder, recheck: on.recheck, rechecking: entry.rechecking }} />
-      <Box label="What agents can do">
-        <p className="m-0 text-ws-ink">{runAsYou(review?.readOnly)}</p>
-        {review?.readOnly ? (
-          <>
-            <ReadOnlyLine readOnly={review.readOnly} />
-            <p className="m-0 text-ws-ink2">{readOnlyNote(review.readOnly)}</p>
-          </>
-        ) : (
-          <p className="m-0 text-ws-ink2">{COPY.notALock}</p>
-        )}
-      </Box>
+      <TechnicalDetails preflight={preflight} checking={phase === "loading"} steps={{ trust: on.trustFolder, recheck: on.recheck, rechecking: entry.rechecking }} />
       <div className="flex flex-wrap items-center gap-2">
         <Btn
           tone="primary"

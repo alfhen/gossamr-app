@@ -6,7 +6,7 @@ import { isoWeek, ticketPick, type PlanItem } from "../lib/planMyWeek";
 import type { WorkItem, WorkstreamView } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { buildCommands, rankCommands, type CommandActions } from "./commands";
-import { PLAN_EMPTY, PLAN_LEFT_OUT, PlanMyWeek, PlanMyWeekView, afterMove, afterRemove, restorePick, ThisWeekView, findTicket, rowStep, CHOICES, revealChoices, movedText } from "./PlanMyWeek";
+import { PLAN_EMPTY, PLAN_LEFT_OUT, PlanMyWeek, PlanMyWeekView, afterMove, afterRemove, restorePick, ThisWeekView, findTicket, rowStep, CHOICES, revealChoices, movedText, rovingStop } from "./PlanMyWeek";
 import { WorkstreamList } from "./PipHome";
 import { usePipHome } from "./pipHomeStore";
 import { loadPrefs, usePrefs } from "./prefs";
@@ -84,6 +84,21 @@ describe("the Plan my week card", () => {
     const described = /aria-describedby="([^"]+)"/.exec(row("CA-2"))![1];
     expect(html).toContain(`id="${described}" data-plan-because="true"`);
     expect(html).toContain('role="status" data-plan-moved="true" class="sr-only"');
+  });
+
+  it("makes the list one Tab stop: the first row, or the one the keyboard was last on, and its buttons; the others are out of the order (G33)", () => {
+    const html = view([pick("CA-1"), pick("CA-2")]);
+    const row = (key: string) => new RegExp(`<li data-plan-pick="[^"]*${key}"[^>]*>`).exec(html)![0];
+    expect(row("CA-1")).toContain('tabindex="0"');
+    expect(row("CA-2")).toContain('tabindex="-1"');
+    // The second row's buttons are not Tab stops; the first row's are.
+    expect(html).toMatch(/data-plan-remove="true" tabindex="-1" aria-label="Remove CA-2 Something"/);
+    expect(html).not.toMatch(/data-plan-remove="true" tabindex="-1" aria-label="Remove CA-1 Something"/);
+    const [a, b] = [pick("CA-1"), pick("CA-2")];
+    expect(rovingStop([a, b], null)).toBe(a.id);
+    expect(rovingStop([a, b], b.id)).toBe(b.id);
+    expect(rovingStop([a], b.id)).toBe(a.id);
+    expect(rovingStop([], null)).toBeNull();
   });
 
   it("says where a pick went after a move (G11)", () => {

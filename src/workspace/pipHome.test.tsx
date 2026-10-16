@@ -259,7 +259,7 @@ describe("Pip home", () => {
     for (const step of ["investigate", "triage", "plan", "build", "review", "verify"]) expect(steps).toContain(`data-step="${step}"`);
     expect(steps).toContain('data-step-next="investigate"');
     expect(steps.match(/data-step-quiet="true"/g)).toHaveLength(5);
-    expect(renderToStaticMarkup(<StepsColumn workstream={view} />)).toContain("No notes yet.");
+    expect(renderToStaticMarkup(<StepsColumn workstream={view} />)).toContain("No notes yet. Pip writes here what it decides to remember about this workstream");
   });
 });
 

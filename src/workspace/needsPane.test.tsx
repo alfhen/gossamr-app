@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import type { Need } from "../lib/needs";
-import { ReporterReplyQuote, closeTarget, HigherPriority, EDIT_FIELD, advancedText, doneText, postedToJira, waitStarted, nextAdvanced, endEditing, firstDecision } from "./NeedsPane";
+import { ReporterReplyQuote, closeTarget, HigherPriority, EDIT_FIELD, advancedText, doneText, postedToJira, waitStarted, nextAdvanced, endEditing, firstDecision, paneStop } from "./NeedsPane";
 
 /** A stand-in for the pane: each selector it is asked for answers with what the test put there. */
 const pane = (found: Record<string, unknown[]>) =>
@@ -29,6 +29,15 @@ describe("firstDecision", () => {
   it("falls back to the action bar's last button where there is no card", () => {
     const post = { id: "post" };
     expect(firstDecision(pane({ [`${body} [data-draft-actions] button:not(:disabled)`]: [{ id: "skip" }, post] }))).toBe(post);
+  });
+});
+
+describe("paneStop (G33)", () => {
+  it("is the pane's heading, as Enter on a row lands, and the pane when it has none", () => {
+    const heading = { id: "heading" };
+    expect(paneStop({ querySelector: (s: string) => (s === "[data-needs-pane-title]" ? heading : null) } as unknown as HTMLElement)).toBe(heading);
+    const bare = { querySelector: () => null } as unknown as HTMLElement;
+    expect(paneStop(bare)).toBe(bare);
   });
 });
 

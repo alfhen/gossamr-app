@@ -413,7 +413,7 @@ describe("PipConversation", () => {
       const html = renderToStaticMarkup(
         <Composer conversation={GENERAL_CONVERSATION} attached={attached} chips={[]} looking="the board" scene={{ itemKey: null, route: "pip", runOpen: false }} footer="4 agents working · 2 need you" />,
       );
-      expect(html).toMatch(/<p role="status" data-composer-footer="true" class="[^"]*text-ws-ink3[^"]*">4 agents working · 2 need you<\/p>/);
+      expect(html).toMatch(/<p data-composer-footer="true" class="[^"]*text-ws-ink3[^"]*">4 agents working · 2 need you<\/p>/);
       expect(html.indexOf("data-composer-footer")).toBeGreaterThan(html.indexOf('id="pip-input"'));
       expect(renderToStaticMarkup(<ComposerFooter text="No agents working · nothing needs you" />)).toContain("No agents working");
     });

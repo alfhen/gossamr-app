@@ -102,7 +102,7 @@ test.describe("the timeline's words for a posted ask (G13)", () => {
 });
 
 test.describe("the reporter's reply stays in the timeline (G1, G12, G13)", () => {
-  test("a reply that ended the wait is still there once the person asks again, and a longer reply ends with an ellipsis", async ({ page }) => {
+  test("a reply that ended the wait is still there once the person asks again, and a reply of two lines is quoted on both (G27 of round 12)", async ({ page }) => {
     test.setTimeout(150_000);
     await page.setViewportSize({ width: 1440, height: 900 });
     await openApp(page, "runs=empty");
@@ -119,7 +119,7 @@ test.describe("the reporter's reply stays in the timeline (G1, G12, G13)", () =>
     await commentOnTicket(page, "CA-408", "It should send three emails.\nOne to the shopper, two to support.");
     const lines = pipHome(page).locator("[data-timeline] [data-timeline-line]");
     const reply = lines.filter({ hasText: "The reporter replied on the ticket" });
-    await expect(reply.locator("[data-timeline-detail]")).toHaveText("“It should send three emails.…”");
+    await expect(reply.locator("[data-timeline-detail]")).toHaveText("“It should send three emails. One to the shopper, two to support.”");
     await askAndPost(2);
     // Asking again ended the wait the reply ended, but the reply stays, between the two asks.
     await expect(reply).toHaveCount(1);

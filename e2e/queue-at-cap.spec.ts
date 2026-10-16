@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { advanceRuns, expectToast, landOnWorkspace, mockRuns, peekSheet, peekTicket } from "./support/app";
+import { advanceRuns, expectToast, landOnWorkspace, mockRuns, openTechnical, peekSheet, peekTicket } from "./support/app";
 
 const setup = (page: Page) => page.getByRole("dialog", { name: "Start an agent" });
 const safety = (page: Page) => page.getByRole("dialog", { name: "Agents safety and settings" });
@@ -25,6 +25,7 @@ async function openSetup(page: Page, key: string) {
   }
   await expect(setup(page)).toContainText(key);
   await setup(page).getByRole("combobox", { name: "Repository" }).selectOption("acme/webshop");
+  await openTechnical(setup(page));
   await expect(setup(page).getByRole("group", { name: "Checks before you approve" })).toContainText("What runs");
 }
 

@@ -66,6 +66,9 @@ export function rowStep(ev: Pick<KeyboardEvent, "key" | "altKey" | "ctrlKey" | "
   return ev.key === "ArrowDown" || ev.key === "j" ? 1 : ev.key === "ArrowUp" || ev.key === "k" ? -1 : 0;
 }
 
+/** The plan's one Tab stop (a roving tabindex): the pick the keyboard was last on, else the first, so a plan that lost that pick is still entered by Tab. Null for an empty plan. */
+export const rovingStop = (picks: readonly PlanItem[], last: string | null): string | null => (picks.find((p) => p.id === last) ?? picks[0])?.id ?? null;
+
 /** The pick the keyboard goes to once the one at `index` is removed from `picks` (as they are after): the one now at that index, else the one before it; null when none is left (the add box takes it). */
 export const afterRemove = (picks: readonly PlanItem[], index: number): string | null => (picks[index] ?? picks[index - 1])?.id ?? null;
 
@@ -117,6 +120,9 @@ export function PlanMyWeekView({
   /** Several tickets matched the words: the person chooses one. */
   const [choices, setChoices] = useState<WorkItem[] | null>(null);
   const [focus, setFocus] = useState<{ id: string; part: "row" | "up" | "down" } | { removed: number } | null>(null);
+  /** The row that is the list's one Tab stop (a roving tabindex): the one the keyboard was last on. */
+  const [stop, setStop] = useState<string | null>(null);
+  const tabStop = rovingStop(picks, stop);
   const root = useRef<HTMLElement>(null);
   // What Undo puts back goes into the plan as it is by then, which the closure of the press that removed the row cannot see.
   // Set once the render commits, never during it: a render React throws away must not leave Undo its picks.
@@ -225,7 +231,8 @@ export function PlanMyWeekView({
             <li
               key={p.id}
               data-plan-pick={p.id}
-              tabIndex={0}
+              tabIndex={p.id === tabStop ? 0 : -1}
+              onFocus={() => setStop(p.id)}
               draggable
               aria-label={`${n + 1}. ${p.title}`}
               aria-describedby={`${because}-${p.id}`}
@@ -270,13 +277,13 @@ export function PlanMyWeekView({
                   Because {p.because}
                 </span>
               </span>
-              <button type="button" data-plan-move="up" aria-label={`Move ${p.title} up`} disabled={n === 0} onClick={() => (move(n, n - 1), setFocus({ id: p.id, part: "up" }))} className={small}>
+              <button type="button" data-plan-move="up" tabIndex={p.id === tabStop ? undefined : -1} aria-label={`Move ${p.title} up`} disabled={n === 0} onClick={() => (move(n, n - 1), setFocus({ id: p.id, part: "up" }))} className={small}>
                 ↑
               </button>
-              <button type="button" data-plan-move="down" aria-label={`Move ${p.title} down`} disabled={n === picks.length - 1} onClick={() => (move(n, n + 1), setFocus({ id: p.id, part: "down" }))} className={small}>
+              <button type="button" data-plan-move="down" tabIndex={p.id === tabStop ? undefined : -1} aria-label={`Move ${p.title} down`} disabled={n === picks.length - 1} onClick={() => (move(n, n + 1), setFocus({ id: p.id, part: "down" }))} className={small}>
                 ↓
               </button>
-              <button type="button" data-plan-remove aria-label={`Remove ${p.title}`} onClick={() => remove(n)} className={small}>
+              <button type="button" data-plan-remove tabIndex={p.id === tabStop ? undefined : -1} aria-label={`Remove ${p.title}`} onClick={() => remove(n)} className={small}>
                 Remove
               </button>
             </li>

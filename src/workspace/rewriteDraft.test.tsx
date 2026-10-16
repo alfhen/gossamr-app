@@ -8,7 +8,7 @@ import { useRuns } from "./runsStore";
 import { useWorkstreams } from "./workstreamsStore";
 import { DraftCard, draftSummary, draftTitle } from "./DraftCard";
 import { DraftPreview, draftPreviewBody } from "./DraftPreview";
-import { ONLY_SPACING, changedPairs, diffSummary, diffWords, oneLine, rewriteBlocked, rewriteEdit, rewriteFields, RewriteView, takesBackendText, type Rewrite } from "./RewriteDiff";
+import { ONLY_SPACING, changedPairs, diffSummary, diffWords, oneLine, rewriteBlocked, rewriteEdit, rewriteFields, RewriteView, startsBlock, takesBackendText, type Rewrite } from "./RewriteDiff";
 import { diffLines } from "../lib/textDiff";
 import { targetOf } from "../lib/proposals";
 
@@ -43,7 +43,7 @@ const draft = (i: Rewrite = intent(), over: Partial<Proposal> = {}): Proposal =>
 
 const props = (p: Proposal) => ({ proposal: p, statusName: null, people: [], working: false, error: null, onApprove: vi.fn(), onSkip: vi.fn() });
 /** The text of each line of `kind`, without the marks on its changed words. */
-const lines = (html: string, kind: string) => [...html.matchAll(new RegExp(`data-line="${kind}"[^>]*>.*?<span class="min-w-0[^>]*><span class="sr-only">[^<]*</span>(.*?)</span></div>`, "g"))].map((m) => m[1].replace(/<[^>]+>/g, ""));
+const lines = (html: string, kind: string) => [...html.matchAll(new RegExp(`data-line="${kind}"[^>]*>.*?<span class="min-w-0[^>]*>(?:<span class="sr-only">[^<]*</span>)?(.*?)</span></div>`, "g"))].map((m) => m[1].replace(/<[^>]+>/g, ""));
 /** The card's text as a screen reader gets it, each line's hidden lead-in in brackets. */
 const spoken = (html: string) => html.replace(/<span class="sr-only">([^<]*)<\/span>/g, "[$1]").replace(/<[^>]+>/g, "");
 
@@ -85,6 +85,17 @@ describe("a description edit draft", () => {
     expect(spoken(html)).toContain("[Unchanged: ]Backoff starts at two seconds.");
     expect(html.match(/<span aria-hidden="true" class="w-3[^>]*>[+−]<\/span>/g)?.length).toBeGreaterThan(0);
     expect(html).toMatch(/role="group" aria-label="description changes"/);
+  });
+
+  it("reads a block of lines of one kind once, and skips blank lines (G32)", () => {
+    const html = renderToStaticMarkup(<DraftCard {...props(draft())} />);
+    // The title line, the reworded line and then "## Scope" with its blank line and two bullets: three blocks, each said once, the blank line hidden.
+    expect(spoken(html)).toContain("[Added: ]## Scope");
+    expect(spoken(html).match(/\[Added: \]/g)).toHaveLength(3);
+    expect(html).toMatch(/data-line="add" aria-hidden="true"/);
+    const rows = diffLines("a", "a\n\nb\nc");
+    expect(rows.map((_, i) => startsBlock(rows, i))).toEqual([true, false, true, false]);
+    expect(diffSummary(diffLines("a", "a\n\nb"), "description")).toBe("Description changes: 1 line added.");
   });
 
   it("shows only the part it changes", () => {
