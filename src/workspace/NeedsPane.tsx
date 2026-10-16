@@ -146,10 +146,15 @@ export interface Advanced {
   text: string;
   /** The workstream the done need was in, which the line's `Done: …` part opens; absent for a need outside any (General). */
   back?: { workstreamId: string; label: string };
+  /** The key of the need that was done: when Undo brings it back the line is stale. */
+  doneKey?: string;
 }
 
 /** The line for a new advance after `previous`, whose id is never the same. */
-export const nextAdvanced = (previous: Advanced | null, text: string, back?: Advanced["back"]): Advanced => ({ id: (previous?.id ?? 0) + 1, text, ...(back ? { back } : {}) });
+export const nextAdvanced = (previous: Advanced | null, text: string, back?: Advanced["back"], doneKey?: string): Advanced => ({ id: (previous?.id ?? 0) + 1, text, ...(back ? { back } : {}), ...(doneKey ? { doneKey } : {}) });
+
+/** Whether the line is stale because the need it says was done is back in `needs` (Undo brought it back). */
+export const advancedUndone = (advanced: Advanced | null, needs: readonly Pick<Need, "key">[]): boolean => !!advanced?.doneKey && needs.some((n) => n.key === advanced.doneKey);
 
 /** How long the line saying the pane moved on stays. */
 export const ADVANCED_MS = 5000;
@@ -492,7 +497,7 @@ export function EscalationBody({ view }: { view: WorkstreamView }) {
       />
       {draft && draft.state.type === "pending" && (
         <div ref={review}>
-          <LiveDraftCard proposal={draft} jump={false} />
+          <LiveDraftCard proposal={draft} jump={false} headingLevel={3} />
         </div>
       )}
     </div>
@@ -504,7 +509,7 @@ function DraftBody({ need, proposal: p }: { need: Need; proposal: Proposal }) {
   return (
     <div className="grid gap-2">
       {need.kind === "plan" && <PlanApproval questions={planOpenQuestions(planResultFor(p, runs, undefined))} />}
-      <LiveDraftCard proposal={p} jump={false} />
+      <LiveDraftCard proposal={p} jump={false} headingLevel={3} />
     </div>
   );
 }
@@ -512,7 +517,7 @@ function DraftBody({ need, proposal: p }: { need: Need; proposal: Proposal }) {
 /** A run draft: one of a kind that needs nothing chosen is read in place, with Start under it; any other opens its setup sheet from its card. */
 function StartBody({ proposal: p }: { proposal: Proposal }) {
   const phase = useInlineStarts((s) => s.entries[p.id]?.phase ?? "closed");
-  if (!inlineStartable(p)) return <LiveDraftCard proposal={p} jump={false} />;
+  if (!inlineStartable(p)) return <LiveDraftCard proposal={p} jump={false} headingLevel={3} />;
   return (
     <div className="grid gap-2">
       <p className="m-0 text-sm text-ws-ink2">
@@ -540,7 +545,7 @@ function Decision({ need }: { need: Need }) {
     case "permission":
       return run ? <PermissionBody run={run} /> : null;
     case "question":
-      return proposal ? <LiveDraftCard proposal={proposal} jump={false} /> : run ? <AnswerBody run={run} /> : null;
+      return proposal ? <LiveDraftCard proposal={proposal} jump={false} headingLevel={3} /> : run ? <AnswerBody run={run} /> : null;
     case "signIn":
       return run ? <SignInBox run={run} onAttach={() => void useRuns.getState().attach(run.id)} /> : null;
     case "failure":
@@ -813,8 +818,11 @@ export function NeedsPane({ needs }: { needs: readonly Need[] }) {
   const [advanced, setAdvanced] = useState<Advanced | null>(null);
   const lastId = useRef(0);
   useAdvance(needs, (done, next) =>
-    setAdvanced((prev) => nextAdvanced(prev ?? { id: lastId.current, text: "" }, advancedText(done, next, waitStarted(done, useWorkspace.getState().proposals), postedToJira(done, useWorkspace.getState().proposals)), done.workstreamId ? { workstreamId: done.workstreamId, label: doneText(done, postedToJira(done, useWorkspace.getState().proposals)) } : undefined)),
+    setAdvanced((prev) => nextAdvanced(prev ?? { id: lastId.current, text: "" }, advancedText(done, next, waitStarted(done, useWorkspace.getState().proposals), postedToJira(done, useWorkspace.getState().proposals)), done.workstreamId ? { workstreamId: done.workstreamId, label: doneText(done, postedToJira(done, useWorkspace.getState().proposals)) } : undefined, done.key)),
   );
+  useEffect(() => {
+    if (advancedUndone(advanced, needs)) setAdvanced(null);
+  }, [advanced, needs]);
   useEffect(() => {
     if (!advanced) return;
     lastId.current = advanced.id;

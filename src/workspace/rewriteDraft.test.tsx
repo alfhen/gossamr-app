@@ -312,3 +312,13 @@ describe("the plan's description draft says it can start a Build (G3)", () => {
     expect(html(ws("manage"), AUTOSTART_DEFAULTS, draft())).not.toContain("data-approval-starts-build");
   });
 });
+
+describe("heading levels in a rewrite (G14)", () => {
+  const i: Rewrite = intent({ title: null, body: bodyChange(docFromMarkdown("One."), "Two.") });
+  const render = (headingLevel?: 3 | 4) => renderToStaticMarkup(<RewriteView intent={i} title="" body="Two." editing={false} onTitle={vi.fn()} onBody={vi.fn()} headingLevel={headingLevel} />);
+  it("is a level 4 by default, and a level 3 under the decision pane's level 2", () => {
+    expect(render()).toMatch(/<h4[^>]*>Description/);
+    expect(render(3)).toMatch(/<h3[^>]*>Description/);
+    expect(render(3)).not.toContain("<h4");
+  });
+});

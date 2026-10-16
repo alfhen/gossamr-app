@@ -470,7 +470,7 @@ test.describe("D1: Pip speaks up when a ticket is unclear", () => {
     const draft = needsPane(page).getByRole("article", { name: "Comment on CA-408" });
     await expect(draft.locator('[data-created-by="gossamr"]')).toHaveText("Drafted by Gossamr");
     await expect(draft).toContainText("@Mette Lund");
-    await expect(draft).toContainText("Before work on CA-408 starts");
+    await expect(draft).toContainText("A few things about CA-408 need clearing up");
     await expect(draft).toContainText("What does done look like for CA-408?");
     await expect(draft).toContainText("Who asked for this, and who is waiting on it?");
     expect(await jiraWrites(page)).toEqual([]);
@@ -797,7 +797,7 @@ test.describe("B10: the switch and the first permission prompt explain themselve
   test("a line under the Manage switch says what the mode does, and changes with it, on Pip home's header and the Pip pane's", async ({ page }) => {
     await openApp(page, "wsManage=1&runs=empty");
     await workstreamOnHome(page);
-    const MANAGE = "Pip manages: it starts the next step by itself and drafts what's next; nothing reaches Jira without you.";
+    const MANAGE = "Pip manages: after each step finishes it starts the next one and drafts what's next. Gossamr posts nothing to Jira without you; a Build runs with your Claude settings and could reach Jira or GitHub itself.";
     const ADVISE = "Pip advises: it answers when asked and starts nothing by itself.";
     const homeLine = stepRail(page).locator("[data-mode-line]");
     await expect(homeLine).toHaveText(MANAGE);

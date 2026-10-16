@@ -80,9 +80,14 @@ describe("pipHomeKey: regions", () => {
     expect(pipHomeKey(key("[", { metaKey: true, target: composer }), at({ region: "composer", regions: ALL }))).toEqual({ type: "region", to: "rail" });
     // A budget field on the rail, or an answer to a run: the person is typing there.
     for (const target of [el("INPUT"), el("TEXTAREA"), el("DIV", true)]) {
-      expect(f6("rail", { target })).toBeNull();
+      // F6 types nothing, so a single-line input lets it go (G7); a textarea and an editable div keep it.
+      if (target.tagName !== "INPUT") expect(f6("rail", { target })).toBeNull();
       expect(pipHomeKey(key("[", { ctrlKey: true, target }), at({ region: "rail" }))).toBeNull();
     }
+    const planAdd = { ...el("INPUT"), id: "data-plan-add" };
+    expect(f6("week", { target: planAdd })).toEqual({ type: "region", to: "workstreams" });
+    expect(f6("week", { target: planAdd, shiftKey: true })).toEqual({ type: "region", to: "needs" });
+    expect(pipHomeKey(key("]", { metaKey: true, target: planAdd }), at({ region: "week", regions: ALL }))).toBeNull();
     expect(pipHomeKey(key("F6", { altKey: true }), at())).toBeNull();
     expect(pipHomeKey(key("]"), at())).toBeNull();
     expect(pipHomeKey(key("[", { metaKey: true, shiftKey: true }), at())).toBeNull();
@@ -278,6 +283,8 @@ describe("the workspace layout's regions (D29)", () => {
     expect(regionStep(key("F6", { target: { tagName: "TEXTAREA", id: "pip-input" } }))).toBe(1);
     expect(regionStep(key("F6", { shiftKey: true }))).toBe(-1);
     expect(regionStep(key("F6", { target: { tagName: "TEXTAREA", id: "answer" } }))).toBe(0);
+    expect(regionStep(key("F6", { target: { tagName: "INPUT", id: "data-plan-add" } }))).toBe(1);
+    expect(regionStep(key("F6", { shiftKey: true, target: { tagName: "INPUT" } }))).toBe(-1);
     expect(regionStep(key("F6", { ctrlKey: true }))).toBe(0);
     expect(regionStep(key("Tab"))).toBe(0);
   });

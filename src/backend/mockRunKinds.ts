@@ -3,7 +3,7 @@ import { TICKETLESS_STARTER } from "../workspace/runSheetLogic";
 
 export { TICKETLESS_STARTER };
 
-const STATUS_NOTE = "Finish your answer with a short, factual note for the ticket under 'For Jira:': what you did or found, what state things are in, a link to the pull request if there is one, and what a person needs to do next. The note is posted to the ticket for people who do not use Gossamr, so name no runs, workstreams, worktrees, Pip, Gossamr or other app internals and point at nothing only the app holds; write it in a neutral voice without 'I' or 'we'; and say only what is new since the last comment on the ticket.";
+const STATUS_NOTE = "Finish your answer with a short, factual note for the ticket under 'For Jira:': what you did or found, what state things are in, a link to the pull request if there is one, and what a person needs to do next. The note may be posted to the ticket, after a person reads and approves it, for people who do not use Gossamr, so name no runs, workstreams, worktrees, Pip, Gossamr or other app internals and point at nothing only the app holds; write it in a neutral voice without 'I' or 'we'; and say only what is new since the last comment on the ticket.";
 
 const BREAKDOWN =
   "If the work is genuinely too big for one person to do as one piece, put a section 'Subtasks:' before your final note: 3 to 8 lines, each a short summary of a task someone could pick up on its own, and say in your note that you propose a breakdown. If it fits as one piece, say so in your note and leave the section out. ";

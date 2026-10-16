@@ -150,17 +150,16 @@ function cobwebEntries(i: StartMyDayInput): DayEntry[] {
     .map((v) => ({ key: `cobweb:${v.workstream.id}`, text: `${v.workstream.itemKey ?? v.workstream.title} · no Jira update for ${plural(i.withers[v.workstream.id].days, "day", "days")}`, label: "Open workstream", action: { type: "workstream", id: v.workstream.id } as const }));
 }
 
-/** The Jira drafts waiting for the person, oldest first: each opens its own decision when Needs you has one, else its workstream or ticket. */
+/** The Jira drafts waiting for the person that Needs you does not already list (a draft with a need is on the decide, unblock or approve line), oldest first: each opens its workstream or ticket. */
 function draftEntries(i: StartMyDayInput): DayEntry[] {
   return i.proposals
-    .filter((p) => p.state.type === "pending" && isJiraWrite(p.intent) && !p.supersededBy)
+    .filter((p) => p.state.type === "pending" && isJiraWrite(p.intent) && !p.supersededBy && !i.needs.some((n) => n.target.type === "draft" && n.target.id === p.id))
     .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
     .map((p): DayEntry => {
       const target = targetOf(p.intent);
-      const need = i.needs.find((n) => n.target.type === "draft" && n.target.id === p.id);
       const ws = i.workstreams.find((v) => inWorkstreamPane(p, v.workstream));
-      const action: DayAction = need ? { type: "need", need } : ws ? { type: "workstream", id: ws.workstream.id } : { type: "ticket", key: target?.key ?? "" };
-      return { key: `draft:${p.id}`, text: `${target?.key ?? "A new ticket"} · ${need?.title ?? WHAT[p.intent.type]}`, label: need ? "Review" : ws ? "Open workstream" : "Open ticket", action };
+      const action: DayAction = ws ? { type: "workstream", id: ws.workstream.id } : { type: "ticket", key: target?.key ?? "" };
+      return { key: `draft:${p.id}`, text: `${target?.key ?? "A new ticket"} · ${WHAT[p.intent.type]}`, label: ws ? "Open workstream" : "Open ticket", action };
     });
 }
 

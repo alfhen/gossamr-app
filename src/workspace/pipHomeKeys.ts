@@ -70,6 +70,13 @@ export function isTypingTarget(target: unknown): boolean {
   return typeof el.closest === "function" && !!el.closest("[contenteditable]:not([contenteditable=false])");
 }
 
+/** Whether F6 may leave `target`: Pip's composer, or a single-line input, which F6 types nothing in. Cmd/Ctrl+[ and ] stay the field's own, as they edit text. */
+function f6Leaves(target: unknown, key: string): boolean {
+  if (!isTypingTarget(target)) return true;
+  if ((target as { id?: unknown }).id === PIP_INPUT_ID) return true;
+  return key === "F6" && /^INPUT$/i.test(String((target as { tagName?: unknown }).tagName ?? ""));
+}
+
 /** The region `by` from `region` among those `on` screen (every one but the toast, which only counts while shown, when none is said), wrapping around; the one the keyboard is in always counts. */
 export function stepRegion(region: PipHomeRegion, by: 1 | -1, on: readonly PipHomeRegion[] = PIP_HOME_REGIONS.filter((r) => r !== "toast")): PipHomeRegion {
   const regions = PIP_HOME_REGIONS.filter((r) => r === region || on.includes(r));
@@ -97,7 +104,7 @@ function columnStep(ev: PipHomeKeyEvent): 1 | -1 | 0 {
  */
 export function pipHomeKey(ev: PipHomeKeyEvent, state: PipHomeKeyState): PipHomeKeyAction | null {
   const by = columnStep(ev);
-  if (by) return state.overlay || (isTypingTarget(ev.target) && (ev.target as { id?: unknown }).id !== PIP_INPUT_ID) ? null : { type: "region", to: stepRegion(state.region ?? columnRegion(state.column), by, state.regions) };
+  if (by) return state.overlay || !f6Leaves(ev.target, ev.key) ? null : { type: "region", to: stepRegion(state.region ?? columnRegion(state.column), by, state.regions) };
   if ((ev.metaKey || ev.ctrlKey) && !ev.altKey && !ev.shiftKey && ev.key.toLowerCase() === "z") return state.overlay || isTypingTarget(ev.target) ? null : { type: "undo" };
   if (ev.metaKey || ev.ctrlKey || ev.altKey || ev.shiftKey) return null;
   if (state.overlay || isTypingTarget(ev.target)) return null;
@@ -193,6 +200,6 @@ export function nextRegion(present: readonly WorkspaceRegion[], current: Workspa
 /** F6 forward, Shift+F6 back, and nothing for any other key, in the workspace layout. */
 export function regionStep(ev: Pick<PipHomeKeyEvent, "key" | "metaKey" | "ctrlKey" | "altKey" | "shiftKey" | "target">): 1 | -1 | 0 {
   if (ev.key !== "F6" || ev.metaKey || ev.ctrlKey || ev.altKey) return 0;
-  if (isTypingTarget(ev.target) && (ev.target as { id?: unknown }).id !== PIP_INPUT_ID) return 0;
+  if (!f6Leaves(ev.target, ev.key)) return 0;
   return ev.shiftKey ? -1 : 1;
 }

@@ -42,7 +42,7 @@ describe("the line under the mode switch", () => {
   it("says what Manage does, and changes to what Advise does", () => {
     const manage = render(viewOf({ mode: "manage" }));
     expect(manage).toContain('data-mode-line="manage"');
-    expect(manage).toContain("Pip manages: it starts the next step by itself and drafts what&#x27;s next; nothing reaches Jira without you.");
+    expect(manage).toContain("Pip manages: after each step finishes it starts the next one and drafts what&#x27;s next. Gossamr posts nothing to Jira without you; a Build runs with your Claude settings and could reach Jira or GitHub itself.");
     const advise = render(viewOf({ mode: "advise" }));
     expect(advise).toContain('data-mode-line="advise"');
     expect(advise).toContain("Pip advises: it answers when asked and starts nothing by itself.");

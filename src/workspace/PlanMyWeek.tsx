@@ -11,7 +11,7 @@ import { focusPeekOf } from "./PeekSheet";
 import { runDayAction } from "./StartMyDay";
 import { showPlanMyWeek } from "./planActions";
 import { useToasts } from "./toasts";
-import { offerUndo, withdrawUndo } from "./undo";
+import { hideUndoToast, offerUndo, withdrawUndo } from "./undo";
 import { useNow } from "./useNow";
 import { openOnPipHome, useWorkstreams } from "./workstreamsStore";
 
@@ -72,10 +72,26 @@ export const rovingStop = (picks: readonly PlanItem[], last: string | null): str
 /** The pick the keyboard goes to once the one at `index` is removed from `picks` (as they are after): the one now at that index, else the one before it; null when none is left (the add box takes it). */
 export const afterRemove = (picks: readonly PlanItem[], index: number): string | null => (picks[index] ?? picks[index - 1])?.id ?? null;
 
-/** The plan with `pick` put back at `index` (or the end, when the plan is shorter by now): what Undo does after a removal. Null when the pick is in the plan again, so there is nothing to put back. */
-export function restorePick(picks: readonly PlanItem[], pick: PlanItem, index: number): PlanItem[] | null {
+/** The ids of the picks either side of one when it was removed (null at the top or the end): where Undo puts it back however the others came and went since. */
+export interface PickNeighbours {
+  prev: string | null;
+  next: string | null;
+}
+
+/** The neighbours of the pick at `index`. */
+export const neighboursOf = (picks: readonly PlanItem[], index: number): PickNeighbours => ({ prev: picks[index - 1]?.id ?? null, next: picks[index + 1]?.id ?? null });
+
+/**
+ * The plan with `pick` put back: before the pick that followed it when that is still there, else after the one that
+ * preceded it, else at `index` (or the end, when the plan is shorter by now): what Undo does after a removal, in any order of
+ * several. Null when the pick is in the plan again, so there is nothing to put back.
+ */
+export function restorePick(picks: readonly PlanItem[], pick: PlanItem, index: number, near?: PickNeighbours): PlanItem[] | null {
   if (picks.some((x) => x.id === pick.id)) return null;
-  return [...picks.slice(0, index), pick, ...picks.slice(index)];
+  const next = near?.next ? picks.findIndex((x) => x.id === near.next) : -1;
+  const prev = near?.prev ? picks.findIndex((x) => x.id === near.prev) : -1;
+  const at = next >= 0 ? next : prev >= 0 ? prev + 1 : index;
+  return [...picks.slice(0, at), pick, ...picks.slice(at)];
 }
 
 /** Where the keyboard goes once a pick moved by its ↑ or ↓ button: the same button in its new row, the other one when that is off at the end of the list, else the row. */
@@ -158,15 +174,18 @@ export function PlanMyWeekView({
   const remove = (index: number) => {
     const gone = picks[index];
     if (!gone) return;
+    const near = neighboursOf(picks, index);
     onChange(picks.filter((x) => x.id !== gone.id));
     setFocus({ removed: index });
+    // Only the newest removal's Undo is on screen; the earlier ones stay good for Ctrl+Z.
+    hideUndoToast(offered.current[offered.current.length - 1]);
     offered.current.push(
       offerUndo({
         text: `Removed ${gone.title} from the plan.`,
         undone: `Put ${gone.title} back in the plan.`,
         async undo() {
           // Added again meanwhile: nothing to put back.
-          const back = restorePick(latest.current.picks, gone, index);
+          const back = restorePick(latest.current.picks, gone, index, near);
           if (!back) return false;
           latest.current.onChange(back);
         },

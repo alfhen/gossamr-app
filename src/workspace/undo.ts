@@ -146,6 +146,14 @@ export function offerUndo(offer: UndoOffer): number {
   return id;
 }
 
+/** Takes the toast of offer `id` down while the offer stays good for the palette's "Undo" (a newer offer for the same kind of thing is the one to show). */
+export const hideUndoToast = (id: number | undefined) => {
+  const toast = id === undefined ? undefined : toastOf.get(id);
+  if (toast === undefined || id === undefined) return;
+  toastOf.delete(id);
+  useToasts.getState().dismiss(toast);
+};
+
 /** Withdraws offer `id` (see `UndoLog.withdraw`), taking its toast down. */
 export const withdrawUndo = (id: number | undefined) => {
   if (id !== undefined) undoLog.withdraw(id);

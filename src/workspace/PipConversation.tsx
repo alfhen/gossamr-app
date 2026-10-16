@@ -17,7 +17,8 @@ import { AttachButton, AttachedThumbs, TurnImages, type useAttachments } from ".
 import { currentContext } from "./pipHooks";
 import { appliedState, usePip, type AppliedState } from "./pipStore";
 import { usePopover } from "./Popover";
-import { chipPageAction, placeholderFor } from "./suggestions";
+import { chipPageAction, isInvestigateChip, placeholderFor } from "./suggestions";
+import { investigateKey, settleDraftFocus } from "./clarityActions";
 import { planRewriteDraft } from "./pipHomeLogic";
 import { useRuns } from "./runsStore";
 import { useTabs } from "./tabsStore";
@@ -340,7 +341,11 @@ export function IntroAction({ conversation, text }: { conversation: string; text
     <button
       type="button"
       data-intro-action
-      onClick={() => usePip.getState().askIn(conversation, text)}
+      onClick={() => {
+        // The button goes with the intro once asked; the keyboard follows the draft it asks for (see the chips).
+        if (isInvestigateChip(text)) settleDraftFocus(new Set(Object.keys(useWorkspace.getState().proposals)), investigateKey(text));
+        usePip.getState().askIn(conversation, text);
+      }}
       className="justify-self-start rounded-md bg-gradient-to-br from-ws-pip to-ws-pip2 px-3 py-1 font-semibold text-ws-on-pip hover:brightness-105 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip"
     >
       {text}
@@ -651,7 +656,12 @@ export function Composer({ conversation, attached, chips, looking, scene, footer
               key={s}
               type="button"
               // A chip with a page action does it here; any other is a question for Pip.
-              onClick={(ev) => (chipPageAction(s) === "showPlanUpdate" ? showPlanUpdate(conversation, ev.currentTarget.closest(PIP_ROOT)) : ask(s))}
+              onClick={(ev) => {
+                if (chipPageAction(s) === "showPlanUpdate") return showPlanUpdate(conversation, ev.currentTarget.closest(PIP_ROOT));
+                // The chip goes when pressed; the keyboard follows the draft it asks for instead of falling to the page.
+                if (isInvestigateChip(s)) settleDraftFocus(new Set(Object.keys(useWorkspace.getState().proposals)), investigateKey(s));
+                ask(s);
+              }}
               className="rounded-full border border-ws-sep2 px-2.5 py-0.5 text-sm hover:border-ws-pip hover:text-ws-pip"
             >
               {s}

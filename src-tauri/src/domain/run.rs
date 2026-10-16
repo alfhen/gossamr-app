@@ -144,7 +144,7 @@ pub const FINDINGS_LIMIT: usize = 6_000;
 /// and a finished run drafts it as a comment on its ticket.
 macro_rules! status_note {
     () => {
-        "Finish your answer with a short, factual note for the ticket under 'For Jira:': what you did or found, what state things are in, a link to the pull request if there is one, and what a person needs to do next. The note is posted to the ticket for people who do not use Gossamr, so name no runs, workstreams, worktrees, Pip, Gossamr or other app internals and point at nothing only the app holds; write it in a neutral voice without 'I' or 'we'; and say only what is new since the last comment on the ticket."
+        "Finish your answer with a short, factual note for the ticket under 'For Jira:': what you did or found, what state things are in, a link to the pull request if there is one, and what a person needs to do next. The note may be posted to the ticket, after a person reads and approves it, for people who do not use Gossamr, so name no runs, workstreams, worktrees, Pip, Gossamr or other app internals and point at nothing only the app holds; write it in a neutral voice without 'I' or 'we'; and say only what is new since the last comment on the ticket."
     };
 }
 
@@ -1299,17 +1299,24 @@ mod tests {
     #[test]
     fn the_default_prompts_of_every_kind_are_pinned() {
         let pinned = [
-            (RunKind::Investigate, "1e474f8e90c400682ec9f5769aba75c97f46ec4a6bc93555c2f7fcfb01b7c880"),
-            (RunKind::Triage, "a0d1676c7b4e89dd8abc8a2854565c7588ffd06c39eab42763d5b01b55eb93f4"),
-            (RunKind::Plan, "b6f6f32bd835eb137e0e580d2089e4d7178bb6dbc7b8833d08d67f6c140a8bbf"),
-            (RunKind::Build, "f80497c6328884c8853f07e7d3656eed0790de59c5f126437b443767a5b00809"),
-            (RunKind::Review, "9800985ab0718a5fdc73fbb11e1d64cf4123c3402e3fd3d503df3735951ae7b3"),
-            (RunKind::Verify, "3c47a323d3193e8c763d2644c5be33fd6ca817e023afd94d4153c056bf6b2a32"),
+            (RunKind::Investigate, "79a389d4ab4623a20a0ab235632189e6b91a2595494f395ff3ea4fcbb5f1e1ed"),
+            (RunKind::Triage, "a1f332b8e0cc1371b4c6ca38d732ca0bff02dfed5b99685a58c90990cafb50a4"),
+            (RunKind::Plan, "166e95261e78fde54e90206d1fb1f5cabaa0fb1a5e89b2ea1d84970bbde6d0bd"),
+            (RunKind::Build, "352667f24da6d31039749c355d08a6301db843d8a4f70d6781bdbd918f5921bf"),
+            (RunKind::Review, "6a0bf2fe4f3094aa9c23ecb773510321f1f944dd9621c42c4456eb71602131a7"),
+            (RunKind::Verify, "47636c15cd39949fe11f9bcebeb54b6953f0361df672db520c02d93e1fbbb7e5"),
         ];
         for (kind, digest) in pinned {
             let pr = (kind == RunKind::Review).then_some(12);
             assert_eq!(of_kind(kind, pr, false).digest(), digest, "{kind:?}");
         }
+    }
+
+    #[test]
+    fn the_note_for_the_ticket_may_be_posted_only_after_a_person_approves_it() {
+        let prompt = render_prompt(&of_kind(RunKind::Investigate, None, false));
+        assert!(prompt.contains("The note may be posted to the ticket, after a person reads and approves it, for people who do not use Gossamr"));
+        assert!(!prompt.contains("The note is posted to the ticket"));
     }
 
     #[test]
@@ -1367,7 +1374,7 @@ mod tests {
         assert!(PUSH_ALLOWED.matches("'For Jira:'").count() == 1 && BUILD_INSTRUCTION.contains("do not push and do not open a pull request unless a later sentence says you may"));
         let off = render_prompt(&of_kind(RunKind::Build, None, false));
         assert!(!off.contains("gh pr create") && !off.contains("draft pull request"));
-        assert_eq!(of_kind(RunKind::Build, None, true).digest(), "20d66cea25926dbb215e1890d175bc0beab318d36eff5359ca3a932fbdb7e552");
+        assert_eq!(of_kind(RunKind::Build, None, true).digest(), "e790ed002284c3fefba508d683a1ab4131493d68e83713573ca57bdb3aed870f");
     }
 
     #[test]
@@ -1566,10 +1573,10 @@ mod tests {
     /// became adversarial and began ending with a verdict. All but Build (third) changed again in Phase 6, when the
     /// read-only launch restriction joined the digest.
     const GOLDEN_DIGESTS: [&str; 4] = [
-        "a0d1676c7b4e89dd8abc8a2854565c7588ffd06c39eab42763d5b01b55eb93f4",
-        "3c47a323d3193e8c763d2644c5be33fd6ca817e023afd94d4153c056bf6b2a32",
-        "f80497c6328884c8853f07e7d3656eed0790de59c5f126437b443767a5b00809",
-        "9800985ab0718a5fdc73fbb11e1d64cf4123c3402e3fd3d503df3735951ae7b3",
+        "a1f332b8e0cc1371b4c6ca38d732ca0bff02dfed5b99685a58c90990cafb50a4",
+        "47636c15cd39949fe11f9bcebeb54b6953f0361df672db520c02d93e1fbbb7e5",
+        "352667f24da6d31039749c355d08a6301db843d8a4f70d6781bdbd918f5921bf",
+        "6a0bf2fe4f3094aa9c23ecb773510321f1f944dd9621c42c4456eb71602131a7",
     ];
 
     fn reporting(kind: RunKind) -> RunSpec {
@@ -1652,12 +1659,12 @@ mod tests {
     /// triage began giving its plan recommendation as a flag. All but Build (fourth) changed in Phase 6, when the read-only
     /// launch restriction joined the digest.
     const REPORT_GOLDEN_DIGESTS: [&str; 6] = [
-        "942c01a84521bc545ea2669d77b9ea81a19f1fab0a3ce2e53fe973643aa3af74",
-        "3f3a0c0f1a42a3b628f2ff0e0165b6123a7754b016830e8e509f94dac3b855ee",
-        "472c021ee58827e330d29eee4761bc533f6c4236c3bb3ec2b094f4cc7d5af928",
-        "cabf0234bb7fe39e9e1824ef2ae8199ac7e8855ade52e0a14288cec37453feb4",
-        "1e25e0814200524f3c6a739e51d78115a920b1d05f57c8360a42eb3e67ffa0ab",
-        "781ad9e99afd9173103bcacf2ace09a6e9285a7be1a1dc3a4c91706ebc202751",
+        "e1b02b45343fed358cc781e3f2ca6a4a1260903278737722bcfa81a32c678a8e",
+        "e0a59af2caf9f4bb996fda09b3d69bf00fe59ba82d5f0dd8fbfe6e2485482700",
+        "1b34eca939eff840a78c30b1c8ad9d9b54a5ee839fab46163982364c19ce1231",
+        "1f983e1146652fb90bcf927c88fb36025f76c3a602727d527afbf66ad43c93f1",
+        "3b5ae521135e06002b11c59e8ea403e31fb40326af623c5bd039aaf0af317f34",
+        "da812248e184dec659e97992547b9a48d42e90f486ea8fe1971dcbf2b56f4512",
     ];
 
     #[test]
@@ -1749,7 +1756,7 @@ mod tests {
         let bare = RunSpec { plan_approved: true, ..of_kind(RunKind::Build, None, false) };
         assert!(bare.validate().is_err(), "a flag without a plan");
         // A spec without a plan never carries the key, so every pinned digest above stays what it was.
-        assert_eq!(of_kind(RunKind::Build, None, false).digest(), "f80497c6328884c8853f07e7d3656eed0790de59c5f126437b443767a5b00809");
+        assert_eq!(of_kind(RunKind::Build, None, false).digest(), "352667f24da6d31039749c355d08a6301db843d8a4f70d6781bdbd918f5921bf");
     }
 
     #[test]
@@ -2280,9 +2287,9 @@ mod tests {
             assert!(build.canonical().get("readOnly").is_none());
             assert_eq!(build.digest(), pre_phase_6_digest(&build));
         }
-        assert_eq!(of_kind(RunKind::Build, None, false).digest(), "f80497c6328884c8853f07e7d3656eed0790de59c5f126437b443767a5b00809");
-        assert_eq!(of_kind(RunKind::Build, None, true).digest(), "20d66cea25926dbb215e1890d175bc0beab318d36eff5359ca3a932fbdb7e552");
-        assert_eq!(reporting(RunKind::Build).digest(), "cabf0234bb7fe39e9e1824ef2ae8199ac7e8855ade52e0a14288cec37453feb4");
+        assert_eq!(of_kind(RunKind::Build, None, false).digest(), "352667f24da6d31039749c355d08a6301db843d8a4f70d6781bdbd918f5921bf");
+        assert_eq!(of_kind(RunKind::Build, None, true).digest(), "e790ed002284c3fefba508d683a1ab4131493d68e83713573ca57bdb3aed870f");
+        assert_eq!(reporting(RunKind::Build).digest(), "1f983e1146652fb90bcf927c88fb36025f76c3a602727d527afbf66ad43c93f1");
     }
 
     /// For Investigate, Triage and Plan only the restriction was added: without it, their digests are the ones pinned
@@ -2291,9 +2298,9 @@ mod tests {
     fn without_the_restriction_every_read_only_digest_is_what_it_was_before_phase_6() {
         assert_eq!(pre_phase_6_digest(&spec()), "7534d3cc2194330252913a230041a452e813b32198b0ceab89d01b20dae06b16");
         let old = [
-            (RunKind::Investigate, "8968bb351cd5b01c8e2c5d208fecec466923cfab58cc6e7e42f686f43dc5b5de"),
-            (RunKind::Triage, "5416ca487da32d600150792ac7faddf007977f78e564c0548280aa1edd323244"),
-            (RunKind::Plan, "aa9afa572019e8d8e40875c9c6c2a5617c15f8e82b089dfad8389d75e508b1f6"),
+            (RunKind::Investigate, "6c857732349fe0a4f556d5887a7071592a2fef800bcdb1e606fa7c2416b69fd1"),
+            (RunKind::Triage, "24267e5d16995aa9e544829d6f4d29f699e5f858bd78afde001991bfe2552e4f"),
+            (RunKind::Plan, "8ba9e735b32d8d8bd8d6c10f7c1b71d33b97e2ed2b9a2909a20976b6fc95332b"),
         ];
         for (kind, digest) in old {
             assert_eq!(pre_phase_6_digest(&of_kind(kind, (kind == RunKind::Review).then_some(12), false)), digest, "{kind:?}");
@@ -2301,7 +2308,7 @@ mod tests {
         for (kind, digest) in [(RunKind::Review, "fa6cb9d4624eb9ee97227f381cf0cedaf8964d7926455687ec66f9c2c6a4954b"), (RunKind::Verify, "0145b452701a5ad3b0148a4b40845b0c5d7d081aa1b16589f54f3e8fdff787bd")] {
             assert_ne!(pre_phase_6_digest(&of_kind(kind, (kind == RunKind::Review).then_some(12), false)), digest, "{kind:?} names its commands now");
         }
-        assert_eq!(pre_phase_6_digest(&reporting(RunKind::Investigate)), "4979d15fce5f6a5038b8af6e3958f60d05991a53e9fd1de0290114b7c4cf17e8");
+        assert_eq!(pre_phase_6_digest(&reporting(RunKind::Investigate)), "e7248428b1865baf6cd7af0dfb35df42863655fd3fc7ec565156c9582357477d");
     }
 
     #[test]
@@ -2311,7 +2318,7 @@ mod tests {
         json.as_object_mut().unwrap().remove("report");
         let back: RunSpec = serde_json::from_value(json).unwrap();
         back.validate().unwrap();
-        assert_eq!(back.digest(), "20d66cea25926dbb215e1890d175bc0beab318d36eff5359ca3a932fbdb7e552");
+        assert_eq!(back.digest(), "e790ed002284c3fefba508d683a1ab4131493d68e83713573ca57bdb3aed870f");
         let old: RunSpec = serde_json::from_value(serde_json::to_value(spec()).unwrap()).unwrap();
         old.validate().unwrap();
         assert_eq!(old.digest(), INVESTIGATE_DIGEST, "an old investigation draft is now a changed prompt, read again before approving");

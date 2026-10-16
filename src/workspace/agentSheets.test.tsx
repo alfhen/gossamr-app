@@ -12,7 +12,9 @@ import { RunSetupView, setupBlock, type SetupViewProps } from "./RunSetup";
 import { sheetFocusTarget } from "./AgentSheet";
 import { focusDecision, READ_ONLY_STEP_NOTE } from "./PermissionAsk";
 import { RunSheetView, type RunSheetActions, type RunSheetViewProps } from "./RunSheet";
-import { MAY_TOUCH, SAFETY_SUMMARY, prChoices, sheetTopOn } from "./runSheetLogic";
+import { INSTRUCTIONS } from "../backend/mockRunKinds";
+import { RunPreflight } from "./RunPreflight";
+import { COPY, MAY_TOUCH, SAFETY_SUMMARY, prChoices, sheetTopOn } from "./runSheetLogic";
 import { PipLauncher } from "./PipExtras";
 import { usePrefs } from "./prefs";
 import { useRuns } from "./runsStore";
@@ -920,5 +922,25 @@ describe("the safety sheet as the one-time intro", () => {
   it("has Got it, continue in its footer only when it opened in place of the person's first action", () => {
     expect(intro(true)).toMatch(/<button[^>]*>Got it, continue<\/button>/);
     expect(intro(false)).not.toContain("Got it, continue");
+  });
+});
+
+describe("start review copy (G13)", () => {
+  it("says the note may be posted after a person approves it, and names no rules that are not shown", () => {
+    expect(INSTRUCTIONS.investigate).toContain("The note may be posted to the ticket, after a person reads and approves it, for people who do not use Gossamr");
+    expect(INSTRUCTIONS.investigate).not.toContain("The note is posted to the ticket");
+    expect(COPY.readOnlyNote).toContain("every command outside its read-only rules");
+    expect(COPY.readOnlyNote).not.toContain("rules above");
+  });
+
+  it("ticks real checks, and leaves the facts (what runs, the clone) without a tick", () => {
+    const preflight: Preflight = { rows: [{ level: "green", text: "What runs: abc123def456" }, { level: "green", text: "Clone: /Users/sample/Code/web on main." }, { level: "green", text: "Claude Code 2.1.286" }], blocking: false };
+    const html = renderToStaticMarkup(<RunPreflight preflight={preflight} checking={false} />);
+    const rows = html.split("<li ").slice(1);
+    expect(rows).toHaveLength(3);
+    expect(rows[0]).not.toContain("<svg");
+    expect(rows[1]).not.toContain("<svg");
+    expect(rows[2]).toContain("<svg");
+    expect(rows[2]).toContain("Fine: ");
   });
 });

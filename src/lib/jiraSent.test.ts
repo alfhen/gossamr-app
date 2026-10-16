@@ -163,12 +163,12 @@ describe("the second line of a row (G25)", () => {
 
 describe("what the row shows of a comment to the reporter", () => {
   const asked = (id: string, text: string) => draft(id, comment("CA-401", text), { createdBy: "user", label: "Questions for the reporter", updatedAt: ago(Number(id.slice(1))) });
-  const first = "Hi Mette,\n\nBefore work on CA-401 starts, a few things need clearing up:\n\n- What is the goal?";
-  const again = "Hi Mette,\n\nThanks for your answer above. Before work on CA-401 starts, a few things are still open:\n\n- What is in scope?";
+  const first = "Hi Mette,\n\nA few things about CA-401 need clearing up:\n\n- What is the goal?";
+  const again = "Hi Mette,\n\nThanks for your answer above. A few things about CA-401 are still open:\n\n- What is in scope?";
 
   it("skips the greeting line in the short preview and keeps it in the whole", () => {
     const [e] = jiraSent({ proposals: [asked("a1", first)], events: {}, workstreams: [] });
-    expect(e.summary).toBe("Before work on CA-401 starts, a few things need clearing up:");
+    expect(e.summary).toBe("A few things about CA-401 need clearing up:");
     expect(e.detail[0]).toBe("Hi Mette,");
     expect(sentWhat(comment("CA-401", "Hi,"), null)!.summary).toBe("Hi,");
     expect(sentWhat(comment("CA-401", "Hello there, I moved this."), null)!.summary).toBe("Hello there, I moved this.");

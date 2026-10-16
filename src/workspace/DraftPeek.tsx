@@ -171,6 +171,7 @@ export function DraftPeekView({ proposal: p, fields, containers, people, working
         ticketKey=""
         people={people}
         placeholder="Describe the ticket"
+        label="Description of the new ticket"
         fill
         className="grow rounded-md border border-ws-sep2 bg-ws-win"
       />

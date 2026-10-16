@@ -2,7 +2,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
-import { PaletteView } from "./Palette";
+import { PaletteView, restoreFocus } from "./Palette";
 
 const html = renderToStaticMarkup(<PaletteView query="" results={[]} active={0} onQuery={vi.fn()} onActive={vi.fn()} onRun={vi.fn()} onClose={vi.fn()} />);
 const classOf = (marker: string) => html.match(new RegExp(`<div[^>]*${marker}[^>]*class="([^"]*)"|<div class="([^"]*)"[^>]*${marker}`))?.slice(1).find(Boolean)?.split(" ") ?? [];
@@ -24,5 +24,21 @@ describe("palette placement", () => {
     const keyframes = css.match(/@keyframes ws-pop\s*\{[\s\S]*?\}\s*\}/)?.[0] ?? "";
     expect(keyframes).toContain("translateY");
     expect(keyframes).not.toMatch(/translate(X|3d)?\(|translate:|left|margin|width/);
+  });
+});
+
+describe("palette focus (G8)", () => {
+  it("gives focus back to the opener, or the main area, but not when it already moved onto the page", () => {
+    const focus = vi.fn();
+    const main = { focus: vi.fn() };
+    const body = {};
+    const doc = (active: unknown) => ({ activeElement: active, body, getElementById: () => main }) as never;
+    restoreFocus({ isConnected: true, focus } as never, doc(body));
+    expect(focus).toHaveBeenCalledTimes(1);
+    restoreFocus({ isConnected: false, focus } as never, doc(body));
+    expect(main.focus).toHaveBeenCalledTimes(1);
+    restoreFocus({ isConnected: true, focus } as never, doc({ isConnected: true }));
+    expect(focus).toHaveBeenCalledTimes(1);
+    expect(main.focus).toHaveBeenCalledTimes(1);
   });
 });

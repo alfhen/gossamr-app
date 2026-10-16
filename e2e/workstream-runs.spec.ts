@@ -40,7 +40,7 @@ async function startRunFromPip(page: Page) {
   await expect(draft).toBeVisible();
   await settled(page);
   await startFromSetup(page, () => draft.getByRole("button", { name: "Review and start →" }).click());
-  await expect(page.getByText("Agent started on CA-401.", { exact: false })).toBeVisible();
+  await expect(page.getByText("Agent started on CA-401.", { exact: false }).last()).toBeVisible();
 }
 
 /** `startRunFromPip`, then back on the board, where CA-401's peek lists the run as R1 in its workstream. */
@@ -96,7 +96,7 @@ test("after starting a run from the workstream's conversation, the Agents view k
   await openApp(page, "runs=empty");
   await startRunFromPip(page);
   // The start leaves the person on the board; the toast's Open goes to the run in the Agents view.
-  await page.getByRole("button", { name: "Open", exact: true }).click();
+  await page.getByRole("button", { name: /^Open: Agent started on CA-401/ }).click();
 
   // The Agents view, with the new run selected: the pane is still the workstream's, and the run shows R1 and the id to type elsewhere.
   await expect(pipConversation(page)).toHaveText(/^Workstream: CA-401 .+ · Investigate$/);

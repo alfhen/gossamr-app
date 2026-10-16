@@ -1,7 +1,7 @@
 import { isValidElement, type ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
-import { ToastCard, focusToast, roundStart } from "./ToastHost";
+import { ToastCard, ToastStack, focusToast, roundStart } from "./ToastHost";
 import type { Toast } from "./toasts";
 
 const toast: Toast = { id: 1, text: "Kept your plan for 2026-W42.", tone: "info", at: 0 };
@@ -93,5 +93,16 @@ describe("where Esc on the toast gives the keyboard back (G21)", () => {
     props().onKeyDown(esc());
     // No window here, so no round was noted.
     expect(composer.focus).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("the toast's live region (G5)", () => {
+  it("holds the message alone, with no button inside it, and names the action by its toast", () => {
+    const held: Toast = { id: 2, text: "Held CA-408.", tone: "info", at: 0, action: { label: "Undo", run: () => undefined } };
+    const html = renderToStaticMarkup(<ToastStack toasts={[held]} dismiss={() => undefined} />);
+    const live = html.match(/<p role="status"[^>]*>(.*?)<\/p>/);
+    expect(live?.[1]).toBe("Held CA-408.");
+    expect(html.match(/role="status"/g)).toHaveLength(1);
+    expect(html).toContain('aria-label="Undo: Held CA-408."');
   });
 });

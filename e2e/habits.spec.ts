@@ -88,7 +88,8 @@ test.describe("Start my day", () => {
     await expect(line(page, "reporter").getByRole("heading")).toHaveText("1 waiting on the reporter");
     await expect(line(page, "reporter")).toContainText("CA-408 · waiting 3 days");
     await expect(line(page, "reporter").getByRole("button", { name: /^Draft a nudge/ })).toBeVisible();
-    await expect(line(page, "drafts").getByRole("heading")).toHaveText("1 Jira draft waiting to be posted");
+    // The draft has a need, so it is listed once, under approve, and not again as a waiting draft.
+    await expect(line(page, "drafts")).toHaveCount(0);
     // A long list of unclear tickets is a count; More lists them.
     await expect(line(page, "unclear").getByRole("heading")).toContainText("may be unclear");
     await line(page, "unclear").getByRole("button", { name: "More" }).click();
@@ -107,7 +108,7 @@ test.describe("Start my day", () => {
     await workstreamRow(page, "General").click();
 
     // The draft waiting: its decision opens in the pane, and the card gives the room.
-    await line(page, "drafts").getByRole("button", { name: /^Review: CA-402/ }).click();
+    await line(page, "approve").getByRole("button", { name: /^Open: .*CA-402/ }).click();
     await expect(needsPane(page).getByRole("article", { name: "Comment on CA-402" })).toBeVisible();
     await expect(card(page)).toHaveCount(0);
     await page.keyboard.press("Escape");
@@ -146,7 +147,7 @@ test.describe("Start my day", () => {
     await expect(line(page, "reporter")).toContainText("CA-408 · waiting 4 days");
     await line(page, "reporter").getByRole("button", { name: /^Draft a nudge/ }).click();
     const nudge = needsPane(page).getByRole("article", { name: "Comment on CA-408" });
-    await expect(nudge).toContainText("The earlier questions are still open");
+    await expect(nudge).toContainText("The earlier questions about CA-408 are still open");
     await expect(nudge.locator('[data-created-by="gossamr"]')).toHaveText("Drafted by Gossamr");
     expect(await jiraWrites(page)).toEqual([]);
     expect((await actions(page, "reporter_nudged")).map((e) => e.actor)).toEqual(["person"]);
@@ -183,7 +184,7 @@ test.describe("the reporter nudge", () => {
     await nextLine(page).getByRole("button", { name: "Draft a nudge" }).click();
     const draft = needsPane(page).getByRole("article", { name: "Comment on CA-408" });
     await expect(draft).toContainText("@Mette Lund");
-    await expect(draft).toContainText("The earlier questions are still open");
+    await expect(draft).toContainText("The earlier questions about CA-408 are still open");
     await expect(draft.locator('[data-created-by="gossamr"]')).toHaveText("Drafted by Gossamr");
     expect(await jiraWrites(page)).toEqual([]);
     // One at a time: no second offer while it waits, and it is a draft in Needs you, never in a safe batch.
@@ -242,7 +243,7 @@ test.describe("What Jira saw from me", () => {
     await expect(rows.nth(0).locator("[data-sent-second]")).toContainText("- ");
     await rows.nth(0).getByRole("button", { name: "Show the posted text" }).click();
     await expect(rows.nth(0).locator("[data-sent-detail]")).toContainText("The Black Friday send is next week.");
-    await expect(rows.nth(0).locator("[data-sent-detail]")).toContainText("Before work on CA-409 starts");
+    await expect(rows.nth(0).locator("[data-sent-detail]")).toContainText("A few things about CA-409 need clearing up");
     await rows.nth(0).getByRole("button", { name: "Show less" }).click();
     await expect(rows.nth(0).locator("[data-sent-detail]")).toHaveCount(0);
 

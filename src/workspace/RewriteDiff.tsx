@@ -242,12 +242,15 @@ interface Props {
    * field being edited keeps the text exactly as it would be written.
    */
   runName?: string | null;
+  /** The level of the section headings: 4 under a card's own heading, 3 where the surface's heading is a level 2. */
+  headingLevel?: 3 | 4;
 }
 
 const field = "w-full rounded-md border border-ws-sep2 bg-ws-win px-2 py-1 text-ws-ink";
 
 /** What a rewrite would change, as a diff against what the ticket said when it was drafted. While editing, the new text is a field and the diff follows it. */
-export function RewriteView({ intent, title, body, editing, disabled, onTitle, onBody, runName = null }: Props) {
+export function RewriteView({ intent, title, body, editing, disabled, onTitle, onBody, runName = null, headingLevel = 4 }: Props) {
+  const H = `h${headingLevel}` as const;
   const titleRows = useMemo(() => (intent.title ? withGaps(diffLines(intent.title.from, title)) : []), [intent.title, title]);
   const bodyRows = useMemo(() => {
     const rows = intent.body ? withGaps(diffLines(intent.body.fromText, body)) : [];
@@ -259,14 +262,14 @@ export function RewriteView({ intent, title, body, editing, disabled, onTitle, o
     <div className="grid gap-2.5">
       {intent.title && (
         <section className="grid gap-1">
-          <h4 className="m-0 text-xs font-semibold text-ws-ink3">Title</h4>
+          <H className="m-0 text-xs font-semibold text-ws-ink3">Title</H>
           {editing && !disabled ? <input aria-label="New title" value={title} onChange={(e) => onTitle(e.target.value)} className={field} /> : null}
           <Rows rows={titleRows} what="title" />
         </section>
       )}
       {intent.body && (
         <section className="grid gap-1">
-          <h4 className="m-0 text-xs font-semibold text-ws-ink3">Description{changedLines(diffLines(intent.body.fromText, body)) === 0 ? " (no change)" : ""}</h4>
+          <H className="m-0 text-xs font-semibold text-ws-ink3">Description{changedLines(diffLines(intent.body.fromText, body)) === 0 ? " (no change)" : ""}</H>
           {editing && !disabled ? (
             <textarea aria-label="New description, as Markdown" value={body} onChange={(e) => onBody(e.target.value)} rows={Math.min(18, Math.max(6, body.split("\n").length + 1))} className={`${field} font-mono text-[12.5px]`} />
           ) : null}

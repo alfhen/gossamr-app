@@ -21,6 +21,7 @@ import { useRuns } from "./runsStore";
 import { useWorkspace, workflowOfItem } from "../workspaceStore";
 import { PEEK_DRAFT_MARGIN, peekFocusAfterLeaving } from "./peekDrafts";
 import { useToasts } from "./toasts";
+import { doneText, postedToJira, waitStarted } from "./NeedsPane";
 import { escLeavesPause, useCardKeys } from "./draftCardKeys";
 import { takeDraftEditIntent } from "./draftKeys";
 import { itemKey } from "../lib/filter";
@@ -121,6 +122,18 @@ export function showPause(card: Pick<ParentNode, "querySelector"> | null) {
 /** What Esc at the posting pause tells a screen reader: the editor closed and the words are still there. */
 export const EDIT_KEPT_NOTE = "Edit kept. Nothing was posted.";
 
+/** What a screen reader hears when `p` was posted from its card: what was posted, and that the ticket waits on the reporter when that is what it started. Null when `done` did not reach Jira. */
+export function postedNote(p: Proposal, done: Proposal | null): string | null {
+  if (!done) return null;
+  const key = targetOf(p.intent)?.key ?? "";
+  const title = isReporterQuestions(p) ? `Questions for the reporter${key ? ` on ${key}` : ""}` : isReporterNudge(p) ? `Nudge for the reporter${key ? ` on ${key}` : ""}` : draftTitle(p);
+  const proposals = { [p.id]: done };
+  const target = { type: "draft", id: p.id } as const;
+  if (!postedToJira({ target }, proposals)) return null;
+  const waits = waitStarted({ target, ticketKey: key || undefined }, proposals);
+  return `${doneText({ title, ticketKey: undefined, workstreamTitle: "" }, true)}${waits ? ` ${waits}.` : ""}`;
+}
+
 /** Puts the keyboard on the element `find` returns once the page has drawn it, trying again for a few frames while focus is not on it (a button re-rendered in place may not be there yet, or may lose the focus to its section). */
 export function focusWhenDrawn(find: () => Pick<HTMLElement, "focus"> | null, active: () => unknown, frame: (run: () => void) => unknown = requestAnimationFrame, tries = 3) {
   frame(() => {
@@ -169,6 +182,8 @@ export interface DraftCardProps {
   onSendAnswer?(edit: ProposalEdit | null, message: string): void;
   /** For a GitHub review, whether the token may post it; null while that is being asked. Approving a review posts it. */
   access?: ReviewAccess | null;
+  /** The level of the headings inside the card, one below the heading of the surface it sits in (the decision pane's is 2, so 3). */
+  headingLevel?: 3 | 4;
 }
 
 const button = "rounded-md border border-ws-sep2 px-2.5 py-1 text-sm hover:bg-ws-hover disabled:opacity-45";
@@ -212,7 +227,7 @@ export function settleKeptEdits(id: string, state: ProposalStateKind): void {
   if (state === "applied" || state === "retired") keptEdits.delete(id);
 }
 
-function DraftCardBody({ proposal: p, statusName, people, working, error, onApprove, onSkip, onReview, onShow, onOpenRun, onDiscuss, pass, onSendBack, answer, onSendAnswer }: DraftCardProps) {
+function DraftCardBody({ proposal: p, statusName, people, working, error, onApprove, onSkip, onReview, onShow, onOpenRun, onDiscuss, pass, onSendBack, answer, onSendAnswer, headingLevel }: DraftCardProps) {
   const intent = p.intent;
   const key = targetOf(intent)?.key ?? "";
   const stored = intent.type === "comment" ? docText(intent.body) : "";
@@ -288,6 +303,15 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
 
   const state = p.state.type;
   const open = state === "pending" || state === "applying";
+  // Posted from a card outside the Needs pane (a peek, a workstream): the keyboard was on a button that is gone or disabled, so it goes to the line that says it is done, not to whatever the page falls back on. The pane has its own line.
+  const doneLine = useRef<HTMLSpanElement>(null);
+  const wasOpen = useRef(open);
+  useEffect(() => {
+    const was = wasOpen.current;
+    wasOpen.current = open;
+    if (!was || state !== "applied" || !hadFocus.current || card.current?.closest("[data-needs-pane]")) return;
+    focusWhenDrawn(() => doneLine.current, () => document.activeElement);
+  }, [open, state]);
   const remaining = summaries.filter((_, i) => i >= made && picked[i]).length;
   const revision = p.revisions[p.revisions.length - 1];
   const shownError = error ?? p.error;
@@ -449,7 +473,9 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
       <div className="flex items-center gap-2 bg-ws-pip-soft px-3 py-1.5 text-sm font-semibold text-ws-pip">
         <span aria-hidden>✦</span>
         {draftTitle(p, answer?.label)}
-        <span className="ml-auto font-normal text-ws-ink3">{BADGE[state]}</span>
+        <span ref={doneLine} tabIndex={-1} data-draft-state className="ml-auto font-normal text-ws-ink3 focus-visible:outline-2 focus-visible:outline-ws-pip">
+          {BADGE[state]}
+        </span>
       </div>
       <div
         className="grid gap-2 px-3 py-2.5"
@@ -473,6 +499,7 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
               }}
               ticketKey={key}
               people={people}
+              label={`Edit the comment on ${key}`}
               className="rounded-md border border-ws-sep2 bg-ws-win"
             />
           ) : (
@@ -504,6 +531,7 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
             onTitle={(v) => ((rewriteEdited.current = true), setNewTitle(v))}
             onBody={(v) => ((rewriteEdited.current = true), setNewText(v))}
             runName={p.origin.type === "run" ? runName : null}
+            headingLevel={headingLevel}
           />
         )}
         {intent.type === "link" && (
@@ -663,7 +691,7 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
               <span data-created-by={isReporterQuestions(p) ? "gossamr" : "agent"} className="mr-2 rounded-full bg-ws-pip-soft px-2 text-xs font-semibold text-ws-pip">
                 {isReporterQuestions(p) ? "Drafted by Gossamr" : "Drafted by an agent"}
               </span>
-            )}
+            )}{" "}
             <FromRun proposal={p} onOpen={onOpenRun ? () => onOpenRun((p.origin as { runId: string }).runId) : undefined} />
             {isReporterQuestions(p) ? ". Gossamr wrote this around the triage's open questions, which are the agent's words. Read and edit them before you approve." : ". The words are the agent's. Read and edit them before you approve."}
           </p>
@@ -672,7 +700,7 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
           <p data-provenance="gossamr" className="m-0 text-sm text-ws-ink3">
             <span data-created-by="gossamr" className="mr-2 rounded-full bg-ws-pip-soft px-2 text-xs font-semibold text-ws-pip">
               Drafted by Gossamr
-            </span>
+            </span>{" "}
             Gossamr wrote this from what the ticket&apos;s description leaves out. Read and edit the questions before you approve.
           </p>
         )}
@@ -680,7 +708,7 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
           <p data-provenance="gossamr" className="m-0 text-sm text-ws-ink3">
             <span data-created-by="gossamr" className="mr-2 rounded-full bg-ws-pip-soft px-2 text-xs font-semibold text-ws-pip">
               Drafted by Gossamr
-            </span>
+            </span>{" "}
             Gossamr wrote this follow-up because the reporter hasn&apos;t answered for days. Read and edit it before you approve.
           </p>
         )}
@@ -688,7 +716,7 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
           <p data-provenance="pip" className="m-0 text-sm text-ws-ink3">
             <span data-created-by="pip" className="mr-2 rounded-full bg-ws-pip-soft px-2 text-xs font-semibold text-ws-pip">
               Drafted by Pip
-            </span>
+            </span>{" "}
             {answersProvenance(replyPrompt, intent.type === "comment" ? body : undefined)}
           </p>
         )}
@@ -802,7 +830,7 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
 }
 
 /** A draft card wired to the workspace: approving or skipping goes through the store, and edits are saved first. */
-export function LiveDraftCard({ proposal: p, jump = true }: { proposal: Proposal; jump?: boolean }) {
+export function LiveDraftCard({ proposal: p, jump = true, headingLevel }: { proposal: Proposal; jump?: boolean; headingLevel?: 3 | 4 }) {
   const backend = useBackend();
   const names = useWorkspace((s) => s.names);
   const containers = useWorkspace((s) => s.containers);
@@ -835,6 +863,7 @@ export function LiveDraftCard({ proposal: p, jump = true }: { proposal: Proposal
   return (
     <DraftCard
       proposal={p}
+      headingLevel={headingLevel}
       statusName={statusName}
       people={people}
       working={working}
@@ -885,7 +914,12 @@ export function LiveDraftCard({ proposal: p, jump = true }: { proposal: Proposal
             return done;
           }
           if (edit && backend) await backend.proposalsEdit(p.id, edit);
-          return useWorkspace.getState().approve(p.id);
+          const inPane = !!document.querySelector(`[data-draft="${CSS.escape(p.id)}"]`)?.closest("[data-needs-pane]");
+          const done = await useWorkspace.getState().approve(p.id);
+          // The pane's own line says it when a post moves on to the next need; anywhere else this is the only word.
+          const note = inPane ? null : postedNote(p, done);
+          if (note) useToasts.getState().push(note, "info");
+          return done;
         })
       }
     />

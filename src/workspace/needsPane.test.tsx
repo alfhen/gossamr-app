@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import type { Need } from "../lib/needs";
-import { ReporterReplyQuote, closeTarget, HigherPriority, EDIT_FIELD, advancedText, doneText, postedToJira, waitStarted, nextAdvanced, endEditing, firstDecision, paneStop } from "./NeedsPane";
+import { ReporterReplyQuote, closeTarget, HigherPriority, EDIT_FIELD, advancedText, doneText, postedToJira, waitStarted, nextAdvanced, advancedUndone, endEditing, firstDecision, paneStop } from "./NeedsPane";
 
 /** A stand-in for the pane: each selector it is asked for answers with what the test put there. */
 const pane = (found: Record<string, unknown[]>) =>
@@ -121,6 +121,18 @@ describe("the advanced line's id", () => {
     expect(second.text).toBe(first.text);
     expect(second.id).not.toBe(first.id);
     expect(second).not.toEqual(first);
+  });
+});
+
+describe("the advanced line after Undo", () => {
+  const line = nextAdvanced(null, "Done: Questions for the reporter on CA-402. Now: CA-408", undefined, "need-402");
+  it("goes when the done need is back in the list, and stays while it is gone", () => {
+    expect(advancedUndone(line, [{ key: "need-408" }])).toBe(false);
+    expect(advancedUndone(line, [{ key: "need-402" }, { key: "need-408" }])).toBe(true);
+  });
+  it("never goes for a line that names no need, or no line", () => {
+    expect(advancedUndone(nextAdvanced(null, "x"), [{ key: "need-402" }])).toBe(false);
+    expect(advancedUndone(null, [{ key: "need-402" }])).toBe(false);
   });
 });
 

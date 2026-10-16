@@ -366,7 +366,7 @@ export const MANAGE_STATE: Record<"on" | "off", string> = {
 
 /** What the mode switch means, one line under it: Manage starts and drafts by itself, Advise only answers. */
 export const MODE_LINE: Record<"manage" | "advise", string> = {
-  manage: "Pip manages: it starts the next step by itself and drafts what's next; nothing reaches Jira without you.",
+  manage: "Pip manages: after each step finishes it starts the next one and drafts what's next. Gossamr posts nothing to Jira without you; a Build runs with your Claude settings and could reach Jira or GitHub itself.",
   advise: "Pip advises: it answers when asked and starts nothing by itself.",
 };
 

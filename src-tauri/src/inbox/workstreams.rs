@@ -285,14 +285,19 @@ pub fn replies_of(t: &crate::model::CachedTicket, me: &str) -> Vec<chrono::DateT
 }
 
 /// The clarity notice of `ws`, if it should show: the ticket is cached and reads thin (`gaps`), no Triage ran in the
-/// workstream (its verdict is the authority), the person hasn't dismissed or asked about it (unless the ticket changed
-/// since they asked), and nothing is waiting on the reporter.
-pub fn clarity_of(ws: &Workstream, runs: &[Run], gaps: &[ClarityGap], replies: &[chrono::DateTime<Utc>], events: &[WorkstreamEvent]) -> Option<Clarity> {
+/// workstream (its verdict is the authority) and no Triage, Plan or Build ran on the ticket anywhere (`item_runs`, in any
+/// workstream or in General: a plan already lists what is open), the person hasn't dismissed or asked about it (unless the
+/// ticket changed since they asked), and nothing is waiting on the reporter.
+pub fn clarity_of(ws: &Workstream, runs: &[Run], item_runs: &[Run], gaps: &[ClarityGap], replies: &[chrono::DateTime<Utc>], events: &[WorkstreamEvent]) -> Option<Clarity> {
     if ws.closed_at.is_some() || ws.item_key.is_none() || gaps.is_empty() {
         return None;
     }
     let mine = |r: &&Run| r.spec.workstream.as_deref() == Some(ws.id.as_str());
     if runs.iter().filter(mine).any(|r| r.spec.kind == RunKind::Triage) {
+        return None;
+    }
+    let key = ws.item_key.as_deref();
+    if item_runs.iter().any(|r| r.item.as_ref().map(|i| i.key.as_str()) == key && matches!(r.spec.kind, RunKind::Triage | RunKind::Plan | RunKind::Build)) {
         return None;
     }
     let follow = reporter_follow(events, replies);
@@ -464,9 +469,9 @@ pub fn reporter_comment(key: &str, reporter: Option<&str>, questions: &[String],
         one_question_each(questions).iter().map(|q| format!("- {q}")).collect::<Vec<_>>().join("\n")
     };
     if replied {
-        return format!("{hello}\n\nThanks for your answer above. Before work on {key} starts, a few things are still open:\n\n{asks}\n\nCould you answer these here on the ticket? Thanks.");
+        return format!("{hello}\n\nThanks for your answer above. A few things about {key} are still open:\n\n{asks}\n\nCould you answer these here on the ticket? Thanks.");
     }
-    format!("{hello}\n\nBefore work on {key} starts, a few things need clearing up:\n\n{asks}\n\nCould you answer them here on the ticket? Thanks.")
+    format!("{hello}\n\nA few things about {key} need clearing up:\n\n{asks}\n\nCould you answer them here on the ticket? Thanks.")
 }
 
 /// The comment `nudge_reporter` drafts: a short, polite follow-up on the questions already asked on the ticket. When the
@@ -475,7 +480,7 @@ pub fn reporter_comment(key: &str, reporter: Option<&str>, questions: &[String],
 pub fn nudge_comment(key: &str, reporter: Option<&str>, replied: bool) -> String {
     let hello = reporter.map_or_else(|| "Hi,".to_string(), |name| format!("Hi @{name},"));
     let questions = if replied { "follow-up questions" } else { "earlier questions" };
-    format!("{hello}\n\nThe {questions} are still open, and work on {key} can't start until they are cleared up. Could you answer them here on the ticket when you have a moment? Thanks.")
+    format!("{hello}\n\nThe {questions} about {key} are still open. Could you answer them here on the ticket when you have a moment? Thanks.")
 }
 
 /// One counter of a workstream's budget: how much is used of how much it may use.
@@ -591,6 +596,8 @@ struct TicketFacts {
     ticket: Option<crate::model::CachedTicket>,
     /// The signed-in person's account id, whose comments are not the reporter's.
     me: String,
+    /// The connection's runs on the ticket, in any workstream or in General (`clarity_of`); filled by the caller, which has the runs.
+    item_runs: Vec<Run>,
 }
 
 /// The `TicketFacts` of the ticket workstream `ws` is on, as it reads in the cache; none without a ticket, a cached one,
@@ -600,7 +607,7 @@ fn ticket_facts(db: &Db, scope: &Scope, ws: &Workstream) -> Result<TicketFacts> 
     let Some(work) = db.item(&Core::item(scope, key))? else { return Ok(TicketFacts::default()) };
     let cached = serde_json::from_value::<crate::model::CachedTicket>(work.extra.clone()).ok();
     let replies = cached.as_ref().map(|t| replies_of(t, &scope.account_id)).unwrap_or_default();
-    Ok(TicketFacts { gaps: clarity_gaps(&work.body.plain_text()), replies, ticket: cached, me: scope.account_id.clone() })
+    Ok(TicketFacts { gaps: clarity_gaps(&work.body.plain_text()), replies, ticket: cached, me: scope.account_id.clone(), item_runs: Vec::new() })
 }
 
 /// The `escalation_posted` line for workstream `ws_id` when review draft `posted`, just posted to GitHub, is the one its
@@ -859,6 +866,10 @@ impl Core {
                 let readiness = readiness_verdicts(db, &runs)?;
                 let events = escalation_events(db, &ws)?;
                 let ticket = ticket_facts(db, scope, &ws)?;
+                let ticket = match ws.item_key.as_deref() {
+                    Some(key) => TicketFacts { item_runs: db.runs(&RunQuery { connection_id: Some(connection_id.clone()), ..Default::default() })?.into_iter().filter(|r| r.item.as_ref().is_some_and(|i| i.key == key)).collect(), ..ticket },
+                    None => ticket,
+                };
                 Ok(Some((ws, runs, Verdicts { reviews: verdicts, readiness }, events, pending_reviews(db)?, ticket)))
             })
             .await?;
@@ -871,7 +882,7 @@ impl Core {
     fn view_of(&self, workstream: Workstream, runs: &[Run], verdicts: &Verdicts, events: &[WorkstreamEvent], drafts: &[Proposal], ticket: &TicketFacts) -> Result<WorkstreamView> {
         let escalation = escalation_of(&workstream, runs, |r| verdicts.reviews.get(&r.id).copied(), events, drafts);
         let readiness = readiness_of(&workstream, runs, |r| verdicts.readiness.get(&r.id).cloned(), &ticket.replies, events);
-        let clarity = clarity_of(&workstream, runs, &ticket.gaps, &ticket.replies, events);
+        let clarity = clarity_of(&workstream, runs, &ticket.item_runs, &ticket.gaps, &ticket.replies, events);
         let (follow, replied_at) = reporter_follow_at(events, &ticket.replies);
         let waiting = follow.waiting.filter(|_| workstream.closed_at.is_none()).map(|since| ReporterWait { since });
         let mut view = WorkstreamView::of(workstream, runs, &verdicts.reviews);
@@ -916,7 +927,8 @@ impl Core {
             .map(|ws| {
                 let linked: Vec<Run> = runs.iter().filter(|r| r.spec.workstream.as_deref() == Some(ws.id.as_str())).cloned().collect();
                 let events = events.remove(&ws.id).unwrap_or_default();
-                let ticket = tickets.remove(&ws.id).unwrap_or_default();
+                let mut ticket = tickets.remove(&ws.id).unwrap_or_default();
+                ticket.item_runs = runs.iter().filter(|r| ws.item_key.as_deref().is_some_and(|key| r.item.as_ref().is_some_and(|i| i.key == key))).cloned().collect();
                 self.view_of(ws, &linked, &verdicts, &events, &drafts, &ticket)
             })
             .collect()
@@ -1741,7 +1753,7 @@ mod tests {
             let Intent::Comment { item, body } = &draft.intent else { panic!("a comment: {:?}", draft.intent) };
             assert_eq!(item.key, "CA-1");
             let text = body.plain_text();
-            for part in ["Hi @Kim Ode,", "Before work on CA-1 starts", "- What does done look like?", "- Who is waiting on it?", "answer them here on the ticket"] {
+            for part in ["Hi @Kim Ode,", "A few things about CA-1 need clearing up", "- What does done look like?", "- Who is waiting on it?", "answer them here on the ticket"] {
                 assert!(text.contains(part), "{part} in {text}");
             }
             assert!(format!("{body:?}").contains("rep-1"), "the reporter is mentioned, not just named");
@@ -1844,7 +1856,7 @@ mod tests {
             let questions = vec!["What does done look like?".to_string(), "Who is waiting on it?".to_string()];
             assert_eq!(
                 reporter_comment("CA-401", Some("Kim Ode"), &questions, false),
-                "Hi @Kim Ode,\n\nBefore work on CA-401 starts, a few things need clearing up:\n\n- What does done look like?\n- Who is waiting on it?\n\nCould you answer them here on the ticket? Thanks."
+                "Hi @Kim Ode,\n\nA few things about CA-401 need clearing up:\n\n- What does done look like?\n- Who is waiting on it?\n\nCould you answer them here on the ticket? Thanks."
             );
             let none = reporter_comment("CA-401", None, &[], false);
             assert!(none.starts_with("Hi,\n") && none.contains("- What is the goal?") && none.contains("acceptance criteria") && none.contains("in scope, and what is out") && none.contains("who is waiting on it"), "{none}");
@@ -1855,7 +1867,7 @@ mod tests {
             let questions = vec!["What does done look like for CA-408? Which behaviour or number should change?".to_string(), "Who is waiting on it?".to_string()];
             assert_eq!(
                 reporter_comment("CA-408", None, &questions, false),
-                "Hi,\n\nBefore work on CA-408 starts, a few things need clearing up:\n\n- What does done look like for CA-408?\n- Which behaviour or number should change?\n- Who is waiting on it?\n\nCould you answer them here on the ticket? Thanks."
+                "Hi,\n\nA few things about CA-408 need clearing up:\n\n- What does done look like for CA-408?\n- Which behaviour or number should change?\n- Who is waiting on it?\n\nCould you answer them here on the ticket? Thanks."
             );
             // A question mark inside a sentence, or before a lower-case word, does not split; and the fallback frame says no "we".
             assert_eq!(one_question_each(&["Is v2? or v3 meant?".to_string(), "Done?".to_string()]), vec!["Is v2? or v3 meant?", "Done?"]);
@@ -1867,7 +1879,7 @@ mod tests {
             let questions = vec!["What does done look like?".to_string()];
             assert_eq!(
                 reporter_comment("CA-401", Some("Kim Ode"), &questions, true),
-                "Hi @Kim Ode,\n\nThanks for your answer above. Before work on CA-401 starts, a few things are still open:\n\n- What does done look like?\n\nCould you answer these here on the ticket? Thanks."
+                "Hi @Kim Ode,\n\nThanks for your answer above. A few things about CA-401 are still open:\n\n- What does done look like?\n\nCould you answer these here on the ticket? Thanks."
             );
             assert_ne!(reporter_comment("CA-401", None, &questions, true), reporter_comment("CA-401", None, &questions, false));
         }
@@ -2155,9 +2167,9 @@ mod tests {
         fn the_clarity_notice_shows_for_a_thin_ticket_until_a_triage_a_dismissal_or_an_ask_and_comes_back_when_the_ticket_changed_after_one() {
             let ws: Workstream = serde_json::from_value(serde_json::json!({ "id": "w", "connectionId": "c", "title": "t", "createdAt": "2026-10-01T10:00:00Z", "itemKey": "CA-1" })).unwrap();
             let gaps = [ClarityGap::Short, ClarityGap::Done];
-            let shown = |ws: &Workstream, runs: &[Run], events: &[WorkstreamEvent]| clarity_of(ws, runs, &gaps, &[], events);
+            let shown = |ws: &Workstream, runs: &[Run], events: &[WorkstreamEvent]| clarity_of(ws, runs, &[], &gaps, &[], events);
             assert_eq!(shown(&ws, &[], &[]), Some(Clarity { gaps: gaps.to_vec() }));
-            assert_eq!(clarity_of(&ws, &[], &[], &[], &[]), None, "nothing missing");
+            assert_eq!(clarity_of(&ws, &[], &[], &[], &[], &[]), None, "nothing missing");
             assert_eq!(shown(&Workstream { item_key: None, ..ws.clone() }, &[], &[]), None, "no ticket");
             assert_eq!(shown(&Workstream { closed_at: Some(Utc::now()), ..ws.clone() }, &[], &[]), None, "closed");
             assert!(shown(&Workstream { mode: Mode::Manage, ..ws.clone() }, &[], &[]).is_some(), "not a need: every mode");
@@ -2178,6 +2190,27 @@ mod tests {
         }
 
         #[tokio::test]
+        async fn a_triage_plan_or_build_on_the_ticket_anywhere_ends_the_notice_but_an_investigate_or_another_ticket_does_not() {
+            let fx = fixture().await;
+            let ws = fx.core.open_workstream(&fx.scope, Some(fx.item("CA-1")), None).await.unwrap();
+            let shown = || async {
+                let view = fx.core.workstream(&fx.scope, &ws.id).await.unwrap().unwrap();
+                let listed = fx.core.workstreams(&fx.scope, false).await.unwrap().into_iter().find(|v| v.workstream.id == ws.id).unwrap();
+                assert_eq!(listed.clarity, view.clarity, "the list and the single view agree");
+                view.clarity.is_some()
+            };
+            assert!(shown().await, "a thin ticket");
+            insert_run(&fx, "i1", None, RunKind::Investigate, RunState::Done).await;
+            assert!(shown().await, "an Investigate alone settles nothing");
+            let spec = RunSpec { kind: RunKind::Plan, name: "name-p0".into(), ..run_spec() };
+            let elsewhere = Run::queued("p0".into(), "p-p0".into(), Connection::jira_id(&fx.scope), Some(fx.item("CA-2")), spec, "f".into(), Utc::now());
+            fx.core.with_db_for(&fx.scope, |db| db.insert_run(&elsewhere)).await.unwrap();
+            assert!(shown().await, "a Plan on another ticket settles nothing");
+            insert_run(&fx, "p1", None, RunKind::Plan, RunState::Done).await;
+            assert!(!shown().await, "a Plan started from General on the same ticket does");
+        }
+
+        #[tokio::test]
         async fn a_triage_in_the_workstream_ends_the_notice_and_the_ask_now_drafts_the_questions_for_approval() {
             let fx = fixture().await;
             let ws = fx.core.open_workstream(&fx.scope, Some(fx.item("CA-1")), None).await.unwrap();
@@ -2193,7 +2226,7 @@ mod tests {
             let Intent::Comment { item, body } = &draft.intent else { panic!("a comment: {:?}", draft.intent) };
             assert_eq!(item.key, "CA-1");
             let text = body.plain_text();
-            for part in ["Before work on CA-1 starts", "- What is the goal?", "- What has to be true for this to be done", "- What is in scope, and what is out?", "- Who asked for it, and who is waiting on it?"] {
+            for part in ["A few things about CA-1 need clearing up", "- What is the goal?", "- What has to be true for this to be done", "- What is in scope, and what is out?", "- Who asked for it, and who is waiting on it?"] {
                 assert!(text.contains(part), "{part} in {text}");
             }
             assert!(fx.tracker.intents().is_empty(), "nothing is posted before the person approves");
@@ -2263,11 +2296,11 @@ mod tests {
         #[test]
         fn the_nudge_comment_is_short_polite_and_names_the_ticket() {
             let text = nudge_comment("CA-1", Some("Mette"), false);
-            assert!(text.starts_with("Hi @Mette,") && text.contains("The earlier questions are still open") && !text.contains("gentle") && text.contains("CA-1"), "{text}");
+            assert!(text.starts_with("Hi @Mette,") && text.contains("The earlier questions about CA-1 are still open") && !text.contains("can't start") && !text.contains("gentle") && text.contains("CA-1"), "{text}");
             assert!(nudge_comment("CA-1", None, false).starts_with("Hi,"));
             assert!(!text.contains("we ") && !text.contains(" I ") && !text.contains(" my ") && !text.to_lowercase().contains("gossamr"), "{text}");
             let again = nudge_comment("CA-1", Some("Mette"), true);
-            assert!(again.contains("The follow-up questions are still open") && again.contains("CA-1"), "{again}");
+            assert!(again.contains("The follow-up questions about CA-1 are still open") && again.contains("CA-1"), "{again}");
             assert!(text.len() < 300, "short");
         }
 
@@ -2290,7 +2323,7 @@ mod tests {
             assert!(matches!(&nudge.origin, Origin::Chat { workstream, .. } if workstream.as_deref() == Some(ws.id.as_str())), "in this workstream");
             let Intent::Comment { item, body } = &nudge.intent else { panic!("a comment: {:?}", nudge.intent) };
             assert_eq!(item.key, "CA-1");
-            assert!(body.plain_text().contains("The earlier questions are still open"));
+            assert!(body.plain_text().contains("The earlier questions about CA-1 are still open"));
             assert_eq!(fx.tracker.intents().len(), posted, "nothing is posted before the person approves it");
             let events = fx.core.workstream_events(&fx.scope, &ws.id).await.unwrap();
             let line = events.iter().find(|e| e.action == "reporter_nudged").expect("audited");

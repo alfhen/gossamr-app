@@ -318,8 +318,9 @@ export function SourceBar({ source, sources, onChange }: { source: ActivitySourc
   );
 }
 
-export function DayHeading({ label }: { label: string }) {
-  return <h3 className="sticky top-0 z-10 m-0 bg-ws-win px-2 pt-4 pb-1 text-xs font-semibold tracking-wide text-ws-ink3 uppercase">{label}</h3>;
+export function DayHeading({ label, level = 3 }: { label: string; level?: 2 | 3 }) {
+  const H = `h${level}` as const;
+  return <H className="sticky top-0 z-10 m-0 bg-ws-win px-2 pt-4 pb-1 text-xs font-semibold tracking-wide text-ws-ink3 uppercase">{label}</H>;
 }
 
 export function ChipBar({ chip, counts, onChange, chips = CHIPS }: { chip: ActivityChip; counts: Partial<Record<ActivityChip, number>>; onChange(chip: ActivityChip): void; chips?: readonly ActivityChip[] }) {

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { editedWords, jiraSent, SENT_LABEL, type SentEntry } from "../lib/jiraSent";
 import { useWorkspace } from "../workspaceStore";
 import { DayHeading, EmptyNote } from "./ActivityView";
@@ -87,6 +87,13 @@ export function SentRow({ entry: e, onTicket, onWorkstream }: { entry: SentEntry
  */
 export function JiraSentView() {
   useEscToPipHome(useAgentsFlag((s) => s.enabled));
+  const title = useRef<HTMLHeadingElement>(null);
+  // The page opens from the palette, which gives the keyboard back to what it came from as it closes: a frame later the
+  // heading takes it, so a screen reader starts on the page it opened.
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => title.current?.focus());
+    return () => cancelAnimationFrame(frame);
+  }, []);
   const proposals = useWorkspace((s) => s.proposals);
   const open = useWorkstreams((s) => s.list);
   const closed = useWorkstreams((s) => s.closed);
@@ -109,7 +116,7 @@ export function JiraSentView() {
         <button type="button" data-sent-back onClick={() => useTabs.getState().setRoute("pip")} className={`${link} text-sm`}>
           ← Pip home
         </button>
-        <h1 className="m-0 text-base font-semibold">What Jira saw from me</h1>
+        <h1 ref={title} tabIndex={-1} className="m-0 rounded text-base font-semibold focus-visible:outline-2 focus-visible:outline-ws-pip">What Jira saw from me</h1>
         <p className="m-0 text-sm text-ws-ink3">Everything Gossamr posted to Jira after you approved it. This page only shows it; it posts nothing. {GITHUB_NOT_LISTED} It lists only what Gossamr posted. An agent run with your Claude settings could reach Jira on its own; see Agent safety.</p>
       </header>
       <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-[max(32px,var(--ws-launcher-clear,0px))]">
@@ -120,7 +127,7 @@ export function JiraSentView() {
             <div role="feed" aria-label="Posted to Jira">
               {groups.map((g) => (
                 <section key={g.day} aria-label={g.label}>
-                  <DayHeading label={g.label} />
+                  <DayHeading label={g.label} level={2} />
                   {g.entries.map((e) => (
                     <SentRow key={e.id} entry={e} onTicket={(key) => workspaceTicketLinks.open(key)} onWorkstream={(id) => openOnPipHome(id)} />
                   ))}
