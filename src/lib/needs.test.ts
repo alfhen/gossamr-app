@@ -626,6 +626,9 @@ describe("needs: where a need is", () => {
     const fromRun = (id: string, runId: string): Proposal => ({ ...draft(id, comment("CA-401"), 5), origin: { type: "run", runId, shortId: null, workstream: null } }) as Proposal;
     const runs = [run("r9", "investigate", "done")];
     expect(needs(input({ runs, proposals: [fromRun("c1", "r9")] }))[0].title).toBe("Investigate · comment");
+    // A Review run's GitHub review doesn't read "Review · review".
+    const reviewed = { ...draft("g1", review(), 5), origin: { type: "run", runId: "r-rev", shortId: null, workstream: null } } as Proposal;
+    expect(needs(input({ runs: [run("r-rev", "review", "done")], proposals: [reviewed] }))[0].title).toBe("Review · GitHub review");
     const long = { type: "comment", item: ref("CA-401"), body: docFromText("Thanks for the report, the export times out after ten rows."), mentions: [] } as unknown as Intent;
     expect(needs(input({ proposals: [draft("c2", long, 4)] }))[0].title).toBe("Draft comment: “Thanks for the report, the export…”");
     const secret = { ...long, body: docFromText(`ghp_${"a".repeat(36)} is the token`) } as unknown as Intent;
