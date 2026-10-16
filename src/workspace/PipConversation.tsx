@@ -572,8 +572,11 @@ export function Composer({ conversation, attached, chips, looking, scene, footer
   const prefill = usePip((s) => s.prefill);
   const agentsOn = useAgentsEnabled();
   const [input, setInput] = useState(() => unsentInputOf(conversation));
+  // What the input holds as last drawn on screen: set after the render commits, so a render React throws away saves nothing.
   const inputNow = useRef(input);
-  inputNow.current = input;
+  useEffect(() => {
+    inputNow.current = input;
+  }, [input]);
   const inputOf = useRef(conversation);
   // The input is about the conversation it was typed in: keep it there and show what the new one left unsent.
   useEffect(() => {

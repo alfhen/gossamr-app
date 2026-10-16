@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { itemRef } from "../backend/mockConnector";
 import { docFromText } from "../lib/docs";
 import type { Proposal, RunSpec } from "../types";
-import { DraftCard, keepEditsOfDraft, keptEditsOfDraft } from "./DraftCard";
+import { DraftCard, keepEditsOfDraft, keptEditsOfDraft, settleKeptEdits } from "./DraftCard";
 import { draftPreviewBody } from "./DraftPreview";
 
 const spec: RunSpec = { kind: "investigate", repo: "acme/web", clonePath: "/Users/sample/Code/web", base: "main", name: "ca-412-fix-ab12", instruction: "Investigate this work." };
@@ -58,5 +58,23 @@ describe("a skipped draft's unsaved edit (G2)", () => {
     expect(out).toContain("My half-written reply");
     expect(out).toContain("<textarea");
     expect(out).not.toContain("Original text</");
+  });
+
+  it("stays kept while the draft can still be shown, so a card left again comes back with it, and goes once it is posted or retired", () => {
+    keepEditsOfDraft("c3", { body: { text: "Restored once", mentions: [] } });
+    renderToStaticMarkup(<DraftCard proposal={commentDraft("c3")} statusName={null} people={[]} working={false} error={null} onApprove={vi.fn()} onSkip={vi.fn()} />);
+    expect(keptEditsOfDraft("c3")?.body?.text).toBe("Restored once");
+    for (const state of ["pending", "applying", "skipped"] as const) {
+      settleKeptEdits("c3", state);
+      expect(keptEditsOfDraft("c3")?.body?.text, state).toBe("Restored once");
+    }
+    settleKeptEdits("c3", "applied");
+    expect(keptEditsOfDraft("c3")).toBeUndefined();
+    keepEditsOfDraft("c4", { message: "Try again" });
+    settleKeptEdits("c4", "retired");
+    expect(keptEditsOfDraft("c4")).toBeUndefined();
+    keepEditsOfDraft("c5", { message: "Typed" });
+    keepEditsOfDraft("c5", {});
+    expect(keptEditsOfDraft("c5")).toBeUndefined();
   });
 });

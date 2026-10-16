@@ -573,6 +573,9 @@ fn escalation_events(db: &Db, ws: &Workstream) -> Result<Vec<WorkstreamEvent>> {
     let kept = |e: &WorkstreamEvent| match e.action.as_str() {
         "fix_rounds_exhausted" | "fix_round_person" | "escalation_taken" | "escalation_posted" | "readiness_asked" | "readiness_answered" | "readiness_overridden" | "clarity_asked" | "clarity_dismissed" | "reporter_nudged" | "basis_drifted" | "resumed" => true,
         "draft_approved" => e.proposal_id.as_ref().is_some_and(|p| asked.contains(p)),
+        // A skipped or retired ask was never posted, which `clarity_of` reads through `draft_lapsed`, and so is an Undo of the skip.
+        "draft_skipped" | "draft_retired" => e.proposal_id.as_ref().is_some_and(|p| asked.contains(p)),
+        "undone" => e.detail.as_deref() == Some("draft_skipped") && e.proposal_id.as_ref().is_some_and(|p| asked.contains(p)),
         _ => false,
     };
     Ok(all.into_iter().filter(kept).collect())
@@ -2202,6 +2205,19 @@ mod tests {
 
             let other = fx.core.open_workstream(&fx.scope, None, Some("Other".into())).await.unwrap();
             assert!(matches!(fx.core.ask_reporter_now(&fx.scope, &other.id, &[]).await.unwrap_err(), Error::Proposal(why) if why == CLARITY_GONE), "no ticket, no notice");
+        }
+
+        #[tokio::test]
+        async fn a_skipped_ask_brings_the_notice_back_in_the_workstream_view_and_its_undo_takes_it_away_again() {
+            let fx = fixture().await;
+            let ws = fx.core.open_workstream(&fx.scope, Some(fx.item("CA-1")), None).await.unwrap();
+            let draft = fx.core.ask_reporter_now(&fx.scope, &ws.id, &[]).await.unwrap();
+            assert_eq!(fx.core.workstream(&fx.scope, &ws.id).await.unwrap().unwrap().clarity, None, "asked");
+            fx.core.skip_proposal(&draft.id).await.unwrap();
+            assert!(fx.core.workstream(&fx.scope, &ws.id).await.unwrap().unwrap().clarity.is_some(), "the skipped ask was never posted, so the ticket still may be unclear");
+            assert!(fx.core.workstreams(&fx.scope, false).await.unwrap().iter().any(|v| v.workstream.id == ws.id && v.clarity.is_some()), "the list reads the same");
+            fx.core.unskip_proposal(&draft.id).await.unwrap();
+            assert_eq!(fx.core.workstream(&fx.scope, &ws.id).await.unwrap().unwrap().clarity, None, "Undo brought the ask back");
         }
 
         #[tokio::test]
