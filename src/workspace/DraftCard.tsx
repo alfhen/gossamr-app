@@ -8,7 +8,7 @@ import { useClaude } from "../claudeStore";
 import { useWorkstreams } from "./workstreamsStore";
 import { useTabs } from "./tabsStore";
 import { useBackend } from "../backend/useBackend";
-import type { Person, Proposal, ProposalEdit, ReviewAccess } from "../types";
+import type { Person, Proposal, ProposalEdit, ProposalStateKind, ReviewAccess } from "../types";
 import { useRepoReviewAccess, useReviewAccess } from "./reviewAccess";
 import { editThenPost, ReviewDraft, reviewWithPipPrompt } from "./ReviewDraft";
 import { draftStatus } from "./boardLogic";
@@ -194,14 +194,20 @@ export interface KeptEdits {
 }
 const keptEdits = new Map<string, KeptEdits>();
 
-/** Remember the unsaved `edits` of draft `id`, until the card is shown again. */
+/** Remember the unsaved `edits` of draft `id`, until the draft is posted or retired; no edits leave nothing kept. */
 export function keepEditsOfDraft(id: string, edits: KeptEdits): void {
   if (edits.body || edits.rewrite || edits.message !== undefined) keptEdits.set(id, edits);
+  else keptEdits.delete(id);
 }
 
-/** The edits kept for draft `id`, if any (they stay until the card has taken them). */
+/** The edits kept for draft `id`, if any. They stay while the draft can still be shown, so leaving a restored card before posting it doesn't lose them. */
 export function keptEditsOfDraft(id: string): KeptEdits | undefined {
   return keptEdits.get(id);
+}
+
+/** Forget the kept edits of draft `id` once it is posted or retired: nothing will show them again. */
+export function settleKeptEdits(id: string, state: ProposalStateKind): void {
+  if (state === "applied" || state === "retired") keptEdits.delete(id);
 }
 
 function DraftCardBody({ proposal: p, statusName, people, working, error, onApprove, onSkip, onReview, onShow, onOpenRun, onDiscuss, pass, onSendBack, answer, onSendAnswer }: DraftCardProps) {
@@ -211,7 +217,7 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
   const linked = useMemo(() => autoLink(stored, people), [stored, people]);
   // A card that comes back after Skip (Undo) starts from what was typed in it, in edit mode.
   const [kept] = useState(() => keptEditsOfDraft(p.id));
-  useEffect(() => void keptEdits.delete(p.id), []);
+  useEffect(() => settleKeptEdits(p.id, p.state.type), [p.id, p.state.type]);
   const [body, setBody] = useState(kept?.body?.text ?? linked.text);
   const [mentions, setMentions] = useState<Mention[]>(kept?.body?.mentions ?? linked.mentions);
   const [editing, setEditing] = useState(!!kept);
@@ -283,13 +289,20 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
     if (shownError) errorLine.current?.scrollIntoView?.({ block: "nearest" });
   }, [shownError]);
 
+  /** What is typed in the card's fields that the draft doesn't hold yet. */
+  const typed = (): KeptEdits => ({
+    ...(intent.type === "comment" && edited.current ? { body: { text: body, mentions } } : {}),
+    ...(rewrite && rewriteEdited.current ? { rewrite: { title: newTitle, text: newText } } : {}),
+    ...((followUp || reply) && messageEdited.current ? { message } : {}),
+  });
+  // A card restored with kept edits keeps its saved copy current, so it survives the card going away before it is posted.
+  useEffect(() => {
+    if (keptEditsOfDraft(p.id)) keepEditsOfDraft(p.id, typed());
+  }, [body, mentions, newTitle, newText, message]);
+
   /** Skip, taking what was typed along, so Undo shows it again. */
   const skip = () => {
-    keepEditsOfDraft(p.id, {
-      ...(intent.type === "comment" && edited.current ? { body: { text: body, mentions } } : {}),
-      ...(rewrite && rewriteEdited.current ? { rewrite: { title: newTitle, text: newText } } : {}),
-      ...((followUp || reply) && messageEdited.current ? { message } : {}),
-    });
+    keepEditsOfDraft(p.id, typed());
     onSkip();
   };
 

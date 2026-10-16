@@ -113,7 +113,8 @@ export const doneText = (done: Pick<Need, "title" | "ticketKey" | "workstreamTit
   const where = done.ticketKey ?? done.workstreamTitle;
   // A title that already names the ticket is not repeated, and a question is not quoted as if it were what was done.
   const key = done.ticketKey;
-  if (key && done.title.startsWith(key)) {
+  // The title names the ticket only when the key ends there: CA-40 is not the start of "CA-408: …".
+  if (key && done.title.startsWith(key) && (done.title.length === key.length || /^[\s:·-]/.test(done.title.slice(key.length)))) {
     const rest = done.title.slice(key.length).replace(/^\s*[:·-]\s*/, "");
     if (rest.endsWith("?")) return `${posted ? "Posted to Jira" : "Done"}: decided "${rest}" on ${key}.`;
     return `${posted ? "Posted to Jira" : "Done"}: ${done.title}.`;
