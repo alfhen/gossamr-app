@@ -49,6 +49,11 @@ describe("What Jira saw from me", () => {
     expect(sentWhat(rewrite("Line one", "Line one\nLine two", { from: "A", to: "B" }), null)!.summary).toBe("Added to the description and title changed");
     // A plan's first added line is its heading: the preview says what the plan holds, without markdown (G9).
     expect(sentWhat(rewrite("Line one", "Line one\n\n## Gossamr Plan\n\n---\n- Fix the login redirect\n- Add a test"), null)!.second).toBe("Fix the login redirect");
+    // Plus bullets and numbered steps are list markers too; a "+" or number that is part of the text stays.
+    expect(sentWhat(rewrite("Line one", "Line one\n+ Fix the redirect"), null)!.second).toBe("Fix the redirect");
+    expect(sentWhat(rewrite("Line one", "Line one\n1. Fix the redirect"), null)!.second).toBe("Fix the redirect");
+    expect(sentWhat(rewrite("Line one", "Line one\n2) Add a test"), null)!.second).toBe("Add a test");
+    expect(sentWhat(rewrite("Line one", "Line one\n+5 rows per page"), null)!.second).toBe("+5 rows per page");
     expect(sentWhat(rewrite("Line one", "Line one\n\n## Gossamr Plan"), null)!.second).toBe("Gossamr Plan");
     expect(sentWhat(rewrite("", "Fresh text"), null)).toMatchObject({ summary: "Description added", detail: ["The new description:", "+ Fresh text"] });
     expect(sentWhat(rewrite("Line one", "Line 1"), null)!.summary).toBe("Description rewritten");
