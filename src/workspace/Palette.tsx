@@ -15,7 +15,7 @@ import { usePrefs } from "./prefs";
 import { useRunSetup } from "./runSetupStore";
 import { useRuns } from "./runsStore";
 import { activeTab, allSavedViews, useTabs } from "./tabsStore";
-import { keyConnectionId, openTicketByKey } from "./jump";
+import { openTicketByKey, useKeyConnectionId } from "./jump";
 import { focusPeekOf } from "./PeekSheet";
 import { useGithubUi } from "./githubUi";
 import { openPull } from "./openPull";
@@ -409,8 +409,8 @@ export function Palette() {
   const typedKey = step.type === "workstream" ? ticketKeyOf(query) : null;
   const unlisted = typedKey && !Object.values(items).some((i) => i.item.key.toUpperCase() === typedKey) ? typedKey : null;
   const [looked, setLooked] = useState<{ key: string; item: WorkItem | null } | null>(null);
+  const connectionId = useKeyConnectionId();
   useEffect(() => {
-    const connectionId = keyConnectionId();
     if (!unlisted || !connectionId) return;
     let current = true;
     const found = (item: WorkItem | null) => current && setLooked({ key: unlisted, item });
@@ -418,7 +418,7 @@ export function Palette() {
     return () => {
       current = false;
     };
-  }, [unlisted]);
+  }, [unlisted, connectionId]);
   // A new ticket's project and title are steps back to the search; the workstream's ticket is all the palette was opened for.
   const prompting = step.type === "project" || step.type === "title";
   return (
