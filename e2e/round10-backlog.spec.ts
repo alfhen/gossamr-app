@@ -37,9 +37,10 @@ test.describe("Start my day puts the unclear tickets above the lines that follow
     const card = pipHome(page).locator("[data-start-my-day]");
     await expect(card).toBeVisible();
     const kinds = await card.locator("[data-day-line]").evaluateAll((els) => els.map((el) => el.getAttribute("data-day-line")));
-    expect(kinds).toContain("drafts");
+    // The questions draft is a decision now, on the approve line only (round 13, G10), so the unclear line follows that one.
+    expect(kinds).toContain("approve");
     const unclear = kinds.indexOf("unclear");
-    expect(unclear, kinds.join()).toBeGreaterThanOrEqual(0);
+    expect(unclear, kinds.join()).toBeGreaterThan(kinds.indexOf("approve"));
     for (const later of ["drafts", "reporter", "cobweb"]) if (kinds.includes(later)) expect(unclear, kinds.join()).toBeLessThan(kinds.indexOf(later));
     expect(kinds.filter((k) => k === "unclear")).toHaveLength(1);
   });
