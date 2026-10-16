@@ -308,6 +308,11 @@ impl Core {
         f(&guard.as_ref().expect("opened above").1)
     }
 
+    /// `with_db_for` as one transaction: everything `f` writes (a change and its audit line) lands together, or nothing does.
+    async fn with_db_atomically_for<T>(&self, scope: &Scope, f: impl FnOnce(&Db) -> Result<T>) -> Result<T> {
+        self.with_db_for(scope, |db| db.atomically(f)).await
+    }
+
     pub fn close_db(&self) {
         *self.db.lock().expect("db lock poisoned") = None;
     }
