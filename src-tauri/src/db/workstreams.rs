@@ -132,29 +132,29 @@ impl Db {
     /// Appends one line to a workstream's audit after its last, numbering it itself, and returns it as stored. `detail`
     /// is cut to 2 KB. There is no way to change or remove a line once written.
     pub fn append_workstream_event(&self, event: &WorkstreamEvent) -> Result<WorkstreamEvent> {
-        let tx = self.conn.unchecked_transaction()?;
-        let last: Option<u32> =
-            tx.query_row("SELECT max(seq) FROM workstream_events WHERE workstream_id = ?1", params![event.workstream_id], |r| r.get(0))?;
-        let mut stored = event.clone();
-        stored.seq = last.map_or(0, |n| n + 1);
-        stored.detail = event.detail.as_deref().map(|d| d.chars().take(DETAIL_LIMIT).collect());
-        tx.execute(
-            "INSERT INTO workstream_events (workstream_id, seq, at, actor, action, run_id, proposal_id, digest, detail)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-            params![
-                stored.workstream_id,
-                stored.seq,
-                stamp(stored.at),
-                stored.actor.as_str(),
-                stored.action,
-                stored.run_id,
-                stored.proposal_id,
-                stored.digest,
-                stored.detail
-            ],
-        )?;
-        tx.commit()?;
-        Ok(stored)
+        self.atomically(|db| {
+            let last: Option<u32> =
+                db.conn.query_row("SELECT max(seq) FROM workstream_events WHERE workstream_id = ?1", params![event.workstream_id], |r| r.get(0))?;
+            let mut stored = event.clone();
+            stored.seq = last.map_or(0, |n| n + 1);
+            stored.detail = event.detail.as_deref().map(|d| d.chars().take(DETAIL_LIMIT).collect());
+            db.conn.execute(
+                "INSERT INTO workstream_events (workstream_id, seq, at, actor, action, run_id, proposal_id, digest, detail)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                params![
+                    stored.workstream_id,
+                    stored.seq,
+                    stamp(stored.at),
+                    stored.actor.as_str(),
+                    stored.action,
+                    stored.run_id,
+                    stored.proposal_id,
+                    stored.digest,
+                    stored.detail
+                ],
+            )?;
+            Ok(stored)
+        })
     }
 
     /// A workstream's audit, oldest first.
@@ -293,5 +293,29 @@ mod tests {
         assert_eq!((events[1].run_id.as_deref(), events[1].proposal_id.as_deref(), events[1].digest.as_deref()), (Some("r1"), Some("p1"), Some("abc")));
         assert_eq!(db.workstream_events("b").unwrap().len(), 1);
         assert!(db.workstream_events("none").unwrap().is_empty());
+    }
+
+    #[test]
+    fn writes_made_atomically_all_land_or_none_do_and_an_audit_line_joins_them() {
+        let db = Db::in_memory().unwrap();
+        db.insert_workstream(&ws("a", "jira:acme", Some("CA-1"), 0)).unwrap();
+        let e = |action: &str| WorkstreamEvent::new("a", Actor::Person, action, now());
+
+        let failed: Result<()> = db.atomically(|db| {
+            db.save_workstream(&Workstream { held_reason: Some("person".into()), ..ws("a", "jira:acme", Some("CA-1"), 0) })?;
+            db.append_workstream_event(&e("undone"))?;
+            Err(Error::Proposal("a later write failed".into()))
+        });
+        assert!(failed.is_err());
+        assert_eq!(db.workstream("a").unwrap().unwrap().held_reason, None);
+        assert!(db.workstream_events("a").unwrap().is_empty());
+
+        db.atomically(|db| {
+            db.save_workstream(&Workstream { held_reason: Some("person".into()), ..ws("a", "jira:acme", Some("CA-1"), 0) })?;
+            db.append_workstream_event(&e("undone")).map(|_| ())
+        })
+        .unwrap();
+        assert_eq!(db.workstream("a").unwrap().unwrap().held_reason.as_deref(), Some("person"));
+        assert_eq!(db.workstream_events("a").unwrap().len(), 1);
     }
 }

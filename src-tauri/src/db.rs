@@ -52,6 +52,17 @@ impl Db {
         Ok(Self { conn })
     }
 
+    /// Runs `f` as one transaction: every write it makes lands, or none does. Inside another `atomically` it joins that one.
+    pub fn atomically<T>(&self, f: impl FnOnce(&Self) -> Result<T>) -> Result<T> {
+        if !self.conn.is_autocommit() {
+            return f(self);
+        }
+        let tx = self.conn.unchecked_transaction()?;
+        let out = f(self)?;
+        tx.commit()?;
+        Ok(out)
+    }
+
     /// Tickets stored by releases before the cache, with when each was last refreshed. Only read to backfill the
     /// cache once; the table is otherwise left as it was.
     pub fn legacy_tickets(&self) -> Result<Vec<(CachedTicket, String)>> {
