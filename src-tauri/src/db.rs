@@ -52,6 +52,12 @@ impl Db {
         Ok(Self { conn })
     }
 
+    /// Runs raw SQL, for tests that need the database to refuse a write.
+    #[cfg(test)]
+    pub fn execute_batch(&self, sql: &str) -> Result<()> {
+        Ok(self.conn.execute_batch(sql)?)
+    }
+
     /// Runs `f` as one transaction: every write it makes lands, or none does. Inside another `atomically` it joins that one.
     pub fn atomically<T>(&self, f: impl FnOnce(&Self) -> Result<T>) -> Result<T> {
         if !self.conn.is_autocommit() {
