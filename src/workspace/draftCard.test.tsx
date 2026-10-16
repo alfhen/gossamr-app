@@ -3,7 +3,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { itemRef } from "../backend/mockConnector";
 import { docFromText } from "../lib/docs";
 import type { Proposal, RunSpec } from "../types";
-import { DraftCard, keepEditsOfDraft, keptEditsOfDraft, settleKeptEdits } from "./DraftCard";
+import { READINESS_COMMENT_LABEL } from "../lib/proposals";
+import { useToasts } from "./toasts";
+import { DraftCard, postedNote, keepEditsOfDraft, keptEditsOfDraft, settleKeptEdits } from "./DraftCard";
 import { draftPreviewBody } from "./DraftPreview";
 
 const spec: RunSpec = { kind: "investigate", repo: "acme/web", clonePath: "/Users/sample/Code/web", base: "main", name: "ca-412-fix-ab12", instruction: "Investigate this work." };
@@ -85,5 +87,38 @@ describe("a skipped draft's unsaved edit (G2)", () => {
     expect(ticks(card("s1"))).toEqual([true, true]);
     keepEditsOfDraft("s2", { picked: [true, false] });
     expect(ticks(card("s2"))).toEqual([true, false]);
+  });
+});
+
+describe("what a post from a card says (G3)", () => {
+  const questions = (state: Proposal["state"]): Proposal => ({ ...commentDraft("q1"), label: READINESS_COMMENT_LABEL, intent: { type: "comment", item: itemRef("CA-408"), body: docFromText("Hi, a few things need clearing up.") }, state });
+  it("says once what was posted, and that the ticket waits on the reporter when the questions went", () => {
+    const p = commentDraft("c1");
+    expect(postedNote(p, { ...p, state: { type: "applied" } })).toBe("Posted to Jira: Comment on CA-412.");
+    expect(postedNote(p, p)).toBeNull();
+    expect(postedNote(p, null)).toBeNull();
+    const asked = questions({ type: "applied" });
+    const note = postedNote(asked, asked);
+    expect(note).toMatch(/^Posted to Jira: /);
+    expect(note).toBe("Posted to Jira: Questions for the reporter on CA-408. CA-408 now waits on the reporter; nothing starts on its own.");
+  });
+  it("is one polite status message", () => {
+    useToasts.getState().clear();
+    const p = commentDraft("c1");
+    const note = postedNote(p, { ...p, state: { type: "applied" } });
+    useToasts.getState().push(note!, "info");
+    expect(useToasts.getState().toasts.map((t) => [t.text, t.tone])).toEqual([["Posted to Jira: Comment on CA-412.", "info"]]);
+    useToasts.getState().clear();
+  });
+});
+
+describe("a comment draft's edit field and provenance (G4)", () => {
+  it("names the edit field after the ticket, and keeps a space between the pill and the sentence", () => {
+    keepEditsOfDraft("g4", { body: { text: "Edited", mentions: [] } });
+    const out = renderToStaticMarkup(<DraftCard proposal={commentDraft("g4")} statusName={null} people={[]} working={false} error={null} onApprove={vi.fn()} onSkip={vi.fn()} />);
+    expect(out).toMatch(/<textarea[^>]*aria-label="Edit the comment on CA-412"/);
+    const asked: Proposal = { ...commentDraft("g4b"), origin: { type: "chat", requestId: "r1" }, label: READINESS_COMMENT_LABEL, intent: { type: "comment", item: itemRef("CA-408"), body: docFromText("Hi") } };
+    const html = renderToStaticMarkup(<DraftCard proposal={asked} statusName={null} people={[]} working={false} error={null} onApprove={vi.fn()} onSkip={vi.fn()} />);
+    expect(html).toMatch(/Drafted by Gossamr<\/span> Gossamr wrote/);
   });
 });

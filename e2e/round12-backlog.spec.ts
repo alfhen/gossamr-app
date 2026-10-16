@@ -139,7 +139,7 @@ test.describe("the workstream controls (G24, G31, G32)", () => {
     await expect(manage).toHaveAccessibleDescription(/Pip advises: it answers when asked/);
     await manage.click();
     await expect(controls.locator("[data-manage-state]")).toHaveText("on: Pip starts the next steps");
-    await expect(manage).toHaveAccessibleDescription(/Pip manages: it starts the next step by itself/);
+    await expect(manage).toHaveAccessibleDescription(/Pip manages: after each step finishes it starts the next one/);
     await expect(controls.getByRole("button", { name: "Hold" })).toHaveAccessibleDescription("No wakes and no automatic steps; its agents carry on");
     await expect(controls.getByRole("button", { name: "Close…" })).toHaveAccessibleDescription("Its conversation goes back to General; its agents and drafts are kept");
     await expect(controls.getByRole("button", { name: "More for this workstream" })).toHaveAccessibleDescription("More: stop the workstream");

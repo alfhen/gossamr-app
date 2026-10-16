@@ -11,6 +11,9 @@ const LOOK: Record<PreflightRow["level"], { icon: IconName; tone: string; word: 
   red: { icon: "x", tone: "text-ws-blocked", word: "Blocks starting" },
 };
 
+/** A green row that states a fact (what runs, which clone) rather than passing a check: it gets no tick, which would read as a verdict. */
+export const isFactRow = (row: PreflightRow) => row.level === "green" && /^(What runs|Clone): /.test(row.text);
+
 export interface PreflightSteps {
   /** Opens Terminal in the folder with Claude, for its one-time trust question. */
   trust(path: string): void;
@@ -33,11 +36,12 @@ export function RunPreflight({ preflight, checking, steps }: { preflight: Prefli
       <ul className="m-0 grid list-none gap-1.5 p-0">
         {preflight.rows.map((row, i) => {
           const look = LOOK[row.level];
+          const fact = isFactRow(row);
           return (
             <li key={i} data-level={row.level} className="grid grid-cols-[18px_minmax(0,1fr)] gap-2 text-ws-ink2">
-              <Icon name={look.icon} className={`mt-0.5 size-[15px] ${look.tone}`} />
+              {fact ? <span aria-hidden /> : <Icon name={look.icon} className={`mt-0.5 size-[15px] ${look.tone}`} />}
               <span className="[overflow-wrap:anywhere]">
-                <span className="sr-only">{look.word}: </span>
+                {!fact && <span className="sr-only">{look.word}: </span>}
                 {row.text}
               </span>
               {row.action?.type === "trustFolder" && steps && (

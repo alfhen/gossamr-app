@@ -368,7 +368,7 @@ describe("how the launch command is offered", () => {
 
 describe("what a read-only step may touch", () => {
   it("says commands the rules don't allow are refused, not the listed ones", () => {
-    expect(COPY.readOnlyNote).toContain("every command the rules above don't allow");
+    expect(COPY.readOnlyNote).toContain("every command outside its read-only rules");
     expect(COPY.readOnlyNote).not.toContain("the commands listed");
   });
 

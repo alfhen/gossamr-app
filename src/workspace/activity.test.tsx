@@ -116,6 +116,9 @@ describe("the chips and notes", () => {
 
   it("renders a day heading and a status note", () => {
     expect(renderToStaticMarkup(<DayHeading label="Today" />)).toContain("Today");
+    expect(renderToStaticMarkup(<DayHeading label="Today" />)).toContain("<h3");
+    // Under a page's own level 1, a day is a level 2 (G14).
+    expect(renderToStaticMarkup(<DayHeading label="Today" level={2} />)).toMatch(/<h2[^>]*>Today<\/h2>/);
     expect(renderToStaticMarkup(<EmptyNote>All quiet</EmptyNote>)).toContain('role="status"');
   });
 });

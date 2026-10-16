@@ -160,7 +160,7 @@ test.describe("an unclear ticket (G23, G24, G25, G27)", () => {
     await page.getByRole("combobox").fill("what jira saw");
     await page.keyboard.press("Enter");
     const row = page.locator("[data-jira-sent] [data-sent-entry]").first();
-    await expect(row.locator("[data-sent-summary]")).toContainText("Before work on CA-408 starts");
+    await expect(row.locator("[data-sent-summary]")).toContainText("A few things about CA-408 need clearing up");
     await expect(row.locator("[data-sent-second]")).toHaveText(/^- What does done look like for CA-408\?( \(\+\d+ more\))?$/);
     await row.getByRole("button", { name: "Show the posted text" }).click();
     await expect(row.locator("[data-sent-detail]")).toContainText("Which behaviour or number should change?");

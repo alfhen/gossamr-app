@@ -151,12 +151,13 @@ export function escalationOf(ws: Workstream, runs: readonly Run[], verdictOf: (r
 
 /**
  * The clarity notice of `ws`, as `clarity_of`: the ticket reads thin (`gaps`), no Triage ran in the workstream (its verdict
- * is the authority), the person hasn't dismissed or asked about it (unless the ticket changed since they asked), and nothing
+ * is the authority), no Triage, Plan or Build ran on the ticket anywhere (`itemRuns`: in any workstream or in General), the person hasn't dismissed or asked about it (unless the ticket changed since they asked), and nothing
  * waits on the reporter. Never a need, so any mode shows it.
  */
-export function clarityOf(ws: Workstream, runs: readonly Run[], gaps: readonly ClarityGap[], replies: readonly string[], events: readonly WorkstreamEvent[]): Clarity | null {
+export function clarityOf(ws: Workstream, runs: readonly Run[], itemRuns: readonly Run[], gaps: readonly ClarityGap[], replies: readonly string[], events: readonly WorkstreamEvent[]): Clarity | null {
   if (ws.closedAt !== null || ws.itemKey === null || !gaps.length) return null;
   if (runs.some((r) => r.spec.workstream === ws.id && r.spec.kind === "triage")) return null;
+  if (itemRuns.some((r) => r.item?.key === ws.itemKey && (r.spec.kind === "triage" || r.spec.kind === "plan" || r.spec.kind === "build"))) return null;
   const follow = reporterFollow(events, replies);
   const said = (action: string) => events.some((e) => e.actor === "person" && e.action === action);
   // An ask whose draft was skipped or retired was never posted, so it doesn't settle the notice.
@@ -369,7 +370,7 @@ export class MockWorkstreams {
     const replies = this.repliesOf(ws);
     const readiness = events.length ? readinessOf(ws, linked, (r) => (r.spec.kind === "triage" && r.state === "done" ? this.readinessOfRun(r) : null), replies, events) : null;
     const ticket = ws.closedAt === null && ws.itemKey ? this.ticketOf(ws.itemKey) : null;
-    const clarity = ticket ? clarityOf(ws, linked, clarityGaps(docText(ticket.body)), replies, events) : null;
+    const clarity = ticket ? clarityOf(ws, linked, runs, clarityGaps(docText(ticket.body)), replies, events) : null;
     const { follow, repliedAt } = ws.closedAt === null ? followWithReply(events, replies) : { follow: null, repliedAt: null };
     const waitingOnReporter: ReporterWait | null = follow?.waiting ? { since: follow.waiting } : null;
     const changedWhileWaiting = !!follow?.changed;

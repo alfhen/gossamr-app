@@ -122,6 +122,7 @@ export function ToastCard({ toast: t, waiting, onDismiss }: { toast: Toast; wait
             onDismiss();
           }}
           data-toast-action={t.action.label}
+          aria-label={`${t.action.label}: ${t.text}`}
           className="shrink-0 font-semibold text-ws-accent underline"
         >
           {t.action.label}
@@ -150,7 +151,6 @@ export function ToastCard({ toast: t, waiting, onDismiss }: { toast: Toast; wait
 export function ToastHost({ placement }: { placement?: CSSProperties }) {
   const toasts = useToasts((s) => s.toasts);
   const dismiss = useToasts((s) => s.dismiss);
-  const head = toasts[0];
   // A note about the page the person has left goes with it.
   useEffect(
     () =>
@@ -161,14 +161,22 @@ export function ToastHost({ placement }: { placement?: CSSProperties }) {
       }),
     [],
   );
+  return <ToastStack toasts={toasts} dismiss={dismiss} placement={placement} />;
+}
+
+/** The toasts as they are laid out: the one on screen, and its words in a live region of their own. */
+export function ToastStack({ toasts, dismiss, placement }: { toasts: readonly Toast[]; dismiss(id: number): void; placement?: CSSProperties }) {
+  const head = toasts[0];
   return (
     <div
-      role="status"
-      aria-live="polite"
       data-toast-host={placement ? "canvas" : "window"}
       style={placement ?? { right: 16, bottom: 16 }}
       className={`ws-toasts pointer-events-none z-50 grid w-max max-w-[min(420px,calc(100vw-2rem))] justify-items-end ${placement ? "absolute" : "fixed"}`}
     >
+      {/* The live region holds the message alone: the Undo and × buttons beside it would be read out as one run with it. */}
+      <p role="status" aria-live="polite" data-toast-status className="sr-only">
+        {head?.text}
+      </p>
       {head && <ToastCard key={head.id} toast={head} waiting={toasts.length - 1} onDismiss={() => dismiss(head.id)} />}
     </div>
   );

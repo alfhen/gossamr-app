@@ -146,7 +146,7 @@ describe("Start my day", () => {
   });
 
   describe("Jira drafts waiting to be posted", () => {
-    it("lists pending Jira writes, oldest first, each opening its own decision when Needs you has one", () => {
+    it("lists pending Jira writes that Needs you does not list, oldest first, so a draft with a need is on its decide, unblock or approve line only", () => {
       const first = comment("p1", "CA-401", { createdAt: ago(3) });
       const move = comment("p2", "CA-402", { createdAt: ago(1), intent: { type: "transition", item: { connectionId: "c", externalId: "CA-402", key: "CA-402" }, to: "31" } as Intent });
       const run = comment("p3", "CA-403", { intent: { type: "startRun", connectionId: "c", item: null, spec: {} } as unknown as Intent });
@@ -154,11 +154,10 @@ describe("Start my day", () => {
       const skipped = comment("p5", "CA-405", { state: { type: "skipped" } });
       const needs = [need("draft:p1", "approve", { title: "Draft comment", target: { type: "draft", id: "p1" } })];
       const l = line(input({ proposals: [move, first, run, done, skipped], needs }), "drafts")!;
-      expect(l.title).toBe("2 Jira drafts waiting to be posted");
-      expect(l.entries.map((e) => [e.text, e.label, e.action.type])).toEqual([
-        ["CA-401 · Draft comment", "Review", "need"],
-        ["CA-402 · Draft move", "Open ticket", "ticket"],
-      ]);
+      expect(l.title).toBe("1 Jira draft waiting to be posted");
+      expect(l.entries.map((e) => [e.text, e.label, e.action.type])).toEqual([["CA-402 · Draft move", "Open ticket", "ticket"]]);
+      expect(line(input({ proposals: [first], needs }), "drafts")).toBeUndefined();
+      expect(line(input({ proposals: [first], needs }), "approve")!.entries).toHaveLength(1);
     });
 
     it("opens the workstream a draft belongs to when it has no need of its own", () => {

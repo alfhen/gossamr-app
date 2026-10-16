@@ -66,6 +66,9 @@ export const UNCLEAR_CHIP = "What is unclear about this ticket?";
 /** The chip that asks Pip for a Jira update to post, for a workstream whose cobweb says Jira has not heard for days. */
 export const JIRA_UPDATE_CHIP = "Draft a Jira update";
 
+/** Whether `chip` is the "Investigate KEY" suggestion: it asks Pip to draft the agent to start, and unmounts when pressed. */
+export const isInvestigateChip = (chip: string): boolean => /^Investigate \S+$/.test(chip);
+
 /** Something a chip does on the page itself instead of asking Pip: bring the plan's description update into view. */
 export type ChipPageAction = "showPlanUpdate";
 

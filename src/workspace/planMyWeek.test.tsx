@@ -6,7 +6,7 @@ import { isoWeek, ticketPick, type PlanItem } from "../lib/planMyWeek";
 import type { WorkItem, WorkstreamView } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { buildCommands, rankCommands, type CommandActions } from "./commands";
-import { PLAN_EMPTY, PLAN_LEFT_OUT, PlanMyWeek, PlanMyWeekView, afterMove, afterRemove, restorePick, ThisWeekView, findTicket, rowStep, CHOICES, revealChoices, movedText, rovingStop } from "./PlanMyWeek";
+import { PLAN_EMPTY, PLAN_LEFT_OUT, PlanMyWeek, PlanMyWeekView, afterMove, afterRemove, restorePick, neighboursOf, ThisWeekView, findTicket, rowStep, CHOICES, revealChoices, movedText, rovingStop } from "./PlanMyWeek";
 import { WorkstreamList } from "./PipHome";
 import { usePipHome } from "./pipHomeStore";
 import { loadPrefs, usePrefs } from "./prefs";
@@ -126,6 +126,20 @@ describe("Undo after removing a pick (G21)", () => {
     expect(restorePick([c], b, 1)).toEqual([c, b]);
     expect(restorePick([], a, 0)).toEqual([a]);
     expect(restorePick([c], a, 5)).toEqual([c, a]);
+  });
+
+  it("puts picks back in their place whichever removal is undone first", () => {
+    const near = (all: PlanItem[], i: number) => neighboursOf(all, i);
+    const [na, nb] = [near([a, b, c], 0), near([b, c], 0)];
+    // Undo the newer removal first, then the older.
+    expect(restorePick([c], b, 0, nb)).toEqual([b, c]);
+    expect(restorePick([b, c], a, 0, na)).toEqual([a, b, c]);
+    // Undo the older first, then the newer.
+    expect(restorePick([c], a, 0, na)).toEqual([a, c]);
+    expect(restorePick([a, c], b, 0, nb)).toEqual([a, b, c]);
+    // Both neighbours gone: the index; the last pick comes back after the one before it.
+    expect(restorePick([], b, 0, near([a, b, c], 1))).toEqual([b]);
+    expect(restorePick([a], c, 5, near([a, b, c], 2))).toEqual([a, c]);
   });
 
   it("puts nothing back once the pick is in the plan again, so Undo says it has changed", () => {

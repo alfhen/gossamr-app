@@ -36,6 +36,16 @@ const KBD = "rounded border border-ws-sep2 bg-ws-win px-1 font-sans text-[11px]"
 /** The footer line of "Start a workstream": what picking a ticket there does and does not do. */
 export const START_WORKSTREAM_NOTE = "Opens a workstream; starts no agent and posts nothing.";
 
+/**
+ * Where the keyboard goes when the palette closes: back to what had it, else the main area. Left alone when it already
+ * moved on to something on the page (a view the pick opened took it), which this would otherwise take back.
+ */
+export function restoreFocus(opener: HTMLElement | null, doc: Pick<Document, "activeElement" | "body" | "getElementById"> = document): void {
+  const at = doc.activeElement as HTMLElement | null;
+  if (at && at !== doc.body && at.isConnected) return;
+  (opener?.isConnected ? opener : doc.getElementById(MAIN_ID))?.focus();
+}
+
 export function PaletteView({
   query,
   results,
@@ -120,6 +130,8 @@ export function PaletteView({
                 role="option"
                 aria-selected={i === active}
                 onMouseMove={() => i !== active && onActive(i)}
+                // An option can't take focus; the press must not pull it off the input either, or it falls to the page.
+                onMouseDown={(ev) => ev.preventDefault()}
                 onClick={() => onRun(c)}
                 className={`flex cursor-pointer items-center gap-2.5 rounded-lg px-2.5 py-[7px] ${c.group === "Ask Pip" ? "text-ws-pip" : ""} ${i === active ? "bg-ws-accent-soft" : ""}`}
               >
@@ -342,7 +354,7 @@ export function Palette() {
   // What the keyboard was on when the palette opened: its entries act on that item, as its buttons do.
   const [subject] = useState(() => focusedSubject(document.activeElement));
 
-  useEffect(() => () => (opener?.isConnected ? opener : document.getElementById(MAIN_ID))?.focus(), [opener]);
+  useEffect(() => () => restoreFocus(opener), [opener]);
 
   const go = (next: Step) => (setStep(next), setQuery(""), setActive(0));
 

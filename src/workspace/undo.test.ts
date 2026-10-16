@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LIFETIME_MS, UNDO_LIFETIME_MS, useToasts } from "./toasts";
-import { UNDO_VALID_MS, UndoLog, offerUndo, undoLog } from "./undo";
+import { UNDO_VALID_MS, UndoLog, hideUndoToast, offerUndo, undoLog } from "./undo";
 
 /** A log with a clock the test moves and a record of what it told the person. */
 function setup(valid = UNDO_VALID_MS) {
@@ -158,6 +158,17 @@ describe("the Undo toast", () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(undo).toHaveBeenCalledTimes(1);
     expect(useToasts.getState().toasts.map((t) => t.text)).toContain("CA-401 is free again.");
+  });
+
+  it("hides one offer's toast and keeps the offer for the palette's Undo", async () => {
+    const undo = vi.fn(async () => {});
+    const older = offerUndo({ text: "Removed CA-1 from the plan.", undo });
+    offerUndo({ text: "Removed CA-2 from the plan.", undo: async () => {} });
+    hideUndoToast(older);
+    expect(useToasts.getState().toasts.map((t) => t.text)).toEqual(["Removed CA-2 from the plan."]);
+    expect(undoLog.get(older)?.state).toBe("offered");
+    expect(await undoLog.run(older)).toBe("undone");
+    expect(undo).toHaveBeenCalledTimes(1);
   });
 
   it("takes the toast down when the offer is undone from the palette's path, and when it failed", async () => {

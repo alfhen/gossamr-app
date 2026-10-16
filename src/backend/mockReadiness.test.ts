@@ -46,7 +46,7 @@ describe("the comment to the reporter", () => {
 
   it("is the same words Rust drafts (reporter_comment in src-tauri/src/inbox/workstreams.rs)", () => {
     expect(reporterComment("CA-401", "Kim Ode", questions)).toBe(
-      "Hi @Kim Ode,\n\nBefore work on CA-401 starts, a few things need clearing up:\n\n- What does done look like?\n- Who is waiting on it?\n\nCould you answer them here on the ticket? Thanks.",
+      "Hi @Kim Ode,\n\nA few things about CA-401 need clearing up:\n\n- What does done look like?\n- Who is waiting on it?\n\nCould you answer them here on the ticket? Thanks.",
     );
     const none = reporterComment("CA-401", null, []);
     expect(none.startsWith("Hi,\n")).toBe(true);
@@ -67,7 +67,7 @@ describe("the comment to the reporter", () => {
 
   it("thanks the reporter and says what is still open once they have replied, the same words Rust drafts", () => {
     const again = reporterComment("CA-401", "Kim Ode", questions, true);
-    expect(again).toBe("Hi @Kim Ode,\n\nThanks for your answer above. Before work on CA-401 starts, a few things are still open:\n\n- What does done look like?\n- Who is waiting on it?\n\nCould you answer these here on the ticket? Thanks.");
+    expect(again).toBe("Hi @Kim Ode,\n\nThanks for your answer above. A few things about CA-401 are still open:\n\n- What does done look like?\n- Who is waiting on it?\n\nCould you answer these here on the ticket? Thanks.");
     expect(again).not.toBe(reporterComment("CA-401", "Kim Ode", questions));
   });
 

@@ -20,6 +20,7 @@ export function MentionTextarea({
   ticketKey,
   people,
   placeholder,
+  label,
   onSubmit,
   onPasteFiles,
   onBlur,
@@ -35,6 +36,8 @@ export function MentionTextarea({
   /** People on the ticket, suggested first. */
   people: Person[];
   placeholder?: string;
+  /** The field's accessible name, for a field with no visible label (the placeholder is not one). */
+  label?: string;
   onSubmit?: () => void;
   /** Receives files pasted into the field; without it, pasting a file does nothing special. */
   onPasteFiles?: (files: File[]) => void;
@@ -153,6 +156,7 @@ export function MentionTextarea({
         value={value}
         disabled={disabled}
         placeholder={placeholder}
+        aria-label={label}
         onChange={(e) => {
           onChange(e.target.value, mentions);
           track(e.target);
