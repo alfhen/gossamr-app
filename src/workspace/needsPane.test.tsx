@@ -74,6 +74,9 @@ describe("the line names the workstream the done need was in (G19)", () => {
     // A key that is only the start of the title's key is not the title's ticket.
     expect(doneText({ title: "CA-408: the reporter replied, plan now?", ticketKey: "CA-40" })).toBe("Done: CA-408: the reporter replied, plan now? on CA-40.");
     expect(doneText({ title: "CA-408", ticketKey: "CA-408" })).toBe("Done: CA-408.");
+    // A space alone separates the key too, and is not quoted.
+    expect(doneText({ title: "CA-408 Questions?", ticketKey: "CA-408" })).toBe('Done: decided "Questions?" on CA-408.');
+    expect(doneText({ title: "CA-408 - plan now?", ticketKey: "CA-408" }, true)).toBe('Posted to Jira: decided "plan now?" on CA-408.');
     expect(doneText({ title: "CA-408 · Questions for the reporter", ticketKey: "CA-408" })).toBe("Done: CA-408 · Questions for the reporter.");
     expect(doneText({ title: "CA-408: Questions for the reporter", ticketKey: "CA-408" })).toBe("Done: CA-408: Questions for the reporter.");
     expect(advancedText({ title: "Questions", ticketKey: "CA-408" }, { title: "R2 asks a question" }, "CA-408 now waits on the reporter")).toBe("Done: Questions on CA-408. CA-408 now waits on the reporter. Now: R2 asks a question");
