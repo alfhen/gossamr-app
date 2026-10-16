@@ -191,12 +191,14 @@ export interface KeptEdits {
   body?: { text: string; mentions: Mention[] };
   rewrite?: { title: string; text: string };
   message?: string;
+  /** Which proposed subtasks were still ticked, when any was unticked. */
+  picked?: boolean[];
 }
 const keptEdits = new Map<string, KeptEdits>();
 
 /** Remember the unsaved `edits` of draft `id`, until the draft is posted or retired; no edits leave nothing kept. */
 export function keepEditsOfDraft(id: string, edits: KeptEdits): void {
-  if (edits.body || edits.rewrite || edits.message !== undefined) keptEdits.set(id, edits);
+  if (edits.body || edits.rewrite || edits.message !== undefined || edits.picked) keptEdits.set(id, edits);
   else keptEdits.delete(id);
 }
 
@@ -269,8 +271,14 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
   const replyBlock = reply ? (messageProblem ?? (answer?.waiting ? null : NOT_WAITING)) : null;
   const summaries = intent.type === "subtasks" ? intent.summaries : [];
   const made = p.created.length;
-  const [picked, setPicked] = useState<boolean[]>(summaries.map(() => true));
-  useEffect(() => setPicked(summaries.map(() => true)), [summaries.join("\n")]);
+  const [picked, setPicked] = useState<boolean[]>(() => (kept?.picked?.length === summaries.length ? kept.picked : summaries.map(() => true)));
+  // New subtasks start ticked again; the ones a card came back with (Undo) keep the ticks they had.
+  const pickedFor = useRef(summaries.join("\n"));
+  useEffect(() => {
+    if (pickedFor.current === summaries.join("\n")) return;
+    pickedFor.current = summaries.join("\n");
+    setPicked(summaries.map(() => true));
+  }, [summaries.join("\n")]);
   // People can arrive after the card first renders; link them unless the text was edited by hand.
   useEffect(() => {
     if (edited.current) return;
@@ -294,11 +302,12 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
     ...(intent.type === "comment" && edited.current ? { body: { text: body, mentions } } : {}),
     ...(rewrite && rewriteEdited.current ? { rewrite: { title: newTitle, text: newText } } : {}),
     ...((followUp || reply) && messageEdited.current ? { message } : {}),
+    ...(intent.type === "subtasks" && picked.some((on) => !on) ? { picked } : {}),
   });
   // A card restored with kept edits keeps its saved copy current, so it survives the card going away before it is posted.
   useEffect(() => {
     if (keptEditsOfDraft(p.id)) keepEditsOfDraft(p.id, typed());
-  }, [body, mentions, newTitle, newText, message]);
+  }, [body, mentions, newTitle, newText, message, picked]);
 
   /** Skip, taking what was typed along, so Undo shows it again. */
   const skip = () => {

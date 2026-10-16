@@ -77,4 +77,13 @@ describe("a skipped draft's unsaved edit (G2)", () => {
     keepEditsOfDraft("c5", {});
     expect(keptEditsOfDraft("c5")).toBeUndefined();
   });
+
+  it("brings back which subtasks were unticked, and a card with nothing kept starts with every one ticked", () => {
+    const subtasks = (id: string): Proposal => ({ ...runDraft({ type: "pending" }), id, intent: { type: "subtasks", parent: itemRef("CA-412"), summaries: ["Write the copy", "Add the banner"] } });
+    const card = (id: string) => renderToStaticMarkup(<DraftCard proposal={subtasks(id)} statusName={null} people={[]} working={false} error={null} onApprove={vi.fn()} onSkip={vi.fn()} />);
+    const ticks = (html: string) => [...html.matchAll(/<input type="checkbox"[^>]*>/g)].map((m) => m[0].includes("checked"));
+    expect(ticks(card("s1"))).toEqual([true, true]);
+    keepEditsOfDraft("s2", { picked: [true, false] });
+    expect(ticks(card("s2"))).toEqual([true, false]);
+  });
 });
