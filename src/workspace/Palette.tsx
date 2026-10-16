@@ -8,13 +8,14 @@ import { useToasts } from "./toasts";
 import { useActivity } from "./activityStore";
 import { SUGGESTED_TICKETS, START_WORKSTREAM, buildCommands, agentCommands, askToPlanCommands, startWorkstreamCommands, noStartableTicket, workstreamCommands, keyCommand, newTicketIntent, projectChoices, pullCommand, rankCommands, searchOrder, ticketCommands, timelineCommands, unwatchCommands, watchCommands, withAskPip, type Command, type CommandActions, type CommandContext, type TimelineState } from "./commands";
 import { workContainers } from "./domains";
+import { ticketKeyOf } from "./watchLogic";
 import { projectOf, withProject } from "./filters";
 import { useAgentsEnabled } from "./agentsFlag";
 import { usePrefs } from "./prefs";
 import { useRunSetup } from "./runSetupStore";
 import { useRuns } from "./runsStore";
 import { activeTab, allSavedViews, useTabs } from "./tabsStore";
-import { openTicketByKey } from "./jump";
+import { keyConnectionId, openTicketByKey } from "./jump";
 import { focusPeekOf } from "./PeekSheet";
 import { useGithubUi } from "./githubUi";
 import { openPull } from "./openPull";
@@ -404,6 +405,20 @@ export function Palette() {
     return withAskPip(found, query, actions.askPip);
   }, [containers, items, watch, proposals, github, unread, agents, needingMe, savedViews, tab.filter, tab.view, query, step, unwatched, selected, workstreams, me, subject, clarityLearning]);
 
+  // A typed key that isn't among the watched tickets is looked up in the full cache (or read live), so a Done ticket there is said to be Done.
+  const typedKey = step.type === "workstream" ? ticketKeyOf(query) : null;
+  const unlisted = typedKey && !Object.values(items).some((i) => i.item.key.toUpperCase() === typedKey) ? typedKey : null;
+  const [looked, setLooked] = useState<{ key: string; item: WorkItem | null } | null>(null);
+  useEffect(() => {
+    const connectionId = keyConnectionId();
+    if (!unlisted || !connectionId) return;
+    let current = true;
+    const found = (item: WorkItem | null) => current && setLooked({ key: unlisted, item });
+    useWorkspace.getState().peekItem({ connectionId, externalId: unlisted, key: unlisted }).then(found, () => found(null));
+    return () => {
+      current = false;
+    };
+  }, [unlisted]);
   // A new ticket's project and title are steps back to the search; the workstream's ticket is all the palette was opened for.
   const prompting = step.type === "project" || step.type === "title";
   return (
@@ -412,7 +427,7 @@ export function Palette() {
       results={results}
       active={Math.min(active, Math.max(0, results.length - 1))}
       placeholder={step.type === "project" ? "Which project is the ticket for?" : step.type === "title" ? `Title of the new ${step.container.name} ticket` : step.type === "workstream" ? "Start a workstream: type a ticket key or words" : undefined}
-      empty={step.type === "title" ? "Type a title, then press Enter. Pip drafts it; you approve it." : step.type === "workstream" ? noStartableTicket(Object.values(items), query, workstreams) : undefined}
+      empty={step.type === "title" ? "Type a title, then press Enter. Pip drafts it; you approve it." : step.type === "workstream" ? noStartableTicket(Object.values(items), query, workstreams, looked?.key === ticketKeyOf(query) ? looked.item : null) : undefined}
       hints={prompting ? ["↑↓ move", "↵ select", "esc back"] : undefined}
       note={step.type === "workstream" ? START_WORKSTREAM_NOTE : undefined}
       onQuery={(q) => (setQuery(q), setActive(0))}

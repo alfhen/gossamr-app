@@ -286,7 +286,7 @@ describe("the workstream control", () => {
     expect(asking).not.toContain("Close workstream");
     const confirming = renderToStaticMarkup(<WorkstreamControl item={item} workstream={view} onStart={noop} onOpen={noop} confirmingClose onAskClose={noop} onClose={noop} />);
     expect(confirming).toContain('aria-label="Close this workstream"');
-    expect(confirming).toContain("Its agents and drafts are kept.");
+    expect(confirming).toContain("Its agents and drafts are kept in General.");
     expect(confirming).toContain("Close workstream");
     expect(confirming).toContain("Keep");
     expect(renderToStaticMarkup(<WorkstreamControl item={item} workstream={null} onStart={noop} onOpen={noop} onAskClose={noop} />)).toContain("Start a workstream");

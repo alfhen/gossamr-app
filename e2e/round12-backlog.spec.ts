@@ -81,7 +81,7 @@ test.describe("what Pip is for, and what the glossary is called (G21)", () => {
     await page.goto("/?runs=empty");
     const card = pipHome(page).locator("[data-pip-orientation]");
     await expect(card).toContainText("Pip works through your Jira tickets with coding agents and drafts every Jira and GitHub write for you to read and approve; nothing posts until you do.");
-    await expect(card).toContainText("Gossamr posts only what you approve; an agent run with your Claude settings could reach Jira or GitHub on its own.");
+    await expect(card).toContainText("Gossamr posts only what you approve; a Build runs with your Claude settings and could reach Jira or GitHub on its own.");
     await expect(card.getByRole("button", { name: "More" })).toHaveCount(0);
     await card.getByRole("button", { name: "What the words mean" }).click();
     await expect(card).toContainText("One ticket's work from start to pull request");
@@ -121,7 +121,7 @@ test.describe("the start review (G22, G23)", () => {
     await page.getByRole("combobox").fill("agents safety");
     await page.keyboard.press("Enter");
     const lines = safety(page).locator("[data-safety-summary] li");
-    await expect(lines.nth(2)).toHaveText("Gossamr posts to Jira or GitHub only what you approve. An agent run with your Claude settings, which a Build is, could reach Jira or GitHub on its own: your Claude settings, not Gossamr, decide that.");
+    await expect(lines.nth(2)).toHaveText("Gossamr posts to Jira or GitHub only what you approve. A Build runs with your Claude settings and could reach Jira or GitHub on its own: your Claude settings, not Gossamr, decide that.");
   });
 });
 
@@ -141,7 +141,7 @@ test.describe("the workstream controls (G24, G31, G32)", () => {
     await expect(controls.locator("[data-manage-state]")).toHaveText("on: Pip starts the next steps");
     await expect(manage).toHaveAccessibleDescription(/Pip manages: after each step finishes it starts the next one/);
     await expect(controls.getByRole("button", { name: "Hold" })).toHaveAccessibleDescription("No wakes and no automatic steps; its agents carry on");
-    await expect(controls.getByRole("button", { name: "Close…" })).toHaveAccessibleDescription("Its conversation goes back to General; its agents and drafts are kept");
+    await expect(controls.getByRole("button", { name: "Close…" })).toHaveAccessibleDescription("Its conversation goes back to General; its agents and drafts are kept in General");
     await expect(controls.getByRole("button", { name: "More for this workstream" })).toHaveAccessibleDescription("More: stop the workstream");
     await expect(pipHome(page).getByRole("region", { name: "Pip's notes" })).toContainText("No notes yet. Pip writes here what it decides to remember about this workstream");
   });

@@ -11,6 +11,9 @@ export const ORIENTATION_TERMS: readonly { term: string; text: string }[] = [
   { term: "Status", text: "Each workstream's one word: Needs you, Held, Waiting on reporter, Running, Quiet, Done or Idle. Hover a word for what it means." },
   { term: "Intake", text: "The first stage of a workstream, before there is a plan." },
   { term: "Advise", text: "Pip answers when asked and starts nothing." },
+  { term: "Manage", text: "Pip is woken when a step finishes and starts the routine next one on its own, within the workstream's allowance. Advise or Hold stops it." },
+  { term: "Hold", text: "Stops Pip waking and any automatic step in one workstream until you Resume. Its agents carry on." },
+  { term: "Allow once", text: "When an agent asks permission for a command, Allow once opens it in Terminal to confirm there; Deny tells the agent no and it carries on without it. A read-only step can only be denied." },
   { term: "Decide", text: "A draft or a choice waits on you." },
   { term: "Unblock", text: "An agent is stopped until you answer." },
   { term: "Worktree", text: "The run's own checkout of your repository, so runs don't step on each other or on your files." },
@@ -19,7 +22,7 @@ export const ORIENTATION_TERMS: readonly { term: string; text: string }[] = [
 /** What the app is for, said first: the glossary behind its button only names the words. */
 export const ORIENTATION_PURPOSE = "Pip works through your Jira tickets with coding agents and drafts every Jira and GitHub write for you to read and approve; nothing posts until you do.";
 
-export const ORIENTATION_SAFETY = `Gossamr posts only what you approve; an agent run with your Claude settings could reach Jira or GitHub on its own. ${BUILD_ON_GITHUB}`;
+export const ORIENTATION_SAFETY = `Gossamr posts only what you approve; a Build runs with your Claude settings and could reach Jira or GitHub on its own. ${BUILD_ON_GITHUB}`;
 
 /** The glossary's button, named apart from the other More buttons on Pip home. */
 export const ORIENTATION_WORDS = "What the words mean";

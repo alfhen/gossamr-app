@@ -47,9 +47,10 @@ describe("the Start my day card", () => {
     ],
   };
 
-  it("is a labelled region with a heading, each line a titled list whose entries have a button saying what it does", () => {
+  it("is a heading and titled lists whose entries have a button saying what it does, not a second region inside Pip home's own (G28)", () => {
     const html = renderToStaticMarkup(<StartMyDayView day={day} onDone={() => {}} onSent={() => {}} />);
-    expect(html).toMatch(/<section data-start-my-day="true"[^>]*aria-labelledby="start-my-day"/);
+    expect(html).toMatch(/<div data-start-my-day="true"/);
+    expect(html).not.toMatch(/<section data-start-my-day|data-start-my-day[^>]*aria-labelledby/);
     expect(html).toMatch(/<h2 id="start-my-day"[^>]*>Start my day<\/h2>/);
     expect(html).toContain("2 waiting on the reporter");
     expect(html).toContain('aria-label="Draft a nudge: CA-408 · waiting 3 days"');
@@ -87,6 +88,15 @@ describe("the Start my day card", () => {
     const html = renderToStaticMarkup(<DayLineView line={short} />);
     expect(html.match(/data-day-entry=/g)).toHaveLength(2);
     expect(html).not.toContain("data-day-more");
+  });
+
+  it("names what each More button expands, starting with the words it shows (G28)", () => {
+    const more = (n: number) => entry(`x${n}`, `CA-${n} · Draft comment`, "Open", { type: "workstream", id: `w${n}` });
+    const approve = { kind: "approve" as const, title: "5 to approve", count: 5, more: 2, entries: [more(1), more(2), more(3)], rest: [more(4), more(5)] };
+    expect(renderToStaticMarkup(<DayLineView line={approve} />)).toContain('aria-label="Show 2 more: 5 to approve"');
+    expect(renderToStaticMarkup(<DayLineView line={approve} initiallyOpen />)).toContain('aria-label="Show fewer: 5 to approve"');
+    const unclear = { kind: "unclear" as const, title: "5 tickets may be unclear", count: 5, more: 2, entries: [more(1), more(2), more(3)], rest: [more(4), more(5)] };
+    expect(renderToStaticMarkup(<DayLineView line={unclear} />)).toContain('aria-label="More: 5 tickets may be unclear"');
   });
 
   it("says what a quiet day looks like instead of an empty box", () => {

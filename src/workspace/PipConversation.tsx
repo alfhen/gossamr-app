@@ -151,7 +151,7 @@ function WakeText({ id, text }: { id: string; text: string }) {
         <Markdown text={text} />
       </div>
       {long && (
-        <button type="button" aria-expanded={open} aria-controls={panel} onClick={() => setOpen(!open)} className="justify-self-start rounded text-xs font-semibold text-ws-ink2 hover:underline focus-visible:outline-2 focus-visible:outline-ws-pip">
+        <button type="button" aria-expanded={open} aria-controls={panel} aria-label={open ? "Show less of Pip's answer" : "Show more of Pip's answer"} onClick={() => setOpen(!open)} className="justify-self-start rounded text-xs font-semibold text-ws-ink2 hover:underline focus-visible:outline-2 focus-visible:outline-ws-pip">
           {open ? "Show less" : "Show more"}
         </button>
       )}

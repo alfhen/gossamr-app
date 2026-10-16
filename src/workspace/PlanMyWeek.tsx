@@ -139,7 +139,7 @@ export function PlanMyWeekView({
   /** The row that is the list's one Tab stop (a roving tabindex): the one the keyboard was last on. */
   const [stop, setStop] = useState<string | null>(null);
   const tabStop = rovingStop(picks, stop);
-  const root = useRef<HTMLElement>(null);
+  const root = useRef<HTMLDivElement>(null);
   // What Undo puts back goes into the plan as it is by then, which the closure of the press that removed the row cannot see.
   // Set once the render commits, never during it: a render React throws away must not leave Undo its picks.
   const latest = useRef({ picks, onChange });
@@ -215,11 +215,11 @@ export function PlanMyWeekView({
     revealChoices(root.current?.querySelector<HTMLElement>("[data-plan-choices]"));
   }, [choices]);
   return (
-    <section
+    // Not a region of its own: Pip home's labelled stop around it already is "Plan my week".
+    <div
       ref={root}
       data-plan-my-week
       data-esc-local
-      aria-labelledby="plan-my-week"
       tabIndex={-1}
       onKeyDown={(ev) => {
         if (ev.key === "Escape" && !ev.defaultPrevented) (ev.stopPropagation(), onClose());
@@ -378,7 +378,7 @@ export function PlanMyWeekView({
           {kept ? `Kept on this device for the ${weekLabel(week)}; it shows as This week on Pip home.` : "Keep this plan to see it as This week on Pip home; it stays on this device."}
         </span>
       </div>
-    </section>
+    </div>
   );
 }
 

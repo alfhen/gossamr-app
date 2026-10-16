@@ -239,7 +239,18 @@ export function WorkstreamList({ list, closed, showClosed, selected, onSelect, o
                   {v.workstream.itemKey && <b className="shrink-0 font-mono font-semibold">{v.workstream.itemKey}</b>}
                   <span className="min-w-0 truncate">{rowTitle(v.workstream)}</span>
                 </span>
-                <span className="text-xs">Closed</span>
+                <span className="flex items-baseline gap-2 text-xs">
+                  Closed
+                  <button
+                    type="button"
+                    data-reopen-workstream={v.workstream.id}
+                    aria-label={`Reopen ${v.workstream.itemKey ?? rowTitle(v.workstream)}`}
+                    onClick={() => void useWorkstreams.getState().reopen(v.workstream.id)}
+                    className="rounded px-1 font-medium text-ws-ink2 underline hover:bg-ws-hover focus-visible:outline-2 focus-visible:outline-ws-pip"
+                  >
+                    Reopen
+                  </button>
+                </span>
               </li>
             ))}
             {closed.length === 0 && <li className="px-2.5 py-1 text-sm text-ws-ink3">No closed workstreams.</li>}

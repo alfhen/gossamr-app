@@ -187,6 +187,8 @@ export function AgentsSettingsView({ runs, stopping, keepRunning, settings, sett
       title="Agents"
       hint={<>safety and settings · <kbd className="font-sans">esc</kbd> close</>}
       wide={false}
+      // The first-run sheet is answered before anything else: Tab stays in it until Got it, continue (or Close).
+      modal={intro}
       onClose={onClose}
       footer={
         intro ? (

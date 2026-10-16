@@ -679,6 +679,27 @@ async fn workstreams_close(app: AppHandle, core: State<'_, CoreState>, agent: St
     Ok(ws)
 }
 
+/// Reopens a closed workstream (the page's Undo of Close, and a closed row's Reopen).
+#[tauri::command]
+async fn workstreams_reopen(app: AppHandle, core: State<'_, CoreState>, id: String) -> Result<Workstream> {
+    let ws = core.reopen_workstream(&core.scope().await?, &id).await?;
+    workstreams_changed(&app, &ws.connection_id);
+    Ok(ws)
+}
+
+/// The person's "Bring them here": the runs and drafts on the workstream's ticket that are in no workstream move into it.
+/// Returns what moved, which the page's Undo hands back to `workstreams_undo`.
+#[tauri::command]
+async fn workstreams_adopt(app: AppHandle, core: State<'_, CoreState>, id: String) -> Result<inbox::Adoptable> {
+    let scope = core.scope().await?;
+    let moved = core.adopt_into_workstream(&scope, &id).await?;
+    let connection = Connection::jira_id(&scope);
+    workstreams_changed(&app, &connection);
+    runs_changed(&app, &connection);
+    proposals_changed(&app, &connection);
+    Ok(moved)
+}
+
 /// The person's change to a workstream's notes.
 #[tauri::command]
 async fn workstreams_set_notes(app: AppHandle, core: State<'_, CoreState>, id: String, notes: String) -> Result<Workstream> {
@@ -818,6 +839,9 @@ async fn workstreams_allow_more(app: AppHandle, core: State<'_, CoreState>, id: 
 async fn workstreams_undo(app: AppHandle, core: State<'_, CoreState>, id: String, undo: inbox::WorkstreamUndo) -> Result<Workstream> {
     let ws = core.undo_workstream(&core.scope().await?, &id, &undo).await?;
     workstreams_changed(&app, &ws.connection_id);
+    // Taking back "Bring them here" moves runs and drafts, which the page reads too.
+    runs_changed(&app, &ws.connection_id);
+    proposals_changed(&app, &ws.connection_id);
     Ok(ws)
 }
 
@@ -1554,6 +1578,8 @@ pub fn run() {
             workstreams_get,
             workstreams_list,
             workstreams_close,
+            workstreams_reopen,
+            workstreams_adopt,
             workstreams_set_notes,
             workstreams_events,
             workstreams_set_mode,

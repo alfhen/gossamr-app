@@ -403,7 +403,7 @@ export function needs({ workstreams, runs, proposals, dismissed, heldAt, titleOf
       title,
       why: drafted,
       ifYouWait: review ? "Nothing is posted to GitHub until you choose." : "Nothing is written to Jira until you approve it.",
-      primary: action("approve", review ? "Post review" : p.intent.type === "runAnswer" ? "Send answer" : p.intent.type === "followUp" ? "Send back" : "Approve"),
+      primary: action("approve", review ? "Post review" : p.intent.type === "runAnswer" ? "Send answer" : p.intent.type === "followUp" ? "Send back" : p.intent.type === "comment" ? "Post comment" : "Approve"),
       secondary: [...edit, action("dismiss", "Skip")],
       batchable: safeToBatch(p) && !repeated.has(p.id),
     });

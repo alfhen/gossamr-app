@@ -51,6 +51,24 @@ describe("What Jira saw from me", () => {
     expect(sentWhat(rewrite("Line one", "Line 1"), null)!.summary).toBe("Description rewritten");
   });
 
+  it("gives a description row a type that says what its summary does, not 'Description edit' over 'Description added' (G29)", () => {
+    const rewrite = (fromText: string, toText: string, title: { from: string; to: string } | null = null): Intent => ({ type: "rewrite", item: ref("CA-402"), title, body: fromText === toText ? null : { from: doc("a"), to: doc("b"), fromText, toText }, flattened: [] });
+    expect(sentWhat(rewrite("", "Fresh text"), null)).toMatchObject({ label: "New description", summary: "Description added" });
+    expect(sentWhat(rewrite("Line one", "Line one\nLine two"), null)).toMatchObject({ label: "Description addition", summary: "Added to the description" });
+    expect(sentWhat(rewrite("Line one", "Line 1"), null)).toMatchObject({ label: "Description rewrite", summary: "Description rewritten" });
+    expect(sentWhat(rewrite("x", "x", { from: "A", to: "B" }), null)).toMatchObject({ label: "Title change", summary: "Title changed to B" });
+    const p = draft("r", rewrite("", "Fresh text"));
+    expect(jiraSent({ proposals: [p], events: {}, workstreams: [] })[0]).toMatchObject({ kind: "description", label: "New description" });
+  });
+
+  it("says who made it once in the footer: Gossamr's own draft came from the person's request, not from Gossamr (G29)", () => {
+    const asked = draft("d", comment("CA-401", "x"), { createdBy: "user", label: "Questions for the reporter", origin: { type: "chat", requestId: "clarity:w1", workstream: "w1" } });
+    const [e] = jiraSent({ proposals: [asked], events: {}, workstreams: [view("w1", "CA-401")] });
+    const footer = `${editedWords(e)} · from ${e.from}`;
+    expect(footer).toBe("Gossamr drafted it; posted without changes · from your request");
+    expect(footer.match(/Gossamr/g)).toHaveLength(1);
+  });
+
   it("names the keys a subtasks draft created, one for each title", () => {
     const intent: Intent = { type: "subtasks", parent: ref("CA-403"), summaries: ["Write tests", "Update docs"] };
     expect(sentWhat(intent, null, [ref("CA-501"), ref("CA-502")])).toMatchObject({ summary: "2 subtasks: CA-501 Write tests; CA-502 Update docs", detail: ["• CA-501 Write tests", "• CA-502 Update docs"] });
@@ -95,7 +113,7 @@ describe("What Jira saw from me", () => {
     const asked = draft("d", comment("CA-401", "x"), { createdBy: "user", label: "Questions for the reporter" });
     const nudge = draft("e", comment("CA-401", "x"), { createdBy: "user", label: "Nudge for the reporter" });
     const out = Object.fromEntries(jiraSent({ proposals: [pip, run, board, asked, nudge], events: {}, workstreams: [view("w1", "CA-401")] }).map((e) => [e.id, [e.madeBy, e.from]]));
-    expect(out).toEqual({ a: ["Pip", "Pip, on CA-401"], b: ["An agent run", "run R3"], c: ["You", "the board"], d: ["Gossamr", "Gossamr"], e: ["Gossamr", "Gossamr"] });
+    expect(out).toEqual({ a: ["Pip", "Pip, on CA-401"], b: ["An agent run", "run R3"], c: ["You", "the board"], d: ["Gossamr", "your request"], e: ["Gossamr", "your request"] });
     // Pip's chat draft with no ticket to name stays "Pip's conversation".
     const bare = draft("f", { type: "create", container: { connectionId: "c", externalId: "P", key: "P" }, fields: { title: "T", body: { blocks: [] } } } as unknown as Intent);
     expect(jiraSent({ proposals: [bare], events: {}, workstreams: [] })[0].from).toBe("Pip's conversation");
@@ -140,6 +158,15 @@ describe("the second line of a row (G25)", () => {
     expect(sentWhat(comment("CA-401", "Before work starts:\n\n1. Goal?\n2. Scope?\n3. Owner?"), null)).toMatchObject({ summary: "Before work starts:", second: "1. Goal? (+2 more)" });
     // A greeting is skipped by the opener, so the second line is the one after it.
     expect(sentWhat(comment("CA-401", "Hi Mette,\n\nBefore work starts, a few things need clearing up:\n\n- What is the goal?"), null)).toMatchObject({ summary: "Before work starts, a few things need clearing up:", second: "- What is the goal?" });
+  });
+
+  it("counts the items still to come when a list is shown, not the lines: a closing line or a wrapped one is no item (G29)", () => {
+    const text = "Before work starts, three things:\n\n1. Goal?\n2. Scope?\n3. Owner?\n\nThanks!";
+    expect(sentWhat(comment("CA-401", text), null)).toMatchObject({ second: "1. Goal? (+2 more)" });
+    expect(sentWhat(comment("CA-401", "Opener:\n\n- First?\nwrapped on from the first\n- Second?\n\nThanks, Pip"), null)).toMatchObject({ second: "- First? (+1 more)" });
+    // Lines that are not a list are still counted as lines.
+    expect(sentWhat(comment("CA-401", "Opener.\n\nOne.\n\nTwo.\n\nThree."), null)).toMatchObject({ second: "One. (+2 more)" });
+    expect(sentWhat(comment("CA-401", "Opener:\n\n1. Only?\n\nThanks!"), null)!.second).toBe("1. Only?");
   });
 
   it("is left out of a one-line comment, and cut short like the summary", () => {

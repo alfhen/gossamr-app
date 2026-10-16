@@ -369,7 +369,7 @@ describe("What Jira saw from me", () => {
       ["CA-408", "comment", "Gossamr", false],
     ]);
     expect(sent[0]).toMatchObject({ summary: "On it, today.", workstreamId: null, from: "the board" });
-    expect(sent[1]).toMatchObject({ workstreamId: id, workstream: "CA-408", from: "Gossamr" });
+    expect(sent[1]).toMatchObject({ workstreamId: id, workstream: "CA-408", from: "your request" });
     // A draft still waiting, or skipped, is not there.
     const waiting = await backend.proposalsCreate({ type: "comment", item: itemRef("CA-403"), body: { blocks: [] } });
     await useWorkspace.getState().refreshProposals();

@@ -1,5 +1,6 @@
 import { docFromText, docText, quoteAfterFirst } from "../lib/docs";
 import { BUILD_ACCOUNT_LIMIT, INSTRUCTIONS, PLAN_LIMIT, REVIEW_REPORTS } from "./mockRunKinds";
+import { canJoinWorkstream, withWorkstream } from "../lib/workstreamAdopt";
 import { answersSupersession, capRefusal, isAnswersDraft, isReporterQuestions, isRunComment, isRunReview, leftByRun, offTheDiff, PLAN_IS_THE_USERS, REPLACED_REASON, REVIEW_CHANGED, REVIEW_IS_THE_USERS, REVIEW_MAYBE_POSTED_NOTE, REVIEW_NOT_FOUND_NOTE, REVIEW_OUTDATED_NOTE, reviewEditProblem, reporterSupersession, reviewSupersession, runCommentSupersession, supersession, targetOf, WORKSTREAM_PENDING_CAP, workstreamOf } from "../lib/proposals";
 import { commentable } from "../lib/diffHunks";
 import { followUpProblem } from "../workspace/followUp";
@@ -263,6 +264,18 @@ export class MockProposals {
     this.drafts = this.drafts.map((p) => (p.id === id ? next : p));
     this.changed();
     return next;
+  }
+
+  /**
+   * Puts pending draft `id` in workstream `workstream`, or back in General with null, wherever it records one, as
+   * `set_workstream`: in its origin when Pip or a run made it, and in the run it would start. A draft with nowhere to record one stays as it is.
+   */
+  setWorkstream(id: string, workstream: string | null) {
+    const p = this.get(id);
+    if (!p || !canJoinWorkstream(p)) return;
+    const origin = p.origin.type === "chat" || p.origin.type === "run" ? withWorkstream(p.origin, workstream) : p.origin;
+    const intent = p.intent.type === "startRun" ? { ...p.intent, spec: withWorkstream(p.intent.spec, workstream) } : p.intent;
+    this.set(id, { origin, intent });
   }
 
   /** Tells the listeners the drafts may read differently, as when the pull request a review draft is about moved on. */

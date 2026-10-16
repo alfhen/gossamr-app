@@ -13,6 +13,8 @@ import { useRuns } from "./runsStore";
 import { activeTab, loadTabs, useTabs } from "./tabsStore";
 import { contextFor, conversationTitle, focusComposer, focusedConversation, paneConversation, paneWorkstream, useWorkstreams, workstreamTicket } from "./workstreamsStore";
 import { usePipHome } from "./pipHomeStore";
+import { undoLog } from "./undo";
+import { useToasts } from "./toasts";
 import type { WorkstreamView } from "../types";
 import { GENERAL_CONVERSATION, workstreamConversation } from "../lib/conversations";
 
@@ -330,5 +332,55 @@ describe("focusComposer", () => {
     frames.shift()!();
     expect(moved.doc.activeElement).toBe(moved.chip);
     expect(moved.input.focus).not.toHaveBeenCalled();
+  });
+});
+
+describe("closing, reopening and bringing a ticket's runs here (G23, G17)", () => {
+  it("offers Undo after Close that reopens the workstream, and says the drafts stay in General", async () => {
+    undoLog.clear();
+    useToasts.getState().clear();
+    const ws = (await useWorkstreams.getState().start(CA401))!;
+    expect(await useWorkstreams.getState().close(ws.workstream.id)).toBe(true);
+    expect(useWorkstreams.getState().forItem("CA-401")).toBeNull();
+    const offer = undoLog.latest();
+    expect(offer?.text).toBe("Closed the workstream on CA-401. Its agents and drafts are kept in General.");
+    expect(await undoLog.run(offer!.id)).toBe("undone");
+    expect(useWorkstreams.getState().forItem("CA-401")?.workstream.id).toBe(ws.workstream.id);
+    expect(useToasts.getState().toasts.map((t) => t.text)).toContain("Reopened the workstream on CA-401.");
+  });
+
+  it("reopens a closed workstream from its row, and says so when its ticket has another open by now", async () => {
+    const ws = (await useWorkstreams.getState().start(CA401))!;
+    await useWorkstreams.getState().close(ws.workstream.id);
+    useToasts.getState().clear();
+    expect(await useWorkstreams.getState().reopen(ws.workstream.id)).toBe(true);
+    expect(useWorkstreams.getState().list.map((v) => v.workstream.id)).toEqual([ws.workstream.id]);
+    expect(useToasts.getState().toasts.map((t) => t.text)).toContain("Reopened the workstream on CA-401.");
+    await useWorkstreams.getState().close(ws.workstream.id);
+    const fresh = (await useWorkstreams.getState().start(CA401))!;
+    useToasts.getState().clear();
+    expect(await useWorkstreams.getState().reopen(ws.workstream.id)).toBe(false);
+    expect(useToasts.getState().toasts.map((t) => t.text).join(" ")).toContain("Couldn't reopen the workstream. CA-401 has another workstream open");
+    expect(useWorkstreams.getState().forItem("CA-401")?.workstream.id).toBe(fresh.workstream.id);
+  });
+
+  it("moves what is in General only when asked, and its Undo puts it back", async () => {
+    undoLog.clear();
+    const draft = await backend.runsDraft({ kind: "investigate", repo: "acme/storefront", clonePath: "/Users/sample/Code/storefront", base: "main", name: "ca-401-adopt-1a2b", instruction: "" }, CA401);
+    const run = await backend.runsApprove(draft.id, (await backend.runsReview(draft.id)).digest);
+    const ws = (await useWorkstreams.getState().start(CA401))!;
+    expect(useWorkstreams.getState().forItem("CA-401")?.adoptable).toEqual({ runs: [run.id], drafts: [] });
+    expect((await backend.runsGet(run.id))?.spec.workstream).toBeUndefined();
+    expect(await useWorkstreams.getState().adopt(ws.workstream.id)).toBe(true);
+    expect(useWorkstreams.getState().forItem("CA-401")).toMatchObject({ stage: "investigate", runs: [run.id] });
+    expect(useWorkstreams.getState().forItem("CA-401")?.adoptable).toBeUndefined();
+    const offer = undoLog.latest();
+    expect(offer?.text).toBe("Brought 1 run on CA-401 into the workstream.");
+    expect(await undoLog.run(offer!.id)).toBe("undone");
+    expect((await backend.runsGet(run.id))?.spec.workstream).toBeUndefined();
+    expect(useWorkstreams.getState().forItem("CA-401")?.adoptable).toEqual({ runs: [run.id], drafts: [] });
+    // Nothing left to bring: the person is told, and no Undo is offered.
+    await backend.workstreamsAdopt(ws.workstream.id);
+    expect(await useWorkstreams.getState().adopt(ws.workstream.id)).toBe(false);
   });
 });

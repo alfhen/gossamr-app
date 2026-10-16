@@ -480,7 +480,7 @@ export function WorkstreamControl({ item, workstream, onStart, onOpen, confirmin
               if (ev.key === "Escape") (ev.stopPropagation(), onAskClose(false));
             }}
           >
-            Close it? Its agents and drafts are kept.
+            Close it? Its agents and drafts are kept in General.
             <button type="button" autoFocus onClick={onClose} className="font-semibold text-ws-pip underline">
               Close workstream
             </button>
@@ -489,7 +489,7 @@ export function WorkstreamControl({ item, workstream, onStart, onOpen, confirmin
             </button>
           </span>
         ) : (
-          <button type="button" onClick={() => onAskClose(true)} title={`Close ${item.key}'s workstream; its conversation goes back to General, and its agents and drafts are kept`} className="text-ws-ink2 underline">
+          <button type="button" onClick={() => onAskClose(true)} title={`Close ${item.key}'s workstream; its conversation goes back to General, and its agents and drafts are kept in General`} className="text-ws-ink2 underline">
             Close…
           </button>
         ))}

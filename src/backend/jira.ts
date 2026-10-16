@@ -4,6 +4,7 @@ import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
 import type { Mention } from "../lib/mentions";
 import type { ClarityGap } from "../lib/ticketClarity";
 import type {
+  Adoptable,
   AssignedElsewhere,
   CacheChanged,
   CatalogPage,
@@ -529,6 +530,12 @@ export class JiraBackend implements Backend {
 
   workstreamsClose(id: string) {
     return invoke<Workstream>("workstreams_close", { id });
+  }
+  workstreamsReopen(id: string) {
+    return invoke<Workstream>("workstreams_reopen", { id });
+  }
+  workstreamsAdopt(id: string) {
+    return invoke<Adoptable>("workstreams_adopt", { id });
   }
 
   workstreamsSetNotes(id: string, notes: string) {

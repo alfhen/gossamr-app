@@ -7,7 +7,7 @@ import { useWorkspace } from "../workspaceStore";
 import { DraftPreview, KEY_HINT, KEY_HINT_ROOM, LiveDraftPreview, collapseReview, openLiveDraft } from "./DraftPreview";
 import { escapeCollapses } from "./draftKeys";
 import { focusPeekOf } from "./PeekSheet";
-import { CLOSED_INLINE, InlineStartContext, InlineStartView, inlineStartBlock, inlineStartKey, inlineStartable, revealReview, tabToStart, useInlineStarts, type InlineActions } from "./InlineStart";
+import { CLOSED_INLINE, InlineStartContext, InlineStartView, inlineStartBlock, inlineStartKey, inlineStartable, revealReview, useInlineStarts, type InlineActions } from "./InlineStart";
 import { usePrefs } from "./prefs";
 import { COPY } from "./runSheetLogic";
 import { useRunSetup } from "./runSetupStore";
@@ -317,7 +317,7 @@ describe("which run drafts start in place", () => {
     expect(order).toEqual(["close", "focus"]);
   });
 
-  it("brings a review just opened to the top of its scroll box and puts the keyboard on it, Start one Tab away", () => {
+  it("brings a review just opened to the top of its scroll box and puts the keyboard on it", () => {
     const box = { scrollTop: 100, getBoundingClientRect: () => ({ top: 50, bottom: 650 }) };
     const panel = { focus: vi.fn(), getBoundingClientRect: () => ({ top: 450, bottom: 1250 }), closest: vi.fn(() => box) };
     revealReview(panel);
@@ -334,16 +334,18 @@ describe("which run drafts start in place", () => {
     revealReview(grown, false);
     expect(grown.focus).not.toHaveBeenCalled();
     expect(box.scrollTop).toBe(492);
+  });
 
-    const tab = (over: Partial<{ shiftKey: boolean; target: unknown }> = {}) => ({ key: "Tab", shiftKey: false, metaKey: false, ctrlKey: false, altKey: false, target: panel, currentTarget: panel, ...over });
-    const start = { disabled: false, focus: vi.fn() };
-    expect(tabToStart(tab(), start)).toBe(true);
-    expect(start.focus).toHaveBeenCalledTimes(1);
-    // Shift+Tab, a Tab from a control inside the review, or Start still off: the browser's own Tab.
-    expect(tabToStart(tab({ shiftKey: true }), start)).toBe(false);
-    expect(tabToStart(tab({ target: {} }), start)).toBe(false);
-    expect(tabToStart(tab(), { ...start, disabled: true })).toBe(false);
-    expect(start.focus).toHaveBeenCalledTimes(1);
+  it("keeps the disclosures before Start agent in Tab order, and no longer sends Tab from the review itself straight to Start (G27)", async () => {
+    const id = await draft();
+    await inline().open(id);
+    const html = render(id);
+    const start = html.indexOf("data-inline-start-button");
+    const summaries = [...html.matchAll(/<summary/g)].map((m) => m.index!);
+    expect(start).toBeGreaterThan(0);
+    expect(summaries.length).toBeGreaterThan(0);
+    for (const at of summaries) expect(at).toBeLessThan(start);
+    expect(html).not.toMatch(/tabindex="[1-9]/);
   });
 
   it("opens a ticket draft's peek on one press of its button, and its key hint never changes the card's height", () => {

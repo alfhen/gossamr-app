@@ -419,6 +419,8 @@ export class MockBackend implements Backend {
     this.proposals.runKind = (id) => this.runs.get(id)?.spec.kind ?? null;
     this.proposals.audit = (p, actor, action, detail, workstream) => void this.workstreams.record(workstream ?? workstreamOf(p), actor, action, { proposalId: p.id, ...(detail ? { detail } : {}) });
     this.workstreams.pendingDrafts = () => this.proposals.list({ states: ["pending"] });
+    this.workstreams.moveRun = (id, workstream) => this.runs.setWorkstream(id, workstream);
+    this.workstreams.moveDraft = (id, workstream) => this.proposals.setWorkstream(id, workstream);
     // A run that moved on may have moved its workstream's stage on.
     this.runs.onChanged(() => this.workstreams.changed());
     this.runs.ticketText = (ref) => {
@@ -526,6 +528,14 @@ export class MockBackend implements Backend {
     const closed = this.workstreams.close(id);
     mockCancelTurns((c) => c === workstreamConversation(id));
     return closed;
+  }
+
+  async workstreamsReopen(id: string) {
+    return this.workstreams.reopen(id);
+  }
+
+  async workstreamsAdopt(id: string) {
+    return this.workstreams.adopt(id);
   }
 
   async workstreamsSetNotes(id: string, notes: string) {

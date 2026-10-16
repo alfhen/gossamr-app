@@ -75,6 +75,12 @@ export function showMe(ref: ItemRef, opts: { peek?: boolean } = {}) {
 
 const cachedByKey = (key: string) => Object.values(useWorkspace.getState().items).find((i) => i.item.key === key);
 
+/** The work connection a ticket key typed by hand is read from, if one is connected. */
+export function keyConnectionId(): string | undefined {
+  const ws = useWorkspace.getState();
+  return workConnections(ws.connections)[0]?.id ?? workWatch(ws.watch)[0]?.connectionId;
+}
+
 /**
  * Opens a ticket by key in whichever project it is: the synced one if there is one, otherwise a live read-only
  * peek that is never stored.
@@ -83,7 +89,7 @@ export async function openTicketByKey(key: string): Promise<boolean> {
   const ws = useWorkspace.getState();
   const cached = Object.values(ws.items).find((i) => i.item.key.toLowerCase() === key.toLowerCase());
   if (cached) return showMe(cached.item);
-  const connectionId = workConnections(ws.connections)[0]?.id ?? workWatch(ws.watch)[0]?.connectionId;
+  const connectionId = keyConnectionId();
   if (!connectionId) {
     useToasts.getState().push("Not connected yet.");
     return false;

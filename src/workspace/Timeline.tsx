@@ -233,7 +233,7 @@ function RunEntry({ entry, run, label, now, need, open, pane }: { entry: Timelin
             label={label}
             onOpen={open}
             onAttach={NOOP}
-            onOpenNeed={need ? () => openNeed(need) : undefined}
+            // No onOpenNeed: the line above carries the one "In Needs you" this entry has, and the row's own pill would say it twice.
             asking={asking}
             failure={NO_FAILURE}
           />

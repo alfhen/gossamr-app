@@ -48,7 +48,7 @@ export function SentRow({ entry: e, onTicket, onWorkstream }: { entry: SentEntry
       )}
       {more && (
         <div className="grid gap-1">
-          <button type="button" aria-expanded={open} onClick={() => setOpen(!open)} className={`justify-self-start text-sm ${link}`}>
+          <button type="button" aria-expanded={open} aria-label={`${open ? "Show less" : "Show the posted text"}: ${e.summary}`} onClick={() => setOpen(!open)} className={`justify-self-start text-sm ${link}`}>
             {open ? "Show less" : "Show the posted text"}
           </button>
           {open && (
@@ -117,7 +117,7 @@ export function JiraSentView() {
           ← Pip home
         </button>
         <h1 ref={title} tabIndex={-1} className="m-0 rounded text-base font-semibold focus-visible:outline-2 focus-visible:outline-ws-pip">What Jira saw from me</h1>
-        <p className="m-0 text-sm text-ws-ink3">Everything Gossamr posted to Jira after you approved it. This page only shows it; it posts nothing. {GITHUB_NOT_LISTED} It lists only what Gossamr posted. An agent run with your Claude settings could reach Jira on its own; see Agent safety.</p>
+        <p className="m-0 text-sm text-ws-ink3">Everything Gossamr posted to Jira after you approved it. This page only shows it; it posts nothing. {GITHUB_NOT_LISTED} It lists only what Gossamr posted. A Build runs with your Claude settings and could reach Jira on its own; see Agent safety.</p>
       </header>
       <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-[max(32px,var(--ws-launcher-clear,0px))]">
         <div className="mx-auto max-w-[780px]">

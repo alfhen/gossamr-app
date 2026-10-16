@@ -98,6 +98,8 @@ export function DayLineView({ line, initiallyOpen = false }: { line: DayLine; in
   // A long list of tickets that may be unclear is a notice, not a decision: its title carries the count and More lists them, so it does not push the lines that need the person off the card.
   const collapsed = line.kind === "unclear" && line.count > DAY_ENTRIES;
   const entries = open ? all : collapsed ? [] : line.entries;
+  // What the button says; its name adds which line it expands, as several lines have one.
+  const more = open ? "Show fewer" : collapsed ? "More" : `Show ${line.more} more`;
   return (
     <section data-day-line={line.kind} aria-label={line.title} className="grid gap-0.5">
       <h3 className="m-0 text-sm font-semibold text-ws-ink">{line.title}</h3>
@@ -108,8 +110,8 @@ export function DayLineView({ line, initiallyOpen = false }: { line: DayLine; in
         {(collapsed || line.more > 0) &&
           (collapsed || line.rest?.length ? (
             <li>
-              <button type="button" data-day-more aria-expanded={open} onClick={() => setOpen(!open)} className="rounded px-1 text-ws-ink2 underline hover:bg-ws-hover focus-visible:outline-2 focus-visible:outline-ws-pip">
-                {open ? "Show fewer" : collapsed ? "More" : `Show ${line.more} more`}
+              <button type="button" data-day-more aria-expanded={open} aria-label={`${more}: ${line.title}`} onClick={() => setOpen(!open)} className="rounded px-1 text-ws-ink2 underline hover:bg-ws-hover focus-visible:outline-2 focus-visible:outline-ws-pip">
+                {more}
               </button>
             </li>
           ) : (
@@ -123,7 +125,8 @@ export function DayLineView({ line, initiallyOpen = false }: { line: DayLine; in
 /** The card itself: pure of the stores, so a test can render it. */
 export function StartMyDayView({ day, onDone, onSent, onPlan }: { day: StartMyDay; onDone(): void; onSent(): void; onPlan?(): void }) {
   return (
-    <section data-start-my-day aria-labelledby="start-my-day" tabIndex={-1} className="grid gap-2 border-b border-ws-sep bg-ws-bar px-3 py-2 outline-none">
+    // Not a region of its own: Pip home's labelled stop around it already is "Start my day".
+    <div data-start-my-day tabIndex={-1} className="grid gap-2 border-b border-ws-sep bg-ws-bar px-3 py-2 outline-none">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
         <h2 id="start-my-day" className="m-0 min-w-0 flex-1 text-sm font-semibold text-ws-ink">
           Start my day
@@ -150,7 +153,7 @@ export function StartMyDayView({ day, onDone, onSent, onPlan }: { day: StartMyDa
       ) : (
         day.lines.map((l) => <DayLineView key={l.kind} line={l} />)
       )}
-    </section>
+    </div>
   );
 }
 

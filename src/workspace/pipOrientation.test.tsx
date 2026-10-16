@@ -30,7 +30,7 @@ afterEach(() => {
 describe("Pip home's orientation card", () => {
   it("explains Pip, a workstream, a run and a worktree, and says nothing is posted without a click", () => {
     const html = renderToStaticMarkup(<PipOrientation open />);
-    expect(ORIENTATION_TERMS.map((t) => t.term)).toEqual(["Pip", "Workstream", "Run", "Cobweb", "Status", "Intake", "Advise", "Decide", "Unblock", "Worktree"]);
+    expect(ORIENTATION_TERMS.map((t) => t.term)).toEqual(["Pip", "Workstream", "Run", "Cobweb", "Status", "Intake", "Advise", "Manage", "Hold", "Allow once", "Decide", "Unblock", "Worktree"]);
     expect(html).toContain("One ticket&#x27;s work from start to pull request");
     expect(html).toContain("One Claude Code agent session doing a step: investigate, plan, build or review");
     expect(html).toContain("own checkout of your repository");
@@ -39,7 +39,7 @@ describe("Pip home's orientation card", () => {
     expect(html).toContain(ORIENTATION_SAFETY);
     expect(html).toContain(ORIENTATION_PURPOSE);
     expect(ORIENTATION_PURPOSE).toBe("Pip works through your Jira tickets with coding agents and drafts every Jira and GitHub write for you to read and approve; nothing posts until you do.");
-    expect(ORIENTATION_SAFETY).toBe("Gossamr posts only what you approve; an agent run with your Claude settings could reach Jira or GitHub on its own. On GitHub, a build runs as you: when Pushing is ticked its prompt asks it to push only its own branch to a draft pull request. That is a request, not a lock; see Agent safety.");
+    expect(ORIENTATION_SAFETY).toBe("Gossamr posts only what you approve; a Build runs with your Claude settings and could reach Jira or GitHub on its own. On GitHub, a Build runs as you: when Pushing is ticked its prompt asks it to push only its own branch to a draft pull request. That is a request, not a lock; see Agent safety.");
     expect(html).toMatch(/<button type="button"[^>]*>Got it<\/button>/);
   });
 

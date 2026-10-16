@@ -394,14 +394,14 @@ describe("the pause before a review with risky edits is posted (G1)", () => {
   });
 
   it("finds a broad mention added to the summary", () => {
-    expect(reviewRisks(intent, `${intent.summary} cc @everyone`, unchanged)).toEqual({ risks: ["broadcast"], quote: { broadcast: "@everyone" } });
+    expect(reviewRisks(intent, `${intent.summary} cc @everyone`, unchanged)).toEqual({ risks: ["broadcast"], quote: { broadcast: ["@everyone"] } });
   });
 
   it("finds a secret added to an inline comment, and masks it in the quote", () => {
     const comments = [{ ...unchanged[0], body: `${unchanged[0].body} password: hunter22x` }, unchanged[1]];
     const found = reviewRisks(intent, intent.summary, comments);
     expect(found.risks).toEqual(["secret"]);
-    expect(found.quote.secret).toBe("hu…");
+    expect(found.quote.secret).toEqual(["hu…"]);
   });
 
   it("joins the risks of the summary and the comments, and ignores a dropped comment", () => {
@@ -411,7 +411,7 @@ describe("the pause before a review with risky edits is posted (G1)", () => {
   });
 
   it("says everyone on the pull request would see it, not the ticket", () => {
-    expect(riskNote(["broadcast"], { broadcast: "@everyone" }, "the pull request")).toBe("Your edit mentions everyone at “@everyone”. Everyone on the pull request would see it once it is posted.");
+    expect(riskNote(["broadcast"], { broadcast: ["@everyone"] }, "the pull request")).toBe("Your edit mentions everyone at “@everyone”. Everyone on the pull request would see it once it is posted.");
   });
 });
 

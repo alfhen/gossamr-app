@@ -62,7 +62,7 @@ test.describe("first-run orientation", () => {
     await expect(orientation).toContainText("One ticket's work from start to pull request");
     await expect(orientation).toContainText("One Claude Code agent session doing a step: investigate, plan, build or review");
     await expect(orientation).toContainText("The run's own checkout of your repository");
-    await expect(orientation).toContainText("Gossamr posts only what you approve; an agent run with your Claude settings could reach Jira or GitHub on its own. On GitHub, a build runs as you: when Pushing is ticked its prompt asks it to push only its own branch to a draft pull request. That is a request, not a lock; see Agent safety.");
+    await expect(orientation).toContainText("Gossamr posts only what you approve; a Build runs with your Claude settings and could reach Jira or GitHub on its own. On GitHub, a Build runs as you: when Pushing is ticked its prompt asks it to push only its own branch to a draft pull request. That is a request, not a lock; see Agent safety.");
 
     // It takes no focus, and Pip home's keys and footer hints are as they were.
     await expect(orientation.getByRole("button", { name: "Got it" })).not.toBeFocused();

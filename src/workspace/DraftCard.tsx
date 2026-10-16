@@ -30,7 +30,8 @@ import { RetiredDraft } from "./RetiredDraft";
 import { answerProblem, MAX_ANSWER } from "../lib/answer";
 import { answerTitle, editThenSend, isSendKey, NOT_WAITING, useAnswerRun, type AnswerRun } from "./runAnswer";
 import { bodyChangeSize, RewriteView, rewriteBlocked, rewriteEdit, rewriteFields, rewriteWhat, takesBackendText } from "./RewriteDiff";
-import { newRiskQuote, newRisks, riskNote, type Risk, type RiskQuotes } from "../lib/riskyText";
+import { newRiskQuote, newRisks, type Risk, type RiskQuotes } from "../lib/riskyText";
+import { PostingPause } from "./PostingPause";
 import { FromRun, RunName, useFromRunName } from "./RunProvenance";
 
 const BADGE: Record<Proposal["state"]["type"], string> = {
@@ -742,25 +743,7 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
             </button>
           </p>
         )}
-        {pause && open && (
-          <p
-            role="alert"
-            data-post-pause={pause.risks.join(" ")}
-            className="m-0 scroll-mb-12 text-sm text-ws-warn"
-            onKeyDown={(ev) => {
-              // Esc here is Keep editing, not the peek closing over the unsaved text.
-              if (ev.key !== "Escape" || ev.defaultPrevented) return;
-              ev.preventDefault();
-              ev.stopPropagation();
-              keepEditing();
-            }}
-          >
-            {riskNote(pause.risks, pause.quote)}{" "}
-            <button type="button" data-post-pause-keep onClick={keepEditing} className="rounded font-semibold underline hover:bg-ws-hover focus-visible:outline-2 focus-visible:outline-ws-pip">
-              Keep editing
-            </button>
-          </p>
-        )}
+        {pause && open && <PostingPause risks={pause.risks} quote={pause.quote} anyway="Post anyway" working={working || state === "applying"} onKeep={keepEditing} onPost={approve} />}
         {(open || onShow) && (
           <div data-draft-actions className="sticky bottom-0 z-[1] -mx-3 -mb-2.5 flex flex-wrap items-center justify-end gap-2 border-t border-ws-sep bg-ws-win px-3 py-2">
             {onShow && (
@@ -798,21 +781,10 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
                     {working || state === "applying" ? "Sending…" : "Send answer"}
                   </button>
                 )}
-                {!runDraft && !followUp && !reply && (
-                  <button
-                    type="button"
-                    disabled={working || state === "applying" || (intent.type === "comment" && !body.trim()) || (intent.type === "subtasks" && remaining === 0) || rewriteBlock}
-                    onClick={approve}
-                    onKeyDown={(ev) => {
-                      // While paused this button reads "Post anyway": Esc is Keep editing from here too, and only here, so typing in the fields stays theirs.
-                      if (!pause || ev.key !== "Escape" || ev.defaultPrevented) return;
-                      ev.preventDefault();
-                      ev.stopPropagation();
-                      keepEditing();
-                    }}
-                    className={primary}
-                  >
-                    {working || state === "applying" ? "Working…" : pause ? "Post anyway" : action}
+                {/* While the pause shows, its own Post anyway stands in for this button, beside Keep editing. */}
+                {!runDraft && !followUp && !reply && !pause && (
+                  <button type="button" disabled={working || state === "applying" || (intent.type === "comment" && !body.trim()) || (intent.type === "subtasks" && remaining === 0) || rewriteBlock} onClick={approve} className={primary}>
+                    {working || state === "applying" ? "Working…" : action}
                   </button>
                 )}
               </>

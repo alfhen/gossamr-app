@@ -144,7 +144,7 @@ function ReplyQuote({ reply, onShow }: { reply: ReplyInfo; onShow?(id: string): 
         {reply.quote}
       </blockquote>
       {long && (
-        <button type="button" aria-expanded={open} onClick={() => setOpen(!open)} className="justify-self-start text-xs font-semibold text-ws-ink2 hover:underline">
+        <button type="button" aria-expanded={open} aria-label={open ? "Show less of the quoted comment" : "Show more of the quoted comment"} onClick={() => setOpen(!open)} className="justify-self-start text-xs font-semibold text-ws-ink2 hover:underline">
           {open ? "Show less" : "Show more"}
         </button>
       )}

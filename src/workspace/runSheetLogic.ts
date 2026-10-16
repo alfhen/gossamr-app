@@ -23,7 +23,7 @@ export const COPY = {
 export const SAFETY_SUMMARY: readonly { icon: "check" | "hand" | "lock"; text: string }[] = [
   { icon: "check", text: "Investigate, Triage, Plan, Review and Verify only read: Claude Code refuses their edits and writes. Review and Verify may run the repository's tests." },
   { icon: "hand", text: "Build changes code in its own worktree and runs with your own Claude settings, which decide whether it can push a branch or open a pull request. Its prompt asks it to push only when Pushing is ticked, and to stay out of Jira; both are requests, not locks." },
-  { icon: "lock", text: "Gossamr posts to Jira or GitHub only what you approve. An agent run with your Claude settings, which a Build is, could reach Jira or GitHub on its own: your Claude settings, not Gossamr, decide that." },
+  { icon: "lock", text: "Gossamr posts to Jira or GitHub only what you approve. A Build runs with your Claude settings and could reach Jira or GitHub on its own: your Claude settings, not Gossamr, decide that." },
 ];
 
 export interface MayTouch {

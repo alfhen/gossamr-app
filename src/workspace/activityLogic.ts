@@ -375,6 +375,10 @@ export function eventText(e: WorkstreamEvent, label: (id: string | null) => stri
       return `${who} opened the workstream`;
     case "closed":
       return `${who} closed the workstream`;
+    case "reopened":
+      return `${who} reopened the workstream`;
+    case "adopted":
+      return `${who} brought ${(e.detail ?? "runs and drafts").replace(", ", " and ")} on the ticket into the workstream`;
     case "wake":
       return `Pip picked up ${label(e.runId)}`;
     case "autostart": {
@@ -415,7 +419,7 @@ export function eventText(e: WorkstreamEvent, label: (id: string | null) => stri
     case "draft_skipped":
       return `${who} skipped a draft`;
     case "undone":
-      return e.detail === "held" ? `${who} undid holding the workstream` : e.detail === "mode_set" ? `${who} undid a change of mode` : e.detail === "draft_skipped" ? `${who} brought back a skipped draft` : `${who} undid an action`;
+      return e.detail === "held" ? `${who} undid holding the workstream` : e.detail === "mode_set" ? `${who} undid a change of mode` : e.detail === "draft_skipped" ? `${who} brought back a skipped draft` : e.detail === "adopted" ? `${who} put the runs and drafts they brought in back under General` : `${who} undid an action`;
     case "notes_set":
       return "Pip updated its notes";
     case "budget_reset":

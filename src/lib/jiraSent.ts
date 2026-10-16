@@ -64,13 +64,21 @@ const short = (text: string) => {
   return first.length > SHORT ? `${first.slice(0, SHORT - 1).trimEnd()}…` : first;
 };
 
-/** The line after the one `short` picks: a comment's opener is often the same ("Before work starts…"), what follows it is not. A reply of more lines says how many are not shown: "(+N more)". */
+/** A line that starts a bullet or a numbered item: "- Goal?", "• Goal?", "1. Goal?", "2) Goal?". */
+const ITEM = /^(?:[-*•]|\d+[.)])\s/;
+
+/**
+ * The line after the one `short` picks: a comment's opener is often the same ("Before work starts…"), what follows it is not.
+ * A reply of more says how many are not shown: "(+N more)", counting the items when the line shown starts a list (a closing
+ * "Thanks!" or a wrapped line is not an item), else the lines.
+ */
 const after = (text: string) => {
   const all = text.trim().split("\n").map((l) => l.trim()).filter(Boolean);
   const at = all.length > 1 && GREETING.test(all[0]) ? 2 : 1;
   const next = all[at] ?? "";
   const cut = next.length > SHORT ? `${next.slice(0, SHORT - 1).trimEnd()}…` : next;
-  const more = all.length - at - 1;
+  const rest = all.slice(at + 1);
+  const more = ITEM.test(next) ? rest.filter((l) => ITEM.test(l)).length : rest.length;
   return cut && more > 0 ? `${cut} (+${more} more)` : cut;
 };
 
@@ -85,7 +93,7 @@ function descriptionDiff(from: string, to: string): string[] {
  * What a Jira write said, short and whole. Null for an intent that isn't a Jira write. `created` are the keys of the
  * tickets it made (`Proposal.created`): a subtasks entry names each, entry `i` for summary `i`.
  */
-export function sentWhat(intent: Intent, label: string | null, created: readonly ItemRef[] = []): { kind: SentKind; summary: string; second?: string; detail: string[] } | null {
+export function sentWhat(intent: Intent, label: string | null, created: readonly ItemRef[] = []): { kind: SentKind; label?: string; summary: string; second?: string; detail: string[] } | null {
   switch (intent.type) {
     case "comment": {
       const text = docText(intent.body);
@@ -99,18 +107,19 @@ export function sentWhat(intent: Intent, label: string | null, created: readonly
       // An edit that only adds is said as an addition, and one on an empty description as a new description.
       const empty = !intent.body?.fromText.trim();
       const onlyAdds = !body.some((l) => l.startsWith("− "));
-      const [summary, lead] = !intent.body
-        ? [`Title changed to ${intent.title?.to ?? ""}`, null]
+      // The pill says the same kind of change the summary does: "Description edit" over "Description added" was two words for one thing.
+      const [summary, lead, pill] = !intent.body
+        ? [`Title changed to ${intent.title?.to ?? ""}`, null, "Title change"]
         : empty
-          ? [`Description added${intent.title ? " and title changed" : ""}`, "The new description:"]
+          ? [`Description added${intent.title ? " and title changed" : ""}`, "The new description:", "New description"]
           : onlyAdds
-            ? [`Added to the description${intent.title ? " and title changed" : ""}`, "Added to the description:"]
-            : [`Description rewritten${intent.title ? " and title changed" : ""}`, "Description, as it read and as it now reads:"];
+            ? [`Added to the description${intent.title ? " and title changed" : ""}`, "Added to the description:", "Description addition"]
+            : [`Description rewritten${intent.title ? " and title changed" : ""}`, "Description, as it read and as it now reads:", "Description rewrite"];
       const parts = [intent.title && `Title: ${intent.title.from} → ${intent.title.to}`, lead].filter((x): x is string => !!x);
       // What the edit put in: the first line it added, which says more than "Description added".
       const added = body.find((l) => l.startsWith("+ ") && l.slice(2).trim())?.slice(2).trim() ?? "";
       const second = added.length > SHORT ? `${added.slice(0, SHORT - 1).trimEnd()}…` : added;
-      return { kind: "description", summary, ...(second ? { second } : {}), detail: [...parts, ...body] };
+      return { kind: "description", label: pill, summary, ...(second ? { second } : {}), detail: [...parts, ...body] };
     }
     case "subtasks": {
       const named = intent.summaries.map((s, i) => (created[i] ? `${created[i].key} ${s}` : s));
@@ -142,7 +151,8 @@ function fromWords(p: Proposal, labels: readonly (readonly [string, string])[], 
   }
   if (p.origin.type === "chat") {
     const key = p.createdBy === "pip" ? (targetOf(p.intent)?.key ?? null) : null;
-    return p.createdBy === "pip" ? (key ? `Pip, on ${key}` : "Pip's conversation") : workstreamOf(p) ? "Gossamr" : "the conversation";
+    // What Gossamr drafted at the person's ask ("Ask the reporter now") is named by that, not by Gossamr again: the line before says who drafted it.
+    return p.createdBy === "pip" ? (key ? `Pip, on ${key}` : "Pip's conversation") : workstreamOf(p) ? "your request" : "the conversation";
   }
   return p.origin.type === "autopilot" ? "the autopilot" : "the board";
 }

@@ -49,7 +49,7 @@ test("Open in Pip puts the cursor in the workstream's conversation, and Close, o
 
   await peek.getByRole("button", { name: "Close…" }).click();
   const confirm = peek.getByRole("group", { name: "Close this workstream" });
-  await expect(confirm).toContainText("Its agents and drafts are kept.");
+  await expect(confirm).toContainText("Its agents and drafts are kept in General.");
   await confirm.getByRole("button", { name: "Keep" }).click();
   await expect(pipConversation(page)).toHaveText(/^Workstream: CA-401 /);
 

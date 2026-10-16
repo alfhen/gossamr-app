@@ -180,6 +180,7 @@ function GroupRow({ group: g, now, onPick, openByDefault }: { group: NeedGroup; 
             data-needs-you-more
             aria-expanded={expanded}
             aria-controls={list}
+            aria-label={expanded ? `Show less of what needs you in ${g.title}` : `+${g.count - 1} more that need you in ${g.title}`}
             onClick={() => usePipHome.getState().setExpanded(gid, !expanded)}
             className="rounded px-1 font-semibold text-ws-accent hover:underline focus-visible:outline-2 focus-visible:outline-ws-pip"
           >
