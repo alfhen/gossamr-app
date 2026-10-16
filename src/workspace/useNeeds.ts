@@ -61,7 +61,10 @@ function useReporterAsks(): Record<string, ReporterAsk> {
   );
   const [asks, setAsks] = useState<Record<string, ReporterAsk>>({});
   useEffect(() => {
-    if (!backend || !stops) return void setAsks({});
+    // What was read for the decisions before goes now, so a stale ask is never quoted while the new read is on its way.
+    lastAsked = {};
+    setAsks({});
+    if (!backend || !stops) return;
     let live = true;
     const ids = stops.split("\t").map((h) => h.split("\n")[0]);
     void Promise.all(ids.map((id) => backend.workstreamsEvents(id).then((events) => [id, reporterAsk(events)] as const, () => [id, null] as const))).then((read) => {
