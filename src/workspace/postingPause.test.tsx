@@ -5,9 +5,14 @@ import { PostingPause } from "./PostingPause";
 const render = (anyway = "Post anyway") => renderToStaticMarkup(<PostingPause risks={["secret"]} quote={{ secret: ["hu…", "gh…"] }} anyway={anyway} onKeep={() => {}} onPost={() => {}} />);
 
 describe("the posting pause (G26)", () => {
-  it("keeps both choices inside the alert, Keep editing first and the only primary button", () => {
+  it("keeps both choices in a group, Keep editing first and the only primary button, with the alert on the note alone (G14)", () => {
     const html = render();
-    const alert = /<div role="alert"[^>]*>([\s\S]*)<\/div>$/.exec(html)?.[1] ?? "";
+    const alert = /<div role="group"[^>]*>([\s\S]*)<\/div>$/.exec(html)?.[1] ?? "";
+    const id = /<p id="([^"]+)" role="alert"/.exec(html)?.[1];
+    expect(id).toBeTruthy();
+    expect(html).toContain(`aria-labelledby="${id}"`);
+    expect(html.match(/role="alert"/g)).toHaveLength(1);
+    expect(html.match(new RegExp(`aria-describedby="${id}"`, "g"))).toHaveLength(2);
     expect(alert).toContain("Keep editing");
     expect(alert).toContain("Post anyway");
     expect(alert.indexOf("Keep editing")).toBeLessThan(alert.indexOf("Post anyway"));

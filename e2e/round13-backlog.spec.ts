@@ -164,7 +164,7 @@ test.describe("the reporter question draft (G25, G26, G29)", () => {
     expect(await jiraWrites(page)).toEqual([]);
   });
 
-  test("pauses on two secrets with both buttons in the alert, Keep editing first, and quotes each", async ({ page }) => {
+  test("pauses on two secrets with both buttons in the group, the note the alert, Keep editing first, and quotes each", async ({ page }) => {
     test.setTimeout(120_000);
     const draft = await reporterDraft(page);
     await draft.getByRole("button", { name: "Edit" }).click();
@@ -173,7 +173,8 @@ test.describe("the reporter question draft (G25, G26, G29)", () => {
     await draft.getByRole("button", { name: "Done editing" }).click();
     await draft.getByRole("button", { name: "Post comment" }).click();
     const pause = draft.locator("[data-post-pause]");
-    await expect(pause).toHaveAttribute("role", "alert");
+    await expect(pause).toHaveAttribute("role", "group");
+    await expect(pause.locator("p[role=alert]")).toHaveCount(1);
     await expect(pause).toBeVisible();
     await expect(pause).toContainText("like a password, key or token at “hu…” and “gh…”.");
     await expect(pause).not.toContainText("hunter2");
@@ -202,7 +203,7 @@ test.describe("the reporter question draft (G25, G26, G29)", () => {
     await page.keyboard.press("Enter");
     const entry = page.locator("[data-jira-sent] [data-sent-entry]").first();
     await expect(entry).toBeVisible();
-    await expect(entry.locator("[data-sent-edited]")).toHaveText("Gossamr drafted it; posted without changes");
+    await expect(entry.locator("[data-sent-edited]")).toHaveText("Gossamr drafted it; posted without changes.");
     await expect(entry.locator("[data-sent-from]")).toContainText("from your request, in the workstream");
     await expect(entry.locator("[data-sent-from]")).not.toContainText("Gossamr");
   });

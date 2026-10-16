@@ -361,12 +361,23 @@ export function AgentsScreen({ runs, status, error, environment, filters, select
         ))}
       </div>
     );
+  const title = useRef<HTMLHeadingElement>(null);
+  const root = useRef<HTMLDivElement>(null);
+  // The screen opens from the rail or the palette, which leave the keyboard in Pip's composer: a frame later the heading takes it, unless it is already inside the view.
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => {
+      if (!root.current?.contains(document.activeElement)) title.current?.focus();
+    });
+    return () => cancelAnimationFrame(frame);
+  }, []);
   const waiting = status === "idle" || (status === "loading" && runs.length === 0);
 
   return (
-    <div className="@container flex h-full min-h-0 flex-col">
+    <div ref={root} className="@container flex h-full min-h-0 flex-col">
       <header className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-ws-sep bg-ws-bar px-6 py-2.5">
-        <h1 className="m-0 text-base font-semibold">Agents</h1>
+        <h1 ref={title} tabIndex={-1} className="m-0 rounded text-base font-semibold focus-visible:outline-2 focus-visible:outline-ws-pip">
+          Agents
+        </h1>
         <span aria-live="polite" className="text-sm text-ws-ink3">
           {summaryLine(runs, now, needsYou)}
         </span>

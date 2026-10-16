@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Proposal, WorkstreamActor } from "../types";
 import { ANSWERS_COMMENT_LABEL, READINESS_COMMENT_LABEL } from "./proposals";
-import { agoText, answersDue, nudgeComment, nudgeOffered, nudgeText, NUDGE_AFTER_DAYS, followWithReply, planDue, replyComment, replyExcerpt, REPLY_EXCERPT, reporterFollow, reporterReplies, waitedDays, waitingOnReporterText } from "./reporterWait";
+import { agoText, answersDue, nudgeComment, nudgeOffered, nudgeText, NUDGE_AFTER_DAYS, followWithReply, planDue, replyComment, replyExcerpt, REPLY_EXCERPT, reporterAsk, reporterFollow, reporterReplies, waitedDays, waitingOnReporterText } from "./reporterWait";
 import { NUDGE_COMMENT_LABEL } from "./proposals";
 import fixtures from "./reporterWait.fixtures.json";
 
@@ -37,6 +37,22 @@ describe("the reporter's reply as a quote (G15)", () => {
     expect(replyComment(comments, at(9))).toEqual({ id: "b", excerpt: "Second" });
     expect(replyComment(comments, at(7))).toBeNull();
     expect(replyComment(comments, null)).toBeNull();
+  });
+});
+
+describe("reporterAsk", () => {
+  const ask = [line(1, "person", "readiness_asked", "d1"), line(2, "person", "draft_approved", "d1")];
+
+  it("is the approval time of the newest ask and of a nudge after it, and outlives the ticket changing", () => {
+    expect(reporterAsk([])).toBeNull();
+    expect(reporterAsk([line(1, "person", "readiness_asked", "d1")])).toBeNull();
+    expect(reporterAsk(ask)).toEqual({ asked: at(2), nudged: null });
+    const nudge = [line(3, "person", "reporter_nudged", "n1"), line(4, "person", "draft_approved", "n1")];
+    expect(reporterAsk([...ask, ...nudge])).toEqual({ asked: at(2), nudged: at(4) });
+    expect(reporterAsk([...ask, ...nudge, line(5, "supervisor", "basis_drifted")])).toEqual({ asked: at(2), nudged: at(4) });
+    // Asking again starts over; answering or planning anyway ends it.
+    expect(reporterAsk([...ask, ...nudge, line(5, "person", "readiness_asked", "d2"), line(6, "person", "draft_approved", "d2")])).toEqual({ asked: at(6), nudged: null });
+    expect(reporterAsk([...ask, line(3, "person", "readiness_answered")])).toBeNull();
   });
 });
 

@@ -13,6 +13,9 @@ export function mentionNote(mentions: readonly Pick<Mention, "name">[]): string 
   return `Posts as you; Jira notifies ${who}.`;
 }
 
+/** The app-side note by a description update's Update button: that it writes to Jira as the person, and who Jira tells. `what` is `rewriteWhat`: "description", "title" or "title and description". App text, not Jira's. */
+export const rewriteNote = (what: string) => `Changes the ticket's ${what} in Jira as you; Jira notifies its watchers.`;
+
 export interface ActiveQuery {
   /** Index of the `@` that starts the mention. */
   start: number;

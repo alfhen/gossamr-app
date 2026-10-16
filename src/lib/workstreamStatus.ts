@@ -131,9 +131,12 @@ export function answersOwed(id: string, events: readonly WorkstreamEvent[] | und
 /** The detail an Idle workstream carries while the word check finds its ticket thin (a notice, never a need). */
 export const UNCLEAR_DETAIL = "may be unclear";
 /** The pill's hint: the state's own, and for an Idle workstream flagged "may be unclear", what that means. */
-export const hintFor = (status: Pick<WorkstreamStatus, "state" | "detail">): string => (status.state === "idle" && status.detail === UNCLEAR_DETAIL ? `${STATUS_HINT.idle} ${UNCLEAR_HINT}` : STATUS_HINT[status.state]);
+export const hintFor = (status: Pick<WorkstreamStatus, "state" | "detail">): string =>
+  status.state === "idle" && status.detail === UNCLEAR_DETAIL ? `${STATUS_HINT.idle} ${UNCLEAR_HINT}` : status.state === "idle" && status.detail === REPLIED_DETAIL ? REPLIED_HINT : STATUS_HINT[status.state];
 /** What an idle row says once the reporter has answered on the ticket and the person has not chosen yet: the answer is the news. */
 export const REPLIED_DETAIL = "reporter replied";
+/** The pill's hint for it: the Idle hint would say nothing waits on the person, next to "reporter replied". */
+export const REPLIED_HINT = "The reporter answered on the ticket. Read the reply, then choose what comes next; nothing starts on its own.";
 
 /** How long ago the reporter was asked, as the pill's detail: a bare "0d" does not say what it counts. */
 const askedText = (days: number) => (days === 0 ? "asked today" : days === 1 ? "asked yesterday" : `asked ${days} days ago`);

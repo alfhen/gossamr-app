@@ -5,7 +5,7 @@ import { docFromText } from "../lib/docs";
 import type { Proposal } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { setLiveDraft } from "./draftLive";
-import { keepEditsOfDraft } from "./DraftCard";
+import { keepEditsOfDraft, keepEditsOnLeave, keptEditsOfDraft } from "./DraftCard";
 import { keyPlan, openNeed, setPaneIntent, takePaneIntent } from "./needsActions";
 import { usePipHome } from "./pipHomeStore";
 import { useTabs } from "./tabsStore";
@@ -105,6 +105,32 @@ describe("a then Enter on a comment draft (G1)", () => {
       keepEditsOfDraft("p1", {});
     }
     expect(plan()).toBe("ask");
+  });
+
+  it("opens the card when an edit finished with Done editing was kept as the card went, and not for one with nothing typed or no longer pending (G1)", () => {
+    keepEditsOnLeave("p1", "pending", {});
+    expect(keptEditsOfDraft("p1")).toBeUndefined();
+    keepEditsOnLeave("p1", "applied", { body: { text: "Edited text", mentions: [] } });
+    expect(keptEditsOfDraft("p1")).toBeUndefined();
+    try {
+      keepEditsOnLeave("p1", "pending", { body: { text: "Edited text", mentions: [] } });
+      expect(keptEditsOfDraft("p1")?.body?.text).toBe("Edited text");
+      expect(keyPlan(draftNeed, "approve")).toEqual({ type: "open", edit: false });
+    } finally {
+      keepEditsOfDraft("p1", {});
+    }
+  });
+
+  it("keeps the edits of sibling drafts apart (G1)", () => {
+    keepEditsOnLeave("p1", "pending", { body: { text: "One", mentions: [] } });
+    keepEditsOnLeave("p2", "pending", { message: "Two" });
+    try {
+      expect(keptEditsOfDraft("p1")?.body?.text).toBe("One");
+      expect(keptEditsOfDraft("p2")?.message).toBe("Two");
+    } finally {
+      keepEditsOfDraft("p1", {});
+      keepEditsOfDraft("p2", {});
+    }
   });
 
   it("opens an answers draft whose card is not on screen when its text would stop at the pause", () => {

@@ -72,6 +72,13 @@ const screen = (over: Partial<AgentsScreenProps> = {}) =>
     />,
   );
 
+describe("opening Agents (G9)", () => {
+  it("makes the h1 a place focus can be sent to, and sends it there as the screen mounts", () => {
+    expect(screen()).toMatch(/<h1 tabindex="-1"[^>]*>\s*Agents\s*<\/h1>/);
+    expect(readFileSync(new URL("./AgentsView.tsx", import.meta.url), "utf8")).toMatch(/requestAnimationFrame\([\s\S]{0,200}title\.current\?\.focus\(\)/);
+  });
+});
+
 const articles = (html: string) => html.match(/<article[\s\S]*?<\/article>/g) ?? [];
 
 const run = (state: RunState, over: Partial<Run> = {}): Run => ({ ...eight()[0], id: `r-${state}`, state, needs: null, lastDetail: null, tokens: null, result: null, error: null, lastProgressAt: iso(1), queuedAt: iso(10), endedAt: null, ...over });

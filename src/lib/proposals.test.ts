@@ -219,6 +219,19 @@ describe("the comments about a ticket's open questions", () => {
 });
 
 describe("answersProvenance", () => {
+  it("never quotes a pasted secret in full, and cuts what it shows (G5)", () => {
+    const token = `ghp_${"a1B2".repeat(9)}`;
+    const line = answersProvenance(`Q. My answers: use ${token} for the export`);
+    expect(line).toContain("“use gh… for the export”");
+    expect(line).not.toContain(token);
+    expect(line).not.toContain("ghp_");
+    const pass = answersProvenance("My answers: the password: hunter2secret works");
+    expect(pass).toContain("password: hu…");
+    expect(pass).not.toContain("hunter2secret");
+    // The 80-character cut counts the masked text, so the quote still fills up.
+    expect(answersProvenance(`My answers: ${token} ${"word ".repeat(40)}`)).toContain("gh… word word");
+  });
+
   it("quotes the start of the reply after My answers:, and is words for the app, never for Jira", () => {
     const line = answersProvenance("CA-401's open questions: “Who is it for?”. My answers:   It is for\nthe winback team. ");
     expect(line).toBe("Drafted from your reply “It is for the winback team.” in this conversation, each answer under its question. Read and edit it before you approve.");

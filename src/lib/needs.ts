@@ -5,6 +5,8 @@ import { docText } from "./docs";
 import { parsePermission, permissionOffer, readAs } from "./permission";
 import { inWorkstreamPane, isAnswersDraft, isReporterNudge, isReporterQuestions, targetOf, workstreamOf } from "./proposals";
 import { humanDuration } from "./runNames";
+import { agoText, type ReporterAsk } from "./reporterWait";
+import { maskSecrets } from "./riskyText";
 import { isHeldByYou, shortHeld, stepsOf } from "./workstreamHold";
 import { STAGE_LABEL, runWorkstream } from "./workstreamStage";
 
@@ -94,6 +96,8 @@ export interface NeedsInput {
   proposals: readonly Proposal[];
   /** The runs whose failure (or stop, or unclear state) the person dismissed. They are the only way a failure goes without being dealt with. */
   dismissed: ReadonlySet<string>;
+  /** When the reporter was asked, and nudged, by workstream id, where that is known (`reporterAsk`): the readiness decision says so. */
+  asked?: Readonly<Record<string, ReporterAsk>>;
   /** When each held workstream was last held, by id, where that is known; otherwise its `createdAt` stands in. */
   heldAt?: Readonly<Record<string, string>>;
   /** A ticket's title by its key, when it is cached. */
@@ -302,6 +306,19 @@ const sentence = (text: string) => clip(text).replace(/[.!?…]+$/, "") + ".";
 /** The draft intents whose card has an Edit. */
 const EDITABLE: ReadonlySet<Intent["type"]> = new Set(["comment", "rewrite", "create", "subtasks", "githubReview", "followUp", "runAnswer"]);
 
+/** A comment draft with no run behind it, told apart by its first words (a secret masked first): `Draft comment: “Thanks for the…”`. */
+function commentTitle(body: Parameters<typeof docText>[0]): string {
+  const words = maskSecrets(docText(body)).trim().split(/\s+/).filter(Boolean);
+  return words.length ? `${DRAFT_TEXT.comment}: “${words.slice(0, COMMENT_WORDS).join(" ")}${words.length > COMMENT_WORDS ? "…" : ""}”` : DRAFT_TEXT.comment;
+}
+const COMMENT_WORDS = 6;
+
+/**
+ * What a "Keep waiting" is remembered under: this quiet spell of the run (it ends when the run makes progress), so a later
+ * quiet spell, or a failure of the same run, still needs the person.
+ */
+export const quietKey = (run: Pick<Run, "id" | "lastProgressAt">) => `quiet:${run.id}@${run.lastProgressAt}`;
+
 /**
  * Everything waiting on the person across the open workstreams and General, highest rank first: a decision (an escalation,
  * a plan or description to approve, a workstream that used its automatic steps, a ticket the triage found not clear enough to plan), then what is stuck (a permission, a question, a sign-in, a failure, a run stopped at
@@ -313,7 +330,7 @@ const EDITABLE: ReadonlySet<Intent["type"]> = new Set(["comment", "rewrite", "cr
  * possible continuation and an unclear run stay until the person deals with them: Retry, a fix, a resume, or a Dismiss
  * (`dismissed`); looking at them clears nothing.
  */
-export function needs({ workstreams, runs, proposals, dismissed, heldAt, titleOf, now }: NeedsInput): Need[] {
+export function needs({ workstreams, runs, proposals, dismissed, heldAt, asked, titleOf, now }: NeedsInput): Need[] {
   const kept = workstreamTitles(workstreams);
   const snapped = snapshotTitles(runs, proposals);
   const titleFor = (key: string | null | undefined) => (key ? titleOf?.(key)?.trim() || kept.get(key) || snapped.get(key) : undefined);
@@ -367,7 +384,7 @@ export function needs({ workstreams, runs, proposals, dismissed, heldAt, titleOf
     const label = from && ws?.labels.find(([id]) => id === from)?.[1];
     const step = from ? runs.find((r) => r.id === from)?.spec.kind : undefined;
     const what = DRAFT_TEXT[p.intent.type].replace(/^Draft /, "");
-    const title = isReporterQuestions(p) ? "Questions for the reporter" : isReporterNudge(p) ? "Nudge for the reporter" : isAnswersDraft(p) ? "Answers to the open questions" : label ? (step ? `${label} ${STAGE_LABEL[step].toLowerCase()} · ${what}` : `${label} ${what}`) : DRAFT_TEXT[p.intent.type];
+    const title = isReporterQuestions(p) ? "Questions for the reporter" : isReporterNudge(p) ? "Nudge for the reporter" : isAnswersDraft(p) ? "Answers to the open questions" : label ? (step ? `${label} ${STAGE_LABEL[step].toLowerCase()} · ${what}` : `${label} ${what}`) : step ? `${STAGE_LABEL[step]} · ${what}` : p.intent.type === "comment" && !from ? commentTitle(p.intent.body) : DRAFT_TEXT[p.intent.type];
     const by = label ? (step ? `${label} ${STAGE_LABEL[step].toLowerCase()}` : label) : p.createdBy === "pip" ? "Pip" : p.createdBy === "autopilot" ? "The autopilot" : p.createdBy === "agent" ? "An agent" : "You";
     // The questions to a reporter are Gossamr's words around the triage's own, and the person's choice: say so.
     const asked = isReporterQuestions(p);
@@ -528,7 +545,7 @@ export function needs({ workstreams, runs, proposals, dismissed, heldAt, titleOf
       });
     } else if (run.state === "working") {
       const quiet = quietMinutes(run, now);
-      if (quiet === null) continue;
+      if (quiet === null || dismissed.has(quietKey(run))) continue;
       out.push({
         ...base,
         group: "unblock",
@@ -537,7 +554,7 @@ export function needs({ workstreams, runs, proposals, dismissed, heldAt, titleOf
         why: `${name} has made no progress for ${humanDuration(quiet)}.`,
         ifYouWait: "It carries on if it is only slow; nothing is stopped for you.",
         primary: action("open", "Open in Terminal"),
-        secondary: [],
+        secondary: [action("dismiss", "Keep waiting")],
         batchable: false,
       });
     }
@@ -607,16 +624,20 @@ export function needs({ workstreams, runs, proposals, dismissed, heldAt, titleOf
     if (!r) continue;
     const key = v.workstream.itemKey;
     // The ticket changed, or the reporter replied, while the person waited: the question is back, as a choice to plan now or ask again.
+    // The reporter was asked before, and has not answered unless this is their reply: say so before the questions.
+    const ask = v.workstream.id in (asked ?? {}) && !r.replied ? asked![v.workstream.id] : null;
+    const when = new Date(now);
+    const already = ask ? `You asked the reporter ${agoText(ask.asked, when)}${ask.nudged ? ` and nudged ${agoText(ask.nudged, when)}` : ""}; they have not answered. ` : "";
     out.push({
       key: `readiness:${r.triageRun}`,
       group: "decide",
       kind: "readiness",
       ...where(v.workstream.id, key),
       title: r.replied ? `${key ?? "This ticket"}: the reporter replied, plan now?` : r.changed ? `${key ?? "This ticket"} changed: plan now?` : `${key ?? "This ticket"} isn't clear enough to plan`,
-      why: r.replied ? `The reporter replied on ${key ?? "the ticket"} while you waited. ${readinessWhy(r)}` : r.changed ? `${key ?? "The ticket"} changed while you waited for the reporter. ${readinessWhy(r)}` : readinessWhy(r),
+      why: r.replied ? `The reporter replied on ${key ?? "the ticket"} while you waited. ${readinessWhy(r)}` : r.changed ? `${key ?? "The ticket"} changed while you waited for the reporter. ${already}${readinessWhy(r)}` : `${already}${readinessWhy(r)}`,
       ifYouWait: "No plan starts until you choose; nothing is posted to Jira.",
       at: r.at,
-      primary: r.changed ? action("planAnyway", "Plan now") : action("askReporter", "Ask the reporter"),
+      primary: r.changed ? action("planAnyway", "Plan now") : action("askReporter", ask ? "Ask again" : "Ask the reporter"),
       secondary: r.changed ? [action("askReporter", "Still unclear (ask again)")] : [action("answerSelf", "I'll answer"), action("planAnyway", "Plan anyway")],
       target: { type: "workstream" },
       batchable: false,

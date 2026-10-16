@@ -3,6 +3,7 @@ import { MockBackend } from "../backend/mock";
 import { AUTOSTART_DEFAULTS, HELD_BUDGET, HELD_PERSON, HELD_RESTART, TRIPWIRE } from "../types";
 import type { Intent, ItemRef, Proposal, Run, RunKind, RunState, WorkstreamRule, WorkstreamStage, WorkstreamView } from "../types";
 import { needs as buildNeeds, type Need } from "./needs";
+import { docFromText } from "./docs";
 import { approvalStartsBuild, fixRoundOnPost, nextStep, reviewPostFixRound } from "./nextStep";
 import { budgetView } from "./workstreamHold";
 
@@ -213,7 +214,7 @@ describe("nextStep when the person is waited on", () => {
   });
 
   it("does not hide a working run behind a draft that only needs approving, but shows it once nothing works", () => {
-    const draft = { ...applied("d1", "b"), state: { type: "pending" } as const, intent: { type: "comment", item: ref("CA-401"), body: "Hi", mentions: [] } as unknown as Intent, origin: { type: "chat", requestId: "q", workstream: "ws-1" } } as Proposal;
+    const draft = { ...applied("d1", "b"), state: { type: "pending" } as const, intent: { type: "comment", item: ref("CA-401"), body: docFromText("Hi"), mentions: [] } as unknown as Intent, origin: { type: "chat", requestId: "q", workstream: "ws-1" } } as Proposal;
     expect(next([run("b", "build", "working")], {}, [draft])?.kind).toBe("auto");
     const idle = next([run("b", "build", "done")], { stage: "build", rules: { build_review: false } }, [draft]);
     expect(idle?.kind).toBe("waiting");
@@ -221,7 +222,7 @@ describe("nextStep when the person is waited on", () => {
   });
 
   it("is not waiting on a draft while a step is queued or about to start by a rule; it is once the line would be idle", () => {
-    const draft = { ...applied("d1", "b"), state: { type: "pending" } as const, intent: { type: "comment", item: ref("CA-401"), body: "Hi", mentions: [] } as unknown as Intent, origin: { type: "chat", requestId: "q", workstream: "ws-1" } } as Proposal;
+    const draft = { ...applied("d1", "b"), state: { type: "pending" } as const, intent: { type: "comment", item: ref("CA-401"), body: docFromText("Hi"), mentions: [] } as unknown as Intent, origin: { type: "chat", requestId: "q", workstream: "ws-1" } } as Proposal;
     expect(next([run("b", "build", "queued")], { stage: "build" }, [draft])).toMatchObject({ kind: "auto", need: null });
     // The build has finished and build_review is on: a review is about to start.
     expect(next([run("b", "build", "done")], { stage: "build", rules: { build_review: true } }, [draft])).toMatchObject({ kind: "auto", need: null, text: "Next: a review starts automatically after R1 (Build)." });
@@ -400,7 +401,7 @@ describe("nextStep while the workstream waits on the reporter", () => {
     expect(needsOf(v, runs)).toEqual([]);
     expect(line(waiting(runs, { stage: "triage" }, iso(60 * 24 * 2)), runs)?.nudge).toBe(true);
     expect(line(waiting(runs, { stage: "triage" }, iso(60 * 24 * 2 - 60)), runs)?.nudge).toBeUndefined();
-    const drafted = { ...applied("n1", "b"), state: { type: "pending" } as const, label: "Nudge for the reporter", createdBy: "user", intent: { type: "comment", item: ref("CA-401"), body: "Hi", mentions: [] } as unknown as Intent, origin: { type: "chat", requestId: "nudge:w", workstream: v.workstream.id } } as Proposal;
+    const drafted = { ...applied("n1", "b"), state: { type: "pending" } as const, label: "Nudge for the reporter", createdBy: "user", intent: { type: "comment", item: ref("CA-401"), body: docFromText("Hi"), mentions: [] } as unknown as Intent, origin: { type: "chat", requestId: "nudge:w", workstream: v.workstream.id } } as Proposal;
     expect(line(v, runs, [drafted])?.nudge).toBeUndefined();
   });
 
