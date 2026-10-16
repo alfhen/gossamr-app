@@ -507,6 +507,18 @@ describe("timeline: the audit", () => {
     expect(asked.target).toEqual({ type: "draft", id: "d1" });
   });
 
+  it("keeps the choice to ask before the draft it made and the post that followed, even when it was recorded a moment after the draft (G22)", () => {
+    for (const asked of [0, -0.5]) {
+      const list = timeline({
+        drafts: [draft("d1", comment("CA-401"), 4, { state: { type: "applied" }, updatedAgo: 4 })],
+        events: [line("clarity_asked", 4 + asked, { proposalId: "d1" }), line("draft_approved", 4, { proposalId: "d1" })],
+      });
+      const at = (match: (e: (typeof list)[number]) => boolean) => list.findIndex(match);
+      expect(at((e) => e.action === "clarity_asked")).toBeLessThan(at((e) => e.kind === "draft"));
+      expect(at((e) => e.action === "clarity_asked")).toBeLessThan(at((e) => e.text.includes("approved a comment")));
+    }
+  });
+
   it("collapses the same line again and again into one that says how many", () => {
     const list = timeline({ events: [line("rule_set", 10), line("rule_set", 9), line("rule_set", 8), line("held", 7), line("rule_set", 6)] });
     expect(list.map((e) => e.text)).toEqual(["You changed an automatic step (3 times)", "You held the workstream", "You changed an automatic step"]);

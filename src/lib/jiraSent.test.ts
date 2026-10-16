@@ -208,4 +208,14 @@ describe("what the row shows of a comment to the reporter", () => {
     const out = jiraSent({ proposals: [asked("a8", first), asked("a2", again)], events: {}, workstreams: [] });
     expect(out.map((e) => e.label)).toEqual(["Follow-up questions to the reporter", "Questions to the reporter"]);
   });
+
+  it("masks a posted secret everywhere it is shown and says so, keeping the rest of the text", () => {
+    const out = jiraSent({ proposals: [draft("k1", comment("CA-401", "Here is the login.\n\npassword: hunter22secret\n\nThanks")), draft("k2", comment("CA-401", "Plain text"))], events: {}, workstreams: [] });
+    const [a, b] = out.sort((x, y) => x.id.localeCompare(y.id));
+    expect(a.masked).toBe(true);
+    expect(a.detail).toEqual(["Here is the login.", "", "password: hu…", "", "Thanks"]);
+    expect(a.second).toBe("password: hu… (+1 more)");
+    expect(JSON.stringify(a)).not.toContain("hunter22secret");
+    expect(b.masked).toBe(false);
+  });
 });

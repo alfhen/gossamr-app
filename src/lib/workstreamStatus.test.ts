@@ -61,6 +61,8 @@ describe("workstreamStatus: every state", () => {
     expect(at(view({}, { heldReason: `${TRIPWIRE}basis_drift`, drifted: ["description"] })).detail).toBe("the ticket's description changed in Jira");
     expect(at(view({}, { heldReason: HELD_PERSON }))).toMatchObject({ state: "held", word: "Held by you", detail: null });
     expect(at(view({}, { heldReason: HELD_ALL }))).toMatchObject({ state: "held", word: "Held by you (Hold all)", detail: null });
+    // The reporter was asked before (or after) the hold: the held pill still says so (G25).
+    expect(at(view({ waitingOnReporter: { since: ago(3) } }, { heldReason: HELD_PERSON }))).toMatchObject({ state: "held", word: "Held by you", detail: ON_REPORTER_DETAIL });
   });
 
   it("never says tripwire", () => {

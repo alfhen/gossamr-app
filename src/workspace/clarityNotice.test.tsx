@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { WorkstreamView } from "../types";
-import { ClarityNotice, QuietClarity } from "./WorkstreamControls";
+import { changedLine, ClarityNotice, QuietClarity } from "./WorkstreamControls";
 
 const view = (over: Partial<WorkstreamView> = {}): WorkstreamView =>
   ({ workstream: { id: "w1", connectionId: "c", itemKey: "CA-408", title: "CA-408 Thing", closedAt: null, createdAt: "2026-10-01T10:00:00Z" }, stage: "intake", runs: [], labels: [], budget: {}, clarity: { gaps: ["short", "done"] }, ...over }) as unknown as WorkstreamView;
@@ -27,12 +27,14 @@ describe("the clarity notice", () => {
     expect(renderToStaticMarkup(<ClarityNotice view={view({ reporterReplied: true, changedWhileWaiting: true })} />)).not.toContain("They wrote");
   });
 
-  it("is a labelled group, not a live region that reads its buttons; a short status line says what appeared (G10)", () => {
+  it("is a labelled group, not a live region that reads its buttons; opening it announces nothing, a change does (G10, G28)", () => {
     const html = renderToStaticMarkup(<ClarityNotice view={view()} />);
-    expect(html).toContain('<span role="status" data-clarity-status="true" class="sr-only">CA-408 may be unclear</span>');
+    expect(html).toContain('<span role="status" data-clarity-status="true" class="sr-only"></span>');
+    expect(changedLine("CA-408 may be unclear", "CA-408 may be unclear")).toBe("");
+    expect(changedLine("CA-408 may be unclear", "CA-408: the reporter replied")).toBe("CA-408: the reporter replied");
+    expect(changedLine("CA-408 may be unclear", "")).toBe("");
     expect(html).toMatch(/<div role="group" aria-label="Ticket wording check" data-clarity-notice="w1"/);
     for (const m of html.matchAll(/<(\w+)[^>]*role="status"[^>]*>(.*?)<\/\1>/g)) expect(m[2]).not.toContain("<button");
-    expect(renderToStaticMarkup(<ClarityNotice view={view({ reporterReplied: true })} />)).toContain("CA-408: the reporter replied</span>");
   });
 
   it("has one live region for what it says, whichever way the ticket is flagged (G31)", () => {

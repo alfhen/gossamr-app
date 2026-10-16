@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { maskSecret, newRiskQuote, newRisks, riskNote, risksIn } from "./riskyText";
+import { maskSecret, maskSecrets, newRiskQuote, newRisks, riskNote, risksIn } from "./riskyText";
 
 describe("the pause before posting edited text", () => {
   it("finds a broad mention, and never a mention of a person", () => {
@@ -88,5 +88,12 @@ describe("the pause before posting edited text", () => {
     expect(riskNote(["secret"], { secret: ["hu…"] })).toBe("Your edit looks like a password, key or token at “hu…”. Everyone on the ticket would see it once it is posted.");
     expect(riskNote(["broadcast", "secret"], { broadcast: ["@here"], secret: ["hu…"] })).toBe("Your edit mentions everyone at “@here”. It also looks like a password, key or token at “hu…”. Everyone on the ticket would see it once it is posted.");
     expect(riskNote(["secret"])).not.toContain("“");
+  });
+
+  it("masks each secret in a text and keeps the rest", () => {
+    expect(maskSecrets("Login with password: hunter22secret and retry")).toBe("Login with password: hu… and retry");
+    expect(maskSecrets("token=ghp_abcdefghijklmnopqrstuvwxyz0123 then Bearer abcdefghijklmnopqrstuvwxyz1")).toBe("token=gh… then Bearer ab…");
+    expect(maskSecrets("clone https://bob:s3cretpw@host/repo")).toBe("clone https://bob:s3…@host/repo");
+    expect(maskSecrets("The password reset flow is slow. @everyone")).toBe("The password reset flow is slow. @everyone");
   });
 });

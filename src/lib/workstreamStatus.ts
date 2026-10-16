@@ -170,8 +170,8 @@ export function workstreamStatus(view: WorkstreamView, needs: readonly Pick<Need
   // A hold the system made is one of the needs; when it is the only one the one thing worth saying is why (the hold's own words), else the count.
   // What else the workstream waits on follows the count, so "1 waiting" does not hide that the reporter has been asked too.
   if (waiting > 0) return make("needs-you", [waiting === 1 && ws.heldReason && !byYou ? (shortHeld(ws.heldReason, ws.drifted) ?? `${waiting} waiting`) : `${waiting} waiting`, view.waitingOnReporter && ON_REPORTER_DETAIL, owed && OWED_DETAIL].filter(Boolean).join(" · "));
-  // The person's own hold is quieter than one the system made: it asks nothing, so it is grey, not amber.
-  if (ws.heldReason) return byYou ? { ...make("held", null, shortHeld(ws.heldReason) ?? "Held by you"), tone: "ink" } : make("held", heldDetail(ws.heldReason, view));
+  // The person's own hold is quieter than one the system made: it asks nothing, so it is grey, not amber. It still says when the reporter has been asked.
+  if (ws.heldReason) return byYou ? { ...make("held", view.waitingOnReporter ? ON_REPORTER_DETAIL : null, shortHeld(ws.heldReason) ?? "Held by you"), tone: "ink" } : make("held", heldDetail(ws.heldReason, view));
   if (view.waitingOnReporter) return make("waiting", askedText(waitedDays(view.waitingOnReporter.since, now)));
   const furthest = (pick: (r: Run) => boolean) => own.filter(pick).sort((a, b) => a.queuedAt.localeCompare(b.queuedAt)).pop();
   const going = furthest((r) => RUNNING.has(r.state)) ?? furthest((r) => r.state === "queued");

@@ -75,6 +75,21 @@ const secretPart = (match: string): string =>
 /** A secret for the note: its first two characters and an ellipsis, never the rest. */
 export const maskSecret = (secret: string): string => `${[...secret].slice(0, 2).join("")}…`;
 
+/** `text` with each secret-shaped run's secret part masked (see `maskSecret`) and the rest kept; text without one comes back as it was. */
+export function maskSecrets(text: string): string {
+  let out = "";
+  let from = 0;
+  // Overlapping shapes ("token=ghp_…") are one run: the first, longest one is masked.
+  for (const f of occurrences(text).filter((o) => o.risk === "secret").sort((a, b) => a.at - b.at || b.text.length - a.text.length)) {
+    if (f.at < from) continue;
+    const secret = secretPart(f.text);
+    const start = f.at + f.text.lastIndexOf(secret);
+    out += text.slice(from, start) + maskSecret(secret);
+    from = start + secret.length;
+  }
+  return out + text.slice(from);
+}
+
 /** What the pause quotes for each new risk, in the order they stand in the text: a broad mention as written ("@everyone"), a secret masked ("hu…"). */
 export type RiskQuotes = Partial<Record<Risk, string[]>>;
 

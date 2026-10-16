@@ -511,7 +511,9 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
               ticketKey={key}
               people={people}
               label={`Edit the comment on ${key}`}
-              className="rounded-md border border-ws-sep2 bg-ws-win"
+              // Grows with its text, and never shorter than about six lines: two lines was too little to edit a comment in.
+              fill
+              className="rounded-md border border-ws-sep2 bg-ws-win [&_textarea]:min-h-40"
             />
           ) : (
             <p className="m-0 whitespace-pre-wrap [overflow-wrap:anywhere]">{body}</p>
