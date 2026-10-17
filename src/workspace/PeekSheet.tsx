@@ -27,6 +27,16 @@ import { PeekNotice } from "./WatchNotices";
 import { WorkDocView } from "./WorkDocView";
 import { stageText } from "../lib/workstreamStage";
 import { focusPip, useItemWorkstream, useWorkstreams } from "./workstreamsStore";
+import { useToasts } from "./toasts";
+
+/**
+ * The peek's "Start a workstream": the workstream opens as `start` shows it, which over Pip home is the one selected there, so
+ * closing the peek does not leave General in its place; a note says it started where the Pip pane is not there to show it.
+ */
+export async function startFromPeek(ref: ItemRef) {
+  const started = await useWorkstreams.getState().start(ref);
+  if (started && useTabs.getState().route === "pip") useToasts.getState().push(`Started a workstream on ${ref.key}.`, "info", undefined, { lifetime: 2500 });
+}
 
 const CATEGORY_TONE = {
   todo: "bg-ws-hover text-ws-ink2",
@@ -763,7 +773,7 @@ function OpenPeek({ item, motion, wide, onWide, onMotionEnd }: { item: WorkItem 
             <WorkstreamControl
               item={ref}
               workstream={workstream}
-              onStart={() => void useWorkstreams.getState().start(ref)}
+              onStart={() => void startFromPeek(ref)}
               onOpen={() => focusPip(workstream?.workstream.id)}
               confirmingClose={!!workstream && confirmingClose === workstream.workstream.id}
               onAskClose={(ask) => useWorkstreams.getState().askClose(ask && workstream ? workstream.workstream.id : null)}

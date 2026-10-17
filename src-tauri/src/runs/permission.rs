@@ -43,7 +43,7 @@ use crate::domain::{PermissionAllowed, Run, RunEvent, RunKind, RunState};
 use crate::error::{Error, Result};
 
 /// What a read-only run's prompt says instead of Allow.
-pub const READ_ONLY_REFUSES: &str = "This run is read-only: Claude Code refuses this.";
+pub const READ_ONLY_REFUSES: &str = "This run is read-only, so this command would be refused anyway.";
 /// Why Allow isn't offered for a request Gossamr may not have whole.
 pub const NOT_EXACT: &str = "Gossamr can't show this request whole, so it doesn't offer Allow. Open it in Terminal to read it there.";
 pub const HAS_COMMAND_INSIDE: &str = "This command has a command inside it, so Gossamr can't check what it runs: Gossamr doesn't allow this.";

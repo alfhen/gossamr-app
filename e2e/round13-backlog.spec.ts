@@ -145,7 +145,7 @@ test.describe("a read-only run's permission prompt (G24)", () => {
     await expandAllNeeds(page);
     await needOfKind(page, "permission").click();
     const ask = needsPane(page).locator("[data-permission-ask]");
-    await expect(ask.locator("[data-permission-refusal]")).toContainText("This run is read-only: Claude Code refuses this.");
+    await expect(ask.locator("[data-permission-refusal]")).toContainText("This run is read-only, so this command would be refused anyway.");
     const note = ask.locator("[data-permission-read-only]");
     await expect(note).toHaveText("This is a read-only step, so it can't be allowed. Deny lets it carry on without it.");
     expect(await ask.evaluate((el) => !!(el.querySelector("[data-permission-read-only]")!.compareDocumentPosition(el.querySelector("[data-permission-decisions]")!) & Node.DOCUMENT_POSITION_FOLLOWING))).toBe(true);

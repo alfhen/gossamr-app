@@ -228,7 +228,7 @@ export function PlanMyWeekView({
     >
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
         <h2 id="plan-my-week" className="m-0 min-w-0 flex-1 text-sm font-semibold text-ws-ink">
-          Plan my week <span className="font-normal text-ws-ink3">· {weekLabel(week)}</span>
+          Plan my week <span className="font-normal text-ws-ink3">· {weekLabel(week)}</span> <span data-plan-scope className="font-normal text-ws-ink3">· all your tickets, not only this workstream&apos;s</span>
         </h2>
         <button type="button" data-plan-propose onClick={onPropose} className={`${button} border-transparent text-ws-ink2 underline`}>
           {kept ? "Start over" : "Propose again"}

@@ -177,6 +177,15 @@ test("Allow once on a Build opens it in Terminal for that exact command, and a p
   expect(await mockAttached(page)).toEqual([build.id]);
   expect(await jiraWrites(page)).toEqual(written);
 
+  // Deny on a Build asks first; an open confirm belongs to the request it was opened for, so a new request closes it.
+  await asking(page).getByRole("button", { name: "Deny" }).click();
+  const denyConfirm = asking(page).getByRole("group", { name: "Deny this request" });
+  await expect(denyConfirm).toContainText("Deny this?");
+  await askPermission(page, build.id, "approve Bash: git status");
+  await expect(asking(page)).toContainText("git status");
+  await expect(denyConfirm).toHaveCount(0);
+  expect((await mockRuns(page)).find((r) => r.id === build.id)?.state).toBe("needsPermission");
+
   // On its card in Agents, Stop asks first, as the sheet does: one click beside Deny doesn't abandon the run.
   await page.getByRole("button", { name: /^Agents/ }).click();
   const onCard = page.locator(`main article[data-run-id="${build.id}"]`);
@@ -208,12 +217,13 @@ test("Deny on a read-only run, which is never offered Allow: Claude carries on w
   await item.click();
   await expect(asking(page)).toContainText("R1 wants to run this command:");
   await expect(asking(page).locator("code")).toHaveText("rm -rf node_modules");
-  await expect(asking(page)).toContainText("This run is read-only: Claude Code refuses this.");
+  await expect(asking(page)).toContainText("This run is read-only, so this command would be refused anyway.");
   await expect(asking(page).getByRole("button", { name: /Allow/ })).toHaveCount(0);
   await expect(asking(page).getByRole("button")).toHaveText(["Copy", "Deny", "Stop the run (abandons it)"]);
 
   await asking(page).getByRole("button", { name: "Deny" }).click();
-  await asking(page).getByRole("group", { name: "Deny this request" }).getByRole("button", { name: "Yes, deny" }).click();
+  // A read-only run was refused anyway: one click tells it no, with no confirm step.
+  await expect(asking(page).getByRole("group", { name: "Deny this request" })).toHaveCount(0);
   await expect.poll(async () => (await mockRuns(page)).find((r) => r.id === run.id)?.state).toBe("working");
   expect(await audited(page, "permission_denied")).toEqual([{ actor: "person", runId: run.id, detail: "rm -rf node_modules" }]);
   // Dealt with, it leaves Needs you, and the pane has moved on from it.

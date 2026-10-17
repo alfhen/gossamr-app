@@ -260,7 +260,7 @@ describe("cards", () => {
     expect(build).toContain("git push -u origin worktree-ca-401-fix");
     expect(buttonsOf(build)).toEqual(["Copy", "Allow once in Terminal", "Deny", "Stop the run (abandons it)"]);
     const ro = card({ ...asking, spec: { ...asking.spec, kind: "investigate" } });
-    expect(ro).toContain("This run is read-only: Claude Code refuses this.");
+    expect(ro).toContain("This run is read-only, so this command would be refused anyway.");
     expect(buttonsOf(ro)).toEqual(["Copy", "Deny", "Stop the run (abandons it)"]);
     for (const html of [build, ro]) for (const word of ["Approve", "Nudge", "Always"]) expect(html).not.toContain(word);
   });

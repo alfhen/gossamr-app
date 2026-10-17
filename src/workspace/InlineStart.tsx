@@ -354,6 +354,13 @@ export function InlineStartView({ id, entry, on }: { id: string; entry: InlineEn
           {entry.error}
         </p>
       )}
+      {/* The plain version first; the exact words, flags and checks follow for whoever wants them. */}
+      {/* Only once the review is in: while it loads or after it failed, what the agent may do isn't known yet. */}
+      {review && (
+        <p data-start-summary className="m-0 text-ws-ink">
+          {review.readOnly ? "This agent only reads the code; it can't change anything." : "This agent can change code, in its own copy of the repository and not in your own."} Read what it will be told, then press Start agent. Nothing runs before that.
+        </p>
+      )}
       <WhatAgentsCanDo readOnly={review?.readOnly} />
       {review ? (
         <>
@@ -376,7 +383,8 @@ export function InlineStartView({ id, entry, on }: { id: string; entry: InlineEn
         )
       )}
       <TechnicalDetails preflight={preflight} checking={phase === "loading"} steps={{ trust: on.trustFolder, recheck: on.recheck, rechecking: entry.rechecking }} />
-      <div className="flex flex-wrap items-center gap-2">
+      {/* In the flow, never pinned over the text: it also shows in the Decide pane, whose actions stay where they are read (B4). */}
+      <div data-inline-start-actions className="flex flex-wrap items-center gap-2">
         <Btn
           tone="primary"
           icon="play"

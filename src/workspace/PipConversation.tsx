@@ -26,6 +26,7 @@ import { useAgentsEnabled } from "./agentsFlag";
 import { usePipHome } from "./pipHomeStore";
 import { contextFor, useWorkstreams } from "./workstreamsStore";
 import { useWorkspace } from "../workspaceStore";
+import { maskSecrets } from "../lib/riskyText";
 import { BUILD_ON_GITHUB } from "./githubSafety";
 
 export { PIP_INPUT_ID };
@@ -203,8 +204,8 @@ export function TurnView({ turn, proposals, afterQueued = false }: { turn: Turn;
         </p>
       )}
       <div data-user-bubble className="max-w-[85%] justify-self-end rounded-[14px_14px_4px_14px] bg-ws-accent px-3 py-1.5 whitespace-pre-wrap text-white [overflow-wrap:anywhere]">
-        {turn.shown ?? turn.prompt}
-        {turn.quote && <blockquote className="m-0 mt-1 line-clamp-2 border-l-2 border-white/50 pl-2 text-sm text-white/85">{turn.quote}</blockquote>}
+        {maskSecrets(turn.shown ?? turn.prompt)}
+        {turn.quote && <blockquote className="m-0 mt-1 line-clamp-2 border-l-2 border-white/50 pl-2 text-sm text-white/85">{maskSecrets(turn.quote)}</blockquote>}
       </div>
       {turn.status === "queued" && (
         <div className="flex items-center justify-end gap-1.5 text-sm text-ws-ink3">

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState, type KeyboardEvent } from "react";
 import { BUILD_ON_GITHUB } from "./githubSafety";
 import { usePrefs } from "./prefs";
 
@@ -10,6 +10,14 @@ export const ORIENTATION_TERMS: readonly { term: string; text: string }[] = [
   { term: "Cobweb", text: "Work has happened but Jira has not heard for days. Post an update to clear it." },
   { term: "Status", text: "Each workstream's one word: Needs you, Held, Waiting on reporter, Running, Quiet, Done or Idle. Each status word has a short explanation: hover it, or select its row and a screen reader reads it with the row." },
   { term: "Intake", text: "The first stage of a workstream, before there is a plan." },
+  { term: "Triage", text: "The step that reads the ticket and says whether it is clear enough to plan. Nothing is changed." },
+  { term: "Plan", text: "The step that reads the code and writes what to build. Approving the plan is what lets a Build start." },
+  { term: "Build", text: "The step that changes code, in its own worktree. With Pushing ticked, as it is by default, it is asked to open a draft pull request." },
+  { term: "Review", text: "Three things share the word: the Review step, where an agent checks a Build's changes; a review draft, whose comments go to GitHub only when you approve it; and Review on a draft's button, which opens it to read before you decide." },
+  { term: "Pushing", text: "A setting on a Build: when it is ticked, the Build's prompt asks it to push its own branch to a draft pull request. It is a request, not a lock." },
+  { term: "Held", text: "A workstream with no automatic steps and no Pip wakes: you held it, or something made it stop, such as its steps being used up. Resume lifts it." },
+  { term: "Quiet", text: "Nothing has happened in the workstream for days, or work has happened that Jira has not heard about." },
+  { term: "Idle", text: "Nothing is running and nothing waits on you." },
   { term: "Advise", text: "Pip answers when asked and starts nothing." },
   { term: "Manage", text: "Pip is woken when a step finishes and starts the routine next one on its own, within the workstream's allowance. Advise or Hold stops it." },
   { term: "Hold", text: "Stops Pip waking and any automatic step in one workstream until you Resume. Its agents carry on." },
@@ -47,9 +55,22 @@ export function dismissOrientation() {
 export function PipOrientation({ onDismiss = dismissOrientation, open = false, compact = false }: { onDismiss?(): void; open?: boolean; compact?: boolean }) {
   const [asked, setMore] = useState(open);
   const more = asked && !compact;
+  const words = useRef<HTMLButtonElement>(null);
   const button = "rounded-md border border-ws-sep2 px-2.5 py-px text-sm leading-normal whitespace-nowrap hover:bg-ws-hover focus-visible:outline-2 focus-visible:outline-ws-pip";
   return (
-    <section data-pip-orientation aria-labelledby="pip-orientation" className="grid max-h-[40vh] shrink-0 gap-1.5 overflow-y-auto border-b border-ws-sep bg-ws-bar px-4 py-1.5">
+    <section
+      data-pip-orientation
+      aria-labelledby="pip-orientation"
+      // Esc folds the words away and keeps the keyboard on their button; with them folded it is not the card's.
+      data-esc-local={more ? "" : undefined}
+      onKeyDown={(ev: KeyboardEvent<HTMLElement>) => {
+        if (ev.key !== "Escape" || !more) return;
+        ev.preventDefault();
+        ev.stopPropagation();
+        setMore(false);
+        words.current?.focus();
+      }}
+      className="grid max-h-[40vh] shrink-0 gap-1.5 overflow-y-auto border-b border-ws-sep bg-ws-bar px-4 py-1.5">
       <div className="flex items-center gap-3">
         <p className="m-0 min-w-0 flex-1 text-sm text-ws-ink2">
           <b id="pip-orientation" className="font-semibold text-ws-ink">
@@ -57,7 +78,7 @@ export function PipOrientation({ onDismiss = dismissOrientation, open = false, c
           </b>{" "}
           {ORIENTATION_PURPOSE} {ORIENTATION_SAFETY}
         </p>
-        <button type="button" aria-expanded={more} aria-controls="pip-orientation-more" onClick={() => setMore(!more)} className={button}>
+        <button ref={words} type="button" aria-expanded={more} aria-controls="pip-orientation-more" onClick={() => setMore(!more)} className={button}>
           {ORIENTATION_WORDS}
         </button>
         <button type="button" onClick={onDismiss} className={button}>

@@ -1,7 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
-import { askPermission, askPip, expandNeedsYou, expectToast, homeConversation, homeSettled, mockRuns, needOfKind, needRow, needsPane, needsYouTray, openApp, openPipHome, pipHome, startWorkstream, workstreamRow } from "./support/app";
+import { askPip, expandNeedsYou, expectToast, homeConversation, homeSettled, mockRuns, needOfKind, needRow, needsPane, needsYouTray, openApp, openPipHome, pipHome, startWorkstream, workstreamRow } from "./support/app";
 
-// Fixes from the fourth dogfood round: Deny asks before it tells the agent no, Needs-you titles wrap instead of
+// Fixes from the fourth dogfood round: Deny asks before it tells the agent no on a Build, Needs-you titles wrap instead of
 // truncating, and the Decisions count leaves out bookkeeping.
 
 const stateOf = async (page: Page, id: string) => (await mockRuns(page)).find((r) => r.id === id)?.state;
@@ -19,39 +19,15 @@ async function onPermission(page: Page) {
   return { run, pane };
 }
 
-test.describe("Deny on a permission prompt asks first (F1)", () => {
-  test("one click only asks; Keep waiting and Escape leave the run waiting; Yes, deny goes through and says so", async ({ page }) => {
+test.describe("Deny on a permission prompt (F1)", () => {
+  // A read-only run was refused anyway, so one click tells it no; the confirm step is for a Build (e2e/decisions.spec.ts).
+  test("one click on a read-only run's Deny goes through and says so", async ({ page }) => {
     const { run, pane } = await onPermission(page);
-    await pane.getByRole("button", { name: "Deny", exact: true }).click();
-    const confirm = pane.getByRole("group", { name: "Deny this request" });
-    await expect(confirm).toContainText("Deny this?");
     expect(await stateOf(page, run.id)).toBe("needsPermission");
-
-    await confirm.getByRole("button", { name: "Keep waiting" }).click();
-    await expect(confirm).toHaveCount(0);
-    expect(await stateOf(page, run.id)).toBe("needsPermission");
-
     await pane.getByRole("button", { name: "Deny", exact: true }).click();
-    await expect(confirm).toBeVisible();
-    await page.keyboard.press("Escape");
-    await expect(confirm).toHaveCount(0);
-    expect(await stateOf(page, run.id)).toBe("needsPermission");
-
-    await pane.getByRole("button", { name: "Deny", exact: true }).click();
-    await confirm.getByRole("button", { name: "Yes, deny" }).click();
+    await expect(pane.getByRole("group", { name: "Deny this request" })).toHaveCount(0);
     await expect.poll(() => stateOf(page, run.id)).toBe("working");
     await expectToast(page, /^Denied\. .+ carries on without it\./);
-  });
-
-  test("an open Deny confirm closes when the run asks for something else, so it can't deny the new request", async ({ page }) => {
-    const { run, pane } = await onPermission(page);
-    await pane.getByRole("button", { name: "Deny", exact: true }).click();
-    const confirm = pane.getByRole("group", { name: "Deny this request" });
-    await expect(confirm).toBeVisible();
-    await askPermission(page, run.id, "approve Bash: git status");
-    await expect(pane.locator("[data-permission-ask]")).toContainText("git status");
-    await expect(confirm).toHaveCount(0);
-    expect(await stateOf(page, run.id)).toBe("needsPermission");
   });
 });
 

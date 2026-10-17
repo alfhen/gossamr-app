@@ -32,7 +32,7 @@ import { answerTitle, editThenSend, isSendKey, NOT_WAITING, useAnswerRun, type A
 import { bodyChangeSize, RewriteView, rewriteBlocked, rewriteEdit, rewriteFields, rewriteWhat, takesBackendText } from "./RewriteDiff";
 import { newRiskQuote, newRisks, type Risk, type RiskQuotes } from "../lib/riskyText";
 import { PostingPause } from "./PostingPause";
-import { setLiveDraft } from "./draftLive";
+import { liveDraft, setLiveDraft, touchDrafts, useDraftsRev } from "./draftLive";
 import { focusWhenDrawn } from "./focusDrawn";
 
 import { FromRun, RunName, useFromRunName } from "./RunProvenance";
@@ -217,6 +217,7 @@ const keptEdits = new Map<string, KeptEdits>();
 export function keepEditsOfDraft(id: string, edits: KeptEdits): void {
   if (edits.body || edits.rewrite || edits.message !== undefined || edits.picked) keptEdits.set(id, edits);
   else keptEdits.delete(id);
+  touchDrafts();
 }
 
 /** The edits kept for draft `id`, if any. They stay while the draft can still be shown, so leaving a restored card before posting it doesn't lose them. */
@@ -231,7 +232,15 @@ export function keepEditsOnLeave(id: string, state: ProposalStateKind, edits: Ke
 
 /** Forget the kept edits of draft `id` once it is posted or retired: nothing will show them again. */
 export function settleKeptEdits(id: string, state: ProposalStateKind): void {
-  if (state === "applied" || state === "retired") keptEdits.delete(id);
+  if ((state === "applied" || state === "retired") && keptEdits.delete(id)) touchDrafts();
+}
+
+/** Whether draft `id` holds an edit its stored text doesn't (a mounted card's or one kept for it), and a comment's text as edited; follows the card as it is typed in. */
+export function useEditedDraft(id: string): { edited: boolean; text?: string } {
+  useDraftsRev();
+  const live = liveDraft(id);
+  const kept = keptEditsOfDraft(id);
+  return { edited: !!live?.edited || !!kept, text: live?.text ?? kept?.body?.text };
 }
 
 function DraftCardBody({ proposal: p, statusName, people, working, error, onApprove, onSkip, onReview, onShow, onOpenRun, onDiscuss, pass, onSendBack, answer, onSendAnswer, headingLevel }: DraftCardProps) {
@@ -375,7 +384,7 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
   };
   // The keyboard route from Needs you's list reads this: an edit or a pause waiting means "a, Enter" opens the card and doesn't approve the stored text (G1).
   useEffect(() => {
-    setLiveDraft(p.id, p.state.type === "pending" ? { edited: Object.keys(typed()).length > 0 || edit() !== null, risky: risks().risks.length > 0 } : null);
+    setLiveDraft(p.id, p.state.type === "pending" ? { edited: Object.keys(typed()).length > 0 || edit() !== null, risky: risks().risks.length > 0, ...(intent.type === "comment" && edited.current ? { text: body } : {}) } : null);
   });
   // The latest committed edits and state, for the cleanup below to read as the card goes; set after each commit, never in render.
   const leaving = useRef({ state: p.state.type, edits: typed() });

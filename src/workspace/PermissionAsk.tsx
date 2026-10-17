@@ -101,7 +101,7 @@ export function StopRunConfirm({ name, onStop, onKeep }: { name: string; onStop(
 /** What a card asks before Deny tells the agent no: unlike Allow once, nothing else follows it. */
 export const DENY_QUESTION = "Deny this?";
 
-/** The card's confirm step for Deny, as `StopRunConfirm` is for Stop. Escape keeps it waiting. */
+/** The card's confirm step for Deny (a read-only run has none: the agent was refused anyway, so one click tells it no), as `StopRunConfirm` is for Stop. Escape keeps it waiting. */
 export function DenyConfirm({ onDeny, onKeep }: { onDeny(): void; onKeep(): void }) {
   return (
     <span
@@ -194,7 +194,7 @@ export function PermissionAsk({ run, onAttach, onStop, label, answered: given, c
         {denying ? (
           <DenyConfirm onDeny={() => (setDenying(false), deny())} onKeep={() => setDenying(false)} />
         ) : (
-          <Btn tone={offer.allow === "readOnly" || offer.allow === "forbidden" ? "primary" : "plain"} icon="x" disabled={busy || !command} aria-describedby={explained ? undefined : note} onClick={() => setDenying(true)}>
+          <Btn tone={offer.allow === "readOnly" || offer.allow === "forbidden" ? "primary" : "plain"} icon="x" disabled={busy || !command} aria-describedby={explained ? undefined : note} onClick={offer.allow === "readOnly" ? deny : () => setDenying(true)}>
             Deny
           </Btn>
         )}

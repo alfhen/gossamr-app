@@ -158,6 +158,28 @@ export function waitStarted(done: Pick<Need, "target" | "ticketKey">, proposals:
   return `${done.ticketKey ?? "The workstream"} now waits on the reporter; nothing starts on its own`;
 }
 
+/** Whether the reporter has replied on workstream `id`, so a note saying it now waits on them is no longer true. */
+export const reporterAnswered = (list: readonly Pick<WorkstreamView, "workstream" | "reporterReplied">[], id: string) => !!list.find((v) => v.workstream.id === id)?.reporterReplied;
+
+/** Shows the note that `workstreamId` now waits on the reporter, and takes it off the screen once the reporter has replied. */
+export function pushWaitToast(text: string, workstreamId: string | null | undefined) {
+  const id = useToasts.getState().push(text, "info");
+  if (id === null || !workstreamId) return;
+  // Both watches go once the toast does, whether the reporter replied or its own timer took it.
+  const off = () => {
+    offWorkstreams();
+    offToasts();
+  };
+  const offWorkstreams = useWorkstreams.subscribe((s) => {
+    const shown = useToasts.getState().toasts.some((t) => t.id === id);
+    if (shown && reporterAnswered(s.list, workstreamId)) useToasts.getState().dismiss(id);
+    if (!shown || reporterAnswered(s.list, workstreamId)) off();
+  });
+  const offToasts = useToasts.subscribe((s) => {
+    if (!s.toasts.some((t) => t.id === id)) off();
+  });
+}
+
 /** The line with an id of its own: two advances with the same words (drafts with one title) are still two, so the line shows again and its timer restarts. */
 export interface Advanced {
   id: number;
@@ -841,8 +863,11 @@ export function NeedsPane({ needs }: { needs: readonly Need[] }) {
   useAdvance(needs, (done, next) =>
     setAdvanced((prev) => nextAdvanced(prev ?? { id: lastId.current, text: "" }, advancedText(done, next, waitStarted(done, useWorkspace.getState().proposals), postedToJira(done, useWorkspace.getState().proposals)), done.workstreamId ? { workstreamId: done.workstreamId, label: doneText(done, postedToJira(done, useWorkspace.getState().proposals)) } : undefined, done.key)),
     (done) => {
-      const text = lastNeedText(done, useWorkspace.getState().proposals);
-      if (text) useToasts.getState().push(text, "info");
+      const proposals = useWorkspace.getState().proposals;
+      const text = lastNeedText(done, proposals);
+      if (!text) return;
+      if (waitStarted(done, proposals)) pushWaitToast(text, done.workstreamId);
+      else useToasts.getState().push(text, "info");
     },
   );
   useEffect(() => {

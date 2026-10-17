@@ -282,7 +282,7 @@ describe("the step rail", () => {
   it("offers 'Approve N safe drafts' for two or more comments, moves or subtasks, and never counts a rewrite", () => {
     const approve = vi.fn();
     const two = renderToStaticMarkup(<StepDrafts step="review" drafts={[fromRun("c1", comment, "r5"), fromRun("t1", transition, "r5"), fromRun("rw", rewrite, "r5")]} approve={approve} />);
-    expect(two).toContain(">Approve 2 safe drafts</button>");
+    expect(two).toContain(">Approve 2 of this step&#x27;s drafts</button>");
     expect(two).toContain('data-draft="rw"');
     const one = renderToStaticMarkup(<StepDrafts step="review" drafts={[fromRun("c1", comment, "r5"), fromRun("rw", rewrite, "r5"), fromRun("rw2", rewrite, "r5")]} approve={approve} />);
     expect(one).not.toContain("safe drafts");

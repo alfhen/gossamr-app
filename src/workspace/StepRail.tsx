@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { itemKey } from "../lib/filter";
 import { leftOutLabel, repeatedComments, REPEATED_COMMENT_NOTE } from "../lib/needs";
-import { inWorkstreamPane } from "../lib/proposals";
+import { inWorkstreamPane, isAnswersDraft } from "../lib/proposals";
 import type { CodeChange, Proposal, ReviewView, Run, WorkstreamEvent, WorkstreamView } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { RunLabel } from "./AgentCard";
@@ -11,7 +11,7 @@ import { Btn } from "./AgentSheet";
 import { draftTitle } from "./DraftCard";
 import { LiveDraftPreview } from "./DraftPreview";
 import { PipRunCard } from "./PipRunCard";
-import { BATCH_TITLE, batchLabel, batchable, batchToApprove, freezeBatch, nextStep, retiredStepDrafts, stepChips, stepDrafts, type BatchSnapshot, type StepChip, type StepGroup } from "./pipHomeLogic";
+import { BATCH_ASIDE, BATCH_TITLE, batchable, batchToApprove, freezeBatch, nextStep, retiredStepDrafts, stepBatchLabel, stepChips, stepDrafts, type BatchSnapshot, type StepChip, type StepGroup } from "./pipHomeLogic";
 import { usePipHome } from "./pipHomeStore";
 import { openOnGithub } from "./githubUi";
 import { openPullView, usePullView } from "./pullViewStore";
@@ -90,6 +90,8 @@ export function StepDrafts({ step, drafts, approve, initialConfirming = false }:
   /** Set by a confirm: the confirmation and the drafts go, so the keyboard lands on what came of them. */
   const refocus = useRef(false);
   const together = batchable(drafts);
+  // Drafts from the person's own reply are never in the batch, as in Needs you; the note says why when it leaves a draft out.
+  const aside = drafts.filter((p) => p.state.type === "pending" && isAnswersDraft(p)).length;
   useEffect(() => {
     if (!outcome || !refocus.current) return;
     refocus.current = false;
@@ -134,10 +136,16 @@ export function StepDrafts({ step, drafts, approve, initialConfirming = false }:
               onClick={() => (setOutcome(null), setFrozen(freezeBatch(drafts)))}
               className="rounded-md border border-ws-sep2 px-2.5 py-px text-sm font-semibold text-ws-ink hover:bg-ws-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip disabled:opacity-45"
             >
-              {busy ? "Approving…" : batchLabel(together.length)}
+              {busy ? "Approving…" : stepBatchLabel(step, together.length)}
             </button>
           </div>
         ))}
+      {/* While a batch is offered or being confirmed, and also where only the reply's drafts kept the button away, the note says why they are not in it. */}
+      {aside > 0 && (frozen !== null || together.length + aside >= 2) && (
+        <p data-batch-aside className="m-0 text-xs text-ws-ink3">
+          {BATCH_ASIDE}
+        </p>
+      )}
       {outcome && (
         <p ref={said} role="status" tabIndex={-1} data-batch-outcome className={`m-0 rounded text-sm [overflow-wrap:anywhere] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip ${outcome.failed ? "text-ws-blocked" : "text-ws-ink2"}`}>
           {outcome.text}

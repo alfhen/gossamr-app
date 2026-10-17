@@ -279,6 +279,22 @@ describe("which run drafts start in place", () => {
     expect(begin).not.toHaveBeenCalled();
   });
 
+  it("leads with a plain summary once the review is in, and keeps Start agent and Hide in the flow, never pinned over the text (G27, B4)", async () => {
+    // While the review loads, what the agent may do isn't known, so there is no summary yet (CodeRabbit on #181).
+    const loading = renderToStaticMarkup(<InlineStartView id="p-plain" entry={{ ...CLOSED_INLINE, phase: "loading" }} on={noop} />);
+    expect(loading).not.toContain("data-start-summary");
+    expect(loading).toContain("data-inline-start-actions");
+    const id = await draft();
+    await inline().open(id);
+    const html = render(id);
+    expect(html).toContain("data-start-summary");
+    expect(html).toContain(entry(id).review?.readOnly ? "This agent only reads the code; it can&#x27;t change anything." : "This agent can change code, in its own copy of the repository and not in your own.");
+    expect(html).toContain("Nothing runs before that.");
+    expect(html.indexOf("data-start-summary")).toBeLessThan(html.indexOf("What agents can do"));
+    expect(html).toContain("data-inline-start-actions");
+    expect(html).not.toMatch(/<div[^>]*data-inline-start-actions[^>]*sticky/);
+  });
+
   it("shows the review under the card once open, and hides the card's own 'Review and start' meanwhile", () => {
     const p = runDraft("plan");
     const panel = <InlineStartView id={p.id} entry={{ ...CLOSED_INLINE, phase: "loading" }} on={noop} />;
