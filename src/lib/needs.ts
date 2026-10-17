@@ -406,9 +406,12 @@ export function needs({ workstreams, runs, proposals, dismissed, heldAt, asked, 
     if (p.intent.type === "rewrite") {
       // A plan run's description update is how the plan is approved; any other rewrite is read in its diff first.
       const plan = from !== null && runs.find((r) => r.id === from)?.spec.kind === "plan" && !!p.intent.body;
+      // A Triage's description update stands where its comment did: a draft that waits for a go-ahead, read in its diff first
+      // (never in a batch), and nothing the workstream waits on, so it does not outrank the question or the wait it sits beside.
+      const triage = from !== null && step === "triage" && !!p.intent.body;
       out.push({
         ...base,
-        group: "decide",
+        group: triage ? "approve" : "decide",
         kind: plan ? "plan" : "description",
         title: plan ? "Approve the plan" : title,
         why: plan ? `${label ? "An agent" : by} wrote the plan${key ? ` for ${key}` : ""}${label ? ` (run ${label})` : ""}; approving its description update is how the plan is approved.` : drafted,

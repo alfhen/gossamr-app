@@ -429,6 +429,7 @@ export class MockBackend implements Backend {
       return ticketBlockText({ item: w, comments: this.connector.comments(ref), people: this.connector.people, titleOf: (r) => this.connector.item(r)?.title ?? null, code: this.github.code.devLinks(ref) });
     };
     this.runs.ticketDoc = (ref) => this.connector.item(ref)?.body ?? null;
+    this.runs.reporterReplied = (ref) => this.workstreams.reporterRepliedOn(ref.key);
     this.runs.pullRequest = (repo, number) => this.github.code.change(repo, number);
     this.runs.pullFiles = (repo, number) => this.github.code.pullFiles(repo, number);
     this.runs.codeConnectionFor = (repo) => (this.github.isWatched(repo) ? GITHUB_CONNECTION : null);

@@ -152,7 +152,7 @@ test("keyboard only, intake to review on Pip home: columns with F6, rows and ste
   await expect(peekSheet(page)).toHaveAttribute("aria-label", "Details for CA-401");
   await expect(pipHome(page)).toBeVisible();
   // The keyboard goes into the peek with it, onto the draft, and its approve is a few Tabs on.
-  const inPeek = peekSheet(page).getByRole("article", { name: "Update the description of CA-401" });
+  const inPeek = peekSheet(page).getByRole("article", { name: "Update the description of CA-401" }).filter({ hasText: "Gossamr Plan" });
   await expect(inPeek).toBeFocused();
   await expectVisibleFocus(page);
   await expectPeekInPlace(page);
@@ -203,16 +203,17 @@ test("keyboard only, intake to review on Pip home: columns with F6, rows and ste
   await pressUntil(page, "j", comment, 10);
   await press(page, "Enter");
   await expect(peekSheet(page)).toHaveAttribute("aria-label", "Details for CA-401");
-  // The comments the earlier runs left (the investigation's, the triage's and the build's among them) wait in the peek
-  // too, none retired by the review's comment: five to post, and only the review's is.
+  // The comments the earlier runs left (the investigation's and the build's among them) wait in the peek too, none retired
+  // by the review's comment: four to post, and only the review's is. The triage's note is a description update, which waits
+  // beside them as its own card.
   const waiting = peekSheet(page).getByRole("article", { name: "Comment on CA-401" }).getByRole("button", { name: "Post comment" });
-  await expect(waiting).toHaveCount(5);
+  await expect(waiting).toHaveCount(4);
   const post = peekSheet(page).locator(`article[data-draft="${id}"]`).getByRole("button", { name: "Post comment" });
   await pressUntil(page, "Tab", post, 10);
   expect((await jiraWrites(page)).length).toBe(1);
   await press(page, "Enter");
   await expect.poll(async () => (await jiraWrites(page)).filter((w) => w.type === "comment").map((w) => w.proposalId)).toEqual([id]);
-  await expect(waiting).toHaveCount(4);
+  await expect(waiting).toHaveCount(3);
   await expect(peekSheet(page).locator(`article[data-draft="${id}"]`).getByRole("button", { name: "Post comment" })).toHaveCount(0);
 });
 

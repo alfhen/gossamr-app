@@ -572,7 +572,7 @@ impl RunService {
     pub(super) async fn draft_for(&self, run: &Run) -> Option<Attention> {
         let mut why = None;
         if run.item.is_some() {
-            if self.logged(run, self.core.auto_draft_run_comment(&run.id).await) {
+            if self.logged(run, self.core.auto_draft_run_triage(&run.id).await) {
                 why = Some(Attention::Drafted);
             }
             if self.logged(run, self.core.draft_run_subtasks(&run.id).await) {

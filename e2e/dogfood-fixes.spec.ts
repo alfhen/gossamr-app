@@ -95,7 +95,7 @@ async function toFinishedReview(page: Page, before: () => Promise<void> = async 
   await finish(page, (await started(page, "plan")).id);
   await page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "All projects" }).click();
   await peekTicket(page, "CA-401");
-  const plan = peekSheet(page).getByRole("article", { name: "Update the description of CA-401" });
+  const plan = peekSheet(page).getByRole("article", { name: "Update the description of CA-401" }).filter({ hasText: "Gossamr Plan" });
   await plan.getByRole("button", { name: "Update description" }).click();
   await expect(plan).toHaveCount(0);
   const build = await started(page, "build");
@@ -827,7 +827,8 @@ test.describe("plan chip (D19)", () => {
     await expect(chip).toBeVisible();
     const turns = await pipPane(page).locator("[data-turn-status]").count();
     await chip.click();
-    const plan = pipPane(page).getByRole("article", { name: "Update the description of CA-401" });
+    // The triage's own description update stands above the plan's in the conversation: the plan's is the newer.
+    const plan = pipPane(page).getByRole("article", { name: "Update the description of CA-401" }).last();
     await expect(plan).toBeFocused();
     await expect(plan).toBeInViewport();
     await expect(pipPane(page).getByRole("button", { name: "Stop" })).toHaveCount(0);

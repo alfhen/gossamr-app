@@ -410,6 +410,15 @@ pub struct Revised {
 }
 
 impl Proposal {
+    /// Whether the draft is a description update an agent run left that adds or replaces the description's `Triage` section
+    /// and leaves its `Gossamr Plan` section as it was: what a finished Triage drafts in place of a comment. A plan's
+    /// description update, which may carry a `Triage` section along, is not one.
+    pub fn is_triage_description(&self) -> bool {
+        matches!(self.origin, Origin::Run { .. })
+            && matches!(&self.intent, Intent::Rewrite { title: None, body: Some(b), .. }
+                if b.to.triage_section().is_some_and(|t| b.from.triage_section().as_ref() != Some(&t)) && b.to.plan_section() == b.from.plan_section())
+    }
+
     /// The existing item the proposal is about, if any.
     pub fn target(&self) -> Option<&ItemRef> {
         self.intent.target()

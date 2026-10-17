@@ -381,6 +381,8 @@ pub const WORKSTREAM_PENDING_CAP: usize = 8;
 /// Why a draft a newer one of the same kind replaced was retired.
 pub const REPLACED_REASON: &str = "Replaced by a newer draft";
 
+const TRIAGE_KEEPS_THE_REST: &str = "a Triage description draft can change only its Triage section; the rest of the description, the Gossamr Plan included, stays as it is";
+
 const PLAN_IS_THE_USERS: &str =
     "this description update carries the Gossamr Plan a build follows, so only the user changes it; tell them what you would change instead";
 
@@ -413,6 +415,10 @@ pub fn supersession(older: &Proposal, newer: &Proposal) -> Supersession {
     }
     // A newer draft that leaves a field of the older one alone would lose that change, so both stay.
     if older.intent.supersession_key().as_ref() != Some(&key) || !newer.intent.covers(&older.intent) {
+        return Supersession::Unrelated;
+    }
+    // A Triage's description update and a plan's are two things on one description: neither replaces the other.
+    if older.is_triage_description() != newer.is_triage_description() {
         return Supersession::Unrelated;
     }
     let by_pip = newer.created_by == CreatedBy::Pip;
@@ -506,6 +512,12 @@ fn is_run_comment(p: &Proposal) -> bool {
         && !p.label.as_deref().is_some_and(|l| l.starts_with(PLAN_COMMENT_LABEL) || l == READINESS_COMMENT_LABEL)
 }
 
+/// Whether `p` is what a finished Triage leaves for its ticket: its note as a comment, or the description update that puts
+/// the note and its open questions in the description's `Triage` section.
+fn is_triage_note(p: &Proposal) -> bool {
+    is_run_comment(p) || (matches!(p.origin, Origin::Run { .. }) && machine_made(p) && p.is_triage_description())
+}
+
 /// The id of the run a run comment was made from.
 fn comment_run_id(p: &Proposal) -> Option<&str> {
     match &p.origin {
@@ -580,7 +592,7 @@ pub const OVERRIDDEN_REASON: &str = "You chose to plan anyway, so this note no l
 /// Investigate's findings) is never touched. As `answers_supersession` in `proposals.ts`.
 pub fn answers_supersession(older: &Proposal, newer: &Proposal, kind_of: impl Fn(&str) -> Option<crate::domain::RunKind>) -> Option<std::result::Result<(), &'static str>> {
     let ws = newer.workstream()?;
-    let same = is_answers_draft(newer) && is_run_comment(older) && older.workstream() == Some(ws) && older.target() == newer.target();
+    let same = is_answers_draft(newer) && is_triage_note(older) && older.workstream() == Some(ws) && older.target() == newer.target();
     if !same || older.id == newer.id || older.state != ProposalState::Pending || older.error.is_some() {
         return None;
     }
@@ -598,7 +610,7 @@ pub fn retire_triage_notes(db: &Db, workstream: &str, triage: &str, reason: &str
     let pending = db.proposals(&ProposalQuery { workstream: Some(workstream.into()), states: Some(vec![StateKind::Pending]), ..Default::default() })?;
     let mut retired = Vec::new();
     for mut old in pending {
-        if !is_run_comment(&old) || comment_run_id(&old) != Some(triage) || old.error.is_some() {
+        if !is_triage_note(&old) || comment_run_id(&old) != Some(triage) || old.error.is_some() {
             continue;
         }
         if person_edited(&old) {
@@ -742,6 +754,12 @@ pub fn edit_noted(db: &Db, id: &str, intent: Intent, note: &str, at: DateTime<Ut
             return Err(refuse("an edit can't change which text the rewrite was drafted against"));
         }
     }
+    // A Triage's description update changes only its Triage section; Pip's revision keeps that section and leaves the rest, the plan included, as it was.
+    if let (Intent::Rewrite { body: Some(ob), .. }, Intent::Rewrite { body: Some(nb), .. }) = (&p.intent, &intent) {
+        if note != EDITED_NOTE && p.is_triage_description() && (nb.to.triage_section().is_none() || nb.to.without_triage_section() != ob.to.without_triage_section()) {
+            return Err(refuse(TRIAGE_KEEPS_THE_REST));
+        }
+    }
     // A transition's label named the old target, so the approve button falls back to the new status's name.
     if matches!((&p.intent, &intent), (Intent::Transition { to: a, .. }, Intent::Transition { to: b, .. }) if a != b) {
         p.label = None;
@@ -791,7 +809,7 @@ pub fn left_by_run(p: &Proposal) -> bool {
 /// Whether the draft is a description update carrying a `Gossamr Plan` section that an agent run left: the plan a build
 /// follows once the person approves it.
 pub fn is_run_plan_rewrite(p: &Proposal) -> bool {
-    matches!(p.origin, Origin::Run { .. }) && matches!(&p.intent, Intent::Rewrite { body: Some(b), .. } if b.to.plan_section().is_some())
+    matches!(p.origin, Origin::Run { .. }) && matches!(&p.intent, Intent::Rewrite { body: Some(b), .. } if b.to.plan_section().is_some()) && !p.is_triage_description()
 }
 
 /// Whether Pip changed the draft's text and the person never edited it after: what it says is partly Pip's words.
@@ -1615,6 +1633,26 @@ mod tests {
         let dropped = edit(&db, &p.id, rewrite(None, Some(("old text", "x"))), now()).unwrap_err();
         assert!(dropped.to_string().contains("drafted against"), "{dropped}");
         assert!(edit(&db, &p.id, rewrite(Some(("Old", "Same")), Some(("old text", "old text"))), now()).is_err(), "an edit goes through the same checks");
+    }
+
+    #[test]
+    fn pips_revision_of_a_triage_description_draft_changes_only_its_triage_section() {
+        let db = Db::in_memory().unwrap();
+        let from = "Fix it.\n\n## Gossamr Plan\n\nThe plan.";
+        let draft = Draft { origin: Origin::Run { run_id: "run-1".into(), short_id: None, workstream: None }, created_by: CreatedBy::Agent, intent: rewrite(None, Some((from, "Fix it.\n\n## Triage\n\nSize: 3.\n\n## Gossamr Plan\n\nThe plan."))), label: None, basis: None };
+        let p = made(&db, draft);
+        assert!(p.is_triage_description());
+        for (why, to) in [
+            ("plan changed", "Fix it.\n\n## Triage\n\nSize: 3.\n\n## Gossamr Plan\n\nMy plan."),
+            ("plan dropped", "Fix it.\n\n## Triage\n\nSize: 3."),
+            ("the person's text changed", "Fix it now.\n\n## Triage\n\nSize: 3.\n\n## Gossamr Plan\n\nThe plan."),
+            ("Triage section dropped", "Fix it.\n\nSize: 3.\n\n## Gossamr Plan\n\nThe plan."),
+        ] {
+            let refused = edit_noted(&db, &p.id, rewrite(None, Some((from, to))), REVISED_BY_PIP, now()).unwrap_err();
+            assert!(refused.to_string().contains("can change only its Triage section"), "{why}: {refused}");
+        }
+        let revised = edit_noted(&db, &p.id, rewrite(None, Some((from, "Fix it.\n\n## Triage\n\nSize: 5.\n\n## Gossamr Plan\n\nThe plan."))), REVISED_BY_PIP, now()).unwrap();
+        assert!(matches!(&revised.intent, Intent::Rewrite { body: Some(b), .. } if b.to.triage_section().unwrap().plain_text() == "Size: 5."));
     }
 
     #[test]

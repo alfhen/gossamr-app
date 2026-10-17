@@ -350,7 +350,7 @@ impl Core {
     }
 
     /// Every status comment draft made from `run`, newest first, whether it is still waiting or was decided.
-    async fn comment_drafts_of(&self, run: &Run) -> Result<Vec<Proposal>> {
+    pub(super) async fn comment_drafts_of(&self, run: &Run) -> Result<Vec<Proposal>> {
         Ok(self.run_comments(run).await?.into_iter().filter(|p| !is_plan_comment(p) && !is_reporter_questions(p)).collect())
     }
 

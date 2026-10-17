@@ -282,7 +282,8 @@ describe("I'll answer, then the person's answers", () => {
     expect(text).toContain("“Which behaviour or number should change?”\nAnswer: The open rate should rise");
     expect(text).toContain("“What is in scope and what is out?”\nAnswer: We only touch the winback flow");
     expect(text).toContain("“Who asked for this, and who is waiting on it?”\nAnswer: The CRM team asked for it");
-    expect(drafts.some((p) => p.intent.type === "rewrite")).toBe(false);
+    // The answers are a comment: no description update waits, because the triage's own, which listed the questions, is retired.
+    expect(drafts.some((p) => p.intent.type === "rewrite" && p.state.type === "pending")).toBe(false);
     // The plan is not drafted beside a comment nobody posted: Pip says it will once the answers are posted.
     expect(drafts.some(planDraft)).toBe(false);
     expect(mockPipTurns.turns(`ws:${id}`).find((t) => t.requestId === "a1")?.text).toContain("Once the answers are posted, Plan this starts the plan.");
@@ -324,26 +325,30 @@ describe("I'll answer, then the person's answers", () => {
     expect(text).not.toContain("Answers:");
   });
 
-  it("retires the triage's own pending comment, which says the ticket can't be sized, the moment the person chooses to answer", async () => {
+  /** The description update a finished triage left: its Triage section holds the note and the questions. */
+  const triageNote = (id: string, triage: string) => backend.proposals.list({ workstream: id }).find((p) => p.origin.type === "run" && p.origin.runId === triage && p.intent.type === "rewrite")!;
+  const bodyOf = (p: Proposal) => (p.intent.type === "rewrite" && p.intent.body ? p.intent.body.toText : "");
+
+  it("retires the triage's own pending description update, which says the ticket can't be sized, the moment the person chooses to answer", async () => {
     const { id, triage } = await answering();
-    const note = backend.proposals.list({ workstream: id }).find((p) => p.origin.type === "run" && p.origin.runId === triage.id && p.intent.type === "comment")!;
+    const note = triageNote(id, triage.id);
     expect(note.state).toMatchObject({ type: "retired", reason: "Replaced by your answers to the open questions" });
-    expect(docText(note.intent.type === "comment" ? note.intent.body : { blocks: [] })).toContain("it needs an answer on what done looks like");
+    expect(bodyOf(note)).toContain("it needs an answer on what done looks like");
     expect(events(id).filter((e) => e.action === "draft_superseded" && e.proposalId === note.id)).toMatchObject([{ actor: "person" }]);
     // Nothing of it is left to approve, or to batch.
     await useWorkspace.getState().refreshProposals();
     expect(currentNeeds().some((n) => n.key === `draft:${note.id}`)).toBe(false);
   });
 
-  it("keeps a triage comment the person edited, and leaves another run's comment alone", async () => {
+  it("keeps a triage description update the person edited, and leaves another run's comment alone", async () => {
     const id = await open("CA-408");
     const spec: RunSpec = { kind: "triage", repo: "acme/storefront", clonePath: "/Users/sample/Code/storefront", base: "main", name: "ca-408-triage", instruction: "", focus: null, focusFromRun: null, ticketBlock: null, workstream: id };
     const draft = await backend.runsDraft(spec, CA408);
     const triage = await backend.runsApprove(draft.id, (await backend.runsReview(draft.id)).digest);
     finish(triage.id);
     await useWorkstreams.getState().refresh();
-    const note = backend.proposals.list({ workstream: id }).find((p) => p.origin.type === "run" && p.origin.runId === triage.id && p.intent.type === "comment")!;
-    await backend.proposalsEdit(note.id, { type: "comment", body: "My own words about this ticket.", mentions: [] });
+    const note = triageNote(id, triage.id);
+    await backend.proposalsEdit(note.id, { type: "rewrite", body: `${bodyOf(note)}\n\nMy own words about this ticket.` });
     const findings = backend.proposals.fromRun({ type: "comment", item: CA408, body: docFromText("The investigation found the flow is one email.") }, "From an agent run", { type: "run", runId: "someone-else", shortId: null, workstream: id });
     await useWorkstreams.getState().planAnyway(id);
     expect(backend.proposals.get(note.id)?.state.type).toBe("pending");
@@ -358,7 +363,7 @@ describe("I'll answer, then the person's answers", () => {
     const triage = await backend.runsApprove(draft.id, (await backend.runsReview(draft.id)).digest);
     finish(triage.id);
     await useWorkstreams.getState().refresh();
-    const note = backend.proposals.list({ workstream: id }).find((p) => p.origin.type === "run" && p.origin.runId === triage.id && p.intent.type === "comment")!;
+    const note = triageNote(id, triage.id);
     expect(note.state.type).toBe("pending");
     expect(await useWorkstreams.getState().planAnyway(id)).toBe(true);
     expect(backend.proposals.get(note.id)?.state).toMatchObject({ type: "retired", reason: "You chose to plan anyway, so this note no longer fits" });

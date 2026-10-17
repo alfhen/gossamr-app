@@ -26,7 +26,7 @@ fn marker_level(block: &Block) -> Option<u8> {
 
 impl Doc {
     /// The first `Gossamr Plan` heading, and where its section ends: at the next heading of the same or a higher level.
-    fn plan_range(&self) -> Option<(usize, usize, u8)> {
+    pub(super) fn plan_range(&self) -> Option<(usize, usize, u8)> {
         let at = self.blocks.iter().position(|b| marker_level(b).is_some())?;
         let level = marker_level(&self.blocks[at])?;
         let end = self.blocks[at + 1..].iter().position(|b| matches!(b, Block::Heading { level: l, .. } if *l <= level)).map_or(self.blocks.len(), |n| at + 1 + n);

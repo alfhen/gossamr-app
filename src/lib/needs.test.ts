@@ -3,7 +3,7 @@ import { MockBackend } from "../backend/mock";
 import { HELD_ALL, HELD_BUDGET, HELD_DAILY, HELD_PERSON, HELD_QUOTA, HELD_RESTART, TRIPWIRE } from "../types";
 import type { Intent, ItemRef, Proposal, ProposalState, Run, RunKind, RunState, WorkstreamStage, WorkstreamView } from "../types";
 import { docFromText } from "./docs";
-import { BATCHABLE, GROUP_RANK, chipLabel, byRank, escalationReason, higherPriority, needAfter, needGroups, needs, needsIn, quietKey, leftOutLabel, readinessPrompt, readinessWhy, repeatedComments, titleFromTicketBlock, type Need, type NeedKind, type NeedsInput } from "./needs";
+import { BATCHABLE, GROUP_RANK, chipLabel, byRank, escalationReason, higherPriority, needAfter, needGroups, needs, needsIn, quietKey, leftOutLabel, readinessPrompt, readinessWhy, repeatedComments, safeToBatch, titleFromTicketBlock, type Need, type NeedKind, type NeedsInput } from "./needs";
 
 const NOW = Date.parse("2026-09-30T12:00:00Z");
 const iso = (minutesAgo: number) => new Date(NOW - minutesAgo * 60_000).toISOString();
@@ -446,6 +446,23 @@ describe("needs: the comment with the person's answers", () => {
     // A comment Pip merely labels like Gossamr's is Pip's, and an ordinary draft.
     const pretend = { ...draft("d-pip", comment("CA-401"), 1, { workstream: "ws-1" }), label: "Questions for the reporter" } as Proposal;
     expect(needs(input({ workstreams: [view("ws-1", "CA-401")], proposals: [pretend] }))[0]).toMatchObject({ batchable: true });
+  });
+});
+
+describe("needs: a triage's description update", () => {
+  it("is an Approve draft read in its diff, never in the safe batch, like the comment it stands in for; a plan's and a person's rewrite stay a Decide", () => {
+    const triage = run("t-1", "triage", "done");
+    const plan = run("p-1", "plan", "done");
+    const from = (runId: string): Proposal["origin"] => ({ type: "run", runId, shortId: null, workstream: "ws-1" });
+    const note = { ...draft("d-note", rewrite("CA-401"), 3, { workstream: "ws-1", origin: from("t-1") }), createdBy: "agent" } as Proposal;
+    const approved = { ...draft("d-plan", rewrite("CA-401"), 2, { workstream: "ws-1", origin: from("p-1") }), createdBy: "agent" } as Proposal;
+    const own = draft("d-own", rewrite("CA-401"), 1, { workstream: "ws-1" });
+    const list = needs(input({ workstreams: [view("ws-1", "CA-401", { runs: ["t-1", "p-1"] })], runs: [triage, plan], proposals: [note, approved, own] }));
+    const by = (key: string) => list.find((n) => n.key === key)!;
+    expect(by("draft:d-note")).toMatchObject({ group: "approve", kind: "description", batchable: false, ifYouWait: "Nothing is written to Jira until you approve it." });
+    expect(by("draft:d-plan")).toMatchObject({ group: "decide", kind: "plan", title: "Approve the plan" });
+    expect(by("draft:d-own")).toMatchObject({ group: "decide", kind: "description" });
+    expect(safeToBatch(note)).toBe(false);
   });
 });
 
