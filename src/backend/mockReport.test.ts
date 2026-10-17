@@ -141,12 +141,19 @@ describe("an adversarial review", () => {
   });
 
   const earlier = /macro_rules! earlier_notes \{\s*\(\) => \{\s*"([^"]*)"/.exec(rust)![1];
+  const answers = /macro_rules! comment_answers \{\s*\(\) => \{\s*"([^"]*)"/.exec(rust)![1];
   const triageForm = /macro_rules! triage_form \{\s*\(\) => \{\s*"([^"]*)"/.exec(rust)![1];
 
   it("tells the investigation, triage and plan notes to cover only what earlier notes on the ticket do not, and no other kind", () => {
     for (const kind of ["investigate", "triage", "plan"] as const) expect(INSTRUCTIONS[kind].endsWith(`${earlier}${note}`), kind).toBe(true);
     for (const kind of ["verify", "build", "review"] as const) expect(INSTRUCTIONS[kind], kind).not.toContain("compared with them");
     expect(earlier).toContain("cover only what is new compared with them");
+  });
+
+  it("tells a triage and a plan that answers in the ticket's comments count as answers, and no other kind", () => {
+    expect(answers).toContain("Answers in the ticket's comments, for example from the reporter, count as answers: use them, and list as open only what is still unanswered.");
+    for (const kind of ["triage", "plan"] as const) expect(INSTRUCTIONS[kind].endsWith(`${answers}${earlier}${note}`), kind).toBe(true);
+    for (const kind of ["investigate", "verify", "build", "review"] as const) expect(INSTRUCTIONS[kind], kind).not.toContain(answers);
   });
 
   it("asks a triage for its size as story points with a plain meaning and for the open questions it mentions by name, and no other kind", () => {
@@ -165,8 +172,8 @@ describe("an adversarial review", () => {
         expect(INSTRUCTIONS[kind].split(rule).length - 1, `${kind}: ${rule}`).toBe(1);
       }
     }
-    const plan = /pub const PLAN_INSTRUCTION: &str = concat!\("((?:[^"\\]|\\.)*)", earlier_notes!\(\), status_note!\(\)\);/.exec(rust)![1].replace(/\\"/g, '"');
-    expect(INSTRUCTIONS.plan).toBe(`${plan}${earlier}${note}`);
+    const plan = /pub const PLAN_INSTRUCTION: &str = concat!\("((?:[^"\\]|\\.)*)", comment_answers!\(\), earlier_notes!\(\), status_note!\(\)\);/.exec(rust)![1].replace(/\\"/g, '"');
+    expect(INSTRUCTIONS.plan).toBe(`${plan}${answers}${earlier}${note}`);
     expect(INSTRUCTIONS.plan).not.toContain("attached to the run");
   });
 

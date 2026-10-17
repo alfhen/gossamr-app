@@ -76,7 +76,7 @@ test.describe("the plan's description draft and the build it starts (G3, G2)", (
     await finish(page, await started(page, "plan"));
     await page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "All projects" }).click();
     await peekTicket(page, "CA-401");
-    const draft = peekSheet(page).getByRole("article", { name: "Update the description of CA-401" });
+    const draft = peekSheet(page).getByRole("article", { name: "Update the description of CA-401" }).filter({ hasText: "Gossamr Plan" });
     await expect(draft.locator("[data-approval-starts-build]")).toContainText("Approving this can start a Build: it changes code in its own worktree and runs with your Claude settings.");
     await draft.getByRole("button", { name: "Update description" }).click();
     await expect(draft).toHaveCount(0);

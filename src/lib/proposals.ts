@@ -213,12 +213,14 @@ const machineMade = (p: Proposal) => p.createdBy === "pip" || p.createdBy === "a
  * by Pip or an agent, that changes every field the older one does (`covers`). A draft the person edited is theirs, and the plan a build follows (`isPlanRewrite`) only the person
  * changes. As `supersession` in `proposals.rs`.
  */
-export function supersession(older: Proposal, newer: Proposal, isPlanRewrite: (p: Proposal) => boolean): Supersession {
+export function supersession(older: Proposal, newer: Proposal, isPlanRewrite: (p: Proposal) => boolean, isTriageDescription: (p: Proposal) => boolean = () => false): Supersession {
   const ws = workstreamOf(newer);
   const key = supersessionKey(newer.intent);
   if (!ws || !key || older.state.type !== "pending" || workstreamOf(older) !== ws || !machineMade(older) || !machineMade(newer)) return { type: "unrelated" };
   // A newer draft that leaves a field of the older one alone would lose that change, so both stay.
   if (supersessionKey(older.intent) !== key || !covers(newer.intent, older.intent)) return { type: "unrelated" };
+  // A Triage's description update and a plan's are two things on one description: neither replaces the other.
+  if (isTriageDescription(older) !== isTriageDescription(newer)) return { type: "unrelated" };
   const byPip = newer.createdBy === "pip";
   if (older.revisions.some((r) => r.note === "Edited")) {
     const on = targetOf(older.intent);
@@ -332,14 +334,20 @@ export const OVERRIDDEN_REASON = "You chose to plan anyway, so this note no long
  * is never touched. Null when `older` is not that: another ticket or workstream, not pending, or back in Pending after a
  * failed post (`error` is set). As `answers_supersession` in `proposals.rs`.
  */
-export function answersSupersession(older: Proposal, newer: Proposal, kindOf: (runId: string) => RunKind | null): "supersede" | typeof KEPT_EDITED | null {
+export function answersSupersession(older: Proposal, newer: Proposal, kindOf: (runId: string) => RunKind | null, isTriageDescription: (p: Proposal) => boolean = () => false): "supersede" | typeof KEPT_EDITED | null {
   const ws = workstreamOf(newer);
-  if (!ws || !isAnswersDraft(newer) || !isRunComment(older) || workstreamOf(older) !== ws || older.id === newer.id || older.state.type !== "pending" || older.error) return null;
+  if (!ws || !isAnswersDraft(newer) || !isTriageNote(older, isTriageDescription) || workstreamOf(older) !== ws || older.id === newer.id || older.state.type !== "pending" || older.error) return null;
   const [on, to] = [targetOf(older.intent), targetOf(newer.intent)];
   if (!on || !to || on.connectionId !== to.connectionId || on.externalId !== to.externalId || older.origin.type !== "run") return null;
   if (kindOf(older.origin.runId) !== "triage") return null;
   return older.revisions.some((r) => r.note === "Edited") ? KEPT_EDITED : "supersede";
 }
+
+/**
+ * Whether `p` is what a finished Triage leaves for its ticket: its note as a comment, or the description update that puts the
+ * note and its open questions in the description's `Triage` section (`isTriageDescription` says which drafts are that). As `is_triage_note`.
+ */
+export const isTriageNote = (p: Proposal, isTriageDescription: (p: Proposal) => boolean) => isRunComment(p) || (p.origin.type === "run" && machineMade(p) && isTriageDescription(p));
 
 /** Whether `p` is a comment an agent run left for its ticket, other than a plan's: what a finished run drafts on its own. As `is_run_comment`. */
 export const isRunComment = (p: Proposal) => p.origin.type === "run" && p.intent.type === "comment" && machineMade(p) && !p.label?.startsWith(PLAN_COMMENT_LABEL) && p.label !== READINESS_COMMENT_LABEL;

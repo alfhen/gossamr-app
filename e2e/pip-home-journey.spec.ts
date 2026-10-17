@@ -58,10 +58,14 @@ async function openStep(page: Page, kind: string) {
   await expect(chip).toHaveAttribute("aria-expanded", "true");
 }
 
-/** The Jira comment drafts waiting under step `kind`, opened if it is closed: not its subtasks or the GitHub review draft. */
+/**
+ * The Jira text drafts waiting under step `kind`, opened if it is closed: not its subtasks or the GitHub review draft. A Triage's
+ * note is a description update, the others' a comment.
+ */
 async function pendingComments(page: Page, kind: string) {
   await openStep(page, kind);
-  return stepChip(page, kind).locator('article[data-draft][data-state="pending"]').filter({ has: page.locator("h3", { hasText: /^Comment on CA-401$/ }) });
+  const title = kind === "triage" ? /^Update the description of CA-401$/ : /^Comment on CA-401$/;
+  return stepChip(page, kind).locator('article[data-draft][data-state="pending"]').filter({ has: page.locator("h3", { hasText: title }) });
 }
 
 /** Starts a workstream on CA-401 from its peek, with room for every automatic turn of the chain, then selects it on Pip home. */
@@ -138,9 +142,9 @@ test("intake to review on Pip home: the person talks to Pip, starts the investig
   await expect(peekSheet(page)).toHaveAttribute("aria-label", "Details for CA-401");
   await expect(pipHome(page)).toBeVisible();
   // The draft takes the keyboard in the peek, and the window stays where it was around it.
-  await expect(peekSheet(page).getByRole("article", { name: "Update the description of CA-401" })).toBeFocused();
+  await expect(peekSheet(page).getByRole("article", { name: "Update the description of CA-401" }).filter({ hasText: "Gossamr Plan" })).toBeFocused();
   await expectPeekInPlace(page);
-  await peekSheet(page).getByRole("article", { name: "Update the description of CA-401" }).getByRole("button", { name: "Update description" }).click();
+  await peekSheet(page).getByRole("article", { name: "Update the description of CA-401" }).filter({ hasText: "Gossamr Plan" }).getByRole("button", { name: "Update description" }).click();
   await expect(rewrite).toHaveCount(0);
   expect((await jiraWrites(page)).map((w) => [w.type, w.key])).toEqual([["rewrite", "CA-401"]]);
   await page.keyboard.press("Escape");

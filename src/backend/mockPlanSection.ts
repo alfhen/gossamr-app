@@ -28,6 +28,9 @@ export function planSectionOf(doc: WorkDoc): WorkDoc | null {
   return r ? { blocks: doc.blocks.slice(r.at + 1, r.end) } : null;
 }
 
+/** Where the plan section's heading stands among the blocks, null without one. */
+export const planStartOf = (doc: WorkDoc): number | null => range(doc)?.at ?? null;
+
 export function withoutPlanSection(doc: WorkDoc): WorkDoc {
   const r = range(doc);
   return r ? { blocks: [...doc.blocks.slice(0, r.at), ...doc.blocks.slice(r.end)] } : doc;

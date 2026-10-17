@@ -1575,6 +1575,44 @@ mod auto {
         assert_eq!(w.of_kind(RunKind::Plan).await.len(), 1, "once");
     }
 
+    /// The reporter's comment on `CA-1` at `at`, in its cached ticket.
+    async fn reporter_comments(w: &World, at: chrono::DateTime<Utc>) {
+        w.rig.fx
+            .edit_item("CA-1", |item| {
+                let mut ticket: crate::model::CachedTicket = serde_json::from_value(item.extra.clone()).unwrap();
+                let author = crate::model::Person { account_id: "rep-1".into(), name: "Kim Ode".into(), avatar_url: None };
+                ticket.comments.push(serde_json::from_value(serde_json::json!({ "id": "c9", "author": author, "created": at.to_rfc3339(), "body": "Done means the winback mail goes out. Only the winback flow. The CRM team asked." })).unwrap());
+                item.extra = serde_json::to_value(&ticket).unwrap();
+            })
+            .await;
+    }
+
+    #[tokio::test]
+    async fn plan_anyway_after_the_reporter_answered_in_a_comment_assumes_none_of_the_questions_the_reporter_answered() {
+        let w = World::start().await;
+        w.pip.quiet.store(true, Ordering::SeqCst);
+        let (core, scope) = (&w.rig.fx.core, &w.rig.fx.scope);
+        let triage = triaged(&w, VAGUE).await;
+        // The person asked the reporter and the ask was posted; the reporter answered after that.
+        let at = Utc::now();
+        let line = |action: &str, p: Option<&str>, at| {
+            let e = WorkstreamEvent::new(&w.ws, Actor::Person, action, at);
+            match p {
+                Some(p) => e.proposal(p),
+                None => e.run(&triage.id),
+            }
+        };
+        core.record_workstream_event(scope, line("clarity_asked", Some("c1"), at)).await.unwrap();
+        core.record_workstream_event(scope, line("draft_approved", Some("c1"), at)).await.unwrap();
+        reporter_comments(&w, at + chrono::Duration::minutes(5)).await;
+        core.record_workstream_event(scope, line("readiness_overridden", None, at + chrono::Duration::minutes(6))).await.unwrap();
+        w.sweep().await;
+        let plan = w.started(RunKind::Plan, Rule::TriagePlan, &triage).await.unwrap();
+        assert!(plan.spec.assumptions.is_empty(), "the answers are in the ticket's comments, so nothing is assumed: {:?}", plan.spec.assumptions);
+        let prompt = crate::domain::render_prompt(&plan.spec);
+        assert!(!prompt.contains(crate::domain::ASSUMPTIONS_PREFACE) && !prompt.contains("ASSUMPTIONS>>>"), "{prompt}");
+    }
+
     #[tokio::test]
     async fn a_workstream_waiting_on_the_reporter_starts_no_plan_after_a_triage_that_recommends_one_until_the_wait_is_over() {
         let w = World::start().await;

@@ -878,6 +878,11 @@ export class MockWorkstreams {
     return ws;
   }
 
+  /** Whether someone but the person has commented on ticket `key` since the reporter was asked on an open workstream of it: what a Triage run then reads from the comments. */
+  reporterRepliedOn(key: string): boolean {
+    return this.all.some((ws) => ws.itemKey === key && ws.closedAt === null && reporterRepliesOf(this.audit.filter((e) => e.workstreamId === ws.id), this.replyCommentsOf(key)).length > 0);
+  }
+
   /** A workstream's audit, oldest first. */
   events(id: string): WorkstreamEvent[] {
     this.owned(id);

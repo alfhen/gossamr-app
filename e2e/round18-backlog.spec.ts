@@ -58,7 +58,7 @@ test.describe("Draft the Build after an approved plan in Advise (G14, G17)", () 
 
     await page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "All projects" }).click();
     await peekTicket(page, "CA-401");
-    const plan = peekSheet(page).getByRole("article", { name: "Update the description of CA-401" });
+    const plan = peekSheet(page).getByRole("article", { name: "Update the description of CA-401" }).filter({ hasText: "Gossamr Plan" });
     await plan.getByRole("button", { name: "Update description" }).click();
     await expect(plan).toHaveCount(0);
     await expect(pipConversation(page)).toHaveText(/^Workstream: CA-401 /);

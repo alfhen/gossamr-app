@@ -1,18 +1,19 @@
 import { docFromText, docText, quoteAfterFirst } from "../lib/docs";
 import { BUILD_ACCOUNT_LIMIT, INSTRUCTIONS, PLAN_LIMIT, REVIEW_REPORTS } from "./mockRunKinds";
 import { canJoinWorkstream, withWorkstream } from "../lib/workstreamAdopt";
-import { answersSupersession, capRefusal, isAnswersDraft, isReporterQuestions, isRunComment, isRunReview, leftByRun, offTheDiff, PLAN_IS_THE_USERS, REPLACED_REASON, REVIEW_CHANGED, REVIEW_IS_THE_USERS, REVIEW_MAYBE_POSTED_NOTE, REVIEW_NOT_FOUND_NOTE, REVIEW_OUTDATED_NOTE, reviewEditProblem, reporterSupersession, reviewSupersession, runCommentSupersession, supersession, targetOf, WORKSTREAM_PENDING_CAP, workstreamOf } from "../lib/proposals";
+import { answersSupersession, capRefusal, isAnswersDraft, isReporterQuestions, isRunComment, isRunReview, isTriageNote, leftByRun, offTheDiff, PLAN_IS_THE_USERS, REPLACED_REASON, REVIEW_CHANGED, REVIEW_IS_THE_USERS, REVIEW_MAYBE_POSTED_NOTE, REVIEW_NOT_FOUND_NOTE, REVIEW_OUTDATED_NOTE, reviewEditProblem, reporterSupersession, reviewSupersession, runCommentSupersession, supersession, targetOf, WORKSTREAM_PENDING_CAP, workstreamOf } from "../lib/proposals";
 import { commentable } from "../lib/diffHunks";
 import { followUpProblem } from "../workspace/followUp";
 import { answerProblem } from "../lib/answer";
 import { bodyChange, markdownOf } from "./mockMarkdown";
 import { planSectionOf } from "./mockPlanSection";
+import { isTriageDescription } from "./mockTriageSection";
 import { readStored, writeStored } from "../workspace/storage";
 import { AnswerLostError, ReviewOutdatedError } from "./mockGithub";
 import type { ChangedFile, Intent, ItemRef, MaybePosted, PostedReview, Proposal, ProposalEdit, ProposalOrigin, ProposalQuery, ProposalsChanged, ReviewComment, RunKind, WorkItemKind, WorkstreamActor } from "../types";
 
 /** A description update carrying a `Gossamr Plan` section that an agent run left: the plan a build follows once the person approves it. As `is_run_plan_rewrite` in `proposals.rs`. */
-export const isRunPlanRewrite = (p: Proposal) => p.origin.type === "run" && p.intent.type === "rewrite" && !!p.intent.body && !!planSectionOf(p.intent.body.to);
+export const isRunPlanRewrite = (p: Proposal) => p.origin.type === "run" && p.intent.type === "rewrite" && !!p.intent.body && !!planSectionOf(p.intent.body.to) && !isTriageDescription(p);
 
 /** Pip changed the draft's text and the person never edited it after. As `revised_by_pip_unedited` in `proposals.rs`. */
 export const revisedByPipUnedited = (p: Proposal) => p.revisions.some((r) => r.note === "Revised by Pip") && !p.revisions.some((r) => r.note === "Edited");
@@ -183,7 +184,7 @@ export class MockProposals {
     const kept: { proposal: Proposal; why: string }[] = [];
     if (isAnswersDraft(p)) {
       for (const older of this.drafts) {
-        const verdict = answersSupersession(older, p, this.runKind);
+        const verdict = answersSupersession(older, p, this.runKind, isTriageDescription);
         if (verdict === "supersede" && !replaced.includes(older)) replaced.push(older);
         else if (verdict && verdict !== "supersede") kept.push({ proposal: older, why: verdict });
       }
@@ -192,13 +193,13 @@ export class MockProposals {
   }
 
   /**
-   * The person chose "I'll answer" or "Plan anyway" on Triage `triage` of `workstream`: its own pending comment, which says
+   * The person chose "I'll answer" or "Plan anyway" on Triage `triage` of `workstream`: its own pending note (a comment, or the description update with its Triage section), which says
    * the ticket can't be sized, is retired (`reason`) and the audit says so, as asking the reporter does. The person's edit
    * keeps it. Another run's comment is left. As `retire_triage_notes` in `proposals.rs`.
    */
   retireTriageNotes(workstream: string, triage: string, reason: string) {
     const now = new Date().toISOString();
-    const notes = this.drafts.filter((d) => d.state.type === "pending" && !d.error && workstreamOf(d) === workstream && isRunComment(d) && d.origin.type === "run" && d.origin.runId === triage);
+    const notes = this.drafts.filter((d) => d.state.type === "pending" && !d.error && workstreamOf(d) === workstream && isTriageNote(d, isTriageDescription) && d.origin.type === "run" && d.origin.runId === triage);
     const edited = (d: Proposal) => d.revisions.some((r) => r.note === "Edited");
     const retired = notes.filter((d) => !edited(d));
     this.drafts = this.drafts.map((d) => (retired.includes(d) ? { ...d, state: { type: "retired" as const, reason }, updatedAt: now } : d));
@@ -213,7 +214,7 @@ export class MockProposals {
     const open = this.drafts.filter((d) => (d.state.type === "pending" || d.state.type === "applying") && workstreamOf(d) === ws);
     const replaced: Proposal[] = [];
     for (const older of open) {
-      const verdict = supersession(older, p, isRunPlanRewrite);
+      const verdict = supersession(older, p, isRunPlanRewrite, isTriageDescription);
       if (verdict.type === "refuse") throw new Error(verdict.reason);
       if (verdict.type === "supersede") replaced.push(older);
     }

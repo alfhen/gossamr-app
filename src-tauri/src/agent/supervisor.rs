@@ -1118,7 +1118,9 @@ impl Supervisor {
                 Decision::Start { rule, kind, .. } => {
                     let Some(item) = src.item.as_ref() else { continue };
                     // A plan the person chose to start though its Triage found the ticket not ready assumes answers to that Triage's questions.
-                    let assumptions = if kind == RunKind::Plan && input.readiness_overridden { report.readiness.iter().filter(|r| !r.ready).flat_map(|r| r.questions.clone()).collect() } else { Vec::new() };
+                    // Questions the reporter has since answered in a comment are not assumed: the plan reads the answers in the ticket's comments.
+                    let answered = crate::inbox::answered_by_reply(events, &replies, src.ended_at.unwrap_or(src.queued_at));
+                    let assumptions = if kind == RunKind::Plan && input.readiness_overridden && !answered { report.readiness.iter().filter(|r| !r.ready).flat_map(|r| r.questions.clone()).collect() } else { Vec::new() };
                     let slots = Slots { findings_from_run: carried.map(String::from), assumptions, pr: pr.as_ref().map(|p| p.number), pr_sha: pr.as_ref().and_then(|p| p.sha.clone()) };
                     let spec = match self.core.plan(&src.spec.repo, item).await {
                         Ok(plan) => autostart::spec_for(&decision, src, plan, &slots),

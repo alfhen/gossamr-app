@@ -129,13 +129,13 @@ test("a build Pip drafts is never started in place: its 'Review and start →' o
   await expect(stepChip(page, "plan").locator("[data-step-state]")).toHaveText("Ready to review");
 
   // The plan's description draft opens the ticket's peek over Pip home, where its diff is read and approved as anywhere.
-  const rewrite = homeConversationRegion(page).getByRole("article", { name: "Update the description of CA-401" });
+  const rewrite = homeConversationRegion(page).getByRole("article", { name: "Update the description of CA-401" }).last();
   await rewrite.getByRole("button", { name: "Review on CA-401 →" }).click();
   await expect(peekSheet(page)).toHaveAttribute("aria-label", "Details for CA-401");
   await expect(pipHome(page)).toBeVisible();
-  await expect(peekSheet(page).getByRole("article", { name: "Update the description of CA-401" })).toBeFocused();
+  await expect(peekSheet(page).getByRole("article", { name: "Update the description of CA-401" }).filter({ hasText: "Gossamr Plan" })).toBeFocused();
   await expectPeekInPlace(page);
-  await peekSheet(page).getByRole("article", { name: "Update the description of CA-401" }).getByRole("button", { name: "Update description" }).click();
+  await peekSheet(page).getByRole("article", { name: "Update the description of CA-401" }).filter({ hasText: "Gossamr Plan" }).getByRole("button", { name: "Update description" }).click();
   await expect(rewrite).toHaveCount(0);
   await page.keyboard.press("Escape");
   await expect(peekSheet(page)).toHaveCount(0);
