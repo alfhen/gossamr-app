@@ -165,10 +165,18 @@ export const reporterAnswered = (list: readonly Pick<WorkstreamView, "workstream
 export function pushWaitToast(text: string, workstreamId: string | null | undefined) {
   const id = useToasts.getState().push(text, "info");
   if (id === null || !workstreamId) return;
-  const off = useWorkstreams.subscribe((s) => {
+  // Both watches go once the toast does, whether the reporter replied or its own timer took it.
+  const off = () => {
+    offWorkstreams();
+    offToasts();
+  };
+  const offWorkstreams = useWorkstreams.subscribe((s) => {
     const shown = useToasts.getState().toasts.some((t) => t.id === id);
     if (shown && reporterAnswered(s.list, workstreamId)) useToasts.getState().dismiss(id);
     if (!shown || reporterAnswered(s.list, workstreamId)) off();
+  });
+  const offToasts = useToasts.subscribe((s) => {
+    if (!s.toasts.some((t) => t.id === id)) off();
   });
 }
 
