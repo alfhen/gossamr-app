@@ -12,7 +12,7 @@ import { draftTitle } from "./DraftCard";
 import { LiveDraftPreview } from "./DraftPreview";
 import { PipRunCard } from "./PipRunCard";
 import { useDraftsRev } from "./draftLive";
-import { BATCH_ASIDE, BATCH_TITLE, EDITED_ASIDE, batchable, editedPending, batchToApprove, freezeBatch, nextStep, retiredStepDrafts, stepBatchLabel, stepChips, stepDrafts, type BatchSnapshot, type StepChip, type StepGroup } from "./pipHomeLogic";
+import { BATCH_ASIDE, BATCH_TITLE, EDITED_ASIDE, batchable, draftEdited, editedPending, batchToApprove, freezeBatch, nextStep, retiredStepDrafts, stepBatchLabel, stepChips, stepDrafts, type BatchSnapshot, type StepChip, type StepGroup } from "./pipHomeLogic";
 import { usePipHome } from "./pipHomeStore";
 import { openOnGithub } from "./githubUi";
 import { openPullView, usePullView } from "./pullViewStore";
@@ -98,6 +98,7 @@ export function StepDrafts({ step, drafts, inPane = [], approve, initialConfirmi
   const refocus = useRef(false);
   useDraftsRev();
   const together = batchable(counted);
+  const leftOut = repeatedComments(counted.filter((p) => !draftEdited(p.id)));
   const edited = editedPending(counted).length;
   // Drafts from the person's own reply are never in the batch, as in Needs you; the note says why when it leaves a draft out.
   const aside = counted.filter((p) => p.state.type === "pending" && isAnswersDraft(p)).length;
@@ -128,9 +129,10 @@ export function StepDrafts({ step, drafts, inPane = [], approve, initialConfirmi
       {frozen ? (
         <>
           <BatchConfirm count={frozen.length} onConfirm={() => void confirm(frozen)} onCancel={cancel} />
-          {repeatedComments(counted).length > 0 && (
+          {/* The repeats among the unedited drafts, as the batch counts them: an edited twin never makes its copy a repeat. */}
+          {leftOut.length > 0 && (
             <p data-batch-left-out className="m-0 text-sm text-ws-ink2">
-              {REPEATED_COMMENT_NOTE}: {repeatedComments(counted).map((p) => leftOutLabel(p, draftTitle(p))).join(", ")}.
+              {REPEATED_COMMENT_NOTE}: {leftOut.map((p) => leftOutLabel(p, draftTitle(p))).join(", ")}.
             </p>
           )}
         </>
