@@ -20,6 +20,7 @@ import { useRunSetup } from "./runSetupStore";
 import { useRuns } from "./runsStore";
 import { useWorkspace, workflowOfItem } from "../workspaceStore";
 import { PEEK_DRAFT_MARGIN, peekFocusAfterLeaving } from "./peekDrafts";
+import { KeyHint } from "./KeyHint";
 import { useToasts } from "./toasts";
 import { doneText, postedToJira, waitStarted } from "./NeedsPane";
 import { escLeavesPause, useCardKeys } from "./draftCardKeys";
@@ -863,11 +864,11 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
           </div>
         )}
       </div>
-      {keys.hint && (
-        // Said aloud only when it asks for a confirm; the list of keys is read when the card is, not announced at each focus.
-        <p aria-live={keys.asking ? "polite" : undefined} data-key-hint className={`m-0 border-t border-ws-sep px-3 py-1 text-xs ${keys.asking ? "bg-ws-pip-soft font-semibold text-ws-pip" : "bg-ws-bar text-ws-ink3"}`}>
-          {keys.hint}
-        </p>
+      {keys.hint ? (
+        <KeyHint hint={keys.hint} asking={!!keys.asking} className={`m-0 border-t border-ws-sep px-3 py-1 text-xs ${keys.asking ? "bg-ws-pip-soft font-semibold text-ws-pip" : "bg-ws-bar text-ws-ink3"}`} />
+      ) : (
+        // Mounted before it is needed, so the confirm that fills it is announced.
+        <p aria-live="polite" data-key-live className="sr-only" />
       )}
     </article>
   );
