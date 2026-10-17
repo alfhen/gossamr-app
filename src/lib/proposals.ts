@@ -31,9 +31,16 @@ export function targetOf(intent: Intent): ItemRef | null {
   }
 }
 
-/** A few words of what a draft says, to name it in a line that has no card beside it (the Undo for a skip); masked, null for a draft with no words of its own. */
-export function draftExcerpt(intent: Intent, max = 40): string | null {
-  const text = intent.type === "comment" ? docText(intent.body) : intent.type === "create" ? intent.fields.title : intent.type === "runAnswer" || intent.type === "followUp" ? intent.message : "";
+/**
+ * A few words of what a draft says, to name it in a line that has no card beside it (the Undo for a skip); masked, null for a draft
+ * with no words of its own. `edited` is what the person typed into the card, which names it better than the stored text.
+ */
+export function draftExcerpt(intent: Intent, max = 40, edited?: { body?: { text: string }; message?: string }): string | null {
+  const text =
+    intent.type === "comment" ? (edited?.body?.text ?? docText(intent.body))
+    : intent.type === "create" ? intent.fields.title
+    : intent.type === "runAnswer" || intent.type === "followUp" ? (edited?.message ?? intent.message)
+    : "";
   const flat = maskSecrets(text).replace(/\s+/g, " ").trim();
   if (!flat) return null;
   return flat.length <= max ? flat : `${flat.slice(0, max).trimEnd()}…`;

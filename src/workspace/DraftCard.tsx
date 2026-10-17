@@ -21,6 +21,7 @@ import { useRuns } from "./runsStore";
 import { useWorkspace, workflowOfItem } from "../workspaceStore";
 import { PEEK_DRAFT_MARGIN, peekFocusAfterLeaving } from "./peekDrafts";
 import { KeyHint } from "./KeyHint";
+import { keptEdits, keptEditsOfDraft, type KeptEdits } from "./keptEdits";
 import { useToasts } from "./toasts";
 import { doneText, postedToJira, waitStarted } from "./NeedsPane";
 import { escLeavesPause, useCardKeys } from "./draftCardKeys";
@@ -214,15 +215,7 @@ export function DraftCard(props: DraftCardProps) {
   );
 }
 
-/** What was typed into a draft's fields when it was skipped, so Undo brings the draft back with the edit still in them. */
-export interface KeptEdits {
-  body?: { text: string; mentions: Mention[] };
-  rewrite?: { title: string; text: string };
-  message?: string;
-  /** Which proposed subtasks were still ticked, when any was unticked. */
-  picked?: boolean[];
-}
-const keptEdits = new Map<string, KeptEdits>();
+export type { KeptEdits } from "./keptEdits";
 
 /** Remember the unsaved `edits` of draft `id`, until the draft is posted or retired; no edits leave nothing kept. */
 export function keepEditsOfDraft(id: string, edits: KeptEdits): void {
@@ -232,9 +225,7 @@ export function keepEditsOfDraft(id: string, edits: KeptEdits): void {
 }
 
 /** The edits kept for draft `id`, if any. They stay while the draft can still be shown, so leaving a restored card before posting it doesn't lose them. */
-export function keptEditsOfDraft(id: string): KeptEdits | undefined {
-  return keptEdits.get(id);
-}
+export { keptEditsOfDraft } from "./keptEdits";
 
 /** A card going away with its draft still pending keeps what was typed in it (G1), so the card that comes back shows it and "a, Enter" opens the card and doesn't post the stored text. */
 export function keepEditsOnLeave(id: string, state: ProposalStateKind, edits: KeptEdits): void {
