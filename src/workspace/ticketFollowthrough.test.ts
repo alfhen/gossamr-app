@@ -300,6 +300,9 @@ describe("I'll answer, then the person's answers", () => {
     await backend.proposalsApprove(answers.id);
     await ask(id, "a3", "where do we stand?");
     expect(backend.proposals.list({ workstream: id }).some(planDraft)).toBe(false);
+    // The word alone is not the ask (CodeRabbit on #182).
+    await ask(id, "a3a", "what is the plan for the rest of the week?");
+    expect(backend.proposals.list({ workstream: id }).some(planDraft)).toBe(false);
     await ask(id, "a3b", "Plan this");
     const plans = backend.proposals.list({ workstream: id }).filter(planDraft);
     expect(plans).toHaveLength(1);
