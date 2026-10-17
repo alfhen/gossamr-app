@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MockBackend } from "../backend/mock";
 import { itemRef } from "../backend/mockConnector";
-import { docText } from "../lib/docs";
+import { docFromText, docText } from "../lib/docs";
 import { LEARN_AFTER } from "../lib/clarityLearning";
 import { safeToBatch } from "../lib/needs";
 import { jiraSent } from "../lib/jiraSent";
@@ -121,6 +121,19 @@ describe("Draft a nudge", () => {
     expect(currentNeeds().find((n) => n.key === `draft:${nudge.id}`)).toMatchObject({ group: "approve", batchable: false, title: "Nudge for the reporter" });
     // A plain comment beside it is batchable, so the exclusion is the nudge's own.
     expect(safeToBatch({ ...nudge, label: null } as Proposal)).toBe(true);
+  });
+
+  it("lists the questions of the newest ask the reporter got, not of one still pending or skipped", async () => {
+    const id = await waitedOn(3);
+    const ask = (text: string) => backend.proposals.askedFor({ type: "comment", item: itemRef("CA-408"), body: docFromText(`Hi,\n\n${text}\n\nThanks.`) }, "Questions for the reporter", id);
+    const posted = ask("- What is the goal?");
+    await backend.proposalsApprove(posted.id);
+    await backend.proposalsSkip(ask("- Was this skipped?").id);
+    ask("- Is this still a draft?");
+    const nudge = await backend.workstreamsNudgeReporter(id);
+    const text = docText(nudge.intent.type === "comment" ? nudge.intent.body : { blocks: [] });
+    expect(text).toContain("What is the goal?");
+    expect(text).not.toMatch(/skipped|still a draft/);
   });
 
   it("waits while one is drafted, and posting it starts the wait again from then", async () => {

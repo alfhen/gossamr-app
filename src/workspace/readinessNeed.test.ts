@@ -1,11 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MockBackend } from "../backend/mock";
 import { itemRef } from "../backend/mockConnector";
-import { readinessPrompt } from "../lib/needs";
+import { readinessPrompt, type Need } from "../lib/needs";
 import type { Run, RunSpec } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { contextDeps } from "./contextActions";
 import { keyPlan } from "./needsActions";
+import { doneNeed, PLANNING_ANYWAY } from "./NeedsPane";
 import { usePip } from "./pipStore";
 import { usePipHome } from "./pipHomeStore";
 import { useTabs } from "./tabsStore";
@@ -115,6 +116,16 @@ describe("a ticket the triage found not clear enough to plan", () => {
     expect(texts()).toContain("Planning anyway. The plan starts as soon as the workstream's checks allow.");
     const events = await backend.workstreamsEvents(id);
     expect(events.find((e) => e.action === "readiness_overridden")).toMatchObject({ actor: "person", runId: triage.id });
+  });
+
+  it("marks Plan anyway for that question only: a later question on the workstream keeps its own title in the Done line", async () => {
+    const { id, triage } = await stopped();
+    expect(await useWorkstreams.getState().planAnyway(id)).toBe(true);
+    const question = (run: string) => ({ key: `readiness:${run}`, kind: "readiness", workstreamId: id, title: "CA-408: not ready to plan" }) as never as Need;
+    // The pane never read the mark (another need was open when the question went): a question from a later triage is not labelled by it.
+    expect(doneNeed(question("triage-later")).title).toBe("CA-408: not ready to plan");
+    expect(doneNeed(question(triage.id)).title).toBe(PLANNING_ANYWAY);
+    expect(doneNeed(question(triage.id)).title).toBe("CA-408: not ready to plan");
   });
 
   it("is chosen once: a second press says the workstream isn't waiting any more and changes nothing", async () => {
