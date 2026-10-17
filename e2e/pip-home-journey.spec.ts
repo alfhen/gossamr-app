@@ -61,7 +61,7 @@ async function openStep(page: Page, kind: string) {
 /** The Jira comment drafts waiting under step `kind`, opened if it is closed: not its subtasks or the GitHub review draft. */
 async function pendingComments(page: Page, kind: string) {
   await openStep(page, kind);
-  return stepChip(page, kind).locator('article[data-draft][data-state="pending"][aria-label="Comment on CA-401"]');
+  return stepChip(page, kind).locator('article[data-draft][data-state="pending"]').filter({ has: page.locator("h3", { hasText: /^Comment on CA-401$/ }) });
 }
 
 /** Starts a workstream on CA-401 from its peek, with room for every automatic turn of the chain, then selects it on Pip home. */
@@ -191,8 +191,8 @@ test("intake to review on Pip home: the person talks to Pip, starts the investig
   await openStep(page, "review");
   const pending = stepChip(page, "review").locator('article[data-draft][data-state="pending"]');
   await expect(pending).toHaveCount(2);
-  await expect(pending.and(page.locator('[aria-label^="GitHub review of "]'))).toHaveCount(1);
-  const drafts = pending.and(page.locator(':not([aria-label^="GitHub review of "])'));
+  await expect(pending.filter({ has: page.locator("h3", { hasText: /^GitHub review of / }) })).toHaveCount(1);
+  const drafts = pending.filter({ hasNot: page.locator("h3", { hasText: /^GitHub review of / }) });
   await expect(drafts).toHaveCount(1);
   await expect(stepChip(page, "review").getByRole("button", { name: /safe drafts/ })).toHaveCount(0);
   const id = (await drafts.getAttribute("data-draft"))!;
@@ -211,13 +211,13 @@ test("intake to review on Pip home: the person talks to Pip, starts the investig
   await expect(peekSheet(page)).toHaveCount(0);
   await expect(pipHome(page)).toBeVisible();
   // Approving the comment left the GitHub review draft alone: nothing went to GitHub, and it still waits.
-  const github = stepChip(page, "review").locator('article[data-draft][aria-label^="GitHub review of acme/storefront#"]');
+  const github = stepChip(page, "review").locator('article[data-draft]').filter({ has: page.locator("h3", { hasText: /^GitHub review of acme\/storefront#/ }) });
   await expect(github).toHaveCount(1);
   await expect(github).toHaveAttribute("data-state", "pending");
   expect(await githubWrites(page)).toEqual([]);
 
   // Reviewed and posted from the peek: exactly one comment review of the build's pull request, at the commit R6 read.
-  const name = (await github.getAttribute("aria-label"))!;
+  const name = (await github.locator("h3").first().textContent())!;
   await github.getByRole("button", { name: "Review and post →" }).click();
   const card = peekSheet(page).getByRole("article", { name });
   await card.getByRole("button", { name: "Post review" }).click();

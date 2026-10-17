@@ -63,10 +63,10 @@ test("s skips a draft at once, with an Undo that brings it back, and the audit s
   // The keyboard goes to the draft from the composer; s acts: no ask, no Enter.
   await homeComposer(page).press("ArrowUp");
   await expect(card).toBeFocused();
-  await expect(card.getByRole("status")).toHaveText("a approve · e edit · d s skip · ↵ open");
+  await expect(card.locator("[data-key-hint]")).toHaveText("a approve · e edit · d s skip · ↵ open");
   await page.keyboard.press("s");
   await expect(card).toHaveAttribute("data-state", "skipped");
-  await expectToast(page, "Skipped the draft on CA-401.");
+  await expectToast(page, "Skipped the draft on CA-401");
   await expect(undo(page)).toBeVisible();
   expect(await jiraWrites(page)).toEqual([]);
 
@@ -97,7 +97,7 @@ test("a on a draft still asks for Enter, since approving writes to Jira; Undo is
   await homeComposer(page).press("ArrowUp");
   await expect(card).toBeFocused();
   await page.keyboard.press("a");
-  await expect(card.getByRole("status")).toHaveText("↵ approve · any other key cancels");
+  await expect(card.locator("[data-key-hint]")).toHaveText("↵ approve · any other key cancels");
   expect(await jiraWrites(page)).toEqual([]);
   await page.keyboard.press("Enter");
   await expect.poll(async () => (await jiraWrites(page)).map((w) => w.type)).toEqual(["comment"]);
@@ -213,7 +213,7 @@ test("draft cards in the conversation: j and k move, d skips at once and Undo re
   await page.keyboard.press("j");
   await page.keyboard.press("d");
   await expect(second).toHaveAttribute("data-state", "skipped");
-  await expectToast(page, "Skipped the draft on CA-401.");
+  await expectToast(page, "Skipped the draft on CA-401");
   await undo(page).click();
   await expect(second).toHaveAttribute("data-state", "pending");
   await expect(first).toHaveAttribute("data-state", "pending");
@@ -256,7 +256,7 @@ test("the Activity Drafts list and the ticket's peek take the same keys on their
   await expect(drafts.first()).toBeFocused();
   await page.keyboard.press("d");
   await expect(drafts).toHaveCount(1);
-  await expectToast(page, "Skipped the draft on CA-401.");
+  await expectToast(page, "Skipped the draft on CA-401");
   await undo(page).click();
   await expect(drafts).toHaveCount(2);
   // a asks for Enter on these too: it writes to Jira.

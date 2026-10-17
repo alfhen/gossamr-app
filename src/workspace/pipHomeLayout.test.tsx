@@ -38,9 +38,9 @@ describe("Pip home's layout", () => {
     const out = html();
     const left = out.slice(out.indexOf("data-pip-home-left"), out.indexOf('data-pip-home-column="conversation"'));
     expect(left.indexOf('aria-label="Needs you"')).toBeGreaterThan(-1);
-    expect(left.indexOf('aria-label="Needs you"')).toBeLessThan(left.indexOf('aria-label="Workstreams"'));
+    expect(left.indexOf('aria-label="Needs you"')).toBeLessThan(left.indexOf('aria-label="Your workstreams"'));
     // Needs you is a section of its own, no longer inside the workstreams' navigation.
-    const nav = left.slice(left.indexOf('<nav aria-label="Workstreams"'));
+    const nav = left.slice(left.indexOf('<nav aria-label="Your workstreams"'));
     expect(nav).not.toContain('aria-label="Needs you"');
     expect(nav).toMatch(/^<nav[^>]*min-h-0 flex-1/);
     // The main list sizes to its content up to half the column; the workstreams take the rest.

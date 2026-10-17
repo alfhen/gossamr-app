@@ -49,7 +49,7 @@ test("ArrowUp from the empty input reaches Pip's new comment draft with a visibl
   await expect(draft).toContainText("a approve · e edit · d s skip · ↵ open");
   expect(await hintClipped(draft)).toBe(false);
   await page.keyboard.press("a");
-  await expect(draft.getByRole("status")).toHaveText("↵ approve · any other key cancels");
+  await expect(draft.locator("[data-key-hint]")).toHaveText("↵ approve · any other key cancels");
   expect(await hintClipped(draft)).toBe(false);
   await expect(stateOf(draft)).toHaveText("Draft");
   await page.keyboard.press("Enter");
@@ -106,7 +106,7 @@ test("a click on a card's text neither shows its keys nor lets a and Enter appro
 
   await draft.getByText(NUDGE).click();
   await expect(draft).toBeFocused();
-  await expect(draft.getByRole("status")).toHaveCount(0);
+  await expect(draft.locator("[data-key-hint]")).toHaveCount(0);
   expect((await ring(draft)).style).toBe("none");
   await page.keyboard.press("a");
   await page.keyboard.press("Enter");
@@ -120,7 +120,7 @@ test("skipping the last card under Drafts waiting hands focus to the input, so j
   await openPip(page);
   const waiting = pipPane(page).getByRole("region", { name: "Drafts" });
   const draft = waiting.getByRole("article").last();
-  const name = await draft.getAttribute("aria-label");
+  const name = await draft.locator("h3").first().textContent();
   const before = await waiting.getByRole("article").count();
 
   await page.locator(PIP_INPUT).press("ArrowUp");

@@ -3,10 +3,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { itemRef } from "../backend/mockConnector";
 import { docFromText } from "../lib/docs";
 import type { Proposal, RunSpec } from "../types";
-import { NUDGE_COMMENT_LABEL, READINESS_COMMENT_LABEL } from "../lib/proposals";
+import { ANSWERS_COMMENT_LABEL, NUDGE_COMMENT_LABEL, READINESS_COMMENT_LABEL } from "../lib/proposals";
 import { useToasts } from "./toasts";
-import { DraftCard, answersRisks, rewriteRisks, postedNote, keepEditsOfDraft, keptEditsOfDraft, settleKeptEdits } from "./DraftCard";
-import { draftPreviewBody } from "./DraftPreview";
+import { DraftCard, SECRET_NOTE, answersRisks, rewriteRisks, postedNote, keepEditsOfDraft, keptEditsOfDraft, settleKeptEdits } from "./DraftCard";
+import { DraftPreview, draftPreviewBody } from "./DraftPreview";
 
 const spec: RunSpec = { kind: "investigate", repo: "acme/web", clonePath: "/Users/sample/Code/web", base: "main", name: "ca-412-fix-ab12", instruction: "Investigate this work." };
 const BEFORE = "Read the exact prompt and checks, then start it. Nothing runs before that.";
@@ -146,5 +146,46 @@ describe("an edited description's posting pause counts lines in the description 
     expect(quote.broadcast).toEqual(["@everyone\t1"]);
     expect(quote.secret?.[0]).toMatch(/\t1$/);
     expect(rewriteRisks("Old", "a\nb", "Hi @here", "a\nb").quote.broadcast).toEqual(["@here"]);
+  });
+});
+
+describe("a comment being read that holds something secret-like (G22)", () => {
+  beforeEach(() => {
+    vi.stubGlobal("localStorage", { getItem: () => null, setItem: () => {}, removeItem: () => {} });
+  });
+  const card = (p: Proposal) => renderToStaticMarkup(<DraftCard proposal={p} statusName={null} people={[]} working={false} error={null} onApprove={vi.fn()} onSkip={vi.fn()} />);
+  const answers = (text: string): Proposal => ({ ...commentDraft("g22"), createdBy: "pip", label: ANSWERS_COMMENT_LABEL, intent: { type: "comment", item: itemRef("CA-412"), body: docFromText(text) } });
+
+  it("says it will pause before posting and keeps the text as written", () => {
+    const out = card(answers("Answer: token=ghp_abcdefghijklmnopqrstuvwxyz0123456789"));
+    expect(out).toContain("data-secret-note");
+    expect(out).toContain(SECRET_NOTE);
+    expect(out).toContain("ghp_abcdefghijklmnopqrstuvwxyz0123456789");
+  });
+
+  it("says nothing on a draft without one", () => {
+    expect(card(answers("Answer: the staging one"))).not.toContain("data-secret-note");
+    expect(card(commentDraft("g22b"))).not.toContain("data-secret-note");
+  });
+});
+
+describe("the Start-an-agent card's name (G28)", () => {
+  beforeEach(() => {
+    vi.stubGlobal("localStorage", { getItem: () => null, setItem: () => {}, removeItem: () => {} });
+  });
+
+  it("is labelled by its heading, so its title is read once", () => {
+    const out = renderToStaticMarkup(<DraftCard proposal={runDraft({ type: "pending" })} statusName={null} people={[]} working={false} error={null} onApprove={vi.fn()} onSkip={vi.fn()} onReview={vi.fn()} />);
+    const id = out.match(/aria-labelledby="([^"]+)"/)![1];
+    expect(out).toMatch(new RegExp(`<h3 id="${id}"[^>]*>Start an agent: CA-412</h3>`));
+    expect(out).not.toContain('aria-label="Start an agent');
+  });
+
+  it("is so in the preview too, with no status role for the key hint", () => {
+    const out = renderToStaticMarkup(<DraftPreview proposal={runDraft({ type: "pending" })} statusName={null} targetTitle={null} onOpen={vi.fn()} onApprove={vi.fn()} onSkip={vi.fn()} />);
+    const id = out.match(/aria-labelledby="([^"]+)"/)![1];
+    expect(out).toMatch(new RegExp(`<h3 id="${id}"[^>]*>Start an agent: CA-412</h3>`));
+    expect(out).not.toContain('aria-label="Start an agent');
+    expect(out).not.toContain('role="status"');
   });
 });

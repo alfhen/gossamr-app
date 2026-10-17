@@ -67,7 +67,7 @@ test("a token that can't post says why, offers the PR view with the review's com
 
   // From its preview card, a can't post it: it only opens the draft, so Enter then confirms nothing.
   const card = await previewCard(page);
-  await expect(card.getByRole("status")).toHaveText("e edit · d s skip · ↵ open");
+  await expect(card.locator("[data-key-hint]")).toHaveText("e edit · d s skip · ↵ open");
   await expect(card.getByRole("button", { name: "Open PR view →" })).toBeVisible();
   await page.keyboard.press("a");
   await page.keyboard.press("Enter");
@@ -98,7 +98,7 @@ test("the review's preview card warns that the pull request moved on before a po
   const card = await previewCard(page);
   await expect(card.locator("[data-preview-warning]")).toHaveText(/^The pull request has moved on since this review: reviewed a1b2c3d4, now at moved\w*\. GitHub may mark these comments outdated\.$/);
   await page.keyboard.press("a");
-  await expect(card.getByRole("status")).toHaveText("↵ post this review · any other key cancels");
+  await expect(card.locator("[data-key-hint]")).toHaveText("↵ post this review · any other key cancels");
   await expect(card.locator("[data-preview-warning]")).toBeVisible();
   await page.keyboard.press("Enter");
   // The mock's push dropped the reviewed commit, so GitHub refuses it as outdated.
@@ -109,9 +109,9 @@ test("the review's preview card warns that the pull request moved on before a po
 test("a then Enter on the review's preview card posts it, once", async ({ page }) => {
   await reviewedDraft(page);
   const card = await previewCard(page);
-  await expect(card.getByRole("status")).toHaveText("a post · e edit · d s skip · ↵ open");
+  await expect(card.locator("[data-key-hint]")).toHaveText("a post · e edit · d s skip · ↵ open");
   await page.keyboard.press("a");
-  await expect(card.getByRole("status")).toHaveText("↵ post this review · any other key cancels");
+  await expect(card.locator("[data-key-hint]")).toHaveText("↵ post this review · any other key cancels");
   await page.keyboard.press("Enter");
   await expect.poll(async () => (await githubWrites(page)).length).toBe(1);
   expect((await githubWrites(page))[0].comments.map((c) => `${c.path}:${c.line}`)).toEqual([`${RETRY}:42`, `${RETRY}:17`]);

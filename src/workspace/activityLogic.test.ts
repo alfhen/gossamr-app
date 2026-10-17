@@ -159,8 +159,15 @@ describe("the Pip & agents chip", () => {
     expect(toWorkstreamEntries({ w1: lines }, [ws]).map((e) => e.text).reverse()).toEqual([
       "You chose to ask the reporter about R3's open questions; drafted for you to post",
       "You chose to answer R3's open questions",
-      "You chose to plan anyway after R3 found the ticket not ready",
+      "You chose to plan now, after asking the reporter about R3's open questions",
     ]);
+  });
+
+  it("words a Plan now, after the reporter was asked about that triage, apart from Plan anyway", () => {
+    const lines = [ev(1, "person", "readiness_asked", "r3", null), ev(2, "person", "readiness_overridden", "r3", null), ev(3, "person", "readiness_overridden", "r2", null)];
+    const texts = toWorkstreamEntries({ w1: lines }, [ws]).map((e) => e.text).reverse();
+    expect(texts[1]).toBe("You chose to plan now, after asking the reporter about R3's open questions");
+    expect(texts[2]).toBe("You chose to plan anyway after R2 found the ticket not ready");
   });
 
   it("words the clarity notice's two choices", () => {

@@ -42,13 +42,23 @@ afterEach(() => {
 });
 
 describe("skipping a draft", () => {
+  it("names the draft in the Undo, masking a secret and cutting a long text (G27)", async () => {
+    const ws = await backend.workstreamsOpen(CA401);
+    const long = backend.proposals.draft({ ...comment, body: docFromText("Password: hunter22secret and a long tail that goes on and on for a while") } as Intent, null, "r1", ws.id);
+    await useWorkspace.getState().refreshProposals();
+    await useWorkspace.getState().skip(long.id);
+    const said = texts()[0];
+    expect(said).toMatch(/^Skipped the draft on CA-401: “Password: hu….*…”\.$/);
+    expect(said).not.toContain("hunter22secret");
+  });
+
   it("offers Undo, and Undo brings the draft back to pending with its own audit line", async () => {
     const ws = await backend.workstreamsOpen(CA401);
     const p = backend.proposals.draft(comment, null, "r1", ws.id);
     await useWorkspace.getState().refreshProposals();
     await useWorkspace.getState().skip(p.id);
     expect(useWorkspace.getState().proposals[p.id].state.type).toBe("skipped");
-    expect(texts()).toEqual(["Skipped the draft on CA-401."]);
+    expect(texts()).toEqual(["Skipped the draft on CA-401: “Hi”."]);
     expect(useToasts.getState().toasts[0].action).toMatchObject({ label: "Undo", what: "skip" });
     undoButton()!.run();
     await vi.waitFor(() => expect(useWorkspace.getState().proposals[p.id].state.type).toBe("pending"));

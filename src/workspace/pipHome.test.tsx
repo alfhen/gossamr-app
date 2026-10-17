@@ -56,7 +56,7 @@ const options = (html: string) => [...html.matchAll(/data-workstream-row="([^"]+
 describe("the workstream list on Pip home", () => {
   it("pins General first, then a row per open workstream with its key, title and stage", () => {
     const html = list();
-    expect(html).toContain('<nav aria-label="Workstreams"');
+    expect(html).toContain('<nav aria-label="Your workstreams"');
     expect(options(html)).toEqual(["general", ...open.map((v) => v.workstream.id)]);
     expect(html).toMatch(/data-workstream-row="general"[^>]*>.*General/);
     for (const v of open) {
@@ -196,9 +196,16 @@ describe("the workstream list on Pip home", () => {
 });
 
 describe("Pip home", () => {
+  it("names the navigation, its heading and its listbox apart (G28)", () => {
+    const html = renderToStaticMarkup(<PipHome />);
+    expect(html).toContain('<nav aria-label="Your workstreams"');
+    expect(html).toContain(">Workstreams</h2>");
+    expect(html).toMatch(/role="listbox" aria-label="Open workstreams"/);
+  });
+
   it("opens on General: the list, the conversation in a Pip root with the one composer, and the steps", () => {
     const html = renderToStaticMarkup(<PipHome />);
-    expect(html.indexOf('aria-label="Workstreams"')).toBeLessThan(html.indexOf('aria-label="Conversation"'));
+    expect(html.indexOf('aria-label="Your workstreams"')).toBeLessThan(html.indexOf('aria-label="Conversation"'));
     expect(html.indexOf('aria-label="Conversation"')).toBeLessThan(html.indexOf('aria-label="Steps"'));
     expect(html).toMatch(/<section aria-label="Conversation" data-pip-root=/);
     expect(html).toContain('data-pip-conversation="general"');

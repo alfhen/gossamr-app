@@ -61,7 +61,7 @@ describe("Pip home's orientation card", () => {
     const dl = html.match(/<dl[^>]*>/)![0];
     expect(dl).toContain('aria-label="What the words mean"');
     expect(dl).toContain('tabindex="0"');
-    expect(dl).toMatch(/class="[^"]*max-h-\[30vh\][^"]*overflow-y-auto/);
+    expect(dl).toMatch(/class="[^"]*max-h-\[18vh\][^"]*overflow-y-auto/);
     expect(html.match(/<section[^>]*>/)![0]).not.toMatch(/max-h|overflow/);
   });
 
@@ -90,7 +90,7 @@ describe("Pip home's orientation card", () => {
     const html = renderToStaticMarkup(<PipHome />);
     expect(html).not.toContain("data-pip-orientation");
     // The rest of Pip home and its footer hints are as they were.
-    expect(html).toContain('aria-label="Workstreams"');
+    expect(html).toContain('aria-label="Your workstreams"');
     expect(html).toContain("data-pip-home-hints");
   });
 

@@ -31,6 +31,14 @@ export function targetOf(intent: Intent): ItemRef | null {
   }
 }
 
+/** A few words of what a draft says, to name it in a line that has no card beside it (the Undo for a skip); masked, null for a draft with no words of its own. */
+export function draftExcerpt(intent: Intent, max = 40): string | null {
+  const text = intent.type === "comment" ? docText(intent.body) : intent.type === "create" ? intent.fields.title : intent.type === "runAnswer" ? intent.message : "";
+  const flat = maskSecrets(text).replace(/\s+/g, " ").trim();
+  if (!flat) return null;
+  return flat.length <= max ? flat : `${flat.slice(0, max).trimEnd()}…`;
+}
+
 /** Whether a draft is sent to a run with a button of its own rather than applied with `proposalsApprove`. */
 export const isRunDraft = (intent: Intent) => intent.type === "startRun" || intent.type === "followUp" || intent.type === "runAnswer";
 

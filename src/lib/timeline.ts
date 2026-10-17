@@ -378,9 +378,11 @@ export function timeline(input: TimelineInput): TimelineEntry[] {
   const holdNeed = needs.find((n) => n.kind === "hold" || n.kind === "budget");
   const escalationNeed = needs.find((n) => n.kind === "escalation");
   let rounds = 0;
+  const asked = new Set<string>();
   let previous: (TimelineEntry & { order: number; cause?: string; before?: string }) | null = null;
   for (const e of events) {
     if (e.action === "fix_round_sent") rounds++;
+    if (e.action === "readiness_asked" && e.runId) asked.add(e.runId);
     if (TOLD_ELSEWHERE.has(e.action)) continue;
     const draft = e.proposalId ? byDraft.get(e.proposalId) : undefined;
     // An approval, or a review posted, that its draft's own entry already says ("You approved a comment: posted") is that entry's.
@@ -391,7 +393,7 @@ export function timeline(input: TimelineInput): TimelineEntry[] {
         continue;
       }
     }
-    const text = (e.proposalId ? draftLine(e, who(e.actor), draft) : null) ?? eventText(e, label, rounds);
+    const text = (e.proposalId ? draftLine(e, who(e.actor), draft) : null) ?? eventText(e, label, rounds, !!e.runId && asked.has(e.runId));
     if (!text) continue;
     // A line about something still waiting on the person opens its need: the hold that still holds, the escalation still open.
     const need = (e.action === "held" || (e.action === "undone" && e.detail === "held")) && e === lastHeld && holdNeed ? holdNeed : e.action === "fix_rounds_exhausted" && escalationNeed ? escalationNeed : e.runId && !REPORTER_ASKS.has(e.action) ? needOfRun.get(e.runId) : undefined;
