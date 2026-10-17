@@ -4,7 +4,7 @@ import { AUTOSTART_DEFAULTS, HELD_BUDGET, HELD_PERSON, HELD_RESTART, TRIPWIRE } 
 import type { Intent, ItemRef, Proposal, Run, RunKind, RunState, WorkstreamRule, WorkstreamStage, WorkstreamView } from "../types";
 import { needs as buildNeeds, type Need } from "./needs";
 import { docFromText } from "./docs";
-import { approvalStartsBuild, fixRoundOnPost, nextStep, reviewPostFixRound } from "./nextStep";
+import { approvalStartsBuild, fixRoundOnPost, nextStep, planApproved, reviewPostFixRound } from "./nextStep";
 import { budgetView } from "./workstreamHold";
 import { followWithReply } from "./reporterWait";
 
@@ -485,5 +485,15 @@ describe("what posting a review draft also does (G6)", () => {
     expect(reviewPostFixRound(rev, blocked(), AUTOSTART_DEFAULTS, fixed(2))).toBeNull();
     expect(reviewPostFixRound(rev, blocked(), null, [])).toBeNull();
     expect(reviewPostFixRound(run("r-x", "review", "done"), blocked(), AUTOSTART_DEFAULTS, [])).toBeNull();
+  });
+});
+
+describe("planApproved", () => {
+  it("is true only for an applied description update from that plan run", () => {
+    const plan = run("p", "plan", "done");
+    expect(planApproved(plan, [applied("d1", "p")])).toBe(true);
+    expect(planApproved(plan, [applied("d1", "other")])).toBe(false);
+    expect(planApproved(plan, [{ ...applied("d1", "p"), state: { type: "pending" } } as Proposal])).toBe(false);
+    expect(planApproved(plan, [])).toBe(false);
   });
 });
