@@ -1,6 +1,7 @@
 import type { Proposal, ReporterReply, ReporterReplyAt, WorkstreamEvent } from "../types";
 import { isAnswersDraft, isReporterNudge, workstreamOf } from "./proposals";
 import { WITHER_DAYS } from "./views";
+import { maskSecrets } from "./riskyText";
 
 /** Where a workstream stands with the reporter, read from its audit, as `ReporterFollow` in src-tauri/src/inbox/workstreams.rs. */
 export interface ReporterFollow {
@@ -142,7 +143,7 @@ export function reporterReplies(events: readonly FollowLine[], comments: readonl
     .filter(({ t }) => !Number.isNaN(t) && t > first!)
     .sort((a, b) => a.t - b.t)
     .flatMap(({ c }) => {
-      const excerpt = replyExcerpt(c.text);
+      const excerpt = replyExcerpt(maskSecrets(c.text));
       return excerpt ? [{ id: c.id, excerpt, at: c.at }] : [];
     });
 }
@@ -154,7 +155,7 @@ export function reporterReplies(events: readonly FollowLine[], comments: readonl
  */
 export function replyComment(comments: readonly { id: string; at: string; text: string }[], repliedAt: string | null): ReporterReply | null {
   const c = repliedAt ? comments.find((k) => k.at === repliedAt) : undefined;
-  const excerpt = c ? replyExcerpt(c.text) : "";
+  const excerpt = c ? replyExcerpt(maskSecrets(c.text)) : "";
   return c && excerpt ? { id: c.id, excerpt } : null;
 }
 
