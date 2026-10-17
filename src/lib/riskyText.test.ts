@@ -23,6 +23,15 @@ describe("the pause before posting edited text", () => {
     for (const t of ["run npm_install first", "the sk_live flag", "pk_live_abcdefghijklmnop1234 is public", "glpat- is the prefix"]) expect(risksIn(t), t).toEqual([]);
   });
 
+  it("finds those keys inside a longer word, as the Rust redaction does", () => {
+    for (const k of ["x_sk_live_abcdefghijklmnop1234", "envglpat-abcdefghij0123456789", `my_npm_${"a1".repeat(19)}`, `keyAIza${"Sy-_".repeat(9)}`]) {
+      expect(risksIn(`use ${k} now`), k).toEqual(["secret"]);
+      expect(maskSecrets(`use ${k} now`), k).not.toContain("abcdefghij");
+      expect(maskSecrets(`use ${k} now`), k).not.toContain("a1a1a1a1");
+      expect(maskSecrets(`use ${k} now`), k).not.toContain("Sy-_Sy-_");
+    }
+  });
+
   it("asks only about what an edit adds, so a draft that already said it is not stopped again", () => {
     expect(newRisks("Looks good", "Looks good @everyone\nPassword: hunter2")).toEqual(["broadcast", "secret"]);
     expect(newRisks("cc @everyone", "cc @everyone, thanks")).toEqual([]);
