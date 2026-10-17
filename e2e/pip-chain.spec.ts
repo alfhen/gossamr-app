@@ -122,7 +122,7 @@ test("in one workstream Pip drafts investigate, triage with findings, plan, a bu
   const push = setup(page).locator("[data-push-locked]");
   await expect(push.getByRole("checkbox")).toBeChecked();
   await expect(push.getByRole("checkbox")).toBeDisabled();
-  await expect(push).toContainText("Builds in a workstream always push their branch and open a draft pull request. The prompt says never mark it ready and never merge it.");
+  await expect(push).toContainText("Builds in a workstream always ask to push their branch and open a draft pull request, and Pushing can't be turned off here. The prompt says never mark it ready and never merge it.");
   // Reading it starts nothing; only Start agent would.
   expect(await runCount(page)).toBe(before);
 

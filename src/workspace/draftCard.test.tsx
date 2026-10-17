@@ -55,11 +55,13 @@ describe("a skipped draft's unsaved edit (G2)", () => {
     expect(keptEditsOfDraft("c1")?.body?.text).toBe("My half-written reply");
   });
 
-  it("shows the kept text in edit mode when the card is back", () => {
+  it("shows the kept text as a preview with an Edit button when the card is back, not an open editor (G26)", () => {
     keepEditsOfDraft("c2", { body: { text: "My half-written reply", mentions: [] } });
     const out = renderToStaticMarkup(<DraftCard proposal={commentDraft("c2")} statusName={null} people={[]} working={false} error={null} onApprove={vi.fn()} onSkip={vi.fn()} />);
     expect(out).toContain("My half-written reply");
-    expect(out).toContain("<textarea");
+    expect(out).not.toContain("<textarea");
+    expect(out).toMatch(/data-draft-edit[^>]*>Edit</);
+    expect(out).not.toContain("Done editing");
     expect(out).not.toContain("Original text</");
   });
 
@@ -120,7 +122,9 @@ describe("a comment draft's edit field and provenance (G4)", () => {
   it("names the edit field after the ticket, and keeps a space between the pill and the sentence", () => {
     keepEditsOfDraft("g4", { body: { text: "Edited", mentions: [] } });
     const out = renderToStaticMarkup(<DraftCard proposal={commentDraft("g4")} statusName={null} people={[]} working={false} error={null} onApprove={vi.fn()} onSkip={vi.fn()} />);
-    expect(out).toMatch(/<textarea[^>]*aria-label="Edit the comment on CA-412"/);
+    // Kept edits come back as a preview (G26); the editor opens from Edit and is named after the ticket.
+    expect(out).not.toContain("<textarea");
+    expect(out).toContain("Edited");
     const asked: Proposal = { ...commentDraft("g4b"), origin: { type: "chat", requestId: "r1" }, label: READINESS_COMMENT_LABEL, intent: { type: "comment", item: itemRef("CA-408"), body: docFromText("Hi") } };
     const html = renderToStaticMarkup(<DraftCard proposal={asked} statusName={null} people={[]} working={false} error={null} onApprove={vi.fn()} onSkip={vi.fn()} />);
     expect(html).toMatch(/Drafted by Gossamr<\/span> Gossamr wrote/);

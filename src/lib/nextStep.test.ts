@@ -4,7 +4,7 @@ import { AUTOSTART_DEFAULTS, HELD_BUDGET, HELD_PERSON, HELD_RESTART, TRIPWIRE } 
 import type { Intent, ItemRef, Proposal, Run, RunKind, RunState, WorkstreamRule, WorkstreamStage, WorkstreamView } from "../types";
 import { needs as buildNeeds, type Need } from "./needs";
 import { docFromText } from "./docs";
-import { approvalStartsBuild, fixRoundOnPost, nextStep, reviewPostFixRound } from "./nextStep";
+import { approvalStartsBuild, fixRoundOnPost, nextStep, planApproved, reviewPostFixRound } from "./nextStep";
 import { budgetView } from "./workstreamHold";
 import { followWithReply } from "./reporterWait";
 
@@ -249,6 +249,19 @@ describe("nextStep in Advise", () => {
     expect(text([run("t", "triage", "done")], { mode: "advise" })).toBe(line);
   });
 
+  it("offers to draft the Build once the plan is approved, and not before or elsewhere (G14)", () => {
+    const plan = run("p", "plan", "done");
+    const offered = next([plan], { mode: "advise" }, [applied("d1", "p")]);
+    expect(offered).toMatchObject({ kind: "advise", draft: { label: "Draft the Build", ask: "Build this" } });
+    expect(next([plan], { mode: "advise" })?.draft).toBeUndefined();
+    expect(next([plan], { mode: "advise" }, [{ ...applied("d1", "p"), state: { type: "skipped" } } as unknown as Proposal])?.draft).toBeUndefined();
+    expect(next([plan, run("b", "build", "done", { queuedAt: iso(5) })], { mode: "advise" }, [applied("d1", "p")])?.draft).toBeUndefined();
+    expect(next([plan], {}, [applied("d1", "p")])?.draft).toBeUndefined();
+    // Another draft waiting turns the line into "waiting on you", and the Build stays one press away.
+    const comment = { ...applied("d2", "p"), intent: { type: "comment", item: ref("CA-401"), body: docFromText("Hi") } as unknown as Intent, state: { type: "pending" } } as Proposal;
+    expect(next([plan], { mode: "advise" }, [applied("d1", "p"), comment])).toMatchObject({ kind: "waiting", draft: { label: "Draft the Build", ask: "Build this" } });
+  });
+
   it("never says a rule starts a step", () => {
     for (const kind of ["investigate", "triage", "plan", "build", "review", "verify"] as const) expect(text([run("x", kind, "working")], { mode: "advise" })).not.toMatch(/automatically/);
   });
@@ -472,5 +485,15 @@ describe("what posting a review draft also does (G6)", () => {
     expect(reviewPostFixRound(rev, blocked(), AUTOSTART_DEFAULTS, fixed(2))).toBeNull();
     expect(reviewPostFixRound(rev, blocked(), null, [])).toBeNull();
     expect(reviewPostFixRound(run("r-x", "review", "done"), blocked(), AUTOSTART_DEFAULTS, [])).toBeNull();
+  });
+});
+
+describe("planApproved", () => {
+  it("is true only for an applied description update from that plan run", () => {
+    const plan = run("p", "plan", "done");
+    expect(planApproved(plan, [applied("d1", "p")])).toBe(true);
+    expect(planApproved(plan, [applied("d1", "other")])).toBe(false);
+    expect(planApproved(plan, [{ ...applied("d1", "p"), state: { type: "pending" } } as Proposal])).toBe(false);
+    expect(planApproved(plan, [])).toBe(false);
   });
 });

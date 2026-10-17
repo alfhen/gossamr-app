@@ -6,7 +6,8 @@ import type { ReviewView, Run } from "../types";
 import { Icon, KIND_ICON } from "./AgentIcons";
 import { RunBody, StateChip, TONE, type FailureState } from "./AgentParts";
 import { ownKey } from "./agentKeys";
-import { KIND_LABEL, ageSince, ageText, branchOf, formatTokens, repoName, runTitle, stateView } from "./agentsLogic";
+import { KIND_LABEL, ageSince, ageText, branchOf, formatTokens, repoName, runTitle } from "./agentsLogic";
+import { useStateView } from "./useStateView";
 import { readOnlyHeadline, verdictChip, verdictText } from "./runSheetLogic";
 
 export const agentId = (id: string) => `agent-${id}`;
@@ -168,7 +169,7 @@ export function ReadOnlyBadge({ run, compact = false }: { run: Run; compact?: bo
 }
 
 export function AgentCard({ run, now, selected, position, total, ticketTitle, label, onOpen, onAttach, onDraftComment, onBuildFromPlan, onReviewThis, onResume, draftReady, breakdownReady, onOpenDraft, onOpenBreakdown, descriptionReady, onOpenDescription, review, failure, onOpenNeed, asking }: AgentItemProps) {
-  const view = stateView(run, now);
+  const view = useStateView(run, now);
   const tone = TONE[view.tone];
   const title = runTitle(run, ticketTitle);
   const tokens = formatTokens(run.tokens);

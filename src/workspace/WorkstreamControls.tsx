@@ -1,6 +1,7 @@
 import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { Switch } from "../components/Switch";
 import { needsIn, type Need } from "../lib/needs";
+import { inWorkstreamPane } from "../lib/proposals";
 import { nextStep, type NextStep } from "../lib/nextStep";
 import { flaggedGaps, ignoredAmong, projectOfKey, SHORT_GAP } from "../lib/clarityLearning";
 import { clarityRepliedText, clarityText, type ClarityGap } from "../lib/ticketClarity";
@@ -15,6 +16,8 @@ import { paneHas, useDecisionShown } from "./decisionShown";
 import { EscalationCard } from "./EscalationCard";
 import { focusLost } from "./commands";
 import { openNeed } from "./needsActions";
+import { usePip } from "./pipStore";
+import { workstreamConversation } from "../lib/conversations";
 import { usePopover } from "./Popover";
 import { useRuns } from "./runsStore";
 import { usePrefs } from "./prefs";
@@ -133,6 +136,8 @@ export const HOLD_HINT = "No wakes and no automatic steps; its agents carry on";
 export const CLOSE_HINT = "Its conversation goes back to General; its agents and drafts are kept in General";
 /** What Close does to the agents of the workstream, said in its confirm: closing stops none, and a queued one does not start while the workstream is closed (`workstream_runs` in src-tauri/src/runs/service.rs). */
 export const CLOSE_RUNS_NOTE = "Agents already running carry on; one still queued does not start while it is closed.";
+/** What Close leaves waiting, said in its confirm when drafts are still open: they are not decided by closing. */
+export const CLOSE_DRAFTS_NOTE = (count: number) => `${count === 1 ? "1 draft is still waiting and stays" : `${count} drafts are still waiting and stay`} in General.`;
 export const MORE_HINT = "More: stop the workstream";
 
 /** What the Automatic steps button opens, for its tooltip: the routine next steps and who starts them. */
@@ -201,7 +206,7 @@ export function StopConfirm({ onStop, onKeep }: { onStop(): void; onKeep(): void
 }
 
 /** Asks before Close: the workstream goes, its agents and drafts stay. Tab stays between its two buttons while it is open. */
-export function CloseConfirm({ onClose, onKeep }: { onClose(): void; onKeep(): void }) {
+export function CloseConfirm({ onClose, onKeep, drafts = 0 }: { onClose(): void; onKeep(): void; /** Drafts still waiting for a decision, which stay with the person in General. */ drafts?: number }) {
   const question = useId();
   const detail = useId();
   return (
@@ -220,7 +225,7 @@ export function CloseConfirm({ onClose, onKeep }: { onClose(): void; onKeep(): v
       }}
     >
       <span className="text-ws-ink2">
-        <span id={question}>Close it?</span> <span id={detail}>Its conversation goes back to General; its agents and drafts are kept in General. {CLOSE_RUNS_NOTE}</span>
+        <span id={question}>Close it?</span> <span id={detail}>Its conversation goes back to General; its agents and drafts are kept in General. {drafts > 0 ? `${CLOSE_DRAFTS_NOTE(drafts)} ` : ""}{CLOSE_RUNS_NOTE}</span>
       </span>
       <Btn tone="primary" onClick={onClose} className="px-2 py-0.5">
         Close workstream
@@ -398,6 +403,8 @@ export interface ControlsViewProps {
   /** Close was pressed and waits for the person to confirm; left out where a workstream can't be closed from here. */
   confirmingClose?: boolean;
   onConfirmClose?(on: boolean): void;
+  /** Drafts of the workstream still waiting, which Close leaves for General: its confirm counts them. */
+  openDrafts?: number;
   /** What comes next, from `nextStep`; absent where it isn't known (the line is left out). */
   next?: NextStep | null;
 }
@@ -438,6 +445,15 @@ export function NextStepLine({ next, workstreamId }: { next: NextStep; workstrea
           </Btn>
         </>
       )}
+      {next.draft && workstreamId && (
+        <>
+          {" "}
+          {/* Asks Pip as typing the same words would: Pip drafts the step for review, and nothing starts until the person starts it. */}
+          <Btn tone="plain" data-next-draft onClick={() => usePip.getState().askIn(workstreamConversation(workstreamId), next.draft!.ask)} className="px-2 py-0.5">
+            {next.draft.label}
+          </Btn>
+        </>
+      )}
     </p>
   );
 }
@@ -446,7 +462,7 @@ export function NextStepLine({ next, workstreamId }: { next: NextStep; workstrea
  * Under the workstream's line in the Pip pane: the Manage switch, why it is held with Resume, a review that still blocks
  * after the fix rounds with the person's choices, the budget once it runs low, Hold and Stop, and the automatic steps. Everything comes from the workstream's view, the same in the app and the sample.
  */
-export function WorkstreamControlsView({ view, globals, actions, confirmingStop, onConfirmStop, confirmingClose = false, onConfirmClose, next }: ControlsViewProps) {
+export function WorkstreamControlsView({ view, globals, actions, confirmingStop, onConfirmStop, confirmingClose = false, onConfirmClose, openDrafts = 0, next }: ControlsViewProps) {
   const ws = view.workstream;
   const note = budgetNote(view.budget);
   const manage = ws.mode === "manage";
@@ -496,7 +512,7 @@ export function WorkstreamControlsView({ view, globals, actions, confirmingStop,
           <MoreMenu onStop={() => onConfirmStop(true)} />
         </span>
         {confirmingStop && <StopConfirm onStop={() => (closeConfirm(), actions.onStop())} onKeep={closeConfirm} />}
-        {confirmingClose && onConfirmClose && actions.onClose && <CloseConfirm onClose={actions.onClose} onKeep={keepOpen} />}
+        {confirmingClose && onConfirmClose && actions.onClose && <CloseConfirm onClose={actions.onClose} onKeep={keepOpen} drafts={openDrafts} />}
       </div>
       <p id={modeLineId} data-mode-line={ws.mode} className="m-0 text-xs text-ws-ink2">
         {MODE_LINE[ws.mode]}
@@ -546,5 +562,6 @@ export function WorkstreamControls({ view }: { view: WorkstreamView }) {
   const events = useWorkstreams((s) => s.events[id]) ?? NO_EVENTS;
   const confirmingClose = useWorkstreams((s) => s.confirmingClose === id);
   const next = useMemo(() => nextStepOnceKnown(view, runs, Object.values(proposals), needs, globals, events), [view, runs, proposals, needs, globals, events]);
-  return <WorkstreamControlsView view={view} globals={globals} actions={actions} confirmingStop={confirmingStop} onConfirmStop={setConfirmingStop} confirmingClose={confirmingClose} onConfirmClose={(on) => useWorkstreams.getState().askClose(on ? id : null)} next={next} />;
+  const openDrafts = useMemo(() => Object.values(proposals).filter((p) => p.state.type === "pending" && inWorkstreamPane(p, view.workstream)).length, [proposals, view.workstream]);
+  return <WorkstreamControlsView view={view} globals={globals} actions={actions} confirmingStop={confirmingStop} onConfirmStop={setConfirmingStop} confirmingClose={confirmingClose} onConfirmClose={(on) => useWorkstreams.getState().askClose(on ? id : null)} openDrafts={openDrafts} next={next} />;
 }

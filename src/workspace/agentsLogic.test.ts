@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { MockBackend } from "../backend/mock";
-import type { Run, RunState, WorkstreamView } from "../types";
+import type { Proposal, Run, RunState, WorkstreamView } from "../types";
 import {
   APPROVE_PLAN,
   planOpenQuestions,
@@ -33,6 +33,7 @@ import {
   runTitle,
   sortRuns,
   stateView,
+  runApproved,
   stepRun,
   slotWaiters,
   stopAllText,
@@ -122,6 +123,28 @@ describe("how a state looks", () => {
     expect(stateView(run("done"), NOW).tone).toBe("done");
     expect(stateView(run("failed"), NOW).tone).toBe("blocked");
     expect(stateView(run("stopped"), NOW).tone).toBe("muted");
+  });
+
+  it("reads Approved for a done run whose main draft was applied, and Ready to review otherwise (G17)", () => {
+    const done = run("done", { id: "r1" });
+    const draft = (intent: string, state: string, at: number, runId = "r1") => ({ id: `${intent}${at}`, createdAt: iso(at), origin: { type: "run", runId, shortId: null }, intent: { type: intent }, state: { type: state } }) as unknown as Proposal;
+    expect(stateView(done, NOW).label).toBe("Ready to review");
+    expect(stateView(done, NOW, true)).toMatchObject({ label: "Approved", tone: "done", icon: "check" });
+    expect(stateView(run("working"), NOW, true).label).toBe("Working");
+    expect(runApproved(done, [draft("rewrite", "applied", 5)])).toBe(true);
+    expect(runApproved(done, [draft("rewrite", "pending", 5)])).toBe(false);
+    expect(runApproved(done, [draft("rewrite", "skipped", 5)])).toBe(false);
+    // Only the first draft is the main one; a later applied comment does not make it so, and a replaced draft does not count.
+    expect(runApproved(done, [draft("rewrite", "pending", 9), draft("comment", "applied", 5)])).toBe(false);
+    expect(runApproved(done, [draft("rewrite", "retired", 9), draft("comment", "applied", 5)])).toBe(true);
+    expect(runApproved(done, [draft("startRun", "pending", 9), draft("comment", "applied", 5)])).toBe(true);
+    expect(runApproved(done, [draft("rewrite", "applied", 5, "other")])).toBe(false);
+    // A plan's main draft is its description update, whatever else it drafted first.
+    const plan = run("done", { id: "r1", spec: { ...base.spec, kind: "plan" } });
+    expect(runApproved(plan, [draft("comment", "pending", 9), draft("rewrite", "applied", 5)])).toBe(true);
+    expect(runApproved(plan, [draft("comment", "applied", 9), draft("rewrite", "pending", 5)])).toBe(false);
+    expect(runApproved(plan, [draft("comment", "applied", 9)])).toBe(false);
+    expect(runApproved(run("working", { id: "r1" }), [draft("rewrite", "applied", 5)])).toBe(false);
   });
 
   it("swaps the working colour for the quiet one and stops pulsing", () => {

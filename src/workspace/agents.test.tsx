@@ -10,6 +10,12 @@ import { AgentsBanners } from "./AgentsBanners";
 import { AgentsIntro } from "./AgentsEmpty";
 import { AgentsScreen, StopAll, keyAction, type AgentsActions, type AgentsScreenProps } from "./AgentsView";
 import { NO_FILTERS } from "./agentsLogic";
+
+// The cards are called as plain functions in "opening a run", outside a render, so the store hook behind their state label is stood in for by the pure `stateView`.
+vi.mock("./useStateView", async () => {
+  const logic = await import("./agentsLogic");
+  return { useStateView: (run: Parameters<typeof logic.stateView>[0], now: number) => logic.stateView(run, now) };
+});
 import { LAUNCHER_GUTTER } from "./PipExtras";
 import { DENY_QUESTION, DenyConfirm, StopRunConfirm, stopRunQuestion } from "./PermissionAsk";
 import { Rail, railBadgeText } from "./Rail";

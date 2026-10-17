@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MockBackend } from "../backend/mock";
 import { itemRef } from "../backend/mockConnector";
 import { docFromText, docText } from "../lib/docs";
-import { LEARN_AFTER } from "../lib/clarityLearning";
+import { ignoredGaps, LEARN_AFTER } from "../lib/clarityLearning";
 import { safeToBatch } from "../lib/needs";
 import { jiraSent } from "../lib/jiraSent";
 import { nudgeOffered } from "../lib/reporterWait";
@@ -24,6 +24,7 @@ const memory = () => {
 };
 const THIN = "Fix it.";
 const ago = (days: number) => new Date(Date.now() - days * 86_400_000).toISOString();
+const ignoredGapsOf = (project: string) => ignoredGaps(usePrefs.getState().clarityLearning, project);
 const texts = () => useToasts.getState().toasts.map((t) => t.text);
 
 let backend: MockBackend;
@@ -249,6 +250,22 @@ describe("what Looks fine teaches the clarity notice", () => {
     expect(texts()[0]).toMatch(/^Gossamr will stop flagging CA /);
     expect(await giveBackClarity("CA")).toBe(1);
     expect(texts()).toEqual(["Gossamr will flag new unclear CA tickets as before."]);
+  });
+
+  it("a Looks fine after the reporter replied dismisses the notice and counts for nothing (G22)", async () => {
+    const [a, b, c] = await dismissAll(thinTickets);
+    const replied = (id: string) => useWorkstreams.setState((s) => ({ list: s.list.map((v) => (v.workstream.id === id ? { ...v, reporterReplied: true } : v)) }));
+    await useWorkstreams.getState().looksFine(a);
+    replied(b);
+    useToasts.getState().clear();
+    await useWorkstreams.getState().looksFine(b);
+    // The notice went, the count stayed at one, and the toast says what comes next without "Noted for".
+    expect(usePrefs.getState().clarityLearning).toEqual({ CA: { short: 1, done: 1, scope: 1, who: 1 } });
+    expect(events(b).some((e) => e.action === "clarity_dismissed")).toBe(true);
+    expect(texts().join(" ")).not.toContain("Noted for");
+    await useWorkstreams.getState().looksFine(c);
+    expect(usePrefs.getState().clarityLearning).toEqual({ CA: { short: 2, done: 2, scope: 2, who: 2 } });
+    expect(ignoredGapsOf("CA")).toEqual([]);
   });
 
   it("three Looks fine in a row leave 'stopped flagging' on screen, never the 'After N more' counters", async () => {

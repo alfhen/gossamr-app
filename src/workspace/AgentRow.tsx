@@ -1,5 +1,6 @@
 import { Dot, RowText, StateChip } from "./AgentParts";
-import { KIND_LABEL, ageText, formatTokens, repoName, runTitle, stateView } from "./agentsLogic";
+import { KIND_LABEL, ageText, formatTokens, repoName, runTitle } from "./agentsLogic";
+import { useStateView } from "./useStateView";
 import { AutoStarted, InNeedsYou, KeyAsking, ReadOnlyBadge, RunLabel, RunRef, agentId, onActivate, ticketLabel, type AgentItemProps } from "./AgentCard";
 
 /** Shared by the header and the rows so the columns line up. */
@@ -22,7 +23,7 @@ export function AgentRowHeader() {
 }
 
 export function AgentRow({ run, now, selected, position, total, ticketTitle, label, onOpen, onOpenNeed, asking }: AgentItemProps) {
-  const view = stateView(run, now);
+  const view = useStateView(run, now);
   const title = runTitle(run, ticketTitle);
   const tokens = formatTokens(run.tokens);
   return (

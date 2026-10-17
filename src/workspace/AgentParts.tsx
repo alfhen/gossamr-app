@@ -6,6 +6,7 @@ import { createdFrom } from "./runSheetLogic";
 import { useRuns } from "./runsStore";
 import { useWorkstreams } from "./workstreamsStore";
 import { PermissionAsk, PermissionSent, usePermissionConfirmation } from "./PermissionAsk";
+import { useStateView } from "./useStateView";
 import { permissionRequest, progressText, quietMinutes, quietText, resultHeadline, slotQueue, stateView, stoppedText, type Tone } from "./agentsLogic";
 
 export const TONE: Record<Tone, { text: string; soft: string; color: string }> = {
@@ -18,7 +19,7 @@ export const TONE: Record<Tone, { text: string; soft: string; color: string }> =
 };
 
 export function StateChip({ run, now }: { run: Run; now: number }) {
-  const v = stateView(run, now);
+  const v = useStateView(run, now);
   const t = TONE[v.tone];
   return (
     <span data-state={run.state} className={`inline-flex items-center gap-1 rounded-full px-2 text-xs leading-[1.6] font-semibold whitespace-nowrap ${t.soft} ${t.text}`}>

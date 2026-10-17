@@ -6,7 +6,8 @@ import type { Proposal } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { setLiveDraft } from "./draftLive";
 import { keepEditsOfDraft, keepEditsOnLeave, keptEditsOfDraft } from "./DraftCard";
-import { keyPlan, openNeed, setPaneIntent, takePaneIntent } from "./needsActions";
+import { OPENED_NOT_POSTED, keyPlan, openNeed, sayOpenNote, setPaneIntent, takePaneIntent } from "./needsActions";
+import { useToasts } from "./toasts";
 import { usePipHome } from "./pipHomeStore";
 import { useTabs } from "./tabsStore";
 import { lastReadHeldTimes, currentNeeds, setLastReadHeldTimes } from "./useNeeds";
@@ -89,12 +90,20 @@ describe("a then Enter on a comment draft (G1)", () => {
 
   it("opens the card when it holds an unsaved edit, so the edit is what is posted", () => {
     setLiveDraft("p1", { edited: true, risky: false });
-    expect(keyPlan(draftNeed, "approve")).toEqual({ type: "open", edit: false });
+    expect(keyPlan(draftNeed, "approve")).toEqual({ type: "open", edit: false, note: OPENED_NOT_POSTED });
   });
 
-  it("opens the card when its words would stop at the posting pause", () => {
+  it("opens the card when its words would stop at the posting pause, and says why nothing was posted (G27)", () => {
     setLiveDraft("p1", { edited: false, risky: true });
     expect(plan()).toBe("open");
+    useToasts.getState().clear();
+    sayOpenNote(keyPlan(draftNeed, "approve")!);
+    expect(useToasts.getState().toasts.map((t) => t.text)).toEqual(["Not posted. This draft holds an edit or would pause, so its card opens to read first."]);
+    // A plain open (nothing to explain) and an ask say nothing.
+    setLiveDraft("p1", null);
+    sayOpenNote(keyPlan(draftNeed, "approve")!);
+    sayOpenNote({ type: "open", edit: true });
+    expect(useToasts.getState().toasts).toHaveLength(1);
   });
 
   it("opens the card when words typed into it were kept after it closed", () => {
@@ -115,7 +124,7 @@ describe("a then Enter on a comment draft (G1)", () => {
     try {
       keepEditsOnLeave("p1", "pending", { body: { text: "Edited text", mentions: [] } });
       expect(keptEditsOfDraft("p1")?.body?.text).toBe("Edited text");
-      expect(keyPlan(draftNeed, "approve")).toEqual({ type: "open", edit: false });
+      expect(keyPlan(draftNeed, "approve")).toEqual({ type: "open", edit: false, note: OPENED_NOT_POSTED });
     } finally {
       keepEditsOfDraft("p1", {});
     }

@@ -39,6 +39,10 @@ test.describe("the ask of the reporter (G2, G9)", () => {
     await draft.getByRole("button", { name: "Skip" }).click();
     await expect(workstreamRow(page, "CA-408").locator("[data-status-detail]")).toHaveText("· may be unclear");
     await page.locator("[data-toast]").getByRole("button", { name: "Undo" }).click();
+    // It comes back as a preview of what was typed (G26), and Edit opens the field with it.
+    await expect(draft).toContainText("My own wording of the ask");
+    await expect(needsPane(page).locator("textarea")).toHaveCount(0);
+    await draft.getByRole("button", { name: "Edit" }).click();
     await expect(needsPane(page).locator("textarea").first()).toHaveValue("My own wording of the ask");
   });
 });

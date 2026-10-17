@@ -42,7 +42,7 @@ describe("Pip home's orientation card", () => {
     expect(html).toContain(ORIENTATION_SAFETY);
     expect(html).toContain(ORIENTATION_PURPOSE);
     expect(ORIENTATION_PURPOSE).toBe("Pip works through your Jira tickets with coding agents and drafts every Jira and GitHub write for you to read and approve; nothing posts until you do.");
-    expect(ORIENTATION_SAFETY).toBe("Gossamr posts only what you approve; a Build runs with your Claude settings and could reach Jira or GitHub on its own. On GitHub, a Build runs as you: when Pushing is ticked its prompt asks it to push only its own branch to a draft pull request. That is a request, not a lock; see Agent safety.");
+    expect(ORIENTATION_SAFETY).toBe("Gossamr posts only what you approve; a Build runs with your Claude settings and could reach Jira or GitHub on its own. On GitHub, a Build runs as you. In a workstream or with Pushing ticked, it is asked to push only its branch to a draft pull request: a request, not a lock; see Agent safety.");
     expect(html).toMatch(/<button type="button"[^>]*>Got it<\/button>/);
   });
 

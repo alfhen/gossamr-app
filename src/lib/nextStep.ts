@@ -46,7 +46,14 @@ export interface NextStep {
   need: Need | null;
   /** The reporter has been silent long enough that "Draft a nudge" is offered beside the line (`kind` "reporter" only). */
   nudge?: boolean;
+  /** The next step can be drafted from the line (in Advise, beside "advise" or a waiting draft): the button's label and the request it sends Pip, word for word what the person would type. Pip drafts it for review; nothing starts. */
+  draft?: { label: string; ask: string };
 }
+
+/** The steps the Next line offers to draft in Advise, by the finished run that leads to them. */
+const DRAFT_AFTER: Partial<Record<RunKind, { label: string; ask: string }>> = {
+  plan: { label: "Draft the Build", ask: "Build this" },
+};
 
 /** The step a rule's run is, with its article: "a review starts automatically". */
 const A_STEP: Record<RunKind, string> = { investigate: "an investigation", triage: "a triage", plan: "a plan", build: "a build", review: "a review", verify: "a verification" };
@@ -180,7 +187,8 @@ export function nextStep(view: WorkstreamView, runs: readonly Run[], proposals: 
   if (view.reporterReplied && going.length === 0) return step("reporter", `the reporter replied${view.reporterRepliedAt ? ` ${agoText(view.reporterRepliedAt, now)}` : ""}; read it, then Looks fine or ask again.`);
   const approve = own[0];
   const line = chain(view, runs, proposals, globals, mine, going, step, events);
-  if (approve && line.kind !== "slot" && line.kind !== "auto" && line.kind !== "depends") return step("waiting", `waiting on you. ${approve.why}${more}`, approve);
+  // A draft waiting beside an approved plan still leaves the Build one press away in Advise.
+  if (approve && line.kind !== "slot" && line.kind !== "auto" && line.kind !== "depends") return { ...step("waiting", `waiting on you. ${approve.why}${more}`, approve), ...(line.draft ? { draft: line.draft } : {}) };
   return line;
 }
 
@@ -199,7 +207,14 @@ function chain(view: WorkstreamView, runs: readonly Run[], proposals: readonly P
     return step("done", `nothing left. The PR is ${verified ? "verified" : "reviewed"} and waits for you to merge it.`);
   }
 
-  if (ws.mode !== "manage") return step("advise", "nothing starts on its own while Manage is off. Ask Pip to draft the next step (for example “Build this”), or start an agent from ⌘K.");
+  if (ws.mode !== "manage") {
+    const advise = step("advise", "nothing starts on its own while Manage is off. Ask Pip to draft the next step (for example “Build this”), or start an agent from ⌘K.");
+    // Only a finished, approved plan has a next step that can be asked for by name; Pip refuses a Build before that.
+    const last = going.length === 0 ? mine[mine.length - 1] : undefined;
+    const approved = !!last && last.spec.kind === "plan" && last.state === "done" && planApproved(last, proposals);
+    const draft = approved ? DRAFT_AFTER[last.spec.kind] : undefined;
+    return draft ? { ...advise, draft } : advise;
+  }
 
   if (view.budget.level === "spent") return step("spent", "the automatic steps are used up. Ask Pip or use ⌘K to start the next step.");
   const left = view.budget.level === "amber" ? ` (${stepsLeftText(view.budget).replace(/ automatic steps left$/, "")} automatic steps left)` : "";
@@ -252,6 +267,11 @@ function afterRunning(src: Run, view: WorkstreamView, globals: Partial<AutoStart
   return step("manual", `when ${name} finishes, nothing starts on its own: ${whyNothing(src, view, globals)}. Ask Pip or use ⌘K to start the next step.`);
 }
 
+/** Whether the person approved `plan`'s plan: its description update was posted. The Build offer and the autostart rule read it the same way. */
+export function planApproved(plan: Run, proposals: readonly Proposal[]): boolean {
+  return proposals.some((p) => p.origin.type === "run" && p.origin.runId === plan.id && p.intent.type === "rewrite" && p.state.type === "applied");
+}
+
 /** The line with nothing running: what the rules are about to start after the newest run, or why nothing is. */
 function afterFinished(last: Run, view: WorkstreamView, mine: readonly Run[], proposals: readonly Proposal[], globals: Partial<AutoStartSwitches>, left: string, step: Step, events: readonly AuditLine[]): NextStep {
   const name = nameOf(last, view);
@@ -262,7 +282,7 @@ function afterFinished(last: Run, view: WorkstreamView, mine: readonly Run[], pr
   }
   const known: Partial<AutostartInput> = {};
   if (kind === "build") known.pr = { number: 0, sha: null };
-  if (kind === "plan") known.planApproved = proposals.some((p) => p.origin.type === "run" && p.origin.runId === last.id && p.intent.type === "rewrite" && p.state.type === "applied");
+  if (kind === "plan") known.planApproved = planApproved(last, proposals);
   if (kind === "review") {
     known.report = view.reviewBlocking ? { verdict: "blocking", findings: SOME_FINDING } : { verdict: "pass" };
     // The rounds the supervisor already sent for this review's build, counted as it counts them.

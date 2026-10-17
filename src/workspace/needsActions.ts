@@ -14,6 +14,7 @@ import { setPaneIntent, takePaneIntent, usePipHome } from "./pipHomeStore";
 import { useRuns } from "./runsStore";
 import { useTabs } from "./tabsStore";
 import { useWorkstreams } from "./workstreamsStore";
+import { useToasts } from "./toasts";
 
 /**
  * What the Needs you list's keys and buttons do. Everything here reaches the stores through the same commands the cards
@@ -60,7 +61,15 @@ export type NeedKey = "approve" | "dismiss" | "skip" | "edit";
  * What a key does: asks for Enter first (`ask`), acts at once (`do`: what can be undone, which offers Undo as it does), or
  * opens the decision, with the pane's first move (`open`).
  */
-export type KeyPlan = { type: "ask"; text: string; run(): void } | { type: "do"; run(): void } | { type: "open"; edit: boolean };
+export type KeyPlan = { type: "ask"; text: string; run(): void } | { type: "do"; run(): void } | { type: "open"; edit: boolean; /** Why a key that approves opened the card instead: said aloud, so the key does not read as dead. */ note?: string };
+
+/** What a (approve) says when it opens a draft's card rather than asking for Enter: the card holds an edit, or its words would stop at the posting pause. */
+export const OPENED_NOT_POSTED = "Not posted. This draft holds an edit or would pause, so its card opens to read first.";
+
+/** Says `plan.note`, if it has one, as a status; for the keys that open a card where they would otherwise have approved. */
+export function sayOpenNote(plan: KeyPlan): void {
+  if (plan.type === "open" && plan.note) useToasts.getState().push(plan.note, "info");
+}
 
 const proposalOf = (need: Need) => (need.target.type === "draft" ? useWorkspace.getState().proposals[need.target.id] : undefined);
 const runOf = (need: Need) => (need.runId ? useRuns.getState().runs.find((r) => r.id === need.runId) : undefined);
@@ -99,7 +108,8 @@ export function keyPlan(need: Need, which: NeedKey): KeyPlan | null {
           const decide = draftDecisions(p.id, p);
           return { type: "ask", text: `${need.kind === "question" ? "send" : "approve"} ${thing(need)}`, run: decide.approve };
         }
-        return { type: "open", edit: false };
+        // An edit or a pause is why a approves nothing here: the card does, so say so.
+        return { type: "open", edit: false, ...(p && draftKeyAction(p, "a") === "approve" ? { note: OPENED_NOT_POSTED } : {}) };
       case "allow":
         return run ? { type: "ask", text: "allow this once in Terminal", run: () => void useRuns.getState().allowPermissionOnce(run.id, readAs(run.needs)) } : null;
       case "retry":

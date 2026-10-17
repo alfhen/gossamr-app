@@ -2,7 +2,7 @@ import { parsePermission } from "../lib/permission";
 import { humanDuration } from "../lib/runNames";
 import { relativeTime } from "../lib/views";
 import { runLabels, stage } from "../lib/workstreamStage";
-import type { Run, RunKind, RunState, WorkstreamStage, WorkstreamView } from "../types";
+import type { Proposal, Run, RunKind, RunState, WorkstreamStage, WorkstreamView } from "../types";
 
 export const QUIET_MINUTES = 30;
 const MINUTE = 60_000;
@@ -80,10 +80,34 @@ const VIEWS: Record<RunState, StateView> = {
   unknown: { label: "Unknown", tone: "warn", icon: "help", live: false },
 };
 
-/** What a run is called and coloured, with the quiet colour taking over from the working one. */
-export function stateView(run: Pick<Run, "state" | "lastProgressAt" | "stoppedByLimit" | "slotWaitSince">, now: number): StateView {
+/** What a done run reads once its main draft was approved and applied: there is nothing left to review. */
+export const APPROVED_LABEL = "Approved";
+
+/** Drafts that only act on a run (start, send back, answer it); they are never what the run produced. */
+const ACTS_ON_RUN: readonly Proposal["intent"]["type"][] = ["startRun", "followUp", "runAnswer"];
+
+/**
+ * Whether a done run's main draft was applied: a plan's description update, else the first draft its result made (a comment, a review's post).
+ * A run whose draft is still open, skipped or replaced, or that made none, is still to review.
+ */
+export function runApproved(run: Pick<Run, "id" | "state"> & { spec: Pick<Run["spec"], "kind"> }, proposals: Iterable<Proposal>): boolean {
+  if (run.state !== "done") return false;
+  let main: Proposal | null = null;
+  const plan = run.spec.kind === "plan";
+  for (const p of proposals) {
+    if (p.origin.type !== "run" || p.origin.runId !== run.id || ACTS_ON_RUN.includes(p.intent.type) || p.state.type === "retired") continue;
+    // A plan's comment is not what it was made for: the description is.
+    if (plan && p.intent.type !== "rewrite") continue;
+    if (!main || p.createdAt < main.createdAt) main = p;
+  }
+  return main?.state.type === "applied";
+}
+
+/** What a run is called and coloured, with the quiet colour taking over from the working one. `approved` is `runApproved`: a done run reads "Approved" instead of "Ready to review". */
+export function stateView(run: Pick<Run, "state" | "lastProgressAt" | "stoppedByLimit" | "slotWaitSince">, now: number, approved = false): StateView {
   if (run.state === "stopped" && run.stoppedByLimit) return { label: "Stopped at limit", tone: "warn", icon: "stop", live: false };
   if (waitsForSlot(run)) return { ...VIEWS.queued, label: SLOT_WAIT };
+  if (approved && run.state === "done") return { ...VIEWS.done, label: APPROVED_LABEL };
   const view = VIEWS[run.state];
   return quietMinutes(run, now) === null ? view : { ...view, tone: "warn", live: false };
 }
