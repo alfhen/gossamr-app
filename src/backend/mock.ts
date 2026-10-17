@@ -625,8 +625,9 @@ export class MockBackend implements Backend {
     const item = itemRef(key);
     const reporter = this.connector.item(item)?.reporter ?? null;
     const name = reporter ? (this.connector.people.find((p) => p.accountId === reporter.accountId)?.name ?? null) : null;
-    // The questions still open are the ones of the newest ask the reporter got, as the person posted it: an ask still pending or skipped never reached them.
-    const ask = this.proposals.list({ workstream: id, states: ["applied"] }).filter(isReporterQuestions).sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
+    // The questions still open are the ones of the ask the reporter got last, as the person posted it: an ask still pending or
+    // skipped never reached them, and an applied draft is not changed after it posts, so its update is the post.
+    const ask = this.proposals.list({ workstream: id, states: ["applied"] }).filter(isReporterQuestions).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0];
     const open = ask?.intent.type === "comment" ? askedQuestions(docText(ask.intent.body)) : [];
     const body = reporterDoc(nudgeComment(key, name, !!this.workstreams.get(id)?.reporterReplies?.length, open), reporter && name ? { person: reporter, name } : null);
     const proposal = this.proposals.askedFor({ type: "comment", item, body }, NUDGE_COMMENT_LABEL, id, "nudge");
