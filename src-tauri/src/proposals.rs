@@ -381,6 +381,8 @@ pub const WORKSTREAM_PENDING_CAP: usize = 8;
 /// Why a draft a newer one of the same kind replaced was retired.
 pub const REPLACED_REASON: &str = "Replaced by a newer draft";
 
+const TRIAGE_KEEPS_THE_PLAN: &str = "a Triage description draft can't change the Gossamr Plan; revise only its Triage section";
+
 const PLAN_IS_THE_USERS: &str =
     "this description update carries the Gossamr Plan a build follows, so only the user changes it; tell them what you would change instead";
 
@@ -750,6 +752,12 @@ pub fn edit_noted(db: &Db, id: &str, intent: Intent, note: &str, at: DateTime<Ut
         let body_basis = |b: &Option<BodyChange>| b.as_ref().map(|b| b.from.clone());
         if title_basis(ot) != title_basis(nt) || body_basis(ob) != body_basis(nb) {
             return Err(refuse("an edit can't change which text the rewrite was drafted against"));
+        }
+    }
+    // A Triage's description update leaves the plan as it was; a revision may not add or change one.
+    if let (Intent::Rewrite { body: Some(ob), .. }, Intent::Rewrite { body: Some(nb), .. }) = (&p.intent, &intent) {
+        if note != EDITED_NOTE && p.is_triage_description() && ob.to.plan_section() != nb.to.plan_section() {
+            return Err(refuse(TRIAGE_KEEPS_THE_PLAN));
         }
     }
     // A transition's label named the old target, so the approve button falls back to the new status's name.
@@ -1625,6 +1633,21 @@ mod tests {
         let dropped = edit(&db, &p.id, rewrite(None, Some(("old text", "x"))), now()).unwrap_err();
         assert!(dropped.to_string().contains("drafted against"), "{dropped}");
         assert!(edit(&db, &p.id, rewrite(Some(("Old", "Same")), Some(("old text", "old text"))), now()).is_err(), "an edit goes through the same checks");
+    }
+
+    #[test]
+    fn pips_revision_of_a_triage_description_draft_may_not_change_the_plan() {
+        let db = Db::in_memory().unwrap();
+        let from = "Fix it.\n\n## Gossamr Plan\n\nThe plan.";
+        let draft = Draft { origin: Origin::Run { run_id: "run-1".into(), short_id: None, workstream: None }, created_by: CreatedBy::Agent, intent: rewrite(None, Some((from, "Fix it.\n\n## Triage\n\nSize: 3.\n\n## Gossamr Plan\n\nThe plan."))), label: None, basis: None };
+        let p = made(&db, draft);
+        assert!(p.is_triage_description());
+        let plan_changed = edit_noted(&db, &p.id, rewrite(None, Some((from, "Fix it.\n\n## Triage\n\nSize: 3.\n\n## Gossamr Plan\n\nMy plan."))), REVISED_BY_PIP, now()).unwrap_err();
+        assert!(plan_changed.to_string().contains("can't change the Gossamr Plan"), "{plan_changed}");
+        let plan_dropped = edit_noted(&db, &p.id, rewrite(None, Some((from, "Fix it.\n\n## Triage\n\nSize: 3."))), REVISED_BY_PIP, now()).unwrap_err();
+        assert!(plan_dropped.to_string().contains("can't change the Gossamr Plan"), "{plan_dropped}");
+        let revised = edit_noted(&db, &p.id, rewrite(None, Some((from, "Fix it.\n\n## Triage\n\nSize: 5.\n\n## Gossamr Plan\n\nThe plan."))), REVISED_BY_PIP, now()).unwrap();
+        assert!(matches!(&revised.intent, Intent::Rewrite { body: Some(b), .. } if b.to.triage_section().unwrap().plain_text() == "Size: 5."));
     }
 
     #[test]

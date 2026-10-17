@@ -1,5 +1,5 @@
 import type { Proposal, WorkBlock, WorkDoc, WorkInline } from "../types";
-import { isPlanExpand, planSectionOf, planStartOf } from "./mockPlanSection";
+import { planSectionOf, planStartOf } from "./mockPlanSection";
 import { docFromMarkdown, markdownOf } from "./mockMarkdown";
 
 /** The marker of a description's triage section, as `TRIAGE_HEADING` in `domain/doc/triage.rs`. */
@@ -11,13 +11,14 @@ export const QUESTIONS_LEAD = "Open questions:";
 const textOf = (content: WorkInline[]) => content.map((i) => (i.type === "text" || i.type === "link" ? i.text : "")).join("");
 const isMarker = (b: WorkBlock) => b.type === "heading" && textOf(b.content).trim().replace(/:+$/, "").trim().toLowerCase() === TRIAGE_HEADING.toLowerCase();
 
-/** The first triage heading and where its section ends: at the next heading of the same or a higher level, or at the plan's expand. */
+/** The first triage heading before the plan and where its section ends: at the next heading of the same or a higher level, never past the plan's start (a heading section or an expand). */
 function range(doc: WorkDoc): { at: number; end: number; level: number } | null {
-  const at = doc.blocks.findIndex(isMarker);
+  const limit = planStartOf(doc) ?? doc.blocks.length;
+  const at = doc.blocks.slice(0, limit).findIndex(isMarker);
   const head = doc.blocks[at];
   if (head?.type !== "heading") return null;
-  const next = doc.blocks.slice(at + 1).findIndex((b) => (b.type === "heading" && b.level <= head.level) || isPlanExpand(b));
-  return { at, end: next < 0 ? doc.blocks.length : at + 1 + next, level: head.level };
+  const next = doc.blocks.slice(at + 1, limit).findIndex((b) => b.type === "heading" && b.level <= head.level);
+  return { at, end: next < 0 ? limit : at + 1 + next, level: head.level };
 }
 
 /** What stands under the triage heading, without the heading. As `triage_section`. */
@@ -34,7 +35,7 @@ export function withoutTriageSection(doc: WorkDoc): WorkDoc {
 
 /**
  * `doc` with `note` and, when there are any, `questions` as its triage section: replacing the one it has, in place and at
- * its heading level, or added after the description and before the plan section. The note is Markdown whose headings
+ * its heading level, or added after the description and before the plan section, at that heading's level. The note is Markdown whose headings
  * become plain paragraphs, so that none can end the section. As `with_triage_section`.
  */
 export function withTriageSection(doc: WorkDoc, note: string, questions: readonly string[]): WorkDoc {
@@ -42,7 +43,10 @@ export function withTriageSection(doc: WorkDoc, note: string, questions: readonl
   const at = r ? r.at : (planStartOf(doc) ?? doc.blocks.length);
   const before = doc.blocks.slice(0, at);
   const after = r ? doc.blocks.slice(r.end) : doc.blocks.slice(at);
-  const level = r?.level ?? NEW_LEVEL;
+  const planAt = planStartOf(doc);
+  const plan = planAt === null ? undefined : doc.blocks[planAt];
+  // A plan under a heading sets the level; a plan that is an expand has none.
+  const level = r?.level ?? (plan?.type === "heading" ? plan.level : NEW_LEVEL);
   let text = note.trim();
   if (questions.length) text = `${text ? `${text}\n\n` : ""}${QUESTIONS_LEAD}\n\n${questions.map((q) => `- ${q.trim()}`).join("\n")}`;
   const own = docFromMarkdown(text).blocks.map((b): WorkBlock => (b.type === "heading" ? { type: "paragraph", content: b.content } : b));
