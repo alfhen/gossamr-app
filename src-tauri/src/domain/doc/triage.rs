@@ -22,11 +22,13 @@ fn is_marker(block: &Block) -> Option<u8> {
 }
 
 impl Doc {
-    /// The first `Triage` heading, and where its section ends: at the next heading of the same or a higher level.
+    /// The first `Triage` heading before the plan section, and where its section ends: at the next heading of the same or
+    /// a higher level, and never past the plan's start, so a plan that follows it is not part of it.
     fn triage_range(&self) -> Option<(usize, usize, u8)> {
-        let at = self.blocks.iter().position(|b| is_marker(b).is_some())?;
+        let limit = self.plan_range().map_or(self.blocks.len(), |(at, _, _)| at);
+        let at = self.blocks[..limit].iter().position(|b| is_marker(b).is_some())?;
         let level = is_marker(&self.blocks[at])?;
-        let end = self.blocks[at + 1..].iter().position(|b| matches!(b, Block::Heading { level: l, .. } if *l <= level)).map_or(self.blocks.len(), |n| at + 1 + n);
+        let end = self.blocks[at + 1..limit].iter().position(|b| matches!(b, Block::Heading { level: l, .. } if *l <= level)).map_or(limit, |n| at + 1 + n);
         Some((at, end, level))
     }
 
@@ -45,14 +47,14 @@ impl Doc {
     }
 
     /// This document with `note` and, when there are any, `questions` as its `Triage` section: replacing the one it has,
-    /// in place and at its heading level, or added after the description and before the `Gossamr Plan` section. The
+    /// in place and at its heading level, or added after the description and before the `Gossamr Plan` section, at that heading's level. The
     /// note is Markdown whose headings become plain paragraphs, so that none can end the section.
     pub fn with_triage_section(&self, note: &str, questions: &[String]) -> Doc {
         let (before, after, level) = match self.triage_range() {
             Some((at, end, level)) => (self.blocks[..at].to_vec(), self.blocks[end..].to_vec(), level),
             None => {
-                let at = self.plan_range().map_or(self.blocks.len(), |(at, _, _)| at);
-                (self.blocks[..at].to_vec(), self.blocks[at..].to_vec(), NEW_LEVEL)
+                let (at, level) = self.plan_range().map_or((self.blocks.len(), NEW_LEVEL), |(at, _, level)| (at, level));
+                (self.blocks[..at].to_vec(), self.blocks[at..].to_vec(), level)
             }
         };
         let mut text = note.trim().to_string();
@@ -145,5 +147,31 @@ mod tests {
         let plain = md("Just text.");
         assert_eq!((plain.triage_section(), plain.without_triage_section()), (None, plain.clone()));
         assert!(md("A paragraph about a Triage.").triage_section().is_none());
+    }
+
+    #[test]
+    fn a_plan_that_follows_the_triage_section_is_not_part_of_it_and_survives_a_re_triage() {
+        let doc = md("Fix it.\n\n## Triage\n\nOld note.\n\n### Gossamr Plan\n\nThe plan.");
+        assert_eq!(doc.triage_section().unwrap().to_markdown(), "Old note.");
+        assert_eq!(doc.without_triage_section().to_markdown(), "Fix it.\n\n### Gossamr Plan\n\nThe plan.");
+        let again = doc.with_triage_section("New note.", &[]);
+        assert_eq!(again.to_markdown(), "Fix it.\n\n## Triage\n\nNew note.\n\n### Gossamr Plan\n\nThe plan.");
+        assert_eq!(again.plan_section(), doc.plan_section());
+    }
+
+    #[test]
+    fn a_heading_named_triage_inside_the_plan_is_not_the_marker() {
+        let doc = md("Fix it.\n\n## Gossamr Plan\n\nintro\n\n### Triage\n\nPart of the plan.");
+        assert_eq!(doc.triage_section(), None);
+        assert_eq!(doc.without_triage_section(), doc);
+        let with = doc.with_triage_section("Size: 3.", &[]);
+        assert_eq!(with.to_markdown(), "Fix it.\n\n## Triage\n\nSize: 3.\n\n## Gossamr Plan\n\nintro\n\n### Triage\n\nPart of the plan.");
+        assert_eq!(with.plan_section(), doc.plan_section());
+    }
+
+    #[test]
+    fn a_new_section_takes_the_level_of_the_plan_heading_it_is_added_before() {
+        let with = md("Fix it.\n\n### Gossamr Plan\n\nThe plan.").with_triage_section("Size: 3.", &[]);
+        assert_eq!(with.to_markdown(), "Fix it.\n\n### Triage\n\nSize: 3.\n\n### Gossamr Plan\n\nThe plan.");
     }
 }

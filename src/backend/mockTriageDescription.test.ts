@@ -46,6 +46,22 @@ describe("the Triage section of a description in the sample build", () => {
     expect(markdownOf(withoutTriageSection(doc))).toBe("Text.\n\n### Next\n\nout");
     expect(triageSectionOf(md("Just text"))).toBeNull();
   });
+
+  it("ends before a plan that follows it, whatever the plan's level, so a re-triage keeps the plan", () => {
+    const doc = md("Fix it.\n\n## Triage\n\nOld note.\n\n### Gossamr Plan\n\nThe plan.");
+    expect(markdownOf(triageSectionOf(doc)!)).toBe("Old note.");
+    expect(markdownOf(withTriageSection(doc, "New note.", []))).toBe("Fix it.\n\n## Triage\n\nNew note.\n\n### Gossamr Plan\n\nThe plan.");
+  });
+
+  it("does not take a heading named Triage inside the plan as its marker", () => {
+    const doc = md("Fix it.\n\n## Gossamr Plan\n\nintro\n\n### Triage\n\nPart of the plan.");
+    expect(triageSectionOf(doc)).toBeNull();
+    expect(markdownOf(withTriageSection(doc, "Size: 3.", []))).toBe("Fix it.\n\n## Triage\n\nSize: 3.\n\n## Gossamr Plan\n\nintro\n\n### Triage\n\nPart of the plan.");
+  });
+
+  it("is added at the level of the plan heading it stands before", () => {
+    expect(markdownOf(withTriageSection(md("Fix it.\n\n### Gossamr Plan\n\nThe plan."), "Size: 3.", []))).toBe("Fix it.\n\n### Triage\n\nSize: 3.\n\n### Gossamr Plan\n\nThe plan.");
+  });
 });
 
 describe("the answered-by-reply reading", () => {
@@ -92,6 +108,18 @@ describe("a Triage on the vague CA-408 in the sample build", () => {
     expect(commentsOf(b, run.id)).toEqual([]);
     expect(b.proposals.writes).toEqual([]);
     for (const word of [" I ", " we ", "Gossamr", "Pip"]) expect(update.intent.body.toText).not.toContain(word);
+  });
+
+  it("is revised by Pip in its Triage section, never in the plan", async () => {
+    const b = sample();
+    b.supervisor.dispose();
+    const ws = (await b.workstreamsOpen(CA408)).id;
+    const update = rewriteOf(b, (await triage(b, ws)).id)!;
+    if (update.intent.type !== "rewrite" || !update.intent.body) throw new Error("a description update");
+    const text = update.intent.body.toText;
+    expect(() => b.proposals.pipRevise(update.id, { description: `${text}\n\n## Gossamr Plan\n\nMy plan.` }, ws)).toThrow("can't change the Gossamr Plan");
+    const revised = b.proposals.pipRevise(update.id, { description: text.replace("The ticket cannot be sized yet", "The ticket is vague") }, ws);
+    expect(revised.revisions[revised.revisions.length - 1]?.note).toBe("Revised by Pip");
   });
 
   it("is replaced by a later triage's update, which retires the older unedited one", async () => {
