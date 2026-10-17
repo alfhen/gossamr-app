@@ -31,7 +31,7 @@ import { batchLabel, EDITED_ASIDE, editedPending, freezeBatch, type BatchSnapsho
 import { useToasts } from "./toasts";
 import { useNow } from "./useNow";
 import { controlActions, HeldBanner } from "./WorkstreamControls";
-import { openOnPipHome, useWorkstreams } from "./workstreamsStore";
+import { openOnPipHome, takePlannedAnyway, useWorkstreams } from "./workstreamsStore";
 
 /** The row of `need` in Pip home's list: its own when the group is expanded, else its group's. */
 function rowFor(need: Need): HTMLElement | null {
@@ -84,13 +84,13 @@ function useAdvance(needs: readonly Need[], onAdvance: (done: Need, next: Need) 
       if (next) {
         // The line says what was done and what is now open; the new pane's heading takes the keyboard, so no key lands on a button by accident.
         const done = was.find((n) => n.key === deciding);
-        if (done) onAdvance(done, next);
+        if (done) onAdvance(doneNeed(done), next);
         setPaneIntent("card");
         home.decide(next.key, next.workstreamId);
       } else {
         // Nothing comes next, so no pane line says what was done: it is said where a screen reader hears it (G6).
         const done = was.find((n) => n.key === deciding);
-        if (done) onLast(done);
+        if (done) onLast(doneNeed(done));
         home.closeDecision();
         lands(null);
       }
@@ -106,6 +106,15 @@ function useAdvance(needs: readonly Need[], onAdvance: (done: Need, next: Need) 
     }
   }, [needs]);
 }
+
+/** How a readiness need's key starts; the rest is the triage run it waits on. */
+const READINESS_KEY = "readiness:";
+
+/** What the Done line says of a readiness question settled with Plan anyway, in place of the problem it restates. */
+export const PLANNING_ANYWAY = "Planning anyway";
+
+/** The need as the Done line names it: a readiness question the person settled with Plan anyway says so, not "ticket not ready" again. */
+export const doneNeed = (done: Need, planned = takePlannedAnyway(done.kind === "readiness" ? done.key.slice(READINESS_KEY.length) : null)): Need => (planned ? { ...done, title: PLANNING_ANYWAY } : done);
 
 /** The line over the pane once it moved on by itself: what was dealt with, and what is open now. */
 export const advancedText = (done: Pick<Need, "title" | "ticketKey" | "workstreamTitle">, next: Pick<Need, "title" | "ticketKey">, waitsOn?: string | null, posted = false) =>

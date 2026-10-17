@@ -49,6 +49,7 @@ describe("skipping a draft", () => {
     await useWorkspace.getState().skip(p.id);
     expect(useWorkspace.getState().proposals[p.id].state.type).toBe("skipped");
     expect(texts()).toEqual(["Skipped the draft on CA-401."]);
+    expect(useToasts.getState().toasts[0].action).toMatchObject({ label: "Undo", what: "skip" });
     undoButton()!.run();
     await vi.waitFor(() => expect(useWorkspace.getState().proposals[p.id].state.type).toBe("pending"));
     expect(texts()).toContain("The draft is back.");

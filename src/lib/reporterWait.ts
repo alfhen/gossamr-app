@@ -214,11 +214,17 @@ export function nudgeOffered(wait: { since: string } | null | undefined, now: Da
 /** What the Next line adds once the nudge is offered: "The reporter hasn't answered for 3 days. You can draft a nudge." */
 export const nudgeText = (days: number) => `The reporter hasn't answered for ${plural(days, "day", "days")}. You can draft a nudge.`;
 
+/** The questions an ask comment lists: its bullet lines, as the person left them, without the dash. As `asked_questions` in src-tauri/src/inbox/workstreams.rs. */
+export const askedQuestions = (ask: string): string[] => ask.split("\n").map((l) => l.trim()).filter((l) => l.startsWith("- ")).map((l) => l.slice(2).trim()).filter(Boolean);
+
 /**
- * What the nudge comment says, as `nudge_comment` in src-tauri/src/inbox/workstreams.rs. Once the reporter has replied before
- * the ask now open (`replied`), it follows up on that ask rather than the first. Jira's words, in a neutral voice: no "I" or "we", no stage words, nothing of Gossamr's, no "above".
+ * What the nudge comment says, as `nudge_comment` in src-tauri/src/inbox/workstreams.rs, with the questions still open (`open`,
+ * the bullets of the newest ask) listed under it. Once the reporter has replied before the ask now open (`replied`), it
+ * follows up on that ask rather than the first. Jira's words, in a neutral voice: no "I" or "we", no stage words, nothing of Gossamr's, no "above".
  */
-export function nudgeComment(key: string, reporter: string | null, replied = false): string {
+export function nudgeComment(key: string, reporter: string | null, replied = false, open: readonly string[] = []): string {
   const hello = reporter ? `Hi @${reporter},` : "Hi,";
-  return `${hello}\n\nThe ${replied ? "follow-up questions" : "earlier questions"} about ${key} are still open. Could you answer them here on the ticket when you have a moment? Thanks.`;
+  const questions = replied ? "follow-up questions" : "earlier questions";
+  if (!open.length) return `${hello}\n\nThe ${questions} about ${key} are still open. Could you answer them here on the ticket when you have a moment? Thanks.`;
+  return `${hello}\n\nThe ${questions} about ${key} are still open:\n\n${open.map((q) => `- ${q}`).join("\n")}\n\nCould you answer them here on the ticket when you have a moment? Thanks.`;
 }

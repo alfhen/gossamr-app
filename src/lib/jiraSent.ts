@@ -57,6 +57,15 @@ export interface SentEntry {
 
 const SHORT = 120;
 
+/** `text` cut to `SHORT` characters with "…", at the last word boundary when there is one in the second half, so a word is not cut in two. */
+export function cutWords(text: string): string {
+  if (text.length <= SHORT) return text;
+  const head = text.slice(0, SHORT - 1);
+  // The word the cut lands in is dropped whole, unless the cut falls right after one.
+  const space = /\s/.test(text[SHORT - 1]) ? -1 : head.search(/\s\S*$/);
+  return `${(space > SHORT / 2 ? head.slice(0, space) : head).trimEnd()}…`;
+}
+
 /** A line that only greets ("Hi @Mette Lund,"): it says nothing about what was posted. */
 const GREETING = /^(hi|hello|hey|hej|dear)\b[^\n]{0,60}$/i;
 
@@ -64,7 +73,7 @@ const GREETING = /^(hi|hello|hey|hej|dear)\b[^\n]{0,60}$/i;
 const short = (text: string) => {
   const all = text.trim().split("\n").map((l) => l.trim()).filter(Boolean);
   const first = (all.length > 1 && GREETING.test(all[0]) ? all[1] : all[0]) ?? "";
-  return first.length > SHORT ? `${first.slice(0, SHORT - 1).trimEnd()}…` : first;
+  return cutWords(first);
 };
 
 /** A line that starts a bullet or a numbered item: "- Goal?", "• Goal?", "1. Goal?", "2) Goal?". */
@@ -79,7 +88,7 @@ const after = (text: string) => {
   const all = text.trim().split("\n").map((l) => l.trim()).filter(Boolean);
   const at = all.length > 1 && GREETING.test(all[0]) ? 2 : 1;
   const next = all[at] ?? "";
-  const cut = next.length > SHORT ? `${next.slice(0, SHORT - 1).trimEnd()}…` : next;
+  const cut = cutWords(next);
   const rest = all.slice(at + 1);
   const more = ITEM.test(next) ? rest.filter((l) => ITEM.test(l)).length : rest.length;
   return cut && more > 0 ? `${cut} (+${more} more)` : cut;
@@ -137,7 +146,7 @@ function sentWhatOf(intent: Intent, label: string | null, created: readonly Item
       const plain = (l: string) => l.replace(/^(?:[#>\-*\s]+|\+\s+|\d+[.)]\s+)+/, "").trim();
       const isHeadingOrRule = (l: string) => /^#{1,6}(\s|$)/.test(l) || /^([-*_])(\s*\1){2,}$/.test(l);
       const added = plain(addedLines.find((l) => !isHeadingOrRule(l) && plain(l)) ?? addedLines.find((l) => plain(l)) ?? "");
-      const second = added.length > SHORT ? `${added.slice(0, SHORT - 1).trimEnd()}…` : added;
+      const second = cutWords(added);
       return { kind: "description", label: pill, summary, ...(second ? { second } : {}), detail: [...parts, ...body] };
     }
     case "subtasks": {

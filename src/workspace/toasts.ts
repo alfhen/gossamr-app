@@ -2,6 +2,9 @@ import { create } from "zustand";
 
 export type ToastTone = "error" | "info";
 
+/** Names an action's button: "Undo" alone, or "Undo keep waiting" when the toast says what it would undo (`what`). */
+export const actionName = (a: { label: string; what?: string }) => (a.what ? `${a.label} ${a.what}` : a.label);
+
 export interface Toast {
   id: number;
   text: string;
@@ -42,6 +45,8 @@ export interface ToastOptions {
 
 export interface ToastAction {
   label: string;
+  /** What the button would undo, in a few words ("keep waiting"): the button reads "Undo keep waiting", so a toast waiting behind another says which one it is. */
+  what?: string;
   run(): void;
 }
 

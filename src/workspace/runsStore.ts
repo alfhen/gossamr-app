@@ -534,7 +534,7 @@ export const useRuns = create<RunsState>((set, get) => ({
     const run = get().runs.find((r) => r.id === runId);
     const name = labelsByRun(get().runs).get(runId) ?? run?.item?.key ?? "the run";
     // Local only: nothing reached the run, so it can be put back exactly.
-    offerUndo({ text: quiet ? `Waiting on ${name}; it is out of Needs you for now.` : `Dismissed ${name} from Needs you.`, undone: `${name} is back in Needs you.`, undo: async () => get().undismiss(id, before) });
+    offerUndo({ what: quiet ? "keep waiting" : "dismiss", text: quiet ? `Waiting on ${name}; it is out of Needs you for now.` : `Dismissed ${name} from Needs you.`, undone: `${name} is back in Needs you.`, undo: async () => get().undismiss(id, before) });
   },
 
   undismiss(id, before) {

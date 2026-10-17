@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Proposal, WorkstreamActor } from "../types";
 import { ANSWERS_COMMENT_LABEL, READINESS_COMMENT_LABEL } from "./proposals";
-import { agoText, answersDue, nudgeComment, nudgeOffered, nudgeText, NUDGE_AFTER_DAYS, followWithReply, planDue, replyComment, replyExcerpt, REPLY_EXCERPT, reporterAsk, reporterFollow, reporterReplies, waitedDays, waitingOnReporterText } from "./reporterWait";
+import { agoText, askedQuestions, answersDue, nudgeComment, nudgeOffered, nudgeText, NUDGE_AFTER_DAYS, followWithReply, planDue, replyComment, replyExcerpt, REPLY_EXCERPT, reporterAsk, reporterFollow, reporterReplies, waitedDays, waitingOnReporterText } from "./reporterWait";
 import { NUDGE_COMMENT_LABEL } from "./proposals";
 import fixtures from "./reporterWait.fixtures.json";
 
@@ -199,6 +199,16 @@ describe("the nudge", () => {
     expect(nudgeComment("CA-408", "Mette Lund")).toBe("Hi @Mette Lund,\n\nThe earlier questions about CA-408 are still open. Could you answer them here on the ticket when you have a moment? Thanks.");
     expect(nudgeComment("CA-408", null).startsWith("Hi,\n")).toBe(true);
     expect(nudgeComment("CA-408", null)).not.toContain("gentle");
+  });
+
+  it("lists the questions still open as bullets, the ones the ask carried (G20), and keeps its voice neutral", () => {
+    const ask = "Hi @Mette Lund,\n\nA few things need clearing up to make this ticket clear to work on:\n\n- What does done look like?\n- Who is waiting on it?\n\nCould you answer them here on the ticket? Thanks.";
+    const open = askedQuestions(ask);
+    expect(open).toEqual(["What does done look like?", "Who is waiting on it?"]);
+    const text = nudgeComment("CA-408", "Mette Lund", false, open);
+    expect(text).toBe("Hi @Mette Lund,\n\nThe earlier questions about CA-408 are still open:\n\n- What does done look like?\n- Who is waiting on it?\n\nCould you answer them here on the ticket when you have a moment? Thanks.");
+    expect(text).not.toMatch(/\b(we|I|above|Gossamr|Pip|runs?|workstreams?)\b/);
+    expect(askedQuestions("Hi,\n\nNo bullets.")).toEqual([]);
   });
 
   it("follows up on the follow-up questions once the reporter has replied before, and never says we, above, planned or Gossamr", () => {

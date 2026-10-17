@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import type { Need } from "../lib/needs";
-import { ReporterReplyQuote, closeTarget, lastNeedText, HigherPriority, EDIT_FIELD, advancedText, closedText, doneText, postedToJira, waitStarted, nextAdvanced, advancedUndone, advancedStale, endEditing, firstDecision, paneStop } from "./NeedsPane";
+import { ReporterReplyQuote, closeTarget, lastNeedText, HigherPriority, EDIT_FIELD, advancedText, closedText, doneNeed, doneText, PLANNING_ANYWAY, postedToJira, waitStarted, nextAdvanced, advancedUndone, advancedStale, endEditing, firstDecision, paneStop } from "./NeedsPane";
 
 /** A stand-in for the pane: each selector it is asked for answers with what the test put there. */
 const pane = (found: Record<string, unknown[]>) =>
@@ -77,6 +77,11 @@ describe("the line names the workstream the done need was in (G19)", () => {
   it("says it by the ticket, else the workstream's title, and leaves it out for General", () => {
     expect(doneText({ title: "Questions for the reporter", ticketKey: "DEVOPS-490", workstreamTitle: "Fix the deploy" })).toBe("Done: Questions for the reporter on DEVOPS-490.");
     expect(doneText({ title: "Reply", workstreamTitle: "Fix the deploy" })).toBe("Done: Reply on Fix the deploy.");
+    // A readiness question settled with Plan anyway says that, not the problem again (G35); any other choice, or a need that isn't one, keeps its title.
+    const readiness = { title: "CA-408: not ready to plan", ticketKey: "CA-408", workstreamTitle: "Fix it", kind: "readiness", workstreamId: "ws-1" } as never;
+    expect(doneText(doneNeed(readiness, true))).toBe("Done: Planning anyway on CA-408.");
+    expect(PLANNING_ANYWAY).toBe("Planning anyway");
+    expect(doneNeed(readiness, false)).toBe(readiness);
     expect(doneText({ title: "Reply" })).toBe("Done: Reply.");
     // A title that starts with the ticket does not repeat it, and a question is not read out as an action.
     expect(doneText({ title: "CA-408: the reporter replied, plan now?", ticketKey: "CA-408" })).toBe('Done: decided "the reporter replied, plan now?" on CA-408.');

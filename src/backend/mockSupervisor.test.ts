@@ -366,7 +366,7 @@ describe("the sample supervisor", () => {
       if (draft.intent.type !== "comment") throw new Error("a comment");
       expect(draft.intent.item.key).toBe("CA-408");
       const text = docText(draft.intent.body);
-      for (const part of ["Hi @Mette Lund,", "A few things about CA-408 need clearing up", "- What does done look like for CA-408?", "- Who asked for this, and who is waiting on it?"]) expect(text).toContain(part);
+      for (const part of ["Hi @Mette Lund,", "A few things need clearing up to make this ticket clear to work on", "- What does done look like for CA-408?", "- Who asked for this, and who is waiting on it?"]) expect(text).toContain(part);
       expect(JSON.stringify(draft.intent.body)).toContain('"type":"mention"');
       expect(b.proposals.writes).toEqual([]);
       expect(b.workstreams.events(ws).find((e) => e.action === "readiness_asked")).toMatchObject({ actor: "person", runId: triage.id, proposalId: draft.id });

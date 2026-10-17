@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { chipLabel, editedTitle, GROUP_LABEL, needGroups, type Need, type NeedGroup, type NeedGroupKind } from "../lib/needs";
 import { relativeTime } from "../lib/views";
 import { isAnswersDraft } from "../lib/proposals";
@@ -238,6 +238,26 @@ function GroupRow({ group: g, now, onPick, openByDefault }: { group: NeedGroup; 
   );
 }
 
+/** Whether a scrolling box has more below what it shows: a few pixels of slack, so a rounding gap doesn't count. */
+export const hasMoreBelow = (box: Pick<HTMLElement, "scrollHeight" | "scrollTop" | "clientHeight">) => box.scrollHeight - box.scrollTop - box.clientHeight > 4;
+
+/** Whether the list clipped by its box has more below, kept up as it scrolls, resizes or grows (a group opening). */
+function useMoreBelow(box: React.RefObject<HTMLElement | null>) {
+  const [more, setMore] = useState(false);
+  useEffect(() => {
+    const el = box.current;
+    if (!el) return;
+    const measure = () => setMore(hasMoreBelow(el));
+    measure();
+    el.addEventListener("scroll", measure, { passive: true });
+    const watch = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure);
+    watch?.observe(el);
+    Array.from(el.children).forEach((child) => watch?.observe(child));
+    return () => (el.removeEventListener("scroll", measure), watch?.disconnect());
+  });
+  return more;
+}
+
 export interface NeedsYouListProps {
   needs: readonly Need[];
   /** The rail popover's form: no border of its own, a shorter list. */
@@ -257,8 +277,10 @@ export interface NeedsYouListProps {
  */
 export function NeedsYouList({ needs, compact = false, main = false, onPick, now = Date.now() }: NeedsYouListProps) {
   const groups = useMemo(() => needGroups(needs), [needs]);
+  const box = useRef<HTMLElement>(null);
+  const moreBelow = useMoreBelow(box);
   return (
-    <section aria-label="Needs you" data-needs-you className={`grid min-h-0 content-start gap-1 overflow-y-auto ${compact ? "max-h-[min(400px,60vh)] p-2" : main ? "max-h-1/2 shrink px-1.5 pb-2" : "max-h-[38vh] border-t border-ws-sep pt-2"}`}>
+    <section ref={box} aria-label="Needs you" data-needs-you className={`grid min-h-0 content-start gap-1 overflow-y-auto ${compact ? "max-h-[min(400px,60vh)] p-2" : main ? "max-h-1/2 shrink px-1.5 pb-2" : "max-h-[38vh] border-t border-ws-sep pt-2"}`}>
       <h2 data-needs-you-title tabIndex={-1} className={`sticky top-0 z-10 m-0 flex items-center gap-1.5 px-1 outline-none font-semibold tracking-wide uppercase ${main ? "bg-ws-bar pt-2 pb-1 text-sm text-ws-ink2" : "bg-ws-win text-xs text-ws-ink3"}`}>
         Needs you
         <span data-needs-you-count aria-label={`${needs.length} waiting`} className={`rounded-full px-1.5 text-[10px] ${needs.length ? "bg-ws-pip text-ws-on-pip" : "bg-ws-hover text-ws-ink3"}`}>
@@ -276,6 +298,8 @@ export function NeedsYouList({ needs, compact = false, main = false, onPick, now
           ))}
         </ul>
       )}
+      {/* The list is clipped by its box: a fade at the foot says there is more to scroll to. */}
+      {moreBelow && <div data-needs-you-fade aria-hidden className={`pointer-events-none sticky bottom-0 -mt-8 h-8 shrink-0 bg-gradient-to-t to-transparent ${compact || !main ? "from-ws-win" : "from-ws-bar"}`} />}
     </section>
   );
 }

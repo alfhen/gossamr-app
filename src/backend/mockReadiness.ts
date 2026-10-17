@@ -19,6 +19,9 @@ export function thinDescription(text: string | null | undefined): boolean {
   return t !== "" && !t.includes("\n") && t.length < THIN_LIMIT;
 }
 
+/** The open questions a sample triage lists; the first holds two, which every reader lists one each (`oneQuestionEach`). */
+const unclearQuestions = (key: string) => [`What does done look like for ${key}? Which behaviour or number should change?`, "What is in scope and what is out?", "Who asked for this, and who is waiting on it?"];
+
 /**
  * What a sample triage of a ticket with a thin description finishes with: it can't size the work, says `Ready to plan: no`
  * and lists what it would need to know. It still says `Plan recommended: yes`, so a managed workstream shows that the
@@ -30,9 +33,7 @@ export function unclearTriageResult(key: string): string {
     "",
     "Ready to plan: no",
     "Open questions:",
-    `- What does done look like for ${key}? Which behaviour or number should change?`,
-    "- What is in scope and what is out?",
-    "- Who asked for this, and who is waiting on it?",
+    ...unclearQuestions(key).map((q) => `- ${q}`),
     "",
     "Plan recommended: yes",
     "",
@@ -41,29 +42,36 @@ export function unclearTriageResult(key: string): string {
   ].join("\n");
 }
 
-export const UNCLEAR_TRIAGE_SUMMARY = "Triage complete: the ticket isn't clear enough to size, three questions open";
+const COUNTED = ["no", "one", "two", "three", "four", "five", "six"];
+
+/** The summary of that triage: it counts the questions as they are listed (one each), so it never says three over four bullets. */
+export const unclearTriageSummary = (key: string) => {
+  const n = oneQuestionEach(unclearQuestions(key)).length;
+  return `Triage complete: the ticket isn't clear enough to size, ${COUNTED[n] ?? n} ${n === 1 ? "question" : "questions"} open`;
+};
 
 /** What the approve button of the comment to the reporter says, as `READINESS_LABEL` in src-tauri/src/inbox/workstreams.rs. */
 export const READINESS_LABEL = READINESS_COMMENT_LABEL;
 
-/**
- * The comment "Ask the reporter" drafts, as `reporter_comment` in src-tauri/src/inbox/workstreams.rs: a fixed frame around
- * the questions the Triage listed, or around the four things a ticket needs when it listed none. `replied`: the reporter has
- * answered since the last ask, so the frame thanks them and says what is still open.
- */
 /** A listed question that holds several ("What is done? Which number changes?") as one each, so the reporter answers one thing per bullet; as `one_question_each` in src-tauri/src/inbox/workstreams.rs. */
 export function oneQuestionEach(questions: readonly string[]): string[] {
   return questions.flatMap((q) => q.trim().split(/(?<=\?)\s+(?=\p{Lu})/u)).filter((q) => q !== "");
 }
 
-export function reporterComment(key: string, reporter: string | null, questions: readonly string[], replied = false): string {
+/**
+ * The comment "Ask the reporter" drafts, as `reporter_comment` in src-tauri/src/inbox/workstreams.rs: a fixed frame around
+ * the questions the Triage listed, or around the four things a ticket needs when it listed none. The ticket's key is left
+ * out (the comment is on the ticket) and one line says why the questions are asked. `replied`: the reporter has
+ * answered since the last ask, so the frame thanks them and says what is still open.
+ */
+export function reporterComment(reporter: string | null, questions: readonly string[], replied = false): string {
   const hello = reporter ? `Hi @${reporter},` : "Hi,";
   const asks = questions.length
     ? oneQuestionEach(questions).map((q) => `- ${q}`).join("\n")
     : "- What is the goal?\n- What has to be true for this to be done (the acceptance criteria)?\n- What is in scope, and what is out?\n- Who asked for it, and who is waiting on it?";
   // The reporter has answered since the last ask: thank them and say what is still open, rather than repeat the first ask.
-  if (replied) return `${hello}\n\nThanks for your answer above. A few things about ${key} are still open:\n\n${asks}\n\nCould you answer these here on the ticket? Thanks.`;
-  return `${hello}\n\nA few things about ${key} need clearing up:\n\n${asks}\n\nCould you answer them here on the ticket? Thanks.`;
+  if (replied) return `${hello}\n\nThanks for your answer above. A few things are still open to make this ticket clear to work on:\n\n${asks}\n\nCould you answer these here on the ticket? Thanks.`;
+  return `${hello}\n\nA few things need clearing up to make this ticket clear to work on:\n\n${asks}\n\nCould you answer them here on the ticket? Thanks.`;
 }
 
 /** `reporterComment` as a document, with the reporter's greeting a real mention when they are known. */

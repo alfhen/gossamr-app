@@ -36,6 +36,8 @@ test.describe("a posted secret on What Jira saw from me (G26)", () => {
     await draft.getByRole("button", { name: "Post comment" }).click();
     await draft.locator("[data-post-pause]").getByRole("button", { name: "Post anyway" }).click();
     await expect.poll(async () => (await jiraWrites(page)).length).toBe(1);
+    // The pause's line numbers are for the pause only: the posted text carries none.
+    expect((await jiraWrites(page))[0].text).not.toMatch(/\(line \d+\)/);
     await page.keyboard.press("ControlOrMeta+k");
     await palette(page).getByRole("combobox").fill("what jira saw");
     await page.keyboard.press("Enter");
@@ -46,9 +48,10 @@ test.describe("a posted secret on What Jira saw from me (G26)", () => {
     const detail = entry.locator("[data-sent-detail]");
     await expect(detail).toContainText("Password: hu…");
     await expect(detail).not.toContainText("hunter22secret");
+    await expect(detail).not.toContainText("(line ");
     await expect(entry).not.toContainText("hunter22secret");
     // The rest of the comment is still there.
-    await expect(detail).toContainText("CA-408");
+    await expect(detail).toContainText("What is the goal?");
   });
 });
 

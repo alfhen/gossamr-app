@@ -80,10 +80,16 @@ export async function confirmBatch(frozen: BatchSnapshot, drafts: readonly Propo
   }
 }
 
-/** A step's drafts, each as its card in the conversation, with "Approve N safe drafts" over two or more that may go together. */
-export function StepDrafts({ step, drafts, approve, initialConfirming = false }: { step: StepGroup; drafts: readonly Proposal[]; approve(id: string): Promise<{ error?: string | null }>; initialConfirming?: boolean }) {
+/**
+ * A step's drafts, each as its card in the conversation, with "Approve N safe drafts" over two or more that may go together.
+ * `inPane` are the step's drafts the decision pane shows instead of a card: they are no card here, but the batch counts and
+ * approves them, as Needs you's does, so both buttons count the same drafts.
+ */
+export function StepDrafts({ step, drafts, inPane = [], approve, initialConfirming = false }: { step: StepGroup; drafts: readonly Proposal[]; inPane?: readonly Proposal[]; approve(id: string): Promise<{ error?: string | null }>; initialConfirming?: boolean }) {
+  /** What the batch counts and approves: the cards and the drafts in the pane. */
+  const counted = inPane.length ? [...drafts, ...inPane] : drafts;
   /** The drafts the open confirm covers, fixed when it opened; null while it is closed. */
-  const [frozen, setFrozen] = useState<BatchSnapshot | null>(() => (initialConfirming ? freezeBatch(drafts) : null));
+  const [frozen, setFrozen] = useState<BatchSnapshot | null>(() => (initialConfirming ? freezeBatch(counted) : null));
   const [outcome, setOutcome] = useState<{ text: string; failed: boolean } | null>(null);
   const [busy, setBusy] = useState(false);
   const ask = useRef<HTMLButtonElement>(null);
@@ -91,11 +97,11 @@ export function StepDrafts({ step, drafts, approve, initialConfirming = false }:
   /** Set by a confirm: the confirmation and the drafts go, so the keyboard lands on what came of them. */
   const refocus = useRef(false);
   useDraftsRev();
-  const together = batchable(drafts);
-  const leftOut = repeatedComments(drafts.filter((p) => !draftEdited(p.id)));
-  const edited = editedPending(drafts).length;
+  const together = batchable(counted);
+  const leftOut = repeatedComments(counted.filter((p) => !draftEdited(p.id)));
+  const edited = editedPending(counted).length;
   // Drafts from the person's own reply are never in the batch, as in Needs you; the note says why when it leaves a draft out.
-  const aside = drafts.filter((p) => p.state.type === "pending" && isAnswersDraft(p)).length;
+  const aside = counted.filter((p) => p.state.type === "pending" && isAnswersDraft(p)).length;
   useEffect(() => {
     if (!outcome || !refocus.current) return;
     refocus.current = false;
@@ -110,14 +116,14 @@ export function StepDrafts({ step, drafts, approve, initialConfirming = false }:
     setFrozen(null);
     setBusy(true);
     try {
-      setOutcome(await confirmBatch(covered, drafts, approve));
+      setOutcome(await confirmBatch(covered, counted, approve));
     } catch (e) {
       setOutcome({ text: `Couldn't approve these drafts: ${messageOf(e)}`, failed: true });
     } finally {
       setBusy(false);
     }
   };
-  if (!drafts.length && !outcome) return null;
+  if (!counted.length && !outcome) return null;
   return (
     <div data-step-drafts={step} className="grid gap-2">
       {frozen ? (
@@ -138,7 +144,7 @@ export function StepDrafts({ step, drafts, approve, initialConfirming = false }:
               type="button"
               disabled={busy}
               title={BATCH_TITLE}
-              onClick={() => (setOutcome(null), setFrozen(freezeBatch(drafts)))}
+              onClick={() => (setOutcome(null), setFrozen(freezeBatch(counted)))}
               className="rounded-md border border-ws-sep2 px-2.5 py-px text-sm font-semibold text-ws-ink hover:bg-ws-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip disabled:opacity-45"
             >
               {busy ? "Approving…" : stepBatchLabel(step, together.length)}
@@ -361,6 +367,8 @@ export function StepRailView({ view, runs, events, verdicts, changes = NO_CHANGE
   // A draft open in Pip home's decision pane is not a card here as well.
   const shown = useDecisionShown();
   const drafts = useMemo(() => stepDrafts(shown.drafts.size ? proposals.filter((p) => !shown.drafts.has(p.id)) : proposals, runs), [proposals, runs, shown]);
+  // The ones the pane shows are no cards here, yet the batch counts them, as Needs you's does.
+  const inPane = useMemo(() => (shown.drafts.size ? stepDrafts(proposals.filter((p) => shown.drafts.has(p.id)), runs) : {}), [proposals, runs, shown]);
   const retired = useMemo(() => retiredStepDrafts(proposals, runs), [proposals, runs]);
   const labels = useMemo(() => new Map(view.labels), [view.labels]);
   const id = view.workstream.id;
@@ -383,7 +391,7 @@ export function StepRailView({ view, runs, events, verdicts, changes = NO_CHANGE
       {(drafts.pip || retired.pip) && (
         <section aria-label="Pip's drafts" className="grid gap-1.5">
           <h3 className="m-0 text-xs font-semibold tracking-wide text-ws-ink3 uppercase">Pip&apos;s drafts</h3>
-          <StepDrafts step="pip" drafts={drafts.pip ?? []} approve={approve} />
+          <StepDrafts step="pip" drafts={drafts.pip ?? []} inPane={inPane.pip} approve={approve} />
           <EarlierStepDrafts step="pip" drafts={retired.pip ?? []} />
         </section>
       )}
@@ -430,6 +438,8 @@ export function StepRailView({ view, runs, events, verdicts, changes = NO_CHANGE
                   )}
                 </span>
                 {!quiet && <ChipLine chip={chip} label={chip.newest ? labels.get(chip.newest.id) : undefined} ws={view.workstream} />}
+                {/* The one quiet line shows no state: every step says one to a screen reader, as the others' lines do. */}
+                {quiet && <span className="sr-only">Not started</span>}
               </button>
               {chip.kind === "plan" && planWaits(drafts.plan) && <PlanApproval questions={planOpenQuestions(planResultFor(waitingPlan(drafts.plan), runs, chip.newest))} />}
               {chip.pr && <StepPullRequest pr={chip.pr} onOpen={onOpenPr} />}
@@ -439,7 +449,7 @@ export function StepRailView({ view, runs, events, verdicts, changes = NO_CHANGE
                   {chip.runs.map((run) => (
                     <PipRunCard key={run.id} run={run} now={now} ticketTitle={titleOf(run)} label={labels.get(run.id)} onOpen={() => onOpenRun(run)} focusable />
                   ))}
-                  <StepDrafts step={chip.kind} drafts={drafts[chip.kind] ?? []} approve={approve} />
+                  <StepDrafts step={chip.kind} drafts={drafts[chip.kind] ?? []} inPane={inPane[chip.kind]} approve={approve} />
                   <EarlierStepDrafts step={chip.kind} drafts={retired[chip.kind] ?? []} />
                   {!chip.runs.length && !drafts[chip.kind] && !retired[chip.kind] && <p className="m-0 text-sm text-ws-ink3">Nothing here yet.</p>}
                 </div>

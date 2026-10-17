@@ -130,6 +130,8 @@ export function AutomaticStepsPanel({ rules, globals, onRule }: { rules: Workstr
 /** What Hold, Close… and ⋯ do, as the short hints on their buttons say (title for the pointer, aria-description for the screen reader). */
 export const HOLD_HINT = "No wakes and no automatic steps; its agents carry on";
 export const CLOSE_HINT = "Its conversation goes back to General; its agents and drafts are kept in General";
+/** What Close does to the agents of the workstream, said in its confirm: closing stops none, and a queued one does not start while the workstream is closed (`workstream_runs` in src-tauri/src/runs/service.rs). */
+export const CLOSE_RUNS_NOTE = "Agents already running carry on; one still queued does not start while it is closed.";
 export const MORE_HINT = "More: stop the workstream";
 
 /** What the Automatic steps button opens, for its tooltip: the routine next steps and who starts them. */
@@ -137,9 +139,10 @@ export const AUTO_STEPS_HELP = "Which routine next steps (a review after a build
 
 function AutomaticSteps({ rules, globals, actions }: { rules: WorkstreamRules; globals: AutoStartSwitches | null; actions: ControlActions }) {
   const { open, setOpen, root } = usePopover();
+  // Hold, Close…, Automatic steps and ⋯ are plain buttons, with their border, not text that happens to be clickable.
   return (
     <div ref={root} className="relative">
-      <Btn tone="ghost" data-popover-trigger aria-expanded={open} title={AUTO_STEPS_HELP} onClick={() => (open || actions.onSteps?.(), setOpen(!open))} className="px-1.5 py-0.5">
+      <Btn tone="plain" data-popover-trigger aria-expanded={open} title={AUTO_STEPS_HELP} onClick={() => (open || actions.onSteps?.(), setOpen(!open))} className="px-1.5 py-0.5">
         Automatic steps
       </Btn>
       {open && <AutomaticStepsPanel rules={rules} globals={globals} onRule={actions.onRule} />}
@@ -159,7 +162,7 @@ function MoreMenu({ onStop }: { onStop(): void }) {
   }, [open, root]);
   return (
     <div ref={root} className="relative">
-      <Btn tone="ghost" aria-label="More for this workstream" title={MORE_HINT} aria-description={MORE_HINT} aria-haspopup="menu" aria-expanded={open} data-popover-trigger onClick={() => setOpen(!open)} className="px-1.5 py-0.5">
+      <Btn tone="plain" aria-label="More for this workstream" title={MORE_HINT} aria-description={MORE_HINT} aria-haspopup="menu" aria-expanded={open} data-popover-trigger onClick={() => setOpen(!open)} className="px-1.5 py-0.5">
         ⋯
       </Btn>
       {open && (
@@ -216,12 +219,12 @@ export function CloseConfirm({ onClose, onKeep }: { onClose(): void; onKeep(): v
       }}
     >
       <span className="text-ws-ink2">
-        <span id={question}>Close it?</span> <span id={detail}>Its conversation goes back to General; its agents and drafts are kept in General.</span>
+        <span id={question}>Close it?</span> <span id={detail}>Its conversation goes back to General; its agents and drafts are kept in General. {CLOSE_RUNS_NOTE}</span>
       </span>
       <Btn tone="primary" onClick={onClose} className="px-2 py-0.5">
         Close workstream
       </Btn>
-      <Btn tone="ghost" autoFocus onClick={onKeep} className="px-2 py-0.5">
+      <Btn tone="ghost" autoFocus aria-describedby={`${question} ${detail}`} onClick={onKeep} className="px-2 py-0.5">
         Keep
       </Btn>
     </div>
@@ -479,13 +482,13 @@ export function WorkstreamControlsView({ view, globals, actions, confirmingStop,
         <AutomaticSteps rules={ws.rules} globals={globals} actions={actions} />
         <span className="ml-auto flex items-center gap-1">
           {!ws.heldReason && (
-            <Btn tone="ghost" data-ws-hold onClick={() => settleHoldFocus(actions.onHold(), "hold")} title={HOLD_HINT} aria-description={HOLD_HINT} className="px-1.5 py-0.5">
+            <Btn tone="plain" data-ws-hold onClick={() => settleHoldFocus(actions.onHold(), "hold")} title={HOLD_HINT} aria-description={HOLD_HINT} className="px-1.5 py-0.5">
               Hold
             </Btn>
           )}
           {/* Both, or nothing: a Close whose confirm could close nothing is not offered. */}
           {onConfirmClose && actions.onClose && (
-            <Btn tone="ghost" data-close-workstream onClick={() => onConfirmClose(true)} title={CLOSE_HINT} aria-description={CLOSE_HINT} className="px-1.5 py-0.5">
+            <Btn tone="plain" data-close-workstream onClick={() => onConfirmClose(true)} title={CLOSE_HINT} aria-description={CLOSE_HINT} className="px-1.5 py-0.5">
               Close…
             </Btn>
           )}

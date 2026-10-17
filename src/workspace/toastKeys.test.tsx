@@ -14,6 +14,18 @@ const props = (onDismiss = () => undefined) => {
 };
 const esc = (over: Record<string, unknown> = {}) => ({ key: "Escape", defaultPrevented: false, preventDefault: vi.fn(), stopPropagation: vi.fn(), ...over });
 
+describe("a toast's Undo names what it undoes (G29)", () => {
+  it("reads 'Undo keep waiting' on the button, with the toast's words in its name, while the label stays Undo", () => {
+    const named: Toast = { id: 2, text: "Waiting on CA-377; it is out of Needs you for now.", tone: "info", at: 0, action: { label: "Undo", what: "keep waiting", run: () => undefined } };
+    const html = renderToStaticMarkup(<ToastCard toast={named} waiting={2} onDismiss={() => undefined} />);
+    expect(html).toContain("+2 more");
+    expect(html).toMatch(/<button[^>]*data-toast-action="Undo"[^>]*aria-label="Undo keep waiting: Waiting on CA-377[^"]*"[^>]*>Undo keep waiting<\/button>/);
+    // Without a name it is the plain button it was.
+    const plain = renderToStaticMarkup(<ToastCard toast={{ ...named, action: { label: "Undo", run: () => undefined } }} waiting={0} onDismiss={() => undefined} />);
+    expect(plain).toMatch(/aria-label="Undo: Waiting on CA-377[^"]*"[^>]*>Undo<\/button>/);
+  });
+});
+
 describe("a toast takes the keyboard", () => {
   it("can be focused (not a Tab stop), is marked as keeping Esc to itself, and says Esc and F6", () => {
     const html = renderToStaticMarkup(<ToastCard toast={toast} waiting={0} onDismiss={() => undefined} />);

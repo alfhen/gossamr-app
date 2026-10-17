@@ -181,6 +181,7 @@ export function PlanMyWeekView({
     hideUndoToast(offered.current[offered.current.length - 1]);
     offered.current.push(
       offerUndo({
+        what: "remove",
         text: `Removed ${gone.title} from the plan.`,
         undone: `Put ${gone.title} back in the plan.`,
         async undo() {

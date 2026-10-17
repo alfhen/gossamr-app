@@ -20,6 +20,7 @@ import { usePrefs } from "./prefs";
 import { CommentCard, HistoryRow, SectionCard, SectionNav, showComment } from "./PeekParts";
 import { displayName, historyNotes, isCollapsed, linkRows, parentCrumb, replyDraft, sectionChips, shownComments, subtasksOf, type Collapsed, type Crumb, type LinkRow, type Note, type PeekSectionId, type ReplyDraft, type Subtasks } from "./peekLogic";
 import { AgentMenu, TicketAgents, runsOfTicket } from "./AgentMenu";
+import { CLOSE_RUNS_NOTE } from "./WorkstreamControls";
 import { Development } from "./DevelopmentSection";
 import { useRuns } from "./runsStore";
 import { useTabs } from "./tabsStore";
@@ -490,7 +491,7 @@ export function WorkstreamControl({ item, workstream, onStart, onOpen, confirmin
               if (ev.key === "Escape") (ev.stopPropagation(), onAskClose(false));
             }}
           >
-            Close it? Its agents and drafts are kept in General.
+            Close it? Its agents and drafts are kept in General. {CLOSE_RUNS_NOTE}
             <button type="button" autoFocus onClick={onClose} className="font-semibold text-ws-pip underline">
               Close workstream
             </button>

@@ -365,6 +365,7 @@ describe("closing, reopening and bringing a ticket's runs here (G23, G17)", () =
     expect(useWorkstreams.getState().forItem("CA-401")).toBeNull();
     const offer = undoLog.latest();
     expect(offer?.text).toBe("Closed the workstream on CA-401. Its agents and drafts are kept in General.");
+    expect(useToasts.getState().toasts[0].action).toMatchObject({ label: "Undo", what: "close" });
     expect(await undoLog.run(offer!.id)).toBe("undone");
     expect(useWorkstreams.getState().forItem("CA-401")?.workstream.id).toBe(ws.workstream.id);
     expect(useToasts.getState().toasts.map((t) => t.text)).toContain("Reopened the workstream on CA-401.");

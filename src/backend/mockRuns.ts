@@ -12,7 +12,7 @@ import { isReporterQuestions, makerName, PLAN_COMMENT_LABEL } from "../lib/propo
 import { revisedByPipUnedited, runAnswerProblem, type MockProposals } from "./mockProposals";
 import { ESCALATION_GONE, textDigest, type MockWorkstreams } from "./mockWorkstreams";
 import { fixRoundMessage, marked, type ReviewFinding } from "./mockSupervisor";
-import { UNCLEAR_TRIAGE_SUMMARY, thinDescription, unclearTriageResult } from "./mockReadiness";
+import { thinDescription, unclearTriageResult, unclearTriageSummary } from "./mockReadiness";
 import { withWorkstream } from "../lib/workstreamAdopt";
 import { BUILD_ACCOUNT_LIMIT, BUILD_ACCOUNT_PREFACE, BUILD_NEEDS_PLAN, PIP_CHAIN_KINDS, REVIEW_NEEDS_BUILD, REVIEW_NO_FOCUS, WAITING_FOR_PR_HINT, ASSUMPTIONS_PREFACE, FINDINGS_LIMIT, FINDINGS_PREFACE, INSTRUCTIONS, pipPrompt, NEW_TICKET_TAIL, PLAN_FOLLOW, PLAN_FOLLOW_UNEDITED, PLAN_LIMIT, PUSH_ALLOWED, TICKETLESS_STARTER, buildAccountLabel, checkoutParagraph, checksOutPr, readOnlyRules, testsParagraph, findingsLabel, planLabel, reportParagraph, reviewRefusal, specProblem, withoutMarkers } from "./mockRunKinds";
 
@@ -965,7 +965,7 @@ export class MockRuns {
       if (script) patch.result = scriptedFinish(run.spec.kind, patch.result, script);
       if (run.spec.kind === "plan") patch.result = withAssumptions(patch.result, run.spec.assumptions ?? []);
       if (opened) patch.branch = opened.headRef;
-      patch.summary = answered ? PLAN_ANSWERED_SUMMARY : opened ? PUSHED_SUMMARY : unclear ? UNCLEAR_TRIAGE_SUMMARY : SCRIPTED_SUMMARY[run.spec.kind];
+      patch.summary = answered ? PLAN_ANSWERED_SUMMARY : opened ? PUSHED_SUMMARY : unclear ? unclearTriageSummary(unclear.key) : SCRIPTED_SUMMARY[run.spec.kind];
       if (run.spec.kind === "plan" && run.spec.assumptions?.length) patch.summary = `${patch.summary}. ${assumptionsSummaryLine(run.spec.assumptions.length)}`;
       patch.resultComplete = true;
       patch.endedAt = at;

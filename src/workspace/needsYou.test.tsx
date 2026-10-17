@@ -9,7 +9,7 @@ import type { Intent, Proposal, Run, WorkstreamView } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { Launcher } from "./PipExtras";
 import { NeedsPane } from "./NeedsPane";
-import { NeedsYouList, firstText, groupText } from "./NeedsYou";
+import { NeedsYouList, firstText, groupText, hasMoreBelow } from "./NeedsYou";
 import { NO_FILTERS, groupRuns, slotWaiters, stopAllLabel, stoppable, summaryLine, yourAgents } from "./agentsLogic";
 import { arm, confirmArmed, disarm, keyPlan, openInWorkstream, openNeed } from "./needsActions";
 import { BATCH_ASIDE, BATCH_TITLE, composerFooter } from "./pipHomeLogic";
@@ -169,6 +169,17 @@ describe("the Needs you list", () => {
     expect(folded).toContain("+5 more");
     unseed();
     expect(renderToStaticMarkup(<NeedsYouList needs={list} now={NOW} />)).not.toContain("data-needs-you-need=");
+  });
+
+  it("says a clipped list has more below only while there is more to scroll to (G26)", () => {
+    expect(hasMoreBelow({ scrollHeight: 600, scrollTop: 0, clientHeight: 300 })).toBe(true);
+    expect(hasMoreBelow({ scrollHeight: 600, scrollTop: 150, clientHeight: 300 })).toBe(true);
+    // At the foot, or within a rounding pixel of it, or not clipped at all, there is no fade.
+    expect(hasMoreBelow({ scrollHeight: 600, scrollTop: 300, clientHeight: 300 })).toBe(false);
+    expect(hasMoreBelow({ scrollHeight: 600, scrollTop: 298, clientHeight: 300 })).toBe(false);
+    expect(hasMoreBelow({ scrollHeight: 200, scrollTop: 0, clientHeight: 300 })).toBe(false);
+    // Nothing is measured before the page has laid it out, so the markup carries no fade.
+    expect(renderToStaticMarkup(<NeedsYouList needs={list} now={NOW} />)).not.toContain("data-needs-you-fade");
   });
 
   it("explains Decide, Unblock and Approve on the chips", () => {

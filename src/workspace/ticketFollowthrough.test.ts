@@ -79,7 +79,7 @@ describe("the clarity notice on a workstream", () => {
     const asked = Object.values(useWorkspace.getState().proposals).find((p) => p.label === "Questions for the reporter")!;
     expect(asked).toMatchObject({ state: { type: "pending" }, createdBy: "user", intent: { type: "comment" }, origin: { type: "chat", workstream: id } });
     const body = docText(asked.intent.type === "comment" ? asked.intent.body : { blocks: [] });
-    for (const part of ["Hi @Mette Lund,", "A few things about CA-408 need clearing up", "- What is the goal?", "- What has to be true for this to be done (the acceptance criteria)?", "- What is in scope, and what is out?", "- Who asked for it, and who is waiting on it?"]) expect(body).toContain(part);
+    for (const part of ["Hi @Mette Lund,", "A few things need clearing up to make this ticket clear to work on", "- What is the goal?", "- What has to be true for this to be done (the acceptance criteria)?", "- What is in scope, and what is out?", "- Who asked for it, and who is waiting on it?"]) expect(body).toContain(part);
     expect(backend.proposals.writes).toEqual([]);
     expect(events(id).find((e) => e.action === "clarity_asked")).toMatchObject({ actor: "person", proposalId: asked.id });
     expect(stored(id).clarity ?? null).toBeNull();

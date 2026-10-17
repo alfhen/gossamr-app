@@ -443,7 +443,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     // A skip changes nothing outside the draft, so it is the one decision that can be taken back.
     if (was === "pending" && p.state.type === "skipped") {
       const on = targetOf(p.intent)?.key;
-      offerUndo({ text: `Skipped the draft${on ? ` on ${on}` : ""}.`, undone: "The draft is back.", undo: async () => void (await get().unskip(id)), restored: () => openRestored(p) });
+      offerUndo({ what: "skip", text: `Skipped the draft${on ? ` on ${on}` : ""}.`, undone: "The draft is back.", undo: async () => void (await get().unskip(id)), restored: () => openRestored(p) });
     }
     return p;
   },

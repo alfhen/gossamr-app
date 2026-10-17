@@ -49,7 +49,7 @@ describe("the pause before posting edited text", () => {
     expect(newRiskQuote("x", "Adgangskoden er solsikke99")).toEqual({ secret: ["so…"] });
     expect(newRiskQuote("x", "mit password er: Kaffe123")).toEqual({ secret: ["Ka…"] });
     // Both risks are quoted, and only what is new.
-    expect(newRiskQuote("cc @everyone", "cc @everyone\nPassword: hunter2 and @here")).toEqual({ secret: ["hu…"], broadcast: ["@here"] });
+    expect(newRiskQuote("cc @everyone", "cc @everyone\nPassword: hunter2 and @here")).toEqual({ secret: ["hu…\t2"], broadcast: ["@here\t2"] });
     expect(newRiskQuote("x", "@here, then Password: hunter2")).toEqual({ broadcast: ["@here"], secret: ["hu…"] });
     expect(newRiskQuote("cc @everyone", "cc @everyone, thanks")).toEqual({});
     expect(newRiskQuote("x", "cc @Mette")).toEqual({});
@@ -57,12 +57,12 @@ describe("the pause before posting edited text", () => {
 
   it("quotes each secret, not only the first, each by its first two characters, and each broad mention once (G26)", () => {
     const edited = "Password: hunter2\nand token=ghp_abcdefghijklmnopqrstuvwxyz0123\ncc @here @everyone @HERE";
-    expect(newRiskQuote("x", edited)).toEqual({ secret: ["hu…", "gh…"], broadcast: ["@here", "@everyone"] });
+    expect(newRiskQuote("x", edited)).toEqual({ secret: ["hu…\t1", "gh…\t2"], broadcast: ["@here\t3", "@everyone\t3"] });
     const note = riskNote(["broadcast", "secret"], newRiskQuote("x", edited));
-    expect(note).toBe("This draft mentions everyone at “@here” and “@everyone”. It also looks like a password, key or token at “hu…” and “gh…”. Everyone on the ticket would see it once it is posted.");
+    expect(note).toBe("This draft mentions everyone at “@here” (line 3) and “@everyone” (line 3). It also looks like a password, key or token at “hu…” (line 1) and “gh…” (line 2). Everyone on the ticket would see it once it is posted.");
     for (const rest of ["nter2", "abcdefghij"]) expect(note).not.toContain(rest);
     // A secret that was already in the draft is not quoted again; a long list says how many more.
-    expect(newRiskQuote("Password: hunter2", edited).secret).toEqual(["gh…"]);
+    expect(newRiskQuote("Password: hunter2", edited).secret).toEqual(["gh…\t2"]);
     const many = riskNote(["secret"], { secret: ["aa…", "bb…", "cc…", "dd…", "ee…"] });
     expect(many).toBe("This draft looks like a password, key or token at “aa…”, “bb…”, “cc…” and 2 more. Everyone on the ticket would see it once it is posted.");
   });
@@ -109,9 +109,21 @@ describe("the pause before posting edited text", () => {
     expect(maskSecrets(`${header} MIIEvQIBADANBg please rotate it`)).toBe("--… please rotate it");
     expect(maskSecrets(`${header}\nMIIEvQIBADANBgkqhkiG9w0B\nAQEFAASC==\n\nThanks, Mette`)).toBe("--…\n\nThanks, Mette");
     // One item in the pause, never the header and the body as two.
-    expect(newRiskQuote("x", `${header}\n${body}\n-----END PRIVATE KEY-----`)).toEqual({ secret: ["--…"] });
-    expect(newRiskQuote("x", `${header}\n${body}`)).toEqual({ secret: ["--…"] });
+    expect(newRiskQuote("x", `${header}\n${body}\n-----END PRIVATE KEY-----`)).toEqual({ secret: ["a private key\t1"] });
+    expect(newRiskQuote("x", `${header}\n${body}`)).toEqual({ secret: ["a private key\t1"] });
     expect(risksIn(`${header}\n${body}`)).toEqual(["secret"]);
+  });
+});
+
+describe("finding what the pause quotes in a long draft (G33)", () => {
+  it("names the line of each quote in a text of several lines, and says 'a private key' for a key", () => {
+    const edited = "Looks good.\n\nPassword: hunter2\nThanks\n-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0B\n-----END PRIVATE KEY-----";
+    const quote = newRiskQuote("Looks good.", edited);
+    expect(quote).toEqual({ secret: ["hu…\t3", "a private key\t5"] });
+    expect(riskNote(["secret"], quote)).toContain("at “hu…” (line 3) and “a private key” (line 5).");
+    // One line needs no number.
+    expect(newRiskQuote("x", "Password: hunter2")).toEqual({ secret: ["hu…"] });
+    expect(riskNote(["secret"], { secret: ["hu…"] })).not.toContain("line");
   });
 });
 

@@ -48,6 +48,7 @@ describe("the desktop backend's wiring", () => {
     expect(rust).toContain(`pub const CLARITY_NOTES: [&str; 2] = [${CLARITY_NOTES.map((n) => `"${n}"`).join(", ")}];`);
     // The comment is the same words around the greeting and the ticket's key.
     expect(rust).toContain(nudgeComment("{key}", null).replace("Hi,", "{hello}").replace("The earlier questions", "The {questions}").replace(/\n/g, "\\n"));
+    expect(rust).toContain(nudgeComment("{key}", null, false, ["{q}"]).replace("Hi,", "{hello}").replace("The earlier questions", "The {questions}").replace("- {q}", "{bullets}").replace(/\n/g, "\\n"));
     expect(rust).toContain('let questions = if replied { "follow-up questions" } else { "earlier questions" };');
     expect(read("../../src-tauri/src/proposals.rs")).toContain(`pub const ANSWERS_OPENING: &str = "${ANSWERS_OPENING}";`);
     expect(read("../../src-tauri/src/proposals.rs")).toContain(`pub const NUDGE_COMMENT_LABEL: &str = "${NUDGE_COMMENT_LABEL}";`);

@@ -217,7 +217,8 @@ describe("the step rail", () => {
     expect(stepOf(going, "investigate")).not.toContain(">Next<");
     for (const kind of ["triage", "plan", "build", "review", "verify"] as const) {
       expect(stepOf(fresh, kind)).toContain('data-step-quiet="true"');
-      expect(stepOf(fresh, kind)).not.toContain("Not started");
+      // No visible state line, but a screen reader hears one, as for every other step (G34).
+      expect(stepOf(fresh, kind)).toContain('<span class="sr-only">Not started</span>');
       expect(stepOf(fresh, kind)).not.toContain("data-step-next");
     }
     expect(fresh.match(/data-step-next=/g)).toHaveLength(1);
@@ -288,6 +289,16 @@ describe("the step rail", () => {
     const one = renderToStaticMarkup(<StepDrafts step="review" drafts={[fromRun("c1", comment, "r5"), fromRun("rw", rewrite, "r5"), fromRun("rw2", rewrite, "r5")]} approve={approve} />);
     expect(one).not.toContain("safe drafts");
     expect(approve).not.toHaveBeenCalled();
+  });
+
+  it("counts a draft the decision pane shows in its batch, as Needs you does, without a card for it (G25)", () => {
+    const html = renderToStaticMarkup(<StepDrafts step="review" drafts={[fromRun("c1", comment, "r5"), fromRun("c2", comment, "r5")]} inPane={[fromRun("t1", transition, "r5")]} approve={vi.fn()} />);
+    expect(html).toContain(">Approve 3 of this step&#x27;s drafts</button>");
+    expect(html).toContain('data-draft="c1"');
+    expect(html).not.toContain('data-draft="t1"');
+    // One card and the one in the pane make two together; with none in the pane there is one, so no button.
+    expect(renderToStaticMarkup(<StepDrafts step="review" drafts={[fromRun("c1", comment, "r5")]} inPane={[fromRun("t1", transition, "r5")]} approve={vi.fn()} />)).toContain("Approve 2 of this step");
+    expect(renderToStaticMarkup(<StepDrafts step="review" drafts={[fromRun("c1", comment, "r5")]} approve={vi.fn()} />)).not.toContain("Approve");
   });
 
   it("keeps the note on edited drafts while the batch is being confirmed (CodeRabbit on #182)", () => {

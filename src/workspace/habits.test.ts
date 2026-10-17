@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MockBackend } from "../backend/mock";
 import { itemRef } from "../backend/mockConnector";
-import { docText } from "../lib/docs";
+import { docFromText, docText } from "../lib/docs";
 import { LEARN_AFTER } from "../lib/clarityLearning";
 import { safeToBatch } from "../lib/needs";
 import { jiraSent } from "../lib/jiraSent";
@@ -93,6 +93,25 @@ describe("Draft a nudge", () => {
     expect(usePipHome.getState()).toMatchObject({ deciding: `draft:${nudge.id}`, selected: id });
   });
 
+  it("lists the questions the posted ask carried, as bullets, so the reporter need not scroll up (G20)", async () => {
+    backend.editTicket("CA-408", { description: THIN });
+    const id = await open("CA-408");
+    const ask = await backend.workstreamsClarityAsk(id);
+    const asked = (ask.intent.type === "comment" ? docText(ask.intent.body) : "").split("\n").filter((l) => l.startsWith("- ")).map((l) => l.slice(2));
+    expect(asked.length).toBeGreaterThan(0);
+    await backend.proposalsApprove(ask.id);
+    // The wait began long enough ago: the audit's approval of the ask is moved back.
+    backend.workstreams.seedEvent(id, "person", "draft_approved", ago(3), { proposalId: ask.id });
+    await useWorkstreams.getState().refresh();
+    expect(await useWorkstreams.getState().nudgeReporter(id)).toBe(true);
+    await useWorkspace.getState().refreshProposals();
+    const [nudge] = nudges();
+    const text = docText(nudge.intent.type === "comment" ? nudge.intent.body : { blocks: [] });
+    expect(text).toContain("are still open:\n\n- ");
+    for (const q of asked) expect(text).toContain(`- ${q}`);
+    expect(text).not.toMatch(/\b(we|I|runs?|workstreams?|Pip|Gossamr)\b/);
+  });
+
   it("is a draft in Needs you like the questions, and never one of the safe batch", async () => {
     const id = await waitedOn(3);
     await useWorkstreams.getState().nudgeReporter(id);
@@ -102,6 +121,40 @@ describe("Draft a nudge", () => {
     expect(currentNeeds().find((n) => n.key === `draft:${nudge.id}`)).toMatchObject({ group: "approve", batchable: false, title: "Nudge for the reporter" });
     // A plain comment beside it is batchable, so the exclusion is the nudge's own.
     expect(safeToBatch({ ...nudge, label: null } as Proposal)).toBe(true);
+  });
+
+  it("lists the questions of the newest ask the reporter got, not of one still pending or skipped", async () => {
+    const id = await waitedOn(3);
+    const ask = (text: string) => backend.proposals.askedFor({ type: "comment", item: itemRef("CA-408"), body: docFromText(`Hi,\n\n${text}\n\nThanks.`) }, "Questions for the reporter", id);
+    const posted = ask("- What is the goal?");
+    await backend.proposalsApprove(posted.id);
+    await backend.proposalsSkip(ask("- Was this skipped?").id);
+    ask("- Is this still a draft?");
+    const nudge = await backend.workstreamsNudgeReporter(id);
+    const text = docText(nudge.intent.type === "comment" ? nudge.intent.body : { blocks: [] });
+    expect(text).toContain("What is the goal?");
+    expect(text).not.toMatch(/skipped|still a draft/);
+  });
+
+  it("lists the questions of the ask posted last, not of the one drafted last", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const id = await waitedOn(3);
+      const ask = (text: string) => backend.proposals.askedFor({ type: "comment", item: itemRef("CA-408"), body: docFromText(`Hi,\n\n- ${text}\n\nThanks.`) }, "Questions for the reporter", id);
+      const first = ask("Drafted first, posted last?");
+      vi.advanceTimersByTime(1000);
+      const second = ask("Drafted last, posted first?");
+      vi.advanceTimersByTime(1000);
+      await backend.proposalsApprove(second.id);
+      vi.advanceTimersByTime(1000);
+      await backend.proposalsApprove(first.id);
+      const nudge = await backend.workstreamsNudgeReporter(id);
+      const text = docText(nudge.intent.type === "comment" ? nudge.intent.body : { blocks: [] });
+      expect(text).toContain("Drafted first, posted last?");
+      expect(text).not.toContain("Drafted last, posted first?");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("waits while one is drafted, and posting it starts the wait again from then", async () => {

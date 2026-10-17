@@ -4,7 +4,7 @@ import type { ScreenContext } from "../types";
 import { MockBackend } from "./mock";
 import { itemRef } from "./mockConnector";
 import { readinessLine, scriptPip, type PipWorkstream } from "./mockPip";
-import { THIN_LIMIT, oneQuestionEach, reporterComment, reporterDoc, thinDescription, unclearTriageResult } from "./mockReadiness";
+import { THIN_LIMIT, oneQuestionEach, reporterComment, reporterDoc, thinDescription, unclearTriageResult, unclearTriageSummary } from "./mockReadiness";
 import { readiness } from "./mockSupervisor";
 
 describe("a thin description", () => {
@@ -48,14 +48,24 @@ describe("the sample triage of a vague ticket", () => {
   });
 });
 
+describe("the sample triage's summary (G16)", () => {
+  it("counts the questions as they are listed, one each, so it never says three over four bullets", () => {
+    // The result has three bullets, the first holding two questions: every reader lists four.
+    const bullets = unclearTriageResult("CA-408").split("\n").filter((l) => l.startsWith("- ")).map((l) => l.slice(2));
+    expect(bullets).toHaveLength(3);
+    expect(oneQuestionEach(bullets)).toHaveLength(4);
+    expect(unclearTriageSummary("CA-408")).toBe("Triage complete: the ticket isn't clear enough to size, four questions open");
+  });
+});
+
 describe("the comment to the reporter", () => {
   const questions = ["What does done look like?", "Who is waiting on it?"];
 
   it("is the same words Rust drafts (reporter_comment in src-tauri/src/inbox/workstreams.rs)", () => {
-    expect(reporterComment("CA-401", "Kim Ode", questions)).toBe(
-      "Hi @Kim Ode,\n\nA few things about CA-401 need clearing up:\n\n- What does done look like?\n- Who is waiting on it?\n\nCould you answer them here on the ticket? Thanks.",
+    expect(reporterComment("Kim Ode", questions)).toBe(
+      "Hi @Kim Ode,\n\nA few things need clearing up to make this ticket clear to work on:\n\n- What does done look like?\n- Who is waiting on it?\n\nCould you answer them here on the ticket? Thanks.",
     );
-    const none = reporterComment("CA-401", null, []);
+    const none = reporterComment(null, []);
     expect(none.startsWith("Hi,\n")).toBe(true);
     for (const part of ["- What is the goal?", "acceptance criteria", "in scope, and what is out", "who is waiting on it"]) expect(none).toContain(part);
   });
@@ -64,24 +74,31 @@ describe("the comment to the reporter", () => {
     expect(oneQuestionEach(["What does done look like for CA-408? Which behaviour or number should change?", "Who is waiting on it?"])).toEqual(["What does done look like for CA-408?", "Which behaviour or number should change?", "Who is waiting on it?"]);
     // A question mark inside a sentence, or before a lower-case word, does not split.
     expect(oneQuestionEach(["Is v2? or v3 meant?", "Done?"])).toEqual(["Is v2? or v3 meant?", "Done?"]);
-    const text = reporterComment("CA-408", null, ["What is done? Who is waiting?"]);
+    const text = reporterComment(null, ["What is done? Who is waiting?"]);
     expect(text).toContain("\n\n- What is done?\n- Who is waiting?\n\n");
   });
 
+  it("leaves the ticket key out and says in one line why the questions are asked (G21), in a neutral voice", () => {
+    for (const text of [reporterComment("Kim Ode", questions), reporterComment("Kim Ode", questions, true), reporterComment(null, [])]) {
+      expect(text).not.toMatch(/CA-\d|\b(we|I|runs?|workstreams?|Pip|Gossamr)\b/);
+      expect(text).toMatch(/to make this ticket clear to work on/);
+    }
+  });
+
   it("speaks neutrally in the frame it falls back on: no 'we'", () => {
-    expect(reporterComment("CA-401", null, [])).not.toMatch(/\bwe\b/i);
+    expect(reporterComment(null, [])).not.toMatch(/\bwe\b/i);
   });
 
   it("thanks the reporter and says what is still open once they have replied, the same words Rust drafts", () => {
-    const again = reporterComment("CA-401", "Kim Ode", questions, true);
-    expect(again).toBe("Hi @Kim Ode,\n\nThanks for your answer above. A few things about CA-401 are still open:\n\n- What does done look like?\n- Who is waiting on it?\n\nCould you answer these here on the ticket? Thanks.");
-    expect(again).not.toBe(reporterComment("CA-401", "Kim Ode", questions));
+    const again = reporterComment("Kim Ode", questions, true);
+    expect(again).toBe("Hi @Kim Ode,\n\nThanks for your answer above. A few things are still open to make this ticket clear to work on:\n\n- What does done look like?\n- Who is waiting on it?\n\nCould you answer these here on the ticket? Thanks.");
+    expect(again).not.toBe(reporterComment("Kim Ode", questions));
   });
 
   it("makes the reporter's greeting a real mention when they are known", () => {
     const person = { connectionId: "mock", accountId: "mette" };
-    const doc = reporterDoc(reporterComment("CA-401", "Mette Lund", questions), { person, name: "Mette Lund" });
-    expect(docText(doc)).toBe(reporterComment("CA-401", "Mette Lund", questions));
+    const doc = reporterDoc(reporterComment("Mette Lund", questions), { person, name: "Mette Lund" });
+    expect(docText(doc)).toBe(reporterComment("Mette Lund", questions));
     const first = doc.blocks[0];
     expect(first.type === "paragraph" && first.content.slice(0, 3)).toEqual([
       { type: "text", text: "Hi ", marks: [] },
