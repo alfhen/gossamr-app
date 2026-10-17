@@ -266,7 +266,7 @@ export function answersScript(prompt: string, runs: readonly Run[], workstream: 
     .sort((a, b) => (b.endedAt ?? b.queuedAt).localeCompare(a.endedAt ?? a.queuedAt))[0];
   return {
     steps: ["Read the open questions", "Drafted a comment with your answers"],
-    text: `I drafted a comment on **${item.key}** with your answers, ${split ? "each under its question" : "the questions first, then your answers as you wrote them"}. It goes to the ticket as a comment, not a change to the description, and nothing is posted until you approve it.${triage ? " Once you post the answers, I'll draft the plan." : ""}`,
+    text: `I drafted a comment on **${item.key}** with your answers, ${split ? "each under its question" : "the questions first, then your answers as you wrote them"}. It goes to the ticket as a comment, not a change to the description, and nothing is posted until you approve it.${triage ? " Once the answers are posted, Plan this starts the plan." : ""}`,
     filter: null,
     draft: { intent: { type: "comment", item, body: docFromText(body.join("\n").trim()) }, label: ANSWERS_COMMENT_LABEL },
   };
@@ -593,9 +593,16 @@ function rewriteTarget(prompt: string, context: ScreenContext): ItemRef | null {
  */
 export function scriptPip(prompt: string, context: ScreenContext, images: ImageData[] = [], runs: readonly Run[] = [], now = Date.now(), drafts: readonly Proposal[] = [], discussed: string | null = null, workstream: PipWorkstream | null = null): PipScript {
   const turn = scriptTurn(prompt, context, images, runs, now, drafts, discussed, workstream);
-  // Their answers were posted: whatever else this turn does, it also proposes the plan they were waiting to follow.
-  const plan = turn.runDraft ? null : planAfterAnswers(runs, workstream);
-  const script = plan ? { ...turn, steps: [...turn.steps, ...plan.steps], text: `${turn.text}\n\n${plan.text}`, runDraft: plan.runDraft } : turn;
+  // Their answers were posted and they asked for the plan ("Plan this"): whatever else this turn does, it also proposes it.
+  // Nothing proposes it unasked, as the real agent is told to wait for the person to ask.
+  // Asked means the plan ask a step takes ("Plan this", "plan CA-408"), not any message with the word, and never a plan
+  // of another ticket.
+  const planAsk = CHAIN_ASKS.find((a) => a.kind === "plan")!;
+  const asked = prompt.toLowerCase();
+  const askedForPlan = !prompt.startsWith(EVENT) && planAsk.pattern.test(asked) && !otherKey(asked, workstream?.item ?? null);
+  // That plan follows the triage the answers answered, so it takes the place of any plan the words alone would draft.
+  const plan = askedForPlan ? planAfterAnswers(runs, workstream) : null;
+  const script = !plan ? turn : turn.runDraft ? { ...plan, filter: turn.filter } : { ...turn, steps: [...turn.steps, ...plan.steps], text: `${turn.text}\n\n${plan.text}`, runDraft: plan.runDraft };
   const unclear = prompt.startsWith(EVENT) ? null : readinessLine(workstream);
   return unclear ? { ...script, steps: ["Read the ticket", ...script.steps], text: `${unclear}\n\n${script.text}` } : script;
 }

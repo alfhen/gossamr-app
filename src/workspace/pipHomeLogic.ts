@@ -4,6 +4,8 @@ import { shortHeld } from "../lib/workstreamHold";
 import { byQueue, REVIEW_POSTED, reviewPosted, STAGE_LABEL } from "../lib/workstreamStage";
 import type { CodeChange, Proposal, ReviewView, Run, RunKind, WorkstreamEvent, WorkstreamView } from "../types";
 import { liveCounts, liveWords, needsPerson, stateView, stoppedAtLimit, type Tone } from "./agentsLogic";
+import { keptEditsOfDraft } from "./DraftCard";
+import { liveDraft } from "./draftLive";
 import { shownVerdict, verdictChip } from "./runSheetLogic";
 import type { WorkstreamSuggestionScene } from "./suggestions";
 
@@ -71,13 +73,25 @@ export const BATCH_TITLE = "Safe drafts are comments, status moves and subtasks 
 /** What a group says under its needs when drafts from the person's own reply are left out of "Approve N safe drafts". */
 export const BATCH_ASIDE = "Not in the batch: drafts from your reply are read on their own.";
 
+/** What a group says under its needs when drafts the person edited are left out of "Approve N safe drafts". */
+export const EDITED_ASIDE = "Not in the batch: drafts you edited are posted from their card.";
+
+/** Whether draft `id` holds an edit its stored text doesn't, on a mounted card or kept for one: only the card posts those words, so no batch does. */
+export const draftEdited = (id: string): boolean => !!liveDraft(id)?.edited || !!keptEditsOfDraft(id);
+
+/** The pending drafts among `drafts` that the person edited and no batch covers. */
+export const editedPending = (drafts: readonly Proposal[]): Proposal[] => drafts.filter((p) => p.state.type === "pending" && draftEdited(p.id));
+
 /**
  * The drafts of a step that "Approve N safe drafts" would approve, in order; it is offered only for two or more. A comment
- * with the same text as an earlier one on its ticket is left to be decided on its own (see `repeatedComments`).
+ * with the same text as an earlier one on its ticket is left to be decided on its own (see `repeatedComments`), and one the
+ * person edited is posted from its card, since approving here would post the stored text.
  */
 export function batchable(drafts: readonly Proposal[]): Proposal[] {
-  const repeated = new Set(repeatedComments(drafts).map((p) => p.id));
-  return drafts.filter((p) => p.state.type === "pending" && safeToBatch(p) && !repeated.has(p.id));
+  // Edited drafts go first, so an edited copy of a comment can't make its unedited twin count as the repeat.
+  const unedited = drafts.filter((p) => !draftEdited(p.id));
+  const repeated = new Set(repeatedComments(unedited).map((p) => p.id));
+  return unedited.filter((p) => p.state.type === "pending" && safeToBatch(p) && !repeated.has(p.id));
 }
 
 /** What an "Approve N safe drafts" covers, fixed when its confirm opens: each draft by id, with the revision shown then. */

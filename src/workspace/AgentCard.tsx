@@ -232,6 +232,7 @@ export function AgentCard({ run, now, selected, position, total, ticketTitle, la
               onClick={(ev) => (ev.stopPropagation(), onDraftComment())}
               onKeyDown={ownKey}
               title="Makes a draft you read and edit. Nothing is posted."
+              aria-label={`Draft comment on ${ticketLabel(run) ?? title}`}
               className="rounded-md border border-ws-pip px-2 py-px text-sm text-ws-pip hover:bg-ws-pip-soft"
             >
               Draft comment

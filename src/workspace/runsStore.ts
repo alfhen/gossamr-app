@@ -454,7 +454,7 @@ export const useRuns = create<RunsState>((set, get) => ({
     try {
       const run = await backend.runsAnswer(id, text);
       set({ answered: { ...get().answered, [id]: run.lastProgressAt } });
-      useToasts.getState().push(resuming ? "Resumed. Claude is picking it back up." : "Answer sent. Claude is picking it back up.", "info");
+      useToasts.getState().push(resuming ? "Resumed. Claude is picking it back up." : "Answer sent. Claude is picking it back up. Only the agent sees your answer; nothing goes to Jira.", "info");
     } catch (e) {
       useToasts.getState().push(`Couldn't send the answer: ${messageOf(e)}`);
     } finally {

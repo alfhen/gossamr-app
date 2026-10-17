@@ -446,7 +446,7 @@ describe("the run sheet", () => {
       const run = await asking();
       await s().answer(run.id, "Yes, keep it.");
       await settle();
-      expect(useToasts.getState().toasts.map((t) => [t.text, t.tone])).toContainEqual(["Answer sent. Claude is picking it back up.", "info"]);
+      expect(useToasts.getState().toasts.map((t) => [t.text, t.tone])).toContainEqual(["Answer sent. Claude is picking it back up. Only the agent sees your answer; nothing goes to Jira.", "info"]);
       const now = s().runs.find((r) => r.id === run.id)!;
       expect(s().answered[run.id]).toBe(now.lastProgressAt);
     });

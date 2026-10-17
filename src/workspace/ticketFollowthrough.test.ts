@@ -285,7 +285,7 @@ describe("I'll answer, then the person's answers", () => {
     expect(drafts.some((p) => p.intent.type === "rewrite")).toBe(false);
     // The plan is not drafted beside a comment nobody posted: Pip says it will once the answers are posted.
     expect(drafts.some(planDraft)).toBe(false);
-    expect(mockPipTurns.turns(`ws:${id}`).find((t) => t.requestId === "a1")?.text).toContain("Once you post the answers, I'll draft the plan.");
+    expect(mockPipTurns.turns(`ws:${id}`).find((t) => t.requestId === "a1")?.text).toContain("Once the answers are posted, Plan this starts the plan.");
     expect(triage.id).toBeTruthy();
     // It needs approval like any Jira write, and is never in the safe batch.
     expect(backend.proposals.writes).toEqual([]);
@@ -295,9 +295,15 @@ describe("I'll answer, then the person's answers", () => {
     await ask(id, "a2", "where do we stand?");
     expect(backend.proposals.list({ workstream: id }).filter((p) => p.label === "Answers to the open questions")).toHaveLength(1);
     expect(backend.proposals.list({ workstream: id }).some(planDraft)).toBe(false);
-    // Posted: Pip's next turn proposes the plan from the triage, which does not start, and only once.
+    // Posted: a turn that does not ask for the plan proposes none; "Plan this" proposes it from the triage, which does not
+    // start, and only once.
     await backend.proposalsApprove(answers.id);
     await ask(id, "a3", "where do we stand?");
+    expect(backend.proposals.list({ workstream: id }).some(planDraft)).toBe(false);
+    // The word alone is not the ask (CodeRabbit on #182).
+    await ask(id, "a3a", "what is the plan for the rest of the week?");
+    expect(backend.proposals.list({ workstream: id }).some(planDraft)).toBe(false);
+    await ask(id, "a3b", "Plan this");
     const plans = backend.proposals.list({ workstream: id }).filter(planDraft);
     expect(plans).toHaveLength(1);
     expect(plans[0].intent.type === "startRun" && plans[0].intent.spec).toMatchObject({ kind: "plan", workstream: id });

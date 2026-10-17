@@ -56,6 +56,15 @@ describe("Pip home's orientation card", () => {
     expect(html).not.toContain("Worktree");
   });
 
+  it("scrolls the words inside a named, focusable list, not the whole card (G8)", () => {
+    const html = renderToStaticMarkup(<PipOrientation open />);
+    const dl = html.match(/<dl[^>]*>/)![0];
+    expect(dl).toContain('aria-label="What the words mean"');
+    expect(dl).toContain('tabindex="0"');
+    expect(dl).toMatch(/class="[^"]*max-h-\[30vh\][^"]*overflow-y-auto/);
+    expect(html.match(/<section[^>]*>/)![0]).not.toMatch(/max-h|overflow/);
+  });
+
   it("keeps to its one line while Plan my week is open, even when More was opened", () => {
     expect(renderToStaticMarkup(<PipOrientation open />)).toContain("Worktree");
     const compact = renderToStaticMarkup(<PipOrientation open compact />);

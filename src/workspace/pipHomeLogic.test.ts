@@ -9,7 +9,9 @@ import { docFromText } from "../lib/docs";
 import { workstreamStatus } from "../lib/workstreamStatus";
 import { NO_FILTERS, groupRuns, laneCount, laneOf, summaryLine } from "./agentsLogic";
 import { repeatedComments } from "../lib/needs";
-import { planRewriteDraft, batchable, freezeBatch, composerFooter, draftStep, workstreamSuggestionScene, FIX_ROUNDS, lastHeldAt, nextStep, retiredStepDrafts, shortHeld, stepChips, stepDrafts, STEP_KINDS } from "./pipHomeLogic";
+import { setLiveDraft } from "./draftLive";
+import { keepEditsOfDraft } from "./DraftCard";
+import { batchToApprove, EDITED_ASIDE, planRewriteDraft, batchable, freezeBatch, composerFooter, draftStep, workstreamSuggestionScene, FIX_ROUNDS, lastHeldAt, nextStep, retiredStepDrafts, shortHeld, stepChips, stepDrafts, STEP_KINDS } from "./pipHomeLogic";
 
 const NOW = Date.parse("2026-09-30T12:00:00Z");
 const iso = (minutesAgo: number) => new Date(NOW - minutesAgo * 60_000).toISOString();
@@ -250,6 +252,10 @@ describe("drafts by step", () => {
     // The same words on another ticket are another comment.
     const elsewhere = draft("d", { ...text("Looks good to me."), item: { connectionId: "c", externalId: "CA-402", key: "CA-402" } } as Intent, 2);
     expect(batchable([first, elsewhere]).map((p) => p.id)).toEqual(["a", "d"]);
+    // When the first of the two is edited, the second is no longer a repeat of anything in the batch (CodeRabbit on #182).
+    setLiveDraft("a", { edited: true, risky: false });
+    expect(batchable([first, same, other]).map((p) => p.id)).toEqual(["b", "c"]);
+    setLiveDraft("a", null);
   });
 
   it("leave out the questions to a reporter and Pip's comment with the person's answers, which are read and approved on their own", () => {
@@ -257,6 +263,27 @@ describe("drafts by step", () => {
     const clarity = { ...draft("clarity", comment("CA-401"), 4), createdBy: "user", label: "Questions for the reporter" } as Proposal;
     const answers = { ...draft("answers", comment("CA-401"), 3), label: "Answers to the open questions" } as Proposal;
     expect(batchable([asked, clarity, answers, fromRun("c1", comment("CA-401"), "r5")]).map((p) => p.id)).toEqual(["c1"]);
+  });
+
+  it("leave out a draft the person edited, which only its card posts, and refuse a batch whose draft gained an edit after its confirm opened (G1)", () => {
+    const a = fromRun("e1", comment("CA-401"), "r5");
+    const b = fromRun("e2", comment("CA-401"), "r5");
+    const c = { ...fromRun("e3", transition, "r5") };
+    const drafts = [a, { ...b, intent: { ...comment("CA-401"), body: docFromText("Different") } } as Proposal, c];
+    expect(batchable(drafts).map((p) => p.id)).toEqual(["e1", "e2", "e3"]);
+    const frozen = freezeBatch(drafts);
+    // An edit typed in a mounted card.
+    setLiveDraft("e2", { edited: true, risky: false });
+    expect(batchable(drafts).map((p) => p.id)).toEqual(["e1", "e3"]);
+    expect(freezeBatch(drafts).map((f) => f.id)).toEqual(["e1", "e3"]);
+    expect(batchToApprove(frozen, drafts)).toBeNull();
+    setLiveDraft("e2", null);
+    expect(batchToApprove(frozen, drafts)?.map((p) => p.id)).toEqual(["e1", "e2", "e3"]);
+    // Edits kept for a card that has since closed count as well.
+    keepEditsOfDraft("e1", { body: { text: "Mine", mentions: [] } });
+    expect(batchable(drafts).map((p) => p.id)).toEqual(["e2", "e3"]);
+    keepEditsOfDraft("e1", {});
+    expect(EDITED_ASIDE).toBe("Not in the batch: drafts you edited are posted from their card.");
   });
 });
 

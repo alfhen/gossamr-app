@@ -70,7 +70,7 @@ export function PipOrientation({ onDismiss = dismissOrientation, open = false, c
         setMore(false);
         words.current?.focus();
       }}
-      className="grid max-h-[40vh] shrink-0 gap-1.5 overflow-y-auto border-b border-ws-sep bg-ws-bar px-4 py-1.5">
+      className="grid shrink-0 gap-1.5 border-b border-ws-sep bg-ws-bar px-4 py-1.5">
       <div className="flex items-center gap-3">
         <p className="m-0 min-w-0 flex-1 text-sm text-ws-ink2">
           <b id="pip-orientation" className="font-semibold text-ws-ink">
@@ -86,7 +86,8 @@ export function PipOrientation({ onDismiss = dismissOrientation, open = false, c
         </button>
       </div>
       {more && (
-        <dl id="pip-orientation-more" className="m-0 grid grid-cols-[repeat(auto-fit,minmax(220px,1fr))] gap-x-4 gap-y-2 text-sm text-ws-ink2">
+        // The words scroll inside their own list, which the keyboard can reach and a screen reader can name.
+        <dl id="pip-orientation-more" tabIndex={0} aria-label="What the words mean" className="m-0 grid max-h-[30vh] overflow-y-auto focus-visible:outline-2 focus-visible:outline-ws-pip grid-cols-[repeat(auto-fit,minmax(220px,1fr))] gap-x-4 gap-y-2 text-sm text-ws-ink2">
           {ORIENTATION_TERMS.map((t) => (
             <div key={t.term}>
               <dt className="font-semibold text-ws-ink">{t.term}</dt>

@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import type { Need } from "../lib/needs";
-import { ReporterReplyQuote, closeTarget, lastNeedText, HigherPriority, EDIT_FIELD, advancedText, closedText, doneText, postedToJira, waitStarted, nextAdvanced, advancedUndone, endEditing, firstDecision, paneStop } from "./NeedsPane";
+import { ReporterReplyQuote, closeTarget, lastNeedText, HigherPriority, EDIT_FIELD, advancedText, closedText, doneText, postedToJira, waitStarted, nextAdvanced, advancedUndone, advancedStale, endEditing, firstDecision, paneStop } from "./NeedsPane";
 
 /** A stand-in for the pane: each selector it is asked for answers with what the test put there. */
 const pane = (found: Record<string, unknown[]>) =>
@@ -227,5 +227,19 @@ describe("lastNeedText", () => {
 
   it("says what was done when the draft was posted", () => {
     expect(lastNeedText(need, withState("applied"))).toMatch(/^(Done|Posted to Jira): Draft comment on CA-401\.$/);
+  });
+});
+
+describe("the Done line goes stale (G4)", () => {
+  const line = nextAdvanced(null, "Done: Ask on CA-1. Now waits on Mette. Now: CA-2 · Reply", { workstreamId: "w1", label: "Done: Ask on CA-1." }, "need-1", "need-2", true);
+  it("goes once another need than the one it names is open", () => {
+    expect(advancedStale(line, "need-2", [])).toBe(false);
+    expect(advancedStale(line, "need-9", [])).toBe(true);
+    expect(advancedStale(null, "need-9", [])).toBe(false);
+  });
+  it("goes once the reporter has replied, only when it said it waits", () => {
+    const replied = [{ workstream: { id: "w1" }, reporterReplied: true }] as never;
+    expect(advancedStale(line, "need-2", replied)).toBe(true);
+    expect(advancedStale(nextAdvanced(null, "x", line.back, "need-1", "need-2"), "need-2", replied)).toBe(false);
   });
 });

@@ -11,7 +11,8 @@ import { Btn } from "./AgentSheet";
 import { draftTitle } from "./DraftCard";
 import { LiveDraftPreview } from "./DraftPreview";
 import { PipRunCard } from "./PipRunCard";
-import { BATCH_ASIDE, BATCH_TITLE, batchable, batchToApprove, freezeBatch, nextStep, retiredStepDrafts, stepBatchLabel, stepChips, stepDrafts, type BatchSnapshot, type StepChip, type StepGroup } from "./pipHomeLogic";
+import { useDraftsRev } from "./draftLive";
+import { BATCH_ASIDE, BATCH_TITLE, EDITED_ASIDE, batchable, draftEdited, editedPending, batchToApprove, freezeBatch, nextStep, retiredStepDrafts, stepBatchLabel, stepChips, stepDrafts, type BatchSnapshot, type StepChip, type StepGroup } from "./pipHomeLogic";
 import { usePipHome } from "./pipHomeStore";
 import { openOnGithub } from "./githubUi";
 import { openPullView, usePullView } from "./pullViewStore";
@@ -89,7 +90,10 @@ export function StepDrafts({ step, drafts, approve, initialConfirming = false }:
   const said = useRef<HTMLParagraphElement>(null);
   /** Set by a confirm: the confirmation and the drafts go, so the keyboard lands on what came of them. */
   const refocus = useRef(false);
+  useDraftsRev();
   const together = batchable(drafts);
+  const leftOut = repeatedComments(drafts.filter((p) => !draftEdited(p.id)));
+  const edited = editedPending(drafts).length;
   // Drafts from the person's own reply are never in the batch, as in Needs you; the note says why when it leaves a draft out.
   const aside = drafts.filter((p) => p.state.type === "pending" && isAnswersDraft(p)).length;
   useEffect(() => {
@@ -119,9 +123,10 @@ export function StepDrafts({ step, drafts, approve, initialConfirming = false }:
       {frozen ? (
         <>
           <BatchConfirm count={frozen.length} onConfirm={() => void confirm(frozen)} onCancel={cancel} />
-          {repeatedComments(drafts).length > 0 && (
+          {/* The repeats among the unedited drafts, as the batch counts them: an edited twin never makes its copy a repeat. */}
+          {leftOut.length > 0 && (
             <p data-batch-left-out className="m-0 text-sm text-ws-ink2">
-              {REPEATED_COMMENT_NOTE}: {repeatedComments(drafts).map((p) => leftOutLabel(p, draftTitle(p))).join(", ")}.
+              {REPEATED_COMMENT_NOTE}: {leftOut.map((p) => leftOutLabel(p, draftTitle(p))).join(", ")}.
             </p>
           )}
         </>
@@ -144,6 +149,11 @@ export function StepDrafts({ step, drafts, approve, initialConfirming = false }:
       {aside > 0 && (frozen !== null || together.length + aside >= 2) && (
         <p data-batch-aside className="m-0 text-xs text-ws-ink3">
           {BATCH_ASIDE}
+        </p>
+      )}
+      {edited > 0 && (frozen !== null || together.length + edited >= 2) && (
+        <p data-batch-aside="edited" className="m-0 text-xs text-ws-ink3">
+          {EDITED_ASIDE}
         </p>
       )}
       {outcome && (

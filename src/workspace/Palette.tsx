@@ -244,7 +244,12 @@ export function appActions(): CommandActions {
     openAgents: showAllRuns,
     openWorkstream: openOnPipHome,
     askPipToPlan: (item) => void askPipToPlan(item),
-    startWorkstreamOn: (item) => void useWorkstreams.getState().start(item.item),
+    // Starting one moves nothing on screen the palette owns, so say it in the live region; a failure is already toasted by start().
+    startWorkstreamOn: (item) =>
+      void useWorkstreams
+        .getState()
+        .start(item.item)
+        .then((view) => view && useToasts.getState().push(`Started a workstream on ${item.item.key}.`, "info")),
     showTimeline,
     startMyDay: showStartMyDay,
     planMyWeek: showPlanMyWeek,

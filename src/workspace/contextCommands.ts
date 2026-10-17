@@ -1,6 +1,7 @@
 import { openInWorkstreamLabel, type Need, type NeedActionId, type NeedGroup } from "../lib/needs";
 import type { Proposal, Run, WorkstreamView } from "../types";
 import { draftKeyAction } from "./draftKeys";
+import { draftEdited } from "./pipHomeLogic";
 import type { Command } from "./commands";
 
 /**
@@ -130,13 +131,14 @@ export function contextCommands(subject: Subject | null, data: ContextData, deps
  */
 export function batchCommands(groups: readonly NeedGroup[], deps: Pick<ContextDeps, "approveSafe">): Command[] {
   return groups
-    .filter((g) => g.safeBatch.length >= 2)
-    .map((g): Command => ({
+    .map((g) => ({ g, together: g.safeBatch.filter((n) => !(n.target.type === "draft" && draftEdited(n.target.id))) }))
+    .filter(({ together }) => together.length >= 2)
+    .map(({ g, together }): Command => ({
       id: `batch:${g.workstreamId ?? "general"}`,
       group: "Agents",
       icon: "✓",
       label: `Approve all safe drafts in ${g.ticketKey ?? g.title}`,
-      hint: `${g.safeBatch.length} drafts · shows them first`,
+      hint: `${together.length} drafts · shows them first`,
       keywords: "approve safe drafts batch all workstream comments moves subtasks",
       run: () => deps.approveSafe(g),
     }));

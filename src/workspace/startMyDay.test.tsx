@@ -179,7 +179,8 @@ describe("What Jira saw from me: the way back", () => {
     const html = renderToStaticMarkup(<JiraSentView />).replace(/&#x27;/g, "'").replace(/&quot;/g, '"');
     expect(html).toContain("GitHub reviews Gossamr posted are not listed here");
     expect(GITHUB_NOT_LISTED).toContain("You posted an agent's GitHub review");
-    expect(SENT_EMPTY).toContain(GITHUB_NOT_LISTED);
+    expect(SENT_EMPTY).not.toContain(GITHUB_NOT_LISTED);
+    expect(html.split(GITHUB_NOT_LISTED).length).toBe(2);
   });
 
   it("does not say how long Gossamr has been posting when it has no posts on record (G22)", () => {

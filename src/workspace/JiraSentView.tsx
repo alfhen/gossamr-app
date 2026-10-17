@@ -16,7 +16,7 @@ const link = "rounded px-1 text-ws-ink2 underline decoration-ws-sep2 underline-o
 export const GITHUB_NOT_LISTED = "GitHub reviews Gossamr posted are not listed here; each shows in its workstream's timeline as “You posted an agent's GitHub review”.";
 
 /** What the view says before Gossamr has posted anything. */
-export const SENT_EMPTY = `No posts to Jira from Gossamr are on record here. What you approve shows up here, with what Pip drafted and what you changed. ${GITHUB_NOT_LISTED}`;
+export const SENT_EMPTY = `No posts to Jira from Gossamr are on record here. What you approve shows up here, with what Pip drafted and what you changed.`;
 
 const time = (at: string) => new Date(at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 

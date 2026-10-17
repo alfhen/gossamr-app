@@ -552,7 +552,7 @@ export function ReviewDraft({
             {shownError ?? problem}
           </p>
         )}
-        {pause && open && <PostingPause risks={pause.risks} quote={pause.quote} where="the pull request" anyway="Post it anyway" working={working || state === "applying" || !!problem} onKeep={keepEditing} onPost={() => post()} />}
+        {pause && open && <PostingPause risks={pause.risks} quote={pause.quote} where="the pull request" subject="Your edit" anyway="Post it anyway" working={working || state === "applying" || !!problem} onKeep={keepEditing} onPost={() => post()} />}
         <div data-draft-actions className="sticky bottom-0 z-[1] -mx-3 -mb-2.5 flex flex-wrap items-center justify-end gap-2 border-t border-ws-sep bg-ws-win px-3 py-2">
           <button
             type="button"

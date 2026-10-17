@@ -202,7 +202,7 @@ describe("the run sheet, by state", () => {
       expect(box(html)).toContain('placeholder="Write your answer"');
       expect(html).not.toContain("Claude suggests");
       expect(html).toContain("Gossamr stops the agent and wakes it with your answer");
-      expect(html).toContain("Its conversation is kept.");
+      expect(html).toContain("Its conversation is kept. Only the agent sees your answer; nothing goes to Jira.");
       expect(buttons(html)).toEqual(expect.arrayContaining(["Send answer", "Open in Terminal"]));
     });
 

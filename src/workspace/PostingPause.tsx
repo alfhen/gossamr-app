@@ -12,7 +12,7 @@ const primary = "rounded-md bg-ws-pip px-3.5 py-1.5 text-sm font-semibold text-w
 /** The group's name: short, so the note is read once as the alert and as each button's description, not a third time on entering. */
 export const PAUSE_NAME = "Check before posting";
 
-export function PostingPause({ risks, quote, where, anyway, working, onKeep, onPost }: { risks: readonly Risk[]; quote: RiskQuotes; where?: string; anyway: string; working?: boolean; onKeep(): void; onPost(): void }) {
+export function PostingPause({ risks, quote, where, subject, anyway, working, onKeep, onPost }: { risks: readonly Risk[]; quote: RiskQuotes; where?: string; subject?: string; anyway: string; working?: boolean; onKeep(): void; onPost(): void }) {
   const note = useId();
   return (
     <div
@@ -28,7 +28,7 @@ export function PostingPause({ risks, quote, where, anyway, working, onKeep, onP
         onKeep();
       }}
     >
-      <p id={note} role="alert" className="m-0 text-sm text-ws-warn">{riskNote(risks, quote, where)}</p>
+      <p id={note} role="alert" className="m-0 text-sm text-ws-warn">{riskNote(risks, quote, where, subject)}</p>
       <div className="flex flex-wrap items-center gap-2">
         <button type="button" data-post-pause-keep aria-describedby={note} onClick={onKeep} className={primary}>
           Keep editing

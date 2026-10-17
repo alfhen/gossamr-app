@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { itemRef } from "../backend/mockConnector";
 import { docFromText } from "../lib/docs";
 import type { Proposal, RunSpec } from "../types";
-import { READINESS_COMMENT_LABEL } from "../lib/proposals";
+import { NUDGE_COMMENT_LABEL, READINESS_COMMENT_LABEL } from "../lib/proposals";
 import { useToasts } from "./toasts";
 import { DraftCard, answersRisks, postedNote, keepEditsOfDraft, keptEditsOfDraft, settleKeptEdits } from "./DraftCard";
 import { draftPreviewBody } from "./DraftPreview";
@@ -128,5 +128,13 @@ describe("an answers draft built from the person's reply (G2)", () => {
     expect(answersRisks("1. \u201cWhich env?\u201d\nAnswer: token=ghp_abcdefghijklmnopqrstuvwxyz0123456789").risks).toEqual(["secret"]);
     expect(answersRisks("Answer: @everyone please check").risks).toEqual(["broadcast"]);
     expect(answersRisks("Answer: the staging environment, as in the ticket").risks).toEqual([]);
+  });
+});
+
+describe("a nudge for the reporter says who Jira notifies (G6)", () => {
+  it("shows the posts-as-you line for the @-mentioned reporter, as the questions card does", () => {
+    const nudge: Proposal = { ...commentDraft("n1"), label: NUDGE_COMMENT_LABEL, intent: { type: "comment", item: itemRef("CA-412"), body: docFromText("Hi @Mette Lund,\n\nThe earlier questions about CA-412 are still open.") } };
+    const html = renderToStaticMarkup(<DraftCard proposal={nudge} statusName={null} people={[{ accountId: "a1", name: "Mette Lund" }]} working={false} error={null} onApprove={vi.fn()} onSkip={vi.fn()} onReview={vi.fn()} />);
+    expect(html).toContain("Posts as you; Jira notifies Mette Lund.");
   });
 });
