@@ -7,6 +7,7 @@ import { HELD_ALL, HELD_BUDGET, HELD_PERSON } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { contextDeps } from "./contextActions";
 import { draftDecisions } from "./DraftPreview";
+import { keepEditsOfDraft } from "./DraftCard";
 import { usePipHome } from "./pipHomeStore";
 import { useRuns } from "./runsStore";
 import { useTabs } from "./tabsStore";
@@ -73,6 +74,19 @@ describe("skipping a draft", () => {
     usePipHome.getState().decide(`draft:${b.id}`, ws.id);
     await useWorkspace.getState().skip(b.id);
     expect(useToasts.getState().toasts.find((t) => t.text.includes("Other"))?.spoken).toBe(false);
+  });
+
+  it("names an edited draft by what the person typed, not by its stored text, still masked", async () => {
+    const ws = await backend.workstreamsOpen(CA401);
+    const p = backend.proposals.draft(comment, null, "r1", ws.id);
+    await useWorkspace.getState().refreshProposals();
+    keepEditsOfDraft(p.id, { body: { text: "Edited reply token=hunter22secret", mentions: [] } });
+    await useWorkspace.getState().skip(p.id);
+    const said = texts()[0];
+    expect(said).toMatch(/^Skipped the draft on CA-401: “Edited reply /);
+    expect(said).not.toContain("“Hi”");
+    expect(said).not.toContain("hunter22secret");
+    keepEditsOfDraft(p.id, {});
   });
 
   it("offers Undo, and Undo brings the draft back to pending with its own audit line", async () => {

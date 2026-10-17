@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { Intent, Proposal, RunKind, RunSpec } from "../types";
 import { answersProvenance, ANSWERS_COMMENT_LABEL, isReporterFollowUp, answersSupersession, READINESS_COMMENT_LABEL, draftExcerpt, draftsForTurn, earlierDrafts, inWorkstreamPane, isAnswersDraft, isReporterQuestions, reporterSupersession, supersession, supersessionKey, targetOf, withoutRunDrafts } from "./proposals";
 import fixtures from "./draftHygiene.fixtures.json";
+import { docFromText } from "./docs";
 import { isRunPlanRewrite } from "../backend/mockProposals";
 
 const ref = (key: string) => ({ connectionId: "c", externalId: key, key });
@@ -282,3 +283,13 @@ describe("draftExcerpt of a follow-up draft", () => {
     expect(out).not.toContain("ghp_abcdefghijklmnopqrstuvwxyz0123456789");
   });
 });
+describe("draftExcerpt with an edit", () => {
+  it("names a follow-up or a comment by its edited words when there are any", () => {
+    const followUp = { type: "followUp", message: "Stored message" } as unknown as Intent;
+    expect(draftExcerpt(followUp, 40, { message: "Edited message" })).toBe("Edited message");
+    expect(draftExcerpt(followUp)).toBe("Stored message");
+    const comment = { type: "comment", item: { connectionId: "c", key: "CA-1" }, body: docFromText("Stored") } as unknown as Intent;
+    expect(draftExcerpt(comment, 40, { body: { text: "Edited" } })).toBe("Edited");
+  });
+});
+
