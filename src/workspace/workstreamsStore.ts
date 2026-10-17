@@ -100,6 +100,9 @@ const readinessOf = (list: readonly WorkstreamView[], id: string) => list.find((
 /** "1 workstream", "2 workstreams". */
 const workstreams = (n: number) => `${n} ${n === 1 ? "workstream" : "workstreams"}`;
 
+/** What Looks fine says comes next, in the same toast as what it taught when there is one: the notice asks nothing more, and the agent step is the person's to start. */
+export const LOOKS_FINE_NEXT = "The agent step can be started from the conversation.";
+
 /**
  * The triage runs whose readiness question the person just settled with Plan anyway, until the Done line that says so has
  * been written (`takePlannedAnyway`). Kept by triage run, not workstream: a mark the pane never read (the question went while
@@ -457,7 +460,7 @@ export const useWorkstreams = create<WorkstreamsState>()((set, get) => {
       if (next.learned.length) {
         // One word for what it learned, one audit line for each gap.
         // No longer news once it is given back, so it never comes up after (or over) the "as before" note.
-        pushLearning(project, `Gossamr will stop flagging ${project} tickets that ${next.learned.map(gapWords).join(", or that ")}. Give that back in Settings, or from ⌘K.`, () => ignoredGaps(usePrefs.getState().clarityLearning, project).length > 0);
+        pushLearning(project, `Gossamr will stop flagging ${project} tickets that ${next.learned.map(gapWords).join(", or that ")}. Give that back in Settings, or from ⌘K. ${LOOKS_FINE_NEXT}`, () => ignoredGaps(usePrefs.getState().clarityLearning, project).length > 0);
         void get().loadEvents(id);
       } else if (shown.length) {
         // The first and second Looks fine count silently otherwise: say how far it is from Gossamr stopping.
@@ -469,7 +472,10 @@ export const useWorkstreams = create<WorkstreamsState>()((set, get) => {
         // Out of date once the count moves (another Looks fine) or is given back: the newer note replaces it, never waits behind it.
         const at = JSON.stringify(shown.map((g) => counts[g] ?? 0));
         const standing = () => JSON.stringify(shown.map((g) => usePrefs.getState().clarityLearning[project]?.[g] ?? 0)) === at;
-        pushLearning(project, `Noted for ${gapList(shown)}. After ${left} more Looks fine on ${project} tickets like this, Gossamr stops flagging ${them} (Settings > Unclear tickets).`, standing);
+        pushLearning(project, `Noted for ${gapList(shown)}. After ${left} more Looks fine on ${project} tickets like this, Gossamr stops flagging ${them} (Settings > Unclear tickets). ${LOOKS_FINE_NEXT}`, standing);
+      } else {
+        // Nothing was taught, so nothing else says what comes next: the notice would only go.
+        useToasts.getState().push(`${key} marked as clear enough. ${LOOKS_FINE_NEXT}`, "info");
       }
       return true;
     },

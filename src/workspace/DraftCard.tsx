@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { MentionTextarea } from "../components/MentionTextarea";
 import { docText } from "../lib/docs";
 import { autoLink, liveMentions, mentionNote, rewriteNote, type Mention } from "../lib/mentions";
@@ -20,6 +20,8 @@ import { useRunSetup } from "./runSetupStore";
 import { useRuns } from "./runsStore";
 import { useWorkspace, workflowOfItem } from "../workspaceStore";
 import { PEEK_DRAFT_MARGIN, peekFocusAfterLeaving } from "./peekDrafts";
+import { KeyHint } from "./KeyHint";
+import { keptEdits, keptEditsOfDraft, type KeptEdits } from "./keptEdits";
 import { useToasts } from "./toasts";
 import { doneText, postedToJira, waitStarted } from "./NeedsPane";
 import { escLeavesPause, useCardKeys } from "./draftCardKeys";
@@ -193,6 +195,9 @@ export interface DraftCardProps {
 const button = "rounded-md border border-ws-sep2 px-2.5 py-1 text-sm hover:bg-ws-hover disabled:opacity-45";
 const primary = "rounded-md bg-ws-pip px-3.5 py-1.5 text-sm font-semibold text-ws-on-pip shadow-sm hover:brightness-110 disabled:opacity-45";
 
+/** Under a comment being read whose text looks like a secret: the pause is coming, and the text above is what would be posted. */
+export const SECRET_NOTE = "This holds something that looks like a secret. Gossamr will pause before posting it.";
+
 /** What an answers draft's text would put in front of everyone: checked against nothing, since none of it was on the ticket before the person typed it in the composer. */
 export function answersRisks(text: string): { risks: Risk[]; quote: RiskQuotes } {
   return { risks: newRisks("", text), quote: newRiskQuote("", text) };
@@ -210,15 +215,7 @@ export function DraftCard(props: DraftCardProps) {
   );
 }
 
-/** What was typed into a draft's fields when it was skipped, so Undo brings the draft back with the edit still in them. */
-export interface KeptEdits {
-  body?: { text: string; mentions: Mention[] };
-  rewrite?: { title: string; text: string };
-  message?: string;
-  /** Which proposed subtasks were still ticked, when any was unticked. */
-  picked?: boolean[];
-}
-const keptEdits = new Map<string, KeptEdits>();
+export type { KeptEdits } from "./keptEdits";
 
 /** Remember the unsaved `edits` of draft `id`, until the draft is posted or retired; no edits leave nothing kept. */
 export function keepEditsOfDraft(id: string, edits: KeptEdits): void {
@@ -228,9 +225,7 @@ export function keepEditsOfDraft(id: string, edits: KeptEdits): void {
 }
 
 /** The edits kept for draft `id`, if any. They stay while the draft can still be shown, so leaving a restored card before posting it doesn't lose them. */
-export function keptEditsOfDraft(id: string): KeptEdits | undefined {
-  return keptEdits.get(id);
-}
+export { keptEditsOfDraft } from "./keptEdits";
 
 /** A card going away with its draft still pending keeps what was typed in it (G1), so the card that comes back shows it and "a, Enter" opens the card and doesn't post the stored text. */
 export function keepEditsOnLeave(id: string, state: ProposalStateKind, edits: KeptEdits): void {
@@ -496,10 +491,12 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
                 ? `Update ${rewriteWhat(rewrite)}`
                 : "Apply";
 
+  const Title = headingLevel === 4 ? "h4" : "h3";
+  const titleId = useId();
   return (
     <article
       ref={card}
-      aria-label={draftTitle(p, answer?.label)}
+      aria-labelledby={titleId}
       data-draft={p.id}
       {...keys.props}
       onFocus={(ev) => {
@@ -514,7 +511,10 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
     >
       <div className="flex items-center gap-2 bg-ws-pip-soft px-3 py-1.5 text-sm font-semibold text-ws-pip">
         <span aria-hidden>✦</span>
-        {draftTitle(p, answer?.label)}
+        {/* The card is named by this heading, so a screen reader says the title once. */}
+        <Title id={titleId} className="m-0 text-sm font-semibold">
+          {draftTitle(p, answer?.label)}
+        </Title>
         <span ref={doneLine} tabIndex={-1} data-draft-state className="ml-auto font-normal text-ws-ink3 focus-visible:outline-2 focus-visible:outline-ws-pip">
           {BADGE[state]}
         </span>
@@ -549,6 +549,12 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
           ) : (
             <p className="m-0 whitespace-pre-wrap [overflow-wrap:anywhere]">{body}</p>
           ))}
+        {intent.type === "comment" && !editing && open && risks().risks.includes("secret") && (
+          // The words stay as written, since the person posts what they read; what the pause would catch is said before Post, not only at it.
+          <p data-secret-note className="m-0 text-sm text-ws-ink3">
+            {SECRET_NOTE}
+          </p>
+        )}
         {intent.type === "comment" && (isReporterQuestions(p) || isReporterNudge(p)) && open && mentionNote(liveMentions(body, mentions)) && (
           <p data-mention-note className="m-0 text-sm text-ws-ink3">
             {mentionNote(liveMentions(body, mentions))}
@@ -840,11 +846,8 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
           </div>
         )}
       </div>
-      {keys.hint && (
-        <p role="status" data-key-hint className={`m-0 border-t border-ws-sep px-3 py-1 text-xs ${keys.asking ? "bg-ws-pip-soft font-semibold text-ws-pip" : "bg-ws-bar text-ws-ink3"}`}>
-          {keys.hint}
-        </p>
-      )}
+      {/* Always mounted, so the live region is there before the confirm that fills it. */}
+      <KeyHint hint={keys.hint ?? ""} asking={!!keys.asking} className={`m-0 border-t border-ws-sep px-3 py-1 text-xs ${keys.asking ? "bg-ws-pip-soft font-semibold text-ws-pip" : "bg-ws-bar text-ws-ink3"}`} />
     </article>
   );
 }

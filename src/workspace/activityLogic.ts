@@ -366,9 +366,10 @@ const HELD_WORDS: Record<WorkstreamActor, string> = { person: "You held the work
 /**
  * What one audit line says in the feed, naming runs by their label in the workstream (`label`); null for lines the
  * feed leaves out (a fix round's own auto-start line, which "Fix round n sent" already says, and bookkeeping).
- * `rounds` counts the fix rounds sent so far, this one included.
+ * `rounds` counts the fix rounds sent so far, this one included. `asked` says the reporter was asked about this line's triage
+ * before it, which makes an override "Plan now" (their reply or the changed ticket came back) rather than "Plan anyway".
  */
-export function eventText(e: WorkstreamEvent, label: (id: string | null) => string, rounds: number): string | null {
+export function eventText(e: WorkstreamEvent, label: (id: string | null) => string, rounds: number, asked = false): string | null {
   const who = e.actor === "person" ? "You" : e.actor === "pip" ? "Pip" : e.actor === "supervisor" ? "Gossamr" : "An agent";
   switch (e.action) {
     case "opened":
@@ -433,7 +434,7 @@ export function eventText(e: WorkstreamEvent, label: (id: string | null) => stri
     case "readiness_answered":
       return `${who} chose to answer ${label(e.runId)}'s open questions`;
     case "readiness_overridden":
-      return `${who} chose to plan anyway after ${label(e.runId)} found the ticket not ready`;
+      return asked ? `${who} chose to plan now, after asking the reporter about ${label(e.runId)}'s open questions` : `${who} chose to plan anyway after ${label(e.runId)} found the ticket not ready`;
     case "clarity_asked":
       return `${who} chose to ask the reporter; Gossamr drafted the questions for you to post`;
     case "clarity_dismissed":
@@ -463,9 +464,11 @@ export function toWorkstreamEntries(events: Readonly<Record<string, readonly Wor
     const label = (run: string | null) => (run ? (labels.get(run) ?? `run ${run.length <= 12 ? run : run.slice(0, 8)}`) : "a run");
     const item = refOf(view);
     let rounds = 0;
+    const asked = new Set<string>();
     for (const e of events[id] ?? []) {
       if (e.action === "fix_round_sent") rounds++;
-      const text = eventText(e, label, rounds);
+      if (e.action === "readiness_asked" && e.runId) asked.add(e.runId);
+      const text = eventText(e, label, rounds, !!e.runId && asked.has(e.runId));
       if (!text) continue;
       out.push({ source: "pip", id: `ws:${id}:${e.seq}`, at: e.at, workstreamId: id, actor: e.actor, action: e.action, runId: e.runId, itemKey: view.workstream.itemKey, item, text, mention: false, unread: false });
     }

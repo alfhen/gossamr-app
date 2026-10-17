@@ -587,13 +587,25 @@ describe("timeline: the audit", () => {
     expect(audit.map((e) => [e.text, e.decision])).toEqual([
       ["You chose to ask the reporter about R1's open questions; drafted for you to post", true],
       ["You chose to answer R1's open questions", true],
-      ["You chose to plan anyway after R1 found the ticket not ready", true],
+      ["You chose to plan now, after asking the reporter about R1's open questions", true],
     ]);
     expect(audit.every((e) => e.kind === "audit" && e.decision)).toBe(true);
     // The same line by anyone but the person is still worded, and is not the person's decision.
     const other = timeline({ events: [line("readiness_overridden", 1, { actor: "pip", runId: "r1" })], runs: [run("r1", "triage", "done", 30)], labels: new Map([["r1", "R1"]]) }).find((e) => e.kind === "audit")!;
     expect(other.text).toBe("Pip chose to plan anyway after R1 found the ticket not ready");
     expect(other.decision).toBe(false);
+  });
+
+  it("words a Plan now after the reporter was asked apart from Plan anyway", () => {
+    const list = timeline({
+      events: [line("readiness_asked", 3, { runId: "r1", proposalId: "d1" }), line("readiness_overridden", 2, { runId: "r1" }), line("readiness_overridden", 1, { runId: "r2" })],
+      runs: [run("r1", "triage", "done", 30), run("r2", "triage", "done", 30)],
+      labels: new Map([["r1", "R1"], ["r2", "R2"]]),
+    });
+    const texts = list.filter((e) => e.kind === "audit").map((e) => e.text);
+    expect(texts).toContain("You chose to plan now, after asking the reporter about R1's open questions");
+    expect(texts).toContain("You chose to plan anyway after R2 found the ticket not ready");
+    expect(texts.join("\n")).not.toContain("plan anyway after R1");
   });
 
   it("says a triage's finish with the reason the ticket waits, and opens its need", () => {

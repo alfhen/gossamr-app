@@ -560,7 +560,7 @@ test.describe("draft cards: click, Esc, a and s (D2, D7, D23, D28)", () => {
     await page.keyboard.press("ArrowUp");
     const armed = cards.first();
     await expect(armed).toBeFocused();
-    const hint = armed.getByRole("status");
+    const hint = armed.locator("[data-key-hint]");
     await expect(hint).toHaveText("a approve · e edit · d s skip · ↵ open");
     // The hint hangs under the card: the card is as tall with it as without it.
     const tall = (await armed.boundingBox())!.height;
@@ -570,7 +570,7 @@ test.describe("draft cards: click, Esc, a and s (D2, D7, D23, D28)", () => {
     // From an armed card, one click on the next card's button opens the peek.
     await page.locator(PIP_INPUT).press("ArrowUp");
     await page.keyboard.press("ArrowUp");
-    await expect(armed.getByRole("status")).toBeVisible();
+    await expect(armed.locator("[data-key-hint]")).toBeVisible();
     await cards.last().getByRole("button", { name: "Review on CA-401 →" }).click();
     await expect(peekSheet(page)).toHaveAttribute("aria-label", "Details for CA-401");
   });
@@ -595,7 +595,7 @@ test.describe("draft cards: click, Esc, a and s (D2, D7, D23, D28)", () => {
     // ArrowUp walks the timeline's entries, the runs and Pip's turns between the cards included.
     for (let i = 0; i < 16 && !(await first.evaluate((el) => el === document.activeElement)); i++) await page.keyboard.press("ArrowUp");
     await expect(first).toBeFocused();
-    const hint = first.getByRole("status");
+    const hint = first.locator("[data-key-hint]");
     await expect(hint).toBeVisible();
     const under = (await hint.boundingBox())!;
     const title = (await waiting.nth(1).locator("[data-draft-body] > div").first().boundingBox())!;
@@ -670,9 +670,9 @@ test.describe("draft cards: click, Esc, a and s (D2, D7, D23, D28)", () => {
     await page.keyboard.press("ArrowUp");
     await expect(newest).toBeFocused();
     await page.keyboard.press("a");
-    await expect(newest.getByRole("status")).toHaveText("↵ approve · any other key cancels");
+    await expect(newest.locator("[data-key-hint]")).toHaveText("↵ approve · any other key cancels");
     await page.keyboard.press("s");
-    await expect(newest.getByRole("status")).toHaveText("a approve · e edit · d s skip · ↵ open");
+    await expect(newest.locator("[data-key-hint]")).toHaveText("a approve · e edit · d s skip · ↵ open");
     await expect(newest).toBeFocused();
     // The s that cancelled did not skip: the draft is still pending, and nothing was written.
     await expect(newest).toHaveAttribute("data-state", "pending");
@@ -684,7 +684,7 @@ test.describe("draft cards: click, Esc, a and s (D2, D7, D23, D28)", () => {
     await page.locator(PIP_INPUT).focus();
     await page.keyboard.press("ArrowUp");
     await expect(card).toBeFocused();
-    await expect(card.getByRole("status")).toHaveText("e edit · d s skip · ↵ open");
+    await expect(card.locator("[data-key-hint]")).toHaveText("e edit · d s skip · ↵ open");
     await expect(card).toHaveAttribute("data-state", "pending");
   });
 });
@@ -924,7 +924,7 @@ test.describe("Discuss with Pip on a review (D22)", () => {
     await expect(others).toHaveText(/^▸ \+\d+ drafts? on other tickets$/);
     await expect(others).toHaveAttribute("aria-expanded", "false");
     // Every card listed is about CA-402.
-    for (const name of await drafts.getByRole("article").evaluateAll((els) => els.map((e) => e.getAttribute("aria-label") ?? ""))) expect(name).toMatch(/CA-402|acme\/webshop#218/);
+    for (const name of await drafts.getByRole("article").evaluateAll((els) => els.map((e) => e.getAttribute("aria-label") ?? e.querySelector("h3")?.textContent ?? ""))) expect(name).toMatch(/CA-402|acme\/webshop#218/);
     const folded = Number((await others.textContent())!.match(/\d+/)![0]);
     const shown = await drafts.getByRole("article").count();
     await others.click();

@@ -101,7 +101,7 @@ test.describe("draft keys after a skip (N1)", () => {
     await expect(start).toHaveCount(0);
     // The next draft has the keyboard, armed: its hint shows, and its keys work without a Shift+Tab and Tab first.
     await expect(rewrite).toBeFocused();
-    await expect(rewrite.getByRole("status")).toHaveText(/↵ open$/);
+    await expect(rewrite.locator("[data-key-hint]")).toHaveText(/↵ open$/);
     await page.keyboard.press("a");
     await expect(peekSheet(page)).toHaveAttribute("aria-label", "Details for CA-401");
     const inPeek = peekSheet(page).getByRole("article", { name: "Update the description of CA-401" });

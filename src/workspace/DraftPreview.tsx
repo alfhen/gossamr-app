@@ -1,4 +1,4 @@
-import { useContext, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { useContext, useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { docText } from "../lib/docs";
 import { itemKey } from "../lib/filter";
 import { REVIEW_OUTDATED_NOTE, targetOf, unreachable } from "../lib/proposals";
@@ -20,6 +20,7 @@ import { focusPeekDraft } from "./peekDrafts";
 import { plainMarkdown } from "../lib/markdown";
 import { maskSecrets } from "../lib/riskyText";
 import { useTabs } from "./tabsStore";
+import { KeyHint } from "./KeyHint";
 import { RetiredDraft } from "./RetiredDraft";
 import { NOT_WAITING, useAnswerRun, type AnswerRun } from "./runAnswer";
 
@@ -207,6 +208,7 @@ function DraftPreviewCard({ proposal: p, statusName, targetTitle, pass, answer =
   /** Whether a may decide the draft in place: not an answer whose run moved on, nor a review the token can't post. */
   const canApprove = !stale && (p.intent.type !== "githubReview" || canPost);
   const title = draftTitle(p, answer?.label);
+  const titleId = useId();
   const review = p.intent.type === "githubReview" && state === "pending" ? p.intent : null;
   // A review the keys may post reads where its pull request is now, once the card is reached from the keyboard, so it
   // warns before a posts it as the full card does.
@@ -255,7 +257,7 @@ function DraftPreviewCard({ proposal: p, statusName, targetTitle, pass, answer =
   return (
     <article
       ref={ref}
-      aria-label={title}
+      aria-labelledby={titleId}
       data-draft={p.id}
       data-state={state}
       // While a decision waits for Enter, Esc is the card's: it cancels the ask, and stops nothing else. So it is while the
@@ -301,7 +303,10 @@ function DraftPreviewCard({ proposal: p, statusName, targetTitle, pass, answer =
       <section data-draft-body className="overflow-hidden rounded-[inherit]">
         <div className={`flex items-center gap-2 px-2.5 py-1.5 text-sm font-semibold ${HEADER[state]}`}>
           <span aria-hidden>{ICON[p.intent.type]}</span>
-          <span className="min-w-0 truncate">{title}</span>
+          {/* The card is named by this heading, so a screen reader says the title once. */}
+          <h3 id={titleId} className="m-0 min-w-0 truncate text-sm font-semibold">
+            {title}
+          </h3>
           <span className="ml-auto shrink-0 font-medium text-ws-ink3">
             {STATE[state]}
             {changed && <span data-draft-edited> · edited</span>}
@@ -353,11 +358,7 @@ function DraftPreviewCard({ proposal: p, statusName, targetTitle, pass, answer =
           </p>
         )}
       </section>
-      {armed && (
-        <p ref={hint} role="status" className={`${KEY_HINT} ${asking ? "bg-ws-pip-soft font-semibold text-ws-pip" : "bg-ws-win text-ws-ink3"}`}>
-          {draftKeyHint(p, asking, canApprove)}
-        </p>
-      )}
+      {armed && <KeyHint hintRef={hint} hint={draftKeyHint(p, asking, canApprove)} asking={!!asking} className={`${KEY_HINT} ${asking ? "bg-ws-pip-soft font-semibold text-ws-pip" : "bg-ws-win text-ws-ink3"}`} />}
     </article>
   );
 }

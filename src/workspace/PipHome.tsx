@@ -159,9 +159,9 @@ export function WorkstreamList({ list, closed, showClosed, selected, onSelect, o
     className: `${ROW} ${selected === id ? "bg-ws-sel text-ws-ink" : "text-ws-ink2 hover:bg-ws-hover"} ${witherClass(level, "ws-")} ${dim ? "opacity-60" : ""}`.trim(),
   });
   return (
-    <nav aria-label="Workstreams" tabIndex={-1} className="flex min-h-0 flex-1 flex-col border-t border-ws-sep bg-ws-bar">
+    <nav aria-label="Your workstreams" tabIndex={-1} className="flex min-h-0 flex-1 flex-col border-t border-ws-sep bg-ws-bar">
       <h2 className="m-0 px-3 pt-2 pb-1 text-xs font-semibold tracking-wide text-ws-ink3 uppercase">Workstreams</h2>
-      <ul ref={listRef} role="listbox" aria-label="Workstreams" aria-keyshortcuts="j k ArrowDown ArrowUp Enter" className="m-0 grid min-h-0 list-none content-start gap-0.5 overflow-y-auto p-0 px-1.5">
+      <ul ref={listRef} role="listbox" aria-label="Open workstreams" aria-keyshortcuts="j k ArrowDown ArrowUp Enter" className="m-0 grid min-h-0 list-none content-start gap-0.5 overflow-y-auto p-0 px-1.5">
         <li data-workstream-row="general" {...option(null, optionName("General", needsIn(needsYou, null) > 0 ? `${needsIn(needsYou, null)} in Needs you` : null))}>
           <span className="flex min-w-0 items-center gap-1.5">
             <span className="font-semibold text-ws-ink">General</span>
@@ -502,7 +502,7 @@ function overlayOpen(): boolean {
 const REGION_ON: Record<PipHomeRegion, string> = {
   needs: "[data-pip-home] [data-needs-you]",
   week: "[data-pip-home] [data-this-week]",
-  workstreams: '[data-pip-home] nav[aria-label="Workstreams"]',
+  workstreams: '[data-pip-home] nav[aria-label="Your workstreams"]',
   day: "[data-pip-home] [data-plan-my-week], [data-pip-home] [data-start-my-day]",
   notice: `[data-pip-home] ${NOTICE}`,
   timeline: "[data-pip-home] [data-timeline]",
@@ -524,7 +524,7 @@ function regionOf(el: Element | null): PipHomeRegion | null {
   if (el.closest("[data-needs-you]")) return "needs";
   if (el.closest(NOTICE)) return "notice";
   if (el.closest("[data-this-week]")) return "week";
-  if (el.closest('nav[aria-label="Workstreams"]')) return "workstreams";
+  if (el.closest('nav[aria-label="Your workstreams"]')) return "workstreams";
   if (el.closest('[data-pip-home-column="rail"]')) return "rail";
   if (el.id === PIP_INPUT_ID) return "composer";
   if (el.closest("[data-timeline-scope-shown], [data-pip-home-column=\"conversation\"] > section > header")) return "timeline";
@@ -598,7 +598,7 @@ function usePipHomeKeys(needsYou: readonly Need[]) {
           return void show(home?.querySelector<HTMLElement>("[data-this-week-item] button") ?? home?.querySelector<HTMLElement>("[data-this-week-edit]") ?? home?.querySelector<HTMLElement>("[data-this-week]"));
         case "workstreams": {
           const rows = all('[role="option"]');
-          return void show(rows.find((r) => r.getAttribute("aria-selected") === "true") ?? rows[0] ?? home?.querySelector<HTMLElement>('nav[aria-label="Workstreams"]'));
+          return void show(rows.find((r) => r.getAttribute("aria-selected") === "true") ?? rows[0] ?? home?.querySelector<HTMLElement>('nav[aria-label="Your workstreams"]'));
         }
         case "day":
           return void show(home?.querySelector<HTMLElement>("[data-plan-my-week]") ?? home?.querySelector<HTMLElement>("[data-start-my-day]"));

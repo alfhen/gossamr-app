@@ -876,7 +876,7 @@ const regionNow = (page: Page) =>
     if (a.closest("[data-needs-pane]")) return "pane";
     if (a.closest("[data-needs-you]")) return "needs";
     if (a.closest("[data-clarity-notice]")) return "notice";
-    if (a.closest('nav[aria-label="Workstreams"]')) return "workstreams";
+    if (a.closest('nav[aria-label="Your workstreams"]')) return "workstreams";
     if (a.closest("[data-timeline-scope-shown]")) return "timeline";
     if (a.closest('[data-pip-home-column="rail"]')) return "rail";
     return a.id === "pip-input" ? "composer" : null;

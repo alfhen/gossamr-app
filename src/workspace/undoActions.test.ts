@@ -7,6 +7,7 @@ import { HELD_ALL, HELD_BUDGET, HELD_PERSON } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { contextDeps } from "./contextActions";
 import { draftDecisions } from "./DraftPreview";
+import { keepEditsOfDraft } from "./DraftCard";
 import { usePipHome } from "./pipHomeStore";
 import { useRuns } from "./runsStore";
 import { useTabs } from "./tabsStore";
@@ -42,13 +43,36 @@ afterEach(() => {
 });
 
 describe("skipping a draft", () => {
+  it("names the draft in the Undo, masking a secret and cutting a long text (G27)", async () => {
+    const ws = await backend.workstreamsOpen(CA401);
+    const long = backend.proposals.draft({ ...comment, body: docFromText("Password: hunter22secret and a long tail that goes on and on for a while") } as Intent, null, "r1", ws.id);
+    await useWorkspace.getState().refreshProposals();
+    await useWorkspace.getState().skip(long.id);
+    const said = texts()[0];
+    expect(said).toMatch(/^Skipped the draft on CA-401: “Password: hu….*…”\.$/);
+    expect(said).not.toContain("hunter22secret");
+  });
+
+  it("names an edited draft by what the person typed, not by its stored text, still masked", async () => {
+    const ws = await backend.workstreamsOpen(CA401);
+    const p = backend.proposals.draft(comment, null, "r1", ws.id);
+    await useWorkspace.getState().refreshProposals();
+    keepEditsOfDraft(p.id, { body: { text: "Edited reply token=hunter22secret", mentions: [] } });
+    await useWorkspace.getState().skip(p.id);
+    const said = texts()[0];
+    expect(said).toMatch(/^Skipped the draft on CA-401: “Edited reply /);
+    expect(said).not.toContain("“Hi”");
+    expect(said).not.toContain("hunter22secret");
+    keepEditsOfDraft(p.id, {});
+  });
+
   it("offers Undo, and Undo brings the draft back to pending with its own audit line", async () => {
     const ws = await backend.workstreamsOpen(CA401);
     const p = backend.proposals.draft(comment, null, "r1", ws.id);
     await useWorkspace.getState().refreshProposals();
     await useWorkspace.getState().skip(p.id);
     expect(useWorkspace.getState().proposals[p.id].state.type).toBe("skipped");
-    expect(texts()).toEqual(["Skipped the draft on CA-401."]);
+    expect(texts()).toEqual(["Skipped the draft on CA-401: “Hi”."]);
     expect(useToasts.getState().toasts[0].action).toMatchObject({ label: "Undo", what: "skip" });
     undoButton()!.run();
     await vi.waitFor(() => expect(useWorkspace.getState().proposals[p.id].state.type).toBe("pending"));

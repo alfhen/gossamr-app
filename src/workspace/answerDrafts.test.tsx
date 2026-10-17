@@ -41,7 +41,7 @@ beforeEach(() => vi.stubGlobal("localStorage", { getItem: () => null, setItem: (
 describe("an answer draft's cards", () => {
   it("show the run's live question as the agent's words and the whole suggested reply, named by the run's label", () => {
     for (const html of [preview(answerDraft(), waiting), card(answerDraft(), waiting)]) {
-      expect(html).toContain('aria-label="Answer for R1"');
+      expect(html).toMatch(/>Answer for R1<\/h3>/);
       expect(html).toMatch(/data-question[^>]*><b[^>]*>R1 asks:<\/b> Should the refund path keep the old rounding\?/);
       expect(html).not.toContain("What it asked when drafted");
       expect(html).not.toContain(NOT_WAITING_HTML);
@@ -56,7 +56,7 @@ describe("an answer draft's cards", () => {
 
   it("fall back to the question the draft kept, and its session, when the run isn't loaded", () => {
     const html = preview(answerDraft(), null);
-    expect(html).toContain('aria-label="Answer for abcd1234"');
+    expect(html).toMatch(/>Answer for abcd1234<\/h3>/);
     expect(html).toContain("The agent asks:</b> What it asked when drafted");
   });
 

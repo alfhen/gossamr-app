@@ -456,7 +456,7 @@ test.describe("draft action bar", () => {
     // Under the bar is the peek's footer or the window's edge, never more of the draft.
     const under = await page.evaluate(({ x, y }) => {
       const el = document.elementFromPoint(x, y);
-      return { inCard: !!el?.closest('article[aria-label="Update the description of CA-401"]'), inScroller: !!el?.closest("[data-peek-scroll]") };
+      return { inCard: el?.closest("article[data-draft]")?.querySelector("h3")?.textContent === "Update the description of CA-401", inScroller: !!el?.closest("[data-peek-scroll]") };
     }, { x: b.x + b.width / 2, y: b.y + b.height + 4 });
     expect(under.inCard && under.inScroller).toBe(false);
     await expectSolid(bar);

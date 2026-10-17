@@ -207,7 +207,7 @@ describe("what Looks fine teaches the clarity notice", () => {
     expect(usePrefs.getState().clarityLearning).toEqual({ CA: { short: 2, done: 2, scope: 2, who: 2 } });
     // The first and second say how many more it takes; the second replaces the first, which is out of date.
     expect(texts()).toEqual([
-      "Noted for short description, no \"done\" criteria, no scope and no \"who is waiting\". After 1 more Looks fine on CA tickets like this, Gossamr stops flagging them (Settings > Unclear tickets).",
+      "Noted for short description, no \"done\" criteria, no scope and no \"who is waiting\". After 1 more Looks fine on CA tickets like this, Gossamr stops flagging them (Settings > Unclear tickets). The agent step can be started from the conversation.",
     ]);
     useToasts.getState().clear();
     await useWorkstreams.getState().looksFine(c);
@@ -224,6 +224,19 @@ describe("what Looks fine teaches the clarity notice", () => {
     ]);
     expect(events(c).filter((e) => e.action === "clarity_dismissed")).toHaveLength(1);
     expect(backend.proposals.writes).toEqual([]);
+  });
+
+  it("says what comes next after Looks fine, in the toast about what it taught and on its own when it taught nothing (G29)", async () => {
+    const ids = await dismissAll(thinTickets);
+    await useWorkstreams.getState().looksFine(ids[0]);
+    expect(texts()).toHaveLength(1);
+    expect(texts()[0]).toMatch(/ The agent step can be started from the conversation\.$/);
+    for (const id of ids.slice(1)) await useWorkstreams.getState().looksFine(id);
+    // Taught away, a gap is not flagged again: a fourth Looks fine has nothing to teach and says only what is next.
+    useToasts.getState().clear();
+    const [d] = await dismissAll(["CA-408"]);
+    await useWorkstreams.getState().looksFine(d);
+    expect(texts()).toEqual(["CA-408 marked as clear enough. The agent step can be started from the conversation."]);
   });
 
   it("gives back what it learned without the old 'will stop flagging' note staying ahead of the 'as before' one", async () => {
@@ -358,7 +371,7 @@ describe("what Looks fine teaches the clarity notice", () => {
     usePrefs.setState({ clarityLearning: { CA: { short: 1 } } });
     backend.editTicket("CA-402", { description: THIN });
     await useWorkstreams.getState().looksFine(await open("CA-402"));
-    expect(texts()).toEqual(["Noted for short description, no \"done\" criteria, no scope and no \"who is waiting\". After 1 more Looks fine on CA tickets like this, Gossamr stops flagging the first of them (Settings > Unclear tickets)."]);
+    expect(texts()).toEqual(["Noted for short description, no \"done\" criteria, no scope and no \"who is waiting\". After 1 more Looks fine on CA tickets like this, Gossamr stops flagging the first of them (Settings > Unclear tickets). The agent step can be started from the conversation."]);
   });
 
   it("clears the 'will stop flagging' notes only of the projects it reset, not one whose audit failed", async () => {

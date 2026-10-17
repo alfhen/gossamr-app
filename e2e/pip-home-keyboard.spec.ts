@@ -197,7 +197,7 @@ test("keyboard only, intake to review on Pip home: columns with F6, rows and ste
   await press(page, "Enter");
   await expect(chipButton(page, "review")).toHaveAttribute("aria-expanded", "true");
   await expect(stepChip(page, "review").getByRole("button", { name: /safe drafts/ })).toHaveCount(0);
-  const comment = stepChip(page, "review").locator('article[data-draft][data-state="pending"]:not([aria-label^="GitHub review of "])');
+  const comment = stepChip(page, "review").locator('article[data-draft][data-state="pending"]').filter({ hasNot: page.locator("h3", { hasText: /^GitHub review of / }) });
   await expect(comment).toHaveCount(1);
   const id = (await comment.getAttribute("data-draft"))!;
   await pressUntil(page, "j", comment, 10);

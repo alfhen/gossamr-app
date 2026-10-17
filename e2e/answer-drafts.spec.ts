@@ -54,9 +54,9 @@ test("a run's question wakes Pip, which suggests a reply the person checks and s
   expect((await mockRuns(page)).find((r) => r.id === id)?.state).toBe("needsAnswer");
 
   await card.focus();
-  await expect(card.getByRole("status")).toHaveText("a send · e edit · d s skip · ↵ open");
+  await expect(card.locator("[data-key-hint]")).toHaveText("a send · e edit · d s skip · ↵ open");
   await page.keyboard.press("a");
-  await expect(card.getByRole("status")).toHaveText("↵ send this reply · any other key cancels");
+  await expect(card.locator("[data-key-hint]")).toHaveText("↵ send this reply · any other key cancels");
   await page.keyboard.press("Enter");
   await expect.poll(async () => (await mockRuns(page)).find((r) => r.id === id)?.state).toBe("working");
   await expect(card).toHaveAttribute("data-state", "applied");

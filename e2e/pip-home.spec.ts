@@ -408,9 +408,9 @@ test("Esc on a draft card asking for Enter cancels the ask and leaves Pip answer
   await homeComposer(page).press("ArrowUp");
   await expect(card).toBeFocused();
   await page.keyboard.press("a");
-  await expect(card.getByRole("status")).toHaveText(/^↵ approve/);
+  await expect(card.locator("[data-key-hint]")).toHaveText(/^↵ approve/);
   await page.keyboard.press("Escape");
-  await expect(card.getByRole("status")).not.toHaveText(/^↵ approve/);
+  await expect(card.locator("[data-key-hint]")).not.toHaveText(/^↵ approve/);
   await expect(card).toHaveAttribute("data-state", "pending");
   await expect(stop).toBeVisible();
 
