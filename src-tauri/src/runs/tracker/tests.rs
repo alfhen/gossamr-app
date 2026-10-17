@@ -711,7 +711,7 @@ async fn a_plan_that_finishes_leaves_its_status_comment_and_a_description_update
     let [draft] = drafts.as_slice() else { panic!("{drafts:?}") };
     assert!(matches!(&draft.origin, crate::domain::Origin::Run { run_id, .. } if *run_id == run.id));
     assert_eq!(draft.created_by, crate::domain::CreatedBy::Agent);
-    assert!(matches!(&draft.intent, crate::domain::Intent::Rewrite { body: Some(b), .. } if b.to.to_markdown().contains("## Gossamr Plan") && b.to.to_markdown().contains("Round once.") && !b.to.to_markdown().contains("For Jira")));
+    assert!(matches!(&draft.intent, crate::domain::Intent::Rewrite { body: Some(b), .. } if b.to.to_markdown().contains("<summary>Gossamr Plan</summary>") && !b.to.to_markdown().contains("## Gossamr Plan") && b.to.to_markdown().contains("Round once.") && !b.to.to_markdown().contains("For Jira")));
     assert_eq!(comment_drafts(&rig).await.len(), 1, "the status comment is still drafted");
     assert!(rig.fx.tracker.intents().is_empty(), "nothing is written");
     assert_eq!(rig.drafted.lock().unwrap().len(), 1);

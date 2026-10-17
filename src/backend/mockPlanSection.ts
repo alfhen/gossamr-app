@@ -6,29 +6,34 @@ import { markdownOf } from "./mockMarkdown";
 
 /** The marker of a description's plan section, as `PLAN_HEADING` in `domain/doc/plan.rs`. */
 export const PLAN_HEADING = "Gossamr Plan";
-const NEW_LEVEL = 2;
 const MIN_PLAN_ROOM = 1_000;
 const DESCRIPTION_LIMIT = 30_000;
 
 const headingText = (content: WorkInline[]) => content.map((i) => (i.type === "text" || i.type === "link" ? i.text : "")).join("");
 const isMarker = (b: WorkBlock) => b.type === "heading" && headingText(b.content).trim().replace(/:+$/, "").trim().toLowerCase() === PLAN_HEADING.toLowerCase();
 
-/** The first marker heading and where its section ends: at the next heading of the same or a higher level. */
-function range(doc: WorkDoc): { at: number; end: number; level: number } | null {
-  const at = doc.blocks.findIndex(isMarker);
+/** Whether `b` is the expand a plan is written into: a top-level collapsible titled `Gossamr Plan`. As `is_plan_expand` in `domain/doc/plan.rs`. */
+export const isPlanExpand = (b: WorkBlock) => b.type === "expand" && b.title.trim().replace(/:+$/, "").trim().toLowerCase() === PLAN_HEADING.toLowerCase();
+
+/** Where the plan lives and where it ends: the first top-level plan expand (its one block), or the first marker heading and what follows it up to the next heading of the same or a higher level (the form older tickets carry), whichever stands first. */
+function range(doc: WorkDoc): { at: number; end: number } | null {
+  const at = doc.blocks.findIndex((b) => isPlanExpand(b) || isMarker(b));
   const head = doc.blocks[at];
-  if (head?.type !== "heading") return null;
+  if (!head) return null;
+  if (head.type !== "heading") return { at, end: at + 1 };
   const next = doc.blocks.slice(at + 1).findIndex((b) => b.type === "heading" && b.level <= head.level);
-  return { at, end: next < 0 ? doc.blocks.length : at + 1 + next, level: head.level };
+  return { at, end: next < 0 ? doc.blocks.length : at + 1 + next };
 }
 
-/** What stands under the plan heading, without the heading. */
+/** What stands in the plan: the expand's content, or what stands under the old plan heading. */
 export function planSectionOf(doc: WorkDoc): WorkDoc | null {
   const r = range(doc);
-  return r ? { blocks: doc.blocks.slice(r.at + 1, r.end) } : null;
+  if (!r) return null;
+  const head = doc.blocks[r.at];
+  return { blocks: head.type === "expand" ? head.content : doc.blocks.slice(r.at + 1, r.end) };
 }
 
-/** Where the plan section's heading stands among the blocks, null without one. */
+/** Where the plan stands among the blocks, null without one. */
 export const planStartOf = (doc: WorkDoc): number | null => range(doc)?.at ?? null;
 
 export function withoutPlanSection(doc: WorkDoc): WorkDoc {
@@ -36,23 +41,14 @@ export function withoutPlanSection(doc: WorkDoc): WorkDoc {
   return r ? { blocks: [...doc.blocks.slice(0, r.at), ...doc.blocks.slice(r.end)] } : doc;
 }
 
-/** `doc` with `intro` and `plan` as its plan section: replacing the one it has, or added at the end. As `with_plan_section` in `domain/doc/plan.rs`. */
+/** `doc` with `intro` and `plan` as its plan: one `Gossamr Plan` expand in place of the plan it has (an expand, or the older heading section) or added at the end. As `with_plan_section` in `domain/doc/plan.rs`. */
 export function withPlanSection(doc: WorkDoc, intro: string, plan: WorkDoc): WorkDoc {
   const r = range(doc);
-  const level = r?.level ?? NEW_LEVEL;
   const before = r ? doc.blocks.slice(0, r.at) : doc.blocks;
   const after = r ? doc.blocks.slice(r.end) : [];
   const own = plan.blocks.map((b): WorkBlock => (isMarker(b) && b.type === "heading" ? { type: "paragraph", content: b.content } : b));
-  const levels = own.flatMap((b) => (b.type === "heading" ? [b.level] : []));
-  const shallowest = levels.length ? Math.min(...levels) : null;
-  const shift = shallowest !== null && shallowest <= level ? level + 1 - shallowest : 0;
-  const moved = own.map((b): WorkBlock => {
-    if (b.type !== "heading") return b;
-    const at = Math.min(6, b.level + shift);
-    return at <= level ? { type: "paragraph", content: b.content } : { ...b, level: at };
-  });
-  const heading: WorkBlock = { type: "heading", level, content: [{ type: "text", text: PLAN_HEADING, marks: [] }] };
-  return { blocks: [...before, heading, ...docFromText(intro).blocks, ...moved, ...after] };
+  const expand: WorkBlock = { type: "expand", title: PLAN_HEADING, content: [...docFromText(intro).blocks, ...own] };
+  return { blocks: [...before, expand, ...after] };
 }
 
 export interface RunLike {
@@ -84,7 +80,7 @@ export function assemblePlan(run: RunLike, body: WorkDoc, parse: (markdown: stri
   const intro = planIntro(run);
   const rest = [...markdownOf(withoutPlanSection(body))].length;
   const which = run.shortId ?? run.id;
-  let room = Math.min(PLAN_LIMIT, DESCRIPTION_LIMIT - (rest + PLAN_HEADING.length + [...intro].length + 64));
+  let room = Math.min(PLAN_LIMIT, DESCRIPTION_LIMIT - (rest + PLAN_HEADING.length + [...intro].length + 96));
   for (let tries = 0; tries < 4 && room >= MIN_PLAN_ROOM; tries++) {
     const fitted = fit(plan, room, (total) => `[Cut here. The plan was ${total} characters and this section holds ${room}. The whole of it is in agent run ${which}.]`);
     const to = withPlanSection(body, intro, parse(fitted.text));

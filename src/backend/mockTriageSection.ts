@@ -1,5 +1,5 @@
 import type { Proposal, WorkBlock, WorkDoc, WorkInline } from "../types";
-import { planSectionOf, planStartOf } from "./mockPlanSection";
+import { isPlanExpand, planSectionOf, planStartOf } from "./mockPlanSection";
 import { docFromMarkdown, markdownOf } from "./mockMarkdown";
 
 /** The marker of a description's triage section, as `TRIAGE_HEADING` in `domain/doc/triage.rs`. */
@@ -11,12 +11,12 @@ export const QUESTIONS_LEAD = "Open questions:";
 const textOf = (content: WorkInline[]) => content.map((i) => (i.type === "text" || i.type === "link" ? i.text : "")).join("");
 const isMarker = (b: WorkBlock) => b.type === "heading" && textOf(b.content).trim().replace(/:+$/, "").trim().toLowerCase() === TRIAGE_HEADING.toLowerCase();
 
-/** The first triage heading and where its section ends: at the next heading of the same or a higher level. */
+/** The first triage heading and where its section ends: at the next heading of the same or a higher level, or at the plan's expand. */
 function range(doc: WorkDoc): { at: number; end: number; level: number } | null {
   const at = doc.blocks.findIndex(isMarker);
   const head = doc.blocks[at];
   if (head?.type !== "heading") return null;
-  const next = doc.blocks.slice(at + 1).findIndex((b) => b.type === "heading" && b.level <= head.level);
+  const next = doc.blocks.slice(at + 1).findIndex((b) => (b.type === "heading" && b.level <= head.level) || isPlanExpand(b));
   return { at, end: next < 0 ? doc.blocks.length : at + 1 + next, level: head.level };
 }
 

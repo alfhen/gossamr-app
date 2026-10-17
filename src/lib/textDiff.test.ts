@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { changedLines, diffLines, MAX_DIFF_CELLS, withGaps } from "./textDiff";
+import { changedLines, diffLines, MAX_DIFF_CELLS, readableLine, withGaps } from "./textDiff";
 
 const kinds = (from: string, to: string) => diffLines(from, to).map((l) => `${l.kind === "add" ? "+" : l.kind === "del" ? "-" : " "}${l.text}`);
 
@@ -72,5 +72,15 @@ describe("withGaps", () => {
   it("does not fold a stretch of one or two lines", () => {
     const rows = withGaps([{ kind: "del", text: "x" }, ...lines(5), { kind: "add", text: "y" }]);
     expect(rows.map((r) => (r.kind === "gap" ? "gap" : r.text))).toEqual(["x", "s0", "s1", "s2", "s3", "s4", "y"]);
+  });
+});
+
+describe("readableLine", () => {
+  it("shows the lines of a collapsible section as a heading-like line, not as tags, and leaves every other line as it is", () => {
+    expect(readableLine("<details>")).toBe("▸ Collapsible section");
+    expect(readableLine("<summary>Gossamr Plan</summary>")).toBe("▸ Gossamr Plan");
+    expect(readableLine("</details>")).toBe("◂ End of collapsible section");
+    expect(readableLine("Use <details> for it")).toBe("Use <details> for it");
+    expect(readableLine("## Heading")).toBe("## Heading");
   });
 });

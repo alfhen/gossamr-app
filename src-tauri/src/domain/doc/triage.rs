@@ -22,11 +22,12 @@ fn is_marker(block: &Block) -> Option<u8> {
 }
 
 impl Doc {
-    /// The first `Triage` heading, and where its section ends: at the next heading of the same or a higher level.
+    /// The first `Triage` heading, and where its section ends: at the next heading of the same or a higher level, or at the plan's expand.
     fn triage_range(&self) -> Option<(usize, usize, u8)> {
         let at = self.blocks.iter().position(|b| is_marker(b).is_some())?;
         let level = is_marker(&self.blocks[at])?;
-        let end = self.blocks[at + 1..].iter().position(|b| matches!(b, Block::Heading { level: l, .. } if *l <= level)).map_or(self.blocks.len(), |n| at + 1 + n);
+        let ends = |b: &Block| matches!(b, Block::Heading { level: l, .. } if *l <= level) || super::plan::is_plan_expand(b);
+        let end = self.blocks[at + 1..].iter().position(ends).map_or(self.blocks.len(), |n| at + 1 + n);
         Some((at, end, level))
     }
 
@@ -51,7 +52,7 @@ impl Doc {
         let (before, after, level) = match self.triage_range() {
             Some((at, end, level)) => (self.blocks[..at].to_vec(), self.blocks[end..].to_vec(), level),
             None => {
-                let at = self.plan_range().map_or(self.blocks.len(), |(at, _, _)| at);
+                let at = self.plan_range().map_or(self.blocks.len(), |(at, _)| at);
                 (self.blocks[..at].to_vec(), self.blocks[at..].to_vec(), NEW_LEVEL)
             }
         };
@@ -94,6 +95,8 @@ mod tests {
         Doc::from_markdown(text, &[])
     }
 
+    const EXPAND: &str = "<details>\n<summary>Gossamr Plan</summary>\n\nintro\n\nThe plan.\n\n</details>";
+
     fn questions() -> Vec<String> {
         vec!["What does done look like?".into(), "Who is waiting on it?".into()]
     }
@@ -114,9 +117,15 @@ mod tests {
         let with = planned.with_triage_section("Size: 3 points.", &[]);
         assert_eq!(with.to_markdown(), "Fix it.\n\n## Triage\n\nSize: 3 points.\n\n## Gossamr Plan\n\nintro\n\nThe plan.");
         assert_eq!(with.plan_section(), planned.plan_section(), "the plan is untouched");
+        // The same with the plan in its expand: the triage section stands before it and does not take it in.
+        let expand = md("Fix it.").with_plan_section("intro", &md("The plan."));
+        let with = expand.with_triage_section("Size: 3 points.", &[]);
+        assert_eq!(with.to_markdown(), format!("Fix it.\n\n## Triage\n\nSize: 3 points.\n\n{EXPAND}"));
+        assert_eq!(with.triage_section().unwrap().to_markdown(), "Size: 3 points.");
+        assert_eq!(with.plan_section(), expand.plan_section(), "the plan is untouched");
         // A plan added to a description that has a Triage section goes after it, at the end.
         let other = md("Fix it.").with_triage_section("Size: 3 points.", &[]).with_plan_section("intro", &md("The plan."));
-        assert_eq!(other.to_markdown(), "Fix it.\n\n## Triage\n\nSize: 3 points.\n\n## Gossamr Plan\n\nintro\n\nThe plan.");
+        assert_eq!(other.to_markdown(), format!("Fix it.\n\n## Triage\n\nSize: 3 points.\n\n{EXPAND}"));
     }
 
     #[test]
@@ -124,7 +133,7 @@ mod tests {
         let first = md("Fix it.").with_triage_section("Cannot be sized yet.", &questions());
         let planned = first.with_plan_section("intro", &md("The plan."));
         let second = planned.with_triage_section("Size: 3 points. The answers in the ticket's comments were used.", &[]);
-        assert_eq!(second.to_markdown(), "Fix it.\n\n## Triage\n\nSize: 3 points. The answers in the ticket's comments were used.\n\n## Gossamr Plan\n\nintro\n\nThe plan.");
+        assert_eq!(second.to_markdown(), format!("Fix it.\n\n## Triage\n\nSize: 3 points. The answers in the ticket's comments were used.\n\n{EXPAND}"));
         assert_eq!(second.blocks.iter().filter(|b| is_marker(b).is_some()).count(), 1);
         assert!(second.triage_questions().is_empty(), "a ready triage leaves no open question in it");
     }

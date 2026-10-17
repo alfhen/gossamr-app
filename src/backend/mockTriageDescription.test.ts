@@ -10,6 +10,8 @@ import type { Proposal, RunSpec } from "../types";
 const md = docFromMarkdown;
 const QUESTIONS = ["What does done look like?", "Who is waiting on it?"];
 
+const EXPAND = "<details>\n<summary>Gossamr Plan</summary>\n\nintro\n\nThe plan.\n\n</details>";
+
 describe("the Triage section of a description in the sample build", () => {
   it("is added after the description with its note and its open questions as a list, and found again", () => {
     const doc = md("Fix it.");
@@ -27,13 +29,18 @@ describe("the Triage section of a description in the sample build", () => {
     expect(markdownOf(with_)).toBe("Fix it.\n\n## Triage\n\nSize: 3 points.\n\n## Gossamr Plan\n\nintro\n\nThe plan.");
     expect(markdownOf(planSectionOf(with_)!)).toBe(markdownOf(planSectionOf(planned)!));
     const other = withPlanSection(withTriageSection(md("Fix it."), "Size: 3 points.", []), "intro", md("The plan."));
-    expect(markdownOf(other)).toBe("Fix it.\n\n## Triage\n\nSize: 3 points.\n\n## Gossamr Plan\n\nintro\n\nThe plan.");
+    expect(markdownOf(other)).toBe(`Fix it.\n\n## Triage\n\nSize: 3 points.\n\n${EXPAND}`);
+    // The expand holds the plan, so the triage section before it ends at it and the plan is left out of the section.
+    expect(markdownOf(triageSectionOf(other)!)).toBe("Size: 3 points.");
+    const inExpand = withTriageSection(md(`Fix it.\n\n${EXPAND}`), "Size: 3 points.", []);
+    expect(markdownOf(inExpand)).toBe(`Fix it.\n\n## Triage\n\nSize: 3 points.\n\n${EXPAND}`);
+    expect(markdownOf(planSectionOf(inExpand)!)).toBe("intro\n\nThe plan.");
   });
 
   it("is replaced where it stands by a re-triage, never stacked, and a ready one leaves no question in it", () => {
     const first = withPlanSection(withTriageSection(md("Fix it."), "Cannot be sized yet.", QUESTIONS), "intro", md("The plan."));
     const second = withTriageSection(first, "Size: 3 points. The answers in the ticket's comments were used.", []);
-    expect(markdownOf(second)).toBe("Fix it.\n\n## Triage\n\nSize: 3 points. The answers in the ticket's comments were used.\n\n## Gossamr Plan\n\nintro\n\nThe plan.");
+    expect(markdownOf(second)).toBe(`Fix it.\n\n## Triage\n\nSize: 3 points. The answers in the ticket's comments were used.\n\n${EXPAND}`);
     expect(triageQuestionsOf(second)).toEqual([]);
   });
 
