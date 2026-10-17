@@ -19,7 +19,7 @@ test.describe("the ask of the reporter (G11, G12)", () => {
     await workstreamRow(page, "CA-408").click();
     await pipHome(page).locator("[data-clarity-notice]").getByRole("button", { name: "Ask the reporter now" }).click();
     const draft = needsPane(page).getByRole("article", { name: /^Comment on CA-/ });
-    await expect(draft).toContainText(/A few things need clearing up so the work can be planned/);
+    await expect(draft).toContainText(/A few things need clearing up before work on this starts/);
     await expect(draft).not.toContainText("Before work on");
     await draft.getByRole("button", { name: "Skip" }).click();
     await expect(page.locator("[data-needs-advanced]")).toContainText("Now:");
@@ -53,7 +53,7 @@ test.describe("the reporter's comment draft for a keyboard and a screen reader (
     const message = (await live.textContent()) ?? "";
     expect(message.length).toBeGreaterThan(0);
     expect(await page.locator('[role="status"]:has([data-toast-action])').count()).toBe(0);
-    await expect(page.locator("[data-toast]").getByRole("button", { name: /^Undo: / })).toBeVisible();
+    await expect(page.locator("[data-toast]").getByRole("button", { name: /^Undo[^:]*: / })).toBeVisible();
     expect(await page.locator("[data-toast] > span").first().textContent()).toBe(message);
   });
 });

@@ -85,7 +85,7 @@ test.describe("the pause before posting edited words (G4)", () => {
     await draft.getByRole("button", { name: "Done editing" }).click();
     await draft.getByRole("button", { name: "Post comment" }).click();
     const pause = draft.locator("[data-post-pause]");
-    await expect(pause).toContainText("Your edit mentions everyone at “@everyone”. It also looks like a password, key or token at “hu…”. Everyone on the ticket would see it once it is posted.");
+    await expect(pause).toContainText("Your edit mentions everyone at “@everyone” (line 12). It also looks like a password, key or token at “hu…” (line 13). Everyone on the ticket would see it once it is posted.");
     await expect(pause).not.toContainText("Post anyway, or keep editing?");
     await expect(pause).not.toContainText("hunter2");
     expect(await jiraWrites(page)).toEqual([]);

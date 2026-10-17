@@ -70,8 +70,8 @@ export function reporterComment(reporter: string | null, questions: readonly str
     ? oneQuestionEach(questions).map((q) => `- ${q}`).join("\n")
     : "- What is the goal?\n- What has to be true for this to be done (the acceptance criteria)?\n- What is in scope, and what is out?\n- Who asked for it, and who is waiting on it?";
   // The reporter has answered since the last ask: thank them and say what is still open, rather than repeat the first ask.
-  if (replied) return `${hello}\n\nThanks for your answer above. A few things are still open before the work can be planned:\n\n${asks}\n\nCould you answer these here on the ticket? Thanks.`;
-  return `${hello}\n\nA few things need clearing up so the work can be planned:\n\n${asks}\n\nCould you answer them here on the ticket? Thanks.`;
+  if (replied) return `${hello}\n\nThanks for your answer above. A few things are still open before work on this starts:\n\n${asks}\n\nCould you answer these here on the ticket? Thanks.`;
+  return `${hello}\n\nA few things need clearing up before work on this starts:\n\n${asks}\n\nCould you answer them here on the ticket? Thanks.`;
 }
 
 /** `reporterComment` as a document, with the reporter's greeting a real mention when they are known. */

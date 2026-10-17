@@ -588,7 +588,9 @@ test.describe("workstream start", () => {
     await expect(quiet).toHaveCount(5);
     expect(await quiet.evaluateAll((els) => els.map((el) => el.getAttribute("data-step-chip")))).toEqual(["triage", "plan", "build", "review", "verify"]);
     for (const box of await quiet.evaluateAll((els) => els.map((el) => el.getBoundingClientRect().height))) expect(box).toBeLessThan(30);
-    await expect(quiet.getByText("Not started")).toHaveCount(0);
+    // Nothing visible says it; the state is there for a screen reader only (G34).
+    await expect(quiet.locator("span:not(.sr-only)").getByText("Not started")).toHaveCount(0);
+    await expect(quiet.locator(".sr-only")).toHaveText(Array(5).fill("Not started"));
 
     // A quiet step still opens.
     const plan = rail.locator('[data-step-chip="plan"]');

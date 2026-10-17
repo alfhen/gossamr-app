@@ -243,7 +243,7 @@ test.describe("What Jira saw from me", () => {
     await expect(rows.nth(0).locator("[data-sent-second]")).toContainText("- ");
     await rows.nth(0).getByRole("button", { name: "Show the posted text" }).click();
     await expect(rows.nth(0).locator("[data-sent-detail]")).toContainText("The Black Friday send is next week.");
-    await expect(rows.nth(0).locator("[data-sent-detail]")).toContainText("A few things need clearing up so the work can be planned");
+    await expect(rows.nth(0).locator("[data-sent-detail]")).toContainText("A few things need clearing up before work on this starts");
     await rows.nth(0).getByRole("button", { name: "Show less" }).click();
     await expect(rows.nth(0).locator("[data-sent-detail]")).toHaveCount(0);
 

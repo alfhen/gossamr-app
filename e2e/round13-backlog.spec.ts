@@ -176,7 +176,7 @@ test.describe("the reporter question draft (G25, G26, G29)", () => {
     await expect(pause).toHaveAttribute("role", "group");
     await expect(pause.locator("p[role=alert]")).toHaveCount(1);
     await expect(pause).toBeVisible();
-    await expect(pause).toContainText("like a password, key or token at “hu…” and “gh…”.");
+    await expect(pause).toContainText("like a password, key or token at “hu…” (line 12) and “gh…” (line 13).");
     await expect(pause).not.toContainText("hunter2");
     const keep = pause.getByRole("button", { name: "Keep editing" });
     const anyway = pause.getByRole("button", { name: "Post anyway" });

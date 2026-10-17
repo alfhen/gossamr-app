@@ -149,7 +149,7 @@ test.describe("a GitHub review with risky words (G1)", () => {
     await summary.fill(`${await summary.inputValue()} cc @everyone`);
     await review.getByRole("button", { name: /^Post review/ }).click();
     const pause = review.locator("[data-post-pause]");
-    await expect(pause).toContainText("Your edit mentions everyone at “@everyone”. Everyone on the pull request would see it once it is posted.");
+    await expect(pause).toContainText("Your edit mentions everyone at “@everyone” (line 6). Everyone on the pull request would see it once it is posted.");
     await expect(pause.getByRole("button", { name: "Keep editing" })).toBeFocused();
     expect(await githubWrites(page)).toEqual([]);
     await page.keyboard.press("Escape");
