@@ -862,12 +862,8 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
           </div>
         )}
       </div>
-      {keys.hint ? (
-        <KeyHint hint={keys.hint} asking={!!keys.asking} className={`m-0 border-t border-ws-sep px-3 py-1 text-xs ${keys.asking ? "bg-ws-pip-soft font-semibold text-ws-pip" : "bg-ws-bar text-ws-ink3"}`} />
-      ) : (
-        // Mounted before it is needed, so the confirm that fills it is announced.
-        <p aria-live="polite" data-key-live className="sr-only" />
-      )}
+      {/* Always mounted, so the live region is there before the confirm that fills it. */}
+      <KeyHint hint={keys.hint ?? ""} asking={!!keys.asking} className={`m-0 border-t border-ws-sep px-3 py-1 text-xs ${keys.asking ? "bg-ws-pip-soft font-semibold text-ws-pip" : "bg-ws-bar text-ws-ink3"}`} />
     </article>
   );
 }

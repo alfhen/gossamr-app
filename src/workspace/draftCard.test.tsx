@@ -219,6 +219,11 @@ describe("the key hint's live region", () => {
   });
   const live = (html: string) => html.match(/<p aria-live="polite"[^>]*data-key-live[^>]*class="sr-only"[^>]*>(.*?)<\/p>/)?.[1];
 
+  it("leaves out the visible line while there is no hint, so only the live region is there", () => {
+    const out = renderToStaticMarkup(<KeyHint hint="" asking={false} className="x" />);
+    expect(out).toBe('<p aria-live="polite" data-key-live="true" class="sr-only"></p>');
+  });
+
   it("is mounted on a card before any hint, and empty", () => {
     const out = renderToStaticMarkup(<DraftCard proposal={commentDraft("kh1")} statusName={null} people={[]} working={false} error={null} onApprove={vi.fn()} onSkip={vi.fn()} />);
     expect(live(out)).toBe("");
