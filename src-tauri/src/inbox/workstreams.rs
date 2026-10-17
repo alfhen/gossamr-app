@@ -1294,9 +1294,9 @@ impl Core {
         let item = Core::item(scope, &key);
         let reporter = self.ticket_for_pip(scope, &key).await.ok().and_then(|(t, _)| t.reporter);
         let people: Vec<_> = reporter.iter().map(|p| (crate::domain::PersonRef { connection_id: item.connection_id.clone(), account_id: p.account_id.clone() }, p.name.clone())).collect();
-        // The questions still open are the ones of the newest ask the reporter got, as the person posted it: an ask still
-        // pending or skipped never reached them.
-        let open = self.proposals(&ProposalQuery { workstream: Some(id.to_string()), states: Some(vec![StateKind::Applied]), ..Default::default() }).await?.iter().filter(|p| proposals::is_reporter_questions(p)).max_by_key(|p| p.created_at).and_then(|p| match &p.intent {
+        // The questions still open are the ones of the ask the reporter got last, as the person posted it: an ask still
+        // pending or skipped never reached them, and an applied draft is not changed after it posts, so its update is the post.
+        let open = self.proposals(&ProposalQuery { workstream: Some(id.to_string()), states: Some(vec![StateKind::Applied]), ..Default::default() }).await?.iter().filter(|p| proposals::is_reporter_questions(p)).max_by_key(|p| p.updated_at).and_then(|p| match &p.intent {
             Intent::Comment { body, .. } => Some(asked_questions(&body.plain_text())),
             _ => None,
         });
@@ -2528,6 +2528,31 @@ mod tests {
             let Intent::Comment { body, .. } = &nudge.intent else { panic!("a comment: {:?}", nudge.intent) };
             let text = body.plain_text();
             assert!(text.contains("- What is the goal?") && !text.contains("still a draft"), "{text}");
+        }
+
+        #[tokio::test]
+        async fn the_nudge_lists_the_questions_of_the_ask_posted_last_not_the_one_drafted_last() {
+            let fx = fixture().await;
+            let ws = fx.core.open_workstream(&fx.scope, Some(fx.item("CA-1")), None).await.unwrap();
+            let ask = |text: &str| proposals::Draft {
+                origin: Origin::Chat { request_id: format!("clarity:{}", ws.id), workstream: Some(ws.id.clone()) },
+                created_by: CreatedBy::User,
+                intent: Intent::Comment { item: fx.item("CA-1"), body: crate::tracker::comment_doc(&format!("Hi,\n\n- {text}\n\nThanks."), &[]) },
+                label: Some(READINESS_LABEL.into()),
+                basis: None,
+            };
+            let first = fx.core.propose(&fx.scope, ask("Drafted first, posted last?")).await.unwrap();
+            let second = fx.core.propose(&fx.scope, ask("Drafted last, posted first?")).await.unwrap();
+            fx.core.approve_proposal(&second.id).await.unwrap();
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            fx.core.approve_proposal(&first.id).await.unwrap();
+            let old = Utc::now() - chrono::Duration::days(3);
+            fx.core.record_workstream_event(&fx.scope, WorkstreamEvent::new(&ws.id, Actor::Person, "clarity_asked", old).proposal("earlier")).await.unwrap();
+            fx.core.record_workstream_event(&fx.scope, WorkstreamEvent::new(&ws.id, Actor::Person, "draft_approved", old).proposal("earlier")).await.unwrap();
+            let nudge = fx.core.nudge_reporter(&fx.scope, &ws.id).await.expect("three days is long enough");
+            let Intent::Comment { body, .. } = &nudge.intent else { panic!("a comment: {:?}", nudge.intent) };
+            let text = body.plain_text();
+            assert!(text.contains("Drafted first, posted last?") && !text.contains("Drafted last, posted first?"), "{text}");
         }
 
         #[tokio::test]
