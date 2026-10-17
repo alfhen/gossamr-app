@@ -420,15 +420,15 @@ test.describe("G15: the person's answers go to Jira as a comment", () => {
     await expect(needRow(page, "Start Plan")).toHaveCount(1);
   });
 
-  test("the triage's own comment ('Triage could not size this') is retired, so it can't contradict the answers or be batched", async ({ page }) => {
+  test("the triage's own description update (its Triage section says the ticket can't be sized) is retired, so it can't contradict the answers or be batched", async ({ page }) => {
     test.setTimeout(120_000);
     await unclear(page);
     await expandNeedsYou(page, VAGUE);
-    await expect(needRow(page, "R2 triage · comment")).toHaveCount(1);
+    await expect(needRow(page, "R2 triage · rewrite")).toHaveCount(1);
     await needOfKind(page, "readiness").click();
     await needsPane(page).getByRole("button", { name: "I'll answer" }).click();
     // Only the investigation's own comment is left in the group, so it has nothing to expand.
-    await expect(needsYouTray(page)).not.toContainText("R2 triage · comment");
+    await expect(needsYouTray(page)).not.toContainText("R2 triage · rewrite");
     await expect(needsYouRow(page, VAGUE).getByRole("button", { name: /^Approve \d+ safe drafts$/ })).toHaveCount(0);
     expect((await actions(page, "draft_superseded")).map((e) => e.actor)).toEqual(["person"]);
     // The answers come, and nothing left waits but them.
@@ -439,7 +439,7 @@ test.describe("G15: the person's answers go to Jira as a comment", () => {
     await homeSettled(page);
     await expandNeedsYou(page, VAGUE);
     await expect(needRow(page, "Answers to the open questions")).toHaveCount(1);
-    await expect(needRow(page, "R2 triage · comment")).toHaveCount(0);
+    await expect(needRow(page, "R2 triage · rewrite")).toHaveCount(0);
     expect(await jiraWrites(page)).toEqual([]);
   });
 
@@ -465,19 +465,19 @@ test.describe("G15: the person's answers go to Jira as a comment", () => {
   });
 });
 
-test.describe("G16: asking the reporter retires the triage's own comment that repeats the questions", () => {
-  test("only the questions draft waits, so 'Approve N safe drafts' can't post both", async ({ page }) => {
+test.describe("G16: asking the reporter leaves the triage's description update waiting beside the comment", () => {
+  test("the questions are a comment and the triage's note a description update, so both wait and neither is a safe batch of two", async ({ page }) => {
     await unclear(page);
     await expandNeedsYou(page, VAGUE);
-    await expect(needRow(page, "R2 triage · comment")).toHaveCount(1);
+    await expect(needRow(page, "R2 triage · rewrite")).toHaveCount(1);
     await needOfKind(page, "readiness").click();
     await needsPane(page).getByRole("button", { name: "Ask the reporter" }).click();
     await expandNeedsYou(page, VAGUE);
     await expect(needRow(page, "Questions for the reporter")).toHaveCount(1);
-    await expect(needRow(page, "R2 triage · comment")).toHaveCount(0);
+    await expect(needRow(page, "R2 triage · rewrite")).toHaveCount(1);
     await expect(needsYouRow(page, VAGUE).getByRole("button", { name: /^Approve \d+ safe drafts$/ })).toHaveCount(0);
-    // The retired draft says what replaced it; nothing was posted.
-    expect((await actions(page, "draft_superseded")).length).toBe(1);
+    // Nothing was retired, and nothing was posted.
+    expect((await actions(page, "draft_superseded")).length).toBe(0);
     expect(await jiraWrites(page)).toEqual([]);
   });
 });
@@ -487,12 +487,12 @@ test.describe("G16b: Plan anyway retires it too", () => {
     test.setTimeout(120_000);
     await unclear(page);
     await expandNeedsYou(page, VAGUE);
-    await expect(needRow(page, "R2 triage · comment")).toHaveCount(1);
+    await expect(needRow(page, "R2 triage · rewrite")).toHaveCount(1);
     await needOfKind(page, "readiness").click();
     await needsPane(page).getByRole("button", { name: "Plan anyway" }).click();
     await started(page, "plan");
     // Nothing of the triage's note is left to approve; the group may be gone altogether.
-    await expect(needsYouTray(page)).not.toContainText("R2 triage · comment");
+    await expect(needsYouTray(page)).not.toContainText("R2 triage · rewrite");
     expect((await actions(page, "draft_superseded")).length).toBe(1);
     expect(await jiraWrites(page)).toEqual([]);
   });

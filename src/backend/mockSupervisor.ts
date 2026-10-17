@@ -1,7 +1,7 @@
 import { AUTOSTART_DEFAULTS, HELD_BUDGET, HELD_DAILY } from "../types";
 import type { AutoStartSwitches, BasisField, BudgetLevel, Run, RunKind, Tripwire, Workstream, WorkstreamEvent, WorkstreamRule, WorkstreamRules } from "../types";
 import { budgetLevel } from "../lib/workstreamHold";
-import { reporterFollow } from "../lib/reporterWait";
+import { answeredByReply, reporterFollow } from "../lib/reporterWait";
 import { byQueue, runLabels } from "../lib/workstreamStage";
 import { runRef } from "../lib/composerVerbs";
 import { withoutMarkers } from "./mockRunKinds";
@@ -695,7 +695,10 @@ export class MockSupervisor {
         case "start":
           try {
             // A plan the person chose to start though its Triage found the ticket not ready assumes answers to that Triage's questions.
-            const assumptions = decision.kind === "plan" && input.readinessOverridden ? (triageReadiness(src)?.questions ?? []) : [];
+            // Questions the reporter has since answered in a comment are not assumed: the plan reads the answers in the ticket's comments.
+            // The sample's runs keep their own clock, so a triage that ran after the reply is told by what it saw (`sawReply`), not by times.
+            const answered = !runs.sawReply(src.id) && answeredByReply(events, workstreams.repliesOf(ws));
+            const assumptions = decision.kind === "plan" && input.readinessOverridden && !answered ? (triageReadiness(src)?.questions ?? []) : [];
             const run = runs.autoStart(decision.kind, src.id, decision.rule, assumptions);
             notes.set(src.id, { started: { kind: decision.kind, label: labelOf(run.id) } });
           } catch {

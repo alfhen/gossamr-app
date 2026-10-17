@@ -83,7 +83,7 @@ fn prepare(run: &Run, item: &ItemRef, work: Option<WorkItem>, plan: &str) -> std
 }
 
 fn is_plan_rewrite(p: &Proposal) -> bool {
-    matches!(&p.intent, Intent::Rewrite { body: Some(b), .. } if b.to.plan_section().is_some())
+    matches!(&p.intent, Intent::Rewrite { body: Some(b), .. } if b.to.plan_section().is_some()) && !p.is_triage_description()
 }
 
 fn from_run(p: &Proposal, run_id: &str) -> bool {

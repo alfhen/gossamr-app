@@ -415,6 +415,10 @@ pub fn supersession(older: &Proposal, newer: &Proposal) -> Supersession {
     if older.intent.supersession_key().as_ref() != Some(&key) || !newer.intent.covers(&older.intent) {
         return Supersession::Unrelated;
     }
+    // A Triage's description update and a plan's are two things on one description: neither replaces the other.
+    if older.is_triage_description() != newer.is_triage_description() {
+        return Supersession::Unrelated;
+    }
     let by_pip = newer.created_by == CreatedBy::Pip;
     if person_edited(older) {
         let on = older.target().map_or(String::new(), |t| format!(" on {}", t.key));
@@ -506,6 +510,12 @@ fn is_run_comment(p: &Proposal) -> bool {
         && !p.label.as_deref().is_some_and(|l| l.starts_with(PLAN_COMMENT_LABEL) || l == READINESS_COMMENT_LABEL)
 }
 
+/// Whether `p` is what a finished Triage leaves for its ticket: its note as a comment, or the description update that puts
+/// the note and its open questions in the description's `Triage` section.
+fn is_triage_note(p: &Proposal) -> bool {
+    is_run_comment(p) || (matches!(p.origin, Origin::Run { .. }) && machine_made(p) && p.is_triage_description())
+}
+
 /// The id of the run a run comment was made from.
 fn comment_run_id(p: &Proposal) -> Option<&str> {
     match &p.origin {
@@ -580,7 +590,7 @@ pub const OVERRIDDEN_REASON: &str = "You chose to plan anyway, so this note no l
 /// Investigate's findings) is never touched. As `answers_supersession` in `proposals.ts`.
 pub fn answers_supersession(older: &Proposal, newer: &Proposal, kind_of: impl Fn(&str) -> Option<crate::domain::RunKind>) -> Option<std::result::Result<(), &'static str>> {
     let ws = newer.workstream()?;
-    let same = is_answers_draft(newer) && is_run_comment(older) && older.workstream() == Some(ws) && older.target() == newer.target();
+    let same = is_answers_draft(newer) && is_triage_note(older) && older.workstream() == Some(ws) && older.target() == newer.target();
     if !same || older.id == newer.id || older.state != ProposalState::Pending || older.error.is_some() {
         return None;
     }
@@ -598,7 +608,7 @@ pub fn retire_triage_notes(db: &Db, workstream: &str, triage: &str, reason: &str
     let pending = db.proposals(&ProposalQuery { workstream: Some(workstream.into()), states: Some(vec![StateKind::Pending]), ..Default::default() })?;
     let mut retired = Vec::new();
     for mut old in pending {
-        if !is_run_comment(&old) || comment_run_id(&old) != Some(triage) || old.error.is_some() {
+        if !is_triage_note(&old) || comment_run_id(&old) != Some(triage) || old.error.is_some() {
             continue;
         }
         if person_edited(&old) {
@@ -791,7 +801,7 @@ pub fn left_by_run(p: &Proposal) -> bool {
 /// Whether the draft is a description update carrying a `Gossamr Plan` section that an agent run left: the plan a build
 /// follows once the person approves it.
 pub fn is_run_plan_rewrite(p: &Proposal) -> bool {
-    matches!(p.origin, Origin::Run { .. }) && matches!(&p.intent, Intent::Rewrite { body: Some(b), .. } if b.to.plan_section().is_some())
+    matches!(p.origin, Origin::Run { .. }) && matches!(&p.intent, Intent::Rewrite { body: Some(b), .. } if b.to.plan_section().is_some()) && !p.is_triage_description()
 }
 
 /// Whether Pip changed the draft's text and the person never edited it after: what it says is partly Pip's words.

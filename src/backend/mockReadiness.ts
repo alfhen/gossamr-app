@@ -42,6 +42,28 @@ export function unclearTriageResult(key: string): string {
   ].join("\n");
 }
 
+/**
+ * What a sample triage of the same ticket finishes with once the reporter has answered in a comment: the comments are in
+ * its prompt, so the answers count, nothing is left open and it says `Ready to plan: yes`. Its note for Jira is neutral
+ * and says the answers in the comments were used.
+ */
+export function answeredTriageResult(key: string): string {
+  return [
+    `${key}'s description is one short line, but the reporter's answers in the comments cover what it leaves out, so I could size it.`,
+    "",
+    "Size: 3 points (about a day).",
+    "",
+    "Ready to plan: yes",
+    "",
+    "Plan recommended: yes",
+    "",
+    "For Jira:",
+    "Size: 3 points (about a day). The answers in the ticket's comments were used for what done looks like, what is in and out of scope, and who is waiting on it, so no questions are open.",
+  ].join("\n");
+}
+
+export const answeredTriageSummary = () => "Triage complete: the reporter's answers in the comments were used, size 3, no questions open";
+
 const COUNTED = ["no", "one", "two", "three", "four", "five", "six"];
 
 /** The summary of that triage: it counts the questions as they are listed (one each), so it never says three over four bullets. */

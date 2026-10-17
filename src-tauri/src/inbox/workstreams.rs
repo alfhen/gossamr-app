@@ -299,23 +299,33 @@ pub fn reply_excerpt(text: &str) -> String {
     format!("{}{tail}", shown.join("\n"))
 }
 
+/// When the first reporter ask of the audit `events` was posted: the approval of the comment of a `readiness_asked`,
+/// `clarity_asked` or `reporter_nudged`. None while the reporter has not been asked.
+pub fn first_ask_posted(events: &[WorkstreamEvent]) -> Option<chrono::DateTime<Utc>> {
+    let mut asked: HashSet<&str> = HashSet::new();
+    for e in events.iter().filter(|e| e.actor == Actor::Person) {
+        match e.action.as_str() {
+            "readiness_asked" | "clarity_asked" | "reporter_nudged" => asked.extend(e.proposal_id.as_deref()),
+            "draft_approved" if e.proposal_id.as_deref().is_some_and(|p| asked.contains(p)) => return Some(e.at),
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Whether the reporter answered what a Triage that finished at `since` left open: a comment from someone but the person
+/// (`replies`, their times) came after the first ask was posted and after `since`. A Triage that ran after the reply
+/// had the answer in its prompt, so what it still lists is open. Mirrored by `answeredByReply` in src/lib/reporterWait.ts.
+pub fn answered_by_reply(events: &[WorkstreamEvent], replies: &[chrono::DateTime<Utc>], since: chrono::DateTime<Utc>) -> bool {
+    first_ask_posted(events).is_some_and(|ask| replies.iter().any(|r| *r > ask && *r > since))
+}
+
 /// Every comment of the cached ticket `t` from someone other than `me` that came after the first reporter ask was posted (the
 /// approval of the comment of a `readiness_asked`, `clarity_asked` or `reporter_nudged`), oldest first, each as its quote.
 /// A comment that says nothing is left out. Mirrored by `reporterReplies` in src/lib/reporterWait.ts; both run the `replies`
 /// of src/lib/reporterWait.fixtures.json.
 pub fn reporter_replies(events: &[WorkstreamEvent], t: &crate::model::CachedTicket, me: &str) -> Vec<ReporterReplyAt> {
-    let mut asked: HashSet<&str> = HashSet::new();
-    let mut first = None;
-    for e in events.iter().filter(|e| e.actor == Actor::Person) {
-        match e.action.as_str() {
-            "readiness_asked" | "clarity_asked" | "reporter_nudged" => asked.extend(e.proposal_id.as_deref()),
-            "draft_approved" if e.proposal_id.as_deref().is_some_and(|p| asked.contains(p)) => {
-                first = Some(e.at);
-                break;
-            }
-            _ => {}
-        }
-    }
+    let first = first_ask_posted(events);
     let Some(first) = first else { return Vec::new() };
     let mut found: Vec<ReporterReplyAt> = t
         .comments
@@ -323,7 +333,7 @@ pub fn reporter_replies(events: &[WorkstreamEvent], t: &crate::model::CachedTick
         .filter(|c| c.author.account_id != me)
         .filter_map(|c| {
             let at = chrono::DateTime::parse_from_rfc3339(&c.created).ok()?.with_timezone(&Utc);
-            let excerpt = reply_excerpt(&c.body);
+            let excerpt = reply_excerpt(&crate::runs::redact::redact(&c.body));
             (at > first && !excerpt.is_empty()).then(|| ReporterReplyAt { id: c.id.clone(), excerpt, at })
         })
         .collect();
@@ -336,7 +346,7 @@ pub fn reporter_replies(events: &[WorkstreamEvent], t: &crate::model::CachedTick
 /// `replyComment` in src/lib/reporterWait.ts; both run the `reply` of src/lib/reporterWait.fixtures.json.
 pub fn reply_to(t: &crate::model::CachedTicket, me: &str, at: chrono::DateTime<Utc>) -> Option<ReporterReply> {
     let c = t.comments.iter().filter(|c| c.author.account_id != me).find(|c| chrono::DateTime::parse_from_rfc3339(&c.created).is_ok_and(|d| d.with_timezone(&Utc) == at))?;
-    let excerpt = reply_excerpt(&c.body);
+    let excerpt = reply_excerpt(&crate::runs::redact::redact(&c.body));
     (!excerpt.is_empty()).then(|| ReporterReply { id: c.id.clone(), excerpt })
 }
 
@@ -1909,8 +1919,8 @@ mod tests {
             fx.core.with_db_for(&fx.scope, |db| db.upsert_items(&[item], "2026-09-29T13:00:00Z").map(|_| ())).await.unwrap();
 
             assert!(matches!(fx.core.ask_reporter(&fx.scope, &ws.id, "t0").await.unwrap_err(), Error::Proposal(why) if why == READINESS_GONE), "only the triage it is about");
-            // The triage's own note is already waiting as a comment draft on the same ticket, in the same workstream.
-            let note = fx.core.auto_draft_run_comment("t1").await.unwrap().expect("the triage's note drafted on its own");
+            // The triage's own note is already waiting as a description update on the same ticket, in the same workstream.
+            let note = triage_note(&fx).await;
             let draft = fx.core.ask_reporter(&fx.scope, &ws.id, "t1").await.unwrap();
             assert_eq!((draft.state.clone(), draft.created_by, draft.label.as_deref()), (ProposalState::Pending, CreatedBy::Agent, Some(READINESS_LABEL)));
             assert!(matches!(&draft.origin, Origin::Run { run_id, workstream, .. } if run_id == "t1" && workstream.as_deref() == Some(ws.id.as_str())), "Gossamr's draft from the triage, in this workstream");
@@ -1930,14 +1940,17 @@ mod tests {
             let waiting = fx.core.proposals_in(&fx.scope, &ProposalQuery { states: Some(vec![StateKind::Pending]), workstream: Some(ws.id.clone()), ..Default::default() }).await.unwrap();
             let mut ids: Vec<&str> = waiting.iter().map(|p| p.id.as_str()).collect();
             ids.sort_unstable();
-            assert_eq!(ids, [draft.id.as_str()], "only the questions wait: the triage's own note repeated them");
+            let mut both = vec![draft.id.as_str(), note.id.as_str()];
+            both.sort_unstable();
+            assert_eq!(ids, both, "the ask is a comment and the triage's note a description update: they say different things, so both wait");
             let note_now = fx.core.proposal_in(&fx.scope, &note.id).await.unwrap().unwrap();
-            assert_eq!((note_now.state, note_now.superseded_by.as_deref()), (ProposalState::Retired(proposals::REPLACED_REASON.into()), Some(draft.id.as_str())), "superseded by the questions draft, so no batch posts both");
+            assert_eq!((note_now.state, note_now.superseded_by), (ProposalState::Pending, None));
+            assert!(matches!(note.intent, Intent::Rewrite { .. }) && note.is_triage_description(), "not a comment: {:?}", note.intent);
         }
 
-        /// The triage's own note, drafted when it finished, waiting as a comment on the ticket.
+        /// The triage's own note, drafted when it finished, waiting as a description update (its Triage section) on the ticket.
         async fn triage_note(fx: &Fixture) -> Proposal {
-            fx.core.auto_draft_run_comment("t1").await.unwrap().expect("the triage's note drafted on its own")
+            fx.core.auto_draft_run_triage("t1").await.unwrap().expect("the triage's note drafted on its own")
         }
 
         #[tokio::test]
@@ -1945,8 +1958,8 @@ mod tests {
             let fx = fixture().await;
             let (ws, _) = triaged(&fx).await;
             let note = triage_note(&fx).await;
-            let edited = fx.core.auto_draft_run_comment("t1").await;
-            assert!(edited.is_err() || edited.unwrap().is_none(), "one note per triage");
+            let again = fx.core.auto_draft_run_triage("t1").await;
+            assert!(again.is_err() || again.unwrap().is_none(), "one note per triage");
             fx.core.answer_readiness(&fx.scope, &ws.id, "t1").await.unwrap();
             let now = fx.core.proposal_in(&fx.scope, &note.id).await.unwrap().unwrap();
             assert_eq!(now.state, ProposalState::Retired(proposals::ANSWERED_REASON.into()));
@@ -1962,8 +1975,8 @@ mod tests {
             let fx = fixture().await;
             let (ws, _) = triaged(&fx).await;
             let note = triage_note(&fx).await;
-            let Intent::Comment { item, .. } = note.intent.clone() else { panic!("a comment") };
-            fx.core.edit_proposal(&note.id, &crate::inbox::Edit::Comment { body: "Mine.".into(), mentions: vec![], quote: None }).await.unwrap();
+            let Intent::Rewrite { item, body: Some(body), .. } = note.intent.clone() else { panic!("a description update") };
+            fx.core.edit_proposal(&note.id, &crate::inbox::Edit::Rewrite { title: None, body: Some(format!("{}\n\nMine.", body.to.to_markdown())) }).await.unwrap();
             fx.core.override_readiness(&fx.scope, &ws.id, "t1").await.unwrap();
             assert_eq!(fx.core.proposal_in(&fx.scope, &note.id).await.unwrap().unwrap().state, ProposalState::Pending, "the person edited it");
             assert_eq!(item.key, "CA-1");
@@ -2086,6 +2099,21 @@ mod tests {
         }
 
         #[test]
+        fn a_question_is_answered_by_a_comment_that_came_after_the_ask_was_posted_and_after_the_triage_that_listed_it() {
+            let at = |n: i64| chrono::DateTime::from_timestamp(1_800_000_000 + n * 60, 0).unwrap();
+            let asked = [line(1, Actor::Person, "readiness_asked", Some("c1")), line(2, Actor::Person, "draft_approved", Some("c1"))];
+            // The ask was posted at minute 2.
+            assert!(answered_by_reply(&asked, &[at(5)], at(0)), "a reply after the ask, to a triage that finished before it");
+            assert!(answered_by_reply(&asked, &[at(5)], at(4)), "the triage finished before the reply");
+            assert!(!answered_by_reply(&asked, &[at(5)], at(6)), "a triage that ran after the reply read it: what it lists is open");
+            assert!(!answered_by_reply(&asked, &[at(1)], at(0)), "a comment from before the ask answers nothing");
+            assert!(!answered_by_reply(&asked, &[], at(0)), "no comment");
+            assert!(!answered_by_reply(&asked[..1], &[at(5)], at(0)), "the ask was never posted");
+            assert!(!answered_by_reply(&[line(1, Actor::Pip, "readiness_asked", Some("c1")), line(2, Actor::Person, "draft_approved", Some("c1"))], &[at(5)], at(0)), "only the person's ask counts");
+            assert_eq!(first_ask_posted(&asked), Some(at(2)));
+        }
+
+        #[test]
         fn the_shared_cases_read_the_same_here_and_in_the_page() {
             let all: serde_json::Value = serde_json::from_str(include_str!("../../../src/lib/reporterWait.fixtures.json")).unwrap();
             let cases = all["cases"].as_array().unwrap();
@@ -2144,6 +2172,20 @@ mod tests {
             assert_eq!(reply_excerpt(""), "");
             assert_eq!(reply_excerpt(&"x".repeat(500)).chars().count(), REPLY_EXCERPT);
             assert_eq!(reply_excerpt(&"x".repeat(REPLY_EXCERPT)), "x".repeat(REPLY_EXCERPT));
+        }
+
+        #[test]
+        fn a_token_across_the_cut_never_shows_its_prefix_in_the_quote() {
+            let token = format!("ghp_{}", "a1B2".repeat(9));
+            let mut t = crate::tracker::testing::sample_ticket();
+            let person = crate::model::Person { account_id: "kim".into(), name: "n".into(), avatar_url: None };
+            // The token starts 120 characters in, so the 140-character cut lands inside it.
+            let body = format!("{}{token} and more", "word ".repeat(24));
+            t.comments = vec![crate::model::Comment { id: "c1".into(), author: person, created: at(3).to_rfc3339(), body, mentions: vec![], mentioned: vec![], doc: None }];
+            let got = reply_to(&t, "me", at(3)).unwrap().excerpt;
+            assert!(!got.contains("ghp_"), "{got:?}");
+            assert!(got.contains("[redacted]"), "{got:?}");
+            assert!(got.starts_with("word word"), "a useful excerpt stays: {got:?}");
         }
 
         fn follow_of(events: &[WorkstreamEvent]) -> ReporterFollow {

@@ -62,7 +62,7 @@ const runCount = (page: Page) =>
 async function settlePlan(page: Page) {
   await page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "All projects" }).click();
   await peekTicket(page, "CA-401");
-  const draft = peekSheet(page).getByRole("article", { name: "Update the description of CA-401" });
+  const draft = peekSheet(page).getByRole("article", { name: "Update the description of CA-401" }).filter({ hasText: "Gossamr Plan" });
   await draft.getByRole("button", { name: "Edit" }).click();
   const body = draft.getByRole("textbox", { name: "New description, as Markdown" });
   await body.fill(`${await body.inputValue()}\n\n${MARKER}`);

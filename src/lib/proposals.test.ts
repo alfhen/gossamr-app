@@ -216,9 +216,35 @@ describe("the comments about a ticket's open questions", () => {
     expect(answersSupersession(asked("8", "t1"), answers, kindOf), "the questions to the reporter stay").toBeNull();
     expect(answersSupersession(fromRun("10", "t1"), fromRun("11", "t1"), kindOf), "only the answers draft supersedes").toBeNull();
   });
+
+  it("treats a triage's description update, which the predicate names, as its own pending note too: replaced by the answers, kept when edited", () => {
+    const answers = proposal("9", comment("A-1"), { label: ANSWERS_COMMENT_LABEL, origin: { type: "chat", requestId: "q1", workstream: "ws-1" } });
+    const kindOf = (run: string) => (run === "t1" ? ("triage" as const) : null);
+    const rewrite = (id: string, extra: Partial<Proposal> = {}) => fromRun(id, "t1", { intent: { type: "rewrite", item: ref("A-1"), title: null, body: { from: { blocks: [] }, to: { blocks: [] }, fromText: "", toText: "## Triage" }, flattened: [] }, ...extra });
+    const isTriage = (p: Proposal) => p.intent.type === "rewrite";
+    expect(answersSupersession(rewrite("1"), answers, kindOf), "without the predicate it is not a triage note").toBeNull();
+    expect(answersSupersession(rewrite("2"), answers, kindOf, isTriage)).toBe("supersede");
+    expect(answersSupersession(rewrite("3", { revisions: [{ note: "Edited" } as Proposal["revisions"][number]] }), answers, kindOf, isTriage)).toBe("draft_kept_edited");
+  });
+
+  it("leaves a triage's description update and a plan's alone: neither replaces the other, though both rewrite the description", () => {
+    const rewrite = (id: string) => fromRun(id, "t1", { createdBy: "agent", intent: { type: "rewrite", item: ref("A-1"), title: null, body: { from: { blocks: [] }, to: { blocks: [] }, fromText: "", toText: "x" }, flattened: [] } });
+    const [triage, plan] = [rewrite("1"), rewrite("2")];
+    const isTriage = (p: Proposal) => p.id === "1";
+    expect(supersession(triage, plan, () => false, isTriage).type).toBe("unrelated");
+    expect(supersession(plan, triage, () => false, isTriage).type).toBe("unrelated");
+    expect(supersession(triage, rewrite("3"), () => false, (p) => p.id !== "2").type).toBe("supersede");
+  });
 });
 
 describe("answersProvenance", () => {
+  it("does not count a quote after the Answers: heading as a question", () => {
+    const body = "Answers to the open questions on this ticket:\n\nAnswers:\n\u201cStop the rollout.\u201d\nThen redo it.";
+    expect(answersProvenance("My answers: stop it", body)).toContain("in this conversation, your answers as written");
+    expect(answersProvenance("My answers: stop it", "Answer:\n\u201cStop the rollout.\u201d")).not.toContain("the questions, then");
+    expect(answersProvenance("My answers: x", "1. \u201cWhy?\u201d\nAnswers:\n\u201cBecause.\u201d")).toContain("the questions, then your answers as written");
+  });
+
   it("never quotes a pasted secret in full, and cuts what it shows (G5)", () => {
     const token = `ghp_${"a1B2".repeat(9)}`;
     const line = answersProvenance(`Q. My answers: use ${token} for the export`);

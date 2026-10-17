@@ -1,6 +1,7 @@
 import type { Proposal, ReporterReply, ReporterReplyAt, WorkstreamEvent } from "../types";
 import { isAnswersDraft, isReporterNudge, workstreamOf } from "./proposals";
 import { WITHER_DAYS } from "./views";
+import { maskSecrets } from "./riskyText";
 
 /** Where a workstream stands with the reporter, read from its audit, as `ReporterFollow` in src-tauri/src/inbox/workstreams.rs. */
 export interface ReporterFollow {
@@ -118,6 +119,32 @@ export function replyExcerpt(text: string): string {
   return `${shown.join("\n")}${more > 0 ? ` (+${more} more)` : ""}`;
 }
 
+/** When the first reporter ask of the audit `events` was posted (the approval of a `readiness_asked`, `clarity_asked` or `reporter_nudged` comment), as epoch milliseconds; null while the reporter has not been asked. As `first_ask_posted` in src-tauri/src/inbox/workstreams.rs. */
+export function firstAskPosted(events: readonly FollowLine[]): number | null {
+  const asked = new Set<string>();
+  for (const e of events) {
+    if (e.actor !== "person") continue;
+    if (e.action === "readiness_asked" || e.action === "clarity_asked" || e.action === "reporter_nudged") {
+      if (e.proposalId) asked.add(e.proposalId);
+    } else if (e.action === "draft_approved" && e.proposalId && asked.has(e.proposalId)) {
+      const at = Date.parse(e.at);
+      return Number.isNaN(at) ? null : at;
+    }
+  }
+  return null;
+}
+
+/**
+ * Whether the reporter answered what a Triage that finished at `since` (ISO; none: any time) left open: a comment from someone but the person
+ * (`replies`, their times) came after the first ask was posted and after `since`. A Triage that ran after the reply had the
+ * answer in its prompt, so what it still lists is open. As `answered_by_reply` in src-tauri/src/inbox/workstreams.rs.
+ */
+export function answeredByReply(events: readonly FollowLine[], replies: readonly string[], since = ""): boolean {
+  const ask = firstAskPosted(events);
+  const from = Date.parse(since);
+  return ask !== null && replies.some((r) => Date.parse(r) > ask && !(Date.parse(r) <= from));
+}
+
 /**
  * Every comment on the ticket from someone but the person that came after the first reporter ask was posted on the workstream
  * (the approval of a `readiness_asked`, `clarity_asked` or `reporter_nudged` comment), oldest first, each as its quote: the
@@ -125,24 +152,14 @@ export function replyExcerpt(text: string): string {
  * left out. As `reporter_replies` in src-tauri/src/inbox/workstreams.rs; both run the `replies` of src/lib/reporterWait.fixtures.json.
  */
 export function reporterReplies(events: readonly FollowLine[], comments: readonly { id: string; at: string; text: string }[]): ReporterReplyAt[] {
-  const asked = new Set<string>();
-  let first: number | null = null;
-  for (const e of events) {
-    if (e.actor !== "person") continue;
-    if (e.action === "readiness_asked" || e.action === "clarity_asked" || e.action === "reporter_nudged") {
-      if (e.proposalId) asked.add(e.proposalId);
-    } else if (e.action === "draft_approved" && e.proposalId && asked.has(e.proposalId)) {
-      first = Date.parse(e.at);
-      break;
-    }
-  }
+  const first = firstAskPosted(events);
   if (first === null || Number.isNaN(first)) return [];
   return comments
     .map((c) => ({ c, t: Date.parse(c.at) }))
     .filter(({ t }) => !Number.isNaN(t) && t > first!)
     .sort((a, b) => a.t - b.t)
     .flatMap(({ c }) => {
-      const excerpt = replyExcerpt(c.text);
+      const excerpt = replyExcerpt(maskSecrets(c.text));
       return excerpt ? [{ id: c.id, excerpt, at: c.at }] : [];
     });
 }
@@ -154,7 +171,7 @@ export function reporterReplies(events: readonly FollowLine[], comments: readonl
  */
 export function replyComment(comments: readonly { id: string; at: string; text: string }[], repliedAt: string | null): ReporterReply | null {
   const c = repliedAt ? comments.find((k) => k.at === repliedAt) : undefined;
-  const excerpt = c ? replyExcerpt(c.text) : "";
+  const excerpt = c ? replyExcerpt(maskSecrets(c.text)) : "";
   return c && excerpt ? { id: c.id, excerpt } : null;
 }
 

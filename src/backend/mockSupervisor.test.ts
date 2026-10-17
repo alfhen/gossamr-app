@@ -307,6 +307,67 @@ describe("the sample supervisor", () => {
       expect(JSON.stringify(rewrite?.intent)).toContain(line);
     });
 
+    it("leaves the questions the reporter answered out of the plan's assumptions, and says nothing of assuming when every one was answered", async () => {
+      const { b, ws, triage } = await triaged();
+      const ask = await b.workstreamsReadinessAsk(ws, triage.id);
+      await b.proposalsApprove(ask.id);
+      await new Promise((r) => setTimeout(r, 5));
+      b.commentOnTicket("CA-408", "Done means the winback mail goes to lapsed customers. Only the winback flow. The CRM team asked.");
+      await b.workstreamsReadinessOverride(ws, triage.id);
+      const plan = newest(b, ws, "plan")!;
+      expect(plan.spec.assumptions ?? []).toEqual([]);
+      finish(b, plan.id);
+      const result = b.runs.get(plan.id)!.result!;
+      expect(result).not.toContain("assumes answers");
+      expect(result).not.toContain("Assumed:");
+      const rewrite = b.proposals.list({ states: ["pending"] }).find((p) => p.intent.type === "rewrite" && p.origin.type === "run" && p.origin.runId === plan.id);
+      expect(JSON.stringify(rewrite?.intent)).not.toContain("assumes answers");
+      expect(JSON.stringify(rewrite?.intent)).not.toContain("chose to plan without answers");
+    });
+
+    it("still assumes what a triage that ran after the reporter's reply left open, which read the answers and found these unanswered", async () => {
+      const { b, ws, triage } = await triaged();
+      const ask = await b.workstreamsReadinessAsk(ws, triage.id);
+      await b.proposalsApprove(ask.id);
+      await new Promise((r) => setTimeout(r, 5));
+      b.commentOnTicket("CA-408", "Only the winback flow.");
+      await new Promise((r) => setTimeout(r, 5));
+      const spec: RunSpec = { kind: "triage", repo: "acme/storefront", clonePath: "/Users/sample/Code/storefront", base: "main", name: "ca-408-after", instruction: "", focus: null, focusFromRun: null, ticketBlock: null, workstream: ws };
+      const draft = await b.runsDraft(spec, CA408);
+      const later = await b.runsApprove(draft.id, (await b.runsReview(draft.id)).digest);
+      b.runs.scriptNext("triage", { ready: false, questions: ["Who is waiting on it?"] });
+      finish(b, later.id);
+      // The reply came before this triage finished, so what it lists is open: the plan assumes it.
+      await new Promise((r) => setTimeout(r, 5));
+      await b.workstreamsReadinessOverride(ws, later.id);
+      expect(newest(b, ws, "plan")!.spec.assumptions).toEqual(["Who is waiting on it?"]);
+    });
+
+    it("turns ready when the triage runs again after the reporter's reply: the answers in the comments are used, and nothing is asked again", async () => {
+      const { b, ws, triage } = await triaged();
+      const ask = await b.workstreamsReadinessAsk(ws, triage.id);
+      await b.proposalsApprove(ask.id);
+      await new Promise((r) => setTimeout(r, 5));
+      b.commentOnTicket("CA-408", "Done means the winback mail goes to lapsed customers. Only the winback flow. The CRM team asked.");
+      const spec: RunSpec = { kind: "triage", repo: "acme/storefront", clonePath: "/Users/sample/Code/storefront", base: "main", name: "ca-408-again", instruction: "", focus: null, focusFromRun: null, ticketBlock: null, workstream: ws };
+      const draft = await b.runsDraft(spec, CA408);
+      const again = await b.runsApprove(draft.id, (await b.runsReview(draft.id)).digest);
+      finish(b, again.id);
+      const result = b.runs.get(again.id)!.result!;
+      expect(result).toContain("Ready to plan: yes");
+      expect(result).not.toContain("Open questions:");
+      expect(result).not.toContain("cannot be sized yet");
+      expect(result).toContain("The answers in the ticket's comments were used");
+      expect(b.workstreams.get(ws)?.readiness).toBeFalsy();
+      // Its note is a description update that replaces the Triage section and leaves no question in it.
+      const update = b.proposals.list({ states: ["pending"] }).find((p) => p.intent.type === "rewrite" && p.origin.type === "run" && p.origin.runId === again.id);
+      if (update?.intent.type !== "rewrite" || !update.intent.body) throw new Error("a description update");
+      expect(update.intent.body.toText).toContain("## Triage");
+      expect(update.intent.body.toText).toContain("The answers in the ticket's comments were used");
+      expect(update.intent.body.toText).not.toContain("Open questions:");
+      expect(b.proposals.list({ states: ["pending"] }).some((p) => p.intent.type === "comment" && p.origin.type === "run" && p.origin.runId === again.id)).toBe(false);
+    });
+
     it("starts a plan with no assumptions after a triage that was ready, and carries none into any other kind", async () => {
       const w = world();
       const ws = w.b.workstreams.open(CA401).id;
@@ -355,13 +416,14 @@ describe("the sample supervisor", () => {
 
     it("drafts a comment to the reporter with Ask the reporter, posts nothing, and settles", async () => {
       const { b, ws, triage } = await triaged();
-      const own = b.proposals.list({ states: ["pending"] }).filter((p) => p.intent.type === "comment" && p.origin.type === "run" && p.origin.runId === triage.id);
+      // The triage's own note is a description update, not a comment, so nothing of it repeats the ask: both wait.
+      const own = b.proposals.list({ states: ["pending"] }).filter((p) => p.intent.type === "rewrite" && p.origin.type === "run" && p.origin.runId === triage.id);
       expect(own).toHaveLength(1);
+      expect(b.proposals.list({ states: ["pending"] }).filter((p) => p.intent.type === "comment" && p.origin.type === "run" && p.origin.runId === triage.id)).toHaveLength(0);
       const before = b.proposals.list({ states: ["pending"] }).length;
       const draft = await b.workstreamsReadinessAsk(ws, triage.id);
-      // The triage's own note repeated the questions: it is superseded by this draft, so only one of them can be posted.
-      expect(b.proposals.list({ states: ["pending"] })).toHaveLength(before);
-      expect(b.proposals.get(own[0].id)).toMatchObject({ state: { type: "retired" }, supersededBy: draft.id });
+      expect(b.proposals.list({ states: ["pending"] })).toHaveLength(before + 1);
+      expect(b.proposals.get(own[0].id)).toMatchObject({ state: { type: "pending" } });
       expect(draft).toMatchObject({ state: { type: "pending" }, createdBy: "agent", label: "Questions for the reporter", origin: { type: "run", runId: triage.id, workstream: ws } });
       if (draft.intent.type !== "comment") throw new Error("a comment");
       expect(draft.intent.item.key).toBe("CA-408");

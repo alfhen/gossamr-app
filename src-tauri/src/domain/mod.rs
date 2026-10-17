@@ -19,7 +19,7 @@ mod workflow;
 pub mod workstream;
 
 pub use clarity::{clarity_gaps, clarity_questions, gaps_phrase, ClarityGap};
-pub use doc::{Block, Doc, Inline, Mark, PLAN_HEADING};
+pub use doc::{Block, Doc, Inline, Mark, PLAN_HEADING, TRIAGE_HEADING};
 pub use code::{
     clip, ChangedFile, CheckState, CodeChange, CodeChangeKind, CodeChangeState, CodeFile, CodeHit, CommitInfo, CommitQuery, Notice, TreeEntry, TreeEntryKind, DevLink, LinkSource, PullRequestDetail, ReviewInfo, ReviewState, BODY_LIMIT,
 };

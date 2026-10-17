@@ -4,8 +4,10 @@ use super::PersonRef;
 
 mod markdown;
 mod plan;
+mod triage;
 
 pub use plan::PLAN_HEADING;
+pub use triage::{QUESTIONS_LEAD, TRIAGE_HEADING};
 
 /// Portable rich text. Connector formats (ADF, Markdown) convert to this at the edge.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]

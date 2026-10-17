@@ -302,7 +302,7 @@ async function workingBuild(page: Page) {
   await moveTo(page, (await started(page, "plan")).id, "done", 3);
   await page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "All projects" }).click();
   await peekTicket(page, "CA-401");
-  const draft = peekSheet(page).getByRole("article", { name: "Update the description of CA-401" });
+  const draft = peekSheet(page).getByRole("article", { name: "Update the description of CA-401" }).filter({ hasText: "Gossamr Plan" });
   await draft.getByRole("button", { name: "Update description" }).click();
   await expect(draft).toHaveCount(0);
   await expect(pipConversation(page)).toHaveText(/^Workstream: CA-401 /);

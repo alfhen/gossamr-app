@@ -98,7 +98,7 @@ test("from the step rail's Review step on Pip home, the view opens with the revi
   const planChip = stepChip(page, "plan").locator("[data-step-chip]");
   if ((await planChip.getAttribute("aria-expanded")) !== "true") await planChip.click();
   await stepChip(page, "plan").getByRole("article", { name: "Update the description of CA-401" }).getByRole("button", { name: "Review on CA-401 →" }).click();
-  await peekSheet(page).getByRole("article", { name: "Update the description of CA-401" }).getByRole("button", { name: "Update description" }).click();
+  await peekSheet(page).getByRole("article", { name: "Update the description of CA-401" }).filter({ hasText: "Gossamr Plan" }).getByRole("button", { name: "Update description" }).click();
   await page.keyboard.press("Escape");
   await expect(peekSheet(page)).toHaveCount(0);
   await finishOnHome(page, (await started("build")).id);
