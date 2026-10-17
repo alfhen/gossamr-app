@@ -77,9 +77,11 @@ export function SentRow({ entry: e, onTicket, onWorkstream }: { entry: SentEntry
               <button type="button" data-sent-workstream={e.workstreamId} aria-label={`Open the workstream ${e.workstream}`} onClick={() => onWorkstream(e.workstreamId!)} className={link}>
                 {e.workstream}
               </button>
+              {"."}
             </>
-          ) : null}
-          .
+          ) : (
+            "."
+          )}
         </span>
       </p>
     </article>

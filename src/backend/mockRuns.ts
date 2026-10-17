@@ -1181,7 +1181,7 @@ export class MockRuns {
     }
     const note = resolved.note;
     if (note?.fromMarker && note.text && !this.commentDrafts(run.id).length) {
-      const text = commentText(note, this.changes.get(run.id) ?? null, run.spec.kind, false, resolved.status === "blocked", run.spec.pr);
+      const text = commentText(note, this.changes.get(run.id) ?? null, run.spec.kind, false, resolved.status === "blocked", run.spec.pr, run.spec.repo);
       // Not a second draft of the very words already waiting on the ticket, as the real backend leaves it.
       const item = run.item;
       const waiting = this.proposals.list().some((p) => p.state.type === "pending" && p.intent.type === "comment" && p.intent.item.key === item.key && docText(p.intent.body) === text);
@@ -2130,7 +2130,7 @@ export class MockRuns {
     const resolved = this.resolved(run);
     const note = resolved.note;
     if (!note?.text) throw new Error("the run finished without a written answer, so there is nothing to draft");
-    const body = commentText(note, this.changes.get(id) ?? null, run.spec.kind, resolved.source === "summaryOnly", resolved.status === "blocked", run.spec.pr);
+    const body = commentText(note, this.changes.get(id) ?? null, run.spec.kind, resolved.source === "summaryOnly", resolved.status === "blocked", run.spec.pr, run.spec.repo);
     const same = this.proposals.list({ states: ["pending"] }).find((p) => p.intent.type === "comment" && p.intent.item.externalId === item.externalId && docText(p.intent.body) === body);
     if (same) throw new Error(`that comment is already waiting as a draft on ${item.key}`);
     return this.proposals.fromRun({ type: "comment", item, body: docFromText(body) }, run.shortId ? `From agent run ${run.shortId}` : "From an agent run", this.fromRun(run));

@@ -149,14 +149,14 @@ describe("a row of What Jira saw from me", () => {
     expect(html).toContain('data-sent-edited="yes"');
     expect(html).toContain("Pip drafted it; you edited it before approving");
     expect(html).toMatch(/data-sent-workstream="w1"[^>]*>CA-401</);
-    expect(html).toContain("Made from Pip, on CA-401");
+    expect(html).toContain("Made from Pip, in the workstream");
   });
 
   it("reads as two sentences, and its two CA-401 buttons have names of their own (G12)", () => {
     const html = renderToStaticMarkup(<SentRow entry={sent()} onTicket={() => {}} onWorkstream={() => {}} />);
     expect(html).not.toContain("·");
     expect(html).toContain("before approving.</span>");
-    expect(html).toMatch(/Made from Pip, on CA-401, in the workstream <button[^>]*>CA-401<\/button>\./);
+    expect(html).toMatch(/Made from Pip, in the workstream <button[^>]*>CA-401<\/button>\.<\/span>/);
     expect(html).toMatch(/data-sent-ticket="true" aria-label="Open CA-401 in Gossamr"/);
     expect(html).toMatch(/data-sent-workstream="w1" aria-label="Open the workstream CA-401"/);
   });

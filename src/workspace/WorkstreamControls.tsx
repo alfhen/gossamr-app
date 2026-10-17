@@ -4,6 +4,7 @@ import { needsIn, type Need } from "../lib/needs";
 import { nextStep, type NextStep } from "../lib/nextStep";
 import { flaggedGaps, ignoredAmong, projectOfKey, SHORT_GAP } from "../lib/clarityLearning";
 import { clarityRepliedText, clarityText, type ClarityGap } from "../lib/ticketClarity";
+import { maskSecrets } from "../lib/riskyText";
 import { adoptOfferText } from "../lib/workstreamAdopt";
 import { RULE_SWITCH, STEP_HELP, asksBudget, isHeldByYou, budgetNote, heldBanner, ruleText, stepsLeftText, stepsOf } from "../lib/workstreamHold";
 import { ALLOW_MORE_STEPS, HELD_BUDGET, TRIPWIRE, WORKSTREAM_RULES, type AutoStartSwitches, type Proposal, type Run, type WorkstreamEvent, type WorkstreamRule, type WorkstreamRules, type WorkstreamView } from "../types";
@@ -354,7 +355,7 @@ export function ClarityNotice({ view }: { view: WorkstreamView }) {
       </p>
       {view.reporterReply && (
         <p data-clarity-reply className="m-0 text-sm whitespace-pre-line text-ws-ink2 [overflow-wrap:anywhere]">
-          {`They wrote: “${view.reporterReply.excerpt}”`}
+          {`They wrote: “${maskSecrets(view.reporterReply.excerpt)}”`}
         </p>
       )}
       <p className="m-0 text-xs text-ws-ink2">This is a quick check of the words, not a verdict. It holds nothing up; the triage still decides whether the ticket is ready to plan.</p>

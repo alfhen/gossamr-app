@@ -155,6 +155,16 @@ export function offerUndo(offer: UndoOffer): number {
   return id;
 }
 
+/** What Ctrl+Z says when the log holds nothing: the footer promises it undoes, so silence would read as broken (G8). */
+export const NOTHING_TO_UNDO = "Nothing to undo. What was posted to Jira stays posted.";
+
+/** Ctrl+Z: undoes the newest good offer, or says there is nothing to undo through the toast's polite live region. */
+export function undoLatest(): void {
+  const last = undoLog.latest();
+  if (!last) return void useToasts.getState().push(NOTHING_TO_UNDO, "info");
+  void undoLog.run(last.id);
+}
+
 /** Takes the toast of offer `id` down while the offer stays good for the palette's "Undo" (a newer offer for the same kind of thing is the one to show). */
 export const hideUndoToast = (id: number | undefined) => {
   const toast = id === undefined ? undefined : toastOf.get(id);

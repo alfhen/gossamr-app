@@ -5,7 +5,7 @@ import { docFromText } from "../lib/docs";
 import type { Proposal, RunSpec } from "../types";
 import { NUDGE_COMMENT_LABEL, READINESS_COMMENT_LABEL } from "../lib/proposals";
 import { useToasts } from "./toasts";
-import { DraftCard, answersRisks, postedNote, keepEditsOfDraft, keptEditsOfDraft, settleKeptEdits } from "./DraftCard";
+import { DraftCard, answersRisks, rewriteRisks, postedNote, keepEditsOfDraft, keptEditsOfDraft, settleKeptEdits } from "./DraftCard";
 import { draftPreviewBody } from "./DraftPreview";
 
 const spec: RunSpec = { kind: "investigate", repo: "acme/web", clonePath: "/Users/sample/Code/web", base: "main", name: "ca-412-fix-ab12", instruction: "Investigate this work." };
@@ -136,5 +136,15 @@ describe("a nudge for the reporter says who Jira notifies (G6)", () => {
     const nudge: Proposal = { ...commentDraft("n1"), label: NUDGE_COMMENT_LABEL, intent: { type: "comment", item: itemRef("CA-412"), body: docFromText("Hi @Mette Lund,\n\nThe earlier questions about CA-412 are still open.") } };
     const html = renderToStaticMarkup(<DraftCard proposal={nudge} statusName={null} people={[{ accountId: "a1", name: "Mette Lund" }]} working={false} error={null} onApprove={vi.fn()} onSkip={vi.fn()} onReview={vi.fn()} />);
     expect(html).toContain("Posts as you; Jira notifies Mette Lund.");
+  });
+});
+
+describe("an edited description's posting pause counts lines in the description (G4)", () => {
+  it("quotes a catch on the description's first line as line 1, and the title's without a line", () => {
+    const { risks, quote } = rewriteRisks("Old", "Old text", "Old", "Hello @everyone password: hunter2hunter2\nsecond line");
+    expect(risks.sort()).toEqual(["broadcast", "secret"]);
+    expect(quote.broadcast).toEqual(["@everyone\t1"]);
+    expect(quote.secret?.[0]).toMatch(/\t1$/);
+    expect(rewriteRisks("Old", "a\nb", "Hi @here", "a\nb").quote.broadcast).toEqual(["@here"]);
   });
 });

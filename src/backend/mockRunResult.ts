@@ -1,4 +1,5 @@
 import { SUMMARY_ONLY, type CodeChange, type ItemRef, type JiraNote, type ReportView, type ResultSource, type ReviewFinding, type ReviewSeverity, type ReviewVerdict, type ReviewView, type RunKind, type TicketProposal, type WorkItemKind } from "../types";
+import { parsePullRef } from "../lib/githubUrl";
 
 const KEY = /\b[A-Za-z][A-Za-z0-9_]*-\d+\b/g;
 
@@ -274,7 +275,7 @@ export function namesUrl(text: string, url: string): boolean {
 }
 
 /** The comment as the backend first drafts it, for the sample data. */
-export function commentText(note: JiraNote, change: CodeChange | null, kind: RunKind = "investigate", summaryOnly = false, blocked = false, pr: number | null = null): string {
+export function commentText(note: JiraNote, change: CodeChange | null, kind: RunKind = "investigate", summaryOnly = false, blocked = false, pr: number | null = null, repo: string | null = null): string {
   const intro: Partial<Record<RunKind, string>> = {
     investigate: "Investigated with an agent.",
     plan: "Planned with an agent.",
@@ -291,7 +292,8 @@ export function commentText(note: JiraNote, change: CodeChange | null, kind: Run
   if (change?.kind === "pullRequest" && !namesUrl(note.text, change.url)) parts.push(`Pull request: ${change.url}`);
   else if (kind === "review" && pr != null) {
     // A review opened no pull request, but the Jira reader should know which one it read: its link when known, else its number.
-    const url = change?.kind === "pullRequest" && change.number === pr ? change.url : null;
+    // Without a change of its own, the pull request is the run's repository's, so its page is built from that.
+    const url = change?.kind === "pullRequest" && change.number === pr ? change.url : repo && parsePullRef(`${repo}#${pr}`) ? `https://github.com/${repo}/pull/${pr}` : null;
     const named = namesUrl(note.text, `#${pr}`) || namesUrl(note.text, `/pull/${pr}`) || (url !== null && namesUrl(note.text, url));
     if (!named) parts.push(url ? `Pull request: ${url}` : `Pull request #${pr}`);
   }

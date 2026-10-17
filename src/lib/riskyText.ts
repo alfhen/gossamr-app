@@ -15,6 +15,12 @@ const SECRETS: RegExp[] = [
   /\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})/,
   /\bxox[abprs]-[A-Za-z0-9-]{10,}/,
   /\bsk-[A-Za-z0-9_-]{20,}/,
+  // Stripe-style keys (sk_live_, rk_test_; pk_ is public and stays out), GitLab, npm and Google API keys.
+  // Anywhere in a word, as the Rust redaction finds them, so "x_sk_live_…" is caught too.
+  /(?:sk|rk)_(?:live|test)_[A-Za-z0-9]{16,}/,
+  /glpat-[A-Za-z0-9_-]{20,}/,
+  /npm_[A-Za-z0-9]{36,}/,
+  /AIza[0-9A-Za-z_-]{35,}/,
   /\bATATT[A-Za-z0-9_=-]{20,}/,
   /\beyJ[\w-]{10,}\.[\w-]{10,}\.[\w-]{5,}/,
   /\bBearer\s+[A-Za-z0-9._~+/-]{20,}/i,

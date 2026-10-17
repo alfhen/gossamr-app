@@ -1,14 +1,16 @@
-import { useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
 import { docText } from "../lib/docs";
 import { higherPriority, needAfter, leftOutLabel, needGroups, repeatedComments, REPEATED_COMMENT_NOTE, type Need } from "../lib/needs";
 import { ALLOW_MORE_STEPS, type Proposal, type ReporterReply, type Run, type WorkstreamView } from "../types";
 import { stepsOf } from "../lib/workstreamHold";
 import { isReporterNudge, isReporterQuestions } from "../lib/proposals";
+import { maskSecrets } from "../lib/riskyText";
+import { rewriteWhat } from "./RewriteDiff";
 import { useWorkspace } from "../workspaceStore";
 import { OpenInTerminal, FailureNext } from "./AgentParts";
 import { Box, BoxTitle, Btn } from "./AgentSheet";
 import { planOpenQuestions, progressText, quietMinutes, quietText } from "./agentsLogic";
-import { draftSummary, draftTitle, LiveDraftCard } from "./DraftCard";
+import { draftSummary, draftTitle, LiveDraftCard, useEditedDraft } from "./DraftCard";
 import { draftDecisions } from "./DraftPreview";
 import { useGithubUi } from "./githubUi";
 import { openComment } from "./jump";
@@ -18,7 +20,7 @@ import { failureHelp } from "./failureHelp";
 import { inlineStartable, InlineStart, useInlineStarts } from "./InlineStart";
 import { GroupChip } from "./NeedsYou";
 import { groupId, openInWorkstream, openNeed, setPaneIntent, takePaneIntent } from "./needsActions";
-import { chipLabel, openInWorkstreamLabel, quietKey } from "../lib/needs";
+import { chipLabel, editedTitle, openInWorkstreamLabel, quietKey } from "../lib/needs";
 import { PermissionAsk, StopRunConfirm } from "./PermissionAsk";
 import { usePipHome } from "./pipHomeStore";
 import { RunAnswer } from "./RunAnswer";
@@ -117,11 +119,11 @@ export const PLANNING_ANYWAY = "Planning anyway";
 export const doneNeed = (done: Need, planned = takePlannedAnyway(done.kind === "readiness" ? done.key.slice(READINESS_KEY.length) : null)): Need => (planned ? { ...done, title: PLANNING_ANYWAY } : done);
 
 /** The line over the pane once it moved on by itself: what was dealt with, and what is open now. */
-export const advancedText = (done: Pick<Need, "title" | "ticketKey" | "workstreamTitle">, next: Pick<Need, "title" | "ticketKey">, waitsOn?: string | null, posted = false) =>
+export const advancedText = (done: Pick<Need, "title" | "ticketKey" | "workstreamTitle">, next: Pick<Need, "title" | "ticketKey">, waitsOn?: string | null, posted: boolean | string = false) =>
   `${doneText(done, posted)}${waitsOn ? ` ${waitsOn}.` : ""} Now: ${next.ticketKey ? `${next.ticketKey} · ` : ""}${next.title}`;
 
 /** What is said when the need decided was the last one and the pane closes: what was done, and the wait it started. */
-export const closedText = (done: Pick<Need, "title" | "ticketKey" | "workstreamTitle">, waitsOn?: string | null, posted = false) => `${doneText(done, posted)}${waitsOn ? ` ${waitsOn}.` : ""}`;
+export const closedText = (done: Pick<Need, "title" | "ticketKey" | "workstreamTitle">, waitsOn?: string | null, posted: boolean | string = false) => `${doneText(done, posted)}${waitsOn ? ` ${waitsOn}.` : ""}`;
 
 /**
  * The note for the last need decided from the pane, or null when its draft went without being posted: a Skip says so in
@@ -132,11 +134,13 @@ export function lastNeedText(done: Need, proposals: Readonly<Record<string, Prop
     const state = proposals[done.target.id]?.state.type;
     if (state !== "applied" && state !== "applying") return null;
   }
-  return closedText(done, waitStarted(done, proposals), postedToJira(done, proposals));
+  return closedText(done, waitStarted(done, proposals), postedFor(done, proposals));
 }
 
 /** What was done and in which workstream: "Done: Questions for the reporter on CA-408." The pane moved on, so the line is what says where it happened. */
-export const doneText = (done: Pick<Need, "title" | "ticketKey" | "workstreamTitle">, posted = false) => {
+export const doneText = (done: Pick<Need, "title" | "ticketKey" | "workstreamTitle">, posted: boolean | string = false) => {
+  // A posted description change or set of subtasks says what Jira got, not the title of the card it was decided on (G7).
+  if (typeof posted === "string") return posted;
   const where = done.ticketKey ?? done.workstreamTitle;
   // A title that already names the ticket is not repeated, and a question is not quoted as if it were what was done.
   const key = done.ticketKey;
@@ -156,6 +160,20 @@ export function postedToJira(done: Pick<Need, "target">, proposals: Readonly<Rec
   const p = done.target.type === "draft" ? proposals[done.target.id] : undefined;
   return !!p && JIRA_WRITES.has(p.intent.type) && (p.state.type === "applied" || p.state.type === "applying");
 }
+
+/** What Jira got, in words, when `done` was a description change or subtasks that were posted; null for a comment or anything else, whose Done line names the card. */
+export function postedWhat(done: Pick<Need, "target">, proposals: Readonly<Record<string, Proposal>>): string | null {
+  const p = done.target.type === "draft" ? proposals[done.target.id] : undefined;
+  // Only a posted draft says what Jira got: one still applying has not created or changed anything yet.
+  if (!p || !JIRA_WRITES.has(p.intent.type) || p.state.type !== "applied") return null;
+  const { intent } = p;
+  if (intent.type === "rewrite") return `Updated the ${rewriteWhat(intent)} of ${intent.item.key} in Jira.`;
+  if (intent.type === "subtasks") return `Created ${intent.summaries.length} subtask${intent.summaries.length === 1 ? "" : "s"} on ${intent.parent.key} in Jira.`;
+  return null;
+}
+
+/** What `doneText` takes for `posted`: the words for a description change or subtasks, else whether it was posted at all. */
+export const postedFor = (done: Pick<Need, "target">, proposals: Readonly<Record<string, Proposal>>): boolean | string => postedWhat(done, proposals) ?? postedToJira(done, proposals);
 
 /**
  * What posting `done` started, when it was the questions or the nudge for the reporter (posted, not skipped): the wait, so the
@@ -237,8 +255,15 @@ export function HigherPriority({ needs, need }: { needs: readonly Need[]; need: 
   return higher ? <HigherPriorityBar need={higher} /> : null;
 }
 
+/** A need's title as the person has it: a draft they edited and have not posted titles by its words as edited, as its row in Needs you does, and says so. */
+export function useNeedTitle(need: Need): { title: string; edited: boolean } {
+  const { edited, text } = useEditedDraft(need.target.type === "draft" ? need.target.id : "");
+  return { title: editedTitle(need.title, text), edited };
+}
+
 /** The slim bar over the pane: a higher-ranked Decide or Unblock came in while another is open. It opens that need when pressed (Enter too); nothing switches by itself. */
 function HigherPriorityBar({ need }: { need: Need }) {
+  const { title } = useNeedTitle(need);
   return (
     <button
       type="button"
@@ -247,7 +272,7 @@ function HigherPriorityBar({ need }: { need: Need }) {
       className="flex w-full min-w-0 shrink-0 items-center gap-1.5 border-b border-ws-sep bg-ws-pip-soft px-3 py-1 text-left text-sm text-ws-ink focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-ws-pip"
     >
       <b className="shrink-0 font-semibold">Higher priority:</b>
-      <span className="min-w-0 truncate">{need.title}</span>
+      <span className="min-w-0 truncate">{title}</span>
       <span className="shrink-0 font-semibold text-ws-accent">· Open</span>
     </button>
   );
@@ -350,9 +375,10 @@ function StoppedBody({ run }: { run: Run }) {
   );
 }
 
-function QuietBody({ run }: { run: Run }) {
+export function QuietBody({ run }: { run: Run }) {
   const now = useNow();
   const [stopping, setStopping] = useState(false);
+  const helpId = useId();
   const quiet = quietMinutes(run, now);
   const store = useRuns.getState();
   return (
@@ -370,10 +396,13 @@ function QuietBody({ run }: { run: Run }) {
             Stop the run
           </Btn>
         )}
-        <Btn tone="plain" icon="x" onClick={() => store.dismiss(quietKey(run))} title="Takes it out of Needs you until it makes progress and goes quiet again. Nothing is stopped.">
+        <Btn tone="plain" icon="clock" onClick={() => store.dismiss(quietKey(run))} aria-describedby={`${helpId}-keep`}>
           Keep waiting
         </Btn>
       </div>
+      <p id={`${helpId}-keep`} data-keep-waiting-help className="m-0 text-xs text-ws-ink2">
+        Keep waiting leaves the run going and takes this out of Needs you until it goes quiet again.
+      </p>
     </Box>
   );
 }
@@ -451,7 +480,7 @@ export function ReporterReplyQuote({ reply, ticketKey }: { reply?: ReporterReply
   return (
     <div data-reporter-reply className="grid gap-1">
       <p className="m-0 text-xs font-semibold text-ws-ink2">The reporter replied</p>
-      <p className="m-0 whitespace-pre-wrap text-ws-ink2 [overflow-wrap:anywhere]">{`“${reply.excerpt}”`}</p>
+      <p className="m-0 whitespace-pre-wrap text-ws-ink2 [overflow-wrap:anywhere]">{`“${maskSecrets(reply.excerpt)}”`}</p>
       {ticketKey && (
         <button type="button" data-reporter-reply-open className="w-fit cursor-pointer border-0 bg-transparent p-0 text-xs font-semibold text-ws-ink2 underline" onClick={() => void openComment(ticketKey, reply.id)}>
           Open their comment
@@ -707,6 +736,7 @@ function NeedDecision({ need }: { need: Need }) {
     if (root.current && endEditing(root.current)) return void root.current.focus({ preventScroll: true });
     close();
   };
+  const paneTitle = useNeedTitle(need);
   return (
     <section
       ref={root}
@@ -730,8 +760,13 @@ function NeedDecision({ need }: { need: Need }) {
             )}
             <GroupChip group={need.group} label={chipLabel(need)} />
             <span data-needs-pane-title role="heading" aria-level={2} tabIndex={-1} className="min-w-0 truncate rounded focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip">
-              {need.title}
+              {paneTitle.title}
             </span>
+            {paneTitle.edited && (
+              <span data-needs-pane-edited className="shrink-0 font-semibold text-ws-pip">
+                edited
+              </span>
+            )}
           </div>
           <p data-needs-why className="m-0 text-sm font-semibold text-ws-ink [overflow-wrap:anywhere]">
             {need.why}
@@ -896,7 +931,7 @@ export function NeedsPane({ needs }: { needs: readonly Need[] }) {
   const [advanced, setAdvanced] = useState<Advanced | null>(null);
   const lastId = useRef(0);
   useAdvance(needs, (done, next) =>
-    setAdvanced((prev) => nextAdvanced(prev ?? { id: lastId.current, text: "" }, advancedText(done, next, waitStarted(done, useWorkspace.getState().proposals), postedToJira(done, useWorkspace.getState().proposals)), done.workstreamId ? { workstreamId: done.workstreamId, label: doneText(done, postedToJira(done, useWorkspace.getState().proposals)) } : undefined, done.key, next.key, !!waitStarted(done, useWorkspace.getState().proposals))),
+    setAdvanced((prev) => nextAdvanced(prev ?? { id: lastId.current, text: "" }, advancedText(done, next, waitStarted(done, useWorkspace.getState().proposals), postedFor(done, useWorkspace.getState().proposals)), done.workstreamId ? { workstreamId: done.workstreamId, label: doneText(done, postedFor(done, useWorkspace.getState().proposals)) } : undefined, done.key, next.key, !!waitStarted(done, useWorkspace.getState().proposals))),
     (done) => {
       const proposals = useWorkspace.getState().proposals;
       const text = lastNeedText(done, proposals);

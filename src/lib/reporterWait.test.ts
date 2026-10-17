@@ -32,6 +32,27 @@ describe("the reporter's reply as a quote (G15)", () => {
     expect(replyExcerpt("x".repeat(REPLY_EXCERPT))).toBe("x".repeat(REPLY_EXCERPT));
   });
 
+  it("ends on a whole word when a space is near the cut, else cuts at the limit", () => {
+    const words = `${"ab ".repeat(45)}scope is in scope`;
+    const got = replyExcerpt(words);
+    expect(got.endsWith("ab…")).toBe(true);
+    expect(Array.from(got).length).toBeLessThanOrEqual(REPLY_EXCERPT);
+    expect(replyExcerpt(`${"a ".repeat(30)}${"x".repeat(200)}`)).toBe(`${"a ".repeat(30)}${"x".repeat(REPLY_EXCERPT - 61)}…`);
+  });
+
+  it("masks a secret before the cut, so a token across it shows no prefix", () => {
+    const token = `ghp_${"a1B2".repeat(9)}`;
+    // The token starts 120 characters in: the 140-character cut lands inside it.
+    const text = `${"word ".repeat(24)}${token} and more`;
+    const comments = [{ id: "a", at: at(5), text }];
+    const events = [{ actor: "person", action: "readiness_asked", proposalId: "d1", at: at(1) }, { actor: "person", action: "draft_approved", proposalId: "d1", at: at(2) }] as never;
+    for (const got of [replyComment(comments, at(5))!.excerpt, reporterReplies(events, comments)[0].excerpt]) {
+      expect(got).not.toContain("ghp_");
+      expect(got).toContain("gh…");
+      expect(got.startsWith("word word")).toBe(true);
+    }
+  });
+
   it("finds the comment written when the wait ended, and none without one", () => {
     const comments = [{ id: "a", at: at(5), text: "First" }, { id: "b", at: at(9), text: "Second" }];
     expect(replyComment(comments, at(9))).toEqual({ id: "b", excerpt: "Second" });

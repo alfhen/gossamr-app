@@ -1322,6 +1322,10 @@ describe("the comment drafted from a run opens by saying what the agent did, as 
   it("names the pull request a review read, unless the note does, as comment_text does (G3)", () => {
     const note = jiraNote("For Jira:\nTwo findings.");
     expect(commentText(note, null, "review", false, false, 7)).toBe("Reviewed with an agent.\n\nTwo findings.\n\nPull request #7");
+    // With the run's repository known, the line carries the pull request's page rather than a bare number (G11).
+    expect(commentText(note, null, "review", false, false, 7, "acme/storefront")).toBe("Reviewed with an agent.\n\nTwo findings.\n\nPull request: https://github.com/acme/storefront/pull/7");
+    expect(commentText(note, null, "review", false, false, 7, "not a repo")).toContain("Pull request #7");
+    expect(commentText(jiraNote("For Jira:\nFine in #7."), null, "review", false, false, 7, "acme/storefront")).not.toContain("Pull request");
     expect(commentText(jiraNote("For Jira:\nFine in #7."), null, "review", false, false, 7)).not.toContain("Pull request #7");
     expect(commentText(jiraNote("For Jira:\nFollows #70."), null, "review", false, false, 7)).toContain("Pull request #7");
     expect(commentText(note, null, "review")).not.toContain("Pull request");

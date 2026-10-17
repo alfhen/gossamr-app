@@ -106,9 +106,12 @@ export function ToastCard({ toast: t, waiting, onDismiss }: { toast: Toast; wait
         onDismiss();
         leaveToast();
       }}
-      className={`pointer-events-auto flex items-start gap-2 rounded-lg border bg-ws-win px-3 py-2 text-sm shadow-ws-pop outline-none focus-visible:outline-2 focus-visible:outline-ws-pip ${t.tone === "error" ? "border-ws-blocked text-ws-blocked" : "border-ws-sep2 text-ws-ink2"}`}
+      className={`pointer-events-auto flex flex-wrap items-start gap-x-2 gap-y-1 rounded-lg border bg-ws-win px-3 py-2 text-sm shadow-ws-pop outline-none focus-visible:outline-2 focus-visible:outline-ws-pip ${t.tone === "error" ? "border-ws-blocked text-ws-blocked" : "border-ws-sep2 text-ws-ink2"}`}
     >
-      <span className="min-w-0 [overflow-wrap:anywhere]">{t.text}</span>
+      {/* A floor of 14rem to grow from: the badge, Undo and the x wrap under the text rather than squeezing it into a column. */}
+      <span data-toast-text className="min-w-0 flex-1 basis-56 [overflow-wrap:anywhere]">
+        {t.text}
+      </span>
       {waiting > 0 && (
         <span className="shrink-0 rounded-full bg-ws-sel px-1.5 text-xs font-semibold text-ws-ink3" title={`${waiting} more after this one`}>
           +{waiting} more

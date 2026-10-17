@@ -192,6 +192,9 @@ describe("nothing covers anything", () => {
       expect(out).toContain("Agent started");
       expect(out).not.toContain("Watching 4 repositories");
       expect(out).toContain("+1 more");
+      // The text keeps a floor and the buttons wrap under it, so Undo and "+1 more" never squeeze it into a narrow column (G10).
+      expect(out).toMatch(/data-toast="true"[^>]*class="[^"]*\bflex-wrap\b/);
+      expect(out).toMatch(/data-toast-text="true" class="[^"]*\bflex-1\b[^"]*\bbasis-56\b/);
     } finally {
       useToasts.getState().clear();
       Object.assign(useToasts.getInitialState(), { toasts: [] });

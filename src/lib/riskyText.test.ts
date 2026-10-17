@@ -13,6 +13,25 @@ describe("the pause before posting edited text", () => {
     for (const t of ["The password reset flow is broken", "Reset the token on login", "No secret here", "the token expired", "password reset flow", "kodeord er ikke sat", "https://example.com/path", "see https://acme.atlassian.net/browse/CA-1", "mail me at user@host.com", "adgangskoden er ikke sat", "Mette will update the docs"]) expect(risksIn(t), t).toEqual([]);
   });
 
+  it("finds Stripe, GitLab, npm and Google API keys, and not words that only start like them (G3)", () => {
+    const keys = ["sk_live_abcdefghijklmnop1234", "sk_test_abcdefghijklmnop1234", "rk_live_abcdefghijklmnop1234", "glpat-abcdefghij0123456789", `npm_${"a1".repeat(18)}`, `AIza${"Sy-_".repeat(8)}abc`];
+    for (const k of keys) {
+      expect(risksIn(`use ${k} now`), k).toEqual(["secret"]);
+      expect(newRiskQuote("fine", `use ${k} now`), k).toEqual({ secret: [`${k.slice(0, 2)}…`] });
+      expect(maskSecrets(`use ${k} now`), k).toBe(`use ${k.slice(0, 2)}… now`);
+    }
+    for (const t of ["run npm_install first", "the sk_live flag", "pk_live_abcdefghijklmnop1234 is public", "glpat- is the prefix"]) expect(risksIn(t), t).toEqual([]);
+  });
+
+  it("finds those keys inside a longer word, as the Rust redaction does", () => {
+    for (const k of ["x_sk_live_abcdefghijklmnop1234", "envglpat-abcdefghij0123456789", `my_npm_${"a1".repeat(19)}`, `keyAIza${"Sy-_".repeat(9)}`]) {
+      expect(risksIn(`use ${k} now`), k).toEqual(["secret"]);
+      expect(maskSecrets(`use ${k} now`), k).not.toContain("abcdefghij");
+      expect(maskSecrets(`use ${k} now`), k).not.toContain("a1a1a1a1");
+      expect(maskSecrets(`use ${k} now`), k).not.toContain("Sy-_Sy-_");
+    }
+  });
+
   it("asks only about what an edit adds, so a draft that already said it is not stopped again", () => {
     expect(newRisks("Looks good", "Looks good @everyone\nPassword: hunter2")).toEqual(["broadcast", "secret"]);
     expect(newRisks("cc @everyone", "cc @everyone, thanks")).toEqual([]);
