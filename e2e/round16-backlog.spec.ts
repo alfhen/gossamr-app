@@ -28,7 +28,7 @@ test.describe("the ask and the nudge to the reporter (G21, G20)", () => {
   test("the ask leaves out the ticket key and says why it asks; the nudge lists the questions still open", async ({ page }) => {
     test.setTimeout(120_000);
     const draft = await reporterDraft(page);
-    await expect(draft).toContainText("A few things need clearing up before work on this starts:");
+    await expect(draft).toContainText("A few things need clearing up to make this ticket clear to work on:");
     await expect(draft).not.toContainText("A few things about CA-408");
     const asked = (await draft.innerText()).split("\n").filter((l) => /^- /.test(l.trim()) || /^[A-Z].*\?$/.test(l.trim()));
     expect(asked.length).toBeGreaterThan(0);

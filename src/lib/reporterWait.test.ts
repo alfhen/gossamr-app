@@ -210,7 +210,7 @@ describe("the nudge", () => {
   });
 
   it("lists the questions still open as bullets, the ones the ask carried (G20), and keeps its voice neutral", () => {
-    const ask = "Hi @Mette Lund,\n\nA few things need clearing up before work on this starts:\n\n- What does done look like?\n- Who is waiting on it?\n\nCould you answer them here on the ticket? Thanks.";
+    const ask = "Hi @Mette Lund,\n\nA few things need clearing up to make this ticket clear to work on:\n\n- What does done look like?\n- Who is waiting on it?\n\nCould you answer them here on the ticket? Thanks.";
     const open = askedQuestions(ask);
     expect(open).toEqual(["What does done look like?", "Who is waiting on it?"]);
     const text = nudgeComment("CA-408", "Mette Lund", false, open);

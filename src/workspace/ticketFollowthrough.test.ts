@@ -79,7 +79,7 @@ describe("the clarity notice on a workstream", () => {
     const asked = Object.values(useWorkspace.getState().proposals).find((p) => p.label === "Questions for the reporter")!;
     expect(asked).toMatchObject({ state: { type: "pending" }, createdBy: "user", intent: { type: "comment" }, origin: { type: "chat", workstream: id } });
     const body = docText(asked.intent.type === "comment" ? asked.intent.body : { blocks: [] });
-    for (const part of ["Hi @Mette Lund,", "A few things need clearing up before work on this starts", "- What is the goal?", "- What has to be true for this to be done (the acceptance criteria)?", "- What is in scope, and what is out?", "- Who asked for it, and who is waiting on it?"]) expect(body).toContain(part);
+    for (const part of ["Hi @Mette Lund,", "A few things need clearing up to make this ticket clear to work on", "- What is the goal?", "- What has to be true for this to be done (the acceptance criteria)?", "- What is in scope, and what is out?", "- Who asked for it, and who is waiting on it?"]) expect(body).toContain(part);
     expect(backend.proposals.writes).toEqual([]);
     expect(events(id).find((e) => e.action === "clarity_asked")).toMatchObject({ actor: "person", proposalId: asked.id });
     expect(stored(id).clarity ?? null).toBeNull();
@@ -295,9 +295,12 @@ describe("I'll answer, then the person's answers", () => {
     await ask(id, "a2", "where do we stand?");
     expect(backend.proposals.list({ workstream: id }).filter((p) => p.label === "Answers to the open questions")).toHaveLength(1);
     expect(backend.proposals.list({ workstream: id }).some(planDraft)).toBe(false);
-    // Posted: Pip's next turn proposes the plan from the triage, which does not start, and only once.
+    // Posted: a turn that does not ask for the plan proposes none; "Plan this" proposes it from the triage, which does not
+    // start, and only once.
     await backend.proposalsApprove(answers.id);
     await ask(id, "a3", "where do we stand?");
+    expect(backend.proposals.list({ workstream: id }).some(planDraft)).toBe(false);
+    await ask(id, "a3b", "Plan this");
     const plans = backend.proposals.list({ workstream: id }).filter(planDraft);
     expect(plans).toHaveLength(1);
     expect(plans[0].intent.type === "startRun" && plans[0].intent.spec).toMatchObject({ kind: "plan", workstream: id });

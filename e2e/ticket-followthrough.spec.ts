@@ -162,7 +162,7 @@ test.describe("G13: Pip speaks up when a workstream opens on a vague ticket", ()
     const draft = needsPane(page).getByRole("article", { name: `Comment on ${VAGUE}` });
     await expect(draft.locator('[data-created-by="gossamr"]')).toHaveText("Drafted by Gossamr");
     await expect(draft).toContainText("@Mette Lund");
-    await expect(draft).toContainText("A few things need clearing up before work on this starts");
+    await expect(draft).toContainText("A few things need clearing up to make this ticket clear to work on");
     for (const q of ["What is the goal?", "What has to be true for this to be done (the acceptance criteria)?", "What is in scope, and what is out?", "Who asked for it, and who is waiting on it?"]) await expect(draft).toContainText(q);
     expect((await actions(page, "clarity_asked")).map((e) => e.actor)).toEqual(["person"]);
     // Not waiting yet: the comment has not been posted.
@@ -407,8 +407,12 @@ test.describe("G15: the person's answers go to Jira as a comment", () => {
     const posted = (await jiraWrites(page))[0].text ?? "";
     expect(posted).toContain("Answer: Done means the winback mail goes to lapsed customers.");
     expect(posted).not.toMatch(/Drafted|your reply|Pip/);
-    // Pip's next turn proposes the plan, which does not start by itself.
+    // A turn that does not ask for the plan proposes none; "Plan this" does, and the plan does not start by itself.
     await askPip(page, "where do we stand?");
+    await homeSettled(page);
+    await expect(homeConversationRegion(page)).not.toContainText("Your answers are posted");
+    expect(await newest(page, "plan")).toBeNull();
+    await askPip(page, "Plan this");
     await homeSettled(page);
     await expect(homeConversationRegion(page)).toContainText("Your answers are posted");
     expect(await newest(page, "plan")).toBeNull();

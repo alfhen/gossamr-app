@@ -63,7 +63,7 @@ describe("the comment to the reporter", () => {
 
   it("is the same words Rust drafts (reporter_comment in src-tauri/src/inbox/workstreams.rs)", () => {
     expect(reporterComment("Kim Ode", questions)).toBe(
-      "Hi @Kim Ode,\n\nA few things need clearing up before work on this starts:\n\n- What does done look like?\n- Who is waiting on it?\n\nCould you answer them here on the ticket? Thanks.",
+      "Hi @Kim Ode,\n\nA few things need clearing up to make this ticket clear to work on:\n\n- What does done look like?\n- Who is waiting on it?\n\nCould you answer them here on the ticket? Thanks.",
     );
     const none = reporterComment(null, []);
     expect(none.startsWith("Hi,\n")).toBe(true);
@@ -81,7 +81,7 @@ describe("the comment to the reporter", () => {
   it("leaves the ticket key out and says in one line why the questions are asked (G21), in a neutral voice", () => {
     for (const text of [reporterComment("Kim Ode", questions), reporterComment("Kim Ode", questions, true), reporterComment(null, [])]) {
       expect(text).not.toMatch(/CA-\d|\b(we|I|runs?|workstreams?|Pip|Gossamr)\b/);
-      expect(text).toMatch(/before work on this starts/);
+      expect(text).toMatch(/to make this ticket clear to work on/);
     }
   });
 
@@ -91,7 +91,7 @@ describe("the comment to the reporter", () => {
 
   it("thanks the reporter and says what is still open once they have replied, the same words Rust drafts", () => {
     const again = reporterComment("Kim Ode", questions, true);
-    expect(again).toBe("Hi @Kim Ode,\n\nThanks for your answer above. A few things are still open before work on this starts:\n\n- What does done look like?\n- Who is waiting on it?\n\nCould you answer these here on the ticket? Thanks.");
+    expect(again).toBe("Hi @Kim Ode,\n\nThanks for your answer above. A few things are still open to make this ticket clear to work on:\n\n- What does done look like?\n- Who is waiting on it?\n\nCould you answer these here on the ticket? Thanks.");
     expect(again).not.toBe(reporterComment("Kim Ode", questions));
   });
 

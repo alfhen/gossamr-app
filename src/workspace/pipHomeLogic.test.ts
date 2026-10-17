@@ -252,6 +252,10 @@ describe("drafts by step", () => {
     // The same words on another ticket are another comment.
     const elsewhere = draft("d", { ...text("Looks good to me."), item: { connectionId: "c", externalId: "CA-402", key: "CA-402" } } as Intent, 2);
     expect(batchable([first, elsewhere]).map((p) => p.id)).toEqual(["a", "d"]);
+    // When the first of the two is edited, the second is no longer a repeat of anything in the batch (CodeRabbit on #182).
+    setLiveDraft("a", { edited: true, risky: false });
+    expect(batchable([first, same, other]).map((p) => p.id)).toEqual(["b", "c"]);
+    setLiveDraft("a", null);
   });
 
   it("leave out the questions to a reporter and Pip's comment with the person's answers, which are read and approved on their own", () => {
