@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { agentsSettled, needsPane, openApp, openPipHome, pipHome, startWorkstream, workstreamRow } from "./support/app";
+import { agentsSettled, askRun, expandNeedsYou, mockRuns, needRow, needsPane, openApp, openPipHome, pipHome, startWorkstream, workstreamRow } from "./support/app";
 
 // Fixes from the eighteenth dogfood round: 'start CA-408' in the palette offers the workstream, not only Ask Pip (G8).
 
@@ -45,5 +45,21 @@ test.describe("a skip announces once (G6)", () => {
     await expect(page.locator("[data-needs-advanced]")).toContainText(/^Skipped: .*Now:/);
     await expect(page.locator("[data-toast]").getByRole("button", { name: /^Undo/ })).toBeVisible();
     await expect(page.locator("[data-toast-status]")).toHaveText("");
+  });
+});
+
+test.describe("a typed answer to an agent's question (G1)", () => {
+  test("is not carried over to a new question the run asks while its box is open", async ({ page }) => {
+    await openApp(page);
+    await openPipHome(page);
+    await expandNeedsYou(page);
+    await needRow(page, /CA-409.*asks a question/).click();
+    const box = needsPane(page).getByRole("textbox", { name: "Your answer" });
+    await box.fill("Yes, keep the old rounding.");
+    const run = (await mockRuns(page)).find((r) => r.key === "CA-409" && r.state === "needsAnswer");
+    expect(run).toBeTruthy();
+    await askRun(page, run!.id, "Which currency should refunds use?");
+    await expect(needsPane(page)).toContainText("Which currency should refunds use?");
+    await expect(box).toHaveValue("");
   });
 });

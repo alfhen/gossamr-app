@@ -71,9 +71,21 @@ describe("skipping a draft", () => {
     await useWorkspace.getState().refreshProposals();
     await useWorkspace.getState().skip(a.id);
     expect(useToasts.getState().toasts[0].spoken).toBeUndefined();
+    useTabs.getState().setRoute("pip");
     usePipHome.getState().decide(`draft:${b.id}`, ws.id);
     await useWorkspace.getState().skip(b.id);
     expect(useToasts.getState().toasts.find((t) => t.text.includes("Other"))?.spoken).toBe(false);
+    useTabs.getState().setRoute("workspace");
+  });
+
+  it("speaks the skip away from Pip, even if Pip was last deciding that draft (the pane isn't there to say it)", async () => {
+    const ws = await backend.workstreamsOpen(CA401);
+    const p = backend.proposals.draft(comment, null, "r1", ws.id);
+    await useWorkspace.getState().refreshProposals();
+    useTabs.getState().setRoute("workspace");
+    usePipHome.getState().decide(`draft:${p.id}`, ws.id);
+    await useWorkspace.getState().skip(p.id);
+    expect(useToasts.getState().toasts[0].spoken).toBeUndefined();
   });
 
   it("names an edited draft by what the person typed, not by its stored text, still masked", async () => {

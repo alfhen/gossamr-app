@@ -328,7 +328,7 @@ function PermissionBody({ run }: { run: Run }) {
 function AnswerBody({ run }: { run: Run }) {
   const answering = useRuns((s) => s.answering.has(run.id));
   const store = useRuns.getState();
-  return <RunAnswer key={run.id} run={run} answering={answering} on={{ answer: (text) => void store.answer(run.id, text), attach: () => void store.attach(run.id) }} />;
+  return <RunAnswer key={run.id} run={run} answering={answering} on={{ answer: (text) => store.answer(run.id, text), attach: () => void store.attach(run.id) }} />;
 }
 
 function Dismiss({ run }: { run: Run }) {
