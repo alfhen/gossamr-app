@@ -196,7 +196,9 @@ export type WorkBlock =
   | { type: "list"; ordered: boolean; items: WorkBlock[][] }
   | { type: "quote"; content: WorkBlock[] }
   | { type: "code"; language: string | null; text: string }
-  | { type: "rule" };
+  | { type: "rule" }
+  /** A collapsible section (Jira's expand): readers see the title, agents get the content in full. */
+  | { type: "expand"; title: string; content: WorkBlock[] };
 
 export interface WorkDoc {
   blocks: WorkBlock[];

@@ -73,7 +73,7 @@ export function docMentions(doc: WorkDoc): Mention[] {
     if (block.type === "paragraph" || block.type === "heading") {
       for (const i of block.content) if (i.type === "mention") found.set(i.person.accountId, { accountId: i.person.accountId, name: i.name });
     } else if (block.type === "list") block.items.forEach((item) => item.forEach(visit));
-    else if (block.type === "quote") block.content.forEach(visit);
+    else if (block.type === "quote" || block.type === "expand") block.content.forEach(visit);
   };
   doc.blocks.forEach(visit);
   return [...found.values()];

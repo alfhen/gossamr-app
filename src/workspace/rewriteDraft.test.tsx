@@ -152,6 +152,15 @@ describe("a description edit draft", () => {
     expect(html).toContain("Description: 4 lines added, 2 removed");
     expect(html).toContain("Review on DEVOPS-471 →");
   });
+
+  it("diffs inside an expand line by line, so a changed plan is readable", () => {
+    const wrap = (step: string) => `<details>\n<summary>Gossamr Plan</summary>\n\n${step}\n\n</details>`;
+    const body = bodyChange(docFromMarkdown(wrap("Step one")), wrap("Step one, reworded"));
+    const i = intent({ title: null, body });
+    const html = renderToStaticMarkup(<RewriteView intent={i} title="" body={body.toText} editing={false} onTitle={vi.fn()} onBody={vi.fn()} />);
+    expect(lines(html, "del")).toEqual(["Step one"]);
+    expect(lines(html, "add")).toEqual(["Step one, reworded"]);
+  });
 });
 
 describe("what the person's edit sends", () => {

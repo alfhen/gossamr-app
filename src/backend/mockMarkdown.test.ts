@@ -57,3 +57,23 @@ describe("the sample build's Markdown", () => {
     expect([change.fromText, change.toText]).toEqual(["old", "## New\n\n- a"]);
   });
 });
+
+describe("collapsible sections", () => {
+  const text = "Intro\n\n<details>\n<summary>Gossamr Plan</summary>\n\n## Steps\n\n- one\n\n```\n</details>\n```\n\n<details>\n<summary>Inner &amp; more</summary>\n\ndeep\n\n</details>\n\n</details>\n\nAfter";
+
+  it("reads <details> into an expand, keeps nesting and fenced tags, and writes the same text back", () => {
+    const doc = docFromMarkdown(text);
+    expect(doc.blocks.map((b) => b.type)).toEqual(["paragraph", "expand", "paragraph"]);
+    const expand = doc.blocks[1];
+    if (expand.type !== "expand") throw new Error("expand expected");
+    expect(expand.title).toBe("Gossamr Plan");
+    expect(expand.content.map((b) => b.type)).toEqual(["heading", "list", "code", "expand"]);
+    expect(markdownOf(doc)).toBe(text);
+  });
+
+  it("shows an expand's lines in a description change", () => {
+    const change = bodyChange(docFromMarkdown(text), text.replace("deep", "deeper"));
+    expect(change.fromText).toContain("<summary>Gossamr Plan</summary>");
+    expect(change.toText).toContain("deeper");
+  });
+});

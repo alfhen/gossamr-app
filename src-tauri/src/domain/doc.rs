@@ -22,6 +22,8 @@ pub enum Block {
     Quote { content: Vec<Block> },
     Code { language: Option<String>, text: String },
     Rule,
+    /// A collapsible section: Jira's expand. Readers see the title; agents and plain text get everything.
+    Expand { title: String, content: Vec<Block> },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -135,6 +137,13 @@ fn push_blocks(blocks: &[Block], out: &mut String) {
                 out.push('\n');
             }
             Block::Rule => {}
+            Block::Expand { title, content } => {
+                if !title.is_empty() {
+                    out.push_str(title);
+                    out.push('\n');
+                }
+                push_blocks(content, out);
+            }
         }
     }
 }
@@ -171,6 +180,21 @@ mod tests {
                 Inline::LineBreak => "break",
             })
             .collect()
+    }
+
+    #[test]
+    fn plain_text_of_an_expand_holds_the_title_and_everything_inside() {
+        let doc = Doc {
+            blocks: vec![
+                Doc::paragraph("Before").blocks.remove(0),
+                Block::Expand { title: "Details".into(), content: Doc::from_text("Hidden one\n\nHidden two", &[]).blocks },
+            ],
+        };
+        assert_eq!(doc.plain_text(), "Before\nDetails\nHidden one\nHidden two");
+        let json = serde_json::to_value(&doc.blocks[1]).unwrap();
+        assert_eq!(json["type"], "expand");
+        assert_eq!(json["title"], "Details");
+        assert_eq!(json["content"][0]["type"], "paragraph");
     }
 
     #[test]
