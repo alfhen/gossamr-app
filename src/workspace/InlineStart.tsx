@@ -365,9 +365,12 @@ export function InlineStartView({ id, entry, on }: { id: string; entry: InlineEn
         </p>
       )}
       {/* The plain version first; the exact words, flags and checks follow for whoever wants them. */}
-      <p data-start-summary className="m-0 text-ws-ink">
-        {review?.readOnly ? "This agent only reads the code; it can't change anything." : "This agent can change code, in its own copy of the repository and not in your own."} Read what it will be told, then press Start agent. Nothing runs before that.
-      </p>
+      {/* Only once the review is in: while it loads or after it failed, what the agent may do isn't known yet. */}
+      {review && (
+        <p data-start-summary className="m-0 text-ws-ink">
+          {review.readOnly ? "This agent only reads the code; it can't change anything." : "This agent can change code, in its own copy of the repository and not in your own."} Read what it will be told, then press Start agent. Nothing runs before that.
+        </p>
+      )}
       <WhatAgentsCanDo readOnly={review?.readOnly} />
       {review ? (
         <>

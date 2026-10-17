@@ -205,7 +205,7 @@ export function TurnView({ turn, proposals, afterQueued = false }: { turn: Turn;
       )}
       <div data-user-bubble className="max-w-[85%] justify-self-end rounded-[14px_14px_4px_14px] bg-ws-accent px-3 py-1.5 whitespace-pre-wrap text-white [overflow-wrap:anywhere]">
         {maskSecrets(turn.shown ?? turn.prompt)}
-        {turn.quote && <blockquote className="m-0 mt-1 line-clamp-2 border-l-2 border-white/50 pl-2 text-sm text-white/85">{turn.quote}</blockquote>}
+        {turn.quote && <blockquote className="m-0 mt-1 line-clamp-2 border-l-2 border-white/50 pl-2 text-sm text-white/85">{maskSecrets(turn.quote)}</blockquote>}
       </div>
       {turn.status === "queued" && (
         <div className="flex items-center justify-end gap-1.5 text-sm text-ws-ink3">

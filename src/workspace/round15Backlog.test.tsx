@@ -58,6 +58,12 @@ describe("a pasted secret in the app (G16)", () => {
     expect(html).toContain("Thanks. Password: hu… Please retry.");
   });
 
+  it("is masked in the quote the person's bubble shows too", () => {
+    const html = renderToStaticMarkup(<TurnView turn={turn({ prompt: "About this", quote: `token = ${SECRET}` })} proposals={[]} />);
+    expect(html).not.toContain(SECRET);
+    expect(html).toContain("token = hu…");
+  });
+
   it("is masked in a reply the preview shows for an agent's question, but not on the card being edited", () => {
     const reply = draft("d2", "x", { intent: { type: "runAnswer", runId: "r1", message: `The password is ${SECRET}`, question: "Which password?" } as Proposal["intent"] });
     expect(renderToStaticMarkup(<TurnView turn={turn({ prompt: "ok" })} proposals={[reply]} />)).not.toContain(SECRET);
@@ -83,6 +89,21 @@ describe("the note that the reporter is waited on (G23)", () => {
     expect(useToasts.getState().toasts).toHaveLength(1);
     useWorkstreams.setState({ list: [view(true)] });
     expect(useToasts.getState().toasts).toHaveLength(0);
+  });
+
+  it("stops watching once the toast has gone by itself", () => {
+    useWorkstreams.setState({ list: [view(false)] });
+    const subscribe = useWorkstreams.subscribe;
+    const unsubscribed = vi.fn();
+    vi.spyOn(useWorkstreams, "subscribe").mockImplementation((listener) => {
+      const off = subscribe(listener);
+      return () => (unsubscribed(), off());
+    });
+    pushWaitToast("CA-408 now waits on the reporter; nothing starts on its own.", "ws-1");
+    expect(unsubscribed).not.toHaveBeenCalled();
+    // The toast's own timer (or anything else) takes it away: the watch on the workstreams goes with it.
+    useToasts.getState().clear();
+    expect(unsubscribed).toHaveBeenCalled();
   });
 });
 
@@ -127,6 +148,9 @@ describe("the step rail's batch (G26)", () => {
     const html = renderToStaticMarkup(<StepDrafts step="pip" drafts={[draft("b1", "One"), answers("b3")]} approve={vi.fn()} />);
     expect(html).toContain("Not in the batch: drafts from your reply are read on their own.");
     expect(html).not.toContain("Approve 1 of");
+    // While the batch is being confirmed the note stays, so the person sees what it leaves out as they decide (CodeRabbit on #181).
+    const confirming = renderToStaticMarkup(<StepDrafts step="pip" drafts={[draft("b1", "One"), draft("b2", "Two"), answers("b3")]} approve={vi.fn()} initialConfirming />);
+    expect(confirming).toContain("data-batch-aside");
   });
 });
 

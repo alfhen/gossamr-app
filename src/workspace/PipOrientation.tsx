@@ -12,7 +12,7 @@ export const ORIENTATION_TERMS: readonly { term: string; text: string }[] = [
   { term: "Intake", text: "The first stage of a workstream, before there is a plan." },
   { term: "Triage", text: "The step that reads the ticket and says whether it is clear enough to plan. Nothing is changed." },
   { term: "Plan", text: "The step that reads the code and writes what to build. Approving the plan is what lets a Build start." },
-  { term: "Build", text: "The step that changes code, in its own worktree, and opens a draft pull request." },
+  { term: "Build", text: "The step that changes code, in its own worktree. With Pushing ticked, as it is by default, it is asked to open a draft pull request." },
   { term: "Review", text: "Three things share the word: the Review step, where an agent checks a Build's changes; a review draft, whose comments go to GitHub only when you approve it; and Review on a draft's button, which opens it to read before you decide." },
   { term: "Pushing", text: "A setting on a Build: when it is ticked, the Build's prompt asks it to push its own branch to a draft pull request. It is a request, not a lock." },
   { term: "Held", text: "A workstream with no automatic steps and no Pip wakes: you held it, or something made it stop, such as its steps being used up. Resume lifts it." },
