@@ -1277,8 +1277,9 @@ impl Core {
         let item = Core::item(scope, &key);
         let reporter = self.ticket_for_pip(scope, &key).await.ok().and_then(|(t, _)| t.reporter);
         let people: Vec<_> = reporter.iter().map(|p| (crate::domain::PersonRef { connection_id: item.connection_id.clone(), account_id: p.account_id.clone() }, p.name.clone())).collect();
-        // The questions still open are the ones of the newest ask on the ticket, as the person left them.
-        let open = self.proposals(&ProposalQuery { workstream: Some(id.to_string()), ..Default::default() }).await?.iter().filter(|p| proposals::is_reporter_questions(p)).max_by_key(|p| p.created_at).and_then(|p| match &p.intent {
+        // The questions still open are the ones of the newest ask the reporter got, as the person posted it: an ask still
+        // pending or skipped never reached them.
+        let open = self.proposals(&ProposalQuery { workstream: Some(id.to_string()), states: Some(vec![StateKind::Applied]), ..Default::default() }).await?.iter().filter(|p| proposals::is_reporter_questions(p)).max_by_key(|p| p.created_at).and_then(|p| match &p.intent {
             Intent::Comment { body, .. } => Some(asked_questions(&body.plain_text())),
             _ => None,
         });
@@ -2490,6 +2491,26 @@ mod tests {
             fx.core.approve_proposal(&nudge.id).await.unwrap();
             assert!(fx.core.workstream(&fx.scope, &ws.id).await.unwrap().unwrap().waiting_on_reporter.is_some_and(|w| Utc::now() - w.since < chrono::Duration::days(1)));
             assert!(matches!(fx.core.nudge_reporter(&fx.scope, &ws.id).await.unwrap_err(), Error::Proposal(why) if why == NUDGE_GONE));
+        }
+
+        #[tokio::test]
+        async fn the_nudge_lists_the_questions_of_the_newest_posted_ask_not_one_still_pending() {
+            let fx = fixture().await;
+            let ws = fx.core.open_workstream(&fx.scope, Some(fx.item("CA-1")), None).await.unwrap();
+            let asked = fx.core.ask_reporter_now(&fx.scope, &ws.id, &[]).await.unwrap();
+            fx.core.approve_proposal(&asked.id).await.unwrap();
+            let old = Utc::now() - chrono::Duration::days(3);
+            fx.core.record_workstream_event(&fx.scope, WorkstreamEvent::new(&ws.id, Actor::Person, "clarity_asked", old).proposal("earlier")).await.unwrap();
+            fx.core.record_workstream_event(&fx.scope, WorkstreamEvent::new(&ws.id, Actor::Person, "draft_approved", old).proposal("earlier")).await.unwrap();
+            // A newer ask the person left as a draft never reached the reporter, so the nudge does not ask about it.
+            let body = crate::tracker::comment_doc("Hi,\n\n- Is this still a draft?\n\nThanks.", &[]);
+            let draft = proposals::Draft { origin: Origin::Chat { request_id: format!("clarity:{}", ws.id), workstream: Some(ws.id.clone()) }, created_by: CreatedBy::User, intent: Intent::Comment { item: fx.item("CA-1"), body }, label: Some(READINESS_LABEL.into()), basis: None };
+            let pending = fx.core.propose(&fx.scope, draft).await.unwrap();
+            assert!(proposals::is_reporter_questions(&pending) && pending.state == ProposalState::Pending);
+            let nudge = fx.core.nudge_reporter(&fx.scope, &ws.id).await.expect("three days is long enough");
+            let Intent::Comment { body, .. } = &nudge.intent else { panic!("a comment: {:?}", nudge.intent) };
+            let text = body.plain_text();
+            assert!(text.contains("- What is the goal?") && !text.contains("still a draft"), "{text}");
         }
 
         #[tokio::test]

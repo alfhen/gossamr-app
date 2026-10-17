@@ -32,7 +32,9 @@ test.describe("the ask and the nudge to the reporter (G21, G20)", () => {
     await expect(draft).not.toContainText("A few things about CA-408");
     const asked = (await draft.innerText()).split("\n").filter((l) => /^- /.test(l.trim()) || /^[A-Z].*\?$/.test(l.trim()));
     expect(asked.length).toBeGreaterThan(0);
-    // The ask waited long enough: its approval is dated days back, so the nudge is due.
+    // The ask is posted, and waited long enough: its approval is dated days back, so the nudge is due.
+    await draft.getByRole("button", { name: "Post comment" }).click();
+    await expect.poll(async () => (await jiraWrites(page)).map((w) => [w.type, w.key])).toEqual([["comment", "CA-408"]]);
     const ask = (await workstreamEvents(page)).find((e) => e.action === "clarity_asked")!;
     await seedWorkstreamEvent(page, "CA-408", { actor: "person", action: "draft_approved", at: ago(3), proposalId: (ask as { proposalId?: string | null }).proposalId });
     await page.keyboard.press("Escape");
@@ -42,7 +44,8 @@ test.describe("the ask and the nudge to the reporter (G21, G20)", () => {
     await expect(nudge).toContainText("The earlier questions about CA-408 are still open:");
     await expect(nudge).toContainText("What is the goal?");
     await expect(nudge).not.toContainText(/\b(runs?|workstreams?|Pip|Gossamr)\b.*still open/);
-    expect(await jiraWrites(page)).toEqual([]);
+    // Only the ask went to Jira; the nudge waits for its own Post comment.
+    expect((await jiraWrites(page)).map((w) => w.proposalId)).toEqual([(ask as { proposalId?: string | null }).proposalId]);
   });
 });
 
