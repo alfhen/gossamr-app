@@ -96,8 +96,13 @@ test("a on a draft still asks for Enter, since approving writes to Jira; Undo is
   const card = homeConversationRegion(page).getByRole("article", { name: "Comment on CA-401" });
   await homeComposer(page).press("ArrowUp");
   await expect(card).toBeFocused();
+  // The live region is there, empty, before the confirm, and the confirm fills that same node: a new node would often not be read out.
+  const live = card.locator("[data-key-live]");
+  await expect(live).toHaveText("");
+  await live.evaluate((el) => el.setAttribute("data-seen", "before"));
   await page.keyboard.press("a");
   await expect(card.locator("[data-key-hint]")).toHaveText("↵ approve · any other key cancels");
+  await expect(card.locator('[data-key-live][data-seen="before"]')).toHaveText("↵ approve · any other key cancels");
   expect(await jiraWrites(page)).toEqual([]);
   await page.keyboard.press("Enter");
   await expect.poll(async () => (await jiraWrites(page)).map((w) => w.type)).toEqual(["comment"]);
