@@ -350,7 +350,7 @@ function PushOption({ p }: { p: SetupViewProps }) {
         <span className="grid gap-0.5">
           <b className="font-semibold text-ws-ink">Push its branch and open a draft pull request</b>
           {locked ? (
-            <span className="text-ws-ink2">Builds in a workstream always push their branch and open a draft pull request. The prompt says never mark it ready and never merge it.</span>
+            <span className="text-ws-ink2">Builds in a workstream always ask to push their branch and open a draft pull request, and Pushing can't be turned off here. The prompt says never mark it ready and never merge it.</span>
           ) : (
             <span className="text-ws-ink2">On by default. The prompt tells it to push the branch, open a draft pull request, never mark it ready and never merge it, and to put the link in its note for Jira. Off, the prompt tells it to commit on its own branch and not push.</span>
           )}

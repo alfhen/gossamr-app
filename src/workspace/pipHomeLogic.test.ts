@@ -143,6 +143,16 @@ describe("the step chips", () => {
     expect(chips.every((c) => c.newest === null && c.state === null && c.needsYou === 0)).toBe(true);
   });
 
+  it("read Approved, not Ready to review, once the run's main draft was applied (G17)", () => {
+    const runs = [run("r1", "plan", "done", { queuedAt: iso(50) }), run("r2", "investigate", "done", { queuedAt: iso(55) })];
+    const rewrite = { type: "rewrite", item: ref("CA-401"), part: "description" } as unknown as Intent;
+    const open = stepChips(runs, [], {}, [fromRun("d1", rewrite, "r1")], { now: NOW });
+    expect(chip(open, "plan").state).toBe("Ready to review");
+    const posted = stepChips(runs, [], {}, [fromRun("d1", rewrite, "r1", 5)].map((p) => ({ ...p, state: { type: "applied" } }) as Proposal), { now: NOW });
+    expect(chip(posted, "plan")).toMatchObject({ state: "Approved", tone: "done" });
+    expect(chip(posted, "investigate").state).toBe("Ready to review");
+  });
+
   it("say how the newest run of each stands, how many there were and whether a rule started it", () => {
     const runs = [
       run("r1", "investigate", "done", { queuedAt: iso(50) }),

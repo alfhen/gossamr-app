@@ -6,7 +6,8 @@ import { useWorkspace } from "../workspaceStore";
 import { Icon, KIND_ICON } from "./AgentIcons";
 import { Box, BoxTitle, Btn, CodeBox, Details, MONO_BLOCK, Sec, SheetFrame } from "./AgentSheet";
 import { StateChip, useSlotQueue } from "./AgentParts";
-import { KIND_LABEL, agentGroups, ageText, formatTokens, ordinal, progressText, quietMinutes, quietText, repoName, runTitle, slotPosition, stateView } from "./agentsLogic";
+import { KIND_LABEL, agentGroups, ageText, formatTokens, ordinal, progressText, quietMinutes, quietText, repoName, runTitle, slotPosition } from "./agentsLogic";
+import { useStateView } from "./useStateView";
 import { openTicketByKey } from "./jump";
 import { failureHelp, retryEnabled, type FailureAct } from "./failureHelp";
 import { failureAction } from "./failureActions";
@@ -295,7 +296,7 @@ function BriefBody({ brief, readOnly }: { brief: RunSheetViewProps["brief"]; rea
 
 /** The whole sheet as a function of what it is shown; `RunSheet` loads the data and connects the actions. */
 export function RunSheetView({ run, now, ticketTitle, place, label, wide, onWide, events, disk, brief, confirmStop, outcome, tickets, pickBlocker, waitingBreakdown, drafting, answering, opened, answerSent = false, permissionAnswered = null, cleanup = null, slotPlace = null, stoppedHere = false, on }: RunSheetViewProps) {
-  const view = stateView(run, now);
+  const view = useStateView(run, now);
   const stop = stopControl(run);
   const title = runTitle(run, ticketTitle);
   const attention = ["needsPermission", "needsAnswer", "systemBlocked", "unknown", "failed", "queued"].includes(run.state) || answerable(run);

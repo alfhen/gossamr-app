@@ -3,7 +3,7 @@ import { inWorkstreamPane } from "../lib/proposals";
 import { shortHeld } from "../lib/workstreamHold";
 import { byQueue, REVIEW_POSTED, reviewPosted, STAGE_LABEL } from "../lib/workstreamStage";
 import type { CodeChange, Proposal, ReviewView, Run, RunKind, WorkstreamEvent, WorkstreamView } from "../types";
-import { liveCounts, liveWords, needsPerson, stateView, stoppedAtLimit, type Tone } from "./agentsLogic";
+import { liveCounts, liveWords, needsPerson, runApproved, stateView, stoppedAtLimit, type Tone } from "./agentsLogic";
 import { keptEditsOfDraft } from "./DraftCard";
 import { liveDraft } from "./draftLive";
 import { shownVerdict, verdictChip } from "./runSheetLogic";
@@ -172,7 +172,7 @@ export function stepChips(runs: readonly Run[], events: readonly (Pick<Workstrea
   return STEP_KINDS.map((kind) => {
     const own = runs.filter((r) => r.spec.kind === kind).sort(byQueue);
     const newest = own[own.length - 1] ?? null;
-    const view = newest ? stateView(newest, now) : null;
+    const view = newest ? stateView(newest, now, runApproved(newest, proposals)) : null;
     const waiting = kind === "build" && !!waitingForPr && newest?.state === "done";
     const review = kind === "review" && newest ? shownVerdict(newest, verdicts) : null;
     const ids = new Set(own.map((r) => r.id));

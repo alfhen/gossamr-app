@@ -30,7 +30,7 @@ import { nudgeOffered } from "../lib/reporterWait";
 import { useWorkspace } from "../workspaceStore";
 import { NeedsPane, paneStop } from "./NeedsPane";
 import { StartMyDayCard } from "./StartMyDay";
-import { arm, confirmArmed, disarm, groupId, keyPlan, openNeed, setPaneIntent } from "./needsActions";
+import { arm, confirmArmed, disarm, groupId, keyPlan, openNeed, sayOpenNote, setPaneIntent } from "./needsActions";
 import { undoLatest } from "./undo";
 import { liveCounts } from "./agentsLogic";
 import { composerFooter, landingSelection } from "./pipHomeLogic";
@@ -44,7 +44,7 @@ import { StepRail } from "./StepRail";
 import { useNow } from "./AgentsView";
 import { pipHomeHints } from "./footerHints";
 import { ShortcutHint } from "./ShortcutHint";
-import { PipOrientation } from "./PipOrientation";
+import { ORIENTATION_WORDS, PipOrientation } from "./PipOrientation";
 import { DecisionShownContext, decisionShown } from "./decisionShown";
 
 const PIP_HOME_HINTS = pipHomeHints();
@@ -659,6 +659,7 @@ function usePipHomeKeys(needsYou: readonly Need[]) {
           if (plan.type === "ask") return setPaneIntent(null), inPane && backToRow(need), arm(need, plan);
           // Skipping or dismissing acts at once and offers Undo; the row keeps the keyboard, or hands it on as it leaves.
           if (plan.type === "do") return setPaneIntent(null), plan.run();
+          sayOpenNote(plan);
           return openNeed(need, { edit: plan.edit });
         }
         case "undo": {
@@ -749,6 +750,9 @@ export function PipHome() {
   const nudgeDue = useMemo(() => new Set(openList.filter((v) => nudgeOffered(v.waitingOnReporter, new Date(now), Object.values(proposals), v.workstream.id)).map((v) => v.workstream.id)), [openList, proposals, now]);
   const footer = useMemo(() => composerFooter(runs, needsYou.length, now), [runs, needsYou.length, now]);
   const orientationSeen = usePrefs((s) => s.pipOrientationSeen);
+  // Once Got it is pressed the card is gone for good; the words stay one button away in the header, which brings the card back for now.
+  const [wordsOpen, setWordsOpen] = useState(false);
+  const wordsLink = useRef<HTMLButtonElement>(null);
   // The footer names the list's own keys while the keyboard is on one of its rows.
   const [onNeed, setOnNeed] = useState(false);
   // And the timeline's while it is on one of its entries.
@@ -792,8 +796,14 @@ export function PipHome() {
       <header className="flex shrink-0 items-baseline gap-3 border-b border-ws-sep bg-ws-bar px-4 py-2">
         <h1 className="m-0 text-base font-semibold">Pip home</h1>
         <span className="min-w-0 truncate text-sm text-ws-ink3">What needs you, your workstreams, and what Pip and its agents are doing</span>
+        {orientationSeen && (
+          <button ref={wordsLink} type="button" data-orientation-link aria-expanded={wordsOpen} onClick={() => setWordsOpen(!wordsOpen)} className="ml-auto shrink-0 rounded-md px-2 text-sm text-ws-ink2 underline decoration-ws-sep2 underline-offset-2 hover:bg-ws-hover focus-visible:outline-2 focus-visible:outline-ws-pip">
+            {ORIENTATION_WORDS}
+          </button>
+        )}
       </header>
       {!orientationSeen && <PipOrientation compact={planOpen} />}
+      {orientationSeen && wordsOpen && <PipOrientation open compact={planOpen} onDismiss={() => (setWordsOpen(false), wordsLink.current?.focus())} />}
       <div className="grid min-h-0 flex-1 grid-cols-[minmax(260px,340px)_minmax(0,1fr)] grid-rows-[minmax(0,1fr)_auto] overflow-hidden min-[1100px]:grid-cols-[minmax(280px,340px)_minmax(0,1fr)_minmax(240px,320px)] min-[1100px]:grid-rows-[minmax(0,1fr)]">
         <div data-pip-home-column="list" onFocusCapture={enter("list")} className="contents">
           {/* The left column: Needs you takes the height, the workstreams are a compact section under it. */}

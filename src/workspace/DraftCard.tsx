@@ -258,12 +258,12 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
   const key = targetOf(intent)?.key ?? "";
   const stored = intent.type === "comment" ? docText(intent.body) : "";
   const linked = useMemo(() => autoLink(stored, people), [stored, people]);
-  // A card that comes back after Skip (Undo) starts from what was typed in it, in edit mode.
+  // A card that comes back after Skip (Undo) starts from what was typed in it, shown as a preview with Edit beside it.
   const [kept] = useState(() => keptEditsOfDraft(p.id));
   useEffect(() => settleKeptEdits(p.id, p.state.type), [p.id, p.state.type]);
   const [body, setBody] = useState(kept?.body?.text ?? linked.text);
   const [mentions, setMentions] = useState<Mention[]>(kept?.body?.mentions ?? linked.mentions);
-  const [editing, setEditing] = useState(!!kept);
+  const [editing, setEditing] = useState(false);
   const edited = useRef(!!kept?.body);
   const rewrite = intent.type === "rewrite" ? intent : null;
   const startsBuild = useApprovalStartsBuild(p);
@@ -501,6 +501,8 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
                 ? `Update ${rewriteWhat(rewrite)}`
                 : "Apply";
 
+  // A move whose button reads only the status it goes to ("QA") says the verb to a screen reader; a label that is already a phrase is left alone.
+  const moveName = intent.type === "transition" && p.label && statusName && p.label.trim().toLowerCase() === statusName.toLowerCase() ? `Move to ${p.label.trim()}` : undefined;
   const Title = headingLevel === 4 ? "h4" : "h3";
   const titleId = useId();
   return (
@@ -828,7 +830,7 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
                   </button>
                 )}
                 {(intent.type === "comment" || rewrite) && (
-                  <button type="button" data-draft-edit disabled={working} onClick={() => setEditing(!editing)} className={button}>
+                  <button type="button" data-draft-edit disabled={working} onClick={() => (editing ? setEditing(false) : (setEditing(true), focusField("textarea, input:not([type]), input[type=text]")))} className={button}>
                     {editing ? "Done editing" : "Edit"}
                   </button>
                 )}
@@ -852,7 +854,7 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
                 )}
                 {/* While the pause shows, its own Post anyway stands in for this button, beside Keep editing. */}
                 {!runDraft && !followUp && !reply && !pause && (
-                  <button type="button" disabled={working || state === "applying" || (intent.type === "comment" && !body.trim()) || (intent.type === "subtasks" && remaining === 0) || rewriteBlock} onClick={approve} className={primary}>
+                  <button type="button" disabled={working || state === "applying" || (intent.type === "comment" && !body.trim()) || (intent.type === "subtasks" && remaining === 0) || rewriteBlock} aria-label={working || state === "applying" ? undefined : moveName} onClick={approve} className={primary}>
                     {working || state === "applying" ? "Working…" : action}
                   </button>
                 )}

@@ -26,7 +26,7 @@ describe("what the app says it does on GitHub (G5, G6)", () => {
       expect(text).toContain(BUILD_ON_GITHUB);
       expect(text).not.toContain("is told to push");
     }
-    // As the safety sheet says it: runs as the person, only when Pushing is ticked, a request and not a lock.
+    // As the safety sheet says it: runs as the person, always in a workstream and otherwise when Pushing is ticked, a request and not a lock.
     expect(BUILD_ON_GITHUB).toContain("runs as you");
     expect(BUILD_ON_GITHUB).toContain("when Pushing is ticked");
     expect(BUILD_ON_GITHUB).toContain("That is a request, not a lock");

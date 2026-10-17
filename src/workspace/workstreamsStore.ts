@@ -444,7 +444,8 @@ export const useWorkstreams = create<WorkstreamsState>()((set, get) => {
       if (!view?.clarity || !key) return stale();
       const project = projectOfKey(key);
       // What the person said looks fine is what the notice showed them: the gaps not already taught away.
-      const shown = flaggedGaps(view.clarity.gaps, usePrefs.getState().clarityLearning, project);
+      // A Looks fine after the reporter replied answers their reply, not the word check: it teaches nothing.
+      const shown = view.reporterReplied ? [] : flaggedGaps(view.clarity.gaps, usePrefs.getState().clarityLearning, project);
       if (!(await ok("Couldn't dismiss the notice", (b) => b.workstreamsClarityDismiss(id)))) return false;
       const backend = get().backend ?? useWorkspace.getState().backend;
       // The dismissal stands either way: it is the person's answer to this notice and is audited as `clarity_dismissed`.

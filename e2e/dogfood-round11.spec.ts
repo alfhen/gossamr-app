@@ -351,6 +351,6 @@ test.describe("what limits a build on GitHub (G5)", () => {
   test("Pip's intro says it is a request, applies with Pushing ticked, and runs as the person", async ({ page }) => {
     await openApp(page, "runs=empty");
     await openPipHome(page);
-    await expect(pipHome(page).getByRole("region", { name: "Conversation" })).toContainText("a Build runs as you: when Pushing is ticked its prompt asks it to push only its own branch to a draft pull request. That is a request, not a lock; see Agent safety.");
+    await expect(pipHome(page).getByRole("region", { name: "Conversation" })).toContainText("a Build runs as you: its prompt asks it to push only its own branch to a draft pull request, always in a workstream and otherwise when Pushing is ticked. That is a request, not a lock; see Agent safety.");
   });
 });

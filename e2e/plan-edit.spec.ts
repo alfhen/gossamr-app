@@ -19,7 +19,7 @@ async function peekCa401(page: Page) {
 async function buildFromPlan(page: Page) {
   for (let attempt = 0; attempt < 2; attempt++) {
     await peekCa401(page);
-    await peek(page).getByRole("button", { name: /Welcome flow refresh Ready to review/ }).click();
+    await peek(page).getByRole("button", { name: /Welcome flow refresh (Ready to review|Approved)/ }).click();
     await page.getByRole("button", { name: "Build from this plan" }).click();
     const safety = page.getByRole("dialog", { name: "Agents safety and settings" });
     await expect(setup(page).or(safety)).toBeVisible();

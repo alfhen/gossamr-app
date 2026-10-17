@@ -4,7 +4,8 @@ import { labelsByRun } from "../lib/workstreamStage";
 import { AutoStarted, ReadOnlyBadge, RunLabel } from "./AgentCard";
 import { useWorkspace } from "../workspaceStore";
 import { useAgentsEnabled } from "./agentsFlag";
-import { runTitle, stateView, waitsForSlot } from "./agentsLogic";
+import { runTitle, waitsForSlot } from "./agentsLogic";
+import { useStateView } from "./useStateView";
 import { Dot, RowText, TONE } from "./AgentParts";
 import { STRIP_SHOWN, stripRuns } from "./pipRuns";
 import { useRuns } from "./runsStore";
@@ -24,7 +25,7 @@ interface CardProps {
 
 /** A run in Pip's pane: its state, what it is doing, and a way into the run's sheet. */
 export function PipRunCard({ run, now, ticketTitle, label, onOpen, focusable = false }: CardProps) {
-  const view = stateView(run, now);
+  const view = useStateView(run, now);
   const tone = TONE[view.tone];
   const title = runTitle(run, ticketTitle);
   return (

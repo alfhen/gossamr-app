@@ -44,6 +44,9 @@ export const inputName = (placeholder: string) => (placeholder === DEFAULT_PLACE
 /** The footer line of "Start a workstream": what picking a ticket there does and does not do. */
 export const START_WORKSTREAM_NOTE = "Opens a workstream; starts no agent and posts nothing.";
 
+/** Above the list in "Start a workstream" until something is typed: the list is only some of the tickets, and typing narrows it to others. */
+export const START_WORKSTREAM_HINT = "Only some tickets are listed. Type a key or words to find others.";
+
 /**
  * Where the keyboard goes when the palette closes: back to what had it, else the main area. Left alone when it already
  * moved on to something on the page (a view the pick opened took it), which this would otherwise take back.
@@ -62,6 +65,7 @@ export function PaletteView({
   empty,
   hints = ["↑↓ move", "↵ select", "esc close"],
   note,
+  lead,
   onQuery,
   onActive,
   onRun,
@@ -77,6 +81,8 @@ export function PaletteView({
   hints?: string[];
   /** A line under the list, above the key hints: what picking a result does. */
   note?: string;
+  /** A line between the input and the list. */
+  lead?: string;
   onQuery(q: string): void;
   onActive(i: number): void;
   onRun(c: Command): void;
@@ -125,6 +131,11 @@ export function PaletteView({
           onChange={(ev) => onQuery(ev.target.value)}
           className="w-full border-b border-ws-sep bg-transparent px-4 py-3.5 text-[15px] outline-none placeholder:text-ws-ink3"
         />
+        {lead && (
+          <p data-palette-lead className="m-0 border-b border-ws-sep px-3.5 py-1.5 text-xs text-ws-ink3">
+            {lead}
+          </p>
+        )}
         <ul id="palette-list" role="listbox" aria-label="Results" className="m-0 max-h-[min(380px,50vh)] list-none overflow-auto p-1.5">
           {results.map((c, i) => (
             <Fragment key={c.id}>
@@ -442,6 +453,7 @@ export function Palette() {
       empty={step.type === "title" ? "Type a title, then press Enter. Pip drafts it; you approve it." : step.type === "workstream" ? noStartableTicket(Object.values(items), query, workstreams, looked?.key === ticketKeyOf(query) ? looked.item : null) : undefined}
       hints={prompting ? ["↑↓ move", "↵ select", "esc back"] : undefined}
       note={step.type === "workstream" ? START_WORKSTREAM_NOTE : undefined}
+      lead={step.type === "workstream" && !query.trim() ? START_WORKSTREAM_HINT : undefined}
       onQuery={(q) => (setQuery(q), setActive(0))}
       onActive={setActive}
       onRun={(c) => (c.stay ? c.run() : (close(false), c.run()))}

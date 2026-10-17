@@ -294,7 +294,7 @@ test.describe("agent intro continues (D1, D25)", () => {
   test("Pip's intro says nothing is posted to Jira until the person approves", async ({ page }) => {
     await openApp(page);
     await openPip(page);
-    await expect(pipPane(page)).toContainText("Nothing is posted to Jira until you approve it. On GitHub, a Build runs as you: when Pushing is ticked its prompt asks it to push only its own branch to a draft pull request. That is a request, not a lock; see Agent safety.");
+    await expect(pipPane(page)).toContainText("Nothing is posted to Jira until you approve it. On GitHub, a Build runs as you: its prompt asks it to push only its own branch to a draft pull request, always in a workstream and otherwise when Pushing is ticked. That is a request, not a lock; see Agent safety.");
     await expect(pipPane(page)).not.toContainText("Nothing changes until you approve");
   });
 });
