@@ -20,6 +20,7 @@ import { focusPeekDraft } from "./peekDrafts";
 import { plainMarkdown } from "../lib/markdown";
 import { maskSecrets } from "../lib/riskyText";
 import { useTabs } from "./tabsStore";
+import { KeyHint } from "./KeyHint";
 import { RetiredDraft } from "./RetiredDraft";
 import { NOT_WAITING, useAnswerRun, type AnswerRun } from "./runAnswer";
 
@@ -357,11 +358,7 @@ function DraftPreviewCard({ proposal: p, statusName, targetTitle, pass, answer =
           </p>
         )}
       </section>
-      {armed && (
-        <p ref={hint} aria-live={asking ? "polite" : undefined} data-key-hint className={`${KEY_HINT} ${asking ? "bg-ws-pip-soft font-semibold text-ws-pip" : "bg-ws-win text-ws-ink3"}`}>
-          {draftKeyHint(p, asking, canApprove)}
-        </p>
-      )}
+      {armed && <KeyHint hintRef={hint} hint={draftKeyHint(p, asking, canApprove)} asking={!!asking} className={`${KEY_HINT} ${asking ? "bg-ws-pip-soft font-semibold text-ws-pip" : "bg-ws-win text-ws-ink3"}`} />}
     </article>
   );
 }

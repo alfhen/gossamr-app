@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Intent, Proposal, RunKind, RunSpec } from "../types";
-import { answersProvenance, ANSWERS_COMMENT_LABEL, isReporterFollowUp, answersSupersession, READINESS_COMMENT_LABEL, draftsForTurn, earlierDrafts, inWorkstreamPane, isAnswersDraft, isReporterQuestions, reporterSupersession, supersession, supersessionKey, targetOf, withoutRunDrafts } from "./proposals";
+import { answersProvenance, ANSWERS_COMMENT_LABEL, isReporterFollowUp, answersSupersession, READINESS_COMMENT_LABEL, draftExcerpt, draftsForTurn, earlierDrafts, inWorkstreamPane, isAnswersDraft, isReporterQuestions, reporterSupersession, supersession, supersessionKey, targetOf, withoutRunDrafts } from "./proposals";
 import fixtures from "./draftHygiene.fixtures.json";
 import { isRunPlanRewrite } from "../backend/mockProposals";
 
@@ -266,5 +266,19 @@ describe("answersProvenance", () => {
 
   it("names the reply without quoting it when that turn is no longer at hand", () => {
     expect(answersProvenance(null)).toBe("Drafted from your reply in this conversation, each answer under its question. Read and edit it before you approve.");
+  });
+});
+
+describe("draftExcerpt of a follow-up draft", () => {
+  const followUp = (message: string): Intent => ({ type: "followUp", connectionId: "c", runId: "r1", item: ref("CA-1"), message, reason: "checks failed" });
+
+  it("names a follow-up by its message, cut to the length asked", () => {
+    expect(draftExcerpt(followUp("Please rerun the failing checks"))).toBe("Please rerun the failing checks");
+    expect(draftExcerpt(followUp("Please rerun the failing checks and report back"), 10)).toBe("Please rer…");
+  });
+
+  it("masks a secret in the message", () => {
+    const out = draftExcerpt(followUp("use token ghp_abcdefghijklmnopqrstuvwxyz0123456789 now"));
+    expect(out).not.toContain("ghp_abcdefghijklmnopqrstuvwxyz0123456789");
   });
 });
