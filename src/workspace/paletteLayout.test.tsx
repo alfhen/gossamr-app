@@ -65,3 +65,13 @@ describe("palette start a workstream (G10)", () => {
     start.mockRestore();
   });
 });
+
+describe("the input's name (G9)", () => {
+  const named = (placeholder?: string) => renderToStaticMarkup(<PaletteView query="" results={[]} active={0} placeholder={placeholder} onQuery={vi.fn()} onActive={vi.fn()} onRun={vi.fn()} onClose={vi.fn()} />).match(/<input[^>]*aria-label="([^"]*)"/)?.[1];
+
+  it("is the search name for plain search and the question in a mode", () => {
+    expect(named()).toBe("Search commands and tickets");
+    expect(named("Which ticket should the agent work on?")).toBe("Which ticket should the agent work on?");
+    expect(named("Start a workstream: type a ticket key or words")).toBe("Start a workstream: type a ticket key or words");
+  });
+});

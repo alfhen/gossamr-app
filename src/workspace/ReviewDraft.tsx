@@ -5,7 +5,7 @@ import { useAutoHeight } from "../components/autoHeight";
 import { parseBlocks, plainMarkdown } from "../lib/markdown";
 import { hunkLinesAround } from "../lib/diffHunks";
 import { KEPT_EDITED, keptOlderReviews, REVIEW_OUTDATED_NOTE, reviewEditProblem } from "../lib/proposals";
-import { newRiskQuote, newRisks, type Risk, type RiskQuotes } from "../lib/riskyText";
+import { maskSecrets, newRiskQuote, newRisks, type Risk, type RiskQuotes } from "../lib/riskyText";
 import { PostingPause } from "./PostingPause";
 import type { ChangedFile, DiffSide, Proposal, ProposalEdit, ReviewComment } from "../types";
 import { showPause, type DraftCardProps } from "./DraftCard";
@@ -298,6 +298,10 @@ export function ReviewDraft({
   const state = p.state.type;
   const open = state === "pending" || state === "applying";
   const shownError = error ?? saveError ?? p.error;
+  // Read-only text is shown masked, as every Jira surface does; the editable boxes keep the text as it is.
+  const shownSummary = maskSecrets(review.summary);
+  const shownBodies = comments.map((c) => maskSecrets(c.body));
+  const masked = !open && (shownSummary !== review.summary || comments.some((c, i) => !c.dropped && shownBodies[i] !== c.body));
   /** GitHub said the review's lines no longer match the pull request. */
   const outdated = p.error === REVIEW_OUTDATED_NOTE;
   const moved = open && !!head && !sameCommit(head, review.commitSha);
@@ -459,7 +463,7 @@ export function ReviewDraft({
             />
           ) : (
             <div data-review-summary className="font-normal [overflow-wrap:anywhere]">
-              <Markdown text={review.summary} />
+              <Markdown text={shownSummary} />
             </div>
           )}
         </label>
@@ -498,7 +502,7 @@ export function ReviewDraft({
                         />
                       ) : (
                         <div className="[overflow-wrap:anywhere]">
-                          <Markdown text={c.body} />
+                          <Markdown text={shownBodies[i]} />
                         </div>
                       )}
                       {open && <ReviewPreview text={c.body} label={`the comment on ${place}`} />}
@@ -508,6 +512,11 @@ export function ReviewDraft({
               );
             })}
           </ul>
+        )}
+        {masked && (
+          <p data-review-masked className="m-0 text-xs text-ws-ink3">
+            Part of this looked like a password, key or token and is hidden here. GitHub holds the text as it was posted.
+          </p>
         )}
         {open && (
           <p id={hint} data-review-markdown className="m-0 text-xs text-ws-ink3">

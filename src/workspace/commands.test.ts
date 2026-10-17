@@ -479,6 +479,14 @@ describe("Pip home in the palette", () => {
     expect(startWorkstreamCommands(items, "start a workstream on ca-401", [], a)).toHaveLength(1);
   });
 
+  it("starts a workstream on a bare ticket key after start, and leaves plain start and free words alone", () => {
+    const a = actions();
+    expect(startWorkstreamCommands(items, "start CA-401", [], a).map((c) => c.label)).toEqual(["Start a workstream on CA-401"]);
+    expect(startWorkstreamCommands(items, "start on ca-401", [], a).map((c) => c.label)).toEqual(["Start a workstream on CA-401"]);
+    expect(startWorkstreamCommands(items, "start", [], a)).toEqual([]);
+    expect(startWorkstreamCommands(items, "start checkout", [], a)).toEqual([]);
+  });
+
   it("never offers to start a workstream on a Done ticket, typed by key or by its words", () => {
     const a = actions();
     const ca401 = items.find((i) => i.item.key === "CA-401")!;

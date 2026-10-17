@@ -62,6 +62,8 @@ export function followWithReply(events: readonly FollowLine[], replies: readonly
 export interface ReporterAsk {
   asked: string;
   nudged: string | null;
+  /** The first comment from someone but the person after the ask, as its time; null while nobody has answered. */
+  replied: string | null;
 }
 
 /**
@@ -69,7 +71,7 @@ export interface ReporterAsk {
  * it, if any. Unlike `reporterFollow` it outlives the reporter's reply or the ticket changing, and ends only when the person
  * chooses to answer or plan anyway. Null when the reporter was not asked.
  */
-export function reporterAsk(events: readonly FollowLine[]): ReporterAsk | null {
+export function reporterAsk(events: readonly FollowLine[], replies: readonly string[] = []): ReporterAsk | null {
   const kinds = new Map<string, "ask" | "nudge">();
   let now = null as ReporterAsk | null;
   for (const e of events) {
@@ -77,11 +79,14 @@ export function reporterAsk(events: readonly FollowLine[]): ReporterAsk | null {
     if (e.action === "readiness_asked" || e.action === "clarity_asked" || e.action === "reporter_nudged") {
       if (e.proposalId) kinds.set(e.proposalId, e.action === "reporter_nudged" ? "nudge" : "ask");
     } else if (e.action === "draft_approved" && e.proposalId && kinds.has(e.proposalId)) {
-      if (kinds.get(e.proposalId) === "ask") now = { asked: e.at, nudged: null };
+      if (kinds.get(e.proposalId) === "ask") now = { asked: e.at, nudged: null, replied: null };
       else if (now) now = { ...now, nudged: e.at };
     } else if (e.action === "readiness_answered" || e.action === "readiness_overridden") now = null;
   }
-  return now;
+  if (!now) return null;
+  const since = Date.parse(now.asked);
+  const first = replies.filter((r) => Date.parse(r) > since).sort((a, b) => Date.parse(a) - Date.parse(b))[0];
+  return { ...now, replied: first ?? null };
 }
 
 /** How many characters of a reply the quote keeps. As `REPLY_EXCERPT` in src-tauri/src/inbox/workstreams.rs. */

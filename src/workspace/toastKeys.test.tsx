@@ -118,3 +118,12 @@ describe("the toast's live region (G5)", () => {
     expect(html).toContain('aria-label="Undo: Held CA-408."');
   });
 });
+
+describe("the live region for a toast said elsewhere (G6)", () => {
+  it("stays empty for a toast marked spoken: false, while the card still shows it", () => {
+    const quiet: Toast = { id: 3, text: "Skipped the draft on CA-401.", tone: "info", at: 0, spoken: false, action: { label: "Undo", run: () => undefined } };
+    const html = renderToStaticMarkup(<ToastStack toasts={[quiet]} dismiss={() => undefined} />);
+    expect(html.match(/<p role="status"[^>]*>(.*?)<\/p>/)?.[1]).toBe("");
+    expect(html).toContain("Skipped the draft on CA-401.");
+  });
+});

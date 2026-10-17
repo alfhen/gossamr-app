@@ -39,6 +39,26 @@ export function draftExcerpt(intent: Intent, max = 40): string | null {
   return flat.length <= max ? flat : `${flat.slice(0, max).trimEnd()}…`;
 }
 
+/** What names a draft in a line with no card beside it: its excerpt, or for one with no words of its own what its card is titled ("Update the description of CA-401"); null when neither says more than the ticket. */
+export function draftSaid(intent: Intent): string | null {
+  const said = draftExcerpt(intent);
+  if (said) return said;
+  switch (intent.type) {
+    case "rewrite":
+      return `Update the ${intent.title && intent.body ? "title and description" : intent.body ? "description" : "title"} of ${intent.item.key}`;
+    case "transition":
+      return `Move ${intent.item.key}`;
+    case "subtasks":
+      return `Subtasks under ${intent.parent.key}`;
+    case "update":
+      return `Update ${intent.item.key}`;
+    case "link":
+      return `Link ${intent.from.key}`;
+    default:
+      return null;
+  }
+}
+
 /** Whether a draft is sent to a run with a button of its own rather than applied with `proposalsApprove`. */
 export const isRunDraft = (intent: Intent) => intent.type === "startRun" || intent.type === "followUp" || intent.type === "runAnswer";
 

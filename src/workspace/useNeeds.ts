@@ -56,7 +56,7 @@ function useReporterAsks(): Record<string, ReporterAsk> {
   const stops = useWorkstreams((s) =>
     s.list
       .filter((v) => v.workstream.closedAt === null && v.readiness)
-      .map((v) => `${v.workstream.id}\n${v.readiness!.triageRun}\n${v.readiness!.changed ? 1 : 0}${v.readiness!.replied ? 1 : 0}`)
+      .map((v) => `${v.workstream.id}\n${v.readiness!.triageRun}\n${v.readiness!.changed ? 1 : 0}${v.readiness!.replied ? 1 : 0}\n${(v.reporterReplies ?? []).map((r) => r.at).join(",")}`)
       .join("\t"),
   );
   const [asks, setAsks] = useState<Record<string, ReporterAsk>>({});
@@ -66,8 +66,10 @@ function useReporterAsks(): Record<string, ReporterAsk> {
     setAsks({});
     if (!backend || !stops) return;
     let live = true;
-    const ids = stops.split("\t").map((h) => h.split("\n")[0]);
-    void Promise.all(ids.map((id) => backend.workstreamsEvents(id).then((events) => [id, reporterAsk(events)] as const, () => [id, null] as const))).then((read) => {
+    const rows = stops.split("\t").map((h) => h.split("\n"));
+    const ids = rows.map((h) => h[0]);
+    const repliesOf = Object.fromEntries(rows.map((h) => [h[0], h[3] ? h[3].split(",") : []]));
+    void Promise.all(ids.map((id) => backend.workstreamsEvents(id).then((events) => [id, reporterAsk(events, repliesOf[id])] as const, () => [id, null] as const))).then((read) => {
       if (!live) return;
       const next = Object.fromEntries(read.filter((r): r is readonly [string, ReporterAsk] => r[1] !== null));
       lastAsked = next;

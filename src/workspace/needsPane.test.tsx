@@ -2,7 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import { MockBackend } from "../backend/mock";
 import type { Need } from "../lib/needs";
-import { ReporterReplyQuote, closeTarget, lastNeedText, HigherPriority, EDIT_FIELD, advancedText, closedText, doneNeed, doneText, PLANNING_ANYWAY, postedToJira, postedWhat, postedFor, waitStarted, nextAdvanced, advancedUndone, advancedStale, endEditing, firstDecision, paneStop, useNeedTitle, QuietBody } from "./NeedsPane";
+import { PLANNING_NOW, ReporterReplyQuote, closeTarget, lastNeedText, HigherPriority, EDIT_FIELD, advancedText, closedText, doneNeed, doneText, skippedDraft, PLANNING_ANYWAY, postedToJira, postedWhat, postedFor, waitStarted, nextAdvanced, advancedUndone, advancedStale, endEditing, firstDecision, paneStop, useNeedTitle, QuietBody } from "./NeedsPane";
 import { keepEditsOfDraft } from "./DraftCard";
 
 /** A stand-in for the pane: each selector it is asked for answers with what the test put there. */
@@ -83,6 +83,8 @@ describe("the line names the workstream the done need was in (G19)", () => {
     const readiness = { title: "CA-408: not ready to plan", ticketKey: "CA-408", workstreamTitle: "Fix it", kind: "readiness", workstreamId: "ws-1" } as never;
     expect(doneText(doneNeed(readiness, true))).toBe("Done: Planning anyway on CA-408.");
     expect(PLANNING_ANYWAY).toBe("Planning anyway");
+    expect(doneText(doneNeed(readiness, "now"))).toBe("Done: Planning now on CA-408.");
+    expect(PLANNING_NOW).toBe("Planning now");
     expect(doneNeed(readiness, false)).toBe(readiness);
     expect(doneText({ title: "Reply" })).toBe("Done: Reply.");
     // A title that starts with the ticket does not repeat it, and a question is not read out as an action.
@@ -300,5 +302,19 @@ describe("the Done line goes stale (G4)", () => {
     const replied = [{ workstream: { id: "w1" }, reporterReplied: true }] as never;
     expect(advancedStale(line, "need-2", replied)).toBe(true);
     expect(advancedStale(nextAdvanced(null, "x", line.back, "need-1", "need-2"), "need-2", replied)).toBe(false);
+  });
+});
+
+describe("a skipped draft's line (G6)", () => {
+  it("says Skipped, not Done, and a posted or plain need is unchanged", () => {
+    expect(advancedText({ title: "Approve the plan", ticketKey: "CA-401" }, { title: "R2 asks a question" }, null, false, true)).toBe("Skipped: Approve the plan on CA-401. Now: R2 asks a question");
+    expect(advancedText({ title: "Approve the plan", ticketKey: "CA-401" }, { title: "R2 asks a question" })).toBe("Done: Approve the plan on CA-401. Now: R2 asks a question");
+    expect(doneText({ title: "Reply" }, false, true)).toBe("Skipped: Reply.");
+  });
+
+  it("is a skip only when the draft's state is skipped", () => {
+    const need = { target: { type: "draft", id: "p1" } } as never;
+    expect(skippedDraft(need, { p1: { state: { type: "skipped" } } } as never)).toBe(true);
+    expect(skippedDraft(need, { p1: { state: { type: "applied" } } } as never)).toBe(false);
   });
 });

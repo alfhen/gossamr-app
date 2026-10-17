@@ -103,11 +103,15 @@ const workstreams = (n: number) => `${n} ${n === 1 ? "workstream" : "workstreams
 /** What Looks fine says comes next, in the same toast as what it taught when there is one: the notice asks nothing more, and the agent step is the person's to start. */
 export const LOOKS_FINE_NEXT = "The agent step can be started from the conversation.";
 
-/** Workstreams whose readiness question the person just settled with Plan anyway, until the Done line that says so has been written (`takePlannedAnyway`). */
-const plannedAnyway = new Set<string>();
+/** Workstreams whose readiness question the person just settled with Plan anyway, until the Done line that says so has been written (`takePlannedAnyway`): "now" when the reporter replied or the ticket changed, else "anyway". */
+const plannedAnyway = new Map<string, "now" | "anyway">();
 
 /** Whether `id`'s readiness question was just settled with Plan anyway; asking forgets it, so a later question on the workstream reads for itself. */
-export const takePlannedAnyway = (id: string | null) => (id !== null && plannedAnyway.delete(id));
+export const takePlannedAnyway = (id: string | null): "now" | "anyway" | false => {
+  const mark = id === null ? undefined : plannedAnyway.get(id);
+  if (id !== null) plannedAnyway.delete(id);
+  return mark ?? false;
+};
 
 export const useWorkstreams = create<WorkstreamsState>()((set, get) => {
   /** Calls the backend for one of the person's controls, then reads the list again; a refusal is told in a toast as `failed`. */
@@ -500,7 +504,7 @@ export const useWorkstreams = create<WorkstreamsState>()((set, get) => {
       const stop = readinessOf(get().list, id);
       if (!stop) return stale();
       // Marked before the call: the list that refreshes in it is what makes the question go, and its Done line reads the mark.
-      plannedAnyway.add(id);
+      plannedAnyway.set(id, stop.replied || stop.changed ? "now" : "anyway");
       const done = await act("Couldn't plan anyway", (b) => b.workstreamsReadinessOverride(id, stop.triageRun));
       if (!done.ok) plannedAnyway.delete(id);
       const said = stop.replied ? "Planning now with the reporter's reply on the ticket. The plan starts as soon as the workstream's checks allow." : stop.changed ? "Planning now with the ticket as it is. The plan starts as soon as the workstream's checks allow." : "Planning anyway. The plan starts as soon as the workstream's checks allow.";

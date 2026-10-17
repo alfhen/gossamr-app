@@ -20,6 +20,8 @@ export interface UndoOffer {
   text: string;
   /** What the toast says once undone; "Undone." when not given. */
   undone?: string;
+  /** `false` when the words are already spoken by a line beside it (the Needs you pane's), so the toast's live region stays quiet; it still shows. */
+  spoken?: false;
   /** Puts it back. Rejects (or resolves false) when it can't: the offer is then spent and the person told. */
   undo(): Promise<boolean | void>;
   /** Runs once it is back, to show the person what came back (open the restored draft); its failure is not the undo's. */
@@ -150,7 +152,7 @@ export const undoLog = new UndoLog(
  */
 export function offerUndo(offer: UndoOffer): number {
   const id = undoLog.offer(offer);
-  const toast = useToasts.getState().push(offer.text, "info", { label: "Undo", what: offer.what, run: () => void undoLog.run(id) }, { lifetime: UNDO_LIFETIME_MS, keep: true });
+  const toast = useToasts.getState().push(offer.text, "info", { label: "Undo", what: offer.what, run: () => void undoLog.run(id) }, { lifetime: UNDO_LIFETIME_MS, keep: true, spoken: offer.spoken });
   if (toast !== null) toastOf.set(id, toast);
   return id;
 }

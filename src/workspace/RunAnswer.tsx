@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { Run } from "../types";
 import { Box, BoxTitle, Btn, Details } from "./AgentSheet";
 import { ANSWER_REMINDER, answerDraft, canSendAnswer, resumable, suggestedAnswer } from "./runSheetLogic";
@@ -8,14 +8,34 @@ export interface AnswerActions {
   attach(): void;
 }
 
+/** What was typed for each question, kept while its card is closed and opened again; keyed by run and question so a new question starts empty. */
+const keptAnswers = new Map<string, string>();
+const answerKey = (run: Run) => `${run.id}:${run.needs ?? ""}`;
+/** Keeps `text` as the answer to `run`'s question (what typing does), so the card shows it when it is drawn again. */
+export const keepAnswer = (run: Run, text: string) => void keptAnswers.set(answerKey(run), text);
+/** Forget everything kept for a run (tests, and when it no longer needs an answer). */
+export function forgetKeptAnswers(runId?: string) {
+  for (const k of [...keptAnswers.keys()]) if (!runId || k.startsWith(`${runId}:`)) keptAnswers.delete(k);
+}
+
 /** The agent's question with a box to answer it in; for a run stopped with an answer that didn't get through, that answer to send again; for a run Gossamr stopped at a limit, the words to resume it with. */
 export function RunAnswer({ run, answering, on }: { run: Run; answering: boolean; on: AnswerActions }) {
-  const [text, setText] = useState(() => answerDraft(run));
+  const key = answerKey(run);
+  const [text, setTextState] = useState(() => keptAnswers.get(key) ?? answerDraft(run));
+  const setText = (v: string) => (keptAnswers.set(key, v), setTextState(v));
+  const waiting = run.state === "needsAnswer" || run.state === "stopped";
+  useEffect(() => {
+    if (!waiting) forgetKeptAnswers(run.id);
+  }, [waiting, run.id]);
   const suggestion = suggestedAnswer(run);
   const limit = resumable(run);
   const again = run.state === "stopped" && !limit;
   const ready = canSendAnswer(text) && !answering;
-  const send = () => ready && on.answer(text);
+  const send = () => {
+    if (!ready) return;
+    keptAnswers.delete(key);
+    on.answer(text);
+  };
   return (
     <Box tone="needs" label={limit ? "Stopped at its limit" : "Question from the agent"}>
       <BoxTitle icon={limit ? "clock" : "hand"} tone="needs">

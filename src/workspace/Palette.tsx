@@ -34,6 +34,13 @@ export const MAIN_ID = "workspace-main";
 
 const KBD = "rounded border border-ws-sep2 bg-ws-win px-1 font-sans text-[11px]";
 
+/** The palette's placeholder when it is a plain search, and the input's name then. */
+export const DEFAULT_PLACEHOLDER = "Switch project, change view, jump to a ticket, or ask Pip…";
+export const SEARCH_NAME = "Search commands and tickets";
+
+/** The input's accessible name: the question a mode asks ("Which ticket should the agent work on?"), since the placeholder alone is not reliably read; plain search keeps its name (G9). */
+export const inputName = (placeholder: string) => (placeholder === DEFAULT_PLACEHOLDER ? SEARCH_NAME : placeholder.replace(/…$/, ""));
+
 /** The footer line of "Start a workstream": what picking a ticket there does and does not do. */
 export const START_WORKSTREAM_NOTE = "Opens a workstream; starts no agent and posts nothing.";
 
@@ -51,7 +58,7 @@ export function PaletteView({
   query,
   results,
   active,
-  placeholder = "Switch project, change view, jump to a ticket, or ask Pip…",
+  placeholder = DEFAULT_PLACEHOLDER,
   empty,
   hints = ["↑↓ move", "↵ select", "esc close"],
   note,
@@ -112,7 +119,7 @@ export function PaletteView({
           aria-expanded="true"
           aria-controls="palette-list"
           aria-activedescendant={results[active] ? `palette-${results[active].id}` : undefined}
-          aria-label="Search commands and tickets"
+          aria-label={inputName(placeholder)}
           placeholder={placeholder}
           value={query}
           onChange={(ev) => onQuery(ev.target.value)}

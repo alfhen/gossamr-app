@@ -5,7 +5,7 @@ import { itemRef } from "../backend/mockConnector";
 import type { StartMyDay } from "../lib/startMyDay";
 import type { Intent, Proposal } from "../types";
 import { useWorkspace } from "../workspaceStore";
-import { GITHUB_NOT_LISTED, JiraSentView, SENT_EMPTY, SentRow } from "./JiraSentView";
+import { DetailLine, GITHUB_NOT_LISTED, JiraSentView, SENT_EMPTY, SentRow } from "./JiraSentView";
 import { jiraSent } from "../lib/jiraSent";
 import { DAY_EMPTY, DayLineView, UNCLEAR_NEXT, StartMyDayView, doneForNow, runDayAction, showStartMyDay } from "./StartMyDay";
 import { usePipHome } from "./pipHomeStore";
@@ -190,5 +190,29 @@ describe("What Jira saw from me: the way back", () => {
   it("does not say how long Gossamr has been posting when it has no posts on record (G22)", () => {
     expect(SENT_EMPTY).toMatch(/^No posts to Jira from Gossamr are on record here\./);
     expect(SENT_EMPTY).not.toMatch(/yet|never|today|this week/i);
+  });
+});
+
+describe("a posted description's lines and the full stop (G13, G10)", () => {
+  const entry = () => {
+    const p = { id: "d1", createdAt: "2026-10-13T08:00:00Z", updatedAt: "2026-10-13T09:00:00Z", origin: { type: "chat", requestId: "r", workstream: "w1" }, createdBy: "pip", intent: { type: "rewrite", item: itemRef("WEB-101"), title: null, body: { from: { blocks: [] }, to: { blocks: [] }, fromText: "Keep\nOld line", toText: "Keep\nNew line" }, flattened: [] } as unknown as Intent, label: null, basis: null, state: { type: "applied" }, revisions: [], created: [], error: null, run: null } as unknown as Proposal;
+    return jiraSent({ proposals: [p], events: {}, workstreams: [{ workstream: { id: "w1", itemKey: "WEB-101", title: "WEB-101 Welcome", closedAt: null }, labels: [], runs: [] } as never] })[0];
+  };
+
+  it("hides each diff marker from a screen reader and says Added or Removed in its place, leaving the strings as they are", () => {
+    const e = entry();
+    expect(e.detail).toContain("+ New line");
+    expect(e.detail).toContain("− Old line");
+    expect(renderToStaticMarkup(<DetailLine line="+ New line" diff />)).toBe('<span aria-hidden="true">+ </span><span class="sr-only">Added: </span>New line');
+    expect(renderToStaticMarkup(<DetailLine line="− Old line" diff />)).toBe('<span aria-hidden="true">− </span><span class="sr-only">Removed: </span>Old line');
+    expect(renderToStaticMarkup(<DetailLine line="  Keep" diff />)).toBe('<span aria-hidden="true">  </span>Keep');
+    expect(renderToStaticMarkup(<DetailLine line="+ not a diff" diff={false} />)).toBe("+ not a diff");
+  });
+
+  it("puts no padding after the workstream's name, so its full stop is not set off by a space", () => {
+    const html = renderToStaticMarkup(<SentRow entry={entry()} onTicket={() => {}} onWorkstream={() => {}} />);
+    expect(html).toMatch(/<button[^>]*data-sent-workstream="w1"[^>]*class="[^"]*pl-1[^"]*"/);
+    expect(html).not.toMatch(/data-sent-workstream="w1"[^>]*class="[^"]*\bpx-1\b/);
+    expect(html).toMatch(/WEB-101<\/button>\.<\/span>/);
   });
 });

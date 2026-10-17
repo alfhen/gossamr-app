@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { activeQuery, autoLink, insertMention, liveMentions, rankPeople, segments } from "./mentions";
+import { activeQuery, autoLink, insertMention, liveMentions, rankPeople, segments, subtasksNote } from "./mentions";
 
 const sam = { accountId: "s", name: "Sam Holt" };
 const mette = { accountId: "m", name: "Mette Lund" };
@@ -77,5 +77,12 @@ describe("autoLink", () => {
   it("leaves full names two people share alone", () => {
     const twin = { accountId: "s3", name: "Sam Holt" };
     expect(autoLink("@Sam Holt any news?", [sam, twin]).mentions).toEqual([]);
+  });
+});
+
+describe("subtasksNote", () => {
+  it("says how many subtasks are created under the ticket in Jira as the person", () => {
+    expect(subtasksNote(1, "CA-412")).toBe("Creates 1 subtask under CA-412 in Jira as you.");
+    expect(subtasksNote(3, "CA-412")).toBe("Creates 3 subtasks under CA-412 in Jira as you.");
   });
 });

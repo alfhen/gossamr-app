@@ -16,6 +16,9 @@ export function mentionNote(mentions: readonly Pick<Mention, "name">[]): string 
 /** The app-side note by a description update's Update button: that it writes to Jira as the person, and who Jira tells. `what` is `rewriteWhat`: "description", "title" or "title and description". App text, not Jira's. */
 export const rewriteNote = (what: string) => `Changes the ticket's ${what} in Jira as you; Jira notifies its watchers.`;
 
+/** The app-side note by a subtasks card's Create button: that it creates the `n` ticked subtasks in Jira as the person. App text, not Jira's. */
+export const subtasksNote = (n: number, parentKey: string) => `Creates ${n} subtask${n === 1 ? "" : "s"} under ${parentKey} in Jira as you.`;
+
 export interface ActiveQuery {
   /** Index of the `@` that starts the mention. */
   start: number;
