@@ -40,7 +40,7 @@ export interface RunSheetActions extends ResultActions {
   cancelStop(): void;
   stop(): void;
   startNow(): void;
-  answer(text: string): void;
+  answer(text: string): Promise<boolean> | void;
   adoptSession(session: string): Promise<void>;
   retry(): void;
   fix(act: FailureAct): void;
@@ -496,7 +496,7 @@ export function RunSheet({ id }: { id: string }) {
     cancelStop: () => setConfirmStop(false),
     stop: () => (setConfirmStop(false), setStoppedHere(true), void store.stop(id)),
     startNow: () => void store.startNow(id),
-    answer: (text) => void store.answer(id, text),
+    answer: (text) => store.answer(id, text),
     adoptSession: (session) => store.adoptSession(id, session),
     retry: () => void store.retryLaunch(id),
     fix: (act) => failureAction(id, act),

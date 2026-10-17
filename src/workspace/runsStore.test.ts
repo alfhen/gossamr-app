@@ -7,6 +7,7 @@ import { useWorkstreams } from "./workstreamsStore";
 import { useTabs } from "./tabsStore";
 import { useToasts } from "./toasts";
 import { usePrefs } from "./prefs";
+import { answerKey, keepAnswer, keptAnswer } from "./keptAnswers";
 import { browseList, introCancelled, startWhat, useRuns } from "./runsStore";
 import { laneOf, needsAttention } from "./agentsLogic";
 
@@ -483,13 +484,23 @@ describe("the run sheet", () => {
       expect(s().browseOrder).toBeNull();
     });
 
+    it("forgets a typed answer once the run no longer waits, even with no answer box on screen", async () => {
+      const run = await asking();
+      keepAnswer(run, "Yes, keep it.");
+      expect(keptAnswer(answerKey(run))).toBe("Yes, keep it.");
+      await backend.runsAnswer(run.id, "Sent from elsewhere.");
+      await s().reload();
+      expect(keptAnswer(answerKey(run))).toBeUndefined();
+    });
+
     it("says why it failed and lets the person try again", async () => {
       const run = await asking();
       vi.spyOn(backend, "runsAnswer").mockRejectedValueOnce(new Error("Claude started a copy. Your answer is kept on the run."));
-      await s().answer(run.id, "Yes");
+      // false, so the answer box keeps what was typed for the next try.
+      expect(await s().answer(run.id, "Yes")).toBe(false);
       expect(useToasts.getState().toasts[0].text).toBe("Couldn't send the answer: Claude started a copy. Your answer is kept on the run.");
       expect(s().answering.size).toBe(0);
-      await s().answer(run.id, "Yes");
+      expect(await s().answer(run.id, "Yes")).toBe(true);
       await settle();
       expect(s().runs.find((r) => r.id === run.id)?.state).toBe("working");
     });
