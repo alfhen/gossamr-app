@@ -188,7 +188,7 @@ mod tests {
     fn a_triage_section_before_an_expand_plan_stays_separate_through_a_re_triage_at_level_two() {
         let doc = md("Fix it.").with_triage_section("Old note.", &[]).with_plan_section("intro", &md("The plan."));
         let again = doc.with_triage_section("New note.", &questions());
-        assert_eq!(again.triage_section().unwrap().to_markdown(), format!("New note.\n\nOpen questions:\n\n- What does done look like?\n- Who is waiting on it?"));
+        assert_eq!(again.triage_section().unwrap().to_markdown(), "New note.\n\nOpen questions:\n\n- What does done look like?\n- Who is waiting on it?");
         assert_eq!(again.plan_section(), doc.plan_section(), "the plan is untouched");
         assert!(matches!(again.blocks.last(), Some(Block::Expand { .. })));
         // Added to a ticket whose plan is an expand, it is the only marker and takes level 2.
