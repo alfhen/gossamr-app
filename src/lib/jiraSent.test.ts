@@ -121,7 +121,7 @@ describe("What Jira saw from me", () => {
     const asked = draft("d", comment("CA-401", "x"), { createdBy: "user", label: "Questions for the reporter" });
     const nudge = draft("e", comment("CA-401", "x"), { createdBy: "user", label: "Nudge for the reporter" });
     const out = Object.fromEntries(jiraSent({ proposals: [pip, run, board, asked, nudge], events: {}, workstreams: [view("w1", "CA-401")] }).map((e) => [e.id, [e.madeBy, e.from]]));
-    expect(out).toEqual({ a: ["Pip", "Pip, on CA-401"], b: ["An agent run", "run R3"], c: ["You", "the board"], d: ["Gossamr", "your request"], e: ["Gossamr", "your request"] });
+    expect(out).toEqual({ a: ["Pip", "Pip"], b: ["An agent run", "run R3"], c: ["You", "the board"], d: ["Gossamr", "your request"], e: ["Gossamr", "your request"] });
     // Pip's chat draft with no ticket to name stays "Pip's conversation".
     const bare = draft("f", { type: "create", container: { connectionId: "c", externalId: "P", key: "P" }, fields: { title: "T", body: { blocks: [] } } } as unknown as Intent);
     expect(jiraSent({ proposals: [bare], events: {}, workstreams: [] })[0].from).toBe("Pip's conversation");

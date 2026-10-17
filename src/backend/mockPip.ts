@@ -13,6 +13,7 @@ import { labelsByRun } from "../lib/workstreamStage";
 import { heldText } from "../lib/workstreamHold";
 import { draftPhrase, runPhrase } from "../lib/runNames";
 import { statusId } from "./mockConnector";
+import { triageReadiness } from "./mockSupervisor";
 import type { LastTrip } from "./mockWorkstreams";
 import { clarityText, type ClarityGap } from "../lib/ticketClarity";
 
@@ -247,7 +248,12 @@ export function answersScript(prompt: string, runs: readonly Run[], workstream: 
   if (!workstream?.answersDue || !item) return null;
   const at = prompt.indexOf("My answers:");
   const asked = at >= 0 ? prompt.slice(0, at) : "";
-  const questions = [...asked.matchAll(/\u201c([^\u201d]*)\u201d/g)].map((m) => m[1].trim()).filter((q) => q && q !== "(it listed no questions)");
+  const triage = runs
+    .filter((r) => r.spec.workstream === workstream.id && r.spec.kind === "triage" && r.state === "done")
+    .sort((a, b) => (b.endedAt ?? b.queuedAt).localeCompare(a.endedAt ?? a.queuedAt))[0];
+  const quoted = [...asked.matchAll(/\u201c([^\u201d]*)\u201d/g)].map((m) => m[1].trim()).filter((q) => q && q !== "(it listed no questions)");
+  // A reply the person typed afresh quotes nothing: the open questions are then the newest finished triage's, the ones the readiness need lists.
+  const questions = quoted.length || !triage ? quoted : (triageReadiness(triage)?.questions ?? []);
   const answer = (at >= 0 ? prompt.slice(at + "My answers:".length) : prompt).trim();
   // As many numbered items (their markers dropped), or lines, or else sentences, as questions pair them up; any other shape gets every question, numbered, then the answer as it was written.
   // A reply that numbers its answers (a marker opening it or a line) is paired only by those numbers, as lines or sentences would then shift the answers.
@@ -261,12 +267,9 @@ export function answersScript(prompt: string, runs: readonly Run[], workstream: 
     if (questions.length) body.push("");
     body.push(questions.length === 1 ? `Answer: ${answer}` : `Answers: ${answer}`);
   }
-  const triage = runs
-    .filter((r) => r.spec.workstream === workstream.id && r.spec.kind === "triage" && r.state === "done")
-    .sort((a, b) => (b.endedAt ?? b.queuedAt).localeCompare(a.endedAt ?? a.queuedAt))[0];
   return {
     steps: ["Read the open questions", "Drafted a comment with your answers"],
-    text: `I drafted a comment on **${item.key}** with your answers, ${split ? "each under its question" : "the questions first, then your answers as you wrote them"}. It goes to the ticket as a comment, not a change to the description, and nothing is posted until you approve it.${triage ? " Once the answers are posted, Plan this starts the plan." : ""}`,
+    text: `I drafted a comment on **${item.key}** with your answers, ${split ? "each under its question" : questions.length ? "the questions first, then your answers as you wrote them" : "your answers as you wrote them"}. It goes to the ticket as a comment, not a change to the description, and nothing is posted until you approve it.${triage ? " Once the answers are posted, Plan this starts the plan." : ""}`,
     filter: null,
     draft: { intent: { type: "comment", item, body: docFromText(body.join("\n").trim()) }, label: ANSWERS_COMMENT_LABEL },
   };

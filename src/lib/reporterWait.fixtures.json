@@ -510,7 +510,7 @@
       ],
       "comments": [{"author": "kim", "at": "2026-10-12T10:05:00Z", "id": "c9", "text": "It breaks when the shopper pays with a gift card and a discount code at the same time, but only on the second visit to the checkout, and never in the test shop, which is why nobody could reproduce it before."}],
       "me": "me",
-      "expect": { "waiting": false, "since": null, "changed": true, "replied": true, "repliedAt": "2026-10-12T10:05:00Z", "reply": { "id": "c9", "excerpt": "It breaks when the shopper pays with a gift card and a discount code at the same time, but only on the second visit to the checkout, and ne…" } }
+      "expect": { "waiting": false, "since": null, "changed": true, "replied": true, "repliedAt": "2026-10-12T10:05:00Z", "reply": { "id": "c9", "excerpt": "It breaks when the shopper pays with a gift card and a discount code at the same time, but only on the second visit to the checkout, and…" } }
     },
     {
       "name": "a reply that says nothing has no quote, and no reply has none either",
@@ -543,6 +543,27 @@
       "comments": [],
       "me": "me",
       "expect": { "waiting": false, "since": null, "changed": true, "replied": false, "repliedAt": null }
+    },
+    {
+      "name": "Looks fine after the reply is choosing: not replied, the ticket still changed",
+      "events": [
+        {"actor": "person", "action": "readiness_asked", "proposalId": "d1", "at": "2026-10-12T10:01:00Z"},
+        {"actor": "person", "action": "draft_approved", "proposalId": "d1", "at": "2026-10-12T10:02:00Z"},
+        {"actor": "person", "action": "clarity_dismissed", "at": "2026-10-12T10:06:00Z"}
+      ],
+      "comments": [{"author": "kim", "at": "2026-10-12T10:05:00Z"}],
+      "me": "me",
+      "expect": { "waiting": false, "since": null, "changed": true, "replied": false, "repliedAt": null }
+    },
+    {
+      "name": "an excerpt cut mid-word backs up to the last space",
+      "events": [
+        {"actor": "person", "action": "readiness_asked", "proposalId": "d1", "at": "2026-10-12T10:01:00Z"},
+        {"actor": "person", "action": "draft_approved", "proposalId": "d1", "at": "2026-10-12T10:02:00Z"}
+      ],
+      "comments": [{"id": "c1", "author": "kim", "at": "2026-10-12T10:05:00Z", "text": "We looked at the checkout flow and the scope is limited to the cart page and the payment step only, nothing about the account area is in scope. Marketing wants it soon"}],
+      "me": "me",
+      "expect": { "waiting": false, "since": null, "changed": true, "replied": true, "repliedAt": "2026-10-12T10:05:00Z", "reply": { "id": "c1", "excerpt": "We looked at the checkout flow and the scope is limited to the cart page and the payment step only, nothing about the account area is in…" } }
     }
   ]
 }

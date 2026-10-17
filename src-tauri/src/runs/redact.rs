@@ -139,6 +139,12 @@ fn known_shapes(word: &str, base: usize, spans: &mut Vec<Range<usize>>) {
     for prefix in ["AKIA", "ASIA"] {
         prefixed(word, base, prefix, 16, |b| b.is_ascii_uppercase() || b.is_ascii_digit(), spans);
     }
+    for prefix in ["sk_live_", "sk_test_", "rk_live_", "rk_test_"] {
+        prefixed(word, base, prefix, 16, alnum, spans);
+    }
+    prefixed(word, base, "glpat-", 20, |b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_'), spans);
+    prefixed(word, base, "npm_", 36, alnum, spans);
+    prefixed(word, base, "AIza", 35, |b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_'), spans);
     for kind in ["xoxb-", "xoxa-", "xoxp-", "xoxr-", "xoxs-"] {
         prefixed(word, base, kind, 10, |b| b.is_ascii_alphanumeric() || b == b'-', spans);
     }
@@ -186,6 +192,18 @@ mod tests {
         gone("ASIAIOSFODNN7EXAMPLE", "ASIAIOSFODNN7EXAMPLE");
         gone("slack xoxb-123456789012-abcdefghijkl", "123456789012");
         gone("xoxp-1234567890-abcdefghij", "1234567890");
+    }
+
+    #[test]
+    fn stripe_gitlab_npm_and_google_keys() {
+        gone("key sk_live_abcdefghijklmnop1234 here", "abcdefghijklmnop1234");
+        gone("rk_test_abcdefghijklmnop1234", "abcdefghijklmnop1234");
+        gone("glpat-abcdefghij0123456789_x", "abcdefghij0123456789");
+        gone("npm_abcdefghijklmnopqrstuvwxyz0123456789", "abcdefghijklmnopqrstuvwxyz");
+        gone("AIzaSyA-abcdefghijklmnopqrstuvwxyz01234", "abcdefghijklmnopqrstuvwxyz");
+        for plain in ["npm_install runs", "sk_live alone", "pk_live_abcdefghijklmnop1234"] {
+            assert_eq!(redact(plain), plain);
+        }
     }
 
     #[test]

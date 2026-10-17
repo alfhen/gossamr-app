@@ -2,6 +2,7 @@ import type { Intent, Proposal, ProposalMaker, ReporterReply, ReporterReplyAt, R
 import { eventText } from "../workspace/activityLogic";
 import { GENERAL_CONVERSATION, workstreamConversation } from "./conversations";
 import type { Need } from "./needs";
+import { maskSecrets } from "./riskyText";
 import { inWorkstreamPane, isReporterFollowUp, isReporterNudge, isReporterQuestions, targetOf, workstreamOf } from "./proposals";
 
 /**
@@ -427,11 +428,11 @@ export function timeline(input: TimelineInput): TimelineEntry[] {
   // A reporter answers on the ticket, which leaves no audit line: each reply is told from its comment's time, and stays once the person asks again.
   for (const r of reporterReplies) {
     if (!Number.isFinite(time(r.at))) continue;
-    out.push({ key: `audit:reply:${r.id}`, kind: "audit", at: r.at, updatedAt: r.at, ticketKey, text: "The reporter replied on the ticket", detail: `“${r.excerpt}”`, target: ticketKey ? { type: "comment", ticketKey, id: r.id } : null, needKey: null, decision: false, attention: r.at === reporterRepliedAt, actor: "supervisor", action: "reporter_replied", order: order++ });
+    out.push({ key: `audit:reply:${r.id}`, kind: "audit", at: r.at, updatedAt: r.at, ticketKey, text: "The reporter replied on the ticket", detail: `“${maskSecrets(r.excerpt)}”`, target: ticketKey ? { type: "comment", ticketKey, id: r.id } : null, needKey: null, decision: false, attention: r.at === reporterRepliedAt, actor: "supervisor", action: "reporter_replied", order: order++ });
   }
   // Without the list (a view that has none), the one reply that ended the wait is told alone.
   if (!reporterReplies.length && reporterRepliedAt && Number.isFinite(time(reporterRepliedAt))) {
-    out.push({ key: `audit:reply:${reporterRepliedAt}`, kind: "audit", at: reporterRepliedAt, updatedAt: reporterRepliedAt, ticketKey, text: "The reporter replied on the ticket", ...(reporterReply ? { detail: `“${reporterReply.excerpt}”` } : {}), target: reporterReply && ticketKey ? { type: "comment", ticketKey, id: reporterReply.id } : null, needKey: null, decision: false, attention: true, actor: "supervisor", action: "reporter_replied", order: order++ });
+    out.push({ key: `audit:reply:${reporterRepliedAt}`, kind: "audit", at: reporterRepliedAt, updatedAt: reporterRepliedAt, ticketKey, text: "The reporter replied on the ticket", ...(reporterReply ? { detail: `“${maskSecrets(reporterReply.excerpt)}”` } : {}), target: reporterReply && ticketKey ? { type: "comment", ticketKey, id: reporterReply.id } : null, needKey: null, decision: false, attention: true, actor: "supervisor", action: "reporter_replied", order: order++ });
   }
 
   // When things happened, except that an effect never stands before its cause: a draft a run left, or what was done to a

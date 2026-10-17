@@ -6,6 +6,7 @@ import { needs as buildNeeds, type Need } from "./needs";
 import { docFromText } from "./docs";
 import { approvalStartsBuild, fixRoundOnPost, nextStep, reviewPostFixRound } from "./nextStep";
 import { budgetView } from "./workstreamHold";
+import { followWithReply } from "./reporterWait";
 
 const NOW = Date.parse("2026-09-30T12:00:00Z");
 const iso = (minutesAgo: number) => new Date(NOW - minutesAgo * 60_000).toISOString();
@@ -201,6 +202,10 @@ describe("nextStep when the person is waited on", () => {
     const going = [run("b", "build", "working")];
     expect(nextStep({ ...view(going), reporterReplied: true } as WorkstreamView, going, [], [], AUTOSTART_DEFAULTS, [], new Date(NOW))?.kind).not.toBe("reporter");
     expect(nextStep(view(runs), runs, [], [], AUTOSTART_DEFAULTS, [], new Date(NOW))?.kind).not.toBe("reporter");
+    // "Looks fine" after the reply is choosing (G6): the line moves on to the chain, though the ticket still counts as changed.
+    const chosen = followWithReply([{ actor: "person", action: "readiness_asked", proposalId: "d", at: iso(300) }, { actor: "person", action: "draft_approved", proposalId: "d", at: iso(290) }, { actor: "person", action: "clarity_dismissed", proposalId: null, at: iso(100) }], [iso(180)]).follow;
+    expect(chosen).toEqual({ waiting: null, changed: true, replied: false });
+    expect(nextStep({ ...view(runs), reporterReplied: chosen.replied } as WorkstreamView, runs, [], [], AUTOSTART_DEFAULTS, [], new Date(NOW))?.text).not.toContain("Looks fine or ask again");
   });
 
   it("adds no count when the person is waited on for one thing only", () => {

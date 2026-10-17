@@ -125,6 +125,13 @@ export function showPause(card: Pick<ParentNode, "querySelector"> | null) {
   (keep.closest?.<HTMLElement>("[data-post-pause]") ?? keep).scrollIntoView?.({ block: "nearest" });
 }
 
+/** The pause for an edited rewrite: lines count in the description alone, since the title above it is not line 1 of what the person edits, and the title's catches carry no line (G4). */
+export function rewriteRisks(wasTitle: string, wasText: string, newTitle: string, newText: string): { risks: Risk[]; quote: RiskQuotes } {
+  const quote: RiskQuotes = newRiskQuote(wasText, newText);
+  for (const [r, found] of Object.entries(newRiskQuote(wasTitle, newTitle)) as [Risk, string[]][]) quote[r] = [...found.map((q) => q.split("\t")[0]), ...(quote[r] ?? [])];
+  return { risks: newRisks(`${wasTitle}\n${wasText}`, `${newTitle}\n${newText}`), quote };
+}
+
 /** What Esc at the posting pause tells a screen reader: the editor closed and the words are still there. */
 export const EDIT_KEPT_NOTE = "Edit kept. Nothing was posted.";
 
@@ -376,9 +383,8 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
     }
     if (intent.type === "comment" && edited.current) return { risks: newRisks(linked.text, body), quote: newRiskQuote(linked.text, body) };
     if (rewrite && rewriteEdited.current) {
-      const was = `${rewriteFields(rewrite).title}\n${rewriteFields(rewrite).text}`;
-      const now = `${newTitle}\n${newText}`;
-      return { risks: newRisks(was, now), quote: newRiskQuote(was, now) };
+      const { title, text } = rewriteFields(rewrite);
+      return rewriteRisks(title, text, newTitle, newText);
     }
     return { risks: [], quote: {} };
   };

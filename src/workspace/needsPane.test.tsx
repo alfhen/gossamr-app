@@ -1,7 +1,9 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
+import { MockBackend } from "../backend/mock";
 import type { Need } from "../lib/needs";
-import { ReporterReplyQuote, closeTarget, lastNeedText, HigherPriority, EDIT_FIELD, advancedText, closedText, doneNeed, doneText, PLANNING_ANYWAY, postedToJira, waitStarted, nextAdvanced, advancedUndone, advancedStale, endEditing, firstDecision, paneStop } from "./NeedsPane";
+import { ReporterReplyQuote, closeTarget, lastNeedText, HigherPriority, EDIT_FIELD, advancedText, closedText, doneNeed, doneText, PLANNING_ANYWAY, postedToJira, postedWhat, postedFor, waitStarted, nextAdvanced, advancedUndone, advancedStale, endEditing, firstDecision, paneStop, useNeedTitle, QuietBody } from "./NeedsPane";
+import { keepEditsOfDraft } from "./DraftCard";
 
 /** A stand-in for the pane: each selector it is asked for answers with what the test put there. */
 const pane = (found: Record<string, unknown[]>) =>
@@ -157,6 +159,40 @@ describe("the higher-priority bar's snapshot", () => {
   });
 });
 
+describe("the decision's title follows an edited draft (G5)", () => {
+  const need = { key: "draft:p9", kind: "draft", title: "Draft comment: “Old words here”", target: { type: "draft", id: "p9" } } as unknown as Need;
+  const Title = ({ n }: { n: Need }) => {
+    const { title, edited } = useNeedTitle(n);
+    return <span data-edited={edited}>{title}</span>;
+  };
+
+  it("quotes the words as edited, and says so, where the stored text would be the stale ones", () => {
+    expect(renderToStaticMarkup(<Title n={need} />)).toContain("Old words here");
+    keepEditsOfDraft("p9", { body: { text: "Brand new wording instead", mentions: [] } });
+    try {
+      const out = renderToStaticMarkup(<Title n={need} />);
+      expect(out).toContain("Brand new wording instead");
+      expect(out).not.toContain("Old words here");
+      expect(out).toContain('data-edited="true"');
+    } finally {
+      keepEditsOfDraft("p9", {});
+    }
+    // A need that is no draft keeps its title.
+    expect(renderToStaticMarkup(<Title n={{ ...need, target: { type: "run", id: "r1" } } as unknown as Need} />)).toContain("Old words here");
+  });
+});
+
+describe("Keep waiting on a quiet run (G9)", () => {
+  it("is no x, which reads as dismiss, and says what it does under the buttons", () => {
+    const out = renderToStaticMarkup(<QuietBody run={new MockBackend().runs.list()[0]} />);
+    const keep = /<button[^>]*>(?:(?!<\/button>).)*Keep waiting<\/button>/s.exec(out)?.[0] ?? "";
+    expect(keep).toContain("aria-describedby");
+    // The clock's face, not the x's two strokes.
+    expect(keep).toContain("M12 7.5V12l3 2");
+    expect(out).toContain("Keep waiting leaves the run going and takes this out of Needs you until it goes quiet again.");
+  });
+});
+
 describe("what posting to the reporter starts, said when Pip moves on", () => {
   const draft = (label: string, state: string, createdBy = "agent") => ({ id: "d1", label, createdBy, intent: { type: "comment" }, state: { type: state } }) as unknown as Parameters<typeof waitStarted>[1][string];
   const done = { target: { type: "draft", id: "d1" }, ticketKey: "CA-408" } as Parameters<typeof waitStarted>[0];
@@ -232,6 +268,24 @@ describe("lastNeedText", () => {
 
   it("says what was done when the draft was posted", () => {
     expect(lastNeedText(need, withState("applied"))).toMatch(/^(Done|Posted to Jira): Draft comment on CA-401\.$/);
+  });
+});
+
+describe("the Done line names what Jira got (G7)", () => {
+  const need = { key: "draft:p1", kind: "draft", title: "Approve the plan", ticketKey: "CA-401", workstreamId: null, target: { type: "draft", id: "p1" } } as unknown as Need;
+  const item = { connectionId: "c", externalId: "1", key: "CA-401" };
+  const props = (intent: object, type = "applied") => ({ p1: { id: "p1", state: { type }, intent } }) as never;
+  it("says a rewrite updated the description, not that the card was approved", () => {
+    const p = props({ type: "rewrite", item, title: null, body: {}, flattened: [] });
+    expect(postedWhat(need, p)).toBe("Updated the description of CA-401 in Jira.");
+    expect(lastNeedText(need, p)).toBe("Updated the description of CA-401 in Jira.");
+    expect(advancedText(need, { title: "Next" }, null, postedFor(need, p))).toBe("Updated the description of CA-401 in Jira. Now: Next");
+  });
+  it("counts the subtasks created, and leaves a comment on the card's title", () => {
+    expect(lastNeedText(need, props({ type: "subtasks", parent: item, summaries: ["a", "b"] }))).toBe("Created 2 subtasks on CA-401 in Jira.");
+    expect(postedWhat(need, props({ type: "subtasks", parent: item, summaries: ["a"] }))).toBe("Created 1 subtask on CA-401 in Jira.");
+    expect(lastNeedText(need, props({ type: "comment" }))).toBe("Posted to Jira: Approve the plan on CA-401.");
+    expect(postedWhat(need, props({ type: "rewrite", item, title: null, body: {} }, "pending"))).toBeNull();
   });
 });
 

@@ -797,6 +797,12 @@ describe("timeline: the reporter's reply on the ticket", () => {
   it("quotes the reply and opens its comment on the ticket, when the view says which it was (G15)", () => {
     const got = timeline({ ticketKey: "CA-401", reporterRepliedAt: iso(30), reporterReply: { id: "c7", excerpt: "It should send three emails." } });
     expect(got[0]).toMatchObject({ text: "The reporter replied on the ticket", detail: "“It should send three emails.”", target: { type: "comment", ticketKey: "CA-401", id: "c7" } });
+    // A secret in the reply is masked in the quote (G2), whichever way the entry is made.
+    const secret = { id: "c8", excerpt: "Use ghp_abcdefghijklmnopqrstuvwxyz0123 and password: hunter22secret" };
+    for (const input of [{ reporterRepliedAt: iso(30), reporterReply: secret }, { reporterReplies: [{ ...secret, at: iso(30) }] }]) {
+      const detail = timeline({ ticketKey: "CA-401", ...input })[0].detail;
+      expect(detail).toBe("“Use gh… and password: hu…”");
+    }
     // Without a ticket key there is nothing to open, but the quote stays.
     expect(timeline({ reporterRepliedAt: iso(30), reporterReply: { id: "c7", excerpt: "Yes." } })[0]).toMatchObject({ detail: "“Yes.”", target: null });
     expect(timeline({ ticketKey: "CA-401", reporterRepliedAt: iso(30) })[0].detail).toBeUndefined();

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LIFETIME_MS, UNDO_LIFETIME_MS, useToasts } from "./toasts";
-import { UNDO_VALID_MS, UndoLog, hideUndoToast, offerUndo, undoLog } from "./undo";
+import { UNDO_VALID_MS, UndoLog, hideUndoToast, offerUndo, undoLog, undoLatest, NOTHING_TO_UNDO } from "./undo";
 
 /** A log with a clock the test moves and a record of what it told the person. */
 function setup(valid = UNDO_VALID_MS) {
@@ -232,5 +232,26 @@ describe("refocus once an Undo is done (G7)", () => {
     const ok = log.offer({ text: "B", undo: async () => {}, refocus: () => { throw new Error("gone"); } });
     expect(await log.run(ok)).toBe("undone");
     expect(seen).toEqual([]);
+  });
+});
+
+describe("Ctrl+Z (G8)", () => {
+  it("says so through a toast when nothing is left to undo", () => {
+    useToasts.getState().clear();
+    const latest = vi.spyOn(undoLog, "latest").mockReturnValue(null);
+    undoLatest();
+    latest.mockRestore();
+    expect(useToasts.getState().toasts.map((t) => [t.text, t.tone])).toEqual([[NOTHING_TO_UNDO, "info"]]);
+    useToasts.getState().clear();
+  });
+  it("undoes the newest offer when there is one", async () => {
+    useToasts.getState().clear();
+    const undo = vi.fn(async () => {});
+    offerUndo({ text: "Skipped.", undo });
+    undoLatest();
+    await Promise.resolve();
+    expect(undo).toHaveBeenCalled();
+    expect(useToasts.getState().toasts.map((t) => t.text)).not.toContain(NOTHING_TO_UNDO);
+    useToasts.getState().clear();
   });
 });

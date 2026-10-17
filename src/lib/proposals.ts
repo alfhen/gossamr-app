@@ -262,6 +262,9 @@ export function answersPaired(body: string): boolean {
   return questions > 0 && lines.filter((l) => /^Answer:/i.test(l)).length === questions;
 }
 
+/** Whether an answers comment's text quotes any question at all (a reply typed afresh, with no questions to pair, quotes none). */
+const answersQuote = (body: string): boolean => body.split("\n").some((l) => /^(?:\d+[.)]\s+)?\u201c/.test(l.trim()));
+
 /**
  * The line under the answers draft's card that says which reply it was made from: the start of what the person wrote after "My answers:"
  * in the message `prompt` (null when that turn is no longer at hand, then the line names the reply without quoting it). Shown in the app
@@ -273,7 +276,7 @@ export function answersProvenance(prompt: string | null, body?: string): string 
   // A secret the person pasted is masked before the cut, so the line never shows it and the cut counts what is shown.
   const reply = maskSecrets((at >= 0 ? prompt!.slice(at + "My answers:".length) : (prompt ?? "")).replace(/\s+/g, " ").trim());
   const quoted = reply ? ` “${[...reply].length > REPLY_QUOTED ? `${[...reply].slice(0, REPLY_QUOTED).join("").trimEnd()}…` : reply}”` : "";
-  return `Drafted from your reply${quoted} in this conversation, ${body === undefined || answersPaired(body) ? "each answer under its question" : "the questions, then your answers as written"}. Read and edit it before you approve.`;
+  return `Drafted from your reply${quoted} in this conversation, ${body === undefined || answersPaired(body) ? "each answer under its question" : answersQuote(body) ? "the questions, then your answers as written" : "your answers as written"}. Read and edit it before you approve.`;
 }
 
 /**

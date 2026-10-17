@@ -252,6 +252,8 @@ pub fn reporter_follow_at(events: &[WorkstreamEvent], replies: &[chrono::DateTim
             "readiness_answered" | "readiness_overridden" if person => now = ReporterFollow::default(),
             "basis_drifted" if e.actor == Actor::Supervisor && now.waiting.is_some() => now = ReporterFollow { waiting: None, changed: true, replied: false },
             "resumed" if person => now.waiting = None,
+            // "Looks fine" after the reply is the person choosing: the reply is read, though the ticket still counts as changed.
+            "clarity_dismissed" if person => now.replied = false,
             _ => {}
         }
     }
@@ -264,6 +266,9 @@ pub fn reporter_follow_at(events: &[WorkstreamEvent], replies: &[chrono::DateTim
 /// How many characters of a reply the quote keeps. As `REPLY_EXCERPT` in src/lib/reporterWait.ts.
 const REPLY_EXCERPT: usize = 140;
 
+/// How far back from the cut the excerpt looks for a space to end on. As `REPLY_WORD_BACK` in src/lib/reporterWait.ts.
+const REPLY_WORD_BACK: usize = 20;
+
 /// How many lines of a reply the quote keeps. As `REPLY_LINES` in src/lib/reporterWait.ts.
 const REPLY_LINES: usize = 2;
 
@@ -275,7 +280,19 @@ pub fn reply_excerpt(text: &str) -> String {
     let shown: Vec<String> = lines
         .iter()
         .take(REPLY_LINES)
-        .map(|line| if line.chars().count() > REPLY_EXCERPT { format!("{}…", line.chars().take(REPLY_EXCERPT - 1).collect::<String>().trim_end()) } else { line.clone() })
+        .map(|line| {
+            let chars: Vec<char> = line.chars().collect();
+            if chars.len() <= REPLY_EXCERPT {
+                return line.clone();
+            }
+            // Back up to the last space when one is near, so the cut does not land inside a word.
+            let cut = &chars[..REPLY_EXCERPT - 1];
+            let end = match cut.iter().rposition(|c| *c == ' ') {
+                Some(space) if chars[REPLY_EXCERPT - 1] != ' ' && space >= REPLY_EXCERPT - 1 - REPLY_WORD_BACK => space,
+                _ => cut.len(),
+            };
+            format!("{}…", cut[..end].iter().collect::<String>().trim_end())
+        })
         .collect();
     let more = lines.len() - shown.len();
     let tail = if more > 0 { format!(" (+{more} more)") } else { String::new() };

@@ -170,6 +170,12 @@ fn names_url(text: &str, url: &str) -> bool {
     !url.is_empty() && text.match_indices(url).any(|(at, _)| !text[at + url.len()..].starts_with(|c: char| c.is_alphanumeric() || c == '_' || c == '-'))
 }
 
+/// Whether `repo` reads as `owner/name`, as `parsePullRef` in src/lib/githubUrl.ts takes it, so a link can be built from it.
+fn valid_repo(repo: &str) -> bool {
+    let word = |s: &str, max: usize| !s.is_empty() && s.len() <= max && s.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '.' | '_'));
+    repo.split_once('/').is_some_and(|(owner, name)| word(owner, 39) && !owner.starts_with(['-', '.', '_']) && !owner.contains(['.', '_']) && word(name, 100))
+}
+
 pub fn comment_text(run: &Run, resolved: &Resolved, note: &JiraNote, change: Option<&CodeChange>) -> String {
     let mut parts = vec![intro(run.spec.kind).to_string()];
     if resolved.status == Some(ReportStatus::Blocked) {
@@ -189,7 +195,9 @@ pub fn comment_text(run: &Run, resolved: &Resolved, note: &JiraNote, change: Opt
         let url = change.filter(|c| c.kind == CodeChangeKind::PullRequest && c.number == Some(n)).map(|c| c.url.as_str());
         let named = names_url(&note.text, &format!("#{n}")) || names_url(&note.text, &format!("/pull/{n}")) || url.is_some_and(|u| names_url(&note.text, u));
         if !named {
-            parts.push(url.map_or_else(|| format!("Pull request #{n}"), |u| format!("Pull request: {u}")));
+            // Without a change of its own, the pull request is the run's repository's, so its page is built from that.
+            let built = valid_repo(&run.spec.repo).then(|| format!("https://github.com/{}/pull/{n}", run.spec.repo));
+            parts.push(url.map(str::to_owned).or(built).map_or_else(|| format!("Pull request #{n}"), |u| format!("Pull request: {u}")));
         }
     }
     parts.join("\n\n")
@@ -895,6 +903,14 @@ pub(in crate::inbox) mod tests {
         assert!(!text.contains("Pull request:"), "{text}");
     }
 
+    #[test]
+    fn a_repo_reads_as_owner_slash_name_before_a_link_is_built_from_it() {
+        assert!(valid_repo("acme/webshop") && valid_repo("a-b/my.repo_2"));
+        for bad in ["", "acme", "acme/", "/webshop", "a b/c", "acme/web/shop", "-acme/x", "ac_me/x", "acme/we bshop"] {
+            assert!(!valid_repo(bad), "{bad:?}");
+        }
+    }
+
     #[tokio::test]
     async fn a_review_note_says_it_is_a_review_and_names_the_pull_request_it_read() {
         let fx = fixture_watching(&["acme/webshop"]).await;
@@ -905,7 +921,7 @@ pub(in crate::inbox) mod tests {
         .await;
         let text = body_of(&fx.core.draft_run_comment(&run.id).await.unwrap());
         assert!(text.starts_with("Reviewed with an agent."), "{text}");
-        assert!(text.ends_with("Pull request #7"), "{text}");
+        assert!(text.ends_with("Pull request: https://github.com/acme/webshop/pull/7"), "{text}");
         assert!(!text.contains("Worked on"), "{text}");
 
         let fx = fixture_watching(&["acme/webshop"]).await;
@@ -925,7 +941,7 @@ pub(in crate::inbox) mod tests {
             r.result = Some("Done.\n\nFor Jira:\nFollows #70.".into());
         })
         .await;
-        assert!(body_of(&fx.core.draft_run_comment(&other.id).await.unwrap()).ends_with("Pull request #7"), "#70 is not #7");
+        assert!(body_of(&fx.core.draft_run_comment(&other.id).await.unwrap()).ends_with("Pull request: https://github.com/acme/webshop/pull/7"), "#70 is not #7");
 
         let fx = fixture_watching(&["acme/webshop"]).await;
         let plain = run_with(&fx, |r| r.spec.kind = RunKind::Review).await;

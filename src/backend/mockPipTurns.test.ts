@@ -3,7 +3,9 @@ import { INTERRUPTED, MOCK_TURN_DAYS, NEVER_RAN, SHOWN_MAX_CHARS, freshStart, mo
 import { answersScript, mockAsk, numberedAnswers } from "./mockPip";
 import { docText } from "../lib/docs";
 import { answersPaired, answersProvenance } from "../lib/proposals";
-import type { ScreenContext } from "../types";
+import type { Run, ScreenContext } from "../types";
+import { MockBackend } from "./mock";
+import { unclearTriageResult } from "./mockReadiness";
 
 const KEY = "gossamr-mock-pip-turns";
 const DAY = 24 * 60 * 60 * 1000;
@@ -356,6 +358,21 @@ describe("the comment with the person's answers (G3)", () => {
     const said = script("It is all about winback.").text;
     expect(said).not.toContain("each under its question");
     expect(said).toContain("the questions first, then your answers as you wrote them");
+  });
+
+  it("pairs a reply typed afresh with the open questions of the newest finished triage, and claims no questions when there are none (G1)", () => {
+    const triage = { ...new MockBackend().runs.list()[0], state: "done", spec: { ...new MockBackend().runs.list()[0].spec, kind: "triage", workstream: "w1" }, result: unclearTriageResult("CA-408"), resultComplete: true, endedAt: "2026-10-12T10:00:00Z" } as Run;
+    const typed = answersScript("1. Done means three emails. 2. Only the CRM number. 3. The old export is out. 4. Support asked.", [triage], ws)!;
+    const body = typed.draft!.intent.type === "comment" ? docText(typed.draft!.intent.body) : "";
+    expect(body).toContain("\u201cWhat does done look like for CA-408?\u201d\nAnswer: Done means three emails.");
+    expect(answersPaired(body)).toBe(true);
+    expect(typed.text).toContain("each under its question");
+    // Without a triage to take questions from, nothing is claimed to come first.
+    const none = answersScript("It is all about winback.", [], ws)!;
+    expect(none.text).toContain("your answers as you wrote them");
+    expect(none.text).not.toContain("the questions first");
+    const noneBody = none.draft!.intent.type === "comment" ? docText(none.draft!.intent.body) : "";
+    expect(answersProvenance("It is all about winback.", noneBody)).not.toContain("questions");
   });
 
   it("the provenance line claims pairing only when the comment's text has it", () => {

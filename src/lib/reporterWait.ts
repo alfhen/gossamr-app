@@ -51,6 +51,8 @@ export function followWithReply(events: readonly FollowLine[], replies: readonly
     else if (person && (e.action === "readiness_answered" || e.action === "readiness_overridden")) now = { waiting: null, changed: false, replied: false };
     else if (e.actor === "supervisor" && e.action === "basis_drifted" && now.waiting) now = { waiting: null, changed: true, replied: false };
     else if (person && e.action === "resumed") now = { ...now, waiting: null };
+    // "Looks fine" after the reply is the person choosing: the reply is read, though the ticket still counts as changed.
+    else if (person && e.action === "clarity_dismissed") now = { ...now, replied: false };
   }
   while (next < times.length) reply(times[next++]);
   return { follow: now, repliedAt: now.replied ? repliedAt : null };
@@ -85,11 +87,14 @@ export function reporterAsk(events: readonly FollowLine[]): ReporterAsk | null {
 /** How many characters of a reply the quote keeps. As `REPLY_EXCERPT` in src-tauri/src/inbox/workstreams.rs. */
 export const REPLY_EXCERPT = 140;
 
+/** How far back from the cut the excerpt looks for a space to end on. As `REPLY_WORD_BACK` in src-tauri/src/inbox/workstreams.rs. */
+export const REPLY_WORD_BACK = 20;
+
 /** How many lines of a reply the quote keeps. As `REPLY_LINES` in src-tauri/src/inbox/workstreams.rs. */
 export const REPLY_LINES = 2;
 
 /**
- * The first two lines of a comment's text with their spacing made even, each cut to `REPLY_EXCERPT` characters with "…", on
+ * The first two lines of a comment's text with their spacing made even, each cut to `REPLY_EXCERPT` characters (at a word when one ends near the cut) with "…", on
  * two lines of their own, and " (+N more)" after them when N more lines follow, so a numbered reply doesn't read as one item.
  * As `reply_excerpt` in src-tauri/src/inbox/workstreams.rs.
  */
@@ -97,7 +102,12 @@ export function replyExcerpt(text: string): string {
   const lines = text.split(/\n/).map((l) => l.split(/\s+/).filter(Boolean).join(" ")).filter((l) => l);
   const shown = lines.slice(0, REPLY_LINES).map((line) => {
     const chars = Array.from(line);
-    return chars.length > REPLY_EXCERPT ? `${chars.slice(0, REPLY_EXCERPT - 1).join("").trimEnd()}…` : line;
+    if (chars.length <= REPLY_EXCERPT) return line;
+    // Back up to the last space when one is near, so the cut doesn't land inside a word.
+    const cut = chars.slice(0, REPLY_EXCERPT - 1);
+    const space = cut.lastIndexOf(" ");
+    const end = chars[REPLY_EXCERPT - 1] !== " " && space >= REPLY_EXCERPT - 1 - REPLY_WORD_BACK ? space : cut.length;
+    return `${cut.slice(0, end).join("").trimEnd()}…`;
   });
   const more = lines.length - shown.length;
   return `${shown.join("\n")}${more > 0 ? ` (+${more} more)` : ""}`;

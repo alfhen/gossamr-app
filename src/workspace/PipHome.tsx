@@ -31,7 +31,7 @@ import { useWorkspace } from "../workspaceStore";
 import { NeedsPane, paneStop } from "./NeedsPane";
 import { StartMyDayCard } from "./StartMyDay";
 import { arm, confirmArmed, disarm, groupId, keyPlan, openNeed, setPaneIntent } from "./needsActions";
-import { undoLog } from "./undo";
+import { undoLatest } from "./undo";
 import { liveCounts } from "./agentsLogic";
 import { composerFooter, landingSelection } from "./pipHomeLogic";
 import { focusToast } from "./ToastHost";
@@ -663,8 +663,7 @@ function usePipHomeKeys(needsYou: readonly Need[]) {
         }
         case "undo": {
           // The toast offering it goes with it (`undoLog`'s settled hook).
-          const last = undoLog.latest();
-          return void (last && undoLog.run(last.id));
+          return undoLatest();
         }
         case "confirm":
           return confirmArmed();
