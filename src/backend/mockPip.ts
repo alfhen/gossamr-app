@@ -595,7 +595,11 @@ export function scriptPip(prompt: string, context: ScreenContext, images: ImageD
   const turn = scriptTurn(prompt, context, images, runs, now, drafts, discussed, workstream);
   // Their answers were posted and they asked for the plan ("Plan this"): whatever else this turn does, it also proposes it.
   // Nothing proposes it unasked, as the real agent is told to wait for the person to ask.
-  const askedForPlan = !prompt.startsWith(EVENT) && /\bplan\b/i.test(prompt);
+  // Asked means the plan ask a step takes ("Plan this", "plan CA-408"), not any message with the word, and never a plan
+  // of another ticket.
+  const planAsk = CHAIN_ASKS.find((a) => a.kind === "plan")!;
+  const asked = prompt.toLowerCase();
+  const askedForPlan = !prompt.startsWith(EVENT) && planAsk.pattern.test(asked) && !otherKey(asked, workstream?.item ?? null);
   // That plan follows the triage the answers answered, so it takes the place of any plan the words alone would draft.
   const plan = askedForPlan ? planAfterAnswers(runs, workstream) : null;
   const script = !plan ? turn : turn.runDraft ? { ...plan, filter: turn.filter } : { ...turn, steps: [...turn.steps, ...plan.steps], text: `${turn.text}\n\n${plan.text}`, runDraft: plan.runDraft };

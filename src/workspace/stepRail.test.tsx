@@ -298,6 +298,14 @@ describe("the step rail", () => {
     expect(html).toContain(EDITED_ASIDE);
   });
 
+  it("doesn't call a draft left out as a repeat when only its edited twin made it one (CodeRabbit on #182)", () => {
+    setLiveDraft("c1", { edited: true, risky: false });
+    const html = renderToStaticMarkup(<StepDrafts step="review" drafts={[fromRun("c1", comment, "r5"), fromRun("c2", comment, "r5"), fromRun("t1", transition, "r5")]} approve={vi.fn()} initialConfirming />);
+    setLiveDraft("c1", null);
+    expect(html).toContain(">Yes, approve 2</button>");
+    expect(html).not.toContain("data-batch-left-out");
+  });
+
   it("asks first, inline, with Yes focused; Esc there cancels and approves nothing", () => {
     const html = renderToStaticMarkup(<StepDrafts step="review" drafts={[fromRun("c1", comment, "r5"), fromRun("c2", comment, "r5")]} approve={vi.fn()} initialConfirming />);
     expect(html).toMatch(/role="group" aria-label="Approve 2 drafts" data-esc-local/);
