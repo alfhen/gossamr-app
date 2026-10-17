@@ -333,7 +333,7 @@ pub fn reporter_replies(events: &[WorkstreamEvent], t: &crate::model::CachedTick
         .filter(|c| c.author.account_id != me)
         .filter_map(|c| {
             let at = chrono::DateTime::parse_from_rfc3339(&c.created).ok()?.with_timezone(&Utc);
-            let excerpt = reply_excerpt(&c.body);
+            let excerpt = reply_excerpt(&crate::runs::redact::redact(&c.body));
             (at > first && !excerpt.is_empty()).then(|| ReporterReplyAt { id: c.id.clone(), excerpt, at })
         })
         .collect();
@@ -346,7 +346,7 @@ pub fn reporter_replies(events: &[WorkstreamEvent], t: &crate::model::CachedTick
 /// `replyComment` in src/lib/reporterWait.ts; both run the `reply` of src/lib/reporterWait.fixtures.json.
 pub fn reply_to(t: &crate::model::CachedTicket, me: &str, at: chrono::DateTime<Utc>) -> Option<ReporterReply> {
     let c = t.comments.iter().filter(|c| c.author.account_id != me).find(|c| chrono::DateTime::parse_from_rfc3339(&c.created).is_ok_and(|d| d.with_timezone(&Utc) == at))?;
-    let excerpt = reply_excerpt(&c.body);
+    let excerpt = reply_excerpt(&crate::runs::redact::redact(&c.body));
     (!excerpt.is_empty()).then(|| ReporterReply { id: c.id.clone(), excerpt })
 }
 
@@ -2172,6 +2172,20 @@ mod tests {
             assert_eq!(reply_excerpt(""), "");
             assert_eq!(reply_excerpt(&"x".repeat(500)).chars().count(), REPLY_EXCERPT);
             assert_eq!(reply_excerpt(&"x".repeat(REPLY_EXCERPT)), "x".repeat(REPLY_EXCERPT));
+        }
+
+        #[test]
+        fn a_token_across_the_cut_never_shows_its_prefix_in_the_quote() {
+            let token = format!("ghp_{}", "a1B2".repeat(9));
+            let mut t = crate::tracker::testing::sample_ticket();
+            let person = crate::model::Person { account_id: "kim".into(), name: "n".into(), avatar_url: None };
+            // The token starts 120 characters in, so the 140-character cut lands inside it.
+            let body = format!("{}{token} and more", "word ".repeat(24));
+            t.comments = vec![crate::model::Comment { id: "c1".into(), author: person, created: at(3).to_rfc3339(), body, mentions: vec![], mentioned: vec![], doc: None }];
+            let got = reply_to(&t, "me", at(3)).unwrap().excerpt;
+            assert!(!got.contains("ghp_"), "{got:?}");
+            assert!(got.contains("[redacted]"), "{got:?}");
+            assert!(got.starts_with("word word"), "a useful excerpt stays: {got:?}");
         }
 
         fn follow_of(events: &[WorkstreamEvent]) -> ReporterFollow {

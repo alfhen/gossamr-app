@@ -238,6 +238,13 @@ describe("the comments about a ticket's open questions", () => {
 });
 
 describe("answersProvenance", () => {
+  it("does not count a quote after the Answers: heading as a question", () => {
+    const body = "Answers to the open questions on this ticket:\n\nAnswers:\n\u201cStop the rollout.\u201d\nThen redo it.";
+    expect(answersProvenance("My answers: stop it", body)).toContain("in this conversation, your answers as written");
+    expect(answersProvenance("My answers: stop it", "Answer:\n\u201cStop the rollout.\u201d")).not.toContain("the questions, then");
+    expect(answersProvenance("My answers: x", "1. \u201cWhy?\u201d\nAnswers:\n\u201cBecause.\u201d")).toContain("the questions, then your answers as written");
+  });
+
   it("never quotes a pasted secret in full, and cuts what it shows (G5)", () => {
     const token = `ghp_${"a1B2".repeat(9)}`;
     const line = answersProvenance(`Q. My answers: use ${token} for the export`);

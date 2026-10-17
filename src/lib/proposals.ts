@@ -293,7 +293,12 @@ export function answersPaired(body: string): boolean {
 }
 
 /** Whether an answers comment's text quotes any question at all (a reply typed afresh, with no questions to pair, quotes none). */
-const answersQuote = (body: string): boolean => body.split("\n").some((l) => /^(?:\d+[.)]\s+)?\u201c/.test(l.trim()));
+const answersQuote = (body: string): boolean => {
+  const lines = body.split("\n").map((l) => l.trim());
+  // Quotes after an "Answers:" heading are the person's words, not questions.
+  const heading = lines.findIndex((l) => /^Answers?:/i.test(l));
+  return (heading < 0 ? lines : lines.slice(0, heading)).some((l) => /^(?:\d+[.)]\s+)?\u201c/.test(l));
+};
 
 /**
  * The line under the answers draft's card that says which reply it was made from: the start of what the person wrote after "My answers:"
