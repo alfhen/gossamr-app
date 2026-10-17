@@ -4,7 +4,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MockBackend } from "../backend/mock";
 import type { CodeChange, Intent, ItemRef, Proposal, ReviewView, Run, RunKind, RunState, WorkstreamEvent, WorkstreamView } from "../types";
 import { DecisionShownContext } from "./decisionShown";
-import { freezeBatch } from "./pipHomeLogic";
+import { EDITED_ASIDE, freezeBatch } from "./pipHomeLogic";
+import { setLiveDraft } from "./draftLive";
 import { approveBatch, BATCH_CHANGED, BatchConfirm, confirmBatch, NOTES_HELP, NOTES_EMPTY, EarlierStepDrafts, planResultFor, StepDrafts, StepRailView, type StepRailViewProps } from "./StepRail";
 
 const memory = () => {
@@ -298,6 +299,14 @@ describe("the step rail", () => {
     // One card and the one in the pane make two together; with none in the pane there is one, so no button.
     expect(renderToStaticMarkup(<StepDrafts step="review" drafts={[fromRun("c1", comment, "r5")]} inPane={[fromRun("t1", transition, "r5")]} approve={vi.fn()} />)).toContain("Approve 2 of this step");
     expect(renderToStaticMarkup(<StepDrafts step="review" drafts={[fromRun("c1", comment, "r5")]} approve={vi.fn()} />)).not.toContain("Approve");
+  });
+
+  it("keeps the note on edited drafts while the batch is being confirmed (CodeRabbit on #182)", () => {
+    setLiveDraft("c3", { edited: true, risky: false });
+    const html = renderToStaticMarkup(<StepDrafts step="review" drafts={[fromRun("c1", comment, "r5"), fromRun("t1", transition, "r5"), fromRun("c3", comment, "r5")]} approve={vi.fn()} initialConfirming />);
+    setLiveDraft("c3", null);
+    expect(html).toContain(">Yes, approve 2</button>");
+    expect(html).toContain(EDITED_ASIDE);
   });
 
   it("asks first, inline, with Yes focused; Esc there cancels and approves nothing", () => {

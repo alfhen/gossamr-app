@@ -295,9 +295,12 @@ describe("I'll answer, then the person's answers", () => {
     await ask(id, "a2", "where do we stand?");
     expect(backend.proposals.list({ workstream: id }).filter((p) => p.label === "Answers to the open questions")).toHaveLength(1);
     expect(backend.proposals.list({ workstream: id }).some(planDraft)).toBe(false);
-    // Posted: Pip's next turn proposes the plan from the triage, which does not start, and only once.
+    // Posted: a turn that does not ask for the plan proposes none; "Plan this" proposes it from the triage, which does not
+    // start, and only once.
     await backend.proposalsApprove(answers.id);
     await ask(id, "a3", "where do we stand?");
+    expect(backend.proposals.list({ workstream: id }).some(planDraft)).toBe(false);
+    await ask(id, "a3b", "Plan this");
     const plans = backend.proposals.list({ workstream: id }).filter(planDraft);
     expect(plans).toHaveLength(1);
     expect(plans[0].intent.type === "startRun" && plans[0].intent.spec).toMatchObject({ kind: "plan", workstream: id });
