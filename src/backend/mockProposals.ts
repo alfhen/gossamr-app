@@ -7,13 +7,13 @@ import { followUpProblem } from "../workspace/followUp";
 import { answerProblem } from "../lib/answer";
 import { bodyChange, markdownOf } from "./mockMarkdown";
 import { planSectionOf } from "./mockPlanSection";
-import { isTriageDescription } from "./mockTriageSection";
+import { isTriageDescription, triageSectionOf, withoutTriageSection } from "./mockTriageSection";
 import { readStored, writeStored } from "../workspace/storage";
 import { AnswerLostError, ReviewOutdatedError } from "./mockGithub";
 import type { ChangedFile, Intent, ItemRef, MaybePosted, PostedReview, Proposal, ProposalEdit, ProposalOrigin, ProposalQuery, ProposalsChanged, ReviewComment, RunKind, WorkItemKind, WorkstreamActor } from "../types";
 
 /** A description update carrying a `Gossamr Plan` section that an agent run left: the plan a build follows once the person approves it. As `is_run_plan_rewrite` in `proposals.rs`. */
-const TRIAGE_KEEPS_THE_PLAN = "a Triage description draft can't change the Gossamr Plan; revise only its Triage section";
+const TRIAGE_KEEPS_THE_REST = "a Triage description draft can change only its Triage section; the rest of the description, the Gossamr Plan included, stays as it is";
 
 export const isRunPlanRewrite = (p: Proposal) => p.origin.type === "run" && p.intent.type === "rewrite" && !!p.intent.body && !!planSectionOf(p.intent.body.to) && !isTriageDescription(p);
 
@@ -451,9 +451,10 @@ export class MockProposals {
         title: was.title && title !== undefined ? { ...was.title, to: title.split(/\s+/).filter(Boolean).join(" ") } : was.title,
         body: was.body && description !== undefined ? bodyChange(was.body.from, description.trim()) : was.body,
       };
-      // As `edit_noted`: a revision of a Triage description draft may not add or change a plan.
-      const plan = (b: typeof was.body) => { const s = b && planSectionOf(b.to); return s ? markdownOf(s) : null; };
-      if (isTriageDescription(p) && plan(was.body) !== plan((intent as Extract<Intent, { type: "rewrite" }>).body)) throw new Error(TRIAGE_KEEPS_THE_PLAN);
+      // As `edit_noted`: a revision of a Triage description draft keeps its Triage section and leaves the rest, the plan included, as it was.
+      const now = (intent as Extract<Intent, { type: "rewrite" }>).body;
+      const rest = (b: typeof was.body) => (b ? markdownOf(withoutTriageSection(b.to)) : null);
+      if (isTriageDescription(p) && (!now || !triageSectionOf(now.to) || rest(was.body) !== rest(now))) throw new Error(TRIAGE_KEEPS_THE_REST);
       const problem = rewriteProblem(intent as Extract<Intent, { type: "rewrite" }>);
       if (problem) throw new Error(problem);
       return this.set(id, { intent, revisions: [...p.revisions, { at: new Date().toISOString(), note: "Revised by Pip", intent }], error: null });

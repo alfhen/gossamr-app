@@ -110,14 +110,17 @@ describe("a Triage on the vague CA-408 in the sample build", () => {
     for (const word of [" I ", " we ", "Gossamr", "Pip"]) expect(update.intent.body.toText).not.toContain(word);
   });
 
-  it("is revised by Pip in its Triage section, never in the plan", async () => {
+  it("is revised by Pip in its Triage section, never in the plan or the person's text", async () => {
     const b = sample();
     b.supervisor.dispose();
     const ws = (await b.workstreamsOpen(CA408)).id;
     const update = rewriteOf(b, (await triage(b, ws)).id)!;
     if (update.intent.type !== "rewrite" || !update.intent.body) throw new Error("a description update");
     const text = update.intent.body.toText;
-    expect(() => b.proposals.pipRevise(update.id, { description: `${text}\n\n## Gossamr Plan\n\nMy plan.` }, ws)).toThrow("can't change the Gossamr Plan");
+    const refused = "can change only its Triage section";
+    expect(() => b.proposals.pipRevise(update.id, { description: `${text}\n\n## Gossamr Plan\n\nMy plan.` }, ws)).toThrow(refused);
+    expect(() => b.proposals.pipRevise(update.id, { description: `Also this. ${text}` }, ws)).toThrow(refused);
+    expect(() => b.proposals.pipRevise(update.id, { description: text.replace(/^#+ Triage$/m, "") }, ws)).toThrow(refused);
     const revised = b.proposals.pipRevise(update.id, { description: text.replace("The ticket cannot be sized yet", "The ticket is vague") }, ws);
     expect(revised.revisions[revised.revisions.length - 1]?.note).toBe("Revised by Pip");
   });
