@@ -143,7 +143,8 @@ export function StepDrafts({ step, drafts, approve, initialConfirming = false }:
             </button>
           </div>
         ))}
-      {!frozen && aside > 0 && together.length + aside >= 2 && (
+      {/* While a batch is offered or being confirmed, and also where only the reply's drafts kept the button away, the note says why they are not in it. */}
+      {aside > 0 && (frozen !== null || together.length + aside >= 2) && (
         <p data-batch-aside className="m-0 text-xs text-ws-ink3">
           {BATCH_ASIDE}
         </p>
