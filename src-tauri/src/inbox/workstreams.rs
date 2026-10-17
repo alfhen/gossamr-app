@@ -516,9 +516,9 @@ pub fn reporter_comment(reporter: Option<&str>, questions: &[String], replied: b
         one_question_each(questions).iter().map(|q| format!("- {q}")).collect::<Vec<_>>().join("\n")
     };
     if replied {
-        return format!("{hello}\n\nThanks for your answer above. A few things are still open before work on this starts:\n\n{asks}\n\nCould you answer these here on the ticket? Thanks.");
+        return format!("{hello}\n\nThanks for your answer above. A few things are still open to make this ticket clear to work on:\n\n{asks}\n\nCould you answer these here on the ticket? Thanks.");
     }
-    format!("{hello}\n\nA few things need clearing up before work on this starts:\n\n{asks}\n\nCould you answer them here on the ticket? Thanks.")
+    format!("{hello}\n\nA few things need clearing up to make this ticket clear to work on:\n\n{asks}\n\nCould you answer them here on the ticket? Thanks.")
 }
 
 /// The questions an ask comment lists: its bullet lines, as the person left them, without the dash.
@@ -1899,7 +1899,7 @@ mod tests {
             let Intent::Comment { item, body } = &draft.intent else { panic!("a comment: {:?}", draft.intent) };
             assert_eq!(item.key, "CA-1");
             let text = body.plain_text();
-            for part in ["Hi @Kim Ode,", "A few things need clearing up before work on this starts", "- What does done look like?", "- Who is waiting on it?", "answer them here on the ticket"] {
+            for part in ["Hi @Kim Ode,", "A few things need clearing up to make this ticket clear to work on", "- What does done look like?", "- Who is waiting on it?", "answer them here on the ticket"] {
                 assert!(text.contains(part), "{part} in {text}");
             }
             assert!(format!("{body:?}").contains("rep-1"), "the reporter is mentioned, not just named");
@@ -2002,7 +2002,7 @@ mod tests {
             let questions = vec!["What does done look like?".to_string(), "Who is waiting on it?".to_string()];
             assert_eq!(
                 reporter_comment(Some("Kim Ode"), &questions, false),
-                "Hi @Kim Ode,\n\nA few things need clearing up before work on this starts:\n\n- What does done look like?\n- Who is waiting on it?\n\nCould you answer them here on the ticket? Thanks."
+                "Hi @Kim Ode,\n\nA few things need clearing up to make this ticket clear to work on:\n\n- What does done look like?\n- Who is waiting on it?\n\nCould you answer them here on the ticket? Thanks."
             );
             let none = reporter_comment(None, &[], false);
             assert!(none.starts_with("Hi,\n") && none.contains("- What is the goal?") && none.contains("acceptance criteria") && none.contains("in scope, and what is out") && none.contains("who is waiting on it"), "{none}");
@@ -2013,7 +2013,7 @@ mod tests {
             let questions = vec!["What does done look like for CA-408? Which behaviour or number should change?".to_string(), "Who is waiting on it?".to_string()];
             assert_eq!(
                 reporter_comment(None, &questions, false),
-                "Hi,\n\nA few things need clearing up before work on this starts:\n\n- What does done look like for CA-408?\n- Which behaviour or number should change?\n- Who is waiting on it?\n\nCould you answer them here on the ticket? Thanks."
+                "Hi,\n\nA few things need clearing up to make this ticket clear to work on:\n\n- What does done look like for CA-408?\n- Which behaviour or number should change?\n- Who is waiting on it?\n\nCould you answer them here on the ticket? Thanks."
             );
             // A question mark inside a sentence, or before a lower-case word, does not split; and the fallback frame says no "we".
             assert_eq!(one_question_each(&["Is v2? or v3 meant?".to_string(), "Done?".to_string()]), vec!["Is v2? or v3 meant?", "Done?"]);
@@ -2025,7 +2025,7 @@ mod tests {
             let questions = vec!["What does done look like?".to_string()];
             assert_eq!(
                 reporter_comment(Some("Kim Ode"), &questions, true),
-                "Hi @Kim Ode,\n\nThanks for your answer above. A few things are still open before work on this starts:\n\n- What does done look like?\n\nCould you answer these here on the ticket? Thanks."
+                "Hi @Kim Ode,\n\nThanks for your answer above. A few things are still open to make this ticket clear to work on:\n\n- What does done look like?\n\nCould you answer these here on the ticket? Thanks."
             );
             assert_ne!(reporter_comment(None, &questions, true), reporter_comment(None, &questions, false));
         }
@@ -2372,7 +2372,7 @@ mod tests {
             let Intent::Comment { item, body } = &draft.intent else { panic!("a comment: {:?}", draft.intent) };
             assert_eq!(item.key, "CA-1");
             let text = body.plain_text();
-            for part in ["A few things need clearing up before work on this starts", "- What is the goal?", "- What has to be true for this to be done", "- What is in scope, and what is out?", "- Who asked for it, and who is waiting on it?"] {
+            for part in ["A few things need clearing up to make this ticket clear to work on", "- What is the goal?", "- What has to be true for this to be done", "- What is in scope, and what is out?", "- Who asked for it, and who is waiting on it?"] {
                 assert!(text.contains(part), "{part} in {text}");
             }
             assert!(fx.tracker.intents().is_empty(), "nothing is posted before the person approves");

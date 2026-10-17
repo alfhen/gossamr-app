@@ -470,7 +470,7 @@ test.describe("D1: Pip speaks up when a ticket is unclear", () => {
     const draft = needsPane(page).getByRole("article", { name: "Comment on CA-408" });
     await expect(draft.locator('[data-created-by="gossamr"]')).toHaveText("Drafted by Gossamr");
     await expect(draft).toContainText("@Mette Lund");
-    await expect(draft).toContainText("A few things need clearing up before work on this starts");
+    await expect(draft).toContainText("A few things need clearing up to make this ticket clear to work on");
     await expect(draft).toContainText("What does done look like for CA-408?");
     await expect(draft).toContainText("Who asked for this, and who is waiting on it?");
     expect(await jiraWrites(page)).toEqual([]);
