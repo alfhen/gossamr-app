@@ -1,28 +1,28 @@
 import { useEffect, useState } from "react";
 import type { Run } from "../types";
 import { Box, BoxTitle, Btn, Details } from "./AgentSheet";
+import { answerKey, dropKeptAnswer, forgetKeptAnswers, keptAnswer, setKeptAnswer } from "./keptAnswers";
 import { ANSWER_REMINDER, answerDraft, canSendAnswer, resumable, suggestedAnswer } from "./runSheetLogic";
 
 export interface AnswerActions {
-  answer(text: string): void;
+  /** Sends the answer; resolves `true` once it got through, so the kept text is dropped only then. */
+  answer(text: string): Promise<boolean> | void;
   attach(): void;
 }
 
-/** What was typed for each question, kept while its card is closed and opened again; keyed by run and question so a new question starts empty. */
-const keptAnswers = new Map<string, string>();
-const answerKey = (run: Run) => `${run.id}:${run.needs ?? ""}`;
-/** Keeps `text` as the answer to `run`'s question (what typing does), so the card shows it when it is drawn again. */
-export const keepAnswer = (run: Run, text: string) => void keptAnswers.set(answerKey(run), text);
-/** Forget everything kept for a run (tests, and when it no longer needs an answer). */
-export function forgetKeptAnswers(runId?: string) {
-  for (const k of [...keptAnswers.keys()]) if (!runId || k.startsWith(`${runId}:`)) keptAnswers.delete(k);
-}
+export { forgetKeptAnswers, keepAnswer } from "./keptAnswers";
 
 /** The agent's question with a box to answer it in; for a run stopped with an answer that didn't get through, that answer to send again; for a run Gossamr stopped at a limit, the words to resume it with. */
 export function RunAnswer({ run, answering, on }: { run: Run; answering: boolean; on: AnswerActions }) {
   const key = answerKey(run);
-  const [text, setTextState] = useState(() => keptAnswers.get(key) ?? answerDraft(run));
-  const setText = (v: string) => (keptAnswers.set(key, v), setTextState(v));
+  const [text, setTextState] = useState(() => keptAnswer(key) ?? answerDraft(run));
+  // A new question on the same card starts from its own kept text or draft, not the last question's answer.
+  const [shownKey, setShownKey] = useState(key);
+  if (shownKey !== key) {
+    setShownKey(key);
+    setTextState(keptAnswer(key) ?? answerDraft(run));
+  }
+  const setText = (v: string) => (setKeptAnswer(key, v), setTextState(v));
   const waiting = run.state === "needsAnswer" || run.state === "stopped";
   useEffect(() => {
     if (!waiting) forgetKeptAnswers(run.id);
@@ -33,8 +33,9 @@ export function RunAnswer({ run, answering, on }: { run: Run; answering: boolean
   const ready = canSendAnswer(text) && !answering;
   const send = () => {
     if (!ready) return;
-    keptAnswers.delete(key);
-    on.answer(text);
+    void Promise.resolve(on.answer(text)).then((ok) => {
+      if (ok) dropKeptAnswer(key);
+    });
   };
   return (
     <Box tone="needs" label={limit ? "Stopped at its limit" : "Question from the agent"}>

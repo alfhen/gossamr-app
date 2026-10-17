@@ -9,6 +9,7 @@ import { copyText } from "./AgentSheet";
 import { KIND_LABEL, NO_FILTERS, agentGroups, stepRun, stopAllText, type AgentFilters } from "./agentsLogic";
 import { showDraft } from "./draftTicket";
 import { openTicketByKey, showMe } from "./jump";
+import { forgetSettledAnswers } from "./keptAnswers";
 import { planCommentMessage } from "./runSheetLogic";
 import { readStored, writeStored } from "./storage";
 import { messageOf, useToasts } from "./toasts";
@@ -117,7 +118,7 @@ interface RunsState {
   stop(id: string): Promise<void>;
   startNow(id: string): Promise<void>;
   /** Sends the person's answer to a run that is asking a question; the run carries on under the same id. */
-  answer(id: string, text: string): Promise<void>;
+  answer(id: string, text: string): Promise<boolean>;
   /** The person's Deny for the permission prompt they read as `command`: Claude is told no and carries on without it. */
   denyPermission(id: string, command: string): Promise<void>;
   /** The person's Allow once for the permission prompt they read as `command`: opens the run in Terminal, where they answer Yes, and copies the command. */
@@ -341,6 +342,7 @@ export const useRuns = create<RunsState>((set, get) => ({
       clearTimeout(watchdog);
       if (mine === seq) {
         set({ runs, status: "ready", error: null, dismissed: forgetRecovered(get().dismissed, runs) });
+        forgetSettledAnswers(runs);
         announceFailedLaunches(get, set);
       }
     } catch (e) {
@@ -447,7 +449,7 @@ export const useRuns = create<RunsState>((set, get) => ({
 
   async answer(id, text) {
     const { backend, answering } = get();
-    if (!backend || answering.has(id)) return;
+    if (!backend || answering.has(id)) return false;
     const before = get().runs.find((r) => r.id === id);
     const resuming = before?.state === "stopped" && !!before.stoppedByLimit;
     set({ answering: new Set([...answering, id]) });
@@ -455,8 +457,10 @@ export const useRuns = create<RunsState>((set, get) => ({
       const run = await backend.runsAnswer(id, text);
       set({ answered: { ...get().answered, [id]: run.lastProgressAt } });
       useToasts.getState().push(resuming ? "Resumed. Claude is picking it back up." : "Answer sent. Claude is picking it back up. Only the agent sees your answer; nothing goes to Jira.", "info");
+      return true;
     } catch (e) {
       useToasts.getState().push(`Couldn't send the answer: ${messageOf(e)}`);
+      return false;
     } finally {
       set({ answering: new Set([...get().answering].filter((x) => x !== id)) });
       void get().reload();

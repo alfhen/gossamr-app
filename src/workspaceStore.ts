@@ -446,7 +446,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       const on = targetOf(p.intent)?.key;
       // Which draft it was, in a few masked words: with several skipped in a row the ticket alone does not say.
       const said = draftSaid(p.intent, keptEditsOfDraft(id));
-      offerUndo({ what: "skip", text: `Skipped the draft${on ? ` on ${on}` : ""}${said ? `: “${said}”` : ""}.`, undone: `The draft${on ? ` on ${on}` : ""} is back${said ? `: “${said}”` : ""}.`, ...(usePipHome.getState().deciding === `draft:${id}` ? { spoken: false as const } : {}), undo: async () => void (await get().unskip(id)), restored: () => openRestored(p) });
+      offerUndo({ what: "skip", text: `Skipped the draft${on ? ` on ${on}` : ""}${said ? `: “${said}”` : ""}.`, undone: `The draft${on ? ` on ${on}` : ""} is back${said ? `: “${said}”` : ""}.`, ...(useTabs.getState().route === "pip" && usePipHome.getState().deciding === `draft:${id}` ? { spoken: false as const } : {}), undo: async () => void (await get().unskip(id)), restored: () => openRestored(p) });
     }
     return p;
   },
