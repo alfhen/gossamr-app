@@ -68,8 +68,8 @@ function expectPinnedBar(html: string) {
   const { bar, after } = actionBarOf(html);
   const open = bar.slice(0, bar.indexOf(">") + 1);
   for (const cls of ["sticky", "bottom-0", "bg-ws-win", "border-t"]) expect(open).toMatch(new RegExp(`class="[^"]*(?<![\\w-])${cls}(?![\\w-])`));
-  // Only the closing tags of the card's body and the card itself follow the bar.
-  expect(after).toBe("</div></article>");
+  // Only the closing tags of the card's body and the card itself follow the bar, and the key hint's empty live region (out of the flow).
+  expect(after.replace('<p aria-live="polite" data-key-live="true" class="sr-only"></p>', "")).toBe("</div></article>");
 }
 
 describe("a GitHub review draft's preview", () => {
