@@ -1,7 +1,7 @@
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { MentionTextarea } from "../components/MentionTextarea";
 import { docText } from "../lib/docs";
-import { autoLink, liveMentions, mentionNote, rewriteNote, type Mention } from "../lib/mentions";
+import { autoLink, liveMentions, mentionNote, rewriteNote, subtasksNote, type Mention } from "../lib/mentions";
 import { answersProvenance, isAnswersDraft, isReporterNudge, isReporterQuestions, targetOf, unreachable } from "../lib/proposals";
 import { APPROVAL_STARTS_BUILD, approvalStartsBuild } from "../lib/nextStep";
 import { useClaude } from "../claudeStore";
@@ -383,6 +383,8 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
     }
     return { risks: [], quote: {} };
   };
+  // Words the person changed, a comment's body or a rewrite's title and text: the alert and the provenance line stop calling them the agent's (G5).
+  const youEdited = edited.current || rewriteEdited.current;
   // The keyboard route from Needs you's list reads this: an edit or a pause waiting means "a, Enter" opens the card and doesn't approve the stored text (G1).
   useEffect(() => {
     setLiveDraft(p.id, p.state.type === "pending" ? { edited: Object.keys(typed()).length > 0 || edit() !== null, risky: risks().risks.length > 0, ...(intent.type === "comment" && edited.current ? { text: body } : {}) } : null);
@@ -589,6 +591,11 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
             {rewriteNote(rewriteWhat(rewrite))}
           </p>
         )}
+        {intent.type === "subtasks" && open && remaining > 0 && (
+          <p data-subtasks-note className="m-0 text-sm text-ws-ink3">
+            {subtasksNote(remaining, intent.parent.key)}
+          </p>
+        )}
         {intent.type === "link" && (
           <p className="m-0">
             <b className="font-mono">{intent.from.key}</b> {LINK_VERB[intent.kind]} <b className="font-mono">{intent.to.key}</b>
@@ -748,7 +755,7 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
               </span>
             )}{" "}
             <FromRun proposal={p} onOpen={onOpenRun ? () => onOpenRun((p.origin as { runId: string }).runId) : undefined} />
-            {isReporterQuestions(p) ? ". Gossamr wrote this around the triage's open questions, which are the agent's words. Read and edit them before you approve." : ". The words are the agent's. Read and edit them before you approve."}
+            {isReporterQuestions(p) ? ". Gossamr wrote this around the triage's open questions, which are the agent's words. Read and edit them before you approve." : youEdited ? ". You edited it; read it before you approve." : ". The words are the agent's. Read and edit them before you approve."}
           </p>
         )}
         {p.origin.type === "chat" && isReporterQuestions(p) && (
@@ -797,7 +804,7 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
             </button>
           </p>
         )}
-        {pause && open && <PostingPause risks={pause.risks} quote={pause.quote} subject={edited.current ? "Your edit" : intent.type === "comment" && isAnswersDraft(p) ? "Your reply" : "This draft"} anyway="Post anyway" working={working || state === "applying"} onKeep={keepEditing} onPost={approve} />}
+        {pause && open && <PostingPause risks={pause.risks} quote={pause.quote} subject={youEdited ? "Your edit" : intent.type === "comment" && isAnswersDraft(p) ? "Your reply" : "This draft"} anyway="Post anyway" working={working || state === "applying"} onKeep={keepEditing} onPost={approve} />}
         {(open || onShow) && (
           <div data-draft-actions className="sticky bottom-0 z-[1] -mx-3 -mb-2.5 flex flex-wrap items-center justify-end gap-2 border-t border-ws-sep bg-ws-win px-3 py-2">
             {onShow && (

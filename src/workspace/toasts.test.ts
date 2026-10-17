@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useToasts } from "./toasts";
+import { speakQuietToasts, useToasts } from "./toasts";
 
 beforeEach(() => vi.useFakeTimers());
 afterEach(() => {
@@ -29,5 +29,23 @@ describe("stacked Undo offers (G3)", () => {
     offer("Held CA-401.");
     offer("Held CA-401.");
     expect(texts()).toEqual(["Held CA-401."]);
+  });
+});
+
+describe("a toast already said elsewhere (G6)", () => {
+  it("keeps spoken: false only when it was given, so the live region can stay quiet", () => {
+    useToasts.getState().push("Skipped the draft.", "info", undefined, { spoken: false });
+    useToasts.getState().push("Held CA-401.", "info");
+    const [first, second] = useToasts.getState().toasts;
+    expect(first.spoken).toBe(false);
+    expect(second.spoken).toBeUndefined();
+  });
+});
+
+describe("speakQuietToasts (G6)", () => {
+  it("lets a quiet toast speak after all, and leaves the others alone", () => {
+    useToasts.getState().push("Skipped the draft.", "info", undefined, { spoken: false });
+    speakQuietToasts();
+    expect(useToasts.getState().toasts[0].spoken).toBeUndefined();
   });
 });

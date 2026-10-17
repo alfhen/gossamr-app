@@ -2,7 +2,7 @@ import { useMemo } from "react";
 import { create } from "zustand";
 import type { Backend } from "./backend/types";
 import { ALL, compileFilter, containerKey, itemKey, usesCode, type FilterContext, type QueryLookup } from "./lib/filter";
-import { draftExcerpt, targetOf, workstreamOf } from "./lib/proposals";
+import { draftSaid, targetOf, workstreamOf } from "./lib/proposals";
 import { movesAreOpaque } from "./workspace/boardLogic";
 import { workContainers } from "./workspace/domains";
 import { useDev } from "./workspace/devStore";
@@ -445,8 +445,8 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     if (was === "pending" && p.state.type === "skipped") {
       const on = targetOf(p.intent)?.key;
       // Which draft it was, in a few masked words: with several skipped in a row the ticket alone does not say.
-      const said = draftExcerpt(p.intent, undefined, keptEditsOfDraft(id));
-      offerUndo({ what: "skip", text: `Skipped the draft${on ? ` on ${on}` : ""}${said ? `: “${said}”` : ""}.`, undone: "The draft is back.", undo: async () => void (await get().unskip(id)), restored: () => openRestored(p) });
+      const said = draftSaid(p.intent, keptEditsOfDraft(id));
+      offerUndo({ what: "skip", text: `Skipped the draft${on ? ` on ${on}` : ""}${said ? `: “${said}”` : ""}.`, undone: `The draft${on ? ` on ${on}` : ""} is back${said ? `: “${said}”` : ""}.`, ...(useTabs.getState().route === "pip" && usePipHome.getState().deciding === `draft:${id}` ? { spoken: false as const } : {}), undo: async () => void (await get().unskip(id)), restored: () => openRestored(p) });
     }
     return p;
   },

@@ -73,7 +73,7 @@ test("s skips a draft at once, with an Undo that brings it back, and the audit s
   // Undo puts the exact draft back, pending, and its audit keeps both lines.
   await undo(page).click();
   await expect(card).toHaveAttribute("data-state", "pending");
-  await expectToast(page, "The draft is back.");
+  await expectToast(page, /^The draft on CA-401 is back/);
   const actions = await actionsOf(page);
   expect(actions.slice(actions.indexOf("draft_skipped"))).toEqual(["draft_skipped", "undone"]);
   expect((await workstreamEvents(page)).find((e) => e.action === "undone")).toMatchObject({ actor: "person", detail: "draft_skipped" });

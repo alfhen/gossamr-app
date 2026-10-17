@@ -81,7 +81,7 @@ test.describe("keys inside the open decision, the palette's Agents and Undo (F2,
     await expect(palette(page)).toBeVisible();
     await page.keyboard.type("undo");
     await palette(page).getByRole("option", { name: /Undo: Skipped the draft on CA-401/ }).click();
-    await expectToast(page, "The draft is back.");
+    await expectToast(page, /^The draft on CA-401 is back/);
     await expect(toast(page).filter({ hasText: "Skipped the draft on CA-401" })).toHaveCount(0);
   });
 

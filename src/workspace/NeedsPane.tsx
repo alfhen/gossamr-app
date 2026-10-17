@@ -30,7 +30,7 @@ import { resumable } from "./runSheetLogic";
 import { useRuns } from "./runsStore";
 import { BatchConfirm, PlanApproval, confirmBatch, planResultFor } from "./StepRail";
 import { batchLabel, EDITED_ASIDE, editedPending, freezeBatch, type BatchSnapshot } from "./pipHomeLogic";
-import { useToasts } from "./toasts";
+import { speakQuietToasts, useToasts } from "./toasts";
 import { useNow } from "./useNow";
 import { controlActions, HeldBanner } from "./WorkstreamControls";
 import { openOnPipHome, takePlannedAnyway, useWorkstreams } from "./workstreamsStore";
@@ -114,16 +114,22 @@ const READINESS_KEY = "readiness:";
 
 /** What the Done line says of a readiness question settled with Plan anyway, in place of the problem it restates. */
 export const PLANNING_ANYWAY = "Planning anyway";
+/** The same for one settled when the reporter replied or the ticket changed, as the toast says "Planning now". */
+export const PLANNING_NOW = "Planning now";
 
 /** The need as the Done line names it: a readiness question the person settled with Plan anyway says so, not "ticket not ready" again. */
-export const doneNeed = (done: Need, planned = takePlannedAnyway(done.kind === "readiness" ? done.key.slice(READINESS_KEY.length) : null)): Need => (planned ? { ...done, title: PLANNING_ANYWAY } : done);
+export const doneNeed = (done: Need, planned: boolean | "now" | "anyway" = takePlannedAnyway(done.kind === "readiness" ? done.key.slice(READINESS_KEY.length) : null)): Need =>
+  planned ? { ...done, title: planned === "now" ? PLANNING_NOW : PLANNING_ANYWAY } : done;
 
 /** The line over the pane once it moved on by itself: what was dealt with, and what is open now. */
-export const advancedText = (done: Pick<Need, "title" | "ticketKey" | "workstreamTitle">, next: Pick<Need, "title" | "ticketKey">, waitsOn?: string | null, posted: boolean | string = false) =>
-  `${doneText(done, posted)}${waitsOn ? ` ${waitsOn}.` : ""} Now: ${next.ticketKey ? `${next.ticketKey} · ` : ""}${next.title}`;
+export const advancedText = (done: Pick<Need, "title" | "ticketKey" | "workstreamTitle">, next: Pick<Need, "title" | "ticketKey">, waitsOn?: string | null, posted: boolean | string = false, skipped = false) =>
+  `${doneText(done, posted, skipped)}${waitsOn ? ` ${waitsOn}.` : ""} Now: ${next.ticketKey ? `${next.ticketKey} · ` : ""}${next.title}`;
 
 /** What is said when the need decided was the last one and the pane closes: what was done, and the wait it started. */
 export const closedText = (done: Pick<Need, "title" | "ticketKey" | "workstreamTitle">, waitsOn?: string | null, posted: boolean | string = false) => `${doneText(done, posted)}${waitsOn ? ` ${waitsOn}.` : ""}`;
+
+/** Whether the need was a draft the person skipped, so the line says "Skipped" and not "Done". */
+export const skippedDraft = (done: Pick<Need, "target">, proposals: Readonly<Record<string, Proposal>>) => done.target.type === "draft" && proposals[done.target.id]?.state.type === "skipped";
 
 /**
  * The note for the last need decided from the pane, or null when its draft went without being posted: a Skip says so in
@@ -138,19 +144,21 @@ export function lastNeedText(done: Need, proposals: Readonly<Record<string, Prop
 }
 
 /** What was done and in which workstream: "Done: Questions for the reporter on CA-408." The pane moved on, so the line is what says where it happened. */
-export const doneText = (done: Pick<Need, "title" | "ticketKey" | "workstreamTitle">, posted: boolean | string = false) => {
+export const doneText = (done: Pick<Need, "title" | "ticketKey" | "workstreamTitle">, posted: boolean | string = false, skipped = false) => {
   // A posted description change or set of subtasks says what Jira got, not the title of the card it was decided on (G7).
   if (typeof posted === "string") return posted;
+  // A skipped draft was not dealt with: the line says so, and it is the one thing a screen reader hears of the skip (G6).
+  const said = skipped ? "Skipped" : posted ? "Posted to Jira" : "Done";
   const where = done.ticketKey ?? done.workstreamTitle;
   // A title that already names the ticket is not repeated, and a question is not quoted as if it were what was done.
   const key = done.ticketKey;
   // The title names the ticket only when the key ends there: CA-40 is not the start of "CA-408: …".
   if (key && done.title.startsWith(key) && (done.title.length === key.length || /^[\s:·-]/.test(done.title.slice(key.length)))) {
     const rest = done.title.slice(key.length).replace(/^\s+/, "").replace(/^[:·-]\s*/, "");
-    if (rest.endsWith("?")) return `${posted ? "Posted to Jira" : "Done"}: decided "${rest}" on ${key}.`;
-    return `${posted ? "Posted to Jira" : "Done"}: ${done.title}.`;
+    if (rest.endsWith("?")) return `${said}: decided "${rest}" on ${key}.`;
+    return `${said}: ${done.title}.`;
   }
-  return `${posted ? "Posted to Jira" : "Done"}: ${done.title}${where ? ` on ${where}` : ""}.`;
+  return `${said}: ${done.title}${where ? ` on ${where}` : ""}.`;
 };
 
 const JIRA_WRITES: ReadonlySet<string> = new Set(["comment", "rewrite", "transition", "subtasks", "create", "link"]);
@@ -320,7 +328,7 @@ function PermissionBody({ run }: { run: Run }) {
 function AnswerBody({ run }: { run: Run }) {
   const answering = useRuns((s) => s.answering.has(run.id));
   const store = useRuns.getState();
-  return <RunAnswer key={run.id} run={run} answering={answering} on={{ answer: (text) => void store.answer(run.id, text), attach: () => void store.attach(run.id) }} />;
+  return <RunAnswer key={run.id} run={run} answering={answering} on={{ answer: (text) => store.answer(run.id, text), attach: () => void store.attach(run.id) }} />;
 }
 
 function Dismiss({ run }: { run: Run }) {
@@ -931,11 +939,12 @@ export function NeedsPane({ needs }: { needs: readonly Need[] }) {
   const [advanced, setAdvanced] = useState<Advanced | null>(null);
   const lastId = useRef(0);
   useAdvance(needs, (done, next) =>
-    setAdvanced((prev) => nextAdvanced(prev ?? { id: lastId.current, text: "" }, advancedText(done, next, waitStarted(done, useWorkspace.getState().proposals), postedFor(done, useWorkspace.getState().proposals)), done.workstreamId ? { workstreamId: done.workstreamId, label: doneText(done, postedFor(done, useWorkspace.getState().proposals)) } : undefined, done.key, next.key, !!waitStarted(done, useWorkspace.getState().proposals))),
+    setAdvanced((prev) => nextAdvanced(prev ?? { id: lastId.current, text: "" }, advancedText(done, next, waitStarted(done, useWorkspace.getState().proposals), postedFor(done, useWorkspace.getState().proposals), skippedDraft(done, useWorkspace.getState().proposals)), done.workstreamId ? { workstreamId: done.workstreamId, label: doneText(done, postedFor(done, useWorkspace.getState().proposals), skippedDraft(done, useWorkspace.getState().proposals)) } : undefined, done.key, next.key, !!waitStarted(done, useWorkspace.getState().proposals))),
     (done) => {
       const proposals = useWorkspace.getState().proposals;
       const text = lastNeedText(done, proposals);
-      if (!text) return;
+      // No pane line follows the last need, so a skip's toast is the one place it is said (G6).
+      if (!text) return skippedDraft(done, proposals) ? speakQuietToasts() : undefined;
       if (waitStarted(done, proposals)) pushWaitToast(text, done.workstreamId);
       else useToasts.getState().push(text, "info");
     },

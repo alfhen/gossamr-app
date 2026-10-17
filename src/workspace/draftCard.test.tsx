@@ -88,6 +88,9 @@ describe("a skipped draft's unsaved edit (G2)", () => {
     expect(ticks(card("s1"))).toEqual([true, true]);
     keepEditsOfDraft("s2", { picked: [true, false] });
     expect(ticks(card("s2"))).toEqual([true, false]);
+    // The note by Create says it makes the ticked ones in Jira as the person (G11).
+    expect(card("s1")).toContain("Creates 2 subtasks under CA-412 in Jira as you.");
+    expect(card("s2")).toContain("Creates 1 subtask under CA-412 in Jira as you.");
   });
 });
 
@@ -188,6 +191,25 @@ describe("the Start-an-agent card's name (G28)", () => {
     expect(out).toMatch(new RegExp(`<h3 id="${id}"[^>]*>Start an agent: CA-412</h3>`));
     expect(out).not.toContain('aria-label="Start an agent');
     expect(out).not.toContain('role="status"');
+  });
+});
+
+describe("an edited description draft's provenance (G5)", () => {
+  const rewriteDraft = (id: string): Proposal => ({
+    ...runDraft({ type: "pending" }),
+    id,
+    origin: { type: "run", runId: "r1", shortId: null } as Proposal["origin"],
+    createdBy: "agent",
+    intent: { type: "rewrite", item: itemRef("CA-412"), title: null, body: { from: docFromText("a"), to: docFromText("b"), fromText: "a", toText: "b" }, flattened: [] } as unknown as Proposal["intent"],
+  });
+  const render = (p: Proposal) => renderToStaticMarkup(<DraftCard proposal={p} statusName={null} people={[]} working={false} error={null} onApprove={vi.fn()} onSkip={vi.fn()} />);
+
+  it("says the words are the agent's until the person edits the rewrite, then that they edited it", () => {
+    expect(render(rewriteDraft("rw1"))).toContain("The words are the agent&#x27;s.");
+    keepEditsOfDraft("rw2", { rewrite: { title: "CA-412", text: "b @everyone" } });
+    const out = render(rewriteDraft("rw2"));
+    expect(out).toContain("You edited it; read it before you approve.");
+    expect(out).not.toContain("The words are the agent");
   });
 });
 

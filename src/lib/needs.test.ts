@@ -317,12 +317,20 @@ describe("needs: a ticket the triage found not clear enough to plan", () => {
     ...over,
   });
 
+  it("says they replied, not that they have not answered, once Looks fine has read the reply and the ticket still counts as changed (G3)", () => {
+    const changed = unclear(["Q?"], { readiness: { triageRun: "r-t", triageLabel: "R1", questions: ["Q?"], at: iso(9), changed: true } });
+    const [n] = needs(input({ workstreams: [changed], runs: [run("r-t", "triage", "done")], asked: { "ws-1": { asked: iso(2 * 24 * 60), nudged: null, replied: iso(60) } } }));
+    expect(n.title).toContain("changed: plan now?");
+    expect(n.why).toContain("You asked the reporter 2 days ago and they replied 1 hour ago. ");
+    expect(n.why).not.toContain("have not answered");
+  });
+
   it("says the reporter was asked and nudged, and offers Ask again, once they have not answered", () => {
-    const asked = { "ws-1": { asked: iso(2 * 24 * 60), nudged: iso(60) } };
+    const asked = { "ws-1": { asked: iso(2 * 24 * 60), nudged: iso(60), replied: null } };
     const [n] = needs(input({ workstreams: [unclear()], runs: [run("r-t", "triage", "done")], asked }));
     expect(n.why).toBe("You asked the reporter 2 days ago and nudged 1 hour ago; they have not answered. R1 left these questions open: What does done look like? · Who is waiting on it?");
     expect(n.primary).toEqual({ id: "askReporter", label: "Ask again" });
-    expect(needs(input({ workstreams: [unclear()], runs: [run("r-t", "triage", "done")], asked: { "ws-1": { asked: iso(60), nudged: null } } }))[0].why).toMatch(/^You asked the reporter 1 hour ago; they have not answered\. /);
+    expect(needs(input({ workstreams: [unclear()], runs: [run("r-t", "triage", "done")], asked: { "ws-1": { asked: iso(60), nudged: null, replied: null } } }))[0].why).toMatch(/^You asked the reporter 1 hour ago; they have not answered\. /);
     // Without an ask, or once they replied, nothing is said about one.
     expect(needs(input({ workstreams: [unclear()], runs: [run("r-t", "triage", "done")] }))[0].primary.label).toBe("Ask the reporter");
     const replied = unclear(["Q?"], { readiness: { triageRun: "r-t", triageLabel: "R1", questions: ["Q?"], at: iso(9), changed: true, replied: true } });

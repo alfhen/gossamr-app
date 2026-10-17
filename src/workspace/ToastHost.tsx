@@ -181,7 +181,7 @@ export function ToastStack({ toasts, dismiss, placement }: { toasts: readonly To
     >
       {/* The live region holds the message alone: the Undo and × buttons beside it would be read out as one run with it. */}
       <p role="status" aria-live="polite" data-toast-status className="sr-only">
-        {head?.text}
+        {head?.spoken === false ? "" : head?.text}
       </p>
       {head && <ToastCard key={head.id} toast={head} waiting={toasts.length - 1} onDismiss={() => dismiss(head.id)} />}
     </div>

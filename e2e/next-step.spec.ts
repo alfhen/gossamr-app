@@ -88,7 +88,7 @@ test("held, the header says so and that Resume continues; Advise says nothing st
   const manage = pipPane(page).getByRole("switch", { name: "Manage this workstream" });
   await manage.click();
   await expect(manage).toHaveAttribute("aria-checked", "false");
-  await expect(nextLine(page)).toHaveText("Next: nothing starts on its own in Advise. Pip suggests, you start.");
+  await expect(nextLine(page)).toHaveText("Next: nothing starts on its own while Manage is off. Ask Pip to draft the next step (for example “Build this”), or start an agent from ⌘K.");
 });
 
 test("waiting on the person, the header links to the top need and opens it in the Needs-you pane", async ({ page }) => {

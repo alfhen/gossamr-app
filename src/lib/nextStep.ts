@@ -199,9 +199,9 @@ function chain(view: WorkstreamView, runs: readonly Run[], proposals: readonly P
     return step("done", `nothing left. The PR is ${verified ? "verified" : "reviewed"} and waits for you to merge it.`);
   }
 
-  if (ws.mode !== "manage") return step("advise", "nothing starts on its own in Advise. Pip suggests, you start.");
+  if (ws.mode !== "manage") return step("advise", "nothing starts on its own while Manage is off. Ask Pip to draft the next step (for example “Build this”), or start an agent from ⌘K.");
 
-  if (view.budget.level === "spent") return step("spent", "the automatic steps are used up. Your click starts the next step.");
+  if (view.budget.level === "spent") return step("spent", "the automatic steps are used up. Ask Pip or use ⌘K to start the next step.");
   const left = view.budget.level === "amber" ? ` (${stepsLeftText(view.budget).replace(/ automatic steps left$/, "")} automatic steps left)` : "";
 
   const src = going[0];
@@ -249,13 +249,13 @@ function afterRunning(src: Run, view: WorkstreamView, globals: Partial<AutoStart
   }
   if (result && unknown) return step("depends", `depends on ${unknown}${left}.`);
   if (result && result.decision === "start") return step("auto", `when ${name} finishes, ${A_STEP[result.kind]} starts automatically${left}.`);
-  return step("manual", `when ${name} finishes, nothing starts on its own: ${whyNothing(src, view, globals)}. Your click starts the next step.`);
+  return step("manual", `when ${name} finishes, nothing starts on its own: ${whyNothing(src, view, globals)}. Ask Pip or use ⌘K to start the next step.`);
 }
 
 /** The line with nothing running: what the rules are about to start after the newest run, or why nothing is. */
 function afterFinished(last: Run, view: WorkstreamView, mine: readonly Run[], proposals: readonly Proposal[], globals: Partial<AutoStartSwitches>, left: string, step: Step, events: readonly AuditLine[]): NextStep {
   const name = nameOf(last, view);
-  if (last.state !== "done") return step("manual", `nothing starts on its own after ${name} ${last.state === "failed" ? "failed" : "stopped"}. Your click starts the next step.`);
+  if (last.state !== "done") return step("manual", `nothing starts on its own after ${name} ${last.state === "failed" ? "failed" : "stopped"}. Ask Pip or use ⌘K to start the next step.`);
   const kind = last.spec.kind;
   if (kind === "build" && view.waitingForPr === last.id && probe(last, view, globals, { pr: null })?.decision === "waitingForPr") {
     return step("auto", `waiting for ${shortOf(last, view)}'s pull request to show up; then a review starts automatically${left}.`);
@@ -269,13 +269,13 @@ function afterFinished(last: Run, view: WorkstreamView, mine: readonly Run[], pr
     const build = last.spec.buildFromRun ?? null;
     known.fixRounds = build ? events.filter((e) => e.action === "autostart" && e.runId === build && !!e.detail?.startsWith("fix_round after ")).length : 0;
     // A review the person posted to GitHub: nothing follows it on its own, whatever it said.
-    if (view.reviewBlocking && reviewPosted(events, last)) return step("manual", `the review is posted; nothing starts on its own. Your click starts the next step.`);
+    if (view.reviewBlocking && reviewPosted(events, last)) return step("manual", `the review is posted; nothing starts on its own. Ask Pip or use ⌘K to start the next step.`);
     known.reviewed = mine.filter((r) => r.spec.kind === "review").map((r) => r.spec.prSha ?? null);
   }
   const result = probe(last, view, globals, known);
   if (result?.decision === "start") return step("auto", `${A_STEP[result.kind]} starts automatically after ${name}${left}.`);
-  if (result?.decision === "exhausted") return step("manual", `${shortOf(last, view)}'s review still blocks after ${known.fixRounds} fix rounds and no fix round starts on its own. Your click starts the next step.`);
+  if (result?.decision === "exhausted") return step("manual", `${shortOf(last, view)}'s review still blocks after ${known.fixRounds} fix rounds and no fix round starts on its own. Ask Pip or use ⌘K to start the next step.`);
   if (result?.decision === "fixRound") return step("auto", `a fix round starts automatically after ${name}${left}.`);
-  if (kind === "review" && view.reviewBlocking) return step("manual", `${shortOf(last, view)}'s review blocks and no fix round starts on its own: ${whyNothing(last, view, globals)}. Your click starts the next step.`);
-  return step("manual", `nothing starts on its own after ${name}: ${whyNothing(last, view, globals)}. Your click starts the next step.`);
+  if (kind === "review" && view.reviewBlocking) return step("manual", `${shortOf(last, view)}'s review blocks and no fix round starts on its own: ${whyNothing(last, view, globals)}. Ask Pip or use ⌘K to start the next step.`);
+  return step("manual", `nothing starts on its own after ${name}: ${whyNothing(last, view, globals)}. Ask Pip or use ⌘K to start the next step.`);
 }

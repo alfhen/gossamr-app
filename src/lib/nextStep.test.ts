@@ -107,11 +107,11 @@ describe("nextStep while a run works", () => {
   it("starts nothing after a build that may not push, and says why", () => {
     const result = next([run("b", "build", "working", { spec: { ...base.spec, kind: "build", workstream: "ws-1", allowPush: false } })]);
     expect(result?.kind).toBe("manual");
-    expect(result?.text).toBe("Next: when R1 (Build) finishes, nothing starts on its own: it may not push, so there is no pull request to review. Your click starts the next step.");
+    expect(result?.text).toBe("Next: when R1 (Build) finishes, nothing starts on its own: it may not push, so there is no pull request to review. Ask Pip or use ⌘K to start the next step.");
   });
 
   it("says nothing starts when the rule's own switch is off, naming the rule", () => {
-    expect(text([run("b", "build", "working")], { rules: { build_review: false } })).toBe("Next: when R1 (Build) finishes, nothing starts on its own: “Build's PR → Review” is off. Your click starts the next step.");
+    expect(text([run("b", "build", "working")], { rules: { build_review: false } })).toBe("Next: when R1 (Build) finishes, nothing starts on its own: “Build's PR → Review” is off. Ask Pip or use ⌘K to start the next step.");
   });
 
   it("follows Settings for a rule the workstream has no switch for", () => {
@@ -130,7 +130,7 @@ describe("nextStep while a run works", () => {
 
   it("says nothing follows a review when fix rounds and verify are both off", () => {
     const text2 = text([run("r", "review", "working", { spec: { ...base.spec, kind: "review", workstream: "ws-1", buildFromRun: "b" } })], { rules: { fix_round: false, review_verify: false } });
-    expect(text2).toBe("Next: when R1 (Review) finishes, nothing starts on its own: “Blocking review → fix round” and “Passing review → Verify” are off. Your click starts the next step.");
+    expect(text2).toBe("Next: when R1 (Review) finishes, nothing starts on its own: “Blocking review → fix round” and “Passing review → Verify” are off. Ask Pip or use ⌘K to start the next step.");
   });
 
   it("says it depends on the triage's result, since a plan starts only if one is recommended", () => {
@@ -144,7 +144,7 @@ describe("nextStep while a run works", () => {
   });
 
   it("says nothing follows a verification", () => {
-    expect(text([run("v", "verify", "working")])).toBe("Next: when R1 (Verify) finishes, nothing starts on its own: nothing follows a verification on its own. Your click starts the next step.");
+    expect(text([run("v", "verify", "working")])).toBe("Next: when R1 (Verify) finishes, nothing starts on its own: nothing follows a verification on its own. Ask Pip or use ⌘K to start the next step.");
   });
 
   it("starts nothing after a run that is not on a ticket", () => {
@@ -153,7 +153,7 @@ describe("nextStep while a run works", () => {
 
   it("mentions the steps left once the budget runs low, and says it is used up once it is", () => {
     expect(text([run("b", "build", "working")], { spent: { autoTurns: 9, wakes: 0 } })).toBe("Next: when R1 (Build) finishes, a review starts automatically (2 of 11 automatic steps left).");
-    expect(next([run("b", "build", "working")], { spent: { autoTurns: 11, wakes: 0 } })).toMatchObject({ kind: "spent", text: "Next: the automatic steps are used up. Your click starts the next step." });
+    expect(next([run("b", "build", "working")], { spent: { autoTurns: 11, wakes: 0 } })).toMatchObject({ kind: "spent", text: "Next: the automatic steps are used up. Ask Pip or use ⌘K to start the next step." });
     expect(next([run("b", "build", "working")], { spent: { autoTurns: 0, wakes: 12 } })?.kind).toBe("spent");
   });
 
@@ -243,7 +243,7 @@ describe("nextStep when the person is waited on", () => {
 
 describe("nextStep in Advise", () => {
   it("says nothing starts on its own, whether a run works or nothing does", () => {
-    const line = "Next: nothing starts on its own in Advise. Pip suggests, you start.";
+    const line = "Next: nothing starts on its own while Manage is off. Ask Pip to draft the next step (for example “Build this”), or start an agent from ⌘K.";
     expect(next([run("b", "build", "working")], { mode: "advise" })).toMatchObject({ kind: "advise", text: line, need: null });
     expect(text([], { mode: "advise" })).toBe(line);
     expect(text([run("t", "triage", "done")], { mode: "advise" })).toBe(line);
@@ -277,7 +277,7 @@ describe("nextStep when held", () => {
 
 describe("nextStep when the budget is spent", () => {
   it("says the click starts the next step, with nothing running too", () => {
-    expect(text([run("t", "triage", "done")], { spent: { autoTurns: 11, wakes: 0 } })).toBe("Next: the automatic steps are used up. Your click starts the next step.");
+    expect(text([run("t", "triage", "done")], { spent: { autoTurns: 11, wakes: 0 } })).toBe("Next: the automatic steps are used up. Ask Pip or use ⌘K to start the next step.");
   });
 
   it("says nothing of a budget while there is plenty left", () => {
@@ -343,21 +343,21 @@ describe("nextStep after the last run finished", () => {
     const sent = (n: number) => ({ at: iso(30 - n), actor: "supervisor" as const, action: "autostart", runId: "b", detail: `fix_round after r${n}` });
     const runs = [run("b", "build", "done"), blocking];
     expect(next(runs, { stage: "review", reviewBlocking: true }, [], AUTOSTART_DEFAULTS, [sent(1)])?.kind).toBe("auto");
-    expect(next(runs, { stage: "review", reviewBlocking: true }, [], AUTOSTART_DEFAULTS, [sent(1), sent(2)])).toMatchObject({ kind: "manual", text: "Next: R2's review still blocks after 2 fix rounds and no fix round starts on its own. Your click starts the next step." });
+    expect(next(runs, { stage: "review", reviewBlocking: true }, [], AUTOSTART_DEFAULTS, [sent(1), sent(2)])).toMatchObject({ kind: "manual", text: "Next: R2's review still blocks after 2 fix rounds and no fix round starts on its own. Ask Pip or use ⌘K to start the next step." });
   });
 
   it("says nothing starts on its own once the person posted a blocking review", () => {
     const blocking = run("r", "review", "done", { spec: { ...base.spec, kind: "review", workstream: "ws-1", buildFromRun: "b" } });
     const posted = { at: iso(2), actor: "person" as const, action: "review_posted", runId: null, detail: null };
-    expect(next([run("b", "build", "done"), blocking], { stage: "review", reviewBlocking: true }, [], AUTOSTART_DEFAULTS, [posted])).toMatchObject({ kind: "manual", text: "Next: the review is posted; nothing starts on its own. Your click starts the next step." });
+    expect(next([run("b", "build", "done"), blocking], { stage: "review", reviewBlocking: true }, [], AUTOSTART_DEFAULTS, [posted])).toMatchObject({ kind: "manual", text: "Next: the review is posted; nothing starts on its own. Ask Pip or use ⌘K to start the next step." });
   });
 
   it("says nothing starts after a triage that did not lead to a plan", () => {
-    expect(text([run("t", "triage", "done")])).toBe("Next: nothing starts on its own after R1 (Triage): it did not call for a plan. Your click starts the next step.");
+    expect(text([run("t", "triage", "done")])).toBe("Next: nothing starts on its own after R1 (Triage): it did not call for a plan. Ask Pip or use ⌘K to start the next step.");
   });
 
   it("says nothing starts after a stopped run, which is waiting on the person only if it asks to be dealt with", () => {
-    expect(text([run("b", "build", "stopped")])).toBe("Next: nothing starts on its own after R1 (Build) stopped. Your click starts the next step.");
+    expect(text([run("b", "build", "stopped")])).toBe("Next: nothing starts on its own after R1 (Build) stopped. Ask Pip or use ⌘K to start the next step.");
   });
 
   it("is nothing running when there are no runs", () => {

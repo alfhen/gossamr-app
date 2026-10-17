@@ -316,6 +316,21 @@ describe("a GitHub review draft's card in the peek (D9, D20, D21, D32)", () => {
     expect(postedLine("skipped", intent)).toBe(". Discarded: nothing went to GitHub.");
   });
 
+  it("masks a secret and a private key in a posted review, and says so, while the editable boxes keep the text (G2)", () => {
+    const secret = "sk_live_" + "4eC39HqLyjWDarjtT1zdp7dc";
+    const key = "-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEA7yn3bRHQ5FHMQ\n-----END RSA PRIVATE KEY-----";
+    const risky = draft({ intent: { ...intent, summary: `Found ${secret} in the config.`, comments: [at(42, `Remove this:\n${key}`)] } });
+    const posted = render({ ...risky, state: { type: "applied" } }, canPost);
+    expect(posted).toContain("sk…");
+    expect(posted).not.toContain(secret);
+    expect(posted).not.toContain("MIIEowIBAAKCAQEA7yn3bRHQ5FHMQ");
+    expect(posted).toContain("GitHub holds the text as it was posted.");
+    const pending = render(risky, canPost);
+    expect(pending).toContain(secret);
+    expect(pending).not.toContain("data-review-masked");
+    expect(render({ ...draft(), state: { type: "applied" } }, canPost)).not.toContain("data-review-masked");
+  });
+
   it("grows each text box with its words, and wraps long diff lines rather than cut them off", () => {
     vi.mocked(useAutoHeight).mockClear();
     const long = "**Nit:** " + "this sentence goes on. ".repeat(20);

@@ -53,6 +53,41 @@ describe("skipping a draft", () => {
     expect(said).not.toContain("hunter22secret");
   });
 
+  it("names a rewrite by its card's title when it has no words, and says so in the undone note (G7)", async () => {
+    const ws = await backend.workstreamsOpen(CA401);
+    const rewrite = { type: "rewrite", item: CA401, title: null, body: { from: docFromText("a"), to: docFromText("b"), fromText: "a", toText: "b" }, flattened: [] } as unknown as Intent;
+    const p = backend.proposals.draft(rewrite, null, "r1", ws.id);
+    await useWorkspace.getState().refreshProposals();
+    await useWorkspace.getState().skip(p.id);
+    expect(texts()).toEqual(["Skipped the draft on CA-401: “Update the description of CA-401”."]);
+    undoButton()!.run();
+    await vi.waitFor(() => expect(texts()).toContain("The draft on CA-401 is back: “Update the description of CA-401”."));
+  });
+
+  it("keeps the toast's live region quiet only when the pane is deciding that draft (G6)", async () => {
+    const ws = await backend.workstreamsOpen(CA401);
+    const a = backend.proposals.draft(comment, null, "r1", ws.id);
+    const b = backend.proposals.draft({ ...comment, body: docFromText("Other") } as Intent, null, "r1", ws.id);
+    await useWorkspace.getState().refreshProposals();
+    await useWorkspace.getState().skip(a.id);
+    expect(useToasts.getState().toasts[0].spoken).toBeUndefined();
+    useTabs.getState().setRoute("pip");
+    usePipHome.getState().decide(`draft:${b.id}`, ws.id);
+    await useWorkspace.getState().skip(b.id);
+    expect(useToasts.getState().toasts.find((t) => t.text.includes("Other"))?.spoken).toBe(false);
+    useTabs.getState().setRoute("workspace");
+  });
+
+  it("speaks the skip away from Pip, even if Pip was last deciding that draft (the pane isn't there to say it)", async () => {
+    const ws = await backend.workstreamsOpen(CA401);
+    const p = backend.proposals.draft(comment, null, "r1", ws.id);
+    await useWorkspace.getState().refreshProposals();
+    useTabs.getState().setRoute("workspace");
+    usePipHome.getState().decide(`draft:${p.id}`, ws.id);
+    await useWorkspace.getState().skip(p.id);
+    expect(useToasts.getState().toasts[0].spoken).toBeUndefined();
+  });
+
   it("names an edited draft by what the person typed, not by its stored text, still masked", async () => {
     const ws = await backend.workstreamsOpen(CA401);
     const p = backend.proposals.draft(comment, null, "r1", ws.id);
@@ -76,7 +111,7 @@ describe("skipping a draft", () => {
     expect(useToasts.getState().toasts[0].action).toMatchObject({ label: "Undo", what: "skip" });
     undoButton()!.run();
     await vi.waitFor(() => expect(useWorkspace.getState().proposals[p.id].state.type).toBe("pending"));
-    expect(texts()).toContain("The draft is back.");
+    expect(texts()).toContain("The draft on CA-401 is back: “Hi”.");
     const audit = (await backend.workstreamsEvents(ws.id)).map((e) => e.action);
     expect(audit.slice(-2)).toEqual(["draft_skipped", "undone"]);
   });

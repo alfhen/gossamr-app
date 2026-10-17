@@ -438,7 +438,9 @@ export function timelineCommands(state: TimelineState, a: Pick<CommandActions, "
  * then the other open ones, newest first.
  */
 export function startWorkstreamCommands(items: readonly WorkItem[], query: string, open: readonly WorkstreamView[], a: Pick<CommandActions, "startWorkstreamOn">, limit = 3, me: readonly PersonRef[] = []): Command[] {
-  const asked = /^\s*(?:start\s+)?(?:a\s+)?workstream(?:\s+(?:on\b\s*)?(.*))?$/i.exec(query);
+  // "start CA-408" or "start on ca-408" names the ticket without the word workstream; plain "start" and free words stay as they are.
+  const bare = /^\s*start\s+(?:on\s+)?(.+)$/i.exec(query);
+  const asked = /^\s*(?:start\s+)?(?:a\s+)?workstream(?:\s+(?:on\b\s*)?(.*))?$/i.exec(query) ?? (bare && ticketKeyOf(bare[1]) ? bare : null);
   if (!asked) return [];
   const rest = asked[1]?.trim() ?? "";
   const taken = new Set(open.filter((v) => v.workstream.closedAt === null && v.workstream.itemKey).map((v) => `${v.workstream.connectionId}:${v.workstream.itemKey}`));

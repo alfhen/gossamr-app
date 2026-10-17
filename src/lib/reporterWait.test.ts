@@ -64,15 +64,23 @@ describe("the reporter's reply as a quote (G15)", () => {
 describe("reporterAsk", () => {
   const ask = [line(1, "person", "readiness_asked", "d1"), line(2, "person", "draft_approved", "d1")];
 
+  it("carries the first reply after the ask, and still does once Looks fine has read it (G3)", () => {
+    const fine = [...ask, line(5, "person", "clarity_dismissed")];
+    expect(reporterAsk(ask, [at(1), at(4), at(6)])).toEqual({ asked: at(2), nudged: null, replied: at(4) });
+    expect(reporterAsk(fine, [at(4)])?.replied).toBe(at(4));
+    expect(reporterAsk(fine, [at(1)])?.replied).toBeNull();
+    expect(reporterAsk(fine)?.replied).toBeNull();
+  });
+
   it("is the approval time of the newest ask and of a nudge after it, and outlives the ticket changing", () => {
     expect(reporterAsk([])).toBeNull();
     expect(reporterAsk([line(1, "person", "readiness_asked", "d1")])).toBeNull();
-    expect(reporterAsk(ask)).toEqual({ asked: at(2), nudged: null });
+    expect(reporterAsk(ask)).toEqual({ asked: at(2), nudged: null, replied: null });
     const nudge = [line(3, "person", "reporter_nudged", "n1"), line(4, "person", "draft_approved", "n1")];
-    expect(reporterAsk([...ask, ...nudge])).toEqual({ asked: at(2), nudged: at(4) });
-    expect(reporterAsk([...ask, ...nudge, line(5, "supervisor", "basis_drifted")])).toEqual({ asked: at(2), nudged: at(4) });
+    expect(reporterAsk([...ask, ...nudge])).toEqual({ asked: at(2), nudged: at(4), replied: null });
+    expect(reporterAsk([...ask, ...nudge, line(5, "supervisor", "basis_drifted")])).toEqual({ asked: at(2), nudged: at(4), replied: null });
     // Asking again starts over; answering or planning anyway ends it.
-    expect(reporterAsk([...ask, ...nudge, line(5, "person", "readiness_asked", "d2"), line(6, "person", "draft_approved", "d2")])).toEqual({ asked: at(6), nudged: null });
+    expect(reporterAsk([...ask, ...nudge, line(5, "person", "readiness_asked", "d2"), line(6, "person", "draft_approved", "d2")])).toEqual({ asked: at(6), nudged: null, replied: null });
     expect(reporterAsk([...ask, line(3, "person", "readiness_answered")])).toBeNull();
   });
 });

@@ -12,11 +12,30 @@ import { openOnPipHome, useWorkstreams } from "./workstreamsStore";
 
 const link = "rounded px-1 text-ws-ink2 underline decoration-ws-sep2 underline-offset-2 hover:bg-ws-hover focus-visible:outline-2 focus-visible:outline-ws-pip";
 
+/** The workstream button in "Made from …, in the workstream X.": no padding after the name, or the full stop reads as set off by a space (G10). */
+const linkBeforeStop = link.replace("px-1", "pl-1");
+
 /** What the view says about GitHub: the reviews Gossamr posts there are not on this page, and where they are. */
 export const GITHUB_NOT_LISTED = "GitHub reviews Gossamr posted are not listed here; each shows in its workstream's timeline as “You posted an agent's GitHub review”.";
 
 /** What the view says before Gossamr has posted anything. */
 export const SENT_EMPTY = `No posts to Jira from Gossamr are on record here. What you approve shows up here, with what Pip drafted and what you changed.`;
+
+/** What a screen reader hears for a description diff line's two-character marker, which it would read as "plus" or "minus"; context lines say nothing. */
+const MARKER_SAID: Record<string, string> = { "+ ": "Added: ", "− ": "Removed: " };
+
+/** One line of the posted text: in a description diff the marker is shown but hidden from a screen reader, which hears "Added: " or "Removed: " in its place (G13). */
+export function DetailLine({ line, diff }: { line: string; diff: boolean }) {
+  const mark = diff ? line.slice(0, 2) : "";
+  if (!diff || (mark !== "+ " && mark !== "− " && mark !== "  ")) return <>{line || " "}</>;
+  return (
+    <>
+      <span aria-hidden>{mark}</span>
+      {MARKER_SAID[mark] && <span className="sr-only">{MARKER_SAID[mark]}</span>}
+      {line.slice(2) || " "}
+    </>
+  );
+}
 
 const time = (at: string) => new Date(at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 
@@ -60,7 +79,7 @@ export function SentRow({ entry: e, onTicket, onWorkstream }: { entry: SentEntry
             <div data-sent-detail className="grid gap-0.5 rounded-md bg-ws-bar px-2.5 py-1.5 text-sm text-ws-ink2">
               {e.detail.map((l, i) => (
                 <p key={i} className="m-0 whitespace-pre-wrap">
-                  {l || " "}
+                  <DetailLine line={l} diff={e.kind === "description"} />
                 </p>
               ))}
             </div>
@@ -74,7 +93,7 @@ export function SentRow({ entry: e, onTicket, onWorkstream }: { entry: SentEntry
           {e.workstream && e.workstreamId ? (
             <>
               {", in the workstream "}
-              <button type="button" data-sent-workstream={e.workstreamId} aria-label={`Open the workstream ${e.workstream}`} onClick={() => onWorkstream(e.workstreamId!)} className={link}>
+              <button type="button" data-sent-workstream={e.workstreamId} aria-label={`Open the workstream ${e.workstream}`} onClick={() => onWorkstream(e.workstreamId!)} className={linkBeforeStop}>
                 {e.workstream}
               </button>
               {"."}

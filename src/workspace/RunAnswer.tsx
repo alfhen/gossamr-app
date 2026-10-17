@@ -1,21 +1,42 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { Run } from "../types";
 import { Box, BoxTitle, Btn, Details } from "./AgentSheet";
+import { answerKey, dropKeptAnswer, forgetKeptAnswers, keptAnswer, setKeptAnswer } from "./keptAnswers";
 import { ANSWER_REMINDER, answerDraft, canSendAnswer, resumable, suggestedAnswer } from "./runSheetLogic";
 
 export interface AnswerActions {
-  answer(text: string): void;
+  /** Sends the answer; resolves `true` once it got through, so the kept text is dropped only then. */
+  answer(text: string): Promise<boolean> | void;
   attach(): void;
 }
 
+export { forgetKeptAnswers, keepAnswer } from "./keptAnswers";
+
 /** The agent's question with a box to answer it in; for a run stopped with an answer that didn't get through, that answer to send again; for a run Gossamr stopped at a limit, the words to resume it with. */
 export function RunAnswer({ run, answering, on }: { run: Run; answering: boolean; on: AnswerActions }) {
-  const [text, setText] = useState(() => answerDraft(run));
+  const key = answerKey(run);
+  const [text, setTextState] = useState(() => keptAnswer(key) ?? answerDraft(run));
+  // A new question on the same card starts from its own kept text or draft, not the last question's answer.
+  const [shownKey, setShownKey] = useState(key);
+  if (shownKey !== key) {
+    setShownKey(key);
+    setTextState(keptAnswer(key) ?? answerDraft(run));
+  }
+  const setText = (v: string) => (setKeptAnswer(key, v), setTextState(v));
+  const waiting = run.state === "needsAnswer" || run.state === "stopped";
+  useEffect(() => {
+    if (!waiting) forgetKeptAnswers(run.id);
+  }, [waiting, run.id]);
   const suggestion = suggestedAnswer(run);
   const limit = resumable(run);
   const again = run.state === "stopped" && !limit;
   const ready = canSendAnswer(text) && !answering;
-  const send = () => ready && on.answer(text);
+  const send = () => {
+    if (!ready) return;
+    void Promise.resolve(on.answer(text)).then((ok) => {
+      if (ok) dropKeptAnswer(key);
+    });
+  };
   return (
     <Box tone="needs" label={limit ? "Stopped at its limit" : "Question from the agent"}>
       <BoxTitle icon={limit ? "clock" : "hand"} tone="needs">

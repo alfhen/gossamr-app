@@ -634,7 +634,7 @@ export function needs({ workstreams, runs, proposals, dismissed, heldAt, asked, 
     // The reporter was asked before, and has not answered unless this is their reply: say so before the questions.
     const ask = v.workstream.id in (asked ?? {}) && !r.replied ? asked![v.workstream.id] : null;
     const when = new Date(now);
-    const already = ask ? `You asked the reporter ${agoText(ask.asked, when)}${ask.nudged ? ` and nudged ${agoText(ask.nudged, when)}` : ""}; they have not answered. ` : "";
+    const already = ask ? `You asked the reporter ${agoText(ask.asked, when)}${ask.nudged ? ` and nudged ${agoText(ask.nudged, when)}` : ""}${ask.replied ? ` and they replied ${agoText(ask.replied, when)}. ` : "; they have not answered. "}` : "";
     out.push({
       key: `readiness:${r.triageRun}`,
       group: "decide",

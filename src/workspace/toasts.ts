@@ -26,6 +26,8 @@ export interface Toast {
   keep?: boolean;
   /** As `ToastOptions.now`: it answers a keypress, so it took the screen from a note rather than waiting behind it. */
   now?: boolean;
+  /** As `ToastOptions.spoken`. */
+  spoken?: false;
 }
 
 export interface ToastOptions {
@@ -41,6 +43,8 @@ export interface ToastOptions {
    * undo; it goes next to the head then, ahead of the notes waiting.
    */
   now?: boolean;
+  /** `false` when a line beside the toast already says it to a screen reader (the pane's "Skipped: …"): its live region stays empty, so it is not announced twice. */
+  spoken?: false;
 }
 
 export interface ToastAction {
@@ -92,6 +96,11 @@ function stillNews(t: Toast): boolean {
   }
 }
 
+/** Lets every toast that was kept out of the live region speak after all: the line that was to say it (the pane's "Skipped: …") has nothing to say, as the skipped draft was the last need. */
+export const speakQuietToasts = () => {
+  if (useToasts.getState().toasts.some((t) => t.spoken === false)) useToasts.setState((s) => ({ toasts: s.toasts.map((t) => (t.spoken === false ? { ...t, spoken: undefined } : t)) }));
+};
+
 export const useToasts = create<ToastState>((set, get) => {
   /** Starts the clock of whichever toast is now at the head, once, after dropping notes that waited too long to come up. */
   const arm = () => {
@@ -112,7 +121,7 @@ export const useToasts = create<ToastState>((set, get) => {
       if (!keep && get().toasts.some((t) => t.text === text)) return null;
       const id = ++seq;
       set((s) => {
-        const toast: Toast = { id, text, tone, action, at: Date.now(), current: options?.current, lifetime: options?.lifetime, keep, now };
+        const toast: Toast = { id, text, tone, action, at: Date.now(), current: options?.current, lifetime: options?.lifetime, keep, now, ...(options?.spoken === false ? { spoken: false as const } : {}) };
         // The same offer again (a second Hold of the same workstream) replaces the one before it, on screen or waiting (an error on screen stays).
         const queue = keep ? s.toasts.filter((t, i) => (i === 0 && t.tone === "error") || t.text !== text) : s.toasts;
         // An error goes ahead of the notes waiting, behind the one on screen and any errors before it. An offer to undo goes
