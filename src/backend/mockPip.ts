@@ -593,9 +593,12 @@ function rewriteTarget(prompt: string, context: ScreenContext): ItemRef | null {
  */
 export function scriptPip(prompt: string, context: ScreenContext, images: ImageData[] = [], runs: readonly Run[] = [], now = Date.now(), drafts: readonly Proposal[] = [], discussed: string | null = null, workstream: PipWorkstream | null = null): PipScript {
   const turn = scriptTurn(prompt, context, images, runs, now, drafts, discussed, workstream);
-  // Their answers were posted: whatever else this turn does, it also proposes the plan they were waiting to follow.
-  const plan = turn.runDraft ? null : planAfterAnswers(runs, workstream);
-  const script = plan ? { ...turn, steps: [...turn.steps, ...plan.steps], text: `${turn.text}\n\n${plan.text}`, runDraft: plan.runDraft } : turn;
+  // Their answers were posted and they asked for the plan ("Plan this"): whatever else this turn does, it also proposes it.
+  // Nothing proposes it unasked, as the real agent is told to wait for the person to ask.
+  const askedForPlan = !prompt.startsWith(EVENT) && /\bplan\b/i.test(prompt);
+  // That plan follows the triage the answers answered, so it takes the place of any plan the words alone would draft.
+  const plan = askedForPlan ? planAfterAnswers(runs, workstream) : null;
+  const script = !plan ? turn : turn.runDraft ? { ...plan, filter: turn.filter } : { ...turn, steps: [...turn.steps, ...plan.steps], text: `${turn.text}\n\n${plan.text}`, runDraft: plan.runDraft };
   const unclear = prompt.startsWith(EVENT) ? null : readinessLine(workstream);
   return unclear ? { ...script, steps: ["Read the ticket", ...script.steps], text: `${unclear}\n\n${script.text}` } : script;
 }

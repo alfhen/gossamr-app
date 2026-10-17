@@ -88,8 +88,10 @@ export const editedPending = (drafts: readonly Proposal[]): Proposal[] => drafts
  * person edited is posted from its card, since approving here would post the stored text.
  */
 export function batchable(drafts: readonly Proposal[]): Proposal[] {
-  const repeated = new Set(repeatedComments(drafts).map((p) => p.id));
-  return drafts.filter((p) => p.state.type === "pending" && safeToBatch(p) && !repeated.has(p.id) && !draftEdited(p.id));
+  // Edited drafts go first, so an edited copy of a comment can't make its unedited twin count as the repeat.
+  const unedited = drafts.filter((p) => !draftEdited(p.id));
+  const repeated = new Set(repeatedComments(unedited).map((p) => p.id));
+  return unedited.filter((p) => p.state.type === "pending" && safeToBatch(p) && !repeated.has(p.id));
 }
 
 /** What an "Approve N safe drafts" covers, fixed when its confirm opens: each draft by id, with the revision shown then. */

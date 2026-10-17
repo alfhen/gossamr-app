@@ -407,8 +407,12 @@ test.describe("G15: the person's answers go to Jira as a comment", () => {
     const posted = (await jiraWrites(page))[0].text ?? "";
     expect(posted).toContain("Answer: Done means the winback mail goes to lapsed customers.");
     expect(posted).not.toMatch(/Drafted|your reply|Pip/);
-    // Pip's next turn proposes the plan, which does not start by itself.
+    // A turn that does not ask for the plan proposes none; "Plan this" does, and the plan does not start by itself.
     await askPip(page, "where do we stand?");
+    await homeSettled(page);
+    await expect(homeConversationRegion(page)).not.toContainText("Your answers are posted");
+    expect(await newest(page, "plan")).toBeNull();
+    await askPip(page, "Plan this");
     await homeSettled(page);
     await expect(homeConversationRegion(page)).toContainText("Your answers are posted");
     expect(await newest(page, "plan")).toBeNull();

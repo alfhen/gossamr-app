@@ -149,7 +149,7 @@ export function StepDrafts({ step, drafts, approve, initialConfirming = false }:
           {BATCH_ASIDE}
         </p>
       )}
-      {!frozen && edited > 0 && together.length + edited >= 2 && (
+      {edited > 0 && (frozen !== null || together.length + edited >= 2) && (
         <p data-batch-aside="edited" className="m-0 text-xs text-ws-ink3">
           {EDITED_ASIDE}
         </p>
