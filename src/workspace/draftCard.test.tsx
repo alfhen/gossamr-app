@@ -6,6 +6,7 @@ import type { Proposal, RunSpec } from "../types";
 import { ANSWERS_COMMENT_LABEL, NUDGE_COMMENT_LABEL, READINESS_COMMENT_LABEL } from "../lib/proposals";
 import { useToasts } from "./toasts";
 import { DraftCard, SECRET_NOTE, answersRisks, rewriteRisks, postedNote, keepEditsOfDraft, keptEditsOfDraft, settleKeptEdits } from "./DraftCard";
+import { KeyHint } from "./KeyHint";
 import { DraftPreview, draftPreviewBody } from "./DraftPreview";
 
 const spec: RunSpec = { kind: "investigate", repo: "acme/web", clonePath: "/Users/sample/Code/web", base: "main", name: "ca-412-fix-ab12", instruction: "Investigate this work." };
@@ -213,5 +214,35 @@ describe("an edited description draft's provenance (G5)", () => {
     const out = render(rewriteDraft("rw2"));
     expect(out).toContain("You edited it; read it before you approve.");
     expect(out).not.toContain("The words are the agent");
+  });
+});
+
+describe("the key hint's live region", () => {
+  beforeEach(() => {
+    vi.stubGlobal("localStorage", { getItem: () => null, setItem: () => {}, removeItem: () => {} });
+  });
+  const live = (html: string) => html.match(/<p aria-live="polite"[^>]*data-key-live[^>]*class="sr-only"[^>]*>(.*?)<\/p>/)?.[1];
+
+  it("leaves out the visible line while there is no hint, so only the live region is there", () => {
+    const out = renderToStaticMarkup(<KeyHint hint="" asking={false} className="x" />);
+    expect(out).toBe('<p aria-live="polite" data-key-live="true" class="sr-only"></p>');
+  });
+
+  it("is mounted on a card before any hint, and empty", () => {
+    const out = renderToStaticMarkup(<DraftCard proposal={commentDraft("kh1")} statusName={null} people={[]} working={false} error={null} onApprove={vi.fn()} onSkip={vi.fn()} />);
+    expect(live(out)).toBe("");
+  });
+
+  it("is empty while the hint only lists keys, and the visible hint is not live", () => {
+    const out = renderToStaticMarkup(<KeyHint hint="a approve · e edit" asking={false} className="x" />);
+    expect(live(out)).toBe("");
+    expect(out).toMatch(/<p data-key-hint="true" class="x">a approve · e edit<\/p>/);
+  });
+
+  it("holds the confirmation while asking, and the visible hint still has no aria-live", () => {
+    const out = renderToStaticMarkup(<KeyHint hint="↵ approve · any other key cancels" asking className="x" />);
+    expect(live(out)).toBe("↵ approve · any other key cancels");
+    const visible = out.match(/<p [^>]*data-key-hint[^>]*>/)![0];
+    expect(visible).not.toContain("aria-live");
   });
 });
