@@ -137,6 +137,15 @@ test.describe("the glossary and the picker (G27)", () => {
     await expect(palette.locator("[data-palette-lead]")).toHaveCount(0);
   });
 
+  test("the header's button opens the words even while Plan my week is open", async ({ page }) => {
+    await page.goto("/");
+    await openPipHome(page);
+    await page.locator("[data-pip-orientation]").getByRole("button", { name: "Got it" }).click();
+    await pipHome(page).locator("[data-start-my-day]").getByRole("button", { name: "Plan my week" }).click();
+    await pipHome(page).locator("[data-orientation-link]").click();
+    await expect(page.locator("[data-pip-orientation]").getByLabel("What the words mean", { exact: true })).toBeVisible();
+  });
+
   test("the left rail is a named region", async ({ page }) => {
     await openApp(page);
     await expect(page.getByRole("complementary", { name: "Workspace sidebar" })).toBeVisible();

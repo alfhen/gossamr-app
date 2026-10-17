@@ -211,7 +211,7 @@ function chain(view: WorkstreamView, runs: readonly Run[], proposals: readonly P
     const advise = step("advise", "nothing starts on its own while Manage is off. Ask Pip to draft the next step (for example “Build this”), or start an agent from ⌘K.");
     // Only a finished, approved plan has a next step that can be asked for by name; Pip refuses a Build before that.
     const last = going.length === 0 ? mine[mine.length - 1] : undefined;
-    const approved = !!last && last.spec.kind === "plan" && last.state === "done" && proposals.some((p) => p.origin.type === "run" && p.origin.runId === last.id && p.intent.type === "rewrite" && p.state.type === "applied");
+    const approved = !!last && last.spec.kind === "plan" && last.state === "done" && planApproved(last, proposals);
     const draft = approved ? DRAFT_AFTER[last.spec.kind] : undefined;
     return draft ? { ...advise, draft } : advise;
   }
@@ -267,6 +267,11 @@ function afterRunning(src: Run, view: WorkstreamView, globals: Partial<AutoStart
   return step("manual", `when ${name} finishes, nothing starts on its own: ${whyNothing(src, view, globals)}. Ask Pip or use ⌘K to start the next step.`);
 }
 
+/** Whether the person approved `plan`'s plan: its description update was posted. The Build offer and the autostart rule read it the same way. */
+export function planApproved(plan: Run, proposals: readonly Proposal[]): boolean {
+  return proposals.some((p) => p.origin.type === "run" && p.origin.runId === plan.id && p.intent.type === "rewrite" && p.state.type === "applied");
+}
+
 /** The line with nothing running: what the rules are about to start after the newest run, or why nothing is. */
 function afterFinished(last: Run, view: WorkstreamView, mine: readonly Run[], proposals: readonly Proposal[], globals: Partial<AutoStartSwitches>, left: string, step: Step, events: readonly AuditLine[]): NextStep {
   const name = nameOf(last, view);
@@ -277,7 +282,7 @@ function afterFinished(last: Run, view: WorkstreamView, mine: readonly Run[], pr
   }
   const known: Partial<AutostartInput> = {};
   if (kind === "build") known.pr = { number: 0, sha: null };
-  if (kind === "plan") known.planApproved = proposals.some((p) => p.origin.type === "run" && p.origin.runId === last.id && p.intent.type === "rewrite" && p.state.type === "applied");
+  if (kind === "plan") known.planApproved = planApproved(last, proposals);
   if (kind === "review") {
     known.report = view.reviewBlocking ? { verdict: "blocking", findings: SOME_FINDING } : { verdict: "pass" };
     // The rounds the supervisor already sent for this review's build, counted as it counts them.

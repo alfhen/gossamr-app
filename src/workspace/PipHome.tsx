@@ -803,7 +803,8 @@ export function PipHome() {
         )}
       </header>
       {!orientationSeen && <PipOrientation compact={planOpen} />}
-      {orientationSeen && wordsOpen && <PipOrientation open compact={planOpen} onDismiss={() => (setWordsOpen(false), wordsLink.current?.focus())} />}
+      {/* Asked for by name, so it opens with its words even while Plan my week takes the room. */}
+      {orientationSeen && wordsOpen && <PipOrientation open onDismiss={() => (setWordsOpen(false), wordsLink.current?.focus())} />}
       <div className="grid min-h-0 flex-1 grid-cols-[minmax(260px,340px)_minmax(0,1fr)] grid-rows-[minmax(0,1fr)_auto] overflow-hidden min-[1100px]:grid-cols-[minmax(280px,340px)_minmax(0,1fr)_minmax(240px,320px)] min-[1100px]:grid-rows-[minmax(0,1fr)]">
         <div data-pip-home-column="list" onFocusCapture={enter("list")} className="contents">
           {/* The left column: Needs you takes the height, the workstreams are a compact section under it. */}
