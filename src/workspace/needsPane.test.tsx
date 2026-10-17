@@ -281,6 +281,18 @@ describe("the Done line names what Jira got (G7)", () => {
     expect(lastNeedText(need, p)).toBe("Updated the description of CA-401 in Jira.");
     expect(advancedText(need, { title: "Next" }, null, postedFor(need, p))).toBe("Updated the description of CA-401 in Jira. Now: Next");
   });
+  it("says a rewrite of both the title and the description updated both, and one alone only that one", () => {
+    const both = props({ type: "rewrite", item, title: { from: "a", to: "b" }, body: {}, flattened: [] });
+    expect(postedWhat(need, both)).toBe("Updated the title and description of CA-401 in Jira.");
+    expect(postedWhat(need, props({ type: "rewrite", item, title: { from: "a", to: "b" }, body: null }))).toBe("Updated the title of CA-401 in Jira.");
+    expect(postedWhat(need, props({ type: "rewrite", item, title: null, body: {} }))).toBe("Updated the description of CA-401 in Jira.");
+  });
+  it("does not say subtasks were created while the draft is still applying", () => {
+    const subtasks = { type: "subtasks", parent: item, summaries: ["a", "b"] };
+    expect(postedWhat(need, props(subtasks, "applying"))).toBeNull();
+    expect(postedToJira(need, props(subtasks, "applying"))).toBe(true);
+    expect(postedWhat(need, props(subtasks, "applied"))).toBe("Created 2 subtasks on CA-401 in Jira.");
+  });
   it("counts the subtasks created, and leaves a comment on the card's title", () => {
     expect(lastNeedText(need, props({ type: "subtasks", parent: item, summaries: ["a", "b"] }))).toBe("Created 2 subtasks on CA-401 in Jira.");
     expect(postedWhat(need, props({ type: "subtasks", parent: item, summaries: ["a"] }))).toBe("Created 1 subtask on CA-401 in Jira.");

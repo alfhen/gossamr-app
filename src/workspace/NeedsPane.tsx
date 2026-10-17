@@ -5,6 +5,7 @@ import { ALLOW_MORE_STEPS, type Proposal, type ReporterReply, type Run, type Wor
 import { stepsOf } from "../lib/workstreamHold";
 import { isReporterNudge, isReporterQuestions } from "../lib/proposals";
 import { maskSecrets } from "../lib/riskyText";
+import { rewriteWhat } from "./RewriteDiff";
 import { useWorkspace } from "../workspaceStore";
 import { OpenInTerminal, FailureNext } from "./AgentParts";
 import { Box, BoxTitle, Btn } from "./AgentSheet";
@@ -162,9 +163,11 @@ export function postedToJira(done: Pick<Need, "target">, proposals: Readonly<Rec
 
 /** What Jira got, in words, when `done` was a description change or subtasks that were posted; null for a comment or anything else, whose Done line names the card. */
 export function postedWhat(done: Pick<Need, "target">, proposals: Readonly<Record<string, Proposal>>): string | null {
-  if (!postedToJira(done, proposals)) return null;
-  const { intent } = proposals[(done.target as { id: string }).id];
-  if (intent.type === "rewrite") return `Updated the ${intent.body ? "description" : "title"} of ${intent.item.key} in Jira.`;
+  const p = done.target.type === "draft" ? proposals[done.target.id] : undefined;
+  // Only a posted draft says what Jira got: one still applying has not created or changed anything yet.
+  if (!p || !JIRA_WRITES.has(p.intent.type) || p.state.type !== "applied") return null;
+  const { intent } = p;
+  if (intent.type === "rewrite") return `Updated the ${rewriteWhat(intent)} of ${intent.item.key} in Jira.`;
   if (intent.type === "subtasks") return `Created ${intent.summaries.length} subtask${intent.summaries.length === 1 ? "" : "s"} on ${intent.parent.key} in Jira.`;
   return null;
 }
