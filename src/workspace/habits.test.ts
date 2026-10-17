@@ -137,6 +137,27 @@ describe("Draft a nudge", () => {
     expect(text).not.toMatch(/skipped|still a draft/);
   });
 
+  it("lists the questions of the ask posted last, not of the one drafted last", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const id = await waitedOn(3);
+      const ask = (text: string) => backend.proposals.askedFor({ type: "comment", item: itemRef("CA-408"), body: docFromText(`Hi,\n\n- ${text}\n\nThanks.`) }, "Questions for the reporter", id);
+      const first = ask("Drafted first, posted last?");
+      vi.advanceTimersByTime(1000);
+      const second = ask("Drafted last, posted first?");
+      vi.advanceTimersByTime(1000);
+      await backend.proposalsApprove(second.id);
+      vi.advanceTimersByTime(1000);
+      await backend.proposalsApprove(first.id);
+      const nudge = await backend.workstreamsNudgeReporter(id);
+      const text = docText(nudge.intent.type === "comment" ? nudge.intent.body : { blocks: [] });
+      expect(text).toContain("Drafted first, posted last?");
+      expect(text).not.toContain("Drafted last, posted first?");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("waits while one is drafted, and posting it starts the wait again from then", async () => {
     const id = await waitedOn(4);
     await useWorkstreams.getState().nudgeReporter(id);
