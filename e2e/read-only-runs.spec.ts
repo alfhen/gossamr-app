@@ -235,6 +235,8 @@ test("a build launches as before; its review is restricted, a fix round goes bac
 });
 
 test("the inline review on Pip home shows the read-only rules, and an investigation started there launches restricted", async ({ page }) => {
+  // It starts a workstream, opens Pip home, drafts and reviews an investigation, then launches it: more than the default 30s on a busy runner.
+  test.setTimeout(90_000);
   await openApp(page, `${MANAGED}&mockRepos=12`);
   await agentsSettled(page);
   await startWorkstream(page, "CA-401");
