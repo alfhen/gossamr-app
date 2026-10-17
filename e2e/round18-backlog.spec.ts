@@ -12,8 +12,9 @@ const runCards = (page: Page, key: string) => pipPane(page).getByRole("article",
 const nextLine = (page: Page) => pipPane(page).locator("[data-next-step]");
 const newest = async (page: Page, kind: string) => (await mockRuns(page)).find((r) => r.kind === kind) ?? null;
 
+/** Pip has finished its turn. A turn can take a while on a busy runner, so this waits longer than the default. */
 async function settled(page: Page) {
-  await expect(pipPane(page).getByRole("button", { name: "Stop" })).toHaveCount(0);
+  await expect(pipPane(page).getByRole("button", { name: "Stop" })).toHaveCount(0, { timeout: 30_000 });
 }
 
 /** Asks Pip for an investigation of CA-401 and starts it from the setup sheet, as the person does. */
