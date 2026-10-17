@@ -108,13 +108,17 @@ function useAdvance(needs: readonly Need[], onAdvance: (done: Need, next: Need) 
   }, [needs]);
 }
 
+/** How a readiness need's key starts; the rest is the triage run it waits on. */
+const READINESS_KEY = "readiness:";
+
 /** What the Done line says of a readiness question settled with Plan anyway, in place of the problem it restates. */
 export const PLANNING_ANYWAY = "Planning anyway";
 /** The same for one settled when the reporter replied or the ticket changed, as the toast says "Planning now". */
 export const PLANNING_NOW = "Planning now";
 
 /** The need as the Done line names it: a readiness question the person settled with Plan anyway says so, not "ticket not ready" again. */
-export const doneNeed = (done: Need, planned: boolean | "now" | "anyway" = takePlannedAnyway(done.kind === "readiness" ? done.workstreamId : null)): Need => (planned ? { ...done, title: planned === "now" ? PLANNING_NOW : PLANNING_ANYWAY } : done);
+export const doneNeed = (done: Need, planned: boolean | "now" | "anyway" = takePlannedAnyway(done.kind === "readiness" ? done.key.slice(READINESS_KEY.length) : null)): Need =>
+  planned ? { ...done, title: planned === "now" ? PLANNING_NOW : PLANNING_ANYWAY } : done;
 
 /** The line over the pane once it moved on by itself: what was dealt with, and what is open now. */
 export const advancedText = (done: Pick<Need, "title" | "ticketKey" | "workstreamTitle">, next: Pick<Need, "title" | "ticketKey">, waitsOn?: string | null, posted: boolean | string = false, skipped = false) =>
