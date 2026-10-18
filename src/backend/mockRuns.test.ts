@@ -438,7 +438,7 @@ describe("a build from a plan run says whether a person settled the plan, as the
   const settle = async (b: MockBackend, extra: string) => {
     const draft = descriptionDraft(b);
     if (draft.intent.type !== "rewrite" || !draft.intent.body) throw new Error("a description draft");
-    await b.proposalsEdit(draft.id, { type: "rewrite", body: `${draft.intent.body.toText}\n\n${extra}` });
+    await b.proposalsEdit(draft.id, { type: "rewrite", body: draft.intent.body.toText.replace(/\n*<\/details>\s*$/, `\n\n${extra}\n\n</details>`) });
     expect((await b.proposalsApprove(draft.id)).state.type).toBe("applied");
   };
 

@@ -1,5 +1,5 @@
 import type { Proposal, WorkBlock, WorkDoc, WorkInline } from "../types";
-import { planLevelOf, planSectionOf, planStartOf } from "./mockPlanSection";
+import { planSectionOf, planStartOf } from "./mockPlanSection";
 import { docFromMarkdown, markdownOf } from "./mockMarkdown";
 
 /** The marker of a description's triage section, as `TRIAGE_HEADING` in `domain/doc/triage.rs`. */
@@ -11,7 +11,7 @@ export const QUESTIONS_LEAD = "Open questions:";
 const textOf = (content: WorkInline[]) => content.map((i) => (i.type === "text" || i.type === "link" ? i.text : "")).join("");
 const isMarker = (b: WorkBlock) => b.type === "heading" && textOf(b.content).trim().replace(/:+$/, "").trim().toLowerCase() === TRIAGE_HEADING.toLowerCase();
 
-/** The first triage heading before the plan section and where its section ends: at the next heading of the same or a higher level, never past the plan's start. */
+/** The first triage heading before the plan and where its section ends: at the next heading of the same or a higher level, never past the plan's start (a heading section or an expand). */
 function range(doc: WorkDoc): { at: number; end: number; level: number } | null {
   const limit = planStartOf(doc) ?? doc.blocks.length;
   const at = doc.blocks.slice(0, limit).findIndex(isMarker);
@@ -43,7 +43,10 @@ export function withTriageSection(doc: WorkDoc, note: string, questions: readonl
   const at = r ? r.at : (planStartOf(doc) ?? doc.blocks.length);
   const before = doc.blocks.slice(0, at);
   const after = r ? doc.blocks.slice(r.end) : doc.blocks.slice(at);
-  const level = r?.level ?? planLevelOf(doc) ?? NEW_LEVEL;
+  const planAt = planStartOf(doc);
+  const plan = planAt === null ? undefined : doc.blocks[planAt];
+  // A plan under a heading sets the level; a plan that is an expand has none.
+  const level = r?.level ?? (plan?.type === "heading" ? plan.level : NEW_LEVEL);
   let text = note.trim();
   if (questions.length) text = `${text ? `${text}\n\n` : ""}${QUESTIONS_LEAD}\n\n${questions.map((q) => `- ${q.trim()}`).join("\n")}`;
   const own = docFromMarkdown(text).blocks.map((b): WorkBlock => (b.type === "heading" ? { type: "paragraph", content: b.content } : b));

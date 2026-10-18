@@ -1635,13 +1635,18 @@ pub(in crate::inbox) mod tests {
         }
     }
 
+    /// `markdown` with `extra` added to the end of its `Gossamr Plan` expand, where a person typing at the end of the plan puts it.
+    fn in_plan_expand(markdown: &str, extra: &str) -> String {
+        markdown.replacen("\n\n</details>", &format!("\n\n{extra}\n\n</details>"), 1)
+    }
+
     /// The plan run's description draft, with `extra` added to the end of its plan by the person, then approved.
     async fn settle_plan(fx: &Fixture, plan: &Run, extra: &str) -> Proposal {
         let made = match fx.core.auto_draft_run_plan_description(&plan.id).await.unwrap() {
             Some(made) => made,
             None => fx.core.draft_run_plan_description(&plan.id).await.unwrap(),
         };
-        let body = format!("{}\n\n{extra}", description_of(&made));
+        let body = in_plan_expand(&description_of(&made), extra);
         fx.core.edit_proposal(&made.id, &Edit::Rewrite { title: None, body: Some(body) }).await.unwrap();
         let done = fx.core.approve_proposal(&made.id).await.unwrap();
         assert_eq!(done.state, ProposalState::Applied, "{:?}", done.error);
@@ -1677,7 +1682,7 @@ pub(in crate::inbox) mod tests {
 
         let pending = plan_with(&fx, PLAN).await;
         let made = fx.core.auto_draft_run_plan_description(&pending.id).await.unwrap().unwrap();
-        let body = format!("{}\n\nEdited but not approved.", description_of(&made));
+        let body = in_plan_expand(&description_of(&made), "Edited but not approved.");
         fx.core.edit_proposal(&made.id, &Edit::Rewrite { title: None, body: Some(body) }).await.unwrap();
         let p = fx.core.draft_run(build_from(&fx, &pending), Some(fx.item("CA-1"))).await.unwrap();
         raw(&p);

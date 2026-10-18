@@ -152,6 +152,23 @@ describe("a description edit draft", () => {
     expect(html).toContain("Description: 4 lines added, 2 removed");
     expect(html).toContain("Review on DEVOPS-471 →");
   });
+
+  it("diffs inside an expand line by line, so a changed plan is readable", () => {
+    const wrap = (step: string) => `<details>\n<summary>Gossamr Plan</summary>\n\n${step}\n\n</details>`;
+    const body = bodyChange(docFromMarkdown(wrap("Step one")), wrap("Step one, reworded"));
+    const i = intent({ title: null, body });
+    const html = renderToStaticMarkup(<RewriteView intent={i} title="" body={body.toText} editing={false} onTitle={vi.fn()} onBody={vi.fn()} />);
+    expect(lines(html, "del")).toEqual(["Step one"]);
+    expect(lines(html, "add")).toEqual(["Step one, reworded"]);
+  });
+
+  it("shows a plan added as an expand with its title as a heading-like line, not as raw tags", () => {
+    const body = bodyChange(docFromMarkdown("Intro"), "Intro\n\n<details>\n<summary>Gossamr Plan</summary>\n\nStep one\n\n</details>");
+    const html = renderToStaticMarkup(<RewriteView intent={intent({ title: null, body })} title="" body={body.toText} editing={false} onTitle={vi.fn()} onBody={vi.fn()} />);
+    expect(lines(html, "add").filter((l) => l.trim())).toEqual(["▸ Collapsible section", "▸ Gossamr Plan", "Step one", "◂ End of collapsible section"]);
+    expect(html).not.toContain("&lt;details&gt;");
+    expect(html).not.toContain("&lt;summary&gt;");
+  });
 });
 
 describe("what the person's edit sends", () => {

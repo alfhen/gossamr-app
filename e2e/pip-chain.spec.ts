@@ -65,7 +65,7 @@ async function settlePlan(page: Page) {
   const draft = peekSheet(page).getByRole("article", { name: "Update the description of CA-401" }).filter({ hasText: "Gossamr Plan" });
   await draft.getByRole("button", { name: "Edit" }).click();
   const body = draft.getByRole("textbox", { name: "New description, as Markdown" });
-  await body.fill(`${await body.inputValue()}\n\n${MARKER}`);
+  await body.fill((await body.inputValue()).replace(/\n*<\/details>\s*$/, `\n\n${MARKER}\n\n</details>`));
   await draft.getByRole("button", { name: "Done editing" }).click();
   await draft.getByRole("button", { name: "Update description" }).click();
   await expect(draft).toHaveCount(0);

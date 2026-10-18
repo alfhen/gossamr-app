@@ -206,7 +206,7 @@ pub fn with_files(mut doc: Value, files: &[crate::model::Uploaded]) -> Value {
 /// What a rewrite built from `to_doc` would turn into plain text, by name: parts of the description the portable
 /// document keeps only the words of.
 pub fn flattened(doc: &Value) -> Vec<String> {
-    fn find(node: &Value, out: &mut Vec<&'static str>, depth: usize) {
+    fn find(node: &Value, out: &mut Vec<&'static str>, depth: usize, top_level: bool) {
         if depth > MAX_DEPTH {
             return;
         }
@@ -214,6 +214,8 @@ pub fn flattened(doc: &Value) -> Vec<String> {
             "media" | "mediaSingle" | "mediaGroup" | "mediaInline" => Some("images and attachments"),
             "table" => Some("tables"),
             "panel" => Some("panels"),
+            // A top-level expand is kept as a collapsible block; one anywhere else, and every nestedExpand, is flattened.
+            "expand" if top_level => None,
             "expand" | "nestedExpand" => Some("collapsible sections"),
             "taskList" | "decisionList" => Some("task and decision lists"),
             "extension" | "bodiedExtension" | "inlineExtension" => Some("macros"),
@@ -224,11 +226,11 @@ pub fn flattened(doc: &Value) -> Vec<String> {
             out.push(w);
         }
         for child in node.get("content").and_then(Value::as_array).into_iter().flatten() {
-            find(child, out, depth + 1);
+            find(child, out, depth + 1, depth == 0);
         }
     }
     let mut out = Vec::new();
-    find(doc, &mut out, 0);
+    find(doc, &mut out, 0, false);
     out.into_iter().map(String::from).collect()
 }
 
@@ -307,6 +309,9 @@ fn push_block(node: &Value, conn: &str, out: &mut Vec<Block>, depth: usize) {
                 out.push(Block::Paragraph { content: vec![plain(text.replace('\n', " "))] });
             }
         }
+        // Only a top-level expand stays one (a nestedExpand sits in tables or expands, and an expand deeper than the top
+        // would not be valid when written back), so the rest keep their title and content in the parent.
+        "expand" if depth == 1 => out.push(Block::Expand { title: attr(node, "title").unwrap_or_default().into(), content: blocks() }),
         "expand" | "nestedExpand" => {
             if let Some(title) = attr(node, "title").filter(|t| !t.is_empty()) {
                 out.push(Block::Paragraph { content: vec![Inline::Text { text: title.into(), marks: vec![Mark::Bold] }] });
@@ -403,15 +408,35 @@ pub fn from_doc(doc: &Doc) -> Value {
     json!({ "type": "doc", "version": 1, "content": doc.blocks.iter().map(block).collect::<Vec<_>>() })
 }
 
+/// Blocks where ADF has no expand to offer (list items, quotes, inside another expand): a nested expand becomes its
+/// title as a paragraph followed by its content, which keeps every word.
+fn flat_blocks(blocks: &[Block]) -> Vec<Value> {
+    blocks
+        .iter()
+        .flat_map(|b| match b {
+            Block::Expand { title, content } => {
+                let mut out = Vec::new();
+                if !title.is_empty() {
+                    out.push(json!({ "type": "paragraph", "content": [{ "type": "text", "text": title }] }));
+                }
+                out.extend(flat_blocks(content));
+                out
+            }
+            other => vec![block(other)],
+        })
+        .collect()
+}
+
 fn block(b: &Block) -> Value {
     match b {
+        Block::Expand { title, content } => json!({ "type": "expand", "attrs": { "title": title }, "content": flat_blocks(content) }),
         Block::Paragraph { content } => json!({ "type": "paragraph", "content": inlines(content) }),
         Block::Heading { level, content } => json!({ "type": "heading", "attrs": { "level": level }, "content": inlines(content) }),
         Block::List { ordered, items } => json!({
             "type": if *ordered { "orderedList" } else { "bulletList" },
-            "content": items.iter().map(|i| json!({ "type": "listItem", "content": i.iter().map(block).collect::<Vec<_>>() })).collect::<Vec<_>>(),
+            "content": items.iter().map(|i| json!({ "type": "listItem", "content": flat_blocks(i) })).collect::<Vec<_>>(),
         }),
-        Block::Quote { content } => json!({ "type": "blockquote", "content": content.iter().map(block).collect::<Vec<_>>() }),
+        Block::Quote { content } => json!({ "type": "blockquote", "content": flat_blocks(content) }),
         Block::Code { language, text } => {
             let mut node = json!({ "type": "codeBlock", "content": if text.is_empty() { vec![] } else { vec![json!({ "type": "text", "text": text })] } });
             if let Some(l) = language {
@@ -663,6 +688,49 @@ mod tests {
         assert_eq!(to_text(&adf), "");
         assert!(to_doc(&adf, "c").plain_text().is_empty());
         assert!(mentions(&adf).is_empty());
+    }
+
+    fn expand_adf() -> Value {
+        serde_json::from_str(include_str!("fixtures/adf_expand.json")).unwrap()
+    }
+
+    #[test]
+    fn a_top_level_expand_round_trips_and_is_not_reported_as_flattened() {
+        let adf = expand_adf();
+        let doc = to_doc(&adf, "c");
+        let Block::Expand { title, content } = &doc.blocks[1] else { panic!("{:?}", doc.blocks) };
+        assert_eq!(title, "Gossamr Plan");
+        assert_eq!(content.len(), 3);
+        assert_eq!(from_doc(&doc), adf);
+        assert_eq!(doc.plain_text(), "Before\nGossamr Plan\nSteps\none\nmake test");
+        assert!(flattened(&adf).is_empty());
+    }
+
+    #[test]
+    fn a_nested_expand_is_flattened_into_its_parent_and_named() {
+        let adf = json!({ "type": "doc", "content": [{ "type": "expand", "attrs": { "title": "Outer" }, "content": [
+            { "type": "nestedExpand", "attrs": { "title": "Inner" }, "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "deep" }] }] }
+        ] }] });
+        let doc = to_doc(&adf, "c");
+        let [Block::Expand { content, .. }] = doc.blocks.as_slice() else { panic!("{:?}", doc.blocks) };
+        assert_eq!(content.len(), 2, "the inner title paragraph and its text");
+        assert_eq!(doc.plain_text(), "Outer\nInner\ndeep");
+        assert_eq!(flattened(&adf), ["collapsible sections"]);
+        let misplaced = json!({ "type": "doc", "content": [{ "type": "panel", "content": [{ "type": "expand", "attrs": { "title": "X" }, "content": [] }] }] });
+        assert_eq!(flattened(&misplaced), ["panels", "collapsible sections"]);
+    }
+
+    #[test]
+    fn children_adf_does_not_allow_in_an_expand_become_paragraphs() {
+        let text = |t: &str| vec![Inline::Text { text: t.into(), marks: vec![] }];
+        let inner = Block::Expand { title: "Inner".into(), content: vec![Block::Paragraph { content: text("deep") }] };
+        let doc = Doc { blocks: vec![Block::Expand { title: "Outer".into(), content: vec![inner.clone()] }, Block::Quote { content: vec![inner] }] };
+        let adf = from_doc(&doc);
+        let kinds = |n: &Value| n["content"].as_array().unwrap().iter().map(|c| c["type"].as_str().unwrap().to_string()).collect::<Vec<_>>();
+        assert_eq!(adf["content"][0]["attrs"]["title"], "Outer");
+        assert_eq!(kinds(&adf["content"][0]), ["paragraph", "paragraph"]);
+        assert_eq!(kinds(&adf["content"][1]), ["paragraph", "paragraph"], "an expand in a quote is flattened too");
+        assert_eq!(adf["content"][0]["content"][0]["content"][0]["text"], "Inner");
     }
 
     #[test]

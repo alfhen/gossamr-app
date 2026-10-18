@@ -63,6 +63,13 @@ function block(b: WorkBlock, at: number): ReactNode {
       );
     case "rule":
       return <hr key={at} className="w-full border-ws-sep" />;
+    case "expand":
+      return (
+        <details key={at} className="rounded-md border border-ws-sep px-3 py-1.5">
+          <summary className="cursor-pointer font-medium">{b.title || "Details"}</summary>
+          <div className="grid gap-2 pt-2">{b.content.map(block)}</div>
+        </details>
+      );
   }
 }
 

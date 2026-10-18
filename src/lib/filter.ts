@@ -63,6 +63,8 @@ function blockText(blocks: WorkBlock[]): string {
           return `${b.text}\n`;
         case "rule":
           return "";
+        case "expand":
+          return `${b.title ? `${b.title}\n` : ""}${blockText(b.content)}`;
       }
     })
     .join("");

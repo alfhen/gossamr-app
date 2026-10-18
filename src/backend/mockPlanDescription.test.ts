@@ -11,31 +11,37 @@ const planRun = (b: MockBackend) => b.runs.list().find((r) => r.spec.kind === "p
 const rewrites = (b: MockBackend) => b.proposals.list().filter((p) => p.intent.type === "rewrite");
 
 describe("the Gossamr Plan section of a description in the sample build", () => {
-  it("is added at the end with the plan's headings moved below it, replaced in place by a re-plan, and taken out again", () => {
+  const wrapped = (inner: string) => `<details>\n<summary>Gossamr Plan</summary>\n\n${inner}\n\n</details>`;
+
+  it("is written as one Gossamr Plan expand at the end, replaced in place by a re-plan, and taken out again", () => {
     const doc = docFromMarkdown("Intro\n\n## Notes\n\nKeep me");
     const once = withPlanSection(doc, "intro line", docFromMarkdown("# Approach\n\nRound once.\n\n## Steps\n\n1. Edit"));
-    expect(markdownOf(once)).toBe("Intro\n\n## Notes\n\nKeep me\n\n## Gossamr Plan\n\nintro line\n\n### Approach\n\nRound once.\n\n#### Steps\n\n1. Edit");
-    expect(markdownOf(planSectionOf(once)!)).toContain("### Approach");
+    expect(once.blocks[once.blocks.length - 1]).toMatchObject({ type: "expand", title: "Gossamr Plan" });
+    expect(markdownOf(once)).toBe(`Intro\n\n## Notes\n\nKeep me\n\n${wrapped("intro line\n\n# Approach\n\nRound once.\n\n## Steps\n\n1. Edit")}`);
+    expect(markdownOf(planSectionOf(once)!)).toBe("intro line\n\n# Approach\n\nRound once.\n\n## Steps\n\n1. Edit");
     const twice = withPlanSection(once, "newer", docFromMarkdown("Round twice."));
-    expect(markdownOf(twice)).toBe("Intro\n\n## Notes\n\nKeep me\n\n## Gossamr Plan\n\nnewer\n\nRound twice.");
+    expect(markdownOf(twice)).toBe(`Intro\n\n## Notes\n\nKeep me\n\n${wrapped("newer\n\nRound twice.")}`);
     expect(markdownOf(withoutPlanSection(twice))).toBe("Intro\n\n## Notes\n\nKeep me");
     expect(PLAN_HEADING).toBe("Gossamr Plan");
   });
 
-  it("never lets a plan heading capped at the section's own level end the section", () => {
-    const doc = docFromMarkdown("Intro\n\n###### Gossamr Plan\n\nold");
-    const next = withPlanSection(doc, "i", docFromMarkdown("###### Deep\n\ntext"));
-    expect(markdownOf(next)).toBe("Intro\n\n###### Gossamr Plan\n\ni\n\nDeep\n\ntext");
-    expect(markdownOf(planSectionOf(next)!)).toBe("i\n\nDeep\n\ntext");
+  it("is read from the expand and from the old heading section, and an old heading section is replaced by the expand, not stacked", () => {
+    const expand = docFromMarkdown(`Intro\n\n${wrapped("in the expand")}\n\n## After\n\nout`);
+    expect(markdownOf(planSectionOf(expand)!)).toBe("in the expand");
+    expect(markdownOf(withoutPlanSection(expand))).toBe("Intro\n\n## After\n\nout");
+    const old = docFromMarkdown("Intro\n\n## Gossamr Plan\n\nold intro\n\n### Old\n\nold text\n\n## Notes\n\nkeep me");
+    expect(markdownOf(planSectionOf(old)!)).toBe("old intro\n\n### Old\n\nold text");
+    const replaced = withPlanSection(old, "new intro", docFromMarkdown("New plan."));
+    expect(markdownOf(replaced)).toBe(`Intro\n\n${wrapped("new intro\n\nNew plan.")}\n\n## Notes\n\nkeep me`);
+    expect(markdownOf(replaced)).not.toContain("## Gossamr Plan");
+    const deep = withPlanSection(docFromMarkdown("###### Gossamr Plan\n\nold"), "i", docFromMarkdown("###### Deep\n\ntext"));
+    expect(markdownOf(deep)).toBe(wrapped("i\n\n###### Deep\n\ntext"));
   });
 
-  it("keeps headings nested below the section, moves a plan that starts shallower than the marker, and turns only the ones that reach its level into text", () => {
-    const deep = withPlanSection(docFromMarkdown("### Gossamr Plan\n\nold"), "i", docFromMarkdown("# One\n\n## Two\n\ntext"));
-    expect(markdownOf(deep)).toBe("### Gossamr Plan\n\ni\n\n#### One\n\n##### Two\n\ntext");
-    const kept = withPlanSection(docFromMarkdown("## Gossamr Plan"), "i", docFromMarkdown("### Below\n\n#### Further"));
-    expect(markdownOf(kept)).toBe("## Gossamr Plan\n\ni\n\n### Below\n\n#### Further");
-    const capped = withPlanSection(docFromMarkdown("##### Gossamr Plan"), "i", docFromMarkdown("# A\n\n## B"));
-    expect(markdownOf(capped)).toBe("##### Gossamr Plan\n\ni\n\n###### A\n\n###### B");
+  it("turns a plan heading that names itself into text, so it can't be taken for the old marker", () => {
+    const next = withPlanSection(docFromMarkdown("x"), "i", docFromMarkdown("## Gossamr Plan\n\ntext"));
+    expect(markdownOf(planSectionOf(next)!)).toBe("i\n\nGossamr Plan\n\ntext");
+    expect(next.blocks.filter((b) => b.type === "heading")).toHaveLength(0);
   });
 
   it("ends at the next heading of its own level or above and is found whatever its case", () => {
@@ -55,10 +61,11 @@ describe("a finished plan run in the sample build", () => {
     expect(draft.createdBy).toBe("agent");
     if (draft.intent.type !== "rewrite" || !draft.intent.body) throw new Error("a description rewrite");
     const to = draft.intent.body.toText;
-    expect(to).toContain("## Gossamr Plan");
+    expect(to).toContain("<details>\n<summary>Gossamr Plan</summary>");
+    expect(to).not.toContain("## Gossamr Plan");
     expect(to).toContain("Drafted by an agent on");
-    expect(to).not.toMatch(/Gossamr Plan\n\n[^\n]*(\([0-9a-f]{8}\)|in Gossamr)/);
-    expect(to).toContain("### Approach");
+    expect(to).not.toMatch(/Gossamr Plan<\/summary>\n\n[^\n]*(\([0-9a-f]{8}\)|in Gossamr)/);
+    expect(to).toContain("# Approach");
     expect(to).toContain("Do the Klaviyo flows read the subject lines");
     expect(to).not.toContain("For Jira");
     expect(draft.intent.body.fromText).toBe(markdownOf(b.connector.item(run.item!)!.body));
@@ -102,7 +109,7 @@ describe("a finished plan run in the sample build", () => {
     const fresh = sample();
     const again = rewrites(fresh)[0];
     expect((await fresh.proposalsApprove(again.id)).state.type).toBe("applied");
-    expect(markdownOf(fresh.connector.item(planRun(fresh).item!)!.body)).toContain("## Gossamr Plan");
+    expect(markdownOf(fresh.connector.item(planRun(fresh).item!)!.body)).toContain("<summary>Gossamr Plan</summary>");
     expect(fresh.runs.outcome(planRun(fresh).id).planDescription?.draft?.state.type).toBe("applied");
   });
 
@@ -180,7 +187,7 @@ describe("Pip and a plan's description draft", () => {
     for (const id of [draft.id, run.id, run.shortId ?? run.id]) expect(first.text).not.toContain(id);
     const script = ask(b, "shorter please", draft.id);
     expect(script.revise).toBeUndefined();
-    expect(script.text).toContain("## Gossamr Plan");
+    expect(script.text).toContain("<summary>Gossamr Plan</summary>");
     expect(() => b.proposals.pipRevise(draft.id, { description: "Pip's tighter plan" })).toThrow("carries the Gossamr Plan a build follows");
     await b.proposalsEdit(draft.id, { type: "rewrite", body: "The person's own words" });
     expect(() => b.proposals.pipRevise(draft.id, { description: "Pip again" })).toThrow("edited this description draft");
@@ -197,7 +204,7 @@ describe("the plan a build takes from an approved description", () => {
     const intro = planIntro({ endedAt: "2026-09-29T10:00:00Z", queuedAt: "2026-09-29T09:00:00Z" });
     expect(intro).toBe("Drafted by an agent on 2026-09-29. A person read and approved it before it was added here.");
     const doc = withPlanSection(docFromMarkdown("Intro"), intro, docFromMarkdown("# Approach\n\nRound once.\n\nA line the person added."));
-    expect(approvedPlanText(planSectionOf(doc)!)).toBe("### Approach\n\nRound once.\n\nA line the person added.");
+    expect(approvedPlanText(planSectionOf(doc)!)).toBe("# Approach\n\nRound once.\n\nA line the person added.");
     const earlier = withPlanSection(docFromMarkdown(""), "Drafted by an agent run (1000addd) on 2025-01-01. A person read and approved it in Gossamr before it was added here.", docFromMarkdown("Step."));
     expect(approvedPlanText(planSectionOf(earlier)!)).toBe("Step.");
     const older = withPlanSection(docFromMarkdown(""), "Drafted by an agent run on 2025-01-01. Something else.", docFromMarkdown("Step."));

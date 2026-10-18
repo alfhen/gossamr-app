@@ -513,15 +513,18 @@ function tightenedTicket(title: string, body: string): { title: string; body: st
   return { title: title.replace(/'s\s+\w+$/, ""), body: body.split(/\n{2,}|\n/).filter((p) => p.trim()).map(first).join("\n\n") };
 }
 
+/** Where a description's plan starts in its Markdown: the line that opens its `Gossamr Plan` expand, or the old `Gossamr Plan` heading. */
+const PLAN_START = /^(?:#{1,6} Gossamr Plan|<details>\n<summary>Gossamr Plan<\/summary>)$/m;
+
 /** A sample tightening of a description with a plan section: everything before it stays, and each line after the heading keeps its first sentence. */
 function shorterPlan(markdown: string): string {
-  const at = markdown.search(/^#{1,6} Gossamr Plan$/m);
+  const at = markdown.search(PLAN_START);
   if (at < 0) return markdown;
   const first = (line: string) => /^.*?[.!?](?=\s|$)/.exec(line)?.[0] ?? line;
   const plan = markdown
     .slice(at)
     .split("\n")
-    .map((l) => (/^#|^\s*$/.test(l) ? l : first(l)));
+    .map((l) => (/^#|^\s*$|^<\/?(?:details|summary)/.test(l) ? l : first(l)));
   return `${markdown.slice(0, at)}${plan.join("\n")}`;
 }
 
@@ -707,7 +710,7 @@ function scriptTurn(prompt: string, context: ScreenContext, images: ImageData[],
     if (!left) return { steps: [], text: "I can't find that description draft any more, or it has been decided already, so there is nothing to discuss.", filter: null, draft: null };
     return {
       steps: ["Read the run", "Read the rest of its result", "Read the ticket", "Checked the draft"],
-      text: `I read the whole run and the ticket and checked ${draftPhrase(left, runs)}: the ticket's description with the run's plan added under a "Gossamr Plan" heading. A build follows that plan, so only you change it. Tell me what you'd change, for example "shorter", and I'll suggest the words for you to put in. Nothing is written to Jira until you approve it.`,
+      text: `I read the whole run and the ticket and checked ${draftPhrase(left, runs)}: the ticket's description with the run's plan added in a collapsed "Gossamr Plan" section. A build follows that plan, so only you change it. Tell me what you'd change, for example "shorter", and I'll suggest the words for you to put in. Nothing is written to Jira until you approve it.`,
       filter: null,
       draft: null,
       discussed: left.id,
@@ -717,7 +720,7 @@ function scriptTurn(prompt: string, context: ScreenContext, images: ImageData[],
   if (discussedDescription?.intent.type === "rewrite" && discussedDescription.intent.body && asksForShorter.test(q)) {
     // The plan a build follows is the person's to change, so Pip only suggests the words.
     const plan = shorterPlan(discussedDescription.intent.body.toText);
-    const section = plan.slice(Math.max(0, plan.search(/^#{1,6} Gossamr Plan$/m)));
+    const section = plan.slice(Math.max(0, plan.search(PLAN_START)));
     return {
       steps: ["Read the run's full result", "Suggested a shorter plan"],
       text: `A build follows this plan, so I can't change the draft; edit it yourself if you like this. I'd keep the ticket's own text and shorten each point in the plan to its first sentence:\n\n${section}`,

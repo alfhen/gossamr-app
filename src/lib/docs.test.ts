@@ -35,3 +35,15 @@ describe("docText", () => {
     expect(JSON.parse(JSON.stringify(doc))).toEqual(doc);
   });
 });
+
+describe("docText of an expand", () => {
+  it("writes the title on its own line and everything inside, nothing hidden", () => {
+    const doc = {
+      blocks: [
+        ...docFromText("Before").blocks,
+        { type: "expand" as const, title: "Gossamr Plan", content: docFromText("Step one\n\nStep two").blocks },
+      ],
+    };
+    expect(docText(doc)).toBe("Before\n\nGossamr Plan\nStep one\nStep two");
+  });
+});

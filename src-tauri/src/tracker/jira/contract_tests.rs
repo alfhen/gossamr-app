@@ -203,6 +203,23 @@ async fn an_update_sends_only_the_fields_in_the_patch() {
 }
 
 #[tokio::test]
+async fn an_approved_plan_rewrite_sends_the_plan_as_one_adf_expand_titled_gossamr_plan() {
+    let server = serve(vec![(&format!("PUT {API}/issue/EX-1"), vec![Reply::status(204, "")])]).await;
+    let from = Doc::paragraph("Cart total is wrong.");
+    let to = from.with_plan_section("Drafted by an agent.", &Doc::from_markdown("## Steps\n\n1. Fix it", &[]));
+    let change = Intent::Rewrite { item: item("EX-1"), title: None, body: Some(BodyChange { from, to }), flattened: vec![] };
+    tracker(&server).apply(&change).await.unwrap();
+    let (_, body) = sent(&server, "PUT").remove(0);
+    let content = &body["fields"]["description"]["content"];
+    assert_eq!(content.as_array().unwrap().len(), 2, "the person's text and one expand: {content}");
+    assert_eq!(content[1]["type"], "expand");
+    assert_eq!(content[1]["attrs"]["title"], "Gossamr Plan");
+    assert_eq!(content[1]["content"][0], json!({ "type": "paragraph", "content": [{ "type": "text", "text": "Drafted by an agent." }] }));
+    assert_eq!(content[1]["content"][1]["type"], "heading");
+    assert_eq!(content[1]["content"][2]["type"], "orderedList");
+}
+
+#[tokio::test]
 async fn a_rewrite_sends_the_description_as_adf_with_marks_mentions_links_code_and_lists() {
     let server = serve(vec![(&format!("PUT {API}/issue/EX-1"), vec![Reply::status(204, "")])]).await;
     let to = Doc {
