@@ -53,7 +53,7 @@ fn intro(run: &Run) -> String {
 fn assemble(run: &Run, body: &Doc, plan: &str) -> std::result::Result<(Doc, bool), String> {
     let intro = intro(run);
     let rest = body.without_plan_section().to_markdown().chars().count();
-    let overhead = PLAN_HEADING.len() + intro.chars().count() + 64;
+    let overhead = PLAN_HEADING.len() + intro.chars().count() + 96;
     let which = run.short_id.as_ref().map_or_else(|| run.id.clone(), ToString::to_string);
     let mut room = PLAN_LIMIT.min(DESCRIPTION_LIMIT.saturating_sub(rest + overhead));
     for _ in 0..4 {
@@ -311,7 +311,7 @@ mod tests {
         assert_eq!(
             to.to_markdown(),
             format!(
-                "Hi\n\n## Gossamr Plan\n\nDrafted by an agent on {date}. A person read and approved it before it was added here.\n\n### Approach\n\nRound in one place.\n\n### Files\n\n- src/cart.rs\n\n### Steps\n\n1. Fix the rounding.\n2. Add a test."
+                "Hi\n\n<details>\n<summary>Gossamr Plan</summary>\n\nDrafted by an agent on {date}. A person read and approved it before it was added here.\n\n## Approach\n\nRound in one place.\n\n## Files\n\n- src/cart.rs\n\n## Steps\n\n1. Fix the rounding.\n2. Add a test.\n\n</details>"
             )
         );
         assert!(!to.to_markdown().contains("For Jira"), "the closing note goes to the ticket on its own");
@@ -355,7 +355,8 @@ mod tests {
         let (_, to) = rewrite_of(&two);
         let md = to.to_markdown();
         assert_eq!(md.matches("Gossamr Plan").count(), 1, "{md}");
-        assert!(md.starts_with("Intro\n\n## Gossamr Plan\n\nDrafted by an agent on") && !md.contains("(") && md.contains("1. Better idea.") && md.ends_with("## Notes\n\nKeep me."), "{md}");
+        assert!(md.starts_with("Intro\n\n<details>\n<summary>Gossamr Plan</summary>\n\nDrafted by an agent on") && !md.contains("(") && md.contains("1. Better idea.") && md.ends_with("</details>\n\n## Notes\n\nKeep me."), "{md}");
+        assert!(!md.contains("## Gossamr Plan"), "the old heading section is replaced by the expand: {md}");
         assert!(!md.contains("Old plan") && !md.contains("First idea"));
         let now = fx.core.proposal(&one.id).await.unwrap().unwrap();
         assert!(matches!(now.state, ProposalState::Retired(_)), "{:?}", now.state);
@@ -536,6 +537,12 @@ mod tests {
         let verify = fx.core.draft_run(RunSpec { kind: RunKind::Verify, instruction: String::new(), ..next_spec(&fx) }, Some(fx.item("CA-1"))).await.unwrap();
         let block = block_of(&verify);
         assert!(block.contains("Gossamr Plan (the agreed plan") && block.contains("Round in one place.") && block.contains("1. Fix the rounding."), "{block}");
+        // The agent reads the plan in full and as text, not as a folded tag, and the description it reads is without the plan.
+        assert!(!block.contains("<details>") && !block.contains("<summary>") && block.contains("Description:\nHi\n\nGossamr Plan (the agreed plan"), "{block}");
+        // A ticket that still carries the older heading section gives the agent the same plan.
+        fx.edit_item("CA-1", |item| item.body = Doc::from_markdown("Hi\n\n## Gossamr Plan\n\nDrafted by an agent on 2026-10-01. Old.\n\n1. Fix the rounding.", &[])).await;
+        let old = block_of(&fx.core.draft_run(RunSpec { kind: RunKind::Verify, instruction: String::new(), ..next_spec(&fx) }, Some(fx.item("CA-1"))).await.unwrap());
+        assert!(old.contains("Description:\nHi\n\nGossamr Plan (the agreed plan") && old.contains("1. Fix the rounding."), "{old}");
         let review = fx.core.runs_review(&build.id).await.unwrap();
         assert!(review.ticket_block.as_deref().unwrap().contains("left out here") && review.prompt.matches("Round in one place.").count() == 1, "one copy of the plan in the prompt");
     }

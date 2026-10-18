@@ -70,3 +70,15 @@ export function withGaps(lines: DiffLine[], context = 2): DiffRow[] {
 }
 
 export const changedLines = (lines: DiffLine[]) => lines.filter((l) => l.kind !== "same").length;
+
+/**
+ * A line of a description's Markdown as a person reads it in a diff. The collapsible sections Gossamr writes (the
+ * `Gossamr Plan`) are `<details><summary>` lines in the text, which are shown as a heading-like line, not as tags; every other line is as it is.
+ */
+export function readableLine(text: string): string {
+  const t = text.trim();
+  if (t === "<details>") return "▸ Collapsible section";
+  if (t === "</details>") return "◂ End of collapsible section";
+  const summary = /^<summary>(.*)<\/summary>$/.exec(t);
+  return summary ? `▸ ${summary[1]}` : text;
+}

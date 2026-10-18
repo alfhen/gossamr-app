@@ -1,7 +1,7 @@
 //! A small Markdown dialect for ticket descriptions: what Pip reads and writes, and what a person edits in the draft.
 //!
 //! It covers what `Doc` can hold: paragraphs, headings, nested lists, quotes, fenced code and rules, with bold, italic,
-//! strike, code, links and mentions inline. A single newline inside a paragraph is a line break, as in `Doc::from_text`.
+//! strike, code, links and mentions inline, and collapsible sections as `<details><summary>` blocks. A single newline inside a paragraph is a line break, as in `Doc::from_text`.
 //! `\` escapes punctuation. Anything else is plain text.
 
 use super::{push_line, Block, Doc, Inline, Mark};
@@ -54,7 +54,7 @@ impl Doc {
                         }
                     }
                     Block::List { items, .. } => items.iter().for_each(|i| walk(i, out)),
-                    Block::Quote { content } => walk(content, out),
+                    Block::Quote { content } | Block::Expand { content, .. } => walk(content, out),
                     Block::Code { .. } | Block::Rule => {}
                 }
             }
@@ -79,7 +79,7 @@ impl Doc {
                         }
                     }
                     Block::List { items, .. } => items.iter().for_each(|i| walk(i, out)),
-                    Block::Quote { content } => walk(content, out),
+                    Block::Quote { content } | Block::Expand { content, .. } => walk(content, out),
                     Block::Code { .. } | Block::Rule => {}
                 }
             }
@@ -119,7 +119,54 @@ fn block_markdown(block: &Block) -> String {
             format!("{fence}{info}\n{text}\n{fence}")
         }
         Block::Rule => "---".into(),
+        Block::Expand { title, content } => {
+            let title = title.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('\n', " ");
+            format!("<details>\n<summary>{title}</summary>\n\n{}\n\n</details>", blocks_markdown(content)).replace("\n\n\n\n</details>", "\n\n</details>")
+        }
     }
+}
+
+const DETAILS_OPEN: &str = "<details>";
+const DETAILS_CLOSE: &str = "</details>";
+
+/// For a line that opens a `<details>` block: the title, the body lines and the index after the closing tag. A block that
+/// never closes runs to the end.
+fn details_block<'a>(lines: &[&'a str], at: usize) -> Option<(String, Vec<&'a str>, usize)> {
+    if columns_of(lines[at]) > 3 || lines[at].trim() != DETAILS_OPEN {
+        return None;
+    }
+    let summary = lines.get(at + 1)?.trim();
+    let title = summary.strip_prefix("<summary>")?.strip_suffix("</summary>")?;
+    let title = title.replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&");
+    let (mut depth, mut fence) = (1, None::<(char, usize)>);
+    let mut i = at + 2;
+    let mut body = Vec::new();
+    while i < lines.len() {
+        let line = lines[i];
+        match fence {
+            Some((mark, ticks)) => {
+                let closing = line.trim();
+                if columns_of(line) <= 3 && closing.len() >= ticks && closing.chars().all(|c| c == mark) {
+                    fence = None;
+                }
+            }
+            None => {
+                if let Some((mark, ticks, _)) = fence_open(line) {
+                    fence = Some((mark, ticks));
+                } else if line.trim() == DETAILS_OPEN && lines.get(i + 1).is_some_and(|l| l.trim().starts_with("<summary>")) {
+                    depth += 1;
+                } else if line.trim() == DETAILS_CLOSE {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Some((title, body, i + 1));
+                    }
+                }
+            }
+        }
+        body.push(line);
+        i += 1;
+    }
+    Some((title, body, i))
 }
 
 /// An item's blocks one under another, so a nested list sits right below the text it belongs to.
@@ -226,7 +273,7 @@ fn escape_line_starts(text: &str) -> String {
 }
 
 fn is_block_start(line: &str) -> bool {
-    heading(line).is_some() || line.starts_with('>') || is_rule(line) || list_marker(line).is_some()
+    line == DETAILS_OPEN || line == DETAILS_CLOSE || heading(line).is_some() || line.starts_with('>') || is_rule(line) || list_marker(line).is_some()
 }
 
 /// How a line opens a fenced code block, as `(mark, length, info string)`: indented by at most three columns, then three
@@ -312,6 +359,9 @@ fn parse_blocks(lines: &[&str], cx: &Context) -> Vec<Block> {
                 i += 1;
             }
             blocks.push(Block::Code { language: (!language.is_empty()).then(|| language.to_string()), text: body.join("\n") });
+        } else if let Some((title, body, next)) = details_block(lines, i) {
+            blocks.push(Block::Expand { title, content: parse_blocks(&body, cx) });
+            i = next;
         } else if let Some((level, text)) = heading(trimmed) {
             blocks.push(Block::Heading { level, content: inlines(text, cx) });
             i += 1;
@@ -573,6 +623,35 @@ mod tests {
     fn structure_survives_a_round_trip() {
         let text = "# Scope\n\nFirst **bold** and *italic* and ~~gone~~ and `code`.\nSecond line.\n\n- one\n- two\n  - nested\n\n1. step\n2. step two\n\n> quoted\n> text\n\n```rust\nlet x = 1;\n```\n\n---\n\n[docs](https://example.com/a)";
         assert_eq!(round(text), text);
+    }
+
+    #[test]
+    fn an_expand_round_trips_as_details() {
+        let text = "Intro\n\n<details>\n<summary>Gossamr Plan</summary>\n\n## Steps\n\n- one\n- two\n\n```\n</details>\n```\n\n<details>\n<summary>Inner</summary>\n\ndeep\n\n</details>\n\n</details>\n\nAfter";
+        let doc = Doc::from_markdown(text, &[]);
+        assert_eq!(doc.blocks.len(), 3, "{doc:?}");
+        let Block::Expand { title, content } = &doc.blocks[1] else { panic!("{:?}", doc.blocks[1]) };
+        assert_eq!(title, "Gossamr Plan");
+        assert_eq!(content.len(), 4, "heading, list, code, nested expand");
+        assert!(matches!(&content[2], Block::Code { text, .. } if text == "</details>"));
+        assert!(matches!(&content[3], Block::Expand { title, .. } if title == "Inner"));
+        assert_eq!(doc.to_markdown(), text);
+        assert_eq!(Doc::from_markdown(&doc.to_markdown(), &[]), doc);
+    }
+
+    #[test]
+    fn an_expand_title_with_markup_and_an_empty_expand_read_back() {
+        let doc = Doc { blocks: vec![Block::Expand { title: "A <b> & c".into(), content: vec![] }, Doc::paragraph("x").blocks.remove(0)] };
+        let md = doc.to_markdown();
+        assert!(md.contains("<summary>A &lt;b&gt; &amp; c</summary>"), "{md}");
+        assert_eq!(Doc::from_markdown(&md, &[]), doc);
+        let quoted = Doc { blocks: vec![Block::Quote { content: vec![Block::Expand { title: "T".into(), content: Doc::paragraph("in").blocks }] }] };
+        assert_eq!(Doc::from_markdown(&quoted.to_markdown(), &[]), quoted);
+        assert_eq!(Doc::paragraph("<details>").to_markdown(), "\\<details>");
+        assert_eq!(Doc::from_markdown(&Doc::paragraph("<details>").to_markdown(), &[]), Doc::paragraph("<details>"));
+        // A paragraph that reads as the close tag stays inside its expand rather than ending it early.
+        let inner = Doc { blocks: vec![Block::Expand { title: "T".into(), content: Doc::paragraph("</details>").blocks }, Doc::paragraph("after").blocks.remove(0)] };
+        assert_eq!(Doc::from_markdown(&inner.to_markdown(), &[]), inner);
     }
 
     #[test]

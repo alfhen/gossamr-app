@@ -1,7 +1,7 @@
 import { docFromText } from "../lib/docs";
 import type { BodyChange, WorkBlock, WorkDoc, WorkInline } from "../types";
 
-/** The part of the backend's Markdown the sample build understands: headings, bullet and numbered lists, quotes, code and paragraphs. */
+/** The part of the backend's Markdown the sample build understands: headings, bullet and numbered lists, quotes, code, collapsible `<details>` sections and paragraphs. */
 function inlines(content: WorkInline[]): string {
   return content
     .map((i) => {
@@ -22,7 +22,8 @@ function inlines(content: WorkInline[]): string {
 function block(b: WorkBlock): string {
   switch (b.type) {
     case "paragraph":
-      return inlines(b.content);
+      // A line that reads as a section's tag is escaped, so it stays a paragraph line and never opens or closes one, as `escape_line_starts`.
+      return inlines(b.content).replace(/^(\s*)(<\/?details>)\s*$/gm, "$1\\$2");
     case "heading":
       return `${"#".repeat(b.level)} ${inlines(b.content).replace(/\n/g, " ")}`;
     case "list":
@@ -43,12 +44,17 @@ function block(b: WorkBlock): string {
     }
     case "rule":
       return "---";
+    case "expand": {
+      const title = b.title.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\n/g, " ");
+      const inner = b.content.map(block).join("\n\n");
+      return `<details>\n<summary>${title}</summary>\n\n${inner ? `${inner}\n\n` : ""}</details>`;
+    }
   }
 }
 
 export const markdownOf = (doc: WorkDoc): string => doc.blocks.map(block).join("\n\n").trim();
 
-const para = (lines: string[]): WorkBlock => docFromText(lines.join("\n")).blocks[0];
+const para = (lines: string[]): WorkBlock => docFromText(lines.map((l) => l.replace(/^(\s*)\\(<\/?details>)\s*$/, "$1$2")).join("\n")).blocks[0];
 
 /** Leading whitespace in columns, a tab advancing to the next multiple of four. */
 const columns = (line: string) => {
@@ -89,6 +95,27 @@ export function docFromMarkdown(text: string): WorkDoc {
       }
       const language = fence[2].trim();
       blocks.push({ type: "code", language: language || null, text: body.join("\n") });
+      continue;
+    }
+    const open = line.trim() === "<details>" && columns(line) <= 3 ? /^\s*<summary>(.*)<\/summary>\s*$/.exec(lines[at + 1] ?? "") : null;
+    if (open) {
+      flush();
+      // The section runs to its matching close, skipping tags inside fenced code.
+      let depth = 1;
+      let fence: string | null = null;
+      let end = at + 2;
+      for (; end < lines.length; end++) {
+        const l = lines[end];
+        const f = /^\s*(`{3,}|~{3,})/.exec(l);
+        if (fence) {
+          if (f && f[1][0] === fence[0] && f[1].length >= fence.length && l.trim() === f[1]) fence = null;
+        } else if (f) fence = f[1];
+        else if (l.trim() === "<details>" && /^\s*<summary>/.test(lines[end + 1] ?? "")) depth++;
+        else if (l.trim() === "</details>" && --depth === 0) break;
+      }
+      const title = open[1].replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
+      blocks.push({ type: "expand", title, content: docFromMarkdown(lines.slice(at + 2, end).join("\n")).blocks });
+      at = end;
       continue;
     }
     const heading = /^(#{1,6}) (.*)$/.exec(line);

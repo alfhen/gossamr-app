@@ -94,7 +94,7 @@ describe("mock Pip drafting the next step of a workstream, as propose_run does",
   async function settle(b: MockBackend, plan: Run, extra: string) {
     const draft = b.proposals.list({ states: ["pending"] }).find((p) => p.origin.type === "run" && p.origin.runId === plan.id && p.intent.type === "rewrite")!;
     if (draft.intent.type !== "rewrite" || !draft.intent.body) throw new Error("a description draft");
-    await b.proposalsEdit(draft.id, { type: "rewrite", body: `${draft.intent.body.toText}\n\n${extra}` });
+    await b.proposalsEdit(draft.id, { type: "rewrite", body: draft.intent.body.toText.replace(/\n*<\/details>\s*$/, `\n\n${extra}\n\n</details>`) });
     await b.proposalsApprove(draft.id);
     return draft;
   }

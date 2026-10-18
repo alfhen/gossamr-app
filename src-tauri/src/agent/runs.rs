@@ -1882,7 +1882,7 @@ mod tests {
             async fn settle(&self, plan: &Run) {
                 let made = self.plan_draft(plan).await;
                 let Intent::Rewrite { body: Some(b), .. } = &made.intent else { panic!() };
-                let body = format!("{}\n\n{EXTRA}", b.to.to_markdown());
+                let body = b.to.to_markdown().replacen("\n\n</details>", &format!("\n\n{EXTRA}\n\n</details>"), 1);
                 self.fx.core.edit_proposal(&made.id, &crate::inbox::Edit::Rewrite { title: None, body: Some(body) }).await.unwrap();
                 assert_eq!(self.fx.core.approve_proposal(&made.id).await.unwrap().state, ProposalState::Applied);
             }

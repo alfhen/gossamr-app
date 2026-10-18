@@ -3,7 +3,7 @@ import { docText } from "./docs";
 import { isReporterFollowUp, isReporterNudge, isReporterQuestions, makerName, targetOf, workstreamOf } from "./proposals";
 import { fromRunPhrase } from "./runNames";
 import { maskSecrets } from "./riskyText";
-import { diffLines, withGaps } from "./textDiff";
+import { diffLines, readableLine, withGaps } from "./textDiff";
 import { isJiraWrite } from "./workstreamWither";
 
 /**
@@ -98,7 +98,7 @@ const lines = (text: string) => text.split("\n").map((l) => l.trimEnd()).filter(
 
 /** A description's change as lines for the disclosure: what was removed ("− "), added ("+ ") and a little around it, as drafted. */
 function descriptionDiff(from: string, to: string): string[] {
-  return withGaps(diffLines(from, to)).map((r) => (r.kind === "gap" ? `… ${r.count} unchanged lines` : `${r.kind === "del" ? "− " : r.kind === "add" ? "+ " : "  "}${r.text}`));
+  return withGaps(diffLines(from, to)).map((r) => (r.kind === "gap" ? `… ${r.count} unchanged lines` : `${r.kind === "del" ? "− " : r.kind === "add" ? "+ " : "  "}${readableLine(r.text)}`));
 }
 
 /**

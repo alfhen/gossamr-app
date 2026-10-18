@@ -29,6 +29,9 @@ function blockText(b: WorkBlock): string {
       return b.text;
     case "rule":
       return "";
+    case "expand":
+      // The title on its own line, then everything inside: nothing is hidden from a reader of the text.
+      return [b.title, ...b.content.map(blockText)].filter(Boolean).join("\n");
   }
 }
 
