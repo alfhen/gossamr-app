@@ -273,7 +273,7 @@ fn escape_line_starts(text: &str) -> String {
 }
 
 fn is_block_start(line: &str) -> bool {
-    line == DETAILS_OPEN || heading(line).is_some() || line.starts_with('>') || is_rule(line) || list_marker(line).is_some()
+    line == DETAILS_OPEN || line == DETAILS_CLOSE || heading(line).is_some() || line.starts_with('>') || is_rule(line) || list_marker(line).is_some()
 }
 
 /// How a line opens a fenced code block, as `(mark, length, info string)`: indented by at most three columns, then three
@@ -649,6 +649,9 @@ mod tests {
         assert_eq!(Doc::from_markdown(&quoted.to_markdown(), &[]), quoted);
         assert_eq!(Doc::paragraph("<details>").to_markdown(), "\\<details>");
         assert_eq!(Doc::from_markdown(&Doc::paragraph("<details>").to_markdown(), &[]), Doc::paragraph("<details>"));
+        // A paragraph that reads as the close tag stays inside its expand rather than ending it early.
+        let inner = Doc { blocks: vec![Block::Expand { title: "T".into(), content: Doc::paragraph("</details>").blocks }, Doc::paragraph("after").blocks.remove(0)] };
+        assert_eq!(Doc::from_markdown(&inner.to_markdown(), &[]), inner);
     }
 
     #[test]

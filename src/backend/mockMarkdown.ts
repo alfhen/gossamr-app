@@ -22,7 +22,8 @@ function inlines(content: WorkInline[]): string {
 function block(b: WorkBlock): string {
   switch (b.type) {
     case "paragraph":
-      return inlines(b.content);
+      // A line that reads as a section's tag is escaped, so it stays a paragraph line and never opens or closes one, as `escape_line_starts`.
+      return inlines(b.content).replace(/^(\s*)(<\/?details>)\s*$/gm, "$1\\$2");
     case "heading":
       return `${"#".repeat(b.level)} ${inlines(b.content).replace(/\n/g, " ")}`;
     case "list":
@@ -53,7 +54,7 @@ function block(b: WorkBlock): string {
 
 export const markdownOf = (doc: WorkDoc): string => doc.blocks.map(block).join("\n\n").trim();
 
-const para = (lines: string[]): WorkBlock => docFromText(lines.join("\n")).blocks[0];
+const para = (lines: string[]): WorkBlock => docFromText(lines.map((l) => l.replace(/^(\s*)\\(<\/?details>)\s*$/, "$1$2")).join("\n")).blocks[0];
 
 /** Leading whitespace in columns, a tab advancing to the next multiple of four. */
 const columns = (line: string) => {

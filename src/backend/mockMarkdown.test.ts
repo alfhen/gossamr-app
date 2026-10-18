@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { docFromText } from "../lib/docs";
+import type { WorkDoc } from "../types";
 import { bodyChange, docFromMarkdown, markdownOf } from "./mockMarkdown";
 
 describe("the sample build's Markdown", () => {
@@ -60,6 +62,13 @@ describe("the sample build's Markdown", () => {
 
 describe("collapsible sections", () => {
   const text = "Intro\n\n<details>\n<summary>Gossamr Plan</summary>\n\n## Steps\n\n- one\n\n```\n</details>\n```\n\n<details>\n<summary>Inner &amp; more</summary>\n\ndeep\n\n</details>\n\n</details>\n\nAfter";
+
+  it("keeps a paragraph that reads as a section tag inside its expand, as text", () => {
+    const doc: WorkDoc = { blocks: [{ type: "expand", title: "T", content: docFromText("</details>").blocks }, ...docFromText("<details>").blocks, ...docFromText("after").blocks] };
+    const md = markdownOf(doc);
+    expect(md).toContain("\\</details>");
+    expect(docFromMarkdown(md)).toEqual(doc);
+  });
 
   it("reads <details> into an expand, keeps nesting and fenced tags, and writes the same text back", () => {
     const doc = docFromMarkdown(text);
