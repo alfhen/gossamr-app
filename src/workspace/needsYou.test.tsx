@@ -76,7 +76,7 @@ const input = (over: Partial<NeedsInput> = {}): NeedsInput => ({
   runs: [
     run("r-perm", "needsPermission", { needs: "approve Bash: git push origin ca-401", lastProgressAt: ago(14) }),
     run("r-q", "needsAnswer", { needs: "Which cache should it keep?", lastProgressAt: ago(9) }),
-    run("r-fail", "failed", { error: "Launch was interrupted", lastProgressAt: ago(8), endedAt: ago(8) }),
+    run("r-fail", "failed", { error: "Launch was interrupted", lastProgressAt: ago(8), endedAt: ago(8), spec: { ...base.spec, kind: "verify", workstream: "ws-1" } }),
   ],
   proposals: [draft("c1", comment("CA-401"), 30, "ws-1"), draft("c2", transition("CA-401"), 25, "ws-1"), draft("c3", comment("CA-401", "Another"), 24, "ws-1"), draft("g1", comment("CA-500"), 10)],
   dismissed: new Set(),
@@ -507,7 +507,7 @@ describe("the decision pane", () => {
   });
 
   it("decides a sign-in with the sign-in box and a limit stop with the resume box", () => {
-    const list = set({ runs: [run("r-s", "systemBlocked"), run("r-l", "stopped", { stoppedByLimit: true, error: "Stopped by Gossamr: it passed the 60 minute limit" })], proposals: [], workstreams: [view("ws-1", "CA-401", "CA-401 Welcome flow refresh", { runs: ["r-s", "r-l"] })] });
+    const list = set({ runs: [run("r-s", "systemBlocked"), run("r-l", "stopped", { stoppedByLimit: true, error: "Stopped by Gossamr: it passed the 60 minute limit", spec: { ...base.spec, kind: "plan", workstream: "ws-1" } })], proposals: [], workstreams: [view("ws-1", "CA-401", "CA-401 Welcome flow refresh", { runs: ["r-s", "r-l"] })] });
     expect(pane(list, "run:r-s")).toContain("Claude needs you to sign in");
     expect(pane(list, "run:r-s")).toContain("R1 needs you to sign in to Claude.");
     const limit = pane(list, "run:r-l");
@@ -623,8 +623,8 @@ describe("every count of needs you and of agents, from one fixture (D4, D5, N3)"
     it(`agrees on the list, the rail badge, the composer, the launcher, the Agents header, Your agents and Stop all${dismissed.size ? ", once the failed run was dismissed" : ""}`, () => {
       const list = needs({ workstreams: [], runs, proposals, dismissed, now: at + 5 * 60_000 });
       const n = list.length;
-      // The sample clock stands at 12:00; five minutes on, the run that was quiet at 11:20 is 45 minutes quiet.
-      expect(n).toBe(3 + (dismissed.size ? 0 : 1) + proposals.length);
+      // A permission and a question, and the failed run until it is dismissed; a quiet run is not a need.
+      expect(n).toBe(2 + (dismissed.size ? 0 : 1) + proposals.length);
       // One number: the list's pill, the rail badge, the composer footer, the launcher and the Agents header.
       expect(renderToStaticMarkup(<NeedsYouList needs={list} now={at} />)).toMatch(new RegExp(`data-needs-you-count[^>]*>${n}<`));
       expect(railBadgeText.pipHome(n)).toBe(needsYouText(n));
@@ -648,7 +648,7 @@ describe("every count of needs you and of agents, from one fixture (D4, D5, N3)"
 
   it("keeps a folder to trust, and every other failure, in the count until it is dismissed (R5)", () => {
     const trust = runs.find((r) => r.failure?.type === "untrustedFolder")!;
-    const other = { ...trust, id: "r-other", failure: { type: "other" } } as unknown as typeof trust;
+    const other = { ...trust, id: "r-other", failure: { type: "other" }, spec: { ...trust.spec, kind: trust.spec.kind === "verify" ? "review" : "verify" } } as unknown as typeof trust;
     const all = [...runs, other];
     useRuns.setState({ runs: all, dismissed: new Set() });
     // Opening Agents once marked every failure but the folder as seen; nothing does that now.

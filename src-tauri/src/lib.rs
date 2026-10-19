@@ -1390,7 +1390,6 @@ pub fn run() {
                 }
                 if let Some(runs) = app.try_state::<RunsState>() {
                     runs.focus.notify_one();
-                    runs.looked();
                 }
                 if let Some(run_id) = app.try_state::<Arc<runs::tracker::OpenOnFocus>>().and_then(|open| open.take(std::time::Instant::now())) {
                     let _ = app.emit("open-run", serde_json::json!({ "runId": run_id }));

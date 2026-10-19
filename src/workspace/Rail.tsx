@@ -3,7 +3,6 @@ import { containerKey, describeFilter, filterChips } from "../lib/filter";
 import type { WorkContainer } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { BUILT_IN_VIEWS, projectOf, sameProject } from "./filters";
-import { useActivity } from "./activityStore";
 import { useActiveTab, useFilterCounts, useLookup } from "./hooks";
 import { workConnections, workContainers } from "./domains";
 import { usePopover } from "./Popover";
@@ -237,9 +236,7 @@ function HoldAllButton() {
   );
 }
 
-const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
-
-/** A count over a rail button, named and titled with what it counts: Activity's unread updates, and Pip home's one count of what needs you. */
+/** A count over a rail button, named and titled with what it counts: Pip home's one count of what needs you, the only badge. */
 function RailBadge({ count, what }: { count: number; what: string }) {
   return (
     <span aria-label={what} title={what} className="absolute -top-[3px] -right-[3px] grid h-[16px] min-w-[16px] place-items-center rounded-full bg-ws-pip px-1 text-[10px] font-semibold text-ws-on-pip">
@@ -248,9 +245,8 @@ function RailBadge({ count, what }: { count: number; what: string }) {
   );
 }
 
-/** What each rail badge counts, as its tooltip says and as the button's name ends ("Pip home, 3 things need you"). Agents has none: what needs you is counted once, on Pip home. */
+/** What the rail badge counts, as its tooltip says and as the button's name ends ("Pip home, 3 things need you"). Activity and Agents have none: what needs you is counted once, on Pip home. */
 export const railBadgeText = {
-  activity: (n: number) => plural(n, "unread update", "unread updates"),
   pipHome: needsYouText,
 };
 
@@ -302,7 +298,6 @@ export function Rail() {
   const containers = useWorkspace((s) => s.containers);
   const watch = useWorkspace((s) => s.watch);
   const kind = useWorkspace((s) => workConnections(s.connections)[0]?.kind);
-  const unread = useActivity((s) => s.unread + s.codeUnread);
   const agentsEnabled = useAgentsEnabled();
   // Pip home has its own composer in place of the pane, so there the Pip button goes to it.
   const pipOpen = usePrefs((s) => s.pipOpen) && route !== "pip";
@@ -348,9 +343,8 @@ export function Rail() {
         <ViewsButton />
       </nav>
       <div className="flex shrink-0 flex-col items-center gap-2 border-t border-ws-sep pt-2.5">
-        <RailButton label={unread > 0 ? `Activity, ${railBadgeText.activity(unread)}` : "Activity"} current={route === "activity"} onClick={() => setRoute("activity")} className={`text-lg ${plain(route === "activity")}`}>
+        <RailButton label="Activity" current={route === "activity"} onClick={() => setRoute("activity")} className={`text-lg ${plain(route === "activity")}`}>
           <BellIcon />
-          {unread > 0 && <RailBadge count={unread} what={railBadgeText.activity(unread)} />}
         </RailButton>
         {agentsEnabled && (
           <RailButton label="Agents" current={route === "agents"} onClick={() => setRoute("agents")} className={`text-lg ${plain(route === "agents")}`}>

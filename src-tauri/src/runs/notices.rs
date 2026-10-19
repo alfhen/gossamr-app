@@ -1,23 +1,26 @@
 //! When a run's news is worth a system notification: one per workstream that starts waiting on the person, not one per
 //! event. Pure: the caller says what waits and when it is, and gets back the notices to show.
 //!
-//! A workstream notifies when a need appears in it, or a need of a higher group does (`Group`: decide over unblock over
-//! approve, as docs/needs-you.md ranks them). While it stays waiting, anything else that happens in it is quiet; once nothing waits in it any more, the
-//! next need notifies again. Runs in no workstream are one stream, `GENERAL`. Finished and failed runs are held for
-//! `FINISH_HOLD` and sent as one notice with a count, at most one per workstream until the person looks (`looked`).
+//! What waits is what the page counts as Needs you (docs/needs-you.md, `src/lib/needs.ts`); a finished run is not one, so it
+//! never notifies. A workstream notifies when a need appears in it, or a need of a higher group does (`Group`: decide over
+//! unblock over approve). While it stays waiting, anything else that happens in it is quiet; once nothing waits in it any
+//! more, the next need notifies again. Runs in no workstream are one stream, `GENERAL`.
 //! Digest mode sends one notice at most every `digest_every` instead, naming the workstreams that wait.
 
 use std::collections::BTreeMap;
 
 use chrono::{DateTime, Duration, Utc};
+
 use serde::{Deserialize, Serialize};
 
+use crate::domain::{Run, RunState};
 use crate::notify::Notice;
 
 /// The name of the stream of runs that belong to no workstream.
 pub const GENERAL: &str = "General";
-/// How long the first finished run of a workstream waits for others to join it in one notice.
-pub const FINISH_HOLD: Duration = Duration::seconds(20);
+/// How long after it ended a failed or limit-stopped run still notifies. It stays in the page's list however long it is
+/// left, but past this it is no news, and must not keep its workstream "waiting" and so quiet about what comes next.
+pub const FAILURE_NEWS: Duration = Duration::minutes(30);
 pub const DIGEST_MINUTES: u32 = 30;
 pub const DIGEST_MINUTES_MAX: u32 = 24 * 60;
 
@@ -87,35 +90,12 @@ pub struct Outgoing {
 struct Stream {
     /// The highest group already announced while the stream has waited.
     notified: Option<Group>,
-    done: u32,
-    failed: u32,
-    first_finished: Option<DateTime<Utc>>,
-    last_finished: Option<String>,
-    /// A finished notice went out; the rest stay quiet until the person looks.
-    announced: bool,
-}
-
-impl Stream {
-    fn finished(&self) -> u32 {
-        self.done + self.failed
-    }
-
-    fn forget_finished(&mut self) {
-        self.done = 0;
-        self.failed = 0;
-        self.first_finished = None;
-        self.last_finished = None;
-    }
 }
 
 #[derive(Default)]
 pub struct Board {
     streams: BTreeMap<Key, Stream>,
     last_digest: Option<DateTime<Utc>>,
-}
-
-fn plural(n: u32, one: &str, many: &str) -> String {
-    format!("{n} {}", if n == 1 { one } else { many })
 }
 
 fn waiting_notice(name: &str, w: &Waiting) -> Option<Outgoing> {
@@ -125,42 +105,7 @@ fn waiting_notice(name: &str, w: &Waiting) -> Option<Outgoing> {
     Some(Outgoing { notice: Notice { title: format!("{name} is waiting on you"), body }, open_run: top.run_id.clone() })
 }
 
-fn finished_notice(name: &str, s: &Stream) -> Outgoing {
-    let counts = match (s.done, s.failed) {
-        (done, 0) => format!("{} finished", plural(done, "run", "runs")),
-        (0, failed) => format!("{} failed", plural(failed, "run", "runs")),
-        (done, failed) => format!("{} finished, {failed} failed", plural(done, "run", "runs")),
-    };
-    let body = if s.finished() == 1 { "Open it to see the result" } else { "Open Gossamr to see the results" };
-    Outgoing { notice: Notice { title: format!("{name}: {counts}"), body: body.into() }, open_run: s.last_finished.clone() }
-}
-
 impl Board {
-    /// A run in `key` finished, or failed or was stopped when `failed`.
-    pub fn finished(&mut self, key: &Key, run_id: &str, failed: bool, now: DateTime<Utc>) {
-        let s = self.streams.entry(key.clone()).or_default();
-        if failed {
-            s.failed += 1;
-        } else {
-            s.done += 1;
-        }
-        s.first_finished.get_or_insert(now);
-        s.last_finished = Some(run_id.to_owned());
-    }
-
-    /// Whether finished runs are waiting to be told or have been, so their workstream's name is worth looking up.
-    pub fn has_finished(&self) -> bool {
-        self.streams.values().any(|s| s.finished() > 0)
-    }
-
-    /// The person looked at the app: finished runs are seen, so the next one may notify.
-    pub fn looked(&mut self) {
-        for s in self.streams.values_mut() {
-            s.forget_finished();
-            s.announced = false;
-        }
-    }
-
     /// What to show now. `waiting` is everything that waits on the person at `now`, so a stream missing from it has been
     /// dealt with and is armed again. `watching` is the person looking at the app: nothing is shown, but what they could
     /// see counts as announced. `name_of` is how a stream is called ("CA-401"). `deliver` shows a notice and says whether
@@ -202,15 +147,6 @@ impl Board {
             self.mark(&waiting);
             self.last_digest = Some(now);
         }
-        for (key, s) in &mut self.streams {
-            if quiet || settings.mode == NoticeMode::Digest {
-                s.forget_finished();
-                s.announced = s.announced && !watching;
-            } else if !s.announced && s.finished() > 0 && s.first_finished.is_some_and(|at| now - at >= FINISH_HOLD) && deliver(&finished_notice(&name_of(key), s)) {
-                s.forget_finished();
-                s.announced = true;
-            }
-        }
     }
 
     fn mark(&mut self, ws: &[&Waiting]) {
@@ -234,6 +170,28 @@ fn digest(waiting: &[&Waiting], name_of: &dyn Fn(&Key) -> String) -> Option<Outg
         n => format!("{n} workstreams wait on you"),
     };
     Some(Outgoing { notice: Notice { title, body: names.join(", ") }, open_run: first.top().and_then(|n| n.run_id.clone()) })
+}
+
+/// The failed or limit-stopped runs that are Needs you and news: the latest run of their kind on their ticket (their
+/// repository when they have none), ended within `FAILURE_NEWS`. A newer run in any state supersedes an older one, as
+/// `latestRuns` in `src/lib/needs.ts` does for the page's list.
+pub fn stuck_runs(runs: &[Run], now: DateTime<Utc>) -> Vec<&Run> {
+    let work = |r: &Run| {
+        let place = r.item.as_ref().map_or_else(|| format!("{}\n{}", r.connection_id, r.spec.repo), |i| format!("{}\n{}", i.connection_id, i.external_id));
+        (place, format!("{:?}", r.spec.kind))
+    };
+    let mut newest: BTreeMap<(String, String), (DateTime<Utc>, &str)> = BTreeMap::new();
+    for r in runs {
+        let seen = newest.entry(work(r)).or_insert((r.queued_at, &r.id));
+        if (r.queued_at, r.id.as_str()) > *seen {
+            *seen = (r.queued_at, &r.id);
+        }
+    }
+    runs.iter()
+        .filter(|r| matches!(r.state, RunState::Failed) || (r.state == RunState::Stopped && r.stopped_by_limit))
+        .filter(|r| r.ended_at.is_some_and(|at| now - at <= FAILURE_NEWS))
+        .filter(|r| newest[&work(r)].1 == r.id)
+        .collect()
 }
 
 #[cfg(test)]
@@ -401,80 +359,11 @@ mod tests {
     }
 
     #[test]
-    fn finished_runs_are_held_then_sent_as_one_notice_with_a_count() {
-        let mut b = Board::default();
-        let key = Some("w1".to_owned());
-        b.finished(&key, "r1", false, t(0));
-        assert!(tick(&mut b, 5, &each(), &[]).is_empty(), "held for others to join");
-        b.finished(&key, "r2", false, t(10));
-        let out = tick(&mut b, 20, &each(), &[]);
-        assert_eq!(titles(&out), ["CA-401: 2 runs finished"]);
-        assert_eq!(out[0].open_run.as_deref(), Some("r2"));
-        assert!(tick(&mut b, 60, &each(), &[]).is_empty(), "sent once");
-    }
-
-    #[test]
-    fn a_single_finish_and_a_failure_read_plainly() {
-        let mut b = Board::default();
-        let key = Some("w1".to_owned());
-        b.finished(&key, "r1", false, t(0));
-        assert_eq!(titles(&tick(&mut b, 20, &each(), &[])), ["CA-401: 1 run finished"]);
-        b.looked();
-        b.finished(&key, "r2", true, t(100));
-        assert_eq!(titles(&tick(&mut b, 120, &each(), &[])), ["CA-401: 1 run failed"]);
-        b.looked();
-        b.finished(&key, "r3", false, t(200));
-        b.finished(&key, "r4", false, t(201));
-        b.finished(&key, "r5", true, t(202));
-        assert_eq!(titles(&tick(&mut b, 220, &each(), &[])), ["CA-401: 2 runs finished, 1 failed"]);
-    }
-
-    #[test]
-    fn more_finishes_stay_quiet_until_the_person_looks() {
-        let mut b = Board::default();
-        let key = Some("w1".to_owned());
-        b.finished(&key, "r1", false, t(0));
-        assert_eq!(tick(&mut b, 20, &each(), &[]).len(), 1);
-        b.finished(&key, "r2", false, t(30));
-        assert!(tick(&mut b, 60, &each(), &[]).is_empty());
-        b.looked();
-        assert!(tick(&mut b, 80, &each(), &[]).is_empty(), "what they looked at is seen");
-        b.finished(&key, "r3", false, t(100));
-        assert_eq!(titles(&tick(&mut b, 130, &each(), &[])), ["CA-401: 1 run finished"]);
-    }
-
-    #[test]
-    fn finished_runs_coalesce_per_workstream_and_general() {
-        let mut b = Board::default();
-        b.finished(&Some("w1".into()), "r1", false, t(0));
-        b.finished(&Some("w2".into()), "r2", false, t(0));
-        b.finished(&None, "r3", false, t(0));
-        b.finished(&None, "r4", true, t(1));
-        let out = tick(&mut b, 25, &each(), &[]);
-        let mut got = titles(&out);
-        got.sort_unstable();
-        assert_eq!(got, ["CA-388: 1 run finished", "CA-401: 1 run finished", "General: 1 run finished, 1 failed"]);
-    }
-
-    #[test]
-    fn being_watched_shows_nothing_but_counts_as_seen() {
-        let mut b = Board::default();
-        let waiting = [ws("w1", vec![need(Group::Unblock, "r5", "a")])];
-        b.finished(&Some("w1".into()), "r1", false, t(0));
-        assert!(tick_delivering(&mut b, 30, &each(), true, &waiting, true).is_empty());
-        assert!(tick(&mut b, 35, &each(), &waiting).is_empty(), "already seen");
-        b.finished(&Some("w1".into()), "r2", false, t(40));
-        assert_eq!(titles(&tick(&mut b, 70, &each(), &[])), ["CA-401: 1 run finished"], "looking re-armed finished notices");
-    }
-
-    #[test]
     fn off_sends_nothing() {
         let off = Settings { mode: NoticeMode::Off, digest_every: Duration::minutes(30) };
         let mut b = Board::default();
-        b.finished(&Some("w1".into()), "r1", false, t(0));
         assert!(tick(&mut b, 100, &off, &[ws("w1", vec![need(Group::Decide, "r5", "a")]), general(vec![need(Group::Unblock, "g", "b")])]).is_empty());
         assert!(tick(&mut b, 200, &each(), &[ws("w1", vec![need(Group::Decide, "r5", "a")])]).is_empty(), "switching on doesn't announce what was already waiting");
-        assert!(tick(&mut b, 300, &each(), &[]).is_empty(), "and nothing finished is left over");
     }
 
     #[test]
@@ -516,10 +405,9 @@ mod tests {
     }
 
     #[test]
-    fn a_digest_uses_its_own_interval_and_leaves_finished_runs_out() {
+    fn a_digest_uses_its_own_interval() {
         let mut b = Board::default();
         let every_ten = Settings { mode: NoticeMode::Digest, digest_every: Duration::minutes(10) };
-        b.finished(&Some("w1".into()), "r1", false, t(0));
         assert!(tick(&mut b, 100, &every_ten, &[]).is_empty());
         assert_eq!(tick(&mut b, 200, &every_ten, &[ws("w1", vec![need(Group::Decide, "r5", "c")])]).len(), 1);
         assert_eq!(tick(&mut b, 200 + 600, &every_ten, &[ws("w1", vec![need(Group::Decide, "r5", "c"), need(Group::Decide, "r6", "d")]), general(vec![need(Group::Approve, "g", "e")])]).len(), 1);
@@ -533,17 +421,6 @@ mod tests {
         assert_eq!(tick_delivering(&mut b, 5, &each(), false, &waiting, false), ["CA-401 is waiting on you"], "offered again");
         assert_eq!(tick_delivering(&mut b, 10, &each(), false, &waiting, true), ["CA-401 is waiting on you"]);
         assert!(tick_delivering(&mut b, 15, &each(), false, &waiting, true).is_empty(), "delivered once, then quiet");
-    }
-
-    #[test]
-    fn a_failed_finished_notice_keeps_its_runs_until_it_is_delivered() {
-        let mut b = Board::default();
-        let key = Some("w1".to_owned());
-        b.finished(&key, "r1", false, t(0));
-        assert_eq!(tick_delivering(&mut b, 20, &each(), false, &[], false), ["CA-401: 1 run finished"]);
-        b.finished(&key, "r2", false, t(25));
-        assert_eq!(tick_delivering(&mut b, 30, &each(), false, &[], true), ["CA-401: 2 runs finished"], "coalesced with the one that failed");
-        assert!(tick_delivering(&mut b, 60, &each(), false, &[], true).is_empty());
     }
 
     #[test]
@@ -575,10 +452,76 @@ mod tests {
         let waiting = [ws("w1", vec![need(Group::Unblock, "r5", "a")])];
         for (settings, watching) in [(each(), true), (off, false)] {
             let mut b = Board::default();
-            b.finished(&Some("w1".into()), "r1", false, t(0));
             assert!(tick_delivering(&mut b, 30, &settings, watching, &waiting, false).is_empty(), "nothing is asked to be delivered");
             assert!(tick_delivering(&mut b, 35, &each(), false, &waiting, true).is_empty(), "the need counts as announced");
-            assert!(tick_delivering(&mut b, 40, &each(), false, &[], true).is_empty(), "and the finished run as seen");
+        }
+    }
+
+    mod stuck {
+        use super::*;
+        use crate::domain::fixtures::run_spec;
+        use crate::domain::{ItemRef, RunKind};
+
+        fn run(id: &str, kind: RunKind, state: RunState, queued: i64, ended: Option<i64>) -> Run {
+            let mut spec = run_spec();
+            spec.kind = kind;
+            let mut r = Run::queued(id.into(), "p".into(), "c".into(), Some(ItemRef { connection_id: "c".into(), external_id: "1".into(), key: "CA-1".into() }), spec, "db".into(), t(queued));
+            r.state = state;
+            r.ended_at = ended.map(t);
+            r
+        }
+
+        fn ids(runs: &[Run], now: i64) -> Vec<&str> {
+            stuck_runs(runs, t(now)).iter().map(|r| r.id.as_str()).collect()
+        }
+
+        #[test]
+        fn a_recent_failure_and_a_limit_stop_are_stuck() {
+            let mut limit = run("limit", RunKind::Build, RunState::Stopped, 0, Some(10));
+            limit.stopped_by_limit = true;
+            let runs = [run("failed", RunKind::Plan, RunState::Failed, 0, Some(10)), limit];
+            assert_eq!(ids(&runs, 60), ["failed", "limit"]);
+        }
+
+        #[test]
+        fn finished_stopped_by_you_and_waiting_runs_are_not() {
+            let runs = [
+                run("done", RunKind::Plan, RunState::Done, 0, Some(10)),
+                run("stopped", RunKind::Build, RunState::Stopped, 0, Some(10)),
+                run("asking", RunKind::Triage, RunState::NeedsAnswer, 0, None),
+            ];
+            assert!(ids(&runs, 60).is_empty());
+        }
+
+        #[test]
+        fn several_failures_of_one_kind_on_a_ticket_are_one_on_the_latest_run() {
+            let runs = [run("p1", RunKind::Plan, RunState::Failed, 0, Some(10)), run("p3", RunKind::Plan, RunState::Failed, 200, Some(210)), run("p2", RunKind::Plan, RunState::Failed, 100, Some(110))];
+            assert_eq!(ids(&runs, 300), ["p3"]);
+        }
+
+        #[test]
+        fn a_newer_run_in_any_state_supersedes_it_but_another_kind_does_not() {
+            for state in [RunState::Working, RunState::Done, RunState::Queued, RunState::Failed] {
+                let runs = [run("old", RunKind::Plan, RunState::Failed, 0, Some(10)), run("new", RunKind::Plan, state, 100, None)];
+                assert!(!ids(&runs, 150).contains(&"old"), "{state:?}");
+            }
+            let runs = [run("old", RunKind::Plan, RunState::Failed, 0, Some(10)), run("other", RunKind::Build, RunState::Done, 100, Some(120))];
+            assert_eq!(ids(&runs, 150), ["old"]);
+        }
+
+        #[test]
+        fn tickets_of_different_connections_sharing_a_key_do_not_supersede_each_other() {
+            let mut newer = run("new", RunKind::Plan, RunState::Done, 100, Some(120));
+            newer.item = Some(ItemRef { connection_id: "other".into(), external_id: "9".into(), key: "CA-1".into() });
+            let runs = [run("old", RunKind::Plan, RunState::Failed, 0, Some(10)), newer];
+            assert_eq!(ids(&runs, 150), ["old"]);
+        }
+
+        #[test]
+        fn a_failure_left_for_longer_than_the_news_window_is_not_news() {
+            let runs = [run("old", RunKind::Plan, RunState::Failed, 0, Some(0))];
+            assert_eq!(ids(&runs, 29 * 60), ["old"]);
+            assert!(ids(&runs, 31 * 60).is_empty());
         }
     }
 

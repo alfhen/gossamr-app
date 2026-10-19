@@ -12,7 +12,7 @@ test.describe("A decision stays with its workstream (G2)", () => {
     await startWorkstream(page, "CA-401");
     await openPipHome(page);
     await expandNeedsYou(page, "General");
-    await needRow(page, /CA-377.*gone quiet/).click();
+    await needRow(page, /DEVOPS-471.*asks to run a command/).click();
     await expect(needsPane(page)).toBeVisible();
     await page.locator('[data-workstream-row]:not([data-workstream-row="general"])').first().click();
     await expect(needsPane(page)).toHaveCount(0);

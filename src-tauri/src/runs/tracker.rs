@@ -12,12 +12,13 @@ use std::time::{Duration, Instant};
 use chrono::{DateTime, Timelike, Utc};
 
 use super::limits;
-use super::notices::{Group, Key, Need, Outgoing, Settings as NoticeSettings, Waiting, GENERAL};
+use super::notices::{stuck_runs, Group, Key, Need, Outgoing, Settings as NoticeSettings, Waiting, GENERAL};
 use super::cli::{AgentEntry, JobInfo, ShortId};
 use super::redact::redact;
 use super::service::{belongs_to, RunService};
 use super::state::{self, map_state, parse_at, progress_at};
 use super::toolchain::Toolchain;
+use crate::domain::workstream::{Mode, HELD_ALL, HELD_BUDGET, HELD_PERSON};
 use crate::domain::{Intent, Origin, ProposalQuery, ProposalState, Run, RunEvent, RunKind, RunQuery, RunState, StateKind};
 use crate::notify::Notice;
 
@@ -282,14 +283,9 @@ impl RunService {
         Polled { busy }
     }
 
-    /// Tells the notifier a run's news. A run that ended is also counted for its workstream's finished notice, which
-    /// `announce_notices` sends; a need is found there from what waits, not from this call.
+    /// Tells the notifier a run's news. A need is found by `announce_notices` from what waits, not from this call.
     pub(super) fn notify_run(&self, run: &Run, why: Attention) {
         self.notifier.notify(run, why);
-        if matches!(why, Attention::Done | Attention::Failed | Attention::Limit) {
-            let at = run.ended_at.unwrap_or_else(Utc::now);
-            self.notices.lock().expect("notices lock poisoned").finished(&run.spec.workstream, &run.id, why != Attention::Done, at);
-        }
     }
 
     /// Looks at everything that waits on the person and sends the system notifications that are due (`notices`).
@@ -330,6 +326,17 @@ impl RunService {
             };
             needs.entry(ws).or_default().push(Need { group: Group::Unblock, run_id: Some(run.id.clone()), what, since: run.last_progress_at });
         }
+        // A failure or a stop at the limit is stuck until dealt with, but only the latest run of its kind on its ticket.
+        let Ok(all) = self.core.runs_list(&RunQuery::default()).await else { return };
+        for run in stuck_runs(&all, now) {
+            let ws = run.spec.workstream.clone();
+            if closed(&ws) {
+                continue;
+            }
+            let name = label_of(&run.id, &ws).unwrap_or_else(|| topic(run).to_owned());
+            let what = if run.state == RunState::Failed { format!("{name} failed") } else { format!("{name} stopped at its limit") };
+            needs.entry(ws).or_default().push(Need { group: Group::Unblock, run_id: Some(run.id.clone()), what, since: run.ended_at.unwrap_or(run.last_progress_at) });
+        }
         // A review that still blocks after the fix rounds is a decision, and a hold waits to be resumed. The escalation's
         // review draft is part of the escalation, so it isn't a need of its own.
         let mut folded = HashSet::new();
@@ -340,7 +347,9 @@ impl RunService {
                 let what = format!("The review still blocks after {} fix {}", e.rounds, if e.rounds == 1 { "round" } else { "rounds" });
                 needs.entry(key.clone()).or_default().push(Need { group: Group::Decide, run_id: Some(e.review_run.clone()), what, since: e.at });
             }
-            if v.workstream.held_reason.is_some() {
+            // A hold the person chose is not a need, and a spent budget is a question only in Manage.
+            let held = v.workstream.held_reason.as_deref().filter(|r| !matches!(*r, HELD_PERSON | HELD_ALL) && (*r != HELD_BUDGET || v.workstream.mode == Mode::Manage));
+            if held.is_some() {
                 needs.entry(key).or_default().push(Need { group: Group::Unblock, run_id: None, what: "It is on hold until you resume it".to_owned(), since: v.workstream.created_at });
             }
         }
@@ -373,11 +382,6 @@ impl RunService {
         // A notice counts as told only once it is delivered, so one that fails is offered again at the next poll.
         let watching = self.notifier.watching();
         self.notices.lock().expect("notices lock poisoned").tick(now, &settings, watching, &waiting, &name_of, &mut |notice| self.notifier.announce(notice));
-    }
-
-    /// The person looked at the app: finished runs are seen, so the next one gets a notice again.
-    pub fn looked(&self) {
-        self.notices.lock().expect("notices lock poisoned").looked();
     }
 
     /// Runs that finished or were stopped lately and still have a worktree: their session may be open at its prompt, or

@@ -1,5 +1,5 @@
 import { readAs } from "../lib/permission";
-import { quietKey, type Need } from "../lib/needs";
+import type { Need } from "../lib/needs";
 import { ALLOW_MORE_STEPS } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { draftKeyAction } from "./draftKeys";
@@ -134,8 +134,7 @@ export function keyPlan(need: Need, which: NeedKey): KeyPlan | null {
   // A deny reaches the agent, so it keeps its Enter; the rest are the person's own and can be undone.
   if (stop.id === "deny") return run ? { type: "ask", text: "deny it; Claude carries on without it", run: () => void useRuns.getState().denyPermission(run.id, readAs(run.needs)) } : null;
   if (p) return { type: "do", run: draftDecisions(p.id, p).skip };
-  // A quiet run is kept waiting for this spell only, so a failure or a new quiet spell still needs the person.
-  return run ? { type: "do", run: () => useRuns.getState().dismiss(need.kind === "quiet" ? quietKey(run) : run.id) } : null;
+  return run ? { type: "do", run: () => useRuns.getState().dismiss(run.id) } : null;
 }
 
 /** What the next Enter does, once a key asked for it; cleared when it is confirmed or cancelled. */

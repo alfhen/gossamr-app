@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { itemKey } from "../lib/filter";
-import { TurnPill } from "./CanvasBits";
 import { relativeTime } from "../lib/views";
 import type { ContainerRef, FeedEntry, ItemRef, Proposal } from "../types";
 import { allContainers, nameOf, pendingDrafts, useWorkspace } from "../workspaceStore";
@@ -10,6 +9,8 @@ import { useDev } from "./devStore";
 import { openOnGithub } from "./githubUi";
 import { useActivity } from "./activityStore";
 import { useAgentsFlag } from "./agentsFlag";
+import { NeedsYouList } from "./NeedsYou";
+import { useNeedsYou } from "./useNeeds";
 import { Icon } from "./AgentIcons";
 import { useRuns } from "./runsStore";
 import { LiveDraftCard } from "./DraftCard";
@@ -30,8 +31,6 @@ export interface FeedRowProps {
   title: string;
   now: Date;
   selected: boolean;
-  /** The item is one the backend says is waiting on the person. */
-  needsMe: boolean;
   /** False when the item has left the cache and can't be opened. */
   openable: boolean;
   position: number;
@@ -43,7 +42,7 @@ export interface FeedRowProps {
 
 const action = "rounded px-1.5 py-0.5 text-sm text-ws-ink3 hover:bg-ws-hover hover:text-ws-ink disabled:opacity-45";
 
-export function FeedRow({ entry: e, actor, title, now, selected, needsMe, openable, position, total, onOpen, onMarkRead, onShow }: FeedRowProps) {
+export function FeedRow({ entry: e, actor, title, now, selected, openable, position, total, onOpen, onMarkRead, onShow }: FeedRowProps) {
   const onKey = (ev: KeyboardEvent) => {
     if (ev.target !== ev.currentTarget || !openable) return;
     if (ev.key === "Enter") {
@@ -77,7 +76,6 @@ export function FeedRow({ entry: e, actor, title, now, selected, needsMe, openab
         </button>
         <div className="mt-1 flex items-center gap-1 text-sm text-ws-ink3">
           <time dateTime={e.at}>{relativeTime(e.at, now)}</time>
-          {needsMe && <TurnPill className="ml-1" />}
           <span className="ml-auto flex gap-0.5 opacity-0 group-focus-within:opacity-100 group-hover:opacity-100">
             {openable && (
               <button type="button" className={action} onClick={onShow}>
@@ -153,7 +151,6 @@ export function CodeFeedRow({ entry: e, ticketTitle, now, selected, position, to
         <div className="mt-1 flex items-center gap-1 text-sm text-ws-ink3">
           <time dateTime={e.at}>{relativeTime(e.at, now)}</time>
           <span className="rounded-full bg-ws-sel px-2 text-xs">{codeVerb(e.kind)}</span>
-          {e.needsYou && e.unread && <TurnPill className="ml-1" why={CODE_TURN_WHY} />}
           <span className="ml-auto flex gap-0.5 opacity-0 group-focus-within:opacity-100 group-hover:opacity-100">
             {e.url && (
               <button type="button" className={action} onClick={onOpenGithub}>
@@ -182,11 +179,6 @@ export interface RunRowProps {
   onOpen(): void;
   onMarkRead(): void;
 }
-
-/** Why a GitHub entry is under Your turn, for its pill's tooltip. */
-const CODE_TURN_WHY = "Your turn: a review request, a failed check, a mention, an assignment or a review on your pull request you haven't opened";
-/** Why an agent entry is under Your turn, for its pill's tooltip. */
-const RUN_TURN_WHY = "Your turn: an agent run is waiting on you, and you haven't opened this yet";
 
 const RUN_CHIP: Record<RunEntry["kind"], string> = { started: "Started", needsYou: "Needs you", finished: "Finished", failed: "Failed" };
 
@@ -227,7 +219,6 @@ export function RunFeedRow({ entry: e, ticketTitle, now, selected, position, tot
         <div className="mt-1 flex items-center gap-1 text-sm text-ws-ink3">
           <time dateTime={e.at}>{relativeTime(e.at, now)}</time>
           <span className="rounded-full bg-ws-sel px-2 text-xs">{RUN_CHIP[e.kind]}</span>
-          {e.needsYou && e.unread && e.kind !== "needsYou" && <TurnPill className="ml-1" why={RUN_TURN_WHY} />}
           <span className="ml-auto flex gap-0.5 opacity-0 group-focus-within:opacity-100 group-hover:opacity-100">
             <button type="button" className={action} onClick={onOpen}>
               Open run
@@ -406,7 +397,7 @@ export function ActivityView() {
   const containers = useWorkspace((s) => s.containers);
   const items = useWorkspace((s) => s.items);
   const names = useWorkspace((s) => s.names);
-  const needsMe = useWorkspace((s) => s.needsMe);
+  const needing = useNeedsYou();
   const proposals = useWorkspace((s) => s.proposals);
   const selected = useTabs((s) => s.selected);
   const { chip, entries, next, status, error, loadingMore, unread: jiraUnread, codeUnread, source, codeEvents, codeRead, runRead } = useActivity();
@@ -418,6 +409,7 @@ export function ActivityView() {
   const shownSource: ActivitySource = shownSourceOf(source, sources);
   const chips = chipsFor({ agents: agentsOn });
   const pipChip = chip === PIP_CHIP;
+  const yourTurn = chip === "needsMe";
   // "Pip & agents" goes with Agents: turned off, the feed is everything again.
   useEffect(() => {
     if (pipChip && !agentsOn) useActivity.getState().setChip("all");
@@ -520,8 +512,8 @@ export function ActivityView() {
           onChange={(p) => useTabs.getState().setFilter(withProject(tab.filter, p))}
         />
         {sources.length > 2 && <SourceBar source={shownSource} sources={sources} onChange={(s) => useActivity.getState().setSource(s)} />}
-        <ChipBar chip={chip} chips={chips} counts={{ needsMe: unread, drafts: drafts.length }} onChange={(c) => useActivity.getState().setChip(c)} />
-        {!showDrafts && !pipChip && (
+        <ChipBar chip={chip} chips={chips} counts={{ needsMe: needing.length, drafts: drafts.length }} onChange={(c) => useActivity.getState().setChip(c)} />
+        {!showDrafts && !pipChip && !yourTurn && (
           <button type="button" disabled={unread === 0} onClick={() => (coversAgents(shownSource) && useActivity.getState().markRunRead(runEntries.filter((e) => e.unread && inProject(e.item)).map((e) => e.id)), void useActivity.getState().markAllRead(codeEntries.filter((e) => e.unread && (!project || (!!e.item && items[itemKey(e.item)]?.container.connectionId === project.connectionId && items[itemKey(e.item)]?.container.externalId === project.externalId))).map((e) => e.id)))} className="ml-auto text-sm text-ws-ink3 underline disabled:no-underline disabled:opacity-45">
             Mark all read
           </button>
@@ -532,6 +524,10 @@ export function ActivityView() {
           <StrayNotices />
           {showDrafts ? (
             <Drafts drafts={drafts} />
+          ) : yourTurn ? (
+            <div className="py-3 [&>section]:max-h-none">
+              <NeedsYouList needs={needing} main />
+            </div>
           ) : !pipChip && status === "error" ? (
             <div role="alert" className="grid justify-items-center gap-2 py-12 text-ws-blocked">
               <p className="m-0">{error}</p>
@@ -600,7 +596,6 @@ export function ActivityView() {
                         title={e.itemTitle ?? item?.title ?? ""}
                         now={now}
                         selected={selected === key}
-                        needsMe={needsMe.has(key) && e.unread}
                         openable={!!item}
                         position={++position}
                         total={total}

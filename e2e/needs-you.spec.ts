@@ -91,9 +91,9 @@ test("one row per workstream, with '+N more' for the rest, and one count on the 
   // The plan is a decision, which ranks above what is stuck and what waits for an approval.
   await expect(ws.locator("[data-needs-you-chip]")).toHaveText("Decide");
   await expect(ws).toContainText("approving its description update is how the plan is approved");
-  // General's four (a permission, a question, a failure and a run gone quiet) are one row too.
+  // General's three (a permission, a question and a failure; a run gone quiet is no need) are one row too.
   const general = needsYouRow(page, "General");
-  await expect(general.locator("[data-needs-you-more]")).toHaveText("+3 more");
+  await expect(general.locator("[data-needs-you-more]")).toHaveText("+2 more");
   await expect(general.locator("[data-needs-you-need]")).toHaveCount(0);
 
   // The group's first need leads; opening the row lists them all, in rank order.
@@ -105,11 +105,11 @@ test("one row per workstream, with '+N more' for the rest, and one count on the 
   await ws.locator("[data-needs-you-more]").click();
   await expect(ws.locator("[data-needs-you-need]")).toHaveCount(0);
 
-  // The one count: the list's pill, the rail's badge and the composer say the same seven, and Agents carries none.
-  await expect(needsYouCount(page)).toHaveText("7");
-  await expect(homeButton(page)).toHaveAccessibleName("Pip home, 7 things need you");
-  await expect(homeButton(page).locator('[aria-label="7 things need you"]')).toHaveText("7");
-  await expect(footer(page)).toHaveText(/ · 7 need you$/);
+  // The one count: the list's pill, the rail's badge and the composer say the same six, and Agents carries none.
+  await expect(needsYouCount(page)).toHaveText("6");
+  await expect(homeButton(page)).toHaveAccessibleName("Pip home, 6 things need you");
+  await expect(homeButton(page).locator('[aria-label="6 things need you"]')).toHaveText("6");
+  await expect(footer(page)).toHaveText(/ · 6 need you$/);
   await expect(page.getByRole("button", { name: "Agents", exact: true })).toHaveCount(1);
   await expect(agentsButton(page).locator("span[aria-label]")).toHaveCount(0);
   await expect(workstreamRow(page, "CA-401").locator("[data-status]")).toHaveText("Needs you");
@@ -307,7 +307,7 @@ test("a run Gossamr stopped at its limit appears in Needs you, with Resume, and 
   await expect(needsYouCount(page)).toHaveText(String(before));
 });
 
-test("a sign-in reads 'needs you to sign in to Claude'; an unclear run, a quiet one and a possible continuation are in the list too", async ({ page }) => {
+test("a sign-in reads 'needs you to sign in to Claude'; a limit stop is in the list, and an unclear run, a quiet one and a possible continuation are not", async ({ page }) => {
   await onHome(page, "runs=stuck");
   await expandGeneral(page);
   const signed = await runOn(page, "SUP-12");
@@ -317,20 +317,17 @@ test("a sign-in reads 'needs you to sign in to Claude'; an unclear run, a quiet 
 
   await expect(need(page, /SUP-12.*needs you to sign in to Claude/)).toHaveCount(1);
   await expect(need(page, /SUP-12/)).not.toContainText(/permission/i);
-  await expect(need(page, /WEB-108.*can't read/)).toHaveCount(1);
-  // The sample's stuck runs: a limit stop and two runs that may have carried on elsewhere, and the run quiet for 40 minutes.
+  // The sample's stuck runs: a limit stop is a need; the run Gossamr lost track of, the two that may have carried on elsewhere and the run quiet for 40 minutes are states, not needs.
   await expect(need(page, /CA-277.*stopped at its limit/)).toHaveCount(1);
-  await expect(need(page, /CA-278.*may have continued in another session/)).toHaveCount(1);
-  await expect(need(page, /CA-279.*may have continued in another session/)).toHaveCount(1);
-  await expect(need(page, /CA-377.*gone quiet/)).toHaveCount(1);
+  await expect(need(page, /WEB-108.*can't read/)).toHaveCount(0);
+  await expect(need(page, /CA-278/)).toHaveCount(0);
+  await expect(need(page, /CA-279/)).toHaveCount(0);
+  await expect(need(page, /CA-377/)).toHaveCount(0);
 
   await need(page, /SUP-12/).click();
   await expect(needsPane(page).getByRole("group", { name: "Sign-in needed" })).toBeVisible();
   await needsPane(page).getByRole("button", { name: "Open in Terminal" }).click();
   await expect.poll(() => mockAttached(page)).toContain(signed.id);
-  await need(page, /CA-278/).click();
-  await expect(needsPane(page).getByRole("group", { name: "Possible continuation" })).toBeVisible();
-  await expect(needsPane(page).getByRole("button", { name: /^Adopt session/ })).toBeVisible();
 });
 
 test("the keyboard in the list: j and k move, Enter opens, ← folds, a asks for Enter before it approves, d dismisses, Esc goes back", async ({ page }) => {

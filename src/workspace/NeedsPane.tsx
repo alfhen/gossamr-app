@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { docText } from "../lib/docs";
 import { higherPriority, needAfter, leftOutLabel, needGroups, repeatedComments, REPEATED_COMMENT_NOTE, type Need } from "../lib/needs";
 import { ALLOW_MORE_STEPS, type Proposal, type ReporterReply, type Run, type WorkstreamView } from "../types";
@@ -9,7 +9,7 @@ import { rewriteWhat } from "./RewriteDiff";
 import { useWorkspace } from "../workspaceStore";
 import { OpenInTerminal, FailureNext } from "./AgentParts";
 import { Box, BoxTitle, Btn } from "./AgentSheet";
-import { planOpenQuestions, progressText, quietMinutes, quietText } from "./agentsLogic";
+import { planOpenQuestions } from "./agentsLogic";
 import { draftSummary, draftTitle, LiveDraftCard, useEditedDraft } from "./DraftCard";
 import { draftDecisions } from "./DraftPreview";
 import { useGithubUi } from "./githubUi";
@@ -20,8 +20,8 @@ import { failureHelp } from "./failureHelp";
 import { inlineStartable, InlineStart, useInlineStarts } from "./InlineStart";
 import { GroupChip } from "./NeedsYou";
 import { groupId, openInWorkstream, openNeed, setPaneIntent, takePaneIntent } from "./needsActions";
-import { chipLabel, editedTitle, openInWorkstreamLabel, quietKey } from "../lib/needs";
-import { PermissionAsk, StopRunConfirm } from "./PermissionAsk";
+import { chipLabel, editedTitle, openInWorkstreamLabel } from "../lib/needs";
+import { PermissionAsk } from "./PermissionAsk";
 import { usePipHome } from "./pipHomeStore";
 import { RunAnswer } from "./RunAnswer";
 import { RunContinuation } from "./RunContinuation";
@@ -31,7 +31,6 @@ import { useRuns } from "./runsStore";
 import { BatchConfirm, PlanApproval, confirmBatch, planResultFor } from "./StepRail";
 import { batchLabel, EDITED_ASIDE, editedPending, freezeBatch, type BatchSnapshot } from "./pipHomeLogic";
 import { speakQuietToasts, useToasts } from "./toasts";
-import { useNow } from "./useNow";
 import { controlActions, HeldBanner } from "./WorkstreamControls";
 import { openOnPipHome, takePlannedAnyway, useWorkstreams } from "./workstreamsStore";
 
@@ -383,54 +382,6 @@ function StoppedBody({ run }: { run: Run }) {
   );
 }
 
-export function QuietBody({ run }: { run: Run }) {
-  const now = useNow();
-  const [stopping, setStopping] = useState(false);
-  const helpId = useId();
-  const quiet = quietMinutes(run, now);
-  const store = useRuns.getState();
-  return (
-    <Box tone="warn" label="Gone quiet">
-      <BoxTitle icon="clock" tone="warn">
-        {quiet === null ? "It has made progress again" : quietText(quiet)}
-      </BoxTitle>
-      <p className="m-0 text-ws-ink2">No new line and no new tokens for a while. It may be waiting on something slow. It was at: {progressText(run)}</p>
-      <div className="flex flex-wrap items-center gap-2">
-        <OpenInTerminal run={run} onOpen={() => void store.attach(run.id)} filled={false} />
-        {stopping ? (
-          <StopRunConfirm name="this run" onStop={() => (setStopping(false), void store.stop(run.id))} onKeep={() => setStopping(false)} />
-        ) : (
-          <Btn tone="danger" icon="stop" onClick={() => setStopping(true)}>
-            Stop the run
-          </Btn>
-        )}
-        <Btn tone="plain" icon="clock" onClick={() => store.dismiss(quietKey(run))} aria-describedby={`${helpId}-keep`}>
-          Keep waiting
-        </Btn>
-      </div>
-      <p id={`${helpId}-keep`} data-keep-waiting-help className="m-0 text-xs text-ws-ink2">
-        Keep waiting leaves the run going and takes this out of Needs you until it goes quiet again.
-      </p>
-    </Box>
-  );
-}
-
-function UnknownBody({ run }: { run: Run }) {
-  const store = useRuns.getState();
-  return (
-    <Box tone="warn" label="State unclear">
-      <BoxTitle icon="help" tone="warn">
-        Open in Terminal to look
-      </BoxTitle>
-      <p className="m-0 text-ws-ink2">{run.needs?.trim() || run.lastDetail?.trim() || "Gossamr can't tell what this session is doing."}</p>
-      <div className="flex flex-wrap items-center gap-2">
-        <OpenInTerminal run={run} onOpen={() => void store.attach(run.id)} filled={false} />
-        <Dismiss run={run} />
-      </div>
-    </Box>
-  );
-}
-
 /** The choice a workstream that used its automatic steps asks for: allow more, or Advise, where nothing starts on its own. */
 function BudgetBody({ view }: { view: WorkstreamView }) {
   const id = view.workstream.id;
@@ -658,12 +609,7 @@ function Decision({ need }: { need: Need }) {
     case "failure":
       return run ? <FailureBody run={run} /> : null;
     case "stoppedAtLimit":
-    case "continuation":
       return run ? <StoppedBody run={run} /> : null;
-    case "quiet":
-      return run ? <QuietBody run={run} /> : null;
-    case "unknown":
-      return run ? <UnknownBody run={run} /> : null;
     case "budget":
       return view ? <BudgetBody view={view} /> : null;
     case "hold":
