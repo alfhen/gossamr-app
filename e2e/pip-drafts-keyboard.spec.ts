@@ -203,8 +203,8 @@ test("the pane keeps its header, chips and input", async ({ page }) => {
   await expect(page.locator(PIP_INPUT)).toHaveAttribute("aria-label", "Ask Pip");
   await expect(pane.getByRole("button", { name: "Ask" })).toBeDisabled();
   await expect(pane.locator(":scope > div.flex-wrap > button").first()).toBeVisible();
-  // Order inside the pane is unchanged: header, conversation, chips, then the form last.
+  // Order inside the pane: header, conversation, chips, then the form, with the status line under it.
   const order = await pane.evaluate((el) => [...el.children].map((c) => c.tagName.toLowerCase()));
-  expect(order.slice(-1)).toEqual(["form"]);
+  expect(order.slice(-2)).toEqual(["form", "p"]);
   expect(order.indexOf("header")).toBeLessThan(order.indexOf("form"));
 });

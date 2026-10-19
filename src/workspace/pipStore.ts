@@ -66,10 +66,7 @@ const loadDismissed = (): string[] => {
   return Array.isArray(raw?.dismissed) ? raw.dismissed.filter((d): d is string => typeof d === "string") : [];
 };
 
-/** Opens the Pip pane, except on Pip home, which has its own composer and no pane. */
-const showPip = () => {
-  if (useTabs.getState().route !== "pip") usePrefs.getState().setPipOpen(true);
-};
+const showPip = () => usePrefs.getState().setPipOpen(true);
 
 const setTabFilter = (tabId: string, filter: WorkFilter, title: string | null) =>
   useTabs.setState((s) => ({ tabs: s.tabs.map((t) => (t.id === tabId ? { ...t, filter, title } : t)) }));

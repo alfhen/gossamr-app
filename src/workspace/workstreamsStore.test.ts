@@ -221,12 +221,12 @@ describe("Pip home's conversation", () => {
     expect(focusedConversation()).toBe(paneConversation());
   });
 
-  it("selects a workstream started on Pip home there, and leaves the pane closed", async () => {
+  it("selects a workstream started on Pip home there, and opens the drawer on its conversation", async () => {
     usePrefs.getState().setPipOpen(false);
     useTabs.getState().setRoute("pip");
     const started = (await useWorkstreams.getState().start(CA401))!;
     expect(usePipHome.getState().selected).toBe(started.workstream.id);
-    expect(usePrefs.getState().pipOpen).toBe(false);
+    expect(usePrefs.getState().pipOpen).toBe(true);
     expect(focusedConversation()).toBe(workstreamConversation(started.workstream.id));
   });
 
@@ -241,7 +241,7 @@ describe("Pip home's conversation", () => {
     expect(usePipHome.getState().selected).toBeNull();
   });
 
-  it("asks there in the selection's conversation without opening the pane", async () => {
+  it("asks there in the selection's conversation and opens the drawer on it", async () => {
     usePrefs.getState().setPipOpen(false);
     useTabs.getState().setRoute("pip");
     const sent: AskRequest[] = [];
@@ -253,7 +253,7 @@ describe("Pip home's conversation", () => {
       ask.mockRestore();
     }
     expect(sent[0]).toMatchObject({ conversation: GENERAL_CONVERSATION });
-    expect(usePrefs.getState().pipOpen).toBe(false);
+    expect(usePrefs.getState().pipOpen).toBe(true);
     expect(useTabs.getState().route).toBe("pip");
   });
 

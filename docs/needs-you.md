@@ -128,7 +128,7 @@ The owner's tickets are often not well defined, and Gossamr exists to make them 
   - An escalation's card is not on the rail while the pane has it, and its card in the pane leaves out its own "R3 still blocks after 2 fix rounds. What next?" line, since the header says it.
   - A system hold's banner is not on the rail while the pane has it.
   - A draft the pane shows (a draft need's, a question's reply draft, the review draft folded into an escalation) is not a card on the timeline (a line stands in, which opens the same need) or in the step rail. Closing the pane puts them back.
-  - The Pip pane (outside Pip home) and the ticket peek keep showing what they show; there is no pane to repeat.
+  - The Pip drawer and the ticket peek keep showing what they show; there is no pane to repeat.
 - **One scroll, nothing hidden.** The pane is the one scroll container in its place (at most 60% of the conversation column); nothing inside it scrolls. A draft's action bar is in the flow at the card's end there rather than sticky, so it never floats over the draft's text or the review comments under it. (On the timeline, the rail and the peek the bar stays sticky.)
 - **After a decision**: focus moves to the next need in rank order. When none are left: "Nothing needs you."
 - **Agents screen**: drops the "Needs you" lane. Runs that need the person show a pill "In Needs you", and pressing it opens that need.
@@ -144,7 +144,7 @@ The same keys mean the same thing in every list that holds actionable items (the
 - s: skip a draft. d and s on a draft, and d on a failure, act at once and offer Undo.
 - Esc: back.
 
-Global shortcuts: Cmd/Ctrl+0 goes to Pip home from anywhere, the Agents screen with a card's button focused included (a button on a card keeps plain keys from the list's own, but lets a Cmd/Ctrl shortcut through: `ownKey` in `agentKeys.ts`). It works from Pip's composer too, never from another field or behind the open palette. Cmd/Ctrl+K opens the palette, Cmd/Ctrl+J Pip.
+Global shortcuts: Cmd/Ctrl+0 goes to Pip home from anywhere, the Agents screen with a card's button focused included (a button on a card keeps plain keys from the list's own, but lets a Cmd/Ctrl shortcut through: `ownKey` in `agentKeys.ts`). It works from Pip's composer too, never from another field or behind the open palette. Cmd/Ctrl+K opens the palette, Cmd/Ctrl+J toggles the Pip drawer from every screen, Pip home included; Esc closes it.
 
 ## Undo (step 4)
 Reversible actions act at once and offer Undo in a toast for about 8 seconds (`src/workspace/undo.ts`): skipping a draft, dismissing a failed or stuck run, holding a workstream, switching it to Advise. Undo restores the exact previous state; when the action wrote an audit line the undo writes its own (`undone`). The backend allows an undo for 60 seconds, only while that change is the last line of the workstream's audit, so a stale toast can't undo over later changes. Anything that reached Jira, GitHub or an agent (post, approve, apply, Deny, Allow, Stop, Resume, start) keeps its confirm. A toast can be reached from the keyboard: F6 stops at the one on screen (`focusToast`), and Esc on it dismisses it and gives the keyboard back to where it was.
@@ -176,7 +176,7 @@ A workstream's story used to be spread over the conversation, the run strip, the
   - Audit lines are one line each.
   - Lines for things in Needs you have an "In Needs you" pill and open their need with the same `openNeed`.
   - The composer, the Next line, the decision pane and the Needs you list are unchanged. General's timeline holds the runs and drafts in no workstream, plus every draft still waiting, as its old "Drafts waiting" did.
-  - **The Pip pane** (outside Pip home) shows the same `TimelineView` for the pane's workstream (`pane`), under its header (Manage switch, Hold, what Pip sees) and over its composer, which are unchanged.
+  - **The Pip drawer** (every screen; on Pip home it shows the selected workstream's conversation) shows the same `TimelineView` for the pane's workstream (`pane`), under its header (Manage switch, Hold, what Pip sees) and over its composer, which are unchanged.
     - Its filter is its own (a group named "Filter", not "Timeline filter"), so filtering the pane leaves Pip home's filter as it was. It has no scope toggle: the pane is one workstream. Its Runs filter has a link, "Runs in every workstream", to Pip home's Runs timeline in Every workstream.
     - Runs render with the pane's narrow `PipRunCard` (with its Open button), not the Agents row, so the Agents screen's row and its `agent-<id>` id stay the only ones on screen when both show. Enter on the card opens the entry (`timelineKeyAction(…, runOpensItself = false)`).
     - General's conversation in the pane is unchanged: it follows the screen, lists the runs going ("Your agents", "See all in Agents") and the drafts waiting with the ticket on screen first and the rest folded. On Pip home General is a timeline as before.
@@ -255,3 +255,9 @@ A first-time user meets about ten concepts, so each workstream says where it sta
 - **3.** Done: one timeline per workstream, with the Runs filter across every workstream (the Agents screen is now the operations view), a This workstream / Every workstream scope, the timeline in the Pip pane, and ⌘K commands for the filter and scope (see above).
 - **4.** Done: undo for reversible actions, one key model app-wide, and every action in ⌘K (see above).
 - **5.** Notifications per workstream state change ("CA-401 is waiting on you"), not per event, with an optional digest setting.
+
+## One Pip drawer
+
+Pip is one conversation surface: the drawer on the right (`PipPane`), toggled by Cmd/Ctrl+J, the rail's Pip button or any link that asks Pip something (`askPip`, `usePip.openWith`, `askAbout`, `focusPip`, a suggestion's button). Whether it is open is kept for the session only. It has the suggestion chips, image attach, the first-run "New here?" card (until Got it) and, under the input, the same status line as Pip home (`composerFooter`: agents running, then the one Needs you count).
+
+On Pip home the drawer shows the conversation of the workstream selected there. While it is open Pip home's own conversation (timeline and composer) is not rendered, so exactly one conversation is on screen; the day card and the decision pane stay. Closed, Pip home shows its own conversation as before. Pip home keeps no launcher mascot.

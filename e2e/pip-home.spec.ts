@@ -91,14 +91,26 @@ test("Cmd/Ctrl+0 stays put while the person types a comment in the peek or has t
   await expect(palette).toBeVisible();
 });
 
-test("the rail's Pip home button opens it too, and Cmd/Ctrl+J there goes to its composer", async ({ page }) => {
+test("the rail's Pip home button opens it too, and Cmd/Ctrl+J there toggles the one Pip drawer, which takes the conversation", async ({ page }) => {
   await openApp(page, "runs=empty");
   await agentsSettled(page, true);
   await homeButton(page).click();
   await expect(pipHome(page).getByRole("navigation", { name: "Workstreams" })).toBeVisible();
   await workstreamRow(page, "General").focus();
+  const ownComposer = pipHome(page).locator(PIP_INPUT);
+  await expect(ownComposer).toBeVisible();
   await page.keyboard.press("ControlOrMeta+j");
-  await expect(homeComposer(page)).toBeFocused();
+  await expect(pipPane(page)).toBeVisible();
+  await expect(page.locator(PIP_INPUT)).toBeFocused();
+  // One conversation at a time: Pip home's own composer gives way to the drawer's.
+  await expect(ownComposer).toHaveCount(0);
+  await expect(page.locator(PIP_INPUT)).toHaveCount(1);
+  await page.keyboard.press("Escape");
+  await expect(pipPane(page)).toHaveCount(0);
+  await expect(ownComposer).toBeVisible();
+  await page.keyboard.press("ControlOrMeta+j");
+  await expect(pipPane(page)).toBeVisible();
+  await page.keyboard.press("ControlOrMeta+j");
   await expect(pipPane(page)).toHaveCount(0);
 });
 

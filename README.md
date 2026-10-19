@@ -63,7 +63,7 @@ The Jira adapter was written against the REST v3 documentation and tested with r
 
 ## Ask Claude
 
-Press `⌘J` on a ticket to ask Claude about it. The app runs your installed Claude Code headlessly (`claude -p`) with your existing login, so it uses your subscription. It does not load your CLAUDE.md, memory, skills, hooks, plugins or other MCP servers. It runs in an empty folder inside the app's data directory, and follow-ups continue the session Pip started there. It runs Sonnet at medium effort, whatever your Claude Code default is.
+Press `⌘J` from any screen to open Pip, the drawer on the right (`Esc` closes it), and ask about the ticket on screen. The app runs your installed Claude Code headlessly (`claude -p`) with your existing login, so it uses your subscription. It does not load your CLAUDE.md, memory, skills, hooks, plugins or other MCP servers. It runs in an empty folder inside the app's data directory, and follow-ups continue the session Pip started there. It runs Sonnet at medium effort, whatever your Claude Code default is.
 
 Agents are Claude Code sessions. Claude asks once per folder whether to trust it, because a cloned repository's own hooks, MCP servers and settings run with the agent. Gossamr never edits Claude's config or answers that question for you. When a folder isn't trusted yet, the checks before you approve show a Trust this folder button that opens Terminal there with `claude`; accept the question, close Terminal, and the checks run again. If a launch is refused anyway, the run opens with the reason and the same button, and Retry starts the same approved run again.
 

@@ -56,8 +56,10 @@ test("a second question waits its turn and is answered after the first, and both
   expect(turns[1].sessionId).toBe(turns[0].sessionId);
 
   await page.reload();
-  await expect(page.getByText("CA-401", { exact: true }).first()).toBeVisible();
-  if (!(await pipPane(page).isVisible())) await openPip(page);
+  // The drawer is closed again after a reload: it is open for the session only.
+  await expect(page.locator("[data-pip-launcher]")).toBeVisible();
+  await expect(pipPane(page)).toHaveCount(0);
+  await openPip(page);
   await expect(pane.getByText(FIRST, { exact: true })).toBeVisible();
   await expect(pane.getByText(SECOND, { exact: true })).toBeVisible();
   await expect(pane.getByText(SECOND_ANSWER)).toBeVisible();

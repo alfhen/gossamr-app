@@ -332,12 +332,18 @@ export function DayScroll({ label, children, tall = false, roomy = false }: { la
   );
 }
 
+const STEPS_BESIDE = "col-span-2 grid max-h-[40vh] min-h-0 content-start gap-3 overflow-y-auto border-t border-ws-sep bg-ws-bar px-3 py-3 min-[1100px]:col-span-1 min-[1100px]:max-h-none min-[1100px]:border-t-0 min-[1100px]:border-l";
+// The drawer takes about 380px of the window, so the steps drop under the list that much later.
+const STEPS_BESIDE_DRAWER = "col-span-2 grid max-h-[40vh] min-h-0 content-start gap-3 overflow-y-auto border-t border-ws-sep bg-ws-bar px-3 py-3 min-[1500px]:col-span-1 min-[1500px]:max-h-none min-[1500px]:border-t-0 min-[1500px]:border-l";
+const HOME_GRID = "grid min-h-0 flex-1 grid-cols-[minmax(260px,340px)_minmax(0,1fr)] grid-rows-[minmax(0,1fr)_auto] overflow-hidden min-[1100px]:grid-cols-[minmax(280px,340px)_minmax(0,1fr)_minmax(240px,320px)] min-[1100px]:grid-rows-[minmax(0,1fr)]";
+const HOME_GRID_DRAWER = "grid min-h-0 flex-1 grid-cols-[minmax(260px,340px)_minmax(0,1fr)] grid-rows-[minmax(0,1fr)_auto] overflow-hidden min-[1500px]:grid-cols-[minmax(280px,340px)_minmax(0,1fr)_minmax(240px,320px)] min-[1500px]:grid-rows-[minmax(0,1fr)]";
+
 /** The right column: the selected workstream's step rail, or a word for General. */
-export function StepsColumn({ workstream }: { workstream: WorkstreamView | null }) {
+export function StepsColumn({ workstream, drawer = false }: { workstream: WorkstreamView | null; drawer?: boolean }) {
   return (
     <aside
       aria-label="Steps"
-      className="col-span-2 grid max-h-[40vh] min-h-0 content-start gap-3 overflow-y-auto border-t border-ws-sep bg-ws-bar px-3 py-3 min-[1100px]:col-span-1 min-[1100px]:max-h-none min-[1100px]:border-t-0 min-[1100px]:border-l"
+      className={drawer ? STEPS_BESIDE_DRAWER : STEPS_BESIDE}
       tabIndex={-1}
     >
       <h2 className="m-0 text-xs font-semibold tracking-wide text-ws-ink3 uppercase">Steps</h2>
@@ -348,15 +354,27 @@ export function StepsColumn({ workstream }: { workstream: WorkstreamView | null 
 
 /**
  * The conversation column of Pip home: the workstream's timeline (its conversation with Pip, its runs, drafts and audit in
- * one list) over the same composer the Pip pane has.
+ * one list) over the same composer the Pip drawer has. While the drawer is open (`chat` off) it is the conversation, so
+ * this column keeps only the day card and the decision pane.
  */
-export function HomeConversation({ workstream, footer = null, pane = null, needs = [], day = null }: { workstream: WorkstreamView | null; footer?: string | null; pane?: ReactNode; needs?: readonly Need[]; day?: ReactNode }) {
+export function HomeConversation({ workstream, footer = null, pane = null, needs = [], day = null, chat = true }: { workstream: WorkstreamView | null; footer?: string | null; pane?: ReactNode; needs?: readonly Need[]; day?: ReactNode; chat?: boolean }) {
   const conversation = workstream ? workstreamConversation(workstream.workstream.id) : GENERAL_CONVERSATION;
   const running = useAnswering(conversation);
   const attached = useAttachments();
   const drop = useFileDrop((files) => void attached.add(files));
   const proposals = useConversationDrafts(conversation, workstream);
   const { chips, primary, scene, label } = usePipChips(workstream);
+  if (!chat) {
+    return (
+      <section aria-label="Conversation" className="flex min-h-0 min-w-0 flex-col bg-ws-win">
+        {day}
+        {pane}
+        <p data-pip-in-drawer className="m-0 px-4 py-3 text-sm text-ws-ink3">
+          Pip is open on the right. Press ⌘J to close it.
+        </p>
+      </section>
+    );
+  }
   return (
     <section aria-label="Conversation" data-pip-root {...drop.handlers} className="relative flex min-h-0 min-w-0 flex-col bg-ws-win">
       {drop.over && (
@@ -750,6 +768,8 @@ export function PipHome() {
   const nudgeDue = useMemo(() => new Set(openList.filter((v) => nudgeOffered(v.waitingOnReporter, new Date(now), Object.values(proposals), v.workstream.id)).map((v) => v.workstream.id)), [openList, proposals, now]);
   const footer = useMemo(() => composerFooter(runs, needsYou.length, now), [runs, needsYou.length, now]);
   const orientationSeen = usePrefs((s) => s.pipOrientationSeen);
+  // The Pip drawer is the conversation while it is open; Pip home's own is what shows when it is closed.
+  const paneOpen = usePrefs((s) => s.pipOpen);
   // Once Got it is pressed the card is gone for good; the words stay one button away in the header, which brings the card back for now.
   const [wordsOpen, setWordsOpen] = useState(false);
   const wordsLink = useRef<HTMLButtonElement>(null);
@@ -802,10 +822,10 @@ export function PipHome() {
           </button>
         )}
       </header>
-      {!orientationSeen && <PipOrientation compact={planOpen} />}
+      {!orientationSeen && !paneOpen && <PipOrientation compact={planOpen} />}
       {/* Asked for by name, so it opens with its words even while Plan my week takes the room. */}
       {orientationSeen && wordsOpen && <PipOrientation open onDismiss={() => (setWordsOpen(false), wordsLink.current?.focus())} />}
-      <div className="grid min-h-0 flex-1 grid-cols-[minmax(260px,340px)_minmax(0,1fr)] grid-rows-[minmax(0,1fr)_auto] overflow-hidden min-[1100px]:grid-cols-[minmax(280px,340px)_minmax(0,1fr)_minmax(240px,320px)] min-[1100px]:grid-rows-[minmax(0,1fr)]">
+      <div className={paneOpen ? HOME_GRID_DRAWER : HOME_GRID}>
         <div data-pip-home-column="list" onFocusCapture={enter("list")} className="contents">
           {/* The left column: Needs you takes the height, the workstreams are a compact section under it. */}
           <div data-pip-home-left className="flex min-h-0 flex-col border-r border-ws-sep bg-ws-bar">
@@ -835,7 +855,7 @@ export function PipHome() {
         <InlineStartContext.Provider value={true}>
           <DecisionShownContext.Provider value={decided}>
             <div data-pip-home-column="conversation" onFocusCapture={enter("conversation")} className="contents">
-              <HomeConversation workstream={workstream} footer={footer} needs={needsYou} day={
+              <HomeConversation workstream={workstream} footer={footer} needs={needsYou} chat={!paneOpen} day={
                   <DayScroll label={planOpen ? "Plan my week" : "Start my day"} tall={planOpen} roomy={quiet}>
                     {planOpen && <PlanMyWeek key={isoWeek(new Date(now))} needs={needsYou} withers={withers} now={now} />}
                     {/* The plan is opened from the card and its Close brings it back; the card is General's summary, not a workstream's. */}
@@ -844,7 +864,7 @@ export function PipHome() {
                 } pane={<NeedsPane needs={needsYou} />} />
             </div>
             <div data-pip-home-column="rail" onFocusCapture={enter("rail")} className="contents">
-              <StepsColumn workstream={workstream} />
+              <StepsColumn workstream={workstream} drawer={paneOpen} />
             </div>
           </DecisionShownContext.Provider>
         </InlineStartContext.Provider>
