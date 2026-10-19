@@ -499,15 +499,19 @@ test.describe("Your turn and Needs you name different things (D5)", () => {
     await page.keyboard.press("Escape");
     await expect(dialog).toHaveCount(0);
 
-    // Activity's chip carries the same name, and so do its rows' pills.
+    // Activity's chip carries the same name and the badge's count, and lists the same needs; its feed rows carry no pill.
     await page.getByRole("button", { name: /^Activity/ }).click();
     const chips = page.getByRole("group", { name: "Show" });
     await chips.getByRole("button", { name: /^Your turn/ }).click();
     await expect(chips.getByRole("button", { name: /^Needs me/ })).toHaveCount(0);
-    await expect(page.getByRole("feed", { name: "Activity" }).locator("[data-your-turn]").first()).toHaveAttribute("title", /^Your turn: /);
+    const badge = Number(/^Pip home, (\d+) /.exec((await page.getByRole("button", { name: /^Pip home/ }).getAttribute("aria-label")) ?? "")?.[1] ?? 0);
+    await expect(page.locator("[data-needs-you-count]")).toHaveText(String(badge));
+    if (badge) await expect(chips.getByRole("button", { name: /^Your turn/ })).toHaveText(new RegExp(`${badge}$`));
+    await chips.getByRole("button", { name: /^All/ }).click();
+    await expect(page.getByRole("feed", { name: "Activity" }).locator("[data-your-turn]")).toHaveCount(0);
   });
 
-  test("the rail's two badges name what they count, in their tooltip and in their button's name, and Agents has none", async ({ page }) => {
+  test("the rail's one badge names what it counts, in its tooltip and in its button's name, and Activity and Agents have none", async ({ page }) => {
     await openApp(page);
     await agentsSettled(page, true);
     const named = async (button: RegExp, badge: RegExp) => {
@@ -517,8 +521,11 @@ test.describe("Your turn and Needs you name different things (D5)", () => {
       await expect(tip).toHaveAttribute("title", badge);
       return (await tip.getAttribute("title"))!;
     };
-    const titles = [await named(/^Activity, \d+ unread updates?$/, /^\d+ unread updates?$/), await named(/^Pip home, \d+ things? needs? you$/, /^\d+ things? needs? you$/)];
-    expect(new Set(titles.map((t) => t.replace(/^\d+ /, ""))).size).toBe(2);
+    await named(/^Pip home, \d+ things? needs? you$/, /^\d+ things? needs? you$/);
+    // The bell is a link to Activity, with no number.
+    const activity = page.getByRole("button", { name: "Activity", exact: true });
+    await expect(activity).toBeVisible();
+    await expect(activity.locator("[title]")).toHaveCount(0);
     // What the agents need is in Needs you, counted once.
     const agents = page.getByRole("button", { name: "Agents", exact: true });
     await expect(agents).toBeVisible();

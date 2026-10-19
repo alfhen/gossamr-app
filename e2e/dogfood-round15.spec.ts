@@ -6,23 +6,14 @@ import { editTicket, expandNeedsYou, jiraWrites, needRow, needsPane, needsYouTra
 
 const peek = (page: Page) => page.locator("#peek-sheet");
 
-test.describe("Keep waiting on a quiet run (G2)", () => {
-  test("the quiet need leaves Needs you with Keep waiting, the run is not stopped, and Undo brings it back", async ({ page }) => {
+test.describe("A quiet run (G2)", () => {
+  test("is not in Needs you, so there is nothing to keep waiting on", async ({ page }) => {
     test.setTimeout(120_000);
     await openApp(page);
     await openPipHome(page);
     await expect(needsYouTray(page)).toBeVisible();
     await expandNeedsYou(page, "General");
-    const quiet = needRow(page, /CA-377.*gone quiet/);
-    await expect(quiet).toHaveCount(1);
-    await quiet.click();
-    await expect(needsPane(page).getByRole("button", { name: "Stop the run" })).toBeVisible();
-    await needsPane(page).getByRole("button", { name: "Keep waiting" }).click();
-    await expect(needRow(page, /CA-377.*gone quiet/)).toHaveCount(0);
-    const toast = page.locator("[data-toast]").filter({ hasText: "it is out of Needs you for now" });
-    await expect(toast).toBeVisible();
-    await toast.getByRole("button", { name: "Undo" }).click();
-    await expect(needRow(page, /CA-377.*gone quiet/)).toHaveCount(1);
+    await expect(needRow(page, /CA-377/)).toHaveCount(0);
   });
 });
 
