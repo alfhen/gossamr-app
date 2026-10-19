@@ -1,8 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
-import { MockBackend } from "../backend/mock";
 import type { Need } from "../lib/needs";
-import { PLANNING_NOW, ReporterReplyQuote, closeTarget, lastNeedText, HigherPriority, EDIT_FIELD, advancedText, closedText, doneNeed, doneText, skippedDraft, PLANNING_ANYWAY, postedToJira, postedWhat, postedFor, waitStarted, nextAdvanced, advancedUndone, advancedStale, endEditing, firstDecision, paneStop, useNeedTitle, QuietBody } from "./NeedsPane";
+import { PLANNING_NOW, ReporterReplyQuote, closeTarget, lastNeedText, HigherPriority, EDIT_FIELD, advancedText, closedText, doneNeed, doneText, skippedDraft, PLANNING_ANYWAY, postedToJira, postedWhat, postedFor, waitStarted, nextAdvanced, advancedUndone, advancedStale, endEditing, firstDecision, paneStop, useNeedTitle } from "./NeedsPane";
 import { keepEditsOfDraft } from "./DraftCard";
 
 /** A stand-in for the pane: each selector it is asked for answers with what the test put there. */
@@ -181,17 +180,6 @@ describe("the decision's title follows an edited draft (G5)", () => {
     }
     // A need that is no draft keeps its title.
     expect(renderToStaticMarkup(<Title n={{ ...need, target: { type: "run", id: "r1" } } as unknown as Need} />)).toContain("Old words here");
-  });
-});
-
-describe("Keep waiting on a quiet run (G9)", () => {
-  it("is no x, which reads as dismiss, and says what it does under the buttons", () => {
-    const out = renderToStaticMarkup(<QuietBody run={new MockBackend().runs.list()[0]} />);
-    const keep = /<button[^>]*>(?:(?!<\/button>).)*Keep waiting<\/button>/s.exec(out)?.[0] ?? "";
-    expect(keep).toContain("aria-describedby");
-    // The clock's face, not the x's two strokes.
-    expect(keep).toContain("M12 7.5V12l3 2");
-    expect(out).toContain("Keep waiting leaves the run going and takes this out of Needs you until it goes quiet again.");
   });
 });
 

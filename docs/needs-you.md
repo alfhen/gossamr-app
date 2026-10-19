@@ -16,7 +16,7 @@
 - `{ key, group: 'decide'|'unblock'|'approve', kind, workstreamId|null, ticketKey?, title, why, ifYouWait, at, primary: ActionSpec, secondary: ActionSpec[], target, batchable }`
 - **group** is what the person is being asked to do:
   - **decide**: escalation, plan or description approval, a workstream that used its automatic steps (`budget`), a ticket the triage found not clear enough to plan (`readiness`).
-  - **unblock**: permission, question, sign-in, failure, stopped at limit, quiet over 30 minutes, unknown, possible continuation, a hold the system made (restart, a tripwire, the daily cap, the quota).
+  - **unblock**: permission, question, sign-in, failure, stopped at limit, a hold the system made (restart, a tripwire, the daily cap, the quota).
   - **approve**: a Jira draft, a GitHub review draft, a run start.
 - **Rank**: decide, then unblock, then approve. Within a group, oldest first, then by key.
 - **why**: one plain sentence saying why it is asked. Examples:
@@ -31,6 +31,12 @@
   - A retired or superseded draft never shows.
 - **Failures** leave only when dealt with: Retry, a fix, or an explicit Dismiss. Viewing never clears them, so remove the `markSeen` effect on needs.
 - `systemBlocked` reads "needs you to sign in to Claude".
+
+### Runs: what is and is not a need
+- A run is a need while it waits on an answer (question, permission, sign-in). Finished runs, runs started or stopped by the person, quiet runs, runs in a state Gossamr can't read and possible continuations are states, not needs: no count, no badge.
+- A failed or limit-stopped run is a need only while it is the **latest** run of its kind on its ticket (`latestRuns`; the repository stands in for a ticket). A newer run in any state, or a Dismiss, closes it, so several Plan runs that failed for the same untrusted folder are one need, on the latest run, offering the trust step and Retry.
+- **One count**: `needs.length`. The house badge, Pip home's list, the composer, the palette, the launcher, Agents' tags and header, and Activity's Your turn (a list of these needs, not of unread feed rows) all read it. The bell has no number; Activity's other chips are information.
+- **System notifications** (`runs/notices.rs`) fire only for a stream that newly starts waiting (or waits on a higher group), only while the window is not focused, and never for a finished run. A failed or limit-stopped run notifies only while it is the latest of its kind and ended within `FAILURE_NEWS`; a hold the person chose never does.
 
 ### Holds: only the system's are needs
 A hold's cause is its reason (`heldReason`; the audit's `held` line carries the same reason and its actor). `person` (Hold, Stop) and `hold_all` (Hold all) are the person's own, and the audit says actor `person` for them.

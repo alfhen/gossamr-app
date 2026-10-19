@@ -1,10 +1,9 @@
 import { ALLOW_MORE_STEPS, HELD_BUDGET, type Intent, type Proposal, type ReadinessStop, type Run, type WorkstreamView } from "../types";
-import { quietMinutes, stoppedAtLimit } from "../workspace/agentsLogic";
+import { stoppedAtLimit } from "../workspace/agentsLogic";
 import { failureHelp } from "../workspace/failureHelp";
 import { docText } from "./docs";
 import { parsePermission, permissionOffer, readAs } from "./permission";
 import { inWorkstreamPane, isAnswersDraft, isReporterNudge, isReporterQuestions, targetOf, workstreamOf } from "./proposals";
-import { humanDuration } from "./runNames";
 import { agoText, type ReporterAsk } from "./reporterWait";
 import { maskSecrets } from "./riskyText";
 import { isHeldByYou, shortHeld, stepsOf } from "./workstreamHold";
@@ -28,9 +27,6 @@ export type NeedKind =
   | "signIn"
   | "failure"
   | "stoppedAtLimit"
-  | "quiet"
-  | "unknown"
-  | "continuation"
   | "hold"
   | "budget"
   | "readiness"
@@ -319,22 +315,32 @@ export const commentTitleOf = (text: string): string => {
 export const editedTitle = (title: string, text: string | undefined): string => (text !== undefined && title.startsWith(DRAFT_TEXT.comment) ? commentTitleOf(text) : title);
 const COMMENT_WORDS = 6;
 
+
 /**
- * What a "Keep waiting" is remembered under: this quiet spell of the run (it ends when the run makes progress), so a later
- * quiet spell, or a failure of the same run, still needs the person.
+ * The runs no newer run of the same kind on the same ticket (or repository, for one without a ticket) has followed, in any
+ * state: a failure or a limit stop only asks for a decision while it is the last word on that work, so a retry that is
+ * running or finished, or one that failed the same way again, leaves exactly one run to deal with.
  */
-export const quietKey = (run: Pick<Run, "id" | "lastProgressAt">) => `quiet:${run.id}@${run.lastProgressAt}`;
+export function latestRuns(runs: readonly Pick<Run, "id" | "item" | "spec" | "queuedAt">[]): Set<string> {
+  const newest = new Map<string, Pick<Run, "id" | "queuedAt">>();
+  for (const run of runs) {
+    const key = `${run.item?.key ?? run.spec.repo}\n${run.spec.kind}`;
+    const seen = newest.get(key);
+    if (!seen || run.queuedAt > seen.queuedAt || (run.queuedAt === seen.queuedAt && run.id > seen.id)) newest.set(key, run);
+  }
+  return new Set([...newest.values()].map((r) => r.id));
+}
 
 /**
  * Everything waiting on the person across the open workstreams and General, highest rank first: a decision (an escalation,
  * a plan or description to approve, a workstream that used its automatic steps, a ticket the triage found not clear enough to plan), then what is stuck (a permission, a question, a sign-in, a failure, a run stopped at
- * its limit, gone quiet for 30 minutes, unclear or that may have carried on elsewhere, a hold the system made), then drafts to approve (a
+ * its limit, a hold the system made), then drafts to approve (a
  * Jira draft, a GitHub review, a run to start). Within a group, oldest first.
  *
  * One thing is one need: a run asking a question that has a drafted reply is the question; a review that still blocks
- * after the fix rounds carries its review draft; a retired or superseded draft never shows. A failure, a limit stop, a
- * possible continuation and an unclear run stay until the person deals with them: Retry, a fix, a resume, or a Dismiss
- * (`dismissed`); looking at them clears nothing.
+ * after the fix rounds carries its review draft; a retired or superseded draft never shows. A failure or a limit stop is a need only
+ * while it is the latest run of its kind on its ticket (`latestRuns`), and stays until the person deals with it: Retry, a
+ * fix, a resume, or a Dismiss (`dismissed`); looking at it clears nothing. A finished run is a state, not a need.
  */
 export function needs({ workstreams, runs, proposals, dismissed, heldAt, asked, titleOf, now }: NeedsInput): Need[] {
   const kept = workstreamTitles(workstreams);
@@ -356,6 +362,7 @@ export function needs({ workstreams, runs, proposals, dismissed, heldAt, asked, 
     };
   };
   const out: Need[] = [];
+  const latest = latestRuns(runs);
   const answers = answersByRun(proposals, runs);
   const carried = new Set([...answers.values()].map((p) => p.id));
   // A review that still blocks carries its review draft, so the draft is not a second need.
@@ -501,7 +508,7 @@ export function needs({ workstreams, runs, proposals, dismissed, heldAt, asked, 
         secondary: [],
         batchable: false,
       });
-    } else if (run.state === "failed" && !dismissed.has(run.id)) {
+    } else if (run.state === "failed" && !dismissed.has(run.id) && latest.has(run.id)) {
       const trust = run.failure?.type === "untrustedFolder";
       const help = failureHelp(run);
       out.push({
@@ -515,56 +522,16 @@ export function needs({ workstreams, runs, proposals, dismissed, heldAt, asked, 
         secondary: [action("dismiss", "Dismiss")],
         batchable: false,
       });
-    } else if (run.state === "stopped" && !dismissed.has(run.id) && (stoppedAtLimit(run) || run.possibleContinuations?.length)) {
-      if (stoppedAtLimit(run)) {
-        out.push({
-          ...base,
-          group: "unblock",
-          kind: "stoppedAtLimit",
-          title: `${name} stopped at its limit`,
-          why: `${name} was stopped at its limit: ${sentence(run.error?.trim() || "it passed its limit")}`,
-          ifYouWait: "It stays stopped; its conversation and worktree are kept.",
-          primary: action("resume", "Resume"),
-          secondary: [action("dismiss", "Dismiss")],
-          batchable: false,
-        });
-      } else {
-        out.push({
-          ...base,
-          group: "unblock",
-          kind: "continuation",
-          title: `${name} may have continued in another session`,
-          why: `${name} stopped, and a session that may be it carried on elsewhere.`,
-          ifYouWait: "The run stays stopped until you adopt a session or dismiss this.",
-          primary: action("open", "Adopt a session"),
-          secondary: [action("dismiss", "Dismiss")],
-          batchable: false,
-        });
-      }
-    } else if (run.state === "unknown" && !dismissed.has(run.id)) {
+    } else if (run.state === "stopped" && !dismissed.has(run.id) && stoppedAtLimit(run) && latest.has(run.id)) {
       out.push({
         ...base,
         group: "unblock",
-        kind: "unknown",
-        title: `${name} is in a state Gossamr can't read`,
-        why: `Gossamr can't tell what ${name} is doing.`,
-        ifYouWait: "Nothing changes until you look at it in Terminal.",
-        primary: action("open", "Open in Terminal"),
+        kind: "stoppedAtLimit",
+        title: `${name} stopped at its limit`,
+        why: `${name} was stopped at its limit: ${sentence(run.error?.trim() || "it passed its limit")}`,
+        ifYouWait: "It stays stopped; its conversation and worktree are kept.",
+        primary: action("resume", "Resume"),
         secondary: [action("dismiss", "Dismiss")],
-        batchable: false,
-      });
-    } else if (run.state === "working") {
-      const quiet = quietMinutes(run, now);
-      if (quiet === null || dismissed.has(quietKey(run))) continue;
-      out.push({
-        ...base,
-        group: "unblock",
-        kind: "quiet",
-        title: `${name} has gone quiet`,
-        why: `${name} has made no progress for ${humanDuration(quiet)}.`,
-        ifYouWait: "It carries on if it is only slow; nothing is stopped for you.",
-        primary: action("open", "Open in Terminal"),
-        secondary: [action("dismiss", "Keep waiting")],
         batchable: false,
       });
     }

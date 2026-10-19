@@ -3,7 +3,7 @@ import { MockBackend } from "../backend/mock";
 import { HELD_ALL, HELD_BUDGET, HELD_DAILY, HELD_PERSON, HELD_QUOTA, HELD_RESTART, TRIPWIRE } from "../types";
 import type { Intent, ItemRef, Proposal, ProposalState, Run, RunKind, RunState, WorkstreamStage, WorkstreamView } from "../types";
 import { docFromText } from "./docs";
-import { BATCHABLE, GROUP_RANK, chipLabel, byRank, escalationReason, higherPriority, needAfter, needGroups, needs, needsIn, quietKey, leftOutLabel, readinessPrompt, readinessWhy, repeatedComments, safeToBatch, titleFromTicketBlock, type Need, type NeedKind, type NeedsInput } from "./needs";
+import { BATCHABLE, GROUP_RANK, chipLabel, byRank, escalationReason, higherPriority, needAfter, needGroups, needs, needsIn, leftOutLabel, readinessPrompt, readinessWhy, repeatedComments, safeToBatch, titleFromTicketBlock, type Need, type NeedKind, type NeedsInput } from "./needs";
 
 const NOW = Date.parse("2026-09-30T12:00:00Z");
 const iso = (minutesAgo: number) => new Date(NOW - minutesAgo * 60_000).toISOString();
@@ -83,7 +83,7 @@ const escalated = (over: { reviewDraft?: string | null; at?: string } = {}): Wor
 });
 
 describe("needs: every kind", () => {
-  const ws1 = view("ws-1", "CA-401", { runs: ["r-q", "r-p", "r-f", "r-limit", "r-quiet", "r-b", "r-rev", "r-plan"] });
+  const ws1 = view("ws-1", "CA-401", { runs: ["r-q", "r-p", "r-f", "r-limit", "r-b", "r-rev", "r-plan"] });
 
   it("finds each kind of wait in its group, with the words that say it", () => {
     const list = needs(
@@ -99,12 +99,9 @@ describe("needs: every kind", () => {
         runs: [
           run("r-q", "triage", "needsAnswer", { needs: "Which cache?" }),
           run("r-p", "build", "needsPermission", { needs: "approve Bash: git push origin ca-401" }),
-          run("r-f", "build", "failed", { error: "boom", endedAt: iso(13) }),
-          run("r-limit", "plan", "stopped", { stoppedByLimit: true, error: "Stopped by Gossamr: it passed the 60 minute limit" }),
-          run("r-quiet", "investigate", "working", { lastProgressAt: iso(45) }),
+          run("r-f", "verify", "failed", { error: "boom", endedAt: iso(13) }),
+          run("r-limit", "review", "stopped", { stoppedByLimit: true, error: "Stopped by Gossamr: it passed the 60 minute limit" }),
           run("r-plan", "plan", "done"),
-          run("r-unknown", "investigate", "unknown", { spec: { ...base.spec, kind: "investigate", workstream: null }, item: ref("CA-900") }),
-          run("r-cont", "investigate", "stopped", { spec: { ...base.spec, kind: "investigate", workstream: null }, item: ref("CA-901"), possibleContinuations: [{ shortId: "abc12345" }] }),
           run("r-sign", "investigate", "systemBlocked", { spec: { ...base.spec, kind: "investigate", workstream: null }, item: null }),
         ],
       }),
@@ -119,16 +116,13 @@ describe("needs: every kind", () => {
       permission: "unblock",
       failure: "unblock",
       stoppedAtLimit: "unblock",
-      quiet: "unblock",
-      unknown: "unblock",
-      continuation: "unblock",
       signIn: "unblock",
       hold: "unblock",
       draft: "approve",
       review: "approve",
       runStart: "approve",
     });
-    expect(list).toHaveLength(16);
+    expect(list).toHaveLength(13);
     expect(by("plan")[0].target).toEqual({ type: "draft", id: "d-plan" });
     // The run's label is a parenthesis, not the subject: "R1 plan wrote the plan" reads wrong once the run is brought into a workstream (G12).
     expect(by("plan")[0].why).toMatch(/^An agent wrote the plan for CA-401 \(run R\d+\); approving/);
@@ -140,9 +134,6 @@ describe("needs: every kind", () => {
     expect(by("permission")[0].title).toBe("R2 asks to run a command");
     expect(by("failure")[0].title).toBe("R3 failed");
     expect(by("stoppedAtLimit")[0].title).toBe("R4 stopped at its limit");
-    expect(by("quiet")[0].title).toBe("R5 has gone quiet");
-    expect(by("unknown")[0].title).toBe("Investigate agent is in a state Gossamr can't read");
-    expect(by("continuation")[0].title).toBe("Investigate agent may have continued in another session");
     expect(by("runStart")[0].title).toBe("Start Investigate");
     expect(by("draft")[0].target).toEqual({ type: "draft", id: "d-comment" });
     expect(by("review")[0].title).toBe("Draft review");
@@ -156,12 +147,9 @@ describe("needs: every kind", () => {
         runs: [
           run("r1", "triage", "needsAnswer", { needs: "Which cache?" }),
           run("r2", "build", "needsPermission", { needs: "approve Bash: git push origin ca-401" }),
-          run("r3", "build", "failed", { error: "boom" }),
-          run("r4", "plan", "stopped", { stoppedByLimit: true }),
-          run("r5", "investigate", "working", { lastProgressAt: iso(45) }),
-          run("r6", "investigate", "unknown"),
+          run("r3", "verify", "failed", { error: "boom" }),
+          run("r4", "review", "stopped", { stoppedByLimit: true }),
           run("r7", "investigate", "systemBlocked"),
-          run("r8", "investigate", "stopped", { possibleContinuations: [{ shortId: "abc12345" }] }),
         ],
       }),
     );
@@ -240,7 +228,7 @@ describe("needs: rank", () => {
       input({
         workstreams: [view("ws-1", "CA-401", { heldReason: HELD_RESTART })],
         proposals: [draft("new", comment("CA-401"), 2), draft("old", comment("CA-401"), 40), draft("same-b", comment("CA-401"), 10), draft("same-a", comment("CA-401"), 10)],
-        runs: [run("r1", "investigate", "failed", { lastProgressAt: iso(10) }), run("r2", "investigate", "needsAnswer", { lastProgressAt: iso(3) })],
+        runs: [run("r1", "investigate", "failed", { lastProgressAt: iso(10) }), run("r2", "triage", "needsAnswer", { lastProgressAt: iso(3) })],
         heldAt: { "ws-1": iso(5) },
       }),
     );
@@ -546,7 +534,7 @@ describe("needs: failures persist until they are dealt with", () => {
   });
 });
 
-describe("needs: stopped at the limit, quiet, unknown and possible continuation", () => {
+describe("needs: stopped at the limit, and the runs that are never a need", () => {
   const ws = view("ws-1", "CA-401", { runs: ["r1"] });
   const only = (r: Run, extra: Partial<NeedsInput> = {}) => needs(input({ workstreams: [ws], runs: [r], ...extra }));
 
@@ -559,50 +547,65 @@ describe("needs: stopped at the limit, quiet, unknown and possible continuation"
     expect(only({ ...stopped, state: "working", stoppedByLimit: false })).toEqual([]);
   });
 
-  it("includes a working run only once it has been quiet for 30 minutes, and not before", () => {
-    expect(only(run("r1", "build", "working", { lastProgressAt: iso(29) }))).toEqual([]);
-    const [n] = only(run("r1", "build", "working", { lastProgressAt: iso(30) }));
-    expect(n).toMatchObject({ kind: "quiet", group: "unblock", at: iso(30) });
-    expect(n.why).toBe("R1 has made no progress for 30 min.");
-    // It leaves when the run moves, which a dismissal is not needed for.
-    expect(only(run("r1", "build", "working", { lastProgressAt: iso(30) }), { now: NOW - 40 * 60_000 })).toEqual([]);
-    expect(only(run("r1", "build", "working", { lastProgressAt: iso(30) }), { dismissed: new Set(["r1"]) })).toHaveLength(1);
-  });
-
-  it("lets the person keep waiting on a quiet run, for that quiet spell only", () => {
-    const quiet = run("r1", "build", "working", { lastProgressAt: iso(30) });
-    const [n] = only(quiet);
-    expect(n.secondary).toEqual([{ id: "dismiss", label: "Keep waiting" }]);
-    expect(only(quiet, { dismissed: new Set([quietKey(quiet)]) })).toEqual([]);
-    // It made progress and went quiet again: a new spell, so the need is back.
-    const again = { ...quiet, lastProgressAt: iso(35) };
-    expect(only(again, { dismissed: new Set([quietKey(quiet)]) })).toHaveLength(1);
-    // A failure of the same run after the dismissal still needs the person.
-    const failed = { ...quiet, state: "failed" as const };
-    expect(kinds(only(failed, { dismissed: new Set([quietKey(quiet)]) }))).toEqual(["failure"]);
-  });
-
-  it("includes an unclear run until it is dismissed or found again", () => {
-    const unknown = run("r1", "build", "unknown");
-    expect(kinds(only(unknown))).toEqual(["unknown"]);
-    expect(only(unknown, { dismissed: new Set(["r1"]) })).toEqual([]);
-    expect(only({ ...unknown, state: "working" })).toEqual([]);
-  });
-
-  it("includes a stopped run that may have carried on in another session, until dismissed or adopted", () => {
-    const stopped = run("r1", "build", "stopped", { possibleContinuations: [{ shortId: "abc12345" }] });
-    expect(kinds(only(stopped))).toEqual(["continuation"]);
-    expect(only(stopped, { dismissed: new Set(["r1"]) })).toEqual([]);
-    expect(only({ ...stopped, possibleContinuations: [] })).toEqual([]);
-    // A limit stop that may also have carried on is one need, the limit.
-    expect(kinds(only({ ...stopped, stoppedByLimit: true }))).toEqual(["stoppedAtLimit"]);
-  });
-
   it("leaves out a run stopped by the person, a finished run and a queued one", () => {
     expect(only(run("r1", "build", "stopped"))).toEqual([]);
     expect(only(run("r1", "build", "done"))).toEqual([]);
     expect(only(run("r1", "build", "queued"))).toEqual([]);
     expect(only(run("r1", "build", "launching"))).toEqual([]);
+  });
+
+  it("leaves out a run that has been quiet, one in a state Gossamr cannot read, and one that may have carried on elsewhere", () => {
+    expect(only(run("r1", "build", "working", { lastProgressAt: iso(300) }))).toEqual([]);
+    expect(only(run("r1", "build", "unknown"))).toEqual([]);
+    expect(only(run("r1", "build", "stopped", { possibleContinuations: [{ shortId: "abc12345" }] }))).toEqual([]);
+  });
+});
+
+describe("needs: a failure is a need only while it is the latest of its kind on its ticket", () => {
+  const ws = view("ws-1", "CA-401", { runs: ["r1", "r2", "r3"] });
+  const only = (runs: Run[], extra: Partial<NeedsInput> = {}) => needs(input({ workstreams: [ws], runs, ...extra }));
+  const failedAt = (id: string, minutesAgo: number, over: Partial<Run> = {}) => run(id, "plan", "failed", { queuedAt: iso(minutesAgo), error: "boom", ...over });
+  const trust = { shortId: null, failure: { type: "untrustedFolder", path: "/work/shop" } } as const;
+
+  it("collapses several plan runs that failed for the same untrusted folder into one need, on the latest run", () => {
+    const list = only([failedAt("r1", 90, trust), failedAt("r2", 60, trust), failedAt("r3", 30, trust)]);
+    expect(list.map((n) => [n.kind, n.runId])).toEqual([["failure", "r3"]]);
+    expect(list[0].title).toBe("R3 needs its folder trusted");
+  });
+
+  it("drops a failure once a newer run of the same kind on the ticket is running or finished", () => {
+    for (const state of ["working", "done", "queued", "needsAnswer"] as const) {
+      const newer = run("r2", "plan", state, { queuedAt: iso(10), needs: state === "needsAnswer" ? "Which?" : null });
+      expect(only([failedAt("r1", 60), newer]).map((n) => n.runId), state).not.toContain("r1");
+    }
+  });
+
+  it("drops a failure that a newer run failed again, keeping the newer one", () => {
+    expect(only([failedAt("r1", 60), failedAt("r2", 10)]).map((n) => n.runId)).toEqual(["r2"]);
+  });
+
+  it("keeps a failure when the newer run is another kind or on another ticket", () => {
+    const otherKind = run("r2", "build", "done", { queuedAt: iso(10) });
+    const otherTicket = run("r3", "plan", "done", { queuedAt: iso(10), item: ref("CA-999") });
+    expect(only([failedAt("r1", 60), otherKind, otherTicket]).map((n) => n.runId)).toEqual(["r1"]);
+  });
+
+  it("keeps an older run's failure only while no newer run exists, so a retry that succeeds clears it", () => {
+    const failed = failedAt("r1", 60, trust);
+    expect(only([failed])).toHaveLength(1);
+    expect(only([failed, run("r2", "plan", "done", { queuedAt: iso(5) })])).toEqual([]);
+  });
+
+  it("drops a limit stop the same way, and a failure the person dismissed", () => {
+    const limit = run("r1", "plan", "stopped", { stoppedByLimit: true, queuedAt: iso(60) });
+    expect(kinds(only([limit]))).toEqual(["stoppedAtLimit"]);
+    expect(only([limit, run("r2", "plan", "working", { queuedAt: iso(5) })])).toEqual([]);
+    expect(only([failedAt("r1", 60)], { dismissed: new Set(["r1"]) })).toEqual([]);
+  });
+
+  it("leaves a stuck question or permission alone when a newer run exists: it is still waiting on an answer", () => {
+    const asking = run("r1", "plan", "needsAnswer", { queuedAt: iso(60), needs: "Which?" });
+    expect(kinds(only([asking, run("r2", "plan", "done", { queuedAt: iso(5) })]))).toEqual(["question"]);
   });
 });
 
@@ -774,7 +777,7 @@ describe("review nits", () => {
     const list = needs(
       input({
         workstreams: [view("ws-1", "CA-401")],
-        runs: [run("r-a", "build", "failed", { lastProgressAt: iso(1), endedAt: iso(50) }), run("r-b", "build", "failed", { lastProgressAt: iso(60), endedAt: iso(10) })],
+        runs: [run("r-a", "build", "failed", { lastProgressAt: iso(1), endedAt: iso(50) }), run("r-b", "verify", "failed", { lastProgressAt: iso(60), endedAt: iso(10) })],
       }),
     );
     expect(list.map((n) => n.key)).toEqual(["run:r-a", "run:r-b"]);

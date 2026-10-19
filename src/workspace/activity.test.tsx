@@ -30,7 +30,6 @@ const row = (over: Partial<FeedRowProps> = {}, e: Partial<FeedEntry> = {}) =>
       title="Lazy-load swatch images"
       now={new Date("2026-09-30T12:00:00Z")}
       selected={false}
-      needsMe={false}
       openable
       position={1}
       total={4}
@@ -64,11 +63,10 @@ describe("FeedRow", () => {
     expect(read).not.toContain("Mark read");
   });
 
-  it("flags tickets waiting on the person and words a mention as one", () => {
-    expect(row({ needsMe: true })).toMatch(/title="Your turn: an unread update[^"]*"[^>]*>Your turn</);
-    expect(row({ needsMe: false })).not.toContain("Your turn");
-    expect(row({ needsMe: true })).not.toContain("Needs you");
+  it("words a mention as one, and flags nothing as Your turn: a feed row is for information", () => {
+    expect(row()).not.toContain("Your turn");
     expect(row({}, { mention: true })).toContain("mentioned you on");
+    expect(row({}, { mention: true })).not.toContain("Your turn");
   });
 
   it("can't be opened once the ticket has left the cache", () => {

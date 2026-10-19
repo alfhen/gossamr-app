@@ -18,6 +18,7 @@ vi.mock("./useStateView", async () => {
 });
 import { LAUNCHER_GUTTER } from "./PipExtras";
 import { DENY_QUESTION, DenyConfirm, StopRunConfirm, stopRunQuestion } from "./PermissionAsk";
+import { useActivity } from "./activityStore";
 import { Rail, railBadgeText } from "./Rail";
 import { usePrefs } from "./prefs";
 import { useRuns } from "./runsStore";
@@ -556,19 +557,19 @@ describe("the rail", () => {
   it("puts the one count in Pip home's label and shows it as its badge", () => {
     set(eight());
     const [, label, inner] = button(renderToStaticMarkup(<Rail />), /Pip home/);
-    // A permission, a question, a failure and the run that has been quiet for 45 minutes.
-    expect(label).toBe("Pip home, 4 things need you");
-    expect(inner).toContain('aria-label="4 things need you" title="4 things need you"');
-    expect(inner).toContain(">4<");
+    // A permission, a question and a failure; the run that has been quiet for 45 minutes is not a need.
+    expect(label).toBe("Pip home, 3 things need you");
+    expect(inner).toContain('aria-label="3 things need you" title="3 things need you"');
+    expect(inner).toContain(">3<");
     expect(inner).toContain("bg-ws-pip");
   });
 
   it("keeps a failed run in the count however long it is looked at, until it is dismissed", () => {
     const failedRun = eight().find((r) => r.state === "failed")!;
     set(eight());
-    expect(button(renderToStaticMarkup(<Rail />), /Pip home/)[1]).toBe("Pip home, 4 things need you");
-    set(eight(), [failedRun.id]);
     expect(button(renderToStaticMarkup(<Rail />), /Pip home/)[1]).toBe("Pip home, 3 things need you");
+    set(eight(), [failedRun.id]);
+    expect(button(renderToStaticMarkup(<Rail />), /Pip home/)[1]).toBe("Pip home, 2 things need you");
   });
 
   it("says thing for one and drops the badge at zero", () => {
@@ -580,10 +581,21 @@ describe("the rail", () => {
     expect(inner).not.toContain("bg-ws-pip");
   });
 
-  it("names what each badge counts, in words no other badge uses", () => {
-    expect([railBadgeText.activity(24), railBadgeText.pipHome(4)]).toEqual(["24 unread updates", "4 things need you"]);
-    expect([railBadgeText.activity(1), railBadgeText.pipHome(1)]).toEqual(["1 unread update", "1 thing needs you"]);
-    expect(railBadgeText).not.toHaveProperty("agents");
+  it("names what the one badge counts", () => {
+    expect(railBadgeText.pipHome(4)).toBe("4 things need you");
+    expect(railBadgeText.pipHome(1)).toBe("1 thing needs you");
+    expect(Object.keys(railBadgeText)).toEqual(["pipHome"]);
+  });
+
+  it("has no badge on Activity, however much is unread", () => {
+    useActivity.getInitialState().unread = 28;
+    useActivity.getInitialState().codeUnread = 3;
+    const [, label, inner] = button(renderToStaticMarkup(<Rail />), /Activity/);
+    useActivity.getInitialState().unread = 0;
+    useActivity.getInitialState().codeUnread = 0;
+    expect(label).toBe("Activity");
+    expect(inner).not.toContain("bg-ws-pip");
+    expect(inner).not.toMatch(/>\d+</);
   });
 
   it("sits beside Activity in the bottom group", () => {
