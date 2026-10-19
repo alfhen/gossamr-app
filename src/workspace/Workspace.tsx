@@ -37,6 +37,7 @@ import { ConnectGithubDialog } from "./ConnectGithub";
 import { useGithubUi } from "./githubUi";
 import { FILTER_LIMIT, useDev } from "./devStore";
 import { ChooseWatch } from "./WatchPicker";
+import { ReauthBanner } from "./ReauthBanner";
 import { ToastHost, focusToast, toastPlacement } from "./ToastHost";
 import { useToasts } from "./toasts";
 import { useTabs, type Route } from "./tabsStore";
@@ -351,6 +352,7 @@ export function Workspace({ backend }: { backend: Backend }) {
           className="relative flex min-h-0 min-w-0 flex-col outline-none"
         >
           <div data-canvas-column style={{ paddingRight: room }} className="flex min-h-0 min-w-0 flex-1 flex-col motion-safe:transition-[padding] motion-safe:duration-200">
+            <ReauthBanner />
             {route === "workspace" ? <Header /> : <div data-tauri-drag-region className="h-[34px] shrink-0" />}
             {route === "workspace" && <FilterBar />}
             {route === "workspace" && <FilterNote />}

@@ -657,6 +657,10 @@ export class JiraBackend implements Backend {
     return () => void pending.then((unlisten) => unlisten());
   }
 
+  async reconnectJira() {
+    await invoke("sign_in");
+  }
+
   syncNow() {
     return invoke<void>("sync_now");
   }

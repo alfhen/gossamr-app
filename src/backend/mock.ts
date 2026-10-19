@@ -1281,7 +1281,7 @@ export class MockBackend implements Backend {
   }
 
   async connectionsList(): Promise<ConnectionInfo[]> {
-    const sample: ConnectionInfo = { id: MOCK_CONNECTION, kind: "mock", workspace: "Sample data", url: null, account: PEOPLE.me, lastSyncAt: this.snap.lastSyncAt, syncing: false, error: null, transient: false };
+    const sample: ConnectionInfo = { id: MOCK_CONNECTION, kind: "mock", workspace: "Sample data", url: null, account: PEOPLE.me, lastSyncAt: this.snap.lastSyncAt, syncing: false, error: null, transient: false, reauth: false };
     return this.github.connected ? [sample, this.github.info()] : [sample];
   }
 
@@ -1481,6 +1481,8 @@ export class MockBackend implements Backend {
       if (until) e.unread = false;
     });
   }
+
+  async reconnectJira() {}
 
   async syncNow() {
     // A sync finds the draft pull requests builds opened.

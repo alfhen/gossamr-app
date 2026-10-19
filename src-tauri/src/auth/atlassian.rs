@@ -206,13 +206,12 @@ impl Authenticator for Atlassian {
     }
 }
 
-/// A refresh token that Atlassian no longer honours (revoked, expired, or spent elsewhere) can't be retried into
-/// working, so say that the person has to sign in again instead of showing the raw token error.
+/// Atlassian answers a refresh token it no longer honours (revoked, expired, spent elsewhere) with a 400, 401 or 403
+/// whose body varies (`invalid_grant`, `unauthorized_client`), and retrying can't fix it. Server errors and network
+/// failures say nothing about the token, so they pass through for the next sync to retry.
 fn refresh_failure(e: Error) -> Error {
     match e {
-        Error::Api { status: 400 | 401 | 403, message } if message.contains("invalid_grant") => {
-            Error::Auth("Atlassian ended this sign-in (it was revoked or has expired). Sign in to Jira again.".into())
-        }
+        Error::Api { status: 400 | 401 | 403, .. } => Error::ReauthRequired,
         other => other,
     }
 }
@@ -378,10 +377,18 @@ mod tests {
 
     #[test]
     fn a_dead_refresh_token_asks_for_a_new_sign_in_and_other_failures_pass_through() {
-        let dead = Error::Api { status: 403, message: r#"{"error":"invalid_grant","error_description":"Unknown or invalid refresh token."}"#.into() };
-        assert!(matches!(refresh_failure(dead), Error::Auth(m) if m.contains("Sign in to Jira again")));
-        assert!(matches!(refresh_failure(Error::Api { status: 500, message: "invalid_grant".into() }), Error::Api { status: 500, .. }));
-        assert!(matches!(refresh_failure(Error::Api { status: 400, message: "bad request".into() }), Error::Api { status: 400, .. }));
+        for (status, body) in [
+            (403, r#"{"error":"unauthorized_client","error_description":"refresh_token is invalid"}"#),
+            (403, r#"{"error":"invalid_grant","error_description":"Unknown or invalid refresh token."}"#),
+            (400, r#"{"error":"invalid_grant"}"#),
+            (401, "unauthorized"),
+        ] {
+            assert!(refresh_failure(Error::Api { status, message: body.into() }).needs_reauth(), "{status} {body}");
+        }
+        for status in [429, 500, 502, 503] {
+            assert!(matches!(refresh_failure(Error::Api { status, message: "invalid_grant".into() }), Error::Api { .. }), "{status}");
+        }
+        assert!(matches!(refresh_failure(Error::Auth("no refresh token".into())), Error::Auth(_)));
     }
 
     #[tokio::test]
