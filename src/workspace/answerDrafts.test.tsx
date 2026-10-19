@@ -5,7 +5,7 @@ import { itemRef } from "../backend/mockConnector";
 import type { Proposal, Run } from "../types";
 import { DraftCard } from "./DraftCard";
 import { DraftPreview } from "./DraftPreview";
-import { answerRun, editThenSend, isSendKey, NOT_WAITING, type AnswerRun } from "./runAnswer";
+import { answerRun, editThenSend, isSendKey, NOT_WAITING, type AnswerRun } from "./runAnswerLogic";
 
 const CA401 = itemRef("CA-401");
 const QUESTION = "Should the refund path keep the old rounding?";
