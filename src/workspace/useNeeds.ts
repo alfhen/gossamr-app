@@ -88,7 +88,9 @@ function useReporterAsks(): Record<string, ReporterAsk> {
  */
 export function useNeedsYou(): Need[] {
   const workstreams = useWorkstreams((s) => s.list);
-  const runs = useRuns((s) => s.runs);
+  const active = useRuns((s) => s.runs);
+  const archived = useRuns((s) => s.archived);
+  const runs = useMemo(() => [...active, ...archived], [active, archived]);
   const dismissed = useRuns((s) => s.dismissed);
   const proposals = useWorkspace((s) => s.proposals);
   const items = useWorkspace((s) => s.items);
@@ -110,7 +112,7 @@ function titlesOf(items: ReturnType<typeof useWorkspace.getState>["items"], peek
 export function currentNeeds(): Need[] {
   const ws = useWorkspace.getState();
   const runs = useRuns.getState();
-  return buildNeeds({ workstreams: useWorkstreams.getState().list, runs: runs.runs, proposals: Object.values(ws.proposals), dismissed: runs.dismissed, heldAt: lastRead, asked: lastAsked, titleOf: titlesOf(ws.items, ws.peeked), now: Date.now() });
+  return buildNeeds({ workstreams: useWorkstreams.getState().list, runs: [...runs.runs, ...runs.archived], proposals: Object.values(ws.proposals), dismissed: runs.dismissed, heldAt: lastRead, asked: lastAsked, titleOf: titlesOf(ws.items, ws.peeked), now: Date.now() });
 }
 
 /** "1 thing needs you", "3 things need you": the one count, in the words the rail badge and the launcher say it. */

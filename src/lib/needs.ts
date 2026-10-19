@@ -444,6 +444,7 @@ export function needs({ workstreams, runs, proposals, dismissed, heldAt, asked, 
   }
 
   for (const run of runs) {
+    if (run.archivedAt) continue;
     const ws = runWorkstream(open, run);
     const name = runName(run, ws);
     const at = run.endedAt ?? run.lastProgressAt;

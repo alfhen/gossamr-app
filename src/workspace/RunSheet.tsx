@@ -1,3 +1,4 @@
+import { archiveControl } from "../lib/archiveRuns";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useBackend } from "../backend/useBackend";
 import { itemKey } from "../lib/filter";
@@ -48,6 +49,8 @@ export interface RunSheetActions extends ResultActions {
   openTicket(): void;
   reveal(path: string): void;
   loadBrief(): void;
+  /** Archives the run; absent where it can't be offered. */
+  archive?(): void;
 }
 
 export interface RunSheetViewProps {
@@ -349,6 +352,11 @@ export function RunSheetView({ run, now, ticketTitle, place, label, wide, onWide
             Start now
           </Btn>
         )}
+        {on.archive && (
+          <Btn icon="folder" data-archive disabled={!archiveControl(run).enabled} title={archiveControl(run).title} onClick={on.archive}>
+            Archive
+          </Btn>
+        )}
         {stop.shown &&
           (confirmStop ? (
             <span
@@ -496,6 +504,7 @@ export function RunSheet({ id }: { id: string }) {
     cancelStop: () => setConfirmStop(false),
     stop: () => (setConfirmStop(false), setStoppedHere(true), void store.stop(id)),
     startNow: () => void store.startNow(id),
+    archive: () => void store.archive([id]).then((done) => done && store.closeSheet()),
     answer: (text) => store.answer(id, text),
     adoptSession: (session) => store.adoptSession(id, session),
     retry: () => void store.retryLaunch(id),

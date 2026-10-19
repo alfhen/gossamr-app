@@ -1,4 +1,5 @@
 import type { KeyboardEvent } from "react";
+import { archiveControl } from "../lib/archiveRuns";
 import { runRef } from "../lib/composerVerbs";
 import { labelsByRun } from "../lib/workstreamStage";
 import { useRuns } from "./runsStore";
@@ -28,6 +29,8 @@ export interface AgentItemProps {
   onDraftComment?(): void;
   /** Present on a finished plan run that can be built from. */
   onBuildFromPlan?(): void;
+  /** Present on a run that is over: takes it out of Agents and Needs you. */
+  onArchive?(): void;
   /** Present on a run stopped at its limit: wakes it with the standard words, as Resume in its sheet does. Only the person's click does this. */
   onResume?(): void;
   /** Present on a finished build that opened a pull request that can be reviewed. */
@@ -168,7 +171,7 @@ export function ReadOnlyBadge({ run, compact = false }: { run: Run; compact?: bo
   );
 }
 
-export function AgentCard({ run, now, selected, position, total, ticketTitle, label, onOpen, onAttach, onDraftComment, onBuildFromPlan, onReviewThis, onResume, draftReady, breakdownReady, onOpenDraft, onOpenBreakdown, descriptionReady, onOpenDescription, review, failure, onOpenNeed, asking }: AgentItemProps) {
+export function AgentCard({ run, now, selected, position, total, ticketTitle, label, onOpen, onAttach, onDraftComment, onBuildFromPlan, onReviewThis, onResume, onArchive, draftReady, breakdownReady, onOpenDraft, onOpenBreakdown, descriptionReady, onOpenDescription, review, failure, onOpenNeed, asking }: AgentItemProps) {
   const view = useStateView(run, now);
   const tone = TONE[view.tone];
   const title = runTitle(run, ticketTitle);
@@ -299,6 +302,18 @@ export function AgentCard({ run, now, selected, position, total, ticketTitle, la
       </div>
       <div className="flex items-center gap-3 text-sm text-ws-ink3 tabular-nums">
         {tokens && <span>{tokens}</span>}
+        {onArchive && (
+          <button
+            type="button"
+            data-archive
+            onClick={(ev) => (ev.stopPropagation(), onArchive())}
+            onKeyDown={ownKey}
+            title={archiveControl(run).title}
+            className="rounded-md px-2 py-px text-sm text-ws-ink2 hover:bg-ws-hover"
+          >
+            Archive
+          </button>
+        )}
         <time dateTime={ageSince(run)} className="ml-auto" title={run.endedAt ? "Ended" : "Started"}>
           {ageText(run, now)}
         </time>

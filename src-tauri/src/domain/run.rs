@@ -930,6 +930,9 @@ pub struct Run {
     /// Set when `claude rm` took the worktree away; the run is kept for its result.
     #[serde(default)]
     pub worktree_removed_at: Option<DateTime<Utc>>,
+    /// Set when the person archived the run: it leaves the Agents view and Needs you but stays here until deleted.
+    #[serde(default)]
+    pub archived_at: Option<DateTime<Utc>>,
     /// Set when the person carried on a finished run in Terminal: it is theirs from then on, so the limits no longer
     /// stop it and finishing again doesn't announce itself a second time.
     #[serde(default)]
@@ -1052,6 +1055,7 @@ impl Run {
             last_progress_at: at,
             ended_at: None,
             worktree_removed_at: None,
+            archived_at: None,
             continued_at: None,
             created_item: None,
             waited_secs: 0,

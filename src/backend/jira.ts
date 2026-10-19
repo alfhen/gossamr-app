@@ -1,3 +1,4 @@
+import type { ClearFilter, ClearPreview, DeleteResult, WorktreeInfo } from "../types";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
@@ -500,6 +501,30 @@ export class JiraBackend implements Backend {
 
   runsCleanup(id: string) {
     return invoke<CleanupResult>("runs_cleanup", { id });
+  }
+
+  runsArchive(ids: string[]) {
+    return invoke<string[]>("runs_archive", { ids });
+  }
+
+  runsRestore(id: string) {
+    return invoke<void>("runs_restore", { id });
+  }
+
+  runsClearPreview(filter: ClearFilter) {
+    return invoke<ClearPreview>("runs_clear_preview", { filter });
+  }
+
+  runsClear(filter: ClearFilter) {
+    return invoke<string[]>("runs_clear", { filter });
+  }
+
+  runsWorktreeInfo(id: string) {
+    return invoke<WorktreeInfo>("runs_worktree_info", { id });
+  }
+
+  runsDelete(id: string, removeWorktree: boolean) {
+    return invoke<DeleteResult>("runs_delete", { id, removeWorktree });
   }
 
   runsRetryLaunch(id: string) {

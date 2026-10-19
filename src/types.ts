@@ -616,6 +616,8 @@ export interface Run {
   endedAt: string | null;
   /** Set once `claude rm` has taken the worktree away; the run stays for its result. */
   worktreeRemovedAt?: string | null;
+  /** Set when the person archived the run: it is out of Agents and Needs you, and kept until deleted. */
+  archivedAt?: string | null;
   continuedAt?: string | null;
   /** How many times the agent has been given the job: 1 for the first, one more for each follow-up sent back. */
   passes?: number;
@@ -1091,6 +1093,31 @@ export const AUTOSTART_DEFAULTS: AutoStartSwitches = { investigateTriage: true, 
 
 /** What `claude rm` said: it removed the worktree, or refused and explained in its own words. */
 export type CleanupResult = { type: "removed" } | { type: "refused"; message: string };
+
+/** Which finished runs "Clear finished" archives. `keep` is the runs the page lists in Needs you. */
+export interface ClearFilter {
+  olderThanDays: number | null;
+  states: RunState[];
+  keep: string[];
+}
+
+/** What a filter selects: the ids, how many per state, and how many it left out and why. */
+export interface ClearPreview {
+  ids: string[];
+  byState: Record<string, number>;
+  kept: { draft: number; needsYou: number };
+}
+
+/** What deleting an archived run could remove beyond Gossamr's records: its worktree folder, only inside ~/Gossamr/agents. */
+export interface WorktreeInfo {
+  path: string;
+  removable: boolean;
+  reason: string | null;
+  bytes: number | null;
+}
+
+/** Deleted, or Claude refused to remove the worktree (its own words) and nothing was deleted. */
+export type DeleteResult = { type: "deleted" } | { type: "refused"; message: string };
 
 /** What `runs_set_enabled` did. `note` says what turning Agents off left alone. */
 export interface RunsEnabledChange {

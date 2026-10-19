@@ -600,6 +600,41 @@ async fn runs_cleanup(runs: State<'_, RunsState>, id: String) -> Result<runs::cl
     runs.cleanup(&id).await
 }
 
+/// Archives runs that are over. They leave the Agents view and Needs you but stay in the database.
+#[tauri::command]
+async fn runs_archive(runs: State<'_, RunsState>, ids: Vec<String>) -> Result<Vec<String>> {
+    runs.archive(&ids).await
+}
+
+#[tauri::command]
+async fn runs_restore(runs: State<'_, RunsState>, id: String) -> Result<()> {
+    runs.restore(&id).await
+}
+
+/// Which runs "Clear finished" would archive for `filter`, and how many it leaves out and why.
+#[tauri::command]
+async fn runs_clear_preview(runs: State<'_, RunsState>, filter: runs::archive::ClearFilter) -> Result<runs::archive::ClearPreview> {
+    runs.clear_preview(&filter).await
+}
+
+/// Archives the runs `runs_clear_preview` shows for `filter`, as they are now.
+#[tauri::command]
+async fn runs_clear(runs: State<'_, RunsState>, filter: runs::archive::ClearFilter) -> Result<Vec<String>> {
+    runs.clear(&filter).await
+}
+
+/// The worktree folder deleting an archived run could remove, and its size. Only a folder inside `~/Gossamr/agents` is removable.
+#[tauri::command]
+async fn runs_worktree_info(runs: State<'_, RunsState>, id: String) -> Result<runs::archive::WorktreeInfo> {
+    runs.worktree_info(&id).await
+}
+
+/// Deletes an archived run's records, and its worktree in `~/Gossamr/agents` when `remove_worktree`.
+#[tauri::command]
+async fn runs_delete(runs: State<'_, RunsState>, id: String, remove_worktree: bool) -> Result<runs::archive::Deleted> {
+    runs.delete(&id, remove_worktree).await
+}
+
 /// Approves a run draft the person has read (`digest` is from `runs_review`) and hands the queued run to the launcher.
 #[tauri::command]
 async fn runs_approve(
@@ -1535,6 +1570,12 @@ pub fn run() {
             runs_settings,
             runs_set_settings,
             runs_cleanup,
+            runs_archive,
+            runs_restore,
+            runs_clear_preview,
+            runs_clear,
+            runs_worktree_info,
+            runs_delete,
             runs_review,
             runs_draft,
             runs_approve,

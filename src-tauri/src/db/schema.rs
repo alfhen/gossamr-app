@@ -300,7 +300,13 @@ CREATE INDEX proposals_workstream ON proposals(workstream, state);";
 const GENERAL_CONVERSATION: &str = "
 UPDATE pip_turns SET conversation = 'general' WHERE conversation = 'workspace';";
 
-const STEPS: &[&str] = &[INBOX, CACHE, PROPOSALS, WATCH, CODE, LINKS, RUNS, RUN_REPORTS, PIP_TURNS, WORKSTREAMS, PROPOSAL_WORKSTREAMS, GENERAL_CONVERSATION];
+/// When the person archived a run, as a column so lists can leave archived runs out. The run's own `data` is not the
+/// source: the tracker rewrites that whole value, which must never bring an archived run back.
+const RUN_ARCHIVE: &str = "
+ALTER TABLE runs ADD COLUMN archived_at TEXT;
+CREATE INDEX runs_archived ON runs(archived_at);";
+
+const STEPS: &[&str] = &[INBOX, CACHE, PROPOSALS, WATCH, CODE, LINKS, RUNS, RUN_REPORTS, PIP_TURNS, WORKSTREAMS, PROPOSAL_WORKSTREAMS, GENERAL_CONVERSATION, RUN_ARCHIVE];
 
 pub fn migrate(conn: &mut Connection) -> Result<()> {
     let applied: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
@@ -457,14 +463,14 @@ mod tests {
         for t in ["proposals", "item_links"] {
             assert_eq!(conn.query_row(&format!("SELECT count(*) FROM {t}"), [], |r| r.get::<_, i64>(0)).unwrap(), 1, "{t}");
         }
-        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), 12);
+        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), STEPS.len() as i64);
     }
 
     #[test]
     fn a_fresh_file_is_at_version_twelve() {
         let mut conn = Connection::open_in_memory().unwrap();
         migrate(&mut conn).unwrap();
-        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), 12);
+        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), STEPS.len() as i64);
     }
 
     #[test]
@@ -490,11 +496,11 @@ mod tests {
         }
         assert!(tables(&conn).contains(&"pip_turns".to_string()));
         assert_eq!(conn.query_row("SELECT count(*) FROM pip_turns", [], |r| r.get::<_, i64>(0)).unwrap(), 0);
-        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), 12);
+        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), STEPS.len() as i64);
 
         migrate(&mut conn).unwrap();
         assert_eq!(conn.query_row("SELECT count(*) FROM runs", [], |r| r.get::<_, i64>(0)).unwrap(), 1);
-        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), 12);
+        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), STEPS.len() as i64);
     }
 
     #[test]
@@ -528,7 +534,7 @@ mod tests {
         migrate(&mut conn).unwrap();
         assert_eq!(conn.query_row("SELECT count(*) FROM sync_state", [], |r| r.get::<_, i64>(0)).unwrap(), 1);
         assert_eq!(conn.query_row("SELECT count(*) FROM pip_turns", [], |r| r.get::<_, i64>(0)).unwrap(), 1);
-        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), 12);
+        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), STEPS.len() as i64);
     }
 
     #[test]
@@ -556,12 +562,12 @@ mod tests {
             assert!(tables(&conn).contains(&t.to_string()), "missing {t}");
             assert_eq!(conn.query_row(&format!("SELECT count(*) FROM {t}"), [], |r| r.get::<_, i64>(0)).unwrap(), 0, "{t}");
         }
-        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), 12);
+        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), STEPS.len() as i64);
 
         conn.execute("INSERT INTO workstreams (id, connection_id, item_key, title, mode, created_at, data) VALUES ('w1', 'c', 'CA-1', 't', 'advise', 't', '{}')", []).unwrap();
         migrate(&mut conn).unwrap();
         assert_eq!(conn.query_row("SELECT count(*) FROM workstreams", [], |r| r.get::<_, i64>(0)).unwrap(), 1);
-        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), 12);
+        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), STEPS.len() as i64);
     }
 
     #[test]
@@ -610,7 +616,7 @@ mod tests {
         assert_eq!(row("in-ws"), (some("chat"), some("w2")), "the origin's workstream wins");
         assert_eq!(row("empty"), (None, None));
         assert_eq!(row("broken"), (None, None));
-        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), 12);
+        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), STEPS.len() as i64);
         migrate(&mut conn).unwrap();
         assert_eq!(conn.query_row("SELECT count(*) FROM proposals", [], |r| r.get::<_, i64>(0)).unwrap(), 6);
     }
@@ -641,8 +647,25 @@ mod tests {
         let in_conversation = |conn: &Connection, c: &str| conn.query_row("SELECT count(*) FROM pip_turns WHERE conversation = ?1", [c], |r| r.get::<_, i64>(0)).unwrap();
         assert_eq!((in_conversation(&conn, "general"), in_conversation(&conn, "workspace")), (4, 0));
         assert_eq!((in_conversation(&conn, "CA-1"), in_conversation(&conn, "ws:w1")), (2, 2));
-        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), 12);
+        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), STEPS.len() as i64);
         migrate(&mut conn).unwrap();
         assert_eq!(in_conversation(&conn, "general"), 4);
+    }
+
+    #[test]
+    fn a_version_twelve_file_keeps_its_runs_unarchived_and_gains_the_archive_column() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        for step in &STEPS[..12] {
+            conn.execute_batch(step).unwrap();
+        }
+        conn.pragma_update(None, "user_version", 12).unwrap();
+        conn.execute("INSERT INTO runs (id, proposal_id, connection_id, kind, repo, expected_worktree, state, queued_at, last_progress_at, data) VALUES ('r1', 'p1', 'c', 'investigate', 'a/b', '/w', 'done', 't', 't', '{}')", []).unwrap();
+
+        migrate(&mut conn).unwrap();
+
+        assert_eq!(conn.query_row("SELECT archived_at FROM runs WHERE id = 'r1'", [], |r| r.get::<_, Option<String>>(0)).unwrap(), None);
+        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), STEPS.len() as i64);
+        migrate(&mut conn).unwrap();
+        assert_eq!(conn.query_row("SELECT count(*) FROM runs", [], |r| r.get::<_, i64>(0)).unwrap(), 1);
     }
 }

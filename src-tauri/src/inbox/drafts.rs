@@ -654,6 +654,24 @@ impl Core {
         self.with_proposals(|db| db.run(id)).await
     }
 
+    /// Archives the listed runs that are over; returns the ids that were archived.
+    pub async fn archive_runs(&self, ids: &[String], at: chrono::DateTime<chrono::Utc>) -> Result<Vec<String>> {
+        self.with_proposals(|db| db.archive_runs(ids, at)).await
+    }
+
+    pub async fn restore_run(&self, id: &str) -> Result<bool> {
+        self.with_proposals(|db| db.restore_run(id)).await
+    }
+
+    /// Removes an archived run and what was recorded for it; false when it isn't archived or doesn't exist.
+    pub async fn delete_archived_run(&self, id: &str) -> Result<bool> {
+        self.with_proposals(|db| db.delete_archived_run(id)).await
+    }
+
+    pub async fn runs_with_pending_drafts(&self) -> Result<std::collections::HashSet<String>> {
+        self.with_proposals(|db| db.runs_with_pending_drafts()).await
+    }
+
     pub async fn run_events(&self, run_id: &str) -> Result<Vec<RunEvent>> {
         self.with_proposals(|db| db.run_events(run_id)).await
     }
