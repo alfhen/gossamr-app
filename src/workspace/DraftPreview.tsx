@@ -22,7 +22,7 @@ import { maskSecrets } from "../lib/riskyText";
 import { useTabs } from "./tabsStore";
 import { KeyHint } from "./KeyHint";
 import { RetiredDraft } from "./RetiredDraft";
-import { NOT_WAITING, useAnswerRun, type AnswerRun } from "./runAnswer";
+import { NOT_WAITING, useAnswerRun, type AnswerRun } from "./runAnswerLogic";
 
 const ICON: Record<Proposal["intent"]["type"], string> = { comment: "✎", transition: "⇄", subtasks: "☰", create: "＋", update: "✦", rewrite: "✎", link: "✦", startRun: "▶", followUp: "↺", runAnswer: "↩", githubReview: "◎" };
 
