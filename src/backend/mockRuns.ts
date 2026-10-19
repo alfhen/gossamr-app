@@ -1,4 +1,6 @@
 import { AUTOSTART_DEFAULTS, DIGEST_MINUTES, SUMMARY_ONLY, type AgentSettings, type ChangedFile, type Intent, type WorkDoc, type CleanupResult, type CloneChoice, type ContainerRef, type FreshCopy, type CodeChange, type ItemRef, type LocalClone, type PlanComment, type Preflight, type ReadOnly, PreflightRow, Proposal, Run, RunEvent, RunFailure, RunQuery, RunOutcome, RunReview, RunKind, RunSpec, RunsChanged, RunsEnvironment, RunState, TicketProposal, WorkstreamRule } from "../types";
+import type { ClearFilter, ClearPreview, DeleteResult, WorktreeInfo } from "../types";
+import { isArchivable, runsWithPendingDrafts, selectClearable } from "../lib/archiveRuns";
 import { containerRef, itemRef } from "./mockConnector";
 import { approvedPlanText, assemblePlan, planSectionOf, withoutPlanSection } from "./mockPlanSection";
 import { isTriageDescription, withoutTriageSection, withTriageSection } from "./mockTriageSection";
@@ -521,6 +523,10 @@ const slugOf = (title: string) => title.toLowerCase().replace(/[^a-z0-9]+/g, " "
 
 /** A run's ticket draft's state, in the words the refusal to draft another uses (state_words in inbox/run_results.rs). */
 const TICKET_DRAFT_STATE: Record<Proposal["state"]["type"], string> = { pending: "waiting for you", applying: "waiting for you", applied: "already created", skipped: "skipped", retired: "out of date" };
+
+const missing = (): never => {
+  throw new Error("that run no longer exists");
+};
 
 export class MockRuns {
   private runs: Run[];
@@ -2249,6 +2255,50 @@ export class MockRuns {
     this.update(id, { worktreeRemovedAt: run.worktreeRemovedAt ?? this.now(), lastDetail: "Worktree removed", ...(earlier ? { earlierSessions: earlier } : {}) });
     this.changed();
     return { type: "removed" };
+  }
+
+  archive(ids: string[]): string[] {
+    const runs = ids.map((id) => this.get(id) ?? missing());
+    const going = runs.find((r) => !isArchivable(r));
+    if (going) throw new Error(`This run is ${going.state}. Stop it first, then archive it.`);
+    const at = this.now();
+    const done = runs.filter((r) => !r.archivedAt).map((r) => r.id);
+    this.runs = this.runs.map((r) => (done.includes(r.id) ? { ...r, archivedAt: at } : r));
+    if (done.length) this.changed();
+    return done;
+  }
+
+  restore(id: string) {
+    const run = this.get(id);
+    if (!run?.archivedAt) throw new Error("This run isn't archived.");
+    this.runs = this.runs.map((r) => (r.id === id ? { ...r, archivedAt: null } : r));
+    this.changed();
+  }
+
+  clearPreview(filter: ClearFilter): ClearPreview {
+    return selectClearable(this.list(), runsWithPendingDrafts(this.proposals.list({ states: ["pending"] })), filter, Date.parse(this.now()));
+  }
+
+  /** Stands in for the folder under `~/Gossamr/agents`; a run in the person's own clone has nothing Gossamr may remove. */
+  worktreeInfo(id: string): WorktreeInfo {
+    const run = this.get(id) ?? missing();
+    const path = `~/Gossamr/agents/${run.spec.repo}/.claude/worktrees/${run.spec.name}`;
+    if (run.worktreeRemovedAt) return { path, removable: false, reason: "The worktree is already removed.", bytes: null };
+    if (run.spec.clonePath && !run.spec.clonePath.includes("/Gossamr/agents")) return { path: run.spec.clonePath, removable: false, reason: "Its worktree isn't in ~/Gossamr/agents, so Gossamr leaves it where it is.", bytes: null };
+    return { path, removable: true, reason: null, bytes: (run.tokens ?? 0) * 4096 };
+  }
+
+  deleteArchived(id: string, removeWorktree: boolean): DeleteResult {
+    const run = this.get(id) ?? missing();
+    if (!run.archivedAt) throw new Error("Only an archived run can be deleted.");
+    if (removeWorktree) {
+      const info = this.worktreeInfo(id);
+      if (!info.removable) throw new Error(info.reason ?? "Its worktree can't be removed.");
+      if (this.unpushed.has(id)) return { type: "refused", message: "The worktree has unpushed commits. Push them or discard them yourself, then try again." };
+    }
+    this.runs = this.runs.filter((r) => r.id !== id);
+    this.changed();
+    return { type: "deleted" };
   }
 
   disk(id: string): number {

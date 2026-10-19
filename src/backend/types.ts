@@ -1,3 +1,4 @@
+import type { ClearFilter, ClearPreview, DeleteResult, WorktreeInfo } from "../types";
 import type { Mention } from "../lib/mentions";
 import type { ClarityGap } from "../lib/ticketClarity";
 import type {
@@ -292,6 +293,17 @@ export interface Backend {
   runsSetSettings(settings: AgentSettings): Promise<AgentSettings>;
   /** Removes a finished run's worktree with `claude rm`. Never forces: Claude refuses unpushed work and says so. */
   runsCleanup(id: string): Promise<CleanupResult>;
+  /** Archives runs that are over; returns the ids archived. A run still going is refused. */
+  runsArchive(ids: string[]): Promise<string[]>;
+  runsRestore(id: string): Promise<void>;
+  /** Which runs `filter` would archive, and how many it keeps out for a draft or Needs you. */
+  runsClearPreview(filter: ClearFilter): Promise<ClearPreview>;
+  /** Archives what the preview shows, worked out again now. Returns the ids archived. */
+  runsClear(filter: ClearFilter): Promise<string[]>;
+  /** The worktree folder deleting this archived run could remove, and its size. */
+  runsWorktreeInfo(id: string): Promise<WorktreeInfo>;
+  /** Deletes an archived run's records, and its worktree inside ~/Gossamr/agents when asked. */
+  runsDelete(id: string, removeWorktree: boolean): Promise<DeleteResult>;
   /** Bytes the run's session files take up. */
   runsDisk(id: string): Promise<number>;
   /** Launches a run whose launch failed, after checking that no session for it exists. */

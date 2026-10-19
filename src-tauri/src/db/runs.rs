@@ -42,6 +42,16 @@ fn insert(conn: &rusqlite::Connection, run: &Run) -> rusqlite::Result<usize> {
     )
 }
 
+/// The run as stored, with `archived_at` taken from its column, which is the only place it is written.
+fn read_run(data: &str, archived_at: Option<&str>) -> Result<Run> {
+    let mut run = serde_json::from_str::<Run>(data)?.with_failure_filled();
+    run.archived_at = archived_at.and_then(|at| chrono::DateTime::parse_from_rfc3339(at).ok()).map(|at| at.with_timezone(&chrono::Utc));
+    Ok(run)
+}
+
+/// What can be archived: a run that is over. One still running, queued or waiting on the person is stopped first.
+pub const ARCHIVABLE: [RunState; 4] = [RunState::Done, RunState::Failed, RunState::Stopped, RunState::Unknown];
+
 fn clash(e: rusqlite::Error) -> Error {
     match &e {
         rusqlite::Error::SqliteFailure(f, _) if f.code == ErrorCode::ConstraintViolation => {
@@ -85,14 +95,14 @@ impl Db {
     }
 
     fn run_where(&self, clause: &str, arg: &str) -> Result<Option<Run>> {
-        let data: Option<String> =
-            self.conn.query_row(&format!("SELECT data FROM runs WHERE {clause}"), params![arg], |r| r.get(0)).optional()?;
-        Ok(data.map(|d| serde_json::from_str::<Run>(&d).map(Run::with_failure_filled)).transpose()?)
+        let row: Option<(String, Option<String>)> =
+            self.conn.query_row(&format!("SELECT data, archived_at FROM runs WHERE {clause}"), params![arg], |r| Ok((r.get(0)?, r.get(1)?))).optional()?;
+        row.map(|(data, archived)| read_run(&data, archived.as_deref())).transpose()
     }
 
     /// Runs matching the query, newest first.
     pub fn runs(&self, q: &RunQuery) -> Result<Vec<Run>> {
-        let mut sql = String::from("SELECT data FROM runs WHERE 1 = 1");
+        let mut sql = String::from("SELECT data, archived_at FROM runs WHERE 1 = 1");
         let mut args: Vec<Sql> = Vec::new();
         if let Some(states) = &q.states {
             let marks = vec!["?"; states.len()].join(",");
@@ -114,12 +124,55 @@ impl Db {
         }
         sql.push_str(" ORDER BY queued_at DESC, id");
         let mut stmt = self.conn.prepare(&sql)?;
-        let rows = stmt.query_map(params_from_iter(args), |r| r.get::<_, String>(0))?;
+        let rows = stmt.query_map(params_from_iter(args), |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?)))?;
         let mut out = Vec::new();
         for row in rows {
-            out.push(serde_json::from_str::<Run>(&row?)?.with_failure_filled());
+            let (data, archived) = row?;
+            out.push(read_run(&data, archived.as_deref())?);
         }
         Ok(out)
+    }
+
+    /// Archives each listed run that is over and not archived already, and returns the ids that were.
+    pub fn archive_runs(&self, ids: &[String], at: chrono::DateTime<chrono::Utc>) -> Result<Vec<String>> {
+        self.atomically(|db| {
+            let marks = vec!["?"; ARCHIVABLE.len()].join(",");
+            let sql = format!("UPDATE runs SET archived_at = ? WHERE id = ? AND archived_at IS NULL AND state IN ({marks})");
+            let mut done = Vec::new();
+            for id in ids {
+                let args = std::iter::once(Sql::Text(stamp(at))).chain(std::iter::once(Sql::Text(id.clone()))).chain(ARCHIVABLE.iter().map(|s| Sql::Text(s.as_str().into())));
+                if db.conn.execute(&sql, params_from_iter(args))? > 0 {
+                    done.push(id.clone());
+                }
+            }
+            Ok(done)
+        })
+    }
+
+    /// Brings an archived run back. False when there was nothing archived under that id.
+    pub fn restore_run(&self, id: &str) -> Result<bool> {
+        Ok(self.conn.execute("UPDATE runs SET archived_at = NULL WHERE id = ?1 AND archived_at IS NOT NULL", params![id])? > 0)
+    }
+
+    /// Removes an archived run with its events and reports; an unarchived run is never touched. False when nothing was removed.
+    pub fn delete_archived_run(&self, id: &str) -> Result<bool> {
+        self.atomically(|db| {
+            let archived: bool = db.conn.query_row("SELECT archived_at IS NOT NULL FROM runs WHERE id = ?1", params![id], |r| r.get(0)).optional()?.unwrap_or(false);
+            if !archived {
+                return Ok(false);
+            }
+            for table in ["run_events", "run_reports", "run_report_tokens"] {
+                db.conn.execute(&format!("DELETE FROM {table} WHERE run_id = ?1"), params![id])?;
+            }
+            Ok(db.conn.execute("DELETE FROM runs WHERE id = ?1", params![id])? > 0)
+        })
+    }
+
+    /// Ids of the runs that have a draft still waiting for the person.
+    pub fn runs_with_pending_drafts(&self) -> Result<std::collections::HashSet<String>> {
+        let mut stmt = self.conn.prepare("SELECT DISTINCT json_extract(data, '$.origin.runId') FROM proposals WHERE state = 'pending' AND json_extract(data, '$.origin.type') = 'run'")?;
+        let rows = stmt.query_map([], |r| r.get::<_, Option<String>>(0))?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?.into_iter().flatten().collect())
     }
 
     /// Stores events after the run's last one, numbering them itself. At most 500 are kept per run and `detail` is cut
@@ -455,5 +508,67 @@ mod tests {
         assert_eq!((stored[0].seq, stored[499].seq, stored[499].text.as_str()), (0, 499, "step 499"));
         assert_eq!(stored[0].detail.as_ref().unwrap().chars().count(), 2_048);
         assert!(db.run_events("other").unwrap().is_empty());
+    }
+
+    fn stored(db: &Db, id: &str, state: RunState) -> Run {
+        let spec = crate::domain::RunSpec { name: format!("name-{id}"), ..run_spec() };
+        let mut r = Run::queued(id.into(), format!("p{id}"), "c".into(), None, spec, "f".into(), now());
+        r.state = state;
+        db.insert_run(&r).unwrap();
+        r
+    }
+
+    #[test]
+    fn an_archived_run_stays_archived_after_a_restart_and_after_the_tracker_saves_it() {
+        let dir = std::env::temp_dir().join(format!("gossamr-archive-{}", std::process::id()));
+        let file = dir.join("inbox.sqlite");
+        {
+            let db = Db::open(&file).unwrap();
+            stored(&db, "a", RunState::Done);
+            stored(&db, "b", RunState::Done);
+            assert_eq!(db.archive_runs(&["a".into()], now()).unwrap(), ["a"]);
+            let mut stale = db.run("a").unwrap().unwrap();
+            stale.archived_at = None;
+            stale.last_detail = Some("polled".into());
+            db.save_run(&stale).unwrap();
+        }
+        let db = Db::open(&file).unwrap();
+        let by_id = |id: &str| db.runs(&RunQuery::default()).unwrap().into_iter().find(|r| r.id == id).unwrap();
+        assert!(by_id("a").archived_at.is_some(), "a run saved from an older copy is still archived");
+        assert_eq!(by_id("a").last_detail.as_deref(), Some("polled"));
+        assert!(by_id("b").archived_at.is_none());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn only_runs_that_are_over_are_archived_and_restore_brings_one_back() {
+        let db = Db::in_memory().unwrap();
+        for (id, state) in [("w", RunState::Working), ("n", RunState::NeedsAnswer), ("q", RunState::Queued), ("d", RunState::Done), ("f", RunState::Failed), ("s", RunState::Stopped), ("u", RunState::Unknown)] {
+            stored(&db, id, state);
+        }
+        let all: Vec<String> = ["w", "n", "q", "d", "f", "s", "u"].map(String::from).to_vec();
+        assert_eq!(db.archive_runs(&all, now()).unwrap(), ["d", "f", "s", "u"]);
+        assert!(db.archive_runs(&all, now()).unwrap().is_empty(), "archiving twice changes nothing");
+        assert!(db.restore_run("d").unwrap());
+        assert!(!db.restore_run("d").unwrap());
+        assert!(db.run("d").unwrap().unwrap().archived_at.is_none());
+    }
+
+    #[test]
+    fn deleting_removes_an_archived_run_with_its_events_and_reports_and_nothing_else() {
+        let db = Db::in_memory().unwrap();
+        for id in ["a", "b"] {
+            stored(&db, id, RunState::Done);
+            db.append_events(id, &[RunEvent { run_id: id.into(), seq: 0, at: now(), kind: "k".into(), text: "t".into(), detail: None }]).unwrap();
+            db.execute_batch(&format!("INSERT INTO run_reports (run_id, revision) VALUES ('{id}', 1); INSERT INTO run_report_tokens (token_hash, run_id, tool_version, minted_at) VALUES ('h{id}', '{id}', 1, 't');")).unwrap();
+        }
+        assert!(!db.delete_archived_run("a").unwrap(), "a run that is not archived is kept");
+        db.archive_runs(&["a".into()], now()).unwrap();
+        assert!(db.delete_archived_run("a").unwrap());
+        assert!(db.run("a").unwrap().is_none() && db.run_events("a").unwrap().is_empty());
+        assert!(db.run("b").unwrap().is_some() && db.run_events("b").unwrap().len() == 1);
+        let count = |table: &str| db.conn.query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r.get::<_, i64>(0)).unwrap();
+        assert_eq!((count("run_reports"), count("run_report_tokens")), (1, 1));
+        assert!(!db.delete_archived_run("a").unwrap());
     }
 }

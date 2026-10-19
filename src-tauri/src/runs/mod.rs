@@ -2,6 +2,7 @@
 #![allow(dead_code)]
 
 pub mod answer;
+pub mod archive;
 pub mod binary;
 pub mod cleanup;
 pub mod cli;

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { isArchivable } from "../lib/archiveRuns";
 import { itemKey } from "../lib/filter";
 import type { Need } from "../lib/needs";
 import { labelsByRun, stageText } from "../lib/workstreamStage";
@@ -7,6 +8,8 @@ import { useWorkspace } from "../workspaceStore";
 import { AgentCard, agentId, type AgentItemProps } from "./AgentCard";
 import { Icon } from "./AgentIcons";
 import { AgentRow, AgentRowHeader } from "./AgentRow";
+import { ArchivedSection } from "./ArchivedSection";
+import { ClearFinished } from "./ClearFinished";
 import { AgentsBanners } from "./AgentsBanners";
 import { AgentsEmpty, AgentsIntro, NoMatch } from "./AgentsEmpty";
 import {
@@ -141,6 +144,7 @@ export interface AgentsActions {
   setView(view: AgentsViewMode): void;
   setGroup(group: AgentsGroup): void;
   toggleEarlier(): void;
+  archive?(id: string): void;
   setIntro(open: boolean): void;
   dismissIntro(): void;
   checkEnvironment(): void;
@@ -267,6 +271,9 @@ export interface AgentsScreenProps {
   /** The open workstreams, for their titles when grouped by workstream. */
   workstreams?: readonly WorkstreamView[];
   stopping: boolean;
+  /** Where "Clear finished…" goes in the header; it needs the stores, so the connected view passes it. */
+  clear?: ReactNode;
+  archivedSection?: ReactNode;
   /** Failed runs the person has taken the Terminal step for. */
   opened: ReadonlySet<string>;
   /** How many things need the person, as Needs you counts them (the rail badge and the composer say the same). */
@@ -292,7 +299,7 @@ export interface AgentsScreenProps {
 }
 
 /** The whole screen as a function of its state; `AgentsView` connects it to the stores. */
-export function AgentsScreen({ runs, status, error, environment, filters, selectedId, earlierOpen, introShown, view, group = "state", workstreams = NO_WORKSTREAMS, stopping, opened, needsYou, inNeeds, asking, now, ticketTitle, draftReady, breakdownReady, descriptionReady, reviewThis, reviewOf, on, onOrder }: AgentsScreenProps) {
+export function AgentsScreen({ runs, status, error, environment, filters, selectedId, earlierOpen, introShown, view, group = "state", workstreams = NO_WORKSTREAMS, stopping, clear, archivedSection, opened, needsYou, inNeeds, asking, now, ticketTitle, draftReady, breakdownReady, descriptionReady, reviewThis, reviewOf, on, onOrder }: AgentsScreenProps) {
   const footer = useFooterHeight();
   // While the pointer is over the list or focus is in it, cards keep their places; the normal sort applies once both leave.
   const [hovered, setHovered] = useState(false);
@@ -336,6 +343,7 @@ export function AgentsScreen({ runs, status, error, environment, filters, select
     onOpenDescription: on.openDescription ? () => on.openDescription?.(run) : undefined,
     onBuildFromPlan: buildFromPlanControl(run).enabled ? () => on.buildFromPlan(run) : undefined,
     onResume: resumable(run) ? () => on.resume(run.id) : undefined,
+    onArchive: on.archive && isArchivable(run) ? () => on.archive?.(run.id) : undefined,
     onReviewThis: reviewThis?.(run),
     review: reviewOf?.(run),
     onDraftComment: run.state === "done" && commentControl(run).enabled ? () => on.draftComment(run.id) : undefined,
@@ -396,6 +404,7 @@ export function AgentsScreen({ runs, status, error, environment, filters, select
           <Icon name="shield" />
           Safety and settings
         </button>
+        {clear}
         <StopAll count={stoppable(runs).length} waiting={slotWaiters(runs).length} busy={stopping} onStop={on.stopAll} />
       </header>
       <Toolbar runs={runs} filters={filters} view={view} group={group} introShown={introShown} on={on} />
@@ -432,6 +441,7 @@ export function AgentsScreen({ runs, status, error, environment, filters, select
               </Lane>
             ))
           )}
+          {!waiting && archivedSection}
         </div>
       </div>
       <footer ref={footer} className="@container flex h-8 shrink-0 items-center gap-4 border-t border-ws-sep bg-ws-win px-6 text-xs text-ws-ink3">
@@ -474,6 +484,7 @@ const actions: AgentsActions = {
   setView: (view) => usePrefs.getState().setAgentsView(view),
   setGroup: (group) => usePrefs.getState().setAgentsGroup(group),
   toggleEarlier: () => useRuns.getState().setEarlierOpen(!useRuns.getState().earlierOpen),
+  archive: (id) => void useRuns.getState().archive([id]),
   setIntro: (open) => useRuns.getState().setIntroOpen(open),
   dismissIntro: () => {
     usePrefs.getState().setAgentsIntroSeen(true);
@@ -493,6 +504,7 @@ const actions: AgentsActions = {
 
 export function AgentsView() {
   const runs = useRuns((s) => s.runs);
+  const archived = useRuns((s) => s.archived);
   const status = useRuns((s) => s.status);
   const error = useRuns((s) => s.error);
   const environment = useRuns((s) => s.environment);
@@ -586,6 +598,8 @@ export function AgentsView() {
       group={group}
       workstreams={workstreams}
       stopping={stopping}
+      clear={<ClearFinished runs={runs} />}
+      archivedSection={<ArchivedSection runs={archived} now={now} />}
       opened={opened}
       needsYou={needs.length}
       inNeeds={inNeeds}

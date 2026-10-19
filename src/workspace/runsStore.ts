@@ -2,8 +2,9 @@ import { create } from "zustand";
 import type { Backend } from "../backend/types";
 import { targetOf } from "../lib/proposals";
 import { labelsByRun } from "../lib/workstreamStage";
-import type { CleanupResult, ItemRef, PlanComment, Proposal, Run, RunKind, RunsEnvironment } from "../types";
+import type { CleanupResult, ClearFilter, DeleteResult, ItemRef, PlanComment, Proposal, Run, RunKind, RunsEnvironment } from "../types";
 import { useWorkspace } from "../workspaceStore";
+import { clearSentence } from "../lib/archiveRuns";
 import { INSTALL_URL, failureHelp, type FailureAct } from "./failureHelp";
 import { copyText } from "./AgentSheet";
 import { KIND_LABEL, NO_FILTERS, agentGroups, stepRun, stopAllText, type AgentFilters } from "./agentsLogic";
@@ -45,7 +46,10 @@ export function browseList(snapshot: readonly string[] | null, live: readonly st
 
 interface RunsState {
   backend: Backend | null;
+  /** The runs on the Agents view; archived ones are in `archived`, so nothing that counts or lists runs sees them. */
   runs: Run[];
+  archived: Run[];
+  archivedOpen: boolean;
   status: "idle" | "loading" | "ready" | "error";
   error: string | null;
   environment: RunsEnvironment | null;
@@ -154,6 +158,14 @@ interface RunsState {
   /** Cleans up each run in turn and says how many Claude removed and what it kept. */
   cleanupAll(ids: readonly string[]): Promise<{ removed: number; refused: string[] }>;
   setEarlierOpen(open: boolean): void;
+  setArchivedOpen(open: boolean): void;
+  /** Archives runs that are over, with an Undo that restores them. */
+  archive(ids: readonly string[]): Promise<boolean>;
+  restore(id: string): Promise<void>;
+  /** Archives what `filter` selects, with an Undo; says how many. */
+  clearFinished(filter: ClearFilter): Promise<number>;
+  /** Deletes an archived run for good, and its worktree when asked. Null when the call failed, which is shown as a message. */
+  deleteArchived(id: string, removeWorktree: boolean): Promise<DeleteResult | null>;
   setIntroOpen(open: boolean | null): void;
 }
 
@@ -172,7 +184,7 @@ export function permissionConfirmation(run: Pick<Run, "lastProgressAt" | "permis
   return run.state === "needsPermission" && run.permissionAllowed?.command === answered.command ? answered : null;
 }
 
-const idle = { runs: [] as Run[], launching: new Set<string>() as ReadonlySet<string>, status: "idle" as const, error: null, environment: null, selectedId: null, sheet: null as RunSheetTarget | null, afterIntro: null, afterIntroWhat: null, browseOrder: null, picking: false };
+const idle = { runs: [] as Run[], archived: [] as Run[], launching: new Set<string>() as ReadonlySet<string>, status: "idle" as const, error: null, environment: null, selectedId: null, sheet: null as RunSheetTarget | null, afterIntro: null, afterIntroWhat: null, browseOrder: null, picking: false };
 
 /** The order the Agents view lists runs in right now, grouped as it is. */
 const liveOrder = (s: Pick<RunsState, "runs" | "filters" | "earlierOpen">) => agentGroups(usePrefs.getState().agentsGroup, s.runs, useWorkstreams.getState().list, s.filters, s.earlierOpen, Date.now()).order;
@@ -255,6 +267,21 @@ async function answerPermission(get: () => RunsState, set: (patch: Partial<RunsS
   }
 }
 
+/** The toast for archived runs, with an Undo that brings them all back. */
+function offerRestore(get: () => RunsState, ids: readonly string[], text: string) {
+  offerUndo({
+    what: "archive",
+    text,
+    undone: ids.length === 1 ? "Restored." : `Restored ${ids.length} runs.`,
+    undo: async () => {
+      const { backend } = get();
+      if (!backend) return false;
+      for (const id of ids) await backend.runsRestore(id);
+      void get().reload();
+    },
+  });
+}
+
 const TICKET_READY = "Draft ticket ready. Nothing is created until you approve it.";
 
 let stop: (() => void) | null = null;
@@ -305,6 +332,7 @@ export const useRuns = create<RunsState>((set, get) => ({
   terminalOpened: new Set<string>(),
   introOpen: null,
   earlierOpen: false,
+  archivedOpen: false,
   stopping: false,
   drafting: null,
   answering: new Set<string>(),
@@ -338,10 +366,11 @@ export const useRuns = create<RunsState>((set, get) => ({
       if (mine === seq) set({ status: "error", error: "Reading your agents took too long." });
     }, LOAD_LIMIT_MS);
     try {
-      const runs = await backend.runsList();
+      const all = await backend.runsList();
       clearTimeout(watchdog);
       if (mine === seq) {
-        set({ runs, status: "ready", error: null, dismissed: forgetRecovered(get().dismissed, runs) });
+        const runs = all.filter((r) => !r.archivedAt);
+        set({ runs, archived: all.filter((r) => r.archivedAt), status: "ready", error: null, dismissed: forgetRecovered(get().dismissed, runs) });
         forgetSettledAnswers(runs);
         announceFailedLaunches(get, set);
       }
@@ -646,5 +675,61 @@ export const useRuns = create<RunsState>((set, get) => ({
   },
 
   setEarlierOpen: (earlierOpen) => set({ earlierOpen }),
+  setArchivedOpen: (archivedOpen) => set({ archivedOpen }),
+
+  async archive(ids) {
+    const { backend } = get();
+    if (!backend || !ids.length) return false;
+    try {
+      const done = await backend.runsArchive([...ids]);
+      if (done.length) offerRestore(get, done, done.length === 1 ? `Archived ${labelsByRun(get().runs).get(done[0]) ?? get().runs.find((r) => r.id === done[0])?.item?.key ?? "the run"}.` : `Archived ${done.length} runs.`);
+      return done.length > 0;
+    } catch (e) {
+      useToasts.getState().push(`Couldn't archive it: ${messageOf(e)}`);
+      return false;
+    } finally {
+      void get().reload();
+    }
+  },
+
+  async restore(id) {
+    const { backend } = get();
+    if (!backend) return;
+    try {
+      await backend.runsRestore(id);
+    } catch (e) {
+      useToasts.getState().push(`Couldn't restore it: ${messageOf(e)}`);
+    }
+    void get().reload();
+  },
+
+  async clearFinished(filter) {
+    const { backend } = get();
+    if (!backend) return 0;
+    try {
+      const done = await backend.runsClear(filter);
+      if (done.length) offerRestore(get, done, `${clearSentence({ ids: done }, filter).replace(/^Archive/, "Archived")}.`);
+      else useToasts.getState().push("Nothing was archived.", "info");
+      return done.length;
+    } catch (e) {
+      useToasts.getState().push(`Couldn't clear them: ${messageOf(e)}`);
+      return 0;
+    } finally {
+      void get().reload();
+    }
+  },
+
+  async deleteArchived(id, removeWorktree) {
+    const { backend } = get();
+    if (!backend) return null;
+    try {
+      return await backend.runsDelete(id, removeWorktree);
+    } catch (e) {
+      useToasts.getState().push(`Couldn't delete it: ${messageOf(e)}`);
+      return null;
+    } finally {
+      void get().reload();
+    }
+  },
   setIntroOpen: (introOpen) => set({ introOpen }),
 }));

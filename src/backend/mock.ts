@@ -1,3 +1,4 @@
+import type { ClearFilter } from "../types";
 import { isTauri } from "@tauri-apps/api/core";
 import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { HELD_PERSON } from "../types";
@@ -897,6 +898,30 @@ export class MockBackend implements Backend {
 
   async runsCleanup(id: string) {
     return this.runs.cleanup(id);
+  }
+
+  async runsArchive(ids: string[]) {
+    return this.runs.archive(ids);
+  }
+
+  async runsRestore(id: string) {
+    this.runs.restore(id);
+  }
+
+  async runsClearPreview(filter: ClearFilter) {
+    return this.runs.clearPreview(filter);
+  }
+
+  async runsClear(filter: ClearFilter) {
+    return this.runs.archive(this.runs.clearPreview(filter).ids);
+  }
+
+  async runsWorktreeInfo(id: string) {
+    return this.runs.worktreeInfo(id);
+  }
+
+  async runsDelete(id: string, removeWorktree: boolean) {
+    return this.runs.deleteArchived(id, removeWorktree);
   }
 
   async runsRetryLaunch(id: string) {
