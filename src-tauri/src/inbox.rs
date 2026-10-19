@@ -151,6 +151,8 @@ pub struct ConnectionInfo {
     pub error: Option<String>,
     /// The error is a network failure that the next sync tries again, so it isn't worth interrupting anyone with.
     pub transient: bool,
+    /// Atlassian ended the sign-in, so signing in again is the only way to sync.
+    pub reauth: bool,
 }
 
 pub struct Core {
@@ -164,6 +166,7 @@ pub struct Core {
     /// people signing in to the same site on one Mac never see each other's tickets or inbox.
     db: Mutex<Option<(String, Db)>>,
     last_error: Mutex<Option<String>>,
+    reauth_needed: AtomicBool,
     syncing: AtomicBool,
     schedules: Mutex<HashMap<String, Schedule>>,
     /// When each connection was last checked for work assigned outside what it watches.
@@ -199,6 +202,7 @@ impl Core {
             home: dirs::home_dir().and_then(|h| h.canonicalize().ok()),
             db: Mutex::new(None),
             last_error: Mutex::new(None),
+            reauth_needed: AtomicBool::new(false),
             syncing: AtomicBool::new(false),
             schedules: Mutex::new(HashMap::new()),
             radar: Mutex::new(HashMap::new()),
@@ -319,7 +323,14 @@ impl Core {
     }
 
     pub fn set_error(&self, e: Option<String>) {
+        self.reauth_needed.store(false, Ordering::SeqCst);
         *self.last_error.lock().expect("error lock poisoned") = e;
+    }
+
+    /// Records a failed sync, remembering whether only a new sign-in can fix it.
+    pub fn set_sync_failure(&self, e: &Error) {
+        self.set_error(Some(e.to_string()));
+        self.reauth_needed.store(e.needs_reauth(), Ordering::SeqCst);
     }
 
     /// Runs a sync if `trigger` says this connection is due one, and records how it went for the backoff.
@@ -748,6 +759,7 @@ impl Core {
                 syncing: self.syncing.load(Ordering::SeqCst),
                 error: self.last_error.lock().expect("error lock poisoned").clone(),
                 transient: false,
+                reauth: self.reauth_needed.load(Ordering::SeqCst),
             });
         }
         out.extend(self.code_connections());
@@ -938,6 +950,17 @@ mod tests {
         let rows = fx.core.connections().await.unwrap();
         assert_eq!((rows[0].workspace.as_str(), rows[0].account.as_str(), rows[0].syncing), ("Acme", "Me", false));
         assert_eq!(rows[0].last_sync_at, None);
+    }
+
+    #[tokio::test]
+    async fn only_a_dead_sign_in_marks_the_connection_for_reauth_and_a_good_sync_clears_it() {
+        let fx = super::testing::fixture().await;
+        fx.core.set_sync_failure(&Error::Api { status: 503, message: "down".into() });
+        assert!(!fx.core.connections().await.unwrap()[0].reauth);
+        fx.core.set_sync_failure(&Error::ReauthRequired);
+        assert!(fx.core.connections().await.unwrap()[0].reauth);
+        fx.core.set_error(None);
+        assert!(!fx.core.connections().await.unwrap()[0].reauth);
     }
 
     #[test]

@@ -53,6 +53,8 @@ interface WorkspaceState {
   moves: Record<string, { statusId: string; to: StatusDef[] }>;
   /** The signed-in connections and how their sync is going. */
   connections: ConnectionInfo[];
+  /** Where signing in to Jira again stands after Atlassian ended the sign-in: `declined` once the person left the flow unfinished. */
+  reauth: "idle" | "prompting" | "connected" | "declined";
   /** What each connection follows. Items, containers, counts and Pip's view are already limited to it. */
   watch: WatchState[];
   /** Open items assigned to the person in containers they don't watch, until watched or dismissed. */
@@ -88,6 +90,8 @@ interface WorkspaceState {
   /** The statuses `item` can move to now, or null when the tracker couldn't say. Answers are kept while the status holds. */
   loadMoves(item: WorkItem): Promise<StatusDef[] | null>;
   refreshConnections(): Promise<void>;
+  /** Starts the Jira sign-in again; does nothing while one is already open. */
+  reconnect(): Promise<void>;
   syncNow(): Promise<void>;
   /** Shows a failure without blocking anything. */
   report(what: string, e: unknown): void;
@@ -126,6 +130,7 @@ const empty = {
   comments: {},
   moves: {},
   connections: [],
+  reauth: "idle" as const,
   watch: [],
   strays: [],
   peeked: {},
@@ -363,12 +368,27 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       const connections = await backend.connectionsList();
       if (backend !== get().backend) return;
       set({ connections });
-      const error = connections.find((c) => c.error && !c.transient)?.error ?? null;
+      const dead = connections.some((c) => c.reauth);
+      if (!dead && get().reauth !== "idle" && get().reauth !== "prompting") set({ reauth: "idle" });
+      if (dead && get().reauth === "idle") void get().reconnect();
+      const error = connections.find((c) => c.error && !c.transient && !c.reauth)?.error ?? null;
       if (error && error !== lastSyncError) useToasts.getState().push(`Couldn't sync: ${error}`);
       lastSyncError = error;
     } catch {
       // The connection row is informational; a failure to read it is not worth interrupting anyone for.
       if (backend === get().backend) clearSyncing();
+    }
+  },
+
+  async reconnect() {
+    const backend = get().backend;
+    if (!backend || get().reauth === "prompting") return;
+    set({ reauth: "prompting" });
+    try {
+      await backend.reconnectJira();
+      if (backend === get().backend) set({ reauth: "connected" });
+    } catch {
+      if (backend === get().backend) set({ reauth: "declined" });
     }
   },
 

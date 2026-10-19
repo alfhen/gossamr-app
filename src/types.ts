@@ -1153,6 +1153,8 @@ export interface ConnectionInfo {
   error: string | null;
   /** The error is a network failure the next sync retries; it shows on the row but doesn't raise a toast. */
   transient: boolean;
+  /** Atlassian ended the sign-in; signing in again is the only way this connection syncs. */
+  reauth: boolean;
 }
 
 /**

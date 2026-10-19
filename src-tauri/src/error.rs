@@ -20,6 +20,9 @@ pub enum Error {
     SiteChanged,
     #[error("Sign-in failed: {0}")]
     Auth(String),
+    /// Atlassian no longer honours the refresh token, so only a new sign-in can restore the connection.
+    #[error("Jira signed you out. Sign in again to keep syncing")]
+    ReauthRequired,
     #[error("{0}")]
     Claude(String),
     #[error("{0}")]
@@ -73,6 +76,12 @@ impl Error {
     }
 }
 
+impl Error {
+    pub fn needs_reauth(&self) -> bool {
+        matches!(self, Error::ReauthRequired)
+    }
+}
+
 // Commands return errors to the frontend as plain messages.
 impl Serialize for Error {
     fn serialize<S: Serializer>(&self, s: S) -> std::result::Result<S::Ok, S::Error> {
@@ -93,5 +102,6 @@ mod tests {
         assert!(!host(401).is_transient() && !host(403).is_transient() && !host(404).is_transient());
         assert!(!Error::RateLimited { message: String::new(), retry_after_secs: 5 }.is_transient());
         assert!(!Error::NotSignedIn.is_transient() && !Error::Auth("no".into()).is_transient());
+        assert!(!Error::ReauthRequired.is_transient() && Error::ReauthRequired.needs_reauth() && !Error::NotSignedIn.needs_reauth());
     }
 }

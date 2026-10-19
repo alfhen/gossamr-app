@@ -129,6 +129,7 @@ fn info(session: &GithubSession, last_sync_at: Option<String>, error: Option<(St
         syncing: false,
         error,
         transient,
+        reauth: false,
     }
 }
 

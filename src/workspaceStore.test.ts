@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MockBackend } from "./backend/mock";
 import { itemRef, statusId } from "./backend/mockConnector";
 import { parseQuery, describeFilter } from "./lib/filter";
@@ -463,5 +463,69 @@ describe("the read-only peek", () => {
     expect(itemByRef(s(), itemRef("WEB-101"))).toBeUndefined();
     s().clearPeeked();
     expect(s().peeked).toEqual({});
+  });
+});
+
+describe("signing in to Jira again after Atlassian ended the sign-in", () => {
+  const dead = () => ({ ...s().connections[0], error: "Jira signed you out. Sign in again to keep syncing", reauth: true });
+  const show = async (row: ReturnType<typeof dead>) => {
+    backend.connectionsList = async () => [row];
+    await s().refreshConnections();
+  };
+
+  it("starts the sign-in once however many syncs report it, and raises no sync toast", async () => {
+    useToasts.getState().clear();
+    await flush();
+    let open!: () => void;
+    const reconnect = vi.fn(() => new Promise<void>((r) => (open = r)));
+    backend.reconnectJira = reconnect;
+    const row = dead();
+    await show(row);
+    await show(row);
+    await show(row);
+    expect(reconnect).toHaveBeenCalledTimes(1);
+    expect(s().reauth).toBe("prompting");
+    await s().reconnect();
+    expect(reconnect).toHaveBeenCalledTimes(1);
+    open();
+    await flush();
+    expect(s().reauth).toBe("connected");
+    await show(row);
+    expect(reconnect).toHaveBeenCalledTimes(1);
+    expect(useToasts.getState().toasts).toEqual([]);
+  });
+
+  it("does not sign in again for a failure that isn't a dead sign-in", async () => {
+    await flush();
+    const reconnect = vi.fn(async () => {});
+    backend.reconnectJira = reconnect;
+    await show({ ...dead(), error: "Network error: timed out", reauth: false });
+    expect(reconnect).not.toHaveBeenCalled();
+    expect(s().reauth).toBe("idle");
+  });
+
+  it("keeps the banner instead of retrying when the sign-in is left unfinished, and Reconnect tries again", async () => {
+    await flush();
+    const reconnect = vi.fn().mockRejectedValueOnce(new Error("timed out waiting for the browser")).mockResolvedValue(undefined);
+    backend.reconnectJira = reconnect;
+    const row = dead();
+    await show(row);
+    await flush();
+    expect(s().reauth).toBe("declined");
+    await show(row);
+    await show(row);
+    expect(reconnect).toHaveBeenCalledTimes(1);
+    await s().reconnect();
+    expect(reconnect).toHaveBeenCalledTimes(2);
+    expect(s().reauth).toBe("connected");
+  });
+
+  it("is ready for the next sign-out once a sync works again", async () => {
+    await flush();
+    backend.reconnectJira = vi.fn().mockRejectedValue(new Error("closed"));
+    await show(dead());
+    await flush();
+    await show({ ...dead(), error: null as never, reauth: false });
+    expect(s().reauth).toBe("idle");
   });
 });

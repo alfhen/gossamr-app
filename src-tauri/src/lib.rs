@@ -1286,7 +1286,7 @@ fn spawn_sync_loop(app: AppHandle, core: CoreState, supervisor: SupervisorState)
                             watch_changed(&app, &synced.connection_id);
                         }
                     }
-                    Err(e) => core.set_error(Some(e.to_string())),
+                    Err(e) => core.set_sync_failure(&e),
                 }
                 publish(&app, &core).await;
             }
