@@ -317,14 +317,14 @@ const COMMENT_WORDS = 6;
 
 
 /**
- * The runs no newer run of the same kind on the same ticket (or repository, for one without a ticket) has followed, in any
+ * The runs no newer run of the same kind on the same ticket (or repository of the same connection, for one without a ticket) has followed, in any
  * state: a failure or a limit stop only asks for a decision while it is the last word on that work, so a retry that is
  * running or finished, or one that failed the same way again, leaves exactly one run to deal with.
  */
-export function latestRuns(runs: readonly Pick<Run, "id" | "item" | "spec" | "queuedAt">[]): Set<string> {
+export function latestRuns(runs: readonly Pick<Run, "id" | "item" | "spec" | "queuedAt" | "connectionId">[]): Set<string> {
   const newest = new Map<string, Pick<Run, "id" | "queuedAt">>();
   for (const run of runs) {
-    const key = `${run.item?.key ?? run.spec.repo}\n${run.spec.kind}`;
+    const key = `${run.item ? `${run.item.connectionId}\n${run.item.externalId}` : `${run.connectionId}\n${run.spec.repo}`}\n${run.spec.kind}`;
     const seen = newest.get(key);
     if (!seen || run.queuedAt > seen.queuedAt || (run.queuedAt === seen.queuedAt && run.id > seen.id)) newest.set(key, run);
   }

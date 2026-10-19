@@ -590,6 +590,12 @@ describe("needs: a failure is a need only while it is the latest of its kind on 
     expect(only([failedAt("r1", 60), otherKind, otherTicket]).map((n) => n.runId)).toEqual(["r1"]);
   });
 
+  it("tells tickets of different connections apart even when they share a key", () => {
+    const other = { connectionId: "other", externalId: "CA-401", key: "CA-401" };
+    const newer = run("r2", "plan", "done", { queuedAt: iso(5), item: other, connectionId: "other" });
+    expect(only([failedAt("r1", 60), newer]).map((n) => n.runId)).toEqual(["r1"]);
+  });
+
   it("keeps an older run's failure only while no newer run exists, so a retry that succeeds clears it", () => {
     const failed = failedAt("r1", 60, trust);
     expect(only([failed])).toHaveLength(1);

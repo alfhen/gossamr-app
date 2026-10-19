@@ -176,7 +176,10 @@ fn digest(waiting: &[&Waiting], name_of: &dyn Fn(&Key) -> String) -> Option<Outg
 /// repository when they have none), ended within `FAILURE_NEWS`. A newer run in any state supersedes an older one, as
 /// `latestRuns` in `src/lib/needs.ts` does for the page's list.
 pub fn stuck_runs(runs: &[Run], now: DateTime<Utc>) -> Vec<&Run> {
-    let work = |r: &Run| (r.item.as_ref().map_or_else(|| r.spec.repo.clone(), |i| i.key.clone()), format!("{:?}", r.spec.kind));
+    let work = |r: &Run| {
+        let place = r.item.as_ref().map_or_else(|| format!("{}\n{}", r.connection_id, r.spec.repo), |i| format!("{}\n{}", i.connection_id, i.external_id));
+        (place, format!("{:?}", r.spec.kind))
+    };
     let mut newest: BTreeMap<(String, String), (DateTime<Utc>, &str)> = BTreeMap::new();
     for r in runs {
         let seen = newest.entry(work(r)).or_insert((r.queued_at, &r.id));
@@ -503,6 +506,14 @@ mod tests {
                 assert!(!ids(&runs, 150).contains(&"old"), "{state:?}");
             }
             let runs = [run("old", RunKind::Plan, RunState::Failed, 0, Some(10)), run("other", RunKind::Build, RunState::Done, 100, Some(120))];
+            assert_eq!(ids(&runs, 150), ["old"]);
+        }
+
+        #[test]
+        fn tickets_of_different_connections_sharing_a_key_do_not_supersede_each_other() {
+            let mut newer = run("new", RunKind::Plan, RunState::Done, 100, Some(120));
+            newer.item = Some(ItemRef { connection_id: "other".into(), external_id: "9".into(), key: "CA-1".into() });
+            let runs = [run("old", RunKind::Plan, RunState::Failed, 0, Some(10)), newer];
             assert_eq!(ids(&runs, 150), ["old"]);
         }
 
