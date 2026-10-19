@@ -71,8 +71,8 @@ export function PipOrientation({ onDismiss = dismissOrientation, open = false, c
         words.current?.focus();
       }}
       className="grid shrink-0 gap-1.5 border-b border-ws-sep bg-ws-bar px-4 py-1.5">
-      <div className="flex items-center gap-3">
-        <p className="m-0 min-w-0 flex-1 text-sm text-ws-ink2">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+        <p className="m-0 min-w-[16rem] flex-1 text-sm text-ws-ink2">
           <b id="pip-orientation" className="font-semibold text-ws-ink">
             New here?
           </b>{" "}

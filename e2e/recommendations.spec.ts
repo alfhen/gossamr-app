@@ -26,6 +26,7 @@ import {
   needsYouRow,
   needsYouTray,
   openApp,
+  openPip,
   openPipHome,
   peekSheet,
   peekTicket,
@@ -816,6 +817,7 @@ test.describe("B10: the switch and the first permission prompt explain themselve
     // The same in the Pip pane's header, on the workspace.
     await page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "All projects" }).click();
     await peekTicket(page, "CA-401");
+    if (!(await pipPane(page).isVisible())) await openPip(page);
     const paneLine = pipPane(page).locator("[data-mode-line]");
     await expect(paneLine).toHaveText(MANAGE);
     await manageSwitch(page).click();

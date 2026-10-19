@@ -430,10 +430,17 @@ export async function openPipHome(page: Page) {
     await page.keyboard.press("ControlOrMeta+0");
     await expect(list).toBeVisible({ timeout: 1_000 });
   }).toPass({ timeout: 10_000 });
+  await closePipDrawer(page);
 }
 
-/** The line at the head of Pip home's conversation naming it: "General", or "Workstream: <title> · <Stage>". */
-export const homeConversation = (page: Page) => pipHome(page).getByRole("region", { name: "Conversation" }).locator("[data-pip-conversation]");
+/** Closes the Pip drawer when it is open, so Pip home shows its own conversation: the drawer takes that place while it is open. */
+export async function closePipDrawer(page: Page) {
+  if (await pipPane(page).count()) await pipPane(page).getByRole("button", { name: "Close Pip" }).click();
+  await expect(pipPane(page)).toHaveCount(0);
+}
+
+/** The line at the head of the conversation shown with Pip home, naming it: "General", or "Workstream: <title> · <Stage>". It is Pip home's own while the drawer is closed and the drawer's while it is open; only one is ever on screen. */
+export const homeConversation = (page: Page) => page.locator("h2[data-pip-conversation]");
 
 /**
  * The peek over Pip home sits in the window as it opened: nothing around it scrolled (a card focused in it once scrolled
@@ -454,7 +461,7 @@ export async function expectPeekInPlace(page: Page) {
 }
 
 /** Pip home's composer input, the only Pip input on screen there. */
-export const homeComposer = (page: Page) => pipHome(page).locator(PIP_INPUT);
+export const homeComposer = (page: Page) => page.locator(PIP_INPUT);
 
 /** The cobweb on a workstream's row in Pip home's list: its drawing and its words for a screen reader (`data-workstream-wither`). */
 export const workstreamWeb = (page: Page, key: string) => workstreamRow(page, key).locator("svg.cobweb");
@@ -519,8 +526,8 @@ export const needsPane = (page: Page) => pipHome(page).getByRole("region", { nam
 /** The decision pane's heading: where the keyboard lands whenever a need is opened (G28). */
 export const needsPaneHeading = (page: Page) => needsPane(page).locator("[data-needs-pane-title]");
 
-/** Pip home's conversation column, where its cards are. */
-export const homeConversationRegion = (page: Page) => pipHome(page).getByRole("region", { name: "Conversation" });
+/** The conversation shown with Pip home, where its cards are: Pip home's own column while the drawer is closed, the drawer while it is open. */
+export const homeConversationRegion = (page: Page) => page.locator("[data-pip-root]");
 
 /** Pip home's step rail, the Steps column. */
 export const stepRail = (page: Page) => pipHome(page).getByRole("complementary", { name: "Steps" });

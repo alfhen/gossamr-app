@@ -435,10 +435,10 @@ describe("Pip home in the palette", () => {
     expect(askToPlanCommands(items, "planet", a)).toEqual([]);
   });
 
-  it("on Pip home, leaves out 'Open Pip home' and calls ⌘J what it does there", () => {
+  it("on Pip home, leaves out 'Open Pip home'; ⌘J is Toggle Pip everywhere", () => {
     const on = buildCommands(containers, BUILT_IN_VIEWS, actions(), { ...ctx, agents: true, onPipHome: true });
     expect(on.some((c) => c.id === "app:pip-home")).toBe(false);
-    expect(on.find((c) => c.id === "app:pip")?.label).toBe("Go to Pip's composer");
+    expect(on.find((c) => c.id === "app:pip")?.label).toBe("Toggle Pip");
     expect(buildCommands(containers, BUILT_IN_VIEWS, actions(), { ...ctx, agents: true }).find((c) => c.id === "app:pip")?.label).toBe("Toggle Pip");
   });
 

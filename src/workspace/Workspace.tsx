@@ -77,7 +77,6 @@ export function mainScreen(route: Route, agentsEnabled: boolean): Route | null {
 }
 
 /** Whether the docked Pip pane is in the window: as the person left it, except on Pip home, whose own conversation takes its place. */
-export const showsPipPane = (route: Route, agentsEnabled: boolean, pipOpen: boolean) => pipOpen && mainScreen(route, agentsEnabled) !== "pip";
 
 /**
  * How much of the main area's right side the workspace leaves to the open peek, so the canvas reflows beside it
@@ -194,7 +193,6 @@ function useGlobalKeys(agentsEnabled: boolean) {
         prefs.setPaletteOpen(!prefs.paletteOpen);
       } else if (ev.key === "j") {
         ev.preventDefault();
-        // On Pip home this goes to its composer; elsewhere it opens or closes the pane.
         togglePip();
       }
     };
@@ -248,7 +246,8 @@ export function Workspace({ backend }: { backend: Backend }) {
   usePipView();
   const screen = mainScreen(route, agentsEnabled);
   useRouteAnnounce(screen);
-  const paneShown = showsPipPane(route, agentsEnabled, pipOpen);
+  const paneShown = pipOpen;
+  // Pip home has its own conversation while the drawer is closed, and no mascot over its columns.
   const launcherShown = !pipOpen && screen !== "pip";
   const room = canvasRoom(route, peekOpen, peekWidth);
 

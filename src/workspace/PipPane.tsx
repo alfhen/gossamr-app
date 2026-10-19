@@ -22,11 +22,13 @@ import { useTabs } from "./tabsStore";
 import { draftsForItem, pendingDrafts, useWorkspace } from "../workspaceStore";
 import { useClaude } from "../claudeStore";
 import { inWorkstreamPane } from "../lib/proposals";
-import { conversationTitle, usePaneWorkstream } from "./workstreamsStore";
+import { conversationTitle, useHomeWorkstream, usePaneWorkstream } from "./workstreamsStore";
 import { stageText } from "../lib/workstreamStage";
 import { WorkstreamControls } from "./WorkstreamControls";
 import { HeaderStatus } from "./StatusPill";
-import { workstreamSuggestionScene } from "./pipHomeLogic";
+import { composerFooter, workstreamSuggestionScene } from "./pipHomeLogic";
+import { usePipHome } from "./pipHomeStore";
+import { PipOrientation } from "./PipOrientation";
 import { TimelineView } from "./Timeline";
 import { useNeedsYou } from "./useNeeds";
 import { useNow } from "./AgentsView";
@@ -103,7 +105,8 @@ function usePaneEscape(onClose: () => void) {
         editing: editable,
         inPipInput: field?.id === PIP_INPUT_ID,
         // A confirmation or popover that takes Esc itself (`data-esc-local`) closes, not the pane.
-        handled: ev.defaultPrevented || usePrefs.getState().paletteOpen || lightboxOpen() || popoverOpen() || (field instanceof HTMLElement && !!field.closest("[data-esc-local]")),
+        // On Pip home an open decision or batch preview closes before the drawer does.
+        handled: ev.defaultPrevented || (tabs.route === "pip" && (usePipHome.getState().deciding !== null || usePipHome.getState().batch !== null)) || usePrefs.getState().paletteOpen || lightboxOpen() || popoverOpen() || (field instanceof HTMLElement && !!field.closest("[data-esc-local]")),
       });
       if (!close) return;
       ev.preventDefault();
@@ -219,13 +222,16 @@ export function ConversationLine({ conversation, workstream }: { conversation: s
 }
 
 /**
- * Docked to the right of the canvas: the conversation with Pip, with what it can see and the drafts it made. A
- * workstream's conversation is its timeline, the same one Pip home shows; General's follows the screen, listing the runs
- * going and the drafts waiting with the ticket on screen first.
+ * The one Pip, docked to the right of every screen: the conversation with Pip, with what it can see and the drafts it
+ * made. A workstream's conversation is its timeline; General's follows the screen, listing the runs going and the drafts
+ * waiting with the ticket on screen first. On Pip home it is the conversation of the workstream selected there.
  */
 export function PipPane({ onClose }: { onClose(): void }) {
   // The ticket the peek shows has an open workstream: its conversation is the one here. Otherwise it is General.
-  const workstream = usePaneWorkstream();
+  const onHome = useTabs((s) => s.route === "pip");
+  const homeWorkstream = useHomeWorkstream();
+  const paneWorkstream = usePaneWorkstream();
+  const workstream = onHome ? homeWorkstream : paneWorkstream;
   const workstreamId = workstream?.workstream.id ?? null;
   const conversation = workstreamId ? workstreamConversation(workstreamId) : GENERAL_CONVERSATION;
   const running = useAnswering(conversation);
@@ -235,6 +241,10 @@ export function PipPane({ onClose }: { onClose(): void }) {
   const proposalList = useConversationDrafts(conversation, workstream);
   const { chips, primary, scene, kind, label, context, words, quote, following } = usePipChips(workstream);
   const needs = useNeedsYou();
+  const runs = useRuns((s) => s.runs);
+  const now = useNow();
+  const footer = useMemo(() => composerFooter(runs, needs.length, now), [runs, needs.length, now]);
+  const orientationSeen = usePrefs((s) => s.pipOrientationSeen);
 
   usePaneEscape(onClose);
 
@@ -263,13 +273,14 @@ export function PipPane({ onClose }: { onClose(): void }) {
         <ContextChip kind={kind} label={label} following={following} open={seeing} onToggle={() => setSeeing(!seeing)} />
         {seeing && <SeeingPanel lines={contextLines(context, quote, words)} following={following} onFollow={(on) => usePip.getState().setPinned(on ? null : currentContext())} />}
       </header>
+      {!orientationSeen && <PipOrientation />}
       {workstream ? (
         <TimelineView key={conversation} conversation={conversation} workstream={workstream} proposals={proposalList} needs={needs} primary={primary} pane />
       ) : (
         // About one ticket, outside a workstream, the pane lists that ticket's drafts and folds the rest.
         <PipConversation key={conversation} conversation={conversation} proposals={proposalList} primary={primary} ticket={context.item} />
       )}
-      <Composer conversation={conversation} attached={attached} chips={chips} looking={label} scene={scene} />
+      <Composer conversation={conversation} attached={attached} chips={chips} looking={label} scene={scene} footer={footer} />
     </aside>
   );
 }

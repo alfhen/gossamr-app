@@ -560,15 +560,12 @@ export function holdAllVisible(list: readonly WorkstreamView[], conversations: R
 }
 
 /**
- * Opens the Pip pane, or keeps it open, and puts the cursor in its composer. On Pip home there is no pane: it selects
- * workstream `id` there (when given) and puts the cursor in Pip home's composer instead.
+ * Opens the Pip drawer, or keeps it open, and puts the cursor in its composer. On Pip home it also selects workstream
+ * `id` (when given), whose conversation the drawer then shows.
  */
 export function focusPip(id?: string) {
-  if (useTabs.getState().route === "pip") {
-    if (id) usePipHome.getState().openWorkstream(id);
-  } else {
-    usePrefs.getState().setPipOpen(true);
-  }
+  if (id && useTabs.getState().route === "pip") usePipHome.getState().openWorkstream(id);
+  usePrefs.getState().setPipOpen(true);
   focusComposer();
 }
 
@@ -601,11 +598,11 @@ export function focusComposer() {
   });
 }
 
-/** ⌘J and the rail's Pip button: on Pip home they go to its composer; elsewhere they open or close the Pip pane. */
+/** ⌘J and the rail's Pip button: open or close the Pip drawer from any screen. Opening puts the cursor in its composer. */
 export function togglePip() {
-  if (useTabs.getState().route === "pip") return focusComposer();
-  const prefs = usePrefs.getState();
-  prefs.setPipOpen(!prefs.pipOpen);
+  usePrefs.getState().setPipOpen(!usePrefs.getState().pipOpen);
+  // Closed on Pip home, its own conversation is what is left, and it takes the cursor.
+  if (usePrefs.getState().pipOpen || useTabs.getState().route === "pip") focusComposer();
 }
 
 /** The ticket the peek shows (selected or peeked), when one is open on a screen that shows it. */

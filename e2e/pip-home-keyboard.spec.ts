@@ -25,6 +25,7 @@ import {
   surfacePullRequests,
   workstreamEvents,
   workstreamRow,
+  closePipDrawer,
 } from "./support/app";
 
 // A workstream in Manage mode, with pull requests shown only when a test says: the setting the phase's scenarios share.
@@ -87,6 +88,7 @@ test("keyboard only, intake to review on Pip home: columns with F6, rows and ste
 
   // Pip home, with the keyboard in its composer; the workstreams with Shift+F6 from there (by the timeline, which has no steps or decision after it in General), then j to the workstream and Enter.
   await press(page, "ControlOrMeta+0");
+  await closePipDrawer(page);
   await expect(homeConversation(page)).toHaveText("General");
   await expect(homeComposer(page)).toBeFocused();
   await press(page, "Shift+F6");
@@ -137,8 +139,7 @@ test("keyboard only, intake to review on Pip home: columns with F6, rows and ste
   await homeSettled(page);
 
   // Shift+F6 from the composer to the rail (the region before it), j to Plan, Enter opens it, j down to the description draft and Enter opens the peek.
-  await page.keyboard.press("ControlOrMeta+j");
-  await expect(homeComposer(page)).toBeFocused();
+  await homeComposer(page).focus();
   await press(page, "Shift+F6");
   // The rail's stop starts with the workstream's controls (Manage, Hold, Close), then its steps.
   await expect(stepRail(page).getByRole("switch", { name: "Manage this workstream" })).toBeFocused();
@@ -190,8 +191,7 @@ test("keyboard only, intake to review on Pip home: columns with F6, rows and ste
 
   // Back to the rail, k or j to Review, Enter. The second review's comment replaced the first's, so one comment draft is
   // left (no 'Approve N safe drafts' batch): j to it, Enter opens the peek, Tab to 'Post comment', Enter.
-  await page.keyboard.press("ControlOrMeta+j");
-  await expect(homeComposer(page)).toBeFocused();
+  await homeComposer(page).focus();
   await press(page, "Shift+F6");
   await pressUntil(page, "j", chipButton(page, "review"));
   await press(page, "Enter");
@@ -224,6 +224,7 @@ test("j and k move through the Needs you rows and the workstream list, in the or
   await palette(page, "start a workstream", "Start a workstream on CA-401");
   await page.keyboard.press("Escape");
   await page.keyboard.press("ControlOrMeta+0");
+  await closePipDrawer(page);
   await expect(homeConversation(page)).toHaveText("General");
 
   // Into the workstream from the list (two regions back from the composer: the timeline, then the workstreams), and Pip drafts an investigation there; it waits in Needs you.

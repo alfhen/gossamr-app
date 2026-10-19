@@ -299,8 +299,7 @@ export function Rail() {
   const watch = useWorkspace((s) => s.watch);
   const kind = useWorkspace((s) => workConnections(s.connections)[0]?.kind);
   const agentsEnabled = useAgentsEnabled();
-  // Pip home has its own composer in place of the pane, so there the Pip button goes to it.
-  const pipOpen = usePrefs((s) => s.pipOpen) && route !== "pip";
+  const pipOpen = usePrefs((s) => s.pipOpen);
   const setPaletteOpen = usePrefs((s) => s.setPaletteOpen);
   const project = projectOf(tab.filter);
   const inWorkspace = route === "workspace";

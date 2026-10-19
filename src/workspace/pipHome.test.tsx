@@ -14,7 +14,7 @@ import { HomeConversation, NO_WORKSTREAMS, PipHome, StepsColumn, WorkstreamList,
 import { usePipHome } from "./pipHomeStore";
 import { loadPrefs, usePrefs } from "./prefs";
 import { loadTabs, useTabs } from "./tabsStore";
-import { mainScreen, showsPipPane } from "./Workspace";
+import { mainScreen } from "./Workspace";
 import { useWorkstreams } from "./workstreamsStore";
 
 const memory = () => {
@@ -283,18 +283,11 @@ describe("Pip home", () => {
 });
 
 describe("with Agents off", () => {
-  it("never shows Pip home, and the pane is where the person left it", () => {
+  it("never shows Pip home", () => {
     expect(mainScreen("pip", false)).toBeNull();
     expect(mainScreen("agents", false)).toBeNull();
     expect(mainScreen("pip", true)).toBe("pip");
-    for (const route of ["workspace", "activity", "settings"] as const) {
-      expect(mainScreen(route, false)).toBe(route);
-      expect(showsPipPane(route, false, true)).toBe(true);
-    }
-    expect(showsPipPane("pip", false, true)).toBe(true);
-    // On Pip home its own conversation takes the pane's place, so there is one composer.
-    expect(showsPipPane("pip", true, true)).toBe(false);
-    expect(showsPipPane("workspace", true, false)).toBe(false);
+    for (const route of ["workspace", "activity", "settings"] as const) expect(mainScreen(route, false)).toBe(route);
   });
 
   it("has no ⌘0 hint in the footer, which has one while Agents are on", () => {
@@ -376,5 +369,16 @@ describe("the conversation's name is a heading (G10)", () => {
     expect(general).toMatch(/<h2 [^>]*data-pip-conversation="general"[^>]*>.*General/);
     const view = (await backend.workstreamsList()).find((v) => v.workstream.itemKey === "CA-401")!;
     expect(renderToStaticMarkup(<HomeConversation workstream={view} />)).toMatch(/<h2 [^>]*data-pip-conversation="ws:[^"]+"[^>]*>.*Workstream: CA-401/);
+  });
+});
+
+describe("one conversation at a time", () => {
+  it("leaves out Pip home's composer and timeline while the drawer is the conversation, keeping the day card", () => {
+    const html = renderToStaticMarkup(<HomeConversation workstream={null} chat={false} day={<p data-day>Start my day</p>} />);
+    expect(html).toContain("data-day");
+    expect(html).toContain("data-pip-in-drawer");
+    expect(html).not.toContain('id="pip-input"');
+    expect(html).not.toContain("data-pip-conversation");
+    expect(renderToStaticMarkup(<HomeConversation workstream={null} />)).toContain('id="pip-input"');
   });
 });

@@ -261,7 +261,7 @@ export function buildCommands(containers: readonly WorkContainer[], savedViews: 
       ? [{ id: "clarity:reset", group: "App" as const, icon: "↺", label: "Give back what Looks fine learned", hint: ctx.clarityLearned === 1 ? "1 project" : `${ctx.clarityLearned} projects`, keywords: "clarity unclear notice reset forget flag again", run: a.giveBackClarity }]
       : []),
     { id: "app:tab", group: "App", icon: "▫", label: "New tab", hint: "Workspace", run: a.newTab },
-    { id: "app:pip", group: "App", icon: "✦", label: ctx.onPipHome ? "Go to Pip's composer" : "Toggle Pip", hint: "⌘J", keywords: "assistant chat claude", run: a.togglePip },
+    { id: "app:pip", group: "App", icon: "✦", label: "Toggle Pip", hint: "⌘J", keywords: "assistant chat claude", run: a.togglePip },
   ];
 }
 

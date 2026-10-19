@@ -87,7 +87,7 @@ export function loadPrefs(): Pick<Prefs, "ui" | "uiChosen" | "theme" | "pipOpen"
     ui: raw?.uiChosen === true && raw.ui === "classic" ? "classic" : "workspace",
     uiChosen: raw?.uiChosen === true,
     theme: THEMES.find((t) => t === raw?.theme) ?? "auto",
-    pipOpen: raw?.pipOpen === true,
+    pipOpen: false,
     peekWidth: storedWidth(raw?.peekWidth, PEEK_DEFAULT),
     pipWidth: storedWidth(raw?.pipWidth, PIP_DEFAULT),
     columnOrder: parseColumnOrders(raw?.columnOrder),
@@ -138,8 +138,8 @@ export const usePrefs = create<Prefs>((set, get) => ({
   resetClarityLearning: (project, gaps) => set((s) => ({ clarityLearning: forget(s.clarityLearning, project, gaps) })),
 }));
 
-usePrefs.subscribe(({ ui, uiChosen, theme, pipOpen, peekWidth, pipWidth, columnOrder, agentsView, agentsGroup, agentsIntroSeen, pipOrientationSeen, permissionExplainerSeen, startOnPipHome, startMyDayDoneOn, clarityLearning, weekPlans }) =>
-  writeStored(KEY, { ui, uiChosen, theme, pipOpen, peekWidth, pipWidth, columnOrder, agentsView, agentsGroup, agentsIntroSeen, pipOrientationSeen, permissionExplainerSeen, startOnPipHome, startMyDayDoneOn, clarityLearning, weekPlans }),
+usePrefs.subscribe(({ ui, uiChosen, theme, peekWidth, pipWidth, columnOrder, agentsView, agentsGroup, agentsIntroSeen, pipOrientationSeen, permissionExplainerSeen, startOnPipHome, startMyDayDoneOn, clarityLearning, weekPlans }) =>
+  writeStored(KEY, { ui, uiChosen, theme, peekWidth, pipWidth, columnOrder, agentsView, agentsGroup, agentsIntroSeen, pipOrientationSeen, permissionExplainerSeen, startOnPipHome, startMyDayDoneOn, clarityLearning, weekPlans }),
 );
 
 /** The browser build has no classic inbox to fall back to, so it always shows the workspace. */
