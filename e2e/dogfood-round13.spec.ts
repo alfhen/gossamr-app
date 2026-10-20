@@ -22,7 +22,7 @@ test.describe("the ask of the reporter (G11, G12)", () => {
     await expect(draft).toContainText(/A few things need clearing up to make this ticket clear to work on/);
     await expect(draft).not.toContainText("Before work on");
     await draft.getByRole("button", { name: "Skip" }).click();
-    await expect(page.locator("[data-needs-advanced]")).toContainText("Now:");
+    await expect(page.locator("[data-toast]").getByRole("button", { name: "Undo" })).toBeVisible();
     await page.locator("[data-toast]").getByRole("button", { name: "Undo" }).click();
     await expect(page.locator("[data-needs-advanced]")).toHaveCount(0);
   });

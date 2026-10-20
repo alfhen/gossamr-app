@@ -10,9 +10,11 @@ import { liveDraft } from "./draftLive";
 import { keptEditsOfDraft } from "./DraftCard";
 import { draftDecisions } from "./DraftPreview";
 import { inlineStartable, useInlineStarts } from "./InlineStart";
-import { setPaneIntent, takePaneIntent, useWorkView } from "./workViewStore";
+import { NO_WORKSTREAM_ID, setPaneIntent, takePaneIntent, useWorkView } from "./workViewStore";
 import { usePrefs } from "./prefs";
+import { ALL } from "./agentsLogic";
 import { useRuns } from "./runsStore";
+import { currentNeeds } from "./useNeeds";
 import { useTabs } from "./tabsStore";
 import { useWorkstreams } from "./workstreamsStore";
 import { useToasts } from "./toasts";
@@ -22,36 +24,56 @@ import { useToasts } from "./toasts";
  * use (`draftDecisions`, the runs store, the workstreams store), so a decision made from the list is the one the card makes.
  */
 
-/** The id a workstream's row has in the list: its own, or "general". */
-export const groupId = (workstreamId: string | null) => workstreamId ?? "general";
+/** The id a workstream has in the Needs you stack and the detail: its own, or the one for no workstream. */
+export const groupId = (workstreamId: string | null) => workstreamId ?? NO_WORKSTREAM_ID;
 
-/** Opens need `need`'s decision under the Needs you strip on the Agents view, going there from any other route. */
-export function openNeed(need: Need, opts: { edit?: boolean } = {}) {
+/** Leaves the peek and shows the Agents view, from any other route. */
+function showAgents() {
   const tabs = useTabs.getState();
   if (tabs.route !== "agents") tabs.setRoute("agents");
-  const view = useWorkView.getState();
-  // The intent is read by the pane as it mounts; one already open for this need is remounted to read it. Anything but Edit clears it.
-  setPaneIntent(opts.edit ? "edit" : null);
-  const open = view.deciding === need.key;
-  view.decide(need.key);
-  if (open && opts.edit) view.redecide();
+  else if (tabs.selected !== null) tabs.select(null);
+}
+
+/** The Agents view with the Needs you filter on and the detail of workstream `workstreamId` (null: No workstream) open. */
+export function showGroup(workstreamId: string | null) {
+  showAgents();
+  // Needs are the workstreams' own: the State grouping has no heading to find them under.
+  usePrefs.getState().setAgentsGroup("workstream");
+  useRuns.getState().setFilter({ needs: true, lane: ALL });
+  useWorkView.getState().openWorkstream(groupId(workstreamId));
 }
 
 /**
- * The pane's "Open in workstream": shows what the need is about where it lives, the card to bring into view in the
- * workstream's detail, the run's sheet over it for a run. A need outside any workstream has no detail to open: it opens
- * the Pip drawer, where General's drafts are. It decides nothing itself, and closes the decision.
+ * Opens need `need`'s decision: the Agents view with the Needs you filter on, the need's workstream (or No workstream) open
+ * with the need open at the top of its detail. The rail's popover, a notification, a run's pill and the palette all end here.
+ */
+export function openNeed(need: Need, opts: { edit?: boolean } = {}) {
+  showGroup(need.workstreamId);
+  const view = useWorkView.getState();
+  // The intent is read by the need as it opens; one already open is remounted to read it.
+  setPaneIntent(opts.edit ? "edit" : "card");
+  const open = view.deciding === need.key;
+  view.decide(need.key);
+  if (open) (opts.edit ? view.redecide : view.refocus)();
+}
+
+/**
+ * Shows what the need is about where it lives: its workstream's detail (No workstream's for a need outside any), the card
+ * brought into view, the run's sheet over it for a run. It decides nothing itself and leaves the filters as they are.
  */
 export function openInWorkstream(need: Need) {
-  const tabs = useTabs.getState();
-  if (tabs.route !== "agents") tabs.setRoute("agents");
+  showAgents();
   const view = useWorkView.getState();
-  view.closeDecision();
-  if (need.workstreamId) {
-    view.openWorkstream(need.workstreamId);
-    view.focus(need.target);
-  } else if (need.target.type !== "run") usePrefs.getState().setPipOpen(true);
+  view.openWorkstream(groupId(need.workstreamId));
+  if (need.workstreamId) view.focus(need.target);
   if (need.target.type === "run") useRuns.getState().openRun(need.target.id, { stay: true });
+}
+
+/** A run from a notification or a nudge: its need when it holds one, else its sheet. */
+export function openRunOrNeed(runId: string) {
+  const need = currentNeeds().find((n) => n.runId === runId);
+  if (need) openNeed(need);
+  else useRuns.getState().openRun(runId);
 }
 
 /**

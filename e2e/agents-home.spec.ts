@@ -1,31 +1,14 @@
 import { expect, test, type Page } from "@playwright/test";
-import {
-  agentsHome,
-  closeWorkstreamSheet,
-  holdBySystem,
-  needsPane,
-  needsYouCount,
-  needsYouRow,
-  needsYouTray,
-  openAgents,
-  openApp,
-  pipConversation,
-  pipPane,
-  selectWorkstream,
-  startWorkstream,
-  workstreamGroup,
-  workstreamOpen,
-  workstreamSheet,
-} from "./support/app";
+import { agentsHome, closeWorkstreamSheet, holdBySystem, needsChip, needsPane, needsPaneHeading, needsYouCount, needsYouTray, openNeedOfKind, openAgents, openApp, pipConversation, pipPane, selectWorkstream, startWorkstream, workstreamGroup, workstreamOpen, workstreamSheet, groupOpen } from "./support/app";
 
-// Agents is the one work view (docs/needs-you.md): the Needs you strip at the top, every workstream with its agents under
-// it, and a workstream's detail as a sheet beside the Pip drawer. There is no separate Pip home.
+// Agents is the one work view (docs/needs-you.md): the summary chips (Needs you is a filter), every workstream with its
+// agents under them, and a workstream's detail as a sheet beside the Pip drawer. There is no separate Pip home.
 
 const MANAGED = "wsManage=1";
 
 const agentsButton = (page: Page) => page.getByRole("button", { name: /^Agents/ });
 
-test("the app opens on Agents, with Needs you at the very top and the workstreams grouped under it by default", async ({ page }) => {
+test("the app opens on Agents, with the summary chips in the header, All on, and the workstreams grouped by default", async ({ page }) => {
   await page.addInitScript(() => {
     const prefs = JSON.parse(localStorage.getItem("gossamr-prefs") ?? "{}");
     delete prefs.startOnAgents;
@@ -34,11 +17,11 @@ test("the app opens on Agents, with Needs you at the very top and the workstream
   await page.goto("/?" + MANAGED);
   await expect(agentsHome(page)).toBeVisible();
   await expect(page).toHaveTitle("Agents — Gossamr");
-  // The strip is above the toolbar and the list; the grouping is Workstream, not State.
-  const strip = needsYouTray(page);
-  await expect(strip).toBeVisible();
-  const above = await strip.evaluate((el) => el.compareDocumentPosition(document.querySelector('[role="group"][aria-label="Group by"]')!) & Node.DOCUMENT_POSITION_FOLLOWING);
-  expect(above).toBeTruthy();
+  const chips = page.getByRole("group", { name: "Show" });
+  await expect(chips).toBeVisible();
+  await expect(chips.getByRole("button", { name: "All" })).toHaveAttribute("aria-pressed", "true");
+  await expect(needsChip(page)).toHaveAttribute("aria-pressed", "false");
+  await expect(needsYouTray(page).locator("[data-needs-you-count]")).not.toHaveText("0");
   await expect(page.getByRole("group", { name: "Group by" }).getByRole("button", { name: "Workstream" })).toHaveAttribute("aria-pressed", "true");
   await expect(agentsHome(page).locator("[data-lane]")).toHaveCount(0);
   await expect(agentsHome(page).locator("[data-workstream-group]").first()).toBeVisible();
@@ -69,33 +52,32 @@ test("the rail's one badge is the one count, on Agents", async ({ page }) => {
   await expect(page.getByRole("navigation", { name: "Workspace" })).toBeVisible();
 });
 
-test("a row of the strip opens its decision right under it, with the same buttons the card has", async ({ page }) => {
+test("a workstream's Open button opens its detail with the decision at the top, above its runs and steps", async ({ page }) => {
   await openApp(page, MANAGED);
   await openAgents(page);
   await expect(needsPane(page)).toHaveCount(0);
-  const row = needsYouRow(page, "General").locator("[data-needs-you-group]");
-  await row.click();
+  await groupOpen(page, "General").click();
+  const sheet = workstreamSheet(page);
+  await expect(sheet).toHaveAttribute("aria-label", "No workstream");
   const pane = needsPane(page);
   await expect(pane).toBeVisible();
+  await expect(sheet.getByRole("heading", { name: "Needs you" })).toBeVisible();
   await expect(pane.locator("[data-needs-why]")).not.toBeEmpty();
   await expect(pane.locator("[data-needs-if-you-wait]")).toContainText("If you wait:");
-  // The pane sits between the strip and the list.
-  const order = await pane.evaluate((el) => {
-    const strip = document.querySelector("[data-agents-strip]")!;
-    const list = document.querySelector("[data-agents-list]")!;
-    return [strip.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING, el.compareDocumentPosition(list) & Node.DOCUMENT_POSITION_FOLLOWING];
-  });
-  expect(order.every(Boolean)).toBe(true);
+  // The open need has the keyboard's attention only when a key or a link opened it; a click on the list leaves focus alone.
+  await pane.focus();
   await page.keyboard.press("Escape");
   await expect(pane).toHaveCount(0);
+  await expect(sheet).toBeVisible();
 });
 
-test("a run's 'In Needs you' pill opens the same decision, and nothing else changes screen", async ({ page }) => {
+test("a run's 'In Needs you' pill opens the same decision, with the Needs you filter on, and nothing else changes screen", async ({ page }) => {
   await openApp(page, MANAGED);
   await openAgents(page);
   const pill = agentsHome(page).locator("[data-agents-list] article[data-run-id] button", { hasText: "In Needs you" }).first();
   await pill.click();
   await expect(needsPane(page)).toBeVisible();
+  await expect(needsChip(page)).toHaveAttribute("aria-pressed", "true");
   await expect(agentsHome(page)).toBeVisible();
 });
 
@@ -170,26 +152,30 @@ test("the palette's 'Open the workstream' and 'Show what needs me' land on Agent
   await palette.getByLabel("Search commands and tickets").fill("what needs me");
   await palette.getByText("Show what needs me", { exact: true }).click();
   await expect(agentsHome(page)).toBeVisible();
-  await expect(page.locator("[data-agents-strip] [data-needs-you-group]").first()).toBeFocused();
+  await expect(needsChip(page)).toHaveAttribute("aria-pressed", "true");
+  await expect(workstreamSheet(page)).toBeVisible();
+  await expect(needsPaneHeading(page)).toBeFocused();
 });
 
-test("a need's 'Open in workstream' opens the workstream's detail with the card in it; a need outside any workstream opens Pip", async ({ page }) => {
+test("the rail popover's item turns the Needs you filter on and opens that workstream's detail with the need at the top; a need in no workstream opens No workstream", async ({ page }) => {
   await openApp(page, MANAGED);
   await startWorkstream(page, "CA-401");
   await holdBySystem(page, "CA-401", "restart");
   await openAgents(page);
-  const ws = needsYouRow(page, "CA-401");
-  await ws.locator("[data-needs-you-group]").click();
-  await needsPane(page).getByRole("button", { name: "Open in workstream" }).click();
-  await expect(needsPane(page)).toHaveCount(0);
+  await closePipDrawerIfOpen(page);
+  await expect(needsChip(page)).toHaveAttribute("aria-pressed", "false");
+  await openNeedOfKind(page, "hold");
+  await expect(needsChip(page)).toHaveAttribute("aria-pressed", "true");
   await expect(workstreamSheet(page)).toBeVisible();
+  await expect(workstreamGroup(page, "CA-401")).toHaveAttribute("aria-current", "true");
+  await expect(needsPane(page)).toHaveAttribute("data-kind", "hold");
+  await expect(needsPaneHeading(page)).toBeFocused();
 
   await closeWorkstreamSheet(page);
-  await closePipDrawerIfOpen(page);
-  await needsYouRow(page, "General").locator("[data-needs-you-group]").click();
-  const pane = needsPane(page);
-  const link = pane.locator("header").getByRole("button").first();
-  await expect(link).toContainText(/Open the run|Show in Pip/);
+  await openNeedOfKind(page, "permission");
+  await expect(workstreamSheet(page)).toHaveAttribute("aria-label", "No workstream");
+  await expect(needsPane(page)).toHaveAttribute("data-kind", "permission");
+  await expect(agentsHome(page).locator('[data-workstream-group="none"]')).toHaveAttribute("aria-current", "true");
 });
 
 test("Start a workstream… and Show closed are in the toolbar", async ({ page }) => {

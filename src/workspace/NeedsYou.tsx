@@ -5,7 +5,7 @@ import { isAnswersDraft } from "../lib/proposals";
 import { useWorkspace } from "../workspaceStore";
 import { useEditedDraft } from "./DraftCard";
 import { useDraftsRev } from "./draftLive";
-import { groupId, openNeed } from "./needsActions";
+import { groupId, openNeed, showGroup } from "./needsActions";
 import { BATCH_ASIDE, BATCH_TITLE, EDITED_ASIDE, batchLabel, draftEdited } from "./workViewLogic";
 import { useWorkView } from "./workViewStore";
 
@@ -80,7 +80,7 @@ function SafeBatch({ needs, gid, aside }: { needs: readonly Need[]; gid: string;
             type="button"
             aria-current={open ? "true" : undefined}
             title={BATCH_TITLE}
-            onClick={() => useWorkView.getState().previewBatch(gid)}
+            onClick={() => (showGroup(needs[0]?.workstreamId ?? null), useWorkView.getState().previewBatch(gid))}
             className="rounded-md border border-ws-sep2 px-2.5 py-px text-sm font-semibold text-ws-ink hover:bg-ws-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip"
           >
             {batchLabel(count)}
@@ -98,6 +98,17 @@ function SafeBatch({ needs, gid, aside }: { needs: readonly Need[]; gid: string;
         </p>
       )}
     </li>
+  );
+}
+
+/** A group's "Approve N safe drafts", for the top of a workstream's Needs you: the same button and notes the list gives. */
+export function GroupBatch({ group }: { group: NeedGroup }) {
+  const proposals = useWorkspace((s) => s.proposals);
+  const aside = [group.top, ...group.rest].filter((n) => n.target.type === "draft" && proposals[n.target.id] && isAnswersDraft(proposals[n.target.id])).length;
+  return (
+    <ul className="m-0 grid list-none p-0 empty:hidden">
+      <SafeBatch needs={group.safeBatch} gid={groupId(group.workstreamId)} aside={aside} />
+    </ul>
   );
 }
 

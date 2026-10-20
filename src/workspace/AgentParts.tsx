@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 import type { Run } from "../types";
 import { Icon, STATE_ICON } from "./AgentIcons";
+import { useDecisionShown } from "./decisionShown";
 import { failureHelp, retryEnabled, type FailureAct } from "./failureHelp";
 import { createdFrom } from "./runSheetLogic";
 import { useRuns } from "./runsStore";
@@ -127,8 +128,11 @@ export function RunBody({ run, now, onAttach, failure }: { run: Run; now: number
 function StateBody({ run, now, onAttach, failure }: { run: Run; now: number; onAttach(): void; failure: FailureState }) {
   const runs = useSlotQueue();
   const quiet = quietMinutes(run, now);
+  const shown = useDecisionShown();
   switch (run.state) {
     case "needsPermission":
+      // Asked once: the open workstream's Needs you holds the buttons, so the card does not repeat them (nor take the keyboard when they are pressed).
+      if (shown.need?.runId === run.id && shown.need.kind === "permission") return <p className="m-0 text-ws-ink2">Asking you in Needs you, in the open workstream.</p>;
       return (
         <div className="grid gap-2 rounded-lg border border-ws-sep bg-ws-win px-2.5 py-2">
           <PermissionAsk run={run} onAttach={onAttach} onStop={() => void useRuns.getState().stop(run.id)} confirmStop />

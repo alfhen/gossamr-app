@@ -49,9 +49,9 @@ test.describe("an edit kept when its card leaves (G1)", () => {
     await needsPane(page).locator("textarea").first().fill("Kept after the card left.");
     await draft.getByRole("button", { name: "Done editing" }).click();
     // The card leaves: the pane is closed, then the draft is opened again from Needs you.
-    await needsPane(page).getByRole("button", { name: "Back to the list" }).click();
+    await needsPane(page).getByRole("button", { name: "Hide" }).click();
     await expect(draft).toHaveCount(0);
-    await needsYouTray(page).getByRole("button", { name: /drafted a comment to the reporter of CA-408/ }).click();
+    await needRow(page, /drafted a comment to the reporter of CA-408/).click();
     await expect(draft).toContainText("Kept after the card left.");
     await draft.getByRole("button", { name: "Post comment" }).click();
     await expect.poll(async () => (await jiraWrites(page)).map((w) => w.text)).toEqual([expect.stringContaining("Kept after the card left.")]);

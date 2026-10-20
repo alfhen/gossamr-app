@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { advanceRuns, agentsHome, askPip, expectPeekInPlace, expectToast, homeConversation, homeConversationRegion, homeSettled, mockRuns, needOfKind, needsPane, openAgents, openApp, openTechnical, peekSheet, peekTicket, selectWorkstream, startWorkstream, stepChip, stepRail } from "./support/app";
+import { advanceRuns, agentsHome, askPip, expectPeekInPlace, expectToast, homeConversation, homeConversationRegion, homeSettled, mockRuns, needOfKind, needsPane, openAgents, openApp, openTechnical, peekSheet, peekTicket, selectWorkstream, startWorkstream, stepChip, stepRail, openNeedOfKind } from "./support/app";
 
 // A workstream in Manage mode, with pull requests shown only when a test says: the setting the phase's scenarios share.
 const MANAGED = "runs=empty&prSurface=manual&wsManage=1";
@@ -31,7 +31,7 @@ async function homeWorkstream(page: Page) {
 
 /** Opens the newest run draft's review in place, past the safety sheet a fresh profile shows once at its first agent action. */
 async function expandNewest(page: Page) {
-  if (!(await needsPane(page).count())) await needOfKind(page, "runStart").click();
+  if (!(await needsPane(page).count())) await openNeedOfKind(page, "runStart");
   const card = runCards(page).last();
   for (let attempt = 0; attempt < 2; attempt++) {
     await card.getByRole("button", { name: /^Review and start( →)?$/ }).click();

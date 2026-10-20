@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { expandNeedsYou, expectToast, landOnWorkspace, mockRuns, needsYouTray, openAgents, openApp, openPip, peekSheet, peekTicket, PIP_INPUT, pipPane, reviewedDraft } from "./support/app";
+import { expandNeedsYou, expectToast, landOnWorkspace, mockRuns, openAgents, openApp, openPip, peekSheet, peekTicket, PIP_INPUT, pipPane, reviewedDraft, needsStack } from "./support/app";
 
 // Fixes from the second dogfood round: counts that agree, keys that work after a skip, Esc and F6 in the workspace layout,
 // and the copy and scroll fixes on the safety sheet, the review card and the plan.
@@ -25,7 +25,7 @@ test.describe("counts that mean one thing (D4, D5, N3)", () => {
     await openApp(page, "runs=failures");
     await openAgents(page);
     await expandNeedsYou(page);
-    const heads = needsYouTray(page).locator('[data-needs-you-need][data-kind="failure"], [data-needs-you-need][data-kind="permission"]').locator("[data-needs-you-head]");
+    const heads = needsStack(page).locator('[data-needs-pane][data-kind="failure"], [data-needs-pane][data-kind="permission"]').locator("[data-needs-pane-head]");
     await expect(heads.first()).toBeVisible();
     const texts = await heads.allTextContents();
     expect(texts.length).toBeGreaterThan(3);

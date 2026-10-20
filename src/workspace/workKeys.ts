@@ -1,10 +1,10 @@
 import { PIP_INPUT_ID } from "./draftKeys";
 import { keyIntent } from "./keyMap";
 
-/** What the item with focus in the Needs you strip is: a row for a workstream's group, or a need inside an expanded one. */
+/** What the item with focus in a list of needs is: a row for a workstream's group, or a need inside an expanded one. */
 export type NeedsItemKind = "group" | "need";
 
-/** Where the Needs you strip's keyboard stands when a key is pressed. */
+/** Where the list's keyboard stands when a key is pressed. */
 export interface NeedsKeyState {
   /** Something over the page takes the keys: the palette, a sheet, the peek, a popover or any other dialog. */
   overlay: boolean;
@@ -16,13 +16,13 @@ export interface NeedsKeyState {
   kind: NeedsItemKind | null;
   /** A key of the list waits for Enter on the item with focus. */
   asking?: boolean;
-  /** A decision is open under the strip. */
+  /** A decision is open. */
   pane?: boolean;
   /** Focus is inside that open decision (on its button, not in its answer box): a, e, d and s act on the need it shows. */
   inPane?: boolean;
 }
 
-/** What a key in the Needs you strip does: focus the row at `index`, or act on the row with focus or the open decision. */
+/** What a key in a list of needs does: focus the row at `index`, or act on the row with focus or the open decision. */
 export type NeedsKeyAction =
   | { type: "focus"; index: number }
   /** Enter or → on a row: expands it and opens its decision. */
@@ -66,7 +66,7 @@ function f6Leaves(target: unknown, key: string): boolean {
 }
 
 /**
- * The key `ev` in the Needs you strip, given where the keyboard is: a step through the rows, or acting on the row with
+ * The key `ev` in a list of needs, given where the keyboard is: a step through the rows, or acting on the row with
  * focus or on the open decision. Null leaves the key to whatever else takes it: plain keys never act while the person
  * types in a field or while something is open over the page.
  */

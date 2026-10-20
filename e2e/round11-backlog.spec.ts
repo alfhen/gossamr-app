@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { advanceRuns, askPip, closeWorkstreamSheet, homeComposer, homeSettled, jiraWrites, mockRuns, needOfKind, needsPane, needsPaneHeading, openAgents, openApp, paneSettled, pipPane, seedWorkstreamEvent, selectWorkstream, startWorkstream, workstreamGroup } from "./support/app";
+import { advanceRuns, askPip, closeWorkstreamSheet, homeComposer, homeSettled, jiraWrites, mockRuns, needOfKind, needsPane, needsPaneHeading, openAgents, openApp, paneSettled, pipPane, seedWorkstreamEvent, selectWorkstream, startWorkstream, workstreamGroup, openNeedOfKind } from "./support/app";
 
 // Backlog items of the eleventh dogfood round: Start my day's room (G21), dates in the timeline (G22), what the status pill says
 // besides the count (G23), one question per bullet (G24), a second line on What Jira saw from me (G25), the composer keeping the
@@ -91,7 +91,7 @@ test.describe("an unclear ticket (G23, G24, G25, G27)", () => {
   test("asking the reporter puts one question on each bullet, and the sent page shows a second line under the opener", async ({ page }) => {
     test.setTimeout(150_000);
     await unclear(page);
-    await needOfKind(page, "readiness").click();
+    await openNeedOfKind(page, "readiness");
     await needsPane(page).getByRole("button", { name: "Ask the reporter" }).click();
     const draft = needsPane(page).getByRole("article", { name: `Comment on ${VAGUE}` });
     await expect(draft).toContainText("What does done look like for CA-408?");
@@ -125,7 +125,7 @@ test.describe("an unclear ticket (G23, G24, G25, G27)", () => {
     await askPip(page, "Draft a comment");
     await homeSettled(page);
     await expect(needOfKind(page, "readiness")).toBeVisible();
-    await needOfKind(page, "readiness").click();
+    await openNeedOfKind(page, "readiness");
     await needsPane(page).getByRole("button", { name: "I'll answer" }).click();
     await page.keyboard.type("Done means the winback mail goes out.");
     await expect(homeComposer(page)).toHaveValue(/My answers: Done means the winback mail goes out\.$/);
@@ -142,9 +142,7 @@ test.describe("opening a need (G28)", () => {
     await askPip(page, "Draft a comment");
     await homeSettled(page);
     for (const kind of ["readiness", "draft"]) {
-      const row = needOfKind(page, kind);
-      await expect(row.first()).toBeVisible();
-      await row.first().click();
+      await openNeedOfKind(page, kind);
       await expect(needsPane(page)).toBeVisible();
       await expect(needsPaneHeading(page)).toBeFocused();
       await expect(needsPaneHeading(page)).toHaveAttribute("role", "heading");

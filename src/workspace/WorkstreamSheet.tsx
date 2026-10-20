@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import { needsIn } from "../lib/needs";
 import { stageText } from "../lib/workstreamStage";
 import type { WorkstreamView } from "../types";
 import { Btn, SheetFrame, pickerOpen } from "./AgentSheet";
@@ -12,7 +13,9 @@ import { useTabs } from "./tabsStore";
 import { isTypingTarget } from "./workKeys";
 import { StepRail } from "./StepRail";
 import { runDayAction } from "./StartMyDay";
-import { useWorkView, type WorkViewFocus } from "./workViewStore";
+import { NO_WORKSTREAM_ID, useWorkView, type WorkViewFocus } from "./workViewStore";
+import { WorkstreamNeeds } from "./NeedsPane";
+import { useNeedsYou } from "./useNeeds";
 import { focusPip, useWorkstreams } from "./workstreamsStore";
 
 export const WORKSTREAM_SHEET_ID = "workstream-sheet";
@@ -62,6 +65,7 @@ function useFocusTarget() {
 
 function Body({ view }: { view: WorkstreamView }) {
   const ws = view.workstream;
+  const needs = useNeedsYou();
   useFocusTarget();
   return (
     <>
@@ -80,6 +84,7 @@ function Body({ view }: { view: WorkstreamView }) {
           Ask Pip about this
         </Btn>
       </div>
+      <WorkstreamNeeds key={`needs:${ws.id}`} needs={needs} workstreamId={ws.id} />
       <StepRail key={ws.id} view={view} />
     </>
   );
@@ -107,6 +112,28 @@ function useDetailEsc() {
  * drafts and pull request, and its controls. The Pip drawer on the right keeps its own place and talks about this workstream.
  */
 export function WorkstreamSheet({ id }: { id: string }) {
+  if (id === NO_WORKSTREAM_ID) return <NoWorkstreamSheet />;
+  return <OpenWorkstreamSheet id={id} />;
+}
+
+/** The detail of the runs and drafts that belong to no workstream: what they ask of the person, decided as in any workstream. */
+function NoWorkstreamSheet() {
+  const needs = useNeedsYou();
+  useDetailEsc();
+  useFocusTarget();
+  return (
+    <SheetFrame id={WORKSTREAM_SHEET_ID} docked label="No workstream" title="No workstream" hint="Agents and drafts that belong to no workstream" wide={false} min={420} onClose={() => useWorkView.getState().closeWorkstream()}>
+      <WorkstreamNeeds needs={needs} workstreamId={null} />
+      {needsIn(needs, null) === 0 && (
+        <p data-no-workstream-empty className="m-0 text-sm text-ws-ink3">
+          Nothing here needs you. Its agents are in the list, under No workstream.
+        </p>
+      )}
+    </SheetFrame>
+  );
+}
+
+function OpenWorkstreamSheet({ id }: { id: string }) {
   const view = useWorkstreams((s) => s.list.find((v) => v.workstream.id === id && v.workstream.closedAt === null));
   useDetailEsc();
   if (!view) return null;

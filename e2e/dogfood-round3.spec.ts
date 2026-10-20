@@ -12,8 +12,7 @@ test.describe("a folder to trust keeps waiting on the person (R5)", () => {
     await openAgents(page);
     const count = await needsYouCount(page).innerText();
     await railButton(page, /^Agents/).click();
-    const header = page.locator("main header").filter({ has: page.getByRole("heading", { name: "Agents" }) });
-    await expect(header).toContainText(`${count} need you`);
+    await expect(needsYouCount(page)).toHaveText(count);
     // The rail's Agents badge is the one count.
     await expect(railButton(page, /^Agents/)).toHaveAccessibleName(`Agents, ${count} things need you`);
     // Back on Pip home, the folder to trust is still a need, and the count has not moved.

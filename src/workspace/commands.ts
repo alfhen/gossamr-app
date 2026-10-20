@@ -50,7 +50,7 @@ export interface CommandActions {
   togglePip(): void;
   startAgent(): void;
   startAgentOn(item: WorkItem, kind: RunKind): void;
-  /** Shows what needs the person: Agents, with the Needs you strip in focus. */
+  /** Shows what needs the person: Agents with the Needs you filter on and the most urgent need open. */
   showNeedsYou(): void;
   openAgentSafety(): void;
   /** Opens (or finds) the workstream on the ticket the peek shows and shows its conversation in Pip. */

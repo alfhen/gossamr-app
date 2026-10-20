@@ -6,8 +6,8 @@ import { useWorkspace } from "../workspaceStore";
 import { contextCommands, batchCommands, type ContextDeps, type Subject } from "./contextCommands";
 import type { Command } from "./commands";
 import { draftDecisions, openLiveDraft } from "./DraftPreview";
-import { keyPlan, openInWorkstream, openNeed } from "./needsActions";
-import { useWorkView } from "./workViewStore";
+import { groupId, keyPlan, openInWorkstream, openNeed, showGroup } from "./needsActions";
+import { NO_WORKSTREAM_ID, useWorkView } from "./workViewStore";
 import { useRuns } from "./runsStore";
 import { useTabs } from "./tabsStore";
 import { openOnAgents, useWorkstreams } from "./workstreamsStore";
@@ -31,7 +31,7 @@ export function focusedSubject(active: Element | null): Subject | null {
     if (runs.selectedId) return { type: "run", id: runs.selectedId };
     const view = useWorkView.getState();
     if (view.deciding) return { type: "need", key: view.deciding };
-    if (view.selected) return { type: "workstream", id: view.selected };
+    if (view.selected && view.selected !== NO_WORKSTREAM_ID) return { type: "workstream", id: view.selected };
   }
   return null;
 }
@@ -87,10 +87,9 @@ export const contextDeps: ContextDeps = {
   advise: (id) => void useWorkstreams.getState().setMode(id, "advise"),
   openWorkstream: openOnAgents,
   approveSafe(group) {
-    // The list's own step: its combined preview and confirm. Nothing is approved here.
-    const tabs = useTabs.getState();
-    if (tabs.route !== "agents") tabs.setRoute("agents");
-    useWorkView.getState().previewBatch(group.workstreamId === null ? "general" : group.workstreamId);
+    // The workstream's own step: its combined preview and confirm. Nothing is approved here.
+    showGroup(group.workstreamId);
+    useWorkView.getState().previewBatch(groupId(group.workstreamId));
   },
 };
 

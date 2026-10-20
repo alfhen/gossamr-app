@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { agentsHome, homeConversation, jiraWrites, needOfKind, needsPane, needsYouCount, needsYouTray, openAgents, openApp, selectWorkstream, startMyDay, startWorkstream } from "./support/app";
+import { agentsHome, homeConversation, jiraWrites, needOfKind, needsPane, needsYouCount, needsYouTray, openAgents, openApp, selectWorkstream, startMyDay, startWorkstream, openNeedOfKind } from "./support/app";
 
 // Fixes from the seventh dogfood round: approving from the Decide pane, the Next line, Plan my week, Start my day, the
 // reporter's questions and What Jira saw from me.
@@ -22,7 +22,7 @@ test.describe("approving from the Decide pane (G1)", () => {
     await workstreamOnHome(page);
     const before = Number(await needsYouCount(page).innerText());
     expect(before).toBeGreaterThan(0);
-    await needOfKind(page, "plan").click();
+    await openNeedOfKind(page, "plan");
     const pane = needsPane(page);
     await expect(pane).toBeVisible();
     await pane.getByRole("button", { name: "Update description" }).click();

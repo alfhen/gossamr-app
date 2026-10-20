@@ -16,6 +16,7 @@ import { nudgedOutside, runNudges, runStatesNow } from "./pipRuns";
 import { isStillFiltered, usePip, type PipFiltered } from "./pipStore";
 import { usePrefs } from "./prefs";
 import { useRuns } from "./runsStore";
+import { openRunOrNeed } from "./needsActions";
 import { useRunSetup } from "./runSetupStore";
 import { useTabs } from "./tabsStore";
 import { focusedConversation, useWorkstreams } from "./workstreamsStore";
@@ -144,7 +145,7 @@ function act(n: Nudge) {
       usePrefs.getState().setPipOpen(true);
       break;
     case "open-run":
-      useRuns.getState().openRun(n.action.id);
+      openRunOrNeed(n.action.id);
       break;
   }
 }

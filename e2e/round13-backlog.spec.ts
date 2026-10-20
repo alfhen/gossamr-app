@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { agentsHome, editTicket, expandAllNeeds, expectToast, homeConversationRegion, homeSettled, jiraWrites, needOfKind, needsPane, needsYouTray, openAgents, openApp, selectWorkstream, startWorkstream, workstreamEvents } from "./support/app";
+import { agentsHome, editTicket, expandAllNeeds, expectToast, homeConversationRegion, homeSettled, jiraWrites, needsPane, openAgents, openApp, selectWorkstream, startWorkstream, workstreamEvents, openNeedOfKind, needsStack } from "./support/app";
 
 // Backlog items of the thirteenth dogfood round: a workstream's offer to bring in what its ticket already has in General (G17),
 // Close with an Undo and a Reopen (G23), the safety copy saying a Build and the glossary's Manage, Hold and Allow once (G24), what
@@ -69,7 +69,7 @@ test.describe("a read-only run's permission prompt (G24)", () => {
     await openApp(page);
     await openAgents(page);
     await expandAllNeeds(page);
-    await needOfKind(page, "permission").click();
+    await openNeedOfKind(page, "permission");
     const ask = needsPane(page).locator("[data-permission-ask]");
     await expect(ask.locator("[data-permission-refusal]")).toContainText("This run is read-only, so this command would be refused anyway.");
     const note = ask.locator("[data-permission-read-only]");
@@ -84,9 +84,8 @@ test.describe("the reporter question draft (G25, G26, G29)", () => {
     const draft = await reporterDraft(page);
     await expect(draft.locator("[data-mention-note]")).toHaveText(/^Posts as you; Jira notifies .+\.$/);
     await expect(draft.getByRole("button", { name: "Post comment" })).toBeVisible();
-    await expandAllNeeds(page);
-    await expect(needsYouTray(page).locator("[data-needs-you-chip]").filter({ hasText: /^Post$/ })).toHaveCount(1);
-    await expect(needsYouTray(page).locator("[data-needs-you-chip]").filter({ hasText: /^Approve$/ })).toHaveCount(0);
+    await expect(needsStack(page).locator("[data-needs-you-chip]").filter({ hasText: /^Post$/ })).toHaveCount(1);
+    await expect(needsStack(page).locator("[data-needs-you-chip]").filter({ hasText: /^Approve$/ })).toHaveCount(0);
     expect(await jiraWrites(page)).toEqual([]);
   });
 

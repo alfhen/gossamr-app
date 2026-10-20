@@ -161,7 +161,9 @@ describe("the lanes", () => {
     for (const heading of ["Running", "Done, ready to review", "Failed or stuck"]) expect(out).toContain(`>${heading}</h3>`);
     expect(out).not.toContain(">Needs you</h3>");
     expect(articles(out)).toHaveLength(8);
-    expect(out).toContain("4 need you · 2 running · 2 ready to review · 4 failed or stuck (1 quiet)");
+    const chip = (name: string) => new RegExp(`data-chip="${name}"[^>]*>[^<]*<span data-chip-count[^>]*>(\\d+)<`).exec(out)?.[1];
+    expect([chip("needs"), chip("review"), chip("bad")]).toEqual(["4", "2", "4"]);
+    expect(out).toContain("2 running · 1 quiet");
   });
 
   it("folds Earlier and says how many are in it", () => {
@@ -629,10 +631,10 @@ describe("a run in Needs you", () => {
 
   it("is told only for the runs Needs you lists, and the header counts Needs you's one count", () => {
     const out = screen({ needsYou: 4, inNeeds: new Map() });
-    expect(out).toContain("4 need you · ");
+    expect(out).toMatch(/data-chip="needs"[^>]*>Needs you<span data-chip-count[^>]*>4</);
     expect(out).not.toContain("In Needs you");
     expect(out).not.toContain('data-lane="needs"');
-    expect(out).not.toContain(">Needs you<");
+    expect(out).not.toContain(">Needs you</h3>");
   });
 });
 

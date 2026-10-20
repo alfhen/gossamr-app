@@ -10,7 +10,7 @@ import { HELD_PERSON, type AutoStartSwitches, type ItemRef, type Run, type Scree
 import { useWorkspace } from "../workspaceStore";
 import { PIP_INPUT_ID } from "./draftKeys";
 import { focusAdopted, focusAdoptButton, focusWorkstreamRow } from "./focusDrawn";
-import { keepSelectionOpen, setPaneIntent, useWorkView } from "./workViewStore";
+import { NO_WORKSTREAM_ID, keepSelectionOpen, setPaneIntent, useWorkView } from "./workViewStore";
 import { usePip } from "./pipStore";
 import { usePrefs } from "./prefs";
 import { useRuns, type RunSheetTarget } from "./runsStore";
@@ -141,6 +141,7 @@ export const useWorkstreams = create<WorkstreamsState>()((set, get) => {
     await useWorkspace.getState().refreshProposals();
     if (useTabs.getState().route !== "agents") useTabs.getState().setRoute("agents");
     const view = useWorkView.getState();
+    view.openWorkstream(id);
     const key = `draft:${draftId}`;
     setPaneIntent("card");
     // The advance after the answered need may have opened this very draft already, with its Post button focused: remount it to read the intent.
@@ -236,7 +237,7 @@ export const useWorkstreams = create<WorkstreamsState>()((set, get) => {
       // workstreams) is read again with the list, so a draft decided meanwhile shows in its counts and lines at once.
       const selectedEvents = () => {
         const selected = useWorkView.getState().selected;
-        for (const id of new Set([...(selected ? [selected] : []), ...Object.keys(get().events)])) void get().loadEvents(id);
+        for (const id of new Set([...(selected && selected !== NO_WORKSTREAM_ID ? [selected] : []), ...Object.keys(get().events)])) void get().loadEvents(id);
       };
       const offWorkstreams = backend.onWorkstreamsChanged(() => (void get().refresh(), selectedEvents()));
       // A run that moved on may have moved its workstream's stage on.

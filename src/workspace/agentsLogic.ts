@@ -35,7 +35,7 @@ export function quietMinutes(run: Pick<Run, "state" | "lastProgressAt">, now: nu
 
 export function laneOf(run: Run, now: number): LaneId {
   switch (run.state) {
-    // A run waiting on the person is stuck until they answer; Needs you (the strip on the Agents view) is where it is decided.
+    // A run waiting on the person is stuck until they answer; a workstream's Needs you (its detail on the Agents view) is where it is decided.
     case "needsAnswer":
     case "needsPermission":
     case "systemBlocked":
@@ -224,15 +224,32 @@ export interface AgentFilters {
   lane: LaneId | "all";
   repo: string;
   ticket: string;
+  /** Only what has something waiting on the person: Needs you's one list, as a filter. */
+  needs?: boolean;
+}
+
+/** Which runs and workstreams hold a need (src/lib/needs.ts), for the Needs you filter; `loose` is a need that belongs to no workstream. */
+export interface NeedsScope {
+  runs: ReadonlySet<string>;
+  workstreams: ReadonlySet<string>;
+  loose: boolean;
+}
+
+export function needsScope(needs: readonly { runId?: string | null; workstreamId: string | null }[]): NeedsScope {
+  return {
+    runs: new Set(needs.flatMap((n) => (n.runId ? [n.runId] : []))),
+    workstreams: new Set(needs.flatMap((n) => (n.workstreamId ? [n.workstreamId] : []))),
+    loose: needs.some((n) => n.workstreamId === null),
+  };
 }
 
 export const ALL = "all";
 export const NO_FILTERS: AgentFilters = { lane: ALL, repo: ALL, ticket: ALL };
 
-export const isFiltered = (f: AgentFilters) => f.lane !== ALL || f.repo !== ALL || f.ticket !== ALL;
+export const isFiltered = (f: AgentFilters) => f.lane !== ALL || f.repo !== ALL || f.ticket !== ALL || !!f.needs;
 
-export function applyFilters(runs: readonly Run[], f: AgentFilters, now: number): Run[] {
-  return runs.filter((r) => (f.lane === ALL || laneOf(r, now) === f.lane) && (f.repo === ALL || r.spec.repo === f.repo) && (f.ticket === ALL || r.item?.key === f.ticket));
+export function applyFilters(runs: readonly Run[], f: AgentFilters, now: number, needed?: NeedsScope): Run[] {
+  return runs.filter((r) => (f.lane === ALL || laneOf(r, now) === f.lane) && (f.repo === ALL || r.spec.repo === f.repo) && (f.ticket === ALL || r.item?.key === f.ticket) && (!f.needs || !needed || needed.runs.has(r.id)));
 }
 
 /** The repos and ticket keys the filters can offer, from every run rather than the filtered ones. */
@@ -260,8 +277,8 @@ export interface LaneGroup {
 }
 
 /** The lanes that have runs, in lane order, each sorted. */
-export function groupRuns(runs: readonly Run[], filters: AgentFilters, now: number): LaneGroup[] {
-  const shown = applyFilters(runs, filters, now);
+export function groupRuns(runs: readonly Run[], filters: AgentFilters, now: number, needed?: NeedsScope): LaneGroup[] {
+  const shown = applyFilters(runs, filters, now, needed);
   return LANE_IDS.map((lane) => ({ lane, ...LANES[lane], runs: sortRuns(shown.filter((r) => laneOf(r, now) === lane)) })).filter((g) => g.runs.length > 0);
 }
 
@@ -297,8 +314,10 @@ export interface WorkstreamGroup {
  * its id. Runs are sorted as in the lanes. With no filter on, an open workstream that has no run yet is a group too, so
  * every workstream can be opened from here.
  */
-export function groupRunsByWorkstream(runs: readonly Run[], workstreams: readonly WorkstreamView[], filters: AgentFilters, now: number): WorkstreamGroup[] {
-  const shown = new Set(applyFilters(runs, filters, now).map((r) => r.id));
+export function groupRunsByWorkstream(runs: readonly Run[], workstreams: readonly WorkstreamView[], filters: AgentFilters, now: number, needed?: NeedsScope): WorkstreamGroup[] {
+  const shown = new Set(applyFilters(runs, filters, now, needed).map((r) => r.id));
+  // With only Needs you on, a workstream or No workstream that holds a need is a group even when none of its runs is the need: the need is in its detail.
+  const bareNeeds = !!filters.needs && !!needed && filters.lane === ALL && filters.repo === ALL && filters.ticket === ALL;
   const byId = new Map(workstreams.map((w) => [w.workstream.id, w]));
   const linked = new Map<string, Run[]>();
   const loose: Run[] = [];
@@ -311,33 +330,33 @@ export function groupRunsByWorkstream(runs: readonly Run[], workstreams: readonl
   for (const [id, all] of linked) {
     const view = byId.get(id);
     const mine = sortRuns(all.filter((r) => shown.has(r.id)));
-    if (!mine.length) continue;
+    if (!mine.length && !(bareNeeds && needed!.workstreams.has(id))) continue;
     // The view knows each review's verdict; without one (a closed workstream) the runs alone give the stage.
     const staged = view ? { stage: view.stage, reviewBlocking: view.reviewBlocking ?? false } : { stage: stage(all), reviewBlocking: false };
     groups.push({ id, title: view?.workstream.title ?? `Workstream ${id}`, itemKey: view?.workstream.itemKey ?? null, ...staged, waitingForPr: view?.waitingForPr ?? null, runs: mine, labels: Object.fromEntries(runLabels(all)) });
   }
   const started = new Map<string, string>();
-  if (!isFiltered(filters)) {
+  if (!isFiltered(filters) || bareNeeds) {
     for (const view of workstreams) {
       const ws = view.workstream;
-      if (ws.closedAt !== null || linked.has(ws.id)) continue;
+      if (ws.closedAt !== null || linked.has(ws.id) || (bareNeeds && !needed!.workstreams.has(ws.id))) continue;
       started.set(ws.id, ws.createdAt);
       groups.push({ id: ws.id, title: ws.title, itemKey: ws.itemKey, stage: view.stage, reviewBlocking: view.reviewBlocking ?? false, waitingForPr: view.waitingForPr ?? null, runs: [], labels: {} });
     }
   }
   const latest = (g: WorkstreamGroup) => (g.runs[0] ? ageSince(g.runs[0]) : (started.get(g.id ?? "") ?? ""));
   groups.sort((a, b) => latest(b).localeCompare(latest(a)) || a.title.localeCompare(b.title));
-  if (loose.length) groups.push({ id: null, title: NO_WORKSTREAM_TITLE, stage: null, runs: sortRuns(loose), labels: {} });
+  if (loose.length || (bareNeeds && needed!.loose)) groups.push({ id: null, title: NO_WORKSTREAM_TITLE, stage: null, runs: sortRuns(loose), labels: {} });
   return groups;
 }
 
 /** The groups the Agents view shows and the order j and k walk their runs, for either grouping; the run sheet browses in the same order. */
-export function agentGroups(group: AgentsGroup, runs: readonly Run[], workstreams: readonly WorkstreamView[], filters: AgentFilters, earlierOpen: boolean, now: number) {
+export function agentGroups(group: AgentsGroup, runs: readonly Run[], workstreams: readonly WorkstreamView[], filters: AgentFilters, earlierOpen: boolean, now: number, needed?: NeedsScope) {
   if (group === "workstream") {
-    const groups = groupRunsByWorkstream(runs, workstreams, filters, now);
+    const groups = groupRunsByWorkstream(runs, workstreams, filters, now, needed);
     return { lanes: null, workstreams: groups, order: navOrder(groups, earlierOpen, filters) };
   }
-  const lanes = groupRuns(runs, filters, now);
+  const lanes = groupRuns(runs, filters, now, needed);
   return { lanes, workstreams: null, order: navOrder(lanes, earlierOpen, filters) };
 }
 
@@ -389,6 +408,33 @@ export const liveWords = (c: ReturnType<typeof liveCounts>) => [c.running && `${
  * gives how many runs it holds.
  */
 export const laneCount = (lane: LaneId, runs: readonly Run[], now: number): string => (lane === "running" ? liveWords(liveCounts(runs, now)).join(" · ") || "0" : String(runs.length));
+
+/** The summary's filter chips, in the order they show. All is the default and clears the other three. */
+export const CHIPS = ["needs", "review", "bad", "all"] as const;
+export type Chip = (typeof CHIPS)[number];
+
+export const CHIP_LABEL: Record<Chip, string> = { needs: "Needs you", review: "Ready to review", bad: "Failed or stuck", all: "All" };
+
+/** The chip a set of filters has on; null when the State filter holds a lane no chip names (Running, Earlier). */
+export function activeChip(f: AgentFilters): Chip | null {
+  if (f.needs) return "needs";
+  return f.lane === ALL ? "all" : f.lane === "done" ? "review" : f.lane === "bad" ? "bad" : null;
+}
+
+/** The filters a chip sets, leaving the repo and ticket filters as they are. */
+export const chipFilters = (chip: Chip): Partial<AgentFilters> => ({ needs: chip === "needs" || undefined, lane: chip === "review" ? "done" : chip === "bad" ? "bad" : ALL });
+
+/** The number on each chip: Needs you's one count (`needsYou`, the rail badge's), and the lanes of the other two, card for card. */
+export function chipCounts(runs: readonly Run[], now: number, needsYou: number): Record<Exclude<Chip, "all">, number> {
+  const count = (lane: LaneId) => runs.filter((r) => laneOf(r, now) === lane).length;
+  return { needs: needsYou, review: count("done"), bad: count("bad") };
+}
+
+/** What the summary says besides the chips: "2 running · 1 queued", with the quiet ones apart. */
+export function liveSummary(runs: readonly Run[], now: number): string {
+  const live = liveCounts(runs, now);
+  return [...liveWords(live), live.quiet ? `${live.quiet} quiet` : ""].filter(Boolean).join(" · ");
+}
 
 /**
  * The Agents view's summary: "2 need you · 2 running · 2 ready to review · 3 failed or stuck (1 quiet)". Need you is

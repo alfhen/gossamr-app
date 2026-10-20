@@ -15,9 +15,14 @@ import { AgentsEmpty, AgentsIntro, NoMatch } from "./AgentsEmpty";
 import {
   AGENTS_GROUPS,
   ALL,
+  CHIPS,
+  CHIP_LABEL,
   LANES,
   LANE_IDS,
+  activeChip,
   agentGroups,
+  chipCounts,
+  chipFilters,
   filterOptions,
   isFiltered,
   laneCount,
@@ -27,8 +32,11 @@ import {
   slotWaiters,
   stopAllText,
   stoppable,
-  summaryLine,
+  liveSummary,
+  needsScope,
   type AgentFilters,
+  type Chip,
+  type NeedsScope,
   type AgentsGroup,
   type LaneGroup,
   type LaneId,
@@ -42,16 +50,17 @@ import { useBuildChanges, useReviewVerdicts } from "./reviewVerdicts";
 import { useRunSetup } from "./runSetupStore";
 import { showDraft as showTicketDraft } from "./draftTicket";
 import { RESUME_TEXT, breakdownTarget, buildFromPlanControl, buildFromPlanOptions, commentControl, reviewThisControl, reviewThisOptions, resumable, runBreakdownDraftOf, runDescriptionDraftOf, runDraftOf, runTicketDraftOf, shownVerdict } from "./runSheetLogic";
-import { useRuns } from "./runsStore";
+import { setNoticeOpener, useRuns } from "./runsStore";
 import { useWorkstreams } from "./workstreamsStore";
 import { stableGroups } from "./stableOrder";
 import { useNow } from "./useNow";
 import { agentKey } from "./agentKeys";
-import { ClosedWorkstreams, DayAndWeek, DecisionScope, NeedsTop, WorkstreamHeadExtras, WorkstreamTools, rowTitle, useWorkstreamWeb } from "./AgentsHome";
+import { ClosedWorkstreams, DayAndWeek, DecisionScope, NeedsBadge, WorkstreamHeadExtras, WorkstreamTools, rowTitle, useWorkstreamWeb } from "./AgentsHome";
 import { WorkstreamSheet } from "./WorkstreamSheet";
-import { arm, confirmArmed, disarm, keyPlan, openNeed } from "./needsActions";
-import { useWorkView } from "./workViewStore";
+import { arm, confirmArmed, disarm, keyPlan, openNeed, openRunOrNeed } from "./needsActions";
+import { NO_WORKSTREAM_ID, useWorkView } from "./workViewStore";
 import { currentNeeds, useNeedsYou } from "./useNeeds";
+import { needsIn } from "../lib/needs";
 
 const KBD = "font-sans text-[11px] rounded border border-ws-sep2 bg-ws-bar px-1";
 const BUTTON = "inline-flex items-center gap-1.5 rounded-md border border-ws-sep2 px-2.5 py-px text-sm leading-normal whitespace-nowrap hover:bg-ws-hover disabled:cursor-not-allowed disabled:opacity-45";
@@ -59,6 +68,9 @@ const VIEW_LABEL: Record<AgentsViewMode, string> = { cards: "Cards", list: "List
 const GROUP_LABEL: Record<AgentsGroup, string> = { state: "State", workstream: "Workstream" };
 
 export { useNow };
+
+// A notification or nudge for a run that needs the person opens its need; runsStore cannot import needsActions without a cycle.
+setNoticeOpener(openRunOrNeed, () => needsScope(currentNeeds()));
 
 const NO_WORKSTREAMS: readonly WorkstreamView[] = [];
 
@@ -155,10 +167,55 @@ export interface AgentsActions {
   stopAll(): void;
   startAgent(): void;
   openSafety(): void;
-  /** Opens a need's decision under the Needs you strip, from a run's "In Needs you" pill. */
+  /** Opens a need's decision at the top of its workstream's detail, from a run's "In Needs you" pill. */
   openNeed?(need: Need): void;
   /** Opens a workstream's detail. */
   openWorkstream?(id: string): void;
+}
+
+/** The summary as filters: Needs you, Ready to review, Failed or stuck and All, each a toggle, with what is running said beside them. */
+function SummaryChips({ runs, now, needsYou, filters, group, on }: { runs: readonly Run[]; now: number; needsYou: number; filters: AgentFilters; group: AgentsGroup; on: AgentsActions }) {
+  const counts = chipCounts(runs, now, needsYou);
+  const active = activeChip(filters);
+  const live = liveSummary(runs, now);
+  const choose = (chip: Chip) => {
+    // Pressing the chip that is on goes back to All.
+    const next = chip === active ? "all" : chip;
+    if (next === "needs" && group !== "workstream") on.setGroup("workstream");
+    on.filter(chipFilters(next));
+  };
+  return (
+    <div role="group" aria-label="Show" data-summary-chips className="flex flex-wrap items-center gap-1.5">
+      {CHIPS.map((chip) => {
+        const n = chip === "all" ? null : counts[chip];
+        // A lane chip with nothing behind it is not offered, unless it is the one that is on; Needs you always says its number.
+        if (n === 0 && chip !== active && chip !== "needs") return null;
+        return (
+          <button
+            key={chip}
+            type="button"
+            data-chip={chip}
+            aria-pressed={active === chip}
+            onClick={() => choose(chip)}
+            className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-px text-sm leading-normal whitespace-nowrap focus-visible:outline-2 focus-visible:outline-ws-pip ${active === chip ? "border-ws-pip bg-ws-pip font-semibold text-ws-on-pip" : chip === "needs" ? "border-ws-pip text-ws-ink hover:bg-ws-hover" : "border-ws-sep2 text-ws-ink2 hover:bg-ws-hover"}`}
+          >
+            {CHIP_LABEL[chip]}
+            {n !== null && (
+              <span data-chip-count data-needs-you-count={chip === "needs" ? "" : undefined} className="font-semibold">
+                {n}
+              </span>
+            )}
+            {chip === "needs" && n === 0 && <span className="sr-only">Nothing needs you.</span>}
+          </button>
+        );
+      })}
+      {(live || (!runs.length && !needsYou)) && (
+        <span aria-live="polite" className="text-sm text-ws-ink3">
+          {live || "Nothing running"}
+        </span>
+      )}
+    </div>
+  );
 }
 
 function Toolbar({ runs, filters, view, group, introShown, tools, on }: { runs: readonly Run[]; filters: AgentFilters; view: AgentsViewMode; group: AgentsGroup; introShown: boolean; tools?: ReactNode; on: AgentsActions }) {
@@ -235,11 +292,14 @@ function Lane({ group, now, folded, onToggle, children }: { group: LaneGroup; no
 
 /** A workstream's runs in the Agents view, under its title and the stage they give it; its detail opens from the heading. */
 function WorkstreamSection({ group, view, current, onOpen, children }: { group: WorkstreamGroup; view?: WorkstreamView; current: boolean; onOpen?(id: string): void; children: ReactNode }) {
+  const needs = useNeedsYou();
+  const mine = needsIn(needs, group.id);
+  const openId = group.id ?? (mine ? NO_WORKSTREAM_ID : null);
   const title = group.itemKey ? rowTitle({ itemKey: group.itemKey, title: group.title }) : group.title;
   const name = group.itemKey ? `${group.itemKey} ${title}` : title;
   const web = useWorkstreamWeb(view);
   return (
-    <section aria-label={group.title} data-workstream-group={group.id ?? "none"} data-wither={web?.level} aria-current={current || undefined} className="relative grid gap-2.5">
+    <section aria-label={group.title} data-workstream-group={group.id ?? "none"} data-wither={web?.level} data-has-needs={mine ? "" : undefined} aria-current={current || undefined} className={`relative grid gap-2.5 ${mine ? "-ml-3 rounded-sm border-l-[3px] border-ws-pip pl-2.5" : ""}`}>
       <div className="flex min-w-0 items-center gap-2">
         {group.id && (
           <span aria-hidden className="text-ws-pip">
@@ -261,10 +321,10 @@ function WorkstreamSection({ group, view, current, onOpen, children }: { group: 
             {stageText(group.stage, group.waitingForPr, group.reviewBlocking)}
           </span>
         )}
-        {view && <WorkstreamHeadExtras view={view} />}
+        {view ? <WorkstreamHeadExtras view={view} /> : <NeedsBadge count={mine} total={needs.length} />}
         <span className="text-xs text-ws-ink3">{group.runs.length}</span>
-        {group.id && onOpen && (
-          <button type="button" data-workstream-open={group.id} aria-label={`Open workstream ${name}`} aria-expanded={current} onClick={() => onOpen(group.id!)} className="ml-auto shrink-0 rounded-md px-2 py-px text-sm font-semibold text-ws-accent hover:bg-ws-hover focus-visible:outline-2 focus-visible:outline-ws-pip">
+        {openId && onOpen && (
+          <button type="button" data-workstream-open={openId} aria-label={group.id ? `Open workstream ${name}` : `Open ${group.title}`} aria-expanded={current} onClick={() => onOpen(openId)} className="ml-auto shrink-0 rounded-md px-2 py-px text-sm font-semibold text-ws-accent hover:bg-ws-hover focus-visible:outline-2 focus-visible:outline-ws-pip">
             Open
           </button>
         )}
@@ -290,8 +350,8 @@ export interface AgentsScreenProps {
   workstreams?: readonly WorkstreamView[];
   /** The workstream whose detail is open, if any. */
   openWorkstream?: string | null;
-  /** What sits above the list and stays in view: the Needs you strip and its decision. */
-  top?: ReactNode;
+  /** Which runs and workstreams hold a need, for the Needs you filter. */
+  needed?: NeedsScope;
   /** A workstream's detail, docked beside the list. */
   side?: ReactNode;
   /** What leads the list: Start my day or Plan my week, and This week. */
@@ -329,13 +389,13 @@ export interface AgentsScreenProps {
 }
 
 /** The whole screen as a function of its state; `AgentsView` connects it to the stores. */
-export function AgentsScreen({ runs, status, error, environment, filters, selectedId, earlierOpen, introShown, view, group = "workstream", workstreams = NO_WORKSTREAMS, openWorkstream = null, top, lead, tools, closedSection, side, stopping, clear, archivedSection, opened, needsYou, inNeeds, asking, now, ticketTitle, draftReady, breakdownReady, descriptionReady, reviewThis, reviewOf, on, onOrder }: AgentsScreenProps) {
+export function AgentsScreen({ runs, status, error, environment, filters, selectedId, earlierOpen, introShown, view, group = "workstream", workstreams = NO_WORKSTREAMS, openWorkstream = null, needed, lead, tools, closedSection, side, stopping, clear, archivedSection, opened, needsYou, inNeeds, asking, now, ticketTitle, draftReady, breakdownReady, descriptionReady, reviewThis, reviewOf, on, onOrder }: AgentsScreenProps) {
   const footer = useFooterHeight();
   // While the pointer is over the list or focus is in it, cards keep their places; the normal sort applies once both leave.
   const [hovered, setHovered] = useState(false);
   const [focused, setFocused] = useState(false);
   const frozen = hovered || focused;
-  const sorted = useMemo(() => agentGroups(group, runs, workstreams, filters, earlierOpen, now), [group, runs, workstreams, filters, earlierOpen, now]);
+  const sorted = useMemo(() => agentGroups(group, runs, workstreams, filters, earlierOpen, now, needed), [group, runs, workstreams, filters, earlierOpen, now, needed]);
   const shownBefore = useRef<{ group: AgentsGroup; lanes: LaneGroup[] | null; workstreams: WorkstreamGroup[] | null } | null>(null);
   const { lanes, workstreams: wsGroups, order } = useMemo(() => {
     const before = shownBefore.current?.group === group ? shownBefore.current : null;
@@ -418,9 +478,7 @@ export function AgentsScreen({ runs, status, error, environment, filters, select
           <h1 ref={title} tabIndex={-1} className="m-0 rounded text-base font-semibold focus-visible:outline-2 focus-visible:outline-ws-pip">
             Agents
           </h1>
-          <span aria-live="polite" className="text-sm text-ws-ink3">
-            {summaryLine(runs, now, needsYou)}
-          </span>
+          <SummaryChips runs={runs} now={now} needsYou={needsYou ?? 0} filters={filters} group={group} on={on} />
           <span className="flex-1" />
           <button type="button" onClick={on.startAgent} className={`${BUTTON} border-ws-pip bg-ws-pip font-semibold text-ws-on-pip hover:bg-ws-pip hover:brightness-110`}>
             <Icon name="play" />
@@ -433,7 +491,6 @@ export function AgentsScreen({ runs, status, error, environment, filters, select
           {clear}
           <StopAll count={stoppable(runs).length} waiting={slotWaiters(runs).length} busy={stopping} onStop={on.stopAll} />
         </header>
-        {top}
         <Toolbar runs={runs} filters={filters} view={view} group={group} introShown={introShown} tools={tools} on={on} />
         <div className="min-h-0 flex-1 overflow-y-auto pt-5 pr-[max(24px,var(--ws-launcher-gutter,0px))] pb-[max(80px,var(--ws-launcher-clear,0px))] pl-6">
           <div
@@ -458,8 +515,8 @@ export function AgentsScreen({ runs, status, error, environment, filters, select
               <NoMatch hidden={runs.length} onClear={on.clearFilters} />
             ) : wsGroups ? (
               wsGroups.map((g, gi) => (
-                <WorkstreamSection key={g.id ?? "none"} group={g} view={g.id ? workstreams.find((w) => w.workstream.id === g.id) : undefined} current={!!g.id && g.id === openWorkstream} onOpen={on.openWorkstream}>
-                  {g.runs.length ? items(g.title, g.runs, gi === 0, g.labels) : <p data-workstream-empty className="m-0 text-sm text-ws-ink3">No agents on this workstream yet.</p>}
+                <WorkstreamSection key={g.id ?? "none"} group={g} view={g.id ? workstreams.find((w) => w.workstream.id === g.id) : undefined} current={(g.id ?? NO_WORKSTREAM_ID) === openWorkstream} onOpen={on.openWorkstream}>
+                  {g.runs.length ? items(g.title, g.runs, gi === 0, g.labels) : <p data-workstream-empty className="m-0 text-sm text-ws-ink3">{filters.needs ? "Open it to see what needs you." : "No agents on this workstream yet."}</p>}
                 </WorkstreamSection>
               ))
             ) : (
@@ -547,6 +604,7 @@ export function AgentsView() {
   const opened = useRuns((s) => s.terminalOpened);
   const needs = useNeedsYou();
   const asking = useWorkView((s) => s.asking);
+  const needed = useMemo(() => needsScope(needs), [needs]);
   const inNeeds = useMemo(() => new Map(needs.flatMap((n) => (n.runId ? [[n.runId, n] as const] : []))), [needs]);
   const view = usePrefs((s) => s.agentsView);
   const group = usePrefs((s) => s.agentsGroup);
@@ -574,7 +632,7 @@ export function AgentsView() {
   useEffect(() => {
     const onKey = (ev: KeyboardEvent) => {
       const target = ev.target as HTMLElement;
-      if (ev.defaultPrevented || ev.metaKey || ev.ctrlKey || ev.altKey || target.closest?.("input, textarea, select, [contenteditable], [role=dialog], #peek-sheet, [data-agents-top]")) return;
+      if (ev.defaultPrevented || ev.metaKey || ev.ctrlKey || ev.altKey || target.closest?.("input, textarea, select, [contenteditable], [role=dialog], #peek-sheet, #workstream-sheet")) return;
       if (ev.key === "n") {
         if (useRuns.getState().sheet || useRunSetup.getState().open) return;
         ev.preventDefault();
@@ -637,7 +695,7 @@ export function AgentsView() {
         group={group}
         workstreams={workstreams}
         openWorkstream={openWorkstream}
-        top={<NeedsTop />}
+        needed={needed}
         lead={<DayAndWeek />}
       side={openWorkstream ? <WorkstreamSheet id={openWorkstream} /> : null}
         tools={<WorkstreamTools showClosed={showClosed} onShowClosed={onShowClosed} />}

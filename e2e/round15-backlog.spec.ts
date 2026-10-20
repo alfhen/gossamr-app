@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { agentsHome, commentOnTicket, editTicket, expectToast, needsPane, needsYouTray, openAgents, openApp, selectWorkstream, startWorkstream } from "./support/app";
+import { agentsHome, commentOnTicket, editTicket, expectToast, needsPane, needsYouTray, openAgents, openApp, selectWorkstream, startWorkstream, needsStack } from "./support/app";
 
 // Backlog items of the fifteenth dogfood round: a secret masked in the person's own bubble (G16), the note that the reporter is
 // waited on taken back once they reply (G23), an edited draft marked in Needs you (G25), Esc folding the glossary (G32) and Plan my week saying whose tickets it covers (G30).
@@ -35,7 +35,7 @@ test.describe("a draft the person edited (G25)", () => {
     const text = needsPane(page).locator("textarea").first();
     await text.fill(`${await text.inputValue()}\n\nOne more thing to answer.`);
     await draft.getByRole("button", { name: "Done editing" }).click();
-    await expect(needsYouTray(page).locator("[data-needs-you-edited]").first()).toBeVisible();
+    await expect(needsStack(page).locator("[data-needs-pane-edited]").first()).toBeVisible();
   });
 });
 

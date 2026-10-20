@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { advanceRuns, agentsHome, askPip, commentOnTicket, expandAllNeeds, expandNeedsYou, expectToast, githubWrites, homeComposer, homeSettled, jiraWrites, mockRuns, needOfKind, needRow, needsPane, openAgents, openApp, paneSettled, peekSheet, pipPane, reviewedDraft, selectWorkstream, startMyDay, startWorkstream } from "./support/app";
+import { advanceRuns, agentsHome, askPip, commentOnTicket, expandNeedsYou, expectToast, githubWrites, homeComposer, homeSettled, jiraWrites, mockRuns, needOfKind, needRow, needsPane, openAgents, openApp, paneSettled, peekSheet, pipPane, reviewedDraft, selectWorkstream, startMyDay, startWorkstream, openNeedOfKind, openNeedRow } from "./support/app";
 
 // Fixes from the eleventh dogfood round: the reporter's reply shown in the decision (G4), the pause before a GitHub review with
 // @everyone or a secret (G1), What Jira saw from me saying GitHub reviews are not listed (G2), numbered answers paired under
@@ -55,7 +55,7 @@ test.describe("the reporter's reply in the decision (G4)", () => {
   test("shows the quoted reply above the ticket, opens it from a link, and Plan now toasts that it plans with the reply", async ({ page }) => {
     test.setTimeout(120_000);
     await unclear(page);
-    await needOfKind(page, "readiness").click();
+    await openNeedOfKind(page, "readiness");
     await needsPane(page).getByRole("button", { name: "Ask the reporter" }).click();
     await needsPane(page).getByRole("article", { name: `Comment on ${VAGUE}` }).getByRole("button", { name: "Post comment" }).click();
     await expect.poll(async () => (await jiraWrites(page)).length).toBe(1);
@@ -83,14 +83,14 @@ test.describe("numbered answers (G3)", () => {
   test("go under their questions one by one, and the card says so", async ({ page }) => {
     test.setTimeout(120_000);
     await unclear(page);
-    await needOfKind(page, "readiness").click();
+    await openNeedOfKind(page, "readiness");
     await needsPane(page).getByRole("button", { name: "I'll answer" }).click();
     const prefill = await homeComposer(page).inputValue();
     await homeComposer(page).fill(`${prefill}1. Done means the winback mail goes to lapsed customers. 2. The open rate should rise. 3. Only the winback flow. 4. The CRM team.`);
     await homeComposer(page).press("Enter");
     await homeSettled(page);
     await expandNeedsYou(page, VAGUE);
-    await needRow(page, "Answers to the open questions").click();
+    await openNeedRow(page, "Answers to the open questions");
     const draft = needsPane(page).getByRole("article", { name: `Comment on ${VAGUE}` });
     await expect(draft).toContainText("“What is in scope and what is out?” Answer: Only the winback flow.");
     await expect(draft).toContainText("“Who asked for this, and who is waiting on it?” Answer: The CRM team.");
@@ -101,14 +101,14 @@ test.describe("numbered answers (G3)", () => {
   test("a reply that doesn't pair says the questions come first and the answers as written", async ({ page }) => {
     test.setTimeout(120_000);
     await unclear(page);
-    await needOfKind(page, "readiness").click();
+    await openNeedOfKind(page, "readiness");
     await needsPane(page).getByRole("button", { name: "I'll answer" }).click();
     const prefill = await homeComposer(page).inputValue();
     await homeComposer(page).fill(`${prefill}It is all about the winback flow.`);
     await homeComposer(page).press("Enter");
     await homeSettled(page);
     await expandNeedsYou(page, VAGUE);
-    await needRow(page, "Answers to the open questions").click();
+    await openNeedRow(page, "Answers to the open questions");
     const draft = needsPane(page).getByRole("article", { name: `Comment on ${VAGUE}` });
     await expect(draft).toContainText("Answers: It is all about the winback flow.");
     await expect(draft.locator('[data-provenance="pip"]')).toContainText("the questions, then your answers as written");
@@ -186,7 +186,7 @@ test.describe("the chip on a GitHub review draft (G6)", () => {
     await reviewedDraft(page);
     await peekSheet(page).getByRole("button", { name: "Close" }).first().click().catch(() => undefined);
     await openAgents(page);
-    await expandAllNeeds(page);
+    await openNeedRow(page, "GitHub review");
     const row = needRow(page, "GitHub review");
     await expect(row).toHaveCount(1);
     await expect(row).toHaveAttribute("data-group", "approve");

@@ -8,7 +8,13 @@ import {
   NO_FILTERS,
   LANE_IDS,
   QUIET_MINUTES,
+  CHIPS,
+  activeChip,
+  agentGroups,
   applyFilters,
+  chipCounts,
+  chipFilters,
+  needsScope,
   needsAttention,
   stoppedAtLimit,
   yourAgents,
@@ -394,6 +400,56 @@ describe("grouping by workstream", () => {
     expect(navOrder(groupRunsByWorkstream(all, workstreams, NO_FILTERS, NOW), false, NO_FILTERS)).toEqual(["s2", "b1", "a2", "a1", "loose2", "s1", "loose1"]);
     expect(navOrder(groupRuns(all, NO_FILTERS, NOW), false, NO_FILTERS)).toEqual(["b1", "a2", "loose2", "a1", "loose1"]);
     expect(navOrder(groupRuns(all, NO_FILTERS, NOW), true, NO_FILTERS)).toEqual(["b1", "a2", "loose2", "a1", "loose1", "s1", "s2"]);
+  });
+});
+
+describe("the summary chips and the Needs you filter", () => {
+  const view = (id: string): WorkstreamView =>
+    ({ workstream: { id, connectionId: "mock", itemKey: null, repo: null, title: `WS ${id}`, pipSession: null, mode: "advise", heldReason: null, notes: null, createdAt: iso(600), closedAt: null, budget: { autoTurns: null, wakes: null, tokens: null }, spent: { autoTurns: 0, wakes: 0, tokens: 0 }, rules: {}, basis: null }, stage: "intake", runs: [], labels: [] }) as unknown as WorkstreamView;
+  const inWs = (state: RunState, id: string, workstream: string | null) => run(state, { id, queuedAt: iso(50), spec: { ...base.spec, workstream } });
+  const runs = [inWs("needsAnswer", "q", "ws-a"), inWs("working", "w", "ws-a"), inWs("done", "d", "ws-b"), inWs("needsPermission", "loose", null)];
+  const needs = [
+    { runId: "q", workstreamId: "ws-a" },
+    { runId: "loose", workstreamId: null },
+    { runId: null, workstreamId: "ws-c" },
+  ];
+  const scope = needsScope(needs);
+  const workstreams = [view("ws-a"), view("ws-b"), view("ws-c")];
+
+  it("turns each chip into filters, and reads them back; All is the default and clears the other three", () => {
+    expect(activeChip(NO_FILTERS)).toBe("all");
+    expect(CHIPS.map((c) => activeChip({ ...NO_FILTERS, ...chipFilters(c) }))).toEqual(["needs", "review", "bad", "all"]);
+    expect(activeChip({ ...NO_FILTERS, lane: "running" })).toBeNull();
+    expect({ ...NO_FILTERS, ...chipFilters("all") }).toEqual(NO_FILTERS);
+    expect(chipFilters("needs")).toEqual({ needs: true, lane: "all" });
+  });
+
+  it("counts Needs you as the one count, and the other two as their lanes", () => {
+    expect(chipCounts(runs, NOW, needs.length)).toEqual({ needs: 3, review: 1, bad: 2 });
+  });
+
+  it("keeps only the runs that hold a need, and every workstream that holds one even with no run of it", () => {
+    const on = { ...NO_FILTERS, needs: true };
+    expect(applyFilters(runs, on, NOW, scope).map((r) => r.id)).toEqual(["q", "loose"]);
+    const groups = groupRunsByWorkstream(runs, workstreams, on, NOW, scope);
+    expect(groups.map((g) => [g.id, g.runs.map((r) => r.id)])).toEqual([
+      ["ws-a", ["q"]],
+      ["ws-c", []],
+      [null, ["loose"]],
+    ]);
+    expect(groups.map((g) => g.id)).not.toContain("ws-b");
+  });
+
+  it("shows No workstream for a need that has no run, and nothing extra once another filter is on", () => {
+    const bare = groupRunsByWorkstream([], workstreams, { ...NO_FILTERS, needs: true }, NOW, needsScope([{ workstreamId: null }]));
+    expect(bare.map((g) => g.id)).toEqual([null]);
+    expect(groupRunsByWorkstream(runs, workstreams, { ...NO_FILTERS, needs: true, repo: "acme/none" }, NOW, scope)).toEqual([]);
+  });
+
+  it("walks only the runs the filter shows, in either grouping", () => {
+    const on = { ...NO_FILTERS, needs: true };
+    expect(agentGroups("workstream", runs, workstreams, on, false, NOW, scope).order).toEqual(["q", "loose"]);
+    expect(agentGroups("state", runs, workstreams, on, false, NOW, scope).order.sort()).toEqual(["loose", "q"]);
   });
 });
 

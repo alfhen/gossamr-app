@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { advanceRuns, agentsHome, askPip, editTicket, jiraWrites, mockRuns, needsPane, needsYouTray, openAgents, openApp, peekSheet, peekTicket, pipConversation, pipPane, selectWorkstream, startWorkstream, stepChip } from "./support/app";
+import { advanceRuns, agentsHome, askPip, editTicket, jiraWrites, mockRuns, needsPane, openAgents, openApp, peekSheet, peekTicket, pipConversation, pipPane, selectWorkstream, startWorkstream, stepChip, needRow } from "./support/app";
 
 // Backlog items of the eighteenth dogfood round: Draft the Build after an approved plan in Advise (G14), the plan reading Approved once its
 // draft is posted (G17), an edited draft reopening as a preview with Edit (G26), and the smaller polish (G27).
@@ -98,9 +98,9 @@ test.describe("an edited draft reopens as a preview (G26)", () => {
     await draft.getByRole("button", { name: "Edit" }).click();
     await needsPane(page).locator("textarea").first().fill("Kept after the card left.");
     await draft.getByRole("button", { name: "Done editing" }).click();
-    await needsPane(page).getByRole("button", { name: "Back to the list" }).click();
+    await needsPane(page).getByRole("button", { name: "Hide" }).click();
     await expect(draft).toHaveCount(0);
-    await needsYouTray(page).getByRole("button", { name: /drafted a comment to the reporter of CA-408/ }).click();
+    await needRow(page, /drafted a comment to the reporter of CA-408/).click();
     await expect(draft).toContainText("Kept after the card left.");
     await expect(needsPane(page).locator("textarea")).toHaveCount(0);
     await expect(draft.getByRole("button", { name: "Done editing" })).toHaveCount(0);

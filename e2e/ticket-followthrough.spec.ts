@@ -1,5 +1,5 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
-import { advanceRuns, agentsHome, askPip, commentOnTicket, editTicket, expandNeedsYou, expectToast, homeComposer, homeConversationRegion, homeSettled, jiraWrites, mockRuns, needOfKind, needRow, needsPane, needsYouCount, needsYouRow, needsYouTray, openAgents, openApp, paneSettled, pipPane, selectWorkstream, startWorkstream, workstreamEvents, workstreamGroup } from "./support/app";
+import { advanceRuns, agentsHome, askPip, commentOnTicket, editTicket, expandNeedsYou, expectToast, homeComposer, homeConversationRegion, homeSettled, jiraWrites, mockRuns, needOfKind, needRow, needsPane, needsYouCount, needsYouRow, needsYouTray, openAgents, openApp, paneSettled, pipPane, selectWorkstream, startWorkstream, workstreamEvents, workstreamGroup, openNeedOfKind, openNeedRow } from "./support/app";
 
 // What Pip does with a vague ticket after it speaks up: a free word check says so when the workstream opens (a notice, not a
 // need), asking the reporter records that the workstream waits on them, the answers go to Jira as a comment, and Plan anyway
@@ -59,7 +59,7 @@ async function unclear(page: Page) {
 
 /** Ask the reporter on the readiness need, then post the comment: the workstream waits on the reporter. */
 async function askAndPost(page: Page) {
-  await needOfKind(page, "readiness").click();
+  await openNeedOfKind(page, "readiness");
   await needsPane(page).getByRole("button", { name: "Ask the reporter" }).click();
   await needsPane(page).getByRole("article", { name: `Comment on ${VAGUE}` }).getByRole("button", { name: "Post comment" }).click();
   await expect.poll(async () => (await jiraWrites(page)).map((w) => [w.type, w.key])).toEqual([["comment", VAGUE]]);
@@ -232,7 +232,7 @@ test.describe("G14: waiting on the reporter", () => {
     // G17: the plan was told the open questions it assumes answers to, and its description draft lists them.
     await finish(page, plan.id);
     await expect(needOfKind(page, "plan")).toBeVisible();
-    await needOfKind(page, "plan").click();
+    await openNeedOfKind(page, "plan");
     await expect(needsPane(page)).toContainText("Open questions the plan assumes answers to");
     await expect(needsPane(page)).toContainText("What does done look like for CA-408?");
     await expect(needsPane(page)).toContainText("Who asked for this, and who is waiting on it?");
@@ -244,7 +244,7 @@ test.describe("G14: waiting on the reporter", () => {
     await askAndPost(page);
     await editTicket(page, VAGUE, { description: "Win back lapsed customers somehow." });
     await pipPane(page).locator("[data-held-banner]").getByRole("button", { name: "Resume" }).click();
-    await needOfKind(page, "readiness").click();
+    await openNeedOfKind(page, "readiness");
     await needsPane(page).getByRole("button", { name: "Still unclear (ask again)" }).click();
     await expectToast(page, "Here is the comment to the reporter.");
     await expect(needOfKind(page, "readiness")).toHaveCount(0);
@@ -287,7 +287,7 @@ test.describe("G14b: a drift with no wait keeps the usual banner", () => {
     const long = `Win back lapsed customers with three emails over two weeks. ${"Each one names the customer's last order. ".repeat(12)}LAST SENTENCE.`;
     await editTicket(page, VAGUE, { description: long });
     await pipPane(page).locator("[data-held-banner]").getByRole("button", { name: "Resume" }).click();
-    await needRow(page, "changed: plan now?").click();
+    await openNeedRow(page, "changed: plan now?");
     const now = needsPane(page).locator("[data-ticket-now]");
     await expect(now).toContainText("Win back lapsed customers with three emails over two weeks.");
     await expect(now.locator("details")).not.toHaveAttribute("open", "");
@@ -301,7 +301,7 @@ test.describe("G15: the person's answers go to Jira as a comment", () => {
   test("I'll answer, then Pip drafts 'Answers to the open questions' for approval, each answer under its question, never a rewrite, and proposes the plan only once it is posted", async ({ page }) => {
     test.setTimeout(120_000);
     await unclear(page);
-    await needOfKind(page, "readiness").click();
+    await openNeedOfKind(page, "readiness");
     await needsPane(page).getByRole("button", { name: "I'll answer" }).click();
     await expect(homeComposer(page)).toHaveValue(/My answers: $/);
     const prefill = await homeComposer(page).inputValue();
@@ -356,7 +356,7 @@ test.describe("G15: the person's answers go to Jira as a comment", () => {
     await unclear(page);
     await expandNeedsYou(page, VAGUE);
     await expect(needRow(page, "R2 triage · rewrite")).toHaveCount(1);
-    await needOfKind(page, "readiness").click();
+    await openNeedOfKind(page, "readiness");
     await needsPane(page).getByRole("button", { name: "I'll answer" }).click();
     // Only the investigation's own comment is left in the group, so it has nothing to expand.
     await expect(needsYouTray(page)).not.toContainText("R2 triage · rewrite");
@@ -377,7 +377,7 @@ test.describe("G15: the person's answers go to Jira as a comment", () => {
   test("it is never one of 'Approve N safe drafts': read and approved on its own", async ({ page }) => {
     test.setTimeout(120_000);
     await unclear(page);
-    await needOfKind(page, "readiness").click();
+    await openNeedOfKind(page, "readiness");
     await needsPane(page).getByRole("button", { name: "I'll answer" }).click();
     await expect(homeComposer(page)).toHaveValue(/My answers: $/);
     await homeComposer(page).fill(`${await homeComposer(page).inputValue()}It is all about lapsed customers.`);
@@ -401,7 +401,7 @@ test.describe("G16: asking the reporter leaves the triage's description update w
     await unclear(page);
     await expandNeedsYou(page, VAGUE);
     await expect(needRow(page, "R2 triage · rewrite")).toHaveCount(1);
-    await needOfKind(page, "readiness").click();
+    await openNeedOfKind(page, "readiness");
     await needsPane(page).getByRole("button", { name: "Ask the reporter" }).click();
     await expandNeedsYou(page, VAGUE);
     await expect(needRow(page, "Questions for the reporter")).toHaveCount(1);
@@ -419,7 +419,7 @@ test.describe("G16b: Plan anyway retires it too", () => {
     await unclear(page);
     await expandNeedsYou(page, VAGUE);
     await expect(needRow(page, "R2 triage · rewrite")).toHaveCount(1);
-    await needOfKind(page, "readiness").click();
+    await openNeedOfKind(page, "readiness");
     await needsPane(page).getByRole("button", { name: "Plan anyway" }).click();
     await started(page, "plan");
     // Nothing of the triage's note is left to approve; the group may be gone altogether.
@@ -433,11 +433,11 @@ test.describe("G17: Plan anyway hands the plan the open questions", () => {
   test("the plan's description draft lists them as the open questions the plan assumes answers to", async ({ page }) => {
     test.setTimeout(120_000);
     await unclear(page);
-    await needOfKind(page, "readiness").click();
+    await openNeedOfKind(page, "readiness");
     await needsPane(page).getByRole("button", { name: "Plan anyway" }).click();
     const plan = await started(page, "plan");
     await finish(page, plan.id);
-    await needOfKind(page, "plan").click();
+    await openNeedOfKind(page, "plan");
     const pane = needsPane(page);
     await expect(pane).toContainText("Open questions the plan assumes answers to");
     for (const q of ["What does done look like for CA-408?", "Which behaviour or number should change?", "What is in scope and what is out?", "Who asked for this, and who is waiting on it?"]) await expect(pane).toContainText(q);

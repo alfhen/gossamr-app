@@ -4,13 +4,12 @@ import { MockBackend } from "../backend/mock";
 import { itemRef } from "../backend/mockConnector";
 import type { Run, WorkstreamView } from "../types";
 import { useWorkspace } from "../workspaceStore";
-import { ClosedWorkstreams, DayAndWeek, DayScroll, NeedsTop, WorkstreamHeadExtras, WorkstreamTools, fadeScroll, hasMoreBelow, rowTitle } from "./AgentsHome";
+import { ClosedWorkstreams, DayAndWeek, DayScroll, WorkstreamHeadExtras, WorkstreamTools, fadeScroll, hasMoreBelow, rowTitle } from "./AgentsHome";
 import { AgentsScreen, type AgentsActions } from "./AgentsView";
 import { NO_FILTERS } from "./agentsLogic";
 import { loadPrefs, usePrefs } from "./prefs";
 import { useRuns } from "./runsStore";
 import { loadTabs, useTabs } from "./tabsStore";
-import { currentNeeds } from "./useNeeds";
 import { WorkstreamSheet } from "./WorkstreamSheet";
 import { useWorkView } from "./workViewStore";
 import { useWorkstreams } from "./workstreamsStore";
@@ -112,6 +111,65 @@ describe("a workstream in the Agents list", () => {
   });
 });
 
+describe("what needs you, in the Agents list and its detail", () => {
+  const actions = (): AgentsActions => ({ select: noop, open: noop, attach: noop, draftComment: noop, buildFromPlan: noop, resume: noop, filter: noop, clearFilters: noop, setView: noop, setGroup: noop, toggleEarlier: noop, setIntro: noop, dismissIntro: noop, checkEnvironment: noop, retry: noop, fix: noop, retryLaunch: noop, copied: noop, stopAll: noop, startAgent: noop, openSafety: noop, openWorkstream: vi.fn() }) as AgentsActions;
+  const screen = (over: Record<string, unknown> = {}) =>
+    renderToStaticMarkup(
+      <AgentsScreen runs={[]} status="ready" error={null} environment={{ claude: "ok", version: "2.1.286" }} filters={NO_FILTERS} selectedId={null} earlierOpen={false} introShown={false} view="cards" stopping={false} opened={new Set()} now={NOW} ticketTitle={() => null} on={actions()} {...over} />,
+    );
+  afterEach(() => seed(useWorkView, { deciding: null, batch: null }));
+  const held = view("ws-1", "CA-401", { heldReason: "restart" });
+  const calm = view("ws-2", "CA-402");
+
+  it("marks the workstream that holds a need with a badge and an accent, and leaves the others plain", () => {
+    seed(useWorkstreams, { list: [held, calm] });
+    const html = screen({ workstreams: [held, calm] });
+    expect(html.match(/data-has-needs/g)).toHaveLength(1);
+    expect(html).toMatch(/data-workstream-group="ws-1" data-has-needs/);
+    expect(html.match(/data-needs-you-badge/g)).toHaveLength(1);
+  });
+
+  it("gives No workstream a badge and an Open button when it holds a need, which opens its detail", () => {
+    const loose = { id: "r-loose", state: "needsAnswer", spec: { workstream: null, repo: "acme/web", kind: "plan" }, queuedAt: "2026-09-30T11:00:00Z", lastProgressAt: "2026-09-30T11:30:00Z", needs: "Which one?" } as unknown as Run;
+    seed(useRuns, { runs: [loose] });
+    const html = screen({ runs: [loose], needsYou: 1 });
+    expect(html).toMatch(/data-workstream-group="none" data-has-needs/);
+    expect(html).toMatch(/data-workstream-open="general"[^>]*aria-label="Open No workstream"/);
+    expect(html).toMatch(/data-needs-you-badge/);
+  });
+
+  it("is the same count on the Needs you chip as the rail badge says, and the chip is a toggle that is on with the filter", () => {
+    seed(useWorkstreams, { list: [held, calm] });
+    const off = screen({ workstreams: [held, calm], needsYou: 1 });
+    expect(off).toMatch(/data-chip="needs" aria-pressed="false"[^>]*>Needs you<span data-chip-count[^>]*>1</);
+    expect(off).toMatch(/data-chip="all" aria-pressed="true"/);
+    const on = screen({ workstreams: [held, calm], needsYou: 1, filters: { ...NO_FILTERS, needs: true } });
+    expect(on).toMatch(/data-chip="needs" aria-pressed="true"/);
+    expect(on).toMatch(/data-chip="all" aria-pressed="false"/);
+  });
+
+  it("shows the decision at the top of the detail, under Needs you, above the steps", () => {
+    seed(useWorkstreams, { list: [held] });
+    seed(useWorkView, { deciding: "held:ws-1" });
+    const html = renderToStaticMarkup(<WorkstreamSheet id="ws-1" />);
+    const at = (needle: string) => html.indexOf(needle);
+    expect(at("data-workstream-needs=")).toBeGreaterThan(-1);
+    expect(at("data-workstream-needs=")).toBeLessThan(at("data-step-rail"));
+    expect(html).toContain('data-needs-pane="held:ws-1"');
+    expect(at('data-needs-pane="held:ws-1"')).toBeLessThan(at("data-step-rail"));
+  });
+
+  it("opens No workstream's detail, with its needs on top and nothing about a workstream", () => {
+    const loose = { id: "r-loose", state: "needsAnswer", spec: { workstream: null, repo: "acme/web", kind: "plan" }, queuedAt: "2026-09-30T11:00:00Z", lastProgressAt: "2026-09-30T11:30:00Z", needs: "Which one?" } as unknown as Run;
+    seed(useRuns, { runs: [loose] });
+    seed(useWorkView, { deciding: "run:r-loose" });
+    const html = renderToStaticMarkup(<WorkstreamSheet id="general" />);
+    expect(html).toContain('aria-label="No workstream"');
+    expect(html).toContain('data-workstream-needs="general"');
+    expect(html).not.toContain("data-step-rail");
+  });
+});
+
 describe("closed workstreams", () => {
   const open = [view("ws-1", "CA-401")];
   const closed = [view("ws-9", "CA-401", { closedAt: "2026-09-20T10:00:00Z" }), view("ws-8", "CA-500", { closedAt: "2026-09-20T10:00:00Z" })];
@@ -166,20 +224,6 @@ describe("the day region's room, and its fade", () => {
     const start = renderToStaticMarkup(<DayScroll label="Start my day">x</DayScroll>);
     expect(start).toContain("max-h-[30vh]");
     expect(start).not.toContain("45vh");
-  });
-});
-
-describe("the Needs you strip", () => {
-  it("is one region named Needs you whose count is the one count, and is not a second list of workstreams", () => {
-    const html = renderToStaticMarkup(<NeedsTop />);
-    expect(html).toContain("data-agents-strip");
-    expect(html.match(/aria-label="Needs you"/g)).toHaveLength(1);
-    expect(html).toMatch(new RegExp(`data-needs-you-count[^>]*>${currentNeeds().length}<`));
-    expect(html).not.toContain('aria-label="Your workstreams"');
-  });
-
-  it("puts the decision pane in the same place, closed until a need is opened", () => {
-    expect(renderToStaticMarkup(<NeedsTop />)).not.toContain("data-needs-pane");
   });
 });
 
