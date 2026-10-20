@@ -58,6 +58,8 @@ import { agentKey } from "./agentKeys";
 import { ClosedWorkstreams, DayAndWeek, DecisionScope, NeedsBadge, WorkstreamHeadExtras, WorkstreamTools, rowTitle, useWorkstreamWeb } from "./AgentsHome";
 import { WorkstreamSheet } from "./WorkstreamSheet";
 import { arm, confirmArmed, disarm, keyPlan, openNeed, openRunOrNeed } from "./needsActions";
+import { isTypingTarget } from "./workKeys";
+import { undoLatest } from "./undo";
 import { NO_WORKSTREAM_ID, useWorkView } from "./workViewStore";
 import { currentNeeds, useNeedsYou } from "./useNeeds";
 import { needsIn } from "../lib/needs";
@@ -632,6 +634,12 @@ export function AgentsView() {
   useEffect(() => {
     const onKey = (ev: KeyboardEvent) => {
       const target = ev.target as HTMLElement;
+      // Ctrl+Z undoes the newest offer (or says there is none), unless the person is typing or something sits over the page.
+      if ((ev.metaKey || ev.ctrlKey) && !ev.altKey && !ev.shiftKey && ev.key.toLowerCase() === "z") {
+        if (ev.defaultPrevented || isTypingTarget(target) || target.closest?.("[role=dialog], #peek-sheet")) return;
+        ev.preventDefault();
+        return undoLatest();
+      }
       if (ev.defaultPrevented || ev.metaKey || ev.ctrlKey || ev.altKey || target.closest?.("input, textarea, select, [contenteditable], [role=dialog], #peek-sheet, #workstream-sheet")) return;
       if (ev.key === "n") {
         if (useRuns.getState().sheet || useRunSetup.getState().open) return;
