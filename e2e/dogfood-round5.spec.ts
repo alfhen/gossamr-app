@@ -50,7 +50,7 @@ test.describe("Needs you on Pip home (G5)", () => {
     await openAgents(page);
     await groupOpen(page, "General").click();
     const items = needsStack(page).locator("[data-needs-pane]");
-    expect(await items.count()).toBeGreaterThan(1);
+    await expect(items.nth(1)).toBeVisible();
     await expect(items.first()).toHaveAttribute("data-open", "true");
     await expect(needsPane(page)).toHaveCount(1);
     await expect(needsStack(page).locator("[data-needs-you-chip]").first()).toHaveAttribute("title", /^(Decide|Unblock|Approve): /);

@@ -73,7 +73,7 @@ function useAdvance(all: readonly Need[], workstreamId: string | null, onAdvance
     earlier.current = needs;
     const home = useWorkView.getState();
     const deciding = home.deciding;
-    const lands = (next: Need | null) => requestAnimationFrame(() => (next ? rowFor(next) : document.querySelector<HTMLElement>("[data-workstream-needs-title]"))?.focus());
+    const lands = (next: Need | null) => requestAnimationFrame(() => (next ? rowFor(next) : (document.querySelector<HTMLElement>("[data-workstream-needs-title]") ?? document.getElementById("workstream-sheet")))?.focus());
     if (deciding && before.includes(deciding) && !keys.includes(deciding)) {
       const next = needAfter(before, deciding, needs);
       if (next) {
@@ -770,7 +770,7 @@ function BatchDecision({ gid, needs }: { gid: string; needs: readonly Need[] }) 
   const root = useRef<HTMLElement>(null);
   const close = () => {
     useWorkView.getState().closeDecision();
-    requestAnimationFrame(() => document.querySelector<HTMLElement>("[data-workstream-needs-title]")?.focus());
+    requestAnimationFrame(() => (document.querySelector<HTMLElement>("[data-workstream-needs-title]") ?? document.getElementById("workstream-sheet"))?.focus());
   };
   const confirm = async (covered: BatchSnapshot) => {
     setFrozen(null);

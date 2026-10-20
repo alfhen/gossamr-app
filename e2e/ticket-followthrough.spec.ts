@@ -1,5 +1,5 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
-import { advanceRuns, agentsHome, askPip, commentOnTicket, editTicket, expandNeedsYou, expectToast, homeComposer, homeConversationRegion, homeSettled, jiraWrites, mockRuns, needOfKind, needRow, needsPane, needsYouCount, needsYouRow, needsYouTray, openAgents, openApp, paneSettled, pipPane, selectWorkstream, startWorkstream, workstreamEvents, workstreamGroup, openNeedOfKind, openNeedRow } from "./support/app";
+import { advanceRuns, agentsHome, askPip, commentOnTicket, editTicket, expandNeedsYou, expectToast, homeComposer, homeConversationRegion, homeSettled, jiraWrites, mockRuns, needOfKind, needRow, needsPane, needsYouCount, needsYouRow, needsYouTray, openAgents, openApp, paneSettled, pipPane, selectWorkstream, startWorkstream, workstreamEvents, workstreamGroup, openNeedOfKind, openNeedRow, needsStack } from "./support/app";
 
 // What Pip does with a vague ticket after it speaks up: a free word check says so when the workstream opens (a notice, not a
 // need), asking the reporter records that the workstream waits on them, the answers go to Jira as a comment, and Plan anyway
@@ -171,7 +171,7 @@ test.describe("G14: waiting on the reporter", () => {
     await askAndPost(page);
     await expect(nextLine(page)).toContainText("Waiting on the reporter since just now; nothing starts on its own.");
     // Not a need: nothing in Needs you says it, and the readiness question is answered.
-    await expect(needsYouTray(page)).not.toContainText("Waiting on the reporter");
+    await expect(needsStack(page)).not.toContainText("Waiting on the reporter");
     await expect(needOfKind(page, "readiness")).toHaveCount(0);
     expect(await newest(page, "plan")).toBeNull();
   });
@@ -359,7 +359,7 @@ test.describe("G15: the person's answers go to Jira as a comment", () => {
     await openNeedOfKind(page, "readiness");
     await needsPane(page).getByRole("button", { name: "I'll answer" }).click();
     // Only the investigation's own comment is left in the group, so it has nothing to expand.
-    await expect(needsYouTray(page)).not.toContainText("R2 triage · rewrite");
+    await expect(needsStack(page)).not.toContainText("R2 triage · rewrite");
     await expect(needsYouRow(page, VAGUE).getByRole("button", { name: /^Approve \d+ safe drafts$/ })).toHaveCount(0);
     expect((await actions(page, "draft_superseded")).map((e) => e.actor)).toEqual(["person"]);
     // The answers come, and nothing left waits but them.
@@ -423,7 +423,7 @@ test.describe("G16b: Plan anyway retires it too", () => {
     await needsPane(page).getByRole("button", { name: "Plan anyway" }).click();
     await started(page, "plan");
     // Nothing of the triage's note is left to approve; the group may be gone altogether.
-    await expect(needsYouTray(page)).not.toContainText("R2 triage · rewrite");
+    await expect(needsStack(page)).not.toContainText("R2 triage · rewrite");
     expect((await actions(page, "draft_superseded")).length).toBe(1);
     expect(await jiraWrites(page)).toEqual([]);
   });

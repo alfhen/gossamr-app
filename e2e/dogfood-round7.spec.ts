@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { agentsHome, homeConversation, jiraWrites, needOfKind, needsPane, needsYouCount, needsYouTray, openAgents, openApp, selectWorkstream, startMyDay, startWorkstream, openNeedOfKind } from "./support/app";
+import { agentsHome, homeConversation, jiraWrites, needOfKind, needsPane, needsYouCount, openAgents, openApp, selectWorkstream, startMyDay, startWorkstream, openNeedOfKind, needsStack } from "./support/app";
 
 // Fixes from the seventh dogfood round: approving from the Decide pane, the Next line, Plan my week, Start my day, the
 // reporter's questions and What Jira saw from me.
@@ -29,7 +29,7 @@ test.describe("approving from the Decide pane (G1)", () => {
     await expect.poll(async () => (await jiraWrites(page)).map((w) => w.type)).toContain("rewrite");
     await expect(needOfKind(page, "plan")).toHaveCount(0);
     // The plan is no longer a need. (The description Jira now holds is not the one the workstream was opened on, so a hold may take its place in the count.)
-    await expect(needsYouTray(page)).not.toContainText("approving its description update is how the plan is approved");
+    await expect(needsStack(page)).not.toContainText("approving its description update is how the plan is approved");
     expect(Number(await needsYouCount(page).innerText())).toBeLessThanOrEqual(before);
     await expect(agentsHome(page)).toBeVisible();
   });
