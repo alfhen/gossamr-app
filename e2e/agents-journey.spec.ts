@@ -1,37 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import {
-  advanceRuns,
-  agentsSettled,
-  expectPeekInPlace,
-  finishOnHome,
-  githubWrites,
-  homeConversation,
-  holdBySystem,
-  homeConversationRegion,
-  homeRunCards,
-  homeSettled,
-  inlineStart,
-  jiraWrites,
-  mockRuns,
-  expandNeedsYou,
-  needRow,
-  needsPane,
-  needsPaneHeading,
-  needsYouCount,
-  needsYouTray,
-  openApp,
-  openPipHome,
-  peekSheet,
-  pipHome,
-  scriptNextRun,
-  setBudget,
-  startWorkstream,
-  stepChip,
-  stepRail,
-  surfacePullRequests,
-  workstreamEvents,
-  workstreamRow,
-} from "./support/app";
+import { advanceRuns, agentsHome, agentsSettled, closeWorkstreamSheet, expandNeedsYou, expectPeekInPlace, finishOnHome, githubWrites, holdBySystem, homeConversation, homeConversationRegion, homeRunCards, homeSettled, inlineStart, jiraWrites, mockRuns, needRow, needsPane, needsPaneHeading, needsYouCount, needsYouTray, openAgents, openApp, peekSheet, scriptNextRun, selectWorkstream, setBudget, startWorkstream, stepChip, stepRail, surfacePullRequests, workstreamEvents, workstreamGroup } from "./support/app";
 
 // A workstream in Manage mode, with pull requests shown only when a test says: the setting the phase's scenarios share.
 // GitHub is signed in with a catalog small enough to be watched whole, so the agents' repository is watched, as the
@@ -73,8 +41,8 @@ async function homeWorkstream(page: Page) {
   await startWorkstream(page, "CA-401");
   const ws = (await workstreamEvents(page))[0].workstreamId;
   await setBudget(page, ws, { autoTurns: 12 });
-  await openPipHome(page);
-  await workstreamRow(page, "CA-401").click();
+  await openAgents(page);
+  await selectWorkstream(page, "CA-401");
   await expect(homeConversation(page)).toHaveText(/^Workstream: CA-401 .* · Intake$/);
   return ws;
 }
@@ -84,8 +52,8 @@ test("intake to review on Pip home: the person talks to Pip, starts the investig
   await openApp(page, MANAGED);
   await agentsSettled(page);
   await homeWorkstream(page);
-  const row = workstreamRow(page, "CA-401");
-  await expect(row).toHaveAttribute("aria-selected", "true");
+  const row = workstreamGroup(page, "CA-401");
+  await expect(row).toHaveAttribute("aria-current", "true");
   await expect(row.locator("[data-stage]")).toHaveText("Intake");
   await expect(stepRail(page).getByRole("switch", { name: "Manage this workstream" })).toHaveAttribute("aria-checked", "true");
 
@@ -104,7 +72,7 @@ test("intake to review on Pip home: the person talks to Pip, starts the investig
   await review.getByRole("button", { name: "Start agent" }).click();
   await expect(page.getByRole("dialog", { name: "Start an agent" })).toHaveCount(0);
   await expect(review).toHaveCount(0);
-  await expect(pipHome(page)).toBeVisible();
+  await expect(agentsHome(page)).toBeVisible();
   await expect(needsYouTray(page).locator("[data-needs-you-count]")).toHaveText("0");
   const r1 = (await newest(page, "investigate"))!;
   await expect(stepChip(page, "investigate").locator('[data-run-label="R1"]')).toBeVisible();
@@ -116,9 +84,11 @@ test("intake to review on Pip home: the person talks to Pip, starts the investig
   await expect(wakes.first().locator("[data-wake-header]")).toHaveText("Pip picked this up: run R1 finished");
   const r2 = await started(page, "triage");
   await expect(stepChip(page, "triage").locator("[data-step-auto]")).toHaveText("· started automatically");
-  // Its header button shows R1 on the rail.
+  // Its header button opens R1's sheet.
   await wakes.first().getByRole("button", { name: "run R1" }).click();
-  await expect(stepChip(page, "investigate").locator(`article[data-run-id="${r1.id}"]`)).toBeFocused();
+  await expect(page.locator("#agent-sheet")).toBeVisible();
+  await page.locator("#agent-sheet").getByRole("button", { name: "Close", exact: true }).first().click();
+  await expect(page.locator("#agent-sheet")).toHaveCount(0);
 
   // R2 moving along touches only the rail and the footer; its finish starts Plan R3 with a second wake turn.
   await homeSettled(page);
@@ -140,7 +110,7 @@ test("intake to review on Pip home: the person talks to Pip, starts the investig
   await expect(stepChip(page, "plan").getByRole("button", { name: /safe drafts/ })).toHaveCount(0);
   await rewrite.getByRole("button", { name: "Review on CA-401 →" }).click();
   await expect(peekSheet(page)).toHaveAttribute("aria-label", "Details for CA-401");
-  await expect(pipHome(page)).toBeVisible();
+  await expect(agentsHome(page)).toBeVisible();
   // The draft takes the keyboard in the peek, and the window stays where it was around it.
   await expect(peekSheet(page).getByRole("article", { name: "Update the description of CA-401" }).filter({ hasText: "Gossamr Plan" })).toBeFocused();
   await expectPeekInPlace(page);
@@ -213,7 +183,7 @@ test("intake to review on Pip home: the person talks to Pip, starts the investig
   await expect(needsYouCount(page)).toHaveText(String(trayBefore - 1));
   await page.keyboard.press("Escape");
   await expect(peekSheet(page)).toHaveCount(0);
-  await expect(pipHome(page)).toBeVisible();
+  await expect(agentsHome(page)).toBeVisible();
   // Approving the comment left the GitHub review draft alone: nothing went to GitHub, and it still waits.
   const github = stepChip(page, "review").locator('article[data-draft]').filter({ has: page.locator("h3", { hasText: /^GitHub review of acme\/storefront#/ }) });
   await expect(github).toHaveCount(1);
@@ -245,7 +215,7 @@ test("the Needs you list ranks a hold ahead of a draft to approve, opens each in
   await openApp(page, MANAGED);
   await agentsSettled(page);
   await homeWorkstream(page);
-  const row = workstreamRow(page, "CA-401");
+  const row = workstreamGroup(page, "CA-401");
   await expect(needsYouCount(page)).toHaveText("0");
 
   await homeConversationRegion(page).getByRole("button", { name: "Investigate CA-401", exact: true }).click();
@@ -264,9 +234,8 @@ test("the Needs you list ranks a hold ahead of a draft to approve, opens each in
   await expect(titles).toHaveText(["Held after a restart", "Start Investigate"]);
 
   // From General, the draft's need selects the workstream again and opens its decision; skipped there, it leaves.
-  await workstreamRow(page, "General").click();
+  await closeWorkstreamSheet(page);
   await needRow(page, "Start Investigate").click();
-  await expect(row).toHaveAttribute("aria-selected", "true");
   await expect(needsPane(page)).toContainText("drafted an Investigate agent for CA-401");
   await needsPane(page).getByRole("button", { name: "Skip" }).click();
   await expect(needRow(page, "Start Investigate")).toHaveCount(0);
@@ -286,60 +255,25 @@ test("the Needs you list ranks a hold ahead of a draft to approve, opens each in
 test("a failed run waits in the list under General, opens its decision, and stays until it is dealt with, not just seen", async ({ page }) => {
   await openApp(page, "prSurface=manual");
   await agentsSettled(page);
-  await openPipHome(page);
+  await openAgents(page);
   await expandNeedsYou(page);
   // The sample's failed run failed on a folder it may not use yet, so it waits as a failure with a step to take.
   const failed = needRow(page, /SUP-9.*needs its folder trusted/);
   await expect(failed).toHaveCount(1);
   await expect(failed).toHaveAttribute("data-kind", "failure");
   await failed.click();
-  await expect(workstreamRow(page, "General")).toHaveAttribute("aria-selected", "true");
   await expect(needsPane(page)).toContainText("Trust this folder in Terminal");
   // Its link opens the run's sheet over Pip home.
   await needsPane(page).getByRole("button", { name: "Open the run" }).click();
   const sheet = page.getByRole("dialog").filter({ hasText: "SUP-9" });
   await expect(sheet.first()).toBeVisible();
-  await expect(pipHome(page)).toBeVisible();
+  await expect(agentsHome(page)).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(sheet).toHaveCount(0);
 
   // Agents shows the failure, and showing it clears nothing: back on Pip home it still waits (R5).
-  await page.getByRole("button", { name: /^Agents/ }).click();
-  await expect(pipHome(page)).toHaveCount(0);
-  await openPipHome(page);
+  await openAgents(page);
   await expandNeedsYou(page);
   await expect(needRow(page, /SUP-9.*needs its folder trusted/)).toHaveCount(1);
 });
 
-test("on a window about 900px wide the steps drop below the conversation, nothing scrolls sideways, and F6 still reaches every region", async ({ page }) => {
-  await page.setViewportSize({ width: 900, height: 800 });
-  await openApp(page, MANAGED);
-  await agentsSettled(page);
-  await homeWorkstream(page);
-  const conversation = homeConversationRegion(page);
-  const steps = stepRail(page);
-  const c = (await conversation.boundingBox())!;
-  const s = (await steps.boundingBox())!;
-  expect(s.y).toBeGreaterThanOrEqual(c.y + c.height - 1);
-  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
-
-  // The workstreams, the timeline, the steps, the composer, then round to Needs you and the workstreams again.
-  await workstreamRow(page, "CA-401").focus();
-  await page.keyboard.press("F6");
-  await expect(conversation.locator("[data-timeline]")).toHaveCount(1);
-  expect(await page.evaluate(() => !!document.activeElement?.closest("[data-timeline]"))).toBe(true);
-  // CA-401's thin description shows the clarity notice, a stop of its own just above the steps.
-  await page.keyboard.press("F6");
-  expect(await page.evaluate(() => !!document.activeElement?.closest("[data-clarity-notice]"))).toBe(true);
-  await page.keyboard.press("F6");
-  // The steps' stop starts with the workstream's controls (G27).
-  await expect(steps.getByRole("switch", { name: "Manage this workstream" })).toBeFocused();
-  await page.keyboard.press("F6");
-  await expect(pipHome(page).locator("#pip-input")).toBeFocused();
-  await page.keyboard.press("F6");
-  expect(await page.evaluate(() => !!document.activeElement?.closest("[data-needs-you]"))).toBe(true);
-  await page.keyboard.press("F6");
-  await expect(workstreamRow(page, "CA-401")).toBeFocused();
-  await page.keyboard.press("Shift+F6");
-  expect(await page.evaluate(() => !!document.activeElement?.closest("[data-needs-you]"))).toBe(true);
-});

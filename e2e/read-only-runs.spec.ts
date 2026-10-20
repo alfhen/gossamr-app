@@ -1,29 +1,5 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
-import {
-  advanceRuns,
-  agentsSettled,
-  askPip,
-  homeConversationRegion,
-  homeRunCards,
-  homeSettled,
-  inlineStart,
-  mockLaunches,
-  mockRuns,
-  openApp,
-  openPipHome,
-  peekSheet,
-  peekTicket,
-  pipConversation,
-  pipPane,
-  setBudget,
-  startWorkstream,
-  surfacePullRequests,
-  workstreamEvents,
-  workstreamRow,
-  type MockLaunch,
-  detailsOf,
-  openTechnical,
-} from "./support/app";
+import { advanceRuns, askPip, detailsOf, mockLaunches, mockRuns, openApp, openTechnical, peekSheet, peekTicket, pipConversation, pipPane, setBudget, startWorkstream, surfacePullRequests, type MockLaunch, workstreamEvents } from "./support/app";
 
 // Phase 6: Investigate, Triage, Plan, Review and Verify launch with a restriction Claude Code itself enforces
 // (`--permission-mode dontAsk` and allow/deny rules); a Build, and a fix round sent to one, keeps what it had. The sample
@@ -232,31 +208,4 @@ test("a build launches as before; its review is restricted, a fix round goes bac
   await surfacePullRequests(page);
   const next = await started(page, "review", review.id);
   restricted(await launch(page, next.id), "review");
-});
-
-test("the inline review on Pip home shows the read-only rules, and an investigation started there launches restricted", async ({ page }) => {
-  // It starts a workstream, opens Pip home, drafts and reviews an investigation, then launches it: more than the default 30s on a busy runner.
-  test.setTimeout(90_000);
-  await openApp(page, `${MANAGED}&mockRepos=12`);
-  await agentsSettled(page);
-  await startWorkstream(page, "CA-401");
-  await openPipHome(page);
-  await workstreamRow(page, "CA-401").click();
-  await homeConversationRegion(page).getByRole("button", { name: "Investigate CA-401", exact: true }).click();
-  await homeSettled(page);
-
-  const review = await inlineStart(page, homeRunCards(page, "CA-401").last());
-  await expect(review.locator("[data-read-only]")).toHaveText(READ_ONLY);
-  const adds = await openDetails(review, "What Gossamr adds for the model");
-  await expect(adds).toContainText("--permission-mode dontAsk");
-  await expect(adds.locator("[data-read-only-rules]")).toContainText("Bash(git push *)");
-  const digest = await review.locator("[data-inline-prompt]").getAttribute("data-inline-prompt");
-
-  await review.getByRole("button", { name: "Start agent" }).click();
-  await expect(review).toHaveCount(0);
-  const r1 = (await newest(page, "investigate"))!;
-  expect(await approvedDigest(page, r1.id)).toBe(digest);
-  const entry = await launch(page, r1.id);
-  restricted(entry, "investigate");
-  expect(entry.autoStart).toBeNull();
 });

@@ -1,8 +1,9 @@
 import { useRef, useState, type KeyboardEvent } from "react";
+import { PIP_INPUT_ID } from "./draftKeys";
 import { BUILD_ON_GITHUB } from "./githubSafety";
 import { usePrefs } from "./prefs";
 
-/** The first-run orientation on Pip home, in the app's own words for each term. Kept apart so a test can read the copy. */
+/** The first-run orientation in the Pip drawer, in the app's own words for each term. Kept apart so a test can read the copy. */
 export const ORIENTATION_TERMS: readonly { term: string; text: string }[] = [
   { term: "Pip", text: "Pip manages your ticket work: it reads your tickets and runs, plans the next step and drafts what to do about it. You decide." },
   { term: "Workstream", text: "One ticket's work from start to pull request. Each has its own conversation with Pip, its steps and its drafts." },
@@ -32,29 +33,22 @@ export const ORIENTATION_PURPOSE = "Pip works through your Jira tickets with cod
 
 export const ORIENTATION_SAFETY = `Gossamr posts only what you approve; a Build runs with your Claude settings and could reach Jira or GitHub on its own. ${BUILD_ON_GITHUB}`;
 
-/** The glossary's button, named apart from the other More buttons on Pip home. */
+/** The glossary's button, named apart from the other More buttons. */
 export const ORIENTATION_WORDS = "What the words mean";
-
-/** Where focus goes when the card closes from its button, so the keyboard stays on Pip home: the list's current row. */
-function focusList() {
-  document.querySelector<HTMLElement>('[data-pip-home-column="list"] [role="option"][tabindex="0"]')?.focus();
-}
 
 /** Marks the card seen, the way the Agents intro is (`agentsIntroSeen`), and keeps the keyboard where it was. */
 export function dismissOrientation() {
   const hadFocus = typeof document !== "undefined" && document.activeElement?.closest("[data-pip-orientation]") != null;
   usePrefs.getState().setPipOrientationSeen(true);
-  if (hadFocus) requestAnimationFrame(focusList);
+  if (hadFocus) requestAnimationFrame(() => document.getElementById(PIP_INPUT_ID)?.focus());
 }
 
 /**
- * What Pip home's words mean, until the person says Got it: one line, with the words behind What the words mean (`open` starts it expanded).
- * It never takes focus by itself. `compact` keeps it to its one line, for while Plan my week needs the room; the person's choice to open the words is
- * remembered and comes back with the words.
+ * What the words mean, until the person says Got it: one line, with the words behind What the words mean (`open` starts it expanded).
+ * It never takes focus by itself.
  */
-export function PipOrientation({ onDismiss = dismissOrientation, open = false, compact = false }: { onDismiss?(): void; open?: boolean; compact?: boolean }) {
-  const [asked, setMore] = useState(open);
-  const more = asked && !compact;
+export function PipOrientation({ onDismiss = dismissOrientation, open = false }: { onDismiss?(): void; open?: boolean }) {
+  const [more, setMore] = useState(open);
   const words = useRef<HTMLButtonElement>(null);
   const button = "rounded-md border border-ws-sep2 px-2.5 py-px text-sm leading-normal whitespace-nowrap hover:bg-ws-hover focus-visible:outline-2 focus-visible:outline-ws-pip";
   return (

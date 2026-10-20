@@ -302,7 +302,7 @@ export function parseQuery(q: string, lookup: QueryLookup): WorkFilter {
 
 /**
  * The name of the tickets waiting on the person's reply (the `needsMe` filter), wherever it shows: the tab and saved
- * view, the Activity chip, the command and the pill on a ticket. "Needs you" stays Pip home's, for runs, drafts and holds.
+ * view, the Activity chip, the command and the pill on a ticket. "Needs you" stays the Agents strip's, for runs, drafts and holds.
  */
 export const YOUR_TURN = "Your turn";
 /** Why a ticket is the person's turn, for the pill's tooltip. */

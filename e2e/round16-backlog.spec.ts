@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { agentsSettled, askPip, editTicket, homeRunCards, homeSettled, jiraWrites, needsPane, openApp, openPipHome, pipHome, seedWorkstreamEvent, startWorkstream, stepChip, workstreamEvents, workstreamRow } from "./support/app";
+import { agentsHome, editTicket, jiraWrites, needsPane, openAgents, openApp, pipPane, seedWorkstreamEvent, selectWorkstream, startWorkstream, stepChip, workstreamEvents } from "./support/app";
 
 // Backlog items of the sixteenth dogfood round: the ask and the nudge to the reporter (G20, G21), what Close does to agents (G24),
 // the posting pause naming its line (G33), Hold and the other controls drawn as buttons (G30), an Undo that names itself (G29),
@@ -8,7 +8,7 @@ import { agentsSettled, askPip, editTicket, homeRunCards, homeSettled, jiraWrite
 const THIN = "Fix it.";
 const ago = (days: number) => new Date(Date.now() - days * 86_400_000).toISOString();
 const toast = (page: Page) => page.locator("[data-toast]");
-const notice = (page: Page) => pipHome(page).locator("[data-clarity-notice]");
+const notice = (page: Page) => agentsHome(page).locator("[data-clarity-notice]");
 
 /** The reporter question draft on a vague ticket: a workstream on it, "Ask the reporter now" pressed, its card in the decision pane. */
 async function reporterDraft(page: Page, query = "runs=empty") {
@@ -16,8 +16,8 @@ async function reporterDraft(page: Page, query = "runs=empty") {
   await editTicket(page, "CA-408", { description: THIN });
   await page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "All projects" }).click();
   await startWorkstream(page, "CA-408");
-  await openPipHome(page);
-  await workstreamRow(page, "CA-408").click();
+  await openAgents(page);
+  await selectWorkstream(page, "CA-408");
   await notice(page).getByRole("button", { name: "Ask the reporter now" }).click();
   const draft = needsPane(page).getByRole("article", { name: "Comment on CA-408" });
   await expect(draft).toBeVisible();
@@ -38,8 +38,8 @@ test.describe("the ask and the nudge to the reporter (G21, G20)", () => {
     const ask = (await workstreamEvents(page)).find((e) => e.action === "clarity_asked")!;
     await seedWorkstreamEvent(page, "CA-408", { actor: "person", action: "draft_approved", at: ago(3), proposalId: (ask as { proposalId?: string | null }).proposalId });
     await page.keyboard.press("Escape");
-    await workstreamRow(page, "CA-408").click();
-    await pipHome(page).locator("[data-next-step]").getByRole("button", { name: "Draft a nudge" }).click();
+    await selectWorkstream(page, "CA-408");
+    await agentsHome(page).locator("[data-next-step]").getByRole("button", { name: "Draft a nudge" }).click();
     const nudge = needsPane(page).getByRole("article", { name: "Comment on CA-408" });
     await expect(nudge).toContainText("The earlier questions about CA-408 are still open:");
     await expect(nudge).toContainText("What is the goal?");
@@ -54,9 +54,9 @@ test.describe("Close, Hold and the posting pause (G24, G30, G33)", () => {
     test.setTimeout(90_000);
     await openApp(page, "wsManage=1&runs=empty");
     await startWorkstream(page, "CA-401");
-    await openPipHome(page);
-    await workstreamRow(page, "CA-401").click();
-    const controls = pipHome(page).locator("[data-workstream-controls]");
+    await openAgents(page);
+    await selectWorkstream(page, "CA-401");
+    const controls = pipPane(page).locator("[data-workstream-controls]");
     for (const name of ["Hold", "Close…", "More for this workstream"]) await expect(controls.getByRole("button", { name, exact: true })).not.toHaveCSS("border-top-color", "rgba(0, 0, 0, 0)");
     await controls.getByRole("button", { name: "Close…", exact: true }).click();
     const confirm = controls.getByRole("group", { name: "Close this workstream" });
@@ -87,28 +87,12 @@ test.describe("an Undo that names itself and steps that say their state (G29, G3
     test.setTimeout(90_000);
     await openApp(page, "wsManage=1&runs=empty");
     await startWorkstream(page, "CA-401");
-    await openPipHome(page);
-    await workstreamRow(page, "CA-401").click();
-    await pipHome(page).getByRole("button", { name: "Hold", exact: true }).click();
+    await openAgents(page);
+    await selectWorkstream(page, "CA-401");
+    await agentsHome(page).getByRole("button", { name: "Hold", exact: true }).click();
     await expect(toast(page).getByRole("button", { name: "Undo hold" })).toBeVisible();
     await expect(toast(page).getByRole("button", { name: "Undo hold" })).toHaveText("Undo hold");
     for (const kind of ["investigate", "triage", "plan", "build", "review", "verify"]) await expect(stepChip(page, kind).locator("[data-step-chip]")).toHaveAccessibleName(/Not started/);
   });
 });
 
-test.describe("the review after the one-time safety sheet (G28)", () => {
-  test("says nothing has started yet", async ({ page }) => {
-    test.setTimeout(120_000);
-    await openApp(page, "runs=empty&prSurface=manual&wsManage=1");
-    await agentsSettled(page);
-    await startWorkstream(page, "CA-401");
-    await openPipHome(page);
-    await workstreamRow(page, "CA-401").click();
-    await askPip(page, "Investigate CA-401");
-    await homeSettled(page);
-    const card = homeRunCards(page, "CA-401").last();
-    await card.getByRole("button", { name: "Review and start", exact: true }).click();
-    await page.getByRole("dialog", { name: "Agents safety and settings" }).getByRole("button", { name: "Got it, continue" }).click();
-    await expect(card.locator("[data-after-intro]")).toHaveText("Nothing has started yet. Read what it will be told, then press Start agent.");
-  });
-});

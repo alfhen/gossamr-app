@@ -1,8 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
-import { openApp, pipHome, workstreamRow } from "./support/app";
+import { openApp } from "./support/app";
 
-/** Pip home's orientation card. */
-const card = (page: Page) => page.locator("[data-pip-orientation]");
 const rail = (page: Page) => page.locator("aside", { has: page.getByRole("navigation", { name: "Workspace" }) });
 
 test.describe("rail names", () => {
@@ -45,45 +43,3 @@ test.describe("rail names", () => {
   });
 });
 
-test.describe("first-run orientation", () => {
-  // The config seeds the card dismissed for every other spec; here the profile is a first run.
-  test.use({ storageState: { cookies: [], origins: [] } });
-
-  test("shows on Pip home the first time, says what the words mean, and Got it hides it for good", async ({ page }) => {
-    await page.goto("/?runs=empty");
-    await expect(pipHome(page).getByRole("navigation", { name: "Workstreams" })).toBeVisible();
-    const orientation = card(page);
-    await expect(orientation).toBeVisible();
-    // One line, with the words behind More.
-    expect((await orientation.boundingBox())!.height).toBeLessThan(70);
-    await expect(orientation).not.toContainText("Worktree");
-    await orientation.getByRole("button", { name: "What the words mean" }).click();
-    await expect(orientation.getByRole("button", { name: "What the words mean" })).toHaveAttribute("aria-expanded", "true");
-    await expect(orientation).toContainText("One ticket's work from start to pull request");
-    await expect(orientation).toContainText("One Claude Code agent session doing a step: investigate, plan, build or review");
-    await expect(orientation).toContainText("The run's own checkout of your repository");
-    await expect(orientation).toContainText("Gossamr posts only what you approve; a Build runs with your Claude settings and could reach Jira or GitHub on its own. On GitHub, a Build runs as you. In a workstream or with Pushing ticked, it is asked to push only its branch to a draft pull request: a request, not a lock; see Agent safety.");
-
-    // It takes no focus, and Pip home's keys and footer hints are as they were.
-    await expect(orientation.getByRole("button", { name: "Got it" })).not.toBeFocused();
-    await expect(pipHome(page).locator("[data-pip-home-hints]")).toContainText("next region");
-    await expect(workstreamRow(page, "General")).toHaveAttribute("aria-selected", "true");
-
-    await orientation.getByRole("button", { name: "Got it" }).click();
-    await expect(card(page)).toHaveCount(0);
-    await expect(workstreamRow(page, "General")).toBeVisible();
-
-    await page.reload();
-    await expect(pipHome(page).getByRole("navigation", { name: "Workstreams" })).toBeVisible();
-    await expect(card(page)).toHaveCount(0);
-  });
-
-  test("Got it from the keyboard leaves focus on Pip home's list", async ({ page }) => {
-    await page.goto("/?runs=empty");
-    await expect(card(page)).toBeVisible();
-    await card(page).getByRole("button", { name: "Got it" }).focus();
-    await page.keyboard.press("Enter");
-    await expect(card(page)).toHaveCount(0);
-    await expect(workstreamRow(page, "General")).toBeFocused();
-  });
-});

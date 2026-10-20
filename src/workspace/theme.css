@@ -107,13 +107,6 @@
   --spacing: 4px;
 }
 
-/* Below 1100px Pip home's Steps column moves under the list, and a toast there rises above the composer (toastPlacement). */
-@media (max-width: 1099px) {
-  main:has([data-pip-home]) {
-    --ws-toast-lift: 128px;
-  }
-}
-
 /* A bare `grid` gets an auto column, which grows to its widest unbreakable child and pushes content past the pane. */
 .ws-root .grid:not([class*="cols"]):not([class*="grid-flow"]):not([class*="grid-template"]) {
   grid-template-columns: minmax(0, 1fr);

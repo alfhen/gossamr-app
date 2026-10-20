@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { askPip, holdBySystem, homeSettled, needsPane, needsPaneHeading, needsYouCount, needsYouRow, needsYouTray, openApp, openPipHome, startWorkstream, workstreamRow } from "./support/app";
+import { askPip, holdBySystem, homeSettled, needsPane, needsPaneHeading, needsYouCount, needsYouRow, needsYouTray, openAgents, openApp, selectWorkstream, startWorkstream } from "./support/app";
 
 // Fixes from the fifth dogfood round's backlog (G18 to G24): a higher-ranked need waits behind a bar instead of taking the
 // decision pane, Pip home lands on the workstream that needs the person, the pane says when it moved on by itself, the
@@ -11,8 +11,8 @@ const MANAGED = "wsManage=1&runs=empty";
 async function draftOpen(page: Page) {
   await openApp(page, MANAGED);
   await startWorkstream(page, "CA-401");
-  await openPipHome(page);
-  await workstreamRow(page, "CA-401").click();
+  await openAgents(page);
+  await selectWorkstream(page, "CA-401");
   await askPip(page, "Draft a comment");
   await homeSettled(page);
   // Alone in its workstream the need is the group's own row.
@@ -37,15 +37,6 @@ test("G18: a need that ranks higher and came in later waits behind a bar; the pa
   await expect(higher(page)).toHaveCount(0);
 });
 
-test("G19: Pip home opens on the workstream of the top need, not on General", async ({ page }) => {
-  await openApp(page, MANAGED);
-  await startWorkstream(page, "CA-401");
-  await holdBySystem(page, "CA-401", "restart");
-  await openPipHome(page);
-  await expect(workstreamRow(page, "CA-401")).toHaveAttribute("aria-selected", "true");
-  await expect(workstreamRow(page, "General")).toHaveAttribute("aria-selected", "false");
-});
-
 test("G20: when the pane moves on by itself it says so for a few seconds, and the new pane's heading has the keyboard", async ({ page }) => {
   await draftOpen(page);
   await holdBySystem(page, "CA-401", "restart");
@@ -60,15 +51,6 @@ test("G20: when the pane moves on by itself it says so for a few seconds, and th
   await expect(line).toHaveAttribute("role", "status");
   await expect(line).toHaveCount(0, { timeout: 9000 });
   await expect(needsYouCount(page)).toHaveText("1");
-});
-
-test("G21: the Agents footer names F6 for the regions and the Pip home key", async ({ page }) => {
-  await openApp(page);
-  await page.getByRole("button", { name: /^Agents/ }).click();
-  const footer = page.locator("footer").filter({ hasText: "start an agent" });
-  await expect(footer).toContainText("j k move");
-  await expect(footer).toContainText("F6 regions");
-  await expect(footer).toContainText(/⌘0 Pip home/);
 });
 
 test("G24: the timeline keeps the entry being read in place when a draft above it is approved", async ({ page }) => {

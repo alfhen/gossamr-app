@@ -209,11 +209,11 @@ describe("what starts", () => {
     useTabs.getState().select(null);
   });
 
-  it("started from the sheet over Pip home, stays on Pip home", async () => {
-    useTabs.getState().setRoute("pip");
+  it("started from the sheet on Agents, stays on Agents", async () => {
+    useTabs.getState().setRoute("agents");
     const run = await s().start();
     expect(run).toMatchObject({ state: "queued" });
-    expect(useTabs.getState().route).toBe("pip");
+    expect(useTabs.getState().route).toBe("agents");
     expect(useRuns.getState().selectedId).toBe(run!.id);
     useTabs.getState().setRoute("workspace");
   });
@@ -498,9 +498,9 @@ describe("the shared review-and-approve core", () => {
     const { review } = await readRunDraft(backend, id);
     const started = await approveRunDraft(backend, id, review.digest);
     if (started.type !== "started") throw new Error("expected a start");
-    useTabs.getState().setRoute("pip");
+    useTabs.getState().setRoute("activity");
     afterRunStarted(started.run, CA, { switchToAgents: false });
-    expect(useTabs.getState().route).toBe("pip");
+    expect(useTabs.getState().route).toBe("activity");
     expect(useRuns.getState().selectedId).toBe(started.run.id);
     expect(useToasts.getState().toasts.slice(-1)[0]?.text).toBe("Agent started on CA-401. It runs in the background.");
     afterRunStarted(started.run, CA, { switchToAgents: true });

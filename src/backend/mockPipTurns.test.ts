@@ -250,7 +250,7 @@ describe("mockAsk", () => {
     expect(backend.proposals.list()).toHaveLength(drafts);
   });
 
-  it("answers 'What is waiting to start?' with where the run draft is read and started, and on Pip home speaks of Pip home, not a board", async () => {
+  it("answers 'What is waiting to start?' with where the run draft is read and started, and on Agents speaks of the agents, not a board", async () => {
     const { MockBackend } = await import("./mock");
     const { itemRef } = await import("./mockConnector");
     const backend = new MockBackend({ runs: { seed: "empty" } });
@@ -259,13 +259,13 @@ describe("mockAsk", () => {
       await mockAsk({ requestId, prompt, sessionId: null, context, conversation, meta: { imageCount: 0 } }, backend, 0);
       return openMockPipTurns().turns(conversation).find((t) => t.requestId === requestId)?.text ?? "";
     };
-    const home: ScreenContext = { view: "Pip home · General", item: null, filter: null, selection: [] };
+    const home: ScreenContext = { view: "Agents · All · 0 runs", item: null, filter: null, selection: [] };
     const waiting = await answer("wait-1", "What is waiting to start?", `ws:${ws.id}`, home);
     expect(waiting).toContain("Review and start");
     expect(waiting).toContain("can't start it myself");
     expect(backend.runs.list()).toHaveLength(0);
     const general = await answer("home-1", "Catch me up", "general", home);
-    expect(general).toMatch(/^You're on Pip home\./);
+    expect(general).toMatch(/^You have no agent runs\./);
     expect(general).not.toMatch(/stale|blocked/);
     // A filter asked for there lands on the workspace tab, and says so.
     const filtered = await answer("home-2", "Show stale tickets", "general", home);

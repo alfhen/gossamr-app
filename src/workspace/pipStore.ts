@@ -89,8 +89,8 @@ export const usePip = create<PipState>((set, get) => ({
     const filtered: PipFiltered = { tabId: tab.id, before: tab.filter, beforeTitle: tab.title, filter, note, requestId: requestId ?? null };
     set((s) => ({ filtered, applied: requestId ? { ...s.applied, [requestId]: { ...filtered, undone: false } } : s.applied }));
     tabs.setFilter(filter);
-    // Pip home stays where it is: the filter waits on the workspace tab for when the person goes there.
-    if (tabs.route !== "pip") tabs.setRoute("workspace");
+    // Agents stays where it is: the filter waits on the workspace tab for when the person goes there.
+    if (tabs.route !== "agents") tabs.setRoute("workspace");
   },
 
   undoFilter() {

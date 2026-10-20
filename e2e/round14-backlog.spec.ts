@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { editTicket, expectToast, jiraWrites, needsPane, openApp, openPipHome, pipHome, startWorkstream, workstreamRow } from "./support/app";
+import { agentsHome, editTicket, expectToast, jiraWrites, needsPane, openAgents, openApp, pipPane, selectWorkstream, startWorkstream } from "./support/app";
 
 // Backlog items of the fourteenth dogfood round: a posted secret masked on What Jira saw from me (G26), the clarity notice not
 // announced when a workstream opens (G28), the comment's edit box and the closed list having room (G29) and the note about the
@@ -7,7 +7,7 @@ import { editTicket, expectToast, jiraWrites, needsPane, openApp, openPipHome, p
 
 const THIN = "Fix it.";
 const toast = (page: Page) => page.locator("[data-toast]");
-const notice = (page: Page) => pipHome(page).locator("[data-clarity-notice]");
+const notice = (page: Page) => agentsHome(page).locator("[data-clarity-notice]");
 const palette = (page: Page) => page.getByRole("dialog", { name: "Command palette" });
 const NOTE = "Here is the comment to the reporter. Nothing is posted until you press Post comment.";
 
@@ -17,8 +17,8 @@ async function reporterDraft(page: Page) {
   await editTicket(page, "CA-408", { description: THIN });
   await page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "All projects" }).click();
   await startWorkstream(page, "CA-408");
-  await openPipHome(page);
-  await workstreamRow(page, "CA-408").click();
+  await openAgents(page);
+  await selectWorkstream(page, "CA-408");
   await notice(page).getByRole("button", { name: "Ask the reporter now" }).click();
   const draft = needsPane(page).getByRole("article", { name: "Comment on CA-408" });
   await expect(draft).toBeVisible();
@@ -60,7 +60,7 @@ test.describe("the clarity notice (G28)", () => {
     test.setTimeout(120_000);
     await reporterDraftOpen(page);
     await expect(notice(page)).toBeVisible();
-    await expect(pipHome(page).locator("[data-clarity-status]")).toHaveText("");
+    await expect(agentsHome(page).locator("[data-clarity-status]")).toHaveText("");
     await expect(notice(page)).toHaveAttribute("role", "group");
   });
 });
@@ -71,8 +71,8 @@ async function reporterDraftOpen(page: Page) {
   await editTicket(page, "CA-408", { description: THIN });
   await page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "All projects" }).click();
   await startWorkstream(page, "CA-408");
-  await openPipHome(page);
-  await workstreamRow(page, "CA-408").click();
+  await openAgents(page);
+  await selectWorkstream(page, "CA-408");
 }
 
 test.describe("room to edit and to read the closed list (G29)", () => {
@@ -84,24 +84,6 @@ test.describe("room to edit and to read the closed list (G29)", () => {
     expect(box!.height).toBeGreaterThanOrEqual(150);
   });
 
-  test("the closed list has a scroll area of its own that the workstreams above keep their room beside", async ({ page }) => {
-    test.setTimeout(120_000);
-    await reporterDraftOpen(page);
-    const controls = pipHome(page).locator("[data-workstream-controls]");
-    await controls.getByRole("button", { name: "Close…" }).click();
-    await controls.getByRole("button", { name: "Close workstream" }).click();
-    await expect(workstreamRow(page, "CA-408")).toHaveCount(0);
-    const list = pipHome(page).getByRole("listbox", { name: "Workstreams" });
-    const before = (await list.boundingBox())!.height;
-    await pipHome(page).getByRole("button", { name: "Show closed" }).click();
-    const closed = pipHome(page).getByRole("list", { name: "Closed workstreams" });
-    await expect(closed.locator("[data-closed-workstream]")).toHaveCount(1);
-    expect(await closed.evaluate((el) => getComputedStyle(el).overflowY)).toBe("auto");
-    // Showing the closed list leaves the workstreams as much room as it can: General stays visible, and the list is not squeezed away.
-    await expect(list.locator('[data-workstream-row="general"]')).toBeVisible();
-    expect((await list.boundingBox())!.height).toBeGreaterThanOrEqual(Math.min(before, 80));
-    expect((await closed.boundingBox())!.height).toBeGreaterThanOrEqual(40);
-  });
 });
 
 test.describe("closing a workstream with a comment to the reporter waiting (G30)", () => {
@@ -109,7 +91,7 @@ test.describe("closing a workstream with a comment to the reporter waiting (G30)
     test.setTimeout(120_000);
     await reporterDraft(page);
     await expectToast(page, NOTE);
-    const controls = pipHome(page).locator("[data-workstream-controls]");
+    const controls = pipPane(page).locator("[data-workstream-controls]");
     await controls.getByRole("button", { name: "Close…" }).click();
     await controls.getByRole("button", { name: "Close workstream" }).click();
     await expectToast(page, "Closed the workstream on CA-408. Its agents and drafts are kept in General.");

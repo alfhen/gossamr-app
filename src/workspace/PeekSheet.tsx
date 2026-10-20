@@ -31,12 +31,12 @@ import { focusPip, useItemWorkstream, useWorkstreams } from "./workstreamsStore"
 import { useToasts } from "./toasts";
 
 /**
- * The peek's "Start a workstream": the workstream opens as `start` shows it, which over Pip home is the one selected there, so
- * closing the peek does not leave General in its place; a note says it started where the Pip pane is not there to show it.
+ * The peek's "Start a workstream": the workstream opens as `start` shows it, which over Agents is its detail, so closing the
+ * peek leaves it there; a note says it started.
  */
 export async function startFromPeek(ref: ItemRef) {
   const started = await useWorkstreams.getState().start(ref);
-  if (started && useTabs.getState().route === "pip") useToasts.getState().push(`Started a workstream on ${ref.key}.`, "info", undefined, { lifetime: 2500 });
+  if (started && useTabs.getState().route === "agents") useToasts.getState().push(`Started a workstream on ${ref.key}.`, "info", undefined, { lifetime: 2500 });
 }
 
 const CATEGORY_TONE = {
@@ -676,9 +676,9 @@ function OpenPeek({ item, motion, wide, onWide, onMotionEnd }: { item: WorkItem 
       if (menuOpen) return setMenuOpen(false);
       const inside = !!document.activeElement?.closest("#peek-sheet");
       useTabs.getState().select(null);
-      // Over Pip home, Pip home hands the keyboard back to what opened the peek. Elsewhere it goes to the ticket's card, or
-      // to the canvas when the card doesn't take focus (as when the peek was opened from the palette), never nowhere.
-      if (inside && useTabs.getState().route !== "pip")
+      // The keyboard goes to the ticket's card, or to the canvas when the card doesn't take focus (as when the peek was
+      // opened from the palette), never nowhere.
+      if (inside)
         requestAnimationFrame(() => {
           const card = canvasElement(ref);
           card?.focus();

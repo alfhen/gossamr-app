@@ -12,13 +12,16 @@ const onPage = (find: () => HTMLElement | null) => {
   if (typeof document !== "undefined" && typeof requestAnimationFrame !== "undefined") focusWhenDrawn(find, () => document.activeElement);
 };
 
-/** Puts the keyboard on workstream `id`'s row in Pip home's list once it is drawn: where it goes after Reopen, or an Undo that brought the workstream back. */
+/** Puts the keyboard on workstream `id`'s open button in the Agents view once it is drawn: where it goes after Reopen, or an Undo that brought the workstream back. */
 export const focusWorkstreamRow = (id: string) =>
-  onPage(() => document.querySelector<HTMLElement>(`[data-workstream-row="${CSS.escape(id)}"]`));
+  onPage(() => document.querySelector<HTMLElement>(`[data-workstream-group="${CSS.escape(id)}"] [data-workstream-open]`));
+
+/** Puts the keyboard back on the Agents view's list once a card over it has closed: its first workstream, else its heading. */
+export const focusAgentsList = () => onPage(() => document.querySelector<HTMLElement>("[data-agents-home] [data-workstream-open]") ?? document.querySelector<HTMLElement>("[data-agents-home] h1"));
 
 /** Puts the keyboard back on "Bring them here" of workstream `id`'s notice, which an Undo of the adoption restored. */
 export const focusAdoptButton = (id: string) =>
   onPage(() => document.querySelector<HTMLElement>(`[data-adopt-notice="${CSS.escape(id)}"] [data-adopt]`));
 
 /** Puts the keyboard on the timeline once the runs and drafts brought into a workstream are in it: "Bring them here" went away with the click. */
-export const focusAdopted = () => onPage(() => document.querySelector<HTMLElement>("[data-pip-home] [data-timeline]"));
+export const focusAdopted = () => onPage(() => document.querySelector<HTMLElement>("aside[data-pip-root] [data-timeline]"));

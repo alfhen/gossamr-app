@@ -8,7 +8,7 @@ import { useWorkspace } from "../workspaceStore";
 import { contextDeps } from "./contextActions";
 import { draftDecisions } from "./DraftPreview";
 import { keepEditsOfDraft } from "./DraftCard";
-import { usePipHome } from "./pipHomeStore";
+import { useWorkView } from "./workViewStore";
 import { useRuns } from "./runsStore";
 import { useTabs } from "./tabsStore";
 import { useToasts } from "./toasts";
@@ -71,8 +71,8 @@ describe("skipping a draft", () => {
     await useWorkspace.getState().refreshProposals();
     await useWorkspace.getState().skip(a.id);
     expect(useToasts.getState().toasts[0].spoken).toBeUndefined();
-    useTabs.getState().setRoute("pip");
-    usePipHome.getState().decide(`draft:${b.id}`, ws.id);
+    useTabs.getState().setRoute("agents");
+    useWorkView.getState().decide(`draft:${b.id}`);
     await useWorkspace.getState().skip(b.id);
     expect(useToasts.getState().toasts.find((t) => t.text.includes("Other"))?.spoken).toBe(false);
     useTabs.getState().setRoute("workspace");
@@ -83,7 +83,7 @@ describe("skipping a draft", () => {
     const p = backend.proposals.draft(comment, null, "r1", ws.id);
     await useWorkspace.getState().refreshProposals();
     useTabs.getState().setRoute("workspace");
-    usePipHome.getState().decide(`draft:${p.id}`, ws.id);
+    useWorkView.getState().decide(`draft:${p.id}`);
     await useWorkspace.getState().skip(p.id);
     expect(useToasts.getState().toasts[0].spoken).toBeUndefined();
   });
@@ -116,19 +116,19 @@ describe("skipping a draft", () => {
     expect(audit.slice(-2)).toEqual(["draft_skipped", "undone"]);
   });
 
-  it("opens the restored draft in Pip home's pane, and only while Pip home is the screen", async () => {
+  it("opens the restored draft in the Agents decision pane, and only while Agents is the screen", async () => {
     const p = backend.proposals.draft(comment);
     await useWorkspace.getState().refreshProposals();
     await useWorkspace.getState().skip(p.id);
-    useTabs.setState({ route: "pip" });
-    usePipHome.getState().closeDecision();
+    useTabs.setState({ route: "agents" });
+    useWorkView.getState().closeDecision();
     await undoLog.run(undoLog.latest()!.id);
-    expect(usePipHome.getState().deciding).toBe(`draft:${p.id}`);
+    expect(useWorkView.getState().deciding).toBe(`draft:${p.id}`);
     await useWorkspace.getState().skip(p.id);
     useTabs.setState({ route: "workspace" });
-    usePipHome.getState().closeDecision();
+    useWorkView.getState().closeDecision();
     await undoLog.run(undoLog.latest()!.id);
-    expect(usePipHome.getState().deciding).toBeNull();
+    expect(useWorkView.getState().deciding).toBeNull();
   });
 
   it("is the same from the keys and buttons: draftDecisions().skip offers it too", async () => {

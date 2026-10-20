@@ -7,7 +7,7 @@ import { useWorkspace } from "../workspaceStore";
 import { BUILT_IN_VIEWS, PRESETS, showsEntry, visibleChips, withProject } from "./filters";
 import { Header, ProjectMenu, ViewSegment } from "./Header";
 import { HOLD_ALL_NOTE, Rail, RailButton, RailTip } from "./Rail";
-import { COMPOSER_CLEAR, ToastHost, toastPlacement } from "./ToastHost";
+import { ToastHost, toastPlacement } from "./ToastHost";
 import { useToasts, LIFETIME_MS, MAX_QUEUED, STALE_MS } from "./toasts";
 import { MORE_BUTTON, sameWindow, tabWindow } from "./TabBar";
 import { canvasRoom, regionTarget } from "./Workspace";
@@ -202,19 +202,13 @@ describe("nothing covers anything", () => {
     }
   });
 
-  it("puts toasts bottom right of the canvas, above the launcher and left of the peek, and in Pip home's Steps column", () => {
-    const canvas = toastPlacement("workspace", 520);
+  it("puts toasts bottom right of the canvas, above the launcher and left of the peek", () => {
+    const canvas = toastPlacement(520);
     expect(canvas.right).toBe("calc(520px + 1.25rem)");
     expect(canvas.bottom).toContain("var(--ws-launcher-clear, 0px)");
     expect(canvas.bottom).toContain("var(--ws-footer-h, 2rem)");
     expect(canvas).not.toHaveProperty("top");
-    expect(toastPlacement("agents", 0).right).toBe("calc(0px + 1.25rem)");
-    // Pip home: inside the Steps column, which is at least 240px wide, or above the composer when a peek covers it.
-    const home = toastPlacement("pip", 0);
-    expect(home.right).toBe(16);
-    expect(Number(home.maxWidth)).toBeLessThanOrEqual(240 + 2 * 16 + 16);
-    expect(toastPlacement("pip", 520).bottom).toContain(`${COMPOSER_CLEAR}px`);
-    expect(toastPlacement("pip", 520).right).toBe("calc(520px + 1.25rem)");
+    expect(toastPlacement(0).right).toBe("calc(0px + 1.25rem)");
   });
 
   it("shows a run of whole tabs that always holds the active one, and ends where the last whole tab does", () => {

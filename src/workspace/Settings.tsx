@@ -15,7 +15,7 @@ import { workContainers } from "./domains";
 import { WatchingSection } from "./WatchSettings";
 import { gapWords, learnedList, LEARN_AFTER, SHORT_GAP } from "../lib/clarityLearning";
 import { giveBackClarity } from "./clarityActions";
-import { useEscToPipHome } from "./escHome";
+import { useEscBack } from "./escBack";
 import { GITHUB_SAFETY } from "./githubSafety";
 
 export function connectionsOf(containers: { ref: { connectionId: string } }[]): { id: string; name: string; projects: number }[] {
@@ -263,7 +263,7 @@ export function Settings() {
   const setTheme = usePrefs((s) => s.setTheme);
   const setUi = usePrefs((s) => s.setUi);
   const agents = useAgentsFlag();
-  useEscToPipHome(agents.enabled);
+  useEscBack(agents.enabled);
   const containers = useWorkspace((s) => s.containers);
   const connections = useWorkspace((s) => s.connections);
   const section = useTabs((s) => s.settingsSection);

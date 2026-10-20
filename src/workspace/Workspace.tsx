@@ -27,10 +27,9 @@ import { useAgentsEnabled, useAgentsFlag } from "./agentsFlag";
 import { applyTheme, usePrefs } from "./prefs";
 import { useRuns } from "./runsStore";
 import { togglePip, useWorkstreams } from "./workstreamsStore";
-import { PipHome, settleGeneralFocus } from "./PipHome";
 import { Rail } from "./Rail";
-import { GENERAL_KEY_OFF, generalKeyOutcome, isHoldAllKey, isPipHomeKey } from "./commands";
-import { TABBABLE, nextRegion, regionStep, wrapTab, type WorkspaceRegion } from "./pipHomeKeys";
+import { isHoldAllKey } from "./commands";
+import { TABBABLE, nextRegion, regionStep, wrapTab, type WorkspaceRegion } from "./workKeys";
 import { Settings } from "./Settings";
 import { Header } from "./Header";
 import { ConnectGithubDialog } from "./ConnectGithub";
@@ -39,10 +38,8 @@ import { FILTER_LIMIT, useDev } from "./devStore";
 import { ChooseWatch } from "./WatchPicker";
 import { ReauthBanner } from "./ReauthBanner";
 import { ToastHost, focusToast, toastPlacement } from "./ToastHost";
-import { useToasts } from "./toasts";
 import { useTabs, type Route } from "./tabsStore";
 import { ROUTE_NAME, routeHeading, routeTitle } from "./routeTitle";
-import { usePipHome } from "./pipHomeStore";
 
 /** Matches no item, for a filter that has nothing to read. */
 const NOTHING: WorkFilter = { type: "items", items: [] };
@@ -71,12 +68,10 @@ function Canvas() {
   return <View tab={tab} items={items} />;
 }
 
-/** What the main area shows on `route`. Agents and Pip home are there only while Agents are on; until the route moves on, nothing is. */
+/** What the main area shows on `route`. Agents is there only while Agents are on; until the route moves on, nothing is. */
 export function mainScreen(route: Route, agentsEnabled: boolean): Route | null {
-  return (route === "agents" || route === "pip") && !agentsEnabled ? null : route;
+  return route === "agents" && !agentsEnabled ? null : route;
 }
-
-/** Whether the docked Pip pane is in the window: as the person left it, except on Pip home, whose own conversation takes its place. */
 
 /**
  * How much of the main area's right side the workspace leaves to the open peek, so the canvas reflows beside it
@@ -84,25 +79,22 @@ export function mainScreen(route: Route, agentsEnabled: boolean): Route | null {
  */
 export const canvasRoom = (route: Route, peekOpen: boolean, peekWidth: number) => (route === "workspace" && peekOpen ? peekWidth : 0);
 
-/** Pip home is where the app opens only once per load, so coming back to the workspace later doesn't send the person away again. */
+/** The app opens on Agents only once per load, so coming back to the workspace later doesn't send the person away again. */
 let landed = false;
 
 /**
- * Opens on Pip home once the workspace is ready and the backend said Agents are on, unless the person turned 'Start on
- * Pip home' off. Then, and with Agents off, the app opens on the workspace.
+ * Opens on Agents once the workspace is ready and the backend said Agents are on, unless the person turned 'Start on
+ * Agents' off. Then, and with Agents off, the app opens on the workspace.
  */
-function useStartOnPipHome(ready: boolean) {
+function useStartOnAgents(ready: boolean) {
   const known = useAgentsFlag((s) => s.known);
   const enabled = useAgentsFlag((s) => s.enabled);
   useEffect(() => {
     if (!ready || !known || landed) return;
     landed = true;
-    if (enabled && usePrefs.getState().startOnPipHome) useTabs.getState().setRoute("pip");
+    if (enabled && usePrefs.getState().startOnAgents) useTabs.getState().setRoute("agents");
   }, [ready, known, enabled]);
 }
-
-/** Whether the keyboard is in a field other than Pip's composer. */
-const typingElsewhere = (el: Element | null) => isTypingTarget(el) && el?.id !== PIP_INPUT_ID;
 
 /** The region of the workspace layout `el` is in: the peek, Pip's pane, or the main area around them. */
 function regionOf(el: Element | null): WorkspaceRegion {
@@ -133,14 +125,14 @@ const tabStops = () =>
   Array.from(document.querySelectorAll<HTMLElement>(TABBABLE)).filter((el) => el.tabIndex >= 0 && !(el as HTMLButtonElement).disabled && !el.closest("[hidden], [inert]") && el.getClientRects().length > 0);
 
 /**
- * The workspace layout's regions by keyboard, as Pip home has its columns (D29): F6 and Shift+F6 step between the main
- * area, the peek and Pip's pane, from Pip's composer too; and Tab from the page's last stop (the pane's last button)
- * goes on to the next region rather than to the page itself. Pip home keeps its own.
+ * The workspace layout's regions by keyboard (D29): F6 and Shift+F6 step between the main area, the peek and Pip's pane,
+ * from Pip's composer too; and Tab from the page's last stop (the pane's last button) goes on to the next region rather
+ * than to the page itself.
  */
 function useRegionKeys() {
   useEffect(() => {
     const onKey = (ev: KeyboardEvent) => {
-      if (ev.defaultPrevented || useTabs.getState().route === "pip" || usePrefs.getState().paletteOpen || document.querySelector('[aria-modal="true"]')) return;
+      if (ev.defaultPrevented || usePrefs.getState().paletteOpen || document.querySelector('[aria-modal="true"]')) return;
       const active = document.activeElement instanceof HTMLElement ? document.activeElement : null;
       const present: WorkspaceRegion[] = ["main", ...(document.getElementById("peek-sheet") ? (["peek"] as const) : []), ...(document.querySelector("aside[data-pip-root]") ? (["pip"] as const) : []), ...(document.querySelector("[data-toast]") ? (["toast"] as const) : [])];
       // A KeyboardEvent's fields are getters on its prototype, so they are named, not spread.
@@ -166,24 +158,6 @@ function useGlobalKeys(agentsEnabled: boolean) {
       if (agentsEnabled && isHoldAllKey(ev) && !isTypingTarget(document.activeElement)) {
         ev.preventDefault();
         void useWorkstreams.getState().holdAll();
-        return;
-      }
-      // Like Cmd/Ctrl+J it works from Pip's composer; never from another field (closing a peek would lose an unsaved
-      // comment) or behind the open palette.
-      if (agentsEnabled && isPipHomeKey(ev) && !typingElsewhere(document.activeElement) && !usePrefs.getState().paletteOpen) {
-        ev.preventDefault();
-        // Already on Pip home inside a workstream, it goes on to General while Pip's composer is empty; with a message in it
-        // the key is off, and says so rather than doing nothing.
-        if (useTabs.getState().route === "pip") {
-          // Read wherever the keyboard is: tabbing away from a half-written message doesn't make it safe to leave.
-          const composer = document.getElementById(PIP_INPUT_ID) as HTMLTextAreaElement | null;
-          const typed = composer ? composer.value : null;
-          if (generalKeyOutcome(typed) === "open") {
-            usePipHome.getState().openGeneral();
-            settleGeneralFocus();
-          } else useToasts.getState().push(GENERAL_KEY_OFF, "info", undefined, { now: true });
-        }
-        useTabs.getState().setRoute("pip");
         return;
       }
       if (!(ev.metaKey || ev.ctrlKey) || ev.altKey || ev.shiftKey) return;
@@ -247,15 +221,14 @@ export function Workspace({ backend }: { backend: Backend }) {
   const screen = mainScreen(route, agentsEnabled);
   useRouteAnnounce(screen);
   const paneShown = pipOpen;
-  // Pip home has its own conversation while the drawer is closed, and no mascot over its columns.
-  const launcherShown = !pipOpen && screen !== "pip";
+  const launcherShown = !pipOpen;
   const room = canvasRoom(route, peekOpen, peekWidth);
 
   useEffect(() => listenToClaude(), []);
 
   // Once the backend answers, Pip's conversation comes back from where it is kept, so it outlives a reload.
   const ready = status === "ready";
-  useStartOnPipHome(ready);
+  useStartOnAgents(ready);
   useEffect(() => {
     if (!ready) return;
     listenToClaude();
@@ -290,7 +263,7 @@ export function Workspace({ backend }: { backend: Backend }) {
   useEffect(() => {
     if (!agentsEnabled) {
       const now = useTabs.getState().route;
-      if (now === "agents" || now === "pip") useTabs.getState().setRoute("workspace");
+      if (now === "agents") useTabs.getState().setRoute("workspace");
       return;
     }
     useRuns.getState().init(backend);
@@ -360,7 +333,6 @@ export function Workspace({ backend }: { backend: Backend }) {
               {screen === "activity" && <ActivityView />}
               {screen === "sent" && <JiraSentView />}
               {screen === "agents" && <AgentsView />}
-              {screen === "pip" && <PipHome />}
               {screen === "settings" && <Settings />}
             </div>
           </div>
@@ -368,7 +340,7 @@ export function Workspace({ backend }: { backend: Backend }) {
           {agentsEnabled && <AgentSheets />}
           {launcherShown && <PipLauncher />}
           <SelectionAsk />
-          <ToastHost placement={toastPlacement(screen, screen === "pip" ? (peekOpen ? peekWidth : 0) : room)} />
+          <ToastHost placement={toastPlacement(room)} />
         </main>
         {paneShown && <PipPane onClose={() => setPipOpen(false)} />}
         {paletteOpen && <Palette />}

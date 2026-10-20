@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { advanceRuns, askPip, expandAllNeeds, needOfKind, needsPane, githubWrites, mockRuns, openApp, openPipHome, peekSheet, peekTicket, pendingReviewDrafts, pipConversation, pipPane, reviewDrafts, setBudget, startWorkstream, surfacePullRequests, workstreamEvents } from "./support/app";
+import { advanceRuns, askPip, expandAllNeeds, githubWrites, mockRuns, needOfKind, needsPane, openAgents, openApp, peekSheet, peekTicket, pendingReviewDrafts, pipConversation, pipPane, reviewDrafts, setBudget, startWorkstream, surfacePullRequests, workstreamEvents } from "./support/app";
 
 // Post the review as is, on an escalation (a review that still blocks after the automatic fix rounds): while its draft is
 // open the card says why its choices wait; posting the draft resolves the escalation; discarding it brings the choices back.
@@ -100,7 +100,7 @@ async function escalated(page: Page) {
     await expect.poll(async () => (await pendingReviewDrafts(page)).map((d) => d.runId)).toEqual([review]);
   }
   await expect.poll(async () => (await lines(page, "fix_rounds_exhausted")).map((e) => e.runId)).toEqual([review]);
-  await openPipHome(page);
+  await openAgents(page);
   await expandAllNeeds(page);
   await expect(escalationItem(page)).toHaveCount(1);
   await escalationItem(page).click();

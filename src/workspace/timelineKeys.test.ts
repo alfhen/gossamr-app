@@ -3,13 +3,10 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { createElement } from "react";
 import { MockBackend } from "../backend/mock";
 import type { Proposal, Run, WorkstreamView } from "../types";
-import { pipHomeHints } from "./footerHints";
 import { HINTS, keyHint } from "./keyMap";
 import { entryLabel, timelineDrafts, timelineRuns, withTicket } from "./Timeline";
 import { ENTRY_FOCUS, anchoredScrollTop, followsEnd, nearBottom, firstShowing, readingAnchor, revealEntry, stepIndex, timelineKeyAction, timelineStop, upToTimeline } from "./timelineKeys";
-import { usePipHome } from "./pipHomeStore";
-import { useTabs } from "./tabsStore";
-import { TimelineFilterBar, TimelineScopeToggle, showTimeline } from "./TimelineFilterBar";
+import { TimelineFilterBar } from "./TimelineFilterBar";
 
 const press = (key: string, mods: { shiftKey?: boolean; metaKey?: boolean } = {}) => ({ key, ...mods });
 
@@ -83,10 +80,6 @@ describe("the timeline's keys", () => {
 
   it("names its keys in the footer from the one model", () => {
     expect(keyHint("timeline")).toBe("j k move through the timeline · ↵ o open");
-    const hints = pipHomeHints(false, true);
-    expect(hints.find((h) => h.id === "timeline")?.keys).toEqual(["j", "k"]);
-    expect(hints.find((h) => h.id === "open")?.keys).toEqual(["↵", "o"]);
-    expect(pipHomeHints().some((h) => h.id === "timeline")).toBe(false);
     expect(HINTS.timeline).toHaveLength(2);
   });
 });
@@ -107,13 +100,6 @@ describe("the filter bar", () => {
     expect(html).not.toContain("Timeline filter");
   });
 
-  it("presses the scope shown, with Runs as with any filter: no scope is another screen", () => {
-    const html = renderToStaticMarkup(createElement(TimelineScopeToggle, { value: "workstream", onChange: () => {} }));
-    expect(html).toContain('aria-label="Timeline scope"');
-    expect(html).toMatch(/aria-pressed="true"[^>]*data-scope="workstream"[^>]*>This workstream</);
-    expect(html).toMatch(/aria-pressed="false"[^>]*data-scope="every"[^>]*>Every workstream</);
-    expect(html).not.toContain("Agents screen");
-  });
 });
 
 describe("what a conversation's timeline holds", () => {
@@ -141,27 +127,6 @@ describe("what a conversation's timeline holds", () => {
     expect(timelineDrafts(all, true, new Set())).toEqual(all);
     expect(timelineDrafts(all, false, new Set(["q1"])).map((x) => x.id)).toEqual(["loose", "mine", "waiting"]);
     expect(timelineDrafts(all, false, new Set()).map((x) => x.id)).toEqual(["loose", "waiting"]);
-  });
-});
-
-describe("showing a filter in a scope", () => {
-  it("goes to Pip home's timeline with both, Runs in every workstream included", () => {
-    usePipHome.getState().reset();
-    useTabs.getState().setRoute("workspace");
-    showTimeline("drafts", "every");
-    expect(useTabs.getState().route).toBe("pip");
-    expect(usePipHome.getState()).toMatchObject({ timelineFilter: "drafts", timelineScope: "every" });
-    useTabs.getState().setRoute("workspace");
-    showTimeline("runs");
-    // Runs in every workstream stays on Pip home's timeline; it no longer redirects to the Agents screen.
-    expect(useTabs.getState().route).toBe("pip");
-    expect(usePipHome.getState()).toMatchObject({ timelineFilter: "runs", timelineScope: "every" });
-    showTimeline("decisions");
-    expect(useTabs.getState().route).toBe("pip");
-    expect(usePipHome.getState()).toMatchObject({ timelineFilter: "decisions", timelineScope: "every" });
-    showTimeline("runs", "workstream");
-    expect(useTabs.getState().route).toBe("pip");
-    expect(usePipHome.getState()).toMatchObject({ timelineFilter: "runs", timelineScope: "workstream" });
   });
 });
 
@@ -236,17 +201,15 @@ describe("firstShowing", () => {
 });
 
 describe("entryLabel", () => {
-  const base = { kind: "audit", scopeLabel: undefined, text: "The reporter replied on the ticket" } as const;
+  const base = { kind: "audit", text: "The reporter replied on the ticket" } as const;
   it("tells the reply entry what Enter does, and leaves other entries as their sentence", () => {
     expect(entryLabel({ ...base, target: { type: "comment", ticketKey: "CA-1", id: "c1" } })).toBe("The reporter replied on the ticket. Enter opens the comment");
-    expect(entryLabel({ ...base, scopeLabel: "CA-1", target: { type: "comment", ticketKey: "CA-1", id: "c1" } })).toBe("CA-1: The reporter replied on the ticket. Enter opens the comment");
     expect(entryLabel({ ...base, target: null })).toBe("The reporter replied on the ticket");
     expect(entryLabel({ ...base, kind: "said", target: null })).toBeUndefined();
   });
 
   it("names the ticket, so a row read alone is not a bare sentence (G32)", () => {
     expect(entryLabel({ ...base, ticketKey: "CA-1", target: null })).toBe("CA-1: The reporter replied on the ticket");
-    expect(entryLabel({ ...base, ticketKey: "CA-1", scopeLabel: "CA-1", target: null })).toBe("CA-1: The reporter replied on the ticket");
     expect(entryLabel({ ...base, ticketKey: null, target: null })).toBe("The reporter replied on the ticket");
     expect(withTicket("Agent R1 started on CA-1", "CA-1")).toBe("Agent R1 started on CA-1");
   });

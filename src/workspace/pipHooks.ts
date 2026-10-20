@@ -9,8 +9,8 @@ import { useRuns } from "./runsStore";
 import { currentNeeds, useNeedsYou } from "./useNeeds";
 import { useActiveTab } from "./hooks";
 import { itemScene, type ItemScene } from "./pipScene";
-import { usePipHome } from "./pipHomeStore";
-import { buildScreenContext, homeConversationLine, type Screen } from "./screenContext";
+import { useWorkView } from "./workViewStore";
+import { buildScreenContext, openWorkstreamLine, type Screen } from "./screenContext";
 import { activeTab, useTabs } from "./tabsStore";
 import { useWorkstreams } from "./workstreamsStore";
 
@@ -39,7 +39,7 @@ export function readScreen(): Screen {
     marked: tabs.marked,
     activity: { chip, container },
     agents: agentsIn(useAgentsFlag.getState().enabled, useRuns.getState(), currentNeeds()),
-    home: homeConversationLine(usePipHome.getState().selected, useWorkstreams.getState().list),
+    workstream: openWorkstreamLine(useWorkView.getState().selected, useWorkstreams.getState().list),
   };
 }
 
@@ -65,11 +65,11 @@ export function useScreen(): Screen {
   const earlierOpen = useRuns((s) => s.earlierOpen);
   const needs = useNeedsYou();
   const agents = useMemo(() => agentsIn(enabled, { sheet, runs, filters, earlierOpen }, needs), [enabled, sheet, runs, filters, earlierOpen, needs]);
-  const homeSelected = usePipHome((s) => s.selected);
-  const home = useWorkstreams((s) => homeConversationLine(homeSelected, s.list));
+  const openSelected = useWorkView((s) => s.selected);
+  const workstream = useWorkstreams((s) => openWorkstreamLine(openSelected, s.list));
   return useMemo(
-    () => ({ route, tab, shown, items, peeked, containers, selected, marked, activity: { chip, container }, agents, home }),
-    [route, tab, shown, items, peeked, containers, selected, marked, chip, container, agents, home],
+    () => ({ route, tab, shown, items, peeked, containers, selected, marked, activity: { chip, container }, agents, workstream }),
+    [route, tab, shown, items, peeked, containers, selected, marked, chip, container, agents, workstream],
   );
 }
 

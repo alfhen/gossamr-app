@@ -1,33 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import {
-  advanceRuns,
-  askPermission,
-  askPip,
-  expandAllNeeds,
-  foldAllNeeds,
-  expectToast,
-  githubWrites,
-  jiraWrites,
-  mockAttached,
-  mockRuns,
-  needOfKind,
-  needsPane,
-  needsPaneHeading,
-  needsYouTray,
-  openApp,
-  openPipHome,
-  peekSheet,
-  peekTicket,
-  pendingReviewDrafts,
-  pipConversation,
-  pipHome,
-  pipPane,
-  reviewDrafts,
-  setBudget,
-  startWorkstream,
-  surfacePullRequests,
-  workstreamEvents,
-} from "./support/app";
+import { advanceRuns, agentsHome, askPermission, askPip, expandAllNeeds, expectToast, foldAllNeeds, githubWrites, jiraWrites, mockAttached, mockRuns, needOfKind, needsPane, needsPaneHeading, needsYouTray, openAgents, openApp, peekSheet, peekTicket, pendingReviewDrafts, pipConversation, pipPane, reviewDrafts, setBudget, startWorkstream, surfacePullRequests, workstreamEvents } from "./support/app";
 
 // Decisions only the person makes, in a workstream in Manage mode (`wsManage=1`): a run's permission prompt answered
 // in the app, and a review that still blocks after the automatic fix rounds. Pull requests show only when a test says.
@@ -107,7 +79,7 @@ test("the first permission prompt on a Build explains Allow once in Terminal abo
   await startWorkstream(page, "CA-401");
   const build = await workingBuild(page);
   await askPermission(page, build.id, `approve Bash: git push -u origin worktree-${build.name}`);
-  await openPipHome(page);
+  await openAgents(page);
   await expandAllNeeds(page);
   await needOfKind(page, "permission").click();
   const explainer = asking(page).locator("[data-permission-explainer]");
@@ -134,7 +106,7 @@ test("Allow once on a Build opens it in Terminal for that exact command, and a p
   const written = await jiraWrites(page);
   await askPermission(page, build.id, `approve Bash: ${push}`);
 
-  await openPipHome(page);
+  await openAgents(page);
   await foldAllNeeds(page);
   const item = needOfKind(page, "permission");
   await expect(item).toContainText("R4 wants to run `git push -u origin");
@@ -209,7 +181,7 @@ test("Deny on a read-only run, which is never offered Allow: Claude carries on w
   await moveTo(page, run.id, "working", 2);
   await askPermission(page, run.id, "approve Bash: rm -rf node_modules");
 
-  await openPipHome(page);
+  await openAgents(page);
   await expandAllNeeds(page);
   const item = needOfKind(page, "permission");
   await expect(item).toContainText("R1 wants to run `rm -rf node_modules`.");
@@ -296,7 +268,7 @@ test("a review that still blocks after two fix rounds comes to the person with t
   await expect.poll(async () => (await lines(page, "fix_rounds_exhausted")).map((e) => e.runId)).toEqual([review]);
   expect(await lines(page, "fix_round_sent")).toHaveLength(2);
 
-  await openPipHome(page);
+  await openAgents(page);
   await foldAllNeeds(page);
   await expect(escalationItem(page)).toHaveCount(1);
   await expect(escalationItem(page)).toContainText("The review still blocks after 2 fix rounds.");
@@ -305,7 +277,7 @@ test("a review that still blocks after two fix rounds comes to the person with t
   // The pane's header says it (and what waiting does); the card doesn't say it a second time, and isn't on the rail as well.
   await expect(needsPane(page)).toContainText("The review still blocks after 2 fix rounds.");
   await expect(card).not.toContainText("What next?");
-  await expect(pipHome(page).locator("[data-escalation]")).toHaveCount(1);
+  await expect(agentsHome(page).locator("[data-escalation]")).toHaveCount(1);
   await expect(card.getByRole("button")).toHaveText(["Run another fix round", "I'll take it from here", "Post the review as is"]);
   await expect(needsPaneHeading(page)).toBeFocused();
 
@@ -314,7 +286,7 @@ test("a review that still blocks after two fix rounds comes to the person with t
   const draft = needsPane(page).locator(`article[data-draft="${waiting.id}"]`);
   await expect(draft).toBeVisible();
   // And one card of it on the whole screen: the timeline and the rail don't show it as well.
-  await expect(pipHome(page).locator(`article[data-draft="${waiting.id}"]`)).toHaveCount(1);
+  await expect(agentsHome(page).locator(`article[data-draft="${waiting.id}"]`)).toHaveCount(1);
   await expect(needsYouTray(page).locator("[data-needs-you-need][data-kind=\"review\"], [data-needs-you-group][data-kind=\"review\"]")).toHaveCount(0);
   // Post the review as is: nothing goes to GitHub until the draft's own Post review.
   await card.getByRole("button", { name: "Post the review as is" }).click();
@@ -351,9 +323,9 @@ test("a review that still blocks after two fix rounds comes to the person with t
   // I'll take it from here: Advise, and nothing else changes.
   const before = { runs: await mockRuns(page), drafts: await pendingReviewDrafts(page), jira: await jiraWrites(page) };
   await card.getByRole("button", { name: "I'll take it from here" }).click();
-  const over = pipHome(page).getByRole("status").filter({ hasText: "Over to you" });
+  const over = agentsHome(page).getByRole("status").filter({ hasText: "Over to you" });
   await expectToast(page, "Over to you: this workstream is on Advise now.");
-  await expect(pipHome(page).getByRole("switch", { name: "Manage this workstream" })).toHaveAttribute("aria-checked", "false");
+  await expect(page.getByRole("switch", { name: "Manage this workstream" }).first()).toHaveAttribute("aria-checked", "false");
   expect((await lines(page, "escalation_taken")).map((e) => ({ actor: e.actor, runId: e.runId }))).toEqual([{ actor: "person", runId: review }]);
   await expect(escalationItem(page)).toHaveCount(0);
   expect(await mockRuns(page)).toEqual(before.runs);
@@ -362,8 +334,8 @@ test("a review that still blocks after two fix rounds comes to the person with t
   expect(await githubWrites(page)).toEqual([]);
 
   // Manage on again: the review taken over stays the person's. No false "on Advise now", and the tray and the card agree.
-  await pipHome(page).getByRole("switch", { name: "Manage this workstream" }).click();
-  await expect(pipHome(page).getByRole("switch", { name: "Manage this workstream" })).toHaveAttribute("aria-checked", "true");
+  await page.getByRole("switch", { name: "Manage this workstream" }).first().click();
+  await expect(page.getByRole("switch", { name: "Manage this workstream" }).first()).toHaveAttribute("aria-checked", "true");
   await expect(over).toHaveCount(0);
   await expect(card).toHaveCount(0);
   await expect(escalationItem(page)).toHaveCount(0);

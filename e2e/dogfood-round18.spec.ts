@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { agentsSettled, askRun, expandNeedsYou, mockRuns, needRow, needsPane, openApp, openPipHome, pipHome, startWorkstream, workstreamRow } from "./support/app";
+import { agentsHome, agentsSettled, askRun, expandNeedsYou, mockRuns, needRow, needsPane, openAgents, openApp, selectWorkstream, startWorkstream } from "./support/app";
 
 // Fixes from the eighteenth dogfood round: 'start CA-408' in the palette offers the workstream, not only Ask Pip (G8).
 
@@ -35,11 +35,11 @@ test.describe("a skip announces once (G6)", () => {
     await page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "All projects" }).click();
     await startWorkstream(page, "CA-408");
     await startWorkstream(page, "CA-402");
-    await openPipHome(page);
-    await workstreamRow(page, "CA-402").click();
-    await pipHome(page).locator("[data-clarity-notice]").getByRole("button", { name: "Ask the reporter now" }).click();
-    await workstreamRow(page, "CA-408").click();
-    await pipHome(page).locator("[data-clarity-notice]").getByRole("button", { name: "Ask the reporter now" }).click();
+    await openAgents(page);
+    await selectWorkstream(page, "CA-402");
+    await agentsHome(page).locator("[data-clarity-notice]").getByRole("button", { name: "Ask the reporter now" }).click();
+    await selectWorkstream(page, "CA-408");
+    await agentsHome(page).locator("[data-clarity-notice]").getByRole("button", { name: "Ask the reporter now" }).click();
     const draft = needsPane(page).getByRole("article", { name: /^Comment on CA-/ });
     await draft.getByRole("button", { name: "Skip" }).click();
     await expect(page.locator("[data-needs-advanced]")).toContainText(/^Skipped: .*Now:/);
@@ -51,7 +51,7 @@ test.describe("a skip announces once (G6)", () => {
 test.describe("a typed answer to an agent's question (G1)", () => {
   test("is not carried over to a new question the run asks while its box is open", async ({ page }) => {
     await openApp(page);
-    await openPipHome(page);
+    await openAgents(page);
     await expandNeedsYou(page);
     await needRow(page, /CA-409.*asks a question/).click();
     const box = needsPane(page).getByRole("textbox", { name: "Your answer" });

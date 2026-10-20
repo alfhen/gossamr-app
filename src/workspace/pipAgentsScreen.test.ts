@@ -107,7 +107,8 @@ describe("chips and placeholder on the Agents screen", () => {
 
   it("words the placeholder for what the next question is about", () => {
     const p = { images: false, quote: false, itemKey: null, route: "agents" as const, runOpen: false };
-    expect(placeholderFor(p)).toBe("Ask about the agents…");
+    expect(placeholderFor(p)).toBe("Ask about your workstreams and agents…");
+    expect(placeholderFor({ ...p, workstream: true })).toBe("Ask about this workstream…");
     expect(placeholderFor({ ...p, runOpen: true })).toBe("Ask about this run…");
     expect(placeholderFor({ ...p, itemKey: "CA-1" })).toBe("Ask about CA-1…");
     expect(placeholderFor({ ...p, quote: true })).toBe("Ask about the selected text…");

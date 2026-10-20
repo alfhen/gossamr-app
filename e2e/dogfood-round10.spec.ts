@@ -1,12 +1,12 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
-import { askPip, expandAllNeeds, expandNeedsYou, homeSettled, jiraWrites, needRow, needsPane, needsYouCount, needsYouRow, openApp, openPipHome, pipHome, startWorkstream, workstreamRow } from "./support/app";
+import { agentsHome, askPip, expandAllNeeds, expandNeedsYou, homeSettled, jiraWrites, needRow, needsPane, needsYouCount, needsYouRow, openAgents, openApp, selectWorkstream, startMyDay, startWorkstream } from "./support/app";
 
 // Fixes from the tenth dogfood round: the long description draft in the Decision pane keeping its actions in view (G10), Plan my
 // week showing its three picks (G13), the posting pause saying what tripped it, one sentence for each risk (G4), and a batch that
 // does not post one comment twice (G2).
 
 const port = Number(process.env.E2E_PORT ?? 4173);
-/** The seeded profile (e2e/playwright.config.ts) without Start my day set aside, so its card shows. */
+/** The seeded profile (e2e/playwright.config.ts) with Start my day not set aside. */
 const DAY_DUE = { cookies: [], origins: [{ origin: `http://localhost:${port}`, localStorage: [{ name: "gossamr-prefs", value: JSON.stringify({ pipOrientationSeen: true, permissionExplainerSeen: true }) }] }] };
 
 const allProjects = (page: Page) => page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "All projects" }).click();
@@ -20,7 +20,7 @@ test.describe("a long description draft in the Decision pane (G10)", () => {
   test("scrolls its diff in a box of its own, so Edit, Skip and Update description are in view on open", async ({ page }) => {
     test.setTimeout(90_000);
     await openApp(page, "runs=kinds");
-    await openPipHome(page);
+    await openAgents(page);
     await expandAllNeeds(page);
     await needRow(page, /Approve the plan/).click();
     const pane = needsPane(page);
@@ -50,34 +50,15 @@ test.describe("a long description draft in the Decision pane (G10)", () => {
   });
 });
 
-test.describe("Plan my week shows its picks (G13)", () => {
-  test.use({ storageState: DAY_DUE, viewport: { width: 1440, height: 900 } });
-
-  test("all three default picks are in the box at 1440x900", async ({ page }) => {
-    test.setTimeout(90_000);
-    await openApp(page, "runs=empty");
-    await openPipHome(page);
-    await pipHome(page).locator("[data-start-my-day]").getByRole("button", { name: "Plan my week" }).click();
-    const plan = pipHome(page).locator("[data-plan-my-week]");
-    const picks = plan.locator("[data-plan-pick]");
-    await expect(picks).toHaveCount(3);
-    const day = await box(pipHome(page).locator("[data-pip-home-day]"));
-    const third = await box(picks.nth(2));
-    expect(third.y + third.height).toBeLessThanOrEqual(day.y + day.height + 1);
-    const keep = await box(plan.locator("[data-plan-keep]"));
-    expect(keep.y + keep.height).toBeLessThanOrEqual(day.y + day.height + 1);
-  });
-});
-
 test.describe("the pause before posting edited words (G4)", () => {
   test("says each risk in a sentence of its own, quotes both, and asks no question", async ({ page }) => {
     test.setTimeout(120_000);
     await openApp(page, "runs=empty");
     await allProjects(page);
     await startWorkstream(page, "CA-408");
-    await openPipHome(page);
-    await workstreamRow(page, "CA-408").click();
-    await pipHome(page).locator("[data-clarity-notice]").getByRole("button", { name: "Ask the reporter now" }).click();
+    await openAgents(page);
+    await selectWorkstream(page, "CA-408");
+    await agentsHome(page).locator("[data-clarity-notice]").getByRole("button", { name: "Ask the reporter now" }).click();
     const draft = needsPane(page).getByRole("article", { name: "Comment on CA-408" });
     await draft.getByRole("button", { name: "Edit" }).click();
     const text = needsPane(page).locator("textarea").first();
@@ -97,8 +78,8 @@ test.describe("Approve N safe drafts with two identical comments (G2)", () => {
     test.setTimeout(120_000);
     await openApp(page, "runs=empty&prSurface=manual&wsManage=1&pipPace=1");
     await startWorkstream(page, "CA-401");
-    await openPipHome(page);
-    await workstreamRow(page, "CA-401").click();
+    await openAgents(page);
+    await selectWorkstream(page, "CA-401");
     // Pip words a check-in three ways, so the fourth asked for says what the first did.
     for (let i = 0; i < 4; i++) {
       await askPip(page, "Draft a comment");
@@ -126,9 +107,9 @@ test.describe("Esc on the posting pause (G1)", () => {
     await openApp(page, "runs=empty");
     await allProjects(page);
     await startWorkstream(page, "CA-408");
-    await openPipHome(page);
-    await workstreamRow(page, "CA-408").click();
-    await pipHome(page).locator("[data-clarity-notice]").getByRole("button", { name: "Ask the reporter now" }).click();
+    await openAgents(page);
+    await selectWorkstream(page, "CA-408");
+    await agentsHome(page).locator("[data-clarity-notice]").getByRole("button", { name: "Ask the reporter now" }).click();
     const draft = needsPane(page).getByRole("article", { name: "Comment on CA-408" });
     await draft.getByRole("button", { name: "Edit" }).click();
     const text = needsPane(page).locator("textarea").first();
@@ -149,9 +130,9 @@ test.describe("Esc on the posting pause (G1)", () => {
     await openApp(page, "runs=empty");
     await allProjects(page);
     await startWorkstream(page, "CA-408");
-    await openPipHome(page);
-    await workstreamRow(page, "CA-408").click();
-    await pipHome(page).locator("[data-clarity-notice]").getByRole("button", { name: "Ask the reporter now" }).click();
+    await openAgents(page);
+    await selectWorkstream(page, "CA-408");
+    await agentsHome(page).locator("[data-clarity-notice]").getByRole("button", { name: "Ask the reporter now" }).click();
     const draft = needsPane(page).getByRole("article", { name: "Comment on CA-408" });
     await draft.getByRole("button", { name: "Edit" }).click();
     const text = needsPane(page).locator("textarea").first();
@@ -175,9 +156,10 @@ test.describe("F6 to a toast with Undo (G12)", () => {
   test("lands on Undo, and Enter runs it", async ({ page }) => {
     test.setTimeout(90_000);
     await openApp(page, "runs=empty");
-    await openPipHome(page);
-    await pipHome(page).locator("[data-start-my-day]").getByRole("button", { name: "Plan my week" }).click();
-    const picks = pipHome(page).locator("[data-plan-my-week] [data-plan-pick]");
+    await openAgents(page);
+    await startMyDay(page);
+    await agentsHome(page).locator("[data-start-my-day]").getByRole("button", { name: "Plan my week" }).click();
+    const picks = agentsHome(page).locator("[data-plan-my-week] [data-plan-pick]");
     const before = await picks.count();
     await picks.nth(1).focus();
     await page.keyboard.press("Delete");

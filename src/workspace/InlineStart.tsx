@@ -13,15 +13,15 @@ import { startWhat, useRuns } from "./runsStore";
 import { messageOf, useToasts } from "./toasts";
 
 /**
- * On while the conversation and the step rail are Pip home's: there a run draft that needs nothing chosen is read and
- * started in place, under its card. Elsewhere, as in the docked Pip pane, every run draft opens the setup sheet.
+ * On inside the Agents view (its decision pane and a workstream's detail): there a run draft that needs nothing chosen is
+ * read and started in place, under its card. Elsewhere, as in the docked Pip pane, every run draft opens the setup sheet.
  */
 export const InlineStartContext = createContext(false);
 
 /** The kinds started in place. A build pushes and a review reads a pull request, so those always open the full setup sheet. */
 const INLINE_KINDS: ReadonlySet<RunKind> = new Set(["investigate", "triage", "plan", "verify"]);
 
-/** Whether draft `p` is started in place on Pip home: a pending run draft on a ticket, of a kind that needs nothing chosen. */
+/** Whether draft `p` is started in place on the Agents view: a pending run draft on a ticket, of a kind that needs nothing chosen. */
 export function inlineStartable(p: Proposal): boolean {
   return p.state.type === "pending" && p.intent.type === "startRun" && p.intent.item !== null && INLINE_KINDS.has(p.intent.spec.kind);
 }
@@ -93,8 +93,8 @@ export function inlineStartKey(ev: { key: string; metaKey: boolean; ctrlKey: boo
 /** Reviews just opened by the person, which come into view and take the keyboard once they render; only then, never on a re-render. */
 const revealOnMount = new Set<string>();
 
-/** What scrolls a review into view: Pip home's conversation, or its Steps column. */
-const REVIEW_SCROLLER = '[data-pip-conversation-body], aside[aria-label="Steps"]';
+/** What scrolls a review into view: the decision pane, or a workstream's detail. */
+const REVIEW_SCROLLER = "[data-needs-pane], [data-sheet-body]";
 
 /** A gap kept above a review brought to the top. */
 const REVIEW_MARGIN = 8;
@@ -113,7 +113,7 @@ interface Revealable {
 /**
  * Brings a review just opened to the top of what scrolls it and puts the keyboard in it: on the review itself, where Enter
  * does nothing, so only ⌘↵ or the Start button starts; Tab from there goes through the disclosures first. Only that one box scrolls, never
- * Pip home around it, as `scrollIntoView` would once the box can't scroll far enough.
+ * the page around it, as `scrollIntoView` would once the box can't scroll far enough.
  */
 export function revealReview(panel: Revealable, focus = true) {
   if (focus) panel.focus({ preventScroll: true });
@@ -201,7 +201,7 @@ export const useInlineStarts = create<InlineStartsState>((set, get) => {
       const result = await approveRunDraft(b, id, entry.review.digest);
       if (result.type === "started") {
         if (current(id, mine)) get().close(id);
-        // The person stays on Pip home; the step rail shows the run.
+        // The person stays where they are; the step rail shows the run.
         afterRunStarted(result.run, item, { switchToAgents: false });
         return result.run;
       }

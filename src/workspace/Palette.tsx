@@ -6,7 +6,7 @@ import { useNeedsYou } from "./useNeeds";
 import { askPip } from "./askPip";
 import { useToasts } from "./toasts";
 import { useActivity } from "./activityStore";
-import { SUGGESTED_TICKETS, START_WORKSTREAM, buildCommands, agentCommands, askToPlanCommands, startWorkstreamCommands, noStartableTicket, workstreamCommands, keyCommand, newTicketIntent, projectChoices, pullCommand, rankCommands, searchOrder, ticketCommands, timelineCommands, unwatchCommands, watchCommands, withAskPip, type Command, type CommandActions, type CommandContext, type TimelineState } from "./commands";
+import { SUGGESTED_TICKETS, START_WORKSTREAM, buildCommands, agentCommands, askToPlanCommands, startWorkstreamCommands, noStartableTicket, workstreamCommands, keyCommand, newTicketIntent, projectChoices, pullCommand, rankCommands, searchOrder, ticketCommands, unwatchCommands, watchCommands, withAskPip, type Command, type CommandActions, type CommandContext } from "./commands";
 import { workContainers } from "./domains";
 import { ticketKeyOf } from "./watchLogic";
 import { projectOf, withProject } from "./filters";
@@ -19,11 +19,11 @@ import { openTicketByKey, useKeyConnectionId } from "./jump";
 import { focusPeekOf } from "./PeekSheet";
 import { useGithubUi } from "./githubUi";
 import { openPull } from "./openPull";
-import { openOnPipHome, togglePip, useWorkstreams } from "./workstreamsStore";
+import { openOnAgents, togglePip, useWorkstreams } from "./workstreamsStore";
 import { contextEntries, focusedSubject } from "./contextActions";
 import { undoLog } from "./undo";
-import { usePipHome } from "./pipHomeStore";
-import { showAllRuns, showTimeline } from "./TimelineFilterBar";
+import { showAllRuns } from "./TimelineFilterBar";
+import { focusWhenDrawn } from "./focusDrawn";
 import { showStartMyDay } from "./StartMyDay";
 import { showPlanMyWeek } from "./planActions";
 import { giveBackClarity } from "./clarityActions";
@@ -234,10 +234,15 @@ export function appActions(): CommandActions {
     startAgent: () => useRuns.getState().setPicking(true),
     startAgentOn: (item, kind) => void useRunSetup.getState().begin({ item: item.item, kind }),
     showNeedsYou: () => {
-      // Pip home, with the keyboard in the Needs you list.
+      // Agents, with the keyboard in the Needs you strip.
       useRuns.setState({ sheet: null });
-      tabs.setRoute("pip");
-      requestAnimationFrame(() => document.querySelector<HTMLElement>('[data-pip-home-column="list"] [data-needs-you-group], [data-pip-home-column="list"] [data-needs-you-title]')?.focus());
+      tabs.setRoute("agents");
+      focusWhenDrawn(
+        () => document.querySelector<HTMLElement>("[data-agents-strip] [data-needs-you-group]") ?? document.querySelector<HTMLElement>("[data-agents-strip] [data-needs-you-title]"),
+        () => document.activeElement,
+        requestAnimationFrame,
+        8,
+      );
     },
     openAgentSafety: () => {
       tabs.setRoute("agents");
@@ -258,9 +263,8 @@ export function appActions(): CommandActions {
       focusPeekOf(item.item.key);
     },
     askPip,
-    openPipHome: () => tabs.setRoute("pip"),
     openAgents: showAllRuns,
-    openWorkstream: openOnPipHome,
+    openWorkstream: openOnAgents,
     askPipToPlan: (item) => void askPipToPlan(item),
     // Starting one moves nothing on screen the palette owns, so say it in the live region; a failure is already toasted by start().
     startWorkstreamOn: (item) =>
@@ -268,35 +272,22 @@ export function appActions(): CommandActions {
         .getState()
         .start(item.item)
         .then((view) => view && useToasts.getState().push(`Started a workstream on ${item.item.key}.`, "info")),
-    showTimeline,
     startMyDay: showStartMyDay,
     planMyWeek: showPlanMyWeek,
-    showWorkstreamStatus: (state) => {
-      usePipHome.getState().setStatusFilter(state);
-      if (state) usePipHome.getState().closeDecision();
-      useTabs.getState().setRoute("pip");
-    },
     openJiraSent: () => tabs.setRoute("sent"),
     giveBackClarity: () => void giveBackClarity(),
   };
 }
 
-/** What the timeline shows: Pip home's filter and scope, current only while Pip home is on screen. */
-export function timelineState(): TimelineState {
-  const route = useTabs.getState().route;
-  const { timelineFilter, timelineScope } = usePipHome.getState();
-  return { filter: timelineFilter, scope: timelineScope, shown: route === "pip" };
-}
-
 /**
  * The palette's "Ask Pip to plan KEY": opens or finds the workstream on the ticket (as the person's own Start a
- * workstream does), shows it on Pip home and asks Pip there to plan it. Pip only drafts the plan run; nothing starts.
+ * workstream does), shows it on Agents and asks Pip to plan it. Pip only drafts the plan run; nothing starts.
  */
 export async function askPipToPlan(item: WorkItem) {
-  useTabs.getState().setRoute("pip");
+  useTabs.getState().setRoute("agents");
   const ws = await useWorkstreams.getState().start(item.item);
   if (!ws) return;
-  openOnPipHome(ws.workstream.id);
+  openOnAgents(ws.workstream.id);
   askPip(`plan ${item.item.key}`);
 }
 
@@ -364,7 +355,7 @@ export function Palette() {
   const selected = useTabs((s) => s.selected);
   const workstreams = useWorkstreams((s) => s.list);
   const tab = useTabs((s) => activeTab(s));
-  // Opened to do one thing, the search starts with its words; opened by Pip home's 'Start a workstream…', it asks for the
+  // Opened to do one thing, the search starts with its words; opened by Agents' 'Start a workstream…', it asks for the
   // ticket alone, offering the person's own first.
   const [seed] = useState(() => usePrefs.getState().paletteSeed);
   const [query, setQuery] = useState(() => (seed === START_WORKSTREAM ? "" : seed));
@@ -401,16 +392,14 @@ export function Palette() {
       agents,
       needsYou: needingMe,
       ticket: ticket ? { key: ticket.item.key, workstream: !!useWorkstreams.getState().forItem(ticket.item.key, ticket.item.connectionId) } : null,
-      onPipHome: useTabs.getState().route === "pip",
       onAgents: useTabs.getState().route === "agents",
       clarityLearned: learnedList(clarityLearning).length,
-      statusFilter: usePipHome.getState().statusFilter,
     };
     const commands = buildCommands(sorted, allSavedViews({ savedViews }), actions, ctx);
     const all = Object.values(items);
     const tickets = ticketCommands(all, query, actions.jumpToItem);
-    // A typed ticket key stays first; any other ticket comes after the commands the query names ("runs", "timeline").
-    const ranked = rankCommands([...contextEntries(subject, agents), ...undoEntries(), ...commands, ...(agents ? timelineCommands(timelineState(), actions) : []), ...unwatchCommands(sorted.filter((c) => watch.find((w) => w.connectionId === c.ref.connectionId)?.mode === "selected"), query, actions)], query);
+    // A typed ticket key stays first; any other ticket comes after the commands the query names ("runs", "agents").
+    const ranked = rankCommands([...contextEntries(subject, agents), ...undoEntries(), ...commands, ...unwatchCommands(sorted.filter((c) => watch.find((w) => w.connectionId === c.ref.connectionId)?.mode === "selected"), query, actions)], query);
     const order = searchOrder(tickets, ranked, query);
     const found = [
       ...order.head,

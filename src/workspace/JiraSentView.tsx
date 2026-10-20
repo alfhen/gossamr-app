@@ -5,10 +5,10 @@ import { DayHeading, EmptyNote } from "./ActivityView";
 import { groupByDay } from "./activityLogic";
 import { useRuns } from "./runsStore";
 import { useAgentsFlag } from "./agentsFlag";
-import { useEscToPipHome } from "./escHome";
+import { useEscBack } from "./escBack";
 import { workspaceTicketLinks } from "./jump";
 import { useTabs } from "./tabsStore";
-import { openOnPipHome, useWorkstreams } from "./workstreamsStore";
+import { openOnAgents, useWorkstreams } from "./workstreamsStore";
 
 const link = "rounded px-1 text-ws-ink2 underline decoration-ws-sep2 underline-offset-2 hover:bg-ws-hover focus-visible:outline-2 focus-visible:outline-ws-pip";
 
@@ -112,7 +112,7 @@ export function SentRow({ entry: e, onTicket, onWorkstream }: { entry: SentEntry
  * drafts and the workstreams' audit (`jiraSent`). It reads and writes nothing else.
  */
 export function JiraSentView() {
-  useEscToPipHome(useAgentsFlag((s) => s.enabled));
+  useEscBack(useAgentsFlag((s) => s.enabled));
   const title = useRef<HTMLHeadingElement>(null);
   // The page opens from the palette, which gives the keyboard back to what it came from as it closes: a frame later the
   // heading takes it, so a screen reader starts on the page it opened.
@@ -139,8 +139,8 @@ export function JiraSentView() {
   return (
     <div data-jira-sent className="flex h-full min-h-0 flex-col">
       <header className="flex flex-wrap items-baseline gap-x-4 gap-y-1 border-b border-ws-sep px-6 py-2.5">
-        <button type="button" data-sent-back onClick={() => useTabs.getState().setRoute("pip")} className={`${link} text-sm`}>
-          ← Pip home
+        <button type="button" data-sent-back onClick={() => useTabs.getState().setRoute("agents")} className={`${link} text-sm`}>
+          ← Agents
         </button>
         <h1 ref={title} tabIndex={-1} className="m-0 rounded text-base font-semibold focus-visible:outline-2 focus-visible:outline-ws-pip">What Jira saw from me</h1>
         <p className="m-0 text-sm text-ws-ink3">Everything Gossamr posted to Jira after you approved it. This page only shows it; it posts nothing. {GITHUB_NOT_LISTED} It lists only what Gossamr posted. A Build runs with your Claude settings and could reach Jira on its own; see Agent safety.</p>
@@ -155,7 +155,7 @@ export function JiraSentView() {
                 <section key={g.day} aria-label={g.label}>
                   <DayHeading label={g.label} level={2} />
                   {g.entries.map((e) => (
-                    <SentRow key={e.id} entry={e} onTicket={(key) => workspaceTicketLinks.open(key)} onWorkstream={(id) => openOnPipHome(id)} />
+                    <SentRow key={e.id} entry={e} onTicket={(key) => workspaceTicketLinks.open(key)} onWorkstream={(id) => openOnAgents(id)} />
                   ))}
                 </section>
               ))}

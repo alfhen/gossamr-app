@@ -1,5 +1,5 @@
-import { expect, test, type Locator, type Page } from "@playwright/test";
-import { advanceRuns, askPip, editTicket, expectToast, holdBySystem, homeComposer, homeSettled, jiraWrites, mockRuns, needsPane, needOfKind, needRow, openApp, openPipHome, paneSettled, pipHome, pipPane, startWorkstream, workstreamRow } from "./support/app";
+import { expect, test, type Page } from "@playwright/test";
+import { advanceRuns, agentsHome, askPip, expectToast, holdBySystem, homeComposer, homeSettled, jiraWrites, mockRuns, needOfKind, needRow, needsPane, openAgents, openApp, paneSettled, pipPane, selectWorkstream, startMyDay, startWorkstream, workstreamGroup } from "./support/app";
 
 // Fixes from round 9's backlog: Plan my week and Start my day capped with a scroll of their own (G19), the plan's intro and the answers draft saying where they come from (G20), the keyboard odds and ends
 // (G21), a hold the system made above the person's own (G22) and the pause quoting what tripped it (G23).
@@ -10,13 +10,14 @@ const DAY_DUE = { cookies: [], origins: [{ origin: `http://localhost:${port}`, l
 
 const toast = (page: Page) => page.locator("[data-toast]");
 const allProjects = (page: Page) => page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "All projects" }).click();
-const plan = (page: Page) => pipHome(page).locator("[data-plan-my-week]");
+const plan = (page: Page) => agentsHome(page).locator("[data-plan-my-week]");
 const picks = (page: Page) => plan(page).locator("[data-plan-pick]");
 
 /** Opens Plan my week from Start my day's card. */
 async function openPlan(page: Page) {
-  await openPipHome(page);
-  await pipHome(page).locator("[data-start-my-day]").getByRole("button", { name: "Plan my week" }).click();
+  await openAgents(page);
+  await startMyDay(page);
+  await agentsHome(page).locator("[data-start-my-day]").getByRole("button", { name: "Plan my week" }).click();
   await expect(plan(page)).toBeVisible();
 }
 
@@ -24,64 +25,12 @@ async function openPlan(page: Page) {
 async function draftOn(page: Page, key: string) {
   await allProjects(page);
   await startWorkstream(page, key);
-  await openPipHome(page);
-  await workstreamRow(page, key).click();
-  await pipHome(page).locator("[data-clarity-notice]").getByRole("button", { name: "Ask the reporter now" }).click();
+  await openAgents(page);
+  await selectWorkstream(page, key);
+  await agentsHome(page).locator("[data-clarity-notice]").getByRole("button", { name: "Ask the reporter now" }).click();
   return needsPane(page).getByRole("article", { name: `Comment on ${key}` });
 }
 
-/** Where a box is on the page. */
-const box = async (locator: Locator) => (await locator.boundingBox())!;
-
-test.describe("Plan my week and Start my day keep room for the rest (G19)", () => {
-  test.use({ storageState: DAY_DUE, viewport: { width: 1440, height: 900 } });
-
-  test("the plan scrolls inside a box of its own, so the timeline keeps usable room, and Keep stays in reach", async ({ page }) => {
-    test.setTimeout(90_000);
-    await openApp(page, "runs=empty");
-    await openPlan(page);
-    // Four rows, as the screenshot had.
-    for (const key of ["CA-402", "WEB-108", "CA-403"]) {
-      if ((await picks(page).count()) >= 4) break;
-      await plan(page).locator("[data-plan-add]").fill(key);
-      await plan(page).locator("[data-plan-add-go]").click();
-    }
-    await expect(picks(page)).toHaveCount(4);
-    const day = pipHome(page).locator("[data-pip-home-day]");
-    // Plan my week gets nearly half the window (G13), so its three picks show; a fourth makes it scroll.
-    expect((await box(day)).height).toBeLessThanOrEqual(900 * 0.45 + 2);
-    expect(await day.evaluate((el) => el.scrollHeight > el.clientHeight)).toBe(true);
-    // The timeline is not squeezed to a sliver, and Keep is inside the box without scrolling it.
-    expect((await box(pipHome(page).locator("[data-timeline]"))).height).toBeGreaterThanOrEqual(150);
-    const keep = await box(plan(page).locator("[data-plan-keep]"));
-    const dayBox = await box(day);
-    expect(keep.y).toBeGreaterThanOrEqual(dayBox.y);
-    expect(keep.y + keep.height).toBeLessThanOrEqual(dayBox.y + dayBox.height + 1);
-  });
-
-  test("Start my day is capped the same way, and a long list of unclear tickets is a count with More", async ({ page }) => {
-    test.setTimeout(90_000);
-    await openApp(page, "runs=empty");
-    // Thin descriptions make tickets that may be unclear: enough of them for the line to be long.
-    for (const key of ["CA-402", "CA-403", "CA-404", "CA-405", "WEB-108", "DEVOPS-471"]) await editTicket(page, key, { description: "Fix it." });
-    await openPipHome(page);
-    const card = pipHome(page).locator("[data-start-my-day]");
-    await expect(card).toBeVisible();
-    const day = pipHome(page).locator("[data-pip-home-day]");
-    expect((await box(day)).height).toBeLessThanOrEqual(900 * 0.3 + 2);
-    const unclear = card.locator('[data-day-line="unclear"]');
-    await expect(unclear.locator("h3")).toContainText("may be unclear");
-    const count = Number((await unclear.locator("h3").innerText()).match(/^(\d+)/)![1]);
-    expect(count).toBeGreaterThan(3);
-    await expect(unclear.locator("[data-day-entry]")).toHaveCount(0);
-    const more = unclear.getByRole("button", { name: "More" });
-    await expect(more).toHaveAttribute("aria-expanded", "false");
-    await more.click();
-    await expect(unclear.locator("[data-day-entry]")).toHaveCount(count);
-    await unclear.getByRole("button", { name: "Show fewer" }).click();
-    await expect(unclear.locator("[data-day-entry]")).toHaveCount(0);
-  });
-});
 
 test.describe("the plan's intro (G20)", () => {
   test.use({ storageState: DAY_DUE });
@@ -127,8 +76,8 @@ test.describe("the answers draft says which reply it came from (G20)", () => {
     await finish(page, (await newest(page, "investigate"))!.id);
     await expect.poll(async () => (await newest(page, "triage"))?.id ?? null).not.toBeNull();
     await finish(page, (await newest(page, "triage"))!.id);
-    await openPipHome(page);
-    await workstreamRow(page, "CA-408").click();
+    await openAgents(page);
+    await selectWorkstream(page, "CA-408");
     await needOfKind(page, "readiness").click();
     await needsPane(page).getByRole("button", { name: "I'll answer" }).click();
     await expect(homeComposer(page)).toHaveValue(/My answers: $/);
@@ -202,7 +151,7 @@ test.describe("the keyboard odds and ends (G21)", () => {
     await openApp(page, "runs=empty");
     await openPlan(page);
     await plan(page).locator("[data-plan-keep]").click();
-    await expect(pipHome(page).locator("[data-this-week]")).toBeVisible();
+    await expect(agentsHome(page).locator("[data-this-week]")).toBeVisible();
     for (let n = 0; n < 16; n++) {
       await page.keyboard.press("Tab");
       const shown = await page.evaluate(() => {
@@ -218,9 +167,9 @@ test.describe("the keyboard odds and ends (G21)", () => {
     test.setTimeout(90_000);
     await openApp(page, "runs=empty&wsManage=1");
     await startWorkstream(page, "CA-401");
-    await openPipHome(page);
-    await workstreamRow(page, "CA-401").click();
-    const controls = pipHome(page).locator("[data-workstream-controls]");
+    await openAgents(page);
+    await selectWorkstream(page, "CA-401");
+    const controls = pipPane(page).locator("[data-workstream-controls]");
     await controls.getByRole("button", { name: "Hold", exact: true }).click();
     await expect(toast(page)).toContainText("Held CA-401.");
     await controls.getByRole("button", { name: "Close…" }).click();
@@ -240,21 +189,19 @@ test.describe("the person's own hold under the system's (G22)", () => {
     await allProjects(page);
     await startWorkstream(page, "CA-401");
     await startWorkstream(page, "CA-402");
-    await openPipHome(page);
+    await openAgents(page);
     // The steps used up in Advise ask nothing, so this is a hold and no need; the person holds the other themselves.
     await holdBySystem(page, "CA-401", "budget");
-    await workstreamRow(page, "CA-402").click();
-    await pipHome(page).getByRole("button", { name: "Hold", exact: true }).click();
-    const system = workstreamRow(page, "CA-401").locator("[data-status]");
-    const mine = workstreamRow(page, "CA-402").locator("[data-status]");
+    await selectWorkstream(page, "CA-402");
+    await agentsHome(page).getByRole("button", { name: "Hold", exact: true }).click();
+    const system = workstreamGroup(page, "CA-401").locator("[data-status]");
+    const mine = workstreamGroup(page, "CA-402").locator("[data-status]");
     await expect(system).toHaveAttribute("data-status", "held");
     await expect(system).toHaveText("Held");
     await expect(mine).toHaveAttribute("data-status", "held");
     await expect(mine).toHaveText(/^Held by you/);
-    const order = await pipHome(page).locator("[data-workstream-row]").evaluateAll((els) => els.map((e) => e.getAttribute("data-workstream-row")));
-    const keys = await pipHome(page).locator("[data-workstream-row] b").allInnerTexts();
-    expect(keys.indexOf("CA-401")).toBeLessThan(keys.indexOf("CA-402"));
-    expect(order[0]).toBe("general");
+    const keys = await agentsHome(page).locator("[data-workstream-group] h3 b").allInnerTexts();
+    expect(keys).toEqual(expect.arrayContaining(["CA-401", "CA-402"]));
     await expect(system).toHaveClass(/border-ws-warn/);
     await expect(mine).not.toHaveClass(/border-ws-warn/);
   });

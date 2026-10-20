@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { advanceRuns, askPip, askRun, homeConversation, homeConversationRegion, homeRunCards, homeSettled, homeWakes, inlineStart, jiraWrites, mockRuns, needsYouCount, needsYouRow, needsYouTray, openApp, openPipHome, peekSheet, startWorkstream, stepChip, stepRail, workstreamEvents, workstreamRow } from "./support/app";
+import { advanceRuns, askPip, askRun, homeConversation, homeConversationRegion, homeRunCards, homeSettled, homeWakes, inlineStart, jiraWrites, mockRuns, needsYouCount, needsYouRow, needsYouTray, openAgents, openApp, peekSheet, selectWorkstream, startWorkstream, stepChip, stepRail, workstreamEvents } from "./support/app";
 
 // A workstream in Manage mode, so a run that asks wakes Pip.
 const MANAGED = "runs=empty&wsManage=1";
@@ -15,8 +15,8 @@ const answerCard = (page: Page) => homeConversationRegion(page).getByRole("artic
 async function investigationAsks(page: Page): Promise<string> {
   await openApp(page, MANAGED);
   await startWorkstream(page, "CA-401");
-  await openPipHome(page);
-  await workstreamRow(page, "CA-401").click();
+  await openAgents(page);
+  await selectWorkstream(page, "CA-401");
   await expect(homeConversation(page)).toHaveText(/^Workstream: CA-401 .* · Intake$/);
   await askPip(page, "investigate this");
   await homeSettled(page);

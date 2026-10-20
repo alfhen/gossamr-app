@@ -7,7 +7,7 @@ export const PIP_INPUT = "#pip-input";
 const PREFS = "gossamr-prefs";
 
 /**
- * Makes this page's profile one whose person turned 'Start on Pip home' off, so a load lands on the workspace with Agents
+ * Makes this page's profile one whose person turned 'Start on Agents' off, so a load lands on the workspace with Agents
  * on too. Only a profile that hasn't chosen yet is changed, and its other preferences stay (the config seeds the
  * orientation card dismissed): whatever the app or the test saves afterwards stands, across reloads as well.
  */
@@ -19,14 +19,14 @@ export async function landOnWorkspace(page: Page) {
     } catch {
       // Unreadable preferences are the app's to reset.
     }
-    if (prefs.startOnPipHome === undefined) localStorage.setItem(key, JSON.stringify({ ...prefs, startOnPipHome: false }));
+    if (prefs.startOnAgents === undefined) localStorage.setItem(key, JSON.stringify({ ...prefs, startOnAgents: false }));
   }, PREFS);
 }
 
 /**
  * Opens the workspace in mock mode and waits for the sample tickets. `query` goes through as the page's search string, so mock
- * flags such as `runs=empty` reach mockOptionsFromUrl. Pip home is where the app lands with Agents on; the specs here start
- * on the workspace, as a person who turned that off does (`landOnWorkspace`), and go to Pip home when they mean to.
+ * flags such as `runs=empty` reach mockOptionsFromUrl. Agents is where the app lands with Agents on; the specs here start
+ * on the workspace, as a person who turned that off does (`landOnWorkspace`), and go to Agents when they mean to.
  */
 export async function openApp(page: Page, query = "") {
   await landOnWorkspace(page);
@@ -417,33 +417,71 @@ export async function holdAll(page: Page, by: "button" | "shortcut" = "button") 
   }
 }
 
-/** Pip home (src/workspace/PipHome.tsx): the workstreams, the conversation and the steps. */
-export const pipHome = (page: Page) => page.locator("[data-pip-home]");
+/** The Agents view (src/workspace/AgentsView.tsx): the Needs you strip, the workstreams with their agents, and a workstream's detail over it. */
+export const agentsHome = (page: Page) => page.locator("[data-agents-home]");
 
 /**
- * Opens Pip home with Cmd/Ctrl+0 and waits for its workstream list. Just after a load the key does nothing until the
- * settings that enable agents have arrived, so it is pressed again until the list shows; it only ever opens Pip home.
+ * Opens Agents from the rail and waits for the view. Just after a load the button does nothing until the settings that
+ * enable agents have arrived, so it is pressed again until the view shows. The Pip drawer is left as it is.
  */
-export async function openPipHome(page: Page) {
-  const list = pipHome(page).getByRole("navigation", { name: "Workstreams" });
+export async function openAgents(page: Page) {
   await expect(async () => {
-    await page.keyboard.press("ControlOrMeta+0");
-    await expect(list).toBeVisible({ timeout: 1_000 });
+    if (!(await agentsHome(page).count())) await page.locator("[data-rail]").getByRole("button", { name: /^Agents/ }).click({ timeout: 1_000 });
+    await expect(agentsHome(page)).toBeVisible({ timeout: 1_000 });
   }).toPass({ timeout: 10_000 });
-  await closePipDrawer(page);
 }
 
-/** Closes the Pip drawer when it is open, so Pip home shows its own conversation: the drawer takes that place while it is open. */
+/** Asks for the day's card over the Agents list from the palette, as Agents no longer shows it by itself. */
+export async function startMyDay(page: Page) {
+  await page.keyboard.press("ControlOrMeta+k");
+  await page.getByRole("dialog", { name: "Command palette" }).getByRole("combobox").fill("start my day");
+  await page.getByRole("dialog", { name: "Command palette" }).getByRole("option", { name: /^Start my day/ }).click();
+  await expect(agentsHome(page).locator("[data-start-my-day]")).toBeVisible();
+}
+
+/** Groups the Agents list by state, its lanes, which Agents does not do by default (it groups by workstream). */
+export async function groupByState(page: Page) {
+  await page.getByRole("group", { name: "Group by" }).getByRole("button", { name: "State" }).click();
+  await expect(agentsHome(page).locator("[data-lane]").first()).toBeVisible();
+}
+
+/** Closes the Pip drawer when it is open. */
 export async function closePipDrawer(page: Page) {
   if (await pipPane(page).count()) await pipPane(page).getByRole("button", { name: "Close Pip" }).click();
   await expect(pipPane(page)).toHaveCount(0);
 }
 
-/** The line at the head of the conversation shown with Pip home, naming it: "General", or "Workstream: <title> · <Stage>". It is Pip home's own while the drawer is closed and the drawer's while it is open; only one is ever on screen. */
-export const homeConversation = (page: Page) => page.locator("h2[data-pip-conversation]");
+/** A workstream's detail, the sheet over the Agents view. */
+export const workstreamSheet = (page: Page) => page.locator("#workstream-sheet");
+
+/** The group of the open workstream on ticket `key` in the Agents list: its heading, status and agents. */
+export const workstreamGroup = (page: Page, key: string) => agentsHome(page).locator("[data-workstream-group]").filter({ has: page.locator("h3", { hasText: key }) });
+
+/** The button that opens the detail of the workstream on ticket `key`. */
+export const workstreamOpen = (page: Page, key: string) => workstreamGroup(page, key).locator("[data-workstream-open]");
 
 /**
- * The peek over Pip home sits in the window as it opened: nothing around it scrolled (a card focused in it once scrolled
+ * Opens the detail of the workstream on ticket `key` and, for the conversation that goes with it, the Pip drawer: Pip talks
+ * about the workstream whose detail is open. Waits until both show it.
+ */
+export async function selectWorkstream(page: Page, key: string) {
+  await workstreamOpen(page, key).click();
+  await expect(workstreamSheet(page)).toBeVisible();
+  if (!(await pipPane(page).count())) await openPip(page);
+  await expect(pipConversation(page)).toHaveText(new RegExp(`^Workstream: ${key}\\b`));
+}
+
+/** Puts the open workstream's detail away, so Pip's conversation is General's again. */
+export async function closeWorkstreamSheet(page: Page) {
+  if (await workstreamSheet(page).count()) await workstreamSheet(page).getByRole("button", { name: "Close", exact: true }).click();
+  await expect(workstreamSheet(page)).toHaveCount(0);
+}
+
+/** The line at the head of the drawer's conversation, naming it: "General", or "Workstream: <title> · <Stage>". */
+export const homeConversation = (page: Page) => pipPane(page).locator("h2[data-pip-conversation]");
+
+/**
+ * The peek over Agents sits in the window as it opened: nothing around it scrolled (a card focused in it once scrolled
  * the app's root, pushing the title bar, the conversation's header and the peek's own Close out of the top of the window
  * and leaving a blank band at the bottom), its Close and the conversation's header on screen.
  */
@@ -460,21 +498,15 @@ export async function expectPeekInPlace(page: Page) {
   await expect(homeConversation(page)).toBeInViewport({ ratio: 1 });
 }
 
-/** Pip home's composer input, the only Pip input on screen there. */
+/** Pip's composer input, the only Pip input on screen. */
 export const homeComposer = (page: Page) => page.locator(PIP_INPUT);
 
-/** The cobweb on a workstream's row in Pip home's list: its drawing and its words for a screen reader (`data-workstream-wither`). */
-export const workstreamWeb = (page: Page, key: string) => workstreamRow(page, key).locator("svg.cobweb");
-export const workstreamWebText = (page: Page, key: string) => workstreamRow(page, key).locator("[data-workstream-wither]");
+/** The cobweb on a workstream's heading in the Agents list: its drawing and its words for a screen reader (`data-workstream-wither`). */
+export const workstreamWeb = (page: Page, key: string) => workstreamGroup(page, key).locator("svg.cobweb");
+export const workstreamWebText = (page: Page, key: string) => workstreamGroup(page, key).locator("[data-workstream-wither]");
 
-/** The row of the open workstream on ticket `key` in Pip home's list; `workstreamRow(page, "General")` is General's. */
-export const workstreamRow = (page: Page, key: string) =>
-  pipHome(page)
-    .getByRole("listbox", { name: "Workstreams" })
-    .getByRole("option", { name: key === "General" ? /^General/ : new RegExp(`^${key}\\b`) });
-
-/** Pip home's Needs you list: the main left column, with the workstream list under it. */
-export const needsYouTray = (page: Page) => pipHome(page).getByRole("region", { name: "Needs you" });
+/** The Needs you strip at the top of the Agents view. */
+export const needsYouTray = (page: Page) => agentsHome(page).getByRole("region", { name: "Needs you" });
 
 /** The Needs you list's one count, as its pill says it. */
 export const needsYouCount = (page: Page) => needsYouTray(page).locator("[data-needs-you-count]");
@@ -502,7 +534,7 @@ export async function expandAllNeeds(page: Page) {
   while (await folded.count()) await folded.first().click();
 }
 
-/** Folds every group in the Needs you list to its header: its top need's why, and "+N more". Pip home opens a group by default while the needs fit. */
+/** Folds every group in the Needs you list to its header: its top need's why, and "+N more". The strip opens a group by default while the needs fit. */
 export async function foldAllNeeds(page: Page) {
   const open = needsYouTray(page).locator('[data-needs-you-more][aria-expanded="true"]');
   while (await open.count()) await open.first().click();
@@ -511,7 +543,7 @@ export async function foldAllNeeds(page: Page) {
 /** Expands the group of workstream `key` (or General) in the Needs you list, so each need in it is a row of its own. */
 export async function expandNeedsYou(page: Page, key = "General") {
   const more = needsYouRow(page, key).locator("[data-needs-you-more]");
-  // Pip home opens a group by itself while the needs fit, and folds it again once more arrive; opened by hand it stays.
+  // The strip opens a group by itself while the needs fit, and folds it again once more arrive; opened by hand it stays.
   if ((await more.getAttribute("aria-expanded")) === "true") {
     await more.click();
     await expect(more).toHaveAttribute("aria-expanded", "false");
@@ -520,19 +552,19 @@ export async function expandNeedsYou(page: Page, key = "General") {
   await expect(more).toHaveAttribute("aria-expanded", "true");
 }
 
-/** The decision open in Pip home's middle column. */
-export const needsPane = (page: Page) => pipHome(page).getByRole("region", { name: "Decision" });
+/** The decision open under the Needs you strip. */
+export const needsPane = (page: Page) => agentsHome(page).getByRole("region", { name: "Decision" });
 
 /** The decision pane's heading: where the keyboard lands whenever a need is opened (G28). */
 export const needsPaneHeading = (page: Page) => needsPane(page).locator("[data-needs-pane-title]");
 
-/** The conversation shown with Pip home, where its cards are: Pip home's own column while the drawer is closed, the drawer while it is open. */
+/** The conversation, where Pip's cards are: the Pip drawer. */
 export const homeConversationRegion = (page: Page) => page.locator("[data-pip-root]");
 
-/** Pip home's step rail, the Steps column. */
-export const stepRail = (page: Page) => pipHome(page).getByRole("complementary", { name: "Steps" });
+/** The step rail in an open workstream's detail. */
+export const stepRail = (page: Page) => workstreamSheet(page);
 
-/** The chip of step `kind` (investigate, triage, plan, build, review, verify) on Pip home's step rail, with what it opens to. */
+/** The chip of step `kind` (investigate, triage, plan, build, review, verify) on the step rail, with what it opens to. */
 export const stepChip = (page: Page, kind: string) => stepRail(page).locator(`[data-step="${kind}"]`);
 
 /** Waits until the sample backend has said whether Agents are on: the rail's Agents button shows or goes. */
@@ -549,14 +581,14 @@ export const pipIdle = (page: Page) =>
   }, NO_MOCK);
 
 /**
- * Waits until Pip has finished answering on Pip home: the sample Pip has nothing running or waiting, a wake a run's
+ * Waits until Pip has finished answering in the drawer: the sample Pip has nothing running or waiting, a wake a run's
  * finish queued included, and the conversation shows every turn ended. No Stop on screen alone proves nothing until a
  * turn has started.
  */
 export async function homeSettled(page: Page) {
   await expect.poll(() => pipIdle(page), { message: "the sample Pip has no turn running or waiting" }).toBe(true);
   await expect(homeConversationRegion(page).locator('[data-turn-status="running"], [data-turn-status="queued"]')).toHaveCount(0);
-  await expect(pipHome(page).getByRole("button", { name: "Stop", exact: true })).toHaveCount(0);
+  await expect(pipPane(page).getByRole("button", { name: "Stop", exact: true })).toHaveCount(0);
 }
 
 /**
@@ -571,8 +603,8 @@ export async function paneSettled(page: Page) {
   await expect(pipPane(page).getByRole("button", { name: "Stop", exact: true })).toHaveCount(0);
 }
 
-/** Pip's wake turns in Pip home's conversation, the ones nobody asked. */
-export const homeWakes = (page: Page) => pipHome(page).getByRole("region", { name: "Conversation" }).locator('[data-turn-kind="wake"]');
+/** Pip's wake turns in the drawer's conversation, the ones nobody asked. */
+export const homeWakes = (page: Page) => pipPane(page).locator('[data-turn-kind="wake"]');
 
 /**
  * Moves run `id` on to done (queued, launching, working, done) once Pip has answered, then waits for the wake turn its
@@ -587,19 +619,28 @@ export async function finishOnHome(page: Page, id: string) {
   await homeSettled(page);
 }
 
-/** Pip's run drafts on ticket `key` in Pip home's conversation, oldest first. */
+/** Pip's run drafts on ticket `key` in the drawer's conversation, oldest first. */
 export const homeRunCards = (page: Page, key: string) => homeConversationRegion(page).getByRole("article", { name: `Start an agent: ${key}` });
 
 /**
- * Opens the 'Review and start' of run draft `card` in place on Pip home, past the safety sheet a fresh profile shows once
- * at its first agent action, and returns the review as shown. `by: "keyboard"` presses Enter on the card instead of
- * clicking its button; the card must have keyboard focus then, and `refocus` brings it back after the safety sheet.
+ * Opens the 'Review and start' of run draft `card`, past the safety sheet a fresh profile shows once at its first agent
+ * action, and returns the review as shown: in place under a card on Agents (the decision pane, a workstream's detail), or,
+ * from the Pip drawer's narrow card, the setup sheet. `by: "keyboard"` presses Enter on the card instead of clicking its
+ * button; the card must have keyboard focus then, and `refocus` brings it back after the safety sheet.
  */
 export async function inlineStart(page: Page, card: Locator, by: "click" | "keyboard" = "click", refocus: () => Promise<void> = () => card.focus()) {
+  // The drawer's card opens the setup sheet; the same draft read in place is the one the Needs you strip opens.
+  if (by === "click" && (await card.evaluate((el) => !!el.closest("[data-pip-root]")))) {
+    const need = needsYouTray(page).locator('[data-needs-you-group][data-kind="runStart"], [data-needs-you-need][data-kind="runStart"]').first();
+    await need.click();
+    card = needsPane(page);
+  }
   const safety = page.getByRole("dialog", { name: "Agents safety and settings" });
-  const review = card.getByRole("group", { name: "Review and start" });
+  const inPlace = card.getByRole("group", { name: "Review and start" });
+  const setup = page.getByRole("dialog", { name: "Start an agent" });
+  const review = inPlace.or(setup);
   for (let attempt = 0; attempt < 2; attempt++) {
-    if (by === "click") await card.getByRole("button", { name: "Review and start", exact: true }).click();
+    if (by === "click") await card.getByRole("button", { name: /^Review and start( →)?$/ }).click();
     else await page.keyboard.press("Enter");
     await expect(review.or(safety)).toBeVisible();
     if (!(await safety.isVisible())) break;
@@ -609,8 +650,8 @@ export async function inlineStart(page: Page, card: Locator, by: "click" | "keyb
     await expect(safety).toHaveCount(0);
     if (by === "keyboard") await refocus();
   }
-  // Open, the review has its own Start and Hide; the card's own button is hidden meanwhile.
-  await expect(card.getByRole("button", { name: "Review and start", exact: true })).toHaveCount(0);
+  // Open in place, the review has its own Start and Hide; the card's own button is hidden meanwhile.
+  if (await inPlace.count()) await expect(card.getByRole("button", { name: "Review and start", exact: true })).toHaveCount(0);
   return review;
 }
 
@@ -647,7 +688,7 @@ export async function expectVisibleFocus(page: Page) {
 const agentSetup = (page: Page) => page.getByRole("dialog", { name: "Start an agent" });
 const agentSafety = (page: Page) => page.getByRole("dialog", { name: "Agents safety and settings" });
 /** The Agents view's cards; Pip's strip of agents shows runs too, and only the view counts. */
-const agentCards = (page: Page) => page.locator('main article[data-run-id]:not(aside[aria-label="Pip"] *)');
+const agentCards = (page: Page) => page.locator('main article[data-run-id]:not(aside[aria-label="Pip"] *):not(#workstream-sheet *)');
 const agentRunIds = async (page: Page) => (await agentCards(page).evaluateAll((els) => els.map((e) => e.getAttribute("data-run-id")))).filter((id): id is string => !!id);
 
 /**
@@ -655,6 +696,7 @@ const agentRunIds = async (page: Page) => (await agentCards(page).evaluateAll((e
  * advances it to done, and opens CA-402's peek, where its GitHub review draft waits. `query` is added to the page's.
  */
 export async function reviewedDraft(page: Page, query = "") {
+  await landOnWorkspace(page);
   await page.goto(`/?mockRepos=14${query}`);
   await page.getByRole("button", { name: "Start watching" }).click();
   await expect(page.getByText("CA-401", { exact: true }).first()).toBeVisible();

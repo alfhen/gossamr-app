@@ -50,7 +50,7 @@ const parts = async (ids: string[]) => {
 };
 const open = () => useWorkstreams.getState().list.filter((v) => v.workstream.closedAt === null);
 
-describe("the cobweb of each workstream on Pip home", () => {
+describe("the cobweb of each workstream on Agents", () => {
   it("shows on a workstream whose agents worked since the person's last post, and on none where nothing happened", async () => {
     const busy = (await backend.workstreamsOpen(CA401)).id;
     const idle = (await backend.workstreamsOpen(CA402)).id;

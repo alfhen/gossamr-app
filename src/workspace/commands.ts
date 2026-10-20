@@ -7,8 +7,6 @@ import { parsePullRef, pullLabel, type PullRef } from "../lib/githubUrl";
 import { isWorkConnection } from "./domains";
 import { ticketKeyOf } from "./watchLogic";
 import { VIEW_LABEL, VIEW_MODES, type ViewMode } from "./tabsStore";
-import { STATUS_ORDER, STATUS_WORD, type StatusState } from "../lib/workstreamStatus";
-import { FILTER_LABEL, SCOPE_LABEL, TIMELINE_FILTERS, TIMELINE_SCOPES, type TimelineFilter, type TimelineScope } from "../lib/timeline";
 
 export type CommandGroup = "Create" | "Projects" | "Views" | "Layout" | "Go to" | "Filters" | "Theme" | "App" | "Tickets" | "GitHub" | "Agents" | "Workstreams" | "Ask Pip" | "This item";
 
@@ -47,12 +45,12 @@ export interface CommandActions {
   openPull(ref: PullRef): void;
   newTab(): void;
   newTicket(): void;
-  /** Asks which ticket to start a workstream on, in the palette itself (the step Pip home's 'Start a workstream…' opens). */
+  /** Asks which ticket to start a workstream on, in the palette itself (the step Agents' 'Start a workstream…' opens). */
   chooseWorkstream(): void;
   togglePip(): void;
   startAgent(): void;
   startAgentOn(item: WorkItem, kind: RunKind): void;
-  /** Shows what needs the person: Pip home, with Needs you in focus. */
+  /** Shows what needs the person: Agents, with the Needs you strip in focus. */
   showNeedsYou(): void;
   openAgentSafety(): void;
   /** Opens (or finds) the workstream on the ticket the peek shows and shows its conversation in Pip. */
@@ -63,26 +61,20 @@ export interface CommandActions {
   holdAllWorkstreams(): void;
   jumpToItem(item: WorkItem): void;
   askPip(query: string): void;
-  /** Goes to Pip home. */
-  openPipHome(): void;
   /** Goes to the Agents screen: every run across every workstream. */
   openAgents(): void;
-  /** Shows open workstream `id` on Pip home. */
+  /** Shows open workstream `id` on Agents. */
   openWorkstream(id: string): void;
-  /** Opens (or finds) the workstream on `item`, shows it on Pip home and asks Pip there to plan it: Pip only drafts, nothing starts. */
+  /** Opens (or finds) the workstream on `item`, shows it on Agents and asks Pip to plan it: Pip only drafts, nothing starts. */
   askPipToPlan(item: WorkItem): void;
-  /** Starts a workstream on `item` and shows its conversation where the person is: on Pip home, or in the Pip pane. */
+  /** Starts a workstream on `item` and shows its conversation in the Pip pane. */
   startWorkstreamOn(item: WorkItem): void;
-  /** Shows the timeline with `filter` in `scope` on Pip home. */
-  showTimeline(filter: TimelineFilter, scope: TimelineScope): void;
-  /** Opens Start my day on Pip home again, whether or not it was set aside today. */
+  /** Opens Start my day on Agents again, whether or not it was set aside today. */
   startMyDay(): void;
   /** Opens "What Jira saw from me": everything Gossamr posted to Jira. */
   openJiraSent(): void;
-  /** Opens Plan my week on Pip home: a short proposal of what to work on this week, to reorder, trim and keep. */
+  /** Opens Plan my week on Agents: a short proposal of what to work on this week, to reorder, trim and keep. */
   planMyWeek(): void;
-  /** Lists only the workstreams in `state` on Pip home; null lists them all again. */
-  showWorkstreamStatus(state: StatusState | null): void;
   /** Gives back what "Looks fine" taught the clarity notice, in every project. */
   giveBackClarity(): void;
 }
@@ -99,14 +91,10 @@ export interface CommandContext {
   needsYou?: number;
   /** The synced ticket the peek shows, and whether it has an open workstream already. */
   ticket?: { key: string; workstream: boolean } | null;
-  /** The person is on Pip home, where opening it is nothing and ⌘J goes to its composer. */
-  onPipHome?: boolean;
   /** The person is on the Agents screen. */
   onAgents?: boolean;
   /** How many projects "Looks fine" has taught the clarity notice to leave a gap out for, for "Give back what Looks fine learned". */
   clarityLearned?: number;
-  /** The state Pip home's workstream list is narrowed to, if any. */
-  statusFilter?: StatusState | null;
 }
 
 /** The shortcut for Hold all workstreams, as the rail and the palette show it. */
@@ -118,22 +106,6 @@ export const HOLD_ALL_HINT = "⌘⇧.";
  */
 export const isHoldAllKey = (ev: Pick<KeyboardEvent, "key" | "code" | "metaKey" | "ctrlKey" | "shiftKey" | "altKey">) =>
   (ev.metaKey || ev.ctrlKey) && ev.shiftKey && !ev.altKey && (ev.code === "Period" || ev.key === "." || ev.key === ">");
-
-/** The shortcut for Pip home, as the rail and the footer show it. */
-export const PIP_HOME_HINT = "⌘0";
-
-/** Whether a key press opens Pip home: Cmd/Ctrl+0 and nothing else held. A plain 0 stays the map's. */
-export const isPipHomeKey = (ev: Pick<KeyboardEvent, "key" | "metaKey" | "ctrlKey" | "shiftKey" | "altKey">) => (ev.metaKey || ev.ctrlKey) && !ev.shiftKey && !ev.altKey && ev.key === "0";
-
-/** What Cmd/Ctrl+0 says while it is off, because the composer holds a message that opening General would leave behind. */
-export const GENERAL_KEY_OFF = "Ctrl+0 is off while Pip's composer holds a message; clear or send it first";
-
-/**
- * What Cmd/Ctrl+0 does on Pip home inside a workstream: it goes on to General, also from Pip's composer while that is
- * empty; with text in it the key is left off (and says so), so a half-written message is not taken away. `composer` is
- * the composer's value wherever the keyboard is, null when there is no composer.
- */
-export const generalKeyOutcome = (composer: string | null): "open" | "off" => (composer !== null && composer.trim() !== "" ? "off" : "open");
 
 /** Whether the keyboard has no place after a page change: on the body, or on an element that went away with it. */
 export const focusLost = (active: Pick<Element, "isConnected"> | null, body: unknown): boolean => !active || active === body || !active.isConnected;
@@ -150,25 +122,6 @@ const FILTERS: { id: string; label: string; keywords: string; filter: WorkFilter
   { id: "unassigned", label: "Unassigned", keywords: "nobody free", filter: { type: "unassigned" } },
   { id: "open", label: "Not done", keywords: "open", filter: { type: "open" } },
 ];
-
-/** What each state's entry says: "Show workstreams waiting on reporter". */
-const STATUS_ENTRY: Record<StatusState, string> = {
-  "needs-you": "Show workstreams that need you",
-  held: "Show held workstreams",
-  waiting: "Show workstreams waiting on reporter",
-  running: "Show running workstreams",
-  quiet: "Show quiet workstreams",
-  done: "Show done workstreams",
-  idle: "Show idle workstreams",
-};
-
-/** Narrows Pip home's workstream list to one status word, and back ("Show all workstreams" while it is narrowed). */
-function statusCommands(a: Pick<CommandActions, "showWorkstreamStatus">, current: StatusState | null): Command[] {
-  return [
-    ...STATUS_ORDER.map((state): Command => ({ id: `workstreams:status:${state}`, group: "Workstreams", icon: "◇", label: STATUS_ENTRY[state], hint: current === state ? "showing" : undefined, keywords: `workstreams status filter list ${STATUS_WORD[state]}`, run: () => a.showWorkstreamStatus(state) })),
-    ...(current ? [{ id: "workstreams:status:all", group: "Workstreams" as const, icon: "◇", label: "Show all workstreams", keywords: "workstreams status filter clear list", run: () => a.showWorkstreamStatus(null) }] : []),
-  ];
-}
 
 export function buildCommands(containers: readonly WorkContainer[], savedViews: readonly SavedView[], a: CommandActions, ctx: CommandContext = NO_CONTEXT): Command[] {
   return [
@@ -196,11 +149,8 @@ export function buildCommands(containers: readonly WorkContainer[], savedViews: 
     { id: "app:settings", group: "Go to", icon: "⚙", label: "Open settings", keywords: "preferences autopilot", run: a.openSettings },
     ...(ctx.agents ? [{ id: "app:start-my-day", group: "Go to" as const, icon: "☀", label: "Start my day", keywords: "morning today summary needs you unclear reporter waiting cobweb drafts", refocus: true, run: a.startMyDay }] : []),
     ...(ctx.agents ? [{ id: "app:plan-my-week", group: "Go to" as const, icon: "☷", label: "Plan my week", keywords: "plan week this week priorities what to work on focus", run: a.planMyWeek }] : []),
-    ...(ctx.agents && !ctx.onPipHome ? [{ id: "app:pip-home", group: "Go to" as const, icon: "✦", label: "Open Pip home", hint: PIP_HOME_HINT, keywords: "pip workstreams conversation agents manager needs you", run: a.openPipHome }] : []),
     // Before "Stop all agents…" in the list, so the query "agents" lands here first.
-    ...(ctx.agents && !ctx.onAgents ? [{ id: "app:agents", group: "Go to" as const, icon: "→", label: "Open Agents", keywords: "agents running capacity operations stop all", run: a.openAgents }] : []),
-    // After "Open Agents", so the query "running" still lands there first.
-    ...(ctx.agents ? statusCommands(a, ctx.statusFilter ?? null) : []),
+    ...(ctx.agents && !ctx.onAgents ? [{ id: "app:agents", group: "Go to" as const, icon: "→", label: "Open Agents", keywords: "agents running capacity operations stop all workstreams needs you", run: a.openAgents }] : []),
     ...FILTERS.map(
       (f): Command => ({ id: `filter:${f.id}`, group: "Filters", icon: "⏷", label: `Filter: ${f.label}`, keywords: f.keywords, run: () => a.addFilter(f.filter) }),
     ),
@@ -372,69 +322,17 @@ export function workstreamCommands(list: readonly WorkstreamView[], query: strin
       group: "Agents",
       icon: "◇",
       label: `Open the workstream on ${ws.itemKey ?? ws.title}`,
-      hint: "Pip home",
-      keywords: "workstream pip home conversation",
+      hint: "Agents",
+      keywords: "workstream agents pip conversation",
       run: () => a.openWorkstream(ws.id),
     }));
 }
 
-/** What the timeline shows now, for its palette entries: its filter and scope, and whether it is on screen (`shown`). */
-export interface TimelineState {
-  filter: TimelineFilter;
-  scope: TimelineScope;
-  shown: boolean;
-}
-
-const FILTER_WORDS: Record<TimelineFilter, string> = {
-  all: "everything story history",
-  runs: "runs agents",
-  drafts: "drafts comments moves",
-  decisions: "decisions decided waiting on me approvals",
-};
-
-const SCOPE_WORDS: Record<TimelineScope, string> = {
-  workstream: "this one current selected workstream only",
-  every: "every all workstreams across everything general merged",
-};
-
-/**
- * The timeline's filters and scopes as palette entries: "Timeline: Runs", "Timeline: Every workstream". A filter keeps
- * the scope and a scope keeps the filter (`state`), as the buttons do; every combination is a timeline on Pip home. While
- * the timeline is on screen, the filter and scope it shows are marked current.
- */
-export function timelineCommands(state: TimelineState, a: Pick<CommandActions, "showTimeline">): Command[] {
-  const hint = (current: boolean) => (state.shown && current ? "current" : undefined);
-  return [
-    ...TIMELINE_FILTERS.map(
-      (f): Command => ({
-        id: `timeline:filter:${f}`,
-        group: "Workstreams",
-        icon: "☰",
-        label: `Timeline: ${FILTER_LABEL[f]}`,
-        hint: hint(state.filter === f),
-        keywords: `timeline filter show ${FILTER_WORDS[f]}`,
-        run: () => a.showTimeline(f, state.scope),
-      }),
-    ),
-    ...TIMELINE_SCOPES.map(
-      (s): Command => ({
-        id: `timeline:scope:${s}`,
-        group: "Workstreams",
-        icon: "☰",
-        label: `Timeline: ${SCOPE_LABEL[s]}`,
-        hint: hint(state.scope === s),
-        keywords: `timeline scope ${SCOPE_WORDS[s]}`,
-        run: () => a.showTimeline(state.filter, s),
-      }),
-    ),
-  ];
-}
-
 /**
  * "Start a workstream on KEY" for a query like "start a workstream on ca-401" or "workstream checkout", the rest of the
- * words finding the ticket as `ticketCommands` does: from anywhere, Pip home included, without peeking the ticket first.
+ * words finding the ticket as `ticketCommands` does: from anywhere, without peeking the ticket first.
  * A ticket whose workstream is open already is left to `workstreamCommands`. Asked with no ticket yet ("start a workstream
- * on ", as Pip home's 'Start a workstream…' asks), it offers a few to start with: the person's own open tickets (`me`),
+ * on ", as Agents' 'Start a workstream…' asks), it offers a few to start with: the person's own open tickets (`me`),
  * then the other open ones, newest first.
  */
 export function startWorkstreamCommands(items: readonly WorkItem[], query: string, open: readonly WorkstreamView[], a: Pick<CommandActions, "startWorkstreamOn">, limit = 3, me: readonly PersonRef[] = []): Command[] {
@@ -486,7 +384,7 @@ export function noStartableTicket(items: readonly WorkItem[], query: string, ope
 /** How many tickets 'Start a workstream…' offers before anything is typed. */
 export const SUGGESTED_TICKETS = 5;
 
-/** What Pip home's 'Start a workstream…' opens the palette with: the words its 'Start a workstream on KEY' entries answer to. */
+/** What Agents' 'Start a workstream…' opens the palette with: the words its 'Start a workstream on KEY' entries answer to. */
 export const START_WORKSTREAM = "start a workstream on ";
 
 /**

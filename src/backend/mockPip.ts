@@ -361,8 +361,8 @@ function moveScript(prompt: string, context: ScreenContext, workstream: PipWorks
   };
 }
 
-/** Whether the screen line is Pip home's, "Pip home" and then its conversation (`screenLine` in src/workspace/screenContext.ts). */
-const onPipHome = (view: string | null | undefined) => view === "Pip home" || !!view?.startsWith("Pip home · ");
+/** Whether the screen line is the Agents view's, "Agents" and then what it shows (`screenLine` in src/workspace/screenContext.ts). */
+const onAgents = (view: string | null | undefined) => view === "Agents" || !!view?.startsWith("Agents · ");
 
 const asksToApprovePlan = /^\s*approve the plan\b/i;
 const asksWhyHeld = /^\s*why is (?:this|it|the workstream) held\b/i;
@@ -544,7 +544,7 @@ export function agentSummary(runs: readonly Run[], now: number): string {
   const line = (r: Run) => `- **${r.item?.key ?? r.spec.repo}** ${stateView(r, now).label.toLowerCase()}${r.lastDetail ? `: ${r.lastDetail}` : r.needs ? `: ${r.needs}` : ""}`;
   const part = (title: string, list: readonly Run[]) => (list.length ? `${title}\n${list.slice(0, 5).map(line).join("\n")}` : "");
   return [
-    // Counted as the Agents view's summary and Pip home's footer count them, quiet runs apart.
+    // Counted as the Agents view's summary and Pip's footer count them, quiet runs apart.
     `You have ${runs.length} agent ${runs.length === 1 ? "run" : "runs"}: ${[`${waiting.length} waiting on you`, ...(liveWords(live).length ? liveWords(live) : ["none running"]), ...(live.quiet ? [`${live.quiet} quiet`] : []), `${done.length} ready to review`].join(", ")}.`,
     part("Waiting on you", waiting),
     part("Working", going),
@@ -829,8 +829,8 @@ function scriptTurn(prompt: string, context: ScreenContext, images: ImageData[],
     const filter = context.filter ? and(context.filter, wanted.filter) : wanted.filter;
     return {
       steps: ["Searched the items"],
-      // On Pip home no board is on screen: the filter lands on the workspace tab, there when the person goes back.
-      text: `${wanted.note}. ${onPipHome(context.view) ? "I filtered your workspace tab for you; it is there when you go back to it. Undo it below if that wasn't what you meant." : "I filtered this view for you; undo it below if that wasn't what you meant."}`,
+      // On Agents no board is on screen: the filter lands on the workspace tab, there when the person goes back.
+      text: `${wanted.note}. ${onAgents(context.view) ? "I filtered your workspace tab for you; it is there when you go back to it. Undo it below if that wasn't what you meant." : "I filtered this view for you; undo it below if that wasn't what you meant."}`,
       filter: { filter, note: wanted.note },
       draft: null,
     };
@@ -901,8 +901,6 @@ function scriptTurn(prompt: string, context: ScreenContext, images: ImageData[],
     };
   }
   if (context.view?.startsWith("Agents")) return { steps: ["Looked at your agents"], text: agentSummary(runs, now), filter: null, draft: null };
-  if (onPipHome(context.view))
-    return { steps: [], text: "You're on Pip home. Pick a workstream on the left to talk about it, ask me what your agents are doing, or start a workstream on a ticket with ⌘K.", filter: null, draft: null };
   const where = context.view ?? "the workspace";
   const open = context.item ? ` and **${context.item.key}** is open` : "";
   return {

@@ -1,13 +1,15 @@
 import { expect, test, type Page } from "@playwright/test";
-import { advanceRuns, askPip, expectPeekInPlace, expectToast, homeConversation, homeConversationRegion, homeSettled, mockRuns, needOfKind, openApp, openPipHome, openTechnical, peekSheet, peekTicket, pipHome, startWorkstream, stepChip, stepRail, workstreamRow } from "./support/app";
+import { advanceRuns, agentsHome, askPip, expectPeekInPlace, expectToast, homeConversation, homeConversationRegion, homeSettled, mockRuns, needOfKind, needsPane, openAgents, openApp, openTechnical, peekSheet, peekTicket, selectWorkstream, startWorkstream, stepChip, stepRail } from "./support/app";
 
 // A workstream in Manage mode, with pull requests shown only when a test says: the setting the phase's scenarios share.
 const MANAGED = "runs=empty&prSurface=manual&wsManage=1";
 
 const setup = (page: Page) => page.getByRole("dialog", { name: "Start an agent" });
 const safety = (page: Page) => page.getByRole("dialog", { name: "Agents safety and settings" });
-/** Pip's run drafts on CA-401 in Pip home's conversation. */
-const runCards = (page: Page) => homeConversationRegion(page).getByRole("article", { name: "Start an agent: CA-401" });
+/** Pip's run drafts on CA-401 in the drawer's conversation, which opens the setup sheet. */
+const drawerCards = (page: Page) => homeConversationRegion(page).getByRole("article", { name: "Start an agent: CA-401" });
+/** The run draft open in the decision pane, where it is read and started in place. */
+const runCards = (page: Page) => needsPane(page);
 
 /** Waits until Pip has finished answering on Pip home. */
 const settled = homeSettled;
@@ -22,16 +24,17 @@ async function ask(page: Page, what: string) {
 /** Starts a workstream on CA-401 from its peek, then shows it on Pip home. */
 async function homeWorkstream(page: Page) {
   await startWorkstream(page, "CA-401");
-  await openPipHome(page);
-  await workstreamRow(page, "CA-401").click();
+  await openAgents(page);
+  await selectWorkstream(page, "CA-401");
   await expect(homeConversation(page)).toHaveText(/^Workstream: CA-401 .* · Intake$/);
 }
 
 /** Opens the newest run draft's review in place, past the safety sheet a fresh profile shows once at its first agent action. */
 async function expandNewest(page: Page) {
+  if (!(await needsPane(page).count())) await needOfKind(page, "runStart").click();
   const card = runCards(page).last();
   for (let attempt = 0; attempt < 2; attempt++) {
-    await card.getByRole("button", { name: "Review and start", exact: true }).click();
+    await card.getByRole("button", { name: /^Review and start( →)?$/ }).click();
     await expect(card.getByRole("group", { name: "Review and start" }).or(safety(page))).toBeVisible();
     if (!(await safety(page).isVisible())) break;
     await safety(page).getByRole("button", { name: "Close" }).click();
@@ -39,7 +42,7 @@ async function expandNewest(page: Page) {
   }
   const review = card.getByRole("group", { name: "Review and start" });
   // Open, the review has its own Start and Hide; the card's own button is hidden meanwhile.
-  await expect(card.getByRole("button", { name: "Review and start", exact: true })).toHaveCount(0);
+  await expect(card.getByRole("button", { name: /^Review and start( →)?$/ })).toHaveCount(0);
   return review;
 }
 
@@ -69,7 +72,7 @@ test("an investigation is reviewed and started in place on Pip home: the exact p
   await openApp(page, MANAGED);
   await homeWorkstream(page);
   await ask(page, "investigate this");
-  await expect(runCards(page)).toHaveCount(1);
+  await expect(drawerCards(page)).toHaveCount(1);
   const waiting = needOfKind(page, "runStart");
   await expect(waiting).toHaveCount(1);
   await expect(waiting).toContainText("drafted an Investigate agent for CA-401");
@@ -92,7 +95,7 @@ test("an investigation is reviewed and started in place on Pip home: the exact p
   await start.click();
   // Nothing else opened, and the person is still on Pip home with the workstream selected.
   await expect(setup(page)).toHaveCount(0);
-  await expect(pipHome(page)).toBeVisible();
+  await expect(agentsHome(page)).toBeVisible();
   await expect(homeConversation(page)).toHaveText(/^Workstream: CA-401 /);
   await expect(review).toHaveCount(0);
   await expect(waiting).toHaveCount(0);
@@ -128,24 +131,22 @@ test("a build Pip drafts is never started in place: its 'Review and start →' o
   await finish(page, (await newest(page, "plan"))!.id);
   await expect(stepChip(page, "plan").locator("[data-step-state]")).toHaveText("Ready to review");
 
-  // The plan's description draft opens the ticket's peek over Pip home, where its diff is read and approved as anywhere.
+  // The plan's description draft opens the ticket's peek, where its diff is read and approved as anywhere.
   const rewrite = homeConversationRegion(page).getByRole("article", { name: "Update the description of CA-401" }).last();
   await rewrite.getByRole("button", { name: "Review on CA-401 →" }).click();
   await expect(peekSheet(page)).toHaveAttribute("aria-label", "Details for CA-401");
-  await expect(pipHome(page)).toBeVisible();
-  await expect(peekSheet(page).getByRole("article", { name: "Update the description of CA-401" }).filter({ hasText: "Gossamr Plan" })).toBeFocused();
   await expectPeekInPlace(page);
   await peekSheet(page).getByRole("article", { name: "Update the description of CA-401" }).filter({ hasText: "Gossamr Plan" }).getByRole("button", { name: "Update description" }).click();
   await expect(rewrite).toHaveCount(0);
   await page.keyboard.press("Escape");
   await expect(peekSheet(page)).toHaveCount(0);
-  await expect(pipHome(page)).toBeVisible();
+  await openAgents(page);
+  await selectWorkstream(page, "CA-401");
 
   const before = (await mockRuns(page)).length;
   await ask(page, "build it");
   await expect(homeConversationRegion(page)).toContainText("I drafted a build of CA-401 following the CA-401 plan.");
-  const build = runCards(page).last();
-  await expect(build.getByRole("button", { name: "Review and start", exact: true })).toHaveCount(0);
+  const build = drawerCards(page).last();
   await build.getByRole("button", { name: "Review and start →" }).click();
   await expect(setup(page)).toBeVisible();
   await expect(setup(page)).toContainText("This build follows the plan from run");
@@ -174,8 +175,8 @@ test("a draft edited elsewhere after it was read in place is refused: the banner
   await expect(peekSheet(page)).toHaveCount(0);
 
   // Back on Pip home the review is still open, as it was read: Start is refused.
-  await openPipHome(page);
-  await workstreamRow(page, "CA-401").click();
+  await openAgents(page);
+  await selectWorkstream(page, "CA-401");
   const again = runCards(page).last().getByRole("group", { name: "Review and start" });
   await expect(again).not.toContainText("changed behind the card");
   await again.getByRole("button", { name: "Start agent" }).click();
@@ -190,5 +191,5 @@ test("a draft edited elsewhere after it was read in place is refused: the banner
   await again.getByRole("button", { name: "Start agent" }).click();
   await expect(again).toHaveCount(0);
   await expect.poll(async () => (await mockRuns(page)).length).toBe(1);
-  await expect(pipHome(page)).toBeVisible();
+  await expect(agentsHome(page)).toBeVisible();
 });

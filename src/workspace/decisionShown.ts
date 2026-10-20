@@ -3,7 +3,7 @@ import type { Need } from "../lib/needs";
 import type { WorkstreamView } from "../types";
 
 /**
- * What Pip home's decision pane already shows, so nothing else on the screen shows it again: the need open in it and the
+ * What the decision pane on Agents already shows, so nothing else on the screen shows it again: the need open in it and the
  * drafts it holds (a draft need's own, and the review draft folded into an escalation).
  */
 export interface DecisionShown {
@@ -13,7 +13,7 @@ export interface DecisionShown {
 
 const NOTHING: DecisionShown = { need: null, drafts: new Set() };
 
-/** Provided by Pip home around its pane, its timeline and its step rail; anywhere else (the Pip pane, a peek) nothing is shown elsewhere. */
+/** Provided by the Agents view around its pane and a workstream's detail; anywhere else (the Pip pane, a peek) nothing is shown elsewhere. */
 export const DecisionShownContext = createContext<DecisionShown>(NOTHING);
 
 export const useDecisionShown = () => useContext(DecisionShownContext);

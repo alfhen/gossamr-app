@@ -10,7 +10,8 @@ import { liveDraft } from "./draftLive";
 import { keptEditsOfDraft } from "./DraftCard";
 import { draftDecisions } from "./DraftPreview";
 import { inlineStartable, useInlineStarts } from "./InlineStart";
-import { setPaneIntent, takePaneIntent, usePipHome } from "./pipHomeStore";
+import { setPaneIntent, takePaneIntent, useWorkView } from "./workViewStore";
+import { usePrefs } from "./prefs";
 import { useRuns } from "./runsStore";
 import { useTabs } from "./tabsStore";
 import { useWorkstreams } from "./workstreamsStore";
@@ -24,30 +25,32 @@ import { useToasts } from "./toasts";
 /** The id a workstream's row has in the list: its own, or "general". */
 export const groupId = (workstreamId: string | null) => workstreamId ?? "general";
 
-/** Opens need `need`'s decision in Pip home's middle column, going to Pip home from any other route. */
+/** Opens need `need`'s decision under the Needs you strip on the Agents view, going there from any other route. */
 export function openNeed(need: Need, opts: { edit?: boolean } = {}) {
   const tabs = useTabs.getState();
-  if (tabs.route !== "pip") tabs.setRoute("pip");
-  const home = usePipHome.getState();
+  if (tabs.route !== "agents") tabs.setRoute("agents");
+  const view = useWorkView.getState();
   // The intent is read by the pane as it mounts; one already open for this need is remounted to read it. Anything but Edit clears it.
   setPaneIntent(opts.edit ? "edit" : null);
-  const open = home.deciding === need.key;
-  home.decide(need.key, need.workstreamId);
-  if (open && opts.edit) home.redecide();
+  const open = view.deciding === need.key;
+  view.decide(need.key);
+  if (open && opts.edit) view.redecide();
 }
 
 /**
- * The pane's "Open in workstream": shows what the need is about where it lives, the card to bring into view, the run's
- * sheet over it for a run. It decides nothing itself, and closes the decision so the conversation has the room.
+ * The pane's "Open in workstream": shows what the need is about where it lives, the card to bring into view in the
+ * workstream's detail, the run's sheet over it for a run. A need outside any workstream has no detail to open: it opens
+ * the Pip drawer, where General's drafts are. It decides nothing itself, and closes the decision.
  */
 export function openInWorkstream(need: Need) {
   const tabs = useTabs.getState();
-  if (tabs.route !== "pip") tabs.setRoute("pip");
-  const home = usePipHome.getState();
-  home.closeDecision();
-  if (need.workstreamId) home.openWorkstream(need.workstreamId);
-  else home.openGeneral();
-  home.focus(need.target);
+  if (tabs.route !== "agents") tabs.setRoute("agents");
+  const view = useWorkView.getState();
+  view.closeDecision();
+  if (need.workstreamId) {
+    view.openWorkstream(need.workstreamId);
+    view.focus(need.target);
+  } else if (need.target.type !== "run") usePrefs.getState().setPipOpen(true);
   if (need.target.type === "run") useRuns.getState().openRun(need.target.id, { stay: true });
 }
 
@@ -143,7 +146,7 @@ let armed: { key: string; run(): void } | null = null;
 /** Asks for Enter on `need`: the row says what it would do, and any other key cancels. */
 export function arm(need: Need, plan: Extract<KeyPlan, { type: "ask" }>) {
   armed = { key: need.key, run: plan.run };
-  usePipHome.getState().ask({ key: need.key, text: `↵ ${plan.text} · any other key cancels` });
+  useWorkView.getState().ask({ key: need.key, text: `↵ ${plan.text} · any other key cancels` });
 }
 
 /** Enter on a row that asked: does what it said. */
@@ -155,7 +158,7 @@ export function confirmArmed() {
 
 export function disarm() {
   armed = null;
-  if (usePipHome.getState().asking) usePipHome.getState().ask(null);
+  if (useWorkView.getState().asking) useWorkView.getState().ask(null);
 }
 
 export { setPaneIntent, takePaneIntent };

@@ -1,53 +1,5 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
-import {
-  advanceRuns,
-  agentsSettled,
-  askPip,
-  backdateWorkstream,
-  editTicket,
-  expandAllNeeds,
-  expandNeedsYou,
-  heldBanner,
-  holdAll,
-  holdBySystem,
-  homeComposer,
-  homeConversationRegion,
-  homeRunCards,
-  homeSettled,
-  inlineStart,
-  githubWrites,
-  jiraWrites,
-  mockRuns,
-  manageSwitch,
-  needOfKind,
-  needRow,
-  needsPane,
-  needsYouCount,
-  needsYouRow,
-  needsYouTray,
-  openApp,
-  openPip,
-  openPipHome,
-  peekSheet,
-  peekTicket,
-  pipConversation,
-  paneSettled as settled,
-  pipHome,
-  pipPane,
-  scriptNextRun,
-  seedWorkstreamEvent,
-  setBudget,
-  stepRail,
-  startWorkstream,
-  surfacePullRequests,
-  wakes,
-  workstreamEvents,
-  workstreamRow,
-  workstreamWeb,
-  workstreamWebText,
-  expectToast,
-  still,
-} from "./support/app";
+import { advanceRuns, agentsHome, agentsSettled, askPip, backdateWorkstream, editTicket, expandAllNeeds, expandNeedsYou, expectToast, githubWrites, groupByState, heldBanner, holdAll, holdBySystem, homeComposer, homeRunCards, homeSettled, inlineStart, jiraWrites, manageSwitch, mockRuns, needOfKind, needRow, needsPane, needsYouCount, needsYouRow, needsYouTray, openAgents, openApp, openPip, paneSettled as settled, peekSheet, peekTicket, pipConversation, pipPane, scriptNextRun, seedWorkstreamEvent, selectWorkstream, setBudget, startWorkstream, stepRail, still, surfacePullRequests, wakes, workstreamEvents, workstreamGroup, workstreamWeb, workstreamWebText } from "./support/app";
 
 // Two product decisions (docs/needs-you.md): a hold the person chose is not a need, and the automatic budget is one unit,
 // "automatic steps", whose running out is a Decide question in Needs you with "Allow 5 more" and "Switch to Advise".
@@ -58,7 +10,7 @@ const MANAGED = "runs=empty&prSurface=manual&wsManage=1&pipPace=1";
 
 const toast = (page: Page) => page.locator("[data-toast]");
 const undo = (page: Page) => toast(page).getByRole("button", { name: "Undo" });
-const homeButton = (page: Page) => page.getByRole("button", { name: /^Pip home/ });
+const homeButton = (page: Page) => page.locator("[data-rail]").getByRole("button", { name: /^Agents/ });
 const nextLine = (page: Page) => pipPane(page).locator("[data-next-step]");
 const setup = (page: Page) => page.getByRole("dialog", { name: "Start an agent" });
 const safety = (page: Page) => page.getByRole("dialog", { name: "Agents safety and settings" });
@@ -68,9 +20,9 @@ const actions = async (page: Page, action: string) => (await workstreamEvents(pa
 /** A workstream on CA-401, opened on Pip home. */
 async function workstreamOnHome(page: Page) {
   await startWorkstream(page, "CA-401");
-  await openPipHome(page);
-  await workstreamRow(page, "CA-401").click();
-  await expect(pipHome(page).getByRole("region", { name: "Conversation" }).locator("[data-pip-conversation]")).toHaveText(/^Workstream: CA-401 /);
+  await openAgents(page);
+  await selectWorkstream(page, "CA-401");
+  await expect(pipPane(page).locator("[data-pip-conversation]")).toHaveText(/^Workstream: CA-401 /);
 }
 
 /** Asks Pip for an investigation of CA-401, opens its draft past the one-time safety sheet and starts it, as the person does. */
@@ -128,7 +80,7 @@ async function toBuild(page: Page) {
 async function budgetState(page: Page): Promise<string> {
   const toasts = await page.locator("[data-toast]").allInnerTexts();
   const pane = await needsPane(page).innerText({ timeout: 1_000 }).catch(() => "(no pane)");
-  const held = await pipHome(page).locator("[data-held-banner]").getAttribute("data-held-banner", { timeout: 1_000 }).catch(() => null);
+  const held = await pipPane(page).locator("[data-held-banner]").getAttribute("data-held-banner", { timeout: 1_000 }).catch(() => null);
   const events = (await workstreamEvents(page)).map((e) => `${e.actor} ${e.action} ${e.detail ?? ""}`.trim());
   return [`toasts: ${JSON.stringify(toasts)}`, `held banner: ${held ?? "none"}`, `pane: ${JSON.stringify(pane)}`, `audit: ${JSON.stringify(events)}`].join("\n");
 }
@@ -154,9 +106,9 @@ test.describe("B2: a hold the person chose is not a need", () => {
     await openApp(page, "wsManage=1&runs=empty");
     await workstreamOnHome(page);
     await expect(needsYouCount(page)).toHaveText("0");
-    const banner = pipHome(page).locator("[data-held-banner]");
+    const banner = pipPane(page).locator("[data-held-banner]");
 
-    await pipHome(page).getByRole("button", { name: "Hold", exact: true }).click();
+    await agentsHome(page).getByRole("button", { name: "Hold", exact: true }).click();
     await expect(banner).toContainText("Held by you");
     await expect(banner).toContainText("You chose this, so the hold itself is not in Needs you.");
     await expect(banner.getByRole("button", { name: "Resume" })).toBeVisible();
@@ -164,9 +116,9 @@ test.describe("B2: a hold the person chose is not a need", () => {
     await expect(needOfKind(page, "hold")).toHaveCount(0);
     await expect(needsYouCount(page)).toHaveText("0");
     await expect(needsYouTray(page)).toContainText("Nothing needs you.");
-    await expect(homeButton(page)).toHaveAccessibleName("Pip home");
-    await expect(workstreamRow(page, "CA-401").locator("[data-status]")).toHaveText("Held by you");
-    await expect(workstreamRow(page, "CA-401").locator('[data-status="needs-you"]')).toHaveCount(0);
+    await expect(homeButton(page)).toHaveAccessibleName("Agents");
+    await expect(workstreamGroup(page, "CA-401").locator("[data-status]")).toHaveText("Held by you");
+    await expect(workstreamGroup(page, "CA-401").locator('[data-status="needs-you"]')).toHaveCount(0);
 
     // Undo of the hold works as before.
     await expectToast(page, "Held CA-401.");
@@ -175,7 +127,7 @@ test.describe("B2: a hold the person chose is not a need", () => {
     expect((await workstreamEvents(page)).map((e) => e.action).slice(-2)).toEqual(["held", "undone"]);
 
     // Resume is the way back from a hold that stands.
-    await pipHome(page).getByRole("button", { name: "Hold", exact: true }).click();
+    await agentsHome(page).getByRole("button", { name: "Hold", exact: true }).click();
     await expect(banner).toBeVisible();
     await banner.getByRole("button", { name: "Resume" }).click();
     await expect(banner).toHaveCount(0);
@@ -186,12 +138,12 @@ test.describe("B2: a hold the person chose is not a need", () => {
     await openApp(page, "wsManage=1&runs=empty");
     await workstreamOnHome(page);
     await holdAll(page, "button");
-    const banner = pipHome(page).locator("[data-held-banner]");
+    const banner = pipPane(page).locator("[data-held-banner]");
     await expect(banner).toContainText("Held by you (Hold all)");
     await expect(banner.getByRole("button", { name: "Resume" })).toBeVisible();
     await expect(needOfKind(page, "hold")).toHaveCount(0);
     await expect(needsYouCount(page)).toHaveText("0");
-    await expect(homeButton(page)).toHaveAccessibleName("Pip home");
+    await expect(homeButton(page)).toHaveAccessibleName("Agents");
   });
 
   test("a hold the system makes stays a need: it is counted, ranks in Unblock and opens Resume", async ({ page }) => {
@@ -202,7 +154,7 @@ test.describe("B2: a hold the person chose is not a need", () => {
     await expect(held).toHaveCount(1);
     await expect(held).toContainText("Held after a restart");
     await expect(needsYouCount(page)).toHaveText("1");
-    await expect(homeButton(page)).toHaveAccessibleName("Pip home, 1 thing needs you");
+    await expect(homeButton(page)).toHaveAccessibleName("Agents, 1 thing needs you");
     await held.click();
     await expect(needsPane(page)).toHaveAttribute("data-kind", "hold");
     await needsPane(page).locator("[data-held-banner]").getByRole("button", { name: "Resume" }).click();
@@ -301,13 +253,13 @@ test.describe("B3: one budget unit, and running out becomes a question", () => {
       .catch(async (e: Error) => {
         throw new Error(`${e.message}\n\nWhat the page held when the budget need stayed:\n${await budgetState(page)}`);
       });
-    await expect(pipHome(page).locator("[data-held-banner]")).toHaveCount(0);
+    await expect(pipPane(page).locator("[data-held-banner]")).toHaveCount(0);
     await expect(needsYouCount(page)).toHaveText(String(before - 1));
     const events = await workstreamEvents(page);
     expect(events.filter((e) => e.action === "steps_allowed").map((e) => [e.actor, e.detail])).toEqual([["person", "5"]]);
     expect(events.filter((e) => e.action === "resumed").map((e) => [e.actor, e.detail])).toEqual([["person", "budget"]]);
     // What was spent stays: 2 of 7 now, 5 left.
-    await expect(pipHome(page).locator("[data-steps-left]")).toHaveText("5 of 7 automatic steps left");
+    await expect(pipPane(page).locator("[data-steps-left]")).toHaveText("5 of 7 automatic steps left");
     expect(await jiraWrites(page)).toEqual([]);
 
     // The plan the triage queued goes on, and its finish wakes Pip again.
@@ -324,7 +276,7 @@ test.describe("B3: one budget unit, and running out becomes a question", () => {
     await expect(needOfKind(page, "budget")).toHaveCount(0);
     expect((await actions(page, "mode_set")).map((e) => [e.actor, e.detail]).pop()).toEqual(["person", "advise"]);
     // The hold stays for Resume, which the header offers; nothing was allowed.
-    await expect(pipHome(page).locator("[data-held-banner]")).toContainText("Held: automatic steps used up");
+    await expect(pipPane(page).locator("[data-held-banner]")).toContainText("Held: automatic steps used up");
     expect(await actions(page, "steps_allowed")).toEqual([]);
     await expectToast(page, "CA-401 to Advise");
   });
@@ -396,8 +348,8 @@ async function unclear(page: Page) {
   await startInvestigation(page, VAGUE);
   await finish(page, (await newest(page, "investigate"))!.id);
   await finish(page, (await started(page, "triage")).id);
-  await openPipHome(page);
-  await workstreamRow(page, VAGUE).click();
+  await openAgents(page);
+  await selectWorkstream(page, VAGUE);
   await expect(needOfKind(page, "readiness")).toBeVisible();
 }
 
@@ -445,8 +397,8 @@ test.describe("D1: Pip speaks up when a ticket is unclear", () => {
     await expect(pane).toContainText("No plan starts until you choose.");
     for (const name of ["Ask the reporter", "I'll answer", "Plan anyway"]) await expect(pane.getByRole("button", { name })).toBeVisible();
     // The Next line says what the workstream waits on.
-    await expect(pipHome(page).locator("[data-next-step]")).toContainText("waiting on you.");
-    await expect(pipHome(page).locator("[data-next-step]")).toContainText("What does done look like for CA-408?");
+    await expect(agentsHome(page).locator("[data-next-step]")).toContainText("waiting on you.");
+    await expect(agentsHome(page).locator("[data-next-step]")).toContainText("What does done look like for CA-408?");
     expect(await jiraWrites(page)).toEqual([]);
   });
 
@@ -496,8 +448,8 @@ test.describe("D1: Pip speaks up when a ticket is unclear", () => {
   test("Plan anyway records the person's override and the plan starts as the rule would have; under a hold it waits for Resume", async ({ page }) => {
     await unclear(page);
     // A hold is respected: the override is on record, and the plan starts only once the workstream is set going.
-    await pipHome(page).getByRole("button", { name: "Hold", exact: true }).click();
-    await expect(pipHome(page).locator("[data-held-banner]")).toContainText("Held by you");
+    await agentsHome(page).getByRole("button", { name: "Hold", exact: true }).click();
+    await expect(pipPane(page).locator("[data-held-banner]")).toContainText("Held by you");
     await needOfKind(page, "readiness").click();
     await needsPane(page).getByRole("button", { name: "Plan anyway" }).click();
     await expect(needOfKind(page, "readiness")).toHaveCount(0);
@@ -505,7 +457,7 @@ test.describe("D1: Pip speaks up when a ticket is unclear", () => {
     expect([line.actor, line.runId]).toEqual(["person", (await newest(page, "triage"))!.id]);
     await expect.poll(async () => await newest(page, "plan")).toBeNull();
 
-    await pipHome(page).locator("[data-held-banner]").getByRole("button", { name: "Resume" }).click();
+    await pipPane(page).locator("[data-held-banner]").getByRole("button", { name: "Resume" }).click();
     const plan = await started(page, "plan");
     const triage = (await newest(page, "triage"))!;
     expect((await actions(page, "autostart")).map((e) => e.detail)).toContain(`triage_plan after ${triage.id}`);
@@ -551,28 +503,26 @@ test.describe("D2: a workstream where work is happening but Jira hasn't heard", 
     await seedWorkstreamEvent(page, "CA-402", { actor: "person", action: "review_posted", at: ago(6) });
     await seedWorkstreamEvent(page, "CA-401", { actor: "person", action: "review_posted", at: ago(6) });
     await backdateWorkstream(page, "CA-403", 6);
-    await openPipHome(page);
+    await openAgents(page);
 
     // Six days without a word to Jira, but nothing happened in CA-403 or CA-401 since: no cobweb. The ticket list's own covers a ticket nobody touches.
     for (const key of ["CA-403", "CA-401"]) {
-      await expect(workstreamRow(page, key)).toBeVisible();
+      await expect(workstreamGroup(page, key)).toBeVisible();
       await expect(workstreamWeb(page, key)).toHaveCount(0);
-      await expect(workstreamRow(page, key)).not.toHaveAttribute("data-wither", /.+/);
+      await expect(workstreamGroup(page, key)).not.toHaveAttribute("data-wither", /.+/);
     }
     // An agent started in CA-402 (and Pip answered the request): work since the post, so its row has the web.
-    const row = workstreamRow(page, "CA-402");
+    const row = workstreamGroup(page, "CA-402");
     const words = /^No Jira update for 6 days \(1 run and 1 Pip turn since\)$/;
     await expect(workstreamWeb(page, "CA-402")).toHaveCount(1);
     await expect(row).toHaveAttribute("data-wither", "3");
-    await expect(row).toHaveAttribute("title", words);
+    await expect(row.locator("[data-workstream-wither]")).toHaveAttribute("title", words);
     await expect(workstreamWebText(page, "CA-402")).toHaveText(words);
     // A screen reader gets the same words with the row; the drawing is hidden from it.
-    await expect(row).toHaveAccessibleDescription(/No Jira update for 6 days \(1 run and 1 Pip turn since\)$/);
     await expect(workstreamWeb(page, "CA-402")).toHaveAttribute("aria-hidden", "true");
-    await expect(row).toHaveClass(/\bws-wither ws-wither-3\b/);
 
     // Pip taking a turn in CA-401 is work too: its row grows one, counting that turn.
-    await workstreamRow(page, "CA-401").click();
+    await selectWorkstream(page, "CA-401");
     await homeComposer(page).fill("where do we stand?");
     await homeComposer(page).press("Enter");
     await homeSettled(page);
@@ -583,7 +533,7 @@ test.describe("D2: a workstream where work is happening but Jira hasn't heard", 
     // It is a look, not a duty: no need, no count anywhere.
     await expect(needsYouCount(page)).toHaveText("0");
     await expect(needsYouTray(page)).toContainText("Nothing needs you.");
-    await expect(homeButton(page)).toHaveAccessibleName("Pip home");
+    await expect(homeButton(page)).toHaveAccessibleName("Agents");
     await expect(needOfKind(page, "readiness")).toHaveCount(0);
   });
 
@@ -594,20 +544,20 @@ test.describe("D2: a workstream where work is happening but Jira hasn't heard", 
     await backdateWorkstream(page, "CA-402", 8);
     await startInvestigation(page, "CA-402");
     await finish(page, (await newest(page, "investigate"))!.id);
-    await openPipHome(page);
+    await openAgents(page);
     const web = workstreamWeb(page, "CA-402");
     // No post yet: the clock runs from when it opened, 8 days ago.
     await expect(web).toHaveCount(1);
-    await expect(workstreamRow(page, "CA-402")).toHaveAttribute("data-wither", "4");
+    await expect(workstreamGroup(page, "CA-402")).toHaveAttribute("data-wither", "4");
     await expect(workstreamWebText(page, "CA-402")).toHaveText(/^No Jira update for 8 days \(\d+ runs? and \d+ Pip turns? since\)$/);
 
     // The person approves the comment the investigation drafted: that is a post, and the clock starts again.
-    await workstreamRow(page, "CA-402").click();
+    await selectWorkstream(page, "CA-402");
     await needOfKind(page, "draft").click();
     await needsPane(page).getByRole("button", { name: "Post comment" }).click();
     await expect.poll(async () => (await jiraWrites(page)).map((w) => [w.type, w.key])).toEqual([["comment", "CA-402"]]);
     await expect(web).toHaveCount(0);
-    await expect(workstreamRow(page, "CA-402")).not.toHaveAttribute("data-wither", /.+/);
+    await expect(workstreamGroup(page, "CA-402")).not.toHaveAttribute("data-wither", /.+/);
     await expect(workstreamWebText(page, "CA-402")).toHaveCount(0);
   });
 });
@@ -616,87 +566,14 @@ test.describe("D2: a workstream where work is happening but Jira hasn't heard", 
 // decision shows once, in the pane, which scrolls alone and never hides text behind its action bar; Runs across every
 // workstream stays in the timeline; and the mode switch and the first permission prompt explain themselves.
 
-const home = (page: Page) => pipHome(page);
+const home = (page: Page) => agentsHome(page);
 const boxOf = async (loc: Locator) => (await loc.boundingBox())!;
-const timelineBody = (page: Page) => homeConversationRegion(page).locator("[data-timeline]");
-
-test.describe("B1: Needs you is the main left column on Pip home", () => {
-  test("the screen is named, Needs you heads the column with the workstreams under it, and both are usable at 1440x900", async ({ page }) => {
-    await page.setViewportSize({ width: 1440, height: 900 });
-    await openApp(page, "runs=kinds&prSurface=manual&wsManage=1");
-    await openPipHome(page);
-    await expect(home(page).getByRole("heading", { level: 1, name: "Pip home" })).toBeVisible();
-    await expect(page.getByRole("heading", { level: 1 })).toHaveCount(1);
-
-    const needs = needsYouTray(page);
-    const list = home(page).getByRole("navigation", { name: "Workstreams" });
-    // Needs you is a region of its own, no longer inside the workstreams' navigation.
-    await expect(list.getByRole("region", { name: "Needs you" })).toHaveCount(0);
-    const [n, w, c] = [await boxOf(needs), await boxOf(list), await boxOf(homeConversationRegion(page))];
-    expect(n.y + n.height).toBeLessThanOrEqual(w.y + 1);
-    // Needs you comes first and shows every need it has without scrolling; the workstreams take what it leaves (G7 in round 8).
-    expect(await needs.evaluate((el) => el.scrollHeight - el.clientHeight)).toBeLessThanOrEqual(4);
-    expect(n.x + n.width).toBeLessThanOrEqual(c.x + 1);
-    expect(n.width).toBeGreaterThanOrEqual(280);
-    expect(w.y + w.height).toBeLessThanOrEqual(900);
-    // Both are usable: a need row and a workstream row are on screen, and the timeline sits beside them.
-    await expect(needsYouRow(page, "General")).toBeVisible();
-    await expect(workstreamRow(page, "General")).toBeVisible();
-    await expect(timelineBody(page)).toBeVisible();
-
-    // A title wraps to two lines rather than being cut to one (the existing two-line clamp).
-    const clamp = await needsYouRow(page, "General").locator("[data-needs-you-head]").first().evaluate((el) => getComputedStyle(el).getPropertyValue("-webkit-line-clamp"));
-    expect(clamp).toBe("2");
-    const nowrap = await needsYouRow(page, "General").locator("[data-needs-you-head]").first().evaluate((el) => getComputedStyle(el).whiteSpace);
-    expect(nowrap).not.toBe("nowrap");
-  });
-
-  test("the list keeps its keys: F6 between regions, j and k, Enter opens the decision, Esc closes it", async ({ page }) => {
-    await openApp(page, "runs=kinds&prSurface=manual&wsManage=1");
-    await openPipHome(page);
-    const first = needsYouTray(page).locator("[data-needs-you-group]").first();
-    await first.focus();
-    const inList = () => page.evaluate(() => !!document.activeElement?.closest('[data-pip-home-column="list"]'));
-    await page.keyboard.press("j");
-    expect(await inList()).toBe(true);
-    await expect(first).not.toBeFocused();
-    await page.keyboard.press("k");
-    await expect(first).toBeFocused();
-    await page.keyboard.press("Enter");
-    await expect(needsPane(page)).toBeVisible();
-    await page.keyboard.press("Escape");
-    await expect(needsPane(page)).toHaveCount(0);
-    await first.focus();
-    await page.keyboard.press("F6");
-    await expect(workstreamRow(page, "General")).toBeFocused();
-  });
-});
 
 test.describe("B4: a decision shows once", () => {
-  test("a draft open in the pane is not a card on the timeline as well, and is one again when the pane closes", async ({ page }) => {
-    await openApp(page, "runs=kinds&prSurface=manual&wsManage=1");
-    await openPipHome(page);
-    await needsYouRow(page, "General").locator("[data-needs-you-group]").click();
-    const pane = needsPane(page);
-    await expect(pane).toBeVisible();
-    const card = pane.locator("article[data-draft]").first();
-    await expect(card).toBeVisible();
-    const id = (await card.getAttribute("data-draft"))!;
-    // One card of it on the whole screen: in the pane. The timeline says it in a line, and the rail has none.
-    await expect(home(page).locator(`article[data-draft="${id}"]`)).toHaveCount(1);
-    await expect(timelineBody(page).locator(`article[data-draft="${id}"]`)).toHaveCount(0);
-    await expect(timelineBody(page).locator(`[data-timeline-entry="draft:${id}"]`)).toHaveCount(1);
-    await expect(stepRail(page).locator(`[data-draft="${id}"]`)).toHaveCount(0);
-    await page.keyboard.press("Escape");
-    await expect(pane).toHaveCount(0);
-    await expect(home(page).locator(`article[data-draft="${id}"]`)).toHaveCount(1);
-    await expect(timelineBody(page).locator(`article[data-draft="${id}"]`)).toHaveCount(1);
-  });
-
   test("the pane is the only scroller in its place, and the draft's action bar is in the flow, never over the text", async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await openApp(page, "runs=kinds&prSurface=manual&wsManage=1");
-    await openPipHome(page);
+    await openAgents(page);
     await needsYouRow(page, "General").locator("[data-needs-you-group]").click();
     const pane = needsPane(page);
     const bar = pane.locator("[data-draft-actions]").first();
@@ -732,65 +609,6 @@ test.describe("B4: a decision shows once", () => {
     // Closed, the rail shows it again.
     await page.keyboard.press("Escape");
     await expect(stepRail(page).locator("[data-held-banner]")).toHaveCount(1);
-  });
-});
-
-test.describe("B6: Runs across every workstream stays in the timeline", () => {
-  test("Runs with Every workstream lists runs from every workstream on Pip home, labelled, and never swaps to Agents", async ({ page }) => {
-    test.setTimeout(90_000);
-    await openApp(page, "prSurface=manual&wsManage=1&pipPace=1");
-    await startWorkstream(page, "CA-401");
-    await startInvestigation(page);
-    const run = (await newest(page, "investigate"))!;
-    await openPipHome(page);
-    await workstreamRow(page, "CA-401").click();
-    const filter = (name: string) => home(page).getByRole("group", { name: "Timeline filter" }).getByRole("button", { name: new RegExp(`^${name}\\b`) });
-    const scope = (name: string) => home(page).getByRole("group", { name: "Timeline scope" }).getByRole("button", { name });
-    await filter("Runs").click();
-    await scope("Every workstream").click();
-    // Still Pip home: the heading is Pip home's, there is no Agents screen, both buttons are pressed.
-    await expect(page.getByRole("heading", { level: 1, name: "Pip home" })).toBeVisible();
-    await expect(page.locator("main").getByRole("heading", { name: "Agents", exact: true })).toHaveCount(0);
-    await expect(filter("Runs")).toHaveAttribute("aria-pressed", "true");
-    await expect(scope("Every workstream")).toHaveAttribute("aria-pressed", "true");
-    // Runs from every workstream and General: this workstream's, and the sample's own in General.
-    const entries = timelineBody(page).locator('[data-timeline-entry][data-kind="run"]');
-    await expect(entries.first()).toBeVisible();
-    expect(await entries.count()).toBeGreaterThan(1);
-    await expect(timelineBody(page).locator(`article[data-run-id="${run.id}"]`)).toBeVisible();
-    await expect(entries.locator("[data-timeline-workstream]", { hasText: /^CA-401$/ }).first()).toBeVisible();
-    await expect(entries.locator('[data-timeline-workstream="general"]').first()).toBeVisible();
-    // The scope is what the person left it: the Pip pane's link says the same without leaving Pip home.
-    await scope("This workstream").click();
-    await expect(timelineBody(page).locator('[data-timeline-workstream="general"]')).toHaveCount(0);
-  });
-
-  test("the Agents screen stays reachable, by its tab and by ⌘K, as the operations view", async ({ page }) => {
-    await openApp(page, "prSurface=manual");
-    await openPipHome(page);
-    await page.getByRole("button", { name: "Agents", exact: true }).click();
-    const main = page.locator("main");
-    await expect(main.getByRole("heading", { name: "Agents", exact: true })).toBeVisible();
-    await expect(main.getByRole("button", { name: /^Stop all/ })).toBeVisible();
-    await expect(main.locator("[data-agents-scope]")).toHaveCount(0);
-    // ⌘K: Open Agents from Pip home.
-    await openPipHome(page);
-    await expect(main.getByRole("heading", { name: "Agents", exact: true })).toHaveCount(0);
-    await page.keyboard.press("ControlOrMeta+k");
-    await page.keyboard.type("agents");
-    const dialog = page.getByRole("dialog", { name: /Search|Jump|command/i }).or(page.getByRole("dialog")).first();
-    await expect(dialog.getByRole("option").first()).toContainText("Open Agents");
-    await page.keyboard.press("Enter");
-    await expect(main.getByRole("heading", { name: "Agents", exact: true })).toBeVisible();
-    // And ⌘K's timeline commands stay on Pip home, with no hint sending Runs elsewhere.
-    await page.keyboard.press("ControlOrMeta+k");
-    await page.keyboard.type("Timeline: Runs");
-    const option = page.getByRole("option", { name: /^Timeline: Runs/ });
-    await expect(option).toBeVisible();
-    await expect(option).not.toContainText("Agents");
-    await page.keyboard.press("Enter");
-    await expect(page.getByRole("heading", { level: 1, name: "Pip home" })).toBeVisible();
-    await expect(page.getByRole("group", { name: "Timeline filter" }).getByRole("button", { name: /^Runs\b/ })).toHaveAttribute("aria-pressed", "true");
   });
 });
 
@@ -837,7 +655,7 @@ test.describe("B10: the switch and the first permission prompt explain themselve
 
     test("the first permission prompt explains both buttons above them with a Got it that is kept, and no later prompt repeats it", async ({ page }) => {
       await openApp(page, "runs=kinds&prSurface=manual");
-      await openPipHome(page);
+      await openAgents(page);
       await expandAllNeeds(page);
       await needOfKind(page, "permission").click();
       const ask = needsPane(page).locator("[data-permission-ask]");
@@ -855,7 +673,7 @@ test.describe("B10: the switch and the first permission prompt explain themselve
       // It stays dismissed across a reload.
       await page.reload();
       await expect(page.getByText("CA-401", { exact: true }).first()).toBeVisible();
-      await openPipHome(page);
+      await openAgents(page);
       await expandAllNeeds(page);
       await needOfKind(page, "permission").click();
       await expect(needsPane(page).locator("[data-permission-ask]")).toBeVisible();
@@ -870,27 +688,8 @@ test.describe("B10: the switch and the first permission prompt explain themselve
 // a command word outranks the tickets it also matches; one label for approving drafts together, whose preview opens in the
 // pane; the timeline's fix rounds, failure headings and order; Ctrl+0 from a card's button; the launcher clear of Agents.
 
-/** The region of Pip home the keyboard is in, as F6 names them. */
-const regionNow = (page: Page) =>
-  page.evaluate(() => {
-    const a = document.activeElement;
-    if (!a) return null;
-    if (a.closest("[data-needs-pane]")) return "pane";
-    if (a.closest("[data-needs-you]")) return "needs";
-    if (a.closest("[data-clarity-notice]")) return "notice";
-    if (a.closest('nav[aria-label="Your workstreams"]')) return "workstreams";
-    if (a.closest("[data-timeline-scope-shown]")) return "timeline";
-    if (a.closest('[data-pip-home-column="rail"]')) return "rail";
-    return a.id === "pip-input" ? "composer" : null;
-  });
 
-/** Presses `key` and waits for the keyboard to be in `region`. */
-async function pressTo(page: Page, key: string, region: string) {
-  await page.keyboard.press(key);
-  await expect.poll(() => regionNow(page), { message: `after ${key}` }).toBe(region);
-}
-
-/** A workstream on CA-401 on Pip home with two drafted comments of Pip's waiting in Needs you: one group of two needs, which may go together. */
+/** A workstream on CA-401 with two drafted comments of Pip's waiting in Needs you: one group of two needs, which may go together. */
 async function twoDrafts(page: Page) {
   await openApp(page, MANAGED);
   await workstreamOnHome(page);
@@ -901,86 +700,6 @@ async function twoDrafts(page: Page) {
   await expect(needsYouCount(page)).toHaveText("2");
 }
 
-test.describe("B5: F6 reaches every region of Pip home", () => {
-  test("in order: Needs you, the workstreams, the timeline, the open decision, the steps, the composer; Shift+F6 and Cmd/Ctrl+[ ] go the other way", async ({ page }) => {
-    await twoDrafts(page);
-    const group = needsYouRow(page, "CA-401").locator("[data-needs-you-group]");
-    await group.focus();
-    // Enter opens the decision, and the keyboard is in it.
-    await page.keyboard.press("Enter");
-    await expect(needsPane(page)).toBeVisible();
-    await expect.poll(() => regionNow(page)).toBe("pane");
-
-    // CA-401's thin description shows the clarity notice, which is a stop of its own at the top of the steps column.
-    // The decision sits above the timeline on screen, so F6 meets it first (G28).
-    for (const region of ["timeline", "notice", "rail", "composer", "needs", "workstreams", "pane"]) await pressTo(page, "F6", region);
-    for (const region of ["workstreams", "needs", "composer", "rail", "notice", "timeline", "pane"]) await pressTo(page, "Shift+F6", region);
-    // The same with the bracket keys, and the timeline lands on an entry (or the timeline itself while it has none).
-    await pressTo(page, "ControlOrMeta+BracketRight", "timeline");
-    await expect(page.locator("[data-timeline]")).toHaveCount(1);
-    await pressTo(page, "ControlOrMeta+BracketLeft", "pane");
-
-    // The workstreams land on the selected one, Needs you on the row open in the pane.
-    await pressTo(page, "Shift+F6", "workstreams");
-    await expect(workstreamRow(page, "CA-401")).toBeFocused();
-    await pressTo(page, "Shift+F6", "needs");
-    await expect(group).toBeFocused();
-
-    // With the decision closed it is passed by.
-    await page.keyboard.press("Escape");
-    await expect(needsPane(page)).toHaveCount(0);
-    await expect.poll(() => regionNow(page)).toBe("needs");
-    for (const region of ["workstreams", "timeline", "notice", "rail", "composer", "needs"]) await pressTo(page, "F6", region);
-  });
-
-  test("with no workstream there is no steps region and no decision, and the timeline is still a stop", async ({ page }) => {
-    await openApp(page, MANAGED);
-    await openPipHome(page);
-    await expect(homeComposer(page)).toBeFocused();
-    for (const region of ["needs", "workstreams", "timeline", "composer"]) await pressTo(page, "F6", region);
-  });
-});
-
-test.describe("B5: j and k move row by row through the visible rows, and a collapsed group is one row", () => {
-  test("a collapsed group is one row; an open one is its own row, then one for each of its other needs, and Enter or o opens its top need", async ({ page }) => {
-    await twoDrafts(page);
-    const group = needsYouRow(page, "CA-401").locator("[data-needs-you-group]");
-    const key = (await group.getAttribute("data-need-key"))!;
-    // Pip home opens a group by default while its needs fit: fold this one first.
-    await needsYouRow(page, "CA-401").locator("[data-needs-you-more]").click();
-    const focusedKey = () => page.evaluate(() => document.activeElement?.getAttribute("data-need-key") ?? null);
-    await group.focus();
-    await expect(group).toHaveAttribute("aria-expanded", "false");
-    // Folded: the next row is the workstreams'.
-    await page.keyboard.press("j");
-    await expect(workstreamRow(page, "General")).toBeFocused();
-    await page.keyboard.press("k");
-    await expect(group).toBeFocused();
-
-    // o expands it and opens its top need, as Enter does; Esc comes back to the row.
-    await page.keyboard.press("o");
-    await expect(group).toHaveAttribute("aria-expanded", "true");
-    await expect(needsPane(page)).toHaveAttribute("data-needs-pane", key);
-    await page.keyboard.press("Escape");
-    await expect(group).toBeFocused();
-
-    // Open: its own row stands for its top need, so the next stop is the other need, then the workstreams, and back.
-    const rows = needsYouRow(page, "CA-401").locator("[data-needs-you-need]");
-    await expect(rows).toHaveCount(2);
-    await page.keyboard.press("j");
-    await expect.poll(focusedKey).not.toBe(key);
-    await expect(rows.nth(1)).toBeFocused();
-    await page.keyboard.press("j");
-    await expect(workstreamRow(page, "General")).toBeFocused();
-    await page.keyboard.press("k");
-    await expect(rows.nth(1)).toBeFocused();
-    await page.keyboard.press("k");
-    await expect(group).toBeFocused();
-    await page.keyboard.press("k");
-    await expect(group).toBeFocused();
-  });
-});
-
 test.describe("B7: a command word outranks the tickets it also matches", () => {
   const options = async (page: Page, query: string) => {
     await page.keyboard.press("ControlOrMeta+k");
@@ -989,25 +708,6 @@ test.describe("B7: a command word outranks the tickets it also matches", () => {
     await expect(list.first()).toBeVisible();
     return list;
   };
-
-  test("'runs', 'timeline' and 'agents' find their commands first, and a ticket with the word in its title follows", async ({ page }) => {
-    await openApp(page, MANAGED);
-    await agentsSettled(page);
-    let list = await options(page, "runs");
-    await expect(list.first()).toContainText("Timeline: Runs");
-    const names = await list.allInnerTexts();
-    expect(names.findIndex((n) => n.includes("Worker runs out of memory"))).toBeGreaterThan(0);
-    await page.keyboard.press("Escape");
-
-    list = await options(page, "timeline");
-    await expect(list.first()).toContainText(/^.?\s*Timeline: /);
-    await page.keyboard.press("Escape");
-
-    list = await options(page, "agents");
-    expect(await list.first().innerText()).toMatch(/Open Agents|Open Pip home/);
-    await expect(list.first()).not.toContainText(/[A-Z]+-\d+/);
-    await page.keyboard.press("Escape");
-  });
 
   test("fuzzy ticket search still works, and a typed ticket key still leads", async ({ page }) => {
     await openApp(page, MANAGED);
@@ -1030,7 +730,7 @@ test.describe("B8: one label for approving drafts together, and its preview open
     await expandNeedsYou(page, "CA-401");
     const batch = ws.getByRole("button", { name: "Approve 2 safe drafts" });
     await expect(batch).toHaveCount(1);
-    await expect(pipHome(page).getByRole("button", { name: /^Approve these/ })).toHaveCount(0);
+    await expect(agentsHome(page).getByRole("button", { name: /^Approve these/ })).toHaveCount(0);
     await batch.click();
 
     const pane = needsPane(page);
@@ -1080,28 +780,9 @@ test.describe("B9: the timeline's fix rounds, failure headings and order", () =>
     await seedWorkstreamEvent(page, "CA-401", { actor: "supervisor", action: "fix_round_sent", at: minutesAgo(3), runId: run.id, detail: "120" });
     await seedWorkstreamEvent(page, "CA-401", { actor: "supervisor", action: "fix_round_sent", at: minutesAgo(2), runId: run.id, detail: "120" });
     await seedWorkstreamEvent(page, "CA-401", { actor: "person", action: "fix_round_sent", at: minutesAgo(1), runId: run.id, detail: "120" });
-    await openPipHome(page);
-    await workstreamRow(page, "CA-401").click();
+    await openAgents(page);
+    await selectWorkstream(page, "CA-401");
     await expect.poll(async () => (await entryTexts(page)).filter((t) => t.startsWith("Fix round"))).toEqual(["Fix round 1 sent to R1 automatically", "Fix round 2 sent to R1 automatically", "Fix round 3 sent to R1"]);
-  });
-
-  test("a failed run's heading is short and its own message is smaller type under it", async ({ page }) => {
-    await openApp(page, "runs=kinds&prSurface=manual&wsManage=1");
-    await openPipHome(page);
-    const failed = homeConversationRegion(page).locator('[data-timeline-entry][data-kind="run"][data-phase="failed"]').first();
-    await expect(failed).toBeVisible();
-    // The row's name starts with its ticket (G32); the heading is what follows it.
-    const heading = ((await failed.getAttribute("aria-label")) ?? "").replace(/^[A-Z][A-Z0-9]*-\d+: /, "");
-    expect(heading).toMatch(/^Investigate( R\d+)? failed$/);
-    const detail = failed.locator("[data-timeline-detail]");
-    await expect(detail).toHaveCount(1);
-    const message = (await detail.innerText()).trim();
-    expect(message.length).toBeGreaterThan(0);
-    expect(heading).not.toContain(message);
-    await expect(failed.locator("[data-timeline-line]")).toContainText(heading!);
-    // Smaller type than the heading.
-    const size = (loc: Locator) => loc.evaluate((el) => parseFloat(getComputedStyle(el).fontSize));
-    expect(await size(detail)).toBeLessThan(await size(failed.locator("[data-timeline-line] > span.min-w-0, [data-timeline-line] button").first()));
   });
 
   test("two automatic rounds then the person's posting: each round after the review that sent it, and the posted review after the review run", async ({ page }) => {
@@ -1119,8 +800,8 @@ test.describe("B9: the timeline's fix rounds, failure headings and order", () =>
       // The rules send the build back for each of the first two; the third review is the person's.
       await expect.poll(async () => (await actions(page, round < 2 ? "fix_round_sent" : "fix_rounds_exhausted")).length).toBe(round < 2 ? round + 1 : 1);
     }
-    await openPipHome(page);
-    await workstreamRow(page, "CA-401").click();
+    await openAgents(page);
+    await selectWorkstream(page, "CA-401");
     await expect.poll(async () => (await entryTexts(page)).filter((t) => t.startsWith("Fix round"))).toEqual(["Fix round 1 sent to R4 automatically", "Fix round 2 sent to R4 automatically"]);
     const texts = async () => entryTexts(page);
     const at = (all: string[], re: RegExp, nth = 0) => all.map((t, i) => (re.test(t) ? i : -1)).filter((i) => i >= 0)[nth] ?? -1;
@@ -1156,13 +837,13 @@ test.describe("B11: Ctrl+0 goes to Pip home from the Agents screen with a card's
     await button.focus();
     await expect(button).toBeFocused();
     await page.keyboard.press("ControlOrMeta+0");
-    await expect(pipHome(page)).toBeVisible();
+    await expect(agentsHome(page)).toBeVisible();
 
     await page.getByRole("button", { name: /^Agents/ }).click();
     const card = page.locator("main article[data-run-id]").first();
     await card.focus();
     await page.keyboard.press("ControlOrMeta+0");
-    await expect(pipHome(page)).toBeVisible();
+    await expect(agentsHome(page)).toBeVisible();
   });
 
   test("plain keys on a card's button still stay with the button", async ({ page }) => {
@@ -1191,6 +872,7 @@ test.describe("B12: the Pip launcher keeps clear of the Agents screen's cards an
 
     const launcher = page.locator("[data-pip-launcher]");
     await expect(launcher).toBeVisible();
+    await groupByState(page);
     const show = page.locator('[data-lane="earlier"]').getByRole("button", { name: "Show" });
     await expect(show).toBeVisible();
     const scroller = page.locator("main [data-agents-list]").locator("xpath=..");

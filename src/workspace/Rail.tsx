@@ -15,7 +15,7 @@ import { SavedViewsPanel } from "./SavedViews";
 import { useTabs } from "./tabsStore";
 import { RAIL_BADGES, matchesQuery, nounFor, railSplit, type Noun } from "./watchLogic";
 import { useClaude } from "../claudeStore";
-import { HOLD_ALL_HINT, PIP_HOME_HINT } from "./commands";
+import { HOLD_ALL_HINT } from "./commands";
 import { holdAllVisible, togglePip, useWorkstreams } from "./workstreamsStore";
 import { NeedsYouList } from "./NeedsYou";
 import { needsYouText, useNeedsYou } from "./useNeeds";
@@ -236,7 +236,7 @@ function HoldAllButton() {
   );
 }
 
-/** A count over a rail button, named and titled with what it counts: Pip home's one count of what needs you, the only badge. */
+/** A count over a rail button, named and titled with what it counts: the one count of what needs you, the only badge. */
 function RailBadge({ count, what }: { count: number; what: string }) {
   return (
     <span aria-label={what} title={what} className="absolute -top-[3px] -right-[3px] grid h-[16px] min-w-[16px] place-items-center rounded-full bg-ws-pip px-1 text-[10px] font-semibold text-ws-on-pip">
@@ -245,42 +245,41 @@ function RailBadge({ count, what }: { count: number; what: string }) {
   );
 }
 
-/** What the rail badge counts, as its tooltip says and as the button's name ends ("Pip home, 3 things need you"). Activity and Agents have none: what needs you is counted once, on Pip home. */
+/** What the rail badge counts, as its tooltip says and as the button's name ends ("Agents, 3 things need you"). Activity has none: what needs you is counted once, on Agents. */
 export const railBadgeText = {
-  pipHome: needsYouText,
+  agents: needsYouText,
 };
 
-/**
- * Pip home, with how many things need the person across the workstreams: the one count (`needs.length`). Its context menu
- * (a right click, or the keyboard's menu key) opens the Needs you list as a popover from any route; a need there opens on Pip home.
- */
-/** How the rail's Pip home button opens what needs the person without leaving the screen. */
-export const PIP_HOME_TRAY_NOTE = "Right-click or Shift+F10: what needs you";
+/** How the rail's Agents button opens what needs the person without leaving the screen. */
+export const AGENTS_TRAY_NOTE = "Right-click or Shift+F10: what needs you";
 
-function PipHomeButton({ current }: { current: boolean }) {
+/**
+ * Agents, with how many things need the person across the workstreams: the one count (`needs.length`). Its context menu
+ * (a right click, or the keyboard's menu key) opens the Needs you list as a popover from any route; a need there opens on Agents.
+ */
+function AgentsButton({ current }: { current: boolean }) {
   const items = useNeedsYou();
   const { open, setOpen, root } = usePopover();
   const count = items.length;
   return (
     <div ref={root} className="relative">
       <RailButton
-        label={count > 0 ? `Pip home, ${railBadgeText.pipHome(count)}` : "Pip home"}
-        hint={PIP_HOME_HINT}
+        label={count > 0 ? `Agents, ${railBadgeText.agents(count)}` : "Agents"}
         tip={!open}
         current={current}
-        // A click goes to Pip home; what needs the person opens beside it from the context menu (right-click or Shift+F10).
-        note={PIP_HOME_TRAY_NOTE}
-        aria-description={PIP_HOME_TRAY_NOTE}
+        // A click goes to Agents; what needs the person opens beside it from the context menu (right-click or Shift+F10).
+        note={AGENTS_TRAY_NOTE}
+        aria-description={AGENTS_TRAY_NOTE}
         data-popover-trigger
-        onClick={() => (setOpen(false), useTabs.getState().setRoute("pip"))}
+        onClick={() => (setOpen(false), useTabs.getState().setRoute("agents"))}
         onContextMenu={(ev) => {
           ev.preventDefault();
           setOpen(!open);
         }}
         className={`text-lg ${plain(current)}`}
       >
-        <span aria-hidden>⌂</span>
-        {count > 0 && <RailBadge count={count} what={railBadgeText.pipHome(count)} />}
+        <Icon name="term" className="size-[19px]" />
+        {count > 0 && <RailBadge count={count} what={railBadgeText.agents(count)} />}
       </RailButton>
       {open && (
         <div role="dialog" aria-label="Needs you" className="absolute bottom-0 left-full z-40 ml-2 w-[300px] overflow-hidden rounded-xl border border-ws-sep2 bg-ws-win text-ws-ink shadow-ws-pop">
@@ -345,12 +344,7 @@ export function Rail() {
         <RailButton label="Activity" current={route === "activity"} onClick={() => setRoute("activity")} className={`text-lg ${plain(route === "activity")}`}>
           <BellIcon />
         </RailButton>
-        {agentsEnabled && (
-          <RailButton label="Agents" current={route === "agents"} onClick={() => setRoute("agents")} className={`text-lg ${plain(route === "agents")}`}>
-            <Icon name="term" className="size-[19px]" />
-          </RailButton>
-        )}
-        {agentsEnabled && <PipHomeButton current={route === "pip"} />}
+        {agentsEnabled && <AgentsButton current={route === "agents"} />}
         {agentsEnabled && <HoldAllButton />}
         <RailButton label="Settings" current={route === "settings"} onClick={() => setRoute("settings")} className={`text-lg ${plain(route === "settings")}`}>
           <span aria-hidden>⚙</span>

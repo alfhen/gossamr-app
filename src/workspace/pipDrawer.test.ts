@@ -26,8 +26,8 @@ afterEach(() => {
 });
 
 describe("the Pip drawer's open state", () => {
-  it("toggles with ⌘J from every screen, Pip home included", () => {
-    for (const route of ["workspace", "activity", "agents", "settings", "pip"] as const) {
+  it("toggles with ⌘J from every screen", () => {
+    for (const route of ["workspace", "activity", "agents", "settings"] as const) {
       useTabs.getState().setRoute(route);
       togglePip();
       expect(open()).toBe(true);
@@ -45,7 +45,7 @@ describe("the Pip drawer's open state", () => {
 });
 
 describe("everything that links to Pip opens the drawer", () => {
-  it.each(["workspace", "pip"] as const)("a question asked of Pip, on %s", async (route) => {
+  it.each(["workspace", "agents"] as const)("a question asked of Pip, on %s", async (route) => {
     useTabs.getState().setRoute(route);
     const ask = vi.spyOn(claude, "ask").mockResolvedValue({ queued: false, ahead: 0 });
     try {
@@ -58,22 +58,22 @@ describe("everything that links to Pip opens the drawer", () => {
     expect(useTabs.getState().route).toBe(route);
   });
 
-  it.each(["workspace", "pip"] as const)("a prompt put in its composer, on %s", (route) => {
+  it.each(["workspace", "agents"] as const)("a prompt put in its composer, on %s", (route) => {
     useTabs.getState().setRoute(route);
     usePip.getState().openWith("Draft a reply");
     expect(open()).toBe(true);
     expect(usePip.getState().prefill?.text).toBe("Draft a reply");
   });
 
-  it.each(["workspace", "pip"] as const)("a quoted selection, on %s", (route) => {
+  it.each(["workspace", "agents"] as const)("a quoted selection, on %s", (route) => {
     useTabs.getState().setRoute(route);
     usePip.getState().askAbout("some words");
     expect(open()).toBe(true);
     expect(usePip.getState().quote).toBe("some words");
   });
 
-  it("the peek's Open in Pip, on Pip home too", () => {
-    useTabs.getState().setRoute("pip");
+  it("the peek's Open in Pip, on Agents too", () => {
+    useTabs.getState().setRoute("agents");
     focusPip();
     expect(open()).toBe(true);
     useTabs.getState().setRoute("workspace");

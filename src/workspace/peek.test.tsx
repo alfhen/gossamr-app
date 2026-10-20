@@ -13,9 +13,9 @@ import { ContextChip } from "./PipPane";
 import { DraftPreview } from "./DraftPreview";
 import { WorkDocView } from "./WorkDocView";
 import { TicketAgentsView, WorkstreamLine } from "./AgentMenu";
-import { usePipHome } from "./pipHomeStore";
+import { useWorkView } from "./workViewStore";
 import { useTabs } from "./tabsStore";
-import { openOnPipHome } from "./workstreamsStore";
+import { openOnAgents } from "./workstreamsStore";
 
 const ws = () => useWorkspace.getState();
 
@@ -305,11 +305,11 @@ describe("the workstream line in 'Agents on this ticket'", () => {
     waitingForPr: null,
   } as unknown as Parameters<typeof WorkstreamLine>[0]["workstream"];
 
-  it("links to the workstream on Pip home while Agents are on", () => {
+  it("links to the workstream on Agents while Agents are on", () => {
     const onOpen = vi.fn();
     const html = renderToStaticMarkup(<WorkstreamLine workstream={view} onOpen={onOpen} />);
     expect(html).toContain("Workstream: CA-401 Refund rounding");
-    expect(html).toMatch(/<button type="button" data-open-pip-home="true"[^>]*>Open on Pip home<\/button>/);
+    expect(html).toMatch(/<button type="button" data-open-workstream="true"[^>]*>Open in Agents<\/button>/);
     const el = WorkstreamLine({ workstream: view, onOpen }) as { props: { children: { props?: { onClick?(): void } }[] } };
     const kids = el.props.children;
     kids[kids.length - 1]?.props?.onClick?.();
@@ -317,22 +317,22 @@ describe("the workstream line in 'Agents on this ticket'", () => {
   });
 
   it("is a plain line without it, as with Agents off", () => {
-    expect(renderToStaticMarkup(<WorkstreamLine workstream={view} />)).not.toContain("Open on Pip home");
-    expect(renderToStaticMarkup(<TicketAgentsView runs={[]} now={0} title={null} workstream={view} onOpen={vi.fn()} />)).not.toContain("Open on Pip home");
-    expect(renderToStaticMarkup(<TicketAgentsView runs={[]} now={0} title={null} workstream={view} onOpen={vi.fn()} onOpenWorkstream={vi.fn()} />)).toContain("Open on Pip home");
+    expect(renderToStaticMarkup(<WorkstreamLine workstream={view} />)).not.toContain("Open in Agents");
+    expect(renderToStaticMarkup(<TicketAgentsView runs={[]} now={0} title={null} workstream={view} onOpen={vi.fn()} />)).not.toContain("Open in Agents");
+    expect(renderToStaticMarkup(<TicketAgentsView runs={[]} now={0} title={null} workstream={view} onOpen={vi.fn()} onOpenWorkstream={vi.fn()} />)).toContain("Open in Agents");
   });
 
-  it("opens the workstream on Pip home, closing the peek over it", () => {
+  it("opens the workstream on Agents, closing the peek over it", () => {
     useTabs.setState({ route: "workspace", selected: "mock:CA-401" });
-    openOnPipHome("ws-7");
-    expect(useTabs.getState().route).toBe("pip");
+    openOnAgents("ws-7");
+    expect(useTabs.getState().route).toBe("agents");
     expect(useTabs.getState().selected).toBeNull();
-    expect(usePipHome.getState().selected).toBe("ws-7");
+    expect(useWorkView.getState().selected).toBe("ws-7");
     useTabs.setState({ selected: "mock:CA-401" });
-    openOnPipHome(null);
+    openOnAgents(null);
     expect(useTabs.getState().selected).toBeNull();
-    expect(usePipHome.getState().selected).toBeNull();
+    expect(useWorkView.getState().selected).toBeNull();
     useTabs.setState({ route: "workspace" });
-    usePipHome.getState().reset();
+    useWorkView.getState().reset();
   });
 });

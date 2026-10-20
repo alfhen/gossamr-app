@@ -97,7 +97,7 @@ describe("the chips and notes", () => {
     expect(on).toMatch(/aria-pressed="true"[^>]*><span aria-hidden="true">◆ <\/span>Pip &amp; agents/);
   });
 
-  it("shows a workstream's audit line with its ticket and a way to Pip home, newest first", () => {
+  it("shows a workstream's audit line with its ticket and a way to Agents, newest first", () => {
     const ws = { workstream: { id: "w1", connectionId: "mock", itemKey: "CA-401", title: "CA-401 Retry", closedAt: null }, stage: "triage", runs: ["r1", "r2"], labels: [["r1", "R1"], ["r2", "R2"]] } as unknown as Parameters<typeof toWorkstreamEntries>[1][number];
     const line = (seq: number, at: string, actor: "person" | "supervisor", action: string, runId: string | null, detail: string | null = null) => ({ workstreamId: "w1", seq, at, actor, action, runId, proposalId: null, digest: null, detail });
     const [newest, older] = toWorkstreamEntries({ w1: [line(1, "2026-09-30T10:00:00Z", "person", "opened", null), line(2, "2026-09-30T11:00:00Z", "supervisor", "autostart", "r2", "investigate_triage after r1")] }, [ws]);
@@ -109,7 +109,7 @@ describe("the chips and notes", () => {
     expect(html).toContain("Triage R2 started automatically after R1");
     expect(html).toContain("CA-401");
     expect(html).toContain("Retry failed webhooks");
-    expect(html).toContain("Open on Pip home");
+    expect(html).toContain("Open in Agents");
   });
 
   it("renders a day heading and a status note", () => {

@@ -145,9 +145,9 @@ export function AgentsSettingsView({ runs, stopping, keepRunning, settings, sett
         </Box>
       </Sec>
 
-      <Sec title="Pip home">
+      <Sec title="Agents">
         <Box>
-          <StartOnPipHome />
+          <StartOnAgents />
         </Box>
       </Sec>
 
@@ -223,15 +223,15 @@ export function AgentsSettingsView({ runs, stopping, keepRunning, settings, sett
   );
 }
 
-/** Whether Gossamr opens on Pip home, as it does until the person turns it off. This sheet only shows while Agents are on, and so does Pip home. */
-function StartOnPipHome() {
-  const on = usePrefs((s) => s.startOnPipHome);
+/** Whether Gossamr opens on Agents, as it does until the person turns it off. This sheet only shows while Agents are on, and so does the Agents view. */
+function StartOnAgents() {
+  const on = usePrefs((s) => s.startOnAgents);
   return (
     <SwitchRow
-      label="Start on Pip home"
-      description="Open Gossamr on Pip home, with your workstreams and Pip side by side. Turn it off to open on the workspace; ⌘0 opens Pip home from anywhere."
+      label="Start on Agents"
+      description="Open Gossamr on Agents, with what needs you, your workstreams and their agents in one place. Turn it off to open on the workspace."
       checked={on}
-      onChange={(next) => usePrefs.getState().setStartOnPipHome(next)}
+      onChange={(next) => usePrefs.getState().setStartOnAgents(next)}
     />
   );
 }

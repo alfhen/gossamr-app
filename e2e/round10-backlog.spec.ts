@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { agentsSettled, editTicket, homeSettled, jiraWrites, needsPane, openApp, openPipHome, pipHome, startWorkstream, stepRail, workstreamRow } from "./support/app";
+import { agentsHome, agentsSettled, closeWorkstreamSheet, editTicket, jiraWrites, needsPane, openAgents, openApp, selectWorkstream, startMyDay, startWorkstream, stepRail } from "./support/app";
 
 // Fixes from round 10's backlog: the unclear tickets higher on Start my day (G26), the workstream controls on the steps rail's
 // F6 stop (G27), Ctrl+0 on Pip home going on to General (G28), "N here" on a Needs you group (G30), the palette's and the
@@ -12,7 +12,7 @@ const DAY_DUE = { cookies: [], origins: [{ origin: `http://localhost:${port}`, l
 const THIN = "Fix it.";
 const toast = (page: Page) => page.locator("[data-toast]");
 const allProjects = (page: Page) => page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "All projects" }).click();
-const notice = (page: Page) => pipHome(page).locator("[data-clarity-notice]");
+const notice = (page: Page) => agentsHome(page).locator("[data-clarity-notice]");
 
 /** A workstream on `key`, begun from its peek, and Pip home on it. */
 async function begin(page: Page, key: string) {
@@ -29,12 +29,13 @@ test.describe("Start my day puts the unclear tickets above the lines that follow
     for (const key of ["CA-402", "CA-409"]) await editTicket(page, key, { description: THIN });
     await begin(page, "CA-402");
     await begin(page, "CA-409");
-    await openPipHome(page);
-    await workstreamRow(page, "CA-402").click();
+    await openAgents(page);
+    await selectWorkstream(page, "CA-402");
     await notice(page).getByRole("button", { name: "Ask the reporter now" }).click();
     await page.keyboard.press("Escape");
-    await workstreamRow(page, "General").click();
-    const card = pipHome(page).locator("[data-start-my-day]");
+    await closeWorkstreamSheet(page);
+    await startMyDay(page);
+    const card = agentsHome(page).locator("[data-start-my-day]");
     await expect(card).toBeVisible();
     const kinds = await card.locator("[data-day-line]").evaluateAll((els) => els.map((el) => el.getAttribute("data-day-line")));
     // The questions draft is a decision now, on the approve line only (round 13, G10), so the unclear line follows that one.
@@ -46,68 +47,12 @@ test.describe("Start my day puts the unclear tickets above the lines that follow
   });
 });
 
-test.describe("the steps rail's F6 stop holds the workstream's controls (G27)", () => {
-  test("F6 lands on Manage, the arrows reach Hold and Close, and then the steps", async ({ page }) => {
-    test.setTimeout(90_000);
-    await openApp(page, "runs=empty");
-    await begin(page, "CA-408");
-    await openPipHome(page);
-    await workstreamRow(page, "CA-408").click();
-    await homeSettled(page);
-    const rail = stepRail(page);
-    const manage = rail.getByRole("switch", { name: "Manage this workstream" });
-    const hold = rail.getByRole("button", { name: "Hold", exact: true });
-    const close = rail.getByRole("button", { name: "Close…" });
-    await expect(manage).toBeVisible();
-    // The clarity notice is a region of its own on the way (it sits in the rail's column).
-    for (let n = 0; n < 12 && !(await manage.evaluate((el) => el === document.activeElement)); n++) await page.keyboard.press("F6");
-    await expect(manage).toBeFocused();
-    await page.keyboard.press("ArrowDown");
-    await expect(hold).toBeFocused();
-    await page.keyboard.press("ArrowDown");
-    await expect(close).toBeFocused();
-    await page.keyboard.press("ArrowDown");
-    await expect(rail.locator("[data-step-chip]").first()).toBeFocused();
-    await page.keyboard.press("ArrowUp");
-    await expect(close).toBeFocused();
-  });
-});
-
-test.describe("Ctrl+0 on Pip home inside a workstream goes on to General (G28)", () => {
-  test("from Pip home on a workstream it selects General; from elsewhere it only opens Pip home", async ({ page }) => {
-    test.setTimeout(90_000);
-    await openApp(page, "runs=empty");
-    await begin(page, "CA-408");
-    await openPipHome(page);
-    await workstreamRow(page, "CA-408").click();
-    await expect(workstreamRow(page, "CA-408")).toHaveAttribute("aria-selected", "true");
-    // Not from Pip's composer while a message is typed in it: the workstream stays (G7 says so in a toast).
-    await page.locator("#pip-input").fill("a message");
-    await page.keyboard.press("ControlOrMeta+0");
-    await expect(workstreamRow(page, "CA-408")).toHaveAttribute("aria-selected", "true");
-    await page.locator("#pip-input").fill("");
-    await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
-    await page.keyboard.press("ControlOrMeta+0");
-    await expect(workstreamRow(page, "General")).toHaveAttribute("aria-selected", "true");
-    await expect(workstreamRow(page, "CA-408")).toHaveAttribute("aria-selected", "false");
-    // On General it stays put.
-    await page.keyboard.press("ControlOrMeta+0");
-    await expect(workstreamRow(page, "General")).toHaveAttribute("aria-selected", "true");
-    // Coming from the workspace, it opens Pip home on the workstream it was on, as before.
-    await workstreamRow(page, "CA-408").click();
-    await allProjects(page);
-    await expect(pipHome(page)).toHaveCount(0);
-    await page.keyboard.press("ControlOrMeta+0");
-    await expect(workstreamRow(page, "CA-408")).toHaveAttribute("aria-selected", "true");
-  });
-});
-
 test.describe("what the palette and the reporter draft say (G31)", () => {
   test("'Start a workstream' says it starts no agent and posts nothing", async ({ page }) => {
     await openApp(page, "runs=empty");
     await agentsSettled(page, true);
-    await openPipHome(page);
-    await pipHome(page).getByRole("button", { name: "Start a workstream…" }).click();
+    await openAgents(page);
+    await agentsHome(page).getByRole("button", { name: "Start a workstream…" }).click();
     const dialog = page.getByRole("dialog", { name: "Command palette" });
     await expect(dialog.locator("[data-palette-note]")).toHaveText("Opens a workstream; starts no agent and posts nothing.");
     await page.keyboard.press("Escape");
@@ -121,8 +66,8 @@ test.describe("what the palette and the reporter draft say (G31)", () => {
     await openApp(page, "runs=empty");
     await editTicket(page, "CA-408", { description: THIN });
     await begin(page, "CA-408");
-    await openPipHome(page);
-    await workstreamRow(page, "CA-408").click();
+    await openAgents(page);
+    await selectWorkstream(page, "CA-408");
     await notice(page).getByRole("button", { name: "Ask the reporter now" }).click();
     const draft = needsPane(page).getByRole("article", { name: "Comment on CA-408" });
     await expect(draft).toBeVisible();
@@ -137,8 +82,8 @@ test.describe("toasts leave with the page and clear the launcher (G32)", () => {
     test.setTimeout(90_000);
     await openApp(page, "runs=empty");
     await begin(page, "CA-408");
-    await openPipHome(page);
-    await workstreamRow(page, "CA-408").click();
+    await openAgents(page);
+    await selectWorkstream(page, "CA-408");
     const rail = stepRail(page);
     await rail.getByRole("button", { name: "Close…" }).click();
     await rail.getByRole("button", { name: "Close workstream" }).click();
@@ -150,7 +95,7 @@ test.describe("toasts leave with the page and clear the launcher (G32)", () => {
     // A toast younger than the route grace (500 ms) is taken to come with the change and stays; leave it older than that.
     await page.waitForTimeout(700);
     await allProjects(page);
-    await expect(pipHome(page)).toHaveCount(0);
+    await expect(agentsHome(page)).toHaveCount(0);
     await expect(toast(page)).toHaveCount(0);
   });
 
@@ -161,11 +106,11 @@ test.describe("toasts leave with the page and clear the launcher (G32)", () => {
     await expect(launcher).toBeVisible();
     // A toast over the workspace (here, from drafting a ticket in the palette) clears the launcher's box.
     await page.keyboard.press("ControlOrMeta+k");
-    await page.getByRole("combobox").fill("New ticket");
+    await page.getByRole("dialog", { name: "Command palette" }).getByRole("combobox").fill("New ticket");
     await page.getByRole("option", { name: /^New ticket/ }).first().click();
     const dialog = page.getByRole("dialog", { name: "Command palette" });
     if (await dialog.getByRole("option").count()) await dialog.getByRole("option").first().click();
-    await page.getByRole("combobox").fill("Check the toast");
+    await page.getByRole("dialog", { name: "Command palette" }).getByRole("combobox").fill("Check the toast");
     await page.keyboard.press("Enter");
     await expect(toast(page)).toContainText("Drafted a new ticket");
     const t = (await toast(page).boundingBox())!;

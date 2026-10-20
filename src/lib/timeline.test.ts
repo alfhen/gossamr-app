@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { MockBackend } from "../backend/mock";
 import type { Intent, ItemRef, Proposal, ProposalState, Run, RunKind, RunState, WorkstreamActor, WorkstreamEvent, WorkstreamView } from "../types";
 import { needs, type Need } from "./needs";
-import { EMPTY_FILTER, FILTER_LABEL, SCOPE_LABEL, TIMELINE_FILTERS, TIMELINE_SCOPES, draftSentence, everyWorkstreamParts, timelineAcross, workstreamLabel, filterCounts, filterTimeline, runLifecycle, runPhase, runSentence, shows, timeline, type TimelineEntry, type TimelineInput, type TimelineTurn } from "./timeline";
+import { EMPTY_FILTER, FILTER_LABEL, TIMELINE_FILTERS, draftSentence, filterCounts, filterTimeline, runLifecycle, runPhase, runSentence, shows, timeline, type TimelineEntry, type TimelineTurn } from "./timeline";
 
 const NOW = Date.parse("2026-10-12T12:00:00Z");
 const iso = (minutesAgo: number) => new Date(NOW - minutesAgo * 60_000).toISOString();
@@ -434,15 +434,6 @@ describe("timeline: cause before effect", () => {
     expect(list.map((e) => e.key)).toEqual(["audit:ws-1:0", "run:r2", "draft:d1", "audit:ws-1:2"]);
   });
 
-  it("keeps a workstream's cause before its effect when workstreams are merged by time", () => {
-    const inputs = (id: string): TimelineInput => ({ runs: [{ ...run("r2", "review", "done", 20), spec: { ...run("r2", "review", "done", 20).spec, workstream: id } }], drafts: [posted(25, { origin: { type: "run", runId: "r2", shortId: null, workstream: id } })], events: [], labels, ticketKey: "CA-401" });
-    const merged = timelineAcross([
-      { workstreamId: "ws-1", label: "CA-401", input: inputs("ws-1") },
-      { workstreamId: "ws-2", label: "CA-402", input: { ...inputs("ws-2"), runs: [], drafts: [], events: [line("held", 22, { workstreamId: "ws-2" })] } },
-    ]);
-    expect(merged).toHaveLength(3);
-    expect(merged.findIndex((e) => e.key === "run:r2")).toBeLessThan(merged.findIndex((e) => e.key === "draft:d1"));
-  });
 });
 
 describe("timeline: the audit", () => {
@@ -687,95 +678,6 @@ describe("timeline filters", () => {
     for (const f of TIMELINE_FILTERS) expect(EMPTY_FILTER[f]).toMatch(/\.$/);
     expect(shows("runs", { kind: "audit", decision: true })).toBe(false);
     expect(shows("decisions", { kind: "run", decision: false })).toBe(false);
-  });
-});
-
-describe("every workstream", () => {
-  const view = (id: string, key: string | null, over: Partial<WorkstreamView["workstream"]> = {}): WorkstreamView =>
-    ({ workstream: { id, itemKey: key, title: key ? `${key} Checkout` : "Loose ends", connectionId: "mock", closedAt: null, createdAt: iso(600), ...over }, stage: "intake", runs: [], labels: [], budget: {} }) as unknown as WorkstreamView;
-  const inWs = (id: string, ws: string, queuedAgo: number) => run(id, "build", "done", queuedAgo, { item: ref(ws === "ws-1" ? "CA-401" : "CA-402"), spec: { ...base.spec, kind: "build", workstream: ws } });
-
-  it("merges each part's own timeline by time, each entry carrying its workstream and label", () => {
-    const merged = timelineAcross([
-      { workstreamId: "ws-1", label: "CA-401", input: { turns: [turn("a", 50)], events: [line("held", 10)] } },
-      { workstreamId: "ws-2", label: "CA-402", input: { turns: [turn("b", 40)], runs: [inWs("r9", "ws-2", 30)] } },
-      { workstreamId: null, label: "General", input: { turns: [turn("c", 20)] } },
-    ]);
-    expect(keys(merged)).toEqual(["turn:a", "turn:b", "run:r9", "turn:c", "audit:ws-1:0"]);
-    expect(merged.map((e) => e.scopeLabel)).toEqual(["CA-401", "CA-402", "CA-402", "General", "CA-401"]);
-    expect(merged.map((e) => e.workstreamId)).toEqual(["ws-1", "ws-2", "ws-2", null, "ws-1"]);
-  });
-
-  it("is each part's timeline as it is, only merged: the same entries, in the same order within a part", () => {
-    const one = { turns: [turn("a", 50), turn("b", 5)], runs: [run("r1", "investigate", "done", 30)], events: [line("hold_lifted", 40), line("hold_lifted", 39)] };
-    const alone = timeline(one);
-    const merged = timelineAcross([{ workstreamId: "ws-1", label: "CA-401", input: one }]);
-    expect(merged.map(({ workstreamId: _w, scopeLabel: _l, ...e }) => e)).toEqual(alone);
-  });
-
-  it("keeps something two parts show once, in the first part to show it", () => {
-    const waiting = draft("d1", comment("CA-401"), 15);
-    const merged = timelineAcross([
-      { workstreamId: "ws-1", label: "CA-401", input: { drafts: [waiting] } },
-      { workstreamId: null, label: "General", input: { drafts: [waiting] } },
-    ]);
-    expect(keys(merged)).toEqual(["draft:d1"]);
-    expect(merged[0].scopeLabel).toBe("CA-401");
-  });
-
-  it("keeps the parts' order for entries at the same moment, after the order by kind", () => {
-    const at = iso(30);
-    const merged = timelineAcross([
-      { workstreamId: "ws-1", label: "CA-401", input: { runs: [run("r1", "build", "done", 30, { queuedAt: at })] } },
-      { workstreamId: "ws-2", label: "CA-402", input: { turns: [turn("q", null, { at })], runs: [inWs("r2", "ws-2", 30)] } },
-    ]);
-    // What was said comes first at the same moment, then the runs in their parts' order.
-    expect(keys(merged)).toEqual(["turn:q", "run:r1", "run:r2"]);
-  });
-
-  it("reads every open workstream, then General, from what the stores hold", () => {
-    const ws1 = view("ws-1", "CA-401");
-    const ws2 = view("ws-2", "CA-402");
-    const closed = view("ws-3", "CA-403", { closedAt: iso(5) });
-    const free = run("free", "investigate", "done", 45, { spec: { ...base.spec, kind: "investigate", workstream: null } });
-    const loose = draft("loose", comment("CA-999"), 12, { origin: { type: "chat", requestId: "g1" }, createdBy: "pip" });
-    const onTicket = draft("on-ticket", comment("CA-401"), 11, { origin: { type: "chat", requestId: "x" }, createdBy: "pip" });
-    const parts = everyWorkstreamParts({
-      views: [ws1, ws2, closed],
-      turns: { "ws:ws-1": [turn("a", 50)], "ws:ws-3": [turn("gone", 49)], general: [turn("g1", 13)] },
-      runs: [inWs("r1", "ws-1", 40), inWs("r2", "ws-2", 30), free],
-      proposals: [loose, onTicket],
-      events: { "ws-1": [line("held", 10)], "ws-3": [line("held", 9, { workstreamId: "ws-3" })] },
-    });
-    expect(parts.map((p) => [p.workstreamId, p.label])).toEqual([
-      ["ws-1", "CA-401"],
-      ["ws-2", "CA-402"],
-      [null, "General"],
-    ]);
-    const merged = timelineAcross(parts);
-    const where = Object.fromEntries(merged.map((e) => [e.key, e.scopeLabel]));
-    expect(where).toEqual({ "turn:a": "CA-401", "run:free": "General", "run:r1": "CA-401", "run:r2": "CA-402", "turn:g1": "General", "draft:loose": "General", "draft:on-ticket": "CA-401", "audit:ws-1:0": "CA-401" });
-    // A closed workstream takes no part.
-    expect(merged.some((e) => e.key === "turn:gone" || e.key.startsWith("audit:ws-3"))).toBe(false);
-  });
-
-  it("labels a workstream by its ticket, else its title", () => {
-    expect(workstreamLabel(view("ws-1", "CA-401"))).toBe("CA-401");
-    expect(workstreamLabel(view("ws-2", null))).toBe("Loose ends");
-  });
-
-  it("filters the same way in either scope; Runs in every workstream is a timeline like the others", () => {
-    const merged = timelineAcross([
-      { workstreamId: "ws-1", label: "CA-401", input: { runs: [inWs("r1", "ws-1", 40)], events: [line("held", 10)] } },
-      { workstreamId: "ws-2", label: "CA-402", input: { runs: [inWs("r2", "ws-2", 30)], drafts: [draft("d2", comment("CA-402"), 20)] } },
-    ]);
-    expect(keys(filterTimeline(merged, "runs"))).toEqual(["run:r1", "run:r2"]);
-    expect(keys(filterTimeline(merged, "drafts"))).toEqual(["draft:d2"]);
-    expect(filterCounts(merged)).toEqual({ all: 4, runs: 2, drafts: 1, decisions: 1 });
-    expect(TIMELINE_SCOPES.map((s) => SCOPE_LABEL[s])).toEqual(["This workstream", "Every workstream"]);
-    // Every filter shows in every scope: runs from every workstream, merged by time, with their workstream's label.
-    expect(TIMELINE_FILTERS.length * TIMELINE_SCOPES.length).toBe(8);
-    expect(filterTimeline(merged, "runs").map((e) => e.scopeLabel)).toEqual(["CA-401", "CA-402"]);
   });
 });
 

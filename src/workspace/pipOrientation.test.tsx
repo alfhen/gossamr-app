@@ -2,7 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MockBackend } from "../backend/mock";
 import { useWorkspace } from "../workspaceStore";
-import { PipHome } from "./PipHome";
+import { WordsButton } from "./AgentsHome";
 import { ORIENTATION_PURPOSE, ORIENTATION_SAFETY, ORIENTATION_WORDS, ORIENTATION_TERMS, PipOrientation, dismissOrientation } from "./PipOrientation";
 import { loadPrefs, usePrefs } from "./prefs";
 import { loadTabs, useTabs } from "./tabsStore";
@@ -27,7 +27,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe("Pip home's orientation card", () => {
+describe("the orientation card", () => {
   it("explains Pip, a workstream, a run and a worktree, and says nothing is posted without a click", () => {
     const html = renderToStaticMarkup(<PipOrientation open />);
     expect(ORIENTATION_TERMS.map((t) => t.term)).toEqual(["Pip", "Workstream", "Run", "Cobweb", "Status", "Intake", "Triage", "Plan", "Build", "Review", "Pushing", "Held", "Quiet", "Idle", "Advise", "Manage", "Hold", "Allow once", "Decide", "Unblock", "Worktree"]);
@@ -65,20 +65,13 @@ describe("Pip home's orientation card", () => {
     expect(html.match(/<section[^>]*>/)![0]).not.toMatch(/max-h|overflow/);
   });
 
-  it("keeps to its one line while Plan my week is open, even when More was opened", () => {
-    expect(renderToStaticMarkup(<PipOrientation open />)).toContain("Worktree");
-    const compact = renderToStaticMarkup(<PipOrientation open compact />);
-    expect(compact).not.toContain("<dl");
-    expect(compact).toMatch(/aria-expanded="false"[^>]*>What the words mean</);
-  });
-
   it("takes no focus on load: nothing in it asks for it", () => {
     expect(renderToStaticMarkup(<PipOrientation />)).not.toMatch(/autofocus|tabindex/i);
   });
 
-  it("shows on Pip home until dismissed, and Got it keeps it dismissed across a reload", () => {
+  it("is on until dismissed, and Got it keeps it dismissed across a reload", () => {
     expect(usePrefs.getState().pipOrientationSeen).toBe(false);
-    expect(renderToStaticMarkup(<PipHome />)).toContain("data-pip-orientation");
+    expect(renderToStaticMarkup(<WordsButton />)).toBe("");
 
     // The button's own handler: it asks the stored preference, as the Agents intro's does.
     dismissOrientation();
@@ -87,11 +80,10 @@ describe("Pip home's orientation card", () => {
     expect(loadPrefs().pipOrientationSeen).toBe(true);
     // A static render reads the store's initial state, so a reload is shown by loading the stored prefs into it.
     Object.assign(usePrefs.getInitialState(), loadPrefs());
-    const html = renderToStaticMarkup(<PipHome />);
-    expect(html).not.toContain("data-pip-orientation");
-    // The rest of Pip home and its footer hints are as they were.
-    expect(html).toContain('aria-label="Your workstreams"');
-    expect(html).toContain("data-pip-home-hints");
+    // Dismissed, the words stay one button away on the Agents view.
+    const html = renderToStaticMarkup(<WordsButton />);
+    expect(html).toContain("data-orientation-link");
+    expect(html).toContain("What the words mean");
   });
 
   it("starts unseen for a profile with nothing stored, and stays seen when stored so", () => {

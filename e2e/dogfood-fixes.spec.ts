@@ -1,47 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import {
-  advanceRuns,
-  agentsSettled,
-  expectToast,
-  githubWrites,
-  reviewedDraft,
-  homeConversationRegion,
-  expandNeedsYou,
-  needRow,
-  needsPane,
-  needsYouTray,
-  openPip,
-  askPip,
-  editTicket,
-  finishOnHome,
-  heldBanner,
-  homeConversation,
-  homeRunCards,
-  homeSettled,
-  inlineStart,
-  landOnWorkspace,
-  jiraWrites,
-  mockRuns,
-  openApp,
-  openPipHome,
-  peekSheet,
-  peekTicket,
-  pipConversation,
-  paneSettled as settled,
-  pipPane,
-  scriptNextRun,
-  setBudget,
-  startWorkstream,
-  stepChip,
-  stepRail,
-  surfacePullRequests,
-  wakes,
-  workstreamEvents,
-  workstreamRow,
-  PIP_INPUT,
-  pipHome,
-  openTechnical,
-} from "./support/app";
+import { advanceRuns, agentsSettled, askPip, editTicket, expandNeedsYou, expectToast, finishOnHome, githubWrites, heldBanner, homeConversation, homeConversationRegion, homeRunCards, homeSettled, inlineStart, jiraWrites, landOnWorkspace, mockRuns, needRow, needsPane, openAgents, openApp, openPip, openTechnical, paneSettled as settled, peekSheet, peekTicket, PIP_INPUT, pipConversation, pipPane, reviewedDraft, scriptNextRun, selectWorkstream, setBudget, startWorkstream, stepChip, stepRail, surfacePullRequests, wakes, workstreamEvents, workstreamGroup } from "./support/app";
 
 // New workstreams open in Manage, so the sample supervisor starts the routine next steps; pull requests show only when a test says.
 const MANAGED = "runs=empty&prSurface=manual&wsManage=1";
@@ -119,8 +77,8 @@ async function peekStage(page: Page) {
 
 /** What Pip home says of CA-401's workstream: its row's stage and status, and the conversation's header once it is opened. */
 async function homeStage(page: Page) {
-  await openPipHome(page);
-  const row = workstreamRow(page, "CA-401");
+  await openAgents(page);
+  const row = workstreamGroup(page, "CA-401");
   await row.click();
   return { row, header: homeConversation(page) };
 }
@@ -157,8 +115,8 @@ test.describe("workstream stage and holds (D3, D10, D18)", () => {
   test("a description drift in Manage says automatic steps are paused until Resume, which turns Manage back on", async ({ page }) => {
     await openApp(page, "runs=empty&wsManage=1");
     await startWorkstream(page, "CA-401");
-    await openPipHome(page);
-    await workstreamRow(page, "CA-401").click();
+    await openAgents(page);
+    await selectWorkstream(page, "CA-401");
     await expect(homeConversation(page)).toHaveText(/^Workstream: CA-401 .* · Intake$/);
     await askPip(page, "investigate this");
     await homeSettled(page);
@@ -227,42 +185,8 @@ async function openWatching(page: Page) {
   await expect(page.getByText("CA-401", { exact: true }).first()).toBeVisible();
 }
 
-/** A fresh profile on Pip home, in a workstream on CA-401 whose investigation Pip drafted. Returns the draft's card. */
-async function homeRunDraft(page: Page) {
-  await openApp(page, MANAGED);
-  await agentsSettled(page);
-  await startWorkstream(page, "CA-401");
-  await openPipHome(page);
-  await workstreamRow(page, "CA-401").click();
-  await askPip(page, "Investigate CA-401");
-  await homeSettled(page);
-  return homeRunCards(page, "CA-401").last();
-}
 
 test.describe("agent intro continues (D1, D25)", () => {
-  test("the one-time safety sheet's Got it, continue opens the review the person asked for, in place", async ({ page }) => {
-    const card = await homeRunDraft(page);
-    await card.getByRole("button", { name: "Review and start", exact: true }).click();
-    const sheet = safety(page);
-    await expect(sheet).toBeVisible();
-    // Three lines first, true for each kind, then the longer explanation.
-    const summary = sheet.locator("[data-safety-summary] li");
-    await expect(summary).toHaveCount(3);
-    await expect(summary.nth(0)).toHaveText(/^Investigate, Triage, Plan, Review and Verify only read: Claude Code refuses their edits and writes/);
-    await expect(summary.nth(1)).toHaveText(/^Build changes code in its own worktree and runs with your own Claude settings, which decide whether it can push.*requests, not locks/);
-    // The detail further down says the same about pushing.
-    await expect(sheet.locator('li[data-tone="ask"]', { hasText: "Pushing a branch" })).toContainText("your Claude settings decide");
-    await expect(summary.nth(2)).toHaveText("Gossamr posts to Jira or GitHub only what you approve. A Build runs with your Claude settings and could reach Jira or GitHub on its own: your Claude settings, not Gossamr, decide that.");
-    await sheet.getByRole("button", { name: "Got it, continue" }).click();
-    await expect(sheet).toHaveCount(0);
-    // No second click: the review is open in place.
-    await expect(card.getByRole("group", { name: "Review and start" })).toBeVisible();
-    // Open, the review has its own Start and Hide; the card's own button is hidden meanwhile.
-    await expect(card.getByRole("button", { name: "Review and start", exact: true })).toHaveCount(0);
-    expect(await mockRuns(page)).toEqual([]);
-    expect(await jiraWrites(page)).toEqual([]);
-  });
-
   test("from a ticket peek, continue opens the setup sheet with the peek still there, and Esc closes the sheet first", async ({ page }) => {
     await openApp(page, "runs=empty");
     await peekTicket(page, "CA-401");
@@ -278,17 +202,6 @@ test.describe("agent intro continues (D1, D25)", () => {
     await page.keyboard.press("Escape");
     await expect(setupSheet(page)).toHaveCount(0);
     await expect(peekSheet(page)).toHaveAttribute("aria-label", "Details for CA-401");
-  });
-
-  test("closing the intro with × drops the action, and the next one goes straight through", async ({ page }) => {
-    const card = await homeRunDraft(page);
-    await card.getByRole("button", { name: "Review and start", exact: true }).click();
-    await safety(page).getByRole("button", { name: "Close" }).click();
-    await expect(safety(page)).toHaveCount(0);
-    await expect(card.getByRole("group", { name: "Review and start" })).toHaveCount(0);
-    await card.getByRole("button", { name: "Review and start", exact: true }).click();
-    await expect(card.getByRole("group", { name: "Review and start" })).toBeVisible();
-    await expect(safety(page)).toHaveCount(0);
   });
 
   test("Pip's intro says nothing is posted to Jira until the person approves", async ({ page }) => {
@@ -351,7 +264,7 @@ test.describe("sheets and launcher (D16, D24)", () => {
 test.describe("answering and retry (D11, D14, D15)", () => {
   test("an answer from the sheet is confirmed, timed in the timeline, and the sheet keeps its place among the runs", async ({ page }) => {
     await openApp(page);
-    await openPipHome(page);
+    await openAgents(page);
     // The decision's own link opens the run, with its sheet over Pip home.
     await expandNeedsYou(page);
     await needRow(page, /CA-409.*asks a question/).click();
@@ -376,7 +289,7 @@ test.describe("answering and retry (D11, D14, D15)", () => {
 
   test("the answer box starts empty; Claude's suggestion is offered with Use this, and an empty box never sends", async ({ page }) => {
     await openApp(page);
-    await openPipHome(page);
+    await openAgents(page);
     await expandNeedsYou(page);
     await needRow(page, /CA-409.*asks a question/).click();
     const box = needsPane(page).getByRole("textbox", { name: "Your answer" });
@@ -399,7 +312,7 @@ test.describe("answering and retry (D11, D14, D15)", () => {
   test("copying the own-terminal command by hand, selected, enables Retry as the Copy button does", async ({ page, context }) => {
     await context.grantPermissions(["clipboard-read", "clipboard-write"]);
     await openApp(page);
-    await openPipHome(page);
+    await openAgents(page);
     // The sheet is where a failed run's command is shown to copy; the decision's link opens it.
     await expandNeedsYou(page);
     await needRow(page, /SUP-9.*needs its folder trusted/).click();
@@ -445,37 +358,11 @@ test.describe("agent counts and tray (D4, D27)", () => {
     await expect(setupSheet(page).locator("[data-level]", { hasText: /\d+ of \d+ agent slots in use \(including ones waiting on you\)$/ })).toBeVisible();
   });
 
-  test("Needs you rows put the ticket and its title first and the need second, with the whole line as a tooltip", async ({ page }) => {
-    await openApp(page);
-    await openPipHome(page);
-    await expandNeedsYou(page);
-    const row = needsYouTray(page).locator('[data-needs-you-need][data-kind="question"]').first();
-    await expect(row.locator("[data-needs-you-head]")).toHaveText(/^CA-409 · \S/);
-    await expect(row.locator("[data-needs-you-need-title]")).toHaveText(/asks a question/);
-    const head = await row.locator("[data-needs-you-head]").textContent();
-    await expect(row).toHaveAttribute("title", new RegExp(`^${head!.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} · .*asks a question · `));
-    const top = await row.locator("[data-needs-you-head]").boundingBox();
-    const bottom = await row.locator("[data-needs-you-need-title]").boundingBox();
-    expect(bottom!.y).toBeGreaterThan(top!.y);
-    await expect(homeConversationRegion(page)).toBeVisible();
-  });
 });
 
 /** Whether the focused element sits inside `selector`. */
 const focusIn = (page: Page, selector: string) => page.evaluate((s) => !!document.activeElement?.closest(s), selector);
 
-/** Asks Pip on Pip home's General conversation for an investigation of `key`, and returns its run draft's card. */
-async function generalRunDraft(page: Page, key = "CA-401") {
-  await openApp(page, "runs=empty");
-  await agentsSettled(page, true);
-  await openPipHome(page);
-  await page.locator(PIP_INPUT).fill(`Investigate ${key}`);
-  await page.locator(PIP_INPUT).press("Enter");
-  await homeSettled(page);
-  const card = homeRunCards(page, key).last();
-  await expect(card).toBeVisible();
-  return card;
-}
 
 test.describe("Your turn and Needs you name different things (D5)", () => {
   test("the Jira inbox is Your turn on the tab, the ticket pill, the Activity chip and the palette; Needs you is left to Pip home", async ({ page }) => {
@@ -504,14 +391,14 @@ test.describe("Your turn and Needs you name different things (D5)", () => {
     const chips = page.getByRole("group", { name: "Show" });
     await chips.getByRole("button", { name: /^Your turn/ }).click();
     await expect(chips.getByRole("button", { name: /^Needs me/ })).toHaveCount(0);
-    const badge = Number(/^Pip home, (\d+) /.exec((await page.getByRole("button", { name: /^Pip home/ }).getAttribute("aria-label")) ?? "")?.[1] ?? 0);
+    const badge = Number(/^Agents, (\d+) /.exec((await page.locator("[data-rail]").getByRole("button", { name: /^Agents/ }).getAttribute("aria-label")) ?? "")?.[1] ?? 0);
     await expect(page.locator("[data-needs-you-count]")).toHaveText(String(badge));
     if (badge) await expect(chips.getByRole("button", { name: /^Your turn/ })).toHaveText(new RegExp(`${badge}$`));
     await chips.getByRole("button", { name: /^All/ }).click();
     await expect(page.getByRole("feed", { name: "Activity" }).locator("[data-your-turn]")).toHaveCount(0);
   });
 
-  test("the rail's one badge names what it counts, in its tooltip and in its button's name, and Activity and Agents have none", async ({ page }) => {
+  test("the rail's one badge names what it counts, in its tooltip and in its button's name, and Activity has none", async ({ page }) => {
     await openApp(page);
     await agentsSettled(page, true);
     const named = async (button: RegExp, badge: RegExp) => {
@@ -521,27 +408,14 @@ test.describe("Your turn and Needs you name different things (D5)", () => {
       await expect(tip).toHaveAttribute("title", badge);
       return (await tip.getAttribute("title"))!;
     };
-    await named(/^Pip home, \d+ things? needs? you$/, /^\d+ things? needs? you$/);
+    await named(/^Agents, \d+ things? needs? you$/, /^\d+ things? needs? you$/);
     // The bell is a link to Activity, with no number.
     const activity = page.getByRole("button", { name: "Activity", exact: true });
     await expect(activity).toBeVisible();
     await expect(activity.locator("[title]")).toHaveCount(0);
-    // What the agents need is in Needs you, counted once.
-    const agents = page.getByRole("button", { name: "Agents", exact: true });
-    await expect(agents).toBeVisible();
-    await expect(agents.locator("[title]")).toHaveCount(0);
   });
 });
 
-/** Whether `review` starts within 16px of the top of what scrolls it, or what scrolls it is as far down as it goes. */
-async function reviewAtTop(review: ReturnType<Page["locator"]>, strict = false) {
-  return review.evaluate((el, strict) => {
-    const box = el.closest<HTMLElement>('[data-pip-conversation-body], aside[aria-label="Steps"]');
-    if (!box) return false;
-    const gap = el.getBoundingClientRect().top - box.getBoundingClientRect().top;
-    return (gap >= 0 && gap <= 16) || (!strict && box.scrollTop >= box.scrollHeight - box.clientHeight - 1);
-  }, strict);
-}
 
 test.describe("draft cards: click, Esc, a and s (D2, D7, D23, D28)", () => {
   /** Two comment drafts on CA-401 in the pane, with the peek closed again. */
@@ -585,8 +459,8 @@ test.describe("draft cards: click, Esc, a and s (D2, D7, D23, D28)", () => {
   test("an armed card's key hint hangs clear of the next card's title, in the Drafts waiting list where cards sit closest", async ({ page }) => {
     await openApp(page, MANAGED);
     await startWorkstream(page, "CA-401");
-    await openPipHome(page);
-    await workstreamRow(page, "CA-401").click();
+    await openAgents(page);
+    await selectWorkstream(page, "CA-401");
     await askPip(page, "investigate this");
     await homeSettled(page);
     const review = await inlineStart(page, homeRunCards(page, "CA-401").last());
@@ -609,91 +483,6 @@ test.describe("draft cards: click, Esc, a and s (D2, D7, D23, D28)", () => {
     expect(under.y + under.height).toBeLessThanOrEqual(title.y);
   });
 
-  test("a on a run draft opens its review scrolled into view with the keyboard in it; Tab reaches Start, Esc hides it and keeps the card", async ({ page }) => {
-    const card = await generalRunDraft(page);
-    await expect(pipHome(page).locator("[data-pip-home-hints]")).toContainText("on a draft: approve (then ↵), edit, skip (Ctrl+Z undoes)");
-    await page.locator(PIP_INPUT).focus();
-    await page.keyboard.press("ArrowUp");
-    await expect(card).toBeFocused();
-    await page.keyboard.press("a");
-    // A fresh profile sees the safety sheet once; its focused 'Got it, continue' carries on to the review.
-    const sheet = safety(page);
-    const review = card.getByRole("group", { name: "Review and start" });
-    await expect(review.or(sheet)).toBeVisible();
-    if (await sheet.isVisible()) {
-      await expect(sheet.getByRole("button", { name: "Got it, continue" })).toBeFocused();
-      await page.keyboard.press("Enter");
-    }
-    await expect(review).toBeVisible();
-    await expect(card.getByRole("button", { name: "Review and start", exact: true })).toHaveCount(0);
-    await expect.poll(() => focusIn(page, '[aria-label="Review and start"][role="group"]')).toBe(true);
-    await expect(review).toBeInViewport();
-    // Once loaded, its top is at the top of the conversation, not halfway down under the chips; unless the conversation
-    // can't scroll any further.
-    await expect(review).toHaveAttribute("data-inline-start", /^(shown|changed|error)$/);
-    await expect.poll(() => reviewAtTop(review)).toBe(true);
-    // Enter on the review itself starts nothing.
-    await page.keyboard.press("Enter");
-    expect(await mockRuns(page)).toEqual([]);
-    const start = review.getByRole("button", { name: "Start agent" });
-    await expect(start).toBeEnabled();
-    await expect.poll(async () => (await review.evaluate((el) => el === document.activeElement)) || (await start.evaluate((el) => el === document.activeElement))).toBe(true);
-    // Tab goes through the disclosures first (round 13, G27) and then reaches Start.
-    for (let i = 0; i < 20 && !(await start.evaluate((el) => el === document.activeElement)); i++) await page.keyboard.press("Tab");
-    await expect(start).toBeFocused();
-    await page.keyboard.press("Escape");
-    await expect(review).toHaveCount(0);
-    await expect(card).toBeFocused();
-    await expect(homeConversation(page)).toHaveText("General");
-    await expect(card.getByRole("button", { name: "Review and start", exact: true })).toBeVisible();
-    expect(await mockRuns(page)).toEqual([]);
-  });
-
-  test("a review opened under a longer conversation comes up to its top once it has loaded, clear of the chips", async ({ page }) => {
-    await generalRunDraft(page, "CA-404");
-    await page.locator(PIP_INPUT).fill("Investigate CA-402");
-    await page.locator(PIP_INPUT).press("Enter");
-    await homeSettled(page);
-    const card = homeRunCards(page, "CA-402").last();
-    await page.locator(PIP_INPUT).focus();
-    await page.keyboard.press("ArrowUp");
-    await expect(card).toBeFocused();
-    await page.keyboard.press("a");
-    const sheet = safety(page);
-    const review = card.getByRole("group", { name: "Review and start" });
-    await expect(review.or(sheet)).toBeVisible();
-    if (await sheet.isVisible()) await page.keyboard.press("Enter");
-    await expect(review).toHaveAttribute("data-inline-start", "shown");
-    // At the top of the conversation, under the chips no more: there is room below it to scroll it all the way up.
-    await expect.poll(() => reviewAtTop(review, true)).toBe(true);
-    // The keyboard stays in it.
-    await expect.poll(() => focusIn(page, '[aria-label="Review and start"][role="group"]')).toBe(true);
-  });
-
-  test("a then s only cancels the approve: nothing is skipped, no safety sheet, no review", async ({ page }) => {
-    const cards = await twoComments(page);
-    const newest = cards.last();
-    await page.locator(PIP_INPUT).focus();
-    await page.keyboard.press("ArrowUp");
-    await expect(newest).toBeFocused();
-    await page.keyboard.press("a");
-    await expect(newest.locator("[data-key-hint]")).toHaveText("↵ approve · any other key cancels");
-    await page.keyboard.press("s");
-    await expect(newest.locator("[data-key-hint]")).toHaveText("a approve · e edit · d s skip · ↵ open");
-    await expect(newest).toBeFocused();
-    // The s that cancelled did not skip: the draft is still pending, and nothing was written.
-    await expect(newest).toHaveAttribute("data-state", "pending");
-    await expect(page.locator("[data-toast]")).toHaveCount(0);
-    expect(await jiraWrites(page)).toEqual([]);
-
-    // On a run draft a opens its review rather than asking, and nothing starts.
-    const card = await generalRunDraft(page, "CA-402");
-    await page.locator(PIP_INPUT).focus();
-    await page.keyboard.press("ArrowUp");
-    await expect(card).toBeFocused();
-    await expect(card.locator("[data-key-hint]")).toHaveText("e edit · d s skip · ↵ open");
-    await expect(card).toHaveAttribute("data-state", "pending");
-  });
 });
 
 test.describe("focus and keyboard (D8, D29, D30)", () => {
@@ -725,78 +514,9 @@ test.describe("focus and keyboard (D8, D29, D30)", () => {
     await expect.poll(() => page.evaluate(() => document.activeElement !== document.body)).toBe(true);
   });
 
-  test("on Pip home with no workstream, F6 skips the empty Steps region and Tab past '?' never lands on the page", async ({ page }) => {
-    await openApp(page, "runs=empty");
-    await agentsSettled(page, true);
-    await openPipHome(page);
-    const composer = pipHome(page).locator(PIP_INPUT);
-    await expect(composer).toBeFocused();
-    // Needs you (its heading, with nothing in it), the workstreams, the timeline, then round to the composer: no steps, no decision.
-    const timeline = homeConversationRegion(page).locator("[data-timeline]");
-    await page.keyboard.press("F6");
-    await expect(needsYouTray(page).locator("[data-needs-you-title]")).toBeFocused();
-    await page.keyboard.press("F6");
-    await expect(workstreamRow(page, "General")).toBeFocused();
-    await page.keyboard.press("F6");
-    await expect(timeline).toBeFocused();
-    await page.keyboard.press("F6");
-    await expect(composer).toBeFocused();
-    await page.keyboard.press("Shift+F6");
-    await expect(timeline).toBeFocused();
-    await page.keyboard.press("Shift+F6");
-    await expect(workstreamRow(page, "General")).toBeFocused();
-    await page.keyboard.press("Shift+F6");
-    await expect(needsYouTray(page).locator("[data-needs-you-title]")).toBeFocused();
-    await page.keyboard.press("Shift+F6");
-    await expect(composer).toBeFocused();
-
-    const help = pipHome(page).getByRole("button", { name: "Commands", exact: true });
-    await help.focus();
-    await page.keyboard.press("Tab");
-    const at = await page.evaluate(() => {
-      const el = document.activeElement as HTMLElement | null;
-      return { tag: el?.tagName ?? null, shown: !!el && el.getClientRects().length > 0 };
-    });
-    expect(at.tag).not.toBe("BODY");
-    expect(at.shown).toBe(true);
-  });
-
-  test("the composer shows a 2px focus ring, like the other controls", async ({ page }) => {
-    await openApp(page, "runs=empty");
-    await agentsSettled(page, true);
-    await openPipHome(page);
-    const composer = pipHome(page).locator(PIP_INPUT);
-    await page.keyboard.press("Shift+F6");
-    await page.keyboard.press("F6");
-    await expect(composer).toBeFocused();
-    const ring = await composer.evaluate((el) => ({ width: getComputedStyle(el).outlineWidth, style: getComputedStyle(el).outlineStyle }));
-    expect(ring).toEqual({ width: "2px", style: "solid" });
-  });
 });
 
 test.describe("starting a workstream and help (D6, D26)", () => {
-  test("'Start a workstream…' lists tickets before anything is typed, and Enter starts the first", async ({ page }) => {
-    await openApp(page, "runs=empty");
-    await agentsSettled(page, true);
-    await openPipHome(page);
-    await expect(pipHome(page).getByText("No workstreams yet. A workstream follows one ticket from investigation to a reviewed pull request, with Pip keeping track.")).toBeVisible();
-    await pipHome(page).getByRole("button", { name: "Start a workstream…" }).click();
-    const dialog = page.getByRole("dialog", { name: "Command palette" });
-    const input = dialog.getByRole("combobox");
-    await expect(input).toHaveValue("");
-    await expect(input).toHaveAttribute("placeholder", /type a ticket key or words/);
-    const rows = dialog.getByRole("option", { name: /^Start a workstream on [A-Z]+-\d+/ });
-    await expect(rows.first()).toBeVisible();
-    expect(await rows.count()).toBeLessThanOrEqual(5);
-    // Under their own heading, not Agents.
-    await expect(dialog.locator('li[role="presentation"]').first()).toHaveText("Workstreams");
-    const key = /Start a workstream on ([A-Z]+-\d+)/.exec((await rows.first().textContent()) ?? "")![1];
-    await page.keyboard.press("Enter");
-    await expect(dialog).toHaveCount(0);
-    await expect(workstreamRow(page, key)).toHaveAttribute("aria-selected", "true");
-    await expect(homeConversation(page)).toHaveText(new RegExp(`^Workstream: ${key} `));
-  });
-
   test("typing 'start a workstream' in Ctrl+K lists tickets to start it on, not only Ask Pip", async ({ page }) => {
     await openApp(page, "runs=empty");
     await agentsSettled(page, true);
@@ -806,16 +526,6 @@ test.describe("starting a workstream and help (D6, D26)", () => {
     await expect(dialog.getByRole("option", { name: /^Start a workstream on [A-Z]+-\d+/ }).first()).toBeVisible();
   });
 
-  test("the Commands help in General names runs by their id and says what R1 is", async ({ page }) => {
-    await openApp(page, "runs=empty");
-    await agentsSettled(page, true);
-    await openPipHome(page);
-    await pipHome(page).getByRole("button", { name: "Commands", exact: true }).click();
-    const dialog = pipHome(page).getByRole("dialog", { name: "Commands" });
-    await expect(dialog.getByText("/stop <run id>", { exact: true })).toBeVisible();
-    await expect(dialog.getByText("/stop R1", { exact: true })).toHaveCount(0);
-    await expect(dialog).toContainText("R1, R2… are the names a workstream gives its runs");
-  });
 });
 
 test.describe("plan chip (D19)", () => {
@@ -843,8 +553,8 @@ test.describe("plan chip (D19)", () => {
     await expect(plan).toHaveAttribute("data-state", "pending");
     // Approving the plan is signposted, in Pip's word on the finished plan and on the Plan step, with its open questions (N6).
     await expect(pipPane(page)).toContainText("Approve the description update to let Build start.");
-    await openPipHome(page);
-    await workstreamRow(page, "CA-401").click();
+    await openAgents(page);
+    await selectWorkstream(page, "CA-401");
     const note = stepChip(page, "plan").locator("[data-plan-approve]");
     await expect(note).toContainText("Approve the description update to let Build start.");
     await expect(note.locator("[data-plan-questions] li").first()).toBeVisible();
@@ -910,8 +620,8 @@ test.describe("PR view without GitHub (D17)", () => {
       w.__opened = [];
       w.open = (url: string) => (w.__opened.push(String(url)), null);
     });
-    await openPipHome(page);
-    await workstreamRow(page, "CA-401").click();
+    await openAgents(page);
+    await selectWorkstream(page, "CA-401");
     const open = stepChip(page, "review").getByRole("button", { name: /^PR view of acme\/storefront#\d+$/ });
     const name = (await open.getAttribute("aria-label"))!.replace(/^PR view of /, "");
     await open.click();

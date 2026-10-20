@@ -1,26 +1,21 @@
 import { Fragment, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode, type UIEvent } from "react";
 import { useClaude, type Turn } from "../claudeStore";
-import { GENERAL_CONVERSATION, workstreamConversation } from "../lib/conversations";
 import { itemKey } from "../lib/filter";
 import type { Need } from "../lib/needs";
 import {
   EMPTY_FILTER,
-  everyWorkstreamParts,
   filterCounts,
   filterTimeline,
   timeline,
-  timelineAcross,
   timelineDrafts,
   timelineRuns,
   type ReviewOutcome,
   type TimelineEntry,
   type TimelineFilter,
-  type TimelineScope,
 } from "../lib/timeline";
 import { labelsByRun } from "../lib/workstreamStage";
 import type { Proposal, Run, WorkstreamEvent, WorkstreamView } from "../types";
 import { useWorkspace } from "../workspaceStore";
-import { AgentRow } from "./AgentRow";
 import { dayBreaks } from "./activityLogic";
 import { useToday } from "./useNow";
 import { useDecisionShown } from "./decisionShown";
@@ -28,13 +23,12 @@ import { LiveDraftPreview, openLiveDraft } from "./DraftPreview";
 import { GENERAL_INTRO, IntroAction, TurnView, workstreamIntro } from "./PipConversation";
 import { openNeed } from "./needsActions";
 import { openComment } from "./jump";
-import { isTypingTarget } from "./pipHomeKeys";
-import { usePipHome } from "./pipHomeStore";
+import { isTypingTarget } from "./workKeys";
 import { useReviewVerdicts } from "./reviewVerdicts";
 import { useRuns } from "./runsStore";
 import { ENTRY_FOCUS, TIMELINE_ENTRY, anchoredScrollTop, firstShowing, followsEnd, nearBottom, readingAnchor, revealEntry, stepIndex, timelineKeyAction, timelineStop, type ReadingAnchor } from "./timelineKeys";
 import { PipRunCard } from "./PipRunCard";
-import { TimelineFilterBar, TimelineScopeToggle, showTimeline } from "./TimelineFilterBar";
+import { TimelineFilterBar, showAllRuns } from "./TimelineFilterBar";
 import { useWorkstreams } from "./workstreamsStore";
 
 const NO_TURNS: Turn[] = [];
@@ -80,53 +74,9 @@ function queuedBehind(conversations: readonly (readonly Turn[])[]): Set<string> 
   return out;
 }
 
-const NO_RUNS: readonly Run[] = [];
-const NO_ENTRIES: TimelineEntry[] = [];
-
-/**
- * Every workstream's timeline (`on`): each open workstream's and General's, merged by time (`timelineAcross`), each entry
- * carrying its ticket or "General". It loads every open workstream's conversation and audit while it is on. Empty while off.
- */
-export function useEveryTimeline(needs: readonly Need[], on: boolean) {
-  const byTicket = useClaude((s) => s.byTicket);
-  const views = useWorkstreams((s) => s.list);
-  const events = useWorkstreams((s) => s.events);
-  const proposalMap = useWorkspace((s) => s.proposals);
-  const allRuns = useRuns((s) => s.runs);
-  const open = useMemo(() => views.filter((v) => v.workstream.closedAt === null), [views]);
-  const ids = open.map((v) => v.workstream.id).join(" ");
-  useEffect(() => {
-    if (!on) return;
-    void useClaude.getState().load(GENERAL_CONVERSATION);
-    for (const id of ids.split(" ").filter(Boolean)) {
-      void useClaude.getState().load(workstreamConversation(id));
-      void useWorkstreams.getState().loadEvents(id);
-    }
-  }, [on, ids]);
-  const reviews = useReviewVerdicts(on ? allRuns : NO_RUNS);
-  const labels = useMemo(() => labelsByRun(allRuns), [allRuns]);
-  const verdicts = useMemo(() => Object.fromEntries(Object.entries(reviews).map(([k, v]) => [k, (v?.verdict ?? null) as ReviewOutcome])), [reviews]);
-  const conversations = useMemo(() => {
-    if (!on) return [] as [string, Turn[]][];
-    return [GENERAL_CONVERSATION, ...open.map((v) => workstreamConversation(v.workstream.id))].map((c) => [c, byTicket[c]?.turns ?? NO_TURNS] as [string, Turn[]]);
-  }, [on, open, byTicket]);
-  const proposals = useMemo(() => Object.values(proposalMap).filter((p): p is Proposal => !!p), [proposalMap]);
-  const entries = useMemo(
-    () => (on ? timelineAcross(everyWorkstreamParts({ views: open, turns: Object.fromEntries(conversations), runs: allRuns, proposals, events, needs, labels, verdicts })) : NO_ENTRIES),
-    [on, open, conversations, allRuns, proposals, events, needs, labels, verdicts],
-  );
-  const turns = useMemo(() => conversations.flatMap(([, t]) => t), [conversations]);
-  const byId = useMemo(
-    () => ({ turns: new Map(turns.map((t) => [t.requestId, t])), runs: new Map(allRuns.map((r) => [r.id, r])), drafts: new Map(proposals.map((p) => [p.id, p])), needs: new Map(needs.map((n) => [n.key, n])) }),
-    [turns, allRuns, proposals, needs],
-  );
-  const behind = useMemo(() => queuedBehind(conversations.map(([, t]) => t)), [conversations]);
-  return { entries, byId, labels, turns, behind };
-}
-
 type Lookup = ReturnType<typeof useTimeline>["byId"];
 
-/** Opens what entry `e` is about: its need in Needs you's decision pane, a run's sheet over Pip home, a draft's card. */
+/** Opens what entry `e` is about: its need in the Needs you decision on Agents, a run's sheet, a draft's card. */
 export function openEntry(e: Pick<TimelineEntry, "target">, byId: Lookup, root: ParentNode | null) {
   const t = e.target;
   if (!t) return;
@@ -153,9 +103,9 @@ export const OPENS_COMMENT = "Enter opens the comment";
 export const withTicket = (text: string, ticketKey: string | null | undefined) => (ticketKey && !text.includes(ticketKey) ? `${ticketKey}: ${text}` : text);
 
 /** The spoken name of a timeline entry: none for what is said in the conversation, the sentence with its ticket otherwise, and for a reply that opens a comment, what Enter does. */
-export function entryLabel(e: Pick<TimelineEntry, "kind" | "scopeLabel" | "text" | "target"> & { ticketKey?: string | null }): string | undefined {
+export function entryLabel(e: Pick<TimelineEntry, "kind" | "text" | "target"> & { ticketKey?: string | null }): string | undefined {
   if (e.kind === "said" || e.kind === "pip") return undefined;
-  const text = e.scopeLabel ? withTicket(`${e.scopeLabel}: ${e.text}`, e.ticketKey) : withTicket(e.text, e.ticketKey);
+  const text = withTicket(e.text, e.ticketKey);
   return e.target?.type === "comment" ? `${text}. ${OPENS_COMMENT}` : text;
 }
 
@@ -205,51 +155,18 @@ function Line({ entry, onOpen, children }: { entry: TimelineEntry; onOpen?: () =
   );
 }
 
-const NOOP = () => {};
-const NO_FAILURE = { opened: false, on: { act: NOOP, retry: NOOP, copied: NOOP } };
-
 /**
- * A run's entry: what its life has come to, over the same row the Agents screen lists it with; in the Pip pane (`pane`),
- * over the pane's own narrow card, which keeps the Agents screen's row (and its id) the only one of its kind on screen.
+ * A run's entry: what its life has come to, over the pane's own narrow card, which keeps the Agents screen's row (and its
+ * id) the only one of its kind on screen.
  */
-function RunEntry({ entry, run, label, now, need, open, pane }: { entry: TimelineEntry; run: Run; label?: string; now: number; need?: Need; open(): void; pane: boolean }) {
+function RunEntry({ entry, run, label, now, open }: { entry: TimelineEntry; run: Run; label?: string; now: number; open(): void }) {
   const items = useWorkspace((s) => s.items);
-  const asking = usePipHome((s) => (need && s.asking?.key === need.key ? s.asking.text : undefined));
   const ticketTitle = run.item ? (items[itemKey(run.item)]?.title ?? null) : null;
   return (
     <div className="grid gap-1">
       <Line entry={entry} onOpen={open} />
-      {pane ? (
-        <PipRunCard run={run} now={now} ticketTitle={ticketTitle} label={label} onOpen={() => useRuns.getState().openRun(run.id, { stay: true })} focusable />
-      ) : (
-        <div className="@container overflow-hidden rounded-[10px] border border-ws-sep">
-          <AgentRow
-            run={run}
-            now={now}
-            selected={false}
-            position={1}
-            total={1}
-            ticketTitle={ticketTitle}
-            label={label}
-            onOpen={open}
-            onAttach={NOOP}
-            // No onOpenNeed: the line above carries the one "In Needs you" this entry has, and the row's own pill would say it twice.
-            asking={asking}
-            failure={NO_FAILURE}
-          />
-        </div>
-      )}
+      <PipRunCard run={run} now={now} ticketTitle={ticketTitle} label={label} onOpen={() => useRuns.getState().openRun(run.id, { stay: true })} focusable />
     </div>
-  );
-}
-
-/** The small label an entry carries in Every workstream: its ticket, or General. */
-function ScopeLabel({ entry }: { entry: TimelineEntry }) {
-  if (entry.scopeLabel === undefined) return null;
-  return (
-    <span data-timeline-workstream={entry.workstreamId ?? "general"} className="justify-self-start rounded bg-ws-hover px-1.5 font-mono text-xs leading-[1.6] font-semibold text-ws-ink2">
-      {entry.scopeLabel}
-    </span>
   );
 }
 
@@ -257,10 +174,7 @@ function ScopeLabel({ entry }: { entry: TimelineEntry }) {
  * A workstream's timeline: the conversation's turns, each run's one row, the drafts with their cards, and the audit's
  * lines, interleaved oldest first, under the filter (All, Runs, Drafts, Decisions). j and k walk its entries, Enter or o
  * opens what one is about; an entry about something waiting on the person opens its need.
- *
- * On Pip home (the default) the filter and the scope are Pip home's: in Every workstream it is every open workstream's
- * and General's timeline merged, each entry labelled with its ticket, Runs included. In the Pip
- * pane (`pane`) it is the pane's workstream alone, with a filter of its own that leaves Pip home's as it was.
+ * It is one workstream's (or General's), in the Pip pane.
  */
 export function TimelineView({
   conversation,
@@ -268,24 +182,15 @@ export function TimelineView({
   proposals,
   needs = NO_NEEDS,
   primary = null,
-  pane = false,
 }: {
   conversation: string;
   workstream: WorkstreamView | null;
   proposals: readonly Proposal[];
   needs?: readonly Need[];
   primary?: string | null;
-  pane?: boolean;
 }) {
-  const homeFilter = usePipHome((s) => s.timelineFilter);
-  const homeScope = usePipHome((s) => s.timelineScope);
-  const [paneFilter, setPaneFilter] = useState<TimelineFilter>("all");
-  const filter = pane ? paneFilter : homeFilter;
-  const scope: TimelineScope = pane ? "workstream" : homeScope;
-  const every = scope === "every";
-  const own = useTimeline(conversation, workstream, proposals, needs);
-  const across = useEveryTimeline(needs, every);
-  const { entries, byId, labels, turns, behind } = every ? across : own;
+  const [filter, setFilter] = useState<TimelineFilter>("all");
+  const { entries, byId, labels, turns, behind } = useTimeline(conversation, workstream, proposals, needs);
   const shown = useMemo(() => filterTimeline(entries, filter), [entries, filter]);
   const counts = useMemo(() => filterCounts(entries), [entries]);
   // Entries from earlier days sit under a date, so a clock time is never the only thing saying when.
@@ -356,7 +261,7 @@ export function TimelineView({
     if (!entry) return;
     const kind = entry.getAttribute("data-kind");
     // The pane's run card has no Enter of its own: the timeline opens it.
-    const action = timelineKeyAction(ev, timelineStop(entry) === target, kind, !pane);
+    const action = timelineKeyAction(ev, timelineStop(entry) === target, kind, false);
     if (!action) return;
     ev.preventDefault();
     if (action.type === "open") {
@@ -383,14 +288,14 @@ export function TimelineView({
       }
       case "run": {
         const run = byId.runs.get(e.runId!);
-        return run ? <RunEntry entry={e} run={run} label={labels.get(run.id)} now={now} need={e.needKey ? byId.needs.get(e.needKey) : undefined} open={open} pane={pane} /> : null;
+        return run ? <RunEntry entry={e} run={run} label={labels.get(run.id)} now={now} open={open} /> : null;
       }
       case "draft": {
         const p = byId.drafts.get(e.draftId!);
         if (!p) return null;
         // A draft waiting, one Pip made answering here, or one retired after it waited here: its card. Any other decided one: its line.
         const card = p.state.type === "pending" || p.state.type === "applying" || (e.turnId !== undefined && byId.turns.has(e.turnId)) || (p.state.type === "retired" && seenWaiting.current.has(p.id));
-        // The one open in Pip home's decision pane is there, not here as well: its line stands in.
+        // The one open in the decision pane on Agents is there, not here as well: its line stands in.
         if (card && decided.drafts.has(p.id)) return <Line entry={e} onOpen={open} />;
         return card ? <LiveDraftPreview proposal={p} /> : <Line entry={e} onOpen={() => openLiveDraft(p, { inline: true })} />;
       }
@@ -399,30 +304,20 @@ export function TimelineView({
     }
   };
 
-  // The pane is one workstream's; the runs of every workstream are the timeline's Runs filter on Pip home.
+  // The pane is one workstream's; the runs of every workstream are on the Agents screen.
   const toAllRuns = (
-    <button type="button" data-all-runs onClick={() => showTimeline("runs", "every")} className="text-sm font-semibold text-ws-accent hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip">
+    <button type="button" data-all-runs onClick={showAllRuns} className="text-sm font-semibold text-ws-accent hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip">
       Runs in every workstream
     </button>
   );
   const empty = turns.length === 0;
   return (
-    <div data-timeline-scope-shown={scope} className="flex min-h-[8rem] flex-1 flex-col">
+    <div className="flex min-h-[8rem] flex-1 flex-col">
       <div className="border-b border-ws-sep px-3 py-1.5">
-        {pane ? (
-          <TimelineFilterBar label="Filter" value={filter} counts={counts} onChange={setPaneFilter} after={filter === "runs" && toAllRuns} />
-        ) : (
-          <TimelineFilterBar
-            value={filter}
-            counts={counts}
-            onChange={(f) => showTimeline(f, scope)}
-            after={<TimelineScopeToggle value={scope} onChange={(s) => showTimeline(filter, s)} />}
-          />
-        )}
+        <TimelineFilterBar label="Filter" value={filter} counts={counts} onChange={setFilter} after={filter === "runs" && toAllRuns} />
       </div>
       <div ref={ref} data-pip-conversation-body data-timeline tabIndex={-1} onKeyDown={onKeyDown} onScroll={onScroll} className="grid min-h-0 flex-1 content-start gap-4 overflow-auto px-3 pt-3 pb-4 outline-none focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-[-2px] focus-visible:outline-ws-pip">
         {empty &&
-          !every &&
           filter === "all" &&
           (workstream ? (
             <div className="grid gap-2.5">
@@ -434,7 +329,7 @@ export function TimelineView({
           ) : (
             <p className="m-0 text-ws-ink2">{GENERAL_INTRO}</p>
           ))}
-        {shown.length === 0 && (filter !== "all" || every) && (
+        {shown.length === 0 && filter !== "all" && (
           <p data-timeline-empty className="m-0 text-sm text-ws-ink3">
             {EMPTY_FILTER[filter]}
           </p>
@@ -459,7 +354,6 @@ export function TimelineView({
                 onFocus={revealEntry}
                 className={`grid min-w-0 gap-1 rounded-md ${ENTRY_FOCUS}`}
               >
-                <ScopeLabel entry={e} />
                 {body(e)}
               </li>
               </Fragment>

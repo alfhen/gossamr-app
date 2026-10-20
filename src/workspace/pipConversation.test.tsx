@@ -8,7 +8,7 @@ import { useWorkspace } from "../workspaceStore";
 import { draftDecisions } from "./DraftPreview";
 import { DRAFT_CARD, onDraftCardKey, stepDraftCards, upToNewestDraft } from "./draftKeys";
 import { CommandsList, Composer, GENERAL_RUN_REF_NOTE, commandHelp, ComposerFooter, GENERAL_CONVERSATION, MANAGE_NOTE, PipConversation, draftsForTicket, otherTicketsRow, VerbNote, showPlanUpdate, composerVerb, inputAfterCommand, openWakeRun, outcomeBelongs, keepUnsentInput, unsentInputOf, wakeHeader, wakeIsLong, wakeParts, workstreamConversation, workstreamIntro } from "./PipConversation";
-import { usePipHome } from "./pipHomeStore";
+import { useWorkView } from "./workViewStore";
 import { useTabs } from "./tabsStore";
 import { useRuns } from "./runsStore";
 import { useWorkstreams } from "./workstreamsStore";
@@ -152,16 +152,17 @@ describe("PipConversation", () => {
     expect(html.indexOf('data-draft="p-w"')).toBeGreaterThan(html.indexOf("wake-text-wake-l"));
   });
 
-  it("opens a wake's run on Pip home by its step in the rail, and in the pane by its sheet", () => {
-    useTabs.setState({ route: "pip" });
+  it("opens a wake's run by its sheet over the screen the person is on", () => {
+    useTabs.setState({ route: "agents" });
     openWakeRun("run-2");
-    expect(usePipHome.getState().focusTarget).toEqual({ type: "run", id: "run-2", where: "rail" });
-    expect(useRuns.getState().sheet).toBeNull();
-    usePipHome.getState().reset();
+    expect(useRuns.getState().sheet).toEqual({ type: "run", id: "run-2" });
+    expect(useWorkView.getState().focusTarget).toBeNull();
+    expect(useTabs.getState().route).toBe("agents");
+    useRuns.setState({ sheet: null });
     useTabs.setState({ route: "workspace" });
     openWakeRun("run-2");
     expect(useRuns.getState().sheet).toEqual({ type: "run", id: "run-2" });
-    expect(usePipHome.getState().focusTarget).toBeNull();
+    expect(useWorkView.getState().focusTarget).toBeNull();
     expect(useTabs.getState().route).toBe("workspace");
     useRuns.setState({ sheet: null });
   });
@@ -296,7 +297,7 @@ describe("PipConversation", () => {
     const attached = { images: [], add: async () => {}, remove: () => {}, take: () => [] } as unknown as Parameters<typeof Composer>[0]["attached"];
     const a = workstreamConversation("ws-a");
     const b = workstreamConversation("ws-b");
-    const render = (conversation: string) => renderToStaticMarkup(<Composer conversation={conversation} attached={attached} chips={[]} looking="the board" scene={{ itemKey: null, route: "pip", runOpen: false, workstream: true }} />);
+    const render = (conversation: string) => renderToStaticMarkup(<Composer conversation={conversation} attached={attached} chips={[]} looking="the board" scene={{ itemKey: null, route: "agents", runOpen: false, workstream: true }} />);
     try {
       keepUnsentInput(a, "half a thought about A");
       expect(render(a)).toContain('value="half a thought about A"');
@@ -319,7 +320,7 @@ describe("PipConversation", () => {
     const was = flag.enabled;
     const render = (on: boolean) => {
       flag.enabled = on;
-      return renderToStaticMarkup(<Composer conversation={workstreamConversation("ws-1")} attached={attached} chips={[]} looking="the board" scene={{ itemKey: null, route: "pip", runOpen: false, workstream: true }} />);
+      return renderToStaticMarkup(<Composer conversation={workstreamConversation("ws-1")} attached={attached} chips={[]} looking="the board" scene={{ itemKey: null, route: "agents", runOpen: false, workstream: true }} />);
     };
     try {
       const on = render(true);
@@ -411,7 +412,7 @@ describe("PipConversation", () => {
     it("renders a footer under the input only when given one, as a muted status line", () => {
       expect(composer()).not.toContain("data-composer-footer");
       const html = renderToStaticMarkup(
-        <Composer conversation={GENERAL_CONVERSATION} attached={attached} chips={[]} looking="the board" scene={{ itemKey: null, route: "pip", runOpen: false }} footer="4 agents working · 2 need you" />,
+        <Composer conversation={GENERAL_CONVERSATION} attached={attached} chips={[]} looking="the board" scene={{ itemKey: null, route: "agents", runOpen: false }} footer="4 agents working · 2 need you" />,
       );
       expect(html).toMatch(/<p data-composer-footer="true" class="[^"]*text-ws-ink3[^"]*">4 agents working · 2 need you<\/p>/);
       expect(html.indexOf("data-composer-footer")).toBeGreaterThan(html.indexOf('id="pip-input"'));
@@ -723,7 +724,7 @@ describe("the commands help outside a workstream", () => {
     expect(general.map((c) => c.verb)).toEqual(["stop", "retry", "answer"]);
     expect(general.map((c) => c.usage)).toEqual(["/stop <run id>", "/retry <run id>", "/answer <run id> your answer"]);
     for (const c of general) expect(c.usage).not.toMatch(/\bR1\b/);
-    // Pip home's cards show no id, so the note says where one is (N12).
+    // The pane's cards show no id, so the note says where one is (N12).
     expect(GENERAL_RUN_REF_NOTE).toContain("A run's id is on its card in Agents");
     expect(GENERAL_RUN_REF_NOTE).toContain("R1, R2… are the names a workstream gives its runs");
   });

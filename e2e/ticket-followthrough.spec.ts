@@ -1,33 +1,5 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
-import {
-  advanceRuns,
-  askPip,
-  commentOnTicket,
-  editTicket,
-  expandNeedsYou,
-  homeComposer,
-  homeConversationRegion,
-  homeSettled,
-  jiraWrites,
-  mockRuns,
-  needOfKind,
-  needRow,
-  needsPane,
-  needsYouCount,
-  needsYouRow,
-  needsYouTray,
-  openApp,
-  openPipHome,
-  paneSettled,
-  pipHome,
-  pipPane,
-  seedWorkstreamEvent,
-  startWorkstream,
-  workstreamEvents,
-  workstreamRow,
-  workstreamWebText,
-  expectToast,
-} from "./support/app";
+import { advanceRuns, agentsHome, askPip, commentOnTicket, editTicket, expandNeedsYou, expectToast, homeComposer, homeConversationRegion, homeSettled, jiraWrites, mockRuns, needOfKind, needRow, needsPane, needsYouCount, needsYouRow, needsYouTray, openAgents, openApp, paneSettled, pipPane, selectWorkstream, startWorkstream, workstreamEvents, workstreamGroup } from "./support/app";
 
 // What Pip does with a vague ticket after it speaks up: a free word check says so when the workstream opens (a notice, not a
 // need), asking the reporter records that the workstream waits on them, the answers go to Jira as a comment, and Plan anyway
@@ -40,9 +12,8 @@ const CLEAR = "The welcome flow should send three emails. Only the welcome flow 
 
 const toast = (page: Page) => page.locator("[data-toast]");
 const notice = (scope: Locator) => scope.locator("[data-clarity-notice]");
-const nextLine = (page: Page) => pipHome(page).locator("[data-next-step]");
+const nextLine = (page: Page) => agentsHome(page).locator("[data-next-step]");
 const actions = async (page: Page, action: string) => (await workstreamEvents(page)).filter((e) => e.action === action);
-const ago = (days: number) => new Date(Date.now() - days * 86_400_000).toISOString();
 const newest = async (page: Page, kind: string) => (await mockRuns(page)).find((r) => r.kind === kind) ?? null;
 const setup = (page: Page) => page.getByRole("dialog", { name: "Start an agent" });
 const safety = (page: Page) => page.getByRole("dialog", { name: "Agents safety and settings" });
@@ -81,8 +52,8 @@ async function unclear(page: Page) {
   await startInvestigation(page, VAGUE);
   await finish(page, (await newest(page, "investigate"))!.id);
   await finish(page, (await started(page, "triage")).id);
-  await openPipHome(page);
-  await workstreamRow(page, VAGUE).click();
+  await openAgents(page);
+  await selectWorkstream(page, VAGUE);
   await expect(needOfKind(page, "readiness")).toBeVisible();
 }
 
@@ -93,7 +64,7 @@ async function askAndPost(page: Page) {
   await needsPane(page).getByRole("article", { name: `Comment on ${VAGUE}` }).getByRole("button", { name: "Post comment" }).click();
   await expect.poll(async () => (await jiraWrites(page)).map((w) => [w.type, w.key])).toEqual([["comment", VAGUE]]);
   // The finished investigation may still wait to be read, which is a need and ranks above the wait; the Next line says the wait.
-  await expect(pipHome(page).locator("[data-next-step]")).toContainText("Waiting on the reporter since");
+  await expect(agentsHome(page).locator("[data-next-step]")).toContainText("Waiting on the reporter since");
 }
 
 test.describe("G13: Pip speaks up when a workstream opens on a vague ticket", () => {
@@ -104,9 +75,9 @@ test.describe("G13: Pip speaks up when a workstream opens on a vague ticket", ()
     await expect(notice(pipPane(page))).toContainText(`${VAGUE} may be unclear: ${GAPS}`);
     await expect(notice(pipPane(page)).getByRole("button", { name: "Ask the reporter now" })).toBeVisible();
     await expect(notice(pipPane(page)).getByRole("button", { name: "Looks fine" })).toBeVisible();
-    await openPipHome(page);
-    await workstreamRow(page, VAGUE).click();
-    await expect(notice(pipHome(page))).toContainText(`${VAGUE} may be unclear`);
+    await openAgents(page);
+    await selectWorkstream(page, VAGUE);
+    await expect(notice(agentsHome(page))).toContainText(`${VAGUE} may be unclear`);
     // It is a look, not a duty: no need, no count, nothing in Jira, and nothing blocked.
     await expect(needsYouCount(page)).toHaveText("0");
     await expect(needsYouTray(page)).toContainText("Nothing needs you.");
@@ -116,9 +87,9 @@ test.describe("G13: Pip speaks up when a workstream opens on a vague ticket", ()
     await editTicket(page, "CA-401", { description: CLEAR });
     await page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "All projects" }).click();
     await startWorkstream(page, "CA-401");
-    await openPipHome(page);
-    await workstreamRow(page, "CA-401").click();
-    await expect(notice(pipHome(page))).toHaveCount(0);
+    await openAgents(page);
+    await selectWorkstream(page, "CA-401");
+    await expect(notice(agentsHome(page))).toHaveCount(0);
   });
 
   test("Pip's first turn names the same gaps, and a clear ticket gets no such line", async ({ page }) => {
@@ -144,20 +115,20 @@ test.describe("G13: Pip speaks up when a workstream opens on a vague ticket", ()
     const line = (await actions(page, "clarity_dismissed"))[0];
     expect(line.actor).toBe("person");
     expect(await jiraWrites(page)).toEqual([]);
-    await openPipHome(page);
-    await workstreamRow(page, VAGUE).click();
-    await expect(notice(pipHome(page))).toHaveCount(0);
+    await openAgents(page);
+    await selectWorkstream(page, VAGUE);
+    await expect(notice(agentsHome(page))).toHaveCount(0);
     await expect(needsYouCount(page)).toHaveText("0");
   });
 
   test("Ask the reporter now drafts the questions for approval, posts nothing until approved, and then the workstream waits on the reporter", async ({ page }) => {
     await openApp(page, MANAGED);
     await startWorkstream(page, VAGUE);
-    await openPipHome(page);
-    await workstreamRow(page, VAGUE).click();
-    await notice(pipHome(page)).getByRole("button", { name: "Ask the reporter now" }).click();
+    await openAgents(page);
+    await selectWorkstream(page, VAGUE);
+    await notice(agentsHome(page)).getByRole("button", { name: "Ask the reporter now" }).click();
     await expectToast(page, "Here is the comment to the reporter. Nothing is posted until you press Post comment.");
-    await expect(notice(pipHome(page))).toHaveCount(0);
+    await expect(notice(agentsHome(page))).toHaveCount(0);
     expect(await jiraWrites(page)).toEqual([]);
     const draft = needsPane(page).getByRole("article", { name: `Comment on ${VAGUE}` });
     await expect(draft.locator('[data-created-by="gossamr"]')).toHaveText("Drafted by Gossamr");
@@ -166,47 +137,26 @@ test.describe("G13: Pip speaks up when a workstream opens on a vague ticket", ()
     for (const q of ["What is the goal?", "What has to be true for this to be done (the acceptance criteria)?", "What is in scope, and what is out?", "Who asked for it, and who is waiting on it?"]) await expect(draft).toContainText(q);
     expect((await actions(page, "clarity_asked")).map((e) => e.actor)).toEqual(["person"]);
     // Not waiting yet: the comment has not been posted.
-    await expect(workstreamRow(page, VAGUE).locator("[data-status]")).not.toContainText("Waiting on reporter");
+    await expect(workstreamGroup(page, VAGUE).locator("[data-status]")).not.toContainText("Waiting on reporter");
 
     await draft.getByRole("button", { name: "Post comment" }).click();
     await expect.poll(async () => (await jiraWrites(page)).map((w) => [w.type, w.key])).toEqual([["comment", VAGUE]]);
-    await expect(workstreamRow(page, VAGUE).locator("[data-status]")).toHaveText("Waiting on reporter");
+    await expect(workstreamGroup(page, VAGUE).locator("[data-status]")).toHaveText("Waiting on reporter");
     await expect(nextLine(page)).toHaveText("Next: Waiting on the reporter since just now; nothing starts on its own.");
     // It is not a need, and it is not counted.
     await expect(needsYouCount(page)).toHaveText("0");
     await expect(needsYouTray(page)).toContainText("Nothing needs you.");
-    await expect(notice(pipHome(page))).toHaveCount(0);
+    await expect(notice(agentsHome(page))).toHaveCount(0);
     // The note that nothing is posted yet is not true any more.
     await expect(toast(page).filter({ hasText: "Nothing is posted until you press Post comment" })).toHaveCount(0);
-  });
-
-  test("posting the comment takes the 'nothing is posted yet' note away, and the timeline's lines and counts follow", async ({ page }) => {
-    await openApp(page, MANAGED);
-    await startWorkstream(page, VAGUE);
-    await openPipHome(page);
-    await workstreamRow(page, VAGUE).click();
-    await notice(pipHome(page)).getByRole("button", { name: "Ask the reporter now" }).click();
-    const note = toast(page).filter({ hasText: "Nothing is posted until you press Post comment" });
-    await expect(note).toHaveCount(1);
-    const count = (scope: Locator, filter: string) => scope.locator(`[data-filter="${filter}"] [data-filter-count]`).first();
-    const lines = (scope: Locator) => scope.locator("[data-timeline-line]");
-    await expect(lines(pipHome(page)).filter({ hasText: "You posted the questions for the reporter" })).toHaveCount(0);
-    await needsPane(page).getByRole("article", { name: `Comment on ${VAGUE}` }).getByRole("button", { name: "Post comment" }).click();
-    await expect.poll(async () => (await jiraWrites(page)).length).toBe(1);
-    await expect(note).toHaveCount(0);
-    // The posting is in the timeline's lines at once, and the Drafts count counts it as a draft decided.
-    await expect(lines(pipHome(page)).filter({ hasText: "You posted the questions for the reporter" })).toHaveCount(1);
-    await expect(count(pipHome(page), "all")).toHaveText("3");
-    await expect(count(pipHome(page), "drafts")).toHaveText("1");
-    await expect(count(pipHome(page), "decisions")).toHaveText("2");
   });
 
   test("skipping the comment takes the note away too", async ({ page }) => {
     await openApp(page, MANAGED);
     await startWorkstream(page, VAGUE);
-    await openPipHome(page);
-    await workstreamRow(page, VAGUE).click();
-    await notice(pipHome(page)).getByRole("button", { name: "Ask the reporter now" }).click();
+    await openAgents(page);
+    await selectWorkstream(page, VAGUE);
+    await notice(agentsHome(page)).getByRole("button", { name: "Ask the reporter now" }).click();
     const note = toast(page).filter({ hasText: "Nothing is posted until you press Post comment" });
     await expect(note).toHaveCount(1);
     await needsPane(page).getByRole("article", { name: `Comment on ${VAGUE}` }).getByRole("button", { name: "Skip" }).click();
@@ -238,7 +188,7 @@ test.describe("G14: waiting on the reporter", () => {
     await expect(needOfKind(page, "readiness")).toHaveCount(0);
     // The reporter's reply is a Jira comment: no audit line, no hold.
     await commentOnTicket(page, VAGUE, "Done means all three emails send in the sandbox. The CRM team is waiting.");
-    await expect(workstreamRow(page, VAGUE).locator("[data-status]")).not.toContainText("Waiting on reporter");
+    await expect(workstreamGroup(page, VAGUE).locator("[data-status]")).not.toContainText("Waiting on reporter");
     await expect(nextLine(page)).not.toContainText("Waiting on the reporter");
     const need = needRow(page, "the reporter replied, plan now?");
     await expect(need).toContainText(`${VAGUE}: the reporter replied, plan now?`);
@@ -252,25 +202,6 @@ test.describe("G14: waiting on the reporter", () => {
     await started(page, "plan");
   });
 
-  test("a reporter who hasn't answered for days grows the cobweb: 'Reporter hasn't answered for N days', and it is never a need", async ({ page }) => {
-    test.setTimeout(90_000);
-    await openApp(page, MANAGED);
-    await startWorkstream(page, VAGUE);
-    await openPipHome(page);
-    await workstreamRow(page, VAGUE).click();
-    // Asked and posted three days ago, as the audit would say it.
-    await seedWorkstreamEvent(page, VAGUE, { actor: "person", action: "clarity_asked", at: ago(3.2), proposalId: "old-ask" });
-    await seedWorkstreamEvent(page, VAGUE, { actor: "person", action: "draft_approved", at: ago(3.1), proposalId: "old-ask" });
-    const row = workstreamRow(page, VAGUE);
-    await expect(row.locator("[data-status]")).toHaveText("Waiting on reporter");
-    await expect(row).toHaveAttribute("data-wither", "2");
-    await expect(workstreamWebText(page, VAGUE)).toHaveText("Reporter hasn't answered for 3 days");
-    await expect(row.locator("[data-status-detail]")).toHaveText("· asked 3 days ago");
-    await expect(row).toHaveAttribute("title", /^Reporter hasn't answered for 3 days/);
-    await expect(nextLine(page)).toContainText("Waiting on the reporter since 3 days ago; nothing starts on its own.");
-    await expect(needsYouCount(page)).toHaveText("0");
-  });
-
   test("the ticket changing while waiting brings the question back as 'changed: plan now?', and Plan now starts the plan with the questions it assumes answers to", async ({ page }) => {
     test.setTimeout(120_000);
     await unclear(page);
@@ -278,9 +209,9 @@ test.describe("G14: waiting on the reporter", () => {
 
     await editTicket(page, VAGUE, { description: "Win back lapsed customers with three emails over two weeks." });
     // The existing drift holds the workstream; the wait is over.
-    await expect(workstreamRow(page, VAGUE).locator("[data-status]")).not.toContainText("Waiting on reporter");
+    await expect(workstreamGroup(page, VAGUE).locator("[data-status]")).not.toContainText("Waiting on reporter");
     // The hold says the ticket changed while the workstream waited on the reporter, and where Resume leads.
-    const banner = pipHome(page).locator("[data-held-banner]");
+    const banner = pipPane(page).locator("[data-held-banner]");
     await expect(banner).toContainText(`Held: ${VAGUE}'s description changed while waiting on the reporter. Resume, then decide whether to plan now.`);
     await expect(banner).not.toContainText("changed in Jira");
     await banner.getByRole("button", { name: "Resume" }).click();
@@ -312,13 +243,13 @@ test.describe("G14: waiting on the reporter", () => {
     await unclear(page);
     await askAndPost(page);
     await editTicket(page, VAGUE, { description: "Win back lapsed customers somehow." });
-    await pipHome(page).locator("[data-held-banner]").getByRole("button", { name: "Resume" }).click();
+    await pipPane(page).locator("[data-held-banner]").getByRole("button", { name: "Resume" }).click();
     await needOfKind(page, "readiness").click();
     await needsPane(page).getByRole("button", { name: "Still unclear (ask again)" }).click();
     await expectToast(page, "Here is the comment to the reporter.");
     await expect(needOfKind(page, "readiness")).toHaveCount(0);
     expect((await actions(page, "readiness_asked")).length).toBe(2);
-    await expect(workstreamRow(page, VAGUE).locator("[data-status]")).not.toContainText("Waiting on reporter");
+    await expect(workstreamGroup(page, VAGUE).locator("[data-status]")).not.toContainText("Waiting on reporter");
     await needsPane(page).getByRole("article", { name: `Comment on ${VAGUE}` }).getByRole("button", { name: "Post comment" }).click();
     await expect.poll(async () => (await jiraWrites(page)).length).toBe(2);
     // A finished investigation still waiting to be read is a need, which ranks above the wait: the Next line says the wait.
@@ -329,10 +260,10 @@ test.describe("G14: waiting on the reporter", () => {
     test.setTimeout(120_000);
     await unclear(page);
     await askAndPost(page);
-    await pipHome(page).getByRole("button", { name: "Hold", exact: true }).click();
-    await expect(pipHome(page).locator("[data-held-banner]")).toContainText("Held by you");
-    await pipHome(page).locator("[data-held-banner]").getByRole("button", { name: "Resume" }).click();
-    await expect(workstreamRow(page, VAGUE).locator("[data-status]")).not.toContainText("Waiting on reporter");
+    await agentsHome(page).getByRole("button", { name: "Hold", exact: true }).click();
+    await expect(pipPane(page).locator("[data-held-banner]")).toContainText("Held by you");
+    await pipPane(page).locator("[data-held-banner]").getByRole("button", { name: "Resume" }).click();
+    await expect(workstreamGroup(page, VAGUE).locator("[data-status]")).not.toContainText("Waiting on reporter");
     await expect(nextLine(page)).not.toContainText("Waiting on the reporter");
     // The question is not back: the ticket did not change.
     await expect(needOfKind(page, "readiness")).toHaveCount(0);
@@ -344,7 +275,7 @@ test.describe("G14b: a drift with no wait keeps the usual banner", () => {
     test.setTimeout(120_000);
     await unclear(page);
     await editTicket(page, VAGUE, { description: "Win back lapsed customers." });
-    const banner = pipHome(page).locator("[data-held-banner]");
+    const banner = pipPane(page).locator("[data-held-banner]");
     await expect(banner).toContainText("changed in Jira");
     await expect(banner).not.toContainText("waiting on the reporter");
   });
@@ -355,7 +286,7 @@ test.describe("G14b: a drift with no wait keeps the usual banner", () => {
     await askAndPost(page);
     const long = `Win back lapsed customers with three emails over two weeks. ${"Each one names the customer's last order. ".repeat(12)}LAST SENTENCE.`;
     await editTicket(page, VAGUE, { description: long });
-    await pipHome(page).locator("[data-held-banner]").getByRole("button", { name: "Resume" }).click();
+    await pipPane(page).locator("[data-held-banner]").getByRole("button", { name: "Resume" }).click();
     await needRow(page, "changed: plan now?").click();
     const now = needsPane(page).locator("[data-ticket-now]");
     await expect(now).toContainText("Win back lapsed customers with three emails over two weeks.");

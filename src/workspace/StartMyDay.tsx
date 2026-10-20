@@ -1,23 +1,23 @@
 import { useMemo, useState } from "react";
 import { itemKey } from "../lib/filter";
 import type { Need } from "../lib/needs";
-import { dayKey } from "./activityLogic";
-import { DAY_ENTRIES, startMyDay, startMyDayShown, type DayAction, type DayEntry, type DayLine, type StartMyDay } from "../lib/startMyDay";
+import { DAY_ENTRIES, startMyDay, type DayAction, type DayEntry, type DayLine, type StartMyDay } from "../lib/startMyDay";
 import type { WorkstreamWither } from "../lib/workstreamWither";
 import { useWorkspace } from "../workspaceStore";
 import { openTicketByKey } from "./jump";
+import { focusAgentsList } from "./focusDrawn";
 import { openNeed } from "./needsActions";
 import { showPlanMyWeek } from "./planActions";
-import { usePipHome } from "./pipHomeStore";
+import { useWorkView } from "./workViewStore";
 import { usePrefs } from "./prefs";
 import { useTabs } from "./tabsStore";
-import { openOnPipHome, useWorkstreams } from "./workstreamsStore";
+import { openOnAgents, useWorkstreams } from "./workstreamsStore";
 
 const button = "rounded-md border border-ws-sep2 px-2.5 py-px text-sm leading-normal whitespace-nowrap hover:bg-ws-hover focus-visible:outline-2 focus-visible:outline-ws-pip";
 
 /** What the card is, and what Done for now does. */
-export const DAY_ABOUT = "Once a day: what needs you, what is stuck and what may be unclear. Nothing is posted. Done for now hides it until tomorrow; ⌘K brings it back.";
-export const DONE_HINT = "Hides Start my day until tomorrow. ⌘K brings it back.";
+export const DAY_ABOUT = "What needs you, what is stuck and what may be unclear. Nothing is posted. Done for now hides it; ⌘K brings it back.";
+export const DONE_HINT = "Hides Start my day. ⌘K brings it back.";
 
 /** What the card says when there is nothing to start with. */
 export const DAY_EMPTY = "Nothing needs you, no reporter is silent, and nothing has gone quiet in Jira.";
@@ -28,11 +28,11 @@ export function runDayAction(action: DayAction) {
     case "need":
       return openNeed(action.need);
     case "workstream":
-      return openOnPipHome(action.id);
+      return openOnAgents(action.id);
     case "nudge":
       return void useWorkstreams.getState().nudgeReporter(action.id);
     case "ticket": {
-      // The peek opens over Pip home; a ticket that isn't synced is read live.
+      // The peek opens over Agents; a ticket that isn't synced is read live.
       const cached = Object.values(useWorkspace.getState().items).find((i) => i.item.key === action.key);
       if (cached) return useTabs.getState().select(itemKey(cached.item));
       return void openTicketByKey(action.key);
@@ -40,7 +40,7 @@ export function runDayAction(action: DayAction) {
   }
 }
 
-/** Start my day, from what Pip home already holds: Needs you, the workstreams, their cobwebs, the drafts and the cached tickets. */
+/** Start my day, from what the Agents view already holds: Needs you, the workstreams, their cobwebs, the drafts and the cached tickets. */
 export function useStartMyDay(needs: readonly Need[], withers: Readonly<Record<string, WorkstreamWither>>, now: number): StartMyDay {
   const list = useWorkstreams((s) => s.list);
   const proposals = useWorkspace((s) => s.proposals);
@@ -53,24 +53,19 @@ export function useStartMyDay(needs: readonly Need[], withers: Readonly<Record<s
   );
 }
 
-/** Where focus goes when the card closes from its button, so the keyboard stays on Pip home: the list's current row. */
-function focusList() {
-  document.querySelector<HTMLElement>('[data-pip-home-column="list"] [role="option"][tabindex="0"]')?.focus();
-}
-
-/** Sets the card aside for today and keeps the keyboard where it was. */
-export function doneForNow(now = new Date()) {
+/** Puts the card away and keeps the keyboard where it was. */
+export function doneForNow() {
   const hadFocus = typeof document !== "undefined" && document.activeElement?.closest("[data-start-my-day]") != null;
-  usePrefs.getState().setStartMyDayDoneOn(dayKey(now));
-  if (hadFocus) requestAnimationFrame(focusList);
+  useWorkView.getState().setDayOpen(false);
+  if (hadFocus) focusAgentsList();
 }
 
-/** ⌘K "Start my day": brings the card back on Pip home, whether or not it was set aside today, and puts the keyboard on it. */
+/** ⌘K "Start my day": opens the card on Agents and puts the keyboard on it. */
 export function showStartMyDay() {
-  usePrefs.getState().setStartMyDayDoneOn(null);
-  usePipHome.getState().closeDecision();
-  useTabs.getState().setRoute("pip");
-  // The card mounts on the next render, once Pip home is on screen.
+  useWorkView.getState().setDayOpen(true);
+  useWorkView.getState().closeDecision();
+  useTabs.getState().setRoute("agents");
+  // The card mounts on the next render, once Agents is on screen.
   let tries = 0;
   const focus = () => {
     const card = document.querySelector<HTMLElement>("[data-start-my-day]");
@@ -133,7 +128,7 @@ export function DayLineView({ line, initiallyOpen = false }: { line: DayLine; in
 /** The card itself: pure of the stores, so a test can render it. */
 export function StartMyDayView({ day, onDone, onSent, onPlan }: { day: StartMyDay; onDone(): void; onSent(): void; onPlan?(): void }) {
   return (
-    // Not a region of its own: Pip home's labelled stop around it already is "Start my day".
+    // Not a region of its own: the labelled stop around it already is "Start my day".
     <div data-start-my-day tabIndex={-1} className="grid gap-2 border-b border-ws-sep bg-ws-bar px-3 py-2 outline-none">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
         <h2 id="start-my-day" className="m-0 min-w-0 flex-1 text-sm font-semibold text-ws-ink">
@@ -166,18 +161,18 @@ export function StartMyDayView({ day, onDone, onSent, onPlan }: { day: StartMyDa
 }
 
 /**
- * Start my day at the top of Pip home's conversation column, once a day: until the person says "Done for now", which keeps it
- * away for the rest of the day (the prefs), or while a decision is open in the pane, which has the room. ⌘K brings it back.
+ * Start my day at the top of the Agents list, while the person has asked for it with ⌘K: until "Done for now", or while a
+ * decision is open in the pane, which has the room.
  */
 export function StartMyDayCard({ needs, withers, now }: { needs: readonly Need[]; withers: Readonly<Record<string, WorkstreamWither>>; now: number }) {
-  const doneOn = usePrefs((s) => s.startMyDayDoneOn);
-  const deciding = usePipHome((s) => s.deciding !== null || s.batch !== null);
-  if (!startMyDayShown(doneOn, new Date(now)) || deciding) return null;
+  const open = useWorkView((s) => s.dayOpen);
+  const deciding = useWorkView((s) => s.deciding !== null || s.batch !== null);
+  if (!open || deciding) return null;
   return <LiveStartMyDay needs={needs} withers={withers} now={now} />;
 }
 
-/** The card with its day worked out, only while it shows: set aside, the tickets are not read at all. */
+/** The card with its day worked out, only while it shows: away, the tickets are not read at all. */
 function LiveStartMyDay({ needs, withers, now }: { needs: readonly Need[]; withers: Readonly<Record<string, WorkstreamWither>>; now: number }) {
   const day = useStartMyDay(needs, withers, now);
-  return <StartMyDayView day={day} onDone={() => doneForNow(new Date(now))} onSent={() => useTabs.getState().setRoute("sent")} onPlan={showPlanMyWeek} />;
+  return <StartMyDayView day={day} onDone={doneForNow} onSent={() => useTabs.getState().setRoute("sent")} onPlan={showPlanMyWeek} />;
 }

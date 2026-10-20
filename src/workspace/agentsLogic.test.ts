@@ -56,7 +56,7 @@ describe("lanes", () => {
     queued: "running",
     launching: "running",
     working: "running",
-    // Waiting on the person is stuck; there is no Needs you lane any more, the list on Pip home is where it is decided.
+    // Waiting on the person is stuck; there is no Needs you lane any more, the strip on the Agents view is where it is decided.
     needsAnswer: "bad",
     needsPermission: "bad",
     systemBlocked: "bad",
@@ -369,7 +369,17 @@ describe("grouping by workstream", () => {
   it("leaves out a group the filters empty, and has no No workstream group when every run is in one", () => {
     expect(groupRunsByWorkstream(runs, workstreams, { ...NO_FILTERS, lane: "bad" }, NOW).map((g) => g.id)).toEqual([null]);
     expect(groupRunsByWorkstream(runs.slice(0, 3), workstreams, NO_FILTERS, NOW).map((g) => g.id)).toEqual(["ws-b", "ws-a"]);
-    expect(groupRunsByWorkstream([], workstreams, NO_FILTERS, NOW)).toEqual([]);
+    expect(groupRunsByWorkstream([], [], NO_FILTERS, NOW)).toEqual([]);
+  });
+
+  it("lists an open workstream with no run yet, newest first among the empty, only while no filter is on and never a closed one", () => {
+    const quiet = view("ws-c", "CA-403 No agents yet", "intake");
+    const gone = { ...view("ws-d", "CA-404 Closed", "intake"), workstream: { ...view("ws-d", "CA-404 Closed", "intake").workstream, closedAt: iso(1) } } as WorkstreamView;
+    const groups = groupRunsByWorkstream(runs, [...workstreams, quiet, gone], NO_FILTERS, NOW);
+    expect(groups.map((g) => g.id)).toContain("ws-c");
+    expect(groups.map((g) => g.id)).not.toContain("ws-d");
+    expect(groups.find((g) => g.id === "ws-c")).toMatchObject({ title: "CA-403 No agents yet", stage: "intake", runs: [] });
+    expect(groupRunsByWorkstream(runs, [...workstreams, quiet], { ...NO_FILTERS, lane: "bad" }, NOW).map((g) => g.id)).not.toContain("ws-c");
   });
 
   it("still groups the runs of a workstream it has no title for, by its id", () => {

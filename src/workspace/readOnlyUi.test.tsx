@@ -94,7 +94,7 @@ describe("a read-only kind where it is started", () => {
 
   for (const [where, render] of [
     ["the setup sheet", setup],
-    ["the inline review on Pip home", inline],
+    ["the inline review on Agents", inline],
   ] as const) {
     describe(where, () => {
       it("shows the headline, the note, the exact flag, the rules and the guard line for an Investigate", () => {

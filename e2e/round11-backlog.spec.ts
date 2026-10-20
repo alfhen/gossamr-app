@@ -1,31 +1,10 @@
 import { expect, test, type Page } from "@playwright/test";
-import {
-  advanceRuns,
-  askPip,
-  homeComposer,
-  homeSettled,
-  jiraWrites,
-  mockRuns,
-  needOfKind,
-  needsPane,
-  needsPaneHeading,
-  openApp,
-  openPipHome,
-  paneSettled,
-  pipHome,
-  pipPane,
-  seedWorkstreamEvent,
-  startWorkstream,
-  workstreamRow,
-} from "./support/app";
+import { advanceRuns, askPip, closeWorkstreamSheet, homeComposer, homeSettled, jiraWrites, mockRuns, needOfKind, needsPane, needsPaneHeading, openAgents, openApp, paneSettled, pipPane, seedWorkstreamEvent, selectWorkstream, startWorkstream, workstreamGroup } from "./support/app";
 
 // Backlog items of the eleventh dogfood round: Start my day's room (G21), dates in the timeline (G22), what the status pill says
 // besides the count (G23), one question per bullet (G24), a second line on What Jira saw from me (G25), the composer keeping the
 // keyboard after I'll answer (G27), where opening a need lands (G28) and the screens' names and headings (G29).
 
-const port = Number(process.env.E2E_PORT ?? 4173);
-/** The seeded profile (e2e/playwright.config.ts) without Start my day set aside, so its card shows. */
-const DAY_DUE = { cookies: [], origins: [{ origin: `http://localhost:${port}`, localStorage: [{ name: "gossamr-prefs", value: JSON.stringify({ pipOrientationSeen: true, permissionExplainerSeen: true }) }] }] };
 
 const MANAGED = "runs=empty&prSurface=manual&wsManage=1&pipPace=1";
 const VAGUE = "CA-408";
@@ -64,51 +43,24 @@ async function unclear(page: Page) {
   await finish(page, (await newest(page, "investigate"))!.id);
   await expect.poll(async () => (await newest(page, "triage"))?.id ?? null).not.toBeNull();
   await finish(page, (await newest(page, "triage"))!.id);
-  await openPipHome(page);
-  await workstreamRow(page, VAGUE).click();
+  await openAgents(page);
+  await selectWorkstream(page, VAGUE);
   await expect(needOfKind(page, "readiness")).toBeVisible();
 }
-
-test.describe("Start my day's room (G21)", () => {
-  test.use({ storageState: DAY_DUE, viewport: { width: 1440, height: 900 } });
-
-  test("shows its lines at 1440x900 without scrolling while the conversation under it is empty", async ({ page }) => {
-    await openApp(page, "runs=empty");
-    await openPipHome(page);
-    const day = pipHome(page).locator('[data-pip-home-day][role="region"]');
-    await expect(day).toHaveAttribute("aria-label", "Start my day");
-    await expect(day.locator("[data-day-line]").first()).toBeVisible();
-    const room = await day.evaluate((el) => ({ over: el.scrollHeight - el.clientHeight, cap: parseFloat(getComputedStyle(el).maxHeight) }));
-    // It fits in what it was given, and the cap is more than the third of the window it has once there is a conversation.
-    expect(room.over).toBeLessThanOrEqual(4);
-    await expect(day.locator("[data-day-fade]")).toHaveCount(0);
-    expect(room.cap).toBeGreaterThan(900 * 0.4);
-  });
-
-  test("keeps to a third of the window, and its More below hint, once the conversation has something in it", async ({ page }) => {
-    await openApp(page, "runs=empty");
-    await openPipHome(page);
-    await homeComposer(page).fill("hello");
-    await homeComposer(page).press("Enter");
-    await homeSettled(page);
-    const day = pipHome(page).locator('[data-pip-home-day][role="region"]');
-    expect(await day.evaluate((el) => parseFloat(getComputedStyle(el).maxHeight))).toBeLessThanOrEqual(900 * 0.3 + 1);
-  });
-});
 
 test.describe("dates in the timeline and What Jira saw from me (G22)", () => {
   test("an entry from an earlier day sits under its date, and a timeline of today's entries has none", async ({ page }) => {
     await openApp(page, MANAGED);
     await startWorkstream(page, VAGUE);
-    await openPipHome(page);
-    await workstreamRow(page, VAGUE).click();
-    const timeline = pipHome(page).locator("[data-timeline]");
+    await openAgents(page);
+    await selectWorkstream(page, VAGUE);
+    const timeline = pipPane(page).locator("[data-timeline]");
     await expect(timeline.locator("[data-timeline-entry]").first()).toBeVisible();
     await expect(timeline.locator("[data-timeline-day]")).toHaveCount(0);
     const yesterday = new Date(Date.now() - 36 * 3_600_000).toISOString();
     await seedWorkstreamEvent(page, VAGUE, { actor: "person", action: "held", at: yesterday });
-    await workstreamRow(page, "General").click();
-    await workstreamRow(page, VAGUE).click();
+    await closeWorkstreamSheet(page);
+    await selectWorkstream(page, VAGUE);
     const heads = timeline.locator("[data-timeline-day]");
     await expect(heads.first()).toBeVisible();
     await expect(heads.first()).toHaveText(/^(Yesterday|Today|[A-Z][a-z]+day)$/);
@@ -123,9 +75,9 @@ test.describe("dates in the timeline and What Jira saw from me (G22)", () => {
     await page.clock.install({ time: new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 57) });
     await openApp(page, MANAGED);
     await startWorkstream(page, VAGUE);
-    await openPipHome(page);
-    await workstreamRow(page, VAGUE).click();
-    const timeline = pipHome(page).locator("[data-timeline]");
+    await openAgents(page);
+    await selectWorkstream(page, VAGUE);
+    const timeline = pipPane(page).locator("[data-timeline]");
     await expect(timeline.locator("[data-timeline-entry]").first()).toBeVisible();
     await expect(timeline.locator("[data-timeline-day]")).toHaveCount(0);
     const entries = await timeline.locator("[data-timeline-entry]").count();
@@ -154,10 +106,10 @@ test.describe("an unclear ticket (G23, G24, G25, G27)", () => {
     await draft.getByRole("button", { name: "Post comment" }).click();
     await expect.poll(async () => (await jiraWrites(page)).length).toBe(1);
     // The workstream now waits on the reporter: the row's pill says so, beside whatever else is waiting on the person.
-    await expect(workstreamRow(page, VAGUE).locator("[data-status-detail]")).toContainText(/waiting on reporter|asked/);
+    await expect(workstreamGroup(page, VAGUE).locator("[data-status-detail]")).toContainText(/waiting on reporter|asked/);
 
     await page.keyboard.press("ControlOrMeta+k");
-    await page.getByRole("combobox").fill("what jira saw");
+    await page.getByRole("dialog", { name: "Command palette" }).getByRole("combobox").fill("what jira saw");
     await page.keyboard.press("Enter");
     const row = page.locator("[data-jira-sent] [data-sent-entry]").first();
     await expect(row.locator("[data-sent-summary]")).toContainText("A few things need clearing up to make this ticket clear to work on");
@@ -179,7 +131,7 @@ test.describe("an unclear ticket (G23, G24, G25, G27)", () => {
     await expect(homeComposer(page)).toHaveValue(/My answers: Done means the winback mail goes out\.$/);
     // Whatever the pane did, the keyboard stayed in the composer.
     await expect(homeComposer(page)).toBeFocused();
-    await expect(workstreamRow(page, VAGUE).locator("[data-status-detail]")).toContainText("your answers owed");
+    await expect(workstreamGroup(page, VAGUE).locator("[data-status-detail]")).toContainText("your answers owed");
   });
 });
 
@@ -202,19 +154,3 @@ test.describe("opening a need (G28)", () => {
   });
 });
 
-test.describe("the screens' names (G29)", () => {
-  test.use({ storageState: DAY_DUE });
-
-  test("the tab says which screen is open, the main area is named, and a screen's heading takes the keyboard", async ({ page }) => {
-    await openApp(page, "runs=empty");
-    await openPipHome(page);
-    await expect(page).toHaveTitle("Pip home — Gossamr");
-    await expect(page.getByRole("main", { name: "Pip home" })).toBeVisible();
-    await pipHome(page).locator("[data-start-my-day] [data-day-sent]").click();
-    await expect(page).toHaveTitle("What Jira saw from me — Gossamr");
-    await expect(page.getByRole("main", { name: "What Jira saw from me" })).toBeVisible();
-    await expect(page.getByRole("heading", { level: 1, name: "What Jira saw from me" })).toBeFocused();
-    await page.locator("[data-sent-back]").click();
-    await expect(page).toHaveTitle("Pip home — Gossamr");
-  });
-});

@@ -120,8 +120,6 @@ export function suggestionsFor(s: SuggestionScene): string[] {
     ];
     return chips.slice(0, MOST);
   }
-  // Pip home shows no board: its chips never filter a view the person can't see.
-  if (s.route === "pip") return [...drafts, "Catch me up"];
   if (s.route === "agents") return agentsChips(s.agents, drafts);
   if (s.route === "activity") return [...drafts, "What happened today?", "What needs my reply?"];
   if (s.marked > 0) return ["Summarise the ticked tickets", "Which should I do first?", "Draft a comment on each of these"];
@@ -161,6 +159,6 @@ export function placeholderFor(s: { images: boolean; quote: boolean; itemKey: st
   if (s.quote) return "Ask about the selected text…";
   if (s.itemKey) return `Ask about ${s.itemKey}…`;
   if (s.runOpen) return "Ask about this run…";
-  if (s.route === "pip") return s.workstream ? "Ask about this workstream…" : "Ask about your workstreams and agents…";
-  return s.route === "agents" ? "Ask about the agents…" : "Ask about what you're looking at…";
+  if (s.route === "agents") return s.workstream ? "Ask about this workstream…" : "Ask about your workstreams and agents…";
+  return "Ask about what you're looking at…";
 }

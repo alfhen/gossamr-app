@@ -35,7 +35,7 @@ export function quietMinutes(run: Pick<Run, "state" | "lastProgressAt">, now: nu
 
 export function laneOf(run: Run, now: number): LaneId {
   switch (run.state) {
-    // A run waiting on the person is stuck until they answer; Needs you (the list on Pip home) is where it is decided.
+    // A run waiting on the person is stuck until they answer; Needs you (the strip on the Agents view) is where it is decided.
     case "needsAnswer":
     case "needsPermission":
     case "systemBlocked":
@@ -278,6 +278,8 @@ export interface WorkstreamGroup {
   /** The workstream's id; null for the runs that belong to none. */
   id: string | null;
   title: string;
+  /** The ticket the workstream is about, when it has one. */
+  itemKey?: string | null;
   /** Derived from every run of the workstream, filtered or not; null for the runs that belong to none. */
   stage: WorkstreamStage | null;
   /** The workstream's build whose pull request hasn't been found yet, if any. */
@@ -292,7 +294,8 @@ export interface WorkstreamGroup {
 /**
  * One group per workstream with runs the filters let through, the one with the latest activity first, then the runs in
  * no workstream last as "No workstream". A workstream missing from `workstreams` (a closed one) is still a group, named by
- * its id. Runs are sorted as in the lanes.
+ * its id. Runs are sorted as in the lanes. With no filter on, an open workstream that has no run yet is a group too, so
+ * every workstream can be opened from here.
  */
 export function groupRunsByWorkstream(runs: readonly Run[], workstreams: readonly WorkstreamView[], filters: AgentFilters, now: number): WorkstreamGroup[] {
   const shown = new Set(applyFilters(runs, filters, now).map((r) => r.id));
@@ -311,9 +314,18 @@ export function groupRunsByWorkstream(runs: readonly Run[], workstreams: readonl
     if (!mine.length) continue;
     // The view knows each review's verdict; without one (a closed workstream) the runs alone give the stage.
     const staged = view ? { stage: view.stage, reviewBlocking: view.reviewBlocking ?? false } : { stage: stage(all), reviewBlocking: false };
-    groups.push({ id, title: view?.workstream.title ?? `Workstream ${id}`, ...staged, waitingForPr: view?.waitingForPr ?? null, runs: mine, labels: Object.fromEntries(runLabels(all)) });
+    groups.push({ id, title: view?.workstream.title ?? `Workstream ${id}`, itemKey: view?.workstream.itemKey ?? null, ...staged, waitingForPr: view?.waitingForPr ?? null, runs: mine, labels: Object.fromEntries(runLabels(all)) });
   }
-  const latest = (g: WorkstreamGroup) => ageSince(g.runs[0]);
+  const started = new Map<string, string>();
+  if (!isFiltered(filters)) {
+    for (const view of workstreams) {
+      const ws = view.workstream;
+      if (ws.closedAt !== null || linked.has(ws.id)) continue;
+      started.set(ws.id, ws.createdAt);
+      groups.push({ id: ws.id, title: ws.title, itemKey: ws.itemKey, stage: view.stage, reviewBlocking: view.reviewBlocking ?? false, waitingForPr: view.waitingForPr ?? null, runs: [], labels: {} });
+    }
+  }
+  const latest = (g: WorkstreamGroup) => (g.runs[0] ? ageSince(g.runs[0]) : (started.get(g.id ?? "") ?? ""));
   groups.sort((a, b) => latest(b).localeCompare(latest(a)) || a.title.localeCompare(b.title));
   if (loose.length) groups.push({ id: null, title: NO_WORKSTREAM_TITLE, stage: null, runs: sortRuns(loose), labels: {} });
   return groups;
@@ -356,7 +368,7 @@ const AT_WORK: readonly RunState[] = ["queued", "launching", "working"];
 export const yourAgents = (runs: readonly Run[], dismissed: ReadonlySet<string>): Run[] => runs.filter((r) => AT_WORK.includes(r.state) || needsAttention(r, dismissed));
 
 /**
- * The runs at work, counted one way for the Agents view's summary and Pip home's composer footer so the two agree:
+ * The runs at work, counted one way for the Agents view's summary and Pip's composer footer so the two agree:
  * `running` launching or working with recent progress, `quiet` working with none for a while, `queued` approved and
  * about to start, `waiting` approved and waiting for a slot.
  */
@@ -373,7 +385,7 @@ export const liveWords = (c: ReturnType<typeof liveCounts>) => [c.running && `${
 
 /**
  * The count beside a lane's title. The Running lane holds queued runs too, so it says them apart with `liveCounts`
- * ("2 running · 1 queued"), and its running number is the one the summary and Pip home's footer give; any other lane
+ * ("2 running · 1 queued"), and its running number is the one the summary and Pip's footer give; any other lane
  * gives how many runs it holds.
  */
 export const laneCount = (lane: LaneId, runs: readonly Run[], now: number): string => (lane === "running" ? liveWords(liveCounts(runs, now)).join(" · ") || "0" : String(runs.length));
@@ -381,7 +393,7 @@ export const laneCount = (lane: LaneId, runs: readonly Run[], now: number): stri
 /**
  * The Agents view's summary: "2 need you · 2 running · 2 ready to review · 3 failed or stuck (1 quiet)". Need you is
  * Needs you's one count (`needsYou`, as the rail badge and the composer give it); running, queued and waiting for a slot are
- * `liveCounts`, as Pip home's footer counts; ready to review and failed or stuck are the lanes of those names, card for card.
+ * `liveCounts`, as Pip's footer counts; ready to review and failed or stuck are the lanes of those names, card for card.
  */
 export function summaryLine(runs: readonly Run[], now: number, needsYou = 0): string {
   if (!runs.length) return "Nothing running";

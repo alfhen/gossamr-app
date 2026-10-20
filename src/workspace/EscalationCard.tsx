@@ -9,7 +9,7 @@ import { Btn } from "./AgentSheet";
 import { openLiveDraft } from "./DraftPreview";
 import { draftKey } from "./draftTicket";
 import { useGithubUi } from "./githubUi";
-import { usePipHome } from "./pipHomeStore";
+import { useWorkView } from "./workViewStore";
 import { useTabs } from "./tabsStore";
 import { useWorkstreams } from "./workstreamsStore";
 
@@ -44,7 +44,7 @@ export function draftOpen(escalation: Escalation, opened: Readonly<Record<string
   return selected !== null && selected === (target ? itemKey(target) : draftKey(id)) ? id : null;
 }
 
-/** Whether the choices wait on Pip home's decision pane: Post the review as is was pressed and its draft is still pending. */
+/** Whether the choices wait on the Agents decision pane: Post the review as is was pressed and its draft is still pending. */
 export const postingReview = (posted: boolean, draft: Pick<Proposal, "state"> | undefined) => posted && draft?.state.type === "pending";
 
 /** The confirmation once the person chose, in the words the card shows. */
@@ -68,9 +68,9 @@ export function escalationActions(id: string, e: Escalation): EscalationActions 
     onTakeOver: () => useWorkstreams.getState().takeOver(id, e.reviewRun),
     onPost: (draft) => {
       const p = useWorkspace.getState().proposals[draft];
-      // The draft's card, where its own Post review is: in the peek, over Pip home when that is where the person is.
-      if (p) openLiveDraft(p, { inline: useTabs.getState().route === "pip" });
-      else usePipHome.getState().focus({ type: "draft", id: draft });
+      // The draft's card, where its own Post review is: in the peek, over Agents when that is where the person is.
+      if (p) openLiveDraft(p, { inline: useTabs.getState().route === "agents" });
+      else useWorkView.getState().focus({ type: "draft", id: draft });
     },
   };
 }

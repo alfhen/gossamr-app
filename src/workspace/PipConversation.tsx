@@ -19,11 +19,10 @@ import { appliedState, usePip, type AppliedState } from "./pipStore";
 import { usePopover } from "./Popover";
 import { chipPageAction, isInvestigateChip, placeholderFor } from "./suggestions";
 import { investigateKey, settleDraftFocus } from "./clarityActions";
-import { planRewriteDraft } from "./pipHomeLogic";
+import { planRewriteDraft } from "./workViewLogic";
 import { useRuns } from "./runsStore";
 import { useTabs } from "./tabsStore";
 import { useAgentsEnabled } from "./agentsFlag";
-import { usePipHome } from "./pipHomeStore";
 import { contextFor, useWorkstreams } from "./workstreamsStore";
 import { useWorkspace } from "../workspaceStore";
 import { maskSecrets } from "../lib/riskyText";
@@ -103,12 +102,10 @@ export function wakeHeader(prompt: string, labels: ReadonlyMap<string, string>):
 }
 
 /**
- * Opens the run a wake turn is about: on Pip home its step opens in the rail and its card there takes focus; in the Pip
- * pane its sheet opens over the screen the person is on.
+ * Opens the run a wake turn is about: its sheet opens over the screen the person is on.
  */
 export function openWakeRun(runId: string) {
-  if (useTabs.getState().route === "pip") usePipHome.getState().focus({ type: "run", id: runId, where: "rail" });
-  else useRuns.getState().openRun(runId, { stay: true });
+  useRuns.getState().openRun(runId, { stay: true });
 }
 
 function WakeHeader({ turn }: { turn: Turn }) {
@@ -530,7 +527,7 @@ export function showPlanUpdate(conversation: string, root: DraftRoot | null) {
   const draft = view ? planRewriteDraft(view, useRuns.getState().runs, Object.values(useWorkspace.getState().proposals)) : null;
   if (!draft) return;
   const card = root?.querySelector(`article[data-draft="${draft.id.replace(/["\\]/g, "\\$&")}"]`) as { focus(): void; scrollIntoView?(arg?: ScrollIntoViewOptions): void } | null;
-  if (!card) return openLiveDraft(draft, { inline: !!root?.closest?.("[data-pip-home]") });
+  if (!card) return openLiveDraft(draft);
   card.scrollIntoView?.({ block: "nearest" });
   card.focus();
 }
@@ -545,7 +542,7 @@ interface ComposerProps {
   looking: string;
   /** What the placeholder suggests asking about. */
   scene: Omit<Parameters<typeof placeholderFor>[0], "images" | "quote">;
-  /** A muted line under the input, such as Pip home's "4 agents working · 2 need you"; the pane has none. */
+  /** A muted line under the input, such as "4 agents working · 2 need you". */
   footer?: string | null;
 }
 

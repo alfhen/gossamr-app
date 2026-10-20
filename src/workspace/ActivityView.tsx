@@ -21,7 +21,7 @@ import { showMe } from "./jump";
 import { runBreakdownDraftOf, runDraftOf } from "./runSheetLogic";
 import { useTabs } from "./tabsStore";
 import { StrayNotices } from "./WatchNotices";
-import { openOnPipHome, useWorkstreams } from "./workstreamsStore";
+import { openOnAgents, useWorkstreams } from "./workstreamsStore";
 
 export const feedRowId = (id: string) => `feed-${id}`;
 
@@ -244,7 +244,7 @@ export interface PipRowProps {
   onOpen(): void;
 }
 
-/** A line of a workstream's audit: what Pip, the rules or the person did there. It opens the workstream on Pip home. */
+/** A line of a workstream's audit: what Pip, the rules or the person did there. It opens the workstream on Agents. */
 export function PipFeedRow({ entry: e, ticketTitle, now, position, total, onOpen }: PipRowProps) {
   const onKey = (ev: KeyboardEvent) => {
     if (ev.target !== ev.currentTarget || ev.key !== "Enter") return;
@@ -280,7 +280,7 @@ export function PipFeedRow({ entry: e, ticketTitle, now, position, total, onOpen
           <time dateTime={e.at}>{relativeTime(e.at, now)}</time>
           <span className="ml-auto flex gap-0.5 opacity-0 group-focus-within:opacity-100 group-hover:opacity-100">
             <button type="button" className={action} onClick={onOpen}>
-              Open on Pip home
+              Open in Agents
             </button>
           </span>
         </div>
@@ -548,7 +548,7 @@ export function ActivityView() {
                     if (row.source === "pip") {
                       const w = row.entry;
                       const linked = w.item ? items[itemKey(w.item)] : undefined;
-                      return <PipFeedRow key={w.id} entry={w} ticketTitle={linked?.title ?? null} now={now} position={++position} total={total} onOpen={() => openOnPipHome(w.workstreamId)} />;
+                      return <PipFeedRow key={w.id} entry={w} ticketTitle={linked?.title ?? null} now={now} position={++position} total={total} onOpen={() => openOnAgents(w.workstreamId)} />;
                     }
                     if (row.source === "agents") {
                       const r = row.entry;

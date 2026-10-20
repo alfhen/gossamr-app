@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { advanceRuns, askPip, commentOnTicket, editTicket, expandNeedsYou, homeConversationRegion, homeSettled, jiraWrites, mockRuns, needOfKind, needRow, needsPane, openApp, openPipHome, paneSettled, pipPane, startWorkstream, workstreamRow } from "./support/app";
+import { advanceRuns, askPip, commentOnTicket, editTicket, expandNeedsYou, homeConversationRegion, homeSettled, jiraWrites, mockRuns, needOfKind, needRow, needsPane, openAgents, openApp, paneSettled, pipPane, selectWorkstream, startWorkstream } from "./support/app";
 
 // Round 18 dogfood, CA-408 with the description "Fix it.": the triage's open questions go to the ticket's description as a
 // draft the person approves; "Ask the reporter" stays a comment; the reporter's answer is read by the next triage and the
@@ -21,13 +21,6 @@ async function startInvestigation(page: Page, home = false) {
   if (home) await homeSettled(page);
   else await paneSettled(page);
   const where = home ? homeConversationRegion(page) : pipPane(page);
-  if (home) {
-    // On Pip home the card opens its review in place.
-    const card = where.getByRole("article", { name: `Start an agent: ${KEY}` }).last();
-    await card.getByRole("button", { name: "Review and start", exact: true }).click();
-    await card.getByRole("group", { name: "Review and start" }).getByRole("button", { name: "Start agent" }).click();
-    return;
-  }
   for (let attempt = 0; attempt < 2; attempt++) {
     await where.getByRole("article", { name: `Start an agent: ${KEY}` }).last().getByRole("button", { name: /^Review and start/ }).click();
     await expect(setup(page).or(safety(page))).toBeVisible();
@@ -58,8 +51,8 @@ test("the triage's questions go to the description as a draft, the reporter's an
   await startInvestigation(page);
   await finish(page, await nth(page, "investigate", 1));
   await finish(page, await nth(page, "triage", 1));
-  await openPipHome(page);
-  await workstreamRow(page, KEY).click();
+  await openAgents(page);
+  await selectWorkstream(page, KEY);
   await expect(needOfKind(page, "readiness")).toBeVisible();
 
   // The triage's note and open questions are a description update, not a comment on the ticket.
@@ -90,8 +83,8 @@ test("the triage's questions go to the description as a draft, the reporter's an
   await commentOnTicket(page, KEY, ANSWER);
 
   // Investigate again: the triage the rule starts reads the answers, so it is ready and asks nothing again.
-  await openPipHome(page);
-  await workstreamRow(page, KEY).click();
+  await openAgents(page);
+  await selectWorkstream(page, KEY);
   await startInvestigation(page, true);
   await finish(page, await nth(page, "investigate", 2));
   const again = await nth(page, "triage", 2);
