@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { advanceRuns, askPip, expandNeedsYou, homeComposer, homeSettled, jiraWrites, mockRuns, needOfKind, needRow, needsPane, needsYouCount, needsYouRow, openAgents, openApp, paneSettled, pipPane, seedWorkstreamEvent, selectWorkstream, startWorkstream } from "./support/app";
+import { advanceRuns, askPip, expandNeedsYou, homeComposer, homeSettled, jiraWrites, mockRuns, needOfKind, needRow, needsPane, needsYouCount, needsYouRow, openAgents, openApp, paneSettled, pipPane, seedWorkstreamEvent, selectWorkstream, startWorkstream, openNeedOfKind, openNeedRow, needsStack } from "./support/app";
 
 // Backlog items of the seventeenth dogfood round: the timeline telling Plan now from Plan anyway (G18), the glossary leaving Needs you its
 // rows (G21), a draft that holds a secret saying so before Post (G22), the skip Undo naming its draft (G27), the Start-an-agent card's
@@ -67,14 +67,14 @@ test.describe("a draft that holds a secret says so before Post (G22)", () => {
   test("the answers draft keeps the text as written and says the pause is coming", async ({ page }) => {
     test.setTimeout(150_000);
     await unclear(page);
-    await needOfKind(page, "readiness").click();
+    await openNeedOfKind(page, "readiness");
     await needsPane(page).getByRole("button", { name: "I'll answer" }).click();
     const prefill = await homeComposer(page).inputValue();
     await homeComposer(page).fill(`${prefill}Done means the winback mail goes out. Password: hunter22secret. We only touch the winback flow. The CRM team asked for it.`);
     await homeComposer(page).press("Enter");
     await homeSettled(page);
     await expandNeedsYou(page, VAGUE);
-    await needRow(page, "Answers to the open questions").click();
+    await openNeedRow(page, "Answers to the open questions");
     const draft = needsPane(page).getByRole("article", { name: `Comment on ${VAGUE}` });
     await expect(draft).toContainText("hunter22secret");
     await expect(draft.locator("[data-secret-note]")).toContainText("This holds something that looks like a secret. Gossamr will pause before posting it.");
@@ -117,12 +117,12 @@ test.describe("the skip Undo names the draft (G27)", () => {
     expect(sample).toBeGreaterThan(0);
     // The rest of the group still has its rows and the batch still offers what is left.
     await expect(needsYouRow(page, "CA-401")).toBeVisible();
-    const batch = needsYouRow(page, "CA-401").getByRole("button", { name: /^Approve \d+ safe drafts?$/ });
+    const batch = needsStack(page).getByRole("button", { name: /^Approve \d+ safe drafts?$/ });
     await batch.click();
     await needsPane(page).getByRole("button", { name: /^Yes, approve \d+/ }).click();
     await expect.poll(async () => (await jiraWrites(page)).length).toBeGreaterThan(0);
     // Not reproduced: the group keeps the decision a batch never takes, and General keeps its own rows.
-    await expect(needsYouRow(page, "CA-401")).toContainText("An agent wrote the plan for CA-401");
+    await expect(needsStack(page)).toContainText("An agent wrote the plan for CA-401");
     await expect(needsYouCount(page)).toHaveText(String(sample));
     await expect(needsYouRow(page, "General")).toBeVisible();
   });

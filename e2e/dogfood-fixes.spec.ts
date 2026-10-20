@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { advanceRuns, agentsSettled, askPip, editTicket, expandNeedsYou, expectToast, finishOnHome, githubWrites, heldBanner, homeConversation, homeConversationRegion, homeRunCards, homeSettled, inlineStart, jiraWrites, landOnWorkspace, mockRuns, needRow, needsPane, openAgents, openApp, openPip, openTechnical, paneSettled as settled, peekSheet, peekTicket, PIP_INPUT, pipConversation, pipPane, reviewedDraft, scriptNextRun, selectWorkstream, setBudget, startWorkstream, stepChip, stepRail, surfacePullRequests, wakes, workstreamEvents, workstreamGroup } from "./support/app";
+import { closeWorkstreamSheet, advanceRuns, agentsSettled, askPip, editTicket, expandNeedsYou, expectToast, finishOnHome, githubWrites, heldBanner, homeConversation, homeConversationRegion, homeRunCards, homeSettled, inlineStart, jiraWrites, landOnWorkspace, mockRuns, needsPane, openAgents, openApp, openPip, openTechnical, peekSheet, peekTicket, PIP_INPUT, pipConversation, pipPane, reviewedDraft, scriptNextRun, selectWorkstream, setBudget, startWorkstream, stepChip, stepRail, surfacePullRequests, wakes, workstreamEvents, workstreamGroup, openNeedRow, openRunOf, paneSettled as settled } from "./support/app";
 
 // New workstreams open in Manage, so the sample supervisor starts the routine next steps; pull requests show only when a test says.
 const MANAGED = "runs=empty&prSurface=manual&wsManage=1";
@@ -267,8 +267,9 @@ test.describe("answering and retry (D11, D14, D15)", () => {
     await openAgents(page);
     // The decision's own link opens the run, with its sheet over Pip home.
     await expandNeedsYou(page);
-    await needRow(page, /CA-409.*asks a question/).click();
-    await needsPane(page).getByRole("button", { name: "Open the run" }).click();
+    await openNeedRow(page, /CA-409.*asks a question/);
+    await closeWorkstreamSheet(page);
+    await openRunOf(page, "CA-409");
     await expect(runSheet(page)).toBeVisible();
     await expect(runSheet(page).locator("[data-state]").first()).toHaveAttribute("data-state", "needsAnswer");
     const place = (await sheetHint(page).textContent())?.match(/(\d+) of (\d+)$/)?.slice(1);
@@ -291,7 +292,7 @@ test.describe("answering and retry (D11, D14, D15)", () => {
     await openApp(page);
     await openAgents(page);
     await expandNeedsYou(page);
-    await needRow(page, /CA-409.*asks a question/).click();
+    await openNeedRow(page, /CA-409.*asks a question/);
     const box = needsPane(page).getByRole("textbox", { name: "Your answer" });
     const send = needsPane(page).getByRole("button", { name: "Send answer" });
     await expect(box).toHaveValue("");
@@ -315,8 +316,9 @@ test.describe("answering and retry (D11, D14, D15)", () => {
     await openAgents(page);
     // The sheet is where a failed run's command is shown to copy; the decision's link opens it.
     await expandNeedsYou(page);
-    await needRow(page, /SUP-9.*needs its folder trusted/).click();
-    await needsPane(page).getByRole("button", { name: "Open the run" }).click();
+    await openNeedRow(page, /SUP-9.*needs its folder trusted/);
+    await closeWorkstreamSheet(page);
+    await openRunOf(page, "SUP-9");
     const retry = runSheet(page).getByRole("button", { name: "Retry", exact: true });
     await expect(retry).toBeDisabled();
     // Select the command's text and copy it with the keyboard; the Copy button is never pressed.
@@ -555,7 +557,8 @@ test.describe("plan chip (D19)", () => {
     await expect(pipPane(page)).toContainText("Approve the description update to let Build start.");
     await openAgents(page);
     await selectWorkstream(page, "CA-401");
-    const note = stepChip(page, "plan").locator("[data-plan-approve]");
+    // The plan's description update is the decision open at the top, so its note is there and not repeated on the rail.
+    const note = needsPane(page).locator("[data-plan-approve]");
     await expect(note).toContainText("Approve the description update to let Build start.");
     await expect(note.locator("[data-plan-questions] li").first()).toBeVisible();
   });

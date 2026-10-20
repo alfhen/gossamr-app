@@ -8,7 +8,15 @@ import { HELD_BUDGET, HELD_PERSON, HELD_RESTART } from "../types";
 import type { Intent, Proposal, Run, WorkstreamView } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { Launcher } from "./PipExtras";
-import { NeedsPane } from "./NeedsPane";
+import { WorkstreamNeeds } from "./NeedsPane";
+
+/** The stack of the workstream the open decision (or batch preview) belongs to; nothing when none is open. */
+function NeedsPane({ needs: list }: { needs: readonly Need[] }) {
+  const { deciding, batch } = useWorkView.getState();
+  const owner = list.find((n) => n.key === deciding);
+  if (batch === null && !owner) return null;
+  return <WorkstreamNeeds needs={list} workstreamId={batch !== null ? (batch === "general" ? null : batch) : owner!.workstreamId} />;
+}
 import { NeedsYouList, firstText, groupText, hasMoreBelow } from "./NeedsYou";
 import { NO_FILTERS, groupRuns, slotWaiters, stopAllLabel, stoppable, summaryLine, yourAgents } from "./agentsLogic";
 import { arm, confirmArmed, disarm, keyPlan, openInWorkstream, openNeed } from "./needsActions";
@@ -317,42 +325,44 @@ describe("opening a need", () => {
   const list = needs(input());
   const need = (key: string) => list.find((n) => n.key === key)!;
 
-  it("on Agents opens its decision under the strip, and opens no workstream's detail", () => {
+  const home = (n: Need) => n.workstreamId ?? "general";
+
+  it("on Agents turns the Needs you filter on and opens its workstream's detail with the decision open", () => {
     useTabs.getState().setRoute("agents");
     openNeed(need("run:r-perm"));
     expect(useTabs.getState().route).toBe("agents");
-    expect(useWorkView.getState()).toMatchObject({ selected: null, deciding: "run:r-perm", asking: null });
+    expect(useWorkView.getState()).toMatchObject({ selected: home(need("run:r-perm")), deciding: "run:r-perm", asking: null });
+    expect(useRuns.getState().filters.needs).toBe(true);
+    expect(usePrefs.getState().agentsGroup).toBe("workstream");
   });
 
   it("from another route goes to Agents first, wherever the need is", () => {
     useTabs.getState().setRoute("workspace");
     openNeed(need("held:ws-2"));
     expect(useTabs.getState().route).toBe("agents");
-    expect(useWorkView.getState()).toMatchObject({ selected: null, deciding: "held:ws-2" });
+    expect(useWorkView.getState()).toMatchObject({ selected: "ws-2", deciding: "held:ws-2" });
   });
 
-  it("opens a need in no workstream the same way, with no workstream open", () => {
+  it("opens a need in no workstream under No workstream, whose detail works the same way", () => {
     useWorkView.getState().openWorkstream("ws-1");
     openNeed(need("draft:g1"));
-    expect(useWorkView.getState().deciding).toBe("draft:g1");
+    expect(useWorkView.getState()).toMatchObject({ selected: "general", deciding: "draft:g1" });
   });
 
-  it("'Open in workstream' closes the decision and asks for the card in the workstream's detail; a run's sheet opens over it", () => {
+  it("'Open in workstream' shows the card in the workstream's detail and leaves the filters alone; a run's sheet opens over it", () => {
     useTabs.getState().setRoute("agents");
-    openNeed(need("draft:c1"));
+    useRuns.getState().clearFilters();
     openInWorkstream(need("draft:c1"));
-    expect(useWorkView.getState()).toMatchObject({ selected: "ws-1", deciding: null, focusTarget: { type: "draft", id: "c1" } });
+    expect(useWorkView.getState()).toMatchObject({ selected: "ws-1", focusTarget: { type: "draft", id: "c1" } });
+    expect(useRuns.getState().filters.needs).toBeUndefined();
     expect(useRuns.getState().sheet).toBeNull();
     openInWorkstream(need("held:ws-2"));
     expect(useWorkView.getState()).toMatchObject({ selected: "ws-2", focusTarget: { type: "workstream" } });
     openInWorkstream(need("run:r-q"));
     expect(useWorkView.getState().focusTarget).toEqual({ type: "run", id: "r-q" });
     expect(useRuns.getState().sheet).toEqual({ type: "run", id: "r-q" });
-    // A need in no workstream has no detail to open: it opens the Pip drawer, where General's drafts are.
-    usePrefs.getState().setPipOpen(false);
     openInWorkstream(need("draft:g1"));
-    expect(usePrefs.getState().pipOpen).toBe(true);
-    usePrefs.getState().setPipOpen(false);
+    expect(useWorkView.getState().selected).toBe("general");
   });
 });
 
@@ -485,14 +495,15 @@ describe("the decision pane", () => {
     expect(useWorkView.getState()).toMatchObject({ deciding: null, batch: null });
   });
 
-  it("heads the decision with why and what waiting does, and a link to the workstream", () => {
+  it("heads the decision with why and what waiting does, under a Needs you heading in the workstream's detail", () => {
     const list = set();
     const html = pane(list, "run:r-perm");
-    expect(html).toContain('aria-label="Decision"');
+    expect(html).toContain("data-workstream-needs=");
+    expect(html).toMatch(/data-workstream-needs-title[^>]*>Needs you/);
     expect(html).toContain("R1 wants to run `git push origin ca-401`.");
     expect(html).toContain("If you wait:");
     expect(html).toContain("The run stays paused; nothing else in CA-401 moves.");
-    expect(html).toContain("Open in workstream");
+    expect(html).not.toContain("Open in workstream");
     expect(html).toContain('data-needs-pane="run:r-perm"');
     expect(html).toContain('data-needs-you-chip="unblock"');
   });
@@ -605,13 +616,33 @@ describe("the decision pane", () => {
     expect(html).toContain('aria-label="Review still blocks"');
   });
 
-  it("is the one thing that scrolls in its place: its header stays in view and its drafts' action bars are not sticky", () => {
+  it("keeps a draft's action bar in the flow at the card's end, and does not make the stack a scroller of its own", () => {
     const html = pane(set({ workstreams: [], runs: sample, proposals: [draft("c1", comment("CA-401"), 3)], dismissed: new Set() }), "draft:c1");
-    expect(html).toMatch(/<section[^>]*data-needs-pane="draft:c1"[^>]*class="[^"]*overflow-y-auto[^"]*\[&amp;_\[data-draft-actions\]\]:static/);
-    expect(html).toMatch(/<header class="sticky -top-2.5 /);
-    // The pane is the only scroller inside itself, bar a long diff, which scrolls in a box of its own so the actions under it stay in view.
-    expect(html.match(/[ "]overflow-y-auto[ "]/g)).toHaveLength(1);
-    expect(html).toMatch(/class="[^"]*\[&amp;_\[data-diff\]\]:max-h-\[min\(50vh,28rem\)\] \[&amp;_\[data-diff\]\]:overflow-y-auto/);
+    expect(html).toMatch(/<section[^>]*data-needs-pane="draft:c1"[^>]*class="[^"]*\[&amp;_\[data-draft-actions\]\]:static/);
+    expect(html.match(/[ "]overflow-y-auto[ "]/g)).toBeNull();
+  });
+
+  it("stacks a workstream's needs most urgent first, each with its why, and only the open one decided", () => {
+    const list = set();
+    const ws1Needs = list.filter((n) => n.workstreamId === "ws-1");
+    expect(ws1Needs.length).toBeGreaterThan(1);
+    seed(useWorkView, { deciding: ws1Needs[1].key, batch: null });
+    const html = renderToStaticMarkup(<WorkstreamNeeds needs={list} workstreamId="ws-1" />);
+    expect([...html.matchAll(/data-needs-pane="([^"]+)"/g)].map((m) => m[1])).toEqual(ws1Needs.map((n) => n.key));
+    expect(html.match(/data-needs-pane-body/g)).toHaveLength(1);
+    expect(html.match(/data-needs-if-you-wait/g)).toHaveLength(1);
+    expect(html.match(/aria-expanded="true"/g)).toHaveLength(1);
+    expect(html).toMatch(new RegExp(`data-needs-pane="${ws1Needs[1].key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"[^>]*data-open`));
+  });
+
+  it("holds the needs that belong to no workstream in the same stack", () => {
+    const list = set();
+    const loose = list.filter((n) => n.workstreamId === null);
+    expect(loose.length).toBeGreaterThan(0);
+    seed(useWorkView, { deciding: loose[0].key, batch: null });
+    const html = renderToStaticMarkup(<WorkstreamNeeds needs={list} workstreamId={null} />);
+    expect(html).toContain('data-workstream-needs="general"');
+    expect(html).toContain(`data-needs-pane="${loose[0].key}"`);
   });
 });
 

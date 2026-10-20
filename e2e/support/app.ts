@@ -417,7 +417,7 @@ export async function holdAll(page: Page, by: "button" | "shortcut" = "button") 
   }
 }
 
-/** The Agents view (src/workspace/AgentsView.tsx): the Needs you strip, the workstreams with their agents, and a workstream's detail over it. */
+/** The Agents view (src/workspace/AgentsView.tsx): the summary chips, the workstreams with their agents, and a workstream's detail beside them. */
 export const agentsHome = (page: Page) => page.locator("[data-agents-home]");
 
 /**
@@ -505,57 +505,71 @@ export const homeComposer = (page: Page) => page.locator(PIP_INPUT);
 export const workstreamWeb = (page: Page, key: string) => workstreamGroup(page, key).locator("svg.cobweb");
 export const workstreamWebText = (page: Page, key: string) => workstreamGroup(page, key).locator("[data-workstream-wither]");
 
-/** The Needs you strip at the top of the Agents view. */
-export const needsYouTray = (page: Page) => agentsHome(page).getByRole("region", { name: "Needs you" });
+/** The summary at the top of the Agents view: its filter chips (Needs you, Ready to review, Failed or stuck, All). */
+export const needsYouTray = (page: Page) => agentsHome(page).locator("[data-summary-chips]");
 
-/** The Needs you list's one count, as its pill says it. */
+/** The Needs you chip: a toggle that filters the list, with the one count. */
+export const needsChip = (page: Page) => agentsHome(page).locator('[data-chip="needs"]');
+
+/** The Needs you list's one count, as its chip says it. */
 export const needsYouCount = (page: Page) => needsYouTray(page).locator("[data-needs-you-count]");
 
-/** The row of the workstream on ticket `key` in the Needs you list, or General's (`key` "General"). */
-export const needsYouRow = (page: Page, key: string) =>
-  key === "General" ? needsYouTray(page).locator('[data-needs-you-row="general"]') : needsYouTray(page).locator("[data-needs-you-row]").filter({ has: page.locator("[data-needs-you-key]", { hasText: key }) });
+/** The group of the workstream on ticket `key` in the Agents list, or No workstream's (`key` "General"). */
+export const needsYouRow = (page: Page, key: string) => (key === "General" ? agentsHome(page).locator('[data-workstream-group="none"]') : workstreamGroup(page, key));
 
-/** A need's own row in the Needs you list, by the words it reads; its group has to be expanded first (`expandNeedsYou`). */
-export const needRow = (page: Page, name: string | RegExp) => needsYouTray(page).locator("[data-needs-you-need]").filter({ hasText: name });
+/** The button that opens the detail of the workstream on ticket `key`, or of No workstream (`key` "General"). */
+export const groupOpen = (page: Page, key: string) => (key === "General" ? agentsHome(page).locator('[data-workstream-open="general"]') : workstreamOpen(page, key));
+
+/** The Needs you section at the top of the open workstream's detail. */
+export const needsStack = (page: Page) => workstreamSheet(page).locator("[data-workstream-needs]");
+
+/** A need in the open detail's Needs you section, by the words it reads; pressing it opens it. */
+export const needRow = (page: Page, name: string | RegExp) => workstreamSheet(page).locator("[data-needs-pane]").filter({ hasText: name }).locator("[data-need-row]");
+
+/** The need of `kind` ("permission", "question", "failure", "escalation", "hold", "draft", ...) in the open detail. */
+export const needOfKind = (page: Page, kind: string) => workstreamSheet(page).locator(`[data-needs-pane][data-kind="${kind}"] [data-need-row]`).first();
 
 /**
- * The Needs you row whose need is of `kind` ("permission", "question", "failure", "escalation", "hold", "draft", ...): a
- * group's row when it leads the group, else its own row once the group is expanded (`expandAllNeeds`). The first, when
- * both show it.
+ * Opens the rail's Needs you popover (a right click on the Agents button), which lists every need from any screen, and
+ * presses the first row `pick` finds: the way a notification, the badge or a link takes the person to a need.
  */
-export const needOfKind = (page: Page, kind: string) =>
-  needsYouTray(page)
-    .locator(`[data-needs-you-group][data-kind="${kind}"], [data-needs-you-need][data-kind="${kind}"]`)
-    .first();
-
-/** Expands every group in the Needs you list, so each need in it is a row of its own. */
-export async function expandAllNeeds(page: Page) {
-  const folded = needsYouTray(page).locator('[data-needs-you-more][aria-expanded="false"]');
-  while (await folded.count()) await folded.first().click();
+export async function openNeedFromBadge(page: Page, pick: (list: Locator) => Locator) {
+  await page.locator("[data-rail]").getByRole("button", { name: /^Agents/ }).click({ button: "right" });
+  const popover = page.getByRole("dialog", { name: "Needs you" });
+  await expect(popover).toBeVisible();
+  const more = popover.locator('[data-needs-you-more][aria-expanded="false"]');
+  const rows = popover.locator("[data-needs-you-group], [data-needs-you-need]");
+  if (!(await pick(rows).count())) while (await more.count()) await more.first().click();
+  await pick(rows).first().click();
 }
 
-/** Folds every group in the Needs you list to its header: its top need's why, and "+N more". The strip opens a group by default while the needs fit. */
-export async function foldAllNeeds(page: Page) {
-  const open = needsYouTray(page).locator('[data-needs-you-more][aria-expanded="true"]');
-  while (await open.count()) await open.first().click();
+/** Opens the sheet of the run on ticket `key` from its card in the Agents list, with the keyboard as j and Enter would. */
+export async function openRunOf(page: Page, key: string) {
+  const card = agentsHome(page).locator("article[data-run-id]").filter({ hasText: key }).first();
+  await card.focus();
+  await page.keyboard.press("Enter");
 }
 
-/** Expands the group of workstream `key` (or General) in the Needs you list, so each need in it is a row of its own. */
+/** Opens the need of `kind` from the popover. */
+export const openNeedOfKind = (page: Page, kind: string) => openNeedFromBadge(page, (rows) => rows.and(page.locator(`[data-kind="${kind}"]`)));
+
+/** Opens the need reading `name` from the popover. */
+export const openNeedRow = (page: Page, name: string | RegExp) => openNeedFromBadge(page, (rows) => rows.filter({ hasText: name }));
+
+/** Opens the detail of the workstream on ticket `key` (or No workstream's, for "General") from the list, unless it is open. */
 export async function expandNeedsYou(page: Page, key = "General") {
-  const more = needsYouRow(page, key).locator("[data-needs-you-more]");
-  // The strip opens a group by itself while the needs fit, and folds it again once more arrive; opened by hand it stays.
-  if ((await more.getAttribute("aria-expanded")) === "true") {
-    await more.click();
-    await expect(more).toHaveAttribute("aria-expanded", "false");
-  }
-  await more.click();
-  await expect(more).toHaveAttribute("aria-expanded", "true");
+  if (!(await needsStack(page).count()) || (await groupOpen(page, key).getAttribute("aria-expanded")) !== "true") await groupOpen(page, key).click();
+  await expect(needsStack(page)).toBeVisible();
 }
 
-/** The decision open under the Needs you strip. */
-export const needsPane = (page: Page) => agentsHome(page).getByRole("region", { name: "Decision" });
+/** Kept for the specs that expanded or folded the old list: a workstream's needs are one stack now. */
+export async function expandAllNeeds(_page: Page) {}
+export async function foldAllNeeds(_page: Page) {}
 
-/** The decision pane's heading: where the keyboard lands whenever a need is opened (G28). */
+/** The decision open at the top of a workstream's detail. */
+export const needsPane = (page: Page) => agentsHome(page).locator("[data-needs-pane][data-open]");
+
+/** The open decision's heading: where the keyboard lands whenever a need is opened by a key or a link (G28). */
 export const needsPaneHeading = (page: Page) => needsPane(page).locator("[data-needs-pane-title]");
 
 /** The conversation, where Pip's cards are: the Pip drawer. */
@@ -629,10 +643,9 @@ export const homeRunCards = (page: Page, key: string) => homeConversationRegion(
  * button; the card must have keyboard focus then, and `refocus` brings it back after the safety sheet.
  */
 export async function inlineStart(page: Page, card: Locator, by: "click" | "keyboard" = "click", refocus: () => Promise<void> = () => card.focus()) {
-  // The drawer's card opens the setup sheet; the same draft read in place is the one the Needs you strip opens.
+  // The drawer's card opens the setup sheet; the same draft read in place is the one Needs you opens.
   if (by === "click" && (await card.evaluate((el) => !!el.closest("[data-pip-root]")))) {
-    const need = needsYouTray(page).locator('[data-needs-you-group][data-kind="runStart"], [data-needs-you-need][data-kind="runStart"]').first();
-    await need.click();
+    await openNeedOfKind(page, "runStart");
     card = needsPane(page);
   }
   const safety = page.getByRole("dialog", { name: "Agents safety and settings" });

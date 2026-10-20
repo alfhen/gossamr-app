@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { askPip, holdBySystem, homeSettled, needsPane, needsPaneHeading, needsYouCount, needsYouRow, needsYouTray, openAgents, openApp, selectWorkstream, startWorkstream } from "./support/app";
+import { askPip, holdBySystem, homeSettled, needsPane, needsPaneHeading, needsYouCount, openAgents, openApp, selectWorkstream, startWorkstream, openNeedRow, needsStack } from "./support/app";
 
 // Fixes from the fifth dogfood round's backlog (G18 to G24): a higher-ranked need waits behind a bar instead of taking the
 // decision pane, Pip home lands on the workstream that needs the person, the pane says when it moved on by itself, the
@@ -16,31 +16,23 @@ async function draftOpen(page: Page) {
   await askPip(page, "Draft a comment");
   await homeSettled(page);
   // Alone in its workstream the need is the group's own row.
-  await needsYouTray(page).locator("[data-needs-you-group], [data-needs-you-need]").filter({ hasText: /Pip drafted a comment/ }).first().click();
+  await openNeedRow(page, /Pip drafted a comment/);
   await expect(needsPane(page)).toHaveAttribute("data-kind", "draft");
 }
 
-const higher = (page: Page) => page.locator("[data-needs-higher]");
-
-test("G18: a need that ranks higher and came in later waits behind a bar; the pane stays, and the bar opens it", async ({ page }) => {
+test("G18: a need that ranks higher and comes in later is listed above the open one, and nothing switches under the person", async ({ page }) => {
   await draftOpen(page);
-  // The plan above the draft was there when it opened, so there is no bar.
-  await expect(higher(page)).toHaveCount(0);
   await holdBySystem(page, "CA-401", "restart");
-  await expect(higher(page)).toHaveText(/^Higher priority:\s*Held after a restart\s*· Open$/);
-  // Nothing switched under the person.
+  const kinds = needsStack(page).locator("[data-needs-pane]");
+  await expect.poll(async () => (await kinds.evaluateAll((els) => els.map((e) => e.getAttribute("data-kind")))).filter((k) => k === "hold" || k === "draft")).toEqual(["hold", "draft"]);
+  // The decision that was open stays open.
   await expect(needsPane(page)).toHaveAttribute("data-kind", "draft");
-
-  await higher(page).focus();
-  await page.keyboard.press("Enter");
-  await expect(needsPane(page)).toHaveAttribute("data-kind", "hold");
-  await expect(higher(page)).toHaveCount(0);
 });
 
 test("G20: when the pane moves on by itself it says so for a few seconds, and the new pane's heading has the keyboard", async ({ page }) => {
   await draftOpen(page);
   await holdBySystem(page, "CA-401", "restart");
-  await expect(needsYouRow(page, "CA-401")).toContainText("Held after a restart");
+  await expect(needsStack(page)).toContainText("Held after a restart");
   const pane = needsPane(page);
   await pane.getByRole("button", { name: "Post comment" }).click();
   await expect(pane).toHaveAttribute("data-kind", "hold");

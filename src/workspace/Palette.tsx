@@ -2,7 +2,8 @@ import { Fragment, useEffect, useMemo, useRef, useState, type KeyboardEvent } fr
 import { ALL, containerKey, itemKey } from "../lib/filter";
 import type { CatalogEntry, ContainerRef, WorkContainer, WorkItem } from "../types";
 import { itemsByFilter, useWorkspace } from "../workspaceStore";
-import { useNeedsYou } from "./useNeeds";
+import { currentNeeds, useNeedsYou } from "./useNeeds";
+import { openNeed } from "./needsActions";
 import { askPip } from "./askPip";
 import { useToasts } from "./toasts";
 import { useActivity } from "./activityStore";
@@ -23,7 +24,6 @@ import { openOnAgents, togglePip, useWorkstreams } from "./workstreamsStore";
 import { contextEntries, focusedSubject } from "./contextActions";
 import { undoLog } from "./undo";
 import { showAllRuns } from "./TimelineFilterBar";
-import { focusWhenDrawn } from "./focusDrawn";
 import { showStartMyDay } from "./StartMyDay";
 import { showPlanMyWeek } from "./planActions";
 import { giveBackClarity } from "./clarityActions";
@@ -234,15 +234,11 @@ export function appActions(): CommandActions {
     startAgent: () => useRuns.getState().setPicking(true),
     startAgentOn: (item, kind) => void useRunSetup.getState().begin({ item: item.item, kind }),
     showNeedsYou: () => {
-      // Agents, with the keyboard in the Needs you strip.
+      // Agents with the Needs you filter on and the most urgent need open; with nothing waiting, just Agents.
       useRuns.setState({ sheet: null });
-      tabs.setRoute("agents");
-      focusWhenDrawn(
-        () => document.querySelector<HTMLElement>("[data-agents-strip] [data-needs-you-group]") ?? document.querySelector<HTMLElement>("[data-agents-strip] [data-needs-you-title]"),
-        () => document.activeElement,
-        requestAnimationFrame,
-        8,
-      );
+      const first = currentNeeds()[0];
+      if (first) openNeed(first);
+      else tabs.setRoute("agents");
     },
     openAgentSafety: () => {
       tabs.setRoute("agents");

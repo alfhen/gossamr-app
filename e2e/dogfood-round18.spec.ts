@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { agentsHome, agentsSettled, askRun, expandNeedsYou, mockRuns, needRow, needsPane, openAgents, openApp, selectWorkstream, startWorkstream } from "./support/app";
+import { agentsHome, agentsSettled, askRun, expandNeedsYou, mockRuns, needsPane, openAgents, openApp, selectWorkstream, startWorkstream, openNeedRow } from "./support/app";
 
 // Fixes from the eighteenth dogfood round: 'start CA-408' in the palette offers the workstream, not only Ask Pip (G8).
 
@@ -29,7 +29,7 @@ test.describe("the palette's input name in a mode (G9)", () => {
 });
 
 test.describe("a skip announces once (G6)", () => {
-  test("the pane line says Skipped, and the toast's live region stays empty while the pane says it", async ({ page }) => {
+  test("a skip with no other need in the workstream is said by the toast's live region, once", async ({ page }) => {
     test.setTimeout(120_000);
     await openApp(page, "runs=empty");
     await page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "All projects" }).click();
@@ -42,9 +42,9 @@ test.describe("a skip announces once (G6)", () => {
     await agentsHome(page).locator("[data-clarity-notice]").getByRole("button", { name: "Ask the reporter now" }).click();
     const draft = needsPane(page).getByRole("article", { name: /^Comment on CA-/ });
     await draft.getByRole("button", { name: "Skip" }).click();
-    await expect(page.locator("[data-needs-advanced]")).toContainText(/^Skipped: .*Now:/);
+    await expect(page.locator("[data-needs-advanced]")).toHaveCount(0);
     await expect(page.locator("[data-toast]").getByRole("button", { name: /^Undo/ })).toBeVisible();
-    await expect(page.locator("[data-toast-status]")).toHaveText("");
+    await expect(page.locator("[data-toast-status]")).toContainText("Skipped");
   });
 });
 
@@ -53,7 +53,7 @@ test.describe("a typed answer to an agent's question (G1)", () => {
     await openApp(page);
     await openAgents(page);
     await expandNeedsYou(page);
-    await needRow(page, /CA-409.*asks a question/).click();
+    await openNeedRow(page, /CA-409.*asks a question/);
     const box = needsPane(page).getByRole("textbox", { name: "Your answer" });
     await box.fill("Yes, keep the old rounding.");
     const run = (await mockRuns(page)).find((r) => r.key === "CA-409" && r.state === "needsAnswer");

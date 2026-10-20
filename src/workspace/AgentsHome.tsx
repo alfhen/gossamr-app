@@ -1,13 +1,9 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Cobweb } from "../components/Cobweb";
 import { isoWeek } from "../lib/planMyWeek";
-import { needsIn, type Need } from "../lib/needs";
+import { needsIn } from "../lib/needs";
 import { witherTitle } from "../lib/workstreamWither";
 import type { WorkstreamView } from "../types";
-import { lightboxOpen } from "./PipImages";
-import { popoverOpen } from "./Popover";
-import { NeedsPane } from "./NeedsPane";
-import { NeedsYouList } from "./NeedsYou";
 import { ORIENTATION_WORDS, PipOrientation } from "./PipOrientation";
 import { PlanMyWeek, ThisWeek } from "./PlanMyWeek";
 import { StartMyDayCard } from "./StartMyDay";
@@ -15,16 +11,11 @@ import { StatusPill, useWorkstreamStatus } from "./StatusPill";
 import { START_WORKSTREAM } from "./commands";
 import { DecisionShownContext, decisionShown } from "./decisionShown";
 import { InlineStartContext } from "./InlineStart";
-import { arm, confirmArmed, disarm, groupId, keyPlan, openNeed, sayOpenNote, setPaneIntent } from "./needsActions";
 import { usePrefs } from "./prefs";
-import { useRunSetup } from "./runSetupStore";
-import { useRuns } from "./runsStore";
-import { useTabs } from "./tabsStore";
-import { undoLatest } from "./undo";
+import { groupId } from "./needsActions";
 import { useNeedsYou } from "./useNeeds";
 import { useNow } from "./useNow";
 import { useWorkstreamWithers } from "./useWorkstreamWithers";
-import { needsKey, type NeedsItemKind } from "./workKeys";
 import { useWorkView } from "./workViewStore";
 import { useWorkstreams } from "./workstreamsStore";
 
@@ -83,150 +74,24 @@ export function DayScroll({ label, children, tall = false }: { label: string; ch
   );
 }
 
-/** Something over the page that takes the keys: the palette, the peek, a sheet, a popover, the lightbox or any other dialog. */
-function overlayOpen(): boolean {
-  const runs = useRuns.getState();
-  return (
-    usePrefs.getState().paletteOpen ||
-    useTabs.getState().selected !== null ||
-    useRunSetup.getState().open ||
-    runs.sheet !== null ||
-    runs.picking ||
-    popoverOpen() ||
-    lightboxOpen() ||
-    document.querySelector('[role="dialog"], [aria-modal="true"]') !== null
-  );
-}
-
-/** The rows j and k step through in the Needs you strip: a group's row, and a need inside an expanded group (its top need is its group's row). */
-const STRIP_ROWS = "[data-agents-strip] [data-needs-you-group], [data-agents-strip] [data-needs-you-need]:not([data-needs-top])";
-
-const rowKind = (el: Element | undefined): NeedsItemKind | null => (!el ? null : el.matches("[data-needs-you-group]") ? "group" : el.matches("[data-needs-you-need]") ? "need" : null);
-
-const show = (el: HTMLElement | null | undefined) => {
-  if (!el) return false;
-  el.scrollIntoView?.({ block: "nearest" });
-  el.focus();
-  return true;
-};
-
-/** Puts focus on the Needs you row of `need` (its group's while that is folded): where a decision's keys return to. */
-function backToRow(need: Need) {
-  const strip = "[data-agents-strip]";
-  const row = document.querySelector<HTMLElement>(`${strip} [data-need-key="${CSS.escape(need.key)}"]`) ?? document.querySelector<HTMLElement>(`${strip} [data-needs-you-group="${CSS.escape(groupId(need.workstreamId))}"]`);
-  row?.focus();
-}
-
 /**
- * The Needs you strip's keyboard, as `needsKey` decides: j and k (or the arrows) step through its rows, Enter or o opens
- * one's decision, a, d, s and e act on it (asking for Enter first where the key writes something), and Esc closes the
- * decision. It listens after everything nearer the key, so a card, a confirmation or a sheet that took the key keeps it.
- */
-function useNeedsKeys(needsYou: readonly Need[]) {
-  const needsRef = useRef(needsYou);
-  needsRef.current = needsYou;
-  useEffect(() => {
-    const rows = () => Array.from(document.querySelectorAll<HTMLElement>(STRIP_ROWS));
-    const onFocus = (ev: FocusEvent) => {
-      // A key of the list that asked for Enter is dropped once the keyboard goes anywhere else.
-      const asking = useWorkView.getState().asking;
-      if (asking && !(ev.target instanceof HTMLElement && ev.target.getAttribute("data-need-key") === asking.key)) disarm();
-    };
-    const onKey = (ev: KeyboardEvent) => {
-      if (ev.defaultPrevented) return;
-      const list = rows();
-      const active = document.activeElement as HTMLElement | null;
-      let at = list.indexOf(active as HTMLElement);
-      // A group's top need, opened under its row, is that row's stop.
-      if (at < 0 && active?.hasAttribute("data-needs-top")) at = list.findIndex((e) => e.hasAttribute("data-needs-you-group") && e.getAttribute("data-need-key") === active.getAttribute("data-need-key"));
-      const view = useWorkView.getState();
-      const el = list[at];
-      const needKey = el?.getAttribute("data-need-key") ?? null;
-      // Focus inside the open decision: its keys act on the need it shows, not on a row.
-      const inPane = active instanceof HTMLElement && active.closest("[data-needs-pane]") !== null;
-      const need = needKey ? needsRef.current.find((n) => n.key === needKey) : inPane && view.deciding ? needsRef.current.find((n) => n.key === view.deciding) : undefined;
-      const action = needsKey(ev, { overlay: overlayOpen(), count: list.length, at, kind: rowKind(el), asking: !!view.asking && view.asking.key === needKey, pane: view.deciding !== null || view.batch !== null, inPane });
-      if (!action) return;
-      ev.preventDefault();
-      switch (action.type) {
-        case "decide":
-          if (!need) return;
-          // A group opens with everything it holds listed, and its highest-ranked need decided.
-          if (rowKind(el) === "group" && Number(el.getAttribute("data-needs-count")) > 1) view.setExpanded(groupId(need.workstreamId), true);
-          return openNeed(need);
-        case "collapse": {
-          if (!need) return;
-          const gid = groupId(need.workstreamId);
-          view.setExpanded(gid, false);
-          return void requestAnimationFrame(() => document.querySelector<HTMLElement>(`[data-agents-strip] [data-needs-you-group="${CSS.escape(gid)}"]`)?.focus());
-        }
-        case "act": {
-          const plan = need ? keyPlan(need, action.act) : null;
-          if (!need || !plan) return;
-          // From inside the decision the row is where Enter confirms, so the keyboard goes back to it first.
-          if (plan.type === "ask") return setPaneIntent(null), inPane && backToRow(need), arm(need, plan);
-          // Skipping or dismissing acts at once and offers Undo; the row keeps the keyboard, or hands it on as it leaves.
-          if (plan.type === "do") return setPaneIntent(null), plan.run();
-          sayOpenNote(plan);
-          return openNeed(need, { edit: plan.edit });
-        }
-        case "undo":
-          // The toast offering it goes with it (`undoLog`'s settled hook).
-          return undoLatest();
-        case "confirm":
-          return confirmArmed();
-        case "cancel":
-          return disarm();
-        case "closePane": {
-          const back = inPane ? need : undefined;
-          view.closeDecision();
-          return void (back && backToRow(back));
-        }
-        case "focus":
-          return void show(list[action.index]);
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    document.addEventListener("focusin", onFocus);
-    return () => {
-      window.removeEventListener("keydown", onKey);
-      document.removeEventListener("focusin", onFocus);
-    };
-  }, []);
-}
-
-/**
- * Wraps what shows a workstream or a decision so that the one open in the decision pane is not shown a second time (the
+ * Wraps what shows a workstream or a decision so that the one open in a workstream's Needs you is not shown a second time (the
  * timeline, the step rail, the controls), and run drafts that need nothing chosen are read and started in place.
  */
 export function DecisionScope({ children }: { children: ReactNode }) {
   const needs = useNeedsYou();
   const deciding = useWorkView((s) => s.deciding);
   const list = useWorkstreams((s) => s.list);
-  const decided = useMemo(() => decisionShown(needs.find((n) => n.key === deciding), list), [needs, deciding, list]);
+  const open = useWorkView((s) => s.selected);
+  // Only while its workstream's detail, which holds the decision, is open.
+  const decided = useMemo(() => {
+    const need = needs.find((n) => n.key === deciding);
+    return decisionShown(need && groupId(need.workstreamId) === open ? need : null, list);
+  }, [needs, deciding, list, open]);
   return (
     <InlineStartContext.Provider value={true}>
       <DecisionShownContext.Provider value={decided}>{children}</DecisionShownContext.Provider>
     </InlineStartContext.Provider>
-  );
-}
-
-/**
- * The top of the Agents view: the one Needs you list as a strip, one row for each workstream (and General) with
- * something waiting on the person, and the decision opening under it. Whatever opens a need, the strip's row, a run's "In
- * Needs you" pill, a notification or the rail's count, ends here.
- */
-export function NeedsTop() {
-  const needs = useNeedsYou();
-  const now = useNow();
-  useNeedsKeys(needs);
-  return (
-    <div data-agents-top className="flex max-h-[calc(100%-25rem)] min-h-0 shrink-0 flex-col overflow-y-auto border-b border-ws-sep bg-ws-bar">
-      <div data-agents-strip>
-        <NeedsYouList main needs={needs} now={now} />
-      </div>
-      <NeedsPane needs={needs} />
-    </div>
   );
 }
 
@@ -264,7 +129,7 @@ export function DayAndWeek() {
 }
 
 /** "1 needs you", "3 need you"; nothing when nothing does. */
-function NeedsBadge({ count, total }: { count: number; total: number }) {
+export function NeedsBadge({ count, total }: { count: number; total: number }) {
   if (!count) return null;
   return (
     <span data-needs-you-badge title={`${count} of the ${total} in Needs you ${count === 1 ? "is" : "are"} here`} className="shrink-0 rounded-full bg-ws-pip px-1.5 text-[10px] leading-4 font-semibold text-ws-on-pip">

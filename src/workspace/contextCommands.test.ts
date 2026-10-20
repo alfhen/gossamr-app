@@ -113,7 +113,7 @@ describe("the palette's entries for the focused item", () => {
   it("a need in General says where its link goes; one in a workstream never lists a second open entry", () => {
     const general = need({ key: "run:r-9", workstreamId: null, kind: "failure", runId: "r-9", target: { type: "run", id: "r-9" }, primary: spec("retry", "Retry") });
     expect(labels(contextCommands({ type: "need", key: general.key }, data({ needs: [general], workstreams: [] }), deps()))).toEqual(["Retry", "Open the run"]);
-    expect(openInWorkstreamLabel({ workstreamId: null, target: { type: "draft", id: "p-1" } })).toBe("Show in Pip");
+    expect(openInWorkstreamLabel({ workstreamId: null, target: { type: "draft", id: "p-1" } })).toBe("Open under No workstream");
     expect(contextCommands({ type: "need", key: permission.key }, data({ needs: [permission] }), deps()).some((c) => c.id.startsWith("context:open:"))).toBe(false);
     expect(openInWorkstreamLabel({ workstreamId: "ws-1", target: { type: "run", id: "r-1" } })).toBe("Open in workstream");
   });

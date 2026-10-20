@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { advanceRuns, agentsHome, askPip, expectToast, holdBySystem, homeComposer, homeSettled, jiraWrites, mockRuns, needOfKind, needRow, needsPane, openAgents, openApp, paneSettled, pipPane, selectWorkstream, startMyDay, startWorkstream, workstreamGroup } from "./support/app";
+import { advanceRuns, agentsHome, askPip, expectToast, holdBySystem, homeComposer, homeSettled, jiraWrites, mockRuns, needsPane, openAgents, openApp, paneSettled, pipPane, selectWorkstream, startMyDay, startWorkstream, workstreamGroup, openNeedOfKind, openNeedRow } from "./support/app";
 
 // Fixes from round 9's backlog: Plan my week and Start my day capped with a scroll of their own (G19), the plan's intro and the answers draft saying where they come from (G20), the keyboard odds and ends
 // (G21), a hold the system made above the person's own (G22) and the pause quoting what tripped it (G23).
@@ -78,13 +78,13 @@ test.describe("the answers draft says which reply it came from (G20)", () => {
     await finish(page, (await newest(page, "triage"))!.id);
     await openAgents(page);
     await selectWorkstream(page, "CA-408");
-    await needOfKind(page, "readiness").click();
+    await openNeedOfKind(page, "readiness");
     await needsPane(page).getByRole("button", { name: "I'll answer" }).click();
     await expect(homeComposer(page)).toHaveValue(/My answers: $/);
     await page.keyboard.type("1. Done means all three emails send. 2. Only the CRM export. 3. The support team.");
     await page.keyboard.press("Enter");
     await homeSettled(page);
-    await needRow(page, "Answers to the open questions").click();
+    await openNeedRow(page, "Answers to the open questions");
     const card = needsPane(page).getByRole("article", { name: "Comment on CA-408" });
     await expect(card).toContainText("Answers to the open questions on this ticket:");
     const line = card.locator('[data-provenance="pip"]');

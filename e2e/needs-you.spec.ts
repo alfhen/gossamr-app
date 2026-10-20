@@ -1,8 +1,8 @@
 import { expect, test, type Page } from "@playwright/test";
-import { agentsHome, askPip, blockRun, expandNeedsYou, holdBySystem, homeConversation, homeConversationRegion, homeSettled, jiraWrites, loseRun, mockAttached, mockRuns, needRow, needsPane, needsPaneHeading, needsYouCount, needsYouRow, needsYouTray, openAgents, openApp, selectWorkstream, startWorkstream, stopRunAtLimit, workstreamGroup } from "./support/app";
+import { agentsHome, closeWorkstreamSheet, groupOpen, needsStack, workstreamSheet, askPip, blockRun, expandNeedsYou, holdBySystem, homeConversation, homeConversationRegion, homeSettled, jiraWrites, loseRun, mockAttached, mockRuns, needRow, needsPane, needsPaneHeading, needsYouCount, needsYouTray, openAgents, openApp, selectWorkstream, startWorkstream, stopRunAtLimit, workstreamGroup } from "./support/app";
 
-// One Needs you (docs/needs-you.md): a list of what waits on the person, one count everywhere, and each decision made in
-// a pane beside the conversation.
+// One Needs you (docs/needs-you.md): what waits on the person is one count everywhere, a filter on Agents, and each
+// workstream's decisions are at the top of its detail.
 
 const MANAGED = "wsManage=1";
 
@@ -15,12 +15,17 @@ const footer = (page: Page) => homeConversationRegion(page).locator("[data-compo
 
 const need = needRow;
 
+const chip = (page: Page, name: string) => agentsHome(page).locator(`[data-chip="${name}"]`);
+
 /** The sample's run on ticket `key` (the first, when it has several). */
 const runOn = async (page: Page, key: string) => (await mockRuns(page)).find((r) => r.key === key)!;
 const stateOf = async (page: Page, id: string) => (await mockRuns(page)).find((r) => r.id === id)?.state;
 
+/** The button that opens or hides the need reading `name` in the open detail. */
+const needButton = (page: Page, name: RegExp) => workstreamSheet(page).locator("[data-needs-pane]").filter({ hasText: name }).locator("button[data-need-key]");
+
 /** Whether the keyboard is inside the open decision. */
-const focusInPane = (page: Page) => page.evaluate(() => !!document.querySelector("[data-needs-pane]")?.contains(document.activeElement));
+const focusInPane = (page: Page) => page.evaluate(() => !!document.querySelector("[data-needs-pane][data-open]")?.contains(document.activeElement));
 
 /** Pip home with the sample's own runs (a permission, a question, a failure to retry and a quiet run, all in General), ready. */
 async function onHome(page: Page, query = "") {
@@ -40,48 +45,36 @@ async function workstreamOnHome(page: Page) {
   await expect(homeConversation(page)).toHaveText(/^Workstream: CA-401 /);
 }
 
-/** Pip home opens a group by default while its needs fit: folds them all, for the tests that read the folded list. */
-async function foldAll(page: Page) {
-  const open = needsYouTray(page).locator('[data-needs-you-more][aria-expanded="true"]');
-  while (await open.count()) await open.first().click();
-}
-
-test("one row per workstream, with '+N more' for the rest, and one count on the rail, in the list and under the composer", async ({ page }) => {
+test("a workstream's needs are one stack at the top of its detail, most urgent first, and one count on the rail, the chip and under the composer", async ({ page }) => {
   await openApp(page, MANAGED);
   await expect(agentsButton(page)).toHaveCount(1);
   await workstreamOnHome(page);
-  // The sample leaves CA-401's plan to approve; the workstream gets a hold (a restart's: the person's own Hold is no need) and a draft of Pip's: three needs, one row.
+  // The sample leaves CA-401's plan to approve; the workstream gets a hold (a restart's: the person's own Hold is no need) and a draft of Pip's: three needs, one stack.
   await holdBySystem(page, "CA-401", "restart");
   await askPip(page, "Draft a comment");
   await homeSettled(page);
 
-  const rows = needsYouTray(page).locator("[data-needs-you-row]");
-  await expect(rows).toHaveCount(2);
-  const ws = needsYouRow(page, "CA-401");
-  await expect(ws).toHaveCount(1);
-  // Open by default: the group is its name and count, with every need listed once under it.
-  await expect(ws.locator("[data-needs-you-more]")).toHaveText("Show less");
-  await expect(ws.locator("[data-needs-you-need]")).toHaveCount(3);
-  await foldAll(page);
-  await expect(ws.locator("[data-needs-you-more]")).toHaveText("+2 more");
+  const items = needsStack(page).locator("[data-needs-pane]");
+  await expect(items).toHaveCount(3);
+  await expect(needsStack(page).locator("[data-workstream-needs-count]")).toHaveText("3");
   // The plan is a decision, which ranks above what is stuck and what waits for an approval.
-  await expect(ws.locator("[data-needs-you-chip]")).toHaveText("Decide");
-  await expect(ws).toContainText("approving its description update is how the plan is approved");
-  // General's three (a permission, a question and a failure; a run gone quiet is no need) are one row too.
-  const general = needsYouRow(page, "General");
-  await expect(general.locator("[data-needs-you-more]")).toHaveText("+2 more");
-  await expect(general.locator("[data-needs-you-need]")).toHaveCount(0);
+  await expect(items.nth(0)).toContainText("Approve the plan");
+  await expect(items.nth(0)).toContainText("approving its description update is how the plan is approved");
+  await expect(items.nth(0).locator("[data-needs-you-chip]")).toHaveText("Decide");
+  await expect(items.nth(1)).toContainText("Held after a restart");
+  await expect(items.nth(2)).toContainText("Draft comment");
+  // Only one is open at a time: the first, until another is chosen.
+  await expect(items.nth(0)).toHaveAttribute("data-open", "true");
+  await expect(needsPane(page)).toHaveCount(1);
+  await needButton(page, /Held after a restart/).click();
+  await expect(items.nth(1)).toHaveAttribute("data-open", "true");
+  await expect(needsPane(page)).toHaveCount(1);
 
-  // The group's first need leads; opening the row lists them all, in rank order.
-  await ws.locator("[data-needs-you-more]").click();
-  await expect(ws.locator("[data-needs-you-need]")).toHaveCount(3);
-  await expect(ws.locator("[data-needs-you-need]").nth(0)).toContainText("Approve the plan");
-  await expect(ws.locator("[data-needs-you-need]").nth(1)).toContainText("Held after a restart");
-  await expect(ws.locator("[data-needs-you-need]").nth(2)).toContainText("Draft comment");
-  await ws.locator("[data-needs-you-more]").click();
-  await expect(ws.locator("[data-needs-you-need]")).toHaveCount(0);
+  // General's three (a permission, a question and a failure; a run gone quiet is no need) are one stack too.
+  await groupOpen(page, "General").click();
+  await expect(needsStack(page).locator("[data-needs-pane]")).toHaveCount(3);
 
-  // The one count: the list's pill, the rail's badge and the composer say the same six.
+  // The one count: the chip, the rail's badge and the composer say the same six.
   await expect(needsYouCount(page)).toHaveText("6");
   await expect(homeButton(page)).toHaveAccessibleName("Agents, 6 things need you");
   await expect(homeButton(page).locator('[aria-label="6 things need you"]')).toHaveText("6");
@@ -102,11 +95,8 @@ test("deciding a permission from the pane: Deny, then focus is on the next need"
   await expect(pane).toContainText("wants to run `git push origin HEAD`.");
   await expect(pane).toContainText("If you wait:");
   await expect(pane).toContainText("The run stays paused; nothing else in DEVOPS-471 moves.");
-  await expect(pane.getByRole("button", { name: "Open the run" })).toBeVisible();
   await expect(pane.locator("[data-permission-ask]")).toBeVisible();
   const first = (await pane.getAttribute("data-needs-pane"))!;
-  // The decision has the keyboard as it opens.
-  await expect.poll(() => focusInPane(page)).toBe(true);
 
   const run = await runOn(page, "DEVOPS-471");
   expect(await stateOf(page, run.id)).toBe("needsPermission");
@@ -151,8 +141,7 @@ test("approving a draft from the pane writes it to Jira, and focus goes to the n
   await holdBySystem(page, "CA-401", "restart");
   await expect(needsYouCount(page)).toHaveText("2");
 
-  const ws = needsYouRow(page, "CA-401");
-  await expect(ws.locator("[data-needs-you-need]").first()).toBeVisible();
+  await expect(needsStack(page).locator("[data-needs-pane]").first()).toBeVisible();
   await need(page, /Draft comment/).click();
   const pane = needsPane(page);
   await expect(pane).toContainText("drafted a comment on CA-401.");
@@ -160,10 +149,10 @@ test("approving a draft from the pane writes it to Jira, and focus goes to the n
   await expect(pane.locator("article[data-draft]")).toBeVisible();
   expect(await jiraWrites(page)).toEqual([]);
 
-  // Esc goes back to the list with the keyboard on the need's row.
+  // Esc hides the decision and leaves the keyboard on the need's own button.
   await page.keyboard.press("Escape");
   await expect(pane).toHaveCount(0);
-  await expect(need(page, /Draft comment/)).toBeFocused();
+  await expect(needButton(page, /Draft comment/)).toBeFocused();
 
   await need(page, /Draft comment/).click();
   await pane.getByRole("button", { name: "Post comment" }).click();
@@ -178,6 +167,7 @@ test("approving a draft from the pane writes it to Jira, and focus goes to the n
   await expect(needsYouCount(page)).toHaveText("0");
   await expect(needsYouTray(page)).toContainText("Nothing needs you.");
   await expect(pane).toHaveCount(0);
+  await expect(needsStack(page)).toHaveCount(0);
   await expect(homeButton(page)).toHaveAccessibleName("Agents");
   await expect(footer(page)).toHaveText(/nothing needs you$/);
 });
@@ -194,23 +184,18 @@ test("'Approve N safe drafts' approves comments and moves together after one con
   await homeSettled(page);
   await expect(needsYouCount(page)).toHaveText("3");
 
-  const ws = needsYouRow(page, "CA-401");
-  // Folded, there is no batch yet; expanded, it is offered with the number.
-  await foldAll(page);
-  await expect(ws.getByRole("button", { name: /safe drafts/ })).toHaveCount(0);
-  await ws.locator("[data-needs-you-more]").click();
-  const batch = ws.getByRole("button", { name: "Approve 3 safe drafts" });
+  // The detail offers the batch with the number, above its needs.
+  const batch = needsStack(page).getByRole("button", { name: "Approve 3 safe drafts" });
   await batch.click();
-  // The preview opens in the decision pane like any other decision, not inside the cramped list.
+  // The preview opens above the needs like any other decision.
   const pane = needsPane(page);
   await expect(pane).toHaveAttribute("data-kind", "batch");
-  await expect(needsYouTray(page).locator("[data-needs-you-batch-preview]")).toHaveCount(0);
   const preview = pane.locator("[data-needs-you-batch-preview] li");
   await expect(preview).toHaveCount(3);
   await expect(preview.first()).toContainText(/Comment on CA-401|Move CA-401/);
   expect(await jiraWrites(page)).toEqual([]);
 
-  // Cancel keeps them all, and closes the pane.
+  // Cancel keeps them all, and closes the preview.
   await pane.getByRole("button", { name: "Cancel" }).click();
   await expect(pane).toHaveCount(0);
   expect(await jiraWrites(page)).toEqual([]);
@@ -231,7 +216,7 @@ test("a failure stays in Needs you after Agents is opened, and only a Dismiss (o
   await expect(failure).toHaveCount(1);
 
   // Opening Agents (the failed run is on screen there, as it always was) clears nothing.
-  await agentsButton(page).click();
+  await closeWorkstreamSheet(page);
   await expect(page.locator('main article[data-run-id][data-state="failed"]').first()).toBeVisible();
   await page.waitForTimeout(400);
   await expect(page.locator("[data-rail]").getByRole("button", { name: /^Agents/ })).toHaveAccessibleName(`Agents, ${count} things need you`);
@@ -248,7 +233,8 @@ test("a failure stays in Needs you after Agents is opened, and only a Dismiss (o
   await needsPane(page).getByRole("button", { name: "Dismiss" }).click();
   await expect(need(page, /SUP-9/)).toHaveCount(0);
   await expect(needsYouCount(page)).toHaveText(String(count - 1));
-  await agentsButton(page).click();
+  await chip(page, "all").click();
+  await closeWorkstreamSheet(page);
   await expect(page.locator('main article[data-run-id][data-state="failed"]').first()).toBeVisible();
   await expect(page.locator('main article[data-run-id][data-state="failed"]').first().locator("[data-in-needs-you]")).toHaveCount(0);
   // Remembered across a reload.
@@ -303,10 +289,10 @@ test("a sign-in reads 'needs you to sign in to Claude'; a limit stop is in the l
   await expect.poll(() => mockAttached(page)).toContain(signed.id);
 });
 
-test("d on a permission asks for Enter before it denies, and e on a question goes to its answer box", async ({ page }) => {
+test("d on a run's card asks for Enter before it denies, and e goes to the answer box of its question", async ({ page }) => {
   await onHome(page, MANAGED);
-  await expandGeneral(page);
-  const permission = need(page, /DEVOPS-471.*asks to run a command/);
+  const card = (key: string) => agentsHome(page).locator("article[data-run-id]").filter({ hasText: key }).first();
+  const permission = card("DEVOPS-471");
   await permission.focus();
   // The sample's permission is a read-only run's: nothing to allow, so a only opens it; d denies after Enter.
   await page.keyboard.press("d");
@@ -319,8 +305,8 @@ test("d on a permission asks for Enter before it denies, and e on a question goe
   await page.keyboard.press("Enter");
   await expect.poll(() => stateOf(page, run.id)).toBe("working");
 
-  // e on the question focuses its answer box.
-  const question = need(page, /CA-409.*asks a question/);
+  // e on the question opens its decision with the answer box focused.
+  const question = card("CA-409");
   await question.focus();
   await page.keyboard.press("e");
   await expect(needsPane(page).getByRole("textbox", { name: "Your answer" })).toBeFocused();

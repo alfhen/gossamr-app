@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { docText } from "../lib/docs";
 import { higherPriority, needAfter, leftOutLabel, needGroups, repeatedComments, REPEATED_COMMENT_NOTE, type Need } from "../lib/needs";
 import { ALLOW_MORE_STEPS, type Proposal, type ReporterReply, type Run, type WorkstreamView } from "../types";
@@ -18,9 +18,9 @@ import { escalationActions, EscalationCardView, fixRoundSent, postingReview, TAK
 import { failureAction } from "./failureActions";
 import { failureHelp } from "./failureHelp";
 import { inlineStartable, InlineStart, useInlineStarts } from "./InlineStart";
-import { GroupChip } from "./NeedsYou";
-import { groupId, openInWorkstream, openNeed, setPaneIntent, takePaneIntent } from "./needsActions";
-import { chipLabel, editedTitle, openInWorkstreamLabel } from "../lib/needs";
+import { GroupBatch, GroupChip } from "./NeedsYou";
+import { groupId, openNeed, setPaneIntent, takePaneIntent } from "./needsActions";
+import { chipLabel, editedTitle } from "../lib/needs";
 import { PermissionAsk } from "./PermissionAsk";
 import { useWorkView } from "./workViewStore";
 import { RunAnswer } from "./RunAnswer";
@@ -32,32 +32,27 @@ import { BatchConfirm, PlanApproval, confirmBatch, planResultFor } from "./StepR
 import { batchLabel, EDITED_ASIDE, editedPending, freezeBatch, type BatchSnapshot } from "./workViewLogic";
 import { speakQuietToasts, useToasts } from "./toasts";
 import { controlActions, HeldBanner } from "./WorkstreamControls";
-import { openOnAgents, takePlannedAnyway, useWorkstreams } from "./workstreamsStore";
+import { takePlannedAnyway, useWorkstreams } from "./workstreamsStore";
 
-/** The row of `need` in the Needs you strip: its own when the group is expanded, else its group's. */
+const STACK = "[data-workstream-needs]";
+
+/** The header of `need` in its workstream's Needs you stack. */
 function rowFor(need: Need): HTMLElement | null {
-  const list = "[data-agents-strip]";
-  return document.querySelector<HTMLElement>(`${list} [data-need-key="${CSS.escape(need.key)}"]`) ?? document.querySelector<HTMLElement>(`${list} [data-needs-you-group="${groupId(need.workstreamId)}"]`);
+  return document.querySelector<HTMLElement>(`${STACK} [data-need-key="${CSS.escape(need.key)}"]`);
 }
 
-/** Where Esc from a decision puts the keyboard: what opened it (Start my day's Open, say) while that is still on the page and outside the pane, else the need's own row. */
+/** Where Esc from a decision puts the keyboard: what opened it (Start my day's Open, say) while that is still on the page and outside the pane, else the need's own header. */
 export function closeTarget(opener: HTMLElement | null, pane: Pick<Node, "contains"> | null, row: () => HTMLElement | null): HTMLElement | null {
   if (opener && opener.tagName !== "BODY" && opener.isConnected && !pane?.contains(opener)) return opener;
   return row();
 }
 
-/** The Done line's first part: closes the decision and opens that workstream's detail on Agents, which takes the keyboard. */
-function backTo(workstreamId: string) {
-  useWorkView.getState().closeDecision();
-  openOnAgents(workstreamId);
-}
-
 /**
- * Where the keyboard goes once a need is dealt with: the next need in rank order opens in the pane when the pane was on
- * the one dealt with; from a row of the list it lands on the next row. With none left it lands on the list's title,
- * where "Nothing needs you." is said.
+ * Where the keyboard goes once a need is dealt with: the next need of the same workstream, in rank order, opens in its
+ * stack when the stack was on the one dealt with. With none left it lands on the stack's heading and a toast says what was done.
  */
-function useAdvance(needs: readonly Need[], onAdvance: (done: Need, next: Need) => void, onLast: (done: Need) => void) {
+function useAdvance(all: readonly Need[], workstreamId: string | null, onAdvance: (done: Need, next: Need) => void, onLast: (done: Need) => void) {
+  const needs = useMemo(() => all.filter((n) => n.workstreamId === workstreamId), [all, workstreamId]);
   const previous = useRef<string[]>([]);
   const earlier = useRef<readonly Need[]>([]);
   const focused = useRef<string | null>(null);
@@ -78,7 +73,7 @@ function useAdvance(needs: readonly Need[], onAdvance: (done: Need, next: Need) 
     earlier.current = needs;
     const home = useWorkView.getState();
     const deciding = home.deciding;
-    const lands = (next: Need | null) => requestAnimationFrame(() => (next ? rowFor(next) : document.querySelector<HTMLElement>("[data-agents-strip] [data-needs-you-title]"))?.focus());
+    const lands = (next: Need | null) => requestAnimationFrame(() => (next ? rowFor(next) : (document.querySelector<HTMLElement>("[data-workstream-needs-title]") ?? document.getElementById("workstream-sheet")))?.focus());
     if (deciding && before.includes(deciding) && !keys.includes(deciding)) {
       const next = needAfter(before, deciding, needs);
       if (next) {
@@ -627,26 +622,27 @@ function Decision({ need }: { need: Need }) {
   }
 }
 
-/** The pane's frame: what is asked and why, what waiting does, a way to the workstream and back, then the decision. */
-function NeedDecision({ need }: { need: Need }) {
+/** One need in its workstream's stack: what is asked and why, always shown; what waiting does and the decision once it is open. */
+function NeedItem({ need, open }: { need: Need; open: boolean }) {
   const root = useRef<HTMLElement>(null);
-  // What had the keyboard when the pane opened: Esc gives it back there, which is not Needs you's row when the need came from Start my day.
-  const opener = useRef<HTMLElement | null>(null);
-  if (opener.current === null && typeof document !== "undefined") opener.current = document.activeElement as HTMLElement | null;
+  const focusRev = useWorkView((s) => s.focusRev);
   const close = () => {
     useWorkView.getState().closeDecision();
-    requestAnimationFrame(() => closeTarget(opener.current, root.current, () => rowFor(need))?.focus());
+    requestAnimationFrame(() => rowFor(need)?.focus());
   };
-  // Opened, the keyboard goes to the pane's heading, whatever kind of need it is, so a screen reader hears what was opened and Tab reaches the decision; "e" opens an edit where the card has one.
+  const openIt = () => (setPaneIntent("card"), useWorkView.getState().decide(need.key));
+  // Opened by a key or a link, the keyboard goes to the heading, whatever kind of need it is, so a screen reader hears what was opened and Tab reaches the decision; "e" opens an edit where the card has one. Opened by the stack's own default or a click, it stays where it is.
   useEffect(() => {
+    if (!open) return;
     const intent = takePaneIntent();
+    if (!intent) return;
     let frame = 0;
     let tries = 0;
     let clicked = false;
     const go = () => {
       const el = root.current;
       if (!el) return;
-      // The pane sits under the strip in a scrolling page: it is brought into view as it takes the keyboard.
+      // It is brought into view as it takes the keyboard.
       el.scrollIntoView?.({ block: "nearest" });
       if (intent !== "edit") {
         paneStop(el).focus({ preventScroll: true });
@@ -678,9 +674,9 @@ function NeedDecision({ need }: { need: Need }) {
     };
     go();
     return () => cancelAnimationFrame(frame);
-  }, []);
+  }, [open, focusRev]);
   const onKeyDown = (ev: KeyboardEvent<HTMLElement>) => {
-    if (ev.key !== "Escape" || ev.defaultPrevented || ev.metaKey || ev.ctrlKey || ev.altKey) return;
+    if (!open || ev.key !== "Escape" || ev.defaultPrevented || ev.metaKey || ev.ctrlKey || ev.altKey) return;
     const target = ev.target as HTMLElement;
     // A confirmation that takes Esc itself keeps it.
     if (target.closest("[data-esc-local]")) return;
@@ -696,16 +692,17 @@ function NeedDecision({ need }: { need: Need }) {
     <section
       ref={root}
       tabIndex={-1}
-      aria-label="Decision"
+      aria-label={`Needs you: ${paneTitle.title}`}
       data-needs-pane={need.key}
+      data-open={open || undefined}
       data-kind={need.kind}
       data-group={need.group}
       onKeyDown={onKeyDown}
-      // The pane scrolls in its place. Its drafts' action bars stay where the card ends (a sticky one would float over the text and the review comments beneath it), so a long diff scrolls in a box of its own and the bar sits right under it.
-      className="grid max-h-[min(70vh,40rem)] min-h-0 shrink-0 content-start gap-2 overflow-y-auto border-b border-ws-sep bg-ws-bar px-4 py-2.5 outline-none [&_[data-draft-actions]]:static [&_[data-diff]]:max-h-[min(50vh,28rem)] [&_[data-diff]]:overflow-y-auto"
+      // A draft's action bar stays where its card ends: a sticky one would float over the text and the review comments beneath it.
+      className="grid content-start gap-2 rounded-lg border border-ws-sep bg-ws-bar px-3 py-2 outline-none [&_[data-draft-actions]]:static [&_[data-diff]]:max-h-[min(50vh,28rem)] [&_[data-diff]]:overflow-y-auto"
     >
-      {/* Kept in view while the decision under it scrolls: what is asked and why stays on screen. */}
-      <header className="sticky -top-2.5 z-[2] -mx-4 -mt-2.5 flex items-start gap-2 bg-ws-bar px-4 pt-2.5 pb-1">
+      {/* Pressing anywhere on a closed need opens it; the button is the same for the keyboard. */}
+      <header data-need-row={need.key} data-kind={need.kind} data-group={need.group} onClick={open ? undefined : openIt} className={`flex items-start gap-2 ${open ? "" : "cursor-pointer"}`}>
         <div className="grid min-w-0 flex-1 gap-0.5">
           <div className="flex min-w-0 flex-wrap items-center gap-1.5 text-xs text-ws-ink3">
             {need.head && (
@@ -714,7 +711,7 @@ function NeedDecision({ need }: { need: Need }) {
               </b>
             )}
             <GroupChip group={need.group} label={chipLabel(need)} />
-            <span data-needs-pane-title role="heading" aria-level={2} tabIndex={-1} className="min-w-0 truncate rounded focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip">
+            <span data-needs-pane-title data-needs-you-need-title title={paneTitle.title} role="heading" aria-level={3} tabIndex={-1} className="line-clamp-2 min-w-0 rounded focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip">
               {paneTitle.title}
             </span>
             {paneTitle.edited && (
@@ -726,32 +723,27 @@ function NeedDecision({ need }: { need: Need }) {
           <p data-needs-why className="m-0 text-sm font-semibold text-ws-ink [overflow-wrap:anywhere]">
             {need.why}
           </p>
-          <p data-needs-if-you-wait className="m-0 text-sm text-ws-ink2 [overflow-wrap:anywhere]">
-            <span className="font-semibold">If you wait:</span> {need.ifYouWait}
-          </p>
+          {open && (
+            <p data-needs-if-you-wait className="m-0 text-sm text-ws-ink2 [overflow-wrap:anywhere]">
+              <span className="font-semibold">If you wait:</span> {need.ifYouWait}
+            </p>
+          )}
         </div>
-        <span className="flex shrink-0 items-center gap-2 text-sm">
-          <button
-            type="button"
-            onClick={() => openInWorkstream(need)}
-            className="rounded font-semibold text-ws-accent hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip"
-          >
-            {openInWorkstreamLabel(need)}
-          </button>
-          <button
-            type="button"
-            aria-label="Back to the list"
-            title="Back to the list (Esc)"
-            onClick={close}
-            className="rounded px-1.5 text-ws-ink3 hover:bg-ws-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip"
-          >
-            ×
-          </button>
-        </span>
+        <button
+          type="button"
+          data-need-key={need.key}
+          aria-expanded={open}
+          onClick={(ev) => (ev.stopPropagation(), open ? close() : openIt())}
+          className="shrink-0 rounded px-2 py-px text-sm font-semibold text-ws-accent hover:bg-ws-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip"
+        >
+          {open ? "Hide" : "Decide"}
+        </button>
       </header>
-      <div data-needs-pane-body className="grid gap-2">
-        <Decision need={need} />
-      </div>
+      {open && (
+        <div data-needs-pane-body className="grid gap-2">
+          <Decision need={need} />
+        </div>
+      )}
     </section>
   );
 }
@@ -774,11 +766,11 @@ function BatchDecision({ gid, needs }: { gid: string; needs: readonly Need[] }) 
   const [outcome, setOutcome] = useState<{ text: string; failed: boolean } | null>(null);
   // Comments with the text of an earlier one in the group are not in the batch; the confirm says so.
   const [leftOut] = useState(() => repeatedComments([group?.top, ...(group?.rest ?? [])].flatMap((n) => (n?.target.type === "draft" && proposals[n.target.id] ? [proposals[n.target.id]] : [])).sort((a, b) => a.createdAt.localeCompare(b.createdAt) || (a.id < b.id ? -1 : 1))));
-  const [title] = useState(() => group?.ticketKey ?? group?.title ?? "General");
+  const [title] = useState(() => group?.ticketKey ?? group?.title ?? "No workstream");
   const root = useRef<HTMLElement>(null);
   const close = () => {
     useWorkView.getState().closeDecision();
-    requestAnimationFrame(() => document.querySelector<HTMLElement>(`[data-agents-strip] [data-needs-you-group="${CSS.escape(gid)}"]`)?.focus());
+    requestAnimationFrame(() => (document.querySelector<HTMLElement>("[data-workstream-needs-title]") ?? document.getElementById("workstream-sheet"))?.focus());
   };
   const confirm = async (covered: BatchSnapshot) => {
     setFrozen(null);
@@ -805,10 +797,11 @@ function BatchDecision({ gid, needs }: { gid: string; needs: readonly Need[] }) 
       tabIndex={-1}
       aria-label="Decision"
       data-needs-pane={`batch:${gid}`}
+      data-open
       data-kind="batch"
       data-group="approve"
       onKeyDown={onKeyDown}
-      className="grid max-h-[min(70vh,40rem)] min-h-0 shrink-0 content-start gap-2 overflow-y-auto border-b border-ws-sep bg-ws-bar px-4 py-2.5 outline-none"
+      className="grid content-start gap-2 rounded-lg border border-ws-sep bg-ws-bar px-3 py-2 outline-none"
     >
       <header className="flex items-start gap-2">
         <div className="grid min-w-0 flex-1 gap-0.5">
@@ -875,22 +868,42 @@ function BatchDecision({ gid, needs }: { gid: string; needs: readonly Need[] }) 
   );
 }
 
+
 /**
- * The Needs you decision, open inline under the strip on Agents: the need chosen in the list (`deciding`), or a group's "Approve N safe drafts" preview (`batch`), with what
- * it asks and what waiting does, decided with the same components the cards and the run sheet use. Once it is dealt with
- * the next need opens in its place; with none left the pane closes and the list says "Nothing needs you."
+ * A workstream's decisions, at the top of its detail under "Needs you": one item for each need it holds, most urgent first,
+ * the one in `deciding` open (the top one until another is chosen), or a "Approve N safe drafts" preview (`batch`). They are
+ * decided with the same components the cards and the run sheet use; once one is dealt with the next opens in its place.
+ * `workstreamId` null is the runs and drafts that belong to no workstream.
  */
-export function NeedsPane({ needs }: { needs: readonly Need[] }) {
+export function WorkstreamNeeds({ needs, workstreamId }: { needs: readonly Need[]; workstreamId: string | null }) {
   const deciding = useWorkView((s) => s.deciding);
+  const batch = useWorkView((s) => s.batch);
   const paneRev = useWorkView((s) => s.paneRev);
+  const ranked = useMemo(() => needs.filter((n) => n.workstreamId === workstreamId), [needs, workstreamId]);
+  // A need's age changing as it is acted on must not move it: a reordered DOM node loses the keyboard. The order is the rank's while the set of needs is the same, and re-read when it changes.
+  const order = useRef<{ set: string; keys: string[] }>({ set: "", keys: [] });
+  const mine = useMemo(() => {
+    const set = [...ranked.map((n) => n.key)].sort().join("\n");
+    if (order.current.set !== set) order.current = { set, keys: ranked.map((n) => n.key) };
+    const byKey = new Map(ranked.map((n) => [n.key, n]));
+    return order.current.keys.map((k) => byKey.get(k)!);
+  }, [ranked]);
   const [advanced, setAdvanced] = useState<Advanced | null>(null);
   const lastId = useRef(0);
-  useAdvance(needs, (done, next) =>
-    setAdvanced((prev) => nextAdvanced(prev ?? { id: lastId.current, text: "" }, advancedText(done, next, waitStarted(done, useWorkspace.getState().proposals), postedFor(done, useWorkspace.getState().proposals), skippedDraft(done, useWorkspace.getState().proposals)), done.workstreamId ? { workstreamId: done.workstreamId, label: doneText(done, postedFor(done, useWorkspace.getState().proposals), skippedDraft(done, useWorkspace.getState().proposals)) } : undefined, done.key, next.key, !!waitStarted(done, useWorkspace.getState().proposals))),
+  useAdvance(
+    needs,
+    workstreamId,
+    (done, next) => {
+      const proposals = useWorkspace.getState().proposals;
+      const posted = postedFor(done, proposals);
+      const skipped = skippedDraft(done, proposals);
+      const waits = !!waitStarted(done, proposals);
+      setAdvanced((prev) => nextAdvanced(prev ?? { id: lastId.current, text: "" }, advancedText(done, next, waitStarted(done, proposals), posted, skipped), undefined, done.key, next.key, waits));
+    },
     (done) => {
       const proposals = useWorkspace.getState().proposals;
       const text = lastNeedText(done, proposals);
-      // No pane line follows the last need, so a skip's toast is the one place it is said (G6).
+      // No line follows the last need, so a skip's toast is the one place it is said (G6).
       if (!text) return skippedDraft(done, proposals) ? speakQuietToasts() : undefined;
       if (waitStarted(done, proposals)) pushWaitToast(text, done.workstreamId);
       else useToasts.getState().push(text, "info");
@@ -898,36 +911,45 @@ export function NeedsPane({ needs }: { needs: readonly Need[] }) {
   );
   const list = useWorkstreams((s) => s.list);
   useEffect(() => {
-    if (advancedUndone(advanced, needs) || advancedStale(advanced, deciding, list)) setAdvanced(null);
-  }, [advanced, needs, deciding, list]);
+    if (advancedUndone(advanced, mine) || advancedStale(advanced, deciding, list)) setAdvanced(null);
+  }, [advanced, mine, deciding, list]);
   useEffect(() => {
     if (!advanced) return;
     lastId.current = advanced.id;
     const timer = setTimeout(() => setAdvanced(null), ADVANCED_MS);
     return () => clearTimeout(timer);
   }, [advanced]);
-  const batch = useWorkView((s) => s.batch);
-  const need = needs.find((n) => n.key === deciding);
-  if (batch !== null) return <BatchDecision key={batch} gid={batch} needs={needs} />;
-  if (!need) return null;
+
+  // The most urgent need is open when the detail opens, unless something already chose one of these.
+  const keys = useRef<string[]>([]);
+  keys.current = mine.map((n) => n.key);
+  useEffect(() => {
+    const view = useWorkView.getState();
+    if (keys.current.length && view.batch === null && !(view.deciding && keys.current.includes(view.deciding))) view.expandNeed(keys.current[0]);
+  }, []);
+
+  const gid = groupId(workstreamId);
+  const group = useMemo(() => needGroups(mine)[0], [mine]);
+  const showBatch = batch === gid;
+  if (!mine.length && !showBatch) return null;
   return (
-    <>
+    <section data-workstream-needs={gid} aria-label="Needs you" className="grid gap-2">
+      <h3 data-workstream-needs-title tabIndex={-1} className="m-0 flex items-center gap-2 rounded text-xs font-semibold tracking-[0.05em] text-ws-ink2 uppercase focus-visible:outline-2 focus-visible:outline-ws-pip">
+        Needs you
+        <span data-workstream-needs-count className="rounded-full bg-ws-pip px-1.5 text-[10px] leading-4 text-ws-on-pip">
+          {mine.length}
+        </span>
+      </h3>
       {advanced && (
-        <p key={advanced.id} role="status" data-needs-advanced className="m-0 shrink-0 border-b border-ws-sep bg-ws-bar px-3 py-1 text-sm text-ws-ink2 [overflow-wrap:anywhere]">
-          {advanced.back ? (
-            <>
-              <button type="button" data-needs-advanced-back onClick={() => backTo(advanced.back!.workstreamId)} className="rounded text-left underline underline-offset-2 hover:text-ws-pip focus-visible:outline-2 focus-visible:outline-ws-pip">
-                {advanced.back.label}
-              </button>
-              {advanced.text.slice(advanced.back.label.length)}
-            </>
-          ) : (
-            advanced.text
-          )}
+        <p key={advanced.id} role="status" data-needs-advanced className="m-0 text-sm text-ws-ink2 [overflow-wrap:anywhere]">
+          {advanced.text}
         </p>
       )}
-      <HigherPriority key={need.key} needs={needs} need={need} />
-      <NeedDecision key={`${need.key}:${paneRev}`} need={need} />
-    </>
+      {group && <GroupBatch group={group} />}
+      {showBatch && <BatchDecision key={batch} gid={batch} needs={needs} />}
+      {mine.map((n) => (
+        <NeedItem key={`${n.key}:${paneRev}`} need={n} open={!showBatch && n.key === deciding} />
+      ))}
+    </section>
   );
 }

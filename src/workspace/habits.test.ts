@@ -90,7 +90,7 @@ describe("Draft a nudge", () => {
     expect(text.length).toBeLessThan(300);
     expect(backend.proposals.writes).toEqual([]);
     expect(events(id).find((e) => e.action === "reporter_nudged")).toMatchObject({ actor: "person", proposalId: nudge.id });
-    // The decision opens in the pane under the Needs you strip, with its card focused so Post comment is not one key away.
+    // The decision opens at the top of its workstream's detail, with its card focused so Post comment is not one key away.
     expect(useWorkView.getState()).toMatchObject({ deciding: `draft:${nudge.id}` });
   });
 

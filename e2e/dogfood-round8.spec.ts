@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { advanceRuns, agentsHome, askPip, commentOnTicket, holdBySystem, homeSettled, jiraWrites, mockRuns, needsPane, needsYouRow, needsYouTray, openAgents, openApp, paneSettled as settled, peekSheet, peekTicket, pipPane, selectWorkstream, startWorkstream } from "./support/app";
+import { advanceRuns, agentsHome, askPip, commentOnTicket, holdBySystem, homeSettled, jiraWrites, mockRuns, needsPane, openAgents, openApp, paneSettled as settled, peekSheet, peekTicket, pipPane, selectWorkstream, startWorkstream, openNeedRow, needsStack } from "./support/app";
 
 // Fixes from the eighth dogfood round: what the Decide pane's line says was posted, where the pane goes after the last need,
 // the left column's heights, the timeline's words for asks and rule-started runs, and the plan draft's Build.
@@ -13,9 +13,9 @@ test.describe("the Decide pane's Done line (G5)", () => {
     await selectWorkstream(page, "CA-401");
     await askPip(page, "Draft a comment");
     await homeSettled(page);
-    await needsYouTray(page).locator("[data-needs-you-group], [data-needs-you-need]").filter({ hasText: /Pip drafted a comment/ }).first().click();
+    await openNeedRow(page, /Pip drafted a comment/);
     await holdBySystem(page, "CA-401", "restart");
-    await expect(needsYouRow(page, "CA-401")).toContainText("Held after a restart");
+    await expect(needsStack(page)).toContainText("Held after a restart");
     await needsPane(page).getByRole("button", { name: "Post comment" }).click();
     await expect(page.locator("[data-needs-advanced]")).toHaveText(/^Posted to Jira: Draft comment: “[^”]+” on CA-401\. Now: CA-401 · Held after a restart$/);
   });

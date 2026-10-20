@@ -1,5 +1,5 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
-import { agentsHome, askPip, expandAllNeeds, expandNeedsYou, homeSettled, jiraWrites, needRow, needsPane, needsYouCount, needsYouRow, openAgents, openApp, selectWorkstream, startMyDay, startWorkstream } from "./support/app";
+import { agentsHome, askPip, expandAllNeeds, expandNeedsYou, homeSettled, jiraWrites, needsPane, needsYouCount, openAgents, openApp, selectWorkstream, startMyDay, startWorkstream, openNeedRow, needsStack } from "./support/app";
 
 // Fixes from the tenth dogfood round: the long description draft in the Decision pane keeping its actions in view (G10), Plan my
 // week showing its three picks (G13), the posting pause saying what tripped it, one sentence for each risk (G4), and a batch that
@@ -22,7 +22,7 @@ test.describe("a long description draft in the Decision pane (G10)", () => {
     await openApp(page, "runs=kinds");
     await openAgents(page);
     await expandAllNeeds(page);
-    await needRow(page, /Approve the plan/).click();
+    await openNeedRow(page, /Approve the plan/);
     const pane = needsPane(page);
     const draft = pane.getByRole("article", { name: /Update the description of CA-401/ });
     await expect(draft).toBeVisible();
@@ -87,7 +87,7 @@ test.describe("Approve N safe drafts with two identical comments (G2)", () => {
     }
     await expect(needsYouCount(page)).toHaveText("4");
     await expandNeedsYou(page, "CA-401");
-    const ws = needsYouRow(page, "CA-401");
+    const ws = needsStack(page);
     await expect(ws.getByRole("button", { name: "Approve 4 safe drafts" })).toHaveCount(0);
     await ws.getByRole("button", { name: "Approve 3 safe drafts" }).click();
     const pane = needsPane(page);

@@ -41,7 +41,7 @@ describe("opening a need with an intent", () => {
   it("clears a stale intent when the next action is not Edit", () => {
     openNeed(need("a"), { edit: true });
     openNeed(need("b"));
-    expect(takePaneIntent()).toBeNull();
+    expect(takePaneIntent()).toBe("card");
   });
 });
 

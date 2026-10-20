@@ -7,7 +7,7 @@ import { useWorkspace } from "../workspaceStore";
 import { clearSentence } from "../lib/archiveRuns";
 import { INSTALL_URL, failureHelp, type FailureAct } from "./failureHelp";
 import { copyText } from "./AgentSheet";
-import { KIND_LABEL, NO_FILTERS, agentGroups, stepRun, stopAllText, type AgentFilters } from "./agentsLogic";
+import { KIND_LABEL, NO_FILTERS, agentGroups, stepRun, stopAllText, type AgentFilters, type NeedsScope } from "./agentsLogic";
 import { showDraft } from "./draftTicket";
 import { openTicketByKey, showMe } from "./jump";
 import { forgetSettledAnswers } from "./keptAnswers";
@@ -186,8 +186,19 @@ export function permissionConfirmation(run: Pick<Run, "lastProgressAt" | "permis
 
 const idle = { runs: [] as Run[], archived: [] as Run[], launching: new Set<string>() as ReadonlySet<string>, status: "idle" as const, error: null, environment: null, selectedId: null, sheet: null as RunSheetTarget | null, afterIntro: null, afterIntroWhat: null, browseOrder: null, picking: false };
 
+// Set by needsActions, which can read Needs you; this store cannot import it without a cycle.
+let noticeOpener: ((runId: string) => void) | null = null;
+let scopeSource: () => NeedsScope | undefined = () => undefined;
+export const setNoticeOpener = (open: (runId: string) => void, scope?: () => NeedsScope) => {
+  noticeOpener = open;
+  if (scope) scopeSource = scope;
+};
+
+/** Which runs and workstreams hold a need right now, for the Needs you filter. */
+export const currentNeedsScope = () => scopeSource();
+
 /** The order the Agents view lists runs in right now, grouped as it is. */
-const liveOrder = (s: Pick<RunsState, "runs" | "filters" | "earlierOpen">) => agentGroups(usePrefs.getState().agentsGroup, s.runs, useWorkstreams.getState().list, s.filters, s.earlierOpen, Date.now()).order;
+const liveOrder = (s: Pick<RunsState, "runs" | "filters" | "earlierOpen">) => agentGroups(usePrefs.getState().agentsGroup, s.runs, useWorkstreams.getState().list, s.filters, s.earlierOpen, Date.now(), currentNeedsScope()).order;
 
 /** A run that was dismissed and has moved on (it retried, was resumed, carried on) starts over: if it fails or stops again, Needs you has it again. */
 const DISMISSABLE: readonly Run["state"][] = ["failed", "stopped", "unknown"];
@@ -344,7 +355,7 @@ export const useRuns = create<RunsState>((set, get) => ({
     get().dispose();
     set({ backend, ...idle, status: "loading" });
     const offChanged = backend.onRunsChanged(() => void get().reload());
-    const offOpen = backend.onOpenRun((id) => get().openRun(id));
+    const offOpen = backend.onOpenRun((id) => (noticeOpener ? noticeOpener(id) : get().openRun(id)));
     stop = () => (offChanged(), offOpen());
     void get().reload();
     void get().checkEnvironment();

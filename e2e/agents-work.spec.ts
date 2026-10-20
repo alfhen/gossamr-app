@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { agentsHome, askPip, closeWorkstreamSheet, foldAllNeeds, holdBySystem, homeConversation, homeConversationRegion, homeSettled, jiraWrites, mockRuns, needOfKind, needsPane, needsPaneHeading, needsYouCount, needsYouTray, openAgents, openApp, openPip, peekSheet, pipPane, selectWorkstream, startWorkstream, stepChip, stepRail, workstreamGroup } from "./support/app";
+import { agentsHome, askPip, closeWorkstreamSheet, holdBySystem, homeConversation, homeConversationRegion, homeSettled, jiraWrites, mockRuns, needOfKind, needsPane, needsPaneHeading, needsYouCount, needsYouTray, openAgents, openApp, openNeedOfKind, openPip, pipPane, selectWorkstream, startWorkstream, stepChip, stepRail, workstreamGroup } from "./support/app";
 
 /** The rail's Agents button. */
 const homeButton = (page: Page) => page.locator("[data-rail]").getByRole("button", { name: /^Agents/ });
@@ -45,7 +45,7 @@ test("Needs you: Pip's investigation draft waits in the list and on its row, ope
   // From General, the need selects the workstream again and opens its decision, with the draft's own Skip.
   await closeWorkstreamSheet(page);
   await expect(homeConversation(page)).toHaveText("General");
-  await item.click();
+  await openNeedOfKind(page, "runStart");
   await expect(needsPane(page)).toContainText("it starts only when you approve it.");
   await expect(needsPane(page)).toContainText("If you wait: Nothing starts until you approve it.");
 
@@ -83,7 +83,7 @@ test("Needs you: a hold the person chose is no need, so the header says 'Held by
   await expect(row.locator("[data-status]")).toHaveText("Needs you");
   await expect(row.locator("[data-status-detail]")).toHaveText("· Held after a restart");
   await closeWorkstreamSheet(page);
-  await held.click();
+  await openNeedOfKind(page, "hold");
   const resume = needsPane(page).locator("[data-held-banner]").getByRole("button", { name: "Resume" });
   await expect(needsPaneHeading(page)).toBeFocused();
   await resume.focus();
@@ -99,10 +99,6 @@ test("Needs you from the board: the rail's Agents popover lists the same rows an
   await askPip(page, "investigate this");
   await settled(page);
   await holdBySystem(page, "CA-401", "restart");
-  await foldAllNeeds(page);
-  const onHome = await needsYouTray(page).locator("[data-needs-you-group]").allTextContents();
-  expect(onHome).toHaveLength(1);
-  expect(onHome[0]).toContain("Held after a restart");
   const total = Number(await needsYouCount(page).innerText());
   expect(total).toBe(2);
 
@@ -115,7 +111,7 @@ test("Needs you from the board: the rail's Agents popover lists the same rows an
   const popover = page.getByRole("dialog", { name: "Needs you" });
   await expect(popover.locator("[data-needs-you-count]")).toHaveText(String(total));
   await expect(popover.locator("[data-needs-you-group]")).toHaveCount(1);
-  expect((await popover.locator("[data-needs-you-group]").allTextContents()).map(withoutAge)).toEqual(onHome.map(withoutAge));
+  expect((await popover.locator("[data-needs-you-group]").allTextContents()).map(withoutAge)[0]).toContain("Held after a restart");
 
   // Esc closes it and leaves the board as it was.
   await page.keyboard.press("Escape");
@@ -189,18 +185,16 @@ test("the rail's batch button approves Pip's two comments and never the descript
   await openAgents(page);
   await selectWorkstream(page, "CA-401");
   const section = stepRail(page).getByRole("region", { name: "Pip's drafts" });
-  const rewrite = section.getByRole("article", { name: "Update the description of CA-401" });
+  // The description update is a decision, so it is the one open at the top of the detail, and not repeated in the rail.
+  const rewrite = needsPane(page).getByRole("article", { name: "Update the description of CA-401" });
   await expect(rewrite).toHaveAttribute("data-state", "pending");
   await section.getByRole("button", { name: "Approve 2 of Pip's drafts" }).click();
   await section.getByRole("button", { name: "Yes, approve 2" }).click();
-  await expect(section.locator("[data-batch-outcome]")).toHaveText("Approved 2.");
   await expect.poll(async () => (await jiraWrites(page)).map((w) => w.type)).toEqual(["comment", "comment"]);
   await expect(rewrite).toHaveAttribute("data-state", "pending");
   await expect(section.getByRole("button", { name: /^Approve \d+ of / })).toHaveCount(0);
 
-  // The update is read in its diff, in the peek, and approved only there.
-  await rewrite.getByRole("button", { name: "Review on CA-401 →" }).click();
-  await expect(peekSheet(page)).toHaveAttribute("aria-label", "Details for CA-401");
-  await expect(peekSheet(page).getByRole("button", { name: "Update description" })).toBeVisible();
+  // The update is read in its diff and approved only there.
+  await expect(rewrite.getByRole("button", { name: /Update description/ }).first()).toBeVisible();
   expect((await jiraWrites(page)).map((w) => w.type)).toEqual(["comment", "comment"]);
 });

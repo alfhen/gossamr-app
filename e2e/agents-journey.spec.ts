@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { advanceRuns, agentsHome, agentsSettled, closeWorkstreamSheet, expandNeedsYou, expectPeekInPlace, finishOnHome, githubWrites, holdBySystem, homeConversation, homeConversationRegion, homeRunCards, homeSettled, inlineStart, jiraWrites, mockRuns, needRow, needsPane, needsPaneHeading, needsYouCount, needsYouTray, openAgents, openApp, peekSheet, scriptNextRun, selectWorkstream, setBudget, startWorkstream, stepChip, stepRail, surfacePullRequests, workstreamEvents, workstreamGroup } from "./support/app";
+import { advanceRuns, agentsHome, agentsSettled, closeWorkstreamSheet, expandNeedsYou, expectPeekInPlace, finishOnHome, githubWrites, holdBySystem, homeConversation, homeConversationRegion, homeRunCards, homeSettled, inlineStart, jiraWrites, mockRuns, needRow, needsPane, needsPaneHeading, needsYouCount, needsYouTray, openAgents, openApp, peekSheet, scriptNextRun, selectWorkstream, setBudget, startWorkstream, stepChip, stepRail, surfacePullRequests, workstreamEvents, workstreamGroup, openNeedRow, needsStack, openRunOf } from "./support/app";
 
 // A workstream in Manage mode, with pull requests shown only when a test says: the setting the phase's scenarios share.
 // GitHub is signed in with a catalog small enough to be watched whole, so the agents' repository is watched, as the
@@ -228,14 +228,13 @@ test("the Needs you list ranks a hold ahead of a draft to approve, opens each in
   await expect(row.locator("[data-status]")).toHaveText("Needs you");
   await expect(row.locator("[data-status-detail]")).toHaveText("· 2 waiting");
   // One row for the workstream; what is stuck (the hold) ranks ahead of a draft to approve, however old each is (R2).
-  await expect(needsYouTray(page).locator("[data-needs-you-row]")).toHaveCount(1);
   await expandNeedsYou(page, "CA-401");
-  const titles = needsYouTray(page).locator("[data-needs-you-need-title]");
+  const titles = needsStack(page).locator("[data-needs-you-need-title]");
   await expect(titles).toHaveText(["Held after a restart", "Start Investigate"]);
 
   // From General, the draft's need selects the workstream again and opens its decision; skipped there, it leaves.
   await closeWorkstreamSheet(page);
-  await needRow(page, "Start Investigate").click();
+  await openNeedRow(page, "Start Investigate");
   await expect(needsPane(page)).toContainText("drafted an Investigate agent for CA-401");
   await needsPane(page).getByRole("button", { name: "Skip" }).click();
   await expect(needRow(page, "Start Investigate")).toHaveCount(0);
@@ -263,9 +262,9 @@ test("a failed run waits in the list under General, opens its decision, and stay
   await expect(failed).toHaveAttribute("data-kind", "failure");
   await failed.click();
   await expect(needsPane(page)).toContainText("Trust this folder in Terminal");
-  // Its link opens the run's sheet over Pip home.
-  await needsPane(page).getByRole("button", { name: "Open the run" }).click();
-  const sheet = page.getByRole("dialog").filter({ hasText: "SUP-9" });
+  // The run's own card opens its sheet over Agents.
+  await openRunOf(page, "SUP-9");
+  const sheet = page.getByRole("dialog", { name: "Agent run" });
   await expect(sheet.first()).toBeVisible();
   await expect(agentsHome(page)).toBeVisible();
   await page.keyboard.press("Escape");

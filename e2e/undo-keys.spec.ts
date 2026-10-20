@@ -1,5 +1,5 @@
-import { expect, test, type Locator, type Page } from "@playwright/test";
-import { advanceRuns, agentsHome, askPermission, askPip, expectToast, foldAllNeeds, homeComposer, homeConversationRegion, homeSettled, jiraWrites, mockRuns, needOfKind, needsPane, openAgents, openApp, openPip, peekSheet, peekTicket, PIP_INPUT, pipConversation, pipPane, selectWorkstream, startWorkstream, workstreamEvents, workstreamGroup } from "./support/app";
+import { expect, test, type Page } from "@playwright/test";
+import { advanceRuns, agentsHome, askPermission, askPip, expectToast, homeComposer, homeConversationRegion, homeSettled, jiraWrites, mockRuns, needOfKind, needsPane, openAgents, openApp, openPip, peekSheet, peekTicket, PIP_INPUT, pipConversation, pipPane, selectWorkstream, startWorkstream, workstreamEvents, workstreamGroup, openNeedOfKind, workstreamSheet } from "./support/app";
 
 // Step 4 of the UX overhaul: less ceremony. Reversible actions (skipping a draft, dismissing a failure, holding a
 // workstream, switching it to Advise) act at once and offer Undo for about 8 seconds, instead of asking first; what reaches
@@ -297,10 +297,9 @@ test("Cmd/Ctrl+K on a focused permission need offers Allow once and Deny, and De
   const build = await workingBuild(page);
   await askPermission(page, build.id, `approve Bash: git push -u origin worktree-${build.name}`);
   await openAgents(page);
-  await foldAllNeeds(page);
-  const need: Locator = needOfKind(page, "permission");
-  await expect(need).toContainText("R4 wants to run `git push -u origin");
-  await need.focus();
+  await openNeedOfKind(page, "permission");
+  await expect(needOfKind(page, "permission")).toContainText("R4 wants to run `git push -u origin");
+  await workstreamSheet(page).locator('[data-needs-pane][data-kind="permission"] button[data-need-key]').focus();
 
   await page.keyboard.press("ControlOrMeta+k");
   const palette = page.getByRole("dialog", { name: "Command palette" });
@@ -323,7 +322,7 @@ test("Cmd/Ctrl+K on a focused permission need offers Allow once and Deny, and De
   await expect.poll(async () => (await mockRuns(page)).find((r) => r.id === build.id)?.state).toBe("working");
   const denied = (await workstreamEvents(page)).filter((e) => e.action === "permission_denied");
   expect(denied.map((e) => ({ actor: e.actor, runId: e.runId }))).toEqual([{ actor: "person", runId: build.id }]);
-  await expect(need).toHaveCount(0);
+  await expect(needOfKind(page, "permission")).toHaveCount(0);
 });
 
 test("Cmd/Ctrl+K reaches Hold and Advise for the selected workstream, and 'Approve all safe drafts' shows what it would approve", async ({ page }) => {

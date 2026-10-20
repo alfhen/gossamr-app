@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { expandNeedsYou, expectToast, mockRuns, needRow, needsPane, needsYouTray, openAgents, openApp } from "./support/app";
+import { expandNeedsYou, expectToast, mockRuns, needsPane, needsYouTray, openAgents, openApp, openNeedRow, needsStack } from "./support/app";
 
 // Fixes from the fourth dogfood round: Deny asks before it tells the agent no on a Build, Needs-you titles wrap instead of
 // truncating, and the Decisions count leaves out bookkeeping.
@@ -13,7 +13,7 @@ async function onPermission(page: Page) {
   await expect(needsYouTray(page)).toBeVisible();
   await expandNeedsYou(page, "General");
   const run = (await mockRuns(page)).find((r) => r.key === "DEVOPS-471")!;
-  await needRow(page, /DEVOPS-471.*asks to run a command/).click();
+  await openNeedRow(page, /DEVOPS-471.*asks to run a command/);
   const pane = needsPane(page);
   await expect(pane.locator("[data-permission-ask]")).toBeVisible();
   return { run, pane };
@@ -36,11 +36,10 @@ test.describe("Needs-you titles wrap (F10)", () => {
     await openApp(page);
     await openAgents(page);
     await expandNeedsYou(page, "General");
-    const title = needsYouTray(page).locator("[data-needs-you-need-title]").first();
+    const title = needsStack(page).locator("[data-needs-you-need-title]").first();
     await expect(title).toBeVisible();
     expect(await title.evaluate((el) => getComputedStyle(el).webkitLineClamp)).toBe("2");
     expect(await title.getAttribute("title")).toBeTruthy();
-    expect(await needsYouTray(page).locator("[data-needs-you-title]").evaluate((el) => getComputedStyle(el).position)).toBe("sticky");
   });
 });
 
@@ -56,9 +55,8 @@ test.describe("keys inside the open decision, the palette's Agents and Undo (F2,
     await expect(page.locator("main").getByRole("heading", { name: "Agents", exact: true })).toBeVisible();
   });
 
-  test("a General run need's link says it opens the run", async ({ page }) => {
+  test("a need in no workstream has no link to a workstream", async ({ page }) => {
     const { pane } = await onPermission(page);
-    await expect(pane.getByRole("button", { name: "Open the run" })).toBeVisible();
     await expect(pane.getByRole("button", { name: "Open in workstream" })).toHaveCount(0);
   });
 });

@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { advanceRuns, askPip, commentOnTicket, editTicket, expandNeedsYou, homeConversationRegion, homeSettled, jiraWrites, mockRuns, needOfKind, needRow, needsPane, openAgents, openApp, paneSettled, pipPane, selectWorkstream, startWorkstream } from "./support/app";
+import { advanceRuns, askPip, commentOnTicket, editTicket, expandNeedsYou, homeConversationRegion, homeSettled, jiraWrites, mockRuns, needOfKind, needRow, needsPane, openAgents, openApp, paneSettled, pipPane, selectWorkstream, startWorkstream, openNeedOfKind, openNeedRow } from "./support/app";
 
 // Round 18 dogfood, CA-408 with the description "Fix it.": the triage's open questions go to the ticket's description as a
 // draft the person approves; "Ask the reporter" stays a comment; the reporter's answer is read by the next triage and the
@@ -58,7 +58,7 @@ test("the triage's questions go to the description as a draft, the reporter's an
   // The triage's note and open questions are a description update, not a comment on the ticket.
   await expandNeedsYou(page, KEY);
   await expect(needRow(page, /triage · comment/)).toHaveCount(0);
-  await needRow(page, "R2 triage · rewrite").click();
+  await openNeedRow(page, "R2 triage · rewrite");
   const update = needsPane(page).getByRole("article", { name: `Update the description of ${KEY}` });
   await expect(update).toBeVisible();
   const diff = update.locator('[data-diff="description"]');
@@ -70,7 +70,7 @@ test("the triage's questions go to the description as a draft, the reporter's an
   expect(await jiraWrites(page)).toEqual([]);
 
   // "Ask the reporter" is still a comment, so Jira notifies the reporter.
-  await needOfKind(page, "readiness").click();
+  await openNeedOfKind(page, "readiness");
   await needsPane(page).getByRole("button", { name: "Ask the reporter" }).click();
   await needsPane(page).getByRole("article", { name: `Comment on ${KEY}` }).getByRole("button", { name: "Post comment" }).click();
   await expect.poll(async () => (await jiraWrites(page)).map((w) => [w.type, w.key])).toEqual([["comment", KEY]]);
@@ -100,7 +100,7 @@ test("the triage's questions go to the description as a draft, the reporter's an
   // The plan the rule starts is told no assumptions, and its description draft invents none.
   const plan = await nth(page, "plan", 1);
   await finish(page, plan);
-  await needOfKind(page, "plan").click();
+  await openNeedOfKind(page, "plan");
   const pane = needsPane(page);
   await expect(pane).toContainText("Gossamr Plan");
   await expect(pane).not.toContainText("assumes answers");

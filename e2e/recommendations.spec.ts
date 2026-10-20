@@ -1,5 +1,5 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
-import { advanceRuns, agentsHome, agentsSettled, askPip, backdateWorkstream, editTicket, expandAllNeeds, expandNeedsYou, expectToast, githubWrites, groupByState, heldBanner, holdAll, holdBySystem, homeComposer, homeRunCards, homeSettled, inlineStart, jiraWrites, manageSwitch, mockRuns, needOfKind, needRow, needsPane, needsYouCount, needsYouRow, needsYouTray, openAgents, openApp, openPip, paneSettled as settled, peekSheet, peekTicket, pipConversation, pipPane, scriptNextRun, seedWorkstreamEvent, selectWorkstream, setBudget, startWorkstream, stepRail, still, surfacePullRequests, wakes, workstreamEvents, workstreamGroup, workstreamWeb, workstreamWebText } from "./support/app";
+import { advanceRuns, agentsHome, agentsSettled, askPip, backdateWorkstream, editTicket, expandAllNeeds, expandNeedsYou, expectToast, githubWrites, groupByState, heldBanner, holdAll, holdBySystem, homeComposer, homeRunCards, homeSettled, inlineStart, jiraWrites, manageSwitch, mockRuns, needOfKind, needRow, needsPane, needsYouCount, needsYouTray, openAgents, openApp, openPip, paneSettled as settled, peekSheet, peekTicket, pipConversation, pipPane, scriptNextRun, seedWorkstreamEvent, selectWorkstream, setBudget, startWorkstream, stepRail, still, surfacePullRequests, wakes, workstreamEvents, workstreamGroup, workstreamWeb, workstreamWebText, openNeedOfKind, groupOpen, needsStack } from "./support/app";
 
 // Two product decisions (docs/needs-you.md): a hold the person chose is not a need, and the automatic budget is one unit,
 // "automatic steps", whose running out is a Decide question in Needs you with "Allow 5 more" and "Switch to Advise".
@@ -237,7 +237,7 @@ test.describe("B3: one budget unit, and running out becomes a question", () => {
     await expandNeedsYou(page, "CA-401");
     await expect(needRow(page, title)).toHaveAttribute("data-kind", "budget");
     await expect(needRow(page, title)).toHaveAttribute("data-group", "decide");
-    await expect(needsYouRow(page, "CA-401").locator("[data-needs-you-chip]").first()).toHaveText("Decide");
+    await expect(needsStack(page).locator("[data-needs-you-chip]").first()).toHaveText("Decide");
     await expect(needsYouCount(page)).toHaveText(/^[1-9]\d*$/);
   });
 
@@ -386,7 +386,7 @@ test.describe("D1: Pip speaks up when a ticket is unclear", () => {
     // Open by default, the group's row is its name and count; the need under it says what it is.
     await expect(need).toContainText("CA-408 isn't clear enough to plan");
     await expect(need).toHaveAttribute("data-group", "decide");
-    await expect(needsYouRow(page, VAGUE).locator("[data-needs-you-chip]").first()).toHaveText("Decide");
+    await expect(needsStack(page).locator("[data-needs-you-chip]").first()).toHaveText("Decide");
     await need.click();
     const pane = needsPane(page);
     await expect(pane).toHaveAttribute("data-kind", "readiness");
@@ -404,7 +404,7 @@ test.describe("D1: Pip speaks up when a ticket is unclear", () => {
 
   test("Ask the reporter drafts a comment to the reporter for approval: nothing is posted before it, and the need is answered", async ({ page }) => {
     await unclear(page);
-    await needOfKind(page, "readiness").click();
+    await openNeedOfKind(page, "readiness");
     await needsPane(page).getByRole("button", { name: "Ask the reporter" }).click();
     await expectToast(page, "Here is the comment to the reporter. Nothing is posted until you press Post comment.");
     await expect(needOfKind(page, "readiness")).toHaveCount(0);
@@ -434,7 +434,7 @@ test.describe("D1: Pip speaks up when a ticket is unclear", () => {
 
   test("I'll answer opens the workstream's conversation with the questions quoted in the composer, and starts nothing", async ({ page }) => {
     await unclear(page);
-    await needOfKind(page, "readiness").click();
+    await openNeedOfKind(page, "readiness");
     await needsPane(page).getByRole("button", { name: "I'll answer" }).click();
     await expect(needOfKind(page, "readiness")).toHaveCount(0);
     await expect(homeComposer(page)).toHaveValue(/^R2's open questions about CA-408: “What does done look like for CA-408\?/);
@@ -450,7 +450,7 @@ test.describe("D1: Pip speaks up when a ticket is unclear", () => {
     // A hold is respected: the override is on record, and the plan starts only once the workstream is set going.
     await agentsHome(page).getByRole("button", { name: "Hold", exact: true }).click();
     await expect(pipPane(page).locator("[data-held-banner]")).toContainText("Held by you");
-    await needOfKind(page, "readiness").click();
+    await openNeedOfKind(page, "readiness");
     await needsPane(page).getByRole("button", { name: "Plan anyway" }).click();
     await expect(needOfKind(page, "readiness")).toHaveCount(0);
     const line = (await actions(page, "readiness_overridden"))[0];
@@ -553,10 +553,12 @@ test.describe("D2: a workstream where work is happening but Jira hasn't heard", 
 
     // The person approves the comment the investigation drafted: that is a post, and the clock starts again.
     await selectWorkstream(page, "CA-402");
-    await needOfKind(page, "draft").click();
+    await openNeedOfKind(page, "draft");
     await needsPane(page).getByRole("button", { name: "Post comment" }).click();
     await expect.poll(async () => (await jiraWrites(page)).map((w) => [w.type, w.key])).toEqual([["comment", "CA-402"]]);
     await expect(web).toHaveCount(0);
+    // Nothing waits on the person in it now, so the Needs you filter that opened the draft no longer lists it: All does.
+    await agentsHome(page).locator('[data-chip="all"]').click();
     await expect(workstreamGroup(page, "CA-402")).not.toHaveAttribute("data-wither", /.+/);
     await expect(workstreamWebText(page, "CA-402")).toHaveCount(0);
   });
@@ -574,7 +576,7 @@ test.describe("B4: a decision shows once", () => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await openApp(page, "runs=kinds&prSurface=manual&wsManage=1");
     await openAgents(page);
-    await needsYouRow(page, "General").locator("[data-needs-you-group]").click();
+    await groupOpen(page, "General").click();
     const pane = needsPane(page);
     const bar = pane.locator("[data-draft-actions]").first();
     await expect(bar).toBeVisible();
@@ -599,16 +601,18 @@ test.describe("B4: a decision shows once", () => {
   test("a hold the system made is the pane's banner alone, not the rail's as well, and the header stays in view", async ({ page }) => {
     await openApp(page, "wsManage=1&runs=empty");
     await workstreamOnHome(page);
+    // The sheet holds both: the rail's banner is the one outside the Needs you section.
+    const railBanner = stepRail(page).locator("[data-held-banner]:not([data-needs-pane] *)");
     await holdBySystem(page, "CA-401", "restart");
     await expect(home(page).locator("[data-held-banner]")).toHaveCount(1);
-    await expect(stepRail(page).locator("[data-held-banner]")).toHaveCount(1);
-    await needOfKind(page, "hold").click();
+    await expect(railBanner).toHaveCount(1);
+    await openNeedOfKind(page, "hold");
     await expect(needsPane(page).locator("[data-held-banner]")).toHaveCount(1);
     await expect(home(page).locator("[data-held-banner]")).toHaveCount(1);
-    await expect(stepRail(page).locator("[data-held-banner]")).toHaveCount(0);
+    await expect(railBanner).toHaveCount(0);
     // Closed, the rail shows it again.
     await page.keyboard.press("Escape");
-    await expect(stepRail(page).locator("[data-held-banner]")).toHaveCount(1);
+    await expect(railBanner).toHaveCount(1);
   });
 });
 
@@ -657,7 +661,7 @@ test.describe("B10: the switch and the first permission prompt explain themselve
       await openApp(page, "runs=kinds&prSurface=manual");
       await openAgents(page);
       await expandAllNeeds(page);
-      await needOfKind(page, "permission").click();
+      await openNeedOfKind(page, "permission");
       const ask = needsPane(page).locator("[data-permission-ask]");
       await expect(ask).toBeVisible();
       const explainer = ask.locator("[data-permission-explainer]");
@@ -675,7 +679,7 @@ test.describe("B10: the switch and the first permission prompt explain themselve
       await expect(page.getByText("CA-401", { exact: true }).first()).toBeVisible();
       await openAgents(page);
       await expandAllNeeds(page);
-      await needOfKind(page, "permission").click();
+      await openNeedOfKind(page, "permission");
       await expect(needsPane(page).locator("[data-permission-ask]")).toBeVisible();
       await expect(page.locator("[data-permission-explainer]")).toHaveCount(0);
       expect(await page.evaluate(() => JSON.parse(localStorage.getItem("gossamr-prefs") ?? "{}").permissionExplainerSeen)).toBe(true);
@@ -726,9 +730,8 @@ test.describe("B7: a command word outranks the tickets it also matches", () => {
 test.describe("B8: one label for approving drafts together, and its preview opens in the decision pane", () => {
   test("'Approve N safe drafts' opens the preview and its one confirm in the pane, not inside the list; Cancel and Esc keep the drafts", async ({ page }) => {
     await twoDrafts(page);
-    const ws = needsYouRow(page, "CA-401");
     await expandNeedsYou(page, "CA-401");
-    const batch = ws.getByRole("button", { name: "Approve 2 safe drafts" });
+    const batch = needsStack(page).getByRole("button", { name: "Approve 2 safe drafts" });
     await expect(batch).toHaveCount(1);
     await expect(agentsHome(page).getByRole("button", { name: /^Approve these/ })).toHaveCount(0);
     await batch.click();
@@ -747,7 +750,7 @@ test.describe("B8: one label for approving drafts together, and its preview open
     await expect(pane).toHaveCount(0);
     expect(await jiraWrites(page)).toEqual([]);
     await expect(needsYouCount(page)).toHaveText("2");
-    await expect(ws.locator("[data-needs-you-group]")).toBeFocused();
+    await expect(needsStack(page).locator("[data-workstream-needs-title]")).toBeFocused();
 
     // Choosing a need's own row replaces the preview with its decision.
     await batch.click();
@@ -816,7 +819,7 @@ test.describe("B9: the timeline's fix rounds, failure headings and order", () =>
 
     // The person posts the last review as it is: the line that says so comes after the review run it came of.
     await expandAllNeeds(page);
-    await needOfKind(page, "escalation").click();
+    await openNeedOfKind(page, "escalation");
     const card = needsPane(page).getByRole("group", { name: "Review still blocks" });
     await card.getByRole("button", { name: "Post the review as is" }).click();
     await needsPane(page).getByRole("button", { name: /^Post review/ }).click();

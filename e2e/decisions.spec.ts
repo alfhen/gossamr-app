@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { advanceRuns, agentsHome, askPermission, askPip, expandAllNeeds, expectToast, foldAllNeeds, githubWrites, jiraWrites, mockAttached, mockRuns, needOfKind, needsPane, needsPaneHeading, needsYouTray, openAgents, openApp, peekSheet, peekTicket, pendingReviewDrafts, pipConversation, pipPane, reviewDrafts, setBudget, startWorkstream, surfacePullRequests, workstreamEvents } from "./support/app";
+import { advanceRuns, agentsHome, closeWorkstreamSheet, needsStack, askPermission, askPip, expandAllNeeds, expectToast, githubWrites, jiraWrites, mockAttached, mockRuns, needOfKind, needsPane, needsPaneHeading, needsYouTray, openAgents, openApp, peekSheet, peekTicket, pendingReviewDrafts, pipConversation, pipPane, reviewDrafts, setBudget, startWorkstream, surfacePullRequests, workstreamEvents, openNeedOfKind } from "./support/app";
 
 // Decisions only the person makes, in a workstream in Manage mode (`wsManage=1`): a run's permission prompt answered
 // in the app, and a review that still blocks after the automatic fix rounds. Pull requests show only when a test says.
@@ -81,7 +81,7 @@ test("the first permission prompt on a Build explains Allow once in Terminal abo
   await askPermission(page, build.id, `approve Bash: git push -u origin worktree-${build.name}`);
   await openAgents(page);
   await expandAllNeeds(page);
-  await needOfKind(page, "permission").click();
+  await openNeedOfKind(page, "permission");
   const explainer = asking(page).locator("[data-permission-explainer]");
   await expect(explainer).toContainText("Allow once in Terminal records your choice, opens this run in Terminal with the exact command copied, and you confirm there.");
   await expect(explainer).toContainText("Deny tells the agent no, and it carries on without it.");
@@ -107,7 +107,7 @@ test("Allow once on a Build opens it in Terminal for that exact command, and a p
   await askPermission(page, build.id, `approve Bash: ${push}`);
 
   await openAgents(page);
-  await foldAllNeeds(page);
+  await openNeedOfKind(page, "permission");
   const item = needOfKind(page, "permission");
   await expect(item).toContainText("R4 wants to run `git push -u origin");
   await item.click();
@@ -159,7 +159,7 @@ test("Allow once on a Build opens it in Terminal for that exact command, and a p
   expect((await mockRuns(page)).find((r) => r.id === build.id)?.state).toBe("needsPermission");
 
   // On its card in Agents, Stop asks first, as the sheet does: one click beside Deny doesn't abandon the run.
-  await page.getByRole("button", { name: /^Agents/ }).click();
+  await closeWorkstreamSheet(page);
   const onCard = page.locator(`main article[data-run-id="${build.id}"]`);
   await onCard.getByRole("button", { name: "Stop the run (abandons it)" }).click();
   const confirm = onCard.getByRole("group", { name: "Stop this run" });
@@ -182,7 +182,7 @@ test("Deny on a read-only run, which is never offered Allow: Claude carries on w
   await askPermission(page, run.id, "approve Bash: rm -rf node_modules");
 
   await openAgents(page);
-  await expandAllNeeds(page);
+  await openNeedOfKind(page, "permission");
   const item = needOfKind(page, "permission");
   await expect(item).toContainText("R1 wants to run `rm -rf node_modules`.");
   const before = Number(await count(page).textContent());
@@ -269,10 +269,9 @@ test("a review that still blocks after two fix rounds comes to the person with t
   expect(await lines(page, "fix_round_sent")).toHaveLength(2);
 
   await openAgents(page);
-  await foldAllNeeds(page);
+  await openNeedOfKind(page, "escalation");
   await expect(escalationItem(page)).toHaveCount(1);
   await expect(escalationItem(page)).toContainText("The review still blocks after 2 fix rounds.");
-  await escalationItem(page).click();
   const card = escalationCard(page);
   // The pane's header says it (and what waiting does); the card doesn't say it a second time, and isn't on the rail as well.
   await expect(needsPane(page)).toContainText("The review still blocks after 2 fix rounds.");
@@ -287,7 +286,7 @@ test("a review that still blocks after two fix rounds comes to the person with t
   await expect(draft).toBeVisible();
   // And one card of it on the whole screen: the timeline and the rail don't show it as well.
   await expect(agentsHome(page).locator(`article[data-draft="${waiting.id}"]`)).toHaveCount(1);
-  await expect(needsYouTray(page).locator("[data-needs-you-need][data-kind=\"review\"], [data-needs-you-group][data-kind=\"review\"]")).toHaveCount(0);
+  await expect(needsStack(page).locator('[data-needs-pane][data-kind="review"]')).toHaveCount(0);
   // Post the review as is: nothing goes to GitHub until the draft's own Post review.
   await card.getByRole("button", { name: "Post the review as is" }).click();
   await expect(draft.getByRole("button", { name: "Post review" })).toBeFocused();

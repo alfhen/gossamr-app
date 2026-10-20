@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { agentsHome, editTicket, expectToast, jiraWrites, needsPane, needsYouTray, openAgents, openApp, pipPane, selectWorkstream, startWorkstream } from "./support/app";
+import { agentsHome, editTicket, expectToast, jiraWrites, needsPane, openAgents, openApp, pipPane, selectWorkstream, startWorkstream } from "./support/app";
 
 // Fixes from the fourteenth dogfood round: the offer on screen is the newest action's (G3), a close offer goes once a new
 // workstream opens on the ticket (G4), Reopen says why it cannot (G5) and the held-by-you banner is exact about Needs you (G10).
@@ -50,22 +50,6 @@ async function reporterDraft(page: Page) {
 }
 
 test.describe("approving from the list, the last need and the pause (G1, G6, G8)", () => {
-  test("a then Enter on the row of a draft being edited does not post the stored text; the card's Post posts the edit", async ({ page }) => {
-    test.setTimeout(120_000);
-    const draft = await reporterDraft(page);
-    await draft.getByRole("button", { name: "Edit" }).click();
-    await needsPane(page).locator("textarea").first().fill("Edited by hand before posting.");
-    const row = needsYouTray(page).locator("[data-needs-you-group], [data-needs-you-need]").first();
-    await row.focus();
-    await page.keyboard.press("a");
-    await page.keyboard.press("Enter");
-    expect(await jiraWrites(page)).toEqual([]);
-    await expect(needsPane(page).locator("textarea").first()).toHaveValue("Edited by hand before posting.");
-    await draft.getByRole("button", { name: "Done editing" }).click();
-    await draft.getByRole("button", { name: "Post comment" }).click();
-    await expect.poll(async () => (await jiraWrites(page)).map((w) => w.text)).toEqual([expect.stringContaining("Edited by hand before posting.")]);
-  });
-
   test("posting the only need from the pane says what was posted and that the ticket waits", async ({ page }) => {
     test.setTimeout(120_000);
     const draft = await reporterDraft(page);

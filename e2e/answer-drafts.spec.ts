@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { advanceRuns, askPip, askRun, homeConversation, homeConversationRegion, homeRunCards, homeSettled, homeWakes, inlineStart, jiraWrites, mockRuns, needsYouCount, needsYouRow, needsYouTray, openAgents, openApp, peekSheet, selectWorkstream, startWorkstream, stepChip, stepRail, workstreamEvents } from "./support/app";
+import { advanceRuns, askPip, askRun, homeConversation, homeConversationRegion, homeRunCards, homeSettled, homeWakes, inlineStart, jiraWrites, mockRuns, needsYouCount, openAgents, openApp, peekSheet, selectWorkstream, startWorkstream, stepChip, stepRail, workstreamEvents, expandNeedsYou, needsStack } from "./support/app";
 
 // A workstream in Manage mode, so a run that asks wakes Pip.
 const MANAGED = "runs=empty&wsManage=1";
@@ -43,9 +43,9 @@ test("a run's question wakes Pip, which suggests a reply the person checks and s
   await expect(card.locator("[data-question]")).toHaveText(`R1 asks: ${QUESTION}`);
   await expect(card.locator("[data-reply]")).toContainText("CA-401");
   // One need in the list for the question and its reply, and the reply under Investigate on the rail.
-  const row = needsYouRow(page, "CA-401");
-  await expect(row.locator("[data-needs-you-group]")).toContainText(`R1 asks: “${QUESTION}” Pip suggests a reply.`);
-  await expect(row.locator("[data-needs-you-more]")).toHaveCount(0);
+  await expandNeedsYou(page, "CA-401");
+  await expect(needsStack(page).locator("[data-needs-pane]")).toHaveCount(1);
+  await expect(needsStack(page)).toContainText(`R1 asks: “${QUESTION}” Pip suggests a reply.`);
   await expect(needsYouCount(page)).toHaveText("1");
   await expect(stepChip(page, "investigate").locator("[data-step-needs-you]")).toHaveText("1 needs you");
   await stepChip(page, "investigate").locator("[data-step-chip]").click();
@@ -60,7 +60,7 @@ test("a run's question wakes Pip, which suggests a reply the person checks and s
   await page.keyboard.press("Enter");
   await expect.poll(async () => (await mockRuns(page)).find((r) => r.id === id)?.state).toBe("working");
   await expect(card).toHaveAttribute("data-state", "applied");
-  await expect(needsYouTray(page)).not.toContainText("R1 asks");
+  await expect(needsStack(page)).toHaveCount(0);
   await expect(needsYouCount(page)).toHaveText("0");
   const actions = (await workstreamEvents(page)).map((e) => e.action);
   expect(actions).toContain("run_answered");

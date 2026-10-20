@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { advanceRuns, agentsHome, askPip, backdateWorkstream, expandNeedsYou, homeSettled, mockRuns, needOfKind, needRow, needsPane, needsPaneHeading, needsYouRow, needsYouTray, openAgents, openApp, paneSettled as settled, pipPane, seedWorkstreamEvent, selectWorkstream, startWorkstream, stepChip, workstreamGroup } from "./support/app";
+import { advanceRuns, agentsHome, askPip, backdateWorkstream, expandNeedsYou, homeSettled, mockRuns, needOfKind, needsPane, needsPaneHeading, openAgents, openApp, pipPane, seedWorkstreamEvent, selectWorkstream, startWorkstream, stepChip, workstreamGroup, openNeedOfKind, openNeedRow, groupOpen, needsStack, paneSettled as settled } from "./support/app";
 
 // Fixes from the fifth dogfood round: Needs you on Pip home shows each need once, an unclear ticket's "Ask the reporter" lands
 // on the new draft, Plan is not "Next" while the ticket waits for a choice, and a cobweb says what it is on the row.
@@ -45,24 +45,15 @@ async function unclear(page: Page) {
 }
 
 test.describe("Needs you on Pip home (G5)", () => {
-  test("opens each group by default, so every need shows once under a header that is only its name and count", async ({ page }) => {
+  test("opens No workstream's detail with every need listed once, the first one open, each with a chip that says what it means", async ({ page }) => {
     await openApp(page);
     await openAgents(page);
-    await expect(needsYouTray(page)).toBeVisible();
-    const group = needsYouRow(page, "General");
-    const more = group.locator("[data-needs-you-more]");
-    await expect(more).toHaveAttribute("aria-expanded", "true");
-    await expect(group.locator("[data-needs-you-need]").first()).toBeVisible();
-    // Open, the header does not say the top need's why again.
-    await expect(group.locator("[data-needs-you-why]")).toHaveCount(0);
-    await expect(group.locator("[data-needs-you-count-chip]")).toContainText(/\d+ here/);
-    // The person's fold is kept.
-    await more.click();
-    await expect(more).toHaveAttribute("aria-expanded", "false");
-    await expect(group.locator("[data-needs-you-need]")).toHaveCount(0);
-    await expandNeedsYou(page, "General");
-    // The chips say what they mean.
-    await expect(needsYouTray(page).locator("[data-needs-you-chip]").first()).toHaveAttribute("title", /^(Decide|Unblock|Approve): /);
+    await groupOpen(page, "General").click();
+    const items = needsStack(page).locator("[data-needs-pane]");
+    await expect(items.nth(1)).toBeVisible();
+    await expect(items.first()).toHaveAttribute("data-open", "true");
+    await expect(needsPane(page)).toHaveCount(1);
+    await expect(needsStack(page).locator("[data-needs-you-chip]").first()).toHaveAttribute("title", /^(Decide|Unblock|Approve): /);
   });
 });
 
@@ -77,7 +68,7 @@ test.describe("a ticket stopped as unclear (G2, G3)", () => {
 
   test("Ask the reporter opens the questions draft in the decision pane, not the next need, and posts nothing", async ({ page }) => {
     await unclear(page);
-    await needOfKind(page, "readiness").click();
+    await openNeedOfKind(page, "readiness");
     await needsPane(page).getByRole("button", { name: "Ask the reporter" }).click();
     await expect(needOfKind(page, "readiness")).toHaveCount(0);
     const pane = needsPane(page);
@@ -122,7 +113,7 @@ test.describe("the permission panel says what Deny does once (G11)", () => {
     await openApp(page);
     await openAgents(page);
     await expandNeedsYou(page, "General");
-    await needRow(page, /DEVOPS-471.*asks to run a command/).click();
+    await openNeedRow(page, /DEVOPS-471.*asks to run a command/);
     const pane = needsPane(page);
     await expect(pane.locator("[data-permission-explainer]")).toContainText("What Deny does");
     await expect(pane.locator("[data-permission-ask]")).not.toContainText("Claude is told you said no");
