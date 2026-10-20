@@ -50,8 +50,8 @@ export function FilterNote() {
 }
 
 /**
- * Applies a filter Pip asked for, but only for a question asked in the focused conversation: on Pip home the one it shows,
- * elsewhere the one the pane shows (General or the focused workstream's). Other conversations don't get to change the
+ * Applies a filter Pip asked for, but only for a question asked in the focused conversation: the one the pane shows
+ * (General or the focused workstream's). Other conversations don't get to change the
  * view, and a filter only ever changes the workspace tab's filter.
  */
 export function handlePipView({ requestId, filter, note }: PipView) {

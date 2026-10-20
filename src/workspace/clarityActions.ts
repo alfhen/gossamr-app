@@ -4,7 +4,7 @@ import type { ClarityGap } from "../lib/ticketClarity";
 import { useWorkspace } from "../workspaceStore";
 import { usePrefs } from "./prefs";
 import { PIP_INPUT_ID } from "./draftKeys";
-import { usePipHome } from "./pipHomeStore";
+import { useWorkView } from "./workViewStore";
 import { pushLearning, retireLearning, useToasts } from "./toasts";
 import { useWorkstreams } from "./workstreamsStore";
 
@@ -21,7 +21,7 @@ export function settleClarityFocus(workstreamId: string) {
     if (at && at !== document.body && at.isConnected) return;
     const id = CSS.escape(workstreamId);
     const box = document.querySelector<HTMLElement>(`[data-workstream-controls="${id}"]`);
-    const deciding = usePipHome.getState().deciding;
+    const deciding = useWorkView.getState().deciding;
     const draft = deciding?.startsWith("draft:") ? document.querySelector<HTMLElement>(`article[data-draft="${CSS.escape(deciding.slice("draft:".length))}"]`) : null;
     const next = draft ?? document.querySelector<HTMLElement>(`[data-clarity-quiet="${id}"] button, [data-clarity-notice="${id}"] button`) ?? box?.querySelector<HTMLElement>("button, input:not([role=switch])");
     if (next) next.focus();

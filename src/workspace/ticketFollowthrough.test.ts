@@ -8,7 +8,7 @@ import { docFromText, docText } from "../lib/docs";
 import type { Proposal, Run, RunSpec, ScreenContext } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { usePip } from "./pipStore";
-import { usePipHome } from "./pipHomeStore";
+import { useWorkView } from "./workViewStore";
 import { useToasts } from "./toasts";
 import { currentNeeds } from "./useNeeds";
 import { workstreamStatus } from "../lib/workstreamStatus";
@@ -87,7 +87,7 @@ describe("the clarity notice on a workstream", () => {
     // It is an ordinary draft waiting in Needs you, outside the safe batch.
     expect(currentNeeds().find((n) => n.key === `draft:${asked.id}`)).toMatchObject({ group: "approve", batchable: false, title: "Questions for the reporter" });
     expect(safeToBatch(asked)).toBe(false);
-    expect(usePipHome.getState()).toMatchObject({ deciding: `draft:${asked.id}`, selected: id });
+    expect(useWorkView.getState()).toMatchObject({ deciding: `draft:${asked.id}` });
     useToasts.getState().clear();
     expect(await useWorkstreams.getState().askReporterNow(id)).toBe(false);
     expect(texts()).toEqual(["The workstream isn't waiting for that choice any more."]);
@@ -242,8 +242,8 @@ describe("the audit a timeline counts from", () => {
     const id = await open("CA-408");
     await useWorkstreams.getState().askReporterNow(id);
     await useWorkspace.getState().refreshProposals();
-    // The Pip pane's timeline loaded it; Pip home has another workstream, or none, selected.
-    usePipHome.getState().openGeneral();
+    // The Pip pane's timeline loaded it; Agents has another workstream, or none, open.
+    useWorkView.getState().closeWorkstream();
     await useWorkstreams.getState().loadEvents(id);
     expect(useWorkstreams.getState().events[id].some((e) => e.action === "draft_approved")).toBe(false);
     const asked = Object.values(useWorkspace.getState().proposals).find((p) => p.label === "Questions for the reporter")!;

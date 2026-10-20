@@ -49,11 +49,11 @@ export interface ControlActions {
   onSteps?(): void;
 }
 
-/** Once a workstream closed, its confirm, its controls and its row are gone and the conversation is General's: if the keyboard fell to the page, it goes to General's row, where F6 and j/k carry on. */
+/** Once a workstream closed, its confirm, its controls and its detail are gone: if the keyboard fell to the page, it goes to the Agents heading, where Tab carries on. */
 export function settleClosedFocus() {
   requestAnimationFrame(() => {
     if (!focusLost(document.activeElement, document.body)) return;
-    document.querySelector<HTMLElement>('[data-pip-home] [data-workstream-row="general"]')?.focus();
+    document.querySelector<HTMLElement>("[data-agents-home] h1")?.focus();
   });
 }
 
@@ -81,9 +81,11 @@ export const holdFocusTarget = (root: Pick<ParentNode, "querySelector">, after: 
 
 /** Once `done` resolves and the page has swapped the buttons, puts the keyboard where `holdFocusTarget` says, if it fell to the page. */
 function settleHoldFocus(done: void | Promise<unknown>, after: "hold" | "resume") {
+  // The workstream's controls show in its detail and in Pip's header; the keyboard stays in the one it was in.
+  const scope = document.activeElement?.closest("[data-workstream-controls]") ?? document;
   void Promise.resolve(done).then(() =>
     requestAnimationFrame(() => {
-      if (focusLost(document.activeElement, document.body)) holdFocusTarget(document, after)?.focus();
+      if (focusLost(document.activeElement, document.body)) holdFocusTarget(scope.isConnected ? scope : document, after)?.focus();
     }),
   );
 }
@@ -469,7 +471,7 @@ export function WorkstreamControlsView({ view, globals, actions, confirmingStop,
   const pausedId = useId();
   const modeLineId = useId();
   const box = useRef<HTMLDivElement>(null);
-  // A decision open in Pip home's pane is shown there, not here as well.
+  // A decision open in the Agents decision pane is shown there, not here as well.
   const shown = useDecisionShown();
   // Once the confirmation goes, focus goes back to the menu it came from rather than to nowhere.
   const closeConfirm = () => {

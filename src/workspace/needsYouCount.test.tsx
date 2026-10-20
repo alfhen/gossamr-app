@@ -9,7 +9,7 @@ import { NeedsYouList } from "./NeedsYou";
 import { Launcher } from "./PipExtras";
 import { Rail } from "./Rail";
 import { useActivity } from "./activityStore";
-import { composerFooter } from "./pipHomeLogic";
+import { composerFooter } from "./workViewLogic";
 import { useRuns } from "./runsStore";
 import { currentNeeds, needsYouText } from "./useNeeds";
 
@@ -76,7 +76,7 @@ describe("one count of what needs you", () => {
     const n = list.length;
     expect(list.map((x) => x.kind).sort()).toEqual(["plan", "question"]);
 
-    expect(renderToStaticMarkup(<Rail />)).toContain(`Pip home, ${needsYouText(n)}`);
+    expect(renderToStaticMarkup(<Rail />)).toContain(`Agents, ${needsYouText(n)}`);
 
     Object.assign(useActivity.getInitialState(), { chip: "needsMe", unread: 28, codeUnread: 3 });
     const activity = renderToStaticMarkup(<ActivityView />);
@@ -91,9 +91,9 @@ describe("one count of what needs you", () => {
   it("counts the failures once, on the latest run, and drops them once a newer run has followed", () => {
     seed(failures, []);
     expect(currentNeeds().map((x) => [x.kind, x.runId])).toEqual([["failure", "p3"]]);
-    expect(renderToStaticMarkup(<Rail />)).toContain("Pip home, 1 thing needs you");
+    expect(renderToStaticMarkup(<Rail />)).toContain("Agents, 1 thing needs you");
     seed([...failures, run("again", "working", "plan", 1)], []);
     expect(currentNeeds()).toEqual([]);
-    expect(renderToStaticMarkup(<Rail />)).toContain('aria-label="Pip home"');
+    expect(renderToStaticMarkup(<Rail />)).toContain('aria-label="Agents"');
   });
 });

@@ -3,23 +3,9 @@ import { describe, expect, it, vi } from "vitest";
 import { mentionNote } from "../lib/mentions";
 import { ANSWERS_OPENING, ANSWERS_COMMENT_LABEL } from "../lib/proposals";
 import { PaletteView, START_WORKSTREAM_NOTE } from "./Palette";
-import { COLUMN_ITEMS } from "./PipHome";
 import { goneOnRouteChange } from "./ToastHost";
 
 describe("round 10 backlog", () => {
-  it("G27: the steps rail's stop starts with Manage, Hold and Close, then the chips and cards", () => {
-    const stops = COLUMN_ITEMS.rail.split(", ");
-    expect(stops.slice(0, 3)).toEqual([
-      '[data-pip-home-column="rail"] [data-workstream-controls] [role="switch"][aria-label="Manage this workstream"]',
-      '[data-pip-home-column="rail"] [data-workstream-controls] [data-ws-hold]',
-      '[data-pip-home-column="rail"] [data-workstream-controls] [data-close-workstream]',
-    ]);
-    expect(stops.slice(3).map((s) => s.replace('[data-pip-home-column="rail"] ', ""))).toEqual(["[data-step-chip]", "article[data-run-id]", "article[data-draft]"]);
-    // Every stop is on the rail, and the list column's stops are untouched.
-    expect(stops.every((s) => s.startsWith('[data-pip-home-column="rail"] '))).toBe(true);
-    expect(COLUMN_ITEMS.list).not.toContain("data-workstream-controls");
-  });
-
   it("G24: the answers comment opens with a line saying it answers the triage's questions, in a neutral voice, naming no one", () => {
     expect(ANSWERS_OPENING).toBe("Answers to the open questions on this ticket:");
     expect(ANSWERS_OPENING).not.toMatch(/\b(I|we|Pip|Gossamr|runs?|workstreams?)\b/);

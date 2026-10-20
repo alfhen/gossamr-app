@@ -48,7 +48,7 @@ beforeEach(async () => {
   await useWorkspace.getState().init(backend);
   useRuns.getState().init(backend);
   useToasts.getState().clear();
-  useTabs.getState().setRoute("pip");
+  useTabs.getState().setRoute("agents");
   await settle();
 });
 
@@ -113,7 +113,7 @@ describe("reviewing and starting a run draft in place", () => {
     expect(inlineStartKey(key({ metaKey: true }), { ...entry(id), phase: "changed" })).toBe("held");
   });
 
-  it("starts with the digest shown and stays on Pip home, the draft's review closed", async () => {
+  it("starts with the digest shown and stays on Agents, the draft's review closed", async () => {
     const id = await draft();
     await inline().open(id);
     const { digest } = entry(id).review!;
@@ -122,7 +122,7 @@ describe("reviewing and starting a run draft in place", () => {
     const run = await inline().start(id);
     expect(approve).toHaveBeenCalledWith(id, digest);
     expect(run?.state).toBe("queued");
-    expect(useTabs.getState().route).toBe("pip");
+    expect(useTabs.getState().route).toBe("agents");
     expect(useRuns.getState().selectedId).toBe(run!.id);
     expect(inline().entries[id]).toBeUndefined();
   });
@@ -257,7 +257,7 @@ const runDraft = (kind: RunKind, item: ItemRef | null = CA, over: Partial<Propos
   ...over,
 });
 
-const onPipHome = (p: Proposal) =>
+const onAgents = (p: Proposal) =>
   renderToStaticMarkup(
     <InlineStartContext.Provider value={true}>
       <LiveDraftPreview proposal={p} />
@@ -273,9 +273,9 @@ describe("which run drafts start in place", () => {
     expect(inlineStartable(runDraft("investigate", CA, { state: { type: "skipped" } }))).toBe(false);
   });
 
-  it("gives an eligible draft on Pip home an expander, which its action toggles", () => {
+  it("gives an eligible draft on Agents an expander, which its action toggles", () => {
     const p = runDraft("investigate");
-    const html = onPipHome(p);
+    const html = onAgents(p);
     expect(html).toMatch(/aria-expanded="false"[^>]*>Review and start<\/button>/);
     expect(html).not.toContain("Review and start →");
     const begin = vi.spyOn(useRunSetup.getState(), "begin");
@@ -383,7 +383,7 @@ describe("which run drafts start in place", () => {
     expect(html).toMatch(/<article[^>]*class="relative mb-\[22px\] /);
     // Not reached from the keyboard, the card shows no hint at all.
     expect(html).not.toContain('role="status"');
-    // The button's one press: on Pip home the peek opens on the ticket, with nothing else to press first.
+    // The button's one press: on Agents the peek opens on the ticket, with nothing else to press first.
     useTabs.getState().select(null);
     vi.stubGlobal("document", { querySelector: () => null, querySelectorAll: () => [] });
     vi.stubGlobal("requestAnimationFrame", () => 0);
@@ -392,11 +392,11 @@ describe("which run drafts start in place", () => {
     expect(useTabs.getState().selected).toBe("mock:CA-401");
   });
 
-  it("opens the full setup sheet for a build, a review and a draft with no ticket, on Pip home too", () => {
+  it("opens the full setup sheet for a build, a review and a draft with no ticket, on Agents too", () => {
     const begin = vi.spyOn(useRunSetup.getState(), "begin").mockResolvedValue();
     const toggle = vi.spyOn(useInlineStarts.getState(), "toggle");
     for (const p of [runDraft("build"), runDraft("review"), runDraft("investigate", null)]) {
-      const html = onPipHome(p);
+      const html = onAgents(p);
       expect(html).toContain("Review and start →");
       expect(html).not.toContain("aria-expanded");
       expect(html).not.toContain("inline-start-");
@@ -406,7 +406,7 @@ describe("which run drafts start in place", () => {
     expect(toggle).not.toHaveBeenCalled();
   });
 
-  it("without Pip home's context, as in the docked pane, behaves as before: no expander, the setup sheet opens", () => {
+  it("without the Agents view's context, as in the docked pane, behaves as before: no expander, the setup sheet opens", () => {
     const begin = vi.spyOn(useRunSetup.getState(), "begin").mockResolvedValue();
     const p = runDraft("investigate");
     useInlineStarts.setState({ entries: { [p.id]: { ...CLOSED_INLINE, phase: "shown" } } });

@@ -9,7 +9,7 @@ import { nudgeOffered } from "../lib/reporterWait";
 import type { Proposal } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { giveBackClarity } from "./clarityActions";
-import { usePipHome } from "./pipHomeStore";
+import { useWorkView } from "./workViewStore";
 import { usePrefs } from "./prefs";
 import { pushLearning, useToasts } from "./toasts";
 import { currentNeeds } from "./useNeeds";
@@ -30,7 +30,7 @@ const texts = () => useToasts.getState().toasts.map((t) => t.text);
 let backend: MockBackend;
 beforeEach(async () => {
   vi.stubGlobal("localStorage", memory());
-  usePrefs.setState({ clarityLearning: {}, startMyDayDoneOn: null });
+  usePrefs.setState({ clarityLearning: {} });
   useToasts.getState().clear();
   backend = new MockBackend({ runs: { seed: "empty", prSurfaceMs: null }, wsManage: true });
   backend.supervisor.dispose();
@@ -40,7 +40,7 @@ beforeEach(async () => {
 afterEach(() => {
   useWorkstreams.getState().dispose();
   useToasts.getState().clear();
-  usePrefs.setState({ clarityLearning: {}, startMyDayDoneOn: null });
+  usePrefs.setState({ clarityLearning: {} });
   vi.unstubAllGlobals();
 });
 
@@ -90,8 +90,8 @@ describe("Draft a nudge", () => {
     expect(text.length).toBeLessThan(300);
     expect(backend.proposals.writes).toEqual([]);
     expect(events(id).find((e) => e.action === "reporter_nudged")).toMatchObject({ actor: "person", proposalId: nudge.id });
-    // The decision opens in Pip home's pane, with its card focused so Post comment is not one key away.
-    expect(usePipHome.getState()).toMatchObject({ deciding: `draft:${nudge.id}`, selected: id });
+    // The decision opens in the pane under the Needs you strip, with its card focused so Post comment is not one key away.
+    expect(useWorkView.getState()).toMatchObject({ deciding: `draft:${nudge.id}` });
   });
 
   it("lists the questions the posted ask carried, as bullets, so the reporter need not scroll up (G20)", async () => {

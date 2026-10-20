@@ -1,9 +1,8 @@
 import type { Intent, Proposal, ProposalMaker, ReporterReply, ReporterReplyAt, Run, RunKind, WorkstreamActor, WorkstreamEvent, WorkstreamView } from "../types";
 import { eventText } from "../workspace/activityLogic";
-import { GENERAL_CONVERSATION, workstreamConversation } from "./conversations";
 import type { Need } from "./needs";
 import { maskSecrets } from "./riskyText";
-import { inWorkstreamPane, isReporterFollowUp, isReporterNudge, isReporterQuestions, targetOf, workstreamOf } from "./proposals";
+import { isReporterFollowUp, isReporterNudge, isReporterQuestions, targetOf, workstreamOf } from "./proposals";
 
 /**
  * One timeline per workstream (docs/needs-you.md, step 3): what Pip said, what the person said, each run from start to end
@@ -22,16 +21,6 @@ export type TimelineFilter = "all" | "runs" | "drafts" | "decisions";
 export const TIMELINE_FILTERS: readonly TimelineFilter[] = ["all", "runs", "drafts", "decisions"];
 
 export const FILTER_LABEL: Record<TimelineFilter, string> = { all: "All", runs: "Runs", drafts: "Drafts", decisions: "Decisions" };
-
-/**
- * Whose timeline the filter applies to: the selected workstream's, or every open workstream's and General's merged.
- * Runs in every workstream is the timeline's Runs filter in this scope, like the others; the Agents screen is the operations view.
- */
-export type TimelineScope = "workstream" | "every";
-
-export const TIMELINE_SCOPES: readonly TimelineScope[] = ["workstream", "every"];
-
-export const SCOPE_LABEL: Record<TimelineScope, string> = { workstream: "This workstream", every: "Every workstream" };
 
 /**
  * What opening an entry shows: a run's sheet, a draft's card, or the need in Needs you's decision pane. An entry about
@@ -81,9 +70,6 @@ export interface TimelineEntry {
   actor?: WorkstreamActor;
   action?: string;
   count?: number;
-  /** In Every workstream (`timelineAcross`): the workstream the entry is from (null is General), and the label it carries. */
-  workstreamId?: string | null;
-  scopeLabel?: string;
 }
 
 /** The parts of a conversation's turn the timeline reads. `at` is when it was asked (or when Pip woke). */
@@ -466,45 +452,6 @@ const when = (e: { at: string }) => {
   return Number.isFinite(t) ? t : -Infinity;
 };
 
-/** Oldest first; at the same moment, what was said, then the audit, then runs, then drafts. 0 leaves the order as it was. */
-function byTime(a: Pick<TimelineEntry, "at" | "kind">, b: Pick<TimelineEntry, "at" | "kind">): number {
-  return compare(when(a), when(b)) || SOURCE_RANK[a.kind] - SOURCE_RANK[b.kind];
-}
-
-/** One workstream's part of Every workstream: its timeline's input, and the label its entries carry (its ticket, or "General"). */
-export interface TimelinePart {
-  workstreamId: string | null;
-  label: string;
-  input: TimelineInput;
-}
-
-/**
- * Every workstream's timeline: each part's own `timeline`, merged into one list by time, each entry carrying its
- * workstream and label. Something two parts both show (a draft waiting on a workstream's ticket, which General lists too)
- * is one entry, in the first part that shows it: list the workstreams before General. At the same moment, entries keep
- * the order of their parts, then their own.
- */
-export function timelineAcross(parts: readonly TimelinePart[]): TimelineEntry[] {
-  const seen = new Set<string>();
-  const lists = parts.map((part) =>
-    timeline(part.input).flatMap((e) => {
-      if (seen.has(e.key)) return [];
-      seen.add(e.key);
-      return [{ ...e, workstreamId: part.workstreamId, scopeLabel: part.label }];
-    }),
-  );
-  // A merge of the parts' own lists, which already put every cause before its effect: the earliest head goes next, and at
-  // the same moment the part that comes first.
-  const heads = lists.map(() => 0);
-  const out: TimelineEntry[] = [];
-  for (;;) {
-    let best = -1;
-    for (let i = 0; i < lists.length; i++) if (heads[i] < lists[i].length && (best < 0 || byTime(lists[i][heads[i]], lists[best][heads[best]]) < 0)) best = i;
-    if (best < 0) return out;
-    out.push(lists[best][heads[best]++]);
-  }
-}
-
 /**
  * The drafts a conversation's timeline shows. A workstream's are the ones its conversation shows (`proposals`, already
  * narrowed); General's are those in no workstream, the ones Pip made answering here, and every one still waiting, as
@@ -519,52 +466,6 @@ export function timelineDrafts(proposals: readonly Proposal[], workstream: boole
 export function timelineRuns(runs: readonly Run[], view: WorkstreamView | null): Run[] {
   if (!view) return runs.filter((r) => !r.spec.workstream);
   return runs.filter((r) => view.runs.includes(r.id) || r.spec.workstream === view.workstream.id);
-}
-
-/** What Every workstream is read from: what the stores hold for every conversation at once. */
-export interface EveryWorkstreamData {
-  /** The workstreams; only the open ones take part. */
-  views: readonly WorkstreamView[];
-  /** Each conversation's turns, by conversation id (`general`, `ws:<id>`). */
-  turns: Readonly<Record<string, readonly TimelineTurn[] | undefined>>;
-  runs: readonly Run[];
-  proposals: readonly Proposal[];
-  /** Each workstream's audit, by workstream id. */
-  events: Readonly<Record<string, readonly WorkstreamEvent[] | undefined>>;
-  needs?: readonly Need[];
-  labels?: ReadonlyMap<string, string>;
-  verdicts?: Readonly<Record<string, ReviewOutcome | undefined>>;
-}
-
-/** The label a workstream's entries carry in Every workstream: its ticket's key, else its title. */
-export const workstreamLabel = (view: Pick<WorkstreamView, "workstream">) => view.workstream.itemKey ?? view.workstream.title;
-
-/**
- * The parts of Every workstream: each open workstream, as its own timeline reads it (its conversation, its runs, the
- * drafts its conversation shows and its audit), then General's, as General's timeline reads it.
- */
-export function everyWorkstreamParts(d: EveryWorkstreamData): TimelinePart[] {
-  const shared = { needs: d.needs, labels: d.labels, verdicts: d.verdicts };
-  const open = d.views.filter((v) => v.workstream.closedAt === null);
-  const parts: TimelinePart[] = open.map((v) => ({
-    workstreamId: v.workstream.id,
-    label: workstreamLabel(v),
-    input: {
-      ...shared,
-      turns: d.turns[workstreamConversation(v.workstream.id)] ?? [],
-      runs: timelineRuns(d.runs, v),
-      drafts: d.proposals.filter((p) => inWorkstreamPane(p, v.workstream)),
-      events: d.events[v.workstream.id] ?? [],
-      ticketKey: v.workstream.itemKey,
-      reporterRepliedAt: v.reporterRepliedAt ?? null,
-      reporterReply: v.reporterReply ?? null,
-      reporterReplies: v.reporterReplies ?? [],
-    },
-  }));
-  const general = d.turns[GENERAL_CONVERSATION] ?? [];
-  const asked = new Set(general.map((t) => t.requestId));
-  parts.push({ workstreamId: null, label: "General", input: { ...shared, turns: general, runs: timelineRuns(d.runs, null), drafts: timelineDrafts(d.proposals, false, asked) } });
-  return parts;
 }
 
 /** Whether filter `f` shows entry `e`. */

@@ -6,8 +6,8 @@ import type { PipAsk } from "./runSheetLogic";
 import { contextFor, focusedConversation } from "./workstreamsStore";
 
 /**
- * Opens the Pip drawer and sends it `query` as a question about the screen, in the focused conversation: on Pip home the
- * selected workstream's (or General's), elsewhere the one the ticket on screen has, or General. While Pip
+ * Opens the Pip drawer and sends it `query` as a question about the screen, in the focused conversation: the workstream
+ * open on Agents, the one the ticket on screen has, or General. While Pip
  * answers another, it waits its turn. Pip only ever proposes drafts in reply. A `query` the person wrote goes as it is; an
  * instruction the page wrote for Pip comes as a `PipAsk`, whose `shown` line is what the person's bubble shows while Pip
  * still gets the whole prompt.

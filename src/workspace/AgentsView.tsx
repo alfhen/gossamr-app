@@ -47,12 +47,11 @@ import { useWorkstreams } from "./workstreamsStore";
 import { stableGroups } from "./stableOrder";
 import { useNow } from "./useNow";
 import { agentKey } from "./agentKeys";
-import { PIP_HOME_HINT } from "./commands";
+import { ClosedWorkstreams, DayAndWeek, DecisionScope, NeedsTop, WorkstreamHeadExtras, WorkstreamTools, rowTitle, useWorkstreamWeb } from "./AgentsHome";
+import { WorkstreamSheet } from "./WorkstreamSheet";
 import { arm, confirmArmed, disarm, keyPlan, openNeed } from "./needsActions";
-import { usePipHome } from "./pipHomeStore";
+import { useWorkView } from "./workViewStore";
 import { currentNeeds, useNeedsYou } from "./useNeeds";
-import type { TimelineFilter, TimelineScope } from "../lib/timeline";
-import { showTimeline } from "./TimelineFilterBar";
 
 const KBD = "font-sans text-[11px] rounded border border-ws-sep2 bg-ws-bar px-1";
 const BUTTON = "inline-flex items-center gap-1.5 rounded-md border border-ws-sep2 px-2.5 py-px text-sm leading-normal whitespace-nowrap hover:bg-ws-hover disabled:cursor-not-allowed disabled:opacity-45";
@@ -156,13 +155,13 @@ export interface AgentsActions {
   stopAll(): void;
   startAgent(): void;
   openSafety(): void;
-  /** Opens a need on Pip home, from a run's "In Needs you" pill. */
+  /** Opens a need's decision under the Needs you strip, from a run's "In Needs you" pill. */
   openNeed?(need: Need): void;
-  /** Pip home's timeline with a filter and scope: the Runs timeline across every workstream, from the header's link. */
-  showTimeline?(filter: TimelineFilter, scope: TimelineScope): void;
+  /** Opens a workstream's detail. */
+  openWorkstream?(id: string): void;
 }
 
-function Toolbar({ runs, filters, view, group, introShown, on }: { runs: readonly Run[]; filters: AgentFilters; view: AgentsViewMode; group: AgentsGroup; introShown: boolean; on: AgentsActions }) {
+function Toolbar({ runs, filters, view, group, introShown, tools, on }: { runs: readonly Run[]; filters: AgentFilters; view: AgentsViewMode; group: AgentsGroup; introShown: boolean; tools?: ReactNode; on: AgentsActions }) {
   const { repos, tickets } = useMemo(() => filterOptions(runs), [runs]);
   return (
     <div className="flex flex-wrap items-center gap-2 border-b border-ws-sep px-6 py-1.5">
@@ -205,6 +204,7 @@ function Toolbar({ runs, filters, view, group, introShown, on }: { runs: readonl
         </button>
       )}
       <span className="flex-1" />
+      {tools}
       <button type="button" aria-pressed={introShown} onClick={() => on.setIntro(!introShown)} className="inline-flex items-center gap-1.5 rounded-md px-2 py-px text-sm text-ws-ink2 hover:bg-ws-hover">
         <Icon name="info" />
         How agents work
@@ -233,23 +233,41 @@ function Lane({ group, now, folded, onToggle, children }: { group: LaneGroup; no
   );
 }
 
-/** A workstream's runs in the Agents view, under its title and the stage they give it. */
-function WorkstreamSection({ group, children }: { group: WorkstreamGroup; children: ReactNode }) {
+/** A workstream's runs in the Agents view, under its title and the stage they give it; its detail opens from the heading. */
+function WorkstreamSection({ group, view, current, onOpen, children }: { group: WorkstreamGroup; view?: WorkstreamView; current: boolean; onOpen?(id: string): void; children: ReactNode }) {
+  const title = group.itemKey ? rowTitle({ itemKey: group.itemKey, title: group.title }) : group.title;
+  const name = group.itemKey ? `${group.itemKey} ${title}` : title;
+  const web = useWorkstreamWeb(view);
   return (
-    <section aria-label={group.title} data-workstream-group={group.id ?? "none"} className="grid gap-2.5">
+    <section aria-label={group.title} data-workstream-group={group.id ?? "none"} data-wither={web?.level} aria-current={current || undefined} className="relative grid gap-2.5">
       <div className="flex min-w-0 items-center gap-2">
         {group.id && (
           <span aria-hidden className="text-ws-pip">
             ◆
           </span>
         )}
-        <h3 className={`m-0 min-w-0 truncate text-sm font-semibold ${group.id ? "text-ws-ink" : "text-ws-ink2"}`}>{group.title}</h3>
+        <h3 className={`m-0 flex min-w-0 items-baseline gap-1.5 truncate text-sm font-semibold ${group.id ? "text-ws-ink" : "text-ws-ink2"}`}>
+          {group.itemKey ? (
+            <>
+              <b className="shrink-0 font-mono font-semibold">{group.itemKey}</b>
+              <span className="min-w-0 truncate">{title}</span>
+            </>
+          ) : (
+            group.title
+          )}
+        </h3>
         {group.stage && (
           <span data-stage={group.stage} data-waiting-for-pr={group.waitingForPr || undefined} className="shrink-0 rounded-full bg-ws-pip-soft px-2 text-xs font-semibold text-ws-pip">
             {stageText(group.stage, group.waitingForPr, group.reviewBlocking)}
           </span>
         )}
+        {view && <WorkstreamHeadExtras view={view} />}
         <span className="text-xs text-ws-ink3">{group.runs.length}</span>
+        {group.id && onOpen && (
+          <button type="button" data-workstream-open={group.id} aria-label={`Open workstream ${name}`} aria-expanded={current} onClick={() => onOpen(group.id!)} className="ml-auto shrink-0 rounded-md px-2 py-px text-sm font-semibold text-ws-accent hover:bg-ws-hover focus-visible:outline-2 focus-visible:outline-ws-pip">
+            Open
+          </button>
+        )}
       </div>
       {children}
     </section>
@@ -266,10 +284,22 @@ export interface AgentsScreenProps {
   earlierOpen: boolean;
   introShown: boolean;
   view: AgentsViewMode;
-  /** How runs are grouped; by state (the lanes) when absent. */
+  /** How runs are grouped; by workstream when absent. */
   group?: AgentsGroup;
-  /** The open workstreams, for their titles when grouped by workstream. */
+  /** The open workstreams, for their titles and where they stand when grouped by workstream. */
   workstreams?: readonly WorkstreamView[];
+  /** The workstream whose detail is open, if any. */
+  openWorkstream?: string | null;
+  /** What sits above the list and stays in view: the Needs you strip and its decision. */
+  top?: ReactNode;
+  /** A workstream's detail, docked beside the list. */
+  side?: ReactNode;
+  /** What leads the list: Start my day or Plan my week, and This week. */
+  lead?: ReactNode;
+  /** What the toolbar adds for workstreams: starting one, and the closed ones. */
+  tools?: ReactNode;
+  /** The closed workstreams, when they are asked for. */
+  closedSection?: ReactNode;
   stopping: boolean;
   /** Where "Clear finished…" goes in the header; it needs the stores, so the connected view passes it. */
   clear?: ReactNode;
@@ -299,7 +329,7 @@ export interface AgentsScreenProps {
 }
 
 /** The whole screen as a function of its state; `AgentsView` connects it to the stores. */
-export function AgentsScreen({ runs, status, error, environment, filters, selectedId, earlierOpen, introShown, view, group = "state", workstreams = NO_WORKSTREAMS, stopping, clear, archivedSection, opened, needsYou, inNeeds, asking, now, ticketTitle, draftReady, breakdownReady, descriptionReady, reviewThis, reviewOf, on, onOrder }: AgentsScreenProps) {
+export function AgentsScreen({ runs, status, error, environment, filters, selectedId, earlierOpen, introShown, view, group = "workstream", workstreams = NO_WORKSTREAMS, openWorkstream = null, top, lead, tools, closedSection, side, stopping, clear, archivedSection, opened, needsYou, inNeeds, asking, now, ticketTitle, draftReady, breakdownReady, descriptionReady, reviewThis, reviewOf, on, onOrder }: AgentsScreenProps) {
   const footer = useFooterHeight();
   // While the pointer is over the list or focus is in it, cards keep their places; the normal sort applies once both leave.
   const [hovered, setHovered] = useState(false);
@@ -321,7 +351,8 @@ export function AgentsScreen({ runs, status, error, environment, filters, select
   // Published in the commit, not after paint: j and k read this from a native window listener, which a passive effect can trail by one event.
   useLayoutEffect(() => onOrder?.(order), [order, onOrder]);
   const filtered = isFiltered(filters);
-  const shown = (lanes ?? wsGroups ?? []).reduce((n, g) => n + g.runs.length, 0);
+  // A workstream with no run yet is a group too, so the list is not empty while one exists.
+  const shown = (lanes ?? wsGroups ?? []).reduce((n, g) => n + g.runs.length, 0) + (wsGroups?.filter((g) => g.runs.length === 0).length ?? 0);
   // A run's short name in its workstream shows in the lanes too, as it does in the conversation that uses it.
   const labels = useMemo(() => Object.fromEntries(labelsByRun(runs)), [runs]);
 
@@ -381,79 +412,79 @@ export function AgentsScreen({ runs, status, error, environment, filters, select
   const waiting = status === "idle" || (status === "loading" && runs.length === 0);
 
   return (
-    <div ref={root} className="@container flex h-full min-h-0 flex-col">
-      <header className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-ws-sep bg-ws-bar px-6 py-2.5">
-        <h1 ref={title} tabIndex={-1} className="m-0 rounded text-base font-semibold focus-visible:outline-2 focus-visible:outline-ws-pip">
-          Agents
-        </h1>
-        <span aria-live="polite" className="text-sm text-ws-ink3">
-          {summaryLine(runs, now, needsYou)}
-        </span>
-        <span className="flex-1" />
-        {/* This screen is the operations view; what each run did, in order, is the timeline's Runs filter on Pip home. */}
-        {on.showTimeline && (
-          <button type="button" data-agents-timeline onClick={() => on.showTimeline?.("runs", "every")} className={BUTTON}>
-            Runs timeline
-          </button>
-        )}
-        <button type="button" onClick={on.startAgent} className={`${BUTTON} border-ws-pip bg-ws-pip font-semibold text-ws-on-pip hover:bg-ws-pip hover:brightness-110`}>
-          <Icon name="play" />
-          Start an agent
-        </button>
-        <button type="button" onClick={on.openSafety} className={BUTTON}>
-          <Icon name="shield" />
-          Safety and settings
-        </button>
-        {clear}
-        <StopAll count={stoppable(runs).length} waiting={slotWaiters(runs).length} busy={stopping} onStop={on.stopAll} />
-      </header>
-      <Toolbar runs={runs} filters={filters} view={view} group={group} introShown={introShown} on={on} />
-      <div className="min-h-0 flex-1 overflow-y-auto pt-5 pr-[max(24px,var(--ws-launcher-gutter,0px))] pb-[max(80px,var(--ws-launcher-clear,0px))] pl-6">
-        <div
-          data-agents-list
-          data-frozen={frozen || undefined}
-          onPointerEnter={() => setHovered(true)}
-          onPointerLeave={() => setHovered(false)}
-          onFocus={() => setFocused(true)}
-          onBlur={(ev) => setFocused(!!ev.relatedTarget && ev.currentTarget.contains(ev.relatedTarget as Node))}
-          className="grid gap-5.5"
-        >
-          <AgentsBanners environment={environment} loadError={status === "error" ? error : null} onCheckAgain={on.checkEnvironment} onRetry={on.retry} />
-          {introShown && <AgentsIntro onDismiss={on.dismissIntro} />}
-          {waiting ? (
-            <p role="status" className="m-0 py-10 text-center text-ws-ink3">
-              Loading agents…
-            </p>
-          ) : runs.length === 0 ? (
-            !introShown && status !== "error" && <AgentsEmpty />
-          ) : shown === 0 ? (
-            <NoMatch hidden={runs.length} onClear={on.clearFilters} />
-          ) : wsGroups ? (
-            wsGroups.map((g, gi) => (
-              <WorkstreamSection key={g.id ?? "none"} group={g}>
-                {items(g.title, g.runs, gi === 0, g.labels)}
-              </WorkstreamSection>
-            ))
-          ) : (
-            (lanes ?? []).map((g, gi) => (
-              <Lane key={g.lane} group={g} now={now} folded={laneIsFolded(g.lane, earlierOpen, filters)} onToggle={g.lane === "earlier" && !filtered ? on.toggleEarlier : undefined}>
-                {items(g.title, g.runs, gi === 0, labels)}
-              </Lane>
-            ))
-          )}
-          {!waiting && archivedSection}
-        </div>
-      </div>
-      <footer ref={footer} className="@container flex h-8 shrink-0 items-center gap-4 border-t border-ws-sep bg-ws-win px-6 text-xs text-ws-ink3">
-        <p className="m-0 min-w-0 flex-1 truncate">
-          <kbd className={KBD}>j</kbd> <kbd className={KBD}>k</kbd> move · <kbd className={KBD}>↵</kbd> open · <kbd className={KBD}>n</kbd> start an agent · <kbd className={KBD}>Esc</kbd> clear
-          <span className="hidden @xl:inline">
-            {" "}
-            · <kbd className={KBD}>F6</kbd> regions · <kbd className={KBD}>⌘K</kbd> jump · <kbd className={KBD}>⌘J</kbd> Pip · <kbd className={KBD}>{PIP_HOME_HINT}</kbd> Pip home
+    <div ref={root} data-agents-home className="flex h-full min-h-0">
+    <div className="@container flex h-full min-h-0 min-w-0 flex-1 flex-col">
+        <header className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-ws-sep bg-ws-bar px-6 py-2.5">
+          <h1 ref={title} tabIndex={-1} className="m-0 rounded text-base font-semibold focus-visible:outline-2 focus-visible:outline-ws-pip">
+            Agents
+          </h1>
+          <span aria-live="polite" className="text-sm text-ws-ink3">
+            {summaryLine(runs, now, needsYou)}
           </span>
-        </p>
-        <span className="hidden shrink-0 @3xl:inline">Agents use your own Claude settings and account</span>
-      </footer>
+          <span className="flex-1" />
+          <button type="button" onClick={on.startAgent} className={`${BUTTON} border-ws-pip bg-ws-pip font-semibold text-ws-on-pip hover:bg-ws-pip hover:brightness-110`}>
+            <Icon name="play" />
+            Start an agent
+          </button>
+          <button type="button" onClick={on.openSafety} className={BUTTON}>
+            <Icon name="shield" />
+            Safety and settings
+          </button>
+          {clear}
+          <StopAll count={stoppable(runs).length} waiting={slotWaiters(runs).length} busy={stopping} onStop={on.stopAll} />
+        </header>
+        {top}
+        <Toolbar runs={runs} filters={filters} view={view} group={group} introShown={introShown} tools={tools} on={on} />
+        <div className="min-h-0 flex-1 overflow-y-auto pt-5 pr-[max(24px,var(--ws-launcher-gutter,0px))] pb-[max(80px,var(--ws-launcher-clear,0px))] pl-6">
+          <div
+            data-agents-list
+            data-frozen={frozen || undefined}
+            onPointerEnter={() => setHovered(true)}
+            onPointerLeave={() => setHovered(false)}
+            onFocus={() => setFocused(true)}
+            onBlur={(ev) => setFocused(!!ev.relatedTarget && ev.currentTarget.contains(ev.relatedTarget as Node))}
+            className="grid gap-5.5"
+          >
+            <AgentsBanners environment={environment} loadError={status === "error" ? error : null} onCheckAgain={on.checkEnvironment} onRetry={on.retry} />
+            {introShown && <AgentsIntro onDismiss={on.dismissIntro} />}
+            {lead}
+            {waiting ? (
+              <p role="status" className="m-0 py-10 text-center text-ws-ink3">
+                Loading agents…
+              </p>
+            ) : runs.length === 0 && shown === 0 ? (
+              !introShown && status !== "error" && <AgentsEmpty />
+            ) : shown === 0 ? (
+              <NoMatch hidden={runs.length} onClear={on.clearFilters} />
+            ) : wsGroups ? (
+              wsGroups.map((g, gi) => (
+                <WorkstreamSection key={g.id ?? "none"} group={g} view={g.id ? workstreams.find((w) => w.workstream.id === g.id) : undefined} current={!!g.id && g.id === openWorkstream} onOpen={on.openWorkstream}>
+                  {g.runs.length ? items(g.title, g.runs, gi === 0, g.labels) : <p data-workstream-empty className="m-0 text-sm text-ws-ink3">No agents on this workstream yet.</p>}
+                </WorkstreamSection>
+              ))
+            ) : (
+              (lanes ?? []).map((g, gi) => (
+                <Lane key={g.lane} group={g} now={now} folded={laneIsFolded(g.lane, earlierOpen, filters)} onToggle={g.lane === "earlier" && !filtered ? on.toggleEarlier : undefined}>
+                  {items(g.title, g.runs, gi === 0, labels)}
+                </Lane>
+              ))
+            )}
+            {!waiting && closedSection}
+            {!waiting && archivedSection}
+          </div>
+        </div>
+        <footer ref={footer} className="@container flex h-8 shrink-0 items-center gap-4 border-t border-ws-sep bg-ws-win px-6 text-xs text-ws-ink3">
+          <p className="m-0 min-w-0 flex-1 truncate">
+            <kbd className={KBD}>j</kbd> <kbd className={KBD}>k</kbd> move · <kbd className={KBD}>↵</kbd> open · <kbd className={KBD}>n</kbd> start an agent · <kbd className={KBD}>Esc</kbd> clear
+            <span className="hidden @xl:inline">
+              {" "}
+              · <kbd className={KBD}>F6</kbd> regions · <kbd className={KBD}>⌘K</kbd> jump · <kbd className={KBD}>⌘J</kbd> Pip
+            </span>
+          </p>
+          <span className="hidden shrink-0 @3xl:inline">Agents use your own Claude settings and account</span>
+        </footer>
+    </div>
+    {side}
     </div>
   );
 }
@@ -499,7 +530,7 @@ const actions: AgentsActions = {
   startAgent: () => useRuns.getState().setPicking(true),
   openSafety: () => useRuns.getState().openSafety(),
   openNeed,
-  showTimeline,
+  openWorkstream: (id) => useWorkView.getState().openWorkstream(id),
 };
 
 export function AgentsView() {
@@ -515,11 +546,14 @@ export function AgentsView() {
   const stopping = useRuns((s) => s.stopping);
   const opened = useRuns((s) => s.terminalOpened);
   const needs = useNeedsYou();
-  const asking = usePipHome((s) => s.asking);
+  const asking = useWorkView((s) => s.asking);
   const inNeeds = useMemo(() => new Map(needs.flatMap((n) => (n.runId ? [[n.runId, n] as const] : []))), [needs]);
   const view = usePrefs((s) => s.agentsView);
   const group = usePrefs((s) => s.agentsGroup);
   const workstreams = useWorkstreams((s) => s.list);
+  const closed = useWorkstreams((s) => s.closed);
+  const showClosed = useWorkView((s) => s.showClosed);
+  const openWorkstream = useWorkView((s) => s.selected);
   const introSeen = usePrefs((s) => s.agentsIntroSeen);
   const items = useWorkspace((s) => s.items);
   const proposals = useWorkspace((s) => s.proposals);
@@ -540,7 +574,7 @@ export function AgentsView() {
   useEffect(() => {
     const onKey = (ev: KeyboardEvent) => {
       const target = ev.target as HTMLElement;
-      if (ev.defaultPrevented || ev.metaKey || ev.ctrlKey || ev.altKey || target.closest?.("input, textarea, select, [contenteditable], [role=dialog], #peek-sheet")) return;
+      if (ev.defaultPrevented || ev.metaKey || ev.ctrlKey || ev.altKey || target.closest?.("input, textarea, select, [contenteditable], [role=dialog], #peek-sheet, [data-agents-top]")) return;
       if (ev.key === "n") {
         if (useRuns.getState().sheet || useRunSetup.getState().open) return;
         ev.preventDefault();
@@ -551,7 +585,7 @@ export function AgentsView() {
       const card = target.matches?.("[data-run-id]") ? target : null;
       const runId = card?.getAttribute("data-run-id") ?? null;
       const need = runId ? currentNeeds().find((n) => n.runId === runId) : undefined;
-      const asked = usePipHome.getState().asking;
+      const asked = useWorkView.getState().asking;
       const listed = agentKey(ev, !!card, !!asked && asked.key === need?.key);
       if (listed) {
         if (listed.type === "confirm") return void (ev.preventDefault(), confirmArmed());
@@ -583,38 +617,50 @@ export function AgentsView() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
+  const onShowClosed = (on: boolean) => {
+    useWorkView.getState().setShowClosed(on);
+    if (on) void useWorkstreams.getState().loadClosed();
+  };
   return (
-    <AgentsScreen
-      onOrder={onOrder}
-      runs={runs}
-      status={status}
-      error={error}
-      environment={environment}
-      filters={filters}
-      selectedId={selectedId}
-      earlierOpen={earlierOpen}
-      introShown={introOpen ?? (!introSeen && runs.length === 0)}
-      view={view}
-      group={group}
-      workstreams={workstreams}
-      stopping={stopping}
-      clear={<ClearFinished runs={runs} />}
-      archivedSection={<ArchivedSection runs={archived} now={now} />}
-      opened={opened}
-      needsYou={needs.length}
-      inNeeds={inNeeds}
-      asking={asking}
-      now={now}
-      ticketTitle={(run) => (run.item ? (items[itemKey(run.item)]?.title ?? null) : null)}
-      draftReady={(run) => !!runDraftOf(proposals, run.id) || !!runTicketDraftOf(proposals, run.id)}
-      breakdownReady={(run) => !!runBreakdownDraftOf(proposals, run.id)}
-      descriptionReady={(run) => !!runDescriptionDraftOf(proposals, run.id)}
-      reviewThis={(run) => {
-        const change = changes[run.id] ?? null;
-        return change && reviewThisControl(run, change).enabled ? () => void useRunSetup.getState().begin(reviewThisOptions(run, change)) : undefined;
-      }}
-      reviewOf={(run) => shownVerdict(run, verdicts)}
-      on={actions}
-    />
+    <DecisionScope>
+      <AgentsScreen
+        onOrder={onOrder}
+        runs={runs}
+        status={status}
+        error={error}
+        environment={environment}
+        filters={filters}
+        selectedId={selectedId}
+        earlierOpen={earlierOpen}
+        introShown={introOpen ?? (!introSeen && runs.length === 0)}
+        view={view}
+        group={group}
+        workstreams={workstreams}
+        openWorkstream={openWorkstream}
+        top={<NeedsTop />}
+        lead={<DayAndWeek />}
+      side={openWorkstream ? <WorkstreamSheet id={openWorkstream} /> : null}
+        tools={<WorkstreamTools showClosed={showClosed} onShowClosed={onShowClosed} />}
+        closedSection={showClosed ? <ClosedWorkstreams closed={closed} open={workstreams} /> : null}
+        stopping={stopping}
+        clear={<ClearFinished runs={runs} />}
+        archivedSection={<ArchivedSection runs={archived} now={now} />}
+        opened={opened}
+        needsYou={needs.length}
+        inNeeds={inNeeds}
+        asking={asking}
+        now={now}
+        ticketTitle={(run) => (run.item ? (items[itemKey(run.item)]?.title ?? null) : null)}
+        draftReady={(run) => !!runDraftOf(proposals, run.id) || !!runTicketDraftOf(proposals, run.id)}
+        breakdownReady={(run) => !!runBreakdownDraftOf(proposals, run.id)}
+        descriptionReady={(run) => !!runDescriptionDraftOf(proposals, run.id)}
+        reviewThis={(run) => {
+          const change = changes[run.id] ?? null;
+          return change && reviewThisControl(run, change).enabled ? () => void useRunSetup.getState().begin(reviewThisOptions(run, change)) : undefined;
+        }}
+        reviewOf={(run) => shownVerdict(run, verdicts)}
+        on={actions}
+      />
+    </DecisionScope>
   );
 }

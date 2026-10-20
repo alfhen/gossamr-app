@@ -1,29 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import {
-  advanceRuns,
-  askPip,
-  commentOnTicket,
-  expandAllNeeds,
-  githubWrites,
-  homeComposer,
-  homeSettled,
-  jiraWrites,
-  mockRuns,
-  needOfKind,
-  needRow,
-  needsPane,
-  openApp,
-  openPipHome,
-  paneSettled,
-  peekSheet,
-  pipHome,
-  pipPane,
-  reviewedDraft,
-  startWorkstream,
-  workstreamRow,
-  expandNeedsYou,
-  expectToast,
-} from "./support/app";
+import { advanceRuns, agentsHome, askPip, commentOnTicket, expandAllNeeds, expandNeedsYou, expectToast, githubWrites, homeComposer, homeSettled, jiraWrites, mockRuns, needOfKind, needRow, needsPane, openAgents, openApp, paneSettled, peekSheet, pipPane, reviewedDraft, selectWorkstream, startMyDay, startWorkstream } from "./support/app";
 
 // Fixes from the eleventh dogfood round: the reporter's reply shown in the decision (G4), the pause before a GitHub review with
 // @everyone or a secret (G1), What Jira saw from me saying GitHub reviews are not listed (G2), numbered answers paired under
@@ -70,8 +46,8 @@ async function unclear(page: Page) {
   await finish(page, (await newest(page, "investigate"))!.id);
   await expect.poll(async () => (await newest(page, "triage"))?.id ?? null).not.toBeNull();
   await finish(page, (await newest(page, "triage"))!.id);
-  await openPipHome(page);
-  await workstreamRow(page, VAGUE).click();
+  await openAgents(page);
+  await selectWorkstream(page, VAGUE);
   await expect(needOfKind(page, "readiness")).toBeVisible();
 }
 
@@ -137,7 +113,7 @@ test.describe("numbered answers (G3)", () => {
     await expect(draft).toContainText("Answers: It is all about the winback flow.");
     await expect(draft.locator('[data-provenance="pip"]')).toContainText("the questions, then your answers as written");
     await expect(draft.locator('[data-provenance="pip"]')).not.toContainText("each answer under its question");
-    await expect(pipHome(page)).not.toContainText("each under its question");
+    await expect(agentsHome(page)).not.toContainText("each under its question");
   });
 });
 
@@ -194,8 +170,9 @@ test.describe("What Jira saw from me and GitHub reviews (G2)", () => {
 
   test("says the GitHub reviews are not listed and where they show", async ({ page }) => {
     await openApp(page, "runs=empty");
-    await openPipHome(page);
-    await pipHome(page).locator("[data-start-my-day] [data-day-sent]").click();
+    await openAgents(page);
+    await startMyDay(page);
+    await agentsHome(page).locator("[data-start-my-day] [data-day-sent]").click();
     const sent = page.locator("[data-jira-sent]");
     await expect(sent.getByRole("heading", { name: "What Jira saw from me" })).toBeVisible();
     await expect(sent).toContainText("GitHub reviews Gossamr posted are not listed here; each shows in its workstream's timeline as “You posted an agent's GitHub review”.");
@@ -208,7 +185,7 @@ test.describe("the chip on a GitHub review draft (G6)", () => {
     test.setTimeout(90_000);
     await reviewedDraft(page);
     await peekSheet(page).getByRole("button", { name: "Close" }).first().click().catch(() => undefined);
-    await openPipHome(page);
+    await openAgents(page);
     await expandAllNeeds(page);
     const row = needRow(page, "GitHub review");
     await expect(row).toHaveCount(1);
@@ -220,47 +197,14 @@ test.describe("the chip on a GitHub review draft (G6)", () => {
 
 // Keyboard and screen-reader fixes (G5, G7 to G14).
 
-test.describe("Ctrl+0 inside a workstream (G7, G8)", () => {
-  test("opens General from an empty composer, says it is off while a message is typed, and leaves the keyboard on General's row", async ({ page }) => {
-    test.setTimeout(90_000);
-    await openApp(page, "runs=empty&wsManage=1");
-    await startWorkstream(page, "CA-401");
-    await openPipHome(page);
-    const general = pipHome(page).locator('[data-workstream-row="general"]');
-    await workstreamRow(page, "CA-401").click();
-    await expect(general).toHaveAttribute("aria-selected", "false");
-    // Typed words keep the key off, and it says so.
-    await homeComposer(page).fill("half a thought");
-    await page.keyboard.press("ControlOrMeta+0");
-    await expect(page.locator("[data-toast]")).toContainText("Ctrl+0 is off while Pip's composer holds a message; clear or send it first");
-    await expect(general).toHaveAttribute("aria-selected", "false");
-    // Tabbing away from the message keeps it off too.
-    await pipHome(page).locator("[data-workstream-controls] button").first().focus();
-    await page.keyboard.press("ControlOrMeta+0");
-    await expect(general).toHaveAttribute("aria-selected", "false");
-    // Empty (G7), it goes on to General from the composer itself.
-    await homeComposer(page).fill("");
-    await homeComposer(page).focus();
-    await page.keyboard.press("ControlOrMeta+0");
-    await expect(general).toHaveAttribute("aria-selected", "true");
-    // From a button of the workstream's rail (G8) the keyboard is not left on the page.
-    await workstreamRow(page, "CA-401").click();
-    await pipHome(page).locator("[data-workstream-controls] button").first().focus();
-    await page.keyboard.press("ControlOrMeta+0");
-    await expect(general).toHaveAttribute("aria-selected", "true");
-    await expect(general).toBeFocused();
-    expect(await page.evaluate(() => document.activeElement?.tagName)).not.toBe("BODY");
-  });
-});
-
 test.describe("Hold and Resume keep the keyboard (G9), Close… is asked as a group (G13)", () => {
   test("Hold lands on Resume, Resume on Hold, and Tab stays between Close workstream and Keep", async ({ page }) => {
     test.setTimeout(90_000);
     await openApp(page, "runs=empty&wsManage=1");
     await startWorkstream(page, "CA-401");
-    await openPipHome(page);
-    await workstreamRow(page, "CA-401").click();
-    const controls = pipHome(page).locator("[data-workstream-controls]");
+    await openAgents(page);
+    await selectWorkstream(page, "CA-401");
+    const controls = pipPane(page).locator("[data-workstream-controls]");
     await controls.getByRole("button", { name: "Hold", exact: true }).click();
     await expect(controls.getByRole("button", { name: "Resume" })).toBeFocused();
     await controls.getByRole("button", { name: "Resume" }).click();
@@ -279,26 +223,12 @@ test.describe("Hold and Resume keep the keyboard (G9), Close… is asked as a gr
     test.setTimeout(90_000);
     await openApp(page, "runs=empty&wsManage=1");
     await startWorkstream(page, "CA-401");
-    await openPipHome(page);
-    await workstreamRow(page, "CA-401").click();
-    const controls = pipHome(page).locator("[data-workstream-controls]");
+    await openAgents(page);
+    await selectWorkstream(page, "CA-401");
+    const controls = pipPane(page).locator("[data-workstream-controls]");
     await controls.getByRole("button", { name: "Hold", exact: true }).click();
     await expect(controls.locator("[data-held-banner]")).toHaveAttribute("role", "group");
     expect(await page.locator('[role="status"]:not([data-toast-host])').evaluateAll((els) => els.filter((el) => el.querySelector("button")).map((el) => el.outerHTML.slice(0, 160)))).toEqual([]);
-  });
-});
-
-test.describe("the workstream list's names (G12)", () => {
-  test("a row is named by its key, title and status, not by the status's sentence", async ({ page }) => {
-    test.setTimeout(90_000);
-    await openApp(page, "runs=empty&wsManage=1");
-    await startWorkstream(page, "CA-401");
-    await openPipHome(page);
-    const row = workstreamRow(page, "CA-401");
-    await expect(row).toHaveAttribute("aria-label", /^CA-401 .+, [A-Z][\w ]+/);
-    expect(((await row.getAttribute("aria-label")) ?? "").length).toBeLessThan(120);
-    await expect(row).not.toHaveAttribute("aria-label", /Nothing is running|waits on you/);
-    await expect(row).toHaveAttribute("aria-describedby", /\S+/);
   });
 });
 
@@ -308,9 +238,10 @@ test.describe("Plan my week for a screen reader (G11)", () => {
   test("names a row by its place and title, says where a moved pick went, and names the This week button", async ({ page }) => {
     test.setTimeout(90_000);
     await openApp(page, "runs=empty");
-    await openPipHome(page);
-    await pipHome(page).locator("[data-start-my-day]").getByRole("button", { name: "Plan my week" }).click();
-    const plan = pipHome(page).locator("[data-plan-my-week]");
+    await openAgents(page);
+    await startMyDay(page);
+    await agentsHome(page).locator("[data-start-my-day]").getByRole("button", { name: "Plan my week" }).click();
+    const plan = agentsHome(page).locator("[data-plan-my-week]");
     const first = plan.locator("[data-plan-pick]").first();
     await expect(first).toHaveAttribute("aria-label", /^1\. .*[A-Z]+-\d+/);
     await expect(first).not.toHaveAttribute("aria-label", /Because|Alt and/i);
@@ -319,7 +250,7 @@ test.describe("Plan my week for a screen reader (G11)", () => {
     await page.keyboard.press("Alt+ArrowDown");
     await expect(plan.locator("[data-plan-moved]")).toHaveText(/ moved to position 2 of 3$/);
     await plan.getByRole("button", { name: "Keep this plan" }).click();
-    await expect(pipHome(page).getByRole("button", { name: "Edit this week's plan" })).toBeVisible();
+    await expect(agentsHome(page).getByRole("button", { name: "Edit this week's plan" })).toBeVisible();
   });
 });
 
@@ -329,9 +260,9 @@ test.describe("Esc at the posting pause (G14)", () => {
     await openApp(page, "runs=empty");
     await page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "All projects" }).click();
     await startWorkstream(page, "CA-408");
-    await openPipHome(page);
-    await workstreamRow(page, "CA-408").click();
-    await pipHome(page).locator("[data-clarity-notice]").getByRole("button", { name: "Ask the reporter now" }).click();
+    await openAgents(page);
+    await selectWorkstream(page, "CA-408");
+    await agentsHome(page).locator("[data-clarity-notice]").getByRole("button", { name: "Ask the reporter now" }).click();
     const draft = needsPane(page).getByRole("article", { name: "Comment on CA-408" });
     await draft.getByRole("button", { name: "Edit" }).click();
     const field = needsPane(page).locator("textarea").first();
@@ -347,10 +278,3 @@ test.describe("Esc at the posting pause (G14)", () => {
   });
 });
 
-test.describe("what limits a build on GitHub (G5)", () => {
-  test("Pip's intro says it is a request, applies with Pushing ticked, and runs as the person", async ({ page }) => {
-    await openApp(page, "runs=empty");
-    await openPipHome(page);
-    await expect(pipHome(page).getByRole("region", { name: "Conversation" })).toContainText("a Build runs as you. In a workstream or with Pushing ticked, it is asked to push only its branch to a draft pull request: a request, not a lock; see Agent safety.");
-  });
-});

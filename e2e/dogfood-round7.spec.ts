@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { homeConversation, jiraWrites, needOfKind, needsPane, needsYouCount, needsYouTray, openApp, openPipHome, pipHome, startWorkstream, workstreamRow } from "./support/app";
+import { agentsHome, homeConversation, jiraWrites, needOfKind, needsPane, needsYouCount, needsYouTray, openAgents, openApp, selectWorkstream, startMyDay, startWorkstream } from "./support/app";
 
 // Fixes from the seventh dogfood round: approving from the Decide pane, the Next line, Plan my week, Start my day, the
 // reporter's questions and What Jira saw from me.
@@ -9,8 +9,8 @@ const MANAGED = "wsManage=1";
 /** A workstream on CA-401, opened on Pip home. */
 async function workstreamOnHome(page: Page) {
   await startWorkstream(page, "CA-401");
-  await openPipHome(page);
-  await workstreamRow(page, "CA-401").click();
+  await openAgents(page);
+  await selectWorkstream(page, "CA-401");
   await expect(homeConversation(page)).toHaveText(/^Workstream: CA-401 /);
 }
 
@@ -31,45 +31,13 @@ test.describe("approving from the Decide pane (G1)", () => {
     // The plan is no longer a need. (The description Jira now holds is not the one the workstream was opened on, so a hold may take its place in the count.)
     await expect(needsYouTray(page)).not.toContainText("approving its description update is how the plan is approved");
     expect(Number(await needsYouCount(page).innerText())).toBeLessThanOrEqual(before);
-    await expect(pipHome(page)).toBeVisible();
+    await expect(agentsHome(page)).toBeVisible();
   });
 });
 
 const port = Number(process.env.E2E_PORT ?? 4173);
 /** The seeded profile without Start my day set aside, so its card shows. */
 const DAY_DUE = { cookies: [], origins: [{ origin: `http://localhost:${port}`, localStorage: [{ name: "gossamr-prefs", value: JSON.stringify({ pipOrientationSeen: true, permissionExplainerSeen: true }) }] }] };
-
-test.describe("Start my day, Plan my week and What Jira saw from me (G8, G9, G13)", () => {
-  test.use({ storageState: DAY_DUE });
-
-  test("the day card is a named stop, the plan says its week by date and what keeping does, and the sent view has a way back", async ({ page }) => {
-    test.setTimeout(90_000);
-    await page.setViewportSize({ width: 1440, height: 900 });
-    await openApp(page, "runs=empty");
-    await openPipHome(page);
-    // The F6 stop is a region of its own, named for what it holds.
-    await expect(pipHome(page).locator('[data-pip-home-day][role="region"]')).toHaveAttribute("aria-label", "Start my day");
-    const day = pipHome(page).locator("[data-start-my-day]");
-    await expect(day).toBeVisible();
-
-    await day.getByRole("button", { name: "Plan my week" }).click();
-    const plan = pipHome(page).locator("[data-plan-my-week]");
-    await expect(plan).toBeVisible();
-    await expect(pipHome(page).locator("[data-pip-home-day]")).toHaveAttribute("aria-label", "Plan my week");
-    await expect(plan.getByRole("heading", { name: /Plan my week · week of \d{1,2} \w{3}/ })).toBeVisible();
-    await expect(plan).not.toContainText(/\d{4}-W\d{2}/);
-    await expect(plan).toContainText("Keep this plan to see it as This week on Pip home; it stays on this device.");
-    await expect(plan).not.toContainText("Kept on this device");
-    await plan.locator("[data-plan-close]").click();
-
-    await day.getByRole("button", { name: "What Jira saw from me" }).click();
-    const sent = page.locator("[data-jira-sent]");
-    await expect(sent).toBeVisible();
-    await sent.getByRole("button", { name: "← Pip home" }).click();
-    await expect(sent).toHaveCount(0);
-    await expect(pipHome(page)).toBeVisible();
-  });
-});
 
 const activeTag = (page: Page) => page.evaluate(() => document.activeElement?.tagName ?? "none");
 
@@ -80,9 +48,10 @@ test.describe("keyboard: focus and Esc (G6, G7, G12)", () => {
     test.setTimeout(90_000);
     await page.setViewportSize({ width: 1440, height: 900 });
     await openApp(page, "runs=empty");
-    await openPipHome(page);
-    await pipHome(page).locator("[data-start-my-day]").getByRole("button", { name: "Plan my week" }).click();
-    const plan = pipHome(page).locator("[data-plan-my-week]");
+    await openAgents(page);
+    await startMyDay(page);
+    await agentsHome(page).locator("[data-start-my-day]").getByRole("button", { name: "Plan my week" }).click();
+    const plan = agentsHome(page).locator("[data-plan-my-week]");
     await expect(plan).toBeVisible();
     await expect(plan.locator("[data-plan-pick]").first()).toBeFocused();
     const before = await plan.locator("[data-plan-pick]").count();
@@ -102,9 +71,9 @@ test.describe("keyboard: focus and Esc (G6, G7, G12)", () => {
     test.setTimeout(90_000);
     await openApp(page, "runs=empty");
     await startWorkstream(page, "CA-408");
-    await openPipHome(page);
-    await workstreamRow(page, "CA-408").click();
-    const notice = pipHome(page).locator("[data-clarity-notice]");
+    await openAgents(page);
+    await selectWorkstream(page, "CA-408");
+    const notice = agentsHome(page).locator("[data-clarity-notice]");
     await notice.getByRole("button", { name: "Looks fine" }).focus();
     await page.keyboard.press("Enter");
     await expect(notice).toHaveCount(0);
@@ -116,19 +85,20 @@ test.describe("keyboard: focus and Esc (G6, G7, G12)", () => {
     test.setTimeout(90_000);
     await page.setViewportSize({ width: 1440, height: 900 });
     await openApp(page, "runs=empty");
-    await openPipHome(page);
-    await pipHome(page).locator("[data-start-my-day]").getByRole("button", { name: "What Jira saw from me" }).click();
+    await openAgents(page);
+    await startMyDay(page);
+    await agentsHome(page).locator("[data-start-my-day]").getByRole("button", { name: "What Jira saw from me" }).click();
     await expect(page.locator("[data-jira-sent]")).toBeVisible();
     await page.locator("body").click({ position: { x: 1, y: 1 } });
     await page.keyboard.press("Escape");
     await expect(page.locator("[data-jira-sent]")).toHaveCount(0);
-    await expect(pipHome(page)).toBeVisible();
+    await expect(agentsHome(page)).toBeVisible();
 
     await page.locator("aside", { has: page.getByRole("navigation", { name: "Workspace" }) }).getByRole("button", { name: "Settings" }).click();
     await expect(page.getByRole("heading", { name: "Settings", level: 1 })).toBeVisible();
     await page.locator("body").click({ position: { x: 1, y: 1 } });
     await page.keyboard.press("Escape");
     await expect(page.getByRole("heading", { name: "Settings", level: 1 })).toHaveCount(0);
-    await expect(pipHome(page)).toBeVisible();
+    await expect(agentsHome(page)).toBeVisible();
   });
 });

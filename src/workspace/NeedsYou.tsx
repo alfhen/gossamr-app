@@ -6,8 +6,8 @@ import { useWorkspace } from "../workspaceStore";
 import { useEditedDraft } from "./DraftCard";
 import { useDraftsRev } from "./draftLive";
 import { groupId, openNeed } from "./needsActions";
-import { BATCH_ASIDE, BATCH_TITLE, EDITED_ASIDE, batchLabel, draftEdited } from "./pipHomeLogic";
-import { usePipHome } from "./pipHomeStore";
+import { BATCH_ASIDE, BATCH_TITLE, EDITED_ASIDE, batchLabel, draftEdited } from "./workViewLogic";
+import { useWorkView } from "./workViewStore";
 
 const CHIP: Record<NeedGroupKind, string> = {
   decide: "bg-ws-pip text-ws-on-pip",
@@ -47,7 +47,7 @@ const ROW = "grid w-full rounded px-2 py-1 text-left text-sm leading-snug text-w
 
 /** The line a row shows while a key waits for Enter. */
 function Asking({ need }: { need: Need }) {
-  const asking = usePipHome((s) => s.asking);
+  const asking = useWorkView((s) => s.asking);
   if (asking?.key !== need.key) return null;
   return (
     <span data-needs-asking role="status" className="text-xs font-semibold text-ws-pip">
@@ -62,7 +62,7 @@ function Asking({ need }: { need: Need }) {
  */
 function SafeBatch({ needs, gid, aside }: { needs: readonly Need[]; gid: string; aside: number }) {
   const proposals = useWorkspace((s) => s.proposals);
-  const open = usePipHome((s) => s.batch === gid);
+  const open = useWorkView((s) => s.batch === gid);
   useDraftsRev();
   const drafts = needs.filter((n) => n.target.type === "draft" && proposals[n.target.id]);
   // A draft the person edited is posted from its card, so it is not counted in the batch.
@@ -80,7 +80,7 @@ function SafeBatch({ needs, gid, aside }: { needs: readonly Need[]; gid: string;
             type="button"
             aria-current={open ? "true" : undefined}
             title={BATCH_TITLE}
-            onClick={() => usePipHome.getState().previewBatch(gid)}
+            onClick={() => useWorkView.getState().previewBatch(gid)}
             className="rounded-md border border-ws-sep2 px-2.5 py-px text-sm font-semibold text-ws-ink hover:bg-ws-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip"
           >
             {batchLabel(count)}
@@ -102,7 +102,7 @@ function SafeBatch({ needs, gid, aside }: { needs: readonly Need[]; gid: string;
 }
 
 function NeedRow({ need, gid, now, onPick, showTicket, top }: { need: Need; gid: string; now: number; onPick?(need: Need): void; showTicket: boolean; top: boolean }) {
-  const deciding = usePipHome((s) => s.deciding === need.key);
+  const deciding = useWorkView((s) => s.deciding === need.key);
   // A draft the person edited and has not posted says so, and a comment's title follows the words as edited.
   const { edited, text: typed } = useEditedDraft(need.target.type === "draft" ? need.target.id : "");
   const title = editedTitle(need.title, typed);
@@ -147,13 +147,13 @@ function NeedRow({ need, gid, now, onPick, showTicket, top }: { need: Need; gid:
   );
 }
 
-/** Pip home's list opens its groups by default while this many needs or fewer wait, so each shows once, under its group. */
+/** The strip on Agents opens its groups by default while this many needs or fewer wait, so each shows once, under its group. */
 const OPEN_BY_DEFAULT = 8;
 
 function GroupRow({ group: g, now, onPick, openByDefault }: { group: NeedGroup; now: number; onPick?(need: Need): void; openByDefault: boolean }) {
   const gid = groupId(g.workstreamId);
-  const open = usePipHome((s) => s.expanded.has(gid) || (openByDefault && !s.collapsed.has(gid)));
-  const deciding = usePipHome((s) => s.deciding === g.top.key);
+  const open = useWorkView((s) => s.expanded.has(gid) || (openByDefault && !s.collapsed.has(gid)));
+  const deciding = useWorkView((s) => s.deciding === g.top.key);
   const text = groupText(g, now);
   const list = `needs-you-group-${gid}`;
   const expanded = g.count > 1 && open;
@@ -177,7 +177,7 @@ function GroupRow({ group: g, now, onPick, openByDefault }: { group: NeedGroup; 
         aria-label={expanded ? firstText(g) : undefined}
         onClick={() => {
           onPick?.(g.top);
-          if (g.count > 1) usePipHome.getState().setExpanded(gid, true);
+          if (g.count > 1) useWorkView.getState().setExpanded(gid, true);
           openNeed(g.top);
         }}
         className={`${ROW} ${deciding ? "bg-ws-sel" : ""}`}
@@ -219,7 +219,7 @@ function GroupRow({ group: g, now, onPick, openByDefault }: { group: NeedGroup; 
             aria-expanded={expanded}
             aria-controls={list}
             aria-label={expanded ? `Show less of what needs you in ${g.title}` : `+${g.count - 1} more that need you in ${g.title}`}
-            onClick={() => usePipHome.getState().setExpanded(gid, !expanded)}
+            onClick={() => useWorkView.getState().setExpanded(gid, !expanded)}
             className="rounded px-1 font-semibold text-ws-accent hover:underline focus-visible:outline-2 focus-visible:outline-ws-pip"
           >
             {expanded ? "Show less" : `+${g.count - 1} more`}
@@ -262,7 +262,7 @@ export interface NeedsYouListProps {
   needs: readonly Need[];
   /** The rail popover's form: no border of its own, a shorter list. */
   compact?: boolean;
-  /** Pip home's form: the main left column, taking the height it is given and scrolling inside it. */
+  /** The Agents strip's form: at the top of the view, scrolling inside a height of its own. */
   main?: boolean;
   /** Called with the need activated, before it opens; the popover closes itself with it. */
   onPick?(need: Need): void;
@@ -280,7 +280,7 @@ export function NeedsYouList({ needs, compact = false, main = false, onPick, now
   const box = useRef<HTMLElement>(null);
   const moreBelow = useMoreBelow(box);
   return (
-    <section ref={box} aria-label="Needs you" data-needs-you className={`grid min-h-0 content-start gap-1 overflow-y-auto ${compact ? "max-h-[min(400px,60vh)] p-2" : main ? "max-h-1/2 shrink px-1.5 pb-2" : "max-h-[38vh] border-t border-ws-sep pt-2"}`}>
+    <section ref={box} aria-label="Needs you" data-needs-you className={`grid min-h-0 content-start gap-1 overflow-y-auto ${compact ? "max-h-[min(400px,60vh)] p-2" : main ? "max-h-[min(36vh,20rem)] shrink-0 px-2 pb-2" : "max-h-[38vh] border-t border-ws-sep pt-2"}`}>
       <h2 data-needs-you-title tabIndex={-1} className={`sticky top-0 z-10 m-0 flex items-center gap-1.5 px-1 outline-none font-semibold tracking-wide uppercase ${main ? "bg-ws-bar pt-2 pb-1 text-sm text-ws-ink2" : "bg-ws-win text-xs text-ws-ink3"}`}>
         Needs you
         <span data-needs-you-count aria-label={`${needs.length} waiting`} className={`rounded-full px-1.5 text-[10px] ${needs.length ? "bg-ws-pip text-ws-on-pip" : "bg-ws-hover text-ws-ink3"}`}>

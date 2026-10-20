@@ -361,7 +361,7 @@ describe("shownKey", () => {
 
 describe("the map's zoom keys", () => {
   const key = (k: string, over: { metaKey?: boolean; ctrlKey?: boolean } = {}) => mapZoomKey({ key: k, metaKey: false, ctrlKey: false, ...over });
-  it("zoom with + = and -, fit with 0, and leave Cmd/Ctrl+0 to the app (Pip home)", () => {
+  it("zoom with + = and -, fit with 0, and leave Cmd/Ctrl+0 to the app", () => {
     expect([key("+"), key("="), key("-"), key("0"), key("j")]).toEqual(["in", "in", "out", "fit", null]);
     expect(key("0", { metaKey: true })).toBeNull();
     expect(key("0", { ctrlKey: true })).toBeNull();

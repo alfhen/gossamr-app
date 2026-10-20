@@ -5,11 +5,10 @@ import { flaggedGaps, projectOfKey, type ClarityLearning } from "./clarityLearni
 import { byRank, type Need, type NeedGroupKind } from "./needs";
 import { inWorkstreamPane, isReporterNudge, targetOf, workstreamOf } from "./proposals";
 import { nudgeOffered, waitedDays } from "./reporterWait";
-import { dayKey } from "../workspace/activityLogic";
 import { isJiraWrite, type WorkstreamWither } from "./workstreamWither";
 
 /**
- * Start my day: one card on Pip home that pulls together what the day should begin with, from state the page already holds
+ * Start my day: one card on Agents that pulls together what the day should begin with, from state the page already holds
  * (Needs you, the workstreams' views, their cobwebs, the drafts, the cached tickets). It decides nothing and counts nowhere:
  * every line is a way into something that already exists, and nothing here is a need. The builder is pure.
  */
@@ -21,7 +20,7 @@ export const DAY_ENTRIES = 3;
 export type DayAction =
   /** Opens need `key`'s decision. */
   | { type: "need"; need: Need }
-  /** Shows workstream `id` on Pip home. */
+  /** Shows workstream `id` on Agents. */
   | { type: "workstream"; id: string }
   /** Opens the ticket's peek. */
   | { type: "ticket"; key: string }
@@ -183,5 +182,3 @@ export function startMyDay(i: StartMyDayInput): StartMyDay {
   return { lines, empty: lines.length === 0 };
 }
 
-/** Whether the card shows at `now`: not once the person pressed "Done for now" today. A day set later than today (a clock turned back) also holds it. */
-export const startMyDayShown = (doneOn: string | null, now: Date) => !doneOn || doneOn < dayKey(now);

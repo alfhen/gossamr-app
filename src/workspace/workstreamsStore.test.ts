@@ -12,7 +12,7 @@ import { usePrefs } from "./prefs";
 import { useRuns } from "./runsStore";
 import { activeTab, loadTabs, useTabs } from "./tabsStore";
 import { contextFor, conversationTitle, focusComposer, focusedConversation, paneConversation, paneWorkstream, useWorkstreams, workstreamTicket } from "./workstreamsStore";
-import { usePipHome } from "./pipHomeStore";
+import { useWorkView } from "./workViewStore";
 import { undoLog } from "./undo";
 import { HELD_PERSON } from "../types";
 import { useToasts } from "./toasts";
@@ -46,13 +46,13 @@ afterEach(() => {
 });
 
 describe("starting a workstream from a ticket's peek (G24)", () => {
-  it("is the one Pip home shows when it is open, and says it started", async () => {
+  it("is the one Agents shows when it is open, and says it started", async () => {
     const { startFromPeek } = await import("./PeekSheet");
-    useTabs.getState().setRoute("pip");
-    usePipHome.getState().openGeneral();
+    useTabs.getState().setRoute("agents");
+    useWorkView.getState().closeWorkstream();
     await startFromPeek(CA401);
     const id = useWorkstreams.getState().forItem("CA-401")!.workstream.id;
-    expect(usePipHome.getState().selected).toBe(id);
+    expect(useWorkView.getState().selected).toBe(id);
     expect(useToasts.getState().toasts.map((t) => t.text)).toContain("Started a workstream on CA-401.");
   });
 
@@ -204,46 +204,47 @@ describe("what Pip sees in a workstream's conversation", () => {
   });
 });
 
-describe("Pip home's conversation", () => {
-  it("is the Pip home selection's on route pip, and the pane's everywhere else", async () => {
+describe("the Agents view's conversation", () => {
+  it("is the open workstream's on Agents, and the pane's everywhere else", async () => {
     const ws = (await useWorkstreams.getState().start(CA401))!;
     useTabs.getState().select(itemKey(CA401));
     expect(focusedConversation()).toBe(workstreamConversation(ws.workstream.id));
     expect(focusedConversation()).toBe(paneConversation());
-    useTabs.getState().setRoute("pip");
-    expect(usePipHome.getState().selected).toBeNull();
+    useTabs.getState().setRoute("agents");
+    expect(useWorkView.getState().selected).toBeNull();
     expect(focusedConversation()).toBe(GENERAL_CONVERSATION);
-    usePipHome.getState().openWorkstream(ws.workstream.id);
+    useWorkView.getState().openWorkstream(ws.workstream.id);
     expect(focusedConversation()).toBe(workstreamConversation(ws.workstream.id));
-    // The pane's own pick is untouched by Pip home's.
-    expect(paneConversation()).toBe(GENERAL_CONVERSATION);
+    expect(paneConversation()).toBe(workstreamConversation(ws.workstream.id));
+    // Leaving Agents puts the detail away, and the pane is General's again.
     useTabs.getState().setRoute("activity");
-    expect(focusedConversation()).toBe(paneConversation());
+    expect(useWorkView.getState().selected).toBeNull();
+    expect(focusedConversation()).toBe(GENERAL_CONVERSATION);
   });
 
-  it("selects a workstream started on Pip home there, and opens the drawer on its conversation", async () => {
+  it("opens a workstream started on Agents there, and the drawer on its conversation", async () => {
     usePrefs.getState().setPipOpen(false);
-    useTabs.getState().setRoute("pip");
+    useTabs.getState().setRoute("agents");
     const started = (await useWorkstreams.getState().start(CA401))!;
-    expect(usePipHome.getState().selected).toBe(started.workstream.id);
+    expect(useWorkView.getState().selected).toBe(started.workstream.id);
     expect(usePrefs.getState().pipOpen).toBe(true);
     expect(focusedConversation()).toBe(workstreamConversation(started.workstream.id));
   });
 
-  it("goes back to General once the selected workstream closes, or the workstreams go away", async () => {
-    useTabs.getState().setRoute("pip");
+  it("puts the detail away once the open workstream closes, or the workstreams go away", async () => {
+    useTabs.getState().setRoute("agents");
     const started = (await useWorkstreams.getState().start(CA401))!;
     await useWorkstreams.getState().close(started.workstream.id);
-    expect(usePipHome.getState().selected).toBeNull();
+    expect(useWorkView.getState().selected).toBeNull();
     const again = (await useWorkstreams.getState().start(CA401))!;
-    expect(usePipHome.getState().selected).toBe(again.workstream.id);
+    expect(useWorkView.getState().selected).toBe(again.workstream.id);
     useWorkstreams.getState().dispose();
-    expect(usePipHome.getState().selected).toBeNull();
+    expect(useWorkView.getState().selected).toBeNull();
   });
 
-  it("asks there in the selection's conversation and opens the drawer on it", async () => {
+  it("asks there in the focused conversation and opens the drawer on it", async () => {
     usePrefs.getState().setPipOpen(false);
-    useTabs.getState().setRoute("pip");
+    useTabs.getState().setRoute("agents");
     const sent: AskRequest[] = [];
     const ask = vi.spyOn(claude, "ask").mockImplementation(async (req) => (sent.push(req), { queued: false, ahead: 0 }));
     try {
@@ -254,7 +255,7 @@ describe("Pip home's conversation", () => {
     }
     expect(sent[0]).toMatchObject({ conversation: GENERAL_CONVERSATION });
     expect(usePrefs.getState().pipOpen).toBe(true);
-    expect(useTabs.getState().route).toBe("pip");
+    expect(useTabs.getState().route).toBe("agents");
   });
 
   it("lists the closed workstreams, and a read that an earlier one overtook doesn't land", async () => {
@@ -281,8 +282,8 @@ describe("Pip home's conversation", () => {
     await useWorkstreams.getState().loadEvents(id);
     expect(useWorkstreams.getState().events[id]?.map((e) => e.action)).toEqual((await backend.workstreamsEvents(id)).map((e) => e.action));
 
-    // Selected on Pip home, a change to it reads the audit again.
-    usePipHome.getState().openWorkstream(id);
+    // Open on Agents, a change to it reads the audit again.
+    useWorkView.getState().openWorkstream(id);
     await backend.workstreamsHold(id);
     await vi.waitFor(() => expect(useWorkstreams.getState().events[id]?.slice(-1)[0]?.action).toBe("held"));
 

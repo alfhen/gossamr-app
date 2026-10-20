@@ -24,6 +24,8 @@ export function Btn({ tone = "plain", icon, children, ...rest }: { tone?: Button
 }
 
 export interface FrameProps {
+  /** The element's id; the one sheet over a screen is `agent-sheet`, and a second one under it (a workstream's detail) has its own. */
+  id?: string;
   label: string;
   title: string;
   hint: ReactNode;
@@ -31,6 +33,8 @@ export interface FrameProps {
   /** The narrowest the sheet is drawn, in px; the pane width the person chose for the peek applies above it. */
   min?: number;
   draft?: boolean;
+  /** Docked in the page beside what it belongs to, as a column, rather than sliding over it from the right. */
+  docked?: boolean;
   /** The sheet is modal: Tab and Shift+Tab stay inside it, and a screen reader is told the page behind is not available. For the one the person must answer before carrying on. */
   modal?: boolean;
   onWide?(): void;
@@ -74,7 +78,7 @@ export function trapTab(ev: { key: string; shiftKey: boolean; altKey: boolean; c
   return at === items.length - 1 ? items[0] : null;
 }
 
-export function SheetFrame({ label, title, hint, wide, min = 520, draft = false, modal = false, onWide, onClose, children, footer, topOn }: FrameProps) {
+export function SheetFrame({ id = "agent-sheet", label, title, hint, wide, min = 520, draft = false, docked = false, modal = false, onWide, onClose, children, footer, topOn }: FrameProps) {
   const peek = usePaneWidths().peek;
   const frame = useRef<HTMLElement>(null);
   const body = useRef<HTMLDivElement>(null);
@@ -95,7 +99,7 @@ export function SheetFrame({ label, title, hint, wide, min = 520, draft = false,
     <aside
       ref={frame}
       tabIndex={-1}
-      id="agent-sheet"
+      id={id}
       role="dialog"
       aria-label={label}
       aria-modal={modal || undefined}
@@ -109,8 +113,8 @@ export function SheetFrame({ label, title, hint, wide, min = 520, draft = false,
             }
           : undefined
       }
-      className={`selectable ws-legacy ws-peek-in outline-none absolute inset-y-0 right-0 z-30 flex max-w-full flex-col border-l border-ws-sep2 bg-ws-win shadow-[-14px_0_40px_rgb(0_0_0/0.16)] ${draft ? "outline-2 -outline-offset-[5px] outline-dashed outline-ws-pip" : ""}`}
-      style={{ width: wide ? "100%" : Math.max(peek, min), minWidth: Math.min(min, 360) }}
+      className={`selectable ws-legacy outline-none flex max-w-full flex-col border-l border-ws-sep2 bg-ws-win ${docked ? "relative h-full shrink-0" : "ws-peek-in absolute inset-y-0 right-0 z-30 shadow-[-14px_0_40px_rgb(0_0_0/0.16)]"} ${draft ? "outline-2 -outline-offset-[5px] outline-dashed outline-ws-pip" : ""}`}
+      style={{ width: wide && !docked ? "100%" : Math.max(peek, min), minWidth: Math.min(min, 360) }}
     >
       <div className="flex shrink-0 items-center gap-2 border-b border-ws-sep px-3.5 py-2">
         <span className={`shrink-0 font-mono text-sm font-semibold ${draft ? "text-ws-pip" : "text-ws-ink2"}`}>{title}</span>

@@ -22,21 +22,21 @@ import { GroupChip } from "./NeedsYou";
 import { groupId, openInWorkstream, openNeed, setPaneIntent, takePaneIntent } from "./needsActions";
 import { chipLabel, editedTitle, openInWorkstreamLabel } from "../lib/needs";
 import { PermissionAsk } from "./PermissionAsk";
-import { usePipHome } from "./pipHomeStore";
+import { useWorkView } from "./workViewStore";
 import { RunAnswer } from "./RunAnswer";
 import { RunContinuation } from "./RunContinuation";
 import { SignInBox } from "./RunSheet";
 import { resumable } from "./runSheetLogic";
 import { useRuns } from "./runsStore";
 import { BatchConfirm, PlanApproval, confirmBatch, planResultFor } from "./StepRail";
-import { batchLabel, EDITED_ASIDE, editedPending, freezeBatch, type BatchSnapshot } from "./pipHomeLogic";
+import { batchLabel, EDITED_ASIDE, editedPending, freezeBatch, type BatchSnapshot } from "./workViewLogic";
 import { speakQuietToasts, useToasts } from "./toasts";
 import { controlActions, HeldBanner } from "./WorkstreamControls";
-import { openOnPipHome, takePlannedAnyway, useWorkstreams } from "./workstreamsStore";
+import { openOnAgents, takePlannedAnyway, useWorkstreams } from "./workstreamsStore";
 
-/** The row of `need` in Pip home's list: its own when the group is expanded, else its group's. */
+/** The row of `need` in the Needs you strip: its own when the group is expanded, else its group's. */
 function rowFor(need: Need): HTMLElement | null {
-  const list = '[data-pip-home-column="list"]';
+  const list = "[data-agents-strip]";
   return document.querySelector<HTMLElement>(`${list} [data-need-key="${CSS.escape(need.key)}"]`) ?? document.querySelector<HTMLElement>(`${list} [data-needs-you-group="${groupId(need.workstreamId)}"]`);
 }
 
@@ -46,11 +46,10 @@ export function closeTarget(opener: HTMLElement | null, pane: Pick<Node, "contai
   return row();
 }
 
-/** "Now: <workstream>" on the Done line: closes the decision, opens that workstream on Pip home and puts the keyboard on its row once it shows. */
+/** The Done line's first part: closes the decision and opens that workstream's detail on Agents, which takes the keyboard. */
 function backTo(workstreamId: string) {
-  usePipHome.getState().closeDecision();
-  openOnPipHome(workstreamId);
-  requestAnimationFrame(() => document.querySelector<HTMLElement>(`[data-workstream-row="${CSS.escape(workstreamId)}"]`)?.focus());
+  useWorkView.getState().closeDecision();
+  openOnAgents(workstreamId);
 }
 
 /**
@@ -77,9 +76,9 @@ function useAdvance(needs: readonly Need[], onAdvance: (done: Need, next: Need) 
     const was = earlier.current;
     previous.current = keys;
     earlier.current = needs;
-    const home = usePipHome.getState();
+    const home = useWorkView.getState();
     const deciding = home.deciding;
-    const lands = (next: Need | null) => requestAnimationFrame(() => (next ? rowFor(next) : document.querySelector<HTMLElement>('[data-pip-home-column="list"] [data-needs-you-title]'))?.focus());
+    const lands = (next: Need | null) => requestAnimationFrame(() => (next ? rowFor(next) : document.querySelector<HTMLElement>("[data-agents-strip] [data-needs-you-title]"))?.focus());
     if (deciding && before.includes(deciding) && !keys.includes(deciding)) {
       const next = needAfter(before, deciding, needs);
       if (next) {
@@ -87,7 +86,7 @@ function useAdvance(needs: readonly Need[], onAdvance: (done: Need, next: Need) 
         const done = was.find((n) => n.key === deciding);
         if (done) onAdvance(doneNeed(done), next);
         setPaneIntent("card");
-        home.decide(next.key, next.workstreamId);
+        home.decide(next.key);
       } else {
         // Nothing comes next, so no pane line says what was done: it is said where a screen reader hears it (G6).
         const done = was.find((n) => n.key === deciding);
@@ -635,7 +634,7 @@ function NeedDecision({ need }: { need: Need }) {
   const opener = useRef<HTMLElement | null>(null);
   if (opener.current === null && typeof document !== "undefined") opener.current = document.activeElement as HTMLElement | null;
   const close = () => {
-    usePipHome.getState().closeDecision();
+    useWorkView.getState().closeDecision();
     requestAnimationFrame(() => closeTarget(opener.current, root.current, () => rowFor(need))?.focus());
   };
   // Opened, the keyboard goes to the pane's heading, whatever kind of need it is, so a screen reader hears what was opened and Tab reaches the decision; "e" opens an edit where the card has one.
@@ -647,6 +646,8 @@ function NeedDecision({ need }: { need: Need }) {
     const go = () => {
       const el = root.current;
       if (!el) return;
+      // The pane sits under the strip in a scrolling page: it is brought into view as it takes the keyboard.
+      el.scrollIntoView?.({ block: "nearest" });
       if (intent !== "edit") {
         paneStop(el).focus({ preventScroll: true });
         return;
@@ -701,10 +702,10 @@ function NeedDecision({ need }: { need: Need }) {
       data-group={need.group}
       onKeyDown={onKeyDown}
       // The pane scrolls in its place. Its drafts' action bars stay where the card ends (a sticky one would float over the text and the review comments beneath it), so a long diff scrolls in a box of its own and the bar sits right under it.
-      className="grid max-h-[60%] min-h-0 shrink-0 content-start gap-2 overflow-y-auto border-b border-ws-sep bg-ws-bar px-3 py-2.5 outline-none [&_[data-draft-actions]]:static [&_[data-diff]]:max-h-[min(50vh,28rem)] [&_[data-diff]]:overflow-y-auto"
+      className="grid max-h-[min(70vh,40rem)] min-h-0 shrink-0 content-start gap-2 overflow-y-auto border-b border-ws-sep bg-ws-bar px-4 py-2.5 outline-none [&_[data-draft-actions]]:static [&_[data-diff]]:max-h-[min(50vh,28rem)] [&_[data-diff]]:overflow-y-auto"
     >
       {/* Kept in view while the decision under it scrolls: what is asked and why stays on screen. */}
-      <header className="sticky -top-2.5 z-[2] -mx-3 -mt-2.5 flex items-start gap-2 bg-ws-bar px-3 pt-2.5 pb-1">
+      <header className="sticky -top-2.5 z-[2] -mx-4 -mt-2.5 flex items-start gap-2 bg-ws-bar px-4 pt-2.5 pb-1">
         <div className="grid min-w-0 flex-1 gap-0.5">
           <div className="flex min-w-0 flex-wrap items-center gap-1.5 text-xs text-ws-ink3">
             {need.head && (
@@ -776,8 +777,8 @@ function BatchDecision({ gid, needs }: { gid: string; needs: readonly Need[] }) 
   const [title] = useState(() => group?.ticketKey ?? group?.title ?? "General");
   const root = useRef<HTMLElement>(null);
   const close = () => {
-    usePipHome.getState().closeDecision();
-    requestAnimationFrame(() => document.querySelector<HTMLElement>(`[data-pip-home-column="list"] [data-needs-you-group="${CSS.escape(gid)}"]`)?.focus());
+    useWorkView.getState().closeDecision();
+    requestAnimationFrame(() => document.querySelector<HTMLElement>(`[data-agents-strip] [data-needs-you-group="${CSS.escape(gid)}"]`)?.focus());
   };
   const confirm = async (covered: BatchSnapshot) => {
     setFrozen(null);
@@ -807,7 +808,7 @@ function BatchDecision({ gid, needs }: { gid: string; needs: readonly Need[] }) 
       data-kind="batch"
       data-group="approve"
       onKeyDown={onKeyDown}
-      className="grid max-h-[60%] min-h-0 shrink-0 content-start gap-2 overflow-y-auto border-b border-ws-sep bg-ws-bar px-3 py-2.5 outline-none"
+      className="grid max-h-[min(70vh,40rem)] min-h-0 shrink-0 content-start gap-2 overflow-y-auto border-b border-ws-sep bg-ws-bar px-4 py-2.5 outline-none"
     >
       <header className="flex items-start gap-2">
         <div className="grid min-w-0 flex-1 gap-0.5">
@@ -875,13 +876,13 @@ function BatchDecision({ gid, needs }: { gid: string; needs: readonly Need[] }) 
 }
 
 /**
- * The Needs you decision, open inline above Pip home's conversation: the need chosen in the list (`deciding`), or a group's "Approve N safe drafts" preview (`batch`), with what
+ * The Needs you decision, open inline under the strip on Agents: the need chosen in the list (`deciding`), or a group's "Approve N safe drafts" preview (`batch`), with what
  * it asks and what waiting does, decided with the same components the cards and the run sheet use. Once it is dealt with
  * the next need opens in its place; with none left the pane closes and the list says "Nothing needs you."
  */
 export function NeedsPane({ needs }: { needs: readonly Need[] }) {
-  const deciding = usePipHome((s) => s.deciding);
-  const paneRev = usePipHome((s) => s.paneRev);
+  const deciding = useWorkView((s) => s.deciding);
+  const paneRev = useWorkView((s) => s.paneRev);
   const [advanced, setAdvanced] = useState<Advanced | null>(null);
   const lastId = useRef(0);
   useAdvance(needs, (done, next) =>
@@ -905,7 +906,7 @@ export function NeedsPane({ needs }: { needs: readonly Need[] }) {
     const timer = setTimeout(() => setAdvanced(null), ADVANCED_MS);
     return () => clearTimeout(timer);
   }, [advanced]);
-  const batch = usePipHome((s) => s.batch);
+  const batch = useWorkView((s) => s.batch);
   const need = needs.find((n) => n.key === deciding);
   if (batch !== null) return <BatchDecision key={batch} gid={batch} needs={needs} />;
   if (!need) return null;

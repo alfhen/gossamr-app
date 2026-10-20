@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { advanceRuns, askPip, editTicket, jiraWrites, mockRuns, needsPane, needsYouTray, openApp, openPipHome, peekSheet, peekTicket, pipConversation, pipHome, pipPane, startWorkstream, stepChip, workstreamRow } from "./support/app";
+import { advanceRuns, agentsHome, askPip, editTicket, jiraWrites, mockRuns, needsPane, needsYouTray, openAgents, openApp, peekSheet, peekTicket, pipConversation, pipPane, selectWorkstream, startWorkstream, stepChip } from "./support/app";
 
 // Backlog items of the eighteenth dogfood round: Draft the Build after an approved plan in Advise (G14), the plan reading Approved once its
 // draft is posted (G17), an edited draft reopening as a preview with Edit (G26), and the smaller polish (G27).
@@ -78,8 +78,8 @@ test.describe("Draft the Build after an approved plan in Advise (G14, G17)", () 
     expect(await jiraWrites(page)).toHaveLength(1);
 
     // The plan's step no longer reads Ready to review: its draft was posted.
-    await openPipHome(page);
-    await workstreamRow(page, "CA-401").click();
+    await openAgents(page);
+    await selectWorkstream(page, "CA-401");
     await expect(stepChip(page, "plan").locator("[data-step-state]")).toHaveText("Approved");
   });
 });
@@ -91,9 +91,9 @@ test.describe("an edited draft reopens as a preview (G26)", () => {
     await editTicket(page, "CA-408", { description: "Fix it." });
     await page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "All projects" }).click();
     await startWorkstream(page, "CA-408");
-    await openPipHome(page);
-    await workstreamRow(page, "CA-408").click();
-    await pipHome(page).locator("[data-clarity-notice]").getByRole("button", { name: "Ask the reporter now" }).click();
+    await openAgents(page);
+    await selectWorkstream(page, "CA-408");
+    await agentsHome(page).locator("[data-clarity-notice]").getByRole("button", { name: "Ask the reporter now" }).click();
     const draft = needsPane(page).getByRole("article", { name: "Comment on CA-408" });
     await draft.getByRole("button", { name: "Edit" }).click();
     await needsPane(page).locator("textarea").first().fill("Kept after the card left.");
@@ -116,35 +116,6 @@ test.describe("an edited draft reopens as a preview (G26)", () => {
 
 test.describe("the glossary and the picker (G27)", () => {
   test.use({ storageState: FIRST_RUN });
-
-  test("the glossary stays one button away after Got it, and the Start-a-workstream picker says typing finds others", async ({ page }) => {
-    await page.goto("/");
-    await openPipHome(page);
-    await page.locator("[data-pip-orientation]").getByRole("button", { name: "Got it" }).click();
-    await expect(page.locator("[data-pip-orientation]")).toHaveCount(0);
-    const link = pipHome(page).locator("[data-orientation-link]");
-    await expect(link).toHaveText("What the words mean");
-    await link.click();
-    await expect(page.locator("[data-pip-orientation]").getByLabel("What the words mean", { exact: true })).toBeVisible();
-    await page.locator("[data-pip-orientation]").getByRole("button", { name: "Got it" }).click();
-    await expect(page.locator("[data-pip-orientation]")).toHaveCount(0);
-    await expect(link).toBeFocused();
-
-    await pipHome(page).getByRole("button", { name: "Start a workstream…" }).click();
-    const palette = page.getByRole("dialog", { name: "Command palette" });
-    await expect(palette.locator("[data-palette-lead]")).toHaveText("Only some tickets are listed. Type a key or words to find others.");
-    await palette.getByRole("combobox").fill("CA-4");
-    await expect(palette.locator("[data-palette-lead]")).toHaveCount(0);
-  });
-
-  test("the header's button opens the words even while Plan my week is open", async ({ page }) => {
-    await page.goto("/");
-    await openPipHome(page);
-    await page.locator("[data-pip-orientation]").getByRole("button", { name: "Got it" }).click();
-    await pipHome(page).locator("[data-start-my-day]").getByRole("button", { name: "Plan my week" }).click();
-    await pipHome(page).locator("[data-orientation-link]").click();
-    await expect(page.locator("[data-pip-orientation]").getByLabel("What the words mean", { exact: true })).toBeVisible();
-  });
 
   test("the left rail is a named region", async ({ page }) => {
     await openApp(page);

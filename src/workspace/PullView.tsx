@@ -130,7 +130,7 @@ export function PullViewSheet({ target, draft, onClose, diff: given }: { target:
 
   useLayoutEffect(() => panel.current?.focus(), []);
 
-  // Captured, so nothing behind the view (the peek, Pip home's columns, a canvas) takes its keys: Esc closes it, j and k
+  // Captured, so nothing behind the view (the peek, the Agents list, a canvas) takes its keys: Esc closes it, j and k
   // move through it, and Tab stays in it. Never while typing in a field of the view's own. The app's shortcuts with a
   // modifier (⌘J, ⌘K and the rest) don't reach behind it either, though the browser's own (copy, select all) still work.
   useEffect(() => {

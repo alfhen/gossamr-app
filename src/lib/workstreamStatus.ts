@@ -2,7 +2,7 @@ import type { Proposal, Run, WorkstreamEvent, WorkstreamView } from "../types";
 import { flaggedGaps, projectOfKey, type ClarityLearning } from "./clarityLearning";
 import { needsIn, type Need } from "./needs";
 import { workstreamOf } from "./proposals";
-import { NUDGE_AFTER_DAYS, WAITING_STATUS, answersDue, waitedDays } from "./reporterWait";
+import { NUDGE_AFTER_DAYS, answersDue, waitedDays } from "./reporterWait";
 import { isHeldByYou, shortHeld } from "./workstreamHold";
 import { STAGE_LABEL } from "./workstreamStage";
 import { witherShort, type WorkstreamWither } from "./workstreamWither";
@@ -30,29 +30,6 @@ import { witherShort, type WorkstreamWither } from "./workstreamWither";
  */
 export type StatusState = "needs-you" | "held" | "waiting" | "running" | "quiet" | "done" | "idle";
 
-/** The states from most to least urgent: the order `workstreamStatus` picks in, and the order a filter lists them. */
-export const STATUS_ORDER: readonly StatusState[] = ["needs-you", "held", "waiting", "running", "quiet", "done", "idle"];
-
-/** How far down the workstream list a state sits: what needs the person first, then what is held or waits on someone else, then what moves, then what does not. Held and Waiting on reporter share a rank (the person's own hold comes after them: `byStatusRank`). */
-const LIST_RANK: Record<StatusState, number> = { "needs-you": 0, held: 1, waiting: 1, running: 2, idle: 3, quiet: 4, done: 5 };
-
-/** Where the person's own hold sits: under the holds the system made (they ask something of the person), before what is running. */
-const HELD_BY_YOU_RANK = 1.5;
-
-/**
- * The workstreams in the order the list shows them: by their status (Needs you, then Held by the system and Waiting on
- * reporter, then Held by you, then Running, then Idle, Quiet and Done), each group in the order it was given (newest first, as
- * the store keeps them). `heldByYou` tells the person's own hold from one the system made; without it every hold is the system's.
- * Pure and stable; `items` is left as it is.
- */
-export function byStatusRank<T>(items: readonly T[], stateOf: (item: T) => StatusState, heldByYou: (item: T) => boolean = () => false): T[] {
-  const rankOf = (item: T) => {
-    const state = stateOf(item);
-    return state === "held" && heldByYou(item) ? HELD_BY_YOU_RANK : LIST_RANK[state];
-  };
-  return items.map((item, at) => ({ item, at, rank: rankOf(item) })).sort((a, b) => a.rank - b.rank || a.at - b.at).map((x) => x.item);
-}
-
 /** Colour tokens a state is drawn with (`ws-*` in theme.css); `ink` is the quiet grey. */
 export type StatusTone = "pip" | "warn" | "review" | "accent" | "ink" | "done";
 
@@ -74,27 +51,6 @@ export const STATUS_HINT: Record<StatusState, string> = {
 
 /** What "may be unclear" means, added to the Idle hint only where the pill carries that detail. */
 export const UNCLEAR_HINT = "\"may be unclear\" is a quick check of the ticket's words, not a decision waiting for you.";
-
-/** What the list says when a status filter matches no workstream. */
-export const EMPTY_FILTER: Record<StatusState, string> = {
-  "needs-you": "No workstream needs you.",
-  held: "No workstream is held.",
-  waiting: "No workstream is waiting on the reporter.",
-  running: "No workstream is running.",
-  quiet: "No workstream is quiet.",
-  done: "No workstream is done.",
-  idle: "No workstream is idle.",
-};
-
-/**
- * What the list says when the `state` filter matches no workstream. Runs that belong to General are no workstream's, so for
- * Running it adds where they are: "No workstream is running. 2 agents are running under General."
- */
-export function emptyFilterText(state: StatusState, generalRunning = 0): string {
-  const base = EMPTY_FILTER[state];
-  if (state !== "running" || generalRunning <= 0) return base;
-  return `${base} ${generalRunning === 1 ? "1 agent is" : `${generalRunning} agents are`} running under General.`;
-}
 
 export interface WorkstreamStatus {
   state: StatusState;
@@ -190,10 +146,3 @@ export function workstreamStatus(view: WorkstreamView, needs: readonly Pick<Need
   return make("idle", failed?.state === "failed" ? `${STAGE_LABEL[failed.spec.kind]} failed` : owed ? OWED_DETAIL : view.reporterReplied ? REPLIED_DETAIL : unclear ? UNCLEAR_DETAIL : null);
 }
 
-/** Whether a status matches a filter word the palette takes: "waiting on reporter", "needs you", "held", "running", "quiet", "done", "idle". */
-export function statusFromWords(words: string): StatusState | null {
-  const w = words.trim().toLowerCase().replace(/\s+/g, " ");
-  if (!w) return null;
-  if (w === "held by you") return "held";
-  return STATUS_ORDER.find((s) => STATUS_WORD[s].toLowerCase() === w || (s === "waiting" && (w === "waiting" || w === WAITING_STATUS.toLowerCase()))) ?? null;
-}

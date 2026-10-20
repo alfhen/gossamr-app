@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { advanceRuns, githubWrites, jiraWrites, openApp, peekSheet, peekTicket } from "./support/app";
+import { advanceRuns, githubWrites, jiraWrites, landOnWorkspace, openApp, peekSheet, peekTicket } from "./support/app";
 
 const setup = (page: Page) => page.getByRole("dialog", { name: "Start an agent" });
 const safety = (page: Page) => page.getByRole("dialog", { name: "Agents safety and settings" });
@@ -25,6 +25,7 @@ async function reviewTheBuild(page: Page) {
 
 test("a Review the person starts from Review this finishes with a blocking verdict shown on its card and sheet, read from its written answer", async ({ page }) => {
   // A signed-in GitHub connection, so the code host knows the build's pull request #218 (`?mockRepos`, src/backend/mockWatch.ts).
+  await landOnWorkspace(page);
   await page.goto("/?mockRepos=14");
   await page.getByRole("button", { name: "Start watching" }).click();
   await expect(page.getByText("CA-401", { exact: true }).first()).toBeVisible();

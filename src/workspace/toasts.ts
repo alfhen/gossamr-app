@@ -24,8 +24,6 @@ export interface Toast {
    * before it), is never dropped for waiting, and a second one with the same words replaces the first.
    */
   keep?: boolean;
-  /** As `ToastOptions.now`: it answers a keypress, so it took the screen from a note rather than waiting behind it. */
-  now?: boolean;
   /** As `ToastOptions.spoken`. */
   spoken?: false;
 }
@@ -37,12 +35,6 @@ export interface ToastOptions {
   lifetime?: number;
   /** As `Toast.keep`. */
   keep?: boolean;
-  /**
-   * The note answers a key the person just pressed (Ctrl+0 is off): it takes the screen at once instead of queuing as "+1 more"
-   * behind a note that is about something else, which it replaces. It never takes the screen from an error or an offer to
-   * undo; it goes next to the head then, ahead of the notes waiting.
-   */
-  now?: boolean;
   /** `false` when a line beside the toast already says it to a screen reader (the pane's "Skipped: …"): its live region stays empty, so it is not announced twice. */
   spoken?: false;
 }
@@ -117,26 +109,16 @@ export const useToasts = create<ToastState>((set, get) => {
 
     push(text, tone = "error", action, options) {
       const keep = !!options?.keep;
-      const now = !!options?.now;
       if (!keep && get().toasts.some((t) => t.text === text)) return null;
       const id = ++seq;
       set((s) => {
-        const toast: Toast = { id, text, tone, action, at: Date.now(), current: options?.current, lifetime: options?.lifetime, keep, now, ...(options?.spoken === false ? { spoken: false as const } : {}) };
+        const toast: Toast = { id, text, tone, action, at: Date.now(), current: options?.current, lifetime: options?.lifetime, keep, ...(options?.spoken === false ? { spoken: false as const } : {}) };
         // The same offer again (a second Hold of the same workstream) replaces the one before it, on screen or waiting (an error on screen stays).
         const queue = keep ? s.toasts.filter((t, i) => (i === 0 && t.tone === "error") || t.text !== text) : s.toasts;
         // An error goes ahead of the notes waiting, behind the one on screen and any errors before it. An offer to undo goes
         // to the front: it is a few seconds long, and what it undoes is what the person just did. It takes the screen from a
         // note or an older offer (which waits behind it, still reachable), never from an error, which it queues behind.
         const head = queue[0];
-        if (now && !keep) {
-          // A note on screen gives way; an error or an offer stays, and the answer comes right behind it.
-          const yields = !head || (head.tone !== "error" && !head.keep);
-          // Errors and offers already waiting still come first; the answer goes ahead of the ordinary notes.
-          const rest = yields ? queue.slice(1) : queue;
-          const from = yields ? 0 : 1;
-          const at = rest.findIndex((t, i) => i >= from && t.tone === "info" && !t.keep);
-          return { toasts: at < 0 ? [...rest, toast] : [...rest.slice(0, at), toast, ...rest.slice(at)] };
-        }
         const front = keep && (!head || head.tone !== "error");
         const at = tone === "error" ? queue.findIndex((t, i) => i > 0 && t.tone === "info") : -1;
         // Behind errors, an offer still comes ahead of an older offer: the first one up is always the newest action's.

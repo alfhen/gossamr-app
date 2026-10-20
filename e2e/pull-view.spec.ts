@@ -1,28 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import {
-  agentsSettled,
-  expectVisibleFocus,
-  finishOnHome,
-  githubWrites,
-  homeComposer,
-  homeConversationRegion,
-  homeRunCards,
-  homeSettled,
-  inlineStart,
-  mockRuns,
-  openApp,
-  openPipHome,
-  peekSheet,
-  pipHome,
-  pipPane,
-  reviewedDraft,
-  setBudget,
-  startWorkstream,
-  stepChip,
-  surfacePullRequests,
-  workstreamEvents,
-  workstreamRow,
-} from "./support/app";
+import { expectVisibleFocus, githubWrites, peekSheet, pipPane, reviewedDraft } from "./support/app";
 
 const RETRY = "src/consumer/retry.ts";
 
@@ -67,66 +44,5 @@ test("from the peek's development section: the pull request in Gossamr with the 
   await expect(view).toHaveCount(0);
   await expect(peekSheet(page)).toBeVisible();
   await expect(open).toBeFocused();
-  expect(await githubWrites(page)).toEqual([]);
-});
-
-test("from the step rail's Review step on Pip home, the view opens with the review's draft; j typed in the composer stays text", async ({ page }) => {
-  test.setTimeout(120_000);
-  // GitHub is signed in and the agents' repository watched, as the real app needs before it reads the build's pull request.
-  await openApp(page, "runs=empty&prSurface=manual&wsManage=1&mockRepos=12");
-  await agentsSettled(page);
-  await startWorkstream(page, "CA-401");
-  const ws = (await workstreamEvents(page))[0].workstreamId;
-  await setBudget(page, ws, { autoTurns: 12 });
-  await openPipHome(page);
-  await workstreamRow(page, "CA-401").click();
-
-  // Intake to a finished review, as the journey goes: investigate in place, then the rules, with the plan approved in the peek.
-  await homeConversationRegion(page).getByRole("button", { name: "Investigate CA-401", exact: true }).click();
-  await homeSettled(page);
-  const start = await inlineStart(page, homeRunCards(page, "CA-401").last());
-  await start.getByRole("button", { name: "Start agent" }).click();
-  await expect(start).toHaveCount(0);
-  const newest = async (kind: string) => (await mockRuns(page)).find((r) => r.kind === kind) ?? null;
-  const started = async (kind: string) => {
-    await expect.poll(async () => (await newest(kind))?.id ?? null).not.toBeNull();
-    return (await newest(kind))!;
-  };
-  await finishOnHome(page, (await started("investigate")).id);
-  await finishOnHome(page, (await started("triage")).id);
-  await finishOnHome(page, (await started("plan")).id);
-  const planChip = stepChip(page, "plan").locator("[data-step-chip]");
-  if ((await planChip.getAttribute("aria-expanded")) !== "true") await planChip.click();
-  await stepChip(page, "plan").getByRole("article", { name: "Update the description of CA-401" }).getByRole("button", { name: "Review on CA-401 →" }).click();
-  await peekSheet(page).getByRole("article", { name: "Update the description of CA-401" }).filter({ hasText: "Gossamr Plan" }).getByRole("button", { name: "Update description" }).click();
-  await page.keyboard.press("Escape");
-  await expect(peekSheet(page)).toHaveCount(0);
-  await finishOnHome(page, (await started("build")).id);
-  await surfacePullRequests(page);
-  await finishOnHome(page, (await started("review")).id);
-
-  const open = stepChip(page, "review").getByRole("button", { name: /^PR view of acme\/storefront#\d+$/ });
-  await expect(open).toBeVisible();
-  const name = (await open.getAttribute("aria-label"))!.replace(/^PR view of /, "");
-  await open.click();
-  const view = page.getByRole("dialog", { name: `Pull request ${name}` });
-  await expect(view).toBeVisible();
-  // The pending review draft's comments are there, at their lines.
-  await expect(view.locator("[data-pull-review]")).toContainText("not posted");
-  await expect(view.getByRole("note", { name: `Comment on ${RETRY}:42` })).toBeVisible();
-  await walk(page, ["j", "j", "k"], [`file ${RETRY}`, `comment ${RETRY}:17`, `file ${RETRY}`]);
-  await page.keyboard.press("Escape");
-  await expect(view).toHaveCount(0);
-  await expect(open).toBeFocused();
-  await expect(pipHome(page)).toBeVisible();
-  // The repository is watched and the token may write there, so the review's draft offers posting, not just the view.
-  const draft = pipHome(page).getByRole("article", { name: `GitHub review of ${name}` }).first();
-  await expect(draft.getByRole("button", { name: "Review and post →" })).toBeVisible();
-
-  // With the view closed, j and k typed in the composer are just text.
-  await homeComposer(page).click();
-  await page.keyboard.type("jk");
-  await expect(homeComposer(page)).toHaveValue("jk");
-  await expect(view).toHaveCount(0);
   expect(await githubWrites(page)).toEqual([]);
 });

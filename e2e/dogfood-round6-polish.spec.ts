@@ -1,5 +1,5 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
-import { commentOnTicket, editTicket, expectToast, jiraWrites, needsPane, openApp, openPipHome, peekSheet, peekTicket, pipHome, startWorkstream, workstreamRow } from "./support/app";
+import { agentsHome, commentOnTicket, editTicket, expectToast, jiraWrites, needsPane, openAgents, openApp, pipPane, selectWorkstream, startMyDay, startWorkstream, workstreamGroup } from "./support/app";
 
 // The polish backlog of the sixth dogfood round: Plan my week asks reporters about unclear tickets (at most one pick) and
 // shows several matches to choose from, a workstream closed on a ticket that is not Done is "closed, not done" and can be
@@ -14,31 +14,17 @@ const DAY_DUE = prefs();
 const LEARNED = prefs({ clarityLearning: { CA: { short: 3, done: 3, scope: 3, who: 3 } } });
 
 const CLEAR = "The checkout total must show the discount, only for valid codes. The support team is waiting on it. Done when the total and the order e-mail agree.";
-const palette = (page: Page) => page.getByRole("dialog", { name: "Command palette" });
-const allProjects = (page: Page) => page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "All projects" }).click();
-const plan = (page: Page) => pipHome(page).locator("[data-plan-my-week]");
+const plan = (page: Page) => agentsHome(page).locator("[data-plan-my-week]");
 const picks = (page: Page) => plan(page).locator("[data-plan-pick]");
-const thisWeek = (page: Page) => pipHome(page).locator("[data-this-week]");
 const notice = (scope: Locator) => scope.locator("[data-clarity-notice]");
 
-async function runCommand(page: Page, query: string, option: string | RegExp) {
-  await page.keyboard.press("ControlOrMeta+k");
-  await expect(palette(page)).toBeVisible();
-  await page.keyboard.type(query);
-  await palette(page).getByRole("option", { name: option }).first().click();
-  await expect(palette(page)).toHaveCount(0);
-}
 
-/** A workstream on ticket `key`, begun from its peek. */
-async function begin(page: Page, key: string) {
-  await allProjects(page);
-  await startWorkstream(page, key);
-}
 
 /** Opens Plan my week from Start my day's card. */
 async function openPlan(page: Page) {
-  await openPipHome(page);
-  await pipHome(page).locator("[data-start-my-day]").getByRole("button", { name: "Plan my week" }).click();
+  await openAgents(page);
+  await startMyDay(page);
+  await agentsHome(page).locator("[data-start-my-day]").getByRole("button", { name: "Plan my week" }).click();
   await expect(plan(page)).toBeVisible();
 }
 
@@ -132,47 +118,6 @@ test.describe("Plan my week (G15, G24, G26)", () => {
   });
 });
 
-test.describe("This week: closed, not done (G18)", () => {
-  test.use({ storageState: DAY_DUE });
-
-  test("a workstream closed on a ticket that is not Done is marked closed, not done; Reopen takes it back and the plan keeps that", async ({ page }) => {
-    test.setTimeout(150_000);
-    await openApp(page, "runs=empty");
-    await begin(page, "CA-402");
-    await openPlan(page);
-    await clearPicks(page);
-    await plan(page).locator("[data-plan-add]").fill("CA-402");
-    await plan(page).locator("[data-plan-add-go]").click();
-    await expect(picks(page)).toHaveCount(1);
-    await plan(page).getByRole("button", { name: "Keep this plan" }).click();
-    await expect(thisWeek(page).locator("[data-this-week-item]")).toHaveCount(1);
-    await expect(thisWeek(page).locator("[data-this-week-reopen]")).toHaveCount(0);
-
-    await allProjects(page);
-    await peekTicket(page, "CA-402");
-    await peekSheet(page).getByRole("button", { name: "Close…" }).click();
-    await peekSheet(page).getByRole("group", { name: "Close this workstream" }).getByRole("button", { name: "Close workstream" }).click();
-    await openPipHome(page);
-    const item = thisWeek(page).locator("[data-this-week-item]");
-    // Closed on a ticket still in progress: dropped, not finished.
-    await expect(item).toHaveAttribute("data-closed", "true");
-    await expect(item).not.toHaveAttribute("data-done", /.*/);
-    await expect(item).toHaveAttribute("title", /isn't Done in Jira/);
-    await expect(item.locator("[data-this-week-closed]")).toHaveText("closed, not done");
-    await expect(thisWeek(page).getByRole("button", { name: /^Closed, not done: CA-402/ })).toBeVisible();
-    await expect(thisWeek(page).locator("[data-done]")).toHaveCount(0);
-
-    // Reopen takes it back to open, and the stored plan says so.
-    await item.locator("[data-this-week-reopen]").click();
-    await expect(item).not.toHaveAttribute("data-closed", /.*/);
-    await expect(item.locator("[data-this-week-reopen]")).toHaveCount(0);
-    await expect(thisWeek(page).getByRole("button", { name: /^CA-402/ })).toBeVisible();
-    const stored = await page.evaluate(() => Object.values(JSON.parse(localStorage.getItem("gossamr-prefs") ?? "{}").weekPlans ?? {}) as { items: { id: string; ticketKey: string | null; reopened?: boolean }[] }[]);
-    expect(stored[0].items.map((i) => [i.ticketKey, i.reopened])).toEqual([["CA-402", true]]);
-    expect(await jiraWrites(page)).toEqual([]);
-  });
-});
-
 test.describe("toasts from the keyboard (G22)", () => {
   test.use({ storageState: DAY_DUE });
 
@@ -199,32 +144,13 @@ test.describe("the workstream list (G17, G21)", () => {
   test("an idle workstream whose ticket may be unclear says so in the pill's detail, and stays Idle (a notice is no need)", async ({ page }) => {
     await openApp(page, "runs=empty");
     await startWorkstream(page, "CA-408");
-    await openPipHome(page);
-    const row = workstreamRow(page, "CA-408");
+    await openAgents(page);
+    const row = workstreamGroup(page, "CA-408");
     await expect(row.locator("[data-status]")).toHaveText("Idle");
     await expect(row.locator("[data-status-detail]")).toHaveText("· may be unclear");
-    await expect(pipHome(page).locator("[data-needs-you-count]")).toHaveText("0");
+    await expect(agentsHome(page).locator("[data-needs-you-count]")).toHaveText("0");
   });
 
-  test("a status filter keeps the open workstream listed, dimmed and said so", async ({ page }) => {
-    test.setTimeout(90_000);
-    await openApp(page, "runs=empty");
-    await startWorkstream(page, "CA-408");
-    await begin(page, "CA-402");
-    await openPipHome(page);
-    await workstreamRow(page, "CA-402").click();
-    await runCommand(page, "show workstreams held", "Show held workstreams");
-    await expect(pipHome(page).locator('[data-status-filter="held"]')).toContainText("Showing Held: 0");
-    const open = workstreamRow(page, "CA-402");
-    await expect(open).toBeVisible();
-    await expect(open).toHaveAttribute("data-filtered-out", "");
-    await expect(open.locator("[data-filter-shown]")).toContainText("Shown because it is open; not Held");
-    // The one that isn't open and doesn't match is out of the list.
-    await expect(workstreamRow(page, "CA-408")).toHaveCount(0);
-    await runCommand(page, "show all workstreams", "Show all workstreams");
-    await expect(pipHome(page).locator("[data-filter-shown]")).toHaveCount(0);
-    await expect(workstreamRow(page, "CA-408")).toBeVisible();
-  });
 });
 
 test.describe("the reporter's reply (G16)", () => {
@@ -232,19 +158,19 @@ test.describe("the reporter's reply (G16)", () => {
     test.setTimeout(120_000);
     await openApp(page, "runs=empty");
     await startWorkstream(page, "CA-408");
-    await openPipHome(page);
-    await workstreamRow(page, "CA-408").click();
-    await notice(pipHome(page)).getByRole("button", { name: "Ask the reporter now" }).click();
+    await openAgents(page);
+    await selectWorkstream(page, "CA-408");
+    await notice(agentsHome(page)).getByRole("button", { name: "Ask the reporter now" }).click();
     await needsPane(page).getByRole("article", { name: "Comment on CA-408" }).getByRole("button", { name: "Post comment" }).click();
     await expect.poll(async () => (await jiraWrites(page)).map((w) => [w.type, w.key])).toEqual([["comment", "CA-408"]]);
-    await expect(pipHome(page).locator("[data-next-step]")).toContainText("Waiting on the reporter since");
-    await expect(pipHome(page).locator("[data-timeline]")).not.toContainText("The reporter replied on the ticket");
+    await expect(agentsHome(page).locator("[data-next-step]")).toContainText("Waiting on the reporter since");
+    await expect(pipPane(page).locator("[data-timeline]")).not.toContainText("The reporter replied on the ticket");
 
     await commentOnTicket(page, "CA-408", "It should send three emails.");
-    await expect(pipHome(page).locator("[data-timeline]")).toContainText("The reporter replied on the ticket");
+    await expect(pipPane(page).locator("[data-timeline]")).toContainText("The reporter replied on the ticket");
     // The notice is back, but it doesn't repeat the gaps as if nothing was said.
-    await expect(notice(pipHome(page))).toContainText("CA-408: the reporter replied; read it, then Looks fine or ask again.");
-    await expect(notice(pipHome(page))).not.toContainText("may be unclear");
+    await expect(notice(agentsHome(page))).toContainText("CA-408: the reporter replied; read it, then Looks fine or ask again.");
+    await expect(notice(agentsHome(page))).not.toContainText("may be unclear");
     expect((await jiraWrites(page)).map((w) => w.type)).toEqual(["comment"]);
   });
 });
@@ -256,11 +182,11 @@ test.describe("what Looks fine taught (G19)", () => {
     test.setTimeout(120_000);
     await openApp(page, "runs=empty");
     await startWorkstream(page, "CA-408");
-    await openPipHome(page);
-    await workstreamRow(page, "CA-408").click();
+    await openAgents(page);
+    await selectWorkstream(page, "CA-408");
     // Everything is taught away: no notice, but the note says so.
-    await expect(notice(pipHome(page))).toHaveCount(0);
-    const quiet = pipHome(page).locator("[data-clarity-quiet]");
+    await expect(notice(agentsHome(page))).toHaveCount(0);
+    const quiet = agentsHome(page).locator("[data-clarity-quiet]");
     await expect(quiet).toContainText("Not flagged: you said Looks fine to");
     await expect(quiet).toContainText("in CA tickets");
 
@@ -274,9 +200,9 @@ test.describe("what Looks fine taught (G19)", () => {
     await expect(learned.locator('[data-clarity-gap="short"]')).toHaveCount(0);
 
     // That gap alone is flagged again on the workstream.
-    await openPipHome(page);
-    await workstreamRow(page, "CA-408").click();
-    await expect(notice(pipHome(page))).toContainText("CA-408 may be unclear: it has a very short description.");
-    await expect(pipHome(page).locator("[data-clarity-quiet]")).toContainText("Not flagged: you said Looks fine to");
+    await openAgents(page);
+    await selectWorkstream(page, "CA-408");
+    await expect(notice(agentsHome(page))).toContainText("CA-408 may be unclear: it has a very short description.");
+    await expect(agentsHome(page).locator("[data-clarity-quiet]")).toContainText("Not flagged: you said Looks fine to");
   });
 });

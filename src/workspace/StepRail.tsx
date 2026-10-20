@@ -12,8 +12,8 @@ import { draftTitle } from "./DraftCard";
 import { LiveDraftPreview } from "./DraftPreview";
 import { PipRunCard } from "./PipRunCard";
 import { useDraftsRev } from "./draftLive";
-import { BATCH_ASIDE, BATCH_TITLE, EDITED_ASIDE, batchable, draftEdited, editedPending, batchToApprove, freezeBatch, nextStep, retiredStepDrafts, stepBatchLabel, stepChips, stepDrafts, type BatchSnapshot, type StepChip, type StepGroup } from "./pipHomeLogic";
-import { usePipHome } from "./pipHomeStore";
+import { BATCH_ASIDE, BATCH_TITLE, EDITED_ASIDE, batchable, draftEdited, editedPending, batchToApprove, freezeBatch, nextStep, retiredStepDrafts, stepBatchLabel, stepChips, stepDrafts, type BatchSnapshot, type StepChip, type StepGroup } from "./workViewLogic";
+import { useWorkView } from "./workViewStore";
 import { openOnGithub } from "./githubUi";
 import { openPullView, usePullView } from "./pullViewStore";
 import { useBuildChanges, useReviewVerdicts } from "./reviewVerdicts";
@@ -364,7 +364,7 @@ export function StepRailView({ view, runs, events, verdicts, changes = NO_CHANGE
   useEffect(() => {
     if (revealIn) setOpen((was) => (was.has(revealIn) ? was : new Set([...was, revealIn])));
   }, [reveal, revealIn]);
-  // A draft open in Pip home's decision pane is not a card here as well.
+  // A draft open in the decision pane on Agents is not a card here as well.
   const shown = useDecisionShown();
   const drafts = useMemo(() => stepDrafts(shown.drafts.size ? proposals.filter((p) => !shown.drafts.has(p.id)) : proposals, runs), [proposals, runs, shown]);
   // The ones the pane shows are no cards here, yet the batch counts them, as Needs you's does.
@@ -476,7 +476,7 @@ export function StepRail({ view }: { view: WorkstreamView }) {
   const allProposals = useWorkspace((s) => s.proposals);
   const proposals = useMemo(() => Object.values(allProposals).filter((p) => inWorkstreamPane(p, view.workstream)), [allProposals, view.workstream]);
   const items = useWorkspace((s) => s.items);
-  const reveal = usePipHome((s) => (s.focusTarget?.type === "run" && s.focusTarget.where === "rail" ? s.focusTarget.id : null));
+  const reveal = useWorkView((s) => (s.focusTarget?.type === "run" && s.focusTarget.where === "rail" ? s.focusTarget.id : null));
   useEffect(() => {
     void useWorkstreams.getState().loadEvents(id);
   }, [id]);

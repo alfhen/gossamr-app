@@ -1,36 +1,13 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
-import {
-  editTicket,
-  expectToast,
-  homeConversationRegion,
-  jiraWrites,
-  needsPane,
-  needsYouCount,
-  openApp,
-  openPipHome,
-  peekSheet,
-  pipHome,
-  pipPane,
-  seedWorkstreamEvent,
-  startWorkstream,
-  workstreamEvents,
-  workstreamRow,
-} from "./support/app";
+import { agentsHome, editTicket, expectToast, jiraWrites, needsPane, openAgents, openApp, peekSheet, pipPane, selectWorkstream, startWorkstream, workstreamEvents, workstreamGroup } from "./support/app";
 
 // The habits that make the owner look at their tickets and at what goes to Jira: Start my day, What Jira saw from me, a clarity
 // notice that learns from Looks fine, and a nudge for a reporter who hasn't answered. None of them posts anything by itself.
 
-const port = Number(process.env.E2E_PORT ?? 4173);
-/** The seeded profile (e2e/playwright.config.ts) without Start my day set aside: the card is due. */
-const DAY_DUE = { cookies: [], origins: [{ origin: `http://localhost:${port}`, localStorage: [{ name: "gossamr-prefs", value: JSON.stringify({ pipOrientationSeen: true, permissionExplainerSeen: true }) }] }] };
 
 const THIN = "Fix it.";
-const ago = (days: number) => new Date(Date.now() - days * 86_400_000).toISOString();
 const palette = (page: Page) => page.getByRole("dialog", { name: "Command palette" });
-const card = (page: Page) => pipHome(page).locator("[data-start-my-day]");
-const line = (page: Page, kind: string) => card(page).locator(`[data-day-line="${kind}"]`);
 const notice = (scope: Locator) => scope.locator("[data-clarity-notice]");
-const nextLine = (page: Page) => pipHome(page).locator("[data-next-step]");
 const toast = (page: Page) => page.locator("[data-toast]");
 const actions = async (page: Page, action: string) => (await workstreamEvents(page)).filter((e) => e.action === action);
 const allProjects = (page: Page) => page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "All projects" }).click();
@@ -51,156 +28,12 @@ async function begin(page: Page, key: string) {
 
 /** The questions to the reporter on `key`, asked from its notice and left waiting as a draft. */
 async function askNow(page: Page, key: string) {
-  await openPipHome(page);
-  await workstreamRow(page, key).click();
-  await notice(pipHome(page)).getByRole("button", { name: "Ask the reporter now" }).click();
+  await openAgents(page);
+  await selectWorkstream(page, key);
+  await notice(agentsHome(page)).getByRole("button", { name: "Ask the reporter now" }).click();
   return needsPane(page).getByRole("article", { name: `Comment on ${key}` });
 }
 
-/** CA-408 waits on the reporter: asked and posted `days` days ago, as the audit would say it. */
-async function waitingOn(page: Page, days: number) {
-  await seedWorkstreamEvent(page, "CA-408", { actor: "person", action: "clarity_asked", at: ago(days + 0.1), proposalId: "old-ask" });
-  await seedWorkstreamEvent(page, "CA-408", { actor: "person", action: "draft_approved", at: ago(days), proposalId: "old-ask" });
-}
-
-test.describe("Start my day", () => {
-  test.use({ storageState: DAY_DUE });
-
-  test("gathers the day at the top of Pip home, each line a click from its thing, and Done for now keeps it away until tomorrow; the palette brings it back", async ({ page }) => {
-    test.setTimeout(120_000);
-    await openApp(page, "runs=empty");
-    // CA-408 waits on its reporter, CA-402's questions to the reporter wait for approval, CA-409 reads thin.
-    await startWorkstream(page, "CA-408");
-    await begin(page, "CA-402");
-    await begin(page, "CA-409");
-    await waitingOn(page, 3);
-    const draft = await askNow(page, "CA-402");
-    await expect(draft).toBeVisible();
-    await page.keyboard.press("Escape");
-    await expect(needsPane(page)).toHaveCount(0);
-
-    // It is General's card, the first thing in the conversation column, a region of its own.
-    await workstreamRow(page, "General").click();
-    await expect(card(page)).toBeVisible();
-    await expect(homeConversationRegion(page).locator("[data-start-my-day]")).toBeVisible();
-    await expect(card(page).getByRole("heading", { name: "Start my day" })).toBeVisible();
-    await expect(line(page, "approve").getByRole("heading")).toHaveText("1 to approve");
-    await expect(line(page, "reporter").getByRole("heading")).toHaveText("1 waiting on the reporter");
-    await expect(line(page, "reporter")).toContainText("CA-408 · waiting 3 days");
-    await expect(line(page, "reporter").getByRole("button", { name: /^Draft a nudge/ })).toBeVisible();
-    // The draft has a need, so it is listed once, under approve, and not again as a waiting draft.
-    await expect(line(page, "drafts")).toHaveCount(0);
-    // A long list of unclear tickets is a count; More lists them.
-    await expect(line(page, "unclear").getByRole("heading")).toContainText("may be unclear");
-    await line(page, "unclear").getByRole("button", { name: "More" }).click();
-    await expect(line(page, "unclear")).toContainText("CA-409 may be unclear: it has no description.");
-    // It counts nowhere and writes nothing.
-    await expect(needsYouCount(page)).toHaveText("1");
-    expect(await jiraWrites(page)).toEqual([]);
-
-    // The unclear ticket: its workstream, where the notice is.
-    await line(page, "unclear").getByRole("button", { name: /^Open workstream: CA-409/ }).click();
-    await expect(workstreamRow(page, "CA-409")).toHaveAttribute("aria-selected", "true");
-    await expect(notice(pipHome(page))).toContainText("CA-409 may be unclear");
-
-    // The workstream has no card of its own: Start my day is General's.
-    await expect(card(page)).toHaveCount(0);
-    await workstreamRow(page, "General").click();
-
-    // The draft waiting: its decision opens in the pane, and the card gives the room.
-    await line(page, "approve").getByRole("button", { name: /^Open: .*CA-402/ }).click();
-    await expect(needsPane(page).getByRole("article", { name: "Comment on CA-402" })).toBeVisible();
-    await expect(card(page)).toHaveCount(0);
-    await page.keyboard.press("Escape");
-    await expect(needsPane(page)).toHaveCount(0);
-    await workstreamRow(page, "General").click();
-    await expect(card(page)).toBeVisible();
-    expect(await jiraWrites(page)).toEqual([]);
-
-    // What Jira saw from me is one click away, and it is empty: nothing was posted.
-    await card(page).getByRole("button", { name: "What Jira saw from me" }).click();
-    await expect(page.locator("[data-jira-sent]").getByRole("heading", { name: "What Jira saw from me" })).toBeVisible();
-    await expect(page.locator("[data-jira-sent]")).toContainText("No posts to Jira from Gossamr are on record here.");
-    await openPipHome(page);
-
-    // Done for now: gone for the day, and gone after a reload.
-    await card(page).getByRole("button", { name: "Done for now" }).click();
-    await expect(card(page)).toHaveCount(0);
-    const stored = await page.evaluate(() => JSON.parse(localStorage.getItem("gossamr-prefs") ?? "{}").startMyDayDoneOn);
-    expect(stored).toMatch(/^\d{4}-\d{2}-\d{2}$/);
-    await page.reload();
-    await openPipHome(page);
-    await expect(workstreamRow(page, "General")).toBeVisible();
-    await expect(card(page)).toHaveCount(0);
-
-    // ⌘K brings it back, with the keyboard on it.
-    await runCommand(page, "start my day", "Start my day");
-    await expect(card(page)).toBeVisible();
-    await expect(card(page)).toBeFocused();
-  });
-
-  test("is a draft of the nudge for a reporter who hasn't answered, never a post", async ({ page }) => {
-    await openApp(page, "runs=empty");
-    await startWorkstream(page, "CA-408");
-    await waitingOn(page, 4);
-    await openPipHome(page);
-    await expect(line(page, "reporter")).toContainText("CA-408 · waiting 4 days");
-    await line(page, "reporter").getByRole("button", { name: /^Draft a nudge/ }).click();
-    const nudge = needsPane(page).getByRole("article", { name: "Comment on CA-408" });
-    await expect(nudge).toContainText("The earlier questions about CA-408 are still open");
-    await expect(nudge.locator('[data-created-by="gossamr"]')).toHaveText("Drafted by Gossamr");
-    expect(await jiraWrites(page)).toEqual([]);
-    expect((await actions(page, "reporter_nudged")).map((e) => e.actor)).toEqual(["person"]);
-    // The card gave the room to the decision; once it closes, the line says a nudge is drafted and offers none.
-    await page.keyboard.press("Escape");
-    await workstreamRow(page, "General").click();
-    await expect(line(page, "reporter")).toContainText("a nudge is drafted");
-    await expect(line(page, "reporter").getByRole("button", { name: /Draft a nudge/ })).toHaveCount(0);
-    await expect(line(page, "reporter").getByRole("button", { name: /^Open workstream/ })).toBeVisible();
-  });
-});
-
-test.describe("the reporter nudge", () => {
-  test("is offered on the Next line and the workstream's row once the reporter was silent for 2 days, drafts a polite comment for approval, and a posted nudge starts the wait again", async ({ page }) => {
-    test.setTimeout(90_000);
-    await openApp(page, "runs=empty");
-    await startWorkstream(page, "CA-408");
-    await openPipHome(page);
-    await workstreamRow(page, "CA-408").click();
-    await waitingOn(page, 1.5);
-    await expect(workstreamRow(page, "CA-408").locator("[data-status]")).toHaveText("Waiting on reporter");
-    // Under two days: said, and no offer.
-    await expect(nextLine(page)).toHaveText("Next: Waiting on the reporter since yesterday; nothing starts on its own.");
-    await expect(nextLine(page).getByRole("button", { name: "Draft a nudge" })).toHaveCount(0);
-    await expect(workstreamRow(page, "CA-408").locator("[data-nudge-due]")).toHaveCount(0);
-
-    // Two days or more: the Next line says how long and offers it, and the row says a nudge is due. It is no need.
-    await seedWorkstreamEvent(page, "CA-408", { actor: "person", action: "clarity_asked", at: ago(3.2), proposalId: "older-ask" });
-    await seedWorkstreamEvent(page, "CA-408", { actor: "person", action: "draft_approved", at: ago(3.1), proposalId: "older-ask" });
-    await expect(nextLine(page)).toContainText("Waiting on the reporter since 3 days ago; nothing starts on its own. The reporter hasn't answered for 3 days. You can draft a nudge.");
-    await expect(workstreamRow(page, "CA-408").locator("[data-nudge-due]")).toHaveText("· nudge due");
-    await expect(needsYouCount(page)).toHaveText("0");
-
-    await nextLine(page).getByRole("button", { name: "Draft a nudge" }).click();
-    const draft = needsPane(page).getByRole("article", { name: "Comment on CA-408" });
-    await expect(draft).toContainText("@Mette Lund");
-    await expect(draft).toContainText("The earlier questions about CA-408 are still open");
-    await expect(draft.locator('[data-created-by="gossamr"]')).toHaveText("Drafted by Gossamr");
-    expect(await jiraWrites(page)).toEqual([]);
-    // One at a time: no second offer while it waits, and it is a draft in Needs you, never in a safe batch.
-    await expect(nextLine(page).getByRole("button", { name: "Draft a nudge" })).toHaveCount(0);
-    await expect(workstreamRow(page, "CA-408").locator("[data-nudge-due]")).toHaveCount(0);
-    await expect(needsYouCount(page)).toHaveText("1");
-    await expect(pipHome(page).getByRole("button", { name: /Approve \d+ safe drafts/ })).toHaveCount(0);
-
-    await draft.getByRole("button", { name: "Post comment" }).click();
-    await expect.poll(async () => (await jiraWrites(page)).map((w) => [w.type, w.key])).toEqual([["comment", "CA-408"]]);
-    // Posted: it waits on the reporter again from now, so the next nudge is days away.
-    await expect(nextLine(page)).toHaveText("Next: Waiting on the reporter since just now; nothing starts on its own.");
-    await expect(nextLine(page).getByRole("button", { name: "Draft a nudge" })).toHaveCount(0);
-    await expect(needsYouCount(page)).toHaveText("0");
-  });
-});
 
 test.describe("What Jira saw from me", () => {
   test("lists what was posted by day, newest first, with the ticket, the words, where it came from and whether the person edited the draft", async ({ page }) => {
@@ -249,7 +82,7 @@ test.describe("What Jira saw from me", () => {
 
     // Links lead to the workstream and the ticket.
     await rows.nth(1).locator("[data-sent-workstream]").click();
-    await expect(workstreamRow(page, "CA-408")).toHaveAttribute("aria-selected", "true");
+    await expect(workstreamGroup(page, "CA-408")).toHaveAttribute("aria-current", "true");
     await runCommand(page, "what jira saw", "What Jira saw from me");
     await view.locator("[data-sent-entry]").nth(1).locator("[data-sent-ticket]").click();
     await expect(peekSheet(page)).toHaveAttribute("aria-label", "Details for CA-408");
@@ -259,7 +92,7 @@ test.describe("What Jira saw from me", () => {
 
   test("says so while nothing was posted", async ({ page }) => {
     await openApp(page, "runs=empty");
-    await openPipHome(page);
+    await openAgents(page);
     await runCommand(page, "what jira saw", "What Jira saw from me");
     await expect(page.locator("[data-jira-sent]")).toContainText("No posts to Jira from Gossamr are on record here.");
     await expect(page.locator("[data-sent-entry]")).toHaveCount(0);
@@ -303,9 +136,9 @@ test.describe("the clarity notice learns from Looks fine", () => {
     await expectToast(page, "Gossamr will flag new unclear CA tickets as before.");
     expect((await actions(page, "clarity_reset")).map((e) => [e.actor, e.detail])).toEqual([["person", "CA"]]);
     // CA-208's notice is back, since the gaps are flagged again.
-    await openPipHome(page);
-    await workstreamRow(page, "CA-208").click();
-    await expect(notice(pipHome(page))).toContainText("CA-208 may be unclear");
+    await openAgents(page);
+    await selectWorkstream(page, "CA-208");
+    await expect(notice(agentsHome(page))).toContainText("CA-208 may be unclear");
   });
 
   test("is given back from the palette, and a thin ticket in the project is flagged again", async ({ page }) => {

@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { HELD_ALL, HELD_BUDGET, HELD_DAILY, HELD_PERSON, HELD_QUOTA, HELD_RESTART, TRIPWIRE, TRIPWIRES } from "../types";
 import type { Run, WorkstreamView } from "../types";
 import { NUDGE_AFTER_DAYS } from "./reporterWait";
-import { EMPTY_FILTER, OWED_DETAIL, ON_REPORTER_DETAIL, answersOwed, emptyFilterText, QUIET_DAYS, REPLIED_DETAIL, REPLIED_HINT, STATUS_HINT, UNCLEAR_HINT, hintFor, STATUS_ORDER, UNCLEAR_DETAIL, byStatusRank, statusFromWords, workstreamStatus, type StatusMore } from "./workstreamStatus";
+import { OWED_DETAIL, ON_REPORTER_DETAIL, answersOwed, QUIET_DAYS, REPLIED_DETAIL, REPLIED_HINT, STATUS_HINT, UNCLEAR_HINT, hintFor, UNCLEAR_DETAIL, workstreamStatus, type StatusMore, type StatusState } from "./workstreamStatus";
 import type { WorkstreamWither } from "./workstreamWither";
 
 const NOW = new Date("2026-10-13T09:00:00Z");
@@ -138,10 +138,6 @@ describe("workstreamStatus: priority", () => {
     expect(at(view(), [], {}).state).toBe("idle");
   });
 
-  it("lists the states in that order", () => {
-    expect(STATUS_ORDER).toEqual(["needs-you", "held", "waiting", "running", "quiet", "done", "idle"]);
-  });
-
   it("a hold the system made, with its need, says Needs you and gives the hold's reason as the detail; the hold you chose gives a count", () => {
     expect(at(view({}, { heldReason: HELD_RESTART }), [need])).toMatchObject({ state: "needs-you", detail: "Held after a restart" });
     expect(at(view({}, { heldReason: `${TRIPWIRE}basis_drift`, drifted: ["status"] }), [need]).detail).toBe("Held: the ticket was moved to Done");
@@ -150,68 +146,9 @@ describe("workstreamStatus: priority", () => {
   });
 });
 
-describe("byStatusRank", () => {
-  const states = (items: { state: (typeof STATUS_ORDER)[number] }[]) => byStatusRank(items, (i) => i.state).map((i) => i.state);
-
-  it("puts Needs you first, then Held and Waiting on reporter (as given), Running, Idle, Quiet and Done", () => {
-    expect(states(["done", "quiet", "idle", "running", "waiting", "held", "needs-you"].map((state) => ({ state }) as { state: (typeof STATUS_ORDER)[number] }))).toEqual(["needs-you", "waiting", "held", "running", "idle", "quiet", "done"]);
-  });
-
-  it("keeps the order it was given inside a group, and Held and Waiting on reporter are one group", () => {
-    const items = [
-      { state: "idle", id: 1 },
-      { state: "waiting", id: 2 },
-      { state: "needs-you", id: 3 },
-      { state: "held", id: 4 },
-      { state: "idle", id: 5 },
-      { state: "needs-you", id: 6 },
-    ] as const;
-    expect(byStatusRank(items, (i) => i.state).map((i) => i.id)).toEqual([3, 6, 2, 4, 1, 5]);
-  });
-
-  it("puts a hold the system made above the person's own hold, and the person's own hold above Running", () => {
-    const items = [
-      { state: "held", mine: true, id: 1 },
-      { state: "running", mine: false, id: 2 },
-      { state: "held", mine: false, id: 3 },
-      { state: "waiting", mine: false, id: 4 },
-      { state: "held", mine: true, id: 5 },
-      { state: "held", mine: false, id: 6 },
-    ] as const;
-    expect(byStatusRank(items, (i) => i.state, (i) => i.mine).map((i) => i.id)).toEqual([3, 4, 6, 1, 5, 2]);
-    // Without the predicate every hold is the system's, so the order is as it was given.
-    expect(byStatusRank(items, (i) => i.state).map((i) => i.id)).toEqual([1, 3, 4, 5, 6, 2]);
-  });
-
-  it("draws the person's own hold in the quiet grey, and a hold the system made in amber", () => {
-    expect(at(view({}, { heldReason: HELD_PERSON })).tone).toBe("ink");
-    expect(at(view({}, { heldReason: HELD_ALL })).tone).toBe("ink");
-    expect(at(view({}, { heldReason: HELD_RESTART })).tone).toBe("warn");
-  });
-
-  it("leaves what it was given as it was, and an Idle row that may be unclear stays with the Idle ones", () => {
-    const given = [{ state: "quiet" }, { state: "needs-you" }] as const;
-    byStatusRank(given, (i) => i.state);
-    expect(given.map((i) => i.state)).toEqual(["quiet", "needs-you"]);
-    expect(at(view({ clarity: { gaps: [] } as never }), [], {}).state).toBe("idle");
-  });
-});
-
-describe("statusFromWords", () => {
-  it("reads the words a person types", () => {
-    expect(statusFromWords("waiting on reporter")).toBe("waiting");
-    expect(statusFromWords("Waiting on the reporter")).toBe("waiting");
-    expect(statusFromWords(" needs  you ")).toBe("needs-you");
-    expect(statusFromWords("held by you")).toBe("held");
-    expect(statusFromWords("quiet")).toBe("quiet");
-    expect(statusFromWords("nonsense")).toBeNull();
-    expect(statusFromWords("")).toBeNull();
-  });
-});
-
-describe("status hints and empty filters", () => {
+describe("status hints", () => {
   it("explains every state, and the waiting hint names what ends the wait and when a nudge comes", () => {
-    for (const s of STATUS_ORDER) expect(STATUS_HINT[s].length).toBeGreaterThan(20);
+    for (const s of Object.keys(STATUS_HINT) as StatusState[]) expect(STATUS_HINT[s].length).toBeGreaterThan(20);
     expect(STATUS_HINT.waiting).toContain(`after ${NUDGE_AFTER_DAYS} days`);
   });
 
@@ -226,16 +163,4 @@ describe("status hints and empty filters", () => {
     expect(hintFor({ state: "running", detail: REPLIED_DETAIL })).toBe(STATUS_HINT.running);
   });
 
-  it("has a sentence for every filter that reads naturally", () => {
-    for (const s of STATUS_ORDER) expect(EMPTY_FILTER[s]).toMatch(/^No workstream .+\.$/);
-    expect(EMPTY_FILTER["needs-you"]).toBe("No workstream needs you.");
-    expect(EMPTY_FILTER.waiting).toBe("No workstream is waiting on the reporter.");
-  });
-
-  it("says where the live runs are when the Running filter is empty but General has some", () => {
-    expect(emptyFilterText("running")).toBe("No workstream is running.");
-    expect(emptyFilterText("running", 1)).toBe("No workstream is running. 1 agent is running under General.");
-    expect(emptyFilterText("running", 2)).toBe("No workstream is running. 2 agents are running under General.");
-    expect(emptyFilterText("held", 2)).toBe(EMPTY_FILTER.held);
-  });
 });

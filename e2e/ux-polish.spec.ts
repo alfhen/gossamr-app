@@ -1,5 +1,5 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
-import { PIP_INPUT, advanceRuns, agentsSettled, askPip, holdAll, homeConversation, homeConversationRegion, mockRuns, needsYouTray, openApp, openPip, openPipHome, peekSheet, peekTicket, pipHome, pipIdle, pipPane, reviewedDraft, setManage, startWorkstream, stepRail, workstreamRow } from "./support/app";
+import { advanceRuns, agentsSettled, askPip, homeConversation, homeConversationRegion, mockRuns, openAgents, openApp, openPip, peekSheet, peekTicket, PIP_INPUT, pipIdle, pipPane, reviewedDraft, selectWorkstream, setManage, startWorkstream, stepRail } from "./support/app";
 
 // The UX polish pass: what the person reads (no ids, tools or machinery words), where things sit (nothing covers
 // anything), draft action bars, and how a new workstream opens.
@@ -11,46 +11,6 @@ test.describe("hidden machinery", () => {
   const settled = (page: Page) => expect.poll(() => pipIdle(page), { message: "the sample Pip has no turn running or waiting" }).toBe(true);
 
   const lastBubble = (page: Page) => pipPane(page).locator("[data-user-bubble]").last();
-
-  test("Discuss with Pip on a review draft shows a short line, and Pip names the draft and the run, never their ids or its tools", async ({ page }) => {
-    const review = await reviewedDraft(page);
-    const reviewRun = (await mockRuns(page)).find((r) => r.kind === "review" && r.key === "CA-402")!;
-    expect(reviewRun).toBeTruthy();
-
-    // The draft card names the run by ticket and step, and its link opens it.
-    const from = review.locator("[data-provenance=run]");
-    await expect(from).toContainText("From the CA-402 review");
-    await expect(from).not.toContainText(/\b[0-9a-f]{8}\b/);
-    // What gets posted to GitHub names the review by its ticket, not by the run's id, which a pull request's author can't use.
-    const summary = await review.getByRole("textbox", { name: "Review summary" }).inputValue();
-    expect(summary).toMatch(/\n\nDrafted by a Gossamr agent reviewing CA-402; posted only after a person approved it in Gossamr\.$/);
-    expect(summary).not.toContain(reviewRun.id);
-    if (reviewRun.shortId) expect(summary).not.toContain(reviewRun.shortId);
-    expect(summary).not.toMatch(/agent run [0-9a-z-]{6,}/);
-
-    await review.getByRole("button", { name: "Discuss with Pip" }).click();
-    await expect(pipPane(page)).toBeVisible();
-    await expect(lastBubble(page)).toHaveText("Discuss this review");
-    await expect(pipPane(page)).toContainText("I read the review of acme/webshop#218 in full");
-    await settled(page);
-
-    const text = await pipPane(page).innerText();
-    expect(text).not.toMatch(TOOL_NAME);
-    expect(text).not.toMatch(/mock-\d+/);
-    expect(text).not.toContain("mock-run-");
-    expect(text).not.toContain(reviewRun.id);
-    if (reviewRun.shortId) expect(text).not.toContain(reviewRun.shortId);
-    expect(text).toContain("acme/webshop#218");
-
-    // The stored turn keeps the short line: a reload shows it again, not the instruction Pip was given.
-    await page.reload();
-    // The sample backend starts over on a reload, so it asks what to watch again, and lands on Pip home; Pip's turns are kept.
-    await page.getByRole("button", { name: "Start watching" }).click();
-    const home = homeConversationRegion(page);
-    await expect(home.locator("[data-user-bubble]").last()).toHaveText("Discuss this review");
-    await expect(home).toContainText("I read the review of acme/webshop#218 in full");
-    expect(await home.innerText()).not.toMatch(TOOL_NAME);
-  });
 
   test("Discuss with Pip on an agent's comment draft shows a short line, never the instruction, its ids or Pip's tools", async ({ page }) => {
     await reviewedDraft(page);
@@ -129,80 +89,11 @@ test.describe("no overlap", () => {
 
   const intersects = (a: Box, b: Box) => a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
 
-  const toasts = (page: Page) => page.locator("[data-toast]");
 
   /** The left rail: the aside that holds the Workspace navigation (Rail.tsx). */
   const rail = (page: Page) => page.locator("aside", { has: page.getByRole("navigation", { name: "Workspace" }) });
 
-  /** The one toast on screen is clear of `others`. */
-  async function clearOf(page: Page, others: Locator[]) {
-    await expect(toasts(page)).toHaveCount(1);
-    const t = await box(toasts(page));
-    for (const o of others) expect(intersects(t, await box(o)), `toast over ${o}`).toBe(false);
-  }
 
-  /** What the person navigates and types with on the workspace: none of it is ever under a toast. */
-  const controls = (page: Page) => [
-    page.getByRole("tablist", { name: "Views" }),
-    page.getByRole("group", { name: "View" }),
-    page.getByRole("button", { name: "New tab" }),
-    page.locator("main footer").first(),
-  ];
-
-  test("(e1) toasts come one at a time, bottom right of the canvas, clear of the tabs, the peek, Pip's input, the Needs you tray and the footer", async ({ page }) => {
-    await page.setViewportSize({ width: 1440, height: 900 });
-    await openApp(page);
-    // Hold all twice, back to back: each says what it did in a toast.
-    await startWorkstream(page, "CA-401");
-    await holdAll(page, "shortcut");
-    await holdAll(page, "shortcut");
-
-    await expect(toasts(page)).toHaveCount(1);
-    await expect(toasts(page)).toContainText("Held 1 workstream");
-    await expect(toasts(page)).toContainText("+1 more");
-    // The peek and the Pip pane are open: the toast is left of the peek, clear of its sections and of Pip's input.
-    await expect(peekSheet(page)).toBeVisible();
-    await clearOf(page, [...controls(page), peekSheet(page), page.locator(PIP_INPUT)]);
-
-    // Dismissing the first brings the second, alone.
-    await toasts(page).getByRole("button", { name: "Dismiss" }).click();
-    await expect(toasts(page)).toHaveCount(1);
-    await expect(toasts(page)).toContainText("Every open workstream is held already");
-    await expect(toasts(page)).not.toContainText("more");
-
-    // With the pane closed it stacks above Pip's launcher, never over it.
-    await page.keyboard.press("Escape");
-    await expect(peekSheet(page)).toHaveCount(0);
-    await page.keyboard.press("ControlOrMeta+j");
-    await expect(pipPane(page)).toHaveCount(0);
-    const launcher = page.locator("[data-pip-launcher]");
-    await expect(launcher).toBeVisible();
-    await clearOf(page, [...controls(page), launcher]);
-
-    // On Pip home it is clear of the Needs you tray, the conversation's header, the Steps heading and the home composer too.
-    // The one up (it offers no Undo) goes with the page, so another is made there.
-    await openPipHome(page);
-    await expect(needsYouTray(page)).toBeVisible();
-    await expect(toasts(page)).toHaveCount(0);
-    await holdAll(page, "shortcut");
-    await clearOf(page, [needsYouTray(page), homeConversationRegion(page).locator("header").first(), stepRail(page).getByRole("heading", { name: "Steps" }), page.locator(PIP_INPUT), page.locator("[data-pip-home-hints]")]);
-
-    // An info toast goes away by itself.
-    await expect(toasts(page)).toHaveCount(0, { timeout: 8000 });
-  });
-
-  test("(e1b) a note that waited too long behind another is dropped rather than shown late", async ({ page }) => {
-    await page.setViewportSize({ width: 1440, height: 900 });
-    await openApp(page);
-    await startWorkstream(page, "CA-401");
-    await holdAll(page, "shortcut");
-    await holdAll(page, "shortcut");
-    await expect(toasts(page)).toContainText("+1 more");
-    // The second note waits behind the first for the first's whole life, too long to still be news: it never shows.
-    // A late-shown second note would keep a toast up until about twice the lifetime, so 12s still tells the two apart
-    // while leaving slack for timers that fire late under load.
-    await expect(toasts(page)).toHaveCount(0, { timeout: 12_000 });
-  });
 
   test("(e2) the last row of the list scrolls clear of the floating Pip button and its bubble", async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
@@ -379,7 +270,7 @@ test.describe("no overlap", () => {
     expect(await buttons.count()).toBeGreaterThan(5);
     for (const b of await buttons.all()) expect((await b.getAttribute("aria-label"))?.trim()).toBeTruthy();
 
-    for (const name of ["Search and jump", "All projects", /^Pip home/, "Settings", "Pip"]) {
+    for (const name of ["Search and jump", "All projects", /^Agents/, "Settings", "Pip"]) {
       const button = rail(page).getByRole("button", { name, exact: typeof name === "string" });
       await button.hover();
       const label = (await button.getAttribute("aria-label"))!;
@@ -569,8 +460,8 @@ test.describe("workstream start", () => {
     await openApp(page);
     await agentsSettled(page);
     await startWorkstream(page, "CA-401");
-    await openPipHome(page);
-    await workstreamRow(page, "CA-401").click();
+    await openAgents(page);
+    await selectWorkstream(page, "CA-401");
     await expect(homeConversation(page)).toHaveText(/^Workstream: CA-401 .* · Intake$/);
 
     // The same intro and single action as in the pane.
@@ -600,29 +491,3 @@ test.describe("workstream start", () => {
   });
 });
 
-test.describe("plain words", () => {
-  /**
-   * No three-figure hour count anywhere the person can read. (That a held workstream never says "tripwire" is checked
-   * where one is held for real, in basis-drift.spec.ts.)
-   */
-  async function plainWords(page: Page) {
-    await expect(page.locator("body")).not.toContainText(/Quiet for \d{3,} h|\b\d{3,} h\b/);
-  }
-
-  test("the Agents view and Pip home say how long a run has been quiet in days, never in hundreds of hours", async ({ page }) => {
-    // The sample runs' ages count back from when the page opened; ten days on, the working CA-377 run (quiet for 40 minutes
-    // then) has been quiet for over 240 hours.
-    await page.clock.install();
-    await openApp(page);
-    await agentsSettled(page);
-    await page.clock.setSystemTime(Date.now() + 10 * 24 * 60 * 60_000);
-    await page.getByRole("button", { name: /^Agents/ }).click();
-    const quiet = page.locator('main article[data-run-id]:not(aside[aria-label="Pip"] *)', { hasText: "CA-377" });
-    await expect(quiet.first()).toContainText(/Quiet for \d+ days/);
-    await plainWords(page);
-
-    await openPipHome(page);
-    await expect(pipHome(page).getByRole("navigation", { name: "Workstreams" })).toBeVisible();
-    await plainWords(page);
-  });
-});

@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { needsPane, openApp, openPipHome, pipHome, startWorkstream, workstreamRow } from "./support/app";
+import { agentsHome, needsPane, openAgents, openApp, pipPane, selectWorkstream, startMyDay, startWorkstream } from "./support/app";
 
 // Fixes from the thirteenth dogfood round: the reporter's questions no longer claim work has not started (G12), and the
 // "Done: … Now: …" line goes when Undo brings the skipped draft back (G11), the comment draft's edit field and provenance
@@ -13,11 +13,11 @@ test.describe("the ask of the reporter (G11, G12)", () => {
     await page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "All projects" }).click();
     await startWorkstream(page, "CA-408");
     await startWorkstream(page, "CA-402");
-    await openPipHome(page);
-    await workstreamRow(page, "CA-402").click();
-    await pipHome(page).locator("[data-clarity-notice]").getByRole("button", { name: "Ask the reporter now" }).click();
-    await workstreamRow(page, "CA-408").click();
-    await pipHome(page).locator("[data-clarity-notice]").getByRole("button", { name: "Ask the reporter now" }).click();
+    await openAgents(page);
+    await selectWorkstream(page, "CA-402");
+    await agentsHome(page).locator("[data-clarity-notice]").getByRole("button", { name: "Ask the reporter now" }).click();
+    await selectWorkstream(page, "CA-408");
+    await agentsHome(page).locator("[data-clarity-notice]").getByRole("button", { name: "Ask the reporter now" }).click();
     const draft = needsPane(page).getByRole("article", { name: /^Comment on CA-/ });
     await expect(draft).toContainText(/A few things need clearing up to make this ticket clear to work on/);
     await expect(draft).not.toContainText("Before work on");
@@ -37,9 +37,9 @@ test.describe("the reporter's comment draft for a keyboard and a screen reader (
     await openApp(page, "runs=empty");
     await page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "All projects" }).click();
     await startWorkstream(page, "CA-408");
-    await openPipHome(page);
-    await workstreamRow(page, "CA-408").click();
-    await pipHome(page).locator("[data-clarity-notice]").getByRole("button", { name: "Ask the reporter now" }).click();
+    await openAgents(page);
+    await selectWorkstream(page, "CA-408");
+    await agentsHome(page).locator("[data-clarity-notice]").getByRole("button", { name: "Ask the reporter now" }).click();
     const draft = needsPane(page).getByRole("article", { name: /^Comment on CA-408/ });
     // In the decision that shows it, not on the Manage switch, which Space would flip.
     await expect(needsPane(page).locator(":focus")).toHaveCount(1);
@@ -64,9 +64,10 @@ test.describe("F6 in Plan my week's field (G7)", () => {
   test("steps to another region instead of being kept by the add field", async ({ page }) => {
     test.setTimeout(90_000);
     await openApp(page, "runs=empty");
-    await openPipHome(page);
-    await pipHome(page).locator("[data-start-my-day]").getByRole("button", { name: "Plan my week" }).click();
-    const add = pipHome(page).locator("[data-plan-add]");
+    await openAgents(page);
+    await startMyDay(page);
+    await agentsHome(page).locator("[data-start-my-day]").getByRole("button", { name: "Plan my week" }).click();
+    const add = agentsHome(page).locator("[data-plan-add]");
     await add.focus();
     await page.keyboard.press("F6");
     await expect(add).not.toBeFocused();
@@ -99,9 +100,9 @@ test.describe("the keyboard after the Investigate chip (G6)", () => {
     await openApp(page, "runs=empty");
     await page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "All projects" }).click();
     await startWorkstream(page, "CA-402");
-    await openPipHome(page);
-    await workstreamRow(page, "CA-402").click();
-    const chip = pipHome(page).getByRole("button", { name: "Investigate CA-402", exact: true });
+    await openAgents(page);
+    await selectWorkstream(page, "CA-402");
+    const chip = pipPane(page).getByRole("button", { name: "Investigate CA-402", exact: true });
     await chip.focus();
     await page.keyboard.press("Enter");
     await expect(chip).toHaveCount(0);

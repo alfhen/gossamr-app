@@ -1,8 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Intent, PersonRef, Proposal, WorkItem, WorkstreamView } from "../types";
 import type { Need } from "./needs";
-import { dayKey } from "../workspace/activityLogic";
-import { DAY_ENTRIES, startMyDay, startMyDayShown, type StartMyDayInput } from "./startMyDay";
+import { DAY_ENTRIES, startMyDay, type StartMyDayInput } from "./startMyDay";
 import { NUDGE_COMMENT_LABEL } from "./proposals";
 import type { ClarityLearning } from "./clarityLearning";
 import type { WorkstreamWither } from "./workstreamWither";
@@ -173,20 +172,6 @@ describe("Start my day", () => {
     const day = startMyDay(input({ needs: [need("u1", "unblock", { workstreamId: "w9", ticketKey: "CA-900" })], workstreams: [v, w], withers: { w2: wither(4) }, proposals: [comment("p1", "CA-401")] }));
     expect(day.lines.map((l) => l.kind)).toEqual(["unblock", "unclear", "drafts", "reporter", "cobweb"]);
     expect(day.empty).toBe(false);
-  });
-});
-
-describe("once a day", () => {
-  it("shows until the person says Done for now, for the rest of that day only", () => {
-    const morning = new Date(2026, 9, 13, 8, 0);
-    const evening = new Date(2026, 9, 13, 22, 30);
-    const tomorrow = new Date(2026, 9, 14, 7, 0);
-    expect(dayKey(morning)).toBe("2026-10-13");
-    expect(startMyDayShown(null, morning)).toBe(true);
-    expect(startMyDayShown(dayKey(morning), evening)).toBe(false);
-    expect(startMyDayShown(dayKey(morning), tomorrow)).toBe(true);
-    // A day later than today (a clock turned back) holds it too.
-    expect(startMyDayShown("2026-10-20", morning)).toBe(false);
   });
 });
 

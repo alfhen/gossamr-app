@@ -1,27 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import {
-  askPermission,
-  askPip,
-  editTicket,
-  expandAllNeeds,
-  homeConversation,
-  homeRunCards,
-  homeSettled,
-  jiraWrites,
-  mockRuns,
-  needOfKind,
-  needsPane,
-  needsYouTray,
-  openApp,
-  openPipHome,
-  pipHome,
-  startWorkstream,
-  workstreamEvents,
-  workstreamRow,
-  advanceRuns,
-  homeConversationRegion,
-  expectToast,
-} from "./support/app";
+import { agentsHome, editTicket, expandAllNeeds, expectToast, homeConversationRegion, homeSettled, jiraWrites, needOfKind, needsPane, needsYouTray, openAgents, openApp, selectWorkstream, startWorkstream, workstreamEvents } from "./support/app";
 
 // Backlog items of the thirteenth dogfood round: a workstream's offer to bring in what its ticket already has in General (G17),
 // Close with an Undo and a Reopen (G23), the safety copy saying a Build and the glossary's Manage, Hold and Allow once (G24), what
@@ -29,18 +7,11 @@ import {
 // the start review (G27), names a screen reader hears once (G28), the posted entry's footer (G29), the Done ticket's one reason
 // (G30) and 'start' in the palette (G31).
 
-const port = Number(process.env.E2E_PORT ?? 4173);
-/** A first run: nothing set aside, so the orientation card shows. */
-const FIRST_RUN = { cookies: [], origins: [] };
-/** The seeded profile without Start my day set aside, so its card (and Plan my week) show. */
-const DAY_DUE = { cookies: [], origins: [{ origin: `http://localhost:${port}`, localStorage: [{ name: "gossamr-prefs", value: JSON.stringify({ pipOrientationSeen: true, permissionExplainerSeen: true }) }] }] };
 
 const THIN = "Fix it.";
-const MANAGED = "runs=empty&prSurface=manual&wsManage=1";
 const toast = (page: Page) => page.locator("[data-toast]");
 const allProjects = (page: Page) => page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "All projects" }).click();
-const notice = (page: Page) => pipHome(page).locator("[data-clarity-notice]");
-const safety = (page: Page) => page.getByRole("dialog", { name: "Agents safety and settings" });
+const notice = (page: Page) => agentsHome(page).locator("[data-clarity-notice]");
 const palette = (page: Page) => page.getByRole("dialog", { name: "Command palette" });
 
 /** A workstream on `key`, begun from its peek. */
@@ -54,8 +25,8 @@ async function reporterDraft(page: Page) {
   await openApp(page, "runs=empty");
   await editTicket(page, "CA-408", { description: THIN });
   await begin(page, "CA-408");
-  await openPipHome(page);
-  await workstreamRow(page, "CA-408").click();
+  await openAgents(page);
+  await selectWorkstream(page, "CA-408");
   await notice(page).getByRole("button", { name: "Ask the reporter now" }).click();
   const draft = needsPane(page).getByRole("article", { name: "Comment on CA-408" });
   await expect(draft).toBeVisible();
@@ -68,10 +39,10 @@ test.describe("a workstream opened on a ticket with runs in General (G17)", () =
     // The sample's running investigation of WEB-108 was started from the board, so it sits under General.
     await openApp(page);
     await begin(page, "WEB-108");
-    await openPipHome(page);
-    await workstreamRow(page, "WEB-108").click();
+    await openAgents(page);
+    await selectWorkstream(page, "WEB-108");
     await homeSettled(page);
-    const offer = pipHome(page).locator("[data-adopt-notice]");
+    const offer = agentsHome(page).locator("[data-adopt-notice]");
     await expect(offer).toContainText("1 run on WEB-108 is under General.");
     const runs = homeConversationRegion(page).locator('[data-timeline-entry^="run:"]');
     // Opening moved nothing: the workstream's timeline has no run, and the audit has no adoption.
@@ -92,56 +63,11 @@ test.describe("a workstream opened on a ticket with runs in General (G17)", () =
   });
 });
 
-test.describe("closing a workstream (G23)", () => {
-  test("offers an Undo that reopens it, says the drafts stay in General, and a closed row can be reopened", async ({ page }) => {
-    test.setTimeout(120_000);
-    await openApp(page, "runs=empty");
-    await begin(page, "CA-408");
-    await openPipHome(page);
-    await workstreamRow(page, "CA-408").click();
-    const controls = pipHome(page).locator("[data-workstream-controls]");
-    await controls.getByRole("button", { name: "Close…" }).click();
-    await expect(controls.getByRole("group", { name: "Close this workstream" })).toContainText("its agents and drafts are kept in General.");
-    await controls.getByRole("button", { name: "Close workstream" }).click();
-    await expectToast(page, "Closed the workstream on CA-408. Its agents and drafts are kept in General.");
-    await expect(workstreamRow(page, "CA-408")).toHaveCount(0);
-    await toast(page).getByRole("button", { name: "Undo" }).click();
-    await expect(workstreamRow(page, "CA-408")).toBeVisible();
-    expect((await workstreamEvents(page)).map((e) => e.action).slice(-3)).toEqual(["opened", "closed", "reopened"]);
-
-    // Closed again, its row under Show closed offers Reopen.
-    await workstreamRow(page, "CA-408").click();
-    await controls.getByRole("button", { name: "Close…" }).click();
-    await controls.getByRole("button", { name: "Close workstream" }).click();
-    await expect(workstreamRow(page, "CA-408")).toHaveCount(0);
-    await pipHome(page).getByRole("button", { name: "Show closed" }).click();
-    const closed = pipHome(page).getByRole("list", { name: "Closed workstreams" }).locator('[data-closed-workstream]');
-    await expect(closed).toHaveCount(1);
-    await closed.getByRole("button", { name: "Reopen CA-408" }).click();
-    await expect(workstreamRow(page, "CA-408")).toBeVisible();
-    await expect(closed).toHaveCount(0);
-  });
-});
-
-test.describe("the safety copy and the glossary (G24)", () => {
-  test.use({ storageState: FIRST_RUN });
-
-  test("say a Build, and the glossary explains Manage, Hold and Allow once", async ({ page }) => {
-    await page.goto("/?runs=empty");
-    const card = pipHome(page).locator("[data-pip-orientation]");
-    await expect(card).toContainText("a Build runs with your Claude settings and could reach Jira or GitHub on its own.");
-    await expect(card).not.toContainText("an agent run with your Claude settings");
-    await card.getByRole("button", { name: "What the words mean" }).click();
-    for (const term of ["Manage", "Hold", "Allow once"]) await expect(card.locator("dt", { hasText: new RegExp(`^${term}$`) })).toHaveCount(1);
-    await expect(card.locator("dd", { hasText: "Deny tells the agent no" })).toHaveCount(1);
-  });
-});
-
 test.describe("a read-only run's permission prompt (G24)", () => {
   test("says what Deny does next to the refusal, ahead of the buttons", async ({ page }) => {
     test.setTimeout(90_000);
     await openApp(page);
-    await openPipHome(page);
+    await openAgents(page);
     await expandAllNeeds(page);
     await needOfKind(page, "permission").click();
     const ask = needsPane(page).locator("[data-permission-ask]");
@@ -209,95 +135,11 @@ test.describe("the reporter question draft (G25, G26, G29)", () => {
   });
 });
 
-test.describe("Tab in the first-run safety sheet and the start review (G27)", () => {
-  test("the safety sheet keeps Tab inside it, and in the review the disclosures come before Start agent", async ({ page }) => {
-    test.setTimeout(120_000);
-    await openApp(page, MANAGED);
-    await startWorkstream(page, "CA-401");
-    await openPipHome(page);
-    await workstreamRow(page, "CA-401").click();
-    await expect(homeConversation(page)).toHaveText(/^Workstream: CA-401 /);
-    await askPip(page, "investigate this");
-    await homeSettled(page);
-    const card = homeRunCards(page, "CA-401").last();
-    await card.getByRole("button", { name: "Review and start", exact: true }).click();
-    const sheet = safety(page);
-    await expect(sheet).toBeVisible();
-    await expect(sheet).toHaveAttribute("aria-modal", "true");
-    const inside = () => sheet.evaluate((el) => el.contains(document.activeElement));
-    for (let i = 0; i < 14; i++) {
-      await page.keyboard.press("Tab");
-      expect(await inside(), `Tab ${i + 1}`).toBe(true);
-    }
-    for (let i = 0; i < 14; i++) {
-      await page.keyboard.press("Shift+Tab");
-      expect(await inside(), `Shift+Tab ${i + 1}`).toBe(true);
-    }
-    await sheet.getByRole("button", { name: "Got it, continue" }).click();
-    await expect(sheet).toHaveCount(0);
-
-    // The review opened where it was asked: Tab from it reaches a disclosure before it reaches Start agent.
-    const review = card.getByRole("group", { name: "Review and start" });
-    await expect(review).toBeVisible();
-    await review.focus();
-    const start = review.getByRole("button", { name: "Start agent" });
-    const seen: string[] = [];
-    for (let i = 0; i < 20 && !(await start.evaluate((el) => el === document.activeElement)); i++) {
-      await page.keyboard.press("Tab");
-      seen.push(await page.evaluate(() => document.activeElement?.tagName ?? ""));
-    }
-    await expect(start).toBeFocused();
-    expect(seen.length, seen.join()).toBeGreaterThan(1);
-    expect(seen).toContain("SUMMARY");
-  });
-});
-
-test.describe("names a screen reader hears once (G28)", () => {
-  test.use({ storageState: DAY_DUE });
-
-  test("Start my day and Plan my week are one region each, not a region inside a region of the same name", async ({ page }) => {
-    await openApp(page, "runs=empty");
-    await openPipHome(page);
-    await expect(pipHome(page).getByRole("region", { name: "Start my day" })).toHaveCount(1);
-    await expect(pipHome(page).locator("[data-start-my-day]")).toBeVisible();
-    await pipHome(page).locator("[data-start-my-day]").getByRole("button", { name: "Plan my week" }).click();
-    await expect(pipHome(page).getByRole("region", { name: "Plan my week" })).toHaveCount(1);
-    await expect(pipHome(page).locator("[data-plan-my-week]")).toBeVisible();
-  });
-});
-
-test.describe("one In Needs you on a timeline row (G28)", () => {
-  test("a run waiting on you says it once in the timeline, not on its line and again on its card", async ({ page }) => {
-    test.setTimeout(120_000);
-    await openApp(page, MANAGED);
-    await startWorkstream(page, "CA-401");
-    await openPipHome(page);
-    await workstreamRow(page, "CA-401").click();
-    await askPip(page, "investigate this");
-    await homeSettled(page);
-    const review = homeRunCards(page, "CA-401").last();
-    await review.getByRole("button", { name: "Review and start", exact: true }).click();
-    if (await safety(page).isVisible()) {
-      await safety(page).getByRole("button", { name: "Got it, continue" }).click();
-    }
-    await review.getByRole("button", { name: "Start agent" }).click();
-    await expect.poll(async () => (await mockRuns(page)).find((r) => r.kind === "investigate")?.id ?? null).not.toBeNull();
-    const run = (await mockRuns(page)).find((r) => r.kind === "investigate")!;
-    for (let i = 0; i < 2; i++) await advanceRuns(page, 1, run.id);
-    await homeSettled(page);
-    await askPermission(page, run.id, "approve Bash: git push origin ca-401");
-    const entry = homeConversationRegion(page).locator(`[data-timeline-entry="run:${run.id}"]`);
-    await expect(entry).toHaveAttribute("data-waiting", `run:${run.id}`);
-    await expect(entry.getByRole("button", { name: "In Needs you" })).toHaveCount(1);
-    await expect(entry.getByText("In Needs you", { exact: true })).toHaveCount(1);
-  });
-});
-
 test.describe("the workstream step for a Done ticket (G30)", () => {
   test("names the one real reason, not three possible ones", async ({ page }) => {
     await openApp(page, "runs=empty");
-    await openPipHome(page);
-    await pipHome(page).getByRole("button", { name: "Start a workstream…" }).click();
+    await openAgents(page);
+    await agentsHome(page).getByRole("button", { name: "Start a workstream…" }).click();
     await palette(page).getByRole("combobox").fill("DEVOPS-478");
     await expect(palette(page)).toContainText("DEVOPS-478 is Done in Jira.");
     await expect(palette(page)).not.toContainText("It may be Done, already have a workstream, or not be loaded");

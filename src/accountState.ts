@@ -1,6 +1,6 @@
 import { forgetConversations, stopWatchingProposals } from "./claudeStore";
 import { stopClassicSync, useStore } from "./store";
-import { usePipHome } from "./workspace/pipHomeStore";
+import { useWorkView } from "./workspace/workViewStore";
 import { resetPip } from "./workspace/pipStore";
 import { readStored, writeStored } from "./workspace/storage";
 import { useTabs } from "./workspace/tabsStore";
@@ -25,8 +25,8 @@ export function resetAccountState(accountId: string | null) {
   stopWatchingProposals();
   forgetConversations();
   resetPip(changed);
-  // Pip home's selection is a workstream of the account shown before.
-  usePipHome.getState().reset();
+  // The open workstream and decision belong to the account shown before.
+  useWorkView.getState().reset();
   useWorkspace.getState().dispose();
   useToasts.getState().clear();
   useStore.setState({ snap: null, backend: null, selectedId: null, overlay: null });

@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { jiraWrites, needsPane, needsYouCount, openApp, openPipHome, pipHome, startWorkstream, workstreamRow } from "./support/app";
+import { agentsHome, jiraWrites, needsPane, needsYouCount, openAgents, openApp, pipPane, selectWorkstream, startMyDay, startWorkstream, workstreamGroup } from "./support/app";
 
 // Fixes from round 8's backlog: the workstream step says why a key has nothing to start, a pause before posting edited text that
 // reaches everyone or looks like a secret, Close beside Hold, and the Plan my week add box naming a Done ticket.
@@ -13,8 +13,8 @@ const allProjects = (page: Page) => page.getByRole("navigation", { name: "Worksp
 test.describe("the workstream step with nothing to start (G16)", () => {
   test("says why a typed key has no ticket to start a workstream on", async ({ page }) => {
     await openApp(page, "runs=empty");
-    await openPipHome(page);
-    await pipHome(page).getByRole("button", { name: "Start a workstream…" }).click();
+    await openAgents(page);
+    await agentsHome(page).getByRole("button", { name: "Start a workstream…" }).click();
     const dialog = page.getByRole("dialog", { name: "Command palette" });
     await dialog.getByRole("combobox").fill("CA-9999");
     await expect(dialog.getByRole("option")).toHaveCount(0);
@@ -27,9 +27,9 @@ test.describe("the pause before posting edited text (G19)", () => {
   async function draftOn(page: Page, key: string) {
     await allProjects(page);
     await startWorkstream(page, key);
-    await openPipHome(page);
-    await workstreamRow(page, key).click();
-    await pipHome(page).locator("[data-clarity-notice]").getByRole("button", { name: "Ask the reporter now" }).click();
+    await openAgents(page);
+    await selectWorkstream(page, key);
+    await agentsHome(page).locator("[data-clarity-notice]").getByRole("button", { name: "Ask the reporter now" }).click();
     return needsPane(page).getByRole("article", { name: `Comment on ${key}` });
   }
   const addLine = async (page: Page, draft: ReturnType<Page["locator"]>, line: string) => {
@@ -76,9 +76,9 @@ test.describe("Close beside Hold (G21)", () => {
     test.setTimeout(90_000);
     await openApp(page, "runs=empty&wsManage=1");
     await startWorkstream(page, "CA-401");
-    await openPipHome(page);
-    await workstreamRow(page, "CA-401").click();
-    const controls = pipHome(page).locator("[data-workstream-controls]");
+    await openAgents(page);
+    await selectWorkstream(page, "CA-401");
+    const controls = pipPane(page).locator("[data-workstream-controls]");
     await expect(controls.getByRole("button", { name: "Hold", exact: true })).toBeVisible();
     await controls.getByRole("button", { name: "Close…" }).click();
     const ask = controls.getByRole("group", { name: "Close this workstream" });
@@ -95,7 +95,7 @@ test.describe("Close beside Hold (G21)", () => {
     await expect(controls.getByRole("button", { name: "Close…" })).toBeFocused();
     await controls.getByRole("button", { name: "Close…" }).click();
     await controls.getByRole("button", { name: "Close workstream" }).click();
-    await expect(workstreamRow(page, "CA-401")).toHaveCount(0);
+    await expect(workstreamGroup(page, "CA-401")).toHaveCount(0);
     await expect(needsYouCount(page)).toHaveText("0");
   });
 });
@@ -106,9 +106,10 @@ test.describe("adding a Done ticket to the plan (G24)", () => {
   test("says the ticket is Done in Jira, not that none matches", async ({ page }) => {
     test.setTimeout(90_000);
     await openApp(page, "runs=empty");
-    await openPipHome(page);
-    await pipHome(page).locator("[data-start-my-day]").getByRole("button", { name: "Plan my week" }).click();
-    const plan = pipHome(page).locator("[data-plan-my-week]");
+    await openAgents(page);
+    await startMyDay(page);
+    await agentsHome(page).locator("[data-start-my-day]").getByRole("button", { name: "Plan my week" }).click();
+    const plan = agentsHome(page).locator("[data-plan-my-week]");
     await plan.locator("[data-plan-add]").fill("DEVOPS-478");
     await plan.locator("[data-plan-add-go]").click();
     await expect(plan.locator("[data-plan-missing]")).toHaveText("DEVOPS-478 is Done in Jira.");

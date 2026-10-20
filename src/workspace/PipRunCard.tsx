@@ -19,7 +19,7 @@ interface CardProps {
   /** The run's short name in its workstream (`R1`), when it is in one. */
   label?: string;
   onOpen(): void;
-  /** Stepped to from the keyboard, as on Pip home's step rail: it takes focus from code and shows a ring. */
+  /** Stepped to from the keyboard, as on a workstream's step rail: it takes focus from code and shows a ring. */
   focusable?: boolean;
 }
 

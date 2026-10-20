@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { PIP_INPUT, advanceRuns, askPip, openApp, paneSettled as settled, peekSheet, peekTicket, pipConversation, pipPane, startWorkstream } from "./support/app";
+import { advanceRuns, askPip, groupByState, openApp, paneSettled as settled, peekSheet, peekTicket, PIP_INPUT, pipConversation, pipPane, startWorkstream } from "./support/app";
 
 const setup = (page: Page) => page.getByRole("dialog", { name: "Start an agent" });
 const safety = (page: Page) => page.getByRole("dialog", { name: "Agents safety and settings" });
@@ -149,14 +149,12 @@ test("Agents groups runs by workstream, with its stage and R1, and the rest unde
   await expect(agentRuns(page).first()).toBeVisible();
 
   const groupBy = page.getByRole("group", { name: "Group by" });
-  await expect(groupBy.getByRole("button", { name: "State" })).toHaveAttribute("aria-pressed", "true");
-  await expect(page.locator("[data-lane]").first()).toBeVisible();
-  await groupBy.getByRole("button", { name: "Workstream" }).click();
+  await expect(groupBy.getByRole("button", { name: "Workstream" })).toHaveAttribute("aria-pressed", "true");
 
   const groups = page.locator("[data-workstream-group]");
   await expect(groups.first()).toHaveAttribute("data-workstream-group", /^(?!none$)/);
   const mine = groups.first();
-  await expect(mine.locator("h3").first()).toHaveText(/^CA-401 /);
+  await expect(mine.locator("h3").first()).toHaveText(/^CA-401/);
   await expect(mine.locator("[data-stage]")).toHaveText("Investigate");
   await expect(mine.locator('[data-run-label="R1"]')).toBeVisible();
   await expect(mine.locator("[data-run-id]")).toHaveCount(1);
@@ -226,6 +224,7 @@ test("/stop R1 in the workstream's conversation stops the run without asking Pip
   // The Agents view shows it stopped too.
   await page.getByRole("button", { name: /^Agents/ }).click();
   // A run the person stopped is under Earlier, folded until shown.
+  await groupByState(page);
   await page.locator('[data-lane="earlier"]').getByRole("button", { name: "Show" }).click();
   await expect(agentRuns(page)).toHaveCount(1);
   await expect(page.locator("main [data-run-id][data-state=stopped]")).toHaveCount(1);

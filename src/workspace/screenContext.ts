@@ -20,14 +20,14 @@ export interface Screen {
   activity: { chip: ActivityChip; container: ContainerRef | null };
   /** The Agents view's runs and filters, the run open in the run sheet and how many agents wait on the person; absent while agents are off. */
   agents?: AgentsScene;
-  /** The conversation Pip home shows, as `homeConversationLine` names it. */
-  home?: string;
+  /** The workstream whose detail is open on the Agents view, as `openWorkstreamLine` names it. */
+  workstream?: string;
 }
 
-/** The conversation Pip home shows: "General", or "Workstream: " and the title of the open workstream selected. */
-export function homeConversationLine(selected: string | null, list: readonly WorkstreamView[]): string {
+/** "Workstream: " and the title of the open workstream whose detail is shown on Agents; undefined while none is. */
+export function openWorkstreamLine(selected: string | null, list: readonly WorkstreamView[]): string | undefined {
   const ws = selected ? list.find((v) => v.workstream.id === selected && v.workstream.closedAt === null)?.workstream : undefined;
-  return ws ? `Workstream: ${ws.title}` : "General";
+  return ws ? `Workstream: ${ws.title}` : undefined;
 }
 
 export interface AgentsScene {
@@ -56,13 +56,11 @@ const projectName = (containers: Screen["containers"], project: ContainerRef | n
 
 /**
  * What the person is looking at, as a line: "Board · DEVOPS · 12 items", "Activity · Mentions · DEVOPS", "Agents · Needs
- * you · 3 runs", "Pip home · Workstream: CA-401 Fix the cart" or "Settings".
+ * you · 3 runs", "Agents · All · 3 runs · Workstream: CA-401 Fix the cart" or "Settings".
  */
-export function screenLine(s: Pick<Screen, "route" | "tab" | "shown" | "containers" | "activity" | "agents" | "home">): string {
+export function screenLine(s: Pick<Screen, "route" | "tab" | "shown" | "containers" | "activity" | "agents" | "workstream">): string {
   if (s.route === "settings") return "Settings";
-  // Pip home shows no board: the workspace tab's view and filter are out of sight there; the conversation is what it shows.
-  if (s.route === "pip") return s.home ? `Pip home · ${s.home}` : "Pip home";
-  if (s.route === "agents") return s.agents ? `Agents · ${agentsFilterText(s.agents.filters)} · ${plural(runsShown(s.agents).length, "run")}` : "Agents";
+  if (s.route === "agents") return [s.agents ? `Agents · ${agentsFilterText(s.agents.filters)} · ${plural(runsShown(s.agents).length, "run")}` : "Agents", s.workstream].filter(Boolean).join(" · ");
   if (s.route === "activity") return `Activity · ${CHIP_LABEL[s.activity.chip]} · ${projectName(s.containers, s.activity.container)}`;
   return `${VIEW_LABEL[s.tab.view]} · ${projectName(s.containers, projectOf(s.tab.filter))} · ${plural(s.shown.length)}`;
 }

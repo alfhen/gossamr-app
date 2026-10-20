@@ -8,7 +8,7 @@ import { setLiveDraft } from "./draftLive";
 import { keepEditsOfDraft, keepEditsOnLeave, keptEditsOfDraft } from "./DraftCard";
 import { OPENED_NOT_POSTED, keyPlan, openNeed, sayOpenNote, setPaneIntent, takePaneIntent } from "./needsActions";
 import { useToasts } from "./toasts";
-import { usePipHome } from "./pipHomeStore";
+import { useWorkView } from "./workViewStore";
 import { useTabs } from "./tabsStore";
 import { lastReadHeldTimes, currentNeeds, setLastReadHeldTimes } from "./useNeeds";
 import { useWorkstreams } from "./workstreamsStore";
@@ -17,25 +17,25 @@ const need = (key: string) => ({ key, workstreamId: null }) as unknown as Need;
 
 describe("opening a need with an intent", () => {
   beforeEach(() => {
-    usePipHome.getState().reset();
+    useWorkView.getState().reset();
     setPaneIntent(null);
-    useTabs.setState({ route: "pip" });
+    useTabs.setState({ route: "agents" });
   });
 
   it("remounts a decision that is already open, so Edit is pressed", () => {
     openNeed(need("a"));
-    const rev = usePipHome.getState().paneRev;
+    const rev = useWorkView.getState().paneRev;
     openNeed(need("a"), { edit: true });
-    expect(usePipHome.getState().paneRev).toBe(rev + 1);
+    expect(useWorkView.getState().paneRev).toBe(rev + 1);
     expect(takePaneIntent()).toBe("edit");
   });
 
   it("does not remount for a need that is not open yet, or when not editing", () => {
     openNeed(need("a"));
-    const rev = usePipHome.getState().paneRev;
+    const rev = useWorkView.getState().paneRev;
     openNeed(need("b"), { edit: true });
     openNeed(need("b"));
-    expect(usePipHome.getState().paneRev).toBe(rev);
+    expect(useWorkView.getState().paneRev).toBe(rev);
   });
 
   it("clears a stale intent when the next action is not Edit", () => {

@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MockBackend } from "../backend/mock";
 import type { CodeChange, Intent, ItemRef, Proposal, ReviewView, Run, RunKind, RunState, WorkstreamEvent, WorkstreamView } from "../types";
 import { DecisionShownContext } from "./decisionShown";
-import { EDITED_ASIDE, freezeBatch } from "./pipHomeLogic";
+import { EDITED_ASIDE, freezeBatch } from "./workViewLogic";
 import { setLiveDraft } from "./draftLive";
 import { approveBatch, BATCH_CHANGED, BatchConfirm, confirmBatch, NOTES_HELP, NOTES_EMPTY, EarlierStepDrafts, planResultFor, StepDrafts, StepRailView, type StepRailViewProps } from "./StepRail";
 
@@ -129,7 +129,7 @@ describe("the Plan step while its description update waits (N6)", () => {
   });
 });
 
-describe("a draft open in Pip home's decision pane", () => {
+describe("a draft open in the Agents decision pane", () => {
   it("is not a card on the rail as well: its step lists no draft, and a step with others still does", () => {
     const rail = (proposals: Proposal[], open: string[]) =>
       renderToStaticMarkup(

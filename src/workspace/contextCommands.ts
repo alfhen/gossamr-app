@@ -1,12 +1,12 @@
 import { openInWorkstreamLabel, type Need, type NeedActionId, type NeedGroup } from "../lib/needs";
 import type { Proposal, Run, WorkstreamView } from "../types";
 import { draftKeyAction } from "./draftKeys";
-import { draftEdited } from "./pipHomeLogic";
+import { draftEdited } from "./workViewLogic";
 import type { Command } from "./commands";
 
 /**
  * What the palette's "This item" entries act on: the one thing the keyboard was on when it opened. A row of Needs you (or
- * its open decision) is a need; a draft's card, a run's card or sheet, or a workstream selected on Pip home are themselves.
+ * its open decision) is a need; a draft's card, a run's card or sheet, or a workstream open on Agents are themselves.
  */
 export type Subject = { type: "need"; key: string } | { type: "draft"; id: string } | { type: "run"; id: string } | { type: "workstream"; id: string };
 
@@ -69,7 +69,7 @@ function workstreamEntries(view: WorkstreamView, deps: ContextDeps, ticket: stri
   return [
     ws.heldReason ? entry(`resume:${ws.id}`, `Resume the workstream on ${ticket}`, () => deps.resume(ws.id), { icon: "▶", keywords: "resume lift hold workstream" }) : entry(`hold:${ws.id}`, `Hold the workstream on ${ticket}`, () => deps.hold(ws.id), { icon: "⏸", hint: "undo for 8 s", keywords: "hold pause workstream stop waking" }),
     ...(ws.mode === "manage" ? [entry(`advise:${ws.id}`, `Switch ${ticket} to Advise`, () => deps.advise(ws.id), { icon: "◇", hint: "undo for 8 s", keywords: "advise manage mode pip stop managing workstream" })] : []),
-    entry(`open:${ws.id}`, `Open the workstream on ${ticket}`, () => deps.openWorkstream(ws.id), { icon: "◇", keywords: "open workstream pip home conversation" }),
+    entry(`open:${ws.id}`, `Open the workstream on ${ticket}`, () => deps.openWorkstream(ws.id), { icon: "◇", keywords: "open workstream agents conversation" }),
   ];
 }
 

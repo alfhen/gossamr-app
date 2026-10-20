@@ -1,6 +1,5 @@
 import type { ReactNode } from "react";
-import { FILTER_LABEL, SCOPE_LABEL, TIMELINE_FILTERS, TIMELINE_SCOPES, type TimelineFilter, type TimelineScope } from "../lib/timeline";
-import { usePipHome } from "./pipHomeStore";
+import { FILTER_LABEL, TIMELINE_FILTERS, type TimelineFilter } from "../lib/timeline";
 import { useTabs } from "./tabsStore";
 
 const SEGMENT = "inline-flex gap-0.5 rounded-[7px] border border-ws-sep2 p-0.5";
@@ -10,8 +9,8 @@ const segment = (on: boolean) => `rounded-[5px] px-2 py-px text-sm focus-visible
 const countTitle = (n: number | undefined) => (n === undefined ? undefined : `${n} in this timeline, decided or waiting. What needs you now is in Needs you.`);
 
 /**
- * The timeline's filters: All, Runs, Drafts, Decisions. The same bar heads a workstream's timeline on Pip home and the Pip
- * pane's. `counts` adds how many each shows; `after` is what follows the buttons (the scope, the pane's way to the runs of
+ * The timeline's filters: All, Runs, Drafts, Decisions. It heads the timeline in the Pip
+ * pane. `counts` adds how many each shows; `after` is what follows the buttons (the scope, the pane's way to the runs of
  * every workstream). `label` names the
  * group: the pane's is its own, so it never reads as the main timeline's.
  */
@@ -38,40 +37,7 @@ export function TimelineFilterBar({ value, onChange, counts, after, label = "Tim
   );
 }
 
-/**
- * Whose timeline the filter applies to: "This workstream" or "Every workstream", with every filter, Runs included.
- */
-export function TimelineScopeToggle({ value, onChange }: { value: TimelineScope; onChange(scope: TimelineScope): void }) {
-  return (
-    <div role="group" aria-label="Timeline scope" data-timeline-scope={value} className={SEGMENT}>
-      {TIMELINE_SCOPES.map((s) => (
-        <button
-          key={s}
-          type="button"
-          aria-pressed={value === s}
-          data-scope={s}
-          onClick={() => onChange(s)}
-          className={segment(value === s)}
-        >
-          {SCOPE_LABEL[s]}
-        </button>
-      ))}
-    </div>
-  );
-}
-
-/**
- * Shows filter `filter` in scope `scope` (the one Pip home has, unless given) on Pip home's timeline. Runs in every
- * workstream is there too, like the other filters; the Agents screen is the operations view (`showAllRuns`).
- */
-export function showTimeline(filter: TimelineFilter, scope: TimelineScope = usePipHome.getState().timelineScope) {
-  const home = usePipHome.getState();
-  if (home.timelineScope !== scope) home.setTimelineScope(scope);
-  if (home.timelineFilter !== filter) home.setTimelineFilter(filter);
-  useTabs.getState().setRoute("pip");
-}
-
-/** The Agents screen: what is running, the capacity, Stop all. */
+/** The Agents screen: every run across every workstream, what is running, the capacity, Stop all. */
 export function showAllRuns() {
   useTabs.getState().setRoute("agents");
 }

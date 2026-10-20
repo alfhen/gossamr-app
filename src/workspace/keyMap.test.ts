@@ -2,9 +2,9 @@ import { describe, expect, it } from "vitest";
 import { agentKey } from "./agentKeys";
 import { draftKeyAction } from "./draftKeys";
 import { HINTS, KEY_BINDINGS, KEY_LABEL, isActionKey, keyHint, keyIntent, type KeyItem } from "./keyMap";
-import { pipHomeKey, type PipHomeKeyState } from "./pipHomeKeys";
+import { needsKey, type NeedsKeyState } from "./workKeys";
 import { keyAction } from "./AgentsView";
-import { footerHints, pipHomeHints } from "./footerHints";
+import { footerHints } from "./footerHints";
 import type { Proposal } from "../types";
 
 const press = (key: string, over: Partial<Parameters<typeof keyIntent>[0]> = {}) => ({ key, metaKey: false, ctrlKey: false, altKey: false, shiftKey: false, ...over });
@@ -38,7 +38,7 @@ describe("the one key model", () => {
 });
 
 describe("every list takes the same keys the same way", () => {
-  const needs = (kind: "need" | "group"): PipHomeKeyState => ({ column: "list", overlay: false, count: 4, at: 1, kind });
+  const needs = (kind: "need" | "group"): NeedsKeyState => ({ overlay: false, count: 4, at: 1, kind });
   const comment = {
     id: "p1",
     state: { type: "pending" },
@@ -46,7 +46,7 @@ describe("every list takes the same keys the same way", () => {
   } as unknown as Proposal;
 
   it("the Needs you list", () => {
-    const at = (k: string) => pipHomeKey({ ...press(k), target: null }, needs("need"));
+    const at = (k: string) => needsKey({ ...press(k), target: null }, needs("need"));
     expect(at("j")).toEqual({ type: "focus", index: 2 });
     expect(at("k")).toEqual({ type: "focus", index: 0 });
     expect(at("Enter")).toEqual({ type: "decide" });
@@ -100,12 +100,7 @@ describe("the hint lines", () => {
     expect(keyHint("run")).toBe("j k move · ↵ open · a allow or retry · d dismiss or deny · Esc back");
   });
 
-  it("have the same keys in Pip home's footer wherever the keyboard is", () => {
-    const onNeed = pipHomeHints(true).find((h) => h.id === "needs")!;
-    const onDraft = pipHomeHints(false).find((h) => h.id === "decide")!;
-    expect(onNeed.keys).toEqual(["a", "e", "d", "s"]);
-    expect(onDraft.keys).toEqual(onNeed.keys);
-    expect(pipHomeHints().find((h) => h.id === "open")?.keys).toEqual(["↵", "o"]);
+  it("name j and k to move in the canvas footer", () => {
     expect(footerHints("list").find((h) => h.id === "move")?.keys).toEqual(["j", "k"]);
   });
 });

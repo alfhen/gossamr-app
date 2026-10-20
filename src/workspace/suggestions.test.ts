@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { HELD_PERSON } from "../types";
 import { PLAN_UPDATE_CHIP, chipPageAction, placeholderFor, suggestionsFor, workstreamChips, type SuggestionScene, type WorkstreamSuggestionScene } from "./suggestions";
 
-const base: SuggestionScene = { route: "pip", quote: false, marked: 0, item: null, pendingDrafts: 0, itemDrafts: 0, unassignedInView: 0, shown: 10, filtered: false };
+const base: SuggestionScene = { route: "agents", quote: false, marked: 0, item: null, pendingDrafts: 0, itemDrafts: 0, unassignedInView: 0, shown: 10, filtered: false };
 const ws: WorkstreamSuggestionScene = { key: "PAY-412", stage: "intake", mode: "manage", heldReason: null, hasPendingPlanRewrite: false, hasPendingStartDraft: false, investigated: false };
 
 describe("workstream-aware suggestion chips", () => {
@@ -41,7 +41,7 @@ describe("workstream-aware suggestion chips", () => {
     for (const chip of ["Why is this held?", "What is waiting to start?", "Catch me up", "Approve the plan", "Plan this"]) expect(chipPageAction(chip)).toBeNull();
   });
 
-  it("on Pip home, never offers to filter the board it doesn't show: not in a workstream, not in General", () => {
+  it("with a workstream's detail open on Agents, never offers to filter the board it doesn't show", () => {
     const board = /stale|blocked|unassigned|my tickets/i;
     // A workstream with nothing of its own to offer, and General.
     for (const scene of [{ ...base, workstream: { ...ws, stage: "done" as const, investigated: true } }, base, { ...base, pendingDrafts: 2 }]) {
@@ -49,12 +49,10 @@ describe("workstream-aware suggestion chips", () => {
       expect(chips.length).toBeGreaterThan(0);
       for (const c of chips) expect(c).not.toMatch(board);
     }
-    expect(suggestionsFor(base)).toEqual(["Catch me up"]);
-    expect(suggestionsFor({ ...base, pendingDrafts: 1 })).toEqual(["Which drafts are safe to approve?", "Catch me up"]);
   });
 
-  it("gives Pip home's composer its own placeholder, a peeked ticket's first", () => {
-    const at = { images: false, quote: false, itemKey: null, route: "pip" as const, runOpen: false };
+  it("gives the composer on Agents its own placeholder, a peeked ticket's first", () => {
+    const at = { images: false, quote: false, itemKey: null, route: "agents" as const, runOpen: false };
     expect(placeholderFor(at)).toBe("Ask about your workstreams and agents…");
     expect(placeholderFor({ ...at, workstream: true })).toBe("Ask about this workstream…");
     expect(placeholderFor({ ...at, itemKey: "CA-401" })).toBe("Ask about CA-401…");

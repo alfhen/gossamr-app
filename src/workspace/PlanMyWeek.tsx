@@ -4,7 +4,8 @@ import { WEEK_PICKS, isoWeek, itemOutcome, liveWorkstreamOf, movePick, planMyWee
 import type { WorkstreamWither } from "../lib/workstreamWither";
 import type { PersonRef, WorkItem } from "../types";
 import { useWorkspace } from "../workspaceStore";
-import { usePipHome } from "./pipHomeStore";
+import { useWorkView } from "./workViewStore";
+import { focusAgentsList } from "./focusDrawn";
 import { usePrefs } from "./prefs";
 import { useRuns } from "./runsStore";
 import { focusPeekOf } from "./PeekSheet";
@@ -13,7 +14,7 @@ import { showPlanMyWeek } from "./planActions";
 import { useToasts } from "./toasts";
 import { hideUndoToast, offerUndo, withdrawUndo } from "./undo";
 import { useNow } from "./useNow";
-import { openOnPipHome, useWorkstreams } from "./workstreamsStore";
+import { openOnAgents, useWorkstreams } from "./workstreamsStore";
 
 /** What is said once a pick moved to `to` (0-based) of `total`: its key, or its title for a workstream, and where it is now. */
 export const movedText = (pick: Pick<PlanPick, "ticketKey" | "title">, to: number, total: number) => `${pick.ticketKey ?? pick.title} moved to position ${to + 1} of ${total}`;
@@ -216,7 +217,7 @@ export function PlanMyWeekView({
     revealChoices(root.current?.querySelector<HTMLElement>("[data-plan-choices]"));
   }, [choices]);
   return (
-    // Not a region of its own: Pip home's labelled stop around it already is "Plan my week".
+    // Not a region of its own: the labelled stop around it already is "Plan my week".
     <div
       ref={root}
       data-plan-my-week
@@ -376,14 +377,14 @@ export function PlanMyWeekView({
           Keep this plan
         </button>
         <span className="text-sm text-ws-ink3">
-          {kept ? `Kept on this device for the ${weekLabel(week)}; it shows as This week on Pip home.` : "Keep this plan to see it as This week on Pip home; it stays on this device."}
+          {kept ? `Kept on this device for the ${weekLabel(week)}; it shows as This week on Agents.` : "Keep this plan to see it as This week on Agents; it stays on this device."}
         </span>
       </div>
     </div>
   );
 }
 
-/** Plan my week on Pip home: the proposal (or the plan already kept this week) to reorder, trim, add to and keep. */
+/** Plan my week on Agents: the proposal (or the plan already kept this week) to reorder, trim, add to and keep. */
 export function PlanMyWeek({ needs, withers, now }: { needs: readonly Need[]; withers: Readonly<Record<string, WorkstreamWither>>; now: number }) {
   const list = useWorkstreams((s) => s.list);
   const items = useWorkspace((s) => s.items);
@@ -397,8 +398,8 @@ export function PlanMyWeek({ needs, withers, now }: { needs: readonly Need[]; wi
   const [picks, setPicks] = useState<PlanItem[]>(() => keptPlan?.items ?? propose());
   const [fresh, setFresh] = useState(!keptPlan);
   const close = (toThisWeek = false) => {
-    usePipHome.getState().setPlanOpen(false);
-    const row = () => document.querySelector<HTMLElement>('[data-pip-home-column="list"] [role="option"][tabindex="0"]')?.focus();
+    useWorkView.getState().setPlanOpen(false);
+    const row = focusAgentsList;
     if (!toThisWeek) return void requestAnimationFrame(row);
     // Kept, the person's next stop is the This week list that has just appeared: it renders a frame or two after the card goes.
     let tries = 8;
@@ -438,13 +439,13 @@ export function openTicketItem(key: string) {
 /** Opens what a kept item points at: its workstream while it is open (or the open one on its ticket, once its own closed), else its ticket. */
 function openItem(item: PlanItem, done: boolean) {
   const live = done ? null : liveWorkstreamOf(item, useWorkstreams.getState().list);
-  if (live) return openOnPipHome(live);
-  if (item.workstreamId && !done) return openOnPipHome(item.workstreamId);
+  if (live) return openOnAgents(live);
+  if (item.workstreamId && !done) return openOnAgents(item.workstreamId);
   if (item.ticketKey) return openTicketItem(item.ticketKey);
-  if (item.workstreamId) openOnPipHome(item.workstreamId);
+  if (item.workstreamId) openOnAgents(item.workstreamId);
 }
 
-/** Starts a workstream again on a reopened item's ticket, which opens it on Pip home; an item whose ticket isn't cached opens the ticket instead. */
+/** Starts a workstream again on a reopened item's ticket, which opens it on Agents; an item whose ticket isn't cached opens the ticket instead. */
 function startAgain(item: PlanItem) {
   const ticket = Object.values(useWorkspace.getState().items).find((t) => t.item.key === item.ticketKey && (item.connectionId === undefined || t.item.connectionId === item.connectionId));
   if (ticket) void useWorkstreams.getState().start(ticket.item);
@@ -455,7 +456,7 @@ function startAgain(item: PlanItem) {
 export const CLOSED_NOT_DONE = "Closed, not done";
 const CLOSED_TITLE = "The workstream was closed but the ticket isn't Done in Jira, so this isn't ticked as finished.";
 
-/** The compact "This week" list in Pip home's left column: the kept plan, each item a link, ticked once it is done, and marked apart ("closed, not done") once its workstream closed with the ticket not Done. A ticked or closed item can be reopened. Nothing while no plan is kept. */
+/** The compact "This week" list on Agents: the kept plan, each item a link, ticked once it is done, and marked apart ("closed, not done") once its workstream closed with the ticket not Done. A ticked or closed item can be reopened. Nothing while no plan is kept. */
 export function ThisWeekView({
   week,
   items,

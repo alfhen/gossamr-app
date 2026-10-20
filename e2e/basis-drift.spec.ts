@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { askPip, editTicket, finishOnHome, homeConversation, homeRunCards, homeSettled, homeWakes, inlineStart, jiraWrites, mockRuns, needOfKind, needsYouRow, openApp, openPipHome, pipHome, startWorkstream, stepRail, workstreamEvents, workstreamRow } from "./support/app";
+import { askPip, editTicket, finishOnHome, homeConversation, homeRunCards, homeSettled, homeWakes, inlineStart, jiraWrites, mockRuns, needOfKind, needsYouRow, openAgents, openApp, selectWorkstream, startWorkstream, stepRail, workstreamEvents, workstreamGroup } from "./support/app";
 
 // New workstreams open in Manage, where the supervisor checks the ticket against the basis the workstream recorded.
 const MANAGED = "runs=empty&wsManage=1";
@@ -8,8 +8,8 @@ const DESCRIPTION_HELD = "Held: the ticket's description changed in Jira";
 /** Opens a workstream on `key` from its peek, then shows it on Pip home. */
 async function homeWorkstream(page: Page, key: string) {
   await startWorkstream(page, key);
-  await openPipHome(page);
-  await workstreamRow(page, key).click();
+  await openAgents(page);
+  await selectWorkstream(page, key);
   await expect(homeConversation(page)).toHaveText(new RegExp(`^Workstream: ${key} .* · Intake$`));
 }
 
@@ -21,7 +21,7 @@ const driftedLines = async (page: Page) => (await workstreamEvents(page)).filter
 test("a description edited in Jira holds the managed workstream and says why; Resume takes the ticket as it is, and Pip's next wake mentions it", async ({ page }) => {
   await openApp(page, MANAGED);
   await homeWorkstream(page, "CA-401");
-  const row = workstreamRow(page, "CA-401");
+  const row = workstreamGroup(page, "CA-401");
 
   await editTicket(page, "CA-401", { description: "Someone rewrote the welcome flow: three emails, not two." });
   // The row, the Needs you tray and the rail all say why, and the rail says to read the ticket first.
@@ -69,14 +69,14 @@ test("a description edited in Jira holds the managed workstream and says why; Re
 test("moving a workstream's ticket to another status leaves it be; moving it to Done holds it, saying so", async ({ page }) => {
   await openApp(page, MANAGED);
   await homeWorkstream(page, "CA-402");
-  const row = workstreamRow(page, "CA-402");
+  const row = workstreamGroup(page, "CA-402");
 
   // The sample CA workflow has no In Progress: QA is one of its statuses under way, and Sent its Done.
   await editTicket(page, "CA-402", { statusId: "QA" });
   // The backend's check runs inside the edit, so what it recorded is settled by now.
   expect(await driftedLines(page)).toEqual([]);
   expect((await workstreamEvents(page)).filter((e) => e.action === "tripwire")).toEqual([]);
-  await expect(pipHome(page).getByRole("listbox", { name: "Workstreams" })).toBeVisible();
+  await expect(row).toBeVisible();
   await expect(banner(page)).toHaveCount(0);
   await expect(row.locator("[data-status]")).not.toHaveText("Needs you");
 

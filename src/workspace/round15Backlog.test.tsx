@@ -11,7 +11,7 @@ import { liveDraft, setLiveDraft } from "./draftLive";
 import { reporterAnswered, pushWaitToast } from "./NeedsPane";
 import { TurnView } from "./PipConversation";
 import { ORIENTATION_TERMS } from "./PipOrientation";
-import { stepBatchLabel } from "./pipHomeLogic";
+import { stepBatchLabel } from "./workViewLogic";
 import { StepDrafts } from "./StepRail";
 import { useToasts } from "./toasts";
 import { useWorkstreams } from "./workstreamsStore";

@@ -7,14 +7,14 @@ import { contextCommands, batchCommands, type ContextDeps, type Subject } from "
 import type { Command } from "./commands";
 import { draftDecisions, openLiveDraft } from "./DraftPreview";
 import { keyPlan, openInWorkstream, openNeed } from "./needsActions";
-import { usePipHome } from "./pipHomeStore";
+import { useWorkView } from "./workViewStore";
 import { useRuns } from "./runsStore";
 import { useTabs } from "./tabsStore";
-import { openOnPipHome, useWorkstreams } from "./workstreamsStore";
+import { openOnAgents, useWorkstreams } from "./workstreamsStore";
 
 /**
  * The item the keyboard was on when the palette opened, which its "This item" entries act on: a Needs you row or its open
- * decision, a draft's card, a run's card or open sheet or its selection on Agents, or the workstream selected on Pip home.
+ * decision, a draft's card, a run's card or open sheet or its selection on Agents, or the workstream whose detail is open there.
  */
 export function focusedSubject(active: Element | null): Subject | null {
   const el = active instanceof Element ? active : null;
@@ -27,11 +27,11 @@ export function focusedSubject(active: Element | null): Subject | null {
   const runs = useRuns.getState();
   if (runs.sheet?.type === "run") return { type: "run", id: runs.sheet.id };
   const tabs = useTabs.getState();
-  if (tabs.route === "agents" && runs.selectedId) return { type: "run", id: runs.selectedId };
-  if (tabs.route === "pip") {
-    const home = usePipHome.getState();
-    if (home.deciding) return { type: "need", key: home.deciding };
-    if (home.selected) return { type: "workstream", id: home.selected };
+  if (tabs.route === "agents") {
+    if (runs.selectedId) return { type: "run", id: runs.selectedId };
+    const view = useWorkView.getState();
+    if (view.deciding) return { type: "need", key: view.deciding };
+    if (view.selected) return { type: "workstream", id: view.selected };
   }
   return null;
 }
@@ -76,19 +76,21 @@ export const contextDeps: ContextDeps = {
   skipDraft: (p: Proposal) => draftDecisions(p.id, p).skip(),
   draftInWorkstream(p: Proposal) {
     const id = workstreamOf(p);
-    openOnPipHome(id ?? null);
-    usePipHome.getState().focus({ type: "draft", id: p.id });
+    // A draft outside any workstream has no detail to show it in: its own card opens instead.
+    if (!id) return openLiveDraft(p);
+    openOnAgents(id);
+    useWorkView.getState().focus({ type: "draft", id: p.id });
   },
   openRun: (run: Run) => useRuns.getState().openRun(run.id),
   hold: (id) => void useWorkstreams.getState().hold(id),
   resume: (id) => void useWorkstreams.getState().resume(id),
   advise: (id) => void useWorkstreams.getState().setMode(id, "advise"),
-  openWorkstream: openOnPipHome,
+  openWorkstream: openOnAgents,
   approveSafe(group) {
     // The list's own step: its combined preview and confirm. Nothing is approved here.
     const tabs = useTabs.getState();
-    if (tabs.route !== "pip") tabs.setRoute("pip");
-    usePipHome.getState().previewBatch(group.workstreamId === null ? "general" : group.workstreamId);
+    if (tabs.route !== "agents") tabs.setRoute("agents");
+    useWorkView.getState().previewBatch(group.workstreamId === null ? "general" : group.workstreamId);
   },
 };
 

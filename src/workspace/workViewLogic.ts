@@ -9,7 +9,7 @@ import { liveDraft } from "./draftLive";
 import { shownVerdict, verdictChip } from "./runSheetLogic";
 import type { WorkstreamSuggestionScene } from "./suggestions";
 
-/** Pure helpers behind Pip home's workstream rows and its step rail. They read the live stores' values and decide nothing. */
+/** Pure helpers behind a workstream's step rail and the drawer's footer. They read the live stores' values and decide nothing. */
 
 export { shortHeld };
 
@@ -21,7 +21,7 @@ export function lastHeldAt(events: readonly Pick<WorkstreamEvent, "action" | "at
   return null;
 }
 
-/** The steps of a workstream's chain, in order, as Pip home's step rail shows them. */
+/** The steps of a workstream's chain, in order, as a workstream's step rail shows them. */
 export const STEP_KINDS: readonly RunKind[] = ["investigate", "triage", "plan", "build", "review", "verify"];
 
 /** How many fix rounds the rules send a build before the review is the person's again, as `fix_round` allows. */
@@ -214,7 +214,7 @@ export function nextStep(chips: readonly Pick<StepChip, "kind" | "newest">[]): R
 }
 
 /**
- * Pip home's composer footer: "2 agents running · 1 quiet · 1 queued · 2 need you", counting every run in a workstream or not
+ * The composer footer: "2 agents running · 1 quiet · 1 queued · 2 need you", counting every run in a workstream or not
  * as the Agents view's summary does (`liveCounts`), so the two never disagree on how many are running, then how many things
  * need the person (`needsYou`, the one count). It is told under the input, never in the conversation.
  */
@@ -260,16 +260,4 @@ export function workstreamSuggestionScene(view: WorkstreamView, runs: readonly R
     unclear: !!view.readiness,
     cobweb,
   };
-}
-
-/**
- * Where Pip home lands on its first load with nothing selected: the workstream of the top need in Needs you (`{ id }`;
- * General's own, `{ id: null }`, when the top need is not in a workstream). Null while there is nothing to land on yet: no
- * need, or its workstream is not among the `openIds` read so far.
- */
-export function landingSelection(needsYou: readonly { workstreamId: string | null }[], openIds: readonly string[]): { id: string | null } | null {
-  const top = needsYou[0];
-  if (!top) return null;
-  if (top.workstreamId === null) return { id: null };
-  return openIds.includes(top.workstreamId) ? { id: top.workstreamId } : null;
 }

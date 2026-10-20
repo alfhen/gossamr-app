@@ -12,10 +12,11 @@ import { NeedsPane } from "./NeedsPane";
 import { NeedsYouList, firstText, groupText, hasMoreBelow } from "./NeedsYou";
 import { NO_FILTERS, groupRuns, slotWaiters, stopAllLabel, stoppable, summaryLine, yourAgents } from "./agentsLogic";
 import { arm, confirmArmed, disarm, keyPlan, openInWorkstream, openNeed } from "./needsActions";
-import { BATCH_ASIDE, BATCH_TITLE, composerFooter } from "./pipHomeLogic";
-import { usePipHome } from "./pipHomeStore";
+import { BATCH_ASIDE, BATCH_TITLE, composerFooter } from "./workViewLogic";
+import { useWorkView } from "./workViewStore";
 import { PipRunStripView } from "./PipRunCard";
 import { railBadgeText } from "./Rail";
+import { usePrefs } from "./prefs";
 import { useRuns } from "./runsStore";
 import { loadTabs, useTabs } from "./tabsStore";
 import { useToasts } from "./toasts";
@@ -112,7 +113,7 @@ beforeEach(() => {
 
 afterEach(() => {
   unseed();
-  usePipHome.getState().reset();
+  useWorkView.getState().reset();
   disarm();
   useRuns.setState({ sheet: null, selectedId: null, runs: [], dismissed: new Set() });
   useWorkstreams.setState({ list: [] });
@@ -154,7 +155,7 @@ describe("the Needs you list", () => {
     expect(html).not.toContain(`aria-label="${groupText(g, NOW)}"`);
   });
 
-  it("opens each group by default on Pip home's own list while its needs fit, with the group's header only its name and count", () => {
+  it("opens each group by default on the Agents strip while its needs fit, with the group's header only its name and count", () => {
     const html = renderToStaticMarkup(<NeedsYouList needs={list} now={NOW} main />);
     // The 8 needs fit: ws-1 shows its six, once each, and no why line is repeated on its header.
     expect([...html.matchAll(/data-needs-you-need="([^"]+)"/g)].map((m) => m[1])).toEqual(["run:r-perm", "run:r-q", "run:r-fail", "draft:c1", "draft:c2", "draft:c3"]);
@@ -163,7 +164,7 @@ describe("the Needs you list", () => {
     expect(ws1).toContain("6 waiting in this workstream");
     expect(ws1.split('<ul id="needs-you-group-ws-1"')[0]).not.toContain("data-needs-you-why");
     // The person's fold is kept, and a longer list stays folded as before.
-    seed(usePipHome, { collapsed: new Set(["ws-1"]) });
+    seed(useWorkView, { collapsed: new Set(["ws-1"]) });
     const folded = renderToStaticMarkup(<NeedsYouList needs={list} now={NOW} main />);
     expect(folded).not.toContain("data-needs-you-need=");
     expect(folded).toContain("+5 more");
@@ -192,7 +193,7 @@ describe("the Needs you list", () => {
     const folded = renderToStaticMarkup(<NeedsYouList needs={list} now={NOW} />);
     expect(folded).toContain('aria-expanded="false"');
     expect(folded).not.toContain("data-needs-you-need=");
-    seed(usePipHome, { expanded: new Set(["ws-1"]) });
+    seed(useWorkView, { expanded: new Set(["ws-1"]) });
     const html = renderToStaticMarkup(<NeedsYouList needs={list} now={NOW} />);
     expect(html).toContain('aria-expanded="true"');
     expect([...html.matchAll(/data-needs-you-need="([^"]+)"/g)].map((m) => m[1])).toEqual(["run:r-perm", "run:r-q", "run:r-fail", "draft:c1", "draft:c2", "draft:c3"]);
@@ -209,13 +210,13 @@ describe("the Needs you list", () => {
     expect(html).toMatch(/<h2 data-needs-you-title[^>]*class="sticky top-0 /);
   });
 
-  it("as Pip home's main column, sizes to its content up to half the column and scrolls inside it (G7)", () => {
+  it("as the Agents strip, sizes to its content up to a third of the window and scrolls inside it (G7)", () => {
     const html = renderToStaticMarkup(<NeedsYouList main needs={list} now={NOW} />);
     const region = /<section aria-label="Needs you"[^>]*class="([^"]*)"/.exec(html)?.[1] ?? "";
     expect(region).toContain("shrink");
     expect(region).not.toContain("flex-1");
     expect(region).toContain("overflow-y-auto");
-    expect(region).toContain("max-h-1/2");
+    expect(region).toContain("max-h-[min(36vh,20rem)]");
     // The popover's and the plain list keep their caps.
     expect(renderToStaticMarkup(<NeedsYouList compact needs={list} now={NOW} />)).toMatch(/aria-label="Needs you"[^>]*max-h-\[min\(400px,60vh\)\]/);
     expect(renderToStaticMarkup(<NeedsYouList needs={list} now={NOW} />)).toMatch(/aria-label="Needs you"[^>]*max-h-\[38vh\]/);
@@ -233,7 +234,7 @@ describe("the Needs you list", () => {
 
   it("offers 'Approve N safe drafts' under an expanded group with two or more, with none for a lone draft", () => {
     seed(useWorkspace, { proposals: Object.fromEntries(input().proposals.map((p) => [p.id, p])) });
-    seed(usePipHome, { expanded: new Set(["ws-1"]) });
+    seed(useWorkView, { expanded: new Set(["ws-1"]) });
     const html = renderToStaticMarkup(<NeedsYouList needs={list} now={NOW} />);
     expect(html).toContain("Approve 3 safe drafts");
     expect(html.match(/Approve \d+ safe drafts/g)).toHaveLength(1);
@@ -249,7 +250,7 @@ describe("the Needs you list", () => {
     const answers = { ...draft("a1", comment("CA-401", "Answers: a, b."), 20, "ws-1"), label: ANSWERS_COMMENT_LABEL };
     const proposals = [draft("c1", comment("CA-401"), 30, "ws-1"), answers];
     seed(useWorkspace, { proposals: Object.fromEntries(proposals.map((p) => [p.id, p])) });
-    seed(usePipHome, { expanded: new Set(["ws-1"]) });
+    seed(useWorkView, { expanded: new Set(["ws-1"]) });
     const html = renderToStaticMarkup(<NeedsYouList needs={needs(input({ proposals }))} now={NOW} />);
     expect(html).not.toContain("safe drafts");
     expect(html).toContain(`data-batch-aside`);
@@ -260,17 +261,17 @@ describe("the Needs you list", () => {
 
   it("keeps the batch's preview out of the list: its button opens it in the pane", () => {
     seed(useWorkspace, { proposals: Object.fromEntries(input().proposals.map((p) => [p.id, p])) });
-    seed(usePipHome, { expanded: new Set(["ws-1"]), batch: "ws-1" });
+    seed(useWorkView, { expanded: new Set(["ws-1"]), batch: "ws-1" });
     const html = renderToStaticMarkup(<NeedsYouList needs={list} now={NOW} />);
     expect(html).toContain("Approve 3 safe drafts");
     expect(html).not.toContain("data-needs-you-batch-preview");
     expect(html).not.toContain("Yes, approve");
-    usePipHome.getState().previewBatch("ws-1");
-    expect(usePipHome.getState().batch).toBe("ws-1");
+    useWorkView.getState().previewBatch("ws-1");
+    expect(useWorkView.getState().batch).toBe("ws-1");
   });
 
   it("marks an open group's top need, listed again under it, so j and k step past it", () => {
-    seed(usePipHome, { expanded: new Set(["ws-1"]) });
+    seed(useWorkView, { expanded: new Set(["ws-1"]) });
     const html = renderToStaticMarkup(<NeedsYouList needs={list} now={NOW} />);
     const group = needGroups(list).find((g) => g.workstreamId === "ws-1")!;
     expect([...html.matchAll(/data-needs-top=""/g)]).toHaveLength(1);
@@ -283,7 +284,7 @@ describe("the Needs you list", () => {
   });
 
   it("names the top need on an open group's row, which j and k step past (G11)", () => {
-    seed(usePipHome, { expanded: new Set(["ws-1"]) });
+    seed(useWorkView, { expanded: new Set(["ws-1"]) });
     const group = needGroups(list).find((g) => g.workstreamId === "ws-1")!;
     const label = firstText(group);
     expect(label).toContain(`${group.count} waiting here. First: `);
@@ -303,7 +304,7 @@ describe("the Needs you list", () => {
   });
 
   it("marks the need whose decision is open, and says what a key is waiting for on its row", () => {
-    seed(usePipHome, { expanded: new Set(["ws-1"]), deciding: "run:r-q", asking: { key: "run:r-perm", text: "↵ deny it; Claude carries on without it · any other key cancels" } });
+    seed(useWorkView, { expanded: new Set(["ws-1"]), deciding: "run:r-q", asking: { key: "run:r-perm", text: "↵ deny it; Claude carries on without it · any other key cancels" } });
     const html = renderToStaticMarkup(<NeedsYouList needs={list} now={NOW} />);
     expect(html.match(/aria-current="true"/g)).toHaveLength(1);
     expect(html).toMatch(/data-need-key="run:r-q"[^>]*aria-current="true"|aria-current="true"[^>]*data-need-key="run:r-q"/);
@@ -316,40 +317,42 @@ describe("opening a need", () => {
   const list = needs(input());
   const need = (key: string) => list.find((n) => n.key === key)!;
 
-  it("on Pip home selects its workstream and opens its decision in the middle column", () => {
-    useTabs.getState().setRoute("pip");
+  it("on Agents opens its decision under the strip, and opens no workstream's detail", () => {
+    useTabs.getState().setRoute("agents");
     openNeed(need("run:r-perm"));
-    expect(useTabs.getState().route).toBe("pip");
-    expect(usePipHome.getState()).toMatchObject({ selected: "ws-1", deciding: "run:r-perm", asking: null });
+    expect(useTabs.getState().route).toBe("agents");
+    expect(useWorkView.getState()).toMatchObject({ selected: null, deciding: "run:r-perm", asking: null });
   });
 
-  it("from another route goes to Pip home first", () => {
+  it("from another route goes to Agents first, wherever the need is", () => {
     useTabs.getState().setRoute("workspace");
     openNeed(need("held:ws-2"));
-    expect(useTabs.getState().route).toBe("pip");
-    expect(usePipHome.getState()).toMatchObject({ selected: "ws-2", deciding: "held:ws-2" });
+    expect(useTabs.getState().route).toBe("agents");
+    expect(useWorkView.getState()).toMatchObject({ selected: null, deciding: "held:ws-2" });
   });
 
-  it("goes to General for a need in no workstream", () => {
-    usePipHome.getState().openWorkstream("ws-1");
+  it("opens a need in no workstream the same way, with no workstream open", () => {
+    useWorkView.getState().openWorkstream("ws-1");
     openNeed(need("draft:g1"));
-    expect(usePipHome.getState().selected).toBeNull();
-    expect(usePipHome.getState().deciding).toBe("draft:g1");
+    expect(useWorkView.getState().deciding).toBe("draft:g1");
   });
 
-  it("'Open in workstream' closes the decision and asks for the card, where the card is; a run's sheet opens over it", () => {
-    useTabs.getState().setRoute("pip");
+  it("'Open in workstream' closes the decision and asks for the card in the workstream's detail; a run's sheet opens over it", () => {
+    useTabs.getState().setRoute("agents");
     openNeed(need("draft:c1"));
     openInWorkstream(need("draft:c1"));
-    expect(usePipHome.getState()).toMatchObject({ selected: "ws-1", deciding: null, focusTarget: { type: "draft", id: "c1" } });
+    expect(useWorkView.getState()).toMatchObject({ selected: "ws-1", deciding: null, focusTarget: { type: "draft", id: "c1" } });
     expect(useRuns.getState().sheet).toBeNull();
     openInWorkstream(need("held:ws-2"));
-    expect(usePipHome.getState()).toMatchObject({ selected: "ws-2", focusTarget: { type: "workstream" } });
+    expect(useWorkView.getState()).toMatchObject({ selected: "ws-2", focusTarget: { type: "workstream" } });
     openInWorkstream(need("run:r-q"));
-    expect(usePipHome.getState().focusTarget).toEqual({ type: "run", id: "r-q" });
+    expect(useWorkView.getState().focusTarget).toEqual({ type: "run", id: "r-q" });
     expect(useRuns.getState().sheet).toEqual({ type: "run", id: "r-q" });
+    // A need in no workstream has no detail to open: it opens the Pip drawer, where General's drafts are.
+    usePrefs.getState().setPipOpen(false);
     openInWorkstream(need("draft:g1"));
-    expect(usePipHome.getState().selected).toBeNull();
+    expect(usePrefs.getState().pipOpen).toBe(true);
+    usePrefs.getState().setPipOpen(false);
   });
 });
 
@@ -372,10 +375,10 @@ describe("what the list's keys do", () => {
     if (deny?.type !== "ask") throw new Error("a deny reaches the agent, so it asks first");
     // Nothing happens until Enter confirms what was asked.
     arm(need("run:r-perm"), deny);
-    expect(usePipHome.getState().asking).toEqual({ key: "run:r-perm", text: "↵ deny it; Claude carries on without it · any other key cancels" });
-    expect(usePipHome.getState().asking).not.toBeNull();
+    expect(useWorkView.getState().asking).toEqual({ key: "run:r-perm", text: "↵ deny it; Claude carries on without it · any other key cancels" });
+    expect(useWorkView.getState().asking).not.toBeNull();
     disarm();
-    expect(usePipHome.getState().asking).toBeNull();
+    expect(useWorkView.getState().asking).toBeNull();
     // Confirming what was dropped does nothing.
     confirmArmed();
   });
@@ -441,20 +444,20 @@ describe("the decision pane", () => {
     return needs(given);
   };
   const pane = (list: Need[], key: string) => {
-    seed(usePipHome, { deciding: key });
+    seed(useWorkView, { deciding: key });
     return renderToStaticMarkup(<NeedsPane needs={list} />);
   };
 
   it("opens nothing until a need is chosen, and nothing for a need that is gone", () => {
     const list = set();
     expect(renderToStaticMarkup(<NeedsPane needs={list} />)).toBe("");
-    seed(usePipHome, { deciding: "run:gone" });
+    seed(useWorkView, { deciding: "run:gone" });
     expect(renderToStaticMarkup(<NeedsPane needs={list} />)).toBe("");
   });
 
   it("opens a group's safe drafts as one decision: what each does, then the one confirm; a batch with fewer than two says so", () => {
     const list = set();
-    seed(usePipHome, { batch: "ws-1" });
+    seed(useWorkView, { batch: "ws-1" });
     const html = renderToStaticMarkup(<NeedsPane needs={list} />);
     expect(html).toContain('data-needs-pane="batch:ws-1"');
     expect(html).toContain("Approve 3 safe drafts");
@@ -465,21 +468,21 @@ describe("the decision pane", () => {
     expect(html).toContain('aria-label="Back to the list"');
     // Cancel and Esc keep the drafts: the pane is the one confirm, and nothing was approved by opening it.
     expect(useWorkspace.getState().proposals["c1"].state.type).toBe("pending");
-    seed(usePipHome, { batch: "general" });
+    seed(useWorkView, { batch: "general" });
     expect(renderToStaticMarkup(<NeedsPane needs={list} />)).toContain("These drafts are no longer waiting together.");
   });
 
   it("a batch and a need's decision replace each other, and closing clears either", () => {
-    const home = usePipHome.getState();
-    home.decide("run:r-perm", "ws-1");
+    const home = useWorkView.getState();
+    home.decide("run:r-perm");
     home.previewBatch("ws-1");
-    expect(usePipHome.getState()).toMatchObject({ deciding: null, batch: "ws-1" });
-    expect([...usePipHome.getState().expanded]).toContain("ws-1");
-    usePipHome.getState().decide("run:r-perm", "ws-1");
-    expect(usePipHome.getState()).toMatchObject({ deciding: "run:r-perm", batch: null });
-    usePipHome.getState().previewBatch("ws-1");
-    usePipHome.getState().closeDecision();
-    expect(usePipHome.getState()).toMatchObject({ deciding: null, batch: null });
+    expect(useWorkView.getState()).toMatchObject({ deciding: null, batch: "ws-1" });
+    expect([...useWorkView.getState().expanded]).toContain("ws-1");
+    useWorkView.getState().decide("run:r-perm");
+    expect(useWorkView.getState()).toMatchObject({ deciding: "run:r-perm", batch: null });
+    useWorkView.getState().previewBatch("ws-1");
+    useWorkView.getState().closeDecision();
+    expect(useWorkView.getState()).toMatchObject({ deciding: null, batch: null });
   });
 
   it("heads the decision with why and what waiting does, and a link to the workstream", () => {
@@ -627,7 +630,7 @@ describe("every count of needs you and of agents, from one fixture (D4, D5, N3)"
       expect(n).toBe(2 + (dismissed.size ? 0 : 1) + proposals.length);
       // One number: the list's pill, the rail badge, the composer footer, the launcher and the Agents header.
       expect(renderToStaticMarkup(<NeedsYouList needs={list} now={at} />)).toMatch(new RegExp(`data-needs-you-count[^>]*>${n}<`));
-      expect(railBadgeText.pipHome(n)).toBe(needsYouText(n));
+      expect(railBadgeText.agents(n)).toBe(needsYouText(n));
       expect(Number(/(\d+) needs? you/.exec(composerFooter(runs, n, at))?.[1])).toBe(n);
       expect(renderToStaticMarkup(<Launcher needs={n} onOpen={() => {}} nudge={null} />)).toContain(`Ask Pip, ${needsYouText(n)}`);
       expect(summaryLine(runs, at, n)).toMatch(new RegExp(`^${n} need you · `));

@@ -48,7 +48,7 @@ export interface AgentItemProps {
   /** A finished review's verdict; null when it gave none, absent while unread or for any other run. */
   review?: ReviewView | null;
   failure: FailureState;
-  /** Present while the run is one of the things in Needs you: pressing it opens that need on Pip home. */
+  /** Present while the run is one of the things in Needs you: pressing it opens that need's decision at the top of the view. */
   onOpenNeed?(): void;
   /** What a key pressed on the card waits for Enter to do ("↵ allow this once in Terminal · any other key cancels"), while one does. */
   asking?: string;
@@ -72,7 +72,7 @@ export function InNeedsYou({ onOpen }: { onOpen(): void }) {
       data-in-needs-you
       onClick={(ev) => (ev.stopPropagation(), onOpen())}
       onKeyDown={(ev) => ev.key === "Enter" && ev.stopPropagation()}
-      title="This run is in Needs you on Pip home. Open it there."
+      title="This run is in Needs you. Open its decision at the top."
       className="inline-flex shrink-0 items-center rounded-full border border-ws-pip/50 bg-ws-pip-soft px-2 text-xs leading-[1.6] font-semibold whitespace-nowrap text-ws-pip hover:bg-ws-pip hover:text-ws-on-pip focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip"
     >
       In Needs you

@@ -22,12 +22,12 @@ import { useTabs } from "./tabsStore";
 import { draftsForItem, pendingDrafts, useWorkspace } from "../workspaceStore";
 import { useClaude } from "../claudeStore";
 import { inWorkstreamPane } from "../lib/proposals";
-import { conversationTitle, useHomeWorkstream, usePaneWorkstream } from "./workstreamsStore";
+import { conversationTitle, usePaneWorkstream } from "./workstreamsStore";
 import { stageText } from "../lib/workstreamStage";
 import { WorkstreamControls } from "./WorkstreamControls";
 import { HeaderStatus } from "./StatusPill";
-import { composerFooter, workstreamSuggestionScene } from "./pipHomeLogic";
-import { usePipHome } from "./pipHomeStore";
+import { composerFooter, workstreamSuggestionScene } from "./workViewLogic";
+import { useWorkView } from "./workViewStore";
 import { PipOrientation } from "./PipOrientation";
 import { TimelineView } from "./Timeline";
 import { useNeedsYou } from "./useNeeds";
@@ -82,16 +82,6 @@ export function escapeClosesPane(s: { peekOpen: boolean; ticked: boolean; editin
   return !s.editing || s.inPipInput;
 }
 
-/**
- * Esc on Pip home: whatever is open over it takes Esc first (a sheet, the peek, the palette, a popover, the image
- * lightbox, or a confirmation or field that handles Esc itself, `handled`), and only then does Esc stop Pip's answer in
- * the focused conversation, if it is answering. Nothing to stop is nothing done.
- */
-export function escapeCancelsTurn(s: { sheetOpen: boolean; peekOpen: boolean; paletteOpen: boolean; popoverOpen: boolean; lightbox: boolean; paneOpen: boolean; handled: boolean; running: boolean }): boolean {
-  if (s.sheetOpen || s.peekOpen || s.paletteOpen || s.popoverOpen || s.lightbox || s.paneOpen || s.handled) return false;
-  return s.running;
-}
-
 function usePaneEscape(onClose: () => void) {
   useEffect(() => {
     const onKey = (ev: KeyboardEvent) => {
@@ -105,8 +95,8 @@ function usePaneEscape(onClose: () => void) {
         editing: editable,
         inPipInput: field?.id === PIP_INPUT_ID,
         // A confirmation or popover that takes Esc itself (`data-esc-local`) closes, not the pane.
-        // On Pip home an open decision or batch preview closes before the drawer does.
-        handled: ev.defaultPrevented || (tabs.route === "pip" && (usePipHome.getState().deciding !== null || usePipHome.getState().batch !== null)) || usePrefs.getState().paletteOpen || lightboxOpen() || popoverOpen() || (field instanceof HTMLElement && !!field.closest("[data-esc-local]")),
+        // On Agents an open decision or batch preview closes before the drawer does, when the keyboard is out in the page.
+        handled: ev.defaultPrevented || (tabs.route === "agents" && (useWorkView.getState().deciding !== null || useWorkView.getState().batch !== null) && !(field instanceof HTMLElement && field.closest("aside[data-pip-root]"))) || usePrefs.getState().paletteOpen || lightboxOpen() || popoverOpen() || (field instanceof HTMLElement && !!field.closest("[data-esc-local], #workstream-sheet")),
       });
       if (!close) return;
       ev.preventDefault();
@@ -131,7 +121,7 @@ export function useConversationDrafts(conversation: string, workstream: Workstre
 const NO_TURNS: readonly { kind?: "user" | "wake" }[] = [];
 
 /**
- * What the composer offers and says for the screen, the same in the Pip pane and on Pip home: the suggestion chips, the
+ * What the composer offers and says for the screen: the suggestion chips, the
  * placeholder's scene, and what Pip sees (the context with its label, and the words that describe it). In a
  * workstream's conversation (`workstream`) the chips are about where that workstream stands.
  */
@@ -224,14 +214,11 @@ export function ConversationLine({ conversation, workstream }: { conversation: s
 /**
  * The one Pip, docked to the right of every screen: the conversation with Pip, with what it can see and the drafts it
  * made. A workstream's conversation is its timeline; General's follows the screen, listing the runs going and the drafts
- * waiting with the ticket on screen first. On Pip home it is the conversation of the workstream selected there.
+ * waiting with the ticket on screen first. On Agents, with a workstream's detail open, it is that workstream's.
  */
 export function PipPane({ onClose }: { onClose(): void }) {
   // The ticket the peek shows has an open workstream: its conversation is the one here. Otherwise it is General.
-  const onHome = useTabs((s) => s.route === "pip");
-  const homeWorkstream = useHomeWorkstream();
-  const paneWorkstream = usePaneWorkstream();
-  const workstream = onHome ? homeWorkstream : paneWorkstream;
+  const workstream = usePaneWorkstream();
   const workstreamId = workstream?.workstream.id ?? null;
   const conversation = workstreamId ? workstreamConversation(workstreamId) : GENERAL_CONVERSATION;
   const running = useAnswering(conversation);
@@ -275,7 +262,7 @@ export function PipPane({ onClose }: { onClose(): void }) {
       </header>
       {!orientationSeen && <PipOrientation />}
       {workstream ? (
-        <TimelineView key={conversation} conversation={conversation} workstream={workstream} proposals={proposalList} needs={needs} primary={primary} pane />
+        <TimelineView key={conversation} conversation={conversation} workstream={workstream} proposals={proposalList} needs={needs} primary={primary} />
       ) : (
         // About one ticket, outside a workstream, the pane lists that ticket's drafts and folds the rest.
         <PipConversation key={conversation} conversation={conversation} proposals={proposalList} primary={primary} ticket={context.item} />

@@ -70,6 +70,7 @@ const screen = (over: Partial<AgentsScreenProps> = {}) =>
       earlierOpen={false}
       introShown={false}
       view="cards"
+      group="state"
       stopping={false}
       opened={new Set()}
       now={NOW}
@@ -207,7 +208,7 @@ describe("grouped by workstream", () => {
     expect(screen({ runs: [linked()], group: "workstream", workstreams: [ws] })).not.toContain("waiting for PR");
   });
 
-  it("offers Group by with State pressed by default", () => {
+  it("offers Group by, with State and its lanes while State is chosen", () => {
     const out = screen();
     expect(out).toContain('aria-label="Group by"');
     expect(out).toMatch(/aria-pressed="true"[^>]*>State</);
@@ -215,11 +216,18 @@ describe("grouped by workstream", () => {
     expect(out).not.toContain("data-workstream-group");
   });
 
+  it("groups by Workstream when no grouping is asked for", () => {
+    const out = renderToStaticMarkup(<AgentsScreen runs={eight()} status="ready" error={null} environment={{ claude: "ok", version: "2.1.286" }} filters={NO_FILTERS} selectedId={null} earlierOpen={false} introShown={false} view="cards" stopping={false} opened={new Set()} now={NOW} ticketTitle={() => null} on={on()} />);
+    expect(out).toMatch(/aria-pressed="true"[^>]*>Workstream</);
+    expect(out).toContain("data-workstream-group");
+    expect(out).not.toContain("data-lane=");
+  });
+
   it("shows a workstream with its title, stage chip and R labels, and the other runs under No workstream", () => {
     const out = screen({ runs: [...eight(), linked()], group: "workstream", workstreams: [ws] });
     expect(out).toMatch(/aria-pressed="true"[^>]*>Workstream</);
     expect(out.match(/data-workstream-group="([^"]+)"/g)).toEqual(['data-workstream-group="ws-1"', 'data-workstream-group="none"']);
-    expect(out).toContain(">CA-401 Retry the payment</h3>");
+    expect(out).toMatch(/<h3[^>]*><b[^>]*>CA-401<\/b><span[^>]*>Retry the payment<\/span><\/h3>/);
     expect(out).toContain('data-stage="investigate"');
     expect(out).toContain('data-run-label="R1"');
     expect(out).toContain(">No workstream</h3>");
@@ -236,22 +244,22 @@ describe("grouped by workstream", () => {
 });
 
 describe("the Agents screen as the operations view", () => {
-  it("has no timeline filter of its own: what is running, the capacity and Stop all, with a way to the Runs timeline", () => {
-    const html = screen({ on: { ...on(), showTimeline: vi.fn() } });
+  it("has no timeline filter of its own: what is running, the capacity and Stop all", () => {
+    const html = screen();
     expect(html).not.toContain("data-agents-scope");
     expect(html).not.toContain("Timeline filter");
     expect(html).not.toContain("Timeline scope");
-    expect(html).toMatch(/<button[^>]*data-agents-timeline[^>]*>(?:<[^>]+>)*Runs timeline/);
+    expect(html).not.toContain("data-agents-timeline");
     expect(html).toContain("Stop all");
-    // Without the way there (a screen that can't show Pip home), no button.
-    expect(screen()).not.toContain("data-agents-timeline");
   });
 
-  it("names F6 (the regions) and the Pip home key in its footer, beside j k, Enter and Esc", () => {
+  it("names F6 (the regions) and the palette in its footer, beside j k, Enter and Esc, and no other screen", () => {
     const footer = screen().match(/<footer[\s\S]*?<\/footer>/)![0].replace(/<[^>]+>/g, "").replace(/\s+/g, " ");
     expect(footer).toContain("j k move");
     expect(footer).toContain("F6 regions");
-    expect(footer).toContain("⌘0 Pip home");
+    expect(footer).toContain("⌘K jump");
+    expect(footer).not.toContain("Pip home");
+    expect(footer).not.toContain("⌘0");
   });
 
   it("explains a run's R badge with a tooltip", () => {
@@ -546,19 +554,19 @@ describe("the rail", () => {
     set([]);
   });
 
-  it("has no badge on Agents: what needs the person is counted once, on Pip home", () => {
+  it("has no house icon: Agents is the one button, and the one count is its badge", () => {
     set(eight());
-    const [, label, inner] = button(renderToStaticMarkup(<Rail />), /Agents/);
-    expect(label).toBe("Agents");
-    expect(inner).not.toContain("bg-ws-pip");
-    expect(inner).not.toMatch(/>\d+</);
+    const out = renderToStaticMarkup(<Rail />);
+    expect(out).not.toContain("Pip home");
+    expect(out).not.toContain("⌂");
+    expect(out.match(/aria-label="Agents[^"]*"/g)).toHaveLength(1);
   });
 
-  it("puts the one count in Pip home's label and shows it as its badge", () => {
+  it("puts the one count in Agents' label and shows it as its badge", () => {
     set(eight());
-    const [, label, inner] = button(renderToStaticMarkup(<Rail />), /Pip home/);
+    const [, label, inner] = button(renderToStaticMarkup(<Rail />), /Agents/);
     // A permission, a question and a failure; the run that has been quiet for 45 minutes is not a need.
-    expect(label).toBe("Pip home, 3 things need you");
+    expect(label).toBe("Agents, 3 things need you");
     expect(inner).toContain('aria-label="3 things need you" title="3 things need you"');
     expect(inner).toContain(">3<");
     expect(inner).toContain("bg-ws-pip");
@@ -567,24 +575,24 @@ describe("the rail", () => {
   it("keeps a failed run in the count however long it is looked at, until it is dismissed", () => {
     const failedRun = eight().find((r) => r.state === "failed")!;
     set(eight());
-    expect(button(renderToStaticMarkup(<Rail />), /Pip home/)[1]).toBe("Pip home, 3 things need you");
+    expect(button(renderToStaticMarkup(<Rail />), /Agents/)[1]).toBe("Agents, 3 things need you");
     set(eight(), [failedRun.id]);
-    expect(button(renderToStaticMarkup(<Rail />), /Pip home/)[1]).toBe("Pip home, 2 things need you");
+    expect(button(renderToStaticMarkup(<Rail />), /Agents/)[1]).toBe("Agents, 2 things need you");
   });
 
   it("says thing for one and drops the badge at zero", () => {
     set([run("needsAnswer")]);
-    expect(button(renderToStaticMarkup(<Rail />), /Pip home/)[1]).toBe("Pip home, 1 thing needs you");
+    expect(button(renderToStaticMarkup(<Rail />), /Agents/)[1]).toBe("Agents, 1 thing needs you");
     set([run("working", { lastProgressAt: new Date(NOW + 4 * 60_000).toISOString() }), run("done", { id: "d" })]);
-    const [, label, inner] = button(renderToStaticMarkup(<Rail />), /Pip home/);
-    expect(label).toBe("Pip home");
+    const [, label, inner] = button(renderToStaticMarkup(<Rail />), /Agents/);
+    expect(label).toBe("Agents");
     expect(inner).not.toContain("bg-ws-pip");
   });
 
   it("names what the one badge counts", () => {
-    expect(railBadgeText.pipHome(4)).toBe("4 things need you");
-    expect(railBadgeText.pipHome(1)).toBe("1 thing needs you");
-    expect(Object.keys(railBadgeText)).toEqual(["pipHome"]);
+    expect(railBadgeText.agents(4)).toBe("4 things need you");
+    expect(railBadgeText.agents(1)).toBe("1 thing needs you");
+    expect(Object.keys(railBadgeText)).toEqual(["agents"]);
   });
 
   it("has no badge on Activity, however much is unread", () => {

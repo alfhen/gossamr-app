@@ -1,20 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import {
-  advanceRuns,
-  askPip,
-  expectToast,
-  expandAllNeeds,
-  mockRuns,
-  needsYouCount,
-  needsYouTray,
-  openApp,
-  openPipHome,
-  pipPane,
-  setBudget,
-  startWorkstream,
-  wakes,
-  workstreamEvents,
-} from "./support/app";
+import { advanceRuns, askPip, expandAllNeeds, expectToast, groupByState, mockRuns, needsYouCount, needsYouTray, openAgents, openApp, pipPane, setBudget, startWorkstream, wakes, workstreamEvents } from "./support/app";
 
 // The automatic step budget shown up front ("N of M automatic steps left", with a default that fits a whole chain), and a
 // run Gossamr stopped at its limit: it needs the person, counted in Needs you, and only the person's Resume carries it on.
@@ -23,7 +8,7 @@ const MANAGED = "runs=empty&prSurface=manual&wsManage=1";
 const setup = (page: Page) => page.getByRole("dialog", { name: "Start an agent" });
 const safety = (page: Page) => page.getByRole("dialog", { name: "Agents safety and settings" });
 const runCards = (page: Page, key: string) => pipPane(page).getByRole("article", { name: `Start an agent: ${key}` });
-const railButton = (page: Page, name: RegExp) => page.getByRole("button", { name }).first();
+const railButton = (page: Page, name: RegExp) => page.locator("[data-rail]").getByRole("button", { name }).first();
 const limitItems = (page: Page) => needsYouTray(page).locator('[data-needs-you-need][data-kind="stoppedAtLimit"]');
 
 /** Waits until Pip has finished answering in the pane. */
@@ -79,7 +64,7 @@ test("a run stopped at its limit is in Needs you, with its pill in the Agents la
   const id = stopped!.id;
 
   // Pip home's Needs you counts it, as an item of its own.
-  await openPipHome(page);
+  await openAgents(page);
   await expandAllNeeds(page);
   await expect(limitItems(page)).toHaveCount(1);
   await expect(limitItems(page)).toContainText("stopped at its limit");
@@ -87,13 +72,14 @@ test("a run stopped at its limit is in Needs you, with its pill in the Agents la
 
   // The Agents view lists it under Failed or stuck with an "In Needs you" pill, and its header says the same one count.
   await railButton(page, /^Agents/).click();
+  await groupByState(page);
   const lane = page.locator('[data-lane="bad"]');
   const card = lane.locator(`article[data-run-id="${id}"]`);
   await expect(card).toBeVisible();
   await expect(card).toContainText("Stopped at limit");
   await expect(card.locator("[data-in-needs-you]")).toBeVisible();
   const header = page.locator("main header").filter({ has: page.getByRole("heading", { name: "Agents" }) });
-  await expect(railButton(page, /^Agents/)).toHaveAccessibleName("Agents");
+  await expect(railButton(page, /^Agents/)).toHaveAccessibleName(`Agents, ${count} ${Number(count) === 1 ? "thing needs" : "things need"} you`);
   await expect(header).toContainText(`${count} need you`);
 
   // Nothing resumes it by itself: still stopped after the sample's supervisor and Pip have had their turns.
@@ -110,12 +96,12 @@ test("a run stopped at its limit is in Needs you, with its pill in the Agents la
   await expect(again.getByRole("button", { name: "Resume", exact: true })).toHaveCount(0);
 
   // It no longer waits on the person, on Pip home either.
-  await openPipHome(page);
+  await openAgents(page);
   await expandAllNeeds(page);
   await expect(limitItems(page)).toHaveCount(0);
   // The sample's other runs moved meanwhile, so the count is not compared to before: the one count is the rail's.
   const after = await needsYouCount(page).innerText();
-  await expect(railButton(page, /^Pip home/)).toHaveAccessibleName(`Pip home, ${after} ${after === "1" ? "thing needs" : "things need"} you`);
+  await expect(railButton(page, /^Agents/)).toHaveAccessibleName(`Agents, ${after} ${after === "1" ? "thing needs" : "things need"} you`);
 });
 
 test("the sheet of a run stopped at its limit has Resume too, and resuming from it does the same", async ({ page }) => {

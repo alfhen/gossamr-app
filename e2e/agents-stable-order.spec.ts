@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { askRun, openApp } from "./support/app";
+import { askRun, groupByState, openApp } from "./support/app";
 
 // The Agents view keeps its cards where they are while the person has the pointer over the list or focus in it.
 
@@ -10,6 +10,7 @@ async function openAgents(page: Page) {
   await openApp(page);
   await page.getByRole("button", { name: /^Agents/ }).first().click();
   await expect(page.locator("[data-agents-list]")).toBeVisible();
+  await groupByState(page);
 }
 
 const card = (page: Page, id: string) => page.locator(`main [data-run-id="${id}"]:not(aside[aria-label="Pip"] *)`);

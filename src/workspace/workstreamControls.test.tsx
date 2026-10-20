@@ -18,7 +18,7 @@ import { CONNECT_TO_POST, DRAFT_OPEN, EscalationCardView, EscalationSent, FIX_RO
 import { ESCALATION_GONE } from "../backend/mockWorkstreams";
 import type { Escalation, Proposal } from "../types";
 import type { WatchState } from "../types";
-import type { StepChip } from "./pipHomeLogic";
+import type { StepChip } from "./workViewLogic";
 import { NO_PULL_VIEW, autoNote, pullViewOrGithub } from "./StepRail";
 import { usePullView } from "./pullViewStore";
 import { EscalationBody } from "./NeedsPane";
@@ -59,7 +59,7 @@ describe("the line under the mode switch", () => {
   });
 });
 
-describe("a decision open in Pip home's pane", () => {
+describe("a decision open in the Agents pane", () => {
   const escalation: Escalation = { reviewRun: "r-rev", buildRun: "r-b", reviewLabel: "R5", buildLabel: "R4", rounds: 2, reviewDraft: "p-review", at: "2026-10-01T10:00:00Z" };
   const withProvider = (view: WorkstreamView, kind: "hold" | "escalation" | null) => {
     const need = kind ? ({ key: `${kind}:x`, kind, workstreamId: view.workstream.id, target: { type: "workstream" } } as never) : null;
@@ -402,7 +402,7 @@ describe("a review that still blocks after the fix rounds", () => {
     expect(view({ github: false, escalation })).toContain(POST_AS_IS_HELP.replace(/'/g, "&#x27;"));
   });
 
-  it("on Pip home's decision pane, says to connect GitHub rather than that no draft waits, while it isn't connected", () => {
+  it("on the Agents decision pane, says to connect GitHub rather than that no draft waits, while it isn't connected", () => {
     const view = { ...viewOf(), escalation: { ...escalation, reviewDraft: null } };
     // The store as it starts has no connections; renderToStaticMarkup reads that initial state.
     const offline = renderToStaticMarkup(<EscalationBody view={view} />);
@@ -411,7 +411,7 @@ describe("a review that still blocks after the fix rounds", () => {
     expect(offline).not.toContain(NO_REVIEW_DRAFT);
   });
 
-  it("on Pip home's decision pane, holds the choices once Post the review as is was pressed, until the draft is posted or goes", () => {
+  it("on the Agents decision pane, holds the choices once Post the review as is was pressed, until the draft is posted or goes", () => {
     const pending = { state: { type: "pending" } } as Proposal;
     expect(postingReview(false, pending)).toBe(false);
     expect(postingReview(true, pending)).toBe(true);
@@ -701,10 +701,10 @@ describe("what the Steps column's words mean", () => {
 describe("focus after Close workstream (G5)", () => {
   afterEach(() => vi.unstubAllGlobals());
 
-  it("goes to General's row once the close went through, and not when it failed", async () => {
+  it("goes to the Agents heading once the close went through, and not when it failed", async () => {
     const row = { focus: vi.fn() };
     const body = {};
-    vi.stubGlobal("document", { body, activeElement: body, querySelector: (sel: string) => (sel === '[data-pip-home] [data-workstream-row="general"]' ? row : null) });
+    vi.stubGlobal("document", { body, activeElement: body, querySelector: (sel: string) => (sel === "[data-agents-home] h1" ? row : null) });
     vi.stubGlobal("requestAnimationFrame", (run: () => void) => void run());
     const close = vi.spyOn(useWorkstreams.getState(), "close");
     close.mockResolvedValueOnce(false);

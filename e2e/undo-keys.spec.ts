@@ -1,30 +1,5 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
-import {
-  advanceRuns,
-  askPermission,
-  askPip,
-  foldAllNeeds,
-  homeComposer,
-  homeConversationRegion,
-  homeSettled,
-  jiraWrites,
-  mockRuns,
-  needOfKind,
-  needsPane,
-  openApp,
-  openPip,
-  openPipHome,
-  peekSheet,
-  peekTicket,
-  pipConversation,
-  pipHome,
-  pipPane,
-  PIP_INPUT,
-  startWorkstream,
-  workstreamEvents,
-  workstreamRow,
-  expectToast,
-} from "./support/app";
+import { advanceRuns, agentsHome, askPermission, askPip, expectToast, foldAllNeeds, homeComposer, homeConversationRegion, homeSettled, jiraWrites, mockRuns, needOfKind, needsPane, openAgents, openApp, openPip, peekSheet, peekTicket, PIP_INPUT, pipConversation, pipPane, selectWorkstream, startWorkstream, workstreamEvents, workstreamGroup } from "./support/app";
 
 // Step 4 of the UX overhaul: less ceremony. Reversible actions (skipping a draft, dismissing a failure, holding a
 // workstream, switching it to Advise) act at once and offer Undo for about 8 seconds, instead of asking first; what reaches
@@ -43,9 +18,9 @@ const agentsButton = (page: Page) => page.getByRole("button", { name: /^Agents/ 
 /** A workstream on CA-401, opened on Pip home. */
 async function workstreamOnHome(page: Page) {
   await startWorkstream(page, "CA-401");
-  await openPipHome(page);
-  await workstreamRow(page, "CA-401").click();
-  await expect(pipHome(page).getByRole("region", { name: "Conversation" }).locator("[data-pip-conversation]")).toHaveText(/^Workstream: CA-401 /);
+  await openAgents(page);
+  await selectWorkstream(page, "CA-401");
+  await expect(pipPane(page).locator("[data-pip-conversation]")).toHaveText(/^Workstream: CA-401 /);
 }
 
 const actionsOf = async (page: Page) => (await workstreamEvents(page)).map((e) => e.action);
@@ -114,8 +89,8 @@ test("holding a workstream offers Undo, and so does switching it to Advise", asy
   await openApp(page, `${MANAGED}&runs=empty`);
   await expect(agentsButton(page)).toHaveCount(1);
   await workstreamOnHome(page);
-  const hold = pipHome(page).getByRole("button", { name: "Hold", exact: true });
-  const banner = pipHome(page).locator("[data-held-banner]");
+  const hold = agentsHome(page).getByRole("button", { name: "Hold", exact: true });
+  const banner = pipPane(page).locator("[data-held-banner]");
 
   await hold.click();
   await expect(banner).toBeVisible();
@@ -131,12 +106,12 @@ test("holding a workstream offers Undo, and so does switching it to Advise", asy
   await hold.click();
   await expect(banner).toBeVisible();
   await toast(page).getByRole("button", { name: "Dismiss" }).click();
-  await pipHome(page).getByRole("button", { name: "Resume", exact: true }).click();
+  await agentsHome(page).getByRole("button", { name: "Resume", exact: true }).click();
   await expect(banner).toHaveCount(0);
   await expect(undo(page)).toHaveCount(0);
 
   // Manage off is Advise: Undo restores Manage.
-  const manage = pipHome(page).getByRole("switch", { name: "Manage this workstream" });
+  const manage = agentsHome(page).getByRole("switch", { name: "Manage this workstream" });
   await expect(manage).toBeChecked();
   await manage.click();
   await expect(manage).not.toBeChecked();
@@ -321,7 +296,7 @@ test("Cmd/Ctrl+K on a focused permission need offers Allow once and Deny, and De
   await startWorkstream(page, "CA-401");
   const build = await workingBuild(page);
   await askPermission(page, build.id, `approve Bash: git push -u origin worktree-${build.name}`);
-  await openPipHome(page);
+  await openAgents(page);
   await foldAllNeeds(page);
   const need: Locator = needOfKind(page, "permission");
   await expect(need).toContainText("R4 wants to run `git push -u origin");
@@ -361,15 +336,15 @@ test("Cmd/Ctrl+K reaches Hold and Advise for the selected workstream, and 'Appro
   await homeSettled(page);
 
   // Focus on the list's row of the workstream: its controls are in the palette, and run what the buttons run.
-  await workstreamRow(page, "CA-401").focus();
+  await workstreamGroup(page, "CA-401").focus();
   await page.keyboard.press("ControlOrMeta+k");
   const palette = page.getByRole("dialog", { name: "Command palette" });
   await page.keyboard.type("hold");
   await palette.getByRole("option", { name: /Hold the workstream on CA-401/ }).click();
-  await expect(pipHome(page).locator("[data-held-banner]")).toBeVisible();
+  await expect(pipPane(page).locator("[data-held-banner]")).toBeVisible();
   await expectToast(page, "Held CA-401.");
   await undo(page).click();
-  await expect(pipHome(page).locator("[data-held-banner]")).toHaveCount(0);
+  await expect(pipPane(page).locator("[data-held-banner]")).toHaveCount(0);
 
   // The global entry opens the list's own combined preview and its confirm: nothing is approved by choosing it.
   await page.keyboard.press("ControlOrMeta+k");
@@ -378,8 +353,8 @@ test("Cmd/Ctrl+K reaches Hold and Advise for the selected workstream, and 'Appro
   // It opens in the decision pane, like any other decision.
   const preview = needsPane(page).locator("[data-needs-you-batch-preview]");
   await expect(preview).toBeVisible();
-  await expect(pipHome(page).getByRole("group", { name: "Approve 2 drafts" })).toBeVisible();
+  await expect(agentsHome(page).getByRole("group", { name: "Approve 2 drafts" })).toBeVisible();
   expect(await jiraWrites(page)).toEqual([]);
-  await pipHome(page).getByRole("button", { name: "Yes, approve 2" }).click();
+  await agentsHome(page).getByRole("button", { name: "Yes, approve 2" }).click();
   await expect.poll(async () => (await jiraWrites(page)).map((w) => w.type)).toEqual(["comment", "comment"]);
 });

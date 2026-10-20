@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { escIsElsewhere, escTarget } from "./escHome";
+import { escIsElsewhere, escTarget } from "./escBack";
 import { usePrefs } from "./prefs";
 
 const esc = (over: Record<string, unknown> = {}) => ({ key: "Escape", defaultPrevented: false, target: null, ...over }) as Parameters<typeof escIsElsewhere>[0];
@@ -19,8 +19,8 @@ describe("Esc on a full page", () => {
 });
 
 describe("where Esc on a full page goes", () => {
-  it("is Pip home while Agents are on, and the tickets while they are off and there is no Pip home", () => {
-    expect(escTarget(true)).toBe("pip");
+  it("is Agents while they are on, and the tickets while they are off", () => {
+    expect(escTarget(true)).toBe("agents");
     expect(escTarget(false)).toBe("workspace");
   });
 });

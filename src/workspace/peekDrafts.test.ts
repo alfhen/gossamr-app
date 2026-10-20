@@ -55,7 +55,7 @@ describe("the keyboard and drafts in the peek", () => {
     expect(seen.scrollTop).toBe(50);
   });
 
-  it("focuses the draft opened from Pip home once the peek shows it, its diff in view, and gives up after about two seconds", () => {
+  it("focuses the draft opened from Agents once the peek shows it, its diff in view, and gives up after about two seconds", () => {
     const frames: (() => void)[] = [];
     const frame = (go: () => void) => frames.push(go);
     const cards: ReturnType<typeof el>[] = [];

@@ -9,14 +9,14 @@ import { useClaude } from "../claudeStore";
 import { askPip } from "./askPip";
 import { commentWithPipPrompt, PIP_SHOWN, pipAsks } from "./runSheetLogic";
 import { handlePipView } from "./PipExtras";
-import { escapeCancelsTurn } from "./PipPane";
-import { usePipHome } from "./pipHomeStore";
+import { useWorkView } from "./workViewStore";
 import { useRuns } from "./runsStore";
+import { useWorkstreams } from "./workstreamsStore";
 import { useToasts } from "./toasts";
 import { commentNotes, historyNotes, linkRows } from "./peekLogic";
 import { NUDGE_GAP_MS, NUDGE_DWELL_MS, LARGE_LIST, nudgeCandidates, nudgeDelay, pickNudge, type NudgeScene } from "./nudges";
 import { isStillFiltered, usePip } from "./pipStore";
-import { buildScreenContext, homeConversationLine, screenLine } from "./screenContext";
+import { buildScreenContext, openWorkstreamLine, screenLine } from "./screenContext";
 import { activeTab, loadTabs, useTabs, type Route, type Tab } from "./tabsStore";
 
 const memory = () => {
@@ -79,22 +79,22 @@ describe("screen context by route", () => {
     expect(buildScreenContext(s)).toEqual({ view: "Settings", item: null, filter: null, selection: [] });
   });
 
-  it("says Pip home on Pip home, never the workspace tab's view, and sends no board filter or ticked cards", () => {
-    const s = screen(tab, null, ["mock:DEVOPS-471"], "pip");
-    expect(screenLine(s)).toBe("Pip home");
-    expect(buildScreenContext(s)).toEqual({ view: "Pip home", item: null, filter: null, selection: [] });
+  it("says Agents on Agents, never the workspace tab's view, and sends no board filter or ticked cards", () => {
+    const s = screen(tab, null, ["mock:DEVOPS-471"], "agents");
+    expect(screenLine(s)).toBe("Agents");
+    expect(buildScreenContext(s)).toEqual({ view: "Agents", item: null, filter: null, selection: [] });
   });
 
-  it("names the conversation Pip home shows: General, or the open workstream selected", () => {
+  it("names the workstream whose detail is open on Agents, and nothing for General or one that is closed", () => {
     const tab0: Tab = { id: "t", title: null, filter: { type: "mine" }, view: "board" };
     const open = { workstream: { id: "w1", title: "CA-401 Fix the cart", closedAt: null } } as unknown as WorkstreamView;
     const closed = { workstream: { id: "w2", title: "CA-402 Old", closedAt: "2026-01-01T00:00:00Z" } } as unknown as WorkstreamView;
-    expect(homeConversationLine(null, [open])).toBe("General");
-    expect(homeConversationLine("w1", [open])).toBe("Workstream: CA-401 Fix the cart");
-    expect(homeConversationLine("w2", [open, closed])).toBe("General");
-    expect(homeConversationLine("gone", [open])).toBe("General");
-    const s = { ...screen(tab0, null, [], "pip"), home: homeConversationLine("w1", [open]) };
-    expect(buildScreenContext(s).view).toBe("Pip home · Workstream: CA-401 Fix the cart");
+    expect(openWorkstreamLine(null, [open])).toBeUndefined();
+    expect(openWorkstreamLine("w1", [open])).toBe("Workstream: CA-401 Fix the cart");
+    expect(openWorkstreamLine("w2", [open, closed])).toBeUndefined();
+    expect(openWorkstreamLine("gone", [open])).toBeUndefined();
+    const s = { ...screen(tab0, null, [], "agents"), workstream: openWorkstreamLine("w1", [open]) };
+    expect(screenLine(s)).toBe("Agents · Workstream: CA-401 Fix the cart");
     expect(screenLine({ ...s, route: "workspace" })).toBe("Board · All projects · 12 items");
   });
 
@@ -151,11 +151,12 @@ describe("Claude-driven filters", () => {
     useClaude.setState({ byTicket: {} });
   });
 
-  it("on Pip home, applies a filter asked in the selected workstream's conversation to the workspace tab only, and ignores the rest", () => {
+  it("on Agents, applies a filter asked in the open workstream's conversation to the workspace tab only, and ignores the rest", () => {
     const turn = (requestId: string) => ({ requestId, prompt: "", steps: [], text: "", status: "running" as const, error: null });
     useClaude.setState({ byTicket: { "ws:ws-1": { turns: [turn("home")], sessionId: null }, general: { turns: [turn("general")], sessionId: null }, "ws:ws-2": { turns: [turn("other")], sessionId: null } } });
-    useTabs.getState().setRoute("pip");
-    usePipHome.getState().openWorkstream("ws-1");
+    useTabs.getState().setRoute("agents");
+    useWorkView.getState().openWorkstream("ws-1");
+    useWorkstreams.setState({ list: [{ workstream: { id: "ws-1", closedAt: null }, runs: [], labels: [] } as never] });
     const backend = ws().backend!;
     const calls = Object.getOwnPropertyNames(Object.getPrototypeOf(backend))
       .filter((name) => name !== "constructor" && typeof (backend as unknown as Record<string, unknown>)[name] === "function")
@@ -171,16 +172,17 @@ describe("Claude-driven filters", () => {
       handlePipView({ requestId: "home", filter: { type: "blocked" }, note: "Blocked" });
       expect(activeTab(useTabs.getState()).filter).toEqual({ type: "blocked" });
       expect(usePip.getState().applied.home).toMatchObject({ note: "Blocked", undone: false });
-      expect(useTabs.getState()).toMatchObject({ route: "pip", selected: null, marked: [] });
+      expect(useTabs.getState()).toMatchObject({ route: "agents", selected: null, marked: [] });
       expect(useTabs.getState().tabs).toHaveLength(tabs);
-      expect(usePipHome.getState().selected).toBe("ws-1");
+      expect(useWorkView.getState().selected).toBe("ws-1");
       expect(ws().proposals).toBe(proposals);
       expect(useRuns.getState().runs).toBe(runs);
       for (const call of calls) expect(call).not.toHaveBeenCalled();
     } finally {
       calls.forEach((c) => c.mockRestore());
       useTabs.getState().setRoute("workspace");
-      usePipHome.getState().reset();
+      useWorkView.getState().reset();
+      useWorkstreams.setState({ list: [] });
       useClaude.setState({ byTicket: {} });
     }
   });
@@ -394,18 +396,5 @@ describe("askPip", () => {
     expect(pipAsks.comment(run, "d1").shown).toBe(PIP_SHOWN.draft);
     expect(pipAsks.breakdown(run).shown).toBe(PIP_SHOWN.subtasks);
     expect(pipAsks.breakdown(run, "d4").shown).toBe(PIP_SHOWN.breakdown);
-  });
-});
-
-describe("Esc on Pip home", () => {
-  const none = { sheetOpen: false, peekOpen: false, paletteOpen: false, popoverOpen: false, lightbox: false, paneOpen: false, handled: false, running: true };
-
-  it("leaves Esc to an open sheet, the peek, the palette, a popover, the lightbox or a confirmation first", () => {
-    for (const open of ["sheetOpen", "peekOpen", "paletteOpen", "popoverOpen", "lightbox", "paneOpen", "handled"] as const) expect(escapeCancelsTurn({ ...none, [open]: true })).toBe(false);
-  });
-
-  it("then cancels Pip's turn, and does nothing with no turn to cancel", () => {
-    expect(escapeCancelsTurn(none)).toBe(true);
-    expect(escapeCancelsTurn({ ...none, running: false })).toBe(false);
   });
 });

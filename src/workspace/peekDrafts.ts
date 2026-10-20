@@ -86,7 +86,7 @@ export function peekFocusAfterLeaving(card: unknown, root: Root) {
 const FOCUS_FRAMES = 120;
 
 /**
- * Hands the keyboard to draft `id`'s card in the peek once the peek shows it, as when a draft on Pip home that is read
+ * Hands the keyboard to draft `id`'s card in the peek once the peek shows it, as when a draft on Agents that is read
  * in the peek (a description rewrite) is opened from there: the card's diff comes into view and its buttons are the
  * next Tabs. Gives up after about two seconds. Returns a cancel.
  */

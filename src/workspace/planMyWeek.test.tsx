@@ -1,17 +1,14 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MockBackend } from "../backend/mock";
-import { itemRef } from "../backend/mockConnector";
 import { isoWeek, ticketPick, type PlanItem } from "../lib/planMyWeek";
-import type { WorkItem, WorkstreamView } from "../types";
+import type { WorkItem } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { buildCommands, rankCommands, type CommandActions } from "./commands";
 import { PLAN_EMPTY, PLAN_LEFT_OUT, PlanMyWeek, PlanMyWeekView, afterMove, afterRemove, restorePick, neighboursOf, ThisWeekView, findTicket, rowStep, CHOICES, revealChoices, movedText, rovingStop } from "./PlanMyWeek";
-import { WorkstreamList } from "./PipHome";
-import { usePipHome } from "./pipHomeStore";
+import { useWorkView } from "./workViewStore";
 import { loadPrefs, usePrefs } from "./prefs";
 import { StartMyDayView } from "./StartMyDay";
-import { useWorkstreams } from "./workstreamsStore";
 
 const memory = () => {
   const data = new Map<string, string>();
@@ -23,7 +20,7 @@ const noop = () => undefined;
 
 beforeEach(() => void vi.stubGlobal("localStorage", memory()));
 afterEach(() => {
-  usePipHome.getState().reset();
+  useWorkView.getState().reset();
   usePrefs.setState({ weekPlans: {} });
   vi.unstubAllGlobals();
 });
@@ -33,7 +30,7 @@ describe("the Plan my week card", () => {
     renderToStaticMarkup(<PlanMyWeekView week="2026-W42" picks={picks} kept={false} tickets={[]} onChange={noop} onKeep={noop} onClose={noop} onPropose={noop} {...over} />);
 
   it("says the plan is kept only once it is: before, what keeping does", () => {
-    expect(view([pick("CA-1")])).toContain("Keep this plan to see it as This week on Pip home; it stays on this device.");
+    expect(view([pick("CA-1")])).toContain("Keep this plan to see it as This week on Agents; it stays on this device.");
     expect(view([pick("CA-1")])).not.toContain("Kept on this device");
     expect(view([pick("CA-1")], { kept: true })).toContain("Kept on this device for the week of 12 Oct");
   });
@@ -357,7 +354,7 @@ describe("the stored plan", () => {
 });
 
 describe("the card across a week boundary", () => {
-  // PipHome keys the card by the ISO week of its clock, so the card remounts when the week turns and takes the new week's kept plan.
+  // The Agents view keys the card by the ISO week of its clock, so the card remounts when the week turns and takes the new week's kept plan.
   it("is keyed by the week, which turns only at the boundary", () => {
     const sunday = new Date(2026, 9, 18, 23, 59).getTime();
     const monday = new Date(2026, 9, 19, 0, 1).getTime();
@@ -377,7 +374,7 @@ describe("the card across a week boundary", () => {
 });
 
 describe("the palette", () => {
-  const actions = () => ({ planMyWeek: vi.fn(), showWorkstreamStatus: vi.fn(), startMyDay: vi.fn() }) as unknown as CommandActions & { planMyWeek: ReturnType<typeof vi.fn>; showWorkstreamStatus: ReturnType<typeof vi.fn> };
+  const actions = () => ({ planMyWeek: vi.fn(), startMyDay: vi.fn() }) as unknown as CommandActions & { planMyWeek: ReturnType<typeof vi.fn> };
   const ctx = { project: null, view: null, unreadActivity: 0, agents: true };
 
   it("finds Plan my week, and runs it", () => {
@@ -388,86 +385,9 @@ describe("the palette", () => {
     expect(a.planMyWeek).toHaveBeenCalled();
   });
 
-  it("filters the workstream list by status: 'waiting on reporter' finds its entry, which narrows the list", () => {
-    const a = actions();
-    const found = rankCommands(buildCommands([], [], a, ctx), "show workstreams waiting on reporter");
-    expect(found[0].label).toBe("Show workstreams waiting on reporter");
-    found[0].run();
-    expect(a.showWorkstreamStatus).toHaveBeenCalledWith("waiting");
-    expect(rankCommands(buildCommands([], [], a, ctx), "show workstreams").map((c) => c.id).filter((id) => id.startsWith("workstreams:status:"))).toHaveLength(7);
-  });
-
-  it("offers 'Show all workstreams' only while narrowed", () => {
-    const a = actions();
-    expect(buildCommands([], [], a, ctx).some((c) => c.id === "workstreams:status:all")).toBe(false);
-    const narrowed = buildCommands([], [], a, { ...ctx, statusFilter: "quiet" });
-    narrowed.find((c) => c.id === "workstreams:status:all")!.run();
-    expect(a.showWorkstreamStatus).toHaveBeenCalledWith(null);
-  });
-
-  it("has neither without Agents", () => {
-    expect(buildCommands([], [], actions(), { ...ctx, agents: false }).some((c) => c.id === "app:plan-my-week" || c.id.startsWith("workstreams:status:"))).toBe(false);
-  });
-});
-
-describe("the workstream list's status", () => {
-  let open: WorkstreamView[];
-  beforeEach(async () => {
-    const backend = new MockBackend({ runs: { seed: "empty" } });
-    await useWorkspace.getState().init(backend);
-    await backend.workstreamsOpen(itemRef("CA-401"));
-    await backend.workstreamsOpen(itemRef("CA-402"));
-    open = await backend.workstreamsList();
-    open[1] = { ...open[1], workstream: { ...open[1].workstream, heldReason: "person" } };
-  });
-  afterEach(() => useWorkstreams.getState().dispose());
-  const html = (over: Partial<Parameters<typeof WorkstreamList>[0]> = {}) => renderToStaticMarkup(<WorkstreamList list={open} closed={[]} showClosed={false} selected={null} onSelect={noop} onShowClosed={noop} {...over} />);
-
-  it("gives each row one status word as a pill, and a held-by-you one says so", () => {
-    const out = html();
-    const rows = out.split('data-workstream-row="').slice(2);
-    expect(rows).toHaveLength(2);
-    // Held by you is listed above Idle.
-    expect(rows[0]).toMatch(/data-status="held"[^>]*>Held by you</);
-    expect(rows[1]).toMatch(/data-status="idle"[^>]*>Idle</);
-    expect(rows.every((r) => (r.match(/data-status=/g) ?? []).length === 1)).toBe(true);
-  });
-
-  it("lists only the workstreams in the filtered state, and says how to show them all", () => {
-    const only = html({ statusFilter: "held" });
-    expect(only).toContain('data-status-filter="held"');
-    expect(only).toContain("Showing Held: 1");
-    expect(only).toContain("Show all");
-    expect([...only.matchAll(/data-workstream-row="([^"]+)" role="option"/g)].map((m) => m[1])).toEqual(["general", open[1].workstream.id]);
-    expect(html({ statusFilter: "waiting" })).toContain("No workstream is waiting on the reporter.");
-  });
-
-  it("keeps the open workstream listed, dimmed and said so, when the filter leaves it out, and counts only the matching", () => {
-    const idle = open[0].workstream.id;
-    const out = html({ statusFilter: "held", selected: idle });
-    expect([...out.matchAll(/data-workstream-row="([^"]+)"/g)].map((m) => m[1])).toEqual(["general", open[1].workstream.id, idle]);
-    expect(out).toContain("Showing Held: 1");
-    expect(out).toMatch(new RegExp(`data-workstream-row="${idle}"[^>]*data-filtered-out`));
-    expect(out).toContain("opacity-60");
-    expect(out).toContain("Shown because it is open; not Held");
-    expect(out.match(/data-filter-shown/g)).toHaveLength(1);
-    // Nothing matches: the empty line still says so, with the open one still shown.
-    const none = html({ statusFilter: "waiting", selected: idle });
-    expect(none).toContain("No workstream is waiting on the reporter.");
-    expect(none).toContain("Showing Waiting on reporter: 0");
-    expect(none).toContain("data-filter-shown");
-    // Without a filter, or with the open one in it, no note.
-    expect(html({ selected: idle })).not.toContain("data-filter-shown");
-    expect(html({ statusFilter: "held", selected: open[1].workstream.id })).not.toContain("data-filter-shown");
-  });
-
-  it("says an idle workstream may be unclear while its notice stands, and not once Looks fine taught the gaps away", () => {
-    const thin = [{ ...open[0], clarity: { gaps: ["short" as const] } }, open[1]];
-    const detail = /data-status-detail[^>]*>· may be unclear</;
-    expect(html({ list: thin })).toMatch(detail);
-    expect(html({ list: thin })).not.toContain('data-status="needs-you"');
-    expect(html({ list: thin, learning: { CA: { short: 3 } } })).not.toMatch(detail);
-    expect(html({ list: thin, learning: { WEB: { short: 3 } } })).toMatch(detail);
+  it("has no Plan my week without Agents, and no workstream-status entries at all", () => {
+    expect(buildCommands([], [], actions(), { ...ctx, agents: false }).some((c) => c.id === "app:plan-my-week")).toBe(false);
+    expect(buildCommands([], [], actions(), ctx).some((c) => c.id.startsWith("workstreams:status:"))).toBe(false);
   });
 });
 

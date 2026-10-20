@@ -2,13 +2,13 @@ import { useMemo } from "react";
 import { create } from "zustand";
 import type { Backend } from "./backend/types";
 import { ALL, compileFilter, containerKey, itemKey, usesCode, type FilterContext, type QueryLookup } from "./lib/filter";
-import { draftSaid, targetOf, workstreamOf } from "./lib/proposals";
+import { draftSaid, targetOf } from "./lib/proposals";
 import { movesAreOpaque } from "./workspace/boardLogic";
 import { workContainers } from "./workspace/domains";
 import { useDev } from "./workspace/devStore";
 import type { CodeSummary } from "./lib/devLinks";
 import { newStrays, strayText } from "./workspace/watchLogic";
-import { usePipHome } from "./workspace/pipHomeStore";
+import { useWorkView } from "./workspace/workViewStore";
 import { useTabs } from "./workspace/tabsStore";
 import { messageOf, useToasts } from "./workspace/toasts";
 import { offerUndo } from "./workspace/undo";
@@ -466,7 +466,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       const on = targetOf(p.intent)?.key;
       // Which draft it was, in a few masked words: with several skipped in a row the ticket alone does not say.
       const said = draftSaid(p.intent, keptEditsOfDraft(id));
-      offerUndo({ what: "skip", text: `Skipped the draft${on ? ` on ${on}` : ""}${said ? `: “${said}”` : ""}.`, undone: `The draft${on ? ` on ${on}` : ""} is back${said ? `: “${said}”` : ""}.`, ...(useTabs.getState().route === "pip" && usePipHome.getState().deciding === `draft:${id}` ? { spoken: false as const } : {}), undo: async () => void (await get().unskip(id)), restored: () => openRestored(p) });
+      offerUndo({ what: "skip", text: `Skipped the draft${on ? ` on ${on}` : ""}${said ? `: “${said}”` : ""}.`, undone: `The draft${on ? ` on ${on}` : ""} is back${said ? `: “${said}”` : ""}.`, ...(useTabs.getState().route === "agents" && useWorkView.getState().deciding === `draft:${id}` ? { spoken: false as const } : {}), undo: async () => void (await get().unskip(id)), restored: () => openRestored(p) });
     }
     return p;
   },
@@ -509,9 +509,9 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
   },
 }));
 
-/** An undone skip on Pip home opens the draft that came back in the pane, instead of leaving it on the need the pane had moved to. */
+/** An undone skip on the Agents view opens the draft that came back in the pane, instead of leaving it on the need the pane had moved to. */
 function openRestored(p: Proposal) {
-  if (useTabs.getState().route === "pip") usePipHome.getState().decide(`draft:${p.id}`, workstreamOf(p));
+  if (useTabs.getState().route === "agents") useWorkView.getState().decide(`draft:${p.id}`);
 }
 
 function announceStrays(strays: Stray[]) {

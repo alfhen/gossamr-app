@@ -12,7 +12,7 @@ describe("a button on a run's card", () => {
     }
   });
 
-  it("lets Cmd/Ctrl shortcuts through to the global keys, Ctrl+0 to Pip home among them", () => {
+  it("lets Cmd/Ctrl shortcuts through to the global keys, the palette's and Pip's among them", () => {
     for (const ev of [press("0", { ctrlKey: true }), press("0", { metaKey: true }), press("k", { metaKey: true }), press("j", { ctrlKey: true })]) {
       ownKey(ev);
       expect(ev.stopPropagation).not.toHaveBeenCalled();

@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { editTicket, expandNeedsYou, jiraWrites, needRow, needsPane, needsYouTray, openApp, openPipHome, pipHome, startWorkstream, workstreamRow } from "./support/app";
+import { agentsHome, editTicket, expandNeedsYou, jiraWrites, needRow, needsPane, needsYouTray, openAgents, openApp, selectWorkstream, startWorkstream } from "./support/app";
 
 // Fixes from the fifteenth dogfood round: a quiet run can be waited on without stopping it (G2) and a description update says
 // it writes to Jira as the person (G8).
@@ -10,7 +10,7 @@ test.describe("A quiet run (G2)", () => {
   test("is not in Needs you, so there is nothing to keep waiting on", async ({ page }) => {
     test.setTimeout(120_000);
     await openApp(page);
-    await openPipHome(page);
+    await openAgents(page);
     await expect(needsYouTray(page)).toBeVisible();
     await expandNeedsYou(page, "General");
     await expect(needRow(page, /CA-377/)).toHaveCount(0);
@@ -41,9 +41,9 @@ test.describe("an edit kept when its card leaves (G1)", () => {
     await editTicket(page, "CA-408", { description: "Fix it." });
     await page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "All projects" }).click();
     await startWorkstream(page, "CA-408");
-    await openPipHome(page);
-    await workstreamRow(page, "CA-408").click();
-    await pipHome(page).locator("[data-clarity-notice]").getByRole("button", { name: "Ask the reporter now" }).click();
+    await openAgents(page);
+    await selectWorkstream(page, "CA-408");
+    await agentsHome(page).locator("[data-clarity-notice]").getByRole("button", { name: "Ask the reporter now" }).click();
     const draft = needsPane(page).getByRole("article", { name: "Comment on CA-408" });
     await draft.getByRole("button", { name: "Edit" }).click();
     await needsPane(page).locator("textarea").first().fill("Kept after the card left.");

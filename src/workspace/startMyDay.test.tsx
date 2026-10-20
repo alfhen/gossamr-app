@@ -8,7 +8,7 @@ import { useWorkspace } from "../workspaceStore";
 import { DetailLine, GITHUB_NOT_LISTED, JiraSentView, SENT_EMPTY, SentRow } from "./JiraSentView";
 import { jiraSent } from "../lib/jiraSent";
 import { DAY_EMPTY, DayLineView, UNCLEAR_NEXT, StartMyDayView, doneForNow, runDayAction, showStartMyDay } from "./StartMyDay";
-import { usePipHome } from "./pipHomeStore";
+import { useWorkView } from "./workViewStore";
 import { usePrefs } from "./prefs";
 import { loadTabs, useTabs } from "./tabsStore";
 import { useWorkstreams } from "./workstreamsStore";
@@ -23,7 +23,7 @@ beforeEach(async () => {
   vi.stubGlobal("localStorage", memory());
   vi.stubGlobal("requestAnimationFrame", () => 0);
   useTabs.setState(loadTabs());
-  usePrefs.setState({ startMyDayDoneOn: null, clarityLearning: {} });
+  usePrefs.setState({ clarityLearning: {} });
   backend = new MockBackend({ runs: { seed: "empty", prSurfaceMs: null }, wsManage: true });
   backend.supervisor.dispose();
   await useWorkspace.getState().init(backend);
@@ -31,8 +31,8 @@ beforeEach(async () => {
 });
 afterEach(() => {
   useWorkstreams.getState().dispose();
-  usePrefs.setState({ startMyDayDoneOn: null, clarityLearning: {} });
-  usePipHome.getState().reset();
+  usePrefs.setState({ clarityLearning: {} });
+  useWorkView.getState().reset();
   vi.unstubAllGlobals();
 });
 
@@ -47,7 +47,7 @@ describe("the Start my day card", () => {
     ],
   };
 
-  it("is a heading and titled lists whose entries have a button saying what it does, not a second region inside Pip home's own (G28)", () => {
+  it("is a heading and titled lists whose entries have a button saying what it does, not a second region inside the Agents view's own (G28)", () => {
     const html = renderToStaticMarkup(<StartMyDayView day={day} onDone={() => {}} onSent={() => {}} />);
     expect(html).toMatch(/<div data-start-my-day="true"/);
     expect(html).not.toMatch(/<section data-start-my-day|data-start-my-day[^>]*aria-labelledby/);
@@ -57,8 +57,8 @@ describe("the Start my day card", () => {
     expect(html).toContain("and 2 more");
     expect(html).toMatch(/<button[^>]*data-day-done[^>]*>Done for now<\/button>/);
     expect(html).toMatch(/<button[^>]*data-day-sent[^>]*>What Jira saw from me<\/button>/);
-    expect(html).toContain("Once a day: what needs you, what is stuck and what may be unclear. Nothing is posted.");
-    expect(html).toMatch(/<button[^>]*data-day-done[^>]*title="Hides Start my day until tomorrow/);
+    expect(html).toContain("What needs you, what is stuck and what may be unclear. Nothing is posted.");
+    expect(html).toMatch(/<button[^>]*data-day-done[^>]*title="Hides Start my day\./);
     // It only shows; the card has no button that posts, approves or sends anything.
     expect(html).not.toMatch(/Post comment|Approve|Send/);
   });
@@ -109,28 +109,29 @@ describe("the Start my day card", () => {
     expect(html).not.toContain("data-day-line");
   });
 
-  it("Done for now keeps it away for the rest of today, in the prefs, and the palette brings it back", () => {
-    const at = new Date(2026, 9, 13, 8, 0);
-    doneForNow(at);
-    expect(usePrefs.getState().startMyDayDoneOn).toBe("2026-10-13");
-    expect(JSON.parse(localStorage.getItem("gossamr-prefs")!).startMyDayDoneOn).toBe("2026-10-13");
-    usePipHome.setState({ deciding: "draft:x" });
+  it("is away until asked for: the palette opens it and Done for now puts it away again", () => {
+    expect(useWorkView.getState().dayOpen).toBe(false);
+    useWorkView.setState({ deciding: "draft:x" });
     showStartMyDay();
-    expect(usePrefs.getState().startMyDayDoneOn).toBeNull();
-    expect(usePipHome.getState().deciding).toBeNull();
-    expect(useTabs.getState().route).toBe("pip");
+    expect(useWorkView.getState().dayOpen).toBe(true);
+    doneForNow();
+    expect(useWorkView.getState().dayOpen).toBe(false);
+    showStartMyDay();
+    expect(useWorkView.getState().dayOpen).toBe(true);
+    expect(useWorkView.getState().deciding).toBeNull();
+    expect(useTabs.getState().route).toBe("agents");
   });
 
   it("opens the right thing: a need's decision, a workstream, a ticket's peek", async () => {
     const id = (await backend.workstreamsOpen(itemRef("CA-408"))).id;
     await useWorkstreams.getState().refresh();
     runDayAction({ type: "workstream", id });
-    expect(useTabs.getState().route).toBe("pip");
-    expect(usePipHome.getState().selected).toBe(id);
+    expect(useTabs.getState().route).toBe("agents");
+    expect(useWorkView.getState().selected).toBe(id);
     runDayAction({ type: "ticket", key: "CA-402" });
     expect(useTabs.getState().selected).toBe("mock:CA-402");
     runDayAction({ type: "need", need: { key: "draft:p1", workstreamId: id } as never });
-    expect(usePipHome.getState()).toMatchObject({ deciding: "draft:p1", selected: id });
+    expect(useWorkView.getState()).toMatchObject({ deciding: "draft:p1", selected: id });
   });
 });
 
@@ -174,9 +175,9 @@ describe("a row of What Jira saw from me", () => {
 });
 
 describe("What Jira saw from me: the way back", () => {
-  it("has a back link to Pip home in its header", () => {
+  it("has a back link to Agents in its header", () => {
     const html = renderToStaticMarkup(<JiraSentView />);
-    expect(html).toMatch(/<button[^>]*data-sent-back[^>]*>← Pip home<\/button>/);
+    expect(html).toMatch(/<button[^>]*data-sent-back[^>]*>← Agents<\/button>/);
   });
 
   it("says in its header and its empty note that GitHub reviews are not listed, and where they show (G2)", () => {

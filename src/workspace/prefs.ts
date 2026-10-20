@@ -38,18 +38,16 @@ interface Prefs {
   agentsGroup: AgentsGroup;
   /** The person dismissed the explainer on the Agents view. */
   agentsIntroSeen: boolean;
-  /** The person dismissed the orientation card on Pip home. */
+  /** The person dismissed the orientation card in the Pip drawer. */
   pipOrientationSeen: boolean;
   /** The person dismissed the one-time explainer of Allow once and Deny on a permission prompt. */
   permissionExplainerSeen: boolean;
-  /** The day (as `dayKey`, local) the person pressed "Done for now" on Start my day; the card is back the next day, or from ⌘K. */
-  startMyDayDoneOn: string | null;
   /** What "Looks fine" has taught the clarity notice: how often each gap was dismissed, per Jira project (`src/lib/clarityLearning.ts`). */
   clarityLearning: ClarityLearning;
   /** The plans the person kept in Plan my week, by ISO week (`src/lib/planMyWeek.ts`). Local to this app; nothing of it goes to Jira. */
   weekPlans: WeekPlans;
-  /** Open on Pip home rather than the workspace, while Agents are on. On until the person turns it off. */
-  startOnPipHome: boolean;
+  /** Open on Agents rather than the workspace, while Agents are on. On until the person turns it off. */
+  startOnAgents: boolean;
   setUi(ui: UiMode): void;
   setTheme(theme: ThemeMode): void;
   setPipOpen(open: boolean): void;
@@ -65,9 +63,7 @@ interface Prefs {
   setAgentsIntroSeen(seen: boolean): void;
   setPipOrientationSeen(seen: boolean): void;
   setPermissionExplainerSeen(seen: boolean): void;
-  setStartOnPipHome(on: boolean): void;
-  /** Marks Start my day done for `day`, or open again with null. */
-  setStartMyDayDoneOn(day: string | null): void;
+  setStartOnAgents(on: boolean): void;
   /** Keeps `items` as the plan for the week `now` is in, replacing the one kept before. */
   keepWeekPlan(items: readonly PlanItem[], now?: Date): void;
   /** Takes a ticked item of week `week`'s kept plan back: open again, kept. */
@@ -80,7 +76,7 @@ interface Prefs {
 
 const KEY = "gossamr-prefs";
 
-export function loadPrefs(): Pick<Prefs, "ui" | "uiChosen" | "theme" | "pipOpen" | "peekWidth" | "pipWidth" | "columnOrder" | "agentsView" | "agentsGroup" | "agentsIntroSeen" | "pipOrientationSeen" | "permissionExplainerSeen" | "startOnPipHome" | "startMyDayDoneOn" | "clarityLearning" | "weekPlans"> {
+export function loadPrefs(): Pick<Prefs, "ui" | "uiChosen" | "theme" | "pipOpen" | "peekWidth" | "pipWidth" | "columnOrder" | "agentsView" | "agentsGroup" | "agentsIntroSeen" | "pipOrientationSeen" | "permissionExplainerSeen" | "startOnAgents" | "clarityLearning" | "weekPlans"> {
   const raw = readStored(KEY) as Partial<Record<keyof Prefs, unknown>> | null;
   return {
     // Installs from before the workspace was the default stored "classic" without anyone choosing it.
@@ -92,13 +88,13 @@ export function loadPrefs(): Pick<Prefs, "ui" | "uiChosen" | "theme" | "pipOpen"
     pipWidth: storedWidth(raw?.pipWidth, PIP_DEFAULT),
     columnOrder: parseColumnOrders(raw?.columnOrder),
     agentsView: AGENTS_VIEWS.find((v) => v === raw?.agentsView) ?? "cards",
-    agentsGroup: AGENTS_GROUPS.find((g) => g === raw?.agentsGroup) ?? "state",
+    // Stored as `agentsGroupBy`, so that everyone starts on Workstream once; `agentsGroup` held the old default.
+    agentsGroup: AGENTS_GROUPS.find((g) => g === (raw as Record<string, unknown> | null)?.agentsGroupBy) ?? "workstream",
     agentsIntroSeen: raw?.agentsIntroSeen === true,
     pipOrientationSeen: raw?.pipOrientationSeen === true,
     permissionExplainerSeen: raw?.permissionExplainerSeen === true,
-    // Pip home is where everyone with Agents on lands; only a person who turned it off stays on the workspace.
-    startOnPipHome: raw?.startOnPipHome !== false,
-    startMyDayDoneOn: typeof raw?.startMyDayDoneOn === "string" ? raw.startMyDayDoneOn : null,
+    // Agents is where everyone with Agents on lands; only a person who turned it off stays on the workspace. It was stored as `startOnPipHome`.
+    startOnAgents: (raw?.startOnAgents ?? (raw as Record<string, unknown> | null)?.startOnPipHome) !== false,
     clarityLearning: parseLearning(raw?.clarityLearning),
     weekPlans: parseWeekPlans(raw?.weekPlans),
   };
@@ -126,8 +122,7 @@ export const usePrefs = create<Prefs>((set, get) => ({
   setAgentsIntroSeen: (agentsIntroSeen) => set({ agentsIntroSeen }),
   setPipOrientationSeen: (pipOrientationSeen) => set({ pipOrientationSeen }),
   setPermissionExplainerSeen: (permissionExplainerSeen) => set({ permissionExplainerSeen }),
-  setStartOnPipHome: (startOnPipHome) => set({ startOnPipHome }),
-  setStartMyDayDoneOn: (startMyDayDoneOn) => set({ startMyDayDoneOn }),
+  setStartOnAgents: (startOnAgents) => set({ startOnAgents }),
   keepWeekPlan: (items, now = new Date()) => set((s) => ({ weekPlans: keepPlan(s.weekPlans, items, now) })),
   reopenWeekPlanItem: (week, id) => set((s) => ({ weekPlans: reopenItem(s.weekPlans, week, id) })),
   recordClarityDismissal: (project, gaps) => {
@@ -138,8 +133,8 @@ export const usePrefs = create<Prefs>((set, get) => ({
   resetClarityLearning: (project, gaps) => set((s) => ({ clarityLearning: forget(s.clarityLearning, project, gaps) })),
 }));
 
-usePrefs.subscribe(({ ui, uiChosen, theme, peekWidth, pipWidth, columnOrder, agentsView, agentsGroup, agentsIntroSeen, pipOrientationSeen, permissionExplainerSeen, startOnPipHome, startMyDayDoneOn, clarityLearning, weekPlans }) =>
-  writeStored(KEY, { ui, uiChosen, theme, peekWidth, pipWidth, columnOrder, agentsView, agentsGroup, agentsIntroSeen, pipOrientationSeen, permissionExplainerSeen, startOnPipHome, startMyDayDoneOn, clarityLearning, weekPlans }),
+usePrefs.subscribe(({ ui, uiChosen, theme, peekWidth, pipWidth, columnOrder, agentsView, agentsGroup, agentsIntroSeen, pipOrientationSeen, permissionExplainerSeen, startOnAgents, clarityLearning, weekPlans }) =>
+  writeStored(KEY, { ui, uiChosen, theme, peekWidth, pipWidth, columnOrder, agentsView, agentsGroupBy: agentsGroup, agentsIntroSeen, pipOrientationSeen, permissionExplainerSeen, startOnAgents, clarityLearning, weekPlans }),
 );
 
 /** The browser build has no classic inbox to fall back to, so it always shows the workspace. */

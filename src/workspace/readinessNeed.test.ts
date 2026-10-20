@@ -8,7 +8,7 @@ import { contextDeps } from "./contextActions";
 import { keyPlan } from "./needsActions";
 import { doneNeed, PLANNING_ANYWAY } from "./NeedsPane";
 import { usePip } from "./pipStore";
-import { usePipHome } from "./pipHomeStore";
+import { useWorkView } from "./workViewStore";
 import { useTabs } from "./tabsStore";
 import { useToasts } from "./toasts";
 import { currentNeeds } from "./useNeeds";
@@ -83,7 +83,7 @@ describe("a ticket the triage found not clear enough to plan", () => {
     expect(currentNeeds().find((n) => n.key === `draft:${asked.id}`)).toMatchObject({ group: "approve", kind: "draft", workstreamId: id });
     expect(backend.proposals.writes).toEqual([]);
     // The decision pane shows the new draft, not whichever need came next.
-    expect(usePipHome.getState()).toMatchObject({ deciding: `draft:${asked.id}`, selected: id });
+    expect(useWorkView.getState()).toMatchObject({ deciding: `draft:${asked.id}` });
   });
 
   it("takes the note about the comment back when the workstream is closed, so Undo of the close does not bring it up again (G30)", async () => {
@@ -102,8 +102,8 @@ describe("a ticket the triage found not clear enough to plan", () => {
     useTabs.getState().setRoute("agents");
     expect(await useWorkstreams.getState().answerSelf(id)).toBe(true);
     expect(readinessNeed()).toBeUndefined();
-    expect(useTabs.getState().route).toBe("pip");
-    expect(usePipHome.getState().selected).toBe(id);
+    expect(useTabs.getState().route).toBe("agents");
+    expect(useWorkView.getState().selected).toBe(id);
     expect(usePip.getState().prefill).toEqual({ text: readinessPrompt(stop, "CA-408") });
     expect(usePip.getState().prefill?.text).toMatch(/^R2's open questions about CA-408: “What does done look like for CA-408\?/);
     expect(backend.runs.list({ workstream: id }).some((r) => r.spec.kind === "plan")).toBe(false);
@@ -164,7 +164,7 @@ describe("a ticket the triage found not clear enough to plan", () => {
     const { id } = await stopped();
     contextDeps.needAct(readinessNeed()!, "answerSelf");
     await vi.waitFor(() => expect(readinessNeed()).toBeUndefined());
-    expect(usePipHome.getState().selected).toBe(id);
+    expect(useWorkView.getState().selected).toBe(id);
     expect(usePip.getState().prefill?.text).toContain("“What is in scope and what is out?”");
   });
 });

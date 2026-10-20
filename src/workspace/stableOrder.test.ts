@@ -44,4 +44,12 @@ describe("stableGroups", () => {
     const after = [group("needs", run("n")), group("running", run("x"), run("a"))];
     expect(ids(stableGroups(before, after, true, keyOf))).toEqual(["running:a,x", "needs:n"]);
   });
+
+  it("keeps a group that has no run yet, as a workstream with none is, in its place while frozen, and shows a new one", () => {
+    const before = [group("w1"), group("w2", run("a"))];
+    expect(ids(stableGroups(before, [group("w2", run("a")), group("w1"), group("w3")], true, keyOf))).toEqual(["w1:", "w2:a", "w3:"]);
+    // Gone, it goes; with a run it has joined, it shows it.
+    expect(ids(stableGroups(before, [group("w2", run("a"))], true, keyOf))).toEqual(["w2:a"]);
+    expect(ids(stableGroups(before, [group("w1", run("n")), group("w2", run("a"))], true, keyOf))).toEqual(["w1:n", "w2:a"]);
+  });
 });

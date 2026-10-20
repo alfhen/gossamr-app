@@ -3,7 +3,7 @@ import { needs as buildNeeds, type Need } from "../lib/needs";
 import { reporterAsk, type ReporterAsk } from "../lib/reporterWait";
 import { isHeldByYou } from "../lib/workstreamHold";
 import { useWorkspace } from "../workspaceStore";
-import { lastHeldAt } from "./pipHomeLogic";
+import { lastHeldAt } from "./workViewLogic";
 import { useRuns } from "./runsStore";
 import { useNow } from "./useNow";
 import { useWorkstreams } from "./workstreamsStore";

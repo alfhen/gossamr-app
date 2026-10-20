@@ -117,7 +117,7 @@ interface Props {
   /** What the s key does on a focused card. */
   onSkip?(): void;
   /**
-   * A run draft started in place on Pip home: its action shows or hides `panel`, the review under the card, instead of
+   * A run draft started in place on the Agents view: its action shows or hides `panel`, the review under the card, instead of
    * opening the setup sheet; `onKey` takes the review's own keys (⌘↵) pressed on the card itself, and says whether it did.
    */
   expander?: { open: boolean; panel: ReactNode; onKey?(ev: KeyboardEvent<HTMLElement>): boolean; onClose?(): void };
@@ -404,8 +404,8 @@ export function draftDecisions(id: string, seen?: Proposal): { approve(): void; 
 }
 
 /**
- * What a draft card's action does: a run draft opens the setup sheet, or on Pip home (`inline`) one of a kind started in
- * place shows its review under the card; a ticket's draft shows the ticket (on Pip home its peek opens over Pip home
+ * What a draft card's action does: a run draft opens the setup sheet, or on the Agents view (`inline`) one of a kind started
+ * in place shows its review under the card; a ticket's draft shows the ticket (on Agents its peek opens over Agents
  * rather than going to the canvas, where a rewrite's diff is read and approved as anywhere); a draft of a ticket that
  * doesn't exist yet shows that draft.
  */

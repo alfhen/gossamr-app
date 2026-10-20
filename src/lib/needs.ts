@@ -43,7 +43,7 @@ export interface ActionSpec {
 }
 
 /**
- * What a need brings into view on Pip home: a draft's card, a run's card, the workstream's held banner, or the card of a
+ * What a need brings into view in its workstream's detail: a draft's card, a run's card, the workstream's held banner, or the card of a
  * review that still blocks after the fix rounds.
  */
 export type NeedTarget = { type: "draft"; id: string } | { type: "run"; id: string } | { type: "workstream" } | { type: "escalation" };
@@ -80,10 +80,10 @@ export interface Need {
 
 /**
  * What the pane's link and the palette call `openInWorkstream`, named for where it goes: a need in General has no workstream to
- * open, so a run's need opens the run and any other shows the General timeline.
+ * open, so a run's need opens the run and any other opens Pip.
  */
 export const openInWorkstreamLabel = (need: Pick<Need, "workstreamId" | "target">) =>
-  need.workstreamId ? "Open in workstream" : need.target.type === "run" ? "Open the run" : "Show in General timeline";
+  need.workstreamId ? "Open in workstream" : need.target.type === "run" ? "Open the run" : "Show in Pip";
 
 export interface NeedsInput {
   /** The open workstreams; a closed one's waits go to General. */
