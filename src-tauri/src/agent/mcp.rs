@@ -885,6 +885,49 @@ mod tests {
         reply.split("proposal ").nth(1).unwrap().split(')').next().unwrap().to_string()
     }
 
+    async fn status(url: &str, token: &str) -> u16 {
+        let rpc = serde_json::json!({ "jsonrpc": "2.0", "id": 1, "method": "ping" });
+        reqwest::Client::new().post(url).bearer_auth(token).json(&rpc).send().await.unwrap().status().as_u16()
+    }
+
+    async fn server() -> McpServer {
+        let fx = fixture().await;
+        McpServer::start(fx.core.clone(), crate::agent::runs::testing::FakePlanner::unused(), Arc::new(|_| {}), Arc::new(|_, _, _| {})).await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn each_run_gets_its_own_token_which_dies_with_the_run() {
+        let server = server().await;
+        let a = server.endpoint("run-a").unwrap();
+        let b = server.endpoint("run-b").unwrap();
+        assert_ne!(a.token, b.token);
+        assert_eq!(status(&a.url, &a.token).await, 200);
+        assert_eq!(status(&b.url, &b.token).await, 200);
+        assert_eq!(status(&b.url, &a.token).await, 401, "a token opens only its own run");
+        server.revoke("run-a");
+        assert_eq!(status(&a.url, &a.token).await, 401, "a revoked token is refused");
+        assert_eq!(status(&b.url, &b.token).await, 200, "another run is unaffected");
+    }
+
+    #[tokio::test]
+    async fn an_unknown_token_or_run_is_refused() {
+        let server = server().await;
+        let a = server.endpoint("run-a").unwrap();
+        assert_eq!(status(&a.url, "not-the-token").await, 401);
+        assert_eq!(status(&a.url, "").await, 401);
+        let nobody = a.url.replace("run-a", "never-started");
+        assert_eq!(status(&nobody, &a.token).await, 401);
+    }
+
+    #[tokio::test]
+    async fn a_new_token_for_a_run_replaces_the_old_one() {
+        let server = server().await;
+        let first = server.endpoint("run-a").unwrap();
+        let second = server.endpoint("run-a").unwrap();
+        assert_eq!(status(&first.url, &first.token).await, 401);
+        assert_eq!(status(&second.url, &second.token).await, 200);
+    }
+
     #[test]
     fn checks_the_bearer_token_against_the_one_issued_for_that_run() {
         let tokens = Tokens::default();

@@ -830,7 +830,6 @@ async fn clones_of_a_watched_repository_are_found_and_the_chosen_one_comes_first
     assert_eq!(after.clones[0].path, other);
     let config = AppConfig::load(&rig.fx.core.data_dir());
     assert_eq!(config.picked_clones.get("acme/webshop"), Some(&other));
-    assert_eq!(config.agent_provider, AppConfig::default().agent_provider);
 
     std::fs::remove_dir_all(&other).unwrap();
     rig.svc.clones.clear();

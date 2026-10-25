@@ -27,7 +27,6 @@ use tauri_plugin_opener::OpenerExt;
 
 use auth::{Auth, AuthStatus, DeviceStart, OAuthApp, Scope};
 use agent::{AgentService, AskOutcome, AskRequest};
-use claude::ClaudeCodeProvider;
 use tracker::{Connection, Move};
 use inbox::{CatalogPage, CodeRef, ConnectionInfo, Core, Edit, WatchState, WorkstreamView};
 use error::{Error, Result};
@@ -1504,7 +1503,7 @@ pub fn run() {
                     service.recover().await;
                 });
             }
-            let agent = Arc::new(AgentService::new(core.clone(), mcp, vec![Arc::new(ClaudeCodeProvider::new())], config));
+            let agent = Arc::new(AgentService::new(core.clone(), mcp));
             supervisor.bind(&agent);
             tauri::async_runtime::spawn(supervisor.clone().run_sweeps());
             app.manage::<AgentState>(agent);

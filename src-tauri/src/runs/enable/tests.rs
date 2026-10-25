@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use super::*;
@@ -26,11 +28,11 @@ async fn turning_on_keeps_what_else_is_in_the_config() {
     let rig = ready().await;
     rig.svc.set_enabled(false).await.unwrap();
     let dir = rig.fx.core.data_dir();
-    AppConfig { agent_provider: "codex".into(), ..AppConfig::default() }.save(&dir).unwrap();
+    AppConfig { picked_clones: HashMap::from([("acme/webshop".to_string(), PathBuf::from("/Users/me/Code/webshop"))]), ..AppConfig::default() }.save(&dir).unwrap();
     rig.svc.set_enabled(true).await.unwrap();
     let config = AppConfig::load(&dir);
     assert!(config.agents_enabled);
-    assert_eq!(config.agent_provider, "codex");
+    assert_eq!(config.picked_clones.len(), 1);
     assert!(!dir.join("config.json.tmp").exists());
 }
 

@@ -131,8 +131,6 @@ impl AgentSettings {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct AppConfig {
-    /// The `AgentProvider::id` Pip runs on.
-    pub agent_provider: String,
     /// Background agent runs. On unless the person turned them off; a config without the key is a fresh install.
     pub agents_enabled: bool,
     /// The clone the person chose for a repository (`owner/name`) when several match.
@@ -142,7 +140,7 @@ pub struct AppConfig {
 
 impl Default for AppConfig {
     fn default() -> Self {
-        Self { agent_provider: "claude-code".into(), agents_enabled: true, picked_clones: HashMap::new(), agents: AgentSettings::default() }
+        Self { agents_enabled: true, picked_clones: HashMap::new(), agents: AgentSettings::default() }
     }
 }
 
@@ -170,12 +168,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn defaults_to_claude_and_survives_a_round_trip_and_a_bad_file() {
+    fn defaults_survive_a_round_trip_and_a_bad_file_and_unknown_keys_are_ignored() {
         let dir = std::env::temp_dir().join(format!("gossamr-config-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        assert_eq!(AppConfig::load(&dir).agent_provider, "claude-code");
-        AppConfig { agent_provider: "codex".into(), ..AppConfig::default() }.save(&dir).unwrap();
-        assert_eq!(AppConfig::load(&dir).agent_provider, "codex");
+        let saved = AppConfig { agents_enabled: false, ..AppConfig::default() };
+        saved.save(&dir).unwrap();
+        assert_eq!(AppConfig::load(&dir), saved);
+        std::fs::write(dir.join(FILE), r#"{"agentProvider":"codex","agentsEnabled":false}"#).unwrap();
+        assert_eq!(AppConfig::load(&dir), saved, "a key no longer read is skipped");
         std::fs::write(dir.join(FILE), "{ nope").unwrap();
         assert_eq!(AppConfig::load(&dir), AppConfig::default());
         std::fs::write(dir.join(FILE), "{}").unwrap();
@@ -191,7 +191,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join(FILE), r#"{"agentProvider":"codex"}"#).unwrap();
         let older = AppConfig::load(&dir);
-        assert_eq!((older.agent_provider.as_str(), older.agents_enabled, older.picked_clones.len()), ("codex", true, 0));
+        assert_eq!((older.agents_enabled, older.picked_clones.len()), (true, 0));
         std::fs::write(dir.join(FILE), r#"{"agentsEnabled":true,"pickedClones":{"acme/webshop":"/Users/me/Code/webshop"}}"#).unwrap();
         std::fs::write(dir.join(FILE), r#"{"agentsEnabled":false,"agentProvider":"codex"}"#).unwrap();
         assert!(!AppConfig::load(&dir).agents_enabled, "a saved off stays off");

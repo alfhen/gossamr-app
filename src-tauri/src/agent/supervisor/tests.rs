@@ -12,8 +12,8 @@ use super::*;
 use crate::agent::context::{keys_in, ScreenContext};
 use crate::agent::mcp::McpServer;
 use crate::agent::runs::testing::FakePlanner;
-use crate::agent::{AgentCaps, AgentProvider, AgentRequest, AskRequest, EventStream, REMOVED};
-use crate::config::AppConfig;
+use crate::agent::{AgentRequest, AskRequest, EventStream, REMOVED};
+use crate::claude::{ClaudeCodeProvider, StandIn};
 use crate::db::PipTurn;
 use crate::domain::fixtures::run_spec;
 use crate::domain::workstream::{Budget, Spend, HELD_PERSON, HELD_RESTART};
@@ -35,15 +35,7 @@ struct Script {
 struct Fake(Arc<Script>);
 
 #[async_trait]
-impl AgentProvider for Fake {
-    fn id(&self) -> &'static str {
-        "fake"
-    }
-
-    fn capabilities(&self) -> AgentCaps {
-        AgentCaps { mcp: true, resume: true, streaming: true, reads_code: false, read_only_sandbox: true, vision: false }
-    }
-
+impl StandIn for Fake {
     async fn run(&self, req: AgentRequest) -> crate::error::Result<EventStream> {
         let s = self.0.clone();
         s.prompts.lock().unwrap().push((req.run_id.clone(), req.prompt.clone()));
@@ -110,8 +102,7 @@ struct T {
 
 async fn service(fx: &Fixture, fake: &Fake) -> Arc<AgentService> {
     let server = McpServer::start(fx.core.clone(), FakePlanner::unused(), Arc::new(|_| {}), Arc::new(|_, _, _| {})).await.unwrap();
-    let config = AppConfig { agent_provider: "fake".into(), ..AppConfig::default() };
-    Arc::new(AgentService::new(fx.core.clone(), server, vec![Arc::new(fake.clone())], config))
+    Arc::new(AgentService::with_provider(fx.core.clone(), server, ClaudeCodeProvider::standing_in(Arc::new(fake.clone()))))
 }
 
 fn supervisor(fx: &Fixture, svc: &Arc<AgentService>, settings: &Arc<Mutex<AgentSettings>>, emitted: &Emitted) -> Arc<Supervisor> {
@@ -770,16 +761,26 @@ async fn a_wake_that_failed_before_its_sink_heard_of_it_gives_its_facts_back() {
     assert_eq!(failing(PIP_NOT_RUNNING).await, 1);
     assert_eq!(failing("Not signed in to Jira").await, 1);
     // A wake that was queued and then couldn't start was told through its sink, which takes the facts back, once.
-    assert_eq!(failing("Couldn't start: The assistant provider isn't available.").await, 1);
+    assert_eq!(failing("Couldn't start: Claude Code isn't installed.").await, 1);
+}
+
+struct NotInstalled;
+
+#[async_trait]
+impl StandIn for NotInstalled {
+    async fn run(&self, _req: AgentRequest) -> crate::error::Result<EventStream> {
+        Err(crate::error::Error::Claude("Claude Code isn't installed.".into()))
+    }
+
+    fn cancel(&self, _run_id: &str) {}
 }
 
 #[tokio::test]
 async fn a_wake_that_couldn_t_start_gives_its_facts_back_for_the_next_sweep() {
     let t = setup().await;
-    // An agent service whose provider is gone: the wake is queued, then fails to start.
+    // An agent service whose claude is missing: the wake is queued, then fails to start.
     let server = McpServer::start(t.fx.core.clone(), FakePlanner::unused(), Arc::new(|_| {}), Arc::new(|_, _, _| {})).await.unwrap();
-    let config = AppConfig { agent_provider: "gone".into(), ..AppConfig::default() };
-    let svc = Arc::new(AgentService::new(t.fx.core.clone(), server, vec![Arc::new(t.fake.clone())], config));
+    let svc = Arc::new(AgentService::with_provider(t.fx.core.clone(), server, ClaudeCodeProvider::standing_in(Arc::new(NotInstalled))));
     let sup = supervisor(&t.fx, &svc, &t.settings, &t.emitted);
     let r1 = t.run("r1", RunKind::Investigate, RunState::Done, |_| {}).await;
     sup.clone().on_run(r1, Attention::Done).await;
@@ -1244,7 +1245,7 @@ async fn notify_under_the_launch_lock_returns_at_once_and_the_wake_follows() {
 
 mod auto {
     use super::*;
-    use crate::agent::conformance::{World, FIRST};
+    use crate::agent::world::{World, FIRST};
     use crate::domain::workstream::Rule;
     use crate::runs::service::Timing;
 
