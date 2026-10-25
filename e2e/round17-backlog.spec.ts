@@ -1,8 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import { advanceRuns, askPip, expandNeedsYou, homeComposer, homeSettled, jiraWrites, mockRuns, needOfKind, needRow, needsPane, needsYouCount, needsYouRow, openAgents, openApp, paneSettled, pipPane, seedWorkstreamEvent, selectWorkstream, startWorkstream, openNeedOfKind, openNeedRow, needsStack } from "./support/app";
 
-// Backlog items of the seventeenth dogfood round: the timeline telling Plan now from Plan anyway (G18), the glossary leaving Needs you its
-// rows (G21), a draft that holds a secret saying so before Post (G22), the skip Undo naming its draft (G27), the Start-an-agent card's
+// Backlog items of the seventeenth dogfood round: the timeline telling Plan now from Plan anyway (G18), a draft that holds a secret saying so before Post (G22), the skip Undo naming its draft (G27), the Start-an-agent card's
 // names (G28) and Looks fine saying what comes next (G29).
 
 const MANAGED = "runs=empty&prSurface=manual&wsManage=1&pipPace=1";

@@ -6,7 +6,6 @@ import { readStored, writeStored } from "./storage";
 import { AGENTS_GROUPS, type AgentsGroup } from "./agentsLogic";
 import { dismissed, forget, parseLearning, type ClarityLearning } from "../lib/clarityLearning";
 import type { ClarityGap } from "../lib/ticketClarity";
-import { keepPlan, parseWeekPlans, reopenItem, type PlanItem, type WeekPlans } from "../lib/planMyWeek";
 
 export const THEMES = ["auto", "light", "dark"] as const;
 export type ThemeMode = (typeof THEMES)[number];
@@ -30,14 +29,8 @@ interface Prefs {
   agentsView: AgentsViewMode;
   /** Whether the Agents view groups runs by state (its lanes) or by workstream. */
   agentsGroup: AgentsGroup;
-  /** The person dismissed the orientation card in the Pip drawer. */
-  pipOrientationSeen: boolean;
-  /** The person dismissed the one-time explainer of Allow once and Deny on a permission prompt. */
-  permissionExplainerSeen: boolean;
   /** What "Looks fine" has taught the clarity notice: how often each gap was dismissed, per Jira project (`src/lib/clarityLearning.ts`). */
   clarityLearning: ClarityLearning;
-  /** The plans the person kept in Plan my week, by ISO week (`src/lib/planMyWeek.ts`). Local to this app; nothing of it goes to Jira. */
-  weekPlans: WeekPlans;
   setTheme(theme: ThemeMode): void;
   setPipOpen(open: boolean): void;
   setPeekWidth(width: number): void;
@@ -49,12 +42,6 @@ interface Prefs {
   setColumnOrder(container: string, ids: string[] | null): void;
   setAgentsView(view: AgentsViewMode): void;
   setAgentsGroup(group: AgentsGroup): void;
-  setPipOrientationSeen(seen: boolean): void;
-  setPermissionExplainerSeen(seen: boolean): void;
-  /** Keeps `items` as the plan for the week `now` is in, replacing the one kept before. */
-  keepWeekPlan(items: readonly PlanItem[], now?: Date): void;
-  /** Takes a ticked item of week `week`'s kept plan back: open again, kept. */
-  reopenWeekPlanItem(week: string, id: string): void;
   /** Counts one "Looks fine" on a ticket of `project` whose notice named `gaps`; returns the gaps that are no longer flagged there from now on. */
   recordClarityDismissal(project: string, gaps: readonly ClarityGap[]): ClarityGap[];
   /** Forgets what "Looks fine" taught, for one project or (with none) all of them. */
@@ -63,7 +50,7 @@ interface Prefs {
 
 const KEY = "gossamr-prefs";
 
-export function loadPrefs(): Pick<Prefs, "theme" | "pipOpen" | "peekWidth" | "pipWidth" | "columnOrder" | "agentsView" | "agentsGroup" | "pipOrientationSeen" | "permissionExplainerSeen" | "clarityLearning" | "weekPlans"> {
+export function loadPrefs(): Pick<Prefs, "theme" | "pipOpen" | "peekWidth" | "pipWidth" | "columnOrder" | "agentsView" | "agentsGroup" | "clarityLearning"> {
   const raw = readStored(KEY) as Partial<Record<keyof Prefs, unknown>> | null;
   return {
     theme: THEMES.find((t) => t === raw?.theme) ?? "auto",
@@ -74,10 +61,7 @@ export function loadPrefs(): Pick<Prefs, "theme" | "pipOpen" | "peekWidth" | "pi
     agentsView: AGENTS_VIEWS.find((v) => v === raw?.agentsView) ?? "cards",
     // Stored as `agentsGroupBy`, so that everyone starts on Workstream once; `agentsGroup` held the old default.
     agentsGroup: AGENTS_GROUPS.find((g) => g === (raw as Record<string, unknown> | null)?.agentsGroupBy) ?? "workstream",
-    pipOrientationSeen: raw?.pipOrientationSeen === true,
-    permissionExplainerSeen: raw?.permissionExplainerSeen === true,
     clarityLearning: parseLearning(raw?.clarityLearning),
-    weekPlans: parseWeekPlans(raw?.weekPlans),
   };
 }
 
@@ -99,10 +83,6 @@ export const usePrefs = create<Prefs>((set, get) => ({
     }),
   setAgentsView: (agentsView) => set({ agentsView }),
   setAgentsGroup: (agentsGroup) => set({ agentsGroup }),
-  setPipOrientationSeen: (pipOrientationSeen) => set({ pipOrientationSeen }),
-  setPermissionExplainerSeen: (permissionExplainerSeen) => set({ permissionExplainerSeen }),
-  keepWeekPlan: (items, now = new Date()) => set((s) => ({ weekPlans: keepPlan(s.weekPlans, items, now) })),
-  reopenWeekPlanItem: (week, id) => set((s) => ({ weekPlans: reopenItem(s.weekPlans, week, id) })),
   recordClarityDismissal: (project, gaps) => {
     const next = dismissed(get().clarityLearning, project, gaps);
     set({ clarityLearning: next.learning });
@@ -111,8 +91,8 @@ export const usePrefs = create<Prefs>((set, get) => ({
   resetClarityLearning: (project, gaps) => set((s) => ({ clarityLearning: forget(s.clarityLearning, project, gaps) })),
 }));
 
-usePrefs.subscribe(({ theme, peekWidth, pipWidth, columnOrder, agentsView, agentsGroup, pipOrientationSeen, permissionExplainerSeen, clarityLearning, weekPlans }) =>
-  writeStored(KEY, { theme, peekWidth, pipWidth, columnOrder, agentsView, agentsGroupBy: agentsGroup, pipOrientationSeen, permissionExplainerSeen, clarityLearning, weekPlans }),
+usePrefs.subscribe(({ theme, peekWidth, pipWidth, columnOrder, agentsView, agentsGroup, clarityLearning }) =>
+  writeStored(KEY, { theme, peekWidth, pipWidth, columnOrder, agentsView, agentsGroupBy: agentsGroup, clarityLearning }),
 );
 
 export function applyTheme(theme: ThemeMode, root: HTMLElement = document.documentElement) {

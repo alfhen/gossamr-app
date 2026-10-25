@@ -41,7 +41,7 @@ function rowFor(need: Need): HTMLElement | null {
   return document.querySelector<HTMLElement>(`${STACK} [data-need-key="${CSS.escape(need.key)}"]`);
 }
 
-/** Where Esc from a decision puts the keyboard: what opened it (Start my day's Open, say) while that is still on the page and outside the pane, else the need's own header. */
+/** Where Esc from a decision puts the keyboard: what opened it while that is still on the page and outside the pane, else the need's own header. */
 export function closeTarget(opener: HTMLElement | null, pane: Pick<Node, "contains"> | null, row: () => HTMLElement | null): HTMLElement | null {
   if (opener && opener.tagName !== "BODY" && opener.isConnected && !pane?.contains(opener)) return opener;
   return row();

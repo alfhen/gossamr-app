@@ -8,7 +8,7 @@ import { DraftCard, draftSummary, draftTitle, type DraftCardProps } from "./Draf
 import { PeekView, WorkstreamControl, type PeekViewProps } from "./PeekSheet";
 import { CLOSE_RUNS_NOTE } from "./WorkstreamControls";
 import { PipAvatar } from "./PipAvatar";
-import { FilterNote, Launcher, Nudge, PipFilterNote } from "./PipExtras";
+import { FilterNote, PipFilterNote } from "./PipExtras";
 import { ContextChip } from "./PipPane";
 import { DraftPreview } from "./DraftPreview";
 import { WorkDocView } from "./WorkDocView";
@@ -246,13 +246,6 @@ describe("Pip pane parts", () => {
     expect(out).toContain("Blocked tickets");
     expect(out).toContain("Undo");
     expect(renderToStaticMarkup(<FilterNote />)).toBe("");
-  });
-
-  it("shows the nudge beside the launcher with a way to dismiss it", () => {
-    const out = renderToStaticMarkup(<Launcher needs={2} onOpen={vi.fn()} nudge={<Nudge text="I can help you filter tasks in this view." onOpen={vi.fn()} onDismiss={vi.fn()} />} />);
-    expect(out).toContain("I can help you filter tasks in this view.");
-    expect(out).toContain("Dismiss suggestion");
-    expect(out).toContain("Ask Pip, 2 things need you");
   });
 });
 

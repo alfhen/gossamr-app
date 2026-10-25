@@ -1,8 +1,6 @@
 import { create } from "zustand";
 import type { ScreenContext, WorkFilter } from "../types";
-import { remember, type Nudge } from "./nudges";
 import { usePrefs } from "./prefs";
-import { readStored, writeStored } from "./storage";
 import { activeTab, useTabs } from "./tabsStore";
 
 /** A filter Pip put on a tab, with what it replaced, so the person can take it back. */
@@ -24,28 +22,19 @@ interface PipState {
   filtered: PipFiltered | null;
   /** Every filter Pip applied for a question in the pane, by request, with whether it was taken back. */
   applied: Record<string, PipFiltered & { undone: boolean }>;
-  /** Nudges the person has closed or acted on, by id; they stay closed. */
-  dismissed: string[];
-  /** Nudges already shown this session, so each comes up once. */
-  seen: string[];
-  nudge: Nudge | null;
-  lastNudgeAt: number;
   /** Set while the context is pinned to this snapshot instead of following the screen. */
   pinned: ScreenContext | null;
   /** Text the person selected in the peek sheet to ask about. */
   quote: string | null;
   /** A prompt waiting to land in the pane's input, in place of what is there or, with `append`, after it. */
   prefill: { text: string; append?: boolean } | null;
-  /** A suggestion chosen outside the composer (a workstream intro's button), for the composer of `conversation` to ask as its chip would. */
+  /** A question chosen outside the composer, for the composer of `conversation` to ask as if typed. */
   asking: { conversation: string; text: string } | null;
   applyFilter(filter: WorkFilter, note: string, requestId?: string): void;
   undoFilter(): void;
   clearFiltered(): void;
   undoApplied(requestId: string): void;
   redoApplied(requestId: string): void;
-  dismiss(id: string): void;
-  showNudge(nudge: Nudge, now: number): void;
-  hideNudge(): void;
   setPinned(context: ScreenContext | null): void;
   askAbout(text: string): void;
   clearQuote(): void;
@@ -54,17 +43,10 @@ interface PipState {
   /** Adds text to the end of the pane's input, as typing that landed on a draft card does. */
   typeOn(text: string): void;
   clearPrefill(): void;
-  /** Asks `text` in `conversation` through its composer, exactly as tapping that suggestion's chip does. */
+  /** Asks `text` in `conversation` through its composer. */
   askIn(conversation: string, text: string): void;
   clearAsking(): void;
 }
-
-const KEY = "gossamr-pip";
-
-const loadDismissed = (): string[] => {
-  const raw = readStored(KEY) as { dismissed?: unknown } | null;
-  return Array.isArray(raw?.dismissed) ? raw.dismissed.filter((d): d is string => typeof d === "string") : [];
-};
 
 const showPip = () => usePrefs.getState().setPipOpen(true);
 
@@ -74,10 +56,6 @@ const setTabFilter = (tabId: string, filter: WorkFilter, title: string | null) =
 export const usePip = create<PipState>((set, get) => ({
   filtered: null,
   applied: {},
-  dismissed: loadDismissed(),
-  seen: [],
-  nudge: null,
-  lastNudgeAt: 0,
   pinned: null,
   quote: null,
   prefill: null,
@@ -116,9 +94,6 @@ export const usePip = create<PipState>((set, get) => ({
     set((s) => ({ applied: { ...s.applied, [requestId]: { ...a, undone: false } }, filtered: { ...a, requestId } }));
   },
 
-  dismiss: (id) => set((s) => ({ dismissed: remember(s.dismissed, id), nudge: s.nudge?.id === id ? null : s.nudge })),
-  showNudge: (nudge, now) => set((s) => ({ nudge, lastNudgeAt: now, seen: remember(s.seen, nudge.id) })),
-  hideNudge: () => set((s) => (s.nudge ? { nudge: null } : s)),
   setPinned: (pinned) => set({ pinned }),
   askAbout(text) {
     set({ quote: text });
@@ -135,11 +110,9 @@ export const usePip = create<PipState>((set, get) => ({
   clearAsking: () => set({ asking: null }),
 }));
 
-usePip.subscribe(({ dismissed }) => writeStored(KEY, { dismissed }));
-
 const sameFilter = (a: WorkFilter, b: WorkFilter) => JSON.stringify(a) === JSON.stringify(b);
 
-/** Whether the chip still describes the tab: the person may have changed the filter by hand since. */
+/** Whether the note still describes the tab: the person may have changed the filter by hand since. */
 export const isStillFiltered = (f: PipFiltered | null, tab: { id: string; filter: WorkFilter }): f is PipFiltered =>
   !!f && f.tabId === tab.id && sameFilter(f.filter, tab.filter);
 
@@ -151,7 +124,7 @@ export function appliedState(a: { tabId: string; filter: WorkFilter; before: Wor
   return sameFilter(tab.filter, a.filter) ? "applied" : "changed";
 }
 
-/** Forgets what belonged to the previous account: filters Pip put on tabs and any pinned context, and, when `nudges`, the suggestions closed for good. */
-export function resetPip(nudges: boolean) {
-  usePip.setState({ filtered: null, applied: {}, pinned: null, quote: null, nudge: null, ...(nudges ? { dismissed: [], seen: [] } : {}) });
+/** Forgets what belonged to the previous account: filters Pip put on tabs and any pinned context. */
+export function resetPip() {
+  usePip.setState({ filtered: null, applied: {}, pinned: null, quote: null });
 }

@@ -1,13 +1,9 @@
 import { expect, test, type Page } from "@playwright/test";
-import { advanceRuns, agentsHome, askPip, commentOnTicket, expandNeedsYou, expectToast, githubWrites, homeComposer, homeSettled, jiraWrites, mockRuns, needOfKind, needRow, needsPane, openAgents, openApp, paneSettled, peekSheet, pipPane, reviewedDraft, selectWorkstream, startMyDay, startWorkstream, openNeedOfKind, openNeedRow } from "./support/app";
+import { advanceRuns, agentsHome, askPip, commentOnTicket, expandNeedsYou, expectToast, githubWrites, homeComposer, homeSettled, jiraWrites, mockRuns, needOfKind, needRow, needsPane, openAgents, openApp, openJiraSent, paneSettled, peekSheet, pipPane, reviewedDraft, selectWorkstream, startWorkstream, openNeedOfKind, openNeedRow } from "./support/app";
 
 // Fixes from the eleventh dogfood round: the reporter's reply shown in the decision (G4), the pause before a GitHub review with
 // @everyone or a secret (G1), What Jira saw from me saying GitHub reviews are not listed (G2), numbered answers paired under
 // their questions (G3), and the chip "Post" on a review draft (G6).
-
-const port = Number(process.env.E2E_PORT ?? 4173);
-/** The seeded profile (e2e/playwright.config.ts) without Start my day set aside, so its card shows. */
-const DAY_DUE = { cookies: [], origins: [{ origin: `http://localhost:${port}`, localStorage: [{ name: "gossamr-prefs", value: JSON.stringify({ pipOrientationSeen: true, permissionExplainerSeen: true }) }] }] };
 
 const MANAGED = "runs=empty&prSurface=manual&wsManage=1&pipPace=1";
 const VAGUE = "CA-408";
@@ -161,13 +157,9 @@ test.describe("a GitHub review with risky words (G1)", () => {
 });
 
 test.describe("What Jira saw from me and GitHub reviews (G2)", () => {
-  test.use({ storageState: DAY_DUE });
-
   test("says the GitHub reviews are not listed and where they show", async ({ page }) => {
     await openApp(page, "runs=empty");
-    await openAgents(page);
-    await startMyDay(page);
-    await agentsHome(page).locator("[data-start-my-day] [data-day-sent]").click();
+    await openJiraSent(page);
     const sent = page.locator("[data-jira-sent]");
     await expect(sent.getByRole("heading", { name: "What Jira saw from me" })).toBeVisible();
     await expect(sent).toContainText("GitHub reviews Gossamr posted are not listed here; each shows in its workstream's timeline as “You posted an agent's GitHub review”.");
@@ -224,28 +216,6 @@ test.describe("Hold and Resume keep the keyboard (G9), Close… is asked as a gr
     await controls.getByRole("button", { name: "Hold", exact: true }).click();
     await expect(controls.locator("[data-held-banner]")).toHaveAttribute("role", "group");
     expect(await page.locator('[role="status"]:not([data-toast-host])').evaluateAll((els) => els.filter((el) => el.querySelector("button")).map((el) => el.outerHTML.slice(0, 160)))).toEqual([]);
-  });
-});
-
-test.describe("Plan my week for a screen reader (G11)", () => {
-  test.use({ storageState: DAY_DUE });
-
-  test("names a row by its place and title, says where a moved pick went, and names the This week button", async ({ page }) => {
-    test.setTimeout(90_000);
-    await openApp(page, "runs=empty");
-    await openAgents(page);
-    await startMyDay(page);
-    await agentsHome(page).locator("[data-start-my-day]").getByRole("button", { name: "Plan my week" }).click();
-    const plan = agentsHome(page).locator("[data-plan-my-week]");
-    const first = plan.locator("[data-plan-pick]").first();
-    await expect(first).toHaveAttribute("aria-label", /^1\. .*[A-Z]+-\d+/);
-    await expect(first).not.toHaveAttribute("aria-label", /Because|Alt and/i);
-    await expect(first).toHaveAttribute("aria-keyshortcuts", "Alt+ArrowUp Alt+ArrowDown");
-    await first.focus();
-    await page.keyboard.press("Alt+ArrowDown");
-    await expect(plan.locator("[data-plan-moved]")).toHaveText(/ moved to position 2 of 3$/);
-    await plan.getByRole("button", { name: "Keep this plan" }).click();
-    await expect(agentsHome(page).getByRole("button", { name: "Edit this week's plan" })).toBeVisible();
   });
 });
 

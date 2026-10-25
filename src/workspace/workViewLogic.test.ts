@@ -11,7 +11,7 @@ import { NO_FILTERS, groupRuns, laneCount, laneOf, summaryLine } from "./agentsL
 import { repeatedComments } from "../lib/needs";
 import { setLiveDraft } from "./draftLive";
 import { keepEditsOfDraft } from "./DraftCard";
-import { batchToApprove, EDITED_ASIDE, planRewriteDraft, batchable, freezeBatch, composerFooter, draftStep, workstreamSuggestionScene, FIX_ROUNDS, lastHeldAt, nextStep, retiredStepDrafts, shortHeld, stepChips, stepDrafts, STEP_KINDS } from "./workViewLogic";
+import { batchToApprove, EDITED_ASIDE, batchable, freezeBatch, composerFooter, draftStep, FIX_ROUNDS, lastHeldAt, nextStep, retiredStepDrafts, shortHeld, stepChips, stepDrafts, STEP_KINDS } from "./workViewLogic";
 
 const NOW = Date.parse("2026-09-30T12:00:00Z");
 const iso = (minutesAgo: number) => new Date(NOW - minutesAgo * 60_000).toISOString();
@@ -349,29 +349,6 @@ describe("composerFooter", () => {
       const n = (line: string) => Number(/(\d+) (?:agents? )?running/.exec(line)?.[1] ?? 0);
       expect([n(composerFooter(runs, 0, at)), n(summaryLine(runs, at)), n(laneCount("running", runs.filter((r) => laneOf(r, at) === "running"), at))]).toEqual([running, running, running]);
     }
-  });
-});
-
-describe("workstreamSuggestionScene", () => {
-  it("reads where the workstream stands for its chips", () => {
-    const ws = view("ws-1", "CA-401", { runs: ["r1", "r2"], stage: "triage" });
-    const runs = [run("r1", "investigate", "done"), run("r2", "triage", "working")];
-    const scene = workstreamSuggestionScene(ws, runs, [], [{ kind: "user" }, { kind: "wake" }]);
-    expect(scene).toEqual({ key: "CA-401", stage: "triage", mode: "manage", heldReason: null, hasPendingPlanRewrite: false, hasPendingStartDraft: false, investigated: true, woke: true, running: "R2", unclear: false, cobweb: false });
-    expect(workstreamSuggestionScene(ws, runs, [], [{ kind: "wake" }, { kind: "user" }]).woke).toBe(false);
-  });
-
-  it("sees a plan's description update and a run start waiting", () => {
-    const ws = view("ws-1", "CA-401", { runs: ["r3"], stage: "plan" });
-    const rewrite = { ...draft("p-rw", { type: "rewrite", item: ref("CA-401"), part: "description" } as unknown as Intent, 3), origin: { type: "run", runId: "r3" } } as Proposal;
-    const scene = workstreamSuggestionScene(ws, [run("r3", "plan", "done")], [rewrite, draft("p-s", startRun("CA-401", "build", "ws-1"), 2, { workstream: "ws-1" })], []);
-    expect(scene.hasPendingPlanRewrite).toBe(true);
-    expect(scene.hasPendingStartDraft).toBe(true);
-    expect(scene.running).toBeNull();
-    // The draft 'Show me the plan update' brings into view: the plan's own, not one from another step or a decided one.
-    expect(planRewriteDraft(ws, [run("r3", "plan", "done")], [rewrite])?.id).toBe("p-rw");
-    expect(planRewriteDraft(ws, [run("r3", "investigate", "done")], [rewrite])).toBeNull();
-    expect(planRewriteDraft(ws, [run("r3", "plan", "done")], [{ ...rewrite, state: { type: "applied" } } as Proposal])).toBeNull();
   });
 });
 

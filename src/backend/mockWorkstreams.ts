@@ -929,16 +929,6 @@ export class MockWorkstreams {
     return event;
   }
 
-  /** Opens workstream `id` `days` days earlier than it did: its `createdAt` and its `opened` line move back, for the dev handle. */
-  backdate(id: string, days: number) {
-    const ws = this.owned(id);
-    const back = (iso: string) => new Date(Date.parse(iso) - days * 86_400_000).toISOString();
-    this.put({ ...ws, createdAt: back(ws.createdAt) });
-    this.audit = this.audit.map((e) => (e.workstreamId === id && e.action === "opened" ? { ...e, at: back(e.at) } : e));
-    this.save();
-    this.changed();
-  }
-
   /** Whether the audit names run `id`. */
   namesRun(id: string): boolean {
     return this.audit.some((e) => e.runId === id);

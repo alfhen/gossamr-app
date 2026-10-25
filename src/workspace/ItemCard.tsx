@@ -1,6 +1,4 @@
 import { useEffect, useRef, type DragEvent, type KeyboardEvent, type MouseEvent } from "react";
-import { Cobweb } from "../components/Cobweb";
-import { witherClass, type WitherLevel } from "../lib/views";
 import type { CodeSummary } from "../lib/devLinks";
 import type { StatusDef, WorkItem, WorkPriority } from "../types";
 import { daysQuiet } from "./boardLogic";
@@ -18,7 +16,6 @@ export interface ItemCardProps {
   item: WorkItem;
   assignee: string;
   now: Date;
-  wither: WitherLevel;
   blocked: boolean;
   needsMe: boolean;
   unread: boolean;
@@ -99,7 +96,6 @@ export function ItemCard(p: ItemCardProps) {
   };
 
   const tone = p.draft ? "ws-card-draft" : "";
-  const wither = witherClass(p.wither);
 
   return (
     <article
@@ -113,11 +109,10 @@ export function ItemCard(p: ItemCardProps) {
       onDragEnd={p.onDragEnd}
       onClick={click}
       onKeyDown={key}
-      className={`ws-card group relative cursor-grab rounded-[10px] border bg-ws-win px-2.5 py-2 shadow-sm outline-offset-2 ${tone} ${wither} ${
+      className={`ws-card group relative cursor-grab rounded-[10px] border bg-ws-win px-2.5 py-2 shadow-sm outline-offset-2 ${tone} ${
         p.marked ? "border-ws-pip ring-2 ring-ws-pip ws-card-pick" : p.selected ? "border-ws-pip ring-2 ring-ws-pip-soft ws-card-pick" : "border-ws-sep"
       }`}
     >
-      <Cobweb level={p.wither} />
       <div className="flex items-center gap-1.5">
         <AttentionDot needsMe={p.needsMe} unread={p.unread} />
         <span className="font-mono text-sm font-semibold text-ws-ink2">{item.item.key}</span>

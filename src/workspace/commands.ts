@@ -20,8 +20,6 @@ export interface Command {
   stay?: boolean;
   /** Extra words that should find the command. */
   keywords?: string;
-  /** It only brings back something already there (a card to show again), where another command of the same name does something new: among equal matches it comes after. */
-  refocus?: boolean;
   run(): void;
 }
 
@@ -69,12 +67,8 @@ export interface CommandActions {
   askPipToPlan(item: WorkItem): void;
   /** Starts a workstream on `item` and shows its conversation in the Pip pane. */
   startWorkstreamOn(item: WorkItem): void;
-  /** Opens Start my day on Agents again, whether or not it was set aside today. */
-  startMyDay(): void;
   /** Opens "What Jira saw from me": everything Gossamr posted to Jira. */
   openJiraSent(): void;
-  /** Opens Plan my week on Agents: a short proposal of what to work on this week, to reorder, trim and keep. */
-  planMyWeek(): void;
   /** Gives back what "Looks fine" taught the clarity notice, in every project. */
   giveBackClarity(): void;
 }
@@ -146,8 +140,6 @@ export function buildCommands(containers: readonly WorkContainer[], savedViews: 
     { id: "app:drafts", group: "Go to", icon: "→", label: "Open drafts", keywords: "pip proposals review waiting", run: a.openDrafts },
     { id: "app:jira-sent", group: "Go to", icon: "→", label: "What Jira saw from me", keywords: "posted sent wrote comments moves transitions descriptions subtasks audit history", run: a.openJiraSent },
     { id: "app:settings", group: "Go to", icon: "⚙", label: "Open settings", keywords: "preferences", run: a.openSettings },
-    { id: "app:start-my-day", group: "Go to", icon: "☀", label: "Start my day", keywords: "morning today summary needs you unclear reporter waiting cobweb drafts", refocus: true, run: a.startMyDay },
-    { id: "app:plan-my-week", group: "Go to", icon: "☷", label: "Plan my week", keywords: "plan week this week priorities what to work on focus", run: a.planMyWeek },
     // Before "Stop all agents…" in the list, so the query "agents" lands here first.
     ...(!ctx.onAgents ? [{ id: "app:agents", group: "Go to" as const, icon: "→", label: "Open Agents", keywords: "agents running capacity operations stop all workstreams needs you", run: a.openAgents }] : []),
     ...FILTERS.map(
@@ -227,8 +219,7 @@ export function rankCommands(commands: readonly Command[], query: string): Comma
     const perWord = words.map((w) => Math.min(...fields.map((f) => score(f, w) ?? Infinity)));
     if (perWord.every(Number.isFinite)) ranked.push({ command, rank: perWord.reduce((a, b) => a + b, 0) });
   }
-  // Equal matches keep their order, except that one that only refocuses follows one that does something new ("start": Start a workstream… before Start my day).
-  return ranked.sort((x, y) => x.rank - y.rank || Number(!!x.command.refocus) - Number(!!y.command.refocus)).map((r) => r.command);
+  return ranked.sort((x, y) => x.rank - y.rank).map((r) => r.command);
 }
 
 /**

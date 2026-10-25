@@ -1,10 +1,9 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
-import { advanceRuns, agentsHome, askPip, backdateWorkstream, editTicket, expandAllNeeds, expandNeedsYou, expectToast, githubWrites, groupByState, heldBanner, holdAll, holdBySystem, homeComposer, homeRunCards, homeSettled, inlineStart, jiraWrites, manageSwitch, mockRuns, needOfKind, needRow, needsPane, needsYouCount, needsYouTray, openAgents, openApp, openPip, paneSettled as settled, peekSheet, peekTicket, pipConversation, pipPane, scriptNextRun, seedWorkstreamEvent, selectWorkstream, setBudget, startWorkstream, stepRail, still, surfacePullRequests, wakes, workstreamEvents, workstreamGroup, workstreamWeb, workstreamWebText, openNeedOfKind, groupOpen, needsStack, showWorkspace } from "./support/app";
+import { advanceRuns, agentsHome, askPip, editTicket, expandAllNeeds, expandNeedsYou, expectToast, githubWrites, groupByState, heldBanner, holdAll, holdBySystem, homeComposer, homeRunCards, homeSettled, inlineStart, jiraWrites, manageSwitch, mockRuns, needOfKind, needRow, needsPane, needsYouCount, needsYouTray, openAgents, openApp, openPip, paneSettled as settled, peekSheet, peekTicket, pipConversation, pipPane, scriptNextRun, seedWorkstreamEvent, selectWorkstream, setBudget, startWorkstream, stepRail, still, surfacePullRequests, wakes, workstreamEvents, workstreamGroup, openNeedOfKind, groupOpen, needsStack } from "./support/app";
 
 // Two product decisions (docs/needs-you.md): a hold the person chose is not a need, and the automatic budget is one unit,
 // "automatic steps", whose running out is a Decide question in Needs you with "Allow 5 more" and "Switch to Advise".
-// Then two more: Pip speaks up when a ticket is unclear (at intake, and as a hard stop after the triage), and a workstream
-// where work is happening but Jira hasn't heard grows a cobweb.
+// Then one more: Pip speaks up when a ticket is unclear (at intake, and as a hard stop after the triage).
 
 const MANAGED = "runs=empty&prSurface=manual&wsManage=1&pipPace=1";
 
@@ -479,89 +478,9 @@ test.describe("D1: Pip speaks up when a ticket is unclear", () => {
 });
 
 
-// A workstream where work is happening but Jira hasn't heard grows a cobweb.
-
-const ago = (days: number) => new Date(Date.now() - days * 86_400_000).toISOString();
-
-test.describe("D2: a workstream where work is happening but Jira hasn't heard", () => {
-  test("grows a cobweb on its row only once agents or Pip worked since the person's last post, says so in words, and is never a need", async ({ page }) => {
-    test.setTimeout(90_000);
-    await openApp(page, MANAGED);
-    // CA-403: quiet and nothing happens. CA-402: an agent starts. CA-401: Pip will take a turn.
-    await startWorkstream(page, "CA-403");
-    await startWorkstream(page, "CA-402");
-    await startInvestigation(page, "CA-402");
-    // The agent started working: a run queued is not one that started.
-    await advanceRuns(page, 2, (await newest(page, "investigate"))!.id);
-    await startWorkstream(page, "CA-401");
-    // The last post to Jira was 6 days ago in two of them; CA-403 never posted and opened 6 days ago.
-    await seedWorkstreamEvent(page, "CA-402", { actor: "person", action: "review_posted", at: ago(6) });
-    await seedWorkstreamEvent(page, "CA-401", { actor: "person", action: "review_posted", at: ago(6) });
-    await backdateWorkstream(page, "CA-403", 6);
-    await openAgents(page);
-
-    // Six days without a word to Jira, but nothing happened in CA-403 or CA-401 since: no cobweb. The ticket list's own covers a ticket nobody touches.
-    for (const key of ["CA-403", "CA-401"]) {
-      await expect(workstreamGroup(page, key)).toBeVisible();
-      await expect(workstreamWeb(page, key)).toHaveCount(0);
-      await expect(workstreamGroup(page, key)).not.toHaveAttribute("data-wither", /.+/);
-    }
-    // An agent started in CA-402 (and Pip answered the request): work since the post, so its row has the web.
-    const row = workstreamGroup(page, "CA-402");
-    const words = /^No Jira update for 6 days \(1 run and 1 Pip turn since\)$/;
-    await expect(workstreamWeb(page, "CA-402")).toHaveCount(1);
-    await expect(row).toHaveAttribute("data-wither", "3");
-    await expect(row.locator("[data-workstream-wither]")).toHaveAttribute("title", words);
-    await expect(workstreamWebText(page, "CA-402")).toHaveText(words);
-    // A screen reader gets the same words with the row; the drawing is hidden from it.
-    await expect(workstreamWeb(page, "CA-402")).toHaveAttribute("aria-hidden", "true");
-
-    // Pip taking a turn in CA-401 is work too: its row grows one, counting that turn.
-    await selectWorkstream(page, "CA-401");
-    await homeComposer(page).fill("where do we stand?");
-    await homeComposer(page).press("Enter");
-    await homeSettled(page);
-    await expect(workstreamWeb(page, "CA-401")).toHaveCount(1);
-    await expect(workstreamWebText(page, "CA-401")).toHaveText("No Jira update for 6 days (1 Pip turn since)");
-    await expect(workstreamWeb(page, "CA-403")).toHaveCount(0);
-
-    // It is a look, not a duty: no need, no count anywhere.
-    await expect(needsYouCount(page)).toHaveText("0");
-    await expect(needsYouTray(page)).toContainText("Nothing needs you.");
-    await expect(homeButton(page)).toHaveAccessibleName("Agents");
-    await expect(needOfKind(page, "readiness")).toHaveCount(0);
-  });
-
-  test("starts from when the workstream opened until the person posts, and a post to Jira clears it", async ({ page }) => {
-    test.setTimeout(90_000);
-    await openApp(page, MANAGED);
-    await startWorkstream(page, "CA-402");
-    await backdateWorkstream(page, "CA-402", 8);
-    await startInvestigation(page, "CA-402");
-    await finish(page, (await newest(page, "investigate"))!.id);
-    await openAgents(page);
-    const web = workstreamWeb(page, "CA-402");
-    // No post yet: the clock runs from when it opened, 8 days ago.
-    await expect(web).toHaveCount(1);
-    await expect(workstreamGroup(page, "CA-402")).toHaveAttribute("data-wither", "4");
-    await expect(workstreamWebText(page, "CA-402")).toHaveText(/^No Jira update for 8 days \(\d+ runs? and \d+ Pip turns? since\)$/);
-
-    // The person approves the comment the investigation drafted: that is a post, and the clock starts again.
-    await selectWorkstream(page, "CA-402");
-    await openNeedOfKind(page, "draft");
-    await needsPane(page).getByRole("button", { name: "Post comment" }).click();
-    await expect.poll(async () => (await jiraWrites(page)).map((w) => [w.type, w.key])).toEqual([["comment", "CA-402"]]);
-    await expect(web).toHaveCount(0);
-    // Nothing waits on the person in it now, so the Needs you filter that opened the draft no longer lists it: All does.
-    await agentsHome(page).locator('[data-chip="all"]').click();
-    await expect(workstreamGroup(page, "CA-402")).not.toHaveAttribute("data-wither", /.+/);
-    await expect(workstreamWebText(page, "CA-402")).toHaveCount(0);
-  });
-});
-
 // Layout and explanations (dogfood B1, B4, B6, B10): Needs you is Pip home's main left column and the screen is named; a
 // decision shows once, in the pane, which scrolls alone and never hides text behind its action bar; Runs across every
-// workstream stays in the timeline; and the mode switch and the first permission prompt explain themselves.
+// workstream stays in the timeline; and the mode switch explains itself.
 
 const home = (page: Page) => agentsHome(page);
 const boxOf = async (loc: Locator) => (await loc.boundingBox())!;
@@ -641,46 +560,6 @@ test.describe("B10: the switch and the first permission prompt explain themselve
     await expect(paneLine).toHaveText(ADVISE);
   });
 
-  test.describe("Allow once and Deny", () => {
-    // The first prompt the person ever sees: the config's seeded profile has it dismissed, so this one starts without.
-    test.beforeEach(async ({ page }) => {
-      await page.addInitScript(() => {
-        if (sessionStorage.getItem("explainer-unseeded")) return;
-        sessionStorage.setItem("explainer-unseeded", "1");
-        const prefs = JSON.parse(localStorage.getItem("gossamr-prefs") ?? "{}");
-        localStorage.setItem("gossamr-prefs", JSON.stringify({ ...prefs, permissionExplainerSeen: false }));
-      });
-    });
-
-    test("the first permission prompt explains both buttons above them with a Got it that is kept, and no later prompt repeats it", async ({ page }) => {
-      await openApp(page, "runs=kinds&prSurface=manual");
-      await openAgents(page);
-      await expandAllNeeds(page);
-      await openNeedOfKind(page, "permission");
-      const ask = needsPane(page).locator("[data-permission-ask]");
-      await expect(ask).toBeVisible();
-      const explainer = ask.locator("[data-permission-explainer]");
-      await expect(explainer).toBeVisible();
-      await expect(explainer).toContainText("Deny tells the agent no, and it carries on without it.");
-      // Above the buttons it explains.
-      const [e, d] = [await boxOf(explainer), await boxOf(ask.locator("[data-permission-decisions]"))];
-      expect(e.y + e.height).toBeLessThanOrEqual(d.y + 1);
-      // Got it dismisses it; the keyboard lands on the prompt's own first answer.
-      await explainer.getByRole("button", { name: "Got it" }).click();
-      await expect(explainer).toHaveCount(0);
-      await expect(ask.locator("[data-permission-decisions] button").first()).toBeFocused();
-      // It stays dismissed across a reload.
-      await page.reload();
-      await showWorkspace(page);
-      await expect(page.getByText("CA-401", { exact: true }).first()).toBeVisible();
-      await openAgents(page);
-      await expandAllNeeds(page);
-      await openNeedOfKind(page, "permission");
-      await expect(needsPane(page).locator("[data-permission-ask]")).toBeVisible();
-      await expect(page.locator("[data-permission-explainer]")).toHaveCount(0);
-      expect(await page.evaluate(() => JSON.parse(localStorage.getItem("gossamr-prefs") ?? "{}").permissionExplainerSeen)).toBe(true);
-    });
-  });
 });
 
 

@@ -663,7 +663,7 @@ describe("every count of needs you and of agents, from one fixture (D4, D5, N3)"
       expect(renderToStaticMarkup(<NeedsYouList needs={list} now={at} />)).toMatch(new RegExp(`data-needs-you-count[^>]*>${n}<`));
       expect(railBadgeText.agents(n)).toBe(needsYouText(n));
       expect(Number(/(\d+) needs? you/.exec(composerFooter(runs, n, at))?.[1])).toBe(n);
-      expect(renderToStaticMarkup(<Launcher needs={n} onOpen={() => {}} nudge={null} />)).toContain(`Ask Pip, ${needsYouText(n)}`);
+      expect(renderToStaticMarkup(<Launcher needs={n} onOpen={() => {}} />)).toContain(`Ask Pip, ${needsYouText(n)}`);
       expect(summaryLine(runs, at, n)).toMatch(new RegExp(`^${n} need you · `));
       // Its agent part: the run needs among them, and Agents has no badge of its own.
       const waiting = list.filter((x) => x.runId);

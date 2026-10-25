@@ -1,7 +1,7 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { agentsHome, editTicket, expectToast, jiraWrites, needsPane, openAgents, openApp, peekSheet, pipPane, selectWorkstream, startWorkstream, workstreamEvents, workstreamGroup } from "./support/app";
 
-// The habits that make the owner look at their tickets and at what goes to Jira: Start my day, What Jira saw from me, a clarity
+// The habits that make the owner look at their tickets and at what goes to Jira: What Jira saw from me, a clarity
 // notice that learns from Looks fine, and a nudge for a reporter who hasn't answered. None of them posts anything by itself.
 
 

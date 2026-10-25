@@ -1,25 +1,17 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useState } from "react";
 import { claude, type PipView } from "../backend/claude";
 import { useClaude } from "../claudeStore";
-import { itemKey } from "../lib/filter";
-import { useWorkspace } from "../workspaceStore";
+import { isPaneConversation } from "../lib/conversations";
 import { needsYouText, useNeedsYou } from "./useNeeds";
-import { askPip } from "./askPip";
 import { useActiveTab } from "./hooks";
-import { nudgeCandidates, nudgeDelay, NUDGE_SHOWN_MS, pickNudge, type Nudge, type NudgeScene } from "./nudges";
 import { PipAvatar } from "./PipAvatar";
-import { lookAt } from "./pipGaze";
-import { chipCount, unassignedIn, useItemScene, useScreen } from "./pipHooks";
 import { usePaneWidths } from "./PaneResizers";
-import { nudgedOutside, runNudges, runStatesNow } from "./pipRuns";
 import { isStillFiltered, usePip, type PipFiltered } from "./pipStore";
 import { usePrefs } from "./prefs";
 import { useRuns } from "./runsStore";
-import { openRunOrNeed } from "./needsActions";
 import { useRunSetup } from "./runSetupStore";
 import { useTabs } from "./tabsStore";
-import { focusedConversation, useWorkstreams } from "./workstreamsStore";
-import { isPaneConversation } from "../lib/conversations";
+import { focusedConversation } from "./workstreamsStore";
 
 /** The line under the filter bar after Pip narrowed the view; hidden once the person edits the filter themselves. */
 export function PipFilterNote({ filtered, onUndo, onDismiss }: { filtered: PipFiltered; onUndo(): void; onDismiss(): void }) {
@@ -63,28 +55,9 @@ export function usePipView() {
   useEffect(() => claude.onPipView(handlePipView), []);
 }
 
-export function Nudge({ text, onOpen, onDismiss, onHold }: { text: string; onOpen(): void; onDismiss(): void; onHold?(held: boolean): void }) {
-  return (
-    <div
-      className="pip-pop relative max-w-[250px] rounded-[14px_14px_4px_14px] border border-ws-sep2 bg-ws-win py-2 pr-7 pl-3 text-sm shadow-ws-pop hover:border-ws-pip"
-      onPointerEnter={() => onHold?.(true)}
-      onPointerLeave={() => onHold?.(false)}
-      onFocus={() => onHold?.(true)}
-      onBlur={() => onHold?.(false)}
-    >
-      <button type="button" onClick={onOpen} className="text-left">
-        {text}
-      </button>
-      <button type="button" aria-label="Dismiss suggestion" onClick={onDismiss} className="absolute top-1 right-1.5 rounded px-1 text-lg leading-none text-ws-ink3 hover:bg-ws-hover">
-        ×
-      </button>
-    </div>
-  );
-}
-
 /**
  * How far the canvases' lists scroll on past their last row while the launcher floats over them, published on <main>
- * as `--ws-launcher-clear`: the launcher's height, its nudge bubble beside it and a margin, so no row stays under them.
+ * as `--ws-launcher-clear`: the launcher's height and a margin, so no row stays under it.
  */
 export const LAUNCHER_CLEAR = 112;
 
@@ -98,17 +71,9 @@ export const LAUNCHER_GUTTER = 104;
 /** Keeps the launcher clear of the footer and, while the ticket peek is open, of the peek. */
 export const launcherStyle = (clearRight = 0) => ({ right: `calc(${clearRight}px + 1.25rem)`, bottom: "calc(var(--ws-footer-h, 2rem) + 0.75rem)" });
 
-export function Launcher({ needs, onOpen, nudge, thinking = false, clearRight = 0 }: { needs: number; onOpen(): void; nudge: ReactNode; thinking?: boolean; clearRight?: number }) {
-  const bubble = useRef<HTMLDivElement>(null);
-  const showing = !!nudge;
-  useEffect(() => {
-    if (showing) requestAnimationFrame(() => lookAt(bubble.current));
-  }, [showing]);
+export function Launcher({ needs, onOpen, thinking = false, clearRight = 0 }: { needs: number; onOpen(): void; thinking?: boolean; clearRight?: number }) {
   return (
     <div data-pip-launcher style={launcherStyle(clearRight)} className="absolute z-30 flex max-w-[calc(100%-2.5rem)] items-center gap-2.5">
-      <div ref={bubble} data-pip-nudge>
-        {nudge}
-      </div>
       <div className="relative">
         <i aria-hidden className="pip-thread pointer-events-none absolute bottom-full left-1/2 h-[46px] w-[1.5px] -translate-x-1/2 opacity-60" />
         <button
@@ -128,89 +93,8 @@ export function Launcher({ needs, onOpen, nudge, thinking = false, clearRight = 
   );
 }
 
-function act(n: Nudge) {
-  const pip = usePip.getState();
-  pip.dismiss(n.id);
-  switch (n.action.type) {
-    case "ask":
-      // A question the page wrote for Pip, with a short line for the person, is asked as it is; any other is left to edit.
-      if (n.action.shown) askPip({ prompt: n.action.prompt, shown: n.action.shown });
-      else pip.openWith(n.action.prompt);
-      break;
-    case "filter":
-      pip.applyFilter(n.action.filter, n.action.note);
-      break;
-    case "open":
-      usePrefs.getState().setPipOpen(true);
-      break;
-    case "open-run":
-      openRunOrNeed(n.action.id);
-      break;
-  }
-}
-
-function NudgeBubble({ nudge }: { nudge: Nudge }) {
-  const [held, setHeld] = useState(false);
-  useEffect(() => {
-    if (held) return;
-    const t = setTimeout(() => usePip.getState().hideNudge(), NUDGE_SHOWN_MS);
-    return () => clearTimeout(t);
-  }, [held, nudge.id]);
-  return <Nudge text={nudge.text} onOpen={() => act(nudge)} onDismiss={() => usePip.getState().dismiss(nudge.id)} onHold={setHeld} />;
-}
-
-/** Shows the first suggestion that is still allowed, unless one is up already or the page is hidden. */
-export function fireNudge(candidates: readonly Nudge[], now: number, hidden: boolean) {
-  const pip = usePip.getState();
-  const next = pip.nudge || hidden ? null : pickNudge(candidates, pip.dismissed, pip.seen);
-  if (next) pip.showNudge(next, now);
-}
-
-/** Suggestions about runs that changed state while the app was open; what was already there at the first read is not news. */
-function useRunNudges(): Nudge[] {
-  const ready = useRuns((s) => s.status === "ready");
-  const runs = useRuns((s) => s.runs);
-  const items = useWorkspace((s) => s.items);
-  const workstreams = useWorkstreams((s) => s.list);
-  const [baseline, setBaseline] = useState<ReadonlySet<string> | null>(null);
-  useEffect(() => {
-    if (ready && baseline === null) setBaseline(new Set(runStatesNow(runs)));
-  }, [ready, baseline, runs]);
-  // A managed workstream's runs are told by Pip's wake turns, so they get no nudge here.
-  return useMemo(
-    () => (baseline ? runNudges(runs, baseline, (r) => (r.item ? items[itemKey(r.item)]?.title : null), nudgedOutside(workstreams)) : []),
-    [baseline, runs, items, workstreams],
-  );
-}
-
-/** Picks suggestions for what is on screen: once the person has stayed put a moment, never one they closed, each only once a session and not too soon after the last. */
-function useNudges() {
-  const screen = useScreen();
-  const item = useItemScene(screen);
-  const runs = useRunNudges();
-  const scene: NudgeScene = useMemo(
-    () => ({ route: screen.route, filter: screen.tab.filter, count: screen.shown.length, chips: chipCount(screen), item, unassignedInView: unassignedIn(screen.shown), runs }),
-    [screen, item, runs],
-  );
-  const candidates = useMemo(() => nudgeCandidates(scene), [scene]);
-  const key = candidates.map((c) => c.id).join("|");
-  // The timer fires up to a gap after `key` changed; the text or filter behind an unchanged id may have moved on since.
-  const latest = useRef(candidates);
-  latest.current = candidates;
-
-  useEffect(() => {
-    const pip = usePip.getState();
-    if (pip.nudge && !candidates.some((c) => c.id === pip.nudge!.id)) pip.hideNudge();
-    const timer = setTimeout(() => fireNudge(latest.current, Date.now(), document.hidden), nudgeDelay(Date.now(), pip.lastNudgeAt));
-    return () => clearTimeout(timer);
-  }, [key]);
-
-  useEffect(() => () => usePip.getState().hideNudge(), []);
-}
-
-/** The floating way in while the pane is closed, with a suggestion when something on screen calls for one. */
+/** The floating way in while the pane is closed. */
 export function PipLauncher() {
-  const nudge = usePip((s) => s.nudge);
   const thinking = useClaude((s) => Object.entries(s.byTicket).some(([id, c]) => isPaneConversation(id) && c.turns.some((t) => t.status === "running")));
   const needs = useNeedsYou().length;
   const peekOpen = useTabs((s) => !!s.selected && s.marked.length <= 1);
@@ -218,9 +102,8 @@ export function PipLauncher() {
   // An agent sheet's own buttons sit where the launcher does, Start agent among them: it steps aside while one is open.
   const runSheetOpen = useRuns((s) => s.sheet !== null);
   const setupOpen = useRunSetup((s) => s.open);
-  useNudges();
   if (runSheetOpen || setupOpen) return null;
-  return <Launcher clearRight={peekOpen ? peekWidth : 0} needs={needs} thinking={thinking} onOpen={() => usePrefs.getState().setPipOpen(true)} nudge={nudge && <NudgeBubble nudge={nudge} />} />;
+  return <Launcher clearRight={peekOpen ? peekWidth : 0} needs={needs} thinking={thinking} onOpen={() => usePrefs.getState().setPipOpen(true)} />;
 }
 
 const MIN_SELECTION = 4;

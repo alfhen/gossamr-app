@@ -10,7 +10,7 @@ const items = await new MockBackend().cacheSearch({ type: "and", filters: [] });
 
 const actions = () => {
   const a = Object.fromEntries(
-    ["goToProject", "openSavedView", "setView", "addFilter", "clearFilters", "setTheme", "openSettings", "manageProjects", "watch", "openTicket", "openActivity", "openDrafts", "newTab", "newTicket", "chooseWorkstream", "togglePip", "startAgent", "startAgentOn", "showNeedsYou", "openAgentSafety", "startWorkstream", "closeWorkstream", "jumpToItem", "askPip", "openAgents", "openWorkstream", "askPipToPlan", "startWorkstreamOn", "startMyDay", "openJiraSent", "giveBackClarity"].map((k) => [k, vi.fn()]),
+    ["goToProject", "openSavedView", "setView", "addFilter", "clearFilters", "setTheme", "openSettings", "manageProjects", "watch", "openTicket", "openActivity", "openDrafts", "newTab", "newTicket", "chooseWorkstream", "togglePip", "startAgent", "startAgentOn", "showNeedsYou", "openAgentSafety", "startWorkstream", "closeWorkstream", "jumpToItem", "askPip", "openAgents", "openWorkstream", "askPipToPlan", "startWorkstreamOn", "openJiraSent", "giveBackClarity"].map((k) => [k, vi.fn()]),
   );
   return a as unknown as CommandActions & Record<keyof CommandActions, ReturnType<typeof vi.fn>>;
 };
@@ -392,20 +392,6 @@ describe("Agents in the palette", () => {
     expect(workstreamCommands(list, "  ", a)).toEqual([]);
   });
 
-  it("ranks a command that does something new above one that only brings a card back, for the same words (G31)", () => {
-    const all = buildCommands(containers, BUILT_IN_VIEWS, actions(), ctx);
-    const labels = rankCommands(all, "start").map((c) => c.label);
-    expect(labels.indexOf("Start a workstream…")).toBeGreaterThanOrEqual(0);
-    expect(labels.indexOf("Start a workstream…")).toBeLessThan(labels.indexOf("Start my day"));
-    expect(all.find((c) => c.id === "app:start-my-day")?.refocus).toBe(true);
-    // Only a tie is broken: a closer match still wins, and equal matches of the same kind keep their order.
-    const a = { id: "a", group: "Go to" as const, label: "Start my day", refocus: true, run: () => {} };
-    const b = { id: "b", group: "Go to" as const, label: "Begin: start here", run: () => {} };
-    const c = { id: "c", group: "Go to" as const, label: "Start over", run: () => {} };
-    expect(rankCommands([a, b, c], "start").map((x) => x.id)).toEqual(["c", "a", "b"]);
-    expect(rankCommands([a, c], "start").map((x) => x.id)).toEqual(["c", "a"]);
-  });
-
   it("asks Pip to plan the ticket a query starting with 'plan' names", () => {
     const a = actions();
     const ca401 = items.find((i) => i.item.key === "CA-401")!;
@@ -522,17 +508,6 @@ describe("Agents in the palette", () => {
 
 describe("the habits in the palette", () => {
   const ctx = { project: null, view: null, unreadActivity: 0 };
-
-  it("offers 'Start my day' and finds it by what it is for", () => {
-    const a = actions();
-    const on = buildCommands(containers, BUILT_IN_VIEWS, a, ctx);
-    const start = on.find((c) => c.id === "app:start-my-day")!;
-    expect(start).toMatchObject({ group: "Go to", label: "Start my day" });
-    expect(rankCommands(on, "start my day")[0].id).toBe("app:start-my-day");
-    expect(rankCommands(on, "morning")[0].id).toBe("app:start-my-day");
-    start.run();
-    expect(a.startMyDay).toHaveBeenCalled();
-  });
 
   it("offers 'What Jira saw from me' always, and finds it by what it shows", () => {
     const a = actions();

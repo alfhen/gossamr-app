@@ -30,7 +30,6 @@ const card = (over: Partial<ItemCardProps> = {}, item: WorkItem = s().items["moc
   item,
   assignee: "Jonas Berg",
   now: new Date("2026-09-30T12:00:00Z"),
-  wither: 0,
   blocked: false,
   needsMe: false,
   unread: false,
@@ -77,15 +76,11 @@ describe("ItemCard", () => {
     expect(out).toContain("ws-card-draft");
   });
 
-  it("keeps the age chip on cards that have gone quiet, above the wither overlay, and puts none on fresh or finished ones", () => {
+  it("keeps the age chip on cards that have gone quiet, and puts none on fresh or finished ones", () => {
     const stale = { ...s().items["mock:DEVOPS-473"], updated: "2026-09-20T12:00:00Z" };
-    const out = render(card({ wither: 5 }, stale));
-    expect(out).toContain("ws-wither ws-wither-3");
-    expect(out).toMatch(/ws-age[^>]*>10d</);
-    expect(out).toContain('class="cobweb"');
-    expect(render(card({ wither: 0 }, { ...stale, updated: "2026-09-30T00:00:00Z" }))).not.toContain("ws-age");
-    expect(render(card({ wither: 0 }, { ...stale, status: { id: "x", name: "Done", category: "done" } }))).not.toContain("ws-age");
-    expect(render(card({ wither: 0 }))).not.toContain("ws-wither");
+    expect(render(card({}, stale))).toMatch(/No update for 10 days[^>]*>10d</);
+    expect(render(card({}, { ...stale, updated: "2026-09-30T00:00:00Z" }))).not.toContain("No update for");
+    expect(render(card({}, { ...stale, status: { id: "x", name: "Done", category: "done" } }))).not.toContain("No update for");
   });
 
   it("opens an actions menu with a move for each target, and approve and skip for a draft", () => {
@@ -228,12 +223,11 @@ describe("AgeView", () => {
     expect(days).toEqual([...days].sort((a, b) => b - a));
   });
 
-  it("has a column per age bucket, holds open items only, and lets cards wither, when the person picked columns", () => {
+  it("has a column per age bucket, and holds open items only, when the person picked columns", () => {
     vi.stubGlobal("localStorage", { getItem: (k: string) => (k === "gossamr-age-layout" ? JSON.stringify("columns") : null), setItem: () => {}, removeItem: () => {} });
     sync();
     const out = renderToStaticMarkup(<AgeView tab={{ ...tab(), view: "age" }} items={itemsByFilter(s(), ALL)} />);
     for (const label of ["Fresh", "This week", "Stale", "Forgotten"]) expect(out).toContain(`aria-label="${label},`);
-    expect(out).toContain("ws-wither");
     expect(out).not.toContain('draggable="true"');
     expect(out).not.toContain("DEVOPS-478");
   });

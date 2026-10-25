@@ -2,10 +2,9 @@ import { expect, test, type Page } from "@playwright/test";
 import { advanceRuns, agentsHome, askPip, editTicket, jiraWrites, mockRuns, needsPane, openAgents, openApp, peekSheet, peekTicket, pipConversation, pipPane, selectWorkstream, startWorkstream, stepChip, needRow } from "./support/app";
 
 // Backlog items of the eighteenth dogfood round: Draft the Build after an approved plan in Advise (G14), the plan reading Approved once its
-// draft is posted (G17), an edited draft reopening as a preview with Edit (G26), and the smaller polish (G27).
+// draft is posted (G17), an edited draft reopening as a preview with Edit (G26), and the rail being a named region (G27).
 
 const MANAGED = "runs=empty&prSurface=manual&wsManage=1";
-const FIRST_RUN = { cookies: [], origins: [] };
 const setup = (page: Page) => page.getByRole("dialog", { name: "Start an agent" });
 const runCards = (page: Page, key: string) => pipPane(page).getByRole("article", { name: `Start an agent: ${key}` });
 const nextLine = (page: Page) => pipPane(page).locator("[data-next-step]");
@@ -109,9 +108,7 @@ test.describe("an edited draft reopens as a preview (G26)", () => {
   });
 });
 
-test.describe("the glossary and the picker (G27)", () => {
-  test.use({ storageState: FIRST_RUN });
-
+test.describe("the rail (G27)", () => {
   test("the left rail is a named region", async ({ page }) => {
     await openApp(page);
     await expect(page.getByRole("complementary", { name: "Workspace sidebar" })).toBeVisible();

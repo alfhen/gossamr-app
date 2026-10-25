@@ -40,15 +40,6 @@ interface WorkViewState {
    * place of a need's decision. It confirms nothing; the person does.
    */
   batch: string | null;
-  /** Plan my week is open above the list. */
-  planOpen: boolean;
-  setPlanOpen(open: boolean): void;
-  /** Start my day is open above the list: asked for with ⌘K, until "Done for now". */
-  dayOpen: boolean;
-  setDayOpen(open: boolean): void;
-  /** The glossary ("What the words mean") is open above the list, after its first-run card was dismissed. */
-  wordsOpen: boolean;
-  setWordsOpen(open: boolean): void;
   /** Opens group `gid`'s combined preview of its safe drafts, for the person to confirm. */
   previewBatch(gid: string): void;
   /** Opens need `key`'s decision. */
@@ -73,7 +64,7 @@ interface WorkViewState {
   reset(): void;
 }
 
-const BLANK = { selected: null, showClosed: false, focusTarget: null, deciding: null, paneRev: 0, focusRev: 0, expanded: new Set<string>(), collapsed: new Set<string>(), asking: null, batch: null, planOpen: false, dayOpen: false, wordsOpen: false } as const;
+const BLANK = { selected: null, showClosed: false, focusTarget: null, deciding: null, paneRev: 0, focusRev: 0, expanded: new Set<string>(), collapsed: new Set<string>(), asking: null, batch: null } as const;
 
 export const useWorkView = create<WorkViewState>((set) => ({
   ...BLANK,
@@ -94,9 +85,6 @@ export const useWorkView = create<WorkViewState>((set) => ({
     ),
   ask: (asking) => set({ asking }),
   previewBatch: (gid) => set((s) => ({ batch: gid, deciding: null, asking: null, expanded: new Set([...s.expanded, gid]), collapsed: new Set([...s.collapsed].filter((x) => x !== gid)) })),
-  setPlanOpen: (planOpen) => set({ planOpen }),
-  setDayOpen: (dayOpen) => set({ dayOpen }),
-  setWordsOpen: (wordsOpen) => set({ wordsOpen }),
   reset: () => set({ ...BLANK }),
 }));
 

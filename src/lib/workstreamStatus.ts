@@ -5,7 +5,6 @@ import { workstreamOf } from "./proposals";
 import { NUDGE_AFTER_DAYS, answersDue, waitedDays } from "./reporterWait";
 import { isHeldByYou, shortHeld } from "./workstreamHold";
 import { STAGE_LABEL } from "./workstreamStage";
-import { witherShort, type WorkstreamWither } from "./workstreamWither";
 
 /**
  * One status word per workstream, the first of these that applies. The order is the one docs/needs-you.md gives its
@@ -20,13 +19,12 @@ import { witherShort, type WorkstreamWither } from "./workstreamWither";
  * 3. `waiting`: asked the reporter; nothing starts on its own until they answer. Above Running because a run that is
  *    still finishing doesn't change what the workstream is waiting for.
  * 4. `running`: a run is active (or queued for a slot).
- * 5. `quiet`: nothing has happened for a while, or the cobweb has grown ("work is happening but Jira hasn't heard").
- *    Never for a closed workstream.
+ * 5. `quiet`: nothing has happened for a while. Never for a closed workstream.
  * 6. `done`: closed, or its stage is done.
  * 7. `idle`: none of the above. A word-check notice ("may be unclear", `view.clarity`) is not a need, so it stays Idle and says so in
  *    the detail: the pill agrees with Needs you, which counts nothing for it.
  *
- * Pure: `now`, the runs, the cobweb and the quiet limit are given.
+ * Pure: `now`, the runs and the quiet limit are given.
  */
 export type StatusState = "needs-you" | "held" | "waiting" | "running" | "quiet" | "done" | "idle";
 
@@ -38,13 +36,13 @@ export const STATUS_TONE: Record<StatusState, StatusTone> = { "needs-you": "pip"
 /** The words a state is shown with; a hold the person chose says so ("Held by you"). */
 export const STATUS_WORD: Record<StatusState, string> = { "needs-you": "Needs you", held: "Held", waiting: "Waiting on reporter", running: "Running", quiet: "Quiet", done: "Done", idle: "Idle" };
 
-/** What each word means, for the pill's tooltip and the glossary: what is going on, and what ends it. */
+/** What each word means, for the pill's tooltip: what is going on, and what ends it. */
 export const STATUS_HINT: Record<StatusState, string> = {
   "needs-you": "Something in this workstream waits on a decision from you. Open it in Needs you.",
   held: "No wakes and no automatic steps until the hold is lifted: Resume it when you are ready.",
   waiting: `You asked the reporter on the ticket. A comment there ends the wait; after ${NUDGE_AFTER_DAYS} days Gossamr offers a nudge.`,
   running: "A Claude Code run is working on a step, or is queued for a slot.",
-  quiet: "Nothing has happened for a while, or work is happening that Jira has not heard about.",
+  quiet: "Nothing has happened in this workstream for a while.",
   done: "The workstream is closed, or its work is finished.",
   idle: "Nothing is running and nothing waits on you.",
 };
@@ -64,10 +62,8 @@ export interface WorkstreamStatus {
 export interface StatusMore {
   /** Every run; those of the workstream are read from `view.runs`. */
   runs?: readonly Run[];
-  /** The workstream's cobweb (`useWorkstreamWithers`), when it has one. */
-  wither?: WorkstreamWither | null;
   now?: Date;
-  /** Days without a run or a post before a workstream with no cobweb reads Quiet. */
+  /** Days without a run or a post before a workstream reads Quiet. */
   quietDays?: number;
   /** What "Looks fine" taught the clarity notice: a notice with nothing left to say is not one. */
   learning?: ClarityLearning;
@@ -97,7 +93,7 @@ export const REPLIED_HINT = "The reporter answered on the ticket. Read the reply
 /** How long ago the reporter was asked, as the pill's detail: a bare "0d" does not say what it counts. */
 const askedText = (days: number) => (days === 0 ? "asked today" : days === 1 ? "asked yesterday" : `asked ${days} days ago`);
 
-/** How many days with nothing happening make a workstream Quiet when it has no cobweb to say so. */
+/** How many days with nothing happening make a workstream Quiet. */
 export const QUIET_DAYS = 7;
 
 const RUNNING = new Set<Run["state"]>(["launching", "working"]);
@@ -119,7 +115,7 @@ function heldDetail(reason: string | null | undefined, view: WorkstreamView): st
 }
 
 export function workstreamStatus(view: WorkstreamView, needs: readonly Pick<Need, "workstreamId">[], more: StatusMore = {}): WorkstreamStatus {
-  const { runs = [], wither = null, now = new Date(), quietDays = QUIET_DAYS, learning = {}, answersOwed: owed = false } = more;
+  const { runs = [], now = new Date(), quietDays = QUIET_DAYS, learning = {}, answersOwed: owed = false } = more;
   const ws = view.workstream;
   const make = (state: StatusState, detail: string | null = null, word = STATUS_WORD[state]): WorkstreamStatus => ({ state, word, tone: STATUS_TONE[state], detail });
   const own = runs.filter((r) => view.runs.includes(r.id));
@@ -136,7 +132,6 @@ export function workstreamStatus(view: WorkstreamView, needs: readonly Pick<Need
   const going = furthest((r) => RUNNING.has(r.state)) ?? furthest((r) => r.state === "queued");
   if (going) return make("running", `${STAGE_LABEL[going.spec.kind]}${going.state === "queued" ? " queued" : ""}`);
   if (!ws.closedAt && view.stage !== "done") {
-    if (wither && wither.level > 0) return make("quiet", witherShort(wither));
     const last = lastActivity(view, own);
     if (!Number.isNaN(last) && (now.getTime() - last) / 86_400_000 >= quietDays) return make("quiet", `no activity · ${Math.floor((now.getTime() - last) / 86_400_000)}d`);
   }

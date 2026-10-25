@@ -1,7 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import { advanceRuns, askPip, closeWorkstreamSheet, homeComposer, homeSettled, jiraWrites, mockRuns, needOfKind, needsPane, needsPaneHeading, openAgents, openApp, paneSettled, pipPane, seedWorkstreamEvent, selectWorkstream, startWorkstream, workstreamGroup, openNeedOfKind } from "./support/app";
 
-// Backlog items of the eleventh dogfood round: Start my day's room (G21), dates in the timeline (G22), what the status pill says
+// Backlog items of the eleventh dogfood round: dates in the timeline (G22), what the status pill says
 // besides the count (G23), one question per bullet (G24), a second line on What Jira saw from me (G25), the composer keeping the
 // keyboard after I'll answer (G27), where opening a need lands (G28) and the screens' names and headings (G29).
 

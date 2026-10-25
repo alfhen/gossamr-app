@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { advanceRuns, agentsHome, closeWorkstreamSheet, expandNeedsYou, expectPeekInPlace, finishOnHome, githubWrites, holdBySystem, homeConversation, homeConversationRegion, homeRunCards, homeSettled, inlineStart, jiraWrites, mockRuns, needRow, needsPane, needsPaneHeading, needsYouCount, needsYouTray, openAgents, openApp, peekSheet, scriptNextRun, selectWorkstream, setBudget, startWorkstream, stepChip, stepRail, surfacePullRequests, workstreamEvents, workstreamGroup, openNeedRow, needsStack, openRunOf } from "./support/app";
+import { advanceRuns, agentsHome, askPip, closeWorkstreamSheet, expandNeedsYou, expectPeekInPlace, finishOnHome, githubWrites, holdBySystem, homeConversation, homeConversationRegion, homeRunCards, homeSettled, inlineStart, jiraWrites, mockRuns, needRow, needsPane, needsPaneHeading, needsYouCount, needsYouTray, openAgents, openApp, peekSheet, scriptNextRun, selectWorkstream, setBudget, startWorkstream, stepChip, stepRail, surfacePullRequests, workstreamEvents, workstreamGroup, openNeedRow, needsStack, openRunOf } from "./support/app";
 
 // A workstream in Manage mode, with pull requests shown only when a test says: the setting the phase's scenarios share.
 // GitHub is signed in with a catalog small enough to be watched whole, so the agents' repository is watched, as the
@@ -56,8 +56,8 @@ test("intake to review on Pip home: the person talks to Pip, starts the investig
   await expect(row.locator("[data-stage]")).toHaveText("Intake");
   await expect(stepRail(page).getByRole("switch", { name: "Manage this workstream" })).toHaveAttribute("aria-checked", "true");
 
-  // The workstream's own suggestion asks Pip to investigate: a draft, in the conversation and under Investigate.
-  await homeConversationRegion(page).getByRole("button", { name: "Investigate CA-401", exact: true }).click();
+  // Asking Pip to investigate makes a draft, in the conversation and under Investigate.
+  await askPip(page, "investigate this");
   await homeSettled(page);
   await expect(homeRunCards(page, "CA-401")).toHaveCount(1);
   await expect(stepChip(page, "investigate").locator("[data-step-needs-you]")).toHaveText("1 needs you");
@@ -216,7 +216,7 @@ test("the Needs you list ranks a hold ahead of a draft to approve, opens each in
   const row = workstreamGroup(page, "CA-401");
   await expect(needsYouCount(page)).toHaveText("0");
 
-  await homeConversationRegion(page).getByRole("button", { name: "Investigate CA-401", exact: true }).click();
+  await askPip(page, "investigate this");
   await homeSettled(page);
   // Pip can still be idle just after the click, before its turn starts; a hold then would cancel the turn before it drafts.
   // The draft's need being there is the sign the turn is done. Pip's scripted turn can take longer than the default wait

@@ -7,7 +7,6 @@ import { useNeedsYou } from "./useNeeds";
 import { useNow } from "./useNow";
 import { useWorkspace } from "../workspaceStore";
 import { useWorkstreams } from "./workstreamsStore";
-import { useWorkstreamWithers } from "./useWorkstreamWithers";
 
 /** The pill's colours, from the theme's tokens: filled for what is the person's, soft for the rest, grey for what asks nothing. */
 const TONE: Record<StatusTone, string> = {
@@ -22,7 +21,7 @@ const TONE: Record<StatusTone, string> = {
 /**
  * A workstream's one status word as a small pill (`data-status`, its state in `data-status-state`); its one short detail, if any, follows it.
  * The hint is the mouse's `title` and, for everyone else, a visually hidden line beside the pill that the pill is described by: it is
- * not a tab stop (the rows are walked with F6, j and k), so the row's own text carries it, as the cobweb's does. `describe` is false
+ * not a tab stop (the rows are walked with F6, j and k), so the row's own text carries it. `describe` is false
  * where the caller says the hint itself; `hintId` names the hint's line for a row that is described by it.
  */
 export function StatusPill({ status, title, detail = false, describe = true, hintId: given }: { status: WorkstreamStatus; title?: string; detail?: boolean; describe?: boolean; hintId?: string }) {
@@ -54,12 +53,11 @@ export function useWorkstreamStatus(view: WorkstreamView): WorkstreamStatus {
   const needs = useNeedsYou();
   const learning = usePrefs((s) => s.clarityLearning);
   const now = useNow();
-  const withers = useWorkstreamWithers(useMemo(() => [view], [view]), now);
   const events = useWorkstreams((s) => s.events[view.workstream.id]);
   const drafts = useWorkspace((s) => s.proposals);
   return useMemo(
-    () => workstreamStatus(view, needs, { runs, wither: withers[view.workstream.id] ?? null, now: new Date(now), learning, answersOwed: answersOwed(view.workstream.id, events, Object.values(drafts)) }),
-    [view, needs, runs, withers, now, learning, events, drafts],
+    () => workstreamStatus(view, needs, { runs, now: new Date(now), learning, answersOwed: answersOwed(view.workstream.id, events, Object.values(drafts)) }),
+    [view, needs, runs, now, learning, events, drafts],
   );
 }
 

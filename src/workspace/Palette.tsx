@@ -23,8 +23,6 @@ import { openOnAgents, togglePip, useWorkstreams } from "./workstreamsStore";
 import { contextEntries, focusedSubject } from "./contextActions";
 import { undoLog } from "./undo";
 import { showAllRuns } from "./TimelineFilterBar";
-import { showStartMyDay } from "./StartMyDay";
-import { showPlanMyWeek } from "./planActions";
 import { giveBackClarity } from "./clarityActions";
 import { learnedList } from "../lib/clarityLearning";
 
@@ -267,8 +265,6 @@ export function appActions(): CommandActions {
         .getState()
         .start(item.item)
         .then((view) => view && useToasts.getState().push(`Started a workstream on ${item.item.key}.`, "info")),
-    startMyDay: showStartMyDay,
-    planMyWeek: showPlanMyWeek,
     openJiraSent: () => tabs.setRoute("sent"),
     giveBackClarity: () => void giveBackClarity(),
   };

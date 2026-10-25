@@ -1,13 +1,8 @@
 import { expect, test, type Page } from "@playwright/test";
-import { agentsHome, closeWorkstreamSheet, editTicket, jiraWrites, needsPane, openAgents, openApp, selectWorkstream, startMyDay, startWorkstream, stepRail } from "./support/app";
+import { agentsHome, editTicket, jiraWrites, needsPane, openAgents, openApp, selectWorkstream, startWorkstream, stepRail } from "./support/app";
 
-// Fixes from round 10's backlog: the unclear tickets higher on Start my day (G26), the workstream controls on the steps rail's
-// F6 stop (G27), Ctrl+0 on Pip home going on to General (G28), "N here" on a Needs you group (G30), the palette's and the
+// Fixes from round 10's backlog: the workstream controls on the steps rail's F6 stop (G27), Ctrl+0 on Pip home going on to General (G28), "N here" on a Needs you group (G30), the palette's and the
 // reporter draft's notes (G31) and the toasts leaving with the page and clearing the launcher (G32).
-
-const port = Number(process.env.E2E_PORT ?? 4173);
-/** The seeded profile (e2e/playwright.config.ts) without Start my day set aside, so its card shows. */
-const DAY_DUE = { cookies: [], origins: [{ origin: `http://localhost:${port}`, localStorage: [{ name: "gossamr-prefs", value: JSON.stringify({ pipOrientationSeen: true, permissionExplainerSeen: true }) }] }] };
 
 const THIN = "Fix it.";
 const toast = (page: Page) => page.locator("[data-toast]");
@@ -19,33 +14,6 @@ async function begin(page: Page, key: string) {
   await allProjects(page);
   await startWorkstream(page, key);
 }
-
-test.describe("Start my day puts the unclear tickets above the lines that follow (G26)", () => {
-  test.use({ storageState: DAY_DUE });
-
-  test("the unclear line comes right after the lines that need a decision, before the drafts and the quiet ones", async ({ page }) => {
-    test.setTimeout(120_000);
-    await openApp(page, "runs=empty");
-    for (const key of ["CA-402", "CA-409"]) await editTicket(page, key, { description: THIN });
-    await begin(page, "CA-402");
-    await begin(page, "CA-409");
-    await openAgents(page);
-    await selectWorkstream(page, "CA-402");
-    await notice(page).getByRole("button", { name: "Ask the reporter now" }).click();
-    await page.keyboard.press("Escape");
-    await closeWorkstreamSheet(page);
-    await startMyDay(page);
-    const card = agentsHome(page).locator("[data-start-my-day]");
-    await expect(card).toBeVisible();
-    const kinds = await card.locator("[data-day-line]").evaluateAll((els) => els.map((el) => el.getAttribute("data-day-line")));
-    // The questions draft is a decision now, on the approve line only (round 13, G10), so the unclear line follows that one.
-    expect(kinds).toContain("approve");
-    const unclear = kinds.indexOf("unclear");
-    expect(unclear, kinds.join()).toBeGreaterThan(kinds.indexOf("approve"));
-    for (const later of ["drafts", "reporter", "cobweb"]) if (kinds.includes(later)) expect(unclear, kinds.join()).toBeLessThan(kinds.indexOf(later));
-    expect(kinds.filter((k) => k === "unclear")).toHaveLength(1);
-  });
-});
 
 test.describe("what the palette and the reporter draft say (G31)", () => {
   test("'Start a workstream' says it starts no agent and posts nothing", async ({ page }) => {

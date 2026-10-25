@@ -25,10 +25,10 @@ export function Avatar({ name }: { name: string }) {
   );
 }
 
-/** Days quiet, coloured by how long; `ws-age` keeps it above the wither overlay. */
+/** Days quiet, coloured by how long. */
 export function AgeChip({ days, className = "" }: { days: number; className?: string }) {
   return (
-    <span className={`ws-age text-xs font-semibold ${AGE_TEXT[ageLevel(days)]} ${className}`} title={`No update for ${days} days`}>
+    <span className={`text-xs font-semibold ${AGE_TEXT[ageLevel(days)]} ${className}`} title={`No update for ${days} days`}>
       {days}d
     </span>
   );

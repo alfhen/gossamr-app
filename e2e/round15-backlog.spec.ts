@@ -1,22 +1,8 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test } from "@playwright/test";
 import { agentsHome, commentOnTicket, editTicket, expectToast, needsPane, needsYouTray, openAgents, openApp, selectWorkstream, startWorkstream, needsStack } from "./support/app";
 
 // Backlog items of the fifteenth dogfood round: a secret masked in the person's own bubble (G16), the note that the reporter is
-// waited on taken back once they reply (G23), an edited draft marked in Needs you (G25), Esc folding the glossary (G32) and Plan my week saying whose tickets it covers (G30).
-
-const palette = (page: Page) => page.getByRole("dialog", { name: "Command palette" });
-
-test.describe("the glossary and Plan my week (G32, G30)", () => {
-  test("Plan my week opened from a workstream says it covers all your tickets", async ({ page }) => {
-    test.setTimeout(120_000);
-    await openApp(page, "runs=empty");
-    await openAgents(page);
-    await page.keyboard.press("ControlOrMeta+k");
-    await palette(page).getByRole("combobox").fill("plan my week");
-    await page.keyboard.press("Enter");
-    await expect(agentsHome(page).locator("[data-plan-scope]")).toContainText("all your tickets");
-  });
-});
+// waited on taken back once they reply (G23) and an edited draft marked in Needs you (G25).
 
 test.describe("a draft the person edited (G25)", () => {
   test("is marked edited in Needs you once Done editing is pressed", async ({ page }) => {

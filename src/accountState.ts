@@ -15,13 +15,13 @@ const lastAccount = (): string | null => {
 
 /**
  * Clears what belongs to one account before another (or none) is shown. Conversations, Pip's filter and the loaded
- * workspace are dropped every time. Tabs, saved views and closed suggestions refer to one account's projects, so they
+ * workspace are dropped every time. Tabs and saved views refer to one account's projects, so they
  * survive a restart but not a different account.
  */
 export function resetAccountState(accountId: string | null) {
   const changed = accountId !== lastAccount();
   forgetConversations();
-  resetPip(changed);
+  resetPip();
   // The open workstream and decision belong to the account shown before.
   useWorkView.getState().reset();
   useWorkspace.getState().dispose();

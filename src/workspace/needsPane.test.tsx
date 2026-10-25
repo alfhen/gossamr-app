@@ -207,7 +207,7 @@ describe("Esc from a decision (G7)", () => {
   const row = el({ id: "row" });
   const paneOf = (inside: unknown[]) => ({ contains: (n: unknown) => inside.includes(n) });
 
-  it("gives the keyboard back to what opened the need, such as Start my day's Open", () => {
+  it("gives the keyboard back to what opened the need, such as a button elsewhere on the page", () => {
     const open = el();
     expect(closeTarget(open, paneOf([]), () => row)).toBe(open);
   });

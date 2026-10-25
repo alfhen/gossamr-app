@@ -1,19 +1,15 @@
 import { repeatedComments, safeToBatch } from "../lib/needs";
-import { inWorkstreamPane } from "../lib/proposals";
 import { shortHeld } from "../lib/workstreamHold";
 import { byQueue, REVIEW_POSTED, reviewPosted, STAGE_LABEL } from "../lib/workstreamStage";
-import type { CodeChange, Proposal, ReviewView, Run, RunKind, WorkstreamEvent, WorkstreamView } from "../types";
+import type { CodeChange, Proposal, ReviewView, Run, RunKind, WorkstreamEvent } from "../types";
 import { liveCounts, liveWords, needsPerson, runApproved, stateView, stoppedAtLimit, type Tone } from "./agentsLogic";
 import { keptEditsOfDraft } from "./DraftCard";
 import { liveDraft } from "./draftLive";
 import { shownVerdict, verdictChip } from "./runSheetLogic";
-import type { WorkstreamSuggestionScene } from "./suggestions";
 
 /** Pure helpers behind a workstream's step rail and the drawer's footer. They read the live stores' values and decide nothing. */
 
 export { shortHeld };
-
-const RUNNING = new Set<Run["state"]>(["launching", "working"]);
 
 /** When a workstream was last held, from its audit (`events`, oldest first); null when the audit never says. */
 export function lastHeldAt(events: readonly Pick<WorkstreamEvent, "action" | "at">[]): string | null {
@@ -224,40 +220,4 @@ export function composerFooter(runs: readonly Run[], needsYou: number, now: numb
   const agents = [live.running ? `${live.running} ${live.running === 1 ? "agent" : "agents"} running` : "Nothing running", ...(live.quiet ? [`${live.quiet} quiet`] : []), ...rest];
   const n = needsYou;
   return [...agents, n === 0 ? "nothing needs you" : `${n} ${n === 1 ? "needs" : "need"} you`].join(" · ");
-}
-
-/** The plan's description update of workstream `view` that waits for the person, the newest if there are several; null when none does. */
-export function planRewriteDraft(view: WorkstreamView, runs: readonly Run[], proposals: readonly Proposal[]): Proposal | null {
-  const own = runs.filter((r) => view.runs.includes(r.id) || r.spec.workstream === view.workstream.id);
-  const plans = proposals.filter((p) => p.state.type === "pending" && p.intent.type === "rewrite" && inWorkstreamPane(p, view.workstream) && draftStep(p, own) === "plan");
-  return plans.sort((a, b) => a.createdAt.localeCompare(b.createdAt)).pop() ?? null;
-}
-
-/** The parts of a turn the suggestion scene reads: whether Pip was woken, and in what order. */
-type SceneTurn = { kind?: "user" | "wake" };
-
-/**
- * What the suggestion chips need to know about workstream `view`: where it stands, whether it is held, whether a plan's
- * description update or a run start waits, whether it was investigated, whether Pip was woken since the person last
- * wrote (`turns`, its conversation's, oldest first), and the run at work, by its label.
- */
-export function workstreamSuggestionScene(view: WorkstreamView, runs: readonly Run[], proposals: readonly Proposal[], turns: readonly SceneTurn[], cobweb = false): WorkstreamSuggestionScene {
-  const own = runs.filter((r) => view.runs.includes(r.id) || r.spec.workstream === view.workstream.id);
-  const pending = proposals.filter((p) => p.state.type === "pending" && inWorkstreamPane(p, view.workstream));
-  const labels = new Map(view.labels);
-  const going = own.filter((r) => RUNNING.has(r.state)).sort(byQueue).pop();
-  const lastAsked = turns.map((t) => t.kind ?? "user").lastIndexOf("user");
-  return {
-    key: view.workstream.itemKey,
-    stage: view.stage,
-    mode: view.workstream.mode,
-    heldReason: view.workstream.heldReason,
-    hasPendingPlanRewrite: planRewriteDraft(view, runs, proposals) !== null,
-    hasPendingStartDraft: pending.some((p) => p.intent.type === "startRun"),
-    investigated: own.some((r) => r.spec.kind === "investigate" && r.state === "done"),
-    woke: turns.slice(lastAsked + 1).some((t) => t.kind === "wake"),
-    running: going ? (labels.get(going.id) ?? null) : null,
-    unclear: !!view.readiness,
-    cobweb,
-  };
 }

@@ -6,27 +6,11 @@ export interface Waiting {
   since: string;
 }
 
-/**
- * Days after which something reaches each withering stage: it starts to dry out, gathers a cobweb, then one, two and
- * three spiders. For open tickets with no updates, and requests with no reply.
- */
-export const WITHER_DAYS = { ticket: [2, 3, 5, 7, 10], waiting: [1, 3, 5, 7, 10] } as const;
-
-export type WitherLevel = 0 | 1 | 2 | 3 | 4 | 5;
-
 /** A wait as its largest whole unit, such as "40m", "5h" or "12d". */
 export function age(since: string, now: Date): string {
   const m = Math.max(0, Math.floor((now.getTime() - new Date(since).getTime()) / 60_000));
   return m < 60 ? `${m}m` : m < 1440 ? `${Math.floor(m / 60)}h` : `${Math.floor(m / 1440)}d`;
 }
-
-export function witherLevel(since: string, now: Date, stages: readonly number[]): WitherLevel {
-  const days = (now.getTime() - new Date(since).getTime()) / 86_400_000;
-  return stages.filter((d) => days >= d).length as WitherLevel;
-}
-
-/** The classes that dry a row out at `level` (src/workspace/board.css). */
-export const witherClass = (level: WitherLevel): string => (level ? `ws-wither ws-wither-${Math.min(level, 3)}` : "");
 
 export type StatusTone = "todo" | "progress" | "review" | "blocked" | "done";
 

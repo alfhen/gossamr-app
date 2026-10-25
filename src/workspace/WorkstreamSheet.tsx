@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import { itemKey } from "../lib/filter";
 import { needsIn } from "../lib/needs";
 import { stageText } from "../lib/workstreamStage";
 import type { WorkstreamView } from "../types";
@@ -12,13 +13,21 @@ import { useRuns } from "./runsStore";
 import { useTabs } from "./tabsStore";
 import { isTypingTarget } from "./workKeys";
 import { StepRail } from "./StepRail";
-import { runDayAction } from "./StartMyDay";
+import { openTicketByKey } from "./jump";
 import { NO_WORKSTREAM_ID, useWorkView, type WorkViewFocus } from "./workViewStore";
 import { WorkstreamNeeds } from "./NeedsPane";
 import { useNeedsYou } from "./useNeeds";
 import { focusPip, useWorkstreams } from "./workstreamsStore";
+import { useWorkspace } from "../workspaceStore";
 
 export const WORKSTREAM_SHEET_ID = "workstream-sheet";
+
+/** Opens the ticket in the peek over Agents; a ticket that isn't synced is read live. */
+function openTicket(key: string) {
+  const cached = Object.values(useWorkspace.getState().items).find((i) => i.item.key === key);
+  if (cached) return useTabs.getState().select(itemKey(cached.item));
+  void openTicketByKey(key);
+}
 
 /**
  * The element in an open workstream's detail `target` names: a draft's card, a run's card, the held banner's Resume (the
@@ -76,7 +85,7 @@ function Body({ view }: { view: WorkstreamView }) {
         </span>
         <span className="flex-1" />
         {ws.itemKey && (
-          <Btn tone="ghost" data-workstream-ticket onClick={() => runDayAction({ type: "ticket", key: ws.itemKey! })}>
+          <Btn tone="ghost" data-workstream-ticket onClick={() => openTicket(ws.itemKey!)}>
             Open {ws.itemKey}
           </Btn>
         )}

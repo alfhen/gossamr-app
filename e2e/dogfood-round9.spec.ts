@@ -1,12 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
-import { agentsHome, jiraWrites, needsPane, openAgents, openApp, pipPane, selectWorkstream, startMyDay, startWorkstream, workstreamGroup } from "./support/app";
+import { agentsHome, needsPane, openAgents, openApp, pipPane, selectWorkstream, startWorkstream, workstreamGroup } from "./support/app";
 
-// Fixes from the ninth dogfood round: the Held toast that goes with Resume (G10), Plan my week naming a Done ticket typed by
-// its words (G12), and the words the owner posts to Jira (G3).
-
-const port = Number(process.env.E2E_PORT ?? 4173);
-/** The seeded profile (e2e/playwright.config.ts) without Start my day set aside, so its card shows. */
-const DAY_DUE = { cookies: [], origins: [{ origin: `http://localhost:${port}`, localStorage: [{ name: "gossamr-prefs", value: JSON.stringify({ pipOrientationSeen: true, permissionExplainerSeen: true }) }] }] };
+// Fixes from the ninth dogfood round: the Held toast that goes with Resume (G10) and the words the owner posts to Jira (G3).
 
 const toast = (page: Page) => page.locator("[data-toast]");
 
@@ -22,23 +17,6 @@ test.describe("the Held toast (G10)", () => {
     await agentsHome(page).getByRole("button", { name: "Resume", exact: true }).click();
     await expect(pipPane(page).locator("[data-held-banner]")).toHaveCount(0);
     await expect(toast(page).filter({ hasText: "Held CA-401." })).toHaveCount(0);
-  });
-});
-
-test.describe("adding a Done ticket to the plan by its words (G12)", () => {
-  test.use({ storageState: DAY_DUE });
-
-  test("says the ticket is Done in Jira, not that no open ticket matches", async ({ page }) => {
-    test.setTimeout(90_000);
-    await openApp(page, "runs=empty");
-    await openAgents(page);
-    await startMyDay(page);
-    await agentsHome(page).locator("[data-start-my-day]").getByRole("button", { name: "Plan my week" }).click();
-    const plan = agentsHome(page).locator("[data-plan-my-week]");
-    await plan.locator("[data-plan-add]").fill("queue library");
-    await plan.locator("[data-plan-add-go]").click();
-    await expect(plan.locator("[data-plan-missing]")).toHaveText("DEVOPS-478 is Done in Jira.");
-    expect(await jiraWrites(page)).toEqual([]);
   });
 });
 

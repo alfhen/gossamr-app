@@ -10,7 +10,6 @@ import { DraftCard, keepEditsOfDraft, settleKeptEdits } from "./DraftCard";
 import { liveDraft, setLiveDraft } from "./draftLive";
 import { reporterAnswered, pushWaitToast } from "./NeedsPane";
 import { TurnView } from "./PipConversation";
-import { ORIENTATION_TERMS } from "./PipOrientation";
 import { stepBatchLabel } from "./workViewLogic";
 import { StepDrafts } from "./StepRail";
 import { useToasts } from "./toasts";
@@ -151,13 +150,5 @@ describe("the step rail's batch (G26)", () => {
     // While the batch is being confirmed the note stays, so the person sees what it leaves out as they decide (CodeRabbit on #181).
     const confirming = renderToStaticMarkup(<StepDrafts step="pip" drafts={[draft("b1", "One"), draft("b2", "Two"), answers("b3")]} approve={vi.fn()} initialConfirming />);
     expect(confirming).toContain("data-batch-aside");
-  });
-});
-
-describe("the glossary (G28)", () => {
-  it("names the stages and the status words as well", () => {
-    const terms = ORIENTATION_TERMS.map((t) => t.term);
-    for (const t of ["Triage", "Plan", "Build", "Review", "Pushing", "Held", "Quiet", "Idle"]) expect(terms).toContain(t);
-    expect(ORIENTATION_TERMS.find((t) => t.term === "Review")!.text).toContain("Three things share the word");
   });
 });

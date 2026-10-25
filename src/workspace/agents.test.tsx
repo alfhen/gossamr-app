@@ -20,14 +20,7 @@ import { LAUNCHER_GUTTER } from "./PipExtras";
 import { DENY_QUESTION, DenyConfirm, StopRunConfirm, stopRunQuestion } from "./PermissionAsk";
 import { useActivity } from "./activityStore";
 import { Rail, railBadgeText } from "./Rail";
-import { usePrefs } from "./prefs";
 import { useRuns } from "./runsStore";
-
-/** Server rendering reads a store's initial state, so the flag is set on both. */
-const explainerSeen = (seen: boolean) => {
-  usePrefs.setState({ permissionExplainerSeen: seen });
-  Object.assign(usePrefs.getInitialState(), { permissionExplainerSeen: seen });
-};
 
 const NOW = Date.parse("2026-09-30T12:00:00Z");
 const iso = (minutesAgo: number) => new Date(NOW - minutesAgo * 60_000).toISOString();
@@ -98,8 +91,6 @@ const card = (r: Run, opened = false) =>
 
 beforeEach(() => {
   vi.stubGlobal("localStorage", { getItem: () => null, setItem: () => {}, removeItem: () => {} });
-  // The permission prompt's one-time explainer is dismissed here, so the cards read as the prompt itself.
-  explainerSeen(true);
 });
 
 const failures = () => new MockBackend({ runs: { seed: "failures" } }).runs.list();

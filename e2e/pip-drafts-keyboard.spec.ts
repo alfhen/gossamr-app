@@ -182,7 +182,7 @@ test("a on a run draft opens its setup and starts nothing", async ({ page }) => 
   await expect(runs).toHaveCount(before);
 });
 
-test("the pane keeps its header, chips and input", async ({ page }) => {
+test("the pane keeps its header and input", async ({ page }) => {
   await openApp(page);
   await openPip(page);
   const pane = pipPane(page);
@@ -194,8 +194,7 @@ test("the pane keeps its header, chips and input", async ({ page }) => {
   await expect(page.locator(PIP_INPUT)).toBeFocused();
   await expect(page.locator(PIP_INPUT)).toHaveAttribute("aria-label", "Ask Pip");
   await expect(pane.getByRole("button", { name: "Ask" })).toBeDisabled();
-  await expect(pane.locator(":scope > div.flex-wrap > button").first()).toBeVisible();
-  // Order inside the pane: header, conversation, chips, then the form, with the status line under it.
+  // Order inside the pane: header, conversation, then the form, with the status line under it.
   const order = await pane.evaluate((el) => [...el.children].map((c) => c.tagName.toLowerCase()));
   expect(order.slice(-2)).toEqual(["form", "p"]);
   expect(order.indexOf("header")).toBeLessThan(order.indexOf("form"));

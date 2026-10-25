@@ -7,83 +7,23 @@ import { ALL } from "../lib/filter";
 import type { Proposal, ScreenContext } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { DraftPreview, draftPreviewBody } from "./DraftPreview";
-import { AskPipButton, askPlacement, fireNudge, Launcher, Nudge } from "./PipExtras";
+import { AskPipButton, askPlacement, Launcher } from "./PipExtras";
 import { AppliedCard, ContextChip, escapeClosesPane, SeeingPanel } from "./PipPane";
 import { typingIn } from "./PeekSheet";
 import { PipAvatar } from "./PipAvatar";
 import { pupilOffset } from "./pipGaze";
-import { itemScene, STALE_DAYS } from "./pipScene";
 import { appliedState, usePip } from "./pipStore";
 import { contextLabel, contextLines } from "./screenContext";
-import { suggestionsFor, type SuggestionScene } from "./suggestions";
 import { loadTabs, useTabs } from "./tabsStore";
 
 const ws = () => useWorkspace.getState();
-const world = (now = Date.now()) => ({ items: ws().items, needsMe: ws().needsMe, names: ws().names, me: ws().me, now });
 
 beforeEach(async () => {
   vi.stubGlobal("localStorage", { getItem: () => null, setItem: () => {}, removeItem: () => {} });
   useTabs.setState(loadTabs());
   useTabs.getState().setFilter(ALL);
-  usePip.setState({ filtered: null, applied: {}, dismissed: [], seen: [], nudge: null, lastNudgeAt: 0, pinned: null, quote: null, prefill: null });
+  usePip.setState({ filtered: null, applied: {}, pinned: null, quote: null, prefill: null });
   await ws().init(new MockBackend());
-});
-
-describe("what Pip can tell about a ticket", () => {
-  it("knows what holds a ticket up and that a finished one has nothing to say", () => {
-    const blocked = itemScene(ws().items["mock:DEVOPS-473"], world());
-    expect(blocked.blockedBy).toBe("DEVOPS-490");
-    expect(blocked.linked).toBe(true);
-    const done = Object.values(ws().items).find((i) => i.status.category === "done")!;
-    expect(itemScene(done, world())).toMatchObject({ open: false, staleDays: null, blockedBy: null, waitingOn: null, unassigned: false });
-  });
-
-  it("counts quiet days from the last update once they reach the stale limit", () => {
-    const item = Object.values(ws().items).find((i) => i.status.category !== "done")!;
-    const day = 86_400_000;
-    const at = Date.parse(item.updated);
-    expect(itemScene(item, world(at + (STALE_DAYS - 1) * day)).staleDays).toBeNull();
-    expect(itemScene(item, world(at + (STALE_DAYS + 2) * day)).staleDays).toBe(STALE_DAYS + 2);
-  });
-
-  it("says who is waiting when the ticket needs the user, naming the last commenter", () => {
-    const item = Object.values(ws().items).find((i) => i.status.category !== "done" && i.lastCommenter)!;
-    const key = `${item.item.connectionId}:${item.item.externalId}`;
-    const scene = itemScene(item, { ...world(), needsMe: new Set([key]), me: [] });
-    expect(scene.waitingOn).toBe(ws().names[item.lastCommenter!.accountId] ?? item.lastCommenter!.accountId);
-    expect(itemScene(item, { ...world(), needsMe: new Set(), me: [] }).waitingOn).toBeNull();
-  });
-});
-
-describe("suggestion chips", () => {
-  const base: SuggestionScene = { route: "workspace", quote: false, marked: 0, item: null, pendingDrafts: 0, itemDrafts: 0, unassignedInView: 0, shown: 10, filtered: false };
-  const item = { key: "DEVOPS-9", open: true, staleDays: null, blockedBy: null, waitingOn: null, unassigned: false, linked: false };
-
-  it("offers the usual view questions, and more when drafts wait or tickets have no owner", () => {
-    expect(suggestionsFor(base)).toEqual(["Show stale tickets", "What is blocked?", "Show my tickets", "Catch me up"]);
-    expect(suggestionsFor({ ...base, pendingDrafts: 2, unassignedInView: 1 })).toEqual(["Show stale tickets", "What is blocked?", "Show unassigned tickets", "Which drafts are safe to approve?", "Catch me up"]);
-    expect(suggestionsFor({ ...base, shown: 0, filtered: true })[0]).toBe("Why is this empty?");
-  });
-
-  it("follows the open ticket's state", () => {
-    expect(suggestionsFor({ ...base, item })).toEqual(["What do I need to do here?", "Draft a comment on this one", "Break into subtasks", "Draft a description update", "Create a follow-up ticket"]);
-    const busy = suggestionsFor({ ...base, itemDrafts: 1, item: { ...item, waitingOn: "Byron", blockedBy: "X-1", unassigned: true } });
-    expect(busy).toContain("Draft a reply");
-    expect(busy).toContain("Show the dependency chain");
-    expect(busy).toContain("Suggest an owner");
-    expect(busy.length).toBeLessThanOrEqual(6);
-    expect(suggestionsFor({ ...base, item: { ...item, staleDays: 8 } })).toContain("Draft a nudge");
-    expect(suggestionsFor({ ...base, item: { ...item, open: false } })).not.toContain("Break into subtasks");
-    expect(suggestionsFor({ ...base, item: { ...item, open: false } })).not.toContain("Draft a description update");
-    expect(busy).not.toContain("Draft a description update");
-  });
-
-  it("switches to questions about selected text, the feed, settings and ticked cards", () => {
-    expect(suggestionsFor({ ...base, quote: true, item })).toEqual(["Explain this", "Turn this into a ticket", "Turn this into a subtask"]);
-    expect(suggestionsFor({ ...base, route: "activity", pendingDrafts: 1 })).toEqual(["Which drafts are safe to approve?", "What happened today?", "What needs my reply?"]);
-    expect(suggestionsFor({ ...base, route: "settings", item })).toEqual(["What can you do for me?"]);
-    expect(suggestionsFor({ ...base, marked: 2 })[0]).toBe("Summarise the ticked tickets");
-  });
 });
 
 describe("what Pip can see", () => {
@@ -220,37 +160,10 @@ describe("the avatar and launcher", () => {
   });
 
   it("hangs the launcher from a thread, with the one count of what needs the person", () => {
-    const out = renderToStaticMarkup(<Launcher needs={3} onOpen={vi.fn()} nudge={null} />);
+    const out = renderToStaticMarkup(<Launcher needs={3} onOpen={vi.fn()} />);
     expect(out).toContain("pip-thread");
     expect(out).toContain("pip-dangle");
     expect(out).toContain("Ask Pip, 3 things need you");
-  });
-
-  it("shows a suggestion bubble that can be opened or closed", () => {
-    const out = renderToStaticMarkup(<Nudge text="DEVOPS-9 has been quiet for 9 days." onOpen={vi.fn()} onDismiss={vi.fn()} />);
-    expect(out).toContain("DEVOPS-9 has been quiet for 9 days.");
-    expect(out).toContain("Dismiss suggestion");
-  });
-});
-
-describe("showing a suggestion", () => {
-  const nudge = (text: string) => ({ id: "unassigned-view", kind: "unassigned-view" as const, text, action: { type: "open" as const } });
-
-  it("shows the candidate it is given, with the text it has now, and counts it as seen", () => {
-    fireNudge([nudge("5 tickets here have no owner. Want me to show them?")], 100, false);
-    expect(usePip.getState()).toMatchObject({ nudge: { text: "5 tickets here have no owner. Want me to show them?" }, lastNudgeAt: 100, seen: ["unassigned-view"] });
-  });
-
-  it("stays quiet while one is up, while the page is hidden and for one the person closed", () => {
-    fireNudge([nudge("a")], 1, true);
-    expect(usePip.getState().nudge).toBeNull();
-    usePip.getState().dismiss("unassigned-view");
-    fireNudge([nudge("a")], 1, false);
-    expect(usePip.getState().nudge).toBeNull();
-    usePip.setState({ dismissed: [] });
-    fireNudge([nudge("first")], 2, false);
-    fireNudge([{ ...nudge("second"), id: "other" }], 3, false);
-    expect(usePip.getState().nudge?.text).toBe("first");
   });
 });
 

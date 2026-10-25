@@ -42,11 +42,6 @@ const onFocus = (ev: FocusEvent) => {
   if (ev.target instanceof Element && !ev.target.closest("[data-pip-avatar]")) aim(centre(ev.target));
 };
 
-/** Points every avatar's eyes at `el`, for example the nudge that just appeared; the next mouse move or focus change takes over. */
-export function lookAt(el: Element | null) {
-  if (el) aim(centre(el));
-}
-
 /** Calls `cb` with where the eyes should look as the pointer moves or focus changes; the page listeners exist only while someone watches. */
 export function watchGaze(cb: Listener): () => void {
   if (!listeners.size) {

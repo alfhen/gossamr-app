@@ -3,8 +3,8 @@ import type { ClarityGap } from "./ticketClarity";
 /**
  * What Gossamr learns from "Looks fine": the person says a ticket looks clear enough, and each gap the notice named
  * counts once for the ticket's Jira project. Once the same gap has been dismissed `LEARN_AFTER` times in one project, the
- * page stops flagging that gap for it, until the person gives that back. It only filters what the notice and Start my day
- * say; the word check itself (`clarityGaps`) is unchanged, and Core's own check and audit don't depend on it.
+ * page stops flagging that gap for it, until the person gives that back. It only filters what the notice and the status
+ * pill say; the word check itself (`clarityGaps`) is unchanged, and Core's own check and audit don't depend on it.
  */
 
 /** How many times the same gap is dismissed in one project before it is no longer flagged there. */
@@ -37,7 +37,7 @@ export function parseLearning(raw: unknown): ClarityLearning {
 /** The gaps no longer flagged for `project`: dismissed `LEARN_AFTER` times or more. */
 export const ignoredGaps = (learning: ClarityLearning, project: string): ClarityGap[] => GAPS.filter((g) => (learning[project]?.[g] ?? 0) >= LEARN_AFTER);
 
-/** `gaps` without the ones learned for `project`: what the notice and Start my day still say. */
+/** `gaps` without the ones learned for `project`: what the notice and the status pill still say. */
 export const flaggedGaps = (gaps: readonly ClarityGap[], learning: ClarityLearning, project: string): ClarityGap[] => {
   const skip = ignoredGaps(learning, project);
   return gaps.filter((g) => !skip.includes(g));

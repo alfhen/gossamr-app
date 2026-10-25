@@ -20,7 +20,7 @@ import { dayBreaks } from "./activityLogic";
 import { useToday } from "./useNow";
 import { useDecisionShown } from "./decisionShown";
 import { LiveDraftPreview, openLiveDraft } from "./DraftPreview";
-import { GENERAL_INTRO, IntroAction, TurnView, workstreamIntro } from "./PipConversation";
+import { GENERAL_INTRO, TurnView, workstreamIntro } from "./PipConversation";
 import { openNeed } from "./needsActions";
 import { openComment } from "./jump";
 import { isTypingTarget } from "./workKeys";
@@ -181,13 +181,11 @@ export function TimelineView({
   workstream,
   proposals,
   needs = NO_NEEDS,
-  primary = null,
 }: {
   conversation: string;
   workstream: WorkstreamView | null;
   proposals: readonly Proposal[];
   needs?: readonly Need[];
-  primary?: string | null;
 }) {
   const [filter, setFilter] = useState<TimelineFilter>("all");
   const { entries, byId, labels, turns, behind } = useTimeline(conversation, workstream, proposals, needs);
@@ -320,12 +318,9 @@ export function TimelineView({
         {empty &&
           filter === "all" &&
           (workstream ? (
-            <div className="grid gap-2.5">
-              <p data-empty-workstream className="m-0 text-ws-ink2">
-                {workstreamIntro(workstream.workstream)}
-              </p>
-              {primary && <IntroAction conversation={conversation} text={primary} />}
-            </div>
+            <p data-empty-workstream className="m-0 text-ws-ink2">
+              {workstreamIntro(workstream.workstream)}
+            </p>
           ) : (
             <p className="m-0 text-ws-ink2">{GENERAL_INTRO}</p>
           ))}

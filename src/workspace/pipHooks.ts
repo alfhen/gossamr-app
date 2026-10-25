@@ -1,13 +1,10 @@
 import { useMemo } from "react";
-import { filterChips } from "../lib/filter";
 import { itemsByFilter, useItemsByFilter, useWorkspace } from "../workspaceStore";
-import type { WorkItem } from "../types";
 import { useActivity } from "./activityStore";
 import type { Need } from "../lib/needs";
 import { useRuns } from "./runsStore";
 import { currentNeeds, useNeedsYou } from "./useNeeds";
 import { useActiveTab } from "./hooks";
-import { itemScene, type ItemScene } from "./pipScene";
 import { useWorkView } from "./workViewStore";
 import { buildScreenContext, openWorkstreamLine, type Screen } from "./screenContext";
 import { activeTab, useTabs } from "./tabsStore";
@@ -69,16 +66,3 @@ export function useScreen(): Screen {
     [route, tab, shown, items, peeked, containers, selected, marked, chip, container, agents, workstream],
   );
 }
-
-/** What Pip can tell about the open ticket, or null when none is open on a screen that has a peek. */
-export function useItemScene(screen: Screen): ItemScene | null {
-  const needsMe = useWorkspace((s) => s.needsMe);
-  const names = useWorkspace((s) => s.names);
-  const me = useWorkspace((s) => s.me);
-  const open = screen.route !== "settings" && screen.selected ? screen.items[screen.selected] : undefined;
-  return useMemo(() => (open ? itemScene(open, { items: screen.items, needsMe, names, me, now: Date.now() }) : null), [open, screen.items, needsMe, names, me]);
-}
-
-export const unassignedIn = (shown: readonly WorkItem[]) => shown.filter((i) => i.assignee === null && i.status.category !== "done").length;
-
-export const chipCount = (screen: Screen) => filterChips(screen.tab.filter).length;

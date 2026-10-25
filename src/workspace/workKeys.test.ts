@@ -156,7 +156,7 @@ describe("the workspace layout's regions (D29)", () => {
     expect(regionStep(key("F6", { target: { tagName: "TEXTAREA", id: "pip-input" } }))).toBe(1);
     expect(regionStep(key("F6", { shiftKey: true }))).toBe(-1);
     expect(regionStep(key("F6", { target: { tagName: "TEXTAREA", id: "answer" } }))).toBe(0);
-    expect(regionStep(key("F6", { target: { tagName: "INPUT", id: "data-plan-add" } }))).toBe(1);
+    expect(regionStep(key("F6", { target: { tagName: "INPUT", id: "search" } }))).toBe(1);
     expect(regionStep(key("F6", { shiftKey: true, target: { tagName: "INPUT" } }))).toBe(-1);
     expect(regionStep(key("F6", { ctrlKey: true }))).toBe(0);
     expect(regionStep(key("Tab"))).toBe(0);

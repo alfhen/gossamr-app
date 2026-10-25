@@ -25,18 +25,17 @@ describe("per-account state", () => {
     resetAccountState("jira:site:me");
     await useWorkspace.getState().init(new MockBackend());
     useClaude.setState({ byTicket: { "CA-1": { turns: [], sessionId: "s" } } });
-    usePip.setState({ filtered: { tabId: "t", before: { type: "open" }, beforeTitle: null, filter: { type: "open" }, note: "" }, dismissed: ["large-list"] });
+    usePip.setState({ filtered: { tabId: "t", before: { type: "open" }, beforeTitle: null, filter: { type: "open" }, note: "" } });
     useTabs.getState().openTab({ title: "Mine" });
     useToasts.getState().push("old");
   });
 
-  it("keeps tabs and closed suggestions for the same account but drops conversations, filters and the loaded workspace", () => {
+  it("keeps tabs for the same account but drops conversations, filters and the loaded workspace", () => {
     resetAccountState("jira:site:me");
     expect(useClaude.getState().byTicket).toEqual({});
     expect(usePip.getState().filtered).toBeNull();
     expect(useWorkspace.getState().status).toBe("idle");
     expect(useToasts.getState().toasts).toEqual([]);
-    expect(usePip.getState().dismissed).toEqual(["large-list"]);
     expect(useTabs.getState().tabs.length).toBeGreaterThan(1);
   });
 
@@ -53,11 +52,8 @@ describe("per-account state", () => {
 
   it("forgets everything about another account or a sign-out", () => {
     resetAccountState("jira:site:someone-else");
-    expect(usePip.getState().dismissed).toEqual([]);
+    expect(usePip.getState().filtered).toBeNull();
     expect(useTabs.getState().tabs).toHaveLength(1);
-    usePip.setState({ dismissed: ["large-list"] });
-    resetAccountState(null);
-    expect(usePip.getState().dismissed).toEqual([]);
   });
 });
 

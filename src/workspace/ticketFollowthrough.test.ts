@@ -14,7 +14,6 @@ import { currentNeeds } from "./useNeeds";
 import { workstreamStatus } from "../lib/workstreamStatus";
 import { heldBanner } from "../lib/workstreamHold";
 import { useWorkstreams } from "./workstreamsStore";
-import { withersOf } from "./useWorkstreamWithers";
 
 const memory = () => {
   const data = new Map<string, string>();
@@ -161,7 +160,6 @@ describe("a reporter's reply comment ends the wait", () => {
     expect(stored(id).reporterReply).toEqual({ id: expect.any(String), excerpt: "It should send three emails." });
     expect(stored(id).workstream.heldReason).toBeNull();
     expect(workstreamStatus(stored(id), []).word).not.toBe("Waiting on reporter");
-    expect(withersOf([stored(id)], { events: { [id]: events(id) }, byTicket: {}, runs: [], proposals: {} }, Date.now() + 5 * 86_400_000)[id]?.reporter).toBeUndefined();
   });
 });
 

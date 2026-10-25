@@ -4,7 +4,11 @@ import { isReporterFollowUp, isReporterNudge, isReporterQuestions, makerName, ta
 import { fromRunPhrase } from "./runNames";
 import { maskSecrets } from "./riskyText";
 import { diffLines, readableLine, withGaps } from "./textDiff";
-import { isJiraWrite } from "./workstreamWither";
+
+/** What a post to Jira writes: every kind of draft a tracker applies. A run, a follow-up or an answer reaches an agent, not Jira. */
+const JIRA_WRITES: ReadonlySet<Intent["type"]> = new Set(["comment", "transition", "subtasks", "rewrite", "create", "update", "link"]);
+
+const isJiraWrite = (intent: Intent) => JIRA_WRITES.has(intent.type);
 
 /**
  * "What Jira saw from me": everything Gossamr wrote to Jira on the person's approval, newest first, for the person to look

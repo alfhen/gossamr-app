@@ -7,7 +7,7 @@ import type { Intent, Proposal, RunSpec, WorkstreamView, Run, WorkContainer, Wor
 import { useWorkspace } from "../workspaceStore";
 import { draftDecisions } from "./DraftPreview";
 import { DRAFT_CARD, onDraftCardKey, stepDraftCards, upToNewestDraft } from "./draftKeys";
-import { CommandsList, Composer, GENERAL_RUN_REF_NOTE, commandHelp, ComposerFooter, GENERAL_CONVERSATION, MANAGE_NOTE, PipConversation, draftsForTicket, otherTicketsRow, VerbNote, showPlanUpdate, composerVerb, inputAfterCommand, openWakeRun, outcomeBelongs, keepUnsentInput, unsentInputOf, wakeHeader, wakeIsLong, wakeParts, workstreamConversation, workstreamIntro } from "./PipConversation";
+import { CommandsList, Composer, GENERAL_RUN_REF_NOTE, commandHelp, ComposerFooter, GENERAL_CONVERSATION, MANAGE_NOTE, PipConversation, draftsForTicket, otherTicketsRow, VerbNote, composerVerb, inputAfterCommand, openWakeRun, outcomeBelongs, keepUnsentInput, unsentInputOf, wakeHeader, wakeIsLong, wakeParts, workstreamConversation, workstreamIntro } from "./PipConversation";
 import { useWorkView } from "./workViewStore";
 import { useTabs } from "./tabsStore";
 import { useRuns } from "./runsStore";
@@ -223,21 +223,17 @@ describe("PipConversation", () => {
     expect(html).not.toMatch(/<article[^>]*class="[^"]*(?<![\w:-])outline-none/);
   });
 
-  it("opens a workstream's empty conversation with one sentence on what it is for and one button, and General with its own words", () => {
+  it("opens a workstream's empty conversation with one sentence on what it is for, and General with its own words", () => {
     setTurns({});
-    const ws = renderToStaticMarkup(<PipConversation conversation={workstreamConversation("ws-404")} proposals={[]} primary="Investigate CA-404" />);
+    const ws = renderToStaticMarkup(<PipConversation conversation={workstreamConversation("ws-404")} proposals={[]} />);
     expect(ws).toContain("data-empty-workstream");
     const intro = /<p data-empty-workstream="true"[^>]*>([^<]*)<\/p>/.exec(ws)?.[1] ?? "";
     expect(intro).toBe("Everything for this ticket stays here: its agents, drafts and our conversation.");
     expect(ws).not.toContain("/stop");
-    expect(ws).toMatch(/<button type="button" data-intro-action="true"[^>]*class="[^"]*from-ws-pip[^"]*">Investigate CA-404<\/button>/);
     expect(ws).not.toContain("I follow along as you move around");
-    // With no suggestion to make there is no button.
-    expect(renderToStaticMarkup(<PipConversation conversation={workstreamConversation("ws-404")} proposals={[]} />)).not.toContain("data-intro-action");
-    const general = renderToStaticMarkup(<PipConversation conversation={GENERAL_CONVERSATION} proposals={[]} primary="Catch me up" />);
+    const general = renderToStaticMarkup(<PipConversation conversation={GENERAL_CONVERSATION} proposals={[]} />);
     expect(general).toContain("I follow along as you move around");
     expect(general).not.toContain("data-empty-workstream");
-    expect(general).not.toContain("data-intro-action");
   });
 
   it("names the workstream's ticket in its intro, and leaves Manage's rules and the commands to the Commands popover", () => {
@@ -296,7 +292,7 @@ describe("PipConversation", () => {
     const attached = { images: [], add: async () => {}, remove: () => {}, take: () => [] } as unknown as Parameters<typeof Composer>[0]["attached"];
     const a = workstreamConversation("ws-a");
     const b = workstreamConversation("ws-b");
-    const render = (conversation: string) => renderToStaticMarkup(<Composer conversation={conversation} attached={attached} chips={[]} looking="the board" scene={{ itemKey: null, route: "agents", runOpen: false, workstream: true }} />);
+    const render = (conversation: string) => renderToStaticMarkup(<Composer conversation={conversation} attached={attached} looking="the board" scene={{ itemKey: null, route: "agents", runOpen: false, workstream: true }} />);
     try {
       keepUnsentInput(a, "half a thought about A");
       expect(render(a)).toContain('value="half a thought about A"');
@@ -315,7 +311,7 @@ describe("PipConversation", () => {
 
   it("offers the Commands button beside the input", () => {
     const attached = { images: [], add: async () => {}, remove: () => {}, take: () => [] } as unknown as Parameters<typeof Composer>[0]["attached"];
-    const on = renderToStaticMarkup(<Composer conversation={workstreamConversation("ws-1")} attached={attached} chips={[]} looking="the board" scene={{ itemKey: null, route: "agents", runOpen: false, workstream: true }} />);
+    const on = renderToStaticMarkup(<Composer conversation={workstreamConversation("ws-1")} attached={attached} looking="the board" scene={{ itemKey: null, route: "agents", runOpen: false, workstream: true }} />);
     expect(on).toMatch(/<button type="button" data-popover-trigger="true" aria-label="Commands" aria-haspopup="dialog" aria-expanded="false"[^>]*>\?<\/button>/);
     expect(on.indexOf('aria-label="Commands"')).toBeGreaterThan(on.indexOf('id="pip-input"'));
     // Closed, the commands themselves aren't on screen.
@@ -385,12 +381,12 @@ describe("PipConversation", () => {
     const at = (requestId: string, prompt: string, status: Turn["status"], error: string | null = null): Turn => ({ requestId, prompt, steps: [], text: "", status, error });
     const attached = { images: [], add: async () => {}, remove: () => {}, take: () => [] } as unknown as Parameters<typeof Composer>[0]["attached"];
     const composer = () =>
-      renderToStaticMarkup(<Composer conversation={GENERAL_CONVERSATION} attached={attached} chips={["What is stale?"]} looking="the board" scene={{ itemKey: null, route: "workspace", runOpen: false }} />);
+      renderToStaticMarkup(<Composer conversation={GENERAL_CONVERSATION} attached={attached} looking="the board" scene={{ itemKey: null, route: "workspace", runOpen: false }} />);
 
     it("renders a footer under the input only when given one, as a muted status line", () => {
       expect(composer()).not.toContain("data-composer-footer");
       const html = renderToStaticMarkup(
-        <Composer conversation={GENERAL_CONVERSATION} attached={attached} chips={[]} looking="the board" scene={{ itemKey: null, route: "agents", runOpen: false }} footer="4 agents working · 2 need you" />,
+        <Composer conversation={GENERAL_CONVERSATION} attached={attached} looking="the board" scene={{ itemKey: null, route: "agents", runOpen: false }} footer="4 agents working · 2 need you" />,
       );
       expect(html).toMatch(/<p data-composer-footer="true" class="[^"]*text-ws-ink3[^"]*">4 agents working · 2 need you<\/p>/);
       expect(html.indexOf("data-composer-footer")).toBeGreaterThan(html.indexOf('id="pip-input"'));
@@ -423,14 +419,11 @@ describe("PipConversation", () => {
       expect(html).not.toContain('aria-label="Remove this question"');
     });
 
-    it("keeps the input and Ask next to Stop while Pip answers, and the chips until a question waits", () => {
+    it("keeps the input and Ask next to Stop while Pip answers", () => {
       setTurns({ [GENERAL_CONVERSATION]: { sessionId: null, turns: [at("r1", "First", "running")] } });
       const running = composer();
       expect(running).toMatch(/>Stop<\/button><button type="submit"[^>]*>Ask<\/button>/);
-      expect(running).toContain("What is stale?");
       expect(running).not.toMatch(/<input id="pip-input"[^>]*disabled/);
-      setTurns({ [GENERAL_CONVERSATION]: { sessionId: null, turns: [at("r1", "First", "running"), at("r2", "Second", "queued")] } });
-      expect(composer()).not.toContain("What is stale?");
       setTurns({ [GENERAL_CONVERSATION]: { sessionId: null, turns: [at("r1", "First", "done")] } });
       const idle = composer();
       expect(idle).not.toContain(">Stop<");
@@ -614,41 +607,6 @@ describe("ticket links", () => {
       }
       expect(await b.peekItem(ref("CA-9999"))).toBeNull();
     });
-  });
-});
-
-describe("'Show me the plan update'", () => {
-  const ws = { workstream: { id: "ws-9", itemKey: "CA-412", connectionId: "mock", title: "CA-412 Fix it", mode: "manage", heldReason: null, closedAt: null }, stage: "plan", runs: ["r-plan"], labels: [["r-plan", "R1"]] } as unknown as WorkstreamView;
-  const plan = { id: "r-plan", item: itemRef("CA-412"), spec: { ...spec, kind: "plan", workstream: "ws-9" }, state: "done" } as unknown as Run;
-  const rewrite = draft("p-plan", { type: "rewrite", item: itemRef("CA-412"), part: "description" } as unknown as Intent, { origin: { type: "run", runId: "r-plan", shortId: null } });
-  const before = { list: useWorkstreams.getState().list, runs: useRuns.getState().runs, proposals: useWorkspace.getState().proposals };
-  beforeEach(() => {
-    useWorkstreams.setState({ list: [ws] });
-    useRuns.setState({ runs: [plan] });
-    useWorkspace.setState({ proposals: { [rewrite.id]: rewrite } });
-  });
-  afterEach(() => {
-    useWorkstreams.setState({ list: before.list });
-    useRuns.setState({ runs: before.runs });
-    useWorkspace.setState({ proposals: before.proposals });
-    vi.restoreAllMocks();
-  });
-
-  it("brings the plan's description update into view with the keyboard on its card, and asks Pip nothing", () => {
-    const ask = vi.spyOn(useClaude.getState(), "ask");
-    const card = { focus: vi.fn(), scrollIntoView: vi.fn() };
-    const asked: string[] = [];
-    const root = { querySelector: (s: string) => (asked.push(s), s === 'article[data-draft="p-plan"]' ? card : null), closest: () => null };
-    showPlanUpdate(workstreamConversation("ws-9"), root);
-    expect(card.scrollIntoView).toHaveBeenCalledWith({ block: "nearest" });
-    expect(card.focus).toHaveBeenCalledTimes(1);
-    expect(ask).not.toHaveBeenCalled();
-    // In General, or with no plan update waiting, it does nothing at all.
-    showPlanUpdate(GENERAL_CONVERSATION, root);
-    useWorkspace.setState({ proposals: {} });
-    showPlanUpdate(workstreamConversation("ws-9"), root);
-    expect(card.focus).toHaveBeenCalledTimes(1);
-    expect(ask).not.toHaveBeenCalled();
   });
 });
 

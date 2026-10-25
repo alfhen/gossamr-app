@@ -1,9 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import { openAgents, openApp, pipPane, selectWorkstream, startWorkstream, workstreamGroup } from "./support/app";
 
-// Fixes from the sixth dogfood round: Start my day and Plan my week leave the timeline its room and Start my day is General's
-// alone, the status words are explained, and the Plan my week add box says why a ticket was not added.
-
+// Fixes from the sixth dogfood round: the status words are explained.
 
 const allProjects = (page: Page) => page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "All projects" }).click();
 

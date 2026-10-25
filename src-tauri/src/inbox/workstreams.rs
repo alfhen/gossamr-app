@@ -37,8 +37,7 @@ pub const READINESS_GONE: &str = "This ticket isn't waiting for your choice abou
 /// Why asking the reporter, or saying a ticket looks fine, is refused when its clarity notice isn't showing: the person
 /// chose already, a Triage spoke, or the ticket reads as clear now.
 pub const CLARITY_GONE: &str = "This ticket isn't flagged as possibly unclear any more.";
-/// How many days the reporter may stay silent before a nudge is offered: the first stage of `WITHER_DAYS.ticket` in
-/// src/lib/views.ts, which is when the workstream's cobweb says "Reporter hasn't answered".
+/// How many days the reporter may stay silent before a nudge is offered. As `NUDGE_AFTER_DAYS` in src/lib/reporterWait.ts.
 pub const NUDGE_AFTER_DAYS: i64 = 2;
 /// Why a nudge to the reporter is refused: nobody is being waited on, it is too soon, or a nudge already waits.
 pub const NUDGE_GONE: &str = "This workstream isn't due a nudge to the reporter.";

@@ -3,7 +3,6 @@ import { HELD_ALL, HELD_BUDGET, HELD_DAILY, HELD_PERSON, HELD_QUOTA, HELD_RESTAR
 import type { Run, WorkstreamView } from "../types";
 import { NUDGE_AFTER_DAYS } from "./reporterWait";
 import { OWED_DETAIL, ON_REPORTER_DETAIL, answersOwed, QUIET_DAYS, REPLIED_DETAIL, REPLIED_HINT, STATUS_HINT, UNCLEAR_HINT, hintFor, UNCLEAR_DETAIL, workstreamStatus, type StatusMore, type StatusState } from "./workstreamStatus";
-import type { WorkstreamWither } from "./workstreamWither";
 
 const NOW = new Date("2026-10-13T09:00:00Z");
 const ago = (days: number) => new Date(NOW.getTime() - days * 86_400_000).toISOString();
@@ -13,7 +12,6 @@ const view = (over: Partial<WorkstreamView> = {}, ws: Partial<WorkstreamView["wo
 
 const run = (state: Run["state"], kind: Run["spec"]["kind"] = "build", over: Partial<Run> = {}): Run => ({ id: "r1", state, spec: { kind, workstream: "w1" }, queuedAt: ago(0.5), launchedAt: ago(0.5), endedAt: null, ...over }) as unknown as Run;
 const need = { workstreamId: "w1" };
-const web = (days = 6, over: Partial<WorkstreamWither> = {}): WorkstreamWither => ({ level: 3, days, since: ago(days), runs: 2, turns: 0, text: "", ...over });
 const at = (v: WorkstreamView, needs: { workstreamId: string | null }[] = [], more: StatusMore = {}) => workstreamStatus(v, needs, { now: NOW, ...more });
 
 describe("workstreamStatus: every state", () => {
@@ -104,12 +102,11 @@ describe("workstreamStatus: every state", () => {
     expect(at(thin, [], { runs: [run("failed", "review", { endedAt: ago(0.2) })] }).detail).toBe("Review failed");
   });
 
-  it("Quiet: a cobweb, or no activity for a while; never for a closed workstream", () => {
-    expect(at(view(), [], { wither: web(6) })).toMatchObject({ state: "quiet", word: "Quiet", detail: "No Jira update · 6d" });
-    expect(at(view(), [], { wither: web(4, { reporter: true }) }).detail).toBe("Reporter hasn't answered · 4d");
+  it("Quiet: no activity for a while; never for a closed workstream", () => {
+    expect(at(view({}, { createdAt: ago(6) }))).toMatchObject({ state: "idle", detail: null });
     expect(at(view({}, { createdAt: ago(QUIET_DAYS + 2) }))).toMatchObject({ state: "quiet", detail: `no activity · ${QUIET_DAYS + 2}d` });
     expect(at(view({}, { createdAt: ago(QUIET_DAYS + 2) }), [], { runs: [run("done", "build", { queuedAt: ago(1), launchedAt: ago(1), endedAt: ago(1) })] }).state).toBe("idle");
-    expect(at(view({}, { closedAt: ago(1), createdAt: ago(30) }), [], { wither: web(6) }).state).toBe("done");
+    expect(at(view({}, { closedAt: ago(1), createdAt: ago(30) })).state).toBe("done");
     expect(at(view({}, { createdAt: ago(3) }), [], { quietDays: 2 }).state).toBe("quiet");
   });
 
@@ -126,14 +123,14 @@ describe("workstreamStatus: every state", () => {
 
 describe("workstreamStatus: priority", () => {
   const everything = view({ waitingOnReporter: { since: ago(3) } }, { heldReason: HELD_PERSON });
-  const more: StatusMore = { runs: [run("working")], wither: web(6) };
+  const more: StatusMore = { runs: [run("working")] };
 
   it("goes Needs you, Held, Waiting on reporter, Running, Quiet, Done, Idle, each beating all the ones after it", () => {
     expect(at(everything, [need], more).state).toBe("needs-you");
     expect(at(everything, [], more).state).toBe("held");
     expect(at(view({ waitingOnReporter: { since: ago(3) } }), [], more).state).toBe("waiting");
     expect(at(view(), [], more).state).toBe("running");
-    expect(at(view(), [], { wither: web(6) }).state).toBe("quiet");
+    expect(at(view({}, { createdAt: ago(QUIET_DAYS + 2) }), [], {}).state).toBe("quiet");
     expect(at(view({ stage: "done" }), [], {}).state).toBe("done");
     expect(at(view(), [], {}).state).toBe("idle");
   });

@@ -557,21 +557,6 @@ export function agentSummary(runs: readonly Run[], now: number): string {
 const FINDINGS_SHOWN = 5;
 
 /** What the finished runs found, one line each: the part of the result meant for Jira, or its first line. */
-/** What the run-done nudge asks (runNudges in src/workspace/pipRuns.ts): what one finished run found. */
-const asksWhatRunFound = /^What did the agent find in run (\S+)\?$/;
-
-/** What one run found, named as the person knows it: its note for the ticket, or that it left none. */
-function runFound(run: Run | undefined): PipScript {
-  if (!run) return { steps: [], text: "I can't find that run any more, so I can't say what it found.", filter: null, draft: null };
-  const note = jiraNote(run.result ?? "").text.trim();
-  return {
-    steps: ["Read the run", "Read the rest of its result"],
-    text: note ? `I read the whole result of ${runPhrase(run)}. It found:\n\n${note}` : `${capital(runPhrase(run))} finished without a written answer, so there is nothing to sum up.`,
-    filter: null,
-    draft: null,
-  };
-}
-
 function findings(runs: readonly Run[]): string {
   const done = runs.filter((r) => r.state === "done");
   if (!done.length) return "No agent has finished yet.";
@@ -627,8 +612,6 @@ function scriptTurn(prompt: string, context: ScreenContext, images: ImageData[],
   const answers = answersScript(prompt, runs, workstream);
   if (answers) return answers;
   const q = prompt.toLowerCase();
-  const foundIn = asksWhatRunFound.exec(prompt.trim());
-  if (foundIn) return runFound(runs.find((r) => r.id === foundIn[1]));
   if (asksToSendBack.test(prompt)) return sendBack(context, runs, drafts, discussed);
   const move = moveScript(prompt, context, workstream);
   if (move) return move;

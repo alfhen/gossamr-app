@@ -85,7 +85,7 @@ describe("one count of what needs you", () => {
 
     expect(renderToStaticMarkup(<NeedsYouList needs={list} />)).toMatch(new RegExp(`data-needs-you-count[^>]*>${n}<`));
     expect(Number(/(\d+) needs? you/.exec(composerFooter(runs, n, NOW))?.[1])).toBe(n);
-    expect(renderToStaticMarkup(<Launcher needs={n} onOpen={() => {}} nudge={null} />)).toContain(`Ask Pip, ${needsYouText(n)}`);
+    expect(renderToStaticMarkup(<Launcher needs={n} onOpen={() => {}} />)).toContain(`Ask Pip, ${needsYouText(n)}`);
   });
 
   it("counts the failures once, on the latest run, and drops them once a newer run has followed", () => {

@@ -515,8 +515,8 @@ test.describe("starting a workstream and help (D6, D26)", () => {
 
 });
 
-test.describe("plan chip (D19)", () => {
-  test("'Show me the plan update' brings the plan's description draft into view and focus, and asks Pip nothing", async ({ page }) => {
+test.describe("plan approval (D19)", () => {
+  test("the plan's description draft is pending in the conversation, and approving it is signposted", async ({ page }) => {
     test.setTimeout(90_000);
     await openApp(page, MANAGED);
     await startWorkstream(page, "CA-401");
@@ -527,16 +527,8 @@ test.describe("plan chip (D19)", () => {
     await finish(page, (await started(page, "plan")).id);
     await settled(page);
     await expect(pipPane(page).getByRole("button", { name: "Approve the plan" })).toHaveCount(0);
-    const chip = pipPane(page).getByRole("button", { name: "Show me the plan update" });
-    await expect(chip).toBeVisible();
-    const turns = await pipPane(page).locator("[data-turn-status]").count();
-    await chip.click();
     // The triage's own description update stands above the plan's in the conversation: the plan's is the newer.
     const plan = pipPane(page).getByRole("article", { name: "Update the description of CA-401" }).last();
-    await expect(plan).toBeFocused();
-    await expect(plan).toBeInViewport();
-    await expect(pipPane(page).getByRole("button", { name: "Stop" })).toHaveCount(0);
-    expect(await pipPane(page).locator("[data-turn-status]").count()).toBe(turns);
     await expect(plan).toHaveAttribute("data-state", "pending");
     // Approving the plan is signposted, in Pip's word on the finished plan and on the Plan step, with its open questions (N6).
     await expect(pipPane(page)).toContainText("Approve the description update to let Build start.");

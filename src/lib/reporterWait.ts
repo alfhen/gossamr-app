@@ -1,6 +1,5 @@
 import type { Proposal, ReporterReply, ReporterReplyAt, WorkstreamEvent } from "../types";
 import { isAnswersDraft, isReporterNudge, workstreamOf } from "./proposals";
-import { WITHER_DAYS } from "./views";
 import { maskSecrets } from "./riskyText";
 
 /** Where a workstream stands with the reporter, read from its audit, as `ReporterFollow` in src-tauri/src/inbox/workstreams.rs. */
@@ -225,8 +224,8 @@ export const waitingOnReporterText = (since: string, now: Date) => `Waiting on t
 /** The row's short status while it waits on the reporter. */
 export const WAITING_STATUS = "Waiting on the reporter";
 
-/** How many whole days the reporter may stay silent before a nudge is offered: the cobweb's first stage (`WITHER_DAYS.ticket`), as `NUDGE_AFTER_DAYS` in src-tauri/src/inbox/workstreams.rs. */
-export const NUDGE_AFTER_DAYS = WITHER_DAYS.ticket[0];
+/** How many whole days the reporter may stay silent before a nudge is offered. As `NUDGE_AFTER_DAYS` in src-tauri/src/inbox/workstreams.rs. */
+export const NUDGE_AFTER_DAYS = 2;
 
 /** Why a nudge to the reporter is refused: nobody is waited on, it is too soon, or one waits already. As `NUDGE_GONE` in src-tauri/src/inbox/workstreams.rs. */
 export const NUDGE_GONE = "This workstream isn't due a nudge to the reporter.";

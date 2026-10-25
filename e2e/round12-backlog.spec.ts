@@ -1,14 +1,10 @@
 import { expect, test, type Page } from "@playwright/test";
-import { agentsHome, askPip, homeSettled, needOfKind, openAgents, openApp, paneSettled, pipPane, selectWorkstream, startMyDay, startWorkstream } from "./support/app";
+import { agentsHome, askPip, homeSettled, needOfKind, openAgents, openApp, paneSettled, pipPane, selectWorkstream, startWorkstream } from "./support/app";
 
-// Backlog items of the twelfth dogfood round: what Pip is for and what the glossary is called (G21), the start review leading with
-// what the agent may do (G22), one story of who posts (G23), the workstream controls explaining themselves (G24), a numbered reply
-// quoted past its first line (G27), the Ctrl+0 note not queuing (G30), live regions said once (G31), names for a screen reader
-// (G32), where F6 and Enter land and the plan's one Tab stop (G33), and the Needs you tag's verb (G34).
-
-const port = Number(process.env.E2E_PORT ?? 4173);
-/** The seeded profile without Start my day set aside, so its card (and Plan my week) show. */
-const DAY_DUE = { cookies: [], origins: [{ origin: `http://localhost:${port}`, localStorage: [{ name: "gossamr-prefs", value: JSON.stringify({ pipOrientationSeen: true, permissionExplainerSeen: true }) }] }] };
+// Backlog items of the twelfth dogfood round: the start review leading with what the agent may do (G22), one story of who posts
+// (G23), the workstream controls explaining themselves (G24), a numbered reply quoted past its first line (G27), the Ctrl+0 note
+// not queuing (G30), live regions said once (G31), names for a screen reader (G32), where F6 and Enter land (G33), and the Needs
+// you tag's verb (G34).
 
 const MANAGED = "runs=empty&prSurface=manual&wsManage=1&pipPace=1";
 const VAGUE = "CA-408";
@@ -99,33 +95,5 @@ test.describe("an unclear ticket (G27, G32, G33, G34)", () => {
     const row = needOfKind(page, "runStart");
     await expect(row).toHaveCount(1);
     await expect(row.locator("[data-needs-you-chip]")).toHaveText("Review");
-  });
-});
-
-test.describe("Plan my week's rows (G33)", () => {
-  test.use({ storageState: DAY_DUE, viewport: { width: 1440, height: 900 } });
-
-  test("are one Tab stop with the arrows and j and k inside, and the keys still move a row", async ({ page }) => {
-    test.setTimeout(90_000);
-    await openApp(page, "runs=empty");
-    await openAgents(page);
-    await startMyDay(page);
-    await agentsHome(page).locator("[data-start-my-day]").getByRole("button", { name: "Plan my week" }).click();
-    const plan = agentsHome(page).locator("[data-plan-my-week]");
-    const picks = plan.locator("[data-plan-pick]");
-    await expect(picks).toHaveCount(3);
-    expect(await picks.evaluateAll((els) => els.map((e) => e.getAttribute("tabindex")))).toEqual(["0", "-1", "-1"]);
-    await picks.first().focus();
-    await page.keyboard.press("j");
-    await expect(picks.nth(1)).toBeFocused();
-    // The row the keyboard was on is the stop now, and its buttons with it; the others' buttons are out of the order.
-    expect(await picks.evaluateAll((els) => els.map((e) => e.getAttribute("tabindex")))).toEqual(["-1", "0", "-1"]);
-    await expect(picks.nth(0).locator("[data-plan-remove]")).toHaveAttribute("tabindex", "-1");
-    await expect(picks.nth(1).locator("[data-plan-remove]")).not.toHaveAttribute("tabindex", "-1");
-    await page.keyboard.press("k");
-    await expect(picks.first()).toBeFocused();
-    const ids = await picks.evaluateAll((els) => els.map((e) => e.getAttribute("data-plan-pick")));
-    await page.keyboard.press("Alt+ArrowDown");
-    expect(await picks.evaluateAll((els) => els.map((e) => e.getAttribute("data-plan-pick")))).toEqual([ids[1], ids[0], ids[2]]);
   });
 });

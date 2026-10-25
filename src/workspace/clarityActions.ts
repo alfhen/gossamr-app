@@ -1,9 +1,7 @@
 import { learnedDetail, learnedList, projectOfKey, SHORT_GAP } from "../lib/clarityLearning";
-import type { Proposal } from "../types";
 import type { ClarityGap } from "../lib/ticketClarity";
 import { useWorkspace } from "../workspaceStore";
 import { usePrefs } from "./prefs";
-import { PIP_INPUT_ID } from "./draftKeys";
 import { useWorkView } from "./workViewStore";
 import { pushLearning, retireLearning, useToasts } from "./toasts";
 import { useWorkstreams } from "./workstreamsStore";
@@ -28,44 +26,6 @@ export function settleClarityFocus(workstreamId: string) {
     else if (++frames < 3) requestAnimationFrame(settle);
   };
   requestAnimationFrame(() => requestAnimationFrame(settle));
-}
-
-/** The pending drafts to start an agent that are not among `before`, on ticket `key` when one is named, newest last. */
-export function newStartDrafts(before: ReadonlySet<string>, proposals: Record<string, Proposal>, key?: string): string[] {
-  return Object.values(proposals)
-    .filter((p) => p.intent.type === "startRun" && p.state.type === "pending" && !before.has(p.id) && (!key || p.intent.item?.key === key))
-    .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
-    .map((p) => p.id);
-}
-
-/** The ticket an Investigate chip names ("Investigate CA-408" is CA-408), if it names one. */
-export const investigateKey = (chip: string): string | undefined => /^Investigate (\S+)$/.exec(chip)?.[1];
-
-/** How long the keyboard waits on the composer for the draft an Investigate chip asked for: as long as Pip's answer may take. */
-export const DRAFT_WAIT_MS = 60_000;
-
-/**
- * A suggestion chip that asked Pip to start something (Investigate CA-408) unmounts when pressed, and the keyboard would
- * fall to <body>: it goes to the composer at once, and to the new "Start an agent" draft's card once that renders, if the
- * person has not moved or typed since. It waits as long as Pip may take to answer (`DRAFT_WAIT_MS`), then the composer keeps it.
- */
-export function settleDraftFocus(before: ReadonlySet<string>, key?: string, doc: Document = document, frame: (cb: () => void) => unknown = requestAnimationFrame, now: () => number = Date.now, waitMs = DRAFT_WAIT_MS) {
-  const composer = () => doc.getElementById(PIP_INPUT_ID) as HTMLInputElement | null;
-  const parked = () => {
-    const at = doc.activeElement;
-    return !at || at === doc.body || (at === composer() && !composer()?.value);
-  };
-  composer()?.focus();
-  const until = now() + waitMs;
-  const watch = () => {
-    if (!parked()) return;
-    // The draft is the one on the ticket the chip named: another ticket's new draft is not where the person was going.
-    const id = newStartDrafts(before, useWorkspace.getState().proposals, key)[0];
-    const card = id ? doc.querySelector<HTMLElement>(`article[data-draft="${CSS.escape(id)}"]`) : null;
-    if (card) card.focus();
-    else if (now() < until) frame(watch);
-  };
-  frame(watch);
 }
 
 /**

@@ -2,9 +2,9 @@ import { expect, test, type Page } from "@playwright/test";
 import { agentsHome, editTicket, expandAllNeeds, expectToast, homeConversationRegion, homeSettled, jiraWrites, needsPane, openAgents, openApp, selectWorkstream, startWorkstream, workstreamEvents, openNeedOfKind, needsStack } from "./support/app";
 
 // Backlog items of the thirteenth dogfood round: a workstream's offer to bring in what its ticket already has in General (G17),
-// Close with an Undo and a Reopen (G23), the safety copy saying a Build and the glossary's Manage, Hold and Allow once (G24), what
+// Close with an Undo and a Reopen (G23), a read-only run's permission prompt saying what Deny does (G24), what
 // the reporter question says about posting (G25), the posting pause's two buttons (G26), names a screen reader hears
-// once (G28), the posted entry's footer (G29), the Done ticket's one reason (G30) and 'start' in the palette (G31).
+// once (G28), the posted entry's footer (G29), the Done ticket's one reason (G30).
 
 
 const THIN = "Fix it.";
@@ -141,19 +141,5 @@ test.describe("the workstream step for a Done ticket (G30)", () => {
     await palette(page).getByRole("combobox").fill("DEVOPS-478");
     await expect(palette(page)).toContainText("DEVOPS-478 is Done in Jira.");
     await expect(palette(page)).not.toContainText("It may be Done, already have a workstream, or not be loaded");
-  });
-});
-
-test.describe("'start' in the palette (G31)", () => {
-  test("puts Start a workstream… above Start my day", async ({ page }) => {
-    await openApp(page, "runs=empty");
-    await page.keyboard.press("ControlOrMeta+k");
-    await palette(page).getByRole("combobox").fill("start");
-    const names = await palette(page).getByRole("option").evaluateAll((els) => els.map((el) => el.textContent ?? ""));
-    const workstream = names.findIndex((n) => n.includes("Start a workstream…"));
-    const day = names.findIndex((n) => n.includes("Start my day"));
-    expect(workstream, names.join(" | ")).toBeGreaterThanOrEqual(0);
-    expect(day, names.join(" | ")).toBeGreaterThanOrEqual(0);
-    expect(workstream).toBeLessThan(day);
   });
 });

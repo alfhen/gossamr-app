@@ -69,7 +69,7 @@ export function openInWorkstream(need: Need) {
   if (need.target.type === "run") useRuns.getState().openRun(need.target.id, { stay: true });
 }
 
-/** A run from a notification or a nudge: its need when it holds one, else its sheet. */
+/** A run from a notification: its need when it holds one, else its sheet. */
 export function openRunOrNeed(runId: string) {
   const need = currentNeeds().find((n) => n.runId === runId);
   if (need) openNeed(need);

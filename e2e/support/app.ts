@@ -108,7 +108,6 @@ interface Handle {
   reviewDrafts(): ReviewDraftRow[];
   setBudget(id: string, budget: { autoTurns?: number | null; wakes?: number | null }): void;
   seedWorkstreamEvent(key: string, event: { actor: string; action: string; at: string; runId?: string | null; proposalId?: string | null; detail?: string | null }): void;
-  backdateWorkstream(key: string, days: number): void;
   holdWorkstream(key: string, reason: string): void;
   holdPip(on: boolean): void;
   pipIdle(): boolean;
@@ -316,17 +315,6 @@ export const seedWorkstreamEvent = (page: Page, key: string, event: { actor: str
     { key, event, missing: NO_MOCK },
   );
 
-/** Makes the open workstream on ticket `key` `days` days older: it opened that much earlier. */
-export const backdateWorkstream = (page: Page, key: string, days: number) =>
-  page.evaluate(
-    ({ key, days, missing }) => {
-      const mock = (globalThis as Mocked).__gossamrMock;
-      if (!mock) throw new Error(missing);
-      mock.backdateWorkstream(key, days);
-    },
-    { key, days, missing: NO_MOCK },
-  );
-
 /** Changes sample ticket `key` as someone editing it in Jira would: its summary, description or status (an id or a name). */
 export const editTicket = (page: Page, key: string, change: TicketEdit) =>
   page.evaluate(
@@ -412,12 +400,13 @@ export async function openAgents(page: Page) {
   }).toPass({ timeout: 10_000 });
 }
 
-/** Asks for the day's card over the Agents list from the palette, as Agents no longer shows it by itself. */
-export async function startMyDay(page: Page) {
+/** Opens "What Jira saw from me" from the palette. */
+export async function openJiraSent(page: Page) {
   await page.keyboard.press("ControlOrMeta+k");
-  await page.getByRole("dialog", { name: "Command palette" }).getByRole("combobox").fill("start my day");
-  await page.getByRole("dialog", { name: "Command palette" }).getByRole("option", { name: /^Start my day/ }).click();
-  await expect(agentsHome(page).locator("[data-start-my-day]")).toBeVisible();
+  const palette = page.getByRole("dialog", { name: "Command palette" });
+  await palette.getByRole("combobox").fill("what jira saw");
+  await palette.getByRole("option", { name: /^What Jira saw from me/ }).click();
+  await expect(page.locator("[data-jira-sent]")).toBeVisible();
 }
 
 /** Groups the Agents list by state, its lanes, which Agents does not do by default (it groups by workstream). */
@@ -481,10 +470,6 @@ export async function expectPeekInPlace(page: Page) {
 
 /** Pip's composer input, the only Pip input on screen. */
 export const homeComposer = (page: Page) => page.locator(PIP_INPUT);
-
-/** The cobweb on a workstream's heading in the Agents list: its drawing and its words for a screen reader (`data-workstream-wither`). */
-export const workstreamWeb = (page: Page, key: string) => workstreamGroup(page, key).locator("svg.cobweb");
-export const workstreamWebText = (page: Page, key: string) => workstreamGroup(page, key).locator("[data-workstream-wither]");
 
 /** The summary at the top of the Agents view: its filter chips (Needs you, Ready to review, Failed or stuck, All). */
 export const needsYouTray = (page: Page) => agentsHome(page).locator("[data-summary-chips]");

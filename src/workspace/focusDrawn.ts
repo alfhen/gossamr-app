@@ -16,9 +16,6 @@ const onPage = (find: () => HTMLElement | null) => {
 export const focusWorkstreamRow = (id: string) =>
   onPage(() => document.querySelector<HTMLElement>(`[data-workstream-group="${CSS.escape(id)}"] [data-workstream-open]`));
 
-/** Puts the keyboard back on the Agents view's list once a card over it has closed: its first workstream, else its heading. */
-export const focusAgentsList = () => onPage(() => document.querySelector<HTMLElement>("[data-agents-home] [data-workstream-open]") ?? document.querySelector<HTMLElement>("[data-agents-home] h1"));
-
 /** Puts the keyboard back on "Bring them here" of workstream `id`'s notice, which an Undo of the adoption restored. */
 export const focusAdoptButton = (id: string) =>
   onPage(() => document.querySelector<HTMLElement>(`[data-adopt-notice="${CSS.escape(id)}"] [data-adopt]`));

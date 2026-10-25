@@ -3,13 +3,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MockBackend } from "../backend/mock";
 import { agentSummary, mockAsk, mockPipEvents, scriptPip } from "../backend/mockPip";
 import type { AskRequest, ClaudeEvent } from "../backend/claude";
-import type { Run, RunState, ScreenContext, WorkstreamView } from "../types";
+import type { Run, RunState, ScreenContext } from "../types";
 import { useWorkspace } from "../workspaceStore";
-import { runPhrase } from "../lib/runNames";
-import { NUDGE_GAP_MS, nudgeCandidates, pickNudge, type NudgeScene } from "./nudges";
 import { NO_FILTERS } from "./agentsLogic";
 import { PipRunCard, PipRunStripView } from "./PipRunCard";
-import { STRIP_SHOWN, describeRun, nudgedOutside, runNudgeId, runNudges, runStatesNow, runSummaryPrompt, stripRuns } from "./pipRuns";
+import { STRIP_SHOWN, describeRun, stripRuns } from "./pipRuns";
 import { buildScreenContext, contextLines, type Screen } from "./screenContext";
 import { loadTabs, activeTab, useTabs } from "./tabsStore";
 import { useRuns } from "./runsStore";
@@ -28,84 +26,6 @@ const memory = () => {
 beforeEach(() => {
   vi.stubGlobal("localStorage", memory());
   useRuns.setState({ runs: [], sheet: null, status: "ready" });
-});
-
-describe("run nudges", () => {
-  it("leaves out the runs of a workstream Pip manages, whose wake turns tell the person", () => {
-    const view = (id: string, mode: "advise" | "manage") => ({ workstream: { id, mode } }) as WorkstreamView;
-    const runs = [run("done", { id: "managed", spec: { ...base.spec, workstream: "ws-m" } }), run("failed", { id: "advised", spec: { ...base.spec, workstream: "ws-a" } }), run("needsAnswer", { id: "loose" })];
-    const ids = runNudges(runs, new Set(), () => null, nudgedOutside([view("ws-m", "manage"), view("ws-a", "advise")])).map((n) => n.id);
-    expect(ids.sort()).toEqual(["run:advised:failed", "run:loose:needsAnswer"]);
-    expect(runNudges(runs, new Set())).toHaveLength(3);
-  });
-
-  it("speak up for a run that needs the person, finished or failed, and for nothing else", () => {
-    const states: RunState[] = ["queued", "launching", "working", "stopped", "unknown"];
-    expect(runNudges(states.map((s) => run(s)), new Set())).toEqual([]);
-    const loud = runNudges([run("needsAnswer"), run("needsPermission"), run("systemBlocked"), run("done"), run("failed")], new Set());
-    expect(loud.map((n) => n.kind).sort()).toEqual(["run-done", "run-failed", "run-needs", "run-needs", "run-needs"]);
-    expect(loud.every((n) => n.id.startsWith("run:r-"))).toBe(true);
-  });
-
-  it("never nudge for the quiet chip: a working run quiet for an hour stays silent", () => {
-    expect(runNudges([run("working", { lastProgressAt: iso(60) })], new Set())).toEqual([]);
-  });
-
-  it("name the run and offer to open it, or to ask Pip for a summary when it finished", () => {
-    const [needs] = runNudges([run("needsAnswer")], new Set(), () => "Aurora checkout totals");
-    expect(needs.text).toBe("Aurora checkout totals needs you. Want to look at what it asks?");
-    expect(needs.action).toEqual({ type: "open-run", id: "r-needsAnswer" });
-    const [done] = runNudges([run("done")], new Set(), () => "Aurora investigation");
-    expect(done.text).toBe("Aurora investigation finished. Want me to sum up what it found?");
-    // A ticket title isn't something that finds things, so the question names the run by ticket and step instead.
-    expect(done.action).toEqual({ type: "ask", prompt: "What did the agent find in run r-done?", shown: `What did ${runPhrase(run("done"))} find?` });
-    const [failed] = runNudges([run("failed")], new Set());
-    expect(failed.action).toEqual({ type: "open-run", id: "r-failed" });
-  });
-
-  it("get an answer about the one run the run-done nudge asks about, named as the person knows it", () => {
-    const done = run("done", { result: "Found the cause: the cache key ignores the locale.\n\nFor Jira: The cache key ignores the locale; a fix is a one-line change." });
-    const [nudge] = runNudges([done, run("needsAnswer")], new Set());
-    if (nudge.action.type !== "ask") throw new Error("the run-done nudge asks Pip");
-    const blank: ScreenContext = { view: null, item: null, filter: null, selection: [] };
-    const answer = scriptPip(nudge.action.prompt, blank, [], [done, run("needsAnswer")], NOW);
-    expect(answer.text).toContain(`I read the whole result of ${done.item ? `the ${done.item.key}` : "the"}`);
-    expect(answer.text).toContain("The cache key ignores the locale");
-    expect(answer.text).not.toContain("agent runs");
-    expect(answer.text).not.toContain(done.id);
-    expect(scriptPip("What did the agent find in run gone?", blank, [], [done], NOW).text).toContain("can't find that run");
-  });
-
-  it("come once per state change: the id carries the state, and what was announced stays quiet", () => {
-    const r = run("needsPermission");
-    expect(runNudgeId(r)).toBe("run:r-needsPermission:needsPermission");
-    const first = runNudges([r], new Set());
-    expect(first).toHaveLength(1);
-    expect(runNudges([r], new Set(first.map((n) => n.id)))).toEqual([]);
-    const moved = { ...r, state: "done" as const };
-    expect(runNudges([moved], new Set(first.map((n) => n.id)))).toHaveLength(1);
-    expect(runStatesNow([r, run("working"), moved])).toEqual(["run:r-needsPermission:needsPermission", "run:r-needsPermission:done"]);
-  });
-
-  it("respect a dismissal and the session's memory of what was shown", () => {
-    const [n] = runNudges([run("done")], new Set());
-    expect(pickNudge([n], [n.id], [])).toBeNull();
-    expect(pickNudge([n], [], [n.id])).toBeNull();
-    expect(pickNudge([n], [], [])).toBe(n);
-    expect(NUDGE_GAP_MS).toBeGreaterThan(0);
-  });
-
-  it("come first on any screen but Settings, newest first", () => {
-    const older = run("done", { id: "old", endedAt: iso(50) });
-    const newer = run("failed", { id: "new", endedAt: iso(5) });
-    const nudges = runNudges([older, newer], new Set());
-    expect(nudges.map((n) => n.id)).toEqual(["run:new:failed", "run:old:done"]);
-    const scene = (route: NudgeScene["route"]): NudgeScene => ({ route, filter: { type: "and", filters: [] }, count: 30, chips: 0, item: null, unassignedInView: 0, runs: nudges });
-    expect(nudgeCandidates(scene("workspace")).map((n) => n.id).slice(0, 2)).toEqual(["run:new:failed", "run:old:done"]);
-    expect(nudgeCandidates(scene("workspace")).some((n) => n.kind === "large-list")).toBe(true);
-    expect(nudgeCandidates(scene("agents")).map((n) => n.kind)).toEqual(["run-failed", "run-done"]);
-    expect(nudgeCandidates(scene("settings"))).toEqual([]);
-  });
 });
 
 describe("the strip of live runs", () => {
@@ -199,10 +119,6 @@ describe("what Pip is told about agents", () => {
   it("names the open run for what Pip can see", () => {
     expect(describeRun(run("working", { item: { connectionId: "mock", externalId: "CA-1", key: "CA-1" } }), "Checkout totals", NOW)).toBe("Checkout totals · Working");
     expect(describeRun(run("needsAnswer"), null, NOW)).toMatch(/^Investigate .+ · Needs an answer$/);
-  });
-
-  it("asks what the agents are doing with one fixed question", () => {
-    expect(runSummaryPrompt()).toBe("What are my agents doing?");
   });
 });
 

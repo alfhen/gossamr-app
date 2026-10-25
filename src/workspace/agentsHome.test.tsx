@@ -4,7 +4,7 @@ import { MockBackend } from "../backend/mock";
 import { itemRef } from "../backend/mockConnector";
 import type { Run, WorkstreamView } from "../types";
 import { useWorkspace } from "../workspaceStore";
-import { ClosedWorkstreams, DayAndWeek, DayScroll, WorkstreamHeadExtras, WorkstreamTools, fadeScroll, hasMoreBelow, rowTitle } from "./AgentsHome";
+import { ClosedWorkstreams, WorkstreamHeadExtras, WorkstreamTools, rowTitle } from "./AgentsHome";
 import { AgentsScreen, type AgentsActions } from "./AgentsView";
 import { NO_FILTERS } from "./agentsLogic";
 import { loadPrefs, usePrefs } from "./prefs";
@@ -202,38 +202,6 @@ describe("what a workstream's heading says of where it stands", () => {
 
   it("says a held-by-you workstream is held by you", () => {
     expect(renderToStaticMarkup(<WorkstreamHeadExtras view={view("ws-1", "CA-401", { heldReason: "person" })} />)).toMatch(/data-status="held"[^>]*>Held by you</);
-  });
-});
-
-describe("the day region's room, and its fade", () => {
-  it("shows a 'more below' cue only when a scroller is cut off by more than a few pixels", () => {
-    expect(hasMoreBelow({ scrollHeight: 444, scrollTop: 0, clientHeight: 301 })).toBe(true);
-    expect(hasMoreBelow({ scrollHeight: 444, scrollTop: 143, clientHeight: 301 })).toBe(false);
-    expect(hasMoreBelow({ scrollHeight: 303, scrollTop: 0, clientHeight: 301 })).toBe(false);
-  });
-
-  it("scrolls most of a page, and jumps instead of gliding when the person asked for less motion", () => {
-    expect(fadeScroll(200, false)).toEqual({ top: 160, behavior: "smooth" });
-    expect(fadeScroll(200, true)).toEqual({ top: 160, behavior: "auto" });
-  });
-
-  it("gives Plan my week nearly half the window, so its three picks show, and Start my day a third", () => {
-    expect(renderToStaticMarkup(<DayScroll label="Plan my week" tall>x</DayScroll>)).toContain("max-h-[min(45vh,26rem)]");
-    const start = renderToStaticMarkup(<DayScroll label="Start my day">x</DayScroll>);
-    expect(start).toContain("max-h-[30vh]");
-    expect(start).not.toContain("45vh");
-  });
-});
-
-describe("Start my day and Plan my week", () => {
-  it("are away until asked for, and the plan takes the card's place while it is open", () => {
-    expect(renderToStaticMarkup(<DayAndWeek />)).not.toContain("data-start-my-day");
-    seed(useWorkView, { dayOpen: true });
-    expect(renderToStaticMarkup(<DayAndWeek />)).toContain("data-start-my-day");
-    seed(useWorkView, { planOpen: true });
-    const plan = renderToStaticMarkup(<DayAndWeek />);
-    expect(plan).toContain("data-plan-my-week");
-    expect(plan).not.toContain("data-start-my-day");
   });
 });
 

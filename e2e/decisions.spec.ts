@@ -63,34 +63,6 @@ async function workingBuild(page: Page) {
 
 const audited = async (page: Page, action: string) => (await workstreamEvents(page)).filter((e) => e.action === action).map((e) => ({ actor: e.actor, runId: e.runId, detail: e.detail }));
 
-test("the first permission prompt on a Build explains Allow once in Terminal above the buttons: what it records, copies and leaves to you", async ({ page }) => {
-  // The first prompt the person ever sees: the config's profile has the explainer dismissed, so this one starts without.
-  await page.addInitScript(() => {
-    if (sessionStorage.getItem("explainer-unseeded")) return;
-    sessionStorage.setItem("explainer-unseeded", "1");
-    localStorage.setItem("gossamr-prefs", JSON.stringify({ ...JSON.parse(localStorage.getItem("gossamr-prefs") ?? "{}"), permissionExplainerSeen: false }));
-  });
-  await openApp(page, MANAGED);
-  await startWorkstream(page, "CA-401");
-  const build = await workingBuild(page);
-  await askPermission(page, build.id, `approve Bash: git push -u origin worktree-${build.name}`);
-  await openAgents(page);
-  await expandAllNeeds(page);
-  await openNeedOfKind(page, "permission");
-  const explainer = asking(page).locator("[data-permission-explainer]");
-  await expect(explainer).toContainText("Allow once in Terminal records your choice, opens this run in Terminal with the exact command copied, and you confirm there.");
-  await expect(explainer).toContainText("Deny tells the agent no, and it carries on without it.");
-  const [e, d] = [(await explainer.boundingBox())!, (await asking(page).locator("[data-permission-decisions]").boundingBox())!];
-  expect(e.y + e.height).toBeLessThanOrEqual(d.y + 1);
-  // It says it once: the line under the command that said the same is not repeated beside it.
-  await expect(asking(page)).not.toContainText("Claude Code takes a yes only in its own prompt.");
-  await explainer.getByRole("button", { name: "Got it" }).click();
-  await expect(explainer).toHaveCount(0);
-  await expect(asking(page)).toContainText("Claude Code takes a yes only in its own prompt.");
-  // Nothing was answered by reading it.
-  expect(await mockAttached(page)).toEqual([]);
-});
-
 test("Allow once on a Build opens it in Terminal for that exact command, and a push Gossamr forbids offers no Allow", async ({ page, context }) => {
   await context.grantPermissions(["clipboard-read", "clipboard-write"]);
   await openApp(page, MANAGED);
