@@ -410,8 +410,6 @@ export function makerName(by: ProposalMaker): string {
       return "You";
     case "pip":
       return "Pip";
-    case "autopilot":
-      return "Autopilot";
     case "agent":
       return "An agent run";
     default:

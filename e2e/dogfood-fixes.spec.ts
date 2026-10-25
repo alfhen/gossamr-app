@@ -1,11 +1,10 @@
 import { expect, test, type Page } from "@playwright/test";
-import { closeWorkstreamSheet, advanceRuns, agentsSettled, askPip, editTicket, expandNeedsYou, expectToast, finishOnHome, githubWrites, heldBanner, homeConversation, homeConversationRegion, homeRunCards, homeSettled, inlineStart, jiraWrites, landOnWorkspace, mockRuns, needsPane, openAgents, openApp, openPip, openTechnical, peekSheet, peekTicket, PIP_INPUT, pipConversation, pipPane, reviewedDraft, scriptNextRun, selectWorkstream, setBudget, startWorkstream, stepChip, stepRail, surfacePullRequests, wakes, workstreamEvents, workstreamGroup, openNeedRow, openRunOf, paneSettled as settled } from "./support/app";
+import { closeWorkstreamSheet, advanceRuns, askPip, editTicket, expandNeedsYou, expectToast, finishOnHome, githubWrites, heldBanner, homeConversation, homeConversationRegion, homeRunCards, homeSettled, inlineStart, jiraWrites, showWorkspace, mockRuns, needsPane, openAgents, openApp, openPip, openTechnical, peekSheet, peekTicket, PIP_INPUT, pipConversation, pipPane, reviewedDraft, scriptNextRun, selectWorkstream, setBudget, startWorkstream, stepChip, stepRail, surfacePullRequests, wakes, workstreamEvents, workstreamGroup, openNeedRow, openRunOf, paneSettled as settled } from "./support/app";
 
 // New workstreams open in Manage, so the sample supervisor starts the routine next steps; pull requests show only when a test says.
 const MANAGED = "runs=empty&prSurface=manual&wsManage=1";
 
 const setup = (page: Page) => page.getByRole("dialog", { name: "Start an agent" });
-const safety = (page: Page) => page.getByRole("dialog", { name: "Agents safety and settings" });
 
 /** The newest run of `kind`, as the sample backend holds it. */
 const newest = async (page: Page, kind: string) => (await mockRuns(page)).find((r) => r.kind === kind) ?? null;
@@ -23,17 +22,13 @@ async function started(page: Page, kind: string) {
   return (await newest(page, kind))!;
 }
 
-/** Asks Pip in the pane for an investigation of CA-401, opens its draft past the one-time safety sheet and starts it. */
+/** Asks Pip in the pane for an investigation of CA-401, opens its draft and starts it. */
 async function startInvestigation(page: Page) {
   await askPip(page, "investigate this");
   await settled(page);
   const card = pipPane(page).getByRole("article", { name: "Start an agent: CA-401" }).last();
-  for (let attempt = 0; attempt < 2; attempt++) {
-    await card.getByRole("button", { name: "Review and start →" }).click();
-    await expect(setup(page).or(safety(page))).toBeVisible();
-    if (!(await safety(page).isVisible())) break;
-    await safety(page).getByRole("button", { name: "Close" }).click();
-  }
+  await card.getByRole("button", { name: "Review and start →" }).click();
+  await expect(setup(page)).toBeVisible();
   await setup(page).getByRole("button", { name: "Start agent" }).click();
   await expect(setup(page)).toHaveCount(0);
 }
@@ -179,23 +174,19 @@ const sheetHint = (page: Page) => runSheet(page).locator("span.truncate").first(
 
 /** A fresh profile on the workspace with the sample's repositories watched, so a setup sheet has a clone to start in. */
 async function openWatching(page: Page) {
-  await landOnWorkspace(page);
   await page.goto("/?runs=empty&mockRepos=14");
   await page.getByRole("button", { name: "Start watching" }).click();
+  await showWorkspace(page);
   await expect(page.getByText("CA-401", { exact: true }).first()).toBeVisible();
 }
 
 
-test.describe("agent intro continues (D1, D25)", () => {
-  test("from a ticket peek, continue opens the setup sheet with the peek still there, and Esc closes the sheet first", async ({ page }) => {
+test.describe("starting an agent from the peek (D1)", () => {
+  test("from a ticket peek, the setup sheet opens with the peek still there, and Esc closes the sheet first", async ({ page }) => {
     await openApp(page, "runs=empty");
     await peekTicket(page, "CA-401");
     await peekSheet(page).getByRole("button", { name: "Agent", exact: true }).click();
     await page.getByRole("menuitem", { name: /^Investigate this ticket/ }).click();
-    await expect(safety(page)).toBeVisible();
-    await expect(peekSheet(page)).toHaveAttribute("aria-label", "Details for CA-401");
-    await expect(safety(page).getByRole("button", { name: "Got it, continue" })).toBeFocused();
-    await safety(page).getByRole("button", { name: "Got it, continue" }).click();
     await expect(setupSheet(page)).toBeVisible();
     await expect(setupSheet(page)).toContainText("CA-401");
     await expect(peekSheet(page)).toHaveAttribute("aria-label", "Details for CA-401");
@@ -219,9 +210,6 @@ test.describe("sheets and launcher (D16, D24)", () => {
     await peekTicket(page, "CA-401");
     await peekSheet(page).getByRole("button", { name: "Agent", exact: true }).click();
     await page.getByRole("menuitem", { name: /^Investigate this ticket/ }).click();
-    await expect(safety(page)).toBeVisible();
-    await expect(page.locator("[data-pip-launcher]")).toHaveCount(0);
-    await safety(page).getByRole("button", { name: "Got it, continue" }).click();
     await expect(setupSheet(page)).toBeVisible();
     await expect(page.locator("[data-pip-launcher]")).toHaveCount(0);
     await setupSheet(page).getByRole("combobox", { name: "Repository" }).selectOption("acme/webshop");
@@ -354,7 +342,6 @@ test.describe("agent counts and tray (D4, D27)", () => {
     await peekTicket(page, "CA-401");
     await peekSheet(page).getByRole("button", { name: "Agent", exact: true }).click();
     await page.getByRole("menuitem", { name: /^Investigate this ticket/ }).click();
-    await safety(page).getByRole("button", { name: "Got it, continue" }).click();
     await setupSheet(page).getByRole("combobox", { name: "Repository" }).selectOption("acme/webshop");
     await openTechnical(setupSheet(page));
     await expect(setupSheet(page).locator("[data-level]", { hasText: /\d+ of \d+ agent slots in use \(including ones waiting on you\)$/ })).toBeVisible();
@@ -402,7 +389,6 @@ test.describe("Your turn and Needs you name different things (D5)", () => {
 
   test("the rail's one badge names what it counts, in its tooltip and in its button's name, and Activity has none", async ({ page }) => {
     await openApp(page);
-    await agentsSettled(page, true);
     const named = async (button: RegExp, badge: RegExp) => {
       const b = page.getByRole("button", { name: button });
       await expect(b).toBeVisible();
@@ -521,7 +507,6 @@ test.describe("focus and keyboard (D8, D29, D30)", () => {
 test.describe("starting a workstream and help (D6, D26)", () => {
   test("typing 'start a workstream' in Ctrl+K lists tickets to start it on, not only Ask Pip", async ({ page }) => {
     await openApp(page, "runs=empty");
-    await agentsSettled(page, true);
     await page.keyboard.press("ControlOrMeta+k");
     const dialog = page.getByRole("dialog", { name: "Command palette" });
     await dialog.getByRole("combobox").fill("start a workstream");
@@ -661,8 +646,7 @@ test.describe("description diff (D31)", () => {
     const before = (await mockRuns(page)).map((r) => r.id);
     await peekSheet(page).getByRole("button", { name: "Agent", exact: true }).click();
     await page.getByRole("menuitem", { name: /^Plan this ticket/ }).click();
-    await expect(setupSheet(page).or(safety(page))).toBeVisible();
-    if (await safety(page).isVisible()) await safety(page).getByRole("button", { name: "Got it, continue" }).click();
+    await expect(setupSheet(page)).toBeVisible();
     await setupSheet(page).getByRole("combobox", { name: "Repository" }).selectOption("acme/webshop");
     await setupSheet(page).getByRole("button", { name: "Start agent" }).click();
     await expect(setupSheet(page)).toHaveCount(0);

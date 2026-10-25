@@ -35,8 +35,6 @@ export interface FrameProps {
   draft?: boolean;
   /** Docked in the page beside what it belongs to, as a column, rather than sliding over it from the right. */
   docked?: boolean;
-  /** The sheet is modal: Tab and Shift+Tab stay inside it, and a screen reader is told the page behind is not available. For the one the person must answer before carrying on. */
-  modal?: boolean;
   onWide?(): void;
   onClose(): void;
   children: ReactNode;
@@ -61,24 +59,7 @@ export function sheetFocusTarget<T extends { isConnected: boolean }>(opener: T |
 }
 
 /** The frame the agent sheets share with the ticket peek: it slides over the screen from the right. */
-/** What a Tab can land on inside a sheet. */
-const TABBABLE = 'a[href], button:not(:disabled), input:not(:disabled):not([type=hidden]), select:not(:disabled), textarea:not(:disabled), summary, [tabindex]:not([tabindex="-1"])';
-
-/**
- * Keeps Tab inside `frame` while it is modal: from the last control it goes to the first, from the first (or the frame
- * itself) with Shift it goes to the last. Anything between is the browser's own Tab. True when it moved focus.
- */
-export function trapTab(ev: { key: string; shiftKey: boolean; altKey: boolean; ctrlKey: boolean; metaKey: boolean }, frame: Pick<HTMLElement, "querySelectorAll">, active: Element | null): HTMLElement | null {
-  if (ev.key !== "Tab" || ev.altKey || ev.ctrlKey || ev.metaKey) return null;
-  // A control inside a closed disclosure has no box, so it is not in the order.
-  const items = [...frame.querySelectorAll<HTMLElement>(TABBABLE)].filter((el) => el === active || el.getClientRects().length > 0);
-  if (!items.length) return null;
-  const at = active ? items.indexOf(active as HTMLElement) : -1;
-  if (ev.shiftKey) return at <= 0 ? items[items.length - 1] : null;
-  return at === items.length - 1 ? items[0] : null;
-}
-
-export function SheetFrame({ id = "agent-sheet", label, title, hint, wide, min = 520, draft = false, docked = false, modal = false, onWide, onClose, children, footer, topOn }: FrameProps) {
+export function SheetFrame({ id = "agent-sheet", label, title, hint, wide, min = 520, draft = false, docked = false, onWide, onClose, children, footer, topOn }: FrameProps) {
   const peek = usePaneWidths().peek;
   const frame = useRef<HTMLElement>(null);
   const body = useRef<HTMLDivElement>(null);
@@ -102,17 +83,6 @@ export function SheetFrame({ id = "agent-sheet", label, title, hint, wide, min =
       id={id}
       role="dialog"
       aria-label={label}
-      aria-modal={modal || undefined}
-      onKeyDown={
-        modal
-          ? (ev) => {
-              const to = trapTab(ev, ev.currentTarget, document.activeElement);
-              if (!to) return;
-              ev.preventDefault();
-              to.focus();
-            }
-          : undefined
-      }
       className={`selectable ws-legacy outline-none flex max-w-full flex-col border-l border-ws-sep2 bg-ws-win ${docked ? "relative h-full shrink-0" : "ws-peek-in absolute inset-y-0 right-0 z-30 shadow-[-14px_0_40px_rgb(0_0_0/0.16)]"} ${draft ? "outline-2 -outline-offset-[5px] outline-dashed outline-ws-pip" : ""}`}
       style={{ width: wide && !docked ? "100%" : Math.max(peek, min), minWidth: Math.min(min, 360) }}
     >

@@ -7,13 +7,10 @@ import { itemKey, YOUR_TURN } from "../lib/filter";
 import type { WorkItem } from "../types";
 import { KIND_LABEL, permissionRequest, resultHeadline } from "./agentsLogic";
 
-export const CHIPS = ["all", "needsMe", "mentions", "comments", "status", "assigned", "drafts"] as const;
-/** The chip that shows what Pip and the agents did in the workstreams, from their audit; offered only while Agents are on. */
+/** The chip that shows what Pip and the agents did in the workstreams, from their audit. */
 export const PIP_CHIP = "pip";
-export type ActivityChip = (typeof CHIPS)[number] | typeof PIP_CHIP;
-
-/** The chips to offer: every one in `CHIPS`, then "Pip & agents" while Agents are on. */
-export const chipsFor = (o: { agents: boolean }): readonly ActivityChip[] => (o.agents ? [...CHIPS, PIP_CHIP] : CHIPS);
+export const CHIPS = ["all", "needsMe", "mentions", "comments", "status", "assigned", "drafts", PIP_CHIP] as const;
+export type ActivityChip = (typeof CHIPS)[number];
 
 export const CHIP_LABEL: Record<ActivityChip, string> = {
   pip: "Pip & agents",
@@ -158,8 +155,8 @@ export const shownSourceOf = (source: ActivitySource, offered: readonly Activity
 /** Whether a source's "Mark all read" is about agent entries. */
 export const coversAgents = (source: ActivitySource) => source === "all" || source === "agents";
 
-/** The sources worth offering: the tracker always, GitHub once connected, Agents while they are on. */
-export const sourcesFor = (o: { github: boolean; agents: boolean }): ActivitySource[] => ["all", "jira", ...(o.github ? (["github"] as const) : []), ...(o.agents ? (["agents"] as const) : [])];
+/** The sources worth offering: the tracker and Agents always, GitHub once connected. */
+export const sourcesFor = (o: { github: boolean }): ActivitySource[] => ["all", "jira", ...(o.github ? (["github"] as const) : []), "agents"];
 
 /** A GitHub event as a row of the feed. `item` is the ticket it belongs to when one is known. */
 export interface CodeEntry {

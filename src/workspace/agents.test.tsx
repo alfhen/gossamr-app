@@ -447,7 +447,7 @@ describe("empty, first-run and errors", () => {
   it("states the limits honestly in the explainer", () => {
     const out = renderToStaticMarkup(<AgentsIntro onDismiss={vi.fn()} />).replace(/&#x27;/g, "'");
     for (const phrase of [
-      "You approve each one first. Agents are on by default; turn them off any time in Settings.",
+      "You approve each one first.",
       "A Build runs as you, with your own Claude settings: anything your Claude can do, it can do.",
       "Read-only steps are signed in as you but run without your settings.",
       "Investigate, Triage, Plan, Review and Verify are read-only: Claude Code itself refuses their file edits and writing commands, and your own and the repository's allow rules don't apply.",

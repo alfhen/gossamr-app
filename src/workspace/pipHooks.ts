@@ -3,7 +3,6 @@ import { filterChips } from "../lib/filter";
 import { itemsByFilter, useItemsByFilter, useWorkspace } from "../workspaceStore";
 import type { WorkItem } from "../types";
 import { useActivity } from "./activityStore";
-import { useAgentsFlag } from "./agentsFlag";
 import type { Need } from "../lib/needs";
 import { useRuns } from "./runsStore";
 import { currentNeeds, useNeedsYou } from "./useNeeds";
@@ -19,8 +18,7 @@ const peekedItems = (p: ReturnType<typeof useWorkspace.getState>["peeked"]) => O
 type RunsState = ReturnType<typeof useRuns.getState>;
 
 // What needs the person is Needs you's one list: the agents waiting on them are its run needs, and its length is the count the Agents header gives.
-const agentsIn = (on: boolean, { sheet, runs, filters, earlierOpen }: Pick<RunsState, "sheet" | "runs" | "filters" | "earlierOpen">, needs: readonly Need[]): Screen["agents"] =>
-  on ? { openRun: sheet?.type === "run" ? sheet.id : null, waiting: needs.filter((n) => n.runId).length, needsYou: needs.length, runs, filters, earlierOpen, now: Date.now() } : undefined;
+const agentsIn = ({ sheet, runs, filters, earlierOpen }: Pick<RunsState, "sheet" | "runs" | "filters" | "earlierOpen">, needs: readonly Need[]): Screen["agents"] => ({ openRun: sheet?.type === "run" ? sheet.id : null, waiting: needs.filter((n) => n.runId).length, needsYou: needs.length, runs, filters, earlierOpen, now: Date.now() });
 
 /** The screen as it is right now, read when a question is asked so it is about what is on screen then. */
 export function readScreen(): Screen {
@@ -38,7 +36,7 @@ export function readScreen(): Screen {
     selected: tabs.selected,
     marked: tabs.marked,
     activity: { chip, container },
-    agents: agentsIn(useAgentsFlag.getState().enabled, useRuns.getState(), currentNeeds()),
+    agents: agentsIn(useRuns.getState(), currentNeeds()),
     workstream: openWorkstreamLine(useWorkView.getState().selected, useWorkstreams.getState().list),
   };
 }
@@ -58,13 +56,12 @@ export function useScreen(): Screen {
   const marked = useTabs((s) => s.marked);
   const chip = useActivity((s) => s.chip);
   const container = useActivity((s) => s.container);
-  const enabled = useAgentsFlag((s) => s.enabled);
   const sheet = useRuns((s) => s.sheet);
   const runs = useRuns((s) => s.runs);
   const filters = useRuns((s) => s.filters);
   const earlierOpen = useRuns((s) => s.earlierOpen);
   const needs = useNeedsYou();
-  const agents = useMemo(() => agentsIn(enabled, { sheet, runs, filters, earlierOpen }, needs), [enabled, sheet, runs, filters, earlierOpen, needs]);
+  const agents = useMemo(() => agentsIn({ sheet, runs, filters, earlierOpen }, needs), [sheet, runs, filters, earlierOpen, needs]);
   const openSelected = useWorkView((s) => s.selected);
   const workstream = useWorkstreams((s) => openWorkstreamLine(openSelected, s.list));
   return useMemo(

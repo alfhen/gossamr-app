@@ -221,7 +221,6 @@ impl RunService {
     /// hasn't launched, waiting for a slot or not, has no session yet, so it is withdrawn: marked stopped before it
     /// started, without asking Claude anything (the person's Cancel).
     pub async fn stop(&self, run_id: &str) -> Result<Run> {
-        self.ensure_enabled()?;
         let _turn = self.launching.lock().await;
         let mut run = self.load(run_id).await?;
         if withdrawable(&run) {
@@ -281,7 +280,6 @@ impl RunService {
     /// one hold of the launch lock: the slots it frees are never taken by a waiting run. A session that isn't in the run
     /// index is never touched.
     pub async fn stop_all(&self) -> Result<StopAll> {
-        self.ensure_enabled()?;
         let _turn = self.launching.lock().await;
         let tc = self.toolchain().await?;
         let mut tally = StopAll::default();
@@ -334,7 +332,6 @@ impl RunService {
 
     /// Opens Terminal in the run's worktree with `claude attach` for its session.
     pub async fn attach(&self, run_id: &str) -> Result<()> {
-        self.ensure_enabled()?;
         let run = self.load(run_id).await?;
         let id = run.short_id.clone().ok_or_else(|| refuse("This run has no session to open yet."))?;
         let tc = self.toolchain().await?;
@@ -347,7 +344,6 @@ impl RunService {
     /// Opens Terminal in the run's clone running plain `claude`, so Claude can ask its one-time trust question or sign
     /// the person in. Only for a failed run whose reason is that one, and only for the clone in its stored spec.
     pub async fn open_claude(&self, run_id: &str, purpose: Purpose) -> Result<()> {
-        self.ensure_enabled()?;
         let run = self.load(run_id).await?;
         if run.state != RunState::Failed || !purpose.allows(run.failure.as_ref()) {
             return Err(refuse(purpose.refusal()));
@@ -358,7 +354,6 @@ impl RunService {
     /// Opens Terminal running plain `claude` in a clone before any run exists, for the one-time trust question. Only a
     /// folder under the roots Gossamr scans for clones or under `~/Gossamr/agents` qualifies.
     pub async fn trust_folder(&self, folder: &Path) -> Result<()> {
-        self.ensure_enabled()?;
         let real = folder.canonicalize().map_err(|_| refuse(format!("{} isn't a folder that exists", folder.display())))?;
         let agents = self.home.as_deref().map(super::fresh::agents_root);
         let inside = |root: &PathBuf| root.canonicalize().is_ok_and(|r| real.starts_with(r));
@@ -379,7 +374,6 @@ impl RunService {
     /// Bytes under the run's folder in Claude's `jobs` directory (where multi-gigabyte scratch space lives): at least
     /// this much, as the count stops after three seconds. Only this run's folder is read.
     pub async fn disk(&self, run_id: &str) -> Result<u64> {
-        self.ensure_enabled()?;
         let run = self.load(run_id).await?;
         let id = run.short_id.ok_or_else(|| refuse("This run has no session yet."))?;
         let tc = self.toolchain().await?;

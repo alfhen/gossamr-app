@@ -11,7 +11,6 @@ import { SUGGESTED_TICKETS, START_WORKSTREAM, buildCommands, agentCommands, askT
 import { workContainers } from "./domains";
 import { ticketKeyOf } from "./watchLogic";
 import { projectOf, withProject } from "./filters";
-import { useAgentsEnabled } from "./agentsFlag";
 import { usePrefs } from "./prefs";
 import { useRunSetup } from "./runSetupStore";
 import { useRuns } from "./runsStore";
@@ -345,7 +344,6 @@ export function Palette() {
   const proposals = useWorkspace((s) => s.proposals);
   const github = useWorkspace((s) => s.connections.some((c) => c.kind === "github"));
   const unread = useActivity((s) => s.unread + s.codeUnread);
-  const agents = useAgentsEnabled();
   const needingMe = useNeedsYou().length;
   const savedViews = useTabs((s) => s.savedViews);
   const selected = useTabs((s) => s.selected);
@@ -385,7 +383,6 @@ export function Palette() {
       view: tab.view,
       unreadActivity: unread,
       github,
-      agents,
       needsYou: needingMe,
       ticket: ticket ? { key: ticket.item.key, workstream: !!useWorkstreams.getState().forItem(ticket.item.key, ticket.item.connectionId) } : null,
       onAgents: useTabs.getState().route === "agents",
@@ -395,23 +392,23 @@ export function Palette() {
     const all = Object.values(items);
     const tickets = ticketCommands(all, query, actions.jumpToItem);
     // A typed ticket key stays first; any other ticket comes after the commands the query names ("runs", "agents").
-    const ranked = rankCommands([...contextEntries(subject, agents), ...undoEntries(), ...commands, ...unwatchCommands(sorted.filter((c) => watch.find((w) => w.connectionId === c.ref.connectionId)?.mode === "selected"), query, actions)], query);
+    const ranked = rankCommands([...contextEntries(subject), ...undoEntries(), ...commands, ...unwatchCommands(sorted.filter((c) => watch.find((w) => w.connectionId === c.ref.connectionId)?.mode === "selected"), query, actions)], query);
     const order = searchOrder(tickets, ranked, query);
     const found = [
       ...order.head,
       ...order.tickets,
       ...keyCommand(query, all, actions.openTicket),
       ...pullCommand(query, actions.openPull),
-      ...(agents ? askToPlanCommands(all, query, actions) : []),
-      ...(agents ? agentCommands(all, query, actions.startAgentOn) : []),
-      ...(agents ? workstreamCommands(workstreams, query, actions) : []),
+      ...askToPlanCommands(all, query, actions),
+      ...agentCommands(all, query, actions.startAgentOn),
+      ...workstreamCommands(workstreams, query, actions),
       // The peeked ticket's own "Start a workstream" is in the commands already.
-      ...(agents ? startWorkstreamCommands(all, query, workstreams, actions).filter((c) => !ticket || c.id !== `workstream:start:${itemKey(ticket.item)}`) : []),
+      ...startWorkstreamCommands(all, query, workstreams, actions).filter((c) => !ticket || c.id !== `workstream:start:${itemKey(ticket.item)}`),
       ...order.commands,
       ...watchCommands(unwatched.map((e) => ({ ref: e.ref, key: e.key, name: e.name })), actions),
     ];
     return withAskPip(found, query, actions.askPip);
-  }, [containers, items, watch, proposals, github, unread, agents, needingMe, savedViews, tab.filter, tab.view, query, step, unwatched, selected, workstreams, me, subject, clarityLearning]);
+  }, [containers, items, watch, proposals, github, unread, needingMe, savedViews, tab.filter, tab.view, query, step, unwatched, selected, workstreams, me, subject, clarityLearning]);
 
   // A typed key that isn't among the watched tickets is looked up in the full cache (or read live), so a Done ticket there is said to be Done.
   const typedKey = step.type === "workstream" ? ticketKeyOf(query) : null;

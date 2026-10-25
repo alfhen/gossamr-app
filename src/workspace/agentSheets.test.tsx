@@ -898,12 +898,11 @@ describe("what an agent sheet keeps clear", () => {
   });
 });
 
-describe("the safety sheet as the one-time intro", () => {
-  const intro = (on: boolean) =>
-    renderToStaticMarkup(<AgentsSettingsView runs={[]} stopping={false} keepRunning={0} settings={SETTINGS} cleanup={null} onSettings={vi.fn()} onCleanup={vi.fn()} onStopAll={vi.fn()} onClose={vi.fn()} intro={on} onContinue={vi.fn()} />);
+describe("the safety sheet", () => {
+  const sheet = () => renderToStaticMarkup(<AgentsSettingsView runs={[]} stopping={false} keepRunning={0} settings={SETTINGS} cleanup={null} onSettings={vi.fn()} onCleanup={vi.fn()} onStopAll={vi.fn()} onClose={vi.fn()} />);
 
   it("starts with three lines that are true for each kind, before the longer explanation", () => {
-    const html = intro(false);
+    const html = sheet();
     const lines = [...html.matchAll(/data-safety-summary[\s\S]*?<\/ul>/g)][0][0].match(/<span>([^<]+)<\/span>/g)!.map((m) => m.slice(6, -7).replace(/&#x27;/g, "'"));
     expect(lines).toEqual(SAFETY_SUMMARY.map((l) => l.text));
     expect(lines[0]).toMatch(/^Investigate, Triage, Plan, Review and Verify only read/);
@@ -916,20 +915,6 @@ describe("the safety sheet as the one-time intro", () => {
     expect(lines[1]).toContain("both are requests, not locks");
     expect(lines[2]).toBe("Gossamr posts to Jira or GitHub only what you approve. A Build runs with your Claude settings and could reach Jira or GitHub on its own: your Claude settings, not Gossamr, decide that.");
     expect(html.indexOf("data-safety-summary")).toBeLessThan(html.indexOf("What a Build may touch"));
-  });
-
-  it("shows only the three lines on the first action, the rest folded behind Details, and none of it twice (D25)", () => {
-    const first = intro(true);
-    expect(first).toMatch(/<details data-safety-details="true"[^>]*><summary[^>]*>Details: stopping agents, what a Build may touch, limits and settings<\/summary>/);
-    expect(first.indexOf("data-safety-summary")).toBeLessThan(first.indexOf("<details"));
-    expect(first.indexOf("<details")).toBeLessThan(first.indexOf("Stop everything"));
-    // Opened from Agents later, the same sheet has no fold.
-    expect(intro(false)).not.toContain("<details data-safety-details");
-  });
-
-  it("has Got it, continue in its footer only when it opened in place of the person's first action", () => {
-    expect(intro(true)).toMatch(/<button[^>]*>Got it, continue<\/button>/);
-    expect(intro(false)).not.toContain("Got it, continue");
   });
 });
 

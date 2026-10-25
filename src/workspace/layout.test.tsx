@@ -12,7 +12,6 @@ import { useToasts, LIFETIME_MS, MAX_QUEUED, STALE_MS } from "./toasts";
 import { MORE_BUTTON, sameWindow, tabWindow } from "./TabBar";
 import { canvasRoom, regionTarget } from "./Workspace";
 import { RowBadges } from "./ListView";
-import { useAgentsFlag } from "./agentsFlag";
 import { useWorkstreams } from "./workstreamsStore";
 import type { WorkstreamView, Run } from "../types";
 import { SavedViewsPanel, type SavedViewsPanelProps } from "./SavedViews";
@@ -268,11 +267,9 @@ describe("nothing covers anything", () => {
   });
 
   it("draws Hold all as a pause icon with a note on what it does", () => {
-    const flag = useAgentsFlag.getInitialState();
     const ws = useWorkstreams.getInitialState();
-    const before = { enabled: flag.enabled, list: ws.list };
+    const before = { list: ws.list };
     const view = { workstream: { id: "ws-1", closedAt: null, mode: "manage", heldReason: null } } as unknown as WorkstreamView;
-    Object.assign(flag, { enabled: true });
     Object.assign(ws, { list: [view] });
     try {
       const out = renderToStaticMarkup(<Rail />);
@@ -282,7 +279,6 @@ describe("nothing covers anything", () => {
       expect(HOLD_ALL_NOTE).toMatch(/agents carry on/);
       for (const b of out.match(/<button[^>]*>/g) ?? []) expect(b).toMatch(/aria-label="[^"]+"/);
     } finally {
-      Object.assign(flag, { enabled: before.enabled });
       Object.assign(ws, { list: before.list });
     }
   });

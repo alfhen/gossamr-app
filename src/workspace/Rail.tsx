@@ -7,7 +7,6 @@ import { useActiveTab, useFilterCounts, useLookup } from "./hooks";
 import { workConnections, workContainers } from "./domains";
 import { usePopover } from "./Popover";
 import { projectColour, projectInitials } from "./projects";
-import { useAgentsEnabled } from "./agentsFlag";
 import { usePrefs } from "./prefs";
 import { Icon } from "./AgentIcons";
 import { Icon as Glyph } from "../components/icons";
@@ -297,7 +296,6 @@ export function Rail() {
   const containers = useWorkspace((s) => s.containers);
   const watch = useWorkspace((s) => s.watch);
   const kind = useWorkspace((s) => workConnections(s.connections)[0]?.kind);
-  const agentsEnabled = useAgentsEnabled();
   const pipOpen = usePrefs((s) => s.pipOpen);
   const setPaletteOpen = usePrefs((s) => s.setPaletteOpen);
   const project = projectOf(tab.filter);
@@ -344,8 +342,8 @@ export function Rail() {
         <RailButton label="Activity" current={route === "activity"} onClick={() => setRoute("activity")} className={`text-lg ${plain(route === "activity")}`}>
           <BellIcon />
         </RailButton>
-        {agentsEnabled && <AgentsButton current={route === "agents"} />}
-        {agentsEnabled && <HoldAllButton />}
+        <AgentsButton current={route === "agents"} />
+        <HoldAllButton />
         <RailButton label="Settings" current={route === "settings"} onClick={() => setRoute("settings")} className={`text-lg ${plain(route === "settings")}`}>
           <span aria-hidden>⚙</span>
         </RailButton>

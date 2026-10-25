@@ -10,7 +10,6 @@ const KEY = "CA-408";
 const ANSWER = "Done means the winback mail goes to lapsed customers. The open rate should rise. Only the winback flow is in scope. The CRM team asked for it.";
 
 const setup = (page: Page) => page.getByRole("dialog", { name: "Start an agent" });
-const safety = (page: Page) => page.getByRole("dialog", { name: "Agents safety and settings" });
 const runsOf = async (page: Page, kind: string) => (await mockRuns(page)).filter((r) => r.kind === kind);
 
 /** Asks Pip for an investigation and starts it from the setup sheet, as the person does, in the Pip pane or on Pip home. */
@@ -21,12 +20,8 @@ async function startInvestigation(page: Page, home = false) {
   if (home) await homeSettled(page);
   else await paneSettled(page);
   const where = home ? homeConversationRegion(page) : pipPane(page);
-  for (let attempt = 0; attempt < 2; attempt++) {
-    await where.getByRole("article", { name: `Start an agent: ${KEY}` }).last().getByRole("button", { name: /^Review and start/ }).click();
-    await expect(setup(page).or(safety(page))).toBeVisible();
-    if (!(await safety(page).isVisible())) break;
-    await safety(page).getByRole("button", { name: "Close" }).click();
-  }
+  await where.getByRole("article", { name: `Start an agent: ${KEY}` }).last().getByRole("button", { name: /^Review and start/ }).click();
+  await expect(setup(page)).toBeVisible();
   await setup(page).getByRole("button", { name: "Start agent" }).click();
   await expect(setup(page)).toHaveCount(0);
 }

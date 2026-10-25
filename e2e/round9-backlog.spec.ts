@@ -45,19 +45,14 @@ test.describe("the plan's intro (G20)", () => {
 });
 
 test.describe("the answers draft says which reply it came from (G20)", () => {
-  /** Asks Pip for an investigation of `key` and starts it past the one-time safety sheet, as the person does. */
+  /** Asks Pip for an investigation of `key` and starts it, as the person does. */
   async function startInvestigation(page: Page, key: string) {
     await paneSettled(page);
     await askPip(page, "investigate this");
     await paneSettled(page);
     const setup = page.getByRole("dialog", { name: "Start an agent" });
-    const safety = page.getByRole("dialog", { name: "Agents safety and settings" });
-    for (let attempt = 0; attempt < 2; attempt++) {
-      await pipPane(page).getByRole("article", { name: `Start an agent: ${key}` }).last().getByRole("button", { name: "Review and start →" }).click();
-      await expect(setup.or(safety)).toBeVisible();
-      if (!(await safety.isVisible())) break;
-      await safety.getByRole("button", { name: "Close" }).click();
-    }
+    await pipPane(page).getByRole("article", { name: `Start an agent: ${key}` }).last().getByRole("button", { name: "Review and start →" }).click();
+    await expect(setup).toBeVisible();
     await setup.getByRole("button", { name: "Start agent" }).click();
     await expect(setup).toHaveCount(0);
   }

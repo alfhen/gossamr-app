@@ -11,7 +11,6 @@ const READ_ONLY_TESTS = "Read-only, except the repository's tests: Claude Code r
 const READ_ONLY_GUARD_START = "This run is read-only: Claude Code itself refuses file edits";
 
 const setup = (page: Page) => page.getByRole("dialog", { name: "Start an agent" });
-const safety = (page: Page) => page.getByRole("dialog", { name: "Agents safety and settings" });
 const runSheet = (page: Page) => page.getByRole("dialog", { name: "Agent run" });
 const runCards = (page: Page, key: string) => pipPane(page).getByRole("article", { name: `Start an agent: ${key}` });
 const runCard = (page: Page, id: string) => pipPane(page).locator(`article[data-run-id="${id}"]`);
@@ -94,12 +93,8 @@ test("a person-started investigation shows and launches read-only, and its auto-
   await startWorkstream(page, "CA-401");
   await askPip(page, "investigate this");
   await settled(page);
-  for (let attempt = 0; attempt < 2; attempt++) {
-    await runCards(page, "CA-401").last().getByRole("button", { name: "Review and start →" }).click();
-    await expect(setup(page).or(safety(page))).toBeVisible();
-    if (!(await safety(page).isVisible())) break;
-    await safety(page).getByRole("button", { name: "Close" }).click();
-  }
+  await runCards(page, "CA-401").last().getByRole("button", { name: "Review and start →" }).click();
+  await expect(setup(page)).toBeVisible();
 
   // The sheet says so where the person decides, and lists the exact flag and rules.
   await expect(setup(page).locator("[data-read-only]")).toHaveText(READ_ONLY);
@@ -159,12 +154,8 @@ test("a build launches as before; its review is restricted, a fix round goes bac
   await setBudget(page, (await workstreamEvents(page))[0].workstreamId, { autoTurns: 12 });
   await askPip(page, "investigate this");
   await settled(page);
-  for (let attempt = 0; attempt < 2; attempt++) {
-    await runCards(page, "CA-401").last().getByRole("button", { name: "Review and start →" }).click();
-    await expect(setup(page).or(safety(page))).toBeVisible();
-    if (!(await safety(page).isVisible())) break;
-    await safety(page).getByRole("button", { name: "Close" }).click();
-  }
+  await runCards(page, "CA-401").last().getByRole("button", { name: "Review and start →" }).click();
+  await expect(setup(page)).toBeVisible();
   await setup(page).getByRole("button", { name: "Start agent" }).click();
   await expect(setup(page)).toHaveCount(0);
   await finish(page, (await newest(page, "investigate"))!.id);

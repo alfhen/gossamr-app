@@ -85,7 +85,6 @@ pub(super) struct McpState {
 pub struct McpServer {
     pub port: u16,
     pub runs: PipRuns,
-    pub planner: Arc<dyn RunPlanner>,
     tokens: Tokens,
 }
 
@@ -95,12 +94,12 @@ impl McpServer {
         let port = listener.local_addr()?.port();
         let runs: PipRuns = Arc::default();
         let tokens = Tokens::default();
-        let state = Arc::new(McpState { core, tokens: tokens.clone(), sink, view, runs: runs.clone(), planner: planner.clone() });
+        let state = Arc::new(McpState { core, tokens: tokens.clone(), sink, view, runs: runs.clone(), planner });
         let router = Router::new().route("/mcp/{request_id}", post(handle)).with_state(state);
         tauri::async_runtime::spawn(async move {
             let _ = axum::serve(listener, router).await;
         });
-        Ok(Self { port, runs, planner, tokens })
+        Ok(Self { port, runs, tokens })
     }
 
     /// Mints a fresh token for this run, valid until `revoke`. A second call for the same run replaces the first.
@@ -212,7 +211,7 @@ fn tool_list() -> Vec<Value> {
         tool("list_next_statuses", "List the statuses an item can move to right now, with their ids.", json!({ "key": key }), &["key"]),
         tool(
             "list_proposals",
-            "List drafts from Pip, the user and autopilot. Open ones by default. Check this before proposing so you don't repeat one. Each line is a preview cut short: call get_proposal to read a draft in full.",
+            "List drafts from Pip and the user. Open ones by default. Check this before proposing so you don't repeat one. Each line is a preview cut short: call get_proposal to read a draft in full.",
             json!({ "state": { "type": "string", "enum": ["open", "applied", "skipped", "retired", "all"] }, "key": key }),
             &[],
         ),
@@ -1206,21 +1205,19 @@ mod tests {
         let r = rig().await;
         let mine = id_in(&r.ok("propose_comment", json!({ "key": "CA-1", "body": "mine" })).await);
         let users = r.draft_by(CreatedBy::User, "the user's").await;
-        let auto = r.draft_by(CreatedBy::Autopilot, "autopilot's").await;
         let skipped = r.draft_by(CreatedBy::User, "skipped one").await;
         r.fx.core.skip_proposal(&skipped.id).await.unwrap();
         r.ok("propose_subtasks", json!({ "key": "CA-2", "summaries": ["x"] })).await;
 
         let open = r.ok("list_proposals", json!({})).await;
-        assert_eq!(open.lines().count(), 4, "{open}");
+        assert_eq!(open.lines().count(), 3, "{open}");
         let line = |id: &str| open.lines().find(|l| l.starts_with(id)).unwrap().to_string();
         assert!(line(&mine).contains("by Pip · yours to revise or retire"));
         assert!(line(&users.id).contains("by the user") && !line(&users.id).contains("yours"));
-        assert!(line(&auto.id).contains("by autopilot") && !line(&auto.id).contains("yours"));
         assert!(!open.contains(&skipped.id));
 
         assert!(r.ok("list_proposals", json!({ "state": "skipped" })).await.contains(&skipped.id));
-        assert_eq!(r.ok("list_proposals", json!({ "state": "all" })).await.lines().count(), 5);
+        assert_eq!(r.ok("list_proposals", json!({ "state": "all" })).await.lines().count(), 4);
         let on_two = r.ok("list_proposals", json!({ "key": "CA-2" })).await;
         assert!(on_two.lines().count() == 1 && on_two.contains("subtasks under CA-2"), "{on_two}");
         assert_eq!(r.ok("list_proposals", json!({ "state": "applied" })).await, "No drafts.");
@@ -1232,14 +1229,11 @@ mod tests {
         let r = rig().await;
         let mine = id_in(&r.ok("propose_comment", json!({ "key": "CA-1", "body": "first try" })).await);
         let users = r.draft_by(CreatedBy::User, "the user's words").await;
-        let auto = r.draft_by(CreatedBy::Autopilot, "autopilot's words").await;
         let before = r.drafts().await;
 
-        for foreign in [&users.id, &auto.id] {
-            let revise = r.err("revise_proposal", json!({ "id": foreign, "body": "hijacked" })).await;
-            assert!(revise.contains("wasn't made by Pip"), "{revise}");
-            assert!(r.err("retire_proposal", json!({ "id": foreign })).await.contains("wasn't made by Pip"));
-        }
+        let revise = r.err("revise_proposal", json!({ "id": users.id, "body": "hijacked" })).await;
+        assert!(revise.contains("wasn't made by Pip"), "{revise}");
+        assert!(r.err("retire_proposal", json!({ "id": users.id })).await.contains("wasn't made by Pip"));
         assert!(r.err("revise_proposal", json!({ "id": "missing", "body": "x" })).await.contains("list_proposals"));
         assert_eq!(r.drafts().await, before, "refused calls change nothing");
 
@@ -1280,8 +1274,7 @@ mod tests {
         let r = rig().await;
         let left = r.draft_from(from_run(), CreatedBy::User, "From the run").await;
         let by_hand = r.draft_by(CreatedBy::User, "typed by the person").await;
-        let by_autopilot = r.draft_from(from_run(), CreatedBy::Autopilot, "autopilot's").await;
-        let before = (r.stored(&by_hand.id).await, r.stored(&by_autopilot.id).await);
+        let before = r.stored(&by_hand.id).await;
 
         let reply = r.ok("revise_proposal", json!({ "id": left.id, "body": "Reworked with the full result" })).await;
         assert!(reply.contains("not been applied") && reply.contains("approve"), "{reply}");
@@ -1291,10 +1284,8 @@ mod tests {
         assert_eq!(revised.revisions.last().unwrap().note, "Revised by Pip");
         assert!(r.fx.tracker.intents().is_empty(), "nothing is posted");
 
-        for other in [&by_hand.id, &by_autopilot.id] {
-            assert!(r.err("revise_proposal", json!({ "id": other, "body": "hijacked" })).await.contains("wasn't made by Pip"));
-        }
-        assert_eq!((r.stored(&by_hand.id).await, r.stored(&by_autopilot.id).await), before);
+        assert!(r.err("revise_proposal", json!({ "id": by_hand.id, "body": "hijacked" })).await.contains("wasn't made by Pip"));
+        assert_eq!(r.stored(&by_hand.id).await, before);
         assert!(r.err("retire_proposal", json!({ "id": left.id })).await.contains("wasn't made by Pip"), "it may be revised, not withdrawn");
 
         r.fx.core.skip_proposal(&left.id).await.unwrap();
@@ -1329,17 +1320,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_breakdown_the_person_or_autopilot_made_stays_off_limits_even_with_a_run_origin_next_door() {
+    async fn a_breakdown_the_person_made_stays_off_limits_even_with_a_run_origin_next_door() {
         let r = rig().await;
         let by_hand = subtasks_from(&r, Origin::Board, CreatedBy::User).await;
-        let by_autopilot = subtasks_from(&r, from_run(), CreatedBy::Autopilot).await;
-        let before = (r.stored(&by_hand.id).await, r.stored(&by_autopilot.id).await);
-        for other in [&by_hand.id, &by_autopilot.id] {
-            assert!(r.err("revise_proposal", json!({ "id": other, "summaries": ["hijacked"] })).await.contains("wasn't made by Pip"));
-        }
+        let before = r.stored(&by_hand.id).await;
+        assert!(r.err("revise_proposal", json!({ "id": by_hand.id, "summaries": ["hijacked"] })).await.contains("wasn't made by Pip"));
         let intent = Intent::Subtasks { parent: r.fx.item("CA-1"), summaries: vec!["x".into()] };
         assert!(r.fx.core.revise_as_pip(&r.fx.scope, None, &by_hand.id, intent).await.is_err(), "the rule lives in Core too");
-        assert_eq!((r.stored(&by_hand.id).await, r.stored(&by_autopilot.id).await), before);
+        assert_eq!(r.stored(&by_hand.id).await, before);
     }
 
     async fn new_ticket_from(r: &Rig, origin: Origin, by: CreatedBy) -> Proposal {
@@ -1375,17 +1363,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_new_ticket_the_person_made_or_autopilot_made_stays_off_limits_even_with_a_run_origin_next_door() {
+    async fn a_new_ticket_the_person_made_stays_off_limits_even_with_a_run_origin_next_door() {
         let r = rig().await;
         let by_hand = new_ticket_from(&r, Origin::Board, CreatedBy::User).await;
-        let by_autopilot = new_ticket_from(&r, from_run(), CreatedBy::Autopilot).await;
-        let before = (r.stored(&by_hand.id).await, r.stored(&by_autopilot.id).await);
-        for other in [&by_hand.id, &by_autopilot.id] {
-            assert!(r.err("revise_proposal", json!({ "id": other, "title": "hijacked" })).await.contains("wasn't made by Pip"));
-        }
+        let before = r.stored(&by_hand.id).await;
+        assert!(r.err("revise_proposal", json!({ "id": by_hand.id, "title": "hijacked" })).await.contains("wasn't made by Pip"));
         let intent = Intent::Create { container: ContainerRef { connection_id: "c".into(), external_id: "x".into() }, fields: NewItem { title: "x".into(), body: Doc::default(), kind: ItemKind::Task, assignee: None, parent: None, priority: None, labels: vec![] }, link: None };
         assert!(r.fx.core.revise_as_pip(&r.fx.scope, None, &by_hand.id, intent).await.is_err(), "the rule lives in Core too");
-        assert_eq!((r.stored(&by_hand.id).await, r.stored(&by_autopilot.id).await), before);
+        assert_eq!(r.stored(&by_hand.id).await, before);
     }
 
     #[tokio::test]

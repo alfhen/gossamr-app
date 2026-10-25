@@ -51,7 +51,6 @@ async fn build_with(routes: Vec<(&str, Vec<Reply>)>, tools: Option<ToolchainErro
         vec![fx.home.clone()],
         Arc::new(move |id| seen.lock().unwrap().push(id.to_string())),
     )
-    .enabled(true)
     .with_home(fx.home.clone())
     .with_timing(FAST);
     Rig { svc: Arc::new(tune(svc)), fx, cli, clone, changes }
@@ -505,20 +504,6 @@ async fn an_untrusted_folder_a_failed_command_and_garbled_output_each_fail_with_
         assert!(after.launched_at.is_some() && after.short_id.is_none());
         assert!(rig.live().is_empty(), "a failed run no longer counts toward the cap");
     }
-}
-
-#[tokio::test]
-async fn nothing_launches_when_agents_are_off() {
-    let rig = build(None, |s| s.enabled(false)).await;
-    let run = rig.queued(1).await;
-    assert!(rig.svc.launch(&run.id).await.is_err());
-    assert!(rig.svc.start_now(&run.id).await.is_err());
-    assert!(rig.svc.retry_launch(&run.id).await.is_err());
-    assert!(rig.svc.preflight(None).await.is_err());
-    assert!(rig.svc.clones("acme/webshop").await.is_err());
-    assert!(rig.svc.repos().is_err());
-    assert_eq!(rig.get(&run).await.state, RunState::Queued);
-    assert_eq!(rig.cli.launches(), 0);
 }
 
 #[tokio::test]
@@ -1062,7 +1047,7 @@ mod through_the_real_spawner {
         ]));
         let cli = Arc::new(SystemCli::new(PathBuf::from(FAKE), env.clone()));
         let tools = FixedToolchain(Ok(Toolchain { cli: cli.clone(), env }));
-        let svc = RunService::new(fx.core.clone(), Arc::new(tools), RunIndex::load(&fx.dir.join("index")), vec![], Arc::new(|_| {})).enabled(true).with_timing(FAST);
+        let svc = RunService::new(fx.core.clone(), Arc::new(tools), RunIndex::load(&fx.dir.join("index")), vec![], Arc::new(|_| {})).with_timing(FAST);
         let rig = Rig { svc: Arc::new(svc), cli: Arc::new(FakeCli::new()), clone: clone.canonicalize().unwrap(), changes: Arc::default(), fx };
         Real { rig, cli, scenario_dir }
     }
@@ -1353,8 +1338,6 @@ async fn only_a_watched_repository_is_cloned_and_only_one_clone_of_it_at_a_time(
     let held = fresh::Cloning::take(&rig.svc.cloning, "acme/webshop").unwrap();
     assert!(rig.svc.clone_fresh("Acme/Webshop").await.unwrap_err().to_string().contains("already being cloned"));
     drop(held);
-    rig.svc.set_flag(false);
-    assert!(rig.svc.clone_fresh("acme/webshop").await.is_err(), "agents are off");
 }
 
 #[tokio::test]
@@ -1446,15 +1429,5 @@ mod waiting {
         core.set_workstream_rule(scope, &managed, Rule::InvestigateTriage, None).await.unwrap();
         assert_eq!(rig.svc.launch_waiting().await.unwrap(), std::slice::from_ref(&auto.id));
         assert_eq!(rig.get(&in_closed).await.state, RunState::Queued);
-    }
-
-    #[tokio::test]
-    async fn nothing_waits_on_while_agents_are_off() {
-        let rig = ready().await;
-        let ws = rig.open_on("CA-1").await;
-        let run = rig.queued_in(1, "CA-1", &ws).await;
-        rig.svc.set_flag(false);
-        assert!(rig.svc.launch_waiting().await.unwrap().is_empty());
-        assert_eq!(rig.get(&run).await.state, RunState::Queued);
     }
 }

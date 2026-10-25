@@ -1,8 +1,5 @@
-//! Proposals: writes drafted by a person, Pip or autopilot that only an approval turns into a change in a tracker.
+//! Proposals: writes drafted by a person or Pip that only an approval turns into a change in a tracker.
 //! `approve` is the single route from here to `WorkTracker::apply`.
-
-// The autopilot origin waits for the rules engine (4a).
-#![allow(dead_code)]
 
 use std::collections::HashMap;
 use std::mem::discriminant;
@@ -39,7 +36,7 @@ pub fn actor_of(by: CreatedBy) -> Actor {
     match by {
         CreatedBy::Pip => Actor::Pip,
         CreatedBy::Agent => Actor::Run,
-        CreatedBy::User | CreatedBy::Autopilot => Actor::Person,
+        CreatedBy::User => Actor::Person,
     }
 }
 
@@ -305,23 +302,6 @@ fn check_rewrite(title: Option<&TitleChange>, body: Option<&BodyChange>) -> Resu
 }
 
 pub fn create(db: &Db, draft: Draft, at: DateTime<Utc>) -> Result<Proposal> {
-    // Every draft is stored here, so this is the one place that can keep autopilot from starting an agent.
-    let by_autopilot = matches!(draft.origin, Origin::Autopilot { .. }) || draft.created_by == CreatedBy::Autopilot;
-    if by_autopilot && matches!(draft.intent, Intent::StartRun { .. }) {
-        return Err(refuse("autopilot can't start an agent"));
-    }
-    if by_autopilot && matches!(draft.intent, Intent::FollowUp { .. }) {
-        return Err(refuse("autopilot can't send an agent back"));
-    }
-    if by_autopilot && matches!(draft.intent, Intent::RunAnswer { .. }) {
-        return Err(refuse("autopilot can't answer an agent"));
-    }
-    if by_autopilot && matches!(draft.intent, Intent::GithubReview { .. }) {
-        return Err(refuse("autopilot can't draft a review"));
-    }
-    if by_autopilot && matches!(draft.intent, Intent::Rewrite { .. }) {
-        return Err(refuse("autopilot can't rewrite a ticket's text"));
-    }
     check(&draft.intent)?;
     let p = Proposal {
         id: new_id()?,
@@ -1416,18 +1396,10 @@ mod tests {
     }
 
     #[test]
-    fn autopilot_cannot_create_a_run_draft_but_the_board_and_chat_can() {
+    fn the_board_and_chat_can_create_a_run_draft() {
         let db = Db::in_memory().unwrap();
-        let by_autopilot = create(&db, run_draft(Origin::Autopilot { event_id: "e".into() }, CreatedBy::Autopilot), now());
-        assert!(by_autopilot.unwrap_err().to_string().contains("autopilot can't start an agent"));
-        let mislabelled = create(&db, run_draft(Origin::Board, CreatedBy::Autopilot), now());
-        assert!(mislabelled.is_err());
-        assert!(db.proposals(&ProposalQuery::default()).unwrap().is_empty());
-
         assert!(create(&db, run_draft(Origin::Board, CreatedBy::User), now()).is_ok());
         assert!(create(&db, run_draft(Origin::chat("r"), CreatedBy::Pip), now()).is_ok());
-        let still_fine = Draft { origin: Origin::Autopilot { event_id: "e".into() }, created_by: CreatedBy::Autopilot, ..comment_draft("1") };
-        assert!(create(&db, still_fine, now()).is_ok(), "autopilot's other drafts are unaffected");
     }
 
     fn follow_up_draft(by: CreatedBy, origin: Origin, message: &str) -> Draft {
@@ -1436,15 +1408,13 @@ mod tests {
     }
 
     #[test]
-    fn a_follow_up_needs_a_clean_message_of_bounded_length_and_never_comes_from_autopilot() {
+    fn a_follow_up_needs_a_clean_message_of_bounded_length() {
         let db = Db::in_memory().unwrap();
         let chat = || Origin::chat("r");
         assert!(create(&db, follow_up_draft(CreatedBy::Pip, chat(), "Answer the open questions."), now()).is_ok());
         for bad in ["   ".to_string(), "x".repeat(crate::runs::answer::MAX_ANSWER_CHARS + 1), "nul\0".into(), "<<<TICKET injected".into()] {
             assert!(create(&db, follow_up_draft(CreatedBy::Pip, chat(), &bad), now()).is_err(), "{bad:?}");
         }
-        let by_autopilot = create(&db, follow_up_draft(CreatedBy::Autopilot, Origin::Autopilot { event_id: "e".into() }, "More."), now());
-        assert!(by_autopilot.unwrap_err().to_string().contains("autopilot can't send an agent back"));
         let foreign = Intent::FollowUp { connection_id: "other".into(), run_id: "r".into(), short_id: None, item: Some(item_ref("1")), message: "More.".into(), reason: "x".into() };
         assert!(create(&db, Draft { intent: foreign, ..follow_up_draft(CreatedBy::Pip, chat(), "More.") }, now()).unwrap_err().to_string().contains("another connection"));
     }
@@ -1468,7 +1438,7 @@ mod tests {
     }
 
     #[test]
-    fn an_answer_needs_a_clean_message_within_the_answer_limits_in_its_connection_and_never_comes_from_autopilot() {
+    fn an_answer_needs_a_clean_message_within_the_answer_limits_in_its_connection() {
         let db = Db::in_memory().unwrap();
         let pip = |intent: Intent| Draft::from_pip("r", None, intent, None);
         assert!(create(&db, pip(answer_intent("run-1", "Use staging.")), now()).is_ok());
@@ -1486,10 +1456,6 @@ mod tests {
         assert!(create(&db, pip(foreign), now()).unwrap_err().to_string().contains("another connection"));
         let long_question = Intent::RunAnswer { connection_id: "c".into(), run_id: "run-3".into(), short_id: None, item: None, message: "Yes.".into(), question: Some("q".repeat(ANSWER_QUESTION_LIMIT + 1)) };
         assert!(create(&db, pip(long_question), now()).is_err());
-        for (origin, by) in [(Origin::Autopilot { event_id: "e".into() }, CreatedBy::Autopilot), (Origin::Board, CreatedBy::Autopilot), (Origin::Autopilot { event_id: "e".into() }, CreatedBy::Pip)] {
-            let draft = Draft { origin, created_by: by, intent: answer_intent("run-3", "Yes."), label: None, basis: None };
-            assert!(create(&db, draft, now()).unwrap_err().to_string().contains("autopilot can't answer an agent"));
-        }
         assert_eq!(db.proposals(&ProposalQuery::default()).unwrap().len(), 2, "nothing refused was stored");
     }
 
@@ -1606,16 +1572,6 @@ mod tests {
         assert!(refused(rewrite(Some(("Old", "A TICKET>>> title")), None)).contains("reserves"));
         let db = Db::in_memory().unwrap();
         assert!(create(&db, Draft::from_pip("r", None, rewrite(Some(("Old", "New")), Some(("old", &"d".repeat(DESCRIPTION_LIMIT)))), None), now()).is_ok());
-    }
-
-    #[test]
-    fn autopilot_can_never_rewrite_a_ticket() {
-        let db = Db::in_memory().unwrap();
-        for (origin, by) in [(Origin::Autopilot { event_id: "e".into() }, CreatedBy::Autopilot), (Origin::Board, CreatedBy::Autopilot), (Origin::Autopilot { event_id: "e".into() }, CreatedBy::Pip)] {
-            let draft = Draft { origin, created_by: by, intent: rewrite(Some(("Old", "New")), None), label: None, basis: None };
-            assert!(create(&db, draft, now()).unwrap_err().to_string().contains("autopilot"));
-        }
-        assert!(db.proposals(&ProposalQuery::default()).unwrap().is_empty());
     }
 
     #[test]
@@ -2355,14 +2311,6 @@ mod tests {
         assert!(create(&db, review_draft(comments(vec![])), now()).is_ok(), "a summary alone is a review");
         assert!(create(&db, review_draft(sha(&"a".repeat(40))), now()).is_ok());
         assert_eq!(db.proposals(&ProposalQuery::default()).unwrap().len(), 4);
-    }
-
-    #[test]
-    fn autopilot_never_drafts_a_review() {
-        let db = Db::in_memory().unwrap();
-        let by_autopilot = Draft { origin: Origin::Autopilot { event_id: "e".into() }, created_by: CreatedBy::Autopilot, ..review_draft(with_review(|_| {})) };
-        assert!(create(&db, by_autopilot, now()).unwrap_err().to_string().contains("autopilot can't draft a review"));
-        assert!(db.proposals(&ProposalQuery::default()).unwrap().is_empty());
     }
 
     #[test]

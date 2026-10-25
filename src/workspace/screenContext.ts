@@ -18,7 +18,7 @@ export interface Screen {
   marked: readonly string[];
   /** The Activity feed's filter chip and project. */
   activity: { chip: ActivityChip; container: ContainerRef | null };
-  /** The Agents view's runs and filters, the run open in the run sheet and how many agents wait on the person; absent while agents are off. */
+  /** The Agents view's runs and filters, the run open in the run sheet and how many agents wait on the person. */
   agents?: AgentsScene;
   /** The workstream whose detail is open on the Agents view, as `openWorkstreamLine` names it. */
   workstream?: string;

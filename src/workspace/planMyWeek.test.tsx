@@ -385,8 +385,7 @@ describe("the palette", () => {
     expect(a.planMyWeek).toHaveBeenCalled();
   });
 
-  it("has no Plan my week without Agents, and no workstream-status entries at all", () => {
-    expect(buildCommands([], [], actions(), { ...ctx, agents: false }).some((c) => c.id === "app:plan-my-week")).toBe(false);
+  it("has no workstream-status entries", () => {
     expect(buildCommands([], [], actions(), ctx).some((c) => c.id.startsWith("workstreams:status:"))).toBe(false);
   });
 });

@@ -15,20 +15,11 @@ async function peekCa401(page: Page) {
   await expect(peek(page)).toHaveAttribute("aria-label", "Details for CA-401");
 }
 
-/** From CA-401's done Plan run, chooses 'Build from this plan' and waits for the setup sheet. The first agent action of a fresh profile shows the safety sheet instead, once. */
+/** From CA-401's done Plan run, chooses 'Build from this plan' and waits for the setup sheet. */
 async function buildFromPlan(page: Page) {
-  for (let attempt = 0; attempt < 2; attempt++) {
-    await peekCa401(page);
-    await peek(page).getByRole("button", { name: /Welcome flow refresh (Ready to review|Approved)/ }).click();
-    await page.getByRole("button", { name: "Build from this plan" }).click();
-    const safety = page.getByRole("dialog", { name: "Agents safety and settings" });
-    await expect(setup(page).or(safety)).toBeVisible();
-    if (await safety.isVisible()) {
-      await safety.getByRole("button", { name: "Close" }).click();
-      continue;
-    }
-    break;
-  }
+  await peekCa401(page);
+  await peek(page).getByRole("button", { name: /Welcome flow refresh (Ready to review|Approved)/ }).click();
+  await page.getByRole("button", { name: "Build from this plan" }).click();
   await expect(setup(page)).toBeVisible();
   await expect(setup(page).getByRole("textbox", { name: /^Plan from run / })).toBeVisible();
 }

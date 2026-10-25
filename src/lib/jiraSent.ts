@@ -182,7 +182,7 @@ function fromWords(p: Proposal, labels: readonly (readonly [string, string])[], 
     // What Gossamr drafted at the person's ask ("Ask the reporter now") is named by that, not by Gossamr again: the line before says who drafted it.
     return p.createdBy === "pip" ? (key ? "Pip" : "Pip's conversation") : workstreamOf(p) ? "your request" : "the conversation";
   }
-  return p.origin.type === "autopilot" ? "the autopilot" : "the board";
+  return "the board";
 }
 
 /** What names a run outside a workstream's labels: its step and ticket. */

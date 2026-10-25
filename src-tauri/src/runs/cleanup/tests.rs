@@ -82,14 +82,6 @@ async fn only_finished_runs_with_a_session_can_be_cleaned_up() {
 }
 
 #[tokio::test]
-async fn nothing_is_removed_while_agents_are_off() {
-    let (rig, run) = stopped().await;
-    rig.svc.set_enabled(false).await.unwrap();
-    assert!(rig.svc.cleanup(&run.id).await.is_err());
-    assert!(rig.cli.0.lock().unwrap().rms.is_empty());
-}
-
-#[tokio::test]
 async fn the_tracker_leaves_a_run_whose_worktree_is_gone_alone() {
     let (rig, run) = stopped().await;
     rig.svc.cleanup(&run.id).await.unwrap();

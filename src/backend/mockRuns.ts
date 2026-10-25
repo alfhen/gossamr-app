@@ -2081,7 +2081,7 @@ export class MockRuns {
     const blocker = followUpBlocker(run);
     if (blocker) throw new Error(`This run can't be sent back: ${blocker}.`);
     const passes = (run.passes ?? 1) + 1;
-    const by = p.createdBy === "user" || p.createdBy === "autopilot" ? "You" : makerName(p.createdBy);
+    const by = p.createdBy === "user" ? "You" : makerName(p.createdBy);
     this.followUps.set(run.id, [...(this.followUps.get(run.id) ?? []), { text: `${by} asked for another pass: ${p.intent.reason}`, detail: `Pass ${passes}. Approved by you.` }]);
     const next = this.update(run.id, { state: "working", passes, needs: null, suggestedReply: null, unsentAnswer: null, error: null, endedAt: null, stoppedByLimit: false, continuedAt: this.now(), lastProgressAt: this.now(), lastDetail: "Reading your message" });
     const sent = this.proposals.applyRun(proposalId, run.id);

@@ -375,7 +375,7 @@ export function needs({ workstreams, runs, proposals, dismissed, heldAt, asked, 
     const base = { key: `draft:${p.id}`, at: p.createdAt, target, ...where(workstreamId, key) };
     if (p.intent.type === "startRun") {
       const kind = STAGE_LABEL[p.intent.spec.kind];
-      const maker = p.createdBy === "pip" ? "Pip" : p.createdBy === "autopilot" ? "The autopilot" : p.createdBy === "agent" ? "An agent" : "You";
+      const maker = p.createdBy === "pip" ? "Pip" : p.createdBy === "agent" ? "An agent" : "You";
       out.push({
         ...base,
         group: "approve",
@@ -396,7 +396,7 @@ export function needs({ workstreams, runs, proposals, dismissed, heldAt, asked, 
     // "GitHub review", not "review": beside a Review run's stage it would read "Review · review".
     const what = p.intent.type === "githubReview" ? "GitHub review" : DRAFT_TEXT[p.intent.type].replace(/^Draft /, "");
     const title = isReporterQuestions(p) ? "Questions for the reporter" : isReporterNudge(p) ? "Nudge for the reporter" : isAnswersDraft(p) ? "Answers to the open questions" : label ? (step ? `${label} ${STAGE_LABEL[step].toLowerCase()} · ${what}` : `${label} ${what}`) : step ? `${STAGE_LABEL[step]} · ${what}` : p.intent.type === "comment" && !from ? commentTitle(p.intent.body) : DRAFT_TEXT[p.intent.type];
-    const by = label ? (step ? `${label} ${STAGE_LABEL[step].toLowerCase()}` : label) : p.createdBy === "pip" ? "Pip" : p.createdBy === "autopilot" ? "The autopilot" : p.createdBy === "agent" ? "An agent" : "You";
+    const by = label ? (step ? `${label} ${STAGE_LABEL[step].toLowerCase()}` : label) : p.createdBy === "pip" ? "Pip" : p.createdBy === "agent" ? "An agent" : "You";
     // The questions to a reporter are Gossamr's words around the triage's own, and the person's choice: say so.
     const asked = isReporterQuestions(p);
     const drafted = asked

@@ -279,14 +279,6 @@ async fn a_session_that_never_shows_as_stopped_is_not_woken() {
     assert_eq!((after.state, after.unsent_answer.as_deref()), (RunState::Stopped, Some("Yes")));
 }
 
-#[tokio::test]
-async fn nothing_is_answered_when_agents_are_off() {
-    let (rig, run) = asking().await;
-    rig.svc.set_flag(false);
-    assert!(rig.svc.answer(&run.id, "Yes").await.is_err());
-    assert!(rig.cli.0.lock().unwrap().calls.is_empty());
-}
-
 mod drafts {
     use super::*;
     use crate::domain::{Actor, CreatedBy, Origin, Proposal, ProposalState};
@@ -358,12 +350,9 @@ mod drafts {
     }
 
     #[tokio::test]
-    async fn only_a_pending_answer_draft_of_this_connection_is_sent_and_nothing_with_agents_off() {
+    async fn only_a_pending_answer_draft_of_this_connection_is_sent() {
         let (rig, run) = asking().await;
         let p = suggested(&rig, &run, "Yes").await;
-        rig.svc.set_flag(false);
-        assert!(rig.svc.answer_draft(&p.id, "Yes").await.is_err());
-        rig.svc.set_flag(true);
         rig.set(&run, |r| r.connection_id = "jira:other:somebody".into()).await;
         assert!(rig.svc.answer_draft(&p.id, "Yes").await.unwrap_err().to_string().contains("another connection"));
         rig.set(&run, |r| r.connection_id = run.connection_id.clone()).await;

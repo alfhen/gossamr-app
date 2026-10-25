@@ -8,7 +8,7 @@ import { useTabs } from "./tabsStore";
 import { useToasts } from "./toasts";
 import { usePrefs } from "./prefs";
 import { answerKey, keepAnswer, keptAnswer } from "./keptAnswers";
-import { browseList, introCancelled, startWhat, useRuns } from "./runsStore";
+import { browseList, useRuns } from "./runsStore";
 import { laneOf, needsAttention } from "./agentsLogic";
 
 const memory = () => {
@@ -23,78 +23,11 @@ let backend: MockBackend;
 
 beforeEach(() => {
   vi.stubGlobal("localStorage", memory());
-  useRuns.setState({ dismissed: new Set(), filters: NO_FILTERS, earlierOpen: false, introOpen: null, stopping: false });
+  useRuns.setState({ dismissed: new Set(), filters: NO_FILTERS, earlierOpen: false, introOpen: false, stopping: false });
   useToasts.getState().clear();
   useTabs.getState().setRoute("workspace");
   backend = new MockBackend();
   s().init(backend);
-});
-
-describe("starting an agent for the first time", () => {
-  it("shows the safety sheet once instead of the ticket picker, then lets the person start", () => {
-    usePrefs.setState({ agentsIntroSeen: false });
-    s().setPicking(true);
-    expect(s().sheet).toEqual({ type: "safety" });
-    expect(s().afterIntro).not.toBeNull();
-    expect(s().picking).toBe(false);
-    expect(usePrefs.getState().agentsIntroSeen).toBe(true);
-    s().closeSheet();
-    expect(s().afterIntro).toBeNull();
-    s().setPicking(true);
-    expect(s().picking).toBe(true);
-    expect(s().sheet).toBeNull();
-  });
-
-  it("keeps what the person asked for and carries it on, once, when they continue", () => {
-    usePrefs.setState({ agentsIntroSeen: false });
-    const then = vi.fn();
-    expect(s().ensureAgentsIntro(then)).toBe(false);
-    expect(s().afterIntro).toBe(then);
-    expect(then).not.toHaveBeenCalled();
-    s().continueIntro();
-    expect(then).toHaveBeenCalledTimes(1);
-    expect(s().sheet).toBeNull();
-    s().continueIntro();
-    expect(then).toHaveBeenCalledTimes(1);
-    // Seen now: the next action goes straight through.
-    expect(s().ensureAgentsIntro(then)).toBe(true);
-  });
-
-  it("starts picking the ticket after Got it, continue", () => {
-    usePrefs.setState({ agentsIntroSeen: false });
-    s().setPicking(true);
-    s().continueIntro();
-    expect(s().picking).toBe(true);
-  });
-
-  it("drops what the person asked for when they close the sheet with Esc or ×, or open another", () => {
-    for (const close of [() => s().closeSheet(), () => s().openSafety(), () => s().openRun("r1", { stay: true })]) {
-      usePrefs.setState({ agentsIntroSeen: false });
-      const then = vi.fn();
-      s().ensureAgentsIntro(then);
-      close();
-      expect(s().afterIntro).toBeNull();
-      s().continueIntro();
-      expect(then).not.toHaveBeenCalled();
-      s().closeSheet();
-    }
-  });
-
-  it("says what closing it with Esc or × cancelled, and that nothing started; Got it, continue says nothing (N2)", () => {
-    usePrefs.setState({ agentsIntroSeen: false });
-    s().ensureAgentsIntro(vi.fn(), startWhat(null, "investigate", { connectionId: "mock", externalId: "CA-401", key: "CA-401" }));
-    s().closeSheet();
-    expect(useToasts.getState().toasts.map((t) => [t.text, t.tone])).toEqual([["Cancelled: Investigate CA-401. Nothing was started.", "info"]]);
-    // Closed again with nothing waiting on it, it says nothing more.
-    s().closeSheet();
-    expect(useToasts.getState().toasts).toHaveLength(1);
-    useToasts.getState().clear();
-    usePrefs.setState({ agentsIntroSeen: false });
-    s().ensureAgentsIntro(vi.fn(), "Start an agent");
-    s().continueIntro();
-    expect(useToasts.getState().toasts).toEqual([]);
-    expect(introCancelled("Plan CA-9")).toBe("Cancelled: Plan CA-9. Nothing was started.");
-  });
 });
 
 describe("the runs store", () => {

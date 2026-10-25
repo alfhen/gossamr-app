@@ -456,7 +456,6 @@ impl RunService {
     /// command, once the session has been stopped, since that is what refuses the request. As with an answer, a failure
     /// once the session has been stopped leaves the run `Stopped` with the denial kept to send again.
     pub async fn deny_permission(&self, run_id: &str, command: &str) -> Result<Run> {
-        self.ensure_enabled()?;
         let _turn = self.launching.lock().await;
         let mut run = self.load(run_id).await?;
         read_check(&run, command)?;
@@ -508,7 +507,6 @@ impl RunService {
     /// with the exact command. The session is neither stopped nor resumed. If Terminal can't be opened, nothing is
     /// recorded.
     pub async fn allow_permission_once(&self, run_id: &str, command: &str) -> Result<Run> {
-        self.ensure_enabled()?;
         let _turn = self.launching.lock().await;
         let run = self.load(run_id).await?;
         read_check(&run, command)?;

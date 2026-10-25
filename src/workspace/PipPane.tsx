@@ -15,7 +15,6 @@ import { usePip } from "./pipStore";
 import { usePrefs } from "./prefs";
 import { buildScreenContext, contextLabel, contextLines } from "./screenContext";
 import { suggestionsFor, workstreamChips } from "./suggestions";
-import { useAgentsEnabled } from "./agentsFlag";
 import { agentsSuggestionScene, describeRun, runSummaryPrompt } from "./pipRuns";
 import { useRuns } from "./runsStore";
 import { useTabs } from "./tabsStore";
@@ -154,7 +153,6 @@ export function usePipChips(workstream: WorkstreamView | null = null) {
   }, [openRef?.connectionId, openRef?.externalId]);
   const { kind, label } = contextLabel(context, quote, words.titleOf, words.runOf);
   const open = screen.route !== "settings" && screen.selected ? screen.items[screen.selected] : undefined;
-  const agentsOn = useAgentsEnabled();
   const hasRuns = runs.length > 0;
   const turns = useClaude((s) => (workstream ? s.byTicket[workstreamConversation(workstream.workstream.id)]?.turns : undefined)) ?? NO_TURNS;
   const now = useNow();
@@ -162,7 +160,7 @@ export function usePipChips(workstream: WorkstreamView | null = null) {
   const cobweb = useWorkstreamWithers(own, now)[workstream?.workstream.id ?? ""];
   // A Jira update is offered while none is waiting in Needs you.
   const chaseJira = !!cobweb && !cobweb.draftWaiting;
-  const workstreamScene = useMemo(() => (agentsOn && workstream ? workstreamSuggestionScene(workstream, runs, Object.values(proposals), turns, chaseJira) : undefined), [agentsOn, workstream, runs, proposals, turns, chaseJira]);
+  const workstreamScene = useMemo(() => (workstream ? workstreamSuggestionScene(workstream, runs, Object.values(proposals), turns, chaseJira) : undefined), [workstream, runs, proposals, turns, chaseJira]);
   const base = suggestionsFor({
     route: screen.route,
     quote: quote !== null,
@@ -173,11 +171,11 @@ export function usePipChips(workstream: WorkstreamView | null = null) {
     unassignedInView: unassignedIn(screen.shown),
     shown: screen.shown.length,
     filtered: chipCount(screen) > 0,
-    agents: agentsOn ? agentsSuggestionScene(runs, screen.agents?.openRun ?? null) : undefined,
+    agents: agentsSuggestionScene(runs, screen.agents?.openRun ?? null),
     workstream: workstreamScene,
   });
   // A workstream's chips name its own runs already, at most six of them.
-  const all = agentsOn && hasRuns && screen.route !== "settings" && !quote && !(workstreamScene && workstreamChips(workstreamScene).length) && !base.includes(runSummaryPrompt()) ? [...base, runSummaryPrompt()] : base;
+  const all = hasRuns && screen.route !== "settings" && !quote && !(workstreamScene && workstreamChips(workstreamScene).length) && !base.includes(runSummaryPrompt()) ? [...base, runSummaryPrompt()] : base;
   // A workstream's empty conversation offers its first suggestion as the intro's one button, and not again as a chip.
   const primary = workstreamScene && turns.length === 0 && !quote ? (workstreamChips(workstreamScene)[0] ?? null) : null;
   const chips = primary ? all.filter((c) => c !== primary) : all;

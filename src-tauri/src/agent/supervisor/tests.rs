@@ -2033,9 +2033,6 @@ impl SupervisorCore for Recording {
     fn request_code_sync(&self) {
         self.asked.lock().unwrap().push("sync".into());
     }
-    fn runs_enabled(&self) -> bool {
-        true
-    }
     async fn plan(&self, _repo: &str, _item: &crate::domain::ItemRef) -> crate::error::Result<ClonePlan> {
         Ok(ClonePlan { path: "/clones/webshop".into(), base: "main".into(), name: "ca-1-next-0001".into() })
     }

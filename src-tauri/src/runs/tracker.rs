@@ -231,9 +231,6 @@ impl RunService {
     async fn poll_with(&self, clock: impl Fn() -> DateTime<Utc>) -> Polled {
         let idle = Polled { busy: false };
         let now = clock();
-        if !self.is_enabled() {
-            return idle;
-        }
         let Ok(_not_recovering) = self.recovery.try_lock() else { return Polled { busy: true } };
         let unfinished = [
             RunState::Queued,
@@ -290,9 +287,6 @@ impl RunService {
 
     /// Looks at everything that waits on the person and sends the system notifications that are due (`notices`).
     pub(super) async fn announce_notices(&self, now: DateTime<Utc>) {
-        if !self.is_enabled() {
-            return;
-        }
         let settings = self.settings();
         let settings = NoticeSettings { mode: settings.notifications, digest_every: chrono::Duration::minutes(i64::from(settings.digest_minutes)) };
         let asking = [RunState::NeedsAnswer, RunState::NeedsPermission, RunState::SystemBlocked];
@@ -612,7 +606,6 @@ impl RunService {
     }
 
     pub async fn events(&self, run_id: &str) -> crate::error::Result<Vec<RunEvent>> {
-        self.ensure_enabled()?;
         self.core.run_events(run_id).await
     }
 }

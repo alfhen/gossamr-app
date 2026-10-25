@@ -93,13 +93,10 @@ export const contextDeps: ContextDeps = {
   },
 };
 
-/**
- * The entries for the item in focus, and with Agents on the global batch ones ("Approve all safe drafts in …"), from the
- * stores as they are now. A draft's entries need no Agents; a need, a run or a workstream only exists with them.
- */
-export function contextEntries(subject: Subject | null, agents: boolean): Command[] {
-  const needs = agents ? currentNeeds() : [];
+/** The entries for the item in focus and the global batch ones ("Approve all safe drafts in …"), from the stores as they are now. */
+export function contextEntries(subject: Subject | null): Command[] {
+  const needs = currentNeeds();
   const data = { needs, proposals: useWorkspace.getState().proposals, runs: useRuns.getState().runs, workstreams: useWorkstreams.getState().list };
-  return [...contextCommands(subject, data, contextDeps), ...(agents ? batchCommands(needGroups(needs), contextDeps) : [])];
+  return [...contextCommands(subject, data, contextDeps), ...batchCommands(needGroups(needs), contextDeps)];
 }
 

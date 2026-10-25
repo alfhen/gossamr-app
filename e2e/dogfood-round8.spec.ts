@@ -23,7 +23,6 @@ test.describe("the Decide pane's Done line (G5)", () => {
 
 const SUPERVISED = "runs=empty&prSurface=manual&wsManage=1&pipPace=1";
 const setup = (page: Page) => page.getByRole("dialog", { name: "Start an agent" });
-const safety = (page: Page) => page.getByRole("dialog", { name: "Agents safety and settings" });
 
 /** Moves run `id` on to done, once Pip has finished answering. */
 async function finish(page: Page, id: string) {
@@ -47,12 +46,8 @@ test.describe("the plan's description draft and the build it starts (G3, G2)", (
     await settled(page);
     await askPip(page, "investigate this");
     await settled(page);
-    for (let attempt = 0; attempt < 2; attempt++) {
-      await pipPane(page).getByRole("article", { name: "Start an agent: CA-401" }).last().getByRole("button", { name: "Review and start →" }).click();
-      await expect(setup(page).or(safety(page))).toBeVisible();
-      if (!(await safety(page).isVisible())) break;
-      await safety(page).getByRole("button", { name: "Close" }).click();
-    }
+    await pipPane(page).getByRole("article", { name: "Start an agent: CA-401" }).last().getByRole("button", { name: "Review and start →" }).click();
+    await expect(setup(page)).toBeVisible();
     await setup(page).getByRole("button", { name: "Start agent" }).click();
     await expect(setup(page)).toHaveCount(0);
     await finish(page, await started(page, "investigate"));

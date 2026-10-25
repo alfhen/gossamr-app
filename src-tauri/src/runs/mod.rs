@@ -8,7 +8,6 @@ pub mod cleanup;
 pub mod cli;
 mod continuation;
 pub mod control;
-pub mod enable;
 pub mod env;
 pub mod failure;
 mod follow_up;

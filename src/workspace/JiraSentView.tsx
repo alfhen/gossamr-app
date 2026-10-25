@@ -4,7 +4,6 @@ import { useWorkspace } from "../workspaceStore";
 import { DayHeading, EmptyNote } from "./ActivityView";
 import { groupByDay } from "./activityLogic";
 import { useRuns } from "./runsStore";
-import { useAgentsFlag } from "./agentsFlag";
 import { useEscBack } from "./escBack";
 import { workspaceTicketLinks } from "./jump";
 import { useTabs } from "./tabsStore";
@@ -112,7 +111,7 @@ export function SentRow({ entry: e, onTicket, onWorkstream }: { entry: SentEntry
  * drafts and the workstreams' audit (`jiraSent`). It reads and writes nothing else.
  */
 export function JiraSentView() {
-  useEscBack(useAgentsFlag((s) => s.enabled));
+  useEscBack();
   const title = useRef<HTMLHeadingElement>(null);
   // The page opens from the palette, which gives the keyboard back to what it came from as it closes: a frame later the
   // heading takes it, so a screen reader starts on the page it opened.

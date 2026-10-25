@@ -27,7 +27,6 @@ impl RunService {
     /// draft pending with the reason, and a session that was stopped on the way keeps the message on the run, so
     /// approving again sends it.
     pub async fn send_follow_up(&self, proposal_id: &str, read: &str) -> Result<Run> {
-        self.ensure_enabled()?;
         let _turn = self.launching.lock().await;
         let p = self.core.proposal(proposal_id).await?.ok_or_else(|| refuse("that draft no longer exists"))?;
         let Intent::FollowUp { connection_id, run_id, message, reason, .. } = &p.intent else { return Err(refuse("that draft isn't a follow-up")) };
@@ -54,7 +53,7 @@ impl RunService {
                 let by = match p.created_by {
                     CreatedBy::Pip => "Pip",
                     CreatedBy::Agent => "An agent run",
-                    CreatedBy::User | CreatedBy::Autopilot => "You",
+                    CreatedBy::User => "You",
                 };
                 let event = RunEvent {
                     run_id: run.id.clone(),
@@ -142,7 +141,6 @@ impl RunService {
     /// so the cap of rounds is never passed. After the resume the audit also gets a `fix_round_sent` line with the
     /// message's digest and length, never its text.
     pub async fn send_fix_round(&self, run_id: &str, review: &str, message: &str) -> Result<Run> {
-        self.ensure_enabled()?;
         let _turn = self.launching.lock().await;
         let mut run = self.load(run_id).await?;
         let ws = fix_round_target(&run)?;
@@ -219,7 +217,6 @@ impl RunService {
     /// of automatic rounds stays as it was and the rule never sends a third one itself. Pip and the supervisor have no
     /// way to call this.
     pub async fn send_person_fix_round(&self, review_id: &str) -> Result<Run> {
-        self.ensure_enabled()?;
         let _turn = self.launching.lock().await;
         let review = self.load(review_id).await?;
         let gone = || refuse(crate::inbox::ESCALATION_GONE);

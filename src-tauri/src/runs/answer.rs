@@ -86,7 +86,6 @@ impl RunService {
     /// and the draft is marked applied with the run. A failure keeps the draft pending with the reason. The launch lock
     /// is taken only by `answer`, never here, as tokio's Mutex isn't re-entrant.
     pub async fn answer_draft(&self, proposal_id: &str, read: &str) -> Result<Run> {
-        self.ensure_enabled()?;
         let p = self.core.proposal(proposal_id).await?.ok_or_else(|| refuse("that draft no longer exists"))?;
         let Intent::RunAnswer { connection_id, run_id, message, .. } = &p.intent else { return Err(refuse("that draft isn't an answer")) };
         if p.state != ProposalState::Pending {
@@ -121,7 +120,6 @@ impl RunService {
 
     /// `answer`, retiring the run's other waiting answer drafts but `keep` once it has gone.
     async fn answer_keeping(&self, run_id: &str, text: &str, keep: Option<&str>) -> Result<Run> {
-        self.ensure_enabled()?;
         let text = checked(text)?;
         let _turn = self.launching.lock().await;
         let mut run = self.load(run_id).await?;

@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MockBackend } from "../backend/mock";
 import type { FeedEntry } from "../types";
 import { ChipBar, DayHeading, EmptyNote, FeedRow, PipFeedRow, type FeedRowProps } from "./ActivityView";
-import { chipsFor, toWorkstreamEntries } from "./activityLogic";
+import { toWorkstreamEntries } from "./activityLogic";
 import { useActivity } from "./activityStore";
 
 const entry = (over: Partial<FeedEntry> = {}): FeedEntry => ({
@@ -90,10 +90,8 @@ describe("the chips and notes", () => {
     expect(out).toContain('ml-1 font-normal">2<');
   });
 
-  it("offers 'Pip & agents' only while Agents are on", () => {
-    expect(renderToStaticMarkup(<ChipBar chip="all" counts={{}} onChange={vi.fn()} chips={chipsFor({ agents: false })} />)).not.toContain("Pip &amp; agents");
-    expect(renderToStaticMarkup(<ChipBar chip="all" counts={{}} onChange={vi.fn()} />)).not.toContain("Pip &amp; agents");
-    const on = renderToStaticMarkup(<ChipBar chip="pip" counts={{}} onChange={vi.fn()} chips={chipsFor({ agents: true })} />);
+  it("offers 'Pip & agents' as the last chip", () => {
+    const on = renderToStaticMarkup(<ChipBar chip="pip" counts={{}} onChange={vi.fn()} />);
     expect(on).toMatch(/aria-pressed="true"[^>]*><span aria-hidden="true">◆ <\/span>Pip &amp; agents/);
   });
 

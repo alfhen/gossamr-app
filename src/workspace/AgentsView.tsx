@@ -576,10 +576,7 @@ const actions: AgentsActions = {
   toggleEarlier: () => useRuns.getState().setEarlierOpen(!useRuns.getState().earlierOpen),
   archive: (id) => void useRuns.getState().archive([id]),
   setIntro: (open) => useRuns.getState().setIntroOpen(open),
-  dismissIntro: () => {
-    usePrefs.getState().setAgentsIntroSeen(true);
-    useRuns.getState().setIntroOpen(false);
-  },
+  dismissIntro: () => useRuns.getState().setIntroOpen(false),
   checkEnvironment: () => void useRuns.getState().checkEnvironment(),
   retry: () => useRuns.getState().recover(),
   fix: failureAction,
@@ -614,7 +611,6 @@ export function AgentsView() {
   const closed = useWorkstreams((s) => s.closed);
   const showClosed = useWorkView((s) => s.showClosed);
   const openWorkstream = useWorkView((s) => s.selected);
-  const introSeen = usePrefs((s) => s.agentsIntroSeen);
   const items = useWorkspace((s) => s.items);
   const proposals = useWorkspace((s) => s.proposals);
   const now = useNow();
@@ -698,7 +694,7 @@ export function AgentsView() {
         filters={filters}
         selectedId={selectedId}
         earlierOpen={earlierOpen}
-        introShown={introOpen ?? (!introSeen && runs.length === 0)}
+        introShown={introOpen}
         view={view}
         group={group}
         workstreams={workstreams}

@@ -216,8 +216,9 @@ pub enum Origin {
         #[serde(default)]
         workstream: Option<String>,
     },
+    /// `autopilot` is what drafts stored before it was removed say.
+    #[serde(alias = "autopilot")]
     Board,
-    Autopilot { event_id: String },
     /// Made from what an agent run reported. The text is the agent's, which is why it is marked. `workstream` is the
     /// run's own, copied when the draft is made.
     Run {
@@ -243,7 +244,7 @@ impl Origin {
     pub fn workstream(&self) -> Option<&str> {
         match self {
             Origin::Chat { workstream, .. } | Origin::Run { workstream, .. } => workstream.as_deref(),
-            Origin::Board | Origin::Autopilot { .. } => None,
+            Origin::Board => None,
         }
     }
 
@@ -252,7 +253,6 @@ impl Origin {
         match self {
             Origin::Chat { .. } => "chat",
             Origin::Board => "board",
-            Origin::Autopilot { .. } => "autopilot",
             Origin::Run { .. } => "run",
         }
     }
@@ -284,13 +284,13 @@ impl Basis {
 }
 
 /// Who drafted a proposal. `Agent` is a run's result turned into a draft by Gossamr; drafts stored before it existed
-/// say `User` for that, and are treated alike wherever it matters.
+/// say `User` for that, and are treated alike wherever it matters. Drafts stored as `autopilot` read as `User`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum CreatedBy {
+    #[serde(alias = "autopilot")]
     User,
     Pip,
-    Autopilot,
     Agent,
 }
 
@@ -433,7 +433,7 @@ impl Proposal {
     }
 
     /// Whether the draft can be put in a workstream after it was made: one Pip or a run made records its workstream in
-    /// its origin, and one that starts a run in the run's spec. A board or autopilot draft of anything else has no place
+    /// its origin, and one that starts a run in the run's spec. A board draft of anything else has no place
     /// to record one.
     pub fn can_join_workstream(&self) -> bool {
         matches!(self.origin, Origin::Chat { .. } | Origin::Run { .. }) || matches!(self.intent, Intent::StartRun { .. })
@@ -1041,5 +1041,15 @@ mod tests {
         let json = serde_json::to_value(&posted).unwrap();
         assert_eq!(json["posted"]["id"], 7);
         assert_eq!(serde_json::from_value::<Proposal>(json).unwrap(), posted);
+    }
+
+    #[test]
+    fn proposals_stored_with_the_autopilot_maker_and_origin_still_read() {
+        let p = proposal(review("acme/webshop", 218), &work_item("1", "todo"));
+        let mut json = serde_json::to_value(&p).unwrap();
+        json["createdBy"] = "autopilot".into();
+        json["origin"] = serde_json::json!({ "type": "autopilot", "eventId": "e1" });
+        let read = serde_json::from_value::<Proposal>(json).unwrap();
+        assert_eq!((read.created_by, read.origin), (CreatedBy::User, Origin::Board));
     }
 }

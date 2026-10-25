@@ -2,12 +2,12 @@ import { create } from "zustand";
 import type { Backend } from "../backend/types";
 import { targetOf } from "../lib/proposals";
 import { labelsByRun } from "../lib/workstreamStage";
-import type { CleanupResult, ClearFilter, DeleteResult, ItemRef, PlanComment, Proposal, Run, RunKind, RunsEnvironment } from "../types";
+import type { CleanupResult, ClearFilter, DeleteResult, ItemRef, PlanComment, Proposal, Run, RunsEnvironment } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { clearSentence } from "../lib/archiveRuns";
 import { INSTALL_URL, failureHelp, type FailureAct } from "./failureHelp";
 import { copyText } from "./AgentSheet";
-import { KIND_LABEL, NO_FILTERS, agentGroups, stepRun, stopAllText, type AgentFilters, type NeedsScope } from "./agentsLogic";
+import { NO_FILTERS, agentGroups, stepRun, stopAllText, type AgentFilters, type NeedsScope } from "./agentsLogic";
 import { showDraft } from "./draftTicket";
 import { openTicketByKey, showMe } from "./jump";
 import { forgetSettledAnswers } from "./keptAnswers";
@@ -62,8 +62,8 @@ interface RunsState {
   dismissed: ReadonlySet<string>;
   /** Ids of failed runs the person has taken the step in Terminal for, or copied its command; Retry waits for this. */
   terminalOpened: ReadonlySet<string>;
-  /** Null until the person opens or closes the explainer, when it shows for a first visit with no runs. */
-  introOpen: boolean | null;
+  /** Whether the person has the explainer open. */
+  introOpen: boolean;
   earlierOpen: boolean;
   stopping: boolean;
   /** The run a draft is being made from, so its buttons wait. */
@@ -73,13 +73,6 @@ interface RunsState {
   /** Runs the person just started and has not been told the outcome of: a launch that fails is announced and opened. */
   launching: ReadonlySet<string>;
   sheet: RunSheetTarget | null;
-  /**
-   * What the person asked for when the one-time safety sheet opened instead; "Got it, continue" carries it on. Set only
-   * while the safety sheet is that intro, which is how the sheet knows to offer it.
-   */
-  afterIntro: (() => void) | null;
-  /** What `afterIntro` would start, in words ("Investigate CA-401"), for the note when the intro is closed instead. */
-  afterIntroWhat: string | null;
   /** The order the run sheet browses in, taken when it opened; see `browseList`. */
   browseOrder: readonly string[] | null;
   /** Runs whose answer went through, with the progress time they had then: "Answer sent" shows until it moves on. */
@@ -110,13 +103,6 @@ interface RunsState {
   /** Shows a ticket's drafts, where a draft is approved, and closes the run sheet over it. */
   showDraft(item: ItemRef | null): void;
   setPicking(open: boolean): void;
-  /**
-   * False when it opened the safety sheet because the person has not seen it; callers stop there, and `then`, what
-   * they were doing, runs when the person presses "Got it, continue". Closing the sheet any other way drops it.
-   */
-  ensureAgentsIntro(then?: () => void, what?: string): boolean;
-  /** Closes the one-time safety sheet and carries on with what the person asked for before it opened. */
-  continueIntro(): void;
   /** Moves the run sheet to the next (`1`) or previous (`-1`) run, in the order the Agents view lists them, grouped as it is. */
   browse(delta: 1 | -1): void;
   stop(id: string): Promise<void>;
@@ -166,7 +152,7 @@ interface RunsState {
   clearFinished(filter: ClearFilter): Promise<number>;
   /** Deletes an archived run for good, and its worktree when asked. Null when the call failed, which is shown as a message. */
   deleteArchived(id: string, removeWorktree: boolean): Promise<DeleteResult | null>;
-  setIntroOpen(open: boolean | null): void;
+  setIntroOpen(open: boolean): void;
 }
 
 /** What the person answered to a run's permission prompt (`permissionAnswered`). */
@@ -184,7 +170,7 @@ export function permissionConfirmation(run: Pick<Run, "lastProgressAt" | "permis
   return run.state === "needsPermission" && run.permissionAllowed?.command === answered.command ? answered : null;
 }
 
-const idle = { runs: [] as Run[], archived: [] as Run[], launching: new Set<string>() as ReadonlySet<string>, status: "idle" as const, error: null, environment: null, selectedId: null, sheet: null as RunSheetTarget | null, afterIntro: null, afterIntroWhat: null, browseOrder: null, picking: false };
+const idle = { runs: [] as Run[], archived: [] as Run[], launching: new Set<string>() as ReadonlySet<string>, status: "idle" as const, error: null, environment: null, selectedId: null, sheet: null as RunSheetTarget | null, browseOrder: null, picking: false };
 
 // Set by needsActions, which can read Needs you; this store cannot import it without a cycle.
 let noticeOpener: ((runId: string) => void) | null = null;
@@ -219,8 +205,6 @@ function announceFailedLaunches(get: () => RunsState, set: (patch: Partial<RunsS
   for (const id of launching) {
     const run = runs.find((r) => r.id === id);
     if (!run) continue;
-    // A run that waits for a slot is queued, not started: the "Nothing was started" note stays until it launches.
-    if (run.state === "launching" || run.state === "working") dismissCancelledNote(run);
     if (run.state === "queued" || run.state === "launching") {
       still.add(id);
       continue;
@@ -298,50 +282,12 @@ const TICKET_READY = "Draft ticket ready. Nothing is created until you approve i
 let stop: (() => void) | null = null;
 let seq = 0;
 
-/** The note when the one-time safety sheet is closed with × rather than Got it, continue: what was dropped, and that nothing ran. */
-export const introCancelled = (what: string) => `Cancelled: ${what}. Nothing was started.`;
-
-/** The note `closeSheet` pushed, while it may still be on screen or waiting: it goes the moment a run starts after all. */
-let cancelledNote: { id: number; what: string } | null = null;
-
-const GENERIC_START = "Start an agent";
-
-/**
- * Takes the "Cancelled: … Nothing was started." note away: what it cancelled went ahead after all, so it would now say the
- * opposite of what happened. Given the run that started, only that run's own kind and ticket take it away; a note that
- * names no kind or ticket has nothing to match and goes with any run.
- */
-export function dismissCancelledNote(run?: Pick<Run, "spec" | "item">) {
-  if (!cancelledNote) return;
-  if (run && cancelledNote.what !== GENERIC_START && startWhat(null, run.spec.kind, run.item) !== cancelledNote.what) return;
-  useToasts.getState().dismiss(cancelledNote.id);
-  cancelledNote = null;
-}
-
-/**
- * Takes the note away when the setup sheet opens again for what it cancelled (Review and start on the same draft): over
- * the sheet it would read as if the launch was dropped. A note about something else stays.
- */
-export function dismissCancelledNoteFor(what: string) {
-  if (!cancelledNote || cancelledNote.what !== what) return;
-  useToasts.getState().dismiss(cancelledNote.id);
-  cancelledNote = null;
-}
-
-/** A run start in words for that note: the draft's own kind and ticket when there is one ("Investigate CA-401"), else the kind and ticket asked for. */
-export function startWhat(p: Proposal | null | undefined, kind?: RunKind, item?: ItemRef | null): string {
-  const draft = p?.intent.type === "startRun" ? p.intent : null;
-  const k = draft?.spec.kind ?? kind;
-  const key = (draft ? draft.item : item)?.key;
-  return k ? `${KIND_LABEL[k]}${key ? ` ${key}` : ""}` : "Start an agent";
-}
-
 export const useRuns = create<RunsState>((set, get) => ({
   backend: null,
   filters: NO_FILTERS,
   dismissed: loadDismissed(),
   terminalOpened: new Set<string>(),
-  introOpen: null,
+  introOpen: false,
   earlierOpen: false,
   archivedOpen: false,
   stopping: false,
@@ -417,42 +363,19 @@ export const useRuns = create<RunsState>((set, get) => ({
 
   openRun(id, opts) {
     const filters = opts?.stay ? get().filters : NO_FILTERS;
-    set({ selectedId: id, filters, sheet: { type: "run", id }, afterIntro: null, browseOrder: liveOrder({ ...get(), filters }) });
+    set({ selectedId: id, filters, sheet: { type: "run", id }, browseOrder: liveOrder({ ...get(), filters }) });
     const tabs = useTabs.getState();
     if (!opts?.stay || tabs.route === "settings" || tabs.route === "activity") tabs.setRoute("agents");
   },
 
-  openSafety: () => set({ sheet: { type: "safety" }, afterIntro: null, afterIntroWhat: null, browseOrder: null }),
-  closeSheet: () => {
-    // The one-time intro closed without Got it, continue: what it stood in for is dropped, and the person is told so.
-    const dropped = get().afterIntro ? (get().afterIntroWhat ?? GENERIC_START) : null;
-    set({ sheet: null, afterIntro: null, afterIntroWhat: null, browseOrder: null });
-    const id = dropped ? useToasts.getState().push(introCancelled(dropped), "info") : undefined;
-    if (dropped && id !== undefined && id !== null) cancelledNote = { id, what: dropped };
-  },
+  openSafety: () => set({ sheet: { type: "safety" }, browseOrder: null }),
+  closeSheet: () => set({ sheet: null, browseOrder: null }),
 
   showDraft(item) {
     get().closeSheet();
     if (item) openDraftsOn(item);
   },
-  ensureAgentsIntro(then, what) {
-    const prefs = usePrefs.getState();
-    if (prefs.agentsIntroSeen) return true;
-    prefs.setAgentsIntroSeen(true);
-    set({ sheet: { type: "safety" }, picking: false, afterIntro: then ?? (() => {}), afterIntroWhat: what ?? null, browseOrder: null });
-    return false;
-  },
-
-  continueIntro() {
-    const then = get().afterIntro;
-    set({ sheet: null, afterIntro: null, afterIntroWhat: null });
-    // What the person asked for goes ahead after all, so an earlier "Nothing was started" is no longer true.
-    if (then) dismissCancelledNote();
-    then?.();
-  },
-
   setPicking(picking) {
-    if (picking && !get().ensureAgentsIntro(() => get().setPicking(true), "Start an agent")) return;
     set({ picking });
   },
 

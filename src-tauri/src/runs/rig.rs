@@ -80,7 +80,6 @@ pub async fn ready_on(fx: Fixture, tune: impl FnOnce(RunService) -> RunService) 
         vec![fx.home.clone()],
         Arc::new(move |id| seen.lock().unwrap().push(id.to_string())),
     )
-    .enabled(true)
     .with_drafted(Arc::new(move |id| told.lock().unwrap().push(id.to_string())))
     .with_notifier(notices.clone())
     .with_terminal(opened.clone())

@@ -203,7 +203,7 @@ describe("the global entries", () => {
   it("keeps 'Show what needs me' among the palette's commands", () => {
     const made = new Map<string | symbol, ReturnType<typeof vi.fn>>();
     const actions = new Proxy({}, { get: (_, name) => (made.has(name) ? made : made.set(name, vi.fn())).get(name) }) as unknown as CommandActions;
-    const all = buildCommands([], [], actions, { project: null, view: null, unreadActivity: 0, agents: true, needsYou: 3 });
+    const all = buildCommands([], [], actions, { project: null, view: null, unreadActivity: 0, needsYou: 3 });
     const show = all.find((c) => c.label === "Show what needs me");
     expect(show?.hint).toBe("3 waiting");
     show!.run();

@@ -223,7 +223,6 @@ pub fn draft_line(p: &Proposal) -> String {
     let by = match p.created_by {
         CreatedBy::Pip => "Pip",
         CreatedBy::User => "the user",
-        CreatedBy::Autopilot => "autopilot",
         CreatedBy::Agent => "an agent run",
     };
     let state = match &p.state {
@@ -706,7 +705,6 @@ mod tests {
     #[test]
     fn only_pending_pip_drafts_are_marked_as_revisable() {
         assert!(!draft_line(&draft("x", CreatedBy::Pip, ProposalState::Applied)).contains("yours"));
-        assert!(!draft_line(&draft("x", CreatedBy::Autopilot, ProposalState::Pending)).contains("yours"));
         assert!(draft_line(&draft("x", CreatedBy::Pip, ProposalState::Retired("old".into()))).contains("retired: old"));
     }
 

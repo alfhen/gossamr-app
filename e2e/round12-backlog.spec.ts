@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { agentsHome, agentsSettled, askPip, homeSettled, needOfKind, openAgents, openApp, paneSettled, pipPane, selectWorkstream, startMyDay, startWorkstream } from "./support/app";
+import { agentsHome, askPip, homeSettled, needOfKind, openAgents, openApp, paneSettled, pipPane, selectWorkstream, startMyDay, startWorkstream } from "./support/app";
 
 // Backlog items of the twelfth dogfood round: what Pip is for and what the glossary is called (G21), the start review leading with
 // what the agent may do (G22), one story of who posts (G23), the workstream controls explaining themselves (G24), a numbered reply
@@ -16,17 +16,13 @@ const setup = (page: Page) => page.getByRole("dialog", { name: "Start an agent" 
 const safety = (page: Page) => page.getByRole("dialog", { name: "Agents safety and settings" });
 const allProjects = (page: Page) => page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "All projects" }).click();
 
-/** Opens the setup sheet of Pip's investigation draft, past the one-time safety sheet. */
+/** Opens the setup sheet of Pip's investigation draft. */
 async function openSetup(page: Page, key: string) {
   await paneSettled(page);
   await askPip(page, "investigate this");
   await paneSettled(page);
-  for (let attempt = 0; attempt < 2; attempt++) {
-    await pipPane(page).getByRole("article", { name: `Start an agent: ${key}` }).last().getByRole("button", { name: "Review and start →" }).click();
-    await expect(setup(page).or(safety(page))).toBeVisible();
-    if (!(await safety(page).isVisible())) break;
-    await safety(page).getByRole("button", { name: "Close" }).click();
-  }
+  await pipPane(page).getByRole("article", { name: `Start an agent: ${key}` }).last().getByRole("button", { name: "Review and start →" }).click();
+  await expect(setup(page)).toBeVisible();
 }
 
 
@@ -95,7 +91,6 @@ test.describe("an unclear ticket (G27, G32, G33, G34)", () => {
   test("the Needs you tag of a drafted agent says Review, as its button does", async ({ page }) => {
     test.setTimeout(90_000);
     await openApp(page, MANAGED);
-    await agentsSettled(page, true);
     await startWorkstream(page, "CA-401");
     await openAgents(page);
     await selectWorkstream(page, "CA-401");

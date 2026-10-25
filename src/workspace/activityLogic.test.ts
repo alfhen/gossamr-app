@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { FeedEntry, Proposal, WorkItem, WorkstreamEvent, WorkstreamView } from "../types";
-import { CHIPS, CHIP_LABEL, buildRows, chipsFor, eventText, toWorkstreamEntries, dayBreaks, dayLabel, draftsFor, groupByDay, initials, queryFor, stepIndex, verb, withRead } from "./activityLogic";
+import { CHIPS, CHIP_LABEL, buildRows, eventText, toWorkstreamEntries, dayBreaks, dayLabel, draftsFor, groupByDay, initials, queryFor, stepIndex, verb, withRead } from "./activityLogic";
 
 const entry = (id: string, at: string, over: Partial<FeedEntry> = {}): FeedEntry => ({
   id,
@@ -114,9 +114,8 @@ describe("the Pip & agents chip", () => {
     ],
   };
 
-  it("is offered only while Agents are on, after the usual chips", () => {
-    expect(chipsFor({ agents: false })).toEqual(CHIPS);
-    expect(chipsFor({ agents: true })).toEqual([...CHIPS, "pip"]);
+  it("is offered after the usual chips", () => {
+    expect(CHIPS[CHIPS.length - 1]).toBe("pip");
     expect(CHIP_LABEL.pip).toBe("Pip & agents");
   });
 

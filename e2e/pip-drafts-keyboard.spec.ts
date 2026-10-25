@@ -168,19 +168,11 @@ test("a on a run draft opens its setup and starts nothing", async ({ page }) => 
   await expect(pipPane(page).getByRole("button", { name: "Stop" })).toHaveCount(0);
 
   const setup = page.getByRole("dialog", { name: "Start an agent" });
-  const safety = page.getByRole("dialog", { name: "Agents safety and settings" });
-  // A fresh profile's first agent action shows the safety sheet instead, once.
-  for (let attempt = 0; attempt < 2; attempt++) {
-    await page.locator(PIP_INPUT).press("ArrowUp");
-    await expect(draft).toBeFocused();
-    await expect(draft).toContainText("e edit · d s skip · ↵ open");
-    await expect(draft).not.toContainText("a approve");
-    await page.keyboard.press("a");
-    await expect(setup.or(safety)).toBeVisible();
-    if (!(await safety.isVisible())) break;
-    await safety.getByRole("button", { name: "Close" }).click();
-    await page.locator(PIP_INPUT).focus();
-  }
+  await page.locator(PIP_INPUT).press("ArrowUp");
+  await expect(draft).toBeFocused();
+  await expect(draft).toContainText("e edit · d s skip · ↵ open");
+  await expect(draft).not.toContainText("a approve");
+  await page.keyboard.press("a");
   await expect(setup).toBeVisible();
   await expect(setup).toContainText("CA-401");
 

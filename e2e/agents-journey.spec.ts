@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { advanceRuns, agentsHome, agentsSettled, closeWorkstreamSheet, expandNeedsYou, expectPeekInPlace, finishOnHome, githubWrites, holdBySystem, homeConversation, homeConversationRegion, homeRunCards, homeSettled, inlineStart, jiraWrites, mockRuns, needRow, needsPane, needsPaneHeading, needsYouCount, needsYouTray, openAgents, openApp, peekSheet, scriptNextRun, selectWorkstream, setBudget, startWorkstream, stepChip, stepRail, surfacePullRequests, workstreamEvents, workstreamGroup, openNeedRow, needsStack, openRunOf } from "./support/app";
+import { advanceRuns, agentsHome, closeWorkstreamSheet, expandNeedsYou, expectPeekInPlace, finishOnHome, githubWrites, holdBySystem, homeConversation, homeConversationRegion, homeRunCards, homeSettled, inlineStart, jiraWrites, mockRuns, needRow, needsPane, needsPaneHeading, needsYouCount, needsYouTray, openAgents, openApp, peekSheet, scriptNextRun, selectWorkstream, setBudget, startWorkstream, stepChip, stepRail, surfacePullRequests, workstreamEvents, workstreamGroup, openNeedRow, needsStack, openRunOf } from "./support/app";
 
 // A workstream in Manage mode, with pull requests shown only when a test says: the setting the phase's scenarios share.
 // GitHub is signed in with a catalog small enough to be watched whole, so the agents' repository is watched, as the
@@ -50,7 +50,6 @@ async function homeWorkstream(page: Page) {
 test("intake to review on Pip home: the person talks to Pip, starts the investigation in place, approves the plan and the review's comments, and the rules do the rest", async ({ page }) => {
   test.setTimeout(120_000);
   await openApp(page, MANAGED);
-  await agentsSettled(page);
   await homeWorkstream(page);
   const row = workstreamGroup(page, "CA-401");
   await expect(row).toHaveAttribute("aria-current", "true");
@@ -213,7 +212,6 @@ test("intake to review on Pip home: the person talks to Pip, starts the investig
 
 test("the Needs you list ranks a hold ahead of a draft to approve, opens each in the pane, and each leaves once dealt with", async ({ page }) => {
   await openApp(page, MANAGED);
-  await agentsSettled(page);
   await homeWorkstream(page);
   const row = workstreamGroup(page, "CA-401");
   await expect(needsYouCount(page)).toHaveText("0");
@@ -253,7 +251,6 @@ test("the Needs you list ranks a hold ahead of a draft to approve, opens each in
 
 test("a failed run waits in the list under General, opens its decision, and stays until it is dealt with, not just seen", async ({ page }) => {
   await openApp(page, "prSurface=manual");
-  await agentsSettled(page);
   await openAgents(page);
   await expandNeedsYou(page);
   // The sample's failed run failed on a folder it may not use yet, so it waits as a failure with a step to take.

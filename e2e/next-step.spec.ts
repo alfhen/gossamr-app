@@ -6,7 +6,6 @@ import { advanceRuns, askPermission, askPip, mockRuns, needsPane, openApp, peekS
 const MANAGED = "runs=empty&prSurface=manual&wsManage=1";
 
 const setup = (page: Page) => page.getByRole("dialog", { name: "Start an agent" });
-const safety = (page: Page) => page.getByRole("dialog", { name: "Agents safety and settings" });
 const runCards = (page: Page, key: string) => pipPane(page).getByRole("article", { name: `Start an agent: ${key}` });
 
 /** The line under the workstream's controls in the Pip pane. */
@@ -17,16 +16,12 @@ async function settled(page: Page) {
   await expect(pipPane(page).getByRole("button", { name: "Stop" })).toHaveCount(0);
 }
 
-/** Asks Pip for an investigation of CA-401, opens its draft past the one-time safety sheet and starts it, as the person does. */
+/** Asks Pip for an investigation of CA-401, opens its draft and starts it, as the person does. */
 async function startInvestigation(page: Page) {
   await askPip(page, "investigate this");
   await settled(page);
-  for (let attempt = 0; attempt < 2; attempt++) {
-    await runCards(page, "CA-401").last().getByRole("button", { name: "Review and start →" }).click();
-    await expect(setup(page).or(safety(page))).toBeVisible();
-    if (!(await safety(page).isVisible())) break;
-    await safety(page).getByRole("button", { name: "Close" }).click();
-  }
+  await runCards(page, "CA-401").last().getByRole("button", { name: "Review and start →" }).click();
+  await expect(setup(page)).toBeVisible();
   await setup(page).getByRole("button", { name: "Start agent" }).click();
   await expect(setup(page)).toHaveCount(0);
 }

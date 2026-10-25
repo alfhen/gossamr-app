@@ -1,5 +1,5 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
-import { advanceRuns, agentsHome, agentsSettled, askPip, backdateWorkstream, editTicket, expandAllNeeds, expandNeedsYou, expectToast, githubWrites, groupByState, heldBanner, holdAll, holdBySystem, homeComposer, homeRunCards, homeSettled, inlineStart, jiraWrites, manageSwitch, mockRuns, needOfKind, needRow, needsPane, needsYouCount, needsYouTray, openAgents, openApp, openPip, paneSettled as settled, peekSheet, peekTicket, pipConversation, pipPane, scriptNextRun, seedWorkstreamEvent, selectWorkstream, setBudget, startWorkstream, stepRail, still, surfacePullRequests, wakes, workstreamEvents, workstreamGroup, workstreamWeb, workstreamWebText, openNeedOfKind, groupOpen, needsStack } from "./support/app";
+import { advanceRuns, agentsHome, askPip, backdateWorkstream, editTicket, expandAllNeeds, expandNeedsYou, expectToast, githubWrites, groupByState, heldBanner, holdAll, holdBySystem, homeComposer, homeRunCards, homeSettled, inlineStart, jiraWrites, manageSwitch, mockRuns, needOfKind, needRow, needsPane, needsYouCount, needsYouTray, openAgents, openApp, openPip, paneSettled as settled, peekSheet, peekTicket, pipConversation, pipPane, scriptNextRun, seedWorkstreamEvent, selectWorkstream, setBudget, startWorkstream, stepRail, still, surfacePullRequests, wakes, workstreamEvents, workstreamGroup, workstreamWeb, workstreamWebText, openNeedOfKind, groupOpen, needsStack, showWorkspace } from "./support/app";
 
 // Two product decisions (docs/needs-you.md): a hold the person chose is not a need, and the automatic budget is one unit,
 // "automatic steps", whose running out is a Decide question in Needs you with "Allow 5 more" and "Switch to Advise".
@@ -13,7 +13,6 @@ const undo = (page: Page) => toast(page).getByRole("button", { name: "Undo" });
 const homeButton = (page: Page) => page.locator("[data-rail]").getByRole("button", { name: /^Agents/ });
 const nextLine = (page: Page) => pipPane(page).locator("[data-next-step]");
 const setup = (page: Page) => page.getByRole("dialog", { name: "Start an agent" });
-const safety = (page: Page) => page.getByRole("dialog", { name: "Agents safety and settings" });
 const runCards = (page: Page, key: string) => pipPane(page).getByRole("article", { name: `Start an agent: ${key}` });
 const actions = async (page: Page, action: string) => (await workstreamEvents(page)).filter((e) => e.action === action);
 
@@ -25,17 +24,13 @@ async function workstreamOnHome(page: Page) {
   await expect(pipPane(page).locator("[data-pip-conversation]")).toHaveText(/^Workstream: CA-401 /);
 }
 
-/** Asks Pip for an investigation of CA-401, opens its draft past the one-time safety sheet and starts it, as the person does. */
+/** Asks Pip for an investigation of CA-401, opens its draft and starts it, as the person does. */
 async function startInvestigation(page: Page, key = "CA-401") {
   await settled(page);
   await askPip(page, "investigate this");
   await settled(page);
-  for (let attempt = 0; attempt < 2; attempt++) {
-    await runCards(page, key).last().getByRole("button", { name: "Review and start →" }).click();
-    await expect(setup(page).or(safety(page))).toBeVisible();
-    if (!(await safety(page).isVisible())) break;
-    await safety(page).getByRole("button", { name: "Close" }).click();
-  }
+  await runCards(page, key).last().getByRole("button", { name: "Review and start →" }).click();
+  await expect(setup(page)).toBeVisible();
   await setup(page).getByRole("button", { name: "Start agent" }).click();
   await expect(setup(page)).toHaveCount(0);
 }
@@ -676,6 +671,7 @@ test.describe("B10: the switch and the first permission prompt explain themselve
       await expect(ask.locator("[data-permission-decisions] button").first()).toBeFocused();
       // It stays dismissed across a reload.
       await page.reload();
+      await showWorkspace(page);
       await expect(page.getByText("CA-401", { exact: true }).first()).toBeVisible();
       await openAgents(page);
       await expandAllNeeds(page);
@@ -715,7 +711,6 @@ test.describe("B7: a command word outranks the tickets it also matches", () => {
 
   test("fuzzy ticket search still works, and a typed ticket key still leads", async ({ page }) => {
     await openApp(page, MANAGED);
-    await agentsSettled(page);
     let list = await options(page, "retry failed payment");
     await expect(list.first()).toContainText("DEVOPS-471");
     await page.keyboard.press("Escape");

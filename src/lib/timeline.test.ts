@@ -315,7 +315,6 @@ describe("timeline: drafts", () => {
   it("says who posted a GitHub review, to which pull request, with how many comments and whether it was edited", () => {
     const review = (n: number) => ({ type: "githubReview", connectionId: "gh", item: ref("CA-402"), runId: "r1", repo: "hobbii/cart", number: 17, commitSha: "abc", summary: "s", comments: Array.from({ length: n }, (_, i) => ({ path: "a.ts", line: i + 1, side: "RIGHT", body: "x" })) }) as unknown as Intent;
     expect(draftSentence(draft("d1", review(2), 5, { state: { type: "applied" } }))).toBe("You posted an agent's GitHub review on hobbii/cart#17: 2 inline comments");
-    expect(draftSentence(draft("d2", review(1), 5, { createdBy: "autopilot", state: { type: "applied" } }))).toBe("You posted Gossamr's GitHub review on hobbii/cart#17: 1 inline comment");
     const edited = { ...draft("d3", review(3), 5, { createdBy: "pip", state: { type: "applied" } }), revisions: [{}] } as unknown as Proposal;
     expect(draftSentence(edited)).toBe("You posted Pip's GitHub review on hobbii/cart#17: 3 inline comments, edited by you");
   });

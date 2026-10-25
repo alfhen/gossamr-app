@@ -3,7 +3,6 @@ import { claude, type PipView } from "../backend/claude";
 import { useClaude } from "../claudeStore";
 import { itemKey } from "../lib/filter";
 import { useWorkspace } from "../workspaceStore";
-import { useAgentsEnabled } from "./agentsFlag";
 import { needsYouText, useNeedsYou } from "./useNeeds";
 import { askPip } from "./askPip";
 import { useActiveTab } from "./hooks";
@@ -169,19 +168,18 @@ export function fireNudge(candidates: readonly Nudge[], now: number, hidden: boo
 
 /** Suggestions about runs that changed state while the app was open; what was already there at the first read is not news. */
 function useRunNudges(): Nudge[] {
-  const enabled = useAgentsEnabled();
   const ready = useRuns((s) => s.status === "ready");
   const runs = useRuns((s) => s.runs);
   const items = useWorkspace((s) => s.items);
   const workstreams = useWorkstreams((s) => s.list);
   const [baseline, setBaseline] = useState<ReadonlySet<string> | null>(null);
   useEffect(() => {
-    if (enabled && ready && baseline === null) setBaseline(new Set(runStatesNow(runs)));
-  }, [enabled, ready, baseline, runs]);
+    if (ready && baseline === null) setBaseline(new Set(runStatesNow(runs)));
+  }, [ready, baseline, runs]);
   // A managed workstream's runs are told by Pip's wake turns, so they get no nudge here.
   return useMemo(
-    () => (enabled && baseline ? runNudges(runs, baseline, (r) => (r.item ? items[itemKey(r.item)]?.title : null), nudgedOutside(workstreams)) : []),
-    [enabled, baseline, runs, items, workstreams],
+    () => (baseline ? runNudges(runs, baseline, (r) => (r.item ? items[itemKey(r.item)]?.title : null), nudgedOutside(workstreams)) : []),
+    [baseline, runs, items, workstreams],
   );
 }
 

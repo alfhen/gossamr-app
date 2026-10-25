@@ -17,7 +17,6 @@ import { rowText } from "./AgentParts";
 import { RunSetupView, setupBlock } from "./RunSetup";
 import { createdFrom, defaultProject, finishWithPipPrompt, runTicketDraftOf, startBlock, startSteps, TICKETLESS_STARTER, ticketControl, ticketlessShape, ticketStatus } from "./runSheetLogic";
 import { useRunSetup } from "./runSetupStore";
-import { usePrefs } from "./prefs";
 import { useRuns } from "./runsStore";
 import { useTabs } from "./tabsStore";
 import { useToasts } from "./toasts";
@@ -35,7 +34,6 @@ let backend: MockBackend;
 
 beforeEach(async () => {
   vi.stubGlobal("localStorage", memory());
-  usePrefs.setState({ agentsIntroSeen: true });
   s().close();
   backend = new MockBackend({ runs: { seed: "empty" } });
   await useWorkspace.getState().init(backend);

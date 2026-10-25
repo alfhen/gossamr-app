@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { agentsHome, agentsSettled, closeWorkstreamSheet, editTicket, jiraWrites, needsPane, openAgents, openApp, selectWorkstream, startMyDay, startWorkstream, stepRail } from "./support/app";
+import { agentsHome, closeWorkstreamSheet, editTicket, jiraWrites, needsPane, openAgents, openApp, selectWorkstream, startMyDay, startWorkstream, stepRail } from "./support/app";
 
 // Fixes from round 10's backlog: the unclear tickets higher on Start my day (G26), the workstream controls on the steps rail's
 // F6 stop (G27), Ctrl+0 on Pip home going on to General (G28), "N here" on a Needs you group (G30), the palette's and the
@@ -50,7 +50,6 @@ test.describe("Start my day puts the unclear tickets above the lines that follow
 test.describe("what the palette and the reporter draft say (G31)", () => {
   test("'Start a workstream' says it starts no agent and posts nothing", async ({ page }) => {
     await openApp(page, "runs=empty");
-    await agentsSettled(page, true);
     await openAgents(page);
     await agentsHome(page).getByRole("button", { name: "Start a workstream…" }).click();
     const dialog = page.getByRole("dialog", { name: "Command palette" });

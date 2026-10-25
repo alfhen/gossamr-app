@@ -5,7 +5,6 @@ import { itemRef } from "../backend/mockConnector";
 import type { Preflight } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { RunPreflight } from "./RunPreflight";
-import { usePrefs } from "./prefs";
 import { useRunSetup } from "./runSetupStore";
 import { LOAD_LIMIT_MS, useRuns } from "./runsStore";
 import { useTabs } from "./tabsStore";
@@ -31,7 +30,6 @@ async function start(untrusted = true) {
   runs().init(backend);
   useToasts.getState().clear();
   useTabs.getState().setRoute("workspace");
-  usePrefs.setState({ agentsIntroSeen: true });
   setup().close();
   await settle();
 }

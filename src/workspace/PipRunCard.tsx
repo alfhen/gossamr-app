@@ -3,7 +3,6 @@ import { itemKey } from "../lib/filter";
 import { labelsByRun } from "../lib/workstreamStage";
 import { AutoStarted, ReadOnlyBadge, RunLabel } from "./AgentCard";
 import { useWorkspace } from "../workspaceStore";
-import { useAgentsEnabled } from "./agentsFlag";
 import { runTitle, waitsForSlot } from "./agentsLogic";
 import { useStateView } from "./useStateView";
 import { Dot, RowText, TONE } from "./AgentParts";
@@ -66,7 +65,6 @@ export function PipRunCard({ run, now, ticketTitle, label, onOpen, focusable = f
 
 interface StripProps {
   runs: readonly Run[];
-  enabled: boolean;
   now: number;
   workstream?: string | null;
   /** Failed runs the person dismissed, which leave the strip as they leave Needs you. */
@@ -80,15 +78,15 @@ interface StripProps {
 /**
  * Up to three live runs above the drafts: the ones that need the person (unseen failures among them), then the ones
  * working. In a workstream's conversation (`workstream`), only that workstream's runs. When it lists more such runs than
- * it shows, the header says how many of them it shows and links to the Agents view; never when nothing was cut. Absent while agents are off or nothing is going.
+ * it shows, the header says how many of them it shows and links to the Agents view; never when nothing was cut. Absent when nothing is going.
  */
-export function PipRunStripView({ runs, enabled, now, workstream = null, dismissed, titleOf, onOpen, onSeeAll }: StripProps) {
+export function PipRunStripView({ runs, now, workstream = null, dismissed, titleOf, onOpen, onSeeAll }: StripProps) {
   const labels = labelsByRun(runs);
   const scope = workstream ? runs.filter((r) => r.spec.workstream === workstream) : runs;
   // Out of the runs it would list, not every run there is: one finished or seen is not left out, only not listed.
   const listed = stripRuns(scope, dismissed);
   const shown = listed.slice(0, STRIP_SHOWN);
-  if (!enabled || !shown.length) return null;
+  if (!shown.length) return null;
   const more = shown.length < listed.length;
   return (
     <section aria-label="Your agents" className="grid gap-1.5">
@@ -108,14 +106,12 @@ export function PipRunStripView({ runs, enabled, now, workstream = null, dismiss
 }
 
 export function PipRunStrip({ workstream = null }: { workstream?: string | null }) {
-  const enabled = useAgentsEnabled();
   const runs = useRuns((s) => s.runs);
   const dismissed = useRuns((s) => s.dismissed);
   const items = useWorkspace((s) => s.items);
   return (
     <PipRunStripView
       runs={runs}
-      enabled={enabled}
       now={Date.now()}
       workstream={workstream}
       dismissed={dismissed}

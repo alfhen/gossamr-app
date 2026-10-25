@@ -19,7 +19,7 @@ import type { AgentSettings } from "../types";
 
 const typing = (t: EventTarget | null) => t instanceof HTMLElement && (t.isContentEditable || !!t.closest("input, textarea, select, [contenteditable], [data-esc-local]"));
 
-function Settings({ intro = false }: { intro?: boolean }) {
+function Settings() {
   const backend = useBackend();
   const runs = useRuns((s) => s.runs);
   const stopping = useRuns((s) => s.stopping);
@@ -78,7 +78,7 @@ function Settings({ intro = false }: { intro?: boolean }) {
     setReport(cleanupReport(removed, refused));
   };
   const cleanup = offer ? { count: offer.runs.length, reason: offer.reason, report, busy: cleaning } : report ? { count: 0, reason: "", report, busy: false } : null;
-  return <AgentsSettingsView runs={runs} stopping={stopping} keepRunning={keepRunning ?? (stoppable(runs).length || null)} settings={settings} settingsSaving={settingsSaving} cleanup={cleanup} onSettings={save} onCleanup={() => void cleanAll()} onStopAll={() => void useRuns.getState().stopAll()} onClose={() => useRuns.getState().closeSheet()} intro={intro} onContinue={() => useRuns.getState().continueIntro()} />;
+  return <AgentsSettingsView runs={runs} stopping={stopping} keepRunning={keepRunning ?? (stoppable(runs).length || null)} settings={settings} settingsSaving={settingsSaving} cleanup={cleanup} onSettings={save} onCleanup={() => void cleanAll()} onStopAll={() => void useRuns.getState().stopAll()} onClose={() => useRuns.getState().closeSheet()} />;
 }
 
 /** Asks which ticket to start an agent on. Picking opens the setup sheet; nothing is drafted before that. */
@@ -118,7 +118,6 @@ export function AgentSheets() {
   const setupOpen = useRunSetup((s) => s.open);
   const setupItem = useRunSetup((s) => s.item);
   const sheet = useRuns((s) => s.sheet);
-  const afterIntro = useRuns((s) => s.afterIntro);
   const picking = useRuns((s) => s.picking);
   const ticketTitle = useWorkspace((s) => (setupItem ? (s.items[itemKey(setupItem)]?.title ?? null) : null));
   const runSheetOpen = !setupOpen && sheet !== null;
@@ -150,7 +149,7 @@ export function AgentSheets() {
 
   return (
     <>
-      {setupOpen ? <RunSetup ticketTitle={ticketTitle} /> : sheet?.type === "run" ? <RunSheet key={sheet.id} id={sheet.id} /> : sheet?.type === "safety" ? <Settings intro={afterIntro !== null} /> : null}
+      {setupOpen ? <RunSetup ticketTitle={ticketTitle} /> : sheet?.type === "run" ? <RunSheet key={sheet.id} id={sheet.id} /> : sheet?.type === "safety" ? <Settings /> : null}
       {picking && <AgentTicketPicker />}
     </>
   );

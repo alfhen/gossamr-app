@@ -106,12 +106,9 @@ async fn a_copy_that_claude_starts_instead_is_reported_and_the_draft_stays_pendi
 }
 
 #[tokio::test]
-async fn a_decided_follow_up_is_not_sent_twice_and_nothing_is_sent_with_agents_off() {
+async fn a_decided_follow_up_is_not_sent_twice() {
     let (rig, run) = finished().await;
     let p = follow_up(&rig, &run, CreatedBy::Pip, "More please.").await;
-    rig.svc.set_flag(false);
-    assert!(rig.svc.send_follow_up(&p.id, "More please.").await.is_err());
-    rig.svc.set_flag(true);
     rig.svc.send_follow_up(&p.id, "More please.").await.unwrap();
     assert!(rig.svc.send_follow_up(&p.id, "More please.").await.unwrap_err().to_string().contains("already been decided"));
     assert_eq!(rig.cli.0.lock().unwrap().resumes.len(), 1);

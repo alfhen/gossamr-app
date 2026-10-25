@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { askPip, openApp, openPip, peekSheet, peekTicket, pipConversation, pipPane, startWorkstream } from "./support/app";
+import { askPip, openApp, openPip, peekSheet, peekTicket, pipConversation, pipPane, startWorkstream, showWorkspace } from "./support/app";
 
 /** Where the sample backend keeps workstreams (MOCK_WORKSTREAMS_KEY in src/backend/mockWorkstreams.ts). */
 const STORE = "gossamr-mock-workstreams";
@@ -95,6 +95,7 @@ test("a workstream's conversation is apart from General, and both survive a relo
   await expect(pipPane(page).getByText(WORKSTREAM_QUESTION, { exact: true })).toHaveCount(0);
 
   await page.reload();
+  await showWorkspace(page);
   await expect(page.getByText("CA-401", { exact: true }).first()).toBeVisible();
   if (!(await pipPane(page).isVisible())) await openPip(page);
   await expect(pipConversation(page)).toHaveText("General");
@@ -116,6 +117,7 @@ test("a restart holds every open workstream once, a reload doesn't, and a held w
   await openApp(page);
   await startWorkstream(page, "CA-401");
   await page.reload();
+  await showWorkspace(page);
   await expect(page.getByText("CA-401", { exact: true }).first()).toBeVisible();
   expect((await store(page)).workstreams?.map((w) => w.heldReason)).toEqual([null]);
 
@@ -136,6 +138,7 @@ test("a restart holds every open workstream once, a reload doesn't, and a held w
   await askAndWait(again, WORKSTREAM_QUESTION);
 
   await again.reload();
+  await showWorkspace(again);
   await expect(again.getByText("CA-401", { exact: true }).first()).toBeVisible();
   expect((await store(again)).events?.filter((e) => e.action === "held")).toHaveLength(1);
 });

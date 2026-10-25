@@ -3,34 +3,22 @@ import { expect, type Locator, type Page } from "@playwright/test";
 /** The id of Pip's message input (PIP_INPUT_ID in src/workspace/PipPane.tsx). */
 export const PIP_INPUT = "#pip-input";
 
-/** Where the app's preferences are kept (KEY in src/workspace/prefs.ts). */
-const PREFS = "gossamr-prefs";
-
-/**
- * Makes this page's profile one whose person turned 'Start on Agents' off, so a load lands on the workspace with Agents
- * on too. Only a profile that hasn't chosen yet is changed, and its other preferences stay (the config seeds the
- * orientation card dismissed): whatever the app or the test saves afterwards stands, across reloads as well.
- */
-export async function landOnWorkspace(page: Page) {
-  await page.addInitScript((key) => {
-    let prefs: Record<string, unknown> = {};
-    try {
-      prefs = JSON.parse(localStorage.getItem(key) ?? "{}") ?? {};
-    } catch {
-      // Unreadable preferences are the app's to reset.
-    }
-    if (prefs.startOnAgents === undefined) localStorage.setItem(key, JSON.stringify({ ...prefs, startOnAgents: false }));
-  }, PREFS);
+/** The app lands on Agents once it is ready; this leaves it for the ticket screen, where most specs start. */
+export async function showWorkspace(page: Page) {
+  await expect(page).toHaveTitle("Agents — Gossamr");
+  await page.getByRole("button", { name: "All projects" }).click();
+  await page.mouse.move(700, 500);
+  await expect(page).toHaveTitle("Tickets — Gossamr");
 }
 
 /**
  * Opens the workspace in mock mode and waits for the sample tickets. `query` goes through as the page's search string, so mock
- * flags such as `runs=empty` reach mockOptionsFromUrl. Agents is where the app lands with Agents on; the specs here start
- * on the workspace, as a person who turned that off does (`landOnWorkspace`), and go to Agents when they mean to.
+ * flags such as `runs=empty` reach mockOptionsFromUrl. The app lands on Agents; the specs here start on the workspace
+ * (`showWorkspace`) and go to Agents when they mean to.
  */
 export async function openApp(page: Page, query = "") {
-  await landOnWorkspace(page);
   await page.goto(query ? `/?${query.replace(/^\?/, "")}` : "/");
+  await showWorkspace(page);
   await expect(page.getByText("CA-401", { exact: true }).first()).toBeVisible();
 }
 
@@ -70,13 +58,6 @@ export async function startWorkstream(page: Page, key: string) {
   await peekTicket(page, key);
   await peekSheet(page).getByRole("button", { name: "Start a workstream" }).click();
   await expect(pipConversation(page)).toHaveText(new RegExp(`^Workstream: ${key} .* · Intake$`));
-}
-
-/** Closes the one-time Agents safety sheet if a fresh profile's first agent action showed it. */
-export async function dismissAgentSafety(page: Page) {
-  const safety = page.getByRole("dialog", { name: "Agents safety and settings" });
-  if (await safety.isVisible()) await safety.getByRole("button", { name: "Close" }).click();
-  await expect(safety).toHaveCount(0);
 }
 
 /**
@@ -581,11 +562,6 @@ export const stepRail = (page: Page) => workstreamSheet(page);
 /** The chip of step `kind` (investigate, triage, plan, build, review, verify) on the step rail, with what it opens to. */
 export const stepChip = (page: Page, kind: string) => stepRail(page).locator(`[data-step="${kind}"]`);
 
-/** Waits until the sample backend has said whether Agents are on: the rail's Agents button shows or goes. */
-export async function agentsSettled(page: Page, on = true) {
-  await expect(page.getByRole("button", { name: /^Agents/ })).toHaveCount(on ? 1 : 0);
-}
-
 /** Whether the scripted Pip has no turn running or waiting anywhere, a wake the supervisor queued included. */
 export const pipIdle = (page: Page) =>
   page.evaluate((missing) => {
@@ -637,32 +613,22 @@ export async function finishOnHome(page: Page, id: string) {
 export const homeRunCards = (page: Page, key: string) => homeConversationRegion(page).getByRole("article", { name: `Start an agent: ${key}` });
 
 /**
- * Opens the 'Review and start' of run draft `card`, past the safety sheet a fresh profile shows once at its first agent
- * action, and returns the review as shown: in place under a card on Agents (the decision pane, a workstream's detail), or,
- * from the Pip drawer's narrow card, the setup sheet. `by: "keyboard"` presses Enter on the card instead of clicking its
- * button; the card must have keyboard focus then, and `refocus` brings it back after the safety sheet.
+ * Opens the 'Review and start' of run draft `card` and returns the review as shown: in place under a card on Agents
+ * (the decision pane, a workstream's detail), or, from the Pip drawer's narrow card, the setup sheet. `by: "keyboard"`
+ * presses Enter on the card instead of clicking its button; the card must have keyboard focus then.
  */
-export async function inlineStart(page: Page, card: Locator, by: "click" | "keyboard" = "click", refocus: () => Promise<void> = () => card.focus()) {
+export async function inlineStart(page: Page, card: Locator, by: "click" | "keyboard" = "click") {
   // The drawer's card opens the setup sheet; the same draft read in place is the one Needs you opens.
   if (by === "click" && (await card.evaluate((el) => !!el.closest("[data-pip-root]")))) {
     await openNeedOfKind(page, "runStart");
     card = needsPane(page);
   }
-  const safety = page.getByRole("dialog", { name: "Agents safety and settings" });
   const inPlace = card.getByRole("group", { name: "Review and start" });
   const setup = page.getByRole("dialog", { name: "Start an agent" });
   const review = inPlace.or(setup);
-  for (let attempt = 0; attempt < 2; attempt++) {
-    if (by === "click") await card.getByRole("button", { name: /^Review and start( →)?$/ }).click();
-    else await page.keyboard.press("Enter");
-    await expect(review.or(safety)).toBeVisible();
-    if (!(await safety.isVisible())) break;
-    // The safety sheet takes Esc like any sheet, and hands focus back to where it was.
-    if (by === "click") await safety.getByRole("button", { name: "Close" }).click();
-    else await page.keyboard.press("Escape");
-    await expect(safety).toHaveCount(0);
-    if (by === "keyboard") await refocus();
-  }
+  if (by === "click") await card.getByRole("button", { name: /^Review and start( →)?$/ }).click();
+  else await page.keyboard.press("Enter");
+  await expect(review).toBeVisible();
   // Open in place, the review has its own Start and Hide; the card's own button is hidden meanwhile.
   if (await inPlace.count()) await expect(card.getByRole("button", { name: "Review and start", exact: true })).toHaveCount(0);
   return review;
@@ -699,7 +665,6 @@ export async function expectVisibleFocus(page: Page) {
 }
 
 const agentSetup = (page: Page) => page.getByRole("dialog", { name: "Start an agent" });
-const agentSafety = (page: Page) => page.getByRole("dialog", { name: "Agents safety and settings" });
 /** The Agents view's cards; Pip's strip of agents shows runs too, and only the view counts. */
 const agentCards = (page: Page) => page.locator('main article[data-run-id]:not(aside[aria-label="Pip"] *):not(#workstream-sheet *)');
 const agentRunIds = async (page: Page) => (await agentCards(page).evaluateAll((els) => els.map((e) => e.getAttribute("data-run-id")))).filter((id): id is string => !!id);
@@ -709,21 +674,16 @@ const agentRunIds = async (page: Page) => (await agentCards(page).evaluateAll((e
  * advances it to done, and opens CA-402's peek, where its GitHub review draft waits. `query` is added to the page's.
  */
 export async function reviewedDraft(page: Page, query = "") {
-  await landOnWorkspace(page);
   await page.goto(`/?mockRepos=14${query}`);
   await page.getByRole("button", { name: "Start watching" }).click();
+  await showWorkspace(page);
   await expect(page.getByText("CA-401", { exact: true }).first()).toBeVisible();
   await page.getByRole("button", { name: /^Agents/ }).click();
   await expect(agentCards(page).first()).toBeVisible();
   const before = await agentRunIds(page);
   const build = agentCards(page).filter({ hasText: "Build" }).filter({ hasText: "CA-402" });
-  for (let attempt = 0; attempt < 2; attempt++) {
-    await build.getByRole("button", { name: "Review this" }).click();
-    await expect(agentSetup(page).or(agentSafety(page))).toBeVisible();
-    if (!(await agentSafety(page).isVisible())) break;
-    await agentSafety(page).getByRole("button", { name: "Close" }).click();
-    await expect(agentSafety(page)).toHaveCount(0);
-  }
+  await build.getByRole("button", { name: "Review this" }).click();
+  await expect(agentSetup(page)).toBeVisible();
   await agentSetup(page).getByRole("button", { name: "Start agent" }).click();
   await expect(agentSetup(page)).toHaveCount(0);
   await expect.poll(async () => (await agentRunIds(page)).length).toBe(before.length + 1);

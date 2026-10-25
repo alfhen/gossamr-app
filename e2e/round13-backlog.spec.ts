@@ -3,9 +3,8 @@ import { agentsHome, editTicket, expandAllNeeds, expectToast, homeConversationRe
 
 // Backlog items of the thirteenth dogfood round: a workstream's offer to bring in what its ticket already has in General (G17),
 // Close with an Undo and a Reopen (G23), the safety copy saying a Build and the glossary's Manage, Hold and Allow once (G24), what
-// the reporter question says about posting (G25), the posting pause's two buttons (G26), Tab in the first-run safety sheet and in
-// the start review (G27), names a screen reader hears once (G28), the posted entry's footer (G29), the Done ticket's one reason
-// (G30) and 'start' in the palette (G31).
+// the reporter question says about posting (G25), the posting pause's two buttons (G26), names a screen reader hears
+// once (G28), the posted entry's footer (G29), the Done ticket's one reason (G30) and 'start' in the palette (G31).
 
 
 const THIN = "Fix it.";

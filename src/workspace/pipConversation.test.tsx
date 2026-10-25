@@ -13,7 +13,6 @@ import { useTabs } from "./tabsStore";
 import { useRuns } from "./runsStore";
 import { useWorkstreams } from "./workstreamsStore";
 import { useToasts } from "./toasts";
-import { useAgentsFlag } from "./agentsFlag";
 import { MockBackend } from "../backend/mock";
 import { GENERAL_CONVERSATION as FROM_PANE, PIP_INPUT_ID } from "./PipPane";
 import { Markdown } from "../components/Markdown";
@@ -314,24 +313,13 @@ describe("PipConversation", () => {
     }
   });
 
-  it("offers the Commands button beside the input only while Agents are on", () => {
+  it("offers the Commands button beside the input", () => {
     const attached = { images: [], add: async () => {}, remove: () => {}, take: () => [] } as unknown as Parameters<typeof Composer>[0]["attached"];
-    const flag = useAgentsFlag.getInitialState();
-    const was = flag.enabled;
-    const render = (on: boolean) => {
-      flag.enabled = on;
-      return renderToStaticMarkup(<Composer conversation={workstreamConversation("ws-1")} attached={attached} chips={[]} looking="the board" scene={{ itemKey: null, route: "agents", runOpen: false, workstream: true }} />);
-    };
-    try {
-      const on = render(true);
-      expect(on).toMatch(/<button type="button" data-popover-trigger="true" aria-label="Commands" aria-haspopup="dialog" aria-expanded="false"[^>]*>\?<\/button>/);
-      expect(on.indexOf('aria-label="Commands"')).toBeGreaterThan(on.indexOf('id="pip-input"'));
-      // Closed, the commands themselves aren't on screen.
-      expect(on).not.toContain("/stop R1");
-      expect(render(false)).not.toContain('aria-label="Commands"');
-    } finally {
-      flag.enabled = was;
-    }
+    const on = renderToStaticMarkup(<Composer conversation={workstreamConversation("ws-1")} attached={attached} chips={[]} looking="the board" scene={{ itemKey: null, route: "agents", runOpen: false, workstream: true }} />);
+    expect(on).toMatch(/<button type="button" data-popover-trigger="true" aria-label="Commands" aria-haspopup="dialog" aria-expanded="false"[^>]*>\?<\/button>/);
+    expect(on.indexOf('aria-label="Commands"')).toBeGreaterThan(on.indexOf('id="pip-input"'));
+    // Closed, the commands themselves aren't on screen.
+    expect(on).not.toContain("/stop R1");
   });
 
   describe("commands in the composer", () => {
@@ -352,7 +340,7 @@ describe("PipConversation", () => {
       useRuns.setState({ backend: backend as never, runs: [linked()] });
       setTurns({ [ws]: { sessionId: null, turns: [turn("w1", "Earlier", "Answer")] } });
       const ask = vi.spyOn(useClaude.getState(), "ask");
-      const outcome = await composerVerb("/stop R1", ws, true);
+      const outcome = await composerVerb("/stop R1", ws);
       expect(outcome).toEqual({ ok: true, message: "Stopped R1" });
       expect(backend.runsStop).toHaveBeenCalledWith("run-ws-1");
       expect(ask).not.toHaveBeenCalled();
@@ -360,16 +348,6 @@ describe("PipConversation", () => {
       // Told once, in the note under the input, not again as a toast.
       expect(useToasts.getState().toasts).toEqual([]);
       ask.mockRestore();
-    });
-
-    it("leaves everything to Pip while Agents are off, as the composer was before agents", () => {
-      const backend = fake();
-      useRuns.setState({ backend: backend as never, runs: [linked()] });
-      for (const text of ["/stop R1", "/retry R1", "/answer R1 yes", "/nudge R1"]) {
-        expect(composerVerb(text, ws, false)).toBeNull();
-        expect(composerVerb(text, GENERAL_CONVERSATION, false)).toBeNull();
-      }
-      expect(backend.runsStop).not.toHaveBeenCalled();
     });
 
     it("keeps what was typed when a command is refused, and clears it when it worked unless more was typed since", () => {
@@ -388,10 +366,10 @@ describe("PipConversation", () => {
     it("says what is wrong without calling anything, and lets a question through", async () => {
       const backend = fake();
       useRuns.setState({ backend: backend as never, runs: [linked()] });
-      expect(await composerVerb("/stop R9", ws, true)).toEqual({ ok: false, message: "No run R9 in this workstream" });
-      expect(await composerVerb("/answer R1", ws, true)).toMatchObject({ ok: false, message: expect.stringMatching(/^Say what to answer/) });
+      expect(await composerVerb("/stop R9", ws)).toEqual({ ok: false, message: "No run R9 in this workstream" });
+      expect(await composerVerb("/answer R1", ws)).toMatchObject({ ok: false, message: expect.stringMatching(/^Say what to answer/) });
       expect(backend.runsStop).not.toHaveBeenCalled();
-      expect(composerVerb("investigate this", ws, true)).toBeNull();
+      expect(composerVerb("investigate this", ws)).toBeNull();
     });
 
     it("shows the outcome as a muted note under the input", () => {

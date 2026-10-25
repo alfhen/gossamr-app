@@ -208,13 +208,6 @@ async fn stop_all_stops_the_runs_waiting_for_a_slot_so_none_takes_a_freed_one() 
     assert!(rig.run_actions(&ws).await.iter().any(|(a, run, _)| a == "run_stopped" && run.as_deref() == Some(in_ws.id.as_str())));
 }
 
-#[tokio::test]
-async fn nothing_stops_when_agents_are_off() {
-    let (rig, run) = working().await;
-    let off = RunService::new(rig.fx.core.clone(), Arc::new(crate::runs::toolchain::SystemToolchain::default()), crate::runs::index::RunIndex::load(&tmp("off")), vec![], Arc::new(|_| {}));
-    assert!(off.stop(&run.id).await.is_err() && off.stop_all().await.is_err() && off.attach(&run.id).await.is_err() && off.disk(&run.id).await.is_err());
-}
-
 fn ids() -> (ShortId, PathBuf) {
     (ShortId::parse("1a2b3c4d").unwrap(), PathBuf::from("/opt/fake/bin/claude"))
 }

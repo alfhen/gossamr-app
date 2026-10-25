@@ -409,12 +409,11 @@ export type ProposalOrigin =
   /** Drafted by Pip while answering `requestId`, in a workstream's conversation when `workstream` is set. */
   | { type: "chat"; requestId: string; workstream?: string | null }
   | { type: "board" }
-  | { type: "autopilot"; eventId: string }
   /** Made from an agent run's result; the text is the agent's. `workstream` is the run's own. */
   | { type: "run"; runId: string; shortId: string | null; workstream?: string | null };
 
 /** Who drafted a proposal. `agent` is a run's result made into a draft; drafts stored before it existed say `user`. */
-export type ProposalMaker = "user" | "pip" | "autopilot" | "agent";
+export type ProposalMaker = "user" | "pip" | "agent";
 
 export type ProposalState =
   | { type: "pending" }
@@ -1095,13 +1094,6 @@ export interface WorktreeInfo {
 
 /** Deleted, or Claude refused to remove the worktree (its own words) and nothing was deleted. */
 export type DeleteResult = { type: "deleted" } | { type: "refused"; message: string };
-
-/** What `runs_set_enabled` did. `note` says what turning Agents off left alone. */
-export interface RunsEnabledChange {
-  enabled: boolean;
-  keepRunning: number;
-  note: string | null;
-}
 
 /** One line of a pre-flight check. */
 export interface PreflightRow {

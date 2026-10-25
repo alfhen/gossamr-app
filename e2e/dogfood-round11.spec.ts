@@ -13,7 +13,6 @@ const MANAGED = "runs=empty&prSurface=manual&wsManage=1&pipPace=1";
 const VAGUE = "CA-408";
 
 const setup = (page: Page) => page.getByRole("dialog", { name: "Start an agent" });
-const safety = (page: Page) => page.getByRole("dialog", { name: "Agents safety and settings" });
 const newest = async (page: Page, kind: string) => (await mockRuns(page)).find((r) => r.kind === kind) ?? null;
 
 /** Asks Pip for an investigation and starts it from the setup sheet, as the person does. */
@@ -21,12 +20,8 @@ async function startInvestigation(page: Page, key: string) {
   await paneSettled(page);
   await askPip(page, "investigate this");
   await paneSettled(page);
-  for (let attempt = 0; attempt < 2; attempt++) {
-    await pipPane(page).getByRole("article", { name: `Start an agent: ${key}` }).last().getByRole("button", { name: "Review and start →" }).click();
-    await expect(setup(page).or(safety(page))).toBeVisible();
-    if (!(await safety(page).isVisible())) break;
-    await safety(page).getByRole("button", { name: "Close" }).click();
-  }
+  await pipPane(page).getByRole("article", { name: `Start an agent: ${key}` }).last().getByRole("button", { name: "Review and start →" }).click();
+  await expect(setup(page)).toBeVisible();
   await setup(page).getByRole("button", { name: "Start agent" }).click();
   await expect(setup(page)).toHaveCount(0);
 }

@@ -138,7 +138,6 @@ async fn settings_are_clamped_saved_and_read_back_by_a_new_start() {
     assert_eq!((saved.max_runs, saved.wall_clock_minutes, saved.token_cap), (6, 5, 0));
     assert_eq!(rig.svc.settings(), saved);
     assert_eq!(AppConfig::load(&rig.fx.core.data_dir()).agents, saved);
-    assert!(rig.svc.is_enabled(), "the switch is not touched");
 }
 
 #[tokio::test]

@@ -147,7 +147,6 @@ impl RunService {
     /// The person's choice of one listed session as this run's continuation. It must still pass every check but being
     /// the only one.
     pub async fn adopt_session(&self, run_id: &str, session: &str) -> Result<Run> {
-        self.ensure_enabled()?;
         let id = ShortId::parse(session).ok_or_else(|| refuse("That isn't a session id."))?;
         let _turn = self.launching.lock().await;
         let mut run = self.load(run_id).await?;

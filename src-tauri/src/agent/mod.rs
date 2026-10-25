@@ -108,9 +108,6 @@ pub struct AgentRequest {
 /// What Pip's run tools need from the agent-run service, and nothing that starts, stops or answers a run.
 #[async_trait]
 pub trait RunPlanner: Send + Sync {
-    /// Whether agents are turned on; the run tools say so instead of answering when they are not.
-    fn enabled(&self) -> bool;
-
     /// Where a run in `repo` would be set up: the clone to use, its default branch and a fresh worktree name for
     /// ticket `key` titled `title`. The error is in words Pip can pass on.
     async fn plan(&self, repo: &str, key: &str, title: &str) -> std::result::Result<ClonePlan, String>;
@@ -613,10 +610,7 @@ impl AgentService {
         };
         let open = ProposalQuery { states: Some(vec![StateKind::Pending, StateKind::Applying]), ..Default::default() };
         let drafts = self.core.proposals_in(&scope, &open).await?;
-        let runs = match self.mcp.planner.enabled() {
-            true => runs::context_runs(&self.core, &scope, &handed).await,
-            false => Vec::new(),
-        };
+        let runs = runs::context_runs(&self.core, &scope, &handed).await;
         let sandbox = Sandbox::prepare(&self.core.data_dir())?;
         // A workstream's conversation continues its own session when the page has none to give.
         let asked = req.session_id.or_else(|| workstream.as_ref().and_then(|w| w.workstream.pip_session.clone()));

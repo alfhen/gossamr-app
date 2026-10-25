@@ -1,11 +1,8 @@
-import { isTauri } from "@tauri-apps/api/core";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { announceSignedOut } from "../accountEvents";
 import { auth } from "../backend/auth";
 import type { ConnectionInfo, WatchState } from "../types";
 import { useWorkspace } from "../workspaceStore";
-import { useAgentsFlag } from "./agentsFlag";
-import { AgentsSwitch } from "./AgentsSwitch";
 import { THEME_LABEL, THEMES, usePrefs } from "./prefs";
 import { useTabs } from "./tabsStore";
 import { agoText, count, nounFor, watchSummary } from "./watchLogic";
@@ -261,8 +258,7 @@ function ClaritySection() {
 export function Settings() {
   const theme = usePrefs((s) => s.theme);
   const setTheme = usePrefs((s) => s.setTheme);
-  const agents = useAgentsFlag();
-  useEscBack(agents.enabled);
+  useEscBack();
   const containers = useWorkspace((s) => s.containers);
   const connections = useWorkspace((s) => s.connections);
   const section = useTabs((s) => s.settingsSection);
@@ -305,20 +301,8 @@ export function Settings() {
           <WatchingSection syncLine={syncLine} />
         </Section>
 
-        {isTauri() && (
-          <Section title="Agents">
-            <AgentsSwitch enabled={agents.enabled} pending={agents.pending} error={agents.error} note={agents.note} onChange={(on) => void agents.set(on)} />
-          </Section>
-        )}
-
-        {agents.enabled && (
-          <Section title="Unclear tickets" id="settings-clarity">
-            <ClaritySection />
-          </Section>
-        )}
-
-        <Section title="Autopilot">
-          <p className="m-0 text-ws-ink3">Off. Rules that let Pip draft routine updates for you will be configured here, per project.</p>
+        <Section title="Unclear tickets" id="settings-clarity">
+          <ClaritySection />
         </Section>
       </div>
     </div>

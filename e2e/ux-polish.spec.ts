@@ -1,5 +1,5 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
-import { advanceRuns, agentsSettled, askPip, homeConversation, homeConversationRegion, mockRuns, openAgents, openApp, openPip, peekSheet, peekTicket, PIP_INPUT, pipIdle, pipPane, reviewedDraft, selectWorkstream, setManage, startWorkstream, stepRail } from "./support/app";
+import { advanceRuns, askPip, homeConversation, homeConversationRegion, mockRuns, openAgents, openApp, openPip, peekSheet, peekTicket, PIP_INPUT, pipIdle, pipPane, reviewedDraft, selectWorkstream, setManage, startWorkstream, stepRail } from "./support/app";
 
 // The UX polish pass: what the person reads (no ids, tools or machinery words), where things sit (nothing covers
 // anything), draft action bars, and how a new workstream opens.
@@ -408,7 +408,6 @@ test.describe("draft action bar", () => {
 test.describe("workstream start", () => {
   test("a new workstream opens with one sentence and one action, with the commands behind the '?' button", async ({ page }) => {
     await openApp(page);
-    await agentsSettled(page);
     await startWorkstream(page, "CA-401");
     const pane = pipPane(page);
 
@@ -458,7 +457,6 @@ test.describe("workstream start", () => {
 
   test("Pip home's Steps rail marks Investigate as next and keeps the later steps to one quiet line each", async ({ page }) => {
     await openApp(page);
-    await agentsSettled(page);
     await startWorkstream(page, "CA-401");
     await openAgents(page);
     await selectWorkstream(page, "CA-401");

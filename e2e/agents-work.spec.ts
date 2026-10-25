@@ -4,11 +4,6 @@ import { agentsHome, askPip, closeWorkstreamSheet, holdBySystem, homeConversatio
 /** The rail's Agents button. */
 const homeButton = (page: Page) => page.locator("[data-rail]").getByRole("button", { name: /^Agents/ });
 
-/** Waits until the sample backend has said whether Agents are on: the rail's Agents button shows or goes. */
-async function agentsSettled(page: Page, on: boolean) {
-  await expect(page.getByRole("button", { name: /^Agents/ })).toHaveCount(on ? 1 : 0);
-}
-
 // A workstream in Manage mode, with pull requests shown only when a test says: the setting the phase's scenarios share.
 const MANAGED = "runs=empty&prSurface=manual&wsManage=1";
 
@@ -28,7 +23,6 @@ async function homeWorkstream(page: Page, key = "CA-401") {
 
 test("Needs you: Pip's investigation draft waits in the list and on its row, opens its decision, and leaves once skipped", async ({ page }) => {
   await openApp(page, MANAGED);
-  await agentsSettled(page, true);
   await homeWorkstream(page);
   const row = workstreamGroup(page, "CA-401");
   await expect(row.locator('[data-status="needs-you"]')).toHaveCount(0);
@@ -59,7 +53,6 @@ test("Needs you: Pip's investigation draft waits in the list and on its row, ope
 
 test("Needs you: a hold the person chose is no need, so the header says 'Held by you' with Resume and nothing is counted; a restart's hold is a need that opens Resume", async ({ page }) => {
   await openApp(page, MANAGED);
-  await agentsSettled(page, true);
   await homeWorkstream(page);
   const row = workstreamGroup(page, "CA-401");
   const held = needOfKind(page, "hold");
@@ -94,7 +87,6 @@ test("Needs you: a hold the person chose is no need, so the header says 'Held by
 
 test("Needs you from the board: the rail's Agents popover lists the same rows and opens their decisions on Agents", async ({ page }) => {
   await openApp(page, MANAGED);
-  await agentsSettled(page, true);
   await homeWorkstream(page);
   await askPip(page, "investigate this");
   await settled(page);
@@ -137,7 +129,6 @@ async function palette(page: Page, query: string, name: string | RegExp) {
 
 test("the palette: 'Ask Pip to plan CA-401' lands on its workstream with a Plan draft and nothing started", async ({ page }) => {
   await openApp(page, MANAGED);
-  await agentsSettled(page, true);
   await openAgents(page);
   await openPip(page);
   await expect(homeConversation(page)).toHaveText("General");
@@ -158,17 +149,8 @@ test("the palette: 'Ask Pip to plan CA-401' lands on its workstream with a Plan 
   await expect(workstreamGroup(page, "CA-401")).toHaveAttribute("aria-current", "true");
 });
 
-test("with Agents off, Activity has no 'Pip & agents' chip", async ({ page }) => {
-  await openApp(page, "runs=empty&agents=off");
-  await agentsSettled(page, false);
-  await palette(page, "open activity", /^Open activity/);
-  await expect(page.getByRole("group", { name: "Show" }).getByRole("button", { name: "All", exact: true })).toBeVisible();
-  await expect(page.getByRole("group", { name: "Show" }).getByRole("button", { name: /Pip & agents/ })).toHaveCount(0);
-});
-
 test("the rail's batch button approves Pip's two comments and never the description update beside them, which still opens its diff", async ({ page }) => {
   await openApp(page, "runs=empty");
-  await agentsSettled(page, true);
   // Pip's drafts in the workstream's conversation, from the pane beside CA-401's peek: two comments and a description update.
   await startWorkstream(page, "CA-401");
   const pane = pipPane(page);

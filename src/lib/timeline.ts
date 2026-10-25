@@ -127,7 +127,7 @@ const DRAFT_WORDS: Record<Intent["type"], string> = {
   githubReview: "a GitHub review",
 };
 
-const MAKER: Record<ProposalMaker, string> = { pip: "Pip", agent: "An agent", autopilot: "Gossamr", user: "You" };
+const MAKER: Record<ProposalMaker, string> = { pip: "Pip", agent: "An agent", user: "You" };
 
 /** The audit lines a run's or a draft's own entry already tells, or that are bookkeeping: left out. */
 const TOLD_ELSEWHERE = new Set(["run_approved", "autostart", "wake", "draft_created", "draft_retired", "notes_set"]);

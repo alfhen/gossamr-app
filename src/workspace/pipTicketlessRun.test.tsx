@@ -9,7 +9,6 @@ import { useWorkspace } from "../workspaceStore";
 import { DraftCard, draftTitle } from "./DraftCard";
 import { DraftPreview, draftPreviewBody } from "./DraftPreview";
 import { findRunDraft } from "./runSheetLogic";
-import { useRuns } from "./runsStore";
 
 const blank: ScreenContext = { view: null, item: null, filter: null, selection: [] };
 const QUESTION = "Why does the cart total drift by a cent after a coupon?";
@@ -138,7 +137,6 @@ describe("a ticketless draft from Pip in the UI", () => {
     const made = await backend.runs.pipTicketlessDraft(null, QUESTION, "req-1");
     await useWorkspace.getState().refreshProposals();
     const { useRunSetup } = await import("./runSetupStore");
-    useRuns.getState().ensureAgentsIntro();
     await useRunSetup.getState().begin({ proposalId: made.id });
     const s = useRunSetup.getState();
     expect([s.fromPip, s.item, s.kind, s.phase]).toEqual([true, null, "investigate", "ready"]);

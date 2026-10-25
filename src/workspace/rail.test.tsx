@@ -2,21 +2,16 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MockBackend } from "../backend/mock";
 import { useWorkspace } from "../workspaceStore";
-import { useAgentsFlag } from "./agentsFlag";
 import { HOLD_ALL_HINT } from "./commands";
 import { AGENTS_TRAY_NOTE, Rail, RailTip } from "./Rail";
 
 describe("the icon rail's names", () => {
-  let enabled: boolean;
   beforeEach(async () => {
     vi.stubGlobal("localStorage", { getItem: () => null, setItem: () => {}, removeItem: () => {} });
     await useWorkspace.getState().init(new MockBackend());
     Object.assign(useWorkspace.getInitialState(), useWorkspace.getState());
-    enabled = useAgentsFlag.getInitialState().enabled;
-    Object.assign(useAgentsFlag.getInitialState(), { enabled: true });
   });
   afterEach(() => {
-    Object.assign(useAgentsFlag.getInitialState(), { enabled });
     vi.unstubAllGlobals();
   });
 

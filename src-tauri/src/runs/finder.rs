@@ -10,10 +10,6 @@ use crate::domain::ClonePlan;
 
 #[async_trait]
 impl RunPlanner for RunService {
-    fn enabled(&self) -> bool {
-        self.is_enabled()
-    }
-
     async fn plan(&self, repo: &str, key: &str, title: &str) -> Result<ClonePlan, String> {
         let choice = self.clones(repo).await.map_err(|e| e.to_string())?;
         // The person's pick is listed first. Without one, the first by path: the draft is still theirs to read and edit.
@@ -41,7 +37,6 @@ mod tests {
         assert_eq!(plan.path, rig.clone);
         assert!(plan.name.starts_with("ca-1-fix-the-cart-"), "{}", plan.name);
         assert!(!plan.base.is_empty());
-        assert!(<RunService as RunPlanner>::enabled(&rig.svc));
     }
 
     #[tokio::test]

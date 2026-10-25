@@ -670,7 +670,7 @@ describe("every count of needs you and of agents, from one fixture (D4, D5, N3)"
       expect(n).toBe(waiting.length + proposals.length);
       // Your agents: the strip's "3 of M" is every agent, the waiting ones among them.
       const mine = yourAgents(runs, dismissed);
-      const strip = renderToStaticMarkup(<PipRunStripView runs={runs} enabled now={at} dismissed={dismissed} titleOf={() => null} onOpen={() => {}} onSeeAll={() => {}} />);
+      const strip = renderToStaticMarkup(<PipRunStripView runs={runs} now={at} dismissed={dismissed} titleOf={() => null} onOpen={() => {}} onSeeAll={() => {}} />);
       expect(Number(/data-strip-count[^>]*>\d+ of (\d+)</.exec(strip)?.[1])).toBe(mine.length);
       // Failed or stuck in the header is the lane of that name, card for card (N3).
       const bad = groupRuns(runs, NO_FILTERS, at).find((g) => g.lane === "bad")?.runs.length ?? 0;

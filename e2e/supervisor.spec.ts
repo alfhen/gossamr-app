@@ -36,19 +36,15 @@ const setup = (page: Page) => page.getByRole("dialog", { name: "Start an agent" 
 const safety = (page: Page) => page.getByRole("dialog", { name: "Agents safety and settings" });
 const runCards = (page: Page, key: string) => pipPane(page).getByRole("article", { name: `Start an agent: ${key}` });
 
-/** Asks Pip for an investigation of `key`, opens its draft past the one-time safety sheet and starts it, as the person does. */
+/** Asks Pip for an investigation of `key`, opens its draft and starts it, as the person does. */
 async function startInvestigation(page: Page, key = "CA-401") {
   // The wake the last finish queued is answered first: asked while it runs, the question sets it aside and it is answered
   // again behind the question, two turns instead of one.
   await settled(page);
   await askPip(page, "investigate this");
   await settled(page);
-  for (let attempt = 0; attempt < 2; attempt++) {
-    await runCards(page, key).last().getByRole("button", { name: "Review and start →" }).click();
-    await expect(setup(page).or(safety(page))).toBeVisible();
-    if (!(await safety(page).isVisible())) break;
-    await safety(page).getByRole("button", { name: "Close" }).click();
-  }
+  await runCards(page, key).last().getByRole("button", { name: "Review and start →" }).click();
+  await expect(setup(page)).toBeVisible();
   await setup(page).getByRole("button", { name: "Start agent" }).click();
   await expect(setup(page)).toHaveCount(0);
 }

@@ -475,8 +475,6 @@ pub trait SupervisorCore: Send + Sync {
     /// The pull request a build opened, as a sync cached it, with its head commit.
     fn pull_head_of(&self, run: &Run) -> Result<Option<PullHead>>;
     fn request_code_sync(&self);
-    /// Whether runs can be started at all: Agents are on and the run service is there.
-    fn runs_enabled(&self) -> bool;
     /// Where a run in `repo` on ticket `item` would be set up.
     async fn plan(&self, repo: &str, item: &ItemRef) -> Result<ClonePlan>;
     /// Starts the run an auto-start rule produced. Refused with `NOT_ON_ITS_OWN` when the workstream no longer starts
@@ -594,10 +592,6 @@ impl SupervisorCore for CoreFacade {
         self.core.request_code_sync();
     }
 
-    fn runs_enabled(&self) -> bool {
-        self.runs().is_ok_and(|r| r.is_enabled())
-    }
-
     async fn plan(&self, repo: &str, item: &ItemRef) -> Result<ClonePlan> {
         let runs = self.runs()?;
         let title = self.core.cache_item(item).await?.map(|w| w.title).unwrap_or_default();
@@ -606,7 +600,6 @@ impl SupervisorCore for CoreFacade {
 
     async fn autostart_run(&self, scope: &Scope, spec: RunSpec, rule: Rule, after_run: &str) -> Result<Run> {
         let runs = self.runs()?;
-        runs.ensure_enabled()?;
         self.core.autostart_run(scope, spec, rule, after_run, &runs.settings()).await
     }
 
@@ -1069,9 +1062,6 @@ impl Supervisor {
     async fn autostart(&self, scope: &Scope, ws: &Workstream, runs: &[Run], events: &[WorkstreamEvent]) -> RuleOutcome {
         let settings = (self.settings)();
         let mut out = RuleOutcome::default();
-        if !self.core.runs_enabled() {
-            return out;
-        }
         let tripped = tripped_runs(events);
         let replies = self.core.ticket_replies(scope, ws).await.unwrap_or_default();
         let mut done: Vec<&Run> = runs.iter().filter(|r| r.state == RunState::Done).collect();

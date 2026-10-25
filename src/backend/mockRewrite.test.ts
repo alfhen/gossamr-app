@@ -97,7 +97,7 @@ describe("a description edit in the sample build", () => {
     expect(() => backend.proposals.pipRevise(titleOnly.id, { description: "adds a field" })).toThrow(/doesn't change that field/);
   });
 
-  it("is refused for a draft the user made, and by Autopilot nothing is stored", async () => {
+  it("is refused for a draft the user made", async () => {
     const backend = new MockBackend();
     const now = backend.connector.item(ref())!;
     const mine = await backend.proposalsCreate({ type: "rewrite", item: ref(), title: null, body: bodyChange(now.body, "User text"), flattened: [] });

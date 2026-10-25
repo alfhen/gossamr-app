@@ -252,9 +252,6 @@ pub(super) async fn run(st: &McpState, pip: &PipRun, request_id: &str, name: &st
 }
 
 async fn dispatch(st: &McpState, pip: &PipRun, request_id: &str, name: &str, args: &Value) -> Reply {
-    if !st.planner.enabled() {
-        return Err("Agents are turned off in Settings, so there are no runs to look at or propose.".into());
-    }
     match name {
         "list_runs" => list(st, pip, args).await,
         "get_run" => get(st, pip, request_id, args).await,
@@ -708,7 +705,7 @@ fn revised_ticketless(connection_id: &str, spec: &RunSpec, kind: Option<&str>, f
 #[cfg(test)]
 pub(crate) mod testing {
     use std::path::PathBuf;
-    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
 
     use async_trait::async_trait;
@@ -718,7 +715,6 @@ pub(crate) mod testing {
 
     /// Plans every run into `clone`, counts what it was asked, and has no way to start anything.
     pub struct FakePlanner {
-        pub on: AtomicBool,
         pub clone: PathBuf,
         pub fail: Mutex<Option<String>>,
         pub asked: Mutex<Vec<(String, String, String)>>,
@@ -727,7 +723,7 @@ pub(crate) mod testing {
 
     impl FakePlanner {
         pub fn new(clone: PathBuf) -> Arc<Self> {
-            Arc::new(Self { on: AtomicBool::new(true), clone, fail: Mutex::new(None), asked: Mutex::default(), names: AtomicUsize::new(0) })
+            Arc::new(Self { clone, fail: Mutex::new(None), asked: Mutex::default(), names: AtomicUsize::new(0) })
         }
 
         pub fn unused() -> Arc<Self> {
@@ -737,10 +733,6 @@ pub(crate) mod testing {
 
     #[async_trait]
     impl RunPlanner for FakePlanner {
-        fn enabled(&self) -> bool {
-            self.on.load(Ordering::SeqCst)
-        }
-
         async fn plan(&self, repo: &str, key: &str, title: &str) -> Result<ClonePlan, String> {
             self.asked.lock().unwrap().push((repo.into(), key.into(), title.into()));
             if let Some(why) = self.fail.lock().unwrap().clone() {
@@ -763,7 +755,6 @@ mod tests {
     use crate::domain::fixtures::run_spec;
     use crate::domain::{ContainerRef, CreatedBy, Origin, RunEvent, Proposal, ProposalQuery, ProposalState, INVESTIGATE_INSTRUCTION};
     use crate::inbox::testing::{fixture_watching, Fixture};
-    use crate::proposals::Draft;
 
     struct Rig {
         fx: Fixture,
@@ -1212,15 +1203,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn propose_run_says_so_when_no_clone_is_found_or_agents_are_off_and_stores_nothing() {
+    async fn propose_run_says_so_when_no_clone_is_found_and_stores_nothing() {
         let r = rig().await;
         *r.planner.fail.lock().unwrap() = Some("There is no local clone of acme/webshop in ~/Code, ~/Developer or ~/src".into());
         assert!(r.err("propose_run", json!({ "key": "CA-1", "kind": "investigate" })).await.contains("no local clone of acme/webshop"));
         *r.planner.fail.lock().unwrap() = None;
-        r.planner.on.store(false, Ordering::SeqCst);
-        for (tool, args) in [("propose_run", json!({ "key": "CA-1", "kind": "investigate" })), ("list_runs", json!({})), ("get_run", json!({ "id": "x" }))] {
-            assert!(r.err(tool, args).await.contains("Agents are turned off"), "{tool}");
-        }
         assert!(r.drafts().await.is_empty());
     }
 
@@ -1458,13 +1445,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_ticketless_draft_pip_made_is_not_started_by_autopilot_or_by_a_decided_state() {
+    async fn a_ticketless_draft_pip_made_is_not_revised_once_decided() {
         let r = rig().await;
         let (_, draft) = ticketless(&r).await;
-        let spec = spec_of(&draft);
-        let intent = Intent::StartRun { connection_id: r.fx.item("CA-1").connection_id, item: None, spec };
-        let by = Draft { origin: Origin::Autopilot { event_id: "e".into() }, created_by: CreatedBy::Autopilot, intent, label: None, basis: None };
-        assert!(r.fx.core.propose(&r.fx.scope, by).await.is_err());
         r.fx.core.skip_proposal(&draft.id).await.unwrap();
         assert!(r.err("revise_proposal", json!({ "id": draft.id, "prompt": "late" })).await.contains("skipped"));
     }
@@ -1512,15 +1495,6 @@ mod tests {
         rig.fx.tracker.will(Ok(crate::tracker::Applied { created: vec![made.clone()], error: None }));
         rig.fx.core.approve_proposal(&ticket.id).await.unwrap();
         assert_eq!(rig.fx.core.run(&run.id).await.unwrap().unwrap().created_item, Some(made));
-    }
-
-    #[tokio::test]
-    async fn autopilot_still_cannot_draft_a_run() {
-        let r = rig().await;
-        let spec = RunSpec { clone_path: r.clone.clone(), ..run_spec() };
-        let intent = Intent::StartRun { connection_id: r.fx.item("CA-1").connection_id, item: Some(r.fx.item("CA-1")), spec };
-        let draft = Draft { origin: Origin::Autopilot { event_id: "e".into() }, created_by: CreatedBy::Autopilot, intent, label: None, basis: None };
-        assert!(r.fx.core.propose(&r.fx.scope, draft).await.is_err());
     }
 
     #[tokio::test]

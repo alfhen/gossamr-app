@@ -631,9 +631,9 @@ describe("Hold all", () => {
     for (const k of ["j", "k"]) expect(isHoldAllKey({ key: k, code: `Key${k.toUpperCase()}`, metaKey: true, ctrlKey: false, shiftKey: false, altKey: false })).toBe(false);
   });
 
-  it("is a palette command with its shortcut beside it, while agents are on", () => {
+  it("is a palette command with its shortcut beside it", () => {
     const actions = new Proxy({}, { get: (t: Record<string, unknown>, k: string) => (t[k] ??= vi.fn()) }) as unknown as CommandActions;
-    const on = buildCommands([], [], actions, { project: null, view: null, unreadActivity: 0, agents: true });
+    const on = buildCommands([], [], actions, { project: null, view: null, unreadActivity: 0 });
     const hold = rankCommands(on, "hold all")[0];
     expect(hold).toMatchObject({ id: "workstream:hold-all", label: "Hold all workstreams", hint: HOLD_ALL_HINT });
     expect(HOLD_ALL_HINT).toBe("⌘⇧.");
@@ -641,7 +641,6 @@ describe("Hold all", () => {
     expect(actions.holdAllWorkstreams).toHaveBeenCalled();
     // No other command shows the same shortcut.
     expect(on.filter((c) => c.hint === HOLD_ALL_HINT)).toHaveLength(1);
-    expect(buildCommands([], [], actions).some((c) => c.id === "workstream:hold-all")).toBe(false);
   });
 });
 

@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { agentsHome, closeWorkstreamSheet, holdBySystem, needsChip, needsPane, needsPaneHeading, needsYouCount, needsYouTray, openNeedOfKind, openAgents, openApp, pipConversation, pipPane, selectWorkstream, startWorkstream, workstreamGroup, workstreamOpen, workstreamSheet, groupOpen } from "./support/app";
+import { agentsHome, closeWorkstreamSheet, holdBySystem, needsChip, needsPane, needsPaneHeading, needsYouCount, needsYouTray, openNeedOfKind, openAgents, openApp, pipConversation, pipPane, selectWorkstream, startWorkstream, workstreamGroup, workstreamOpen, workstreamSheet, groupOpen, showWorkspace } from "./support/app";
 
 // Agents is the one work view (docs/needs-you.md): the summary chips (Needs you is a filter), every workstream with its
 // agents under them, and a workstream's detail as a sheet beside the Pip drawer. There is no separate Pip home.
@@ -9,11 +9,6 @@ const MANAGED = "wsManage=1";
 const agentsButton = (page: Page) => page.getByRole("button", { name: /^Agents/ });
 
 test("the app opens on Agents, with the summary chips in the header, All on, and the workstreams grouped by default", async ({ page }) => {
-  await page.addInitScript(() => {
-    const prefs = JSON.parse(localStorage.getItem("gossamr-prefs") ?? "{}");
-    delete prefs.startOnAgents;
-    localStorage.setItem("gossamr-prefs", JSON.stringify(prefs));
-  });
   await page.goto("/?" + MANAGED);
   await expect(agentsHome(page)).toBeVisible();
   await expect(page).toHaveTitle("Agents — Gossamr");
@@ -208,6 +203,7 @@ test("Agents keeps the State grouping when it is chosen, and the choice is kept"
   await group.getByRole("button", { name: "State" }).click();
   await expect(agentsHome(page).locator("[data-lane]").first()).toBeVisible();
   await page.reload();
+  await showWorkspace(page);
   await expect(page.getByText("CA-401", { exact: true }).first()).toBeVisible();
   await openAgents(page);
   await expect(page.getByRole("group", { name: "Group by" }).getByRole("button", { name: "State" })).toHaveAttribute("aria-pressed", "true");

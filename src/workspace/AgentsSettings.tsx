@@ -9,7 +9,6 @@ import { MAY_TOUCH, SAFETY_SUMMARY } from "./runSheetLogic";
 /** A Build's own details, less the Jira line, which the summary already says. */
 const BUILD_DETAILS = MAY_TOUCH.filter((t) => !t.title.startsWith("Writing to Jira"));
 import { Icon } from "./AgentIcons";
-import { usePrefs } from "./prefs";
 
 export interface CleanupOffer {
   count: number;
@@ -33,20 +32,32 @@ export interface SettingsViewProps {
   onCleanup(): void;
   onStopAll(): void;
   onClose(): void;
-  /** Opened once, in place of the person's first agent action; "Got it, continue" closes it and carries on with that. */
-  intro?: boolean;
-  onContinue?(): void;
 }
 
 /** Safety and settings: Stop all, what agents can touch in plain words, and the few switches that exist. */
-export function AgentsSettingsView({ runs, stopping, keepRunning, settings, settingsSaving = false, cleanup, onSettings, onCleanup, onStopAll, onClose, intro = false, onContinue }: SettingsViewProps) {
+export function AgentsSettingsView({ runs, stopping, keepRunning, settings, settingsSaving = false, cleanup, onSettings, onCleanup, onStopAll, onClose }: SettingsViewProps) {
   const [asking, setAsking] = useState(false);
   const active = stoppable(runs);
   const waiting = slotWaiters(runs);
   const reach = active.length + waiting.length;
-  // On the first agent action only the three lines above show, with Got it, continue under them; the rest waits behind Details.
-  const details = (
-    <>
+  return (
+    <SheetFrame
+      label="Agents safety and settings"
+      title="Agents"
+      hint={<>safety and settings · <kbd className="font-sans">esc</kbd> close</>}
+      wide={false}
+      onClose={onClose}
+    >
+      <h2 className="m-0 text-[20px] leading-tight font-semibold">Safety and settings</h2>
+      <ul data-safety-summary className="m-0 grid list-none gap-1.5 p-0">
+        {SAFETY_SUMMARY.map((t) => (
+          <li key={t.text} className="grid grid-cols-[18px_minmax(0,1fr)] gap-1.5 text-ws-ink">
+            <Icon name={t.icon} className="mt-0.5 size-3.5 text-ws-ink2" />
+            <span>{t.text}</span>
+          </li>
+        ))}
+      </ul>
+
       <Sec title="Stop everything">
         <Box>
           <p className="m-0">
@@ -145,12 +156,6 @@ export function AgentsSettingsView({ runs, stopping, keepRunning, settings, sett
         </Box>
       </Sec>
 
-      <Sec title="Agents">
-        <Box>
-          <StartOnAgents />
-        </Box>
-      </Sec>
-
       <Sec title="Clean up">
         <Box>
           <p className="m-0 text-ws-ink2">Finished runs leave their worktree and session files behind. Clean up removes a worktree with claude rm, which refuses work that was never pushed and says why. Gossamr never forces it.</p>
@@ -179,60 +184,7 @@ export function AgentsSettingsView({ runs, stopping, keepRunning, settings, sett
           <p className="m-0 text-ws-ink2">Agents start with the environment of your own shell, read once when Gossamr opens, so they find the same tools you do.</p>
         </Box>
       </Sec>
-    </>
-  );
-  return (
-    <SheetFrame
-      label="Agents safety and settings"
-      title="Agents"
-      hint={<>safety and settings · <kbd className="font-sans">esc</kbd> close</>}
-      wide={false}
-      // The first-run sheet is answered before anything else: Tab stays in it until Got it, continue (or Close).
-      modal={intro}
-      onClose={onClose}
-      footer={
-        intro ? (
-          <>
-            <Btn tone="primary" autoFocus onClick={onContinue ?? onClose}>
-              Got it, continue
-            </Btn>
-            <span className="text-sm text-ws-ink3">This shows once. It stays under Agents, Safety and settings.</span>
-          </>
-        ) : undefined
-      }
-    >
-      <h2 className="m-0 text-[20px] leading-tight font-semibold">Safety and settings</h2>
-      <ul data-safety-summary className="m-0 grid list-none gap-1.5 p-0">
-        {SAFETY_SUMMARY.map((t) => (
-          <li key={t.text} className="grid grid-cols-[18px_minmax(0,1fr)] gap-1.5 text-ws-ink">
-            <Icon name={t.icon} className="mt-0.5 size-3.5 text-ws-ink2" />
-            <span>{t.text}</span>
-          </li>
-        ))}
-      </ul>
-
-      {intro ? (
-        <details data-safety-details className="grid gap-4">
-          <summary className="cursor-pointer text-sm font-semibold text-ws-ink2">Details: stopping agents, what a Build may touch, limits and settings</summary>
-          <div className="mt-3 grid gap-5">{details}</div>
-        </details>
-      ) : (
-        details
-      )}
     </SheetFrame>
-  );
-}
-
-/** Whether Gossamr opens on Agents, as it does until the person turns it off. This sheet only shows while Agents are on, and so does the Agents view. */
-function StartOnAgents() {
-  const on = usePrefs((s) => s.startOnAgents);
-  return (
-    <SwitchRow
-      label="Start on Agents"
-      description="Open Gossamr on Agents, with what needs you, your workstreams and their agents in one place. Turn it off to open on the workspace."
-      checked={on}
-      onChange={(next) => usePrefs.getState().setStartOnAgents(next)}
-    />
   );
 }
 

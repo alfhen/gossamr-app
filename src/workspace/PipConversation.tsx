@@ -22,7 +22,6 @@ import { investigateKey, settleDraftFocus } from "./clarityActions";
 import { planRewriteDraft } from "./workViewLogic";
 import { useRuns } from "./runsStore";
 import { useTabs } from "./tabsStore";
-import { useAgentsEnabled } from "./agentsFlag";
 import { contextFor, useWorkstreams } from "./workstreamsStore";
 import { useWorkspace } from "../workspaceStore";
 import { maskSecrets } from "../lib/riskyText";
@@ -394,12 +393,10 @@ export function PipConversation({ conversation, proposals, bodyRef, primary = nu
 
 /**
  * A command typed in the composer (`/stop R1`, `/retry R1`, `/answer R1 text`, and `/hold`, `/resume` in a workstream),
- * carried out with the person's own commands; what it came to is told under the input. Null for anything else, which is a question for Pip, and for
- * everything while Agents are off, when the composer is what it was before agents. A command never reaches Pip and adds
- * no turn. `R1` is looked up among the runs of the conversation's workstream.
+ * carried out with the person's own commands; what it came to is told under the input. Null for anything else, which is
+ * a question for Pip. A command never reaches Pip and adds no turn. `R1` is looked up among the runs of the conversation's workstream.
  */
-export function composerVerb(text: string, conversation: string, agentsOn: boolean): Promise<VerbOutcome> | null {
-  if (!agentsOn) return null;
+export function composerVerb(text: string, conversation: string): Promise<VerbOutcome> | null {
   const runs = useRuns.getState();
   const workstream = workstreamOfConversation(conversation);
   const heldReason = workstream ? (useWorkstreams.getState().list.find((v) => v.workstream.id === workstream)?.workstream.heldReason ?? null) : null;
@@ -573,7 +570,6 @@ export function Composer({ conversation, attached, chips, looking, scene, footer
   const queued = useQueued(conversation);
   const quote = usePip((s) => s.quote);
   const prefill = usePip((s) => s.prefill);
-  const agentsOn = useAgentsEnabled();
   const [input, setInput] = useState(() => unsentInputOf(conversation));
   // What the input holds as last drawn on screen: set after the render commits, so a render React throws away saves nothing.
   const inputNow = useRef(input);
@@ -614,7 +610,7 @@ export function Composer({ conversation, attached, chips, looking, scene, footer
     const text = prompt.trim() || (count ? defaultQuestion(count) : "");
     if (!text) return;
     setNote(null);
-    const command = composerVerb(text, conversation, agentsOn);
+    const command = composerVerb(text, conversation);
     if (command) {
       const asked = conversation;
       void command.then((outcome) => {
@@ -694,7 +690,7 @@ export function Composer({ conversation, attached, chips, looking, scene, footer
           autoComplete="off"
           className="min-w-0 flex-1 rounded-[10px] border border-ws-sep2 bg-ws-bar px-2.5 py-1.5 focus:border-ws-pip focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip"
         />
-        {agentsOn && <CommandsHelp conversation={conversation} />}
+        <CommandsHelp conversation={conversation} />
         {running && (
           <button type="button" onClick={() => useClaude.getState().cancel(conversation)} className="rounded-md border border-ws-sep2 px-3 font-semibold">
             Stop

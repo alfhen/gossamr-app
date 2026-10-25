@@ -8,7 +8,6 @@ import { useWorkspace } from "../workspaceStore";
 import { runPhrase } from "../lib/runNames";
 import { NUDGE_GAP_MS, nudgeCandidates, pickNudge, type NudgeScene } from "./nudges";
 import { NO_FILTERS } from "./agentsLogic";
-import { useAgentsFlag } from "./agentsFlag";
 import { PipRunCard, PipRunStripView } from "./PipRunCard";
 import { STRIP_SHOWN, describeRun, nudgedOutside, runNudgeId, runNudges, runStatesNow, runSummaryPrompt, stripRuns } from "./pipRuns";
 import { buildScreenContext, contextLines, type Screen } from "./screenContext";
@@ -28,7 +27,6 @@ const memory = () => {
 
 beforeEach(() => {
   vi.stubGlobal("localStorage", memory());
-  useAgentsFlag.setState({ enabled: true });
   useRuns.setState({ runs: [], sheet: null, status: "ready" });
 });
 
@@ -119,11 +117,10 @@ describe("the strip of live runs", () => {
     expect(stripRuns([run("done"), run("failed", { id: "f" }), run("stopped")], new Set(["f"]))).toEqual([]);
   });
 
-  it("is absent while agents are off or nothing is going, and lists live runs when it is on", () => {
-    const view = (runs: Run[], enabled = true) => renderToStaticMarkup(<PipRunStripView runs={runs} enabled={enabled} now={NOW} dismissed={new Set(["f"])} titleOf={() => null} onOpen={() => {}} />);
+  it("is absent when nothing is going, and lists live runs otherwise", () => {
+    const view = (runs: Run[]) => renderToStaticMarkup(<PipRunStripView runs={runs} now={NOW} dismissed={new Set(["f"])} titleOf={() => null} onOpen={() => {}} />);
     const waiting = [run("needsAnswer", { id: "n1", needs: "Keep the old rounding?" })];
     expect(view(waiting)).toContain('aria-label="Your agents"');
-    expect(view(waiting, false)).toBe("");
     expect(view([run("done"), run("failed", { id: "f" })])).toBe("");
     expect(view([])).toBe("");
   });
@@ -131,21 +128,21 @@ describe("the strip of live runs", () => {
   it("lists a failed run the person hasn't seen, and says how many of the runs it lists it shows, with a way to the rest", () => {
     const runs = [run("failed", { id: "f" }), run("needsAnswer", { id: "n1" }), run("working", { id: "w1" }), run("working", { id: "w2" }), run("done", { id: "d1" }), run("done", { id: "d2" }), run("stopped", { id: "s1" }), run("queued", { id: "q1" })];
     const seeAll = vi.fn();
-    const html = renderToStaticMarkup(<PipRunStripView runs={runs} enabled now={NOW} titleOf={() => null} onOpen={() => {}} onSeeAll={seeAll} />);
+    const html = renderToStaticMarkup(<PipRunStripView runs={runs} now={NOW} titleOf={() => null} onOpen={() => {}} onSeeAll={seeAll} />);
     expect(html.match(/data-run-id=/g)).toHaveLength(STRIP_SHOWN);
     expect(html).toContain('data-run-id="f"');
     // Five it would list (the done and stopped ones it never lists don't count): it shows three of them.
     expect(html).toMatch(/data-strip-count[^>]*>3 of 5</);
     expect(html).toContain("See all in Agents</button>");
     // When it shows them all, it says only how many, however many finished runs there are besides.
-    const few = renderToStaticMarkup(<PipRunStripView runs={[...runs.slice(1, 3), ...runs.slice(4, 7)]} enabled now={NOW} titleOf={() => null} onOpen={() => {}} onSeeAll={seeAll} />);
+    const few = renderToStaticMarkup(<PipRunStripView runs={[...runs.slice(1, 3), ...runs.slice(4, 7)]} now={NOW} titleOf={() => null} onOpen={() => {}} onSeeAll={seeAll} />);
     expect(few).toMatch(/data-strip-count[^>]*>2</);
     expect(few).not.toContain("See all in Agents");
     expect(few).not.toMatch(/data-strip-count[^>]*>[^<]* of /);
   });
 
   it("in a workstream's conversation lists only its runs, each with its short name there", () => {
-    const view = (runs: Run[], workstream: string | null) => renderToStaticMarkup(<PipRunStripView runs={runs} enabled now={NOW} workstream={workstream} titleOf={() => null} onOpen={() => {}} />);
+    const view = (runs: Run[], workstream: string | null) => renderToStaticMarkup(<PipRunStripView runs={runs} now={NOW} workstream={workstream} titleOf={() => null} onOpen={() => {}} />);
     const mine = run("working", { id: "w1", spec: { ...base.spec, workstream: "ws-1" } });
     const theirs = run("working", { id: "w2", spec: { ...base.spec, workstream: "ws-2" } });
     const loose = run("needsAnswer", { id: "n1", spec: { ...base.spec, workstream: null } });

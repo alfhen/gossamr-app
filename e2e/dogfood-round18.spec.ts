@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { agentsHome, agentsSettled, askRun, expandNeedsYou, mockRuns, needsPane, openAgents, openApp, selectWorkstream, startWorkstream, openNeedRow } from "./support/app";
+import { agentsHome, askRun, expandNeedsYou, mockRuns, needsPane, openAgents, openApp, selectWorkstream, startWorkstream, openNeedRow } from "./support/app";
 
 // Fixes from the eighteenth dogfood round: 'start CA-408' in the palette offers the workstream, not only Ask Pip (G8).
 
@@ -7,7 +7,6 @@ test.describe("'start KEY' in the palette (G8)", () => {
   test("offers to start a workstream on the ticket", async ({ page }) => {
     test.setTimeout(120_000);
     await openApp(page, "runs=empty");
-    await agentsSettled(page, true);
     await page.keyboard.press("ControlOrMeta+k");
     const dialog = page.getByRole("dialog", { name: "Command palette" });
     await dialog.getByRole("combobox").fill("start CA-402");
@@ -21,7 +20,6 @@ test.describe("the palette's input name in a mode (G9)", () => {
   test("is the question the mode asks, and the search name for plain search", async ({ page }) => {
     test.setTimeout(120_000);
     await openApp(page, "runs=empty");
-    await agentsSettled(page, true);
     await page.keyboard.press("ControlOrMeta+k");
     const dialog = page.getByRole("dialog", { name: "Command palette" });
     await expect(dialog.getByRole("combobox", { name: "Search commands and tickets" })).toBeVisible();

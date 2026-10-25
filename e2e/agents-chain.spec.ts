@@ -5,7 +5,6 @@ import { advanceRuns, agentsHome, askPip, expectPeekInPlace, expectToast, homeCo
 const MANAGED = "runs=empty&prSurface=manual&wsManage=1";
 
 const setup = (page: Page) => page.getByRole("dialog", { name: "Start an agent" });
-const safety = (page: Page) => page.getByRole("dialog", { name: "Agents safety and settings" });
 /** Pip's run drafts on CA-401 in the drawer's conversation, which opens the setup sheet. */
 const drawerCards = (page: Page) => homeConversationRegion(page).getByRole("article", { name: "Start an agent: CA-401" });
 /** The run draft open in the decision pane, where it is read and started in place. */
@@ -29,17 +28,12 @@ async function homeWorkstream(page: Page) {
   await expect(homeConversation(page)).toHaveText(/^Workstream: CA-401 .* · Intake$/);
 }
 
-/** Opens the newest run draft's review in place, past the safety sheet a fresh profile shows once at its first agent action. */
+/** Opens the newest run draft's review in place. */
 async function expandNewest(page: Page) {
   if (!(await needsPane(page).count())) await openNeedOfKind(page, "runStart");
   const card = runCards(page).last();
-  for (let attempt = 0; attempt < 2; attempt++) {
-    await card.getByRole("button", { name: /^Review and start( →)?$/ }).click();
-    await expect(card.getByRole("group", { name: "Review and start" }).or(safety(page))).toBeVisible();
-    if (!(await safety(page).isVisible())) break;
-    await safety(page).getByRole("button", { name: "Close" }).click();
-    await expect(safety(page)).toHaveCount(0);
-  }
+  await card.getByRole("button", { name: /^Review and start( →)?$/ }).click();
+  await expect(card.getByRole("group", { name: "Review and start" })).toBeVisible();
   const review = card.getByRole("group", { name: "Review and start" });
   // Open, the review has its own Start and Hide; the card's own button is hidden meanwhile.
   await expect(card.getByRole("button", { name: /^Review and start( →)?$/ })).toHaveCount(0);
@@ -54,7 +48,6 @@ async function startInline(page: Page) {
   await expect(start).toBeEnabled();
   await start.click();
   await expect(review).toHaveCount(0);
-  // Toasts come one at a time: one saying a closed safety sheet cancelled its action may be ahead of it.
   await expectToast(page, "Agent started on CA-401.");
 }
 

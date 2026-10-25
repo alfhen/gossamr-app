@@ -8,7 +8,7 @@ export const VIEW_MODES = ["board", "list", "map", "age"] as const;
 export type ViewMode = (typeof VIEW_MODES)[number];
 export const VIEW_LABEL: Record<ViewMode, string> = { board: "Board", list: "List", map: "Map", age: "Age" };
 
-/** `agents` is offered only while Agents are on. `sent` is "What Jira saw from me", reached from ⌘K and Start my day. */
+/** `sent` is "What Jira saw from me", reached from ⌘K and Start my day. */
 export type Route = "workspace" | "activity" | "agents" | "settings" | "sent";
 
 /** A part of Settings that something else can open directly. */

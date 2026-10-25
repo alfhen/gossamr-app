@@ -2,8 +2,8 @@ import { expect, test, type Page } from "@playwright/test";
 import { agentsHome, editTicket, jiraWrites, needsPane, openAgents, openApp, pipPane, seedWorkstreamEvent, selectWorkstream, startWorkstream, stepChip, workstreamEvents } from "./support/app";
 
 // Backlog items of the sixteenth dogfood round: the ask and the nudge to the reporter (G20, G21), what Close does to agents (G24),
-// the posting pause naming its line (G33), Hold and the other controls drawn as buttons (G30), an Undo that names itself (G29),
-// every step stating its state (G34) and the review saying nothing has started after the safety sheet (G28).
+// the posting pause naming its line (G33), Hold and the other controls drawn as buttons (G30), an Undo that names itself (G29)
+// and every step stating its state (G34).
 
 const THIN = "Fix it.";
 const ago = (days: number) => new Date(Date.now() - days * 86_400_000).toISOString();

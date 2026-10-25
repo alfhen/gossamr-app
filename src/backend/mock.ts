@@ -34,7 +34,6 @@ import type {
   RunQuery,
   RunSpec,
   RunsChanged,
-  RunsEnabledChange,
   AgentSettings,
   Snapshot,
   Status,
@@ -373,7 +372,6 @@ export class MockBackend implements Backend {
     this.connector = new MockConnector(Date.now(), (c) => this.cacheListeners.forEach((l) => l(c)), options);
     this.github = new MockGithub(options.githubRepos ?? 14, Date.now(), options.githubRepos !== undefined, options.reviewAccess === "none" ? "none" : "sample");
     this.device = options.device ?? { delayMs: 0, outcome: "authorised" };
-    this.agentsOn = options.agents ?? true;
     this.runs = new MockRuns(this.proposals, options.runs);
     this.workstreams = new MockWorkstreams(
       () => this.runs.list(),
@@ -522,7 +520,6 @@ export class MockBackend implements Backend {
 
   /** The person's "Run another fix round" on a review that still blocks after the automatic fix rounds, as `workstreams_fix_round`. */
   async workstreamsFixRound(reviewRun: string) {
-    if (!this.agentsOn) throw new Error("Agents are turned off. Turn them on in Settings.");
     return this.runs.sendPersonFixRound(reviewRun);
   }
 
@@ -678,28 +675,6 @@ export class MockBackend implements Backend {
     return this.workstreams.get(ws)?.workstream.itemKey === target.key ? ws : null;
   }
 
-  /** Agents are on in the sample build, as the browser build has always shown them, unless `options.agents` is false. */
-  private agentsOn = true;
-  /** Makes the next `runsSetEnabled(true)` fail with this reason, as a failed environment capture does. */
-  enableFailure: string | null = null;
-
-  async runsEnabled() {
-    return this.agentsOn;
-  }
-
-  async runsSetEnabled(enabled: boolean): Promise<RunsEnabledChange> {
-    if (enabled && !this.agentsOn && this.enableFailure) throw new Error(this.enableFailure);
-    this.agentsOn = enabled;
-    const keepRunning = this.runs.keepRunning();
-    const note =
-      enabled || keepRunning === 0
-        ? null
-        : keepRunning === 1
-          ? "1 agent is still running and was not stopped. Gossamr won't start new ones or follow it until you turn Agents back on; it keeps running in Claude."
-          : `${keepRunning} agents are still running and were not stopped. Gossamr won't start new ones or follow them until you turn Agents back on; they keep running in Claude.`;
-    return { enabled, keepRunning, note };
-  }
-
   runsList(query?: RunQuery) {
     return Promise.resolve(this.runs.list(query));
   }
@@ -721,7 +696,6 @@ export class MockBackend implements Backend {
   }
 
   async runsSendFollowUp(proposalId: string, message: string) {
-    if (!this.agentsOn) throw new Error("Agents are turned off. Turn them on in Settings.");
     return this.runs.sendFollowUp(proposalId, message);
   }
 
@@ -730,17 +704,14 @@ export class MockBackend implements Backend {
   }
 
   async runsDenyPermission(id: string, command: string) {
-    if (!this.agentsOn) throw new Error("Agents are turned off. Turn them on in Settings.");
     return this.runs.denyPermission(id, command);
   }
 
   async runsAllowPermissionOnce(id: string, command: string) {
-    if (!this.agentsOn) throw new Error("Agents are turned off. Turn them on in Settings.");
     return this.runs.allowPermissionOnce(id, command);
   }
 
   async runsAnswerDraft(proposalId: string, message: string) {
-    if (!this.agentsOn) throw new Error("Agents are turned off. Turn them on in Settings.");
     return this.runs.answerDraft(proposalId, message);
   }
 

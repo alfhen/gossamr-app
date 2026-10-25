@@ -36,7 +36,7 @@ export const ORIENTATION_SAFETY = `Gossamr posts only what you approve; a Build 
 /** The glossary's button, named apart from the other More buttons. */
 export const ORIENTATION_WORDS = "What the words mean";
 
-/** Marks the card seen, the way the Agents intro is (`agentsIntroSeen`), and keeps the keyboard where it was. */
+/** Marks the card seen and keeps the keyboard where it was. */
 export function dismissOrientation() {
   const hadFocus = typeof document !== "undefined" && document.activeElement?.closest("[data-pip-orientation]") != null;
   usePrefs.getState().setPipOrientationSeen(true);

@@ -382,14 +382,6 @@ async fn a_poll_that_cannot_list_sessions_changes_nothing() {
     assert_eq!(rig.get(&run).await.state, RunState::Launching);
 }
 
-#[tokio::test]
-async fn nothing_is_tracked_while_agents_are_off() {
-    let (rig, run) = launched().await;
-    let off = Arc::new(RunService::new(rig.fx.core.clone(), Arc::new(crate::runs::toolchain::SystemToolchain::default()), RunIndex::load(&rig.fx.dir.join("off")), vec![], Arc::new(|_| {})));
-    assert!(!off.poll().await.busy);
-    assert_eq!(rig.get(&run).await.state, RunState::Launching);
-}
-
 #[test]
 fn notices_say_what_the_plan_says() {
     let run = |state: RunState, needs: Option<&str>, error: Option<&str>| {
@@ -1209,7 +1201,7 @@ fn asking(entry: &mut AgentEntry) {
 
 /// A second start of the app: same accounts and listing, none of the first one's memory.
 fn restarted(rig: &Rig) -> RunService {
-    RunService::new(rig.fx.core.clone(), rig.svc.tools.clone(), RunIndex::load(&rig.fx.dir.join("index")), vec![], Arc::new(|_| {})).enabled(true).with_settings(rig.svc.settings())
+    RunService::new(rig.fx.core.clone(), rig.svc.tools.clone(), RunIndex::load(&rig.fx.dir.join("index")), vec![], Arc::new(|_| {})).with_settings(rig.svc.settings())
 }
 
 #[tokio::test]

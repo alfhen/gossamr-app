@@ -11,7 +11,6 @@ import { usePopover } from "./Popover";
 import { useRunSetup } from "./runSetupStore";
 import { reviewablePr } from "./runSheetLogic";
 import { useRuns } from "./runsStore";
-import { useAgentsEnabled } from "./agentsFlag";
 import { openOnAgents } from "./workstreamsStore";
 
 export interface AgentMenuProps {
@@ -114,7 +113,7 @@ export const runsOfTicket = (runs: readonly Run[], ref: ItemRef) => runs.filter(
 
 /**
  * The workstream line at the head of "Agents on this ticket": its title and the stage its runs give it, and with
- * `onOpen` (while Agents are on) a link to the workstream on Agents.
+ * `onOpen` a link to the workstream on Agents.
  */
 export function WorkstreamLine({ workstream, onOpen }: { workstream: WorkstreamView; onOpen?(id: string): void }) {
   return (
@@ -177,6 +176,5 @@ export function TicketAgentsView({ runs, now, title, workstream, onOpen, onOpenW
 export function TicketAgents({ item, title, workstream = null }: { item: ItemRef; title: string; workstream?: WorkstreamView | null }) {
   const runs = useRuns((s) => s.runs);
   const mine = runsOfTicket(runs, item);
-  const agentsOn = useAgentsEnabled();
-  return <TicketAgentsView runs={mine} now={Date.now()} title={title} workstream={workstream} onOpen={(id) => useRuns.getState().openRun(id, { stay: true })} onOpenWorkstream={agentsOn ? openOnAgents : undefined} />;
+  return <TicketAgentsView runs={mine} now={Date.now()} title={title} workstream={workstream} onOpen={(id) => useRuns.getState().openRun(id, { stay: true })} onOpenWorkstream={openOnAgents} />;
 }

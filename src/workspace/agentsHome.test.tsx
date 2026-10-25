@@ -50,8 +50,8 @@ afterEach(() => {
 });
 
 describe("the Agents view's default", () => {
-  it("groups by workstream, and starts on Agents, for a profile with nothing stored", () => {
-    expect(loadPrefs()).toMatchObject({ agentsGroup: "workstream", startOnAgents: true });
+  it("groups by workstream for a profile with nothing stored", () => {
+    expect(loadPrefs()).toMatchObject({ agentsGroup: "workstream" });
   });
 
   it("starts everyone on Workstream once: the grouping the old default stored does not carry over, the one chosen since does", () => {
@@ -63,11 +63,9 @@ describe("the Agents view's default", () => {
     expect(JSON.parse(localStorage.getItem("gossamr-prefs")!)).toMatchObject({ agentsGroupBy: "workstream" });
   });
 
-  it("keeps a 'Start on Pip home' that was turned off turned off", () => {
-    localStorage.setItem("gossamr-prefs", JSON.stringify({ startOnPipHome: false }));
-    expect(loadPrefs().startOnAgents).toBe(false);
-    localStorage.setItem("gossamr-prefs", JSON.stringify({ startOnAgents: true, startOnPipHome: false }));
-    expect(loadPrefs().startOnAgents).toBe(true);
+  it("reads a profile that still stores keys no longer used", () => {
+    localStorage.setItem("gossamr-prefs", JSON.stringify({ startOnAgents: false, startOnPipHome: false, agentsIntroSeen: true, agentsGroupBy: "state" }));
+    expect(loadPrefs()).toMatchObject({ agentsGroup: "state" });
   });
 });
 

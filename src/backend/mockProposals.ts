@@ -212,7 +212,7 @@ export class MockProposals {
 
   private tidyWorkstream(p: Proposal): Proposal[] {
     const ws = workstreamOf(p);
-    if (!ws || p.createdBy === "autopilot" || (p.createdBy === "user" && p.origin.type !== "run")) return [];
+    if (!ws || (p.createdBy === "user" && p.origin.type !== "run")) return [];
     const open = this.drafts.filter((d) => (d.state.type === "pending" || d.state.type === "applying") && workstreamOf(d) === ws);
     const replaced: Proposal[] = [];
     for (const older of open) {

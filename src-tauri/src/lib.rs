@@ -153,8 +153,7 @@ impl runs::tracker::RunNotifier for RunNotices {
 }
 
 /// Looks at `claude agents` every few seconds while a run is under way and the window is in front, and every half
-/// minute otherwise; the window gaining focus brings the next look forward. It runs for the life of the app and does
-/// nothing while Agents are off, so turning them on needs no restart.
+/// minute otherwise; the window gaining focus brings the next look forward. It runs for the life of the app.
 fn spawn_run_tracker(app: AppHandle, service: RunsState) {
     tauri::async_runtime::spawn(async move {
         loop {
@@ -555,34 +554,15 @@ async fn runs_review(core: State<'_, CoreState>, proposal_id: String) -> Result<
     core.runs_review(&proposal_id).await
 }
 
-/// Whether Agents are on. This is the only place the answer lives.
-#[tauri::command]
-fn runs_enabled(runs: State<'_, RunsState>) -> bool {
-    runs.is_enabled()
-}
-
-/// Turns Agents on or off and saves the choice. Turning on reads the shell environment first and fails, leaving
-/// Agents off, if it can't; turning off stops nothing that is running.
-#[tauri::command]
-async fn runs_set_enabled(runs: State<'_, RunsState>, enabled: bool) -> Result<runs::enable::EnabledChange> {
-    let change = runs.set_enabled(enabled).await?;
-    if change.enabled {
-        let runs = runs.inner().clone();
-        tauri::async_runtime::spawn(async move { runs.recover().await });
-    }
-    Ok(change)
-}
-
 /// Drafts a run by hand. It stays a draft until `runs_approve`.
 #[tauri::command]
-async fn runs_draft(app: AppHandle, core: State<'_, CoreState>, runs: State<'_, RunsState>, spec: RunSpec, item: Option<ItemRef>) -> Result<Proposal> {
-    runs.ensure_enabled()?;
+async fn runs_draft(app: AppHandle, core: State<'_, CoreState>, spec: RunSpec, item: Option<ItemRef>) -> Result<Proposal> {
     let made = core.draft_run(spec, item).await?;
     proposals_changed(&app, &Connection::jira_id(&core.scope().await?));
     Ok(made)
 }
 
-/// The limits on runs and the terminal to open. Readable and writable while Agents are off.
+/// The limits on runs and the terminal to open.
 #[tauri::command]
 fn runs_settings(runs: State<'_, RunsState>) -> config::AgentSettings {
     runs.settings()
@@ -644,7 +624,6 @@ async fn runs_approve(
     proposal_id: String,
     digest: String,
 ) -> Result<Run> {
-    runs.ensure_enabled()?;
     let run = core.runs_approve(&proposal_id, &digest).await?;
     // Over the cap it is marked as waiting for a slot now, so the page can say it waits rather than that it started.
     let run = match runs.note_slot_wait(&run.id).await {
@@ -675,14 +654,12 @@ async fn runs_preflight(runs: State<'_, RunsState>, spec: Option<RunSpec>) -> Re
 /// Starts a run that is still queued, as after a restart.
 #[tauri::command]
 async fn runs_start_now(runs: State<'_, RunsState>, id: String) -> Result<Run> {
-    runs.ensure_enabled()?;
     runs.start_now(&id).await
 }
 
 /// Looks for the session of a run whose launch failed, and starts one only if there is none.
 #[tauri::command]
 async fn runs_retry_launch(runs: State<'_, RunsState>, id: String) -> Result<Run> {
-    runs.ensure_enabled()?;
     runs.retry_launch(&id).await
 }
 
@@ -929,7 +906,6 @@ async fn runs_repos(runs: State<'_, RunsState>) -> Result<Vec<String>> {
 /// Local clones of a watched repository.
 #[tauri::command]
 async fn runs_clones(runs: State<'_, RunsState>, repo: String) -> Result<CloneChoice> {
-    runs.ensure_enabled()?;
     runs.clones(&repo).await
 }
 
@@ -942,7 +918,6 @@ async fn runs_clone_fresh(runs: State<'_, RunsState>, repo: String) -> Result<ru
 
 #[tauri::command]
 async fn runs_pick_clone(runs: State<'_, RunsState>, repo: String, path: std::path::PathBuf) -> Result<()> {
-    runs.ensure_enabled()?;
     runs.pick_clone(&repo, &path).await
 }
 
@@ -1080,8 +1055,7 @@ async fn runs_outcome(core: State<'_, CoreState>, runs: State<'_, RunsState>, id
 
 /// Drafts a comment from a finished run's `For Jira:` part. A draft only: the person edits and approves it.
 #[tauri::command]
-async fn runs_draft_comment(app: AppHandle, core: State<'_, CoreState>, runs: State<'_, RunsState>, id: String) -> Result<Proposal> {
-    runs.ensure_enabled()?;
+async fn runs_draft_comment(app: AppHandle, core: State<'_, CoreState>, id: String) -> Result<Proposal> {
     let made = core.draft_run_comment(&id).await?;
     proposals_changed(&app, &Connection::jira_id(&core.scope().await?));
     Ok(made)
@@ -1089,8 +1063,7 @@ async fn runs_draft_comment(app: AppHandle, core: State<'_, CoreState>, runs: St
 
 /// Drafts the whole plan of a finished Plan run as a comment on its ticket. A draft only: the person edits and approves it.
 #[tauri::command]
-async fn runs_draft_plan_comment(app: AppHandle, core: State<'_, CoreState>, runs: State<'_, RunsState>, id: String) -> Result<inbox::PlanComment> {
-    runs.ensure_enabled()?;
+async fn runs_draft_plan_comment(app: AppHandle, core: State<'_, CoreState>, id: String) -> Result<inbox::PlanComment> {
     let made = core.draft_run_plan_comment(&id).await?;
     proposals_changed(&app, &Connection::jira_id(&core.scope().await?));
     Ok(made)
@@ -1098,8 +1071,7 @@ async fn runs_draft_plan_comment(app: AppHandle, core: State<'_, CoreState>, run
 
 /// Drafts the ticket's description with the plan of a finished Plan run added. A draft only: the person reads the diff and approves it.
 #[tauri::command]
-async fn runs_draft_plan_description(app: AppHandle, core: State<'_, CoreState>, runs: State<'_, RunsState>, id: String) -> Result<Proposal> {
-    runs.ensure_enabled()?;
+async fn runs_draft_plan_description(app: AppHandle, core: State<'_, CoreState>, id: String) -> Result<Proposal> {
     let made = core.draft_run_plan_description(&id).await?;
     proposals_changed(&app, &Connection::jira_id(&core.scope().await?));
     Ok(made)
@@ -1107,8 +1079,7 @@ async fn runs_draft_plan_description(app: AppHandle, core: State<'_, CoreState>,
 
 /// Reads a build draft's plan again from the plan run it came from, replacing the person's edits to it.
 #[tauri::command]
-async fn runs_refresh_plan(app: AppHandle, core: State<'_, CoreState>, runs: State<'_, RunsState>, id: String) -> Result<Proposal> {
-    runs.ensure_enabled()?;
+async fn runs_refresh_plan(app: AppHandle, core: State<'_, CoreState>, id: String) -> Result<Proposal> {
     let made = core.runs_refresh_plan(&id).await?;
     proposals_changed(&app, &Connection::jira_id(&core.scope().await?));
     Ok(made)
@@ -1116,8 +1087,7 @@ async fn runs_refresh_plan(app: AppHandle, core: State<'_, CoreState>, runs: Sta
 
 /// Reads a review draft's builder account again from the build run it came from, replacing the person's edits to it.
 #[tauri::command]
-async fn runs_refresh_build_account(app: AppHandle, core: State<'_, CoreState>, runs: State<'_, RunsState>, id: String) -> Result<Proposal> {
-    runs.ensure_enabled()?;
+async fn runs_refresh_build_account(app: AppHandle, core: State<'_, CoreState>, id: String) -> Result<Proposal> {
     let made = core.runs_refresh_build_account(&id).await?;
     proposals_changed(&app, &Connection::jira_id(&core.scope().await?));
     Ok(made)
@@ -1125,8 +1095,7 @@ async fn runs_refresh_build_account(app: AppHandle, core: State<'_, CoreState>, 
 
 /// Drafts a new ticket from a finished run that has no ticket. A draft only: the person edits and approves it.
 #[tauri::command]
-async fn runs_draft_ticket(app: AppHandle, core: State<'_, CoreState>, runs: State<'_, RunsState>, id: String) -> Result<Proposal> {
-    runs.ensure_enabled()?;
+async fn runs_draft_ticket(app: AppHandle, core: State<'_, CoreState>, id: String) -> Result<Proposal> {
     let made = core.draft_run_ticket(&id).await?;
     proposals_changed(&app, &Connection::jira_id(&core.scope().await?));
     Ok(made)
@@ -1140,8 +1109,7 @@ async fn runs_repo_project(core: State<'_, CoreState>, repo: String) -> Result<O
 
 /// Drafts a link saying the run's ticket is blocked by `blocker_key`. A draft only.
 #[tauri::command]
-async fn runs_draft_blocker(app: AppHandle, core: State<'_, CoreState>, runs: State<'_, RunsState>, id: String, blocker_key: String) -> Result<Proposal> {
-    runs.ensure_enabled()?;
+async fn runs_draft_blocker(app: AppHandle, core: State<'_, CoreState>, id: String, blocker_key: String) -> Result<Proposal> {
     let made = core.draft_run_blocker(&id, &blocker_key).await?;
     proposals_changed(&app, &Connection::jira_id(&core.scope().await?));
     Ok(made)
@@ -1477,8 +1445,7 @@ pub fn run() {
                 )
                 .with_notifier(Arc::new(agent::supervisor::FanoutNotifier(vec![notices, supervisor.clone()])))
                 .with_drafted(Arc::new(move |connection_id| proposals_changed(&drafted_handle, connection_id)))
-                .with_settings(config.agents)
-                .enabled(config.agents_enabled);
+                .with_settings(config.agents);
             if let Some(channel) = report {
                 service = service.with_report(channel);
             }
@@ -1496,13 +1463,11 @@ pub fn run() {
             app.manage::<LauncherState>(service.clone());
             app.manage::<RunsState>(service.clone());
             spawn_run_tracker(app.handle().clone(), service.clone());
-            if config.agents_enabled {
-                service.clean_attach_files();
-                tauri::async_runtime::spawn(async move {
-                    service.warm().await;
-                    service.recover().await;
-                });
-            }
+            service.clean_attach_files();
+            tauri::async_runtime::spawn(async move {
+                service.warm().await;
+                service.recover().await;
+            });
             let agent = Arc::new(AgentService::new(core.clone(), mcp));
             supervisor.bind(&agent);
             tauri::async_runtime::spawn(supervisor.clone().run_sweeps());
@@ -1564,8 +1529,6 @@ pub fn run() {
             proposals_unskip,
             proposals_approve,
             proposals_post_review,
-            runs_enabled,
-            runs_set_enabled,
             runs_settings,
             runs_set_settings,
             runs_cleanup,

@@ -1,8 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
-import { advanceRuns, askPip, groupByState, openApp, paneSettled as settled, peekSheet, peekTicket, PIP_INPUT, pipConversation, pipPane, startWorkstream } from "./support/app";
+import { advanceRuns, askPip, groupByState, openApp, paneSettled as settled, peekSheet, peekTicket, PIP_INPUT, pipConversation, pipPane, startWorkstream, showWorkspace } from "./support/app";
 
 const setup = (page: Page) => page.getByRole("dialog", { name: "Start an agent" });
-const safety = (page: Page) => page.getByRole("dialog", { name: "Agents safety and settings" });
 const peekAgents = (page: Page) => peekSheet(page).locator("#peek-agents");
 /** The Agents view's runs; Pip's strip of agents shows runs too, and only the view counts. */
 const agentRuns = (page: Page) => page.locator('main [data-run-id]:not(aside[aria-label="Pip"] *)');
@@ -15,15 +14,10 @@ const audit = (page: Page) =>
     return mock.workstreamEvents().map((e) => [e.action, e.runId]);
   });
 
-/** Clicks Start agent in the setup sheet, past the safety sheet a fresh profile shows once at its first agent action. */
+/** Clicks Start agent in the setup sheet. */
 async function startFromSetup(page: Page, open: () => Promise<void>) {
-  for (let attempt = 0; attempt < 2; attempt++) {
-    await open();
-    await expect(setup(page).or(safety(page))).toBeVisible();
-    if (!(await safety(page).isVisible())) break;
-    await safety(page).getByRole("button", { name: "Close" }).click();
-    await expect(safety(page)).toHaveCount(0);
-  }
+  await open();
+  await expect(setup(page)).toBeVisible();
   await expect(setup(page)).toContainText("CA-401");
   await setup(page).getByRole("button", { name: "Start agent" }).click();
   await expect(setup(page)).toHaveCount(0);
@@ -179,6 +173,7 @@ test("Agents groups runs by workstream, with its stage and R1, and the rest unde
 
   // The choice is kept, and State brings the lanes back.
   await page.reload();
+  await showWorkspace(page);
   await expect(page.getByText("CA-401", { exact: true }).first()).toBeVisible();
   await page.getByRole("button", { name: /^Agents/ }).click();
   await expect(page.getByRole("group", { name: "Group by" }).getByRole("button", { name: "Workstream" })).toHaveAttribute("aria-pressed", "true");

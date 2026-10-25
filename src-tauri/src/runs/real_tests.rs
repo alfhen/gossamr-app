@@ -356,7 +356,7 @@ async fn real_approved_run_launches_into_its_worktree_is_adopted_by_retry_then_s
 
     let cli = Arc::new(SignedIn(SystemCli::new(s.cli.binary().to_path_buf(), s.env.clone())));
     let tools = FixedToolchain(Ok(Toolchain { cli: cli.clone(), env: s.env.clone() }));
-    let svc = RunService::new(fx.core.clone(), Arc::new(tools), RunIndex::load(&fx.dir.join("index")), vec![], Arc::new(|_| {})).enabled(true);
+    let svc = RunService::new(fx.core.clone(), Arc::new(tools), RunIndex::load(&fx.dir.join("index")), vec![], Arc::new(|_| {}));
 
     let spec = RunSpec { clone_path: clone.canonicalize().unwrap(), name: "ce-4-spike-0a1b".into(), base: "feature".into(), ..crate::domain::fixtures::run_spec() };
     let draft = fx.core.draft_run(spec, Some(fx.item("CA-1"))).await.unwrap();
@@ -407,7 +407,6 @@ async fn real_signed_out_session_is_tracked_as_a_system_block_then_stops_and_a_f
     let opened = Arc::new(super::rig::Opened::default());
     let notices = Arc::new(super::rig::Notices::default());
     let svc = RunService::new(fx.core.clone(), Arc::new(tools), RunIndex::load(&fx.dir.join("index")), vec![], Arc::new(|_| {}))
-        .enabled(true)
         .with_terminal(opened.clone())
         .with_notifier(notices.clone());
 

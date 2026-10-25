@@ -250,7 +250,6 @@ test("the Activity Drafts list and the ticket's peek take the same keys on their
 
 // A permission a Build asks for can be allowed once in Terminal as well as denied; a read-only run's can only be denied.
 const setup = (page: Page) => page.getByRole("dialog", { name: "Start an agent" });
-const safety = (page: Page) => page.getByRole("dialog", { name: "Agents safety and settings" });
 
 async function newest(page: Page, kind: string) {
   return (await mockRuns(page)).find((r) => r.kind === kind) ?? null;
@@ -269,12 +268,8 @@ async function started(page: Page, kind: string) {
 async function workingBuild(page: Page) {
   await askPip(page, "investigate this");
   await expect(pipPane(page).getByRole("button", { name: "Stop" })).toHaveCount(0);
-  for (let attempt = 0; attempt < 2; attempt++) {
-    await pipPane(page).getByRole("article", { name: "Start an agent: CA-401" }).last().getByRole("button", { name: "Review and start →" }).click();
-    await expect(setup(page).or(safety(page))).toBeVisible();
-    if (!(await safety(page).isVisible())) break;
-    await safety(page).getByRole("button", { name: "Close" }).click();
-  }
+  await pipPane(page).getByRole("article", { name: "Start an agent: CA-401" }).last().getByRole("button", { name: "Review and start →" }).click();
+  await expect(setup(page)).toBeVisible();
   await setup(page).getByRole("button", { name: "Start agent" }).click();
   await expect(setup(page)).toHaveCount(0);
   await moveTo(page, (await newest(page, "investigate"))!.id, "done", 3);
