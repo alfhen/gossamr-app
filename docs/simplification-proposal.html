@@ -1,0 +1,926 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Gossamr, simplified</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+/* Layout: sticky section index on the left, one ~70ch reading column; collapses to a single column under 920px. */
+:root {
+  --bg: #f4f6f9;
+  --surface: #ffffff;
+  --ink: #18202e;
+  --muted: #586378;
+  --line: #dbe1ea;
+  --accent: #0b6b6b;
+  --accent-soft: #e1f0ef;
+  --cut: #a3313a;
+  --cut-soft: #f7e5e6;
+  --keep: #2e6a30;
+  --keep-soft: #e4f0e2;
+  --code-bg: #edf0f4;
+  --display: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
+  --body: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #10141b; --surface: #161b24; --ink: #e3e7ee; --muted: #98a2b4; --line: #29303c;
+    --accent: #5ec6c0; --accent-soft: #15302f; --cut: #f0898f; --cut-soft: #3a1d21;
+    --keep: #8ecf89; --keep-soft: #1b2e1b; --code-bg: #1d232e; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #10141b; --surface: #161b24; --ink: #e3e7ee; --muted: #98a2b4; --line: #29303c;
+  --accent: #5ec6c0; --accent-soft: #15302f; --cut: #f0898f; --cut-soft: #3a1d21;
+  --keep: #8ecf89; --keep-soft: #1b2e1b; --code-bg: #1d232e; color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+body {
+  margin: 0; background: var(--bg); color: var(--ink);
+  font: 16px/1.6 var(--body);
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 0 64px;
+  -webkit-text-size-adjust: 100%;
+}
+a { color: var(--accent); }
+a:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
+code { font-family: var(--mono); font-size: 0.86em; background: var(--code-bg); padding: 0.1em 0.35em; border-radius: 4px; overflow-wrap: anywhere; }
+pre { font-family: var(--mono); font-size: 13px; line-height: 1.55; background: var(--code-bg); padding: 14px 16px; border-radius: 8px; overflow-x: auto; margin: 0; }
+pre code { background: none; padding: 0; font-size: inherit; overflow-wrap: normal; }
+
+.page { max-width: 1180px; margin: 0 auto; display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 56px; }
+header.masthead { grid-column: 1 / -1; padding-block: 56px 8px; border-bottom: 1px solid var(--line); }
+.eyebrow { font-size: 12px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); margin: 0 0 12px; }
+h1 { font-family: var(--display); font-weight: 600; font-size: clamp(36px, 6vw, 56px); line-height: 1.05; margin: 0 0 16px; text-wrap: balance; letter-spacing: -0.01em; }
+.lede { font-size: 19px; line-height: 1.55; max-width: 62ch; margin: 0 0 24px; color: var(--ink); }
+.meta { display: flex; flex-wrap: wrap; gap: 8px 20px; font-size: 13px; color: var(--muted); margin: 0 0 32px; }
+.meta span b { color: var(--ink); font-weight: 600; }
+
+nav.toc { position: sticky; top: calc(env(safe-area-inset-top, 0px) + 24px); align-self: start; padding-top: 40px; font-size: 14px; }
+nav.toc p { font-size: 12px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); margin: 0 0 10px; }
+nav.toc ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; counter-reset: toc; }
+nav.toc li { counter-increment: toc; }
+nav.toc a { display: grid; grid-template-columns: 26px 1fr; padding: 4px 8px; border-radius: 6px; color: var(--muted); text-decoration: none; }
+nav.toc a::before { content: counter(toc); font-variant-numeric: tabular-nums; color: var(--muted); opacity: 0.7; }
+nav.toc a:hover { background: var(--surface); color: var(--ink); }
+
+main { min-width: 0; padding-top: 32px; }
+section { padding-block: 24px 16px; scroll-margin-top: 16px; }
+section + section { border-top: 1px solid var(--line); }
+h2 { font-family: var(--display); font-weight: 600; font-size: 28px; line-height: 1.2; margin: 0 0 16px; text-wrap: balance; display: flex; gap: 14px; align-items: baseline; }
+h2 .n { font-family: var(--body); font-size: 14px; font-weight: 600; color: var(--accent); font-variant-numeric: tabular-nums; min-width: 1.6em; }
+h3 { font-size: 17px; margin: 28px 0 10px; text-wrap: balance; }
+p, ul, ol { max-width: 70ch; }
+p { margin: 0 0 14px; }
+ul, ol { padding-left: 1.3em; margin: 0 0 16px; }
+li { margin-bottom: 6px; }
+li > ul { margin-top: 6px; margin-bottom: 0; }
+strong { font-weight: 650; }
+
+.table-wrap { overflow-x: auto; margin: 0 0 20px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+table { border-collapse: collapse; width: 100%; font-size: 14px; line-height: 1.5; }
+th, td { text-align: left; vertical-align: top; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+tr:last-child td { border-bottom: 0; }
+th { font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); font-weight: 600; background: var(--bg); }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+tr.total td { font-weight: 650; background: var(--bg); }
+
+/* before → after strip */
+.shift { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; margin: 0 0 40px; }
+.shift div { background: var(--surface); padding: 16px 18px; display: grid; gap: 2px; }
+.shift .what { font-size: 13px; color: var(--muted); }
+.shift .val { font-size: 22px; font-weight: 650; font-variant-numeric: tabular-nums; }
+.shift .val s { color: var(--muted); font-weight: 500; text-decoration-color: var(--cut); text-decoration-thickness: 2px; }
+.shift .val .to { color: var(--accent); }
+@media (max-width: 720px) { .shift { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
+.concepts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin: 0 0 20px; max-width: 760px; }
+.concept { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; min-width: 0; }
+.concept h4 { margin: 0 0 4px; font-family: var(--display); font-size: 20px; font-weight: 600; }
+.concept p { margin: 0; font-size: 14.5px; color: var(--ink); }
+@media (max-width: 560px) { .concepts { grid-template-columns: minmax(0, 1fr); } }
+
+.diagram { overflow-x: auto; margin: 4px 0 24px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); padding: 12px; }
+.diagram svg { display: block; min-width: 680px; width: 100%; height: auto; }
+.diagram .box { fill: var(--bg); stroke: var(--line); stroke-width: 1.5; }
+.diagram .box.pip { fill: var(--accent-soft); stroke: var(--accent); }
+.diagram .box.gate { fill: var(--keep-soft); stroke: var(--keep); }
+.diagram .t { fill: var(--ink); font: 600 15px var(--body); }
+.diagram .s { fill: var(--muted); font: 12px var(--mono); }
+.diagram .lbl { fill: var(--muted); font: 12.5px var(--body); }
+.diagram .ln { fill: none; stroke: var(--muted); stroke-width: 1.5; }
+.diagram .ln.acc { stroke: var(--accent); }
+.diagram .ln.dash { stroke-dasharray: 5 4; stroke: var(--cut); }
+.diagram .lbl.cut { fill: var(--cut); }
+.diagram .head { fill: var(--muted); }
+.diagram .head.acc { fill: var(--accent); }
+.diagram .head.cut { fill: var(--cut); }
+
+.note { border-left: 3px solid var(--accent); background: var(--accent-soft); padding: 12px 16px; border-radius: 0 8px 8px 0; margin: 0 0 20px; max-width: 70ch; font-size: 15px; }
+.note p:last-child { margin: 0; }
+
+.pill { display: inline-block; font-size: 11.5px; font-weight: 600; letter-spacing: 0.04em; padding: 1px 8px; border-radius: 999px; white-space: nowrap; }
+.pill.cut { background: var(--cut-soft); color: var(--cut); }
+.pill.keep { background: var(--keep-soft); color: var(--keep); }
+
+.bar { display: inline-block; width: 72px; height: 8px; border-radius: 4px; background: var(--cut-soft); vertical-align: middle; position: relative; overflow: hidden; margin-left: 8px; }
+.bar i { position: absolute; inset: 0 auto 0 0; background: var(--accent); border-radius: 4px; }
+
+.risks { counter-reset: risk; list-style: none; padding: 0; max-width: 72ch; display: grid; gap: 14px; }
+.risks > li { counter-increment: risk; display: grid; grid-template-columns: 30px minmax(0, 1fr); gap: 4px 10px; margin: 0; }
+.risks > li::before { content: counter(risk); font-weight: 650; color: var(--cut); font-variant-numeric: tabular-nums; }
+.risks > li > * { grid-column: 2; }
+.risks > li > strong:first-child { grid-column: 2; }
+.risks p { margin: 0 0 6px; }
+.risks ul { margin: 4px 0 0; }
+
+.decisions { list-style: none; padding: 0; counter-reset: dec; display: grid; gap: 12px; max-width: 760px; }
+.decisions > li { counter-increment: dec; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px 14px 52px; position: relative; margin: 0; }
+.decisions > li::before { content: counter(dec); position: absolute; left: 16px; top: 13px; width: 24px; height: 24px; border-radius: 50%; background: var(--accent-soft); color: var(--accent); font-weight: 650; font-size: 13px; display: grid; place-items: center; font-variant-numeric: tabular-nums; }
+.decisions h4 { margin: 0 0 4px; font-size: 15.5px; }
+.decisions p { margin: 0 0 6px; font-size: 15px; }
+.decisions .rec { color: var(--keep); font-weight: 600; }
+.decisions ul { margin: 4px 0 6px; }
+
+footer { grid-column: 1 / -1; border-top: 1px solid var(--line); padding-top: 20px; font-size: 13px; color: var(--muted); }
+
+@media (max-width: 920px) {
+  .page { grid-template-columns: minmax(0, 1fr); gap: 0; }
+  nav.toc { position: static; padding-top: 24px; }
+  nav.toc ol { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  header.masthead { padding-block: 32px 8px; }
+}
+@media (max-width: 480px) {
+  nav.toc ol { grid-template-columns: minmax(0, 1fr); }
+  h2 { font-size: 24px; }
+  .lede { font-size: 17px; }
+}
+</style>
+</head>
+<body>
+<div class="page">
+
+<header class="masthead">
+  <p class="eyebrow">Gossamr · design proposal</p>
+  <h1>Gossamr, simplified</h1>
+  <p class="lede">Pip drives everything. Workstreams are the only container. Agents are plain Claude Code sessions with your own config, plus one MCP server so they can report back. Every write Gossamr makes to Jira or GitHub is still a draft you approve.</p>
+  <div class="meta">
+    <span><b>Status</b> Proposal, awaiting owner decisions</span>
+    <span><b>Date</b> 25 October 2026</span>
+    <span><b>Basis</b> 23-agent code map, then an adversarial review against the code</span>
+  </div>
+  <div class="shift" aria-label="Before and after">
+    <div><span class="what">Mode systems</span><span class="val"><s>4</s> → <span class="to">1</span></span></div>
+    <div><span class="what">Ways to start an agent</span><span class="val"><s>~10</s> → <span class="to">1</span></span></div>
+    <div><span class="what">Settings</span><span class="val"><s>~40</s> → <span class="to">6</span></span></div>
+    <div><span class="what">Tauri commands</span><span class="val"><s>142</s> → <span class="to">~35</span></span></div>
+    <div><span class="what">Window events</span><span class="val"><s>11</s> → <span class="to">4</span></span></div>
+    <div><span class="what">Tracked lines</span><span class="val"><s>207k</s> → <span class="to">~120k</span></span></div>
+  </div>
+</header>
+
+<nav class="toc" aria-label="Sections">
+  <p>Sections</p>
+  <ol>
+    <li><a href="#summary">Summary</a></li>
+    <li><a href="#today">Gossamr today</a></li>
+    <li><a href="#model">The target model</a></li>
+    <li><a href="#pip">Pip as the driver</a></li>
+    <li><a href="#agents">Agents on the harness</a></li>
+    <li><a href="#drafts">Drafts: the one gate</a></li>
+    <li><a href="#ui">The UI after</a></li>
+    <li><a href="#backend">Backend surface</a></li>
+    <li><a href="#goes">What goes, by area</a></li>
+    <li><a href="#giveup">What we give up</a></li>
+    <li><a href="#keep">What we keep</a></li>
+    <li><a href="#order">Order of work</a></li>
+    <li><a href="#decisions">Decisions</a></li>
+    <li><a href="#spikes">Spikes</a></li>
+  </ol>
+</nav>
+
+<main>
+
+<section id="summary">
+  <h2><span class="n">1</span>Summary</h2>
+  <p>Gossamr today is about 207,000 tracked lines, counting code, tests, fixtures and e2e. It was built around an idea the owner no longer wants: the app polices the agents. Today it has:</p>
+  <ul>
+    <li>four separate mode systems;</li>
+    <li>about 40 settings;</li>
+    <li>about ten ways to start an agent;</li>
+    <li>six auto-start rules, with per-workstream overrides;</li>
+    <li>budgets, holds and tripwires;</li>
+    <li>a read-only permission regime, a permission-prompt classifier and a preflight checklist.</li>
+  </ul>
+  <p>A TypeScript copy of most of these rules is kept in step with the Rust through 10,000 lines of shared fixtures.</p>
+  <p>This proposal cuts Gossamr down to four concepts and one loop:</p>
+  <div class="concepts">
+    <div class="concept"><h4>Pip</h4><p>The only driver. You talk to Pip. Pip sees every workstream and agent, starts and steers agents, and drafts every update Gossamr makes to Jira and GitHub.</p></div>
+    <div class="concept"><h4>Workstreams</h4><p>The only container: one ticket (or one ticketless question), with its agents, drafts and Pip conversation.</p></div>
+    <div class="concept"><h4>Agents</h4><p>Plain <code>claude --bg --worktree</code> sessions with your own Claude config. Gossamr adds one MCP server to each, so the agent can report back, ask Pip a question and read its workstream.</p></div>
+    <div class="concept"><h4>Drafts</h4><p>The one gate that stays. Every write Gossamr makes to Jira or GitHub is a draft you approve with one key. Agents push their own branches and open draft PRs with their own <code>git</code> and <code>gh</code>.</p></div>
+  </div>
+  <p>What that adds up to:</p>
+  <ul>
+    <li>one mode: Pip manages;</li>
+    <li>one way to start work: ask Pip;</li>
+    <li>one result channel: the agent's <code>report</code> call, with the transcript as a fallback;</li>
+    <li>one draft card;</li>
+    <li>one status word per workstream.</li>
+  </ul>
+  <p>About 40% of the codebase goes. Section 9 has the per-area figures, and some of them are estimates.</p>
+</section>
+
+<section id="today">
+  <h2><span class="n">2</span>Gossamr today</h2>
+  <h3>Architecture</h3>
+<pre><code>React (Vite, Zustand)                         Rust (Tauri 2)
+──────────────────────                        ──────────────────────────────────────────────
+Workspace shell ── Board/List/Map/Age         lib.rs: 142 commands, 11 window events
+Classic inbox (2nd UI, still mounted)         Core (inbox/*): cache, drafts, workstreams, runs-to-drafts
+Peek sheet, palette, tabs, saved views        proposals.rs: draft → approve → apply (one write gate)
+Agents screen + Needs-you filter              tracker/jira, codehost/github, auth (Atlassian OAuth, GitHub)
+Pip pane (claudeStore)            ──ask──▶    AgentService: one `claude -p` per Pip turn, turn queue
+Run setup sheet, inline start, run sheet      McpServer "gossamr": 35 tools for Pip (read + propose_*)
+Draft cards, review drafts, rewrite diff      Supervisor: wakes Pip, applies 6 auto-start rules, budgets
+Mock backend (21 modules, ~11k lines)         RunService: preflight, gates, `claude --bg --worktree`, tracker
+                                              ReportServer "run-report": 2nd MCP server, 1 tool, stable port
+                                              one SQLite file per signed-in account, 13 migrations, Keychain</code></pre>
+  <p style="margin-top:14px"><strong>Pip</strong> runs as <code>claude -p</code> with every built-in tool off, no user settings, and only the <code>gossamr</code> MCP server. It can read and draft, but it can never touch files, a shell or the network.</p>
+  <p><strong>Agents</strong> run as <code>claude --bg --worktree</code> in a clone of the repo. Gossamr reads their state by polling <code>claude agents --json</code>. Their results come from an opt-in <code>report_result</code> tool on a second MCP server, or, more often, from parsing headings such as <code>For Jira:</code> and <code>Verdict:</code> out of the final answer.</p>
+
+  <h3>What it does</h3>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Area</th><th>Features</th></tr></thead>
+    <tbody>
+      <tr><td>Jira</td><td>Sync and cache; board, list, map and age views; tabs and saved views; peek sheet with comments and mentions; transitions by drag; watch list with modes, depth, pins and a 14-day grace period; footprint and "assigned elsewhere" radar; activity feed (mentions, comments, status, assignments); "What Jira saw from me" log</td></tr>
+      <tr><td>GitHub</td><td>Sign-in three ways; PR, branch and check badges per ticket; in-app PR diff viewer; GitHub review drafts posted as comment reviews</td></tr>
+      <tr><td>Pip</td><td>Docked conversation per workstream plus General; streamed answers; screenshots; quoted selections; 35 MCP tools; wake turns from the supervisor; a first-run 22-term glossary; nudge bubbles; suggestion chips; a slash-command grammar; a view-filter tool with undo and redo</td></tr>
+      <tr><td>Agents</td><td>Six kinds (investigate, triage, plan, build, review, verify) with fixed prompt templates; setup sheet or inline start; digest-bound approval; read-only enforcement for five kinds; permission Allow-once-in-Terminal; limits; fresh clones; continuation adoption; archive, clear and clean-up</td></tr>
+      <tr><td>Workstreams</td><td>Advise/Manage mode; six auto-start rules with tri-state overrides; budgets with "Allow 5 more"; six hold reasons; four tripwires; readiness stop; clarity check with per-project learning; reporter-wait tracking; cobweb staleness; adopt; 60-second undo</td></tr>
+      <tr><td>Planning</td><td>Start my day; Plan my week; Needs you (14 need kinds in 3 groups)</td></tr>
+      <tr><td>Drafts</td><td>11 intent kinds; about 15 supersession rules; plan and triage sections written into descriptions; risky-text pause; basis drift checks</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>The census of extra machinery</h3>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Thing</th><th>Count today</th><th>Where</th></tr></thead>
+    <tbody>
+      <tr><td>Mode systems</td><td>4: Advise/Manage, Agents on/off, classic/workspace UI, start-on-Agents</td><td><code>domain/workstream.rs</code>, <code>config.rs</code>, <code>agentsFlag.ts</code>, <code>prefs.ts</code></td></tr>
+      <tr><td>Ways to start an agent</td><td>about 10 (listed after this table)</td><td><code>commands.ts</code>, <code>AgentMenu.tsx</code>, <code>runSetupStore.ts</code>, <code>InlineStart.tsx</code>, <code>agent/autostart.rs</code></td></tr>
+      <tr><td>Ways to create a workstream</td><td>6 entry points into one command</td><td><code>workstreamsStore.ts</code>, <code>Palette.tsx</code>, <code>PeekSheet.tsx</code>, <code>PlanMyWeek.tsx</code></td></tr>
+      <tr><td>Settings and knobs</td><td>about 40</td><td><code>Settings.tsx</code>, <code>AgentsSettings.tsx</code>, <code>WatchSettings.tsx</code>, <code>config.rs</code>, <code>prefs.ts</code></td></tr>
+      <tr><td>Ways to resume a session</td><td>4: answer, follow-up, automatic fix round, person fix round</td><td><code>runs/answer.rs</code>, <code>runs/follow_up.rs</code></td></tr>
+      <tr><td>Result channels</td><td>3: MCP report, heading parser, transcript tail</td><td><code>runs/report/</code>, <code>runs/result.rs</code>, <code>runs/final_answer.rs</code></td></tr>
+      <tr><td>Status vocabularies</td><td>4: run lanes, 7 workstream statuses, 8 stages, 14 need kinds</td><td><code>agentsLogic.ts</code>, <code>workstreamStatus.ts</code>, <code>workstreamStage.ts</code>, <code>needs.ts</code></td></tr>
+      <tr><td>Tauri commands and events</td><td>142 and 11</td><td><code>lib.rs</code></td></tr>
+      <tr><td>Rust and TypeScript rule mirrors</td><td>about 10,000 lines of shared JSON fixtures, and about 11,000 lines of mock backend (18,000 with its tests)</td><td><code>*.fixtures.json</code>, <code>src/backend/mock*.ts</code></td></tr>
+    </tbody>
+  </table></div>
+  <p>The ways to start an agent today are:</p>
+  <ul>
+    <li>the palette, two ways;</li>
+    <li>the ticket menu;</li>
+    <li>the Agents button;</li>
+    <li>Build-from-plan;</li>
+    <li>Review-this;</li>
+    <li>retry;</li>
+    <li>the Pip StartRun card;</li>
+    <li>inline start;</li>
+    <li>suggestion chips;</li>
+    <li>auto-start and fix rounds.</li>
+  </ul>
+  <div class="note"><p>Nearly all of it exists to stop an agent or Pip from doing something without your say-so. The vision turns that around. You drive by talking to Pip. Claude Code's own harness polices the agents. Gossamr guards only its own writes to Jira and GitHub.</p></div>
+</section>
+
+<section id="model">
+  <h2><span class="n">3</span>The target model</h2>
+  <h3>Four concepts</h3>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Concept</th><th>What it is</th><th>Stored as</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Workstream</strong></td><td>One ticket or one ticketless question, with its agents, drafts and Pip conversation</td><td><code>workstreams</code>: id, item key, repo, title, Pip session id, Pip notes, paused reason, closed at</td></tr>
+      <tr><td><strong>Agent</strong></td><td>One Claude Code background session in a worktree, with a role label and the brief Pip wrote</td><td><code>runs</code>: id, start key, workstream, role, brief, repo, clone, base, PR and pinned SHA, worktree, session id, short id, state, timestamps. The report is kept in <code>run_reports</code>.</td></tr>
+      <tr><td><strong>Pip</strong></td><td>The conversation that drives everything</td><td><code>pip_turns</code></td></tr>
+      <tr><td><strong>Draft</strong></td><td>A Jira or GitHub write waiting for you</td><td><code>proposals</code>: target, kind, payload, basis, state</td></tr>
+    </tbody>
+  </table></div>
+  <p>Everything else, such as the status word and what needs you, is worked out when it is read.</p>
+
+  <h3>The loop</h3>
+  <div class="diagram" role="img" aria-label="You talk to Pip. Pip starts, messages and stops agents. Agents report back and wake Pip once per state change. Pip drafts writes; you approve them and they go to Jira or GitHub. Agents push their own branches directly with git and gh.">
+    <svg viewBox="0 0 760 330" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="head" d="M0,0 L10,5 L0,10 z"/></marker>
+        <marker id="aha" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="head acc" d="M0,0 L10,5 L0,10 z"/></marker>
+        <marker id="ahc" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="head cut" d="M0,0 L10,5 L0,10 z"/></marker>
+      </defs>
+      <rect class="box" x="16" y="34" width="120" height="60" rx="8"/>
+      <text class="t" x="76" y="69" text-anchor="middle">You</text>
+
+      <rect class="box pip" x="216" y="34" width="190" height="60" rx="8"/>
+      <text class="t" x="311" y="60" text-anchor="middle">Pip</text>
+      <text class="s" x="311" y="80" text-anchor="middle">claude -p · gossamr MCP</text>
+
+      <rect class="box" x="486" y="34" width="258" height="60" rx="8"/>
+      <text class="t" x="615" y="60" text-anchor="middle">Agents</text>
+      <text class="s" x="615" y="80" text-anchor="middle">claude --bg --worktree · your config</text>
+
+      <rect class="box gate" x="216" y="234" width="190" height="60" rx="8"/>
+      <text class="t" x="311" y="260" text-anchor="middle">Drafts</text>
+      <text class="s" x="311" y="280" text-anchor="middle">you approve, one key</text>
+
+      <rect class="box" x="486" y="234" width="258" height="60" rx="8"/>
+      <text class="t" x="615" y="269" text-anchor="middle">Jira · GitHub</text>
+
+      <!-- you → pip -->
+      <line class="ln acc" x1="136" y1="64" x2="212" y2="64" marker-end="url(#aha)"/>
+      <text class="lbl" x="174" y="54" text-anchor="middle">talk</text>
+
+      <!-- pip → agents -->
+      <line class="ln acc" x1="406" y1="56" x2="482" y2="56" marker-end="url(#aha)"/>
+      <text class="lbl" x="444" y="24" text-anchor="middle">start · message</text>
+      <text class="lbl" x="444" y="40" text-anchor="middle">· stop</text>
+
+      <!-- agents → pip (report / wake) -->
+      <path class="ln" d="M 560 94 C 560 150, 360 150, 350 98" marker-end="url(#ah)"/>
+      <text class="lbl" x="470" y="128" text-anchor="middle">report · ask · read_workstream</text>
+      <text class="lbl" x="470" y="160" text-anchor="middle">wake once per (agent, state)</text>
+
+      <!-- pip → drafts -->
+      <line class="ln acc" x1="290" y1="94" x2="290" y2="230" marker-end="url(#aha)"/>
+      <text class="lbl" x="280" y="200" text-anchor="end">draft</text>
+
+      <!-- you → drafts (approve) -->
+      <path class="ln" d="M 76 94 L 76 264 L 212 264" marker-end="url(#ah)"/>
+      <text class="lbl" x="88" y="252">approve</text>
+
+      <!-- drafts → jira/github -->
+      <line class="ln acc" x1="406" y1="264" x2="482" y2="264" marker-end="url(#aha)"/>
+      <text class="lbl" x="444" y="254" text-anchor="middle">apply</text>
+
+      <!-- agents → github direct (outside gate) -->
+      <line class="ln dash" x1="700" y1="94" x2="700" y2="230" marker-end="url(#ahc)"/>
+      <text class="lbl cut" x="690" y="176" text-anchor="end">git push · gh pr create --draft</text>
+      <text class="lbl cut" x="690" y="192" text-anchor="end">outside the draft gate</text>
+    </svg>
+  </div>
+  <p>There is no rule table. When an agent finishes, Gossamr wakes Pip in that workstream with the facts: ids, role, state, and whether the agent reported. Pip reads the report and decides what to do next. It might:</p>
+  <ul>
+    <li>start a reviewer;</li>
+    <li>send the builder a fix;</li>
+    <li>draft the Jira comment;</li>
+    <li>ask you.</li>
+  </ul>
+  <p>Pip follows your instruction for that workstream. If you say "Plan and build CA-412, have it reviewed", that is the authority for Pip to start a planner, then a builder, then a reviewer, without asking again for each one.</p>
+
+  <h3>Roles are labels, not tiers</h3>
+  <p>Pip picks the role (planner, builder, triager, reviewer, investigator, or anything else) and writes the brief. These all go:</p>
+  <ul>
+    <li>the six fixed templates;</li>
+    <li>the per-kind required fields, such as <code>plan_from_run</code>, <code>build_account</code> and <code>findings_from_run</code>;</li>
+    <li>the per-kind permission profiles.</li>
+  </ul>
+  <p>Gossamr still wraps Pip's text in one base brief, because some facts only Gossamr can get right:</p>
+  <ul>
+    <li><strong>Checkout.</strong> A worktree starts at the clone's current HEAD, not at the base branch (<code>domain/run.rs:738</code>). So the base brief always says to run <code>git fetch origin &lt;base&gt;</code> and switch to that branch before starting.</li>
+    <li><strong>Pull requests.</strong> When Pip passes a PR, <code>start_agent</code> checks that it comes from the same repository (<code>CodeChange::is_same_repo</code>) and pins its head SHA. The base brief then says to:
+      <ul>
+        <li>fetch <code>pull/&lt;n&gt;/head</code>;</li>
+        <li>check out <code>&lt;sha&gt;</code> detached;</li>
+        <li>stop if that fails, rather than review the base branch instead.</li>
+      </ul>
+    </li>
+    <li><strong>Data.</strong> The ticket text is fenced off as data. One sentence explains how to use <code>report</code>, <code>ask</code> and <code>read_workstream</code>.</li>
+  </ul>
+  <p>A handoff is a report that the next agent reads with <code>read_workstream</code>. It is no longer a typed slot that Core fills in.</p>
+</section>
+
+<section id="pip">
+  <h2><span class="n">4</span>Pip as the driver</h2>
+  <h3>Tools</h3>
+  <p>Pip keeps its read tools, trimmed and merged. It gains tools to drive agents and to ask you questions. The <code>propose_*</code> family merges into one draft tool.</p>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Tool</th><th>Replaces</th></tr></thead>
+    <tbody>
+      <tr><td><code>search_items</code>, <code>read_item</code>, <code>list_statuses</code></td><td><code>search_items</code>, <code>get_item</code>, <code>find_containers</code>, <code>list_containers</code>, <code>get_workflow</code>, <code>list_next_statuses</code></td></tr>
+      <tr><td><code>read_activity(since?, kinds?)</code></td><td>Nothing today. Reads mentions, comments, status and assignment changes on watched tickets.</td></tr>
+      <tr><td><code>read_pr</code>, <code>list_prs</code>, <code>read_repo_file</code>, <code>search_code</code>, <code>list_watched_repos</code></td><td>The 9 GitHub tools</td></tr>
+      <tr><td><code>list_workstreams</code>, <code>read_workstream</code>, <code>open_workstream</code>, <code>close_workstream</code>, <code>set_notes</code></td><td><code>get_workstream</code>, <code>list_workstreams</code>, <code>set_workstream_notes</code>, and the open command that only the UI has today</td></tr>
+      <tr><td><code>list_agents</code>, <code>read_agent(id, page)</code></td><td><code>list_runs</code>, <code>get_run</code>, <code>get_run_result</code>, <code>get_run_events</code></td></tr>
+      <tr><td><strong><code>start_agent(workstream, role, brief, repo?, pr?)</code></strong></td><td><code>propose_run</code>, the StartRun draft, the setup sheet, digest approval, inline start and auto-start</td></tr>
+      <tr><td><strong><code>message_agent(agent, text)</code></strong></td><td><code>propose_follow_up</code>, <code>propose_answer</code>, the FollowUp and RunAnswer drafts, and fix rounds</td></tr>
+      <tr><td><strong><code>stop_agent(agent)</code></strong></td><td>Stop, which today only you can do</td></tr>
+      <tr><td><strong><code>ask_person(workstream, question)</code></strong></td><td>Nothing today. Raises a "Pip asks you" item and a notification.</td></tr>
+      <tr><td><code>list_drafts</code>, <code>read_draft</code>, <code>draft(kind, target, payload)</code>, <code>revise_draft</code>, <code>retire_draft</code></td><td><code>list_proposals</code>, <code>get_proposal</code>, the five <code>propose_*</code> write tools, <code>revise_proposal</code>, <code>retire_proposal</code></td></tr>
+    </tbody>
+  </table></div>
+  <p><code>set_view_filter</code> and the <code>pip-view</code> event go. Pip tells you where to look instead of moving the page.</p>
+  <p><strong><code>start_agent</code></strong> takes an idempotency key, which Gossamr derives from the Pip turn and the call. A retried MCP call or a duplicate wake can therefore never launch the same agent twice. This replaces today's <code>UNIQUE(runs.proposal_id)</code> guard. Gossamr also:</p>
+  <ul>
+    <li>resolves the clone and the base branch;</li>
+    <li>generates the worktree name itself. The role is a short label, checked for length and characters, and used only in the session name;</li>
+    <li>records which Pip turn started the agent.</li>
+  </ul>
+  <p><strong><code>message_agent</code></strong> behaves by the agent's state:</p>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Agent state</th><th>What <code>message_agent</code> does</th></tr></thead>
+    <tbody>
+      <tr><td>working</td><td>Queues the text. Gossamr delivers it as the answer to the agent's next <code>ask</code>, or by resuming the session when the turn ends.</td></tr>
+      <tr><td>waiting on <code>ask</code></td><td>Returns the text as the answer, with no stop or resume</td></tr>
+      <tr><td>ended with a question, done or stopped</td><td><code>claude --bg --resume &lt;session&gt; -- &lt;reminder + text&gt;</code>, at least 5 s after stop, and checks the session id that comes back</td></tr>
+      <tr><td>waiting at a permission prompt</td><td><span class="pill cut">refused</span> You answer in Terminal.</td></tr>
+      <tr><td>attached in Terminal</td><td><span class="pill cut">refused</span> You are already in the session.</td></tr>
+    </tbody>
+  </table></div>
+  <p>The reminder prefix (<code>runs/answer.rs:20</code>) stays, because the original brief drops out of a long conversation.</p>
+
+  <h3>What stays locked on Pip</h3>
+  <p>Pip keeps its current boundary:</p>
+  <ul>
+    <li>no built-in tools;</li>
+    <li>no user settings;</li>
+    <li>only the <code>gossamr</code> MCP server;</li>
+    <li>reads only watched projects and repos, and the tickets you handed it.</li>
+  </ul>
+  <p>Pip reads untrusted ticket and PR text all day, and it can now start agents, so this boundary matters more than before. Pip does not need a shell: when code needs reading or changing, it starts an agent.</p>
+  <p>Pip keeps an explicit model setting. It runs with <code>--setting-sources ""</code>, so it never reads your default model (Decision 6).</p>
+
+  <h3>Wakes</h3>
+  <p>The supervisor shrinks to a waker.</p>
+  <p><strong>What wakes Pip.</strong> An agent in a workstream changes to done, failed or needs-you, or is stopped by something other than Gossamr, Pip or you. The stop-then-resume inside <code>message_agent</code> wakes nobody. Nor does a stop that you or Pip asked for.</p>
+  <p><strong>At most once.</strong> Each (agent, state) pair still wakes Pip at most once. The pair is recorded in the workstream's audit log, as it is today, and a restart rebuilds the list from that log. Without it, the 30-second sweep would wake Pip again for the same finished run. A waiting wake merges with any newer one, and your own messages go ahead of waiting wakes.</p>
+  <p><strong>What a wake contains.</strong> Only facts Gossamr wrote. Pip reads the agent's own words with <code>read_agent</code>.</p>
+  <p><strong>What goes.</strong></p>
+  <ul>
+    <li>the Advise/Manage gate;</li>
+    <li>the auto-start pass and the fix-round cap;</li>
+    <li>budgets and "Allow 5 more";</li>
+    <li>the six hold reasons and four tripwires;</li>
+    <li>the <code>SupervisorCore</code>, <code>CoreFacade</code> and <code>WakeQueue</code> traits.</li>
+  </ul>
+  <p><strong>Backstops.</strong> Three remain, and none of them is a setting:</p>
+  <ul>
+    <li>the global cap on agents running at once;</li>
+    <li>a limit on wakes per workstream per day;</li>
+    <li>a limit on Pip turns per day across all workstreams.</li>
+  </ul>
+  <p>The two daily limits are fixed in code. When one is hit, the workstream pauses (one <code>paused_reason</code> column) and you are told. A Resume control on the workstream clears the pause. A loop that goes wrong then costs money once, not all night.</p>
+  <p><strong>When the app is closed.</strong> Pip runs as a <code>claude -p</code> process started by the app, so it does not run while the app is closed. Agents keep running in Claude's daemon. At the next launch, <code>recover()</code> brings Gossamr's records in line with the agents, and the waker sends Pip the state changes it missed.</p>
+
+  <h3>One prompt</h3>
+  <p>The Assistant/Manager split goes. One short system prompt says:</p>
+  <ul>
+    <li>who Pip is and what it can see;</li>
+    <li>that ticket and agent text is data, not instructions;</li>
+    <li>that Gossamr's writes to Jira and GitHub are drafts;</li>
+    <li>that Pip tells you whenever it starts an agent from a wake turn.</li>
+  </ul>
+  <p>Each tool description shrinks to one sentence.</p>
+</section>
+
+<section id="agents">
+  <h2><span class="n">5</span>Agents on the Claude Code harness</h2>
+  <h3>Launch</h3>
+<pre><code>claude --bg --name "Gossamr: CA-412 builder" --worktree &lt;slug&gt; \
+       --mcp-config &lt;app data&gt;/agents/&lt;agent id&gt;.json \
+       --allowedTools mcp__gossamr__report,mcp__gossamr__ask,mcp__gossamr__read_workstream,mcp__gossamr__read_ticket \
+       --append-system-prompt &lt;base brief&gt; -- &lt;Pip's brief&gt;</code></pre>
+  <p style="margin-top:14px">The agent runs with your own permission mode, settings, hooks, CLAUDE.md, MCP servers and model. The only allow rule Gossamr adds is for its own four tools, so a call to report never turns into a permission prompt. <code>--allowedTools</code> works together with <code>--bg</code>, and resuming the session in place keeps it (<code>docs/agents-cli-findings.md:147</code>).</p>
+  <p><span class="pill cut">goes</span> These go:</p>
+  <ul>
+    <li>the read-only regime: <code>dontAsk</code> mode, empty <code>--setting-sources</code>, <code>--strict-mcp-config</code>, the exact allow list and the deny list of about 60 rules;</li>
+    <li>the pushing switch;</li>
+    <li>the per-kind lockdowns.</li>
+  </ul>
+  <p><span class="pill keep">stays</span> These stay, because the harness needs them and each was checked against the real CLI (<code>docs/agents-cli-findings.md</code>):</p>
+  <ul>
+    <li><strong>Shell environment.</strong> Gossamr captures your login-shell environment once, because an app launched from the Dock doesn't see your PATH. The shared <code>--bg</code> daemon takes its environment from the first launch.</li>
+    <li><strong>Token file.</strong> The MCP address and token go in a per-agent config file that only you can read (0600). The daemon is shared, so an environment variable set at launch can't reach the session.</li>
+    <li><strong>Resume.</strong> Use <code>claude --bg --resume &lt;session id&gt; -- &lt;message&gt;</code> with no other flag, at least 5 s after stop, and check the id that comes back. Any extra flag, or a resume that comes too soon, starts a copy of the session.</li>
+    <li><strong>Untrusted folders.</strong> Gossamr detects <code>Workspace not trusted</code> at launch and offers <strong>Open in Terminal</strong>, which runs <code>claude</code> in the clone so you can accept Claude's own trust prompt. The pre-check that reads <code>.claude.json</code> goes, along with the amber preflight row.</li>
+    <li><strong>Refused permission modes.</strong> <code>--bg</code> refuses to launch in <code>auto</code> mode unless you have opted in, or in <code>bypassPermissions</code> mode unless you have accepted it. The launch then fails with Claude's own message and the same Terminal fix.</li>
+    <li><strong>Cleanup and git.</strong> <code>claude rm</code> is never forced. Gossamr's own git calls run with hooks off, a timeout and no prompts.</li>
+    <li><strong>Finding a clone.</strong> Gossamr looks in <code>~/Code</code>, <code>~/Developer</code> and <code>~/src</code> for a clone whose origin matches the repo. If it finds several or none, you pick one, or click <strong>Clone it</strong> on the workstream. Pip can't choose a clone path.</li>
+  </ul>
+
+  <h3>The agent's side of the MCP server</h3>
+  <p>The second server, <code>run-report</code>, merges into the single <code>gossamr</code> server. The merged server keeps what lets <code>run-report</code> survive app restarts, which the current <code>gossamr</code> server lacks: today it binds port 0 and keeps its tokens in memory (<code>agent/mcp.rs:94-110</code>). The merged server has:</p>
+  <ul>
+    <li>a remembered port that it binds again at each start;</li>
+    <li>agent tokens stored as hashes in the account database, revoked when the agent reaches done, failed or stopped;</li>
+    <li>two kinds of token. Pip's token lasts one turn and reaches Pip's tools. An agent's token reaches only that agent's four tools.</li>
+  </ul>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Agent tool</th><th>Purpose</th></tr></thead>
+    <tbody>
+      <tr><td><code>report(status, summary, body?, reviewed_sha?)</code></td><td><code>status</code> is done, blocked or question. <code>summary</code> is one line. <code>body</code> is Markdown: a plan, findings, or a review with <code>file:line</code> references. A reviewer passes the SHA it reviewed.</td></tr>
+      <tr><td><code>ask(question)</code></td><td>Waits a fixed time for Pip, or you through Pip, to answer. If the time runs out, it tells the agent to end its turn with the question, and the answer arrives later by resume.</td></tr>
+      <tr><td><code>read_workstream()</code></td><td>The ticket text, Pip's notes, and the reports of earlier agents in the workstream. This is how a builder reads the plan, and how a reviewer reads the builder's account.</td></tr>
+      <tr><td><code>read_ticket(key)</code></td><td>Cached text of a linked ticket, fenced off as data</td></tr>
+    </tbody>
+  </table></div>
+  <p>The report stays in its own <code>run_reports</code> table. The tracker rewrites a run's record on every poll, so a report stored there could be lost (<code>db/schema.rs:216-218</code>).</p>
+  <p>The heading parser goes (<code>runs/result.rs</code>, 1,138 lines). If an agent ends without calling <code>report</code>, its last message in the transcript becomes the summary, and Pip is told the agent didn't report. That fallback is the second result channel.</p>
+  <div class="note"><p>Agent tokens keep well-behaved agents in their lane. They are not a security boundary. Agents run as the same macOS user, so an agent can read other agents' config files, the account database, and Pip's token from Pip's process. Section 10 covers what that means.</p></div>
+
+  <h3>Permission prompts and questions</h3>
+  <p>Nothing outside a <code>--bg</code> session can answer its permission prompt. <code>--permission-prompt-tool</code> works only with <code>--print</code>, which <code>--bg</code> rejects. Any flag on resume starts a copy of the session.</p>
+  <ul>
+    <li><strong>Permission prompt.</strong> The agent shows as needs-you, with the command Claude asked about. One button, <strong>Open in Terminal</strong>, runs <code>claude attach &lt;id&gt;</code> so you can answer Claude's own prompt.
+      <ul>
+        <li>Gossamr keeps the choice between Terminal and iTerm for this button.</li>
+        <li>These go: the classifier in <code>runs/permission.rs</code> with its TypeScript copy and fixtures, Allow-once-in-Terminal with its explainer, and deny-by-stop-and-resume.</li>
+      </ul>
+    </li>
+    <li><strong>Question.</strong> The agent calls <code>ask</code>. Pip answers from what it knows, or calls <code>ask_person</code>. If the answer comes quickly, the agent carries on in the same turn. If not, it ends its turn with the question, and <code>message_agent</code> resumes it later.</li>
+  </ul>
+  <p>If you want fewer prompts, change your own Claude Code default mode. Gossamr adds no setting for this.</p>
+
+  <h3>States</h3>
+  <p>All ten stored run states stay:</p>
+  <ul>
+    <li><code>recover()</code> uses Launching to adopt or fail a run after a restart (<code>runs/service.rs:630-640</code>).</li>
+    <li>Unknown marks a session that has been lost.</li>
+  </ul>
+  <p>The UI shows six:</p>
+  <ul>
+    <li>queued;</li>
+    <li>working, which covers launching too;</li>
+    <li>needs you;</li>
+    <li>done;</li>
+    <li>failed, which covers unknown once the recovery window has passed;</li>
+    <li>stopped.</li>
+  </ul>
+  <p>The mapping from <code>claude agents --json</code> (<code>runs/state.rs</code>) stays. It has been checked against the real CLI, and it is the only source of truth for state.</p>
+</section>
+
+<section id="drafts">
+  <h2><span class="n">6</span>Drafts: the one gate</h2>
+  <p>Every write Gossamr makes to Jira or GitHub stays a draft you approve. These writes are public, other people read them, and Pip reads untrusted text, so approval is worth the extra step here. Starting, messaging and stopping agents are no longer drafts.</p>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Today</th><th>After</th></tr></thead>
+    <tbody>
+      <tr><td>11 intent kinds, including StartRun, FollowUp and RunAnswer</td><td>8 write kinds: comment, transition, create, update fields, rewrite, link, subtasks, GitHub review. Stored StartRun, FollowUp and RunAnswer drafts are retired by a migration.</td></tr>
+      <tr><td>6 <code>auto_draft_*</code> functions run when a run finishes</td><td>Pip drafts from the agent's report when it is woken</td></tr>
+      <tr><td>About 15 supersession rules</td><td>One rule: a newer pending draft of the same kind on the same target replaces the older one, unless you edited the older one</td></tr>
+      <tr><td>The plan goes in as a comment, a description section or a triage section, each with fallbacks</td><td>Pip drafts a comment, plus a description rewrite when it wants the plan in the ticket. The <code>Gossamr Plan</code> expand helper stays, for formatting that rewrite.</td></tr>
+      <tr><td>Digest-bound approval for run starts</td><td><span class="pill cut">goes</span> with the run-start drafts</td></tr>
+      <tr><td>Basis snapshot: a rewrite is refused if the ticket changed in Jira since the draft</td><td><span class="pill keep">stays</span></td></tr>
+      <tr><td>GitHub review built from structured findings</td><td><code>draft(github_review)</code> needs the reviewer's <code>reviewed_sha</code> and the agent id. Each inline comment is checked against the diff at that SHA (<code>codehost/diff::commentable</code>). A comment that doesn't fit the diff moves into the summary.</td></tr>
+      <tr><td>Comment reviews only, posted on approval and checked before posting so a review isn't posted twice</td><td><span class="pill keep">stays</span>, including "Post again" for when an earlier post can't be found. The token pre-check store goes.</td></tr>
+      <tr><td>Pause on risky text (secrets, @everyone)</td><td><span class="pill keep">stays</span>, with one sentence instead of quoted lines</td></tr>
+    </tbody>
+  </table></div>
+  <p>The draft card becomes one component. It shows the target and what will change, with four keys: Approve <code>a</code>, Edit <code>e</code>, Skip <code>s</code>, and Ask Pip. The review card keeps its per-line comments on the diff.</p>
+</section>
+
+<section id="ui">
+  <h2><span class="n">7</span>The UI after</h2>
+  <h3>Screens</h3>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Screen</th><th>Contents</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Inbox</strong></td><td>Mentions, comments, status changes and assignment changes on watched tickets. This is today's activity feed cut down to one list with one filter. It is daily Jira work, and the reason Gossamr started.</td></tr>
+      <tr><td><strong>Board and List</strong></td><td>Your Jira work, and later Linear, with one filter row. Dragging a card drafts a transition.</td></tr>
+      <tr><td><strong>Peek</strong></td><td>The ticket with its comments, composer, and PR and check status, plus <strong>Ask Pip</strong>, which opens Pip with the ticket attached</td></tr>
+      <tr><td><strong>Work</strong></td><td>Workstreams, each with its agents inside it. An agent row shows the state, role and last message, opens the agent's report, and has Open in Terminal and Stop. One filter: <strong>Needs you</strong>. One status word per workstream: needs you, running, failed, done or idle.</td></tr>
+      <tr><td><strong>Pip pane</strong> (<code>⌘J</code>, everywhere)</td><td>The conversation, either General or the open workstream, with draft cards inline and a strip of the workstream's agents</td></tr>
+      <tr><td><strong>Settings</strong></td><td>Six settings (Section 7.3)</td></tr>
+    </tbody>
+  </table></div>
+  <p><strong>Needs you</strong> holds exactly these:</p>
+  <ul>
+    <li>an agent that needs you (a question, a permission prompt or a sign-in);</li>
+    <li>a failed agent;</li>
+    <li>a pending draft;</li>
+    <li>a "Pip asks you" question;</li>
+    <li>a paused workstream.</li>
+  </ul>
+  <p>Notifications fire for new items in Needs you, and for nothing else.</p>
+
+  <h3>What goes from the UI</h3>
+  <ul>
+    <li><strong>Screens:</strong> the classic inbox and its store; Map and Age (Decision 5); Start my day and Plan my week; "What Jira saw from me" (Pip answers that from the audit log); the in-app PR diff viewer (open the PR in GitHub instead; review drafts keep their own diff).</li>
+    <li><strong>Ways to start agents:</strong> the run setup sheet; inline start; the six-kind ticket menu; the agent verbs and step modes in the palette; slash commands in the composer; preflight; the prompt editor.</li>
+    <li><strong>Autonomy controls:</strong> Advise/Manage, Hold all and Automatic steps; budgets; the tripwire and escalation cards.</li>
+    <li><strong>Ticket checks:</strong> the readiness and clarity checks, with their learning table; reporter-wait tracking; cobwebs.</li>
+    <li><strong>Teaching:</strong> nudge bubbles and canned chips; the 22-term glossary; three one-time explainers.</li>
+    <li><strong>Options:</strong> the Agents on/off switch; agents view and grouping options; column reordering; tab windowing; watch modes, depth and the grace period.</li>
+  </ul>
+
+  <h3>Settings after</h3>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Setting</th><th>Why it stays</th></tr></thead>
+    <tbody>
+      <tr><td>Jira and GitHub connections</td><td>Required</td></tr>
+      <tr><td>Watched projects and repos (add, remove)</td><td>Decides what syncs and what Pip can read</td></tr>
+      <tr><td>Agents at once (default 3)</td><td>Protects the machine and the subscription</td></tr>
+      <tr><td>Terminal app (Terminal or iTerm)</td><td>Open in Terminal is how you answer permission prompts and trust prompts</td></tr>
+      <tr><td>Notifications on or off</td><td>People need to be able to silence them</td></tr>
+      <tr><td>Theme</td><td>Costs little and people expect it</td></tr>
+    </tbody>
+  </table></div>
+  <p><span class="pill cut">goes</span> These settings go:</p>
+  <ul>
+    <li>wall-clock and token limits;</li>
+    <li>draft-on-finish and report-result;</li>
+    <li>the notification digest mode and its interval;</li>
+    <li>the six auto-start switches, and Pip turns per day;</li>
+    <li>start on Agents, and the agents view and grouping options;</li>
+    <li>learning for unclear tickets;</li>
+    <li>the Autopilot placeholder;</li>
+    <li>the classic Interface option.</li>
+  </ul>
+  <p>GitHub sign-in keeps one route: importing your <code>gh</code> CLI login. Agents use <code>gh</code>'s own login, not Gossamr's. The Atlassian setup screen stays until Decision 7 is settled.</p>
+
+  <h3>Copy</h3>
+  <p>Each empty state gets one line. There are no explainers and no glossary. Two safety facts are stated once, in Settings:</p>
+  <ul>
+    <li>Gossamr posts nothing to Jira or GitHub until you approve it.</li>
+    <li>Agents run with your own Claude Code settings, so they can push branches and use your own tools.</li>
+  </ul>
+  <p>Pip explains anything else when you ask.</p>
+</section>
+
+<section id="backend">
+  <h2><span class="n">8</span>Backend surface after</h2>
+  <h3>Commands</h3>
+  <p>About 35 commands, down from 142:</p>
+  <ul>
+    <li>auth and connections;</li>
+    <li>cache reads, activity and sync;</li>
+    <li>the watch list;</li>
+    <li>drafts: list, edit, approve, skip;</li>
+    <li>Pip: ask, cancel, turns;</li>
+    <li>workstreams: list, read, close, reopen, resume, choose clone, clone;</li>
+    <li>agents: list, read, stop, stop all, open in Terminal, clean up, archive;</li>
+    <li>settings.</li>
+  </ul>
+
+  <h3>Events</h3>
+  <p>Four events, down from 11:</p>
+  <ul>
+    <li><code>changed { topic }</code> replaces the seven events that carry only a connection id;</li>
+    <li>the streamed <code>pip</code> event;</li>
+    <li><code>snapshot</code>, which drives the Dock badge;</li>
+    <li><code>open-run</code>, which brings the window forward when you click a notification.</li>
+  </ul>
+
+  <h3>Data</h3>
+  <ul>
+    <li><strong><code>runs</code>:</strong> today <code>runs.proposal_id</code> is <code>NOT NULL</code> with a unique index, and that index is what stops a run launching twice (<code>db/schema.rs:189-205</code>). One migration rebuilds the table with:
+      <ul>
+        <li>a nullable <code>proposal_id</code>;</li>
+        <li>a unique <code>start_key</code>;</li>
+        <li><code>kind</code> replaced by <code>role</code>;</li>
+        <li>the removed fields dropped from the <code>data</code> JSON.</li>
+      </ul>
+    </li>
+    <li><strong>Removed enum variants:</strong> stored drafts with removed intents are retired. Old <code>RunKind</code> values stay readable as serde aliases that map to role labels.</li>
+    <li><strong><code>workstreams</code>:</strong> loses the mode, rules, budget and spend columns. One <code>paused_reason</code> column stays.</li>
+    <li><strong><code>run_reports</code>:</strong> stays as its own table and gains <code>reviewed_sha</code>.</li>
+    <li><strong>Migrations:</strong> the 13 existing steps stay, and new steps are added after them.</li>
+  </ul>
+
+  <h3>Abstractions removed</h3>
+  <ul>
+    <li><code>AgentProvider</code>, <code>AgentCaps</code> and the 2,262-line conformance suite, which serve a single provider;</li>
+    <li>the unused <code>AuthMethod</code> variants;</li>
+    <li>the <code>SupervisorCore</code> traits;</li>
+    <li>the unused <code>WorkTracker</code> and <code>CodeHost</code> methods behind <code>#![allow(dead_code)]</code>.</li>
+  </ul>
+
+  <h3>Kept, and opened up for Linear</h3>
+  <p>The <code>WorkTracker</code> trait stays, with three changes:</p>
+  <ul>
+    <li>its Jira-only parts (<code>Scope { cloud_id }</code>, <code>Connection::jira()</code>, and the <code>CachedTicket</code> dispatch with its <code>unreachable!</code> arms) move into the Jira adapter;</li>
+    <li>Gossamr's internal intents come out of the tracker's write type;</li>
+    <li>each signed-in account keeps its own database. A Linear connection adds one more database, and Pip reads across all of them.</li>
+  </ul>
+</section>
+
+<section id="goes">
+  <h2><span class="n">9</span>What goes, by area</h2>
+  <p>The "Lines today" figures come from <code>wc -l</code> and the slice reports, and include tests. The "After" column and the last row are estimates, not measurements. The bar shows the share of each area that stays.</p>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Area</th><th class="num">Lines today</th><th class="num">After</th><th>Main cuts</th></tr></thead>
+    <tbody>
+      <tr><td>Classic inbox</td><td class="num">2,300</td><td class="num">0<span class="bar"><i style="width:0%"></i></span></td><td>The whole UI. <code>legacy.rs</code> stays until old installs have moved.</td></tr>
+      <tr><td>Supervisor, auto-start, workstream governance</td><td class="num">8,600</td><td class="num">~1,800<span class="bar"><i style="width:21%"></i></span></td><td>Modes, rules, budgets, holds, tripwires, readiness and reporter wait go. The wake ledger and pause stay.</td></tr>
+      <tr><td>Run launch gates and policy</td><td class="num">7,000</td><td class="num">~2,200<span class="bar"><i style="width:31%"></i></span></td><td>The read-only regime, the classifier, preflight, limits and the continuation heuristics go. Trust detection, clone finding and Clone it stay.</td></tr>
+      <tr><td>Run results and resume paths</td><td class="num">5,500</td><td class="num">~2,500<span class="bar"><i style="width:45%"></i></span></td><td>The heading parser goes. Four resume paths become one. The two MCP servers merge on a stable port, and <code>ask</code> is added.</td></tr>
+      <tr><td>Conformance suite and provider trait</td><td class="num">2,300</td><td class="num">~150<span class="bar"><i style="width:7%"></i></span></td><td>One smoke test against the fake <code>claude</code> replaces the suite</td></tr>
+      <tr><td>Run and agent UI</td><td class="num">10,000</td><td class="num">~2,800<span class="bar"><i style="width:28%"></i></span></td><td>The setup sheet, inline start, menus, step rail, permission UI and explainers</td></tr>
+      <tr><td>Heuristic UI</td><td class="num">4,800</td><td class="num">0<span class="bar"><i style="width:0%"></i></span></td><td>Start my day and Plan my week, clarity checks, nudges, chips, cobwebs and the glossary</td></tr>
+      <tr><td>Extra views</td><td class="num">3,100</td><td class="num">~900<span class="bar"><i style="width:29%"></i></span></td><td>Map, Age, the PR viewer and "What Jira saw" go. The Inbox list is kept from the activity feed.</td></tr>
+      <tr><td>Drafts (Rust and UI)</td><td class="num">9,000</td><td class="num">~4,800<span class="bar"><i style="width:53%"></i></span></td><td>Intent kinds, supersession rules, auto-drafts, and plan and triage sections</td></tr>
+      <tr><td>Mock backend and its tests</td><td class="num">18,000</td><td class="num">~4,000<span class="bar"><i style="width:22%"></i></span></td><td>The copies of Rust rules go. A thin scripted sample backend stays.</td></tr>
+      <tr><td>Parity fixtures</td><td class="num">10,100</td><td class="num">~1,500<span class="bar"><i style="width:15%"></i></span></td><td>Only the filter and diff fixtures stay</td></tr>
+      <tr><td>E2E</td><td class="num">11,700</td><td class="num">~4,000<span class="bar"><i style="width:34%"></i></span></td><td>Specs named after rounds are replaced by about 10 suites, one per feature</td></tr>
+      <tr><td>Everything else</td><td class="num">~115,000</td><td class="num">~95,000<span class="bar"><i style="width:83%"></i></span></td><td>Dead trait methods, copy, watch modes, events, and merged commands (estimate)</td></tr>
+      <tr class="total"><td>Total</td><td class="num">~207,000</td><td class="num">~120,000<span class="bar"><i style="width:58%"></i></span></td><td>About 40% goes</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section id="giveup">
+  <h2><span class="n">10</span>What we give up</h2>
+  <ol class="risks">
+    <li><strong>The draft gate covers only Gossamr's own writes.</strong>
+      <p>Agents now run with your own tools. A builder pushes branches and opens PRs with <code>git</code> and <code>gh</code>. An agent that has your Atlassian or GitHub MCP servers could write to Jira or GitHub directly. The brief tells agents to report to Gossamr instead, but that is a request, not a lock. Decision 2 settles whether agents get your MCP servers at all.</p></li>
+    <li><strong>Agents are no longer kept read-only.</strong>
+      <p>A planner or reviewer could write if its brief, or text injected into a ticket, told it to. Today <code>dontAsk</code> mode and empty setting sources block that. What still limits the damage:</p>
+      <ul>
+        <li>ticket text stays fenced off as data;</li>
+        <li>every agent works in its own worktree;</li>
+        <li>a reviewer's brief says to change nothing.</li>
+      </ul></li>
+    <li><strong>Push and PR rules become requests.</strong>
+      <p>Today, in a mode that asks for permission, Gossamr's classifier refuses:</p>
+      <ul>
+        <li>a push to anything but the agent's own branch;</li>
+        <li>a PR that is not a draft;</li>
+        <li><code>gh pr merge</code>.</li>
+      </ul>
+      <p>After this change they are instructions in the brief. In a mode that asks, Claude Code's own prompt still catches them. In <code>bypassPermissions</code> mode, nothing does.</p></li>
+    <li><strong>Reviewing a PR runs that PR's Claude config.</strong>
+      <p>When a reviewer checks out a PR branch, it loads that branch's <code>.claude/settings.json</code> hooks and its CLAUDE.md, with your permissions. Today's empty setting sources prevent that. The same-repo rule stays, so a PR from a fork is never checked out. A teammate's branch, though, gets the same trust as your own repo.</p></li>
+    <li><strong>Pip can start agents on its own judgement, even in a wake turn while you are away.</strong>
+      <p>Text injected into a ticket could try to talk Pip into starting an agent with a hostile brief. What still limits it:</p>
+      <ul>
+        <li>Pip treats ticket and agent text as data;</li>
+        <li>Pip tells you whenever it starts an agent in a wake turn;</li>
+        <li>those starts show at once on the Work screen, with Stop;</li>
+        <li>the daily limits pause a workstream that runs away;</li>
+        <li>Pip itself has no file, shell or network access.</li>
+      </ul>
+      <p>None of these is a lock.</p></li>
+    <li><strong>Agent tokens don't separate local processes.</strong>
+      <p>Agents run as the same macOS user. A hostile agent could:</p>
+      <ul>
+        <li>read other agents' token files and the account database;</li>
+        <li>take Pip's token for the current turn from the process list (<code>ps eww</code>), then call <code>start_agent</code> or <code>draft</code> with it until the turn ends.</li>
+      </ul>
+      <p>What still holds:</p>
+      <ul>
+        <li>a draft still needs your key;</li>
+        <li>Pip's tokens are revoked when each turn ends;</li>
+        <li>Gossamr treats its database as readable by any agent.</li>
+      </ul></li>
+    <li><strong>Chains depend on Pip's judgement, not rules.</strong>
+      <p>The fixed table (Investigate → Triage → Plan → Build → Review) always fired the same way. Pip may skip or reorder steps. That is the point, but a weak Pip turn can stall a workstream. The safety net is the wake on every state change, plus the "Pip asks you" item.</p></li>
+    <li><strong>Cost is only loosely bounded.</strong>
+      <p>The fixed daily limits cap wakes and Pip turns. Nothing caps a single long agent. It runs until it finishes, until you stop it, or until Claude's own limits stop it.</p></li>
+    <li><strong>Permission prompts still need Terminal.</strong>
+      <p>The current Claude Code CLI gives Gossamr no way to answer a prompt from inside the app.</p></li>
+  </ol>
+</section>
+
+<section id="keep">
+  <h2><span class="n">11</span>What we keep on purpose</h2>
+  <ul>
+    <li><strong>The draft gate.</strong> Every write Gossamr makes to Jira or GitHub is a draft you approve. One executor applies it. Rewrites keep the basis check, and reviews keep the check before posting.</li>
+    <li><strong>Secrets.</strong> They live only in the Keychain, in one item that is read once.</li>
+    <li><strong>The MCP server.</strong> It listens only on the local machine and checks every request. It binds a stable port and revokes agent tokens by agent state.
+      <ul>
+        <li>Tokens are issued per session, compared in constant time, and stored as hashes.</li>
+        <li>Requests must pass Host and Origin checks.</li>
+      </ul>
+    </li>
+    <li><strong>Untrusted text.</strong> Ticket, PR and agent text is fenced off as data and cleaned before it is stored, shown or given to a model. Cleaning strips control, bidi and markup characters and redacts secrets.</li>
+    <li><strong>Pip's lockdown.</strong> Pip has no built-in tools.</li>
+    <li><strong>The wake ledger.</strong> Each (agent, state) pair wakes Pip at most once, across restarts.</li>
+    <li><strong>One launch per start key.</strong> The same start can't launch twice.</li>
+    <li><strong>PR checkouts.</strong> The same-repo check runs before a PR checkout, and the head SHA is pinned when the agent starts.</li>
+    <li><strong>Jira sessions.</strong> The scope check runs before every Jira request (<code>SiteChanged</code>). The single refresh lock stays for Atlassian tokens, which change at every refresh.</li>
+    <li><strong>Folder trust.</strong> Gossamr detects an untrusted folder, and you answer in Claude's own prompt.</li>
+    <li><strong>Cleanup and git.</strong> <code>claude rm</code> is never forced, and Gossamr's git calls run with hooks off.</li>
+    <li><strong>Recovery.</strong> The stored run states that <code>recover()</code> needs after a restart stay.</li>
+    <li><strong>Harness knowledge.</strong> The checked CLI facts in <code>docs/agents-cli-findings.md</code> stay, with the captured CLI fixtures that pin them.</li>
+  </ul>
+</section>
+
+<section id="order">
+  <h2><span class="n">12</span>Order of work</h2>
+  <p>Each step is one or a few PRs, and the app keeps working after each one.</p>
+  <div class="table-wrap"><table>
+    <thead><tr><th class="num">Step</th><th>What</th><th>Needs</th></tr></thead>
+    <tbody>
+      <tr><td class="num">0</td><td>Spikes (Section 14) and owner decisions (Section 13)</td><td>none</td></tr>
+      <tr><td class="num">1</td><td>Delete what nothing depends on:
+        <ul>
+          <li>the classic inbox and the <code>ui</code> pref;</li>
+          <li>the Agents on/off flag (agents are always on);</li>
+          <li>the Autopilot placeholder;</li>
+          <li>the provider trait and the conformance suite;</li>
+          <li>the glossary and explainers;</li>
+          <li>nudges and chips;</li>
+          <li>cobwebs;</li>
+          <li>Start my day and Plan my week.</li>
+        </ul></td><td>none</td></tr>
+      <tr><td class="num">2</td><td>One mode. Remove:
+        <ul>
+          <li>Advise/Manage and the Assistant/Manager split;</li>
+          <li>the auto-start rules;</li>
+          <li>budgets, holds and tripwires;</li>
+          <li>readiness, clarity and reporter wait.</li>
+        </ul>
+        The supervisor becomes the waker. The wake ledger, the daily limits and <code>paused_reason</code> stay.</td><td>1</td></tr>
+      <tr><td class="num">3</td><td>One MCP server:
+        <ul>
+          <li>merge <code>run-report</code> into <code>gossamr</code>, with a stable port and stored agent tokens;</li>
+          <li>add the four agent tools, and <code>--allowedTools</code> for them;</li>
+          <li>turn <code>report</code> on for every launch.</li>
+        </ul></td><td>0</td></tr>
+      <tr><td class="num">4</td><td>Pip drives agents.
+        <ul>
+          <li>Add <code>start_agent</code> (with the start key and the <code>runs</code> rebuild), <code>message_agent</code>, <code>stop_agent</code> and <code>ask_person</code>.</li>
+          <li>Remove the StartRun, FollowUp and RunAnswer drafts, the setup sheet, inline start, the ticket menu, the palette and composer verbs, digest approval and preflight. Ask Pip on the ticket replaces them.</li>
+        </ul></td><td>2, 3</td></tr>
+      <tr><td class="num">5</td><td>Roles replace kinds.
+        <ul>
+          <li>Drop the six templates, the per-kind fields, the read-only regime, the classifier and the limits.</li>
+          <li>Add the base brief with the checkout and PR steps.</li>
+        </ul></td><td>4</td></tr>
+      <tr><td class="num">6</td><td>Drafts.
+        <ul>
+          <li>One card, eight kinds and one supersession rule. Pip drafts from reports.</li>
+          <li>Remove <code>auto_draft_*</code>, the heading parser, and the structured report fields that <code>inbox/review_drafts.rs</code> imports.</li>
+          <li>GitHub review drafts take <code>reviewed_sha</code>.</li>
+        </ul></td><td>5</td></tr>
+      <tr><td class="num">7</td><td>UI and settings:
+        <ul>
+          <li>the Inbox and Work screens, with one status word;</li>
+          <li>six settings and a copy pass;</li>
+          <li>one keyboard table, four events and the merged commands;</li>
+          <li>the screens settled by Decision 5.</li>
+        </ul></td><td>6</td></tr>
+      <tr><td class="num">8</td><td>Tests, mocks and docs:
+        <ul>
+          <li>delete parity fixtures and mock copies as their rules go;</li>
+          <li>replace the round-named e2e specs with feature suites;</li>
+          <li>replace the two design docs with one short product doc.</li>
+        </ul></td><td>alongside 1–7</td></tr>
+      <tr><td class="num">9</td><td>Linear: move the Jira-only auth and cache types into the Jira adapter, then add a Linear adapter.</td><td>7</td></tr>
+    </tbody>
+  </table></div>
+  <div class="note"><p>Between steps 2 and 4, no chain moves on by itself. Pip drafts each next agent when it is woken, and you approve each one as a StartRun draft, as Advise mode works today. That is acceptable for the length of two PRs.</p></div>
+</section>
+
+<section id="decisions">
+  <h2><span class="n">13</span>Decisions for the owner</h2>
+  <ol class="decisions">
+    <li><h4>Approval for Jira and GitHub writes</h4>
+      <p><span class="rec">Recommended:</span> keep approval per draft, one key each.</p>
+      <p>The alternative is that Pip applies a write after you say yes in chat. That removes the card, but leaves a model to decide what your "yes" means.</p></li>
+    <li><h4>Agents' MCP servers</h4>
+      <p><span class="rec">Recommended:</span> agents get your own MCP servers, as any Claude Code session would, and their brief sends Jira and GitHub updates through Gossamr.</p>
+      <p>This is also how Pip reaches tools beyond Jira and GitHub, such as Slack or Confluence: it starts an agent that has them.</p>
+      <p>The alternative is <code>--strict-mcp-config</code> with only the <code>gossamr</code> server:</p>
+      <ul>
+        <li>The draft gate then covers everything except <code>git</code> and <code>gh</code>.</li>
+        <li>Agents lose your other tools.</li>
+      </ul></li>
+    <li><h4>Pip's own lockdown</h4>
+      <p><span class="rec">Recommended:</span> keep it: no built-in tools, only MCP.</p></li>
+    <li><h4>Unrestricted agents</h4>
+      <p><span class="rec">Recommended:</span> yes, accepting items 2 to 4 in Section 10. Even so, never recommend <code>bypassPermissions</code>.</p></li>
+    <li><h4>Screens</h4>
+      <p><span class="rec">Recommended:</span> keep Inbox, Board and List. Remove Map, Age, "What Jira saw" and the PR viewer.</p></li>
+    <li><h4>Pip's model</h4>
+      <p><span class="rec">Recommended:</span> keep an explicit model setting for Pip.</p>
+      <p>Pip reads none of your settings, so it can only follow your default model if Gossamr reads that one value and passes it as <code>--model</code>.</p></li>
+    <li><h4>Atlassian sign-in</h4>
+      <p>3LO sign-in needs a client secret (<code>auth/atlassian.rs:1</code>). A bundled client means shipping a secret that can be extracted, and using one Atlassian app for everyone.</p>
+      <p><span class="rec">Recommended:</span> bundle the client for internal builds, and keep the setup screen for everyone else.</p></li>
+  </ol>
+</section>
+
+<section id="spikes">
+  <h2><span class="n">14</span>Spikes before step 3</h2>
+  <ol>
+    <li><strong>MCP allow rule.</strong> Does <code>--allowedTools mcp__gossamr__…</code> stop permission prompts for the four agent tools under each mode you might use: default, <code>acceptEdits</code> and <code>auto</code>?</li>
+    <li><strong>Resume keeps the MCP config.</strong> Does a <code>--bg --resume</code> with no flags keep the <code>--mcp-config</code>?</li>
+    <li><strong>Reconnect after restart.</strong> After the app restarts on the same port, does a running session reconnect? Or does its next tool call fail, and if so, does a resume fix it?</li>
+    <li><strong>Tool-call timeout.</strong> How long will Claude Code wait on an MCP tool call before giving up? The answer sets the <code>ask</code> timeout.</li>
+    <li><strong>Resume copies.</strong> With the 5 s wait and the id check, how often does a resume still start a copy? If it never does, <code>runs/continuation.rs</code> can go with nothing to replace it.</li>
+  </ol>
+</section>
+
+</main>
+
+<footer>
+  Source: <code>docs/simplification-proposal.md</code> in alfhen/jira-inbox. Line counts are from <code>wc -l</code> over tracked files on 25 October 2026. Harness behaviour is from <code>docs/agents-cli-findings.md</code>.
+</footer>
+
+</div>
+</body>
+</html>
