@@ -1,4 +1,3 @@
-import { isTauri } from "@tauri-apps/api/core";
 import { create } from "zustand";
 import type { Collapsed, PeekSectionId } from "./peekLogic";
 import { PEEK_DEFAULT, PIP_DEFAULT, storedWidth } from "./paneSizes";
@@ -13,15 +12,10 @@ export const THEMES = ["auto", "light", "dark"] as const;
 export type ThemeMode = (typeof THEMES)[number];
 export const THEME_LABEL: Record<ThemeMode, string> = { auto: "Match system", light: "Light", dark: "Dark" };
 
-export type UiMode = "classic" | "workspace";
-
 export const AGENTS_VIEWS = ["cards", "list"] as const;
 export type AgentsViewMode = (typeof AGENTS_VIEWS)[number];
 
 interface Prefs {
-  ui: UiMode;
-  /** Whether the person picked `ui` themselves, as opposed to it being the default. */
-  uiChosen: boolean;
   theme: ThemeMode;
   pipOpen: boolean;
   peekWidth: number;
@@ -48,7 +42,6 @@ interface Prefs {
   weekPlans: WeekPlans;
   /** Open on Agents rather than the workspace, while Agents are on. On until the person turns it off. */
   startOnAgents: boolean;
-  setUi(ui: UiMode): void;
   setTheme(theme: ThemeMode): void;
   setPipOpen(open: boolean): void;
   setPeekWidth(width: number): void;
@@ -76,12 +69,9 @@ interface Prefs {
 
 const KEY = "gossamr-prefs";
 
-export function loadPrefs(): Pick<Prefs, "ui" | "uiChosen" | "theme" | "pipOpen" | "peekWidth" | "pipWidth" | "columnOrder" | "agentsView" | "agentsGroup" | "agentsIntroSeen" | "pipOrientationSeen" | "permissionExplainerSeen" | "startOnAgents" | "clarityLearning" | "weekPlans"> {
+export function loadPrefs(): Pick<Prefs, "theme" | "pipOpen" | "peekWidth" | "pipWidth" | "columnOrder" | "agentsView" | "agentsGroup" | "agentsIntroSeen" | "pipOrientationSeen" | "permissionExplainerSeen" | "startOnAgents" | "clarityLearning" | "weekPlans"> {
   const raw = readStored(KEY) as Partial<Record<keyof Prefs, unknown>> | null;
   return {
-    // Installs from before the workspace was the default stored "classic" without anyone choosing it.
-    ui: raw?.uiChosen === true && raw.ui === "classic" ? "classic" : "workspace",
-    uiChosen: raw?.uiChosen === true,
     theme: THEMES.find((t) => t === raw?.theme) ?? "auto",
     pipOpen: false,
     peekWidth: storedWidth(raw?.peekWidth, PEEK_DEFAULT),
@@ -105,7 +95,6 @@ export const usePrefs = create<Prefs>((set, get) => ({
   paletteOpen: false,
   paletteSeed: "",
   peekCollapsed: {},
-  setUi: (ui) => set({ ui, uiChosen: true }),
   setTheme: (theme) => set({ theme }),
   setPipOpen: (pipOpen) => set({ pipOpen }),
   setPeekWidth: (peekWidth) => set({ peekWidth }),
@@ -133,14 +122,9 @@ export const usePrefs = create<Prefs>((set, get) => ({
   resetClarityLearning: (project, gaps) => set((s) => ({ clarityLearning: forget(s.clarityLearning, project, gaps) })),
 }));
 
-usePrefs.subscribe(({ ui, uiChosen, theme, peekWidth, pipWidth, columnOrder, agentsView, agentsGroup, agentsIntroSeen, pipOrientationSeen, permissionExplainerSeen, startOnAgents, clarityLearning, weekPlans }) =>
-  writeStored(KEY, { ui, uiChosen, theme, peekWidth, pipWidth, columnOrder, agentsView, agentsGroupBy: agentsGroup, agentsIntroSeen, pipOrientationSeen, permissionExplainerSeen, startOnAgents, clarityLearning, weekPlans }),
+usePrefs.subscribe(({ theme, peekWidth, pipWidth, columnOrder, agentsView, agentsGroup, agentsIntroSeen, pipOrientationSeen, permissionExplainerSeen, startOnAgents, clarityLearning, weekPlans }) =>
+  writeStored(KEY, { theme, peekWidth, pipWidth, columnOrder, agentsView, agentsGroupBy: agentsGroup, agentsIntroSeen, pipOrientationSeen, permissionExplainerSeen, startOnAgents, clarityLearning, weekPlans }),
 );
-
-/** The browser build has no classic inbox to fall back to, so it always shows the workspace. */
-export const isWorkspaceUi = () => !isTauri() || usePrefs.getState().ui === "workspace";
-
-export const useWorkspaceUi = () => usePrefs((s) => !isTauri() || s.ui === "workspace");
 
 export function applyTheme(theme: ThemeMode, root: HTMLElement = document.documentElement) {
   if (theme === "auto") root.removeAttribute("data-theme");

@@ -34,17 +34,6 @@ export interface Attachment {
   size: number;
 }
 
-/** A file uploaded to a ticket. Without `mediaId` it can't be shown inline, so a comment names it instead. */
-export interface Uploaded {
-  id: string;
-  filename: string;
-  mimeType: string;
-  mediaId: string | null;
-  /** Pixel size, which Jira needs to show an image inline. */
-  width?: number;
-  height?: number;
-}
-
 export interface Comment {
   id: string;
   author: Person;
@@ -123,20 +112,8 @@ export interface Snapshot {
   events: InboxEvent[];
   watching: string[];
   lastSyncAt: string | null;
-  /** Things the user did that the ticket data doesn't show, such as transitions. Their comments are read from the tickets. */
-  activity?: MyAction[];
   /** The last sync's error message, cleared by the next successful sync. */
   syncError?: string | null;
-}
-
-export type ViewId = "inbox" | "waiting" | "watching" | "snoozed" | "done" | "work";
-
-export interface MyAction {
-  ticketKey: string;
-  at: string;
-  kind: "comment" | "transition" | "created";
-  /** The comment, or the transition as "From → To". */
-  text: string;
 }
 
 /* Connector-neutral model, mirroring src-tauri/src/domain. Names carry a `Work` prefix where they would clash with

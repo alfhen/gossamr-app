@@ -117,7 +117,7 @@
   }
 }
 
-/* Components written for the classic screens read the plain colour names; here they follow the workspace theme. */
+/* Components shared with the rest of the app read the plain colour names; here they follow the workspace theme. */
 .ws-legacy {
   --color-ink: var(--color-ws-ink);
   --color-ink-2: var(--color-ws-ink2);

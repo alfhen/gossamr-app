@@ -136,7 +136,7 @@ describe("through the mock backend", () => {
     expect((await backend.cacheContainers()).map((x) => x.key)).toContain("SUP");
     expect((await backend.cacheItem(itemRef("WEB-108")))?.title).toBe("Size guide modal");
     expect(await backend.cacheItem(itemRef("NOPE-1"))).toBeNull();
-    expect((await backend.cacheWorkflow(containerRef("WEB")))?.statuses).toHaveLength(5);
+    expect(backend.connector.workflow(containerRef("WEB"))?.statuses).toHaveLength(5);
     expect((await backend.cacheEvents(itemRef("SUP-12"))).length).toBeGreaterThan(0);
     expect((await backend.cachePeople()).map((p) => p.accountId)).toContain("klara");
     backend.connector.comment(itemRef("WEB-108"), "hi");

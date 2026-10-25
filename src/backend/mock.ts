@@ -4,7 +4,6 @@ import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { HELD_PERSON } from "../types";
 import type {
   ChangedFile,
-  AdfNode,
   AssignedElsewhere,
   BasisField,
   CacheChanged,
@@ -21,7 +20,6 @@ import type {
   WatchState,
   ConnectionInfo,
   Comment,
-  ContainerRef,
   Intent,
   EventKind,
   InboxEvent,
@@ -41,8 +39,6 @@ import type {
   Snapshot,
   Status,
   Ticket,
-  Transition,
-  Uploaded,
   WorkFilter,
   WorkItem,
   WorkstreamMode,
@@ -50,7 +46,7 @@ import type {
   WorkstreamRule,
   WorkstreamsChanged,
 } from "../types";
-import { fold, type Mention } from "../lib/mentions";
+import { fold } from "../lib/mentions";
 import { docFromText, docText } from "../lib/docs";
 import { ticketBlockText } from "./mockTicket";
 import { bodyChange, markdownOf } from "./mockMarkdown";
@@ -102,14 +98,6 @@ const S = {
   blocked: { name: "Blocked", category: "indeterminate" },
   done: { name: "Done", category: "done" },
 } satisfies Record<string, Status>;
-
-const WORKFLOW: Record<string, [keyof typeof S, string][]> = {
-  "To Do": [["prog", "Start progress"], ["blocked", "Block"]],
-  "In Progress": [["review", "Send to review"], ["blocked", "Block"], ["todo", "Stop progress"]],
-  "In Review": [["done", "Done"], ["prog", "Back to In Progress"]],
-  Blocked: [["prog", "Unblock"], ["todo", "Back to To Do"]],
-  Done: [["prog", "Reopen"]],
-};
 
 let seq = 1000;
 const id = () => String(++seq);
@@ -358,12 +346,6 @@ function sampleSnapshot(): Snapshot {
       { ...ev("mention", "CA-400", P.mette, 60 * 50, "@Alf can you confirm the 17 Oct go-live works for the CRM side?", false), doneAt: ago(60 * 49) },
     ],
     watching: ["CA-418", "CA-420", "CE-705", "CA-400"],
-    activity: [
-      { ticketKey: "CA-412", at: ago(60 * 46), kind: "transition", text: "To Do → In Progress" },
-      { ticketKey: "CA-409", at: ago(60 * 72), kind: "transition", text: "In Review → Done" },
-      { ticketKey: "CA-421", at: ago(60 * 70 + 30), kind: "created", text: "" },
-      { ticketKey: "CE-705", at: ago(60 * 96), kind: "transition", text: "In Progress → In Review" },
-    ],
     lastSyncAt: new Date().toISOString(),
   };
 }
@@ -374,20 +356,6 @@ const SIMULATED: [EventKind, string, keyof typeof P, string][] = [
 ];
 
 /** In-memory backend with sample data, used for `pnpm dev` in a browser and until a Jira site is connected. */
-/** A rough stand-in for the document Jira builds for a comment with files, so sample mode renders them the same way. */
-function withFiles(body: string, files: Uploaded[]): AdfNode {
-  const paragraphs: AdfNode[] = body
-    .split(/\n{2,}/)
-    .filter((p) => p.trim())
-    .map((p) => ({ type: "paragraph", content: [{ type: "text", text: p }] }));
-  const media = files.map<AdfNode>((f) =>
-    f.mimeType.startsWith("image/")
-      ? { type: "mediaSingle", content: [{ type: "media", attrs: { type: "file", id: f.mediaId, alt: f.filename } }] }
-      : { type: "paragraph", content: [{ type: "text", text: `📎 ${f.filename}` }] },
-  );
-  return { type: "doc", content: [...paragraphs, ...media] };
-}
-
 export class MockBackend implements Backend {
   readonly kind = "mock" as const;
   private snap = sampleSnapshot();
@@ -395,7 +363,7 @@ export class MockBackend implements Backend {
   private cacheListeners = new Set<(c: CacheChanged) => void>();
   private simulated = 0;
 
-  /** The multi-project tracker behind the cache reads; the snapshot above keeps serving the current screens. */
+  /** The multi-project tracker behind the cache reads. */
   readonly connector: MockConnector;
   /** The sample GitHub connection: signed out until a sign-in command runs, unless `githubRepos` is set. */
   readonly github: MockGithub;
@@ -1273,10 +1241,6 @@ export class MockBackend implements Backend {
     return () => {};
   }
 
-  async cacheWorkflow(container: ContainerRef) {
-    return this.connector.workflow(container);
-  }
-
   async cacheEvents(ref: ItemRef) {
     return this.connector.eventsFor(ref);
   }
@@ -1412,11 +1376,6 @@ export class MockBackend implements Backend {
     return e;
   }
 
-  async transitions(key: string): Promise<Transition[]> {
-    const t = this.snap.tickets[key];
-    return (WORKFLOW[t.status.name] ?? []).map(([to, name]) => ({ id: `${key}:${to}`, name, to: S[to] }));
-  }
-
   async transition(key: string, transitionId: string) {
     const to = S[transitionId.split(":")[1] as keyof typeof S];
     if (!to) throw new Error(`Unknown transition ${transitionId}`);
@@ -1426,37 +1385,10 @@ export class MockBackend implements Backend {
     });
   }
 
-  async comment(key: string, body: string, mentions: Mention[] = [], files: Uploaded[] = []) {
-    const doc = files.length ? withFiles(body, files) : undefined;
+  async comment(key: string, body: string) {
     this.update((s) => {
-      s.tickets[key].comments.push({ id: id(), author: s.me, created: new Date().toISOString(), body, mentioned: mentions, doc });
+      s.tickets[key].comments.push({ id: id(), author: s.me, created: new Date().toISOString(), body, mentioned: [] });
     });
-  }
-
-  /** Files "uploaded" in sample mode, as object URLs by media id. */
-  readonly files = new Map<string, string>();
-
-  async attach(_key: string, file: File): Promise<Uploaded> {
-    const mediaId = `sample-${id()}`;
-    this.files.set(mediaId, URL.createObjectURL(file));
-    return { id: id(), filename: file.name, mimeType: file.type, mediaId };
-  }
-
-  dispose() {
-    this.files.forEach((url) => URL.revokeObjectURL(url));
-    this.files.clear();
-  }
-
-  async attachmentLimit() {
-    return 10 * 1024 * 1024;
-  }
-
-  async ticketMedia() {
-    return Object.fromEntries([...this.files.keys()].map((k) => [k, k]));
-  }
-
-  attachmentUrl(id: string) {
-    return this.files.get(id) ?? "";
   }
 
   async createSubtasks(key: string, summaries: string[]) {
@@ -1477,34 +1409,9 @@ export class MockBackend implements Backend {
     });
   }
 
-  async markSeen(key: string) {
-    if (!this.snap.tickets[key]?.changes.length) return;
-    this.update((s) => void (s.tickets[key].changes = []));
-  }
-
   async setUnread(eventId: string, unread: boolean) {
     if (this.connector.setRead(eventId, !unread)) return;
     this.update((s) => void (this.event(s, eventId).unread = unread));
-  }
-
-  async setDone(eventId: string, done: boolean) {
-    if (this.connector.setRead(eventId, done)) return;
-    this.update((s) => {
-      const e = this.event(s, eventId);
-      e.doneAt = done ? new Date().toISOString() : null;
-      if (done) {
-        e.unread = false;
-        e.snoozedUntil = null;
-      }
-    });
-  }
-
-  async snooze(eventId: string, until: Date | null) {
-    this.update((s) => {
-      const e = this.event(s, eventId);
-      e.snoozedUntil = until?.toISOString() ?? null;
-      if (until) e.unread = false;
-    });
   }
 
   async reconnectJira() {}

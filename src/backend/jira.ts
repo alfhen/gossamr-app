@@ -1,8 +1,7 @@
 import type { ClearFilter, ClearPreview, DeleteResult, WorktreeInfo } from "../types";
-import { convertFileSrc, invoke } from "@tauri-apps/api/core";
+import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
-import type { Mention } from "../lib/mentions";
 import type { ClarityGap } from "../lib/ticketClarity";
 import type {
   Adoptable,
@@ -32,8 +31,6 @@ import type {
   AgentSettings,
   CleanupResult,
   Snapshot,
-  Transition,
-  Uploaded,
   CodeChange,
   CodeCommitQuery,
   CodeFile,
@@ -64,7 +61,6 @@ import type {
   WorkEvent,
   WorkFilter,
   WorkItem,
-  Workflow,
   Workstream,
   WorkstreamEvent,
   WorkstreamMode,
@@ -100,42 +96,6 @@ export class JiraBackend implements Backend {
     return () => void pending.then((unlisten) => unlisten());
   }
 
-  transitions(key: string) {
-    return invoke<Transition[]>("transitions", { key });
-  }
-
-  transition(key: string, transitionId: string) {
-    return invoke<void>("transition", { scope: this.scope, key, transitionId });
-  }
-
-  comment(key: string, body: string, mentions: Mention[] = [], files: Uploaded[] = []) {
-    return invoke<void>("comment", { scope: this.scope, key, body, mentions, files });
-  }
-
-  async attach(key: string, file: File) {
-    // The bytes travel as the raw request body; JSON would inflate them several times over.
-    const meta = new URLSearchParams({ ...this.scope, key, name: file.name, type: file.type || "application/octet-stream" });
-    return invoke<Uploaded>("attach", new Uint8Array(await file.arrayBuffer()), { headers: { "x-file": meta.toString() } });
-  }
-
-  ticketMedia(key: string) {
-    return invoke<Record<string, string>>("ticket_media", { scope: this.scope, key });
-  }
-
-  attachmentUrl(id: string) {
-    return convertFileSrc(id, "attachment");
-  }
-
-  private limit: Promise<number | null> | null = null;
-
-  attachmentLimit() {
-    this.limit ??= invoke<number | null>("attachment_limit", { scope: this.scope }).catch((e) => {
-      this.limit = null;
-      throw e;
-    });
-    return this.limit;
-  }
-
   mentionable(key: string, query: string) {
     return invoke<Person[]>("mentionable", { key, query });
   }
@@ -144,20 +104,8 @@ export class JiraBackend implements Backend {
     return invoke<{ created: string[]; error: string | null }>("create_subtasks", { scope: this.scope, key, summaries });
   }
 
-  markSeen(key: string) {
-    return invoke<void>("mark_seen", { key });
-  }
-
   setUnread(id: string, unread: boolean) {
     return invoke<void>("set_unread", { id, unread });
-  }
-
-  setDone(id: string, done: boolean) {
-    return invoke<void>("set_done", { id, done });
-  }
-
-  snooze(id: string, until: Date | null) {
-    return invoke<void>("snooze", { id, until: until?.toISOString() ?? null });
   }
 
   cacheSearch(filter: WorkFilter, opts: ReadScope = {}) {
@@ -174,10 +122,6 @@ export class JiraBackend implements Backend {
 
   cacheContainers(opts: ReadScope = {}) {
     return invoke<WorkContainer[]>("cache_containers", { includeUnwatched: opts.includeUnwatched ?? false });
-  }
-
-  cacheWorkflow(container: ContainerRef) {
-    return invoke<Workflow | null>("cache_workflow", { container });
   }
 
   cachePeople() {

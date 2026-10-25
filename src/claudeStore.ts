@@ -1,8 +1,7 @@
 import { create } from "zustand";
 import { claude, type ClaudeEvent, type EventMeta, type StoredTurn, type TurnUsage } from "./backend/claude";
-import type { Backend } from "./backend/types";
 import type { PipImage, ShownImage } from "./lib/pipImages";
-import type { Proposal, ScreenContext } from "./types";
+import type { ScreenContext } from "./types";
 import { useWorkstreams } from "./workspace/workstreamsStore";
 
 export interface Turn {
@@ -37,30 +36,16 @@ export interface Conversation {
 }
 
 interface ClaudeState {
-  open: boolean;
-  /** Conversations by id: `general` and `ws:<id>` for the Pip pane, a ticket key for the classic drawer. */
+  /** Conversations by id: `general` and `ws:<id>`. */
   byTicket: Record<string, Conversation>;
-  /** Every draft the backend holds. The chat cards read from here, so drafts outlive the conversation that made them. */
-  proposals: Proposal[];
-  setOpen(open: boolean): void;
-  ask(ticketKey: string, prompt: string, sessionId: string | null, context?: ScreenContext, extra?: { looking?: string; quote?: string; images?: PipImage[]; shown?: string }): Promise<void>;
+  ask(ticketKey: string, prompt: string, sessionId: string | null, context: ScreenContext, extra?: { looking?: string; quote?: string; images?: PipImage[]; shown?: string }): Promise<void>;
   /** Stops the turn being answered in the conversation. Turns queued behind it stay queued. */
   cancel(ticketKey: string): void;
   /** Takes a queued turn out of the queue before it runs. */
   remove(requestId: string): void;
   /** Brings back the stored turns of a conversation, after a reload or a restart, without touching turns already shown. */
   load(ticketKey: string): Promise<void>;
-  /** Puts a draft the backend just returned in place, ahead of the `proposals-changed` refresh. */
-  putProposal(p: Proposal): void;
 }
-
-/** The screen as far as the page knows it today: the open ticket. */
-export const ticketContext = (key: string): ScreenContext => ({
-  view: null,
-  item: { connectionId: "", externalId: key, key },
-  filter: null,
-  selection: [],
-});
 
 /** The prompt as the assistant gets it: what was typed, then the text it is about. */
 export const withQuote = (prompt: string, quote: string | undefined): string => (quote ? `${prompt}\n\nThe text I selected:\n${quote.replace(/^/gm, "> ")}` : prompt);
@@ -157,13 +142,9 @@ export function mergeStored(conv: Conversation, stored: StoredTurn[]): Conversat
 }
 
 export const useClaude = create<ClaudeState>()((set, get) => ({
-  open: false,
   byTicket: {},
-  proposals: [],
 
-  setOpen: (open) => set({ open }),
-
-  async ask(ticketKey, prompt, sessionId, context = ticketContext(ticketKey), extra = {}) {
+  async ask(ticketKey, prompt, sessionId, context, extra = {}) {
     const requestId = newRequestId();
     const conv = get().byTicket[ticketKey] ?? empty;
     const { images = [], ...shown } = extra;
@@ -243,11 +224,6 @@ export const useClaude = create<ClaudeState>()((set, get) => ({
       if (--loading === 0) held.clear();
     }
   },
-
-  putProposal(p) {
-    const all = get().proposals;
-    set({ proposals: all.some((x) => x.id === p.id) ? all.map((x) => (x.id === p.id ? p : x)) : [p, ...all] });
-  },
 }));
 
 /** Drops every conversation from memory, as switching account does. What is stored stays stored. */
@@ -258,7 +234,7 @@ export function forgetConversations() {
   for (const conversation of Object.values(useClaude.getState().byTicket)) {
     conversation.turns.forEach((t) => t.images?.forEach((i) => URL.revokeObjectURL(i.url)));
   }
-  useClaude.setState({ open: false, byTicket: {}, proposals: [] });
+  useClaude.setState({ byTicket: {} });
   // Which workstreams there are, and so which conversations, belongs to the account as well.
   useWorkstreams.getState().dispose();
 }
@@ -349,31 +325,4 @@ export function listenToClaude() {
   if (listening) return;
   listening = true;
   claude.onEvent(onClaudeEvent);
-}
-
-let stopWatching: (() => void) | null = null;
-
-export function stopWatchingProposals() {
-  stopWatching?.();
-  stopWatching = null;
-}
-
-/** Loads the backend's drafts now and again whenever they change, replacing any earlier watch. */
-export function watchProposals(backend: Backend) {
-  stopWatching?.();
-  let live = true;
-  let latest = 0;
-  const refresh = () => {
-    const mine = ++latest;
-    backend
-      .proposalsList()
-      .then((proposals) => live && mine === latest && useClaude.setState({ proposals }))
-      .catch(() => {});
-  };
-  const off = backend.onProposalsChanged(refresh);
-  stopWatching = () => {
-    live = false;
-    off();
-  };
-  refresh();
 }

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetAccountState } from "./accountState";
 import { MockBackend } from "./backend/mock";
-import { useClaude, watchProposals } from "./claudeStore";
+import { useClaude } from "./claudeStore";
 import { loadPrefs } from "./workspace/prefs";
 import { usePip } from "./workspace/pipStore";
 import { syncLine } from "./workspace/Settings";
@@ -24,7 +24,7 @@ describe("per-account state", () => {
     stubStorage();
     resetAccountState("jira:site:me");
     await useWorkspace.getState().init(new MockBackend());
-    useClaude.setState({ open: true, byTicket: { "CA-1": { turns: [], sessionId: "s" } } });
+    useClaude.setState({ byTicket: { "CA-1": { turns: [], sessionId: "s" } } });
     usePip.setState({ filtered: { tabId: "t", before: { type: "open" }, beforeTitle: null, filter: { type: "open" }, note: "" }, dismissed: ["large-list"] });
     useTabs.getState().openTab({ title: "Mine" });
     useToasts.getState().push("old");
@@ -51,19 +51,6 @@ describe("per-account state", () => {
     revoke.mockRestore();
   });
 
-  it("stops the proposals watch so a stale account cannot write drafts into the store", async () => {
-    const backend = new MockBackend();
-    let stopped = false;
-    const off = backend.onProposalsChanged.bind(backend);
-    backend.onProposalsChanged = (l) => {
-      const un = off(l);
-      return () => ((stopped = true), un());
-    };
-    watchProposals(backend);
-    resetAccountState("jira:site:me");
-    expect(stopped).toBe(true);
-  });
-
   it("forgets everything about another account or a sign-out", () => {
     resetAccountState("jira:site:someone-else");
     expect(usePip.getState().dismissed).toEqual([]);
@@ -71,17 +58,6 @@ describe("per-account state", () => {
     usePip.setState({ dismissed: ["large-list"] });
     resetAccountState(null);
     expect(usePip.getState().dismissed).toEqual([]);
-  });
-});
-
-describe("which interface opens", () => {
-  it("is the workspace unless the person picked the classic inbox themselves", () => {
-    stubStorage();
-    expect(loadPrefs().ui).toBe("workspace");
-    stubStorage({ "gossamr-prefs": JSON.stringify({ ui: "classic", theme: "auto", pipOpen: false }) });
-    expect(loadPrefs().ui).toBe("workspace");
-    stubStorage({ "gossamr-prefs": JSON.stringify({ ui: "classic", uiChosen: true }) });
-    expect(loadPrefs().ui).toBe("classic");
   });
 });
 

@@ -1,8 +1,5 @@
 import { useMemo, type ReactNode } from "react";
 import { parseBlocks, parseInline, type Block, type Inline } from "../lib/markdown";
-import { projectsOf } from "../lib/views";
-import { useBackend } from "../backend/useBackend";
-import { useStore } from "../store";
 import { useTicketLinks, type TicketLinks } from "./ticketLinks";
 import { Link } from "./Adf";
 import { CodeBlock } from "./CodeBlock";
@@ -124,14 +121,13 @@ function span(n: Inline, i: number): ReactNode {
   }
 }
 
-/** Opens a synced ticket in the app and any other one in Jira. Keys from projects the user has no tickets in stay text. */
+/** A key the workspace knows opens that ticket; any other stays text. */
 function TicketKey({ ticketKey }: { ticketKey: string }) {
   const links = useTicketLinks();
-  return links ? <WorkspaceTicketKey ticketKey={ticketKey} links={links} /> : <ClassicTicketKey ticketKey={ticketKey} />;
+  return links ? <TicketKeyLink ticketKey={ticketKey} links={links} /> : <>{ticketKey}</>;
 }
 
-/** A key the workspace knows opens that ticket; any other stays text. */
-function WorkspaceTicketKey({ ticketKey, links }: { ticketKey: string; links: TicketLinks }) {
+function TicketKeyLink({ ticketKey, links }: { ticketKey: string; links: TicketLinks }) {
   links.useKnown?.();
   const title = links.titleOf(ticketKey);
   if (title === null) return <>{ticketKey}</>;
@@ -140,26 +136,6 @@ function WorkspaceTicketKey({ ticketKey, links }: { ticketKey: string; links: Ti
       type="button"
       title={title ? `${ticketKey}: ${title}` : `Open ${ticketKey}`}
       onClick={() => links.open(ticketKey)}
-      className="font-semibold text-accent underline decoration-accent/40 underline-offset-2 hover:decoration-accent"
-    >
-      {ticketKey}
-    </button>
-  );
-}
-
-function ClassicTicketKey({ ticketKey }: { ticketKey: string }) {
-  const snap = useStore((s) => s.snap);
-  const goToTicket = useStore((s) => s.goToTicket);
-  const backend = useBackend();
-  const known = snap?.tickets[ticketKey];
-  const anyTicket = snap && Object.values(snap.tickets)[0];
-  if (!snap || (!known && !projectsOf(snap).includes(ticketKey.split("-")[0]))) return <>{ticketKey}</>;
-  const url = known?.url ?? anyTicket?.url.replace(/[^/]+$/, ticketKey);
-  return (
-    <button
-      type="button"
-      title={known ? `${ticketKey}: ${known.summary}` : `Open ${ticketKey} in Jira`}
-      onClick={() => (known ? goToTicket(ticketKey) : url && void backend?.openUrl(url))}
       className="font-semibold text-accent underline decoration-accent/40 underline-offset-2 hover:decoration-accent"
     >
       {ticketKey}

@@ -1,4 +1,3 @@
-import type { ReactNode } from "react";
 import { initials, statusTone, type StatusTone } from "../lib/views";
 import type { Person, Status } from "../types";
 import { Icon } from "./icons";
@@ -40,38 +39,4 @@ export function Avatar({ person, size = 20 }: { person: Person | null; size?: nu
       {person ? initials(name) : "–"}
     </span>
   );
-}
-
-export function ToolbarButton({
-  children,
-  onClick,
-  title,
-  variant = "plain",
-  disabled,
-}: {
-  children: ReactNode;
-  onClick: () => void;
-  title?: string;
-  variant?: "plain" | "claude";
-  disabled?: boolean;
-}) {
-  const look =
-    variant === "claude"
-      ? "border-transparent bg-claude-soft font-semibold text-claude"
-      : "border-field-border bg-field hover:bg-hover";
-  return (
-    <button
-      type="button"
-      title={title}
-      onClick={onClick}
-      disabled={disabled}
-      className={`inline-flex h-7 items-center gap-1.5 rounded-[7px] border px-2.5 text-[12.5px] whitespace-nowrap disabled:opacity-50 ${look}`}
-    >
-      {children}
-    </button>
-  );
-}
-
-export function SectionHeading({ children }: { children: ReactNode }) {
-  return <h3 className="mb-2 text-xs font-semibold tracking-wide text-ink-3 uppercase">{children}</h3>;
 }

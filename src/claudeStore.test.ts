@@ -1,8 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { MockBackend } from "./backend/mock";
-import { applyEvent, catchUp, forgetConversations, listenToClaude, mergeStored, onClaudeEvent, turnFromStored, useClaude, watchProposals, withQuote, type Conversation } from "./claudeStore";
+import { applyEvent, catchUp, forgetConversations, listenToClaude, mergeStored, onClaudeEvent, turnFromStored, useClaude, withQuote, type Conversation } from "./claudeStore";
 import { claude, type AskRequest, type ClaudeEvent, type StoredTurn } from "./backend/claude";
-import type { Intent } from "./types";
 
 const conv = (): Conversation => ({
   sessionId: null,
@@ -37,51 +35,7 @@ describe("applyEvent", () => {
 
 const ref = { connectionId: "mock", externalId: "CA-1", key: "CA-1" };
 const started = { queued: false, ahead: 0 };
-const comment = (text: string): Intent => ({
-  type: "comment",
-  item: ref,
-  body: { blocks: [{ type: "paragraph", content: [{ type: "text", text, marks: [] }] }] },
-});
-
-describe("watchProposals", () => {
-  beforeEach(() => useClaude.setState({ proposals: [] }));
-
-  it("loads the backend's drafts and follows changes, so drafts survive a restart", async () => {
-    const backend = new MockBackend();
-    const before = backend.proposals.draft(comment("made before the window opened"));
-    watchProposals(backend);
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(useClaude.getState().proposals.map((p) => p.id)).toEqual([before.id]);
-
-    const later = backend.proposals.draft(comment("made while it was open"));
-    await new Promise((r) => setTimeout(r, 0));
-    expect(useClaude.getState().proposals.map((p) => p.id)).toEqual([later.id, before.id]);
-
-    await backend.proposalsSkip(before.id);
-    await new Promise((r) => setTimeout(r, 0));
-    expect(useClaude.getState().proposals.find((p) => p.id === before.id)?.state.type).toBe("skipped");
-  });
-
-  it("stops following a backend once another is watched", async () => {
-    const first = new MockBackend();
-    const second = new MockBackend();
-    watchProposals(first);
-    watchProposals(second);
-    first.proposals.draft(comment("ignored"));
-    await new Promise((r) => setTimeout(r, 0));
-    expect(useClaude.getState().proposals).toEqual([]);
-  });
-
-  it("puts a returned draft in place without waiting for the refresh", () => {
-    const backend = new MockBackend();
-    const p = backend.proposals.draft(comment("x"));
-    useClaude.getState().putProposal(p);
-    useClaude.getState().putProposal({ ...p, state: { type: "applied" } });
-    expect(useClaude.getState().proposals).toHaveLength(1);
-    expect(useClaude.getState().proposals[0].state.type).toBe("applied");
-  });
-});
+const screen = { view: null, item: null, filter: null, selection: [] };
 
 describe("ask", () => {
   it("sends the screen context with the question and never relies on the session for it", async () => {
@@ -90,17 +44,12 @@ describe("ask", () => {
     const original = claude.ask;
     claude.ask = async (req) => (sent.push(req), started);
     try {
-      await useClaude.getState().ask("CA-9", "what next?", null);
       const custom = { view: "board", item: null, filter: { type: "mine" as const }, selection: [ref] };
       await useClaude.getState().ask("CA-9", "and now?", null, custom);
     } finally {
       claude.ask = original;
     }
-    expect(sent[0]).toMatchObject({
-      prompt: "what next?",
-      context: { view: null, item: { connectionId: "", externalId: "CA-9", key: "CA-9" }, filter: null, selection: [] },
-    });
-    expect(sent[1]).toMatchObject({ context: { view: "board", filter: { type: "mine" }, selection: [ref] } });
+    expect(sent[0]).toMatchObject({ prompt: "and now?", context: { view: "board", filter: { type: "mine" }, selection: [ref] } });
     expect(sent[0]).not.toHaveProperty("ticketKey");
     expect(sent.every((r) => !("cwd" in (r as object)))).toBe(true);
   });
@@ -112,8 +61,8 @@ describe("ask", () => {
     claude.ask = async (req) => (sent.push(req), started);
     const image = { id: "i1", mediaType: "image/png", data: "AAAA", url: "blob:x", width: 10, height: 20 };
     try {
-      await useClaude.getState().ask("CA-10", "look", null, undefined, { images: [image] });
-      await useClaude.getState().ask("CA-10", "no picture", null);
+      await useClaude.getState().ask("CA-10", "look", null, screen, { images: [image] });
+      await useClaude.getState().ask("CA-10", "no picture", null, screen);
     } finally {
       claude.ask = original;
     }
@@ -203,8 +152,8 @@ describe("load", () => {
   it("sends the conversation and what the turn showed with each question", async () => {
     const sent: AskRequest[] = [];
     vi.spyOn(claude, "ask").mockImplementation(async (req) => (sent.push(req), started));
-    await useClaude.getState().ask("general", "what next?", null, undefined, { looking: "CA-401", quote: "this" });
-    await useClaude.getState().ask("CA-7", "and here?", null);
+    await useClaude.getState().ask("general", "what next?", null, screen, { looking: "CA-401", quote: "this" });
+    await useClaude.getState().ask("CA-7", "and here?", null, screen);
     expect(sent[0]).toMatchObject({ conversation: "general", meta: { looking: "CA-401", quote: "this", imageCount: 0 } });
     expect(sent[1]).toMatchObject({ conversation: "CA-7", meta: { imageCount: 0 } });
   });
@@ -212,12 +161,12 @@ describe("load", () => {
     const sent: AskRequest[] = [];
     vi.spyOn(claude, "ask").mockImplementation(async (req) => (sent.push(req), started));
     const instruction = "Let's talk about the GitHub review draft p-1 of acme/webshop#218. Read it with get_proposal.";
-    await useClaude.getState().ask("general", instruction, null, undefined, { shown: "Discuss this review", quote: "the bit" });
+    await useClaude.getState().ask("general", instruction, null, screen, { shown: "Discuss this review", quote: "the bit" });
     expect(sent[0].prompt).toBe(withQuote(instruction, "the bit"));
     expect(sent[0].meta).toMatchObject({ shown: "Discuss this review", quote: "the bit" });
     const turn = useClaude.getState().byTicket.general.turns[0];
     expect(turn).toMatchObject({ prompt: instruction, shown: "Discuss this review" });
-    await useClaude.getState().ask("general", "what next?", null);
+    await useClaude.getState().ask("general", "what next?", null, screen);
     expect(sent[1].meta).not.toHaveProperty("shown");
     expect(useClaude.getState().byTicket.general.turns[1]).not.toHaveProperty("shown");
   });
@@ -237,8 +186,8 @@ describe("queued turns", () => {
 
   it("appends a turn as queued when the backend queued it, and the running event starts it", async () => {
     vi.spyOn(claude, "ask").mockResolvedValueOnce(started).mockResolvedValueOnce({ queued: true, ahead: 1 });
-    await useClaude.getState().ask("general", "first", null);
-    await useClaude.getState().ask("general", "second", "s1");
+    await useClaude.getState().ask("general", "first", null, screen);
+    await useClaude.getState().ask("general", "second", "s1", screen);
     expect(statuses()).toEqual(["running", "queued"]);
     const second = useClaude.getState().byTicket.general.turns[1].requestId;
     const c = applyEvent(useClaude.getState().byTicket.general, second, { type: "running" });
@@ -264,7 +213,7 @@ describe("queued turns", () => {
       events(req.requestId, { type: "running" });
       return { queued: true, ahead: 1 };
     });
-    await useClaude.getState().ask("general", "quick", null);
+    await useClaude.getState().ask("general", "quick", null, screen);
     expect(statuses()).toEqual(["running"]);
   });
 
@@ -292,8 +241,8 @@ describe("queued turns", () => {
   it("sends a queued question with the session known when it was sent", async () => {
     const sent: AskRequest[] = [];
     vi.spyOn(claude, "ask").mockImplementation(async (req) => (sent.push(req), { queued: true, ahead: 1 }));
-    await useClaude.getState().ask("general", "later", null);
-    await useClaude.getState().ask("general", "and later", "s-known");
+    await useClaude.getState().ask("general", "later", null, screen);
+    await useClaude.getState().ask("general", "and later", "s-known", screen);
     expect(sent.map((r) => r.sessionId)).toEqual([null, "s-known"]);
   });
 });

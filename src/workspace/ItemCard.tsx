@@ -99,7 +99,7 @@ export function ItemCard(p: ItemCardProps) {
   };
 
   const tone = p.draft ? "ws-card-draft" : "";
-  const wither = witherClass(p.wither, "ws-");
+  const wither = witherClass(p.wither);
 
   return (
     <article

@@ -42,12 +42,12 @@ The app opens in the workspace, a board, list and age view over everything synce
 
 - **Board:** one section per project with that project's own statuses. Jira only reveals the moves open to a ticket one ticket at a time, so when you pick a card up the app asks Jira where it can go and dims the other columns.
 - **Agents and Plan runs:** a Plan run reads the code and writes an implementation plan. When it finishes, Gossamr drafts two things for you to read, and writes nothing to Jira until you approve them: a short status comment, and an update to the ticket's description that adds the plan as a collapsed `Gossamr Plan` section (a Jira expand, replacing the plan if the ticket already has one), so other agents and people can see and check the agreed work without it filling the description. The description update opens as a before-and-after diff that you can approve, edit, skip or talk over with Pip. The plan text is the agent's own answer, put together without a model; if the ticket's description can't be edited as rich text, or is too long to hold the plan, the run sheet says why and the plan can still be drafted as a comment. Later Build, Review and Verify runs are shown the section as part of the ticket.
-- **Settings:** the Jira site and account, when it last synced, **Sync now**, and **Sign out**. The classic inbox is still reachable from there for now, and back again from its sidebar.
+- **Settings:** the Jira site and account, when it last synced, **Sync now**, and **Sign out**.
 - **Errors** that don't block anything (a failed sync, a move that couldn't be checked) appear as a toast in the corner.
 
 ### Mock mode
 
-`pnpm dev` runs the workspace in a browser on built-in sample data: four projects with different workflows, drafts, and a scripted Pip that answers a few requests and drafts a move or comment. No Jira and no Claude are involved, and the classic inbox isn't available there.
+`pnpm dev` runs the workspace in a browser on built-in sample data: four projects with different workflows, drafts, and a scripted Pip that answers a few requests and drafts a move or comment. No Jira and no Claude are involved.
 
 ### Not yet verified against a live Jira site
 

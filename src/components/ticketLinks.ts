@@ -1,6 +1,6 @@
 import { createContext, useContext } from "react";
 
-/** How a ticket key in rendered text behaves. Without a provider the classic inbox's store answers. */
+/** How a ticket key in rendered text behaves. Without a provider, keys stay text. */
 export interface TicketLinks {
   /** The ticket's title when its key can be opened here, '' when it can be but its title isn't known; null otherwise. */
   titleOf(key: string): string | null;

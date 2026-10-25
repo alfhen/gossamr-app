@@ -261,7 +261,6 @@ function ClaritySection() {
 export function Settings() {
   const theme = usePrefs((s) => s.theme);
   const setTheme = usePrefs((s) => s.setTheme);
-  const setUi = usePrefs((s) => s.setUi);
   const agents = useAgentsFlag();
   useEscBack(agents.enabled);
   const containers = useWorkspace((s) => s.containers);
@@ -321,14 +320,6 @@ export function Settings() {
         <Section title="Autopilot">
           <p className="m-0 text-ws-ink3">Off. Rules that let Pip draft routine updates for you will be configured here, per project.</p>
         </Section>
-
-        {isTauri() && (
-          <Section title="Interface">
-            <button type="button" className="text-ws-accent underline" onClick={() => setUi("classic")}>
-              Go back to the classic inbox
-            </button>
-          </Section>
-        )}
       </div>
     </div>
   );

@@ -1,4 +1,4 @@
-import type { Person, Ticket } from "../types";
+import type { Person } from "../types";
 
 export interface Mention {
   accountId: string;
@@ -61,17 +61,6 @@ export function rankPeople(people: Person[], query: string, limit = 6): Person[]
     if (out.length === limit) break;
   }
   return out;
-}
-
-/** Everyone involved in a ticket, most relevant first: commenters (latest first), assignee, reporter, then editors. */
-export function participants(t: Ticket, me: string): Person[] {
-  const people = [
-    ...[...t.comments].reverse().map((c) => c.author),
-    t.assignee,
-    t.reporter,
-    ...[...t.changes].reverse().map((c) => c.author),
-  ].filter((p): p is Person => !!p && p.accountId !== me);
-  return rankPeople(people, "", Number.MAX_SAFE_INTEGER);
 }
 
 /** Replaces the typed `@query` with `@Full Name ` and returns the new text and caret. */
