@@ -275,7 +275,8 @@ fn git_settings(rest: &[&str]) -> bool {
     match after.first().copied() {
         Some("config") => {
             let reads = ["--get", "--get-all", "--get-regexp", "--list", "-l", "get", "list"];
-            !(after[1..].iter().any(|w| reads.contains(w)) && !after[1..].iter().any(|w| matches!(*w, "--add" | "--unset" | "--unset-all" | "--replace-all" | "--rename-section" | "--remove-section" | "--edit" | "-e" | "set" | "unset" | "edit")))
+            let writes = after[1..].iter().any(|w| matches!(*w, "--add" | "--unset" | "--unset-all" | "--replace-all" | "--rename-section" | "--remove-section" | "--edit" | "-e" | "set" | "unset" | "edit"));
+            writes || !after[1..].iter().any(|w| reads.contains(w))
         }
         Some("remote") => !matches!(after.get(1).copied(), None | Some("-v" | "--verbose" | "show" | "get-url")),
         _ => false,

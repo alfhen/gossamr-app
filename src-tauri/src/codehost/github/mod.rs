@@ -130,7 +130,7 @@ fn review_access_of(repo: &Repo, scopes: Option<&[String]>) -> ReviewAccess {
     let permissions = repo.permissions.as_ref();
     let has = |s: &str| scopes.is_some_and(|all| all.iter().any(|x| x == s));
     let lacks = match scopes {
-        Some(_) if !has("repo") && !(has("public_repo") && !repo.private) => Some(if has("public_repo") {
+        Some(_) if !has("repo") && (!has("public_repo") || repo.private) => Some(if has("public_repo") {
             "it has only the public_repo scope, and the repository is private"
         } else {
             "it lacks the repo scope"
