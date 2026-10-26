@@ -6,10 +6,40 @@ use chrono::{DateTime, Utc};
 
 use super::Core;
 use crate::db::Db;
-use crate::domain::{ticket_snapshot, CheckState, CodeChange, CodeChangeKind, CodeChangeState, DevLink, ItemRef, LinkKind, SnapComment, TicketFacts, WorkItem};
+use crate::domain::{ticket_snapshot, CheckState, CodeChange, CodeChangeKind, CodeChangeState, DevLink, ItemRef, LinkKind, Run, SnapComment, TicketFacts, WorkItem};
+use crate::error::Result;
 use crate::model::CachedTicket;
 
+/// What `read_ticket` found for a key.
+#[derive(Debug, PartialEq, Eq)]
+pub enum TicketRead {
+    Found(String),
+    /// Neither the run's own ticket nor one linked to it.
+    NotLinked,
+    NotCached,
+}
+
 impl Core {
+    /// The cached text of ticket `key` as a run is shown its ticket, when `key` is the run's own ticket or one linked to
+    /// it (an issue link or its parent). Nothing here asks the network.
+    pub async fn ticket_for_agent(&self, run: &Run, key: &str) -> Result<TicketRead> {
+        let Some(own) = run.item.as_ref() else { return Ok(TicketRead::NotLinked) };
+        let key = key.trim();
+        let reachable = self
+            .with_db(|db| {
+                if own.key.eq_ignore_ascii_case(key) {
+                    return Ok(Some(own.clone()));
+                }
+                let Some(work) = db.item(own)? else { return Ok(None) };
+                let mut linked = work.links.iter().flat_map(|l| [&l.from, &l.to]).chain(work.parent.as_ref());
+                Ok(linked.find(|i| i.key.eq_ignore_ascii_case(key)).cloned())
+            })
+            .await?;
+        let Some(item) = reachable else { return Ok(TicketRead::NotLinked) };
+        let links = self.ticket_dev_links(&item);
+        self.with_db(|db| Ok(db.item(&item)?.map_or(TicketRead::NotCached, |work| TicketRead::Found(snapshot(db, &work, &links, false))))).await
+    }
+
     /// The code changes linked to `item`, or none when the code index can't be read: a missing link must not stop a draft.
     pub(super) fn ticket_dev_links(&self, item: &ItemRef) -> Vec<DevLink> {
         self.dev_links(item).unwrap_or_default()

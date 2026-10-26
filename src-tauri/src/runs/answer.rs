@@ -49,7 +49,7 @@ fn checked(text: &str) -> Result<&str> {
     Ok(text)
 }
 
-fn message(text: &str) -> String {
+pub(crate) fn message(text: &str) -> String {
     format!("{REMINDER}\n\n{text}")
 }
 
@@ -123,6 +123,9 @@ impl RunService {
         let text = checked(text)?;
         let _turn = self.launching.lock().await;
         let mut run = self.load(run_id).await?;
+        if self.core.asks().question(run_id).is_some() {
+            return self.answer_ask(run, text, keep).await;
+        }
         let again = run.state == RunState::Stopped && (run.unsent_answer.is_some() || run.stopped_by_limit);
         if run.state != RunState::NeedsAnswer && !again {
             return Err(refuse(match run.state {
@@ -154,27 +157,7 @@ impl RunService {
 
         let failure = self.wake(&tc, &mut run, &id, &session, text, !again).await;
         match failure {
-            None => {
-                let now = Utc::now();
-                back_at_work(&mut run, now);
-                self.remember(&run);
-                self.store(&run).await?;
-                if let Err(e) = self.core.report_stale(&run.id).await {
-                    eprintln!("couldn't mark the report of run {} as older than your answer: {e}", run.id);
-                }
-                let event = RunEvent { run_id: run.id.clone(), seq: 0, at: now, kind: "answered".into(), text: "You answered".into(), detail: None };
-                if let Err(e) = self.core.append_run_events(&run.id, &[event]).await {
-                    eprintln!("couldn't record the answer: {e}");
-                }
-                // Only the length: the answer's text stays with the run.
-                self.note_person(&run, "run_answered", Some(text.chars().count().to_string())).await;
-                match self.core.retire_answer_drafts(&run.id, keep, ANSWERED).await {
-                    Ok(0) => {}
-                    Ok(_) => (self.drafted)(&run.connection_id),
-                    Err(e) => eprintln!("couldn't retire the answers suggested for run {}: {e}", run.id),
-                }
-                Ok(run)
-            }
+            None => self.answered(run, text, keep).await,
             Some(why) => {
                 run.error = Some(why.clone());
                 run.unsent_answer = Some(text.to_owned());
@@ -182,6 +165,38 @@ impl RunService {
                 Err(Error::Claude(format!("{why} Your answer is kept on the run.")))
             }
         }
+    }
+
+    /// Hands the answer to the agent waiting in its `ask` call, which carries on in the same turn: nothing is stopped or
+    /// resumed.
+    async fn answer_ask(&self, run: Run, text: &str, keep: Option<&str>) -> Result<Run> {
+        if !self.core.asks().answer(&run.id, text) {
+            return Err(refuse("It isn't waiting for an answer any more. Look again in a moment."));
+        }
+        self.answered(run, text, keep).await
+    }
+
+    /// Records that the run has its answer and is working again.
+    async fn answered(&self, mut run: Run, text: &str, keep: Option<&str>) -> Result<Run> {
+        let now = Utc::now();
+        back_at_work(&mut run, now);
+        self.remember(&run);
+        self.store(&run).await?;
+        if let Err(e) = self.core.report_stale(&run.id).await {
+            eprintln!("couldn't mark the report of run {} as older than your answer: {e}", run.id);
+        }
+        let event = RunEvent { run_id: run.id.clone(), seq: 0, at: now, kind: "answered".into(), text: "You answered".into(), detail: None };
+        if let Err(e) = self.core.append_run_events(&run.id, &[event]).await {
+            eprintln!("couldn't record the answer: {e}");
+        }
+        // Only the length: the answer's text stays with the run.
+        self.note_person(&run, "run_answered", Some(text.chars().count().to_string())).await;
+        match self.core.retire_answer_drafts(&run.id, keep, ANSWERED).await {
+            Ok(0) => {}
+            Ok(_) => (self.drafted)(&run.connection_id),
+            Err(e) => eprintln!("couldn't retire the answers suggested for run {}: {e}", run.id),
+        }
+        Ok(run)
     }
 
     /// Waits for the session to be listed as stopped, gives its process a moment, and resumes it. `None` is success;

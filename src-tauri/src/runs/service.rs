@@ -25,7 +25,7 @@ use super::toolchain::{Toolchain, ToolchainSource};
 use super::control::{MacTerminal, Terminal};
 use super::tracker::{Attention, NoNotices, RunNotifier};
 use crate::config::{AgentSettings, AppConfig};
-use crate::domain::{render_prompt, Run, RunKind, RunQuery, RunSpec, RunState, GUARD, REPORT_GUARD};
+use crate::domain::{render_prompt, Run, RunKind, RunQuery, RunSpec, RunState, GUARD, AGENT_GUARD};
 use crate::error::{Error, Result};
 use crate::inbox::Core;
 
@@ -92,8 +92,8 @@ pub struct RunService {
     /// Held across a read-modify-write of `config.json`, so a settings change and a picked clone can't undo each other.
     pub(super) config_lock: Mutex<()>,
     pub(super) settings: Mutex<AgentSettings>,
-    /// Where the run-report tool is served; absent when the server couldn't start.
-    pub(super) report: Option<Arc<super::report::ReportChannel>>,
+    /// Where Gossamr's tools are served for agents; absent when the server couldn't start.
+    pub(super) agents: Option<Arc<super::agent_config::AgentChannel>>,
     pub(super) timing: Timing,
     pub(super) misses: Mutex<std::collections::HashMap<String, u32>>,
     pub(super) idle_polls: Mutex<std::collections::HashMap<String, u32>>,
@@ -184,7 +184,7 @@ impl RunService {
             home: dirs::home_dir(),
             config_lock: Mutex::new(()),
             settings: Mutex::new(AgentSettings { max_runs: MAX_CONCURRENT, ..AgentSettings::default() }),
-            report: None,
+            agents: None,
             timing: Timing::default(),
             misses: Mutex::new(std::collections::HashMap::new()),
             idle_polls: Mutex::new(std::collections::HashMap::new()),
@@ -229,7 +229,6 @@ impl RunService {
 
     pub fn with_settings(self, settings: AgentSettings) -> Self {
         let settings = settings.clamped();
-        self.core.set_report_enabled(settings.report_result);
         *self.settings.lock().expect("settings lock poisoned") = settings;
         self
     }
@@ -244,6 +243,11 @@ impl RunService {
     pub fn with_timing(mut self, timing: Timing) -> Self {
         self.timing = timing;
         self
+    }
+
+    /// Resolves when an agent has put up a question, so the tracker can look at its run at once.
+    pub async fn question_asked(&self) {
+        self.core.asks().opened().await;
     }
 
     /// Finds `claude` and reads the shell environment now, so the first approval doesn't wait for it.
@@ -394,14 +398,14 @@ impl RunService {
         self.store(run).await?;
         self.remember(run);
 
-        let report = self.offer_report(run).await;
+        let agent = self.offer_tools(run).await;
         let spec = &run.spec;
         let mut guard = GUARD.to_string();
         if let Some(ro) = &run.read_only {
             guard = format!("{guard} {}", ro.guard);
         }
-        if report.is_some() {
-            guard = format!("{guard} {REPORT_GUARD}");
+        if agent.is_some() {
+            guard = format!("{guard} {AGENT_GUARD}");
         }
         let request = LaunchRequest {
             cwd: spec.clone_path.clone(),
@@ -409,7 +413,7 @@ impl RunService {
             worktree: spec.name.clone(),
             guard,
             prompt: render_prompt(spec),
-            report,
+            agent,
             read_only: run.read_only.clone(),
         };
         self.in_flight.lock().expect("in-flight lock poisoned").insert(run.id.clone());
@@ -638,7 +642,7 @@ impl RunService {
         for mut run in waiting {
             let _ = self.fail(&mut run, &why).await;
         }
-        self.sweep_report_files().await;
+        self.sweep_agent_files().await;
     }
 
     /// Queued runs in no workstream that were waiting for a slot when the app stopped wait no longer. A wait that began

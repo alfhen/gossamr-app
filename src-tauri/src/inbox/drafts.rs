@@ -87,7 +87,7 @@ pub enum Edit {
         pr: Option<u64>,
         #[serde(default)]
         allow_push: Option<bool>,
-        /// Whether the agent is asked to report through the run-report tool.
+        /// Whether the agent is asked to report through the report tool.
         #[serde(default)]
         report: Option<bool>,
         /// The plan a build carries, as the person edited it. Blank removes it.
@@ -391,9 +391,6 @@ impl Core {
             if let (Edit::Run { clone_path: Some(_), .. }, Intent::StartRun { spec, .. }) = (edit, &mut intent) {
                 spec.clone_path = self.resolve_clone(&spec.clone_path)?;
             }
-            if let (Edit::Run { report: Some(true), .. }, Intent::StartRun { spec, .. }) = (edit, &intent) {
-                self.require_report_allowed(spec)?;
-            }
             proposals::edit(db, id, intent, Utc::now())
         })
         .await
@@ -438,15 +435,6 @@ impl Core {
             Some(home) if real.starts_with(home) && real != *home => Ok(real),
             _ => Err(refused("isn't inside your home folder")),
         }
-    }
-
-    /// A run may ask its agent to report through the tool only while the setting is on. Refused, never changed quietly.
-    /// A review always asks: with the setting off the tool isn't offered at launch, and its written verdict is read.
-    fn require_report_allowed(&self, spec: &RunSpec) -> Result<()> {
-        if spec.report && spec.kind != RunKind::Review && !self.report_enabled() {
-            return Err(Error::Proposal("Reporting through Gossamr is off. Turn it on in Settings > Agents, or untick it for this run.".into()));
-        }
-        Ok(())
     }
 
     /// Agents work only in repositories the person watches, whoever drafted the run.
@@ -499,7 +487,6 @@ impl Core {
         if spec.kind == RunKind::Review {
             spec.report = true;
         }
-        self.require_report_allowed(&spec)?;
         spec.clone_path = self.resolve_clone(&spec.clone_path)?;
         if spec.instruction.trim().is_empty() {
             spec.instruction = if spec.project.is_some() { TICKETLESS_STARTER.into() } else { default_instruction(spec.kind).into() };
@@ -1390,22 +1377,19 @@ mod tests {
 
         #[tokio::test]
         async fn a_review_the_person_drafts_always_reports_its_verdict_and_it_cant_be_unticked() {
-            for setting in [false, true] {
-                let fx = watching(vec![same_repo("open", "main")]).await;
-                fx.core.set_report_enabled(setting);
-                let p = fx.core.draft_run(RunSpec { report: false, ..review_of(&fx) }, Some(fx.item("CA-1"))).await.unwrap();
-                assert!(spec_of(&p).report, "setting {setting}: a review asks for the report whoever drafts it");
-                let review = fx.core.runs_review(&p.id).await.unwrap();
-                assert!(review.prompt.contains("verdict ('pass' or 'blocking', required)"), "{}", review.prompt);
-                let edit = |kind: Option<RunKind>, pr: Option<u64>, report: Option<bool>| Edit::Run { instruction: None, base: None, clone_path: None, kind, name: None, pr, allow_push: None, report, plan: None, build_account: None, project: None };
-                let err = fx.core.edit_proposal(&p.id, &edit(None, None, Some(false))).await.unwrap_err().to_string();
-                assert!(err.contains("A review always reports its verdict"), "{err}");
-                assert!(spec_of(&fx.core.proposal(&p.id).await.unwrap().unwrap()).report);
-                let built = fx.core.edit_proposal(&p.id, &edit(Some(RunKind::Build), None, None)).await.unwrap();
-                assert!(!spec_of(&built).report, "another kind asks only when the person ticks it");
-                let back = fx.core.edit_proposal(&p.id, &edit(Some(RunKind::Review), Some(12), None)).await.unwrap();
-                assert!(spec_of(&back).report, "turning it back into a review asks again");
-            }
+            let fx = watching(vec![same_repo("open", "main")]).await;
+            let p = fx.core.draft_run(RunSpec { report: false, ..review_of(&fx) }, Some(fx.item("CA-1"))).await.unwrap();
+            assert!(spec_of(&p).report, "a review asks for the report whoever drafts it");
+            let review = fx.core.runs_review(&p.id).await.unwrap();
+            assert!(review.prompt.contains("verdict ('pass' or 'blocking', required)"), "{}", review.prompt);
+            let edit = |kind: Option<RunKind>, pr: Option<u64>, report: Option<bool>| Edit::Run { instruction: None, base: None, clone_path: None, kind, name: None, pr, allow_push: None, report, plan: None, build_account: None, project: None };
+            let err = fx.core.edit_proposal(&p.id, &edit(None, None, Some(false))).await.unwrap_err().to_string();
+            assert!(err.contains("A review always reports its verdict"), "{err}");
+            assert!(spec_of(&fx.core.proposal(&p.id).await.unwrap().unwrap()).report);
+            let built = fx.core.edit_proposal(&p.id, &edit(Some(RunKind::Build), None, None)).await.unwrap();
+            assert!(!spec_of(&built).report, "another kind asks only when the person ticks it");
+            let back = fx.core.edit_proposal(&p.id, &edit(Some(RunKind::Review), Some(12), None)).await.unwrap();
+            assert!(spec_of(&back).report, "turning it back into a review asks again");
         }
 
         #[tokio::test]

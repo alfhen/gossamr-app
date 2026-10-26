@@ -137,7 +137,7 @@ fn defang(text: &str) -> String {
 }
 
 /// Pip's notes between their data markers, with the line that says what they are.
-fn notes_block(notes: Option<&str>) -> String {
+pub(super) fn notes_block(notes: Option<&str>) -> String {
     match notes.map(defang).filter(|n| !n.trim().is_empty()) {
         Some(n) => format!("{NOTES_NOTE}\n{NOTES_OPEN}\n{}\n{NOTES_CLOSE}", n.trim()),
         None => "Pip's notes: none yet. set_workstream_notes keeps some.".into(),

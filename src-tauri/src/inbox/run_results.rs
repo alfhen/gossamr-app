@@ -35,7 +35,7 @@ pub struct RunOutcome {
     /// How `note` and the proposals were read: from the agent's report through the tool, from the `For Jira:` section of
     /// its written answer, from the whole answer, or from the summary alone. `None` when there is no result yet.
     pub source: Option<ResultSource>,
-    /// What came of offering the run the report tool; `None` when it was never asked to use it.
+    /// What came of offering the run the report tool; `None` when it was never offered the tools.
     pub report: Option<ReportView>,
     /// For a Plan run: the draft of the whole plan as a comment, in whatever state it is now.
     pub plan_draft: Option<RunDraft>,

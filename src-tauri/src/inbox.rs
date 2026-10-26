@@ -15,6 +15,7 @@ use crate::domain::{
 };
 use crate::model::{CachedTicket, CreatedSubtasks, Person, Snapshot, Status, Ticket, Transition};
 use crate::proposals;
+use crate::runs::ask::Asks;
 use crate::sync::{self, Schedule, Trigger, CLOCK_SKEW_MINUTES};
 use crate::tracker::{self, Connection, Move, Registry, WorkTracker};
 
@@ -33,6 +34,7 @@ mod workstreams;
 pub use pip_runs::PipRunAsk;
 #[cfg(test)]
 pub(crate) use workstreams::{basis_of, drifted};
+pub use ticket_context::TicketRead;
 pub use workstreams::{Adoptable, WorkstreamUndo, WorkstreamView, NOTES_CLOSE, NOTES_LIMIT, NOTES_OPEN};
 pub use rewrites::TextSeen;
 mod watch;
@@ -165,9 +167,8 @@ pub struct Core {
     schedules: Mutex<HashMap<String, Schedule>>,
     /// When each connection was last checked for work assigned outside what it watches.
     radar: Mutex<HashMap<String, chrono::DateTime<Utc>>>,
-    /// Whether a run may be asked to report through the run-report tool; the Agents setting, kept here so a draft can
-    /// be refused without a round trip to the service.
-    report_enabled: AtomicBool,
+    /// The questions agents are waiting on, which the MCP server fills and the run service answers.
+    asks: Asks,
     /// Ask for a sync now, whatever the schedule says.
     pub wake: Notify,
     /// The window gained focus: sync if it has been a while and no failure is being waited out.
@@ -200,18 +201,14 @@ impl Core {
             syncing: AtomicBool::new(false),
             schedules: Mutex::new(HashMap::new()),
             radar: Mutex::new(HashMap::new()),
-            report_enabled: AtomicBool::new(false),
+            asks: Asks::default(),
             wake: Notify::new(),
             focus: Notify::new(),
         }
     }
 
-    pub fn set_report_enabled(&self, on: bool) {
-        self.report_enabled.store(on, Ordering::SeqCst);
-    }
-
-    pub fn report_enabled(&self) -> bool {
-        self.report_enabled.load(Ordering::SeqCst)
+    pub fn asks(&self) -> &Asks {
+        &self.asks
     }
 
     #[cfg(test)]

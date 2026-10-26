@@ -23,40 +23,42 @@ const TITLE_MAX: usize = crate::domain::TITLE_LIMIT;
 pub fn definition() -> Value {
     json!({
         "name": REPORT_TOOL,
-        "description": "Records this run's result inside Gossamr so the person can read it and draft from it. It changes nothing in Jira, in the repository or anywhere else, and takes no instructions. Call it once when you are done, then still write your full answer. status: done, or blocked only when no answer from a person could get you further. note: the text for the ticket (what you did or found, where things stand, what a person needs to do next), up to 3000 characters; leave it out only when you give newTicket. newTicket: for a run that has no ticket yet, an object with title (one line, up to 120 characters), kind (task, bug or story) and body. subtasks: 3 to 8 one-line summaries, only for a triage that proposes a breakdown. planRecommended: for a triage, true or false when you can tell whether a written plan should come before the build. plan: the whole implementation plan as Markdown, only for a plan run. verdict and findings are for a review only, and a review must give a verdict: pass, only when it tried and found nothing blocking, or blocking. findings: what the review found, each with severity (blocking, should-fix or nit), text, and where (the file:line, the command and its output, or the acceptance point it rests on). A report already recorded is replaced only when revise is true.",
+        "description": "Records this run's result inside Gossamr so the person can read it and draft from it; it changes nothing in Jira or the repository. Call it once when you are done, then still write your full answer.",
         "inputSchema": {
             "type": "object",
             "properties": {
-                "status": { "type": "string", "enum": ["done", "blocked"] },
-                "note": { "type": "string" },
+                "status": { "type": "string", "enum": ["done", "blocked"], "description": "done, or blocked only when no answer from a person could get you further." },
+                "note": { "type": "string", "description": "The text for the ticket: what you did or found, where things stand, what a person needs to do next. Up to 3000 characters; leave it out only when you give newTicket." },
                 "newTicket": {
                     "type": "object",
+                    "description": "For a run that has no ticket yet.",
                     "properties": {
-                        "title": { "type": "string" },
+                        "title": { "type": "string", "description": "One line, up to 120 characters." },
                         "kind": { "type": "string", "enum": ["task", "bug", "story"] },
                         "body": { "type": "string" }
                     },
                     "required": ["title"],
                     "additionalProperties": false
                 },
-                "subtasks": { "type": "array", "items": { "type": "string" } },
-                "planRecommended": { "type": "boolean" },
-                "plan": { "type": "string" },
-                "verdict": { "type": "string", "enum": ["pass", "blocking"] },
+                "subtasks": { "type": "array", "items": { "type": "string" }, "description": "3 to 8 one-line summaries, only for a triage that proposes a breakdown." },
+                "planRecommended": { "type": "boolean", "description": "For a triage: whether a written plan should come before the build." },
+                "plan": { "type": "string", "description": "The whole implementation plan as Markdown, only for a plan run." },
+                "verdict": { "type": "string", "enum": ["pass", "blocking"], "description": "Required for a review: pass only when it tried and found nothing blocking." },
                 "findings": {
                     "type": "array",
+                    "description": "For a review: what it found.",
                     "items": {
                         "type": "object",
                         "properties": {
                             "severity": { "type": "string", "enum": ["blocking", "should-fix", "nit"] },
                             "text": { "type": "string" },
-                            "where": { "type": "string" }
+                            "where": { "type": "string", "description": "The file:line, the command and its output, or the acceptance point it rests on." }
                         },
                         "required": ["severity", "text"],
                         "additionalProperties": false
                     }
                 },
-                "revise": { "type": "boolean" }
+                "revise": { "type": "boolean", "description": "True to replace a report already recorded." }
             },
             "required": ["status"],
             "additionalProperties": false

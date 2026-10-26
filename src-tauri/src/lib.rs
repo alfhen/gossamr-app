@@ -166,6 +166,7 @@ fn spawn_run_tracker(app: AppHandle, service: RunsState) {
             tokio::select! {
                 _ = tokio::time::sleep(wait) => {}
                 _ = service.focus.notified() => {}
+                _ = service.question_asked() => {}
             }
         }
     });
@@ -1175,13 +1176,9 @@ pub fn run() {
             let drafted_handle = app.handle().clone();
             let open_on_focus = Arc::new(runs::tracker::OpenOnFocus::default());
             app.manage(open_on_focus.clone());
-            let report = match tauri::async_runtime::block_on(runs::report::ReportServer::start(core.clone(), runs::report::config_dir(&core.data_dir()))) {
-                Ok(server) => Some(server.channel),
-                Err(e) => {
-                    eprintln!("the run-report server couldn't start, so runs go without the report tool: {e}");
-                    None
-                }
-            };
+            // Config files of the earlier report channel hold tokens for a server that is gone.
+            let _ = std::fs::remove_dir_all(core.data_dir().join("report"));
+            let bound = tauri::async_runtime::block_on(agent::mcp::bind(runs::agent_config::config_dir(&core.data_dir())))?;
             // The supervisor hears about runs from the run service and wakes Pip through the agent service, which is
             // built after both; until it is bound it does nothing.
             let (emit_handle, changed_handle) = (app.handle().clone(), app.handle().clone());
@@ -1191,7 +1188,7 @@ pub fn run() {
                 Arc::new(move |connection_id| workstreams_changed(&changed_handle, connection_id)),
             );
             let notices: Arc<dyn runs::tracker::RunNotifier> = Arc::new(RunNotices { app: app.handle().clone(), open: open_on_focus });
-            let mut service = runs::service::RunService::new(
+            let service = runs::service::RunService::new(
                     core.clone(),
                     Arc::new(runs::toolchain::SystemToolchain::default()),
                     runs::index::RunIndex::load(&core.data_dir()),
@@ -1200,19 +1197,18 @@ pub fn run() {
                 )
                 .with_notifier(Arc::new(agent::supervisor::FanoutNotifier(vec![notices, supervisor.clone()])))
                 .with_drafted(Arc::new(move |connection_id| proposals_changed(&drafted_handle, connection_id)))
-                .with_settings(config.agents);
-            if let Some(channel) = report {
-                service = service.with_report(channel);
-            }
+                .with_settings(config.agents)
+                .with_agent_channel(bound.channel());
             let service = Arc::new(service);
             let handle = app.handle().clone();
             let view_handle = handle.clone();
-            let mcp = tauri::async_runtime::block_on(agent::mcp::McpServer::start(
+            let mcp = agent::mcp::McpServer::start_on(
+                bound,
                 core.clone(),
                 service.clone(),
                 Arc::new(move |connection_id| proposals_changed(&handle, connection_id)),
                 Arc::new(move |request_id, filter, note| pip_view(&view_handle, request_id, filter, note)),
-            ))?;
+            )?;
             app.manage::<LauncherState>(service.clone());
             app.manage::<RunsState>(service.clone());
             spawn_run_tracker(app.handle().clone(), service.clone());

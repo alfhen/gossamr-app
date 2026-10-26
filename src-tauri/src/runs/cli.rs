@@ -164,8 +164,8 @@ pub struct LaunchRequest {
     pub worktree: String,
     pub guard: String,
     pub prompt: String,
-    /// Offers the session the run-report tool.
-    pub report: Option<super::report::ReportLaunch>,
+    /// Offers the session Gossamr's tools.
+    pub agent: Option<super::agent_config::AgentLaunch>,
     /// For a read-only kind: the permission mode and rules Claude Code enforces.
     pub read_only: Option<crate::domain::ReadOnly>,
 }
@@ -293,7 +293,7 @@ pub trait ClaudeCli: Send + Sync {
     /// `--disallowedTools`, `--setting-sources` and `--strict-mcp-config`). A read-only run is never launched without them.
     async fn supports_read_only(&self) -> CliResult<bool>;
     /// Starts a background session. A read-only request adds `--permission-mode dontAsk`, `--setting-sources` with no
-    /// source, `--strict-mcp-config`, its allow rules (with the report tool's, when offered) and its deny rules, so Claude
+    /// source, `--strict-mcp-config`, its allow rules (with Gossamr's tools', when offered) and its deny rules, so Claude
     /// Code itself refuses the run's writes whatever the person's or the repository's settings allow.
     async fn launch(&self, req: &LaunchRequest) -> CliResult<Launched>;
     async fn agents(&self, all: bool) -> CliResult<Vec<AgentEntry>>;
@@ -402,12 +402,12 @@ impl ClaudeCli for SystemCli {
         let mut args: Vec<&str> = vec!["--bg", "--name", &req.name, "--worktree", &req.worktree];
         // The list flags take a list, so each is followed by another flag; the token is in the file, never on the command
         // line. Each rule is one argument.
-        let config = req.report.as_ref().map(|r| r.config.to_string_lossy().into_owned());
-        let report_rule = format!("mcp__{}__{}", crate::domain::REPORT_SERVER, crate::domain::REPORT_TOOL);
+        let config = req.agent.as_ref().map(|a| a.config.to_string_lossy().into_owned());
+        let tool_rules = crate::domain::agent_allow_rules();
         let mut allowed: Vec<&str> = Vec::new();
         if let Some(config) = &config {
             args.extend(["--mcp-config", config]);
-            allowed.push(&report_rule);
+            allowed.extend(tool_rules.iter().map(String::as_str));
         }
         if let Some(ro) = &req.read_only {
             args.extend(["--permission-mode", &ro.mode]);
@@ -711,7 +711,7 @@ mod tests {
                     worktree: name.to_string(),
                     guard: "guard text".into(),
                     prompt: "-- look at it; \"quoted\" $(not run) `nor this`".into(),
-                    report: None,
+                    agent: None,
                     read_only: None,
                 }
             }
@@ -840,10 +840,10 @@ mod tests {
         }
 
         #[tokio::test]
-        async fn offering_the_report_tool_adds_a_config_path_and_one_allow_rule_and_never_the_token() {
+        async fn offering_the_tools_adds_a_config_path_and_one_allow_rule_for_each_and_never_the_token() {
             let rig = Rig::new("report", "");
             let mut req = rig.request("ce-4-x-aa11");
-            req.report = Some(crate::runs::report::ReportLaunch { config: PathBuf::from("/data/report/run-1.json") });
+            req.agent = Some(crate::runs::agent_config::AgentLaunch { config: PathBuf::from("/data/agents/run-1.json") });
             rig.cli.launch(&req).await.unwrap();
             let calls = rig.calls();
             let args: Vec<&str> = calls.lines().skip(2).collect();
@@ -856,9 +856,12 @@ mod tests {
                     "--worktree",
                     "ce-4-x-aa11",
                     "--mcp-config",
-                    "/data/report/run-1.json",
+                    "/data/agents/run-1.json",
                     "--allowedTools",
-                    "mcp__run-report__report_result",
+                    "mcp__gossamr__report",
+                    "mcp__gossamr__ask",
+                    "mcp__gossamr__read_workstream",
+                    "mcp__gossamr__read_ticket",
                     "--append-system-prompt",
                     "guard text",
                     "--",
@@ -873,7 +876,7 @@ mod tests {
             crate::domain::ReadOnly {
                 mode: "dontAsk".into(),
                 allow: vec!["Bash(git fetch origin main)".into(), "Bash(git checkout --detach origin/main)".into()],
-                deny: vec!["Edit".into(), "Write".into(), "mcp__gossamr".into(), "Bash(git push *)".into(), "Bash(git -c *)".into()],
+                deny: vec!["Edit".into(), "Write".into(), "Bash(git push *)".into(), "Bash(git -c *)".into()],
                 guard: "read-only sentence".into(),
                 setting_sources: Some(String::new()),
                 strict_mcp_config: true,
@@ -916,7 +919,6 @@ mod tests {
                     "--disallowedTools",
                     "Edit",
                     "Write",
-                    "mcp__gossamr",
                     "Bash(git push *)",
                     "Bash(git -c *)",
                     "--append-system-prompt",
@@ -932,26 +934,29 @@ mod tests {
         }
 
         #[tokio::test]
-        async fn a_read_only_launch_with_the_report_tool_puts_its_rule_first_in_the_same_allow_list() {
+        async fn a_read_only_launch_with_the_tools_puts_their_rules_first_in_the_same_allow_list() {
             let rig = Rig::new("readonly-report", "");
             let mut req = rig.request("ce-6-y-ab12");
             req.read_only = Some(read_only());
-            req.report = Some(crate::runs::report::ReportLaunch { config: PathBuf::from("/data/report/run-2.json") });
+            req.agent = Some(crate::runs::agent_config::AgentLaunch { config: PathBuf::from("/data/agents/run-2.json") });
             rig.cli.launch(&req).await.unwrap();
             let calls = rig.calls();
             let args: Vec<&str> = calls.lines().skip(2).collect();
             assert_eq!(
-                &args[5..17],
+                &args[5..20],
                 [
                     "--mcp-config",
-                    "/data/report/run-2.json",
+                    "/data/agents/run-2.json",
                     "--permission-mode",
                     "dontAsk",
                     "--setting-sources",
                     "",
                     "--strict-mcp-config",
                     "--allowedTools",
-                    "mcp__run-report__report_result",
+                    "mcp__gossamr__report",
+                    "mcp__gossamr__ask",
+                    "mcp__gossamr__read_workstream",
+                    "mcp__gossamr__read_ticket",
                     "Bash(git fetch origin main)",
                     "Bash(git checkout --detach origin/main)",
                     "--disallowedTools",

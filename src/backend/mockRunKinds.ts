@@ -38,7 +38,6 @@ export const READ_ONLY_DENY: readonly string[] = [
   "Write",
   "MultiEdit",
   "NotebookEdit",
-  "mcp__gossamr",
   "Bash(git commit *)",
   "Bash(git push *)",
   "Bash(git merge *)",

@@ -67,7 +67,7 @@ impl Scratch {
             worktree: name.to_owned(),
             guard: "Do nothing.".into(),
             prompt: "Reply with OK and stop.".into(),
-            report: None,
+            agent: None,
             read_only: None,
         };
         let launched = self.cli.launch(&req).await.expect("launch");
@@ -247,7 +247,7 @@ async fn real_rm_straight_after_stop_is_retried_until_it_succeeds_and_unpushed_w
 async fn real_prefixed_session_name_is_listed_unchanged_and_the_worktree_keeps_the_slug() {
     let mut s = Scratch::new("prefix").await;
     let title = "Gossamr: CE-7 investigate";
-    let req = LaunchRequest { cwd: s.repo.clone(), name: title.into(), worktree: "ce-7-prefix-0a1b".into(), guard: "Do nothing.".into(), prompt: "Reply with OK and stop.".into(), report: None, read_only: None };
+    let req = LaunchRequest { cwd: s.repo.clone(), name: title.into(), worktree: "ce-7-prefix-0a1b".into(), guard: "Do nothing.".into(), prompt: "Reply with OK and stop.".into(), agent: None, read_only: None };
     let launched = s.cli.launch(&req).await.expect("launch");
     s.launched.push(launched.short_id.clone());
     assert_eq!(launched.name.as_deref(), Some(title), "stdout: {launched:?}");
@@ -559,25 +559,15 @@ async fn real_stop_then_resume_continues_same_session() {
     assert!(job.result.as_deref().is_some_and(|r| r.contains("OK")), "result: {:?}", job.result);
 }
 
-struct Calls(std::sync::Mutex<Vec<(String, serde_json::Value)>>);
-
-#[async_trait]
-impl super::report::ReportSink for Calls {
-    async fn call(&self, _run_id: &str, token_hash: &str, args: &serde_json::Value) -> super::report::Reply {
-        self.0.lock().unwrap().push((token_hash.to_owned(), args.clone()));
-        super::report::Reply::Recorded { revision: 1, notes: Vec::new() }
-    }
-}
-
-/// Settles three things nobody has seen: that a `--bg` session loads the `--mcp-config` server and calls its tool
-/// without a permission prompt, that its token is on no command line, and whether a `--resume` with no flags still has
-/// the tool. The last two are printed, not asserted, because either answer is workable: the feature degrades to the
-/// written answer when the tool is gone. Uses the person's real, signed-in config and `~/Code`, and does model work
-/// with two short prompts. Everything it starts is stopped and removed.
+/// Settles, against the real CLI and the merged server, that a `--bg` session loads the `--mcp-config` server and calls
+/// its tools without a permission prompt, that `ask` is answered in the same call, that the token is on no command line,
+/// and whether a `--resume` with no flags still has the tools. The last is printed, not asserted, because either answer
+/// is workable: the feature degrades to the written answer when the tools are gone. Uses the person's real, signed-in
+/// config and `~/Code`, and does model work with two short prompts. Everything it starts is stopped and removed.
 #[tokio::test]
 #[ignore = "runs the real claude with the real config and does model work"]
-async fn real_report_tool_is_called_from_a_background_session_and_the_token_stays_off_every_command_line() {
-    use super::report::{new_token, token_hash, ReportServer};
+async fn real_agent_tools_are_called_from_a_background_session_and_the_token_stays_off_every_command_line() {
+    use super::report::{new_token, token_hash};
     let home = dirs::home_dir().expect("home");
     let cwd = home.join("Code");
     let shell = std::env::var("SHELL").unwrap_or_default();
@@ -585,47 +575,49 @@ async fn real_report_tool_is_called_from_a_background_session_and_the_token_stay
     let binary = super::binary::find_claude().expect("claude is installed");
     let cli = SystemCli::new(binary.clone(), Arc::new(env.clone()));
     let config = cli.auth_status().await.unwrap().config_directory.expect("config directory");
-    let name = format!("gossamr-report-spike-{}", std::process::id());
+    let name = format!("gossamr-agent-spike-{}", std::process::id());
     let _cleanup = Cleanup { binary: binary.clone(), env: env.clone(), cwd: cwd.clone(), name: name.clone() };
 
-    let dir = std::env::temp_dir().join(format!("gossamr-report-real-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("gossamr-agent-real-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
-    let calls = Arc::new(Calls(std::sync::Mutex::new(Vec::new())));
-    let server = ReportServer::start(calls.clone(), dir.join("report")).await.expect("server");
+    let rig = super::rig::ready().await;
+    let core = rig.fx.core.clone();
+    let bound = crate::agent::mcp::bind(dir.join("agents")).await.expect("bind");
+    let channel = bound.channel();
+    let _server = crate::agent::mcp::McpServer::start_on(bound, core.clone(), rig.svc.clone(), Arc::new(|_| {}), Arc::new(|_, _, _| {})).expect("server");
+    let run = rig.launched(1).await;
     let token = new_token().unwrap();
-    let launch = server.channel.write_config("spike-run", &token).unwrap();
-    let allowed = format!("mcp__{}__{}", crate::domain::REPORT_SERVER, crate::domain::REPORT_TOOL);
+    core.report_reserve(&run.id, &token_hash(&token), crate::domain::REPORT_TOOL_VERSION).await.unwrap();
+    let launch = channel.write_config(&run.id, &token).unwrap();
+    let allowed = crate::domain::agent_allow_rules();
     let config_arg = launch.config.to_string_lossy().into_owned();
-    let prompt = "Call the report_result tool once with status done and note 'spike ok'. Then reply with the single word OK.";
-    let (ok, out) = claude_in(&env, &binary, &cwd, &["--bg", "--name", &name, "--mcp-config", &config_arg, "--allowedTools", &allowed, "--append-system-prompt", crate::domain::REPORT_GUARD, "--", prompt]);
+    let prompt = "Do these in order. 1. Call the report tool once with status done and note 'spike ok'. 2. Call read_workstream once. 3. Call the ask tool once with the question 'Which colour? ticket CA-1' and use the answer. Then reply with the single word OK followed by the answer.";
+    let mut args = vec!["--bg", "--name", &name, "--mcp-config", &config_arg, "--allowedTools"];
+    args.extend(allowed.iter().map(String::as_str));
+    args.extend(["--append-system-prompt", crate::domain::AGENT_GUARD, "--", prompt]);
+    let (ok, out) = claude_in(&env, &binary, &cwd, &args);
     assert!(ok, "launch: {out}");
     let id = super::cli::parse_launch_stdout(&out).unwrap_or_else(|| panic!("no session id in: {out}"));
 
     let (ps_ok, ps) = claude_in(&env, Path::new("/bin/ps"), &cwd, &["-axww", "-o", "command"]);
     assert!(ps_ok && !ps.contains(&token[4..]), "the token is on a command line");
 
-    let seen = |n: usize| calls.0.lock().unwrap().len() >= n;
-    let wait_for = |what: &'static str, n: usize| {
-        let (cli, id, calls) = (&cli, &id, &calls);
-        async move {
-            let deadline = Instant::now() + Duration::from_secs(150);
-            while calls.0.lock().unwrap().len() < n {
-                let rows = cli.agents(true).await.unwrap();
-                if let Some(e) = rows.iter().find(|e| e.id.as_deref() == Some(id.as_str())) {
-                    assert_ne!(e.waiting_for.as_deref(), Some("permission prompt"), "the session stalled on a permission prompt: {e:?}");
-                }
-                assert!(Instant::now() < deadline, "timed out waiting for {what}");
-                tokio::time::sleep(Duration::from_millis(500)).await;
-            }
+    let deadline = Instant::now() + Duration::from_secs(240);
+    let question = loop {
+        let rows = cli.agents(true).await.unwrap();
+        if let Some(e) = rows.iter().find(|e| e.id.as_deref() == Some(id.as_str())) {
+            assert_ne!(e.waiting_for.as_deref(), Some("permission prompt"), "the session stalled on a permission prompt: {e:?}");
         }
+        if let Some(question) = core.asks().question(&run.id) {
+            break question;
+        }
+        assert!(Instant::now() < deadline, "timed out waiting for the question");
+        tokio::time::sleep(Duration::from_millis(500)).await;
     };
-    wait_for("the first call", 1).await;
-    {
-        let first = calls.0.lock().unwrap()[0].clone();
-        assert_eq!(first.0, token_hash(&token), "the call carried the token from the config file");
-        assert_eq!(first.1["status"], "done");
-        eprintln!("FIRST CALL OK, arguments: {}", first.1);
-    }
+    assert!(question.contains("Which colour?"), "{question}");
+    let reported = core.report_stored(&run.id).await.unwrap().and_then(|r| r.report).expect("the report landed before the question");
+    assert_eq!(reported.note.as_deref(), Some("spike ok"));
+    assert!(core.asks().answer(&run.id, "blue"), "the question was still waiting");
 
     let deadline = Instant::now() + Duration::from_secs(120);
     let session = loop {
@@ -636,18 +628,21 @@ async fn real_report_tool_is_called_from_a_background_session_and_the_token_stay
         assert!(Instant::now() < deadline, "timed out waiting for done");
         tokio::time::sleep(Duration::from_millis(500)).await;
     };
+    let job = cli.job(&config, &id).await.unwrap().expect("job");
+    assert!(job.result.as_deref().is_some_and(|r| r.to_lowercase().contains("blue")), "the answer came back in the same call: {:?}", job.result);
     let persisted: Vec<String> = walk(&config.join("jobs").join(id.as_str())).into_iter().filter(|f| std::fs::read(f).is_ok_and(|b| b.windows(token.len()).any(|w| w == token.as_bytes()))).map(|f| f.display().to_string()).collect();
     eprintln!("TOKEN PERSISTED IN THE JOB FILES: {persisted:?}");
 
     tokio::time::sleep(super::service::Timing::default().stop_settle).await;
-    let again = "Call the report_result tool once more with status done, note 'spike again' and revise true. Then reply with the single word OK. If you have no such tool, say NO TOOL.";
+    let again = "Call the report tool once more with status done, note 'spike again' and revise true. Then reply with the single word OK. If you have no such tool, say NO TOOL.";
     let said = cli.resume(&session, again, Some(&cwd)).await.expect("resume");
     assert_eq!(said.short_id, id, "resume answered with another session: a copy was started");
     let deadline = Instant::now() + Duration::from_secs(120);
-    while !seen(2) && Instant::now() < deadline {
+    let revision = || async { core.report_stored(&run.id).await.unwrap().map_or(0, |r| r.revision) };
+    while revision().await < 2 && Instant::now() < deadline {
         tokio::time::sleep(Duration::from_millis(500)).await;
     }
-    eprintln!("A RESUME WITH NO FLAGS {} THE REPORT TOOL", if seen(2) { "KEPT" } else { "LOST" });
+    eprintln!("A RESUME WITH NO FLAGS {} THE TOOLS", if revision().await >= 2 { "KEPT" } else { "LOST" });
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -666,7 +661,7 @@ async fn real_fresh_clone_is_refused_until_trusted_then_its_worktree_session_sta
     let path = super::fresh::ensure_clone(&super::repo::Git::new(s.env.clone()), &home, "octocat/Hello-World").await.expect("clone");
     assert_eq!(path, super::fresh::agents_root(&home).join("octocat/Hello-World"));
     assert!(path.join(".git").is_dir());
-    let request = |name: &str| LaunchRequest { cwd: path.clone(), name: format!("{name} investigate"), worktree: name.to_owned(), guard: "Do nothing.".into(), prompt: "Reply with OK and stop.".into(), report: None, read_only: None };
+    let request = |name: &str| LaunchRequest { cwd: path.clone(), name: format!("{name} investigate"), worktree: name.to_owned(), guard: "Do nothing.".into(), prompt: "Reply with OK and stop.".into(), agent: None, read_only: None };
 
     let refused = s.cli.launch(&request("fresh-0a1b")).await.unwrap_err();
     assert!(refused.stderr_mentions("Workspace not trusted"), "{refused}");
@@ -751,7 +746,7 @@ impl ReadOnlyScratch {
     async fn launch(&self, spec: &RunSpec, prompt: &str) -> ShortId {
         use crate::domain::{GUARD, READ_ONLY_GUARD};
         let read_only = spec.read_only().expect("a read-only kind");
-        let request = LaunchRequest { cwd: self.repo.clone(), name: self.name.clone(), worktree: spec.name.clone(), guard: format!("{GUARD} {READ_ONLY_GUARD}"), prompt: prompt.into(), report: None, read_only: Some(read_only) };
+        let request = LaunchRequest { cwd: self.repo.clone(), name: self.name.clone(), worktree: spec.name.clone(), guard: format!("{GUARD} {READ_ONLY_GUARD}"), prompt: prompt.into(), agent: None, read_only: Some(read_only) };
         self.cli.launch(&request).await.expect("launch").short_id
     }
 

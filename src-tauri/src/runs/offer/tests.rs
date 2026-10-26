@@ -4,10 +4,9 @@ use std::path::{Path, PathBuf};
 use serde_json::json;
 
 use super::*;
-use crate::config::AgentSettings;
-use crate::domain::{RunKind, RunSpec, GUARD, READ_ONLY_GUARD, REPORT_GUARD};
+use crate::domain::{RunKind, RunSpec, AGENT_GUARD, GUARD, READ_ONLY_GUARD};
 use crate::runs::launcher::RunLauncher;
-use crate::runs::report::{token_hash, well_formed, ReportChannel, ReportSink, Reply};
+use crate::runs::report::{token_hash, well_formed, Reply};
 use crate::runs::rig::{ready_with, reporting, Rig};
 use crate::runs::testing::Outcome;
 
@@ -19,7 +18,7 @@ fn dir(tag: &str) -> PathBuf {
 
 fn token_in(config: &Path) -> String {
     let json: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(config).unwrap()).unwrap();
-    json["mcpServers"]["run-report"]["headers"]["Authorization"].as_str().unwrap().strip_prefix("Bearer ").unwrap().to_owned()
+    json["mcpServers"]["gossamr"]["headers"]["Authorization"].as_str().unwrap().strip_prefix("Bearer ").unwrap().to_owned()
 }
 
 fn first_launch(rig: &Rig) -> crate::runs::cli::LaunchRequest {
@@ -27,31 +26,33 @@ fn first_launch(rig: &Rig) -> crate::runs::cli::LaunchRequest {
 }
 
 async fn queued_reporting(rig: &Rig, n: u32) -> Run {
-    rig.fx.core.set_report_enabled(true);
     let p = rig.fx.core.draft_run(RunSpec { report: true, ..rig.spec(n) }, Some(rig.fx.item("CA-1"))).await.unwrap();
     let digest = rig.fx.core.runs_review(&p.id).await.unwrap().digest;
     rig.fx.core.runs_approve(&p.id, &digest).await.unwrap()
 }
 
 async fn report_as(rig: &Rig, run: &Run, token: &str, note: &str) -> Reply {
-    rig.fx.core.call(&run.id, &token_hash(token), &json!({ "status": "done", "note": note, "revise": true })).await
+    rig.fx.core.report_call(&run.id, &token_hash(token), &json!({ "status": "done", "note": note, "revise": true })).await
 }
 
 #[tokio::test]
-async fn a_run_that_asked_for_the_tool_launches_with_a_config_file_and_a_token_that_is_on_no_command_line() {
+async fn every_launch_gets_a_config_file_and_a_token_that_is_on_no_command_line() {
     let d = dir("offer");
     let rig = ready_with(reporting(&d)).await;
-    let run = rig.launched_reporting(1, RunKind::Investigate).await;
+    let run = rig.launched(1).await;
 
     let request = first_launch(&rig);
-    let launch = request.report.clone().expect("offered");
-    assert_eq!(request.guard, format!("{GUARD} {READ_ONLY_GUARD} {REPORT_GUARD}"), "the read-only sentence, then the tool's");
+    let launch = request.agent.clone().expect("offered");
+    assert_eq!(request.guard, format!("{GUARD} {READ_ONLY_GUARD} {AGENT_GUARD}"), "the read-only sentence, then the tools'");
     assert!(request.read_only.is_some());
-    assert_eq!(launch.config, d.join("report").join(format!("{}.json", run.id)));
+    assert_eq!(launch.config, d.join("agents").join(format!("{}.json", run.id)));
     assert_eq!(std::fs::metadata(&launch.config).unwrap().permissions().mode() & 0o777, 0o600);
     let token = token_in(&launch.config);
     assert!(well_formed(&token));
     assert!(!request.guard.contains(&token) && !request.prompt.contains(&token) && !format!("{request:?}").contains(&token[4..]), "the token is in the file alone");
+    let config: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&launch.config).unwrap()).unwrap();
+    assert_eq!(config["mcpServers"]["gossamr"]["timeout"], 600_000, "above how long ask waits");
+    assert_eq!(config["mcpServers"]["gossamr"]["url"], format!("http://127.0.0.1:4242/agent/{}", run.id));
 
     assert!(rig.fx.core.report_stored(&run.id).await.unwrap().is_some_and(|r| r.report.is_none()), "recorded as offered, nothing reported");
     assert_eq!(report_as(&rig, &run, &token, "From the agent.").await, Reply::Recorded { revision: 1, notes: vec![] });
@@ -59,40 +60,29 @@ async fn a_run_that_asked_for_the_tool_launches_with_a_config_file_and_a_token_t
 }
 
 #[tokio::test]
-async fn a_build_that_asked_for_the_tool_gets_the_tool_and_no_restriction() {
+async fn a_build_gets_the_tools_and_no_restriction_whether_or_not_its_prompt_spells_out_the_report() {
     let d = dir("offer-build");
     let rig = ready_with(reporting(&d)).await;
-    rig.launched_reporting(1, RunKind::Build).await;
-    let request = first_launch(&rig);
-    assert!(request.report.is_some() && request.read_only.is_none());
-    assert_eq!(request.guard, format!("{GUARD} {REPORT_GUARD}"), "as before Phase 6");
+    rig.launched_as(1, RunKind::Build).await;
+    rig.launched_reporting(2, RunKind::Build).await;
+    for request in rig.cli.0.lock().unwrap().launches.iter() {
+        assert!(request.agent.is_some() && request.read_only.is_none());
+        assert_eq!(request.guard, format!("{GUARD} {AGENT_GUARD}"));
+    }
     let _ = std::fs::remove_dir_all(&d);
 }
 
 #[tokio::test]
-async fn nothing_changes_for_a_run_that_did_not_ask_or_when_the_setting_or_the_server_is_off() {
+async fn without_a_server_a_run_still_starts_and_is_launched_as_before() {
     let d = dir("off");
-    let channel = std::sync::Arc::new(ReportChannel::new(4242, d.join("report")));
-
-    let rig = ready_with(reporting(&d)).await;
-    rig.launched(1).await;
-    let plain = first_launch(&rig);
-    assert!((plain.report.is_none(), plain.guard.clone()) == (true, format!("{GUARD} {READ_ONLY_GUARD}")), "a run that never asked is launched as before");
-
-    let off = ready_with(|svc| svc.with_report(channel)).await;
-    let run = queued_reporting(&off, 1).await;
-    off.svc.launch(&run.id).await.unwrap();
-    let request = first_launch(&off);
-    assert!(request.report.is_none() && request.guard == format!("{GUARD} {READ_ONLY_GUARD}"), "the setting is off");
-    assert!(off.fx.core.report_stored(&run.id).await.unwrap().is_none());
-    assert_eq!(off.get(&run).await.state, RunState::Launching);
-
-    let no_server = ready_with(|svc| svc.with_settings(AgentSettings { report_result: true, ..AgentSettings::default() })).await;
+    let no_server = ready_with(|svc| svc).await;
     let run = queued_reporting(&no_server, 1).await;
     no_server.svc.launch(&run.id).await.unwrap();
-    assert!(first_launch(&no_server).report.is_none(), "no server, no offer, and the run still starts");
+    let request = first_launch(&no_server);
+    assert!(request.agent.is_none() && request.guard == format!("{GUARD} {READ_ONLY_GUARD}"), "no server, no offer");
+    assert!(no_server.fx.core.report_stored(&run.id).await.unwrap().is_none());
     assert_eq!(no_server.get(&run).await.state, RunState::Launching);
-    assert!(!d.join("report").exists());
+    assert!(!d.join("agents").exists());
     let _ = std::fs::remove_dir_all(&d);
 }
 
@@ -104,7 +94,7 @@ async fn a_launch_whose_answer_was_lost_and_is_adopted_by_retry_can_still_report
     let run = queued_reporting(&rig, 1).await;
     rig.svc.launch(&run.id).await.unwrap();
     assert_eq!(rig.get(&run).await.state, RunState::Failed, "the launch failed while its session started");
-    let token = token_in(&first_launch(&rig).report.unwrap().config);
+    let token = token_in(&first_launch(&rig).agent.unwrap().config);
 
     let adopted = rig.svc.retry_launch(&run.id).await.unwrap();
     assert_eq!((adopted.state, rig.cli.launches()), (RunState::Launching, 1), "the session is adopted, not launched again");
@@ -119,12 +109,12 @@ async fn a_failed_launch_that_started_nothing_is_launched_again_with_a_new_token
     rig.cli.with(|s| s.outcome = Outcome::Exits);
     let run = queued_reporting(&rig, 1).await;
     rig.svc.launch(&run.id).await.unwrap();
-    let first = token_in(&first_launch(&rig).report.unwrap().config);
+    let first = token_in(&first_launch(&rig).agent.unwrap().config);
     assert_eq!(rig.get(&run).await.state, RunState::Failed);
 
     rig.cli.with(|s| s.outcome = Outcome::Starts);
     rig.svc.retry_launch(&run.id).await.unwrap();
-    let second = token_in(&rig.cli.0.lock().unwrap().launches[1].report.clone().unwrap().config);
+    let second = token_in(&rig.cli.0.lock().unwrap().launches[1].agent.clone().unwrap().config);
     assert_ne!(first, second);
     assert_eq!(report_as(&rig, &run, &first, "From a session that started with the first token.").await, Reply::Recorded { revision: 1, notes: vec![] });
     assert_eq!(report_as(&rig, &run, &second, "From the second.").await, Reply::Recorded { revision: 2, notes: vec![] });
@@ -150,7 +140,7 @@ async fn cleaning_up_a_run_ends_its_tokens_and_removes_its_config() {
     let d = dir("cleanup");
     let rig = ready_with(reporting(&d)).await;
     let run = rig.launched_reporting(1, RunKind::Investigate).await;
-    let config = first_launch(&rig).report.unwrap().config;
+    let config = first_launch(&rig).agent.unwrap().config;
     let token = token_in(&config);
     rig.set(&run, |r| {
         r.state = RunState::Done;
@@ -174,14 +164,14 @@ async fn the_sweep_keeps_what_a_live_or_recently_finished_run_may_still_need_and
     let recent = rig.launched_reporting(2, RunKind::Investigate).await;
     let old = rig.launched_reporting(3, RunKind::Investigate).await;
     let failed = rig.launched_reporting(4, RunKind::Investigate).await;
-    let channel = rig.svc.report.clone().unwrap();
+    let channel = rig.svc.agents.clone().unwrap();
     channel.write_config("run-with-no-row", "gsr_0").unwrap();
     let now = chrono::Utc::now();
     rig.set(&recent, |r| (r.state, r.ended_at) = (RunState::Done, Some(now))).await;
     rig.set(&old, |r| (r.state, r.ended_at) = (RunState::Done, Some(now - chrono::Duration::hours(7)))).await;
     rig.set(&failed, |r| (r.state, r.ended_at) = (RunState::Failed, Some(now))).await;
 
-    rig.svc.sweep_report_files().await;
+    rig.svc.sweep_agent_files().await;
     let mut kept = channel.configured();
     kept.sort();
     let mut expected = vec![live.id.clone(), recent.id.clone()];
@@ -195,7 +185,7 @@ async fn answering_a_question_makes_the_report_made_before_it_stale() {
     let d = dir("answer");
     let rig = ready_with(reporting(&d)).await;
     let run = rig.launched_reporting(1, RunKind::Investigate).await;
-    let token = token_in(&first_launch(&rig).report.unwrap().config);
+    let token = token_in(&first_launch(&rig).agent.unwrap().config);
     rig.poll().await;
     assert_eq!(report_as(&rig, &run, &token, "Early.").await, Reply::Recorded { revision: 1, notes: vec![] });
     rig.job(run.short_id.as_ref().unwrap(), |j| j.suggested_reply = None);
@@ -220,7 +210,7 @@ async fn a_run_that_finishes_after_reporting_drafts_from_the_report_on_the_same_
     let d = dir("finish");
     let rig = ready_with(reporting(&d)).await;
     let run = rig.launched_reporting(1, RunKind::Investigate).await;
-    let token = token_in(&first_launch(&rig).report.unwrap().config);
+    let token = token_in(&first_launch(&rig).agent.unwrap().config);
     rig.poll().await;
     assert_eq!(report_as(&rig, &run, &token, "Reported: close as a duplicate.").await, Reply::Recorded { revision: 1, notes: vec![] });
     let id = run.short_id.clone().unwrap();
@@ -247,7 +237,7 @@ async fn a_finished_run_carried_on_in_terminal_no_longer_stands_behind_its_earli
     let d = dir("carried");
     let rig = ready_with(reporting(&d)).await;
     let run = rig.launched_reporting(1, RunKind::Investigate).await;
-    let token = token_in(&first_launch(&rig).report.unwrap().config);
+    let token = token_in(&first_launch(&rig).agent.unwrap().config);
     rig.poll().await;
     report_as(&rig, &run, &token, "First turn.").await;
     rig.cli.with(|s| {

@@ -1,12 +1,9 @@
-use std::sync::Mutex;
-
-use async_trait::async_trait;
 use serde_json::{json, Value};
 
 use super::tool::Checked;
 use super::*;
 use crate::domain::fixtures::run_spec;
-use crate::domain::{render_prompt, ItemKind, Run, RunKind, RunSpec, REPORT_GUARD, REPORT_SERVER, REPORT_TOOL, REPORT_TOOL_VERSION};
+use crate::domain::{render_prompt, ItemKind, Run, RunKind, RunSpec, AGENT_GUARD, AGENT_SERVER, REPORT_TOOL, REPORT_TOOL_VERSION};
 use crate::runs::redact::redact;
 use crate::runs::result::Readiness;
 
@@ -35,22 +32,22 @@ fn accepted(args: Value, target: Target) -> Checked {
 }
 
 #[test]
-fn the_tool_and_what_it_asks_for_are_pinned_so_a_change_must_bump_the_version() {
+fn the_tool_and_what_it_asks_for_are_pinned_so_a_change_is_made_on_purpose() {
     use sha2::{Digest, Sha256};
-    let mut all = vec![definition().to_string(), REPORT_GUARD.to_string(), REPORT_SERVER.to_string(), REPORT_TOOL.to_string(), format!("mcp__{REPORT_SERVER}__{REPORT_TOOL}")];
+    let mut all = vec![definition().to_string(), AGENT_GUARD.to_string(), AGENT_SERVER.to_string(), REPORT_TOOL.to_string(), crate::domain::agent_allow_rules().join(",")];
     for (kind, project) in [(RunKind::Investigate, false), (RunKind::Investigate, true), (RunKind::Triage, false), (RunKind::Plan, false), (RunKind::Build, false), (RunKind::Review, false), (RunKind::Verify, false)] {
         let spec = RunSpec { kind, report: true, project: project.then(|| crate::domain::ContainerRef { connection_id: "c".into(), external_id: "p".into() }), ..run_spec() };
         let prompt = render_prompt(&spec);
-        all.push(prompt[prompt.find("If the run-report tool").unwrap()..].to_string());
+        all.push(prompt[prompt.find("If the Gossamr tool").unwrap()..].to_string());
     }
     let hash: String = Sha256::digest(all.join("\n").as_bytes()).iter().map(|b| format!("{b:02x}")).collect();
-    assert_eq!((REPORT_TOOL_VERSION, hash.as_str()), (3, "9f11e8b2872d77058ddd92dcbf93d7b7930455979bd331017affc478ecf0221b"), "the tool, its guard or the report paragraph changed: bump REPORT_TOOL_VERSION and pin the new hash");
+    assert_eq!((REPORT_TOOL_VERSION, hash.as_str()), (3, "8a2f308d5b1b91c94ae075b392011cc07688075c4e0be56eabfde769938c4379"), "the tool, its guard or the report paragraph changed: pin the new hash, and raise REPORT_TOOL_VERSION only if tokens minted under the old one must stop working");
 }
 
 #[test]
 fn the_published_schema_names_every_field_and_allows_nothing_else() {
     let def = definition();
-    assert_eq!(def["name"], "report_result");
+    assert_eq!(def["name"], "report");
     let schema = &def["inputSchema"];
     assert_eq!(schema["additionalProperties"], false);
     let mut fields: Vec<&str> = schema["properties"].as_object().unwrap().keys().map(String::as_str).collect();
@@ -59,7 +56,8 @@ fn the_published_schema_names_every_field_and_allows_nothing_else() {
     assert_eq!(schema["properties"]["verdict"]["enum"], json!(["pass", "blocking"]));
     assert_eq!(schema["properties"]["findings"]["items"]["properties"]["severity"]["enum"], json!(["blocking", "should-fix", "nit"]));
     assert_eq!(schema["properties"]["findings"]["items"]["additionalProperties"], false);
-    assert!(def["description"].as_str().unwrap().contains("verdict and findings are for a review only"));
+    assert!(def["description"].as_str().unwrap().chars().count() < 250, "a description is a sentence or two");
+    assert_eq!(schema["properties"]["verdict"]["description"], "Required for a review: pass only when it tried and found nothing blocking.");
     assert_eq!(schema["required"], json!(["status"]));
 }
 
@@ -289,7 +287,7 @@ fn every_string_is_cleaned_like_the_written_answer_is() {
 fn what_the_agent_is_told_never_repeats_what_it_sent() {
     let problems = refused(json!({ "status": "<<<TICKET leak TICKET>>>", "note": 5, "evil": "secret-value" }), ticket_run());
     let (text, is_error) = Reply::Invalid(problems).text();
-    assert!(is_error && !text.contains("leak") && !text.contains("secret-value") && text.ends_with("Fix these and call report_result again. Nothing was saved."));
+    assert!(is_error && !text.contains("leak") && !text.contains("secret-value") && text.ends_with("Fix these and call report again. Nothing was saved."));
     let many = Reply::Invalid((1..=20).map(|n| format!("problem {n}")).collect()).text().0;
     assert_eq!(many.lines().count(), 9, "eight problems and the closing line");
     for reply in [Reply::Unavailable, Reply::Locked, Reply::Already] {
@@ -373,207 +371,6 @@ fn a_triage_takes_subtasks_from_the_report_and_a_ticketless_run_its_ticket() {
     let proposal = crate::runs::result::TicketProposal { title: "T".into(), kind: ItemKind::Bug, body: "B".into() };
     let r = resolve(&ticketless_run, Some(&stored(Some(Report { status: ReportStatus::Done, note: None, new_ticket: Some(proposal.clone()), subtasks: vec![], plan: None, plan_recommended: None, verdict: None, findings: vec![] }), false)));
     assert_eq!((r.ticket, r.note), (Some(proposal), None));
-}
-
-struct Stub {
-    calls: Mutex<Vec<(String, String, Value)>>,
-    reply: Reply,
-}
-
-#[async_trait]
-impl ReportSink for Stub {
-    async fn call(&self, run_id: &str, token_hash: &str, args: &Value) -> Reply {
-        self.calls.lock().unwrap().push((run_id.into(), token_hash.into(), args.clone()));
-        self.reply.clone()
-    }
-}
-
-struct Live {
-    stub: std::sync::Arc<Stub>,
-    channel: std::sync::Arc<ReportChannel>,
-    dir: std::path::PathBuf,
-    http: reqwest::Client,
-}
-
-impl Drop for Live {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.dir);
-    }
-}
-
-async fn live(tag: &str, reply: Reply) -> Live {
-    let dir = std::env::temp_dir().join(format!("gossamr-report-{tag}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    let stub = std::sync::Arc::new(Stub { calls: Mutex::new(Vec::new()), reply });
-    let server = ReportServer::start(stub.clone(), dir.join("report")).await.unwrap();
-    Live { stub, channel: server.channel, dir, http: reqwest::Client::new() }
-}
-
-impl Live {
-    fn post(&self, run: &str, token: Option<&str>) -> reqwest::RequestBuilder {
-        let url = format!("http://127.0.0.1:{}/report/{run}", self.channel.port());
-        let req = self.http.post(url);
-        match token {
-            Some(t) => req.header("authorization", format!("Bearer {t}")),
-            None => req,
-        }
-    }
-
-    async fn rpc(&self, run: &str, token: &str, method: &str, params: Value) -> Value {
-        let body = json!({ "jsonrpc": "2.0", "id": 1, "method": method, "params": params });
-        self.post(run, Some(token)).json(&body).send().await.unwrap().json().await.unwrap()
-    }
-
-    fn calls(&self) -> Vec<(String, String, Value)> {
-        self.stub.calls.lock().unwrap().clone()
-    }
-}
-
-#[tokio::test]
-async fn the_server_lists_one_tool_and_hands_a_call_to_the_sink_with_the_hash_of_the_token() {
-    let t = live("call", Reply::Recorded { revision: 1, notes: vec![] }).await;
-    let token = new_token().unwrap();
-    let init = t.rpc("run1", &token, "initialize", json!({ "protocolVersion": "2025-06-18" })).await;
-    assert_eq!((init["result"]["protocolVersion"].as_str(), init["result"]["serverInfo"]["name"].as_str()), (Some("2025-06-18"), Some("gossamr-run-report")));
-    let list = t.rpc("run1", &token, "tools/list", json!({})).await;
-    let tools = list["result"]["tools"].as_array().unwrap();
-    assert_eq!((tools.len(), tools[0]["name"].as_str()), (1, Some("report_result")));
-    assert_eq!(t.rpc("run1", &token, "ping", json!({})).await["result"], json!({}));
-
-    let args = json!({ "status": "done", "note": "n" });
-    let reply = t.rpc("run1", &token, "tools/call", json!({ "name": "report_result", "arguments": args })).await;
-    assert_eq!(reply["result"]["isError"], false);
-    assert!(reply["result"]["content"][0]["text"].as_str().unwrap().starts_with("Recorded (revision 1)"));
-    assert_eq!(t.calls(), [("run1".to_string(), token_hash(&token), args)]);
-}
-
-#[tokio::test]
-async fn any_other_tool_or_method_is_refused_and_never_reaches_the_sink() {
-    let t = live("other", Reply::Unchanged).await;
-    let token = new_token().unwrap();
-    for name in ["get_item", "propose_comment", "report_results", ""] {
-        let reply = t.rpc("run1", &token, "tools/call", json!({ "name": name, "arguments": {} })).await;
-        assert_eq!((reply["result"]["isError"].as_bool(), reply["result"]["content"][0]["text"].as_str()), (Some(true), Some("Unknown tool.")), "{name:?}");
-    }
-    let method = t.rpc("run1", &token, "resources/list", json!({})).await;
-    assert_eq!(method["error"]["code"], -32601);
-    assert!(t.calls().is_empty());
-}
-
-#[tokio::test]
-async fn a_missing_or_malformed_bearer_is_the_only_thing_answered_with_401() {
-    let t = live("auth", Reply::Unavailable).await;
-    let body = json!({ "jsonrpc": "2.0", "id": 1, "method": "ping" });
-    assert_eq!(t.post("run1", None).json(&body).send().await.unwrap().status(), 401);
-    for bad in ["nope", "gsr_short", &format!("gsr_{}", "z".repeat(48)), "ghp_abcdefghijklmnopqrstuvwxyz0123456789"] {
-        assert_eq!(t.post("run1", Some(bad)).json(&body).send().await.unwrap().status(), 401, "{bad}");
-    }
-    let wrong = new_token().unwrap();
-    let reply = t.rpc("run1", &wrong, "tools/call", json!({ "name": "report_result", "arguments": { "status": "done", "note": "n" } })).await;
-    assert_eq!((reply["result"]["isError"].as_bool(), reply["result"]["content"][0]["text"].as_str()), (Some(true), Some(UNAVAILABLE)), "a well-formed token for nothing is a tool error, not a 401");
-}
-
-#[tokio::test]
-async fn a_request_from_a_web_page_or_another_host_is_refused() {
-    let t = live("host", Reply::Unchanged).await;
-    let token = new_token().unwrap();
-    let body = json!({ "jsonrpc": "2.0", "id": 1, "method": "ping" });
-    let send = |extra: Option<(&str, &str)>| {
-        let mut req = t.post("run1", Some(&token)).json(&body);
-        if let Some((k, v)) = extra {
-            req = req.header(k, v);
-        }
-        req.send()
-    };
-    assert_eq!(send(None).await.unwrap().status(), 200);
-    assert_eq!(send(Some(("origin", "http://localhost:3000"))).await.unwrap().status(), 200, "a loopback page is no stranger than the CLI");
-    assert_eq!(send(Some(("origin", "https://evil.example"))).await.unwrap().status(), 403);
-    assert_eq!(send(Some(("origin", "http://127.0.0.1.evil.example"))).await.unwrap().status(), 403);
-    assert_eq!(send(Some(("host", "evil.example"))).await.unwrap().status(), 403);
-    assert_eq!(send(Some(("host", "127.0.0.1:1"))).await.unwrap().status(), 403, "another port is another service");
-    assert_eq!(t.http.get(format!("http://127.0.0.1:{}/report/run1", t.channel.port())).send().await.unwrap().status(), 405);
-}
-
-#[tokio::test]
-async fn an_oversized_or_malformed_body_is_refused_before_anything_reads_it() {
-    let t = live("body", Reply::Unchanged).await;
-    let token = new_token().unwrap();
-    let huge = json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": { "name": "report_result", "arguments": { "status": "done", "note": "x".repeat(200_000) } } });
-    // The server answers 413 and closes once the body passes the limit, while the client may still be writing the rest of
-    // it: that client sees the connection reset instead of the answer. A reset while sending is that race, so it tries again.
-    let mut status = None;
-    for _ in 0..5 {
-        match t.post("run1", Some(&token)).json(&huge).send().await {
-            Ok(reply) => {
-                status = Some(reply.status());
-                break;
-            }
-            Err(e) if e.is_request() => continue,
-            Err(e) => panic!("{e}"),
-        }
-    }
-    assert_eq!(status.expect("an answer within five tries"), 413);
-    assert_eq!(t.post("run1", Some(&token)).body("{ not json").send().await.unwrap().status(), 400);
-    assert_eq!(t.post("run1", Some(&token)).body("[1,2]").send().await.unwrap().status(), 400);
-    let notification = json!({ "jsonrpc": "2.0", "method": "notifications/initialized" });
-    assert_eq!(t.post("run1", Some(&token)).json(&notification).send().await.unwrap().status(), 202);
-    assert!(t.calls().is_empty());
-}
-
-#[tokio::test]
-async fn a_run_id_that_could_be_a_path_never_reaches_the_sink() {
-    let t = live("path", Reply::Unchanged).await;
-    let token = new_token().unwrap();
-    let reply = t.rpc("..%2F..%2Fetc", &token, "tools/call", json!({ "name": "report_result", "arguments": {} })).await;
-    assert_eq!(reply["result"]["content"][0]["text"], UNAVAILABLE);
-    assert!(t.calls().is_empty());
-}
-
-#[tokio::test]
-async fn the_port_used_last_time_is_used_again_when_free_and_replaced_when_not() {
-    let dir = std::env::temp_dir().join(format!("gossamr-report-port-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    let free = {
-        let l = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
-        l.local_addr().unwrap().port()
-    };
-    std::fs::write(dir.join("port"), free.to_string()).unwrap();
-    let sink = || std::sync::Arc::new(Stub { calls: Mutex::new(Vec::new()), reply: Reply::Unchanged }) as std::sync::Arc<dyn ReportSink>;
-    let first = ReportServer::start(sink(), dir.clone()).await.unwrap();
-    assert_eq!(first.channel.port(), free);
-    let second = ReportServer::start(sink(), dir.clone()).await.unwrap();
-    assert_ne!(second.channel.port(), free, "the port is taken, so another is chosen");
-    assert_eq!(std::fs::read_to_string(dir.join("port")).unwrap(), second.channel.port().to_string());
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-#[test]
-fn a_runs_config_is_readable_by_its_owner_alone_and_holds_the_token_the_cli_is_given_nowhere_else() {
-    use std::os::unix::fs::PermissionsExt;
-    let dir = std::env::temp_dir().join(format!("gossamr-report-config-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    let channel = ReportChannel::new(4321, dir.join("report"));
-    let token = new_token().unwrap();
-    let launch = channel.write_config("run-1", &token).unwrap();
-    let mode = |p: &std::path::Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
-    assert_eq!((mode(&launch.config), mode(&dir.join("report"))), (0o600, 0o700));
-    let config: Value = serde_json::from_str(&std::fs::read_to_string(&launch.config).unwrap()).unwrap();
-    let server = &config["mcpServers"]["run-report"];
-    assert_eq!((server["type"].as_str(), server["url"].as_str()), (Some("http"), Some("http://127.0.0.1:4321/report/run-1")));
-    assert_eq!(server["headers"]["Authorization"], format!("Bearer {token}"));
-    assert!(!format!("{launch:?}").contains(&token[4..]), "the launch prints a path, never the token");
-
-    let newer = new_token().unwrap();
-    channel.write_config("run-1", &newer).unwrap();
-    assert!(std::fs::read_to_string(&launch.config).unwrap().contains(&newer[4..]));
-    assert_eq!(channel.configured(), ["run-1"]);
-    channel.remove_config("run-1");
-    assert!(channel.configured().is_empty() && !launch.config.exists());
-    for bad in ["", "../x", "a/b", "a b", "..", &"a".repeat(65)] {
-        assert!(channel.write_config(bad, &token).is_err(), "{bad:?}");
-    }
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 fn review_run(result: Option<&str>, complete: bool) -> Run {

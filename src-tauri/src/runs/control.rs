@@ -236,6 +236,7 @@ impl RunService {
         let id = run.short_id.clone().ok_or_else(|| refuse("This run has no session to stop."))?;
         let tc = self.toolchain().await?;
         tc.cli.stop(&id).await?;
+        self.core.asks().cancel(&run.id);
         Self::stopped(&mut run);
         if let Err(e) = self.index.mark_terminal(&run.id) {
             eprintln!("couldn't update the run index: {e}");

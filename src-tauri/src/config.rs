@@ -32,8 +32,6 @@ pub struct AgentSettings {
     pub terminal: TerminalChoice,
     /// Draft a Jira comment on the run's ticket when it finishes with a `For Jira:` section.
     pub draft_on_finish: bool,
-    /// Offer new runs the run-report tool, through which an agent hands Gossamr its result as data. Off until tried.
-    pub report_result: bool,
     /// Which system notifications about runs the person gets (`runs::notices`).
     pub notifications: NoticeMode,
     /// Minutes between digest notifications, when `notifications` is a digest.
@@ -48,7 +46,6 @@ impl Default for AgentSettings {
             token_cap: 3_000_000,
             terminal: TerminalChoice::Terminal,
             draft_on_finish: true,
-            report_result: false,
             notifications: NoticeMode::Workstream,
             digest_minutes: DIGEST_MINUTES,
         }
@@ -63,7 +60,6 @@ impl AgentSettings {
             token_cap: self.token_cap.min(MAX_TOKENS),
             terminal: self.terminal,
             draft_on_finish: self.draft_on_finish,
-            report_result: self.report_result,
             notifications: self.notifications,
             digest_minutes: self.digest_minutes.clamp(1, DIGEST_MINUTES_MAX),
         }
@@ -118,6 +114,20 @@ mod tests {
     }
 
     #[test]
+    fn a_config_saved_with_the_old_report_setting_still_loads_and_drops_it() {
+        let dir = std::env::temp_dir().join(format!("gossamr-config-report-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(FILE), r#"{"agents":{"maxRuns":2,"reportResult":true,"draftOnFinish":false},"pickedClones":{"acme/webshop":"/Users/me/Code/webshop"}}"#).unwrap();
+        let loaded = AppConfig::load(&dir);
+        assert_eq!((loaded.agents.max_runs, loaded.agents.draft_on_finish), (2, false));
+        assert_eq!(loaded.picked_clones.len(), 1);
+        loaded.save(&dir).unwrap();
+        assert!(!std::fs::read_to_string(dir.join(FILE)).unwrap().contains("reportResult"));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
     fn a_picked_clone_round_trips_beside_older_settings_and_a_mistyped_value_gives_the_defaults() {
         let dir = std::env::temp_dir().join(format!("gossamr-config-agents-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -139,7 +149,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("gossamr-config-limits-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        assert_eq!(AppConfig::load(&dir).agents, AgentSettings { max_runs: 3, wall_clock_minutes: 60, token_cap: 3_000_000, terminal: TerminalChoice::Terminal, draft_on_finish: true, report_result: false, notifications: NoticeMode::Workstream, digest_minutes: 30 });
+        assert_eq!(AppConfig::load(&dir).agents, AgentSettings { max_runs: 3, wall_clock_minutes: 60, token_cap: 3_000_000, terminal: TerminalChoice::Terminal, draft_on_finish: true, notifications: NoticeMode::Workstream, digest_minutes: 30 });
         std::fs::write(dir.join(FILE), r#"{"agents":{"draftOnFinish":false}}"#).unwrap();
         assert!(!AppConfig::load(&dir).agents.draft_on_finish);
         std::fs::write(dir.join(FILE), r#"{"agents":{"maxRuns":2}}"#).unwrap();

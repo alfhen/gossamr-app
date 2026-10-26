@@ -77,7 +77,7 @@ Read from `claude --help` and `claude agents --help`, `claude attach --help`, `c
 - `claude attach <id>` is interactive: it is where a person answers the prompt, in Terminal.
 - `claude logs` only reads, `claude respawn` restarts a session, `claude stop` stops one.
 - `--permission-prompt-tool` and `--permission-prompts host|none` apply only with `--print`, which `--bg` rejects.
-- An allow rule on resume isn't usable: any flag on `--bg --resume` makes `claude` start a copy, and a copy is a new job without the run's saved flags (see "Resume after stop" and the run-report tool section). `--allowedTools "Bash(<exact command>)"` on resume was therefore not used, and `ClaudeCli::resume` still passes no flag.
+- An allow rule on resume isn't usable: any flag on `--bg --resume` makes `claude` start a copy, and a copy is a new job without the run's saved flags (see "Resume after stop" and the agent tools section). `--allowedTools "Bash(<exact command>)"` on resume was therefore not used, and `ClaudeCli::resume` still passes no flag.
 
 What Gossamr does (`runs/permission.rs`):
 
@@ -167,26 +167,28 @@ Nothing here was run against a real `claude`; the scripted CLI only proves the p
 - That repository hooks (`pre-push`, commit hooks) behave in a worktree and in the checkout a Review does (`git fetch origin pull/<n>/head`), and do not run code from the pull request with more reach than the person intended. A Review only reads, but a hook runs on whatever it checks out.
 - That a Review of a draft pull request works (`gh pr view` and `gh pr diff` on a draft), and that the pinned commit is still the pull request's head when the Review starts.
 
-## The run-report tool (off by default; nothing here was run against a real `claude`)
+## The agent tools (one MCP server)
 
-An agent can hand Gossamr its result as data through one MCP tool, `report_result`, served on a loopback port by `runs/report`. Gossamr validates and cleans the call, stores it on that run (`run_reports`, apart from the run's own blob) and drafts from it exactly as it does from the written answer. It never writes to Jira or reaches another run.
+Every run's session is given Gossamr's one MCP server (`agent/mcp.rs`) with four tools of its own, served on a loopback port by `agent/agent_tools.rs`. Pip's tools are on the same server; neither kind of token opens the other's tools.
 
-How it is offered: `claude --bg ... --mcp-config <file> --allowedTools mcp__run-report__report_result --append-system-prompt <guard + REPORT_GUARD> -- <prompt>`. `--strict-mcp-config` is not passed, so the person's own MCP servers stay. The file (`<app data>/report/<run id>.json`, folder 0700, file 0600) holds the server address and the run's token in an `Authorization` header; the token is on no command line and in no environment variable (the daemon that runs `--bg` sessions is shared, so a per-launch variable could not reach it). Resume is still `--bg --resume <id> -- <message>` with no flag, because any flag starts a copy.
+| Tool | What it does |
+|---|---|
+| `report` | Records the run's result as data (`run_reports`, apart from the run's blob). The same validated fields as before, under the new name. The first report stands until a call says `revise: true`. |
+| `ask(question)` | Waits for the answer in the same call. While it waits, the run reads as asking that question, and the supervisor wakes Pip as for any question. An answer through `runs_answer` or an approved answer draft is the call's result at once, with no stop or resume. After `ASK_WAIT` (9 minutes) the call returns "no answer yet; end your turn now with the question", and the answer comes when the session is resumed. Pending asks live in memory: if the app quits, the call fails in the agent. One ask per run. |
+| `read_workstream()` | The run's ticket block, Pip's notes for the workstream, and the reports (or one-line summaries) of the other runs in it, newest last, fenced as data and bounded in size. A run in no workstream gets its ticket block and is told so. |
+| `read_ticket(key)` | Cached text of the run's own ticket or a ticket linked to it, fenced as data. Any other key is refused. |
+
+How it is offered: `claude --bg ... --mcp-config <file> --allowedTools mcp__gossamr__report mcp__gossamr__ask mcp__gossamr__read_workstream mcp__gossamr__read_ticket --append-system-prompt <guard + AGENT_GUARD> -- <prompt>`, on every launch. A read-only kind adds its own exact allow list to the same flag and still passes `--strict-mcp-config`, so this entry is the only server it loads. Other kinds do not pass `--strict-mcp-config`, so the person's own MCP servers stay. The file (`<app data>/agents/<run id>.json`, folder 0700, file 0600) holds the server address, the run's token in an `Authorization` header and `"timeout": 600000`, above `ASK_WAIT`, because a session cuts an HTTP MCP call at 60 s otherwise. The token is on no command line and in no environment variable (the daemon that runs `--bg` sessions is shared, so a per-launch variable could not reach it). Resume is still `--bg --resume <id> -- <message>` with no flag, because any flag starts a copy.
 
 What is decided in code, not by the CLI:
 
-- A token is `gsr_` and 48 hex characters; only its SHA-256 is stored, with the run it was minted for and the tool version. `runs::redact` masks the shape, and a launch failure's text is redacted before it is stored.
-- Hashes are never deleted while the run exists, so a launch whose answer was lost and is later adopted by Retry can still report. Every launch of a run adds its own token, and all of them are valid for that run only.
-- Revocation is by state: a call is taken only while the run is launching, working, waiting for an answer, a permission or a sign-in, or unknown, checked in the same write transaction that stores the report. Done, failed, stopped and queued runs refuse. The config file is removed with the worktree, and a sweep removes the file of a failed run, a missing run, or a finished run six hours after it ended. Cleaning a run up drops its tokens.
-- The first report stands until a call says `revise: true`. A report made before the person answered or carried on is marked stale and the written answer is read instead; the woken session can report again without `revise`.
-- Twelve calls and five refusals per run, four requests in flight, 128 KiB per body, loopback Host and Origin only, 401 only for a missing or malformed bearer (anything else is a tool error, so a client does not start OAuth).
+- **Port.** The server binds the port it used last time (`<app data>/agents/port`) and falls back to a fresh one, logged, when that is taken. Every request is authenticated on its own and no session state is kept, so a restart on the same port is invisible to a running session.
+- **Tokens.** An agent token is `gsr_` and 48 hex characters; only its SHA-256 is stored, with the run it was minted for and the tool version. `runs::redact` masks the shape, and a launch failure's text is redacted before it is stored. Hashes are never deleted while the run exists, so a launch whose answer was lost and is later adopted by Retry can still report. Every launch of a run adds its own token, and all of them are valid for that run only. Pip's token is random, per turn and in memory, and works only on `/mcp/{request_id}`.
+- **Revocation by state.** A call is taken only while the run is launching, working, waiting for an answer, a permission or a sign-in, or unknown. For `report` this is checked in the same write transaction that stores the report. Done, failed, stopped and queued runs refuse. The config file is removed with the worktree, and a sweep removes the file of a failed run, a missing run, or a finished run six hours after it ended. Cleaning a run up drops its tokens.
+- **Caps.** `report`: twelve calls and five refusals per run. The other tools: 200 calls per run. Four quick requests in flight, with pending asks counted apart; 128 KiB per body; loopback Host and Origin only; 401 only for a missing or malformed bearer (anything else is a tool error, so a client does not start OAuth).
+- **Staleness.** A report made before the person answered or carried on is marked stale and the written answer is read instead; the woken session can report again without `revise`.
 
-To check by hand, with a signed-in Claude (`cargo test real_report -- --ignored --nocapture`, which starts a stub server, a real `--bg` session in `~/Code` and one resume, and stops and removes what it started):
-
-1. That a `--bg` session loads the `--mcp-config` file and calls the tool without a permission prompt. `claude agents --help` lists `--mcp-config` among the flags applied to dispatched sessions but not `--allowedTools`, so a permission prompt for the tool is possible: it would show as Needs permission, answered with Deny in Gossamr or in Terminal (see "Answering a permission prompt").
-2. That the token is on no command line (the test checks `ps`) and where Claude keeps the config: the test prints whether the token is in the job's files. If it is, any process of the same user can read it for as long as the job exists; the token only works for one run and only while it is live.
-3. Whether a `--resume` with no flag still has the tool. The test prints KEPT or LOST. Either is workable: the person's answer marks the earlier report stale, and the written answer is read when the resumed turn does not report again.
-4. Whether a session that started while Gossamr was restarting (the tool server rebinds the port it used last time, and a bind failure only disables the tool) reconnects to a server that was down, and whether Claude defers the tool's schema so the prompt's field list is what the agent calls it from.
+To check by hand, with a signed-in Claude: `cargo test real_agent_tools -- --ignored --nocapture`. It starts the merged server, a real `--bg` session in `~/Code` that reports, reads its workstream and asks one question (answered by the test), and one resume, and stops and removes what it started. It prints whether the token is in the job's files and whether a flagless resume kept the tools (the spike results below say it does).
 
 ## The agent MCP channel, checked for real (Claude Code 2.1.310)
 
