@@ -188,6 +188,47 @@ To check by hand, with a signed-in Claude (`cargo test real_report -- --ignored 
 3. Whether a `--resume` with no flag still has the tool. The test prints KEPT or LOST. Either is workable: the person's answer marks the earlier report stale, and the written answer is read when the resumed turn does not report again.
 4. Whether a session that started while Gossamr was restarting (the tool server rebinds the port it used last time, and a bind failure only disables the tool) reconnects to a server that was down, and whether Claude defers the tool's schema so the prompt's field list is what the agent calls it from.
 
+## The agent MCP channel, checked for real (Claude Code 2.1.310)
+
+These are the results of the step 0 spikes for `docs/simplification-proposal.md`. Each ran a real `--bg` session with the person's own signed-in config, in a worktree of a trusted clone, using `--model haiku`. The MCP server was a stub HTTP server on a fixed loopback port that logged every request. All the sessions, worktrees and branches were removed afterwards.
+
+**An MCP tool needs an allow rule, except in `auto`.**
+
+| Mode | Without `--allowedTools` | With `--allowedTools mcp__gossamr__report` |
+|---|---|---|
+| `manual` | `blocked`, `waitingFor: "permission prompt"` | The tool was called and the session ended `done` |
+| `acceptEdits` | `blocked`, `waitingFor: "permission prompt"` | not run; `manual` is the stricter mode |
+| the person's default (`auto`) | The tool was called and the session ended `done` | not run |
+
+- So every launch passes `--allowedTools` for Gossamr's own tools, and `--allowedTools` does reach a dispatched `--bg` session.
+- The agent loaded the deferred tool schema through ToolSearch first. That needed no permission in any mode.
+
+**A flagless resume keeps the session's saved options, but only after a stop.**
+
+- A finished session is still alive and idle until it is stopped.
+- Resuming it while it is still alive started a copy. The CLI printed "session … is already running in the background, so this started a copy". The copy had none of the saved options, so it could not call the tool.
+- After `claude stop` and a 6 s wait, `--bg --resume <session id> -- <message>` printed "woke session … with its saved options (--name, --mcp-config, --permission-mode, --allowedTools, --model)". The tool call then arrived with no prompt.
+
+**Restarting the server on the same port is invisible to a running session.**
+
+- While the server was down, a call failed in the session with `ECONNREFUSED: Unable to connect.` The agent reported it and carried on.
+- The server was restarted on the same port while the agent waited on a second server. The agent's next call reached the new process with no new `initialize`.
+- The stub keeps no `Mcp-Session-Id`, so a server that authenticates each request by its bearer token alone is safe to restart.
+- A resumed session sends `initialize` again on its first call.
+
+**An HTTP MCP call is cut at 60 s unless the server entry sets `timeout`.**
+
+- A tool that answered after 75 s failed in the session with "The operation timed out." The server saw the client go away when it finally answered.
+- With `"timeout": 150000` in that server's entry in the `--mcp-config` file, the same 75 s call returned its result.
+- This matches the documented per-request timer for HTTP servers: the greatest of 60 s, the server's tool timeout and `MCP_TIMEOUT`.
+- So a tool that waits for an answer has to stay under the `timeout` its config file sets.
+
+**Stop, wait 5 s, resume continued the same session every time.**
+
+- The session was stopped in the middle of an MCP tool call, then resumed 5 s later with no flag.
+- In 6 of 6 cycles, plus the resume above, the CLI printed "woke session" with the same id.
+- A copy appeared only when the session was resumed while it was still running.
+
 ## Cleanup check (PR 12a)
 
 `real_rm_straight_after_stop_is_retried_until_it_succeeds_and_unpushed_work_is_refused` (scratch config, signed out) stops two sessions and removes them straight away. The clean one was removed on the first try (0 waits, 0.7 s): the lock refusal described above did not appear for a signed-out session that never did model work, so the retry loop is covered by the scripted CLI and was not seen firing for real in this run. The session with a commit that was never pushed was refused with stdout text ending in a suggestion to run `claude rm <id> --discard-unpushed`, and its worktree and branch were left in place. Gossamr returns that text unchanged and never passes the flag. Not checked: the lock refusal for a session that was doing model work when stopped.
