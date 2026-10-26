@@ -2,15 +2,16 @@
 //! Pip, and starts nothing.
 //!
 //! It hears about runs from the run tracker (`RunNotifier::notify`, called while `RunService.launching` is held, so it
-//! only ever spawns) and from its own periodic sweep, which catches what the tracker never says: a run the person
-//! stopped, a run finishing again after a continuation that drafted nothing, a run that finished while the workstream
-//! was paused.
+//! only ever spawns) and from its own periodic sweep, which catches what the tracker never says: a run stopped from
+//! outside Gossamr, a run finishing again after a continuation that drafted nothing, a run that finished while the
+//! workstream was paused, a build's pull request turning up. A run the person stopped wakes nobody.
 //!
 //! A wake is Pip's ordinary turn in the workstream's conversation, asked with a prompt Rust writes from ids, kinds,
 //! states, counts and parsed flags only (`event_line`), never an agent's words. Each `(workstream, run, state)` wakes
 //! Pip at most once: it is recorded as a `wake` line in the workstream's audit, which is also what a restart rebuilds
-//! from. A paused workstream gets no wakes. Too many wakes pause it (`Core::admit_wake`); quota backoff retries a wake
-//! the subscription refused.
+//! from. A paused workstream gets no wakes. Too many wakes pause it (`Core::admit_wake`). A wake the subscription
+//! refused, or that couldn't start, gives its facts back and holds the workstream's wakes off for a backoff; the sweep
+//! then wakes Pip for them again.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
@@ -19,18 +20,19 @@ use std::time::Duration;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use super::{AgentEvent, AgentService, Update, UpdateSink, WAKE_NOT_STARTED, WAKE_PAUSED};
+use super::{AgentEvent, AgentService, Update, WakeSink, REMOVED, WAKE_NOT_STARTED, WAKE_PAUSED};
 use crate::auth::Scope;
 use crate::domain::{Actor, Origin, ProposalQuery, Run, RunKind, RunState, StateKind, Workstream, WorkstreamEvent};
 use crate::error::{Error, Result};
-use crate::inbox::{Core, WakeAdmission};
+use crate::inbox::Core;
 use crate::runs::report::{ReviewVerdict, Severity};
 use crate::runs::tracker::{Attention, RunNotifier};
 use crate::tracker::Connection;
 
 /// How often the sweep looks over the runs of open workstreams.
 pub const SWEEP_EVERY: Duration = Duration::from_secs(30);
-/// The first wait before a wake that hit the quota is tried again; each further miss doubles it, up to `BACKOFF_MAX`.
+/// The first wait before Pip is woken again in a workstream where a wake hit the quota or couldn't start; each further
+/// miss doubles it, up to `BACKOFF_MAX`.
 pub const BACKOFF_FIRST: Duration = Duration::from_secs(60);
 pub const BACKOFF_MAX: Duration = Duration::from_secs(60 * 60);
 
@@ -45,11 +47,11 @@ pub enum WakeState {
     Done,
     Failed,
     Stopped,
-    /// Gossamr stopped it for passing a limit.
-    Limit,
     NeedsAnswer,
     NeedsPermission,
     SystemBlocked,
+    /// A finished build's pull request was found after Pip was told it was still to come.
+    PullRequest,
 }
 
 impl WakeState {
@@ -58,10 +60,10 @@ impl WakeState {
             WakeState::Done => "done",
             WakeState::Failed => "failed",
             WakeState::Stopped => "stopped",
-            WakeState::Limit => "limit",
             WakeState::NeedsAnswer => "needs_answer",
             WakeState::NeedsPermission => "needs_permission",
             WakeState::SystemBlocked => "system_blocked",
+            WakeState::PullRequest => "pr_found",
         }
     }
 
@@ -70,16 +72,17 @@ impl WakeState {
             WakeState::Done => "Done",
             WakeState::Failed => "Failed",
             WakeState::Stopped => "Stopped",
-            WakeState::Limit => "Stopped at a limit",
             WakeState::NeedsAnswer => "Needs an answer",
             WakeState::NeedsPermission => "Needs permission",
             WakeState::SystemBlocked => "Blocked on sign-in",
+            WakeState::PullRequest => "Pull request found",
         }
     }
 
-    /// What the tracker's notice `why` about `run` means. Every finish with or without a draft is `Done`.
-    pub fn of_attention(run: &Run, why: Attention) -> Self {
-        match why {
+    /// What the tracker's notice `why` about `run` means; `None` for a stop Gossamr made at a limit. Every finish with or
+    /// without a draft is `Done`.
+    pub fn of_attention(run: &Run, why: Attention) -> Option<Self> {
+        Some(match why {
             Attention::Needs => match run.state {
                 RunState::NeedsPermission => WakeState::NeedsPermission,
                 RunState::SystemBlocked => WakeState::SystemBlocked,
@@ -87,17 +90,18 @@ impl WakeState {
             },
             Attention::Done | Attention::Drafted | Attention::DraftedTicket | Attention::Breakdown | Attention::PlanDrafted => WakeState::Done,
             Attention::Failed => WakeState::Failed,
-            Attention::Limit => WakeState::Limit,
-        }
+            Attention::Limit => return None,
+        })
     }
 
-    /// A run at rest, or waiting on the person, as the sweep finds it; `None` while it is under way. A question asked
-    /// while the workstream was paused is noticed this way once it is resumed, keyed by when it was asked.
+    /// A run at rest, or waiting on the person, as the sweep finds it; `None` while it is under way, or after a stop
+    /// Gossamr made at a limit. A question asked while the workstream was paused is noticed this way once it is
+    /// resumed, keyed by when it was asked.
     pub fn of_run(run: &Run) -> Option<Self> {
         match run.state {
             RunState::Done => Some(WakeState::Done),
             RunState::Failed => Some(WakeState::Failed),
-            RunState::Stopped if run.stopped_by_limit => Some(WakeState::Limit),
+            RunState::Stopped if run.stopped_by_limit => None,
             RunState::Stopped => Some(WakeState::Stopped),
             RunState::NeedsAnswer => Some(WakeState::NeedsAnswer),
             RunState::NeedsPermission => Some(WakeState::NeedsPermission),
@@ -154,11 +158,11 @@ impl WakeFact {
 fn mark(run: &Run, state: WakeState) -> String {
     let base = state.as_str();
     match state {
-        WakeState::Done | WakeState::Stopped | WakeState::Limit => match run.continued_at {
+        WakeState::Done | WakeState::Stopped => match run.continued_at {
             Some(at) => format!("{base}@{}", at.timestamp()),
             None => base.to_string(),
         },
-        WakeState::Failed => base.to_string(),
+        WakeState::Failed | WakeState::PullRequest => base.to_string(),
         WakeState::NeedsAnswer | WakeState::NeedsPermission | WakeState::SystemBlocked => format!("{base}@{}", run.last_progress_at.timestamp()),
     }
 }
@@ -276,6 +280,22 @@ pub fn woken_in(events: &[WorkstreamEvent]) -> HashSet<(String, String)> {
     woken
 }
 
+/// Whether a wake turn that ended with `status` and `error` reached Pip, which is what the ceilings count: not one that
+/// never started, or that the subscription refused.
+pub fn reached_pip(status: &str, error: Option<&str>) -> bool {
+    status != "queued" && !error.is_some_and(|e| e == WAKE_PAUSED || e == REMOVED || e.starts_with(WAKE_NOT_STARTED) || is_quota_error(e))
+}
+
+/// Whether the person stopped `run` since it last carried on.
+fn stopped_by_person(events: &[WorkstreamEvent], run: &Run) -> bool {
+    events.iter().any(|e| e.actor == Actor::Person && e.action == "run_stopped" && e.run_id.as_deref() == Some(run.id.as_str()) && run.continued_at.is_none_or(|at| e.at >= at))
+}
+
+/// Whether Pip was told, in the wake with key `key`, that the build `run` is still waiting for its pull request.
+pub fn told_waiting_for_pr(events: &[WorkstreamEvent], run: &str, key: &str) -> bool {
+    events.iter().any(|e| e.actor == Actor::Supervisor && e.action == "waiting_for_pr" && e.run_id.as_deref() == Some(run) && e.detail.as_deref() == Some(key))
+}
+
 /// Tells every notifier in turn: today's notices and the supervisor.
 pub struct FanoutNotifier(pub Vec<Arc<dyn RunNotifier>>);
 
@@ -305,8 +325,9 @@ pub type Emit = Arc<dyn Fn(&str, Update) + Send + Sync>;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Quota {
-    /// The wait before the next retry.
+    /// The wait the next miss starts.
     next: Duration,
+    /// Whether a backoff is running.
     pending: bool,
 }
 
@@ -349,7 +370,8 @@ impl Supervisor {
     }
 
     /// One sweep at `now`: every open workstream that isn't paused has its ticket checked for drift, and each linked
-    /// run at rest that Pip wasn't woken for yet becomes a fact.
+    /// run at rest that Pip wasn't woken for yet becomes a fact, as does a pull request found for a build Pip was told
+    /// was waiting for one.
     pub async fn sweep_at(&self, now: DateTime<Utc>) {
         if self.agent().is_none() {
             return;
@@ -361,14 +383,26 @@ impl Supervisor {
             if ws.paused_reason.is_some() {
                 continue;
             }
+            let Ok(events) = self.core.workstream_events(&scope, &ws.id).await else { continue };
             let Ok(runs) = self.linked(&scope, &ws.id).await else { continue };
+            let woken = self.woken(&ws.id, &events);
+            let is_new = |fact: &WakeFact| !woken.contains(&(fact.run.clone(), fact.key().to_string()));
             let mut facts = Vec::new();
             for run in &runs {
-                if let Some(state) = WakeState::of_run(run) {
+                let Some(state) = WakeState::of_run(run) else { continue };
+                if state == WakeState::Stopped && stopped_by_person(&events, run) {
+                    continue;
+                }
+                if is_new(&WakeFact::new(run, state)) {
                     facts.push(self.fact_of(&scope, run, state).await);
                 }
+                let found = WakeFact::new(run, WakeState::PullRequest);
+                let done = WakeFact::new(run, WakeState::Done);
+                if state == WakeState::Done && is_new(&found) && !is_new(&done) && told_waiting_for_pr(&events, &run.id, done.key()) && matches!(self.core.pull_head_of(run), Ok(Some(_))) {
+                    facts.push(found);
+                }
             }
-            self.handle(&ws.id, facts, false, now).await;
+            self.handle(&ws.id, facts, now).await;
         }
     }
 
@@ -399,7 +433,6 @@ impl Supervisor {
         }
         if run.spec.kind == RunKind::Build && run.spec.allow_push && matches!(self.core.pull_head_of(run), Ok(None)) {
             fact.waiting_for_pr = true;
-            self.core.request_code_sync();
         }
         fact
     }
@@ -410,8 +443,9 @@ impl Supervisor {
         if Connection::jira_id(&scope) != run.connection_id {
             return;
         }
-        let fact = self.fact_of(&scope, &run, WakeState::of_attention(&run, why)).await;
-        self.handle(&ws, vec![fact], false, Utc::now()).await;
+        let Some(state) = WakeState::of_attention(&run, why) else { return };
+        let fact = self.fact_of(&scope, &run, state).await;
+        self.handle(&ws, vec![fact], Utc::now()).await;
     }
 
     /// Whether `(ws, run, key)` was woken, from memory and the workstream's audit, where a later `wake_dropped` line
@@ -429,8 +463,8 @@ impl Supervisor {
         seen.iter().filter(|(w, _, _)| w == ws).map(|(_, r, s)| (r.clone(), s.clone())).collect()
     }
 
-    /// A wake that never started because its workstream was paused or closed first (`WAKE_PAUSED`): its facts are taken
-    /// back with a `wake_dropped` line each, so Pip is woken for them once the workstream is resumed.
+    /// A wake that never ran (its workstream was paused or closed first, the quota refused it, or Pip couldn't start):
+    /// its facts are taken back with a `wake_dropped` line each, so Pip is woken for them again.
     async fn unmark(&self, facts: WakeFacts) {
         let ws = facts.workstream.clone();
         {
@@ -446,8 +480,8 @@ impl Supervisor {
     }
 
     /// Notes the ticket of `ws_id` drifting, then wakes Pip with the `facts` it wasn't woken for yet, unless the
-    /// workstream is closed or paused. `retry` wakes again for facts a quota miss cut short.
-    async fn handle(&self, ws_id: &str, facts: Vec<WakeFact>, retry: bool, now: DateTime<Utc>) {
+    /// workstream is closed, paused or backing off.
+    async fn handle(&self, ws_id: &str, facts: Vec<WakeFact>, now: DateTime<Utc>) {
         let _one = self.work.lock().await;
         let Some(agent) = self.agent() else { return };
         let Ok(scope) = self.core.scope().await else { return };
@@ -462,7 +496,7 @@ impl Supervisor {
             Ok(false) => {}
             Err(e) => eprintln!("couldn't check the ticket of workstream {ws_id} for changes: {e}"),
         }
-        if !retry && self.quota_pending(ws_id) {
+        if self.backing_off(ws_id) {
             return;
         }
         let Ok(events) = self.core.workstream_events(&scope, ws_id).await else { return };
@@ -470,21 +504,21 @@ impl Supervisor {
         let mut fresh: Vec<WakeFact> = Vec::new();
         for f in facts {
             let seen = woken.contains(&(f.run.clone(), f.key().to_string()));
-            if (retry || !seen) && !fresh.iter().any(|g| g.run == f.run && g.key() == f.key()) {
+            if !seen && !fresh.iter().any(|g| g.run == f.run && g.key() == f.key()) {
                 fresh.push(f);
             }
         }
-        self.wake_for(&agent, &scope, &ws, fresh, retry, now).await;
+        self.wake_for(&agent, &scope, &ws, fresh, now).await;
     }
 
     /// Wakes Pip in `ws_id` with `fresh`, unless the workstream has had its ceiling of wakes.
-    async fn wake_for(&self, agent: &Arc<AgentService>, scope: &Scope, ws: &Workstream, fresh: Vec<WakeFact>, retry: bool, now: DateTime<Utc>) {
+    async fn wake_for(&self, agent: &Arc<AgentService>, scope: &Scope, ws: &Workstream, fresh: Vec<WakeFact>, now: DateTime<Utc>) {
         if fresh.is_empty() {
             return;
         }
         let (ws_id, connection) = (ws.id.as_str(), ws.connection_id.as_str());
         let conversation = format!("{}{ws_id}", super::WORKSTREAM_PREFIX);
-        let admitted = match self.core.admit_wake(scope, ws_id, &fresh, &WakeAdmission { retry, at: now }).await {
+        let admitted = match self.core.admit_wake(scope, ws_id, &fresh, now).await {
             Ok(a) => a,
             Err(e) => {
                 eprintln!("couldn't record a wake in workstream {ws_id}: {e}");
@@ -507,11 +541,13 @@ impl Supervisor {
                 seen.insert((ws_id.to_string(), f.run.clone(), f.key().to_string()));
             }
         }
+        if admitted.facts.iter().any(|f| f.waiting_for_pr) {
+            self.core.request_code_sync();
+        }
         let facts = WakeFacts { workstream: ws_id.to_string(), facts: admitted.facts };
-        let sink = self.sink(&conversation, facts.clone());
-        if let Err(e) = agent.wake(ws_id, facts.clone(), sink).await {
-            // A wake that failed to start was told through its sink, which takes the facts back or retries on the
-            // quota. Any other error came before the sink was ever called, so the facts go back here.
+        if let Err(e) = agent.wake(ws_id, facts.clone(), self.sink(&conversation)).await {
+            // A wake that failed to start was told through its sink, which takes the facts back. Any other error came
+            // before the sink was ever called, so the facts go back here.
             if !matches!(&e, Error::Claude(m) if m.starts_with(WAKE_NOT_STARTED)) {
                 self.unmark(facts).await;
             }
@@ -526,86 +562,71 @@ impl Supervisor {
         }
     }
 
-    /// Where a wake turn's events go: to the page, marked as the workstream's and as a wake, and back here to notice a
-    /// quota miss.
-    fn sink(&self, conversation: &str, facts: WakeFacts) -> UpdateSink {
+    /// Where a wake turn's events go: to the page, marked as the workstream's and as a wake, and back here to give the
+    /// facts of a wake that never ran, whichever wakes were merged into it, back to the sweep.
+    fn sink(&self, conversation: &str) -> WakeSink {
         let (emit, me, conversation) = (self.emit.clone(), self.me.clone(), conversation.to_string());
-        Arc::new(move |u: Update| {
+        Arc::new(move |facts: &WakeFacts, u: Update| {
             if let (AgentEvent::Done { ok, message, .. }, Some(me)) = (&u.event, me.upgrade()) {
                 if *ok {
-                    me.quota_ok(&facts.workstream);
+                    me.backoff_over(&facts.workstream);
                 } else if message.as_deref() == Some(WAKE_PAUSED) {
                     let facts = facts.clone();
                     tokio::spawn(async move { me.unmark(facts).await });
-                } else if message.as_deref().is_some_and(is_quota_error) {
+                } else if message.as_deref().is_some_and(|m| is_quota_error(m) || m.starts_with(WAKE_NOT_STARTED)) {
                     let facts = facts.clone();
-                    tokio::spawn(async move { me.on_quota(facts).await });
-                } else if message.as_deref().is_some_and(|m| m.starts_with(WAKE_NOT_STARTED)) {
-                    let facts = facts.clone();
-                    tokio::spawn(async move { me.unmark(facts).await });
+                    tokio::spawn(async move { me.back_off(facts).await });
                 }
             }
             emit(&conversation, u);
         })
     }
 
-    fn quota_ok(&self, ws: &str) {
+    fn backoff_over(&self, ws: &str) {
         let mut quota = self.quota.lock().expect("lock poisoned");
         if quota.get(ws).is_some_and(|q| !q.pending) {
             quota.remove(ws);
         }
     }
 
-    /// Whether a retry after a quota miss is waiting for `ws`: nothing else wakes Pip there until it has run.
-    fn quota_pending(&self, ws: &str) -> bool {
+    /// Whether `ws` is waiting out a backoff: nothing wakes Pip there until it is over.
+    fn backing_off(&self, ws: &str) -> bool {
         self.quota.lock().expect("lock poisoned").get(ws).is_some_and(|q| q.pending)
     }
 
-    /// A wake ended on the quota: stops the workstream's other wakes and, unless a retry is pending already, tries once
-    /// more after the backoff, which doubles each time up to an hour. Never a loop: each retry is one wake.
-    async fn on_quota(self: Arc<Self>, facts: WakeFacts) {
+    /// A wake ended on the quota or couldn't start: its facts are given back, so the sweep wakes Pip for them again
+    /// (after a restart too), and no wake of the workstream's runs until the backoff, which doubles each time up to an
+    /// hour, is over.
+    async fn back_off(self: Arc<Self>, facts: WakeFacts) {
         let ws = facts.workstream.clone();
-        if let Some(agent) = self.agent() {
-            agent.cancel_workstream_wakes(&ws).await;
-        }
         let delay = {
             let mut quota = self.quota.lock().expect("lock poisoned");
             let q = quota.entry(ws.clone()).or_insert(Quota { next: BACKOFF_FIRST, pending: false });
             if q.pending {
-                return;
+                None
+            } else {
+                q.pending = true;
+                let delay = q.next;
+                q.next = next_backoff(delay);
+                Some(delay)
             }
-            q.pending = true;
-            let delay = q.next;
-            q.next = next_backoff(delay);
-            delay
         };
-        let me = self.clone();
-        tokio::spawn(async move {
-            tokio::time::sleep(delay).await;
-            me.retry(facts).await;
-        });
+        if let Some(agent) = self.agent() {
+            agent.cancel_workstream_wakes(&ws).await;
+        }
+        self.unmark(facts).await;
+        if let Some(delay) = delay {
+            let me = self.clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(delay).await;
+                if let Some(q) = me.quota.lock().expect("lock poisoned").get_mut(&ws) {
+                    q.pending = false;
+                }
+            });
+        }
     }
 
-    /// The retry after a quota miss: wakes Pip again. Paused or closed meanwhile, the facts are let go of, so resuming
-    /// wakes Pip for them.
-    async fn retry(&self, facts: WakeFacts) {
-        let ws = facts.workstream.clone();
-        if let Some(q) = self.quota.lock().expect("lock poisoned").get_mut(&ws) {
-            q.pending = false;
-        }
-        let Ok(scope) = self.core.scope().await else { return };
-        let open = match self.core.workstream(&scope, &ws).await {
-            Ok(view) => view.is_some_and(|v| v.workstream.closed_at.is_none() && v.workstream.paused_reason.is_none()),
-            Err(_) => false,
-        };
-        if !open {
-            self.unmark(facts).await;
-            return;
-        }
-        self.handle(&ws, facts.facts, true, Utc::now()).await;
-    }
-
-    /// The pending retry and the backoff the next miss would wait, for `ws`.
+    /// Whether a backoff is running and how long the next miss would wait, for `ws`.
     #[cfg(test)]
     pub(crate) fn quota_state(&self, ws: &str) -> Option<(bool, Duration)> {
         self.quota.lock().unwrap().get(ws).map(|q| (q.pending, q.next))

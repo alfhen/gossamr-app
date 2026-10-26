@@ -31,10 +31,10 @@ use tracker::{Connection, Move};
 use inbox::{CatalogPage, CodeRef, ConnectionInfo, Core, Edit, WatchState, WorkstreamView};
 use error::{Error, Result};
 use domain::{
-    CodeChange, CodeFile, CodeHit, CommitQuery, Comment, Container, ContainerRef, DevLink, Event, FeedPage, FeedQuery, Filter, Footprint, Identity, Intent, ItemRef, Proposal, ProposalQuery, PullRequestDetail, Run, RunEvent, RunQuery, RunReview, RunSpec, Stray,
-    TreeEntry, WatchChange, WatchMode, WorkItem, Workflow, Workstream, WorkstreamEvent,
+    CodeChange, CodeFile, CodeHit, CommitQuery, Comment, Container, DevLink, Event, FeedPage, FeedQuery, Filter, Footprint, Identity, Intent, ItemRef, Proposal, ProposalQuery, PullRequestDetail, Run, RunEvent, RunQuery, RunReview, RunSpec, Stray,
+    TreeEntry, WatchChange, WatchMode, WorkItem, Workstream, WorkstreamEvent,
 };
-use model::{Snapshot, Transition};
+use model::Snapshot;
 use runs::preflight::Preflight;
 use runs::service::CloneChoice;
 use sync::Trigger;
@@ -287,11 +287,6 @@ async fn watch_unwatched_assigned(core: State<'_, CoreState>, connection_id: Str
 #[tauri::command]
 async fn watch_dismiss_assigned(core: State<'_, CoreState>, connection_id: String, container_id: String) -> Result<()> {
     core.watch_dismiss_assigned(&connection_id, &container_id).await
-}
-
-#[tauri::command]
-async fn cache_workflow(core: State<'_, CoreState>, container: ContainerRef) -> Result<Option<Workflow>> {
-    core.cache_workflow(&container).await
 }
 
 #[tauri::command]
@@ -994,13 +989,6 @@ fn sync_now(core: State<'_, CoreState>) {
 }
 
 #[tauri::command]
-async fn mark_seen(app: AppHandle, core: State<'_, CoreState>, key: String) -> Result<()> {
-    core.mark_seen(&key).await?;
-    publish(&app, &core).await;
-    Ok(())
-}
-
-#[tauri::command]
 async fn set_unread(app: AppHandle, core: State<'_, CoreState>, id: String, unread: bool) -> Result<()> {
     core.set_unread(&id, unread).await?;
     publish(&app, &core).await;
@@ -1008,79 +996,8 @@ async fn set_unread(app: AppHandle, core: State<'_, CoreState>, id: String, unre
 }
 
 #[tauri::command]
-async fn set_done(app: AppHandle, core: State<'_, CoreState>, id: String, done: bool) -> Result<()> {
-    core.set_done(&id, done).await?;
-    publish(&app, &core).await;
-    Ok(())
-}
-
-#[tauri::command]
-async fn snooze(app: AppHandle, core: State<'_, CoreState>, id: String, until: Option<String>) -> Result<()> {
-    core.snooze(&id, until.as_deref()).await?;
-    publish(&app, &core).await;
-    Ok(())
-}
-
-#[tauri::command]
-async fn transitions(core: State<'_, CoreState>, key: String) -> Result<Vec<Transition>> {
-    core.transitions(&core.scope().await?, &key).await
-}
-
-#[tauri::command]
-async fn transition(app: AppHandle, core: State<'_, CoreState>, scope: Scope, key: String, transition_id: String) -> Result<()> {
-    core.transition(&scope, &key, &transition_id).await?;
-    cache_changed(&app, &Connection::jira_id(&scope));
-    publish(&app, &core).await;
-    Ok(())
-}
-
-#[tauri::command]
-async fn comment(
-    app: AppHandle,
-    core: State<'_, CoreState>,
-    scope: Scope,
-    key: String,
-    body: String,
-    mentions: Option<Vec<model::MentionRef>>,
-    files: Option<Vec<model::Uploaded>>,
-) -> Result<()> {
-    core.comment(&scope, &key, &body, &mentions.unwrap_or_default(), &files.unwrap_or_default()).await?;
-    cache_changed(&app, &Connection::jira_id(&scope));
-    publish(&app, &core).await;
-    Ok(())
-}
-
-#[tauri::command]
 async fn mentionable(core: State<'_, CoreState>, key: String, query: String) -> Result<Vec<model::Person>> {
     core.mentionable(&core.scope().await?, &key, &query).await
-}
-
-/// Uploads a file sent as the raw request body; its metadata comes URL-encoded in the `x-file` header, since header
-/// values must be ASCII and file names often aren't.
-#[tauri::command]
-async fn attach(core: State<'_, CoreState>, request: tauri::ipc::Request<'_>) -> Result<model::Uploaded> {
-    let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
-        return Err(Error::Api { status: 400, message: "expected the file as raw bytes".into() });
-    };
-    let meta: std::collections::HashMap<String, String> = request
-        .headers()
-        .get("x-file")
-        .and_then(|v| v.to_str().ok())
-        .map(|v| url::form_urlencoded::parse(v.as_bytes()).into_owned().collect())
-        .unwrap_or_default();
-    let field = |k: &str| meta.get(k).cloned().ok_or_else(|| Error::Api { status: 400, message: format!("missing {k}") });
-    let scope = Scope { cloud_id: field("cloudId")?, account_id: field("accountId")? };
-    core.attach(&scope, &field("key")?, &field("name")?, &field("type")?, bytes.clone()).await
-}
-
-#[tauri::command]
-async fn ticket_media(core: State<'_, CoreState>, scope: Scope, key: String) -> Result<std::collections::HashMap<String, String>> {
-    core.ticket_media(&scope, &key).await
-}
-
-#[tauri::command]
-async fn attachment_limit(core: State<'_, CoreState>, scope: Scope) -> Result<Option<u64>> {
-    core.attachment_limit(&scope).await
 }
 
 #[tauri::command]
@@ -1225,26 +1142,6 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
-        // `attachment://localhost/{id}` serves a Jira attachment to the page, so images load straight into <img>.
-        .register_asynchronous_uri_scheme_protocol("attachment", |ctx, request, responder| {
-            let core = ctx.app_handle().try_state::<CoreState>().map(|s| s.inner().clone());
-            let id = request.uri().path().trim_start_matches('/').to_string();
-            tauri::async_runtime::spawn(async move {
-                let result = match core {
-                    Some(core) => core.attachment(&id).await,
-                    None => Err(Error::NotSignedIn),
-                };
-                let response = match result {
-                    Ok((mime, bytes)) => tauri::http::Response::builder()
-                        .header(tauri::http::header::CONTENT_TYPE, mime)
-                        // Not cached: after a sign-out, another account must not be served this account's files.
-                        .header(tauri::http::header::CACHE_CONTROL, "no-store")
-                        .body(bytes),
-                    Err(e) => tauri::http::Response::builder().status(502).body(e.to_string().into_bytes()),
-                };
-                responder.respond(response.expect("static response parts"));
-            });
-        })
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::Focused(true) = event {
                 let app = window.app_handle();
@@ -1349,7 +1246,6 @@ pub fn run() {
             watch_suggestions,
             watch_unwatched_assigned,
             watch_dismiss_assigned,
-            cache_workflow,
             cache_events,
             cache_feed,
             cache_feed_unread,
@@ -1444,16 +1340,7 @@ pub fn run() {
             workstreams_undo,
             workstreams_stop,
             sync_now,
-            mark_seen,
             set_unread,
-            set_done,
-            snooze,
-            transitions,
-            transition,
-            comment,
-            attach,
-            attachment_limit,
-            ticket_media,
             mentionable,
             create_subtasks,
             claude_sessions,

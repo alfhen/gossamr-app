@@ -10,7 +10,7 @@
 use std::collections::{HashMap, VecDeque};
 
 use super::supervisor::WakeFacts;
-use super::{AskRequest, UpdateSink};
+use super::{AskRequest, UpdateSink, WakeSink};
 use crate::auth::Scope;
 
 /// How many of Pip's agent processes may run at the same time, across every conversation.
@@ -33,7 +33,7 @@ pub enum QueueItem {
     /// A question a person sent, the account it was asked in, and where its events go.
     User { scope: Scope, req: Box<AskRequest>, sink: UpdateSink },
     /// The supervisor waking Pip in a workstream with what happened, and where the turn's events go.
-    Wake { scope: Scope, facts: WakeFacts, sink: UpdateSink },
+    Wake { scope: Scope, facts: WakeFacts, sink: WakeSink },
 }
 
 impl Queued for QueueItem {
@@ -431,7 +431,7 @@ mod tests {
         use crate::agent::supervisor::{WakeFact, WakeState};
         let fact = |run: &str| WakeFact { run: run.into(), kind: RunKind::Triage, state: WakeState::Done, mark: String::new(), plan_recommended: None, open_questions: None, verdict: None, blocking: 0, drafts: 0, waiting_for_pr: false };
         let scope = Scope { cloud_id: "s".into(), account_id: "me".into() };
-        let sink: UpdateSink = std::sync::Arc::new(|_| {});
+        let sink: WakeSink = std::sync::Arc::new(|_, _| {});
         let mut item = QueueItem::Wake { scope: scope.clone(), facts: WakeFacts { workstream: "w1".into(), facts: vec![fact("r1")] }, sink: sink.clone() };
         assert!(item.preempted_by_user());
         assert!(item.absorb(&WakeFacts { workstream: "w1".into(), facts: vec![fact("r1"), fact("r2")] }));

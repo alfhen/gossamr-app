@@ -182,6 +182,16 @@ async fn stop_all_counts_what_it_could_not_stop_and_skips_finished_runs() {
 }
 
 #[tokio::test]
+async fn stop_all_records_each_stop_in_the_run_s_workstream_as_the_person_s() {
+    let rig = ready().await;
+    let (run, ws) = rig.launched_in_workstream(1).await;
+    rig.poll().await;
+    rig.svc.stop_all().await.unwrap();
+    assert_eq!(rig.get(&run).await.state, RunState::Stopped);
+    assert_eq!(rig.run_actions(&ws).await, [("run_stopped".to_string(), Some(run.id.clone()), None)]);
+}
+
+#[tokio::test]
 async fn stop_all_stops_the_runs_waiting_for_a_slot_so_none_takes_a_freed_one() {
     let rig = crate::runs::rig::ready_with(|s| s.with_cap(1)).await;
     let running = rig.launched(1).await;

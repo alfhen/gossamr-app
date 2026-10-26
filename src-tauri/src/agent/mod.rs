@@ -230,12 +230,21 @@ pub struct Update {
 
 pub type UpdateSink = Arc<dyn Fn(Update) + Send + Sync>;
 
+/// Where a wake's events go, told the wake's facts as they stand when an event happens: those of a wake merged into one
+/// still waiting are in them.
+pub type WakeSink = Arc<dyn Fn(&WakeFacts, Update) + Send + Sync>;
+
+fn bound(sink: &WakeSink, facts: &WakeFacts) -> UpdateSink {
+    let (sink, facts) = (sink.clone(), facts.clone());
+    Arc::new(move |u| sink(&facts, u))
+}
+
 /// A wake turn that is running, kept so a person's message in its conversation can stop it and queue it again.
 struct WakeInFlight {
     conversation: String,
     scope: Scope,
     facts: WakeFacts,
-    sink: UpdateSink,
+    sink: WakeSink,
 }
 
 /// What became of a wake queued in a conversation that already had one waiting.
@@ -316,7 +325,11 @@ impl AgentService {
             removed
         };
         match removed {
-            Removed::Waiting(QueueItem::User { scope, sink, .. } | QueueItem::Wake { scope, sink, .. }) => {
+            Removed::Waiting(item) => {
+                let (scope, sink) = match item {
+                    QueueItem::User { scope, sink, .. } => (scope, sink),
+                    QueueItem::Wake { scope, facts, sink } => (scope, bound(&sink, &facts)),
+                };
                 recorded(self.core.pip_turn_finish(&scope, request_id, "", false, Some(why), None, None).await);
                 sink(Update { request_id: request_id.to_string(), event: AgentEvent::Done { session_id: None, ok: false, message: Some(why.into()), usage: None } });
             }
@@ -343,8 +356,8 @@ impl AgentService {
 
     /// Queues a question. It starts now when its conversation has nothing running and there is room, and otherwise
     /// once the turns ahead of it have ended; either way its events go to `sink`. In a workstream's conversation a
-    /// person's message also takes out a wake still waiting and stops a wake running (whose facts are queued again
-    /// behind the message).
+    /// person's message also takes out the wakes waiting and stops a wake running; their facts are queued again behind
+    /// the message.
     pub async fn ask(self: &Arc<Self>, mut req: AskRequest, sink: UpdateSink) -> Result<AskOutcome> {
         req.conversation = conversation_id(&req.conversation);
         req.event = None;
@@ -364,9 +377,13 @@ impl AgentService {
         // Kept as waiting until its provider has started, so a reload shows it either way.
         recorded(self.core.pip_turn_begin(&scope, &req.conversation, &req.request_id, &req.prompt, &meta, "queued").await);
         let workstream = workstream_of_conversation(&req.conversation).map(str::to_string);
+        let mut again = Vec::new();
         if workstream.is_some() {
             let waiting = self.queue.lock().expect("lock poisoned").waiting_wakes(&req.conversation);
             for id in waiting {
+                if let Some(QueueItem::Wake { scope, facts, sink }) = self.queue.lock().expect("lock poisoned").waiting(&id) {
+                    again.push((scope.clone(), facts.clone(), sink.clone()));
+                }
                 self.cancel(&id).await;
             }
         }
@@ -381,7 +398,10 @@ impl AgentService {
             };
             if let Some((id, wake)) = running {
                 self.cancel(&id).await;
-                if let Err(e) = self.queue_wake(wake.scope, wake.conversation, wake.facts, wake.sink).await {
+                again.insert(0, (wake.scope, wake.facts, wake.sink));
+            }
+            for (scope, facts, sink) in again {
+                if let Err(e) = self.queue_wake(scope, conversation.clone(), facts, sink).await {
                     eprintln!("couldn't queue Pip's wake again after the person's message: {e}");
                 }
             }
@@ -406,14 +426,15 @@ impl AgentService {
     /// Wakes Pip in workstream `ws_id` with `facts`: a turn of its conversation that gives way to the person's messages.
     /// While another wake waits there, the facts are merged into that one instead. The turn is kept with its event lines
     /// as its prompt and kind `wake`, and asked like any other.
-    pub async fn wake(self: &Arc<Self>, ws_id: &str, facts: WakeFacts, sink: UpdateSink) -> Result<()> {
+    pub async fn wake(self: &Arc<Self>, ws_id: &str, facts: WakeFacts, sink: WakeSink) -> Result<()> {
         let scope = self.core.scope().await?;
         self.queue_wake(scope, format!("{WORKSTREAM_PREFIX}{ws_id}"), facts, sink).await
     }
 
-    async fn queue_wake(self: &Arc<Self>, scope: Scope, conversation: String, facts: WakeFacts, sink: UpdateSink) -> Result<()> {
+    async fn queue_wake(self: &Arc<Self>, scope: Scope, conversation: String, facts: WakeFacts, sink: WakeSink) -> Result<()> {
         let request_id = format!("wake-{}", crate::proposals::new_id()?);
         recorded(self.core.pip_wake_begin(&scope, &conversation, &request_id, &event_line(&facts), "queued").await);
+        let told = bound(&sink, &facts);
         let entered = {
             let mut queue = self.queue.lock().expect("lock poisoned");
             match queue.merge_wake(&conversation, &facts) {
@@ -427,7 +448,7 @@ impl AgentService {
                 let waiting = {
                     let queue = self.queue.lock().expect("lock poisoned");
                     match queue.waiting(&id) {
-                        Some(QueueItem::Wake { facts, sink, .. }) => Some((event_line(facts), sink.clone(), queue.position(&id).unwrap_or(0))),
+                        Some(QueueItem::Wake { facts, sink, .. }) => Some((event_line(facts), bound(sink, facts), queue.position(&id).unwrap_or(0))),
                         _ => None,
                     }
                 };
@@ -441,7 +462,7 @@ impl AgentService {
             WakeEntered::Entered(Enqueued::Start(QueueItem::Wake { scope, facts, sink })) => self.start_wake(request_id, scope, facts, sink).await,
             WakeEntered::Entered(Enqueued::Start(QueueItem::User { .. })) => unreachable!("a wake was queued"),
             WakeEntered::Entered(Enqueued::Waiting { ahead }) => {
-                sink(Update { request_id, event: AgentEvent::Queued { ahead } });
+                told(Update { request_id, event: AgentEvent::Queued { ahead } });
                 Ok(())
             }
         }
@@ -450,8 +471,9 @@ impl AgentService {
     /// Starts wake turn `request_id`. When it cannot start it ends failed through its own sink, and the queue moves on.
     /// A wake whose workstream was paused or closed after it was queued never starts: it ends with `WAKE_PAUSED`,
     /// however it got here (queued behind a turn, queued again behind the person's message, or just admitted).
-    async fn start_wake(self: &Arc<Self>, request_id: String, scope: Scope, facts: WakeFacts, sink: UpdateSink) -> Result<()> {
+    async fn start_wake(self: &Arc<Self>, request_id: String, scope: Scope, facts: WakeFacts, wake_sink: WakeSink) -> Result<()> {
         let conversation = format!("{WORKSTREAM_PREFIX}{}", facts.workstream);
+        let sink = bound(&wake_sink, &facts);
         if !self.wakes_allowed(&scope, &facts.workstream).await {
             recorded(self.core.pip_turn_finish(&scope, &request_id, "", false, Some(WAKE_PAUSED), None, None).await);
             sink(Update { request_id: request_id.clone(), event: AgentEvent::Done { session_id: None, ok: false, message: Some(WAKE_PAUSED.into()), usage: None } });
@@ -468,7 +490,7 @@ impl AgentService {
             meta: None,
             event: Some(event_line(&facts)),
         };
-        self.wakes.lock().expect("lock poisoned").insert(request_id.clone(), WakeInFlight { conversation, scope: scope.clone(), facts, sink: sink.clone() });
+        self.wakes.lock().expect("lock poisoned").insert(request_id.clone(), WakeInFlight { conversation, scope: scope.clone(), facts, sink: wake_sink });
         if let Err(e) = self.start(scope.clone(), req, sink.clone()).await {
             self.wakes.lock().expect("lock poisoned").remove(&request_id);
             let message = format!("{WAKE_NOT_STARTED}: {e}");

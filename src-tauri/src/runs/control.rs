@@ -241,8 +241,9 @@ impl RunService {
             eprintln!("couldn't update the run index: {e}");
         }
         self.reset_counts(&run.id);
-        self.store(&run).await?;
+        // Before the run reads as stopped, so the waker never takes it for a stop from outside.
         self.note_person(&run, "run_stopped", None).await;
+        self.store(&run).await?;
         Ok(run)
     }
 
@@ -271,8 +272,8 @@ impl RunService {
         Self::stopped(run);
         run.slot_wait_since = None;
         run.error = Some(NOT_STARTED.into());
-        self.store(run).await?;
         self.note_person(run, "run_stopped", None).await;
+        self.store(run).await?;
         Ok(())
     }
 
@@ -307,6 +308,7 @@ impl RunService {
                     self.reset_counts(&entry.run_id);
                     if let Some(mut run) = mine {
                         Self::stopped(&mut run);
+                        self.note_person(&run, "run_stopped", None).await;
                         let _ = self.store(&run).await;
                     }
                 }

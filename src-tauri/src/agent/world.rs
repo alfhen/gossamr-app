@@ -591,7 +591,7 @@ async fn pip_never_answers_a_permission_prompt() -> std::result::Result<(), Stri
     Ok(())
 }
 
-/// A workstream with a run Gossamr stopped at its limit, which needs the person: the supervisor's passes and a wake turn whose Pip calls every tool it has, with arguments naming that run, never resume it. No
+/// A workstream with a run Gossamr stopped at its limit, which needs the person: a wake turn (for another run that finished) whose Pip calls every tool it has, with arguments naming that run, never resumes it. No
 /// session is resumed or woken, Terminal stays shut, the run is still stopped at its limit, and the audit has no line
 /// for a resume. Only the person resumes it, from its card or its sheet.
 async fn pip_never_resumes_a_run_stopped_at_its_limit() -> std::result::Result<(), String> {
@@ -601,6 +601,8 @@ async fn pip_never_resumes_a_run_stopped_at_its_limit() -> std::result::Result<(
     w.rig.poll().await;
     let limit = "Stopped by Gossamr: it passed the 60 minute limit";
     let run = w.rig.set(&run, |r| (r.state, r.stopped_by_limit, r.error, r.ended_at) = (RunState::Stopped, true, Some(limit.into()), Some(chrono::Utc::now()))).await;
+    let other = w.person_starts(2).await;
+    w.finish(&other, FOUND).await;
     let resumes = w.rig.cli.0.lock().unwrap().resumes.len();
     let calls_before = w.rig.cli.0.lock().unwrap().calls.len();
     *w.pip.args.lock().unwrap() = [
@@ -614,7 +616,7 @@ async fn pip_never_resumes_a_run_stopped_at_its_limit() -> std::result::Result<(
     w.sweep().await;
     w.sweep().await;
     if w.pip.turns.load(Ordering::SeqCst) == 0 {
-        return Err("Pip was never woken for the limit, so its tools weren't tried".into());
+        return Err("Pip was never woken, so its tools weren't tried".into());
     }
     let offered = w.pip.offered.lock().unwrap().clone();
     if let Some(name) = offered.iter().find(|n| n.contains("resume") || n.contains("answer_run") || n.contains("continue")) {
@@ -634,7 +636,7 @@ async fn pip_never_resumes_a_run_stopped_at_its_limit() -> std::result::Result<(
     if now.state != RunState::Stopped || !now.stopped_by_limit || now.continued_at != run.continued_at {
         return Err(format!("the run was resumed without the person: {:?}, stopped at its limit {}", now.state, now.stopped_by_limit));
     }
-    if let Some(started) = w.of_kind(RunKind::Investigate).await.into_iter().find(|r| r.id != run.id) {
+    if let Some(started) = w.of_kind(RunKind::Investigate).await.into_iter().find(|r| r.id != run.id && r.id != other.id) {
         return Err(format!("a run started after it: {}", started.id));
     }
     if let Some(line) = w.events().await.into_iter().find(|e| e.action.contains("resume") && e.actor != crate::domain::Actor::Person) {

@@ -114,7 +114,10 @@ fn supervisor(fx: &Fixture, svc: &Arc<AgentService>, emitted: &Emitted) -> Arc<S
 
 /// A workstream on CA-1, a supervisor bound to an agent service, and Pip answering every turn at once.
 async fn setup() -> T {
-    let fx = fixture().await;
+    setup_in(fixture().await).await
+}
+
+async fn setup_in(fx: Fixture) -> T {
     let ws = fx.core.open_workstream(&fx.scope, Some(fx.item("CA-1")), None).await.unwrap();
     let fake = Fake::default();
     let svc = service(&fx, &fake).await;
@@ -290,13 +293,14 @@ fn a_fact_is_keyed_by_its_state_and_a_finish_after_a_continuation_is_another() {
     run.state = RunState::Stopped;
     assert_eq!(WakeState::of_run(&run), Some(WakeState::Stopped));
     run.stopped_by_limit = true;
-    assert_eq!(WakeState::of_run(&run), Some(WakeState::Limit));
+    assert_eq!(WakeState::of_run(&run), None, "a stop Gossamr made at a limit wakes nobody");
+    assert_eq!(WakeState::of_attention(&run, Attention::Limit), None);
     run.state = RunState::Working;
     assert_eq!(WakeState::of_run(&run), None, "a run under way is no fact for the sweep");
     run.state = RunState::SystemBlocked;
-    assert_eq!(WakeState::of_attention(&run, Attention::Needs), WakeState::SystemBlocked);
+    assert_eq!(WakeState::of_attention(&run, Attention::Needs), Some(WakeState::SystemBlocked));
     for why in [Attention::Done, Attention::Drafted, Attention::DraftedTicket, Attention::Breakdown, Attention::PlanDrafted] {
-        assert_eq!(WakeState::of_attention(&run, why), WakeState::Done);
+        assert_eq!(WakeState::of_attention(&run, why), Some(WakeState::Done));
     }
 }
 
@@ -327,11 +331,11 @@ async fn a_run_finishing_wakes_pip_once_whatever_repeats_it() {
 }
 
 #[tokio::test]
-async fn a_person_stopped_run_and_a_silent_finish_after_a_continuation_are_caught_by_the_sweep() {
+async fn a_stop_from_outside_and_a_silent_finish_after_a_continuation_are_caught_by_the_sweep() {
     let t = setup().await;
     let first = t.run("r1", RunKind::Investigate, RunState::Done, |_| {}).await;
     t.noticed(&first, Attention::Done).await;
-    // Neither of these is ever told: a stop the person made, and a finish again after carrying on that drafted nothing.
+    // Neither of these is ever told: a stop nobody here asked for, and a finish again after carrying on that drafted nothing.
     t.run("r2", RunKind::Triage, RunState::Stopped, |_| {}).await;
     t.fx.core.save_run(&Run { continued_at: Some(Utc::now()), ..t.fx.core.run("r1").await.unwrap().unwrap() }).await.unwrap();
     assert_eq!(t.wake_turns().await.len(), 1);
@@ -345,6 +349,76 @@ async fn a_person_stopped_run_and_a_silent_finish_after_a_continuation_are_caugh
     assert!(lines[1].contains("[Event] run r1 (investigate) Done") && lines[1].contains("[Event] run r2 (triage) Stopped"), "{lines:?}");
     t.sweep().await;
     assert_eq!(t.wake_turns().await.len(), 2, "a second sweep finds nothing new");
+}
+
+#[tokio::test]
+async fn a_stop_the_person_asked_for_wakes_nobody_and_a_stop_at_a_limit_neither() {
+    let t = setup().await;
+    let stopped = t.run("r1", RunKind::Investigate, RunState::Stopped, |_| {}).await;
+    t.fx.core.record_run_action(&stopped, "run_stopped", None).await.unwrap();
+    t.run("r2", RunKind::Triage, RunState::Stopped, |r| r.stopped_by_limit = true).await;
+    t.sup.clone().on_run(t.fx.core.run("r2").await.unwrap().unwrap(), Attention::Limit).await;
+    t.sweep().await;
+    assert!(t.wake_turns().await.is_empty() && t.wakes().await.is_empty(), "{:?}", t.wakes().await);
+
+    // Carrying on and being stopped again by something else is news.
+    t.fx.core.save_run(&Run { continued_at: Some(Utc::now() + chrono::Duration::seconds(5)), ..t.fx.core.run("r1").await.unwrap().unwrap() }).await.unwrap();
+    t.sweep().await;
+    assert_eq!(t.wakes().await.len(), 1);
+}
+
+#[tokio::test]
+async fn a_finished_build_asks_for_a_code_sync_once_and_wakes_pip_again_when_its_pull_request_turns_up() {
+    let t = setup_in(crate::inbox::testing::fixture_watching(&["acme/webshop"]).await).await;
+    let build = t.run("b1", RunKind::Build, RunState::Done, |r| r.spec.allow_push = true).await;
+    let synced = |t: &T| {
+        let core = t.fx.core.clone();
+        async move { tokio::time::timeout(Duration::from_millis(30), core.wake.notified()).await.is_ok() }
+    };
+    t.sweep().await;
+    assert!(synced(&t).await, "the wake that says the pull request is to come asks for a sync");
+    let lines: Vec<String> = t.wake_turns().await.into_iter().map(|w| w.prompt).collect();
+    assert_eq!(lines, ["[Event] run b1 (build) Done; waiting for its pull request"]);
+    t.sweep().await;
+    t.sweep().await;
+    assert!(!synced(&t).await, "the sweeps that follow ask for nothing");
+    assert_eq!(t.wake_turns().await.len(), 1);
+
+    let mut change = crate::codehost::links::tests::pr(12, &format!("worktree-{}", build.spec.name), "T", "");
+    change.state = crate::domain::CodeChangeState::Open;
+    t.fx.core.with_code_db("github:ann", |db| db.upsert_code_changes(&[change], "2026-09-29T00:00:00Z")).unwrap();
+    t.sweep().await;
+    t.sweep().await;
+    let lines: Vec<String> = t.wake_turns().await.into_iter().map(|w| w.prompt).collect();
+    assert_eq!(lines.len(), 2, "{lines:?}");
+    assert_eq!(lines[1], "[Event] run b1 (build) Pull request found");
+}
+
+#[tokio::test]
+async fn a_pull_request_that_was_there_when_the_build_finished_is_no_second_wake() {
+    let t = setup_in(crate::inbox::testing::fixture_watching(&["acme/webshop"]).await).await;
+    let build = t.run("b1", RunKind::Build, RunState::Done, |r| r.spec.allow_push = true).await;
+    let mut change = crate::codehost::links::tests::pr(12, &format!("worktree-{}", build.spec.name), "T", "");
+    change.state = crate::domain::CodeChangeState::Open;
+    t.fx.core.with_code_db("github:ann", |db| db.upsert_code_changes(&[change], "2026-09-29T00:00:00Z")).unwrap();
+    t.sweep().await;
+    t.sweep().await;
+    let lines: Vec<String> = t.wake_turns().await.into_iter().map(|w| w.prompt).collect();
+    assert_eq!(lines, ["[Event] run b1 (build) Done"]);
+}
+
+#[tokio::test]
+async fn a_wake_that_fails_before_its_sink_hears_of_it_gives_its_facts_back_once() {
+    let t = setup().await;
+    let signed_out = fixture().await;
+    signed_out.core.sign_out().await.unwrap();
+    let svc = service(&signed_out, &Fake::default()).await;
+    let sup = supervisor(&t.fx, &svc, &t.emitted);
+    let r1 = t.run("r1", RunKind::Investigate, RunState::Done, |_| {}).await;
+    sup.clone().on_run(r1, Attention::Done).await;
+    assert_eq!(t.actions().await.iter().filter(|(_, a, _)| a == "wake_dropped").count(), 1);
+    assert!(t.wake_turns().await.is_empty());
+    assert_eq!(sup.quota_state(&t.ws), None, "no backoff for what never reached the queue");
 }
 
 #[tokio::test]
@@ -429,7 +503,7 @@ async fn nothing_happens_before_the_supervisor_is_bound() {
     fx.insert_run(&run).await;
     sup.notify(&run, Attention::Done);
     sup.sweep_at(Utc::now()).await;
-    sup.clone().handle(&ws.id, vec![WakeFact::new(&run, WakeState::Done)], false, Utc::now()).await;
+    sup.clone().handle(&ws.id, vec![WakeFact::new(&run, WakeState::Done)], Utc::now()).await;
     tokio::time::sleep(Duration::from_millis(30)).await;
     assert!(fx.core.workstream_events(&fx.scope, &ws.id).await.unwrap().iter().all(|e| e.action != "wake"));
 }
@@ -437,7 +511,7 @@ async fn nothing_happens_before_the_supervisor_is_bound() {
 // What the person's message does to wakes.
 
 #[tokio::test]
-async fn a_person_s_message_removes_a_waiting_wake_and_pre_empts_a_running_one() {
+async fn a_person_s_message_goes_ahead_of_a_waiting_wake_and_pre_empts_a_running_one() {
     let t = setup().await;
     t.fake.0.hold.store(true, Ordering::SeqCst);
     let (sink, conversation) = (Arc::new(|_| {}) as crate::agent::UpdateSink, t.conversation());
@@ -457,10 +531,18 @@ async fn a_person_s_message_removes_a_waiting_wake_and_pre_empts_a_running_one()
     t.svc.ask(ask("q2", &conversation), sink.clone()).await.unwrap();
     let removed = t.wake_turns().await;
     assert_eq!((removed[0].status.as_str(), removed[0].error.as_deref()), ("failed", Some(REMOVED)));
+    let queued_again = &removed[1];
+    assert_eq!((queued_again.status.as_str(), queued_again.prompt.as_str()), ("queued", "[Event] run r1 (investigate) Done\n[Event] run r2 (triage) Done"), "its facts wait behind the message");
 
-    // Now a wake runs, and the person writes: it is stopped and its facts are queued again behind the message.
+    // The message ran first; the wake then ran with its facts.
     t.fake.open_all();
     t.idle().await;
+    let order = t.fake.started();
+    assert_eq!(order.len(), 3, "q1, q2 and the wake: {order:?}");
+    assert_eq!(order[1], "q2");
+    assert_eq!(t.wakes().await.len(), 2, "each fact was recorded once");
+
+    // Now a wake runs, and the person writes: it is stopped and its facts are queued again behind the message.
     t.fake.0.hold.store(true, Ordering::SeqCst);
     let r3 = t.run("r3", RunKind::Plan, RunState::Done, |_| {}).await;
     t.sup.clone().on_run(r3, Attention::Done).await;
@@ -557,112 +639,179 @@ async fn pip_woken_too_often_in_a_day_across_workstreams_pauses_the_workstream_t
     assert_eq!(t.workstream().await.paused_reason, Some(PauseReason::Ceiling));
     assert!(t.wake_turns().await.is_empty());
     assert!(t.actions().await.contains(&(Actor::Supervisor, "paused".to_string(), Some("ceiling".to_string()))));
+
+    t.resume().await;
+    t.sweep().await;
+    assert_eq!(t.workstream().await.paused_reason, None, "the person's resume lets Pip be woken here again");
+    assert_eq!(t.wake_turns().await.len(), 1);
+}
+
+#[tokio::test]
+async fn wake_turns_that_never_reached_pip_count_toward_no_ceiling() {
+    let t = setup().await;
+    for n in 0..WAKES_PER_WORKSTREAM_PER_DAY {
+        let id = format!("never{n}");
+        t.fx.core.pip_wake_begin(&t.fx.scope, &t.conversation(), &id, "[Event] run x (build) Done", "queued").await.unwrap();
+        t.fx.core.pip_turn_finish(&t.fx.scope, &id, "", false, Some(crate::agent::WAKE_PAUSED), None, None).await.unwrap();
+    }
+    let run = t.run("r1", RunKind::Investigate, RunState::Done, |_| {}).await;
+    t.noticed(&run, Attention::Done).await;
+    assert_eq!(t.workstream().await.paused_reason, None);
+    assert!(t.wake_turns().await.iter().any(|w| w.status == "done"));
 }
 
 // The quota.
 
+async fn dropped(t: &T, run: &str) -> bool {
+    t.actions().await.into_iter().any(|(a, action, d)| a == Actor::Supervisor && action == "wake_dropped" && d.as_deref() == Some(run))
+}
+
+async fn backing_off(t: &T, next: Duration) {
+    for _ in 0..100 {
+        if t.sup.quota_state(&t.ws) == Some((true, next)) {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!("no backoff of {next:?}: {:?}", t.sup.quota_state(&t.ws));
+}
+
 #[tokio::test]
-async fn a_wake_that_hits_the_quota_is_retried_once_after_a_doubling_backoff_and_nothing_else_wakes_meanwhile() {
+async fn a_wake_that_hits_the_quota_gives_its_facts_back_and_holds_wakes_off_for_a_doubling_backoff() {
     let t = setup().await;
     *t.fake.0.fail.lock().unwrap() = Some("Claude AI usage limit reached".into());
     tokio::time::pause();
     let run = t.run("r1", RunKind::Investigate, RunState::Done, |_| {}).await;
     t.noticed(&run, Attention::Done).await;
-    for _ in 0..100 {
-        if t.sup.quota_state(&t.ws).is_some() {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
+    backing_off(&t, Duration::from_secs(120)).await;
     assert_eq!(t.workstream().await.paused_reason, None, "the quota pauses nothing");
-    assert_eq!(t.sup.quota_state(&t.ws), Some((true, Duration::from_secs(120))), "one retry pending; the next waits twice as long");
-    // A second miss while the retry is pending schedules nothing more.
-    t.sup.clone().on_quota(WakeFacts { workstream: t.ws.clone(), facts: vec![WakeFact::new(&run, WakeState::Done)] }).await;
+    assert!(dropped(&t, "done").await, "its fact is taken back, as after a restart it must be found again");
+    // A second miss while the backoff runs starts no second one.
+    t.sup.clone().back_off(WakeFacts { workstream: t.ws.clone(), facts: vec![WakeFact::new(&run, WakeState::Done)] }).await;
     assert_eq!(t.sup.quota_state(&t.ws), Some((true, Duration::from_secs(120))));
     assert_eq!(t.wake_turns().await.len(), 1);
-    // Meanwhile a fact that comes in waits for the retry rather than meeting the quota again.
+    // Meanwhile a fact that comes in waits rather than meeting the quota again.
     let other = t.run("r2", RunKind::Triage, RunState::Done, |_| {}).await;
     t.noticed(&other, Attention::Done).await;
+    t.sweep().await;
     assert_eq!(t.wake_turns().await.len(), 1);
-    assert_eq!(t.wakes().await, [("r1".to_string(), "done".to_string())]);
 
+    // Once it is over the sweep wakes Pip for both facts in one turn; the quota still says no, so the wait doubles.
     tokio::time::advance(BACKOFF_FIRST + Duration::from_secs(1)).await;
-    t.until("retried", |turns| turns.iter().filter(|w| w.kind == "wake" && w.status == "failed").count() == 2).await;
     for _ in 0..100 {
-        if t.sup.quota_state(&t.ws) == Some((true, Duration::from_secs(240))) {
+        if t.sup.quota_state(&t.ws) == Some((false, Duration::from_secs(120))) {
             break;
         }
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
-    assert_eq!(t.sup.quota_state(&t.ws), Some((true, Duration::from_secs(240))), "missed again: one more retry, after twice the wait");
-    assert_eq!(t.wakes().await.len(), 1, "a retry is the same wake, not a new fact");
+    t.sweep().await;
+    backing_off(&t, Duration::from_secs(240)).await;
+    let turns = t.wake_turns().await;
+    assert_eq!(turns.len(), 2);
+    assert_eq!(turns[1].prompt, "[Event] run r1 (investigate) Done\n[Event] run r2 (triage) Done");
 
-    // The quota is back: the next retry's turn goes through and the backoff is forgotten.
+    // The quota is back: the next sweep's turn goes through and the backoff is forgotten.
     *t.fake.0.fail.lock().unwrap() = None;
-    tokio::time::advance(Duration::from_secs(121)).await;
-    t.until("retried again", |turns| turns.iter().any(|w| w.kind == "wake" && w.status == "done")).await;
-    assert_eq!(t.wake_turns().await.len(), 3);
+    tokio::time::advance(Duration::from_secs(241)).await;
     for _ in 0..100 {
-        if t.sup.quota_state(&t.ws).is_none() {
+        if t.sup.quota_state(&t.ws) == Some((false, Duration::from_secs(240))) {
             break;
         }
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
+    t.sweep().await;
+    assert_eq!(t.wake_turns().await.len(), 3);
     assert_eq!(t.sup.quota_state(&t.ws), None);
     t.sweep().await;
-    assert_eq!(t.wakes().await.len(), 2, "the fact that waited is woken for once the retry is over");
+    assert_eq!(t.wake_turns().await.len(), 3, "nothing is left to wake for");
 }
 
-/// A wake that hits the quota, with the retry pending.
+/// A wake that hits the quota, with the backoff running.
 async fn quota_missed(t: &T) -> Run {
     *t.fake.0.fail.lock().unwrap() = Some("Claude AI usage limit reached".into());
     let run = t.run("r1", RunKind::Investigate, RunState::Done, |_| {}).await;
     t.noticed(&run, Attention::Done).await;
-    for _ in 0..100 {
-        if t.sup.quota_state(&t.ws).is_some() {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
+    backing_off(t, Duration::from_secs(120)).await;
     *t.fake.0.fail.lock().unwrap() = None;
     run
 }
 
 #[tokio::test]
-async fn a_quota_retry_wakes_pip_even_when_the_person_resumed_a_pause_meanwhile() {
+async fn a_wake_that_hit_the_quota_is_found_again_after_a_restart() {
+    let t = setup().await;
+    let run = quota_missed(&t).await;
+    t.fx.core.close_db();
+    let fake = Fake::default();
+    let svc = service(&t.fx, &fake).await;
+    let sup = supervisor(&t.fx, &svc, &t.emitted);
+    sup.sweep_at(Utc::now()).await;
+    t.idle().await;
+    let turns = t.wake_turns().await;
+    assert_eq!(turns.len(), 2);
+    assert_eq!((turns[1].prompt.as_str(), turns[1].status.as_str()), (format!("[Event] run {} (investigate) Done", run.id).as_str(), "done"));
+}
+
+#[tokio::test]
+async fn a_pause_and_a_resume_during_the_backoff_change_nothing_once_it_is_over() {
     let t = setup().await;
     tokio::time::pause();
     quota_missed(&t).await;
     t.pause().await;
     t.resume().await;
     tokio::time::advance(BACKOFF_FIRST + Duration::from_secs(1)).await;
-    t.until("retried", |turns| turns.iter().any(|w| w.kind == "wake" && w.status == "done")).await;
-    assert_eq!(t.wake_turns().await.len(), 2);
-}
-
-#[tokio::test]
-async fn a_quota_retry_while_paused_lets_go_of_its_facts_for_the_next_resume() {
-    let t = setup().await;
-    tokio::time::pause();
-    let run = quota_missed(&t).await;
-    t.pause().await;
-    tokio::time::advance(BACKOFF_FIRST + Duration::from_secs(1)).await;
-    let dropped = || async { t.actions().await.into_iter().any(|(a, action, d)| a == Actor::Supervisor && action == "wake_dropped" && d.as_deref() == Some("done")) };
     for _ in 0..100 {
-        if dropped().await {
+        if !t.sup.quota_state(&t.ws).is_some_and(|(pending, _)| pending) {
             break;
         }
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
-    assert!(dropped().await, "the retry's facts are let go of");
-    assert_eq!(t.wake_turns().await.len(), 1, "no turn while paused");
+    t.sweep().await;
+    assert_eq!(t.wake_turns().await.iter().filter(|w| w.status == "done").count(), 1);
+    assert_eq!(t.wake_turns().await.len(), 2);
+}
 
+#[tokio::test]
+async fn a_wake_waiting_when_the_quota_said_no_never_runs_and_gives_its_facts_back_too() {
+    let t = setup().await;
+    t.fake.0.hold.store(true, Ordering::SeqCst);
+    *t.fake.0.fail.lock().unwrap() = Some("Claude AI usage limit reached".into());
+    let r1 = t.run("r1", RunKind::Investigate, RunState::Done, |_| {}).await;
+    t.sup.clone().on_run(r1, Attention::Done).await;
+    t.until("a wake running", |turns| turns.iter().any(|w| w.kind == "wake" && w.status == "running")).await;
+    // A fact arrives while it runs, and waits behind it.
+    let r2 = t.run("r2", RunKind::Triage, RunState::Done, |_| {}).await;
+    t.sup.clone().on_run(r2, Attention::Done).await;
+    t.fake.open_all();
+    t.idle().await;
+    backing_off(&t, Duration::from_secs(120)).await;
+    let dropped_runs: Vec<String> = t.fx.core.workstream_events(&t.fx.scope, &t.ws).await.unwrap().into_iter().filter(|e| e.action == "wake_dropped").filter_map(|e| e.run_id).collect();
+    assert_eq!(dropped_runs.len(), 2, "both runs' facts were taken back: {dropped_runs:?}");
+}
+
+#[tokio::test]
+async fn a_wake_merged_into_a_waiting_one_that_ends_paused_gives_every_fact_back() {
+    let t = setup().await;
+    t.fake.0.hold.store(true, Ordering::SeqCst);
+    t.svc.ask(ask("q1", &t.conversation()), Arc::new(|_| {})).await.unwrap();
+    for id in ["a", "b"] {
+        let run = t.run(id, RunKind::Investigate, RunState::Done, |_| {}).await;
+        t.sup.clone().on_run(run, Attention::Done).await;
+    }
+    assert_eq!(t.wake_turns().await.len(), 1, "b was merged into a");
+    t.pause().await;
+    t.svc.cancel_workstream_turns(&t.ws).await;
+    t.fake.open_all();
+    t.idle().await;
+    for _ in 0..100 {
+        if t.actions().await.iter().filter(|(_, a, _)| a == "wake_dropped").count() == 2 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
     t.resume().await;
     t.sweep().await;
-    let turns = t.wake_turns().await;
-    assert_eq!(turns.len(), 2, "resumed, Pip is woken for them");
-    assert_eq!(turns[1].prompt, format!("[Event] run {} (investigate) Done", run.id));
-    assert_eq!(turns[1].status, "done");
+    let lines: Vec<String> = t.wake_turns().await.into_iter().map(|w| w.prompt).collect();
+    assert_eq!(lines.last().unwrap(), "[Event] run a (investigate) Done\n[Event] run b (investigate) Done", "{lines:?}");
 }
 
 // The ticket changing.
@@ -934,6 +1083,10 @@ async fn a_wake_that_couldn_t_start_gives_its_facts_back_for_the_next_sweep() {
     assert_eq!(wake.len(), 1);
     assert!(wake[0].error.as_deref().is_some_and(|e| e.starts_with(WAKE_NOT_STARTED)), "{:?}", wake[0].error);
     assert_eq!(t.actions().await.iter().filter(|(_, a, _)| a == "wake_dropped").count(), 1, "the fact is taken back");
+    assert_eq!(sup.quota_state(&t.ws), Some((true, Duration::from_secs(120))), "and the sweep leaves it be for a while, instead of trying every 30 seconds");
+    sup.sweep_at(Utc::now()).await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert_eq!(t.wake_turns().await.len(), 1);
 }
 
 #[tokio::test]

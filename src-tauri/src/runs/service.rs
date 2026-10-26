@@ -538,9 +538,10 @@ impl RunService {
         Ok(started)
     }
 
-    /// Whether the workstream `run` belongs to is open and not paused, as the signed-in account has it.
+    /// Whether the workstream `run` belongs to is open and not paused, as the signed-in account has it, and the run
+    /// isn't one no one approved.
     async fn workstream_runs(&self, run: &Run) -> bool {
-        let Some(ws) = run.spec.workstream.as_deref() else { return false };
+        let Some(ws) = run.spec.workstream.as_deref().filter(|_| run.unapproved_auto_start.is_none()) else { return false };
         let Ok(scope) = self.core.scope().await else { return false };
         let Ok(Some(v)) = self.core.workstream(&scope, ws).await else { return false };
         v.workstream.closed_at.is_none() && v.workstream.paused_reason.is_none()

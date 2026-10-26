@@ -35,9 +35,17 @@ impl From<String> for PauseReason {
     }
 }
 
-/// Wakes of Pip one workstream may have in a day, counted from UTC midnight or the person's last resume.
+/// The hold an earlier release put on every open workstream each time the app opened, which no one asked for.
+const RESTART_HOLD: &str = "restart";
+
+fn stored_pause<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<PauseReason>, D::Error> {
+    Ok(Option::<String>::deserialize(d)?.filter(|r| r != RESTART_HOLD).map(PauseReason::from))
+}
+
+/// Wakes of Pip one workstream may have in a day, counted from UTC midnight or the person's last resume of it.
 pub const WAKES_PER_WORKSTREAM_PER_DAY: u32 = 24;
-/// Wake turns Pip may have in a day across every workstream, counted from UTC midnight.
+/// Wake turns Pip may have in a day across every workstream, counted from UTC midnight or the person's last resume of
+/// the workstream being woken.
 pub const WAKE_TURNS_PER_DAY: u32 = 120;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -56,7 +64,7 @@ pub struct Workstream {
     #[serde(default)]
     pub pip_session: Option<String>,
     /// Why the workstream is paused, while it is. A paused workstream gets no wakes.
-    #[serde(default, alias = "heldReason")]
+    #[serde(default, alias = "heldReason", deserialize_with = "stored_pause")]
     pub paused_reason: Option<PauseReason>,
     /// Pip's own notes, at most 2 KB of scrubbed text, only ever shown back to Pip as data.
     #[serde(default)]
@@ -401,7 +409,7 @@ mod tests {
     }
 
     #[test]
-    fn a_workstream_stored_with_the_removed_fields_still_reads_and_any_old_hold_reads_as_paused_by_the_person() {
+    fn a_workstream_stored_with_the_removed_fields_still_reads_and_any_old_hold_but_the_restart_one_reads_as_paused_by_the_person() {
         let stored = |reason: serde_json::Value| {
             serde_json::json!({
                 "id": "w1", "connectionId": "c", "title": "t", "createdAt": "2026-09-29T10:00:00Z", "mode": "manage", "heldReason": reason,
@@ -409,10 +417,12 @@ mod tests {
                 "drifted": ["description"], "resumeMode": "manage"
             })
         };
-        for old in ["restart", "budget", "daily_cap", "quota", "hold_all", "tripwire:marker", "person"] {
+        for old in ["budget", "daily_cap", "quota", "hold_all", "tripwire:marker", "person"] {
             let ws: Workstream = serde_json::from_value(stored(old.into())).unwrap();
             assert_eq!(ws.paused_reason, Some(PauseReason::Person), "{old}");
         }
+        let restarted: Workstream = serde_json::from_value(stored("restart".into())).unwrap();
+        assert_eq!(restarted.paused_reason, None, "the hold every open workstream got at each launch, which nobody asked for");
         let ceiling: Workstream = serde_json::from_value(stored("ceiling".into())).unwrap();
         assert_eq!(ceiling.paused_reason, Some(PauseReason::Ceiling));
         assert_eq!(serde_json::to_value(&ceiling).unwrap()["pausedReason"], "ceiling");

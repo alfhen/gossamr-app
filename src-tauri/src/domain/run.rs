@@ -164,8 +164,8 @@ macro_rules! plan_advice {
 }
 
 /// Triage's verdict on whether the ticket is clear enough to plan, inside its status note. The parser in
-/// `runs/result.rs` (`readiness`) reads the `Ready to plan:` line and the `Open questions:` list; only a `no` stops the
-/// Plan a managed workstream would start next, and a note without the line counts as ready.
+/// `runs/result.rs` (`readiness`) reads the `Ready to plan:` line and the `Open questions:` list, which Pip is told in the
+/// wake; a note without the line counts as ready.
 macro_rules! readiness_check {
     () => {
         "Judge whether the ticket is clear enough to plan. It needs a goal, a way to tell when it is done (acceptance criteria), what is in and what is out of scope, and who asked for it and who is waiting on it. Say 'Ready to plan: yes' on a line of its own in your note when it has all of them. When any is missing, say 'Ready to plan: no' on a line of its own, then an 'Open questions:' list with one line per question that names what is missing, such as '- What does done look like?'. Don't guess what the ticket leaves out. "
@@ -922,6 +922,10 @@ pub struct Run {
     /// approval order, once a slot frees.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub slot_wait_since: Option<DateTime<Utc>>,
+    /// Kept from a run an earlier release queued by an auto-start rule, which no one approved: it starts only when the
+    /// person starts it.
+    #[serde(default, rename = "autoStart", skip_serializing_if = "Option::is_none")]
+    pub unapproved_auto_start: Option<serde_json::Value>,
     /// The restriction the run was actually launched with, set as it launches. A run stored before Phase 6, or a Build,
     /// has none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1022,6 +1026,7 @@ impl Run {
             earlier_sessions: Vec::new(),
             possible_continuations: Vec::new(),
             slot_wait_since: None,
+            unapproved_auto_start: None,
             read_only: None,
             permission_allowed: None,
         }
@@ -1875,13 +1880,14 @@ mod tests {
     }
 
     #[test]
-    fn a_run_stored_with_the_removed_auto_start_field_still_reads() {
+    fn a_run_stored_with_the_removed_auto_start_field_still_reads_and_keeps_it_as_unapproved() {
         let plain = Run::queued("r".into(), "p".into(), "c".into(), None, spec(), "f".into(), Utc::now());
+        assert!(serde_json::to_value(&plain).unwrap().get("autoStart").is_none(), "a person's run stores nothing new");
         let mut json = serde_json::to_value(&plain).unwrap();
         json["autoStart"] = serde_json::json!({ "rule": "investigate_triage", "afterRun": "r1" });
-        let back: Run = serde_json::from_value(json).unwrap();
-        assert_eq!(back, plain);
-        assert!(serde_json::to_value(&back).unwrap().get("autoStart").is_none());
+        let back: Run = serde_json::from_value(json.clone()).unwrap();
+        assert!(back.unapproved_auto_start.is_some());
+        assert_eq!(serde_json::to_value(&back).unwrap()["autoStart"], json["autoStart"], "the tracker rewrites the run, which must not lose it");
     }
 
     #[test]

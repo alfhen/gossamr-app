@@ -227,13 +227,6 @@ fn rebased(basis: &WorkstreamBasis, work: &WorkItem) -> WorkstreamBasis {
     }
 }
 
-/// What the supervisor asks of `admit_wake`.
-pub struct WakeAdmission {
-    /// A retry after a quota miss, for facts already recorded.
-    pub retry: bool,
-    pub at: chrono::DateTime<Utc>,
-}
-
 /// What `admit_wake` let through.
 #[derive(Debug, Default, PartialEq)]
 pub struct Admitted {
@@ -555,15 +548,16 @@ impl Core {
         .await
     }
 
-    /// Decides, in one go, which of `facts` wake Pip in workstream `id`: those it wasn't woken for (all of them on a
-    /// retry), while it is open and not paused. Each fact let through is recorded as a supervisor `wake` line with its
-    /// run and state, which is what makes a second notice a no-op and what a restart reads back. When the workstream
-    /// has had `WAKES_PER_WORKSTREAM_PER_DAY` wake turns since UTC midnight or the person's last resume, or Pip
-    /// `WAKE_TURNS_PER_DAY` across workstreams since midnight, nothing is let through: the workstream is paused for
-    /// `ceiling` and a supervisor `paused` line says so.
-    pub async fn admit_wake(&self, scope: &Scope, id: &str, facts: &[WakeFact], ask: &WakeAdmission) -> Result<Admitted> {
+    /// Decides, in one go, which of `facts` wake Pip in workstream `id`: those it wasn't woken for, while it is open and
+    /// not paused. Each fact let through is recorded as a supervisor `wake` line with its run and state, which is what
+    /// makes a second notice a no-op and what a restart reads back; one that tells Pip a build's pull request is still
+    /// to come also gets a `waiting_for_pr` line. When Pip has had `WAKES_PER_WORKSTREAM_PER_DAY` wake turns in the
+    /// workstream, or `WAKE_TURNS_PER_DAY` across workstreams, since UTC midnight or the person's last resume of it,
+    /// nothing is let through: the workstream is paused for `ceiling` and a supervisor `paused` line says so. Wake
+    /// turns that never reached Pip don't count.
+    pub async fn admit_wake(&self, scope: &Scope, id: &str, facts: &[WakeFact], at: chrono::DateTime<Utc>) -> Result<Admitted> {
         let connection_id = Connection::jira_id(scope);
-        let midnight = ask.at.date_naive().and_hms_opt(0, 0, 0).expect("midnight exists").and_utc();
+        let midnight = at.date_naive().and_hms_opt(0, 0, 0).expect("midnight exists").and_utc();
         self.with_db_atomically_for(scope, |db| {
             let Ok(mut ws) = open(db, &connection_id, id) else { return Ok(Admitted::default()) };
             if ws.paused_reason.is_some() {
@@ -571,22 +565,27 @@ impl Core {
             }
             let events = db.workstream_events(id)?;
             let woken = crate::agent::supervisor::woken_in(&events);
-            let fresh: Vec<WakeFact> = facts.iter().filter(|f| ask.retry || !woken.contains(&(f.run.clone(), f.key().to_string()))).cloned().collect();
+            let fresh: Vec<WakeFact> = facts.iter().filter(|f| !woken.contains(&(f.run.clone(), f.key().to_string()))).cloned().collect();
             if fresh.is_empty() {
                 return Ok(Admitted::default());
             }
-            let resumed = events.iter().filter(|e| e.actor == Actor::Person && e.action == "resumed").map(|e| e.at).max();
-            let since = |at: chrono::DateTime<Utc>| at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
-            let own = db.wake_turns_in_since(&format!("{}{id}", crate::agent::WORKSTREAM_PREFIX), &since(resumed.map_or(midnight, |at| at.max(midnight))))?;
-            if own >= WAKES_PER_WORKSTREAM_PER_DAY || db.wake_turns_since(&since(midnight))? >= WAKE_TURNS_PER_DAY {
+            // The audit keeps whole seconds and the turns milliseconds: a resume counts from the second after it, so
+            // a turn from the same second, which may be from before it, isn't counted again.
+            let resumed = events.iter().filter(|e| e.actor == Actor::Person && e.action == "resumed").map(|e| e.at + chrono::Duration::seconds(1)).max();
+            let from = resumed.map_or(midnight, |r| r.max(midnight)).to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+            let reached = |conversation: Option<&str>| -> Result<u32> {
+                Ok(db.wake_turn_outcomes_since(conversation, &from)?.iter().filter(|(status, error)| crate::agent::supervisor::reached_pip(status, error.as_deref())).count() as u32)
+            };
+            if reached(Some(&format!("{}{id}", crate::agent::WORKSTREAM_PREFIX)))? >= WAKES_PER_WORKSTREAM_PER_DAY || reached(None)? >= WAKE_TURNS_PER_DAY {
                 pause(&mut ws, PauseReason::Ceiling);
                 db.save_workstream(&ws)?;
-                db.append_workstream_event(&paused_event(&ws.id, Actor::Supervisor, PauseReason::Ceiling, ask.at))?;
+                db.append_workstream_event(&paused_event(&ws.id, Actor::Supervisor, PauseReason::Ceiling, at))?;
                 return Ok(Admitted { facts: Vec::new(), changed: true });
             }
-            if !ask.retry {
-                for f in &fresh {
-                    db.append_workstream_event(&WorkstreamEvent::new(&ws.id, Actor::Supervisor, "wake", ask.at).run(&f.run).detail(f.key()))?;
+            for f in &fresh {
+                db.append_workstream_event(&WorkstreamEvent::new(&ws.id, Actor::Supervisor, "wake", at).run(&f.run).detail(f.key()))?;
+                if f.waiting_for_pr {
+                    db.append_workstream_event(&WorkstreamEvent::new(&ws.id, Actor::Supervisor, "waiting_for_pr", at).run(&f.run).detail(f.key()))?;
                 }
             }
             Ok(Admitted { facts: fresh, changed: false })

@@ -86,13 +86,13 @@
       "line": "[Event] run fed09876 (review) Done; verdict: pass"
     },
     {
-      "name": "a run stopped at a limit",
+      "name": "a build whose pull request was found",
       "fact": {
-        "run": "abc12345",
-        "kind": "plan",
-        "state": "limit"
+        "run": "bld00001",
+        "kind": "build",
+        "state": "pullRequest"
       },
-      "line": "[Event] run abc12345 (plan) Stopped at a limit"
+      "line": "[Event] run bld00001 (build) Pull request found"
     },
     {
       "name": "a run waiting for an answer",

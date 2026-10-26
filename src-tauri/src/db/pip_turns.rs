@@ -85,14 +85,15 @@ impl Db {
         Ok(())
     }
 
-    /// How many wake turns were recorded at or after `at`, across conversations.
-    pub fn wake_turns_since(&self, at: &str) -> Result<u32> {
-        Ok(self.conn.query_row("SELECT count(*) FROM pip_turns WHERE role = 'wake' AND created_at >= ?1", params![at], |r| r.get::<_, i64>(0))? as u32)
-    }
-
-    /// How many wake turns of `conversation` were recorded at or after `at`.
-    pub fn wake_turns_in_since(&self, conversation: &str, at: &str) -> Result<u32> {
-        Ok(self.conn.query_row("SELECT count(*) FROM pip_turns WHERE role = 'wake' AND conversation = ?1 AND created_at >= ?2", params![conversation, at], |r| r.get::<_, i64>(0))? as u32)
+    /// How each wake turn recorded at or after `at` stands, as its (status, error): those of `conversation`, or of every
+    /// conversation when none is given.
+    pub fn wake_turn_outcomes_since(&self, conversation: Option<&str>, at: &str) -> Result<Vec<(String, Option<String>)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT p.status, p.error FROM pip_turns w JOIN pip_turns p ON p.request_id = w.request_id AND p.role = 'pip'
+             WHERE w.role = 'wake' AND w.created_at >= ?1 AND (?2 IS NULL OR w.conversation = ?2)",
+        )?;
+        let rows = stmt.query_map(params![at, conversation], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
     pub fn set_pip_turn_status(&self, request_id: &str, status: &str) -> Result<()> {
@@ -322,10 +323,11 @@ mod tests {
         let kinds: Vec<(&str, &str, &str)> = turns.iter().map(|t| (t.request_id.as_str(), t.kind.as_str(), t.prompt.as_str())).collect();
         assert_eq!(kinds, [("q1", "user", "Carry on"), ("w1", "wake", "[Event] run r1 (triage) Done\n[Event] run r2 (plan) Done")], "only a wake's prompt is rewritten");
         assert_eq!(serde_json::to_value(&turns[1]).unwrap()["kind"], "wake");
-        assert_eq!(db.wake_turns_since("2026-10-01T10:00:00.000Z").unwrap(), 1);
-        assert_eq!(db.wake_turns_since("2026-10-01T10:00:02.000Z").unwrap(), 0);
-        assert_eq!(db.wake_turns_in_since("ws:w1", "2026-10-01T10:00:00.000Z").unwrap(), 1);
-        assert_eq!(db.wake_turns_in_since("ws:other", "2026-10-01T10:00:00.000Z").unwrap(), 0);
+        let outcomes = |conversation: Option<&str>, at: &str| db.wake_turn_outcomes_since(conversation, at).unwrap();
+        assert_eq!(outcomes(None, "2026-10-01T10:00:00.000Z"), [("queued".to_string(), None)]);
+        assert!(outcomes(None, "2026-10-01T10:00:02.000Z").is_empty());
+        assert_eq!(outcomes(Some("ws:w1"), "2026-10-01T10:00:00.000Z").len(), 1);
+        assert!(outcomes(Some("ws:other"), "2026-10-01T10:00:00.000Z").is_empty());
         assert!(db.begin_pip_turn_as("ws:w1", "x", "pip", "p", &TurnMeta::default(), "queued", "t").unwrap());
         assert_eq!(db.pip_turns("ws:w1").unwrap().iter().find(|t| t.request_id == "x").map(|t| t.kind.as_str()), Some("user"), "no other role can start a turn");
         db.delete_pip_turn("w1").unwrap();

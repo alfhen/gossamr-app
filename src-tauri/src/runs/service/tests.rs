@@ -1419,4 +1419,16 @@ mod waiting {
         assert_eq!(rig.svc.launch_waiting().await.unwrap(), std::slice::from_ref(&waiting.id));
         assert_eq!(rig.get(&in_closed).await.state, RunState::Queued);
     }
+
+    #[tokio::test]
+    async fn a_run_an_earlier_release_queued_on_its_own_waits_for_the_person_through_the_tracker_rewriting_it() {
+        let rig = ready().await;
+        let ws = rig.open_on("CA-1").await;
+        let old = rig.queued_in(1, "CA-1", &ws).await;
+        rig.set(&old, |r| r.unapproved_auto_start = Some(serde_json::json!({ "rule": "investigate_triage", "afterRun": "r0" }))).await;
+        assert!(rig.svc.launch_waiting().await.unwrap().is_empty());
+        assert_eq!(rig.get(&old).await.state, RunState::Queued);
+        assert!(rig.get(&old).await.unapproved_auto_start.is_some());
+        assert_eq!(rig.svc.start_now(&old.id).await.unwrap().state, RunState::Launching, "the person can still start it");
+    }
 }
