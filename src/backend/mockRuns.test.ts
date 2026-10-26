@@ -178,6 +178,16 @@ describe("mock runs", () => {
     await expect(backend.runsStop(next.id)).rejects.toThrow(/once it is working/);
   });
 
+  it("offers the agent tools from launch, so a run stopped before it started was never offered them", async () => {
+    const backend = new MockBackend();
+    const made = await draft(backend);
+    const run = await backend.runsApprove(made.id, mockDigest(spec));
+    expect((await backend.runsReview(made.id)).report).not.toBeNull();
+    await backend.runsStop(run.id);
+    expect((await backend.runsOutcome(run.id)).report).toBeNull();
+    expect((await backend.runsReview(made.id)).report).toBeNull();
+  });
+
   it("emits runs-changed and open-run", async () => {
     const backend = new MockBackend();
     const changes: string[] = [];

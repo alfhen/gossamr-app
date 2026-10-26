@@ -175,10 +175,25 @@ impl RunService {
     /// Hands the answer to the agent waiting in its `ask` call, which carries on in the same turn: nothing is stopped or
     /// resumed.
     async fn answer_ask(&self, run: Run, text: &str, keep: Option<&str>) -> Result<Run> {
-        if !self.core.asks().answer(&run.id, text) {
-            return Err(refuse("It isn't waiting for an answer any more. Look again in a moment."));
+        let gone = || refuse("It isn't waiting for an answer any more. Look again in a moment.");
+        if self.core.asks().question(&run.id).is_none() {
+            return Err(gone());
         }
-        self.answered(run, text, keep).await
+        let before = run.clone();
+        let mut run = run;
+        let now = Utc::now();
+        back_at_work(&mut run, now);
+        // Stored before the answer is released, so a failed write leaves the agent still waiting rather than answered
+        // behind a run that reads as needing one.
+        self.store(&run).await?;
+        if !self.core.asks().answer(&run.id, text) {
+            if let Err(e) = self.store(&before).await {
+                eprintln!("couldn't put run {} back after its question timed out: {e}", run.id);
+            }
+            return Err(gone());
+        }
+        self.remember(&run);
+        self.after_answer(run, text, keep, now).await
     }
 
     /// Records that the run has its answer and is working again.
@@ -187,6 +202,11 @@ impl RunService {
         back_at_work(&mut run, now);
         self.remember(&run);
         self.store(&run).await?;
+        self.after_answer(run, text, keep, now).await
+    }
+
+    /// What follows an answer once the run is stored as working: none of it undoes the answer if it fails.
+    async fn after_answer(&self, run: Run, text: &str, keep: Option<&str>, now: chrono::DateTime<Utc>) -> Result<Run> {
         if let Err(e) = self.core.report_stale(&run.id).await {
             eprintln!("couldn't mark the report of run {} as older than your answer: {e}", run.id);
         }

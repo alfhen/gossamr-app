@@ -691,7 +691,7 @@ export class MockRuns {
       buildAccount: spec.buildAccount?.trim() ? spec.buildAccount : null,
       findings: spec.findings?.trim() ? spec.findings : null,
       guard: GUARD,
-      report: run && !this.reports.has(run.id) ? null : { allowed: AGENT_ALLOW, guard: AGENT_GUARD },
+      report: run && run.state !== "queued" && !this.reports.has(run.id) ? null : { allowed: AGENT_ALLOW, guard: AGENT_GUARD },
       readOnly: readOnlyRules(spec),
       spec,
     };
@@ -768,7 +768,6 @@ export class MockRuns {
       endedAt: null,
     };
     this.proposals.applyRun(proposalId, run.id);
-    this.reports.set(run.id, { offered: true, report: null, revision: 0, calls: 0, rejections: 0, stale: false });
     this.runs = [run, ...this.runs];
     return run;
   }
@@ -927,6 +926,7 @@ export class MockRuns {
     const readOnly = readOnlyRules(run.spec);
     const guard = [GUARD, readOnly?.guard, AGENT_GUARD].filter(Boolean).join(" ");
     this.launchLog.push({ runId: run.id, kind: run.spec.kind, readOnly, guard, at });
+    if (!this.reports.has(run.id)) this.reports.set(run.id, { offered: true, report: null, revision: 0, calls: 0, rejections: 0, stale: false });
     return this.update(run.id, { ...patch, state: "launching", launchedAt: at, ...(run.slotWaitSince !== undefined ? { slotWaitSince: null } : {}), readOnly });
   }
 
@@ -1937,6 +1937,7 @@ export class MockRuns {
       focusFromRun: null,
       ticketBlock: null,
       project: containerRef(REPO_PROJECTS[found] ?? "CA"),
+      report: true,
       ...(workstream ? { workstream } : {}),
     };
     const unlinkable = this.linkProblem(spec, null);
