@@ -87,7 +87,7 @@ async fn a_blocked_report_says_so_ahead_of_the_note() {
 #[tokio::test]
 async fn a_run_that_never_reports_reads_as_it_always_did_and_says_where_it_came_from() {
     let fx = fixture_watching(&["acme/webshop"]).await;
-    let plain = run_with(&fx, |_| {}).await;
+    let plain = run_with(&fx, |r| r.spec.report = false).await;
     let outcome = fx.core.run_outcome(&plain.id).await.unwrap();
     assert_eq!((outcome.source, outcome.report), (Some(ResultSource::Section), None));
     assert_eq!(outcome.note.unwrap().text, "Add a backoff to the consumer.");
@@ -270,15 +270,14 @@ async fn a_plan_run_carries_the_plan_it_reported() {
 }
 
 #[tokio::test]
-async fn a_draft_that_spells_out_the_report_is_always_allowed_and_the_digest_follows_what_it_says() {
+async fn a_draft_always_spells_out_the_report_and_its_digest_follows_what_it_says() {
     let fx = fixture_watching(&["acme/webshop"]).await;
-    let spec = RunSpec { report: true, ..next_spec(&fx) };
-    let plain = fx.core.draft_run(RunSpec { report: false, ..spec.clone() }, Some(fx.item("CA-1"))).await.unwrap();
-    let on = fx.core.draft_run(spec, Some(fx.item("CA-1"))).await.unwrap();
-    let review = fx.core.runs_review(&on.id).await.unwrap();
+    let spec = next_spec(&fx);
+    let p = fx.core.draft_run(RunSpec { report: false, ..spec.clone() }, Some(fx.item("CA-1"))).await.unwrap();
+    let review = fx.core.runs_review(&p.id).await.unwrap();
     assert!(review.spec.report && review.prompt.contains("If the Gossamr tool `report` is available"));
     assert_eq!(review.report.as_ref().map(|r| r.allowed.as_str()), Some("mcp__gossamr__report, mcp__gossamr__ask, mcp__gossamr__read_workstream, mcp__gossamr__read_ticket"));
-    let unasked = fx.core.runs_review(&plain.id).await.unwrap();
-    assert!(unasked.report.is_some() && !unasked.prompt.contains("Gossamr tool"), "the tools are offered either way; only the paragraph is the draft's");
-    assert_ne!(review.digest, unasked.digest, "the digest follows what the draft says");
+    let silent = RunSpec { report: false, ..review.spec.clone() };
+    assert_ne!(review.digest, silent.digest(), "the digest follows what the draft says");
+    assert!(!crate::domain::render_prompt(&silent).contains("Gossamr tool"), "a draft from before the tools were always on still reads as it did");
 }

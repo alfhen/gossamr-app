@@ -468,10 +468,7 @@ impl Core {
             return Err(Error::Proposal("that item belongs to another connection".into()));
         }
         self.require_watched_repo(&spec.repo)?;
-        // A review's verdict is read by the app, so it always asks for the report, whoever drafts it.
-        if spec.kind == RunKind::Review {
-            spec.report = true;
-        }
+        spec.report = true;
         spec.clone_path = self.resolve_clone(&spec.clone_path)?;
         if spec.instruction.trim().is_empty() {
             spec.instruction = if spec.project.is_some() { TICKETLESS_STARTER.into() } else { default_instruction(spec.kind).into() };
@@ -564,6 +561,15 @@ impl Core {
                 }
             }
             let mut review = RunReview::of(run_of(&p)?.2);
+            if p.state != ProposalState::Pending {
+                let offered = match db.run_by_proposal(id)? {
+                    Some(run) => db.report(&run.id)?.is_some(),
+                    None => false,
+                };
+                if !offered {
+                    review.report = None;
+                }
+            }
             review.pr_title = pr.as_ref().map(|c| c.title.clone());
             review.pr_url = pr.map(|c| c.url);
             Ok(review)
@@ -1278,7 +1284,7 @@ mod tests {
         assert_eq!((spec.instruction.as_str(), spec.project.clone()), (crate::domain::TICKETLESS_STARTER, Some(project_of(&fx))));
         assert_eq!(spec.ticket_block, None);
         let review = fx.core.runs_review(&p.id).await.unwrap();
-        assert!(review.prompt.ends_with(crate::domain::NEW_TICKET_TAIL) && review.prompt.contains(crate::domain::TICKETLESS_STARTER.trim()));
+        assert!(review.prompt.contains(crate::domain::NEW_TICKET_TAIL) && review.prompt.contains(crate::domain::TICKETLESS_STARTER.trim()));
     }
 
     #[tokio::test]

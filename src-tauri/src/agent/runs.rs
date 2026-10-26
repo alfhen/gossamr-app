@@ -1305,7 +1305,7 @@ mod tests {
 
         let review = r.fx.core.runs_review(&draft.id).await.unwrap();
         assert_eq!(review.instruction, QUESTION);
-        assert!(review.prompt.contains(QUESTION) && review.prompt.ends_with(crate::domain::NEW_TICKET_TAIL), "{}", review.prompt);
+        assert!(review.prompt.contains(QUESTION) && review.prompt.contains(crate::domain::NEW_TICKET_TAIL), "{}", review.prompt);
         assert_eq!(review.digest, spec.digest());
 
         let edit = |text: &str| crate::inbox::Edit::Run { instruction: Some(text.into()), base: None, clone_path: None, kind: None, name: None, pr: None, allow_push: None, plan: None, build_account: None, project: None };

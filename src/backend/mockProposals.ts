@@ -333,7 +333,7 @@ export class MockProposals {
         ...(base !== undefined ? { base: base.trim() } : {}),
         ...(clonePath !== undefined ? { clonePath } : {}),
         ...(kind ? { kind } : {}),
-        ...(switched ? { pr: null, prSha: null, allowPush: kind === "build", report: kind === "review" ? true : was.report, ...(kind !== "build" ? { plan: null, planFromRun: null, planApproved: false } : {}), ...(kind !== "review" ? { buildAccount: null, buildFromRun: null } : {}), ...(kind !== "triage" && kind !== "plan" ? { findings: null, findingsFromRun: null } : {}), ...(untouched ? { instruction: INSTRUCTIONS[kind] } : {}), ...(kind !== "investigate" ? { project: null } : {}) } : {}),
+        ...(switched ? { pr: null, prSha: null, allowPush: kind === "build", ...(kind !== "build" ? { plan: null, planFromRun: null, planApproved: false } : {}), ...(kind !== "review" ? { buildAccount: null, buildFromRun: null } : {}), ...(kind !== "triage" && kind !== "plan" ? { findings: null, findingsFromRun: null } : {}), ...(untouched ? { instruction: INSTRUCTIONS[kind] } : {}), ...(kind !== "investigate" ? { project: null } : {}) } : {}),
         ...(project ? { project } : {}),
         ...(pr !== undefined ? { pr, prSha: null, ...(pr !== was.pr ? { buildAccount: null, buildFromRun: null } : {}) } : {}),
         ...(allowPush !== undefined ? { allowPush } : {}),

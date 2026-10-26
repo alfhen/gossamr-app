@@ -671,7 +671,8 @@ export class MockRuns {
   }
 
   review(proposalId: string): RunReview {
-    const started = this.runs.find((r) => r.proposalId === proposalId)?.spec;
+    const run = this.runs.find((r) => r.proposalId === proposalId);
+    const started = run?.spec;
     const spec = started ?? this.draftSpec(proposalId);
     const target = spec.kind === "review" && spec.pr != null ? this.findPullRequest(spec.repo, spec.pr) : null;
     if (!started && spec.kind === "review") {
@@ -690,7 +691,7 @@ export class MockRuns {
       buildAccount: spec.buildAccount?.trim() ? spec.buildAccount : null,
       findings: spec.findings?.trim() ? spec.findings : null,
       guard: GUARD,
-      report: { allowed: AGENT_ALLOW, guard: AGENT_GUARD },
+      report: run && !this.reports.has(run.id) ? null : { allowed: AGENT_ALLOW, guard: AGENT_GUARD },
       readOnly: readOnlyRules(spec),
       spec,
     };
@@ -1572,8 +1573,7 @@ export class MockRuns {
     const unlinkable = this.linkProblem(spec, item);
     if (unlinkable) return Promise.reject(new Error(unlinkable));
     if (!this.known(spec.repo).some((c) => c.path === spec.clonePath)) return Promise.reject(new Error(`${spec.clonePath} isn't a git clone`));
-    // A review's verdict is read by the app, so it always asks for the report, whoever drafts it.
-    if (spec.kind === "review") spec = { ...spec, report: true };
+    spec = { ...spec, report: true };
     // Only a verify that follows a review reads a pull request, the one the review read; never one a caller names, as `Core::draft_run`.
     if (spec.kind === "verify") spec = { ...spec, pr: null, prSha: null };
     let carried: Pick<RunSpec, "plan" | "planFromRun" | "planApproved"> = { plan: null, planFromRun: null, planApproved: false };
@@ -1814,6 +1814,7 @@ export class MockRuns {
       focus: focus?.trim() || null,
       focusFromRun: fromRun,
       ticketBlock: this.ticketText(item) ?? `${item.key}: sample ticket`,
+      report: true,
       ...(workstream ? { workstream } : {}),
     };
     const unlinkable = this.linkProblem(spec, item);

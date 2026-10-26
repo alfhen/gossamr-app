@@ -481,6 +481,7 @@ impl RunService {
         if let (Some(over), Some(id)) = (limits::exceeded(&run, now, &settings), run.short_id.clone()) {
             match tc.cli.stop(&id).await {
                 Ok(()) => {
+                    self.core.asks().cancel(run_id);
                     overrun = Some(over.reason(&settings));
                     run.state = RunState::Stopped;
                     run.needs = None;

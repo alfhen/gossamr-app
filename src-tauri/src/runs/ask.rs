@@ -1,5 +1,6 @@
-//! Questions an agent put through the `ask` tool and is still waiting on. They live in memory: when the app quits the
-//! call fails in the agent, whose tool description says to end its turn with the question instead.
+//! Questions an agent put through the `ask` tool and is still waiting on, and how many calls each run has made to the
+//! tools that read or wait. They live in memory: when the app quits the call fails in the agent, whose tool description
+//! says to end its turn with the question instead, and the counts start again.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -19,6 +20,7 @@ struct Pending {
 
 struct Inner {
     pending: Mutex<HashMap<String, Pending>>,
+    calls: Mutex<HashMap<String, u32>>,
     wait: Mutex<Duration>,
     next: AtomicU64,
     opened: Notify,
@@ -31,7 +33,7 @@ pub struct Asks {
 
 impl Default for Asks {
     fn default() -> Self {
-        Self { inner: Arc::new(Inner { pending: Mutex::new(HashMap::new()), wait: Mutex::new(ASK_WAIT), next: AtomicU64::new(1), opened: Notify::new() }) }
+        Self { inner: Arc::new(Inner { pending: Mutex::new(HashMap::new()), calls: Mutex::new(HashMap::new()), wait: Mutex::new(ASK_WAIT), next: AtomicU64::new(1), opened: Notify::new() }) }
     }
 }
 
@@ -81,6 +83,20 @@ impl Asks {
         taken.is_some_and(|p| p.reply.send(text.to_owned()).is_ok())
     }
 
+    /// Counts one more call by the run and returns how many it has made.
+    pub fn count_call(&self, run_id: &str) -> u32 {
+        let mut calls = self.inner.calls.lock().expect("asks lock poisoned");
+        let made = calls.entry(run_id.to_owned()).or_insert(0);
+        *made += 1;
+        *made
+    }
+
+    /// Drops what is kept for a run that is gone.
+    pub fn forget(&self, run_id: &str) {
+        self.inner.calls.lock().expect("asks lock poisoned").remove(run_id);
+        self.cancel(run_id);
+    }
+
     /// Ends the wait without an answer.
     pub fn cancel(&self, run_id: &str) {
         self.inner.pending.lock().expect("asks lock poisoned").remove(run_id);
@@ -106,7 +122,14 @@ impl Waiting {
         match tokio::time::timeout(wait, &mut self.reply).await {
             Ok(Ok(text)) => Outcome::Answered(text),
             Ok(Err(_)) => Outcome::Cancelled,
-            Err(_) => Outcome::TimedOut,
+            Err(_) => {
+                // Closing first makes a late `answer` fail instead of reaching a call that has already given up.
+                self.reply.close();
+                match self.reply.try_recv() {
+                    Ok(text) => Outcome::Answered(text),
+                    Err(_) => Outcome::TimedOut,
+                }
+            }
         }
     }
 }

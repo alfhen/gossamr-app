@@ -44,20 +44,32 @@ impl RunService {
         }
     }
 
-/// A run's tokens and config file go when its worktree does.
+    /// A run's tokens and config files go when its worktree does.
     pub(super) async fn forget_tools(&self, run_id: &str) {
         if let Some(channel) = &self.agents {
             channel.remove_config(run_id);
+            self.legacy_channel().remove_config(run_id);
         }
+        self.core.asks().forget(run_id);
         if let Err(e) = self.core.report_forget(run_id).await {
             eprintln!("couldn't drop the tool tokens of run {run_id}: {e}");
         }
+    }
+
+    /// Where the earlier report server kept its config files; a session started then resumes with its saved path.
+    fn legacy_channel(&self) -> AgentChannel {
+        AgentChannel::new(0, self.core.data_dir().join("report"))
     }
 
     /// Removes config files that no run can use any more: the run is gone, failed, has no worktree, or ended long enough
     /// ago that its session is no longer watched. Safe to call at any time.
     pub async fn sweep_agent_files(&self) {
         let Some(channel) = &self.agents else { return };
+        self.sweep_configs(channel).await;
+        self.sweep_configs(&self.legacy_channel()).await;
+    }
+
+    async fn sweep_configs(&self, channel: &AgentChannel) {
         let now = Utc::now();
         for id in channel.configured() {
             let keep = match self.core.run(&id).await {

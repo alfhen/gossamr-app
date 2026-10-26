@@ -181,6 +181,22 @@ async fn the_sweep_keeps_what_a_live_or_recently_finished_run_may_still_need_and
 }
 
 #[tokio::test]
+async fn the_config_files_of_the_earlier_report_server_follow_the_same_sweep() {
+    let d = dir("legacy");
+    let rig = ready_with(reporting(&d)).await;
+    let live = rig.launched_reporting(1, RunKind::Investigate).await;
+    let failed = rig.launched_reporting(2, RunKind::Investigate).await;
+    rig.set(&failed, |r| r.state = RunState::Failed).await;
+    let legacy = crate::runs::agent_config::AgentChannel::new(0, rig.fx.core.data_dir().join("report"));
+    for run in [&live, &failed] {
+        legacy.write_config(&run.id, "gsr_0").unwrap();
+    }
+    rig.svc.sweep_agent_files().await;
+    assert_eq!(legacy.configured(), std::slice::from_ref(&live.id), "an open run keeps the file its saved options name");
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+#[tokio::test]
 async fn answering_a_question_makes_the_report_made_before_it_stale() {
     let d = dir("answer");
     let rig = ready_with(reporting(&d)).await;

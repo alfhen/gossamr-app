@@ -144,7 +144,7 @@ impl Core {
             findings_from_run: None,
             allow_push: false,
             project: Some(project),
-            report: false,
+            report: true,
             workstream: workstream.map(Into::into),
         };
         let at = Utc::now();
@@ -201,7 +201,7 @@ impl Core {
             findings_from_run: None,
             allow_push: false,
             project: None,
-            report: false,
+            report: true,
             workstream: workstream.map(Into::into),
         };
         if matches!(kind, RunKind::Triage | RunKind::Plan) {
@@ -359,8 +359,6 @@ impl Core {
                 let change = self.review_target(spec).await?;
                 spec.base = change.base_ref.unwrap_or_else(|| spec.base.clone());
                 spec.pr_sha = change.sha;
-                // Its verdict is read by the app; the tool is offered when the setting allows, else the written verdict counts.
-                spec.report = true;
             }
             // After a passing review: its pull request at the commit it read, so the verify checks the change itself and
             // not the base branch. A review always had GitHub confirm the pull request is this repository's own. A review
@@ -408,7 +406,7 @@ fn chain_spec(kind: RunKind, repo: String, clone_path: std::path::PathBuf, plan:
         findings_from_run: None,
         allow_push: false,
         project: None,
-        report: false,
+        report: true,
         workstream: workstream.map(Into::into),
     }
 }

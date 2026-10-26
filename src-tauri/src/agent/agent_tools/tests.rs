@@ -403,6 +403,74 @@ async fn stopping_a_run_that_is_asking_ends_the_ask() {
 }
 
 #[tokio::test]
+async fn an_ask_whose_session_is_listed_as_finished_is_ended_by_the_tracker() {
+    for ended in ["done", "stopped"] {
+        let t = live(&format!("ask-ended-{ended}")).await;
+        let run = t.working(1).await;
+        let call = t.asking(&run, "Anyone?");
+        t.until_asked(&run).await;
+        t.rig.session(&run, |e| {
+            e.state = Some(ended.into());
+            e.status = None;
+            e.pid = None;
+        });
+        t.rig.poll().await;
+        assert_eq!(text_of(&call.await.unwrap()), (ENDED, true), "{ended}");
+        assert!(t.rig.fx.core.asks().question(&run.id).is_none(), "{ended}");
+    }
+}
+
+#[tokio::test]
+async fn a_client_that_hangs_up_takes_its_question_back() {
+    use tokio::io::AsyncWriteExt;
+    let t = live("ask-hangup").await;
+    let run = t.working(1).await;
+    let body = json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": { "name": "ask", "arguments": { "question": "Hello?" } } }).to_string();
+    let request = format!(
+        "POST /agent/{} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nAuthorization: Bearer {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+        run.id,
+        t.port,
+        t.token(&run),
+        body.len()
+    );
+    let mut stream = tokio::net::TcpStream::connect(("127.0.0.1", t.port)).await.unwrap();
+    stream.write_all(request.as_bytes()).await.unwrap();
+    assert_eq!(t.until_asked(&run).await, "Hello?");
+    drop(stream);
+    for _ in 0..400 {
+        if t.rig.fx.core.asks().question(&run.id).is_none() {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    panic!("the question stayed up after the session hung up");
+}
+
+#[tokio::test]
+async fn an_answer_to_a_question_of_a_run_that_has_stopped_is_refused_and_leaves_it_stopped() {
+    let t = live("ask-stale").await;
+    let run = t.working(1).await;
+    let call = t.asking(&run, "Still there?");
+    t.until_asked(&run).await;
+    t.rig.set(&run, |r| r.state = RunState::Stopped).await;
+    assert!(t.rig.svc.answer(&run.id, "Yes.").await.is_err());
+    assert_eq!(t.rig.get(&run).await.state, RunState::Stopped);
+    assert_eq!(text_of(&call.await.unwrap()), (ENDED, true));
+    assert!(t.rig.fx.core.asks().question(&run.id).is_none());
+}
+
+#[tokio::test]
+async fn stopping_every_run_ends_the_asks_of_the_runs_it_stopped() {
+    let t = live("ask-stop-all").await;
+    let run = t.working(1).await;
+    let call = t.asking(&run, "Go on?");
+    t.until_asked(&run).await;
+    t.rig.svc.stop_all().await.unwrap();
+    assert_eq!(text_of(&call.await.unwrap()), (ENDED, true));
+    assert!(t.rig.fx.core.asks().question(&run.id).is_none());
+}
+
+#[tokio::test]
 async fn read_workstream_gives_the_ticket_notes_and_other_runs_reports_as_data_and_nothing_of_another_workstream() {
     let t = live("workstream").await;
     let (core, fx) = (t.rig.fx.core.clone(), &t.rig.fx);

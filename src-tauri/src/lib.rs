@@ -1176,8 +1176,6 @@ pub fn run() {
             let drafted_handle = app.handle().clone();
             let open_on_focus = Arc::new(runs::tracker::OpenOnFocus::default());
             app.manage(open_on_focus.clone());
-            // Config files of the earlier report channel hold tokens for a server that is gone.
-            let _ = std::fs::remove_dir_all(core.data_dir().join("report"));
             let bound = tauri::async_runtime::block_on(agent::mcp::bind(runs::agent_config::config_dir(&core.data_dir())))?;
             // The supervisor hears about runs from the run service and wakes Pip through the agent service, which is
             // built after both; until it is bound it does nothing.

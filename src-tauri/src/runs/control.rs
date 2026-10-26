@@ -304,6 +304,7 @@ impl RunService {
             };
             match tokio::time::timeout(STOP_LIMIT, tc.cli.stop(&id)).await {
                 Ok(Ok(())) => {
+                    self.core.asks().cancel(&entry.run_id);
                     tally.stopped += 1;
                     let _ = self.index.mark_terminal(&entry.run_id);
                     self.reset_counts(&entry.run_id);

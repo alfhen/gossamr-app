@@ -4,8 +4,7 @@
 //! is only what the run was already allowed to know. Nothing here writes to Jira, to the repository or to another run;
 //! `report` stores one validated report on the calling run and `ask` waits for a person's answer.
 
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use serde_json::{json, Value};
 
@@ -58,7 +57,6 @@ pub(super) fn tools() -> Vec<Value> {
 
 pub(super) struct AgentSide {
     core: Arc<Core>,
-    calls: Mutex<HashMap<String, u32>>,
 }
 
 fn result(text: impl Into<String>, is_error: bool) -> Value {
@@ -67,14 +65,11 @@ fn result(text: impl Into<String>, is_error: bool) -> Value {
 
 impl AgentSide {
     pub(super) fn new(core: Arc<Core>) -> Self {
-        Self { core, calls: Mutex::new(HashMap::new()) }
+        Self { core }
     }
 
     fn within_cap(&self, run_id: &str) -> bool {
-        let mut calls = self.calls.lock().expect("calls lock poisoned");
-        let made = calls.entry(run_id.to_owned()).or_insert(0);
-        *made += 1;
-        *made <= CALL_CAP
+        self.core.asks().count_call(run_id) <= CALL_CAP
     }
 
     /// Answers a `tools/call` made with `token` on run `run_id`'s route.

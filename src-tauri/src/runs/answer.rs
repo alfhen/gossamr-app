@@ -125,7 +125,10 @@ impl RunService {
         let _turn = self.launching.lock().await;
         let mut run = self.load(run_id).await?;
         if self.core.asks().question(run_id).is_some() {
-            return self.answer_ask(run, text, keep).await;
+            if !matches!(run.state, RunState::Done | RunState::Failed | RunState::Stopped) {
+                return self.answer_ask(run, text, keep).await;
+            }
+            self.core.asks().cancel(run_id);
         }
         let again = run.state == RunState::Stopped && (run.unsent_answer.is_some() || run.stopped_by_limit);
         if run.state != RunState::NeedsAnswer && !again {
@@ -146,6 +149,7 @@ impl RunService {
                 return Err(refuse("It isn't waiting for an answer any more. Look again in a moment."));
             }
             tc.cli.stop(&id).await?;
+            self.core.asks().cancel(&run.id);
             Self::stopped(&mut run);
             if let Err(e) = self.index.mark_terminal(&run.id) {
                 eprintln!("couldn't update the run index: {e}");
