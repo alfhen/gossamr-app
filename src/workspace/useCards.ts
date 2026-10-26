@@ -9,6 +9,10 @@ import { useDev, VISIBLE_LIMIT } from "./devStore";
 import { useAttention } from "./CanvasBits";
 import type { ItemCardProps } from "./ItemCard";
 import { useTabs } from "./tabsStore";
+import { useNow } from "./useNow";
+
+/** Cards age by whole days, so an open board only needs to look at the clock again each hour. */
+const HOUR_MS = 3_600_000;
 
 export interface Notice {
   tone: "info" | "error";
@@ -55,7 +59,8 @@ export function useCards(items: readonly WorkItem[], order: readonly string[]) {
 
   useEffect(() => () => useTabs.getState().clearMarks(), []);
 
-  const now = useMemo(() => new Date(), [items]);
+  const tick = useNow(HOUR_MS);
+  const now = useMemo(() => new Date(), [items, tick]);
   const blocked = useMemo(() => blockedKeys(Object.values(allItems)), [allItems]);
   const pending = useMemo(() => pendingMoves(proposals), [proposals]);
   const counts = useMemo(() => draftCounts({ proposals }), [proposals]);
