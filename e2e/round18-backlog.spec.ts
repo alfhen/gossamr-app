@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { advanceRuns, agentsHome, askPip, editTicket, jiraWrites, mockRuns, needsPane, openAgents, openApp, peekSheet, peekTicket, pipConversation, pipPane, selectWorkstream, startWorkstream, stepChip, needRow } from "./support/app";
+import { advanceRuns, askPip, jiraWrites, mockRuns, needsPane, openAgents, openApp, peekSheet, peekTicket, pipCommentDraft, pipConversation, pipPane, selectWorkstream, startWorkstream, stepChip, needRow } from "./support/app";
 
 // Backlog items of the eighteenth dogfood round: the plan reading Approved once its
 // draft is posted (G17), an edited draft reopening as a preview with Edit (G26), and the rail being a named region (G27).
@@ -63,19 +63,17 @@ test.describe("an edited draft reopens as a preview (G26)", () => {
   test("the kept text shows read-only with an Edit button, Edit opens the field with it, and Post posts it", async ({ page }) => {
     test.setTimeout(120_000);
     await openApp(page, "runs=empty");
-    await editTicket(page, "CA-408", { description: "Fix it." });
     await page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "All projects" }).click();
     await startWorkstream(page, "CA-408");
     await openAgents(page);
     await selectWorkstream(page, "CA-408");
-    await agentsHome(page).locator("[data-clarity-notice]").getByRole("button", { name: "Ask the reporter now" }).click();
-    const draft = needsPane(page).getByRole("article", { name: "Comment on CA-408" });
+    const draft = await pipCommentDraft(page, "CA-408");
     await draft.getByRole("button", { name: "Edit" }).click();
     await needsPane(page).locator("textarea").first().fill("Kept after the card left.");
     await draft.getByRole("button", { name: "Done editing" }).click();
     await needsPane(page).getByRole("button", { name: "Hide" }).click();
     await expect(draft).toHaveCount(0);
-    await needRow(page, /drafted a comment to the reporter of CA-408/).click();
+    await needRow(page, /Draft comment/).click();
     await expect(draft).toContainText("Kept after the card left.");
     await expect(needsPane(page).locator("textarea")).toHaveCount(0);
     await expect(draft.getByRole("button", { name: "Done editing" })).toHaveCount(0);

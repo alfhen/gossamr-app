@@ -145,36 +145,9 @@ describe("the Pip & agents chip", () => {
     expect(texts("person", "resumed")).toEqual(["You resumed the workstream"]);
   });
 
-  it("words the person's three choices on a ticket that isn't clear enough to plan, naming the triage", () => {
-    const lines = [ev(1, "person", "readiness_asked", "r3", null), ev(2, "person", "readiness_answered", "r3", null), ev(3, "person", "readiness_overridden", "r3", null)];
-    expect(toWorkstreamEntries({ w1: lines }, [ws]).map((e) => e.text).reverse()).toEqual([
-      "You chose to ask the reporter about R3's open questions; drafted for you to post",
-      "You chose to answer R3's open questions",
-      "You chose to plan now, after asking the reporter about R3's open questions",
-    ]);
-  });
-
-  it("words a Plan now, after the reporter was asked about that triage, apart from Plan anyway", () => {
-    const lines = [ev(1, "person", "readiness_asked", "r3", null), ev(2, "person", "readiness_overridden", "r3", null), ev(3, "person", "readiness_overridden", "r2", null)];
-    const texts = toWorkstreamEntries({ w1: lines }, [ws]).map((e) => e.text).reverse();
-    expect(texts[1]).toBe("You chose to plan now, after asking the reporter about R3's open questions");
-    expect(texts[2]).toBe("You chose to plan anyway after R2 found the ticket not ready");
-  });
-
-  it("words the clarity notice's two choices", () => {
-    const lines = [ev(1, "person", "clarity_asked", null, null), ev(2, "person", "clarity_dismissed", null, null)];
-    expect(toWorkstreamEntries({ w1: lines }, [ws]).map((e) => e.text).reverse()).toEqual(["You chose to ask the reporter; Gossamr drafted the questions for you to post", "You said the ticket looks clear enough"]);
-  });
-
-  it("words the nudge to the reporter and what Looks fine taught the notice, and how the person gave it back", () => {
-    const lines = [ev(1, "person", "reporter_nudged", null, null), ev(2, "person", "clarity_learned", null, "who in CA"), ev(3, "person", "clarity_reset", null, "CA"), ev(4, "person", "clarity_reset", null, null), ev(5, "person", "clarity_reset", null, "who in CA")];
-    expect(toWorkstreamEntries({ w1: lines }, [ws]).map((e) => e.text).reverse()).toEqual([
-      "You had Gossamr draft a nudge to the reporter",
-      "Gossamr stopped flagging CA tickets that don't say who is waiting on them after you said Looks fine 3 times",
-      "You gave back what Gossamr learned from Looks fine for CA",
-      "You gave back what Gossamr learned from Looks fine",
-      "You gave back what Gossamr learned from Looks fine for CA tickets that don't say who is waiting on them",
-    ]);
+  it("leaves out what earlier versions recorded about questions to the reporter and the word check", () => {
+    const old = ["readiness_asked", "readiness_answered", "readiness_overridden", "clarity_asked", "clarity_dismissed", "reporter_nudged", "clarity_learned", "clarity_reset"];
+    expect(toWorkstreamEntries({ w1: old.map((a, n) => ev(n + 1, "person", a, "r3", null)) }, [ws])).toEqual([]);
   });
 
   it("is the workstreams' audit alone, newest first, and nothing of it shows under the other chips", () => {

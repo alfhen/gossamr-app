@@ -67,8 +67,6 @@ export interface CommandActions {
   startWorkstreamOn(item: WorkItem): void;
   /** Opens "What Jira saw from me": everything Gossamr posted to Jira. */
   openJiraSent(): void;
-  /** Gives back what "Looks fine" taught the clarity notice, in every project. */
-  giveBackClarity(): void;
 }
 
 /** What the screen shows right now, for the hints beside entries. */
@@ -84,8 +82,6 @@ export interface CommandContext {
   ticket?: { key: string; workstream: boolean } | null;
   /** The person is on the Agents screen. */
   onAgents?: boolean;
-  /** How many projects "Looks fine" has taught the clarity notice to leave a gap out for, for "Give back what Looks fine learned". */
-  clarityLearned?: number;
 }
 
 /** Whether the keyboard has no place after a page change: on the body, or on an element that went away with it. */
@@ -172,9 +168,6 @@ export function buildCommands(containers: readonly WorkContainer[], savedViews: 
               ]
             : []),
         ]
-      : []),
-    ...(ctx.clarityLearned
-      ? [{ id: "clarity:reset", group: "App" as const, icon: "↺", label: "Give back what Looks fine learned", hint: ctx.clarityLearned === 1 ? "1 project" : `${ctx.clarityLearned} projects`, keywords: "clarity unclear notice reset forget flag again", run: a.giveBackClarity }]
       : []),
     { id: "app:tab", group: "App", icon: "▫", label: "New tab", hint: "Workspace", run: a.newTab },
     { id: "app:pip", group: "App", icon: "✦", label: "Toggle Pip", hint: "⌘J", keywords: "assistant chat claude", run: a.togglePip },

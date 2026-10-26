@@ -1,16 +1,13 @@
 import { expect, test, type Page } from "@playwright/test";
-import { agentsHome, editTicket, expandAllNeeds, expectToast, homeConversationRegion, homeSettled, jiraWrites, needsPane, openAgents, openApp, selectWorkstream, startWorkstream, workstreamEvents, openNeedOfKind, needsStack } from "./support/app";
+import { agentsHome, expandAllNeeds, expectToast, homeConversationRegion, homeSettled, jiraWrites, needsPane, openAgents, openApp, pipCommentDraft, selectWorkstream, startWorkstream, workstreamEvents, openNeedOfKind, needsStack } from "./support/app";
 
 // Backlog items of the thirteenth dogfood round: a workstream's offer to bring in what its ticket already has in General (G17),
-// Close with an Undo and a Reopen (G23), a read-only run's permission prompt saying what Deny does (G24), what
-// the reporter question says about posting (G25), the posting pause's two buttons (G26), names a screen reader hears
-// once (G28), the posted entry's footer (G29), the Done ticket's one reason (G30).
+// Close with an Undo and a Reopen (G23), a read-only run's permission prompt saying what Deny does (G24), the posting
+// pause's two buttons (G26), names a screen reader hears once (G28), the posted entry's footer (G29), the Done ticket's
+// one reason (G30).
 
-
-const THIN = "Fix it.";
 const toast = (page: Page) => page.locator("[data-toast]");
 const allProjects = (page: Page) => page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "All projects" }).click();
-const notice = (page: Page) => agentsHome(page).locator("[data-clarity-notice]");
 const palette = (page: Page) => page.getByRole("dialog", { name: "Command palette" });
 
 /** A workstream on `key`, begun from its peek. */
@@ -19,15 +16,13 @@ async function begin(page: Page, key: string) {
   await startWorkstream(page, key);
 }
 
-/** The reporter question draft on a vague ticket: a workstream on it, "Ask the reporter now" pressed, its card in the decision pane. */
-async function reporterDraft(page: Page) {
+/** A comment on CA-408 drafted by Pip: a workstream on it, Pip asked for a comment, its card in the decision pane. */
+async function commentDraft(page: Page) {
   await openApp(page, "runs=empty");
-  await editTicket(page, "CA-408", { description: THIN });
   await begin(page, "CA-408");
   await openAgents(page);
   await selectWorkstream(page, "CA-408");
-  await notice(page).getByRole("button", { name: "Ask the reporter now" }).click();
-  const draft = needsPane(page).getByRole("article", { name: "Comment on CA-408" });
+  const draft = await pipCommentDraft(page, "CA-408");
   await expect(draft).toBeVisible();
   return draft;
 }
@@ -77,11 +72,10 @@ test.describe("a read-only run's permission prompt (G24)", () => {
   });
 });
 
-test.describe("the reporter question draft (G25, G26, G29)", () => {
-  test("says it posts as you and who Jira notifies, and its tag says Post like its button", async ({ page }) => {
+test.describe("a comment draft (G26, G29)", () => {
+  test("its tag says Post like its button", async ({ page }) => {
     test.setTimeout(120_000);
-    const draft = await reporterDraft(page);
-    await expect(draft.locator("[data-mention-note]")).toHaveText(/^Posts as you; Jira notifies .+\.$/);
+    const draft = await commentDraft(page);
     await expect(draft.getByRole("button", { name: "Post comment" })).toBeVisible();
     await expect(needsStack(page).locator("[data-needs-you-chip]").filter({ hasText: /^Post$/ })).toHaveCount(1);
     await expect(needsStack(page).locator("[data-needs-you-chip]").filter({ hasText: /^Approve$/ })).toHaveCount(0);
@@ -90,7 +84,7 @@ test.describe("the reporter question draft (G25, G26, G29)", () => {
 
   test("pauses on two secrets with both buttons in the group, the note the alert, Keep editing first, and quotes each", async ({ page }) => {
     test.setTimeout(120_000);
-    const draft = await reporterDraft(page);
+    const draft = await commentDraft(page);
     await draft.getByRole("button", { name: "Edit" }).click();
     const text = needsPane(page).locator("textarea").first();
     await text.fill(`${await text.inputValue()}\n\nPassword: hunter2\ntoken=ghp_abcdefghijklmnopqrstuvwxyz0123`);
@@ -100,7 +94,7 @@ test.describe("the reporter question draft (G25, G26, G29)", () => {
     await expect(pause).toHaveAttribute("role", "group");
     await expect(pause.locator("p[role=alert]")).toHaveCount(1);
     await expect(pause).toBeVisible();
-    await expect(pause).toContainText("like a password, key or token at “hu…” (line 12) and “gh…” (line 13).");
+    await expect(pause).toContainText("like a password, key or token at “hu…” (line 3) and “gh…” (line 4).");
     await expect(pause).not.toContainText("hunter2");
     const keep = pause.getByRole("button", { name: "Keep editing" });
     const anyway = pause.getByRole("button", { name: "Post anyway" });
@@ -119,7 +113,7 @@ test.describe("the reporter question draft (G25, G26, G29)", () => {
 
   test("once posted, the sent page says who drafted it once, and where it came from", async ({ page }) => {
     test.setTimeout(120_000);
-    const draft = await reporterDraft(page);
+    const draft = await commentDraft(page);
     await draft.getByRole("button", { name: "Post comment" }).click();
     await expect.poll(async () => (await jiraWrites(page)).length).toBe(1);
     await page.keyboard.press("ControlOrMeta+k");
@@ -127,8 +121,8 @@ test.describe("the reporter question draft (G25, G26, G29)", () => {
     await page.keyboard.press("Enter");
     const entry = page.locator("[data-jira-sent] [data-sent-entry]").first();
     await expect(entry).toBeVisible();
-    await expect(entry.locator("[data-sent-edited]")).toHaveText("Gossamr drafted it; posted without changes.");
-    await expect(entry.locator("[data-sent-from]")).toContainText("from your request, in the workstream");
+    await expect(entry.locator("[data-sent-edited]")).toHaveText("Pip drafted it; posted without changes.");
+    await expect(entry.locator("[data-sent-from]")).toContainText("from Pip, in the workstream");
     await expect(entry.locator("[data-sent-from]")).not.toContainText("Gossamr");
   });
 });

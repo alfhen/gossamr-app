@@ -1,24 +1,9 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
-import { mentionNote } from "../lib/mentions";
-import { ANSWERS_OPENING, ANSWERS_COMMENT_LABEL } from "../lib/proposals";
 import { PaletteView, START_WORKSTREAM_NOTE } from "./Palette";
 import { goneOnRouteChange } from "./ToastHost";
 
 describe("round 10 backlog", () => {
-  it("G24: the answers comment opens with a line saying it answers the triage's questions, in a neutral voice, naming no one", () => {
-    expect(ANSWERS_OPENING).toBe("Answers to the open questions on this ticket:");
-    expect(ANSWERS_OPENING).not.toMatch(/\b(I|we|Pip|Gossamr|runs?|workstreams?)\b/);
-    expect(ANSWERS_OPENING).not.toBe(ANSWERS_COMMENT_LABEL);
-  });
-
-  it("G25: a reporter question that mentions people says it posts as you and who Jira notifies", () => {
-    expect(mentionNote([])).toBeNull();
-    expect(mentionNote([{ name: "Mette Lund" }])).toBe("Posts as you; Jira notifies Mette Lund.");
-    expect(mentionNote([{ name: "Mette Lund" }, { name: "Jens" }, { name: "Mette Lund" }])).toBe("Posts as you; Jira notifies Mette Lund and Jens.");
-    expect(mentionNote([{ name: "A" }, { name: "B" }, { name: "C" }])).toBe("Posts as you; Jira notifies A, B and C.");
-  });
-
   it("G31: the palette's workstream step says it starts no agent and posts nothing; other steps have no such line", () => {
     const view = (note?: string) => renderToStaticMarkup(<PaletteView query="" results={[]} active={0} note={note} onQuery={vi.fn()} onActive={vi.fn()} onRun={vi.fn()} onClose={vi.fn()} />);
     expect(START_WORKSTREAM_NOTE).toBe("Opens a workstream; starts no agent and posts nothing.");

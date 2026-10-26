@@ -1,9 +1,5 @@
-import type { Proposal, Run, WorkstreamEvent, WorkstreamView } from "../types";
-import { flaggedGaps, projectOfKey, type ClarityLearning } from "./clarityLearning";
+import type { Run, WorkstreamView } from "../types";
 import { needsIn, type Need } from "./needs";
-import { workstreamOf } from "./proposals";
-import { NUDGE_AFTER_DAYS, answersDue, waitedDays } from "./reporterWait";
-import { pausedText } from "./workstreamPause";
 import { STAGE_LABEL } from "./workstreamStage";
 
 /**
@@ -11,118 +7,68 @@ import { STAGE_LABEL } from "./workstreamStage";
  * questions, most to least urgent, so the word is always the thing to do or know first:
  *
  * 1. `needs-you`: something in this workstream waits on the person. It outranks everything because Needs you is the one
- *    place decisions are made, a pause is itself a need (so a paused workstream reads "Needs you", and its reason is the
- *    detail when it is the only need: "Paused"), and a person who has one thing to do must not be told the workstream is
- *    merely "Running".
- * 2. `waiting`: asked the reporter; nothing starts on its own until they answer. Above Running because a run that is
- *    still finishing doesn't change what the workstream is waiting for.
+ *    place decisions are made, and a person who has one thing to do must not be told the workstream is merely "Running".
+ * 2. `paused`: the pause is the only thing waiting; the person resumes it.
  * 3. `running`: a run is active (or queued for a slot).
- * 4. `quiet`: nothing has happened for a while. Never for a closed workstream.
- * 5. `done`: closed, or its stage is done.
- * 6. `idle`: none of the above. A word-check notice ("may be unclear", `view.clarity`) is not a need, so it stays Idle and says so in
- *    the detail: the pill agrees with Needs you, which counts nothing for it.
+ * 4. `done`: closed, or its stage is done.
+ * 5. `idle`: none of the above.
  *
- * Pure: `now`, the runs and the quiet limit are given.
+ * Pure: the runs and the needs are given.
  */
-export type StatusState = "needs-you" | "waiting" | "running" | "quiet" | "done" | "idle";
+export type StatusState = "needs-you" | "paused" | "running" | "done" | "idle";
 
 /** Colour tokens a state is drawn with (`ws-*` in theme.css); `ink` is the quiet grey. */
-export type StatusTone = "pip" | "warn" | "review" | "accent" | "ink" | "done";
+export type StatusTone = "pip" | "warn" | "accent" | "ink" | "done";
 
-export const STATUS_TONE: Record<StatusState, StatusTone> = { "needs-you": "pip", waiting: "review", running: "accent", quiet: "ink", done: "done", idle: "ink" };
+export const STATUS_TONE: Record<StatusState, StatusTone> = { "needs-you": "pip", paused: "warn", running: "accent", done: "done", idle: "ink" };
 
 /** The words a state is shown with. */
-export const STATUS_WORD: Record<StatusState, string> = { "needs-you": "Needs you", waiting: "Waiting on reporter", running: "Running", quiet: "Quiet", done: "Done", idle: "Idle" };
+export const STATUS_WORD: Record<StatusState, string> = { "needs-you": "Needs you", paused: "Paused", running: "Running", done: "Done", idle: "Idle" };
 
 /** What each word means, for the pill's tooltip: what is going on, and what ends it. */
 export const STATUS_HINT: Record<StatusState, string> = {
   "needs-you": "Something in this workstream waits on a decision from you. Open it in Needs you.",
-  waiting: `You asked the reporter on the ticket. A comment there ends the wait; after ${NUDGE_AFTER_DAYS} days Gossamr offers a nudge.`,
+  paused: "Pip isn't woken in this workstream until you resume it; its agents carry on.",
   running: "A Claude Code run is working on a step, or is queued for a slot.",
-  quiet: "Nothing has happened in this workstream for a while.",
   done: "The workstream is closed, or its work is finished.",
   idle: "Nothing is running and nothing waits on you.",
 };
 
-/** What "may be unclear" means, added to the Idle hint only where the pill carries that detail. */
-export const UNCLEAR_HINT = "\"may be unclear\" is a quick check of the ticket's words, not a decision waiting for you.";
-
 export interface WorkstreamStatus {
   state: StatusState;
-  /** The one word: "Needs you", "Waiting on reporter". */
+  /** The one word: "Needs you", "Running". */
   word: string;
   tone: StatusTone;
-  /** At most one short detail after the word: "asked 3 days ago", "2 waiting", "Build", "Paused"; null when the word says it all. */
+  /** At most one short detail after the word: "2 waiting", "Build", "Plan failed"; null when the word says it all. */
   detail: string | null;
 }
 
 export interface StatusMore {
   /** Every run; those of the workstream are read from `view.runs`. */
   runs?: readonly Run[];
-  now?: Date;
-  /** Days without a run or a post before a workstream reads Quiet. */
-  quietDays?: number;
-  /** What "Looks fine" taught the clarity notice: a notice with nothing left to say is not one. */
-  learning?: ClarityLearning;
-  /** The person chose "I'll answer" and has not drafted their answers since (`answersOwed`): the detail says the answers are theirs to give. */
-  answersOwed?: boolean;
 }
 
-/** What the pill adds to a detail when the workstream also waits on someone: "waiting on reporter", "your answers owed". */
-export const OWED_DETAIL = "your answers owed";
-export const ON_REPORTER_DETAIL = "waiting on reporter";
-
-/** Whether the person owes answers in workstream `id`, from its audit (when loaded) and the drafts: `answersDue`, for the pill. */
-export function answersOwed(id: string, events: readonly WorkstreamEvent[] | undefined, proposals: readonly Proposal[]): boolean {
-  return !!events && answersDue(events, proposals.filter((p) => workstreamOf(p) === id));
-}
-
-/** The detail an Idle workstream carries while the word check finds its ticket thin (a notice, never a need). */
-export const UNCLEAR_DETAIL = "may be unclear";
-/** The pill's hint: the state's own, and for an Idle workstream flagged "may be unclear", what that means. */
-export const hintFor = (status: Pick<WorkstreamStatus, "state" | "detail">): string =>
-  status.state === "idle" && status.detail === UNCLEAR_DETAIL ? `${STATUS_HINT.idle} ${UNCLEAR_HINT}` : status.state === "idle" && status.detail === REPLIED_DETAIL ? REPLIED_HINT : STATUS_HINT[status.state];
-/** What an idle row says once the reporter has answered on the ticket and the person has not chosen yet: the answer is the news. */
-export const REPLIED_DETAIL = "reporter replied";
-/** The pill's hint for it: the Idle hint would say nothing waits on the person, next to "reporter replied". */
-export const REPLIED_HINT = "The reporter answered on the ticket. Read the reply, then choose what comes next; nothing starts on its own.";
-
-/** How long ago the reporter was asked, as the pill's detail: a bare "0d" does not say what it counts. */
-const askedText = (days: number) => (days === 0 ? "asked today" : days === 1 ? "asked yesterday" : `asked ${days} days ago`);
-
-/** How many days with nothing happening make a workstream Quiet. */
-export const QUIET_DAYS = 7;
+/** The pill's hint: the state's own. */
+export const hintFor = (status: Pick<WorkstreamStatus, "state">): string => STATUS_HINT[status.state];
 
 const RUNNING = new Set<Run["state"]>(["launching", "working"]);
-const at = (iso: string | null | undefined) => (iso ? Date.parse(iso) : NaN);
-
-/** When something last happened in the workstream: its newest run event, else when it opened; NaN when unknown. */
-function lastActivity(view: WorkstreamView, runs: readonly Run[]): number {
-  const times = [at(view.workstream.createdAt), ...runs.flatMap((r) => [at(r.queuedAt), at(r.launchedAt), at(r.endedAt)])].filter((t) => !Number.isNaN(t));
-  return times.length ? Math.max(...times) : NaN;
-}
 
 export function workstreamStatus(view: WorkstreamView, needs: readonly Pick<Need, "workstreamId">[], more: StatusMore = {}): WorkstreamStatus {
-  const { runs = [], now = new Date(), quietDays = QUIET_DAYS, learning = {}, answersOwed: owed = false } = more;
+  const { runs = [] } = more;
   const ws = view.workstream;
-  const make = (state: StatusState, detail: string | null = null, word = STATUS_WORD[state]): WorkstreamStatus => ({ state, word, tone: STATUS_TONE[state], detail });
+  const make = (state: StatusState, detail: string | null = null): WorkstreamStatus => ({ state, word: STATUS_WORD[state], tone: STATUS_TONE[state], detail });
   const own = runs.filter((r) => view.runs.includes(r.id));
   const waiting = needsIn(needs, ws.id);
 
-  // A pause is one of the needs; when it is the only one the one thing worth saying is why, else the count.
-  // What else the workstream waits on follows the count, so "1 waiting" does not hide that the reporter has been asked too.
-  if (waiting > 0) return make("needs-you", [waiting === 1 && ws.pausedReason ? (pausedText(ws.pausedReason) ?? `${waiting} waiting`) : `${waiting} waiting`, view.waitingOnReporter && ON_REPORTER_DETAIL, owed && OWED_DETAIL].filter(Boolean).join(" · "));
-  if (view.waitingOnReporter) return make("waiting", askedText(waitedDays(view.waitingOnReporter.since, now)));
+  // A pause is one of the needs; when it is the only one, it is the word.
+  if (waiting > 0) {
+    if (waiting === 1 && ws.pausedReason) return make("paused", ws.pausedReason === "ceiling" ? "Pip was woken too often today" : null);
+    return make("needs-you", `${waiting} waiting`);
+  }
   const furthest = (pick: (r: Run) => boolean) => own.filter(pick).sort((a, b) => a.queuedAt.localeCompare(b.queuedAt)).pop();
   const going = furthest((r) => RUNNING.has(r.state)) ?? furthest((r) => r.state === "queued");
   if (going) return make("running", `${STAGE_LABEL[going.spec.kind]}${going.state === "queued" ? " queued" : ""}`);
-  if (!ws.closedAt && view.stage !== "done") {
-    const last = lastActivity(view, own);
-    if (!Number.isNaN(last) && (now.getTime() - last) / 86_400_000 >= quietDays) return make("quiet", `no activity · ${Math.floor((now.getTime() - last) / 86_400_000)}d`);
-  }
   if (ws.closedAt || view.stage === "done") return make("done");
   const failed = [...own].sort((a, b) => a.queuedAt.localeCompare(b.queuedAt)).pop();
-  const unclear = !!view.clarity && flaggedGaps(view.clarity.gaps, learning, projectOfKey(ws.itemKey ?? "")).length > 0;
-  return make("idle", failed?.state === "failed" ? `${STAGE_LABEL[failed.spec.kind]} failed` : owed ? OWED_DETAIL : view.reporterReplied ? REPLIED_DETAIL : unclear ? UNCLEAR_DETAIL : null);
+  return make("idle", failed?.state === "failed" ? `${STAGE_LABEL[failed.spec.kind]} failed` : null);
 }
-

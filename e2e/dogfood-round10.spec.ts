@@ -1,5 +1,5 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
-import { agentsHome, askPip, expandAllNeeds, expandNeedsYou, homeSettled, jiraWrites, needsPane, needsYouCount, openAgents, openApp, selectWorkstream, startWorkstream, openNeedRow, needsStack } from "./support/app";
+import { askPip, pipCommentDraft, expandAllNeeds, expandNeedsYou, homeSettled, jiraWrites, needsPane, needsYouCount, openAgents, openApp, selectWorkstream, startWorkstream, openNeedRow, needsStack } from "./support/app";
 
 // Fixes from the tenth dogfood round: the long description draft in the Decision pane keeping its actions in view (G10), the
 // posting pause saying what tripped it, one sentence for each risk (G4), and a batch that does not post one comment twice (G2).
@@ -53,15 +53,14 @@ test.describe("the pause before posting edited words (G4)", () => {
     await startWorkstream(page, "CA-408");
     await openAgents(page);
     await selectWorkstream(page, "CA-408");
-    await agentsHome(page).locator("[data-clarity-notice]").getByRole("button", { name: "Ask the reporter now" }).click();
-    const draft = needsPane(page).getByRole("article", { name: "Comment on CA-408" });
+    const draft = await pipCommentDraft(page, "CA-408");
     await draft.getByRole("button", { name: "Edit" }).click();
     const text = needsPane(page).locator("textarea").first();
     await text.fill(`${await text.inputValue()}\n\ncc @everyone\nPassword: hunter2`);
     await draft.getByRole("button", { name: "Done editing" }).click();
     await draft.getByRole("button", { name: "Post comment" }).click();
     const pause = draft.locator("[data-post-pause]");
-    await expect(pause).toContainText("Your edit mentions everyone at “@everyone” (line 12). It also looks like a password, key or token at “hu…” (line 13). Everyone on the ticket would see it once it is posted.");
+    await expect(pause).toContainText("Your edit mentions everyone at “@everyone” (line 3). It also looks like a password, key or token at “hu…” (line 4). Everyone on the ticket would see it once it is posted.");
     await expect(pause).not.toContainText("Post anyway, or keep editing?");
     await expect(pause).not.toContainText("hunter2");
     expect(await jiraWrites(page)).toEqual([]);
@@ -104,8 +103,7 @@ test.describe("Esc on the posting pause (G1)", () => {
     await startWorkstream(page, "CA-408");
     await openAgents(page);
     await selectWorkstream(page, "CA-408");
-    await agentsHome(page).locator("[data-clarity-notice]").getByRole("button", { name: "Ask the reporter now" }).click();
-    const draft = needsPane(page).getByRole("article", { name: "Comment on CA-408" });
+    const draft = await pipCommentDraft(page, "CA-408");
     await draft.getByRole("button", { name: "Edit" }).click();
     const text = needsPane(page).locator("textarea").first();
     await text.fill(`${await text.inputValue()}\n\ncc @everyone`);
@@ -127,8 +125,7 @@ test.describe("Esc on the posting pause (G1)", () => {
     await startWorkstream(page, "CA-408");
     await openAgents(page);
     await selectWorkstream(page, "CA-408");
-    await agentsHome(page).locator("[data-clarity-notice]").getByRole("button", { name: "Ask the reporter now" }).click();
-    const draft = needsPane(page).getByRole("article", { name: "Comment on CA-408" });
+    const draft = await pipCommentDraft(page, "CA-408");
     await draft.getByRole("button", { name: "Edit" }).click();
     const text = needsPane(page).locator("textarea").first();
     await text.fill(`${await text.inputValue()}\n\ncc @everyone`);

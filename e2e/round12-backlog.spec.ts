@@ -2,9 +2,8 @@ import { expect, test, type Page } from "@playwright/test";
 import { agentsHome, askPip, homeSettled, needOfKind, openAgents, openApp, paneSettled, pipPane, selectWorkstream, startWorkstream } from "./support/app";
 
 // Backlog items of the twelfth dogfood round: the start review leading with what the agent may do (G22), one story of who posts
-// (G23), the workstream controls explaining themselves (G24), a numbered reply quoted past its first line (G27), the Ctrl+0 note
-// not queuing (G30), live regions said once (G31), names for a screen reader (G32), where F6 and Enter land (G33), and the Needs
-// you tag's verb (G34).
+// (G23), the workstream controls explaining themselves (G24), the Ctrl+0 note not queuing (G30), live regions said once (G31),
+// names for a screen reader (G32), where F6 and Enter land (G33), and the Needs you tag's verb (G34).
 
 const SAMPLE = "runs=empty&prSurface=manual&pipPace=1";
 const VAGUE = "CA-408";
@@ -76,7 +75,7 @@ test.describe("the workstream controls (G24, G31, G32)", () => {
   });
 });
 
-test.describe("an unclear ticket (G27, G32, G33, G34)", () => {
+test.describe("the Needs you tag (G34)", () => {
   test("the Needs you tag of a drafted agent says Review, as its button does", async ({ page }) => {
     test.setTimeout(90_000);
     await openApp(page, SAMPLE);

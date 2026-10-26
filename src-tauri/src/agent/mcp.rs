@@ -490,12 +490,8 @@ async fn run_tool(st: &McpState, run: &PipRun, run_id: &str, name: &str, args: &
             let key = required(args, "key")?;
             reachable(st, run, key).await?;
             let body = required(args, "body")?;
-            // A comment that opens with the answers' heading is the person's answers to a triage's open questions: it is
-            // labelled so, which keeps it out of the safe batch (the person reads and approves it on its own).
-            let first = body.lines().next().unwrap_or_default().trim().trim_matches(|c: char| c == '#' || c == '*' || c.is_whitespace()).trim_end_matches(':');
-            let label = (first.eq_ignore_ascii_case(crate::proposals::ANSWERS_COMMENT_LABEL) || [crate::proposals::ANSWERS_OPENING, crate::proposals::ANSWERS_OPENING_BEFORE].iter().any(|o| first.eq_ignore_ascii_case(o.trim_end_matches(':')))).then(|| crate::proposals::ANSWERS_COMMENT_LABEL.to_string());
             let intent = Intent::Comment { item: item_ref(scope, key), body: Doc::from_text(body, &[]) };
-            propose(st, run, run_id, intent, label).await
+            propose(st, run, run_id, intent, None).await
         }
         "propose_subtasks" => {
             let key = required(args, "key")?;
@@ -1077,25 +1073,6 @@ mod tests {
         assert!(workflow.contains("10001 · Done · Done") && workflow.contains("Any status can follow any other"), "{workflow}");
         assert!(r.err("get_workflow", json!({ "container": "nope" })).await.contains("list_containers"));
         assert_eq!(r.ok("list_next_statuses", json!({ "key": "CA-1" })).await, "10001: Finish → Done");
-    }
-
-    #[tokio::test]
-    async fn a_comment_that_opens_with_the_answers_heading_is_labelled_so_and_no_other_is() {
-        let r = rig().await;
-        let plain = r.ok("propose_comment", json!({ "key": "CA-1", "body": "Looks good" })).await;
-        assert_eq!(r.stored(&id_in(&plain)).await.label, None, "an ordinary comment has no label");
-        let answers = r.ok("propose_comment", json!({ "key": "CA-1", "body": "Answers to the open questions on this ticket:\n\n\u{201c}Who asked?\u{201d}\nAnswer: Mette." })).await;
-        let stored = r.stored(&id_in(&answers)).await;
-        assert_eq!(stored.label.as_deref(), Some(crate::proposals::ANSWERS_COMMENT_LABEL), "which keeps it out of the safe batch");
-        assert!(crate::proposals::is_answers_draft(&stored) && !crate::proposals::is_reporter_questions(&stored));
-        let before = r.ok("propose_comment", json!({ "key": "CA-1", "body": "Open questions from triage, with answers:\n\n\u{201c}Who asked?\u{201d}\nAnswer: Mette." })).await;
-        assert_eq!(r.stored(&id_in(&before)).await.label.as_deref(), Some(crate::proposals::ANSWERS_COMMENT_LABEL), "a session made under the old prompt still labels its answers");
-        let old_heading = r.ok("propose_comment", json!({ "key": "CA-1", "body": "Answers to the open questions\nAnswer: ok" })).await;
-        assert_eq!(r.stored(&id_in(&old_heading)).await.label.as_deref(), Some(crate::proposals::ANSWERS_COMMENT_LABEL), "the earlier heading still counts");
-        let headed = r.ok("propose_comment", json!({ "key": "CA-1", "body": "## Answers to the open questions:\nAnswer: ok" })).await;
-        assert_eq!(r.stored(&id_in(&headed)).await.label.as_deref(), Some(crate::proposals::ANSWERS_COMMENT_LABEL), "through a heading and a colon");
-        let elsewhere = r.ok("propose_comment", json!({ "key": "CA-1", "body": "Notes: Answers to the open questions are below" })).await;
-        assert_eq!(r.stored(&id_in(&elsewhere)).await.label, None, "only a first line that is the heading");
     }
 
     #[tokio::test]

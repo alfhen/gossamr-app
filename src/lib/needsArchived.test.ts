@@ -22,7 +22,7 @@ const failed = (id: string, minutesAgo: number, over: Partial<Run> = {}): Run =>
   archivedAt: null,
   ...over,
 });
-const input = (runs: Run[]): NeedsInput => ({ workstreams: [], runs, proposals: [], dismissed: new Set(), now: NOW });
+const input = (runs: Run[]): NeedsInput => ({ workstreams: [], runs, proposals: [], dismissed: new Set() });
 
 describe("needs: archived runs", () => {
   it("an archived run is closed: its failure is no longer a need", () => {

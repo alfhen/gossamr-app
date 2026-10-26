@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { agentsHome, askRun, expandNeedsYou, mockRuns, needsPane, openAgents, openApp, selectWorkstream, startWorkstream, openNeedRow } from "./support/app";
+import { askRun, expandNeedsYou, mockRuns, needsPane, openAgents, openApp, pipCommentDraft, selectWorkstream, startWorkstream, openNeedRow } from "./support/app";
 
 // Fixes from the eighteenth dogfood round: 'start CA-408' in the palette offers the workstream, not only Ask Pip (G8).
 
@@ -35,10 +35,9 @@ test.describe("a skip announces once (G6)", () => {
     await startWorkstream(page, "CA-402");
     await openAgents(page);
     await selectWorkstream(page, "CA-402");
-    await agentsHome(page).locator("[data-clarity-notice]").getByRole("button", { name: "Ask the reporter now" }).click();
+    await pipCommentDraft(page, "CA-402");
     await selectWorkstream(page, "CA-408");
-    await agentsHome(page).locator("[data-clarity-notice]").getByRole("button", { name: "Ask the reporter now" }).click();
-    const draft = needsPane(page).getByRole("article", { name: /^Comment on CA-/ });
+    const draft = await pipCommentDraft(page, "CA-408");
     await draft.getByRole("button", { name: "Skip" }).click();
     await expect(page.locator("[data-needs-advanced]")).toHaveCount(0);
     await expect(page.locator("[data-toast]").getByRole("button", { name: /^Undo/ })).toBeVisible();

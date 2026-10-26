@@ -1,9 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
-import { docText } from "../lib/docs";
 import { higherPriority, needAfter, leftOutLabel, needGroups, repeatedComments, REPEATED_COMMENT_NOTE, type Need } from "../lib/needs";
-import { type Proposal, type ReporterReply, type Run, type WorkstreamView } from "../types";
-import { isReporterNudge, isReporterQuestions } from "../lib/proposals";
-import { maskSecrets } from "../lib/riskyText";
+import { type Proposal, type Run } from "../types";
 import { rewriteWhat } from "./RewriteDiff";
 import { useWorkspace } from "../workspaceStore";
 import { OpenInTerminal, FailureNext } from "./AgentParts";
@@ -11,7 +8,6 @@ import { Box, BoxTitle, Btn } from "./AgentSheet";
 import { planOpenQuestions } from "./agentsLogic";
 import { draftSummary, draftTitle, LiveDraftCard, useEditedDraft } from "./DraftCard";
 import { draftDecisions } from "./DraftPreview";
-import { openComment } from "./jump";
 import { failureAction } from "./failureActions";
 import { failureHelp } from "./failureHelp";
 import { inlineStartable, InlineStart, useInlineStarts } from "./InlineStart";
@@ -29,7 +25,7 @@ import { BatchConfirm, PlanApproval, confirmBatch, planResultFor } from "./StepR
 import { batchLabel, EDITED_ASIDE, editedPending, freezeBatch, type BatchSnapshot } from "./workViewLogic";
 import { speakQuietToasts, useToasts } from "./toasts";
 import { controlActions, PausedBanner } from "./WorkstreamControls";
-import { takePlannedAnyway, useWorkstreams } from "./workstreamsStore";
+import { useWorkstreams } from "./workstreamsStore";
 
 const STACK = "[data-workstream-needs]";
 
@@ -76,13 +72,13 @@ function useAdvance(all: readonly Need[], workstreamId: string | null, onAdvance
       if (next) {
         // The line says what was done and what is now open; the new pane's heading takes the keyboard, so no key lands on a button by accident.
         const done = was.find((n) => n.key === deciding);
-        if (done) onAdvance(doneNeed(done), next);
+        if (done) onAdvance(done, next);
         setPaneIntent("card");
         home.decide(next.key);
       } else {
         // Nothing comes next, so no pane line says what was done: it is said where a screen reader hears it (G6).
         const done = was.find((n) => n.key === deciding);
-        if (done) onLast(doneNeed(done));
+        if (done) onLast(done);
         home.closeDecision();
         lands(null);
       }
@@ -99,24 +95,9 @@ function useAdvance(all: readonly Need[], workstreamId: string | null, onAdvance
   }, [needs]);
 }
 
-/** How a readiness need's key starts; the rest is the triage run it waits on. */
-const READINESS_KEY = "readiness:";
-
-/** What the Done line says of a readiness question settled with Plan anyway, in place of the problem it restates. */
-export const PLANNING_ANYWAY = "Planning anyway";
-/** The same for one settled when the reporter replied or the ticket changed, as the toast says "Planning now". */
-export const PLANNING_NOW = "Planning now";
-
-/** The need as the Done line names it: a readiness question the person settled with Plan anyway says so, not "ticket not ready" again. */
-export const doneNeed = (done: Need, planned: boolean | "now" | "anyway" = takePlannedAnyway(done.kind === "readiness" ? done.key.slice(READINESS_KEY.length) : null)): Need =>
-  planned ? { ...done, title: planned === "now" ? PLANNING_NOW : PLANNING_ANYWAY } : done;
-
 /** The line over the pane once it moved on by itself: what was dealt with, and what is open now. */
-export const advancedText = (done: Pick<Need, "title" | "ticketKey" | "workstreamTitle">, next: Pick<Need, "title" | "ticketKey">, waitsOn?: string | null, posted: boolean | string = false, skipped = false) =>
-  `${doneText(done, posted, skipped)}${waitsOn ? ` ${waitsOn}.` : ""} Now: ${next.ticketKey ? `${next.ticketKey} · ` : ""}${next.title}`;
-
-/** What is said when the need decided was the last one and the pane closes: what was done, and the wait it started. */
-export const closedText = (done: Pick<Need, "title" | "ticketKey" | "workstreamTitle">, waitsOn?: string | null, posted: boolean | string = false) => `${doneText(done, posted)}${waitsOn ? ` ${waitsOn}.` : ""}`;
+export const advancedText = (done: Pick<Need, "title" | "ticketKey" | "workstreamTitle">, next: Pick<Need, "title" | "ticketKey">, posted: boolean | string = false, skipped = false) =>
+  `${doneText(done, posted, skipped)} Now: ${next.ticketKey ? `${next.ticketKey} · ` : ""}${next.title}`;
 
 /** Whether the need was a draft the person skipped, so the line says "Skipped" and not "Done". */
 export const skippedDraft = (done: Pick<Need, "target">, proposals: Readonly<Record<string, Proposal>>) => done.target.type === "draft" && proposals[done.target.id]?.state.type === "skipped";
@@ -130,10 +111,10 @@ export function lastNeedText(done: Need, proposals: Readonly<Record<string, Prop
     const state = proposals[done.target.id]?.state.type;
     if (state !== "applied" && state !== "applying") return null;
   }
-  return closedText(done, waitStarted(done, proposals), postedFor(done, proposals));
+  return doneText(done, postedFor(done, proposals));
 }
 
-/** What was done and in which workstream: "Done: Questions for the reporter on CA-408." The pane moved on, so the line is what says where it happened. */
+/** What was done and in which workstream: "Done: Draft comment on CA-408." The pane moved on, so the line is what says where it happened. */
 export const doneText = (done: Pick<Need, "title" | "ticketKey" | "workstreamTitle">, posted: boolean | string = false, skipped = false) => {
   // A posted description change or set of subtasks says what Jira got, not the title of the card it was decided on (G7).
   if (typeof posted === "string") return posted;
@@ -173,38 +154,6 @@ export function postedWhat(done: Pick<Need, "target">, proposals: Readonly<Recor
 /** What `doneText` takes for `posted`: the words for a description change or subtasks, else whether it was posted at all. */
 export const postedFor = (done: Pick<Need, "target">, proposals: Readonly<Record<string, Proposal>>): boolean | string => postedWhat(done, proposals) ?? postedToJira(done, proposals);
 
-/**
- * What posting `done` started, when it was the questions or the nudge for the reporter (posted, not skipped): the wait, so the
- * person who is moved on to the next need still hears that the workstream waits and nothing starts on its own. Null otherwise.
- */
-export function waitStarted(done: Pick<Need, "target" | "ticketKey">, proposals: Readonly<Record<string, Proposal>>): string | null {
-  const p = done.target.type === "draft" ? proposals[done.target.id] : undefined;
-  if (!p || !(isReporterQuestions(p) || isReporterNudge(p)) || (p.state.type !== "applied" && p.state.type !== "applying")) return null;
-  return `${done.ticketKey ?? "The workstream"} now waits on the reporter; nothing starts on its own`;
-}
-
-/** Whether the reporter has replied on workstream `id`, so a note saying it now waits on them is no longer true. */
-export const reporterAnswered = (list: readonly Pick<WorkstreamView, "workstream" | "reporterReplied">[], id: string) => !!list.find((v) => v.workstream.id === id)?.reporterReplied;
-
-/** Shows the note that `workstreamId` now waits on the reporter, and takes it off the screen once the reporter has replied. */
-export function pushWaitToast(text: string, workstreamId: string | null | undefined) {
-  const id = useToasts.getState().push(text, "info");
-  if (id === null || !workstreamId) return;
-  // Both watches go once the toast does, whether the reporter replied or its own timer took it.
-  const off = () => {
-    offWorkstreams();
-    offToasts();
-  };
-  const offWorkstreams = useWorkstreams.subscribe((s) => {
-    const shown = useToasts.getState().toasts.some((t) => t.id === id);
-    if (shown && reporterAnswered(s.list, workstreamId)) useToasts.getState().dismiss(id);
-    if (!shown || reporterAnswered(s.list, workstreamId)) off();
-  });
-  const offToasts = useToasts.subscribe((s) => {
-    if (!s.toasts.some((t) => t.id === id)) off();
-  });
-}
-
 /** The line with an id of its own: two advances with the same words (drafts with one title) are still two, so the line shows again and its timer restarts. */
 export interface Advanced {
   id: number;
@@ -215,26 +164,19 @@ export interface Advanced {
   doneKey?: string;
   /** The key of the need the pane moved on to: opening another one makes the line stale. */
   nextKey?: string;
-  /** Whether the line says the workstream now waits on the reporter: their reply makes that stale. */
-  waits?: boolean;
 }
 
 /** The line for a new advance after `previous`, whose id is never the same. */
-export const nextAdvanced = (previous: Advanced | null, text: string, back?: Advanced["back"], doneKey?: string, nextKey?: string, waits?: boolean): Advanced => ({
+export const nextAdvanced = (previous: Advanced | null, text: string, back?: Advanced["back"], doneKey?: string, nextKey?: string): Advanced => ({
   id: (previous?.id ?? 0) + 1,
   text,
   ...(back ? { back } : {}),
   ...(doneKey ? { doneKey } : {}),
   ...(nextKey ? { nextKey } : {}),
-  ...(waits ? { waits } : {}),
 });
 
-/** Whether the line is stale: the person opened another need than the one it says is open now, or it says the reporter is awaited and they have since replied. */
-export const advancedStale = (advanced: Advanced | null, deciding: string | null, list: readonly Pick<WorkstreamView, "workstream" | "reporterReplied">[]): boolean => {
-  if (!advanced) return false;
-  if (advanced.nextKey && deciding !== advanced.nextKey) return true;
-  return !!advanced.waits && !!advanced.back && reporterAnswered(list, advanced.back.workstreamId);
-};
+/** Whether the line is stale: the person opened another need than the one it says is open now. */
+export const advancedStale = (advanced: Advanced | null, deciding: string | null): boolean => !!advanced?.nextKey && deciding !== advanced.nextKey;
 
 /** Whether the line is stale because the need it says was done is back in `needs` (Undo brought it back). */
 export const advancedUndone = (advanced: Advanced | null, needs: readonly Pick<Need, "key">[]): boolean => !!advanced?.doneKey && needs.some((n) => n.key === advanced.doneKey);
@@ -370,107 +312,6 @@ function StoppedBody({ run }: { run: Run }) {
   );
 }
 
-/** The most of a ticket's description the decision shows before the rest is folded away. */
-const TICKET_NOW_EXCERPT = 280;
-
-/** What the ticket's description says now: all of it when short, else its start with the rest a disclosure away. Nothing when it is empty. */
-export function TicketNow({ text }: { text: string }) {
-  if (!text) return null;
-  const long = text.length > TICKET_NOW_EXCERPT;
-  const start = long ? `${text.slice(0, TICKET_NOW_EXCERPT).trimEnd()}…` : text;
-  return (
-    <div data-ticket-now className="grid gap-1">
-      <p className="m-0 text-xs font-semibold text-ws-ink2">The ticket now says</p>
-      <p className="m-0 whitespace-pre-wrap text-ws-ink2">{start}</p>
-      {long && (
-        <details data-ticket-now-more className="text-ws-ink2">
-          <summary className="cursor-pointer text-xs font-semibold">Show the whole description</summary>
-          <p className="m-0 mt-1 whitespace-pre-wrap">{text}</p>
-        </details>
-      )}
-    </div>
-  );
-}
-
-/** The reporter's reply as the decision quotes it: how it starts, and a link that opens the whole comment on the ticket. Nothing without a reply. */
-export function ReporterReplyQuote({ reply, ticketKey }: { reply?: ReporterReply | null; ticketKey?: string | null }) {
-  if (!reply) return null;
-  return (
-    <div data-reporter-reply className="grid gap-1">
-      <p className="m-0 text-xs font-semibold text-ws-ink2">The reporter replied</p>
-      <p className="m-0 whitespace-pre-wrap text-ws-ink2 [overflow-wrap:anywhere]">{`“${maskSecrets(reply.excerpt)}”`}</p>
-      {ticketKey && (
-        <button type="button" data-reporter-reply-open className="w-fit cursor-pointer border-0 bg-transparent p-0 text-xs font-semibold text-ws-ink2 underline" onClick={() => void openComment(ticketKey, reply.id)}>
-          Open their comment
-        </button>
-      )}
-    </div>
-  );
-}
-
-/** The three choices on a ticket its triage found not clear enough to plan: ask the reporter, answer the questions, or plan anyway. */
-function ReadinessBody({ view, need }: { view: WorkstreamView; need: Need }) {
-  const r = view.readiness;
-  const id = view.workstream.id;
-  const [busy, setBusy] = useState(false);
-  // The cached ticket, so a ticket that changed shows what it says now rather than only that it changed.
-  const itemKey = view.workstream.itemKey;
-  const description = useWorkspace((s) => (itemKey ? docText(Object.values(s.items).find((i) => i.item.key === itemKey)?.body ?? { blocks: [] }).trim() : ""));
-  if (!r) return null;
-  const key = view.workstream.itemKey ?? "the ticket";
-  const choose = (call: () => Promise<boolean>) => {
-    setBusy(true);
-    void call().finally(() => setBusy(false));
-  };
-  const store = useWorkstreams.getState();
-  return (
-    <Box tone="warn" label={r.changed ? "Ticket changed" : "Not ready to plan"}>
-      <BoxTitle icon="alert" tone="warn">
-        {need.title}
-      </BoxTitle>
-      {r.questions.length > 0 ? (
-        <ul data-readiness-questions className="m-0 grid gap-1 pl-5 text-ws-ink2">
-          {r.questions.map((q, i) => (
-            <li key={i}>{q}</li>
-          ))}
-        </ul>
-      ) : (
-        <p className="m-0 text-ws-ink2">The triage found {key} unclear but listed no questions.</p>
-      )}
-      {r.changed ? (
-        <>
-          {r.replied && <ReporterReplyQuote reply={view.reporterReply} ticketKey={view.workstream.itemKey} />}
-          <TicketNow text={description} />
-          <p className="m-0 text-ws-ink2">{`No plan starts until you choose. ${r.replied && view.reporterReply ? "Read their reply and the ticket, then plan or ask again" : "Read the ticket as it is now, then plan, or ask the reporter again"};`} asking drafts a Jira comment for you to approve, and nothing is posted before that.</p>
-          <div className="flex flex-wrap items-center gap-2">
-            <Btn tone="primary" disabled={busy} onClick={() => choose(() => store.planAnyway(id))}>
-              Plan now
-            </Btn>
-            <Btn tone="plain" disabled={busy} onClick={() => choose(() => store.askReporter(id))}>
-              Still unclear (ask again)
-            </Btn>
-          </div>
-        </>
-      ) : (
-        <>
-          <p className="m-0 text-ws-ink2">No plan starts until you choose. Asking the reporter drafts a Jira comment for you to approve; nothing is posted before that.</p>
-          <div className="flex flex-wrap items-center gap-2">
-            <Btn tone="primary" disabled={busy} onClick={() => choose(() => store.askReporter(id))}>
-              Ask the reporter
-            </Btn>
-            <Btn tone="plain" disabled={busy} onClick={() => choose(() => store.answerSelf(id))}>
-              I'll answer
-            </Btn>
-            <Btn tone="plain" disabled={busy} onClick={() => choose(() => store.planAnyway(id))}>
-              Plan anyway
-            </Btn>
-          </div>
-        </>
-      )}
-    </Box>
-  );
-}
-
 function DraftBody({ need, proposal: p }: { need: Need; proposal: Proposal }) {
   const runs = useRuns((s) => s.runs);
   return (
@@ -521,8 +362,6 @@ function Decision({ need }: { need: Need }) {
       return run ? <StoppedBody run={run} /> : null;
     case "paused":
       return view ? <PausedBanner view={view} actions={controlActions(view.workstream.id)} /> : null;
-    case "readiness":
-      return view ? <ReadinessBody view={view} need={need} /> : null;
     case "runStart":
       return proposal ? <StartBody proposal={proposal} /> : null;
     case "plan":
@@ -808,22 +647,19 @@ export function WorkstreamNeeds({ needs, workstreamId }: { needs: readonly Need[
       const proposals = useWorkspace.getState().proposals;
       const posted = postedFor(done, proposals);
       const skipped = skippedDraft(done, proposals);
-      const waits = !!waitStarted(done, proposals);
-      setAdvanced((prev) => nextAdvanced(prev ?? { id: lastId.current, text: "" }, advancedText(done, next, waitStarted(done, proposals), posted, skipped), undefined, done.key, next.key, waits));
+      setAdvanced((prev) => nextAdvanced(prev ?? { id: lastId.current, text: "" }, advancedText(done, next, posted, skipped), undefined, done.key, next.key));
     },
     (done) => {
       const proposals = useWorkspace.getState().proposals;
       const text = lastNeedText(done, proposals);
       // No line follows the last need, so a skip's toast is the one place it is said (G6).
       if (!text) return skippedDraft(done, proposals) ? speakQuietToasts() : undefined;
-      if (waitStarted(done, proposals)) pushWaitToast(text, done.workstreamId);
-      else useToasts.getState().push(text, "info");
+      useToasts.getState().push(text, "info");
     },
   );
-  const list = useWorkstreams((s) => s.list);
   useEffect(() => {
-    if (advancedUndone(advanced, mine) || advancedStale(advanced, deciding, list)) setAdvanced(null);
-  }, [advanced, mine, deciding, list]);
+    if (advancedUndone(advanced, mine) || advancedStale(advanced, deciding)) setAdvanced(null);
+  }, [advanced, mine, deciding]);
   useEffect(() => {
     if (!advanced) return;
     lastId.current = advanced.id;

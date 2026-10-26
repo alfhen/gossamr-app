@@ -160,8 +160,8 @@ test("the Needs you list ranks a pause ahead of a draft to approve, opens each i
   await expect(needsPane(page)).toContainText("drafted an Investigate agent for CA-401");
   await needsPane(page).getByRole("button", { name: "Skip" }).click();
   await expect(needRow(page, "Start Investigate")).toHaveCount(0);
-  await expect(row.locator("[data-status]")).toHaveText("Needs you");
-  await expect(row.locator("[data-status-detail]")).toHaveText("· Paused: Pip was woken too often today");
+  await expect(row.locator("[data-status]")).toHaveText("Paused");
+  await expect(row.locator("[data-status-detail]")).toHaveText("· Pip was woken too often today");
 
   // The pane moved on to the pause, with its heading focused (no key lands on Resume by accident); Resume clears the need and the badge.
   await expect(needsPane(page)).toHaveAttribute("data-kind", "paused");
@@ -169,7 +169,7 @@ test("the Needs you list ranks a pause ahead of a draft to approve, opens each i
   await expect(needsPaneHeading(page)).toBeFocused();
   await resume.click();
   await expect(needsYouCount(page)).toHaveText("0");
-  await expect(row.locator('[data-status="needs-you"]')).toHaveCount(0);
+  await expect(row.locator('[data-status="paused"]')).toHaveCount(0);
   await expect(needsYouTray(page)).toContainText("Nothing needs you.");
 });
 

@@ -33,7 +33,7 @@ mod workstreams;
 pub use pip_runs::PipRunAsk;
 #[cfg(test)]
 pub(crate) use workstreams::{basis_of, drifted};
-pub use workstreams::{Adoptable, ReadinessStop, WakeAdmission, WorkstreamUndo, WorkstreamView, NOTES_CLOSE, NOTES_LIMIT, NOTES_OPEN};
+pub use workstreams::{Adoptable, WakeAdmission, WorkstreamUndo, WorkstreamView, NOTES_CLOSE, NOTES_LIMIT, NOTES_OPEN};
 pub use rewrites::TextSeen;
 mod watch;
 

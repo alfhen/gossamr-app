@@ -1,13 +1,11 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Run, RunSpec, Workstream, WorkstreamEvent } from "../types";
+import type { Run, RunSpec } from "../types";
 import { MockBackend } from "./mock";
 import { itemRef } from "./mockConnector";
 import { mockPipTurns } from "./mockPipTurns";
 import { mockDigest } from "./mockRuns";
-import { MOCK_WORKSTREAMS_KEY, MockWorkstreams, NOTES_LIMIT, WAKES_PER_WORKSTREAM_PER_DAY, lastDriftOf, readinessOf, waitingForPr } from "./mockWorkstreams";
+import { MOCK_WORKSTREAMS_KEY, MockWorkstreams, NOTES_LIMIT, WAKES_PER_WORKSTREAM_PER_DAY, lastDriftOf, waitingForPr } from "./mockWorkstreams";
 import { driftLine } from "./mockPip";
-import readinessFixtures from "./readiness.fixtures.json";
-import { readiness } from "./mockSupervisor";
 
 /** A browser's storage for this file, kept across new backends as across reloads of one page. */
 const saved = new Map<string, string>();
@@ -549,74 +547,5 @@ describe("a mock workstream's ticket drifting from its basis", () => {
     expect(backend.pipWorkstreamDrift(ws)).not.toBeNull();
     backend.workstreams.seedEvent(ws, "supervisor", "wake", later(2), { runId: "r2", detail: "done" });
     expect(backend.pipWorkstreamDrift(ws)).toBeNull();
-  });
-});
-
-describe("a triage that found its ticket not ready to plan", () => {
-  beforeEach(() => saved.clear());
-
-  const run = (id: string, kind: Run["spec"]["kind"], minute: number, over: Partial<Run> = {}) =>
-    ({ id, state: "done", item: CA401, queuedAt: `2026-09-30T10:${String(minute).padStart(2, "0")}:00Z`, endedAt: `2026-09-30T10:${String(minute + 5).padStart(2, "0")}:00Z`, spec: spec({ kind, workstream: "ws-1" }), ...over }) as Run;
-  const ws = { id: "ws-1", closedAt: null, pausedReason: null } as Workstream;
-  const triage = run("t1", "triage", 10);
-  const notReady = () => ({ ready: false, questions: ["What does done look like?"] });
-  const person = (action: string, runId: string, actor: WorkstreamEvent["actor"] = "person"): WorkstreamEvent => ({ workstreamId: "ws-1", seq: 1, at: "2026-09-30T11:00:00Z", actor, action, runId, proposalId: null, digest: null, detail: null });
-
-  it("waits for the person, as readiness_of: the newest triage on a ticket, done, not ready, with nothing chosen and no plan since", () => {
-    expect(readinessOf(ws, [triage], notReady, [], [])).toEqual({ triageRun: "t1", triageLabel: "R1", questions: ["What does done look like?"], at: triage.endedAt });
-    expect(readinessOf(ws, [triage], () => ({ ready: true, questions: [] }), [], [])).toBeNull();
-    expect(readinessOf(ws, [triage], () => null, [], [])).toBeNull();
-    expect(readinessOf({ ...ws, closedAt: "2026-09-30T12:00:00Z" }, [triage], notReady, [], [])).toBeNull();
-    expect(readinessOf({ ...ws, pausedReason: "person" }, [triage], notReady, [], [])).not.toBeNull();
-    expect(readinessOf(ws, [{ ...triage, item: null }], notReady, [], [])).toBeNull();
-    expect(readinessOf(ws, [{ ...triage, state: "working" }], notReady, [], [])).toBeNull();
-  });
-
-  it("is settled by the person's asking, answering or overriding for that triage, and by nobody else's line", () => {
-    for (const action of ["readiness_asked", "readiness_answered", "readiness_overridden"]) {
-      expect(readinessOf(ws, [triage], notReady, [], [person(action, "t1")]), action).toBeNull();
-      expect(readinessOf(ws, [triage], notReady, [], [person(action, "t1", "pip")]), `${action} by Pip`).not.toBeNull();
-      expect(readinessOf(ws, [triage], notReady, [], [person(action, "t1", "supervisor")]), `${action} by the supervisor`).not.toBeNull();
-      expect(readinessOf(ws, [triage], notReady, [], [person(action, "t0")]), `${action} for another triage`).not.toBeNull();
-    }
-  });
-
-  it("is replaced by a newer triage, and taken away by a plan started since", () => {
-    const newer = run("t2", "triage", 30);
-    expect(readinessOf(ws, [triage, { ...newer, state: "working" }], notReady, [], [])).toBeNull();
-    expect(readinessOf(ws, [triage, newer], (r) => (r.id === "t2" ? { ready: true, questions: [] } : notReady()), [], [])).toBeNull();
-    expect(readinessOf(ws, [triage, newer], (r) => (r.id === "t2" ? { ready: false, questions: ["Q?"] } : { ready: true, questions: [] }), [], [])?.triageRun).toBe("t2");
-    expect(readinessOf(ws, [triage, run("p1", "plan", 40)], notReady, [], [])).toBeNull();
-    expect(readinessOf(ws, [triage, run("p0", "plan", 1)], notReady, [], [])).not.toBeNull();
-  });
-
-  it("refuses the choices once nothing is waiting for them", async () => {
-    const backend = new MockBackend({ runs: { seed: "empty" } });
-    backend.supervisor.dispose();
-    const vague = await backend.workstreamsOpen(itemRef("CA-408"));
-    expect((await backend.workstreamsGet(vague.id))?.readiness ?? null).toBeNull();
-    await expect(backend.workstreamsReadinessOverride(vague.id, "t1")).rejects.toThrow("isn't waiting for your choice");
-    await expect(backend.workstreamsReadinessAnswer("nope", "t1")).rejects.toThrow("there is no workstream nope");
-  });
-});
-
-describe("the readiness stop in the shared cases the Rust side runs too (readiness.fixtures.json)", () => {
-  type Case = (typeof readinessFixtures.stop)[number];
-  const at = (iso: string | undefined) => (iso ?? null) as string | null;
-  it.each(readinessFixtures.stop.map((c) => [c.name, c] as const))("%s", (_, c: Case) => {
-    const shape = { closed: false, ...("workstream" in c ? c.workstream : {}) } as { closed: boolean };
-    const ws = { id: "w1", closedAt: shape.closed ? "2026-10-12T20:00:00Z" : null, pausedReason: null } as Workstream;
-    const reports = new Map<string, string | undefined>();
-    const runs = c.runs.map((r) => {
-      const x = r as typeof r & { endedAt?: string; item?: boolean; workstream?: string; report?: string };
-      reports.set(x.id, x.report);
-      return { id: x.id, state: x.state, item: x.item === false ? null : CA401, queuedAt: x.queuedAt, endedAt: at(x.endedAt), spec: { kind: x.kind, workstream: x.workstream ?? "w1" } } as unknown as Run;
-    });
-    const events = c.events.map((e, i) => ({ workstreamId: "w1", seq: i + 1, runId: null, proposalId: null, digest: null, detail: null, ...e }) as WorkstreamEvent);
-    const got = readinessOf(ws, runs, (r) => {
-      const report = reports.get(r.id);
-      return report === undefined ? null : readiness(report);
-    }, [], events);
-    expect(got === null ? null : { triageRun: got.triageRun, questions: got.questions, at: got.at, ...(got.changed ? { changed: true } : {}) }).toEqual(c.expect);
   });
 });

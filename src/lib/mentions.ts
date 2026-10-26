@@ -5,14 +5,6 @@ export interface Mention {
   name: string;
 }
 
-/** The app-side note under a reporter question draft that @mentions someone: that it posts as the person, and who Jira notifies. Null when nobody is mentioned. App text, not Jira's. */
-export function mentionNote(mentions: readonly Pick<Mention, "name">[]): string | null {
-  const names = [...new Set(mentions.map((m) => m.name))];
-  if (!names.length) return null;
-  const who = names.length === 1 ? names[0] : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
-  return `Posts as you; Jira notifies ${who}.`;
-}
-
 /** The app-side note by a description update's Update button: that it writes to Jira as the person, and who Jira tells. `what` is `rewriteWhat`: "description", "title" or "title and description". App text, not Jira's. */
 export const rewriteNote = (what: string) => `Changes the ticket's ${what} in Jira as you; Jira notifies its watchers.`;
 

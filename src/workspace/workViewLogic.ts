@@ -58,10 +58,7 @@ export const batchLabel = (count: number) => `Approve ${count} safe drafts`;
 export const stepBatchLabel = (step: StepGroup, count: number) => (step === "pip" ? `Approve ${count} of Pip's drafts` : `Approve ${count} of this step's drafts`);
 
 /** What the batch button's tooltip says makes a draft safe: it is a comment, a move or subtasks, read in full before anything is posted. */
-export const BATCH_TITLE = "Safe drafts are comments, status moves and subtasks that only add to Jira. A description rewrite, a question to the reporter and the like are approved one by one. You see every draft before anything is posted.";
-
-/** What a group says under its needs when drafts from the person's own reply are left out of "Approve N safe drafts". */
-export const BATCH_ASIDE = "Not in the batch: drafts from your reply are read on their own.";
+export const BATCH_TITLE = "Safe drafts are comments, status moves and subtasks that only add to Jira. A description rewrite and the like are approved one by one. You see every draft before anything is posted.";
 
 /** What a group says under its needs when drafts the person edited are left out of "Approve N safe drafts". */
 export const EDITED_ASIDE = "Not in the batch: drafts you edited are posted from their card.";

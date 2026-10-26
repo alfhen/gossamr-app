@@ -1,12 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { chipLabel, editedTitle, GROUP_LABEL, needGroups, type Need, type NeedGroup, type NeedGroupKind } from "../lib/needs";
 import { relativeTime } from "../lib/views";
-import { isAnswersDraft } from "../lib/proposals";
 import { useWorkspace } from "../workspaceStore";
 import { useEditedDraft } from "./DraftCard";
 import { useDraftsRev } from "./draftLive";
 import { groupId, openNeed, showGroup } from "./needsActions";
-import { BATCH_ASIDE, BATCH_TITLE, EDITED_ASIDE, batchLabel, draftEdited } from "./workViewLogic";
+import { BATCH_TITLE, EDITED_ASIDE, batchLabel, draftEdited } from "./workViewLogic";
 import { useWorkView } from "./workViewStore";
 
 const CHIP: Record<NeedGroupKind, string> = {
@@ -60,7 +59,7 @@ function Asking({ need }: { need: Need }) {
  * "Approve N safe drafts" under a group's needs. It opens the combined preview of what each would do, with its confirm, in
  * the decision pane like any other decision (`BatchDecision`): the same step the step rail's button asks.
  */
-function SafeBatch({ needs, gid, aside }: { needs: readonly Need[]; gid: string; aside: number }) {
+function SafeBatch({ needs, gid }: { needs: readonly Need[]; gid: string }) {
   const proposals = useWorkspace((s) => s.proposals);
   const open = useWorkView((s) => s.batch === gid);
   useDraftsRev();
@@ -68,10 +67,8 @@ function SafeBatch({ needs, gid, aside }: { needs: readonly Need[]; gid: string;
   // A draft the person edited is posted from its card, so it is not counted in the batch.
   const edited = drafts.filter((n) => n.target.type === "draft" && draftEdited(n.target.id)).length;
   const count = drafts.length - edited;
-  // The drafts from the person's own reply are never in the batch; with the button gone for want of a second draft, the note says why.
-  const note = aside > 0 && count + aside >= 2;
   const editedNote = edited > 0 && count + edited >= 2;
-  if (count < 2 && !note && !editedNote) return null;
+  if (count < 2 && !editedNote) return null;
   return (
     <li data-needs-you-batch className="grid gap-1.5 px-2 py-1">
       {count >= 2 && (
@@ -87,11 +84,6 @@ function SafeBatch({ needs, gid, aside }: { needs: readonly Need[]; gid: string;
           </button>
         </div>
       )}
-      {note && (
-        <p data-batch-aside className="m-0 text-xs text-ws-ink3">
-          {BATCH_ASIDE}
-        </p>
-      )}
       {editedNote && (
         <p data-batch-aside="edited" className="m-0 text-xs text-ws-ink3">
           {EDITED_ASIDE}
@@ -103,11 +95,9 @@ function SafeBatch({ needs, gid, aside }: { needs: readonly Need[]; gid: string;
 
 /** A group's "Approve N safe drafts", for the top of a workstream's Needs you: the same button and notes the list gives. */
 export function GroupBatch({ group }: { group: NeedGroup }) {
-  const proposals = useWorkspace((s) => s.proposals);
-  const aside = [group.top, ...group.rest].filter((n) => n.target.type === "draft" && proposals[n.target.id] && isAnswersDraft(proposals[n.target.id])).length;
   return (
     <ul className="m-0 grid list-none p-0 empty:hidden">
-      <SafeBatch needs={group.safeBatch} gid={groupId(group.workstreamId)} aside={aside} />
+      <SafeBatch needs={group.safeBatch} gid={groupId(group.workstreamId)} />
     </ul>
   );
 }
@@ -168,10 +158,8 @@ function GroupRow({ group: g, now, onPick, openByDefault }: { group: NeedGroup; 
   const text = groupText(g, now);
   const list = `needs-you-group-${gid}`;
   const expanded = g.count > 1 && open;
-  const proposals = useWorkspace((s) => s.proposals);
   // The top need's draft, edited and not posted, says so; open, the need's own row does.
   const { edited } = useEditedDraft(g.top.target.type === "draft" ? g.top.target.id : "");
-  const asideCount = [g.top, ...g.rest].filter((n) => n.target.type === "draft" && proposals[n.target.id] && isAnswersDraft(proposals[n.target.id])).length;
   return (
     <li data-needs-you-row={gid} className="grid has-[[data-needs-you-group]:focus-visible]:[&_[data-needs-top]]:outline-2 has-[[data-needs-you-group]:focus-visible]:[&_[data-needs-top]]:outline-dashed has-[[data-needs-you-group]:focus-visible]:[&_[data-needs-top]]:outline-offset-[-2px] has-[[data-needs-you-group]:focus-visible]:[&_[data-needs-top]]:outline-ws-pip">
       <button
@@ -242,7 +230,7 @@ function GroupRow({ group: g, now, onPick, openByDefault }: { group: NeedGroup; 
           {[g.top, ...g.rest].map((n) => (
             <NeedRow key={n.key} need={n} gid={gid} now={now} onPick={onPick} top={n === g.top} showTicket={g.workstreamId === null || n.ticketKey !== g.ticketKey} />
           ))}
-          <SafeBatch needs={g.safeBatch} gid={gid} aside={asideCount} />
+          <SafeBatch needs={g.safeBatch} gid={gid} />
         </ul>
       )}
     </li>

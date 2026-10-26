@@ -323,8 +323,8 @@ pub fn readiness(result: &str) -> Option<Readiness> {
     Some(Readiness { ready, questions })
 }
 
-/// A listed question that holds several ("What is done? Which number changes?") as one each, so the reporter answers one thing per bullet; as `oneQuestionEach` in src/backend/mockReadiness.ts. Applied when the questions are read from a triage's note, so every reader sees the same list.
-pub fn one_question_each(questions: &[String]) -> Vec<String> {
+/// A listed question that holds several ("What is done? Which number changes?") as one each, so every bullet is one question; as `oneQuestionEach` in src/backend/mockSupervisor.ts.
+fn one_question_each(questions: &[String]) -> Vec<String> {
     let mut out = Vec::new();
     for q in questions {
         let chars: Vec<char> = q.trim().chars().collect();

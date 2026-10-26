@@ -300,16 +300,6 @@ describe("what the person sees", () => {
     }
   });
 
-  it("says the comment to the reporter is Gossamr's, around the triage's questions, and not an agent's alone", () => {
-    const props = { statusName: null, people: [], working: false, error: null, onApprove: vi.fn(), onSkip: vi.fn() };
-    const html = renderToStaticMarkup(<DraftCard proposal={pending({ createdBy: "agent", label: "Questions for the reporter", origin: { type: "run", runId: "r1", shortId: "ab12cd34", workstream: "ws-1" } })} {...props} />);
-    expect(html).toContain('data-created-by="gossamr"');
-    expect(html).toContain("Drafted by Gossamr");
-    expect(html).not.toContain("Drafted by an agent");
-    expect(html).toContain("Gossamr wrote this around the triage&#x27;s open questions, which are the agent&#x27;s words. Read and edit them before you approve.");
-    expect(html).not.toContain("The words are the agent");
-  });
-
   it("offers Discuss with Pip on a comment from a run, and not on any other", () => {
     const props = { statusName: null, people: [], working: false, error: null, onApprove: vi.fn(), onSkip: vi.fn() };
     const html = (p: Proposal, onDiscuss?: () => void) => renderToStaticMarkup(<DraftCard proposal={p} onDiscuss={onDiscuss} {...props} />);

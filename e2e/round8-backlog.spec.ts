@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { agentsHome, jiraWrites, needsPane, needsYouCount, openAgents, openApp, pipPane, selectWorkstream, startWorkstream, workstreamGroup } from "./support/app";
+import { agentsHome, jiraWrites, needsPane, needsYouCount, openAgents, openApp, pipCommentDraft, pipPane, selectWorkstream, startWorkstream, workstreamGroup } from "./support/app";
 
 // Fixes from round 8's backlog: the workstream step says why a key has nothing to start, a pause before posting edited text that
 // reaches everyone or looks like a secret, and Close beside Hold.
@@ -19,14 +19,13 @@ test.describe("the workstream step with nothing to start (G16)", () => {
 });
 
 test.describe("the pause before posting edited text (G19)", () => {
-  /** The questions to the reporter on CA-408, drafted from its notice and left waiting. */
+  /** A comment on `key` drafted by Pip and left waiting in the decision pane. */
   async function draftOn(page: Page, key: string) {
     await allProjects(page);
     await startWorkstream(page, key);
     await openAgents(page);
     await selectWorkstream(page, key);
-    await agentsHome(page).locator("[data-clarity-notice]").getByRole("button", { name: "Ask the reporter now" }).click();
-    return needsPane(page).getByRole("article", { name: `Comment on ${key}` });
+    return pipCommentDraft(page, key);
   }
   const addLine = async (page: Page, draft: ReturnType<Page["locator"]>, line: string) => {
     await draft.getByRole("button", { name: "Edit" }).click();

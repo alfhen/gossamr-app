@@ -1,8 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import { agentsHome, homeConversation, jiraWrites, needOfKind, needsPane, needsYouCount, openAgents, openJiraSent, openApp, selectWorkstream, startWorkstream, openNeedOfKind } from "./support/app";
 
-// Fixes from the seventh dogfood round: approving from the Decide pane, the Next line, the reporter's questions and What Jira
-// saw from me.
+// Fixes from the seventh dogfood round: approving from the Decide pane and Esc leaving the Sent and Settings views.
 
 
 /** A workstream on CA-401, opened on Pip home. */
@@ -33,23 +32,7 @@ test.describe("approving from the Decide pane (G1)", () => {
   });
 });
 
-const activeTag = (page: Page) => page.evaluate(() => document.activeElement?.tagName ?? "none");
-
-test.describe("keyboard: focus and Esc (G6, G7, G12)", () => {
-  test("Looks fine does not drop the keyboard on <body>, and Esc leaves the Sent view for Pip home", async ({ page }) => {
-    test.setTimeout(90_000);
-    await openApp(page, "runs=empty");
-    await startWorkstream(page, "CA-408");
-    await openAgents(page);
-    await selectWorkstream(page, "CA-408");
-    const notice = agentsHome(page).locator("[data-clarity-notice]");
-    await notice.getByRole("button", { name: "Looks fine" }).focus();
-    await page.keyboard.press("Enter");
-    await expect(notice).toHaveCount(0);
-    await expect.poll(() => activeTag(page)).not.toBe("BODY");
-
-  });
-
+test.describe("keyboard: Esc (G7, G12)", () => {
   test("Esc leaves the Sent and Settings views for Pip home, from <body>", async ({ page }) => {
     test.setTimeout(90_000);
     await page.setViewportSize({ width: 1440, height: 900 });

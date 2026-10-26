@@ -314,17 +314,6 @@ export const editTicket = (page: Page, key: string, change: TicketEdit) =>
     { key, change, missing: NO_MOCK },
   );
 
-/** Someone else comments on sample ticket `key` as in Jira (the reporter answering): `by` is a person's id in the sample, Mette by default; the signed-in person's own comments are "me". */
-export const commentOnTicket = (page: Page, key: string, text: string, by?: string) =>
-  page.evaluate(
-    ({ key, text, by, missing }) => {
-      const mock = (globalThis as Mocked).__gossamrMock;
-      if (!mock) throw new Error(missing);
-      mock.commentOnTicket(key, text, by);
-    },
-    { key, text, by, missing: NO_MOCK },
-  );
-
 /** Pauses the open workstream on ticket `key` as the system does at its daily ceiling of Pip wakes: a pause that Resume lifts. */
 export const pauseAtCeiling = (page: Page, key: string) =>
   page.evaluate(
@@ -459,6 +448,17 @@ export const needsStack = (page: Page) => workstreamSheet(page).locator("[data-w
 
 /** A need in the open detail's Needs you section, by the words it reads; pressing it opens it. */
 export const needRow = (page: Page, name: string | RegExp) => workstreamSheet(page).locator("[data-needs-pane]").filter({ hasText: name }).locator("[data-need-row]");
+
+/**
+ * With a workstream open on Agents, asks Pip for a comment on its ticket and opens that draft in the decision pane.
+ * Returns the draft's card; nothing is posted.
+ */
+export async function pipCommentDraft(page: Page, key: string) {
+  await askPip(page, "Draft a comment");
+  await homeSettled(page);
+  await needRow(page, /Draft comment/).click();
+  return needsPane(page).getByRole("article", { name: `Comment on ${key}` });
+}
 
 /** The need of `kind` ("permission", "question", "failure", "paused", "draft", ...) in the open detail. */
 export const needOfKind = (page: Page, kind: string) => workstreamSheet(page).locator(`[data-needs-pane][data-kind="${kind}"] [data-need-row]`).first();

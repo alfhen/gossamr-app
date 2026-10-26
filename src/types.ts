@@ -1,4 +1,3 @@
-import type { ClarityGap } from "./lib/ticketClarity";
 
 export type StatusCategory = "new" | "indeterminate" | "done";
 
@@ -532,8 +531,6 @@ export interface RunSpec {
   findings?: string | null;
   /** The investigation run the findings came from. Set with `findings`, triage and plans only. */
   findingsFromRun?: string | null;
-  /** For a plan the person chose to start though its triage found the ticket not ready: the open questions the plan assumes answers to. Set by the backend from that triage, never by the caller. */
-  assumptions?: string[];
   /** Whether a build is told it may push and open a draft pull request. Builds only. */
   allowPush?: boolean;
   /** Where the draft ticket of an investigation with no ticket lands. Its presence makes the run end as a ticket; the agent never chooses it. */
@@ -864,60 +861,8 @@ export interface WorkstreamView {
   waitingForPr?: string | null;
   /** The newest finished review asked for changes and nothing is in progress: the stage is review, not done. */
   reviewBlocking?: boolean;
-  /** The newest Triage found the ticket not ready to plan, and the Plan after it waits for the person's choice. */
-  readiness?: ReadinessStop | null;
-  /** The ticket's description looks thin to Gossamr's own word check, before any Triage: a notice, never a need. As `Clarity` in src-tauri/src/inbox/workstreams.rs. */
-  clarity?: Clarity | null;
-  /** The person asked the reporter and the comment was posted; nothing has answered it yet. */
-  waitingOnReporter?: ReporterWait | null;
-  /** The wait on the reporter ended with their reply on the ticket (a comment from someone else) and the person hasn't chosen since. */
-  reporterReplied?: boolean;
-  /** When that reply was written (the first comment that ended the wait): the timeline says "The reporter replied on the ticket" then. As `reporter_replied_at` in src-tauri/src/inbox/workstreams.rs. */
-  reporterRepliedAt?: string;
-  /** That reply's comment on the ticket and how it starts, while `reporterReplied`: the timeline and the notice quote it, and the timeline opens the comment. As `reporter_reply` in src-tauri/src/inbox/workstreams.rs. */
-  reporterReply?: ReporterReply;
-  /** Every reply from someone but the person on the ticket since the first reporter ask was posted, oldest first, whether or not the wait they ended was asked again: the timeline tells each. As `reporter_replies` in src-tauri/src/inbox/workstreams.rs. */
-  reporterReplies?: ReporterReplyAt[];
   /** Runs and pending drafts on the ticket that are in no workstream, while the workstream is open: the view offers to bring them here (`workstreamsAdopt`), never moves them on its own. As `adoptable` in src-tauri/src/inbox/workstreams.rs. */
   adoptable?: Adoptable | null;
-}
-
-/** What the clarity check found missing in a ticket's description (`ClarityGap` in src/lib/ticketClarity.ts). */
-export interface Clarity {
-  gaps: ClarityGap[];
-}
-
-/** A workstream waiting on the ticket's reporter. `since` is when the comment with the questions was posted. */
-export interface ReporterWait {
-  since: string;
-}
-
-/** A reply with the time it was written, as `ReporterReplyAt` in src-tauri/src/inbox/workstreams.rs. */
-export interface ReporterReplyAt extends ReporterReply {
-  at: string;
-}
-
-/** The reporter's reply: which comment on the ticket it is and how it starts (`excerpt`, its first two lines and how many more follow). As `ReporterReply` in src-tauri/src/inbox/workstreams.rs. */
-export interface ReporterReply {
-  id: string;
-  excerpt: string;
-}
-
-/**
- * A Triage that found its ticket not ready to plan, waiting for the person: ask the reporter, answer the questions
- * themselves, or plan anyway. Only the person chooses. As `ReadinessStop` in src-tauri/src/inbox/workstreams.rs.
- */
-export interface ReadinessStop {
-  triageRun: string;
-  triageLabel: string;
-  /** The open questions the Triage listed, the agent's words, cleaned and cut. May be empty. */
-  questions: string[];
-  /** When the Triage finished. */
-  at: string;
-  /** The person asked the reporter and then the ticket changed while they waited: the question is back as "changed: plan now?". */
-  changed?: boolean;
-  /** The wait ended with the reporter's reply on the ticket: the question is back as "<KEY>: the reporter replied, plan now?". Always with `changed`. */
-  replied?: boolean;
 }
 
 /** Who did something recorded in a workstream's audit. */

@@ -1,12 +1,10 @@
 import { docText } from "../lib/docs";
-import { followWithReply, NUDGE_GONE, nudgeOffered, reporterFollow, reporterReplies as reporterRepliesOf } from "../lib/reporterWait";
-import { clarityGaps, type ClarityGap } from "../lib/ticketClarity";
 import { workstreamOf } from "../lib/proposals";
 import { adoptableOf, adoptWords, NOTHING_TO_ADOPT } from "../lib/workstreamAdopt";
 import { byQueue, reviewBlocking, runLabels, stage } from "../lib/workstreamStage";
 import { readStored, writeStored } from "../workspace/storage";
 import { BASIS_FIELDS } from "../types";
-import type { Adoptable, BasisField, Clarity, ItemRef, PauseReason, ReadinessStop, ReporterReply, ReporterWait, Proposal, ReviewVerdict, Run, WorkItem, Workstream, WorkstreamActor, WorkstreamBasis, WorkstreamEvent, WorkstreamUndo, WorkstreamView, WorkstreamsChanged } from "../types";
+import type { Adoptable, BasisField, ItemRef, PauseReason, Proposal, ReviewVerdict, Run, WorkItem, Workstream, WorkstreamActor, WorkstreamBasis, WorkstreamEvent, WorkstreamUndo, WorkstreamView, WorkstreamsChanged } from "../types";
 
 const CONNECTION = "mock";
 /** Where the sample backend keeps its workstreams and their audit, so both survive a reload. */
@@ -24,7 +22,7 @@ const TITLE_LIMIT = 200;
 /** What a workstream id may be, as `RunSpec::validate` checks it. */
 const ID_LIMIT = 64;
 /** The markers prompts and Pip's context fence data with; notes holding any of them are refused rather than cleaned. */
-export const MARKERS = ["<<<TICKET", "TICKET>>>", "<<<FOCUS", "FOCUS>>>", "<<<PLAN", "PLAN>>>", "<<<BUILD", "BUILD>>>", "<<<FINDINGS", "FINDINGS>>>", "<<<ASSUMPTIONS", "ASSUMPTIONS>>>", "<<<AGENT_OUTPUT", "AGENT_OUTPUT>>>", "<<<PIP_NOTES", "PIP_NOTES>>>"];
+export const MARKERS = ["<<<TICKET", "TICKET>>>", "<<<FOCUS", "FOCUS>>>", "<<<PLAN", "PLAN>>>", "<<<BUILD", "BUILD>>>", "<<<FINDINGS", "FINDINGS>>>", "<<<AGENT_OUTPUT", "AGENT_OUTPUT>>>", "<<<PIP_NOTES", "PIP_NOTES>>>"];
 
 /** Parts of an audit line besides who did what. */
 export interface EventDetail {
@@ -106,66 +104,6 @@ export function waitingForPr(runs: readonly Run[], prOf: (runId: string) => numb
   return prOf(build.id) == null ? build.id : null;
 }
 
-/**
- * The clarity notice of `ws`, as `clarity_of`: the ticket reads thin (`gaps`), no Triage ran in the workstream (its verdict
- * is the authority), no Triage, Plan or Build ran on the ticket anywhere (`itemRuns`: in any workstream or in General), the person hasn't dismissed or asked about it (unless the ticket changed since they asked), and nothing
- * waits on the reporter. Never a need.
- */
-export function clarityOf(ws: Workstream, runs: readonly Run[], itemRuns: readonly Run[], gaps: readonly ClarityGap[], replies: readonly string[], events: readonly WorkstreamEvent[]): Clarity | null {
-  if (ws.closedAt !== null || ws.itemKey === null || !gaps.length) return null;
-  if (runs.some((r) => r.spec.workstream === ws.id && r.spec.kind === "triage")) return null;
-  if (itemRuns.some((r) => r.item?.key === ws.itemKey && (r.spec.kind === "triage" || r.spec.kind === "plan" || r.spec.kind === "build"))) return null;
-  const follow = reporterFollow(events, replies);
-  const said = (action: string) => events.some((e) => e.actor === "person" && e.action === action);
-  // An ask whose draft was skipped or retired was never posted, so it doesn't settle the notice.
-  const asked = events.some((e) => e.actor === "person" && e.action === "clarity_asked" && !(e.proposalId && draftLapsed(events, e.proposalId)));
-  if (said("clarity_dismissed") || follow.waiting || (asked && !follow.changed)) return null;
-  return { gaps: [...gaps] };
-}
-
-/** Whether the draft `id` was last skipped (and not brought back by Undo) or retired, so it won't be posted. */
-function draftLapsed(events: readonly WorkstreamEvent[], id: string): boolean {
-  let lapsed = false;
-  for (const e of events) {
-    if (e.proposalId !== id) continue;
-    if (e.action === "draft_skipped" || e.action === "draft_retired") lapsed = true;
-    else if (e.action === "undone" && e.detail === "draft_skipped") lapsed = false;
-  }
-  return lapsed;
-}
-
-/** Why asking the reporter, or saying a ticket looks fine, is refused when its clarity notice isn't showing, as `CLARITY_GONE`. */
-export const CLARITY_GONE = "This ticket isn't flagged as possibly unclear any more.";
-
-/** The parts of the clarity learning the page may audit, as `CLARITY_NOTES` in src-tauri/src/inbox/workstreams.rs. */
-export const CLARITY_NOTES: readonly string[] = ["clarity_learned", "clarity_reset"];
-
-/** Why a choice on a Triage that found its ticket not ready is refused, as `READINESS_GONE` in src-tauri/src/inbox/workstreams.rs. */
-export const READINESS_GONE = "This ticket isn't waiting for your choice about its open questions any more.";
-
-/**
- * The readiness stop of `ws`, if its newest Triage on a ticket is done and said `Ready to plan: no`, as `readiness_of`: the
- * workstream is open, the person hasn't chosen yet (`readiness_asked`, `readiness_answered` or
- * `readiness_overridden`, theirs, naming that Triage), and no Plan was started since it finished. A newer Triage, which
- * is under way or says ready, takes it away, as does a Plan the person started by hand. `readiness` is what a Triage's
- * written answer resolves to; null is no verdict, which reads as ready. A choice to ask the reporter is undone by the ticket
- * changing while the person waited (`reporterFollow(...).changed`): the stop comes back, flagged `changed`.
- */
-export function readinessOf(ws: Workstream, runs: readonly Run[], readiness: (run: Run) => { ready: boolean; questions: string[] } | null, replies: readonly string[], events: readonly WorkstreamEvent[]): ReadinessStop | null {
-  if (ws.closedAt !== null) return null;
-  const mine = runs.filter((r) => r.spec.workstream === ws.id);
-  const triage = mine.filter((r) => r.spec.kind === "triage" && !!r.item).sort(byQueue).pop();
-  if (!triage || triage.state !== "done") return null;
-  const found = readiness(triage);
-  if (!found || found.ready) return null;
-  const chosen = events.some((e) => e.actor === "person" && ["readiness_asked", "readiness_answered", "readiness_overridden"].includes(e.action) && e.runId === triage.id);
-  const since = triage.endedAt ?? triage.queuedAt;
-  const follow = reporterFollow(events, replies);
-  const changed = follow.changed;
-  if ((chosen && !changed) || mine.some((r) => r.spec.kind === "plan" && r.queuedAt >= since)) return null;
-  return { triageRun: triage.id, triageLabel: new Map(runLabels(mine)).get(triage.id) ?? "", questions: found.questions, at: since, ...(changed ? { changed } : {}), ...(follow.replied ? { replied: true } : {}) };
-}
-
 /** Why `id` can't be a workstream id at all, as `RunSpec::validate` refuses it; null when it can. */
 export function workstreamIdProblem(id: string): string | null {
   if (!id || [...id].length > ID_LIMIT || /[\u0000-\u001f\u007f]/.test(id)) return "the workstream id must be 1 to 64 characters with no control characters";
@@ -214,24 +152,12 @@ export class MockWorkstreams {
   verdictOf: (run: Run) => ReviewVerdict | null = () => null;
   /** A cached ticket as it is now, by key, which a workstream's basis is taken from; set by the backend that owns the tickets. */
   ticketOf: (key: string) => BasisTicket | null = () => null;
-  /** The times of the comments on a ticket from anyone but the signed-in person, by key: the reporter's replies, which leave no audit line; set by the backend that owns the tickets. */
-  repliesTo: (key: string) => string[] = () => [];
-  /** The comment on a ticket written at `at` (one of `repliesTo`'s times) as the view's `reporterReply`; set by the backend that owns the tickets. */
-  replyAt: (key: string, at: string) => ReporterReply | null = () => null;
-  /** The comments on a ticket from anyone but the signed-in person, with their ids, times and plain text; set by the backend that owns the tickets. */
-  replyCommentsOf: (key: string) => { id: string; at: string; text: string }[] = () => [];
-  /** The reporter's replies on `ws`'s ticket (`repliesTo`); none for a workstream without one. */
-  repliesOf(ws: Pick<Workstream, "itemKey" | "closedAt">): string[] {
-    return ws.itemKey && ws.closedAt === null ? this.repliesTo(ws.itemKey) : [];
-  }
   /** The pending drafts there are, which Bring them here counts; set by the backend that owns the drafts. */
   pendingDrafts: () => readonly Proposal[] = () => [];
   /** Puts run `id` in workstream `workstream`, or back in General with null; set by the backend that owns the runs. */
   moveRun: (id: string, workstream: string | null) => void = () => {};
   /** The same for draft `id`; set by the backend that owns the drafts. */
   moveDraft: (id: string, workstream: string | null) => void = () => {};
-  /** A finished Triage's verdict on its ticket as its written answer gives it, null without one; set by the backend that owns the runs. */
-  readinessOfRun: (run: Run) => { ready: boolean; questions: string[] } | null = () => null;
 
   /**
    * `runs` lists the runs there are, `titleOf` the title of a cached ticket (null when it isn't cached). `now` is the
@@ -278,19 +204,8 @@ export class MockWorkstreams {
     const judged = linked.map((r) => ({ ...r, verdict: r.spec.kind === "review" && r.state === "done" ? this.verdictOf(r) : null }));
     const view: WorkstreamView = { workstream: ws, stage: stage(judged), runs: linked.map((r) => r.id), labels: runLabels(linked) };
     const waiting = waitingForPr(linked, this.prOf);
-    // The audit is read only for an open workstream, as `view_events` does.
-    const events = ws.closedAt === null ? this.audit.filter((e) => e.workstreamId === ws.id) : [];
-    const replies = this.repliesOf(ws);
-    const readiness = events.length ? readinessOf(ws, linked, (r) => (r.spec.kind === "triage" && r.state === "done" ? this.readinessOfRun(r) : null), replies, events) : null;
-    const ticket = ws.closedAt === null && ws.itemKey ? this.ticketOf(ws.itemKey) : null;
-    const clarity = ticket ? clarityOf(ws, linked, runs, clarityGaps(docText(ticket.body)), replies, events) : null;
-    const { follow, repliedAt } = ws.closedAt === null ? followWithReply(events, replies) : { follow: null, repliedAt: null };
-    const waitingOnReporter: ReporterWait | null = follow?.waiting ? { since: follow.waiting } : null;
-    const reporterReplied = !!follow?.replied;
-    const reporterReply = reporterReplied && repliedAt && ws.itemKey ? this.replyAt(ws.itemKey, repliedAt) : null;
-    const reporterReplies = ws.closedAt === null && ws.itemKey ? reporterRepliesOf(events, this.replyCommentsOf(ws.itemKey)) : [];
     const adoptable = ws.closedAt === null && ws.itemKey ? adoptableOf(ws, runs.filter((r) => r.item?.key === ws.itemKey), this.pendingDrafts()) : null;
-    return { ...view, ...(adoptable && (adoptable.runs.length || adoptable.drafts.length) ? { adoptable } : {}), ...(waiting ? { waitingForPr: waiting } : {}), ...(reviewBlocking(judged) ? { reviewBlocking: true } : {}), ...(readiness ? { readiness } : {}), ...(clarity ? { clarity } : {}), ...(waitingOnReporter ? { waitingOnReporter } : {}), ...(reporterReplied ? { reporterReplied } : {}), ...(reporterReplied && repliedAt ? { reporterRepliedAt: repliedAt } : {}), ...(reporterReply ? { reporterReply } : {}), ...(reporterReplies.length ? { reporterReplies } : {}) };
+    return { ...view, ...(adoptable && (adoptable.runs.length || adoptable.drafts.length) ? { adoptable } : {}), ...(waiting ? { waitingForPr: waiting } : {}), ...(reviewBlocking(judged) ? { reviewBlocking: true } : {}) };
   }
 
   /** Opens a workstream on a cached ticket, or with no ticket and a title. A ticket with an open one gets that one back, unchanged. */
@@ -423,82 +338,6 @@ export class MockWorkstreams {
     return next;
   }
 
-  /** The readiness stop of workstream `id` as it stands, refused with `READINESS_GONE` unless it is about `triage`, as `readiness_stop`. */
-  readinessStop(id: string, triage: string): ReadinessStop {
-    const view = this.get(id);
-    if (!view) throw new Error(`there is no workstream ${id}`);
-    if (view.readiness?.triageRun !== triage) throw new Error(READINESS_GONE);
-    return view.readiness;
-  }
-
-  /**
-   * The person's "I'll answer" on a Triage that found its ticket not ready, as `answer_readiness`: records
-   * `readiness_answered`, which settles the stop. Nothing starts. Refused with `READINESS_GONE` unless the stop is about `triage`.
-   */
-  answerReadiness(id: string, triage: string): Workstream {
-    this.readinessStop(id, triage);
-    this.record(id, "person", "readiness_answered", { runId: triage });
-    return this.owned(id);
-  }
-
-  /**
-   * The person's "Plan anyway" on a Triage that found its ticket not ready, as `override_readiness`: records
-   * `readiness_overridden`, which settles the stop. Refused with `READINESS_GONE` unless the stop is about `triage`.
-   */
-  overrideReadiness(id: string, triage: string): Workstream {
-    this.readinessStop(id, triage);
-    this.record(id, "person", "readiness_overridden", { runId: triage });
-    return this.owned(id);
-  }
-
-  /** The clarity notice of workstream `id` as it stands, refused with `CLARITY_GONE` when it isn't showing, as `clarity_notice`. */
-  clarityNotice(id: string): Clarity {
-    const view = this.get(id);
-    if (!view) throw new Error(`there is no workstream ${id}`);
-    if (!view.clarity) throw new Error(CLARITY_GONE);
-    return view.clarity;
-  }
-
-  /** Records `clarity_asked` (the person's, naming the draft they asked for), as `ask_reporter_now` does after drafting. */
-  askedClarity(id: string, proposalId: string) {
-    this.record(id, "person", "clarity_asked", { proposalId });
-  }
-
-  /** The person's "Looks fine", as `dismiss_clarity`: records `clarity_dismissed`, so the notice doesn't show for the ticket again. */
-  dismissClarity(id: string): Workstream {
-    this.clarityNotice(id);
-    this.record(id, "person", "clarity_dismissed");
-    return this.owned(id);
-  }
-
-  /**
-   * The workstream `id` that waits on the reporter, for a nudge to them, as `nudge_reporter` checks it: refused with
-   * `NUDGE_GONE` unless it waits, has for `NUDGE_AFTER_DAYS` days or more, and no nudge waits among `pending` (its drafts).
-   */
-  nudgeDue(id: string, pending: readonly Proposal[], now: Date): string {
-    const view = this.get(id);
-    const key = view?.workstream.itemKey;
-    if (!view || !key || !nudgeOffered(view.waitingOnReporter, now, pending, id)) throw new Error(NUDGE_GONE);
-    return key;
-  }
-
-  /** Records `reporter_nudged` (the person's, naming the draft they asked for), as `nudge_reporter` does after drafting. */
-  nudged(id: string, proposalId: string) {
-    this.record(id, "person", "reporter_nudged", { proposalId });
-  }
-
-  /** Audits the page's clarity learning, as `note_clarity`: only `clarity_learned` and `clarity_reset` are taken. */
-  noteClarity(id: string, action: string, detail: string) {
-    if (!CLARITY_NOTES.includes(action)) throw new Error(`"${action}" isn't a note about the clarity check`);
-    this.owned(id);
-    this.record(id, "person", action, { detail: detail.replace(/[\u0000-\u001f]/g, "").slice(0, 120) });
-  }
-
-  /** Records `readiness_asked` (the person's, naming the Triage and the draft they asked for), as `ask_reporter` does after drafting. */
-  askedReporter(id: string, triage: string, proposalId: string) {
-    this.record(id, "person", "readiness_asked", { runId: triage, proposalId });
-  }
-
   /** Pauses an open workstream, as `pause_workstream` does: one already paused keeps its reason. */
   pause(id: string, reason: PauseReason = "person", actor: WorkstreamActor = "person"): Workstream {
     const ws = this.openOne(id);
@@ -598,11 +437,6 @@ export class MockWorkstreams {
     this.save();
     this.changed();
     return true;
-  }
-
-  /** Whether someone but the person has commented on ticket `key` since the reporter was asked on an open workstream of it: what a Triage run then reads from the comments. */
-  reporterRepliedOn(key: string): boolean {
-    return this.all.some((ws) => ws.itemKey === key && ws.closedAt === null && reporterRepliesOf(this.audit.filter((e) => e.workstreamId === ws.id), this.replyCommentsOf(key)).length > 0);
   }
 
   /** A workstream's audit, oldest first. */

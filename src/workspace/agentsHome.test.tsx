@@ -202,7 +202,7 @@ describe("what a workstream's heading says of where it stands", () => {
   it("says a paused workstream is paused", () => {
     const paused = view("ws-1", "CA-401", { pausedReason: "person" });
     seed(useWorkstreams, { list: [paused] });
-    expect(renderToStaticMarkup(<WorkstreamHeadExtras view={paused} />)).toMatch(/data-status="needs-you"[^>]*>Needs you/);
+    expect(renderToStaticMarkup(<WorkstreamHeadExtras view={paused} />)).toMatch(/data-status="paused"[^>]*>Paused/);
   });
 });
 

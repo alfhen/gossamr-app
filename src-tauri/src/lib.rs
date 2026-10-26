@@ -496,8 +496,7 @@ async fn proposals_approve(app: AppHandle, core: State<'_, CoreState>, id: Strin
     if let Ok(connection) = core.scope().await.map(|s| Connection::jira_id(&s)) {
         proposals_changed(&app, &connection);
         cache_changed(&app, &connection);
-        // Approving a draft in a workstream is a line in its audit: what the workstream waits on (the reporter, from the
-        // approved questions) and its timeline's counts read it.
+        // Approving a draft in a workstream is a line in its audit, which its timeline's counts read.
         if result.as_ref().is_ok_and(|p| p.workstream().is_some()) {
             workstreams_changed(&app, &connection);
         }
@@ -708,74 +707,6 @@ async fn workstreams_adopt(app: AppHandle, core: State<'_, CoreState>, id: Strin
 #[tauri::command]
 async fn workstreams_set_notes(app: AppHandle, core: State<'_, CoreState>, id: String, notes: String) -> Result<Workstream> {
     let ws = core.set_workstream_notes(&core.scope().await?, &id, &notes, domain::Actor::Person).await?;
-    workstreams_changed(&app, &ws.connection_id);
-    Ok(ws)
-}
-
-/// The person's "Ask the reporter" on a Triage that found its ticket not ready to plan: a Jira comment to the reporter
-/// with its open questions, as a draft the person approves like any other. Pip has no way to call this.
-#[tauri::command]
-async fn workstreams_readiness_ask(app: AppHandle, core: State<'_, CoreState>, id: String, triage_run: String) -> Result<Proposal> {
-    let scope = core.scope().await?;
-    let made = core.ask_reporter(&scope, &id, &triage_run).await?;
-    proposals_changed(&app, &Connection::jira_id(&scope));
-    workstreams_changed(&app, &Connection::jira_id(&scope));
-    Ok(made)
-}
-
-/// The person's "Ask the reporter now" on the clarity notice of a ticket no Triage has judged: the same comment to the
-/// reporter, from the gaps the check found, as a draft the person approves like any other. Pip has no way to call this.
-#[tauri::command]
-async fn workstreams_clarity_ask(app: AppHandle, core: State<'_, CoreState>, id: String, skip: Option<Vec<domain::ClarityGap>>) -> Result<Proposal> {
-    let scope = core.scope().await?;
-    let made = core.ask_reporter_now(&scope, &id, &skip.unwrap_or_default()).await?;
-    proposals_changed(&app, &Connection::jira_id(&scope));
-    workstreams_changed(&app, &Connection::jira_id(&scope));
-    Ok(made)
-}
-
-/// The person's "Looks fine" on the clarity notice: it doesn't show again for this ticket.
-#[tauri::command]
-async fn workstreams_clarity_dismiss(app: AppHandle, core: State<'_, CoreState>, id: String) -> Result<Workstream> {
-    let scope = core.scope().await?;
-    let ws = core.dismiss_clarity(&scope, &id).await?;
-    workstreams_changed(&app, &Connection::jira_id(&scope));
-    Ok(ws)
-}
-
-/// The person's "Draft a nudge" on a workstream that has waited on the reporter for days: a short follow-up comment, as a
-/// draft the person approves like any other. Pip has no way to call this.
-#[tauri::command]
-async fn workstreams_nudge_reporter(app: AppHandle, core: State<'_, CoreState>, id: String) -> Result<Proposal> {
-    let scope = core.scope().await?;
-    let made = core.nudge_reporter(&scope, &id).await?;
-    proposals_changed(&app, &Connection::jira_id(&scope));
-    workstreams_changed(&app, &Connection::jira_id(&scope));
-    Ok(made)
-}
-
-/// Audits the page's clarity learning in a workstream: `clarity_learned` when "Looks fine" said enough times stopped a gap
-/// being flagged for a project, `clarity_reset` when the person gave that back. The learning itself is the page's.
-#[tauri::command]
-async fn workstreams_clarity_note(core: State<'_, CoreState>, id: String, action: String, detail: String) -> Result<()> {
-    let scope = core.scope().await?;
-    core.note_clarity(&scope, &id, &action, &detail).await
-}
-
-/// The person's "I'll answer" on a Triage that found its ticket not ready to plan: it settles the question and starts
-/// nothing; the page opens the conversation with the questions quoted.
-#[tauri::command]
-async fn workstreams_readiness_answer(app: AppHandle, core: State<'_, CoreState>, id: String, triage_run: String) -> Result<Workstream> {
-    let ws = core.answer_readiness(&core.scope().await?, &id, &triage_run).await?;
-    workstreams_changed(&app, &ws.connection_id);
-    Ok(ws)
-}
-
-/// The person's "Plan anyway" on a Triage that found its ticket not ready to plan: records the override. Pip has no way
-/// to call this.
-#[tauri::command]
-async fn workstreams_readiness_override(app: AppHandle, core: State<'_, CoreState>, id: String, triage_run: String) -> Result<Workstream> {
-    let ws = core.override_readiness(&core.scope().await?, &id, &triage_run).await?;
     workstreams_changed(&app, &ws.connection_id);
     Ok(ws)
 }
@@ -1508,13 +1439,6 @@ pub fn run() {
             workstreams_adopt,
             workstreams_set_notes,
             workstreams_events,
-            workstreams_readiness_ask,
-            workstreams_clarity_ask,
-            workstreams_clarity_dismiss,
-            workstreams_clarity_note,
-            workstreams_nudge_reporter,
-            workstreams_readiness_answer,
-            workstreams_readiness_override,
             workstreams_pause,
             workstreams_resume,
             workstreams_undo,

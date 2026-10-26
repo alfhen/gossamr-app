@@ -141,9 +141,4 @@ describe("a then Enter on a comment draft (G1)", () => {
       keepEditsOfDraft("p2", {});
     }
   });
-
-  it("opens an answers draft whose card is not on screen when its text would stop at the pause", () => {
-    useWorkspace.setState({ proposals: { p1: draft("Answers to the open questions", "pip", "Ask @here about it") } } as never);
-    expect(plan()).toBe("open");
-  });
 });

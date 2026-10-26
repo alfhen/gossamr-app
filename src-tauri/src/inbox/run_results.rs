@@ -235,11 +235,6 @@ fn is_plan_comment(p: &Proposal) -> bool {
     p.label.as_deref().is_some_and(|l| l.starts_with(PLAN_LABEL))
 }
 
-/// Whether `p` is the comment asking a ticket's reporter the questions a triage left open: the person's choice, never the run's status comment.
-fn is_reporter_questions(p: &Proposal) -> bool {
-    p.label.as_deref() == Some(proposals::READINESS_COMMENT_LABEL)
-}
-
 /// Findings cut at a paragraph or sentence with a note when they are over the limit. A note is shorter today, so this
 /// only guards against that changing. `fit` leaves out the blank line before its note, so it is given two less room
 /// and the result stays within what `RunSpec::validate` accepts.
@@ -345,7 +340,7 @@ impl Core {
 
     /// Every status comment draft made from `run`, newest first, whether it is still waiting or was decided.
     pub(super) async fn comment_drafts_of(&self, run: &Run) -> Result<Vec<Proposal>> {
-        Ok(self.run_comments(run).await?.into_iter().filter(|p| !is_plan_comment(p) && !is_reporter_questions(p)).collect())
+        Ok(self.run_comments(run).await?.into_iter().filter(|p| !is_plan_comment(p)).collect())
     }
 
     /// Every draft of the whole plan as a comment made from `run`.
@@ -1361,18 +1356,6 @@ pub(in crate::inbox) mod tests {
 
     async fn subtask_drafts_in(fx: &Fixture) -> Vec<Proposal> {
         fx.core.proposals(&ProposalQuery::default()).await.unwrap().into_iter().filter(|p| matches!(p.intent, Intent::Subtasks { .. })).collect()
-    }
-
-    #[tokio::test]
-    async fn the_comment_to_the_reporter_is_not_the_triage_s_status_comment() {
-        let fx = fixture_watching(&["acme/webshop"]).await;
-        let run = triage_with(&fx, "Unclear.\n\nFor Jira:\nThe ticket is not clear enough to plan.").await;
-        let item = fx.item("CA-1");
-        let asked = fx.core.draft_from_run(&run, Intent::Comment { item, body: tracker::comment_doc("Could you say which checkout?", &[]) }, proposals::READINESS_COMMENT_LABEL.into()).await.unwrap();
-        assert_eq!(fx.core.run_outcome(&run.id).await.unwrap().draft, None, "the questions are not the status draft");
-        let status = fx.core.auto_draft_run_comment(&run.id).await.unwrap().expect("the run's own status draft is still made");
-        assert_ne!(status.id, asked.id);
-        assert_eq!(fx.core.run_outcome(&run.id).await.unwrap().draft.map(|d| d.id), Some(status.id));
     }
 
     #[tokio::test]

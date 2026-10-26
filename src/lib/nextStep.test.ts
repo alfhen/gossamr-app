@@ -4,7 +4,6 @@ import type { Intent, ItemRef, Proposal, Run, RunKind, RunState, PauseReason, Wo
 import { needs as buildNeeds, type Need } from "./needs";
 import { docFromText } from "./docs";
 import { nextStep } from "./nextStep";
-import { followWithReply } from "./reporterWait";
 
 const NOW = Date.parse("2026-09-30T12:00:00Z");
 const iso = (minutesAgo: number) => new Date(NOW - minutesAgo * 60_000).toISOString();
@@ -56,10 +55,10 @@ const view = (runs: Run[], over: Over = {}): WorkstreamView => ({
   reviewBlocking: over.reviewBlocking ?? false,
 });
 
-const needsOf = (v: WorkstreamView, runs: Run[], proposals: Proposal[] = []): Need[] => buildNeeds({ workstreams: [v], runs, proposals, dismissed: new Set(), now: NOW });
+const needsOf = (v: WorkstreamView, runs: Run[], proposals: Proposal[] = []): Need[] => buildNeeds({ workstreams: [v], runs, proposals, dismissed: new Set() });
 const next = (runs: Run[], over: Over = {}, proposals: Proposal[] = []) => {
   const v = view(runs, over);
-  return nextStep(v, runs, proposals, needsOf(v, runs, proposals));
+  return nextStep(v, runs, needsOf(v, runs, proposals));
 };
 const text = (runs: Run[], over: Over = {}, proposals: Proposal[] = []) => next(runs, over, proposals)?.text;
 
@@ -97,7 +96,7 @@ describe("nextStep when the person is waited on", () => {
     const runs = [run("b", "build", "needsPermission", { needs: "git push origin ca-401" })];
     const v = view(runs);
     const list = needsOf(v, runs);
-    const result = nextStep(v, runs, [], list);
+    const result = nextStep(v, runs, list);
     expect(result).toMatchObject({ kind: "waiting", text: "Next: waiting on you. R1 wants to run `git push origin ca-401`." });
     expect(result?.need).toBe(list[0]);
     expect(result?.need?.key).toBe("run:b");
@@ -106,7 +105,7 @@ describe("nextStep when the person is waited on", () => {
   it("takes the highest-ranked need of the workstream, not another workstream's", () => {
     const runs = [run("b", "build", "needsAnswer", { needs: "Which branch?" }), run("x", "build", "needsPermission", { needs: "rm -rf x", spec: { ...base.spec, kind: "build", workstream: "ws-other" } })];
     const v = view(runs.slice(0, 1));
-    const result = nextStep(v, runs, [], needsOf(v, runs));
+    const result = nextStep(v, runs, needsOf(v, runs));
     expect(result?.need?.key).toBe("run:b");
     expect(result?.text).toContain("R1 asks");
   });
@@ -116,25 +115,9 @@ describe("nextStep when the person is waited on", () => {
     const runs = [run("t", "triage", "done"), run("p", "plan", "done")];
     const v = view(runs);
     const list = needsOf(v, runs, [rewrite("d-old", "t", 500), rewrite("d-plan", "p", 5)]);
-    const result = nextStep(v, runs, [], list);
+    const result = nextStep(v, runs, list);
     expect(result?.need?.kind).toBe("plan");
     expect(result?.text).toMatch(/wrote the plan.* \(\+1 more waiting\)\.?$/);
-  });
-
-  it("says the reporter replied, and when, once their answer ended the wait and the person has not chosen", () => {
-    const runs = [run("t", "triage", "done")];
-    const v = { ...view(runs), reporterReplied: true, reporterRepliedAt: iso(180) } as WorkstreamView;
-    const result = nextStep(v, runs, [], [], new Date(NOW));
-    expect(result).toMatchObject({ kind: "reporter", need: null, text: "Next: the reporter replied 3 hours ago; read it, then Looks fine or ask again." });
-    expect(nextStep({ ...v, reporterRepliedAt: undefined } as WorkstreamView, runs, [], [], new Date(NOW))?.text).toBe("Next: the reporter replied; read it, then Looks fine or ask again.");
-    // A need still comes first, and a step in hand carries on.
-    const going = [run("b", "build", "working")];
-    expect(nextStep({ ...view(going), reporterReplied: true } as WorkstreamView, going, [], [], new Date(NOW))?.kind).not.toBe("reporter");
-    expect(nextStep(view(runs), runs, [], [], new Date(NOW))?.kind).not.toBe("reporter");
-    // "Looks fine" after the reply is choosing (G6): the line moves on to the chain, though the ticket still counts as changed.
-    const chosen = followWithReply([{ actor: "person", action: "readiness_asked", proposalId: "d", at: iso(300) }, { actor: "person", action: "draft_approved", proposalId: "d", at: iso(290) }, { actor: "person", action: "clarity_dismissed", proposalId: null, at: iso(100) }], [iso(180)]).follow;
-    expect(chosen).toEqual({ waiting: null, changed: true, replied: false });
-    expect(nextStep({ ...view(runs), reporterReplied: chosen.replied } as WorkstreamView, runs, [], [], new Date(NOW))?.text).not.toContain("Looks fine or ask again");
   });
 
   it("adds no count when the person is waited on for one thing only", () => {
@@ -196,8 +179,8 @@ describe("nextStep when a run waits for a slot", () => {
     const first = queued("a", 5, "ws-other");
     const mine = queued("b", 3);
     const v = view([mine]);
-    expect(nextStep(v, [first, mine], [], [])).toMatchObject({ kind: "slot", text: "Next: R1 starts when a slot frees (2nd in line)." });
-    expect(nextStep(v, [mine], [], [])?.text).toBe("Next: R1 starts when a slot frees (1st in line).");
+    expect(nextStep(v, [first, mine], [])).toMatchObject({ kind: "slot", text: "Next: R1 starts when a slot frees (2nd in line)." });
+    expect(nextStep(v, [mine], [])?.text).toBe("Next: R1 starts when a slot frees (1st in line).");
   });
 });
 
@@ -217,7 +200,7 @@ describe("nextStep edge cases", () => {
   it("ignores runs that are not the workstream's", () => {
     const v = view([run("b", "build", "working")]);
     const other = run("o", "investigate", "needsPermission", { needs: "ls" });
-    expect(nextStep(v, [run("b", "build", "working"), other], [], [])?.kind).toBe("running");
+    expect(nextStep(v, [run("b", "build", "working"), other], [])?.kind).toBe("running");
   });
 
   it("always starts with Next: and is one sentence", () => {
@@ -230,40 +213,3 @@ describe("nextStep edge cases", () => {
     }
   });
 });
-
-describe("nextStep while the workstream waits on the reporter", () => {
-  const waiting = (runs: Run[], over: Over = {}, since = iso(60 * 24 * 3)): WorkstreamView => ({ ...view(runs, over), waitingOnReporter: { since } });
-  const line = (v: WorkstreamView, runs: Run[], proposals: Proposal[] = []) => nextStep(v, runs, proposals, needsOf(v, runs, proposals), new Date(NOW));
-
-  it("says since when and that nothing starts on its own, and it is not a need", () => {
-    const runs = [run("t", "triage", "done")];
-    const v = waiting(runs, { stage: "triage" }, iso(60 * 24 * 1));
-    expect(line(v, runs)).toMatchObject({ kind: "reporter", need: null, text: "Next: Waiting on the reporter since yesterday; nothing starts on its own." });
-    expect(line(v, runs)?.nudge).toBeUndefined();
-    expect(needsOf(v, runs)).toEqual([]);
-  });
-
-  it("offers a nudge once the reporter has been silent for 2 days, never as a need, and not while one waits", () => {
-    const runs = [run("t", "triage", "done")];
-    const v = waiting(runs, { stage: "triage" });
-    expect(line(v, runs)).toMatchObject({ kind: "reporter", need: null, nudge: true, text: "Next: Waiting on the reporter since 3 days ago; nothing starts on its own. The reporter hasn't answered for 3 days. You can draft a nudge." });
-    expect(needsOf(v, runs)).toEqual([]);
-    expect(line(waiting(runs, { stage: "triage" }, iso(60 * 24 * 2)), runs)?.nudge).toBe(true);
-    expect(line(waiting(runs, { stage: "triage" }, iso(60 * 24 * 2 - 60)), runs)?.nudge).toBeUndefined();
-    const drafted = { ...applied("n1", "b"), state: { type: "pending" } as const, label: "Nudge for the reporter", createdBy: "user", intent: { type: "comment", item: ref("CA-401"), body: docFromText("Hi"), mentions: [] } as unknown as Intent, origin: { type: "chat", requestId: "nudge:w", workstream: v.workstream.id } } as Proposal;
-    expect(line(v, runs, [drafted])?.nudge).toBeUndefined();
-  });
-
-  it("gives way to a pause, to anything that decides or unblocks, and to a step in hand", () => {
-    const going = [run("t", "triage", "working")];
-    expect(line(waiting(going, { stage: "triage" }), going)?.kind).not.toBe("reporter");
-    expect(line(waiting([], { pausedReason: "person" }), [])?.kind).toBe("paused");
-    const failed = [run("b", "build", "failed")];
-    expect(line(waiting(failed), failed)?.kind).toBe("waiting");
-  });
-
-  it("is gone once the wait is", () => {
-    expect(line(view([]), [])?.kind).not.toBe("reporter");
-  });
-});
-

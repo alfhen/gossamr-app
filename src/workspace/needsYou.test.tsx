@@ -2,7 +2,6 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MockBackend } from "../backend/mock";
 import { docFromText } from "../lib/docs";
-import { ANSWERS_COMMENT_LABEL } from "../lib/proposals";
 import { needGroups, needs, type Need, type NeedsInput } from "../lib/needs";
 import type { Intent, PauseReason, Proposal, Run, WorkstreamView } from "../types";
 import { useWorkspace } from "../workspaceStore";
@@ -19,7 +18,7 @@ function NeedsPane({ needs: list }: { needs: readonly Need[] }) {
 import { NeedsYouList, firstText, groupText, hasMoreBelow } from "./NeedsYou";
 import { NO_FILTERS, groupRuns, slotWaiters, stopAllLabel, stoppable, summaryLine, yourAgents } from "./agentsLogic";
 import { arm, confirmArmed, disarm, keyPlan, openInWorkstream, openNeed } from "./needsActions";
-import { BATCH_ASIDE, BATCH_TITLE, composerFooter } from "./workViewLogic";
+import { BATCH_TITLE, composerFooter } from "./workViewLogic";
 import { useWorkView } from "./workViewStore";
 import { PipRunStripView } from "./PipRunCard";
 import { railBadgeText } from "./Rail";
@@ -84,7 +83,6 @@ const input = (over: Partial<NeedsInput> = {}): NeedsInput => ({
   proposals: [draft("c1", comment("CA-401"), 30, "ws-1"), draft("c2", transition("CA-401"), 25, "ws-1"), draft("c3", comment("CA-401", "Another"), 24, "ws-1"), draft("g1", comment("CA-500"), 10)],
   dismissed: new Set(),
   titleOf: (key) => (key === "CA-500" ? "Loose ticket" : null),
-  now: NOW,
   ...over,
 });
 
@@ -242,23 +240,10 @@ describe("the Needs you list", () => {
     expect(html.match(/Approve \d+ safe drafts/g)).toHaveLength(1);
     // The button says what makes a draft safe, and what is left to approve one by one.
     expect(html).toContain(`title="${BATCH_TITLE}"`);
-    expect(BATCH_TITLE).toMatch(/comments, status moves and subtasks[^.]*\. A description rewrite, a question to the reporter/);
+    expect(BATCH_TITLE).toMatch(/comments, status moves and subtasks[^.]*\. A description rewrite/);
     // A group with a single batchable draft has no batch to offer.
     const lone = needs(input({ proposals: [draft("c1", comment("CA-401"), 30, "ws-1")] }));
     expect(renderToStaticMarkup(<NeedsYouList needs={lone} now={NOW} />)).not.toContain("safe drafts");
-  });
-
-  it("says why there is no batch when a draft from the person's reply is waiting beside one safe draft (G27)", () => {
-    const answers = { ...draft("a1", comment("CA-401", "Answers: a, b."), 20, "ws-1"), label: ANSWERS_COMMENT_LABEL };
-    const proposals = [draft("c1", comment("CA-401"), 30, "ws-1"), answers];
-    seed(useWorkspace, { proposals: Object.fromEntries(proposals.map((p) => [p.id, p])) });
-    seed(useWorkView, { expanded: new Set(["ws-1"]) });
-    const html = renderToStaticMarkup(<NeedsYouList needs={needs(input({ proposals }))} now={NOW} />);
-    expect(html).not.toContain("safe drafts");
-    expect(html).toContain(`data-batch-aside`);
-    expect(html).toContain(BATCH_ASIDE);
-    // Nothing is said when there is no answers draft, or when it is the only draft.
-    expect(renderToStaticMarkup(<NeedsYouList needs={needs(input({ proposals: [draft("c1", comment("CA-401"), 30, "ws-1")] }))} now={NOW} />)).not.toContain("data-batch-aside");
   });
 
   it("keeps the batch's preview out of the list: its button opens it in the pane", () => {
@@ -519,40 +504,6 @@ describe("the decision pane", () => {
     expect(card).toContain("Nothing is written to Jira until you approve it.");
   });
 
-  it("decides a ticket the triage found not clear enough to plan with its questions and the three choices", () => {
-    const unclear: WorkstreamView = { ...view("ws-1", "CA-401", "CA-401 Welcome flow refresh"), readiness: { triageRun: "r-t", triageLabel: "R2", questions: ["What does done look like?", "Who is waiting on it?"], at: ago(4) } };
-    const list = set({ workstreams: [unclear], runs: [], proposals: [] });
-    const html = pane(list, "readiness:r-t");
-    expect(html).toContain("CA-401 isn&#x27;t clear enough to plan");
-    expect(html).toContain('data-needs-you-chip="decide"');
-    expect(html).toContain("<li>What does done look like?</li><li>Who is waiting on it?</li>");
-    expect(html).toContain("No plan starts until you choose.");
-    for (const label of ["Ask the reporter", "I&#x27;ll answer", "Plan anyway"]) expect(html).toContain(`>${label}<`);
-    // Nothing is posted by the pane itself: it only offers the choices.
-    expect(html).not.toContain("Post review");
-    // With no questions listed, it says so rather than show an empty list.
-    const none = set({ workstreams: [{ ...unclear, readiness: { ...unclear.readiness!, questions: [] } }], runs: [], proposals: [] });
-    const quiet = pane(none, "readiness:r-t");
-    expect(quiet).toContain("unclear but listed no questions");
-    expect(quiet).not.toContain("data-readiness-questions");
-  });
-
-  it("calls the store for each of the three choices", () => {
-    const unclear: WorkstreamView = { ...view("ws-1", "CA-401", "CA-401 Welcome flow refresh"), readiness: { triageRun: "r-t", triageLabel: "R2", questions: ["Who asked?"], at: ago(4) } };
-    const list = set({ workstreams: [unclear], runs: [], proposals: [] });
-    const was = useWorkstreams.getState();
-    const calls = { askReporter: vi.fn(async () => true), answerSelf: vi.fn(async () => true), planAnyway: vi.fn(async () => true) };
-    useWorkstreams.setState(calls);
-    const [primary, ...rest] = [list[0].primary, ...list[0].secondary];
-    expect([primary.id, ...rest.map((a) => a.id)]).toEqual(["askReporter", "answerSelf", "planAnyway"]);
-    // The keyboard's plan for the primary asks for Enter and then calls the store; the others are the pane's buttons.
-    const plan = keyPlan(list[0], "approve");
-    if (plan?.type !== "ask") throw new Error("it asks for Enter first");
-    plan.run();
-    expect(calls.askReporter).toHaveBeenCalledWith("ws-1");
-    useWorkstreams.setState({ askReporter: was.askReporter, answerSelf: was.answerSelf, planAnyway: was.planAnyway });
-  });
-
   it("decides a plan with its approval note", () => {
     const planRun = run("r-plan", "done", { spec: { ...base.spec, kind: "plan", workstream: "ws-1" } });
     const list = set({ workstreams: [view("ws-1", "CA-401", "CA-401 Welcome flow refresh", { runs: ["r-plan"] })], runs: [planRun], proposals: [{ ...draft("plan", rewrite("CA-401"), 4, "ws-1"), origin: { type: "run", runId: "r-plan", shortId: null, workstream: "ws-1" } } as Proposal], dismissed: new Set() });
@@ -598,7 +549,7 @@ describe("every count of needs you and of agents, from one fixture (D4, D5, N3)"
 
   for (const dismissed of [new Set<string>(), new Set([failed.id])]) {
     it(`agrees on the list, the rail badge, the composer, the launcher, the Agents header, Your agents and Stop all${dismissed.size ? ", once the failed run was dismissed" : ""}`, () => {
-      const list = needs({ workstreams: [], runs, proposals, dismissed, now: at + 5 * 60_000 });
+      const list = needs({ workstreams: [], runs, proposals, dismissed });
       const n = list.length;
       // A permission and a question, and the failed run until it is dismissed; a quiet run is not a need.
       expect(n).toBe(2 + (dismissed.size ? 0 : 1) + proposals.length);
@@ -629,7 +580,7 @@ describe("every count of needs you and of agents, from one fixture (D4, D5, N3)"
     const all = [...runs, other];
     useRuns.setState({ runs: all, dismissed: new Set() });
     // Opening Agents once marked every failure but the folder as seen; nothing does that now.
-    const listed = (dismissed: ReadonlySet<string>) => needs({ workstreams: [], runs: all, proposals: [], dismissed, now: at }).filter((x) => x.kind === "failure").map((x) => x.runId);
+    const listed = (dismissed: ReadonlySet<string>) => needs({ workstreams: [], runs: all, proposals: [], dismissed }).filter((x) => x.kind === "failure").map((x) => x.runId);
     expect(listed(new Set())).toEqual(expect.arrayContaining([trust.id, other.id]));
     useRuns.getState().dismiss(other.id);
     expect(listed(useRuns.getState().dismissed)).toEqual(expect.arrayContaining([trust.id]));

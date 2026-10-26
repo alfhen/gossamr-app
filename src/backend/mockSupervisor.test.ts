@@ -4,10 +4,10 @@ import { MockBackend } from "./mock";
 import type { MockOptions } from "./mockWatch";
 import { itemRef } from "./mockConnector";
 import { basisOfItem, driftOf, type BasisTicket } from "./mockWorkstreams";
-import { docFromText, docText } from "../lib/docs";
+import { docFromText } from "../lib/docs";
 import fixtures from "./supervisor.fixtures.json";
 import readinessFixtures from "./readiness.fixtures.json";
-import { MockSupervisor, eventLine, keysIn, planRecommended, readiness } from "./mockSupervisor";
+import { MockSupervisor, eventLine, keysIn, planRecommended, readiness, triageReadiness } from "./mockSupervisor";
 import type { WakeFact } from "./mockSupervisor";
 
 describe("the supervisor fixtures the Rust side runs too", () => {
@@ -216,8 +216,7 @@ describe("the sample supervisor", () => {
       const { b, ws, triage, wakes } = await triaged();
       expect(b.runs.get(triage.id)?.result).toContain("Ready to plan: no\nOpen questions:");
       expect(b.runs.list({ workstream: ws }).some((r) => r.spec.kind === "plan")).toBe(false);
-      expect(b.workstreams.get(ws)?.readiness).toMatchObject({ triageRun: triage.id });
-      expect(b.workstreams.get(ws)?.readiness?.questions).toHaveLength(4);
+      expect(triageReadiness(b.runs.get(triage.id)!)?.questions).toHaveLength(4);
       expect(last(wakes).facts[0]).toMatchObject({ run: triage.id, planRecommended: true, openQuestions: 4 });
       expect(eventLine(last(wakes).facts)).toBe(`[Event] run ${triage.id} (triage) Done; plan recommended: yes; not ready to plan, 4 open questions; 1 draft`);
     });
@@ -228,116 +227,26 @@ describe("the sample supervisor", () => {
       const triage = await start(b, ws, "triage");
       finish(b, triage.id);
       expect(b.runs.get(triage.id)?.result).not.toContain("Ready to plan");
-      expect(b.workstreams.get(ws)?.readiness).toBeFalsy();
+      expect(triageReadiness(b.runs.get(triage.id)!)).toBeNull();
     });
 
-    it("settles with Plan anyway, as the person's line, and starts nothing", async () => {
-      const { b, ws, triage } = await triaged();
-      await b.workstreamsReadinessOverride(ws, triage.id);
-      expect(b.workstreams.get(ws)?.readiness).toBeFalsy();
-      expect(b.workstreams.events(ws).find((e) => e.action === "readiness_overridden")).toMatchObject({ actor: "person", runId: triage.id });
-      expect(b.runs.list({ workstream: ws }).some((r) => r.spec.kind === "plan")).toBe(false);
-      await expect(b.workstreamsReadinessOverride(ws, triage.id)).rejects.toThrow("isn't waiting for your choice");
+    it("leaves its note as one description update, and no comment of its own", async () => {
+      const { b, triage } = await triaged();
+      const pending = b.proposals.list({ states: ["pending"] }).filter((p) => p.origin.type === "run" && p.origin.runId === triage.id);
+      expect(pending.map((p) => p.intent.type)).toEqual(["rewrite"]);
     });
 
-    it("settles with I'll answer and starts nothing", async () => {
-      const { b, ws, triage } = await triaged();
-      await b.workstreamsReadinessAnswer(ws, triage.id);
-      expect(b.workstreams.get(ws)?.readiness).toBeFalsy();
-      expect(b.runs.list({ workstream: ws }).some((r) => r.spec.kind === "plan")).toBe(false);
-      expect(b.workstreams.events(ws).find((e) => e.action === "readiness_answered")).toMatchObject({ actor: "person", runId: triage.id });
-      await expect(b.workstreamsReadinessAnswer(ws, "nope")).rejects.toThrow("isn't waiting for your choice");
-    });
-
-    it("drafts a comment to the reporter with Ask the reporter, posts nothing, and settles", async () => {
-      const { b, ws, triage } = await triaged();
-      const own = b.proposals.list({ states: ["pending"] }).filter((p) => p.intent.type === "rewrite" && p.origin.type === "run" && p.origin.runId === triage.id);
-      expect(own).toHaveLength(1);
-      expect(b.proposals.list({ states: ["pending"] }).filter((p) => p.intent.type === "comment" && p.origin.type === "run" && p.origin.runId === triage.id)).toHaveLength(0);
-      const before = b.proposals.list({ states: ["pending"] }).length;
-      const draft = await b.workstreamsReadinessAsk(ws, triage.id);
-      expect(b.proposals.list({ states: ["pending"] })).toHaveLength(before + 1);
-      expect(b.proposals.get(own[0].id)).toMatchObject({ state: { type: "pending" } });
-      expect(draft).toMatchObject({ state: { type: "pending" }, createdBy: "agent", label: "Questions for the reporter", origin: { type: "run", runId: triage.id, workstream: ws } });
-      if (draft.intent.type !== "comment") throw new Error("a comment");
-      expect(draft.intent.item.key).toBe("CA-408");
-      const text = docText(draft.intent.body);
-      for (const part of ["Hi @Mette Lund,", "A few things need clearing up to make this ticket clear to work on", "- What does done look like for CA-408?", "- Who asked for this, and who is waiting on it?"]) expect(text).toContain(part);
-      expect(JSON.stringify(draft.intent.body)).toContain('"type":"mention"');
-      expect(b.proposals.writes).toEqual([]);
-      expect(b.workstreams.events(ws).find((e) => e.action === "readiness_asked")).toMatchObject({ actor: "person", runId: triage.id, proposalId: draft.id });
-      expect(b.workstreams.get(ws)?.readiness).toBeFalsy();
-      await expect(b.workstreamsReadinessAsk(ws, triage.id)).rejects.toThrow("isn't waiting for your choice");
-    });
-
-    it("keeps the comment to the reporter out of the triage's status comment slot", async () => {
-      const { b, ws, triage } = await triaged();
-      const asked = await b.workstreamsReadinessAsk(ws, triage.id);
-      expect((await b.runsOutcome(triage.id)).draft?.id).not.toBe(asked.id);
-    });
-
-    it("is resolved by a later triage that says ready, and a later one that says not ready replaces it", async () => {
+    it("is replaced by a later triage's verdict, ready or not", async () => {
       const { b, ws } = await triaged();
       const again = await start(b, ws, "triage", CA408);
-      expect(b.workstreams.get(ws)?.readiness).toBeFalsy();
       b.runs.scriptNext("triage", { ready: false, questions: ["Which segment?"] });
       finish(b, again.id);
-      expect(b.workstreams.get(ws)?.readiness).toMatchObject({ triageRun: again.id, questions: ["Which segment?"] });
+      expect(triageReadiness(b.runs.get(again.id)!)).toEqual({ ready: false, questions: ["Which segment?"] });
       const third = await start(b, ws, "triage", CA408);
       b.runs.scriptNext("triage", { ready: true });
       finish(b, third.id);
-      expect(b.workstreams.get(ws)?.readiness).toBeFalsy();
+      expect(triageReadiness(b.runs.get(third.id)!)).toEqual({ ready: true, questions: [] });
       expect(b.runs.get(third.id)?.result).toContain("Ready to plan: yes");
-    });
-
-    it("turns ready when the triage runs again after the reporter's reply: the answers in the comments are used, and nothing is asked again", async () => {
-      const { b, ws, triage } = await triaged();
-      const ask = await b.workstreamsReadinessAsk(ws, triage.id);
-      await b.proposalsApprove(ask.id);
-      await new Promise((r) => setTimeout(r, 5));
-      b.commentOnTicket("CA-408", "Done means the winback mail goes to lapsed customers. Only the winback flow. The CRM team asked.");
-      const again = await start(b, ws, "triage", CA408);
-      finish(b, again.id);
-      const result = b.runs.get(again.id)!.result!;
-      expect(result).toContain("Ready to plan: yes");
-      expect(result).not.toContain("Open questions:");
-      expect(result).toContain("The answers in the ticket's comments were used");
-      expect(b.workstreams.get(ws)?.readiness).toBeFalsy();
-      const update = b.proposals.list({ states: ["pending"] }).find((p) => p.intent.type === "rewrite" && p.origin.type === "run" && p.origin.runId === again.id);
-      if (update?.intent.type !== "rewrite" || !update.intent.body) throw new Error("a description update");
-      expect(update.intent.body.toText).toContain("## Triage");
-      expect(update.intent.body.toText).not.toContain("Open questions:");
-      expect(b.proposals.list({ states: ["pending"] }).some((p) => p.intent.type === "comment" && p.origin.type === "run" && p.origin.runId === again.id)).toBe(false);
-    });
-  });
-
-  describe("while the workstream waits on the reporter", () => {
-    it("asks nothing and starts nothing after a triage that recommends a plan", async () => {
-      const { b } = world();
-      const ws = b.workstreams.open(CA408).id;
-      const asked = await b.workstreamsClarityAsk(ws);
-      await b.proposalsApprove(asked.id);
-      expect(b.workstreams.get(ws)?.waitingOnReporter?.since).toBeTruthy();
-      b.runs.scriptNext("triage", { planRecommended: true, ready: true });
-      finish(b, (await investigate(b, ws, CA408)).id);
-      finish(b, (await start(b, ws, "triage", CA408)).id);
-      expect(b.runs.list({ workstream: ws }).some((r) => r.spec.kind === "plan")).toBe(false);
-      expect(b.workstreams.get(ws)?.readiness).toBeFalsy();
-      expect(b.workstreams.get(ws)?.waitingOnReporter).toBeTruthy();
-    });
-
-    it("brings the readiness question back as a changed one when the ticket changes", async () => {
-      const { b } = world();
-      const ws = b.workstreams.open(CA408).id;
-      finish(b, (await investigate(b, ws, CA408)).id);
-      const triage = await start(b, ws, "triage", CA408);
-      finish(b, triage.id);
-      const asked = await b.workstreamsReadinessAsk(ws, triage.id);
-      await b.proposalsApprove(asked.id);
-      expect(b.workstreams.get(ws)).toMatchObject({ waitingOnReporter: { since: expect.any(String) } });
-      b.editTicket("CA-408", { description: "Win back lapsed customers with three emails over two weeks." });
-      expect(b.workstreams.get(ws)?.waitingOnReporter).toBeFalsy();
-      expect(b.workstreams.get(ws)?.readiness).toMatchObject({ triageRun: triage.id, changed: true });
     });
   });
 });

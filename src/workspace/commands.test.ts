@@ -10,7 +10,7 @@ const items = await new MockBackend().cacheSearch({ type: "and", filters: [] });
 
 const actions = () => {
   const a = Object.fromEntries(
-    ["goToProject", "openSavedView", "setView", "addFilter", "clearFilters", "setTheme", "openSettings", "manageProjects", "watch", "openTicket", "openActivity", "openDrafts", "newTab", "newTicket", "chooseWorkstream", "togglePip", "startAgent", "startAgentOn", "showNeedsYou", "openAgentSafety", "startWorkstream", "closeWorkstream", "jumpToItem", "askPip", "openAgents", "openWorkstream", "askPipToPlan", "startWorkstreamOn", "openJiraSent", "giveBackClarity"].map((k) => [k, vi.fn()]),
+    ["goToProject", "openSavedView", "setView", "addFilter", "clearFilters", "setTheme", "openSettings", "manageProjects", "watch", "openTicket", "openActivity", "openDrafts", "newTab", "newTicket", "chooseWorkstream", "togglePip", "startAgent", "startAgentOn", "showNeedsYou", "openAgentSafety", "startWorkstream", "closeWorkstream", "jumpToItem", "askPip", "openAgents", "openWorkstream", "askPipToPlan", "startWorkstreamOn", "openJiraSent"].map((k) => [k, vi.fn()]),
   );
   return a as unknown as CommandActions & Record<keyof CommandActions, ReturnType<typeof vi.fn>>;
 };
@@ -518,18 +518,6 @@ describe("the habits in the palette", () => {
     expect(rankCommands(all, "posted")[0].id).toBe("app:jira-sent");
     sent.run();
     expect(a.openJiraSent).toHaveBeenCalled();
-  });
-
-  it("offers giving back what Looks fine learned only once it learned something, with how many projects", () => {
-    const a = actions();
-    expect(buildCommands(containers, BUILT_IN_VIEWS, a, ctx).some((c) => c.id === "clarity:reset")).toBe(false);
-    expect(buildCommands(containers, BUILT_IN_VIEWS, a, { ...ctx, clarityLearned: 0 }).some((c) => c.id === "clarity:reset")).toBe(false);
-    const one = buildCommands(containers, BUILT_IN_VIEWS, a, { ...ctx, clarityLearned: 1 }).find((c) => c.id === "clarity:reset")!;
-    expect(one).toMatchObject({ group: "App", label: "Give back what Looks fine learned", hint: "1 project" });
-    const two = buildCommands(containers, BUILT_IN_VIEWS, a, { ...ctx, clarityLearned: 2 }).find((c) => c.id === "clarity:reset")!;
-    expect(two.hint).toBe("2 projects");
-    two.run();
-    expect(a.giveBackClarity).toHaveBeenCalled();
   });
 });
 

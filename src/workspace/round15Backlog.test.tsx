@@ -4,16 +4,13 @@ import { itemRef } from "../backend/mockConnector";
 import type { Turn } from "../claudeStore";
 import { docFromText } from "../lib/docs";
 import { commentTitleOf, editedTitle } from "../lib/needs";
-import { ANSWERS_COMMENT_LABEL } from "../lib/proposals";
-import type { Proposal, WorkstreamView } from "../types";
+import type { Proposal } from "../types";
 import { DraftCard, keepEditsOfDraft, settleKeptEdits } from "./DraftCard";
 import { liveDraft, setLiveDraft } from "./draftLive";
-import { reporterAnswered, pushWaitToast } from "./NeedsPane";
 import { TurnView } from "./PipConversation";
 import { stepBatchLabel } from "./workViewLogic";
 import { StepDrafts } from "./StepRail";
 import { useToasts } from "./toasts";
-import { useWorkstreams } from "./workstreamsStore";
 
 // Backlog items of the fifteenth dogfood round: a secret masked in the person's bubble and the draft previews (G16), a note that
 // the reporter is waited on taken back once they reply (G23), an edited marker on previews and rows (G25), the step rail's batch
@@ -71,41 +68,6 @@ describe("a pasted secret in the app (G16)", () => {
   });
 });
 
-describe("the note that the reporter is waited on (G23)", () => {
-  const view = (replied: boolean) => ({ workstream: { id: "ws-1" }, reporterReplied: replied }) as unknown as WorkstreamView;
-
-  it("reads the reporter's reply from the workstream", () => {
-    expect(reporterAnswered([view(false)], "ws-1")).toBe(false);
-    expect(reporterAnswered([view(true)], "ws-1")).toBe(true);
-    expect(reporterAnswered([view(true)], "ws-2")).toBe(false);
-  });
-
-  it("is taken off the screen when the workstream's reporter replies, and stays while they have not", () => {
-    useWorkstreams.setState({ list: [view(false)] });
-    pushWaitToast("CA-408 now waits on the reporter; nothing starts on its own.", "ws-1");
-    expect(useToasts.getState().toasts).toHaveLength(1);
-    useWorkstreams.setState({ list: [{ ...view(false), stage: "intake" } as WorkstreamView] });
-    expect(useToasts.getState().toasts).toHaveLength(1);
-    useWorkstreams.setState({ list: [view(true)] });
-    expect(useToasts.getState().toasts).toHaveLength(0);
-  });
-
-  it("stops watching once the toast has gone by itself", () => {
-    useWorkstreams.setState({ list: [view(false)] });
-    const subscribe = useWorkstreams.subscribe;
-    const unsubscribed = vi.fn();
-    vi.spyOn(useWorkstreams, "subscribe").mockImplementation((listener) => {
-      const off = subscribe(listener);
-      return () => (unsubscribed(), off());
-    });
-    pushWaitToast("CA-408 now waits on the reporter; nothing starts on its own.", "ws-1");
-    expect(unsubscribed).not.toHaveBeenCalled();
-    // The toast's own timer (or anything else) takes it away: the watch on the workstreams goes with it.
-    useToasts.getState().clear();
-    expect(unsubscribed).toHaveBeenCalled();
-  });
-});
-
 describe("an edited draft on previews and rows (G25)", () => {
   it("shows a comment's edited words and an edited marker on its preview, and none once it is posted", () => {
     const p = draft("e1", "The words as stored");
@@ -139,16 +101,9 @@ describe("the step rail's batch (G26)", () => {
     expect(stepBatchLabel("build", 3)).toBe("Approve 3 of this step's drafts");
   });
 
-  it("repeats the note that drafts from the person's own reply are not in the batch", () => {
-    const answers = (id: string) => draft(id, "Answers", { label: ANSWERS_COMMENT_LABEL, origin: { type: "board" } });
+  it("offers the batch for two drafts", () => {
     const plain = renderToStaticMarkup(<StepDrafts step="pip" drafts={[draft("b1", "One"), draft("b2", "Two")]} approve={vi.fn()} />);
     expect(plain).not.toContain("data-batch-aside");
     expect(plain).toContain("Approve 2 of Pip&#x27;s drafts");
-    const html = renderToStaticMarkup(<StepDrafts step="pip" drafts={[draft("b1", "One"), answers("b3")]} approve={vi.fn()} />);
-    expect(html).toContain("Not in the batch: drafts from your reply are read on their own.");
-    expect(html).not.toContain("Approve 1 of");
-    // While the batch is being confirmed the note stays, so the person sees what it leaves out as they decide (CodeRabbit on #181).
-    const confirming = renderToStaticMarkup(<StepDrafts step="pip" drafts={[draft("b1", "One"), draft("b2", "Two"), answers("b3")]} approve={vi.fn()} initialConfirming />);
-    expect(confirming).toContain("data-batch-aside");
   });
 });

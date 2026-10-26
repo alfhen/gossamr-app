@@ -1,5 +1,5 @@
 import { and } from "../lib/filter";
-import { ANSWERS_COMMENT_LABEL, ANSWERS_OPENING, REVIEW_IS_THE_USERS, WORKSTREAM_PENDING_CAP, capRefusal, isRunDraft, leftByRun, targetOf } from "../lib/proposals";
+import { REVIEW_IS_THE_USERS, WORKSTREAM_PENDING_CAP, capRefusal, isRunDraft, leftByRun, targetOf } from "../lib/proposals";
 import { followUpBlocker } from "../workspace/followUp";
 import { docFromText, docText } from "../lib/docs";
 import type { Intent, ItemRef, Proposal, ReviewComment, Run, RunKind, ScreenContext, WorkFilter } from "../types";
@@ -12,9 +12,7 @@ import { GENERAL_CONVERSATION, workstreamOfConversation } from "../lib/conversat
 import { labelsByRun } from "../lib/workstreamStage";
 import { draftPhrase, runPhrase } from "../lib/runNames";
 import { statusId } from "./mockConnector";
-import { triageReadiness } from "./mockSupervisor";
 import type { LastDrift } from "./mockWorkstreams";
-import { clarityText, type ClarityGap } from "../lib/ticketClarity";
 
 /** What the scripted Pip does for one question. */
 export interface PipScript {
@@ -187,109 +185,6 @@ export interface PipWorkstream {
   item: ItemRef | null;
   /** The last time its ticket changed in Jira, while Pip hasn't been told of it in a wake since. */
   lastDrift?: LastDrift | null;
-  /** Pip's first turn in this conversation, which opens with the readiness check of the ticket. */
-  first?: boolean;
-  /** The gaps Gossamr's own word check found in the ticket's description, while its notice shows (not dismissed, no triage yet): Pip's first line names them. */
-  clarity?: readonly ClarityGap[] | null;
-  /** The person chose "I'll answer" on a triage's open questions and no comment with their answers was drafted since: their next message holds the answers. */
-  answersDue?: boolean;
-  /** The comment with the person's answers was posted and no plan was drafted since: Pip's next turn proposes the plan. */
-  planDue?: boolean;
-}
-
-/**
- * Pip's readiness check of a workstream's ticket in its first turn, as the Manager prompt asks (`MANAGER` in
- * src-tauri/src/agent/context.rs): the one sentence naming what the ticket leaves out, from the gaps Gossamr's own word check
- * found (`clarity_line` in agent/workstream.rs tells the real Pip the same), e.g. "CA-408 may be unclear: it has a very short
- * description and doesn't say what done looks like." Null when it isn't the first turn, there is no ticket, or the check
- * found nothing, or its notice is gone (dismissed, asked, or a triage ran).
- */
-export function readinessLine(workstream: PipWorkstream | null): string | null {
-  if (!workstream?.first || !workstream.item || !workstream.clarity?.length) return null;
-  return clarityText(workstream.item.key, workstream.clarity);
-}
-
-/**
- * What Pip does with the person's next message after they chose "I'll answer": the comment "Answers to the open questions"
- * for the ticket, each answer under the question it answers (when the message splits into as many lines or sentences as
- * there are questions; else the questions quoted, then the answers as written), as a draft for approval. A comment, never a
- * rewrite of the description. The plan is not drafted beside it: Pip proposes it on the turn after the comment is posted
- * (`planAfterAnswers`). The message is the composer's prefill (`readinessPrompt`): the questions quoted, then "My answers:"
- * and what the person wrote. Null when no answers are due, or there is no ticket.
- */
-/**
- * A reply's numbered answers 1 to `n`, markers dropped, or null unless the reply numbers them plainly: the list starts at
- * a "1." opening the reply or a line, after any preamble, and then "2." to "n." each appear once, in order, with no
- * "n+1.", each opening a line or following the end of a sentence (or written "2)"). Anything else (a repeated number, a number inside an answer such as "version 2.", more answers than questions)
- * is kept as written rather than guessed at.
- */
-export function numberedAnswers(answer: string, n: number): string[] | null {
-  const first = answer.match(/(?:^|\n)\s*1[.)]\s+/);
-  if (!first || n < 2) return null;
-  const rest = answer.slice((first.index ?? 0) + first[0].length);
-  // A marker opens a line, or follows the end of a sentence ("... done. 2. Only"), or is a "k)" after a space; a "2." in
-  // the middle of prose ("We ship version 2. Then") is not one.
-  const marks = [...rest.matchAll(/(?:^|\n)\s*(\d+)[.)]\s+|(?<=[.!?])\s+(\d+)\.\s+|(?<=\s)(\d+)\)\s+/g)].map((m) => ({
-    k: Number(m[1] ?? m[2] ?? m[3]),
-    at: m.index,
-    end: m.index + m[0].length,
-  }));
-  if (marks.length !== n - 1 || marks.some((m, i) => m.k !== i + 2)) return null;
-  const items = [rest.slice(0, marks[0].at), ...marks.map((m, i) => rest.slice(m.end, marks[i + 1]?.at ?? rest.length))].map((s) => s.trim());
-  return items.every(Boolean) ? items : null;
-}
-
-export function answersScript(prompt: string, runs: readonly Run[], workstream: PipWorkstream | null): PipScript | null {
-  const item = workstream?.item;
-  if (!workstream?.answersDue || !item) return null;
-  const at = prompt.indexOf("My answers:");
-  const asked = at >= 0 ? prompt.slice(0, at) : "";
-  const triage = runs
-    .filter((r) => r.spec.workstream === workstream.id && r.spec.kind === "triage" && r.state === "done")
-    .sort((a, b) => (b.endedAt ?? b.queuedAt).localeCompare(a.endedAt ?? a.queuedAt))[0];
-  const quoted = [...asked.matchAll(/\u201c([^\u201d]*)\u201d/g)].map((m) => m[1].trim()).filter((q) => q && q !== "(it listed no questions)");
-  // A reply the person typed afresh quotes nothing: the open questions are then the newest finished triage's, the ones the readiness need lists.
-  const questions = quoted.length || !triage ? quoted : (triageReadiness(triage)?.questions ?? []);
-  const answer = (at >= 0 ? prompt.slice(at + "My answers:".length) : prompt).trim();
-  // As many numbered items (their markers dropped), or lines, or else sentences, as questions pair them up; any other shape gets every question, numbered, then the answer as it was written.
-  // A reply that numbers its answers (a marker opening it or a line) is paired only by those numbers, as lines or sentences would then shift the answers.
-  const numbered = /(?:^|\n)\s*\d+[.)]\s+/.test(answer);
-  const parts = numbered ? [] : [answer.split(/\n+/), answer.split(/(?<=[.!?])\s+/)].map((p) => p.map((l) => l.trim()).filter(Boolean));
-  const split = questions.length < 2 ? undefined : numbered ? (numberedAnswers(answer, questions.length) ?? undefined) : parts.find((p) => p.length === questions.length);
-  const body = [ANSWERS_OPENING, ""];
-  if (split) questions.forEach((q, i) => body.push(`\u201c${q}\u201d`, `Answer: ${split[i]}`, ""));
-  else {
-    questions.forEach((q, i) => body.push(questions.length > 1 ? `${i + 1}. \u201c${q}\u201d` : `\u201c${q}\u201d`));
-    if (questions.length) body.push("");
-    body.push(questions.length === 1 ? `Answer: ${answer}` : `Answers: ${answer}`);
-  }
-  return {
-    steps: ["Read the open questions", "Drafted a comment with your answers"],
-    text: `I drafted a comment on **${item.key}** with your answers, ${split ? "each under its question" : questions.length ? "the questions first, then your answers as you wrote them" : "your answers as you wrote them"}. It goes to the ticket as a comment, not a change to the description, and nothing is posted until you approve it.${triage ? " Once the answers are posted, Plan this starts the plan." : ""}`,
-    filter: null,
-    draft: { intent: { type: "comment", item, body: docFromText(body.join("\n").trim()) }, label: ANSWERS_COMMENT_LABEL },
-  };
-}
-
-/**
- * The plan, proposed on Pip's turn after the person posted their answers: a run draft following the workstream's newest
- * finished Triage, which does not start until they read and start it. Null until the answers are posted (`planDue`), or
- * when the workstream has no finished Triage or no ticket.
- */
-export function planAfterAnswers(runs: readonly Run[], workstream: PipWorkstream | null): PipScript | null {
-  const item = workstream?.item;
-  if (!workstream?.planDue || !item) return null;
-  const triage = runs
-    .filter((r) => r.spec.workstream === workstream.id && r.spec.kind === "triage" && r.state === "done")
-    .sort((a, b) => (b.endedAt ?? b.queuedAt).localeCompare(a.endedAt ?? a.queuedAt))[0];
-  if (!triage) return null;
-  return {
-    steps: ["Read the posted answers", "Drafted an agent run"],
-    text: `Your answers are posted on **${item.key}**, so I drafted the plan, following the triage. It has not started. Open the draft to read the exact prompt, then start it.`,
-    filter: null,
-    draft: null,
-    runDraft: { item, kind: "plan", fromRun: triage.id, focus: null },
-  };
 }
 
 /**
@@ -565,26 +460,6 @@ function rewriteTarget(prompt: string, context: ScreenContext): ItemRef | null {
   return { connectionId: context.item?.connectionId ?? context.selection[0]?.connectionId ?? "mock", externalId: key, key };
 }
 
-/**
- * The scripted assistant the browser build talks to; it decides from keywords and the screen context alone. Its first
- * turn in a workstream opens with the readiness check of the ticket, whatever it was asked (`readinessLine`).
- */
-export function scriptPip(prompt: string, context: ScreenContext, images: ImageData[] = [], runs: readonly Run[] = [], now = Date.now(), drafts: readonly Proposal[] = [], discussed: string | null = null, workstream: PipWorkstream | null = null): PipScript {
-  const turn = scriptTurn(prompt, context, images, runs, now, drafts, discussed, workstream);
-  // Their answers were posted and they asked for the plan ("Plan this"): whatever else this turn does, it also proposes it.
-  // Nothing proposes it unasked, as the real agent is told to wait for the person to ask.
-  // Asked means the plan ask a step takes ("Plan this", "plan CA-408"), not any message with the word, and never a plan
-  // of another ticket.
-  const planAsk = CHAIN_ASKS.find((a) => a.kind === "plan")!;
-  const asked = prompt.toLowerCase();
-  const askedForPlan = !prompt.startsWith(EVENT) && planAsk.pattern.test(asked) && !otherKey(asked, workstream?.item ?? null);
-  // That plan follows the triage the answers answered, so it takes the place of any plan the words alone would draft.
-  const plan = askedForPlan ? planAfterAnswers(runs, workstream) : null;
-  const script = !plan ? turn : turn.runDraft ? { ...plan, filter: turn.filter } : { ...turn, steps: [...turn.steps, ...plan.steps], text: `${turn.text}\n\n${plan.text}`, runDraft: plan.runDraft };
-  const unclear = prompt.startsWith(EVENT) ? null : readinessLine(workstream);
-  return unclear ? { ...script, steps: ["Read the ticket", ...script.steps], text: `${unclear}\n\n${script.text}` } : script;
-}
-
 /** The ways Pip words a check-in comment, one for each that already waits on the ticket. */
 const NUDGES = ["Checking in on this one. Is it still on track, or does anything need to move?", "Following up here. Has anything changed since the last update?", "One more look at this. Is anything holding it up that we could clear?"];
 
@@ -594,10 +469,9 @@ function nudgeText(drafts: readonly Proposal[], item: ItemRef): string {
   return NUDGES.find((n) => !waiting.has(n)) ?? NUDGES[0];
 }
 
-function scriptTurn(prompt: string, context: ScreenContext, images: ImageData[], runs: readonly Run[], now: number, drafts: readonly Proposal[], discussed: string | null, workstream: PipWorkstream | null): PipScript {
+/** The scripted assistant the browser build talks to; it decides from keywords and the screen context alone. */
+export function scriptPip(prompt: string, context: ScreenContext, images: ImageData[] = [], runs: readonly Run[] = [], now = Date.now(), drafts: readonly Proposal[] = [], discussed: string | null = null, workstream: PipWorkstream | null = null): PipScript {
   if (prompt.startsWith(EVENT)) return wakeScript(prompt, runs, workstream);
-  const answers = answersScript(prompt, runs, workstream);
-  if (answers) return answers;
   const q = prompt.toLowerCase();
   if (asksToSendBack.test(prompt)) return sendBack(context, runs, drafts, discussed);
   const move = moveScript(prompt, context, workstream);
@@ -903,12 +777,6 @@ export interface PipDrafter {
   pipRunDraft(item: ItemRef, kind: RunKind, fromRun: string | null, focus: string | null, requestId: string): Promise<unknown>;
   /** The ticket of workstream `id`, for a turn asked in its conversation. */
   pipWorkstreamItem(id: string): ItemRef | null;
-  /** The gaps Gossamr's word check found in workstream `id`'s ticket while its notice shows, for Pip's readiness line in a first turn. */
-  pipWorkstreamClarity?(id: string): readonly ClarityGap[] | null;
-  /** Whether the person chose "I'll answer" in workstream `id` and no comment with their answers was drafted since. */
-  pipWorkstreamAnswersDue?(id: string): boolean;
-  /** Whether the answers comment of workstream `id` was posted and no plan was drafted or started since: Pip proposes the plan on its next turn. */
-  pipWorkstreamPlanDue?(id: string): boolean;
   /** The last time workstream `id`'s ticket changed in Jira, while no wake told Pip of it since; a wake's script reads it. */
   pipWorkstreamDrift?(id: string): LastDrift | null;
   /** Drafts an investigation with no ticket the way propose_run does: Pip gives a repository and a prompt, the backend builds the rest. */
@@ -967,12 +835,9 @@ export async function mockAsk(req: AskRequest, drafter: Partial<PipDrafter> | nu
   const emit = (id: string, e: ClaudeEvent) => mockPipEvents.emit(id, e, meta);
   // Kept the way the app keeps a turn: the question now, steps as they come, the answer and its usage at the end.
   const wsId = workstreamOfConversation(req.conversation);
-  // Pip's first turn in a workstream opens with the readiness check: no other turn is kept in its conversation (a turn waiting
-  // in the queue is kept already, so this one's own entry doesn't count).
-  const first = !!wsId && req.kind !== "wake" && mockPipTurns.turns(req.conversation ?? GENERAL_CONVERSATION).every((t) => t.requestId === req.requestId);
   mockPipTurns.begin(req.conversation ?? GENERAL_CONVERSATION, req.requestId, req.prompt, req.meta ?? { imageCount: req.images?.length ?? 0 }, "running", new Date(), undefined, req.kind ?? "user");
   const item = wsId ? (drafter?.pipWorkstreamItem?.(wsId) ?? null) : null;
-  const workstream = wsId ? { id: wsId, item, lastDrift: drafter?.pipWorkstreamDrift?.(wsId) ?? null, first, clarity: drafter?.pipWorkstreamClarity?.(wsId) ?? null, answersDue: drafter?.pipWorkstreamAnswersDue?.(wsId) ?? false, planDue: drafter?.pipWorkstreamPlanDue?.(wsId) ?? false } : null;
+  const workstream = wsId ? { id: wsId, item, lastDrift: drafter?.pipWorkstreamDrift?.(wsId) ?? null } : null;
   const script = scriptPip(req.prompt, req.context, req.images, drafter?.pipRuns?.() ?? [], Date.now(), drafter?.pipDrafts?.() ?? [], discussing.get(session) ?? null, workstream);
   if (script.discussed) discussing.set(session, script.discussed);
   emit(req.requestId, { type: "started", sessionId: session });

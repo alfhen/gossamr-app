@@ -1,22 +1,7 @@
 import { expect, test } from "@playwright/test";
-import { agentsHome, needsPane, openAgents, openApp, pipPane, selectWorkstream, startWorkstream, workstreamGroup } from "./support/app";
+import { openAgents, openApp, pipPane, selectWorkstream, startWorkstream, workstreamGroup } from "./support/app";
 
-// Fixes from the ninth dogfood round: the words the owner posts to Jira (G3).
-
-test.describe("the ask to the reporter (G3)", () => {
-  test("is in a neutral voice: no 'I', no 'we' and no 'can be planned'", async ({ page }) => {
-    test.setTimeout(90_000);
-    await openApp(page, "runs=empty&prSurface=manual&pipPace=1");
-    await startWorkstream(page, "CA-408");
-    await openAgents(page);
-    await selectWorkstream(page, "CA-408");
-    await agentsHome(page).locator("[data-clarity-notice]").getByRole("button", { name: "Ask the reporter now" }).click();
-    const card = needsPane(page).getByRole("article", { name: "Comment on CA-408" });
-    await expect(card).toContainText("A few things need clearing up to make this ticket clear to work on:");
-    await expect(card).not.toContainText("can be planned");
-    await expect(card).not.toContainText(/Before I |we need|I can.t/);
-  });
-});
+// Fixes from the ninth dogfood round: the close confirm opens on Keep (G9) and the safety line's promises (G13).
 
 test.describe("the close confirm (G9)", () => {
   test("opens on Keep, so Enter twice never closes the workstream", async ({ page }) => {

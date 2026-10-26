@@ -1,25 +1,19 @@
 import { expect, test } from "@playwright/test";
-import { agentsHome, needsPane, openAgents, openApp, selectWorkstream, startWorkstream } from "./support/app";
+import { needsPane, openAgents, openApp, pipCommentDraft, selectWorkstream, startWorkstream } from "./support/app";
 
-// Fixes from the thirteenth dogfood round: the reporter's questions no longer claim work has not started (G12), and the
-// "Done: … Now: …" line goes when Undo brings the skipped draft back (G11), the comment draft's edit field and provenance
-// (G4), the toast's live region (G5), where the keyboard lands after Ask the reporter now (G6) and the palette's focus (G8).
+// Fixes from the thirteenth dogfood round: the "Done: … Now: …" line goes when Undo brings the skipped draft back (G11),
+// the comment draft's edit field (G4), the toast's live region (G5), where the keyboard lands on a comment draft (G6)
+// and the palette's focus (G8).
 
-test.describe("the ask of the reporter (G11, G12)", () => {
-  test("is worded for a ticket that may already have work, and Undo after Skip takes the Done line away", async ({ page }) => {
+test.describe("a skipped comment draft (G11)", () => {
+  test("Undo after Skip takes the Done line away", async ({ page }) => {
     test.setTimeout(120_000);
     await openApp(page, "runs=empty");
     await page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "All projects" }).click();
     await startWorkstream(page, "CA-408");
-    await startWorkstream(page, "CA-402");
     await openAgents(page);
-    await selectWorkstream(page, "CA-402");
-    await agentsHome(page).locator("[data-clarity-notice]").getByRole("button", { name: "Ask the reporter now" }).click();
     await selectWorkstream(page, "CA-408");
-    await agentsHome(page).locator("[data-clarity-notice]").getByRole("button", { name: "Ask the reporter now" }).click();
-    const draft = needsPane(page).getByRole("article", { name: /^Comment on CA-/ });
-    await expect(draft).toContainText(/A few things need clearing up to make this ticket clear to work on/);
-    await expect(draft).not.toContainText("Before work on");
+    const draft = await pipCommentDraft(page, "CA-408");
     await draft.getByRole("button", { name: "Skip" }).click();
     await expect(page.locator("[data-toast]").getByRole("button", { name: "Undo" })).toBeVisible();
     await page.locator("[data-toast]").getByRole("button", { name: "Undo" }).click();
@@ -27,20 +21,18 @@ test.describe("the ask of the reporter (G11, G12)", () => {
   });
 });
 
-test.describe("the reporter's comment draft for a keyboard and a screen reader (G4, G5, G6)", () => {
-  test("takes the keyboard on its card, names its edit field, keeps the provenance words apart and the toast's live region to its message", async ({ page }) => {
+test.describe("a comment draft for a keyboard and a screen reader (G4, G5, G6)", () => {
+  test("takes the keyboard on its card, names its edit field and keeps the toast's live region to its message", async ({ page }) => {
     test.setTimeout(120_000);
     await openApp(page, "runs=empty");
     await page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "All projects" }).click();
     await startWorkstream(page, "CA-408");
     await openAgents(page);
     await selectWorkstream(page, "CA-408");
-    await agentsHome(page).locator("[data-clarity-notice]").getByRole("button", { name: "Ask the reporter now" }).click();
-    const draft = needsPane(page).getByRole("article", { name: /^Comment on CA-408/ });
+    const draft = await pipCommentDraft(page, "CA-408");
     // In the decision that shows it, not on the Manage switch, which Space would flip.
     await expect(needsPane(page).locator(":focus")).toHaveCount(1);
     await expect(page.locator('[role="switch"]:focus')).toHaveCount(0);
-    await expect(draft).toContainText("Drafted by Gossamr Gossamr wrote");
     await draft.getByRole("button", { name: "Edit" }).click();
     await expect(draft.getByRole("combobox", { name: /Edit the comment on CA-408/ })).toBeVisible();
     await draft.getByRole("button", { name: "Skip" }).click();

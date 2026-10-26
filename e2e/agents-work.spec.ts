@@ -25,7 +25,7 @@ test("Needs you: Pip's investigation draft waits in the list and on its row, ope
   await openApp(page, SAMPLE);
   await homeWorkstream(page);
   const row = workstreamGroup(page, "CA-401");
-  await expect(row.locator('[data-status="needs-you"]')).toHaveCount(0);
+  await expect(row.locator('[data-status="paused"]')).toHaveCount(0);
 
   await askPip(page, "investigate this");
   await settled(page);
@@ -62,8 +62,8 @@ test("Needs you: a pause is a need with Resume as its decision, whether the pers
   const banner = pipPane(page).locator("[data-paused-banner]");
   await expect(banner).toContainText("Paused. Pip isn't woken until you resume it.");
   await expect(paused).toHaveCount(1);
-  await expect(row.locator("[data-status]")).toHaveText("Needs you");
-  await expect(row.locator("[data-status-detail]")).toHaveText("· Paused");
+  await expect(row.locator("[data-status]")).toHaveText("Paused");
+  await expect(row.locator("[data-status-detail]")).toHaveCount(0);
   await banner.getByRole("button", { name: "Resume" }).click();
   await expect(banner).toHaveCount(0);
   await expect(paused).toHaveCount(0);
@@ -71,8 +71,8 @@ test("Needs you: a pause is a need with Resume as its decision, whether the pers
   await pauseAtCeiling(page, "CA-401");
   await expect(paused).toHaveCount(1);
   await expect(paused).toContainText("Paused: Pip was woken too often today");
-  await expect(row.locator("[data-status]")).toHaveText("Needs you");
-  await expect(row.locator("[data-status-detail]")).toHaveText("· Paused: Pip was woken too often today");
+  await expect(row.locator("[data-status]")).toHaveText("Paused");
+  await expect(row.locator("[data-status-detail]")).toHaveText("· Pip was woken too often today");
   await closeWorkstreamSheet(page);
   await openNeedOfKind(page, "paused");
   const resume = needsPane(page).locator("[data-paused-banner]").getByRole("button", { name: "Resume" });

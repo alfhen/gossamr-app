@@ -1,10 +1,9 @@
-import { type Intent, type Proposal, type ReadinessStop, type Run, type WorkstreamView } from "../types";
+import { type Intent, type Proposal, type Run, type WorkstreamView } from "../types";
 import { stoppedAtLimit } from "../workspace/agentsLogic";
 import { failureHelp } from "../workspace/failureHelp";
 import { docText } from "./docs";
 import { parsePermission, permissionOffer, readAs } from "./permission";
-import { inWorkstreamPane, isAnswersDraft, isReporterNudge, isReporterQuestions, targetOf, workstreamOf } from "./proposals";
-import { agoText, type ReporterAsk } from "./reporterWait";
+import { inWorkstreamPane, targetOf, workstreamOf } from "./proposals";
 import { maskSecrets } from "./riskyText";
 import { pausedText } from "./workstreamPause";
 import { STAGE_LABEL, runWorkstream } from "./workstreamStage";
@@ -27,13 +26,12 @@ export type NeedKind =
   | "failure"
   | "stoppedAtLimit"
   | "paused"
-  | "readiness"
   | "draft"
   | "review"
   | "runStart";
 
 /** What the person can do about a need, as the keys and the pane's buttons name it. */
-export type NeedActionId = "approve" | "allow" | "deny" | "dismiss" | "edit" | "retry" | "resume" | "askReporter" | "answerSelf" | "planAnyway" | "answer" | "open";
+export type NeedActionId = "approve" | "allow" | "deny" | "dismiss" | "edit" | "retry" | "resume" | "answer" | "open";
 
 export interface ActionSpec {
   id: NeedActionId;
@@ -86,14 +84,10 @@ export interface NeedsInput {
   proposals: readonly Proposal[];
   /** The runs whose failure (or stop, or unclear state) the person dismissed. They are the only way a failure goes without being dealt with. */
   dismissed: ReadonlySet<string>;
-  /** When the reporter was asked, and nudged, by workstream id, where that is known (`reporterAsk`): the readiness decision says so. */
-  asked?: Readonly<Record<string, ReporterAsk>>;
   /** When each paused workstream was last paused, by id, where that is known; otherwise its `createdAt` stands in. */
   pausedAt?: Readonly<Record<string, string>>;
   /** A ticket's title by its key, when it is cached. */
   titleOf?(key: string): string | null | undefined;
-  /** The time the quiet runs are judged by, in ms. */
-  now: number;
 }
 
 /** One workstream's needs, or General's: what its row shows, and what expanding it lists. */
@@ -134,11 +128,8 @@ export const chipLabel = (need: Pick<Need, "group" | "kind"> & { primary?: Pick<
 /** Drafts that may be approved together: pending comments, moves and subtasks. A description rewrite is read in its diff first, and a run or follow-up after its prompt or message, so never. */
 export const BATCHABLE: ReadonlySet<Intent["type"]> = new Set(["comment", "transition", "subtasks"]);
 
-/**
- * Whether `p` may be approved with the others in "Approve N safe drafts": a batchable kind, but never the questions to a
- * reporter, the nudge that follows them up, or Pip's comment with the person's answers, which are read and approved on their own before they reach Jira.
- */
-export const safeToBatch = (p: Proposal) => BATCHABLE.has(p.intent.type) && !isReporterQuestions(p) && !isReporterNudge(p) && !isAnswersDraft(p);
+/** Whether `p` may be approved with the others in "Approve N safe drafts": a batchable kind. */
+export const safeToBatch = (p: Proposal) => BATCHABLE.has(p.intent.type);
 
 /**
  * The pending comments among `drafts` (in order) that say what an earlier one already says on the same ticket, as the same
@@ -171,23 +162,6 @@ export function leftOutLabel(p: Proposal, title: string): string {
 export const REPEATED_COMMENT_NOTE = "Same text as the comment above, left out";
 
 /** What the list says of a review that still blocks after the automatic fix rounds. */
-
-/** What a readiness need says of the open questions: which triage left them and what they are, in one sentence. */
-export function readinessWhy(r: Pick<ReadinessStop, "triageLabel" | "questions">): string {
-  const triage = r.triageLabel || "The triage";
-  if (r.questions.length === 0) return `${triage} found the ticket unclear but listed no questions.`;
-  return clip(`${triage} left ${r.questions.length === 1 ? "this question" : "these questions"} open: ${r.questions.join(" · ")}`, 240);
-}
-
-/**
- * What "I'll answer" puts in the composer, which is one line: the open questions quoted, then where to answer. A question
- * is the triage's own words, so each is quoted as data and the person writes after "My answers:".
- */
-export function readinessPrompt(r: Pick<ReadinessStop, "triageLabel" | "questions">, key: string | null | undefined): string {
-  const triage = r.triageLabel || "The triage";
-  const quoted = r.questions.length ? r.questions.map((q) => `“${q}”`).join(" · ") : "“(it listed no questions)”";
-  return `${triage}'s open questions about ${key ?? "this ticket"}: ${quoted}. My answers: `;
-}
 
 /** What a sign-in need reads: the run, then this. */
 export const SIGN_IN_TEXT = "needs you to sign in to Claude";
@@ -335,7 +309,7 @@ export function latestRuns(runs: readonly Pick<Run, "id" | "item" | "spec" | "qu
  * while it is the latest run of its kind on its ticket (`latestRuns`), and stays until the person deals with it: Retry, a
  * fix, a resume, or a Dismiss (`dismissed`); looking at it clears nothing. A finished run is a state, not a need.
  */
-export function needs({ workstreams, runs, proposals, dismissed, pausedAt, asked, titleOf, now }: NeedsInput): Need[] {
+export function needs({ workstreams, runs, proposals, dismissed, pausedAt, titleOf }: NeedsInput): Need[] {
   const kept = workstreamTitles(workstreams);
   const snapped = snapshotTitles(runs, proposals);
   const titleFor = (key: string | null | undefined) => (key ? titleOf?.(key)?.trim() || kept.get(key) || snapped.get(key) : undefined);
@@ -389,17 +363,9 @@ export function needs({ workstreams, runs, proposals, dismissed, pausedAt, asked
     const step = from ? runs.find((r) => r.id === from)?.spec.kind : undefined;
     // "GitHub review", not "review": beside a Review run's stage it would read "Review · review".
     const what = p.intent.type === "githubReview" ? "GitHub review" : DRAFT_TEXT[p.intent.type].replace(/^Draft /, "");
-    const title = isReporterQuestions(p) ? "Questions for the reporter" : isReporterNudge(p) ? "Nudge for the reporter" : isAnswersDraft(p) ? "Answers to the open questions" : label ? (step ? `${label} ${STAGE_LABEL[step].toLowerCase()} · ${what}` : `${label} ${what}`) : step ? `${STAGE_LABEL[step]} · ${what}` : p.intent.type === "comment" && !from ? commentTitle(p.intent.body) : DRAFT_TEXT[p.intent.type];
+    const title = label ? (step ? `${label} ${STAGE_LABEL[step].toLowerCase()} · ${what}` : `${label} ${what}`) : step ? `${STAGE_LABEL[step]} · ${what}` : p.intent.type === "comment" && !from ? commentTitle(p.intent.body) : DRAFT_TEXT[p.intent.type];
     const by = label ? (step ? `${label} ${STAGE_LABEL[step].toLowerCase()}` : label) : p.createdBy === "pip" ? "Pip" : p.createdBy === "agent" ? "An agent" : "You";
-    // The questions to a reporter are Gossamr's words around the triage's own, and the person's choice: say so.
-    const asked = isReporterQuestions(p);
-    const drafted = asked
-      ? `Gossamr drafted a comment to the reporter${key ? ` of ${key}` : ""}${label ? ` from ${label}'s open questions` : " from what the ticket leaves out"}; it is posted only when you approve it.`
-      : isReporterNudge(p)
-        ? `Gossamr drafted a gentle nudge to the reporter${key ? ` of ${key}` : ""}, who hasn't answered; it is posted only when you approve it.`
-        : isAnswersDraft(p)
-          ? `Pip drafted a comment${key ? ` on ${key}` : ""} with your answers to the open questions; it is posted only when you approve it.`
-          : `${by} drafted ${DRAFT_WHAT[p.intent.type](key)}.`;
+    const drafted = `${by} drafted ${DRAFT_WHAT[p.intent.type](key)}.`;
     const edit = EDITABLE.has(p.intent.type) ? [action("edit", "Edit")] : [];
     if (p.intent.type === "rewrite") {
       // A plan run's description update is how the plan is approved; any other rewrite is read in its diff first.
@@ -550,30 +516,6 @@ export function needs({ workstreams, runs, proposals, dismissed, pausedAt, asked
     });
   }
 
-  for (const v of open) {
-    const r = v.readiness;
-    if (!r) continue;
-    const key = v.workstream.itemKey;
-    // The ticket changed, or the reporter replied, while the person waited: the question is back, as a choice to plan now or ask again.
-    // The reporter was asked before, and has not answered unless this is their reply: say so before the questions.
-    const ask = v.workstream.id in (asked ?? {}) && !r.replied ? asked![v.workstream.id] : null;
-    const when = new Date(now);
-    const already = ask ? `You asked the reporter ${agoText(ask.asked, when)}${ask.nudged ? ` and nudged ${agoText(ask.nudged, when)}` : ""}${ask.replied ? ` and they replied ${agoText(ask.replied, when)}. ` : "; they have not answered. "}` : "";
-    out.push({
-      key: `readiness:${r.triageRun}`,
-      group: "decide",
-      kind: "readiness",
-      ...where(v.workstream.id, key),
-      title: r.replied ? `${key ?? "This ticket"}: the reporter replied, plan now?` : r.changed ? `${key ?? "This ticket"} changed: plan now?` : `${key ?? "This ticket"} isn't clear enough to plan`,
-      why: r.replied ? `The reporter replied on ${key ?? "the ticket"} while you waited. ${readinessWhy(r)}` : r.changed ? `${key ?? "The ticket"} changed while you waited for the reporter. ${already}${readinessWhy(r)}` : `${already}${readinessWhy(r)}`,
-      ifYouWait: "No plan starts until you choose; nothing is posted to Jira.",
-      at: r.at,
-      primary: r.changed ? action("planAnyway", "Plan now") : action("askReporter", ask ? "Ask again" : "Ask the reporter"),
-      secondary: r.changed ? [action("askReporter", "Still unclear (ask again)")] : [action("answerSelf", "I'll answer"), action("planAnyway", "Plan anyway")],
-      target: { type: "workstream" },
-      batchable: false,
-    });
-  }
   return out.sort(byRank);
 }
 

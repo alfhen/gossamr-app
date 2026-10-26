@@ -23,8 +23,6 @@ import { openOnAgents, togglePip, useWorkstreams } from "./workstreamsStore";
 import { contextEntries, focusedSubject } from "./contextActions";
 import { undoLog } from "./undo";
 import { showAllRuns } from "./TimelineFilterBar";
-import { giveBackClarity } from "./clarityActions";
-import { learnedList } from "../lib/clarityLearning";
 
 /** Where focus lands when the palette closes and the element that opened it is gone. */
 export const MAIN_ID = "workspace-main";
@@ -265,7 +263,6 @@ export function appActions(): CommandActions {
         .start(item.item)
         .then((view) => view && useToasts.getState().push(`Started a workstream on ${item.item.key}.`, "info")),
     openJiraSent: () => tabs.setRoute("sent"),
-    giveBackClarity: () => void giveBackClarity(),
   };
 }
 
@@ -351,7 +348,6 @@ export function Palette() {
   const [active, setActive] = useState(0);
   const [step, setStep] = useState<Step>(() => (seed === START_WORKSTREAM ? { type: "workstream" } : { type: "search" }));
   const me = useWorkspace((s) => s.me);
-  const clarityLearning = usePrefs((s) => s.clarityLearning);
   const unwatched = useUnwatchedMatches(query, step.type === "search");
 
   const [opener] = useState(() => document.activeElement as HTMLElement | null);
@@ -381,7 +377,6 @@ export function Palette() {
       needsYou: needingMe,
       ticket: ticket ? { key: ticket.item.key, workstream: !!useWorkstreams.getState().forItem(ticket.item.key, ticket.item.connectionId) } : null,
       onAgents: useTabs.getState().route === "agents",
-      clarityLearned: learnedList(clarityLearning).length,
     };
     const commands = buildCommands(sorted, allSavedViews({ savedViews }), actions, ctx);
     const all = Object.values(items);
@@ -403,7 +398,7 @@ export function Palette() {
       ...watchCommands(unwatched.map((e) => ({ ref: e.ref, key: e.key, name: e.name })), actions),
     ];
     return withAskPip(found, query, actions.askPip);
-  }, [containers, items, watch, proposals, github, unread, needingMe, savedViews, tab.filter, tab.view, query, step, unwatched, selected, workstreams, me, subject, clarityLearning]);
+  }, [containers, items, watch, proposals, github, unread, needingMe, savedViews, tab.filter, tab.view, query, step, unwatched, selected, workstreams, me, subject]);
 
   // A typed key that isn't among the watched tickets is looked up in the full cache (or read live), so a Done ticket there is said to be Done.
   const typedKey = step.type === "workstream" ? ticketKeyOf(query) : null;

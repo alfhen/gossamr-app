@@ -3,6 +3,7 @@ import { claude, type AskRequest } from "../backend/claude";
 import { MockBackend } from "../backend/mock";
 import { itemRef } from "../backend/mockConnector";
 import { forgetConversations, useClaude } from "../claudeStore";
+import { docFromText } from "../lib/docs";
 import { ALL, itemKey } from "../lib/filter";
 import { useWorkspace } from "../workspaceStore";
 import { askPip } from "./askPip";
@@ -275,6 +276,18 @@ describe("the Agents view's conversation", () => {
     expect(useWorkstreams.getState().closed.map((v) => v.workstream.id)).toEqual([first.workstream.id]);
   });
 
+  it("reads the audit again for every workstream something loaded, not only the selected one, when a draft is decided", async () => {
+    const id = (await useWorkstreams.getState().start(CA401))!.workstream.id;
+    const draft = backend.proposals.fromRun({ type: "comment", item: CA401, body: docFromText("Looks good.") }, null, { type: "run", runId: "r-1", shortId: null, workstream: id });
+    await useWorkspace.getState().refreshProposals();
+    // The Pip pane's timeline loaded it; Agents has another workstream, or none, open.
+    useWorkView.getState().closeWorkstream();
+    await useWorkstreams.getState().loadEvents(id);
+    expect(useWorkstreams.getState().events[id].some((e) => e.action === "draft_approved")).toBe(false);
+    await backend.proposalsApprove(draft.id);
+    await vi.waitFor(() => expect(useWorkstreams.getState().events[id].some((e) => e.action === "draft_approved")).toBe(true));
+  });
+
   it("reads a workstream's audit for the step rail, again for the selected one as it changes, and drops a read overtaken or disposed", async () => {
     const ws = (await useWorkstreams.getState().start(CA401))!;
     const id = ws.workstream.id;
@@ -425,8 +438,8 @@ describe("Undo offers that outlive what they undo (G4, G5)", () => {
     expect(useToasts.getState().toasts.map((t) => t.text)).not.toContain(offer.text);
   });
 
-  for (const how of ["asked", "paused", "closed"] as const) {
-    it(`takes the adoption offer back once the workstream is ${how === "asked" ? "waiting on the reporter" : how}`, async () => {
+  for (const how of ["paused", "closed"] as const) {
+    it(`takes the adoption offer back once the workstream is ${how}`, async () => {
       undoLog.clear();
       useToasts.getState().clear();
       await draftInGeneral();
@@ -434,12 +447,7 @@ describe("Undo offers that outlive what they undo (G4, G5)", () => {
       expect(await useWorkstreams.getState().adopt(ws.workstream.id)).toBe(true);
       const offer = undoLog.latest()!;
       expect(undoLog.get(offer.id)?.state).toBe("offered");
-      if (how === "asked") {
-        const real = backend.workstreamsList.bind(backend);
-        const spy = vi.spyOn(backend, "workstreamsList").mockImplementation(async (all) => (await real(all)).map((v) => ({ ...v, waitingOnReporter: { since: new Date().toISOString() } })));
-        await useWorkstreams.getState().refresh();
-        spy.mockRestore();
-      } else if (how === "paused") await useWorkstreams.getState().pause(ws.workstream.id);
+      if (how === "paused") await useWorkstreams.getState().pause(ws.workstream.id);
       else await useWorkstreams.getState().close(ws.workstream.id);
       expect(undoLog.get(offer.id)?.state).toBe("withdrawn");
       expect(useToasts.getState().toasts.map((t) => t.text)).not.toContain(offer.text);

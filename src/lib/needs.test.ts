@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { MockBackend } from "../backend/mock";
 import type { Intent, ItemRef, PauseReason, Proposal, ProposalState, Run, RunKind, RunState, WorkstreamStage, WorkstreamView } from "../types";
 import { docFromText } from "./docs";
-import { BATCHABLE, GROUP_RANK, chipLabel, byRank, higherPriority, needAfter, needGroups, needs, needsIn, leftOutLabel, readinessPrompt, readinessWhy, repeatedComments, safeToBatch, titleFromTicketBlock, type Need, type NeedKind, type NeedsInput } from "./needs";
+import { BATCHABLE, GROUP_RANK, chipLabel, byRank, higherPriority, needAfter, needGroups, needs, needsIn, leftOutLabel, repeatedComments, safeToBatch, titleFromTicketBlock, type Need, type NeedKind, type NeedsInput } from "./needs";
 
 const NOW = Date.parse("2026-09-30T12:00:00Z");
 const iso = (minutesAgo: number) => new Date(NOW - minutesAgo * 60_000).toISOString();
@@ -69,7 +69,7 @@ const startRun = (key: string, kind: RunKind, workstream: string | null): Intent
 const answer = (runId: string): Intent => ({ type: "runAnswer", item: ref("CA-401"), runId, message: "Yes", question: "q" }) as unknown as Intent;
 const review = (): Intent => ({ type: "githubReview", item: ref("CA-401"), connectionId: "github", repo: "acme/shop", number: 7, runId: "r-rev", summary: "s", comments: [] }) as unknown as Intent;
 
-const input = (over: Partial<NeedsInput> = {}): NeedsInput => ({ workstreams: [], runs: [], proposals: [], dismissed: new Set(), now: NOW, ...over });
+const input = (over: Partial<NeedsInput> = {}): NeedsInput => ({ workstreams: [], runs: [], proposals: [], dismissed: new Set(), ...over });
 const kinds = (list: readonly Need[]) => list.map((n) => n.kind);
 describe("needs: every kind", () => {
   const ws1 = view("ws-1", "CA-401", { runs: ["r-q", "r-p", "r-f", "r-limit", "r-b", "r-rev", "r-plan"] });
@@ -254,145 +254,6 @@ describe("needs: pauses", () => {
   it("leaves the other needs in a paused workstream as they are", () => {
     const list = needs(input({ workstreams: [paused("person")], runs: [run("r1", "investigate", "failed")] }));
     expect(kinds(list).sort()).toEqual(["failure", "paused"]);
-  });
-});
-
-describe("needs: a ticket the triage found not clear enough to plan", () => {
-  const unclear = (questions: string[] = ["What does done look like?", "Who is waiting on it?"], over: Partial<WorkstreamView> = {}): WorkstreamView => ({
-    ...view("ws-1", "CA-401", { runs: ["r-t"] }),
-    readiness: { triageRun: "r-t", triageLabel: "R1", questions, at: iso(9) },
-    ...over,
-  });
-
-  it("says they replied, not that they have not answered, once Looks fine has read the reply and the ticket still counts as changed (G3)", () => {
-    const changed = unclear(["Q?"], { readiness: { triageRun: "r-t", triageLabel: "R1", questions: ["Q?"], at: iso(9), changed: true } });
-    const [n] = needs(input({ workstreams: [changed], runs: [run("r-t", "triage", "done")], asked: { "ws-1": { asked: iso(2 * 24 * 60), nudged: null, replied: iso(60) } } }));
-    expect(n.title).toContain("changed: plan now?");
-    expect(n.why).toContain("You asked the reporter 2 days ago and they replied 1 hour ago. ");
-    expect(n.why).not.toContain("have not answered");
-  });
-
-  it("says the reporter was asked and nudged, and offers Ask again, once they have not answered", () => {
-    const asked = { "ws-1": { asked: iso(2 * 24 * 60), nudged: iso(60), replied: null } };
-    const [n] = needs(input({ workstreams: [unclear()], runs: [run("r-t", "triage", "done")], asked }));
-    expect(n.why).toBe("You asked the reporter 2 days ago and nudged 1 hour ago; they have not answered. R1 left these questions open: What does done look like? · Who is waiting on it?");
-    expect(n.primary).toEqual({ id: "askReporter", label: "Ask again" });
-    expect(needs(input({ workstreams: [unclear()], runs: [run("r-t", "triage", "done")], asked: { "ws-1": { asked: iso(60), nudged: null, replied: null } } }))[0].why).toMatch(/^You asked the reporter 1 hour ago; they have not answered\. /);
-    // Without an ask, or once they replied, nothing is said about one.
-    expect(needs(input({ workstreams: [unclear()], runs: [run("r-t", "triage", "done")] }))[0].primary.label).toBe("Ask the reporter");
-    const replied = unclear(["Q?"], { readiness: { triageRun: "r-t", triageLabel: "R1", questions: ["Q?"], at: iso(9), changed: true, replied: true } });
-    expect(needs(input({ workstreams: [replied], asked }))[0].why).not.toContain("You asked");
-  });
-
-  it("is a Decide question with the open questions as its reason and the three choices", () => {
-    const list = needs(input({ workstreams: [unclear()], runs: [run("r-t", "triage", "done")] }));
-    expect(list).toHaveLength(1);
-    expect(list[0]).toMatchObject({
-      key: "readiness:r-t",
-      group: "decide",
-      kind: "readiness",
-      workstreamId: "ws-1",
-      ticketKey: "CA-401",
-      title: "CA-401 isn't clear enough to plan",
-      why: "R1 left these questions open: What does done look like? · Who is waiting on it?",
-      at: iso(9),
-      primary: { id: "askReporter", label: "Ask the reporter" },
-      secondary: [
-        { id: "answerSelf", label: "I'll answer" },
-        { id: "planAnyway", label: "Plan anyway" },
-      ],
-      target: { type: "workstream" },
-      batchable: false,
-    });
-    expect(list[0].ifYouWait).toMatch(/^No plan starts until you choose.*\.$/);
-  });
-
-  it("comes back as 'changed: plan now?' when the ticket changed while the person waited on the reporter, with Plan now and Still unclear", () => {
-    const changed = unclear(["What does done look like?"], { readiness: { triageRun: "r-t", triageLabel: "R1", questions: ["What does done look like?"], at: iso(9), changed: true } });
-    const [need] = needs(input({ workstreams: [changed], runs: [run("r-t", "triage", "done")] }));
-    expect(need).toMatchObject({
-      key: "readiness:r-t",
-      group: "decide",
-      kind: "readiness",
-      title: "CA-401 changed: plan now?",
-      why: "CA-401 changed while you waited for the reporter. R1 left this question open: What does done look like?",
-      primary: { id: "planAnyway", label: "Plan now" },
-      secondary: [{ id: "askReporter", label: "Still unclear (ask again)" }],
-      batchable: false,
-    });
-  });
-
-  it("comes back as '<KEY>: the reporter replied, plan now?' with the same choices when the reporter commented while the person waited", () => {
-    const replied = unclear(["What does done look like?"], { readiness: { triageRun: "r-t", triageLabel: "R1", questions: ["What does done look like?"], at: iso(9), changed: true, replied: true } });
-    const [need] = needs(input({ workstreams: [replied], runs: [run("r-t", "triage", "done")] }));
-    expect(need).toMatchObject({
-      key: "readiness:r-t",
-      kind: "readiness",
-      title: "CA-401: the reporter replied, plan now?",
-      why: "The reporter replied on CA-401 while you waited. R1 left this question open: What does done look like?",
-      primary: { id: "planAnyway", label: "Plan now" },
-      secondary: [{ id: "askReporter", label: "Still unclear (ask again)" }],
-    });
-  });
-
-  it("is counted once, ranks with the decisions ahead of what is stuck, and is not a run's need", () => {
-    const list = needs(input({ workstreams: [unclear()], runs: [run("r-f", "build", "failed")] }));
-    expect(kinds(list)).toEqual(["readiness", "failure"]);
-    expect(list.every((n) => n.kind !== "readiness" || n.runId === undefined)).toBe(true);
-  });
-
-  it("is gone once the workstream no longer reports it: chosen, or a later triage says ready", () => {
-    expect(needs(input({ workstreams: [unclear([], { readiness: null })] }))).toEqual([]);
-    expect(needs(input({ workstreams: [{ ...view("ws-1", "CA-401") }] }))).toEqual([]);
-  });
-
-  it("says plainly when the triage listed no questions, says one question in the singular, and clips a long list", () => {
-    expect(readinessWhy({ triageLabel: "R2", questions: [] })).toBe("R2 found the ticket unclear but listed no questions.");
-    expect(readinessWhy({ triageLabel: "", questions: ["Who asked?"] })).toBe("The triage left this question open: Who asked?");
-    const long = readinessWhy({ triageLabel: "R2", questions: Array.from({ length: 8 }, (_, n) => `Question number ${n + 1} is quite a long one to ask?`) });
-    expect(long.length).toBeLessThanOrEqual(240);
-    expect(long.endsWith("…")).toBe(true);
-  });
-
-  it("quotes the questions for the composer on one line, with where to answer", () => {
-    expect(readinessPrompt({ triageLabel: "R1", questions: ["What does done look like?", "Who asked?"] }, "CA-401")).toBe("R1's open questions about CA-401: “What does done look like?” · “Who asked?”. My answers: ");
-    expect(readinessPrompt({ triageLabel: "", questions: [] }, null)).toBe("The triage's open questions about this ticket: “(it listed no questions)”. My answers: ");
-  });
-});
-
-describe("needs: the comment to a reporter", () => {
-  it("is Gossamr's draft to approve, said so, and not an agent's or a run's note", () => {
-    const asked = draft("d-ask", comment("CA-401"), 3, { origin: { type: "run", runId: "r-t", shortId: null, workstream: "ws-1" } });
-    const [need] = needs(input({ workstreams: [view("ws-1", "CA-401", { runs: ["r-t"] })], runs: [run("r-t", "triage", "done")], proposals: [{ ...asked, createdBy: "agent", label: "Questions for the reporter" }] }));
-    expect(need).toMatchObject({
-      key: "draft:d-ask",
-      group: "approve",
-      kind: "draft",
-      title: "Questions for the reporter",
-      why: "Gossamr drafted a comment to the reporter of CA-401 from R1's open questions; it is posted only when you approve it.",
-      primary: { id: "approve" },
-      // Gossamr's words to a person outside the team are read and approved on their own, never in "Approve N safe drafts".
-      batchable: false,
-    });
-    // The triage's own note is the agent's, as before.
-    const note = needs(input({ workstreams: [view("ws-1", "CA-401", { runs: ["r-t"] })], runs: [run("r-t", "triage", "done")], proposals: [{ ...asked, createdBy: "agent" }] }));
-    expect(note[0]).toMatchObject({ title: "R1 triage · comment", why: "R1 triage drafted a comment on CA-401." });
-  });
-});
-
-describe("needs: the comment with the person's answers", () => {
-  it("is Pip's draft to approve on its own: said so, and never in the safe batch, as the questions to a reporter are not", () => {
-    const answers = { ...draft("d-ans", comment("CA-401"), 3, { workstream: "ws-1" }), label: "Answers to the open questions" } as Proposal;
-    const plain = draft("d-plain", comment("CA-401"), 2, { workstream: "ws-1" });
-    const asked = { ...draft("d-ask", comment("CA-401"), 4, { workstream: "ws-1" }), createdBy: "user", label: "Questions for the reporter" } as Proposal;
-    const list = needs(input({ workstreams: [view("ws-1", "CA-401")], proposals: [answers, plain, asked] }));
-    const by = (key: string) => list.find((n) => n.key === key)!;
-    expect(by("draft:d-ans")).toMatchObject({ title: "Answers to the open questions", why: "Pip drafted a comment on CA-401 with your answers to the open questions; it is posted only when you approve it.", batchable: false });
-    expect(by("draft:d-ask")).toMatchObject({ title: "Questions for the reporter", why: "Gossamr drafted a comment to the reporter of CA-401 from what the ticket leaves out; it is posted only when you approve it.", batchable: false });
-    expect(by("draft:d-plain").batchable).toBe(true);
-    // A comment Pip merely labels like Gossamr's is Pip's, and an ordinary draft.
-    const pretend = { ...draft("d-pip", comment("CA-401"), 1, { workstream: "ws-1" }), label: "Questions for the reporter" } as Proposal;
-    expect(needs(input({ workstreams: [view("ws-1", "CA-401")], proposals: [pretend] }))[0]).toMatchObject({ batchable: true });
   });
 });
 
@@ -762,7 +623,7 @@ describe("the chip on a row (G6)", () => {
   it("is Post for a GitHub review draft and the group's word for every other need, the group staying Approve", () => {
     expect(chipLabel({ group: "approve", kind: "review" })).toBe("Post");
     expect(chipLabel({ group: "approve", kind: "draft" })).toBe("Approve");
-    expect(chipLabel({ group: "decide", kind: "readiness" })).toBe("Decide");
+    expect(chipLabel({ group: "decide", kind: "plan" })).toBe("Decide");
     const list = needs(input({ proposals: [draft("d-review", review(), 26)] }));
     expect(list[0]).toMatchObject({ kind: "review", group: "approve" });
     expect(chipLabel(list[0])).toBe("Post");

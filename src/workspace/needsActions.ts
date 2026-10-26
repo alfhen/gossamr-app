@@ -2,9 +2,6 @@ import { readAs } from "../lib/permission";
 import type { Need } from "../lib/needs";
 import { useWorkspace } from "../workspaceStore";
 import { draftKeyAction } from "./draftKeys";
-import { docText } from "../lib/docs";
-import { isAnswersDraft } from "../lib/proposals";
-import { newRisks } from "../lib/riskyText";
 import { liveDraft } from "./draftLive";
 import { keptEditsOfDraft } from "./DraftCard";
 import { draftDecisions } from "./DraftPreview";
@@ -100,14 +97,13 @@ const runOf = (need: Need) => (need.runId ? useRuns.getState().runs.find((r) => 
 
 /**
  * Whether approving `p` from the list would skip what its card shows: the card holds an edit the draft doesn't, or the words
- * would stop at the posting pause. A card not on screen counts its kept edits, and an answers draft's words are checked here, as the card checks them.
+ * would stop at the posting pause. A card not on screen counts its kept edits.
  */
 function needsCard(p: NonNullable<ReturnType<typeof proposalOf>>): boolean {
   const live = liveDraft(p.id);
   if (live) return live.edited || live.risky;
   // Words typed into a card that has since closed are kept for it, and only the card posts them.
-  if (keptEditsOfDraft(p.id)) return true;
-  return p.intent.type === "comment" && isAnswersDraft(p) && newRisks("", docText(p.intent.body)).length > 0;
+  return !!keptEditsOfDraft(p.id);
 }
 
 /** "this comment", "this move": what an approval would approve, for the line that asks for Enter. */
@@ -137,8 +133,6 @@ export function keyPlan(need: Need, which: NeedKey): KeyPlan | null {
         return run ? { type: "ask", text: "allow this once in Terminal", run: () => void useRuns.getState().allowPermissionOnce(run.id, readAs(run.needs)) } : null;
       case "retry":
         return run ? { type: "ask", text: "retry this run", run: () => void useRuns.getState().retryLaunch(run.id) } : null;
-      case "askReporter":
-        return need.workstreamId ? { type: "ask", text: "draft a comment to the reporter with the open questions; nothing is posted until you approve it", run: () => void useWorkstreams.getState().askReporter(need.workstreamId!) } : null;
       case "resume":
         return need.kind === "paused" && need.workstreamId
           ? { type: "ask", text: "resume this workstream", run: () => void useWorkstreams.getState().resume(need.workstreamId!) }

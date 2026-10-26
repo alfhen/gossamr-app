@@ -1,7 +1,7 @@
 import { docFromText, docText, quoteAfterFirst } from "../lib/docs";
 import { BUILD_ACCOUNT_LIMIT, INSTRUCTIONS, PLAN_LIMIT, REVIEW_REPORTS } from "./mockRunKinds";
 import { canJoinWorkstream, withWorkstream } from "../lib/workstreamAdopt";
-import { answersSupersession, capRefusal, isAnswersDraft, isReporterQuestions, isRunComment, isRunReview, isTriageNote, leftByRun, offTheDiff, PLAN_IS_THE_USERS, REPLACED_REASON, REVIEW_CHANGED, REVIEW_IS_THE_USERS, REVIEW_MAYBE_POSTED_NOTE, REVIEW_NOT_FOUND_NOTE, REVIEW_OUTDATED_NOTE, reviewEditProblem, reporterSupersession, reviewSupersession, runCommentSupersession, supersession, targetOf, WORKSTREAM_PENDING_CAP, workstreamOf } from "../lib/proposals";
+import { capRefusal, isRunComment, isRunReview, leftByRun, offTheDiff, PLAN_IS_THE_USERS, REPLACED_REASON, REVIEW_CHANGED, REVIEW_IS_THE_USERS, REVIEW_MAYBE_POSTED_NOTE, REVIEW_NOT_FOUND_NOTE, REVIEW_OUTDATED_NOTE, reviewEditProblem, reviewSupersession, runCommentSupersession, supersession, targetOf, WORKSTREAM_PENDING_CAP, workstreamOf } from "../lib/proposals";
 import { commentable } from "../lib/diffHunks";
 import { followUpProblem } from "../workspace/followUp";
 import { answerProblem } from "../lib/answer";
@@ -114,11 +114,6 @@ export class MockProposals {
     return Promise.resolve(this.store(intent, label, { type: "board" }, "user"));
   }
 
-  /** Stores the comment "Ask the reporter now" drafts, from the clarity notice of `workstream`, or the nudge ("nudge"): Gossamr's, made for the person, not a run's. */
-  askedFor(intent: Intent, label: string, workstream: string, tag: "clarity" | "nudge" = "clarity"): Proposal {
-    return this.store(intent, label, { type: "chat", requestId: `${tag}:${workstream}`, workstream }, "user");
-  }
-
   /** Stores a draft an agent run's result left for the person, in the run's workstream. */
   fromRun(intent: Intent, label: string | null, origin: Extract<ProposalOrigin, { type: "run" }>): Proposal {
     return this.store(intent, label, origin, "agent");
@@ -160,17 +155,6 @@ export class MockProposals {
    */
   private tidy(p: Proposal): { replaced: Proposal[]; kept: { proposal: Proposal; why: string }[] } {
     const byTicket = p.createdBy === "agent" && isRunComment(p);
-    if (isReporterQuestions(p)) {
-      // The questions to a reporter replace the triage's own comment, which repeats them, as `tidy_reporter_questions`.
-      const replaced: Proposal[] = [];
-      const kept: { proposal: Proposal; why: string }[] = [];
-      for (const older of this.drafts.filter((d) => d.state.type === "pending")) {
-        const verdict = reporterSupersession(older, p);
-        if (verdict === "supersede") replaced.push(older);
-        else if (verdict) kept.push({ proposal: older, why: verdict });
-      }
-      return { replaced, kept };
-    }
     if (isRunReview(p) || byTicket) {
       const replaced: Proposal[] = [];
       const kept: { proposal: Proposal; why: string }[] = [];
@@ -181,33 +165,7 @@ export class MockProposals {
       }
       return { replaced, kept };
     }
-    const replaced = this.tidyWorkstream(p);
-    // The person's answers replace the triage's own note, which says the ticket can't be sized, if it still waits.
-    const kept: { proposal: Proposal; why: string }[] = [];
-    if (isAnswersDraft(p)) {
-      for (const older of this.drafts) {
-        const verdict = answersSupersession(older, p, this.runKind, isTriageDescription);
-        if (verdict === "supersede" && !replaced.includes(older)) replaced.push(older);
-        else if (verdict && verdict !== "supersede") kept.push({ proposal: older, why: verdict });
-      }
-    }
-    return { replaced, kept };
-  }
-
-  /**
-   * The person chose "I'll answer" or "Plan anyway" on Triage `triage` of `workstream`: its own pending note (a comment, or the description update with its Triage section), which says
-   * the ticket can't be sized, is retired (`reason`) and the audit says so, as asking the reporter does. The person's edit
-   * keeps it. Another run's comment is left. As `retire_triage_notes` in `proposals.rs`.
-   */
-  retireTriageNotes(workstream: string, triage: string, reason: string) {
-    const now = new Date().toISOString();
-    const notes = this.drafts.filter((d) => d.state.type === "pending" && !d.error && workstreamOf(d) === workstream && isTriageNote(d, isTriageDescription) && d.origin.type === "run" && d.origin.runId === triage);
-    const edited = (d: Proposal) => d.revisions.some((r) => r.note === "Edited");
-    const retired = notes.filter((d) => !edited(d));
-    this.drafts = this.drafts.map((d) => (retired.includes(d) ? { ...d, state: { type: "retired" as const, reason }, updatedAt: now } : d));
-    if (retired.length) this.changed();
-    for (const d of retired) this.audit(this.get(d.id)!, "person", "draft_superseded");
-    for (const d of notes.filter(edited)) this.audit(d, "person", "draft_kept_edited");
+    return { replaced: this.tidyWorkstream(p), kept: [] };
   }
 
   private tidyWorkstream(p: Proposal): Proposal[] {

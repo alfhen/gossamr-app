@@ -112,16 +112,7 @@ pub const WORKSTREAM: &str = "When a turn has a [Workstream] block, the conversa
      anyone will know it is done (acceptance criteria), what is in and what is out of scope, and who asked for it and who is \
      waiting on it. If any is missing, say so plainly in your first line, naming the ticket and the gap, for example 'CA-401 \
      doesn't say what done looks like.', then carry on with what was asked; never fill a gap with a guess of your own. If \
-     everything is there, don't mention the check. Gossamr also runs a word check of the ticket's description before you speak \
-     (no agent, not a verdict); when the [Workstream] block reports gaps it found, name them in that first line in your own \
-     words and still read the ticket yourself. When an [Event] or the block says a triage found the ticket not ready to \
-     plan, the next step is the person's: they ask the reporter (Gossamr drafts the comment for them to approve), answer the \
-     questions themselves, or plan anyway. Explain those options when asked, and don't draft a plan run for it. When the block says the person chose to \
-     answer the open questions themselves, their next message holds the answers: draft one comment on the ticket with \
-     propose_comment, its first line exactly 'Answers to the open questions on this ticket:', each answer put under the question it answers, never a \
-     description rewrite. Don't draft the plan beside it: say 'Once the answers are posted, Plan this starts the plan.' (nothing starts by itself after the post), and draft the plan \
-     (propose_run, kind plan, from_run the triage) when the person asks for it after the comment is posted. When the block says the workstream waits on the reporter, nothing \
-     starts until they answer or the person chooses; say so when asked, and don't draft a plan run for it. A turn that \
+     everything is there, don't mention the check. A turn that \
      opens with [Event] lines is a wake: Gossamr, not the person, \
      asked you because a run changed; reply in at most about three lines. A workstream holds at most 8 drafts waiting for \
      the person, and a new draft of the same kind on the same ticket (a move, a description update, a triage update or \
@@ -760,61 +751,7 @@ mod tests {
             waiting_for_pr: None,
             event: None,
             last_drift: None,
-            readiness: None,
-            clarity: Vec::new(),
-            waiting_on_reporter: None,
-            answers_due: false,
         }
-    }
-
-    #[test]
-    fn the_block_tells_pip_what_the_word_check_found_that_the_person_asked_the_reporter_and_that_answers_are_due() {
-        use crate::domain::ClarityGap;
-        let mut ws = in_workstream(vec![]);
-        let quiet = ws.block();
-        for part in ["word check", "Waiting on the reporter", "Answers to the open questions"] {
-            assert!(!quiet.contains(part), "nothing to say: {part}");
-        }
-        ws.clarity = vec![ClarityGap::Short, ClarityGap::Done];
-        let said = ws.block();
-        assert!(said.contains("Gossamr's word check of ENG-1's description (no agent ran; it is not a verdict) found that it has a very short description and doesn't say what done looks like. Say so plainly in your first line"), "{said}");
-        ws.clarity = vec![];
-        ws.waiting_on_reporter = Some(now());
-        let waiting = ws.block();
-        assert!(waiting.contains("Waiting on the reporter since "), "{waiting}");
-        assert!(waiting.contains("Nothing starts on its own until they answer, the ticket changes, or the person chooses"), "{waiting}");
-        ws.waiting_on_reporter = None;
-        ws.answers_due = true;
-        let due = ws.block();
-        assert!(due.contains("their next message holds the answers. Draft one comment on the ticket with propose_comment whose first line is exactly 'Answers to the open questions on this ticket:'"), "{due}");
-        assert!(due.contains("this ticket:' (so a reader of the ticket knows they answer its open questions") && due.contains("neutral voice"), "{due}");
-        assert!(due.contains("never a rewrite of the description") && due.contains("needs their approval like any draft"), "{due}");
-        assert!(due.contains("puts each answer under the question it answers"), "{due}");
-        assert!(due.contains("Once the answers are posted, Plan this starts the plan.") && due.contains("when the person asks for it after the comment is posted"), "the plan waits for the post: {due}");
-    }
-
-    #[test]
-    fn answers_are_due_after_i_ll_answer_until_a_comment_with_them_was_drafted() {
-        use crate::agent::workstream::answers_due;
-        use crate::domain::Actor;
-        let at = |s: i64| chrono::DateTime::from_timestamp(1_800_000_000 + s, 0).unwrap();
-        let line = |s: i64, actor, action: &str| crate::domain::WorkstreamEvent::new("w1", actor, action, at(s));
-        let answers = |s: i64, by: CreatedBy, label: &str| {
-            let mut p = draft("w1", by, ProposalState::Pending);
-            p.created_at = at(s);
-            p.label = Some(label.into());
-            p
-        };
-        assert!(!answers_due(&[], &[]));
-        assert!(answers_due(&[line(1, Actor::Person, "readiness_answered")], &[]));
-        assert!(!answers_due(&[line(1, Actor::Pip, "readiness_answered")], &[]), "only the person's choice");
-        assert!(!answers_due(&[line(1, Actor::Person, "readiness_answered"), line(2, Actor::Person, "readiness_overridden")], &[]), "the newest choice counts");
-        assert!(!answers_due(&[line(1, Actor::Person, "readiness_asked")], &[]));
-        let answered = [line(10, Actor::Person, "readiness_answered")];
-        assert!(!answers_due(&answered, &[answers(11, CreatedBy::Pip, crate::proposals::ANSWERS_COMMENT_LABEL)]), "drafted after: no longer due, whatever became of the draft");
-        assert!(answers_due(&answered, &[answers(9, CreatedBy::Pip, crate::proposals::ANSWERS_COMMENT_LABEL)]), "an earlier one isn't theirs");
-        assert!(answers_due(&answered, &[answers(11, CreatedBy::Pip, "Something else")]), "another comment is not the answers");
-        assert!(answers_due(&answered, &[answers(11, CreatedBy::Agent, crate::proposals::ANSWERS_COMMENT_LABEL)]), "an agent's isn't Pip's");
     }
 
     #[test]
@@ -907,8 +844,6 @@ mod tests {
             "its goal, how anyone will know it is done (acceptance criteria), what is in and what is out of scope, and who asked for it and who is waiting on it",
             "say so plainly in your first line, naming the ticket and the gap",
             "'CA-401 doesn't say what done looks like.'",
-            "ask the reporter (Gossamr drafts the comment for them to approve), answer the questions themselves, or plan anyway",
-            "don't draft a plan run for it",
         ] {
             assert!(p.contains(needed), "{needed}");
         }

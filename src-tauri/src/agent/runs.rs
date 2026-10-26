@@ -681,7 +681,6 @@ pub(super) fn revised(connection_id: &str, item: &Option<ItemRef>, spec: &RunSpe
         spec.findings = None;
         spec.findings_from_run = None;
     }
-    spec.assumptions.clear();
     if let Some(focus) = focus.map(valid_focus).transpose()? {
         spec.focus = Some(focus);
     }

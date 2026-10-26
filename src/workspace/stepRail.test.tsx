@@ -186,16 +186,6 @@ describe("the step rail", () => {
     expect(stepOf(html, "review")).not.toContain("Blocking");
   });
 
-  it("does not mark Plan as next while the ticket is stopped as unclear, and says it waits for the person's choice", () => {
-    const two = { runs: [RUNS[0], RUNS[1]], view: { ...view, runs: ["r1", "r2"], labels: [["r1", "R1"], ["r2", "R2"]] as [string, string][], stage: "triage" as const } };
-    const open = renderToStaticMarkup(<StepRailView {...props(two)} />);
-    expect(stepOf(open, "plan")).toContain('data-step-next="plan"');
-    expect(stepOf(open, "plan")).not.toContain("data-step-unclear-tag");
-    const stopped = renderToStaticMarkup(<StepRailView {...props({ ...two, view: { ...two.view, readiness: { triageRun: "r2", triageLabel: "R2", questions: ["What is in scope?"], at: iso(5) } } })} />);
-    expect(stepOf(stopped, "plan")).not.toContain("data-step-next");
-    expect(stepOf(stopped, "plan")).toContain("Waiting for your choice: ticket unclear");
-  });
-
   it("marks the next step and keeps the later steps nothing has reached to one quiet line each", () => {
     const fresh = renderToStaticMarkup(<StepRailView {...props({ runs: [], view: { ...view, runs: [], labels: [], stage: "intake" } })} />);
     expect(stepOf(fresh, "investigate")).toContain('data-step-next="investigate"');

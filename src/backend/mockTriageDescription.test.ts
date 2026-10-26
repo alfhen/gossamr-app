@@ -4,7 +4,6 @@ import { itemRef } from "./mockConnector";
 import { docFromMarkdown, markdownOf } from "./mockMarkdown";
 import { QUESTIONS_LEAD, TRIAGE_HEADING, isTriageDescription, triageQuestionsOf, triageSectionOf, withTriageSection, withoutTriageSection } from "./mockTriageSection";
 import { withPlanSection, planSectionOf } from "./mockPlanSection";
-import { firstAskPosted } from "../lib/reporterWait";
 import type { Proposal, RunSpec } from "../types";
 
 const md = docFromMarkdown;
@@ -71,17 +70,6 @@ describe("the Triage section of a description in the sample build", () => {
   });
 });
 
-describe("when the first ask was posted", () => {
-  const line = (at: string, action: string, proposalId: string, actor = "person") => ({ actor, action, proposalId, at }) as Parameters<typeof firstAskPosted>[0][number];
-  const asked = [line("2026-10-01T10:00:00Z", "readiness_asked", "c1"), line("2026-10-01T10:02:00Z", "draft_approved", "c1")];
-
-  it("is the approval of the person's own ask, and nothing before it", () => {
-    expect(firstAskPosted(asked)).toBe(Date.parse("2026-10-01T10:02:00Z"));
-    expect(firstAskPosted(asked.slice(0, 1))).toBeNull();
-    expect(firstAskPosted([line("2026-10-01T10:00:00Z", "readiness_asked", "c1", "pip"), asked[1]])).toBeNull();
-  });
-});
-
 describe("a Triage on the vague CA-408 in the sample build", () => {
   const CA408 = itemRef("CA-408");
   const sample = () => new MockBackend({ runs: { seed: "empty", prSurfaceMs: null } });
@@ -136,34 +124,5 @@ describe("a Triage on the vague CA-408 in the sample build", () => {
     const second = rewriteOf(b, (await triage(b, ws)).id)!;
     expect(b.proposals.get(first.id)?.state).toMatchObject({ type: "retired" });
     expect(b.proposals.get(second.id)?.state).toEqual({ type: "pending" });
-  });
-
-  it("turns ready after the reporter replied, with a note that says the answers in the comments were used and no question left", async () => {
-    const b = sample();
-    b.supervisor.dispose();
-    const ws = (await b.workstreamsOpen(CA408)).id;
-    const first = await triage(b, ws);
-    const ask = await b.workstreamsReadinessAsk(ws, first.id);
-    await b.proposalsApprove(ask.id);
-    await new Promise((r) => setTimeout(r, 5));
-    b.commentOnTicket("CA-408", "Done means the winback mail goes to lapsed customers. Only the winback flow. The CRM team asked.");
-    const again = await triage(b, ws);
-    expect(again.result).toContain("Ready to plan: yes");
-    expect(again.result).not.toContain("Open questions:");
-    const update = rewriteOf(b, again.id)!;
-    if (update.intent.type !== "rewrite" || !update.intent.body) throw new Error("a description update");
-    expect(update.intent.body.toText).toContain("The answers in the ticket's comments were used");
-    expect(update.intent.body.toText).not.toContain("Open questions");
-    expect(update.intent.body.toText).not.toContain("cannot be sized yet");
-  });
-
-  it("stays unclear while nobody has replied, and for a reply that came before anyone asked", async () => {
-    const b = sample();
-    b.supervisor.dispose();
-    const ws = (await b.workstreamsOpen(CA408)).id;
-    b.commentOnTicket("CA-408", "A comment from before the ask.");
-    await new Promise((r) => setTimeout(r, 5));
-    const run = await triage(b, ws);
-    expect(run.result).toContain("Ready to plan: no\nOpen questions:");
   });
 });

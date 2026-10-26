@@ -1,13 +1,11 @@
 import { expect, test, type Page } from "@playwright/test";
-import { agentsHome, editTicket, jiraWrites, needsPane, openAgents, openApp, selectWorkstream, startWorkstream, stepRail } from "./support/app";
+import { agentsHome, openAgents, openApp, selectWorkstream, startWorkstream, stepRail } from "./support/app";
 
-// Fixes from round 10's backlog: the workstream controls on the steps rail's F6 stop (G27), Ctrl+0 on Pip home going on to General (G28), "N here" on a Needs you group (G30), the palette's and the
-// reporter draft's notes (G31) and the toasts leaving with the page and clearing the launcher (G32).
+// Fixes from round 10's backlog: the workstream controls on the steps rail's F6 stop (G27), Ctrl+0 on Pip home going on to General (G28), "N here" on a Needs you group (G30), the palette's
+// note (G31) and the toasts leaving with the page and clearing the launcher (G32).
 
-const THIN = "Fix it.";
 const toast = (page: Page) => page.locator("[data-toast]");
 const allProjects = (page: Page) => page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "All projects" }).click();
-const notice = (page: Page) => agentsHome(page).locator("[data-clarity-notice]");
 
 /** A workstream on `key`, begun from its peek, and Pip home on it. */
 async function begin(page: Page, key: string) {
@@ -15,7 +13,7 @@ async function begin(page: Page, key: string) {
   await startWorkstream(page, key);
 }
 
-test.describe("what the palette and the reporter draft say (G31)", () => {
+test.describe("what the palette says (G31)", () => {
   test("'Start a workstream' says it starts no agent and posts nothing", async ({ page }) => {
     await openApp(page, "runs=empty");
     await openAgents(page);
@@ -28,20 +26,6 @@ test.describe("what the palette and the reporter draft say (G31)", () => {
     await expect(dialog.locator("[data-palette-note]")).toHaveCount(0);
   });
 
-  test("a question to a reporter that @mentions them says who it mentions; nothing is written before approval", async ({ page }) => {
-    test.setTimeout(120_000);
-    await openApp(page, "runs=empty");
-    await editTicket(page, "CA-408", { description: THIN });
-    await begin(page, "CA-408");
-    await openAgents(page);
-    await selectWorkstream(page, "CA-408");
-    await notice(page).getByRole("button", { name: "Ask the reporter now" }).click();
-    const draft = needsPane(page).getByRole("article", { name: "Comment on CA-408" });
-    await expect(draft).toBeVisible();
-    await expect(draft).toContainText("@");
-    await expect(draft.locator("[data-mention-note]")).toHaveText(/^Posts as you; Jira notifies .+\.$/);
-    expect(await jiraWrites(page)).toEqual([]);
-  });
 });
 
 test.describe("toasts leave with the page and clear the launcher (G32)", () => {

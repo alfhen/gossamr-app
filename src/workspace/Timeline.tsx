@@ -22,7 +22,6 @@ import { useDecisionShown } from "./decisionShown";
 import { LiveDraftPreview, openLiveDraft } from "./DraftPreview";
 import { GENERAL_INTRO, TurnView, workstreamIntro } from "./PipConversation";
 import { openNeed } from "./needsActions";
-import { openComment } from "./jump";
 import { isTypingTarget } from "./workKeys";
 import { useReviewVerdicts } from "./reviewVerdicts";
 import { useRuns } from "./runsStore";
@@ -53,7 +52,7 @@ export function useTimeline(conversation: string, view: WorkstreamView | null, p
   const labels = useMemo(() => labelsByRun(allRuns), [allRuns]);
   const verdicts = useMemo(() => Object.fromEntries(Object.entries(reviews).map(([k, v]) => [k, (v?.verdict ?? null) as ReviewOutcome])), [reviews]);
   const entries = useMemo(
-    () => timeline({ turns, runs, drafts, events: id ? events : NO_EVENTS, needs, labels, verdicts, ticketKey: view?.workstream.itemKey ?? null, reporterRepliedAt: view?.reporterRepliedAt ?? null, reporterReply: view?.reporterReply ?? null, reporterReplies: view?.reporterReplies ?? [] }),
+    () => timeline({ turns, runs, drafts, events: id ? events : NO_EVENTS, needs, labels, verdicts, ticketKey: view?.workstream.itemKey ?? null }),
     [turns, runs, drafts, events, id, needs, labels, verdicts, view],
   );
   const byId = useMemo(
@@ -85,7 +84,6 @@ export function openEntry(e: Pick<TimelineEntry, "target">, byId: Lookup, root: 
     if (need) openNeed(need);
     return;
   }
-  if (t.type === "comment") return void openComment(t.ticketKey, t.id);
   if (t.type === "run") return useRuns.getState().openRun(t.id, { stay: true });
   const card = root?.querySelector<HTMLElement>(`article[data-draft="${CSS.escape(t.id)}"]`);
   if (card) {
@@ -96,17 +94,13 @@ export function openEntry(e: Pick<TimelineEntry, "target">, byId: Lookup, root: 
   if (p) openLiveDraft(p, { inline: true });
 }
 
-/** What the reply entry says of Enter, as the entry is read and hovered. */
-export const OPENS_COMMENT = "Enter opens the comment";
-
-/** `text` with the ticket it is about in front, unless it says so already: a row read alone ("The reporter replied on the ticket") names its ticket. */
+/** `text` with the ticket it is about in front, unless it says so already: a row read alone names its ticket. */
 export const withTicket = (text: string, ticketKey: string | null | undefined) => (ticketKey && !text.includes(ticketKey) ? `${ticketKey}: ${text}` : text);
 
-/** The spoken name of a timeline entry: none for what is said in the conversation, the sentence with its ticket otherwise, and for a reply that opens a comment, what Enter does. */
-export function entryLabel(e: Pick<TimelineEntry, "kind" | "text" | "target"> & { ticketKey?: string | null }): string | undefined {
+/** The spoken name of a timeline entry: none for what is said in the conversation, the sentence with its ticket otherwise. */
+export function entryLabel(e: Pick<TimelineEntry, "kind" | "text"> & { ticketKey?: string | null }): string | undefined {
   if (e.kind === "said" || e.kind === "pip") return undefined;
-  const text = withTicket(e.text, e.ticketKey);
-  return e.target?.type === "comment" ? `${text}. ${OPENS_COMMENT}` : text;
+  return withTicket(e.text, e.ticketKey);
 }
 
 const clock = (iso: string) => {
@@ -131,7 +125,7 @@ function Line({ entry, onOpen, children }: { entry: TimelineEntry; onOpen?: () =
   const waiting = !!entry.needKey;
   return (
     <p data-timeline-line className="m-0 flex min-w-0 flex-wrap items-baseline gap-x-1.5 text-sm text-ws-ink2">
-      <span aria-hidden className={`size-1.5 shrink-0 self-center rounded-full ${waiting ? "bg-ws-pip" : entry.decision || entry.attention ? "bg-ws-accent" : "bg-ws-sep2"}`} />
+      <span aria-hidden className={`size-1.5 shrink-0 self-center rounded-full ${waiting ? "bg-ws-pip" : entry.decision ? "bg-ws-accent" : "bg-ws-sep2"}`} />
       <When at={entry.at} />
       {onOpen && entry.target ? (
         <button type="button" tabIndex={-1} data-timeline-open={entry.target.type} aria-label={withTicket(entry.text, entry.ticketKey)} onClick={onOpen} className={LINK}>
@@ -345,7 +339,6 @@ export function TimelineView({
                 data-waiting={e.needKey ?? undefined}
                 tabIndex={-1}
                 aria-label={entryLabel(e)}
-                title={e.target?.type === "comment" ? OPENS_COMMENT : undefined}
                 onFocus={revealEntry}
                 className={`grid min-w-0 gap-1 rounded-md ${ENTRY_FOCUS}`}
               >

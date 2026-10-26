@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { agentsHome, editTicket, expandNeedsYou, jiraWrites, needRow, needsPane, needsYouTray, openAgents, openApp, selectWorkstream, startWorkstream } from "./support/app";
+import { expandNeedsYou, jiraWrites, needRow, needsPane, needsYouTray, openAgents, openApp, pipCommentDraft, selectWorkstream, startWorkstream } from "./support/app";
 
 // Fixes from the fifteenth dogfood round: a quiet run can be waited on without stopping it (G2) and a description update says
 // it writes to Jira as the person (G8).
@@ -38,20 +38,18 @@ test.describe("an edit kept when its card leaves (G1)", () => {
   test("an edit finished with Done editing is still on the card after the pane moves away and back, and posting posts it", async ({ page }) => {
     test.setTimeout(120_000);
     await openApp(page, "runs=empty");
-    await editTicket(page, "CA-408", { description: "Fix it." });
     await page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "All projects" }).click();
     await startWorkstream(page, "CA-408");
     await openAgents(page);
     await selectWorkstream(page, "CA-408");
-    await agentsHome(page).locator("[data-clarity-notice]").getByRole("button", { name: "Ask the reporter now" }).click();
-    const draft = needsPane(page).getByRole("article", { name: "Comment on CA-408" });
+    const draft = await pipCommentDraft(page, "CA-408");
     await draft.getByRole("button", { name: "Edit" }).click();
     await needsPane(page).locator("textarea").first().fill("Kept after the card left.");
     await draft.getByRole("button", { name: "Done editing" }).click();
     // The card leaves: the pane is closed, then the draft is opened again from Needs you.
     await needsPane(page).getByRole("button", { name: "Hide" }).click();
     await expect(draft).toHaveCount(0);
-    await needRow(page, /drafted a comment to the reporter of CA-408/).click();
+    await needRow(page, /Draft comment/).click();
     await expect(draft).toContainText("Kept after the card left.");
     await draft.getByRole("button", { name: "Post comment" }).click();
     await expect.poll(async () => (await jiraWrites(page)).map((w) => w.text)).toEqual([expect.stringContaining("Kept after the card left.")]);

@@ -44,7 +44,7 @@ export function SentRow({ entry: e, onTicket, onWorkstream }: { entry: SentEntry
   // The disclosure is only offered when there is more to see than the summary line says.
   const more = e.detail.length > 1 || (e.detail[0] ?? "") !== e.summary;
   return (
-    <article data-sent-entry={e.id} data-sent-kind={e.kind} aria-label={`${e.label ?? SENT_LABEL[e.kind]}${e.ticketKey ? ` on ${e.ticketKey}` : ""}`} className="grid gap-1 border-b border-ws-sep px-2 py-2.5">
+    <article data-sent-entry={e.id} data-sent-kind={e.kind} aria-label={`${SENT_LABEL[e.kind]}${e.ticketKey ? ` on ${e.ticketKey}` : ""}`} className="grid gap-1 border-b border-ws-sep px-2 py-2.5">
       <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
         {e.ticketKey && (
           <button type="button" data-sent-ticket aria-label={`Open ${e.ticketKey} in Gossamr`} onClick={() => onTicket(e.ticketKey!)} className="rounded font-mono font-semibold text-ws-ink hover:bg-ws-hover focus-visible:outline-2 focus-visible:outline-ws-pip">
@@ -52,7 +52,7 @@ export function SentRow({ entry: e, onTicket, onWorkstream }: { entry: SentEntry
           </button>
         )}
         <span data-sent-label className="rounded-full bg-ws-pip-soft px-2 text-xs font-semibold text-ws-pip">
-          {e.label ?? SENT_LABEL[e.kind]}
+          {SENT_LABEL[e.kind]}
         </span>
         <span className="ml-auto text-xs text-ws-ink3">{time(e.at)}</span>
       </div>

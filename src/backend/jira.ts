@@ -2,7 +2,6 @@ import type { ClearFilter, ClearPreview, DeleteResult, WorktreeInfo } from "../t
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
-import type { ClarityGap } from "../lib/ticketClarity";
 import type {
   Adoptable,
   AssignedElsewhere,
@@ -502,34 +501,6 @@ export class JiraBackend implements Backend {
 
   workstreamsEvents(id: string) {
     return invoke<WorkstreamEvent[]>("workstreams_events", { id });
-  }
-
-  workstreamsReadinessAsk(id: string, triageRun: string) {
-    return invoke<Proposal>("workstreams_readiness_ask", { id, triageRun });
-  }
-
-  workstreamsClarityAsk(id: string, skip: ClarityGap[] = []) {
-    return invoke<Proposal>("workstreams_clarity_ask", { id, skip });
-  }
-
-  workstreamsClarityDismiss(id: string) {
-    return invoke<Workstream>("workstreams_clarity_dismiss", { id });
-  }
-
-  workstreamsNudgeReporter(id: string) {
-    return invoke<Proposal>("workstreams_nudge_reporter", { id });
-  }
-
-  workstreamsClarityNote(id: string, action: "clarity_learned" | "clarity_reset", detail: string) {
-    return invoke<void>("workstreams_clarity_note", { id, action, detail });
-  }
-
-  workstreamsReadinessAnswer(id: string, triageRun: string) {
-    return invoke<Workstream>("workstreams_readiness_answer", { id, triageRun });
-  }
-
-  workstreamsReadinessOverride(id: string, triageRun: string) {
-    return invoke<Workstream>("workstreams_readiness_override", { id, triageRun });
   }
 
   workstreamsPause(id: string) {

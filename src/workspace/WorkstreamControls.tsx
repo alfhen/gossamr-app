@@ -1,21 +1,16 @@
 import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { inWorkstreamPane } from "../lib/proposals";
 import { nextStep, type NextStep } from "../lib/nextStep";
-import { flaggedGaps, ignoredAmong, projectOfKey, SHORT_GAP } from "../lib/clarityLearning";
-import { clarityRepliedText, clarityText, type ClarityGap } from "../lib/ticketClarity";
-import { maskSecrets } from "../lib/riskyText";
 import { adoptOfferText } from "../lib/workstreamAdopt";
 import { pausedBanner } from "../lib/workstreamPause";
 import type { WorkstreamView } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { Btn } from "./AgentSheet";
-import { giveBackClarity, settleClarityFocus } from "./clarityActions";
 import { paneHas, useDecisionShown } from "./decisionShown";
 import { focusLost } from "./commands";
 import { openNeed } from "./needsActions";
 import { usePopover } from "./Popover";
 import { useRuns } from "./runsStore";
-import { usePrefs } from "./prefs";
 import { useNeedsYou } from "./useNeeds";
 import { useWorkstreams } from "./workstreamsStore";
 
@@ -195,88 +190,6 @@ export function AdoptNotice({ view }: { view: WorkstreamView }) {
   );
 }
 
-/** What a live region says: `line` once it differs from what it said when the workstream was opened, else nothing, so opening a workstream announces nothing and a change does. */
-export const changedLine = (opened: string, line: string): string => (line && line !== opened ? line : "");
-
-function useChangedLine(scope: string, line: string): string {
-  // State, not a ref: a render React throws away can't leave another workstream's opening line behind. Switching
-  // workstreams resets it during render, which React supports, and that render (an opening) announces nothing.
-  const [first, setFirst] = useState({ scope, line });
-  if (first.scope !== scope) {
-    setFirst({ scope, line });
-    return "";
-  }
-  return changedLine(first.line, line);
-}
-
-/**
- * A ticket Gossamr's own word check found thin, before any triage: what it leaves out, with "Ask the reporter now" (the
- * comment to the reporter, for approval) and "Looks fine". It is a notice, not a need: it blocks and counts nothing, and
- * the triage's verdict stays the authority.
- */
-export function ClarityNotice({ view }: { view: WorkstreamView }) {
-  const c = view.clarity;
-  const learning = usePrefs((s) => s.clarityLearning);
-  const [busy, setBusy] = useState(false);
-  // What "Looks fine" taught Gossamr to leave out for the ticket's project is not said in the notice; a notice with nothing left is not shown.
-  const project = projectOfKey(view.workstream.itemKey ?? "");
-  const gaps = c ? flaggedGaps(c.gaps, learning, project) : [];
-  const spoken = gaps.length ? `${view.workstream.itemKey ?? "This ticket"}${view.reporterReplied ? ": the reporter replied" : " may be unclear"}` : "";
-  const heard = useChangedLine(view.workstream.id, spoken);
-  if (!c) return null;
-  const quiet = ignoredAmong(c.gaps, learning, project);
-  if (!gaps.length) return quiet.length ? <QuietClarity view={view} project={project} gaps={quiet} /> : null;
-  const id = view.workstream.id;
-  const choose = (call: () => Promise<boolean>) => {
-    setBusy(true);
-    void call().finally(() => (setBusy(false), settleClarityFocus(id)));
-  };
-  const store = useWorkstreams.getState();
-  return (
-    <>
-    {/* The toast announces what started; the notice itself is a group, so its buttons are not read as a status. */}
-    <span role="status" data-clarity-status className="sr-only">
-      {heard}
-    </span>
-    <div role="group" aria-label="Ticket wording check" data-clarity-notice={id} className="grid gap-1 rounded-md border border-ws-warn/40 bg-ws-warn/10 px-2.5 py-1.5 text-sm text-ws-ink">
-      <p data-clarity-text className="m-0">
-        {view.reporterReplied ? clarityRepliedText(view.workstream.itemKey ?? "This ticket") : clarityText(view.workstream.itemKey ?? "This ticket", gaps)}
-      </p>
-      {view.reporterReply && (
-        <p data-clarity-reply className="m-0 text-sm whitespace-pre-line text-ws-ink2 [overflow-wrap:anywhere]">
-          {`They wrote: “${maskSecrets(view.reporterReply.excerpt)}”`}
-        </p>
-      )}
-      <p className="m-0 text-xs text-ws-ink2">This is a quick check of the words, not a verdict. It holds nothing up; the triage still decides whether the ticket is ready to plan.</p>
-      <div className="flex flex-wrap items-center gap-2">
-        <Btn tone="plain" disabled={busy} onClick={() => choose(() => store.askReporterNow(id))} className="px-2 py-0.5">
-          Ask the reporter now
-        </Btn>
-        <Btn tone="ghost" disabled={busy} onClick={() => choose(() => store.looksFine(id))} className="px-2 py-0.5">
-          Looks fine
-        </Btn>
-      </div>
-      {quiet.length > 0 && <QuietClarity view={view} project={project} gaps={quiet} inside />}
-    </div>
-    </>
-  );
-}
-
-/** What the notice leaves out because of what "Looks fine" taught: said quietly, with a way to flag it again. Alone when nothing else is flagged, else under the notice. */
-export function QuietClarity({ view, project, gaps, inside = false }: { view: WorkstreamView; project: string; gaps: readonly ClarityGap[]; inside?: boolean }) {
-  const [busy, setBusy] = useState(false);
-  return (
-    <p data-clarity-quiet={view.workstream.id} className={`m-0 flex flex-wrap items-baseline gap-x-2 text-xs text-ws-ink2 ${inside ? "" : "px-1"}`}>
-      <span>
-        Not flagged: you said Looks fine to {gaps.map((g) => SHORT_GAP[g]).join(" and ")} in {project} tickets.
-      </span>
-      <button type="button" disabled={busy} onClick={() => (setBusy(true), void giveBackClarity(project, gaps).finally(() => (setBusy(false), settleClarityFocus(view.workstream.id))))} className="rounded px-1 font-medium text-ws-ink underline hover:bg-ws-hover focus-visible:outline-2 focus-visible:outline-ws-pip">
-        {`Flag again in ${project}`}
-      </button>
-    </p>
-  );
-}
-
 export interface ControlsViewProps {
   view: WorkstreamView;
   actions: ControlActions;
@@ -292,13 +205,9 @@ export interface ControlsViewProps {
   next?: NextStep | null;
 }
 
-/**
- * The one line that says what happens next. When it is waiting on the person, the line opens the top need in the Needs-you pane.
- * When the reporter has been silent for days (`next.nudge`), "Draft a nudge" sits beside it: a short follow-up comment, for approval.
- */
-export function NextStepLine({ next, workstreamId }: { next: NextStep; workstreamId?: string }) {
+/** The one line that says what happens next. When it is waiting on the person, the line opens the top need in the Needs-you pane. */
+export function NextStepLine({ next }: { next: NextStep }) {
   const { need } = next;
-  const [busy, setBusy] = useState(false);
   return (
     <p data-next-step={next.kind} className="m-0 text-sm text-ws-ink">
       {need ? (
@@ -307,14 +216,6 @@ export function NextStepLine({ next, workstreamId }: { next: NextStep; workstrea
         </button>
       ) : (
         next.text
-      )}
-      {next.nudge && workstreamId && (
-        <>
-          {" "}
-          <Btn tone="plain" data-nudge disabled={busy} onClick={() => (setBusy(true), void useWorkstreams.getState().nudgeReporter(workstreamId).finally(() => setBusy(false)))} className="px-2 py-0.5">
-            Draft a nudge
-          </Btn>
-        </>
       )}
     </p>
   );
@@ -361,8 +262,7 @@ export function WorkstreamControlsView({ view, actions, confirmingStop, onConfir
       </div>
       {!paneHas(shown, "paused", ws.id) && <PausedBanner view={view} actions={actions} />}
       <AdoptNotice view={view} />
-      <ClarityNotice view={view} />
-      {next && <NextStepLine next={next} workstreamId={ws.id} />}
+      {next && <NextStepLine next={next} />}
     </div>
   );
 }
@@ -376,7 +276,7 @@ export function WorkstreamControls({ view }: { view: WorkstreamView }) {
   const proposals = useWorkspace((s) => s.proposals);
   const needs = useNeedsYou();
   const confirmingClose = useWorkstreams((s) => s.confirmingClose === id);
-  const next = useMemo(() => nextStep(view, runs, Object.values(proposals), needs), [view, runs, proposals, needs]);
+  const next = useMemo(() => nextStep(view, runs, needs), [view, runs, needs]);
   const openDrafts = useMemo(() => Object.values(proposals).filter((p) => p.state.type === "pending" && inWorkstreamPane(p, view.workstream)).length, [proposals, view.workstream]);
   return <WorkstreamControlsView view={view} actions={actions} confirmingStop={confirmingStop} onConfirmStop={setConfirmingStop} confirmingClose={confirmingClose} onConfirmClose={(on) => useWorkstreams.getState().askClose(on ? id : null)} openDrafts={openDrafts} next={next} />;
 }

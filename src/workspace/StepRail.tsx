@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { itemKey } from "../lib/filter";
 import { leftOutLabel, repeatedComments, REPEATED_COMMENT_NOTE } from "../lib/needs";
-import { inWorkstreamPane, isAnswersDraft } from "../lib/proposals";
+import { inWorkstreamPane } from "../lib/proposals";
 import type { CodeChange, Proposal, ReviewView, Run, WorkstreamEvent, WorkstreamView } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { RunLabel } from "./AgentCard";
@@ -12,7 +12,7 @@ import { draftTitle } from "./DraftCard";
 import { LiveDraftPreview } from "./DraftPreview";
 import { PipRunCard } from "./PipRunCard";
 import { useDraftsRev } from "./draftLive";
-import { BATCH_ASIDE, BATCH_TITLE, EDITED_ASIDE, batchable, draftEdited, editedPending, batchToApprove, freezeBatch, nextStep, retiredStepDrafts, stepBatchLabel, stepChips, stepDrafts, type BatchSnapshot, type StepChip, type StepGroup } from "./workViewLogic";
+import { BATCH_TITLE, EDITED_ASIDE, batchable, draftEdited, editedPending, batchToApprove, freezeBatch, nextStep, retiredStepDrafts, stepBatchLabel, stepChips, stepDrafts, type BatchSnapshot, type StepChip, type StepGroup } from "./workViewLogic";
 import { useWorkView } from "./workViewStore";
 import { openOnGithub } from "./githubUi";
 import { openPullView, usePullView } from "./pullViewStore";
@@ -100,8 +100,6 @@ export function StepDrafts({ step, drafts, inPane = [], approve, initialConfirmi
   const together = batchable(counted);
   const leftOut = repeatedComments(counted.filter((p) => !draftEdited(p.id)));
   const edited = editedPending(counted).length;
-  // Drafts from the person's own reply are never in the batch, as in Needs you; the note says why when it leaves a draft out.
-  const aside = counted.filter((p) => p.state.type === "pending" && isAnswersDraft(p)).length;
   useEffect(() => {
     if (!outcome || !refocus.current) return;
     refocus.current = false;
@@ -151,12 +149,6 @@ export function StepDrafts({ step, drafts, inPane = [], approve, initialConfirmi
             </button>
           </div>
         ))}
-      {/* While a batch is offered or being confirmed, and also where only the reply's drafts kept the button away, the note says why they are not in it. */}
-      {aside > 0 && (frozen !== null || together.length + aside >= 2) && (
-        <p data-batch-aside className="m-0 text-xs text-ws-ink3">
-          {BATCH_ASIDE}
-        </p>
-      )}
       {edited > 0 && (frozen !== null || together.length + edited >= 2) && (
         <p data-batch-aside="edited" className="m-0 text-xs text-ws-ink3">
           {EDITED_ASIDE}
@@ -343,9 +335,7 @@ export function PlanApproval({ questions }: { questions: readonly string[] }) {
 export function StepRailView({ view, runs, events, verdicts, changes = NO_CHANGES, proposals, now, titleOf, onOpenRun, approve, onOpenPr = (url) => void openOnGithub(url), onPullView = pullViewOrGithub, initialOpen = [], reveal = null }: StepRailViewProps) {
   const [open, setOpen] = useState<ReadonlySet<StepGroup>>(() => new Set(initialOpen));
   const chips = useMemo(() => stepChips([...runs], events, verdicts, proposals, { now, waitingForPr: view.waitingForPr, changes }), [runs, events, verdicts, proposals, now, view.waitingForPr, changes]);
-  // A ticket stopped as unclear is not planned until the person chooses: Plan is not what comes next.
-  const unclear = !!view.readiness;
-  const next = unclear && nextStep(chips) === "plan" ? null : nextStep(chips);
+  const next = nextStep(chips);
   const revealIn = reveal ? (runs.find((r) => r.id === reveal)?.spec.kind ?? null) : null;
   useEffect(() => {
     if (revealIn) setOpen((was) => (was.has(revealIn) ? was : new Set([...was, revealIn])));
@@ -410,11 +400,6 @@ export function StepRailView({ view, runs, events, verdicts, changes = NO_CHANGE
                   {isNext && (
                     <span data-step-next-tag className="rounded-full bg-ws-pip-soft px-1.5 text-[10px] leading-4 font-semibold text-ws-pip">
                       {chip.newest && chip.newest.state !== "done" ? "Now" : "Next"}
-                    </span>
-                  )}
-                  {unclear && chip.kind === "plan" && !chip.newest && (
-                    <span data-step-unclear-tag className="rounded-full bg-ws-warn/15 px-1.5 text-[10px] leading-4 font-semibold text-ws-warn">
-                      Waiting for your choice: ticket unclear
                     </span>
                   )}
                   {chip.needsYou > 0 && (

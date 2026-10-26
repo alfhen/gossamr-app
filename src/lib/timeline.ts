@@ -1,8 +1,7 @@
-import type { Intent, Proposal, ProposalMaker, ReporterReply, ReporterReplyAt, Run, RunKind, WorkstreamActor, WorkstreamEvent, WorkstreamView } from "../types";
+import type { Intent, Proposal, ProposalMaker, Run, RunKind, WorkstreamActor, WorkstreamEvent, WorkstreamView } from "../types";
 import { eventText } from "../workspace/activityLogic";
 import type { Need } from "./needs";
-import { maskSecrets } from "./riskyText";
-import { isReporterFollowUp, isReporterNudge, isReporterQuestions, targetOf, workstreamOf } from "./proposals";
+import { targetOf, workstreamOf } from "./proposals";
 
 /**
  * One timeline per workstream (docs/needs-you.md, step 3): what Pip said, what the person said, each run from start to end
@@ -27,7 +26,7 @@ export const FILTER_LABEL: Record<TimelineFilter, string> = { all: "All", runs: 
  * something waiting on the person always opens its need, the same as its row in Needs you. Null for an entry with
  * nothing more to show (a question and its answer, a line about the workstream itself).
  */
-export type TimelineTarget = { type: "run"; id: string } | { type: "draft"; id: string } | { type: "need"; key: string } | { type: "comment"; ticketKey: string; id: string } | null;
+export type TimelineTarget = { type: "run"; id: string } | { type: "draft"; id: string } | { type: "need"; key: string } | null;
 
 /** Where a run is in its life, as its one entry says it. */
 export type RunPhase = "queued" | "started" | "waiting" | "finished" | "failed" | "stopped" | "limit" | "unknown";
@@ -54,8 +53,6 @@ export interface TimelineEntry {
   needKey: string | null;
   /** Something the person decided, or is asked to decide: what the Decisions filter shows. */
   decision: boolean;
-  /** News that waits on the person's reading, not a decision: drawn in the accent of the person's own lines. */
-  attention?: boolean;
   /** The turn's request id, for `said` and `pip`; for a draft Pip made answering a question, that question's. */
   turnId?: string;
   /** The run's id, for `run`. */
@@ -102,12 +99,6 @@ export interface TimelineInput {
   verdicts?: Readonly<Record<string, ReviewOutcome | undefined>>;
   /** The workstream's ticket, for the entries that name none of their own. */
   ticketKey?: string | null;
-  /** When the reporter replied on the ticket, while the wait it ended is undecided (`WorkstreamView.reporterRepliedAt`): a comment leaves no audit line, so the entry is made here. */
-  reporterRepliedAt?: string | null;
-  /** That reply's comment (`WorkstreamView.reporterReply`): its entry quotes it and opens it on the ticket. */
-  reporterReply?: ReporterReply | null;
-  /** Every reply since the first reporter ask was posted (`WorkstreamView.reporterReplies`): each is an entry, so a reply stays once the person asks again. */
-  reporterReplies?: readonly ReporterReplyAt[];
 }
 
 const KIND_WORD: Record<RunKind, string> = { investigate: "Investigate", triage: "Triage", plan: "Plan", build: "Build", review: "Review", verify: "Verify" };
@@ -135,11 +126,8 @@ const TOLD_ELSEWHERE = new Set(["run_approved", "wake", "draft_created", "draft_
 /** Audit lines that ask the person to decide something, whoever wrote them. */
 const ASKS = new Set(["paused"]);
 
-/** What the person does to ask the reporter: each is its own line, never merged into "(2 times)", since a second ask is news. */
-const REPORTER_ASKS = new Set(["readiness_asked", "clarity_asked", "reporter_nudged"]);
-
 /** What the person did that counts as deciding something. Opening or closing a workstream and the notes are bookkeeping, not decisions. */
-const DECIDED = new Set(["draft_approved", "draft_skipped", "review_posted", "paused", "resumed", "dismissed", "undone", "run_stopped", "run_answered", "run_retried", "readiness_asked", "readiness_answered", "readiness_overridden", "clarity_asked", "clarity_dismissed", "reporter_nudged", "clarity_learned", "clarity_reset"]);
+const DECIDED = new Set(["draft_approved", "draft_skipped", "review_posted", "paused", "resumed", "dismissed", "undone", "run_stopped", "run_answered", "run_retried"]);
 
 const time = (iso: string | undefined) => {
   const t = iso ? Date.parse(iso) : NaN;
@@ -208,19 +196,10 @@ export function runSentence(run: Run, label: string | undefined, verdict: Review
 }
 
 /** Whose draft it was, for a sentence about the person's decision on it: "Pip", "an agent", "you". */
-const makerWord = (p: Proposal) => (isReporterQuestions(p) || isReporterNudge(p) ? "Gossamr" : p.createdBy === "agent" ? "an agent" : p.createdBy === "user" ? "you" : MAKER[p.createdBy]);
-
-/** What an earlier ask changes in how a draft's entry reads (see `timeline`). */
-export interface DraftWording {
-  /** The reporter was asked on this workstream before: this ask is the follow-up. */
-  followUp?: boolean;
-}
-
-/** Whether the draft's own words are the follow-up's (`isReporterFollowUp`); a body that is not a document reads as the first ask's. */
-const followUpWorded = (p: Proposal) => p.intent.type === "comment" && typeof p.intent.body === "object" && Array.isArray(p.intent.body?.blocks) && isReporterFollowUp(p);
+const makerWord = (p: Proposal) => (p.createdBy === "agent" ? "an agent" : p.createdBy === "user" ? "you" : MAKER[p.createdBy]);
 
 /** What an applied draft says: the person's decision, and for a review or a run what it came to. */
-function appliedSentence(p: Proposal, on: string, wording: DraftWording = {}): string {
+function appliedSentence(p: Proposal, on: string): string {
   const i = p.intent;
   if (i.type === "githubReview") {
     const n = i.comments.length;
@@ -230,25 +209,21 @@ function appliedSentence(p: Proposal, on: string, wording: DraftWording = {}): s
     const kind = KIND_WORD[i.spec.kind].toLowerCase();
     return `You started the ${kind} run that ${makerWord(p)} drafted${on}`;
   }
-  // The reporter's drafts are told by what they are, so the first ask, the follow-up and the nudge don't read alike.
-  const edited = p.revisions.length ? ", edited by you" : "";
-  if (isReporterNudge(p)) return `You posted the nudge to the reporter${on}${edited}`;
-  if (isReporterQuestions(p)) return `You posted the ${wording.followUp || followUpWorded(p) ? "follow-up " : ""}questions for the reporter${on}${edited}`;
   return `You approved ${DRAFT_WORDS[i.type]}${on}${p.createdBy === "user" ? "" : `, drafted by ${makerWord(p)}`}: ${i.type === "runAnswer" ? "sent" : "posted"}`;
 }
 
 /** The sentence a draft's entry says: who made what on which ticket, then how it stands. */
-export function draftSentence(p: Proposal, wording: DraftWording = {}): string {
+export function draftSentence(p: Proposal): string {
   const target = targetOf(p.intent);
   const on = target ? ` on ${target.key}` : "";
-  const made = `${isReporterQuestions(p) || isReporterNudge(p) ? "Gossamr" : MAKER[p.createdBy]} drafted ${DRAFT_WORDS[p.intent.type]}${on}`;
+  const made = `${MAKER[p.createdBy]} drafted ${DRAFT_WORDS[p.intent.type]}${on}`;
   switch (p.state.type) {
     case "pending":
       return made;
     case "applying":
       return `${made}: posting`;
     case "applied":
-      return appliedSentence(p, on, wording);
+      return appliedSentence(p, on);
     case "skipped":
       return `${made}: skipped`;
     case "retired":
@@ -286,12 +261,10 @@ const AFTER_DRAFT = SOURCE_RANK.draft + 0.5;
  * same moment keep their source's own order. A turn the page doesn't know the time of stands where the turn before it does.
  */
 export function timeline(input: TimelineInput): TimelineEntry[] {
-  const { turns = [], runs = [], drafts = [], events = [], needs = [], labels = new Map(), verdicts = {}, ticketKey = null, reporterRepliedAt = null, reporterReply = null, reporterReplies = [] } = input;
+  const { turns = [], runs = [], drafts = [], events = [], needs = [], labels = new Map(), verdicts = {}, ticketKey = null } = input;
   const needOfRun = new Map(needs.flatMap((n) => (n.runId ? [[n.runId, n] as const] : [])));
-  // A triage that found its ticket not clear enough to plan is what the readiness need (`readiness:<run>`) asks about.
-  for (const n of needs) if (n.kind === "readiness") needOfRun.set(n.key.slice("readiness:".length), n);
   const needOfDraft = new Map(needs.flatMap((n) => (n.key.startsWith("draft:") ? [[n.key.slice("draft:".length), n] as const] : [])));
-  const out: (TimelineEntry & { order: number; cause?: string; before?: string })[] = [];
+  const out: (TimelineEntry & { order: number; cause?: string })[] = [];
   let order = 0;
 
   // The conversation: a turn without a time stands with the one before it (or, first, the one after).
@@ -317,7 +290,7 @@ export function timeline(input: TimelineInput): TimelineEntry[] {
       at: approvedAt.get(run.id) ?? run.queuedAt,
       updatedAt: lifecycle[lifecycle.length - 1].at,
       ticketKey: run.item?.key ?? ticketKey,
-      text: runSentence(run, labels.get(run.id), verdicts[run.id]) + (need?.kind === "readiness" && runPhase(run) === "finished" ? ": the ticket isn't clear enough to plan" : ""),
+      text: runSentence(run, labels.get(run.id), verdicts[run.id]),
       ...(runPhase(run) === "failed" && firstLine(run.error) ? { detail: firstLine(run.error) } : {}),
       target: need ? { type: "need", key: need.key } : { type: "run", id: run.id },
       needKey: need?.key ?? null,
@@ -329,8 +302,6 @@ export function timeline(input: TimelineInput): TimelineEntry[] {
     });
   }
 
-  // The reporter was asked before when another ask of theirs on this workstream was posted earlier.
-  const askedBefore = (p: Proposal) => isReporterQuestions(p) && drafts.some((q) => q.id !== p.id && isReporterQuestions(q) && q.state.type === "applied" && time(q.updatedAt) < time(p.updatedAt));
   for (const p of drafts) {
     const need = needOfDraft.get(p.id);
     out.push({
@@ -339,7 +310,7 @@ export function timeline(input: TimelineInput): TimelineEntry[] {
       at: p.createdAt,
       updatedAt: p.state.type === "pending" ? p.createdAt : p.updatedAt,
       ticketKey: targetOf(p.intent)?.key ?? ticketKey,
-      text: draftSentence(p, { followUp: askedBefore(p) }),
+      text: draftSentence(p),
       target: need ? { type: "need", key: need.key } : { type: "draft", id: p.id },
       needKey: need?.key ?? null,
       decision: !!need,
@@ -357,10 +328,8 @@ export function timeline(input: TimelineInput): TimelineEntry[] {
   const label = (id: string | null) => (id ? (labels.get(id) ?? `run ${id.length <= 12 ? id : id.slice(0, 8)}`) : "a run");
   const lastPaused = [...events].reverse().find((e) => e.action === "paused" || e.action === "held" || e.action === "resumed");
   const pausedNeed = needs.find((n) => n.kind === "paused");
-  const asked = new Set<string>();
-  let previous: (TimelineEntry & { order: number; cause?: string; before?: string }) | null = null;
+  let previous: (TimelineEntry & { order: number; cause?: string }) | null = null;
   for (const e of events) {
-    if (e.action === "readiness_asked" && e.runId) asked.add(e.runId);
     if (TOLD_ELSEWHERE.has(e.action)) continue;
     const draft = e.proposalId ? byDraft.get(e.proposalId) : undefined;
     // An approval, or a review posted, that its draft's own entry already says ("You approved a comment: posted") is that entry's.
@@ -371,19 +340,19 @@ export function timeline(input: TimelineInput): TimelineEntry[] {
         continue;
       }
     }
-    const text = (e.proposalId ? draftLine(e, who(e.actor), draft) : null) ?? eventText(e, label, !!e.runId && asked.has(e.runId));
+    const text = (e.proposalId ? draftLine(e, who(e.actor), draft) : null) ?? eventText(e, label);
     if (!text) continue;
     // A line about something still waiting on the person opens its need: the pause that still holds.
-    const need = (e.action === "paused" || e.action === "held") && e === lastPaused && pausedNeed ? pausedNeed : e.runId && !REPORTER_ASKS.has(e.action) ? needOfRun.get(e.runId) : undefined;
+    const need = (e.action === "paused" || e.action === "held") && e === lastPaused && pausedNeed ? pausedNeed : e.runId ? needOfRun.get(e.runId) : undefined;
     const target: TimelineTarget = need ? { type: "need", key: need.key } : e.proposalId && draft ? { type: "draft", id: e.proposalId } : e.runId && runs.some((r) => r.id === e.runId) ? { type: "run", id: e.runId } : null;
     // The same line again and again is one entry that says how many.
-    if (previous && previous.text.replace(/ \(\d+ times\)$/, "") === text && previous.actor === e.actor && previous.action === e.action && !need && !REPORTER_ASKS.has(e.action)) {
+    if (previous && previous.text.replace(/ \(\d+ times\)$/, "") === text && previous.actor === e.actor && previous.action === e.action && !need) {
       previous.count = (previous.count ?? 1) + 1;
       previous.text = `${text} (${previous.count} times)`;
       previous.updatedAt = e.at;
       continue;
     }
-    const entry: TimelineEntry & { order: number; cause?: string; before?: string } = {
+    const entry: TimelineEntry & { order: number; cause?: string } = {
       key: `audit:${e.workstreamId}:${e.seq}`,
       kind: "audit",
       at: e.at,
@@ -395,32 +364,18 @@ export function timeline(input: TimelineInput): TimelineEntry[] {
       decision: (e.actor === "person" && DECIDED.has(e.action)) || ASKS.has(e.action) || !!need,
       actor: e.actor,
       action: e.action,
-      // A choice to ask the reporter is told when it was made, not moved after the draft it made.
-      ...(e.proposalId && draft && !REPORTER_ASKS.has(e.action) ? { cause: `draft:${e.proposalId}` } : {}),
-      // ... and the choice is the cause of the draft: recorded a moment after drafting, it still stands before the draft and what follows it.
-      ...(e.proposalId && draft && REPORTER_ASKS.has(e.action) ? { before: `draft:${e.proposalId}` } : {}),
+      ...(e.proposalId && draft ? { cause: `draft:${e.proposalId}` } : {}),
       order: order++,
     };
     out.push(entry);
     previous = entry;
   }
 
-  // A reporter answers on the ticket, which leaves no audit line: each reply is told from its comment's time, and stays once the person asks again.
-  for (const r of reporterReplies) {
-    if (!Number.isFinite(time(r.at))) continue;
-    out.push({ key: `audit:reply:${r.id}`, kind: "audit", at: r.at, updatedAt: r.at, ticketKey, text: "The reporter replied on the ticket", detail: `“${maskSecrets(r.excerpt)}”`, target: ticketKey ? { type: "comment", ticketKey, id: r.id } : null, needKey: null, decision: false, attention: r.at === reporterRepliedAt, actor: "supervisor", action: "reporter_replied", order: order++ });
-  }
-  // Without the list (a view that has none), the one reply that ended the wait is told alone.
-  if (!reporterReplies.length && reporterRepliedAt && Number.isFinite(time(reporterRepliedAt))) {
-    out.push({ key: `audit:reply:${reporterRepliedAt}`, kind: "audit", at: reporterRepliedAt, updatedAt: reporterRepliedAt, ticketKey, text: "The reporter replied on the ticket", ...(reporterReply ? { detail: `“${maskSecrets(reporterReply.excerpt)}”` } : {}), target: reporterReply && ticketKey ? { type: "comment", ticketKey, id: reporterReply.id } : null, needKey: null, decision: false, attention: true, actor: "supervisor", action: "reporter_replied", order: order++ });
-  }
-
   // When things happened, except that an effect never stands before its cause: a draft a run left, or what was done to a
   // draft, is not earlier than the run, or the draft, it came of, whatever the clocks the stores read say.
   const placed = new Map<string, { t: number; rank: number }>();
-  const place = (e: TimelineEntry & { cause?: string; before?: string }) => {
-    const effect = e.before ? placed.get(e.before) : undefined;
-    const own = { t: effect ? Math.min(when(e), effect.t) : when(e), rank: SOURCE_RANK[e.kind] };
+  const place = (e: TimelineEntry & { cause?: string }) => {
+    const own = { t: when(e), rank: SOURCE_RANK[e.kind] };
     const cause = e.cause ? placed.get(e.cause) : undefined;
     placed.set(e.key, cause ? { t: Math.max(own.t, cause.t), rank: e.kind === "audit" ? AFTER_DRAFT : own.rank } : own);
   };
@@ -433,7 +388,7 @@ export function timeline(input: TimelineInput): TimelineEntry[] {
       const y = placed.get(b.key)!;
       return compare(x.t, y.t) || x.rank - y.rank || a.order - b.order;
     })
-    .map(({ order: _order, cause: _cause, before: _before, ...e }) => e);
+    .map(({ order: _order, cause: _cause, ...e }) => e);
 }
 
 const compare = (a: number, b: number) => (a < b ? -1 : a > b ? 1 : 0);

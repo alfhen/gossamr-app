@@ -1,92 +1,27 @@
 import { expect, test, type Page } from "@playwright/test";
-import { advanceRuns, askPip, expandNeedsYou, homeComposer, homeSettled, jiraWrites, mockRuns, needOfKind, needRow, needsPane, needsYouCount, needsYouRow, openAgents, openApp, paneSettled, pipPane, seedWorkstreamEvent, selectWorkstream, startWorkstream, openNeedOfKind, openNeedRow, needsStack } from "./support/app";
+import { askPip, expandNeedsYou, homeSettled, jiraWrites, needRow, needsPane, needsYouCount, needsYouRow, openAgents, openApp, pipCommentDraft, selectWorkstream, startWorkstream, needsStack } from "./support/app";
 
-// Backlog items of the seventeenth dogfood round: the timeline telling Plan now from Plan anyway (G18), a draft that holds a secret saying so before Post (G22), the skip Undo naming its draft (G27), the Start-an-agent card's
-// names (G28) and Looks fine saying what comes next (G29).
+// Backlog items of the seventeenth dogfood round: a draft that holds a secret saying so before Post (G22) and the skip Undo
+// naming its draft (G27).
 
-const SAMPLE = "runs=empty&prSurface=manual&pipPace=1";
-const VAGUE = "CA-408";
 const toast = (page: Page) => page.locator("[data-toast]");
-const setup = (page: Page) => page.getByRole("dialog", { name: "Start an agent" });
-const newest = async (page: Page, kind: string) => (await mockRuns(page)).find((r) => r.kind === kind) ?? null;
-
-/** Asks Pip for `what` on `key` and starts the draft from the setup sheet, as the person does. */
-async function startStep(page: Page, what: string, key: string) {
-  await paneSettled(page);
-  await askPip(page, what);
-  await paneSettled(page);
-  await pipPane(page).getByRole("article", { name: `Start an agent: ${key}` }).last().getByRole("button", { name: "Review and start →" }).click();
-  await expect(setup(page)).toBeVisible();
-  await setup(page).getByRole("button", { name: "Start agent" }).click();
-  await expect(setup(page)).toHaveCount(0);
-}
-
-const startInvestigation = (page: Page, key: string) => startStep(page, "investigate this", key);
-
-/** Moves run `id` on to done once Pip has answered. */
-async function finish(page: Page, id: string) {
-  await paneSettled(page);
-  for (let i = 0; i < 3; i++) await advanceRuns(page, 1, id);
-  await expect.poll(async () => (await mockRuns(page)).find((r) => r.id === id)?.state).toBe("done");
-}
-
-/** A workstream on the vague ticket, its investigation and the triage the person started after it: not ready to plan. Left on Pip home. */
-async function unclear(page: Page) {
-  await openApp(page, SAMPLE);
-  await startWorkstream(page, VAGUE);
-  await startInvestigation(page, VAGUE);
-  await finish(page, (await newest(page, "investigate"))!.id);
-  await startStep(page, "triage this", VAGUE);
-  await finish(page, (await newest(page, "triage"))!.id);
-  await openAgents(page);
-  await selectWorkstream(page, VAGUE);
-  await expect(needOfKind(page, "readiness")).toBeVisible();
-}
-
-test.describe("Plan now has its own line (G18)", () => {
-  test("a Plan now after asking the reporter is not worded as Plan anyway", async ({ page }) => {
-    await openApp(page, SAMPLE);
-    await startWorkstream(page, VAGUE);
-    await openAgents(page);
-    await selectWorkstream(page, VAGUE);
-    await seedWorkstreamEvent(page, VAGUE, { actor: "person", action: "readiness_asked", at: new Date(Date.now() - 3000).toISOString(), runId: "t1", proposalId: "d1" });
-    await seedWorkstreamEvent(page, VAGUE, { actor: "person", action: "readiness_overridden", at: new Date(Date.now() - 2000).toISOString(), runId: "t1" });
-    await seedWorkstreamEvent(page, VAGUE, { actor: "person", action: "readiness_overridden", at: new Date(Date.now() - 1000).toISOString(), runId: "t2" });
-    const timeline = pipPane(page).locator("[data-timeline]");
-    await expect(timeline).toContainText(/chose to plan now, after asking the reporter about/);
-    await expect(timeline).toContainText(/chose to plan anyway after .* found the ticket not ready/);
-    await expect(timeline).not.toContainText(/chose to plan anyway after (?!.*t2).*t1/);
-  });
-});
 
 test.describe("a draft that holds a secret says so before Post (G22)", () => {
-  test("the answers draft keeps the text as written and says the pause is coming", async ({ page }) => {
-    test.setTimeout(150_000);
-    await unclear(page);
-    await openNeedOfKind(page, "readiness");
-    await needsPane(page).getByRole("button", { name: "I'll answer" }).click();
-    const prefill = await homeComposer(page).inputValue();
-    await homeComposer(page).fill(`${prefill}Done means the winback mail goes out. Password: hunter22secret. We only touch the winback flow. The CRM team asked for it.`);
-    await homeComposer(page).press("Enter");
-    await homeSettled(page);
-    await expandNeedsYou(page, VAGUE);
-    await openNeedRow(page, "Answers to the open questions");
-    const draft = needsPane(page).getByRole("article", { name: `Comment on ${VAGUE}` });
+  test("the edited draft keeps the text as written and says the pause is coming", async ({ page }) => {
+    test.setTimeout(120_000);
+    await openApp(page, "runs=empty");
+    await startWorkstream(page, "CA-408");
+    await openAgents(page);
+    await selectWorkstream(page, "CA-408");
+    const draft = await pipCommentDraft(page, "CA-408");
+    await draft.getByRole("button", { name: "Edit" }).click();
+    const text = needsPane(page).locator("textarea").first();
+    await text.fill(`${await text.inputValue()}\n\nPassword: hunter22secret`);
+    await draft.getByRole("button", { name: "Done editing" }).click();
     await expect(draft).toContainText("hunter22secret");
     await expect(draft.locator("[data-secret-note]")).toContainText("This holds something that looks like a secret. Gossamr will pause before posting it.");
     await draft.getByRole("button", { name: "Post comment" }).click();
     await expect(draft.locator("[data-post-pause]")).toBeVisible();
-    expect(await jiraWrites(page)).toEqual([]);
-  });
-});
-
-test.describe("Looks fine says what comes next (G29)", () => {
-  test("a short toast says the agent step can be started from the conversation", async ({ page }) => {
-    await openApp(page, SAMPLE);
-    await startWorkstream(page, VAGUE);
-    await expect(pipPane(page).locator("[data-clarity-notice]")).toBeVisible();
-    await pipPane(page).locator("[data-clarity-notice]").getByRole("button", { name: "Looks fine" }).click();
-    await expect(toast(page).filter({ hasText: "The agent step can be started from the conversation." })).toHaveCount(1);
     expect(await jiraWrites(page)).toEqual([]);
   });
 });

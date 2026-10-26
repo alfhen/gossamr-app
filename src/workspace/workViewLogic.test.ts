@@ -222,13 +222,6 @@ describe("drafts by step", () => {
     setLiveDraft("a", null);
   });
 
-  it("leave out the questions to a reporter and Pip's comment with the person's answers, which are read and approved on their own", () => {
-    const asked = { ...fromRun("asked", comment("CA-401"), "r5"), label: "Questions for the reporter" } as Proposal;
-    const clarity = { ...draft("clarity", comment("CA-401"), 4), createdBy: "user", label: "Questions for the reporter" } as Proposal;
-    const answers = { ...draft("answers", comment("CA-401"), 3), label: "Answers to the open questions" } as Proposal;
-    expect(batchable([asked, clarity, answers, fromRun("c1", comment("CA-401"), "r5")]).map((p) => p.id)).toEqual(["c1"]);
-  });
-
   it("leave out a draft the person edited, which only its card posts, and refuse a batch whose draft gained an edit after its confirm opened (G1)", () => {
     const a = fromRun("e1", comment("CA-401"), "r5");
     const b = fromRun("e2", comment("CA-401"), "r5");
@@ -256,7 +249,7 @@ describe("composerFooter", () => {
     const ws = view("ws-1", "CA-401", { runs: ["a", "b", "c", "d"] });
     const fresh = { lastProgressAt: iso(1) };
     const runs = [run("a", "investigate", "working", fresh), run("b", "triage", "queued"), run("c", "plan", "launching"), run("d", "build", "done"), run("x", "plan", "working", { ...fresh, item: ref("CA-999"), spec: { ...base.spec, kind: "plan", workstream: null } })];
-    const waiting = needs({ workstreams: [ws], runs: [], proposals: [draft("p1", comment("CA-401"), 5), draft("p2", comment("CA-401"), 4)], dismissed: new Set(), now: NOW }).length;
+    const waiting = needs({ workstreams: [ws], runs: [], proposals: [draft("p1", comment("CA-401"), 5), draft("p2", comment("CA-401"), 4)], dismissed: new Set() }).length;
     // "Running", the word the Agents view's lane uses for runs at work.
     expect(composerFooter(runs, waiting, NOW)).toBe("3 agents running · 1 queued · 2 need you");
     expect(composerFooter([runs[0]], 1, NOW)).toBe("1 agent running · 1 needs you");

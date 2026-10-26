@@ -1,72 +1,19 @@
 import { expect, test, type Page } from "@playwright/test";
-import { advanceRuns, agentsHome, askPip, homeComposer, homeSettled, jiraWrites, mockRuns, needsPane, openAgents, openApp, paneSettled, pipPane, selectWorkstream, startWorkstream, openNeedOfKind, openNeedRow } from "./support/app";
+import { jiraWrites, needsPane, openAgents, openApp, pipCommentDraft, pipPane, selectWorkstream, startWorkstream } from "./support/app";
 
-// Fixes from round 9's backlog: the answers draft saying where it comes from (G20), the keyboard odds and ends (G21) and the
-// pause quoting what tripped it (G23).
+// Fixes from round 9's backlog: the keyboard odds and ends (G21) and the pause quoting what tripped it (G23).
 
 const toast = (page: Page) => page.locator("[data-toast]");
 const allProjects = (page: Page) => page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "All projects" }).click();
 
-/** The questions to the reporter on `key`, drafted from its notice and left waiting in the decision pane. */
+/** A comment on `key` drafted by Pip and left waiting in the decision pane. */
 async function draftOn(page: Page, key: string) {
   await allProjects(page);
   await startWorkstream(page, key);
   await openAgents(page);
   await selectWorkstream(page, key);
-  await agentsHome(page).locator("[data-clarity-notice]").getByRole("button", { name: "Ask the reporter now" }).click();
-  return needsPane(page).getByRole("article", { name: `Comment on ${key}` });
+  return pipCommentDraft(page, key);
 }
-
-test.describe("the answers draft says which reply it came from (G20)", () => {
-  /** Asks Pip for `what` on `key` and starts it, as the person does. */
-  async function startStep(page: Page, what: string, key: string) {
-    await paneSettled(page);
-    await askPip(page, what);
-    await paneSettled(page);
-    const setup = page.getByRole("dialog", { name: "Start an agent" });
-    await pipPane(page).getByRole("article", { name: `Start an agent: ${key}` }).last().getByRole("button", { name: "Review and start →" }).click();
-    await expect(setup).toBeVisible();
-    await setup.getByRole("button", { name: "Start agent" }).click();
-    await expect(setup).toHaveCount(0);
-  }
-  const newest = async (page: Page, kind: string) => (await mockRuns(page)).find((r) => r.kind === kind) ?? null;
-  async function finish(page: Page, id: string) {
-    await paneSettled(page);
-    for (let i = 0; i < 3; i++) await advanceRuns(page, 1, id);
-    await expect.poll(async () => (await mockRuns(page)).find((r) => r.id === id)?.state).toBe("done");
-  }
-
-  test("on its card in the app only, never in the comment that goes to Jira", async ({ page }) => {
-    test.setTimeout(180_000);
-    await openApp(page, "runs=empty&prSurface=manual&pipPace=1");
-    await startWorkstream(page, "CA-408");
-    await startStep(page, "investigate this", "CA-408");
-    await finish(page, (await newest(page, "investigate"))!.id);
-    await startStep(page, "triage this", "CA-408");
-    await finish(page, (await newest(page, "triage"))!.id);
-    await openAgents(page);
-    await selectWorkstream(page, "CA-408");
-    await openNeedOfKind(page, "readiness");
-    await needsPane(page).getByRole("button", { name: "I'll answer" }).click();
-    await expect(homeComposer(page)).toHaveValue(/My answers: $/);
-    await page.keyboard.type("1. Done means all three emails send. 2. Only the CRM export. 3. The support team.");
-    await page.keyboard.press("Enter");
-    await homeSettled(page);
-    await openNeedRow(page, "Answers to the open questions");
-    const card = needsPane(page).getByRole("article", { name: "Comment on CA-408" });
-    await expect(card).toContainText("Answers to the open questions on this ticket:");
-    const line = card.locator('[data-provenance="pip"]');
-    await expect(line).toContainText("Drafted by Pip");
-    await expect(line).toContainText("Drafted from your reply “1. Done means all three emails send.");
-    // What is posted is the answers alone.
-    await card.getByRole("button", { name: "Edit" }).click();
-    const text = await card.locator("textarea").first().inputValue();
-    expect(text).toContain("Answers to the open questions on this ticket:");
-    expect(text).not.toMatch(/Drafted|your reply|Pip/);
-    await card.getByRole("button", { name: "Done editing" }).click();
-    expect(await jiraWrites(page)).toEqual([]);
-  });
-});
 
 test.describe("the keyboard odds and ends (G21)", () => {
   test("Esc on the Close confirm keeps the keyboard on Close… with a toast up", async ({ page }) => {

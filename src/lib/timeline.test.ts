@@ -266,7 +266,7 @@ describe("timeline: a run is one entry, updated in place", () => {
     expect(working.needKey).toBeNull();
     expect(working.decision).toBe(false);
     const asking = run("r2", "build", "needsPermission", 5, { needs: "git push origin ca-401" });
-    const need = needs({ workstreams: [view()], runs: [asking], proposals: [], dismissed: new Set(), now: NOW })[0];
+    const need = needs({ workstreams: [view()], runs: [asking], proposals: [], dismissed: new Set() })[0];
     const entry = timeline({ runs: [asking], needs: [need] })[0];
     expect(entry.target).toEqual({ type: "need", key: need.key });
     expect(entry.needKey).toBe(need.key);
@@ -319,13 +319,6 @@ describe("timeline: drafts", () => {
     expect(timeline({ drafts: [draft("d2", comment("CA-401"), 5)] })[0].turnId).toBeUndefined();
   });
 
-  it("says Gossamr drafted the comment to a reporter, and still an agent for the triage's own note", () => {
-    const asked = { ...draft("d1", comment("CA-401"), 5), label: "Questions for the reporter" } as Proposal;
-    expect(timeline({ drafts: [asked] })[0].text).toBe("Gossamr drafted a comment on CA-401");
-    expect(timeline({ drafts: [{ ...asked, state: { type: "applied" } } as Proposal] })[0].text).toBe("You posted the questions for the reporter on CA-401");
-    expect(timeline({ drafts: [draft("d2", comment("CA-401"), 5)] })[0].text).toBe("An agent drafted a comment on CA-401");
-  });
-
   it("says the person started the run Pip drafted", () => {
     const start = { type: "startRun", item: ref("CA-401"), spec: { ...base.spec, kind: "build" } } as unknown as Intent;
     const d = draft("d1", start, 5, { createdBy: "pip", state: { type: "applied" } });
@@ -334,22 +327,9 @@ describe("timeline: drafts", () => {
   });
 
 
-  it("tells the first ask, the follow-up and the nudge apart (G13)", () => {
-    const asked = (id: string, label: string, over: Partial<Proposal> = {}) => ({ ...draft(id, comment("CA-408"), 5, { state: { type: "applied" } }), label, ...over }) as Proposal;
-    const questions = asked("d1", "Questions for the reporter");
-    expect(draftSentence(questions)).toBe("You posted the questions for the reporter on CA-408");
-    expect(draftSentence(asked("d2", "Nudge for the reporter"))).toBe("You posted the nudge to the reporter on CA-408");
-    expect(draftSentence(questions, { followUp: true })).toBe("You posted the follow-up questions for the reporter on CA-408");
-    expect(draftSentence({ ...questions, revisions: [{}] } as unknown as Proposal)).toBe("You posted the questions for the reporter on CA-408, edited by you");
-    // An earlier ask posted on the workstream makes the next one a follow-up.
-    const second = asked("d3", "Questions for the reporter", { createdAt: iso(10), updatedAt: iso(10) });
-    const list = timeline({ drafts: [{ ...questions, createdAt: iso(30), updatedAt: iso(30) } as Proposal, second] });
-    expect(list.map((e) => e.text)).toEqual(["You posted the questions for the reporter on CA-408", "You posted the follow-up questions for the reporter on CA-408"]);
-  });
-
   it("opens the draft's card, or its need while it waits", () => {
     const pending = draft("d1", comment("CA-401"), 5);
-    const need = needs({ workstreams: [view()], runs: [], proposals: [pending], dismissed: new Set(), now: NOW }).find((n) => n.key === "draft:d1")!;
+    const need = needs({ workstreams: [view()], runs: [], proposals: [pending], dismissed: new Set() }).find((n) => n.key === "draft:d1")!;
     expect(need).toBeDefined();
     const linked = timeline({ drafts: [pending], needs: [need] })[0];
     expect(linked.target).toEqual({ type: "need", key: "draft:d1" });
@@ -444,41 +424,6 @@ describe("timeline: the audit", () => {
     ]);
   });
 
-  it("keeps each ask of the reporter as a line of its own, however alike (G29)", () => {
-    for (const action of ["readiness_asked", "clarity_asked", "reporter_nudged"]) {
-      const list = timeline({ events: [line(action, 10), line(action, 9)] });
-      expect(list).toHaveLength(2);
-      expect(list.some((e) => e.count !== undefined || / times\)$/.test(e.text))).toBe(false);
-    }
-  });
-
-  it("tells the choice to ask the reporter before the post it made, and without the need it settled (G7)", () => {
-    const base = needs({ workstreams: [view({ pausedReason: "person" })], runs: [], proposals: [], dismissed: new Set(), now: NOW, pausedAt: { "ws-1": iso(5) } }).find((n) => n.kind === "paused")!;
-    const open: Need = { ...base, key: "readiness:r1", kind: "readiness", runId: "r1" };
-    const list = timeline({
-      drafts: [draft("d1", comment("CA-401"), 4, { state: { type: "applied" }, updatedAgo: 2 })],
-      events: [line("readiness_asked", 5, { runId: "r1", proposalId: "d1" }), line("draft_approved", 2, { proposalId: "d1" })],
-      needs: [open],
-    });
-    const texts = list.map((e) => e.text);
-    const asked = list.find((e) => e.action === "readiness_asked")!;
-    expect(texts.indexOf(asked.text)).toBeLessThan(texts.findIndex((t) => t.includes("approved a comment")));
-    expect(asked.needKey).toBeNull();
-    expect(asked.target).toEqual({ type: "draft", id: "d1" });
-  });
-
-  it("keeps the choice to ask before the draft it made and the post that followed, even when it was recorded a moment after the draft (G22)", () => {
-    for (const asked of [0, -0.5]) {
-      const list = timeline({
-        drafts: [draft("d1", comment("CA-401"), 4, { state: { type: "applied" }, updatedAgo: 4 })],
-        events: [line("clarity_asked", 4 + asked, { proposalId: "d1" }), line("draft_approved", 4, { proposalId: "d1" })],
-      });
-      const at = (match: (e: (typeof list)[number]) => boolean) => list.findIndex(match);
-      expect(at((e) => e.action === "clarity_asked")).toBeLessThan(at((e) => e.kind === "draft"));
-      expect(at((e) => e.action === "clarity_asked")).toBeLessThan(at((e) => e.text.includes("approved a comment")));
-    }
-  });
-
   it("collapses the same line again and again into one that says how many", () => {
     const list = timeline({ events: [line("run_stopped", 10, { runId: "r1" }), line("run_stopped", 9, { runId: "r1" }), line("run_stopped", 8, { runId: "r1" }), line("paused", 7), line("run_stopped", 6, { runId: "r1" })], labels });
     expect(list.map((e) => e.text)).toEqual(["You stopped R1 (3 times)", "You paused the workstream", "You stopped R1"]);
@@ -504,72 +449,20 @@ describe("timeline: the audit", () => {
     ]);
   });
 
-  it("leaves out what an earlier version recorded: automatic starts, fix rounds, budgets, rules and modes", () => {
-    const old = ["autostart", "waiting_for_pr", "fix_round_sent", "fix_rounds_exhausted", "budget_reset", "steps_allowed", "rule_set", "mode_set", "escalation_taken"];
+  it("leaves out what an earlier version recorded: automatic starts, fix rounds, budgets, rules, modes and the reporter questions", () => {
+    const old = ["autostart", "waiting_for_pr", "fix_round_sent", "fix_rounds_exhausted", "budget_reset", "steps_allowed", "rule_set", "mode_set", "escalation_taken", "readiness_asked", "readiness_answered", "readiness_overridden", "clarity_asked", "clarity_dismissed", "clarity_learned", "clarity_reset", "reporter_nudged"];
     expect(timeline({ events: old.map((a, n) => line(a, 20 - n, { actor: "supervisor" })) })).toEqual([]);
   });
 
   it("links the pause that still holds to its need", () => {
     const held = view({ pausedReason: "person" });
-    const all = needs({ workstreams: [held], runs: [], proposals: [], dismissed: new Set(), now: NOW, pausedAt: { "ws-1": iso(5) } });
+    const all = needs({ workstreams: [held], runs: [], proposals: [], dismissed: new Set(), pausedAt: { "ws-1": iso(5) } });
     const pause = all.find((n) => n.kind === "paused")!;
     const list = timeline({ events: [line("paused", 30), line("resumed", 20), line("paused", 5)], needs: [pause] });
     expect(list.map((e) => e.target)).toEqual([null, null, { type: "need", key: pause.key }]);
     expect(list[2].needKey).toBe(pause.key);
   });
 
-  it("words the person's three choices on a ticket that isn't clear enough to plan and counts each among their decisions", () => {
-    const list = timeline({
-      events: [line("readiness_asked", 3, { runId: "r1", proposalId: "d1" }), line("readiness_answered", 2, { runId: "r1" }), line("readiness_overridden", 1, { runId: "r1" })],
-      runs: [run("r1", "triage", "done", 30)],
-      labels: new Map([["r1", "R1"]]),
-    });
-    const audit = list.filter((e) => e.kind === "audit");
-    expect(audit.map((e) => [e.text, e.decision])).toEqual([
-      ["You chose to ask the reporter about R1's open questions; drafted for you to post", true],
-      ["You chose to answer R1's open questions", true],
-      ["You chose to plan now, after asking the reporter about R1's open questions", true],
-    ]);
-    expect(audit.every((e) => e.kind === "audit" && e.decision)).toBe(true);
-    // The same line by anyone but the person is still worded, and is not the person's decision.
-    const other = timeline({ events: [line("readiness_overridden", 1, { actor: "pip", runId: "r1" })], runs: [run("r1", "triage", "done", 30)], labels: new Map([["r1", "R1"]]) }).find((e) => e.kind === "audit")!;
-    expect(other.text).toBe("Pip chose to plan anyway after R1 found the ticket not ready");
-    expect(other.decision).toBe(false);
-  });
-
-  it("words a Plan now after the reporter was asked apart from Plan anyway", () => {
-    const list = timeline({
-      events: [line("readiness_asked", 3, { runId: "r1", proposalId: "d1" }), line("readiness_overridden", 2, { runId: "r1" }), line("readiness_overridden", 1, { runId: "r2" })],
-      runs: [run("r1", "triage", "done", 30), run("r2", "triage", "done", 30)],
-      labels: new Map([["r1", "R1"], ["r2", "R2"]]),
-    });
-    const texts = list.filter((e) => e.kind === "audit").map((e) => e.text);
-    expect(texts).toContain("You chose to plan now, after asking the reporter about R1's open questions");
-    expect(texts).toContain("You chose to plan anyway after R2 found the ticket not ready");
-    expect(texts.join("\n")).not.toContain("plan anyway after R1");
-  });
-
-  it("says a triage's finish with the reason the ticket waits, and opens its need", () => {
-    const stopped: WorkstreamView = { ...view(), readiness: { triageRun: "r1", triageLabel: "R1", questions: ["Who asked?"], at: iso(20) } };
-    const found = needs({ workstreams: [stopped], runs: [], proposals: [], dismissed: new Set(), now: NOW });
-    expect(found.map((n) => n.kind)).toEqual(["readiness"]);
-    const [entry] = timeline({ runs: [run("r1", "triage", "done", 30)], needs: found, labels: new Map([["r1", "R1"]]) });
-    expect(entry).toMatchObject({ text: "Triage R1 finished: the ticket isn't clear enough to plan", target: { type: "need", key: "readiness:r1" }, needKey: "readiness:r1", decision: true });
-    const [after] = timeline({ runs: [run("r1", "triage", "done", 30)], needs: [], labels: new Map([["r1", "R1"]]) });
-    expect(after).toMatchObject({ text: "Triage R1 finished", target: { type: "run", id: "r1" }, decision: false });
-  });
-
-  it("opens the run or the draft a line names, when it is on the timeline", () => {
-    const list = timeline({
-      runs: [run("r1", "build", "stopped", 30)],
-      drafts: [draft("d1", comment("CA-401"), 20, { state: { type: "applied" } })],
-      events: [line("run_stopped", 15, { runId: "r1" }), line("draft_skipped", 10, { proposalId: "d1" }), line("run_answered", 5, { runId: "gone" })],
-      labels,
-    });
-    const audit = list.filter((e) => e.kind === "audit");
-    expect(audit.map((e) => e.target)).toEqual([{ type: "run", id: "r1" }, { type: "draft", id: "d1" }, null]);
-    expect(audit[2].text).toBe("You answered run gone");
-  });
 });
 
 describe("timeline: one line for one post", () => {
@@ -628,55 +521,5 @@ describe("timeline filters", () => {
     for (const f of TIMELINE_FILTERS) expect(EMPTY_FILTER[f]).toMatch(/\.$/);
     expect(shows("runs", { kind: "audit", decision: true })).toBe(false);
     expect(shows("decisions", { kind: "run", decision: false })).toBe(false);
-  });
-});
-
-describe("timeline: the reporter's replies on the ticket (G1)", () => {
-  it("keeps a reply once the person asks again, in time order between the two asks", () => {
-    const asked = (id: string, minutes: number) => ({ ...draft(id, comment("CA-408"), minutes, { state: { type: "applied" } }), label: "Questions for the reporter", createdAt: iso(minutes), updatedAt: iso(minutes) }) as Proposal;
-    const list = timeline({
-      ticketKey: "CA-408",
-      drafts: [asked("d1", 50), asked("d2", 10)],
-      // The wait the reply ended was asked again, so the view has no reply pending any more.
-      reporterReplies: [{ id: "c1", excerpt: "It happens on checkout…", at: iso(30) }],
-    });
-    expect(list.map((e) => e.text)).toEqual(["You posted the questions for the reporter on CA-408", "The reporter replied on the ticket", "You posted the follow-up questions for the reporter on CA-408"]);
-    expect(list[1]).toMatchObject({ key: "audit:reply:c1", detail: "“It happens on checkout…”", attention: false, target: { type: "comment", ticketKey: "CA-408", id: "c1" } });
-  });
-
-  it("asks for attention on the reply the person has not settled, and tells each reply by its comment", () => {
-    const list = timeline({ ticketKey: "CA-408", reporterRepliedAt: iso(30), reporterReplies: [{ id: "c1", excerpt: "One", at: iso(40) }, { id: "c2", excerpt: "Two", at: iso(30) }] });
-    expect(list.map((e) => [e.key, e.attention])).toEqual([["audit:reply:c1", false], ["audit:reply:c2", true]]);
-  });
-});
-
-describe("timeline: the reporter's reply on the ticket", () => {
-  it("is an entry of its own at the reply's time, since a comment leaves no audit line", () => {
-    const at = iso(30);
-    const got = timeline({ ticketKey: "CA-401", reporterRepliedAt: at });
-    expect(got).toHaveLength(1);
-    expect(got[0]).toMatchObject({ kind: "audit", at, text: "The reporter replied on the ticket", ticketKey: "CA-401", decision: false, attention: true, target: null });
-  });
-
-  it("quotes the reply and opens its comment on the ticket, when the view says which it was (G15)", () => {
-    const got = timeline({ ticketKey: "CA-401", reporterRepliedAt: iso(30), reporterReply: { id: "c7", excerpt: "It should send three emails." } });
-    expect(got[0]).toMatchObject({ text: "The reporter replied on the ticket", detail: "“It should send three emails.”", target: { type: "comment", ticketKey: "CA-401", id: "c7" } });
-    // A secret in the reply is masked in the quote (G2), whichever way the entry is made.
-    const secret = { id: "c8", excerpt: "Use ghp_abcdefghijklmnopqrstuvwxyz0123 and password: hunter22secret" };
-    for (const input of [{ reporterRepliedAt: iso(30), reporterReply: secret }, { reporterReplies: [{ ...secret, at: iso(30) }] }]) {
-      const detail = timeline({ ticketKey: "CA-401", ...input })[0].detail;
-      expect(detail).toBe("“Use gh… and password: hu…”");
-    }
-    // Without a ticket key there is nothing to open, but the quote stays.
-    expect(timeline({ reporterRepliedAt: iso(30), reporterReply: { id: "c7", excerpt: "Yes." } })[0]).toMatchObject({ detail: "“Yes.”", target: null });
-    expect(timeline({ ticketKey: "CA-401", reporterRepliedAt: iso(30) })[0].detail).toBeUndefined();
-  });
-
-  it("sits among the other entries by its time, and is absent without one", () => {
-    const turns: TimelineTurn[] = [{ requestId: "t1", at: iso(60), prompt: "hi", text: "", status: "done" }, { requestId: "t2", at: iso(10), prompt: "again", text: "", status: "done" }];
-    const texts = timeline({ turns, reporterRepliedAt: iso(30) }).map((e) => e.text);
-    expect(texts).toEqual(["You: hi", "The reporter replied on the ticket", "You: again"]);
-    expect(timeline({ turns }).map((e) => e.text)).toEqual(["You: hi", "You: again"]);
-    expect(timeline({ reporterRepliedAt: "not a time" })).toEqual([]);
   });
 });

@@ -1,6 +1,6 @@
 import type { Intent, ItemRef, Proposal, Run, WorkstreamEvent, WorkstreamView } from "../types";
 import { docText } from "./docs";
-import { isReporterFollowUp, isReporterNudge, isReporterQuestions, makerName, targetOf, workstreamOf } from "./proposals";
+import { makerName, targetOf, workstreamOf } from "./proposals";
 import { fromRunPhrase } from "./runNames";
 import { maskSecrets } from "./riskyText";
 import { diffLines, readableLine, withGaps } from "./textDiff";
@@ -38,8 +38,6 @@ export interface SentEntry {
   /** The ticket it went to; null for a new ticket that was created. */
   ticketKey: string | null;
   kind: SentKind;
-  /** What the pill says in place of the kind's label, for a comment that is more specific than "Comment": "Questions to the reporter". */
-  label?: string;
   /** One short line: what was posted. */
   summary: string;
   /** A second line for a comment or a description edit, whose summary alone is thin: what follows the opener, or what was added. "(+N more)" ends it when more lines of a comment follow. */
@@ -49,7 +47,7 @@ export interface SentEntry {
   /** The workstream it came from, by id, and its name ("CA-401"), when it came from one. */
   workstreamId: string | null;
   workstream: string | null;
-  /** Who drafted it: "Pip", "An agent", "Gossamr", "You". */
+  /** Who drafted it: "Pip", "An agent", "You". */
   madeBy: string;
   /** Where the draft came from: "Pip's conversation", "run R3", "the board". */
   from: string;
@@ -183,7 +181,6 @@ function fromWords(p: Proposal, labels: readonly (readonly [string, string])[], 
   }
   if (p.origin.type === "chat") {
     const key = p.createdBy === "pip" ? (targetOf(p.intent)?.key ?? null) : null;
-    // What Gossamr drafted at the person's ask ("Ask the reporter now") is named by that, not by Gossamr again: the line before says who drafted it.
     return p.createdBy === "pip" ? (key ? "Pip" : "Pip's conversation") : workstreamOf(p) ? "your request" : "the conversation";
   }
   return "the board";
@@ -221,10 +218,9 @@ export function jiraSent({ proposals, events, workstreams, runs = [] }: SentInpu
       at: approved?.at ?? p.updatedAt,
       ticketKey: targetOf(p.intent)?.key ?? p.created[0]?.key ?? null,
       ...what,
-      ...(isReporterFollowUp(p) ? { label: "Follow-up questions to the reporter" } : isReporterQuestions(p) ? { label: "Questions to the reporter" } : isReporterNudge(p) ? { label: "Nudge to the reporter" } : {}),
       workstreamId,
       workstream: view ? (view.workstream.itemKey ?? view.workstream.title) : null,
-      madeBy: isReporterQuestions(p) || isReporterNudge(p) ? "Gossamr" : makerName(p.createdBy),
+      madeBy: makerName(p.createdBy),
       from: fromWords(p, view?.labels ?? [], runs),
       edited: p.revisions.some((r) => r.note === "Edited"),
     });

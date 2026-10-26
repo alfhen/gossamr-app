@@ -1,7 +1,6 @@
 import type { Run, RunKind } from "../types";
 import { byQueue } from "../lib/workstreamStage";
 import { withoutMarkers } from "./mockRunKinds";
-import { oneQuestionEach } from "./mockReadiness";
 import type { MockWorkstreams } from "./mockWorkstreams";
 import type { MockRuns } from "./mockRuns";
 import type { MockProposals } from "./mockProposals";
@@ -232,10 +231,50 @@ function triagePlanRecommended(run: Run): boolean | null {
   return run.item && run.resultComplete !== false && run.result ? planRecommended(run.result) : null;
 }
 
+/** A listed question that holds several ("What is done? Which number changes?") as one each, so every bullet is one question; as `one_question_each` in runs/result.rs. */
+export function oneQuestionEach(questions: readonly string[]): string[] {
+  return questions.flatMap((q) => q.trim().split(/(?<=\?)\s+(?=\p{Lu})/u)).filter((q) => q !== "");
+}
+
 /** What a finished Triage on a ticket says about its ticket being ready to plan, from its whole written answer, as `Resolved.readiness`. */
 export function triageReadiness(run: Run): Readiness | null {
   return run.spec.kind === "triage" && run.item && run.resultComplete !== false && run.result ? readiness(run.result) : null;
 }
+
+/** A description is thin when it is a single non-empty line of fewer than `THIN_LIMIT` characters: the one deliberately vague kind of ticket the sample's Triage recognises. */
+export const THIN_LIMIT = 40;
+
+export function thinDescription(text: string | null | undefined): boolean {
+  const t = (text ?? "").trim();
+  return t !== "" && !t.includes("\n") && t.length < THIN_LIMIT;
+}
+
+/** The open questions a sample triage lists; the first holds two, which every reader lists one each (`oneQuestionEach`). */
+const unclearQuestions = (key: string) => [`What does done look like for ${key}? Which behaviour or number should change?`, "What is in scope and what is out?", "Who asked for this, and who is waiting on it?"];
+
+/** What a sample triage of a ticket with a thin description finishes with: it can't size the work, says `Ready to plan: no` and lists what it would need to know. */
+export function unclearTriageResult(key: string): string {
+  return [
+    `${key}'s description is one short line, so I can't size it with any confidence.`,
+    "",
+    "Ready to plan: no",
+    "Open questions:",
+    ...unclearQuestions(key).map((q) => `- ${q}`),
+    "",
+    "Plan recommended: yes",
+    "",
+    "For Jira:",
+    "The ticket cannot be sized yet: the description is one line. Before it can be planned it needs an answer on what done looks like, what is in and out of scope, and who asked for it and who is waiting on it.",
+  ].join("\n");
+}
+
+const COUNTED = ["no", "one", "two", "three", "four", "five", "six"];
+
+/** The summary of that triage: it counts the questions as they are listed (one each), so it never says three over four bullets. */
+export const unclearTriageSummary = (key: string) => {
+  const n = oneQuestionEach(unclearQuestions(key)).length;
+  return `Triage complete: the ticket isn't clear enough to size, ${COUNTED[n] ?? n} ${n === 1 ? "question" : "questions"} open`;
+};
 
 const KEY_STATE: Record<WakeState, string> = {
   done: "done",
