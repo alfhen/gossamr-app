@@ -12,7 +12,7 @@ use crate::auth::Scope;
 use crate::db::Db;
 use crate::domain::{
     default_instruction, Actor, Basis, TICKETLESS_STARTER, WorkstreamEvent, CodeChange, CodeChangeState, ContainerRef, CreatedBy, Doc, Intent, ItemKind, ItemRef, Origin, Proposal, ProposalQuery, ProposalState, Run, RunKind,
-    ReviewComment, RunEvent, RunQuery, RunReview, RunSpec,
+    ReviewComment, RunEvent, RunQuery, RunReview, RunSpec, RunState,
 };
 use crate::error::{Error, Result};
 use crate::model::MentionRef;
@@ -563,7 +563,7 @@ impl Core {
             let mut review = RunReview::of(run_of(&p)?.2);
             if p.state != ProposalState::Pending {
                 let offered = match db.run_by_proposal(id)? {
-                    Some(run) => db.report(&run.id)?.is_some(),
+                    Some(run) => run.state == RunState::Queued || db.report(&run.id)?.is_some(),
                     None => false,
                 };
                 if !offered {

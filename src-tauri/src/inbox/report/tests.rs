@@ -281,3 +281,13 @@ async fn a_draft_always_spells_out_the_report_and_its_digest_follows_what_it_say
     assert_ne!(review.digest, silent.digest(), "the digest follows what the draft says");
     assert!(!crate::domain::render_prompt(&silent).contains("Gossamr tool"), "a draft from before the tools were always on still reads as it did");
 }
+
+#[tokio::test]
+async fn an_approved_run_that_has_not_launched_yet_still_shows_the_tools_it_will_get() {
+    let fx = fixture_watching(&["acme/webshop"]).await;
+    let p = fx.core.draft_run(next_spec(&fx), Some(fx.item("CA-1"))).await.unwrap();
+    let digest = fx.core.runs_review(&p.id).await.unwrap().digest;
+    let queued = fx.core.runs_approve(&p.id, &digest).await.unwrap();
+    assert_eq!(queued.state, RunState::Queued);
+    assert!(fx.core.runs_review(&p.id).await.unwrap().report.is_some());
+}
