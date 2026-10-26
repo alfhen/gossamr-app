@@ -231,6 +231,12 @@ These are the results of the step 0 spikes for `docs/simplification-proposal.md`
 - In 6 of 6 cycles, plus the resume above, the CLI printed "woke session" with the same id.
 - A copy appeared only when the session was resumed while it was still running.
 
+**After a resume, an agent may not load a deferred tool unless it is told to.**
+
+- In the merged-server real test (`real_agent_tools_are_called_…`), the resumed turn's prompt ended "If you have no such tool, say NO TOOL". The agent answered NO TOOL without searching for the tool.
+- With "loading it with ToolSearch first if it is not loaded", the same resume called `report`.
+- So the reminder sent ahead of every resume names Gossamr's four tools and says to load them with ToolSearch.
+
 ## Cleanup check (PR 12a)
 
 `real_rm_straight_after_stop_is_retried_until_it_succeeds_and_unpushed_work_is_refused` (scratch config, signed out) stops two sessions and removes them straight away. The clean one was removed on the first try (0 waits, 0.7 s): the lock refusal described above did not appear for a signed-out session that never did model work, so the retry loop is covered by the scripted CLI and was not seen firing for real in this run. The session with a commit that was never pushed was refused with stdout text ending in a suggestion to run `claude rm <id> --discard-unpushed`, and its worktree and branch were left in place. Gossamr returns that text unchanged and never passes the flag. Not checked: the lock refusal for a session that was doing model work when stopped.

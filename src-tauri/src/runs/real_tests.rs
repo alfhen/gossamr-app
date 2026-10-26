@@ -633,8 +633,9 @@ async fn real_agent_tools_are_called_from_a_background_session_and_the_token_sta
     let persisted: Vec<String> = walk(&config.join("jobs").join(id.as_str())).into_iter().filter(|f| std::fs::read(f).is_ok_and(|b| b.windows(token.len()).any(|w| w == token.as_bytes()))).map(|f| f.display().to_string()).collect();
     eprintln!("TOKEN PERSISTED IN THE JOB FILES: {persisted:?}");
 
+    cli.stop(&id).await.expect("stop");
     tokio::time::sleep(super::service::Timing::default().stop_settle).await;
-    let again = "Call the report tool once more with status done, note 'spike again' and revise true. Then reply with the single word OK. If you have no such tool, say NO TOOL.";
+    let again = "Call the gossamr report tool once more, loading it with ToolSearch first if it is not loaded, with status done, note 'spike again' and revise true. Then reply with the single word OK. Only if ToolSearch finds no such tool, say NO TOOL.";
     let said = cli.resume(&session, again, Some(&cwd)).await.expect("resume");
     assert_eq!(said.short_id, id, "resume answered with another session: a copy was started");
     let deadline = Instant::now() + Duration::from_secs(120);
