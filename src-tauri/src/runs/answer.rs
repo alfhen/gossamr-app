@@ -57,6 +57,7 @@ pub(crate) fn message(text: &str) -> String {
 pub(super) fn back_at_work(run: &mut Run, now: chrono::DateTime<Utc>) {
     run.state = RunState::Working;
     run.needs = None;
+    run.asking = false;
     run.suggested_reply = None;
     run.unsent_answer = None;
     run.permission_allowed = None;

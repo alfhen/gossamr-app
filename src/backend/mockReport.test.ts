@@ -96,23 +96,20 @@ describe("the sample runs that show each source", () => {
 
 describe("asking for the tool", () => {
   const spec: RunSpec = { kind: "investigate", repo: "acme/storefront", clonePath: "/Users/sample/Code/storefront", base: "main", name: "ca-412-fix-ab12", instruction: "Investigate this work.", focus: null, focusFromRun: null, ticketBlock: "CA-412: sample" };
-  it("is refused while the setting is off, and the prompt and digest change when it is on", async () => {
+  it("puts the report paragraph in the prompt and digest when the draft asks, and offers the four tools either way", async () => {
     const b = new MockBackend();
-    await expect(b.runsDraft({ ...spec, report: true }, itemRef("CA-412"))).rejects.toThrow(/Reporting through Gossamr is off/);
-    await b.runsSetSettings({ ...(await b.runsSettings()), reportResult: true });
     const made = await b.runsDraft({ ...spec, report: true }, itemRef("CA-412"));
     const plain = await b.runsDraft({ ...spec, name: "ca-412-fix-cd34" }, itemRef("CA-412"));
     const review = await b.runsReview(made.id);
-    expect(review.prompt).toContain("If the run-report tool `report_result` is available");
-    expect(review.report).toMatchObject({ allowed: "mcp__run-report__report_result" });
+    expect(review.prompt).toContain("If the Gossamr tool `report` is available");
+    expect(review.report?.allowed).toBe("mcp__gossamr__report, mcp__gossamr__ask, mcp__gossamr__read_workstream, mcp__gossamr__read_ticket");
     expect(review.digest).not.toBe((await b.runsReview(plain.id)).digest);
-    expect((await b.runsReview(plain.id)).report).toBeNull();
-    expect(renderPrompt({ ...spec, report: false })).not.toContain("run-report");
+    expect((await b.runsReview(plain.id)).report).toMatchObject({ allowed: review.report?.allowed });
+    expect(renderPrompt({ ...spec, report: false })).not.toContain("Gossamr tool");
   });
 
   it("makes a run that finishes report what its answer says, and drafts from the report", async () => {
     const b = new MockBackend({ runs: { seed: "empty", epoch: NOW } });
-    await b.runsSetSettings({ ...(await b.runsSettings()), reportResult: true });
     const made = await b.runsDraft({ ...spec, report: true }, itemRef("CA-412"));
     const run = await b.runsApprove(made.id, (await b.runsReview(made.id)).digest);
     for (let i = 0; i < 3; i++) b.runs.advance(run.id);

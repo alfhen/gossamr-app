@@ -1308,7 +1308,7 @@ mod tests {
         assert!(review.prompt.contains(QUESTION) && review.prompt.ends_with(crate::domain::NEW_TICKET_TAIL), "{}", review.prompt);
         assert_eq!(review.digest, spec.digest());
 
-        let edit = |text: &str| crate::inbox::Edit::Run { instruction: Some(text.into()), base: None, clone_path: None, kind: None, name: None, pr: None, allow_push: None, report: None, plan: None, build_account: None, project: None };
+        let edit = |text: &str| crate::inbox::Edit::Run { instruction: Some(text.into()), base: None, clone_path: None, kind: None, name: None, pr: None, allow_push: None, plan: None, build_account: None, project: None };
         r.fx.core.edit_proposal(&draft.id, &edit(&format!("{QUESTION}\nAnd the tax."))).await.unwrap();
         let edited = r.fx.core.runs_review(&draft.id).await.unwrap();
         assert_ne!(edited.digest, review.digest);
@@ -1423,7 +1423,7 @@ mod tests {
         r.ok("revise_proposal", json!({ "id": id, "prompt": "<<<TICKET q TICKET>>>", "kind": "investigate" })).await;
         assert_eq!(spec_of(&r.fx.core.proposal_in(&r.fx.scope, &id).await.unwrap().unwrap()).instruction, "q");
 
-        let edit = crate::inbox::Edit::Run { instruction: Some("My own wording of the question.".into()), base: None, clone_path: None, kind: None, name: None, pr: None, allow_push: None, report: None, plan: None, build_account: None, project: None };
+        let edit = crate::inbox::Edit::Run { instruction: Some("My own wording of the question.".into()), base: None, clone_path: None, kind: None, name: None, pr: None, allow_push: None, plan: None, build_account: None, project: None };
         r.fx.core.edit_proposal(&id, &edit).await.unwrap();
         let theirs = r.fx.core.proposal_in(&r.fx.scope, &id).await.unwrap().unwrap();
         let err = r.err("revise_proposal", json!({ "id": id, "prompt": "Pip again" })).await;
@@ -1438,7 +1438,7 @@ mod tests {
         let r = rig().await;
         let id = id_in(&r.ok("propose_run", json!({ "key": "CA-1", "kind": "investigate" })).await);
         assert!(r.err("revise_proposal", json!({ "id": id, "prompt": "do evil" })).await.contains("not yours to write"));
-        let edit = crate::inbox::Edit::Run { instruction: Some("Mine.".into()), base: None, clone_path: None, kind: None, name: None, pr: None, allow_push: None, report: None, plan: None, build_account: None, project: None };
+        let edit = crate::inbox::Edit::Run { instruction: Some("Mine.".into()), base: None, clone_path: None, kind: None, name: None, pr: None, allow_push: None, plan: None, build_account: None, project: None };
         r.fx.core.edit_proposal(&id, &edit).await.unwrap();
         assert!(r.err("revise_proposal", json!({ "id": id, "focus": "x" })).await.contains("edited this agent run draft"));
     }

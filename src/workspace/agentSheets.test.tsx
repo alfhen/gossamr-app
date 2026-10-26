@@ -22,7 +22,7 @@ import { offsetText } from "./RunTimeline";
 
 const NOW = Date.parse("2026-09-30T12:00:00Z");
 const iso = (minutesAgo: number) => new Date(NOW - minutesAgo * 60_000).toISOString();
-const SETTINGS: AgentSettings = { maxRuns: 3, wallClockMinutes: 60, tokenCap: 3_000_000, terminal: "terminal", draftOnFinish: true, reportResult: false };
+const SETTINGS: AgentSettings = { maxRuns: 3, wallClockMinutes: 60, tokenCap: 3_000_000, terminal: "terminal", draftOnFinish: true };
 const seeded = () => new MockBackend().runs.list();
 
 const run = (state: RunState, over: Partial<Run> = {}): Run => ({ ...seeded()[0], id: `r-${state}`, state, needs: null, lastDetail: null, tokens: 212_000, result: null, error: null, shortId: "1000a000", lastProgressAt: iso(1), queuedAt: iso(10), endedAt: null, ...over });
@@ -166,6 +166,13 @@ describe("the run sheet, by state", () => {
       expect(html).toContain("Gossamr stops the agent and wakes it with your answer");
       expect(html).toContain("Its conversation is kept. Only the agent sees your answer; nothing goes to Jira.");
       expect(buttons(html)).toEqual(expect.arrayContaining(["Send answer", "Open in Terminal"]));
+    });
+
+    it("says the answer goes straight to an agent waiting in its ask call, without the stop and wake wording", () => {
+      const html = sheet(asking({ asking: true }));
+      expect(html).toContain("Claude is asking you");
+      expect(html).toContain("Your answer goes straight to the agent, which is waiting for it.");
+      expect(html).not.toContain("stops the agent");
     });
 
     it("offers the reply Claude suggested beside an empty box, never in it, and Send answer stays off", () => {

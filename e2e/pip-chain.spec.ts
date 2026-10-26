@@ -138,8 +138,8 @@ test("in one workstream Pip drafts investigate, triage with findings, plan, a bu
   await expect(setup(page).locator("[data-pip-chain]")).toHaveText(id ?? "");
   // A Build launches as before: the exact command carries no read-only flag.
   await openTechnical(setup(page));
-  await detailsOf(setup(page), "Show the exact command").locator("> summary").click();
-  const command = detailsOf(setup(page), "Show the exact command");
+  await detailsOf(setup(page), "Show the command (illustrative)").locator("> summary").click();
+  const command = detailsOf(setup(page), "Show the command (illustrative)");
   await expect(command).toContainText("claude --bg --name");
   await expect(command).not.toContainText("--permission-mode");
   await expect(command).not.toContainText("--setting-sources");

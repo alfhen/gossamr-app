@@ -4,7 +4,6 @@ import { MockBackend } from "../backend/mock";
 import type { ReportView, ResultSource, Run, RunOutcome, RunReview } from "../types";
 import { RunSheetView, type RunSheetActions, type RunSheetViewProps } from "./RunSheet";
 import { reportNotes } from "./runSheetLogic";
-import { AgentsSettingsView } from "./AgentsSettings";
 import { RunSetupView, type SetupViewProps } from "./RunSetup";
 
 const NOW = Date.parse("2026-09-30T12:00:00Z");
@@ -84,38 +83,16 @@ describe("what the sheet says about the report tool", () => {
   });
 });
 
-const settings = { maxRuns: 3, wallClockMinutes: 60, tokenCap: 3_000_000, terminal: "terminal" as const, draftOnFinish: true, reportResult: false };
-
-describe("the setting", () => {
-  const view = (s: typeof settings | null) =>
-    renderToStaticMarkup(<AgentsSettingsView runs={[]} stopping={false} keepRunning={null} settings={s} cleanup={null} onSettings={vi.fn()} onCleanup={vi.fn()} onStopAll={vi.fn()} onClose={vi.fn()} />);
-
-  it("is a clearly worded switch, off by default, that says what it can and cannot do", () => {
-    const html = view(settings);
-    expect(html).toContain("Result tool");
-    expect(html).toContain("Let new agents report their result to Gossamr");
-    expect(html).toMatch(/aria-label="Offer new runs the result tool"(?![^>]*checked)/);
-    expect(html).toContain("Off by default");
-    expect(html).toContain("no way to reach Jira, your repository or any other run");
-    expect(html).toContain("Not tried on real runs yet");
-  });
-
-  it("shows it on when it is on, and disabled until the settings are loaded", () => {
-    expect(view({ ...settings, reportResult: true })).toMatch(/aria-label="Offer new runs the result tool"[^>]*checked/);
-    expect(view(null)).toMatch(/aria-label="Offer new runs the result tool"[^>]*disabled/);
-  });
-});
-
 describe("the setup sheet", () => {
-  const review = (report: boolean): RunReview => ({
+  const review = (): RunReview => ({
     digest: "d",
     prompt: "prompt",
     instruction: "Investigate this work.",
     focus: null,
     ticketBlock: null,
     guard: "guard text",
-    report: report ? { allowed: "mcp__run-report__report_result", guard: "The run-report tool only records your result inside Gossamr." } : null,
-    spec: { kind: "investigate", repo: "acme/web", clonePath: "/Users/sample/Code/web", base: "main", name: "ca-1-x-ab12", instruction: "Investigate this work.", report },
+    report: { allowed: "mcp__gossamr__report, mcp__gossamr__ask", guard: "Gossamr gives you tools that only reach Gossamr." },
+    spec: { kind: "investigate", repo: "acme/web", clonePath: "/Users/sample/Code/web", base: "main", name: "ca-1-x-ab12", instruction: "Investigate this work.", report: true },
   });
   const props = (over: Partial<SetupViewProps> = {}): SetupViewProps => ({
     item: null,
@@ -133,7 +110,7 @@ describe("the setup sheet", () => {
     project: null,
     projects: [],
     choice: { clones: [{ path: "/Users/sample/Code/web", branch: "main", dirty: false, defaultBranch: "main" }], picked: null, fresh: null },
-    review: review(false),
+    review: review(),
     preflight: null,
     phase: "ready",
     busy: false,
@@ -148,34 +125,17 @@ describe("the setup sheet", () => {
     onBase: vi.fn(),
     wide: false,
     onWide: vi.fn(),
-    on: { close: vi.fn(), discard: vi.fn(), start: vi.fn(), chooseRepo: vi.fn(), chooseClone: vi.fn(), cloneFresh: vi.fn(), retryRepos: vi.fn(), openSettings: vi.fn(), dismissChanged: vi.fn(), commit: vi.fn(), chooseKind: vi.fn(), chooseProject: vi.fn(), searchPrs: vi.fn(), choosePr: vi.fn(), setAllowPush: vi.fn(), setReport: vi.fn() },
+    on: { close: vi.fn(), discard: vi.fn(), start: vi.fn(), chooseRepo: vi.fn(), chooseClone: vi.fn(), cloneFresh: vi.fn(), retryRepos: vi.fn(), openSettings: vi.fn(), dismissChanged: vi.fn(), commit: vi.fn(), chooseKind: vi.fn(), chooseProject: vi.fn(), searchPrs: vi.fn(), choosePr: vi.fn(), setAllowPush: vi.fn() },
     ...over,
   });
   const html = (p: SetupViewProps) => renderToStaticMarkup(<RunSetupView {...p} />);
 
-  it("shows nothing about the tool while the setting is off", () => {
+  it("has no switch for the report and shows the exact extras every launch adds", () => {
     const out = html(props());
     expect(out).not.toContain("Let the agent report its result to Gossamr");
-    expect(out).not.toContain("data-report-extras");
-  });
-
-  it("offers a ticked box when the setting is on and the draft asks for it, with the exact extras", () => {
-    const out = html(props({ reportOffered: true, review: review(true) }));
-    expect(out).toContain("Let the agent report its result to Gossamr");
-    expect(out).toMatch(/aria-label="Let the agent report its result to Gossamr"[^>]*checked/);
     expect(out).toContain("data-report-extras");
-    expect(out).toContain("mcp__run-report__report_result");
-    expect(out).toContain("The run-report tool only records your result inside Gossamr.");
+    expect(out).toContain("mcp__gossamr__report, mcp__gossamr__ask");
+    expect(out).toContain("Gossamr gives you tools that only reach Gossamr.");
     expect(out).toContain("never on the command line");
-  });
-
-  it("offers an unticked box when the setting is on and this draft doesn't ask", () => {
-    const out = html(props({ reportOffered: true }));
-    expect(out).toContain("Let the agent report its result to Gossamr");
-    expect(out).not.toMatch(/aria-label="Let the agent report its result to Gossamr"[^>]*checked/);
-  });
-
-  it("keeps showing the box for a draft that already asks for the tool after the setting went off", () => {
-    expect(html(props({ reportOffered: false, review: review(true) }))).toContain("Let the agent report its result to Gossamr");
   });
 });

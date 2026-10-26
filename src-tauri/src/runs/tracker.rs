@@ -464,6 +464,7 @@ impl RunService {
             RunState::NeedsAnswer | RunState::NeedsPermission | RunState::SystemBlocked => seen.text.as_deref().and_then(|t| cleaned(t, NEEDS_KEPT)),
             _ => None,
         };
+        run.asking = seen.state == RunState::NeedsAnswer && self.core.asks().question(run_id).is_some();
         run.suggested_reply = match seen.state {
             RunState::NeedsAnswer => job.as_ref().and_then(|j| j.suggested_reply.as_deref()).and_then(|r| cleaned(r, REPLY_KEPT)),
             _ => None,
@@ -483,6 +484,7 @@ impl RunService {
                     overrun = Some(over.reason(&settings));
                     run.state = RunState::Stopped;
                     run.needs = None;
+                    run.asking = false;
                     run.error.clone_from(&overrun);
                     run.stopped_by_limit = true;
                     run.last_progress_at = now;

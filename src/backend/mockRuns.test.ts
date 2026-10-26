@@ -10,7 +10,7 @@ import { MockWorkstreams } from "./mockWorkstreams";
 import { DENIED_MESSAGE } from "../lib/permission";
 import { RESUME_TEXT } from "../workspace/runSheetLogic";
 import { mockAsk } from "./mockPip";
-import { GUARD as GUARD_TEXT, MOVED_ON, findingsFitted, mockDigest, renderPrompt } from "./mockRuns";
+import { AGENT_GUARD, GUARD as GUARD_TEXT, MOVED_ON, findingsFitted, mockDigest, renderPrompt } from "./mockRuns";
 
 const spec: RunSpec = {
   kind: "investigate",
@@ -120,6 +120,19 @@ describe("mock runs", () => {
     for (const r of before.filter((x) => !active.includes(x))) expect(after.find((x) => x.id === r.id)?.state).toBe(r.state);
     expect(after.filter((r) => r.state === "stopped")).toHaveLength(active.length);
     expect(await backend.runsStopAll()).toEqual({ stopped: 0, failed: 0, waiting: 0 });
+  });
+
+  it("has a run waiting in its ask call, which an answer resolves at once and a question that ended its turn is not", async () => {
+    const backend = new MockBackend();
+    const waiting = backend.runs.list().find((r) => r.state === "needsAnswer")!;
+    expect(waiting).toMatchObject({ asking: true, needs: "Should the refund path keep the old rounding?" });
+    const answered = await backend.runsAnswer(waiting.id, "Yes, keep it.");
+    expect(answered).toMatchObject({ state: "working", needs: null });
+    expect(answered.asking).toBeFalsy();
+
+    const working = backend.runs.list().find((r) => r.state === "working" && r.id !== waiting.id)!;
+    expect(backend.runs.ask(working.id, "Which one?")).toMatchObject({ state: "needsAnswer", asking: false });
+    expect(backend.runs.ask(working.id, "Which one?", true).asking).toBe(true);
   });
 
   it("answers a question, and only a question", async () => {
@@ -940,7 +953,7 @@ describe("mock runs of a read-only kind launch restricted, as RunService::spawn 
     const launched = b.runs.get(run.id)!;
     expect(launched.state).toBe("launching");
     expect(launched.readOnly).toEqual(readOnlyRules(spec));
-    expect(b.runs.launches()).toEqual([{ runId: run.id, kind: "investigate", readOnly: readOnlyRules(spec), guard: `${GUARD_TEXT} ${READ_ONLY_GUARD}`, at: launched.launchedAt }]);
+    expect(b.runs.launches()).toEqual([{ runId: run.id, kind: "investigate", readOnly: readOnlyRules(spec), guard: `${GUARD_TEXT} ${READ_ONLY_GUARD} ${AGENT_GUARD}`, at: launched.launchedAt }]);
     b.runs.advance(run.id);
     b.runs.advance(run.id);
     expect(b.runs.get(run.id)).toMatchObject({ state: "done", readOnly: readOnlyRules(spec) });

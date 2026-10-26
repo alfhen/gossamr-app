@@ -6,7 +6,7 @@ import { mockAsk, mockPipEvents, openQuestions, scriptPip, suggestedAnswer } fro
 import { eventLine } from "./mockSupervisor";
 import { mockPipTurns } from "./mockPipTurns";
 import { itemRef } from "./mockConnector";
-import { BUILD_NEEDS_PLAN, REVIEW_NEEDS_BUILD, REVIEW_NO_FOCUS, REVIEW_REPORTS, WAITING_FOR_PR_HINT } from "./mockRunKinds";
+import { BUILD_NEEDS_PLAN, REVIEW_NEEDS_BUILD, REVIEW_NO_FOCUS, WAITING_FOR_PR_HINT } from "./mockRunKinds";
 import type { AskRequest } from "./claude";
 import { planOpenQuestions } from "../workspace/agentsLogic";
 import type { Intent, Proposal, Run, RunKind, RunSpec, ScreenContext } from "../types";
@@ -106,8 +106,6 @@ describe("mock Pip drafting the next step of a workstream, as propose_run does",
     expect(constant("REVIEW_NO_FOCUS")).toBe(REVIEW_NO_FOCUS);
     const rustWorkstreams = readFileSync(new URL("../../src-tauri/src/inbox/workstreams.rs", import.meta.url), "utf8");
     expect(new RegExp(`const WAITING_FOR_PR_HINT: &str = "([^"]*)";`).exec(rustWorkstreams)?.[1]).toBe(WAITING_FOR_PR_HINT);
-    const rustDrafts = readFileSync(new URL("../../src-tauri/src/inbox/drafts.rs", import.meta.url), "utf8");
-    expect(/const REVIEW_REPORTS: &str = "([^"]*)";/.exec(rustDrafts)?.[1]).toBe(REVIEW_REPORTS);
     for (const words of [
       "the person hasn't settled the plan yet: they approve or skip the Gossamr Plan draft first",
       "the plan of that run hasn't been put to the person on the ticket.",

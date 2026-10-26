@@ -310,12 +310,13 @@ async fn an_agents_question_reads_as_needing_an_answer_until_it_is_answered_thro
     t.rig.poll().await;
     let waiting = t.rig.get(&run).await;
     assert_eq!((waiting.state, waiting.needs.as_deref()), (RunState::NeedsAnswer, Some("Which colour?")), "its session still lists as working");
+    assert!(waiting.asking, "the sheet can say the answer goes straight to the agent");
     assert!(t.rig.noticed().contains(&(Attention::Needs, RunState::NeedsAnswer)), "the supervisor and the notices hear it as they hear any question");
     t.rig.poll().await;
     assert_eq!(t.rig.get(&run).await.state, RunState::NeedsAnswer, "a later look at a working session doesn't flip it back");
 
     let answered = t.rig.svc.answer(&run.id, "  Blue.\n").await.unwrap();
-    assert_eq!((answered.state, answered.needs), (RunState::Working, None));
+    assert_eq!((answered.state, answered.needs, answered.asking), (RunState::Working, None, false));
     let reply = call.await.unwrap();
     let (text, is_error) = text_of(&reply);
     assert!(!is_error && text.ends_with("Blue.") && text.starts_with(crate::runs::answer::REMINDER), "{text}");

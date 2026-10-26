@@ -274,14 +274,11 @@ async fn a_draft_that_spells_out_the_report_is_always_allowed_and_the_digest_fol
     let fx = fixture_watching(&["acme/webshop"]).await;
     let spec = RunSpec { report: true, ..next_spec(&fx) };
     let plain = fx.core.draft_run(RunSpec { report: false, ..spec.clone() }, Some(fx.item("CA-1"))).await.unwrap();
-    let edit = crate::inbox::Edit::Run { instruction: None, base: None, clone_path: None, kind: None, name: None, pr: None, allow_push: None, report: Some(true), plan: None, build_account: None, project: None };
     let on = fx.core.draft_run(spec, Some(fx.item("CA-1"))).await.unwrap();
     let review = fx.core.runs_review(&on.id).await.unwrap();
     assert!(review.spec.report && review.prompt.contains("If the Gossamr tool `report` is available"));
     assert_eq!(review.report.as_ref().map(|r| r.allowed.as_str()), Some("mcp__gossamr__report, mcp__gossamr__ask, mcp__gossamr__read_workstream, mcp__gossamr__read_ticket"));
     let unasked = fx.core.runs_review(&plain.id).await.unwrap();
     assert!(unasked.report.is_some() && !unasked.prompt.contains("Gossamr tool"), "the tools are offered either way; only the paragraph is the draft's");
-    let edited = fx.core.edit_proposal(&plain.id, &edit).await.unwrap();
-    assert!(matches!(&edited.intent, Intent::StartRun { spec, .. } if spec.report));
-    assert_ne!(fx.core.runs_review(&edited.id).await.unwrap().digest, unasked.digest, "the digest follows what the draft now says");
+    assert_ne!(review.digest, unasked.digest, "the digest follows what the draft says");
 }

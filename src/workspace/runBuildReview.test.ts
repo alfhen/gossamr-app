@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MockBackend } from "../backend/mock";
 import { itemRef } from "../backend/mockConnector";
-import { BUILD_ACCOUNT_LIMIT, INSTRUCTIONS, PUSH_ALLOWED, REVIEW_REPORTS, withoutMarkers } from "../backend/mockRunKinds";
+import { BUILD_ACCOUNT_LIMIT, INSTRUCTIONS, PUSH_ALLOWED, withoutMarkers } from "../backend/mockRunKinds";
 import type { Run, RunSpec } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { reviewThisControl, reviewThisOptions, splitPrompt } from "./runSheetLogic";
@@ -48,15 +48,11 @@ describe("a finished build in the mock", () => {
 });
 
 describe("a review the person drafts", () => {
-  it.each([false, true])("always asks for the report, with the setting %s, and the person can't untick it", async (reportResult) => {
-    await backend.runsSetSettings({ ...(await backend.runsSettings()), reportResult });
+  it("always asks for the report, whoever drafts it", async () => {
     await begin();
     expect(s().error).toBeNull();
     expect(s().review!.spec.report).toBe(true);
     expect(s().review!.prompt).toContain("verdict ('pass' or 'blocking', required)");
-    await s().saveEdit({ report: false });
-    expect(s().error).toBe(REVIEW_REPORTS);
-    expect(s().review!.spec.report).toBe(true);
     const direct = await backend.runsDraft(reviewSpec({ report: false }), CA);
     expect(direct.intent.type === "startRun" && direct.intent.spec.report).toBe(true);
   });

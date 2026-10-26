@@ -45,7 +45,7 @@ test.describe("the start review (G22, G23)", () => {
       await technical.locator("> summary").click();
     }
     await expect(checks).toContainText("What runs");
-    await expect(technical.getByText("Show the exact command")).toBeVisible();
+    await expect(technical.getByText("Show the command (illustrative)")).toBeVisible();
   });
 
   test("the safety sheet says Gossamr posts only what is approved, and a run with your Claude settings could reach Jira on its own", async ({ page }) => {

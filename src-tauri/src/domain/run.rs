@@ -869,6 +869,9 @@ pub struct Run {
     pub short_id: Option<ShortId>,
     pub session_id: Option<String>,
     pub needs: Option<String>,
+    /// The question is held in the agent's `ask` call: the answer goes straight to it, with no stop and no wake.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub asking: bool,
     /// The answer Claude proposes to its own question, when it offers one.
     #[serde(default)]
     pub suggested_reply: Option<String>,
@@ -1009,6 +1012,7 @@ impl Run {
             short_id: None,
             session_id: None,
             needs: None,
+            asking: false,
             suggested_reply: None,
             unsent_answer: None,
             last_detail: None,
