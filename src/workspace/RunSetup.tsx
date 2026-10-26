@@ -40,7 +40,6 @@ export interface SetupActions {
   searchPrs(query: string): void;
   choosePr(number: number): void;
   setAllowPush(on: boolean): void;
-  setReport?(on: boolean): void;
   trustFolder?(path: string): void;
   recheck?(): void;
   refreshPlan?(): void;
@@ -92,8 +91,6 @@ export interface SetupViewProps {
   onBuildAccount?(text: string): void;
   wide: boolean;
   onWide(): void;
-  /** The Agents setting that offers the result tool is on. */
-  reportOffered?: boolean;
   on: SetupActions;
 }
 
@@ -315,29 +312,6 @@ function KindPicker({ p }: { p: SetupViewProps }) {
   );
 }
 
-/** The result tool: asking for it is part of what the person approves, and the prompt below shows the exact words. */
-function ReportOption({ p }: { p: SetupViewProps }) {
-  const on = !!p.review?.spec.report;
-  // A review's verdict is read by the app, so it always asks for the report; the backend refuses unticking it.
-  const locked = p.review?.spec.kind === "review";
-  return (
-    <Sec title="Result">
-      <label className="flex items-start gap-2" data-report-locked={locked || undefined}>
-        <input type="checkbox" aria-label="Let the agent report its result to Gossamr" checked={on} disabled={locked || !p.review || p.busy || p.phase !== "ready"} onChange={(ev) => p.on.setReport?.(ev.target.checked)} className="mt-1" />
-        <span className="grid gap-0.5">
-          <b className="font-semibold text-ws-ink">Let the agent report its result to Gossamr</b>
-          <span className="text-ws-ink2">The prompt asks it to call one extra tool, report_result, with its result. The tool only records what it says on this run; it can&apos;t write to Jira or reach anything else, and what you get is still a draft. The agent writes its full answer too, and Gossamr reads that when the tool isn&apos;t used.</span>
-          {locked && (
-            <span className="text-ws-ink2">
-              A review always reports its verdict.{p.reportOffered ? "" : " Reporting is off in Settings, so the tool won't be offered and Gossamr reads the 'Verdict:' line of its written answer instead."}
-            </span>
-          )}
-        </span>
-      </label>
-    </Sec>
-  );
-}
-
 function PushOption({ p }: { p: SetupViewProps }) {
   const on = !!p.review?.spec.allowPush;
   // A workstream's build always ends with a draft pull request, which its review then reads; the backend refuses turning it off.
@@ -494,7 +468,6 @@ export function RunSetupView(p: SetupViewProps) {
       )}
       <KindPicker p={p} />
       {p.kind === "build" && <PushOption p={p} />}
-      {(p.reportOffered || p.review?.spec.report) && <ReportOption p={p} />}
       {p.kind === "review" && p.repo && (
         <PrPicker
           key={p.repo}
@@ -562,7 +535,7 @@ export function RunSetupView(p: SetupViewProps) {
   );
 }
 
-/** The launch as a shell would read it: exact and copyable, or illustrative and without Copy when it names the run-report config. */
+/** The launch as a shell would read it: exact and copyable, or illustrative and without Copy when it names the agent tools' config. */
 function LaunchCommand({ review, itemKey }: { review: RunReview; itemKey: string | null }) {
   const shown = commandShown(review.report);
   return (
@@ -639,7 +612,6 @@ export function RunSetup({ ticketTitle }: { ticketTitle: string | null }) {
     onBuildAccount: setBuildAccount,
     wide,
     onWide: () => setWide((w) => !w),
-    reportOffered: s.reportAvailable,
     on: {
       close: () => useRunSetup.getState().close(),
       discard: () => void useRunSetup.getState().discard(),
@@ -659,7 +631,6 @@ export function RunSetup({ ticketTitle }: { ticketTitle: string | null }) {
       searchPrs: (query) => void useRunSetup.getState().searchPrs(query),
       choosePr: (number) => void useRunSetup.getState().choosePr(number),
       setAllowPush: (on) => void useRunSetup.getState().saveEdit({ allowPush: on }),
-      setReport: (on) => void useRunSetup.getState().saveEdit({ report: on }),
       trustFolder: (path) => void useRunSetup.getState().trustFolder(path),
       recheck: () => void useRunSetup.getState().recheck(),
       refreshPlan: () => void useRunSetup.getState().refreshPlan(),

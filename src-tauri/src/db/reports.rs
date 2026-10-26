@@ -1,4 +1,4 @@
-//! Reports an agent made through the run-report tool, and the tokens minted for its runs.
+//! Reports an agent made through the report tool, and the tokens minted for its runs.
 
 use chrono::{DateTime, Utc};
 use rusqlite::{params, OptionalExtension, Transaction, TransactionBehavior};
@@ -74,7 +74,19 @@ impl Db {
         Ok(())
     }
 
-    /// Everything a call to the tool does, in one write transaction: the token and the run's state are looked at in the
+    /// The run `token_hash` was minted for, when it is in a state that takes calls and the token is for the tools as they
+    /// are now. Any other token, run or state gives `None`, which never says which.
+    pub fn agent_run(&self, run_id: &str, token_hash: &str) -> Result<Option<Run>> {
+        let tx = Transaction::new_unchecked(&self.conn, TransactionBehavior::Deferred)?;
+        let version: Option<u32> = tx.query_row("SELECT tool_version FROM run_report_tokens WHERE token_hash = ?1 AND run_id = ?2", params![token_hash, run_id], |r| r.get(0)).optional()?;
+        if version != Some(REPORT_TOOL_VERSION) {
+            return Ok(None);
+        }
+        let stored: Option<(String, String)> = tx.query_row("SELECT state, data FROM runs WHERE id = ?1", params![run_id], |r| Ok((r.get(0)?, r.get(1)?))).optional()?;
+        Ok(stored.filter(|(state, _)| OPEN.contains(&state.as_str())).and_then(|(_, data)| serde_json::from_str(&data).ok()))
+    }
+
+    /// Everything a call to the report tool does, in one write transaction: the token and the run's state are looked at in the
     /// same transaction that stores the report, so a call checked while the run was open can't land after it ended.
     pub fn record_report(&self, run_id: &str, token_hash: &str, args: &Value, now: DateTime<Utc>) -> Result<Reply> {
         let tx = Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)?;

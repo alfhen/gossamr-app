@@ -1,6 +1,7 @@
 //! Pip's assistant runs. `ClaudeCodeProvider` drives the user's `claude` against Pip's local MCP tools and reports
 //! events; `AgentService` prepares each run's prompt and screen context and routes events to the page.
 
+mod agent_tools;
 pub mod context;
 mod drafts;
 mod github;

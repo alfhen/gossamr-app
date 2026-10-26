@@ -1,27 +1,33 @@
-//! A minimal MCP server (streamable HTTP, JSON responses only) that an agent connects to during one of Pip's runs.
+//! Gossamr's one MCP server (streamable HTTP, JSON responses only), for Pip and for the agents it runs.
 //!
-//! The agent gets read tools plus proposal tools. A proposal is stored as a draft for the user to approve; nothing
-//! here writes to a tracker. That keeps "Pip never changes anything without your approval" true regardless of what
-//! the model decides.
+//! Pip gets read tools plus proposal tools. A proposal is stored as a draft for the user to approve; nothing here
+//! writes to a tracker. That keeps "Pip never changes anything without your approval" true regardless of what the
+//! model decides. An agent gets four tools of its own (`agent_tools`) and never sees Pip's.
 
 use std::mem::discriminant;
+use std::path::PathBuf;
 use std::sync::Arc;
 
-use axum::extract::{Path, State};
+use axum::body::Bytes;
+use axum::extract::{DefaultBodyLimit, Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
 use axum::{Json, Router};
 use serde_json::{json, Value};
+use tokio::sync::Semaphore;
 
 use crate::auth::Scope;
 use crate::error::{Error, Result};
+use super::agent_tools::{self, AgentSide};
 use super::context::draft_line;
 use super::{McpEndpoint, RunPlanner};
-use crate::domain::{ContainerRef, DiffSide, Doc, Filter, Intent, ItemKind, ItemRef, NewItem, Proposal, ProposalQuery, ReviewComment, StateKind, Transitions};
+use crate::domain::{ASK_TOOL, ContainerRef, DiffSide, Doc, Filter, Intent, ItemKind, ItemRef, NewItem, Proposal, ProposalQuery, ReviewComment, StateKind, Transitions};
 use crate::inbox::{Core, TextSeen};
 use crate::model::CachedTicket;
 use crate::proposals::{self, Draft};
+use crate::runs::agent_config::AgentChannel;
+use crate::runs::report::well_formed;
 use crate::tracker::Connection;
 
 const SEARCH_LIMIT: usize = 50;
@@ -70,7 +76,8 @@ impl PipRun {
 /// mid-run can't hand the agent another account's tickets.
 pub type PipRuns = Arc<std::sync::Mutex<std::collections::HashMap<String, PipRun>>>;
 
-/// The bearer token of each run in progress, by run id. A token exists only between `endpoint` and `revoke`.
+/// The bearer token of each of Pip's requests in progress, by request id. A token exists only between `endpoint` and
+/// `revoke`.
 type Tokens = Arc<std::sync::Mutex<std::collections::HashMap<String, String>>>;
 
 pub(super) struct McpState {
@@ -82,6 +89,65 @@ pub(super) struct McpState {
     pub planner: Arc<dyn RunPlanner>,
 }
 
+/// One server, two kinds of caller. Pip reaches its tools at `/mcp/{request_id}` with a token that lives in memory for
+/// one turn; an agent reaches its own tools at `/agent/{run_id}` with a token stored as a hash, which stays valid across
+/// restarts. Neither kind of token opens the other's route, and every request is authenticated on its own, so a restart
+/// on the same port is invisible to a session that outlives it.
+struct Serving {
+    pip: Arc<McpState>,
+    agents: AgentSide,
+    port: u16,
+    pip_slots: Semaphore,
+    agent_slots: Semaphore,
+    ask_slots: Semaphore,
+}
+
+/// Pip's turns are one at a time per conversation; an agent's quick calls are a report or a read.
+const PIP_IN_FLIGHT: usize = 16;
+const AGENT_IN_FLIGHT: usize = 4;
+/// Pending `ask` calls wait for minutes, so they are counted apart from the quick ones.
+const ASKS_IN_FLIGHT: usize = 16;
+/// A plan is up to 24,000 characters, which is under 100 KB as UTF-8.
+const BODY_LIMIT_BYTES: usize = 128 * 1024;
+const PORT_FILE: &str = "port";
+
+/// A listener on loopback and what a launch needs to know about it. Bound first so the run service can be given the
+/// port before the server that needs the run service is started.
+pub struct Bound {
+    listener: tokio::net::TcpListener,
+    channel: Arc<AgentChannel>,
+}
+
+impl Bound {
+    pub fn channel(&self) -> Arc<AgentChannel> {
+        self.channel.clone()
+    }
+}
+
+/// Binds loopback on the port used last time when it is free, so a session that outlives a restart still finds the
+/// server; any other port is remembered for next time. `dir` holds the port file and the per-run config files.
+pub async fn bind(dir: PathBuf) -> std::io::Result<Bound> {
+    std::fs::create_dir_all(&dir)?;
+    let remembered = std::fs::read_to_string(dir.join(PORT_FILE)).ok().and_then(|s| s.trim().parse::<u16>().ok()).filter(|p| *p != 0);
+    let listener = match remembered {
+        Some(port) => match tokio::net::TcpListener::bind(("127.0.0.1", port)).await {
+            Ok(listener) => listener,
+            Err(e) => {
+                eprintln!("the MCP server couldn't take its last port {port} ({e}), so it uses another; sessions started before keep the old address");
+                tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?
+            }
+        },
+        None => tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?,
+    };
+    let port = listener.local_addr()?.port();
+    if remembered != Some(port) {
+        if let Err(e) = std::fs::write(dir.join(PORT_FILE), port.to_string()) {
+            eprintln!("couldn't remember the MCP server's port: {e}");
+        }
+    }
+    Ok(Bound { listener, channel: Arc::new(AgentChannel::new(port, dir)) })
+}
+
 pub struct McpServer {
     pub port: u16,
     pub runs: PipRuns,
@@ -89,13 +155,34 @@ pub struct McpServer {
 }
 
 impl McpServer {
+    /// A server on any free port, with nothing remembered.
+    #[cfg(test)]
     pub async fn start(core: Arc<Core>, planner: Arc<dyn RunPlanner>, sink: ChangeSink, view: ViewSink) -> std::io::Result<Self> {
         let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
         let port = listener.local_addr()?.port();
+        let channel = Arc::new(AgentChannel::new(port, std::env::temp_dir().join(format!("gossamr-agents-{port}"))));
+        Self::start_on(Bound { listener, channel }, core, planner, sink, view)
+    }
+
+    pub fn start_on(bound: Bound, core: Arc<Core>, planner: Arc<dyn RunPlanner>, sink: ChangeSink, view: ViewSink) -> std::io::Result<Self> {
+        let Bound { listener, channel } = bound;
+        let port = channel.port();
         let runs: PipRuns = Arc::default();
         let tokens = Tokens::default();
-        let state = Arc::new(McpState { core, tokens: tokens.clone(), sink, view, runs: runs.clone(), planner });
-        let router = Router::new().route("/mcp/{request_id}", post(handle)).with_state(state);
+        let pip = Arc::new(McpState { core: core.clone(), tokens: tokens.clone(), sink, view, runs: runs.clone(), planner });
+        let state = Arc::new(Serving {
+            pip,
+            agents: AgentSide::new(core),
+            port,
+            pip_slots: Semaphore::new(PIP_IN_FLIGHT),
+            agent_slots: Semaphore::new(AGENT_IN_FLIGHT),
+            ask_slots: Semaphore::new(ASKS_IN_FLIGHT),
+        });
+        let router = Router::new()
+            .route("/mcp/{request_id}", post(pip_endpoint))
+            .route("/agent/{run_id}", post(agent_endpoint))
+            .layer(DefaultBodyLimit::max(BODY_LIMIT_BYTES))
+            .with_state(state);
         tauri::async_runtime::spawn(async move {
             let _ = axum::serve(listener, router).await;
         });
@@ -120,30 +207,49 @@ fn random_token() -> std::result::Result<String, getrandom::Error> {
     Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
 }
 
-/// A request is honoured only with the token issued for the run named in its path.
+/// Pip's request is honoured only with the token issued for the request named in its path.
 fn authorized(headers: &HeaderMap, tokens: &Tokens, request_id: &str) -> bool {
     let Some(token) = tokens.lock().expect("lock poisoned").get(request_id).cloned() else {
         return false;
     };
     let token = token.as_str();
-    let given = headers
-        .get("authorization")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.strip_prefix("Bearer "))
-        .unwrap_or_default();
+    let given = bearer(headers).unwrap_or_default();
     // Constant-time so the token can't be guessed byte by byte by another local process.
     given.len() == token.len() && given.bytes().zip(token.bytes()).fold(0u8, |acc, (a, b)| acc | (a ^ b)) == 0
 }
 
-async fn handle(
-    State(st): State<Arc<McpState>>,
-    Path(request_id): Path<String>,
-    headers: HeaderMap,
-    Json(msg): Json<Value>,
-) -> Response {
-    if !authorized(&headers, &st.tokens, &request_id) {
-        return StatusCode::UNAUTHORIZED.into_response();
+fn is_loopback_host(host: &str, port: u16) -> bool {
+    [format!("127.0.0.1:{port}"), format!("localhost:{port}")].iter().any(|h| h.eq_ignore_ascii_case(host))
+}
+
+fn is_loopback_origin(origin: &str) -> bool {
+    let Some(rest) = origin.strip_prefix("http://") else { return false };
+    let host = rest.split([':', '/']).next().unwrap_or_default();
+    host == "127.0.0.1" || host.eq_ignore_ascii_case("localhost")
+}
+
+/// A browser page can be made to post here; the Host check stops DNS rebinding and an Origin that isn't loopback stops
+/// the page itself. The CLI sends neither a foreign Host nor a foreign Origin.
+fn local_request(headers: &HeaderMap, port: u16) -> bool {
+    let host_ok = headers.get("host").and_then(|h| h.to_str().ok()).is_some_and(|h| is_loopback_host(h, port));
+    let origin_ok = headers.get("origin").is_none_or(|o| o.to_str().is_ok_and(is_loopback_origin));
+    host_ok && origin_ok
+}
+
+fn bearer(headers: &HeaderMap) -> Option<&str> {
+    headers.get("authorization")?.to_str().ok()?.strip_prefix("Bearer ")
+}
+
+/// The JSON-RPC message in `body`, or the status to refuse it with.
+fn message(body: &Bytes) -> std::result::Result<Value, StatusCode> {
+    match serde_json::from_slice::<Value>(body) {
+        Ok(msg) if msg.is_object() => Ok(msg),
+        _ => Err(StatusCode::BAD_REQUEST),
     }
+}
+
+/// Answers `msg` as an MCP server with `tools`; a `tools/call` is `call`'s to answer.
+async fn rpc(msg: Value, tools: impl FnOnce() -> Vec<Value>, call: impl std::future::Future<Output = Value>) -> Response {
     // Notifications carry no id and get no body.
     let Some(id) = msg.get("id").cloned() else {
         return StatusCode::ACCEPTED.into_response();
@@ -155,8 +261,8 @@ async fn handle(
             "serverInfo": { "name": "gossamr", "version": env!("CARGO_PKG_VERSION") }
         })),
         "ping" => Ok(json!({})),
-        "tools/list" => Ok(json!({ "tools": tool_list() })),
-        "tools/call" => Ok(call_tool(&st, &request_id, &msg["params"]).await),
+        "tools/list" => Ok(json!({ "tools": tools() })),
+        "tools/call" => Ok(call.await),
         _ => Err(json!({ "code": -32601, "message": "Method not found" })),
     };
     let reply = match result {
@@ -164,6 +270,47 @@ async fn handle(
         Err(e) => json!({ "jsonrpc": "2.0", "id": id, "error": e }),
     };
     Json(reply).into_response()
+}
+
+async fn pip_endpoint(State(st): State<Arc<Serving>>, Path(request_id): Path<String>, headers: HeaderMap, body: Bytes) -> Response {
+    let Ok(_slot) = st.pip_slots.try_acquire() else { return StatusCode::TOO_MANY_REQUESTS.into_response() };
+    if !local_request(&headers, st.port) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    if !authorized(&headers, &st.pip.tokens, &request_id) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let msg = match message(&body) {
+        Ok(msg) => msg,
+        Err(status) => return status.into_response(),
+    };
+    let params = msg["params"].clone();
+    rpc(msg, tool_list, call_tool(&st.pip, &request_id, &params)).await
+}
+
+async fn agent_endpoint(State(st): State<Arc<Serving>>, Path(run_id): Path<String>, headers: HeaderMap, body: Bytes) -> Response {
+    let Ok(quick) = st.agent_slots.try_acquire() else { return StatusCode::TOO_MANY_REQUESTS.into_response() };
+    if !local_request(&headers, st.port) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    // Only a missing or malformed bearer is a 401; a client that sees one for a legitimate session may start OAuth.
+    let Some(token) = bearer(&headers).filter(|t| well_formed(t)) else { return StatusCode::UNAUTHORIZED.into_response() };
+    let msg = match message(&body) {
+        Ok(msg) => msg,
+        Err(status) => return status.into_response(),
+    };
+    let params = msg["params"].clone();
+    let asking = msg["method"] == "tools/call" && params["name"] == ASK_TOOL;
+    let _held = if asking {
+        drop(quick);
+        match st.ask_slots.try_acquire() {
+            Ok(slot) => slot,
+            Err(_) => return StatusCode::TOO_MANY_REQUESTS.into_response(),
+        }
+    } else {
+        quick
+    };
+    rpc(msg, agent_tools::tools, st.agents.call(&run_id, token, &params)).await
 }
 
 pub(super) fn tool(name: &str, description: &str, properties: Value, required: &[&str]) -> Value {

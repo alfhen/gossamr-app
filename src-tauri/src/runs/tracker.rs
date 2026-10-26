@@ -385,6 +385,22 @@ impl RunService {
         Some(found)
     }
 
+    /// A run whose agent waits in its `ask` call reads as asking, with that question, whatever the session is listed as
+    /// doing: it is working as far as Claude can tell. A run that ended while it waited has nobody left to answer.
+    fn with_pending_ask(&self, run_id: &str, mut seen: state::Observed) -> state::Observed {
+        let asks = self.core.asks();
+        match (asks.question(run_id), seen.state) {
+            (Some(question), RunState::Working) => {
+                seen.state = RunState::NeedsAnswer;
+                seen.text = Some(question);
+                seen.idle_polls = 0;
+            }
+            (Some(_), RunState::Done | RunState::Failed | RunState::Stopped) => asks.cancel(run_id),
+            _ => {}
+        }
+        seen
+    }
+
     /// Applies one run's observation. Returns its connection when anything about it changed.
     /// A Review that reached Done is added to `reviewed`, for its GitHub review draft to be made once the launch lock is
     /// let go (`draft_review`).
@@ -405,7 +421,7 @@ impl RunService {
         };
         let misses = self.misses.lock().expect("misses lock poisoned").get(run_id).copied().unwrap_or(0);
         let idle = self.idle_polls.lock().expect("idle polls lock poisoned").get(run_id).copied().unwrap_or(0);
-        let seen = map_state(entry, job.as_ref(), &before, now, misses, idle);
+        let seen = self.with_pending_ask(run_id, map_state(entry, job.as_ref(), &before, now, misses, idle));
         for (counts, n) in [(&self.misses, seen.pid_misses), (&self.idle_polls, seen.idle_polls)] {
             let mut all = counts.lock().expect("run counts lock poisoned");
             if n > 0 {
@@ -448,6 +464,7 @@ impl RunService {
             RunState::NeedsAnswer | RunState::NeedsPermission | RunState::SystemBlocked => seen.text.as_deref().and_then(|t| cleaned(t, NEEDS_KEPT)),
             _ => None,
         };
+        run.asking = seen.state == RunState::NeedsAnswer && self.core.asks().question(run_id).is_some();
         run.suggested_reply = match seen.state {
             RunState::NeedsAnswer => job.as_ref().and_then(|j| j.suggested_reply.as_deref()).and_then(|r| cleaned(r, REPLY_KEPT)),
             _ => None,
@@ -464,9 +481,11 @@ impl RunService {
         if let (Some(over), Some(id)) = (limits::exceeded(&run, now, &settings), run.short_id.clone()) {
             match tc.cli.stop(&id).await {
                 Ok(()) => {
+                    self.core.asks().cancel(run_id);
                     overrun = Some(over.reason(&settings));
                     run.state = RunState::Stopped;
                     run.needs = None;
+                    run.asking = false;
                     run.error.clone_from(&overrun);
                     run.stopped_by_limit = true;
                     run.last_progress_at = now;

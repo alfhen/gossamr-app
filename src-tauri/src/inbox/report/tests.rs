@@ -14,7 +14,6 @@ fn good() -> Value {
 
 /// A run that is under way and was given a token.
 async fn open(fx: &Fixture, spec: RunSpec, item: Option<crate::domain::ItemRef>) -> (Run, String) {
-    fx.core.set_report_enabled(true);
     let run = approved(fx, RunSpec { report: true, ..spec }, item, "", |r| {
         r.state = RunState::Working;
         r.result = None;
@@ -32,7 +31,7 @@ async fn ticket_run(fx: &Fixture) -> (Run, String) {
 }
 
 async fn call(fx: &Fixture, run: &Run, token: &str, args: Value) -> Reply {
-    fx.core.call(&run.id, &token_hash(token), &args).await
+    fx.core.report_call(&run.id, &token_hash(token), &args).await
 }
 
 async fn set(fx: &Fixture, run: &Run, f: impl FnOnce(&mut Run)) -> Run {
@@ -88,7 +87,7 @@ async fn a_blocked_report_says_so_ahead_of_the_note() {
 #[tokio::test]
 async fn a_run_that_never_reports_reads_as_it_always_did_and_says_where_it_came_from() {
     let fx = fixture_watching(&["acme/webshop"]).await;
-    let plain = run_with(&fx, |_| {}).await;
+    let plain = run_with(&fx, |r| r.spec.report = false).await;
     let outcome = fx.core.run_outcome(&plain.id).await.unwrap();
     assert_eq!((outcome.source, outcome.report), (Some(ResultSource::Section), None));
     assert_eq!(outcome.note.unwrap().text, "Add a backoff to the consumer.");
@@ -125,7 +124,7 @@ async fn a_token_works_for_its_own_run_while_it_is_open_and_for_nothing_else() {
     assert_eq!(call(&fx, &b, &token_a, good()).await, Reply::Unavailable, "a's token on b's run");
     assert_eq!(call(&fx, &a, &token_b, good()).await, Reply::Unavailable, "b's token on a's run");
     assert_eq!(call(&fx, &a, &new_token().unwrap(), good()).await, Reply::Unavailable, "a token nobody minted");
-    assert_eq!(fx.core.call("no-such-run", &token_hash(&token_a), &good()).await, Reply::Unavailable);
+    assert_eq!(fx.core.report_call("no-such-run", &token_hash(&token_a), &good()).await, Reply::Unavailable);
     assert!(fx.core.report_stored(&b.id).await.unwrap().unwrap().report.is_none(), "nothing landed on b");
 
     for state in [RunState::Queued, RunState::Done, RunState::Failed, RunState::Stopped] {
@@ -271,21 +270,24 @@ async fn a_plan_run_carries_the_plan_it_reported() {
 }
 
 #[tokio::test]
-async fn drafting_with_the_tool_is_refused_while_the_setting_is_off() {
+async fn a_draft_always_spells_out_the_report_and_its_digest_follows_what_it_says() {
     let fx = fixture_watching(&["acme/webshop"]).await;
-    let spec = RunSpec { report: true, ..next_spec(&fx) };
-    let off = fx.core.draft_run(spec.clone(), Some(fx.item("CA-1"))).await.unwrap_err().to_string();
-    assert!(off.contains("Reporting through Gossamr is off"), "{off}");
-    let plain = fx.core.draft_run(RunSpec { report: false, ..spec.clone() }, Some(fx.item("CA-1"))).await.unwrap();
-    let edit = crate::inbox::Edit::Run { instruction: None, base: None, clone_path: None, kind: None, name: None, pr: None, allow_push: None, report: Some(true), plan: None, build_account: None, project: None };
-    assert!(fx.core.edit_proposal(&plain.id, &edit).await.is_err());
+    let spec = next_spec(&fx);
+    let p = fx.core.draft_run(RunSpec { report: false, ..spec.clone() }, Some(fx.item("CA-1"))).await.unwrap();
+    let review = fx.core.runs_review(&p.id).await.unwrap();
+    assert!(review.spec.report && review.prompt.contains("If the Gossamr tool `report` is available"));
+    assert_eq!(review.report.as_ref().map(|r| r.allowed.as_str()), Some("mcp__gossamr__report, mcp__gossamr__ask, mcp__gossamr__read_workstream, mcp__gossamr__read_ticket"));
+    let silent = RunSpec { report: false, ..review.spec.clone() };
+    assert_ne!(review.digest, silent.digest(), "the digest follows what the draft says");
+    assert!(!crate::domain::render_prompt(&silent).contains("Gossamr tool"), "a draft from before the tools were always on still reads as it did");
+}
 
-    fx.core.set_report_enabled(true);
-    let on = fx.core.draft_run(spec, Some(fx.item("CA-1"))).await.unwrap();
-    let review = fx.core.runs_review(&on.id).await.unwrap();
-    assert!(review.spec.report && review.prompt.contains("If the run-report tool `report_result` is available"));
-    let before = fx.core.runs_review(&plain.id).await.unwrap().digest;
-    let edited = fx.core.edit_proposal(&plain.id, &edit).await.unwrap();
-    assert!(matches!(&edited.intent, Intent::StartRun { spec, .. } if spec.report));
-    assert_ne!(fx.core.runs_review(&edited.id).await.unwrap().digest, before, "the digest follows what the draft now says");
+#[tokio::test]
+async fn an_approved_run_that_has_not_launched_yet_still_shows_the_tools_it_will_get() {
+    let fx = fixture_watching(&["acme/webshop"]).await;
+    let p = fx.core.draft_run(next_spec(&fx), Some(fx.item("CA-1"))).await.unwrap();
+    let digest = fx.core.runs_review(&p.id).await.unwrap().digest;
+    let queued = fx.core.runs_approve(&p.id, &digest).await.unwrap();
+    assert_eq!(queued.state, RunState::Queued);
+    assert!(fx.core.runs_review(&p.id).await.unwrap().report.is_some());
 }

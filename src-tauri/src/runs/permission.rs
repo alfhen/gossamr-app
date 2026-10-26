@@ -469,6 +469,7 @@ impl RunService {
         }
         let denial = DENIED_MESSAGE.to_owned();
         tc.cli.stop(&id).await?;
+        self.core.asks().cancel(&run.id);
         Self::stopped(&mut run);
         if let Err(e) = self.index.mark_terminal(&run.id) {
             eprintln!("couldn't update the run index: {e}");

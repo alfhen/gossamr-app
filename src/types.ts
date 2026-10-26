@@ -487,7 +487,7 @@ export type ProposalEdit =
   | { type: "runAnswer"; message: string }
   /** A review draft's summary and comments, as the person rewords and drops them; the ones left out stay as they are. A person's edit never moves a comment or adds one. */
   | { type: "githubReview"; summary?: string; comments?: ReviewComment[] }
-  | { type: "run"; instruction?: string; base?: string; clonePath?: string; kind?: RunKind; name?: string; pr?: number | null; allowPush?: boolean; report?: boolean; plan?: string; buildAccount?: string; project?: ContainerRef };
+  | { type: "run"; instruction?: string; base?: string; clonePath?: string; kind?: RunKind; name?: string; pr?: number | null; allowPush?: boolean; plan?: string; buildAccount?: string; project?: ContainerRef };
 
 /** Emitted as the `proposals-changed` event when a draft was created, edited, applied, revised or retired. */
 export interface ProposalsChanged {
@@ -535,7 +535,7 @@ export interface RunSpec {
   allowPush?: boolean;
   /** Where the draft ticket of an investigation with no ticket lands. Its presence makes the run end as a ticket; the agent never chooses it. */
   project?: ContainerRef | null;
-  /** Whether the agent is asked to report its result through Gossamr's run-report tool, when Gossamr offers it. */
+  /** Whether the prompt spells out what the report tool is to be given. Every launch offers the tool. */
   report?: boolean;
   /** The workstream the run belongs to. Part of what the person approves, never part of the prompt. */
   workstream?: string | null;
@@ -566,6 +566,8 @@ export interface Run {
   sessionId: string | null;
   /** The question, or the exact command awaiting permission. */
   needs: string | null;
+  /** The question is held in the agent's `ask` call, so the answer goes straight to it. */
+  asking?: boolean;
   /** The answer Claude proposes to its own question, when it offers one. */
   suggestedReply?: string | null;
   /** An answer that was stopped on its way: the run is stopped, and this is what it was to be woken with. */
@@ -736,7 +738,7 @@ export interface RunReview {
   /** For a triage or plan made after an investigation: the findings as they will be sent. */
   findings?: string | null;
   guard: string;
-  /** What the session is also given when the run asks for the result tool and Gossamr's server is running. */
+  /** What the session is also given when Gossamr's server is running: its four tools, their allow rules and the line added to the guard. */
   report?: { allowed: string; guard: string } | null;
   /** For a read-only kind: what Claude Code is told to refuse, and the sentence added to the guard. */
   readOnly?: ReadOnly | null;
@@ -900,8 +902,6 @@ export interface AgentSettings {
   terminal: "terminal" | "iTerm";
   /** Draft a Jira comment on the run's ticket when it finishes with a `For Jira:` section. */
   draftOnFinish: boolean;
-  /** Offer new runs the run-report tool, through which an agent hands Gossamr its result as data. */
-  reportResult: boolean;
   /** Which system notifications about runs to show; a backend that sent none has "workstream". */
   notifications?: NoticeMode;
   /** Minutes between digest notifications. */

@@ -104,7 +104,7 @@ impl Rig {
         self.svc.start_now(&queued.id).await.unwrap()
     }
 
-    /// Approved with the report tool asked for and launched; the service must have been built with `reporting`.
+    /// Approved with the report paragraph asked for and launched; the service must have been built with `reporting` to offer the tools.
     pub async fn launched_reporting(&self, n: u32, kind: crate::domain::RunKind) -> Run {
         let p = self.fx.core.draft_run(RunSpec { kind, report: true, ..self.spec(n) }, Some(self.fx.item("CA-1"))).await.unwrap();
         let digest = self.fx.core.runs_review(&p.id).await.unwrap().digest;
@@ -182,11 +182,8 @@ impl Rig {
     }
 }
 
-/// A service that offers the report tool on a channel in `dir`, with the setting on.
+/// A service that offers Gossamr's tools on a channel in `dir`.
 pub fn reporting(dir: &Path) -> impl FnOnce(RunService) -> RunService {
-    let channel = Arc::new(super::report::ReportChannel::new(4242, dir.join("report")));
-    move |svc| {
-        let settings = crate::config::AgentSettings { report_result: true, ..svc.settings() };
-        svc.with_settings(settings).with_report(channel)
-    }
+    let channel = Arc::new(super::agent_config::AgentChannel::new(4242, dir.join("agents")));
+    move |svc| svc.with_agent_channel(channel)
 }

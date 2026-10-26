@@ -284,6 +284,7 @@ describe("the sample path from a prompt to a ticket", () => {
   it("seeds a draft from an answer with no section, and refuses a run with a ticket", async () => {
     await backend.runsSetSettings({ ...(await backend.runsSettings()), draftOnFinish: false });
     const run = await ticketless();
+    backend.runs.setReport(run.id, null);
     (backend.runs as unknown as { update(id: string, patch: Partial<Run>): void }).update(run.id, { result: "The consumer retries in a loop.\n\nIt never backs off." });
     const made = await backend.runsDraftTicket(run.id);
     expect(made.intent.type === "create" && made.intent.fields.title).toBe("The consumer retries in a loop.");

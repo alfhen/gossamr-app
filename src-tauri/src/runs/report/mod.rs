@@ -1,17 +1,15 @@
-//! The run-report channel: a tool an agent calls to hand Gossamr its result as data, instead of Gossamr reading prose.
+//! The report an agent hands Gossamr through the `report` tool as data, instead of Gossamr reading prose.
 //!
 //! A call only ever produces a validated, sanitised `Report` stored on the run. It writes nothing to Jira, to the
 //! repository or to any other run, and drafts are made from a stored report exactly as they are from the written answer.
 
 mod resolve;
-mod server;
 mod tool;
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 pub use resolve::{resolve, Resolved};
-pub use server::{config_dir, ReportChannel, ReportLaunch, ReportServer, ReportSink};
 pub use tool::{check, definition, Target, FINDINGS_MAX, FINDING_TEXT_LIMIT, MAX_CALLS, MAX_REJECTIONS};
 
 use super::result::TicketProposal;
@@ -147,10 +145,10 @@ impl Reply {
                 (format!("Recorded (revision {revision}){notes}. Your written answer is still needed."), false)
             }
             Reply::Unchanged => ("Already recorded exactly as given. Your written answer is still needed.".into(), false),
-            Reply::Already => ("A report is already recorded for this run. If it needs correcting, call report_result again with revise set to true.".into(), true),
+            Reply::Already => ("A report is already recorded for this run. If it needs correcting, call report again with revise set to true.".into(), true),
             Reply::Invalid(problems) => {
                 let mut lines: Vec<String> = problems.iter().take(8).cloned().collect();
-                lines.push("Fix these and call report_result again. Nothing was saved.".into());
+                lines.push("Fix these and call report again. Nothing was saved.".into());
                 (lines.join("\n"), true)
             }
             Reply::Locked => ("This run's report has been refused too often and is no longer being recorded. Finish with your written answer.".into(), true),

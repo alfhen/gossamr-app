@@ -490,6 +490,7 @@ These figures come from `wc -l` and the slice reports, and include tests. The "A
    - A draft still needs the person's key.
    - Pip's tokens are revoked when each turn ends.
    - Gossamr treats its database as readable by any agent.
+   - Accepted: the server reuses its last loopback port so running sessions survive a restart. A process of another user that holds that port while Gossamr is down, or after it moved, would see those sessions' tokens and could answer their `ask` calls.
 
 7. **Chains are judgement, not rules.** The fixed Investigate → Triage → Plan → Build → Review table always fired the same way. Pip may skip or reorder steps. That is the point, but a weak Pip turn can stall a workstream. The wake on every state change, and the "Pip asks you" need, are the safety net.
 

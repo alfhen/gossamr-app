@@ -38,7 +38,6 @@ export const READ_ONLY_DENY: readonly string[] = [
   "Write",
   "MultiEdit",
   "NotebookEdit",
-  "mcp__gossamr",
   "Bash(git commit *)",
   "Bash(git push *)",
   "Bash(git merge *)",
@@ -153,7 +152,7 @@ export function reportParagraph(spec: { kind: RunKind; project?: unknown }): str
     fields.push("verdict ('pass' or 'blocking', required)");
     fields.push("findings (an array of objects with severity blocking, should-fix or nit, text, and where: the file:line, command and output, or acceptance point it rests on)");
   }
-  return `If the run-report tool \`report_result\` is available, call it once when you are done with: ${fields.join("; ")}. It only records your result in Gossamr and changes nothing in Jira or anywhere else. Call it yourself, not from a subagent. Then still write your full answer as asked above, whether or not the tool was there or refused.`;
+  return `If the Gossamr tool \`report\` is available, call it once when you are done with: ${fields.join("; ")}. It only records your result in Gossamr and changes nothing in Jira or anywhere else. Call it yourself, not from a subagent. Then still write your full answer as asked above, whether or not the tool was there or refused.`;
 }
 
 /** What a ticketless investigation is told after the person's own text, as `NEW_TICKET_TAIL` in `domain/run.rs`. */
@@ -215,8 +214,6 @@ export const PUSH_ALLOWED =
 /** Pip's refusals for a build or review that doesn't follow a finished run, as in src-tauri/src/agent/runs.rs. */
 export const BUILD_NEEDS_PLAN = "A build can only follow a finished plan run: pass from_run with the plan run's id from list_runs. Pip can't propose a build or review on its own.";
 export const REVIEW_NEEDS_BUILD = "A review can only follow a finished build whose pull request has been found: pass from_run with the build run's id from list_runs. Pip can't propose a build or review on its own.";
-/** Why a review's report can't be unticked: the app reads its verdict. As `REVIEW_REPORTS` in `inbox/drafts.rs`. */
-export const REVIEW_REPORTS = "A review always reports its verdict to Gossamr. With reporting off in Settings the tool isn't offered, and its written 'Verdict:' line is read instead.";
 
 export const REVIEW_NO_FOCUS = "A review judges the change on its own; it takes no focus note.";
 /** Told to Pip with the refusal of a review whose build's pull request hasn't been found yet, as WAITING_FOR_PR_HINT in src-tauri/src/inbox/workstreams.rs. */

@@ -4,7 +4,7 @@ import { MockBackend } from "../backend/mock";
 import type { AgentSettings } from "../types";
 import { AgentsSettingsView, withDigestMinutes } from "./AgentsSettings";
 
-const SETTINGS: AgentSettings = { maxRuns: 3, wallClockMinutes: 60, tokenCap: 3_000_000, terminal: "terminal", draftOnFinish: true, reportResult: false };
+const SETTINGS: AgentSettings = { maxRuns: 3, wallClockMinutes: 60, tokenCap: 3_000_000, terminal: "terminal", draftOnFinish: true };
 const view = (settings: AgentSettings | null, settingsSaving = false) =>
   renderToStaticMarkup(<AgentsSettingsView runs={[]} stopping={false} keepRunning={0} settings={settings} settingsSaving={settingsSaving} cleanup={null} onSettings={vi.fn()} onCleanup={vi.fn()} onStopAll={vi.fn()} onClose={vi.fn()} />);
 
@@ -14,7 +14,7 @@ describe("Settings", () => {
     expect(html).not.toContain("Automatic steps");
     expect(html).not.toContain("Pip turns per day");
     expect(html).toContain("Limits");
-    expect(html).toContain("Result tool");
+    expect(html).not.toContain("Result tool");
   });
 });
 

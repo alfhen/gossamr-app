@@ -1,5 +1,5 @@
 import { docFromText, docText, quoteAfterFirst } from "../lib/docs";
-import { BUILD_ACCOUNT_LIMIT, INSTRUCTIONS, PLAN_LIMIT, REVIEW_REPORTS } from "./mockRunKinds";
+import { BUILD_ACCOUNT_LIMIT, INSTRUCTIONS, PLAN_LIMIT } from "./mockRunKinds";
 import { canJoinWorkstream, withWorkstream } from "../lib/workstreamAdopt";
 import { capRefusal, isRunComment, isRunReview, leftByRun, offTheDiff, PLAN_IS_THE_USERS, REPLACED_REASON, REVIEW_CHANGED, REVIEW_IS_THE_USERS, REVIEW_MAYBE_POSTED_NOTE, REVIEW_NOT_FOUND_NOTE, REVIEW_OUTDATED_NOTE, reviewEditProblem, reviewSupersession, runCommentSupersession, supersession, targetOf, WORKSTREAM_PENDING_CAP, workstreamOf } from "../lib/proposals";
 import { commentable } from "../lib/diffHunks";
@@ -322,7 +322,7 @@ export class MockProposals {
     }
     if (edit.type === "run" && intent.type === "startRun") {
       if (edit.instruction !== undefined && !edit.instruction.trim()) throw new Error("the instruction can't be empty");
-      const { instruction, base, clonePath, kind, name, pr, allowPush, report, plan, buildAccount, project } = edit;
+      const { instruction, base, clonePath, kind, name, pr, allowPush, plan, buildAccount, project } = edit;
       if (project && project.connectionId !== CONNECTION) throw new Error("the project belongs to another connection");
       const was = intent.spec;
       const switched = kind && kind !== was.kind;
@@ -333,18 +333,15 @@ export class MockProposals {
         ...(base !== undefined ? { base: base.trim() } : {}),
         ...(clonePath !== undefined ? { clonePath } : {}),
         ...(kind ? { kind } : {}),
-        // A review always reports its verdict; what another kind asks for is the person's choice again.
-        ...(switched ? { pr: null, prSha: null, allowPush: kind === "build", report: kind === "review" ? true : was.kind === "review" ? false : was.report, ...(kind !== "build" ? { plan: null, planFromRun: null, planApproved: false } : {}), ...(kind !== "review" ? { buildAccount: null, buildFromRun: null } : {}), ...(kind !== "triage" && kind !== "plan" ? { findings: null, findingsFromRun: null } : {}), ...(untouched ? { instruction: INSTRUCTIONS[kind] } : {}), ...(kind !== "investigate" ? { project: null } : {}) } : {}),
+        ...(switched ? { pr: null, prSha: null, allowPush: kind === "build", ...(kind !== "build" ? { plan: null, planFromRun: null, planApproved: false } : {}), ...(kind !== "review" ? { buildAccount: null, buildFromRun: null } : {}), ...(kind !== "triage" && kind !== "plan" ? { findings: null, findingsFromRun: null } : {}), ...(untouched ? { instruction: INSTRUCTIONS[kind] } : {}), ...(kind !== "investigate" ? { project: null } : {}) } : {}),
         ...(project ? { project } : {}),
         ...(pr !== undefined ? { pr, prSha: null, ...(pr !== was.pr ? { buildAccount: null, buildFromRun: null } : {}) } : {}),
         ...(allowPush !== undefined ? { allowPush } : {}),
-        ...(report !== undefined ? { report } : {}),
         // Plan text the person changed here is theirs, so the build is told a person settled it.
         ...(plan !== undefined ? (plan.trim() ? { plan, planApproved: !!was.planApproved || plan !== was.plan } : { plan: null, planFromRun: null, planApproved: false }) : {}),
         ...(buildAccount !== undefined ? (buildAccount.trim() ? { buildAccount } : { buildAccount: null, buildFromRun: null }) : {}),
         ...(name !== undefined ? { name: name.trim() } : {}),
       };
-      if (report === false && spec.kind === "review") throw new Error(REVIEW_REPORTS);
       if (spec.allowPush && spec.kind !== "build") throw new Error("Only a build can push.");
       if (allowPush === false && spec.kind === "build" && spec.workstream) throw new Error("a workstream's build always publishes a draft pull request");
       if (plan?.trim() && !was.planFromRun) throw new Error("this draft doesn't carry a plan");

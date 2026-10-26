@@ -236,6 +236,7 @@ impl RunService {
         let id = run.short_id.clone().ok_or_else(|| refuse("This run has no session to stop."))?;
         let tc = self.toolchain().await?;
         tc.cli.stop(&id).await?;
+        self.core.asks().cancel(&run.id);
         Self::stopped(&mut run);
         if let Err(e) = self.index.mark_terminal(&run.id) {
             eprintln!("couldn't update the run index: {e}");
@@ -303,6 +304,7 @@ impl RunService {
             };
             match tokio::time::timeout(STOP_LIMIT, tc.cli.stop(&id)).await {
                 Ok(Ok(())) => {
+                    self.core.asks().cancel(&entry.run_id);
                     tally.stopped += 1;
                     let _ = self.index.mark_terminal(&entry.run_id);
                     self.reset_counts(&entry.run_id);

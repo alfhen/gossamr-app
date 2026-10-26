@@ -51,7 +51,7 @@ async function launch(page: Page, id: string): Promise<MockLaunch> {
 /** Opens a closed `<details>` by its summary inside `scope`. */
 async function openDetails(scope: Locator, summary: string) {
   // The launch command sits inside the review's Technical details.
-  if (summary === "Show the exact command" && (await scope.locator("[data-technical-details]").count())) await openTechnical(scope);
+  if (summary === "Show the command (illustrative)" && (await scope.locator("[data-technical-details]").count())) await openTechnical(scope);
   const details = detailsOf(scope, summary);
   await details.locator("summary").click();
   await expect(details).toHaveAttribute("open", "");
@@ -111,15 +111,15 @@ test("a person-started investigation shows and launches read-only, and the triag
   for (const rule of ["Edit", "Write", "Bash(git push *)"]) await expect(deny.getByText(rule, { exact: true })).toHaveCount(1);
   await expect(adds).toContainText(READ_ONLY_GUARD_START);
 
-  // The exact command is the restricted launch, flag for flag, and its guard carries the read-only sentence.
-  const command = await openDetails(setup(page), "Show the exact command");
-  await expect(command).toContainText("--permission-mode 'dontAsk' --setting-sources '' --strict-mcp-config --allowedTools 'Bash(git fetch origin main)'");
+  // The command is the restricted launch, flag for flag, and its guard carries the read-only sentence.
+  const command = await openDetails(setup(page), "Show the command (illustrative)");
+  await expect(command).toContainText("--permission-mode 'dontAsk' --setting-sources '' --strict-mcp-config --allowedTools 'mcp__gossamr__report' 'mcp__gossamr__ask' 'mcp__gossamr__read_workstream' 'mcp__gossamr__read_ticket' 'Bash(git fetch origin main)'");
   await expect(command).toContainText("--disallowedTools 'Edit' 'Write'");
   await expect(command).toContainText(READ_ONLY_GUARD_START);
-  // With the report tool off it names no placeholder config, so it is exact and can be copied.
-  await expect(command).not.toContainText("--mcp-config");
-  await expect(command.getByRole("button", { name: "Copy the command" })).toBeVisible();
-  await expect(command.locator("[data-command-illustrative]")).toHaveCount(0);
+  // It names the agent tools' config, written at launch, so it is illustrative and offered without Copy.
+  await expect(command).toContainText("--mcp-config '<agent tools config, written at launch>'");
+  await expect(command.getByRole("button", { name: "Copy the command" })).toHaveCount(0);
+  await expect(command.locator("[data-command-illustrative]")).toHaveCount(1);
 
   // The digest the checks show is the one the approval carries. That the restriction is part of that digest is proven
   // by mockRuns.test.ts and the Rust `pre_phase_6_digest` tests, not here: both sides of this check come from one digest.

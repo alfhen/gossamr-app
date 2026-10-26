@@ -28,7 +28,7 @@ function outcomeOf(run: Run): RunOutcome {
 beforeEach(() => vi.stubGlobal("localStorage", { getItem: () => null, setItem: () => {}, removeItem: () => {} }));
 
 describe("a review's verdict", () => {
-  it("is read from the written Verdict line when the report setting is off, with its findings by severity", () => {
+  it("is read from the written Verdict line when the run made no report, with its findings by severity", () => {
     const review = outcomeOf(finished).review!;
     expect(review).toMatchObject({ verdict: "blocking", blocking: 1, shouldFix: 1, nits: 1, source: "written" });
     expect(review.findings.map((f) => f.severity)).toEqual(["blocking", "should-fix", "nit"]);

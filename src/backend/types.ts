@@ -187,7 +187,7 @@ export interface Backend {
   runsApprove(proposalId: string, digest: string): Promise<Run>;
   /** Stops a working run; rejects until it is working. */
   runsStop(id: string): Promise<Run>;
-  /** Answers a run that is asking a question: stops its session and wakes it with the answer. Also sends again an answer that was stopped on its way. */
+  /** Answers a run that is asking a question: hands the answer to the agent waiting in its ask call, or stops its session and wakes it when its turn ended. Also sends again an answer that was stopped on its way. */
   runsAnswer(id: string, text: string): Promise<Run>;
   /**
    * The person's Deny for the permission prompt they read as `command`: the session is stopped, which drops the prompt,

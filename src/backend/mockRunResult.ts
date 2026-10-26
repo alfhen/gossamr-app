@@ -351,7 +351,7 @@ export function fit(text: string, limit: number, note: (total: number) => string
   return { text: `${window.slice(0, cutAt).trimEnd()}\n\n${tail}`, total, cut: true };
 }
 
-/** What an agent reported through the run-report tool, as `runs/report` stores it. */
+/** What an agent reported through the report tool, as `runs/report` stores it. */
 export interface MockReport {
   status: "done" | "blocked";
   note?: string;

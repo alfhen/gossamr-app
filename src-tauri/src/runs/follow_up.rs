@@ -93,6 +93,7 @@ impl RunService {
             let alive = listed.iter().find(|e| belongs_to(e, run)).is_some_and(|e| !matches!(e.state.as_deref(), Some("stopped" | "done")));
             if alive {
                 tc.cli.stop(&id).await?;
+                self.core.asks().cancel(&run.id);
                 Self::stopped(run);
                 if let Err(e) = self.index.mark_terminal(&run.id) {
                     eprintln!("couldn't update the run index: {e}");

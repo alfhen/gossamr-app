@@ -1,7 +1,9 @@
 //! Everything that runs the user's `claude` binary for background agent runs.
 #![allow(dead_code)]
 
+pub mod agent_config;
 pub mod answer;
+pub mod ask;
 pub mod archive;
 pub mod binary;
 pub mod cleanup;

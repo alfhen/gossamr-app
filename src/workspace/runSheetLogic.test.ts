@@ -346,10 +346,10 @@ describe("the prompt of the other kinds", () => {
 
   it("shows a read-only kind's launch with every flag SystemCli::launch adds, in its order, and the whole guard", () => {
     const readOnly = { mode: "dontAsk", allow: ["Bash(git fetch origin main)", "Bash(npm test)"], deny: ["Edit", "Bash(git push *)"], guard: "Read-only sentence.", settingSources: "", strictMcpConfig: true };
-    const report = { allowed: "mcp__run-report__report_result", guard: "Report sentence." };
+    const report = { allowed: "mcp__gossamr__report, mcp__gossamr__ask", guard: "Report sentence." };
     const cmd = launchCommand(spec({ kind: "investigate" }), "CA-1", "Guard.", "the prompt", { readOnly, report }).split("\n")[1];
     expect(cmd).toBe(
-      "claude --bg --name 'CA-1 investigate' --worktree 'ca-1-fix-ab12' --mcp-config '<run-report config, written at launch>' --permission-mode 'dontAsk' --setting-sources '' --strict-mcp-config --allowedTools 'mcp__run-report__report_result' 'Bash(git fetch origin main)' 'Bash(npm test)' --disallowedTools 'Edit' 'Bash(git push *)' --append-system-prompt 'Guard. Read-only sentence. Report sentence.' -- 'the prompt'",
+      "claude --bg --name 'CA-1 investigate' --worktree 'ca-1-fix-ab12' --mcp-config '<agent tools config, written at launch>' --permission-mode 'dontAsk' --setting-sources '' --strict-mcp-config --allowedTools 'mcp__gossamr__report' 'mcp__gossamr__ask' 'Bash(git fetch origin main)' 'Bash(npm test)' --disallowedTools 'Edit' 'Bash(git push *)' --append-system-prompt 'Guard. Read-only sentence. Report sentence.' -- 'the prompt'",
     );
     const build = launchCommand(spec({ kind: "build" }), "CA-1", "Guard.", "the prompt", { readOnly: null, report: null });
     expect(build).not.toMatch(/--(permission-mode|setting-sources|strict-mcp-config|allowedTools|disallowedTools)/);
@@ -360,7 +360,7 @@ describe("the prompt of the other kinds", () => {
 describe("how the launch command is offered", () => {
   it("is exact and copyable without the report tool, and illustrative with no Copy when it names the report config", () => {
     expect(commandShown(null)).toEqual({ summary: "Show the exact command", copy: true, note: null });
-    const shown = commandShown({ allowed: "mcp__run-report__report_result", guard: "g" });
+    const shown = commandShown({ allowed: "mcp__gossamr__report", guard: "g" });
     expect(shown).toMatchObject({ summary: "Show the command (illustrative)", copy: false });
     expect(shown.note).toContain(REPORT_CONFIG_SHOWN);
   });

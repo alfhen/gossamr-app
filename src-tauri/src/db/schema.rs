@@ -212,7 +212,7 @@ CREATE TABLE run_events (
   PRIMARY KEY (run_id, seq)
 ) WITHOUT ROWID;";
 
-/// What an agent reported through the run-report tool, apart from the run's own blob so a tracker poll that rewrites the
+/// What an agent reported through the report tool, apart from the run's own blob so a tracker poll that rewrites the
 /// run can't lose it. A token's hash is never deleted while its run exists: revocation is by the run's state, and a
 /// launch whose answer was lost can still be adopted with the token it was given.
 const RUN_REPORTS: &str = "

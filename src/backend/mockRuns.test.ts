@@ -10,7 +10,7 @@ import { MockWorkstreams } from "./mockWorkstreams";
 import { DENIED_MESSAGE } from "../lib/permission";
 import { RESUME_TEXT } from "../workspace/runSheetLogic";
 import { mockAsk } from "./mockPip";
-import { GUARD as GUARD_TEXT, MOVED_ON, findingsFitted, mockDigest, renderPrompt } from "./mockRuns";
+import { AGENT_GUARD, GUARD as GUARD_TEXT, MOVED_ON, findingsFitted, mockDigest, renderPrompt } from "./mockRuns";
 
 const spec: RunSpec = {
   kind: "investigate",
@@ -122,6 +122,19 @@ describe("mock runs", () => {
     expect(await backend.runsStopAll()).toEqual({ stopped: 0, failed: 0, waiting: 0 });
   });
 
+  it("has a run waiting in its ask call, which an answer resolves at once and a question that ended its turn is not", async () => {
+    const backend = new MockBackend();
+    const waiting = backend.runs.list().find((r) => r.state === "needsAnswer")!;
+    expect(waiting).toMatchObject({ asking: true, needs: "Should the refund path keep the old rounding?" });
+    const answered = await backend.runsAnswer(waiting.id, "Yes, keep it.");
+    expect(answered).toMatchObject({ state: "working", needs: null });
+    expect(answered.asking).toBeFalsy();
+
+    const working = backend.runs.list().find((r) => r.state === "working" && r.id !== waiting.id)!;
+    expect(backend.runs.ask(working.id, "Which one?")).toMatchObject({ state: "needsAnswer", asking: false });
+    expect(backend.runs.ask(working.id, "Which one?", true).asking).toBe(true);
+  });
+
   it("answers a question, and only a question", async () => {
     const backend = new MockBackend();
     const [asking, permission] = ["needsAnswer", "needsPermission"].map((state) => backend.runs.list().find((r) => r.state === state)!);
@@ -163,6 +176,16 @@ describe("mock runs", () => {
     const next = await backend.runsApprove((await draft(backend, other)).id, mockDigest(other));
     backend.runs.advance(next.id);
     await expect(backend.runsStop(next.id)).rejects.toThrow(/once it is working/);
+  });
+
+  it("offers the agent tools from launch, so a run stopped before it started was never offered them", async () => {
+    const backend = new MockBackend();
+    const made = await draft(backend);
+    const run = await backend.runsApprove(made.id, mockDigest(spec));
+    expect((await backend.runsReview(made.id)).report).not.toBeNull();
+    await backend.runsStop(run.id);
+    expect((await backend.runsOutcome(run.id)).report).toBeNull();
+    expect((await backend.runsReview(made.id)).report).toBeNull();
   });
 
   it("emits runs-changed and open-run", async () => {
@@ -940,7 +963,7 @@ describe("mock runs of a read-only kind launch restricted, as RunService::spawn 
     const launched = b.runs.get(run.id)!;
     expect(launched.state).toBe("launching");
     expect(launched.readOnly).toEqual(readOnlyRules(spec));
-    expect(b.runs.launches()).toEqual([{ runId: run.id, kind: "investigate", readOnly: readOnlyRules(spec), guard: `${GUARD_TEXT} ${READ_ONLY_GUARD}`, at: launched.launchedAt }]);
+    expect(b.runs.launches()).toEqual([{ runId: run.id, kind: "investigate", readOnly: readOnlyRules(spec), guard: `${GUARD_TEXT} ${READ_ONLY_GUARD} ${AGENT_GUARD}`, at: launched.launchedAt }]);
     b.runs.advance(run.id);
     b.runs.advance(run.id);
     expect(b.runs.get(run.id)).toMatchObject({ state: "done", readOnly: readOnlyRules(spec) });
