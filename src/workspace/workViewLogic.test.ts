@@ -1,17 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { MockBackend } from "../backend/mock";
-import { heldText } from "../lib/workstreamHold";
-import { HELD_ALL, HELD_BUDGET, HELD_DAILY, HELD_PERSON, HELD_QUOTA, HELD_RESTART, TRIPWIRE, TRIPWIRES } from "../types";
-import type { CodeChange, Intent, ItemRef, Proposal, ProposalState, Run, RunKind, RunState, WorkstreamStage, WorkstreamView } from "../types";
+import type { CodeChange, Intent, ItemRef, PauseReason, Proposal, ProposalState, Run, RunKind, RunState, WorkstreamStage, WorkstreamView } from "../types";
 import { agentSummary } from "../backend/mockPip";
 import { needs } from "../lib/needs";
 import { docFromText } from "../lib/docs";
-import { workstreamStatus } from "../lib/workstreamStatus";
 import { NO_FILTERS, groupRuns, laneCount, laneOf, summaryLine } from "./agentsLogic";
 import { repeatedComments } from "../lib/needs";
 import { setLiveDraft } from "./draftLive";
 import { keepEditsOfDraft } from "./DraftCard";
-import { batchToApprove, EDITED_ASIDE, planRewriteDraft, batchable, freezeBatch, composerFooter, draftStep, workstreamSuggestionScene, FIX_ROUNDS, lastHeldAt, nextStep, retiredStepDrafts, shortHeld, stepChips, stepDrafts, STEP_KINDS } from "./workViewLogic";
+import { batchToApprove, EDITED_ASIDE, batchable, freezeBatch, composerFooter, draftStep, lastPausedAt, nextStep, retiredStepDrafts, stepChips, stepDrafts, STEP_KINDS } from "./workViewLogic";
 
 const NOW = Date.parse("2026-09-30T12:00:00Z");
 const iso = (minutesAgo: number) => new Date(NOW - minutesAgo * 60_000).toISOString();
@@ -31,7 +28,7 @@ const run = (id: string, kind: RunKind, state: RunState, over: Partial<Run> = {}
   ...over,
 });
 
-const view = (id: string, key: string | null, over: { heldReason?: string | null; stage?: WorkstreamStage; runs?: string[]; waitingForPr?: string | null; createdAt?: string; reviewBlocking?: boolean } = {}): WorkstreamView => ({
+const view = (id: string, key: string | null, over: { pausedReason?: PauseReason | null; stage?: WorkstreamStage; runs?: string[]; waitingForPr?: string | null; createdAt?: string; reviewBlocking?: boolean } = {}): WorkstreamView => ({
   workstream: {
     id,
     connectionId: "mock",
@@ -39,14 +36,10 @@ const view = (id: string, key: string | null, over: { heldReason?: string | null
     repo: null,
     title: key ? `${key} Something` : "Ticketless",
     pipSession: null,
-    mode: "manage",
-    heldReason: over.heldReason ?? null,
+    pausedReason: over.pausedReason ?? null,
     notes: null,
     createdAt: over.createdAt ?? iso(600),
     closedAt: null,
-    budget: { autoTurns: null, wakes: null, tokens: null },
-    spent: { autoTurns: 0, wakes: 0, tokens: 0 },
-    rules: {},
     basis: null,
   },
   stage: over.stage ?? "intake",
@@ -54,7 +47,6 @@ const view = (id: string, key: string | null, over: { heldReason?: string | null
   labels: (over.runs ?? []).map((r, n) => [r, `R${n + 1}`]),
   waitingForPr: over.waitingForPr ?? null,
   ...(over.reviewBlocking ? { reviewBlocking: true } : {}),
-  budget: { autoTurns: { used: 0, limit: 6 }, wakes: { used: 0, limit: 12 }, level: "ok" },
 });
 
 const draft = (id: string, intent: Intent, minutesAgo: number, over: { state?: ProposalState; workstream?: string | null } = {}): Proposal =>
@@ -77,39 +69,11 @@ const draft = (id: string, intent: Intent, minutesAgo: number, over: { state?: P
 const comment = (key: string): Intent => ({ type: "comment", item: ref(key), body: docFromText("Looks good"), mentions: [] }) as unknown as Intent;
 const startRun = (key: string, kind: RunKind, workstream: string | null): Intent => ({ type: "startRun", item: ref(key), spec: { ...base.spec, kind, workstream } }) as unknown as Intent;
 
-describe("shortHeld and lastHeldAt", () => {
-  it("shortens what the held banner says", () => {
-    expect(shortHeld(null)).toBeNull();
-    expect(shortHeld(HELD_PERSON)).toBe("Held by you");
-    expect(shortHeld(HELD_BUDGET)).toBe("Held: budget");
-    expect(shortHeld(`${TRIPWIRE}marker`)).toBe("Held: a run's output held one of Gossamr's data markers");
-    expect(shortHeld(`${TRIPWIRE}basis_drift`, ["description"])).toBe("Held: the ticket's description changed in Jira");
-    expect(shortHeld(`${TRIPWIRE}basis_drift`, ["status"])).toBe("Held: the ticket was moved to Done");
-  });
-
-  it("reads a safety hold exactly as the rail banner does, never naming the tripwire", () => {
-    for (const kind of TRIPWIRES) {
-      const reason = `${TRIPWIRE}${kind}`;
-      for (const drifted of [undefined, ["description"] as const, ["status"] as const]) {
-        const short = shortHeld(reason, drifted);
-        expect(short).toBe(heldText(reason, drifted));
-        expect(short).not.toMatch(/tripwire/i);
-      }
-    }
-  });
-
-  it("never says tripwire in a row's status for any hold", () => {
-    const reasons = [HELD_RESTART, HELD_PERSON, HELD_ALL, HELD_BUDGET, HELD_DAILY, HELD_QUOTA, ...TRIPWIRES.map((k) => `${TRIPWIRE}${k}`), `${TRIPWIRE}other`];
-    for (const reason of reasons) {
-      expect(heldText(reason, ["description"])).not.toMatch(/tripwire/i);
-      expect(shortHeld(reason, ["description"])).not.toMatch(/tripwire/i);
-      expect(workstreamStatus(view("ws-1", "CA-401", { heldReason: reason }), []).detail ?? "").not.toMatch(/tripwire/i);
-    }
-  });
-
-  it("takes the last hold in the audit", () => {
-    expect(lastHeldAt([{ action: "opened", at: iso(9) }])).toBeNull();
-    expect(lastHeldAt([{ action: "held", at: iso(9) }, { action: "resumed", at: iso(8) }, { action: "held", at: iso(3) }])).toBe(iso(3));
+describe("lastPausedAt", () => {
+  it("takes the last pause in the audit, an earlier version's hold included", () => {
+    expect(lastPausedAt([{ action: "opened", at: iso(9) }])).toBeNull();
+    expect(lastPausedAt([{ action: "paused", at: iso(9) }, { action: "resumed", at: iso(8) }, { action: "paused", at: iso(3) }])).toBe(iso(3));
+    expect(lastPausedAt([{ action: "paused", at: iso(9) }, { action: "held", at: iso(4) }])).toBe(iso(4));
   });
 });
 
@@ -153,16 +117,16 @@ describe("the step chips", () => {
     expect(chip(posted, "investigate").state).toBe("Ready to review");
   });
 
-  it("say how the newest run of each stands, how many there were and whether a rule started it", () => {
+  it("say how the newest run of each stands and how many there were", () => {
     const runs = [
       run("r1", "investigate", "done", { queuedAt: iso(50) }),
-      run("r2", "triage", "working", { queuedAt: iso(40), autoStart: { rule: "investigate_triage", afterRun: "r1" } }),
+      run("r2", "triage", "working", { queuedAt: iso(40) }),
       run("r0", "investigate", "failed", { queuedAt: iso(55) }),
     ];
     const chips = stepChips(runs, [], {}, [], { now: NOW });
-    expect(chip(chips, "investigate")).toMatchObject({ state: "Ready to review", tone: "done", auto: false, newest: { id: "r1" } });
+    expect(chip(chips, "investigate")).toMatchObject({ state: "Ready to review", tone: "done", newest: { id: "r1" } });
     expect(chip(chips, "investigate").runs.map((r) => r.id)).toEqual(["r0", "r1"]);
-    expect(chip(chips, "triage")).toMatchObject({ state: "Working", auto: true });
+    expect(chip(chips, "triage")).toMatchObject({ state: "Working" });
     expect(chip(chips, "plan").state).toBeNull();
   });
 
@@ -175,18 +139,8 @@ describe("the step chips", () => {
     expect(chip(stepChips([{ ...review, state: "working" }], [], { r5: { verdict: "pass", blocking: 0 } as never }, [], { now: NOW }), "review").verdict).toBeNull();
   });
 
-  it("count the build's fix rounds from the audit, out of two, and say when it waits for its pull request", () => {
+  it("say when the build waits for its pull request", () => {
     const build = run("r4", "build", "done");
-    const sent = { action: "fix_round_sent", runId: "r4", actor: "supervisor" } as const;
-    const yours = { ...sent, actor: "person" } as const;
-    expect(chip(stepChips([build], [], {}, [], { now: NOW }), "build").fixRound).toBeNull();
-    expect(chip(stepChips([build], [{ action: "wake", runId: "r4", actor: "pip" }, sent], {}, [], { now: NOW }), "build").fixRound).toBe(`fix round 1/${FIX_ROUNDS}`);
-    expect(chip(stepChips([build], [sent, sent], {}, [], { now: NOW }), "build").fixRound).toBe("fix round 2/2");
-    // The person's rounds past the cap are said as theirs, not as a third automatic one.
-    expect(chip(stepChips([build], [sent, sent, yours], {}, [], { now: NOW }), "build").fixRound).toBe("fix round 3 (yours, after 2 automatic)");
-    expect(chip(stepChips([build], [sent, sent, yours, yours], {}, [], { now: NOW }), "build").fixRound).toBe("fix round 4 (2 yours, after 2 automatic)");
-    // Another workstream's build, or none, counts nothing.
-    expect(chip(stepChips([build], [{ action: "fix_round_sent", runId: "other", actor: "supervisor" }], {}, [], { now: NOW }), "build").fixRound).toBeNull();
     expect(chip(stepChips([build], [], {}, [], { now: NOW, waitingForPr: "r4" }), "build")).toMatchObject({ state: "waiting for PR", tone: "warn" });
   });
 
@@ -268,13 +222,6 @@ describe("drafts by step", () => {
     setLiveDraft("a", null);
   });
 
-  it("leave out the questions to a reporter and Pip's comment with the person's answers, which are read and approved on their own", () => {
-    const asked = { ...fromRun("asked", comment("CA-401"), "r5"), label: "Questions for the reporter" } as Proposal;
-    const clarity = { ...draft("clarity", comment("CA-401"), 4), createdBy: "user", label: "Questions for the reporter" } as Proposal;
-    const answers = { ...draft("answers", comment("CA-401"), 3), label: "Answers to the open questions" } as Proposal;
-    expect(batchable([asked, clarity, answers, fromRun("c1", comment("CA-401"), "r5")]).map((p) => p.id)).toEqual(["c1"]);
-  });
-
   it("leave out a draft the person edited, which only its card posts, and refuse a batch whose draft gained an edit after its confirm opened (G1)", () => {
     const a = fromRun("e1", comment("CA-401"), "r5");
     const b = fromRun("e2", comment("CA-401"), "r5");
@@ -302,7 +249,7 @@ describe("composerFooter", () => {
     const ws = view("ws-1", "CA-401", { runs: ["a", "b", "c", "d"] });
     const fresh = { lastProgressAt: iso(1) };
     const runs = [run("a", "investigate", "working", fresh), run("b", "triage", "queued"), run("c", "plan", "launching"), run("d", "build", "done"), run("x", "plan", "working", { ...fresh, item: ref("CA-999"), spec: { ...base.spec, kind: "plan", workstream: null } })];
-    const waiting = needs({ workstreams: [ws], runs: [], proposals: [draft("p1", comment("CA-401"), 5), draft("p2", comment("CA-401"), 4)], dismissed: new Set(), now: NOW }).length;
+    const waiting = needs({ workstreams: [ws], runs: [], proposals: [draft("p1", comment("CA-401"), 5), draft("p2", comment("CA-401"), 4)], dismissed: new Set() }).length;
     // "Running", the word the Agents view's lane uses for runs at work.
     expect(composerFooter(runs, waiting, NOW)).toBe("3 agents running · 1 queued · 2 need you");
     expect(composerFooter([runs[0]], 1, NOW)).toBe("1 agent running · 1 needs you");
@@ -349,29 +296,6 @@ describe("composerFooter", () => {
       const n = (line: string) => Number(/(\d+) (?:agents? )?running/.exec(line)?.[1] ?? 0);
       expect([n(composerFooter(runs, 0, at)), n(summaryLine(runs, at)), n(laneCount("running", runs.filter((r) => laneOf(r, at) === "running"), at))]).toEqual([running, running, running]);
     }
-  });
-});
-
-describe("workstreamSuggestionScene", () => {
-  it("reads where the workstream stands for its chips", () => {
-    const ws = view("ws-1", "CA-401", { runs: ["r1", "r2"], stage: "triage" });
-    const runs = [run("r1", "investigate", "done"), run("r2", "triage", "working")];
-    const scene = workstreamSuggestionScene(ws, runs, [], [{ kind: "user" }, { kind: "wake" }]);
-    expect(scene).toEqual({ key: "CA-401", stage: "triage", mode: "manage", heldReason: null, hasPendingPlanRewrite: false, hasPendingStartDraft: false, investigated: true, woke: true, running: "R2", unclear: false, cobweb: false });
-    expect(workstreamSuggestionScene(ws, runs, [], [{ kind: "wake" }, { kind: "user" }]).woke).toBe(false);
-  });
-
-  it("sees a plan's description update and a run start waiting", () => {
-    const ws = view("ws-1", "CA-401", { runs: ["r3"], stage: "plan" });
-    const rewrite = { ...draft("p-rw", { type: "rewrite", item: ref("CA-401"), part: "description" } as unknown as Intent, 3), origin: { type: "run", runId: "r3" } } as Proposal;
-    const scene = workstreamSuggestionScene(ws, [run("r3", "plan", "done")], [rewrite, draft("p-s", startRun("CA-401", "build", "ws-1"), 2, { workstream: "ws-1" })], []);
-    expect(scene.hasPendingPlanRewrite).toBe(true);
-    expect(scene.hasPendingStartDraft).toBe(true);
-    expect(scene.running).toBeNull();
-    // The draft 'Show me the plan update' brings into view: the plan's own, not one from another step or a decided one.
-    expect(planRewriteDraft(ws, [run("r3", "plan", "done")], [rewrite])?.id).toBe("p-rw");
-    expect(planRewriteDraft(ws, [run("r3", "investigate", "done")], [rewrite])).toBeNull();
-    expect(planRewriteDraft(ws, [run("r3", "plan", "done")], [{ ...rewrite, state: { type: "applied" } } as Proposal])).toBeNull();
   });
 });
 

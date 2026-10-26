@@ -1,8 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
-import { advanceRuns, expectToast, landOnWorkspace, mockRuns, openTechnical, peekSheet, peekTicket } from "./support/app";
+import { advanceRuns, expectToast, showWorkspace, mockRuns, openTechnical, peekSheet, peekTicket } from "./support/app";
 
 const setup = (page: Page) => page.getByRole("dialog", { name: "Start an agent" });
-const safety = (page: Page) => page.getByRole("dialog", { name: "Agents safety and settings" });
 /** A run's card or row in the Agents view; Pip's strip of agents shows runs too, and only the view counts. */
 const agentRun = (page: Page, id: string) => page.locator(`main [data-run-id="${id}"]:not(aside[aria-label="Pip"] *)`).first();
 const LIVE = ["launching", "working", "needsAnswer", "needsPermission", "systemBlocked"];
@@ -10,19 +9,14 @@ const LIVE = ["launching", "working", "needsAnswer", "needsPermission", "systemB
 /** How many of the sample backend's runs take a slot. */
 const live = async (page: Page) => (await mockRuns(page)).filter((r) => LIVE.includes(r.state)).length;
 
-/** Opens the setup sheet for an investigation of `key` from its peek's Agent menu, past the one-time safety sheet. */
+/** Opens the setup sheet for an investigation of `key` from its peek's Agent menu. */
 async function openSetup(page: Page, key: string) {
-  for (let attempt = 0; attempt < 2; attempt++) {
-    const board = page.getByRole("button", { name: "All projects", exact: true });
-    if (await board.isVisible()) await board.click();
-    await peekTicket(page, key);
-    await peekSheet(page).getByRole("button", { name: "Agent", exact: true }).click();
-    await page.getByRole("menuitem", { name: /^Investigate this ticket/ }).click();
-    await expect(setup(page).or(safety(page))).toBeVisible();
-    if (!(await safety(page).isVisible())) break;
-    await safety(page).getByRole("button", { name: "Close" }).click();
-    await expect(safety(page)).toHaveCount(0);
-  }
+  const board = page.getByRole("button", { name: "All projects", exact: true });
+  if (await board.isVisible()) await board.click();
+  await peekTicket(page, key);
+  await peekSheet(page).getByRole("button", { name: "Agent", exact: true }).click();
+  await page.getByRole("menuitem", { name: /^Investigate this ticket/ }).click();
+  await expect(setup(page)).toBeVisible();
   await expect(setup(page)).toContainText(key);
   await setup(page).getByRole("combobox", { name: "Repository" }).selectOption("acme/webshop");
   await openTechnical(setup(page));
@@ -47,9 +41,9 @@ async function start(page: Page): Promise<string> {
 
 test("with three agents running a 4th approved run waits for a slot, never over the cap, and launches when one finishes", async ({ page }) => {
   // A signed-in GitHub connection, so the setup sheet has repositories to run in (`?mockRepos`, src/backend/mockWatch.ts).
-  await landOnWorkspace(page);
   await page.goto("/?runs=empty&runsCap=3&mockRepos=14");
   await page.getByRole("button", { name: "Start watching" }).click();
+  await showWorkspace(page);
   await expect(page.getByText("CA-401", { exact: true }).first()).toBeVisible();
   const running: string[] = [];
   for (const key of ["CA-401", "CA-402", "CA-403"]) {
@@ -90,9 +84,9 @@ test("with three agents running a 4th approved run waits for a slot, never over 
 });
 
 test("a run waiting for a slot can be stopped from its sheet, and Stop all stops the waiting ones too and launches nothing", async ({ page }) => {
-  await landOnWorkspace(page);
   await page.goto("/?runs=empty&runsCap=3&mockRepos=14");
   await page.getByRole("button", { name: "Start watching" }).click();
+  await showWorkspace(page);
   await expect(page.getByText("CA-401", { exact: true }).first()).toBeVisible();
   const running: string[] = [];
   for (const key of ["CA-401", "CA-402", "CA-403"]) {

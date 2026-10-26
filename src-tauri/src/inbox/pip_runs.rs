@@ -8,10 +8,8 @@ use chrono::Utc;
 use super::ticket_context::snapshot;
 use super::Core;
 use crate::auth::Scope;
-use crate::domain::workstream::Rule;
 use crate::domain::{
-    default_instruction, pip_chain_kinds, pip_kinds, Actor, AutoStarted, Basis, ClonePlan, CodeChangeKind, ContainerRef, CreatedBy, Intent, Origin, Proposal, ProposalQuery, Run,
-    RunEvent, RunKind, RunQuery, RunSpec, RunState, StateKind, WorkstreamEvent,
+    default_instruction, pip_chain_kinds, pip_kinds, Basis, ClonePlan, CodeChangeKind, ContainerRef, Intent, Proposal, ProposalQuery, Run, RunEvent, RunKind, RunQuery, RunSpec, RunState, StateKind,
 };
 use crate::error::{Error, Result};
 use crate::proposals::{self, Draft};
@@ -144,10 +142,9 @@ impl Core {
             build_from_run: None,
             findings: None,
             findings_from_run: None,
-            assumptions: Vec::new(),
             allow_push: false,
             project: Some(project),
-            report: false,
+            report: true,
             workstream: workstream.map(Into::into),
         };
         let at = Utc::now();
@@ -202,14 +199,13 @@ impl Core {
             build_from_run: None,
             findings: None,
             findings_from_run: None,
-            assumptions: Vec::new(),
             allow_push: false,
             project: None,
-            report: false,
+            report: true,
             workstream: workstream.map(Into::into),
         };
         if matches!(kind, RunKind::Triage | RunKind::Plan) {
-            self.attach_pip_findings(scope, workstream, &item, from_run.as_deref(), true, &mut spec).await?;
+            self.attach_pip_findings(scope, workstream, &item, from_run.as_deref(), &mut spec).await?;
         }
         let at = Utc::now();
         self.with_db_for(scope, |db| {
@@ -233,22 +229,13 @@ impl Core {
     /// Fills a triage or plan Pip drafts with what an investigation found. `from_run` counts when it names a finished
     /// investigation on this ticket in the same workstream, and then a failure to read it is Pip's to hear; otherwise the
     /// newest finished investigation on this ticket in the conversation's workstream, if any, is used when it can be read.
-    /// With `newest` false, as for a run a rule starts, only the run `from_run` names is ever carried: one that isn't
-    /// such an investigation is refused, and none named carries none, since the newest may be one a tripwire named or
-    /// whose output the supervisor never checked.
-    async fn attach_pip_findings(&self, scope: &Scope, workstream: Option<&str>, item: &crate::domain::ItemRef, from_run: Option<&str>, newest: bool, spec: &mut RunSpec) -> Result<()> {
+    async fn attach_pip_findings(&self, scope: &Scope, workstream: Option<&str>, item: &crate::domain::ItemRef, from_run: Option<&str>, spec: &mut RunSpec) -> Result<()> {
         let of_ticket = |r: &Run| r.spec.kind == RunKind::Investigate && r.state == crate::domain::RunState::Done && r.item.as_ref().is_some_and(|i| (&i.connection_id, &i.external_id) == (&item.connection_id, &item.external_id));
         if let Some(id) = from_run {
             if let Some(named) = self.run_in(scope, id).await?.filter(|r| of_ticket(r) && r.spec.workstream.as_deref() == workstream) {
                 spec.findings_from_run = Some(self.attach_findings(spec, &named.id, Some(item)).await?);
                 return Ok(());
             }
-            if !newest {
-                return Err(refuse(format!("run {id} isn't a finished investigation of this ticket in this workstream")));
-            }
-        }
-        if !newest {
-            return Ok(());
         }
         let Some(ws) = workstream else { return Ok(()) };
         let newest = self
@@ -329,7 +316,7 @@ impl Core {
         let clone_path = self.resolve_clone(&plan.path)?;
         let item = Self::item(scope, key);
         let mut spec = chain_spec(kind, repo, clone_path, plan, workstream);
-        self.fill_chain_slots(scope, &source, &item, true, &mut spec).await?;
+        self.fill_chain_slots(scope, &source, &item, &mut spec).await?;
         if kind == RunKind::Build {
             spec.focus_from_run = focus.as_ref().map(|_| source.id.clone());
             spec.focus = focus;
@@ -352,15 +339,15 @@ impl Core {
     }
 
     /// Fills what a run that follows the finished run `source` carries from it, as Core reads it, never from a caller: a
-    /// triage or plan the findings of the investigation (`source` when it is one, else the one the spec names, else, with
-    /// `newest`, the workstream's newest), a build the plan the person settled and in a workstream a draft pull request,
-    /// a review the builder's account and the pull request pinned to its head commit, with its verdict reported.
-    pub(super) async fn fill_chain_slots(&self, scope: &Scope, source: &Run, item: &crate::domain::ItemRef, newest: bool, spec: &mut RunSpec) -> Result<()> {
+    /// triage or plan the findings of the investigation (`source` when it is one, else the one the spec names, else the
+    /// workstream's newest), a build the plan the person settled and in a workstream a draft pull request, a review the
+    /// builder's account and the pull request pinned to its head commit, with its verdict reported.
+    pub(super) async fn fill_chain_slots(&self, scope: &Scope, source: &Run, item: &crate::domain::ItemRef, spec: &mut RunSpec) -> Result<()> {
         match spec.kind {
             RunKind::Triage | RunKind::Plan => {
                 let named = spec.findings_from_run.take().or_else(|| (source.spec.kind == RunKind::Investigate).then(|| source.id.clone()));
                 let workstream = spec.workstream.clone();
-                self.attach_pip_findings(scope, workstream.as_deref(), item, named.as_deref(), newest, spec).await?;
+                self.attach_pip_findings(scope, workstream.as_deref(), item, named.as_deref(), spec).await?;
             }
             RunKind::Build => {
                 spec.plan_from_run = Some(self.attach_plan(spec, &source.id, Some(item)).await?);
@@ -372,8 +359,6 @@ impl Core {
                 let change = self.review_target(spec).await?;
                 spec.base = change.base_ref.unwrap_or_else(|| spec.base.clone());
                 spec.pr_sha = change.sha;
-                // Its verdict is read by the app; the tool is offered when the setting allows, else the written verdict counts.
-                spec.report = true;
             }
             // After a passing review: its pull request at the commit it read, so the verify checks the change itself and
             // not the base branch. A review always had GitHub confirm the pull request is this repository's own. A review
@@ -391,74 +376,11 @@ impl Core {
         }
         Ok(())
     }
-
-    /// Starts the run `spec` describes because auto-start `rule` fired after the finished run `after_run`: the same
-    /// handoff steps as a chain draft of Pip's, stored as an agent's draft from that run in its workstream and approved
-    /// in the same transaction with the spec's own digest, so it is queued for `launch_waiting`. Nothing of Pip's is
-    /// carried: a spec with a focus is refused. A review pinned in `spec` to the commit a sync cached is refused with
-    /// `PR_MOVED` when GitHub's head is another one. The audit gets a Supervisor `autostart` line with the digest and
-    /// `<rule> after <run>`. The workstream is read again in the same transaction: when it no longer starts steps on its
-    /// own (closed, held, advised, out of budget) or `rule` is off in `settings`, nothing is made and the refusal is
-    /// `NOT_ON_ITS_OWN`, since what the supervisor decided was decided before the person changed that.
-    pub async fn autostart_run(&self, scope: &Scope, mut spec: RunSpec, rule: Rule, after_run: &str, settings: &crate::config::AgentSettings) -> Result<Run> {
-        let source = self.run_in(scope, after_run).await?.ok_or_else(|| refuse(format!("there is no run {after_run} for this account")))?;
-        if source.state != RunState::Done {
-            return Err(refuse(format!("run {after_run} hasn't finished, so nothing starts after it")));
-        }
-        let Some(ws) = source.spec.workstream.clone().filter(|w| spec.workstream.as_deref() == Some(w.as_str())) else {
-            return Err(refuse("a run starts on its own only in the workstream of the run it follows"));
-        };
-        let item = source.item.clone().ok_or_else(|| refuse("a run starts on its own only on a ticket"))?;
-        if spec.focus.is_some() || spec.focus_from_run.is_some() {
-            return Err(refuse("a run that starts on its own carries no focus"));
-        }
-        self.require_watched_repo(&spec.repo)?;
-        spec.clone_path = self.resolve_clone(&spec.clone_path)?;
-        let cached = spec.pr_sha.take();
-        // Only the findings the rule named: the supervisor checked that run, and the workstream's newest it may not have.
-        self.fill_chain_slots(scope, &source, &item, false, &mut spec).await?;
-        if spec.kind == RunKind::Review && cached.is_some() && cached != spec.pr_sha {
-            return Err(refuse(PR_MOVED));
-        }
-        let links = self.ticket_dev_links(&item);
-        let connection_id = Connection::jira_id(scope);
-        let file = super::db_file(&self.connection(scope)?);
-        let at = Utc::now();
-        self.with_db_for(scope, |db| {
-            if !db.workstream(&ws)?.is_some_and(|w| crate::config::rule_runs(settings, &w, rule)) {
-                return Err(refuse(NOT_ON_ITS_OWN));
-            }
-            let work = chain_ticket(db, &connection_id, &item, &links, &mut spec)?;
-            let digest = spec.digest();
-            let intent = Intent::StartRun { connection_id: connection_id.clone(), item: Some(item.clone()), spec };
-            let draft = Draft { origin: Origin::of_run(&source), created_by: CreatedBy::Agent, intent, label: None, basis: Some(Basis::of(&work)) };
-            let made = proposals::create(db, draft, at)?;
-            let run_id = proposals::new_id()?;
-            let run = db.approve_start_run(&made.id, &digest, |p| {
-                let Intent::StartRun { spec, .. } = &p.intent else { unreachable!("made as a run draft") };
-                let mut run = Run::queued(run_id, p.id.clone(), connection_id.clone(), Some(item.clone()), spec.clone(), file, at);
-                run.auto_start = Some(AutoStarted { rule, after_run: after_run.to_string() });
-                run
-            })?;
-            let event = WorkstreamEvent::new(&ws, Actor::Supervisor, "autostart", at).run(&run.id).proposal(&made.id).digest(&run.digest).detail(format!("{} after {after_run}", rule.as_str()));
-            db.append_workstream_event(&event)?;
-            Ok(run)
-        })
-        .await
-    }
 }
 
 /// Why no verify follows a review: the review has no pull request pinned to the commit it read, so a verify after it
 /// would check the base branch instead of the change.
 pub const VERIFY_UNPINNED: &str = "that review has no pull request pinned to the commit it read, so a verify after it would check the base branch instead of the change";
-
-/// Why an auto-started review waits: GitHub's head of the pull request isn't the commit the last sync cached.
-pub const PR_MOVED: &str = "the pull request has a commit the last sync hasn't seen; the review waits for the next one";
-
-/// Why a step a rule decided on wasn't started or sent after all: the person held the workstream, switched it to Advise
-/// or switched the rule off since, or its budget ran out. Not a failure; the rules decide again once it starts steps on
-/// its own again.
-pub const NOT_ON_ITS_OWN: &str = "this workstream doesn't start steps on its own right now";
 
 /// The spec of a run that follows another before its handoffs are filled: the kind's own template, the source's
 /// repository, the clone `plan` found, and nothing of Pip's.
@@ -482,10 +404,9 @@ fn chain_spec(kind: RunKind, repo: String, clone_path: std::path::PathBuf, plan:
         build_from_run: None,
         findings: None,
         findings_from_run: None,
-            assumptions: Vec::new(),
         allow_push: false,
         project: None,
-        report: false,
+        report: true,
         workstream: workstream.map(Into::into),
     }
 }

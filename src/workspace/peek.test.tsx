@@ -8,7 +8,7 @@ import { DraftCard, draftSummary, draftTitle, type DraftCardProps } from "./Draf
 import { PeekView, WorkstreamControl, type PeekViewProps } from "./PeekSheet";
 import { CLOSE_RUNS_NOTE } from "./WorkstreamControls";
 import { PipAvatar } from "./PipAvatar";
-import { FilterNote, Launcher, Nudge, PipFilterNote } from "./PipExtras";
+import { FilterNote, PipFilterNote } from "./PipExtras";
 import { ContextChip } from "./PipPane";
 import { DraftPreview } from "./DraftPreview";
 import { WorkDocView } from "./WorkDocView";
@@ -247,13 +247,6 @@ describe("Pip pane parts", () => {
     expect(out).toContain("Undo");
     expect(renderToStaticMarkup(<FilterNote />)).toBe("");
   });
-
-  it("shows the nudge beside the launcher with a way to dismiss it", () => {
-    const out = renderToStaticMarkup(<Launcher needs={2} onOpen={vi.fn()} nudge={<Nudge text="I can help you filter tasks in this view." onOpen={vi.fn()} onDismiss={vi.fn()} />} />);
-    expect(out).toContain("I can help you filter tasks in this view.");
-    expect(out).toContain("Dismiss suggestion");
-    expect(out).toContain("Ask Pip, 2 things need you");
-  });
 });
 
 describe("WorkDocView", () => {
@@ -278,7 +271,7 @@ describe("WorkDocView", () => {
 
 describe("the workstream control", () => {
   const item = { connectionId: "mock", externalId: "CA-401", key: "CA-401" };
-  const view = { workstream: { id: "ws-1", connectionId: "mock", itemKey: "CA-401", repo: null, title: "CA-401 Retry", pipSession: null, mode: "advise" as const, heldReason: null, notes: null, createdAt: "2026-10-01T10:00:00Z", closedAt: null, budget: { autoTurns: null, wakes: null, tokens: null }, spent: { autoTurns: 0, wakes: 0, tokens: 0 }, rules: {}, basis: null }, stage: "intake" as const, runs: [], labels: [], budget: { autoTurns: { used: 0, limit: 6 }, wakes: { used: 0, limit: 12 }, level: "ok" as const } };
+  const view = { workstream: { id: "ws-1", connectionId: "mock", itemKey: "CA-401", repo: null, title: "CA-401 Retry", pipSession: null, pausedReason: null, notes: null, createdAt: "2026-10-01T10:00:00Z", closedAt: null, basis: null }, stage: "intake" as const, runs: [], labels: [], budget: { autoTurns: { used: 0, limit: 6 }, wakes: { used: 0, limit: 12 }, level: "ok" as const } };
   const noop = () => {};
 
   it("offers Close behind a confirm that says the agents and drafts are kept", () => {

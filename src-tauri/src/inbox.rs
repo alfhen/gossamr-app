@@ -13,8 +13,9 @@ use crate::events::{changes_since, derive, my_actions, NewEvent};
 use crate::domain::{
     Comment, Container, ContainerRef, Event, FeedPage, FeedQuery, Filter, FilterContext, Identity, Intent, ItemRef, PersonRef, Visible, WorkItem, Workflow,
 };
-use crate::model::{Attachment, CachedTicket, CreatedSubtasks, MentionRef, Person, Snapshot, Status, Ticket, Transition, Uploaded};
+use crate::model::{CachedTicket, CreatedSubtasks, Person, Snapshot, Status, Ticket, Transition};
 use crate::proposals;
+use crate::runs::ask::Asks;
 use crate::sync::{self, Schedule, Trigger, CLOCK_SKEW_MINUTES};
 use crate::tracker::{self, Connection, Move, Registry, WorkTracker};
 
@@ -30,12 +31,11 @@ mod review_drafts;
 mod rewrites;
 mod ticket_context;
 mod workstreams;
-pub use pip_runs::{PipRunAsk, NOT_ON_ITS_OWN, PR_MOVED};
-#[cfg(test)]
-pub use pip_runs::VERIFY_UNPINNED;
+pub use pip_runs::PipRunAsk;
 #[cfg(test)]
 pub(crate) use workstreams::{basis_of, drifted};
-pub use workstreams::{answered_by_reply, reporter_follow, Adoptable, Admitted, Escalation, ReadinessStop, WakeAdmission, WorkstreamUndo, WorkstreamView, ESCALATION_GONE, NOTES_CLOSE, NOTES_LIMIT, NOTES_OPEN};
+pub use ticket_context::TicketRead;
+pub use workstreams::{Adoptable, WorkstreamUndo, WorkstreamView, NOTES_CLOSE, NOTES_LIMIT, NOTES_OPEN};
 pub use rewrites::TextSeen;
 mod watch;
 
@@ -80,10 +80,6 @@ fn ago(d: Duration) -> String {
 }
 
 /// Separate files per site and account, so two people signing in on one Mac never see each other's inbox.
-fn media_key(attachment_id: &str) -> String {
-    format!("media:{attachment_id}")
-}
-
 fn db_file(connection: &Connection) -> String {
     let safe = |s: &str| s.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '_' }).collect::<String>();
     format!("inbox-{}-{}.sqlite", safe(&connection.workspace), safe(&connection.account))
@@ -171,9 +167,8 @@ pub struct Core {
     schedules: Mutex<HashMap<String, Schedule>>,
     /// When each connection was last checked for work assigned outside what it watches.
     radar: Mutex<HashMap<String, chrono::DateTime<Utc>>>,
-    /// Whether a run may be asked to report through the run-report tool; the Agents setting, kept here so a draft can
-    /// be refused without a round trip to the service.
-    report_enabled: AtomicBool,
+    /// The questions agents are waiting on, which the MCP server fills and the run service answers.
+    asks: Asks,
     /// Ask for a sync now, whatever the schedule says.
     pub wake: Notify,
     /// The window gained focus: sync if it has been a while and no failure is being waited out.
@@ -206,18 +201,14 @@ impl Core {
             syncing: AtomicBool::new(false),
             schedules: Mutex::new(HashMap::new()),
             radar: Mutex::new(HashMap::new()),
-            report_enabled: AtomicBool::new(false),
+            asks: Asks::default(),
             wake: Notify::new(),
             focus: Notify::new(),
         }
     }
 
-    pub fn set_report_enabled(&self, on: bool) {
-        self.report_enabled.store(on, Ordering::SeqCst);
-    }
-
-    pub fn report_enabled(&self) -> bool {
-        self.report_enabled.load(Ordering::SeqCst)
+    pub fn asks(&self) -> &Asks {
+        &self.asks
     }
 
     #[cfg(test)]
@@ -306,8 +297,6 @@ impl Core {
             backfill_cache(&db, &connection)?;
             db.release_interrupted(Utc::now())?;
             db.fail_interrupted_pip_turns()?;
-            // Nothing wakes Pip or starts on its own after a restart until the person resumes the workstream.
-            db.hold_open_workstreams(crate::domain::workstream::HELD_RESTART, Utc::now())?;
             *guard = Some((connection.id.clone(), db));
         }
         f(&guard.as_ref().expect("opened above").1)
@@ -492,35 +481,20 @@ impl Core {
         .await
     }
 
-    pub async fn mark_seen(&self, key: &str) -> Result<()> {
-        self.with_db(|db| db.mark_seen(key, &now_iso())).await
-    }
-
     pub async fn set_unread(&self, id: &str, unread: bool) -> Result<()> {
         self.with_db(|db| db.set_unread(id, unread)).await
-    }
-
-    pub async fn set_done(&self, id: &str, done: bool) -> Result<()> {
-        let at = done.then(now_iso);
-        self.with_db(|db| db.set_done(id, at.as_deref())).await
-    }
-
-    pub async fn snooze(&self, id: &str, until: Option<&str>) -> Result<()> {
-        // Stored in the same format as every other timestamp so string comparisons order correctly.
-        let until = until
-            .map(|u| {
-                chrono::DateTime::parse_from_rfc3339(u)
-                    .map(|d| d.with_timezone(&Utc).to_rfc3339_opts(SecondsFormat::Secs, true))
-                    .map_err(|_| Error::Api { status: 400, message: format!("not a valid time: {u}") })
-            })
-            .transpose()?;
-        self.with_db(|db| db.snooze(id, until.as_deref())).await
     }
 
     /// The signed-in scope, for work that starts now.
     pub async fn scope(&self) -> Result<Scope> {
         let (site, me) = self.identity().await?;
         Ok(Scope::of(&site, &me))
+    }
+
+    /// The moves open to a ticket. A move's id is its target status.
+    pub async fn transitions(&self, scope: &Scope, key: &str) -> Result<Vec<Transition>> {
+        let moves = self.tracker(scope)?.transitions(&Self::item(scope, key)).await?;
+        Ok(moves.into_iter().map(|m| Transition { id: m.to.id.clone(), name: m.name, to: Status::from(&m.to) }).collect())
     }
 
     pub async fn mentionable(&self, scope: &Scope, key: &str, query: &str) -> Result<Vec<Person>> {
@@ -531,88 +505,6 @@ impl Core {
             .collect())
     }
 
-    /// The moves open to a ticket. A move's id is its target status, which `transition` takes back.
-    pub async fn transitions(&self, scope: &Scope, key: &str) -> Result<Vec<Transition>> {
-        let moves = self.tracker(scope)?.transitions(&Self::item(scope, key)).await?;
-        Ok(moves.into_iter().map(|m| Transition { id: m.to.id.clone(), name: m.name, to: Status::from(&m.to) }).collect())
-    }
-
-    /// `scope` is the account the user was looking at when they acted; the write is refused if that has changed.
-    pub async fn transition(&self, scope: &Scope, key: &str, status_id: &str) -> Result<()> {
-        let intent = Intent::Transition { item: Self::item(scope, key), to: status_id.into() };
-        self.tracker(scope)?.apply(&intent).await?;
-        self.after_write(scope, key).await;
-        Ok(())
-    }
-
-    /// `scope` is the account the user was looking at when they acted; the write is refused if that has changed.
-    pub async fn comment(
-        &self,
-        scope: &Scope,
-        key: &str,
-        body: &str,
-        mentions: &[MentionRef],
-        files: &[Uploaded],
-    ) -> Result<()> {
-        let body = body.trim();
-        if body.is_empty() && files.is_empty() {
-            return Err(Error::Api { status: 400, message: "a comment can't be empty".into() });
-        }
-        let connection = Connection::jira_id(scope);
-        let people: Vec<(PersonRef, String)> = mentions
-            .iter()
-            .map(|m| (PersonRef { connection_id: connection.clone(), account_id: m.account_id.clone() }, m.name.clone()))
-            .collect();
-        let intent = Intent::Comment { item: Self::item(scope, key), body: tracker::comment_doc(body, &people) };
-        self.tracker(scope)?.apply_with_files(&intent, files).await?;
-        self.after_write(scope, key).await;
-        Ok(())
-    }
-
-    /// Where each of a ticket's attachments lives in the media service, as `media id → attachment id`, so the files a
-    /// description or comment embeds can be shown. Lookups are cached: an attachment's media id never changes.
-    pub async fn ticket_media(&self, scope: &Scope, key: &str) -> Result<HashMap<String, String>> {
-        let attachments: Vec<Attachment> = self.ticket(scope, key).await?.attachments;
-        let cached = self
-            .with_db_for(scope, |db| attachments.iter().map(|a| Ok((a.id.clone(), db.meta(&media_key(&a.id))?))).collect::<Result<Vec<_>>>())
-            .await?;
-        let mut out = HashMap::new();
-        for (id, media) in cached {
-            let media = match media {
-                Some(m) => m,
-                None => {
-                    let Some(m) = self.tracker(scope)?.media_id(&id).await? else { continue };
-                    self.with_db_for(scope, |db| db.set_meta(&media_key(&id), &m)).await?;
-                    m
-                }
-            };
-            out.insert(media, id);
-        }
-        Ok(out)
-    }
-
-    /// An attachment's bytes and content type, for the signed-in account.
-    pub async fn attachment(&self, id: &str) -> Result<(String, Vec<u8>)> {
-        if id.is_empty() || !id.chars().all(|c| c.is_ascii_digit()) {
-            return Err(Error::Api { status: 400, message: "not an attachment id".into() });
-        }
-        let scope = self.scope().await?;
-        self.tracker(&scope)?.download(id).await
-    }
-
-    /// Uploads a file to a ticket. The ticket isn't refreshed here: the comment that follows does that.
-    pub async fn attach(&self, scope: &Scope, key: &str, filename: &str, mime_type: &str, bytes: Vec<u8>) -> Result<Uploaded> {
-        let uploaded = self.tracker(scope)?.attach(&Self::item(scope, key), filename, mime_type, bytes).await?;
-        if let Some(m) = &uploaded.media_id {
-            let _ = self.with_db_for(scope, |db| db.set_meta(&media_key(&uploaded.id), m)).await;
-        }
-        Ok(uploaded)
-    }
-
-    pub async fn attachment_limit(&self, scope: &Scope) -> Result<Option<u64>> {
-        self.tracker(scope)?.attachment_limit().await
-    }
-
     /// Re-reads a ticket after a successful write. A failure here must not be reported as a failed write, or a retry
     /// would post the comment twice; the next sync picks the change up instead.
     async fn after_write(&self, scope: &Scope, key: &str) {
@@ -620,11 +512,6 @@ impl Core {
             self.set_error(Some(format!("Saved, but couldn't refresh {key}: {e}")));
             self.wake.notify_one();
         }
-    }
-
-    /// The cached ticket, or a fresh read from Jira when it isn't cached.
-    pub async fn ticket(&self, scope: &Scope, key: &str) -> Result<CachedTicket> {
-        ticket_of(&self.work_item(scope, key).await?)
     }
 
     /// The cached item, or a fresh read from Jira when it isn't cached.
@@ -685,10 +572,6 @@ impl Core {
             Ok(db.containers(&id)?.into_iter().filter(|c| visible.allows(&c.container_ref.external_id)).collect())
         })
         .await
-    }
-
-    pub async fn cache_workflow(&self, container: &ContainerRef) -> Result<Option<Workflow>> {
-        self.workflow_in(&self.scope().await?, container).await
     }
 
     pub async fn workflow_in(&self, scope: &Scope, container: &ContainerRef) -> Result<Option<Workflow>> {
@@ -1123,11 +1006,6 @@ pub(crate) mod testing {
         /// Stores `ws` as it is, whatever its connection.
         pub async fn insert_workstream(&self, ws: &crate::domain::Workstream) {
             self.core.with_db_for(&self.scope, |db| db.insert_workstream(ws)).await.unwrap();
-        }
-
-        /// Overwrites the stored `ws`, as nothing but a misbehaving tool would.
-        pub async fn save_workstream(&self, ws: &crate::domain::Workstream) {
-            self.core.with_db_for(&self.scope, |db| db.save_workstream(ws)).await.unwrap();
         }
     }
 

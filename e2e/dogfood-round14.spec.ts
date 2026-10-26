@@ -1,20 +1,20 @@
 import { expect, test, type Page } from "@playwright/test";
-import { agentsHome, editTicket, expectToast, jiraWrites, needsPane, openAgents, openApp, pipPane, selectWorkstream, startWorkstream } from "./support/app";
+import { agentsHome, expectToast, jiraWrites, needsPane, openAgents, openApp, pipCommentDraft, pipPane, selectWorkstream, startWorkstream } from "./support/app";
 
 // Fixes from the fourteenth dogfood round: the offer on screen is the newest action's (G3), a close offer goes once a new
-// workstream opens on the ticket (G4), Reopen says why it cannot (G5) and the held-by-you banner is exact about Needs you (G10).
+// workstream opens on the ticket (G4), Reopen says why it cannot (G5) and the paused banner says what a pause does (G10).
 
-test.describe("Undo offers, Reopen and the held banner (G3, G4, G5, G10)", () => {
+test.describe("Undo offers, Reopen and the paused banner (G3, G4, G5, G10)", () => {
   test("the close offer goes when the ticket gets a new workstream, and Reopen is disabled with its reason", async ({ page }) => {
     test.setTimeout(120_000);
-    await openApp(page, "runs=empty&wsManage=1");
+    await openApp(page, "runs=empty");
     await page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "All projects" }).click();
     await startWorkstream(page, "CA-401");
     await openAgents(page);
     await selectWorkstream(page, "CA-401");
     const controls = pipPane(page).locator("[data-workstream-controls]");
-    await controls.getByRole("button", { name: "Hold", exact: true }).click();
-    await expect(agentsHome(page).locator("[data-held-by-you]")).toContainText("You chose this, so the hold itself is not in Needs you.");
+    await controls.getByRole("button", { name: "Pause", exact: true }).click();
+    await expect(agentsHome(page).locator("[data-paused-banner]")).toContainText("Pip isn't woken until you resume it.");
     await controls.getByRole("button", { name: "Close…" }).click();
     await controls.getByRole("button", { name: "Close workstream" }).click();
     await expect(page.locator("[data-toast]").filter({ hasText: "Closed the workstream on CA-401" })).toBeVisible();
@@ -35,31 +35,29 @@ test.describe("Undo offers, Reopen and the held banner (G3, G4, G5, G10)", () =>
 const allProjects = (page: Page) => page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "All projects" }).click();
 const activeIsBody = (page: Page) => page.evaluate(() => document.activeElement === document.body || document.activeElement === null);
 
-/** The reporter question draft on a vague ticket: a workstream on it, "Ask the reporter now" pressed, its card in the decision pane. */
-async function reporterDraft(page: Page) {
+/** A comment draft of Pip's on CA-408: a workstream on it, Pip asked for a comment, its card in the decision pane. */
+async function commentDraft(page: Page) {
   await openApp(page, "runs=empty");
-  await editTicket(page, "CA-408", { description: "Fix it." });
   await allProjects(page);
   await startWorkstream(page, "CA-408");
   await openAgents(page);
   await selectWorkstream(page, "CA-408");
-  await agentsHome(page).locator("[data-clarity-notice]").getByRole("button", { name: "Ask the reporter now" }).click();
-  const draft = needsPane(page).getByRole("article", { name: "Comment on CA-408" });
+  const draft = await pipCommentDraft(page, "CA-408");
   await expect(draft).toBeVisible();
   return draft;
 }
 
 test.describe("approving from the list, the last need and the pause (G1, G6, G8)", () => {
-  test("posting the only need from the pane says what was posted and that the ticket waits", async ({ page }) => {
+  test("posting the only need from the pane says what was posted", async ({ page }) => {
     test.setTimeout(120_000);
-    const draft = await reporterDraft(page);
+    const draft = await commentDraft(page);
     await draft.getByRole("button", { name: "Post comment" }).click();
-    await expectToast(page, "Posted to Jira: Questions for the reporter on CA-408. CA-408 now waits on the reporter; nothing starts on its own.");
+    await expectToast(page, "Posted to Jira: Draft comment: “Checking in on this one. Is…” on CA-408.");
   });
 
   test("Esc at the posting pause with the keyboard on Keep editing closes the pause and keeps the text", async ({ page }) => {
     test.setTimeout(120_000);
-    const draft = await reporterDraft(page);
+    const draft = await commentDraft(page);
     await draft.getByRole("button", { name: "Edit" }).click();
     const text = needsPane(page).locator("textarea").first();
     await text.fill(`${await text.inputValue()}\n\nPassword: hunter2`);
@@ -70,7 +68,7 @@ test.describe("approving from the list, the last need and the pause (G1, G6, G8)
     await page.keyboard.press("Escape");
     await expect(pause).toHaveCount(0);
     await expect(needsPane(page)).toBeVisible();
-    expect(await activeIsBody(page)).toBe(false);
+    await expect.poll(() => activeIsBody(page)).toBe(false);
     expect(await draft.evaluate((el) => el.contains(document.activeElement))).toBe(true);
     await expect(text).toHaveValue(/hunter2/);
     expect(await jiraWrites(page)).toEqual([]);

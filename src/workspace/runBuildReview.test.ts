@@ -1,10 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MockBackend } from "../backend/mock";
 import { itemRef } from "../backend/mockConnector";
-import { BUILD_ACCOUNT_LIMIT, INSTRUCTIONS, PUSH_ALLOWED, REVIEW_REPORTS, withoutMarkers } from "../backend/mockRunKinds";
+import { BUILD_ACCOUNT_LIMIT, INSTRUCTIONS, PUSH_ALLOWED, withoutMarkers } from "../backend/mockRunKinds";
 import type { Run, RunSpec } from "../types";
 import { useWorkspace } from "../workspaceStore";
-import { usePrefs } from "./prefs";
 import { reviewThisControl, reviewThisOptions, splitPrompt } from "./runSheetLogic";
 import { useRunSetup } from "./runSetupStore";
 import { useRuns } from "./runsStore";
@@ -31,7 +30,6 @@ beforeEach(async () => {
   backend = new MockBackend({ githubRepos: 14, runs: { epoch: Date.parse("2026-09-30T12:00:00Z"), seed: "kinds" } });
   await useWorkspace.getState().init(backend);
   useRuns.getState().init(backend);
-  usePrefs.getState().setAgentsIntroSeen(true);
   useToasts.getState().clear();
   useTabs.getState().setRoute("workspace");
   await backend.watchSetMode("github:ada", "everything");
@@ -50,15 +48,11 @@ describe("a finished build in the mock", () => {
 });
 
 describe("a review the person drafts", () => {
-  it.each([false, true])("always asks for the report, with the setting %s, and the person can't untick it", async (reportResult) => {
-    await backend.runsSetSettings({ ...(await backend.runsSettings()), reportResult });
+  it("always asks for the report, whoever drafts it", async () => {
     await begin();
     expect(s().error).toBeNull();
     expect(s().review!.spec.report).toBe(true);
     expect(s().review!.prompt).toContain("verdict ('pass' or 'blocking', required)");
-    await s().saveEdit({ report: false });
-    expect(s().error).toBe(REVIEW_REPORTS);
-    expect(s().review!.spec.report).toBe(true);
     const direct = await backend.runsDraft(reviewSpec({ report: false }), CA);
     expect(direct.intent.type === "startRun" && direct.intent.spec.report).toBe(true);
   });

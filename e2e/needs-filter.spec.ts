@@ -1,19 +1,18 @@
 import { expect, test, type Page } from "@playwright/test";
-import { agentsHome, closePipDrawer, groupOpen, holdBySystem, needsPane, needsStack, needsYouCount, openAgents, openApp, openNeedOfKind, startWorkstream, workstreamGroup, workstreamSheet } from "./support/app";
+import { agentsHome, closePipDrawer, groupOpen, pauseAtCeiling, needsPane, needsStack, needsYouCount, openAgents, openApp, openNeedOfKind, startWorkstream, workstreamGroup, workstreamSheet } from "./support/app";
 
 // Needs you is a filter on Agents, and each workstream's needs are at the top of its detail (docs/needs-you.md).
 
-const MANAGED = "wsManage=1";
 
 const chip = (page: Page, name: string) => agentsHome(page).locator(`[data-chip="${name}"]`);
 const railBadge = (page: Page) => page.locator("[data-rail]").getByRole("button", { name: /^Agents/ });
 
 async function withNeeds(page: Page, calm = false) {
-  await openApp(page, MANAGED);
+  await openApp(page);
   if (calm) await startWorkstream(page, "CA-402");
   await startWorkstream(page, "CA-401");
-  // A restart's hold is a need of the system's; the sample leaves CA-401's plan to approve and General's own needs.
-  await holdBySystem(page, "CA-401", "restart");
+  // A pause is a need; the sample leaves CA-401's plan to approve and General's own needs.
+  await pauseAtCeiling(page, "CA-401");
   await openAgents(page);
   await closePipDrawer(page);
 }
@@ -78,10 +77,10 @@ test("opening a workstream puts its needs at the top of the detail, most urgent 
   await expect(sheet.getByRole("heading", { name: "Needs you" })).toBeVisible();
   const items = needsStack(page).locator("[data-needs-pane]");
   expect(await items.count()).toBeGreaterThan(1);
-  // A decision (the plan) outranks what is stuck (the hold).
+  // A decision (the plan) outranks what is stuck (the pause).
   await expect(items.first()).toHaveAttribute("data-group", "decide");
   await expect(items.first()).toHaveAttribute("data-open", "true");
-  await expect(items.nth(1)).toHaveAttribute("data-kind", "hold");
+  await expect(items.nth(1)).toHaveAttribute("data-kind", "paused");
   await expect(items.nth(1)).not.toHaveAttribute("data-open", "true");
   // It sits above the steps and runs.
   const above = await needsStack(page).evaluate((el) => !!(el.compareDocumentPosition(document.querySelector("#workstream-sheet [data-step-rail]")!) & Node.DOCUMENT_POSITION_FOLLOWING));
@@ -90,8 +89,8 @@ test("opening a workstream puts its needs at the top of the detail, most urgent 
 
   // Opening the second one closes the first.
   await items.nth(1).locator("[data-need-key]").click();
-  await expect(needsPane(page)).toHaveAttribute("data-kind", "hold");
-  await expect(needsPane(page).locator("[data-held-banner]").getByRole("button", { name: "Resume" })).toBeVisible();
+  await expect(needsPane(page)).toHaveAttribute("data-kind", "paused");
+  await expect(needsPane(page).locator("[data-paused-banner]").getByRole("button", { name: "Resume" })).toBeVisible();
   await expect(items.first()).not.toHaveAttribute("data-open", "true");
 });
 
@@ -109,15 +108,15 @@ test("a need in no workstream opens No workstream, which works the same way and 
 test("the badge popover's item turns the filter on and opens that workstream's detail with the need open", async ({ page }) => {
   await withNeeds(page);
   await expect(chip(page, "needs")).toHaveAttribute("aria-pressed", "false");
-  await openNeedOfKind(page, "hold");
+  await openNeedOfKind(page, "paused");
   await expect(chip(page, "needs")).toHaveAttribute("aria-pressed", "true");
   await expect(workstreamGroup(page, "CA-401")).toHaveAttribute("aria-current", "true");
   await expect(workstreamSheet(page)).toBeVisible();
-  await expect(needsPane(page)).toHaveAttribute("data-kind", "hold");
+  await expect(needsPane(page)).toHaveAttribute("data-kind", "paused");
 });
 
 test("j and k still walk the runs and Enter opens one", async ({ page }) => {
-  await openApp(page, MANAGED);
+  await openApp(page);
   await openAgents(page);
   await page.locator("body").click({ position: { x: 5, y: 5 } });
   await page.keyboard.press("j");

@@ -18,7 +18,7 @@ use super::service::RunService;
 use super::toolchain::Toolchain;
 use crate::auth::Scope;
 use crate::config::TerminalChoice;
-use crate::domain::workstream::HELD_PERSON;
+use crate::domain::workstream::PauseReason;
 use crate::domain::{Actor, Run, RunFailure, RunQuery, RunState};
 use crate::error::{Error, Result};
 
@@ -221,7 +221,6 @@ impl RunService {
     /// hasn't launched, waiting for a slot or not, has no session yet, so it is withdrawn: marked stopped before it
     /// started, without asking Claude anything (the person's Cancel).
     pub async fn stop(&self, run_id: &str) -> Result<Run> {
-        self.ensure_enabled()?;
         let _turn = self.launching.lock().await;
         let mut run = self.load(run_id).await?;
         if withdrawable(&run) {
@@ -237,21 +236,23 @@ impl RunService {
         let id = run.short_id.clone().ok_or_else(|| refuse("This run has no session to stop."))?;
         let tc = self.toolchain().await?;
         tc.cli.stop(&id).await?;
+        self.core.asks().cancel(&run.id);
         Self::stopped(&mut run);
         if let Err(e) = self.index.mark_terminal(&run.id) {
             eprintln!("couldn't update the run index: {e}");
         }
         self.reset_counts(&run.id);
-        self.store(&run).await?;
+        // Before the run reads as stopped, so the waker never takes it for a stop from outside.
         self.note_person(&run, "run_stopped", None).await;
+        self.store(&run).await?;
         Ok(run)
     }
 
-    /// The person's Stop for one of `scope`'s workstreams: holds it, so nothing wakes Pip or starts on its own, then
-    /// stops each of its runs that can be stopped, as `stop` does one. Runs not yet working are left queued, and the
-    /// hold keeps anything from starting them on its own.
+    /// The person's Stop for one of `scope`'s workstreams: pauses it, so nothing wakes Pip, then stops each of its runs
+    /// that can be stopped, as `stop` does one. Runs not yet working are left queued, and the pause keeps anything from
+    /// starting them on its own.
     pub async fn stop_workstream(&self, scope: &Scope, id: &str) -> Result<StopAll> {
-        let ws = self.core.hold_workstream(scope, id, HELD_PERSON, Actor::Person).await?;
+        let ws = self.core.pause_workstream(scope, id, PauseReason::Person, Actor::Person).await?;
         let runs = self.core.runs_in(scope, &RunQuery { workstream: Some(ws.id.clone()), ..Default::default() }).await?;
         let mut tally = StopAll::default();
         for run in runs.iter().filter(|r| can_stop(r.state)) {
@@ -272,8 +273,8 @@ impl RunService {
         Self::stopped(run);
         run.slot_wait_since = None;
         run.error = Some(NOT_STARTED.into());
-        self.store(run).await?;
         self.note_person(run, "run_stopped", None).await;
+        self.store(run).await?;
         Ok(())
     }
 
@@ -281,7 +282,6 @@ impl RunService {
     /// one hold of the launch lock: the slots it frees are never taken by a waiting run. A session that isn't in the run
     /// index is never touched.
     pub async fn stop_all(&self) -> Result<StopAll> {
-        self.ensure_enabled()?;
         let _turn = self.launching.lock().await;
         let tc = self.toolchain().await?;
         let mut tally = StopAll::default();
@@ -304,11 +304,13 @@ impl RunService {
             };
             match tokio::time::timeout(STOP_LIMIT, tc.cli.stop(&id)).await {
                 Ok(Ok(())) => {
+                    self.core.asks().cancel(&entry.run_id);
                     tally.stopped += 1;
                     let _ = self.index.mark_terminal(&entry.run_id);
                     self.reset_counts(&entry.run_id);
                     if let Some(mut run) = mine {
                         Self::stopped(&mut run);
+                        self.note_person(&run, "run_stopped", None).await;
                         let _ = self.store(&run).await;
                     }
                 }
@@ -334,7 +336,6 @@ impl RunService {
 
     /// Opens Terminal in the run's worktree with `claude attach` for its session.
     pub async fn attach(&self, run_id: &str) -> Result<()> {
-        self.ensure_enabled()?;
         let run = self.load(run_id).await?;
         let id = run.short_id.clone().ok_or_else(|| refuse("This run has no session to open yet."))?;
         let tc = self.toolchain().await?;
@@ -347,7 +348,6 @@ impl RunService {
     /// Opens Terminal in the run's clone running plain `claude`, so Claude can ask its one-time trust question or sign
     /// the person in. Only for a failed run whose reason is that one, and only for the clone in its stored spec.
     pub async fn open_claude(&self, run_id: &str, purpose: Purpose) -> Result<()> {
-        self.ensure_enabled()?;
         let run = self.load(run_id).await?;
         if run.state != RunState::Failed || !purpose.allows(run.failure.as_ref()) {
             return Err(refuse(purpose.refusal()));
@@ -358,7 +358,6 @@ impl RunService {
     /// Opens Terminal running plain `claude` in a clone before any run exists, for the one-time trust question. Only a
     /// folder under the roots Gossamr scans for clones or under `~/Gossamr/agents` qualifies.
     pub async fn trust_folder(&self, folder: &Path) -> Result<()> {
-        self.ensure_enabled()?;
         let real = folder.canonicalize().map_err(|_| refuse(format!("{} isn't a folder that exists", folder.display())))?;
         let agents = self.home.as_deref().map(super::fresh::agents_root);
         let inside = |root: &PathBuf| root.canonicalize().is_ok_and(|r| real.starts_with(r));
@@ -379,7 +378,6 @@ impl RunService {
     /// Bytes under the run's folder in Claude's `jobs` directory (where multi-gigabyte scratch space lives): at least
     /// this much, as the count stops after three seconds. Only this run's folder is read.
     pub async fn disk(&self, run_id: &str) -> Result<u64> {
-        self.ensure_enabled()?;
         let run = self.load(run_id).await?;
         let id = run.short_id.ok_or_else(|| refuse("This run has no session yet."))?;
         let tc = self.toolchain().await?;

@@ -55,7 +55,7 @@ import { useWorkstreams } from "./workstreamsStore";
 import { stableGroups } from "./stableOrder";
 import { useNow } from "./useNow";
 import { agentKey } from "./agentKeys";
-import { ClosedWorkstreams, DayAndWeek, DecisionScope, NeedsBadge, WorkstreamHeadExtras, WorkstreamTools, rowTitle, useWorkstreamWeb } from "./AgentsHome";
+import { ClosedWorkstreams, DecisionScope, NeedsBadge, WorkstreamHeadExtras, WorkstreamTools, rowTitle } from "./AgentsHome";
 import { WorkstreamSheet } from "./WorkstreamSheet";
 import { arm, confirmArmed, disarm, keyPlan, openNeed, openRunOrNeed } from "./needsActions";
 import { isTypingTarget } from "./workKeys";
@@ -299,9 +299,8 @@ function WorkstreamSection({ group, view, current, onOpen, children }: { group: 
   const openId = group.id ?? (mine ? NO_WORKSTREAM_ID : null);
   const title = group.itemKey ? rowTitle({ itemKey: group.itemKey, title: group.title }) : group.title;
   const name = group.itemKey ? `${group.itemKey} ${title}` : title;
-  const web = useWorkstreamWeb(view);
   return (
-    <section aria-label={group.title} data-workstream-group={group.id ?? "none"} data-wither={web?.level} data-has-needs={mine ? "" : undefined} aria-current={current || undefined} className={`relative grid gap-2.5 ${mine ? "-ml-3 rounded-sm border-l-[3px] border-ws-pip pl-2.5" : ""}`}>
+    <section aria-label={group.title} data-workstream-group={group.id ?? "none"} data-has-needs={mine ? "" : undefined} aria-current={current || undefined} className={`relative grid gap-2.5 ${mine ? "-ml-3 rounded-sm border-l-[3px] border-ws-pip pl-2.5" : ""}`}>
       <div className="flex min-w-0 items-center gap-2">
         {group.id && (
           <span aria-hidden className="text-ws-pip">
@@ -356,8 +355,6 @@ export interface AgentsScreenProps {
   needed?: NeedsScope;
   /** A workstream's detail, docked beside the list. */
   side?: ReactNode;
-  /** What leads the list: Start my day or Plan my week, and This week. */
-  lead?: ReactNode;
   /** What the toolbar adds for workstreams: starting one, and the closed ones. */
   tools?: ReactNode;
   /** The closed workstreams, when they are asked for. */
@@ -391,7 +388,7 @@ export interface AgentsScreenProps {
 }
 
 /** The whole screen as a function of its state; `AgentsView` connects it to the stores. */
-export function AgentsScreen({ runs, status, error, environment, filters, selectedId, earlierOpen, introShown, view, group = "workstream", workstreams = NO_WORKSTREAMS, openWorkstream = null, needed, lead, tools, closedSection, side, stopping, clear, archivedSection, opened, needsYou, inNeeds, asking, now, ticketTitle, draftReady, breakdownReady, descriptionReady, reviewThis, reviewOf, on, onOrder }: AgentsScreenProps) {
+export function AgentsScreen({ runs, status, error, environment, filters, selectedId, earlierOpen, introShown, view, group = "workstream", workstreams = NO_WORKSTREAMS, openWorkstream = null, needed, tools, closedSection, side, stopping, clear, archivedSection, opened, needsYou, inNeeds, asking, now, ticketTitle, draftReady, breakdownReady, descriptionReady, reviewThis, reviewOf, on, onOrder }: AgentsScreenProps) {
   const footer = useFooterHeight();
   // While the pointer is over the list or focus is in it, cards keep their places; the normal sort applies once both leave.
   const [hovered, setHovered] = useState(false);
@@ -506,7 +503,6 @@ export function AgentsScreen({ runs, status, error, environment, filters, select
           >
             <AgentsBanners environment={environment} loadError={status === "error" ? error : null} onCheckAgain={on.checkEnvironment} onRetry={on.retry} />
             {introShown && <AgentsIntro onDismiss={on.dismissIntro} />}
-            {lead}
             {waiting ? (
               <p role="status" className="m-0 py-10 text-center text-ws-ink3">
                 Loading agents…
@@ -576,10 +572,7 @@ const actions: AgentsActions = {
   toggleEarlier: () => useRuns.getState().setEarlierOpen(!useRuns.getState().earlierOpen),
   archive: (id) => void useRuns.getState().archive([id]),
   setIntro: (open) => useRuns.getState().setIntroOpen(open),
-  dismissIntro: () => {
-    usePrefs.getState().setAgentsIntroSeen(true);
-    useRuns.getState().setIntroOpen(false);
-  },
+  dismissIntro: () => useRuns.getState().setIntroOpen(false),
   checkEnvironment: () => void useRuns.getState().checkEnvironment(),
   retry: () => useRuns.getState().recover(),
   fix: failureAction,
@@ -614,7 +607,6 @@ export function AgentsView() {
   const closed = useWorkstreams((s) => s.closed);
   const showClosed = useWorkView((s) => s.showClosed);
   const openWorkstream = useWorkView((s) => s.selected);
-  const introSeen = usePrefs((s) => s.agentsIntroSeen);
   const items = useWorkspace((s) => s.items);
   const proposals = useWorkspace((s) => s.proposals);
   const now = useNow();
@@ -698,13 +690,12 @@ export function AgentsView() {
         filters={filters}
         selectedId={selectedId}
         earlierOpen={earlierOpen}
-        introShown={introOpen ?? (!introSeen && runs.length === 0)}
+        introShown={introOpen}
         view={view}
         group={group}
         workstreams={workstreams}
         openWorkstream={openWorkstream}
         needed={needed}
-        lead={<DayAndWeek />}
       side={openWorkstream ? <WorkstreamSheet id={openWorkstream} /> : null}
         tools={<WorkstreamTools showClosed={showClosed} onShowClosed={onShowClosed} />}
         closedSection={showClosed ? <ClosedWorkstreams closed={closed} open={workstreams} /> : null}

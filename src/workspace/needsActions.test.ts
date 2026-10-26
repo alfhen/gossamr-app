@@ -10,7 +10,7 @@ import { OPENED_NOT_POSTED, keyPlan, openNeed, sayOpenNote, setPaneIntent, takeP
 import { useToasts } from "./toasts";
 import { useWorkView } from "./workViewStore";
 import { useTabs } from "./tabsStore";
-import { lastReadHeldTimes, currentNeeds, setLastReadHeldTimes } from "./useNeeds";
+import { lastReadPausedTimes, currentNeeds, setLastReadPausedTimes } from "./useNeeds";
 import { useWorkstreams } from "./workstreamsStore";
 
 const need = (key: string) => ({ key, workstreamId: null }) as unknown as Need;
@@ -45,17 +45,17 @@ describe("opening a need with an intent", () => {
   });
 });
 
-describe("hold times Pip is told", () => {
+describe("pause times Pip is told", () => {
   it("are the ones the list last read", () => {
-    const held = { workstream: { id: "ws-1", closedAt: null, heldReason: "restart", createdAt: "2026-01-01T00:00:00Z" }, stage: "intake", runs: [], labels: [] };
-    useWorkstreams.setState({ list: [held] as never });
-    const before = currentNeeds().find((n) => n.key === "held:ws-1");
-    setLastReadHeldTimes({ "ws-1": "2026-06-01T00:00:00Z" });
-    expect(lastReadHeldTimes()).toEqual({ "ws-1": "2026-06-01T00:00:00Z" });
-    const after = currentNeeds().find((n) => n.key === "held:ws-1");
+    const paused = { workstream: { id: "ws-1", closedAt: null, pausedReason: "person", createdAt: "2026-01-01T00:00:00Z" }, stage: "intake", runs: [], labels: [] };
+    useWorkstreams.setState({ list: [paused] as never });
+    const before = currentNeeds().find((n) => n.key === "paused:ws-1");
+    setLastReadPausedTimes({ "ws-1": "2026-06-01T00:00:00Z" });
+    expect(lastReadPausedTimes()).toEqual({ "ws-1": "2026-06-01T00:00:00Z" });
+    const after = currentNeeds().find((n) => n.key === "paused:ws-1");
     expect(before?.at).toBe("2026-01-01T00:00:00.000Z".replace(".000", ""));
     expect(after?.at).toBe("2026-06-01T00:00:00Z");
-    setLastReadHeldTimes({});
+    setLastReadPausedTimes({});
   });
 });
 
@@ -140,10 +140,5 @@ describe("a then Enter on a comment draft (G1)", () => {
       keepEditsOfDraft("p1", {});
       keepEditsOfDraft("p2", {});
     }
-  });
-
-  it("opens an answers draft whose card is not on screen when its text would stop at the pause", () => {
-    useWorkspace.setState({ proposals: { p1: draft("Answers to the open questions", "pip", "Ask @here about it") } } as never);
-    expect(plan()).toBe("open");
   });
 });

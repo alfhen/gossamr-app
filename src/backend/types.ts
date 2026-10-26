@@ -1,6 +1,4 @@
 import type { ClearFilter, ClearPreview, DeleteResult, WorktreeInfo } from "../types";
-import type { Mention } from "../lib/mentions";
-import type { ClarityGap } from "../lib/ticketClarity";
 import type {
   Adoptable,
   AssignedElsewhere,
@@ -25,13 +23,10 @@ import type {
   RunSpec,
   RunOutcome,
   RunsChanged,
-  RunsEnabledChange,
   AgentSettings,
   CleanupResult,
   RunsEnvironment,
   Snapshot,
-  Transition,
-  Uploaded,
   ChangedFile,
   PullDiff,
   CodeChange,
@@ -62,12 +57,9 @@ import type {
   WorkEvent,
   WorkFilter,
   WorkItem,
-  Workflow,
   Workstream,
   WorkstreamEvent,
-  WorkstreamMode,
   WorkstreamUndo,
-  WorkstreamRule,
   WorkstreamView,
   WorkstreamsChanged,
 } from "../types";
@@ -82,27 +74,12 @@ export interface Backend {
   load(): Promise<Snapshot>;
   /** Called with a fresh snapshot whenever local or remote state changes. Returns an unsubscribe function. */
   subscribe(listener: (snap: Snapshot) => void): () => void;
-  transitions(ticketKey: string): Promise<Transition[]>;
-  transition(ticketKey: string, transitionId: string): Promise<void>;
-  /** Posts a comment. Each mention's `@Name` in the body becomes a real Jira mention, which notifies that person. */
-  comment(ticketKey: string, body: string, mentions?: Mention[], files?: Uploaded[]): Promise<void>;
-  /** Uploads a file to the ticket, to be included in a comment. */
-  attach(ticketKey: string, file: File): Promise<Uploaded>;
-  /** The site's per-file upload limit in bytes, or null when attachments are turned off. */
-  attachmentLimit(): Promise<number | null>;
-  /** Maps the media ids that documents embed to the ticket's attachment ids. */
-  ticketMedia(ticketKey: string): Promise<Record<string, string>>;
-  /** A URL the page can load an attachment from. */
-  attachmentUrl(attachmentId: string): string;
   /** People who can see the ticket and match the query, for @mention suggestions. */
   mentionable(ticketKey: string, query: string): Promise<Person[]>;
   /** Creates sub-tasks under a ticket and returns their keys. */
   /** Stops at the first failure; `created` lists the keys made before it, in order. */
   createSubtasks(ticketKey: string, summaries: string[]): Promise<{ created: string[]; error: string | null }>;
-  markSeen(ticketKey: string): Promise<void>;
   setUnread(eventId: string, unread: boolean): Promise<void>;
-  setDone(eventId: string, done: boolean): Promise<void>;
-  snooze(eventId: string, until: Date | null): Promise<void>;
   /** Items in the local cache that match the filter, newest first. Works offline. Only watched containers unless `includeUnwatched`. */
   cacheSearch(filter: WorkFilter, opts?: ReadScope): Promise<WorkItem[]>;
   /** A watched item from the cache. Any other is read live and flagged `unwatched`, without being stored; null when it can't be read. */
@@ -111,7 +88,6 @@ export interface Backend {
   peekItem(ref: ItemRef): Promise<WorkItem | null>;
   /** Watched containers only, unless `includeUnwatched`. */
   cacheContainers(opts?: ReadScope): Promise<WorkContainer[]>;
-  cacheWorkflow(container: ContainerRef): Promise<Workflow | null>;
   /** People the cache has seen, so views can name an assignee. */
   cachePeople(): Promise<Person[]>;
   /** The signed-in person, so views can tell which items are theirs. */
@@ -200,10 +176,6 @@ export interface Backend {
   /** Called when drafts changed, including by a sync revising or retiring them. Returns an unsubscribe function. */
   onProposalsChanged(listener: (change: ProposalsChanged) => void): () => void;
   /** Background agent runs, newest first. */
-  /** Whether Agents are on. The backend owns this; the page only asks. */
-  runsEnabled(): Promise<boolean>;
-  /** Turns Agents on or off and saves it. Turning on rejects, leaving it off, when Claude can't be set up; turning off stops nothing. */
-  runsSetEnabled(enabled: boolean): Promise<RunsEnabledChange>;
   runsList(query?: RunQuery): Promise<Run[]>;
   runsGet(id: string): Promise<Run | null>;
   /** The exact prompt a `startRun` draft would send, and the digest that approves it. */
@@ -215,7 +187,7 @@ export interface Backend {
   runsApprove(proposalId: string, digest: string): Promise<Run>;
   /** Stops a working run; rejects until it is working. */
   runsStop(id: string): Promise<Run>;
-  /** Answers a run that is asking a question: stops its session and wakes it with the answer. Also sends again an answer that was stopped on its way. */
+  /** Answers a run that is asking a question: hands the answer to the agent waiting in its ask call, or stops its session and wakes it when its turn ended. Also sends again an answer that was stopped on its way. */
   runsAnswer(id: string, text: string): Promise<Run>;
   /**
    * The person's Deny for the permission prompt they read as `command`: the session is stopped, which drops the prompt,
@@ -328,42 +300,16 @@ export interface Backend {
   workstreamsSetNotes(id: string, notes: string): Promise<Workstream>;
   /** A workstream's append-only audit, oldest first. */
   workstreamsEvents(id: string): Promise<WorkstreamEvent[]>;
-  /** The person sets how much Pip may do on its own in an open workstream. */
-  workstreamsSetMode(id: string, mode: WorkstreamMode): Promise<Workstream>;
-  /** The person's "Run another fix round" on review `reviewRun`, which still blocks after the automatic fix rounds: sends the build its blocking findings again. Only while that review waits for their choice. */
-  workstreamsFixRound(reviewRun: string): Promise<Run>;
-  /** The person's "I'll take it from here" on review `reviewRun`: the workstream goes to Advise and nothing else changes. */
-  workstreamsTakeOver(id: string, reviewRun: string): Promise<Workstream>;
-  /** The person's "Ask the reporter" on Triage `triageRun`, which found its ticket not ready to plan: a Jira comment to the reporter with its open questions, as a draft the person approves like any other. Refused when the stop isn't about that Triage any more. */
-  workstreamsReadinessAsk(id: string, triageRun: string): Promise<Proposal>;
-  /** The person's "Ask the reporter now" on a workstream's clarity notice (a ticket no Triage has judged): the same comment to the reporter, with one question per gap the check found, as a draft the person approves like any other. Refused when the notice isn't showing any more. */
-  workstreamsClarityAsk(id: string, skip?: ClarityGap[]): Promise<Proposal>;
-  /** The person's "Looks fine" on the clarity notice: it doesn't show for this ticket again. Refused when the notice isn't showing. */
-  workstreamsClarityDismiss(id: string): Promise<Workstream>;
-  /** The person's "Draft a nudge" on a workstream that has waited on the reporter for `NUDGE_AFTER_DAYS` days or more: a short follow-up comment to them, as a draft the person approves like any other; once it is posted the wait starts again from then. Refused unless the workstream is due one. */
-  workstreamsNudgeReporter(id: string): Promise<Proposal>;
-  /** Audits the page's clarity learning in workstream `id`: `clarity_learned` (a gap is no longer flagged for a project after enough "Looks fine") or `clarity_reset` (the person gave it back), with `detail` saying which. The learning itself is the page's. */
-  workstreamsClarityNote(id: string, action: "clarity_learned" | "clarity_reset", detail: string): Promise<void>;
-  /** The person's "I'll answer" on Triage `triageRun`: it settles the question and starts nothing. */
-  workstreamsReadinessAnswer(id: string, triageRun: string): Promise<Workstream>;
-  /** The person's "Plan anyway" on Triage `triageRun`: records the override and lets the Triage-to-Plan rule start the Plan under its own checks (Manage, not held, within budget). */
-  workstreamsReadinessOverride(id: string, triageRun: string): Promise<Workstream>;
-  /** The person holds an open workstream: nothing wakes Pip or starts on its own in it; its runs carry on. */
-  workstreamsHold(id: string): Promise<Workstream>;
-  /** The person lifts a workstream's hold; what was spent is kept, so a budget hold lifted in Advise is held again on the way back to Manage. */
+  /** The person pauses an open workstream: nothing wakes Pip in it; its runs carry on. */
+  workstreamsPause(id: string): Promise<Workstream>;
+  /** The person resumes a workstream, whatever paused it. */
   workstreamsResume(id: string): Promise<Workstream>;
-  /** The person's "Allow 5 more" on a workstream held for its automatic steps: its allowance goes up by 5 and it resumes, keeping what was spent. Refused when it isn't held for its budget. */
-  workstreamsAllowMore(id: string): Promise<Workstream>;
   /**
-   * The person's Undo of a hold or of a switch to Advise, a moment after it: the workstream goes back to how `undo` says it stood.
+   * The person's Undo of "Bring them here", a moment after it: the runs and drafts it moved go back to General.
    * Allowed only while that change is the last line of the audit and under a minute old; it adds its own `undone` line.
    */
   workstreamsUndo(id: string, undo: WorkstreamUndo): Promise<Workstream>;
-  /** The person's switch for one auto-start rule in a workstream; null follows the global switch again. */
-  workstreamsSetRule(id: string, rule: WorkstreamRule, on: boolean | null): Promise<Workstream>;
-  /** The person's Hold all: holds every open workstream. Returns those it held. */
-  workstreamsHoldAll(): Promise<Workstream[]>;
-  /** The person stops a workstream: holds it, then stops each of its runs that can be stopped. */
+  /** The person stops a workstream: pauses it, then stops each of its runs that can be stopped. */
   workstreamsStop(id: string): Promise<{ stopped: number; failed: number }>;
   /** Called when a workstream was opened, closed or changed. Returns an unsubscribe function. */
   onWorkstreamsChanged(listener: (change: WorkstreamsChanged) => void): () => void;
@@ -389,6 +335,4 @@ export interface Backend {
   /** Runs the Jira sign-in again for the signed-in account, keeping its local data. Rejects when the person doesn't finish it. */
   reconnectJira(): Promise<void>;
   openUrl(url: string): Promise<void>;
-  /** Releases anything the backend holds, when the app switches to another one. */
-  dispose?(): void;
 }

@@ -1,11 +1,10 @@
 import { expect, test, type Page } from "@playwright/test";
-import { advanceRuns, agentsHome, askPip, expectPeekInPlace, expectToast, homeConversation, homeConversationRegion, homeSettled, mockRuns, needOfKind, needsPane, openAgents, openApp, openTechnical, peekSheet, peekTicket, selectWorkstream, startWorkstream, stepChip, stepRail, openNeedOfKind } from "./support/app";
+import { advanceRuns, agentsHome, askPip, expectPeekInPlace, expectToast, homeConversation, homeConversationRegion, homeSettled, mockRuns, needOfKind, needsPane, openAgents, openApp, openTechnical, peekSheet, peekTicket, selectWorkstream, startWorkstream, stepChip, openNeedOfKind } from "./support/app";
 
-// A workstream in Manage mode, with pull requests shown only when a test says: the setting the phase's scenarios share.
-const MANAGED = "runs=empty&prSurface=manual&wsManage=1";
+// Pull requests are shown only when a test says: the setting the phase's scenarios share.
+const SAMPLE = "runs=empty&prSurface=manual";
 
 const setup = (page: Page) => page.getByRole("dialog", { name: "Start an agent" });
-const safety = (page: Page) => page.getByRole("dialog", { name: "Agents safety and settings" });
 /** Pip's run drafts on CA-401 in the drawer's conversation, which opens the setup sheet. */
 const drawerCards = (page: Page) => homeConversationRegion(page).getByRole("article", { name: "Start an agent: CA-401" });
 /** The run draft open in the decision pane, where it is read and started in place. */
@@ -29,17 +28,12 @@ async function homeWorkstream(page: Page) {
   await expect(homeConversation(page)).toHaveText(/^Workstream: CA-401 .* · Intake$/);
 }
 
-/** Opens the newest run draft's review in place, past the safety sheet a fresh profile shows once at its first agent action. */
+/** Opens the newest run draft's review in place. */
 async function expandNewest(page: Page) {
   if (!(await needsPane(page).count())) await openNeedOfKind(page, "runStart");
   const card = runCards(page).last();
-  for (let attempt = 0; attempt < 2; attempt++) {
-    await card.getByRole("button", { name: /^Review and start( →)?$/ }).click();
-    await expect(card.getByRole("group", { name: "Review and start" }).or(safety(page))).toBeVisible();
-    if (!(await safety(page).isVisible())) break;
-    await safety(page).getByRole("button", { name: "Close" }).click();
-    await expect(safety(page)).toHaveCount(0);
-  }
+  await card.getByRole("button", { name: /^Review and start( →)?$/ }).click();
+  await expect(card.getByRole("group", { name: "Review and start" })).toBeVisible();
   const review = card.getByRole("group", { name: "Review and start" });
   // Open, the review has its own Start and Hide; the card's own button is hidden meanwhile.
   await expect(card.getByRole("button", { name: /^Review and start( →)?$/ })).toHaveCount(0);
@@ -54,7 +48,6 @@ async function startInline(page: Page) {
   await expect(start).toBeEnabled();
   await start.click();
   await expect(review).toHaveCount(0);
-  // Toasts come one at a time: one saying a closed safety sheet cancelled its action may be ahead of it.
   await expectToast(page, "Agent started on CA-401.");
 }
 
@@ -69,7 +62,7 @@ async function finish(page: Page, id: string) {
 const newest = async (page: Page, kind: string) => (await mockRuns(page)).find((r) => r.kind === kind) ?? null;
 
 test("an investigation is reviewed and started in place on Pip home: the exact prompt and checks, then Start, and the rail shows R1 running", async ({ page }) => {
-  await openApp(page, MANAGED);
+  await openApp(page, SAMPLE);
   await homeWorkstream(page);
   await ask(page, "investigate this");
   await expect(drawerCards(page)).toHaveCount(1);
@@ -116,12 +109,8 @@ test("an investigation is reviewed and started in place on Pip home: the exact p
 
 test("a build Pip drafts is never started in place: its 'Review and start →' opens the full setup sheet", async ({ page }) => {
   test.setTimeout(90_000);
-  await openApp(page, MANAGED);
+  await openApp(page, SAMPLE);
   await homeWorkstream(page);
-  // The person runs the steps themselves here, so no rule starts one meanwhile.
-  const manage = stepRail(page).getByRole("switch", { name: "Manage this workstream" });
-  await manage.click();
-  await expect(manage).toHaveAttribute("aria-checked", "false");
 
   await ask(page, "investigate this");
   await startInline(page);
@@ -155,7 +144,7 @@ test("a build Pip drafts is never started in place: its 'Review and start →' o
 });
 
 test("a draft edited elsewhere after it was read in place is refused: the banner, the prompt read again, and Start waits for I've read it", async ({ page }) => {
-  await openApp(page, MANAGED);
+  await openApp(page, SAMPLE);
   await homeWorkstream(page);
   await ask(page, "investigate this");
   const review = await expandNewest(page);

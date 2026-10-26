@@ -1,12 +1,9 @@
 import type { ClearFilter } from "../types";
 import { isTauri } from "@tauri-apps/api/core";
 import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
-import { HELD_PERSON } from "../types";
 import type {
   ChangedFile,
-  AdfNode,
   AssignedElsewhere,
-  BasisField,
   CacheChanged,
   CatalogPage,
   CodeCommitQuery,
@@ -21,7 +18,6 @@ import type {
   WatchState,
   ConnectionInfo,
   Comment,
-  ContainerRef,
   Intent,
   EventKind,
   InboxEvent,
@@ -36,37 +32,28 @@ import type {
   RunQuery,
   RunSpec,
   RunsChanged,
-  RunsEnabledChange,
   AgentSettings,
   Snapshot,
   Status,
   Ticket,
-  Transition,
-  Uploaded,
   WorkFilter,
   WorkItem,
-  WorkstreamMode,
   WorkstreamUndo,
-  WorkstreamRule,
   WorkstreamsChanged,
 } from "../types";
-import { fold, type Mention } from "../lib/mentions";
+import { fold } from "../lib/mentions";
 import { docFromText, docText } from "../lib/docs";
 import { ticketBlockText } from "./mockTicket";
 import { bodyChange, markdownOf } from "./mockMarkdown";
 import { MOCK_CONNECTION, MockConnector, PEOPLE, itemRef } from "./mockConnector";
-import { ANSWERED_REASON, basisFieldsOf, isReporterQuestions, NUDGE_COMMENT_LABEL, OVERRIDDEN_REASON, targetOf, workstreamOf } from "../lib/proposals";
+import { basisFieldsOf, targetOf, workstreamOf } from "../lib/proposals";
 import { workstreamConversation, workstreamOfConversation } from "../lib/conversations";
-import { MockSupervisor, triageReadiness } from "./mockSupervisor";
-import { READINESS_LABEL, reporterComment, reporterDoc } from "./mockReadiness";
-import { clarityQuestions, type ClarityGap } from "../lib/ticketClarity";
-import { askedQuestions, nudgeComment } from "../lib/reporterWait";
-import { answersDue, planDue, replyComment } from "../lib/reporterWait";
-import { mockCancelTurns, mockCancelWakes, mockHasWaitingWake, mockPipIdle, mockQueueWake } from "./mockPipQueue";
+import { MockSupervisor } from "./mockSupervisor";
+import { mockCancelTurns, mockCancelWakes, mockPipIdle, mockQueueWake } from "./mockPipQueue";
 import { holdMockPip } from "./mockPip";
 import { MockProposals } from "./mockProposals";
 import { mockPipTurns } from "./mockPipTurns";
-import { MockWorkstreams, CLARITY_GONE, READINESS_GONE, lastTripOf, type LastTrip } from "./mockWorkstreams";
+import { MockWorkstreams, lastDriftOf, type LastDrift } from "./mockWorkstreams";
 
 /** Where the sample backend keeps the drafts Pip made in its conversations. */
 const KEPT_DRAFTS = "gossamr-mock-pip-drafts";
@@ -102,14 +89,6 @@ const S = {
   blocked: { name: "Blocked", category: "indeterminate" },
   done: { name: "Done", category: "done" },
 } satisfies Record<string, Status>;
-
-const WORKFLOW: Record<string, [keyof typeof S, string][]> = {
-  "To Do": [["prog", "Start progress"], ["blocked", "Block"]],
-  "In Progress": [["review", "Send to review"], ["blocked", "Block"], ["todo", "Stop progress"]],
-  "In Review": [["done", "Done"], ["prog", "Back to In Progress"]],
-  Blocked: [["prog", "Unblock"], ["todo", "Back to To Do"]],
-  Done: [["prog", "Reopen"]],
-};
 
 let seq = 1000;
 const id = () => String(++seq);
@@ -358,12 +337,6 @@ function sampleSnapshot(): Snapshot {
       { ...ev("mention", "CA-400", P.mette, 60 * 50, "@Alf can you confirm the 17 Oct go-live works for the CRM side?", false), doneAt: ago(60 * 49) },
     ],
     watching: ["CA-418", "CA-420", "CE-705", "CA-400"],
-    activity: [
-      { ticketKey: "CA-412", at: ago(60 * 46), kind: "transition", text: "To Do → In Progress" },
-      { ticketKey: "CA-409", at: ago(60 * 72), kind: "transition", text: "In Review → Done" },
-      { ticketKey: "CA-421", at: ago(60 * 70 + 30), kind: "created", text: "" },
-      { ticketKey: "CE-705", at: ago(60 * 96), kind: "transition", text: "In Progress → In Review" },
-    ],
     lastSyncAt: new Date().toISOString(),
   };
 }
@@ -374,20 +347,6 @@ const SIMULATED: [EventKind, string, keyof typeof P, string][] = [
 ];
 
 /** In-memory backend with sample data, used for `pnpm dev` in a browser and until a Jira site is connected. */
-/** A rough stand-in for the document Jira builds for a comment with files, so sample mode renders them the same way. */
-function withFiles(body: string, files: Uploaded[]): AdfNode {
-  const paragraphs: AdfNode[] = body
-    .split(/\n{2,}/)
-    .filter((p) => p.trim())
-    .map((p) => ({ type: "paragraph", content: [{ type: "text", text: p }] }));
-  const media = files.map<AdfNode>((f) =>
-    f.mimeType.startsWith("image/")
-      ? { type: "mediaSingle", content: [{ type: "media", attrs: { type: "file", id: f.mediaId, alt: f.filename } }] }
-      : { type: "paragraph", content: [{ type: "text", text: `📎 ${f.filename}` }] },
-  );
-  return { type: "doc", content: [...paragraphs, ...media] };
-}
-
 export class MockBackend implements Backend {
   readonly kind = "mock" as const;
   private snap = sampleSnapshot();
@@ -395,7 +354,7 @@ export class MockBackend implements Backend {
   private cacheListeners = new Set<(c: CacheChanged) => void>();
   private simulated = 0;
 
-  /** The multi-project tracker behind the cache reads; the snapshot above keeps serving the current screens. */
+  /** The multi-project tracker behind the cache reads. */
   readonly connector: MockConnector;
   /** The sample GitHub connection: signed out until a sign-in command runs, unless `githubRepos` is set. */
   readonly github: MockGithub;
@@ -405,15 +364,10 @@ export class MockBackend implements Backend {
     this.connector = new MockConnector(Date.now(), (c) => this.cacheListeners.forEach((l) => l(c)), options);
     this.github = new MockGithub(options.githubRepos ?? 14, Date.now(), options.githubRepos !== undefined, options.reviewAccess === "none" ? "none" : "sample");
     this.device = options.device ?? { delayMs: 0, outcome: "authorised" };
-    this.agentsOn = options.agents ?? true;
     this.runs = new MockRuns(this.proposals, options.runs);
     this.workstreams = new MockWorkstreams(
       () => this.runs.list(),
       (ref) => this.connector.item(ref)?.title ?? null,
-      undefined,
-      undefined,
-      undefined,
-      options.wsManage ? "manage" : "advise",
     );
     this.runs.workstreams = this.workstreams;
     // A draft made, approved or skipped in a workstream goes in its audit, by whoever did it.
@@ -430,7 +384,6 @@ export class MockBackend implements Backend {
       return ticketBlockText({ item: w, comments: this.connector.comments(ref), people: this.connector.people, titleOf: (r) => this.connector.item(r)?.title ?? null, code: this.github.code.devLinks(ref) });
     };
     this.runs.ticketDoc = (ref) => this.connector.item(ref)?.body ?? null;
-    this.runs.reporterReplied = (ref) => this.workstreams.reporterRepliedOn(ref.key);
     this.runs.pullRequest = (repo, number) => this.github.code.change(repo, number);
     this.runs.pullFiles = (repo, number) => this.github.code.pullFiles(repo, number);
     this.runs.codeConnectionFor = (repo) => (this.github.isWatched(repo) ? GITHUB_CONNECTION : null);
@@ -438,15 +391,8 @@ export class MockBackend implements Backend {
     this.runs.onPullRequest = (change) => this.github.code.addPullRequest(change);
     this.workstreams.prOf = (runId) => this.runs.pullRequestOf(runId);
     this.workstreams.verdictOf = (run) => this.runs.resolvedOf(run.id)?.verdict ?? null;
-    this.workstreams.readinessOfRun = (run) => triageReadiness(run);
     this.workstreams.ticketOf = (key) => this.connector.item(itemRef(key));
-    // The reporter replies on the ticket with a comment, which leaves no audit line: anyone's but the person's own.
-    this.workstreams.repliesTo = (key) => this.connector.comments(itemRef(key)).filter((c) => c.author.accountId !== this.connector.me.accountId).map((c) => c.created);
-    // The reply that ended a wait, by when it was written: which comment it is and how it starts.
-    this.workstreams.replyAt = (key, at) => replyComment(this.connector.comments(itemRef(key)).filter((c) => c.author.accountId !== this.connector.me.accountId).map((c) => ({ id: c.id, at: c.created, text: docText(c.body) })), at);
-    // Every such comment, for the timeline's reply entries.
-    this.workstreams.replyCommentsOf = (key) => this.connector.comments(itemRef(key)).filter((c) => c.author.accountId !== this.connector.me.accountId).map((c) => ({ id: c.id, at: c.created, text: docText(c.body) }));
-    // What the person just wrote is the workstream's basis now, so the supervisor doesn't take an approved write for drift.
+    // What the person just wrote is the workstream's basis now, so the supervisor doesn't take an approved write for a change.
     this.proposals.onWritten = (p) => {
       const ws = workstreamOf(p);
       if (ws) this.workstreams.rebase(ws, basisFieldsOf(p.intent));
@@ -457,7 +403,6 @@ export class MockBackend implements Backend {
       workstreams: this.workstreams,
       proposals: this.proposals,
       wake: (ws, facts) => void mockQueueWake(ws, facts, this, options.pipPace),
-      hasWaitingWake: mockHasWaitingWake,
       cancelWakes: mockCancelWakes,
     });
     exposeMockClock({
@@ -465,7 +410,7 @@ export class MockBackend implements Backend {
       workstreams: this.workstreams,
       proposals: this.proposals,
       pip: { hold: holdMockPip, idle: mockPipIdle },
-      tickets: { edit: (key, change) => this.editTicket(key, change), comment: (key, text, by) => this.commentOnTicket(key, text, by) },
+      tickets: { edit: (key, change) => this.editTicket(key, change) },
       github: { writes: this.github.writes, movePullHead: (repo, number) => this.movePullHead(repo, number), tried: () => this.github.tried, loseNextAnswer: (kept) => this.github.loseNextAnswer(kept) },
     });
     if (this.runs.pipRun) void this.runs.seedPipDraft(itemRef("CA-402"));
@@ -548,138 +493,24 @@ export class MockBackend implements Backend {
     return this.workstreams.events(id);
   }
 
-  async workstreamsSetMode(id: string, mode: WorkstreamMode) {
-    return this.workstreams.setMode(id, mode, "person");
-  }
-
-  /** The person's "Run another fix round" on a review that still blocks after the automatic fix rounds, as `workstreams_fix_round`. */
-  async workstreamsFixRound(reviewRun: string) {
-    if (!this.agentsOn) throw new Error("Agents are turned off. Turn them on in Settings.");
-    return this.runs.sendPersonFixRound(reviewRun);
-  }
-
-  /** The person's "I'll take it from here", as `workstreams_take_over`: the workstream goes to Advise and nothing else changes. */
-  async workstreamsTakeOver(id: string, reviewRun: string) {
-    return this.workstreams.takeOver(id, reviewRun);
-  }
-
-  /** Holds a workstream and stops Pip's turns in its conversation, as `workstreams_hold` does; its runs carry on. */
-  async workstreamsHold(id: string) {
-    const held = this.workstreams.hold(id, HELD_PERSON, "person");
+  /** Pauses a workstream and stops Pip's turns in its conversation, as `workstreams_pause` does; its runs carry on. */
+  async workstreamsPause(id: string) {
+    const paused = this.workstreams.pause(id, "person", "person");
     mockCancelTurns((c) => c === workstreamConversation(id));
-    return held;
+    return paused;
   }
 
   async workstreamsResume(id: string) {
     return this.workstreams.resume(id);
   }
 
-  /**
-   * The person's "Ask the reporter", as `workstreams_readiness_ask`: a Jira comment to the ticket's reporter with the
-   * Triage's open questions, drafted from the questions and a fixed frame in this workstream, as a draft the person
-   * approves like any other. Records `readiness_asked`. Refused unless the workstream's stop is about `triageRun`.
-   */
-  async workstreamsReadinessAsk(id: string, triageRun: string) {
-    const stop = this.workstreams.readinessStop(id, triageRun);
-    const run = this.runs.get(triageRun);
-    if (!run?.item) throw new Error(READINESS_GONE);
-    const item = run.item;
-    const reporter = this.connector.item(item)?.reporter ?? null;
-    const name = reporter ? (this.connector.people.find((p) => p.accountId === reporter.accountId)?.name ?? null) : null;
-    const body = reporterDoc(reporterComment(name, stop.questions, !!this.workstreams.get(id)?.reporterReplied), reporter && name ? { person: reporter, name } : null);
-    const proposal = this.proposals.fromRun({ type: "comment", item, body }, READINESS_LABEL, { type: "run", runId: run.id, shortId: run.shortId, workstream: run.spec.workstream ?? null });
-    this.workstreams.askedReporter(id, triageRun, proposal.id);
-    return proposal;
-  }
-
-  /**
-   * The person's "Ask the reporter now", as `workstreams_clarity_ask`: the same comment to the reporter as "Ask the reporter",
-   * with one question per gap the clarity check found, as a draft the person approves like any other. Records
-   * `clarity_asked`. Refused with `CLARITY_GONE` unless the workstream's notice is showing.
-   */
-  async workstreamsClarityAsk(id: string, skip: ClarityGap[] = []) {
-    const notice = this.workstreams.clarityNotice(id);
-    const key = this.workstreams.get(id)?.workstream.itemKey;
-    // What the page no longer flags for the project is not asked about; with nothing left the notice is gone.
-    const gaps = notice.gaps.filter((g) => !skip.includes(g));
-    if (!key || !gaps.length) throw new Error(CLARITY_GONE);
-    const item = itemRef(key);
-    const reporter = this.connector.item(item)?.reporter ?? null;
-    const name = reporter ? (this.connector.people.find((p) => p.accountId === reporter.accountId)?.name ?? null) : null;
-    const body = reporterDoc(reporterComment(name, clarityQuestions(gaps), !!this.workstreams.get(id)?.reporterReplied), reporter && name ? { person: reporter, name } : null);
-    const proposal = this.proposals.askedFor({ type: "comment", item, body }, READINESS_LABEL, id);
-    this.workstreams.askedClarity(id, proposal.id);
-    return proposal;
-  }
-
-  /** The person's "Looks fine", as `workstreams_clarity_dismiss`: the notice doesn't show for this ticket again. */
-  async workstreamsClarityDismiss(id: string) {
-    return this.workstreams.dismissClarity(id);
-  }
-
-  /**
-   * The person's "Draft a nudge", as `workstreams_nudge_reporter`: a short follow-up comment to the reporter, as a draft the
-   * person approves like any other. Records `reporter_nudged`. Refused with `NUDGE_GONE` unless the workstream has waited
-   * on the reporter for `NUDGE_AFTER_DAYS` days or more and no nudge waits already.
-   */
-  async workstreamsNudgeReporter(id: string) {
-    const key = this.workstreams.nudgeDue(id, this.proposals.list({ workstream: id, states: ["pending", "applying"] }), new Date());
-    const item = itemRef(key);
-    const reporter = this.connector.item(item)?.reporter ?? null;
-    const name = reporter ? (this.connector.people.find((p) => p.accountId === reporter.accountId)?.name ?? null) : null;
-    // The questions still open are the ones of the ask the reporter got last, as the person posted it: an ask still pending or
-    // skipped never reached them, and an applied draft is not changed after it posts, so its update is the post.
-    const ask = this.proposals.list({ workstream: id, states: ["applied"] }).filter(isReporterQuestions).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0];
-    const open = ask?.intent.type === "comment" ? askedQuestions(docText(ask.intent.body)) : [];
-    const body = reporterDoc(nudgeComment(key, name, !!this.workstreams.get(id)?.reporterReplies?.length, open), reporter && name ? { person: reporter, name } : null);
-    const proposal = this.proposals.askedFor({ type: "comment", item, body }, NUDGE_COMMENT_LABEL, id, "nudge");
-    this.workstreams.nudged(id, proposal.id);
-    return proposal;
-  }
-
-  /** Audits the page's clarity learning, as `workstreams_clarity_note`. */
-  async workstreamsClarityNote(id: string, action: "clarity_learned" | "clarity_reset", detail: string) {
-    this.workstreams.noteClarity(id, action, detail);
-  }
-
-  /** The person's "I'll answer", as `workstreams_readiness_answer`: settles the question and starts nothing. */
-  async workstreamsReadinessAnswer(id: string, triageRun: string) {
-    const ws = this.workstreams.answerReadiness(id, triageRun);
-    // Their answers go to the ticket as a comment of their own, so the triage's note, which says it can't be sized, no longer waits.
-    this.proposals.retireTriageNotes(id, triageRun, ANSWERED_REASON);
-    return ws;
-  }
-
-  /** The person's "Plan anyway", as `workstreams_readiness_override`: records the override; the supervisor's Triage-to-Plan rule then starts the Plan under its own checks. */
-  async workstreamsReadinessOverride(id: string, triageRun: string) {
-    const ws = this.workstreams.overrideReadiness(id, triageRun);
-    this.proposals.retireTriageNotes(id, triageRun, OVERRIDDEN_REASON);
-    return ws;
-  }
-
-  /** The person's "Allow 5 more", as `workstreams_allow_more`: the allowance goes up by 5 and the workstream resumes. */
-  async workstreamsAllowMore(id: string) {
-    return this.workstreams.allowMore(id);
-  }
-
   async workstreamsUndo(id: string, undo: WorkstreamUndo) {
     return this.workstreams.undo(id, undo);
   }
 
-  async workstreamsSetRule(id: string, rule: WorkstreamRule, on: boolean | null) {
-    return this.workstreams.setRule(id, rule, on);
-  }
-
-  /** Holds every workstream and stops Pip's turns in all of their conversations; queued runs wait and drafts stay as they are. */
-  async workstreamsHoldAll() {
-    const held = this.workstreams.holdAll();
-    mockCancelTurns((c) => workstreamOfConversation(c) !== null);
-    return held;
-  }
-
-  /** Holds the workstream, then stops each of its runs that can be stopped, as `stop_workstream` does. */
+  /** Pauses the workstream, then stops each of its runs that can be stopped, as `stop_workstream` does. */
   async workstreamsStop(id: string) {
-    const ws = this.workstreams.hold(id, HELD_PERSON, "person");
+    const ws = this.workstreams.pause(id, "person", "person");
     mockCancelTurns((c) => c === workstreamConversation(id));
     const tally = { stopped: 0, failed: 0 };
     for (const run of this.runs.list().filter((r) => r.spec.workstream === ws.id && STOPPABLE.includes(r.state))) {
@@ -710,28 +541,6 @@ export class MockBackend implements Backend {
     return this.workstreams.get(ws)?.workstream.itemKey === target.key ? ws : null;
   }
 
-  /** Agents are on in the sample build, as the browser build has always shown them, unless `options.agents` is false. */
-  private agentsOn = true;
-  /** Makes the next `runsSetEnabled(true)` fail with this reason, as a failed environment capture does. */
-  enableFailure: string | null = null;
-
-  async runsEnabled() {
-    return this.agentsOn;
-  }
-
-  async runsSetEnabled(enabled: boolean): Promise<RunsEnabledChange> {
-    if (enabled && !this.agentsOn && this.enableFailure) throw new Error(this.enableFailure);
-    this.agentsOn = enabled;
-    const keepRunning = this.runs.keepRunning();
-    const note =
-      enabled || keepRunning === 0
-        ? null
-        : keepRunning === 1
-          ? "1 agent is still running and was not stopped. Gossamr won't start new ones or follow it until you turn Agents back on; it keeps running in Claude."
-          : `${keepRunning} agents are still running and were not stopped. Gossamr won't start new ones or follow them until you turn Agents back on; they keep running in Claude.`;
-    return { enabled, keepRunning, note };
-  }
-
   runsList(query?: RunQuery) {
     return Promise.resolve(this.runs.list(query));
   }
@@ -753,7 +562,6 @@ export class MockBackend implements Backend {
   }
 
   async runsSendFollowUp(proposalId: string, message: string) {
-    if (!this.agentsOn) throw new Error("Agents are turned off. Turn them on in Settings.");
     return this.runs.sendFollowUp(proposalId, message);
   }
 
@@ -762,17 +570,14 @@ export class MockBackend implements Backend {
   }
 
   async runsDenyPermission(id: string, command: string) {
-    if (!this.agentsOn) throw new Error("Agents are turned off. Turn them on in Settings.");
     return this.runs.denyPermission(id, command);
   }
 
   async runsAllowPermissionOnce(id: string, command: string) {
-    if (!this.agentsOn) throw new Error("Agents are turned off. Turn them on in Settings.");
     return this.runs.allowPermissionOnce(id, command);
   }
 
   async runsAnswerDraft(proposalId: string, message: string) {
-    if (!this.agentsOn) throw new Error("Agents are turned off. Turn them on in Settings.");
     return this.runs.answerDraft(proposalId, message);
   }
 
@@ -994,47 +799,15 @@ export class MockBackend implements Backend {
     return key ? itemRef(key) : null;
   }
 
-  /** The gaps Gossamr's word check found in workstream `id`'s ticket while its notice shows, for Pip's readiness line in a first turn. */
-  pipWorkstreamClarity(id: string) {
-    return this.workstreams.get(id)?.clarity?.gaps ?? null;
-  }
-
-  /** Whether the person chose "I'll answer" in workstream `id` and no comment with their answers was drafted in it since. */
-  pipWorkstreamAnswersDue(id: string): boolean {
-    return answersDue(
-      this.workstreams.events(id),
-      this.proposals.list().filter((p) => workstreamOf(p) === id),
-    );
-  }
-
-  /** Whether the person's answers to the open questions were posted in workstream `id` and no plan was drafted or started since: Pip's next turn proposes it. */
-  pipWorkstreamPlanDue(id: string): boolean {
-    return planDue(
-      this.workstreams.events(id),
-      this.proposals.list().filter((p) => workstreamOf(p) === id),
-      this.runs.list(),
-      id,
-    );
-  }
-
-  pipWorkstreamHeld(id: string): string | null {
-    return this.workstreams.get(id)?.workstream.heldReason ?? null;
-  }
-
-  pipWorkstreamDrifted(id: string): readonly BasisField[] | null {
-    return this.workstreams.get(id)?.workstream.drifted ?? null;
-  }
-
-  /** The last tripwire that held workstream `id`, until a wake after the one that follows the person's resume: Pip is told once. */
-  pipWorkstreamTrip(id: string): LastTrip | null {
+  /** The last time workstream `id`'s ticket changed in Jira, until a wake after the one that follows it: Pip is told once. */
+  pipWorkstreamDrift(id: string): LastDrift | null {
     if (!this.workstreams.get(id)) return null;
     const events = this.workstreams.events(id);
-    const trip = lastTripOf(events);
-    if (!trip?.resumedAt) return trip;
-    const since = trip.resumedAt;
+    const drift = lastDriftOf(events);
+    if (!drift) return null;
     // One wake turn's lines share their time; the turn asking now has written its own already.
-    const turns = new Set(events.filter((e) => e.actor === "supervisor" && e.action === "wake" && e.at >= since).map((e) => e.at));
-    return turns.size <= 1 ? trip : null;
+    const turns = new Set(events.filter((e) => e.actor === "supervisor" && e.action === "wake" && e.at >= drift.at).map((e) => e.at));
+    return turns.size <= 1 ? drift : null;
   }
 
   pipRunDraft(item: ItemRef, kind: RunKind, fromRun: string | null, focus: string | null, requestId: string) {
@@ -1047,10 +820,6 @@ export class MockBackend implements Backend {
 
   pipAnswer(runId: string, message: string, requestId: string) {
     return this.runs.proposeAnswer(runId, message, requestId);
-  }
-
-  pipPersonWrote(id: string) {
-    this.workstreams.personWrote(id);
   }
 
   pipDrafted(requestId: string) {
@@ -1083,28 +852,18 @@ export class MockBackend implements Backend {
     this.workstreams.changed();
   }
 
-  /** Someone else comments on sample ticket `key` in Jira, as its reporter would (`by` is a person's id in the sample, Mette by default); the workstreams tell their listeners. */
-  commentOnTicket(key: string, text: string, by = "mette") {
-    this.connector.commentBy(itemRef(key), by, text);
-    this.workstreams.changed();
-  }
-
   proposalsApprove(id: string) {
     return this.proposals.approve(id);
   }
 
   async proposalsPostReview(id: string, revisions: number, postAnyway = false) {
-    // Read before the post, while the draft is still pending: posting the review an escalation offered resolves it.
-    const offered = this.workstreams.escalationOffering(id);
-    const posted = await this.proposals.postReview(
+    return this.proposals.postReview(
       id,
       revisions,
       async (p) => this.github.postReview(p.id, p.intent),
       async (p, sent) => this.github.postedReview(p.intent.repo, p.intent.number, sent.commitSha, sent.summary),
       postAnyway,
     );
-    if (offered && posted.state.type === "applied") this.workstreams.escalationPosted(offered.workstream, offered.reviewRun, id);
-    return posted;
   }
 
   /** Someone force-pushes pull request `number` of `repo`: its head is a new commit whose diff lacks the lines it showed, and the old one is gone from it, as `MockCode.movePullHead`. */
@@ -1273,10 +1032,6 @@ export class MockBackend implements Backend {
     return () => {};
   }
 
-  async cacheWorkflow(container: ContainerRef) {
-    return this.connector.workflow(container);
-  }
-
   async cacheEvents(ref: ItemRef) {
     return this.connector.eventsFor(ref);
   }
@@ -1412,11 +1167,6 @@ export class MockBackend implements Backend {
     return e;
   }
 
-  async transitions(key: string): Promise<Transition[]> {
-    const t = this.snap.tickets[key];
-    return (WORKFLOW[t.status.name] ?? []).map(([to, name]) => ({ id: `${key}:${to}`, name, to: S[to] }));
-  }
-
   async transition(key: string, transitionId: string) {
     const to = S[transitionId.split(":")[1] as keyof typeof S];
     if (!to) throw new Error(`Unknown transition ${transitionId}`);
@@ -1426,37 +1176,10 @@ export class MockBackend implements Backend {
     });
   }
 
-  async comment(key: string, body: string, mentions: Mention[] = [], files: Uploaded[] = []) {
-    const doc = files.length ? withFiles(body, files) : undefined;
+  async comment(key: string, body: string) {
     this.update((s) => {
-      s.tickets[key].comments.push({ id: id(), author: s.me, created: new Date().toISOString(), body, mentioned: mentions, doc });
+      s.tickets[key].comments.push({ id: id(), author: s.me, created: new Date().toISOString(), body, mentioned: [] });
     });
-  }
-
-  /** Files "uploaded" in sample mode, as object URLs by media id. */
-  readonly files = new Map<string, string>();
-
-  async attach(_key: string, file: File): Promise<Uploaded> {
-    const mediaId = `sample-${id()}`;
-    this.files.set(mediaId, URL.createObjectURL(file));
-    return { id: id(), filename: file.name, mimeType: file.type, mediaId };
-  }
-
-  dispose() {
-    this.files.forEach((url) => URL.revokeObjectURL(url));
-    this.files.clear();
-  }
-
-  async attachmentLimit() {
-    return 10 * 1024 * 1024;
-  }
-
-  async ticketMedia() {
-    return Object.fromEntries([...this.files.keys()].map((k) => [k, k]));
-  }
-
-  attachmentUrl(id: string) {
-    return this.files.get(id) ?? "";
   }
 
   async createSubtasks(key: string, summaries: string[]) {
@@ -1477,34 +1200,9 @@ export class MockBackend implements Backend {
     });
   }
 
-  async markSeen(key: string) {
-    if (!this.snap.tickets[key]?.changes.length) return;
-    this.update((s) => void (s.tickets[key].changes = []));
-  }
-
   async setUnread(eventId: string, unread: boolean) {
     if (this.connector.setRead(eventId, !unread)) return;
     this.update((s) => void (this.event(s, eventId).unread = unread));
-  }
-
-  async setDone(eventId: string, done: boolean) {
-    if (this.connector.setRead(eventId, done)) return;
-    this.update((s) => {
-      const e = this.event(s, eventId);
-      e.doneAt = done ? new Date().toISOString() : null;
-      if (done) {
-        e.unread = false;
-        e.snoozedUntil = null;
-      }
-    });
-  }
-
-  async snooze(eventId: string, until: Date | null) {
-    this.update((s) => {
-      const e = this.event(s, eventId);
-      e.snoozedUntil = until?.toISOString() ?? null;
-      if (until) e.unread = false;
-    });
   }
 
   async reconnectJira() {}

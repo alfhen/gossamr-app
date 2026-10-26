@@ -1,11 +1,8 @@
-import { isTauri } from "@tauri-apps/api/core";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { announceSignedOut } from "../accountEvents";
 import { auth } from "../backend/auth";
 import type { ConnectionInfo, WatchState } from "../types";
 import { useWorkspace } from "../workspaceStore";
-import { useAgentsFlag } from "./agentsFlag";
-import { AgentsSwitch } from "./AgentsSwitch";
 import { THEME_LABEL, THEMES, usePrefs } from "./prefs";
 import { useTabs } from "./tabsStore";
 import { agoText, count, nounFor, watchSummary } from "./watchLogic";
@@ -13,8 +10,6 @@ import { keyInitials } from "./projects";
 import { disconnectGithub, useGithubUi } from "./githubUi";
 import { workContainers } from "./domains";
 import { WatchingSection } from "./WatchSettings";
-import { gapWords, learnedList, LEARN_AFTER, SHORT_GAP } from "../lib/clarityLearning";
-import { giveBackClarity } from "./clarityActions";
 import { useEscBack } from "./escBack";
 import { GITHUB_SAFETY } from "./githubSafety";
 
@@ -219,51 +214,10 @@ function Section({ title, id, children }: { title: string; id?: string; children
   );
 }
 
-/** What "Looks fine" taught the clarity notice, per project, each gap with a way to give it back, and the project's all at once. */
-function ClaritySection() {
-  const learned = learnedList(usePrefs((s) => s.clarityLearning));
-  return (
-    <div data-clarity-learning className="grid gap-2">
-      <p className="m-0 text-ws-ink2">Say Looks fine to the same gap {LEARN_AFTER} times in one Jira project and Gossamr stops flagging it there. The triage still decides whether a ticket is ready to plan.</p>
-      {learned.length === 0 ? (
-        <p className="m-0 text-ws-ink3">Nothing learned yet.</p>
-      ) : (
-        <ul aria-label="Learned from Looks fine" className="m-0 grid list-none gap-1.5 p-0">
-          {learned.map((l) => (
-            <li key={l.project} data-clarity-project={l.project} className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-              <span className="min-w-0 flex-1">
-                <b className="font-mono font-semibold">{l.project}</b> tickets are not flagged for:
-                <ul aria-label={`Gaps not flagged in ${l.project}`} className="m-0 mt-0.5 grid list-none gap-0.5 p-0 text-ws-ink2">
-                  {l.gaps.map((g) => (
-                    <li key={g} data-clarity-gap={g} title={`${l.project} tickets that ${gapWords(g)}`} className="flex items-baseline gap-2">
-                      <span className="min-w-0">{SHORT_GAP[g]}</span>
-                      <button type="button" aria-label={`Give back ${SHORT_GAP[g]} in ${l.project}`} onClick={() => void giveBackClarity(l.project, [g])} className="rounded px-1 text-xs underline hover:bg-ws-hover focus-visible:outline-2 focus-visible:outline-ws-pip">
-                        Give back
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              </span>
-              {l.gaps.length > 1 && (
-                <button type="button" onClick={() => void giveBackClarity(l.project)} className="rounded-md border border-ws-sep2 px-2.5 py-px text-sm hover:bg-ws-hover">
-                  Give back all
-                </button>
-              )}
-            </li>
-          ))}
-        </ul>
-      )}
-      <p data-clarity-giveback-note className="m-0 text-ws-ink3">Tickets you already said Looks fine to stay unflagged; Flag again on a ticket brings its notice back.</p>
-    </div>
-  );
-}
-
 export function Settings() {
   const theme = usePrefs((s) => s.theme);
   const setTheme = usePrefs((s) => s.setTheme);
-  const setUi = usePrefs((s) => s.setUi);
-  const agents = useAgentsFlag();
-  useEscBack(agents.enabled);
+  useEscBack();
   const containers = useWorkspace((s) => s.containers);
   const connections = useWorkspace((s) => s.connections);
   const section = useTabs((s) => s.settingsSection);
@@ -305,30 +259,6 @@ export function Settings() {
         <Section title="Watching" id="settings-watching">
           <WatchingSection syncLine={syncLine} />
         </Section>
-
-        {isTauri() && (
-          <Section title="Agents">
-            <AgentsSwitch enabled={agents.enabled} pending={agents.pending} error={agents.error} note={agents.note} onChange={(on) => void agents.set(on)} />
-          </Section>
-        )}
-
-        {agents.enabled && (
-          <Section title="Unclear tickets" id="settings-clarity">
-            <ClaritySection />
-          </Section>
-        )}
-
-        <Section title="Autopilot">
-          <p className="m-0 text-ws-ink3">Off. Rules that let Pip draft routine updates for you will be configured here, per project.</p>
-        </Section>
-
-        {isTauri() && (
-          <Section title="Interface">
-            <button type="button" className="text-ws-accent underline" onClick={() => setUi("classic")}>
-              Go back to the classic inbox
-            </button>
-          </Section>
-        )}
       </div>
     </div>
   );

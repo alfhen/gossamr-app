@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { AdfNode } from "../types";
-import { Adf, dateOf, MediaContext } from "./Adf";
+import { Adf, dateOf } from "./Adf";
 
 const doc = (...content: AdfNode[]): AdfNode => ({ type: "doc", content });
 const p = (...content: AdfNode[]): AdfNode => ({ type: "paragraph", content });
@@ -34,14 +34,8 @@ describe("Adf", () => {
     expect(out).toContain("still here");
   });
 
-  it("shows embedded images it can find, and names the ones it can't", () => {
+  it("names embedded images", () => {
     const shot: AdfNode = { type: "mediaSingle", content: [{ type: "media", attrs: { id: "m1", alt: "shot.png" } }] };
-    const found = renderToStaticMarkup(
-      <MediaContext.Provider value={() => ({ url: "attachment://localhost/10001", name: "shot.png", image: true })}>
-        <Adf doc={doc(shot)} />
-      </MediaContext.Provider>,
-    );
-    expect(found).toContain('src="attachment://localhost/10001"');
     expect(html(doc(shot))).toContain("📎 shot.png");
   });
 

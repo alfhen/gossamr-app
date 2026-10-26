@@ -5,7 +5,6 @@
 //! below once they have one.
 #![allow(dead_code, unused_imports)]
 
-mod clarity;
 mod code;
 mod doc;
 mod event;
@@ -18,7 +17,6 @@ mod watch;
 mod workflow;
 pub mod workstream;
 
-pub use clarity::{clarity_gaps, clarity_questions, gaps_phrase, ClarityGap};
 pub use doc::{Block, Doc, Inline, Mark, PLAN_HEADING, TRIAGE_HEADING};
 pub use code::{
     clip, ChangedFile, CheckState, CodeChange, CodeChangeKind, CodeChangeState, CodeFile, CodeHit, CommitInfo, CommitQuery, Notice, TreeEntry, TreeEntryKind, DevLink, LinkSource, PullRequestDetail, ReviewInfo, ReviewState, BODY_LIMIT,
@@ -34,7 +32,7 @@ pub use proposal::{
     Revised, Revision, StateKind, Verdict,
 };
 pub use run::{
-    allowed_kinds, default_instruction, has_markers, AutoStarted, pip_chain_kinds, pip_kinds, render_prompt, valid_repo, without_markers, ClonePlan, Continuation, EarlierSession, PermissionAllowed, ReadOnly, ReportOffer, Run, RunEvent, RunFailure, RunKind, RunQuery, RunReview, RunSpec, RunState, FOCUS_LIMIT, ASSUMPTIONS_PREFACE, LIMIT_STOP, PIP_PROMPT_LIMIT, GUARD, GUARD_VERSION, INVESTIGATE_INSTRUCTION, REPORT_GUARD, REPORT_SERVER, REPORT_TOOL, REPORT_TOOL_VERSION,
+    agent_allow_rules, allowed_kinds, default_instruction, has_markers, pip_chain_kinds, pip_kinds, render_prompt, valid_repo, without_markers, ClonePlan, Continuation, EarlierSession, PermissionAllowed, ReadOnly, ReportOffer, Run, RunEvent, RunFailure, RunKind, RunQuery, RunReview, RunSpec, RunState, FOCUS_LIMIT, LIMIT_STOP, PIP_PROMPT_LIMIT, GUARD, GUARD_VERSION, INVESTIGATE_INSTRUCTION, AGENT_CALL_TIMEOUT_MS, AGENT_GUARD, AGENT_SERVER, AGENT_TOOLS, ASK_TOOL, READ_TICKET_TOOL, READ_WORKSTREAM_TOOL, REPORT_TOOL, REPORT_TOOL_VERSION,
     READ_ONLY_DENY, READ_ONLY_GUARD, READ_ONLY_MODE, TEST_RUNNERS, NEW_TICKET_TAIL, PLAN_LIMIT, BUILD_ACCOUNT_LIMIT, FINDINGS_LIMIT, plan_label, build_account_label, findings_label, TICKET_BLOCK_LIMIT, TICKETLESS_STARTER, TITLE_LIMIT,
 };
 pub use snapshot::{ticket_snapshot, SnapComment, TicketFacts};
@@ -92,7 +90,6 @@ pub(crate) mod fixtures {
             build_from_run: None,
             findings: None,
             findings_from_run: None,
-            assumptions: Vec::new(),
             allow_push: false,
             project: None,
             report: false,

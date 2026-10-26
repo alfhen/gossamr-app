@@ -64,7 +64,6 @@ impl RunService {
     /// Clones a watched repository into `~/Gossamr/agents/<owner>/<repo>` (or, if a clone is already there, fetches
     /// into it). Only the person's explicit choice calls this.
     pub async fn clone_fresh(&self, repo: &str) -> Result<LocalClone> {
-        self.ensure_enabled()?;
         self.core.require_watched_repo(repo)?;
         let home = self.fresh_home().ok_or_else(|| Error::Claude("Gossamr can't find your home folder.".into()))?;
         let _only_one = Cloning::take(&self.cloning, repo)?;

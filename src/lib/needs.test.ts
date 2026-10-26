@@ -1,9 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { MockBackend } from "../backend/mock";
-import { HELD_ALL, HELD_BUDGET, HELD_DAILY, HELD_PERSON, HELD_QUOTA, HELD_RESTART, TRIPWIRE } from "../types";
-import type { Intent, ItemRef, Proposal, ProposalState, Run, RunKind, RunState, WorkstreamStage, WorkstreamView } from "../types";
+import type { Intent, ItemRef, PauseReason, Proposal, ProposalState, Run, RunKind, RunState, WorkstreamStage, WorkstreamView } from "../types";
 import { docFromText } from "./docs";
-import { BATCHABLE, GROUP_RANK, chipLabel, byRank, escalationReason, higherPriority, needAfter, needGroups, needs, needsIn, leftOutLabel, readinessPrompt, readinessWhy, repeatedComments, safeToBatch, titleFromTicketBlock, type Need, type NeedKind, type NeedsInput } from "./needs";
+import { BATCHABLE, GROUP_RANK, chipLabel, byRank, higherPriority, needAfter, needGroups, needs, needsIn, leftOutLabel, repeatedComments, safeToBatch, titleFromTicketBlock, type Need, type NeedKind, type NeedsInput } from "./needs";
 
 const NOW = Date.parse("2026-09-30T12:00:00Z");
 const iso = (minutesAgo: number) => new Date(NOW - minutesAgo * 60_000).toISOString();
@@ -24,7 +23,7 @@ const run = (id: string, kind: RunKind, state: RunState, over: Partial<Run> = {}
   ...over,
 });
 
-const view = (id: string, key: string | null, over: { heldReason?: string | null; stage?: WorkstreamStage; runs?: string[]; createdAt?: string; title?: string } = {}): WorkstreamView => ({
+const view = (id: string, key: string | null, over: { pausedReason?: PauseReason | null; stage?: WorkstreamStage; runs?: string[]; createdAt?: string; title?: string } = {}): WorkstreamView => ({
   workstream: {
     id,
     connectionId: "mock",
@@ -32,21 +31,16 @@ const view = (id: string, key: string | null, over: { heldReason?: string | null
     repo: null,
     title: over.title ?? (key ? `${key} Something` : "Ticketless"),
     pipSession: null,
-    mode: "manage",
-    heldReason: over.heldReason ?? null,
+    pausedReason: over.pausedReason ?? null,
     notes: null,
     createdAt: over.createdAt ?? iso(600),
     closedAt: null,
-    budget: { autoTurns: null, wakes: null, tokens: null },
-    spent: { autoTurns: 0, wakes: 0, tokens: 0 },
-    rules: {},
     basis: null,
   },
   stage: over.stage ?? "intake",
   runs: over.runs ?? [],
   labels: (over.runs ?? []).map((r, n) => [r, `R${n + 1}`]),
   waitingForPr: null,
-  budget: { autoTurns: { used: 0, limit: 6 }, wakes: { used: 0, limit: 12 }, level: "ok" },
 });
 
 const draft = (id: string, intent: Intent, minutesAgo: number, over: { state?: ProposalState; workstream?: string | null; origin?: Proposal["origin"]; supersededBy?: string | null } = {}): Proposal =>
@@ -75,20 +69,15 @@ const startRun = (key: string, kind: RunKind, workstream: string | null): Intent
 const answer = (runId: string): Intent => ({ type: "runAnswer", item: ref("CA-401"), runId, message: "Yes", question: "q" }) as unknown as Intent;
 const review = (): Intent => ({ type: "githubReview", item: ref("CA-401"), connectionId: "github", repo: "acme/shop", number: 7, runId: "r-rev", summary: "s", comments: [] }) as unknown as Intent;
 
-const input = (over: Partial<NeedsInput> = {}): NeedsInput => ({ workstreams: [], runs: [], proposals: [], dismissed: new Set(), now: NOW, ...over });
+const input = (over: Partial<NeedsInput> = {}): NeedsInput => ({ workstreams: [], runs: [], proposals: [], dismissed: new Set(), ...over });
 const kinds = (list: readonly Need[]) => list.map((n) => n.kind);
-const escalated = (over: { reviewDraft?: string | null; at?: string } = {}): WorkstreamView => ({
-  ...view("ws-1", "CA-401", { runs: ["r-b", "r-rev"] }),
-  escalation: { reviewRun: "r-rev", buildRun: "r-b", reviewLabel: "R2", buildLabel: "R1", rounds: 2, reviewDraft: over.reviewDraft ?? null, at: over.at ?? iso(7) },
-});
-
 describe("needs: every kind", () => {
   const ws1 = view("ws-1", "CA-401", { runs: ["r-q", "r-p", "r-f", "r-limit", "r-b", "r-rev", "r-plan"] });
 
   it("finds each kind of wait in its group, with the words that say it", () => {
     const list = needs(
       input({
-        workstreams: [ws1, view("ws-2", "CA-402", { heldReason: HELD_RESTART, createdAt: iso(50) }), { ...escalated(), workstream: { ...escalated().workstream, id: "ws-3", itemKey: "CA-403", title: "CA-403 Third" } }, view("ws-4", "CA-404", { heldReason: HELD_BUDGET })],
+        workstreams: [ws1, view("ws-2", "CA-402", { pausedReason: "ceiling", createdAt: iso(50) })],
         proposals: [
           draft("d-comment", comment("CA-401"), 20),
           draft("d-start", startRun("CA-401", "investigate", "ws-1"), 25),
@@ -110,26 +99,22 @@ describe("needs: every kind", () => {
     expect(Object.fromEntries(list.map((n) => [n.kind, n.group]))).toEqual({
       plan: "decide",
       description: "decide",
-      escalation: "decide",
-      budget: "decide",
       question: "unblock",
       permission: "unblock",
       failure: "unblock",
       stoppedAtLimit: "unblock",
       signIn: "unblock",
-      hold: "unblock",
+      paused: "unblock",
       draft: "approve",
       review: "approve",
       runStart: "approve",
     });
-    expect(list).toHaveLength(13);
+    expect(list).toHaveLength(11);
     expect(by("plan")[0].target).toEqual({ type: "draft", id: "d-plan" });
     // The run's label is a parenthesis, not the subject: "R1 plan wrote the plan" reads wrong once the run is brought into a workstream (G12).
     expect(by("plan")[0].why).toMatch(/^An agent wrote the plan for CA-401 \(run R\d+\); approving/);
     expect(by("description")[0].title).toBe("Draft rewrite");
-    expect(by("escalation")[0].title).toBe("Review still blocks after 2 fix rounds");
-    expect(by("hold")[0]).toMatchObject({ title: "Held after a restart", workstreamId: "ws-2", target: { type: "workstream" } });
-    expect(by("budget")[0]).toMatchObject({ workstreamId: "ws-4", target: { type: "workstream" } });
+    expect(by("paused")[0]).toMatchObject({ title: "Paused: Pip was woken too often today", workstreamId: "ws-2", target: { type: "workstream" } });
     expect(by("question")[0]).toMatchObject({ title: "R1 asks a question", target: { type: "run", id: "r-q" }, runId: "r-q" });
     expect(by("permission")[0].title).toBe("R2 asks to run a command");
     expect(by("failure")[0].title).toBe("R3 failed");
@@ -142,7 +127,7 @@ describe("needs: every kind", () => {
   it("says why and what waiting does in one plain sentence each, for every kind", () => {
     const list = needs(
       input({
-        workstreams: [view("ws-1", "CA-401", { runs: ["r1", "r2", "r3", "r4", "r5", "r6", "r7"], heldReason: HELD_BUDGET }), { ...escalated(), workstream: { ...escalated().workstream, id: "ws-3", itemKey: "CA-403", title: "CA-403 Third" } }],
+        workstreams: [view("ws-1", "CA-401", { runs: ["r1", "r2", "r3", "r4", "r5", "r6", "r7"], pausedReason: "person" })],
         proposals: [draft("d1", comment("CA-401"), 20), draft("d2", startRun("CA-401", "build", "ws-1"), 25), draft("d3", review(), 26), draft("d4", rewrite("CA-401"), 27), draft("d5", subtasks("CA-401"), 28)],
         runs: [
           run("r1", "triage", "needsAnswer", { needs: "Which cache?" }),
@@ -153,7 +138,7 @@ describe("needs: every kind", () => {
         ],
       }),
     );
-    expect(list.length).toBeGreaterThanOrEqual(12);
+    expect(list.length).toBeGreaterThanOrEqual(10);
     for (const n of list) {
       for (const text of [n.why, n.ifYouWait]) {
         expect(text, `${n.kind}`).toMatch(/\S/);
@@ -164,7 +149,6 @@ describe("needs: every kind", () => {
     const permission = list.find((n) => n.kind === "permission")!;
     expect(permission.why).toBe("R2 wants to run `git push origin ca-401`.");
     expect(permission.ifYouWait).toBe("The run stays paused; nothing else in CA-401 moves.");
-    expect(list.find((n) => n.kind === "escalation")!.why).toBe("The review still blocks after 2 fix rounds.");
     expect(list.find((n) => n.kind === "draft" && n.target.type === "draft" && n.target.id === "d1")!.ifYouWait).toBe("Nothing is written to Jira until you approve it.");
     expect(list.find((n) => n.kind === "review")!.ifYouWait).toBe("Nothing is posted to GitHub until you choose.");
     expect(list.find((n) => n.kind === "question")!.why).toBe("R1 asks: “Which cache?”");
@@ -213,227 +197,63 @@ describe("needs: rank", () => {
   it("puts a decision first, then what is stuck, then drafts to approve", () => {
     const list = needs(
       input({
-        workstreams: [{ ...escalated(), workstream: { ...escalated().workstream, id: "ws-3", itemKey: "CA-403", title: "CA-403 Third" } }, ws],
+        workstreams: [ws],
         proposals: [draft("old-draft", comment("CA-401"), 90), draft("rewrite", rewrite("CA-401"), 1)],
         runs: [run("r1", "investigate", "failed", { lastProgressAt: iso(80) })],
       }),
     );
-    expect(list.map((n) => n.group)).toEqual(["decide", "decide", "unblock", "approve"]);
-    expect(kinds(list)).toEqual(["escalation", "description", "failure", "draft"]);
+    expect(list.map((n) => n.group)).toEqual(["decide", "unblock", "approve"]);
+    expect(kinds(list)).toEqual(["description", "failure", "draft"]);
     expect(GROUP_RANK).toEqual({ decide: 0, unblock: 1, approve: 2 });
   });
 
   it("is oldest first within a group, then by key", () => {
     const list = needs(
       input({
-        workstreams: [view("ws-1", "CA-401", { heldReason: HELD_RESTART })],
+        workstreams: [view("ws-1", "CA-401", { pausedReason: "person" })],
         proposals: [draft("new", comment("CA-401"), 2), draft("old", comment("CA-401"), 40), draft("same-b", comment("CA-401"), 10), draft("same-a", comment("CA-401"), 10)],
         runs: [run("r1", "investigate", "failed", { lastProgressAt: iso(10) }), run("r2", "triage", "needsAnswer", { lastProgressAt: iso(3) })],
-        heldAt: { "ws-1": iso(5) },
+        pausedAt: { "ws-1": iso(5) },
       }),
     );
-    expect(list.map((n) => n.key)).toEqual(["run:r1", "held:ws-1", "run:r2", "draft:old", "draft:same-a", "draft:same-b", "draft:new"]);
+    expect(list.map((n) => n.key)).toEqual(["run:r1", "paused:ws-1", "run:r2", "draft:old", "draft:same-a", "draft:same-b", "draft:new"]);
     expect(byRank({ group: "approve", at: iso(1), key: "a" }, { group: "decide", at: iso(99), key: "b" })).toBeGreaterThan(0);
   });
 
-  it("counts a hold from when it was last held, and from its workstream's opening when that isn't known", () => {
-    const held = view("ws-1", "CA-401", { heldReason: HELD_RESTART, createdAt: iso(300) });
+  it("counts a pause from when it was last paused, and from its workstream's opening when that isn't known", () => {
+    const held = view("ws-1", "CA-401", { pausedReason: "person", createdAt: iso(300) });
     const run1 = run("r1", "investigate", "needsAnswer", { lastProgressAt: iso(100) });
-    expect(kinds(needs(input({ workstreams: [held], runs: [run1], heldAt: { "ws-1": iso(5) } })))).toEqual(["question", "hold"]);
-    expect(kinds(needs(input({ workstreams: [held], runs: [run1] })))).toEqual(["hold", "question"]);
+    expect(kinds(needs(input({ workstreams: [held], runs: [run1], pausedAt: { "ws-1": iso(5) } })))).toEqual(["question", "paused"]);
+    expect(kinds(needs(input({ workstreams: [held], runs: [run1] })))).toEqual(["paused", "question"]);
   });
 });
 
-describe("needs: holds", () => {
-  const held = (reason: string, over: { mode?: "manage" | "advise" } = {}): WorkstreamView => {
-    const v = view("ws-1", "CA-401", { heldReason: reason });
-    return { ...v, workstream: { ...v.workstream, mode: over.mode ?? "manage" } };
-  };
+describe("needs: pauses", () => {
+  const paused = (reason: PauseReason) => view("ws-1", "CA-401", { pausedReason: reason });
 
-  it("makes no need of a hold the person chose, Hold or Hold all, and counts nothing for it", () => {
-    for (const reason of [HELD_PERSON, HELD_ALL]) expect(needs(input({ workstreams: [held(reason)] })), reason).toEqual([]);
-    // Other needs in the workstream are untouched by it.
-    const list = needs(input({ workstreams: [held(HELD_PERSON)], runs: [run("r1", "investigate", "failed")] }));
-    expect(kinds(list)).toEqual(["failure"]);
-  });
-
-  it("keeps every hold the system makes a need: a restart, a tripwire, the daily cap and the quota", () => {
-    for (const reason of [HELD_RESTART, HELD_DAILY, HELD_QUOTA, `${TRIPWIRE}basis_drift`, `${TRIPWIRE}marker`, `${TRIPWIRE}repeated_failure`, `${TRIPWIRE}chain_refused`]) {
-      expect(kinds(needs(input({ workstreams: [held(reason)] }))), reason).toEqual(["hold"]);
-    }
-    expect(needs(input({ workstreams: [held(HELD_RESTART)] }))[0]).toMatchObject({ key: "held:ws-1", group: "unblock", title: "Held after a restart", primary: { id: "resume" } });
-  });
-
-  it("asks a Decide question when the automatic steps run out, with the two choices", () => {
-    const list = needs(input({ workstreams: [{ ...held(HELD_BUDGET), budget: { autoTurns: { used: 11, limit: 11 }, wakes: { used: 11, limit: 12 }, level: "spent" } }] }));
-    expect(list).toHaveLength(1);
-    expect(list[0]).toMatchObject({
-      key: "budget:ws-1",
-      group: "decide",
-      kind: "budget",
+  it("makes a need of every pause, with Resume as its action", () => {
+    expect(needs(input({ workstreams: [paused("person")] }))[0]).toMatchObject({
+      key: "paused:ws-1",
+      group: "unblock",
+      kind: "paused",
       workstreamId: "ws-1",
       ticketKey: "CA-401",
-      title: "CA-401 used its 11 automatic steps",
-      why: "Pip and the automatic steps are paused until you decide.",
-      primary: { id: "allowMore", label: "Allow 5 more" },
-      secondary: [{ id: "advise", label: "Switch to Advise" }],
+      title: "Paused",
+      why: "You paused it.",
+      primary: { id: "resume", label: "Resume" },
       target: { type: "workstream" },
       batchable: false,
     });
-    expect(list[0].ifYouWait).toMatch(/\.$/);
+    expect(needs(input({ workstreams: [paused("ceiling")] }))[0]).toMatchObject({ title: "Paused: Pip was woken too often today", why: "Pip was woken too often today, so Gossamr paused it." });
   });
 
-  it("names the count the person reads: whichever of turns and wakes is nearer its limit", () => {
-    const wakes = needs(input({ workstreams: [{ ...held(HELD_BUDGET), budget: { autoTurns: { used: 3, limit: 11 }, wakes: { used: 12, limit: 12 }, level: "spent" } }] }));
-    expect(wakes[0].title).toBe("CA-401 used its 11 automatic steps");
+  it("makes nothing of a workstream that isn't paused", () => {
+    expect(needs(input({ workstreams: [view("ws-1", "CA-401")] }))).toEqual([]);
   });
 
-  it("is answered once the workstream is in Advise, where nothing starts on its own", () => {
-    expect(needs(input({ workstreams: [held(HELD_BUDGET, { mode: "advise" })] }))).toEqual([]);
-  });
-
-  it("ranks the question with the decisions, ahead of what is stuck", () => {
-    const list = needs(input({ workstreams: [held(HELD_BUDGET)], runs: [run("r1", "investigate", "failed")] }));
-    expect(kinds(list)).toEqual(["budget", "failure"]);
-  });
-});
-
-describe("needs: a ticket the triage found not clear enough to plan", () => {
-  const unclear = (questions: string[] = ["What does done look like?", "Who is waiting on it?"], over: Partial<WorkstreamView> = {}): WorkstreamView => ({
-    ...view("ws-1", "CA-401", { runs: ["r-t"] }),
-    readiness: { triageRun: "r-t", triageLabel: "R1", questions, at: iso(9) },
-    ...over,
-  });
-
-  it("says they replied, not that they have not answered, once Looks fine has read the reply and the ticket still counts as changed (G3)", () => {
-    const changed = unclear(["Q?"], { readiness: { triageRun: "r-t", triageLabel: "R1", questions: ["Q?"], at: iso(9), changed: true } });
-    const [n] = needs(input({ workstreams: [changed], runs: [run("r-t", "triage", "done")], asked: { "ws-1": { asked: iso(2 * 24 * 60), nudged: null, replied: iso(60) } } }));
-    expect(n.title).toContain("changed: plan now?");
-    expect(n.why).toContain("You asked the reporter 2 days ago and they replied 1 hour ago. ");
-    expect(n.why).not.toContain("have not answered");
-  });
-
-  it("says the reporter was asked and nudged, and offers Ask again, once they have not answered", () => {
-    const asked = { "ws-1": { asked: iso(2 * 24 * 60), nudged: iso(60), replied: null } };
-    const [n] = needs(input({ workstreams: [unclear()], runs: [run("r-t", "triage", "done")], asked }));
-    expect(n.why).toBe("You asked the reporter 2 days ago and nudged 1 hour ago; they have not answered. R1 left these questions open: What does done look like? · Who is waiting on it?");
-    expect(n.primary).toEqual({ id: "askReporter", label: "Ask again" });
-    expect(needs(input({ workstreams: [unclear()], runs: [run("r-t", "triage", "done")], asked: { "ws-1": { asked: iso(60), nudged: null, replied: null } } }))[0].why).toMatch(/^You asked the reporter 1 hour ago; they have not answered\. /);
-    // Without an ask, or once they replied, nothing is said about one.
-    expect(needs(input({ workstreams: [unclear()], runs: [run("r-t", "triage", "done")] }))[0].primary.label).toBe("Ask the reporter");
-    const replied = unclear(["Q?"], { readiness: { triageRun: "r-t", triageLabel: "R1", questions: ["Q?"], at: iso(9), changed: true, replied: true } });
-    expect(needs(input({ workstreams: [replied], asked }))[0].why).not.toContain("You asked");
-  });
-
-  it("is a Decide question with the open questions as its reason and the three choices", () => {
-    const list = needs(input({ workstreams: [unclear()], runs: [run("r-t", "triage", "done")] }));
-    expect(list).toHaveLength(1);
-    expect(list[0]).toMatchObject({
-      key: "readiness:r-t",
-      group: "decide",
-      kind: "readiness",
-      workstreamId: "ws-1",
-      ticketKey: "CA-401",
-      title: "CA-401 isn't clear enough to plan",
-      why: "R1 left these questions open: What does done look like? · Who is waiting on it?",
-      at: iso(9),
-      primary: { id: "askReporter", label: "Ask the reporter" },
-      secondary: [
-        { id: "answerSelf", label: "I'll answer" },
-        { id: "planAnyway", label: "Plan anyway" },
-      ],
-      target: { type: "workstream" },
-      batchable: false,
-    });
-    expect(list[0].ifYouWait).toMatch(/^No plan starts until you choose.*\.$/);
-  });
-
-  it("comes back as 'changed: plan now?' when the ticket changed while the person waited on the reporter, with Plan now and Still unclear", () => {
-    const changed = unclear(["What does done look like?"], { readiness: { triageRun: "r-t", triageLabel: "R1", questions: ["What does done look like?"], at: iso(9), changed: true } });
-    const [need] = needs(input({ workstreams: [changed], runs: [run("r-t", "triage", "done")] }));
-    expect(need).toMatchObject({
-      key: "readiness:r-t",
-      group: "decide",
-      kind: "readiness",
-      title: "CA-401 changed: plan now?",
-      why: "CA-401 changed while you waited for the reporter. R1 left this question open: What does done look like?",
-      primary: { id: "planAnyway", label: "Plan now" },
-      secondary: [{ id: "askReporter", label: "Still unclear (ask again)" }],
-      batchable: false,
-    });
-  });
-
-  it("comes back as '<KEY>: the reporter replied, plan now?' with the same choices when the reporter commented while the person waited", () => {
-    const replied = unclear(["What does done look like?"], { readiness: { triageRun: "r-t", triageLabel: "R1", questions: ["What does done look like?"], at: iso(9), changed: true, replied: true } });
-    const [need] = needs(input({ workstreams: [replied], runs: [run("r-t", "triage", "done")] }));
-    expect(need).toMatchObject({
-      key: "readiness:r-t",
-      kind: "readiness",
-      title: "CA-401: the reporter replied, plan now?",
-      why: "The reporter replied on CA-401 while you waited. R1 left this question open: What does done look like?",
-      primary: { id: "planAnyway", label: "Plan now" },
-      secondary: [{ id: "askReporter", label: "Still unclear (ask again)" }],
-    });
-  });
-
-  it("is counted once, ranks with the decisions ahead of what is stuck, and is not a run's need", () => {
-    const list = needs(input({ workstreams: [unclear()], runs: [run("r-f", "build", "failed")] }));
-    expect(kinds(list)).toEqual(["readiness", "failure"]);
-    expect(list.every((n) => n.kind !== "readiness" || n.runId === undefined)).toBe(true);
-  });
-
-  it("is gone once the workstream no longer reports it: chosen, or a later triage says ready", () => {
-    expect(needs(input({ workstreams: [unclear([], { readiness: null })] }))).toEqual([]);
-    expect(needs(input({ workstreams: [{ ...view("ws-1", "CA-401") }] }))).toEqual([]);
-  });
-
-  it("says plainly when the triage listed no questions, says one question in the singular, and clips a long list", () => {
-    expect(readinessWhy({ triageLabel: "R2", questions: [] })).toBe("R2 found the ticket unclear but listed no questions.");
-    expect(readinessWhy({ triageLabel: "", questions: ["Who asked?"] })).toBe("The triage left this question open: Who asked?");
-    const long = readinessWhy({ triageLabel: "R2", questions: Array.from({ length: 8 }, (_, n) => `Question number ${n + 1} is quite a long one to ask?`) });
-    expect(long.length).toBeLessThanOrEqual(240);
-    expect(long.endsWith("…")).toBe(true);
-  });
-
-  it("quotes the questions for the composer on one line, with where to answer", () => {
-    expect(readinessPrompt({ triageLabel: "R1", questions: ["What does done look like?", "Who asked?"] }, "CA-401")).toBe("R1's open questions about CA-401: “What does done look like?” · “Who asked?”. My answers: ");
-    expect(readinessPrompt({ triageLabel: "", questions: [] }, null)).toBe("The triage's open questions about this ticket: “(it listed no questions)”. My answers: ");
-  });
-});
-
-describe("needs: the comment to a reporter", () => {
-  it("is Gossamr's draft to approve, said so, and not an agent's or a run's note", () => {
-    const asked = draft("d-ask", comment("CA-401"), 3, { origin: { type: "run", runId: "r-t", shortId: null, workstream: "ws-1" } });
-    const [need] = needs(input({ workstreams: [view("ws-1", "CA-401", { runs: ["r-t"] })], runs: [run("r-t", "triage", "done")], proposals: [{ ...asked, createdBy: "agent", label: "Questions for the reporter" }] }));
-    expect(need).toMatchObject({
-      key: "draft:d-ask",
-      group: "approve",
-      kind: "draft",
-      title: "Questions for the reporter",
-      why: "Gossamr drafted a comment to the reporter of CA-401 from R1's open questions; it is posted only when you approve it.",
-      primary: { id: "approve" },
-      // Gossamr's words to a person outside the team are read and approved on their own, never in "Approve N safe drafts".
-      batchable: false,
-    });
-    // The triage's own note is the agent's, as before.
-    const note = needs(input({ workstreams: [view("ws-1", "CA-401", { runs: ["r-t"] })], runs: [run("r-t", "triage", "done")], proposals: [{ ...asked, createdBy: "agent" }] }));
-    expect(note[0]).toMatchObject({ title: "R1 triage · comment", why: "R1 triage drafted a comment on CA-401." });
-  });
-});
-
-describe("needs: the comment with the person's answers", () => {
-  it("is Pip's draft to approve on its own: said so, and never in the safe batch, as the questions to a reporter are not", () => {
-    const answers = { ...draft("d-ans", comment("CA-401"), 3, { workstream: "ws-1" }), label: "Answers to the open questions" } as Proposal;
-    const plain = draft("d-plain", comment("CA-401"), 2, { workstream: "ws-1" });
-    const asked = { ...draft("d-ask", comment("CA-401"), 4, { workstream: "ws-1" }), createdBy: "user", label: "Questions for the reporter" } as Proposal;
-    const list = needs(input({ workstreams: [view("ws-1", "CA-401")], proposals: [answers, plain, asked] }));
-    const by = (key: string) => list.find((n) => n.key === key)!;
-    expect(by("draft:d-ans")).toMatchObject({ title: "Answers to the open questions", why: "Pip drafted a comment on CA-401 with your answers to the open questions; it is posted only when you approve it.", batchable: false });
-    expect(by("draft:d-ask")).toMatchObject({ title: "Questions for the reporter", why: "Gossamr drafted a comment to the reporter of CA-401 from what the ticket leaves out; it is posted only when you approve it.", batchable: false });
-    expect(by("draft:d-plain").batchable).toBe(true);
-    // A comment Pip merely labels like Gossamr's is Pip's, and an ordinary draft.
-    const pretend = { ...draft("d-pip", comment("CA-401"), 1, { workstream: "ws-1" }), label: "Questions for the reporter" } as Proposal;
-    expect(needs(input({ workstreams: [view("ws-1", "CA-401")], proposals: [pretend] }))[0]).toMatchObject({ batchable: true });
+  it("leaves the other needs in a paused workstream as they are", () => {
+    const list = needs(input({ workstreams: [paused("person")], runs: [run("r1", "investigate", "failed")] }));
+    expect(kinds(list).sort()).toEqual(["failure", "paused"]);
   });
 });
 
@@ -476,13 +296,6 @@ describe("needs: folding", () => {
     expect(kinds(list)).toEqual(["draft"]);
   });
 
-  it("folds an escalation's review draft into the escalation, so it is not listed twice", () => {
-    const list = needs(input({ workstreams: [escalated({ reviewDraft: "rd" })], proposals: [draft("rd", review(), 5), draft("other", comment("CA-401"), 4)] }));
-    expect(list.map((n) => n.key)).toEqual(["escalation:r-rev", "draft:other"]);
-    // Without the escalation (chosen, or closed) the draft is an ordinary one.
-    expect(needs(input({ workstreams: [{ ...escalated({ reviewDraft: "rd" }), escalation: undefined }], proposals: [draft("rd", review(), 5)] })).map((n) => n.key)).toEqual(["draft:rd"]);
-  });
-
   it("never shows a retired, superseded, applied, skipped or applying draft", () => {
     const list = needs(
       input({
@@ -500,7 +313,7 @@ describe("needs: folding", () => {
   });
 
   it("leaves a closed workstream's waits to General", () => {
-    const closed: WorkstreamView = { ...view("ws-9", "CA-409"), workstream: { ...view("ws-9", "CA-409").workstream, closedAt: iso(1), heldReason: HELD_PERSON } };
+    const closed: WorkstreamView = { ...view("ws-9", "CA-409"), workstream: { ...view("ws-9", "CA-409").workstream, closedAt: iso(1), pausedReason: "person" } };
     const list = needs(input({ workstreams: [closed], proposals: [draft("d", comment("CA-409"), 5, { workstream: "ws-9" })] }));
     expect(list.map((n) => [n.key, n.workstreamId])).toEqual([["draft:d", null]]);
   });
@@ -670,16 +483,6 @@ describe("needs: where a need is", () => {
     expect(title).toContain("gh…");
     expect(title).not.toContain("ghp_");
   });
-
-  it("labels a tripwire hold the short way, and a used-up budget as the question it is", () => {
-    const list = needs(input({ workstreams: [view("ws-1", "CA-401", { heldReason: HELD_BUDGET }), view("ws-2", null, { heldReason: `${TRIPWIRE}repeated_failure` })] }));
-    expect(list.map((n) => n.title).sort()).toEqual(["CA-401 used its 6 automatic steps", "Held: the same step failed twice"]);
-  });
-
-  it("words an escalation the way the list says it", () => {
-    expect(escalationReason(2)).toBe("Review still blocks after 2 fix rounds");
-    expect(escalationReason(1)).toBe("Review still blocks after 1 fix round");
-  });
 });
 
 describe("needGroups", () => {
@@ -820,7 +623,7 @@ describe("the chip on a row (G6)", () => {
   it("is Post for a GitHub review draft and the group's word for every other need, the group staying Approve", () => {
     expect(chipLabel({ group: "approve", kind: "review" })).toBe("Post");
     expect(chipLabel({ group: "approve", kind: "draft" })).toBe("Approve");
-    expect(chipLabel({ group: "decide", kind: "readiness" })).toBe("Decide");
+    expect(chipLabel({ group: "decide", kind: "plan" })).toBe("Decide");
     const list = needs(input({ proposals: [draft("d-review", review(), 26)] }));
     expect(list[0]).toMatchObject({ kind: "review", group: "approve" });
     expect(chipLabel(list[0])).toBe("Post");

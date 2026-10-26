@@ -1,12 +1,8 @@
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { MentionTextarea } from "../components/MentionTextarea";
 import { docText } from "../lib/docs";
-import { autoLink, liveMentions, mentionNote, rewriteNote, subtasksNote, type Mention } from "../lib/mentions";
-import { answersProvenance, isAnswersDraft, isReporterNudge, isReporterQuestions, targetOf, unreachable } from "../lib/proposals";
-import { APPROVAL_STARTS_BUILD, approvalStartsBuild } from "../lib/nextStep";
-import { useClaude } from "../claudeStore";
-import { useWorkstreams } from "./workstreamsStore";
-import { useTabs } from "./tabsStore";
+import { autoLink, liveMentions, rewriteNote, subtasksNote, type Mention } from "../lib/mentions";
+import { targetOf, unreachable } from "../lib/proposals";
 import { useBackend } from "../backend/useBackend";
 import type { Person, Proposal, ProposalEdit, ProposalStateKind, ReviewAccess } from "../types";
 import { useRepoReviewAccess, useReviewAccess } from "./reviewAccess";
@@ -23,7 +19,7 @@ import { PEEK_DRAFT_MARGIN, peekFocusAfterLeaving } from "./peekDrafts";
 import { KeyHint } from "./KeyHint";
 import { keptEdits, keptEditsOfDraft, type KeptEdits } from "./keptEdits";
 import { useToasts } from "./toasts";
-import { doneText, postedToJira, waitStarted } from "./NeedsPane";
+import { doneText, postedToJira } from "./NeedsPane";
 import { escLeavesPause, useCardKeys } from "./draftCardKeys";
 import { takeDraftEditIntent } from "./draftKeys";
 import { itemKey } from "../lib/filter";
@@ -137,27 +133,13 @@ export function rewriteRisks(wasTitle: string, wasText: string, newTitle: string
 /** What Esc at the posting pause tells a screen reader: the editor closed and the words are still there. */
 export const EDIT_KEPT_NOTE = "Edit kept. Nothing was posted.";
 
-/** What a screen reader hears when `p` was posted from its card: what was posted, and that the ticket waits on the reporter when that is what it started. Null when `done` did not reach Jira. */
+/** What a screen reader hears when `p` was posted from its card: what was posted. Null when `done` did not reach Jira. */
 export function postedNote(p: Proposal, done: Proposal | null): string | null {
   if (!done) return null;
-  const key = targetOf(p.intent)?.key ?? "";
-  const title = isReporterQuestions(p) ? `Questions for the reporter${key ? ` on ${key}` : ""}` : isReporterNudge(p) ? `Nudge for the reporter${key ? ` on ${key}` : ""}` : draftTitle(p);
   const proposals = { [p.id]: done };
   const target = { type: "draft", id: p.id } as const;
   if (!postedToJira({ target }, proposals)) return null;
-  const waits = waitStarted({ target, ticketKey: key || undefined }, proposals);
-  return `${doneText({ title, ticketKey: undefined, workstreamTitle: "" }, true)}${waits ? ` ${waits}.` : ""}`;
-}
-
-/** Whether approving `p` also starts a Build (`approvalStartsBuild`), read from the runs, the workstream and Settings' switches. */
-export function useApprovalStartsBuild(p: Proposal): boolean {
-  const runId = p.origin.type === "run" ? p.origin.runId : null;
-  const run = useRuns((s) => (runId ? s.runs.find((r) => r.id === runId) : undefined));
-  // The plan's own workstream: only a run in it is one the supervisor starts a Build after.
-  const ws = run?.spec.workstream ?? null;
-  const view = useWorkstreams((s) => (ws ? s.list.find((v) => v.workstream.id === ws) : undefined));
-  const globals = useWorkstreams((s) => s.globals);
-  return approvalStartsBuild(p, run, view, globals);
+  return doneText({ title: draftTitle(p), ticketKey: undefined, workstreamTitle: "" }, true);
 }
 
 export interface DraftCardProps {
@@ -197,11 +179,6 @@ const primary = "rounded-md bg-ws-pip px-3.5 py-1.5 text-sm font-semibold text-w
 
 /** Under a comment being read whose text looks like a secret: the pause is coming, and the text above is what would be posted. */
 export const SECRET_NOTE = "This holds something that looks like a secret. Gossamr will pause before posting it.";
-
-/** What an answers draft's text would put in front of everyone: checked against nothing, since none of it was on the ticket before the person typed it in the composer. */
-export function answersRisks(text: string): { risks: Risk[]; quote: RiskQuotes } {
-  return { risks: newRisks("", text), quote: newRiskQuote("", text) };
-}
 
 export function DraftCard(props: DraftCardProps) {
   const p = props.proposal;
@@ -258,11 +235,7 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
   const [editing, setEditing] = useState(false);
   const edited = useRef(!!kept?.body);
   const rewrite = intent.type === "rewrite" ? intent : null;
-  const startsBuild = useApprovalStartsBuild(p);
   const runName = useFromRunName(p);
-  // The message the answers draft was made from, for its provenance line: the person's reply in the conversation that asked Pip.
-  const replyRequest = p.origin.type === "chat" && isAnswersDraft(p) ? p.origin.requestId : null;
-  const replyPrompt = useClaude((s) => (replyRequest ? (Object.values(s.byTicket).flatMap((c) => c.turns).find((t) => t.requestId === replyRequest)?.prompt ?? null) : null));
   const [newTitle, setNewTitle] = useState(kept?.rewrite?.title ?? rewriteFields(rewrite).title);
   const [newText, setNewText] = useState(kept?.rewrite?.text ?? rewriteFields(rewrite).text);
   const rewriteEdited = useRef(!!kept?.rewrite);
@@ -372,10 +345,6 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
   // Edited words that mention everyone or look like a secret wait for a second press: a confirm the person can pass, never a block.
   const [pause, setPause] = useState<{ risks: Risk[]; quote: RiskQuotes } | null>(null);
   const risks = (): { risks: Risk[]; quote: RiskQuotes } => {
-    // An answers draft is the person's own reply put into a comment: what they pasted into the composer is new to the ticket, so all of it is checked, edited or not.
-    if (intent.type === "comment" && isAnswersDraft(p)) {
-      return answersRisks(edited.current ? body : linked.text);
-    }
     if (intent.type === "comment" && edited.current) return { risks: newRisks(linked.text, body), quote: newRiskQuote(linked.text, body) };
     if (rewrite && rewriteEdited.current) {
       const { title, text } = rewriteFields(rewrite);
@@ -557,11 +526,6 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
           // The words stay as written, since the person posts what they read; what the pause would catch is said before Post, not only at it.
           <p data-secret-note className="m-0 text-sm text-ws-ink3">
             {SECRET_NOTE}
-          </p>
-        )}
-        {intent.type === "comment" && (isReporterQuestions(p) || isReporterNudge(p)) && open && mentionNote(liveMentions(body, mentions)) && (
-          <p data-mention-note className="m-0 text-sm text-ws-ink3">
-            {mentionNote(liveMentions(body, mentions))}
           </p>
         )}
         {intent.type === "transition" && (
@@ -752,36 +716,12 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
         {p.origin.type === "run" && (
           <p data-provenance="run" className="m-0 text-sm text-ws-ink3">
             {p.createdBy === "agent" && (
-              <span data-created-by={isReporterQuestions(p) ? "gossamr" : "agent"} className="mr-2 rounded-full bg-ws-pip-soft px-2 text-xs font-semibold text-ws-pip">
-                {isReporterQuestions(p) ? "Drafted by Gossamr" : "Drafted by an agent"}
+              <span data-created-by="agent" className="mr-2 rounded-full bg-ws-pip-soft px-2 text-xs font-semibold text-ws-pip">
+                Drafted by an agent
               </span>
             )}{" "}
             <FromRun proposal={p} onOpen={onOpenRun ? () => onOpenRun((p.origin as { runId: string }).runId) : undefined} />
-            {isReporterQuestions(p) ? ". Gossamr wrote this around the triage's open questions, which are the agent's words. Read and edit them before you approve." : youEdited ? ". You edited it; read it before you approve." : ". The words are the agent's. Read and edit them before you approve."}
-          </p>
-        )}
-        {p.origin.type === "chat" && isReporterQuestions(p) && (
-          <p data-provenance="gossamr" className="m-0 text-sm text-ws-ink3">
-            <span data-created-by="gossamr" className="mr-2 rounded-full bg-ws-pip-soft px-2 text-xs font-semibold text-ws-pip">
-              Drafted by Gossamr
-            </span>{" "}
-            Gossamr wrote this from what the ticket&apos;s description leaves out. Read and edit the questions before you approve.
-          </p>
-        )}
-        {p.origin.type === "chat" && isReporterNudge(p) && (
-          <p data-provenance="gossamr" className="m-0 text-sm text-ws-ink3">
-            <span data-created-by="gossamr" className="mr-2 rounded-full bg-ws-pip-soft px-2 text-xs font-semibold text-ws-pip">
-              Drafted by Gossamr
-            </span>{" "}
-            Gossamr wrote this follow-up because the reporter hasn&apos;t answered for days. Read and edit it before you approve.
-          </p>
-        )}
-        {p.origin.type === "chat" && isAnswersDraft(p) && (
-          <p data-provenance="pip" className="m-0 text-sm text-ws-ink3">
-            <span data-created-by="pip" className="mr-2 rounded-full bg-ws-pip-soft px-2 text-xs font-semibold text-ws-pip">
-              Drafted by Pip
-            </span>{" "}
-            {answersProvenance(replyPrompt, intent.type === "comment" ? body : undefined)}
+            {youEdited ? ". You edited it; read it before you approve." : ". The words are the agent's. Read and edit them before you approve."}
           </p>
         )}
         {p.state.type === "retired" && <p className="m-0 text-sm text-ws-ink3">{p.state.reason}</p>}
@@ -791,22 +731,7 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
             {shownError}
           </p>
         )}
-        {startsBuild && open && (
-          <p data-approval-starts-build className="m-0 text-sm text-ws-ink2">
-            {APPROVAL_STARTS_BUILD}{" "}
-            <button
-              type="button"
-              onClick={() => {
-                useTabs.getState().setRoute("agents");
-                useRuns.getState().openSafety();
-              }}
-              className="rounded text-ws-ink2 underline hover:bg-ws-hover focus-visible:outline-2 focus-visible:outline-ws-pip"
-            >
-              Agents settings
-            </button>
-          </p>
-        )}
-        {pause && open && <PostingPause risks={pause.risks} quote={pause.quote} subject={youEdited ? "Your edit" : intent.type === "comment" && isAnswersDraft(p) ? "Your reply" : "This draft"} anyway="Post anyway" working={working || state === "applying"} onKeep={keepEditing} onPost={approve} />}
+        {pause && open && <PostingPause risks={pause.risks} quote={pause.quote} subject={youEdited ? "Your edit" : "This draft"} anyway="Post anyway" working={working || state === "applying"} onKeep={keepEditing} onPost={approve} />}
         {(open || onShow) && (
           <div data-draft-actions className="sticky bottom-0 z-[1] -mx-3 -mb-2.5 flex flex-wrap items-center justify-end gap-2 border-t border-ws-sep bg-ws-win px-3 py-2">
             {onShow && (

@@ -1,15 +1,15 @@
 import { expect, test, type Page } from "@playwright/test";
-import { askPip, holdBySystem, homeSettled, needsPane, needsPaneHeading, needsYouCount, openAgents, openApp, selectWorkstream, startWorkstream, openNeedRow, needsStack } from "./support/app";
+import { askPip, pauseAtCeiling, homeSettled, needsPane, needsPaneHeading, needsYouCount, openAgents, openApp, selectWorkstream, startWorkstream, openNeedRow, needsStack } from "./support/app";
 
 // Fixes from the fifth dogfood round's backlog (G18 to G24): a higher-ranked need waits behind a bar instead of taking the
 // decision pane, Pip home lands on the workstream that needs the person, the pane says when it moved on by itself, the
 // Agents footer names F6 and Pip home, and the timeline keeps the reader's place.
 
-const MANAGED = "wsManage=1&runs=empty";
+const SAMPLE = "runs=empty";
 
-/** A managed workstream on CA-401 with a draft comment of Pip's waiting, on Pip home with the draft's decision open. */
+/** A workstream on CA-401 with a draft comment of Pip's waiting, on Pip home with the draft's decision open. */
 async function draftOpen(page: Page) {
-  await openApp(page, MANAGED);
+  await openApp(page, SAMPLE);
   await startWorkstream(page, "CA-401");
   await openAgents(page);
   await selectWorkstream(page, "CA-401");
@@ -22,22 +22,22 @@ async function draftOpen(page: Page) {
 
 test("G18: a need that ranks higher and comes in later is listed above the open one, and nothing switches under the person", async ({ page }) => {
   await draftOpen(page);
-  await holdBySystem(page, "CA-401", "restart");
+  await pauseAtCeiling(page, "CA-401");
   const kinds = needsStack(page).locator("[data-needs-pane]");
-  await expect.poll(async () => (await kinds.evaluateAll((els) => els.map((e) => e.getAttribute("data-kind")))).filter((k) => k === "hold" || k === "draft")).toEqual(["hold", "draft"]);
+  await expect.poll(async () => (await kinds.evaluateAll((els) => els.map((e) => e.getAttribute("data-kind")))).filter((k) => k === "paused" || k === "draft")).toEqual(["paused", "draft"]);
   // The decision that was open stays open.
   await expect(needsPane(page)).toHaveAttribute("data-kind", "draft");
 });
 
 test("G20: when the pane moves on by itself it says so for a few seconds, and the new pane's heading has the keyboard", async ({ page }) => {
   await draftOpen(page);
-  await holdBySystem(page, "CA-401", "restart");
-  await expect(needsStack(page)).toContainText("Held after a restart");
+  await pauseAtCeiling(page, "CA-401");
+  await expect(needsStack(page)).toContainText("Paused: Pip was woken too often today");
   const pane = needsPane(page);
   await pane.getByRole("button", { name: "Post comment" }).click();
-  await expect(pane).toHaveAttribute("data-kind", "hold");
+  await expect(pane).toHaveAttribute("data-kind", "paused");
   const line = page.locator("[data-needs-advanced]");
-  await expect(line).toHaveText(/^Posted to Jira: Draft comment: “[^”]+” on CA-401\. Now: CA-401 · Held after a restart$/);
+  await expect(line).toHaveText(/^Posted to Jira: Draft comment: “[^”]+” on CA-401\. Now: CA-401 · Paused: Pip was woken too often today$/);
   await expect(needsPaneHeading(page)).toBeFocused();
   // Not a stop for the keyboard, and it goes by itself.
   await expect(line).toHaveAttribute("role", "status");

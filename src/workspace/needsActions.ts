@@ -1,11 +1,7 @@
 import { readAs } from "../lib/permission";
 import type { Need } from "../lib/needs";
-import { ALLOW_MORE_STEPS } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { draftKeyAction } from "./draftKeys";
-import { docText } from "../lib/docs";
-import { isAnswersDraft } from "../lib/proposals";
-import { newRisks } from "../lib/riskyText";
 import { liveDraft } from "./draftLive";
 import { keptEditsOfDraft } from "./DraftCard";
 import { draftDecisions } from "./DraftPreview";
@@ -69,7 +65,7 @@ export function openInWorkstream(need: Need) {
   if (need.target.type === "run") useRuns.getState().openRun(need.target.id, { stay: true });
 }
 
-/** A run from a notification or a nudge: its need when it holds one, else its sheet. */
+/** A run from a notification: its need when it holds one, else its sheet. */
 export function openRunOrNeed(runId: string) {
   const need = currentNeeds().find((n) => n.runId === runId);
   if (need) openNeed(need);
@@ -101,14 +97,13 @@ const runOf = (need: Need) => (need.runId ? useRuns.getState().runs.find((r) => 
 
 /**
  * Whether approving `p` from the list would skip what its card shows: the card holds an edit the draft doesn't, or the words
- * would stop at the posting pause. A card not on screen counts its kept edits, and an answers draft's words are checked here, as the card checks them.
+ * would stop at the posting pause. A card not on screen counts its kept edits.
  */
 function needsCard(p: NonNullable<ReturnType<typeof proposalOf>>): boolean {
   const live = liveDraft(p.id);
   if (live) return live.edited || live.risky;
   // Words typed into a card that has since closed are kept for it, and only the card posts them.
-  if (keptEditsOfDraft(p.id)) return true;
-  return p.intent.type === "comment" && isAnswersDraft(p) && newRisks("", docText(p.intent.body)).length > 0;
+  return !!keptEditsOfDraft(p.id);
 }
 
 /** "this comment", "this move": what an approval would approve, for the line that asks for Enter. */
@@ -117,8 +112,7 @@ const thing = (need: Need) => (need.kind === "question" ? "this reply" : need.ki
 /**
  * What key `which` does on `need`. Anything that writes, posts, starts or answers an agent asks for Enter first, as a draft's
  * own card does ("a" then Enter): any other key cancels. Skipping a draft and dismissing a run touch nothing outside Gossamr,
- * so they act at once and offer Undo. What needs reading before it is decided (a rewrite's diff, a run's prompt, a hold's
- * cause) or has nothing to write opens its decision instead. Null when the key means nothing here.
+ * so they act at once and offer Undo. What needs reading before it is decided (a rewrite's diff, a run's prompt) or has nothing to write opens its decision instead. Null when the key means nothing here.
  */
 export function keyPlan(need: Need, which: NeedKey): KeyPlan | null {
   const all = [need.primary, ...need.secondary];
@@ -139,12 +133,8 @@ export function keyPlan(need: Need, which: NeedKey): KeyPlan | null {
         return run ? { type: "ask", text: "allow this once in Terminal", run: () => void useRuns.getState().allowPermissionOnce(run.id, readAs(run.needs)) } : null;
       case "retry":
         return run ? { type: "ask", text: "retry this run", run: () => void useRuns.getState().retryLaunch(run.id) } : null;
-      case "allowMore":
-        return need.workstreamId ? { type: "ask", text: `allow ${ALLOW_MORE_STEPS} more automatic steps`, run: () => void useWorkstreams.getState().allowMore(need.workstreamId!) } : null;
-      case "askReporter":
-        return need.workstreamId ? { type: "ask", text: "draft a comment to the reporter with the open questions; nothing is posted until you approve it", run: () => void useWorkstreams.getState().askReporter(need.workstreamId!) } : null;
       case "resume":
-        return need.kind === "hold" && need.workstreamId
+        return need.kind === "paused" && need.workstreamId
           ? { type: "ask", text: "resume this workstream", run: () => void useWorkstreams.getState().resume(need.workstreamId!) }
           : { type: "open", edit: false };
       default:

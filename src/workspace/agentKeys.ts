@@ -39,7 +39,7 @@ export function agentKey(ev: KeyLike, onCard: boolean, asking: boolean): AgentKe
 
 /**
  * What a button on a run's card does with a key it has handled itself: it keeps plain keys from the list's own (j, k, a, o…), but
- * lets a Cmd/Ctrl shortcut (the palette, Hold all) go on to the global keys, as it does from anywhere else.
+ * lets a Cmd/Ctrl shortcut (the palette) go on to the global keys, as it does from anywhere else.
  */
 export function ownKey(ev: KeyLike & { stopPropagation(): void }): void {
   if (!ev.metaKey && !ev.ctrlKey) ev.stopPropagation();

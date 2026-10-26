@@ -2,10 +2,10 @@ import { expect, test } from "@playwright/test";
 import { askPip, openApp, PIP_INPUT, pipIdle, pipPane, startWorkstream } from "./support/app";
 
 // The timeline in the Pip pane (docs/needs-you.md).
-const MANAGED = "runs=empty&prSurface=manual&wsManage=1";
+const SAMPLE = "runs=empty&prSurface=manual";
 
 test("the Pip pane shows the workstream's timeline over its composer, with a filter of its own", async ({ page }) => {
-  await openApp(page, MANAGED);
+  await openApp(page, SAMPLE);
   await startWorkstream(page, "CA-401");
   const pane = pipPane(page);
   const paneTimeline = pane.locator("[data-timeline]");

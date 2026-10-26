@@ -6,7 +6,7 @@ import { mockAsk, mockPipEvents, openQuestions, scriptPip, suggestedAnswer } fro
 import { eventLine } from "./mockSupervisor";
 import { mockPipTurns } from "./mockPipTurns";
 import { itemRef } from "./mockConnector";
-import { BUILD_NEEDS_PLAN, REVIEW_NEEDS_BUILD, REVIEW_NO_FOCUS, REVIEW_REPORTS, WAITING_FOR_PR_HINT } from "./mockRunKinds";
+import { BUILD_NEEDS_PLAN, REVIEW_NEEDS_BUILD, REVIEW_NO_FOCUS, WAITING_FOR_PR_HINT } from "./mockRunKinds";
 import type { AskRequest } from "./claude";
 import { planOpenQuestions } from "../workspace/agentsLogic";
 import type { Intent, Proposal, Run, RunKind, RunSpec, ScreenContext } from "../types";
@@ -106,8 +106,6 @@ describe("mock Pip drafting the next step of a workstream, as propose_run does",
     expect(constant("REVIEW_NO_FOCUS")).toBe(REVIEW_NO_FOCUS);
     const rustWorkstreams = readFileSync(new URL("../../src-tauri/src/inbox/workstreams.rs", import.meta.url), "utf8");
     expect(new RegExp(`const WAITING_FOR_PR_HINT: &str = "([^"]*)";`).exec(rustWorkstreams)?.[1]).toBe(WAITING_FOR_PR_HINT);
-    const rustDrafts = readFileSync(new URL("../../src-tauri/src/inbox/drafts.rs", import.meta.url), "utf8");
-    expect(/const REVIEW_REPORTS: &str = "([^"]*)";/.exec(rustDrafts)?.[1]).toBe(REVIEW_REPORTS);
     for (const words of [
       "the person hasn't settled the plan yet: they approve or skip the Gossamr Plan draft first",
       "the plan of that run hasn't been put to the person on the ticket.",
@@ -223,12 +221,6 @@ describe("mock Pip drafting the next step of a workstream, as propose_run does",
     expect(said).toBe(`I couldn't draft that: ${BUILD_NEEDS_PLAN}`);
     expect(b.proposals.list().filter((p) => p.intent.type === "startRun")).toEqual([]);
     expect(mockPipTurns.turns(`ws:${ws}`).find((t) => t.requestId === "ws-refused")).toMatchObject({ status: "done", error: null });
-  });
-
-  it("says which ticket fields drifted when asked why a workstream is held", () => {
-    const context = { screen: "board", item: null } as unknown as ScreenContext;
-    const ws = { id: "ws1", item: CA401, heldReason: "tripwire:basis_drift", drifted: ["summary", "description"] as const };
-    expect(scriptPip("Why is this held?", context, [], [], NOW, [], null, ws).text).toMatch(/^Held: the ticket's summary and description changed in Jira\./);
   });
 
   it("names the workstream's newest finished run of the kind before as the one to follow", () => {

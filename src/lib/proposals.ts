@@ -263,106 +263,8 @@ export function reviewSupersession(older: Proposal, newer: Proposal): "supersede
 /** The label of a comment draft that carries a plan run's whole plan, which no later comment replaces. As `PLAN_COMMENT_LABEL` in `proposals.rs`. */
 export const PLAN_COMMENT_LABEL = "Plan from agent run";
 
-/** The label of a comment draft that asks a ticket's reporter the questions a triage left open, which no run's comment replaces and which replaces none. As `READINESS_COMMENT_LABEL` in `proposals.rs`. */
-export const READINESS_COMMENT_LABEL = "Questions for the reporter";
-
-/** Whether `p` is the comment "Ask the reporter" (or "Ask the reporter now") drafted: Gossamr's words around the open questions, never one Pip made, whatever it is labelled. As `is_reporter_questions`. */
-export const isReporterQuestions = (p: Proposal) => p.intent.type === "comment" && p.label === READINESS_COMMENT_LABEL && p.createdBy !== "pip";
-
-/** What the second ask to a reporter says in place of the first's frame, once they have answered: the mark of a follow-up. As `reporter_comment` in `workstreams.rs`. */
-export const FOLLOW_UP_MARK = "Thanks for your answer above.";
-
-/** Whether `p` is a reporter's questions asked again after a reply (`isReporterQuestions`, worded as the follow-up). */
-export const isReporterFollowUp = (p: Proposal) => isReporterQuestions(p) && p.intent.type === "comment" && docText(p.intent.body).includes(FOLLOW_UP_MARK);
-
-/** The label of the follow-up comment "Draft a nudge" drafts when the reporter has been silent for days: short and polite, never in the safe batch. As `NUDGE_COMMENT_LABEL` in `proposals.rs`. */
-export const NUDGE_COMMENT_LABEL = "Nudge for the reporter";
-
-/** Whether `p` is the comment "Draft a nudge" drafted: Gossamr's words, never one Pip made, whatever it is labelled. As `is_reporter_nudge`. */
-export const isReporterNudge = (p: Proposal) => p.intent.type === "comment" && p.label === NUDGE_COMMENT_LABEL && p.createdBy !== "pip";
-
-/** The label of a comment Pip drafts once the person chose "I'll answer" on a triage's open questions: each question with their answer, for the ticket. As `ANSWERS_COMMENT_LABEL` in `proposals.rs`. */
-export const ANSWERS_COMMENT_LABEL = "Answers to the open questions";
-/** The first line of that comment, so a Jira reader knows the open questions on the ticket are answered below. Neutral voice; as `ANSWERS_OPENING` in `proposals.rs`. */
-export const ANSWERS_OPENING = "Answers to the open questions on this ticket:";
-
-/** Whether `p` is the comment Pip drafted with the person's answers to the open questions. As `is_answers_draft`. */
-export const isAnswersDraft = (p: Proposal) => p.intent.type === "comment" && p.label === ANSWERS_COMMENT_LABEL && p.createdBy === "pip";
-
-/** How much of the reply the provenance line quotes. */
-const REPLY_QUOTED = 80;
-
-/** Whether an answers comment's text puts an "Answer:" under every question it quotes (numbered or not), rather than quoting them and answering once. */
-export function answersPaired(body: string): boolean {
-  const lines = body.split("\n").map((l) => l.trim());
-  const questions = lines.filter((l) => /^(?:\d+[.)]\s+)?\u201c/.test(l)).length;
-  return questions > 0 && lines.filter((l) => /^Answer:/i.test(l)).length === questions;
-}
-
-/** Whether an answers comment's text quotes any question at all (a reply typed afresh, with no questions to pair, quotes none). */
-const answersQuote = (body: string): boolean => {
-  const lines = body.split("\n").map((l) => l.trim());
-  // Quotes after an "Answers:" heading are the person's words, not questions.
-  const heading = lines.findIndex((l) => /^Answers?:/i.test(l));
-  return (heading < 0 ? lines : lines.slice(0, heading)).some((l) => /^(?:\d+[.)]\s+)?\u201c/.test(l));
-};
-
-/**
- * The line under the answers draft's card that says which reply it was made from: the start of what the person wrote after "My answers:"
- * in the message `prompt` (null when that turn is no longer at hand, then the line names the reply without quoting it). Shown in the app
- * only; the comment that goes to Jira has none of it. Given the comment's text (`body`), it says "each answer under its question" only when
- * the text does that (`answersPaired`); otherwise the questions and then the answers as written.
- */
-export function answersProvenance(prompt: string | null, body?: string): string {
-  const at = prompt?.indexOf("My answers:") ?? -1;
-  // A secret the person pasted is masked before the cut, so the line never shows it and the cut counts what is shown.
-  const reply = maskSecrets((at >= 0 ? prompt!.slice(at + "My answers:".length) : (prompt ?? "")).replace(/\s+/g, " ").trim());
-  const quoted = reply ? ` “${[...reply].length > REPLY_QUOTED ? `${[...reply].slice(0, REPLY_QUOTED).join("").trimEnd()}…` : reply}”` : "";
-  return `Drafted from your reply${quoted} in this conversation, ${body === undefined || answersPaired(body) ? "each answer under its question" : answersQuote(body) ? "the questions, then your answers as written" : "your answers as written"}. Read and edit it before you approve.`;
-}
-
-/**
- * What the questions to a reporter made from a triage do to an older pending draft: the triage's own comment, which repeats
- * them, is replaced, so "Approve N safe drafts" can't post both; the person's edit keeps it. Null when `older` is none of
- * that. As `tidy_reporter_questions`.
- */
-export function reporterSupersession(older: Proposal, newer: Proposal): "supersede" | typeof KEPT_EDITED | null {
-  if (!isReporterQuestions(newer) || newer.origin.type !== "run" || older.origin.type !== "run") return null;
-  const [on, to] = [targetOf(older.intent), targetOf(newer.intent)];
-  const same = isRunComment(older) && older.id !== newer.id && older.origin.runId === newer.origin.runId && workstreamOf(older) === workstreamOf(newer) && !!on && !!to && on.connectionId === to.connectionId && on.externalId === to.externalId;
-  if (!same || older.state.type !== "pending" || older.error) return null;
-  return older.revisions.some((r) => r.note === "Edited") ? KEPT_EDITED : "supersede";
-}
-
-/** Why a Triage's own pending comment was retired once the person chose "I'll answer", as `ANSWERED_REASON` in `proposals.rs`. */
-export const ANSWERED_REASON = "Replaced by your answers to the open questions";
-
-/** Why it was retired once the person chose "Plan anyway", as `OVERRIDDEN_REASON` in `proposals.rs`. */
-export const OVERRIDDEN_REASON = "You chose to plan anyway, so this note no longer fits";
-
-/**
- * What the comment with the person's answers does to an older pending comment: the Triage's own note, which says the
- * ticket can't be sized, is replaced, and the person's edit keeps it. Another run kind's comment (an Investigate's findings)
- * is never touched. Null when `older` is not that: another ticket or workstream, not pending, or back in Pending after a
- * failed post (`error` is set). As `answers_supersession` in `proposals.rs`.
- */
-export function answersSupersession(older: Proposal, newer: Proposal, kindOf: (runId: string) => RunKind | null, isTriageDescription: (p: Proposal) => boolean = () => false): "supersede" | typeof KEPT_EDITED | null {
-  const ws = workstreamOf(newer);
-  if (!ws || !isAnswersDraft(newer) || !isTriageNote(older, isTriageDescription) || workstreamOf(older) !== ws || older.id === newer.id || older.state.type !== "pending" || older.error) return null;
-  const [on, to] = [targetOf(older.intent), targetOf(newer.intent)];
-  if (!on || !to || on.connectionId !== to.connectionId || on.externalId !== to.externalId || older.origin.type !== "run") return null;
-  if (kindOf(older.origin.runId) !== "triage") return null;
-  return older.revisions.some((r) => r.note === "Edited") ? KEPT_EDITED : "supersede";
-}
-
-/**
- * Whether `p` is what a finished Triage leaves for its ticket: its note as a comment, or the description update that puts the
- * note and its open questions in the description's `Triage` section (`isTriageDescription` says which drafts are that). As `is_triage_note`.
- */
-export const isTriageNote = (p: Proposal, isTriageDescription: (p: Proposal) => boolean) => isRunComment(p) || (p.origin.type === "run" && machineMade(p) && isTriageDescription(p));
-
 /** Whether `p` is a comment an agent run left for its ticket, other than a plan's: what a finished run drafts on its own. As `is_run_comment`. */
-export const isRunComment = (p: Proposal) => p.origin.type === "run" && p.intent.type === "comment" && machineMade(p) && !p.label?.startsWith(PLAN_COMMENT_LABEL) && p.label !== READINESS_COMMENT_LABEL;
+export const isRunComment = (p: Proposal) => p.origin.type === "run" && p.intent.type === "comment" && machineMade(p) && !p.label?.startsWith(PLAN_COMMENT_LABEL);
 
 /**
  * What a new run comment does to an older pending one, as `run_comment_supersession` in `proposals.rs`: the same ticket in
@@ -410,8 +312,6 @@ export function makerName(by: ProposalMaker): string {
       return "You";
     case "pip":
       return "Pip";
-    case "autopilot":
-      return "Autopilot";
     case "agent":
       return "An agent run";
     default:

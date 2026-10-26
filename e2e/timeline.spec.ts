@@ -1,27 +1,21 @@
 import { expect, test, type Page } from "@playwright/test";
 import { askPip, finishOnHome, homeConversation, homeConversationRegion, homeRunCards, homeSettled, inlineStart, mockRuns, openAgents, openApp, selectWorkstream, startWorkstream } from "./support/app";
 
-// New workstreams open in Manage, so the sample supervisor starts the routine next steps; pull requests show only when a test says.
-const MANAGED = "runs=empty&prSurface=manual&wsManage=1";
+// Pull requests show only when a test says.
+const SAMPLE = "runs=empty&prSurface=manual";
 
 const timeline = (page: Page) => homeConversationRegion(page).locator("[data-timeline]");
 
 /** The newest run of `kind`, as the sample backend holds it. */
 const newest = async (page: Page, kind: string) => (await mockRuns(page)).find((r) => r.kind === kind) ?? null;
 
-/** Waits for a rule to have started the next run of `kind`, and returns it. */
-async function started(page: Page, kind: string) {
-  await expect.poll(async () => (await newest(page, kind))?.id ?? null).not.toBeNull();
-  return (await newest(page, kind))!;
-}
-
 
 /**
- * A managed workstream on CA-401 opened on Pip home, its investigation asked of Pip and started in place: the chain's
+ * A workstream on CA-401 opened on Pip home, its investigation asked of Pip and started in place: the chain's
  * first run. Returns the investigation.
  */
 async function investigating(page: Page) {
-  await openApp(page, MANAGED);
+  await openApp(page, SAMPLE);
   await startWorkstream(page, "CA-401");
   await openAgents(page);
   await selectWorkstream(page, "CA-401");
@@ -31,7 +25,7 @@ async function investigating(page: Page) {
   const review = await inlineStart(page, homeRunCards(page, "CA-401").last());
   await review.getByRole("button", { name: "Start agent" }).click();
   await expect(review).toHaveCount(0);
-  return (await started(page, "investigate"))!;
+  return (await newest(page, "investigate"))!;
 }
 
 

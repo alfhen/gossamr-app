@@ -3,34 +3,22 @@ import { expect, type Locator, type Page } from "@playwright/test";
 /** The id of Pip's message input (PIP_INPUT_ID in src/workspace/PipPane.tsx). */
 export const PIP_INPUT = "#pip-input";
 
-/** Where the app's preferences are kept (KEY in src/workspace/prefs.ts). */
-const PREFS = "gossamr-prefs";
-
-/**
- * Makes this page's profile one whose person turned 'Start on Agents' off, so a load lands on the workspace with Agents
- * on too. Only a profile that hasn't chosen yet is changed, and its other preferences stay (the config seeds the
- * orientation card dismissed): whatever the app or the test saves afterwards stands, across reloads as well.
- */
-export async function landOnWorkspace(page: Page) {
-  await page.addInitScript((key) => {
-    let prefs: Record<string, unknown> = {};
-    try {
-      prefs = JSON.parse(localStorage.getItem(key) ?? "{}") ?? {};
-    } catch {
-      // Unreadable preferences are the app's to reset.
-    }
-    if (prefs.startOnAgents === undefined) localStorage.setItem(key, JSON.stringify({ ...prefs, startOnAgents: false }));
-  }, PREFS);
+/** The app lands on Agents once it is ready; this leaves it for the ticket screen, where most specs start. */
+export async function showWorkspace(page: Page) {
+  await expect(page).toHaveTitle("Agents — Gossamr");
+  await page.getByRole("button", { name: "All projects" }).click();
+  await page.mouse.move(700, 500);
+  await expect(page).toHaveTitle("Tickets — Gossamr");
 }
 
 /**
  * Opens the workspace in mock mode and waits for the sample tickets. `query` goes through as the page's search string, so mock
- * flags such as `runs=empty` reach mockOptionsFromUrl. Agents is where the app lands with Agents on; the specs here start
- * on the workspace, as a person who turned that off does (`landOnWorkspace`), and go to Agents when they mean to.
+ * flags such as `runs=empty` reach mockOptionsFromUrl. The app lands on Agents; the specs here start on the workspace
+ * (`showWorkspace`) and go to Agents when they mean to.
  */
 export async function openApp(page: Page, query = "") {
-  await landOnWorkspace(page);
   await page.goto(query ? `/?${query.replace(/^\?/, "")}` : "/");
+  await showWorkspace(page);
   await expect(page.getByText("CA-401", { exact: true }).first()).toBeVisible();
 }
 
@@ -72,13 +60,6 @@ export async function startWorkstream(page: Page, key: string) {
   await expect(pipConversation(page)).toHaveText(new RegExp(`^Workstream: ${key} .* · Intake$`));
 }
 
-/** Closes the one-time Agents safety sheet if a fresh profile's first agent action showed it. */
-export async function dismissAgentSafety(page: Page) {
-  const safety = page.getByRole("dialog", { name: "Agents safety and settings" });
-  if (await safety.isVisible()) await safety.getByRole("button", { name: "Close" }).click();
-  await expect(safety).toHaveCount(0);
-}
-
 /**
  * Steps the sample backend's scripted runs along `times` times (queued, launching, working, done): every unfinished run,
  * or only run `id`. It goes through `__gossamrMock`, which the sample backend sets in a dev browser (exposeMockClock in
@@ -111,7 +92,7 @@ type Script = { planRecommended?: boolean; ready?: boolean; questions?: string[]
 /** The restriction a read-only run is launched with (`ReadOnly` in src/types.ts). */
 export type ReadOnly = { mode: string; allow: string[]; deny: string[]; guard: string };
 /** One launch as the mock launcher made it (`MockLaunch` in src/backend/mockRuns.ts). */
-export type MockLaunch = { runId: string; kind: string; readOnly: ReadOnly | null; guard: string; autoStart: string | null; at: string };
+export type MockLaunch = { runId: string; kind: string; readOnly: ReadOnly | null; guard: string; at: string };
 interface Handle {
   runs(): { id: string; kind: string; state: string; prSha: string | null; passes: number; key: string | null; shortId: string | null; digest: string; name: string }[];
   launches(): MockLaunch[];
@@ -125,10 +106,8 @@ interface Handle {
   attached(): string[];
   jiraWrites(): { proposalId: string; type: string; key: string | null; text?: string }[];
   reviewDrafts(): ReviewDraftRow[];
-  setBudget(id: string, budget: { autoTurns?: number | null; wakes?: number | null }): void;
   seedWorkstreamEvent(key: string, event: { actor: string; action: string; at: string; runId?: string | null; proposalId?: string | null; detail?: string | null }): void;
-  backdateWorkstream(key: string, days: number): void;
-  holdWorkstream(key: string, reason: string): void;
+  pauseWorkstream(key: string, reason: "person" | "ceiling"): void;
   holdPip(on: boolean): void;
   pipIdle(): boolean;
   editTicket(key: string, change: TicketEdit): void;
@@ -310,17 +289,6 @@ export const loseNextReviewAnswer = (page: Page, kept: boolean) =>
     { kept, missing: NO_MOCK },
   );
 
-/** Sets workstream `id`'s own limits for automatic turns and wakes. */
-export const setBudget = (page: Page, id: string, budget: { autoTurns?: number | null; wakes?: number | null }) =>
-  page.evaluate(
-    ({ id, budget, missing }) => {
-      const mock = (globalThis as Mocked).__gossamrMock;
-      if (!mock) throw new Error(missing);
-      mock.setBudget(id, budget);
-    },
-    { id, budget, missing: NO_MOCK },
-  );
-
 /**
  * Adds an audit line to the open workstream on ticket `key` as of `at` (an ISO time), the way to age what depends on the time
  * since: the sample backend's clock is the browser's, which a test can't move.
@@ -335,17 +303,6 @@ export const seedWorkstreamEvent = (page: Page, key: string, event: { actor: str
     { key, event, missing: NO_MOCK },
   );
 
-/** Makes the open workstream on ticket `key` `days` days older: it opened that much earlier. */
-export const backdateWorkstream = (page: Page, key: string, days: number) =>
-  page.evaluate(
-    ({ key, days, missing }) => {
-      const mock = (globalThis as Mocked).__gossamrMock;
-      if (!mock) throw new Error(missing);
-      mock.backdateWorkstream(key, days);
-    },
-    { key, days, missing: NO_MOCK },
-  );
-
 /** Changes sample ticket `key` as someone editing it in Jira would: its summary, description or status (an id or a name). */
 export const editTicket = (page: Page, key: string, change: TicketEdit) =>
   page.evaluate(
@@ -357,26 +314,15 @@ export const editTicket = (page: Page, key: string, change: TicketEdit) =>
     { key, change, missing: NO_MOCK },
   );
 
-/** Someone else comments on sample ticket `key` as in Jira (the reporter answering): `by` is a person's id in the sample, Mette by default; the signed-in person's own comments are "me". */
-export const commentOnTicket = (page: Page, key: string, text: string, by?: string) =>
+/** Pauses the open workstream on ticket `key` as the system does at its daily ceiling of Pip wakes: a pause that Resume lifts. */
+export const pauseAtCeiling = (page: Page, key: string) =>
   page.evaluate(
-    ({ key, text, by, missing }) => {
+    ({ key, missing }) => {
       const mock = (globalThis as Mocked).__gossamrMock;
       if (!mock) throw new Error(missing);
-      mock.commentOnTicket(key, text, by);
+      mock.pauseWorkstream(key, "ceiling");
     },
-    { key, text, by, missing: NO_MOCK },
-  );
-
-/** Holds the open workstream on ticket `key` as the system would, for `reason` ("restart", "budget", "daily_cap", ...): the holds that are a need, unlike the person's own Hold. */
-export const holdBySystem = (page: Page, key: string, reason: string) =>
-  page.evaluate(
-    ({ key, reason, missing }) => {
-      const mock = (globalThis as Mocked).__gossamrMock;
-      if (!mock) throw new Error(missing);
-      mock.holdWorkstream(key, reason);
-    },
-    { key, reason, missing: NO_MOCK },
+    { key, missing: NO_MOCK },
   );
 
 /** Makes the scripted Pip wait, still answering, after it starts each turn (`on`), or lets it go on: a turn to act on while it runs. */
@@ -390,32 +336,12 @@ export const holdPip = (page: Page, on: boolean) =>
     { on, missing: NO_MOCK },
   );
 
-/** The Manage switch of the workstream the Pip pane shows. */
-export const manageSwitch = (page: Page) => pipPane(page).getByRole("switch", { name: "Manage this workstream" });
-
-/** Turns Manage on (or off) for the workstream the Pip pane shows, as the person does with its switch. */
-export async function setManage(page: Page, on = true) {
-  const control = manageSwitch(page);
-  if ((await control.getAttribute("aria-checked")) !== String(on)) await control.click();
-  await expect(control).toHaveAttribute("aria-checked", String(on));
-}
-
 /** Pip's wake turns in the pane, the ones nobody asked; `wakeTurns` counts them. */
 export const wakes = (page: Page) => pipPane(page).locator('[data-turn-kind="wake"]');
 export const wakeTurns = (page: Page) => wakes(page).count();
 
-/** The banner saying why the pane's workstream is held, with its Resume. */
-export const heldBanner = (page: Page) => pipPane(page).locator("[data-held-banner]");
-
-/** Presses Hold all: the rail's button, or Cmd/Ctrl+Shift+Period. */
-export async function holdAll(page: Page, by: "button" | "shortcut" = "button") {
-  if (by === "button") await page.getByRole("button", { name: "Hold all workstreams" }).click();
-  else {
-    // From outside any field, as the shortcut does nothing while the person types.
-    await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
-    await page.keyboard.press("ControlOrMeta+Shift+Period");
-  }
-}
+/** The banner saying why the pane's workstream is paused, with its Resume. */
+export const pausedBanner = (page: Page) => pipPane(page).locator("[data-paused-banner]");
 
 /** The Agents view (src/workspace/AgentsView.tsx): the summary chips, the workstreams with their agents, and a workstream's detail beside them. */
 export const agentsHome = (page: Page) => page.locator("[data-agents-home]");
@@ -431,12 +357,13 @@ export async function openAgents(page: Page) {
   }).toPass({ timeout: 10_000 });
 }
 
-/** Asks for the day's card over the Agents list from the palette, as Agents no longer shows it by itself. */
-export async function startMyDay(page: Page) {
+/** Opens "What Jira saw from me" from the palette. */
+export async function openJiraSent(page: Page) {
   await page.keyboard.press("ControlOrMeta+k");
-  await page.getByRole("dialog", { name: "Command palette" }).getByRole("combobox").fill("start my day");
-  await page.getByRole("dialog", { name: "Command palette" }).getByRole("option", { name: /^Start my day/ }).click();
-  await expect(agentsHome(page).locator("[data-start-my-day]")).toBeVisible();
+  const palette = page.getByRole("dialog", { name: "Command palette" });
+  await palette.getByRole("combobox").fill("what jira saw");
+  await palette.getByRole("option", { name: /^What Jira saw from me/ }).click();
+  await expect(page.locator("[data-jira-sent]")).toBeVisible();
 }
 
 /** Groups the Agents list by state, its lanes, which Agents does not do by default (it groups by workstream). */
@@ -501,10 +428,6 @@ export async function expectPeekInPlace(page: Page) {
 /** Pip's composer input, the only Pip input on screen. */
 export const homeComposer = (page: Page) => page.locator(PIP_INPUT);
 
-/** The cobweb on a workstream's heading in the Agents list: its drawing and its words for a screen reader (`data-workstream-wither`). */
-export const workstreamWeb = (page: Page, key: string) => workstreamGroup(page, key).locator("svg.cobweb");
-export const workstreamWebText = (page: Page, key: string) => workstreamGroup(page, key).locator("[data-workstream-wither]");
-
 /** The summary at the top of the Agents view: its filter chips (Needs you, Ready to review, Failed or stuck, All). */
 export const needsYouTray = (page: Page) => agentsHome(page).locator("[data-summary-chips]");
 
@@ -526,7 +449,18 @@ export const needsStack = (page: Page) => workstreamSheet(page).locator("[data-w
 /** A need in the open detail's Needs you section, by the words it reads; pressing it opens it. */
 export const needRow = (page: Page, name: string | RegExp) => workstreamSheet(page).locator("[data-needs-pane]").filter({ hasText: name }).locator("[data-need-row]");
 
-/** The need of `kind` ("permission", "question", "failure", "escalation", "hold", "draft", ...) in the open detail. */
+/**
+ * With a workstream open on Agents, asks Pip for a comment on its ticket and opens that draft in the decision pane.
+ * Returns the draft's card; nothing is posted.
+ */
+export async function pipCommentDraft(page: Page, key: string) {
+  await askPip(page, "Draft a comment");
+  await homeSettled(page);
+  await needRow(page, /Draft comment/).click();
+  return needsPane(page).getByRole("article", { name: `Comment on ${key}` });
+}
+
+/** The need of `kind` ("permission", "question", "failure", "paused", "draft", ...) in the open detail. */
 export const needOfKind = (page: Page, kind: string) => workstreamSheet(page).locator(`[data-needs-pane][data-kind="${kind}"] [data-need-row]`).first();
 
 /**
@@ -581,11 +515,6 @@ export const stepRail = (page: Page) => workstreamSheet(page);
 /** The chip of step `kind` (investigate, triage, plan, build, review, verify) on the step rail, with what it opens to. */
 export const stepChip = (page: Page, kind: string) => stepRail(page).locator(`[data-step="${kind}"]`);
 
-/** Waits until the sample backend has said whether Agents are on: the rail's Agents button shows or goes. */
-export async function agentsSettled(page: Page, on = true) {
-  await expect(page.getByRole("button", { name: /^Agents/ })).toHaveCount(on ? 1 : 0);
-}
-
 /** Whether the scripted Pip has no turn running or waiting anywhere, a wake the supervisor queued included. */
 export const pipIdle = (page: Page) =>
   page.evaluate((missing) => {
@@ -637,32 +566,22 @@ export async function finishOnHome(page: Page, id: string) {
 export const homeRunCards = (page: Page, key: string) => homeConversationRegion(page).getByRole("article", { name: `Start an agent: ${key}` });
 
 /**
- * Opens the 'Review and start' of run draft `card`, past the safety sheet a fresh profile shows once at its first agent
- * action, and returns the review as shown: in place under a card on Agents (the decision pane, a workstream's detail), or,
- * from the Pip drawer's narrow card, the setup sheet. `by: "keyboard"` presses Enter on the card instead of clicking its
- * button; the card must have keyboard focus then, and `refocus` brings it back after the safety sheet.
+ * Opens the 'Review and start' of run draft `card` and returns the review as shown: in place under a card on Agents
+ * (the decision pane, a workstream's detail), or, from the Pip drawer's narrow card, the setup sheet. `by: "keyboard"`
+ * presses Enter on the card instead of clicking its button; the card must have keyboard focus then.
  */
-export async function inlineStart(page: Page, card: Locator, by: "click" | "keyboard" = "click", refocus: () => Promise<void> = () => card.focus()) {
+export async function inlineStart(page: Page, card: Locator, by: "click" | "keyboard" = "click") {
   // The drawer's card opens the setup sheet; the same draft read in place is the one Needs you opens.
   if (by === "click" && (await card.evaluate((el) => !!el.closest("[data-pip-root]")))) {
     await openNeedOfKind(page, "runStart");
     card = needsPane(page);
   }
-  const safety = page.getByRole("dialog", { name: "Agents safety and settings" });
   const inPlace = card.getByRole("group", { name: "Review and start" });
   const setup = page.getByRole("dialog", { name: "Start an agent" });
   const review = inPlace.or(setup);
-  for (let attempt = 0; attempt < 2; attempt++) {
-    if (by === "click") await card.getByRole("button", { name: /^Review and start( →)?$/ }).click();
-    else await page.keyboard.press("Enter");
-    await expect(review.or(safety)).toBeVisible();
-    if (!(await safety.isVisible())) break;
-    // The safety sheet takes Esc like any sheet, and hands focus back to where it was.
-    if (by === "click") await safety.getByRole("button", { name: "Close" }).click();
-    else await page.keyboard.press("Escape");
-    await expect(safety).toHaveCount(0);
-    if (by === "keyboard") await refocus();
-  }
+  if (by === "click") await card.getByRole("button", { name: /^Review and start( →)?$/ }).click();
+  else await page.keyboard.press("Enter");
+  await expect(review).toBeVisible();
   // Open in place, the review has its own Start and Hide; the card's own button is hidden meanwhile.
   if (await inPlace.count()) await expect(card.getByRole("button", { name: "Review and start", exact: true })).toHaveCount(0);
   return review;
@@ -699,7 +618,6 @@ export async function expectVisibleFocus(page: Page) {
 }
 
 const agentSetup = (page: Page) => page.getByRole("dialog", { name: "Start an agent" });
-const agentSafety = (page: Page) => page.getByRole("dialog", { name: "Agents safety and settings" });
 /** The Agents view's cards; Pip's strip of agents shows runs too, and only the view counts. */
 const agentCards = (page: Page) => page.locator('main article[data-run-id]:not(aside[aria-label="Pip"] *):not(#workstream-sheet *)');
 const agentRunIds = async (page: Page) => (await agentCards(page).evaluateAll((els) => els.map((e) => e.getAttribute("data-run-id")))).filter((id): id is string => !!id);
@@ -709,21 +627,16 @@ const agentRunIds = async (page: Page) => (await agentCards(page).evaluateAll((e
  * advances it to done, and opens CA-402's peek, where its GitHub review draft waits. `query` is added to the page's.
  */
 export async function reviewedDraft(page: Page, query = "") {
-  await landOnWorkspace(page);
   await page.goto(`/?mockRepos=14${query}`);
   await page.getByRole("button", { name: "Start watching" }).click();
+  await showWorkspace(page);
   await expect(page.getByText("CA-401", { exact: true }).first()).toBeVisible();
   await page.getByRole("button", { name: /^Agents/ }).click();
   await expect(agentCards(page).first()).toBeVisible();
   const before = await agentRunIds(page);
   const build = agentCards(page).filter({ hasText: "Build" }).filter({ hasText: "CA-402" });
-  for (let attempt = 0; attempt < 2; attempt++) {
-    await build.getByRole("button", { name: "Review this" }).click();
-    await expect(agentSetup(page).or(agentSafety(page))).toBeVisible();
-    if (!(await agentSafety(page).isVisible())) break;
-    await agentSafety(page).getByRole("button", { name: "Close" }).click();
-    await expect(agentSafety(page)).toHaveCount(0);
-  }
+  await build.getByRole("button", { name: "Review this" }).click();
+  await expect(agentSetup(page)).toBeVisible();
   await agentSetup(page).getByRole("button", { name: "Start agent" }).click();
   await expect(agentSetup(page)).toHaveCount(0);
   await expect.poll(async () => (await agentRunIds(page)).length).toBe(before.length + 1);

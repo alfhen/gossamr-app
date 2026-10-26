@@ -2,21 +2,15 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MockBackend } from "../backend/mock";
 import { useWorkspace } from "../workspaceStore";
-import { useAgentsFlag } from "./agentsFlag";
-import { HOLD_ALL_HINT } from "./commands";
 import { AGENTS_TRAY_NOTE, Rail, RailTip } from "./Rail";
 
 describe("the icon rail's names", () => {
-  let enabled: boolean;
   beforeEach(async () => {
     vi.stubGlobal("localStorage", { getItem: () => null, setItem: () => {}, removeItem: () => {} });
     await useWorkspace.getState().init(new MockBackend());
     Object.assign(useWorkspace.getInitialState(), useWorkspace.getState());
-    enabled = useAgentsFlag.getInitialState().enabled;
-    Object.assign(useAgentsFlag.getInitialState(), { enabled: true });
   });
   afterEach(() => {
-    Object.assign(useAgentsFlag.getInitialState(), { enabled });
     vi.unstubAllGlobals();
   });
 
@@ -34,7 +28,6 @@ describe("the icon rail's names", () => {
     const at = { x: 60, y: 20 };
     expect(renderToStaticMarkup(<RailTip label="Search and jump" hint="⌘K" at={at} />)).toMatch(/role="tooltip"[^>]*>Search and jump<kbd[^>]*>⌘K<\/kbd>/);
     expect(renderToStaticMarkup(<RailTip label="Agents" note={AGENTS_TRAY_NOTE} at={at} />)).toContain(AGENTS_TRAY_NOTE);
-    expect(renderToStaticMarkup(<RailTip label="Hold all workstreams" hint={HOLD_ALL_HINT} at={at} />)).toContain(HOLD_ALL_HINT);
     // A screen with no shortcut shows its name alone.
     expect(renderToStaticMarkup(<RailTip label="Settings" at={at} />)).not.toContain("<kbd");
   });

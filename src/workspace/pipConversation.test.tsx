@@ -7,13 +7,12 @@ import type { Intent, Proposal, RunSpec, WorkstreamView, Run, WorkContainer, Wor
 import { useWorkspace } from "../workspaceStore";
 import { draftDecisions } from "./DraftPreview";
 import { DRAFT_CARD, onDraftCardKey, stepDraftCards, upToNewestDraft } from "./draftKeys";
-import { CommandsList, Composer, GENERAL_RUN_REF_NOTE, commandHelp, ComposerFooter, GENERAL_CONVERSATION, MANAGE_NOTE, PipConversation, draftsForTicket, otherTicketsRow, VerbNote, showPlanUpdate, composerVerb, inputAfterCommand, openWakeRun, outcomeBelongs, keepUnsentInput, unsentInputOf, wakeHeader, wakeIsLong, wakeParts, workstreamConversation, workstreamIntro } from "./PipConversation";
+import { CommandsList, Composer, GENERAL_RUN_REF_NOTE, commandHelp, ComposerFooter, GENERAL_CONVERSATION, PipConversation, draftsForTicket, otherTicketsRow, VerbNote, composerVerb, inputAfterCommand, openWakeRun, outcomeBelongs, keepUnsentInput, unsentInputOf, wakeHeader, wakeIsLong, wakeParts, workstreamConversation, workstreamIntro } from "./PipConversation";
 import { useWorkView } from "./workViewStore";
 import { useTabs } from "./tabsStore";
 import { useRuns } from "./runsStore";
 import { useWorkstreams } from "./workstreamsStore";
 import { useToasts } from "./toasts";
-import { useAgentsFlag } from "./agentsFlag";
 import { MockBackend } from "../backend/mock";
 import { GENERAL_CONVERSATION as FROM_PANE, PIP_INPUT_ID } from "./PipPane";
 import { Markdown } from "../components/Markdown";
@@ -117,7 +116,7 @@ describe("PipConversation", () => {
     const [a, b] = runs.slice(0, 2).map((r, i) => ({ ...r, id: `run-${i + 1}`, queuedAt: `2026-09-30T1${i}:00:00Z`, spec: { ...r.spec, workstream: "ws-1" } }));
     useRuns.setState({ runs: [a, b] });
     useRuns.getInitialState().runs = [a, b];
-    const wake: Turn = { requestId: "wake-1", kind: "wake", prompt: `[Event] run ${b.id} (triage) Done; plan recommended: yes`, steps: [], text: "R2 finished. Plan R3 is queued to start automatically.", status: "done", error: null };
+    const wake: Turn = { requestId: "wake-1", kind: "wake", prompt: `[Event] run ${b.id} (triage) Done; plan recommended: yes`, steps: [], text: "R2 finished. I drafted a plan for you to start.", status: "done", error: null };
     setTurns({ [workstreamConversation("ws-1")]: { sessionId: "s1", turns: [turn("q1", "Investigate it", "Drafted."), wake] } });
     const html = renderToStaticMarkup(<PipConversation conversation={workstreamConversation("ws-1")} proposals={[]} />);
     useRuns.getInitialState().runs = [];
@@ -125,7 +124,7 @@ describe("PipConversation", () => {
     expect(html.replace(/<[^>]+>/g, "")).toContain("Pip picked this up: run R2 finished");
     // The run is named by a button that opens it.
     expect(html).toMatch(/<button type="button" data-wake-run="run-2"[^>]*>run R2<\/button> finished/);
-    expect(html).toContain("Plan R3 is queued to start automatically.");
+    expect(html).toContain("I drafted a plan for you to start.");
     expect(html).not.toContain("[Event]");
     expect(html.match(/bg-ws-accent px-3/g)).toHaveLength(1);
   });
@@ -224,72 +223,56 @@ describe("PipConversation", () => {
     expect(html).not.toMatch(/<article[^>]*class="[^"]*(?<![\w:-])outline-none/);
   });
 
-  it("opens a workstream's empty conversation with one sentence on what it is for and one button, and General with its own words", () => {
+  it("opens a workstream's empty conversation with one sentence on what it is for, and General with its own words", () => {
     setTurns({});
-    const ws = renderToStaticMarkup(<PipConversation conversation={workstreamConversation("ws-404")} proposals={[]} primary="Investigate CA-404" />);
+    const ws = renderToStaticMarkup(<PipConversation conversation={workstreamConversation("ws-404")} proposals={[]} />);
     expect(ws).toContain("data-empty-workstream");
     const intro = /<p data-empty-workstream="true"[^>]*>([^<]*)<\/p>/.exec(ws)?.[1] ?? "";
     expect(intro).toBe("Everything for this ticket stays here: its agents, drafts and our conversation.");
     expect(ws).not.toContain("/stop");
-    expect(ws).toMatch(/<button type="button" data-intro-action="true"[^>]*class="[^"]*from-ws-pip[^"]*">Investigate CA-404<\/button>/);
     expect(ws).not.toContain("I follow along as you move around");
-    // With no suggestion to make there is no button.
-    expect(renderToStaticMarkup(<PipConversation conversation={workstreamConversation("ws-404")} proposals={[]} />)).not.toContain("data-intro-action");
-    const general = renderToStaticMarkup(<PipConversation conversation={GENERAL_CONVERSATION} proposals={[]} primary="Catch me up" />);
+    const general = renderToStaticMarkup(<PipConversation conversation={GENERAL_CONVERSATION} proposals={[]} />);
     expect(general).toContain("I follow along as you move around");
     expect(general).not.toContain("data-empty-workstream");
-    expect(general).not.toContain("data-intro-action");
   });
 
-  it("names the workstream's ticket in its intro, and leaves Manage's rules and the commands to the Commands popover", () => {
+  it("names the workstream's ticket in its intro, and leaves the commands to the Commands popover", () => {
     setTurns({});
     expect(workstreamIntro({ itemKey: "CA-401", title: "CA-401 Welcome flow refresh" })).toBe("Everything for CA-401 Welcome flow refresh stays here: its agents, drafts and our conversation.");
     expect(workstreamIntro({ itemKey: "CA-401", title: "Welcome flow refresh" })).toBe("Everything for CA-401 Welcome flow refresh stays here: its agents, drafts and our conversation.");
     expect(workstreamIntro({ itemKey: null, title: "Tidy the docs" })).toBe("Everything for Tidy the docs stays here: its agents, drafts and our conversation.");
     const before = useWorkstreams.getInitialState().list;
-    const ws = (mode: "advise" | "manage"): WorkstreamView => ({
-      workstream: { id: "ws-405", connectionId: "mock", itemKey: "CA-405", repo: null, title: "CA-405 Export fix", pipSession: null, mode, heldReason: null, notes: null, createdAt: "2026-10-01T10:00:00Z", closedAt: null, budget: { autoTurns: null, wakes: null, tokens: null }, spent: { autoTurns: 0, wakes: 0, tokens: 0 }, rules: {}, basis: null },
+    const ws: WorkstreamView = {
+      workstream: { id: "ws-405", connectionId: "mock", itemKey: "CA-405", repo: null, title: "CA-405 Export fix", pipSession: null, pausedReason: null, notes: null, createdAt: "2026-10-01T10:00:00Z", closedAt: null, basis: null },
       stage: "intake",
       runs: [],
       labels: [],
-      budget: { autoTurns: { used: 0, limit: 6 }, wakes: { used: 0, limit: 12 }, level: "ok" },
-    });
-    const intro = (mode: "advise" | "manage") => {
-      // Rendered on the server, a store is read through its initial state.
-      useWorkstreams.getInitialState().list = [ws(mode)];
-      return renderToStaticMarkup(<PipConversation conversation={workstreamConversation("ws-405")} proposals={[]} />);
     };
     try {
-      for (const mode of ["advise", "manage"] as const) {
-        const html = intro(mode);
-        expect(html).toContain("Everything for CA-405 Export fix stays here");
-        expect(html).not.toContain("fixed rules");
-        expect(html).not.toContain("/stop");
-        // One sentence.
-        expect(/<p data-empty-workstream="true"[^>]*>([^<]*)<\/p>/.exec(html)?.[1].match(/[.!?](\s|$)/g)).toHaveLength(1);
-      }
+      // Rendered on the server, a store is read through its initial state.
+      useWorkstreams.getInitialState().list = [ws];
+      const html = renderToStaticMarkup(<PipConversation conversation={workstreamConversation("ws-405")} proposals={[]} />);
+      expect(html).toContain("Everything for CA-405 Export fix stays here");
+      expect(html).not.toContain("fixed rules");
+      expect(html).not.toContain("/stop");
+      // One sentence.
+      expect(/<p data-empty-workstream="true"[^>]*>([^<]*)<\/p>/.exec(html)?.[1].match(/[.!?](\s|$)/g)).toHaveLength(1);
     } finally {
       useWorkstreams.getInitialState().list = before;
     }
-    const managed = renderToStaticMarkup(<CommandsList workstream manage />);
-    expect(managed).toContain(MANAGE_NOTE);
-    expect(MANAGE_NOTE).toContain("routine next steps start on their own by fixed rules");
-    expect(MANAGE_NOTE).toContain("I start nothing myself");
-    expect(MANAGE_NOTE).toContain("every change to Jira still waits for you");
-    expect(renderToStaticMarkup(<CommandsList workstream manage={false} />)).not.toContain("data-manage-note");
   });
 
-  it("lists the commands in the popover: the run commands everywhere, /hold and /resume in a workstream, R1 only there", () => {
-    const ws = renderToStaticMarkup(<CommandsList workstream manage={false} />);
-    for (const usage of ["/stop R1", "/retry R1", "/answer R1 your answer", "/hold", "/resume"]) expect(ws).toContain(`>${usage}</dt>`);
+  it("lists the commands in the popover: the run commands everywhere, /pause and /resume in a workstream, R1 only there", () => {
+    const ws = renderToStaticMarkup(<CommandsList workstream />);
+    for (const usage of ["/stop R1", "/retry R1", "/answer R1 your answer", "/pause", "/resume"]) expect(ws).toContain(`>${usage}</dt>`);
     expect(ws).toContain("R1 is a run in this workstream; a run&#x27;s id works anywhere.");
     // Outside a workstream, where cards show no R labels, the examples name a run by its id and say what R1 is.
-    const general = renderToStaticMarkup(<CommandsList workstream={false} manage={false} />);
+    const general = renderToStaticMarkup(<CommandsList workstream={false} />);
     for (const usage of ["/stop &lt;run id&gt;", "/retry &lt;run id&gt;", "/answer &lt;run id&gt; your answer"]) expect(general).toContain(`>${usage}</dt>`);
     expect(general).not.toMatch(/>\/\w+ R1/);
     expect(general).toContain("A run&#x27;s id is on its card in Agents, and at the top of its sheet (Open on a card under Your agents). R1, R2… are the names a workstream gives its runs, and work in its conversation.");
     expect(general).not.toContain("R1 is a run in this workstream");
-    expect(general).not.toContain('data-command="hold"');
+    expect(general).not.toContain('data-command="pause"');
     expect(general).not.toContain('data-command="resume"');
   });
 
@@ -297,7 +280,7 @@ describe("PipConversation", () => {
     const attached = { images: [], add: async () => {}, remove: () => {}, take: () => [] } as unknown as Parameters<typeof Composer>[0]["attached"];
     const a = workstreamConversation("ws-a");
     const b = workstreamConversation("ws-b");
-    const render = (conversation: string) => renderToStaticMarkup(<Composer conversation={conversation} attached={attached} chips={[]} looking="the board" scene={{ itemKey: null, route: "agents", runOpen: false, workstream: true }} />);
+    const render = (conversation: string) => renderToStaticMarkup(<Composer conversation={conversation} attached={attached} looking="the board" scene={{ itemKey: null, route: "agents", runOpen: false, workstream: true }} />);
     try {
       keepUnsentInput(a, "half a thought about A");
       expect(render(a)).toContain('value="half a thought about A"');
@@ -314,24 +297,13 @@ describe("PipConversation", () => {
     }
   });
 
-  it("offers the Commands button beside the input only while Agents are on", () => {
+  it("offers the Commands button beside the input", () => {
     const attached = { images: [], add: async () => {}, remove: () => {}, take: () => [] } as unknown as Parameters<typeof Composer>[0]["attached"];
-    const flag = useAgentsFlag.getInitialState();
-    const was = flag.enabled;
-    const render = (on: boolean) => {
-      flag.enabled = on;
-      return renderToStaticMarkup(<Composer conversation={workstreamConversation("ws-1")} attached={attached} chips={[]} looking="the board" scene={{ itemKey: null, route: "agents", runOpen: false, workstream: true }} />);
-    };
-    try {
-      const on = render(true);
-      expect(on).toMatch(/<button type="button" data-popover-trigger="true" aria-label="Commands" aria-haspopup="dialog" aria-expanded="false"[^>]*>\?<\/button>/);
-      expect(on.indexOf('aria-label="Commands"')).toBeGreaterThan(on.indexOf('id="pip-input"'));
-      // Closed, the commands themselves aren't on screen.
-      expect(on).not.toContain("/stop R1");
-      expect(render(false)).not.toContain('aria-label="Commands"');
-    } finally {
-      flag.enabled = was;
-    }
+    const on = renderToStaticMarkup(<Composer conversation={workstreamConversation("ws-1")} attached={attached} looking="the board" scene={{ itemKey: null, route: "agents", runOpen: false, workstream: true }} />);
+    expect(on).toMatch(/<button type="button" data-popover-trigger="true" aria-label="Commands" aria-haspopup="dialog" aria-expanded="false"[^>]*>\?<\/button>/);
+    expect(on.indexOf('aria-label="Commands"')).toBeGreaterThan(on.indexOf('id="pip-input"'));
+    // Closed, the commands themselves aren't on screen.
+    expect(on).not.toContain("/stop R1");
   });
 
   describe("commands in the composer", () => {
@@ -352,7 +324,7 @@ describe("PipConversation", () => {
       useRuns.setState({ backend: backend as never, runs: [linked()] });
       setTurns({ [ws]: { sessionId: null, turns: [turn("w1", "Earlier", "Answer")] } });
       const ask = vi.spyOn(useClaude.getState(), "ask");
-      const outcome = await composerVerb("/stop R1", ws, true);
+      const outcome = await composerVerb("/stop R1", ws);
       expect(outcome).toEqual({ ok: true, message: "Stopped R1" });
       expect(backend.runsStop).toHaveBeenCalledWith("run-ws-1");
       expect(ask).not.toHaveBeenCalled();
@@ -360,16 +332,6 @@ describe("PipConversation", () => {
       // Told once, in the note under the input, not again as a toast.
       expect(useToasts.getState().toasts).toEqual([]);
       ask.mockRestore();
-    });
-
-    it("leaves everything to Pip while Agents are off, as the composer was before agents", () => {
-      const backend = fake();
-      useRuns.setState({ backend: backend as never, runs: [linked()] });
-      for (const text of ["/stop R1", "/retry R1", "/answer R1 yes", "/nudge R1"]) {
-        expect(composerVerb(text, ws, false)).toBeNull();
-        expect(composerVerb(text, GENERAL_CONVERSATION, false)).toBeNull();
-      }
-      expect(backend.runsStop).not.toHaveBeenCalled();
     });
 
     it("keeps what was typed when a command is refused, and clears it when it worked unless more was typed since", () => {
@@ -388,10 +350,10 @@ describe("PipConversation", () => {
     it("says what is wrong without calling anything, and lets a question through", async () => {
       const backend = fake();
       useRuns.setState({ backend: backend as never, runs: [linked()] });
-      expect(await composerVerb("/stop R9", ws, true)).toEqual({ ok: false, message: "No run R9 in this workstream" });
-      expect(await composerVerb("/answer R1", ws, true)).toMatchObject({ ok: false, message: expect.stringMatching(/^Say what to answer/) });
+      expect(await composerVerb("/stop R9", ws)).toEqual({ ok: false, message: "No run R9 in this workstream" });
+      expect(await composerVerb("/answer R1", ws)).toMatchObject({ ok: false, message: expect.stringMatching(/^Say what to answer/) });
       expect(backend.runsStop).not.toHaveBeenCalled();
-      expect(composerVerb("investigate this", ws, true)).toBeNull();
+      expect(composerVerb("investigate this", ws)).toBeNull();
     });
 
     it("shows the outcome as a muted note under the input", () => {
@@ -407,12 +369,12 @@ describe("PipConversation", () => {
     const at = (requestId: string, prompt: string, status: Turn["status"], error: string | null = null): Turn => ({ requestId, prompt, steps: [], text: "", status, error });
     const attached = { images: [], add: async () => {}, remove: () => {}, take: () => [] } as unknown as Parameters<typeof Composer>[0]["attached"];
     const composer = () =>
-      renderToStaticMarkup(<Composer conversation={GENERAL_CONVERSATION} attached={attached} chips={["What is stale?"]} looking="the board" scene={{ itemKey: null, route: "workspace", runOpen: false }} />);
+      renderToStaticMarkup(<Composer conversation={GENERAL_CONVERSATION} attached={attached} looking="the board" scene={{ itemKey: null, route: "workspace", runOpen: false }} />);
 
     it("renders a footer under the input only when given one, as a muted status line", () => {
       expect(composer()).not.toContain("data-composer-footer");
       const html = renderToStaticMarkup(
-        <Composer conversation={GENERAL_CONVERSATION} attached={attached} chips={[]} looking="the board" scene={{ itemKey: null, route: "agents", runOpen: false }} footer="4 agents working · 2 need you" />,
+        <Composer conversation={GENERAL_CONVERSATION} attached={attached} looking="the board" scene={{ itemKey: null, route: "agents", runOpen: false }} footer="4 agents working · 2 need you" />,
       );
       expect(html).toMatch(/<p data-composer-footer="true" class="[^"]*text-ws-ink3[^"]*">4 agents working · 2 need you<\/p>/);
       expect(html.indexOf("data-composer-footer")).toBeGreaterThan(html.indexOf('id="pip-input"'));
@@ -445,14 +407,11 @@ describe("PipConversation", () => {
       expect(html).not.toContain('aria-label="Remove this question"');
     });
 
-    it("keeps the input and Ask next to Stop while Pip answers, and the chips until a question waits", () => {
+    it("keeps the input and Ask next to Stop while Pip answers", () => {
       setTurns({ [GENERAL_CONVERSATION]: { sessionId: null, turns: [at("r1", "First", "running")] } });
       const running = composer();
       expect(running).toMatch(/>Stop<\/button><button type="submit"[^>]*>Ask<\/button>/);
-      expect(running).toContain("What is stale?");
       expect(running).not.toMatch(/<input id="pip-input"[^>]*disabled/);
-      setTurns({ [GENERAL_CONVERSATION]: { sessionId: null, turns: [at("r1", "First", "running"), at("r2", "Second", "queued")] } });
-      expect(composer()).not.toContain("What is stale?");
       setTurns({ [GENERAL_CONVERSATION]: { sessionId: null, turns: [at("r1", "First", "done")] } });
       const idle = composer();
       expect(idle).not.toContain(">Stop<");
@@ -636,41 +595,6 @@ describe("ticket links", () => {
       }
       expect(await b.peekItem(ref("CA-9999"))).toBeNull();
     });
-  });
-});
-
-describe("'Show me the plan update'", () => {
-  const ws = { workstream: { id: "ws-9", itemKey: "CA-412", connectionId: "mock", title: "CA-412 Fix it", mode: "manage", heldReason: null, closedAt: null }, stage: "plan", runs: ["r-plan"], labels: [["r-plan", "R1"]] } as unknown as WorkstreamView;
-  const plan = { id: "r-plan", item: itemRef("CA-412"), spec: { ...spec, kind: "plan", workstream: "ws-9" }, state: "done" } as unknown as Run;
-  const rewrite = draft("p-plan", { type: "rewrite", item: itemRef("CA-412"), part: "description" } as unknown as Intent, { origin: { type: "run", runId: "r-plan", shortId: null } });
-  const before = { list: useWorkstreams.getState().list, runs: useRuns.getState().runs, proposals: useWorkspace.getState().proposals };
-  beforeEach(() => {
-    useWorkstreams.setState({ list: [ws] });
-    useRuns.setState({ runs: [plan] });
-    useWorkspace.setState({ proposals: { [rewrite.id]: rewrite } });
-  });
-  afterEach(() => {
-    useWorkstreams.setState({ list: before.list });
-    useRuns.setState({ runs: before.runs });
-    useWorkspace.setState({ proposals: before.proposals });
-    vi.restoreAllMocks();
-  });
-
-  it("brings the plan's description update into view with the keyboard on its card, and asks Pip nothing", () => {
-    const ask = vi.spyOn(useClaude.getState(), "ask");
-    const card = { focus: vi.fn(), scrollIntoView: vi.fn() };
-    const asked: string[] = [];
-    const root = { querySelector: (s: string) => (asked.push(s), s === 'article[data-draft="p-plan"]' ? card : null), closest: () => null };
-    showPlanUpdate(workstreamConversation("ws-9"), root);
-    expect(card.scrollIntoView).toHaveBeenCalledWith({ block: "nearest" });
-    expect(card.focus).toHaveBeenCalledTimes(1);
-    expect(ask).not.toHaveBeenCalled();
-    // In General, or with no plan update waiting, it does nothing at all.
-    showPlanUpdate(GENERAL_CONVERSATION, root);
-    useWorkspace.setState({ proposals: {} });
-    showPlanUpdate(workstreamConversation("ws-9"), root);
-    expect(card.focus).toHaveBeenCalledTimes(1);
-    expect(ask).not.toHaveBeenCalled();
   });
 });
 

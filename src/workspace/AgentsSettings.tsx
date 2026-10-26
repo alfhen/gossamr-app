@@ -1,7 +1,5 @@
 import { useState } from "react";
-import { SwitchRow } from "../components/Switch";
-import { RULE_SWITCH, ruleText } from "../lib/workstreamHold";
-import { AUTOSTART_DEFAULTS, DIGEST_MINUTES, WORKSTREAM_RULES, type AgentSettings, type NoticeMode, type Run, type WorkstreamRule } from "../types";
+import { DIGEST_MINUTES, type AgentSettings, type NoticeMode, type Run } from "../types";
 import { Box, Btn, Sec, SheetFrame } from "./AgentSheet";
 import { slotWaiters, stopAllLabel, stopAllText, stoppable, KIND_LABEL } from "./agentsLogic";
 import { MAY_TOUCH, SAFETY_SUMMARY } from "./runSheetLogic";
@@ -9,7 +7,6 @@ import { MAY_TOUCH, SAFETY_SUMMARY } from "./runSheetLogic";
 /** A Build's own details, less the Jira line, which the summary already says. */
 const BUILD_DETAILS = MAY_TOUCH.filter((t) => !t.title.startsWith("Writing to Jira"));
 import { Icon } from "./AgentIcons";
-import { usePrefs } from "./prefs";
 
 export interface CleanupOffer {
   count: number;
@@ -33,20 +30,32 @@ export interface SettingsViewProps {
   onCleanup(): void;
   onStopAll(): void;
   onClose(): void;
-  /** Opened once, in place of the person's first agent action; "Got it, continue" closes it and carries on with that. */
-  intro?: boolean;
-  onContinue?(): void;
 }
 
 /** Safety and settings: Stop all, what agents can touch in plain words, and the few switches that exist. */
-export function AgentsSettingsView({ runs, stopping, keepRunning, settings, settingsSaving = false, cleanup, onSettings, onCleanup, onStopAll, onClose, intro = false, onContinue }: SettingsViewProps) {
+export function AgentsSettingsView({ runs, stopping, keepRunning, settings, settingsSaving = false, cleanup, onSettings, onCleanup, onStopAll, onClose }: SettingsViewProps) {
   const [asking, setAsking] = useState(false);
   const active = stoppable(runs);
   const waiting = slotWaiters(runs);
   const reach = active.length + waiting.length;
-  // On the first agent action only the three lines above show, with Got it, continue under them; the rest waits behind Details.
-  const details = (
-    <>
+  return (
+    <SheetFrame
+      label="Agents safety and settings"
+      title="Agents"
+      hint={<>safety and settings · <kbd className="font-sans">esc</kbd> close</>}
+      wide={false}
+      onClose={onClose}
+    >
+      <h2 className="m-0 text-[20px] leading-tight font-semibold">Safety and settings</h2>
+      <ul data-safety-summary className="m-0 grid list-none gap-1.5 p-0">
+        {SAFETY_SUMMARY.map((t) => (
+          <li key={t.text} className="grid grid-cols-[18px_minmax(0,1fr)] gap-1.5 text-ws-ink">
+            <Icon name={t.icon} className="mt-0.5 size-3.5 text-ws-ink2" />
+            <span>{t.text}</span>
+          </li>
+        ))}
+      </ul>
+
       <Sec title="Stop everything">
         <Box>
           <p className="m-0">
@@ -125,32 +134,6 @@ export function AgentsSettingsView({ runs, stopping, keepRunning, settings, sett
         </Box>
       </Sec>
 
-      <Sec title="Automatic steps">
-        <Box>
-          {settings ? <AutomaticStepsForm key={JSON.stringify(settings)} settings={settings} disabled={settingsSaving} onSave={onSettings} /> : <p className="m-0 text-ws-ink3">Loading…</p>}
-        </Box>
-      </Sec>
-
-      <Sec title="Result tool">
-        <Box>
-          <label className="flex items-start gap-2">
-            <input type="checkbox" aria-label="Offer new runs the result tool" disabled={!settings || settingsSaving} checked={!!settings?.reportResult} onChange={(e) => settings && onSettings({ ...settings, reportResult: e.target.checked })} className="mt-1" />
-            <span className="grid gap-0.5">
-              <b className="font-semibold text-ws-ink">Let new agents report their result to Gossamr</b>
-              <span className="text-ws-ink2">Off by default. When on, a new run can be asked to call one extra tool, report_result, that hands Gossamr its result as data: the note for Jira, a proposed ticket, subtasks or a plan. Gossamr checks and cleans it before it is stored on that run.</span>
-            </span>
-          </label>
-          <p className="m-0 text-sm text-ws-ink2">The tool only records what the agent says, on that run. It has no way to reach Jira, your repository or any other run, and drafts made from it still wait for your approval. The agent still writes its full answer, and Gossamr reads that as before when the tool is missing, unused or refused. The run sheet says which one it used.</p>
-          <p className="m-0 text-sm text-ws-ink3">Not tried on real runs yet. It applies to runs you start after turning it on, and each run's setup sheet can still turn it off. If Claude asks to approve the tool, that shows as a permission prompt you answer in Terminal.</p>
-        </Box>
-      </Sec>
-
-      <Sec title="Agents">
-        <Box>
-          <StartOnAgents />
-        </Box>
-      </Sec>
-
       <Sec title="Clean up">
         <Box>
           <p className="m-0 text-ws-ink2">Finished runs leave their worktree and session files behind. Clean up removes a worktree with claude rm, which refuses work that was never pushed and says why. Gossamr never forces it.</p>
@@ -179,60 +162,7 @@ export function AgentsSettingsView({ runs, stopping, keepRunning, settings, sett
           <p className="m-0 text-ws-ink2">Agents start with the environment of your own shell, read once when Gossamr opens, so they find the same tools you do.</p>
         </Box>
       </Sec>
-    </>
-  );
-  return (
-    <SheetFrame
-      label="Agents safety and settings"
-      title="Agents"
-      hint={<>safety and settings · <kbd className="font-sans">esc</kbd> close</>}
-      wide={false}
-      // The first-run sheet is answered before anything else: Tab stays in it until Got it, continue (or Close).
-      modal={intro}
-      onClose={onClose}
-      footer={
-        intro ? (
-          <>
-            <Btn tone="primary" autoFocus onClick={onContinue ?? onClose}>
-              Got it, continue
-            </Btn>
-            <span className="text-sm text-ws-ink3">This shows once. It stays under Agents, Safety and settings.</span>
-          </>
-        ) : undefined
-      }
-    >
-      <h2 className="m-0 text-[20px] leading-tight font-semibold">Safety and settings</h2>
-      <ul data-safety-summary className="m-0 grid list-none gap-1.5 p-0">
-        {SAFETY_SUMMARY.map((t) => (
-          <li key={t.text} className="grid grid-cols-[18px_minmax(0,1fr)] gap-1.5 text-ws-ink">
-            <Icon name={t.icon} className="mt-0.5 size-3.5 text-ws-ink2" />
-            <span>{t.text}</span>
-          </li>
-        ))}
-      </ul>
-
-      {intro ? (
-        <details data-safety-details className="grid gap-4">
-          <summary className="cursor-pointer text-sm font-semibold text-ws-ink2">Details: stopping agents, what a Build may touch, limits and settings</summary>
-          <div className="mt-3 grid gap-5">{details}</div>
-        </details>
-      ) : (
-        details
-      )}
     </SheetFrame>
-  );
-}
-
-/** Whether Gossamr opens on Agents, as it does until the person turns it off. This sheet only shows while Agents are on, and so does the Agents view. */
-function StartOnAgents() {
-  const on = usePrefs((s) => s.startOnAgents);
-  return (
-    <SwitchRow
-      label="Start on Agents"
-      description="Open Gossamr on Agents, with what needs you, your workstreams and their agents in one place. Turn it off to open on the workspace."
-      checked={on}
-      onChange={(next) => usePrefs.getState().setStartOnAgents(next)}
-    />
   );
 }
 
@@ -341,77 +271,6 @@ function NotificationsForm({ settings, disabled, onSave }: { settings: AgentSett
           <span className="text-sm text-ws-ink3">at most one notification in that time</span>
         </label>
       )}
-    </div>
-  );
-}
-
-/** What each automatic step does, said beside its switch. */
-const RULE_NOTE: Record<WorkstreamRule, string> = {
-  investigate_triage: "A finished investigation on a ticket starts its triage.",
-  triage_plan: "A triage that says a plan is recommended starts the plan.",
-  plan_build: "Once you approve the plan's description draft, the build starts. It may push its own branch to a draft pull request, nothing more.",
-  build_review: "Once a finished build's draft pull request shows up, an adversarial review of it starts.",
-  fix_round:
-    "A fix round sends the reviewer's blocking findings to the build, which can push to its draft PR. At most two rounds; after that it comes to you.",
-  review_verify: "A passing review starts a verify. Off by default.",
-};
-
-/** The global switches with one changed, as `runsSetSettings` saves them; a backend that sent none has the defaults. */
-export const withAutostart = (settings: AgentSettings, rule: WorkstreamRule, on: boolean): AgentSettings => ({
-  ...settings,
-  autostart: { ...AUTOSTART_DEFAULTS, ...settings.autostart, [RULE_SWITCH[rule]]: on },
-});
-
-/** The settings with Pip turns per day read from `text`, or null when it says nothing new (or nothing a number). Zero is no daily limit, as in the app. */
-export function withTurnsPerDay(settings: AgentSettings, text: string): AgentSettings | null {
-  const n = Number(text);
-  if (text.trim() === "" || !Number.isFinite(n)) return null;
-  const turns = Math.max(0, Math.round(n));
-  return turns === settings.managerTurnsPerDay ? null : { ...settings, managerTurnsPerDay: turns };
-}
-
-/**
- * The global switches for the steps that start on their own in a workstream Pip manages, and the daily cap on the
- * turns Pip is woken for. Each workstream can still turn a step off for itself.
- */
-function AutomaticStepsForm({ settings, disabled, onSave }: { settings: AgentSettings; disabled: boolean; onSave(next: AgentSettings): void }) {
-  const switches = { ...AUTOSTART_DEFAULTS, ...settings.autostart };
-  const [turns, setTurns] = useState(String(settings.managerTurnsPerDay));
-  const save = () => {
-    const next = withTurnsPerDay(settings, turns);
-    if (next) onSave(next);
-    // What isn't a number, or says nothing new, shows the saved number again rather than staying in the field.
-    else setTurns(String(settings.managerTurnsPerDay));
-  };
-  return (
-    <div className="grid gap-2.5">
-      <p className="m-0 text-ws-ink2">
-        Only in a workstream set to Manage. Each step is started by Gossamr from a fixed template once the one before is done; Pip can't start, stop or approve anything. A hold, Hold all or a used-up budget stops them all.
-      </p>
-      {WORKSTREAM_RULES.map((rule) => (
-        <SwitchRow
-          key={rule}
-          label={ruleText(rule)}
-          description={RULE_NOTE[rule]}
-          checked={switches[RULE_SWITCH[rule]]}
-          disabled={disabled}
-          onChange={(on) => onSave(withAutostart(settings, rule, on))}
-        />
-      ))}
-      <label className="flex flex-wrap items-center gap-2">
-        <span className="min-w-[210px]">Pip turns per day</span>
-        <input
-          disabled={disabled}
-          aria-label="Pip turns per day"
-          inputMode="numeric"
-          value={turns}
-          onChange={(e) => setTurns(e.target.value)}
-          onBlur={save}
-          onKeyDown={(ev) => ev.key === "Enter" && ev.currentTarget.blur()}
-          className={FIELD}
-        />
-        <span className="text-sm text-ws-ink3">turns Pip is woken for, across workstreams; 0 means no daily limit</span>
-      </label>
     </div>
   );
 }

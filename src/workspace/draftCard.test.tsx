@@ -3,9 +3,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { itemRef } from "../backend/mockConnector";
 import { docFromText } from "../lib/docs";
 import type { Proposal, RunSpec } from "../types";
-import { ANSWERS_COMMENT_LABEL, NUDGE_COMMENT_LABEL, READINESS_COMMENT_LABEL } from "../lib/proposals";
 import { useToasts } from "./toasts";
-import { DraftCard, SECRET_NOTE, answersRisks, rewriteRisks, postedNote, keepEditsOfDraft, keptEditsOfDraft, settleKeptEdits } from "./DraftCard";
+import { DraftCard, SECRET_NOTE, rewriteRisks, postedNote, keepEditsOfDraft, keptEditsOfDraft, settleKeptEdits } from "./DraftCard";
 import { KeyHint } from "./KeyHint";
 import { DraftPreview, draftPreviewBody } from "./DraftPreview";
 
@@ -97,16 +96,11 @@ describe("a skipped draft's unsaved edit (G2)", () => {
 });
 
 describe("what a post from a card says (G3)", () => {
-  const questions = (state: Proposal["state"]): Proposal => ({ ...commentDraft("q1"), label: READINESS_COMMENT_LABEL, intent: { type: "comment", item: itemRef("CA-408"), body: docFromText("Hi, a few things need clearing up.") }, state });
-  it("says once what was posted, and that the ticket waits on the reporter when the questions went", () => {
+  it("says once what was posted", () => {
     const p = commentDraft("c1");
     expect(postedNote(p, { ...p, state: { type: "applied" } })).toBe("Posted to Jira: Comment on CA-412.");
     expect(postedNote(p, p)).toBeNull();
     expect(postedNote(p, null)).toBeNull();
-    const asked = questions({ type: "applied" });
-    const note = postedNote(asked, asked);
-    expect(note).toMatch(/^Posted to Jira: /);
-    expect(note).toBe("Posted to Jira: Questions for the reporter on CA-408. CA-408 now waits on the reporter; nothing starts on its own.");
   });
   it("is one polite status message", () => {
     useToasts.getState().clear();
@@ -125,25 +119,6 @@ describe("a comment draft's edit field and provenance (G4)", () => {
     // Kept edits come back as a preview (G26); the editor opens from Edit and is named after the ticket.
     expect(out).not.toContain("<textarea");
     expect(out).toContain("Edited");
-    const asked: Proposal = { ...commentDraft("g4b"), origin: { type: "chat", requestId: "r1" }, label: READINESS_COMMENT_LABEL, intent: { type: "comment", item: itemRef("CA-408"), body: docFromText("Hi") } };
-    const html = renderToStaticMarkup(<DraftCard proposal={asked} statusName={null} people={[]} working={false} error={null} onApprove={vi.fn()} onSkip={vi.fn()} />);
-    expect(html).toMatch(/Drafted by Gossamr<\/span> Gossamr wrote/);
-  });
-});
-
-describe("an answers draft built from the person's reply (G2)", () => {
-  it("pauses for a pasted secret or @everyone even when unedited, and a clean one posts at once", () => {
-    expect(answersRisks("1. \u201cWhich env?\u201d\nAnswer: token=ghp_abcdefghijklmnopqrstuvwxyz0123456789").risks).toEqual(["secret"]);
-    expect(answersRisks("Answer: @everyone please check").risks).toEqual(["broadcast"]);
-    expect(answersRisks("Answer: the staging environment, as in the ticket").risks).toEqual([]);
-  });
-});
-
-describe("a nudge for the reporter says who Jira notifies (G6)", () => {
-  it("shows the posts-as-you line for the @-mentioned reporter, as the questions card does", () => {
-    const nudge: Proposal = { ...commentDraft("n1"), label: NUDGE_COMMENT_LABEL, intent: { type: "comment", item: itemRef("CA-412"), body: docFromText("Hi @Mette Lund,\n\nThe earlier questions about CA-412 are still open.") } };
-    const html = renderToStaticMarkup(<DraftCard proposal={nudge} statusName={null} people={[{ accountId: "a1", name: "Mette Lund" }]} working={false} error={null} onApprove={vi.fn()} onSkip={vi.fn()} onReview={vi.fn()} />);
-    expect(html).toContain("Posts as you; Jira notifies Mette Lund.");
   });
 });
 
@@ -162,17 +137,21 @@ describe("a comment being read that holds something secret-like (G22)", () => {
     vi.stubGlobal("localStorage", { getItem: () => null, setItem: () => {}, removeItem: () => {} });
   });
   const card = (p: Proposal) => renderToStaticMarkup(<DraftCard proposal={p} statusName={null} people={[]} working={false} error={null} onApprove={vi.fn()} onSkip={vi.fn()} />);
-  const answers = (text: string): Proposal => ({ ...commentDraft("g22"), createdBy: "pip", label: ANSWERS_COMMENT_LABEL, intent: { type: "comment", item: itemRef("CA-412"), body: docFromText(text) } });
+  /** A comment draft whose card holds an edit with `text`, the words the pause reads. */
+  const edited = (id: string, text: string): Proposal => {
+    keepEditsOfDraft(id, { body: { text, mentions: [] } });
+    return commentDraft(id);
+  };
 
   it("says it will pause before posting and keeps the text as written", () => {
-    const out = card(answers("Answer: token=ghp_abcdefghijklmnopqrstuvwxyz0123456789"));
+    const out = card(edited("g22", "token=ghp_abcdefghijklmnopqrstuvwxyz0123456789"));
     expect(out).toContain("data-secret-note");
     expect(out).toContain(SECRET_NOTE);
     expect(out).toContain("ghp_abcdefghijklmnopqrstuvwxyz0123456789");
   });
 
   it("says nothing on a draft without one", () => {
-    expect(card(answers("Answer: the staging one"))).not.toContain("data-secret-note");
+    expect(card(edited("g22c", "the staging one"))).not.toContain("data-secret-note");
     expect(card(commentDraft("g22b"))).not.toContain("data-secret-note");
   });
 });

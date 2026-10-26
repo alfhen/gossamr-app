@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { FeedEntry, Proposal, WorkItem, WorkstreamEvent, WorkstreamView } from "../types";
-import { CHIPS, CHIP_LABEL, buildRows, chipsFor, eventText, toWorkstreamEntries, dayBreaks, dayLabel, draftsFor, groupByDay, initials, queryFor, stepIndex, verb, withRead } from "./activityLogic";
+import { CHIPS, CHIP_LABEL, buildRows, toWorkstreamEntries, dayBreaks, dayLabel, draftsFor, groupByDay, initials, queryFor, stepIndex, verb, withRead } from "./activityLogic";
 
 const entry = (id: string, at: string, over: Partial<FeedEntry> = {}): FeedEntry => ({
   id,
@@ -106,17 +106,15 @@ describe("the Pip & agents chip", () => {
       ev(1, "person", "run_approved", "r1"),
       ev(2, "supervisor", "wake", "r1", "r1|done"),
       ev(3, "supervisor", "autostart", "r2", "investigate_triage after r1"),
-      ev(4, "person", "held", null, "person"),
+      ev(4, "person", "paused", null, "person"),
       ev(5, "person", "resumed", null, "person"),
-      ev(6, "supervisor", "autostart", "r3", "fix_round after r2"),
-      ev(7, "supervisor", "fix_round_sent", "r3", "120"),
-      ev(8, "supervisor", "budget", null, "amber"),
+      ev(6, "supervisor", "fix_round_sent", "r3", "120"),
+      ev(7, "supervisor", "budget", null, "amber"),
     ],
   };
 
-  it("is offered only while Agents are on, after the usual chips", () => {
-    expect(chipsFor({ agents: false })).toEqual(CHIPS);
-    expect(chipsFor({ agents: true })).toEqual([...CHIPS, "pip"]);
+  it("is offered after the usual chips", () => {
+    expect(CHIPS[CHIPS.length - 1]).toBe("pip");
     expect(CHIP_LABEL.pip).toBe("Pip & agents");
   });
 
@@ -124,66 +122,32 @@ describe("the Pip & agents chip", () => {
     const ref = { connectionId: "c", externalId: "A-1", key: "A-1" };
     const entries = toWorkstreamEntries(events, [ws], () => ref);
     expect(entries.map((e) => e.text)).toEqual([
-      "Fix round 1 sent to R3 automatically",
       "You resumed the workstream",
-      "You held the workstream",
-      "Triage R2 started automatically after R1",
+      "You paused the workstream",
       "Pip picked up R1",
       "You started R1",
       "You opened the workstream",
     ]);
-    expect(entries[0]).toMatchObject({ source: "pip", workstreamId: "w1", itemKey: "A-1", item: ref, runId: "r3", action: "fix_round_sent", unread: false });
+    expect(entries[0]).toMatchObject({ source: "pip", workstreamId: "w1", itemKey: "A-1", item: ref, action: "resumed", unread: false });
     expect(new Set(entries.map((e) => e.id)).size).toBe(entries.length);
     expect(toWorkstreamEntries({}, [ws])).toEqual([]);
   });
 
-  it("says a fix round the rules sent was automatic, and one the person chose was not", () => {
-    const label = (id: string | null) => id ?? "a run";
-    expect(eventText(ev(1, "supervisor", "fix_round_sent", "R3"), label, 1)).toBe("Fix round 1 sent to R3 automatically");
-    expect(eventText(ev(2, "person", "fix_round_sent", "R3"), label, 3)).toBe("Fix round 3 sent to R3");
+  it("leaves out what an earlier version recorded: automatic starts, fix rounds, budgets, rules and modes", () => {
+    const old = ["autostart", "fix_round_sent", "fix_rounds_exhausted", "steps_allowed", "budget_reset", "rule_set", "mode_set", "escalation_taken", "escalation_posted"];
+    expect(toWorkstreamEntries({ w1: old.map((a, n) => ev(n + 1, "supervisor", a, "R3", "5")) }, [ws])).toEqual([]);
   });
 
-  it("words the person's Allow 5 more", () => {
-    const allowed = ev(9, "person", "steps_allowed", null, "5");
-    expect(toWorkstreamEntries({ w1: [allowed] }, [ws]).map((e) => e.text)).toEqual(["You allowed 5 more automatic steps"]);
+  it("words a pause and a resume by who made them", () => {
+    const texts = (actor: Parameters<typeof ev>[1], action: string) => toWorkstreamEntries({ w1: [ev(1, actor, action, null, null)] }, [ws]).map((e) => e.text);
+    expect(texts("person", "paused")).toEqual(["You paused the workstream"]);
+    expect(texts("supervisor", "paused")).toEqual(["The workstream was paused"]);
+    expect(texts("person", "resumed")).toEqual(["You resumed the workstream"]);
   });
 
-  it("says a message of the person's gave the automatic steps back, rather than that they reset the budget", () => {
-    const texts = (detail: string | null) => toWorkstreamEntries({ w1: [ev(1, "person", "budget_reset", null, detail)] }, [ws]).map((e) => e.text);
-    expect(texts("message")).toEqual(["Your message gave Pip its automatic steps back"]);
-    expect(texts(null)).toEqual(["You reset the budget"]);
-  });
-
-  it("words the person's three choices on a ticket that isn't clear enough to plan, naming the triage", () => {
-    const lines = [ev(1, "person", "readiness_asked", "r3", null), ev(2, "person", "readiness_answered", "r3", null), ev(3, "person", "readiness_overridden", "r3", null)];
-    expect(toWorkstreamEntries({ w1: lines }, [ws]).map((e) => e.text).reverse()).toEqual([
-      "You chose to ask the reporter about R3's open questions; drafted for you to post",
-      "You chose to answer R3's open questions",
-      "You chose to plan now, after asking the reporter about R3's open questions",
-    ]);
-  });
-
-  it("words a Plan now, after the reporter was asked about that triage, apart from Plan anyway", () => {
-    const lines = [ev(1, "person", "readiness_asked", "r3", null), ev(2, "person", "readiness_overridden", "r3", null), ev(3, "person", "readiness_overridden", "r2", null)];
-    const texts = toWorkstreamEntries({ w1: lines }, [ws]).map((e) => e.text).reverse();
-    expect(texts[1]).toBe("You chose to plan now, after asking the reporter about R3's open questions");
-    expect(texts[2]).toBe("You chose to plan anyway after R2 found the ticket not ready");
-  });
-
-  it("words the clarity notice's two choices", () => {
-    const lines = [ev(1, "person", "clarity_asked", null, null), ev(2, "person", "clarity_dismissed", null, null)];
-    expect(toWorkstreamEntries({ w1: lines }, [ws]).map((e) => e.text).reverse()).toEqual(["You chose to ask the reporter; Gossamr drafted the questions for you to post", "You said the ticket looks clear enough"]);
-  });
-
-  it("words the nudge to the reporter and what Looks fine taught the notice, and how the person gave it back", () => {
-    const lines = [ev(1, "person", "reporter_nudged", null, null), ev(2, "person", "clarity_learned", null, "who in CA"), ev(3, "person", "clarity_reset", null, "CA"), ev(4, "person", "clarity_reset", null, null), ev(5, "person", "clarity_reset", null, "who in CA")];
-    expect(toWorkstreamEntries({ w1: lines }, [ws]).map((e) => e.text).reverse()).toEqual([
-      "You had Gossamr draft a nudge to the reporter",
-      "Gossamr stopped flagging CA tickets that don't say who is waiting on them after you said Looks fine 3 times",
-      "You gave back what Gossamr learned from Looks fine for CA",
-      "You gave back what Gossamr learned from Looks fine",
-      "You gave back what Gossamr learned from Looks fine for CA tickets that don't say who is waiting on them",
-    ]);
+  it("leaves out what earlier versions recorded about questions to the reporter and the word check", () => {
+    const old = ["readiness_asked", "readiness_answered", "readiness_overridden", "clarity_asked", "clarity_dismissed", "reporter_nudged", "clarity_learned", "clarity_reset"];
+    expect(toWorkstreamEntries({ w1: old.map((a, n) => ev(n + 1, "person", a, "r3", null)) }, [ws])).toEqual([]);
   });
 
   it("is the workstreams' audit alone, newest first, and nothing of it shows under the other chips", () => {

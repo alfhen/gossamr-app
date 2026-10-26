@@ -1,10 +1,8 @@
 import { expect, test, type Page } from "@playwright/test";
-import { agentsHome, homeConversation, jiraWrites, needOfKind, needsPane, needsYouCount, openAgents, openApp, selectWorkstream, startMyDay, startWorkstream, openNeedOfKind, needsStack } from "./support/app";
+import { agentsHome, homeConversation, jiraWrites, needOfKind, needsPane, needsYouCount, openAgents, openJiraSent, openApp, selectWorkstream, startWorkstream, openNeedOfKind } from "./support/app";
 
-// Fixes from the seventh dogfood round: approving from the Decide pane, the Next line, Plan my week, Start my day, the
-// reporter's questions and What Jira saw from me.
+// Fixes from the seventh dogfood round: approving from the Decide pane and Esc leaving the Sent and Settings views.
 
-const MANAGED = "wsManage=1";
 
 /** A workstream on CA-401, opened on Pip home. */
 async function workstreamOnHome(page: Page) {
@@ -18,7 +16,7 @@ test.describe("approving from the Decide pane (G1)", () => {
   test("'Update description' on the plan's decision approves it: the draft leaves, Needs you drops by one, Jira gets the edit", async ({ page }) => {
     test.setTimeout(90_000);
     await page.setViewportSize({ width: 1440, height: 900 });
-    await openApp(page, MANAGED);
+    await openApp(page);
     await workstreamOnHome(page);
     const before = Number(await needsYouCount(page).innerText());
     expect(before).toBeGreaterThan(0);
@@ -28,67 +26,19 @@ test.describe("approving from the Decide pane (G1)", () => {
     await pane.getByRole("button", { name: "Update description" }).click();
     await expect.poll(async () => (await jiraWrites(page)).map((w) => w.type)).toContain("rewrite");
     await expect(needOfKind(page, "plan")).toHaveCount(0);
-    // The plan is no longer a need. (The description Jira now holds is not the one the workstream was opened on, so a hold may take its place in the count.)
-    await expect(needsStack(page)).not.toContainText("approving its description update is how the plan is approved");
+    // The plan is no longer a need.
     expect(Number(await needsYouCount(page).innerText())).toBeLessThanOrEqual(before);
     await expect(agentsHome(page)).toBeVisible();
   });
 });
 
-const port = Number(process.env.E2E_PORT ?? 4173);
-/** The seeded profile without Start my day set aside, so its card shows. */
-const DAY_DUE = { cookies: [], origins: [{ origin: `http://localhost:${port}`, localStorage: [{ name: "gossamr-prefs", value: JSON.stringify({ pipOrientationSeen: true, permissionExplainerSeen: true }) }] }] };
-
-const activeTag = (page: Page) => page.evaluate(() => document.activeElement?.tagName ?? "none");
-
-test.describe("keyboard: focus and Esc (G6, G7, G12)", () => {
-  test.use({ storageState: DAY_DUE });
-
-  test("Plan my week opens on a row, Delete removes it, and a chosen ticket's row takes the focus", async ({ page }) => {
-    test.setTimeout(90_000);
-    await page.setViewportSize({ width: 1440, height: 900 });
-    await openApp(page, "runs=empty");
-    await openAgents(page);
-    await startMyDay(page);
-    await agentsHome(page).locator("[data-start-my-day]").getByRole("button", { name: "Plan my week" }).click();
-    const plan = agentsHome(page).locator("[data-plan-my-week]");
-    await expect(plan).toBeVisible();
-    await expect(plan.locator("[data-plan-pick]").first()).toBeFocused();
-    const before = await plan.locator("[data-plan-pick]").count();
-    await page.keyboard.press("Delete");
-    await expect(plan.locator("[data-plan-pick]")).toHaveCount(before - 1);
-    expect(await activeTag(page)).not.toBe("BODY");
-    // Several tickets match: choosing one lands the keyboard on its new row, not on <body>.
-    await plan.locator("[data-plan-add]").fill("e");
-    await plan.locator("[data-plan-add-go]").click();
-    await expect(plan.locator("[data-plan-choice]").first()).toBeFocused();
-    await page.keyboard.press("Enter");
-    await expect(plan.locator("[data-plan-pick]")).toHaveCount(before);
-    await expect(plan.locator("[data-plan-pick]").last()).toBeFocused();
-  });
-
-  test("Looks fine does not drop the keyboard on <body>, and Esc leaves the Sent view for Pip home", async ({ page }) => {
-    test.setTimeout(90_000);
-    await openApp(page, "runs=empty");
-    await startWorkstream(page, "CA-408");
-    await openAgents(page);
-    await selectWorkstream(page, "CA-408");
-    const notice = agentsHome(page).locator("[data-clarity-notice]");
-    await notice.getByRole("button", { name: "Looks fine" }).focus();
-    await page.keyboard.press("Enter");
-    await expect(notice).toHaveCount(0);
-    await expect.poll(() => activeTag(page)).not.toBe("BODY");
-
-  });
-
+test.describe("keyboard: Esc (G7, G12)", () => {
   test("Esc leaves the Sent and Settings views for Pip home, from <body>", async ({ page }) => {
     test.setTimeout(90_000);
     await page.setViewportSize({ width: 1440, height: 900 });
     await openApp(page, "runs=empty");
     await openAgents(page);
-    await startMyDay(page);
-    await agentsHome(page).locator("[data-start-my-day]").getByRole("button", { name: "What Jira saw from me" }).click();
-    await expect(page.locator("[data-jira-sent]")).toBeVisible();
+    await openJiraSent(page);
     await page.locator("body").click({ position: { x: 1, y: 1 } });
     await page.keyboard.press("Escape");
     await expect(page.locator("[data-jira-sent]")).toHaveCount(0);

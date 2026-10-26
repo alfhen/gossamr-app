@@ -212,7 +212,7 @@ CREATE TABLE run_events (
   PRIMARY KEY (run_id, seq)
 ) WITHOUT ROWID;";
 
-/// What an agent reported through the run-report tool, apart from the run's own blob so a tracker poll that rewrites the
+/// What an agent reported through the report tool, apart from the run's own blob so a tracker poll that rewrites the
 /// run can't lose it. A token's hash is never deleted while its run exists: revocation is by the run's state, and a
 /// launch whose answer was lost can still be adopted with the token it was given.
 const RUN_REPORTS: &str = "
@@ -306,7 +306,30 @@ const RUN_ARCHIVE: &str = "
 ALTER TABLE runs ADD COLUMN archived_at TEXT;
 CREATE INDEX runs_archived ON runs(archived_at);";
 
-const STEPS: &[&str] = &[INBOX, CACHE, PROPOSALS, WATCH, CODE, LINKS, RUNS, RUN_REPORTS, PIP_TURNS, WORKSTREAMS, PROPOSAL_WORKSTREAMS, GENERAL_CONVERSATION, RUN_ARCHIVE];
+/// Pip is woken for a run once, which the workstream's audit records as a supervisor `wake` line. Runs that were already
+/// at rest in an open workstream when the waker took over, as most were in one Pip only advised on, get that line too,
+/// so only what happens next wakes Pip. A run stopped at a limit wakes nobody, so it gets none. The key is the state,
+/// and for a run that finished again after the person carried on, `state@<when>` in whole seconds.
+const WAKE_LEDGER: &str = "
+INSERT INTO workstream_events (workstream_id, seq, at, actor, action, run_id, detail)
+SELECT r.ws,
+  (SELECT COALESCE(MAX(seq), -1) FROM workstream_events e WHERE e.workstream_id = r.ws) + ROW_NUMBER() OVER (PARTITION BY r.ws ORDER BY r.id),
+  strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), 'supervisor', 'wake', r.id, r.key
+FROM (
+  SELECT json_extract(data, '$.spec.workstream') AS ws, id,
+    CASE WHEN state <> 'failed' AND json_extract(data, '$.continuedAt') IS NOT NULL
+      THEN state || '@' || strftime('%s', json_extract(data, '$.continuedAt')) ELSE state END AS key
+  FROM runs
+  WHERE json_valid(data) AND state IN ('done', 'failed', 'stopped')
+    AND NOT (state = 'stopped' AND COALESCE(json_extract(data, '$.stoppedByLimit'), 0))
+) r
+JOIN workstreams w ON w.id = r.ws AND w.closed_at IS NULL
+WHERE NOT EXISTS (
+  SELECT 1 FROM workstream_events e
+  WHERE e.workstream_id = r.ws AND e.actor = 'supervisor' AND e.action = 'wake' AND e.run_id = r.id AND e.detail = r.key
+);";
+
+const STEPS: &[&str] = &[INBOX, CACHE, PROPOSALS, WATCH, CODE, LINKS, RUNS, RUN_REPORTS, PIP_TURNS, WORKSTREAMS, PROPOSAL_WORKSTREAMS, GENERAL_CONVERSATION, RUN_ARCHIVE, WAKE_LEDGER];
 
 pub fn migrate(conn: &mut Connection) -> Result<()> {
     let applied: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
@@ -464,6 +487,46 @@ mod tests {
             assert_eq!(conn.query_row(&format!("SELECT count(*) FROM {t}"), [], |r| r.get::<_, i64>(0)).unwrap(), 1, "{t}");
         }
         assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), STEPS.len() as i64);
+    }
+
+    #[test]
+    fn runs_at_rest_in_open_workstreams_are_recorded_as_woken_for_once() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        for step in &STEPS[..13] {
+            conn.execute_batch(step).unwrap();
+        }
+        conn.pragma_update(None, "user_version", 13).unwrap();
+        for (id, state) in [("w-open", None), ("w-closed", Some("2026-10-01T00:00:00Z"))] {
+            conn.execute("INSERT INTO workstreams (id, connection_id, title, mode, created_at, closed_at, data) VALUES (?1, 'c', 't', 'advise', 't', ?2, '{}')", rusqlite::params![id, state]).unwrap();
+        }
+        let run = |id: &str, ws: &str, state: &str, extra: &str| {
+            conn.execute(
+                "INSERT INTO runs (id, proposal_id, connection_id, kind, repo, expected_worktree, state, queued_at, last_progress_at, data) VALUES (?1, ?1, 'c', 'build', 'a/b', ?1, ?3, 't', 't', ?4)",
+                rusqlite::params![id, ws, state, format!(r#"{{"spec":{{"workstream":"{ws}"}}{extra}}}"#)],
+            )
+            .unwrap();
+        };
+        run("done", "w-open", "done", "");
+        run("again", "w-open", "done", r#","continuedAt":"2026-10-01T10:00:00.5Z""#);
+        run("failed", "w-open", "failed", r#","continuedAt":"2026-10-01T10:00:00Z""#);
+        run("limit", "w-open", "stopped", r#","stoppedByLimit":true"#);
+        run("working", "w-open", "working", "");
+        run("closed", "w-closed", "done", "");
+        conn.execute("INSERT INTO workstream_events (workstream_id, seq, at, actor, action) VALUES ('w-open', 0, 't', 'person', 'opened')", []).unwrap();
+
+        migrate(&mut conn).unwrap();
+
+        let mut stmt = conn.prepare("SELECT workstream_id || ' ' || seq || ' ' || actor || ' ' || action || ' ' || COALESCE(run_id, '-') || ' ' || COALESCE(detail, '-') FROM workstream_events ORDER BY workstream_id, seq").unwrap();
+        let rows: Vec<String> = stmt.query_map([], |r| r.get(0)).unwrap().collect::<rusqlite::Result<_>>().unwrap();
+        assert_eq!(
+            rows,
+            [
+                "w-open 0 person opened - -",
+                "w-open 1 supervisor wake again done@1790848800",
+                "w-open 2 supervisor wake done done",
+                "w-open 3 supervisor wake failed failed"
+            ]
+        );
     }
 
     #[test]

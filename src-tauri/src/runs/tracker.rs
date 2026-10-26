@@ -18,7 +18,6 @@ use super::redact::redact;
 use super::service::{belongs_to, RunService};
 use super::state::{self, map_state, parse_at, progress_at};
 use super::toolchain::Toolchain;
-use crate::domain::workstream::{Mode, HELD_ALL, HELD_BUDGET, HELD_PERSON};
 use crate::domain::{Intent, Origin, ProposalQuery, ProposalState, Run, RunEvent, RunKind, RunQuery, RunState, StateKind};
 use crate::notify::Notice;
 
@@ -231,9 +230,6 @@ impl RunService {
     async fn poll_with(&self, clock: impl Fn() -> DateTime<Utc>) -> Polled {
         let idle = Polled { busy: false };
         let now = clock();
-        if !self.is_enabled() {
-            return idle;
-        }
         let Ok(_not_recovering) = self.recovery.try_lock() else { return Polled { busy: true } };
         let unfinished = [
             RunState::Queued,
@@ -290,16 +286,13 @@ impl RunService {
 
     /// Looks at everything that waits on the person and sends the system notifications that are due (`notices`).
     pub(super) async fn announce_notices(&self, now: DateTime<Utc>) {
-        if !self.is_enabled() {
-            return;
-        }
         let settings = self.settings();
         let settings = NoticeSettings { mode: settings.notifications, digest_every: chrono::Duration::minutes(i64::from(settings.digest_minutes)) };
         let asking = [RunState::NeedsAnswer, RunState::NeedsPermission, RunState::SystemBlocked];
         let Ok(runs) = self.core.runs_list(&RunQuery { states: Some(asking.to_vec()), ..RunQuery::default() }).await else { return };
         let Ok(drafts) = self.core.proposals(&ProposalQuery { states: Some(vec![StateKind::Pending]), ..ProposalQuery::default() }).await else { return };
         let drafts: Vec<_> = drafts.into_iter().filter(|p| p.state == ProposalState::Pending).collect();
-        // The open workstreams give names, run labels, escalations and holds; the closed ones are only told apart by id,
+        // The open workstreams give names, run labels and pauses; the closed ones are only told apart by id,
         // so what belongs to one is skipped without loading it.
         let (views, closed_ids) = match self.core.scope().await {
             Ok(scope) => (self.core.workstreams(&scope, false).await.unwrap_or_default(), self.core.closed_workstream_ids(&scope).await.unwrap_or_default()),
@@ -337,27 +330,17 @@ impl RunService {
             let what = if run.state == RunState::Failed { format!("{name} failed") } else { format!("{name} stopped at its limit") };
             needs.entry(ws).or_default().push(Need { group: Group::Unblock, run_id: Some(run.id.clone()), what, since: run.ended_at.unwrap_or(run.last_progress_at) });
         }
-        // A review that still blocks after the fix rounds is a decision, and a hold waits to be resumed. The escalation's
-        // review draft is part of the escalation, so it isn't a need of its own.
-        let mut folded = HashSet::new();
+        // A paused workstream waits to be resumed.
         for v in &views {
-            let key = Some(v.workstream.id.clone());
-            if let Some(e) = &v.escalation {
-                folded.extend(e.review_draft.clone());
-                let what = format!("The review still blocks after {} fix {}", e.rounds, if e.rounds == 1 { "round" } else { "rounds" });
-                needs.entry(key.clone()).or_default().push(Need { group: Group::Decide, run_id: Some(e.review_run.clone()), what, since: e.at });
-            }
-            // A hold the person chose is not a need, and a spent budget is a question only in Manage.
-            let held = v.workstream.held_reason.as_deref().filter(|r| !matches!(*r, HELD_PERSON | HELD_ALL) && (*r != HELD_BUDGET || v.workstream.mode == Mode::Manage));
-            if held.is_some() {
-                needs.entry(key).or_default().push(Need { group: Group::Unblock, run_id: None, what: "It is on hold until you resume it".to_owned(), since: v.workstream.created_at });
+            if v.workstream.paused_reason.is_some() {
+                needs.entry(Some(v.workstream.id.clone())).or_default().push(Need { group: Group::Unblock, run_id: None, what: "It is paused until you resume it".to_owned(), since: v.workstream.created_at });
             }
         }
         // Every pending draft waits for approval, a plan or description rewrite as a decision. A reply drafted to a run's
         // question is part of that question.
         for draft in &drafts {
             let workstream = draft.workstream().map(str::to_owned);
-            if closed(&workstream) || folded.contains(&draft.id) || matches!(draft.intent, Intent::RunAnswer { .. }) {
+            if closed(&workstream) || matches!(draft.intent, Intent::RunAnswer { .. }) {
                 continue;
             }
             let from = match &draft.origin {
@@ -402,6 +385,22 @@ impl RunService {
         Some(found)
     }
 
+    /// A run whose agent waits in its `ask` call reads as asking, with that question, whatever the session is listed as
+    /// doing: it is working as far as Claude can tell. A run that ended while it waited has nobody left to answer.
+    fn with_pending_ask(&self, run_id: &str, mut seen: state::Observed) -> state::Observed {
+        let asks = self.core.asks();
+        match (asks.question(run_id), seen.state) {
+            (Some(question), RunState::Working) => {
+                seen.state = RunState::NeedsAnswer;
+                seen.text = Some(question);
+                seen.idle_polls = 0;
+            }
+            (Some(_), RunState::Done | RunState::Failed | RunState::Stopped) => asks.cancel(run_id),
+            _ => {}
+        }
+        seen
+    }
+
     /// Applies one run's observation. Returns its connection when anything about it changed.
     /// A Review that reached Done is added to `reviewed`, for its GitHub review draft to be made once the launch lock is
     /// let go (`draft_review`).
@@ -422,7 +421,7 @@ impl RunService {
         };
         let misses = self.misses.lock().expect("misses lock poisoned").get(run_id).copied().unwrap_or(0);
         let idle = self.idle_polls.lock().expect("idle polls lock poisoned").get(run_id).copied().unwrap_or(0);
-        let seen = map_state(entry, job.as_ref(), &before, now, misses, idle);
+        let seen = self.with_pending_ask(run_id, map_state(entry, job.as_ref(), &before, now, misses, idle));
         for (counts, n) in [(&self.misses, seen.pid_misses), (&self.idle_polls, seen.idle_polls)] {
             let mut all = counts.lock().expect("run counts lock poisoned");
             if n > 0 {
@@ -465,6 +464,7 @@ impl RunService {
             RunState::NeedsAnswer | RunState::NeedsPermission | RunState::SystemBlocked => seen.text.as_deref().and_then(|t| cleaned(t, NEEDS_KEPT)),
             _ => None,
         };
+        run.asking = seen.state == RunState::NeedsAnswer && self.core.asks().question(run_id).is_some();
         run.suggested_reply = match seen.state {
             RunState::NeedsAnswer => job.as_ref().and_then(|j| j.suggested_reply.as_deref()).and_then(|r| cleaned(r, REPLY_KEPT)),
             _ => None,
@@ -481,9 +481,11 @@ impl RunService {
         if let (Some(over), Some(id)) = (limits::exceeded(&run, now, &settings), run.short_id.clone()) {
             match tc.cli.stop(&id).await {
                 Ok(()) => {
+                    self.core.asks().cancel(run_id);
                     overrun = Some(over.reason(&settings));
                     run.state = RunState::Stopped;
                     run.needs = None;
+                    run.asking = false;
                     run.error.clone_from(&overrun);
                     run.stopped_by_limit = true;
                     run.last_progress_at = now;
@@ -612,7 +614,6 @@ impl RunService {
     }
 
     pub async fn events(&self, run_id: &str) -> crate::error::Result<Vec<RunEvent>> {
-        self.ensure_enabled()?;
         self.core.run_events(run_id).await
     }
 }

@@ -26,9 +26,9 @@ mod workstreams;
 pub use cache::{stamp, SyncState, Upserted};
 pub use runs::ARCHIVABLE;
 pub use code::CachedHttp;
-pub use pip_turns::{PipTurn, ROLE_WAKE};
+pub use pip_turns::{PipTurn, NEVER_RAN};
 #[cfg(test)]
-pub use pip_turns::{INTERRUPTED, NEVER_RAN};
+pub use pip_turns::INTERRUPTED;
 
 pub struct Db {
     conn: Connection,
@@ -210,6 +210,7 @@ impl Db {
         self.update_event("UPDATE events SET unread = ?2 WHERE id = ?1", params![id, unread])
     }
 
+    #[cfg(test)]
     pub fn set_done(&self, id: &str, done_at: Option<&str>) -> Result<()> {
         if done_at.is_some() {
             self.update_event(
@@ -221,6 +222,7 @@ impl Db {
         }
     }
 
+    #[cfg(test)]
     pub fn snooze(&self, id: &str, until: Option<&str>) -> Result<()> {
         if until.is_some() {
             self.update_event("UPDATE events SET snoozed_until = ?2, unread = 0 WHERE id = ?1", params![id, until])
@@ -234,14 +236,6 @@ impl Db {
             0 => Err(Error::Api { status: 404, message: "that inbox item no longer exists".into() }),
             _ => Ok(()),
         }
-    }
-
-    pub fn mark_seen(&self, key: &str, at: &str) -> Result<()> {
-        self.conn.execute(
-            "INSERT INTO seen (ticket_key, at) VALUES (?1, ?2) ON CONFLICT(ticket_key) DO UPDATE SET at = ?2",
-            params![key, at],
-        )?;
-        Ok(())
     }
 
     pub fn seen(&self) -> Result<std::collections::HashMap<String, String>> {

@@ -7,7 +7,6 @@
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -26,7 +25,7 @@ use super::toolchain::{Toolchain, ToolchainSource};
 use super::control::{MacTerminal, Terminal};
 use super::tracker::{Attention, NoNotices, RunNotifier};
 use crate::config::{AgentSettings, AppConfig};
-use crate::domain::{render_prompt, Run, RunKind, RunQuery, RunSpec, RunState, GUARD, REPORT_GUARD};
+use crate::domain::{render_prompt, Run, RunKind, RunQuery, RunSpec, RunState, GUARD, AGENT_GUARD};
 use crate::error::{Error, Result};
 use crate::inbox::Core;
 
@@ -90,14 +89,11 @@ pub struct RunService {
     pub(super) drafted: Arc<dyn Fn(&str) + Send + Sync>,
     pub(super) terminal: Arc<dyn Terminal>,
     pub(super) home: Option<PathBuf>,
-    enabled: AtomicBool,
-    /// Held across a read-modify-write of `config.json`, so the enable switch and a picked clone can't undo each other.
+    /// Held across a read-modify-write of `config.json`, so a settings change and a picked clone can't undo each other.
     pub(super) config_lock: Mutex<()>,
-    /// One switch at a time: turning on reads the environment, which can take a while.
-    pub(super) switching: tokio::sync::Mutex<()>,
     pub(super) settings: Mutex<AgentSettings>,
-    /// Where the run-report tool is served; absent when the server couldn't start.
-    pub(super) report: Option<Arc<super::report::ReportChannel>>,
+    /// Where Gossamr's tools are served for agents; absent when the server couldn't start.
+    pub(super) agents: Option<Arc<super::agent_config::AgentChannel>>,
     pub(super) timing: Timing,
     pub(super) misses: Mutex<std::collections::HashMap<String, u32>>,
     pub(super) idle_polls: Mutex<std::collections::HashMap<String, u32>>,
@@ -186,11 +182,9 @@ impl RunService {
             drafted: Arc::new(|_| {}),
             terminal: Arc::new(MacTerminal),
             home: dirs::home_dir(),
-            enabled: AtomicBool::new(false),
             config_lock: Mutex::new(()),
-            switching: tokio::sync::Mutex::new(()),
             settings: Mutex::new(AgentSettings { max_runs: MAX_CONCURRENT, ..AgentSettings::default() }),
-            report: None,
+            agents: None,
             timing: Timing::default(),
             misses: Mutex::new(std::collections::HashMap::new()),
             idle_polls: Mutex::new(std::collections::HashMap::new()),
@@ -233,22 +227,8 @@ impl RunService {
         dirs::home_dir().map(|h| default_roots(&h)).unwrap_or_default()
     }
 
-    pub fn enabled(self, on: bool) -> Self {
-        self.enabled.store(on, Ordering::SeqCst);
-        self
-    }
-
-    pub fn is_enabled(&self) -> bool {
-        self.enabled.load(Ordering::SeqCst)
-    }
-
-    pub(super) fn set_flag(&self, on: bool) {
-        self.enabled.store(on, Ordering::SeqCst);
-    }
-
     pub fn with_settings(self, settings: AgentSettings) -> Self {
         let settings = settings.clamped();
-        self.core.set_report_enabled(settings.report_result);
         *self.settings.lock().expect("settings lock poisoned") = settings;
         self
     }
@@ -265,17 +245,22 @@ impl RunService {
         self
     }
 
+    /// Resolves when an agent has put up a question, so the tracker can look at its run at once.
+    pub async fn question_asked(&self) {
+        self.core.asks().opened().await;
+    }
+
     /// Finds `claude` and reads the shell environment now, so the first approval doesn't wait for it.
     pub async fn warm(&self) {
         let _ = self.tools.get().await;
     }
 
-    pub fn ensure_enabled(&self) -> Result<()> {
-        if self.is_enabled() {
-            Ok(())
-        } else {
-            Err(Error::Claude("Agents are turned off. Turn them on in Settings.".into()))
-        }
+    pub(super) fn update_config(&self, change: impl FnOnce(&mut AppConfig)) -> Result<()> {
+        let _only_writer = self.config_lock.lock().expect("config lock poisoned");
+        let dir = self.core.data_dir();
+        let mut config = AppConfig::load(&dir);
+        change(&mut config);
+        config.save(&dir)
     }
 
     pub(super) async fn load(&self, id: &str) -> Result<Run> {
@@ -413,14 +398,14 @@ impl RunService {
         self.store(run).await?;
         self.remember(run);
 
-        let report = self.offer_report(run).await;
+        let agent = self.offer_tools(run).await;
         let spec = &run.spec;
         let mut guard = GUARD.to_string();
         if let Some(ro) = &run.read_only {
             guard = format!("{guard} {}", ro.guard);
         }
-        if report.is_some() {
-            guard = format!("{guard} {REPORT_GUARD}");
+        if agent.is_some() {
+            guard = format!("{guard} {AGENT_GUARD}");
         }
         let request = LaunchRequest {
             cwd: spec.clone_path.clone(),
@@ -428,7 +413,7 @@ impl RunService {
             worktree: spec.name.clone(),
             guard,
             prompt: render_prompt(spec),
-            report,
+            agent,
             read_only: run.read_only.clone(),
         };
         self.in_flight.lock().expect("in-flight lock poisoned").insert(run.id.clone());
@@ -450,14 +435,16 @@ impl RunService {
     /// Starts a queued run, or with `retry` a failed one that never got a session. Returns whether it launched: a queued
     /// run over the cap is left queued, waiting for a slot, and a retry over the cap fails for it as before.
     async fn start(&self, run_id: &str, retry: bool) -> Result<(Run, bool)> {
-        self.ensure_enabled()?;
         let _turn = self.launching.lock().await;
-        // Turning Agents off takes this lock too, so a start that waited for it can't launch after the switch went off.
-        self.ensure_enabled()?;
         let mut run = self.load(run_id).await?;
         let eligible = if retry { run.state == RunState::Failed && run.short_id.is_none() } else { run.state == RunState::Queued };
         if !eligible {
             return Ok((run, false));
+        }
+        // Only a person reaches `start`, so starting a run an earlier release queued on its own is their approval of it;
+        // without this, one sent to wait for a slot would never pass `workstream_runs`.
+        if run.unapproved_auto_start.take().is_some() {
+            self.store(&run).await?;
         }
         // A free slot goes to the runs already waiting for one first, in approval order; `launch_waiting` starts them.
         if !retry && (self.live_elsewhere(&run) >= self.cap() || self.waits_behind(&run).await) {
@@ -536,9 +523,9 @@ impl RunService {
     }
 
     /// Starts the runs that wait, in approval order (`queued_at`, then id), while fewer than the cap are live: queued
-    /// runs in a workstream that is open and not held (ones the supervisor auto-started and ones a person approved,
-    /// in one queue), and runs in no workstream a person approved over the cap. The rest stay queued, never failed for
-    /// the cap: one the cap keeps out is marked as waiting for a slot, and a held workstream's is skipped.
+    /// runs in a workstream that is open and not paused, and runs in no workstream a person approved over the cap. The
+    /// rest stay queued, never failed for the cap: one the cap keeps out is marked as waiting for a slot, and a paused
+    /// workstream's is skipped.
     ///
     /// Each start takes the launch lock itself, and tokio's mutex isn't re-entrant, so this is only ever called with no
     /// lock held: from the supervisor's own task, after the tracker's poll returns, and after a stop has freed a slot.
@@ -546,9 +533,6 @@ impl RunService {
     /// the stop through its settle to the wake, with the answered run marked terminal in the index in between, so a
     /// waiting run can't take that run's slot while it settles. Returns the ids it started.
     pub async fn launch_waiting(&self) -> Result<Vec<String>> {
-        if !self.is_enabled() {
-            return Ok(Vec::new());
-        }
         let mut queued = self.core.runs_list(&RunQuery { states: Some(vec![RunState::Queued]), ..RunQuery::default() }).await?;
         queued.retain(|r| r.spec.workstream.is_some() || r.slot_wait_since.is_some());
         queued.sort_by(|a, b| (a.queued_at, &a.id).cmp(&(b.queued_at, &b.id)));
@@ -563,29 +547,21 @@ impl RunService {
         Ok(started)
     }
 
-    /// Whether the workstream `run` belongs to is open and not held, as the signed-in account has it. A run an auto-start
-    /// rule started also needs the workstream still starting steps on its own with that rule on: one the person switched
-    /// to Advise, or whose rule they switched off, keeps it waiting for them.
+    /// Whether the workstream `run` belongs to is open and not paused, as the signed-in account has it, and the run
+    /// isn't one no one approved.
     async fn workstream_runs(&self, run: &Run) -> bool {
-        let Some(ws) = run.spec.workstream.as_deref() else { return false };
+        let Some(ws) = run.spec.workstream.as_deref().filter(|_| run.unapproved_auto_start.is_none()) else { return false };
         let Ok(scope) = self.core.scope().await else { return false };
         let Ok(Some(v)) = self.core.workstream(&scope, ws).await else { return false };
-        let ws = v.workstream;
-        match &run.auto_start {
-            Some(auto) => ws.closed_at.is_none() && ws.held_reason.is_none() && ws.mode == crate::domain::workstream::Mode::Manage && crate::config::rule_on(&self.settings(), &ws, auto.rule),
-            None => ws.closed_at.is_none() && ws.held_reason.is_none(),
-        }
+        v.workstream.closed_at.is_none() && v.workstream.paused_reason.is_none()
     }
 
     /// `start` for a waiting run: under the launch lock it is checked again that it is still queued, that its workstream
-    /// isn't held (or, in no workstream, that it is still waiting for a slot) and that there is room under the cap;
+    /// isn't paused (or, in no workstream, that it is still waiting for a slot) and that there is room under the cap;
     /// otherwise it is left as it is, marked as waiting for a slot when the cap is all that keeps it. Returns whether it
     /// launched.
     async fn start_waiting(&self, run_id: &str) -> Result<bool> {
         let _turn = self.launching.lock().await;
-        if !self.is_enabled() {
-            return Ok(false);
-        }
         let mut run = self.load(run_id).await?;
         let may_start = match run.spec.workstream {
             Some(_) => self.workstream_runs(&run).await,
@@ -624,13 +600,10 @@ impl RunService {
 
     /// After a restart: runs that were launching are matched to their sessions for up to the recovery window, adopted
     /// if found and failed if not. Queued runs stay queued; one in no workstream that was waiting for a slot before the
-    /// restart stops waiting, so it is the person's to start again (a workstream's waits behind the restart hold). The
-    /// same pass runs again on sign-in and when Agents are turned back on; a wait from this session is kept then, so an
+    /// restart stops waiting, so it is the person's to start again (a workstream's keeps waiting). The
+    /// same pass runs again on sign-in; a wait from this session is kept then, so an
     /// approved run still starts when a slot frees. Live runs missing from the index are put back.
     pub async fn recover(&self) {
-        if !self.is_enabled() {
-            return;
-        }
         let _only_pass = self.recovery.lock().await;
         self.forget_slot_waits().await;
         let live = vec![RunState::Launching, RunState::Working, RunState::NeedsAnswer, RunState::NeedsPermission, RunState::SystemBlocked, RunState::Unknown];
@@ -669,7 +642,7 @@ impl RunService {
         for mut run in waiting {
             let _ = self.fail(&mut run, &why).await;
         }
-        self.sweep_report_files().await;
+        self.sweep_agent_files().await;
     }
 
     /// Queued runs in no workstream that were waiting for a slot when the app stopped wait no longer. A wait that began
@@ -691,7 +664,6 @@ impl RunService {
     }
 
     pub async fn preflight(&self, spec: Option<RunSpec>) -> Result<Preflight> {
-        self.ensure_enabled()?;
         let pr = match spec.as_ref().filter(|s| s.kind == RunKind::Review) {
             Some(s) => Some(self.core.review_target(s).await.map_err(|e| e.to_string())),
             None => None,
@@ -714,14 +686,12 @@ impl RunService {
 
     /// The repositories a run can be set up in: every one watched on any GitHub connection.
     pub fn repos(&self) -> Result<Vec<String>> {
-        self.ensure_enabled()?;
         self.core.watched_repo_names()
     }
 
     /// Local clones of a watched repository, from a scan cached for ten minutes. The one the person chose, if it is
     /// still a clone, comes first.
     pub async fn clones(&self, repo: &str) -> Result<CloneChoice> {
-        self.ensure_enabled()?;
         let mut clones = match self.clones.get(repo) {
             Some(cached) => cached,
             None => {
@@ -741,7 +711,6 @@ impl RunService {
 
     /// Remembers which clone to use for a repository. Only a clone the scan finds can be picked.
     pub async fn pick_clone(&self, repo: &str, path: &Path) -> Result<()> {
-        self.ensure_enabled()?;
         let path = path.canonicalize().map_err(|_| Error::Proposal(format!("{} isn't a folder that exists", path.display())))?;
         let scanned = self.scan(repo).await?;
         self.clones.put(repo, scanned.clone());
@@ -755,7 +724,6 @@ impl RunService {
 
     /// A worktree name for a new run in `clone`, not used by any worktree or leftover branch there.
     pub async fn suggest_name(&self, clone: &Path, key: &str, title: &str) -> Result<String> {
-        self.ensure_enabled()?;
         if !(clone.is_absolute() && clone.is_dir()) {
             return Err(Error::Proposal(format!("{} isn't a folder that exists", clone.display())));
         }

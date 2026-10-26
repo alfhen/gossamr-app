@@ -10,7 +10,7 @@
 use std::collections::{HashMap, VecDeque};
 
 use super::supervisor::WakeFacts;
-use super::{AskRequest, UpdateSink};
+use super::{AskRequest, UpdateSink, WakeSink};
 use crate::auth::Scope;
 
 /// How many of Pip's agent processes may run at the same time, across every conversation.
@@ -33,7 +33,7 @@ pub enum QueueItem {
     /// A question a person sent, the account it was asked in, and where its events go.
     User { scope: Scope, req: Box<AskRequest>, sink: UpdateSink },
     /// The supervisor waking Pip in a workstream with what happened, and where the turn's events go.
-    Wake { scope: Scope, facts: WakeFacts, sink: UpdateSink },
+    Wake { scope: Scope, facts: WakeFacts, sink: WakeSink },
 }
 
 impl Queued for QueueItem {
@@ -212,11 +212,6 @@ impl<T: Queued> TurnQueue<T> {
     pub fn turns_of(&self, conversation: &str) -> Vec<String> {
         let Some(lane) = self.lanes.get(conversation) else { return Vec::new() };
         lane.in_flight.iter().cloned().chain(lane.waiting.iter().map(|e| e.id.clone())).collect()
-    }
-
-    /// The conversations with a turn waiting or running.
-    pub fn conversations(&self) -> Vec<String> {
-        self.lanes.keys().cloned().collect()
     }
 
     /// The session `conversation`'s last finished turn ended with.
@@ -412,7 +407,6 @@ mod tests {
         assert_eq!(q.turns_of("A"), ["w1", "a1", "w2"]);
         assert_eq!(ids(q.finished("w1", None)), ["a1"], "the person's message runs first");
         assert_eq!(ids(q.finished("a1", None)), ["w2"]);
-        assert_eq!(q.conversations(), ["A"]);
     }
 
     #[test]
@@ -435,9 +429,9 @@ mod tests {
     fn the_real_items_merge_only_wakes_of_the_same_workstream() {
         use crate::domain::RunKind;
         use crate::agent::supervisor::{WakeFact, WakeState};
-        let fact = |run: &str| WakeFact { run: run.into(), kind: RunKind::Triage, state: WakeState::Done, mark: String::new(), plan_recommended: None, open_questions: None, verdict: None, blocking: 0, drafts: 0, started: None, fix_round: None, exhausted: false, waiting_for_pr: false };
+        let fact = |run: &str| WakeFact { run: run.into(), kind: RunKind::Triage, state: WakeState::Done, mark: String::new(), plan_recommended: None, open_questions: None, verdict: None, blocking: 0, drafts: 0, waiting_for_pr: false };
         let scope = Scope { cloud_id: "s".into(), account_id: "me".into() };
-        let sink: UpdateSink = std::sync::Arc::new(|_| {});
+        let sink: WakeSink = std::sync::Arc::new(|_, _| {});
         let mut item = QueueItem::Wake { scope: scope.clone(), facts: WakeFacts { workstream: "w1".into(), facts: vec![fact("r1")] }, sink: sink.clone() };
         assert!(item.preempted_by_user());
         assert!(item.absorb(&WakeFacts { workstream: "w1".into(), facts: vec![fact("r1"), fact("r2")] }));

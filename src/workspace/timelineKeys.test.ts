@@ -201,16 +201,15 @@ describe("firstShowing", () => {
 });
 
 describe("entryLabel", () => {
-  const base = { kind: "audit", text: "The reporter replied on the ticket" } as const;
-  it("tells the reply entry what Enter does, and leaves other entries as their sentence", () => {
-    expect(entryLabel({ ...base, target: { type: "comment", ticketKey: "CA-1", id: "c1" } })).toBe("The reporter replied on the ticket. Enter opens the comment");
-    expect(entryLabel({ ...base, target: null })).toBe("The reporter replied on the ticket");
-    expect(entryLabel({ ...base, kind: "said", target: null })).toBeUndefined();
+  const base = { kind: "audit", text: "Agent R1 started on CA-1" } as const;
+  it("is the entry's sentence, and nothing for what is said in the conversation", () => {
+    expect(entryLabel(base)).toBe("Agent R1 started on CA-1");
+    expect(entryLabel({ ...base, kind: "said" })).toBeUndefined();
   });
 
   it("names the ticket, so a row read alone is not a bare sentence (G32)", () => {
-    expect(entryLabel({ ...base, ticketKey: "CA-1", target: null })).toBe("CA-1: The reporter replied on the ticket");
-    expect(entryLabel({ ...base, ticketKey: null, target: null })).toBe("The reporter replied on the ticket");
+    expect(entryLabel({ ...base, text: "You paused the workstream", ticketKey: "CA-1" })).toBe("CA-1: You paused the workstream");
+    expect(entryLabel({ ...base, text: "You paused the workstream", ticketKey: null })).toBe("You paused the workstream");
     expect(withTicket("Agent R1 started on CA-1", "CA-1")).toBe("Agent R1 started on CA-1");
   });
 });

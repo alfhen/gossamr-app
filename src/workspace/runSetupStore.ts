@@ -4,7 +4,7 @@ import { itemKey } from "../lib/filter";
 import type { CloneChoice, ContainerRef, ItemRef, Preflight, Proposal, ProposalEdit, Run, RunKind, RunReview, RunSpec } from "../types";
 import { allContainers, useWorkspace } from "../workspaceStore";
 import { defaultProject, defaultRepo, findRunDraft, kindBlock, linkedRepo, prChoices, repoChoices, ticketlessShape, type PrChoice } from "./runSheetLogic";
-import { dismissCancelledNoteFor, startWhat, useRuns } from "./runsStore";
+import { useRuns } from "./runsStore";
 import { readStored, writeStored } from "./storage";
 import { useTabs } from "./tabsStore";
 import { messageOf, useToasts } from "./toasts";
@@ -90,8 +90,6 @@ interface SetupState {
   planFromRun: string | null;
   /** The build run a review is made from; the backend reads its answer. */
   buildFromRun: string | null;
-  /** The Agents setting that offers runs the result tool is on, so a new draft asks for it. */
-  reportAvailable: boolean;
   prs: PrSearch;
   item: ItemRef | null;
   /** What the ticket is called, for naming the worktree. */
@@ -157,7 +155,6 @@ const closed = {
   pr: null,
   planFromRun: null as string | null,
   buildFromRun: null as string | null,
-  reportAvailable: false,
   prs: NO_PRS,
   item: null,
   title: null,
@@ -267,7 +264,7 @@ export const useRunSetup = create<SetupState>((set, get) => {
       set({ project });
       // A run on a ticket with an open workstream belongs to it, so the person's own runs group with Pip's.
       const workstream = item ? useWorkstreams.getState().forItem(item.key, item.connectionId)?.workstream.id : undefined;
-      const spec: RunSpec = { kind, repo, clonePath: clone.path, base: clone.defaultBranch ?? clone.branch, name, instruction: "", focus: null, focusFromRun: null, ticketBlock: null, pr: kind === "review" ? pr : null, allowPush: kind === "build", report: kind === "review" || get().reportAvailable, plan: null, planFromRun: kind === "build" ? planFromRun : null, buildAccount: null, buildFromRun: kind === "review" ? buildFromRun : null, project, ...(workstream ? { workstream } : {}) };
+      const spec: RunSpec = { kind, repo, clonePath: clone.path, base: clone.defaultBranch ?? clone.branch, name, instruction: "", focus: null, focusFromRun: null, ticketBlock: null, pr: kind === "review" ? pr : null, allowPush: kind === "build", report: true, plan: null, planFromRun: kind === "build" ? planFromRun : null, buildAccount: null, buildFromRun: kind === "review" ? buildFromRun : null, project, ...(workstream ? { workstream } : {}) };
       const draft = await backend.runsDraft(spec, item);
       if (!current(mine)) return void backend.proposalsSkip(draft.id).catch(() => {});
       set({ proposalId: draft.id, ownDraft: true });
@@ -286,14 +283,10 @@ export const useRunSetup = create<SetupState>((set, get) => {
     async begin(options) {
       const { item = null, proposalId, kind = "investigate", pr, repo: wanted, planFromRun = null, buildFromRun = null } = options;
       const backend = useWorkspace.getState().backend;
-      const what = startWhat(proposalId ? useWorkspace.getState().proposals[proposalId] : null, kind, item);
-      if (!backend || !useRuns.getState().ensureAgentsIntro(() => void get().begin(options), what)) return;
-      // The first-run sheet was closed with × earlier and the person is back for the same start: its "Nothing was started" is old.
-      dismissCancelledNoteFor(what);
+      if (!backend) return;
       const mine = ++run;
       useRuns.getState().closeSheet();
-      const reportAvailable = !!(await backend.runsSettings().catch(() => null))?.reportResult;
-      set({ ...closed, open: true, backend, kind, pr: pr ?? null, planFromRun, buildFromRun, reportAvailable, item, phase: "preparing" });
+      set({ ...closed, open: true, backend, kind, pr: pr ?? null, planFromRun, buildFromRun, item, phase: "preparing" });
       latestWatched = [];
       stopWatching?.();
       stopWatching = backend.onWatchChanged(() => void loadRepos(run, true));

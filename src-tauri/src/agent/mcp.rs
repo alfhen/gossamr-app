@@ -1,27 +1,33 @@
-//! A minimal MCP server (streamable HTTP, JSON responses only) that an agent connects to during one of Pip's runs.
+//! Gossamr's one MCP server (streamable HTTP, JSON responses only), for Pip and for the agents it runs.
 //!
-//! The agent gets read tools plus proposal tools. A proposal is stored as a draft for the user to approve; nothing
-//! here writes to a tracker. That keeps "Pip never changes anything without your approval" true regardless of what
-//! the model decides.
+//! Pip gets read tools plus proposal tools. A proposal is stored as a draft for the user to approve; nothing here
+//! writes to a tracker. That keeps "Pip never changes anything without your approval" true regardless of what the
+//! model decides. An agent gets four tools of its own (`agent_tools`) and never sees Pip's.
 
 use std::mem::discriminant;
+use std::path::PathBuf;
 use std::sync::Arc;
 
-use axum::extract::{Path, State};
+use axum::body::Bytes;
+use axum::extract::{DefaultBodyLimit, Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
 use axum::{Json, Router};
 use serde_json::{json, Value};
+use tokio::sync::Semaphore;
 
 use crate::auth::Scope;
 use crate::error::{Error, Result};
+use super::agent_tools::{self, AgentSide};
 use super::context::draft_line;
 use super::{McpEndpoint, RunPlanner};
-use crate::domain::{ContainerRef, DiffSide, Doc, Filter, Intent, ItemKind, ItemRef, NewItem, Proposal, ProposalQuery, ReviewComment, StateKind, Transitions};
+use crate::domain::{ASK_TOOL, ContainerRef, DiffSide, Doc, Filter, Intent, ItemKind, ItemRef, NewItem, Proposal, ProposalQuery, ReviewComment, StateKind, Transitions};
 use crate::inbox::{Core, TextSeen};
 use crate::model::CachedTicket;
 use crate::proposals::{self, Draft};
+use crate::runs::agent_config::AgentChannel;
+use crate::runs::report::well_formed;
 use crate::tracker::Connection;
 
 const SEARCH_LIMIT: usize = 50;
@@ -70,7 +76,8 @@ impl PipRun {
 /// mid-run can't hand the agent another account's tickets.
 pub type PipRuns = Arc<std::sync::Mutex<std::collections::HashMap<String, PipRun>>>;
 
-/// The bearer token of each run in progress, by run id. A token exists only between `endpoint` and `revoke`.
+/// The bearer token of each of Pip's requests in progress, by request id. A token exists only between `endpoint` and
+/// `revoke`.
 type Tokens = Arc<std::sync::Mutex<std::collections::HashMap<String, String>>>;
 
 pub(super) struct McpState {
@@ -82,25 +89,104 @@ pub(super) struct McpState {
     pub planner: Arc<dyn RunPlanner>,
 }
 
+/// One server, two kinds of caller. Pip reaches its tools at `/mcp/{request_id}` with a token that lives in memory for
+/// one turn; an agent reaches its own tools at `/agent/{run_id}` with a token stored as a hash, which stays valid across
+/// restarts. Neither kind of token opens the other's route, and every request is authenticated on its own, so a restart
+/// on the same port is invisible to a session that outlives it.
+struct Serving {
+    pip: Arc<McpState>,
+    agents: AgentSide,
+    port: u16,
+    pip_slots: Semaphore,
+    agent_slots: Semaphore,
+    ask_slots: Semaphore,
+}
+
+/// Pip's turns are one at a time per conversation; an agent's quick calls are a report or a read.
+const PIP_IN_FLIGHT: usize = 16;
+const AGENT_IN_FLIGHT: usize = 4;
+/// Pending `ask` calls wait for minutes, so they are counted apart from the quick ones.
+const ASKS_IN_FLIGHT: usize = 16;
+/// A plan is up to 24,000 characters, which is under 100 KB as UTF-8.
+const BODY_LIMIT_BYTES: usize = 128 * 1024;
+const PORT_FILE: &str = "port";
+
+/// A listener on loopback and what a launch needs to know about it. Bound first so the run service can be given the
+/// port before the server that needs the run service is started.
+pub struct Bound {
+    listener: tokio::net::TcpListener,
+    channel: Arc<AgentChannel>,
+}
+
+impl Bound {
+    pub fn channel(&self) -> Arc<AgentChannel> {
+        self.channel.clone()
+    }
+}
+
+/// Binds loopback on the port used last time when it is free, so a session that outlives a restart still finds the
+/// server; any other port is remembered for next time. `dir` holds the port file and the per-run config files.
+pub async fn bind(dir: PathBuf) -> std::io::Result<Bound> {
+    std::fs::create_dir_all(&dir)?;
+    let remembered = std::fs::read_to_string(dir.join(PORT_FILE)).ok().and_then(|s| s.trim().parse::<u16>().ok()).filter(|p| *p != 0);
+    let listener = match remembered {
+        Some(port) => match tokio::net::TcpListener::bind(("127.0.0.1", port)).await {
+            Ok(listener) => listener,
+            Err(e) => {
+                eprintln!("the MCP server couldn't take its last port {port} ({e}), so it uses another; sessions started before keep the old address");
+                tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?
+            }
+        },
+        None => tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?,
+    };
+    let port = listener.local_addr()?.port();
+    if remembered != Some(port) {
+        if let Err(e) = std::fs::write(dir.join(PORT_FILE), port.to_string()) {
+            eprintln!("couldn't remember the MCP server's port: {e}");
+        }
+    }
+    Ok(Bound { listener, channel: Arc::new(AgentChannel::new(port, dir)) })
+}
+
 pub struct McpServer {
     pub port: u16,
     pub runs: PipRuns,
-    pub planner: Arc<dyn RunPlanner>,
     tokens: Tokens,
 }
 
 impl McpServer {
+    /// A server on any free port, with nothing remembered.
+    #[cfg(test)]
     pub async fn start(core: Arc<Core>, planner: Arc<dyn RunPlanner>, sink: ChangeSink, view: ViewSink) -> std::io::Result<Self> {
         let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
         let port = listener.local_addr()?.port();
+        let channel = Arc::new(AgentChannel::new(port, std::env::temp_dir().join(format!("gossamr-agents-{port}"))));
+        Self::start_on(Bound { listener, channel }, core, planner, sink, view)
+    }
+
+    pub fn start_on(bound: Bound, core: Arc<Core>, planner: Arc<dyn RunPlanner>, sink: ChangeSink, view: ViewSink) -> std::io::Result<Self> {
+        let Bound { listener, channel } = bound;
+        let port = channel.port();
         let runs: PipRuns = Arc::default();
         let tokens = Tokens::default();
-        let state = Arc::new(McpState { core, tokens: tokens.clone(), sink, view, runs: runs.clone(), planner: planner.clone() });
-        let router = Router::new().route("/mcp/{request_id}", post(handle)).with_state(state);
+        let pip = Arc::new(McpState { core: core.clone(), tokens: tokens.clone(), sink, view, runs: runs.clone(), planner });
+        let state = Arc::new(Serving {
+            pip,
+            agents: AgentSide::new(core),
+            port,
+            pip_slots: Semaphore::new(PIP_IN_FLIGHT),
+            agent_slots: Semaphore::new(AGENT_IN_FLIGHT),
+            ask_slots: Semaphore::new(ASKS_IN_FLIGHT),
+        });
+        let router = Router::new()
+            .route("/mcp/{request_id}", post(pip_endpoint))
+            .route("/agent/{run_id}", post(agent_endpoint))
+            .layer(DefaultBodyLimit::max(BODY_LIMIT_BYTES))
+            .with_state(state);
         tauri::async_runtime::spawn(async move {
             let _ = axum::serve(listener, router).await;
         });
-        Ok(Self { port, runs, planner, tokens })
+        Ok(Self { port, runs, tokens })
     }
 
     /// Mints a fresh token for this run, valid until `revoke`. A second call for the same run replaces the first.
@@ -121,30 +207,49 @@ fn random_token() -> std::result::Result<String, getrandom::Error> {
     Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
 }
 
-/// A request is honoured only with the token issued for the run named in its path.
+/// Pip's request is honoured only with the token issued for the request named in its path.
 fn authorized(headers: &HeaderMap, tokens: &Tokens, request_id: &str) -> bool {
     let Some(token) = tokens.lock().expect("lock poisoned").get(request_id).cloned() else {
         return false;
     };
     let token = token.as_str();
-    let given = headers
-        .get("authorization")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.strip_prefix("Bearer "))
-        .unwrap_or_default();
+    let given = bearer(headers).unwrap_or_default();
     // Constant-time so the token can't be guessed byte by byte by another local process.
     given.len() == token.len() && given.bytes().zip(token.bytes()).fold(0u8, |acc, (a, b)| acc | (a ^ b)) == 0
 }
 
-async fn handle(
-    State(st): State<Arc<McpState>>,
-    Path(request_id): Path<String>,
-    headers: HeaderMap,
-    Json(msg): Json<Value>,
-) -> Response {
-    if !authorized(&headers, &st.tokens, &request_id) {
-        return StatusCode::UNAUTHORIZED.into_response();
+fn is_loopback_host(host: &str, port: u16) -> bool {
+    [format!("127.0.0.1:{port}"), format!("localhost:{port}")].iter().any(|h| h.eq_ignore_ascii_case(host))
+}
+
+fn is_loopback_origin(origin: &str) -> bool {
+    let Some(rest) = origin.strip_prefix("http://") else { return false };
+    let host = rest.split([':', '/']).next().unwrap_or_default();
+    host == "127.0.0.1" || host.eq_ignore_ascii_case("localhost")
+}
+
+/// A browser page can be made to post here; the Host check stops DNS rebinding and an Origin that isn't loopback stops
+/// the page itself. The CLI sends neither a foreign Host nor a foreign Origin.
+fn local_request(headers: &HeaderMap, port: u16) -> bool {
+    let host_ok = headers.get("host").and_then(|h| h.to_str().ok()).is_some_and(|h| is_loopback_host(h, port));
+    let origin_ok = headers.get("origin").is_none_or(|o| o.to_str().is_ok_and(is_loopback_origin));
+    host_ok && origin_ok
+}
+
+fn bearer(headers: &HeaderMap) -> Option<&str> {
+    headers.get("authorization")?.to_str().ok()?.strip_prefix("Bearer ")
+}
+
+/// The JSON-RPC message in `body`, or the status to refuse it with.
+fn message(body: &Bytes) -> std::result::Result<Value, StatusCode> {
+    match serde_json::from_slice::<Value>(body) {
+        Ok(msg) if msg.is_object() => Ok(msg),
+        _ => Err(StatusCode::BAD_REQUEST),
     }
+}
+
+/// Answers `msg` as an MCP server with `tools`; a `tools/call` is `call`'s to answer.
+async fn rpc(msg: Value, tools: impl FnOnce() -> Vec<Value>, call: impl std::future::Future<Output = Value>) -> Response {
     // Notifications carry no id and get no body.
     let Some(id) = msg.get("id").cloned() else {
         return StatusCode::ACCEPTED.into_response();
@@ -156,8 +261,8 @@ async fn handle(
             "serverInfo": { "name": "gossamr", "version": env!("CARGO_PKG_VERSION") }
         })),
         "ping" => Ok(json!({})),
-        "tools/list" => Ok(json!({ "tools": tool_list() })),
-        "tools/call" => Ok(call_tool(&st, &request_id, &msg["params"]).await),
+        "tools/list" => Ok(json!({ "tools": tools() })),
+        "tools/call" => Ok(call.await),
         _ => Err(json!({ "code": -32601, "message": "Method not found" })),
     };
     let reply = match result {
@@ -165,6 +270,47 @@ async fn handle(
         Err(e) => json!({ "jsonrpc": "2.0", "id": id, "error": e }),
     };
     Json(reply).into_response()
+}
+
+async fn pip_endpoint(State(st): State<Arc<Serving>>, Path(request_id): Path<String>, headers: HeaderMap, body: Bytes) -> Response {
+    let Ok(_slot) = st.pip_slots.try_acquire() else { return StatusCode::TOO_MANY_REQUESTS.into_response() };
+    if !local_request(&headers, st.port) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    if !authorized(&headers, &st.pip.tokens, &request_id) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let msg = match message(&body) {
+        Ok(msg) => msg,
+        Err(status) => return status.into_response(),
+    };
+    let params = msg["params"].clone();
+    rpc(msg, tool_list, call_tool(&st.pip, &request_id, &params)).await
+}
+
+async fn agent_endpoint(State(st): State<Arc<Serving>>, Path(run_id): Path<String>, headers: HeaderMap, body: Bytes) -> Response {
+    let Ok(quick) = st.agent_slots.try_acquire() else { return StatusCode::TOO_MANY_REQUESTS.into_response() };
+    if !local_request(&headers, st.port) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    // Only a missing or malformed bearer is a 401; a client that sees one for a legitimate session may start OAuth.
+    let Some(token) = bearer(&headers).filter(|t| well_formed(t)) else { return StatusCode::UNAUTHORIZED.into_response() };
+    let msg = match message(&body) {
+        Ok(msg) => msg,
+        Err(status) => return status.into_response(),
+    };
+    let params = msg["params"].clone();
+    let asking = msg["method"] == "tools/call" && params["name"] == ASK_TOOL;
+    let _held = if asking {
+        drop(quick);
+        match st.ask_slots.try_acquire() {
+            Ok(slot) => slot,
+            Err(_) => return StatusCode::TOO_MANY_REQUESTS.into_response(),
+        }
+    } else {
+        quick
+    };
+    rpc(msg, agent_tools::tools, st.agents.call(&run_id, token, &params)).await
 }
 
 pub(super) fn tool(name: &str, description: &str, properties: Value, required: &[&str]) -> Value {
@@ -212,7 +358,7 @@ fn tool_list() -> Vec<Value> {
         tool("list_next_statuses", "List the statuses an item can move to right now, with their ids.", json!({ "key": key }), &["key"]),
         tool(
             "list_proposals",
-            "List drafts from Pip, the user and autopilot. Open ones by default. Check this before proposing so you don't repeat one. Each line is a preview cut short: call get_proposal to read a draft in full.",
+            "List drafts from Pip and the user. Open ones by default. Check this before proposing so you don't repeat one. Each line is a preview cut short: call get_proposal to read a draft in full.",
             json!({ "state": { "type": "string", "enum": ["open", "applied", "skipped", "retired", "all"] }, "key": key }),
             &[],
         ),
@@ -491,12 +637,8 @@ async fn run_tool(st: &McpState, run: &PipRun, run_id: &str, name: &str, args: &
             let key = required(args, "key")?;
             reachable(st, run, key).await?;
             let body = required(args, "body")?;
-            // A comment that opens with the answers' heading is the person's answers to a triage's open questions: it is
-            // labelled so, which keeps it out of the safe batch (the person reads and approves it on its own).
-            let first = body.lines().next().unwrap_or_default().trim().trim_matches(|c: char| c == '#' || c == '*' || c.is_whitespace()).trim_end_matches(':');
-            let label = (first.eq_ignore_ascii_case(crate::proposals::ANSWERS_COMMENT_LABEL) || [crate::proposals::ANSWERS_OPENING, crate::proposals::ANSWERS_OPENING_BEFORE].iter().any(|o| first.eq_ignore_ascii_case(o.trim_end_matches(':')))).then(|| crate::proposals::ANSWERS_COMMENT_LABEL.to_string());
             let intent = Intent::Comment { item: item_ref(scope, key), body: Doc::from_text(body, &[]) };
-            propose(st, run, run_id, intent, label).await
+            propose(st, run, run_id, intent, None).await
         }
         "propose_subtasks" => {
             let key = required(args, "key")?;
@@ -885,6 +1027,49 @@ mod tests {
         reply.split("proposal ").nth(1).unwrap().split(')').next().unwrap().to_string()
     }
 
+    async fn status(url: &str, token: &str) -> u16 {
+        let rpc = serde_json::json!({ "jsonrpc": "2.0", "id": 1, "method": "ping" });
+        reqwest::Client::new().post(url).bearer_auth(token).json(&rpc).send().await.unwrap().status().as_u16()
+    }
+
+    async fn server() -> McpServer {
+        let fx = fixture().await;
+        McpServer::start(fx.core.clone(), crate::agent::runs::testing::FakePlanner::unused(), Arc::new(|_| {}), Arc::new(|_, _, _| {})).await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn each_run_gets_its_own_token_which_dies_with_the_run() {
+        let server = server().await;
+        let a = server.endpoint("run-a").unwrap();
+        let b = server.endpoint("run-b").unwrap();
+        assert_ne!(a.token, b.token);
+        assert_eq!(status(&a.url, &a.token).await, 200);
+        assert_eq!(status(&b.url, &b.token).await, 200);
+        assert_eq!(status(&b.url, &a.token).await, 401, "a token opens only its own run");
+        server.revoke("run-a");
+        assert_eq!(status(&a.url, &a.token).await, 401, "a revoked token is refused");
+        assert_eq!(status(&b.url, &b.token).await, 200, "another run is unaffected");
+    }
+
+    #[tokio::test]
+    async fn an_unknown_token_or_run_is_refused() {
+        let server = server().await;
+        let a = server.endpoint("run-a").unwrap();
+        assert_eq!(status(&a.url, "not-the-token").await, 401);
+        assert_eq!(status(&a.url, "").await, 401);
+        let nobody = a.url.replace("run-a", "never-started");
+        assert_eq!(status(&nobody, &a.token).await, 401);
+    }
+
+    #[tokio::test]
+    async fn a_new_token_for_a_run_replaces_the_old_one() {
+        let server = server().await;
+        let first = server.endpoint("run-a").unwrap();
+        let second = server.endpoint("run-a").unwrap();
+        assert_eq!(status(&first.url, &first.token).await, 401);
+        assert_eq!(status(&second.url, &second.token).await, 200);
+    }
+
     #[test]
     fn checks_the_bearer_token_against_the_one_issued_for_that_run() {
         let tokens = Tokens::default();
@@ -1038,25 +1223,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_comment_that_opens_with_the_answers_heading_is_labelled_so_and_no_other_is() {
-        let r = rig().await;
-        let plain = r.ok("propose_comment", json!({ "key": "CA-1", "body": "Looks good" })).await;
-        assert_eq!(r.stored(&id_in(&plain)).await.label, None, "an ordinary comment has no label");
-        let answers = r.ok("propose_comment", json!({ "key": "CA-1", "body": "Answers to the open questions on this ticket:\n\n\u{201c}Who asked?\u{201d}\nAnswer: Mette." })).await;
-        let stored = r.stored(&id_in(&answers)).await;
-        assert_eq!(stored.label.as_deref(), Some(crate::proposals::ANSWERS_COMMENT_LABEL), "which keeps it out of the safe batch");
-        assert!(crate::proposals::is_answers_draft(&stored) && !crate::proposals::is_reporter_questions(&stored));
-        let before = r.ok("propose_comment", json!({ "key": "CA-1", "body": "Open questions from triage, with answers:\n\n\u{201c}Who asked?\u{201d}\nAnswer: Mette." })).await;
-        assert_eq!(r.stored(&id_in(&before)).await.label.as_deref(), Some(crate::proposals::ANSWERS_COMMENT_LABEL), "a session made under the old prompt still labels its answers");
-        let old_heading = r.ok("propose_comment", json!({ "key": "CA-1", "body": "Answers to the open questions\nAnswer: ok" })).await;
-        assert_eq!(r.stored(&id_in(&old_heading)).await.label.as_deref(), Some(crate::proposals::ANSWERS_COMMENT_LABEL), "the earlier heading still counts");
-        let headed = r.ok("propose_comment", json!({ "key": "CA-1", "body": "## Answers to the open questions:\nAnswer: ok" })).await;
-        assert_eq!(r.stored(&id_in(&headed)).await.label.as_deref(), Some(crate::proposals::ANSWERS_COMMENT_LABEL), "through a heading and a colon");
-        let elsewhere = r.ok("propose_comment", json!({ "key": "CA-1", "body": "Notes: Answers to the open questions are below" })).await;
-        assert_eq!(r.stored(&id_in(&elsewhere)).await.label, None, "only a first line that is the heading");
-    }
-
-    #[tokio::test]
     async fn every_propose_tool_stores_a_pending_pip_draft_and_none_touches_the_tracker() {
         let r = rig().await;
         let comment = r.ok("propose_comment", json!({ "key": "CA-1", "body": " Looks good " })).await;
@@ -1163,21 +1329,19 @@ mod tests {
         let r = rig().await;
         let mine = id_in(&r.ok("propose_comment", json!({ "key": "CA-1", "body": "mine" })).await);
         let users = r.draft_by(CreatedBy::User, "the user's").await;
-        let auto = r.draft_by(CreatedBy::Autopilot, "autopilot's").await;
         let skipped = r.draft_by(CreatedBy::User, "skipped one").await;
         r.fx.core.skip_proposal(&skipped.id).await.unwrap();
         r.ok("propose_subtasks", json!({ "key": "CA-2", "summaries": ["x"] })).await;
 
         let open = r.ok("list_proposals", json!({})).await;
-        assert_eq!(open.lines().count(), 4, "{open}");
+        assert_eq!(open.lines().count(), 3, "{open}");
         let line = |id: &str| open.lines().find(|l| l.starts_with(id)).unwrap().to_string();
         assert!(line(&mine).contains("by Pip · yours to revise or retire"));
         assert!(line(&users.id).contains("by the user") && !line(&users.id).contains("yours"));
-        assert!(line(&auto.id).contains("by autopilot") && !line(&auto.id).contains("yours"));
         assert!(!open.contains(&skipped.id));
 
         assert!(r.ok("list_proposals", json!({ "state": "skipped" })).await.contains(&skipped.id));
-        assert_eq!(r.ok("list_proposals", json!({ "state": "all" })).await.lines().count(), 5);
+        assert_eq!(r.ok("list_proposals", json!({ "state": "all" })).await.lines().count(), 4);
         let on_two = r.ok("list_proposals", json!({ "key": "CA-2" })).await;
         assert!(on_two.lines().count() == 1 && on_two.contains("subtasks under CA-2"), "{on_two}");
         assert_eq!(r.ok("list_proposals", json!({ "state": "applied" })).await, "No drafts.");
@@ -1189,14 +1353,11 @@ mod tests {
         let r = rig().await;
         let mine = id_in(&r.ok("propose_comment", json!({ "key": "CA-1", "body": "first try" })).await);
         let users = r.draft_by(CreatedBy::User, "the user's words").await;
-        let auto = r.draft_by(CreatedBy::Autopilot, "autopilot's words").await;
         let before = r.drafts().await;
 
-        for foreign in [&users.id, &auto.id] {
-            let revise = r.err("revise_proposal", json!({ "id": foreign, "body": "hijacked" })).await;
-            assert!(revise.contains("wasn't made by Pip"), "{revise}");
-            assert!(r.err("retire_proposal", json!({ "id": foreign })).await.contains("wasn't made by Pip"));
-        }
+        let revise = r.err("revise_proposal", json!({ "id": users.id, "body": "hijacked" })).await;
+        assert!(revise.contains("wasn't made by Pip"), "{revise}");
+        assert!(r.err("retire_proposal", json!({ "id": users.id })).await.contains("wasn't made by Pip"));
         assert!(r.err("revise_proposal", json!({ "id": "missing", "body": "x" })).await.contains("list_proposals"));
         assert_eq!(r.drafts().await, before, "refused calls change nothing");
 
@@ -1237,8 +1398,7 @@ mod tests {
         let r = rig().await;
         let left = r.draft_from(from_run(), CreatedBy::User, "From the run").await;
         let by_hand = r.draft_by(CreatedBy::User, "typed by the person").await;
-        let by_autopilot = r.draft_from(from_run(), CreatedBy::Autopilot, "autopilot's").await;
-        let before = (r.stored(&by_hand.id).await, r.stored(&by_autopilot.id).await);
+        let before = r.stored(&by_hand.id).await;
 
         let reply = r.ok("revise_proposal", json!({ "id": left.id, "body": "Reworked with the full result" })).await;
         assert!(reply.contains("not been applied") && reply.contains("approve"), "{reply}");
@@ -1248,10 +1408,8 @@ mod tests {
         assert_eq!(revised.revisions.last().unwrap().note, "Revised by Pip");
         assert!(r.fx.tracker.intents().is_empty(), "nothing is posted");
 
-        for other in [&by_hand.id, &by_autopilot.id] {
-            assert!(r.err("revise_proposal", json!({ "id": other, "body": "hijacked" })).await.contains("wasn't made by Pip"));
-        }
-        assert_eq!((r.stored(&by_hand.id).await, r.stored(&by_autopilot.id).await), before);
+        assert!(r.err("revise_proposal", json!({ "id": by_hand.id, "body": "hijacked" })).await.contains("wasn't made by Pip"));
+        assert_eq!(r.stored(&by_hand.id).await, before);
         assert!(r.err("retire_proposal", json!({ "id": left.id })).await.contains("wasn't made by Pip"), "it may be revised, not withdrawn");
 
         r.fx.core.skip_proposal(&left.id).await.unwrap();
@@ -1286,17 +1444,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_breakdown_the_person_or_autopilot_made_stays_off_limits_even_with_a_run_origin_next_door() {
+    async fn a_breakdown_the_person_made_stays_off_limits_even_with_a_run_origin_next_door() {
         let r = rig().await;
         let by_hand = subtasks_from(&r, Origin::Board, CreatedBy::User).await;
-        let by_autopilot = subtasks_from(&r, from_run(), CreatedBy::Autopilot).await;
-        let before = (r.stored(&by_hand.id).await, r.stored(&by_autopilot.id).await);
-        for other in [&by_hand.id, &by_autopilot.id] {
-            assert!(r.err("revise_proposal", json!({ "id": other, "summaries": ["hijacked"] })).await.contains("wasn't made by Pip"));
-        }
+        let before = r.stored(&by_hand.id).await;
+        assert!(r.err("revise_proposal", json!({ "id": by_hand.id, "summaries": ["hijacked"] })).await.contains("wasn't made by Pip"));
         let intent = Intent::Subtasks { parent: r.fx.item("CA-1"), summaries: vec!["x".into()] };
         assert!(r.fx.core.revise_as_pip(&r.fx.scope, None, &by_hand.id, intent).await.is_err(), "the rule lives in Core too");
-        assert_eq!((r.stored(&by_hand.id).await, r.stored(&by_autopilot.id).await), before);
+        assert_eq!(r.stored(&by_hand.id).await, before);
     }
 
     async fn new_ticket_from(r: &Rig, origin: Origin, by: CreatedBy) -> Proposal {
@@ -1332,17 +1487,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_new_ticket_the_person_made_or_autopilot_made_stays_off_limits_even_with_a_run_origin_next_door() {
+    async fn a_new_ticket_the_person_made_stays_off_limits_even_with_a_run_origin_next_door() {
         let r = rig().await;
         let by_hand = new_ticket_from(&r, Origin::Board, CreatedBy::User).await;
-        let by_autopilot = new_ticket_from(&r, from_run(), CreatedBy::Autopilot).await;
-        let before = (r.stored(&by_hand.id).await, r.stored(&by_autopilot.id).await);
-        for other in [&by_hand.id, &by_autopilot.id] {
-            assert!(r.err("revise_proposal", json!({ "id": other, "title": "hijacked" })).await.contains("wasn't made by Pip"));
-        }
+        let before = r.stored(&by_hand.id).await;
+        assert!(r.err("revise_proposal", json!({ "id": by_hand.id, "title": "hijacked" })).await.contains("wasn't made by Pip"));
         let intent = Intent::Create { container: ContainerRef { connection_id: "c".into(), external_id: "x".into() }, fields: NewItem { title: "x".into(), body: Doc::default(), kind: ItemKind::Task, assignee: None, parent: None, priority: None, labels: vec![] }, link: None };
         assert!(r.fx.core.revise_as_pip(&r.fx.scope, None, &by_hand.id, intent).await.is_err(), "the rule lives in Core too");
-        assert_eq!((r.stored(&by_hand.id).await, r.stored(&by_autopilot.id).await), before);
+        assert_eq!(r.stored(&by_hand.id).await, before);
     }
 
     #[tokio::test]

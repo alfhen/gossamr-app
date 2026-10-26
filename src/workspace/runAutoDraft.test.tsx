@@ -1,4 +1,3 @@
-import { AUTOSTART_DEFAULTS } from "../types";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import type { AskRequest } from "../backend/claude";
@@ -301,16 +300,6 @@ describe("what the person sees", () => {
     }
   });
 
-  it("says the comment to the reporter is Gossamr's, around the triage's questions, and not an agent's alone", () => {
-    const props = { statusName: null, people: [], working: false, error: null, onApprove: vi.fn(), onSkip: vi.fn() };
-    const html = renderToStaticMarkup(<DraftCard proposal={pending({ createdBy: "agent", label: "Questions for the reporter", origin: { type: "run", runId: "r1", shortId: "ab12cd34", workstream: "ws-1" } })} {...props} />);
-    expect(html).toContain('data-created-by="gossamr"');
-    expect(html).toContain("Drafted by Gossamr");
-    expect(html).not.toContain("Drafted by an agent");
-    expect(html).toContain("Gossamr wrote this around the triage&#x27;s open questions, which are the agent&#x27;s words. Read and edit them before you approve.");
-    expect(html).not.toContain("The words are the agent");
-  });
-
   it("offers Discuss with Pip on a comment from a run, and not on any other", () => {
     const props = { statusName: null, people: [], working: false, error: null, onApprove: vi.fn(), onSkip: vi.fn() };
     const html = (p: Proposal, onDiscuss?: () => void) => renderToStaticMarkup(<DraftCard proposal={p} onDiscuss={onDiscuss} {...props} />);
@@ -349,7 +338,7 @@ describe("what the person sees", () => {
   });
 
   it("has the setting in the safety sheet's limits, on by default", () => {
-    const settings = { maxRuns: 3, wallClockMinutes: 60, tokenCap: 3_000_000, terminal: "terminal" as const, draftOnFinish: true, reportResult: false, autostart: AUTOSTART_DEFAULTS, managerTurnsPerDay: 40 };
+    const settings = { maxRuns: 3, wallClockMinutes: 60, tokenCap: 3_000_000, terminal: "terminal" as const, draftOnFinish: true };
     const html = renderToStaticMarkup(<AgentsSettingsView runs={[]} stopping={false} keepRunning={0} settings={settings} cleanup={null} onSettings={vi.fn()} onCleanup={vi.fn()} onStopAll={vi.fn()} onClose={vi.fn()} />);
     expect(html).toContain("Draft a Jira comment when an agent finishes");
     expect(html).toMatch(/<input type="checkbox"[^>]*checked/);

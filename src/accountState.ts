@@ -1,5 +1,4 @@
-import { forgetConversations, stopWatchingProposals } from "./claudeStore";
-import { stopClassicSync, useStore } from "./store";
+import { forgetConversations } from "./claudeStore";
 import { useWorkView } from "./workspace/workViewStore";
 import { resetPip } from "./workspace/pipStore";
 import { readStored, writeStored } from "./workspace/storage";
@@ -16,20 +15,17 @@ const lastAccount = (): string | null => {
 
 /**
  * Clears what belongs to one account before another (or none) is shown. Conversations, Pip's filter and the loaded
- * workspace are dropped every time. Tabs, saved views and closed suggestions refer to one account's projects, so they
- * survive a restart or a UI switch but not a different account.
+ * workspace are dropped every time. Tabs and saved views refer to one account's projects, so they
+ * survive a restart but not a different account.
  */
 export function resetAccountState(accountId: string | null) {
   const changed = accountId !== lastAccount();
-  stopClassicSync();
-  stopWatchingProposals();
   forgetConversations();
-  resetPip(changed);
+  resetPip();
   // The open workstream and decision belong to the account shown before.
   useWorkView.getState().reset();
   useWorkspace.getState().dispose();
   useToasts.getState().clear();
-  useStore.setState({ snap: null, backend: null, selectedId: null, overlay: null });
   if (changed) {
     useTabs.getState().reset();
     writeStored(KEY, { id: accountId });

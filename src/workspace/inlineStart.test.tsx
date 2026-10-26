@@ -7,8 +7,7 @@ import { useWorkspace } from "../workspaceStore";
 import { DraftPreview, KEY_HINT, KEY_HINT_ROOM, LiveDraftPreview, collapseReview, openLiveDraft } from "./DraftPreview";
 import { escapeCollapses } from "./draftKeys";
 import { focusPeekOf } from "./PeekSheet";
-import { AFTER_INTRO_NOTE, CLOSED_INLINE, InlineStartContext, InlineStartView, inlineStartBlock, inlineStartKey, inlineStartable, revealReview, useInlineStarts, type InlineActions } from "./InlineStart";
-import { usePrefs } from "./prefs";
+import { CLOSED_INLINE, InlineStartContext, InlineStartView, inlineStartBlock, inlineStartKey, inlineStartable, revealReview, useInlineStarts, type InlineActions } from "./InlineStart";
 import { COPY } from "./runSheetLogic";
 import { useRunSetup } from "./runSetupStore";
 import { useRuns } from "./runsStore";
@@ -43,7 +42,6 @@ async function draft(): Promise<string> {
 
 beforeEach(async () => {
   vi.stubGlobal("localStorage", memory());
-  usePrefs.setState({ agentsIntroSeen: true });
   backend = new MockBackend({ runs: { seed: "empty", epoch: Date.parse("2026-09-30T12:00:00Z") } });
   await useWorkspace.getState().init(backend);
   useRuns.getState().init(backend);
@@ -198,43 +196,6 @@ describe("reviewing and starting a run draft in place", () => {
     expect(render(id)).toContain('role="alert"');
     expect(inlineStartBlock(entry(id))).toBeNull();
     expect((await inline().start(id))?.state).toBe("queued");
-  });
-
-  it("opens the safety sheet first for a person who hasn't seen it, and reads nothing", async () => {
-    const id = await draft();
-    usePrefs.setState({ agentsIntroSeen: false });
-    await inline().open(id);
-    expect(useRuns.getState().sheet).toEqual({ type: "safety" });
-    expect(inline().entries[id]).toBeUndefined();
-    useRuns.getState().closeSheet();
-  });
-
-  it("opens the review in place once the person presses Got it, continue on the safety sheet, without a second click", async () => {
-    const id = await draft();
-    usePrefs.setState({ agentsIntroSeen: false });
-    await inline().open(id);
-    expect(inline().entries[id]).toBeUndefined();
-    useRuns.getState().continueIntro();
-    expect(useRuns.getState().sheet).toBeNull();
-    await vi.waitFor(() => expect(inline().entries[id]?.phase).toBe("shown"));
-    expect(inline().entries[id]?.review).not.toBeNull();
-    // Nothing started with the press, and the review says so (G28); a review the person opens themselves has no such note.
-    expect(inline().entries[id]?.afterIntro).toBe(true);
-    expect(render(id)).toContain(AFTER_INTRO_NOTE);
-    inline().close(id);
-    await inline().open(id);
-    expect(render(id)).not.toContain("data-after-intro");
-  });
-
-  it("opens the setup sheet the person asked for once they continue past the safety sheet, as asked", async () => {
-    usePrefs.setState({ agentsIntroSeen: false });
-    await useRunSetup.getState().begin({ item: CA, kind: "triage" });
-    expect(useRunSetup.getState().open).toBe(false);
-    useRuns.getState().continueIntro();
-    await vi.waitFor(() => expect(useRunSetup.getState().open).toBe(true));
-    expect(useRunSetup.getState()).toMatchObject({ kind: "triage", item: CA });
-    expect(useRuns.getState().sheet).toBeNull();
-    useRunSetup.getState().close();
   });
 });
 

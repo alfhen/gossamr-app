@@ -1,8 +1,8 @@
 import { expect, test, type Page } from "@playwright/test";
 import { advanceRuns, askPip, askRun, homeConversation, homeConversationRegion, homeRunCards, homeSettled, homeWakes, inlineStart, jiraWrites, mockRuns, needsYouCount, openAgents, openApp, peekSheet, selectWorkstream, startWorkstream, stepChip, stepRail, workstreamEvents, expandNeedsYou, needsStack } from "./support/app";
 
-// A workstream in Manage mode, so a run that asks wakes Pip.
-const MANAGED = "runs=empty&wsManage=1";
+// A run that asks wakes Pip in its workstream.
+const SAMPLE = "runs=empty";
 const QUESTION = "Should the refund path keep the old rounding?";
 
 /** Pip's suggested reply to R1 in Pip home's conversation. */
@@ -13,7 +13,7 @@ const answerCard = (page: Page) => homeConversationRegion(page).getByRole("artic
  * has it ask `QUESTION`; returns the run's id once Pip's wake about it is answered.
  */
 async function investigationAsks(page: Page): Promise<string> {
-  await openApp(page, MANAGED);
+  await openApp(page, SAMPLE);
   await startWorkstream(page, "CA-401");
   await openAgents(page);
   await selectWorkstream(page, "CA-401");

@@ -168,19 +168,11 @@ test("a on a run draft opens its setup and starts nothing", async ({ page }) => 
   await expect(pipPane(page).getByRole("button", { name: "Stop" })).toHaveCount(0);
 
   const setup = page.getByRole("dialog", { name: "Start an agent" });
-  const safety = page.getByRole("dialog", { name: "Agents safety and settings" });
-  // A fresh profile's first agent action shows the safety sheet instead, once.
-  for (let attempt = 0; attempt < 2; attempt++) {
-    await page.locator(PIP_INPUT).press("ArrowUp");
-    await expect(draft).toBeFocused();
-    await expect(draft).toContainText("e edit · d s skip · ↵ open");
-    await expect(draft).not.toContainText("a approve");
-    await page.keyboard.press("a");
-    await expect(setup.or(safety)).toBeVisible();
-    if (!(await safety.isVisible())) break;
-    await safety.getByRole("button", { name: "Close" }).click();
-    await page.locator(PIP_INPUT).focus();
-  }
+  await page.locator(PIP_INPUT).press("ArrowUp");
+  await expect(draft).toBeFocused();
+  await expect(draft).toContainText("e edit · d s skip · ↵ open");
+  await expect(draft).not.toContainText("a approve");
+  await page.keyboard.press("a");
   await expect(setup).toBeVisible();
   await expect(setup).toContainText("CA-401");
 
@@ -190,7 +182,7 @@ test("a on a run draft opens its setup and starts nothing", async ({ page }) => 
   await expect(runs).toHaveCount(before);
 });
 
-test("the pane keeps its header, chips and input", async ({ page }) => {
+test("the pane keeps its header and input", async ({ page }) => {
   await openApp(page);
   await openPip(page);
   const pane = pipPane(page);
@@ -202,8 +194,7 @@ test("the pane keeps its header, chips and input", async ({ page }) => {
   await expect(page.locator(PIP_INPUT)).toBeFocused();
   await expect(page.locator(PIP_INPUT)).toHaveAttribute("aria-label", "Ask Pip");
   await expect(pane.getByRole("button", { name: "Ask" })).toBeDisabled();
-  await expect(pane.locator(":scope > div.flex-wrap > button").first()).toBeVisible();
-  // Order inside the pane: header, conversation, chips, then the form, with the status line under it.
+  // Order inside the pane: header, conversation, then the form, with the status line under it.
   const order = await pane.evaluate((el) => [...el.children].map((c) => c.tagName.toLowerCase()));
   expect(order.slice(-2)).toEqual(["form", "p"]);
   expect(order.indexOf("header")).toBeLessThan(order.indexOf("form"));

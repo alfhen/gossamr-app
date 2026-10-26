@@ -37,7 +37,7 @@ export type NeedsKeyAction =
   | { type: "cancel" }
   /** Esc on a row while a decision is open. */
   | { type: "closePane" }
-  /** Ctrl/Cmd+Z outside a field: takes back the newest skip, dismissal or hold still on offer. */
+  /** Ctrl/Cmd+Z outside a field: takes back the newest skip or dismissal still on offer. */
   | { type: "undo" };
 
 export interface KeyEventLike {

@@ -206,7 +206,7 @@ impl RunService {
         if let Err(e) = self.index.forget(id) {
             eprintln!("couldn't update the run index: {e}");
         }
-        self.forget_report(id).await;
+        self.forget_tools(id).await;
         self.changed_for(&[run]);
         Ok(Deleted::Deleted)
     }

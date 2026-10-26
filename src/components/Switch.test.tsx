@@ -50,7 +50,7 @@ describe("SwitchRow", () => {
 });
 
 describe("on/off preferences", () => {
-  it.each(["../workspace/AgentsSwitch.tsx", "../workspace/PipPane.tsx", "../workspace/Settings.tsx"])("%s has no raw checkbox", (file) => {
+  it.each(["../workspace/PipPane.tsx", "../workspace/Settings.tsx"])("%s has no raw checkbox", (file) => {
     expect(readFileSync(new URL(file, import.meta.url), "utf8")).not.toMatch(/type="checkbox"/);
   });
 });

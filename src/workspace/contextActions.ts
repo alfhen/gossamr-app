@@ -50,16 +50,7 @@ export const contextDeps: ContextDeps = {
       case "allow":
       case "retry":
       case "resume":
-      case "allowMore":
-      case "askReporter":
         return go(plan("approve"));
-      // The palette's own Enter is the deliberate step: it records the person's choice, which only the person can make.
-      case "answerSelf":
-        return need.workstreamId ? void useWorkstreams.getState().answerSelf(need.workstreamId) : openNeed(need);
-      case "planAnyway":
-        return need.workstreamId ? void useWorkstreams.getState().planAnyway(need.workstreamId) : openNeed(need);
-      case "advise":
-        return need.workstreamId ? contextDeps.advise(need.workstreamId) : openNeed(need);
       case "deny":
       case "dismiss":
         return go(plan("dismiss"));
@@ -82,9 +73,8 @@ export const contextDeps: ContextDeps = {
     useWorkView.getState().focus({ type: "draft", id: p.id });
   },
   openRun: (run: Run) => useRuns.getState().openRun(run.id),
-  hold: (id) => void useWorkstreams.getState().hold(id),
+  pause: (id) => void useWorkstreams.getState().pause(id),
   resume: (id) => void useWorkstreams.getState().resume(id),
-  advise: (id) => void useWorkstreams.getState().setMode(id, "advise"),
   openWorkstream: openOnAgents,
   approveSafe(group) {
     // The workstream's own step: its combined preview and confirm. Nothing is approved here.
@@ -93,13 +83,10 @@ export const contextDeps: ContextDeps = {
   },
 };
 
-/**
- * The entries for the item in focus, and with Agents on the global batch ones ("Approve all safe drafts in …"), from the
- * stores as they are now. A draft's entries need no Agents; a need, a run or a workstream only exists with them.
- */
-export function contextEntries(subject: Subject | null, agents: boolean): Command[] {
-  const needs = agents ? currentNeeds() : [];
+/** The entries for the item in focus and the global batch ones ("Approve all safe drafts in …"), from the stores as they are now. */
+export function contextEntries(subject: Subject | null): Command[] {
+  const needs = currentNeeds();
   const data = { needs, proposals: useWorkspace.getState().proposals, runs: useRuns.getState().runs, workstreams: useWorkstreams.getState().list };
-  return [...contextCommands(subject, data, contextDeps), ...(agents ? batchCommands(needGroups(needs), contextDeps) : [])];
+  return [...contextCommands(subject, data, contextDeps), ...batchCommands(needGroups(needs), contextDeps)];
 }
 

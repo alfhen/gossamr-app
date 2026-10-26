@@ -2,7 +2,6 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
 import type { Intent } from "../types";
 import { MockBackend } from "./mock";
 import { itemRef } from "./mockConnector";
-import { UNDO_WINDOW_MS } from "./mockWorkstreams";
 import { UNSKIP_WINDOW_MS } from "./mockProposals";
 import { docFromText } from "../lib/docs";
 
@@ -71,63 +70,5 @@ describe("taking a skip back (the mock of unskip)", () => {
     vi.setSystemTime(Date.now() + UNSKIP_WINDOW_MS + 1);
     await expect(backend.proposalsUnskip(p.id)).rejects.toThrow(/too long ago/);
     expect((await backend.proposalsGet(p.id))?.state.type).toBe("skipped");
-  });
-});
-
-describe("taking a hold or an Advise back (the mock of workstreams_undo)", () => {
-  it("undoes a hold, restores what the hold replaced, and adds an undone line", async () => {
-    const backend = new MockBackend({ runs: { seed: "empty" } });
-    const ws = await backend.workstreamsOpen(CA401);
-    await backend.workstreamsHold(ws.id);
-    const back = await backend.workstreamsUndo(ws.id, { type: "hold", was: null });
-    expect(back.heldReason).toBeNull();
-    expect(await lines(backend, ws.id)).toEqual([
-      ["person", "opened", null],
-      ["person", "held", "person"],
-      ["person", "undone", "held"],
-    ]);
-    // Done once: nothing left to undo.
-    await expect(backend.workstreamsUndo(ws.id, { type: "hold", was: null })).rejects.toThrow(/can't be undone/);
-  });
-
-  it("goes back to the hold a person's hold replaced, never to a reason that isn't one", async () => {
-    const backend = new MockBackend({ runs: { seed: "empty" } });
-    const ws = await backend.workstreamsOpen(CA401);
-    backend.workstreams.hold(ws.id, "budget", "supervisor");
-    await backend.workstreamsHold(ws.id);
-    await expect(backend.workstreamsUndo(ws.id, { type: "hold", was: "because" })).rejects.toThrow(/isn't a hold/);
-    expect((await backend.workstreamsUndo(ws.id, { type: "hold", was: "budget" })).heldReason).toBe("budget");
-  });
-
-  it("refuses once anything else has happened since, or after the window, or for a hold that wasn't the person's", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-10-12T09:00:00Z"));
-    const backend = new MockBackend({ runs: { seed: "empty" } });
-    const ws = await backend.workstreamsOpen(CA401);
-    await backend.workstreamsHold(ws.id);
-    vi.setSystemTime(Date.now() + UNDO_WINDOW_MS + 1);
-    await expect(backend.workstreamsUndo(ws.id, { type: "hold", was: null })).rejects.toThrow(/can't be undone/);
-    vi.setSystemTime(new Date("2026-10-12T10:00:00Z"));
-    await backend.workstreamsResume(ws.id);
-    await backend.workstreamsHold(ws.id);
-    await backend.workstreamsSetRule(ws.id, "triage_plan", false);
-    await expect(backend.workstreamsUndo(ws.id, { type: "hold", was: null })).rejects.toThrow(/can't be undone/);
-    expect((await backend.workstreamsEvents(ws.id)).filter((e) => e.action === "undone")).toEqual([]);
-    const other = await backend.workstreamsOpen(itemRef("CA-402"));
-    backend.workstreams.hold(other.id, "budget", "supervisor");
-    await expect(backend.workstreamsUndo(other.id, { type: "hold", was: null })).rejects.toThrow(/can't be undone/);
-  });
-
-  it("undoes a switch to Advise, with the mode a tripwire kept", async () => {
-    const backend = new MockBackend({ runs: { seed: "empty" } });
-    const ws = await backend.workstreamsOpen(CA401);
-    await backend.workstreamsSetMode(ws.id, "manage");
-    await backend.workstreamsSetMode(ws.id, "advise");
-    const back = await backend.workstreamsUndo(ws.id, { type: "mode", was: "manage", resumeMode: "manage" });
-    expect(back).toMatchObject({ mode: "manage", resumeMode: "manage" });
-    const all = await lines(backend, ws.id);
-    expect(all[all.length - 1]).toEqual(["person", "undone", "mode_set"]);
-    expect((await backend.workstreamsEvents(ws.id)).filter((e) => e.action === "mode_set")).toHaveLength(2);
-    await expect(backend.workstreamsUndo(ws.id, { type: "mode", was: "advise", resumeMode: null })).rejects.toThrow(/can't be undone/);
   });
 });

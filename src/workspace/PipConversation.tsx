@@ -9,7 +9,7 @@ import { labelsByRun } from "../lib/workstreamStage";
 import { workstreamOfConversation } from "../lib/conversations";
 import { MAX_IMAGES, defaultQuestion } from "../lib/pipImages";
 import type { ItemRef, Proposal, Workstream } from "../types";
-import { LiveDraftPreview, openLiveDraft } from "./DraftPreview";
+import { LiveDraftPreview } from "./DraftPreview";
 import { PIP_INPUT_ID, PIP_ROOT, stepDraftCards, upToNewestDraft } from "./draftKeys";
 import { PipRunStrip } from "./PipRunCard";
 import { upToTimeline } from "./timelineKeys";
@@ -17,12 +17,8 @@ import { AttachButton, AttachedThumbs, TurnImages, type useAttachments } from ".
 import { currentContext } from "./pipHooks";
 import { appliedState, usePip, type AppliedState } from "./pipStore";
 import { usePopover } from "./Popover";
-import { chipPageAction, isInvestigateChip, placeholderFor } from "./suggestions";
-import { investigateKey, settleDraftFocus } from "./clarityActions";
-import { planRewriteDraft } from "./workViewLogic";
 import { useRuns } from "./runsStore";
-import { useTabs } from "./tabsStore";
-import { useAgentsEnabled } from "./agentsFlag";
+import { useTabs, type Route } from "./tabsStore";
 import { contextFor, useWorkstreams } from "./workstreamsStore";
 import { useWorkspace } from "../workspaceStore";
 import { maskSecrets } from "../lib/riskyText";
@@ -157,7 +153,7 @@ function WakeText({ id, text }: { id: string; text: string }) {
   );
 }
 
-/** Why a wake turn ended without an answer, said quietly: the person wrote first, or held it. */
+/** Why a wake turn ended without an answer, said quietly: the person wrote first, or stopped it. */
 const setAside = (turn: Turn) => turn.kind === "wake" && turn.status === "failed" && (turn.error === REMOVED_TURN || turn.error === "Stopped");
 
 /** One question and Pip's answer to it, with the drafts the answer made. `afterQueued` says a queued turn waits behind another queued one. A wake has no question: a muted line says what woke Pip. */
@@ -317,13 +313,8 @@ export function useAnswering(conversation: string): boolean {
   return useClaude((s) => (s.byTicket[conversation]?.turns ?? NO_TURNS).some((t) => t.status === "running"));
 }
 
-/** Whether a question in this conversation waits for the one being answered. */
-function useQueued(conversation: string): boolean {
-  return useClaude((s) => (s.byTicket[conversation]?.turns ?? NO_TURNS).some((t) => t.status === "queued"));
-}
-
 /**
- * The one sentence a workstream's empty conversation opens with: what it is for. The commands and what Manage does are
+ * The one sentence a workstream's empty conversation opens with: what it is for. The commands are
  * behind the composer's Commands button, not here.
  */
 export function workstreamIntro(workstream: Pick<Workstream, "itemKey" | "title"> | null): string {
@@ -333,32 +324,14 @@ export function workstreamIntro(workstream: Pick<Workstream, "itemKey" | "title"
   return `Everything for ${name} stays here: its agents, drafts and our conversation.`;
 }
 
-/** The workstream intro's one button: the conversation's first suggestion, asked through the composer as its chip would be. */
-export function IntroAction({ conversation, text }: { conversation: string; text: string }) {
-  return (
-    <button
-      type="button"
-      data-intro-action
-      onClick={() => {
-        // The button goes with the intro once asked; the keyboard follows the draft it asks for (see the chips).
-        if (isInvestigateChip(text)) settleDraftFocus(new Set(Object.keys(useWorkspace.getState().proposals)), investigateKey(text));
-        usePip.getState().askIn(conversation, text);
-      }}
-      className="justify-self-start rounded-md bg-gradient-to-br from-ws-pip to-ws-pip2 px-3 py-1 font-semibold text-ws-on-pip hover:brightness-105 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip"
-    >
-      {text}
-    </button>
-  );
-}
-
 /** What General's empty conversation opens with. */
 export const GENERAL_INTRO = `I follow along as you move around. Tell me what to show, or ask about what is on screen. I can filter this view and draft comments, moves and subtasks. Nothing is posted to Jira until you approve it. ${BUILD_ON_GITHUB}`;
 
 /**
  * The conversation itself: running agents, drafts left from before, then each question with its answer. Up and down move
- * between its draft cards. `primary` is the one action a workstream's empty conversation offers under its intro.
+ * between its draft cards.
  */
-export function PipConversation({ conversation, proposals, bodyRef, primary = null, ticket = null }: { conversation: string; proposals: Proposal[]; bodyRef?: RefObject<HTMLDivElement | null>; primary?: string | null; /** The ticket a pane is about, whose drafts it lists ahead of the rest. */ ticket?: ItemRef | null }) {
+export function PipConversation({ conversation, proposals, bodyRef, ticket = null }: { conversation: string; proposals: Proposal[]; bodyRef?: RefObject<HTMLDivElement | null>; /** The ticket a pane is about, whose drafts it lists ahead of the rest. */ ticket?: ItemRef | null }) {
   const turns = useClaude((s) => s.byTicket[conversation]?.turns) ?? NO_TURNS;
   const workstreamId = workstreamOfConversation(conversation);
   const workstream = useWorkstreams((s) => (workstreamId ? (s.list.find((v) => v.workstream.id === workstreamId)?.workstream ?? null) : null));
@@ -376,12 +349,9 @@ export function PipConversation({ conversation, proposals, bodyRef, primary = nu
       <EarlierDrafts key={ticket ? `${ticket.connectionId}:${ticket.key}` : ""} proposals={proposals} turns={turns} ticket={ticket} />
       {turns.length === 0 &&
         (workstreamId ? (
-          <div className="grid gap-2.5">
-            <p data-empty-workstream className="m-0 text-ws-ink2">
-              {workstreamIntro(workstream)}
-            </p>
-            {primary && <IntroAction conversation={conversation} text={primary} />}
-          </div>
+          <p data-empty-workstream className="m-0 text-ws-ink2">
+            {workstreamIntro(workstream)}
+          </p>
         ) : (
           <p className="m-0 text-ws-ink2">{GENERAL_INTRO}</p>
         ))}
@@ -393,18 +363,16 @@ export function PipConversation({ conversation, proposals, bodyRef, primary = nu
 }
 
 /**
- * A command typed in the composer (`/stop R1`, `/retry R1`, `/answer R1 text`, and `/hold`, `/resume` in a workstream),
- * carried out with the person's own commands; what it came to is told under the input. Null for anything else, which is a question for Pip, and for
- * everything while Agents are off, when the composer is what it was before agents. A command never reaches Pip and adds
- * no turn. `R1` is looked up among the runs of the conversation's workstream.
+ * A command typed in the composer (`/stop R1`, `/retry R1`, `/answer R1 text`, and `/pause`, `/resume` in a workstream),
+ * carried out with the person's own commands; what it came to is told under the input. Null for anything else, which is
+ * a question for Pip. A command never reaches Pip and adds no turn. `R1` is looked up among the runs of the conversation's workstream.
  */
-export function composerVerb(text: string, conversation: string, agentsOn: boolean): Promise<VerbOutcome> | null {
-  if (!agentsOn) return null;
+export function composerVerb(text: string, conversation: string): Promise<VerbOutcome> | null {
   const runs = useRuns.getState();
   const workstream = workstreamOfConversation(conversation);
-  const heldReason = workstream ? (useWorkstreams.getState().list.find((v) => v.workstream.id === workstream)?.workstream.heldReason ?? null) : null;
-  const done = runComposerVerb(text, { runs: runs.runs, workstream, backend: runs.backend ?? useWorkspace.getState().backend, heldReason });
-  // /hold and /resume change the workstream's header at once, not on the next change event.
+  const pausedReason = workstream ? (useWorkstreams.getState().list.find((v) => v.workstream.id === workstream)?.workstream.pausedReason ?? null) : null;
+  const done = runComposerVerb(text, { runs: runs.runs, workstream, backend: runs.backend ?? useWorkspace.getState().backend, pausedReason });
+  // /pause and /resume change the workstream's header at once, not on the next change event.
   return done && workstream ? done.then((outcome) => (outcome.ok && void useWorkstreams.getState().refresh(), outcome)) : done;
 }
 
@@ -436,9 +404,6 @@ export function ComposerFooter({ text }: { text: string }) {
   );
 }
 
-/** What the Commands popover says about Manage: the rules start routine steps, Pip starts nothing, Jira waits. */
-export const MANAGE_NOTE = "Automatic steps: in Manage, routine next steps start on their own by fixed rules. I start nothing myself, and every change to Jira still waits for you.";
-
 /** How a command names its run outside a workstream, where cards show no R labels. */
 const RUN_ID_REF = "<run id>";
 
@@ -455,10 +420,10 @@ export function commandHelp(workstream: boolean): readonly CommandHelp[] {
 }
 
 /**
- * The commands the composer takes, with a line on each; a workstream's own only in a workstream, and Manage's note when it
- * is managed. Outside a workstream, where cards show no R labels, the examples name a run by its id.
+ * The commands the composer takes, with a line on each; a workstream's own only in a workstream. Outside a workstream,
+ * where cards show no R labels, the examples name a run by its id.
  */
-export function CommandsList({ workstream, manage }: { workstream: boolean; manage: boolean }) {
+export function CommandsList({ workstream }: { workstream: boolean }) {
   const shown = commandHelp(workstream);
   return (
     <div className="grid gap-2">
@@ -471,11 +436,6 @@ export function CommandsList({ workstream, manage }: { workstream: boolean; mana
         ))}
       </dl>
       <p className="m-0 text-ws-ink3">{workstream ? RUN_REF_NOTE : GENERAL_RUN_REF_NOTE}</p>
-      {manage && (
-        <p data-manage-note className="m-0 text-ws-ink3">
-          {MANAGE_NOTE}
-        </p>
-      )}
     </div>
   );
 }
@@ -484,7 +444,6 @@ export function CommandsList({ workstream, manage }: { workstream: boolean; mana
 function CommandsHelp({ conversation }: { conversation: string }) {
   const { open, setOpen, root } = usePopover();
   const workstreamId = workstreamOfConversation(conversation);
-  const manage = useWorkstreams((s) => (workstreamId ? s.list.find((v) => v.workstream.id === workstreamId)?.workstream.mode === "manage" : false));
   const panel = `pip-commands-${conversation}`;
   return (
     <div ref={root} className="relative flex">
@@ -504,40 +463,27 @@ function CommandsHelp({ conversation }: { conversation: string }) {
       {open && (
         <div id={panel} role="dialog" aria-label="Commands" className="absolute right-0 bottom-full z-40 mb-2 w-[300px] max-w-[80vw] rounded-xl border border-ws-sep2 bg-ws-win px-3 py-2.5 text-sm shadow-ws-pop">
           <h3 className="m-0 mb-1.5 text-xs font-semibold tracking-wide text-ws-ink3 uppercase">Commands</h3>
-          <CommandsList workstream={workstreamId !== null} manage={manage} />
+          <CommandsList workstream={workstreamId !== null} />
         </div>
       )}
     </div>
   );
 }
 
-interface DraftRoot {
-  querySelector(selector: string): unknown;
-  closest?(selector: string): unknown;
-}
-
-/**
- * 'Show me the plan update', done on the page and never asked of Pip: the plan's description update waiting in the
- * conversation's workstream comes into view with the keyboard on its card, or, where the conversation doesn't show its
- * card, opens where it is read and approved (the ticket's peek). Nothing is approved.
- */
-export function showPlanUpdate(conversation: string, root: DraftRoot | null) {
-  const id = workstreamOfConversation(conversation);
-  const view = id ? useWorkstreams.getState().list.find((v) => v.workstream.id === id) : undefined;
-  const draft = view ? planRewriteDraft(view, useRuns.getState().runs, Object.values(useWorkspace.getState().proposals)) : null;
-  if (!draft) return;
-  const card = root?.querySelector(`article[data-draft="${draft.id.replace(/["\\]/g, "\\$&")}"]`) as { focus(): void; scrollIntoView?(arg?: ScrollIntoViewOptions): void } | null;
-  if (!card) return openLiveDraft(draft);
-  card.scrollIntoView?.({ block: "nearest" });
-  card.focus();
+/** The input's hint: what the next question will be about. */
+export function placeholderFor(s: { images: boolean; quote: boolean; itemKey: string | null; route: Route; runOpen: boolean; workstream?: boolean }): string {
+  if (s.images) return "Say what to look at, or just ask…";
+  if (s.quote) return "Ask about the selected text…";
+  if (s.itemKey) return `Ask about ${s.itemKey}…`;
+  if (s.runOpen) return "Ask about this run…";
+  if (s.route === "agents") return s.workstream ? "Ask about this workstream…" : "Ask about your workstreams and agents…";
+  return "Ask about what you're looking at…";
 }
 
 interface ComposerProps {
   conversation: string;
   /** Images waiting to go with the next question; the pane owns them so a drop anywhere on it lands here. */
   attached: ReturnType<typeof useAttachments>;
-  /** Suggested questions, shown while no question waits its turn. */
-  chips: string[];
   /** What the working line names while Pip answers. */
   looking: string;
   /** What the placeholder suggests asking about. */
@@ -546,7 +492,6 @@ interface ComposerProps {
   footer?: string | null;
 }
 
-/** Where a question is written: suggestions, the quoted text, attached images and the input with Ask or Stop. */
 /** Whether a command typed in `asked` may still change the composer: not once the person has moved to another conversation,
  * where its note and the input it would clear belong to something else. */
 export function outcomeBelongs(asked: string, shown: string): boolean {
@@ -567,13 +512,12 @@ export function unsentInputOf(conversation: string): string {
   return unsentInput.get(conversation) ?? "";
 }
 
-export function Composer({ conversation, attached, chips, looking, scene, footer = null }: ComposerProps) {
+/** Where a question is written: the quoted text, attached images and the input with Ask or Stop. */
+export function Composer({ conversation, attached, looking, scene, footer = null }: ComposerProps) {
   const sessionId = useClaude((s) => s.byTicket[conversation]?.sessionId ?? null);
   const running = useAnswering(conversation);
-  const queued = useQueued(conversation);
   const quote = usePip((s) => s.quote);
   const prefill = usePip((s) => s.prefill);
-  const agentsOn = useAgentsEnabled();
   const [input, setInput] = useState(() => unsentInputOf(conversation));
   // What the input holds as last drawn on screen: set after the render commits, so a render React throws away saves nothing.
   const inputNow = useRef(input);
@@ -614,7 +558,7 @@ export function Composer({ conversation, attached, chips, looking, scene, footer
     const text = prompt.trim() || (count ? defaultQuestion(count) : "");
     if (!text) return;
     setNote(null);
-    const command = composerVerb(text, conversation, agentsOn);
+    const command = composerVerb(text, conversation);
     if (command) {
       const asked = conversation;
       void command.then((outcome) => {
@@ -637,7 +581,7 @@ export function Composer({ conversation, attached, chips, looking, scene, footer
     ask(input);
   };
 
-  // The workstream intro's button asks here, the same way its chip would.
+  // A question asked from outside the composer lands here, as if typed and sent.
   const asking = usePip((s) => s.asking);
   useEffect(() => {
     if (!asking || asking.conversation !== conversation) return;
@@ -647,26 +591,6 @@ export function Composer({ conversation, attached, chips, looking, scene, footer
 
   return (
     <>
-      {!queued && chips.length > 0 && (
-        <div className="flex flex-wrap gap-1.5 px-3 pb-2">
-          {chips.map((s) => (
-            <button
-              key={s}
-              type="button"
-              // A chip with a page action does it here; any other is a question for Pip.
-              onClick={(ev) => {
-                if (chipPageAction(s) === "showPlanUpdate") return showPlanUpdate(conversation, ev.currentTarget.closest(PIP_ROOT));
-                // The chip goes when pressed; the keyboard follows the draft it asks for instead of falling to the page.
-                if (isInvestigateChip(s)) settleDraftFocus(new Set(Object.keys(useWorkspace.getState().proposals)), investigateKey(s));
-                ask(s);
-              }}
-              className="rounded-full border border-ws-sep2 px-2.5 py-0.5 text-sm hover:border-ws-pip hover:text-ws-pip"
-            >
-              {s}
-            </button>
-          ))}
-        </div>
-      )}
       {quote && (
         <div className="mx-3 mb-2 flex items-start gap-2 rounded-md border border-ws-pip bg-ws-pip-soft px-2.5 py-1 text-sm text-ws-ink2">
           <span className="line-clamp-2 min-w-0 flex-1 [overflow-wrap:anywhere]">“{quote}”</span>
@@ -694,7 +618,7 @@ export function Composer({ conversation, attached, chips, looking, scene, footer
           autoComplete="off"
           className="min-w-0 flex-1 rounded-[10px] border border-ws-sep2 bg-ws-bar px-2.5 py-1.5 focus:border-ws-pip focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip"
         />
-        {agentsOn && <CommandsHelp conversation={conversation} />}
+        <CommandsHelp conversation={conversation} />
         {running && (
           <button type="button" onClick={() => useClaude.getState().cancel(conversation)} className="rounded-md border border-ws-sep2 px-3 font-semibold">
             Stop

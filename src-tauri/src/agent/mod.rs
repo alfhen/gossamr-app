@@ -1,7 +1,7 @@
-//! Pip's assistant runs. An `AgentProvider` drives one agent (a CLI, an API) against Pip's local MCP tools and reports
-//! neutral events; `AgentService` prepares each run's prompt and screen context and routes events to the page.
+//! Pip's assistant runs. `ClaudeCodeProvider` drives the user's `claude` against Pip's local MCP tools and reports
+//! events; `AgentService` prepares each run's prompt and screen context and routes events to the page.
 
-pub mod autostart;
+mod agent_tools;
 pub mod context;
 mod drafts;
 mod github;
@@ -14,7 +14,7 @@ pub mod supervisor;
 pub mod workstream;
 
 #[cfg(test)]
-pub(crate) mod conformance;
+pub(crate) mod world;
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
@@ -24,7 +24,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 
 use crate::auth::Scope;
-use crate::config::AppConfig;
+use crate::claude::ClaudeCodeProvider;
 use crate::db::PipTurn;
 use crate::domain::{ClonePlan, ProposalQuery, StateKind};
 use crate::error::{Error, Result};
@@ -34,7 +34,7 @@ use images::ImageInput;
 use mcp::McpServer;
 use queue::{Enqueued, QueueItem, Removed, TurnQueue};
 use sandbox::Sandbox;
-use supervisor::{event_line, WakeFacts, WAKE_REQUEST};
+use supervisor::{event_line, fact_keys, WakeFacts, WAKE_REQUEST};
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(tag = "type", rename_all = "camelCase", rename_all_fields = "camelCase")]
@@ -52,9 +52,9 @@ pub enum AgentEvent {
         usage: Option<TurnUsage>,
     },
     /// The turn waits behind `ahead` turns of its conversation, or for room when that is 0. Only `AgentService` says
-    /// this, never a provider.
+    /// this, never the provider.
     Queued { ahead: usize },
-    /// The turn left the queue and its provider is starting. Only `AgentService` says this, never a provider.
+    /// The turn left the queue and its provider is starting. Only `AgentService` says this, never the provider.
     Running,
 }
 
@@ -97,54 +97,23 @@ pub struct AgentRequest {
     /// Screen context, open drafts and the person's request, already composed.
     pub prompt: String,
     pub mcp: McpEndpoint,
-    /// The working folder. A `Sandbox` can only be made by `Sandbox::prepare`, so no provider is started anywhere else.
+    /// The working folder. A `Sandbox` can only be made by `Sandbox::prepare`, so no run is started anywhere else.
     pub sandbox: Sandbox,
-    /// Continues an earlier session where the provider can. Never needed for correctness: the prompt is complete.
+    /// Continues an earlier session. Never needed for correctness: the prompt is complete.
     pub session: Option<String>,
-    /// Screenshots sent with the prompt, inline. Only given to a provider with `vision`.
+    /// Screenshots sent with the prompt, inline.
     pub images: Vec<ImageInput>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct AgentCaps {
-    pub mcp: bool,
-    pub resume: bool,
-    pub streaming: bool,
-    /// The agent can read the person's local code. No provider does yet; the prompt says so when one does.
-    pub reads_code: bool,
-    /// The agent starts with no way to change files or reach anything but the MCP endpoint.
-    pub read_only_sandbox: bool,
-    /// The agent takes images inline with the prompt.
-    pub vision: bool,
 }
 
 /// What Pip's run tools need from the agent-run service, and nothing that starts, stops or answers a run.
 #[async_trait]
 pub trait RunPlanner: Send + Sync {
-    /// Whether agents are turned on; the run tools say so instead of answering when they are not.
-    fn enabled(&self) -> bool;
-
     /// Where a run in `repo` would be set up: the clone to use, its default branch and a fresh worktree name for
     /// ticket `key` titled `title`. The error is in words Pip can pass on.
     async fn plan(&self, repo: &str, key: &str, title: &str) -> std::result::Result<ClonePlan, String>;
 }
 
 pub type EventStream = mpsc::UnboundedReceiver<AgentEvent>;
-
-/// Every provider must pass the suite in `conformance.rs`.
-#[async_trait]
-pub trait AgentProvider: Send + Sync {
-    fn id(&self) -> &'static str;
-
-    fn capabilities(&self) -> AgentCaps;
-
-    /// Starts a run. The stream ends with exactly one `Done`, including after a cancel or a crash, and once it has
-    /// ended nothing of the run is still executing.
-    async fn run(&self, req: AgentRequest) -> Result<EventStream>;
-
-    /// Stops the run; its stream then ends with a failed `Done`. Unknown or finished runs are ignored.
-    fn cancel(&self, run_id: &str);
-}
 
 /// The conversation a request belongs to when the page doesn't say: Pip's general conversation, outside any workstream.
 pub const GENERAL_CONVERSATION: &str = "general";
@@ -153,7 +122,7 @@ pub const GENERAL_CONVERSATION: &str = "general";
 const LEGACY_WORKSPACE_CONVERSATION: &str = "workspace";
 
 /// A workstream's conversation is `ws:<id>`.
-const WORKSTREAM_PREFIX: &str = "ws:";
+pub(crate) const WORKSTREAM_PREFIX: &str = "ws:";
 
 fn general() -> String {
     GENERAL_CONVERSATION.into()
@@ -245,9 +214,9 @@ pub struct AskOutcome {
 /// Why a turn that was taken out of the queue never ran.
 pub const REMOVED: &str = "Removed before it started";
 
-/// Why a wake never ran: its workstream was held, advised or closed before it started. Its facts count as not woken,
-/// so the supervisor wakes Pip for them once the workstream is set going again.
-pub const WAKE_HELD: &str = "Held before it started";
+/// Why a wake never ran: its workstream was paused or closed before it started. Its facts count as not woken, so the
+/// supervisor wakes Pip for them once the workstream is resumed.
+pub const WAKE_PAUSED: &str = "Paused before it started";
 
 /// How a wake that couldn't be started ends: Pip never saw its facts, so they count as not woken.
 pub const WAKE_NOT_STARTED: &str = "Couldn't start";
@@ -260,23 +229,23 @@ pub struct Update {
     pub event: AgentEvent,
 }
 
-/// Refuses images the provider can't take, rather than answering as if they weren't there.
-fn check_images(images: &[ImageInput], caps: AgentCaps) -> Result<()> {
-    images::validate(images)?;
-    if !images.is_empty() && !caps.vision {
-        return Err(Error::Claude("The assistant you've chosen can't look at images yet. Send the question as text.".into()));
-    }
-    Ok(())
-}
-
 pub type UpdateSink = Arc<dyn Fn(Update) + Send + Sync>;
+
+/// Where a wake's events go, told the wake's facts as they stand when an event happens: those of a wake merged into one
+/// still waiting are in them.
+pub type WakeSink = Arc<dyn Fn(&WakeFacts, Update) + Send + Sync>;
+
+fn bound(sink: &WakeSink, facts: &WakeFacts) -> UpdateSink {
+    let (sink, facts) = (sink.clone(), facts.clone());
+    Arc::new(move |u| sink(&facts, u))
+}
 
 /// A wake turn that is running, kept so a person's message in its conversation can stop it and queue it again.
 struct WakeInFlight {
     conversation: String,
     scope: Scope,
     facts: WakeFacts,
-    sink: UpdateSink,
+    sink: WakeSink,
 }
 
 /// What became of a wake queued in a conversation that already had one waiting.
@@ -288,9 +257,7 @@ enum WakeEntered {
 pub struct AgentService {
     core: Arc<Core>,
     mcp: McpServer,
-    providers: HashMap<&'static str, Arc<dyn AgentProvider>>,
-    config: Mutex<AppConfig>,
-    running: Mutex<HashMap<String, Arc<dyn AgentProvider>>>,
+    provider: ClaudeCodeProvider,
     live: Mutex<HashMap<String, LiveTurn>>,
     queue: Mutex<TurnQueue<QueueItem>>,
     /// Turns stopped while their provider was still starting; it is stopped as soon as it has.
@@ -322,14 +289,15 @@ fn recorded(r: Result<()>) {
 }
 
 impl AgentService {
-    pub fn new(core: Arc<Core>, mcp: McpServer, providers: Vec<Arc<dyn AgentProvider>>, config: AppConfig) -> Self {
-        let providers = providers.into_iter().map(|p| (p.id(), p)).collect();
+    pub fn new(core: Arc<Core>, mcp: McpServer) -> Self {
+        Self::with_provider(core, mcp, ClaudeCodeProvider::new())
+    }
+
+    fn with_provider(core: Arc<Core>, mcp: McpServer, provider: ClaudeCodeProvider) -> Self {
         Self {
             core,
             mcp,
-            providers,
-            config: Mutex::new(config),
-            running: Mutex::new(HashMap::new()),
+            provider,
             live: Mutex::new(HashMap::new()),
             queue: Mutex::new(TurnQueue::default()),
             stop_early: Mutex::new(HashSet::new()),
@@ -358,16 +326,17 @@ impl AgentService {
             removed
         };
         match removed {
-            Removed::Waiting(QueueItem::User { scope, sink, .. } | QueueItem::Wake { scope, sink, .. }) => {
+            Removed::Waiting(item) => {
+                let (scope, sink) = match item {
+                    QueueItem::User { scope, sink, .. } => (scope, sink),
+                    QueueItem::Wake { scope, facts, sink } => (scope, bound(&sink, &facts)),
+                };
                 recorded(self.core.pip_turn_finish(&scope, request_id, "", false, Some(why), None, None).await);
                 sink(Update { request_id: request_id.to_string(), event: AgentEvent::Done { session_id: None, ok: false, message: Some(why.into()), usage: None } });
             }
             Removed::InFlight => {
                 self.wakes.lock().expect("lock poisoned").remove(request_id);
-                let provider = self.running.lock().expect("lock poisoned").get(request_id).cloned();
-                if let Some(p) = provider {
-                    p.cancel(request_id);
-                }
+                self.provider.cancel(request_id);
             }
             Removed::Unknown => {}
         }
@@ -388,8 +357,8 @@ impl AgentService {
 
     /// Queues a question. It starts now when its conversation has nothing running and there is room, and otherwise
     /// once the turns ahead of it have ended; either way its events go to `sink`. In a workstream's conversation a
-    /// person's message also takes out a wake still waiting, stops a wake running (whose facts are queued again behind
-    /// the message), and starts Pip's automatic turns counting from zero.
+    /// person's message also takes out the wakes waiting and stops a wake running; their facts are queued again behind
+    /// the message.
     pub async fn ask(self: &Arc<Self>, mut req: AskRequest, sink: UpdateSink) -> Result<AskOutcome> {
         req.conversation = conversation_id(&req.conversation);
         req.event = None;
@@ -409,12 +378,15 @@ impl AgentService {
         // Kept as waiting until its provider has started, so a reload shows it either way.
         recorded(self.core.pip_turn_begin(&scope, &req.conversation, &req.request_id, &req.prompt, &meta, "queued").await);
         let workstream = workstream_of_conversation(&req.conversation).map(str::to_string);
-        if let Some(ws) = &workstream {
+        let mut again = Vec::new();
+        if workstream.is_some() {
             let waiting = self.queue.lock().expect("lock poisoned").waiting_wakes(&req.conversation);
             for id in waiting {
+                if let Some(QueueItem::Wake { scope, facts, sink }) = self.queue.lock().expect("lock poisoned").waiting(&id) {
+                    again.push((scope.clone(), facts.clone(), sink.clone()));
+                }
                 self.cancel(&id).await;
             }
-            recorded(self.core.person_wrote_in_workstream(&scope, ws).await);
         }
         let (conversation, run_id) = (req.conversation.clone(), req.request_id.clone());
         let item = QueueItem::User { scope: scope.clone(), req: Box::new(req), sink: sink.clone() };
@@ -427,8 +399,10 @@ impl AgentService {
             };
             if let Some((id, wake)) = running {
                 self.cancel(&id).await;
-                // It was counted when it was first let through, so it may merge into one waiting.
-                if let Err(e) = self.queue_wake(wake.scope, wake.conversation, wake.facts, wake.sink, true).await {
+                again.insert(0, (wake.scope, wake.facts, wake.sink));
+            }
+            for (scope, facts, sink) in again {
+                if let Err(e) = self.queue_wake(scope, conversation.clone(), facts, sink).await {
                     eprintln!("couldn't queue Pip's wake again after the person's message: {e}");
                 }
             }
@@ -451,22 +425,20 @@ impl AgentService {
     }
 
     /// Wakes Pip in workstream `ws_id` with `facts`: a turn of its conversation that gives way to the person's messages.
-    /// While another wake waits there and `may_merge` allows, the facts are merged into that one instead. The turn is
-    /// kept with its event lines as its prompt and kind `wake`, and asked like any other, with the manager's role and
-    /// tools. Whether the facts were merged: decided here alone, under the queue's lock, so the budget the supervisor
-    /// charges is for the turns there really are.
-    pub async fn wake(self: &Arc<Self>, ws_id: &str, facts: WakeFacts, sink: UpdateSink, may_merge: bool) -> Result<bool> {
+    /// While another wake waits there, the facts are merged into that one instead. The turn is kept with its event lines
+    /// as its prompt and kind `wake`, and asked like any other.
+    pub async fn wake(self: &Arc<Self>, ws_id: &str, facts: WakeFacts, sink: WakeSink) -> Result<()> {
         let scope = self.core.scope().await?;
-        self.queue_wake(scope, format!("{WORKSTREAM_PREFIX}{ws_id}"), facts, sink, may_merge).await
+        self.queue_wake(scope, format!("{WORKSTREAM_PREFIX}{ws_id}"), facts, sink).await
     }
 
-    async fn queue_wake(self: &Arc<Self>, scope: Scope, conversation: String, facts: WakeFacts, sink: UpdateSink, may_merge: bool) -> Result<bool> {
+    async fn queue_wake(self: &Arc<Self>, scope: Scope, conversation: String, facts: WakeFacts, sink: WakeSink) -> Result<()> {
         let request_id = format!("wake-{}", crate::proposals::new_id()?);
-        recorded(self.core.pip_wake_begin(&scope, &conversation, &request_id, &event_line(&facts), "queued").await);
+        recorded(self.core.pip_wake_begin(&scope, &conversation, &request_id, &event_line(&facts), &fact_keys(&facts), "queued").await);
+        let told = bound(&sink, &facts);
         let entered = {
             let mut queue = self.queue.lock().expect("lock poisoned");
-            let merged = if may_merge { queue.merge_wake(&conversation, &facts) } else { None };
-            match merged {
+            match queue.merge_wake(&conversation, &facts) {
                 Some(id) => WakeEntered::Merged(id),
                 None => WakeEntered::Entered(queue.enqueue(&conversation, &request_id, QueueItem::Wake { scope: scope.clone(), facts, sink: sink.clone() })),
             }
@@ -477,38 +449,35 @@ impl AgentService {
                 let waiting = {
                     let queue = self.queue.lock().expect("lock poisoned");
                     match queue.waiting(&id) {
-                        Some(QueueItem::Wake { facts, sink, .. }) => Some((event_line(facts), sink.clone(), queue.position(&id).unwrap_or(0))),
+                        Some(QueueItem::Wake { facts, sink, .. }) => Some((event_line(facts), fact_keys(facts), bound(sink, facts), queue.position(&id).unwrap_or(0))),
                         _ => None,
                     }
                 };
-                if let Some((lines, sink, ahead)) = waiting {
-                    recorded(self.core.pip_wake_lines(&scope, &id, &lines).await);
+                if let Some((lines, keys, sink, ahead)) = waiting {
+                    recorded(self.core.pip_wake_lines(&scope, &id, &lines, &keys).await);
                     // The page reads the merged lines from the stored turn when it hears of the wake again.
                     sink(Update { request_id: id, event: AgentEvent::Queued { ahead } });
                 }
-                Ok(true)
+                Ok(())
             }
-            WakeEntered::Entered(Enqueued::Start(QueueItem::Wake { scope, facts, sink })) => {
-                self.start_wake(request_id, scope, facts, sink).await?;
-                Ok(false)
-            }
+            WakeEntered::Entered(Enqueued::Start(QueueItem::Wake { scope, facts, sink })) => self.start_wake(request_id, scope, facts, sink).await,
             WakeEntered::Entered(Enqueued::Start(QueueItem::User { .. })) => unreachable!("a wake was queued"),
             WakeEntered::Entered(Enqueued::Waiting { ahead }) => {
-                sink(Update { request_id, event: AgentEvent::Queued { ahead } });
-                Ok(false)
+                told(Update { request_id, event: AgentEvent::Queued { ahead } });
+                Ok(())
             }
         }
     }
 
     /// Starts wake turn `request_id`. When it cannot start it ends failed through its own sink, and the queue moves on.
-    /// A wake whose workstream was held, advised or closed after it was queued never starts: it ends with `WAKE_HELD`,
-    /// however it got here (queued behind a turn, queued again behind the person's message, or just admitted). Only the
-    /// budget's own hold lets it run, since the wake that uses up the budget is the one it holds the workstream after.
-    async fn start_wake(self: &Arc<Self>, request_id: String, scope: Scope, facts: WakeFacts, sink: UpdateSink) -> Result<()> {
+    /// A wake whose workstream was paused or closed after it was queued never starts: it ends with `WAKE_PAUSED`,
+    /// however it got here (queued behind a turn, queued again behind the person's message, or just admitted).
+    async fn start_wake(self: &Arc<Self>, request_id: String, scope: Scope, facts: WakeFacts, wake_sink: WakeSink) -> Result<()> {
         let conversation = format!("{WORKSTREAM_PREFIX}{}", facts.workstream);
+        let sink = bound(&wake_sink, &facts);
         if !self.wakes_allowed(&scope, &facts.workstream).await {
-            recorded(self.core.pip_turn_finish(&scope, &request_id, "", false, Some(WAKE_HELD), None, None).await);
-            sink(Update { request_id: request_id.clone(), event: AgentEvent::Done { session_id: None, ok: false, message: Some(WAKE_HELD.into()), usage: None } });
+            recorded(self.core.pip_turn_finish(&scope, &request_id, "", false, Some(WAKE_PAUSED), None, None).await);
+            sink(Update { request_id: request_id.clone(), event: AgentEvent::Done { session_id: None, ok: false, message: Some(WAKE_PAUSED.into()), usage: None } });
             self.release(&request_id, None);
             return Ok(());
         }
@@ -522,7 +491,7 @@ impl AgentService {
             meta: None,
             event: Some(event_line(&facts)),
         };
-        self.wakes.lock().expect("lock poisoned").insert(request_id.clone(), WakeInFlight { conversation, scope: scope.clone(), facts, sink: sink.clone() });
+        self.wakes.lock().expect("lock poisoned").insert(request_id.clone(), WakeInFlight { conversation, scope: scope.clone(), facts, sink: wake_sink });
         if let Err(e) = self.start(scope.clone(), req, sink.clone()).await {
             self.wakes.lock().expect("lock poisoned").remove(&request_id);
             let message = format!("{WAKE_NOT_STARTED}: {e}");
@@ -535,52 +504,36 @@ impl AgentService {
         Ok(())
     }
 
-    /// Whether workstream `ws_id` may have Pip woken in it now: open, in Manage mode, and held for nothing but its budget.
+    /// Whether workstream `ws_id` may have Pip woken in it now: it is open and not paused.
     async fn wakes_allowed(&self, scope: &Scope, ws_id: &str) -> bool {
         let Ok(Some(view)) = self.core.workstream(scope, ws_id).await else { return false };
-        let ws = view.workstream;
-        ws.closed_at.is_none() && ws.mode == crate::domain::workstream::Mode::Manage && ws.held_reason.as_deref().is_none_or(|r| r == crate::domain::workstream::HELD_BUDGET)
-    }
-
-    /// Whether a wake waits in `conversation`, so a new one would merge into it rather than be a turn of its own.
-    pub fn has_waiting_wake(&self, conversation: &str) -> bool {
-        !self.queue.lock().expect("lock poisoned").waiting_wakes(conversation).is_empty()
+        view.workstream.closed_at.is_none() && view.workstream.paused_reason.is_none()
     }
 
     /// Stops every turn of workstream `ws_id`'s conversation, those waiting first so none starts in between, as
-    /// closing or holding it does. A wake that never started ends with `WAKE_HELD`.
+    /// closing or pausing it does. A wake that never started ends with `WAKE_PAUSED`.
     pub async fn cancel_workstream_turns(&self, ws_id: &str) {
         let conversation = format!("{WORKSTREAM_PREFIX}{ws_id}");
         let turns = self.queue.lock().expect("lock poisoned").turns_of(&conversation);
         for id in turns.iter().rev() {
-            let why = if self.is_wake(id) { WAKE_HELD } else { REMOVED };
+            let why = if self.is_wake(id) { WAKE_PAUSED } else { REMOVED };
             self.cancel_with(id, why).await;
         }
     }
 
-    /// Stops the wakes of workstream `ws_id`, waiting or running, and leaves the person's turns be: what a tripwire or a
-    /// hold of the supervisor's own does.
+    /// Stops the wakes of workstream `ws_id`, waiting or running, and leaves the person's turns be: what the supervisor's
+    /// own pause does.
     pub async fn cancel_workstream_wakes(&self, ws_id: &str) {
         let conversation = format!("{WORKSTREAM_PREFIX}{ws_id}");
         let turns = self.queue.lock().expect("lock poisoned").turns_of(&conversation);
         for id in turns.iter().rev().filter(|id| self.is_wake(id)) {
-            self.cancel_with(id, WAKE_HELD).await;
+            self.cancel_with(id, WAKE_PAUSED).await;
         }
     }
 
     /// Whether `request_id` is a wake, waiting or running.
     fn is_wake(&self, request_id: &str) -> bool {
         self.wakes.lock().expect("lock poisoned").contains_key(request_id) || matches!(self.queue.lock().expect("lock poisoned").waiting(request_id), Some(QueueItem::Wake { .. }))
-    }
-
-    /// Stops every turn in every workstream's conversation, waiting or running: the person's Hold all.
-    pub async fn cancel_all_workstream_turns(&self) {
-        let conversations = self.queue.lock().expect("lock poisoned").conversations();
-        for c in conversations {
-            if let Some(ws) = workstream_of_conversation(&c) {
-                self.cancel_workstream_turns(ws).await;
-            }
-        }
     }
 
     /// Ends `run_id`'s place in the queue and starts what may run now.
@@ -619,13 +572,7 @@ impl AgentService {
     }
 
     async fn start(self: &Arc<Self>, scope: Scope, req: AskRequest, sink: UpdateSink) -> Result<()> {
-        let id = self.config.lock().expect("lock poisoned").agent_provider.clone();
-        let provider = self
-            .providers
-            .get(id.as_str())
-            .cloned()
-            .ok_or_else(|| Error::Claude(format!("The assistant provider “{id}” isn't available.")))?;
-        check_images(&req.images, provider.capabilities())?;
+        images::validate(&req.images)?;
         // A turn in a workstream's conversation works in that workstream, which must be an open one of this account.
         let mut workstream = match workstream_of_conversation(&req.conversation) {
             Some(id) => Some(workstream::for_turn(&self.core, &scope, id).await?),
@@ -660,24 +607,19 @@ impl AgentService {
         };
         let open = ProposalQuery { states: Some(vec![StateKind::Pending, StateKind::Applying]), ..Default::default() };
         let drafts = self.core.proposals_in(&scope, &open).await?;
-        let runs = match self.mcp.planner.enabled() {
-            true => runs::context_runs(&self.core, &scope, &handed).await,
-            false => Vec::new(),
-        };
+        let runs = runs::context_runs(&self.core, &scope, &handed).await;
         let sandbox = Sandbox::prepare(&self.core.data_dir())?;
         // A workstream's conversation continues its own session when the page has none to give.
         let asked = req.session_id.or_else(|| workstream.as_ref().and_then(|w| w.workstream.pip_session.clone()));
-        let session = match asked.filter(|_| provider.capabilities().resume) {
+        let session = match asked {
             Some(id) if self.core.is_pip_session(&id).await? => Some(id),
             _ => None,
         };
 
         let run_id = req.request_id.clone();
-        // In a workstream's conversation Pip manages it: it drafts each next step, and the person still starts each one.
-        let role = if workstream.is_some() { context::Role::Manager } else { context::Role::Assistant };
         let agent_req = AgentRequest {
             run_id: run_id.clone(),
-            system: context::system_prompt(role, provider.capabilities().reads_code, self.core.can_edit_text(&scope)?),
+            system: context::system_prompt(self.core.can_edit_text(&scope)?),
             prompt: context::compose(&context, item.as_deref(), &links, &drafts, &runs, workstream.as_ref(), &req.prompt),
             mcp: self.mcp.endpoint(&run_id)?,
             sandbox,
@@ -689,11 +631,10 @@ impl AgentService {
         let workstream_id = workstream.map(|w| w.workstream.id);
         let pip = mcp::PipRun { scope: scope.clone(), handed, read, read_runs: Default::default(), workstream: workstream_id.clone() };
         self.mcp.runs.lock().expect("lock poisoned").insert(run_id.clone(), pip);
-        self.running.lock().expect("lock poisoned").insert(run_id.clone(), provider.clone());
         self.live.lock().expect("lock poisoned").insert(run_id.clone(), LiveTurn::default());
         recorded(self.core.pip_turn_status(&scope, &run_id, "running").await);
         sink(Update { request_id: run_id.clone(), event: AgentEvent::Running });
-        let mut events = match provider.run(agent_req).await {
+        let mut events = match self.provider.run(agent_req).await {
             Ok(e) => e,
             Err(e) => {
                 self.finish(&run_id);
@@ -701,7 +642,7 @@ impl AgentService {
             }
         };
         if self.stop_early.lock().expect("lock poisoned").remove(&run_id) {
-            provider.cancel(&run_id);
+            self.provider.cancel(&run_id);
         }
 
         let this = self.clone();
@@ -759,7 +700,6 @@ impl AgentService {
     fn finish(&self, run_id: &str) {
         self.wakes.lock().expect("lock poisoned").remove(run_id);
         self.live.lock().expect("lock poisoned").remove(run_id);
-        self.running.lock().expect("lock poisoned").remove(run_id);
         self.mcp.runs.lock().expect("lock poisoned").remove(run_id);
         self.mcp.revoke(run_id);
     }
@@ -768,26 +708,6 @@ impl AgentService {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn caps(vision: bool) -> AgentCaps {
-        AgentCaps { mcp: true, resume: false, streaming: true, reads_code: false, read_only_sandbox: true, vision }
-    }
-
-    #[test]
-    fn a_provider_without_vision_refuses_images_instead_of_dropping_them() {
-        let images = [images::tests::png()];
-        assert!(check_images(&images, caps(true)).is_ok());
-        let err = check_images(&images, caps(false)).unwrap_err().to_string();
-        assert!(err.contains("can't look at images"));
-        assert!(check_images(&[], caps(false)).is_ok());
-    }
-
-    #[test]
-    fn invalid_images_are_refused_even_for_a_provider_with_vision() {
-        let mut bad = images::tests::png();
-        bad.media_type = "image/gif".into();
-        assert!(check_images(&[bad], caps(true)).is_err());
-    }
 
     #[test]
     fn the_ask_request_takes_images_and_works_without_them() {
@@ -826,6 +746,7 @@ mod tests {
     mod recording {
         use super::*;
         use crate::agent::runs::testing::FakePlanner;
+        use crate::claude::StandIn;
         use crate::inbox::testing::{fixture, Fixture};
         use std::time::Duration;
         use tokio::sync::Notify;
@@ -843,15 +764,7 @@ mod tests {
         }
 
         #[async_trait]
-        impl AgentProvider for Fake {
-            fn id(&self) -> &'static str {
-                "fake"
-            }
-
-            fn capabilities(&self) -> AgentCaps {
-                AgentCaps { mcp: true, resume: false, streaming: true, reads_code: false, read_only_sandbox: true, vision: false }
-            }
-
+        impl StandIn for Fake {
             async fn run(&self, _req: AgentRequest) -> Result<EventStream> {
                 if self.refuse {
                     return Err(Error::Claude("Claude isn't installed".into()));
@@ -876,8 +789,7 @@ mod tests {
 
         async fn service(fx: &Fixture, fake: Fake) -> Arc<AgentService> {
             let server = McpServer::start(fx.core.clone(), FakePlanner::unused(), Arc::new(|_| {}), Arc::new(|_, _, _| {})).await.unwrap();
-            let config = AppConfig { agent_provider: "fake".into(), ..AppConfig::default() };
-            Arc::new(AgentService::new(fx.core.clone(), server, vec![Arc::new(fake)], config))
+            Arc::new(AgentService::with_provider(fx.core.clone(), server, ClaudeCodeProvider::standing_in(Arc::new(fake))))
         }
 
         fn ask(id: &str) -> AskRequest {
@@ -1009,6 +921,7 @@ mod tests {
     mod queueing {
         use super::*;
         use crate::agent::runs::testing::FakePlanner;
+        use crate::claude::StandIn;
         use crate::inbox::testing::{fixture, Fixture};
         use std::sync::atomic::{AtomicUsize, Ordering};
         use std::time::Duration;
@@ -1033,15 +946,7 @@ mod tests {
         struct Fake(Arc<Counting>);
 
         #[async_trait]
-        impl AgentProvider for Fake {
-            fn id(&self) -> &'static str {
-                "fake"
-            }
-
-            fn capabilities(&self) -> AgentCaps {
-                AgentCaps { mcp: true, resume: true, streaming: true, reads_code: false, read_only_sandbox: true, vision: false }
-            }
-
+        impl StandIn for Fake {
             async fn run(&self, req: AgentRequest) -> Result<EventStream> {
                 let c = self.0.clone();
                 c.started.lock().unwrap().push((req.run_id.clone(), req.session.clone()));
@@ -1110,8 +1015,7 @@ mod tests {
 
         async fn service(fx: &Fixture, fake: Fake) -> (Arc<AgentService>, Seen, UpdateSink) {
             let server = McpServer::start(fx.core.clone(), FakePlanner::unused(), Arc::new(|_| {}), Arc::new(|_, _, _| {})).await.unwrap();
-            let config = AppConfig { agent_provider: "fake".into(), ..AppConfig::default() };
-            let svc = Arc::new(AgentService::new(fx.core.clone(), server, vec![Arc::new(fake)], config));
+            let svc = Arc::new(AgentService::with_provider(fx.core.clone(), server, ClaudeCodeProvider::standing_in(Arc::new(fake))));
             let seen: Seen = Arc::default();
             let into = seen.clone();
             (svc, seen, Arc::new(move |u: Update| into.lock().unwrap().push((u.request_id, u.event))))
@@ -1292,7 +1196,7 @@ mod tests {
             let (svc, seen, sink) = service(&fx, fake.clone()).await;
             svc.ask(ask("q1", "A"), sink.clone()).await.unwrap();
             let mut bad = ask("q2", "A");
-            bad.images = vec![images::tests::png()];
+            bad.images = vec![ImageInput { media_type: "image/jpeg".into(), ..images::tests::png() }];
             svc.ask(bad, sink.clone()).await.unwrap();
             svc.ask(ask("q3", "A"), sink.clone()).await.unwrap();
 
@@ -1300,7 +1204,7 @@ mod tests {
             fake.until_started(2).await;
             assert_eq!(fake.started(), ["q1", "q3"]);
             let q2 = events_of(&seen, "q2");
-            assert!(matches!(q2.last(), Some(AgentEvent::Done { ok: false, message: Some(m), .. }) if m.contains("can't look at images")), "{q2:?}");
+            assert!(matches!(q2.last(), Some(AgentEvent::Done { ok: false, message: Some(m), .. }) if m.contains("isn't the image/jpeg")), "{q2:?}");
             assert_eq!(status(&fx, "A", "q2").await, "failed");
             fake.open("q3").await;
             until_status(&fx, "A", "q3", "done").await;
@@ -1318,9 +1222,9 @@ mod tests {
             assert_eq!(svc.mcp.runs.lock().unwrap().get("q1").and_then(|p| p.workstream.clone()), Some(ws.id.clone()), "Pip's tools know the workstream");
             assert!(svc.mcp.runs.lock().unwrap().get("q1").is_some_and(|p| p.handed.contains("CA-1")), "its ticket is handed to Pip");
             let prompt = fake.0.prompts.lock().unwrap().get("q1").cloned().unwrap();
-            assert!(prompt.contains(&format!("Id: {} · ticket CA-1 · mode advise · stage Intake", ws.id)) && prompt.contains("[Open drafts in this workstream]"), "{prompt}");
+            assert!(prompt.contains(&format!("Id: {} · ticket CA-1 · stage Intake", ws.id)) && prompt.contains("[Open drafts in this workstream]"), "{prompt}");
             let system = fake.0.systems.lock().unwrap().get("q1").cloned().unwrap();
-            assert!(system.contains(context::MANAGER), "a workstream's turn is the manager's: {system}");
+            assert!(system.contains(context::WORKSTREAM), "a workstream's turn has the workstream's guidance: {system}");
             fake.open("q1").await;
             until_status(&fx, &conversation, "q1", "done").await;
             for _ in 0..100 {
@@ -1334,7 +1238,8 @@ mod tests {
             svc.ask(ask("g1", GENERAL_CONVERSATION), sink.clone()).await.unwrap();
             fake.until_started(2).await;
             let general = fake.0.systems.lock().unwrap().get("g1").cloned().unwrap();
-            assert!(!general.contains(context::MANAGER) && general.contains("gossamr tools"), "the general conversation's turn is the assistant's: {general}");
+            assert_eq!(general, system, "every conversation has the same prompt");
+            assert!(general.contains("gossamr tools"), "{general}");
             fake.open("g1").await;
             until_status(&fx, GENERAL_CONVERSATION, "g1", "done").await;
 

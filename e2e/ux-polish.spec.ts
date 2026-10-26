@@ -1,5 +1,5 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
-import { advanceRuns, agentsSettled, askPip, homeConversation, homeConversationRegion, mockRuns, openAgents, openApp, openPip, peekSheet, peekTicket, PIP_INPUT, pipIdle, pipPane, reviewedDraft, selectWorkstream, setManage, startWorkstream, stepRail } from "./support/app";
+import { askPip, homeConversation, homeConversationRegion, mockRuns, openAgents, openApp, openPip, peekSheet, peekTicket, PIP_INPUT, pipIdle, pipPane, reviewedDraft, selectWorkstream, startWorkstream, stepRail } from "./support/app";
 
 // The UX polish pass: what the person reads (no ids, tools or machinery words), where things sit (nothing covers
 // anything), draft action bars, and how a new workstream opens.
@@ -95,19 +95,12 @@ test.describe("no overlap", () => {
 
 
 
-  test("(e2) the last row of the list scrolls clear of the floating Pip button and its bubble", async ({ page }) => {
+  test("(e2) the last row of the list scrolls clear of the floating Pip button", async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await openApp(page);
     await expect(pipPane(page)).toHaveCount(0);
     const launcher = page.locator("[data-pip-launcher]");
     await expect(launcher.getByRole("button", { name: /^Ask Pip/ })).toBeVisible();
-    // A run finishing puts Pip's offer to sum it up in a bubble beside the launcher.
-    const working = (await mockRuns(page)).find((r) => r.state === "working")!;
-    expect(working).toBeTruthy();
-    await expect.poll(async () => (await advanceRuns(page, 1, working.id), (await mockRuns(page)).find((r) => r.id === working.id)?.state)).toBe("done");
-    const nudge = launcher.locator("[data-pip-nudge] > *");
-    await expect(nudge.first()).toBeVisible({ timeout: 5000 });
-    await expect(nudge.first()).toContainText("Want me to sum up what it found?");
 
     const list = page.getByRole("listbox", { name: "Items" });
     await list.evaluate((el) => {
@@ -118,20 +111,9 @@ test.describe("no overlap", () => {
     await expect(last).toBeInViewport();
     const row = await box(last);
     expect(intersects(row, await box(launcher.getByRole("button", { name: /^Ask Pip/ })))).toBe(false);
-    await expect(nudge.first()).toBeVisible();
-    expect(intersects(row, await box(nudge.first()))).toBe(false);
     // The assignee avatar at the row's end is in view, above the footer.
     const footer = await box(page.locator("main footer").first());
     expect(row.y + row.height).toBeLessThanOrEqual(footer.y + 1);
-
-    // Taking up the offer asks about that run, and Pip answers about that run, not with a roll-call of every agent.
-    await nudge.first().getByRole("button", { name: /Want me to sum up/ }).click();
-    await expect(pipPane(page)).toBeVisible();
-    await expect(pipPane(page).locator("[data-user-bubble]").last()).toHaveText(/^What did the .+ find\?$/);
-    const answer = pipPane(page).locator("[data-pip-answer]").last();
-    await expect(answer).toContainText("I read the whole result of");
-    await expect(answer).not.toContainText("agent runs");
-    await expect(answer).not.toContainText(working.id);
   });
 
   test("(e3) with the peek and the Pip pane open the canvas reflows beside the peek, tabs whole and badges uncut", async ({ page }) => {
@@ -287,16 +269,6 @@ test.describe("no overlap", () => {
     await expect(page.getByRole("tooltip")).toHaveText("All projects");
     await page.keyboard.press("Shift+Tab");
     await expect(page.getByRole("tooltip")).toContainText("Search and jump");
-
-    // On a Manage workstream, Hold all is a pause icon with a name and a note on what it does.
-    await startWorkstream(page, "CA-401");
-    await setManage(page);
-    const hold = rail(page).getByRole("button", { name: "Hold all workstreams" });
-    await expect(hold.locator("svg")).toHaveCount(1);
-    await expect(hold).not.toContainText("⏸");
-    await hold.hover();
-    await expect(page.getByRole("tooltip")).toContainText("Hold all workstreams");
-    await expect(page.getByRole("tooltip")).toContainText("Stops automatic steps in every workstream; agents carry on");
   });
 });
 
@@ -367,7 +339,7 @@ test.describe("draft action bar", () => {
     for (let i = 0; i <= before; i++) await expectFlushAtEnd(page, comments.nth(i), barOf(comments.nth(i), "Post comment"));
   });
 
-  test("a keyboard-focused draft card in the Pip pane shows its whole focus ring, clear of the suggestion chips", async ({ page }) => {
+  test("a keyboard-focused draft card in the Pip pane shows its whole focus ring", async ({ page }) => {
     await openApp(page);
     await peekTicket(page, "CA-401");
     await openPip(page);
@@ -377,10 +349,9 @@ test.describe("draft action bar", () => {
       await expect(pipPane(page).getByRole("button", { name: "Stop" })).toHaveCount(0);
     }
     const cards = pipPane(page).getByRole("article", { name: "Comment on CA-401" });
-    const chips = pipPane(page).getByRole("button", { name: "What are my agents doing?" }).locator("..");
     const conversation = pipPane(page).locator("[data-pip-conversation-body]");
 
-    /** The focused card with its 2px ring 2px out lies inside the conversation's scroll box and clear of the chips. */
+    /** The focused card with its 2px ring 2px out lies inside the conversation's scroll box. */
     const expectWhole = async (card: Locator) => {
       await expect(card).toBeFocused();
       const ring = 4;
@@ -388,8 +359,6 @@ test.describe("draft action bar", () => {
       const s = await box(conversation);
       expect(c.y - ring).toBeGreaterThanOrEqual(s.y - 0.5);
       expect(c.y + c.height + ring).toBeLessThanOrEqual(s.y + s.height + 0.5);
-      const k = await box(chips);
-      expect(c.y + c.height + ring).toBeLessThanOrEqual(k.y + 0.5);
     };
 
     await page.locator(PIP_INPUT).press("ArrowUp");
@@ -406,9 +375,8 @@ test.describe("draft action bar", () => {
 });
 
 test.describe("workstream start", () => {
-  test("a new workstream opens with one sentence and one action, with the commands behind the '?' button", async ({ page }) => {
+  test("a new workstream opens with one sentence, with the commands behind the '?' button", async ({ page }) => {
     await openApp(page);
-    await agentsSettled(page);
     await startWorkstream(page, "CA-401");
     const pane = pipPane(page);
 
@@ -419,12 +387,6 @@ test.describe("workstream start", () => {
     expect(text.length).toBeLessThanOrEqual(140);
     expect(text.match(/[.!?](\s|$)/g)).toHaveLength(1);
     await expect(pane.getByText("/stop R1")).toHaveCount(0);
-
-    // The workstream's first suggestion is the intro's one primary action, not repeated as a chip.
-    const primary = pane.getByRole("button", { name: "Investigate CA-401", exact: true });
-    await expect(primary).toHaveCount(1);
-    await expect(primary).toHaveAttribute("data-intro-action", "true");
-    await expect(primary).toBeVisible();
 
     // The commands are a Tab away from the input, open with Enter and close with Esc, leaving the pane open.
     await page.locator(PIP_INPUT).focus();
@@ -437,7 +399,7 @@ test.describe("workstream start", () => {
     const dialog = pane.getByRole("dialog", { name: "Commands" });
     await expect(dialog).toBeVisible();
     await expect(help).toHaveAttribute("aria-expanded", "true");
-    for (const usage of ["/stop R1", "/retry R1", "/answer R1 your answer", "/hold", "/resume"]) await expect(dialog.getByText(usage, { exact: true })).toBeVisible();
+    for (const usage of ["/stop R1", "/retry R1", "/answer R1 your answer", "/pause", "/resume"]) await expect(dialog.getByText(usage, { exact: true })).toBeVisible();
     await expect(dialog).toContainText("R1 is a run in this workstream; a run's id works anywhere.");
     await page.keyboard.press("Escape");
     await expect(dialog).toHaveCount(0);
@@ -449,25 +411,18 @@ test.describe("workstream start", () => {
     await page.keyboard.press("Escape");
     await expect(dialog).toHaveCount(0);
     await expect(pane).toBeVisible();
-
-    // The primary action asks Pip what its chip would have asked.
-    await primary.click();
-    await expect(pane.locator("[data-user-bubble]").last()).toHaveText("Investigate CA-401");
-    await expect(pane.locator("[data-empty-workstream]")).toHaveCount(0);
   });
 
   test("Pip home's Steps rail marks Investigate as next and keeps the later steps to one quiet line each", async ({ page }) => {
     await openApp(page);
-    await agentsSettled(page);
     await startWorkstream(page, "CA-401");
     await openAgents(page);
     await selectWorkstream(page, "CA-401");
     await expect(homeConversation(page)).toHaveText(/^Workstream: CA-401 .* · Intake$/);
 
-    // The same intro and single action as in the pane.
+    // The same intro as in the pane.
     const region = homeConversationRegion(page);
     await expect(region.locator("[data-empty-workstream]")).toHaveText(/^Everything for CA-401 /);
-    await expect(region.getByRole("button", { name: "Investigate CA-401", exact: true })).toHaveCount(1);
     await expect(region.getByRole("button", { name: "Commands", exact: true })).toBeVisible();
 
     const rail = stepRail(page);

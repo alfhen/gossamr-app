@@ -143,9 +143,9 @@ describe("agent entries in the activity feed", () => {
     expect(buildRows({ ...input, source: "agents", container: project, containerOf: inP }).map((r) => r.entry.id).sort()).toEqual(["run:p:needsAnswer", "run:p:started"]);
   });
 
-  it("offers the Agents source only while agents are on", () => {
-    expect(sourcesFor({ github: false, agents: false })).toEqual(["all", "jira"]);
-    expect(sourcesFor({ github: true, agents: true })).toEqual(["all", "jira", "github", "agents"]);
+  it("offers the Agents source, and GitHub once it is connected", () => {
+    expect(sourcesFor({ github: false })).toEqual(["all", "jira", "agents"]);
+    expect(sourcesFor({ github: true })).toEqual(["all", "jira", "github", "agents"]);
   });
 });
 
@@ -320,13 +320,12 @@ describe("approving a blocker in the sample data", () => {
   });
 });
 
-describe("the Activity source after agents are turned off", () => {
-  it("falls back to the tracker's, which the view hands back to the store", () => {
-    const off = sourcesFor({ github: false, agents: false });
-    expect(shownSourceOf("agents", off)).toBe("jira");
-    expect(shownSourceOf("github", off)).toBe("jira");
-    expect(shownSourceOf("agents", sourcesFor({ github: false, agents: true }))).toBe("agents");
-    expect(shownSourceOf("all", off)).toBe("all");
+describe("the Activity source", () => {
+  it("falls back to the tracker's when it is no longer offered, which the view hands back to the store", () => {
+    const offered = sourcesFor({ github: false });
+    expect(shownSourceOf("github", offered)).toBe("jira");
+    expect(shownSourceOf("agents", offered)).toBe("agents");
+    expect(shownSourceOf("all", offered)).toBe("all");
   });
 
   it("marks agent entries read only for All sources and Agents", () => {

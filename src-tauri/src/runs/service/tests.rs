@@ -51,7 +51,6 @@ async fn build_with(routes: Vec<(&str, Vec<Reply>)>, tools: Option<ToolchainErro
         vec![fx.home.clone()],
         Arc::new(move |id| seen.lock().unwrap().push(id.to_string())),
     )
-    .enabled(true)
     .with_home(fx.home.clone())
     .with_timing(FAST);
     Rig { svc: Arc::new(tune(svc)), fx, cli, clone, changes }
@@ -296,12 +295,9 @@ async fn a_retry_over_the_cap_still_fails_for_it() {
 }
 
 #[tokio::test]
-async fn approved_runs_over_the_cap_launch_in_approval_order_with_a_workstream_s_auto_started_successor() {
-    use crate::domain::workstream::{Mode, Rule};
-    use crate::domain::Actor;
+async fn approved_runs_over_the_cap_launch_in_approval_order_with_a_workstream_s_run_among_them() {
     let rig = build(None, |s| s.with_cap(1)).await;
     let ws = rig.fx.core.open_workstream(&rig.fx.scope, Some(rig.fx.item("CA-1")), None).await.unwrap().id;
-    rig.fx.core.set_workstream_mode(&rig.fx.scope, &ws, Mode::Manage, Actor::Person).await.unwrap();
     let running = rig.queued(1).await;
     rig.svc.launch(&running.id).await.unwrap();
     let older = rig.queued(2).await;
@@ -310,7 +306,6 @@ async fn approved_runs_over_the_cap_launch_in_approval_order_with_a_workstream_s
     let p = rig.fx.core.draft_run(spec, Some(rig.fx.item("CA-1"))).await.unwrap();
     let digest = rig.fx.core.runs_review(&p.id).await.unwrap().digest;
     let successor = rig.fx.core.runs_approve(&p.id, &digest).await.unwrap();
-    let successor = rig.set(&successor, |r| r.auto_start = Some(crate::domain::AutoStarted { rule: Rule::InvestigateTriage, after_run: running.id.clone() })).await;
     let newer = rig.queued(4).await;
     rig.svc.launch(&newer.id).await.unwrap();
     assert!(rig.svc.launch_waiting().await.unwrap().is_empty(), "the one slot is taken");
@@ -505,20 +500,6 @@ async fn an_untrusted_folder_a_failed_command_and_garbled_output_each_fail_with_
         assert!(after.launched_at.is_some() && after.short_id.is_none());
         assert!(rig.live().is_empty(), "a failed run no longer counts toward the cap");
     }
-}
-
-#[tokio::test]
-async fn nothing_launches_when_agents_are_off() {
-    let rig = build(None, |s| s.enabled(false)).await;
-    let run = rig.queued(1).await;
-    assert!(rig.svc.launch(&run.id).await.is_err());
-    assert!(rig.svc.start_now(&run.id).await.is_err());
-    assert!(rig.svc.retry_launch(&run.id).await.is_err());
-    assert!(rig.svc.preflight(None).await.is_err());
-    assert!(rig.svc.clones("acme/webshop").await.is_err());
-    assert!(rig.svc.repos().is_err());
-    assert_eq!(rig.get(&run).await.state, RunState::Queued);
-    assert_eq!(rig.cli.launches(), 0);
 }
 
 #[tokio::test]
@@ -830,7 +811,6 @@ async fn clones_of_a_watched_repository_are_found_and_the_chosen_one_comes_first
     assert_eq!(after.clones[0].path, other);
     let config = AppConfig::load(&rig.fx.core.data_dir());
     assert_eq!(config.picked_clones.get("acme/webshop"), Some(&other));
-    assert_eq!(config.agent_provider, AppConfig::default().agent_provider);
 
     std::fs::remove_dir_all(&other).unwrap();
     rig.svc.clones.clear();
@@ -1063,7 +1043,7 @@ mod through_the_real_spawner {
         ]));
         let cli = Arc::new(SystemCli::new(PathBuf::from(FAKE), env.clone()));
         let tools = FixedToolchain(Ok(Toolchain { cli: cli.clone(), env }));
-        let svc = RunService::new(fx.core.clone(), Arc::new(tools), RunIndex::load(&fx.dir.join("index")), vec![], Arc::new(|_| {})).enabled(true).with_timing(FAST);
+        let svc = RunService::new(fx.core.clone(), Arc::new(tools), RunIndex::load(&fx.dir.join("index")), vec![], Arc::new(|_| {})).with_timing(FAST);
         let rig = Rig { svc: Arc::new(svc), cli: Arc::new(FakeCli::new()), clone: clone.canonicalize().unwrap(), changes: Arc::default(), fx };
         Real { rig, cli, scenario_dir }
     }
@@ -1127,7 +1107,7 @@ mod through_the_real_spawner {
         let real = real().await;
         let run = real.rig.queued(1).await;
         let spec = &run.spec;
-        let request = LaunchRequest { cwd: spec.clone_path.clone(), name: "x".into(), worktree: spec.name.clone(), guard: GUARD.into(), prompt: "p".into(), report: None, read_only: None };
+        let request = LaunchRequest { cwd: spec.clone_path.clone(), name: "x".into(), worktree: spec.name.clone(), guard: GUARD.into(), prompt: "p".into(), agent: None, read_only: None };
         let started = real.cli.launch(&request).await.unwrap();
         real.rig.set(&run, |r| {
             r.state = RunState::Failed;
@@ -1354,8 +1334,6 @@ async fn only_a_watched_repository_is_cloned_and_only_one_clone_of_it_at_a_time(
     let held = fresh::Cloning::take(&rig.svc.cloning, "acme/webshop").unwrap();
     assert!(rig.svc.clone_fresh("Acme/Webshop").await.unwrap_err().to_string().contains("already being cloned"));
     drop(held);
-    rig.svc.set_flag(false);
-    assert!(rig.svc.clone_fresh("acme/webshop").await.is_err(), "agents are off");
 }
 
 #[tokio::test]
@@ -1373,7 +1351,7 @@ async fn the_launch_still_refuses_a_path_that_is_not_a_clone_of_the_repository()
 
 mod waiting {
     use super::*;
-    use crate::domain::workstream::HELD_PERSON;
+    use crate::domain::workstream::PauseReason;
     use crate::domain::Actor;
 
     impl Rig {
@@ -1405,14 +1383,14 @@ mod waiting {
         let (a, b) = (rig.open_on("CA-1").await, rig.open_on("CA-2").await);
         let first = rig.queued_in(1, "CA-1", &a).await;
         let second = rig.queued_in(2, "CA-1", &a).await;
-        let held = rig.queued_in(3, "CA-2", &b).await;
+        let paused = rig.queued_in(3, "CA-2", &b).await;
         let loose = rig.queued(4).await;
-        rig.fx.core.hold_workstream(&rig.fx.scope, &b, HELD_PERSON, Actor::Person).await.unwrap();
+        rig.fx.core.pause_workstream(&rig.fx.scope, &b, PauseReason::Person, Actor::Person).await.unwrap();
 
         assert_eq!(rig.svc.launch_waiting().await.unwrap(), std::slice::from_ref(&first.id));
         assert_eq!(rig.get(&first).await.state, RunState::Launching);
-        for waiting in [&second, &held, &loose] {
-            assert_eq!(rig.get(waiting).await.state, RunState::Queued, "over the cap, held or in no workstream: still queued");
+        for waiting in [&second, &paused, &loose] {
+            assert_eq!(rig.get(waiting).await.state, RunState::Queued, "over the cap, paused or in no workstream: still queued");
         }
         assert!(rig.svc.launch_waiting().await.unwrap().is_empty(), "the cap is still full");
         assert_eq!(rig.get(&second).await.state, RunState::Queued, "never failed for the cap");
@@ -1420,42 +1398,53 @@ mod waiting {
         rig.finish(&first).await;
         assert_eq!(rig.svc.launch_waiting().await.unwrap(), std::slice::from_ref(&second.id));
         rig.finish(&second).await;
-        assert!(rig.svc.launch_waiting().await.unwrap().is_empty(), "a held workstream's run is skipped");
+        assert!(rig.svc.launch_waiting().await.unwrap().is_empty(), "a paused workstream's run is skipped");
         rig.fx.core.resume_workstream(&rig.fx.scope, &b).await.unwrap();
-        assert_eq!(rig.svc.launch_waiting().await.unwrap(), std::slice::from_ref(&held.id));
+        assert_eq!(rig.svc.launch_waiting().await.unwrap(), std::slice::from_ref(&paused.id));
         assert_eq!(rig.get(&loose).await.state, RunState::Queued, "a run in no workstream is the person's to start");
         assert_eq!(rig.cli.launches(), 3);
     }
 
     #[tokio::test]
-    async fn a_closed_workstream_s_run_and_one_a_rule_started_in_an_advised_workstream_or_with_its_rule_off_wait() {
-        use crate::domain::workstream::{Mode, Rule};
+    async fn a_closed_workstream_s_run_waits_and_a_paused_one_starts_once_resumed() {
         let rig = ready().await;
         rig.fx.add_item(2).await;
-        let (closed, managed) = (rig.open_on("CA-1").await, rig.open_on("CA-2").await);
+        let (closed, paused) = (rig.open_on("CA-1").await, rig.open_on("CA-2").await);
         let in_closed = rig.queued_in(1, "CA-1", &closed).await;
         rig.fx.core.close_workstream(&rig.fx.scope, &closed).await.unwrap();
-        let (core, scope) = (&rig.fx.core, &rig.fx.scope);
-        core.set_workstream_mode(scope, &managed, Mode::Manage, Actor::Person).await.unwrap();
-        let auto = rig.queued_in(2, "CA-2", &managed).await;
-        let auto = rig.set(&auto, |r| r.auto_start = Some(crate::domain::AutoStarted { rule: Rule::InvestigateTriage, after_run: "r0".into() })).await;
-        core.set_workstream_mode(scope, &managed, Mode::Advise, Actor::Person).await.unwrap();
-        assert!(rig.svc.launch_waiting().await.unwrap().is_empty(), "closed, and advised");
-        core.set_workstream_mode(scope, &managed, Mode::Manage, Actor::Person).await.unwrap();
-        core.set_workstream_rule(scope, &managed, Rule::InvestigateTriage, Some(false)).await.unwrap();
-        assert!(rig.svc.launch_waiting().await.unwrap().is_empty(), "its rule is off");
-        core.set_workstream_rule(scope, &managed, Rule::InvestigateTriage, None).await.unwrap();
-        assert_eq!(rig.svc.launch_waiting().await.unwrap(), std::slice::from_ref(&auto.id));
+        let waiting = rig.queued_in(2, "CA-2", &paused).await;
+        rig.fx.core.pause_workstream(&rig.fx.scope, &paused, PauseReason::Ceiling, Actor::Supervisor).await.unwrap();
+        assert!(rig.svc.launch_waiting().await.unwrap().is_empty(), "closed, and paused");
+        rig.fx.core.resume_workstream(&rig.fx.scope, &paused).await.unwrap();
+        assert_eq!(rig.svc.launch_waiting().await.unwrap(), std::slice::from_ref(&waiting.id));
         assert_eq!(rig.get(&in_closed).await.state, RunState::Queued);
     }
 
     #[tokio::test]
-    async fn nothing_waits_on_while_agents_are_off() {
+    async fn a_run_an_earlier_release_queued_on_its_own_waits_for_the_person_through_the_tracker_rewriting_it() {
         let rig = ready().await;
         let ws = rig.open_on("CA-1").await;
-        let run = rig.queued_in(1, "CA-1", &ws).await;
-        rig.svc.set_flag(false);
+        let old = rig.queued_in(1, "CA-1", &ws).await;
+        rig.set(&old, |r| r.unapproved_auto_start = Some(serde_json::json!({ "rule": "investigate_triage", "afterRun": "r0" }))).await;
         assert!(rig.svc.launch_waiting().await.unwrap().is_empty());
-        assert_eq!(rig.get(&run).await.state, RunState::Queued);
+        assert_eq!(rig.get(&old).await.state, RunState::Queued);
+        assert!(rig.get(&old).await.unapproved_auto_start.is_some());
+        assert_eq!(rig.svc.start_now(&old.id).await.unwrap().state, RunState::Launching, "the person can still start it");
+    }
+
+    #[tokio::test]
+    async fn starting_an_unapproved_queued_run_over_the_cap_lets_it_launch_when_a_slot_frees() {
+        let rig = build(None, |s| s.with_cap(1)).await;
+        let busy = rig.queued(9).await;
+        assert_eq!(rig.svc.start_now(&busy.id).await.unwrap().state, RunState::Launching);
+        let ws = rig.open_on("CA-1").await;
+        let old = rig.queued_in(1, "CA-1", &ws).await;
+        rig.set(&old, |r| r.unapproved_auto_start = Some(serde_json::json!({ "rule": "investigate_triage", "afterRun": "r0" }))).await;
+        let waiting = rig.svc.start_now(&old.id).await.unwrap();
+        assert_eq!(waiting.state, RunState::Queued);
+        assert!(waiting.slot_wait_since.is_some());
+        assert!(waiting.unapproved_auto_start.is_none(), "starting it is the person's approval");
+        rig.finish(&busy).await;
+        assert_eq!(rig.svc.launch_waiting().await.unwrap(), std::slice::from_ref(&old.id));
     }
 }

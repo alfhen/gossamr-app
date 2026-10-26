@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import { isTypingTarget } from "./workKeys";
 import { usePrefs } from "./prefs";
-import { useTabs, type Route } from "./tabsStore";
+import { useTabs } from "./tabsStore";
 
 /** Whether Esc is for something else: a field, a control that takes Esc itself, an open dialog or the palette. */
 export function escIsElsewhere(ev: Pick<KeyboardEvent, "key" | "defaultPrevented" | "target">): boolean {
@@ -10,18 +10,15 @@ export function escIsElsewhere(ev: Pick<KeyboardEvent, "key" | "defaultPrevented
   return isTypingTarget(ev.target) || (typeof el?.closest === "function" && !!el.closest("[data-esc-local], [role=dialog], [role=menu], [role=listbox]"));
 }
 
-/** Where Esc on a full page goes: Agents, or the tickets while Agents are off. */
-export const escTarget = (agentsEnabled: boolean): Route => (agentsEnabled ? "agents" : "workspace");
-
-/** Esc on a full page (Sent, Settings) goes back to `escTarget`, wherever the keyboard is on the page (including <body>). */
-export function useEscBack(agentsEnabled: boolean) {
+/** Esc on a full page (Sent, Settings) goes back to Agents, wherever the keyboard is on the page (including <body>). */
+export function useEscBack() {
   useEffect(() => {
     const onKey = (ev: KeyboardEvent) => {
       if (escIsElsewhere(ev)) return;
       ev.preventDefault();
-      useTabs.getState().setRoute(escTarget(agentsEnabled));
+      useTabs.getState().setRoute("agents");
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [agentsEnabled]);
+  }, []);
 }

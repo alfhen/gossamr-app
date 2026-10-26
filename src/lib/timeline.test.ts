@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { MockBackend } from "../backend/mock";
-import type { Intent, ItemRef, Proposal, ProposalState, Run, RunKind, RunState, WorkstreamActor, WorkstreamEvent, WorkstreamView } from "../types";
+import type { Intent, ItemRef, PauseReason, Proposal, ProposalState, Run, RunKind, RunState, WorkstreamActor, WorkstreamEvent, WorkstreamView } from "../types";
 import { needs, type Need } from "./needs";
 import { EMPTY_FILTER, FILTER_LABEL, TIMELINE_FILTERS, draftSentence, filterCounts, filterTimeline, runLifecycle, runPhase, runSentence, shows, timeline, type TimelineEntry, type TimelineTurn } from "./timeline";
 
@@ -18,7 +18,6 @@ const run = (id: string, kind: RunKind, state: RunState, queuedAgo: number, over
   failure: null,
   needs: null,
   error: null,
-  autoStart: null,
   stoppedByLimit: false,
   queuedAt: iso(queuedAgo),
   launchedAt: state === "queued" ? null : iso(queuedAgo - 1),
@@ -81,7 +80,7 @@ const labels = new Map([
   ["r3", "R3"],
 ]);
 
-const view = (over: { heldReason?: string | null } = {}): WorkstreamView => ({
+const view = (over: { pausedReason?: PauseReason | null } = {}): WorkstreamView => ({
   workstream: {
     id: "ws-1",
     connectionId: "mock",
@@ -89,14 +88,10 @@ const view = (over: { heldReason?: string | null } = {}): WorkstreamView => ({
     repo: null,
     title: "CA-401 Rounding",
     pipSession: null,
-    mode: "manage",
-    heldReason: over.heldReason ?? null,
+    pausedReason: over.pausedReason ?? null,
     notes: null,
     createdAt: iso(600),
     closedAt: null,
-    budget: { autoTurns: null, wakes: null, tokens: null },
-    spent: { autoTurns: 0, wakes: 0, tokens: 0 },
-    rules: {},
     basis: null,
   },
   stage: "build",
@@ -106,7 +101,6 @@ const view = (over: { heldReason?: string | null } = {}): WorkstreamView => ({
     ["r2", "R2"],
   ],
   waitingForPr: null,
-  budget: { autoTurns: { used: 0, limit: 11 }, wakes: { used: 0, limit: 12 }, level: "ok" },
 });
 
 describe("timeline: one list, oldest first", () => {
@@ -115,14 +109,14 @@ describe("timeline: one list, oldest first", () => {
       turns: [turn("q1", 100), turn("q2", 30)],
       runs: [run("r1", "investigate", "done", 90), run("r2", "build", "working", 20)],
       drafts: [draft("d1", comment("CA-401"), 70, { state: { type: "applied" }, updatedAgo: 60 })],
-      events: [line("mode_set", 95, { detail: "manage" }), line("draft_approved", 60, { proposalId: "d1" })],
+      events: [line("paused", 95, { detail: "person" }), line("draft_approved", 60, { proposalId: "d1" })],
       labels,
       ticketKey: "CA-401",
     });
     expect(keys(list)).toEqual(["turn:q1", "audit:ws-1:0", "run:r1", "draft:d1", "turn:q2", "run:r2"]);
     expect(list.map((e) => e.text)).toEqual([
       "You: question q1",
-      "You let Pip manage the workstream",
+      "You paused the workstream",
       "Investigate R1 finished",
       "You approved a comment on CA-401, drafted by an agent: posted",
       "You: question q2",
@@ -131,7 +125,7 @@ describe("timeline: one list, oldest first", () => {
   });
 
   it("gives every entry a stable key, a kind, a time, a ticket and a sentence", () => {
-    const input = { turns: [turn("q1", 10)], runs: [run("r1", "plan", "queued", 5)], drafts: [draft("d1", transition("CA-401"), 3)], events: [line("held", 2)], ticketKey: "CA-401" };
+    const input = { turns: [turn("q1", 10)], runs: [run("r1", "plan", "queued", 5)], drafts: [draft("d1", transition("CA-401"), 3)], events: [line("paused", 2)], ticketKey: "CA-401" };
     const a = timeline(input);
     const b = timeline(input);
     expect(keys(a)).toEqual(keys(b));
@@ -155,7 +149,7 @@ describe("timeline: one list, oldest first", () => {
   });
 
   it("breaks a tie in time by source: what was said, the audit, then runs, then drafts", () => {
-    const list = timeline({ turns: [turn("q1", 10)], runs: [run("r1", "plan", "queued", 10)], drafts: [draft("d1", comment("CA-401"), 10)], events: [line("held", 10)] });
+    const list = timeline({ turns: [turn("q1", 10)], runs: [run("r1", "plan", "queued", 10)], drafts: [draft("d1", comment("CA-401"), 10)], events: [line("paused", 10)] });
     expect(list.map((e) => e.kind)).toEqual(["said", "audit", "run", "draft"]);
   });
 
@@ -207,14 +201,14 @@ describe("timeline: a run is one entry, updated in place", () => {
     expect(done.updatedAt).toBe(iso(30));
   });
 
-  it("stands where the audit says it was approved or started by a rule, else where it was queued", () => {
+  it("stands where the audit says it was approved, else where it was queued", () => {
     const list = timeline({
       turns: [turn("q1", 50)],
       runs: [run("r1", "plan", "working", 10), run("r2", "build", "queued", 5), run("r3", "review", "queued", 60)],
-      events: [line("run_approved", 55, { runId: "r1" }), line("autostart", 45, { runId: "r2", actor: "supervisor", detail: "plan_build after r1" }), line("run_approved", 40, { runId: "r2" })],
+      events: [line("run_approved", 55, { runId: "r1" }), line("run_approved", 40, { runId: "r2" })],
     });
     expect(keys(list)).toEqual(["run:r3", "run:r1", "turn:q1", "run:r2"]);
-    expect(list.find((e) => e.key === "run:r2")!.at).toBe(iso(45));
+    expect(list.find((e) => e.key === "run:r2")!.at).toBe(iso(40));
   });
 
   it("records each step of its life: queued, started and how it ended", () => {
@@ -247,7 +241,7 @@ describe("timeline: a run is one entry, updated in place", () => {
   });
 
   it("says each phase in a plain sentence, with a finished review's verdict", () => {
-    expect(runSentence(run("r1", "plan", "queued", 5, { autoStart: { rule: "triage_plan", afterRun: "r0" } }), "R1", undefined)).toBe("Plan R1 queued automatically");
+    expect(runSentence(run("r1", "plan", "queued", 5), "R1", undefined)).toBe("Plan R1 queued");
     expect(runSentence(run("r1", "plan", "needsAnswer", 5), "R1", undefined)).toBe("Plan R1 is waiting on you: it asks a question");
     expect(runSentence(run("r1", "build", "needsPermission", 5), "R1", undefined)).toBe("Build R1 is waiting on you: it needs permission");
     expect(runSentence(run("r1", "build", "systemBlocked", 5), "R1", undefined)).toBe("Build R1 is waiting on you: sign in to Claude");
@@ -272,7 +266,7 @@ describe("timeline: a run is one entry, updated in place", () => {
     expect(working.needKey).toBeNull();
     expect(working.decision).toBe(false);
     const asking = run("r2", "build", "needsPermission", 5, { needs: "git push origin ca-401" });
-    const need = needs({ workstreams: [view()], runs: [asking], proposals: [], dismissed: new Set(), now: NOW })[0];
+    const need = needs({ workstreams: [view()], runs: [asking], proposals: [], dismissed: new Set() })[0];
     const entry = timeline({ runs: [asking], needs: [need] })[0];
     expect(entry.target).toEqual({ type: "need", key: need.key });
     expect(entry.needKey).toBe(need.key);
@@ -315,7 +309,6 @@ describe("timeline: drafts", () => {
   it("says who posted a GitHub review, to which pull request, with how many comments and whether it was edited", () => {
     const review = (n: number) => ({ type: "githubReview", connectionId: "gh", item: ref("CA-402"), runId: "r1", repo: "hobbii/cart", number: 17, commitSha: "abc", summary: "s", comments: Array.from({ length: n }, (_, i) => ({ path: "a.ts", line: i + 1, side: "RIGHT", body: "x" })) }) as unknown as Intent;
     expect(draftSentence(draft("d1", review(2), 5, { state: { type: "applied" } }))).toBe("You posted an agent's GitHub review on hobbii/cart#17: 2 inline comments");
-    expect(draftSentence(draft("d2", review(1), 5, { createdBy: "autopilot", state: { type: "applied" } }))).toBe("You posted Gossamr's GitHub review on hobbii/cart#17: 1 inline comment");
     const edited = { ...draft("d3", review(3), 5, { createdBy: "pip", state: { type: "applied" } }), revisions: [{}] } as unknown as Proposal;
     expect(draftSentence(edited)).toBe("You posted Pip's GitHub review on hobbii/cart#17: 3 inline comments, edited by you");
   });
@@ -326,40 +319,17 @@ describe("timeline: drafts", () => {
     expect(timeline({ drafts: [draft("d2", comment("CA-401"), 5)] })[0].turnId).toBeUndefined();
   });
 
-  it("says Gossamr drafted the comment to a reporter, and still an agent for the triage's own note", () => {
-    const asked = { ...draft("d1", comment("CA-401"), 5), label: "Questions for the reporter" } as Proposal;
-    expect(timeline({ drafts: [asked] })[0].text).toBe("Gossamr drafted a comment on CA-401");
-    expect(timeline({ drafts: [{ ...asked, state: { type: "applied" } } as Proposal] })[0].text).toBe("You posted the questions for the reporter on CA-401");
-    expect(timeline({ drafts: [draft("d2", comment("CA-401"), 5)] })[0].text).toBe("An agent drafted a comment on CA-401");
-  });
-
-  it("says a run a rule started was started by Gossamr, with the plan's approval when that is what started it (G2)", () => {
+  it("says the person started the run Pip drafted", () => {
     const start = { type: "startRun", item: ref("CA-401"), spec: { ...base.spec, kind: "build" } } as unknown as Intent;
     const d = draft("d1", start, 5, { createdBy: "pip", state: { type: "applied" } });
-    expect(draftSentence(d, { auto: { afterPlan: false } })).toBe("Gossamr started the build run automatically on CA-401");
-    expect(draftSentence(d, { auto: { afterPlan: true } })).toBe("Gossamr started the build run automatically on CA-401 after you approved the plan");
-    const rule = (detail: string) => timeline({ drafts: [d], events: [line("autostart", 6, { actor: "supervisor", proposalId: "d1", detail })] })[0].text;
-    expect(rule("plan_build after r1")).toBe("Gossamr started the build run automatically on CA-401 after you approved the plan");
-    expect(rule("triage_plan after r1")).toBe("Gossamr started the build run automatically on CA-401");
+    expect(draftSentence(d)).toBe("You started the build run that Pip drafted on CA-401");
     expect(timeline({ drafts: [d] })[0].text).toBe("You started the build run that Pip drafted on CA-401");
   });
 
-  it("tells the first ask, the follow-up and the nudge apart (G13)", () => {
-    const asked = (id: string, label: string, over: Partial<Proposal> = {}) => ({ ...draft(id, comment("CA-408"), 5, { state: { type: "applied" } }), label, ...over }) as Proposal;
-    const questions = asked("d1", "Questions for the reporter");
-    expect(draftSentence(questions)).toBe("You posted the questions for the reporter on CA-408");
-    expect(draftSentence(asked("d2", "Nudge for the reporter"))).toBe("You posted the nudge to the reporter on CA-408");
-    expect(draftSentence(questions, { followUp: true })).toBe("You posted the follow-up questions for the reporter on CA-408");
-    expect(draftSentence({ ...questions, revisions: [{}] } as unknown as Proposal)).toBe("You posted the questions for the reporter on CA-408, edited by you");
-    // An earlier ask posted on the workstream makes the next one a follow-up.
-    const second = asked("d3", "Questions for the reporter", { createdAt: iso(10), updatedAt: iso(10) });
-    const list = timeline({ drafts: [{ ...questions, createdAt: iso(30), updatedAt: iso(30) } as Proposal, second] });
-    expect(list.map((e) => e.text)).toEqual(["You posted the questions for the reporter on CA-408", "You posted the follow-up questions for the reporter on CA-408"]);
-  });
 
   it("opens the draft's card, or its need while it waits", () => {
     const pending = draft("d1", comment("CA-401"), 5);
-    const need = needs({ workstreams: [view()], runs: [], proposals: [pending], dismissed: new Set(), now: NOW }).find((n) => n.key === "draft:d1")!;
+    const need = needs({ workstreams: [view()], runs: [], proposals: [pending], dismissed: new Set() }).find((n) => n.key === "draft:d1")!;
     expect(need).toBeDefined();
     const linked = timeline({ drafts: [pending], needs: [need] })[0];
     expect(linked.target).toEqual({ type: "need", key: "draft:d1" });
@@ -386,25 +356,6 @@ describe("timeline: a failed run's heading and its message", () => {
   });
 });
 
-describe("timeline: automatic fix rounds", () => {
-  it("gives each round the rules sent a line of its own, and the person's own round its own without 'automatically'", () => {
-    const list = timeline({
-      runs: [run("r1", "build", "done", 60), run("r2", "review", "done", 50)],
-      events: [
-        line("autostart", 40, { actor: "supervisor", runId: "r1", detail: "fix_round after r2" }),
-        line("fix_round_sent", 40, { actor: "supervisor", runId: "r1", detail: "120" }),
-        line("autostart", 30, { actor: "supervisor", runId: "r1", detail: "fix_round after r3" }),
-        line("fix_round_sent", 30, { actor: "supervisor", runId: "r1", detail: "120" }),
-        line("fix_round_sent", 10, { actor: "person", runId: "r1", detail: "120" }),
-      ],
-      labels,
-    });
-    expect(list.filter((e) => e.kind === "audit").map((e) => e.text)).toEqual(["Fix round 1 sent to R1 automatically", "Fix round 2 sent to R1 automatically", "Fix round 3 sent to R1"]);
-    // Each opens the build it went to.
-    expect(list.filter((e) => e.kind === "audit").map((e) => e.target)).toEqual([{ type: "run", id: "r1" }, { type: "run", id: "r1" }, { type: "run", id: "r1" }]);
-  });
-});
-
 describe("timeline: cause before effect", () => {
   const review = (n: number) => ({ type: "githubReview", connectionId: "gh", item: ref("CA-401"), runId: "r2", repo: "hobbii/cart", number: 17, commitSha: "abc", summary: "s", comments: Array.from({ length: n }, (_, i) => ({ path: "a.ts", line: i + 1, side: "RIGHT", body: "x" })) }) as unknown as Intent;
   const posted = (minutesAgo: number, over: Parameters<typeof draft>[3] = {}) => draft("d1", review(2), minutesAgo, { state: { type: "applied" }, origin: { type: "run", runId: "r2", shortId: null, workstream: "ws-1" }, ...over });
@@ -428,7 +379,7 @@ describe("timeline: cause before effect", () => {
     const list = timeline({
       runs: [run("r2", "review", "done", 20)],
       drafts: [posted(15)],
-      events: [line("held", 20), line("review_posted", 10, { proposalId: "d1" }), line("resumed", 12)],
+      events: [line("paused", 20), line("review_posted", 10, { proposalId: "d1" }), line("resumed", 12)],
       labels,
     });
     expect(list.map((e) => e.key)).toEqual(["audit:ws-1:0", "run:r2", "draft:d1", "audit:ws-1:2"]);
@@ -441,21 +392,20 @@ describe("timeline: the audit", () => {
     const list = timeline({
       runs: [run("r1", "build", "working", 30)],
       drafts: [draft("d1", comment("CA-401"), 20)],
-      events: [line("run_approved", 30, { runId: "r1" }), line("autostart", 30, { runId: "r1", actor: "supervisor", detail: "plan_build after r0" }), line("wake", 25, { actor: "supervisor", runId: "r1" }), line("draft_created", 20, { proposalId: "d1", actor: "run" }), line("notes_set", 19, { actor: "pip" })],
+      events: [line("run_approved", 30, { runId: "r1" }), line("wake", 25, { actor: "supervisor", runId: "r1" }), line("draft_created", 20, { proposalId: "d1", actor: "run" }), line("notes_set", 19, { actor: "pip" })],
       labels,
     });
     expect(list.map((e) => e.kind)).toEqual(["run", "draft"]);
   });
 
-  it("keeps holds, mode switches, escalations, undos and what the person did to runs and drafts", () => {
+  it("keeps pauses, undos and what the person did to runs and drafts", () => {
     const list = timeline({
       runs: [run("r1", "build", "done", 90), run("r2", "review", "done", 80)],
       drafts: [draft("d1", comment("CA-401"), 70, { state: { type: "pending" } })],
       events: [
-        line("held", 60),
-        line("undone", 59, { detail: "held" }),
-        line("mode_set", 58, { detail: "advise" }),
-        line("fix_rounds_exhausted", 57, { actor: "supervisor", runId: "r2", detail: "2" }),
+        line("paused", 60),
+        line("resumed", 59),
+        line("basis_drifted", 58, { actor: "supervisor", detail: "description" }),
         line("draft_skipped", 56, { proposalId: "d1" }),
         line("undone", 55, { proposalId: "d1", detail: "draft_skipped" }),
         line("run_stopped", 54, { runId: "r1" }),
@@ -464,10 +414,9 @@ describe("timeline: the audit", () => {
       labels,
     });
     expect(list.filter((e) => e.kind === "audit").map((e) => e.text)).toEqual([
-      "You held the workstream",
-      "You undid holding the workstream",
-      "You stopped Pip managing the workstream",
-      "The review still blocks after 2 fix rounds",
+      "You paused the workstream",
+      "You resumed the workstream",
+      "The ticket's description changed in Jira",
       "You skipped a comment on CA-401",
       "You brought back a comment on CA-401",
       "You stopped R1",
@@ -475,151 +424,45 @@ describe("timeline: the audit", () => {
     ]);
   });
 
-  it("keeps each ask of the reporter as a line of its own, however alike (G29)", () => {
-    for (const action of ["readiness_asked", "clarity_asked", "reporter_nudged"]) {
-      const list = timeline({ events: [line(action, 10), line(action, 9)] });
-      expect(list).toHaveLength(2);
-      expect(list.some((e) => e.count !== undefined || / times\)$/.test(e.text))).toBe(false);
-    }
-  });
-
-  it("tells the choice to ask the reporter before the post it made, and without the need it settled (G7)", () => {
-    const base = needs({ workstreams: [view({ heldReason: "restart" })], runs: [], proposals: [], dismissed: new Set(), now: NOW, heldAt: { "ws-1": iso(5) } }).find((n) => n.kind === "hold")!;
-    const open: Need = { ...base, key: "readiness:r1", kind: "readiness", runId: "r1" };
-    const list = timeline({
-      drafts: [draft("d1", comment("CA-401"), 4, { state: { type: "applied" }, updatedAgo: 2 })],
-      events: [line("readiness_asked", 5, { runId: "r1", proposalId: "d1" }), line("draft_approved", 2, { proposalId: "d1" })],
-      needs: [open],
-    });
-    const texts = list.map((e) => e.text);
-    const asked = list.find((e) => e.action === "readiness_asked")!;
-    expect(texts.indexOf(asked.text)).toBeLessThan(texts.findIndex((t) => t.includes("approved a comment")));
-    expect(asked.needKey).toBeNull();
-    expect(asked.target).toEqual({ type: "draft", id: "d1" });
-  });
-
-  it("keeps the choice to ask before the draft it made and the post that followed, even when it was recorded a moment after the draft (G22)", () => {
-    for (const asked of [0, -0.5]) {
-      const list = timeline({
-        drafts: [draft("d1", comment("CA-401"), 4, { state: { type: "applied" }, updatedAgo: 4 })],
-        events: [line("clarity_asked", 4 + asked, { proposalId: "d1" }), line("draft_approved", 4, { proposalId: "d1" })],
-      });
-      const at = (match: (e: (typeof list)[number]) => boolean) => list.findIndex(match);
-      expect(at((e) => e.action === "clarity_asked")).toBeLessThan(at((e) => e.kind === "draft"));
-      expect(at((e) => e.action === "clarity_asked")).toBeLessThan(at((e) => e.text.includes("approved a comment")));
-    }
-  });
-
   it("collapses the same line again and again into one that says how many", () => {
-    const list = timeline({ events: [line("rule_set", 10), line("rule_set", 9), line("rule_set", 8), line("held", 7), line("rule_set", 6)] });
-    expect(list.map((e) => e.text)).toEqual(["You changed an automatic step (3 times)", "You held the workstream", "You changed an automatic step"]);
+    const list = timeline({ events: [line("run_stopped", 10, { runId: "r1" }), line("run_stopped", 9, { runId: "r1" }), line("run_stopped", 8, { runId: "r1" }), line("paused", 7), line("run_stopped", 6, { runId: "r1" })], labels });
+    expect(list.map((e) => e.text)).toEqual(["You stopped R1 (3 times)", "You paused the workstream", "You stopped R1"]);
     expect(list[0].count).toBe(3);
     expect(list[0].at).toBe(iso(10));
     expect(list[0].updatedAt).toBe(iso(8));
   });
 
   it("marks what the person did and what asks them to decide as decisions, and not the rest", () => {
-    const list = timeline({ events: [line("held", 10, { actor: "supervisor" }), line("waiting_for_pr", 9, { actor: "supervisor", runId: "r1" }), line("budget_reset", 8), line("fix_rounds_exhausted", 7, { actor: "supervisor", detail: "2" }), line("escalation_taken", 6, { runId: "r9" })] });
+    const list = timeline({ events: [line("paused", 10, { actor: "supervisor", detail: "ceiling" }), line("resumed", 8), line("basis_drifted", 7, { actor: "supervisor", detail: "status" })] });
     expect(list.map((e) => [e.action, e.decision])).toEqual([
-      ["held", true],
-      ["waiting_for_pr", false],
-      ["budget_reset", true],
-      ["fix_rounds_exhausted", true],
-      ["escalation_taken", true],
+      ["paused", true],
+      ["resumed", true],
+      ["basis_drifted", false],
     ]);
-    expect(list.find((e) => e.action === "escalation_taken")?.text).toBe("You took the review of run r9 over from Pip");
   });
 
   it("leaves opening and closing the workstream and the notes out of the decisions", () => {
-    const list = timeline({ events: [line("opened", 10), line("notes_set", 9), line("closed", 8), line("mode_set", 7, { detail: "manage" })] });
+    const list = timeline({ events: [line("opened", 10), line("notes_set", 9), line("closed", 8)] });
     expect(list.map((e) => [e.action, e.decision])).toEqual([
       ["opened", false],
       ["closed", false],
-      ["mode_set", true],
     ]);
   });
 
-  it("links the hold that still holds and the open escalation to their needs", () => {
-    const held = view({ heldReason: "restart" });
-    const all = needs({ workstreams: [held], runs: [], proposals: [], dismissed: new Set(), now: NOW, heldAt: { "ws-1": iso(5) } });
-    const hold = all.find((n) => n.kind === "hold")!;
-    const escalation: Need = { ...hold, key: "escalation:r2", kind: "escalation", group: "decide" };
-    const list = timeline({ events: [line("held", 30), line("resumed", 20), line("held", 5), line("fix_rounds_exhausted", 4, { actor: "supervisor", detail: "2" })], needs: [hold, escalation] });
-    expect(list.map((e) => e.target)).toEqual([null, null, { type: "need", key: hold.key }, { type: "need", key: "escalation:r2" }]);
-    expect(list[2].needKey).toBe(hold.key);
-    // An undo that restores the supervisor's hold after the person's own holds the need now.
-    const undone = timeline({ events: [line("held", 30, { actor: "supervisor" }), line("held", 20), line("undone", 10, { detail: "held" })], needs: [hold] });
-    expect(undone.map((e) => e.target)).toEqual([null, null, { type: "need", key: hold.key }]);
-    expect(undone[2].needKey).toBe(hold.key);
+  it("leaves out what an earlier version recorded: automatic starts, fix rounds, budgets, rules, modes and the reporter questions", () => {
+    const old = ["autostart", "waiting_for_pr", "fix_round_sent", "fix_rounds_exhausted", "budget_reset", "steps_allowed", "rule_set", "mode_set", "escalation_taken", "readiness_asked", "readiness_answered", "readiness_overridden", "clarity_asked", "clarity_dismissed", "clarity_learned", "clarity_reset", "reporter_nudged"];
+    expect(timeline({ events: old.map((a, n) => line(a, 20 - n, { actor: "supervisor" })) })).toEqual([]);
   });
 
-  it("links a budget hold's line to its question, and a hold the person chose to no need", () => {
-    const budget = needs({ workstreams: [view({ heldReason: "budget" })], runs: [], proposals: [], dismissed: new Set(), now: NOW })[0];
-    expect(budget.kind).toBe("budget");
-    const list = timeline({ events: [line("held", 5, { actor: "supervisor", detail: "budget" })], needs: [budget] });
-    expect(list.map((e) => e.target)).toEqual([{ type: "need", key: "budget:ws-1" }]);
-    const own = needs({ workstreams: [view({ heldReason: "person" })], runs: [], proposals: [], dismissed: new Set(), now: NOW });
-    expect(own).toEqual([]);
-    expect(timeline({ events: [line("held", 5, { detail: "person" })], needs: own }).map((e) => e.target)).toEqual([null]);
+  it("links the pause that still holds to its need", () => {
+    const held = view({ pausedReason: "person" });
+    const all = needs({ workstreams: [held], runs: [], proposals: [], dismissed: new Set(), pausedAt: { "ws-1": iso(5) } });
+    const pause = all.find((n) => n.kind === "paused")!;
+    const list = timeline({ events: [line("paused", 30), line("resumed", 20), line("paused", 5)], needs: [pause] });
+    expect(list.map((e) => e.target)).toEqual([null, null, { type: "need", key: pause.key }]);
+    expect(list[2].needKey).toBe(pause.key);
   });
 
-  it("words the person's Allow 5 more and counts it among their decisions", () => {
-    const [allowed] = timeline({ events: [line("steps_allowed", 5, { detail: "5" })] });
-    expect(allowed).toMatchObject({ text: "You allowed 5 more automatic steps", decision: true });
-  });
-
-  it("words the person's three choices on a ticket that isn't clear enough to plan and counts each among their decisions", () => {
-    const list = timeline({
-      events: [line("readiness_asked", 3, { runId: "r1", proposalId: "d1" }), line("readiness_answered", 2, { runId: "r1" }), line("readiness_overridden", 1, { runId: "r1" })],
-      runs: [run("r1", "triage", "done", 30)],
-      labels: new Map([["r1", "R1"]]),
-    });
-    const audit = list.filter((e) => e.kind === "audit");
-    expect(audit.map((e) => [e.text, e.decision])).toEqual([
-      ["You chose to ask the reporter about R1's open questions; drafted for you to post", true],
-      ["You chose to answer R1's open questions", true],
-      ["You chose to plan now, after asking the reporter about R1's open questions", true],
-    ]);
-    expect(audit.every((e) => e.kind === "audit" && e.decision)).toBe(true);
-    // The same line by anyone but the person is still worded, and is not the person's decision.
-    const other = timeline({ events: [line("readiness_overridden", 1, { actor: "pip", runId: "r1" })], runs: [run("r1", "triage", "done", 30)], labels: new Map([["r1", "R1"]]) }).find((e) => e.kind === "audit")!;
-    expect(other.text).toBe("Pip chose to plan anyway after R1 found the ticket not ready");
-    expect(other.decision).toBe(false);
-  });
-
-  it("words a Plan now after the reporter was asked apart from Plan anyway", () => {
-    const list = timeline({
-      events: [line("readiness_asked", 3, { runId: "r1", proposalId: "d1" }), line("readiness_overridden", 2, { runId: "r1" }), line("readiness_overridden", 1, { runId: "r2" })],
-      runs: [run("r1", "triage", "done", 30), run("r2", "triage", "done", 30)],
-      labels: new Map([["r1", "R1"], ["r2", "R2"]]),
-    });
-    const texts = list.filter((e) => e.kind === "audit").map((e) => e.text);
-    expect(texts).toContain("You chose to plan now, after asking the reporter about R1's open questions");
-    expect(texts).toContain("You chose to plan anyway after R2 found the ticket not ready");
-    expect(texts.join("\n")).not.toContain("plan anyway after R1");
-  });
-
-  it("says a triage's finish with the reason the ticket waits, and opens its need", () => {
-    const stopped: WorkstreamView = { ...view(), readiness: { triageRun: "r1", triageLabel: "R1", questions: ["Who asked?"], at: iso(20) } };
-    const found = needs({ workstreams: [stopped], runs: [], proposals: [], dismissed: new Set(), now: NOW });
-    expect(found.map((n) => n.kind)).toEqual(["readiness"]);
-    const [entry] = timeline({ runs: [run("r1", "triage", "done", 30)], needs: found, labels: new Map([["r1", "R1"]]) });
-    expect(entry).toMatchObject({ text: "Triage R1 finished: the ticket isn't clear enough to plan", target: { type: "need", key: "readiness:r1" }, needKey: "readiness:r1", decision: true });
-    const [after] = timeline({ runs: [run("r1", "triage", "done", 30)], needs: [], labels: new Map([["r1", "R1"]]) });
-    expect(after).toMatchObject({ text: "Triage R1 finished", target: { type: "run", id: "r1" }, decision: false });
-  });
-
-  it("opens the run or the draft a line names, when it is on the timeline", () => {
-    const list = timeline({
-      runs: [run("r1", "build", "stopped", 30)],
-      drafts: [draft("d1", comment("CA-401"), 20, { state: { type: "applied" } })],
-      events: [line("run_stopped", 15, { runId: "r1" }), line("draft_skipped", 10, { proposalId: "d1" }), line("run_answered", 5, { runId: "gone" })],
-      labels,
-    });
-    const audit = list.filter((e) => e.kind === "audit");
-    expect(audit.map((e) => e.target)).toEqual([{ type: "run", id: "r1" }, { type: "draft", id: "d1" }, null]);
-    expect(audit[2].text).toBe("You answered run gone");
-  });
 });
 
 describe("timeline: one line for one post", () => {
@@ -648,7 +491,7 @@ describe("timeline filters", () => {
     turns: [turn("q1", 100)],
     runs: [run("r1", "investigate", "done", 90), run("r2", "build", "needsPermission", 20, { needs: "git push" })],
     drafts: [draft("d1", comment("CA-401"), 70), draft("d2", transition("CA-401"), 60, { state: { type: "applied" } })],
-    events: [line("mode_set", 95, { detail: "manage" }), line("waiting_for_pr", 50, { actor: "supervisor", runId: "r1" })],
+    events: [line("paused", 95), line("basis_drifted", 50, { actor: "supervisor", detail: "summary" })],
     needs: [{ key: "run:r2", runId: "r2" } as Need, { key: "draft:d1" } as Need],
     labels,
   });
@@ -666,7 +509,7 @@ describe("timeline filters", () => {
   });
 
   it("Decisions shows what the person decided and what waits on them", () => {
-    expect(keys(filterTimeline(all, "decisions"))).toEqual(["audit:ws-1:" + all.find((e) => e.action === "mode_set")!.key.split(":")[2], "draft:d1", "run:r2"]);
+    expect(keys(filterTimeline(all, "decisions"))).toEqual(["audit:ws-1:" + all.find((e) => e.action === "paused")!.key.split(":")[2], "draft:d1", "run:r2"]);
   });
 
   it("counts what each filter shows", () => {
@@ -678,55 +521,5 @@ describe("timeline filters", () => {
     for (const f of TIMELINE_FILTERS) expect(EMPTY_FILTER[f]).toMatch(/\.$/);
     expect(shows("runs", { kind: "audit", decision: true })).toBe(false);
     expect(shows("decisions", { kind: "run", decision: false })).toBe(false);
-  });
-});
-
-describe("timeline: the reporter's replies on the ticket (G1)", () => {
-  it("keeps a reply once the person asks again, in time order between the two asks", () => {
-    const asked = (id: string, minutes: number) => ({ ...draft(id, comment("CA-408"), minutes, { state: { type: "applied" } }), label: "Questions for the reporter", createdAt: iso(minutes), updatedAt: iso(minutes) }) as Proposal;
-    const list = timeline({
-      ticketKey: "CA-408",
-      drafts: [asked("d1", 50), asked("d2", 10)],
-      // The wait the reply ended was asked again, so the view has no reply pending any more.
-      reporterReplies: [{ id: "c1", excerpt: "It happens on checkout…", at: iso(30) }],
-    });
-    expect(list.map((e) => e.text)).toEqual(["You posted the questions for the reporter on CA-408", "The reporter replied on the ticket", "You posted the follow-up questions for the reporter on CA-408"]);
-    expect(list[1]).toMatchObject({ key: "audit:reply:c1", detail: "“It happens on checkout…”", attention: false, target: { type: "comment", ticketKey: "CA-408", id: "c1" } });
-  });
-
-  it("asks for attention on the reply the person has not settled, and tells each reply by its comment", () => {
-    const list = timeline({ ticketKey: "CA-408", reporterRepliedAt: iso(30), reporterReplies: [{ id: "c1", excerpt: "One", at: iso(40) }, { id: "c2", excerpt: "Two", at: iso(30) }] });
-    expect(list.map((e) => [e.key, e.attention])).toEqual([["audit:reply:c1", false], ["audit:reply:c2", true]]);
-  });
-});
-
-describe("timeline: the reporter's reply on the ticket", () => {
-  it("is an entry of its own at the reply's time, since a comment leaves no audit line", () => {
-    const at = iso(30);
-    const got = timeline({ ticketKey: "CA-401", reporterRepliedAt: at });
-    expect(got).toHaveLength(1);
-    expect(got[0]).toMatchObject({ kind: "audit", at, text: "The reporter replied on the ticket", ticketKey: "CA-401", decision: false, attention: true, target: null });
-  });
-
-  it("quotes the reply and opens its comment on the ticket, when the view says which it was (G15)", () => {
-    const got = timeline({ ticketKey: "CA-401", reporterRepliedAt: iso(30), reporterReply: { id: "c7", excerpt: "It should send three emails." } });
-    expect(got[0]).toMatchObject({ text: "The reporter replied on the ticket", detail: "“It should send three emails.”", target: { type: "comment", ticketKey: "CA-401", id: "c7" } });
-    // A secret in the reply is masked in the quote (G2), whichever way the entry is made.
-    const secret = { id: "c8", excerpt: "Use ghp_abcdefghijklmnopqrstuvwxyz0123 and password: hunter22secret" };
-    for (const input of [{ reporterRepliedAt: iso(30), reporterReply: secret }, { reporterReplies: [{ ...secret, at: iso(30) }] }]) {
-      const detail = timeline({ ticketKey: "CA-401", ...input })[0].detail;
-      expect(detail).toBe("“Use gh… and password: hu…”");
-    }
-    // Without a ticket key there is nothing to open, but the quote stays.
-    expect(timeline({ reporterRepliedAt: iso(30), reporterReply: { id: "c7", excerpt: "Yes." } })[0]).toMatchObject({ detail: "“Yes.”", target: null });
-    expect(timeline({ ticketKey: "CA-401", reporterRepliedAt: iso(30) })[0].detail).toBeUndefined();
-  });
-
-  it("sits among the other entries by its time, and is absent without one", () => {
-    const turns: TimelineTurn[] = [{ requestId: "t1", at: iso(60), prompt: "hi", text: "", status: "done" }, { requestId: "t2", at: iso(10), prompt: "again", text: "", status: "done" }];
-    const texts = timeline({ turns, reporterRepliedAt: iso(30) }).map((e) => e.text);
-    expect(texts).toEqual(["You: hi", "The reporter replied on the ticket", "You: again"]);
-    expect(timeline({ turns }).map((e) => e.text)).toEqual(["You: hi", "You: again"]);
-    expect(timeline({ reporterRepliedAt: "not a time" })).toEqual([]);
   });
 });

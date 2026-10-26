@@ -1,209 +1,36 @@
 import { expect, test, type Page } from "@playwright/test";
-import { advanceRuns, agentsHome, askPip, expectToast, holdBySystem, homeComposer, homeSettled, jiraWrites, mockRuns, needsPane, openAgents, openApp, paneSettled, pipPane, selectWorkstream, startMyDay, startWorkstream, workstreamGroup, openNeedOfKind, openNeedRow } from "./support/app";
+import { jiraWrites, needsPane, openAgents, openApp, pipCommentDraft, pipPane, selectWorkstream, startWorkstream } from "./support/app";
 
-// Fixes from round 9's backlog: Plan my week and Start my day capped with a scroll of their own (G19), the plan's intro and the answers draft saying where they come from (G20), the keyboard odds and ends
-// (G21), a hold the system made above the person's own (G22) and the pause quoting what tripped it (G23).
-
-const port = Number(process.env.E2E_PORT ?? 4173);
-/** The seeded profile (e2e/playwright.config.ts) without Start my day set aside, so its card shows. */
-const DAY_DUE = { cookies: [], origins: [{ origin: `http://localhost:${port}`, localStorage: [{ name: "gossamr-prefs", value: JSON.stringify({ pipOrientationSeen: true, permissionExplainerSeen: true }) }] }] };
+// Fixes from round 9's backlog: the keyboard odds and ends (G21) and the pause quoting what tripped it (G23).
 
 const toast = (page: Page) => page.locator("[data-toast]");
 const allProjects = (page: Page) => page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "All projects" }).click();
-const plan = (page: Page) => agentsHome(page).locator("[data-plan-my-week]");
-const picks = (page: Page) => plan(page).locator("[data-plan-pick]");
 
-/** Opens Plan my week from Start my day's card. */
-async function openPlan(page: Page) {
-  await openAgents(page);
-  await startMyDay(page);
-  await agentsHome(page).locator("[data-start-my-day]").getByRole("button", { name: "Plan my week" }).click();
-  await expect(plan(page)).toBeVisible();
-}
-
-/** The questions to the reporter on `key`, drafted from its notice and left waiting in the decision pane. */
+/** A comment on `key` drafted by Pip and left waiting in the decision pane. */
 async function draftOn(page: Page, key: string) {
   await allProjects(page);
   await startWorkstream(page, key);
   await openAgents(page);
   await selectWorkstream(page, key);
-  await agentsHome(page).locator("[data-clarity-notice]").getByRole("button", { name: "Ask the reporter now" }).click();
-  return needsPane(page).getByRole("article", { name: `Comment on ${key}` });
+  return pipCommentDraft(page, key);
 }
 
-
-test.describe("the plan's intro (G20)", () => {
-  test.use({ storageState: DAY_DUE });
-
-  test("says in one line that what waits on others is answered in Needs you, not planned", async ({ page }) => {
-    test.setTimeout(90_000);
-    await openApp(page, "runs=empty");
-    await openPlan(page);
-    await expect(plan(page).locator("[data-plan-left-out]")).toHaveText("It proposes 3; more that needs you stays in Needs you, where it is answered rather than planned.");
-    await expect(plan(page).locator("[data-plan-intro]")).toContainText("Nothing is written to Jira.");
-  });
-});
-
-test.describe("the answers draft says which reply it came from (G20)", () => {
-  /** Asks Pip for an investigation of `key` and starts it past the one-time safety sheet, as the person does. */
-  async function startInvestigation(page: Page, key: string) {
-    await paneSettled(page);
-    await askPip(page, "investigate this");
-    await paneSettled(page);
-    const setup = page.getByRole("dialog", { name: "Start an agent" });
-    const safety = page.getByRole("dialog", { name: "Agents safety and settings" });
-    for (let attempt = 0; attempt < 2; attempt++) {
-      await pipPane(page).getByRole("article", { name: `Start an agent: ${key}` }).last().getByRole("button", { name: "Review and start →" }).click();
-      await expect(setup.or(safety)).toBeVisible();
-      if (!(await safety.isVisible())) break;
-      await safety.getByRole("button", { name: "Close" }).click();
-    }
-    await setup.getByRole("button", { name: "Start agent" }).click();
-    await expect(setup).toHaveCount(0);
-  }
-  const newest = async (page: Page, kind: string) => (await mockRuns(page)).find((r) => r.kind === kind) ?? null;
-  async function finish(page: Page, id: string) {
-    await paneSettled(page);
-    for (let i = 0; i < 3; i++) await advanceRuns(page, 1, id);
-    await expect.poll(async () => (await mockRuns(page)).find((r) => r.id === id)?.state).toBe("done");
-  }
-
-  test("on its card in the app only, never in the comment that goes to Jira", async ({ page }) => {
-    test.setTimeout(180_000);
-    await openApp(page, "runs=empty&prSurface=manual&wsManage=1&pipPace=1");
-    await startWorkstream(page, "CA-408");
-    await startInvestigation(page, "CA-408");
-    await finish(page, (await newest(page, "investigate"))!.id);
-    await expect.poll(async () => (await newest(page, "triage"))?.id ?? null).not.toBeNull();
-    await finish(page, (await newest(page, "triage"))!.id);
-    await openAgents(page);
-    await selectWorkstream(page, "CA-408");
-    await openNeedOfKind(page, "readiness");
-    await needsPane(page).getByRole("button", { name: "I'll answer" }).click();
-    await expect(homeComposer(page)).toHaveValue(/My answers: $/);
-    await page.keyboard.type("1. Done means all three emails send. 2. Only the CRM export. 3. The support team.");
-    await page.keyboard.press("Enter");
-    await homeSettled(page);
-    await openNeedRow(page, "Answers to the open questions");
-    const card = needsPane(page).getByRole("article", { name: "Comment on CA-408" });
-    await expect(card).toContainText("Answers to the open questions on this ticket:");
-    const line = card.locator('[data-provenance="pip"]');
-    await expect(line).toContainText("Drafted by Pip");
-    await expect(line).toContainText("Drafted from your reply “1. Done means all three emails send.");
-    // What is posted is the answers alone.
-    await card.getByRole("button", { name: "Edit" }).click();
-    const text = await card.locator("textarea").first().inputValue();
-    expect(text).toContain("Answers to the open questions on this ticket:");
-    expect(text).not.toMatch(/Drafted|your reply|Pip/);
-    await card.getByRole("button", { name: "Done editing" }).click();
-    expect(await jiraWrites(page)).toEqual([]);
-  });
-});
-
 test.describe("the keyboard odds and ends (G21)", () => {
-  test.use({ storageState: DAY_DUE });
-
-  test("Delete and Backspace on a plan row remove it with an Undo that puts it back where it was", async ({ page }) => {
-    test.setTimeout(90_000);
-    await openApp(page, "runs=empty");
-    await openPlan(page);
-    await expect(picks(page)).toHaveCount(3);
-    const ids = await picks(page).evaluateAll((els) => els.map((e) => e.getAttribute("data-plan-pick")));
-    const title = await picks(page).nth(1).locator("[data-plan-title]").innerText();
-    await picks(page).nth(1).focus();
-    await page.keyboard.press("Delete");
-    await expect(picks(page)).toHaveCount(2);
-    await expect(toast(page)).toContainText(`Removed ${title} from the plan.`);
-    // The keyboard stays in the plan, on the pick that took its place.
-    await expect(plan(page).locator(`[data-plan-pick="${ids[2]}"]`)).toBeFocused();
-    await toast(page).getByRole("button", { name: "Undo" }).click();
-    await expect(picks(page)).toHaveCount(3);
-    expect(await picks(page).evaluateAll((els) => els.map((e) => e.getAttribute("data-plan-pick")))).toEqual(ids);
-    await expect(plan(page).locator(`[data-plan-pick="${ids[1]}"]`)).toBeFocused();
-    await expectToast(page, `Put ${title} back in the plan.`);
-    // Backspace is the same, and so is the Remove button.
-    await page.keyboard.press("Backspace");
-    await expect(picks(page)).toHaveCount(2);
-    await expect(toast(page).getByRole("button", { name: "Undo" })).toBeVisible();
-  });
-
-  test("Esc on the toast gives the keyboard back to where it was in the plan, not to Ask Pip", async ({ page }) => {
-    test.setTimeout(90_000);
-    await openApp(page, "runs=empty");
-    await openPlan(page);
-    const ids = await picks(page).evaluateAll((els) => els.map((e) => e.getAttribute("data-plan-pick")));
-    await picks(page).nth(1).focus();
-    await page.keyboard.press("Delete");
-    await expect(toast(page)).toBeVisible();
-    const near = plan(page).locator(`[data-plan-pick="${ids[2]}"]`);
-    await expect(near).toBeFocused();
-    // F6 goes round the regions to the toast; the composer is the stop before it.
-    for (let n = 0; n < 12 && !(await toast(page).evaluate((el) => el.contains(document.activeElement))); n++) await page.keyboard.press("F6");
-    // The toast offers Undo, so F6 puts the keyboard on it (G12 of round 10).
-    await expect(toast(page).getByRole("button", { name: "Undo" })).toBeFocused();
-    await page.keyboard.press("Escape");
-    await expect(toast(page)).toHaveCount(0);
-    await expect(near).toBeFocused();
-  });
-
-  test("Tab after Keep this plan never lands on a control that is not shown", async ({ page }) => {
-    test.setTimeout(90_000);
-    await openApp(page, "runs=empty");
-    await openPlan(page);
-    await plan(page).locator("[data-plan-keep]").click();
-    await expect(agentsHome(page).locator("[data-this-week]")).toBeVisible();
-    for (let n = 0; n < 16; n++) {
-      await page.keyboard.press("Tab");
-      const shown = await page.evaluate(() => {
-        const el = document.activeElement as HTMLElement | null;
-        if (!el || el === document.body) return true;
-        return el.getClientRects().length > 0 && !el.closest("[hidden], [inert]") && getComputedStyle(el).visibility !== "hidden" && !(el as HTMLButtonElement).disabled;
-      });
-      expect(shown, `Tab ${n + 1}`).toBe(true);
-    }
-  });
-
   test("Esc on the Close confirm keeps the keyboard on Close… with a toast up", async ({ page }) => {
     test.setTimeout(90_000);
-    await openApp(page, "runs=empty&wsManage=1");
+    await openApp(page, "runs=empty");
     await startWorkstream(page, "CA-401");
     await openAgents(page);
     await selectWorkstream(page, "CA-401");
     const controls = pipPane(page).locator("[data-workstream-controls]");
-    await controls.getByRole("button", { name: "Hold", exact: true }).click();
-    await expect(toast(page)).toContainText("Held CA-401.");
+    await controls.getByRole("button", { name: "Pause", exact: true }).click();
+    await expect(toast(page)).toContainText("Paused CA-401.");
     await controls.getByRole("button", { name: "Close…" }).click();
     const ask = controls.getByRole("group", { name: "Close this workstream" });
     await expect(ask.getByRole("button", { name: "Keep" })).toBeFocused();
     await page.keyboard.press("Escape");
     await expect(ask).toHaveCount(0);
     await expect(controls.getByRole("button", { name: "Close…" })).toBeFocused();
-  });
-});
-
-test.describe("the person's own hold under the system's (G22)", () => {
-  test("a hold the system made sorts above Held by you, which is drawn quieter", async ({ page }) => {
-    test.setTimeout(120_000);
-    await openApp(page, "runs=empty&wsManage=0");
-    // CA-401 first, so CA-402 is the newer of the two, as the store keeps them.
-    await allProjects(page);
-    await startWorkstream(page, "CA-401");
-    await startWorkstream(page, "CA-402");
-    await openAgents(page);
-    // The steps used up in Advise ask nothing, so this is a hold and no need; the person holds the other themselves.
-    await holdBySystem(page, "CA-401", "budget");
-    await selectWorkstream(page, "CA-402");
-    await agentsHome(page).getByRole("button", { name: "Hold", exact: true }).click();
-    const system = workstreamGroup(page, "CA-401").locator("[data-status]");
-    const mine = workstreamGroup(page, "CA-402").locator("[data-status]");
-    await expect(system).toHaveAttribute("data-status", "held");
-    await expect(system).toHaveText("Held");
-    await expect(mine).toHaveAttribute("data-status", "held");
-    await expect(mine).toHaveText(/^Held by you/);
-    const keys = await agentsHome(page).locator("[data-workstream-group] h3 b").allInnerTexts();
-    expect(keys).toEqual(expect.arrayContaining(["CA-401", "CA-402"]));
-    await expect(system).toHaveClass(/border-ws-warn/);
-    await expect(mine).not.toHaveClass(/border-ws-warn/);
   });
 });
 

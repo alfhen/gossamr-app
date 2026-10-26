@@ -1,19 +1,13 @@
 import { useId, useMemo } from "react";
-import { answersOwed, hintFor, workstreamStatus, type StatusTone, type WorkstreamStatus } from "../lib/workstreamStatus";
+import { hintFor, workstreamStatus, type StatusTone, type WorkstreamStatus } from "../lib/workstreamStatus";
 import type { WorkstreamView } from "../types";
-import { usePrefs } from "./prefs";
 import { useRuns } from "./runsStore";
 import { useNeedsYou } from "./useNeeds";
-import { useNow } from "./useNow";
-import { useWorkspace } from "../workspaceStore";
-import { useWorkstreams } from "./workstreamsStore";
-import { useWorkstreamWithers } from "./useWorkstreamWithers";
 
 /** The pill's colours, from the theme's tokens: filled for what is the person's, soft for the rest, grey for what asks nothing. */
 const TONE: Record<StatusTone, string> = {
   pip: "bg-ws-pip text-ws-on-pip",
   warn: "border border-ws-warn/50 bg-ws-warn/10 text-ws-ink",
-  review: "bg-ws-review-soft text-ws-review",
   accent: "bg-ws-accent-soft text-ws-accent",
   ink: "bg-ws-hover text-ws-ink2",
   done: "bg-ws-done-soft text-ws-done",
@@ -22,7 +16,7 @@ const TONE: Record<StatusTone, string> = {
 /**
  * A workstream's one status word as a small pill (`data-status`, its state in `data-status-state`); its one short detail, if any, follows it.
  * The hint is the mouse's `title` and, for everyone else, a visually hidden line beside the pill that the pill is described by: it is
- * not a tab stop (the rows are walked with F6, j and k), so the row's own text carries it, as the cobweb's does. `describe` is false
+ * not a tab stop (the rows are walked with F6, j and k), so the row's own text carries it. `describe` is false
  * where the caller says the hint itself; `hintId` names the hint's line for a row that is described by it.
  */
 export function StatusPill({ status, title, detail = false, describe = true, hintId: given }: { status: WorkstreamStatus; title?: string; detail?: boolean; describe?: boolean; hintId?: string }) {
@@ -52,15 +46,7 @@ export function StatusPill({ status, title, detail = false, describe = true, hin
 export function useWorkstreamStatus(view: WorkstreamView): WorkstreamStatus {
   const runs = useRuns((s) => s.runs);
   const needs = useNeedsYou();
-  const learning = usePrefs((s) => s.clarityLearning);
-  const now = useNow();
-  const withers = useWorkstreamWithers(useMemo(() => [view], [view]), now);
-  const events = useWorkstreams((s) => s.events[view.workstream.id]);
-  const drafts = useWorkspace((s) => s.proposals);
-  return useMemo(
-    () => workstreamStatus(view, needs, { runs, wither: withers[view.workstream.id] ?? null, now: new Date(now), learning, answersOwed: answersOwed(view.workstream.id, events, Object.values(drafts)) }),
-    [view, needs, runs, withers, now, learning, events, drafts],
-  );
+  return useMemo(() => workstreamStatus(view, needs, { runs }), [view, needs, runs]);
 }
 
 /** The header's pill: the word and its detail, for the workstream shown. */

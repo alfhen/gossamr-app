@@ -69,14 +69,6 @@ describe("What Jira saw from me", () => {
     expect(jiraSent({ proposals: [p], events: {}, workstreams: [] })[0]).toMatchObject({ kind: "description", label: "New description" });
   });
 
-  it("says who made it once in the footer: Gossamr's own draft came from the person's request, not from Gossamr (G29)", () => {
-    const asked = draft("d", comment("CA-401", "x"), { createdBy: "user", label: "Questions for the reporter", origin: { type: "chat", requestId: "clarity:w1", workstream: "w1" } });
-    const [e] = jiraSent({ proposals: [asked], events: {}, workstreams: [view("w1", "CA-401")] });
-    const footer = `${editedWords(e)} · from ${e.from}`;
-    expect(footer).toBe("Gossamr drafted it; posted without changes · from your request");
-    expect(footer.match(/Gossamr/g)).toHaveLength(1);
-  });
-
   it("names the keys a subtasks draft created, one for each title", () => {
     const intent: Intent = { type: "subtasks", parent: ref("CA-403"), summaries: ["Write tests", "Update docs"] };
     expect(sentWhat(intent, null, [ref("CA-501"), ref("CA-502")])).toMatchObject({ summary: "2 subtasks: CA-501 Write tests; CA-502 Update docs", detail: ["• CA-501 Write tests", "• CA-502 Update docs"] });
@@ -118,15 +110,11 @@ describe("What Jira saw from me", () => {
     const pip = draft("a", comment("CA-401", "x"));
     const run = draft("b", comment("CA-401", "x"), { origin: { type: "run", runId: "r3", shortId: null, workstream: "w1" }, createdBy: "agent" });
     const board = draft("c", comment("CA-401", "x"), { origin: { type: "board" }, createdBy: "user" });
-    const asked = draft("d", comment("CA-401", "x"), { createdBy: "user", label: "Questions for the reporter" });
-    const nudge = draft("e", comment("CA-401", "x"), { createdBy: "user", label: "Nudge for the reporter" });
-    const out = Object.fromEntries(jiraSent({ proposals: [pip, run, board, asked, nudge], events: {}, workstreams: [view("w1", "CA-401")] }).map((e) => [e.id, [e.madeBy, e.from]]));
-    expect(out).toEqual({ a: ["Pip", "Pip"], b: ["An agent run", "run R3"], c: ["You", "the board"], d: ["Gossamr", "your request"], e: ["Gossamr", "your request"] });
+    const out = Object.fromEntries(jiraSent({ proposals: [pip, run, board], events: {}, workstreams: [view("w1", "CA-401")] }).map((e) => [e.id, [e.madeBy, e.from]]));
+    expect(out).toEqual({ a: ["Pip", "Pip"], b: ["An agent run", "run R3"], c: ["You", "the board"] });
     // Pip's chat draft with no ticket to name stays "Pip's conversation".
     const bare = draft("f", { type: "create", container: { connectionId: "c", externalId: "P", key: "P" }, fields: { title: "T", body: { blocks: [] } } } as unknown as Intent);
     expect(jiraSent({ proposals: [bare], events: {}, workstreams: [] })[0].from).toBe("Pip's conversation");
-    const labels = Object.fromEntries(jiraSent({ proposals: [pip, asked, nudge], events: {}, workstreams: [view("w1", "CA-401")] }).map((e) => [e.id, [e.kind, e.label]]));
-    expect(labels).toEqual({ a: ["comment", undefined], d: ["comment", "Questions to the reporter"], e: ["comment", "Nudge to the reporter"] });
   });
 
   it("says whether the person edited the draft before approving it", () => {
@@ -207,22 +195,15 @@ describe("the second line of a row (G25)", () => {
   });
 });
 
-describe("what the row shows of a comment to the reporter", () => {
-  const asked = (id: string, text: string) => draft(id, comment("CA-401", text), { createdBy: "user", label: "Questions for the reporter", updatedAt: ago(Number(id.slice(1))) });
+describe("what the row shows of a comment with a greeting", () => {
   const first = "Hi Mette,\n\nA few things about CA-401 need clearing up:\n\n- What is the goal?";
-  const again = "Hi Mette,\n\nThanks for your answer above. A few things about CA-401 are still open:\n\n- What is in scope?";
 
   it("skips the greeting line in the short preview and keeps it in the whole", () => {
-    const [e] = jiraSent({ proposals: [asked("a1", first)], events: {}, workstreams: [] });
+    const [e] = jiraSent({ proposals: [draft("a1", comment("CA-401", first))], events: {}, workstreams: [] });
     expect(e.summary).toBe("A few things about CA-401 need clearing up:");
     expect(e.detail[0]).toBe("Hi Mette,");
     expect(sentWhat(comment("CA-401", "Hi,"), null)!.summary).toBe("Hi,");
     expect(sentWhat(comment("CA-401", "Hello there, I moved this."), null)!.summary).toBe("Hello there, I moved this.");
-  });
-
-  it("calls a second ask after a reply a follow-up, not the same row twice", () => {
-    const out = jiraSent({ proposals: [asked("a8", first), asked("a2", again)], events: {}, workstreams: [] });
-    expect(out.map((e) => e.label)).toEqual(["Follow-up questions to the reporter", "Questions to the reporter"]);
   });
 
   it("masks a posted secret everywhere it is shown and says so, keeping the rest of the text", () => {

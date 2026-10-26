@@ -7,16 +7,13 @@ import { useActiveTab, useFilterCounts, useLookup } from "./hooks";
 import { workConnections, workContainers } from "./domains";
 import { usePopover } from "./Popover";
 import { projectColour, projectInitials } from "./projects";
-import { useAgentsEnabled } from "./agentsFlag";
 import { usePrefs } from "./prefs";
 import { Icon } from "./AgentIcons";
 import { Icon as Glyph } from "../components/icons";
 import { SavedViewsPanel } from "./SavedViews";
 import { useTabs } from "./tabsStore";
 import { RAIL_BADGES, matchesQuery, nounFor, railSplit, type Noun } from "./watchLogic";
-import { useClaude } from "../claudeStore";
-import { HOLD_ALL_HINT } from "./commands";
-import { holdAllVisible, togglePip, useWorkstreams } from "./workstreamsStore";
+import { togglePip } from "./workstreamsStore";
 import { NeedsYouList } from "./NeedsYou";
 import { needsYouText, useNeedsYou } from "./useNeeds";
 
@@ -218,24 +215,6 @@ function BellIcon() {
   );
 }
 
-/** What Hold all does, under its name in the tooltip. */
-export const HOLD_ALL_NOTE = "Stops automatic steps in every workstream; agents carry on";
-
-/**
- * Hold all, while anything could start on its own: a workstream in Manage that isn't held, or Pip answering in a
- * workstream's conversation. It holds every open workstream and stops Pip's turns in them; agents carry on.
- */
-function HoldAllButton() {
-  const managing = useWorkstreams((s) => holdAllVisible(s.list, {}));
-  const answering = useClaude((s) => holdAllVisible([], s.byTicket));
-  if (!managing && !answering) return null;
-  return (
-    <RailButton label="Hold all workstreams" hint={HOLD_ALL_HINT} note={HOLD_ALL_NOTE} onClick={() => void useWorkstreams.getState().holdAll()} className="text-ws-ink2 hover:bg-ws-hover">
-      <Glyph name="pause" className="size-[19px]" />
-    </RailButton>
-  );
-}
-
 /** A count over a rail button, named and titled with what it counts: the one count of what needs you, the only badge. */
 function RailBadge({ count, what }: { count: number; what: string }) {
   return (
@@ -297,7 +276,6 @@ export function Rail() {
   const containers = useWorkspace((s) => s.containers);
   const watch = useWorkspace((s) => s.watch);
   const kind = useWorkspace((s) => workConnections(s.connections)[0]?.kind);
-  const agentsEnabled = useAgentsEnabled();
   const pipOpen = usePrefs((s) => s.pipOpen);
   const setPaletteOpen = usePrefs((s) => s.setPaletteOpen);
   const project = projectOf(tab.filter);
@@ -344,8 +322,7 @@ export function Rail() {
         <RailButton label="Activity" current={route === "activity"} onClick={() => setRoute("activity")} className={`text-lg ${plain(route === "activity")}`}>
           <BellIcon />
         </RailButton>
-        {agentsEnabled && <AgentsButton current={route === "agents"} />}
-        {agentsEnabled && <HoldAllButton />}
+        <AgentsButton current={route === "agents"} />
         <RailButton label="Settings" current={route === "settings"} onClick={() => setRoute("settings")} className={`text-lg ${plain(route === "settings")}`}>
           <span aria-hidden>⚙</span>
         </RailButton>

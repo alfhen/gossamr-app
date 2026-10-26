@@ -5,7 +5,6 @@ import { SCRIPTED_PLAN_RESULT } from "../backend/mockRuns";
 import { PLAN_LIMIT } from "../backend/mockRunKinds";
 import type { Run } from "../types";
 import { useWorkspace } from "../workspaceStore";
-import { usePrefs } from "./prefs";
 import { splitPrompt } from "./runSheetLogic";
 import { useRunSetup } from "./runSetupStore";
 import { useRuns } from "./runsStore";
@@ -25,7 +24,6 @@ beforeEach(async () => {
   backend = new MockBackend({ githubRepos: 14, runs: { epoch: Date.parse("2026-09-30T12:00:00Z"), seed: "kinds" } });
   await useWorkspace.getState().init(backend);
   useRuns.getState().init(backend);
-  usePrefs.getState().setAgentsIntroSeen(true);
   useToasts.getState().clear();
   useTabs.getState().setRoute("workspace");
   await backend.watchSetMode("github:ada", "everything");

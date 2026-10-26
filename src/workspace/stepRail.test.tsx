@@ -29,16 +29,15 @@ const run = (id: string, kind: RunKind, state: RunState, minutesAgo: number, ove
   queuedAt: iso(minutesAgo),
   lastProgressAt: iso(minutesAgo - 1),
   endedAt: state === "done" ? iso(minutesAgo - 2) : null,
-  autoStart: null,
   ...over,
 });
 
 const RUNS = [
   run("r1", "investigate", "done", 90),
-  run("r2", "triage", "done", 80, { autoStart: { rule: "investigate_triage", afterRun: "r1" } }),
-  run("r3", "plan", "done", 70, { autoStart: { rule: "triage_plan", afterRun: "r2" } }),
-  run("r4", "build", "done", 60, { autoStart: { rule: "plan_build", afterRun: "r3" } }),
-  run("r5", "review", "done", 50, { autoStart: { rule: "build_review", afterRun: "r4" } }),
+  run("r2", "triage", "done", 80),
+  run("r3", "plan", "done", 70),
+  run("r4", "build", "done", 60),
+  run("r5", "review", "done", 50),
 ];
 
 const view: WorkstreamView = {
@@ -49,21 +48,16 @@ const view: WorkstreamView = {
     repo: null,
     title: "CA-401 Retry the export",
     pipSession: null,
-    mode: "manage",
-    heldReason: null,
+    pausedReason: null,
     notes: "Plan first, then build.",
     createdAt: iso(120),
     closedAt: null,
-    budget: { autoTurns: null, wakes: null, tokens: null },
-    spent: { autoTurns: 0, wakes: 0, tokens: 0 },
-    rules: {},
     basis: null,
   },
   stage: "review",
   runs: RUNS.map((r) => r.id),
   labels: RUNS.map((r, n) => [r.id, `R${n + 1}`]),
   waitingForPr: null,
-  budget: { autoTurns: { used: 0, limit: 6 }, wakes: { used: 0, limit: 12 }, level: "ok" },
 };
 
 const event = (action: string, runId: string | null): WorkstreamEvent => ({ workstreamId: "ws-1", seq: 1, at: iso(10), actor: "supervisor", action, runId, proposalId: null, digest: null, detail: null });
@@ -149,10 +143,10 @@ describe("the step rail", () => {
   it("shows Pip's notes, the workstream's controls, then the six steps in order", () => {
     const html = renderToStaticMarkup(<StepRailView {...props()} />);
     expect(html).toContain("Plan first, then build.");
-    expect(html.indexOf("Plan first, then build.")).toBeLessThan(html.indexOf("Manage this workstream"));
+    expect(html.indexOf("Plan first, then build.")).toBeLessThan(html.indexOf("data-workstream-controls"));
     const order = [...html.matchAll(/data-step="(\w+)"/g)].map((m) => m[1]);
     expect(order).toEqual(["investigate", "triage", "plan", "build", "review", "verify"]);
-    expect(html.indexOf("Manage this workstream")).toBeLessThan(html.indexOf('data-step="investigate"'));
+    expect(html.indexOf("data-workstream-controls")).toBeLessThan(html.indexOf('data-step="investigate"'));
   });
 
   it("says what Pip's notes are under their heading", () => {
@@ -170,15 +164,12 @@ describe("the step rail", () => {
     expect(renderToStaticMarkup(<StepRailView {...props()} />)).not.toContain(NOTES_EMPTY);
   });
 
-  it("derives each chip from the runs: label and state, started automatically, the verdict and the fix round", () => {
+  it("derives each chip from the runs: label and state, and the verdict", () => {
     const verdicts: Record<string, ReviewView | null> = { r5: { verdict: "blocking", blocking: 2 } as ReviewView };
-    const html = renderToStaticMarkup(<StepRailView {...props({ verdicts, events: [event("fix_round_sent", "r4")] })} />);
+    const html = renderToStaticMarkup(<StepRailView {...props({ verdicts })} />);
     expect(stepOf(html, "investigate")).toContain('data-run-label="R1"');
     expect(stepOf(html, "investigate")).toContain("Ready to review");
-    expect(stepOf(html, "investigate")).not.toContain("started automatically");
-    expect(stepOf(html, "triage")).toContain("started automatically");
     expect(stepOf(html, "review")).toMatch(/data-step-verdict[^>]*>· Blocking · 2</);
-    expect(stepOf(html, "build")).toMatch(/data-step-fix-round[^>]*>· fix round 1\/2</);
     expect(stepOf(html, "verify")).toContain("Not started");
     const passed = renderToStaticMarkup(<StepRailView {...props({ verdicts: { r5: { verdict: "pass", blocking: 0 } as ReviewView } })} />);
     expect(stepOf(passed, "review")).toMatch(/data-step-verdict[^>]*>· Pass</);
@@ -193,16 +184,6 @@ describe("the step rail", () => {
     const html = renderToStaticMarkup(<StepRailView {...props({ verdicts, events: [posted] })} />);
     expect(stepOf(html, "review")).toMatch(/data-step-verdict[^>]*>· Review posted</);
     expect(stepOf(html, "review")).not.toContain("Blocking");
-  });
-
-  it("does not mark Plan as next while the ticket is stopped as unclear, and says it waits for the person's choice", () => {
-    const two = { runs: [RUNS[0], RUNS[1]], view: { ...view, runs: ["r1", "r2"], labels: [["r1", "R1"], ["r2", "R2"]] as [string, string][], stage: "triage" as const } };
-    const open = renderToStaticMarkup(<StepRailView {...props(two)} />);
-    expect(stepOf(open, "plan")).toContain('data-step-next="plan"');
-    expect(stepOf(open, "plan")).not.toContain("data-step-unclear-tag");
-    const stopped = renderToStaticMarkup(<StepRailView {...props({ ...two, view: { ...two.view, readiness: { triageRun: "r2", triageLabel: "R2", questions: ["What is in scope?"], at: iso(5) } } })} />);
-    expect(stepOf(stopped, "plan")).not.toContain("data-step-next");
-    expect(stepOf(stopped, "plan")).toContain("Waiting for your choice: ticket unclear");
   });
 
   it("marks the next step and keeps the later steps nothing has reached to one quiet line each", () => {

@@ -3,9 +3,8 @@ import { MockBackend } from "../backend/mock";
 import { scriptPip } from "../backend/mockPip";
 import type { Run, RunState, ScreenContext } from "../types";
 import { NO_FILTERS, type AgentFilters } from "./agentsLogic";
-import { agentsSuggestionScene } from "./pipRuns";
+import { placeholderFor } from "./PipConversation";
 import { buildScreenContext, contextLabel, contextLines, screenLine, type Screen } from "./screenContext";
-import { placeholderFor, suggestionsFor, type SuggestionScene } from "./suggestions";
 import { activeTab, loadTabs, useTabs } from "./tabsStore";
 
 const NOW = Date.parse("2026-09-30T12:00:00Z");
@@ -75,36 +74,7 @@ describe("the Agents screen", () => {
   });
 });
 
-describe("chips and placeholder on the Agents screen", () => {
-  const scene = (over: Partial<SuggestionScene> = {}): SuggestionScene => ({
-    route: "agents", quote: false, marked: 0, item: null, pendingDrafts: 0, itemDrafts: 0, unassignedInView: 5, shown: 132, filtered: true, agents: agentsSuggestionScene(RUNS, null), ...over,
-  });
-
-  it("offers questions about the agents and none of the board's", () => {
-    const chips = suggestionsFor(scene());
-    expect(chips).toEqual(["Which agents need me?", "What are my agents doing?", "What did the finished runs find?"]);
-    expect(suggestionsFor(scene({ agents: agentsSuggestionScene([run("w", "working")], null) }))).toEqual(["What are my agents doing?"]);
-    expect(suggestionsFor(scene({ agents: agentsSuggestionScene([], null) }))).toEqual(["Which tickets would an agent help with?"]);
-    expect(suggestionsFor(scene({ agents: agentsSuggestionScene([run("z", "working")], null), pendingDrafts: 1 }))).toEqual(["What are my agents doing?", "Which drafts are safe to approve?"]);
-    for (const c of [...chips, ...suggestionsFor(scene({ agents: agentsSuggestionScene(RUNS, "c") }))]) expect(c).not.toMatch(/stale|blocked|unassigned|Catch me up/i);
-  });
-
-  it("asks about the open run by how it stands", () => {
-    const chips = (id: string) => suggestionsFor(scene({ agents: agentsSuggestionScene(RUNS, id) }));
-    expect(chips("c")).toEqual(["What did this run find?", "Draft a comment from this run", "Send it back for another pass", "Create a follow-up ticket"]);
-    expect(chips("a")[0]).toBe("What is this run asking me?");
-    expect(chips("b")).toEqual(["What is this run doing?"]);
-    expect(chips("d")).toEqual(["What happened in this run?"]);
-    expect(suggestionsFor(scene({ agents: agentsSuggestionScene([run("t", "done", { item: null })], "t") }))).not.toContain("Draft a comment from this run");
-  });
-
-  it("keeps selected text and Settings first, and the board's chips on the board", () => {
-    expect(suggestionsFor(scene({ quote: true }))[0]).toBe("Explain this");
-    expect(suggestionsFor(scene({ route: "settings" }))).toEqual(["What can you do for me?"]);
-    expect(suggestionsFor(scene({ route: "workspace", agents: undefined }))).toContain("Show stale tickets");
-    expect(suggestionsFor(scene({ route: "activity", agents: undefined }))).toEqual(["What happened today?", "What needs my reply?"]);
-  });
-
+describe("the placeholder on the Agents screen", () => {
   it("words the placeholder for what the next question is about", () => {
     const p = { images: false, quote: false, itemKey: null, route: "agents" as const, runOpen: false };
     expect(placeholderFor(p)).toBe("Ask about your workstreams and agents…");

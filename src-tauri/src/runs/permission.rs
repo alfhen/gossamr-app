@@ -275,7 +275,8 @@ fn git_settings(rest: &[&str]) -> bool {
     match after.first().copied() {
         Some("config") => {
             let reads = ["--get", "--get-all", "--get-regexp", "--list", "-l", "get", "list"];
-            !(after[1..].iter().any(|w| reads.contains(w)) && !after[1..].iter().any(|w| matches!(*w, "--add" | "--unset" | "--unset-all" | "--replace-all" | "--rename-section" | "--remove-section" | "--edit" | "-e" | "set" | "unset" | "edit")))
+            let writes = after[1..].iter().any(|w| matches!(*w, "--add" | "--unset" | "--unset-all" | "--replace-all" | "--rename-section" | "--remove-section" | "--edit" | "-e" | "set" | "unset" | "edit"));
+            writes || !after[1..].iter().any(|w| reads.contains(w))
         }
         Some("remote") => !matches!(after.get(1).copied(), None | Some("-v" | "--verbose" | "show" | "get-url")),
         _ => false,
@@ -455,7 +456,6 @@ impl RunService {
     /// command, once the session has been stopped, since that is what refuses the request. As with an answer, a failure
     /// once the session has been stopped leaves the run `Stopped` with the denial kept to send again.
     pub async fn deny_permission(&self, run_id: &str, command: &str) -> Result<Run> {
-        self.ensure_enabled()?;
         let _turn = self.launching.lock().await;
         let mut run = self.load(run_id).await?;
         read_check(&run, command)?;
@@ -469,6 +469,7 @@ impl RunService {
         }
         let denial = DENIED_MESSAGE.to_owned();
         tc.cli.stop(&id).await?;
+        self.core.asks().cancel(&run.id);
         Self::stopped(&mut run);
         if let Err(e) = self.index.mark_terminal(&run.id) {
             eprintln!("couldn't update the run index: {e}");
@@ -507,7 +508,6 @@ impl RunService {
     /// with the exact command. The session is neither stopped nor resumed. If Terminal can't be opened, nothing is
     /// recorded.
     pub async fn allow_permission_once(&self, run_id: &str, command: &str) -> Result<Run> {
-        self.ensure_enabled()?;
         let _turn = self.launching.lock().await;
         let run = self.load(run_id).await?;
         read_check(&run, command)?;

@@ -1,18 +1,33 @@
 //! Pip's conversations as stored. A turn is two rows under its request id: what started it (the person's question, role
-//! `user`, or the supervisor's event lines, role `wake`) and Pip's answer. Only `begin_pip_turn_as` inserts; every later
+//! `user`, or the supervisor's event lines, role `wake`) and Pip's answer. Only `insert_pip_turn` inserts; every later
 //! write is an update, so a turn whose rows were cleared stays gone.
 
 use rusqlite::params;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use super::Db;
 use crate::agent::{TurnMeta, TurnUsage};
+use crate::domain::{Actor, WorkstreamEvent};
 use crate::error::Result;
 
 /// Why a turn that was running when the app last closed is shown as failed.
 pub const INTERRUPTED: &str = "Gossamr closed before Pip finished";
 /// Why a turn that was still waiting its turn when the app last closed is shown as failed: it never started.
 pub const NEVER_RAN: &str = "Gossamr closed before this question ran";
+
+/// What a wake turn's `meta` holds: the `(run, key)` facts its event lines tell of.
+#[derive(Serialize, Deserialize)]
+struct WakeMeta {
+    wakes: Vec<(String, String)>,
+}
+
+fn wake_facts_json(facts: &[(String, String)]) -> Result<String> {
+    Ok(serde_json::to_string(&WakeMeta { wakes: facts.to_vec() })?)
+}
+
+fn wake_facts_of(meta: &str) -> Vec<(String, String)> {
+    serde_json::from_str::<WakeMeta>(meta).map(|m| m.wakes).unwrap_or_default()
+}
 
 /// One question and its answer, as the page shows it again.
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -49,18 +64,21 @@ pub const ROLE_WAKE: &str = "wake";
 impl Db {
     /// Records a question and Pip's empty answer. Returns false when a turn with this request id is already stored.
     pub fn begin_pip_turn(&self, conversation: &str, request_id: &str, prompt: &str, meta: &TurnMeta, status: &str, at: &str) -> Result<bool> {
-        self.begin_pip_turn_as(conversation, request_id, ROLE_USER, prompt, meta, status, at)
+        self.insert_pip_turn(conversation, request_id, ROLE_USER, prompt, &serde_json::to_string(meta)?, status, at)
     }
 
-    /// `begin_pip_turn` for a turn started by `role`: `user`, or `wake` with the event lines as its prompt.
+    /// Records a wake turn: its event lines in place of a question, and the `(run, key)` facts they tell of.
+    pub fn begin_pip_wake(&self, conversation: &str, request_id: &str, lines: &str, facts: &[(String, String)], status: &str, at: &str) -> Result<bool> {
+        self.insert_pip_turn(conversation, request_id, ROLE_WAKE, lines, &wake_facts_json(facts)?, status, at)
+    }
+
     #[allow(clippy::too_many_arguments)]
-    pub fn begin_pip_turn_as(&self, conversation: &str, request_id: &str, role: &str, prompt: &str, meta: &TurnMeta, status: &str, at: &str) -> Result<bool> {
-        let role = if role == ROLE_WAKE { ROLE_WAKE } else { ROLE_USER };
+    fn insert_pip_turn(&self, conversation: &str, request_id: &str, role: &str, prompt: &str, meta: &str, status: &str, at: &str) -> Result<bool> {
         let tx = self.conn.unchecked_transaction()?;
         let n = tx.execute(
             "INSERT OR IGNORE INTO pip_turns (conversation, request_id, role, prompt, status, meta, created_at)
              VALUES (?1, ?2, ?6, ?3, 'done', ?4, ?5)",
-            params![conversation, request_id, prompt, serde_json::to_string(meta)?, at, role],
+            params![conversation, request_id, prompt, meta, at, role],
         )?;
         if n == 0 {
             return Ok(false);
@@ -73,9 +91,9 @@ impl Db {
         Ok(true)
     }
 
-    /// Rewrites a wake turn's event lines, as when more facts were merged into it while it waited.
-    pub fn set_pip_wake_prompt(&self, request_id: &str, prompt: &str) -> Result<()> {
-        self.conn.execute("UPDATE pip_turns SET prompt = ?2 WHERE request_id = ?1 AND role = 'wake'", params![request_id, prompt])?;
+    /// Rewrites a wake turn's event lines and facts, as when more were merged into it while it waited.
+    pub fn set_pip_wake(&self, request_id: &str, lines: &str, facts: &[(String, String)]) -> Result<()> {
+        self.conn.execute("UPDATE pip_turns SET prompt = ?2, meta = ?3 WHERE request_id = ?1 AND role = 'wake'", params![request_id, lines, wake_facts_json(facts)?])?;
         Ok(())
     }
 
@@ -85,9 +103,15 @@ impl Db {
         Ok(())
     }
 
-    /// How many wake turns were recorded at or after `at`, across conversations.
-    pub fn wake_turns_since(&self, at: &str) -> Result<u32> {
-        Ok(self.conn.query_row("SELECT count(*) FROM pip_turns WHERE role = 'wake' AND created_at >= ?1", params![at], |r| r.get::<_, i64>(0))? as u32)
+    /// How each wake turn recorded at or after `at` stands, as its (status, error): those of `conversation`, or of every
+    /// conversation when none is given.
+    pub fn wake_turn_outcomes_since(&self, conversation: Option<&str>, at: &str) -> Result<Vec<(String, Option<String>)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT p.status, p.error FROM pip_turns w JOIN pip_turns p ON p.request_id = w.request_id AND p.role = 'pip'
+             WHERE w.role = 'wake' AND w.created_at >= ?1 AND (?2 IS NULL OR w.conversation = ?2)",
+        )?;
+        let rows = stmt.query_map(params![at, conversation], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
     pub fn set_pip_turn_status(&self, request_id: &str, status: &str) -> Result<()> {
@@ -173,13 +197,26 @@ impl Db {
         Ok(())
     }
 
-    /// Marks turns that were waiting or running when the app last closed as failed; nothing is left to finish them.
+    /// Marks turns that were waiting or running when the app last closed as failed; nothing is left to finish them. A
+    /// wake that never ran gives its facts back with a supervisor `wake_dropped` line each, so Pip is woken for them again.
     pub fn fail_interrupted_pip_turns(&self) -> Result<usize> {
-        let tx = self.conn.unchecked_transaction()?;
-        let running = tx.execute("UPDATE pip_turns SET status = 'failed', error = ?1 WHERE role = 'pip' AND status = 'running'", params![INTERRUPTED])?;
-        let waiting = tx.execute("UPDATE pip_turns SET status = 'failed', error = ?1 WHERE role = 'pip' AND status = 'queued'", params![NEVER_RAN])?;
-        tx.commit()?;
-        Ok(running + waiting)
+        self.atomically(|db| {
+            let mut stmt = db.conn.prepare(
+                "SELECT w.conversation, w.meta FROM pip_turns w JOIN pip_turns p ON p.request_id = w.request_id AND p.role = 'pip'
+                 WHERE w.role = 'wake' AND p.status = 'queued'",
+            )?;
+            let never_ran = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
+            let now = chrono::Utc::now();
+            for (conversation, meta) in never_ran {
+                let Some(workstream) = conversation.strip_prefix(crate::agent::WORKSTREAM_PREFIX) else { continue };
+                for (run, key) in meta.as_deref().map(wake_facts_of).unwrap_or_default() {
+                    db.append_workstream_event(&WorkstreamEvent::new(workstream, Actor::Supervisor, "wake_dropped", now).run(&run).detail(&key))?;
+                }
+            }
+            let running = db.conn.execute("UPDATE pip_turns SET status = 'failed', error = ?1 WHERE role = 'pip' AND status = 'running'", params![INTERRUPTED])?;
+            let waiting = db.conn.execute("UPDATE pip_turns SET status = 'failed', error = ?1 WHERE role = 'pip' AND status = 'queued'", params![NEVER_RAN])?;
+            Ok(running + waiting)
+        })
     }
 
     #[cfg(test)]
@@ -307,22 +344,36 @@ mod tests {
     }
 
     #[test]
+    fn a_wake_that_never_ran_gives_its_facts_back_once() {
+        let db = Db::in_memory().unwrap();
+        db.begin_pip_wake("ws:w1", "w1", "[Event] run r1 (triage) Done", &[("r1".into(), "done".into()), ("r2".into(), "failed".into())], "queued", "t1").unwrap();
+        db.begin_pip_wake("ws:w1", "w2", "[Event] run r3 (plan) Done", &[("r3".into(), "done".into())], "running", "t2").unwrap();
+        db.fail_interrupted_pip_turns().unwrap();
+        let dropped: Vec<(Option<String>, Option<String>)> =
+            db.workstream_events("w1").unwrap().into_iter().filter(|e| e.action == "wake_dropped").map(|e| (e.run_id, e.detail)).collect();
+        assert_eq!(dropped, [(Some("r1".into()), Some("done".into())), (Some("r2".into()), Some("failed".into()))]);
+        db.fail_interrupted_pip_turns().unwrap();
+        assert_eq!(db.workstream_events("w1").unwrap().len(), 2, "a second open adds nothing");
+    }
+
+    #[test]
     fn a_wake_turn_loads_as_a_wake_and_old_rows_as_the_person_s() {
         let db = Db::in_memory().unwrap();
         db.begin_pip_turn("ws:w1", "q1", "Carry on", &TurnMeta::default(), "running", "2026-10-01T10:00:00.000Z").unwrap();
-        db.begin_pip_turn_as("ws:w1", "w1", ROLE_WAKE, "[Event] run r1 (triage) Done", &TurnMeta::default(), "queued", "2026-10-01T10:00:01.000Z").unwrap();
-        db.set_pip_wake_prompt("w1", "[Event] run r1 (triage) Done\n[Event] run r2 (plan) Done").unwrap();
-        db.set_pip_wake_prompt("q1", "rewritten").unwrap();
+        db.begin_pip_wake("ws:w1", "w1", "[Event] run r1 (triage) Done", &[("r1".into(), "done".into())], "queued", "2026-10-01T10:00:01.000Z").unwrap();
+        db.set_pip_wake("w1", "[Event] run r1 (triage) Done\n[Event] run r2 (plan) Done", &[("r1".into(), "done".into()), ("r2".into(), "done".into())]).unwrap();
+        db.set_pip_wake("q1", "rewritten", &[]).unwrap();
         let turns = db.pip_turns("ws:w1").unwrap();
         let kinds: Vec<(&str, &str, &str)> = turns.iter().map(|t| (t.request_id.as_str(), t.kind.as_str(), t.prompt.as_str())).collect();
         assert_eq!(kinds, [("q1", "user", "Carry on"), ("w1", "wake", "[Event] run r1 (triage) Done\n[Event] run r2 (plan) Done")], "only a wake's prompt is rewritten");
         assert_eq!(serde_json::to_value(&turns[1]).unwrap()["kind"], "wake");
-        assert_eq!(db.wake_turns_since("2026-10-01T10:00:00.000Z").unwrap(), 1);
-        assert_eq!(db.wake_turns_since("2026-10-01T10:00:02.000Z").unwrap(), 0);
-        assert!(db.begin_pip_turn_as("ws:w1", "x", "pip", "p", &TurnMeta::default(), "queued", "t").unwrap());
-        assert_eq!(db.pip_turns("ws:w1").unwrap().iter().find(|t| t.request_id == "x").map(|t| t.kind.as_str()), Some("user"), "no other role can start a turn");
+        let outcomes = |conversation: Option<&str>, at: &str| db.wake_turn_outcomes_since(conversation, at).unwrap();
+        assert_eq!(outcomes(None, "2026-10-01T10:00:00.000Z"), [("queued".to_string(), None)]);
+        assert!(outcomes(None, "2026-10-01T10:00:02.000Z").is_empty());
+        assert_eq!(outcomes(Some("ws:w1"), "2026-10-01T10:00:00.000Z").len(), 1);
+        assert!(outcomes(Some("ws:other"), "2026-10-01T10:00:00.000Z").is_empty());
         db.delete_pip_turn("w1").unwrap();
-        assert_eq!(db.pip_turns("ws:w1").unwrap().len(), 2);
+        assert_eq!(db.pip_turns("ws:w1").unwrap().len(), 1);
 
         // A row stored before wakes existed has no other role than `user`, and reads as the person's.
         db.conn.execute("INSERT INTO pip_turns (conversation, request_id, role, prompt, status, created_at) VALUES ('general', 'old', 'user', 'Hi', 'done', 't0')", []).unwrap();

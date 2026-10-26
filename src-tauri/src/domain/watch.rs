@@ -1,8 +1,8 @@
-//! Which containers a person follows on each connection. Only watched containers are synced, shown, counted, given
-//! to Pip, and (once it exists) drafted for by autopilot.
+//! Which containers a person follows on each connection. Only watched containers are synced, shown, counted and given
+//! to Pip.
 //!
-//! Autopilot and triage must call `WatchSet::is_watched` (or `Core::is_item_watched`) with the container of the item
-//! they are about to act on, and skip it when that is false. The read paths already filter, so this is the one check
+//! Anything that acts on an item must call `WatchSet::is_watched` (or `Core::is_item_watched`) with the container of the
+//! item it is about to act on, and skip it when that is false. The read paths already filter, so this is the one check
 //! a future writer has to remember.
 
 use serde::{Deserialize, Serialize};

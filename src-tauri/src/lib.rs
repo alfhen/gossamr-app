@@ -27,15 +27,14 @@ use tauri_plugin_opener::OpenerExt;
 
 use auth::{Auth, AuthStatus, DeviceStart, OAuthApp, Scope};
 use agent::{AgentService, AskOutcome, AskRequest};
-use claude::ClaudeCodeProvider;
 use tracker::{Connection, Move};
 use inbox::{CatalogPage, CodeRef, ConnectionInfo, Core, Edit, WatchState, WorkstreamView};
 use error::{Error, Result};
 use domain::{
-    CodeChange, CodeFile, CodeHit, CommitQuery, Comment, Container, ContainerRef, DevLink, Event, FeedPage, FeedQuery, Filter, Footprint, Identity, Intent, ItemRef, Proposal, ProposalQuery, PullRequestDetail, Run, RunEvent, RunQuery, RunReview, RunSpec, Stray,
-    TreeEntry, WatchChange, WatchMode, WorkItem, Workflow, Workstream, WorkstreamEvent,
+    CodeChange, CodeFile, CodeHit, CommitQuery, Comment, Container, DevLink, Event, FeedPage, FeedQuery, Filter, Footprint, Identity, Intent, ItemRef, Proposal, ProposalQuery, PullRequestDetail, Run, RunEvent, RunQuery, RunReview, RunSpec, Stray,
+    TreeEntry, WatchChange, WatchMode, WorkItem, Workstream, WorkstreamEvent,
 };
-use model::{Snapshot, Transition};
+use model::Snapshot;
 use runs::preflight::Preflight;
 use runs::service::CloneChoice;
 use sync::Trigger;
@@ -48,7 +47,6 @@ type CoreState = Arc<Core>;
 type AgentState = Arc<AgentService>;
 type LauncherState = Arc<dyn runs::launcher::RunLauncher>;
 type RunsState = Arc<runs::service::RunService>;
-type SupervisorState = Arc<agent::supervisor::Supervisor>;
 
 /// Sends the latest snapshot to the window and updates the Dock badge. Failures only mean there is nothing to
 /// show yet (e.g. signed out).
@@ -154,8 +152,7 @@ impl runs::tracker::RunNotifier for RunNotices {
 }
 
 /// Looks at `claude agents` every few seconds while a run is under way and the window is in front, and every half
-/// minute otherwise; the window gaining focus brings the next look forward. It runs for the life of the app and does
-/// nothing while Agents are off, so turning them on needs no restart.
+/// minute otherwise; the window gaining focus brings the next look forward. It runs for the life of the app.
 fn spawn_run_tracker(app: AppHandle, service: RunsState) {
     tauri::async_runtime::spawn(async move {
         loop {
@@ -169,6 +166,7 @@ fn spawn_run_tracker(app: AppHandle, service: RunsState) {
             tokio::select! {
                 _ = tokio::time::sleep(wait) => {}
                 _ = service.focus.notified() => {}
+                _ = service.question_asked() => {}
             }
         }
     });
@@ -290,11 +288,6 @@ async fn watch_unwatched_assigned(core: State<'_, CoreState>, connection_id: Str
 #[tauri::command]
 async fn watch_dismiss_assigned(core: State<'_, CoreState>, connection_id: String, container_id: String) -> Result<()> {
     core.watch_dismiss_assigned(&connection_id, &container_id).await
-}
-
-#[tauri::command]
-async fn cache_workflow(core: State<'_, CoreState>, container: ContainerRef) -> Result<Option<Workflow>> {
-    core.cache_workflow(&container).await
 }
 
 #[tauri::command]
@@ -494,17 +487,12 @@ async fn proposals_unskip(app: AppHandle, core: State<'_, CoreState>, id: String
 
 /// Applies the draft. A failed attempt still returns it, back to pending with `error` set.
 #[tauri::command]
-async fn proposals_approve(app: AppHandle, core: State<'_, CoreState>, supervisor: State<'_, SupervisorState>, id: String) -> Result<Proposal> {
+async fn proposals_approve(app: AppHandle, core: State<'_, CoreState>, id: String) -> Result<Proposal> {
     let result = core.approve_proposal(&id).await;
-    // Approving a draft can be what a rule waits on, as a plan's is for its build.
-    if let Some(p) = result.as_ref().ok().filter(|p| p.state == domain::ProposalState::Applied) {
-        supervisor.on_proposal_applied(p.workstream());
-    }
     if let Ok(connection) = core.scope().await.map(|s| Connection::jira_id(&s)) {
         proposals_changed(&app, &connection);
         cache_changed(&app, &connection);
-        // Approving a draft in a workstream is a line in its audit: what the workstream waits on (the reporter, from the
-        // approved questions) and its timeline's counts read it.
+        // Approving a draft in a workstream is a line in its audit, which its timeline's counts read.
         if result.as_ref().is_ok_and(|p| p.workstream().is_some()) {
             workstreams_changed(&app, &connection);
         }
@@ -525,8 +513,6 @@ async fn proposals_post_review(app: AppHandle, core: State<'_, CoreState>, id: S
     let result = core.post_review_draft(&id, revisions, post_anyway.unwrap_or(false)).await;
     if let Ok(connection) = core.scope().await.map(|s| Connection::jira_id(&s)) {
         proposals_changed(&app, &connection);
-        // A review posted as it is resolves its escalation, and the card leaves Needs you.
-        workstreams_changed(&app, &connection);
     }
     publish(&app, &core).await;
     result
@@ -556,34 +542,15 @@ async fn runs_review(core: State<'_, CoreState>, proposal_id: String) -> Result<
     core.runs_review(&proposal_id).await
 }
 
-/// Whether Agents are on. This is the only place the answer lives.
-#[tauri::command]
-fn runs_enabled(runs: State<'_, RunsState>) -> bool {
-    runs.is_enabled()
-}
-
-/// Turns Agents on or off and saves the choice. Turning on reads the shell environment first and fails, leaving
-/// Agents off, if it can't; turning off stops nothing that is running.
-#[tauri::command]
-async fn runs_set_enabled(runs: State<'_, RunsState>, enabled: bool) -> Result<runs::enable::EnabledChange> {
-    let change = runs.set_enabled(enabled).await?;
-    if change.enabled {
-        let runs = runs.inner().clone();
-        tauri::async_runtime::spawn(async move { runs.recover().await });
-    }
-    Ok(change)
-}
-
 /// Drafts a run by hand. It stays a draft until `runs_approve`.
 #[tauri::command]
-async fn runs_draft(app: AppHandle, core: State<'_, CoreState>, runs: State<'_, RunsState>, spec: RunSpec, item: Option<ItemRef>) -> Result<Proposal> {
-    runs.ensure_enabled()?;
+async fn runs_draft(app: AppHandle, core: State<'_, CoreState>, spec: RunSpec, item: Option<ItemRef>) -> Result<Proposal> {
     let made = core.draft_run(spec, item).await?;
     proposals_changed(&app, &Connection::jira_id(&core.scope().await?));
     Ok(made)
 }
 
-/// The limits on runs and the terminal to open. Readable and writable while Agents are off.
+/// The limits on runs and the terminal to open.
 #[tauri::command]
 fn runs_settings(runs: State<'_, RunsState>) -> config::AgentSettings {
     runs.settings()
@@ -645,7 +612,6 @@ async fn runs_approve(
     proposal_id: String,
     digest: String,
 ) -> Result<Run> {
-    runs.ensure_enabled()?;
     let run = core.runs_approve(&proposal_id, &digest).await?;
     // Over the cap it is marked as waiting for a slot now, so the page can say it waits rather than that it started.
     let run = match runs.note_slot_wait(&run.id).await {
@@ -676,14 +642,12 @@ async fn runs_preflight(runs: State<'_, RunsState>, spec: Option<RunSpec>) -> Re
 /// Starts a run that is still queued, as after a restart.
 #[tauri::command]
 async fn runs_start_now(runs: State<'_, RunsState>, id: String) -> Result<Run> {
-    runs.ensure_enabled()?;
     runs.start_now(&id).await
 }
 
 /// Looks for the session of a run whose launch failed, and starts one only if there is none.
 #[tauri::command]
 async fn runs_retry_launch(runs: State<'_, RunsState>, id: String) -> Result<Run> {
-    runs.ensure_enabled()?;
     runs.retry_launch(&id).await
 }
 
@@ -743,117 +707,16 @@ async fn workstreams_set_notes(app: AppHandle, core: State<'_, CoreState>, id: S
     Ok(ws)
 }
 
-/// The person sets how much Pip may do on its own in a workstream: `advise` or `manage`.
+/// The person pauses a workstream: nothing wakes Pip in it; its runs carry on.
 #[tauri::command]
-async fn workstreams_set_mode(app: AppHandle, core: State<'_, CoreState>, id: String, mode: domain::workstream::Mode) -> Result<Workstream> {
-    let ws = core.set_workstream_mode(&core.scope().await?, &id, mode, domain::Actor::Person).await?;
-    workstreams_changed(&app, &ws.connection_id);
-    Ok(ws)
-}
-
-/// The person's "Run another fix round" on a review that still blocks after the automatic fix rounds: sends the build
-/// one more round with the review's blocking findings. Only while that review is waiting for their choice; Pip has no
-/// way to call this.
-#[tauri::command]
-async fn workstreams_fix_round(app: AppHandle, runs: State<'_, RunsState>, review_run: String) -> Result<Run> {
-    let run = runs.send_person_fix_round(&review_run).await;
-    if let Ok(run) = &run {
-        runs_changed(&app, &run.connection_id);
-        workstreams_changed(&app, &run.connection_id);
-    }
-    run
-}
-
-/// The person's "I'll take it from here" on a review that still blocks after the automatic fix rounds: the workstream
-/// goes to Advise and nothing else changes. Pip has no way to call this.
-#[tauri::command]
-async fn workstreams_take_over(app: AppHandle, runs: State<'_, RunsState>, id: String, review_run: String) -> Result<Workstream> {
-    // Under the launch lock, as the person's fix round is, so the two choices can't both go through.
-    let ws = runs.take_over_escalation(&id, &review_run).await?;
-    workstreams_changed(&app, &ws.connection_id);
-    runs_changed(&app, &ws.connection_id);
-    Ok(ws)
-}
-
-/// The person's "Ask the reporter" on a Triage that found its ticket not ready to plan: a Jira comment to the reporter
-/// with its open questions, as a draft the person approves like any other. Pip has no way to call this.
-#[tauri::command]
-async fn workstreams_readiness_ask(app: AppHandle, core: State<'_, CoreState>, id: String, triage_run: String) -> Result<Proposal> {
-    let scope = core.scope().await?;
-    let made = core.ask_reporter(&scope, &id, &triage_run).await?;
-    proposals_changed(&app, &Connection::jira_id(&scope));
-    workstreams_changed(&app, &Connection::jira_id(&scope));
-    Ok(made)
-}
-
-/// The person's "Ask the reporter now" on the clarity notice of a ticket no Triage has judged: the same comment to the
-/// reporter, from the gaps the check found, as a draft the person approves like any other. Pip has no way to call this.
-#[tauri::command]
-async fn workstreams_clarity_ask(app: AppHandle, core: State<'_, CoreState>, id: String, skip: Option<Vec<domain::ClarityGap>>) -> Result<Proposal> {
-    let scope = core.scope().await?;
-    let made = core.ask_reporter_now(&scope, &id, &skip.unwrap_or_default()).await?;
-    proposals_changed(&app, &Connection::jira_id(&scope));
-    workstreams_changed(&app, &Connection::jira_id(&scope));
-    Ok(made)
-}
-
-/// The person's "Looks fine" on the clarity notice: it doesn't show again for this ticket.
-#[tauri::command]
-async fn workstreams_clarity_dismiss(app: AppHandle, core: State<'_, CoreState>, id: String) -> Result<Workstream> {
-    let scope = core.scope().await?;
-    let ws = core.dismiss_clarity(&scope, &id).await?;
-    workstreams_changed(&app, &Connection::jira_id(&scope));
-    Ok(ws)
-}
-
-/// The person's "Draft a nudge" on a workstream that has waited on the reporter for days: a short follow-up comment, as a
-/// draft the person approves like any other. Pip has no way to call this.
-#[tauri::command]
-async fn workstreams_nudge_reporter(app: AppHandle, core: State<'_, CoreState>, id: String) -> Result<Proposal> {
-    let scope = core.scope().await?;
-    let made = core.nudge_reporter(&scope, &id).await?;
-    proposals_changed(&app, &Connection::jira_id(&scope));
-    workstreams_changed(&app, &Connection::jira_id(&scope));
-    Ok(made)
-}
-
-/// Audits the page's clarity learning in a workstream: `clarity_learned` when "Looks fine" said enough times stopped a gap
-/// being flagged for a project, `clarity_reset` when the person gave that back. The learning itself is the page's.
-#[tauri::command]
-async fn workstreams_clarity_note(core: State<'_, CoreState>, id: String, action: String, detail: String) -> Result<()> {
-    let scope = core.scope().await?;
-    core.note_clarity(&scope, &id, &action, &detail).await
-}
-
-/// The person's "I'll answer" on a Triage that found its ticket not ready to plan: it settles the question and starts
-/// nothing; the page opens the conversation with the questions quoted.
-#[tauri::command]
-async fn workstreams_readiness_answer(app: AppHandle, core: State<'_, CoreState>, id: String, triage_run: String) -> Result<Workstream> {
-    let ws = core.answer_readiness(&core.scope().await?, &id, &triage_run).await?;
-    workstreams_changed(&app, &ws.connection_id);
-    Ok(ws)
-}
-
-/// The person's "Plan anyway" on a Triage that found its ticket not ready to plan: records the override and lets the
-/// Triage-to-Plan rule start the Plan now, under the rule's own checks (Manage, not held, within budget). Pip has no way to call this.
-#[tauri::command]
-async fn workstreams_readiness_override(app: AppHandle, core: State<'_, CoreState>, supervisor: State<'_, SupervisorState>, id: String, triage_run: String) -> Result<Workstream> {
-    let ws = core.override_readiness(&core.scope().await?, &id, &triage_run).await?;
-    workstreams_changed(&app, &ws.connection_id);
-    supervisor.on_proposal_applied(Some(&id));
-    Ok(ws)
-}
-
-/// The person holds a workstream: nothing wakes Pip or starts on its own in it; its runs carry on.
-#[tauri::command]
-async fn workstreams_hold(app: AppHandle, core: State<'_, CoreState>, agent: State<'_, AgentState>, id: String) -> Result<Workstream> {
-    let ws = core.hold_workstream(&core.scope().await?, &id, domain::workstream::HELD_PERSON, domain::Actor::Person).await?;
+async fn workstreams_pause(app: AppHandle, core: State<'_, CoreState>, agent: State<'_, AgentState>, id: String) -> Result<Workstream> {
+    let ws = core.pause_workstream(&core.scope().await?, &id, domain::workstream::PauseReason::Person, domain::Actor::Person).await?;
     agent.cancel_workstream_turns(&id).await;
     workstreams_changed(&app, &ws.connection_id);
     Ok(ws)
 }
 
-/// The person lifts a workstream's hold, whatever held it.
+/// The person resumes a workstream, whatever paused it.
 #[tauri::command]
 async fn workstreams_resume(app: AppHandle, core: State<'_, CoreState>, id: String) -> Result<Workstream> {
     let ws = core.resume_workstream(&core.scope().await?, &id).await?;
@@ -861,15 +724,7 @@ async fn workstreams_resume(app: AppHandle, core: State<'_, CoreState>, id: Stri
     Ok(ws)
 }
 
-/// The person's "Allow 5 more" on a workstream held for its automatic steps: its allowance goes up by 5 and it resumes.
-#[tauri::command]
-async fn workstreams_allow_more(app: AppHandle, core: State<'_, CoreState>, id: String) -> Result<Workstream> {
-    let ws = core.allow_more_steps(&core.scope().await?, &id).await?;
-    workstreams_changed(&app, &ws.connection_id);
-    Ok(ws)
-}
-
-/// The person's Undo of a hold or of a switch to Advise, a moment after it: the workstream goes back to how it stood. Refused once anything else happened in it, or after a minute.
+/// The person's Undo of "Bring them here", a moment after it. Refused once anything else happened in it, or after a minute.
 #[tauri::command]
 async fn workstreams_undo(app: AppHandle, core: State<'_, CoreState>, id: String, undo: inbox::WorkstreamUndo) -> Result<Workstream> {
     let ws = core.undo_workstream(&core.scope().await?, &id, &undo).await?;
@@ -880,27 +735,7 @@ async fn workstreams_undo(app: AppHandle, core: State<'_, CoreState>, id: String
     Ok(ws)
 }
 
-/// The person's switch for one auto-start rule in a workstream; `on: null` follows the global switch again.
-#[tauri::command]
-async fn workstreams_set_rule(app: AppHandle, core: State<'_, CoreState>, id: String, rule: String, on: Option<bool>) -> Result<Workstream> {
-    let rule = domain::workstream::Rule::parse(&rule).ok_or_else(|| Error::Proposal(format!("there is no auto-start rule {rule:?}")))?;
-    let ws = core.set_workstream_rule(&core.scope().await?, &id, rule, on).await?;
-    workstreams_changed(&app, &ws.connection_id);
-    Ok(ws)
-}
-
-/// The person's Hold all: holds every open workstream and stops every Pip turn in one, waiting or running. Returns
-/// those it held.
-#[tauri::command]
-async fn workstreams_hold_all(app: AppHandle, core: State<'_, CoreState>, agent: State<'_, AgentState>) -> Result<Vec<Workstream>> {
-    let scope = core.scope().await?;
-    let held = core.hold_all_workstreams(&scope).await?;
-    agent.cancel_all_workstream_turns().await;
-    workstreams_changed(&app, &Connection::jira_id(&scope));
-    Ok(held)
-}
-
-/// The person stops a workstream: holds it, then stops each of its runs that can be stopped.
+/// The person stops a workstream: pauses it, then stops each of its runs that can be stopped.
 #[tauri::command]
 async fn workstreams_stop(app: AppHandle, core: State<'_, CoreState>, runs: State<'_, RunsState>, agent: State<'_, AgentState>, id: String) -> Result<runs::control::StopAll> {
     let scope = core.scope().await?;
@@ -930,7 +765,6 @@ async fn runs_repos(runs: State<'_, RunsState>) -> Result<Vec<String>> {
 /// Local clones of a watched repository.
 #[tauri::command]
 async fn runs_clones(runs: State<'_, RunsState>, repo: String) -> Result<CloneChoice> {
-    runs.ensure_enabled()?;
     runs.clones(&repo).await
 }
 
@@ -943,7 +777,6 @@ async fn runs_clone_fresh(runs: State<'_, RunsState>, repo: String) -> Result<ru
 
 #[tauri::command]
 async fn runs_pick_clone(runs: State<'_, RunsState>, repo: String, path: std::path::PathBuf) -> Result<()> {
-    runs.ensure_enabled()?;
     runs.pick_clone(&repo, &path).await
 }
 
@@ -1081,8 +914,7 @@ async fn runs_outcome(core: State<'_, CoreState>, runs: State<'_, RunsState>, id
 
 /// Drafts a comment from a finished run's `For Jira:` part. A draft only: the person edits and approves it.
 #[tauri::command]
-async fn runs_draft_comment(app: AppHandle, core: State<'_, CoreState>, runs: State<'_, RunsState>, id: String) -> Result<Proposal> {
-    runs.ensure_enabled()?;
+async fn runs_draft_comment(app: AppHandle, core: State<'_, CoreState>, id: String) -> Result<Proposal> {
     let made = core.draft_run_comment(&id).await?;
     proposals_changed(&app, &Connection::jira_id(&core.scope().await?));
     Ok(made)
@@ -1090,8 +922,7 @@ async fn runs_draft_comment(app: AppHandle, core: State<'_, CoreState>, runs: St
 
 /// Drafts the whole plan of a finished Plan run as a comment on its ticket. A draft only: the person edits and approves it.
 #[tauri::command]
-async fn runs_draft_plan_comment(app: AppHandle, core: State<'_, CoreState>, runs: State<'_, RunsState>, id: String) -> Result<inbox::PlanComment> {
-    runs.ensure_enabled()?;
+async fn runs_draft_plan_comment(app: AppHandle, core: State<'_, CoreState>, id: String) -> Result<inbox::PlanComment> {
     let made = core.draft_run_plan_comment(&id).await?;
     proposals_changed(&app, &Connection::jira_id(&core.scope().await?));
     Ok(made)
@@ -1099,8 +930,7 @@ async fn runs_draft_plan_comment(app: AppHandle, core: State<'_, CoreState>, run
 
 /// Drafts the ticket's description with the plan of a finished Plan run added. A draft only: the person reads the diff and approves it.
 #[tauri::command]
-async fn runs_draft_plan_description(app: AppHandle, core: State<'_, CoreState>, runs: State<'_, RunsState>, id: String) -> Result<Proposal> {
-    runs.ensure_enabled()?;
+async fn runs_draft_plan_description(app: AppHandle, core: State<'_, CoreState>, id: String) -> Result<Proposal> {
     let made = core.draft_run_plan_description(&id).await?;
     proposals_changed(&app, &Connection::jira_id(&core.scope().await?));
     Ok(made)
@@ -1108,8 +938,7 @@ async fn runs_draft_plan_description(app: AppHandle, core: State<'_, CoreState>,
 
 /// Reads a build draft's plan again from the plan run it came from, replacing the person's edits to it.
 #[tauri::command]
-async fn runs_refresh_plan(app: AppHandle, core: State<'_, CoreState>, runs: State<'_, RunsState>, id: String) -> Result<Proposal> {
-    runs.ensure_enabled()?;
+async fn runs_refresh_plan(app: AppHandle, core: State<'_, CoreState>, id: String) -> Result<Proposal> {
     let made = core.runs_refresh_plan(&id).await?;
     proposals_changed(&app, &Connection::jira_id(&core.scope().await?));
     Ok(made)
@@ -1117,8 +946,7 @@ async fn runs_refresh_plan(app: AppHandle, core: State<'_, CoreState>, runs: Sta
 
 /// Reads a review draft's builder account again from the build run it came from, replacing the person's edits to it.
 #[tauri::command]
-async fn runs_refresh_build_account(app: AppHandle, core: State<'_, CoreState>, runs: State<'_, RunsState>, id: String) -> Result<Proposal> {
-    runs.ensure_enabled()?;
+async fn runs_refresh_build_account(app: AppHandle, core: State<'_, CoreState>, id: String) -> Result<Proposal> {
     let made = core.runs_refresh_build_account(&id).await?;
     proposals_changed(&app, &Connection::jira_id(&core.scope().await?));
     Ok(made)
@@ -1126,8 +954,7 @@ async fn runs_refresh_build_account(app: AppHandle, core: State<'_, CoreState>, 
 
 /// Drafts a new ticket from a finished run that has no ticket. A draft only: the person edits and approves it.
 #[tauri::command]
-async fn runs_draft_ticket(app: AppHandle, core: State<'_, CoreState>, runs: State<'_, RunsState>, id: String) -> Result<Proposal> {
-    runs.ensure_enabled()?;
+async fn runs_draft_ticket(app: AppHandle, core: State<'_, CoreState>, id: String) -> Result<Proposal> {
     let made = core.draft_run_ticket(&id).await?;
     proposals_changed(&app, &Connection::jira_id(&core.scope().await?));
     Ok(made)
@@ -1141,8 +968,7 @@ async fn runs_repo_project(core: State<'_, CoreState>, repo: String) -> Result<O
 
 /// Drafts a link saying the run's ticket is blocked by `blocker_key`. A draft only.
 #[tauri::command]
-async fn runs_draft_blocker(app: AppHandle, core: State<'_, CoreState>, runs: State<'_, RunsState>, id: String, blocker_key: String) -> Result<Proposal> {
-    runs.ensure_enabled()?;
+async fn runs_draft_blocker(app: AppHandle, core: State<'_, CoreState>, id: String, blocker_key: String) -> Result<Proposal> {
     let made = core.draft_run_blocker(&id, &blocker_key).await?;
     proposals_changed(&app, &Connection::jira_id(&core.scope().await?));
     Ok(made)
@@ -1164,13 +990,6 @@ fn sync_now(core: State<'_, CoreState>) {
 }
 
 #[tauri::command]
-async fn mark_seen(app: AppHandle, core: State<'_, CoreState>, key: String) -> Result<()> {
-    core.mark_seen(&key).await?;
-    publish(&app, &core).await;
-    Ok(())
-}
-
-#[tauri::command]
 async fn set_unread(app: AppHandle, core: State<'_, CoreState>, id: String, unread: bool) -> Result<()> {
     core.set_unread(&id, unread).await?;
     publish(&app, &core).await;
@@ -1178,79 +997,8 @@ async fn set_unread(app: AppHandle, core: State<'_, CoreState>, id: String, unre
 }
 
 #[tauri::command]
-async fn set_done(app: AppHandle, core: State<'_, CoreState>, id: String, done: bool) -> Result<()> {
-    core.set_done(&id, done).await?;
-    publish(&app, &core).await;
-    Ok(())
-}
-
-#[tauri::command]
-async fn snooze(app: AppHandle, core: State<'_, CoreState>, id: String, until: Option<String>) -> Result<()> {
-    core.snooze(&id, until.as_deref()).await?;
-    publish(&app, &core).await;
-    Ok(())
-}
-
-#[tauri::command]
-async fn transitions(core: State<'_, CoreState>, key: String) -> Result<Vec<Transition>> {
-    core.transitions(&core.scope().await?, &key).await
-}
-
-#[tauri::command]
-async fn transition(app: AppHandle, core: State<'_, CoreState>, scope: Scope, key: String, transition_id: String) -> Result<()> {
-    core.transition(&scope, &key, &transition_id).await?;
-    cache_changed(&app, &Connection::jira_id(&scope));
-    publish(&app, &core).await;
-    Ok(())
-}
-
-#[tauri::command]
-async fn comment(
-    app: AppHandle,
-    core: State<'_, CoreState>,
-    scope: Scope,
-    key: String,
-    body: String,
-    mentions: Option<Vec<model::MentionRef>>,
-    files: Option<Vec<model::Uploaded>>,
-) -> Result<()> {
-    core.comment(&scope, &key, &body, &mentions.unwrap_or_default(), &files.unwrap_or_default()).await?;
-    cache_changed(&app, &Connection::jira_id(&scope));
-    publish(&app, &core).await;
-    Ok(())
-}
-
-#[tauri::command]
 async fn mentionable(core: State<'_, CoreState>, key: String, query: String) -> Result<Vec<model::Person>> {
     core.mentionable(&core.scope().await?, &key, &query).await
-}
-
-/// Uploads a file sent as the raw request body; its metadata comes URL-encoded in the `x-file` header, since header
-/// values must be ASCII and file names often aren't.
-#[tauri::command]
-async fn attach(core: State<'_, CoreState>, request: tauri::ipc::Request<'_>) -> Result<model::Uploaded> {
-    let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
-        return Err(Error::Api { status: 400, message: "expected the file as raw bytes".into() });
-    };
-    let meta: std::collections::HashMap<String, String> = request
-        .headers()
-        .get("x-file")
-        .and_then(|v| v.to_str().ok())
-        .map(|v| url::form_urlencoded::parse(v.as_bytes()).into_owned().collect())
-        .unwrap_or_default();
-    let field = |k: &str| meta.get(k).cloned().ok_or_else(|| Error::Api { status: 400, message: format!("missing {k}") });
-    let scope = Scope { cloud_id: field("cloudId")?, account_id: field("accountId")? };
-    core.attach(&scope, &field("key")?, &field("name")?, &field("type")?, bytes.clone()).await
-}
-
-#[tauri::command]
-async fn ticket_media(core: State<'_, CoreState>, scope: Scope, key: String) -> Result<std::collections::HashMap<String, String>> {
-    core.ticket_media(&scope, &key).await
-}
-
-#[tauri::command]
-async fn attachment_limit(core: State<'_, CoreState>, scope: Scope) -> Result<Option<u64>> {
-    core.attachment_limit(&scope).await
 }
 
 #[tauri::command]
@@ -1301,7 +1049,7 @@ async fn cancel_claude(agent: State<'_, AgentState>, request_id: String) -> Resu
     Ok(())
 }
 
-fn spawn_sync_loop(app: AppHandle, core: CoreState, supervisor: SupervisorState) {
+fn spawn_sync_loop(app: AppHandle, core: CoreState) {
     tauri::async_runtime::spawn(async move {
         // Launch catches up straight away, from the cursor the last run left in the cache.
         let mut trigger = Trigger::Now;
@@ -1341,8 +1089,6 @@ fn spawn_sync_loop(app: AppHandle, core: CoreState, supervisor: SupervisorState)
                             if let Ok(scope) = core.scope().await {
                                 workstreams_changed(&app, &Connection::jira_id(&scope));
                             }
-                            // ...and start the review the rules have waiting on it.
-                            supervisor.nudge();
                         }
                     }
                     Err(_) => {
@@ -1397,26 +1143,6 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
-        // `attachment://localhost/{id}` serves a Jira attachment to the page, so images load straight into <img>.
-        .register_asynchronous_uri_scheme_protocol("attachment", |ctx, request, responder| {
-            let core = ctx.app_handle().try_state::<CoreState>().map(|s| s.inner().clone());
-            let id = request.uri().path().trim_start_matches('/').to_string();
-            tauri::async_runtime::spawn(async move {
-                let result = match core {
-                    Some(core) => core.attachment(&id).await,
-                    None => Err(Error::NotSignedIn),
-                };
-                let response = match result {
-                    Ok((mime, bytes)) => tauri::http::Response::builder()
-                        .header(tauri::http::header::CONTENT_TYPE, mime)
-                        // Not cached: after a sign-out, another account must not be served this account's files.
-                        .header(tauri::http::header::CACHE_CONTROL, "no-store")
-                        .body(bytes),
-                    Err(e) => tauri::http::Response::builder().status(502).body(e.to_string().into_bytes()),
-                };
-                responder.respond(response.expect("static response parts"));
-            });
-        })
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::Focused(true) = event {
                 let app = window.app_handle();
@@ -1450,26 +1176,17 @@ pub fn run() {
             let drafted_handle = app.handle().clone();
             let open_on_focus = Arc::new(runs::tracker::OpenOnFocus::default());
             app.manage(open_on_focus.clone());
-            let report = match tauri::async_runtime::block_on(runs::report::ReportServer::start(core.clone(), runs::report::config_dir(&core.data_dir()))) {
-                Ok(server) => Some(server.channel),
-                Err(e) => {
-                    eprintln!("the run-report server couldn't start, so runs go without the report tool: {e}");
-                    None
-                }
-            };
+            let bound = tauri::async_runtime::block_on(agent::mcp::bind(runs::agent_config::config_dir(&core.data_dir())))?;
             // The supervisor hears about runs from the run service and wakes Pip through the agent service, which is
             // built after both; until it is bound it does nothing.
-            let runs_slot: Arc<std::sync::OnceLock<std::sync::Weak<runs::service::RunService>>> = Arc::default();
-            let (settings_slot, emit_handle, changed_handle) = (runs_slot.clone(), app.handle().clone(), app.handle().clone());
-            let facade = agent::supervisor::CoreFacade::new(core.clone());
+            let (emit_handle, changed_handle) = (app.handle().clone(), app.handle().clone());
             let supervisor = agent::supervisor::Supervisor::new(
-                facade.clone(),
-                Arc::new(move || settings_slot.get().and_then(std::sync::Weak::upgrade).map(|s| s.settings()).unwrap_or_default()),
+                core.clone(),
                 Arc::new(move |conversation, update| wake_update(&emit_handle, conversation, update)),
                 Arc::new(move |connection_id| workstreams_changed(&changed_handle, connection_id)),
             );
             let notices: Arc<dyn runs::tracker::RunNotifier> = Arc::new(RunNotices { app: app.handle().clone(), open: open_on_focus });
-            let mut service = runs::service::RunService::new(
+            let service = runs::service::RunService::new(
                     core.clone(),
                     Arc::new(runs::toolchain::SystemToolchain::default()),
                     runs::index::RunIndex::load(&core.data_dir()),
@@ -1479,38 +1196,31 @@ pub fn run() {
                 .with_notifier(Arc::new(agent::supervisor::FanoutNotifier(vec![notices, supervisor.clone()])))
                 .with_drafted(Arc::new(move |connection_id| proposals_changed(&drafted_handle, connection_id)))
                 .with_settings(config.agents)
-                .enabled(config.agents_enabled);
-            if let Some(channel) = report {
-                service = service.with_report(channel);
-            }
+                .with_agent_channel(bound.channel());
             let service = Arc::new(service);
-            let _ = runs_slot.set(Arc::downgrade(&service));
-            facade.bind_runs(&service);
             let handle = app.handle().clone();
             let view_handle = handle.clone();
-            let mcp = tauri::async_runtime::block_on(agent::mcp::McpServer::start(
+            let mcp = agent::mcp::McpServer::start_on(
+                bound,
                 core.clone(),
                 service.clone(),
                 Arc::new(move |connection_id| proposals_changed(&handle, connection_id)),
                 Arc::new(move |request_id, filter, note| pip_view(&view_handle, request_id, filter, note)),
-            ))?;
+            )?;
             app.manage::<LauncherState>(service.clone());
             app.manage::<RunsState>(service.clone());
             spawn_run_tracker(app.handle().clone(), service.clone());
-            if config.agents_enabled {
-                service.clean_attach_files();
-                tauri::async_runtime::spawn(async move {
-                    service.warm().await;
-                    service.recover().await;
-                });
-            }
-            let agent = Arc::new(AgentService::new(core.clone(), mcp, vec![Arc::new(ClaudeCodeProvider::new())], config));
+            service.clean_attach_files();
+            tauri::async_runtime::spawn(async move {
+                service.warm().await;
+                service.recover().await;
+            });
+            let agent = Arc::new(AgentService::new(core.clone(), mcp));
             supervisor.bind(&agent);
             tauri::async_runtime::spawn(supervisor.clone().run_sweeps());
             app.manage::<AgentState>(agent);
-            app.manage::<SupervisorState>(supervisor.clone());
 
-            spawn_sync_loop(app.handle().clone(), core, supervisor);
+            spawn_sync_loop(app.handle().clone(), core);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -1530,7 +1240,6 @@ pub fn run() {
             watch_suggestions,
             watch_unwatched_assigned,
             watch_dismiss_assigned,
-            cache_workflow,
             cache_events,
             cache_feed,
             cache_feed_unread,
@@ -1565,8 +1274,6 @@ pub fn run() {
             proposals_unskip,
             proposals_approve,
             proposals_post_review,
-            runs_enabled,
-            runs_set_enabled,
             runs_settings,
             runs_set_settings,
             runs_cleanup,
@@ -1622,34 +1329,12 @@ pub fn run() {
             workstreams_adopt,
             workstreams_set_notes,
             workstreams_events,
-            workstreams_set_mode,
-            workstreams_fix_round,
-            workstreams_take_over,
-            workstreams_readiness_ask,
-            workstreams_clarity_ask,
-            workstreams_clarity_dismiss,
-            workstreams_clarity_note,
-            workstreams_nudge_reporter,
-            workstreams_readiness_answer,
-            workstreams_readiness_override,
-            workstreams_hold,
+            workstreams_pause,
             workstreams_resume,
-            workstreams_allow_more,
             workstreams_undo,
-            workstreams_set_rule,
-            workstreams_hold_all,
             workstreams_stop,
             sync_now,
-            mark_seen,
             set_unread,
-            set_done,
-            snooze,
-            transitions,
-            transition,
-            comment,
-            attach,
-            attachment_limit,
-            ticket_media,
             mentionable,
             create_subtasks,
             claude_sessions,

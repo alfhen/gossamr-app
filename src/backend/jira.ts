@@ -1,9 +1,7 @@
 import type { ClearFilter, ClearPreview, DeleteResult, WorktreeInfo } from "../types";
-import { convertFileSrc, invoke } from "@tauri-apps/api/core";
+import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
-import type { Mention } from "../lib/mentions";
-import type { ClarityGap } from "../lib/ticketClarity";
 import type {
   Adoptable,
   AssignedElsewhere,
@@ -28,12 +26,9 @@ import type {
   RunSpec,
   RunOutcome,
   RunsChanged,
-  RunsEnabledChange,
   AgentSettings,
   CleanupResult,
   Snapshot,
-  Transition,
-  Uploaded,
   CodeChange,
   CodeCommitQuery,
   CodeFile,
@@ -64,12 +59,9 @@ import type {
   WorkEvent,
   WorkFilter,
   WorkItem,
-  Workflow,
   Workstream,
   WorkstreamEvent,
-  WorkstreamMode,
   WorkstreamUndo,
-  WorkstreamRule,
   WorkstreamView,
   WorkstreamsChanged,
 } from "../types";
@@ -100,42 +92,6 @@ export class JiraBackend implements Backend {
     return () => void pending.then((unlisten) => unlisten());
   }
 
-  transitions(key: string) {
-    return invoke<Transition[]>("transitions", { key });
-  }
-
-  transition(key: string, transitionId: string) {
-    return invoke<void>("transition", { scope: this.scope, key, transitionId });
-  }
-
-  comment(key: string, body: string, mentions: Mention[] = [], files: Uploaded[] = []) {
-    return invoke<void>("comment", { scope: this.scope, key, body, mentions, files });
-  }
-
-  async attach(key: string, file: File) {
-    // The bytes travel as the raw request body; JSON would inflate them several times over.
-    const meta = new URLSearchParams({ ...this.scope, key, name: file.name, type: file.type || "application/octet-stream" });
-    return invoke<Uploaded>("attach", new Uint8Array(await file.arrayBuffer()), { headers: { "x-file": meta.toString() } });
-  }
-
-  ticketMedia(key: string) {
-    return invoke<Record<string, string>>("ticket_media", { scope: this.scope, key });
-  }
-
-  attachmentUrl(id: string) {
-    return convertFileSrc(id, "attachment");
-  }
-
-  private limit: Promise<number | null> | null = null;
-
-  attachmentLimit() {
-    this.limit ??= invoke<number | null>("attachment_limit", { scope: this.scope }).catch((e) => {
-      this.limit = null;
-      throw e;
-    });
-    return this.limit;
-  }
-
   mentionable(key: string, query: string) {
     return invoke<Person[]>("mentionable", { key, query });
   }
@@ -144,20 +100,8 @@ export class JiraBackend implements Backend {
     return invoke<{ created: string[]; error: string | null }>("create_subtasks", { scope: this.scope, key, summaries });
   }
 
-  markSeen(key: string) {
-    return invoke<void>("mark_seen", { key });
-  }
-
   setUnread(id: string, unread: boolean) {
     return invoke<void>("set_unread", { id, unread });
-  }
-
-  setDone(id: string, done: boolean) {
-    return invoke<void>("set_done", { id, done });
-  }
-
-  snooze(id: string, until: Date | null) {
-    return invoke<void>("snooze", { id, until: until?.toISOString() ?? null });
   }
 
   cacheSearch(filter: WorkFilter, opts: ReadScope = {}) {
@@ -174,10 +118,6 @@ export class JiraBackend implements Backend {
 
   cacheContainers(opts: ReadScope = {}) {
     return invoke<WorkContainer[]>("cache_containers", { includeUnwatched: opts.includeUnwatched ?? false });
-  }
-
-  cacheWorkflow(container: ContainerRef) {
-    return invoke<Workflow | null>("cache_workflow", { container });
   }
 
   cachePeople() {
@@ -329,14 +269,6 @@ export class JiraBackend implements Backend {
   onProposalsChanged(listener: (change: ProposalsChanged) => void) {
     const pending = listen<ProposalsChanged>("proposals-changed", (e) => listener(e.payload));
     return () => void pending.then((unlisten) => unlisten());
-  }
-
-  runsEnabled() {
-    return invoke<boolean>("runs_enabled");
-  }
-
-  runsSetEnabled(enabled: boolean) {
-    return invoke<RunsEnabledChange>("runs_set_enabled", { enabled });
   }
 
   runsList(query: RunQuery = {}) {
@@ -571,68 +503,16 @@ export class JiraBackend implements Backend {
     return invoke<WorkstreamEvent[]>("workstreams_events", { id });
   }
 
-  workstreamsSetMode(id: string, mode: WorkstreamMode) {
-    return invoke<Workstream>("workstreams_set_mode", { id, mode });
-  }
-
-  workstreamsFixRound(reviewRun: string) {
-    return invoke<Run>("workstreams_fix_round", { reviewRun });
-  }
-
-  workstreamsTakeOver(id: string, reviewRun: string) {
-    return invoke<Workstream>("workstreams_take_over", { id, reviewRun });
-  }
-
-  workstreamsReadinessAsk(id: string, triageRun: string) {
-    return invoke<Proposal>("workstreams_readiness_ask", { id, triageRun });
-  }
-
-  workstreamsClarityAsk(id: string, skip: ClarityGap[] = []) {
-    return invoke<Proposal>("workstreams_clarity_ask", { id, skip });
-  }
-
-  workstreamsClarityDismiss(id: string) {
-    return invoke<Workstream>("workstreams_clarity_dismiss", { id });
-  }
-
-  workstreamsNudgeReporter(id: string) {
-    return invoke<Proposal>("workstreams_nudge_reporter", { id });
-  }
-
-  workstreamsClarityNote(id: string, action: "clarity_learned" | "clarity_reset", detail: string) {
-    return invoke<void>("workstreams_clarity_note", { id, action, detail });
-  }
-
-  workstreamsReadinessAnswer(id: string, triageRun: string) {
-    return invoke<Workstream>("workstreams_readiness_answer", { id, triageRun });
-  }
-
-  workstreamsReadinessOverride(id: string, triageRun: string) {
-    return invoke<Workstream>("workstreams_readiness_override", { id, triageRun });
-  }
-
-  workstreamsHold(id: string) {
-    return invoke<Workstream>("workstreams_hold", { id });
+  workstreamsPause(id: string) {
+    return invoke<Workstream>("workstreams_pause", { id });
   }
 
   workstreamsResume(id: string) {
     return invoke<Workstream>("workstreams_resume", { id });
   }
 
-  workstreamsAllowMore(id: string) {
-    return invoke<Workstream>("workstreams_allow_more", { id });
-  }
-
   workstreamsUndo(id: string, undo: WorkstreamUndo) {
     return invoke<Workstream>("workstreams_undo", { id, undo });
-  }
-
-  workstreamsSetRule(id: string, rule: WorkstreamRule, on: boolean | null) {
-    return invoke<Workstream>("workstreams_set_rule", { id, rule, on });
-  }
-
-  workstreamsHoldAll() {
-    return invoke<Workstream[]>("workstreams_hold_all");
   }
 
   workstreamsStop(id: string) {

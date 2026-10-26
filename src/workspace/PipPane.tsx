@@ -10,29 +10,25 @@ import { PipAvatar } from "./PipAvatar";
 import { Composer, GENERAL_CONVERSATION, PIP_INPUT_ID, PipConversation, useAnswering, workstreamConversation } from "./PipConversation";
 import { lightboxOpen, useAttachments, useFileDrop } from "./PipImages";
 import { popoverOpen } from "./Popover";
-import { chipCount, currentContext, unassignedIn, useItemScene, useScreen } from "./pipHooks";
+import { currentContext, useScreen } from "./pipHooks";
 import { usePip } from "./pipStore";
 import { usePrefs } from "./prefs";
 import { buildScreenContext, contextLabel, contextLines } from "./screenContext";
-import { suggestionsFor, workstreamChips } from "./suggestions";
-import { useAgentsEnabled } from "./agentsFlag";
-import { agentsSuggestionScene, describeRun, runSummaryPrompt } from "./pipRuns";
+import { describeRun } from "./pipRuns";
 import { useRuns } from "./runsStore";
 import { useTabs } from "./tabsStore";
-import { draftsForItem, pendingDrafts, useWorkspace } from "../workspaceStore";
+import { useWorkspace } from "../workspaceStore";
 import { useClaude } from "../claudeStore";
 import { inWorkstreamPane } from "../lib/proposals";
 import { conversationTitle, usePaneWorkstream } from "./workstreamsStore";
 import { stageText } from "../lib/workstreamStage";
 import { WorkstreamControls } from "./WorkstreamControls";
 import { HeaderStatus } from "./StatusPill";
-import { composerFooter, workstreamSuggestionScene } from "./workViewLogic";
+import { composerFooter } from "./workViewLogic";
 import { useWorkView } from "./workViewStore";
-import { PipOrientation } from "./PipOrientation";
 import { TimelineView } from "./Timeline";
 import { useNeedsYou } from "./useNeeds";
 import { useNow } from "./AgentsView";
-import { useWorkstreamWithers } from "./useWorkstreamWithers";
 
 export { AppliedCard, GENERAL_CONVERSATION, PIP_INPUT_ID, workstreamConversation } from "./PipConversation";
 
@@ -118,18 +114,10 @@ export function useConversationDrafts(conversation: string, workstream: Workstre
   return useMemo(() => Object.values(proposals).filter((p) => !shown || inWorkstreamPane(p, shown)), [proposals, shown]);
 }
 
-const NO_TURNS: readonly { kind?: "user" | "wake" }[] = [];
-
-/**
- * What the composer offers and says for the screen: the suggestion chips, the
- * placeholder's scene, and what Pip sees (the context with its label, and the words that describe it). In a
- * workstream's conversation (`workstream`) the chips are about where that workstream stands.
- */
-export function usePipChips(workstream: WorkstreamView | null = null) {
+/** What the composer says for the screen: the placeholder's scene, and what Pip sees (the context with its label, and the words that describe it). */
+export function usePipScene(workstream: WorkstreamView | null = null) {
   const screen = useScreen();
-  const itemScene = useItemScene(screen);
   const lookup = useLookup();
-  const proposals = useWorkspace((s) => s.proposals);
   const pinned = usePip((s) => s.pinned);
   const quote = usePip((s) => s.quote);
   const live = useMemo(() => buildScreenContext(screen), [screen]);
@@ -154,35 +142,8 @@ export function usePipChips(workstream: WorkstreamView | null = null) {
   }, [openRef?.connectionId, openRef?.externalId]);
   const { kind, label } = contextLabel(context, quote, words.titleOf, words.runOf);
   const open = screen.route !== "settings" && screen.selected ? screen.items[screen.selected] : undefined;
-  const agentsOn = useAgentsEnabled();
-  const hasRuns = runs.length > 0;
-  const turns = useClaude((s) => (workstream ? s.byTicket[workstreamConversation(workstream.workstream.id)]?.turns : undefined)) ?? NO_TURNS;
-  const now = useNow();
-  const own = useMemo(() => (workstream ? [workstream] : []), [workstream]);
-  const cobweb = useWorkstreamWithers(own, now)[workstream?.workstream.id ?? ""];
-  // A Jira update is offered while none is waiting in Needs you.
-  const chaseJira = !!cobweb && !cobweb.draftWaiting;
-  const workstreamScene = useMemo(() => (agentsOn && workstream ? workstreamSuggestionScene(workstream, runs, Object.values(proposals), turns, chaseJira) : undefined), [agentsOn, workstream, runs, proposals, turns, chaseJira]);
-  const base = suggestionsFor({
-    route: screen.route,
-    quote: quote !== null,
-    marked: screen.marked.length,
-    item: itemScene,
-    pendingDrafts: pendingDrafts({ proposals }).length,
-    itemDrafts: open ? draftsForItem({ proposals }, open.item).length : 0,
-    unassignedInView: unassignedIn(screen.shown),
-    shown: screen.shown.length,
-    filtered: chipCount(screen) > 0,
-    agents: agentsOn ? agentsSuggestionScene(runs, screen.agents?.openRun ?? null) : undefined,
-    workstream: workstreamScene,
-  });
-  // A workstream's chips name its own runs already, at most six of them.
-  const all = agentsOn && hasRuns && screen.route !== "settings" && !quote && !(workstreamScene && workstreamChips(workstreamScene).length) && !base.includes(runSummaryPrompt()) ? [...base, runSummaryPrompt()] : base;
-  // A workstream's empty conversation offers its first suggestion as the intro's one button, and not again as a chip.
-  const primary = workstreamScene && turns.length === 0 && !quote ? (workstreamChips(workstreamScene)[0] ?? null) : null;
-  const chips = primary ? all.filter((c) => c !== primary) : all;
-  const scene = { itemKey: itemScene?.key ?? null, route: screen.route, runOpen: !!context.run, workstream: !!workstream };
-  return { chips, primary, scene, kind, label, context, words, quote, following: pinned === null };
+  const scene = { itemKey: open?.item.key ?? null, route: screen.route, runOpen: !!context.run, workstream: !!workstream };
+  return { scene, kind, label, context, words, quote, following: pinned === null };
 }
 
 /** The line naming the conversation: "General", or "Workstream: <title> · <Stage>" with only the title cut short. */
@@ -226,12 +187,11 @@ export function PipPane({ onClose }: { onClose(): void }) {
   const attached = useAttachments();
   const drop = useFileDrop((files) => void attached.add(files));
   const proposalList = useConversationDrafts(conversation, workstream);
-  const { chips, primary, scene, kind, label, context, words, quote, following } = usePipChips(workstream);
+  const { scene, kind, label, context, words, quote, following } = usePipScene(workstream);
   const needs = useNeedsYou();
   const runs = useRuns((s) => s.runs);
   const now = useNow();
   const footer = useMemo(() => composerFooter(runs, needs.length, now), [runs, needs.length, now]);
-  const orientationSeen = usePrefs((s) => s.pipOrientationSeen);
 
   usePaneEscape(onClose);
 
@@ -260,14 +220,13 @@ export function PipPane({ onClose }: { onClose(): void }) {
         <ContextChip kind={kind} label={label} following={following} open={seeing} onToggle={() => setSeeing(!seeing)} />
         {seeing && <SeeingPanel lines={contextLines(context, quote, words)} following={following} onFollow={(on) => usePip.getState().setPinned(on ? null : currentContext())} />}
       </header>
-      {!orientationSeen && <PipOrientation />}
       {workstream ? (
-        <TimelineView key={conversation} conversation={conversation} workstream={workstream} proposals={proposalList} needs={needs} primary={primary} />
+        <TimelineView key={conversation} conversation={conversation} workstream={workstream} proposals={proposalList} needs={needs} />
       ) : (
         // About one ticket, outside a workstream, the pane lists that ticket's drafts and folds the rest.
-        <PipConversation key={conversation} conversation={conversation} proposals={proposalList} primary={primary} ticket={context.item} />
+        <PipConversation key={conversation} conversation={conversation} proposals={proposalList} ticket={context.item} />
       )}
-      <Composer conversation={conversation} attached={attached} chips={chips} looking={label} scene={scene} footer={footer} />
+      <Composer conversation={conversation} attached={attached} looking={label} scene={scene} footer={footer} />
     </aside>
   );
 }

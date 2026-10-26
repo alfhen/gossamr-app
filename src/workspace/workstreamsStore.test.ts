@@ -3,6 +3,7 @@ import { claude, type AskRequest } from "../backend/claude";
 import { MockBackend } from "../backend/mock";
 import { itemRef } from "../backend/mockConnector";
 import { forgetConversations, useClaude } from "../claudeStore";
+import { docFromText } from "../lib/docs";
 import { ALL, itemKey } from "../lib/filter";
 import { useWorkspace } from "../workspaceStore";
 import { askPip } from "./askPip";
@@ -14,7 +15,6 @@ import { activeTab, loadTabs, useTabs } from "./tabsStore";
 import { contextFor, conversationTitle, focusComposer, focusedConversation, paneConversation, paneWorkstream, useWorkstreams, workstreamTicket } from "./workstreamsStore";
 import { useWorkView } from "./workViewStore";
 import { undoLog } from "./undo";
-import { HELD_PERSON } from "../types";
 import { useToasts } from "./toasts";
 import type { WorkstreamView } from "../types";
 import { GENERAL_CONVERSATION, workstreamConversation } from "../lib/conversations";
@@ -276,6 +276,18 @@ describe("the Agents view's conversation", () => {
     expect(useWorkstreams.getState().closed.map((v) => v.workstream.id)).toEqual([first.workstream.id]);
   });
 
+  it("reads the audit again for every workstream something loaded, not only the selected one, when a draft is decided", async () => {
+    const id = (await useWorkstreams.getState().start(CA401))!.workstream.id;
+    const draft = backend.proposals.fromRun({ type: "comment", item: CA401, body: docFromText("Looks good.") }, null, { type: "run", runId: "r-1", shortId: null, workstream: id });
+    await useWorkspace.getState().refreshProposals();
+    // The Pip pane's timeline loaded it; Agents has another workstream, or none, open.
+    useWorkView.getState().closeWorkstream();
+    await useWorkstreams.getState().loadEvents(id);
+    expect(useWorkstreams.getState().events[id].some((e) => e.action === "draft_approved")).toBe(false);
+    await backend.proposalsApprove(draft.id);
+    await vi.waitFor(() => expect(useWorkstreams.getState().events[id].some((e) => e.action === "draft_approved")).toBe(true));
+  });
+
   it("reads a workstream's audit for the step rail, again for the selected one as it changes, and drops a read overtaken or disposed", async () => {
     const ws = (await useWorkstreams.getState().start(CA401))!;
     const id = ws.workstream.id;
@@ -284,8 +296,8 @@ describe("the Agents view's conversation", () => {
 
     // Open on Agents, a change to it reads the audit again.
     useWorkView.getState().openWorkstream(id);
-    await backend.workstreamsHold(id);
-    await vi.waitFor(() => expect(useWorkstreams.getState().events[id]?.slice(-1)[0]?.action).toBe("held"));
+    await backend.workstreamsPause(id);
+    await vi.waitFor(() => expect(useWorkstreams.getState().events[id]?.slice(-1)[0]?.action).toBe("paused"));
 
     let release: (events: Awaited<ReturnType<typeof backend.workstreamsEvents>>) => void = () => {};
     const read = vi.spyOn(backend, "workstreamsEvents").mockImplementationOnce(() => new Promise((resolve) => (release = resolve)));
@@ -426,8 +438,8 @@ describe("Undo offers that outlive what they undo (G4, G5)", () => {
     expect(useToasts.getState().toasts.map((t) => t.text)).not.toContain(offer.text);
   });
 
-  for (const how of ["asked", "held", "closed"] as const) {
-    it(`takes the adoption offer back once the workstream is ${how === "asked" ? "waiting on the reporter" : how}`, async () => {
+  for (const how of ["paused", "closed"] as const) {
+    it(`takes the adoption offer back once the workstream is ${how}`, async () => {
       undoLog.clear();
       useToasts.getState().clear();
       await draftInGeneral();
@@ -435,25 +447,20 @@ describe("Undo offers that outlive what they undo (G4, G5)", () => {
       expect(await useWorkstreams.getState().adopt(ws.workstream.id)).toBe(true);
       const offer = undoLog.latest()!;
       expect(undoLog.get(offer.id)?.state).toBe("offered");
-      if (how === "asked") {
-        const real = backend.workstreamsList.bind(backend);
-        const spy = vi.spyOn(backend, "workstreamsList").mockImplementation(async (all) => (await real(all)).map((v) => ({ ...v, waitingOnReporter: { since: new Date().toISOString() } })));
-        await useWorkstreams.getState().refresh();
-        spy.mockRestore();
-      } else if (how === "held") await useWorkstreams.getState().hold(ws.workstream.id);
+      if (how === "paused") await useWorkstreams.getState().pause(ws.workstream.id);
       else await useWorkstreams.getState().close(ws.workstream.id);
       expect(undoLog.get(offer.id)?.state).toBe("withdrawn");
       expect(useToasts.getState().toasts.map((t) => t.text)).not.toContain(offer.text);
     });
   }
 
-  it("says in the reopen note that the hold the person chose is still theirs", async () => {
+  it("says in the reopen note that the pause the person chose is still theirs", async () => {
     const ws = (await useWorkstreams.getState().start(CA401))!;
-    await useWorkstreams.getState().hold(ws.workstream.id);
+    await useWorkstreams.getState().pause(ws.workstream.id);
     await useWorkstreams.getState().close(ws.workstream.id);
     useToasts.getState().clear();
     expect(await useWorkstreams.getState().reopen(ws.workstream.id)).toBe(true);
-    expect(useWorkstreams.getState().forItem("CA-401")?.workstream.heldReason).toBe(HELD_PERSON);
-    expect(useToasts.getState().toasts.map((t) => t.text)).toContain("Reopened the workstream on CA-401. It is still held by you; Resume it to carry on.");
+    expect(useWorkstreams.getState().forItem("CA-401")?.workstream.pausedReason).toBe("person");
+    expect(useToasts.getState().toasts.map((t) => t.text)).toContain("Reopened the workstream on CA-401. It is still paused; Resume it to carry on.");
   });
 });

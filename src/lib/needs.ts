@@ -1,17 +1,16 @@
-import { ALLOW_MORE_STEPS, HELD_BUDGET, type Intent, type Proposal, type ReadinessStop, type Run, type WorkstreamView } from "../types";
+import { type Intent, type Proposal, type Run, type WorkstreamView } from "../types";
 import { stoppedAtLimit } from "../workspace/agentsLogic";
 import { failureHelp } from "../workspace/failureHelp";
 import { docText } from "./docs";
 import { parsePermission, permissionOffer, readAs } from "./permission";
-import { inWorkstreamPane, isAnswersDraft, isReporterNudge, isReporterQuestions, targetOf, workstreamOf } from "./proposals";
-import { agoText, type ReporterAsk } from "./reporterWait";
+import { inWorkstreamPane, targetOf, workstreamOf } from "./proposals";
 import { maskSecrets } from "./riskyText";
-import { isHeldByYou, shortHeld, stepsOf } from "./workstreamHold";
+import { pausedText } from "./workstreamPause";
 import { STAGE_LABEL, runWorkstream } from "./workstreamStage";
 
 /**
  * Needs you: the one place that says what waits on the person, and the only source of its count. It reads what the stores
- * hold (proposals, runs, workstreams with their holds and escalations, and the failures the person dismissed) and decides
+ * pause (proposals, runs, workstreams with their pauses, and the failures the person dismissed) and decides
  * nothing. Every screen that counts or lists what needs the person counts these and lists these, as docs/needs-you.md says.
  */
 
@@ -19,7 +18,6 @@ import { STAGE_LABEL, runWorkstream } from "./workstreamStage";
 export type NeedGroupKind = "decide" | "unblock" | "approve";
 
 export type NeedKind =
-  | "escalation"
   | "plan"
   | "description"
   | "permission"
@@ -27,15 +25,13 @@ export type NeedKind =
   | "signIn"
   | "failure"
   | "stoppedAtLimit"
-  | "hold"
-  | "budget"
-  | "readiness"
+  | "paused"
   | "draft"
   | "review"
   | "runStart";
 
 /** What the person can do about a need, as the keys and the pane's buttons name it. */
-export type NeedActionId = "approve" | "allow" | "deny" | "dismiss" | "edit" | "retry" | "resume" | "allowMore" | "advise" | "askReporter" | "answerSelf" | "planAnyway" | "answer" | "open";
+export type NeedActionId = "approve" | "allow" | "deny" | "dismiss" | "edit" | "retry" | "resume" | "answer" | "open";
 
 export interface ActionSpec {
   id: NeedActionId;
@@ -43,10 +39,9 @@ export interface ActionSpec {
 }
 
 /**
- * What a need brings into view in its workstream's detail: a draft's card, a run's card, the workstream's held banner, or the card of a
- * review that still blocks after the fix rounds.
+ * What a need brings into view in its workstream's detail: a draft's card, a run's card, or the workstream's own controls.
  */
-export type NeedTarget = { type: "draft"; id: string } | { type: "run"; id: string } | { type: "workstream" } | { type: "escalation" };
+export type NeedTarget = { type: "draft"; id: string } | { type: "run"; id: string } | { type: "workstream" };
 
 /** One thing waiting on the person. `workstreamId` null is General. */
 export interface Need {
@@ -63,7 +58,7 @@ export interface Need {
   head: string | null;
   /** The title of the workstream it is in, less the ticket's key; absent for General. */
   workstreamTitle?: string;
-  /** What it is, in a few words: "R1 asks a question", "Draft comment", "Held by you". */
+  /** What it is, in a few words: "R1 asks a question", "Draft comment", "Paused". */
   title: string;
   /** One plain sentence: why the person is asked. */
   why: string;
@@ -89,14 +84,10 @@ export interface NeedsInput {
   proposals: readonly Proposal[];
   /** The runs whose failure (or stop, or unclear state) the person dismissed. They are the only way a failure goes without being dealt with. */
   dismissed: ReadonlySet<string>;
-  /** When the reporter was asked, and nudged, by workstream id, where that is known (`reporterAsk`): the readiness decision says so. */
-  asked?: Readonly<Record<string, ReporterAsk>>;
-  /** When each held workstream was last held, by id, where that is known; otherwise its `createdAt` stands in. */
-  heldAt?: Readonly<Record<string, string>>;
+  /** When each paused workstream was last paused, by id, where that is known; otherwise its `createdAt` stands in. */
+  pausedAt?: Readonly<Record<string, string>>;
   /** A ticket's title by its key, when it is cached. */
   titleOf?(key: string): string | null | undefined;
-  /** The time the quiet runs are judged by, in ms. */
-  now: number;
 }
 
 /** One workstream's needs, or General's: what its row shows, and what expanding it lists. */
@@ -137,11 +128,8 @@ export const chipLabel = (need: Pick<Need, "group" | "kind"> & { primary?: Pick<
 /** Drafts that may be approved together: pending comments, moves and subtasks. A description rewrite is read in its diff first, and a run or follow-up after its prompt or message, so never. */
 export const BATCHABLE: ReadonlySet<Intent["type"]> = new Set(["comment", "transition", "subtasks"]);
 
-/**
- * Whether `p` may be approved with the others in "Approve N safe drafts": a batchable kind, but never the questions to a
- * reporter, the nudge that follows them up, or Pip's comment with the person's answers, which are read and approved on their own before they reach Jira.
- */
-export const safeToBatch = (p: Proposal) => BATCHABLE.has(p.intent.type) && !isReporterQuestions(p) && !isReporterNudge(p) && !isAnswersDraft(p);
+/** Whether `p` may be approved with the others in "Approve N safe drafts": a batchable kind. */
+export const safeToBatch = (p: Proposal) => BATCHABLE.has(p.intent.type);
 
 /**
  * The pending comments among `drafts` (in order) that say what an earlier one already says on the same ticket, as the same
@@ -172,26 +160,6 @@ export function leftOutLabel(p: Proposal, title: string): string {
 
 /** What the batch confirm says of a comment it left out because an earlier one has the same text. */
 export const REPEATED_COMMENT_NOTE = "Same text as the comment above, left out";
-
-/** What the list says of a review that still blocks after the automatic fix rounds. */
-export const escalationReason = (rounds: number) => `Review still blocks after ${rounds} fix ${rounds === 1 ? "round" : "rounds"}`;
-
-/** What a readiness need says of the open questions: which triage left them and what they are, in one sentence. */
-export function readinessWhy(r: Pick<ReadinessStop, "triageLabel" | "questions">): string {
-  const triage = r.triageLabel || "The triage";
-  if (r.questions.length === 0) return `${triage} found the ticket unclear but listed no questions.`;
-  return clip(`${triage} left ${r.questions.length === 1 ? "this question" : "these questions"} open: ${r.questions.join(" · ")}`, 240);
-}
-
-/**
- * What "I'll answer" puts in the composer, which is one line: the open questions quoted, then where to answer. A question
- * is the triage's own words, so each is quoted as data and the person writes after "My answers:".
- */
-export function readinessPrompt(r: Pick<ReadinessStop, "triageLabel" | "questions">, key: string | null | undefined): string {
-  const triage = r.triageLabel || "The triage";
-  const quoted = r.questions.length ? r.questions.map((q) => `“${q}”`).join(" · ") : "“(it listed no questions)”";
-  return `${triage}'s open questions about ${key ?? "this ticket"}: ${quoted}. My answers: `;
-}
 
 /** What a sign-in need reads: the run, then this. */
 export const SIGN_IN_TEXT = "needs you to sign in to Claude";
@@ -329,17 +297,17 @@ export function latestRuns(runs: readonly Pick<Run, "id" | "item" | "spec" | "qu
 }
 
 /**
- * Everything waiting on the person across the open workstreams and General, highest rank first: a decision (an escalation,
- * a plan or description to approve, a workstream that used its automatic steps, a ticket the triage found not clear enough to plan), then what is stuck (a permission, a question, a sign-in, a failure, a run stopped at
- * its limit, a hold the system made), then drafts to approve (a
- * Jira draft, a GitHub review, a run to start). Within a group, oldest first.
+ * Everything waiting on the person across the open workstreams and General, highest rank first: a decision (a plan or
+ * description to approve, a ticket the triage found not clear enough to plan), then what is stuck (a permission, a question,
+ * a sign-in, a failure, a run stopped at its limit, a paused workstream), then drafts to approve (a Jira draft, a GitHub
+ * review, a run to start). Within a group, oldest first.
  *
- * One thing is one need: a run asking a question that has a drafted reply is the question; a review that still blocks
- * after the fix rounds carries its review draft; a retired or superseded draft never shows. A failure or a limit stop is a need only
+ * One thing is one need: a run asking a question that has a drafted reply is the question; a retired or superseded draft
+ * never shows. A failure or a limit stop is a need only
  * while it is the latest run of its kind on its ticket (`latestRuns`), and stays until the person deals with it: Retry, a
  * fix, a resume, or a Dismiss (`dismissed`); looking at it clears nothing. A finished run is a state, not a need.
  */
-export function needs({ workstreams, runs, proposals, dismissed, heldAt, asked, titleOf, now }: NeedsInput): Need[] {
+export function needs({ workstreams, runs, proposals, dismissed, pausedAt, titleOf }: NeedsInput): Need[] {
   const kept = workstreamTitles(workstreams);
   const snapped = snapshotTitles(runs, proposals);
   const titleFor = (key: string | null | undefined) => (key ? titleOf?.(key)?.trim() || kept.get(key) || snapped.get(key) : undefined);
@@ -362,8 +330,6 @@ export function needs({ workstreams, runs, proposals, dismissed, heldAt, asked, 
   const latest = latestRuns(runs);
   const answers = answersByRun(proposals, runs);
   const carried = new Set([...answers.values()].map((p) => p.id));
-  // A review that still blocks carries its review draft, so the draft is not a second need.
-  for (const v of open) if (v.escalation?.reviewDraft) carried.add(v.escalation.reviewDraft);
 
   const repeated = new Set(repeatedComments([...proposals].sort((a, b) => a.createdAt.localeCompare(b.createdAt) || (a.id < b.id ? -1 : 1))).map((p) => p.id));
   for (const p of proposals) {
@@ -375,7 +341,7 @@ export function needs({ workstreams, runs, proposals, dismissed, heldAt, asked, 
     const base = { key: `draft:${p.id}`, at: p.createdAt, target, ...where(workstreamId, key) };
     if (p.intent.type === "startRun") {
       const kind = STAGE_LABEL[p.intent.spec.kind];
-      const maker = p.createdBy === "pip" ? "Pip" : p.createdBy === "autopilot" ? "The autopilot" : p.createdBy === "agent" ? "An agent" : "You";
+      const maker = p.createdBy === "pip" ? "Pip" : p.createdBy === "agent" ? "An agent" : "You";
       out.push({
         ...base,
         group: "approve",
@@ -395,17 +361,9 @@ export function needs({ workstreams, runs, proposals, dismissed, heldAt, asked, 
     const step = from ? runs.find((r) => r.id === from)?.spec.kind : undefined;
     // "GitHub review", not "review": beside a Review run's stage it would read "Review · review".
     const what = p.intent.type === "githubReview" ? "GitHub review" : DRAFT_TEXT[p.intent.type].replace(/^Draft /, "");
-    const title = isReporterQuestions(p) ? "Questions for the reporter" : isReporterNudge(p) ? "Nudge for the reporter" : isAnswersDraft(p) ? "Answers to the open questions" : label ? (step ? `${label} ${STAGE_LABEL[step].toLowerCase()} · ${what}` : `${label} ${what}`) : step ? `${STAGE_LABEL[step]} · ${what}` : p.intent.type === "comment" && !from ? commentTitle(p.intent.body) : DRAFT_TEXT[p.intent.type];
-    const by = label ? (step ? `${label} ${STAGE_LABEL[step].toLowerCase()}` : label) : p.createdBy === "pip" ? "Pip" : p.createdBy === "autopilot" ? "The autopilot" : p.createdBy === "agent" ? "An agent" : "You";
-    // The questions to a reporter are Gossamr's words around the triage's own, and the person's choice: say so.
-    const asked = isReporterQuestions(p);
-    const drafted = asked
-      ? `Gossamr drafted a comment to the reporter${key ? ` of ${key}` : ""}${label ? ` from ${label}'s open questions` : " from what the ticket leaves out"}; it is posted only when you approve it.`
-      : isReporterNudge(p)
-        ? `Gossamr drafted a gentle nudge to the reporter${key ? ` of ${key}` : ""}, who hasn't answered; it is posted only when you approve it.`
-        : isAnswersDraft(p)
-          ? `Pip drafted a comment${key ? ` on ${key}` : ""} with your answers to the open questions; it is posted only when you approve it.`
-          : `${by} drafted ${DRAFT_WHAT[p.intent.type](key)}.`;
+    const title = label ? (step ? `${label} ${STAGE_LABEL[step].toLowerCase()} · ${what}` : `${label} ${what}`) : step ? `${STAGE_LABEL[step]} · ${what}` : p.intent.type === "comment" && !from ? commentTitle(p.intent.body) : DRAFT_TEXT[p.intent.type];
+    const by = label ? (step ? `${label} ${STAGE_LABEL[step].toLowerCase()}` : label) : p.createdBy === "pip" ? "Pip" : p.createdBy === "agent" ? "An agent" : "You";
+    const drafted = `${by} drafted ${DRAFT_WHAT[p.intent.type](key)}.`;
     const edit = EDITABLE.has(p.intent.type) ? [action("edit", "Edit")] : [];
     if (p.intent.type === "rewrite") {
       // A plan run's description update is how the plan is approved; any other rewrite is read in its diff first.
@@ -536,38 +494,19 @@ export function needs({ workstreams, runs, proposals, dismissed, heldAt, asked, 
   }
 
   for (const v of open) {
-    const held = shortHeld(v.workstream.heldReason, v.workstream.drifted);
-    // A hold the person chose is not a need: they know, and the workstream's header says it with a Resume.
-    if (!held || isHeldByYou(v.workstream.heldReason)) continue;
+    const reason = v.workstream.pausedReason;
+    const paused = pausedText(reason);
+    if (!reason || !paused) continue;
     const id = v.workstream.id;
-    if (v.workstream.heldReason === HELD_BUDGET) {
-      // Running out of automatic steps is a question for the person: more, or no more. In Advise nothing starts on its own, so it is answered.
-      if (v.workstream.mode !== "manage") continue;
-      out.push({
-        key: `budget:${id}`,
-        group: "decide",
-        kind: "budget",
-        ...where(id, v.workstream.itemKey),
-        title: `${v.workstream.itemKey ?? "This workstream"} used its ${stepsOf(v.budget).limit} automatic steps`,
-        why: "Pip and the automatic steps are paused until you decide.",
-        ifYouWait: "Nothing more starts on its own; its agents carry on.",
-        at: heldAt?.[id] ?? v.workstream.createdAt,
-        primary: action("allowMore", `Allow ${ALLOW_MORE_STEPS} more`),
-        secondary: [action("advise", "Switch to Advise")],
-        target: { type: "workstream" },
-        batchable: false,
-      });
-      continue;
-    }
     out.push({
-      key: `held:${id}`,
+      key: `paused:${id}`,
       group: "unblock",
-      kind: "hold",
+      kind: "paused",
       ...where(id, v.workstream.itemKey),
-      title: held,
-      why: `${held}.`,
-      ifYouWait: "Pip takes no turns and no automatic step starts; its agents carry on.",
-      at: heldAt?.[id] ?? v.workstream.createdAt,
+      title: paused,
+      why: reason === "ceiling" ? "Pip was woken too often today, so Gossamr paused it." : "You paused it.",
+      ifYouWait: "Pip isn't woken; its agents carry on.",
+      at: pausedAt?.[id] ?? v.workstream.createdAt,
       primary: action("resume", "Resume"),
       secondary: [],
       target: { type: "workstream" },
@@ -575,49 +514,6 @@ export function needs({ workstreams, runs, proposals, dismissed, heldAt, asked, 
     });
   }
 
-  for (const v of open) {
-    const e = v.escalation;
-    if (!e) continue;
-    out.push({
-      key: `escalation:${e.reviewRun}`,
-      group: "decide",
-      kind: "escalation",
-      ...where(v.workstream.id, v.workstream.itemKey),
-      title: escalationReason(e.rounds),
-      why: `The review still blocks after ${e.rounds} fix ${e.rounds === 1 ? "round" : "rounds"}.`,
-      ifYouWait: "The build stays as it is; no more fix rounds start until you choose.",
-      at: e.at,
-      primary: action("open", "Choose what next"),
-      secondary: [],
-      target: { type: "escalation" },
-      batchable: false,
-    });
-  }
-
-  for (const v of open) {
-    const r = v.readiness;
-    if (!r) continue;
-    const key = v.workstream.itemKey;
-    // The ticket changed, or the reporter replied, while the person waited: the question is back, as a choice to plan now or ask again.
-    // The reporter was asked before, and has not answered unless this is their reply: say so before the questions.
-    const ask = v.workstream.id in (asked ?? {}) && !r.replied ? asked![v.workstream.id] : null;
-    const when = new Date(now);
-    const already = ask ? `You asked the reporter ${agoText(ask.asked, when)}${ask.nudged ? ` and nudged ${agoText(ask.nudged, when)}` : ""}${ask.replied ? ` and they replied ${agoText(ask.replied, when)}. ` : "; they have not answered. "}` : "";
-    out.push({
-      key: `readiness:${r.triageRun}`,
-      group: "decide",
-      kind: "readiness",
-      ...where(v.workstream.id, key),
-      title: r.replied ? `${key ?? "This ticket"}: the reporter replied, plan now?` : r.changed ? `${key ?? "This ticket"} changed: plan now?` : `${key ?? "This ticket"} isn't clear enough to plan`,
-      why: r.replied ? `The reporter replied on ${key ?? "the ticket"} while you waited. ${readinessWhy(r)}` : r.changed ? `${key ?? "The ticket"} changed while you waited for the reporter. ${already}${readinessWhy(r)}` : `${already}${readinessWhy(r)}`,
-      ifYouWait: "No plan starts until you choose; nothing is posted to Jira.",
-      at: r.at,
-      primary: r.changed ? action("planAnyway", "Plan now") : action("askReporter", ask ? "Ask again" : "Ask the reporter"),
-      secondary: r.changed ? [action("askReporter", "Still unclear (ask again)")] : [action("answerSelf", "I'll answer"), action("planAnyway", "Plan anyway")],
-      target: { type: "workstream" },
-      batchable: false,
-    });
-  }
   return out.sort(byRank);
 }
 

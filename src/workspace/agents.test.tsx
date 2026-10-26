@@ -20,14 +20,7 @@ import { LAUNCHER_GUTTER } from "./PipExtras";
 import { DENY_QUESTION, DenyConfirm, StopRunConfirm, stopRunQuestion } from "./PermissionAsk";
 import { useActivity } from "./activityStore";
 import { Rail, railBadgeText } from "./Rail";
-import { usePrefs } from "./prefs";
 import { useRuns } from "./runsStore";
-
-/** Server rendering reads a store's initial state, so the flag is set on both. */
-const explainerSeen = (seen: boolean) => {
-  usePrefs.setState({ permissionExplainerSeen: seen });
-  Object.assign(usePrefs.getInitialState(), { permissionExplainerSeen: seen });
-};
 
 const NOW = Date.parse("2026-09-30T12:00:00Z");
 const iso = (minutesAgo: number) => new Date(NOW - minutesAgo * 60_000).toISOString();
@@ -98,8 +91,6 @@ const card = (r: Run, opened = false) =>
 
 beforeEach(() => {
   vi.stubGlobal("localStorage", { getItem: () => null, setItem: () => {}, removeItem: () => {} });
-  // The permission prompt's one-time explainer is dismissed here, so the cards read as the prompt itself.
-  explainerSeen(true);
 });
 
 const failures = () => new MockBackend({ runs: { seed: "failures" } }).runs.list();
@@ -196,11 +187,10 @@ describe("the lanes", () => {
 
 describe("grouped by workstream", () => {
   const ws: WorkstreamView = {
-    workstream: { id: "ws-1", connectionId: "mock", itemKey: "CA-401", repo: null, title: "CA-401 Retry the payment", pipSession: null, mode: "advise", heldReason: null, notes: null, createdAt: iso(60), closedAt: null, budget: { autoTurns: null, wakes: null, tokens: null }, spent: { autoTurns: 0, wakes: 0, tokens: 0 }, rules: {}, basis: null },
+    workstream: { id: "ws-1", connectionId: "mock", itemKey: "CA-401", repo: null, title: "CA-401 Retry the payment", pipSession: null, pausedReason: null, notes: null, createdAt: iso(60), closedAt: null, basis: null },
     stage: "investigate",
     runs: ["w1"],
     labels: [["w1", "R1"]],
-    budget: { autoTurns: { used: 0, limit: 6 }, wakes: { used: 0, limit: 12 }, level: "ok" },
   };
   const linked = () => run("working", { id: "w1", queuedAt: iso(1), spec: { ...eight()[0].spec, kind: "investigate", workstream: "ws-1" } });
 
@@ -447,7 +437,7 @@ describe("empty, first-run and errors", () => {
   it("states the limits honestly in the explainer", () => {
     const out = renderToStaticMarkup(<AgentsIntro onDismiss={vi.fn()} />).replace(/&#x27;/g, "'");
     for (const phrase of [
-      "You approve each one first. Agents are on by default; turn them off any time in Settings.",
+      "You approve each one first.",
       "A Build runs as you, with your own Claude settings: anything your Claude can do, it can do.",
       "Read-only steps are signed in as you but run without your settings.",
       "Investigate, Triage, Plan, Review and Verify are read-only: Claude Code itself refuses their file edits and writing commands, and your own and the repository's allow rules don't apply.",

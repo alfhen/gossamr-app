@@ -4,7 +4,6 @@ import { itemRef } from "./mockConnector";
 import { docFromMarkdown, markdownOf } from "./mockMarkdown";
 import { QUESTIONS_LEAD, TRIAGE_HEADING, isTriageDescription, triageQuestionsOf, triageSectionOf, withTriageSection, withoutTriageSection } from "./mockTriageSection";
 import { withPlanSection, planSectionOf } from "./mockPlanSection";
-import { answeredByReply, firstAskPosted } from "../lib/reporterWait";
 import type { Proposal, RunSpec } from "../types";
 
 const md = docFromMarkdown;
@@ -71,24 +70,9 @@ describe("the Triage section of a description in the sample build", () => {
   });
 });
 
-describe("the answered-by-reply reading", () => {
-  const line = (at: string, action: string, proposalId: string, actor = "person") => ({ actor, action, proposalId, at }) as Parameters<typeof firstAskPosted>[0][number];
-  const asked = [line("2026-10-01T10:00:00Z", "readiness_asked", "c1"), line("2026-10-01T10:02:00Z", "draft_approved", "c1")];
-
-  it("counts a comment after the ask was posted and after the triage that listed the question, and nothing else", () => {
-    expect(firstAskPosted(asked)).toBe(Date.parse("2026-10-01T10:02:00Z"));
-    expect(answeredByReply(asked, ["2026-10-01T10:05:00Z"], "2026-10-01T10:00:00Z")).toBe(true);
-    expect(answeredByReply(asked, ["2026-10-01T10:05:00Z"], "2026-10-01T10:06:00Z")).toBe(false);
-    expect(answeredByReply(asked, ["2026-10-01T10:01:00Z"], "2026-10-01T10:00:00Z")).toBe(false);
-    expect(answeredByReply(asked, [], "2026-10-01T10:00:00Z")).toBe(false);
-    expect(answeredByReply(asked.slice(0, 1), ["2026-10-01T10:05:00Z"], "2026-10-01T10:00:00Z")).toBe(false);
-    expect(answeredByReply([line("2026-10-01T10:00:00Z", "readiness_asked", "c1", "pip"), asked[1]], ["2026-10-01T10:05:00Z"])).toBe(false);
-  });
-});
-
 describe("a Triage on the vague CA-408 in the sample build", () => {
   const CA408 = itemRef("CA-408");
-  const sample = () => new MockBackend({ runs: { seed: "empty", prSurfaceMs: null }, wsManage: true });
+  const sample = () => new MockBackend({ runs: { seed: "empty", prSurfaceMs: null } });
   const spec = (ws: string): RunSpec => ({ kind: "triage", repo: "acme/storefront", clonePath: "/Users/sample/Code/storefront", base: "main", name: `ca-408-${Math.random().toString(16).slice(2, 6)}`, instruction: "", focus: null, focusFromRun: null, ticketBlock: null, workstream: ws });
   async function triage(b: MockBackend, ws: string) {
     const draft = await b.runsDraft(spec(ws), CA408);
@@ -140,34 +124,5 @@ describe("a Triage on the vague CA-408 in the sample build", () => {
     const second = rewriteOf(b, (await triage(b, ws)).id)!;
     expect(b.proposals.get(first.id)?.state).toMatchObject({ type: "retired" });
     expect(b.proposals.get(second.id)?.state).toEqual({ type: "pending" });
-  });
-
-  it("turns ready after the reporter replied, with a note that says the answers in the comments were used and no question left", async () => {
-    const b = sample();
-    b.supervisor.dispose();
-    const ws = (await b.workstreamsOpen(CA408)).id;
-    const first = await triage(b, ws);
-    const ask = await b.workstreamsReadinessAsk(ws, first.id);
-    await b.proposalsApprove(ask.id);
-    await new Promise((r) => setTimeout(r, 5));
-    b.commentOnTicket("CA-408", "Done means the winback mail goes to lapsed customers. Only the winback flow. The CRM team asked.");
-    const again = await triage(b, ws);
-    expect(again.result).toContain("Ready to plan: yes");
-    expect(again.result).not.toContain("Open questions:");
-    const update = rewriteOf(b, again.id)!;
-    if (update.intent.type !== "rewrite" || !update.intent.body) throw new Error("a description update");
-    expect(update.intent.body.toText).toContain("The answers in the ticket's comments were used");
-    expect(update.intent.body.toText).not.toContain("Open questions");
-    expect(update.intent.body.toText).not.toContain("cannot be sized yet");
-  });
-
-  it("stays unclear while nobody has replied, and for a reply that came before anyone asked", async () => {
-    const b = sample();
-    b.supervisor.dispose();
-    const ws = (await b.workstreamsOpen(CA408)).id;
-    b.commentOnTicket("CA-408", "A comment from before the ask.");
-    await new Promise((r) => setTimeout(r, 5));
-    const run = await triage(b, ws);
-    expect(run.result).toContain("Ready to plan: no\nOpen questions:");
   });
 });

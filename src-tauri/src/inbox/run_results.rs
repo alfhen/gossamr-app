@@ -35,7 +35,7 @@ pub struct RunOutcome {
     /// How `note` and the proposals were read: from the agent's report through the tool, from the `For Jira:` section of
     /// its written answer, from the whole answer, or from the summary alone. `None` when there is no result yet.
     pub source: Option<ResultSource>,
-    /// What came of offering the run the report tool; `None` when it was never asked to use it.
+    /// What came of offering the run the report tool; `None` when it was never offered the tools.
     pub report: Option<ReportView>,
     /// For a Plan run: the draft of the whole plan as a comment, in whatever state it is now.
     pub plan_draft: Option<RunDraft>,
@@ -235,11 +235,6 @@ fn is_plan_comment(p: &Proposal) -> bool {
     p.label.as_deref().is_some_and(|l| l.starts_with(PLAN_LABEL))
 }
 
-/// Whether `p` is the comment asking a ticket's reporter the questions a triage left open: the person's choice, never the run's status comment.
-fn is_reporter_questions(p: &Proposal) -> bool {
-    p.label.as_deref() == Some(proposals::READINESS_COMMENT_LABEL)
-}
-
 /// Findings cut at a paragraph or sentence with a note when they are over the limit. A note is shorter today, so this
 /// only guards against that changing. `fit` leaves out the blank line before its note, so it is given two less room
 /// and the result stays within what `RunSpec::validate` accepts.
@@ -301,12 +296,6 @@ impl Core {
         Ok(self.change_of(run)?.filter(|c| c.kind == CodeChangeKind::PullRequest && c.repo.eq_ignore_ascii_case(&run.spec.repo)).and_then(|c| c.number.map(|n| (n, c.sha))))
     }
 
-    /// Whether the person approved the Gossamr Plan description draft of the plan run `run`, with text of their own: a
-    /// skipped one, or one Pip revised that the person didn't edit, doesn't count.
-    pub async fn plan_approved_of(&self, run: &Run) -> Result<bool> {
-        Ok(run.spec.kind == RunKind::Plan && self.approved_plan_of(run).await?.is_some())
-    }
-
     /// What the sheet shows about a run's result: the part meant for Jira, the tickets it names, and the pull request
     /// or branch it produced as far as a sync has cached them.
     pub async fn run_outcome(&self, id: &str) -> Result<RunOutcome> {
@@ -351,7 +340,7 @@ impl Core {
 
     /// Every status comment draft made from `run`, newest first, whether it is still waiting or was decided.
     pub(super) async fn comment_drafts_of(&self, run: &Run) -> Result<Vec<Proposal>> {
-        Ok(self.run_comments(run).await?.into_iter().filter(|p| !is_plan_comment(p) && !is_reporter_questions(p)).collect())
+        Ok(self.run_comments(run).await?.into_iter().filter(|p| !is_plan_comment(p)).collect())
     }
 
     /// Every draft of the whole plan as a comment made from `run`.
@@ -1370,18 +1359,6 @@ pub(in crate::inbox) mod tests {
     }
 
     #[tokio::test]
-    async fn the_comment_to_the_reporter_is_not_the_triage_s_status_comment() {
-        let fx = fixture_watching(&["acme/webshop"]).await;
-        let run = triage_with(&fx, "Unclear.\n\nFor Jira:\nThe ticket is not clear enough to plan.").await;
-        let item = fx.item("CA-1");
-        let asked = fx.core.draft_from_run(&run, Intent::Comment { item, body: tracker::comment_doc("Could you say which checkout?", &[]) }, proposals::READINESS_COMMENT_LABEL.into()).await.unwrap();
-        assert_eq!(fx.core.run_outcome(&run.id).await.unwrap().draft, None, "the questions are not the status draft");
-        let status = fx.core.auto_draft_run_comment(&run.id).await.unwrap().expect("the run's own status draft is still made");
-        assert_ne!(status.id, asked.id);
-        assert_eq!(fx.core.run_outcome(&run.id).await.unwrap().draft.map(|d| d.id), Some(status.id));
-    }
-
-    #[tokio::test]
     async fn a_triage_breakdown_is_drafted_once_as_subtasks_from_the_run_and_nothing_is_created() {
         let fx = fixture_watching(&["acme/webshop"]).await;
         let run = triage_with(&fx, BREAKDOWN).await;
@@ -1522,7 +1499,7 @@ pub(in crate::inbox) mod tests {
         let p = fx.core.draft_run(build_from(&fx, &plan), Some(fx.item("CA-1"))).await.unwrap();
         let first = fx.core.runs_review(&p.id).await.unwrap();
 
-        let edit = |text: &str| Edit::Run { instruction: None, base: None, clone_path: None, kind: None, name: None, pr: None, allow_push: None, report: None, plan: Some(text.into()), build_account: None, project: None };
+        let edit = |text: &str| Edit::Run { instruction: None, base: None, clone_path: None, kind: None, name: None, pr: None, allow_push: None, plan: Some(text.into()), build_account: None, project: None };
         let edited = fx.core.edit_proposal(&p.id, &edit("My own plan.")).await.unwrap();
         assert_eq!(spec_in(&edited).plan.as_deref(), Some("My own plan."));
         let second = fx.core.runs_review(&p.id).await.unwrap();
@@ -1620,7 +1597,7 @@ pub(in crate::inbox) mod tests {
     async fn changing_the_kind_away_from_triage_or_plan_drops_the_findings() {
         let fx = fixture_watching(&["acme/webshop"]).await;
         let investigation = run_with(&fx, |_| {}).await;
-        let kind = |k| Edit::Run { instruction: None, base: None, clone_path: None, kind: Some(k), name: None, pr: None, allow_push: None, report: None, plan: None, build_account: None, project: None };
+        let kind = |k| Edit::Run { instruction: None, base: None, clone_path: None, kind: Some(k), name: None, pr: None, allow_push: None, plan: None, build_account: None, project: None };
         let p = fx.core.draft_run(after_investigation(&fx, RunKind::Triage, &investigation), Some(fx.item("CA-1"))).await.unwrap();
         let plan = spec_in(&fx.core.edit_proposal(&p.id, &kind(RunKind::Plan)).await.unwrap());
         assert!(plan.findings.is_some() && plan.findings_from_run.is_some(), "a plan carries findings too");
@@ -1797,7 +1774,7 @@ pub(in crate::inbox) mod tests {
         let fx = fixture_watching(&["acme/webshop"]).await;
         let plan = plan_with(&fx, PLAN).await;
         let p = fx.core.draft_run(build_from(&fx, &plan), Some(fx.item("CA-1"))).await.unwrap();
-        let edit = |text: &str| Edit::Run { instruction: None, base: None, clone_path: None, kind: None, name: None, pr: None, allow_push: None, report: None, plan: Some(text.into()), build_account: None, project: None };
+        let edit = |text: &str| Edit::Run { instruction: None, base: None, clone_path: None, kind: None, name: None, pr: None, allow_push: None, plan: Some(text.into()), build_account: None, project: None };
         let edited = spec_in(&fx.core.edit_proposal(&p.id, &edit("1. My own plan.")).await.unwrap());
         assert!(edited.plan_approved);
         assert!(fx.core.runs_review(&p.id).await.unwrap().prompt.contains("A person read, edited and approved the plan below."));
@@ -1809,7 +1786,7 @@ pub(in crate::inbox) mod tests {
     async fn editing_a_plan_needs_one_clearing_it_drops_its_source_and_changing_kind_drops_both() {
         let fx = fixture_watching(&["acme/webshop"]).await;
         let plan = plan_with(&fx, PLAN).await;
-        let edit = |plan: Option<&str>, kind: Option<RunKind>| Edit::Run { instruction: None, base: None, clone_path: None, kind, name: None, pr: None, allow_push: None, report: None, plan: plan.map(Into::into), build_account: None, project: None };
+        let edit = |plan: Option<&str>, kind: Option<RunKind>| Edit::Run { instruction: None, base: None, clone_path: None, kind, name: None, pr: None, allow_push: None, plan: plan.map(Into::into), build_account: None, project: None };
         let p = fx.core.draft_run(build_from(&fx, &plan), Some(fx.item("CA-1"))).await.unwrap();
         let cleared = spec_in(&fx.core.edit_proposal(&p.id, &edit(Some("  \n"), None)).await.unwrap());
         assert_eq!((cleared.plan, cleared.plan_from_run), (None, None));
@@ -1993,7 +1970,7 @@ pub(in crate::inbox) mod tests {
             let mut build = built(&fx).await;
             let p = fx.core.draft_run(review_from(&fx, &build), Some(fx.item("CA-1"))).await.unwrap();
             let first = fx.core.runs_review(&p.id).await.unwrap();
-            let edit = |text: &str| Edit::Run { instruction: None, base: None, clone_path: None, kind: None, name: None, pr: None, allow_push: None, report: None, plan: None, build_account: Some(text.into()), project: None };
+            let edit = |text: &str| Edit::Run { instruction: None, base: None, clone_path: None, kind: None, name: None, pr: None, allow_push: None, plan: None, build_account: Some(text.into()), project: None };
 
             let edited = fx.core.edit_proposal(&p.id, &edit("My own words about it.")).await.unwrap();
             assert_eq!(spec_in(&edited).build_account.as_deref(), Some("My own words about it."));
@@ -2018,7 +1995,7 @@ pub(in crate::inbox) mod tests {
         async fn clearing_drops_the_account_with_its_source_and_a_changed_pull_request_or_kind_drops_it_too() {
             let fx = draft_pr().await;
             let build = built(&fx).await;
-            let edit = |account: Option<&str>, kind: Option<RunKind>, pr: Option<u64>| Edit::Run { instruction: None, base: None, clone_path: None, kind, name: None, pr, allow_push: None, report: None, plan: None, build_account: account.map(Into::into), project: None };
+            let edit = |account: Option<&str>, kind: Option<RunKind>, pr: Option<u64>| Edit::Run { instruction: None, base: None, clone_path: None, kind, name: None, pr, allow_push: None, plan: None, build_account: account.map(Into::into), project: None };
             let draft = || async { fx.core.draft_run(review_from(&fx, &build), Some(fx.item("CA-1"))).await.unwrap() };
 
             let p = draft().await;
@@ -2043,10 +2020,10 @@ pub(in crate::inbox) mod tests {
         async fn editing_a_draft_into_a_build_turns_push_on_and_out_of_one_turns_it_off() {
             let fx = draft_pr().await;
             let p = fx.core.draft_run(RunSpec { instruction: String::new(), ..next_spec(&fx) }, Some(fx.item("CA-1"))).await.unwrap();
-            let kind = |k| Edit::Run { instruction: None, base: None, clone_path: None, kind: Some(k), name: None, pr: None, allow_push: None, report: None, plan: None, build_account: None, project: None };
+            let kind = |k| Edit::Run { instruction: None, base: None, clone_path: None, kind: Some(k), name: None, pr: None, allow_push: None, plan: None, build_account: None, project: None };
             let build = spec_in(&fx.core.edit_proposal(&p.id, &kind(RunKind::Build)).await.unwrap());
             assert!(build.allow_push && build.kind == RunKind::Build);
-            let off = Edit::Run { instruction: None, base: None, clone_path: None, kind: None, name: None, pr: None, allow_push: Some(false), report: None, plan: None, build_account: None, project: None };
+            let off = Edit::Run { instruction: None, base: None, clone_path: None, kind: None, name: None, pr: None, allow_push: Some(false), plan: None, build_account: None, project: None };
             assert!(!spec_in(&fx.core.edit_proposal(&p.id, &off).await.unwrap()).allow_push, "the person can turn it off");
             let back = spec_in(&fx.core.edit_proposal(&p.id, &kind(RunKind::Verify)).await.unwrap());
             assert!(!back.allow_push);

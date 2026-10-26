@@ -110,12 +110,12 @@ async fn stopping_a_workstream_holds_it_and_stops_only_its_stoppable_runs() {
     assert_eq!(stops, expected);
     assert_eq!((rig.get(&first).await.state, rig.get(&second).await.state), (RunState::Stopped, RunState::Stopped));
     assert_eq!(rig.get(&outside).await.state, RunState::Working, "a run outside the workstream goes on");
-    assert_eq!(rig.get(&queued).await.state, RunState::Queued, "a queued one is left for the hold to keep");
+    assert_eq!(rig.get(&queued).await.state, RunState::Queued, "a queued one is left for the pause to keep");
     let view = rig.fx.core.workstream(&rig.fx.scope, &ws).await.unwrap().unwrap();
-    assert_eq!(view.workstream.held_reason.as_deref(), Some("person"));
+    assert_eq!(view.workstream.paused_reason, Some(crate::domain::workstream::PauseReason::Person));
     let events = rig.fx.core.workstream_events(&rig.fx.scope, &ws).await.unwrap();
-    let held: Vec<_> = events.iter().filter(|e| e.action == "held").map(|e| (e.actor, e.detail.as_deref())).collect();
-    assert_eq!(held, [(Actor::Person, Some("person"))]);
+    let paused: Vec<_> = events.iter().filter(|e| e.action == "paused").map(|e| (e.actor, e.detail.as_deref())).collect();
+    assert_eq!(paused, [(Actor::Person, Some("person"))]);
     assert_eq!(rig.run_actions(&ws).await.iter().filter(|(a, _, _)| a == "run_stopped").count(), 2);
 
     assert_eq!(rig.svc.stop_workstream(&rig.fx.scope, &ws).await.unwrap(), StopAll::default(), "nothing is left to stop");
@@ -182,6 +182,16 @@ async fn stop_all_counts_what_it_could_not_stop_and_skips_finished_runs() {
 }
 
 #[tokio::test]
+async fn stop_all_records_each_stop_in_the_run_s_workstream_as_the_person_s() {
+    let rig = ready().await;
+    let (run, ws) = rig.launched_in_workstream(1).await;
+    rig.poll().await;
+    rig.svc.stop_all().await.unwrap();
+    assert_eq!(rig.get(&run).await.state, RunState::Stopped);
+    assert_eq!(rig.run_actions(&ws).await, [("run_stopped".to_string(), Some(run.id.clone()), None)]);
+}
+
+#[tokio::test]
 async fn stop_all_stops_the_runs_waiting_for_a_slot_so_none_takes_a_freed_one() {
     let rig = crate::runs::rig::ready_with(|s| s.with_cap(1)).await;
     let running = rig.launched(1).await;
@@ -206,13 +216,6 @@ async fn stop_all_stops_the_runs_waiting_for_a_slot_so_none_takes_a_freed_one() 
     assert_eq!(rig.cli.launches(), launches, "Stop all launched nothing");
     assert_eq!(rig.get(&plain).await.state, RunState::Queued, "a queued run not waiting for a slot doesn't start on its own, so it is left");
     assert!(rig.run_actions(&ws).await.iter().any(|(a, run, _)| a == "run_stopped" && run.as_deref() == Some(in_ws.id.as_str())));
-}
-
-#[tokio::test]
-async fn nothing_stops_when_agents_are_off() {
-    let (rig, run) = working().await;
-    let off = RunService::new(rig.fx.core.clone(), Arc::new(crate::runs::toolchain::SystemToolchain::default()), crate::runs::index::RunIndex::load(&tmp("off")), vec![], Arc::new(|_| {}));
-    assert!(off.stop(&run.id).await.is_err() && off.stop_all().await.is_err() && off.attach(&run.id).await.is_err() && off.disk(&run.id).await.is_err());
 }
 
 fn ids() -> (ShortId, PathBuf) {

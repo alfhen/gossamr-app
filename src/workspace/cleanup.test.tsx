@@ -1,4 +1,3 @@
-import { AUTOSTART_DEFAULTS } from "../types";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MockBackend } from "../backend/mock";
@@ -131,15 +130,15 @@ describe("the mock settings", () => {
     const live = backend.runs.list().filter((r) => ["working", "needsAnswer", "needsPermission", "systemBlocked", "launching"].includes(r.state)).length;
     const rows = async () => (await backend.runsPreflight(null)).rows.map((r) => r.text).join("|");
     expect(await rows()).toContain(`${live} of 6 agent slots in use (including ones waiting on you)`);
-    await backend.runsSetSettings({ maxRuns: 1, wallClockMinutes: 60, tokenCap: 0, terminal: "terminal", draftOnFinish: true, reportResult: false, autostart: AUTOSTART_DEFAULTS, managerTurnsPerDay: 40 });
+    await backend.runsSetSettings({ maxRuns: 1, wallClockMinutes: 60, tokenCap: 0, terminal: "terminal", draftOnFinish: true });
     expect(await rows()).toContain(`${live} of 1 agent slots are in use, including ones waiting on you. This one will wait for a slot and start when one finishes.`);
     expect((await backend.runsPreflight(null)).blocking).toBe(false);
   });
 
   it("clamps like the backend and returns what it kept", async () => {
     const backend = new MockBackend();
-    const saved = await backend.runsSetSettings({ maxRuns: 40, wallClockMinutes: -5, tokenCap: 2_500_000, terminal: "iTerm", draftOnFinish: false, reportResult: false, autostart: AUTOSTART_DEFAULTS, managerTurnsPerDay: 40 });
-    expect(saved).toEqual({ maxRuns: 6, wallClockMinutes: 0, tokenCap: 2_500_000, terminal: "iTerm", draftOnFinish: false, reportResult: false, autostart: AUTOSTART_DEFAULTS, managerTurnsPerDay: 40, notifications: "workstream", digestMinutes: 30 });
+    const saved = await backend.runsSetSettings({ maxRuns: 40, wallClockMinutes: -5, tokenCap: 2_500_000, terminal: "iTerm", draftOnFinish: false });
+    expect(saved).toEqual({ maxRuns: 6, wallClockMinutes: 0, tokenCap: 2_500_000, terminal: "iTerm", draftOnFinish: false, notifications: "workstream", digestMinutes: 30 });
     expect(await backend.runsSettings()).toEqual(saved);
   });
 });

@@ -1,21 +1,9 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
-import { advanceRuns, agentsHome, agentsSettled, askPip, backdateWorkstream, editTicket, expandAllNeeds, expandNeedsYou, expectToast, githubWrites, groupByState, heldBanner, holdAll, holdBySystem, homeComposer, homeRunCards, homeSettled, inlineStart, jiraWrites, manageSwitch, mockRuns, needOfKind, needRow, needsPane, needsYouCount, needsYouTray, openAgents, openApp, openPip, paneSettled as settled, peekSheet, peekTicket, pipConversation, pipPane, scriptNextRun, seedWorkstreamEvent, selectWorkstream, setBudget, startWorkstream, stepRail, still, surfacePullRequests, wakes, workstreamEvents, workstreamGroup, workstreamWeb, workstreamWebText, openNeedOfKind, groupOpen, needsStack } from "./support/app";
+import { pauseAtCeiling, agentsHome, askPip, expandNeedsYou, groupByState, homeSettled, jiraWrites, needRow, needsPane, needsYouCount, needsYouTray, openAgents, openApp, pipPane, selectWorkstream, startWorkstream, stepRail, openNeedOfKind, groupOpen, needsStack } from "./support/app";
 
-// Two product decisions (docs/needs-you.md): a hold the person chose is not a need, and the automatic budget is one unit,
-// "automatic steps", whose running out is a Decide question in Needs you with "Allow 5 more" and "Switch to Advise".
-// Then two more: Pip speaks up when a ticket is unclear (at intake, and as a hard stop after the triage), and a workstream
-// where work is happening but Jira hasn't heard grows a cobweb.
+// A few layout and keyboard scenarios of Pip home (docs/needs-you.md).
 
-const MANAGED = "runs=empty&prSurface=manual&wsManage=1&pipPace=1";
-
-const toast = (page: Page) => page.locator("[data-toast]");
-const undo = (page: Page) => toast(page).getByRole("button", { name: "Undo" });
-const homeButton = (page: Page) => page.locator("[data-rail]").getByRole("button", { name: /^Agents/ });
-const nextLine = (page: Page) => pipPane(page).locator("[data-next-step]");
-const setup = (page: Page) => page.getByRole("dialog", { name: "Start an agent" });
-const safety = (page: Page) => page.getByRole("dialog", { name: "Agents safety and settings" });
-const runCards = (page: Page, key: string) => pipPane(page).getByRole("article", { name: `Start an agent: ${key}` });
-const actions = async (page: Page, action: string) => (await workstreamEvents(page)).filter((e) => e.action === action);
+const SAMPLE = "runs=empty&prSurface=manual&pipPace=1";
 
 /** A workstream on CA-401, opened on Pip home. */
 async function workstreamOnHome(page: Page) {
@@ -25,548 +13,9 @@ async function workstreamOnHome(page: Page) {
   await expect(pipPane(page).locator("[data-pip-conversation]")).toHaveText(/^Workstream: CA-401 /);
 }
 
-/** Asks Pip for an investigation of CA-401, opens its draft past the one-time safety sheet and starts it, as the person does. */
-async function startInvestigation(page: Page, key = "CA-401") {
-  await settled(page);
-  await askPip(page, "investigate this");
-  await settled(page);
-  for (let attempt = 0; attempt < 2; attempt++) {
-    await runCards(page, key).last().getByRole("button", { name: "Review and start →" }).click();
-    await expect(setup(page).or(safety(page))).toBeVisible();
-    if (!(await safety(page).isVisible())) break;
-    await safety(page).getByRole("button", { name: "Close" }).click();
-  }
-  await setup(page).getByRole("button", { name: "Start agent" }).click();
-  await expect(setup(page)).toHaveCount(0);
-}
-
-const newest = async (page: Page, kind: string) => (await mockRuns(page)).find((r) => r.kind === kind) ?? null;
-
-/** Moves run `id` on to done once Pip has answered, so each finish gets a wake turn of its own. */
-async function finish(page: Page, id: string) {
-  await settled(page);
-  for (let i = 0; i < 3; i++) await advanceRuns(page, 1, id);
-  await expect.poll(async () => (await mockRuns(page)).find((r) => r.id === id)?.state).toBe("done");
-}
-
-/** Waits for the next run of `kind` to have been started by a rule and returns it. */
-async function started(page: Page, kind: string, after: string | null = null) {
-  await expect.poll(async () => (await newest(page, kind))?.id ?? null).not.toBe(after);
-  return (await newest(page, kind))!;
-}
-
-/** The person approves the Gossamr Plan description draft on CA-401 from its peek, as written. */
-async function approvePlan(page: Page) {
-  await page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "All projects" }).click();
-  await peekTicket(page, "CA-401");
-  const draft = peekSheet(page).getByRole("article", { name: "Update the description of CA-401" }).filter({ hasText: "Gossamr Plan" });
-  await draft.getByRole("button", { name: "Update description" }).click();
-  await expect(draft).toHaveCount(0);
-  await expect(pipConversation(page)).toHaveText(/^Workstream: CA-401 /);
-}
-
-/** Investigation, triage and plan, with the plan approved: returns the build the rules started. */
-async function toBuild(page: Page) {
-  await startInvestigation(page);
-  await finish(page, (await newest(page, "investigate"))!.id);
-  await finish(page, (await started(page, "triage")).id);
-  await finish(page, (await started(page, "plan")).id);
-  await approvePlan(page);
-  return started(page, "build");
-}
-
-/** A workstream on CA-401 allowed `steps` automatic steps, which the investigation and its triage use up: held for its budget. */
-/** The toasts, the open pane, the hold and the audit, as text: what a failed Allow 5 more leaves behind for its log. */
-async function budgetState(page: Page): Promise<string> {
-  const toasts = await page.locator("[data-toast]").allInnerTexts();
-  const pane = await needsPane(page).innerText({ timeout: 1_000 }).catch(() => "(no pane)");
-  const held = await pipPane(page).locator("[data-held-banner]").getAttribute("data-held-banner", { timeout: 1_000 }).catch(() => null);
-  const events = (await workstreamEvents(page)).map((e) => `${e.actor} ${e.action} ${e.detail ?? ""}`.trim());
-  return [`toasts: ${JSON.stringify(toasts)}`, `held banner: ${held ?? "none"}`, `pane: ${JSON.stringify(pane)}`, `audit: ${JSON.stringify(events)}`].join("\n");
-}
-
-/** Opens the budget question from the Next line and waits for the pane to stop moving, so a click lands on its button. */
-async function openBudgetNeed(page: Page) {
-  await nextLine(page).getByRole("button").click();
-  await still(needsPane(page).getByRole("button", { name: "Allow 5 more" }));
-}
-
-async function spent(page: Page, steps = 2) {
-  await openApp(page, MANAGED);
-  await startWorkstream(page, "CA-401");
-  await setBudget(page, (await workstreamEvents(page))[0].workstreamId, { autoTurns: steps });
-  await startInvestigation(page);
-  await finish(page, (await newest(page, "investigate"))!.id);
-  await finish(page, (await started(page, "triage")).id);
-  await expect(heldBanner(page)).toHaveAttribute("data-held-banner", "budget");
-}
-
-test.describe("B2: a hold the person chose is not a need", () => {
-  test("Hold: no need, no count, 'Held by you' with Resume in the header, and Undo still lifts it", async ({ page }) => {
-    await openApp(page, "wsManage=1&runs=empty");
-    await workstreamOnHome(page);
-    await expect(needsYouCount(page)).toHaveText("0");
-    const banner = pipPane(page).locator("[data-held-banner]");
-
-    await agentsHome(page).getByRole("button", { name: "Hold", exact: true }).click();
-    await expect(banner).toContainText("Held by you");
-    await expect(banner).toContainText("You chose this, so the hold itself is not in Needs you.");
-    await expect(banner.getByRole("button", { name: "Resume" })).toBeVisible();
-    // Nothing waits on the person: no row, no count anywhere, and the list says so.
-    await expect(needOfKind(page, "hold")).toHaveCount(0);
-    await expect(needsYouCount(page)).toHaveText("0");
-    await expect(needsYouTray(page)).toContainText("Nothing needs you.");
-    await expect(homeButton(page)).toHaveAccessibleName("Agents");
-    await expect(workstreamGroup(page, "CA-401").locator("[data-status]")).toHaveText("Held by you");
-    await expect(workstreamGroup(page, "CA-401").locator('[data-status="needs-you"]')).toHaveCount(0);
-
-    // Undo of the hold works as before.
-    await expectToast(page, "Held CA-401.");
-    await undo(page).click();
-    await expect(banner).toHaveCount(0);
-    expect((await workstreamEvents(page)).map((e) => e.action).slice(-2)).toEqual(["held", "undone"]);
-
-    // Resume is the way back from a hold that stands.
-    await agentsHome(page).getByRole("button", { name: "Hold", exact: true }).click();
-    await expect(banner).toBeVisible();
-    await banner.getByRole("button", { name: "Resume" }).click();
-    await expect(banner).toHaveCount(0);
-    await expect(needsYouCount(page)).toHaveText("0");
-  });
-
-  test("Hold all is the person's own too: 'Held by you (Hold all)', not counted", async ({ page }) => {
-    await openApp(page, "wsManage=1&runs=empty");
-    await workstreamOnHome(page);
-    await holdAll(page, "button");
-    const banner = pipPane(page).locator("[data-held-banner]");
-    await expect(banner).toContainText("Held by you (Hold all)");
-    await expect(banner.getByRole("button", { name: "Resume" })).toBeVisible();
-    await expect(needOfKind(page, "hold")).toHaveCount(0);
-    await expect(needsYouCount(page)).toHaveText("0");
-    await expect(homeButton(page)).toHaveAccessibleName("Agents");
-  });
-
-  test("a hold the system makes stays a need: it is counted, ranks in Unblock and opens Resume", async ({ page }) => {
-    await openApp(page, "wsManage=1&runs=empty");
-    await workstreamOnHome(page);
-    await holdBySystem(page, "CA-401", "restart");
-    const held = needOfKind(page, "hold");
-    await expect(held).toHaveCount(1);
-    await expect(held).toContainText("Held after a restart");
-    await expect(needsYouCount(page)).toHaveText("1");
-    await expect(homeButton(page)).toHaveAccessibleName("Agents, 1 thing needs you");
-    await held.click();
-    await expect(needsPane(page)).toHaveAttribute("data-kind", "hold");
-    await needsPane(page).locator("[data-held-banner]").getByRole("button", { name: "Resume" }).click();
-    await expect(needsYouCount(page)).toHaveText("0");
-  });
-
-  test("the system's other holds, a tripwire and the quota, are needs too", async ({ page }) => {
-    await openApp(page, "wsManage=1&runs=empty");
-    await workstreamOnHome(page);
-    await holdBySystem(page, "CA-401", "tripwire:repeated_failure");
-    await expect(needOfKind(page, "hold")).toContainText("Held: the same step failed twice");
-    await expect(needsYouCount(page)).toHaveText("1");
-  });
-});
-
-test.describe("B3: one budget unit, and running out becomes a question", () => {
-  test("a managed workstream counts in 'automatic steps' only, never turns or wakes", async ({ page }) => {
-    await openApp(page, MANAGED);
-    await startWorkstream(page, "CA-401");
-    const controls = pipPane(page).locator("[data-workstream-controls]");
-    await expect(controls.locator("[data-steps-left]")).toHaveText("11 of 11 automatic steps left");
-    await expect(controls).not.toContainText(/turns|wakes/i);
-    // Near the limit the warning says it in the same unit, for the counter nearer its limit (here the wakes: 4 of 5).
-    await setBudget(page, (await workstreamEvents(page))[0].workstreamId, { wakes: 5 });
-    await startInvestigation(page);
-    const triage = await finish(page, (await newest(page, "investigate"))!.id).then(() => started(page, "triage"));
-    await finish(page, triage.id);
-    await finish(page, (await started(page, "plan")).id);
-    await expect(wakes(page)).toHaveCount(3);
-    await startInvestigation(page);
-    await finish(page, (await newest(page, "investigate"))!.id);
-    await expect(wakes(page)).toHaveCount(4);
-    await expect(pipPane(page).locator('[data-budget="amber"]')).toHaveText("4 of 5 automatic steps used");
-    await expect(controls).not.toContainText(/turns|wakes/i);
-  });
-
-  test("automatic fix rounds cost no step: a chain through two rounds and the exhausted review uses 5 of 11", async ({ page }) => {
-    test.setTimeout(120_000);
-    await openApp(page, MANAGED);
-    await startWorkstream(page, "CA-401");
-    const build = await toBuild(page);
-    let review: string | null = null;
-    for (let round = 0; round < 3; round++) {
-      await finish(page, build.id);
-      await surfacePullRequests(page);
-      review = (await started(page, "review", review)).id;
-      await finish(page, review);
-    }
-    expect(await actions(page, "fix_round_sent")).toHaveLength(2);
-    await expect.poll(async () => (await actions(page, "fix_rounds_exhausted")).length).toBe(1);
-    // Pip heard of all nine runs finishing, but only the investigation, triage, plan, the build's first finish and the last
-    // review were steps: the reviews that sent a round and the builds that came back from one are free.
-    await expect(wakes(page)).toHaveCount(9);
-    await expect(pipPane(page).locator("[data-steps-left]")).toHaveText("6 of 11 automatic steps left");
-    expect(await actions(page, "held")).toEqual([]);
-    expect(await actions(page, "budget")).toEqual([]);
-  });
-
-  test("running out holds the workstream and asks in Needs you: a Decide need with Allow 5 more and Switch to Advise", async ({ page }) => {
-    await spent(page);
-    const title = "CA-401 used its 2 automatic steps";
-    // The header says so in steps, and the Next line points at the question.
-    await expect(heldBanner(page)).toContainText("Held: automatic steps used up");
-    await expect(heldBanner(page)).not.toContainText(/turns|wakes|write to Pip/);
-    await expect(nextLine(page)).toHaveAttribute("data-next-step", "held");
-    await expect(nextLine(page)).toHaveText("Next: the automatic steps are used up. Choose in Needs you: allow 5 more, or switch to Advise.");
-    expect(await actions(page, "held").then((a) => a.map((e) => e.detail))).toEqual(["budget"]);
-
-    // The Next line opens the need on Pip home.
-    await nextLine(page).getByRole("button").click();
-    const pane = needsPane(page);
-    await expect(pane).toHaveAttribute("data-kind", "budget");
-    await expect(pane).toContainText(title);
-    await expect(pane).toContainText("Pip and the automatic steps are paused until you decide.");
-    await expect(pane).toContainText("2 of 2 automatic steps used");
-    await expect(pane.getByRole("button", { name: "Allow 5 more" })).toBeVisible();
-    await expect(pane.getByRole("button", { name: "Switch to Advise" })).toBeVisible();
-    await expect(pane).not.toContainText(/turns|wakes/i);
-    // It is a Decide need, counted once.
-    await expandNeedsYou(page, "CA-401");
-    await expect(needRow(page, title)).toHaveAttribute("data-kind", "budget");
-    await expect(needRow(page, title)).toHaveAttribute("data-group", "decide");
-    await expect(needsStack(page).locator("[data-needs-you-chip]").first()).toHaveText("Decide");
-    await expect(needsYouCount(page)).toHaveText(/^[1-9]\d*$/);
-  });
-
-  test("Allow 5 more raises the allowance by 5, resumes the workstream and writes the person's audit line", async ({ page }) => {
-    await spent(page);
-    await openBudgetNeed(page);
-    const before = Number(await needsYouCount(page).innerText());
-    await needsPane(page).getByRole("button", { name: "Allow 5 more" }).click();
-
-    // If this fails in CI, the log says what the page held, since CI's traces can't be read from here.
-    await expect(needOfKind(page, "budget"))
-      .toHaveCount(0)
-      .catch(async (e: Error) => {
-        throw new Error(`${e.message}\n\nWhat the page held when the budget need stayed:\n${await budgetState(page)}`);
-      });
-    await expect(pipPane(page).locator("[data-held-banner]")).toHaveCount(0);
-    await expect(needsYouCount(page)).toHaveText(String(before - 1));
-    const events = await workstreamEvents(page);
-    expect(events.filter((e) => e.action === "steps_allowed").map((e) => [e.actor, e.detail])).toEqual([["person", "5"]]);
-    expect(events.filter((e) => e.action === "resumed").map((e) => [e.actor, e.detail])).toEqual([["person", "budget"]]);
-    // What was spent stays: 2 of 7 now, 5 left.
-    await expect(pipPane(page).locator("[data-steps-left]")).toHaveText("5 of 7 automatic steps left");
-    expect(await jiraWrites(page)).toEqual([]);
-
-    // The plan the triage queued goes on, and its finish wakes Pip again.
-    const plan = await started(page, "plan");
-    await settled(page);
-    await finish(page, plan.id);
-    await expect.poll(async () => (await actions(page, "wake")).map((e) => e.runId)).toContain(plan.id);
-  });
-
-  test("Switch to Advise answers the question without lifting the hold or allowing anything", async ({ page }) => {
-    await spent(page);
-    await openBudgetNeed(page);
-    await needsPane(page).getByRole("button", { name: "Switch to Advise" }).click();
-    await expect(needOfKind(page, "budget")).toHaveCount(0);
-    expect((await actions(page, "mode_set")).map((e) => [e.actor, e.detail]).pop()).toEqual(["person", "advise"]);
-    // The hold stays for Resume, which the header offers; nothing was allowed.
-    await expect(pipPane(page).locator("[data-held-banner]")).toContainText("Held: automatic steps used up");
-    expect(await actions(page, "steps_allowed")).toEqual([]);
-    await expectToast(page, "CA-401 to Advise");
-  });
-
-  test("the header's banner for a budget hold offers Allow 5 more and Switch to Advise, never Resume", async ({ page }) => {
-    await spent(page);
-    const banner = heldBanner(page);
-    await expect(banner.getByRole("button", { name: "Resume" })).toHaveCount(0);
-    await expect(banner.getByRole("button", { name: "Switch to Advise" })).toBeVisible();
-    await banner.getByRole("button", { name: "Allow 5 more" }).click();
-    await expect(heldBanner(page)).toHaveCount(0);
-    const events = await workstreamEvents(page);
-    expect(events.filter((e) => e.action === "steps_allowed").map((e) => [e.actor, e.detail])).toEqual([["person", "5"]]);
-    expect(events.filter((e) => e.action === "budget_reset")).toEqual([]);
-    await expect(pipPane(page).locator("[data-steps-left]")).toHaveText("5 of 7 automatic steps left");
-  });
-
-  test("the banner's Switch to Advise answers the question, and the hold it leaves is lifted with Resume", async ({ page }) => {
-    await spent(page);
-    await heldBanner(page).getByRole("button", { name: "Switch to Advise" }).click();
-    await expect(needOfKind(page, "budget")).toHaveCount(0);
-    await expect(heldBanner(page).getByRole("button", { name: "Allow 5 more" })).toHaveCount(0);
-    await expect(heldBanner(page).getByRole("button", { name: "Resume" })).toBeVisible();
-  });
-
-  test("Switch to Advise, Resume and back to Manage asks Allow 5 more again, with the spent count unchanged", async ({ page }) => {
-    await spent(page);
-    const left = pipPane(page).locator("[data-steps-left]");
-    const before = await left.innerText();
-    await heldBanner(page).getByRole("button", { name: "Switch to Advise" }).click();
-    await expect(needOfKind(page, "budget")).toHaveCount(0);
-    await heldBanner(page).getByRole("button", { name: "Resume" }).click();
-    await expect(heldBanner(page)).toHaveCount(0);
-    expect(await actions(page, "budget_reset")).toEqual([]);
-
-    // Manage again: nothing was granted, so the question is back.
-    await pipPane(page).getByRole("switch", { name: "Manage this workstream" }).click();
-    await expect(heldBanner(page)).toHaveAttribute("data-held-banner", "budget");
-    await expect(heldBanner(page).getByRole("button", { name: "Allow 5 more" })).toBeVisible();
-    await expect(left).toHaveText(before);
-    await nextLine(page).getByRole("button").click();
-    await expect(needsPane(page)).toHaveAttribute("data-kind", "budget");
-    await expect(needsPane(page).getByRole("button", { name: "Allow 5 more" })).toBeVisible();
-    expect((await actions(page, "held")).map((e) => [e.actor, e.detail]).pop()).toEqual(["supervisor", "budget"]);
-    expect(await actions(page, "steps_allowed")).toEqual([]);
-  });
-
-  test("a double click on Allow 5 more allows once and shows no error", async ({ page }) => {
-    await spent(page);
-    await openBudgetNeed(page);
-    await needsPane(page).getByRole("button", { name: "Allow 5 more" }).dblclick();
-    await expect(needOfKind(page, "budget")).toHaveCount(0);
-    expect((await actions(page, "steps_allowed")).length).toBe(1);
-    await expect(toast(page).filter({ hasText: /Couldn't/ })).toHaveCount(0);
-  });
-});
-
-// Pip speaks up when a ticket is unclear.
-
-const VAGUE = "CA-408";
-const VAGUE_WORDS = "CA-408 may be unclear: it has a very short description, doesn't say what done looks like, doesn't say what's in or out of scope, and doesn't say who is waiting on it.";
-/** A description that says what done looks like, what is in scope and who is waiting, which Pip's check reads as clear. */
-const CLEAR_WORDS = "The retry should cap at five attempts. Only the webhook handler is in scope. The payments team is waiting on it. Done when a provider outage no longer produces a retry burst.";
-
-/** A managed workstream on the sample's vague ticket, its investigation and the triage a rule started after it finished: the triage says it is not ready to plan. Left on Pip home, on its row. */
-async function unclear(page: Page) {
-  await openApp(page, MANAGED);
-  await startWorkstream(page, VAGUE);
-  await startInvestigation(page, VAGUE);
-  await finish(page, (await newest(page, "investigate"))!.id);
-  await finish(page, (await started(page, "triage")).id);
-  await openAgents(page);
-  await selectWorkstream(page, VAGUE);
-  await expect(needOfKind(page, "readiness")).toBeVisible();
-}
-
-test.describe("D1: Pip speaks up when a ticket is unclear", () => {
-  test("its first turn in a workstream on a vague ticket says plainly what is missing, and a clear ticket gets no such line", async ({ page }) => {
-    await openApp(page, MANAGED);
-    await startWorkstream(page, VAGUE);
-    await settled(page);
-    await askPip(page, "where do we stand?");
-    await settled(page);
-    await expect(pipPane(page)).toContainText(VAGUE_WORDS);
-    // Only its first turn does: the second doesn't say it again. (The notice above the conversation says it once more, in its own box, the status pill's detail a third time, and the pill's hint for screen readers, which explains the phrase, a fourth. The notice's status line stays empty until its line changes, so it is not read out again on open.)
-    await askPip(page, "where do we stand now?");
-    await settled(page);
-    expect(((await pipPane(page).innerText()).match(/may be unclear/g) ?? []).length).toBe(4);
-    await expect(pipPane(page).locator("[data-clarity-notice]")).toContainText("CA-408 may be unclear");
-
-    // A ticket whose description says what done looks like, what is in scope and who is waiting is not remarked on.
-    await editTicket(page, "DEVOPS-471", { description: CLEAR_WORDS });
-    await startWorkstream(page, "DEVOPS-471");
-    await settled(page);
-    await askPip(page, "where do we stand?");
-    await settled(page);
-    await expect(pipPane(page)).not.toContainText("DEVOPS-471 may be unclear");
-  });
-
-  test("a triage that says the ticket isn't ready stops the plan: a Decide need lists the questions, with the three choices", async ({ page }) => {
-    await unclear(page);
-    // Nothing planned, though the triage recommended a plan: the rule is gated on the verdict.
-    expect(await newest(page, "plan")).toBeNull();
-    expect((await actions(page, "autostart")).map((e) => e.detail)).toEqual([expect.stringMatching(/^investigate_triage after /)]);
-
-    const need = needRow(page, "isn't clear enough to plan");
-    // Open by default, the group's row is its name and count; the need under it says what it is.
-    await expect(need).toContainText("CA-408 isn't clear enough to plan");
-    await expect(need).toHaveAttribute("data-group", "decide");
-    await expect(needsStack(page).locator("[data-needs-you-chip]").first()).toHaveText("Decide");
-    await need.click();
-    const pane = needsPane(page);
-    await expect(pane).toHaveAttribute("data-kind", "readiness");
-    await expect(pane).toContainText("CA-408 isn't clear enough to plan");
-    const questions = pane.locator("[data-readiness-questions] li");
-    await expect(questions).toHaveCount(4);
-    await expect(questions.nth(0)).toContainText("What does done look like for CA-408?");
-    await expect(pane).toContainText("No plan starts until you choose.");
-    for (const name of ["Ask the reporter", "I'll answer", "Plan anyway"]) await expect(pane.getByRole("button", { name })).toBeVisible();
-    // The Next line says what the workstream waits on.
-    await expect(agentsHome(page).locator("[data-next-step]")).toContainText("waiting on you.");
-    await expect(agentsHome(page).locator("[data-next-step]")).toContainText("What does done look like for CA-408?");
-    expect(await jiraWrites(page)).toEqual([]);
-  });
-
-  test("Ask the reporter drafts a comment to the reporter for approval: nothing is posted before it, and the need is answered", async ({ page }) => {
-    await unclear(page);
-    await openNeedOfKind(page, "readiness");
-    await needsPane(page).getByRole("button", { name: "Ask the reporter" }).click();
-    await expectToast(page, "Here is the comment to the reporter. Nothing is posted until you press Post comment.");
-    await expect(needOfKind(page, "readiness")).toHaveCount(0);
-    expect(await jiraWrites(page)).toEqual([]);
-    expect(await newest(page, "plan")).toBeNull();
-    const asked = (await actions(page, "readiness_asked"))[0];
-    expect([asked.actor, asked.runId]).toEqual(["person", (await newest(page, "triage"))!.id]);
-
-    // The draft is an ordinary one: Gossamr's, addressed to the reporter, listing the questions, waiting in Needs you.
-    await expandNeedsYou(page, VAGUE);
-    const row = needRow(page, "Questions for the reporter");
-    await expect(row).toHaveCount(1);
-    await expect(row).toHaveAttribute("data-group", "approve");
-    await row.click();
-    await expect(needsPane(page)).toContainText("Gossamr drafted a comment to the reporter of CA-408 from R2's open questions; it is posted only when you approve it.");
-    const draft = needsPane(page).getByRole("article", { name: "Comment on CA-408" });
-    await expect(draft.locator('[data-created-by="gossamr"]')).toHaveText("Drafted by Gossamr");
-    await expect(draft).toContainText("@Mette Lund");
-    await expect(draft).toContainText("A few things need clearing up to make this ticket clear to work on");
-    await expect(draft).toContainText("What does done look like for CA-408?");
-    await expect(draft).toContainText("Who asked for this, and who is waiting on it?");
-    expect(await jiraWrites(page)).toEqual([]);
-    // Approving it is the one thing that posts, and it goes to the ticket whole.
-    await draft.getByRole("button", { name: "Post comment" }).click();
-    await expect.poll(async () => (await jiraWrites(page)).map((w) => [w.type, w.key])).toEqual([["comment", VAGUE]]);
-  });
-
-  test("I'll answer opens the workstream's conversation with the questions quoted in the composer, and starts nothing", async ({ page }) => {
-    await unclear(page);
-    await openNeedOfKind(page, "readiness");
-    await needsPane(page).getByRole("button", { name: "I'll answer" }).click();
-    await expect(needOfKind(page, "readiness")).toHaveCount(0);
-    await expect(homeComposer(page)).toHaveValue(/^R2's open questions about CA-408: “What does done look like for CA-408\?/);
-    await expect(homeComposer(page)).toHaveValue(/“What is in scope and what is out\?” · “Who asked for this, and who is waiting on it\?”\. My answers: $/);
-    await expect(homeComposer(page)).toBeFocused();
-    expect((await actions(page, "readiness_answered")).map((e) => e.actor)).toEqual(["person"]);
-    expect(await newest(page, "plan")).toBeNull();
-    expect(await jiraWrites(page)).toEqual([]);
-  });
-
-  test("Plan anyway records the person's override and the plan starts as the rule would have; under a hold it waits for Resume", async ({ page }) => {
-    await unclear(page);
-    // A hold is respected: the override is on record, and the plan starts only once the workstream is set going.
-    await agentsHome(page).getByRole("button", { name: "Hold", exact: true }).click();
-    await expect(pipPane(page).locator("[data-held-banner]")).toContainText("Held by you");
-    await openNeedOfKind(page, "readiness");
-    await needsPane(page).getByRole("button", { name: "Plan anyway" }).click();
-    await expect(needOfKind(page, "readiness")).toHaveCount(0);
-    const line = (await actions(page, "readiness_overridden"))[0];
-    expect([line.actor, line.runId]).toEqual(["person", (await newest(page, "triage"))!.id]);
-    await expect.poll(async () => await newest(page, "plan")).toBeNull();
-
-    await pipPane(page).locator("[data-held-banner]").getByRole("button", { name: "Resume" }).click();
-    const plan = await started(page, "plan");
-    const triage = (await newest(page, "triage"))!;
-    expect((await actions(page, "autostart")).map((e) => e.detail)).toContain(`triage_plan after ${triage.id}`);
-    expect(plan.id).toBeTruthy();
-    expect(await jiraWrites(page)).toEqual([]);
-  });
-
-  test("a later triage that says ready resolves the need, and the plan starts as it always did", async ({ page }) => {
-    await unclear(page);
-    const first = (await newest(page, "triage"))!;
-    // The person asks for another triage (Pip drafts it from the investigation); it finishes saying the ticket is ready.
-    await scriptNextRun(page, "triage", { ready: true });
-    await homeComposer(page).fill("triage it");
-    await homeComposer(page).press("Enter");
-    await homeSettled(page);
-    const review = await inlineStart(page, homeRunCards(page, VAGUE).last());
-    await review.getByRole("button", { name: "Start agent" }).click();
-    const again = await started(page, "triage", first.id);
-    await finish(page, again.id);
-    await expect(needOfKind(page, "readiness")).toHaveCount(0);
-    const plan = await started(page, "plan");
-    expect(plan.id).toBeTruthy();
-  });
-});
-
-
-// A workstream where work is happening but Jira hasn't heard grows a cobweb.
-
-const ago = (days: number) => new Date(Date.now() - days * 86_400_000).toISOString();
-
-test.describe("D2: a workstream where work is happening but Jira hasn't heard", () => {
-  test("grows a cobweb on its row only once agents or Pip worked since the person's last post, says so in words, and is never a need", async ({ page }) => {
-    test.setTimeout(90_000);
-    await openApp(page, MANAGED);
-    // CA-403: quiet and nothing happens. CA-402: an agent starts. CA-401: Pip will take a turn.
-    await startWorkstream(page, "CA-403");
-    await startWorkstream(page, "CA-402");
-    await startInvestigation(page, "CA-402");
-    // The agent started working: a run queued is not one that started.
-    await advanceRuns(page, 2, (await newest(page, "investigate"))!.id);
-    await startWorkstream(page, "CA-401");
-    // The last post to Jira was 6 days ago in two of them; CA-403 never posted and opened 6 days ago.
-    await seedWorkstreamEvent(page, "CA-402", { actor: "person", action: "review_posted", at: ago(6) });
-    await seedWorkstreamEvent(page, "CA-401", { actor: "person", action: "review_posted", at: ago(6) });
-    await backdateWorkstream(page, "CA-403", 6);
-    await openAgents(page);
-
-    // Six days without a word to Jira, but nothing happened in CA-403 or CA-401 since: no cobweb. The ticket list's own covers a ticket nobody touches.
-    for (const key of ["CA-403", "CA-401"]) {
-      await expect(workstreamGroup(page, key)).toBeVisible();
-      await expect(workstreamWeb(page, key)).toHaveCount(0);
-      await expect(workstreamGroup(page, key)).not.toHaveAttribute("data-wither", /.+/);
-    }
-    // An agent started in CA-402 (and Pip answered the request): work since the post, so its row has the web.
-    const row = workstreamGroup(page, "CA-402");
-    const words = /^No Jira update for 6 days \(1 run and 1 Pip turn since\)$/;
-    await expect(workstreamWeb(page, "CA-402")).toHaveCount(1);
-    await expect(row).toHaveAttribute("data-wither", "3");
-    await expect(row.locator("[data-workstream-wither]")).toHaveAttribute("title", words);
-    await expect(workstreamWebText(page, "CA-402")).toHaveText(words);
-    // A screen reader gets the same words with the row; the drawing is hidden from it.
-    await expect(workstreamWeb(page, "CA-402")).toHaveAttribute("aria-hidden", "true");
-
-    // Pip taking a turn in CA-401 is work too: its row grows one, counting that turn.
-    await selectWorkstream(page, "CA-401");
-    await homeComposer(page).fill("where do we stand?");
-    await homeComposer(page).press("Enter");
-    await homeSettled(page);
-    await expect(workstreamWeb(page, "CA-401")).toHaveCount(1);
-    await expect(workstreamWebText(page, "CA-401")).toHaveText("No Jira update for 6 days (1 Pip turn since)");
-    await expect(workstreamWeb(page, "CA-403")).toHaveCount(0);
-
-    // It is a look, not a duty: no need, no count anywhere.
-    await expect(needsYouCount(page)).toHaveText("0");
-    await expect(needsYouTray(page)).toContainText("Nothing needs you.");
-    await expect(homeButton(page)).toHaveAccessibleName("Agents");
-    await expect(needOfKind(page, "readiness")).toHaveCount(0);
-  });
-
-  test("starts from when the workstream opened until the person posts, and a post to Jira clears it", async ({ page }) => {
-    test.setTimeout(90_000);
-    await openApp(page, MANAGED);
-    await startWorkstream(page, "CA-402");
-    await backdateWorkstream(page, "CA-402", 8);
-    await startInvestigation(page, "CA-402");
-    await finish(page, (await newest(page, "investigate"))!.id);
-    await openAgents(page);
-    const web = workstreamWeb(page, "CA-402");
-    // No post yet: the clock runs from when it opened, 8 days ago.
-    await expect(web).toHaveCount(1);
-    await expect(workstreamGroup(page, "CA-402")).toHaveAttribute("data-wither", "4");
-    await expect(workstreamWebText(page, "CA-402")).toHaveText(/^No Jira update for 8 days \(\d+ runs? and \d+ Pip turns? since\)$/);
-
-    // The person approves the comment the investigation drafted: that is a post, and the clock starts again.
-    await selectWorkstream(page, "CA-402");
-    await openNeedOfKind(page, "draft");
-    await needsPane(page).getByRole("button", { name: "Post comment" }).click();
-    await expect.poll(async () => (await jiraWrites(page)).map((w) => [w.type, w.key])).toEqual([["comment", "CA-402"]]);
-    await expect(web).toHaveCount(0);
-    // Nothing waits on the person in it now, so the Needs you filter that opened the draft no longer lists it: All does.
-    await agentsHome(page).locator('[data-chip="all"]').click();
-    await expect(workstreamGroup(page, "CA-402")).not.toHaveAttribute("data-wither", /.+/);
-    await expect(workstreamWebText(page, "CA-402")).toHaveCount(0);
-  });
-});
-
-// Layout and explanations (dogfood B1, B4, B6, B10): Needs you is Pip home's main left column and the screen is named; a
+// Layout and explanations (dogfood B1, B4, B6): Needs you is Pip home's main left column and the screen is named; a
 // decision shows once, in the pane, which scrolls alone and never hides text behind its action bar; Runs across every
-// workstream stays in the timeline; and the mode switch and the first permission prompt explain themselves.
+// workstream stays in the timeline.
 
 const home = (page: Page) => agentsHome(page);
 const boxOf = async (loc: Locator) => (await loc.boundingBox())!;
@@ -574,7 +23,7 @@ const boxOf = async (loc: Locator) => (await loc.boundingBox())!;
 test.describe("B4: a decision shows once", () => {
   test("the pane is the only scroller in its place, and the draft's action bar is in the flow, never over the text", async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
-    await openApp(page, "runs=kinds&prSurface=manual&wsManage=1");
+    await openApp(page, "runs=kinds&prSurface=manual");
     await openAgents(page);
     await groupOpen(page, "General").click();
     const pane = needsPane(page);
@@ -598,17 +47,17 @@ test.describe("B4: a decision shows once", () => {
     expect(b.y + b.height).toBeLessThanOrEqual(p.y + p.height + 1);
   });
 
-  test("a hold the system made is the pane's banner alone, not the rail's as well, and the header stays in view", async ({ page }) => {
-    await openApp(page, "wsManage=1&runs=empty");
+  test("a pause is the pane's banner alone, not the rail's as well", async ({ page }) => {
+    await openApp(page, "runs=empty");
     await workstreamOnHome(page);
     // The sheet holds both: the rail's banner is the one outside the Needs you section.
-    const railBanner = stepRail(page).locator("[data-held-banner]:not([data-needs-pane] *)");
-    await holdBySystem(page, "CA-401", "restart");
-    await expect(home(page).locator("[data-held-banner]")).toHaveCount(1);
+    const railBanner = stepRail(page).locator("[data-paused-banner]:not([data-needs-pane] *)");
+    await pauseAtCeiling(page, "CA-401");
+    await expect(home(page).locator("[data-paused-banner]")).toHaveCount(1);
     await expect(railBanner).toHaveCount(1);
-    await openNeedOfKind(page, "hold");
-    await expect(needsPane(page).locator("[data-held-banner]")).toHaveCount(1);
-    await expect(home(page).locator("[data-held-banner]")).toHaveCount(1);
+    await openNeedOfKind(page, "paused");
+    await expect(needsPane(page).locator("[data-paused-banner]")).toHaveCount(1);
+    await expect(home(page).locator("[data-paused-banner]")).toHaveCount(1);
     await expect(railBanner).toHaveCount(0);
     // Closed, the rail shows it again.
     await page.keyboard.press("Escape");
@@ -616,86 +65,14 @@ test.describe("B4: a decision shows once", () => {
   });
 });
 
-test.describe("B10: the switch and the first permission prompt explain themselves", () => {
-  test("a line under the Manage switch says what the mode does, and changes with it, on Pip home's header and the Pip pane's", async ({ page }) => {
-    await openApp(page, "wsManage=1&runs=empty");
-    await workstreamOnHome(page);
-    const MANAGE = "Pip manages: after each step finishes it starts the next one and drafts what's next. Gossamr posts nothing to Jira without you; a Build runs with your Claude settings and could reach Jira or GitHub itself.";
-    const ADVISE = "Pip advises: it answers when asked and starts nothing by itself.";
-    const homeLine = stepRail(page).locator("[data-mode-line]");
-    await expect(homeLine).toHaveText(MANAGE);
-    // Directly under the switch's row.
-    const row = stepRail(page).getByRole("switch", { name: "Manage this workstream" });
-    // The line follows the row that holds the switch, before anything else of the header, and is below it on screen.
-    expect(await homeLine.evaluate((el, sw) => !!el.previousElementSibling?.contains(document.evaluate(sw, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue), '//*[@role="switch"][@aria-label="Manage this workstream"]')).toBe(true);
-    const [r, l] = [await boxOf(row), await boxOf(homeLine)];
-    expect(l.y).toBeGreaterThanOrEqual(r.y + r.height - 2);
-    await row.click();
-    await expect(homeLine).toHaveText(ADVISE);
-    await expect(homeLine).toHaveAttribute("data-mode-line", "advise");
-    await row.click();
-    await expect(homeLine).toHaveText(MANAGE);
-
-    // The same in the Pip pane's header, on the workspace.
-    await page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "All projects" }).click();
-    await peekTicket(page, "CA-401");
-    if (!(await pipPane(page).isVisible())) await openPip(page);
-    const paneLine = pipPane(page).locator("[data-mode-line]");
-    await expect(paneLine).toHaveText(MANAGE);
-    await manageSwitch(page).click();
-    await expect(paneLine).toHaveText(ADVISE);
-  });
-
-  test.describe("Allow once and Deny", () => {
-    // The first prompt the person ever sees: the config's seeded profile has it dismissed, so this one starts without.
-    test.beforeEach(async ({ page }) => {
-      await page.addInitScript(() => {
-        if (sessionStorage.getItem("explainer-unseeded")) return;
-        sessionStorage.setItem("explainer-unseeded", "1");
-        const prefs = JSON.parse(localStorage.getItem("gossamr-prefs") ?? "{}");
-        localStorage.setItem("gossamr-prefs", JSON.stringify({ ...prefs, permissionExplainerSeen: false }));
-      });
-    });
-
-    test("the first permission prompt explains both buttons above them with a Got it that is kept, and no later prompt repeats it", async ({ page }) => {
-      await openApp(page, "runs=kinds&prSurface=manual");
-      await openAgents(page);
-      await expandAllNeeds(page);
-      await openNeedOfKind(page, "permission");
-      const ask = needsPane(page).locator("[data-permission-ask]");
-      await expect(ask).toBeVisible();
-      const explainer = ask.locator("[data-permission-explainer]");
-      await expect(explainer).toBeVisible();
-      await expect(explainer).toContainText("Deny tells the agent no, and it carries on without it.");
-      // Above the buttons it explains.
-      const [e, d] = [await boxOf(explainer), await boxOf(ask.locator("[data-permission-decisions]"))];
-      expect(e.y + e.height).toBeLessThanOrEqual(d.y + 1);
-      // Got it dismisses it; the keyboard lands on the prompt's own first answer.
-      await explainer.getByRole("button", { name: "Got it" }).click();
-      await expect(explainer).toHaveCount(0);
-      await expect(ask.locator("[data-permission-decisions] button").first()).toBeFocused();
-      // It stays dismissed across a reload.
-      await page.reload();
-      await expect(page.getByText("CA-401", { exact: true }).first()).toBeVisible();
-      await openAgents(page);
-      await expandAllNeeds(page);
-      await openNeedOfKind(page, "permission");
-      await expect(needsPane(page).locator("[data-permission-ask]")).toBeVisible();
-      await expect(page.locator("[data-permission-explainer]")).toHaveCount(0);
-      expect(await page.evaluate(() => JSON.parse(localStorage.getItem("gossamr-prefs") ?? "{}").permissionExplainerSeen)).toBe(true);
-    });
-  });
-});
-
-
-// Keyboard and polish (dogfood B5, B7, B8, B9, B11, B12): F6 reaches every region of Pip home and j/k treat every group alike;
+// Keyboard and polish (dogfood B5, B7, B8, B11, B12): F6 reaches every region of Pip home and j/k treat every group alike;
 // a command word outranks the tickets it also matches; one label for approving drafts together, whose preview opens in the
-// pane; the timeline's fix rounds, failure headings and order; Ctrl+0 from a card's button; the launcher clear of Agents.
+// pane; Ctrl+0 from a card's button; the launcher clear of Agents.
 
 
 /** A workstream on CA-401 with two drafted comments of Pip's waiting in Needs you: one group of two needs, which may go together. */
 async function twoDrafts(page: Page) {
-  await openApp(page, MANAGED);
+  await openApp(page, SAMPLE);
   await workstreamOnHome(page);
   await askPip(page, "Draft a comment");
   await homeSettled(page);
@@ -714,8 +91,7 @@ test.describe("B7: a command word outranks the tickets it also matches", () => {
   };
 
   test("fuzzy ticket search still works, and a typed ticket key still leads", async ({ page }) => {
-    await openApp(page, MANAGED);
-    await agentsSettled(page);
+    await openApp(page, SAMPLE);
     let list = await options(page, "retry failed payment");
     await expect(list.first()).toContainText("DEVOPS-471");
     await page.keyboard.press("Escape");
@@ -771,69 +147,9 @@ test.describe("B8: one label for approving drafts together, and its preview open
   });
 });
 
-test.describe("B9: the timeline's fix rounds, failure headings and order", () => {
-  const minutesAgo = (m: number) => new Date(Date.now() - m * 60_000).toISOString();
-  const entryTexts = (page: Page) => page.locator("[data-timeline-entry]").evaluateAll((els) => els.map((e) => (e.getAttribute("aria-label") ?? "").replace(/^[A-Z][A-Z0-9]*-\d+: /, "")));
-
-  test("each fix round has a line of its own: the rules' say 'automatically', the person's does not", async ({ page }) => {
-    await openApp(page, MANAGED);
-    await startWorkstream(page, "CA-401");
-    await startInvestigation(page);
-    const run = (await newest(page, "investigate"))!;
-    await seedWorkstreamEvent(page, "CA-401", { actor: "supervisor", action: "fix_round_sent", at: minutesAgo(3), runId: run.id, detail: "120" });
-    await seedWorkstreamEvent(page, "CA-401", { actor: "supervisor", action: "fix_round_sent", at: minutesAgo(2), runId: run.id, detail: "120" });
-    await seedWorkstreamEvent(page, "CA-401", { actor: "person", action: "fix_round_sent", at: minutesAgo(1), runId: run.id, detail: "120" });
-    await openAgents(page);
-    await selectWorkstream(page, "CA-401");
-    await expect.poll(async () => (await entryTexts(page)).filter((t) => t.startsWith("Fix round"))).toEqual(["Fix round 1 sent to R1 automatically", "Fix round 2 sent to R1 automatically", "Fix round 3 sent to R1"]);
-  });
-
-  test("two automatic rounds then the person's posting: each round after the review that sent it, and the posted review after the review run", async ({ page }) => {
-    test.setTimeout(240_000);
-    await openApp(page, `${MANAGED}&mockRepos=12`);
-    await startWorkstream(page, "CA-401");
-    await setBudget(page, (await workstreamEvents(page))[0].workstreamId, { autoTurns: 30, wakes: 40 });
-    const build = (await toBuild(page)).id;
-    let review: string | null = null;
-    for (let round = 0; round < 3; round++) {
-      await finish(page, build);
-      await surfacePullRequests(page);
-      review = (await started(page, "review", review)).id;
-      await finish(page, review);
-      // The rules send the build back for each of the first two; the third review is the person's.
-      await expect.poll(async () => (await actions(page, round < 2 ? "fix_round_sent" : "fix_rounds_exhausted")).length).toBe(round < 2 ? round + 1 : 1);
-    }
-    await openAgents(page);
-    await selectWorkstream(page, "CA-401");
-    await expect.poll(async () => (await entryTexts(page)).filter((t) => t.startsWith("Fix round"))).toEqual(["Fix round 1 sent to R4 automatically", "Fix round 2 sent to R4 automatically"]);
-    const texts = async () => entryTexts(page);
-    const at = (all: string[], re: RegExp, nth = 0) => all.map((t, i) => (re.test(t) ? i : -1)).filter((i) => i >= 0)[nth] ?? -1;
-    let all = await texts();
-    const reviews = all.map((t, i) => (/^Review R\d+ finished/.test(t) ? i : -1)).filter((i) => i >= 0);
-    expect(reviews).toHaveLength(3);
-    // Each round follows the review that sent it, and comes before the next review.
-    expect(at(all, /^Fix round 1/)).toBeGreaterThan(reviews[0]);
-    expect(at(all, /^Fix round 1/)).toBeLessThan(reviews[1]);
-    expect(at(all, /^Fix round 2/)).toBeGreaterThan(reviews[1]);
-    expect(at(all, /^Fix round 2/)).toBeLessThan(reviews[2]);
-
-    // The person posts the last review as it is: the line that says so comes after the review run it came of.
-    await expandAllNeeds(page);
-    await openNeedOfKind(page, "escalation");
-    const card = needsPane(page).getByRole("group", { name: "Review still blocks" });
-    await card.getByRole("button", { name: "Post the review as is" }).click();
-    await needsPane(page).getByRole("button", { name: /^Post review/ }).click();
-    await expect.poll(async () => (await githubWrites(page)).length).toBe(1);
-    await expect.poll(async () => at(await texts(), /^You posted .*GitHub review/)).toBeGreaterThan(-1);
-    all = await texts();
-    const lastReview = all.map((t, i) => (/^Review R\d+ finished/.test(t) ? i : -1)).filter((i) => i >= 0).pop()!;
-    expect(at(all, /^You posted .*GitHub review/)).toBeGreaterThan(lastReview);
-  });
-});
-
 test.describe("B11: Ctrl+0 goes to Pip home from the Agents screen with a card's button focused", () => {
   test("from a card's own button, and from the card", async ({ page }) => {
-    await openApp(page, "runs=kinds&prSurface=manual&wsManage=1");
+    await openApp(page, "runs=kinds&prSurface=manual");
     await page.getByRole("button", { name: /^Agents/ }).click();
     const button = page.locator("main article[data-run-id] button", { hasText: "Draft comment" }).first();
     await expect(button).toBeVisible();
@@ -850,7 +166,7 @@ test.describe("B11: Ctrl+0 goes to Pip home from the Agents screen with a card's
   });
 
   test("plain keys on a card's button still stay with the button", async ({ page }) => {
-    await openApp(page, "runs=kinds&prSurface=manual&wsManage=1");
+    await openApp(page, "runs=kinds&prSurface=manual");
     await page.getByRole("button", { name: /^Agents/ }).click();
     const button = page.locator("main article[data-run-id] button", { hasText: "Draft comment" }).first();
     await button.focus();
@@ -862,7 +178,7 @@ test.describe("B11: Ctrl+0 goes to Pip home from the Agents screen with a card's
 test.describe("B12: the Pip launcher keeps clear of the Agents screen's cards and its Earlier link", () => {
   test("no card and no lane link stands under the launcher, at the top of the list or the bottom", async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
-    await openApp(page, "runs=kinds&prSurface=manual&wsManage=1");
+    await openApp(page, "runs=kinds&prSurface=manual");
     await page.getByRole("button", { name: /^Agents/ }).click();
     // A run the person stops goes under Earlier, folded, with its "Show" link at the lane's right end.
     await page.locator("main [data-run-id]").filter({ hasText: "WEB-108" }).first().click();

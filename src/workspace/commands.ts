@@ -20,8 +20,6 @@ export interface Command {
   stay?: boolean;
   /** Extra words that should find the command. */
   keywords?: string;
-  /** It only brings back something already there (a card to show again), where another command of the same name does something new: among equal matches it comes after. */
-  refocus?: boolean;
   run(): void;
 }
 
@@ -57,8 +55,6 @@ export interface CommandActions {
   startWorkstream(): void;
   /** Asks, in the peek, to confirm closing the workstream on the ticket the peek shows. */
   closeWorkstream(): void;
-  /** Holds every open workstream and stops Pip's turns in them, as the rail's Hold all does. */
-  holdAllWorkstreams(): void;
   jumpToItem(item: WorkItem): void;
   askPip(query: string): void;
   /** Goes to the Agents screen: every run across every workstream. */
@@ -69,14 +65,8 @@ export interface CommandActions {
   askPipToPlan(item: WorkItem): void;
   /** Starts a workstream on `item` and shows its conversation in the Pip pane. */
   startWorkstreamOn(item: WorkItem): void;
-  /** Opens Start my day on Agents again, whether or not it was set aside today. */
-  startMyDay(): void;
   /** Opens "What Jira saw from me": everything Gossamr posted to Jira. */
   openJiraSent(): void;
-  /** Opens Plan my week on Agents: a short proposal of what to work on this week, to reorder, trim and keep. */
-  planMyWeek(): void;
-  /** Gives back what "Looks fine" taught the clarity notice, in every project. */
-  giveBackClarity(): void;
 }
 
 /** What the screen shows right now, for the hints beside entries. */
@@ -86,26 +76,13 @@ export interface CommandContext {
   unreadActivity: number;
   /** A GitHub account is connected. */
   github?: boolean;
-  agents?: boolean;
   /** How many things need the person (Needs you's one count), for the hint beside "Show what needs me". */
   needsYou?: number;
   /** The synced ticket the peek shows, and whether it has an open workstream already. */
   ticket?: { key: string; workstream: boolean } | null;
   /** The person is on the Agents screen. */
   onAgents?: boolean;
-  /** How many projects "Looks fine" has taught the clarity notice to leave a gap out for, for "Give back what Looks fine learned". */
-  clarityLearned?: number;
 }
-
-/** The shortcut for Hold all workstreams, as the rail and the palette show it. */
-export const HOLD_ALL_HINT = "⌘⇧.";
-
-/**
- * Whether a key press is Hold all (Cmd/Ctrl+Shift+Period). `code` is read first since Shift turns the key into `>` on
- * most layouts; nothing else in Gossamr takes Cmd/Ctrl+Shift.
- */
-export const isHoldAllKey = (ev: Pick<KeyboardEvent, "key" | "code" | "metaKey" | "ctrlKey" | "shiftKey" | "altKey">) =>
-  (ev.metaKey || ev.ctrlKey) && ev.shiftKey && !ev.altKey && (ev.code === "Period" || ev.key === "." || ev.key === ">");
 
 /** Whether the keyboard has no place after a page change: on the body, or on an element that went away with it. */
 export const focusLost = (active: Pick<Element, "isConnected"> | null, body: unknown): boolean => !active || active === body || !active.isConnected;
@@ -146,11 +123,9 @@ export function buildCommands(containers: readonly WorkContainer[], savedViews: 
     { id: "app:activity", group: "Go to", icon: "→", label: "Open activity", hint: ctx.unreadActivity ? `${ctx.unreadActivity} new` : undefined, keywords: "feed events", run: a.openActivity },
     { id: "app:drafts", group: "Go to", icon: "→", label: "Open drafts", keywords: "pip proposals review waiting", run: a.openDrafts },
     { id: "app:jira-sent", group: "Go to", icon: "→", label: "What Jira saw from me", keywords: "posted sent wrote comments moves transitions descriptions subtasks audit history", run: a.openJiraSent },
-    { id: "app:settings", group: "Go to", icon: "⚙", label: "Open settings", keywords: "preferences autopilot", run: a.openSettings },
-    ...(ctx.agents ? [{ id: "app:start-my-day", group: "Go to" as const, icon: "☀", label: "Start my day", keywords: "morning today summary needs you unclear reporter waiting cobweb drafts", refocus: true, run: a.startMyDay }] : []),
-    ...(ctx.agents ? [{ id: "app:plan-my-week", group: "Go to" as const, icon: "☷", label: "Plan my week", keywords: "plan week this week priorities what to work on focus", run: a.planMyWeek }] : []),
+    { id: "app:settings", group: "Go to", icon: "⚙", label: "Open settings", keywords: "preferences", run: a.openSettings },
     // Before "Stop all agents…" in the list, so the query "agents" lands here first.
-    ...(ctx.agents && !ctx.onAgents ? [{ id: "app:agents", group: "Go to" as const, icon: "→", label: "Open Agents", keywords: "agents running capacity operations stop all workstreams needs you", run: a.openAgents }] : []),
+    ...(!ctx.onAgents ? [{ id: "app:agents", group: "Go to" as const, icon: "→", label: "Open Agents", keywords: "agents running capacity operations stop all workstreams needs you", run: a.openAgents }] : []),
     ...FILTERS.map(
       (f): Command => ({ id: `filter:${f.id}`, group: "Filters", icon: "⏷", label: `Filter: ${f.label}`, keywords: f.keywords, run: () => a.addFilter(f.filter) }),
     ),
@@ -163,52 +138,36 @@ export function buildCommands(containers: readonly WorkContainer[], savedViews: 
     { id: "github:connect", group: "GitHub", icon: "↗", label: ctx.github ? "Connect another GitHub account" : "Connect GitHub", keywords: "sign in token pull requests code", run: a.connectGithub },
     ...(ctx.github ? [{ id: "github:repos", group: "GitHub" as const, icon: "⚙", label: "Manage repositories", keywords: "github watch unwatch repos code", run: a.manageRepositories }] : []),
     ...THEMES.map((t): Command => ({ id: `theme:${t}`, group: "Theme", icon: "◐", label: `Theme: ${THEME_LABEL[t]}`, keywords: "appearance colours", run: () => a.setTheme(t) })),
-    ...(ctx.agents
+    { id: "workstream:choose", group: "Workstreams", icon: "◇", label: "Start a workstream…", hint: "starts no agent and posts nothing", keywords: "start new workstream ticket conversation", stay: true, run: a.chooseWorkstream },
+    { id: "agents:start", group: "Agents", icon: ">_", label: "Start an agent…", hint: "n · runs Claude on a ticket", keywords: "run claude investigate background task", run: a.startAgent },
+    { id: "agents:needs", group: "Agents", icon: "✋", label: "Show what needs me", hint: ctx.needsYou ? `${ctx.needsYou} waiting` : undefined, keywords: "needs you agents waiting permission question blocked failed drafts approve decide", run: a.showNeedsYou },
+    { id: "agents:stop", group: "Agents", icon: "■", label: "Stop all agents…", keywords: "agents halt kill end everything", run: a.openAgentSafety },
+    { id: "agents:safety", group: "Agents", icon: "⛨", label: "Agent safety and settings", keywords: "agents touch permissions", run: a.openAgentSafety },
+    ...(ctx.ticket
       ? [
-          { id: "workstream:choose", group: "Workstreams" as const, icon: "◇", label: "Start a workstream…", hint: "starts no agent and posts nothing", keywords: "start new workstream ticket conversation", stay: true, run: a.chooseWorkstream },
-          { id: "agents:start", group: "Agents" as const, icon: ">_", label: "Start an agent…", hint: "n · runs Claude on a ticket", keywords: "run claude investigate background task", run: a.startAgent },
-          { id: "agents:needs", group: "Agents" as const, icon: "✋", label: "Show what needs me", hint: ctx.needsYou ? `${ctx.needsYou} waiting` : undefined, keywords: "needs you agents waiting permission question blocked failed drafts approve decide", run: a.showNeedsYou },
-          { id: "agents:stop", group: "Agents" as const, icon: "■", label: "Stop all agents…", keywords: "agents halt kill end everything", run: a.openAgentSafety },
-          { id: "agents:safety", group: "Agents" as const, icon: "⛨", label: "Agent safety and settings", keywords: "agents touch permissions", run: a.openAgentSafety },
           {
-            id: "workstream:hold-all",
+            id: "workstream:start",
             group: "Agents" as const,
-            icon: "⏸",
-            label: "Hold all workstreams",
-            hint: HOLD_ALL_HINT,
-            keywords: "pause supervisor manage automatic wake pip stop everything",
-            run: a.holdAllWorkstreams,
+            icon: "◇",
+            label: ctx.ticket.workstream ? `Open the workstream on ${ctx.ticket.key}` : `Start a workstream on ${ctx.ticket.key}`,
+            hint: ctx.ticket.workstream ? "in Pip" : undefined,
+            keywords: "workstream pip conversation track ticket",
+            run: a.startWorkstream,
           },
-          ...(ctx.ticket
+          ...(ctx.ticket.workstream
             ? [
                 {
-                  id: "workstream:start",
+                  id: "workstream:close",
                   group: "Agents" as const,
                   icon: "◇",
-                  label: ctx.ticket.workstream ? `Open the workstream on ${ctx.ticket.key}` : `Start a workstream on ${ctx.ticket.key}`,
-                  hint: ctx.ticket.workstream ? "in Pip" : undefined,
-                  keywords: "workstream pip conversation track ticket",
-                  run: a.startWorkstream,
+                  label: `Close the workstream on ${ctx.ticket.key}…`,
+                  hint: "asks first",
+                  keywords: "workstream end finish stop conversation general",
+                  run: a.closeWorkstream,
                 },
-                ...(ctx.ticket.workstream
-                  ? [
-                      {
-                        id: "workstream:close",
-                        group: "Agents" as const,
-                        icon: "◇",
-                        label: `Close the workstream on ${ctx.ticket.key}…`,
-                        hint: "asks first",
-                        keywords: "workstream end finish stop conversation general",
-                        run: a.closeWorkstream,
-                      },
-                    ]
-                  : []),
               ]
             : []),
         ]
-      : []),
-    ...(ctx.clarityLearned
-      ? [{ id: "clarity:reset", group: "App" as const, icon: "↺", label: "Give back what Looks fine learned", hint: ctx.clarityLearned === 1 ? "1 project" : `${ctx.clarityLearned} projects`, keywords: "clarity unclear notice reset forget flag again", run: a.giveBackClarity }]
       : []),
     { id: "app:tab", group: "App", icon: "▫", label: "New tab", hint: "Workspace", run: a.newTab },
     { id: "app:pip", group: "App", icon: "✦", label: "Toggle Pip", hint: "⌘J", keywords: "assistant chat claude", run: a.togglePip },
@@ -232,8 +191,7 @@ export function rankCommands(commands: readonly Command[], query: string): Comma
     const perWord = words.map((w) => Math.min(...fields.map((f) => score(f, w) ?? Infinity)));
     if (perWord.every(Number.isFinite)) ranked.push({ command, rank: perWord.reduce((a, b) => a + b, 0) });
   }
-  // Equal matches keep their order, except that one that only refocuses follows one that does something new ("start": Start a workstream… before Start my day).
-  return ranked.sort((x, y) => x.rank - y.rank || Number(!!x.command.refocus) - Number(!!y.command.refocus)).map((r) => r.command);
+  return ranked.sort((x, y) => x.rank - y.rank).map((r) => r.command);
 }
 
 /**

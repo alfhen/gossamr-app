@@ -42,12 +42,12 @@ The app opens in the workspace, a board, list and age view over everything synce
 
 - **Board:** one section per project with that project's own statuses. Jira only reveals the moves open to a ticket one ticket at a time, so when you pick a card up the app asks Jira where it can go and dims the other columns.
 - **Agents and Plan runs:** a Plan run reads the code and writes an implementation plan. When it finishes, Gossamr drafts two things for you to read, and writes nothing to Jira until you approve them: a short status comment, and an update to the ticket's description that adds the plan as a collapsed `Gossamr Plan` section (a Jira expand, replacing the plan if the ticket already has one), so other agents and people can see and check the agreed work without it filling the description. The description update opens as a before-and-after diff that you can approve, edit, skip or talk over with Pip. The plan text is the agent's own answer, put together without a model; if the ticket's description can't be edited as rich text, or is too long to hold the plan, the run sheet says why and the plan can still be drafted as a comment. Later Build, Review and Verify runs are shown the section as part of the ticket.
-- **Settings:** the Jira site and account, when it last synced, **Sync now**, and **Sign out**. The classic inbox is still reachable from there for now, and back again from its sidebar.
+- **Settings:** the Jira site and account, when it last synced, **Sync now**, and **Sign out**.
 - **Errors** that don't block anything (a failed sync, a move that couldn't be checked) appear as a toast in the corner.
 
 ### Mock mode
 
-`pnpm dev` runs the workspace in a browser on built-in sample data: four projects with different workflows, drafts, and a scripted Pip that answers a few requests and drafts a move or comment. No Jira and no Claude are involved, and the classic inbox isn't available there.
+`pnpm dev` runs the workspace in a browser on built-in sample data: four projects with different workflows, drafts, and a scripted Pip that answers a few requests and drafts a move or comment. No Jira and no Claude are involved.
 
 ### Not yet verified against a live Jira site
 
@@ -58,7 +58,7 @@ The Jira adapter was written against the REST v3 documentation and tested with r
 - Approving a move: the status id on the card is matched to Jira's transition id at approval time, and Jira may refuse it if the workflow has required fields.
 - Reading comments from the API (`issue/{key}/comment`) for the peek sheet, and rendering their formatting; media and some panels show as plain text.
 - Rewriting a ticket's title and description (`PUT issue/{key}`) from a draft you approve. The description goes to Jira as ADF built from Markdown, so images, tables, panels and macros in the old one become plain text (the draft says so, and Jira keeps the old text in the issue history). The ticket is read again just before the write, and one edited in Jira since the draft was made is refused. Jira can't make the write conditional, so an edit made in the moment between that read and the write can still be overwritten.
-- Pip narrowing the view (`pip-view`, `set_view_filter`) and the nudge bubble.
+- Pip narrowing the view (`pip-view`, `set_view_filter`).
 - Bulk moves offer every status and rely on Jira refusing the ones a ticket can't reach.
 
 ## Ask Claude
@@ -67,7 +67,7 @@ Press `⌘J` from any screen to open Pip, the drawer on the right (`Esc` closes 
 
 Agents are Claude Code sessions. Claude asks once per folder whether to trust it, because a cloned repository's own hooks, MCP servers and settings run with the agent. Gossamr never edits Claude's config or answers that question for you. When a folder isn't trusted yet, the checks before you approve show a Trust this folder button that opens Terminal there with `claude`; accept the question, close Terminal, and the checks run again. If a launch is refused anyway, the run opens with the reason and the same button, and Retry starts the same approved run again.
 
-Claude can read the ticket through a local MCP server the app runs, and nothing else: no built-in Claude Code tools, so it can't read local files, run commands, browse the web or write files. It can't change Jira either: comments, transitions, subtasks, new tickets and new titles or descriptions for a ticket come back as cards you approve, edit or skip. A description edit shows as a before-and-after diff, and Autopilot can never make one.
+Claude can read the ticket through a local MCP server the app runs, and nothing else: no built-in Claude Code tools, so it can't read local files, run commands, browse the web or write files. It can't change Jira either: comments, transitions, subtasks, new tickets and new titles or descriptions for a ticket come back as cards you approve, edit or skip. A description edit shows as a before-and-after diff.
 
 ## Development
 

@@ -9,7 +9,6 @@ const MARKER = "Marker: the person also wants the unsubscribe link checked.";
 const NO_PR_YET = "that build has no pull request in this repository yet. Gossamr asked GitHub for it";
 
 const setup = (page: Page) => page.getByRole("dialog", { name: "Start an agent" });
-const safety = (page: Page) => page.getByRole("dialog", { name: "Agents safety and settings" });
 /** Pip's run drafts on CA-401 in the pane. */
 const runCards = (page: Page) => pipPane(page).getByRole("article", { name: "Start an agent: CA-401" });
 
@@ -20,15 +19,10 @@ async function ask(page: Page, what: string) {
   await settled(page);
 }
 
-/** Opens Pip's newest run draft in the setup sheet, past the safety sheet a fresh profile shows once at its first agent action. */
+/** Opens Pip's newest run draft in the setup sheet. */
 async function openNewestDraft(page: Page) {
-  for (let attempt = 0; attempt < 2; attempt++) {
-    await runCards(page).last().getByRole("button", { name: "Review and start →" }).click();
-    await expect(setup(page).or(safety(page))).toBeVisible();
-    if (!(await safety(page).isVisible())) break;
-    await safety(page).getByRole("button", { name: "Close" }).click();
-    await expect(safety(page)).toHaveCount(0);
-  }
+  await runCards(page).last().getByRole("button", { name: "Review and start →" }).click();
+  await expect(setup(page)).toBeVisible();
   await expect(setup(page)).toContainText("CA-401");
 }
 
@@ -144,8 +138,8 @@ test("in one workstream Pip drafts investigate, triage with findings, plan, a bu
   await expect(setup(page).locator("[data-pip-chain]")).toHaveText(id ?? "");
   // A Build launches as before: the exact command carries no read-only flag.
   await openTechnical(setup(page));
-  await detailsOf(setup(page), "Show the exact command").locator("> summary").click();
-  const command = detailsOf(setup(page), "Show the exact command");
+  await detailsOf(setup(page), "Show the command (illustrative)").locator("> summary").click();
+  const command = detailsOf(setup(page), "Show the command (illustrative)");
   await expect(command).toContainText("claude --bg --name");
   await expect(command).not.toContainText("--permission-mode");
   await expect(command).not.toContainText("--setting-sources");

@@ -81,9 +81,6 @@ impl RunService {
     /// Replaces a finished run's summary with its full answer when one can be read now. True when the run changed.
     /// Safe to call at any time and for any run: anything but a finished run with only a summary is left alone.
     pub async fn refresh_result(&self, run_id: &str) -> bool {
-        if !self.is_enabled() {
-            return false;
-        }
         let Ok(Some(run)) = self.core.run(run_id).await else { return false };
         if run.state != RunState::Done || run.result_complete {
             return false;

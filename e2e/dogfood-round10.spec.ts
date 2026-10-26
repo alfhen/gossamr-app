@@ -1,13 +1,8 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
-import { agentsHome, askPip, expandAllNeeds, expandNeedsYou, homeSettled, jiraWrites, needsPane, needsYouCount, openAgents, openApp, selectWorkstream, startMyDay, startWorkstream, openNeedRow, needsStack } from "./support/app";
+import { askPip, pipCommentDraft, expandAllNeeds, expandNeedsYou, homeSettled, jiraWrites, needsPane, needsYouCount, openAgents, openApp, selectWorkstream, startWorkstream, openNeedRow, needsStack } from "./support/app";
 
-// Fixes from the tenth dogfood round: the long description draft in the Decision pane keeping its actions in view (G10), Plan my
-// week showing its three picks (G13), the posting pause saying what tripped it, one sentence for each risk (G4), and a batch that
-// does not post one comment twice (G2).
-
-const port = Number(process.env.E2E_PORT ?? 4173);
-/** The seeded profile (e2e/playwright.config.ts) with Start my day not set aside. */
-const DAY_DUE = { cookies: [], origins: [{ origin: `http://localhost:${port}`, localStorage: [{ name: "gossamr-prefs", value: JSON.stringify({ pipOrientationSeen: true, permissionExplainerSeen: true }) }] }] };
+// Fixes from the tenth dogfood round: the long description draft in the Decision pane keeping its actions in view (G10), the
+// posting pause saying what tripped it, one sentence for each risk (G4), and a batch that does not post one comment twice (G2).
 
 const allProjects = (page: Page) => page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "All projects" }).click();
 
@@ -58,15 +53,14 @@ test.describe("the pause before posting edited words (G4)", () => {
     await startWorkstream(page, "CA-408");
     await openAgents(page);
     await selectWorkstream(page, "CA-408");
-    await agentsHome(page).locator("[data-clarity-notice]").getByRole("button", { name: "Ask the reporter now" }).click();
-    const draft = needsPane(page).getByRole("article", { name: "Comment on CA-408" });
+    const draft = await pipCommentDraft(page, "CA-408");
     await draft.getByRole("button", { name: "Edit" }).click();
     const text = needsPane(page).locator("textarea").first();
     await text.fill(`${await text.inputValue()}\n\ncc @everyone\nPassword: hunter2`);
     await draft.getByRole("button", { name: "Done editing" }).click();
     await draft.getByRole("button", { name: "Post comment" }).click();
     const pause = draft.locator("[data-post-pause]");
-    await expect(pause).toContainText("Your edit mentions everyone at “@everyone” (line 12). It also looks like a password, key or token at “hu…” (line 13). Everyone on the ticket would see it once it is posted.");
+    await expect(pause).toContainText("Your edit mentions everyone at “@everyone” (line 3). It also looks like a password, key or token at “hu…” (line 4). Everyone on the ticket would see it once it is posted.");
     await expect(pause).not.toContainText("Post anyway, or keep editing?");
     await expect(pause).not.toContainText("hunter2");
     expect(await jiraWrites(page)).toEqual([]);
@@ -76,7 +70,7 @@ test.describe("the pause before posting edited words (G4)", () => {
 test.describe("Approve N safe drafts with two identical comments (G2)", () => {
   test("covers a comment and its copy once, says which it left out, and posts nothing until the confirm", async ({ page }) => {
     test.setTimeout(120_000);
-    await openApp(page, "runs=empty&prSurface=manual&wsManage=1&pipPace=1");
+    await openApp(page, "runs=empty&prSurface=manual&pipPace=1");
     await startWorkstream(page, "CA-401");
     await openAgents(page);
     await selectWorkstream(page, "CA-401");
@@ -109,8 +103,7 @@ test.describe("Esc on the posting pause (G1)", () => {
     await startWorkstream(page, "CA-408");
     await openAgents(page);
     await selectWorkstream(page, "CA-408");
-    await agentsHome(page).locator("[data-clarity-notice]").getByRole("button", { name: "Ask the reporter now" }).click();
-    const draft = needsPane(page).getByRole("article", { name: "Comment on CA-408" });
+    const draft = await pipCommentDraft(page, "CA-408");
     await draft.getByRole("button", { name: "Edit" }).click();
     const text = needsPane(page).locator("textarea").first();
     await text.fill(`${await text.inputValue()}\n\ncc @everyone`);
@@ -132,8 +125,7 @@ test.describe("Esc on the posting pause (G1)", () => {
     await startWorkstream(page, "CA-408");
     await openAgents(page);
     await selectWorkstream(page, "CA-408");
-    await agentsHome(page).locator("[data-clarity-notice]").getByRole("button", { name: "Ask the reporter now" }).click();
-    const draft = needsPane(page).getByRole("article", { name: "Comment on CA-408" });
+    const draft = await pipCommentDraft(page, "CA-408");
     await draft.getByRole("button", { name: "Edit" }).click();
     const text = needsPane(page).locator("textarea").first();
     await text.fill(`${await text.inputValue()}\n\ncc @everyone`);
@@ -147,27 +139,5 @@ test.describe("Esc on the posting pause (G1)", () => {
     await expect(text).toBeFocused();
     await expect(text).toHaveValue(/cc @everyone/);
     expect(await jiraWrites(page)).toEqual([]);
-  });
-});
-
-test.describe("F6 to a toast with Undo (G12)", () => {
-  test.use({ storageState: DAY_DUE });
-
-  test("lands on Undo, and Enter runs it", async ({ page }) => {
-    test.setTimeout(90_000);
-    await openApp(page, "runs=empty");
-    await openAgents(page);
-    await startMyDay(page);
-    await agentsHome(page).locator("[data-start-my-day]").getByRole("button", { name: "Plan my week" }).click();
-    const picks = agentsHome(page).locator("[data-plan-my-week] [data-plan-pick]");
-    const before = await picks.count();
-    await picks.nth(1).focus();
-    await page.keyboard.press("Delete");
-    const toast = page.locator("[data-toast]");
-    await expect(toast).toBeVisible();
-    for (let n = 0; n < 12 && !(await toast.evaluate((el) => el.contains(document.activeElement))); n++) await page.keyboard.press("F6");
-    await expect(toast.getByRole("button", { name: "Undo" })).toBeFocused();
-    await page.keyboard.press("Enter");
-    await expect(picks).toHaveCount(before);
   });
 });

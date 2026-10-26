@@ -1,16 +1,8 @@
-import type { Person, Ticket } from "../types";
+import type { Person } from "../types";
 
 export interface Mention {
   accountId: string;
   name: string;
-}
-
-/** The app-side note under a reporter question draft that @mentions someone: that it posts as the person, and who Jira notifies. Null when nobody is mentioned. App text, not Jira's. */
-export function mentionNote(mentions: readonly Pick<Mention, "name">[]): string | null {
-  const names = [...new Set(mentions.map((m) => m.name))];
-  if (!names.length) return null;
-  const who = names.length === 1 ? names[0] : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
-  return `Posts as you; Jira notifies ${who}.`;
 }
 
 /** The app-side note by a description update's Update button: that it writes to Jira as the person, and who Jira tells. `what` is `rewriteWhat`: "description", "title" or "title and description". App text, not Jira's. */
@@ -61,17 +53,6 @@ export function rankPeople(people: Person[], query: string, limit = 6): Person[]
     if (out.length === limit) break;
   }
   return out;
-}
-
-/** Everyone involved in a ticket, most relevant first: commenters (latest first), assignee, reporter, then editors. */
-export function participants(t: Ticket, me: string): Person[] {
-  const people = [
-    ...[...t.comments].reverse().map((c) => c.author),
-    t.assignee,
-    t.reporter,
-    ...[...t.changes].reverse().map((c) => c.author),
-  ].filter((p): p is Person => !!p && p.accountId !== me);
-  return rankPeople(people, "", Number.MAX_SAFE_INTEGER);
 }
 
 /** Replaces the typed `@query` with `@Full Name ` and returns the new text and caret. */

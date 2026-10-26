@@ -4,14 +4,14 @@ import { labelsByRun, runLabels } from "./workstreamStage";
 
 /**
  * Commands typed into Pip's composer that act without going to Pip: `/stop R1`, `/retry R1`, `/answer R1 text` on a run,
- * and `/hold`, `/resume` on the conversation's workstream. They call the same user-only commands as the run's own
+ * and `/pause`, `/resume` on the conversation's workstream. They call the same user-only commands as the run's own
  * buttons and the workstream's header; Pip has no tool for any of them and never sees them.
  */
 
-export const COMPOSER_VERBS = ["stop", "retry", "answer", "hold", "resume"] as const;
+export const COMPOSER_VERBS = ["stop", "retry", "answer", "pause", "resume"] as const;
 export type ComposerVerb = (typeof COMPOSER_VERBS)[number];
 /** The verbs that act on the conversation's workstream and take no run. */
-export const WORKSTREAM_VERBS = ["hold", "resume"] as const satisfies readonly ComposerVerb[];
+export const WORKSTREAM_VERBS = ["pause", "resume"] as const satisfies readonly ComposerVerb[];
 type WorkstreamVerb = (typeof WORKSTREAM_VERBS)[number];
 type RunVerb = Exclude<ComposerVerb, WorkstreamVerb>;
 
@@ -34,7 +34,7 @@ export const COMMAND_HELP: readonly CommandHelp[] = [
   { verb: "stop", usage: "/stop R1", meaning: "Stops the run." },
   { verb: "retry", usage: "/retry R1", meaning: "Starts the run again with the same instructions." },
   { verb: "answer", usage: "/answer R1 your answer", meaning: "Sends your answer to the run's question." },
-  { verb: "hold", usage: "/hold", meaning: "Holds this workstream: its agents carry on, nothing new starts on its own." },
+  { verb: "pause", usage: "/pause", meaning: "Pauses this workstream: its agents carry on, Pip isn't woken." },
   { verb: "resume", usage: "/resume", meaning: "Resumes this workstream." },
 ];
 
@@ -105,7 +105,7 @@ export interface VerbOutcome {
 
 const DONE: Record<RunVerb, string> = { stop: "Stopped", retry: "Retrying", answer: "Answered" };
 const WORKSTREAM_DONE: Record<WorkstreamVerb, string> = {
-  hold: "Held this workstream. Its agents carry on; nothing starts on its own until you resume",
+  pause: "Paused this workstream. Its agents carry on; Pip isn't woken until you resume",
   resume: "Resumed this workstream",
 };
 
@@ -119,13 +119,13 @@ export function runComposerVerb(
     runs,
     workstream,
     backend,
-    heldReason = null,
+    pausedReason = null,
   }: {
     runs: readonly Run[];
     workstream: string | null;
-    backend: Pick<Backend, "runsStop" | "runsRetryLaunch" | "runsAnswer" | "workstreamsHold" | "workstreamsResume"> | null;
-    /** Why the workstream is held now, if it is: a second /hold changes nothing and says so. */
-    heldReason?: string | null;
+    backend: Pick<Backend, "runsStop" | "runsRetryLaunch" | "runsAnswer" | "workstreamsPause" | "workstreamsResume"> | null;
+    /** Why the workstream is paused now, if it is: a second /pause changes nothing and says so. */
+    pausedReason?: string | null;
   },
 ): Promise<VerbOutcome> | null {
   const parsed = parseVerb(input);
@@ -135,8 +135,8 @@ export function runComposerVerb(
     const { verb } = parsed;
     if (!workstream) return Promise.resolve({ ok: false, message: `/${verb} works in a workstream's conversation; open the workstream on its ticket first` });
     if (!backend) return Promise.resolve({ ok: false, message: "Not connected yet." });
-    if (verb === "hold" && heldReason) return Promise.resolve({ ok: true, message: "This workstream is held already" });
-    const call = async () => (verb === "hold" ? backend.workstreamsHold(workstream) : backend.workstreamsResume(workstream));
+    if (verb === "pause" && pausedReason) return Promise.resolve({ ok: true, message: "This workstream is paused already" });
+    const call = async () => (verb === "pause" ? backend.workstreamsPause(workstream) : backend.workstreamsResume(workstream));
     return call().then(
       () => ({ ok: true, message: WORKSTREAM_DONE[verb] }),
       (e: unknown) => ({ ok: false, message: `Couldn't ${verb} this workstream. ${e instanceof Error ? e.message : String(e)}` }),

@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { askPip, openApp, openPip, PIP_INPUT, pipPane } from "./support/app";
+import { askPip, openApp, openPip, PIP_INPUT, pipPane, showWorkspace } from "./support/app";
 
 /** Where the sample backend keeps Pip's turns (KEY in src/backend/mockPipTurns.ts). */
 const STORE = "gossamr-mock-pip-turns";
@@ -36,6 +36,7 @@ test.beforeEach(async ({ page }) => {
 test("a finished conversation is shown again after a reload", async ({ page }) => {
   await askAndWait(page, QUESTION, ANSWER);
   await page.reload();
+  await showWorkspace(page);
   await expect(page.getByText("CA-401", { exact: true }).first()).toBeVisible();
   await showPip(page);
   await expect(pipPane(page).getByText(QUESTION, { exact: true })).toBeVisible();
@@ -79,6 +80,7 @@ test("a reload mid-answer doesn't stop Pip: the turn carries on and ends as answ
   const pane = pipPane(page);
   await expect(pane.getByRole("button", { name: "Stop" })).toBeVisible();
   await page.reload();
+  await showWorkspace(page);
 
   await expect(page.getByText("CA-401", { exact: true }).first()).toBeVisible();
   await showPip(page);
@@ -121,6 +123,7 @@ test("the draft a turn made is still under it after a reload, once, even when th
   await expect(comment).toHaveCount(1);
   await expect(pane.getByRole("button", { name: "Stop" })).toBeVisible();
   await page.reload();
+  await showWorkspace(page);
 
   await expect(page.getByText("CA-401", { exact: true }).first()).toBeVisible();
   await showPip(page);
@@ -129,6 +132,7 @@ test("the draft a turn made is still under it after a reload, once, even when th
   await expect(comment).toHaveCount(1);
 
   await page.reload();
+  await showWorkspace(page);
   await expect(page.getByText("CA-401", { exact: true }).first()).toBeVisible();
   await showPip(page);
   await expect(pane.getByText("Draft a comment", { exact: true })).toBeVisible();

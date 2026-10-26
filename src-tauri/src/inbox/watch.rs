@@ -91,7 +91,7 @@ impl Core {
         Ok(c)
     }
 
-    /// What `scope`'s connection follows. Autopilot and other writers ask this before acting on an item.
+    /// What `scope`'s connection follows. Writers ask this before acting on an item.
     pub async fn watch_set_of(&self, scope: &Scope) -> Result<WatchSet> {
         let id = Connection::jira_id(scope);
         self.with_db_for(scope, |db| db.watch_set(&id)).await

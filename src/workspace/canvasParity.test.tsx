@@ -177,7 +177,7 @@ describe("ListRow", () => {
     const out = renderToStaticMarkup(<ListRow {...rowProps()} />);
     expect(out).toContain("DEVOPS-9");
     expect(out).toContain("Fix the thing");
-    expect(out).toMatch(/ws-age[^>]*>6d</);
+    expect(out).toMatch(/No update for 6 days[^>]*>6d</);
     expect(out).toContain("text-[#d2701f]");
     expect(out).toContain(">JB<");
     expect(out).toContain("In Progress");
@@ -198,7 +198,7 @@ describe("ListRow", () => {
 
   it("has no age chip for finished work and flags selection and ticks", () => {
     const done = renderToStaticMarkup(<ListRow {...rowProps({ item: item("D-1", { status: status("Done", "done"), updated: daysAgo(30) }) })} />);
-    expect(done).not.toContain("ws-age");
+    expect(done).not.toContain("No update for");
     const on = renderToStaticMarkup(<ListRow {...rowProps({ selected: true })} />);
     expect(on).toContain('aria-selected="true"');
     const ticked = renderToStaticMarkup(<ListRow {...rowProps({ marked: true })} />);

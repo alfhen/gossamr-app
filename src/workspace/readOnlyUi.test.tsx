@@ -128,7 +128,7 @@ describe("a read-only kind where it is started", () => {
 
       it("lists the read-only rules before the report tool's, the order the guard lines are sent in", () => {
         const html = render(reviewOf({ kind: "investigate", report: true }));
-        const withReport = { ...reviewOf({ kind: "investigate", report: true }), report: { allowed: "mcp__run-report__report_result", guard: "REPORT LINE" } };
+        const withReport = { ...reviewOf({ kind: "investigate", report: true }), report: { allowed: "mcp__gossamr__report", guard: "REPORT LINE" } };
         const shown = render(withReport);
         expect(html).toContain("data-read-only-extras");
         expect(shown.indexOf("data-read-only-extras")).toBeLessThan(shown.indexOf("data-report-extras"));
@@ -168,7 +168,7 @@ describe("the setup sheet's exact command", () => {
     expect(exact).toContain("Show the exact command");
     expect(exact).toContain('aria-label="Copy the command"');
     expect(exact).not.toContain("data-command-illustrative");
-    const withReport = setup({ ...reviewOf({ kind: "investigate" }), report: { allowed: "mcp__run-report__report_result", guard: "Report sentence." } });
+    const withReport = setup({ ...reviewOf({ kind: "investigate" }), report: { allowed: "mcp__gossamr__report", guard: "Report sentence." } });
     expect(withReport).toContain("Show the command (illustrative)");
     expect(withReport).not.toContain("Show the exact command");
     expect(withReport).toContain(`--mcp-config ${esc(`'${REPORT_CONFIG_SHOWN}'`)}`);

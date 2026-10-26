@@ -15,7 +15,6 @@ import { LiveDraftPeek } from "./DraftPeek";
 import { PIP_INPUT_ID } from "./draftKeys";
 import { canvasElement, showMe } from "./jump";
 import { PEEK_DEFAULT } from "./paneSizes";
-import { useAgentsEnabled } from "./agentsFlag";
 import { usePrefs } from "./prefs";
 import { CommentCard, HistoryRow, SectionCard, SectionNav, showComment } from "./PeekParts";
 import { displayName, historyNotes, isCollapsed, linkRows, parentCrumb, replyDraft, sectionChips, shownComments, subtasksOf, type Collapsed, type Crumb, type LinkRow, type Note, type PeekSectionId, type ReplyDraft, type Subtasks } from "./peekLogic";
@@ -644,9 +643,8 @@ function OpenPeek({ item, motion, wide, onWide, onMotionEnd }: { item: WorkItem 
   const [menuOpen, setMenuOpen] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const now = useMemo(() => new Date(), [item]);
-  const agentsOn = useAgentsEnabled();
-  const agentRuns = useRuns((s) => (agentsOn ? runsOfTicket(s.runs, ref).length : 0));
-  const workstream = useItemWorkstream(agentsOn ? ref : null);
+  const agentRuns = useRuns((s) => runsOfTicket(s.runs, ref).length);
+  const workstream = useItemWorkstream(ref);
   const confirmingClose = useWorkstreams((s) => s.confirmingClose);
 
   useEffect(() => {
@@ -768,7 +766,7 @@ function OpenPeek({ item, motion, wide, onWide, onMotionEnd }: { item: WorkItem 
         ) : null
       }
       agentMenu={
-        agentsOn && !readOnly ? (
+        !readOnly ? (
           <div className="flex flex-wrap items-center gap-2">
             <AgentMenu item={ref} />
             <WorkstreamControl

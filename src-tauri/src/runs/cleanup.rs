@@ -93,7 +93,6 @@ impl RunService {
     /// and Claude says so. An earlier session that couldn't be removed is remembered, and cleaning up again retries just
     /// that one.
     pub async fn cleanup(&self, run_id: &str) -> Result<Cleanup> {
-        self.ensure_enabled()?;
         if !self.cleaning.lock().expect("cleaning lock poisoned").insert(run_id.to_owned()) {
             return Err(refuse("This run is already being cleaned up."));
         }
@@ -152,7 +151,7 @@ impl RunService {
             if let Err(e) = self.index.forget(&run.id) {
                 eprintln!("couldn't update the run index: {e}");
             }
-            self.forget_report(&run.id).await;
+            self.forget_tools(&run.id).await;
         }
         Ok(Cleanup::Removed)
     }

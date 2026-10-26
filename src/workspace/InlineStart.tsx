@@ -9,7 +9,6 @@ import { COPY, startBlock } from "./runSheetLogic";
 import { DRAFT_CARD, PIP_INPUT_ID } from "./draftKeys";
 import { scrollTopFor } from "./peekDrafts";
 import { afterRunStarted, approveRunDraft, readRunDraft } from "./runSetupStore";
-import { startWhat, useRuns } from "./runsStore";
 import { messageOf, useToasts } from "./toasts";
 
 /**
@@ -41,19 +40,14 @@ export interface InlineEntry {
   rechecking: boolean;
   /** Terminal was opened to trust a folder, so the checks run again when the person comes back. */
   trustOpened: boolean;
-  /** Opened by "Got it, continue" on the one-time safety sheet: the review says that nothing has started, as the person may think it did. */
-  afterIntro: boolean;
 }
 
-export const CLOSED_INLINE: InlineEntry = { phase: "closed", review: null, preflight: null, displayed: null, error: null, rechecking: false, trustOpened: false, afterIntro: false };
-
-/** What the review says first when it opened after the one-time safety sheet. */
-export const AFTER_INTRO_NOTE = "Nothing has started yet. Read what it will be told, then press Start agent.";
+export const CLOSED_INLINE: InlineEntry = { phase: "closed", review: null, preflight: null, displayed: null, error: null, rechecking: false, trustOpened: false };
 
 interface InlineStartsState {
   entries: Record<string, InlineEntry>;
-  /** Reads draft `id` and shows it; nothing starts. `afterIntro`: the one-time safety sheet came first. */
-  open(id: string, afterIntro?: boolean): Promise<void>;
+  /** Reads draft `id` and shows it; nothing starts. */
+  open(id: string): Promise<void>;
   close(id: string): void;
   /** Opens a closed one, closes an open one: the card's own action. */
   toggle(id: string): void;
@@ -153,12 +147,12 @@ export const useInlineStarts = create<InlineStartsState>((set, get) => {
   return {
     entries: {},
 
-    async open(id, afterIntro = false) {
+    async open(id) {
       const b = backend();
-      if (!b || !useRuns.getState().ensureAgentsIntro(() => void get().open(id, true), startWhat(useWorkspace.getState().proposals[id]))) return;
+      if (!b) return;
       revealOnMount.add(id);
       const mine = bump(id);
-      patch(id, { ...CLOSED_INLINE, phase: "loading", afterIntro });
+      patch(id, { ...CLOSED_INLINE, phase: "loading" });
       try {
         const { review, preflight } = await readRunDraft(b, id);
         if (current(id, mine)) patch(id, { phase: "shown", review, preflight });
@@ -357,11 +351,6 @@ export function InlineStartView({ id, entry, on }: { id: string; entry: InlineEn
       {entry.error && (
         <p role="alert" className="m-0 text-ws-blocked [overflow-wrap:anywhere]">
           {entry.error}
-        </p>
-      )}
-      {entry.afterIntro && (
-        <p data-after-intro className="m-0 font-semibold text-ws-ink">
-          {AFTER_INTRO_NOTE}
         </p>
       )}
       {/* The plain version first; the exact words, flags and checks follow for whoever wants them. */}

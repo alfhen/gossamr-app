@@ -32,9 +32,6 @@
 .pip-av[data-paused] * {
   animation-play-state: paused !important;
 }
-.pip-pop {
-  animation: pip-pop 0.25s ease-out;
-}
 .pip-thread {
   background: linear-gradient(transparent, var(--color-ws-ink3));
 }
@@ -78,18 +75,11 @@
     transform: scaleY(0.1);
   }
 }
-@keyframes pip-pop {
-  from {
-    opacity: 0;
-    transform: translateY(6px) scale(0.96);
-  }
-}
 
 @media (prefers-reduced-motion: reduce) {
   .pip-av,
   .pip-av *,
-  .pip-dangle,
-  .pip-pop {
+  .pip-dangle {
     animation: none !important;
   }
   .pip-pup {

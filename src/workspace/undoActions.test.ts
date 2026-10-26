@@ -3,9 +3,7 @@ import { MockBackend } from "../backend/mock";
 import { itemRef } from "../backend/mockConnector";
 import { docFromText } from "../lib/docs";
 import type { Intent, Run, WorkstreamView } from "../types";
-import { HELD_ALL, HELD_BUDGET, HELD_PERSON } from "../types";
 import { useWorkspace } from "../workspaceStore";
-import { contextDeps } from "./contextActions";
 import { draftDecisions } from "./DraftPreview";
 import { keepEditsOfDraft } from "./DraftCard";
 import { useWorkView } from "./workViewStore";
@@ -196,172 +194,36 @@ describe("dismissing a failed run", () => {
   });
 });
 
-describe("holding a workstream", () => {
+describe("pausing a workstream", () => {
   const stored = (id: string): WorkstreamView["workstream"] => useWorkstreams.getState().list.find((v) => v.workstream.id === id)!.workstream;
 
-  it("offers Undo, and Undo lifts the hold", async () => {
+  it("pauses with a note and no Undo, and Resume lifts it", async () => {
     const id = (await backend.workstreamsOpen(CA401)).id;
     await useWorkstreams.getState().refresh();
-    expect(await useWorkstreams.getState().hold(id)).toBe(true);
-    expect(stored(id).heldReason).toBe(HELD_PERSON);
-    expect(texts()).toEqual(["Held CA-401."]);
-    undoButton()!.run();
-    await vi.waitFor(() => expect(stored(id).heldReason).toBeNull());
-    expect((await backend.workstreamsEvents(id)).map((e) => e.action).slice(-2)).toEqual(["held", "undone"]);
-  });
-
-  it("makes no need of the hold, and Undo still lifts it", async () => {
-    const id = (await backend.workstreamsOpen(CA401)).id;
-    await useWorkstreams.getState().refresh();
-    expect(currentNeeds()).toEqual([]);
-    await useWorkstreams.getState().hold(id);
-    expect(stored(id).heldReason).toBe(HELD_PERSON);
-    expect(currentNeeds()).toEqual([]);
-    undoButton()!.run();
-    await vi.waitFor(() => expect(stored(id).heldReason).toBeNull());
-    expect(currentNeeds()).toEqual([]);
-    // Hold all is the person's too.
-    await useWorkstreams.getState().holdAll();
-    expect(stored(id).heldReason).toBe(HELD_ALL);
-    expect(currentNeeds()).toEqual([]);
-  });
-
-  it("restores the hold the person's replaced, not just 'free'", async () => {
-    const id = (await backend.workstreamsOpen(CA401)).id;
-    backend.workstreams.hold(id, HELD_BUDGET, "supervisor");
-    await useWorkstreams.getState().refresh();
-    await useWorkstreams.getState().hold(id);
-    expect(stored(id).heldReason).toBe(HELD_PERSON);
-    undoButton()!.run();
-    await vi.waitFor(() => expect(stored(id).heldReason).toBe(HELD_BUDGET));
-  });
-
-  it("takes the Held toast and its Undo away once the workstream is resumed, and from the palette too", async () => {
-    const id = (await backend.workstreamsOpen(CA401)).id;
-    await useWorkstreams.getState().refresh();
-    await useWorkstreams.getState().hold(id);
-    expect(undoButton()).toBeDefined();
-    expect(undoLog.latest()).not.toBeNull();
-    await useWorkstreams.getState().resume(id);
+    expect(await useWorkstreams.getState().pause(id)).toBe(true);
+    expect(stored(id).pausedReason).toBe("person");
+    expect(texts()).toEqual(["Paused CA-401. Resume it to wake Pip there again."]);
     expect(undoButton()).toBeUndefined();
-    expect(texts()).toEqual([]);
     expect(undoLog.latest()).toBeNull();
+    expect(await useWorkstreams.getState().resume(id)).toBe(true);
+    expect(stored(id).pausedReason).toBeNull();
+    expect((await backend.workstreamsEvents(id)).map((e) => e.action).slice(-2)).toEqual(["paused", "resumed"]);
   });
 
-  it("offers nothing when the workstream was held by the person already, and resuming never offers Undo", async () => {
+  it("makes a need of the pause, which Resume answers", async () => {
     const id = (await backend.workstreamsOpen(CA401)).id;
     await useWorkstreams.getState().refresh();
-    await useWorkstreams.getState().hold(id);
-    useToasts.getState().clear();
-    await useWorkstreams.getState().hold(id);
-    expect(undoButton()).toBeUndefined();
+    expect(currentNeeds()).toEqual([]);
+    await useWorkstreams.getState().pause(id);
+    expect(currentNeeds().map((n) => n.kind)).toEqual(["paused"]);
     await useWorkstreams.getState().resume(id);
-    expect(undoButton()).toBeUndefined();
-    expect(stored(id).heldReason).toBeNull();
-  });
-
-  it("Hold all offers one Undo that frees every workstream it held", async () => {
-    const a = (await backend.workstreamsOpen(CA401)).id;
-    const b = (await backend.workstreamsOpen(itemRef("CA-402"))).id;
-    await useWorkstreams.getState().refresh();
-    expect(await useWorkstreams.getState().holdAll()).toBe(2);
-    expect([stored(a).heldReason, stored(b).heldReason]).toEqual([HELD_ALL, HELD_ALL]);
-    undoButton()!.run();
-    await vi.waitFor(() => expect([stored(a).heldReason, stored(b).heldReason]).toEqual([null, null]));
-  });
-
-  it("Hold all's Undo leaves out a workstream resumed since, and goes once none is left to free", async () => {
-    const a = (await backend.workstreamsOpen(CA401)).id;
-    const b = (await backend.workstreamsOpen(itemRef("CA-402"))).id;
-    await useWorkstreams.getState().refresh();
-    expect(await useWorkstreams.getState().holdAll()).toBe(2);
-    const first = undoLog.latest()!.id;
-    await useWorkstreams.getState().resume(a);
-    await useWorkstreams.getState().hold(a);
-    // a is held by the person now: Hold all's Undo frees b only, and leaves a as the person left it.
-    expect(await undoLog.run(first)).toBe("undone");
-    await vi.waitFor(() => expect(stored(b).heldReason).toBeNull());
-    expect(stored(a).heldReason).toBe(HELD_PERSON);
-
-    expect(await useWorkstreams.getState().holdAll()).toBe(1);
-    const second = undoLog.latest()!.id;
-    await useWorkstreams.getState().resume(b);
-    // b was its only workstream: nothing is left to free, so the offer is withdrawn.
-    expect(undoLog.get(second)?.state).toBe("withdrawn");
+    expect(currentNeeds()).toEqual([]);
   });
 
   it("Stop keeps its confirm and offers no Undo: it reached the agents", async () => {
     const id = (await backend.workstreamsOpen(CA401)).id;
     await useWorkstreams.getState().refresh();
     await useWorkstreams.getState().stop(id);
-    expect(undoButton()).toBeUndefined();
-  });
-});
-
-describe("a workstream that used its automatic steps", () => {
-  const stored = (id: string) => useWorkstreams.getState().list.find((v) => v.workstream.id === id)!.workstream;
-
-  it("is a Decide need, and Allow 5 more raises the allowance, resumes it and answers the need", async () => {
-    const id = (await backend.workstreamsOpen(CA401)).id;
-    await useWorkstreams.getState().setMode(id, "manage");
-    backend.workstreams.hold(id, HELD_BUDGET, "supervisor");
-    await useWorkstreams.getState().refresh();
-    expect(currentNeeds().map((n) => [n.key, n.group, n.title])).toEqual([[`budget:${id}`, "decide", "CA-401 used its 11 automatic steps"]]);
-    expect(await useWorkstreams.getState().allowMore(id)).toBe(true);
-    expect(stored(id)).toMatchObject({ heldReason: null, budget: { autoTurns: 16 } });
-    expect(currentNeeds()).toEqual([]);
-    // Nothing is held for its budget now, so a second press is refused and says why.
-    expect(await useWorkstreams.getState().allowMore(id)).toBe(false);
-    expect(texts().join(" ")).toContain("isn't held for its automatic steps");
-  });
-
-  it("is answered from the palette with the same two choices", async () => {
-    const id = (await backend.workstreamsOpen(CA401)).id;
-    await useWorkstreams.getState().setMode(id, "manage");
-    backend.workstreams.hold(id, HELD_BUDGET, "supervisor");
-    await useWorkstreams.getState().refresh();
-    const [budget] = currentNeeds();
-    contextDeps.needAct(budget, "advise");
-    await vi.waitFor(() => expect(stored(id).mode).toBe("advise"));
-    await useWorkstreams.getState().setMode(id, "manage");
-    // Allow 5 more is asked for with Enter on the keyboard; the palette's own Enter is that step.
-    contextDeps.needAct(currentNeeds()[0], "allowMore");
-    await vi.waitFor(() => expect(stored(id).heldReason).toBeNull());
-    expect(stored(id).budget.autoTurns).toBe(16);
-  });
-
-  it("is answered by Switch to Advise, with the hold left for Resume", async () => {
-    const id = (await backend.workstreamsOpen(CA401)).id;
-    await useWorkstreams.getState().setMode(id, "manage");
-    backend.workstreams.hold(id, HELD_BUDGET, "supervisor");
-    await useWorkstreams.getState().refresh();
-    expect(currentNeeds()).toHaveLength(1);
-    await useWorkstreams.getState().setMode(id, "advise");
-    expect(currentNeeds()).toEqual([]);
-    expect(stored(id).heldReason).toBe(HELD_BUDGET);
-  });
-});
-
-describe("switching a workstream to Advise", () => {
-  const stored = (id: string) => useWorkstreams.getState().list.find((v) => v.workstream.id === id)!.workstream;
-
-  it("offers Undo, and Undo restores Manage", async () => {
-    const id = (await backend.workstreamsOpen(CA401)).id;
-    await useWorkstreams.getState().refresh();
-    await useWorkstreams.getState().setMode(id, "manage");
-    expect(undoButton()).toBeUndefined();
-    await useWorkstreams.getState().setMode(id, "advise");
-    expect(stored(id).mode).toBe("advise");
-    expect(texts()).toEqual(["Switched CA-401 to Advise."]);
-    undoButton()!.run();
-    await vi.waitFor(() => expect(stored(id).mode).toBe("manage"));
-    expect((await backend.workstreamsEvents(id)).map((e) => e.action).slice(-2)).toEqual(["mode_set", "undone"]);
-  });
-
-  it("offers nothing when it was Advise already", async () => {
-    const id = (await backend.workstreamsOpen(CA401)).id;
-    await useWorkstreams.getState().refresh();
-    await useWorkstreams.getState().setMode(id, "advise");
     expect(undoButton()).toBeUndefined();
   });
 });

@@ -1,4 +1,3 @@
-import type { ClarityGap } from "./lib/ticketClarity";
 
 export type StatusCategory = "new" | "indeterminate" | "done";
 
@@ -32,17 +31,6 @@ export interface Attachment {
   filename: string;
   mimeType: string;
   size: number;
-}
-
-/** A file uploaded to a ticket. Without `mediaId` it can't be shown inline, so a comment names it instead. */
-export interface Uploaded {
-  id: string;
-  filename: string;
-  mimeType: string;
-  mediaId: string | null;
-  /** Pixel size, which Jira needs to show an image inline. */
-  width?: number;
-  height?: number;
 }
 
 export interface Comment {
@@ -123,20 +111,8 @@ export interface Snapshot {
   events: InboxEvent[];
   watching: string[];
   lastSyncAt: string | null;
-  /** Things the user did that the ticket data doesn't show, such as transitions. Their comments are read from the tickets. */
-  activity?: MyAction[];
   /** The last sync's error message, cleared by the next successful sync. */
   syncError?: string | null;
-}
-
-export type ViewId = "inbox" | "waiting" | "watching" | "snoozed" | "done" | "work";
-
-export interface MyAction {
-  ticketKey: string;
-  at: string;
-  kind: "comment" | "transition" | "created";
-  /** The comment, or the transition as "From → To". */
-  text: string;
 }
 
 /* Connector-neutral model, mirroring src-tauri/src/domain. Names carry a `Work` prefix where they would clash with
@@ -432,12 +408,11 @@ export type ProposalOrigin =
   /** Drafted by Pip while answering `requestId`, in a workstream's conversation when `workstream` is set. */
   | { type: "chat"; requestId: string; workstream?: string | null }
   | { type: "board" }
-  | { type: "autopilot"; eventId: string }
   /** Made from an agent run's result; the text is the agent's. `workstream` is the run's own. */
   | { type: "run"; runId: string; shortId: string | null; workstream?: string | null };
 
 /** Who drafted a proposal. `agent` is a run's result made into a draft; drafts stored before it existed say `user`. */
-export type ProposalMaker = "user" | "pip" | "autopilot" | "agent";
+export type ProposalMaker = "user" | "pip" | "agent";
 
 export type ProposalState =
   | { type: "pending" }
@@ -512,7 +487,7 @@ export type ProposalEdit =
   | { type: "runAnswer"; message: string }
   /** A review draft's summary and comments, as the person rewords and drops them; the ones left out stay as they are. A person's edit never moves a comment or adds one. */
   | { type: "githubReview"; summary?: string; comments?: ReviewComment[] }
-  | { type: "run"; instruction?: string; base?: string; clonePath?: string; kind?: RunKind; name?: string; pr?: number | null; allowPush?: boolean; report?: boolean; plan?: string; buildAccount?: string; project?: ContainerRef };
+  | { type: "run"; instruction?: string; base?: string; clonePath?: string; kind?: RunKind; name?: string; pr?: number | null; allowPush?: boolean; plan?: string; buildAccount?: string; project?: ContainerRef };
 
 /** Emitted as the `proposals-changed` event when a draft was created, edited, applied, revised or retired. */
 export interface ProposalsChanged {
@@ -556,13 +531,11 @@ export interface RunSpec {
   findings?: string | null;
   /** The investigation run the findings came from. Set with `findings`, triage and plans only. */
   findingsFromRun?: string | null;
-  /** For a plan the person chose to start though its triage found the ticket not ready: the open questions the plan assumes answers to. Set by the backend from that triage, never by the caller. */
-  assumptions?: string[];
   /** Whether a build is told it may push and open a draft pull request. Builds only. */
   allowPush?: boolean;
   /** Where the draft ticket of an investigation with no ticket lands. Its presence makes the run end as a ticket; the agent never chooses it. */
   project?: ContainerRef | null;
-  /** Whether the agent is asked to report its result through Gossamr's run-report tool, when Gossamr offers it. */
+  /** Whether the prompt spells out what the report tool is to be given. Every launch offers the tool. */
   report?: boolean;
   /** The workstream the run belongs to. Part of what the person approves, never part of the prompt. */
   workstream?: string | null;
@@ -593,6 +566,8 @@ export interface Run {
   sessionId: string | null;
   /** The question, or the exact command awaiting permission. */
   needs: string | null;
+  /** The question is held in the agent's `ask` call, so the answer goes straight to it. */
+  asking?: boolean;
   /** The answer Claude proposes to its own question, when it offers one. */
   suggestedReply?: string | null;
   /** An answer that was stopped on its way: the run is stopped, and this is what it was to be woken with. */
@@ -629,8 +604,6 @@ export interface Run {
   possibleContinuations?: { shortId: string; sessionId?: string | null; startedAt?: string | null }[];
   /** The ticket made from this run's draft once the person approved it. */
   createdItem?: ItemRef | null;
-  /** Set when the supervisor started the run by an auto-start rule, after the run named, rather than a person approving it. */
-  autoStart?: { rule: WorkstreamRule; afterRun: string } | null;
   /** Set while an approved run stays queued only because the most agents allowed are running; it starts by itself once a slot frees. */
   slotWaitSince?: string | null;
   /** The restriction a read-only run was launched with; absent for a Build and for a run that hasn't launched. */
@@ -765,7 +738,7 @@ export interface RunReview {
   /** For a triage or plan made after an investigation: the findings as they will be sent. */
   findings?: string | null;
   guard: string;
-  /** What the session is also given when the run asks for the result tool and Gossamr's server is running. */
+  /** What the session is also given when Gossamr's server is running: its four tools, their allow rules and the line added to the guard. */
   report?: { allowed: string; guard: string } | null;
   /** For a read-only kind: what Claude Code is told to refuse, and the sentence added to the guard. */
   readOnly?: ReadOnly | null;
@@ -824,33 +797,16 @@ export interface RunQuery {
 }
 
 /**
- * Mirrors src-tauri/src/domain/workstream.rs. How much Pip may do on its own: in `advise` it answers and drafts; in
- * `manage` the supervisor also wakes it when a run finishes and starts the routine handoffs its rules allow. Pip itself
- * starts nothing in either.
+ * Mirrors `WorkstreamUndo` in src-tauri/src/inbox/workstreams.rs. What the person's Undo takes back: "Bring them here"
+ * (the runs and drafts it moved, which go back to General).
  */
-export type WorkstreamMode = "advise" | "manage";
-
-/**
- * Mirrors `WorkstreamUndo` in src-tauri/src/inbox/workstreams.rs. What the person's Undo takes back, with how the workstream
- * stood before: a hold (`was`: the hold it replaced, if any), a switch of mode (`was`, and the mode a tripwire had kept), or
- * "Bring them here" (the runs and drafts it moved, which go back to General).
- */
-export type WorkstreamUndo = { type: "hold"; was: string | null } | { type: "mode"; was: WorkstreamMode; resumeMode: WorkstreamMode | null } | { type: "adopt"; runs: string[]; drafts: string[] };
+export type WorkstreamUndo = { type: "adopt"; runs: string[]; drafts: string[] };
 
 /** Runs and pending drafts on a workstream's ticket that belong to no workstream (they sit under General), by id; also what bringing them in moved. As `Adoptable` in src-tauri/src/inbox/workstreams.rs. */
 export interface Adoptable {
   runs: string[];
   drafts: string[];
 }
-
-/** An auto-start rule: which finished run may start which successor on its own. */
-export type WorkstreamRule = "investigate_triage" | "triage_plan" | "plan_build" | "build_review" | "fix_round" | "review_verify";
-
-/** Every auto-start rule, in chain order. */
-export const WORKSTREAM_RULES: readonly WorkstreamRule[] = ["investigate_triage", "triage_plan", "plan_build", "build_review", "fix_round", "review_verify"];
-
-/** A workstream's own switches for the auto-start rules; a rule it doesn't name follows the global switch. */
-export type WorkstreamRules = Partial<Record<WorkstreamRule, boolean>>;
 
 /** What a ticket looked like when its workstream opened, to notice it drifting. */
 export interface WorkstreamBasis {
@@ -863,39 +819,15 @@ export interface WorkstreamBasis {
   changing?: string[];
 }
 
-/** Why a workstream is held, as `heldReason` stores it. A tripwire is `tripwire:<kind>`. */
-export const HELD_RESTART = "restart";
-export const HELD_PERSON = "person";
-export const HELD_ALL = "hold_all";
-export const HELD_BUDGET = "budget";
-export const HELD_DAILY = "daily_cap";
-export const HELD_QUOTA = "quota";
-export const TRIPWIRE = "tripwire:";
-export const TRIPWIRES = ["marker", "basis_drift", "repeated_failure", "chain_refused"] as const;
-export type Tripwire = (typeof TRIPWIRES)[number];
-
-/** Automatic Pip turns since the person last wrote, and wakes in all, that a workstream may have unless its budget says otherwise. */
-export const AUTO_TURNS_DEFAULT = 11;
-export const WAKES_DEFAULT = 12;
-/** What the person's "Allow 5 more" adds to a workstream's allowance of automatic steps. */
-export const ALLOW_MORE_STEPS = 5;
+/**
+ * Why a workstream is paused, as `pausedReason` stores it: the person paused it, or Gossamr did for waking Pip too often
+ * in a day (`ceiling`). A paused workstream gets no wakes until the person resumes it. A stored reason this version
+ * doesn't know reads as `person`.
+ */
+export type PauseReason = "person" | "ceiling";
 
 /** Where a workstream is, derived from its runs and never stored. */
 export type WorkstreamStage = "intake" | "investigate" | "triage" | "plan" | "build" | "review" | "verify" | "done";
-
-/** Supervisor limits; `null` is the default (`AUTO_TURNS_DEFAULT`, `WAKES_DEFAULT`; no token limit). */
-export interface WorkstreamBudget {
-  autoTurns: number | null;
-  wakes: number | null;
-  tokens: number | null;
-}
-
-/** What a workstream has used of its budget. `autoTurns` counts since the person last wrote. */
-export interface WorkstreamSpend {
-  autoTurns: number;
-  wakes: number;
-  tokens: number;
-}
 
 /** One piece of work (usually a ticket) that the person, Pip and the runs linked to it carry from intake to done. */
 export interface Workstream {
@@ -907,36 +839,19 @@ export interface Workstream {
   title: string;
   /** The Pip session its conversation resumes. */
   pipSession: string | null;
-  mode: WorkstreamMode;
-  heldReason: string | null;
+  /** Why it is paused, while it is. */
+  pausedReason: PauseReason | null;
   /** Pip's own notes, at most 2 KB. */
   notes: string | null;
   createdAt: string;
   closedAt: string | null;
-  budget: WorkstreamBudget;
-  spent: WorkstreamSpend;
-  rules: WorkstreamRules;
   /** The ticket as it was when the workstream opened; null for a ticketless one. */
   basis: WorkstreamBasis | null;
-  /** The basis fields (`BASIS_FIELDS`) whose drift held it, kept while it is held for `tripwire:basis_drift`. */
-  drifted?: BasisField[];
-  /** The mode a tripwire took away, kept while it holds the workstream: resuming puts it back, unless the person chose a mode meanwhile. */
-  resumeMode?: WorkstreamMode | null;
 }
 
 /** The fields of a workstream's basis, as `BASIS_SUMMARY`, `BASIS_DESCRIPTION` and `BASIS_STATUS` name them. */
 export const BASIS_FIELDS = ["summary", "description", "status"] as const;
 export type BasisField = (typeof BASIS_FIELDS)[number];
-
-/** How much of its budget a workstream has used: `amber` from 80% of either limit, `spent` at 100%. */
-export type BudgetLevel = "ok" | "amber" | "spent";
-
-/** A workstream's budget as the page shows it, defaults filled in. */
-export interface BudgetView {
-  autoTurns: { used: number; limit: number };
-  wakes: { used: number; limit: number };
-  level: BudgetLevel;
-}
 
 /** A workstream with the stage its runs give it, their ids (newest first) and short names (`[runId, "R1"]`, oldest first). */
 export interface WorkstreamView {
@@ -948,83 +863,8 @@ export interface WorkstreamView {
   waitingForPr?: string | null;
   /** The newest finished review asked for changes and nothing is in progress: the stage is review, not done. */
   reviewBlocking?: boolean;
-  /** The newest review still blocks after the automatic fix rounds ran out: the person chooses what happens next. */
-  escalation?: Escalation | null;
-  /** The newest Triage found the ticket not ready to plan, and the Plan after it waits for the person's choice. */
-  readiness?: ReadinessStop | null;
-  /** The ticket's description looks thin to Gossamr's own word check, before any Triage: a notice, never a need. As `Clarity` in src-tauri/src/inbox/workstreams.rs. */
-  clarity?: Clarity | null;
-  /** The person asked the reporter and the comment was posted; nothing has answered it yet. */
-  waitingOnReporter?: ReporterWait | null;
-  /** The ticket changed (a basis drift) while the workstream waited on the reporter, and the person hasn't chosen since: the held banner says so. */
-  changedWhileWaiting?: boolean;
-  /** The wait on the reporter ended with their reply on the ticket (a comment from someone else) and the person hasn't chosen since. Always with `changedWhileWaiting`. */
-  reporterReplied?: boolean;
-  /** When that reply was written (the first comment that ended the wait): the timeline says "The reporter replied on the ticket" then. As `reporter_replied_at` in src-tauri/src/inbox/workstreams.rs. */
-  reporterRepliedAt?: string;
-  /** That reply's comment on the ticket and how it starts, while `reporterReplied`: the timeline and the notice quote it, and the timeline opens the comment. As `reporter_reply` in src-tauri/src/inbox/workstreams.rs. */
-  reporterReply?: ReporterReply;
-  /** Every reply from someone but the person on the ticket since the first reporter ask was posted, oldest first, whether or not the wait they ended was asked again: the timeline tells each. As `reporter_replies` in src-tauri/src/inbox/workstreams.rs. */
-  reporterReplies?: ReporterReplyAt[];
   /** Runs and pending drafts on the ticket that are in no workstream, while the workstream is open: the view offers to bring them here (`workstreamsAdopt`), never moves them on its own. As `adoptable` in src-tauri/src/inbox/workstreams.rs. */
   adoptable?: Adoptable | null;
-  budget: BudgetView;
-}
-
-/** What the clarity check found missing in a ticket's description (`ClarityGap` in src/lib/ticketClarity.ts). */
-export interface Clarity {
-  gaps: ClarityGap[];
-}
-
-/** A workstream waiting on the ticket's reporter. `since` is when the comment with the questions was posted. */
-export interface ReporterWait {
-  since: string;
-}
-
-/** A reply with the time it was written, as `ReporterReplyAt` in src-tauri/src/inbox/workstreams.rs. */
-export interface ReporterReplyAt extends ReporterReply {
-  at: string;
-}
-
-/** The reporter's reply: which comment on the ticket it is and how it starts (`excerpt`, its first two lines and how many more follow). As `ReporterReply` in src-tauri/src/inbox/workstreams.rs. */
-export interface ReporterReply {
-  id: string;
-  excerpt: string;
-}
-
-/**
- * A Triage that found its ticket not ready to plan, waiting for the person: ask the reporter, answer the questions
- * themselves, or plan anyway. Only the person chooses. As `ReadinessStop` in src-tauri/src/inbox/workstreams.rs.
- */
-export interface ReadinessStop {
-  triageRun: string;
-  triageLabel: string;
-  /** The open questions the Triage listed, the agent's words, cleaned and cut. May be empty. */
-  questions: string[];
-  /** When the Triage finished. */
-  at: string;
-  /** The person asked the reporter and then the ticket changed while they waited: the question is back as "changed: plan now?". */
-  changed?: boolean;
-  /** The wait ended with the reporter's reply on the ticket: the question is back as "<KEY>: the reporter replied, plan now?". Always with `changed`. */
-  replied?: boolean;
-}
-
-/**
- * A review that still blocks after the automatic fix rounds, waiting for the person: run another fix round, take the
- * workstream over (Advise), or post the review draft as it is. Only the person chooses. As `Escalation` in
- * src-tauri/src/inbox/workstreams.rs.
- */
-export interface Escalation {
-  reviewRun: string;
-  buildRun: string;
-  reviewLabel: string;
-  buildLabel: string;
-  /** The automatic fix rounds that were used up. */
-  rounds: number;
-  /** The pending GitHub review draft the person may post as it is: the review's own, else the newest of its pull request. */
-  reviewDraft?: string | null;
-  /** When the supervisor found the rounds used up. */
-  at: string;
 }
 
 /** Who did something recorded in a workstream's audit. */
@@ -1036,7 +876,7 @@ export interface WorkstreamEvent {
   seq: number;
   at: string;
   actor: WorkstreamActor;
-  /** e.g. `opened`, `closed`, `notes_set`, `run_approved`, `run_stopped`, `run_answered`, `run_retried`, `mode_set`, `held`, `resumed`, `rule_set`, `budget_reset`. */
+  /** e.g. `opened`, `closed`, `notes_set`, `run_approved`, `run_stopped`, `run_answered`, `run_retried`, `paused`, `resumed`. */
   action: string;
   runId: string | null;
   proposalId: string | null;
@@ -1062,12 +902,6 @@ export interface AgentSettings {
   terminal: "terminal" | "iTerm";
   /** Draft a Jira comment on the run's ticket when it finishes with a `For Jira:` section. */
   draftOnFinish: boolean;
-  /** Offer new runs the run-report tool, through which an agent hands Gossamr its result as data. */
-  reportResult: boolean;
-  /** Which routine handoffs start on their own in a workstream Pip manages. */
-  autostart: AutoStartSwitches;
-  /** Pip turns the supervisor may start in a day across every workstream. Zero turns the cap off. */
-  managerTurnsPerDay: number;
   /** Which system notifications about runs to show; a backend that sent none has "workstream". */
   notifications?: NoticeMode;
   /** Minutes between digest notifications. */
@@ -1077,19 +911,6 @@ export interface AgentSettings {
 /** One notification when a workstream starts waiting on you, one summary every so often, or none. */
 export type NoticeMode = "workstream" | "digest" | "off";
 export const DIGEST_MINUTES = 30;
-
-/** The global switches for the auto-start rules; each workstream can override them. */
-export interface AutoStartSwitches {
-  investigateTriage: boolean;
-  triagePlan: boolean;
-  planBuild: boolean;
-  buildReview: boolean;
-  fixRound: boolean;
-  /** A Verify after a passing review; off until the person turns it on. */
-  reviewVerify: boolean;
-}
-
-export const AUTOSTART_DEFAULTS: AutoStartSwitches = { investigateTriage: true, triagePlan: true, planBuild: true, buildReview: true, fixRound: true, reviewVerify: false };
 
 /** What `claude rm` said: it removed the worktree, or refused and explained in its own words. */
 export type CleanupResult = { type: "removed" } | { type: "refused"; message: string };
@@ -1118,13 +939,6 @@ export interface WorktreeInfo {
 
 /** Deleted, or Claude refused to remove the worktree (its own words) and nothing was deleted. */
 export type DeleteResult = { type: "deleted" } | { type: "refused"; message: string };
-
-/** What `runs_set_enabled` did. `note` says what turning Agents off left alone. */
-export interface RunsEnabledChange {
-  enabled: boolean;
-  keepRunning: number;
-  note: string | null;
-}
 
 /** One line of a pre-flight check. */
 export interface PreflightRow {

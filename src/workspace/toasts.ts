@@ -113,7 +113,7 @@ export const useToasts = create<ToastState>((set, get) => {
       const id = ++seq;
       set((s) => {
         const toast: Toast = { id, text, tone, action, at: Date.now(), current: options?.current, lifetime: options?.lifetime, keep, ...(options?.spoken === false ? { spoken: false as const } : {}) };
-        // The same offer again (a second Hold of the same workstream) replaces the one before it, on screen or waiting (an error on screen stays).
+        // The same offer again (the same offer made twice) replaces the one before it, on screen or waiting (an error on screen stays).
         const queue = keep ? s.toasts.filter((t, i) => (i === 0 && t.tone === "error") || t.text !== text) : s.toasts;
         // An error goes ahead of the notes waiting, behind the one on screen and any errors before it. An offer to undo goes
         // to the front: it is a few seconds long, and what it undoes is what the person just did. It takes the screen from a
@@ -161,27 +161,3 @@ export const useToasts = create<ToastState>((set, get) => {
 });
 
 export const messageOf = (e: unknown): string => (e instanceof Error ? e.message : typeof e === "string" ? e : JSON.stringify(e));
-
-/** The notes about what Looks fine taught, and the projects each is about: only the newest of them is worth showing. */
-const learning = new Map<number, readonly string[]>();
-
-/** Takes down the learning notes (on screen or waiting) about any of these projects: what they said is no longer so. */
-export function retireLearning(projects: readonly string[]) {
-  for (const [id, about] of [...learning]) {
-    if (!about.some((p) => projects.includes(p))) continue;
-    learning.delete(id);
-    useToasts.getState().dismiss(id);
-  }
-}
-
-/**
- * A note about what Looks fine taught in a project, or in several at once (giving back every project's learning): it replaces
- * an older one about any of them, on screen or waiting, and a newer note about any of them replaces it, so the newest says what stands.
- */
-export function pushLearning(projects: string | readonly string[], text: string, current?: () => boolean): number | null {
-  const about = typeof projects === "string" ? [projects] : [...projects];
-  retireLearning(about);
-  const id = useToasts.getState().push(text, "info", undefined, { current });
-  if (id !== null) learning.set(id, about);
-  return id;
-}

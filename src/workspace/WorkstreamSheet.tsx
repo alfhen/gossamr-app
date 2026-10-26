@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import { itemKey } from "../lib/filter";
 import { needsIn } from "../lib/needs";
 import { stageText } from "../lib/workstreamStage";
 import type { WorkstreamView } from "../types";
@@ -12,21 +13,25 @@ import { useRuns } from "./runsStore";
 import { useTabs } from "./tabsStore";
 import { isTypingTarget } from "./workKeys";
 import { StepRail } from "./StepRail";
-import { runDayAction } from "./StartMyDay";
+import { openTicketByKey } from "./jump";
 import { NO_WORKSTREAM_ID, useWorkView, type WorkViewFocus } from "./workViewStore";
 import { WorkstreamNeeds } from "./NeedsPane";
 import { useNeedsYou } from "./useNeeds";
 import { focusPip, useWorkstreams } from "./workstreamsStore";
+import { useWorkspace } from "../workspaceStore";
 
 export const WORKSTREAM_SHEET_ID = "workstream-sheet";
 
-/**
- * The element in an open workstream's detail `target` names: a draft's card, a run's card, the held banner's Resume (the
- * banner itself without one), or the first choice on the card of a review that still blocks after the fix rounds.
- */
+/** Opens the ticket in the peek over Agents; a ticket that isn't synced is read live. */
+function openTicket(key: string) {
+  const cached = Object.values(useWorkspace.getState().items).find((i) => i.item.key === key);
+  if (cached) return useTabs.getState().select(itemKey(cached.item));
+  void openTicketByKey(key);
+}
+
+/** The element in an open workstream's detail `target` names: a draft's card, a run's card, or the paused banner's Resume (the banner itself without one). */
 function targetElement(root: ParentNode, target: WorkViewFocus): HTMLElement | null {
-  if (target.type === "escalation") return root.querySelector<HTMLElement>("[data-escalation] button") ?? root.querySelector<HTMLElement>("[data-escalation]");
-  if (target.type === "workstream") return root.querySelector<HTMLElement>("[data-held-banner] button") ?? root.querySelector<HTMLElement>("[data-held-banner]");
+  if (target.type === "workstream") return root.querySelector<HTMLElement>("[data-paused-banner] button") ?? root.querySelector<HTMLElement>("[data-paused-banner]");
   const attr = target.type === "draft" ? "data-draft" : "data-run-id";
   return root.querySelector<HTMLElement>(`[${attr}="${CSS.escape(target.id)}"]`);
 }
@@ -76,7 +81,7 @@ function Body({ view }: { view: WorkstreamView }) {
         </span>
         <span className="flex-1" />
         {ws.itemKey && (
-          <Btn tone="ghost" data-workstream-ticket onClick={() => runDayAction({ type: "ticket", key: ws.itemKey! })}>
+          <Btn tone="ghost" data-workstream-ticket onClick={() => openTicket(ws.itemKey!)}>
             Open {ws.itemKey}
           </Btn>
         )}

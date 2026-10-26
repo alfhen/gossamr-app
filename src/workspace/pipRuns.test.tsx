@@ -3,14 +3,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MockBackend } from "../backend/mock";
 import { agentSummary, mockAsk, mockPipEvents, scriptPip } from "../backend/mockPip";
 import type { AskRequest, ClaudeEvent } from "../backend/claude";
-import type { Run, RunState, ScreenContext, WorkstreamView } from "../types";
+import type { Run, RunState, ScreenContext } from "../types";
 import { useWorkspace } from "../workspaceStore";
-import { runPhrase } from "../lib/runNames";
-import { NUDGE_GAP_MS, nudgeCandidates, pickNudge, type NudgeScene } from "./nudges";
 import { NO_FILTERS } from "./agentsLogic";
-import { useAgentsFlag } from "./agentsFlag";
 import { PipRunCard, PipRunStripView } from "./PipRunCard";
-import { STRIP_SHOWN, describeRun, nudgedOutside, runNudgeId, runNudges, runStatesNow, runSummaryPrompt, stripRuns } from "./pipRuns";
+import { STRIP_SHOWN, describeRun, stripRuns } from "./pipRuns";
 import { buildScreenContext, contextLines, type Screen } from "./screenContext";
 import { loadTabs, activeTab, useTabs } from "./tabsStore";
 import { useRuns } from "./runsStore";
@@ -28,86 +25,7 @@ const memory = () => {
 
 beforeEach(() => {
   vi.stubGlobal("localStorage", memory());
-  useAgentsFlag.setState({ enabled: true });
   useRuns.setState({ runs: [], sheet: null, status: "ready" });
-});
-
-describe("run nudges", () => {
-  it("leaves out the runs of a workstream Pip manages, whose wake turns tell the person", () => {
-    const view = (id: string, mode: "advise" | "manage") => ({ workstream: { id, mode } }) as WorkstreamView;
-    const runs = [run("done", { id: "managed", spec: { ...base.spec, workstream: "ws-m" } }), run("failed", { id: "advised", spec: { ...base.spec, workstream: "ws-a" } }), run("needsAnswer", { id: "loose" })];
-    const ids = runNudges(runs, new Set(), () => null, nudgedOutside([view("ws-m", "manage"), view("ws-a", "advise")])).map((n) => n.id);
-    expect(ids.sort()).toEqual(["run:advised:failed", "run:loose:needsAnswer"]);
-    expect(runNudges(runs, new Set())).toHaveLength(3);
-  });
-
-  it("speak up for a run that needs the person, finished or failed, and for nothing else", () => {
-    const states: RunState[] = ["queued", "launching", "working", "stopped", "unknown"];
-    expect(runNudges(states.map((s) => run(s)), new Set())).toEqual([]);
-    const loud = runNudges([run("needsAnswer"), run("needsPermission"), run("systemBlocked"), run("done"), run("failed")], new Set());
-    expect(loud.map((n) => n.kind).sort()).toEqual(["run-done", "run-failed", "run-needs", "run-needs", "run-needs"]);
-    expect(loud.every((n) => n.id.startsWith("run:r-"))).toBe(true);
-  });
-
-  it("never nudge for the quiet chip: a working run quiet for an hour stays silent", () => {
-    expect(runNudges([run("working", { lastProgressAt: iso(60) })], new Set())).toEqual([]);
-  });
-
-  it("name the run and offer to open it, or to ask Pip for a summary when it finished", () => {
-    const [needs] = runNudges([run("needsAnswer")], new Set(), () => "Aurora checkout totals");
-    expect(needs.text).toBe("Aurora checkout totals needs you. Want to look at what it asks?");
-    expect(needs.action).toEqual({ type: "open-run", id: "r-needsAnswer" });
-    const [done] = runNudges([run("done")], new Set(), () => "Aurora investigation");
-    expect(done.text).toBe("Aurora investigation finished. Want me to sum up what it found?");
-    // A ticket title isn't something that finds things, so the question names the run by ticket and step instead.
-    expect(done.action).toEqual({ type: "ask", prompt: "What did the agent find in run r-done?", shown: `What did ${runPhrase(run("done"))} find?` });
-    const [failed] = runNudges([run("failed")], new Set());
-    expect(failed.action).toEqual({ type: "open-run", id: "r-failed" });
-  });
-
-  it("get an answer about the one run the run-done nudge asks about, named as the person knows it", () => {
-    const done = run("done", { result: "Found the cause: the cache key ignores the locale.\n\nFor Jira: The cache key ignores the locale; a fix is a one-line change." });
-    const [nudge] = runNudges([done, run("needsAnswer")], new Set());
-    if (nudge.action.type !== "ask") throw new Error("the run-done nudge asks Pip");
-    const blank: ScreenContext = { view: null, item: null, filter: null, selection: [] };
-    const answer = scriptPip(nudge.action.prompt, blank, [], [done, run("needsAnswer")], NOW);
-    expect(answer.text).toContain(`I read the whole result of ${done.item ? `the ${done.item.key}` : "the"}`);
-    expect(answer.text).toContain("The cache key ignores the locale");
-    expect(answer.text).not.toContain("agent runs");
-    expect(answer.text).not.toContain(done.id);
-    expect(scriptPip("What did the agent find in run gone?", blank, [], [done], NOW).text).toContain("can't find that run");
-  });
-
-  it("come once per state change: the id carries the state, and what was announced stays quiet", () => {
-    const r = run("needsPermission");
-    expect(runNudgeId(r)).toBe("run:r-needsPermission:needsPermission");
-    const first = runNudges([r], new Set());
-    expect(first).toHaveLength(1);
-    expect(runNudges([r], new Set(first.map((n) => n.id)))).toEqual([]);
-    const moved = { ...r, state: "done" as const };
-    expect(runNudges([moved], new Set(first.map((n) => n.id)))).toHaveLength(1);
-    expect(runStatesNow([r, run("working"), moved])).toEqual(["run:r-needsPermission:needsPermission", "run:r-needsPermission:done"]);
-  });
-
-  it("respect a dismissal and the session's memory of what was shown", () => {
-    const [n] = runNudges([run("done")], new Set());
-    expect(pickNudge([n], [n.id], [])).toBeNull();
-    expect(pickNudge([n], [], [n.id])).toBeNull();
-    expect(pickNudge([n], [], [])).toBe(n);
-    expect(NUDGE_GAP_MS).toBeGreaterThan(0);
-  });
-
-  it("come first on any screen but Settings, newest first", () => {
-    const older = run("done", { id: "old", endedAt: iso(50) });
-    const newer = run("failed", { id: "new", endedAt: iso(5) });
-    const nudges = runNudges([older, newer], new Set());
-    expect(nudges.map((n) => n.id)).toEqual(["run:new:failed", "run:old:done"]);
-    const scene = (route: NudgeScene["route"]): NudgeScene => ({ route, filter: { type: "and", filters: [] }, count: 30, chips: 0, item: null, unassignedInView: 0, runs: nudges });
-    expect(nudgeCandidates(scene("workspace")).map((n) => n.id).slice(0, 2)).toEqual(["run:new:failed", "run:old:done"]);
-    expect(nudgeCandidates(scene("workspace")).some((n) => n.kind === "large-list")).toBe(true);
-    expect(nudgeCandidates(scene("agents")).map((n) => n.kind)).toEqual(["run-failed", "run-done"]);
-    expect(nudgeCandidates(scene("settings"))).toEqual([]);
-  });
 });
 
 describe("the strip of live runs", () => {
@@ -119,11 +37,10 @@ describe("the strip of live runs", () => {
     expect(stripRuns([run("done"), run("failed", { id: "f" }), run("stopped")], new Set(["f"]))).toEqual([]);
   });
 
-  it("is absent while agents are off or nothing is going, and lists live runs when it is on", () => {
-    const view = (runs: Run[], enabled = true) => renderToStaticMarkup(<PipRunStripView runs={runs} enabled={enabled} now={NOW} dismissed={new Set(["f"])} titleOf={() => null} onOpen={() => {}} />);
+  it("is absent when nothing is going, and lists live runs otherwise", () => {
+    const view = (runs: Run[]) => renderToStaticMarkup(<PipRunStripView runs={runs} now={NOW} dismissed={new Set(["f"])} titleOf={() => null} onOpen={() => {}} />);
     const waiting = [run("needsAnswer", { id: "n1", needs: "Keep the old rounding?" })];
     expect(view(waiting)).toContain('aria-label="Your agents"');
-    expect(view(waiting, false)).toBe("");
     expect(view([run("done"), run("failed", { id: "f" })])).toBe("");
     expect(view([])).toBe("");
   });
@@ -131,21 +48,21 @@ describe("the strip of live runs", () => {
   it("lists a failed run the person hasn't seen, and says how many of the runs it lists it shows, with a way to the rest", () => {
     const runs = [run("failed", { id: "f" }), run("needsAnswer", { id: "n1" }), run("working", { id: "w1" }), run("working", { id: "w2" }), run("done", { id: "d1" }), run("done", { id: "d2" }), run("stopped", { id: "s1" }), run("queued", { id: "q1" })];
     const seeAll = vi.fn();
-    const html = renderToStaticMarkup(<PipRunStripView runs={runs} enabled now={NOW} titleOf={() => null} onOpen={() => {}} onSeeAll={seeAll} />);
+    const html = renderToStaticMarkup(<PipRunStripView runs={runs} now={NOW} titleOf={() => null} onOpen={() => {}} onSeeAll={seeAll} />);
     expect(html.match(/data-run-id=/g)).toHaveLength(STRIP_SHOWN);
     expect(html).toContain('data-run-id="f"');
     // Five it would list (the done and stopped ones it never lists don't count): it shows three of them.
     expect(html).toMatch(/data-strip-count[^>]*>3 of 5</);
     expect(html).toContain("See all in Agents</button>");
     // When it shows them all, it says only how many, however many finished runs there are besides.
-    const few = renderToStaticMarkup(<PipRunStripView runs={[...runs.slice(1, 3), ...runs.slice(4, 7)]} enabled now={NOW} titleOf={() => null} onOpen={() => {}} onSeeAll={seeAll} />);
+    const few = renderToStaticMarkup(<PipRunStripView runs={[...runs.slice(1, 3), ...runs.slice(4, 7)]} now={NOW} titleOf={() => null} onOpen={() => {}} onSeeAll={seeAll} />);
     expect(few).toMatch(/data-strip-count[^>]*>2</);
     expect(few).not.toContain("See all in Agents");
     expect(few).not.toMatch(/data-strip-count[^>]*>[^<]* of /);
   });
 
   it("in a workstream's conversation lists only its runs, each with its short name there", () => {
-    const view = (runs: Run[], workstream: string | null) => renderToStaticMarkup(<PipRunStripView runs={runs} enabled now={NOW} workstream={workstream} titleOf={() => null} onOpen={() => {}} />);
+    const view = (runs: Run[], workstream: string | null) => renderToStaticMarkup(<PipRunStripView runs={runs} now={NOW} workstream={workstream} titleOf={() => null} onOpen={() => {}} />);
     const mine = run("working", { id: "w1", spec: { ...base.spec, workstream: "ws-1" } });
     const theirs = run("working", { id: "w2", spec: { ...base.spec, workstream: "ws-2" } });
     const loose = run("needsAnswer", { id: "n1", spec: { ...base.spec, workstream: null } });
@@ -203,10 +120,6 @@ describe("what Pip is told about agents", () => {
     expect(describeRun(run("working", { item: { connectionId: "mock", externalId: "CA-1", key: "CA-1" } }), "Checkout totals", NOW)).toBe("Checkout totals · Working");
     expect(describeRun(run("needsAnswer"), null, NOW)).toMatch(/^Investigate .+ · Needs an answer$/);
   });
-
-  it("asks what the agents are doing with one fixed question", () => {
-    expect(runSummaryPrompt()).toBe("What are my agents doing?");
-  });
 });
 
 describe("the sample Pip and agents", () => {
@@ -257,22 +170,5 @@ describe("the sample Pip and agents", () => {
     expect(draft.intent.spec.focus).toBe("the retry loop");
     expect(draft.intent.spec.kind).toBe("investigate");
     expect(backend.runs.list().length).toBe(before);
-  });
-});
-
-describe("a run a rule started", () => {
-  it("says on its card which run it started automatically after, by the workstream's label, else its id", () => {
-    const first = run("done", { id: "run-1", queuedAt: iso(30), spec: { ...base.spec, workstream: "ws-1" } });
-    const auto = run("queued", { id: "run-2", queuedAt: iso(20), spec: { ...base.spec, workstream: "ws-1" }, autoStart: { rule: "investigate_triage", afterRun: "run-1" } });
-    useRuns.getInitialState().runs = [first, auto];
-    const card = renderToStaticMarkup(<PipRunCard run={auto} now={NOW} ticketTitle={null} onOpen={() => {}} />);
-    useRuns.getInitialState().runs = [];
-    expect(card).toContain("Queued automatically after R1");
-    const launched = renderToStaticMarkup(<PipRunCard run={{ ...auto, state: "working" }} now={NOW} ticketTitle={null} onOpen={() => {}} />);
-    expect(launched).toContain("Started automatically after");
-    expect(card).toContain('data-auto-start="investigate_triage"');
-    const alone = renderToStaticMarkup(<PipRunCard run={{ ...auto, autoStart: { rule: "build_review", afterRun: "3f9a12bc-0000-4000-8000-000000000000" } }} now={NOW} ticketTitle={null} onOpen={() => {}} />);
-    expect(alone).toContain("Queued automatically after 3f9a12bc");
-    expect(renderToStaticMarkup(<PipRunCard run={first} now={NOW} ticketTitle={null} onOpen={() => {}} />)).not.toMatch(/(Started|Queued) automatically/);
   });
 });

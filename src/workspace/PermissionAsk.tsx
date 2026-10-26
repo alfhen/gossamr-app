@@ -4,14 +4,10 @@ import { labelsByRun } from "../lib/workstreamStage";
 import type { Run } from "../types";
 import { Icon } from "./AgentIcons";
 import { Btn, CodeBox } from "./AgentSheet";
-import { usePrefs } from "./prefs";
 import { permissionConfirmation, useRuns, type PermissionAnswered } from "./runsStore";
 
 /** The one honest line beside Allow once: Gossamr can't say yes for the person, Claude Code's own prompt can. */
 export const ALLOW_ONCE_NOTE = "Claude Code takes a yes only in its own prompt. Allow once opens this run in Terminal and copies the command: choose Yes there for this command only.";
-/** The one-time explainer, above the first permission prompt's buttons, until the person says Got it. */
-export const EXPLAINER_ALLOW = "Allow once in Terminal records your choice, opens this run in Terminal with the exact command copied, and you confirm there. Nothing runs until you do.";
-export const EXPLAINER_DENY = "Deny tells the agent no, and it carries on without it.";
 export const DENY_NOTE = "Claude is told you said no and carries on without it.";
 /** Why a read-only run's card has Deny and nothing to allow. */
 export const READ_ONLY_STEP_NOTE = "This is a read-only step, so it can't be allowed. Deny lets it carry on without it.";
@@ -40,29 +36,6 @@ export function PermissionSent({ answered }: { answered: Pick<PermissionAnswered
       <Icon name="check" className="size-3.5" />
       {confirmationText(answered)}
     </p>
-  );
-}
-
-/** What Allow once and Deny do, said once: on the first permission prompt the person sees, until Got it (kept in the prefs, as the orientation card's is). */
-export function PermissionExplainer({ allow, onDismiss = () => usePrefs.getState().setPermissionExplainerSeen(true) }: { allow: boolean; onDismiss?(): void }) {
-  const box = useRef<HTMLElement>(null);
-  // The button pressed goes with the explainer, so the keyboard lands on the prompt's own first answer, not nowhere.
-  const dismiss = () => {
-    const ask = box.current?.closest("[data-permission-ask]");
-    onDismiss();
-    requestAnimationFrame(() => ask?.querySelector<HTMLElement>("[data-permission-decisions] button:not(:disabled)")?.focus({ preventScroll: true }));
-  };
-  return (
-    <section ref={box} data-permission-explainer aria-label={allow ? "What Allow once and Deny do" : "What Deny does"} className="grid gap-1 rounded-md border border-ws-sep bg-ws-bar px-2.5 py-2 text-sm text-ws-ink2">
-      <p className="m-0 font-semibold text-ws-ink">First permission prompt? {allow ? "What the buttons do" : "What Deny does"}</p>
-      {allow && <p className="m-0">{EXPLAINER_ALLOW}</p>}
-      <p className="m-0">{EXPLAINER_DENY}</p>
-      <div>
-        <Btn tone="plain" onClick={dismiss}>
-          Got it
-        </Btn>
-      </div>
-    </section>
   );
 }
 
@@ -156,7 +129,6 @@ export function PermissionAsk({ run, onAttach, onStop, label, answered: given, c
   const ask = offer.ask;
   const what = !ask ? `${name} is asking permission:` : ask.tool === "Bash" ? `${name} wants to run this command:` : `${name} wants to use ${ask.tool} on:`;
   const allowed = answered?.kind === "allowed";
-  const explained = !usePrefs((s) => s.permissionExplainerSeen) && !allowed;
   const note = useId();
   const root = useRef<HTMLDivElement>(null);
   // Opened from Needs you, the sheet has focus on itself; the decision is what the person came for, so the keyboard starts there.
@@ -168,11 +140,10 @@ export function PermissionAsk({ run, onAttach, onStop, label, answered: given, c
     <div ref={root} data-permission-ask data-allow={offer.allow} className="grid gap-2">
       <p className="m-0 font-semibold text-ws-ink">{what}</p>
       {command ? <CodeBox text={ask ? ask.command : command} what="the command" wrap /> : <p className="m-0 text-ws-ink2">It didn&apos;t say what.</p>}
-      {explained && <PermissionExplainer allow={offer.allow === "offered"} />}
       {allowed ? (
         <PermissionSent answered={answered} />
       ) : offer.allow === "offered" ? (
-        !explained && <p className="m-0 text-sm text-ws-ink2">{ALLOW_ONCE_NOTE}</p>
+        <p className="m-0 text-sm text-ws-ink2">{ALLOW_ONCE_NOTE}</p>
       ) : (
         <p data-permission-refusal className="m-0 text-sm font-semibold text-ws-ink">
           {offer.reason}
@@ -194,7 +165,7 @@ export function PermissionAsk({ run, onAttach, onStop, label, answered: given, c
         {denying ? (
           <DenyConfirm onDeny={() => (setDenying(false), deny())} onKeep={() => setDenying(false)} />
         ) : (
-          <Btn tone={offer.allow === "readOnly" || offer.allow === "forbidden" ? "primary" : "plain"} icon="x" disabled={busy || !command} aria-describedby={explained ? undefined : note} onClick={offer.allow === "readOnly" ? deny : () => setDenying(true)}>
+          <Btn tone={offer.allow === "readOnly" || offer.allow === "forbidden" ? "primary" : "plain"} icon="x" disabled={busy || !command} aria-describedby={note} onClick={offer.allow === "readOnly" ? deny : () => setDenying(true)}>
             Deny
           </Btn>
         )}
@@ -211,12 +182,9 @@ export function PermissionAsk({ run, onAttach, onStop, label, answered: given, c
           </Btn>
         )}
       </div>
-      {/* The explainer says it already, above. */}
-      {!explained && (
-        <p id={note} className="m-0 text-xs text-ws-ink3">
-          Deny: {DENY_NOTE}
-        </p>
-      )}
+      <p id={note} className="m-0 text-xs text-ws-ink3">
+        Deny: {DENY_NOTE}
+      </p>
     </div>
   );
 }

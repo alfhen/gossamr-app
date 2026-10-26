@@ -4,7 +4,7 @@ import { MockBackend } from "../backend/mock";
 import { itemRef } from "../backend/mockConnector";
 import type { Run, WorkstreamView } from "../types";
 import { useWorkspace } from "../workspaceStore";
-import { ClosedWorkstreams, DayAndWeek, DayScroll, WorkstreamHeadExtras, WorkstreamTools, fadeScroll, hasMoreBelow, rowTitle } from "./AgentsHome";
+import { ClosedWorkstreams, WorkstreamHeadExtras, WorkstreamTools, rowTitle } from "./AgentsHome";
 import { AgentsScreen, type AgentsActions } from "./AgentsView";
 import { NO_FILTERS } from "./agentsLogic";
 import { loadPrefs, usePrefs } from "./prefs";
@@ -31,11 +31,10 @@ function seed<S extends object>(store: { getInitialState(): S; setState(patch: P
 
 const view = (id: string, key: string | null, over: Partial<WorkstreamView["workstream"]> = {}): WorkstreamView =>
   ({
-    workstream: { id, itemKey: key, title: key ? `${key} Checkout` : "Loose ends", connectionId: "mock", closedAt: null, createdAt: "2026-09-29T10:00:00Z", heldReason: null, mode: "advise", notes: null, ...over },
+    workstream: { id, itemKey: key, title: key ? `${key} Checkout` : "Loose ends", connectionId: "mock", closedAt: null, createdAt: "2026-09-29T10:00:00Z", pausedReason: null, notes: null, ...over },
     stage: "intake",
     runs: [],
     labels: [],
-    budget: { autoTurns: { used: 0, limit: 6 }, wakes: { used: 0, limit: 12 }, level: "ok" },
   }) as unknown as WorkstreamView;
 
 beforeEach(() => {
@@ -50,8 +49,8 @@ afterEach(() => {
 });
 
 describe("the Agents view's default", () => {
-  it("groups by workstream, and starts on Agents, for a profile with nothing stored", () => {
-    expect(loadPrefs()).toMatchObject({ agentsGroup: "workstream", startOnAgents: true });
+  it("groups by workstream for a profile with nothing stored", () => {
+    expect(loadPrefs()).toMatchObject({ agentsGroup: "workstream" });
   });
 
   it("starts everyone on Workstream once: the grouping the old default stored does not carry over, the one chosen since does", () => {
@@ -63,11 +62,9 @@ describe("the Agents view's default", () => {
     expect(JSON.parse(localStorage.getItem("gossamr-prefs")!)).toMatchObject({ agentsGroupBy: "workstream" });
   });
 
-  it("keeps a 'Start on Pip home' that was turned off turned off", () => {
-    localStorage.setItem("gossamr-prefs", JSON.stringify({ startOnPipHome: false }));
-    expect(loadPrefs().startOnAgents).toBe(false);
-    localStorage.setItem("gossamr-prefs", JSON.stringify({ startOnAgents: true, startOnPipHome: false }));
-    expect(loadPrefs().startOnAgents).toBe(true);
+  it("reads a profile that still stores keys no longer used", () => {
+    localStorage.setItem("gossamr-prefs", JSON.stringify({ startOnAgents: false, startOnPipHome: false, agentsIntroSeen: true, agentsGroupBy: "state" }));
+    expect(loadPrefs()).toMatchObject({ agentsGroup: "state" });
   });
 });
 
@@ -118,7 +115,7 @@ describe("what needs you, in the Agents list and its detail", () => {
       <AgentsScreen runs={[]} status="ready" error={null} environment={{ claude: "ok", version: "2.1.286" }} filters={NO_FILTERS} selectedId={null} earlierOpen={false} introShown={false} view="cards" stopping={false} opened={new Set()} now={NOW} ticketTitle={() => null} on={actions()} {...over} />,
     );
   afterEach(() => seed(useWorkView, { deciding: null, batch: null }));
-  const held = view("ws-1", "CA-401", { heldReason: "restart" });
+  const held = view("ws-1", "CA-401", { pausedReason: "ceiling" });
   const calm = view("ws-2", "CA-402");
 
   it("marks the workstream that holds a need with a badge and an accent, and leaves the others plain", () => {
@@ -150,13 +147,13 @@ describe("what needs you, in the Agents list and its detail", () => {
 
   it("shows the decision at the top of the detail, under Needs you, above the steps", () => {
     seed(useWorkstreams, { list: [held] });
-    seed(useWorkView, { deciding: "held:ws-1" });
+    seed(useWorkView, { deciding: "paused:ws-1" });
     const html = renderToStaticMarkup(<WorkstreamSheet id="ws-1" />);
     const at = (needle: string) => html.indexOf(needle);
     expect(at("data-workstream-needs=")).toBeGreaterThan(-1);
     expect(at("data-workstream-needs=")).toBeLessThan(at("data-step-rail"));
-    expect(html).toContain('data-needs-pane="held:ws-1"');
-    expect(at('data-needs-pane="held:ws-1"')).toBeLessThan(at("data-step-rail"));
+    expect(html).toContain('data-needs-pane="paused:ws-1"');
+    expect(at('data-needs-pane="paused:ws-1"')).toBeLessThan(at("data-step-rail"));
   });
 
   it("opens No workstream's detail, with its needs on top and nothing about a workstream", () => {
@@ -202,40 +199,10 @@ describe("what a workstream's heading says of where it stands", () => {
     expect(html).not.toContain("data-needs-you-badge");
   });
 
-  it("says a held-by-you workstream is held by you", () => {
-    expect(renderToStaticMarkup(<WorkstreamHeadExtras view={view("ws-1", "CA-401", { heldReason: "person" })} />)).toMatch(/data-status="held"[^>]*>Held by you</);
-  });
-});
-
-describe("the day region's room, and its fade", () => {
-  it("shows a 'more below' cue only when a scroller is cut off by more than a few pixels", () => {
-    expect(hasMoreBelow({ scrollHeight: 444, scrollTop: 0, clientHeight: 301 })).toBe(true);
-    expect(hasMoreBelow({ scrollHeight: 444, scrollTop: 143, clientHeight: 301 })).toBe(false);
-    expect(hasMoreBelow({ scrollHeight: 303, scrollTop: 0, clientHeight: 301 })).toBe(false);
-  });
-
-  it("scrolls most of a page, and jumps instead of gliding when the person asked for less motion", () => {
-    expect(fadeScroll(200, false)).toEqual({ top: 160, behavior: "smooth" });
-    expect(fadeScroll(200, true)).toEqual({ top: 160, behavior: "auto" });
-  });
-
-  it("gives Plan my week nearly half the window, so its three picks show, and Start my day a third", () => {
-    expect(renderToStaticMarkup(<DayScroll label="Plan my week" tall>x</DayScroll>)).toContain("max-h-[min(45vh,26rem)]");
-    const start = renderToStaticMarkup(<DayScroll label="Start my day">x</DayScroll>);
-    expect(start).toContain("max-h-[30vh]");
-    expect(start).not.toContain("45vh");
-  });
-});
-
-describe("Start my day and Plan my week", () => {
-  it("are away until asked for, and the plan takes the card's place while it is open", () => {
-    expect(renderToStaticMarkup(<DayAndWeek />)).not.toContain("data-start-my-day");
-    seed(useWorkView, { dayOpen: true });
-    expect(renderToStaticMarkup(<DayAndWeek />)).toContain("data-start-my-day");
-    seed(useWorkView, { planOpen: true });
-    const plan = renderToStaticMarkup(<DayAndWeek />);
-    expect(plan).toContain("data-plan-my-week");
-    expect(plan).not.toContain("data-start-my-day");
+  it("says a paused workstream is paused", () => {
+    const paused = view("ws-1", "CA-401", { pausedReason: "person" });
+    seed(useWorkstreams, { list: [paused] });
+    expect(renderToStaticMarkup(<WorkstreamHeadExtras view={paused} />)).toMatch(/data-status="paused"[^>]*>Paused/);
   });
 });
 

@@ -10,7 +10,7 @@ const items = await new MockBackend().cacheSearch({ type: "and", filters: [] });
 
 const actions = () => {
   const a = Object.fromEntries(
-    ["goToProject", "openSavedView", "setView", "addFilter", "clearFilters", "setTheme", "openSettings", "manageProjects", "watch", "openTicket", "openActivity", "openDrafts", "newTab", "newTicket", "chooseWorkstream", "togglePip", "startAgent", "startAgentOn", "showNeedsYou", "openAgentSafety", "startWorkstream", "closeWorkstream", "jumpToItem", "askPip", "openAgents", "openWorkstream", "askPipToPlan", "startWorkstreamOn", "startMyDay", "openJiraSent", "giveBackClarity"].map((k) => [k, vi.fn()]),
+    ["goToProject", "openSavedView", "setView", "addFilter", "clearFilters", "setTheme", "openSettings", "manageProjects", "watch", "openTicket", "openActivity", "openDrafts", "newTab", "newTicket", "chooseWorkstream", "togglePip", "startAgent", "startAgentOn", "showNeedsYou", "openAgentSafety", "startWorkstream", "closeWorkstream", "jumpToItem", "askPip", "openAgents", "openWorkstream", "askPipToPlan", "startWorkstreamOn", "openJiraSent"].map((k) => [k, vi.fn()]),
   );
   return a as unknown as CommandActions & Record<keyof CommandActions, ReturnType<typeof vi.fn>>;
 };
@@ -61,7 +61,7 @@ describe("palette commands", () => {
 
 describe("a command word outranks tickets", () => {
   const a = actions();
-  const ctx = { project: null, view: "list" as const, unreadActivity: 0, github: false, agents: true, needsYou: 0, ticket: null, onAgents: false };
+  const ctx = { project: null, view: "list" as const, unreadActivity: 0, github: false, needsYou: 0, ticket: null, onAgents: false };
   const commands = buildCommands(containers, BUILT_IN_VIEWS, a, ctx);
   const ticket = (key: string, title: string): WorkItem => ({ ...items[0], title, item: { ...items[0].item, key, externalId: key } });
   const tickets = [ticket("CA-900", "Runs of the nightly sync fail"), ticket("CA-901", "Timeline of agents is blank"), ticket("CA-902", "Retry failed payment")];
@@ -258,16 +258,15 @@ describe("GitHub commands", () => {
 describe("agent commands", () => {
   const noop = new Proxy({}, { get: () => () => {} }) as CommandActions;
   const ctx = { project: null, view: null, unreadActivity: 0 };
-  const labels = (agents: boolean) => buildCommands([], [], noop, { ...ctx, agents }).map((c) => c.label);
+  const labels = () => buildCommands([], [], noop, ctx).map((c) => c.label);
 
-  it("offers the agent entries only when Agents is on", () => {
-    expect(labels(false).some((l) => /agent/i.test(l))).toBe(false);
-    expect(labels(true)).toEqual(expect.arrayContaining(["Start an agent…", "Show what needs me", "Stop all agents…", "Agent safety and settings"]));
+  it("offers the agent entries", () => {
+    expect(labels()).toEqual(expect.arrayContaining(["Start an agent…", "Show what needs me", "Stop all agents…", "Agent safety and settings"]));
   });
 
   it("runs each entry", () => {
     const a = actions();
-    const found = buildCommands([], [], a, { ...ctx, agents: true, needsYou: 2 });
+    const found = buildCommands([], [], a, { ...ctx, needsYou: 2 });
     const named = (label: string) => found.find((c) => c.label === label)!;
     named("Start an agent…").run();
     named("Show what needs me").run();
@@ -279,16 +278,15 @@ describe("agent commands", () => {
     expect(named("Start an agent…").stay).toBeFalsy();
   });
 
-  it("lists Start a workstream on the peeked ticket only with a ticket and Agents on", () => {
+  it("lists Start a workstream on the peeked ticket only with a ticket", () => {
     const ticket = { key: "CA-401", workstream: false };
     const find = (c: Parameters<typeof buildCommands>[3]) => buildCommands([], [], noop, c).filter((x) => x.id === "workstream:start");
-    expect(find({ ...ctx, agents: true })).toEqual([]);
-    expect(find({ ...ctx, agents: true, ticket: null })).toEqual([]);
-    expect(find({ ...ctx, agents: false, ticket })).toEqual([]);
-    expect(find({ ...ctx, agents: true, ticket }).map((c) => c.label)).toEqual(["Start a workstream on CA-401"]);
-    expect(find({ ...ctx, agents: true, ticket: { ...ticket, workstream: true } }).map((c) => c.label)).toEqual(["Open the workstream on CA-401"]);
+    expect(find(ctx)).toEqual([]);
+    expect(find({ ...ctx, ticket: null })).toEqual([]);
+    expect(find({ ...ctx, ticket }).map((c) => c.label)).toEqual(["Start a workstream on CA-401"]);
+    expect(find({ ...ctx, ticket: { ...ticket, workstream: true } }).map((c) => c.label)).toEqual(["Open the workstream on CA-401"]);
     const a = actions();
-    const [entry] = rankCommands(buildCommands([], [], a, { ...ctx, agents: true, ticket }), "start a workstream");
+    const [entry] = rankCommands(buildCommands([], [], a, { ...ctx, ticket }), "start a workstream");
     expect(entry.label).toBe("Start a workstream on CA-401");
     entry.run();
     expect(a.startWorkstream).toHaveBeenCalled();
@@ -297,18 +295,17 @@ describe("agent commands", () => {
   it("offers to close the peeked ticket's workstream only when it has one, and asks first", () => {
     const ticket = { key: "CA-401", workstream: true };
     const find = (c: Parameters<typeof buildCommands>[3]) => buildCommands([], [], noop, c).filter((x) => x.id === "workstream:close");
-    expect(find({ ...ctx, agents: true, ticket: { ...ticket, workstream: false } })).toEqual([]);
-    expect(find({ ...ctx, agents: false, ticket })).toEqual([]);
-    expect(find({ ...ctx, agents: true, ticket }).map((c) => [c.label, c.hint])).toEqual([["Close the workstream on CA-401…", "asks first"]]);
+    expect(find({ ...ctx, ticket: { ...ticket, workstream: false } })).toEqual([]);
+    expect(find({ ...ctx, ticket }).map((c) => [c.label, c.hint])).toEqual([["Close the workstream on CA-401…", "asks first"]]);
     const a = actions();
-    const [entry] = rankCommands(buildCommands([], [], a, { ...ctx, agents: true, ticket }), "close the workstream");
+    const [entry] = rankCommands(buildCommands([], [], a, { ...ctx, ticket }), "close the workstream");
     expect(entry.id).toBe("workstream:close");
     entry.run();
     expect(a.closeWorkstream).toHaveBeenCalled();
   });
 
   it("finds start an agent by its plain words", () => {
-    const found = rankCommands(buildCommands([], [], noop, { ...ctx, agents: true }), "run claude").map((c) => c.label);
+    const found = rankCommands(buildCommands([], [], noop, ctx), "run claude").map((c) => c.label);
     expect(found).toContain("Start an agent…");
   });
 
@@ -368,20 +365,19 @@ describe("Agents in the palette", () => {
     ({ workstream: { id, itemKey: key, title: key ? `${key} Refund rounding` : "Look into the logs", closedAt: closed ? "2026-10-01T00:00:00Z" : null }, stage: "intake", runs: [], labels: [] }) as unknown as Parameters<typeof workstreamCommands>[0][number];
 
   it("finds Open Agents as the operations view (what is running, capacity, Stop all), not as a timeline", () => {
-    const on = buildCommands(containers, BUILT_IN_VIEWS, actions(), { ...ctx, agents: true });
+    const on = buildCommands(containers, BUILT_IN_VIEWS, actions(), ctx);
     for (const q of ["capacity", "running", "operations"]) expect(rankCommands(on, q)[0]?.id).toBe("app:agents");
     expect(on.find((c) => c.id === "app:agents")!.keywords).not.toContain("timeline");
   });
 
   it("offers 'Open Agents' first for 'agents', ahead of Stop all, and not while on Agents", () => {
     const a = actions();
-    const on = buildCommands(containers, BUILT_IN_VIEWS, a, { ...ctx, agents: true });
+    const on = buildCommands(containers, BUILT_IN_VIEWS, a, ctx);
     expect(rankCommands(on, "agents")[0].id).toBe("app:agents");
     expect(on.some((c) => c.id === "app:agents")).toBe(true);
     rankCommands(on, "agents")[0].run();
     expect(a.openAgents).toHaveBeenCalled();
-    expect(buildCommands(containers, BUILT_IN_VIEWS, a, { ...ctx, agents: true, onAgents: true }).some((c) => c.id === "app:agents")).toBe(false);
-    expect(buildCommands(containers, BUILT_IN_VIEWS, a, ctx).some((c) => c.id === "app:agents")).toBe(false);
+    expect(buildCommands(containers, BUILT_IN_VIEWS, a, { ...ctx, onAgents: true }).some((c) => c.id === "app:agents")).toBe(false);
   });
 
   it("opens an open workstream by its ticket's key, never a closed one", () => {
@@ -396,20 +392,6 @@ describe("Agents in the palette", () => {
     expect(workstreamCommands(list, "  ", a)).toEqual([]);
   });
 
-  it("ranks a command that does something new above one that only brings a card back, for the same words (G31)", () => {
-    const all = buildCommands(containers, BUILT_IN_VIEWS, actions(), { ...ctx, agents: true });
-    const labels = rankCommands(all, "start").map((c) => c.label);
-    expect(labels.indexOf("Start a workstream…")).toBeGreaterThanOrEqual(0);
-    expect(labels.indexOf("Start a workstream…")).toBeLessThan(labels.indexOf("Start my day"));
-    expect(all.find((c) => c.id === "app:start-my-day")?.refocus).toBe(true);
-    // Only a tie is broken: a closer match still wins, and equal matches of the same kind keep their order.
-    const a = { id: "a", group: "Go to" as const, label: "Start my day", refocus: true, run: () => {} };
-    const b = { id: "b", group: "Go to" as const, label: "Begin: start here", run: () => {} };
-    const c = { id: "c", group: "Go to" as const, label: "Start over", run: () => {} };
-    expect(rankCommands([a, b, c], "start").map((x) => x.id)).toEqual(["c", "a", "b"]);
-    expect(rankCommands([a, c], "start").map((x) => x.id)).toEqual(["c", "a"]);
-  });
-
   it("asks Pip to plan the ticket a query starting with 'plan' names", () => {
     const a = actions();
     const ca401 = items.find((i) => i.item.key === "CA-401")!;
@@ -422,7 +404,7 @@ describe("Agents in the palette", () => {
   });
 
   it("has no Pip home entry, and ⌘J is Toggle Pip everywhere", () => {
-    const on = buildCommands(containers, BUILT_IN_VIEWS, actions(), { ...ctx, agents: true });
+    const on = buildCommands(containers, BUILT_IN_VIEWS, actions(), ctx);
     expect(on.some((c) => c.id === "app:pip-home")).toBe(false);
     expect(rankCommands(on, "pip home")[0]?.label ?? "").not.toMatch(/Pip home/);
     expect(on.find((c) => c.id === "app:pip")?.label).toBe("Toggle Pip");
@@ -519,25 +501,13 @@ describe("Agents in the palette", () => {
   });
 
   it("keeps the peek's workstream entry as it was", () => {
-    const on = buildCommands(containers, BUILT_IN_VIEWS, actions(), { ...ctx, agents: true, ticket: { key: "CA-401", workstream: false } });
+    const on = buildCommands(containers, BUILT_IN_VIEWS, actions(), { ...ctx, ticket: { key: "CA-401", workstream: false } });
     expect(on.find((c) => c.id === "workstream:start")?.label).toBe("Start a workstream on CA-401");
   });
 });
 
 describe("the habits in the palette", () => {
   const ctx = { project: null, view: null, unreadActivity: 0 };
-
-  it("offers 'Start my day' while Agents are on, and finds it by what it is for", () => {
-    const a = actions();
-    expect(buildCommands(containers, BUILT_IN_VIEWS, a, ctx).some((c) => c.id === "app:start-my-day")).toBe(false);
-    const on = buildCommands(containers, BUILT_IN_VIEWS, a, { ...ctx, agents: true });
-    const start = on.find((c) => c.id === "app:start-my-day")!;
-    expect(start).toMatchObject({ group: "Go to", label: "Start my day" });
-    expect(rankCommands(on, "start my day")[0].id).toBe("app:start-my-day");
-    expect(rankCommands(on, "morning")[0].id).toBe("app:start-my-day");
-    start.run();
-    expect(a.startMyDay).toHaveBeenCalled();
-  });
 
   it("offers 'What Jira saw from me' always, and finds it by what it shows", () => {
     const a = actions();
@@ -549,24 +519,12 @@ describe("the habits in the palette", () => {
     sent.run();
     expect(a.openJiraSent).toHaveBeenCalled();
   });
-
-  it("offers giving back what Looks fine learned only once it learned something, with how many projects", () => {
-    const a = actions();
-    expect(buildCommands(containers, BUILT_IN_VIEWS, a, ctx).some((c) => c.id === "clarity:reset")).toBe(false);
-    expect(buildCommands(containers, BUILT_IN_VIEWS, a, { ...ctx, clarityLearned: 0 }).some((c) => c.id === "clarity:reset")).toBe(false);
-    const one = buildCommands(containers, BUILT_IN_VIEWS, a, { ...ctx, clarityLearned: 1 }).find((c) => c.id === "clarity:reset")!;
-    expect(one).toMatchObject({ group: "App", label: "Give back what Looks fine learned", hint: "1 project" });
-    const two = buildCommands(containers, BUILT_IN_VIEWS, a, { ...ctx, clarityLearned: 2 }).find((c) => c.id === "clarity:reset")!;
-    expect(two.hint).toBe("2 projects");
-    two.run();
-    expect(a.giveBackClarity).toHaveBeenCalled();
-  });
 });
 
 describe("Start a workstream… in the palette (G14)", () => {
   it("is found by 'start', asks for the ticket in the palette itself, and Start an agent says how it differs", () => {
     const a = actions();
-    const found = buildCommands([], [], a, { project: null, view: null, unreadActivity: 0, agents: true });
+    const found = buildCommands([], [], a, { project: null, view: null, unreadActivity: 0 });
     const entry = found.find((c) => c.label === "Start a workstream…")!;
     expect(entry.group).toBe("Workstreams");
     expect(entry.hint).toBe("starts no agent and posts nothing");
@@ -575,6 +533,5 @@ describe("Start a workstream… in the palette (G14)", () => {
     entry.run();
     expect(a.chooseWorkstream).toHaveBeenCalled();
     expect(found.find((c) => c.label === "Start an agent…")!.hint).toContain("runs Claude");
-    expect(buildCommands([], [], a, { project: null, view: null, unreadActivity: 0, agents: false }).some((c) => c.label === "Start a workstream…")).toBe(false);
   });
 });

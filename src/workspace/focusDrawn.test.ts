@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { focusAdoptButton, focusAdopted, focusAgentsList, focusWorkstreamRow } from "./focusDrawn";
+import { focusAdoptButton, focusAdopted, focusWorkstreamRow } from "./focusDrawn";
 
 /** A page that answers each selector with an element that records being focused; frames run at once. */
 function page(found: Record<string, string>) {
@@ -24,13 +24,6 @@ describe("where the keyboard goes after the offers (G7)", () => {
     const focused = page({ '[data-workstream-group="ws-1"] [data-workstream-open]': "open" });
     focusWorkstreamRow("ws-1");
     expect(focused[0]).toBe("open");
-  });
-
-  it("lands on the Agents list's first workstream once a card over it has closed, else on its heading", () => {
-    expect(page({ "[data-agents-home] [data-workstream-open]": "open", "[data-agents-home] h1": "heading" }) && (focusAgentsList(), true)).toBe(true);
-    const focused = page({ "[data-agents-home] h1": "heading" });
-    focusAgentsList();
-    expect(focused[0]).toBe("heading");
   });
 
   it("lands on Bring them here again once its adoption is undone", () => {

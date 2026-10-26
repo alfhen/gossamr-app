@@ -12,7 +12,6 @@ import { useActivity } from "./activityStore";
 import { CANVASES } from "./canvases";
 import { useStepKeys } from "./browse";
 import { itemKey, usesCode, withoutCode } from "../lib/filter";
-import { isTypingTarget } from "../lib/keyboard";
 import { workspaceTicketLinks } from "./jump";
 import { workConnections } from "./domains";
 import { FilterBar } from "./FilterBar";
@@ -23,12 +22,10 @@ import { PullView } from "./PullView";
 import { FilterNote, LAUNCHER_CLEAR, LAUNCHER_GUTTER, PipLauncher, SelectionAsk, usePipView } from "./PipExtras";
 import { GENERAL_CONVERSATION, PIP_INPUT_ID, PipPane } from "./PipPane";
 import { usePaneWidths } from "./PaneResizers";
-import { useAgentsEnabled, useAgentsFlag } from "./agentsFlag";
 import { applyTheme, usePrefs } from "./prefs";
 import { useRuns } from "./runsStore";
 import { togglePip, useWorkstreams } from "./workstreamsStore";
 import { Rail } from "./Rail";
-import { isHoldAllKey } from "./commands";
 import { TABBABLE, nextRegion, regionStep, wrapTab, type WorkspaceRegion } from "./workKeys";
 import { Settings } from "./Settings";
 import { Header } from "./Header";
@@ -68,11 +65,6 @@ function Canvas() {
   return <View tab={tab} items={items} />;
 }
 
-/** What the main area shows on `route`. Agents is there only while Agents are on; until the route moves on, nothing is. */
-export function mainScreen(route: Route, agentsEnabled: boolean): Route | null {
-  return route === "agents" && !agentsEnabled ? null : route;
-}
-
 /**
  * How much of the main area's right side the workspace leaves to the open peek, so the canvas reflows beside it
  * instead of running under it. Other screens keep the peek as an overlay; an expanded peek covers everything anyway.
@@ -82,18 +74,13 @@ export const canvasRoom = (route: Route, peekOpen: boolean, peekWidth: number) =
 /** The app opens on Agents only once per load, so coming back to the workspace later doesn't send the person away again. */
 let landed = false;
 
-/**
- * Opens on Agents once the workspace is ready and the backend said Agents are on, unless the person turned 'Start on
- * Agents' off. Then, and with Agents off, the app opens on the workspace.
- */
+/** Opens on Agents once the workspace is ready. */
 function useStartOnAgents(ready: boolean) {
-  const known = useAgentsFlag((s) => s.known);
-  const enabled = useAgentsFlag((s) => s.enabled);
   useEffect(() => {
-    if (!ready || !known || landed) return;
+    if (!ready || landed) return;
     landed = true;
-    if (enabled && usePrefs.getState().startOnAgents) useTabs.getState().setRoute("agents");
-  }, [ready, known, enabled]);
+    useTabs.getState().setRoute("agents");
+  }, [ready]);
 }
 
 /** The region of the workspace layout `el` is in: the peek, Pip's pane, or the main area around them. */
@@ -151,15 +138,9 @@ function useRegionKeys() {
   }, []);
 }
 
-function useGlobalKeys(agentsEnabled: boolean) {
+function useGlobalKeys() {
   useEffect(() => {
     const onKey = (ev: KeyboardEvent) => {
-      // Not while typing: the shortcut must never fire from Pip's input or any other field.
-      if (agentsEnabled && isHoldAllKey(ev) && !isTypingTarget(document.activeElement)) {
-        ev.preventDefault();
-        void useWorkstreams.getState().holdAll();
-        return;
-      }
       if (!(ev.metaKey || ev.ctrlKey) || ev.altKey || ev.shiftKey) return;
       const prefs = usePrefs.getState();
       if (ev.key === "k") {
@@ -172,22 +153,22 @@ function useGlobalKeys(agentsEnabled: boolean) {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [agentsEnabled]);
+  }, []);
 }
 
 /**
  * The browser tab says which screen is open, and when the person moves to another one from the rail or the palette its heading
  * takes the keyboard, so a screen reader hears where it is. The keyboard is left alone where the person already put it.
  */
-function useRouteAnnounce(screen: Route | null) {
+function useRouteAnnounce(screen: Route) {
   useEffect(() => {
-    if (screen) document.title = routeTitle(screen);
+    document.title = routeTitle(screen);
   }, [screen]);
   const before = useRef(screen);
   useEffect(() => {
     if (before.current === screen) return;
     before.current = screen;
-    const sel = screen && routeHeading(screen);
+    const sel = routeHeading(screen);
     if (!sel) return;
     const frame = requestAnimationFrame(() => {
       const at = document.activeElement;
@@ -214,12 +195,10 @@ export function Workspace({ backend }: { backend: Backend }) {
   const choice = useWorkspace((s) => s.watch.find((w) => w.needsChoice));
   const choiceConnection = useWorkspace((s) => s.connections.find((c) => c.id === choice?.connectionId));
   const hasGithub = useWorkspace((s) => s.connections.some((c) => c.kind === "github"));
-  const agentsEnabled = useAgentsEnabled();
-  useGlobalKeys(agentsEnabled);
+  useGlobalKeys();
   useRegionKeys();
   usePipView();
-  const screen = mainScreen(route, agentsEnabled);
-  useRouteAnnounce(screen);
+  useRouteAnnounce(route);
   const paneShown = pipOpen;
   const launcherShown = !pipOpen;
   const room = canvasRoom(route, peekOpen, peekWidth);
@@ -257,22 +236,13 @@ export function Workspace({ backend }: { backend: Backend }) {
   }, [backend]);
 
   useEffect(() => {
-    useAgentsFlag.getState().init(backend);
-  }, [backend]);
-
-  useEffect(() => {
-    if (!agentsEnabled) {
-      const now = useTabs.getState().route;
-      if (now === "agents") useTabs.getState().setRoute("workspace");
-      return;
-    }
     useRuns.getState().init(backend);
     useWorkstreams.getState().init(backend);
     return () => {
       useWorkstreams.getState().dispose();
       useRuns.getState().dispose();
     };
-  }, [backend, agentsEnabled]);
+  }, [backend]);
 
   useEffect(() => {
     useDev.getState().setEnabled(hasGithub);
@@ -318,7 +288,7 @@ export function Workspace({ backend }: { backend: Backend }) {
         <Rail />
         <main
           id={MAIN_ID}
-          aria-label={screen ? ROUTE_NAME[screen] : undefined}
+          aria-label={ROUTE_NAME[route]}
           tabIndex={-1}
           style={{ ["--ws-launcher-clear" as string]: `${launcherShown ? LAUNCHER_CLEAR : 0}px`, ["--ws-launcher-gutter" as string]: `${launcherShown ? LAUNCHER_GUTTER : 0}px` }}
           className="relative flex min-h-0 min-w-0 flex-col outline-none"
@@ -329,15 +299,15 @@ export function Workspace({ backend }: { backend: Backend }) {
             {route === "workspace" && <FilterBar />}
             {route === "workspace" && <FilterNote />}
             <div className="min-h-0 flex-1">
-              {screen === "workspace" && <Canvas />}
-              {screen === "activity" && <ActivityView />}
-              {screen === "sent" && <JiraSentView />}
-              {screen === "agents" && <AgentsView />}
-              {screen === "settings" && <Settings />}
+              {route === "workspace" && <Canvas />}
+              {route === "activity" && <ActivityView />}
+              {route === "sent" && <JiraSentView />}
+              {route === "agents" && <AgentsView />}
+              {route === "settings" && <Settings />}
             </div>
           </div>
           <PeekSheet />
-          {agentsEnabled && <AgentSheets />}
+          <AgentSheets />
           {launcherShown && <PipLauncher />}
           <SelectionAsk />
           <ToastHost placement={toastPlacement(room)} />

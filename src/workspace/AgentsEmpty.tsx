@@ -15,20 +15,14 @@ function Explain({ icon, title, children }: { icon: IconName; title: string; chi
   );
 }
 
-/** The first-run explainer. What it says about safety is what the plan requires the interface to say. */
+/** The panel the Agents toolbar's How agents work button opens. What it says about safety is what the plan requires the interface to say. */
 export function AgentsIntro({ onDismiss }: { onDismiss(): void }) {
   return (
     <section aria-labelledby="agents-intro" className="grid gap-3.5 rounded-xl border border-ws-sep bg-ws-bar px-5 py-5">
-      <div>
-        <span className="inline-flex items-center gap-1 rounded-full bg-ws-pip-soft px-2 text-xs leading-[1.6] font-semibold text-ws-pip">
-          <Icon name="spark" className="size-[11px]" />
-          New
-        </span>
-      </div>
       <h2 id="agents-intro" className="m-0 max-w-[56ch] text-xl leading-tight font-semibold text-balance">
         Agents are Claude Code sessions that work in the background
       </h2>
-      <p className="m-0 max-w-[62ch] text-ws-ink2">You approve each one first. Agents are on by default; turn them off any time in Settings.</p>
+      <p className="m-0 max-w-[62ch] text-ws-ink2">You approve each one first.</p>
       <div className="grid grid-cols-[repeat(auto-fit,minmax(240px,1fr))] gap-3">
         <Explain icon="term" title="They run as you">
           A Build runs as you, with your own Claude settings: anything your Claude can do, it can do. Read-only steps are signed in as you but run without your settings.

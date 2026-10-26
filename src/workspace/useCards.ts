@@ -3,7 +3,7 @@ import { itemKey } from "../lib/filter";
 import { targetOf } from "../lib/proposals";
 import type { StatusDef, WorkItem, Workflow } from "../types";
 import { draftCounts, knownMoves, nameOf, workflowOfItem, useWorkspace } from "../workspaceStore";
-import { approvableTransitions, blockedKeys, bulkMoves, bulkTargets, draftStatus, movesAreOpaque, pendingMoves, targetsFor, witherOf } from "./boardLogic";
+import { approvableTransitions, blockedKeys, bulkMoves, bulkTargets, draftStatus, movesAreOpaque, pendingMoves, targetsFor } from "./boardLogic";
 import { useCanvasOrder } from "./browse";
 import { useDev, VISIBLE_LIMIT } from "./devStore";
 import { useAttention } from "./CanvasBits";
@@ -95,7 +95,6 @@ export function useCards(items: readonly WorkItem[], order: readonly string[]) {
       item,
       assignee: nameOf({ names }, item.assignee),
       now,
-      wither: witherOf(item, now),
       blocked: blocked.has(key),
       ...attention.marks(item),
       draft: p ? { id: p.id, to: to! } : null,

@@ -1,16 +1,11 @@
 import { expect, test, type Page } from "@playwright/test";
-import { agentsHome, askPip, closeWorkstreamSheet, holdBySystem, homeConversation, homeConversationRegion, homeSettled, jiraWrites, mockRuns, needOfKind, needsPane, needsPaneHeading, needsYouCount, needsYouTray, openAgents, openApp, openNeedOfKind, openPip, pipPane, selectWorkstream, startWorkstream, stepChip, stepRail, workstreamGroup } from "./support/app";
+import { agentsHome, askPip, closeWorkstreamSheet, pauseAtCeiling, homeConversation, homeConversationRegion, homeSettled, jiraWrites, mockRuns, needOfKind, needsPane, needsPaneHeading, needsYouCount, needsYouTray, openAgents, openApp, openNeedOfKind, openPip, pipPane, selectWorkstream, startWorkstream, stepChip, stepRail, workstreamGroup } from "./support/app";
 
 /** The rail's Agents button. */
 const homeButton = (page: Page) => page.locator("[data-rail]").getByRole("button", { name: /^Agents/ });
 
-/** Waits until the sample backend has said whether Agents are on: the rail's Agents button shows or goes. */
-async function agentsSettled(page: Page, on: boolean) {
-  await expect(page.getByRole("button", { name: /^Agents/ })).toHaveCount(on ? 1 : 0);
-}
-
-// A workstream in Manage mode, with pull requests shown only when a test says: the setting the phase's scenarios share.
-const MANAGED = "runs=empty&prSurface=manual&wsManage=1";
+// Pull requests are shown only when a test says: the setting the phase's scenarios share.
+const SAMPLE = "runs=empty&prSurface=manual";
 
 /** An item's line without how long it has waited, which can tick over between two reads. */
 const withoutAge = (line: string) => line.replace(/ · (?:now|\d+[mhd])$/, "");
@@ -27,11 +22,10 @@ async function homeWorkstream(page: Page, key = "CA-401") {
 }
 
 test("Needs you: Pip's investigation draft waits in the list and on its row, opens its decision, and leaves once skipped", async ({ page }) => {
-  await openApp(page, MANAGED);
-  await agentsSettled(page, true);
+  await openApp(page, SAMPLE);
   await homeWorkstream(page);
   const row = workstreamGroup(page, "CA-401");
-  await expect(row.locator('[data-status="needs-you"]')).toHaveCount(0);
+  await expect(row.locator('[data-status="paused"]')).toHaveCount(0);
 
   await askPip(page, "investigate this");
   await settled(page);
@@ -57,48 +51,44 @@ test("Needs you: Pip's investigation draft waits in the list and on its row, ope
   await expect(needsYouTray(page)).toContainText("Nothing needs you.");
 });
 
-test("Needs you: a hold the person chose is no need, so the header says 'Held by you' with Resume and nothing is counted; a restart's hold is a need that opens Resume", async ({ page }) => {
-  await openApp(page, MANAGED);
-  await agentsSettled(page, true);
+test("Needs you: a pause is a need with Resume as its decision, whether the person made it or the daily ceiling did", async ({ page }) => {
+  await openApp(page, SAMPLE);
   await homeWorkstream(page);
   const row = workstreamGroup(page, "CA-401");
-  const held = needOfKind(page, "hold");
-  await expect(held).toHaveCount(0);
+  const paused = needOfKind(page, "paused");
+  await expect(paused).toHaveCount(0);
 
-  await agentsHome(page).getByRole("button", { name: "Hold", exact: true }).click();
-  const banner = pipPane(page).locator("[data-held-banner]");
-  await expect(banner).toContainText("Held by you");
-  await expect(banner).toContainText("You chose this, so the hold itself is not in Needs you.");
-  await expect(held).toHaveCount(0);
-  await expect(row.locator("[data-status]")).toHaveText("Held by you");
-  await expect(row.locator('[data-status="needs-you"]')).toHaveCount(0);
-  await expect(needsYouTray(page)).toContainText("Nothing needs you.");
+  await agentsHome(page).getByRole("button", { name: "Pause", exact: true }).click();
+  const banner = pipPane(page).locator("[data-paused-banner]");
+  await expect(banner).toContainText("Paused. Pip isn't woken until you resume it.");
+  await expect(paused).toHaveCount(1);
+  await expect(row.locator("[data-status]")).toHaveText("Paused");
+  await expect(row.locator("[data-status-detail]")).toHaveCount(0);
   await banner.getByRole("button", { name: "Resume" }).click();
   await expect(banner).toHaveCount(0);
+  await expect(paused).toHaveCount(0);
 
-  // A hold the system makes is a need, with Resume as its decision.
-  await holdBySystem(page, "CA-401", "restart");
-  await expect(held).toHaveCount(1);
-  await expect(held).toContainText("Held after a restart");
-  await expect(row.locator("[data-status]")).toHaveText("Needs you");
-  await expect(row.locator("[data-status-detail]")).toHaveText("· Held after a restart");
+  await pauseAtCeiling(page, "CA-401");
+  await expect(paused).toHaveCount(1);
+  await expect(paused).toContainText("Paused: Pip was woken too often today");
+  await expect(row.locator("[data-status]")).toHaveText("Paused");
+  await expect(row.locator("[data-status-detail]")).toHaveText("· Pip was woken too often today");
   await closeWorkstreamSheet(page);
-  await openNeedOfKind(page, "hold");
-  const resume = needsPane(page).locator("[data-held-banner]").getByRole("button", { name: "Resume" });
+  await openNeedOfKind(page, "paused");
+  const resume = needsPane(page).locator("[data-paused-banner]").getByRole("button", { name: "Resume" });
   await expect(needsPaneHeading(page)).toBeFocused();
   await resume.focus();
   await page.keyboard.press("Enter");
-  await expect(held).toHaveCount(0);
+  await expect(paused).toHaveCount(0);
   await expect(row.locator('[data-status="needs-you"]')).toHaveCount(0);
 });
 
 test("Needs you from the board: the rail's Agents popover lists the same rows and opens their decisions on Agents", async ({ page }) => {
-  await openApp(page, MANAGED);
-  await agentsSettled(page, true);
+  await openApp(page, SAMPLE);
   await homeWorkstream(page);
   await askPip(page, "investigate this");
   await settled(page);
-  await holdBySystem(page, "CA-401", "restart");
+  await pauseAtCeiling(page, "CA-401");
   const total = Number(await needsYouCount(page).innerText());
   expect(total).toBe(2);
 
@@ -111,7 +101,7 @@ test("Needs you from the board: the rail's Agents popover lists the same rows an
   const popover = page.getByRole("dialog", { name: "Needs you" });
   await expect(popover.locator("[data-needs-you-count]")).toHaveText(String(total));
   await expect(popover.locator("[data-needs-you-group]")).toHaveCount(1);
-  expect((await popover.locator("[data-needs-you-group]").allTextContents()).map(withoutAge)[0]).toContain("Held after a restart");
+  expect((await popover.locator("[data-needs-you-group]").allTextContents()).map(withoutAge)[0]).toContain("Pip was woken too often today, so Gossamr paused it");
 
   // Esc closes it and leaves the board as it was.
   await page.keyboard.press("Escape");
@@ -124,7 +114,7 @@ test("Needs you from the board: the rail's Agents popover lists the same rows an
   await expect(popover).toHaveCount(0);
   await expect(agentsHome(page)).toBeVisible();
   await expect(needsPane(page)).toBeVisible();
-  await expect(needsPane(page)).toHaveAttribute("data-kind", "hold");
+  await expect(needsPane(page)).toHaveAttribute("data-kind", "paused");
 });
 
 /** Runs a palette command: opens the palette, types `query` and picks the entry named `name`. */
@@ -136,8 +126,7 @@ async function palette(page: Page, query: string, name: string | RegExp) {
 }
 
 test("the palette: 'Ask Pip to plan CA-401' lands on its workstream with a Plan draft and nothing started", async ({ page }) => {
-  await openApp(page, MANAGED);
-  await agentsSettled(page, true);
+  await openApp(page, SAMPLE);
   await openAgents(page);
   await openPip(page);
   await expect(homeConversation(page)).toHaveText("General");
@@ -158,17 +147,8 @@ test("the palette: 'Ask Pip to plan CA-401' lands on its workstream with a Plan 
   await expect(workstreamGroup(page, "CA-401")).toHaveAttribute("aria-current", "true");
 });
 
-test("with Agents off, Activity has no 'Pip & agents' chip", async ({ page }) => {
-  await openApp(page, "runs=empty&agents=off");
-  await agentsSettled(page, false);
-  await palette(page, "open activity", /^Open activity/);
-  await expect(page.getByRole("group", { name: "Show" }).getByRole("button", { name: "All", exact: true })).toBeVisible();
-  await expect(page.getByRole("group", { name: "Show" }).getByRole("button", { name: /Pip & agents/ })).toHaveCount(0);
-});
-
 test("the rail's batch button approves Pip's two comments and never the description update beside them, which still opens its diff", async ({ page }) => {
   await openApp(page, "runs=empty");
-  await agentsSettled(page, true);
   // Pip's drafts in the workstream's conversation, from the pane beside CA-401's peek: two comments and a description update.
   await startWorkstream(page, "CA-401");
   const pane = pipPane(page);
