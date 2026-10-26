@@ -29,13 +29,9 @@ function openTicket(key: string) {
   void openTicketByKey(key);
 }
 
-/**
- * The element in an open workstream's detail `target` names: a draft's card, a run's card, the held banner's Resume (the
- * banner itself without one), or the first choice on the card of a review that still blocks after the fix rounds.
- */
+/** The element in an open workstream's detail `target` names: a draft's card, a run's card, or the paused banner's Resume (the banner itself without one). */
 function targetElement(root: ParentNode, target: WorkViewFocus): HTMLElement | null {
-  if (target.type === "escalation") return root.querySelector<HTMLElement>("[data-escalation] button") ?? root.querySelector<HTMLElement>("[data-escalation]");
-  if (target.type === "workstream") return root.querySelector<HTMLElement>("[data-held-banner] button") ?? root.querySelector<HTMLElement>("[data-held-banner]");
+  if (target.type === "workstream") return root.querySelector<HTMLElement>("[data-paused-banner] button") ?? root.querySelector<HTMLElement>("[data-paused-banner]");
   const attr = target.type === "draft" ? "data-draft" : "data-run-id";
   return root.querySelector<HTMLElement>(`[${attr}="${CSS.escape(target.id)}"]`);
 }

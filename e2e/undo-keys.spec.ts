@@ -300,6 +300,43 @@ test("Cmd/Ctrl+K on a focused permission need offers Allow once and Deny, and De
   await expect(needOfKind(page, "permission")).toHaveCount(0);
 });
 
+/** Pauses the workstream on CA-401 from the palette, with the keyboard on its row in the list. */
+async function pauseFromPalette(page: Page) {
+  await workstreamGroup(page, "CA-401").focus();
+  await page.keyboard.press("ControlOrMeta+k");
+  await page.keyboard.type("pause");
+  await page.getByRole("dialog", { name: "Command palette" }).getByRole("option", { name: /Pause the workstream on CA-401/ }).click();
+  await expectToast(page, "Paused CA-401. Resume it to wake Pip there again.");
+}
+
+test("F6 reaches the toast on screen, Esc dismisses it and gives the keyboard back", async ({ page }) => {
+  test.setTimeout(90_000);
+  await openApp(page, "runs=empty");
+  await workstreamOnHome(page);
+  await pauseFromPalette(page);
+  const onToast = () => page.evaluate(() => !!document.activeElement?.closest("[data-toast]"));
+  // F6 goes round the regions; the toast is one of them while it shows.
+  for (let n = 0; n < 12 && !(await onToast()); n++) await page.keyboard.press("F6");
+  expect(await onToast()).toBe(true);
+  await page.keyboard.press("Escape");
+  await expect(toast(page)).toHaveCount(0);
+  // The keyboard is not lost to the page itself.
+  expect(await page.evaluate(() => document.activeElement !== document.body && document.activeElement !== null)).toBe(true);
+});
+
+test("'Open in workstream' on a paused need puts the keyboard on the banner's Resume", async ({ page }) => {
+  test.setTimeout(90_000);
+  await openApp(page, "runs=empty");
+  await workstreamOnHome(page);
+  await pauseFromPalette(page);
+  await openNeedOfKind(page, "paused");
+  await workstreamSheet(page).locator('[data-needs-pane][data-kind="paused"] button[data-need-key]').focus();
+  await page.keyboard.press("ControlOrMeta+k");
+  await page.keyboard.type("open in workstream");
+  await page.getByRole("dialog", { name: "Command palette" }).getByRole("option", { name: /Open in workstream/ }).click();
+  await expect(page.locator("[data-paused-banner] button:focus")).toHaveText("Resume");
+});
+
 test("Cmd/Ctrl+K reaches Pause for the selected workstream, and 'Approve all safe drafts' shows what it would approve", async ({ page }) => {
   await openApp(page, "runs=empty");
   await expect(agentsButton(page)).toHaveCount(1);

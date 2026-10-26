@@ -296,18 +296,14 @@ export function suggestedAnswer(run: Run): string {
 
 /**
  * What Pip says when the supervisor wakes it: one short line for each event, at most three, from the event lines
- * alone. A run a rule started is "queued to start" until it shows Working, and nothing Pip says starts anything. A run
- * asking a question gets a suggested reply drafted for the person to check; Pip never sends it.
+ * alone. Nothing Pip says starts anything. A run asking a question gets a suggested reply drafted for the person to
+ * check; Pip never sends it.
  */
 function wakeScript(prompt: string, runs: readonly Run[], workstream: PipWorkstream | null = null): PipScript {
   const answers: { runId: string; message: string }[] = [];
   const labels = labelsByRun(runs);
   // A run by its workstream label (R1), else by ticket and step; never by its id.
   const name = (id: string | undefined) => (id ? (labels.get(id) ?? capital(runPhrase(runs.find((r) => r.id === id)))) : "A run");
-  const startedState = (kind: string, label: string) => {
-    const ws = runs.find((r) => labels.get(r.id) === label && r.spec.kind === kind);
-    return ws?.state === "working" ? "is working on it" : "is queued to start automatically";
-  };
   const lines = prompt
     .split("\n")
     .map((l) => EVENT_LINE.exec(l.trim()))
@@ -315,12 +311,8 @@ function wakeScript(prompt: string, runs: readonly Run[], workstream: PipWorkstr
     .slice(0, 3)
     .map(([, id, kind, state, rest]) => {
       const who = id && !labels.has(id) ? name(id) : `${KIND_WORD[kind as RunKind] ?? "The run"} ${name(id)}`;
-      const started = /; started (\w+) (\S+) automatically/.exec(rest);
-      if (started) return `${name(id)} finished. ${KIND_WORD[started[1] as RunKind] ?? started[1]} ${started[2]} ${startedState(started[1], started[2])}.`;
-      const fix = /; sent fix round (\d+) to build (\S+)/.exec(rest);
-      if (fix) return `${who} still blocks, so fix round ${fix[1]} went to build ${fix[2]}. A fresh review follows its new commit.`;
-      if (rest.includes("; review still blocking after")) return "The review still blocks after 2 fix rounds. Over to you. Run another fix round, take it from here, or post the review as is.";
-      if (rest.includes("; waiting for its pull request")) return `${who} finished. Its review starts once its pull request shows up.`;
+      if (rest.includes("; waiting for its pull request")) return `${who} finished. Its pull request isn't up yet; I'll draft the review when it is.`;
+      if (state.trim() === "Pull request found") return `${who}'s pull request is up. I can draft its review now.`;
       if (rest.includes("; plan recommended: no")) return `${who} finished and doesn't recommend a plan, so nothing starts on its own. Tell me if you want one.`;
       if (rest.includes("; verdict: pass")) return `${who} passed. Nothing else starts on its own; the pull request is yours to mark ready.`;
       if (state.trim() === "Done") {

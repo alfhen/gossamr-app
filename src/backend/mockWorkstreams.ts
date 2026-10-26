@@ -11,7 +11,7 @@ const CONNECTION = "mock";
 /** How long after "Bring them here" it can be undone, as `UNDO_WINDOW_SECS` in `inbox/workstreams.rs`. */
 export const UNDO_WINDOW_MS = 60_000;
 
-/** Wakes of Pip one workstream may have in a day, counted from midnight or the person's last resume, and wake turns Pip may have in a day across workstreams, as `WAKES_PER_WORKSTREAM_PER_DAY` and `WAKE_TURNS_PER_DAY` in src-tauri/src/domain/workstream.rs. */
+/** Wakes of Pip one workstream may have in a day, and wake turns Pip may have in a day across workstreams, both counted from midnight or the person's last resume of the workstream, as `WAKES_PER_WORKSTREAM_PER_DAY` and `WAKE_TURNS_PER_DAY` in src-tauri/src/domain/workstream.rs. */
 export const WAKES_PER_WORKSTREAM_PER_DAY = 24;
 export const WAKE_TURNS_PER_DAY = 120;
 
@@ -117,7 +117,7 @@ function paused(ws: Workstream, reason: PauseReason): Workstream | null {
 }
 
 /** A stored reason this version doesn't know reads as the person's, as `PauseReason`'s `From<String>` does. */
-const pauseReasonOf = (reason: unknown): PauseReason | null => (reason == null ? null : reason === "ceiling" ? "ceiling" : "person");
+const pauseReasonOf = (reason: unknown): PauseReason | null => (reason == null || reason === "restart" ? null : reason === "ceiling" ? "ceiling" : "person");
 
 /** A stored workstream from before the fields now left out: they are dropped, and any old hold reads as paused by the person. */
 const withDefaults = (w: Workstream & { heldReason?: unknown }): Workstream => {
@@ -414,26 +414,30 @@ export class MockWorkstreams {
 
   /**
    * Lets the facts `woken` (run and state key) wake Pip in workstream `id`, as `admit_wake` does: each gets a supervisor
-   * `wake` line. Once the workstream has had `WAKES_PER_WORKSTREAM_PER_DAY` wake turns since midnight or the person's
-   * last resume, or Pip `WAKE_TURNS_PER_DAY` across workstreams since midnight, nothing wakes: the workstream is paused for
-   * `ceiling` with a supervisor `paused` line. A turn is the wake lines recorded at one moment. True when Pip is to be woken.
+   * `wake` line, and one that says a build's pull request is still to come a `waiting_for_pr` line too. Once Pip has had
+   * `WAKES_PER_WORKSTREAM_PER_DAY` wake turns in the workstream, or `WAKE_TURNS_PER_DAY` across workstreams, since
+   * midnight or the person's last resume of it, nothing wakes: the workstream is paused for `ceiling` with a supervisor
+   * `paused` line. A turn is the wake lines recorded at one moment. True when Pip is to be woken.
    */
-  admitWake(id: string, woken: { run: string; key: string }[]): boolean {
+  admitWake(id: string, woken: { run: string; key: string; waitingForPr?: boolean }[]): boolean {
     const ws = this.all.find((w) => w.id === id && w.closedAt === null);
     if (!ws || ws.pausedReason !== null || !woken.length) return false;
     const now = this.now();
     const midnight = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())).toISOString();
     const turns = (events: readonly WorkstreamEvent[], since: string) => new Set(events.filter((e) => e.actor === "supervisor" && e.action === "wake" && e.at >= since).map((e) => `${e.workstreamId}@${e.at}`)).size;
     const resumed = this.events(id).filter((e) => e.actor === "person" && e.action === "resumed").map((e) => e.at).sort().pop();
-    const own = turns(this.audit.filter((e) => e.workstreamId === id), resumed && resumed > midnight ? resumed : midnight);
-    if (own >= WAKES_PER_WORKSTREAM_PER_DAY || turns(this.audit, midnight) >= WAKE_TURNS_PER_DAY) {
+    const from = resumed && resumed > midnight ? resumed : midnight;
+    if (turns(this.audit.filter((e) => e.workstreamId === id), from) >= WAKES_PER_WORKSTREAM_PER_DAY || turns(this.audit, from) >= WAKE_TURNS_PER_DAY) {
       this.put({ ...ws, pausedReason: "ceiling" });
       this.append(id, "supervisor", "paused", { detail: "ceiling" });
       this.save();
       this.changed();
       return false;
     }
-    for (const f of woken) this.append(id, "supervisor", "wake", { runId: f.run, detail: f.key });
+    for (const f of woken) {
+      this.append(id, "supervisor", "wake", { runId: f.run, detail: f.key });
+      if (f.waitingForPr) this.append(id, "supervisor", "waiting_for_pr", { runId: f.run, detail: f.key });
+    }
     this.save();
     this.changed();
     return true;

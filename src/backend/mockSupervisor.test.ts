@@ -187,6 +187,54 @@ describe("the sample supervisor", () => {
     expect(b.workstreams.get(ws)?.workstream.pausedReason).toBeNull();
   });
 
+  it("lets a resume lift the ceiling Pip hit across workstreams, too", async () => {
+    const { b, wakes } = world();
+    const ws = b.workstreams.open(CA401).id;
+    const elsewhere = b.workstreams.open(CA408).id;
+    const now = Date.now();
+    for (let n = 0; n < 120; n++) b.workstreams.seedEvent(elsewhere, "supervisor", "wake", new Date(now - 1000 - n * 1000).toISOString(), { runId: `old${n}`, detail: "done" });
+    finish(b, (await investigate(b, ws)).id);
+    expect(b.workstreams.get(ws)?.workstream.pausedReason).toBe("ceiling");
+    b.workstreams.resume(ws);
+    expect(wakes).toHaveLength(1);
+    expect(b.workstreams.get(ws)?.workstream.pausedReason).toBeNull();
+  });
+
+  it("wakes nobody for a stop the person asked for or one Gossamr made at a limit, and somebody for any other", async () => {
+    const { b, wakes } = world();
+    const ws = b.workstreams.open(CA401).id;
+    const stopped = await investigate(b, ws);
+    b.runs.advance(stopped.id);
+    b.runs.advance(stopped.id);
+    b.runs.stop(stopped.id);
+    const limited = await start(b, ws, "triage");
+    b.runs.advance(limited.id);
+    b.runs.advance(limited.id);
+    b.runs.stopAtLimit(limited.id);
+    b.supervisor.check();
+    expect(wakes).toEqual([]);
+    const all = await start(b, ws, "plan");
+    b.runs.advance(all.id);
+    b.runs.advance(all.id);
+    b.runs.stopAll();
+    expect(wakes).toEqual([]);
+  });
+
+  it("wakes Pip again when the pull request of a build it was told is waiting for one turns up, once", async () => {
+    const { b, wakes } = world();
+    const ws = b.workstreams.open(CA401).id;
+    const build = await start(b, ws, "build");
+    finish(b, build.id);
+    expect(eventLine(last(wakes).facts)).toContain("; waiting for its pull request");
+    expect(supervisorLines(b, ws)).toContain("waiting_for_pr done");
+    b.runs.surfacePullRequests();
+    expect(wakes).toHaveLength(2);
+    expect(eventLine(last(wakes).facts)).toBe(`[Event] run ${build.id} (build) Pull request found`);
+    b.supervisor.check();
+    b.runs.surfacePullRequests();
+    expect(wakes).toHaveLength(2);
+  });
+
   it("notes a ticket that changed since the workstream opened once, and wakes Pip all the same", async () => {
     const { b, wakes } = world();
     const ws = b.workstreams.open(CA401).id;

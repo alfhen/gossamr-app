@@ -2,10 +2,10 @@ import { create } from "zustand";
 import { useTabs } from "./tabsStore";
 
 /**
- * A card in an open workstream's detail something asked to bring into view: a draft, a run, the held banner or a review
- * that still blocks. A run `where: "rail"` is its card on the step rail, whose step opens for it.
+ * A card in an open workstream's detail something asked to bring into view: a draft, a run or the paused banner. A run
+ * `where: "rail"` is its card on the step rail, whose step opens for it.
  */
-export type WorkViewFocus = { type: "draft"; id: string } | { type: "run"; id: string; where?: "rail" } | { type: "workstream" } | { type: "escalation" };
+export type WorkViewFocus = { type: "draft"; id: string } | { type: "run"; id: string; where?: "rail" } | { type: "workstream" };
 
 /** What `selected` holds while the detail of the runs and drafts that belong to no workstream is open. */
 export const NO_WORKSTREAM_ID = "general";

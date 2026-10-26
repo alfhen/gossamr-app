@@ -161,8 +161,6 @@ export function leftOutLabel(p: Proposal, title: string): string {
 /** What the batch confirm says of a comment it left out because an earlier one has the same text. */
 export const REPEATED_COMMENT_NOTE = "Same text as the comment above, left out";
 
-/** What the list says of a review that still blocks after the automatic fix rounds. */
-
 /** What a sign-in need reads: the run, then this. */
 export const SIGN_IN_TEXT = "needs you to sign in to Claude";
 

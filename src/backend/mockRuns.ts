@@ -1271,16 +1271,16 @@ export class MockRuns {
     if (run.state === "queued" && !run.shortId) {
       // It has no session yet, so nothing is asked of Claude: one waiting for a slot is stopped, any other queued one
       // cancelled, before either starts.
+      this.workstreams?.record(run.spec.workstream, "person", "run_stopped", { runId: id });
       const next = this.update(id, { state: "stopped", endedAt: this.now(), slotWaitSince: null, error: NOT_STARTED });
       this.changed();
-      this.workstreams?.record(next.spec.workstream, "person", "run_stopped", { runId: id });
       return next;
     }
     if (!STOPPABLE.includes(run.state)) throw new Error(run.state === "queued" || run.state === "launching" ? "It can be stopped once it is working." : `This run is ${run.state}, so there is nothing to stop.`);
+    this.workstreams?.record(run.spec.workstream, "person", "run_stopped", { runId: id });
     const next = this.update(id, { state: "stopped", endedAt: this.now() });
     this.launchWaiting();
     this.changed();
-    this.workstreams?.record(next.spec.workstream, "person", "run_stopped", { runId: id });
     return next;
   }
 
@@ -1437,7 +1437,10 @@ export class MockRuns {
   /** Stops every live run and the runs waiting for a slot, as `stop_all`: nothing starts in the slots it frees. */
   stopAll(): { stopped: number; failed: number; waiting: number } {
     const active = this.runs.filter((r) => STOPPABLE.includes(r.state));
-    for (const r of active) this.update(r.id, { state: "stopped", endedAt: this.now() });
+    for (const r of active) {
+      this.workstreams?.record(r.spec.workstream, "person", "run_stopped", { runId: r.id });
+      this.update(r.id, { state: "stopped", endedAt: this.now() });
+    }
     const waiting = this.runs.filter((r) => r.state === "queued" && r.slotWaitSince && !r.shortId);
     for (const r of waiting) {
       this.update(r.id, { state: "stopped", endedAt: this.now(), slotWaitSince: null, error: NOT_STARTED });

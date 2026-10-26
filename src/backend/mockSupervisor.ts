@@ -12,7 +12,7 @@ import type { MockProposals } from "./mockProposals";
  */
 
 /** What a run did that wakes Pip. */
-export type WakeState = "done" | "failed" | "stopped" | "limit" | "needsAnswer" | "needsPermission" | "systemBlocked";
+export type WakeState = "done" | "failed" | "stopped" | "needsAnswer" | "needsPermission" | "systemBlocked" | "pullRequest";
 
 /** One thing that happened to a run, as Pip is told it: ids, kinds, states, counts and parsed flags only. */
 export interface WakeFact {
@@ -33,10 +33,10 @@ const STATE_WORDS: Record<WakeState, string> = {
   done: "Done",
   failed: "Failed",
   stopped: "Stopped",
-  limit: "Stopped at a limit",
   needsAnswer: "Needs an answer",
   needsPermission: "Needs permission",
   systemBlocked: "Blocked on sign-in",
+  pullRequest: "Pull request found",
 };
 
 /** Ticket keys such as `CA-412` in `text`, upper-cased, as `context::keys_in` finds them. */
@@ -280,10 +280,10 @@ const KEY_STATE: Record<WakeState, string> = {
   done: "done",
   failed: "failed",
   stopped: "stopped",
-  limit: "limit",
   needsAnswer: "needs_answer",
   needsPermission: "needs_permission",
   systemBlocked: "system_blocked",
+  pullRequest: "pr_found",
 };
 
 const secs = (at: string) => Math.floor(Date.parse(at) / 1000);
@@ -291,12 +291,12 @@ const secs = (at: string) => Math.floor(Date.parse(at) / 1000);
 /** The state part of the `(workstream, run, state)` key, as `mark`: a finish after the person carried on, or a question, by when. */
 export function factKey(run: Pick<Run, "continuedAt" | "lastProgressAt">, state: WakeState): string {
   const base = KEY_STATE[state];
-  if (state === "done" || state === "stopped" || state === "limit") return run.continuedAt ? `${base}@${secs(run.continuedAt)}` : base;
-  if (state === "failed") return base;
+  if (state === "done" || state === "stopped") return run.continuedAt ? `${base}@${secs(run.continuedAt)}` : base;
+  if (state === "failed" || state === "pullRequest") return base;
   return `${base}@${secs(run.lastProgressAt)}`;
 }
 
-/** What `run` did that wakes Pip, if it is at rest or waiting on the person; null while it is under way. */
+/** What `run` did that wakes Pip, if it is at rest or waiting on the person; null while it is under way, or after a stop Gossamr made at a limit. */
 export function wakeStateOf(run: Pick<Run, "state" | "stoppedByLimit">): WakeState | null {
   switch (run.state) {
     case "done":
@@ -306,7 +306,7 @@ export function wakeStateOf(run: Pick<Run, "state" | "stoppedByLimit">): WakeSta
     case "systemBlocked":
       return run.state;
     case "stopped":
-      return run.stoppedByLimit ? "limit" : "stopped";
+      return run.stoppedByLimit ? null : "stopped";
     default:
       return null;
   }
@@ -381,6 +381,7 @@ export class MockSupervisor {
       fact.blocking = resolved.findings.filter((f) => f.severity === "blocking").length;
     }
     fact.drafts = this.parts.runs.draftsWaitingFrom(run.id);
+    if (run.spec.kind === "build" && run.spec.allowPush && this.parts.runs.pullHeadOf(run.id) === null) fact.waitingForPr = true;
     return fact;
   }
 
@@ -391,13 +392,18 @@ export class MockSupervisor {
     if (!ws || ws.closedAt || ws.pausedReason) return;
     workstreams.noteBasisDrift(id);
     const linked = runs.list({ workstream: id });
-    const woken = new Set(workstreams.events(id).filter((e) => e.actor === "supervisor" && e.action === "wake").map((e) => `${e.runId}|${e.detail}`));
+    const events = workstreams.events(id);
+    const woken = new Set(events.filter((e) => e.actor === "supervisor" && e.action === "wake").map((e) => `${e.runId}|${e.detail}`));
+    const stoppedByPerson = (run: Run) => events.some((e) => e.actor === "person" && e.action === "run_stopped" && e.runId === run.id && (!run.continuedAt || e.at >= run.continuedAt));
+    const toldWaiting = (run: Run, key: string) => events.some((e) => e.actor === "supervisor" && e.action === "waiting_for_pr" && e.runId === run.id && e.detail === key);
     const fresh: KeyedFact[] = [];
     for (const run of [...linked].sort(byQueue)) {
       const state = wakeStateOf(run);
-      if (!state) continue;
+      if (!state || (state === "stopped" && stoppedByPerson(run))) continue;
       const fact = this.factOf(run, state);
       if (!woken.has(`${fact.run}|${fact.key}`)) fresh.push(fact);
+      const found: KeyedFact = { run: run.id, kind: run.spec.kind, state: "pullRequest", key: factKey(run, "pullRequest") };
+      if (state === "done" && woken.has(`${fact.run}|${fact.key}`) && !woken.has(`${found.run}|${found.key}`) && toldWaiting(run, fact.key) && runs.pullHeadOf(run.id) !== null) fresh.push(found);
     }
     if (!fresh.length) return;
     if (!workstreams.admitWake(id, fresh)) {

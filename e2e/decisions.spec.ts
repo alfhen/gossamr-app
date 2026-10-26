@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { advanceRuns, closeWorkstreamSheet, askPermission, askPip, jiraWrites, mockAttached, mockRuns, needOfKind, needsPane, needsYouTray, openAgents, openApp, peekSheet, peekTicket, pipConversation, pipPane, startWorkstream, workstreamEvents, openNeedOfKind } from "./support/app";
+import { advanceRuns, closeWorkstreamSheet, askPermission, askPip, githubWrites, jiraWrites, mockAttached, mockRuns, needOfKind, needsPane, needsYouTray, openAgents, openApp, peekSheet, peekTicket, pendingReviewDrafts, pipConversation, pipPane, reviewDrafts, reviewedDraft, startWorkstream, workstreamEvents, openNeedOfKind } from "./support/app";
 
 // Decisions only the person makes: a run's permission prompt answered in the app. Pull requests show only when a test says.
 const SAMPLE = "runs=empty&prSurface=manual";
@@ -164,4 +164,59 @@ test("Deny on a read-only run, which is never offered Allow: Claude carries on w
   await expect(count(page)).toHaveText(String(before - 1));
   expect(await mockAttached(page)).toEqual([]);
   expect(await jiraWrites(page)).toEqual([]);
+});
+
+/** The person starts another Review of CA-402's build from its card in Agents and moves it to done; its draft then waits in CA-402's peek. */
+async function reviewAgain(page: Page) {
+  await page.keyboard.press("Escape");
+  await openAgents(page);
+  const cards = page.locator('main article[data-run-id]:not(aside[aria-label="Pip"] *):not(#workstream-sheet *)');
+  const before = await cards.evaluateAll((els) => els.map((e) => e.getAttribute("data-run-id")));
+  await cards.filter({ hasText: "Build" }).filter({ hasText: "CA-402" }).getByRole("button", { name: "Review this" }).click();
+  await expect(setup(page)).toBeVisible();
+  await setup(page).getByRole("button", { name: "Start agent" }).click();
+  await expect(setup(page)).toHaveCount(0);
+  await expect.poll(async () => (await cards.evaluateAll((els) => els.map((e) => e.getAttribute("data-run-id")))).length).toBe(before.length + 1);
+  const id = (await cards.evaluateAll((els) => els.map((e) => e.getAttribute("data-run-id")))).find((r) => !before.includes(r))!;
+  await advanceRuns(page, 3, id);
+  await expect.poll(async () => (await mockRuns(page)).find((r) => r.id === id)?.state).toBe("done");
+  await page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "All projects" }).click();
+  await peekTicket(page, "CA-402");
+  return id;
+}
+
+test("one review of a pull request waits at a time, except one the person edited, and a posted one is never retired", async ({ page }) => {
+  test.setTimeout(240_000);
+  const first = await reviewedDraft(page);
+  const [d1] = await pendingReviewDrafts(page);
+
+  // The person edits the first review; saving it for the PR view posts nothing.
+  await first.getByRole("textbox", { name: "Review summary" }).fill("Mine: the retry loop still needs a back-off.");
+  await first.getByRole("button", { name: "Open PR view" }).click();
+  const view = page.getByRole("dialog", { name: /^Pull request / });
+  await expect(view).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(view).toHaveCount(0);
+  await expect.poll(async () => (await reviewDrafts(page)).find((d) => d.id === d1.id)?.edited).toBe(true);
+
+  // A newer review leaves the edited one standing beside it, and its card says so.
+  const r2 = await reviewAgain(page);
+  await expect.poll(async () => (await pendingReviewDrafts(page)).map((d) => d.runId)).toHaveLength(2);
+  const [d2] = await pendingReviewDrafts(page);
+  expect(d2.runId).toBe(r2);
+  expect((await reviewDrafts(page)).find((d) => d.id === d1.id)?.supersededBy).toBeNull();
+  const second = peekSheet(page).locator(`article[data-draft="${d2.id}"]`);
+  await expect(second.locator("[data-review-kept-older]")).toHaveText(/^An older review of #\d+ that you edited is still waiting; this one didn't replace it\.$/);
+
+  // The person posts their edited one; the next review replaces the second and leaves the posted one as it is.
+  await peekSheet(page).locator(`article[data-draft="${d1.id}"]`).getByRole("button", { name: "Post review" }).click();
+  await expect.poll(async () => (await githubWrites(page)).length).toBe(1);
+  const r3 = await reviewAgain(page);
+  await expect.poll(async () => (await pendingReviewDrafts(page)).map((d) => d.runId)).toEqual([r3]);
+  const [d3] = await pendingReviewDrafts(page);
+  const all = await reviewDrafts(page);
+  expect(all.find((d) => d.id === d2.id)).toMatchObject({ state: "retired", supersededBy: d3.id });
+  expect(all.find((d) => d.id === d1.id)).toMatchObject({ state: "applied", supersededBy: null });
+  expect(new Set(all.map((d) => d.pull)).size).toBe(1);
+  expect(await githubWrites(page)).toHaveLength(1);
 });

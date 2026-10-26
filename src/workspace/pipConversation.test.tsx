@@ -116,7 +116,7 @@ describe("PipConversation", () => {
     const [a, b] = runs.slice(0, 2).map((r, i) => ({ ...r, id: `run-${i + 1}`, queuedAt: `2026-09-30T1${i}:00:00Z`, spec: { ...r.spec, workstream: "ws-1" } }));
     useRuns.setState({ runs: [a, b] });
     useRuns.getInitialState().runs = [a, b];
-    const wake: Turn = { requestId: "wake-1", kind: "wake", prompt: `[Event] run ${b.id} (triage) Done; plan recommended: yes`, steps: [], text: "R2 finished. Plan R3 is queued to start automatically.", status: "done", error: null };
+    const wake: Turn = { requestId: "wake-1", kind: "wake", prompt: `[Event] run ${b.id} (triage) Done; plan recommended: yes`, steps: [], text: "R2 finished. I drafted a plan for you to start.", status: "done", error: null };
     setTurns({ [workstreamConversation("ws-1")]: { sessionId: "s1", turns: [turn("q1", "Investigate it", "Drafted."), wake] } });
     const html = renderToStaticMarkup(<PipConversation conversation={workstreamConversation("ws-1")} proposals={[]} />);
     useRuns.getInitialState().runs = [];
@@ -124,7 +124,7 @@ describe("PipConversation", () => {
     expect(html.replace(/<[^>]+>/g, "")).toContain("Pip picked this up: run R2 finished");
     // The run is named by a button that opens it.
     expect(html).toMatch(/<button type="button" data-wake-run="run-2"[^>]*>run R2<\/button> finished/);
-    expect(html).toContain("Plan R3 is queued to start automatically.");
+    expect(html).toContain("I drafted a plan for you to start.");
     expect(html).not.toContain("[Event]");
     expect(html.match(/bg-ws-accent px-3/g)).toHaveLength(1);
   });

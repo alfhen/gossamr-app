@@ -15,16 +15,10 @@ function Explain({ icon, title, children }: { icon: IconName; title: string; chi
   );
 }
 
-/** The first-run explainer. What it says about safety is what the plan requires the interface to say. */
+/** The panel the Agents toolbar's How agents work button opens. What it says about safety is what the plan requires the interface to say. */
 export function AgentsIntro({ onDismiss }: { onDismiss(): void }) {
   return (
     <section aria-labelledby="agents-intro" className="grid gap-3.5 rounded-xl border border-ws-sep bg-ws-bar px-5 py-5">
-      <div>
-        <span className="inline-flex items-center gap-1 rounded-full bg-ws-pip-soft px-2 text-xs leading-[1.6] font-semibold text-ws-pip">
-          <Icon name="spark" className="size-[11px]" />
-          New
-        </span>
-      </div>
       <h2 id="agents-intro" className="m-0 max-w-[56ch] text-xl leading-tight font-semibold text-balance">
         Agents are Claude Code sessions that work in the background
       </h2>
