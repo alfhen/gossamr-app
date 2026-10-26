@@ -3,12 +3,16 @@ import { itemKey } from "../lib/filter";
 import { targetOf } from "../lib/proposals";
 import type { StatusDef, WorkItem, Workflow } from "../types";
 import { draftCounts, knownMoves, nameOf, workflowOfItem, useWorkspace } from "../workspaceStore";
-import { approvableTransitions, blockedKeys, bulkMoves, bulkTargets, draftStatus, movesAreOpaque, pendingMoves, targetsFor } from "./boardLogic";
+import { approvableTransitions, blockedKeys, bulkMoves, bulkTargets, draftStatus, movesAreOpaque, pendingMoves, targetsFor, witherOf } from "./boardLogic";
 import { useCanvasOrder } from "./browse";
 import { useDev, VISIBLE_LIMIT } from "./devStore";
 import { useAttention } from "./CanvasBits";
 import type { ItemCardProps } from "./ItemCard";
 import { useTabs } from "./tabsStore";
+import { useNow } from "./useNow";
+
+/** Cards age by whole days, so an open board only needs to look at the clock again each hour. */
+const HOUR_MS = 3_600_000;
 
 export interface Notice {
   tone: "info" | "error";
@@ -55,7 +59,8 @@ export function useCards(items: readonly WorkItem[], order: readonly string[]) {
 
   useEffect(() => () => useTabs.getState().clearMarks(), []);
 
-  const now = useMemo(() => new Date(), [items]);
+  const tick = useNow(HOUR_MS);
+  const now = useMemo(() => new Date(), [items, tick]);
   const blocked = useMemo(() => blockedKeys(Object.values(allItems)), [allItems]);
   const pending = useMemo(() => pendingMoves(proposals), [proposals]);
   const counts = useMemo(() => draftCounts({ proposals }), [proposals]);
@@ -95,6 +100,7 @@ export function useCards(items: readonly WorkItem[], order: readonly string[]) {
       item,
       assignee: nameOf({ names }, item.assignee),
       now,
+      wither: witherOf(item, now),
       blocked: blocked.has(key),
       ...attention.marks(item),
       draft: p ? { id: p.id, to: to! } : null,

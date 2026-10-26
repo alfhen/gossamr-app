@@ -20,6 +20,7 @@ import {
   pendingMoves,
   planDrop,
   targetsFor,
+  witherOf,
 } from "./boardLogic";
 
 const s = () => useWorkspace.getState();
@@ -248,6 +249,13 @@ describe("blocked and age", () => {
   const now = new Date("2026-09-30T12:00:00Z");
   const quiet = (days: number, category: "todo" | "done" = "todo") =>
     ({ ...item("WEB-101"), updated: new Date(now.getTime() - days * 86_400_000 - 1000).toISOString(), status: { id: "x", name: "x", category } }) as WorkItem;
+
+  it("withers open items at 2, 3, 5, 7 and 10 quiet days and never finished ones", () => {
+    const at = (days: number) => witherOf(quiet(days), now);
+    expect([1, 2, 3, 5, 7, 10, 30].map(at)).toEqual([0, 1, 2, 3, 4, 5, 5]);
+    expect([4.9, 6.9, 9.9].map((d) => at(d))).toEqual([2, 3, 4]);
+    expect(witherOf(quiet(30, "done"), now)).toBe(0);
+  });
 
   it("puts open items in age columns, the quietest first, and leaves finished work out", () => {
     const list = [quiet(1), quiet(2), quiet(6), quiet(7), quiet(13), quiet(14), quiet(40), quiet(50, "done")];

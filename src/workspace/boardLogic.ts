@@ -1,6 +1,7 @@
 import { compileFilter, containerKey, itemKey } from "../lib/filter";
 import { targetOf } from "../lib/proposals";
 import { nextStatuses } from "../lib/workflow";
+import { WITHER_DAYS, witherLevel, type WitherLevel } from "../lib/views";
 import { applyOrder, type ColumnOrders } from "./columnOrder";
 import type { ContainerRef, Intent, Proposal, StatusDef, WorkCategory, WorkContainer, WorkItem, Workflow } from "../types";
 
@@ -200,6 +201,9 @@ export const AGE_BUCKETS: readonly AgeBucket[] = [
 ];
 
 export const daysQuiet = (item: WorkItem, now: Date) => Math.max(0, Math.floor((now.getTime() - new Date(item.updated).getTime()) / 86_400_000));
+
+/** Finished work doesn't dry out. */
+export const witherOf = (item: WorkItem, now: Date): WitherLevel => (item.status.category === "done" ? 0 : witherLevel(item.updated, now, WITHER_DAYS.ticket));
 
 /** Open items in columns by how long they have been quiet, the quietest first within each. */
 export function ageColumns(items: readonly WorkItem[], now: Date): { bucket: AgeBucket; items: WorkItem[] }[] {
