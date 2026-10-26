@@ -15,16 +15,16 @@ describe("the clarity notice", () => {
   });
 
   it("says the reporter replied, instead of the gaps again, once they have", () => {
-    const html = renderToStaticMarkup(<ClarityNotice view={view({ reporterReplied: true, changedWhileWaiting: true })} />);
+    const html = renderToStaticMarkup(<ClarityNotice view={view({ reporterReplied: true })} />);
     expect(html).toContain("CA-408: the reporter replied; read it, then Looks fine or ask again.");
     expect(html).not.toContain("may be unclear");
     expect(html).toContain("Ask the reporter now");
   });
 
   it("quotes the reporter's reply once there is one (G15)", () => {
-    const replied = view({ reporterReplied: true, changedWhileWaiting: true, reporterReply: { id: "c1", excerpt: "It should send three emails." } });
+    const replied = view({ reporterReplied: true, reporterReply: { id: "c1", excerpt: "It should send three emails." } });
     expect(renderToStaticMarkup(<ClarityNotice view={replied} />)).toContain("They wrote: “It should send three emails.”");
-    expect(renderToStaticMarkup(<ClarityNotice view={view({ reporterReplied: true, changedWhileWaiting: true })} />)).not.toContain("They wrote");
+    expect(renderToStaticMarkup(<ClarityNotice view={view({ reporterReplied: true })} />)).not.toContain("They wrote");
   });
 
   it("is a labelled group, not a live region that reads its buttons; opening it announces nothing, a change does (G10, G28)", () => {

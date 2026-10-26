@@ -4,8 +4,7 @@ import { MockBackend } from "../backend/mock";
 import { docFromText } from "../lib/docs";
 import { ANSWERS_COMMENT_LABEL } from "../lib/proposals";
 import { needGroups, needs, type Need, type NeedsInput } from "../lib/needs";
-import { HELD_BUDGET, HELD_PERSON, HELD_RESTART } from "../types";
-import type { Intent, Proposal, Run, WorkstreamView } from "../types";
+import type { Intent, PauseReason, Proposal, Run, WorkstreamView } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { Launcher } from "./PipExtras";
 import { WorkstreamNeeds } from "./NeedsPane";
@@ -45,7 +44,7 @@ const sample = backend.runs.list();
 const base = sample[0];
 const run = (id: string, state: Run["state"], over: Partial<Run> = {}): Run => ({ ...base, id, state, item: ref("CA-401"), spec: { ...base.spec, kind: "build", workstream: "ws-1" }, failure: null, needs: null, lastProgressAt: ago(5), queuedAt: ago(60), endedAt: null, ...over });
 
-const view = (id: string, key: string | null, title: string, over: { heldReason?: string | null; runs?: string[] } = {}): WorkstreamView => ({
+const view = (id: string, key: string | null, title: string, over: { pausedReason?: PauseReason | null; runs?: string[] } = {}): WorkstreamView => ({
   workstream: {
     id,
     connectionId: "mock",
@@ -53,20 +52,15 @@ const view = (id: string, key: string | null, title: string, over: { heldReason?
     repo: null,
     title,
     pipSession: null,
-    mode: "manage",
-    heldReason: over.heldReason ?? null,
+    pausedReason: over.pausedReason ?? null,
     notes: null,
     createdAt: ago(600),
     closedAt: null,
-    budget: { autoTurns: null, wakes: null, tokens: null },
-    spent: { autoTurns: 0, wakes: 0, tokens: 0 },
-    rules: {},
     basis: null,
   },
   stage: "build",
   runs: over.runs ?? [],
   labels: (over.runs ?? []).map((r, n) => [r, `R${n + 1}`]),
-  budget: { autoTurns: { used: 0, limit: 6 }, wakes: { used: 0, limit: 12 }, level: "ok" },
 });
 
 const draft = (id: string, intent: Intent, minutes: number, workstream: string | null = null): Proposal =>
@@ -78,7 +72,7 @@ const rewrite = (key: string): Intent => ({ type: "rewrite", item: ref(key), tit
 const startRun = (key: string): Intent => ({ type: "startRun", connectionId: "mock", item: ref(key), spec: { ...base.spec, kind: "investigate", workstream: "ws-1" } }) as unknown as Intent;
 
 const ws1 = view("ws-1", "CA-401", "CA-401 Welcome flow refresh", { runs: ["r-perm", "r-q", "r-fail"] });
-const ws2 = view("ws-2", "CA-402", "CA-402 Cart merge", { heldReason: HELD_RESTART });
+const ws2 = view("ws-2", "CA-402", "CA-402 Cart merge", { pausedReason: "ceiling" });
 
 const input = (over: Partial<NeedsInput> = {}): NeedsInput => ({
   workstreams: [ws1, ws2],
@@ -144,7 +138,7 @@ describe("the Needs you list", () => {
     expect([...html.matchAll(/data-needs-you-head[^>]*>([^<]+)</g)].map((m) => m[1])).toEqual(["Cart merge", "Welcome flow refresh", "General"]);
     expect([...html.matchAll(/data-needs-you-chip="(\w+)"/g)].map((m) => m[1])).toEqual(["unblock", "unblock", "approve"]);
     expect(html).toContain("R1 wants to run `git push origin ca-401`.");
-    expect(html).toContain("Held after a restart.");
+    expect(html).toContain("Pip was woken too often today, so Gossamr paused it.");
     // The age of each top need.
     expect([...html.matchAll(/data-needs-you-age[^>]*>([^<]+)</g)].map((m) => m[1])).toEqual(["10h", "14m", "10m"]);
   });
@@ -338,9 +332,9 @@ describe("opening a need", () => {
 
   it("from another route goes to Agents first, wherever the need is", () => {
     useTabs.getState().setRoute("workspace");
-    openNeed(need("held:ws-2"));
+    openNeed(need("paused:ws-2"));
     expect(useTabs.getState().route).toBe("agents");
-    expect(useWorkView.getState()).toMatchObject({ selected: "ws-2", deciding: "held:ws-2" });
+    expect(useWorkView.getState()).toMatchObject({ selected: "ws-2", deciding: "paused:ws-2" });
   });
 
   it("opens a need in no workstream under No workstream, whose detail works the same way", () => {
@@ -356,7 +350,7 @@ describe("opening a need", () => {
     expect(useWorkView.getState()).toMatchObject({ selected: "ws-1", focusTarget: { type: "draft", id: "c1" } });
     expect(useRuns.getState().filters.needs).toBeUndefined();
     expect(useRuns.getState().sheet).toBeNull();
-    openInWorkstream(need("held:ws-2"));
+    openInWorkstream(need("paused:ws-2"));
     expect(useWorkView.getState()).toMatchObject({ selected: "ws-2", focusTarget: { type: "workstream" } });
     openInWorkstream(need("run:r-q"));
     expect(useWorkView.getState().focusTarget).toEqual({ type: "run", id: "r-q" });
@@ -411,37 +405,23 @@ describe("what the list's keys do", () => {
   it("allows, retries and resumes only after Enter: they reach an agent or start something", () => {
     // A permission's primary is an Allow once only where the run offers one; otherwise a opens its decision.
     expect(["ask", "open"]).toContain(keyPlan(need("run:r-perm"), "approve")?.type);
-    expect(keyPlan(need("held:ws-2"), "approve")).toMatchObject({ type: "ask", text: "resume this workstream" });
-  });
-
-  it("allows 5 more automatic steps only after Enter, as it reaches the workstream's allowance", () => {
-    const list = needs({ ...input(), workstreams: [{ ...view("ws-1", "CA-401", "CA-401 Welcome flow refresh", { heldReason: HELD_BUDGET }), budget: { autoTurns: { used: 11, limit: 11 }, wakes: { used: 0, limit: 12 }, level: "spent" } }], runs: [], proposals: [] });
-    const plan = keyPlan(list[0], "approve");
-    expect(plan).toMatchObject({ type: "ask", text: "allow 5 more automatic steps" });
-    expect(keyPlan(list[0], "dismiss")).toBeNull();
-    const was = useWorkstreams.getState().allowMore;
-    const allowMore = vi.fn(async () => true);
-    useWorkstreams.setState({ allowMore });
-    if (plan?.type !== "ask") throw new Error("it asks for Enter first");
-    plan.run();
-    expect(allowMore).toHaveBeenCalledWith("ws-1");
-    useWorkstreams.setState({ allowMore: was });
+    expect(keyPlan(need("paused:ws-2"), "approve")).toMatchObject({ type: "ask", text: "resume this workstream" });
   });
 
   it("opens the decision where there is something to read first: a rewrite's diff, a question, a run to start", () => {
     expect(keyPlan(need("draft:rw"), "approve")).toEqual({ type: "open", edit: false });
     expect(keyPlan(need("run:r-q"), "approve")).toEqual({ type: "open", edit: false });
     expect(keyPlan(need("draft:st"), "approve")).toEqual({ type: "open", edit: false });
-    expect(keyPlan(need("held:ws-2"), "approve")).toMatchObject({ type: "ask", text: "resume this workstream" });
+    expect(keyPlan(need("paused:ws-2"), "approve")).toMatchObject({ type: "ask", text: "resume this workstream" });
   });
 
   it("opens an edit where the draft has one, and means nothing where it has none", () => {
     expect(keyPlan(need("draft:c1"), "edit")).toEqual({ type: "open", edit: true });
     expect(keyPlan(need("run:r-q"), "edit")).toEqual({ type: "open", edit: true });
     expect(keyPlan(need("run:r-perm"), "edit")).toBeNull();
-    expect(keyPlan(need("held:ws-2"), "edit")).toBeNull();
-    expect(keyPlan(need("held:ws-2"), "dismiss")).toBeNull();
-    expect(keyPlan(need("held:ws-2"), "skip")).toBeNull();
+    expect(keyPlan(need("paused:ws-2"), "edit")).toBeNull();
+    expect(keyPlan(need("paused:ws-2"), "dismiss")).toBeNull();
+    expect(keyPlan(need("paused:ws-2"), "skip")).toBeNull();
   });
 });
 
@@ -529,32 +509,14 @@ describe("the decision pane", () => {
     expect(limit).toContain("Resume");
   });
 
-  it("decides a hold with the held banner's Resume, and a draft with its card", () => {
+  it("decides a pause with the paused banner's Resume, and a draft with its card", () => {
     const list = set();
-    const held = pane(list, "held:ws-2");
-    expect(held).toContain("data-held-banner");
-    expect(held).toContain("Resume");
+    const paused = pane(list, "paused:ws-2");
+    expect(paused).toContain("data-paused-banner");
+    expect(paused).toContain("Resume");
     const card = pane(list, "draft:c1");
     expect(card).toContain('data-draft="c1"');
     expect(card).toContain("Nothing is written to Jira until you approve it.");
-  });
-
-  it("decides a used-up budget with Allow 5 more and Switch to Advise, and shows no need for a hold the person chose", () => {
-    const spent: WorkstreamView = { ...view("ws-1", "CA-401", "CA-401 Welcome flow refresh", { heldReason: HELD_BUDGET }), budget: { autoTurns: { used: 11, limit: 11 }, wakes: { used: 11, limit: 12 }, level: "spent" } };
-    const list = set({ workstreams: [spent], runs: [], proposals: [] });
-    const html = pane(list, "budget:ws-1");
-    expect(html).toContain("CA-401 used its 11 automatic steps");
-    expect(html).toContain("Pip and the automatic steps are paused until you decide.");
-    expect(html).toContain(">Allow 5 more<");
-    expect(html).toContain(">Switch to Advise<");
-    expect(html).toContain('data-needs-you-chip="decide"');
-    expect(html).toContain("11 of 11 automatic steps used");
-    expect(html).not.toMatch(/turns|wakes/);
-    // The person's own hold and Hold all are no need, and so in no count.
-    for (const reason of [HELD_PERSON, "hold_all"]) {
-      const own = set({ workstreams: [view("ws-1", "CA-401", "CA-401 Welcome flow refresh", { heldReason: reason })], runs: [], proposals: [] });
-      expect(own).toEqual([]);
-    }
   });
 
   it("decides a ticket the triage found not clear enough to plan with its questions and the three choices", () => {
@@ -591,29 +553,10 @@ describe("the decision pane", () => {
     useWorkstreams.setState({ askReporter: was.askReporter, answerSelf: was.answerSelf, planAnyway: was.planAnyway });
   });
 
-  it("decides an escalation with its three choices and the review draft that folded into it, and a plan with its approval note", () => {
-    const escalated: WorkstreamView = { ...view("ws-1", "CA-401", "CA-401 Welcome flow refresh", { runs: ["r-b", "r-rev"] }), escalation: { reviewRun: "r-rev", buildRun: "r-b", reviewLabel: "R2", buildLabel: "R1", rounds: 2, reviewDraft: "rd", at: ago(3) } };
-    const review = draft("rd", { type: "githubReview", item: ref("CA-401"), connectionId: "github", repo: "acme/shop", number: 7, runId: "r-rev", summary: "Blocking", comments: [], commitSha: "abc" } as unknown as Intent, 5, "ws-1");
+  it("decides a plan with its approval note", () => {
     const planRun = run("r-plan", "done", { spec: { ...base.spec, kind: "plan", workstream: "ws-1" } });
-    const list = set({ workstreams: [escalated], runs: [planRun], proposals: [review, { ...draft("plan", rewrite("CA-401"), 4, "ws-1"), origin: { type: "run", runId: "r-plan", shortId: null, workstream: "ws-1" } } as Proposal], dismissed: new Set() });
-    const escalation = pane(list, "escalation:r-rev");
-    expect(escalation).toContain("data-escalation");
-    expect(escalation).toContain("Run another fix round");
-    expect(escalation).toContain('data-draft="rd"');
-    expect(escalation).toContain("The review still blocks after 2 fix rounds.");
-    const plan = pane(list, "draft:plan");
-    expect(plan).toContain("data-plan-approve");
-    expect(list.map((n) => n.key)).not.toContain("draft:rd");
-  });
-
-  it("shows an escalation once in the pane: its header says the review still blocks, so the card doesn't say it again", () => {
-    const escalated: WorkstreamView = { ...view("ws-1", "CA-401", "CA-401 Welcome flow refresh", { runs: ["r-b", "r-rev"] }), escalation: { reviewRun: "r-rev", buildRun: "r-b", reviewLabel: "R2", buildLabel: "R1", rounds: 2, reviewDraft: "rd", at: ago(5) } } as WorkstreamView;
-    const review = draft("rd", { type: "githubReview", item: ref("CA-401"), connectionId: "github", repo: "acme/shop", number: 7, runId: "r-rev", summary: "Blocking", comments: [], commitSha: "abc" } as unknown as Intent, 5, "ws-1");
-    const list = set({ workstreams: [escalated], runs: [], proposals: [review], dismissed: new Set() });
-    const html = pane(list, "escalation:r-rev");
-    expect(html).toContain("The review still blocks after 2 fix rounds.");
-    expect(html).not.toContain("What next?");
-    expect(html).toContain('aria-label="Review still blocks"');
+    const list = set({ workstreams: [view("ws-1", "CA-401", "CA-401 Welcome flow refresh", { runs: ["r-plan"] })], runs: [planRun], proposals: [{ ...draft("plan", rewrite("CA-401"), 4, "ws-1"), origin: { type: "run", runId: "r-plan", shortId: null, workstream: "ws-1" } } as Proposal], dismissed: new Set() });
+    expect(pane(list, "draft:plan")).toContain("data-plan-approve");
   });
 
   it("keeps a draft's action bar in the flow at the card's end, and does not make the stack a scroller of its own", () => {

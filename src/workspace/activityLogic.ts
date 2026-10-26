@@ -356,17 +356,24 @@ export function agentMatchesChip(chip: ActivityChip, e: Pick<RunEntry, "unread">
   return chip === "all" || (chip === "needsMe" && e.unread);
 }
 
-const KIND_WORD: Record<string, string> = { investigate: "Investigate", triage: "Triage", plan: "Plan", build: "Build", review: "Review", verify: "Verify" };
 
-const HELD_WORDS: Record<WorkstreamActor, string> = { person: "You held the workstream", pip: "Pip held the workstream", supervisor: "The workstream was held", run: "The workstream was held" };
+const PAUSED_WORDS: Record<WorkstreamActor, string> = { person: "You paused the workstream", pip: "Pip paused the workstream", supervisor: "The workstream was paused", run: "The workstream was paused" };
+
+/** What changed on a ticket, from the fields a `basis_drifted` line names. */
+function driftWords(detail: string | null): string {
+  const fields = (detail ?? "").split(",");
+  const changed = ["summary", "description"].filter((f) => fields.includes(f));
+  const done = fields.includes("status");
+  if (!changed.length) return done ? "The ticket was moved to Done in Jira" : "The ticket changed in Jira";
+  return `The ticket's ${changed.join(" and ")} changed${done ? " and it was moved to Done" : ""} in Jira`;
+}
 
 /**
  * What one audit line says in the feed, naming runs by their label in the workstream (`label`); null for lines the
- * feed leaves out (a fix round's own auto-start line, which "Fix round n sent" already says, and bookkeeping).
- * `rounds` counts the fix rounds sent so far, this one included. `asked` says the reporter was asked about this line's triage
+ * feed leaves out (bookkeeping, and what an earlier version recorded). `asked` says the reporter was asked about this line's triage
  * before it, which makes an override "Plan now" (their reply or the changed ticket came back) rather than "Plan anyway".
  */
-export function eventText(e: WorkstreamEvent, label: (id: string | null) => string, rounds: number, asked = false): string | null {
+export function eventText(e: WorkstreamEvent, label: (id: string | null) => string, asked = false): string | null {
   const who = e.actor === "person" ? "You" : e.actor === "pip" ? "Pip" : e.actor === "supervisor" ? "Gossamr" : "An agent";
   switch (e.action) {
     case "opened":
@@ -379,31 +386,13 @@ export function eventText(e: WorkstreamEvent, label: (id: string | null) => stri
       return `${who} brought ${(e.detail ?? "runs and drafts").replace(", ", " and ")} on the ticket into the workstream`;
     case "wake":
       return `Pip picked up ${label(e.runId)}`;
-    case "autostart": {
-      const [rule, after] = (e.detail ?? "").split(" after ");
-      if (rule === "fix_round") return null;
-      const kind = KIND_WORD[rule?.split("_")[1] ?? ""] ?? "The next step";
-      return `${kind} ${label(e.runId)} started automatically${after ? ` after ${label(after)}` : ""}`;
-    }
-    case "autostart_failed":
-      return `An automatic step after ${label(e.runId)} couldn't start`;
-    case "fix_round_sent":
-      // The rule's rounds say so; one the person chose ("Run another fix round") is theirs.
-      return `Fix round ${rounds} sent to ${label(e.runId)}${e.actor === "supervisor" ? " automatically" : ""}`;
-    case "fix_rounds_exhausted":
-      return `The review still blocks after ${e.detail ?? "2"} fix rounds`;
-    case "escalation_taken":
-      return `${who} took the review of ${label(e.runId)} over from Pip`;
-    case "waiting_for_pr":
-      return `${label(e.runId)} is waiting for its pull request`;
+    case "basis_drifted":
+      return driftWords(e.detail);
+    case "paused":
     case "held":
-      return HELD_WORDS[e.actor];
+      return PAUSED_WORDS[e.actor];
     case "resumed":
       return `${who} resumed the workstream`;
-    case "mode_set":
-      return e.detail === "manage" ? `${who} let Pip manage the workstream` : `${who} stopped Pip managing the workstream`;
-    case "rule_set":
-      return `${who} changed an automatic step`;
     case "run_approved":
       return `${who} started ${label(e.runId)}`;
     case "run_stopped":
@@ -417,14 +406,9 @@ export function eventText(e: WorkstreamEvent, label: (id: string | null) => stri
     case "draft_skipped":
       return `${who} skipped a draft`;
     case "undone":
-      return e.detail === "held" ? `${who} undid holding the workstream` : e.detail === "mode_set" ? `${who} undid a change of mode` : e.detail === "draft_skipped" ? `${who} brought back a skipped draft` : e.detail === "adopted" ? `${who} put the runs and drafts they brought in back under General` : `${who} undid an action`;
+      return e.detail === "draft_skipped" ? `${who} brought back a skipped draft` : e.detail === "adopted" ? `${who} put the runs and drafts they brought in back under General` : `${who} undid an action`;
     case "notes_set":
       return "Pip updated its notes";
-    case "budget_reset":
-      // A message of the person's gives the automatic steps back (`personWrote`); it is not a button they pressed.
-      return e.detail === "message" ? "Your message gave Pip its automatic steps back" : `${who} reset the budget`;
-    case "steps_allowed":
-      return `${who} allowed ${e.detail ?? "5"} more automatic steps`;
     case "readiness_asked":
       // The wait starts when the comment is posted (`draft_approved`), not when it is drafted here.
       return `${who} chose to ask the reporter about ${label(e.runId)}'s open questions; drafted for you to post`;
@@ -460,12 +444,10 @@ export function toWorkstreamEntries(events: Readonly<Record<string, readonly Wor
     const labels = new Map(view.labels);
     const label = (run: string | null) => (run ? (labels.get(run) ?? `run ${run.length <= 12 ? run : run.slice(0, 8)}`) : "a run");
     const item = refOf(view);
-    let rounds = 0;
     const asked = new Set<string>();
     for (const e of events[id] ?? []) {
-      if (e.action === "fix_round_sent") rounds++;
       if (e.action === "readiness_asked" && e.runId) asked.add(e.runId);
-      const text = eventText(e, label, rounds, !!e.runId && asked.has(e.runId));
+      const text = eventText(e, label, !!e.runId && asked.has(e.runId));
       if (!text) continue;
       out.push({ source: "pip", id: `ws:${id}:${e.seq}`, at: e.at, workstreamId: id, actor: e.actor, action: e.action, runId: e.runId, itemKey: view.workstream.itemKey, item, text, mention: false, unread: false });
     }

@@ -41,9 +41,9 @@ pub enum NoticeMode {
 pub enum Group {
     /// A draft waits for approval, or a run start.
     Approve,
-    /// Something is stuck until they act: a run's question, permission or sign-in, or a hold.
+    /// Something is stuck until they act: a run's question, permission or sign-in, or a pause.
     Unblock,
-    /// A choice only they make: a review escalation, a plan or description approval.
+    /// A choice only they make: a plan or description approval.
     Decide,
 }
 
@@ -304,7 +304,7 @@ mod tests {
     #[test]
     fn a_need_without_a_run_notifies_and_opens_nothing() {
         let mut b = Board::default();
-        let hold = Need { group: Group::Unblock, run_id: None, what: "It is on hold until you resume it".into(), since: t(0) };
+        let hold = Need { group: Group::Unblock, run_id: None, what: "It is paused until you resume it".into(), since: t(0) };
         let out = tick(&mut b, 0, &each(), &[ws("w1", vec![hold])]);
         assert_eq!((titles(&out), out[0].open_run.clone()), (vec!["CA-401 is waiting on you"], None));
     }

@@ -27,7 +27,7 @@ const comment = (id: string, state: Proposal["state"] = { type: "pending" }): Pr
   ({ id, createdAt: "2026-10-12T09:00:00Z", updatedAt: "2026-10-12T09:00:00Z", origin: { type: "chat", requestId: "r" }, createdBy: "pip", intent: { type: "comment", item: ref, body: docFromText("Hi") }, label: null, basis: null, state, revisions: [], created: [], error: null, run: null }) as Proposal;
 const rewrite = (id: string): Proposal => ({ ...comment(id), intent: { type: "rewrite", item: ref, title: { from: "A", to: "B" }, body: null, flattened: [] } }) as Proposal;
 const view = (over: Partial<WorkstreamView["workstream"]> = {}): WorkstreamView =>
-  ({ workstream: { id: "ws-1", itemKey: "CA-401", title: "CA-401 Checkout", mode: "manage", heldReason: null, closedAt: null, ...over }, stage: "intake", runs: [], labels: [], budget: {} }) as unknown as WorkstreamView;
+  ({ workstream: { id: "ws-1", itemKey: "CA-401", title: "CA-401 Checkout", pausedReason: null, closedAt: null, ...over }, stage: "intake", runs: [], labels: [], budget: {} }) as unknown as WorkstreamView;
 
 const deps = (): ContextDeps => ({
   needAct: vi.fn(),
@@ -37,9 +37,8 @@ const deps = (): ContextDeps => ({
   skipDraft: vi.fn(),
   draftInWorkstream: vi.fn(),
   openRun: vi.fn(),
-  hold: vi.fn(),
+  pause: vi.fn(),
   resume: vi.fn(),
-  advise: vi.fn(),
   openWorkstream: vi.fn(),
   approveSafe: vi.fn(),
 });
@@ -53,7 +52,7 @@ describe("the palette's entries for the focused item", () => {
     const d = deps();
     const subject: Subject = { type: "need", key: permission.key };
     const entries = contextCommands(subject, data({ needs: [permission] }), d);
-    expect(labels(entries)).toEqual(["Allow once", "Deny", "Open in workstream", "Hold the workstream on CA-401", "Switch CA-401 to Advise"]);
+    expect(labels(entries)).toEqual(["Allow once", "Deny", "Open in workstream", "Pause the workstream on CA-401"]);
     expect(entries.every((c) => c.group === "This item")).toBe(true);
     // Each one calls the need's own button of that name, and the palette adds nothing to it.
     entries[0].run();
@@ -68,31 +67,17 @@ describe("the palette's entries for the focused item", () => {
     const entries = contextCommands({ type: "need", key: permission.key }, data({ needs: [permission] }), deps());
     expect(labels(rankCommands(entries, "allow"))[0]).toBe("Allow once");
     expect(labels(rankCommands(entries, "deny"))[0]).toBe("Deny");
-    expect(labels(rankCommands(entries, "hold"))).toContain("Hold the workstream on CA-401");
-    expect(labels(rankCommands(entries, "advise"))).toContain("Switch CA-401 to Advise");
+    expect(labels(rankCommands(entries, "pause"))).toContain("Pause the workstream on CA-401");
   });
 
-  it("a failed run offers Retry and Dismiss; a limit stop Resume; a held workstream Resume, and not Hold", () => {
+  it("a failed run offers Retry and Dismiss; a limit stop Resume; a paused workstream Resume, and not Pause", () => {
     const failed = need({ key: "run:r-2", kind: "failure", runId: "r-2", primary: spec("retry", "Retry"), secondary: [spec("dismiss", "Dismiss")] });
     expect(labels(contextCommands({ type: "need", key: failed.key }, data({ needs: [failed] }), deps())).slice(0, 2)).toEqual(["Retry", "Dismiss"]);
     const limit = need({ key: "run:r-3", kind: "stoppedAtLimit", runId: "r-3", primary: spec("resume", "Resume"), secondary: [spec("dismiss", "Dismiss")] });
     expect(labels(contextCommands({ type: "need", key: limit.key }, data({ needs: [limit] }), deps())).slice(0, 2)).toEqual(["Resume", "Dismiss"]);
-    const held = need({ key: "held:ws-1", kind: "hold", target: { type: "workstream" }, primary: spec("resume", "Resume") });
-    const entries = contextCommands({ type: "need", key: held.key }, data({ needs: [held], workstreams: [view({ heldReason: "person" })] }), deps());
-    expect(labels(entries)).toEqual(["Resume", "Open in workstream", "Switch CA-401 to Advise"]);
-  });
-
-  it("a used-up budget offers Allow 5 more and Switch to Advise once, each calling the need's own button", () => {
-    const budget = need({ key: "budget:ws-1", kind: "budget", group: "decide", target: { type: "workstream" }, primary: spec("allowMore", "Allow 5 more"), secondary: [spec("advise", "Switch to Advise")] });
-    const d = deps();
-    const entries = contextCommands({ type: "need", key: budget.key }, data({ needs: [budget], workstreams: [view({ heldReason: "budget" })] }), d);
-    // The workstream's own Switch to Advise would say the same thing twice.
-    expect(labels(entries)).toEqual(["Allow 5 more", "Switch to Advise", "Open in workstream"]);
-    entries[0].run();
-    entries[1].run();
-    expect(d.needAct).toHaveBeenNthCalledWith(1, budget, "allowMore");
-    expect(d.needAct).toHaveBeenNthCalledWith(2, budget, "advise");
-    expect(labels(rankCommands(entries, "allow more"))[0]).toBe("Allow 5 more");
+    const paused = need({ key: "paused:ws-1", kind: "paused", target: { type: "workstream" }, primary: spec("resume", "Resume") });
+    const entries = contextCommands({ type: "need", key: paused.key }, data({ needs: [paused], workstreams: [view({ pausedReason: "person" })] }), deps());
+    expect(labels(entries)).toEqual(["Resume", "Open in workstream"]);
   });
 
   it("a ticket that isn't clear enough to plan offers its three choices, each calling the need's own button, and found by what a person would type", () => {
@@ -151,15 +136,13 @@ describe("the palette's entries for the focused item", () => {
     expect(labels(skipped)).toEqual(["Open in workstream"]);
   });
 
-  it("a workstream offers Hold (or Resume when held) and Advise while it is managed", () => {
-    expect(labels(contextCommands({ type: "workstream", id: "ws-1" }, data(), deps()))).toEqual(["Hold the workstream on CA-401", "Switch CA-401 to Advise", "Open the workstream on CA-401"]);
-    expect(labels(contextCommands({ type: "workstream", id: "ws-1" }, data({ workstreams: [view({ heldReason: "person", mode: "advise" })] }), deps()))).toEqual(["Resume the workstream on CA-401", "Open the workstream on CA-401"]);
+  it("a workstream offers Pause (or Resume when paused) and Open", () => {
+    expect(labels(contextCommands({ type: "workstream", id: "ws-1" }, data(), deps()))).toEqual(["Pause the workstream on CA-401", "Open the workstream on CA-401"]);
+    expect(labels(contextCommands({ type: "workstream", id: "ws-1" }, data({ workstreams: [view({ pausedReason: "person" })] }), deps()))).toEqual(["Resume the workstream on CA-401", "Open the workstream on CA-401"]);
     const d = deps();
-    const [hold, advise] = contextCommands({ type: "workstream", id: "ws-1" }, data(), d);
-    hold.run();
-    advise.run();
-    expect(d.hold).toHaveBeenCalledWith("ws-1");
-    expect(d.advise).toHaveBeenCalledWith("ws-1");
+    const [pause] = contextCommands({ type: "workstream", id: "ws-1" }, data(), d);
+    pause.run();
+    expect(d.pause).toHaveBeenCalledWith("ws-1");
     // A closed workstream has no controls.
     expect(contextCommands({ type: "workstream", id: "ws-1" }, data({ workstreams: [view({ closedAt: "2026-10-01T00:00:00Z" })] }), deps())).toEqual([]);
   });

@@ -1,6 +1,6 @@
 //! Workstreams of the signed-in connection: opening one on a ticket (or with no ticket), reading it with the stage its
-//! runs give it, closing it, Pip's notes, its mode, holds and rule switches, and its audit. Nothing here starts, stops
-//! or answers a run or writes to Jira.
+//! runs give it, closing it, Pip's notes, pausing it, and its audit. Nothing here starts, stops or answers a run or
+//! writes to Jira.
 
 use std::collections::{HashMap, HashSet};
 
@@ -11,8 +11,8 @@ use sha2::{Digest, Sha256};
 use super::Core;
 use crate::auth::Scope;
 use crate::db::Db;
-use crate::agent::supervisor::{decide_wake, level_word, WakeFact, TRIP_BASIS};
-use crate::domain::workstream::{ALLOW_MORE_STEPS, BASIS_ASSIGNEE, BASIS_DESCRIPTION, BASIS_STATUS, BASIS_SUMMARY, budget_level, budget_limits, review_blocking, run_labels, stage, tripwire, valid_hold_reason, BudgetLevel, Mode, Rule, Stage, WorkstreamBasis, HELD_ALL, HELD_BUDGET, HELD_PERSON, HELD_QUOTA, HELD_RESTART, TRIPWIRE};
+use crate::agent::supervisor::WakeFact;
+use crate::domain::workstream::{review_blocking, run_labels, stage, PauseReason, Stage, WorkstreamBasis, BASIS_ASSIGNEE, BASIS_DESCRIPTION, BASIS_STATUS, BASIS_SUMMARY, WAKES_PER_WORKSTREAM_PER_DAY, WAKE_TURNS_PER_DAY};
 use crate::domain::{clarity_gaps, clarity_questions, has_markers, Actor, ClarityGap, CreatedBy, Origin, Category, Intent, ItemRef, Proposal, ProposalQuery, ProposalState, Run, RunKind, RunQuery, RunState, StateKind, WorkItem, Workstream, WorkstreamEvent};
 use crate::error::{Error, Result};
 use crate::proposals;
@@ -28,11 +28,8 @@ pub const NOTES_CLOSE: &str = "PIP_NOTES>>>";
 const TITLE_LIMIT: usize = 200;
 /// Told to Pip wherever a finished build's pull request hasn't been found yet: a review needs it pinned.
 pub const WAITING_FOR_PR_HINT: &str = "Gossamr asked GitHub for it; draft the review once get_workstream no longer says the build is waiting for its pull request.";
-/// Why a choice on a review that still blocks after the fix rounds is refused: that review was dealt with, or a newer
-/// one came, since the person saw it. Each extra fix round needs its own click on a fresh escalation.
-pub const ESCALATION_GONE: &str = "This review isn't waiting for your choice any more.";
 /// Why a choice on a Triage that found its ticket not ready is refused: the person chose already, a newer Triage or a Plan
-/// came, or the workstream isn't managed any more.
+/// came.
 pub const READINESS_GONE: &str = "This ticket isn't waiting for your choice about its open questions any more.";
 /// Why asking the reporter, or saying a ticket looks fine, is refused when its clarity notice isn't showing: the person
 /// chose already, a Triage spoke, or the ticket reads as clear now.
@@ -49,19 +46,14 @@ fn refuse(message: impl Into<String>) -> Error {
     Error::Proposal(message.into())
 }
 
-/// How long after a hold or a switch to Advise the person may take it back. The page's Undo toast lasts about 8 seconds;
-/// this leaves room for a slow click, and no more.
+/// How long after "Bring them here" the person may take it back. The page's Undo toast lasts about 8 seconds; this leaves
+/// room for a slow click, and no more.
 pub const UNDO_WINDOW_SECS: i64 = 60;
 
-/// What the person's Undo asks for, with how the workstream stood before the change it takes back, as the page saw it.
+/// What the person's Undo asks for.
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum WorkstreamUndo {
-    /// Takes back a hold: the workstream is held for `was` again (a restart, budget or quota hold the person's replaced), or free.
-    Hold { was: Option<String> },
-    /// Takes back a switch of mode: `was` again, with the mode a tripwire had taken away (`resume_mode`) still kept for resuming.
-    #[serde(rename_all = "camelCase")]
-    Mode { was: Mode, resume_mode: Option<Mode> },
     /// Takes back "Bring them here": each run and draft listed goes back to General, if it is still in this workstream.
     Adopt { runs: Vec<String>, drafts: Vec<String> },
 }
@@ -123,9 +115,6 @@ pub struct WorkstreamView {
     /// The newest finished review asked for changes and nothing is in progress: the stage is Review, not Done.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub review_blocking: bool,
-    /// The newest review still blocks after the automatic fix rounds ran out: the person chooses what happens next.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub escalation: Option<Escalation>,
     /// The newest Triage found the ticket not ready to plan and the Plan after it waits for the person's choice.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub readiness: Option<ReadinessStop>,
@@ -136,12 +125,8 @@ pub struct WorkstreamView {
     /// The person asked the reporter and the comment was posted; nothing has answered it yet.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub waiting_on_reporter: Option<ReporterWait>,
-    /// The ticket changed (a basis drift) while the workstream waited on the reporter, and the person hasn't chosen since: the
-    /// held banner says so, and Resume leads to the plan decision.
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
-    pub changed_while_waiting: bool,
     /// The wait on the reporter ended with their reply on the ticket (a comment from someone else) and the person hasn't
-    /// chosen since. Always with `changed_while_waiting`.
+    /// chosen since.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub reporter_replied: bool,
     /// When that reply was written (the first comment that ended the wait): the timeline's "The reporter replied on the ticket".
@@ -158,7 +143,6 @@ pub struct WorkstreamView {
     /// bring them here. Never moved without the person asking (`adopt_into_workstream`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub adoptable: Option<Adoptable>,
-    pub budget: BudgetView,
 }
 
 /// The reporter's reply: which comment on the ticket it is, and its first line cut short (`reply_excerpt`).
@@ -312,13 +296,6 @@ pub fn first_ask_posted(events: &[WorkstreamEvent]) -> Option<chrono::DateTime<U
     None
 }
 
-/// Whether the reporter answered what a Triage that finished at `since` left open: a comment from someone but the person
-/// (`replies`, their times) came after the first ask was posted and after `since`. A Triage that ran after the reply
-/// had the answer in its prompt, so what it still lists is open. Mirrored by `answeredByReply` in src/lib/reporterWait.ts.
-pub fn answered_by_reply(events: &[WorkstreamEvent], replies: &[chrono::DateTime<Utc>], since: chrono::DateTime<Utc>) -> bool {
-    first_ask_posted(events).is_some_and(|ask| replies.iter().any(|r| *r > ask && *r > since))
-}
-
 /// Every comment of the cached ticket `t` from someone other than `me` that came after the first reporter ask was posted (the
 /// approval of the comment of a `readiness_asked`, `clarity_asked` or `reporter_nudged`), oldest first, each as its quote.
 /// A comment that says nothing is left out. Mirrored by `reporterReplies` in src/lib/reporterWait.ts; both run the `replies`
@@ -396,83 +373,8 @@ fn draft_lapsed(events: &[WorkstreamEvent], id: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// A review that still blocks after `autostart::FIX_ROUNDS_MAX` automatic fix rounds, waiting for the person: run another
-/// fix round, take the workstream over (Advise), or post the review draft as it is. Only the person chooses.
-#[derive(Clone, Debug, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Escalation {
-    pub review_run: String,
-    pub build_run: String,
-    pub review_label: String,
-    pub build_label: String,
-    /// The automatic fix rounds that were used up.
-    pub rounds: u32,
-    /// The pending GitHub review draft the person may post as it is: the review's own, else the newest of its pull
-    /// request.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub review_draft: Option<String>,
-    /// When the supervisor found the rounds used up.
-    pub at: chrono::DateTime<Utc>,
-}
-
-/// The escalation of `ws`, if its newest review still blocks after the automatic fix rounds: the workstream is open and
-/// in Manage (a hold doesn't hide it), its newest review is Done, blocking and of a build, the supervisor said the
-/// rounds ran out for it (`fix_rounds_exhausted`), the person hasn't sent a fix round after it (`fix_round_person`) or
-/// taken it over (`escalation_taken`, which a later switch back to Manage doesn't undo) or posted its review draft as it is (`escalation_posted`), and the build is Done. `drafts` are the account's pending drafts; only GitHub reviews among them count.
-pub fn escalation_of(ws: &Workstream, runs: &[Run], verdict_of: impl Fn(&Run) -> Option<ReviewVerdict>, events: &[WorkstreamEvent], drafts: &[Proposal]) -> Option<Escalation> {
-    if ws.closed_at.is_some() || ws.mode != Mode::Manage {
-        return None;
-    }
-    let mine = |r: &&Run| r.spec.workstream.as_deref() == Some(ws.id.as_str());
-    let review = runs.iter().filter(mine).filter(|r| r.spec.kind == RunKind::Review).max_by(|a, b| (a.queued_at, &a.id).cmp(&(b.queued_at, &b.id)))?;
-    if review.state != RunState::Done || verdict_of(review) != Some(ReviewVerdict::Blocking) {
-        return None;
-    }
-    let build_id = review.spec.build_from_run.as_deref()?;
-    let build = runs.iter().filter(mine).find(|r| r.id == build_id && r.spec.kind == RunKind::Build)?;
-    if build.state != RunState::Done {
-        return None;
-    }
-    let exhausted = events.iter().filter(|e| e.action == "fix_rounds_exhausted" && e.run_id.as_deref() == Some(review.id.as_str())).max_by_key(|e| e.seq)?;
-    let after = format!("after {}", review.id);
-    let chosen = |e: &WorkstreamEvent| match e.action.as_str() {
-        "fix_round_person" => e.detail.as_deref() == Some(after.as_str()),
-        "escalation_taken" | "escalation_posted" => e.run_id.as_deref() == Some(review.id.as_str()),
-        _ => false,
-    };
-    if events.iter().any(chosen) {
-        return None;
-    }
-    let reviews: Vec<(&Proposal, &str, &str, u64)> = drafts
-        .iter()
-        .filter(|p| p.state == ProposalState::Pending)
-        .filter_map(|p| match &p.intent {
-            Intent::GithubReview { run_id, repo, number, .. } => Some((p, run_id.as_str(), repo.as_str(), *number)),
-            _ => None,
-        })
-        .collect();
-    let own = reviews.iter().find(|(_, run, ..)| *run == review.id).map(|(p, ..)| p.id.clone());
-    // The fallback is limited to this workstream's own drafts, so a draft is offered by at most one escalation, the one
-    // whose workstream it was made in, which is also the one posting it resolves.
-    let of_pull = || {
-        let number = review.spec.pr?;
-        reviews.iter().filter(|(p, _, repo, n)| *n == number && repo.eq_ignore_ascii_case(&review.spec.repo) && p.workstream() == Some(ws.id.as_str())).max_by(|a, b| (a.0.created_at, &a.0.id).cmp(&(b.0.created_at, &b.0.id))).map(|(p, ..)| p.id.clone())
-    };
-    let labels = run_labels(&runs.iter().filter(mine).cloned().collect::<Vec<_>>());
-    let label = |id: &str| labels.iter().find(|(r, _)| r == id).map(|(_, l)| l.clone()).unwrap_or_default();
-    Some(Escalation {
-        review_run: review.id.clone(),
-        build_run: build.id.clone(),
-        review_label: label(&review.id),
-        build_label: label(&build.id),
-        rounds: crate::agent::autostart::FIX_ROUNDS_MAX,
-        review_draft: own.or_else(of_pull),
-        at: exhausted.at,
-    })
-}
-
 /// A Triage that found its ticket not ready to plan, waiting for the person: ask the reporter, answer the questions
-/// themselves, or plan anyway. Only the person chooses; the Plan the Triage would have started doesn't start before.
+/// themselves, or plan anyway. Only the person chooses.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReadinessStop {
@@ -493,14 +395,14 @@ pub struct ReadinessStop {
 }
 
 /// The readiness stop of `ws`, if its newest Triage on a ticket is Done and said `Ready to plan: no`: the workstream is
-/// open and in Manage, the person hasn't chosen yet (`readiness_asked`, `readiness_answered` or `readiness_overridden`,
+/// open, the person hasn't chosen yet (`readiness_asked`, `readiness_answered` or `readiness_overridden`,
 /// theirs, naming that Triage), and no Plan was started since it finished. A newer Triage, which is under way or says
 /// ready, takes it away, as does a Plan the person started by hand. `readiness` is what a Triage's report resolves to.
 /// A choice to ask the reporter is undone by the ticket changing while the person waited (`ReporterFollow::changed`): the
 /// stop comes back, flagged `changed`. Mirrored by `readinessOf` in src/backend/mockWorkstreams.ts; both run `stop` in
 /// src/backend/readiness.fixtures.json.
 pub fn readiness_of(ws: &Workstream, runs: &[Run], readiness: impl Fn(&Run) -> Option<Readiness>, replies: &[chrono::DateTime<Utc>], events: &[WorkstreamEvent]) -> Option<ReadinessStop> {
-    if ws.closed_at.is_some() || ws.mode != Mode::Manage {
+    if ws.closed_at.is_some() {
         return None;
     }
     let mine = |r: &&Run| r.spec.workstream.as_deref() == Some(ws.id.as_str());
@@ -566,34 +468,6 @@ pub fn nudge_comment(key: &str, reporter: Option<&str>, replied: bool, open: &[S
     format!("{hello}\n\nThe {questions} about {key} are still open:\n\n{bullets}\n\nCould you answer them here on the ticket when you have a moment? Thanks.")
 }
 
-/// One counter of a workstream's budget: how much is used of how much it may use.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct BudgetCount {
-    pub used: u32,
-    pub limit: u32,
-}
-
-/// A workstream's budget as the page shows it, defaults filled in.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct BudgetView {
-    pub auto_turns: BudgetCount,
-    pub wakes: BudgetCount,
-    pub level: BudgetLevel,
-}
-
-impl BudgetView {
-    pub fn of(ws: &Workstream) -> Self {
-        let (turns, wakes) = budget_limits(ws);
-        BudgetView {
-            auto_turns: BudgetCount { used: ws.spent.auto_turns, limit: turns },
-            wakes: BudgetCount { used: ws.spent.wakes, limit: wakes },
-            level: budget_level(ws),
-        }
-    }
-}
-
 /// What the finished runs of a list of workstreams concluded, by run id: their reviews' verdicts and their Triages'
 /// readiness, which the views of the workstreams are read from.
 struct Verdicts {
@@ -633,14 +507,11 @@ impl WorkstreamView {
             review_blocking: review_blocking(runs, verdict),
             runs: runs.iter().map(|r| r.id.clone()).collect(),
             labels: run_labels(runs),
-            budget: BudgetView::of(&workstream),
             workstream,
             waiting_for_pr: None,
-            escalation: None,
             readiness: None,
             clarity: None,
             waiting_on_reporter: None,
-            changed_while_waiting: false,
             reporter_replied: false,
             reporter_replied_at: None,
             reporter_reply: None,
@@ -650,17 +521,16 @@ impl WorkstreamView {
     }
 }
 
-/// The audit lines an escalation, a readiness stop, a clarity notice or a wait on the reporter is read from, for an open
-/// workstream (each of them checks the mode itself). None for a closed one, so a list of workstreams reads only the
-/// audits it needs. The approvals kept are those of the comments the person asked the reporter with.
-fn escalation_events(db: &Db, ws: &Workstream) -> Result<Vec<WorkstreamEvent>> {
+/// The audit lines a readiness stop, a clarity notice or a wait on the reporter is read from, for an open workstream.
+/// None for a closed one, so a list of workstreams reads only the audits it needs. The approvals kept are those of the comments the person asked the reporter with.
+fn view_events(db: &Db, ws: &Workstream) -> Result<Vec<WorkstreamEvent>> {
     if ws.closed_at.is_some() {
         return Ok(Vec::new());
     }
     let all = db.workstream_events(&ws.id)?;
     let asked: HashSet<String> = all.iter().filter(|e| matches!(e.action.as_str(), "readiness_asked" | "clarity_asked" | "reporter_nudged")).filter_map(|e| e.proposal_id.clone()).collect();
     let kept = |e: &WorkstreamEvent| match e.action.as_str() {
-        "fix_rounds_exhausted" | "fix_round_person" | "escalation_taken" | "escalation_posted" | "readiness_asked" | "readiness_answered" | "readiness_overridden" | "clarity_asked" | "clarity_dismissed" | "reporter_nudged" | "basis_drifted" | "resumed" => true,
+        "readiness_asked" | "readiness_answered" | "readiness_overridden" | "clarity_asked" | "clarity_dismissed" | "reporter_nudged" | "basis_drifted" | "resumed" => true,
         "draft_approved" => e.proposal_id.as_ref().is_some_and(|p| asked.contains(p)),
         // A skipped or retired ask was never posted, which `clarity_of` reads through `draft_lapsed`, and so is an Undo of the skip.
         "draft_skipped" | "draft_retired" => e.proposal_id.as_ref().is_some_and(|p| asked.contains(p)),
@@ -696,61 +566,24 @@ fn ticket_facts(db: &Db, scope: &Scope, ws: &Workstream) -> Result<TicketFacts> 
     Ok(TicketFacts { gaps: clarity_gaps(&work.body.plain_text()), replies, ticket: cached, me: scope.account_id.clone(), item_runs: Vec::new(), adoptable: Adoptable::default() })
 }
 
-/// The `escalation_posted` line for workstream `ws_id` when review draft `posted`, just posted to GitHub, is the one its
-/// escalation offered to post as it is: the escalation is resolved, and this is what says so. None when the workstream
-/// has no escalation or the draft was another one. `posted` is read as it was before the claim, pending.
-pub(crate) fn escalation_posted_event(db: &Db, ws_id: &str, posted: &Proposal, at: chrono::DateTime<Utc>) -> Result<Option<WorkstreamEvent>> {
-    let Some(ws) = db.workstream(ws_id)? else { return Ok(None) };
-    let runs = db.runs(&RunQuery { connection_id: Some(ws.connection_id.clone()), workstream: Some(ws.id.clone()), ..Default::default() })?;
-    let verdicts = verdicts_of(db, &runs)?;
-    let events = escalation_events(db, &ws)?;
-    let mut drafts = pending_reviews(db)?;
-    drafts.push(Proposal { state: ProposalState::Pending, ..posted.clone() });
-    let found = escalation_of(&ws, &runs, |r| verdicts.get(&r.id).copied(), &events, &drafts).filter(|e| e.review_draft.as_deref() == Some(posted.id.as_str()));
-    Ok(found.map(|e| WorkstreamEvent::new(ws_id, Actor::Person, "escalation_posted", at).run(&e.review_run).proposal(&posted.id)))
-}
-
-/// The account's pending GitHub review drafts, which an escalation offers to post as they are.
-fn pending_reviews(db: &Db) -> Result<Vec<Proposal>> {
-    Ok(pending_drafts(db)?.into_iter().filter(|p| matches!(p.intent, Intent::GithubReview { .. })).collect())
-}
-
 /// The account's pending drafts of every kind, which `adoptable_of` picks from.
 fn pending_drafts(db: &Db) -> Result<Vec<Proposal>> {
     db.proposals(&ProposalQuery { states: Some(vec![StateKind::Pending]), ..Default::default() })
 }
 
-/// Holds `ws` with `reason` unless it is closed or already held. An existing reason is kept, except that the person's own
-/// hold, or a tripwire, replaces one that resuming would otherwise lift by itself or that the person didn't choose
-/// (restart, budget, quota): a tripwire's hold is lifted only by the person, never by a message or a new day. Returns
-/// whether it changed.
-fn hold(ws: &mut Workstream, reason: &str) -> bool {
-    if ws.closed_at.is_some() {
+/// Pauses `ws` for `reason` unless it is closed or already paused; whichever pause came first stays. Returns whether it
+/// changed.
+fn pause(ws: &mut Workstream, reason: PauseReason) -> bool {
+    if ws.closed_at.is_some() || ws.paused_reason.is_some() {
         return false;
     }
-    match ws.held_reason.as_deref() {
-        None => {}
-        Some(HELD_RESTART | HELD_BUDGET | HELD_QUOTA) if reason == HELD_PERSON || reason.starts_with(TRIPWIRE) => {}
-        Some(_) => return false,
-    }
-    ws.held_reason = Some(reason.to_string());
+    ws.paused_reason = Some(reason);
     true
 }
 
-/// Holds `ws` for its budget when it is in Manage, not held and has used its automatic steps up: Allow 5 more is the only
-/// way to grant more, so going back to Manage (or a resume that restores it) can't be a way round the question. Returns
-/// whether it held.
-fn rehold_spent(ws: &mut Workstream) -> bool {
-    if ws.closed_at.is_some() || ws.mode != Mode::Manage || ws.held_reason.is_some() || budget_level(ws) != BudgetLevel::Spent {
-        return false;
-    }
-    ws.held_reason = Some(HELD_BUDGET.to_string());
-    true
-}
-
-/// The `held` line for holding workstream `id` with `reason`.
-pub(crate) fn held_event(id: &str, actor: Actor, reason: &str, at: chrono::DateTime<Utc>) -> WorkstreamEvent {
-    WorkstreamEvent::new(id, actor, "held", at).detail(reason)
+/// The `paused` line for pausing workstream `id` for `reason`.
+pub(crate) fn paused_event(id: &str, actor: Actor, reason: PauseReason, at: chrono::DateTime<Utc>) -> WorkstreamEvent {
+    WorkstreamEvent::new(id, actor, "paused", at).detail(reason.as_str())
 }
 
 /// Loads `scope`'s open workstream `id` for a change.
@@ -827,36 +660,8 @@ fn rebased(basis: &WorkstreamBasis, work: &WorkItem) -> WorkstreamBasis {
     }
 }
 
-/// Spends one automatic turn and one wake of `ws` and saves it, holding it for `hold`; the budget's `amber` and
-/// `spent` levels are recorded as they are reached.
-fn spend_turn(db: &Db, ws: &mut Workstream, hold: Option<&str>, at: chrono::DateTime<Utc>) -> Result<()> {
-    let before = budget_level(ws);
-    ws.spent.auto_turns += 1;
-    ws.spent.wakes += 1;
-    let after = budget_level(ws);
-    if let Some(reason) = hold {
-        ws.held_reason = Some(reason.to_string());
-    }
-    db.save_workstream(ws)?;
-    if after != before && after != BudgetLevel::Ok {
-        let (turns, wakes) = budget_limits(ws);
-        let detail = format!("{} {}/{} turns {}/{} wakes", level_word(after), ws.spent.auto_turns, turns, ws.spent.wakes, wakes);
-        db.append_workstream_event(&WorkstreamEvent::new(&ws.id, Actor::Supervisor, "budget", at).detail(detail))?;
-    }
-    if let Some(reason) = hold {
-        db.append_workstream_event(&held_event(&ws.id, Actor::Supervisor, reason, at))?;
-    }
-    Ok(())
-}
-
 /// What the supervisor asks of `admit_wake`.
 pub struct WakeAdmission {
-    /// The wake is a new turn and counts against the budget; false when it merges into one already waiting.
-    pub spend: bool,
-    /// Wake turns allowed today across workstreams; 0 is no cap.
-    pub daily_cap: u32,
-    /// The start of today, from when wake turns count against the cap.
-    pub today: chrono::DateTime<Utc>,
     /// A retry after a quota miss, for facts already recorded.
     pub retry: bool,
     pub at: chrono::DateTime<Utc>,
@@ -867,7 +672,7 @@ pub struct WakeAdmission {
 pub struct Admitted {
     /// The facts to wake Pip with; empty when it isn't woken.
     pub facts: Vec<WakeFact>,
-    /// Whether the workstream changed (spent, held), so the page re-reads it.
+    /// Whether the workstream changed (paused), so the page re-reads it.
     pub changed: bool,
 }
 
@@ -926,17 +731,11 @@ impl Core {
                 repo: None,
                 title: title.chars().take(TITLE_LIMIT).collect(),
                 pip_session: None,
-                mode: Mode::Advise,
-                held_reason: None,
+                paused_reason: None,
                 notes: None,
                 created_at: at,
                 closed_at: None,
-                budget: Default::default(),
-                spent: Default::default(),
-                rules: Default::default(),
                 basis,
-                drifted: Vec::new(),
-                resume_mode: None,
             };
             db.insert_workstream(&ws)?;
             db.append_workstream_event(&WorkstreamEvent::new(&ws.id, Actor::Person, "opened", at))?;
@@ -954,7 +753,7 @@ impl Core {
                 let runs = db.runs(&RunQuery { connection_id: Some(connection_id.clone()), workstream: Some(ws.id.clone()), ..Default::default() })?;
                 let verdicts = verdicts_of(db, &runs)?;
                 let readiness = readiness_verdicts(db, &runs)?;
-                let events = escalation_events(db, &ws)?;
+                let events = view_events(db, &ws)?;
                 let ticket = ticket_facts(db, scope, &ws)?;
                 let pending = pending_drafts(db)?;
                 let ticket = match ws.item_key.as_deref() {
@@ -964,30 +763,25 @@ impl Core {
                     }
                     None => ticket,
                 };
-                let reviews: Vec<Proposal> = pending.into_iter().filter(|p| matches!(p.intent, Intent::GithubReview { .. })).collect();
-                Ok(Some((ws, runs, Verdicts { reviews: verdicts, readiness }, events, reviews, ticket)))
+                Ok(Some((ws, runs, Verdicts { reviews: verdicts, readiness }, events, ticket)))
             })
             .await?;
-        found.map(|(ws, runs, verdicts, events, drafts, ticket)| self.view_of(ws, &runs, &verdicts, &events, &drafts, &ticket)).transpose()
+        found.map(|(ws, runs, verdicts, events, ticket)| self.view_of(ws, &runs, &verdicts, &events, &ticket)).transpose()
     }
 
-    /// A workstream's view from its runs, with the build still waiting for its pull request and the review that still
-    /// blocks after the fix rounds. The pull request is read from the code cache, so it is looked up outside the
-    /// account's database.
-    fn view_of(&self, workstream: Workstream, runs: &[Run], verdicts: &Verdicts, events: &[WorkstreamEvent], drafts: &[Proposal], ticket: &TicketFacts) -> Result<WorkstreamView> {
-        let escalation = escalation_of(&workstream, runs, |r| verdicts.reviews.get(&r.id).copied(), events, drafts);
+    /// A workstream's view from its runs, with the build still waiting for its pull request. The pull request is read
+    /// from the code cache, so it is looked up outside the account's database.
+    fn view_of(&self, workstream: Workstream, runs: &[Run], verdicts: &Verdicts, events: &[WorkstreamEvent], ticket: &TicketFacts) -> Result<WorkstreamView> {
         let readiness = readiness_of(&workstream, runs, |r| verdicts.readiness.get(&r.id).cloned(), &ticket.replies, events);
         let clarity = clarity_of(&workstream, runs, &ticket.item_runs, &ticket.gaps, &ticket.replies, events);
         let (follow, replied_at) = reporter_follow_at(events, &ticket.replies);
         let waiting = follow.waiting.filter(|_| workstream.closed_at.is_none()).map(|since| ReporterWait { since });
         let mut view = WorkstreamView::of(workstream, runs, &verdicts.reviews);
-        view.escalation = escalation;
         view.readiness = readiness;
         view.clarity = clarity;
         view.waiting_on_reporter = waiting;
         let open = view.workstream.closed_at.is_none();
         view.adoptable = Some(ticket.adoptable.clone()).filter(|a| open && !a.is_empty());
-        view.changed_while_waiting = follow.changed && open;
         view.reporter_replied = follow.replied && open;
         view.reporter_replied_at = replied_at.filter(|_| open);
         view.reporter_reply = replied_at.filter(|_| open).and_then(|at| ticket.ticket.as_ref().and_then(|t| reply_to(t, &ticket.me, at)));
@@ -1012,13 +806,12 @@ impl Core {
                 let mut events = HashMap::new();
                 let mut tickets = HashMap::new();
                 for ws in &workstreams {
-                    events.insert(ws.id.clone(), escalation_events(db, ws)?);
+                    events.insert(ws.id.clone(), view_events(db, ws)?);
                     tickets.insert(ws.id.clone(), ticket_facts(db, scope, ws)?);
                 }
                 Ok((workstreams, runs, verdicts, events, pending_drafts(db)?, tickets))
             })
             .await?;
-        let drafts: Vec<Proposal> = pending.iter().filter(|p| matches!(p.intent, Intent::GithubReview { .. })).cloned().collect();
         workstreams
             .into_iter()
             .map(|ws| {
@@ -1027,7 +820,7 @@ impl Core {
                 let mut ticket = tickets.remove(&ws.id).unwrap_or_default();
                 ticket.item_runs = runs.iter().filter(|r| ws.item_key.as_deref().is_some_and(|key| r.item.as_ref().is_some_and(|i| i.key == key))).cloned().collect();
                 ticket.adoptable = adoptable_of(&ws, &ticket.item_runs, &pending);
-                self.view_of(ws, &linked, &verdicts, &events, &drafts, &ticket)
+                self.view_of(ws, &linked, &verdicts, &events, &ticket)
             })
             .collect()
     }
@@ -1054,7 +847,7 @@ impl Core {
         .await
     }
 
-    /// Reopens a closed workstream, as it stood: its mode, hold and notes are kept, and the `reopened` line says so. Refused
+    /// Reopens a closed workstream, as it stood: its pause and notes are kept, and the `reopened` line says so. Refused
     /// when its ticket has another open workstream by now; reopening an open one changes nothing.
     pub async fn reopen_workstream(&self, scope: &Scope, id: &str) -> Result<Workstream> {
         let connection_id = Connection::jira_id(scope);
@@ -1157,45 +950,6 @@ impl Core {
         .await
     }
 
-    /// Sets how much Pip may do on its own in an open workstream. Setting the mode it has records nothing. The person
-    /// setting it forgets the mode a tripwire took away, so resuming leaves their choice. Changing to Manage while not
-    /// held and with the automatic steps used up holds it for its budget again (a supervisor `held` line), so Allow 5
-    /// more is asked again rather than skipped.
-    pub async fn set_workstream_mode(&self, scope: &Scope, id: &str, mode: Mode, actor: Actor) -> Result<Workstream> {
-        let connection_id = Connection::jira_id(scope);
-        let at = Utc::now();
-        self.with_db_atomically_for(scope, |db| {
-            let mut ws = open(db, &connection_id, id)?;
-            // The person choosing a mode while a tripwire holds it wins over the mode resuming would put back.
-            let chosen = actor == Actor::Person && ws.resume_mode.take().is_some();
-            if ws.mode != mode {
-                ws.mode = mode;
-                let reheld = rehold_spent(&mut ws);
-                db.save_workstream(&ws)?;
-                db.append_workstream_event(&WorkstreamEvent::new(&ws.id, actor, "mode_set", at).detail(mode.as_str()))?;
-                if reheld {
-                    db.append_workstream_event(&held_event(&ws.id, Actor::Supervisor, HELD_BUDGET, at))?;
-                }
-            } else if chosen {
-                db.save_workstream(&ws)?;
-            }
-            Ok(ws)
-        })
-        .await
-    }
-
-    /// The person's choice "I'll take it from here" on a review that still blocks after the automatic fix rounds: records
-    /// `escalation_taken` and switches the workstream to Advise. Nothing else changes: no hold, no draft, no run. Refused
-    /// with `ESCALATION_GONE` unless the workstream's escalation is about `review`.
-    pub async fn take_over_escalation(&self, scope: &Scope, id: &str, review: &str) -> Result<Workstream> {
-        let view = self.workstream(scope, id).await?.ok_or_else(|| refuse(format!("there is no workstream {id}")))?;
-        if view.escalation.as_ref().map(|e| e.review_run.as_str()) != Some(review) {
-            return Err(refuse(ESCALATION_GONE));
-        }
-        self.record_workstream_event(scope, WorkstreamEvent::new(id, Actor::Person, "escalation_taken", Utc::now()).run(review)).await?;
-        self.set_workstream_mode(scope, id, Mode::Advise, Actor::Person).await
-    }
-
     /// The readiness stop of workstream `id` as it stands, refused with `READINESS_GONE` unless it is about `triage`.
     async fn readiness_stop(&self, scope: &Scope, id: &str, triage: &str) -> Result<ReadinessStop> {
         let view = self.workstream(scope, id).await?.ok_or_else(|| refuse(format!("there is no workstream {id}")))?;
@@ -1232,10 +986,9 @@ impl Core {
         self.workstream(scope, id).await?.map(|v| v.workstream).ok_or_else(|| refuse(format!("there is no workstream {id}")))
     }
 
-    /// The person's "Plan anyway" on a Triage that found its ticket not ready: records `readiness_overridden`, the one line
-    /// that lets the auto-start rule start the Plan (`autostart::readiness_overridden`), which then still needs the
-    /// workstream in Manage, not held, within budget. It starts nothing itself. Refused with `READINESS_GONE` unless the
-    /// workstream's stop is about `triage`. Pip has no way to call this.
+    /// The person's "Plan anyway" on a Triage that found its ticket not ready: records `readiness_overridden`, which
+    /// settles the stop. It starts nothing itself. Refused with `READINESS_GONE` unless the workstream's stop is about
+    /// `triage`. Pip has no way to call this.
     pub async fn override_readiness(&self, scope: &Scope, id: &str, triage: &str) -> Result<Workstream> {
         self.readiness_stop(scope, id, triage).await?;
         self.record_workstream_event(scope, WorkstreamEvent::new(id, Actor::Person, "readiness_overridden", Utc::now()).run(triage)).await?;
@@ -1327,96 +1080,40 @@ impl Core {
         self.record_workstream_event(scope, WorkstreamEvent::new(id, Actor::Person, action, Utc::now()).detail(detail)).await.map(|_| ())
     }
 
-    /// Holds an open workstream: no wakes and no automatic starts while it is held; its runs carry on. A workstream
-    /// already held keeps its reason, except that the person's hold replaces a restart, budget or quota one.
-    pub async fn hold_workstream(&self, scope: &Scope, id: &str, reason: &str, actor: Actor) -> Result<Workstream> {
-        if !valid_hold_reason(reason) {
-            return Err(refuse(format!("{reason:?} isn't a reason to hold a workstream")));
-        }
+    /// Pauses an open workstream: Pip isn't woken in it while it is paused; its runs carry on. A workstream already
+    /// paused keeps its reason.
+    pub async fn pause_workstream(&self, scope: &Scope, id: &str, reason: PauseReason, actor: Actor) -> Result<Workstream> {
         let connection_id = Connection::jira_id(scope);
         let at = Utc::now();
         self.with_db_atomically_for(scope, |db| {
             let mut ws = open(db, &connection_id, id)?;
-            if hold(&mut ws, reason) {
+            if pause(&mut ws, reason) {
                 db.save_workstream(&ws)?;
-                db.append_workstream_event(&held_event(&ws.id, actor, reason, at))?;
+                db.append_workstream_event(&paused_event(&ws.id, actor, reason, at))?;
             }
             Ok(ws)
         })
         .await
     }
 
-    /// The person lifts a workstream's hold. What was spent is kept, whatever the hold: lifting a budget hold (offered in
-    /// Advise, where nothing starts on its own) doesn't grant steps, so going back to Manage holds it for its budget again
-    /// (`set_workstream_mode`) and Allow 5 more is the only way on. Lifting a basis-drift hold takes the basis again from the ticket as the cache has it now
-    /// (`basis_captured`; forgotten when it isn't cached, so a sweep takes it later). Resuming puts back the mode a
-    /// tripwire took away (`mode_set` by the person), whatever the hold, as a trip can land while another hold is on;
-    /// unless the person chose a mode meanwhile. A workstream that isn't held records nothing.
+    /// The person resumes a workstream, whatever paused it. One that isn't paused records nothing.
     pub async fn resume_workstream(&self, scope: &Scope, id: &str) -> Result<Workstream> {
         let connection_id = Connection::jira_id(scope);
         let at = Utc::now();
         self.with_db_atomically_for(scope, |db| {
             let mut ws = open(db, &connection_id, id)?;
-            let Some(reason) = ws.held_reason.take() else { return Ok(ws) };
-            let restore = ws.resume_mode.take();
-            if let Some(mode) = restore {
-                ws.mode = mode;
-            }
-            let rebase = reason == tripwire(TRIP_BASIS);
-            if rebase {
-                let work = match &ws.item_key {
-                    Some(key) => db.item(&Core::item(scope, key))?,
-                    None => None,
-                };
-                ws.basis = work.as_ref().map(basis_of);
-                ws.drifted.clear();
-            }
-            // Restoring Manage on a spent budget holds it again, as changing to Manage does.
-            let reheld = rehold_spent(&mut ws);
+            let Some(reason) = ws.paused_reason.take() else { return Ok(ws) };
             db.save_workstream(&ws)?;
-            db.append_workstream_event(&WorkstreamEvent::new(&ws.id, Actor::Person, "resumed", at).detail(reason))?;
-            if let Some(mode) = restore {
-                db.append_workstream_event(&WorkstreamEvent::new(&ws.id, Actor::Person, "mode_set", at).detail(mode.as_str()))?;
-            }
-            if rebase && ws.basis.is_some() {
-                db.append_workstream_event(&WorkstreamEvent::new(&ws.id, Actor::Supervisor, "basis_captured", at))?;
-            }
-            if reheld {
-                db.append_workstream_event(&held_event(&ws.id, Actor::Supervisor, HELD_BUDGET, at))?;
-            }
+            db.append_workstream_event(&WorkstreamEvent::new(&ws.id, Actor::Person, "resumed", at).detail(reason.as_str()))?;
             Ok(ws)
         })
         .await
     }
 
-    /// The person's "Allow 5 more" on a workstream held for its budget: raises its automatic turns and wakes allowance by
-    /// `ALLOW_MORE_STEPS` and lifts the hold, keeping what was spent. Records `steps_allowed` and `resumed`, both the
-    /// person's. Refused unless the workstream is held for its budget, so a stale choice changes nothing.
-    pub async fn allow_more_steps(&self, scope: &Scope, id: &str) -> Result<Workstream> {
-        let connection_id = Connection::jira_id(scope);
-        let at = Utc::now();
-        self.with_db_atomically_for(scope, |db| {
-            let mut ws = open(db, &connection_id, id)?;
-            if ws.held_reason.as_deref() != Some(HELD_BUDGET) {
-                return Err(refuse("this workstream isn't held for its automatic steps"));
-            }
-            let (turns, wakes) = budget_limits(&ws);
-            ws.budget.auto_turns = Some(turns + ALLOW_MORE_STEPS);
-            ws.budget.wakes = Some(wakes + ALLOW_MORE_STEPS);
-            ws.held_reason = None;
-            db.save_workstream(&ws)?;
-            db.append_workstream_event(&WorkstreamEvent::new(&ws.id, Actor::Person, "steps_allowed", at).detail(ALLOW_MORE_STEPS.to_string()))?;
-            db.append_workstream_event(&WorkstreamEvent::new(&ws.id, Actor::Person, "resumed", at).detail(HELD_BUDGET))?;
-            Ok(ws)
-        })
-        .await
-    }
-
-    /// The person's Undo of a hold or a switch of mode, a moment after it. It is allowed only while that change is the
-    /// last line of the workstream's audit, made by the person within `UNDO_WINDOW_SECS`, and the workstream still stands
-    /// as it left it: anything else that happened since (a run, a wake, another choice) means the page's picture of "before"
-    /// may be stale, and the change stands. The undo is its own line (`undone`, naming what it took back); the line it
-    /// follows stays.
+    /// The person's Undo of "Bring them here", a moment after it. It is allowed only while that change is the last line
+    /// of the workstream's audit, made by the person within `UNDO_WINDOW_SECS`: anything else that happened since (a run,
+    /// a wake, another choice) means the page's picture of "before" may be stale, and the change stands. The undo is its
+    /// own line (`undone`, naming what it took back); the line it follows stays.
     pub async fn undo_workstream(&self, scope: &Scope, id: &str, undo: &WorkstreamUndo) -> Result<Workstream> {
         self.undo_workstream_at(scope, id, undo, Utc::now()).await
     }
@@ -1424,144 +1121,58 @@ impl Core {
     async fn undo_workstream_at(&self, scope: &Scope, id: &str, undo: &WorkstreamUndo, at: chrono::DateTime<Utc>) -> Result<Workstream> {
         let connection_id = Connection::jira_id(scope);
         self.with_db_atomically_for(scope, |db| {
-            let mut ws = open(db, &connection_id, id)?;
+            let ws = open(db, &connection_id, id)?;
             let events = db.workstream_events(&ws.id)?;
             let last = events.last().filter(|e| e.actor == Actor::Person);
             let fresh = |e: &WorkstreamEvent| at.signed_duration_since(e.at).num_seconds() <= UNDO_WINDOW_SECS;
             let gone = || refuse("That change can't be undone any more: something else happened since, or it was a while ago.");
-            let (action, detail) = match undo {
-                WorkstreamUndo::Hold { was } => {
-                    last.filter(|e| e.action == "held" && fresh(e) && e.detail.is_some() && e.detail == ws.held_reason).ok_or_else(gone)?;
-                    if was.as_deref().is_some_and(|w| !valid_hold_reason(w)) || was == &ws.held_reason {
-                        return Err(refuse("That isn't a hold to go back to."));
-                    }
-                    ws.held_reason = was.clone();
-                    ("undone", "held")
+            let WorkstreamUndo::Adopt { runs, drafts } = undo;
+            last.filter(|e| e.action == "adopted" && fresh(e)).ok_or_else(gone)?;
+            for run in runs {
+                if let Some(mut r) = db.run(run)?.filter(|r| r.spec.workstream.as_deref() == Some(ws.id.as_str())) {
+                    r.spec.workstream = None;
+                    db.save_run(&r)?;
                 }
-                WorkstreamUndo::Mode { was, resume_mode } => {
-                    last.filter(|e| e.action == "mode_set" && fresh(e) && e.detail.as_deref() == Some(ws.mode.as_str())).ok_or_else(gone)?;
-                    if *was == ws.mode {
-                        return Err(refuse("The workstream is in that mode already."));
-                    }
-                    ws.mode = *was;
-                    ws.resume_mode = *resume_mode;
-                    ("undone", "mode_set")
+            }
+            for draft in drafts {
+                if let Some(mut p) = db.proposal(draft)?.filter(|p| p.state == ProposalState::Pending && p.workstream() == Some(ws.id.as_str())) {
+                    p.set_workstream(None);
+                    db.save_proposal(&p)?;
                 }
-                WorkstreamUndo::Adopt { runs, drafts } => {
-                    last.filter(|e| e.action == "adopted" && fresh(e)).ok_or_else(gone)?;
-                    for run in runs {
-                        if let Some(mut r) = db.run(run)?.filter(|r| r.spec.workstream.as_deref() == Some(ws.id.as_str())) {
-                            r.spec.workstream = None;
-                            db.save_run(&r)?;
-                        }
-                    }
-                    for draft in drafts {
-                        if let Some(mut p) = db.proposal(draft)?.filter(|p| p.state == ProposalState::Pending && p.workstream() == Some(ws.id.as_str())) {
-                            p.set_workstream(None);
-                            db.save_proposal(&p)?;
-                        }
-                    }
-                    ("undone", "adopted")
-                }
-            };
-            db.save_workstream(&ws)?;
-            db.append_workstream_event(&WorkstreamEvent::new(&ws.id, Actor::Person, action, at).detail(detail))?;
+            }
+            db.append_workstream_event(&WorkstreamEvent::new(&ws.id, Actor::Person, "undone", at).detail("adopted"))?;
             Ok(ws)
-        })
-        .await
-    }
-
-    /// The person's switch for one auto-start rule in an open workstream; `None` follows the global switch again.
-    pub async fn set_workstream_rule(&self, scope: &Scope, id: &str, rule: Rule, on: Option<bool>) -> Result<Workstream> {
-        let connection_id = Connection::jira_id(scope);
-        let at = Utc::now();
-        self.with_db_atomically_for(scope, |db| {
-            let mut ws = open(db, &connection_id, id)?;
-            if ws.rules.get(rule) != on {
-                ws.rules.set(rule, on);
-                db.save_workstream(&ws)?;
-                let value = match on {
-                    Some(true) => "on",
-                    Some(false) => "off",
-                    None => "inherit",
-                };
-                db.append_workstream_event(&WorkstreamEvent::new(&ws.id, Actor::Person, "rule_set", at).detail(format!("{}={value}", rule.as_str())))?;
-            }
-            Ok(ws)
-        })
-        .await
-    }
-
-    /// The person's Hold all: holds every open workstream of `scope` that isn't held already. Returns those it held.
-    pub async fn hold_all_workstreams(&self, scope: &Scope) -> Result<Vec<Workstream>> {
-        let connection_id = Connection::jira_id(scope);
-        let at = Utc::now();
-        self.with_db_atomically_for(scope, |db| {
-            let mut held = Vec::new();
-            for mut ws in db.workstreams(&connection_id, false)? {
-                if hold(&mut ws, HELD_ALL) {
-                    db.save_workstream(&ws)?;
-                    db.append_workstream_event(&held_event(&ws.id, Actor::Person, HELD_ALL, at))?;
-                    held.push(ws);
-                }
-            }
-            Ok(held)
-        })
-        .await
-    }
-
-    /// The person wrote in workstream `id`'s conversation: Pip's automatic turns count from zero again, and a budget
-    /// hold is lifted unless the wakes still use the budget up. Only a person's message does this. A closed or unknown
-    /// workstream changes nothing.
-    pub async fn person_wrote_in_workstream(&self, scope: &Scope, id: &str) -> Result<()> {
-        let connection_id = Connection::jira_id(scope);
-        let at = Utc::now();
-        self.with_db_atomically_for(scope, |db| {
-            let Ok(mut ws) = open(db, &connection_id, id) else { return Ok(()) };
-            let reset = ws.spent.auto_turns > 0;
-            ws.spent.auto_turns = 0;
-            let resumed = ws.held_reason.as_deref() == Some(HELD_BUDGET) && budget_level(&ws) != BudgetLevel::Spent;
-            if !reset && !resumed {
-                return Ok(());
-            }
-            if resumed {
-                ws.held_reason = None;
-            }
-            db.save_workstream(&ws)?;
-            if resumed {
-                db.append_workstream_event(&WorkstreamEvent::new(&ws.id, Actor::Person, "resumed", at).detail(HELD_BUDGET))?;
-            }
-            if reset {
-                db.append_workstream_event(&WorkstreamEvent::new(&ws.id, Actor::Person, "budget_reset", at).detail("message"))?;
-            }
-            Ok(())
         })
         .await
     }
 
     /// Decides, in one go, which of `facts` wake Pip in workstream `id`: those it wasn't woken for (all of them on a
-    /// retry), while it is open, in Manage mode, not held, within its budget and today's cap. Each fact let through is
-    /// recorded as a supervisor `wake` line with its run and state, which is what makes a second notice a no-op and
-    /// what a restart reads back. A new turn spends one automatic turn and one wake; the budget's `amber` and `spent`
-    /// levels are recorded as they are reached, and using it up or today's cap holds the workstream.
+    /// retry), while it is open and not paused. Each fact let through is recorded as a supervisor `wake` line with its
+    /// run and state, which is what makes a second notice a no-op and what a restart reads back. When the workstream
+    /// has had `WAKES_PER_WORKSTREAM_PER_DAY` wake turns since UTC midnight or the person's last resume, or Pip
+    /// `WAKE_TURNS_PER_DAY` across workstreams since midnight, nothing is let through: the workstream is paused for
+    /// `ceiling` and a supervisor `paused` line says so.
     pub async fn admit_wake(&self, scope: &Scope, id: &str, facts: &[WakeFact], ask: &WakeAdmission) -> Result<Admitted> {
         let connection_id = Connection::jira_id(scope);
-        let today = ask.today.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        let midnight = ask.at.date_naive().and_hms_opt(0, 0, 0).expect("midnight exists").and_utc();
         self.with_db_atomically_for(scope, |db| {
             let Ok(mut ws) = open(db, &connection_id, id) else { return Ok(Admitted::default()) };
+            if ws.paused_reason.is_some() {
+                return Ok(Admitted::default());
+            }
             let events = db.workstream_events(id)?;
             let woken = crate::agent::supervisor::woken_in(&events);
-            let woken = |f: &WakeFact| woken.contains(&(f.run.clone(), f.key().to_string()));
-            let fresh: Vec<WakeFact> = facts.iter().filter(|f| ask.retry || !woken(f)).cloned().collect();
+            let fresh: Vec<WakeFact> = facts.iter().filter(|f| ask.retry || !woken.contains(&(f.run.clone(), f.key().to_string()))).cloned().collect();
             if fresh.is_empty() {
                 return Ok(Admitted::default());
             }
-            let decision = decide_wake(&ws, false, db.wake_turns_since(&today)?, ask.daily_cap);
-            if !decision.wake {
-                let Some(reason) = decision.hold else { return Ok(Admitted::default()) };
-                ws.held_reason = Some(reason.to_string());
+            let resumed = events.iter().filter(|e| e.actor == Actor::Person && e.action == "resumed").map(|e| e.at).max();
+            let since = |at: chrono::DateTime<Utc>| at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+            let own = db.wake_turns_in_since(&format!("{}{id}", crate::agent::WORKSTREAM_PREFIX), &since(resumed.map_or(midnight, |at| at.max(midnight))))?;
+            if own >= WAKES_PER_WORKSTREAM_PER_DAY || db.wake_turns_since(&since(midnight))? >= WAKE_TURNS_PER_DAY {
+                pause(&mut ws, PauseReason::Ceiling);
                 db.save_workstream(&ws)?;
-                db.append_workstream_event(&held_event(&ws.id, Actor::Supervisor, reason, ask.at))?;
+                db.append_workstream_event(&paused_event(&ws.id, Actor::Supervisor, PauseReason::Ceiling, ask.at))?;
                 return Ok(Admitted { facts: Vec::new(), changed: true });
             }
             if !ask.retry {
@@ -1569,85 +1180,7 @@ impl Core {
                     db.append_workstream_event(&WorkstreamEvent::new(&ws.id, Actor::Supervisor, "wake", ask.at).run(&f.run).detail(f.key()))?;
                 }
             }
-            if !ask.spend {
-                return Ok(Admitted { facts: fresh, changed: false });
-            }
-            spend_turn(db, &mut ws, decision.hold, ask.at)?;
-            Ok(Admitted { facts: fresh, changed: true })
-        })
-        .await
-    }
-
-    /// A wake `admit_wake` let through as merging into one already waiting found none to merge into when it was queued,
-    /// since that one started or the person's message took it out meanwhile: it is a turn of its own after all, and
-    /// spends one automatic turn and one wake now, holding the workstream when that uses up its budget (the wake still
-    /// runs, as the one that uses it up always does). Whether the workstream changed.
-    pub async fn charge_wake(&self, scope: &Scope, id: &str, at: chrono::DateTime<Utc>) -> Result<bool> {
-        let connection_id = Connection::jira_id(scope);
-        self.with_db_for(scope, |db| {
-            let Ok(mut ws) = open(db, &connection_id, id) else { return Ok(false) };
-            let mut after = ws.clone();
-            after.spent.auto_turns += 1;
-            after.spent.wakes += 1;
-            let hold = (budget_level(&after) == BudgetLevel::Spent && ws.held_reason.is_none()).then_some(HELD_BUDGET);
-            spend_turn(db, &mut ws, hold, at)?;
-            Ok(true)
-        })
-        .await
-    }
-
-    /// A tripwire fired in workstream `id`: it is recorded with its kind (and run), the workstream drops to Advise and
-    /// is held with `tripwire:<kind>` (unless the person or another tripwire holds it already); the mode it dropped from
-    /// is kept in `resume_mode`, whatever holds it, for resuming to put back. A drifted basis records the fields that drifted (`basis_drifted`, kept in
-    /// `drifted` while held) and is kept until the person resumes, which takes it again from the ticket as it is then.
-    pub async fn trip_workstream(&self, scope: &Scope, id: &str, kind: &str, run: Option<&str>, fields: &[&str]) -> Result<Workstream> {
-        let reason = tripwire(kind);
-        if !valid_hold_reason(&reason) {
-            return Err(refuse(format!("there is no tripwire {kind:?}")));
-        }
-        let connection_id = Connection::jira_id(scope);
-        let at = Utc::now();
-        self.with_db_atomically_for(scope, |db| {
-            let mut ws = open(db, &connection_id, id)?;
-            let mut event = WorkstreamEvent::new(&ws.id, Actor::Supervisor, "tripwire", at).detail(kind);
-            if let Some(run) = run {
-                event = event.run(run);
-            }
-            db.append_workstream_event(&event)?;
-            if kind == TRIP_BASIS && !fields.is_empty() {
-                db.append_workstream_event(&WorkstreamEvent::new(&ws.id, Actor::Supervisor, "basis_drifted", at).detail(fields.join(",")))?;
-            }
-            if ws.mode != Mode::Advise {
-                // Held already (by the person, say), the trip still takes Manage away, and resuming that hold puts it back.
-                ws.resume_mode.get_or_insert(ws.mode);
-                ws.mode = Mode::Advise;
-                db.append_workstream_event(&WorkstreamEvent::new(&ws.id, Actor::Supervisor, "mode_set", at).detail(Mode::Advise.as_str()))?;
-            }
-            if hold(&mut ws, &reason) {
-                db.append_workstream_event(&held_event(&ws.id, Actor::Supervisor, &reason, at))?;
-            }
-            if kind == TRIP_BASIS && ws.held_reason.as_deref() == Some(reason.as_str()) {
-                ws.drifted = fields.iter().map(|f| f.to_string()).collect();
-            }
-            db.save_workstream(&ws)?;
-            Ok(ws)
-        })
-        .await
-    }
-
-    /// Lifts workstream `id`'s hold only when `reason` is what holds it. Returns the workstream when it lifted it.
-    pub async fn lift_workstream_hold(&self, scope: &Scope, id: &str, reason: &str, actor: Actor) -> Result<Option<Workstream>> {
-        let connection_id = Connection::jira_id(scope);
-        let at = Utc::now();
-        self.with_db_atomically_for(scope, |db| {
-            let Ok(mut ws) = open(db, &connection_id, id) else { return Ok(None) };
-            if ws.held_reason.as_deref() != Some(reason) {
-                return Ok(None);
-            }
-            ws.held_reason = None;
-            db.save_workstream(&ws)?;
-            db.append_workstream_event(&WorkstreamEvent::new(&ws.id, actor, "resumed", at).detail(reason))?;
-            Ok(Some(ws))
+            Ok(Admitted { facts: fresh, changed: false })
         })
         .await
     }
@@ -1680,23 +1213,30 @@ impl Core {
         .await
     }
 
-    /// The fields of workstream `id`'s basis its ticket drifted from in the cache (`drifted`), empty when none did. A
-    /// workstream with no basis yet has it captured now and hasn't drifted. `None` when there is nothing to compare: no
-    /// ticket, or not cached.
-    pub async fn workstream_basis_drift(&self, scope: &Scope, id: &str) -> Result<Option<Vec<&'static str>>> {
+    /// Notices workstream `id`'s ticket drifting from its basis in the cache (`drifted`): the fields that drifted are
+    /// recorded once in a supervisor `basis_drifted` line, and the basis is taken again from the ticket as it is now
+    /// (`basis_captured`), so the next change is the next line. Nothing pauses. A workstream with no basis yet has it
+    /// captured and hasn't drifted. Whether it drifted; nothing for a ticketless workstream or a ticket not cached.
+    pub async fn note_basis_drift(&self, scope: &Scope, id: &str) -> Result<bool> {
         let connection_id = Connection::jira_id(scope);
-        let found = self
-            .with_db_for(scope, |db| {
-                let ws = open(db, &connection_id, id)?;
-                let Some(key) = ws.item_key.clone() else { return Ok(None) };
-                Ok(Some((ws.basis, db.item(&Core::item(scope, &key))?)))
-            })
-            .await?;
-        match found {
-            None | Some((_, None)) => Ok(None),
-            Some((Some(basis), Some(work))) => Ok(Some(drifted(&basis, &work))),
-            Some((None, Some(_))) => self.capture_workstream_basis(scope, id, false).await.map(|_| Some(Vec::new())),
-        }
+        let at = Utc::now();
+        self.with_db_atomically_for(scope, |db| {
+            let Ok(mut ws) = open(db, &connection_id, id) else { return Ok(false) };
+            let Some(key) = ws.item_key.clone() else { return Ok(false) };
+            let Some(work) = db.item(&Core::item(scope, &key))? else { return Ok(false) };
+            let fields = ws.basis.as_ref().map(|basis| drifted(basis, &work)).unwrap_or_default();
+            if ws.basis.is_some() && fields.is_empty() {
+                return Ok(false);
+            }
+            ws.basis = Some(basis_of(&work));
+            db.save_workstream(&ws)?;
+            if !fields.is_empty() {
+                db.append_workstream_event(&WorkstreamEvent::new(&ws.id, Actor::Supervisor, "basis_drifted", at).detail(fields.join(",")))?;
+            }
+            db.append_workstream_event(&WorkstreamEvent::new(&ws.id, Actor::Supervisor, "basis_captured", at))?;
+            Ok(!fields.is_empty())
+        })
+        .await
     }
 
     /// A workstream's audit, oldest first. Only for `scope`'s own workstreams.
@@ -1707,12 +1247,6 @@ impl Core {
             db.workstream_events(id)
         })
         .await
-    }
-
-    /// The times of the comments on `ws`'s cached ticket from anyone but the signed-in person: what the reporter's reply
-    /// is read from (`reporter_follow`). Empty without a cached ticket.
-    pub async fn ticket_replies(&self, scope: &Scope, ws: &Workstream) -> Result<Vec<chrono::DateTime<Utc>>> {
-        self.with_db_for(scope, |db| Ok(ticket_facts(db, scope, ws)?.replies)).await
     }
 
     /// Appends `event` to the audit of one of `scope`'s workstreams; its `seq` is given here.
@@ -1839,10 +1373,9 @@ mod tests {
             WorkstreamEvent::new("w", actor, action, Utc::now()).run(run)
         }
 
-        /// A workstream in Manage with a finished Triage `t1` on its ticket.
+        /// A workstream with a finished Triage `t1` on its ticket.
         async fn triaged(fx: &Fixture) -> (Workstream, Vec<Run>) {
             let ws = fx.core.open_workstream(&fx.scope, Some(fx.item("CA-1")), None).await.unwrap();
-            let ws = fx.core.set_workstream_mode(&fx.scope, &ws.id, Mode::Manage, Actor::Person).await.unwrap();
             let t1 = insert_at(fx, "t1", &ws.id, RunKind::Triage, RunState::Done, 10, |r| (r.result, r.result_complete, r.ended_at) = (Some(VAGUE.into()), true, Some(chrono::DateTime::from_timestamp(1_800_000_050, 0).unwrap()))).await;
             (ws, vec![t1])
         }
@@ -1859,9 +1392,8 @@ mod tests {
 
             assert_eq!(readiness_of(&ws, &runs, said(true), &[], &[]), None, "ready");
             assert_eq!(readiness_of(&ws, &runs, |_| None, &[], &[]), None, "no verdict reads as ready");
-            assert_eq!(readiness_of(&Workstream { mode: Mode::Advise, ..ws.clone() }, &runs, said(false), &[], &[]), None, "in Advise nothing starts on its own, so nothing is stopped");
             assert_eq!(readiness_of(&Workstream { closed_at: Some(Utc::now()), ..ws.clone() }, &runs, said(false), &[], &[]), None, "closed");
-            assert!(readiness_of(&Workstream { held_reason: Some(HELD_PERSON.into()), ..ws.clone() }, &runs, said(false), &[], &[]).is_some(), "a hold doesn't hide the question");
+            assert!(readiness_of(&Workstream { paused_reason: Some(PauseReason::Person), ..ws.clone() }, &runs, said(false), &[], &[]).is_some(), "a pause doesn't hide the question");
 
             for action in ["readiness_asked", "readiness_answered", "readiness_overridden"] {
                 assert_eq!(readiness_of(&ws, &runs, said(false), &[], &[by(Actor::Person, action, "t1")]), None, "{action} settles it");
@@ -2010,20 +1542,17 @@ mod tests {
             assert!(matches!(fx.core.override_readiness(&fx.scope, &ws.id, "t0").await.unwrap_err(), Error::Proposal(why) if why == READINESS_GONE));
             assert!(matches!(fx.core.answer_readiness(&fx.scope, &ws.id, "t0").await.unwrap_err(), Error::Proposal(why) if why == READINESS_GONE));
             let after = fx.core.override_readiness(&fx.scope, &ws.id, "t1").await.unwrap();
-            assert_eq!((after.mode, after.held_reason.clone()), (Mode::Manage, None), "the workstream is as it was");
+            assert_eq!(after.paused_reason, None, "the workstream is as it was");
             let events = fx.core.workstream_events(&fx.scope, &ws.id).await.unwrap();
             let tail = events.last().unwrap();
             assert_eq!((tail.actor, tail.action.as_str(), tail.run_id.as_deref()), (Actor::Person, "readiness_overridden", Some("t1")));
             assert_eq!(fx.core.workstream(&fx.scope, &ws.id).await.unwrap().unwrap().readiness, None);
             assert!(matches!(fx.core.override_readiness(&fx.scope, &ws.id, "t1").await.unwrap_err(), Error::Proposal(why) if why == READINESS_GONE), "once");
             assert!(matches!(fx.core.answer_readiness(&fx.scope, &ws.id, "t1").await.unwrap_err(), Error::Proposal(why) if why == READINESS_GONE), "once, whichever choice");
-            assert_eq!(fx.core.with_db_for(&fx.scope, |db| db.runs(&RunQuery::default())).await.unwrap(), runs_before, "it starts no run itself; the rule does");
+            assert_eq!(fx.core.with_db_for(&fx.scope, |db| db.runs(&RunQuery::default())).await.unwrap(), runs_before, "it starts no run itself");
             assert!(fx.tracker.intents().is_empty());
 
-            let (other, _) = {
-                let ws2 = fx.core.open_workstream(&fx.scope, None, Some("Other".into())).await.unwrap();
-                (fx.core.set_workstream_mode(&fx.scope, &ws2.id, Mode::Manage, Actor::Person).await.unwrap(), ())
-            };
+            let other = fx.core.open_workstream(&fx.scope, None, Some("Other".into())).await.unwrap();
             assert!(matches!(fx.core.answer_readiness(&fx.scope, &other.id, "t1").await.unwrap_err(), Error::Proposal(why) if why == READINESS_GONE), "another workstream's triage isn't theirs to answer");
         }
 
@@ -2098,18 +1627,12 @@ mod tests {
         }
 
         #[test]
-        fn a_question_is_answered_by_a_comment_that_came_after_the_ask_was_posted_and_after_the_triage_that_listed_it() {
+        fn the_wait_is_counted_from_when_the_persons_ask_was_posted() {
             let at = |n: i64| chrono::DateTime::from_timestamp(1_800_000_000 + n * 60, 0).unwrap();
             let asked = [line(1, Actor::Person, "readiness_asked", Some("c1")), line(2, Actor::Person, "draft_approved", Some("c1"))];
-            // The ask was posted at minute 2.
-            assert!(answered_by_reply(&asked, &[at(5)], at(0)), "a reply after the ask, to a triage that finished before it");
-            assert!(answered_by_reply(&asked, &[at(5)], at(4)), "the triage finished before the reply");
-            assert!(!answered_by_reply(&asked, &[at(5)], at(6)), "a triage that ran after the reply read it: what it lists is open");
-            assert!(!answered_by_reply(&asked, &[at(1)], at(0)), "a comment from before the ask answers nothing");
-            assert!(!answered_by_reply(&asked, &[], at(0)), "no comment");
-            assert!(!answered_by_reply(&asked[..1], &[at(5)], at(0)), "the ask was never posted");
-            assert!(!answered_by_reply(&[line(1, Actor::Pip, "readiness_asked", Some("c1")), line(2, Actor::Person, "draft_approved", Some("c1"))], &[at(5)], at(0)), "only the person's ask counts");
             assert_eq!(first_ask_posted(&asked), Some(at(2)));
+            assert_eq!(first_ask_posted(&asked[..1]), None, "the ask was never posted");
+            assert_eq!(first_ask_posted(&[line(1, Actor::Pip, "readiness_asked", Some("c1")), line(2, Actor::Person, "draft_approved", Some("c1"))]), None, "only the person's ask counts");
         }
 
         #[test]
@@ -2269,7 +1792,6 @@ mod tests {
         async fn a_change_while_waiting_brings_the_readiness_question_back_flagged_until_the_person_chooses() {
             let fx = fixture().await;
             let ws = fx.core.open_workstream(&fx.scope, Some(fx.item("CA-1")), None).await.unwrap();
-            let ws = fx.core.set_workstream_mode(&fx.scope, &ws.id, Mode::Manage, Actor::Person).await.unwrap();
             let triage = insert_at(&fx, "t1", &ws.id, RunKind::Triage, RunState::Done, 10, |r| (r.result, r.result_complete) = (Some("Small.\n\nFor Jira:\nReady to plan: no\nOpen questions:\n- What does done look like?".into()), true)).await;
             let said = |_: &Run| Some(Readiness { ready: false, questions: vec!["Q?".into()] });
             let mut events = vec![line(1, Actor::Person, "readiness_asked", Some("d1")).run(&triage.id), line(2, Actor::Person, "draft_approved", Some("d1"))];
@@ -2299,28 +1821,9 @@ mod tests {
             let listed = fx.core.workstreams(&fx.scope, false).await.unwrap().into_iter().find(|v| v.workstream.id == ws.id).unwrap();
             assert_eq!(listed.waiting_on_reporter, view.waiting_on_reporter, "the list agrees");
             fx.core.resume_workstream(&fx.scope, &ws.id).await.unwrap();
-            fx.core.hold_workstream(&fx.scope, &ws.id, HELD_PERSON, Actor::Person).await.unwrap();
+            fx.core.pause_workstream(&fx.scope, &ws.id, PauseReason::Person, Actor::Person).await.unwrap();
             fx.core.resume_workstream(&fx.scope, &ws.id).await.unwrap();
             assert_eq!(fx.core.workstream(&fx.scope, &ws.id).await.unwrap().unwrap().waiting_on_reporter, None, "the person resumed");
-        }
-
-        #[tokio::test]
-        async fn the_view_flags_a_change_that_came_while_waiting_until_the_person_chooses() {
-            let fx = fixture().await;
-            let ws = fx.core.open_workstream(&fx.scope, Some(fx.item("CA-1")), None).await.unwrap();
-            let draft = fx.core.ask_reporter_now(&fx.scope, &ws.id, &[]).await.unwrap();
-            fx.core.approve_proposal(&draft.id).await.unwrap();
-            let flagged = || async { fx.core.workstream(&fx.scope, &ws.id).await.unwrap().unwrap() };
-            assert!(!flagged().await.changed_while_waiting, "waiting is not a change");
-            assert!(serde_json::to_value(flagged().await).unwrap().get("changedWhileWaiting").is_none(), "an ordinary view says nothing of it");
-            fx.core.record_workstream_event(&fx.scope, WorkstreamEvent::new(&ws.id, Actor::Supervisor, "basis_drifted", Utc::now()).detail("description")).await.unwrap();
-            let view = flagged().await;
-            assert!(view.changed_while_waiting && view.waiting_on_reporter.is_none(), "the wait is over and the banner can say why");
-            assert_eq!(serde_json::to_value(&view).unwrap()["changedWhileWaiting"], true);
-            let listed = fx.core.workstreams(&fx.scope, false).await.unwrap().into_iter().find(|v| v.workstream.id == ws.id).unwrap();
-            assert!(listed.changed_while_waiting, "the list agrees");
-            fx.core.record_workstream_event(&fx.scope, WorkstreamEvent::new(&ws.id, Actor::Person, "readiness_overridden", Utc::now())).await.unwrap();
-            assert!(!flagged().await.changed_while_waiting, "choosing settles it");
         }
 
         #[tokio::test]
@@ -2349,7 +1852,7 @@ mod tests {
             assert!(still.waiting_on_reporter.is_some() && !still.reporter_replied, "my own and an older comment end nothing");
             comment_by("kim".into(), Utc::now() + chrono::Duration::hours(1)).await;
             let ended = view().await;
-            assert!(ended.waiting_on_reporter.is_none() && ended.changed_while_waiting && ended.reporter_replied, "the reporter replied");
+            assert!(ended.waiting_on_reporter.is_none() && ended.reporter_replied, "the reporter replied");
             assert_eq!(serde_json::to_value(&ended).unwrap()["reporterReplied"], true);
             assert!(ended.reporter_replied_at.is_some(), "the view carries when the reporter replied");
             assert!(serde_json::to_value(&ended).unwrap()["reporterRepliedAt"].is_string());
@@ -2377,7 +1880,7 @@ mod tests {
             assert_eq!(clarity_of(&ws, &[], &[], &[], &[], &[]), None, "nothing missing");
             assert_eq!(shown(&Workstream { item_key: None, ..ws.clone() }, &[], &[]), None, "no ticket");
             assert_eq!(shown(&Workstream { closed_at: Some(Utc::now()), ..ws.clone() }, &[], &[]), None, "closed");
-            assert!(shown(&Workstream { mode: Mode::Manage, ..ws.clone() }, &[], &[]).is_some(), "not a need: every mode");
+            assert!(shown(&Workstream { paused_reason: Some(PauseReason::Person), ..ws.clone() }, &[], &[]).is_some(), "a pause doesn't hide it");
             assert_eq!(shown(&ws, &[], &[line(1, Actor::Person, "clarity_dismissed", None)]), None, "Looks fine");
             assert!(shown(&ws, &[], &[line(1, Actor::Pip, "clarity_dismissed", None)]).is_some(), "only the person's");
             let asked = [line(1, Actor::Person, "clarity_asked", Some("c1"))];
@@ -2610,224 +2113,11 @@ mod tests {
         }
     }
 
-    mod escalation {
-        use super::*;
-        use crate::domain::{CreatedBy, Origin};
-
-        fn line(ws: &str, seq: u32, action: &str, run: &str, detail: &str) -> WorkstreamEvent {
-            let mut e = WorkstreamEvent::new(ws, Actor::Supervisor, action, chrono::DateTime::from_timestamp(1_800_000_100 + i64::from(seq), 0).unwrap()).run(run).detail(detail);
-            e.seq = seq;
-            e
-        }
-
-        fn review_draft(id: &str, run: &str, repo: &str, number: u64, at: i64, state: ProposalState) -> Proposal {
-            let intent = Intent::GithubReview { connection_id: "github:ann".into(), item: None, run_id: run.into(), repo: repo.into(), number, commit_sha: "a1b2c3d4e5f6".into(), summary: "S.".into(), comments: vec![] };
-            let at = chrono::DateTime::from_timestamp(1_800_000_000 + at, 0).unwrap();
-            let origin = Origin::Run { run_id: run.into(), short_id: None, workstream: None };
-            Proposal { id: id.into(), created_at: at, updated_at: at, origin, created_by: CreatedBy::Agent, intent, label: None, basis: None, state, revisions: vec![], created: vec![], error: None, run: None, superseded_by: None, posted: None, maybe_posted: None }
-        }
-
-        /// `p` as made in workstream `ws`.
-        fn in_ws(mut p: Proposal, ws: &str) -> Proposal {
-            if let Origin::Run { workstream, .. } = &mut p.origin {
-                *workstream = Some(ws.into());
-            }
-            p
-        }
-
-        /// A workstream in Manage with a finished build `b`, two finished reviews of it (`r1`, then `r2`) and the
-        /// supervisor's two automatic rounds on record.
-        async fn chain(fx: &Fixture) -> (Workstream, Vec<Run>, Vec<WorkstreamEvent>) {
-            let ws = fx.core.open_workstream(&fx.scope, Some(fx.item("CA-1")), None).await.unwrap();
-            let ws = fx.core.set_workstream_mode(&fx.scope, &ws.id, Mode::Manage, Actor::Person).await.unwrap();
-            let review = |r: &mut Run| (r.spec.build_from_run, r.spec.pr) = (Some("b".into()), Some(218));
-            let runs = vec![
-                insert_at(fx, "b", &ws.id, RunKind::Build, RunState::Done, 10, |r| r.spec.allow_push = true).await,
-                insert_at(fx, "r1", &ws.id, RunKind::Review, RunState::Done, 20, review).await,
-                insert_at(fx, "r2", &ws.id, RunKind::Review, RunState::Done, 30, review).await,
-            ];
-            let events = vec![line(&ws.id, 1, "autostart", "b", "fix_round after r0"), line(&ws.id, 2, "autostart", "b", "fix_round after r1")];
-            (ws, runs, events)
-        }
-
-        fn blocking(_: &Run) -> Option<ReviewVerdict> {
-            Some(ReviewVerdict::Blocking)
-        }
-
-        #[tokio::test]
-        async fn a_review_still_blocking_once_the_rounds_ran_out_waits_for_the_person_and_nothing_else_does() {
-            let fx = fixture().await;
-            let (ws, runs, mut events) = chain(&fx).await;
-            assert_eq!(escalation_of(&ws, &runs, blocking, &events, &[]), None, "the rounds aren't used up yet");
-            events.push(line(&ws.id, 3, "fix_rounds_exhausted", "r1", "2"));
-            assert_eq!(escalation_of(&ws, &runs, blocking, &events, &[]), None, "a newer review came since");
-            events.push(line(&ws.id, 4, "fix_rounds_exhausted", "r2", "2"));
-            let found = escalation_of(&ws, &runs, blocking, &events, &[]).expect("an escalation");
-            assert_eq!(
-                found,
-                Escalation { review_run: "r2".into(), build_run: "b".into(), review_label: "R3".into(), build_label: "R1".into(), rounds: 2, review_draft: None, at: events[3].at }
-            );
-            let json = serde_json::to_value(&found).unwrap();
-            assert_eq!((json["reviewRun"].as_str(), json["rounds"].as_u64()), (Some("r2"), Some(2)));
-            assert!(json.get("reviewDraft").is_none());
-
-            let pass = |r: &Run| if r.id == "r2" { Some(ReviewVerdict::Pass) } else { Some(ReviewVerdict::Blocking) };
-            assert_eq!(escalation_of(&ws, &runs, pass, &events, &[]), None, "the newest review passes");
-            assert_eq!(escalation_of(&ws, &runs, |_| None, &events, &[]), None, "no verdict");
-            let mut after = events.clone();
-            after.push(WorkstreamEvent { actor: Actor::Person, ..line(&ws.id, 5, "fix_round_person", "b", "after r2") });
-            assert_eq!(escalation_of(&ws, &runs, blocking, &after, &[]), None, "the person sent a round after it");
-            let mut other = events.clone();
-            other.push(WorkstreamEvent { actor: Actor::Person, ..line(&ws.id, 5, "fix_round_person", "b", "after r1") });
-            assert!(escalation_of(&ws, &runs, blocking, &other, &[]).is_some(), "a round after an older review doesn't count");
-            let mut taken = events.clone();
-            taken.push(WorkstreamEvent { actor: Actor::Person, detail: None, ..line(&ws.id, 5, "escalation_taken", "r2", "") });
-            assert_eq!(escalation_of(&ws, &runs, blocking, &taken, &[]), None, "the person took it over");
-            let mut taken_older = events.clone();
-            taken_older.push(WorkstreamEvent { actor: Actor::Person, detail: None, ..line(&ws.id, 5, "escalation_taken", "r1", "") });
-            assert!(escalation_of(&ws, &runs, blocking, &taken_older, &[]).is_some(), "taking over an older review doesn't count");
-
-            assert_eq!(escalation_of(&Workstream { mode: Mode::Advise, ..ws.clone() }, &runs, blocking, &events, &[]), None, "in Advise");
-            assert_eq!(escalation_of(&Workstream { closed_at: Some(Utc::now()), ..ws.clone() }, &runs, blocking, &events, &[]), None, "closed");
-            assert!(escalation_of(&Workstream { held_reason: Some(HELD_PERSON.into()), ..ws.clone() }, &runs, blocking, &events, &[]).is_some(), "a hold doesn't hide it");
-            let mut working = runs.clone();
-            working[0].state = RunState::Working;
-            assert_eq!(escalation_of(&ws, &working, blocking, &events, &[]), None, "the build is at work again");
-            let mut newer = runs.clone();
-            newer.push(Run { id: "r3".into(), state: RunState::Working, queued_at: runs[2].queued_at + chrono::Duration::seconds(5), ..runs[2].clone() });
-            assert_eq!(escalation_of(&ws, &newer, blocking, &events, &[]), None, "a newer review of the build is under way");
-        }
-
-        #[tokio::test]
-        async fn the_review_draft_offered_is_the_review_s_own_else_the_newest_pending_one_of_its_pull_request() {
-            let fx = fixture().await;
-            let (ws, runs, mut events) = chain(&fx).await;
-            events.push(line(&ws.id, 3, "fix_rounds_exhausted", "r2", "2"));
-            let draft = |drafts: &[Proposal]| escalation_of(&ws, &runs, blocking, &events, drafts).unwrap().review_draft;
-            let older = in_ws(review_draft("p-old", "r1", "acme/webshop", 218, 1, ProposalState::Pending), &ws.id);
-            let newer = in_ws(review_draft("p-new", "r0", "ACME/webshop", 218, 2, ProposalState::Pending), &ws.id);
-            let other_pr = in_ws(review_draft("p-219", "rx", "acme/webshop", 219, 9, ProposalState::Pending), &ws.id);
-            let posted = in_ws(review_draft("p-posted", "ry", "acme/webshop", 218, 9, ProposalState::Applied), &ws.id);
-            assert_eq!(draft(&[older.clone(), newer.clone(), other_pr.clone(), posted.clone()]).as_deref(), Some("p-new"), "the newest pending one of the pull request");
-            let own = review_draft("p-own", "r2", "acme/webshop", 218, 0, ProposalState::Pending);
-            assert_eq!(draft(&[older, newer, own, other_pr.clone()]).as_deref(), Some("p-own"), "the review's own comes first");
-            assert_eq!(draft(&[other_pr, posted]), None);
-        }
-
-        #[tokio::test]
-        async fn a_pending_draft_is_offered_by_the_escalation_of_its_own_workstream_only() {
-            let fx = fixture().await;
-            let (ws, runs, mut events) = chain(&fx).await;
-            events.push(line(&ws.id, 3, "fix_rounds_exhausted", "r2", "2"));
-            // A second workstream whose escalation is about the same pull request.
-            let ws2 = Workstream { id: "ws-2".into(), ..ws.clone() };
-            let runs2: Vec<Run> = runs
-                .iter()
-                .map(|r| {
-                    let mut r = r.clone();
-                    r.id = format!("{}-2", r.id);
-                    r.spec.workstream = Some(ws2.id.clone());
-                    r.spec.build_from_run = r.spec.build_from_run.map(|b| format!("{b}-2"));
-                    r
-                })
-                .collect();
-            let events2 = vec![line(&ws2.id, 3, "fix_rounds_exhausted", "r2-2", "2")];
-            let draft_of = |ws: &Workstream, runs: &[Run], events: &[WorkstreamEvent], drafts: &[Proposal]| escalation_of(ws, runs, blocking, events, drafts).unwrap().review_draft;
-            let theirs = in_ws(review_draft("p-theirs", "rx", "acme/webshop", 218, 5, ProposalState::Pending), &ws.id);
-            let drafts = [theirs.clone()];
-            assert_eq!(draft_of(&ws, &runs, &events, &drafts).as_deref(), Some("p-theirs"));
-            assert_eq!(draft_of(&ws2, &runs2, &events2, &drafts), None, "another workstream's draft is not offered, even when newer");
-            // A draft made in no workstream is nobody's fallback: posting it records nothing, so offering it would never resolve.
-            let loose = review_draft("p-loose", "ry", "acme/webshop", 218, 9, ProposalState::Pending);
-            assert_eq!(draft_of(&ws, &runs, &events, &[theirs, loose]).as_deref(), Some("p-theirs"));
-        }
-
-        #[tokio::test]
-        async fn the_view_carries_it_and_taking_it_over_goes_to_advise_and_changes_nothing_else() {
-            let fx = fixture().await;
-            let (ws, _, _) = chain(&fx).await;
-            let blocked = "- [blocking] src/cart.ts:42: wrong\n\nVerdict: blocking\n\nFor Jira:\nNo.";
-            for id in ["r1", "r2"] {
-                let mut run = fx.core.with_db_for(&fx.scope, |db| db.run(id)).await.unwrap().unwrap();
-                (run.result, run.result_complete) = (Some(blocked.into()), true);
-                fx.core.with_db_for(&fx.scope, |db| db.save_run(&run)).await.unwrap();
-            }
-            let view = |fx: &Fixture| {
-                let (core, scope, id) = (fx.core.clone(), fx.scope.clone(), ws.id.clone());
-                async move { core.workstream(&scope, &id).await.unwrap().unwrap() }
-            };
-            assert_eq!(view(&fx).await.escalation, None);
-            assert!(matches!(fx.core.take_over_escalation(&fx.scope, &ws.id, "r2").await.unwrap_err(), Error::Proposal(why) if why == ESCALATION_GONE));
-            fx.core.record_workstream_event(&fx.scope, WorkstreamEvent::new(&ws.id, Actor::Supervisor, "fix_rounds_exhausted", Utc::now()).run("r2").detail("2")).await.unwrap();
-            let seen = view(&fx).await;
-            assert_eq!(seen.escalation.as_ref().map(|e| e.review_run.as_str()), Some("r2"));
-            let listed = fx.core.workstreams(&fx.scope, false).await.unwrap().into_iter().find(|v| v.workstream.id == ws.id).unwrap();
-            assert_eq!(listed.escalation, seen.escalation, "the list and the single view agree");
-            assert_eq!(serde_json::to_value(&seen).unwrap()["escalation"]["buildRun"], "b");
-
-            assert!(matches!(fx.core.take_over_escalation(&fx.scope, &ws.id, "r1").await.unwrap_err(), Error::Proposal(why) if why == ESCALATION_GONE), "only the review it is about");
-            let runs_before = fx.core.with_db_for(&fx.scope, |db| db.runs(&RunQuery::default())).await.unwrap();
-            let taken = fx.core.take_over_escalation(&fx.scope, &ws.id, "r2").await.unwrap();
-            assert_eq!(Workstream { mode: Mode::Manage, ..taken.clone() }, seen.workstream, "only the mode changed");
-            assert_eq!((taken.mode, taken.held_reason.clone()), (Mode::Advise, None));
-            let events = fx.core.workstream_events(&fx.scope, &ws.id).await.unwrap();
-            let tail: Vec<_> = events.iter().rev().take(2).rev().map(|e| (e.actor, e.action.as_str(), e.run_id.as_deref(), e.detail.as_deref())).collect();
-            assert_eq!(tail, [(Actor::Person, "escalation_taken", Some("r2"), None), (Actor::Person, "mode_set", None, Some("advise"))]);
-            assert_eq!(view(&fx).await.escalation, None, "taken over");
-            assert_eq!(fx.core.with_db_for(&fx.scope, |db| db.runs(&RunQuery::default())).await.unwrap(), runs_before, "no run changed");
-            assert!(fx.tracker.intents().is_empty());
-            assert!(matches!(fx.core.take_over_escalation(&fx.scope, &ws.id, "r2").await.unwrap_err(), Error::Proposal(why) if why == ESCALATION_GONE), "once");
-            // Manage on again: the review the person took over stays theirs, so the tray and the card agree.
-            fx.core.set_workstream_mode(&fx.scope, &ws.id, Mode::Manage, Actor::Person).await.unwrap();
-            assert_eq!(view(&fx).await.escalation, None, "taken over, then Manage again");
-            let listed = fx.core.workstreams(&fx.scope, false).await.unwrap().into_iter().find(|v| v.workstream.id == ws.id).unwrap();
-            assert_eq!(listed.escalation, None);
-        }
-
-        #[tokio::test]
-        async fn posting_the_review_draft_it_offered_resolves_it_and_is_audited_and_another_draft_does_not() {
-            let fx = fixture().await;
-            let (ws, _, _) = chain(&fx).await;
-            let blocked = "- [blocking] src/cart.ts:42: wrong\n\nVerdict: blocking\n\nFor Jira:\nNo.";
-            for id in ["r1", "r2"] {
-                let mut run = fx.core.with_db_for(&fx.scope, |db| db.run(id)).await.unwrap().unwrap();
-                (run.result, run.result_complete) = (Some(blocked.into()), true);
-                fx.core.with_db_for(&fx.scope, |db| db.save_run(&run)).await.unwrap();
-            }
-            fx.core.record_workstream_event(&fx.scope, WorkstreamEvent::new(&ws.id, Actor::Supervisor, "fix_rounds_exhausted", Utc::now()).run("r2").detail("2")).await.unwrap();
-            let offered = review_draft("p-own", "r2", "acme/webshop", 218, 5, ProposalState::Pending);
-            let other = review_draft("p-219", "rx", "acme/webshop", 219, 6, ProposalState::Pending);
-            fx.core.with_db_for(&fx.scope, |db| db.insert_proposal(&offered).and_then(|_| db.insert_proposal(&other))).await.unwrap();
-            let view = || async { fx.core.workstream(&fx.scope, &ws.id).await.unwrap().unwrap() };
-            assert_eq!(view().await.escalation.and_then(|e| e.review_draft).as_deref(), Some("p-own"), "the draft is offered");
-
-            // Posting a draft the escalation didn't offer leaves it, and records nothing.
-            let line = |p: Proposal| {
-                let (core, scope, id) = (fx.core.clone(), fx.scope.clone(), ws.id.clone());
-                async move { core.with_db_for(&scope, |db| escalation_posted_event(db, &id, &p, Utc::now())).await.unwrap() }
-            };
-            assert_eq!(line(other.clone()).await, None);
-            assert!(view().await.escalation.is_some());
-
-            // Posting the one it offered (as post_review_draft does: Applied by then, and no longer pending) resolves it.
-            let mut done = offered.clone();
-            done.state = ProposalState::Applied;
-            fx.core.with_db_for(&fx.scope, |db| db.save_proposal(&done)).await.unwrap();
-            let event = line(done.clone()).await.expect("the escalation is audited as resolved");
-            assert_eq!((event.actor, event.action.as_str(), event.run_id.as_deref(), event.proposal_id.as_deref()), (Actor::Person, "escalation_posted", Some("r2"), Some("p-own")));
-            fx.core.record_workstream_event(&fx.scope, event).await.unwrap();
-            assert_eq!(view().await.escalation, None, "posted: the card leaves Needs you");
-            let listed = fx.core.workstreams(&fx.scope, false).await.unwrap().into_iter().find(|v| v.workstream.id == ws.id).unwrap();
-            assert_eq!(listed.escalation, None, "the list agrees");
-            assert!(fx.tracker.intents().is_empty());
-        }
-    }
-
     #[tokio::test]
     async fn opening_on_a_ticket_is_idempotent_and_titled_from_the_ticket() {
         let fx = fixture().await;
         let ws = fx.core.open_workstream(&fx.scope, Some(fx.item("CA-1")), None).await.unwrap();
-        assert_eq!((ws.item_key.as_deref(), ws.title.as_str(), ws.mode, ws.closed_at), (Some("CA-1"), "CA-1 Ticket 1", Mode::Advise, None));
+        assert_eq!((ws.item_key.as_deref(), ws.title.as_str(), ws.paused_reason, ws.closed_at), (Some("CA-1"), "CA-1 Ticket 1", None, None));
         let again = fx.core.open_workstream(&fx.scope, Some(fx.item("CA-1")), Some("Another".into())).await.unwrap();
         assert_eq!(again, ws);
         assert_eq!(fx.core.workstreams(&fx.scope, false).await.unwrap().len(), 1);
@@ -2984,7 +2274,7 @@ mod tests {
 
         // Anything else in the audit since, or an old line, and the move stands.
         fx.core.adopt_into_workstream(&fx.scope, &ws.id).await.unwrap();
-        fx.core.hold_workstream(&fx.scope, &ws.id, HELD_PERSON, Actor::Person).await.unwrap();
+        fx.core.pause_workstream(&fx.scope, &ws.id, PauseReason::Person, Actor::Person).await.unwrap();
         assert!(fx.core.undo_workstream(&fx.scope, &ws.id, &undo).await.is_err());
         assert_eq!(workstream_of_run(&fx, &plan.id).await.as_deref(), Some(ws.id.as_str()));
         fx.core.resume_workstream(&fx.scope, &ws.id).await.unwrap();
@@ -3124,91 +2414,9 @@ mod tests {
         assert!(events[1..].iter().all(|e| e.proposal_id.as_deref() == Some(p.id.as_str())));
     }
 
-    async fn held_reason(fx: &Fixture, id: &str) -> Option<String> {
-        fx.core.with_db_for(&fx.scope, |db| db.workstream(id)).await.unwrap().unwrap().held_reason
-    }
-
     fn last(events: &[WorkstreamEvent]) -> (Actor, &str, Option<&str>) {
         let e = events.last().unwrap();
         (e.actor, e.action.as_str(), e.detail.as_deref())
-    }
-
-    fn undo_hold(was: Option<&str>) -> WorkstreamUndo {
-        WorkstreamUndo::Hold { was: was.map(Into::into) }
-    }
-
-    #[tokio::test]
-    async fn undoing_a_hold_frees_the_workstream_and_says_so_in_its_own_line() {
-        let fx = fixture().await;
-        let ws = fx.core.open_workstream(&fx.scope, Some(fx.item("CA-1")), None).await.unwrap();
-        fx.core.hold_workstream(&fx.scope, &ws.id, HELD_PERSON, Actor::Person).await.unwrap();
-        let back = fx.core.undo_workstream(&fx.scope, &ws.id, &undo_hold(None)).await.unwrap();
-        assert_eq!(back.held_reason, None);
-        assert_eq!(held_reason(&fx, &ws.id).await, None, "stored");
-        let events = fx.core.workstream_events(&fx.scope, &ws.id).await.unwrap();
-        let lines: Vec<_> = events.iter().map(|e| (e.actor, e.action.as_str(), e.detail.as_deref())).collect();
-        assert_eq!(lines, [(Actor::Person, "opened", None), (Actor::Person, "held", Some("person")), (Actor::Person, "undone", Some("held"))], "the hold's line stays and the undo adds its own");
-        assert_eq!(fx.core.workstream(&fx.scope, &ws.id).await.unwrap().unwrap().workstream, Workstream { ..back }, "nothing else moved");
-        // Undone, it is not the last line a hold, so a second Undo is refused rather than freeing a hold made later.
-        assert!(fx.core.undo_workstream(&fx.scope, &ws.id, &undo_hold(None)).await.is_err());
-    }
-
-    #[tokio::test]
-    async fn undoing_a_hold_that_replaced_another_puts_the_other_back() {
-        let fx = fixture().await;
-        let ws = fx.core.open_workstream(&fx.scope, Some(fx.item("CA-1")), None).await.unwrap();
-        fx.core.hold_workstream(&fx.scope, &ws.id, HELD_BUDGET, Actor::Supervisor).await.unwrap();
-        fx.core.hold_workstream(&fx.scope, &ws.id, HELD_PERSON, Actor::Person).await.unwrap();
-        assert_eq!(held_reason(&fx, &ws.id).await.as_deref(), Some("person"));
-        fx.core.undo_workstream(&fx.scope, &ws.id, &undo_hold(Some("budget"))).await.unwrap();
-        assert_eq!(held_reason(&fx, &ws.id).await.as_deref(), Some("budget"), "back to the hold the person's replaced, not to free");
-        assert!(fx.core.undo_workstream(&fx.scope, &ws.id, &undo_hold(Some("because"))).await.is_err(), "and never to a reason that isn't one");
-    }
-
-    #[tokio::test]
-    async fn a_hold_is_not_undone_after_anything_else_or_after_the_window() {
-        let fx = fixture().await;
-        let ws = fx.core.open_workstream(&fx.scope, Some(fx.item("CA-1")), None).await.unwrap();
-        fx.core.hold_workstream(&fx.scope, &ws.id, HELD_PERSON, Actor::Person).await.unwrap();
-        let at = fx.core.workstream_events(&fx.scope, &ws.id).await.unwrap().last().unwrap().at;
-        let late = at + chrono::Duration::seconds(UNDO_WINDOW_SECS + 1);
-        let err = fx.core.undo_workstream_at(&fx.scope, &ws.id, &undo_hold(None), late).await.unwrap_err().to_string();
-        assert!(err.contains("can't be undone"), "{err}");
-        assert_eq!(held_reason(&fx, &ws.id).await.as_deref(), Some("person"), "a late undo changes nothing");
-
-        // Another line after the hold (here the person's rule) means the picture of "before" may be stale.
-        fx.core.set_workstream_rule(&fx.scope, &ws.id, Rule::TriagePlan, Some(false)).await.unwrap();
-        assert!(fx.core.undo_workstream(&fx.scope, &ws.id, &undo_hold(None)).await.is_err());
-        assert_eq!(held_reason(&fx, &ws.id).await.as_deref(), Some("person"));
-
-        // Nor a hold that was never the person's: the supervisor's line is not the person's to take back.
-        let other = fx.core.open_workstream(&fx.scope, None, Some("Elsewhere".into())).await.unwrap();
-        fx.core.hold_workstream(&fx.scope, &other.id, HELD_BUDGET, Actor::Supervisor).await.unwrap();
-        assert!(fx.core.undo_workstream(&fx.scope, &other.id, &undo_hold(None)).await.is_err());
-        // A closed workstream is not changed.
-        fx.core.close_workstream(&fx.scope, &ws.id).await.unwrap();
-        assert!(fx.core.undo_workstream(&fx.scope, &ws.id, &undo_hold(None)).await.is_err());
-    }
-
-    #[tokio::test]
-    async fn undoing_a_switch_to_advise_restores_the_mode_and_the_mode_a_tripwire_kept() {
-        let fx = fixture().await;
-        let ws = fx.core.open_workstream(&fx.scope, Some(fx.item("CA-1")), None).await.unwrap();
-        fx.core.set_workstream_mode(&fx.scope, &ws.id, Mode::Manage, Actor::Person).await.unwrap();
-        // The page saw Manage, with a tripwire's resume mode kept, before the person chose Advise.
-        fx.core.with_db_for(&fx.scope, |db| {
-            let mut w = db.workstream(&ws.id)?.unwrap();
-            w.resume_mode = Some(Mode::Manage);
-            db.save_workstream(&w)
-        }).await.unwrap();
-        let advised = fx.core.set_workstream_mode(&fx.scope, &ws.id, Mode::Advise, Actor::Person).await.unwrap();
-        assert_eq!((advised.mode, advised.resume_mode), (Mode::Advise, None), "choosing a mode forgets the one a tripwire took away");
-        let back = fx.core.undo_workstream(&fx.scope, &ws.id, &WorkstreamUndo::Mode { was: Mode::Manage, resume_mode: Some(Mode::Manage) }).await.unwrap();
-        assert_eq!((back.mode, back.resume_mode), (Mode::Manage, Some(Mode::Manage)));
-        let events = fx.core.workstream_events(&fx.scope, &ws.id).await.unwrap();
-        assert_eq!(last(&events), (Actor::Person, "undone", Some("mode_set")));
-        assert_eq!(events.iter().filter(|e| e.action == "mode_set").count(), 2, "the person's two choices stay in the audit");
-        assert!(fx.core.undo_workstream(&fx.scope, &ws.id, &WorkstreamUndo::Mode { was: Mode::Advise, resume_mode: None }).await.is_err(), "the undo is not itself undone by a stale toast");
     }
 
     #[tokio::test]
@@ -3233,194 +2441,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn mode_hold_resume_and_rule_each_append_one_line_by_whoever_did_it() {
-        let fx = fixture().await;
-        let ws = fx.core.open_workstream(&fx.scope, Some(fx.item("CA-1")), None).await.unwrap();
-        let events = || async { fx.core.workstream_events(&fx.scope, &ws.id).await.unwrap() };
-
-        let managed = fx.core.set_workstream_mode(&fx.scope, &ws.id, Mode::Manage, Actor::Person).await.unwrap();
-        assert_eq!(managed.mode, Mode::Manage);
-        assert_eq!(last(&events().await), (Actor::Person, "mode_set", Some("manage")));
-        fx.core.set_workstream_mode(&fx.scope, &ws.id, Mode::Manage, Actor::Person).await.unwrap();
-        assert_eq!(events().await.len(), 2, "the same mode records nothing");
-
-        let held = fx.core.hold_workstream(&fx.scope, &ws.id, HELD_PERSON, Actor::Person).await.unwrap();
-        assert_eq!(held.held_reason.as_deref(), Some("person"));
-        assert_eq!(last(&events().await), (Actor::Person, "held", Some("person")));
-        fx.core.hold_workstream(&fx.scope, &ws.id, HELD_BUDGET, Actor::Supervisor).await.unwrap();
-        assert_eq!(fx.core.workstream(&fx.scope, &ws.id).await.unwrap().unwrap().workstream.held_reason.as_deref(), Some("person"), "an existing reason is kept");
-        assert_eq!(events().await.len(), 3);
-        assert!(fx.core.hold_workstream(&fx.scope, &ws.id, "because", Actor::Person).await.is_err(), "an unknown reason is refused");
-
-        let resumed = fx.core.resume_workstream(&fx.scope, &ws.id).await.unwrap();
-        assert_eq!(resumed.held_reason, None);
-        assert_eq!(last(&events().await), (Actor::Person, "resumed", Some("person")));
-        fx.core.resume_workstream(&fx.scope, &ws.id).await.unwrap();
-        assert_eq!(events().await.len(), 4, "resuming what isn't held records nothing");
-
-        let ruled = fx.core.set_workstream_rule(&fx.scope, &ws.id, Rule::TriagePlan, Some(false)).await.unwrap();
-        assert_eq!(ruled.rules.get(Rule::TriagePlan), Some(false));
-        assert_eq!(last(&events().await), (Actor::Person, "rule_set", Some("triage_plan=off")));
-        fx.core.set_workstream_rule(&fx.scope, &ws.id, Rule::TriagePlan, Some(false)).await.unwrap();
-        assert_eq!(events().await.len(), 5);
-        fx.core.set_workstream_rule(&fx.scope, &ws.id, Rule::TriagePlan, None).await.unwrap();
-        assert_eq!(last(&events().await), (Actor::Person, "rule_set", Some("triage_plan=inherit")));
-
-        let stored = fx.core.workstream(&fx.scope, &ws.id).await.unwrap().unwrap().workstream;
-        assert_eq!(Workstream { mode: ws.mode, rules: ws.rules.clone(), ..stored }, ws, "only the mode, hold and rules changed");
-        assert!(fx.tracker.intents().is_empty(), "nothing is written to Jira");
-
-        fx.core.close_workstream(&fx.scope, &ws.id).await.unwrap();
-        assert!(fx.core.set_workstream_mode(&fx.scope, &ws.id, Mode::Advise, Actor::Person).await.is_err());
-        assert!(fx.core.hold_workstream(&fx.scope, &ws.id, HELD_PERSON, Actor::Person).await.is_err());
-        assert!(fx.core.set_workstream_rule(&fx.scope, &ws.id, Rule::FixRound, Some(true)).await.is_err());
-    }
-
-    #[tokio::test]
-    async fn the_person_s_hold_replaces_a_restart_budget_or_quota_one_but_not_a_tripwire() {
-        let fx = fixture().await;
-        for (n, reason) in [HELD_RESTART, HELD_BUDGET, HELD_QUOTA, "tripwire:marker", HELD_ALL].into_iter().enumerate() {
-            let ws = fx.core.open_workstream(&fx.scope, None, Some(format!("W{n}"))).await.unwrap();
-            fx.core.hold_workstream(&fx.scope, &ws.id, reason, Actor::Supervisor).await.unwrap();
-            let after = fx.core.hold_workstream(&fx.scope, &ws.id, HELD_PERSON, Actor::Person).await.unwrap();
-            let replaced = [HELD_RESTART, HELD_BUDGET, HELD_QUOTA].contains(&reason);
-            assert_eq!(after.held_reason.as_deref(), Some(if replaced { HELD_PERSON } else { reason }), "{reason}");
-            let events = fx.core.workstream_events(&fx.scope, &ws.id).await.unwrap();
-            assert_eq!(events.iter().filter(|e| e.action == "held").count(), if replaced { 2 } else { 1 }, "{reason}");
-        }
-    }
-
-    #[tokio::test]
-    async fn resuming_from_a_budget_hold_keeps_what_was_spent_and_going_back_to_manage_holds_it_again() {
-        let fx = fixture().await;
-        let ws = fx.core.open_workstream(&fx.scope, None, Some("Budgeted".into())).await.unwrap();
-        let mut spent = ws.clone();
-        spent.spent.auto_turns = 11;
-        spent.spent.wakes = 9;
-        spent.spent.tokens = 1_234;
-        fx.core.with_db_for(&fx.scope, |db| db.save_workstream(&spent)).await.unwrap();
-        let view = fx.core.workstream(&fx.scope, &ws.id).await.unwrap().unwrap();
-        assert_eq!(view.budget, BudgetView { auto_turns: BudgetCount { used: 11, limit: 11 }, wakes: BudgetCount { used: 9, limit: 12 }, level: BudgetLevel::Spent });
-        let json = serde_json::to_value(&view).unwrap();
-        assert_eq!(json["budget"], serde_json::json!({ "autoTurns": { "used": 11, "limit": 11 }, "wakes": { "used": 9, "limit": 12 }, "level": "spent" }));
-
-        // Switch to Advise leaves the hold; Resume there lifts it but grants nothing.
-        fx.core.set_workstream_mode(&fx.scope, &ws.id, Mode::Manage, Actor::Person).await.unwrap();
-        fx.core.hold_workstream(&fx.scope, &ws.id, HELD_BUDGET, Actor::Supervisor).await.unwrap();
-        let advised = fx.core.set_workstream_mode(&fx.scope, &ws.id, Mode::Advise, Actor::Person).await.unwrap();
-        assert_eq!(advised.held_reason.as_deref(), Some(HELD_BUDGET), "the hold stays for Resume");
-        let resumed = fx.core.resume_workstream(&fx.scope, &ws.id).await.unwrap();
-        assert_eq!((resumed.held_reason.clone(), resumed.spent.auto_turns, resumed.spent.wakes, resumed.spent.tokens), (None, 11, 9, 1_234));
-        let events = fx.core.workstream_events(&fx.scope, &ws.id).await.unwrap();
-        assert_eq!(last(&events), (Actor::Person, "resumed", Some(HELD_BUDGET)));
-        assert!(!events.iter().any(|e| e.action == "budget_reset"), "nothing was reset");
-        assert_eq!(fx.core.workstream(&fx.scope, &ws.id).await.unwrap().unwrap().budget.level, BudgetLevel::Spent);
-
-        // Back to Manage with the budget still spent: held for it again, as the supervisor, so Allow 5 more is asked again.
-        let manage = fx.core.set_workstream_mode(&fx.scope, &ws.id, Mode::Manage, Actor::Person).await.unwrap();
-        assert_eq!((manage.mode, manage.held_reason.as_deref(), manage.spent.auto_turns), (Mode::Manage, Some(HELD_BUDGET), 11));
-        let events = fx.core.workstream_events(&fx.scope, &ws.id).await.unwrap();
-        assert_eq!(last(&events), (Actor::Supervisor, "held", Some(HELD_BUDGET)));
-        assert_eq!(events[events.len() - 2].action, "mode_set");
-        let allowed = fx.core.allow_more_steps(&fx.scope, &ws.id).await.unwrap();
-        assert_eq!((allowed.held_reason, allowed.spent.auto_turns, allowed.budget.auto_turns), (None, 11, Some(16)));
-
-        // With steps left, going back to Manage holds nothing.
-        let other = fx.core.open_workstream(&fx.scope, None, Some("Fresh".into())).await.unwrap();
-        fx.core.set_workstream_mode(&fx.scope, &other.id, Mode::Advise, Actor::Person).await.unwrap();
-        let back = fx.core.set_workstream_mode(&fx.scope, &other.id, Mode::Manage, Actor::Person).await.unwrap();
-        assert_eq!(back.held_reason, None);
-        assert!(!actions(&fx.core.workstream_events(&fx.scope, &other.id).await.unwrap()).iter().any(|(_, a)| *a == "held"));
-
-        // Resuming from another hold leaves what was spent, and a spent budget under a restored Manage is held again.
-        let mut again = back.clone();
-        again.spent.wakes = 3;
-        fx.core.with_db_for(&fx.scope, |db| db.save_workstream(&again)).await.unwrap();
-        fx.core.hold_workstream(&fx.scope, &other.id, HELD_PERSON, Actor::Person).await.unwrap();
-        assert_eq!(fx.core.resume_workstream(&fx.scope, &other.id).await.unwrap().spent.wakes, 3);
-        let mut used = fx.core.workstream(&fx.scope, &other.id).await.unwrap().unwrap().workstream;
-        used.spent.auto_turns = 11;
-        fx.core.with_db_for(&fx.scope, |db| db.save_workstream(&used)).await.unwrap();
-        fx.core.trip_workstream(&fx.scope, &other.id, "marker", Some("r1"), &[]).await.unwrap();
-        let resumed = fx.core.resume_workstream(&fx.scope, &other.id).await.unwrap();
-        assert_eq!((resumed.mode, resumed.held_reason.as_deref()), (Mode::Manage, Some(HELD_BUDGET)), "the restored Manage asks again");
-    }
-
-    #[tokio::test]
-    async fn allowing_more_steps_raises_the_allowance_keeps_what_was_spent_and_lifts_only_a_budget_hold() {
-        let fx = fixture().await;
-        let ws = fx.core.open_workstream(&fx.scope, None, Some("Budgeted".into())).await.unwrap();
-        let mut spent = ws.clone();
-        spent.spent.auto_turns = 11;
-        spent.spent.wakes = 11;
-        fx.core.with_db_for(&fx.scope, |db| db.save_workstream(&spent)).await.unwrap();
-
-        // Not held for its budget: refused, nothing changes.
-        assert!(fx.core.allow_more_steps(&fx.scope, &ws.id).await.is_err());
-        fx.core.hold_workstream(&fx.scope, &ws.id, HELD_PERSON, Actor::Person).await.unwrap();
-        assert!(fx.core.allow_more_steps(&fx.scope, &ws.id).await.is_err(), "the person's own hold is theirs to resume");
-        fx.core.resume_workstream(&fx.scope, &ws.id).await.unwrap();
-
-        fx.core.hold_workstream(&fx.scope, &ws.id, HELD_BUDGET, Actor::Supervisor).await.unwrap();
-        let after = fx.core.allow_more_steps(&fx.scope, &ws.id).await.unwrap();
-        assert_eq!((after.held_reason.clone(), after.budget.auto_turns, after.budget.wakes, after.spent.auto_turns, after.spent.wakes), (None, Some(16), Some(17), 11, 11));
-        let view = fx.core.workstream(&fx.scope, &ws.id).await.unwrap().unwrap();
-        assert_eq!(view.budget, BudgetView { auto_turns: BudgetCount { used: 11, limit: 16 }, wakes: BudgetCount { used: 11, limit: 17 }, level: BudgetLevel::Ok });
-        let events = fx.core.workstream_events(&fx.scope, &ws.id).await.unwrap();
-        assert_eq!(actions(&events)[events.len() - 3..], [(Actor::Supervisor, "held"), (Actor::Person, "steps_allowed"), (Actor::Person, "resumed")]);
-        assert_eq!(events.iter().find(|e| e.action == "steps_allowed").and_then(|e| e.detail.as_deref()), Some("5"));
-        assert!(!events.iter().any(|e| e.action == "budget_reset"), "nothing was reset");
-    }
-
-    #[tokio::test]
-    async fn the_person_writing_keeps_a_budget_hold_the_wakes_still_use_up_and_lifts_it_otherwise() {
-        let fx = fixture().await;
-        let ws = fx.core.open_workstream(&fx.scope, None, Some("Budgeted".into())).await.unwrap();
-        let mut spent = ws.clone();
-        spent.spent.auto_turns = 3;
-        spent.spent.wakes = 12;
-        fx.core.with_db_for(&fx.scope, |db| db.save_workstream(&spent)).await.unwrap();
-        fx.core.hold_workstream(&fx.scope, &ws.id, HELD_BUDGET, Actor::Supervisor).await.unwrap();
-        fx.core.person_wrote_in_workstream(&fx.scope, &ws.id).await.unwrap();
-        let after = fx.core.workstream(&fx.scope, &ws.id).await.unwrap().unwrap();
-        assert_eq!((after.workstream.held_reason.as_deref(), after.workstream.spent.auto_turns, after.budget.level), (Some(HELD_BUDGET), 0, BudgetLevel::Spent), "the wakes still use it up");
-        let events = fx.core.workstream_events(&fx.scope, &ws.id).await.unwrap();
-        assert_eq!(actions(&events)[1..], [(Actor::Supervisor, "held"), (Actor::Person, "budget_reset")], "never resumed");
-        // With the wakes within the budget, the hold is lifted.
-        let mut within = after.workstream.clone();
-        within.spent.auto_turns = 11;
-        within.spent.wakes = 9;
-        fx.core.with_db_for(&fx.scope, |db| db.save_workstream(&within)).await.unwrap();
-        fx.core.person_wrote_in_workstream(&fx.scope, &ws.id).await.unwrap();
-        assert_eq!(fx.core.workstream(&fx.scope, &ws.id).await.unwrap().unwrap().workstream.held_reason, None);
-        let events = fx.core.workstream_events(&fx.scope, &ws.id).await.unwrap();
-        assert_eq!(actions(&events)[3..], [(Actor::Person, "resumed"), (Actor::Person, "budget_reset")]);
-    }
-
-    #[tokio::test]
-    async fn hold_all_holds_every_open_workstream_not_already_held() {
-        let fx = fixture().await;
-        let a = fx.core.open_workstream(&fx.scope, Some(fx.item("CA-1")), None).await.unwrap();
-        let b = fx.core.open_workstream(&fx.scope, None, Some("B".into())).await.unwrap();
-        let c = fx.core.open_workstream(&fx.scope, None, Some("C".into())).await.unwrap();
-        let d = fx.core.open_workstream(&fx.scope, None, Some("D".into())).await.unwrap();
-        fx.core.hold_workstream(&fx.scope, &b.id, HELD_BUDGET, Actor::Supervisor).await.unwrap();
-        fx.core.close_workstream(&fx.scope, &c.id).await.unwrap();
-
-        let held: Vec<String> = fx.core.hold_all_workstreams(&fx.scope).await.unwrap().into_iter().map(|w| w.id).collect();
-        let mut expected = vec![a.id.clone(), d.id.clone()];
-        expected.sort();
-        let mut held_sorted = held.clone();
-        held_sorted.sort();
-        assert_eq!(held_sorted, expected);
-        assert_eq!(held_reason(&fx, &a.id).await.as_deref(), Some(HELD_ALL));
-        assert_eq!(held_reason(&fx, &b.id).await.as_deref(), Some(HELD_BUDGET));
-        assert_eq!(held_reason(&fx, &c.id).await, None, "a closed one is left alone");
-        assert_eq!(last(&fx.core.workstream_events(&fx.scope, &a.id).await.unwrap()), (Actor::Person, "held", Some(HELD_ALL)));
-        assert!(fx.core.hold_all_workstreams(&fx.scope).await.unwrap().is_empty(), "a second Hold all holds nothing new");
-    }
-
-    #[tokio::test]
     async fn a_ticketed_workstream_keeps_the_ticket_s_basis_and_a_ticketless_one_none() {
         let fx = fixture().await;
         let ws = fx.core.open_workstream(&fx.scope, Some(fx.item("CA-1")), None).await.unwrap();
@@ -3430,25 +2450,6 @@ mod tests {
         assert_eq!(basis.description_digest, sha256_hex(&item.body.plain_text()));
         assert_eq!(fx.core.workstream(&fx.scope, &ws.id).await.unwrap().unwrap().workstream.basis, Some(basis));
         assert_eq!(fx.core.open_workstream(&fx.scope, None, Some("Loose".into())).await.unwrap().basis, None);
-    }
-
-    #[tokio::test]
-    async fn reopening_the_database_holds_every_open_workstream_after_the_restart_once() {
-        let fx = fixture().await;
-        let ws = fx.core.open_workstream(&fx.scope, Some(fx.item("CA-1")), None).await.unwrap();
-        let mine = fx.core.open_workstream(&fx.scope, None, Some("Held by me".into())).await.unwrap();
-        fx.core.hold_workstream(&fx.scope, &mine.id, HELD_PERSON, Actor::Person).await.unwrap();
-        assert_eq!(fx.core.workstream(&fx.scope, &ws.id).await.unwrap().unwrap().workstream.held_reason, None, "not held while the app runs");
-
-        fx.core.close_db();
-        let view = fx.core.workstream(&fx.scope, &ws.id).await.unwrap().unwrap();
-        assert_eq!(view.workstream.held_reason.as_deref(), Some(HELD_RESTART));
-        assert_eq!(last(&fx.core.workstream_events(&fx.scope, &ws.id).await.unwrap()), (Actor::Supervisor, "held", Some(HELD_RESTART)));
-        assert_eq!(fx.core.workstream(&fx.scope, &mine.id).await.unwrap().unwrap().workstream.held_reason.as_deref(), Some(HELD_PERSON));
-
-        fx.core.close_db();
-        let events = fx.core.workstream_events(&fx.scope, &ws.id).await.unwrap();
-        assert_eq!(events.iter().filter(|e| e.action == "held").count(), 1, "a second restart adds nothing");
     }
 
     #[tokio::test]
@@ -3535,102 +2536,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_basis_drift_trip_keeps_the_fields_and_resuming_takes_the_basis_again() {
-        let fx = fixture().await;
-        let ws = fx.core.open_workstream(&fx.scope, Some(fx.item("CA-1")), None).await.unwrap();
-        let before = ws.basis.clone().unwrap();
-        fx.edit_item("CA-1", |i| i.body = crate::domain::Doc::paragraph("Someone rewrote the ticket")).await;
-        assert_eq!(fx.core.workstream_basis_drift(&fx.scope, &ws.id).await.unwrap(), Some(vec![BASIS_DESCRIPTION]));
-
-        let held = fx.core.trip_workstream(&fx.scope, &ws.id, TRIP_BASIS, None, &[BASIS_SUMMARY, BASIS_DESCRIPTION]).await.unwrap();
-        assert_eq!((held.held_reason.as_deref(), held.drifted.clone()), (Some("tripwire:basis_drift"), vec!["summary".to_string(), "description".into()]));
-        assert_eq!(held.basis, Some(before.clone()), "kept while held");
-        let events = fx.core.workstream_events(&fx.scope, &ws.id).await.unwrap();
-        assert!(events.iter().any(|e| (e.actor, e.action.as_str(), e.detail.as_deref()) == (Actor::Supervisor, "basis_drifted", Some("summary,description"))));
-        assert!(events.iter().any(|e| (e.action.as_str(), e.detail.as_deref()) == ("tripwire", Some(TRIP_BASIS))), "the tripwire line keeps the kind");
-
-        let resumed = fx.core.resume_workstream(&fx.scope, &ws.id).await.unwrap();
-        assert_eq!(resumed.held_reason, None);
-        assert!(resumed.drifted.is_empty());
-        let after = resumed.basis.clone().unwrap();
-        assert_ne!(after.description_digest, before.description_digest, "the ticket as it reads now is the basis");
-        assert_eq!(fx.core.workstream(&fx.scope, &ws.id).await.unwrap().unwrap().workstream, resumed);
-        assert_eq!(fx.core.workstream_basis_drift(&fx.scope, &ws.id).await.unwrap(), Some(vec![]), "the first edit isn't counted again");
-        let events = fx.core.workstream_events(&fx.scope, &ws.id).await.unwrap();
-        let tail: Vec<_> = events.iter().rev().take(2).map(|e| (e.actor, e.action.as_str())).collect();
-        assert_eq!(tail, [(Actor::Supervisor, "basis_captured"), (Actor::Person, "resumed")]);
-
-        // Another tripwire keeps the basis and its resume takes nothing again.
-        fx.edit_item("CA-1", |i| i.body = crate::domain::Doc::paragraph("And again")).await;
-        fx.core.trip_workstream(&fx.scope, &ws.id, "marker", Some("r1"), &[]).await.unwrap();
-        let resumed = fx.core.resume_workstream(&fx.scope, &ws.id).await.unwrap();
-        assert_eq!(resumed.basis, Some(after));
-        assert!(resumed.drifted.is_empty());
-    }
-
-    #[tokio::test]
-    async fn resuming_a_trip_from_manage_puts_manage_back_and_one_from_advise_stays_advise() {
-        let fx = fixture().await;
-        let ws = fx.core.open_workstream(&fx.scope, Some(fx.item("CA-1")), None).await.unwrap();
-        fx.core.set_workstream_mode(&fx.scope, &ws.id, Mode::Manage, Actor::Person).await.unwrap();
-        let held = fx.core.trip_workstream(&fx.scope, &ws.id, TRIP_BASIS, None, &[BASIS_DESCRIPTION]).await.unwrap();
-        assert_eq!((held.mode, held.resume_mode), (Mode::Advise, Some(Mode::Manage)), "the trip drops to Advise and remembers Manage");
-        assert_eq!(serde_json::to_value(&held).unwrap()["resumeMode"], "manage");
-
-        let resumed = fx.core.resume_workstream(&fx.scope, &ws.id).await.unwrap();
-        assert_eq!((resumed.held_reason.as_deref(), resumed.mode, resumed.resume_mode), (None, Mode::Manage, None));
-        let events = fx.core.workstream_events(&fx.scope, &ws.id).await.unwrap();
-        let resumed_at = events.iter().position(|e| e.action == "resumed").unwrap();
-        assert_eq!((events[resumed_at + 1].actor, events[resumed_at + 1].action.as_str(), events[resumed_at + 1].detail.as_deref()), (Actor::Person, "mode_set", Some("manage")));
-        assert!(crate::domain::workstream::starts_steps(&resumed), "routine steps start on their own again");
-
-        // From Advise there is nothing to put back.
-        fx.core.set_workstream_mode(&fx.scope, &ws.id, Mode::Advise, Actor::Person).await.unwrap();
-        let held = fx.core.trip_workstream(&fx.scope, &ws.id, "marker", Some("r1"), &[]).await.unwrap();
-        assert_eq!(held.resume_mode, None);
-        let resumed = fx.core.resume_workstream(&fx.scope, &ws.id).await.unwrap();
-        assert_eq!(resumed.mode, Mode::Advise);
-        assert_eq!(last(&fx.core.workstream_events(&fx.scope, &ws.id).await.unwrap()), (Actor::Person, "resumed", Some("tripwire:marker")));
-        assert!(fx.tracker.intents().is_empty(), "nothing is written to Jira");
-    }
-
-    #[tokio::test]
-    async fn a_trip_that_lands_on_another_hold_still_remembers_manage_and_its_resume_puts_it_back() {
-        let fx = fixture().await;
-        let ws = fx.core.open_workstream(&fx.scope, Some(fx.item("CA-1")), None).await.unwrap();
-        fx.core.set_workstream_mode(&fx.scope, &ws.id, Mode::Manage, Actor::Person).await.unwrap();
-        // Held by the person first: the hold stays theirs, and Manage is still remembered.
-        fx.core.hold_workstream(&fx.scope, &ws.id, HELD_PERSON, Actor::Person).await.unwrap();
-        let held = fx.core.trip_workstream(&fx.scope, &ws.id, "marker", Some("r1"), &[]).await.unwrap();
-        assert_eq!((held.held_reason.as_deref(), held.mode, held.resume_mode), (Some(HELD_PERSON), Mode::Advise, Some(Mode::Manage)));
-        let resumed = fx.core.resume_workstream(&fx.scope, &ws.id).await.unwrap();
-        assert_eq!((resumed.held_reason.as_deref(), resumed.mode, resumed.resume_mode), (None, Mode::Manage, None));
-        assert_eq!(last(&fx.core.workstream_events(&fx.scope, &ws.id).await.unwrap()), (Actor::Person, "mode_set", Some("manage")));
-
-        // Held for the budget, which a message would lift: the tripwire takes its place, so only Resume lifts it.
-        fx.core.hold_workstream(&fx.scope, &ws.id, HELD_BUDGET, Actor::Supervisor).await.unwrap();
-        let held = fx.core.trip_workstream(&fx.scope, &ws.id, "marker", Some("r1"), &[]).await.unwrap();
-        assert_eq!((held.held_reason.as_deref(), held.mode, held.resume_mode), (Some("tripwire:marker"), Mode::Advise, Some(Mode::Manage)));
-        fx.core.person_wrote_in_workstream(&fx.scope, &ws.id).await.unwrap();
-        assert_eq!(held_reason(&fx, &ws.id).await.as_deref(), Some("tripwire:marker"));
-        let resumed = fx.core.resume_workstream(&fx.scope, &ws.id).await.unwrap();
-        assert_eq!((resumed.held_reason.as_deref(), resumed.mode), (None, Mode::Manage));
-    }
-
-    #[tokio::test]
-    async fn the_person_choosing_a_mode_while_tripped_wins_over_the_one_resuming_would_put_back() {
-        let fx = fixture().await;
-        let ws = fx.core.open_workstream(&fx.scope, Some(fx.item("CA-1")), None).await.unwrap();
-        fx.core.set_workstream_mode(&fx.scope, &ws.id, Mode::Manage, Actor::Person).await.unwrap();
-        fx.core.trip_workstream(&fx.scope, &ws.id, "repeated_failure", Some("r1"), &[]).await.unwrap();
-        let chosen = fx.core.set_workstream_mode(&fx.scope, &ws.id, Mode::Advise, Actor::Person).await.unwrap();
-        assert_eq!((chosen.mode, chosen.resume_mode), (Mode::Advise, None), "choosing the mode it has still forgets the one to put back");
-        let resumed = fx.core.resume_workstream(&fx.scope, &ws.id).await.unwrap();
-        assert_eq!(resumed.mode, Mode::Advise);
-        assert_eq!(last(&fx.core.workstream_events(&fx.scope, &ws.id).await.unwrap()), (Actor::Person, "resumed", Some("tripwire:repeated_failure")));
-    }
-
-    #[tokio::test]
     async fn a_view_whose_newest_review_is_blocking_is_at_review_and_a_passing_one_is_done() {
         let fx = fixture().await;
         let ws = fx.core.open_workstream(&fx.scope, Some(fx.item("CA-1")), None).await.unwrap();
@@ -3671,22 +2576,16 @@ mod tests {
         assert!(drifted(&taken, &now).is_empty());
     }
 
-    /// The cases the mock runs too: `readiness.fixtures.json` (the readiness stop) and `workstreamHold.fixtures.json` (the budget).
+    /// The cases the mock runs too: `readiness.fixtures.json`.
     mod shared {
         use super::*;
         use serde_json::{json, Value};
 
         /// A workstream as a shared case describes it; what it leaves out is a fresh workstream's.
-        fn workstream_of(id: &str, mode: &str, held: &Value, closed: bool, spent: &Value, budget: &Value) -> Workstream {
-            let mut value = json!({ "id": id, "connectionId": "c", "title": "t", "createdAt": "2026-10-01T10:00:00Z", "mode": mode, "heldReason": held });
+        fn workstream_of(id: &str, closed: bool) -> Workstream {
+            let mut value = json!({ "id": id, "connectionId": "c", "title": "t", "createdAt": "2026-10-01T10:00:00Z" });
             if closed {
                 value["closedAt"] = json!("2026-10-12T20:00:00Z");
-            }
-            if !spent.is_null() {
-                value["spent"] = spent.clone();
-            }
-            if !budget.is_null() {
-                value["budget"] = budget.clone();
             }
             serde_json::from_value(value).unwrap()
         }
@@ -3699,7 +2598,7 @@ mod tests {
             for case in cases {
                 let name = case["name"].as_str().unwrap();
                 let shape = &case["workstream"];
-                let ws = workstream_of("w1", shape["mode"].as_str().unwrap_or("manage"), &shape["held"], shape["closed"].as_bool().unwrap_or(false), &Value::Null, &Value::Null);
+                let ws = workstream_of("w1", shape["closed"].as_bool().unwrap_or(false));
                 let mut reports: HashMap<String, Option<String>> = HashMap::new();
                 let runs: Vec<Run> = case["runs"]
                     .as_array()
@@ -3738,70 +2637,6 @@ mod tests {
                     stop
                 });
                 assert_eq!(got.unwrap_or(Value::Null), case["expect"], "{name}");
-            }
-        }
-
-        #[test]
-        fn the_shared_budget_cases_read_the_same_here_and_in_the_page() {
-            let all: Value = serde_json::from_str(include_str!("../../../src/lib/workstreamHold.fixtures.json")).unwrap();
-            let cases = all["budget"].as_array().unwrap();
-            assert!(cases.len() >= 25);
-            for case in cases {
-                let name = case["name"].as_str().unwrap();
-                let ws = workstream_of("w1", "manage", &Value::Null, false, &case["spent"], &case["budget"]);
-                let expect = &case["expect"];
-                assert_eq!(level_word(budget_level(&ws)), expect["level"].as_str().unwrap(), "{name}");
-                // The page works the steps out of these counters (`stepsOf`, which has no twin here).
-                let view = serde_json::to_value(BudgetView::of(&ws)).unwrap();
-                assert_eq!(view, json!({ "autoTurns": expect["autoTurns"], "wakes": expect["wakes"], "level": expect["level"] }), "{name}");
-            }
-        }
-
-        #[tokio::test]
-        async fn the_shared_sequences_of_budget_actions_leave_the_same_state_and_audit_here_and_in_the_mock() {
-            let all: Value = serde_json::from_str(include_str!("../../../src/lib/workstreamHold.fixtures.json")).unwrap();
-            let sequences = all["sequences"].as_array().unwrap();
-            assert!(sequences.len() >= 30);
-            let fx = fixture().await;
-            for seq in sequences {
-                let name = seq["name"].as_str().unwrap();
-                let start = &seq["start"];
-                let opened = fx.core.open_workstream(&fx.scope, None, Some(name.chars().take(60).collect())).await.unwrap();
-                let mut ws = workstream_of(&opened.id, start["mode"].as_str().unwrap(), &start["held"], start["closed"].as_bool().unwrap_or(false), &start["spent"], &start["budget"]);
-                ws.connection_id = opened.connection_id.clone();
-                ws.title = opened.title.clone();
-                ws.created_at = opened.created_at;
-                fx.core.with_db_for(&fx.scope, |db| db.save_workstream(&ws)).await.unwrap();
-                for step in seq["steps"].as_array().unwrap() {
-                    let what = format!("{name}: {}", step["do"]);
-                    let before = fx.core.workstream_events(&fx.scope, &opened.id).await.unwrap().len();
-                    let actor = || -> Actor { serde_json::from_value(step["actor"].clone()).unwrap() };
-                    let done = match step["do"].as_str().unwrap() {
-                        "setMode" => {
-                            let mode = if step["mode"] == "manage" { Mode::Manage } else { Mode::Advise };
-                            fx.core.set_workstream_mode(&fx.scope, &opened.id, mode, actor()).await
-                        }
-                        "hold" => fx.core.hold_workstream(&fx.scope, &opened.id, step["reason"].as_str().unwrap(), actor()).await,
-                        "resume" => fx.core.resume_workstream(&fx.scope, &opened.id).await,
-                        "allowMore" => fx.core.allow_more_steps(&fx.scope, &opened.id).await,
-                        "trip" => fx.core.trip_workstream(&fx.scope, &opened.id, step["kind"].as_str().unwrap(), Some("r1"), &[]).await,
-                        "spend" => {
-                            let mut now = fx.core.with_db_for(&fx.scope, |db| db.workstream(&opened.id)).await.unwrap().unwrap();
-                            now.spent.auto_turns = step["spent"][0].as_u64().unwrap() as u32;
-                            now.spent.wakes = step["spent"][1].as_u64().unwrap() as u32;
-                            fx.core.with_db_for(&fx.scope, |db| db.save_workstream(&now)).await.map(|_| now)
-                        }
-                        other => panic!("no action {other}"),
-                    };
-                    let expect = &step["expect"];
-                    assert_eq!(done.is_err(), expect["error"].as_bool().unwrap_or(false), "{what}: {done:?}");
-                    let now = fx.core.workstream(&fx.scope, &opened.id).await.unwrap().unwrap();
-                    let state = json!({ "mode": now.workstream.mode.as_str(), "held": now.workstream.held_reason, "limits": [now.budget.auto_turns.limit, now.budget.wakes.limit], "level": level_word(now.budget.level) });
-                    assert_eq!(state, expect["state"], "{what}");
-                    let events = fx.core.workstream_events(&fx.scope, &opened.id).await.unwrap();
-                    let added: Vec<Value> = events[before..].iter().map(|e| json!([e.actor.as_str(), e.action, e.detail])).collect();
-                    assert_eq!(Value::Array(added), expect["events"], "{what}");
-                }
             }
         }
     }

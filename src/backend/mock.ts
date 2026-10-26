@@ -1,11 +1,9 @@
 import type { ClearFilter } from "../types";
 import { isTauri } from "@tauri-apps/api/core";
 import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
-import { HELD_PERSON } from "../types";
 import type {
   ChangedFile,
   AssignedElsewhere,
-  BasisField,
   CacheChanged,
   CatalogPage,
   CodeCommitQuery,
@@ -40,9 +38,7 @@ import type {
   Ticket,
   WorkFilter,
   WorkItem,
-  WorkstreamMode,
   WorkstreamUndo,
-  WorkstreamRule,
   WorkstreamsChanged,
 } from "../types";
 import { fold } from "../lib/mentions";
@@ -57,11 +53,11 @@ import { READINESS_LABEL, reporterComment, reporterDoc } from "./mockReadiness";
 import { clarityQuestions, type ClarityGap } from "../lib/ticketClarity";
 import { askedQuestions, nudgeComment } from "../lib/reporterWait";
 import { answersDue, planDue, replyComment } from "../lib/reporterWait";
-import { mockCancelTurns, mockCancelWakes, mockHasWaitingWake, mockPipIdle, mockQueueWake } from "./mockPipQueue";
+import { mockCancelTurns, mockCancelWakes, mockPipIdle, mockQueueWake } from "./mockPipQueue";
 import { holdMockPip } from "./mockPip";
 import { MockProposals } from "./mockProposals";
 import { mockPipTurns } from "./mockPipTurns";
-import { MockWorkstreams, CLARITY_GONE, READINESS_GONE, lastTripOf, type LastTrip } from "./mockWorkstreams";
+import { MockWorkstreams, CLARITY_GONE, READINESS_GONE, lastDriftOf, type LastDrift } from "./mockWorkstreams";
 
 /** Where the sample backend keeps the drafts Pip made in its conversations. */
 const KEPT_DRAFTS = "gossamr-mock-pip-drafts";
@@ -376,10 +372,6 @@ export class MockBackend implements Backend {
     this.workstreams = new MockWorkstreams(
       () => this.runs.list(),
       (ref) => this.connector.item(ref)?.title ?? null,
-      undefined,
-      undefined,
-      undefined,
-      options.wsManage ? "manage" : "advise",
     );
     this.runs.workstreams = this.workstreams;
     // A draft made, approved or skipped in a workstream goes in its audit, by whoever did it.
@@ -412,7 +404,7 @@ export class MockBackend implements Backend {
     this.workstreams.replyAt = (key, at) => replyComment(this.connector.comments(itemRef(key)).filter((c) => c.author.accountId !== this.connector.me.accountId).map((c) => ({ id: c.id, at: c.created, text: docText(c.body) })), at);
     // Every such comment, for the timeline's reply entries.
     this.workstreams.replyCommentsOf = (key) => this.connector.comments(itemRef(key)).filter((c) => c.author.accountId !== this.connector.me.accountId).map((c) => ({ id: c.id, at: c.created, text: docText(c.body) }));
-    // What the person just wrote is the workstream's basis now, so the supervisor doesn't take an approved write for drift.
+    // What the person just wrote is the workstream's basis now, so the supervisor doesn't take an approved write for a change.
     this.proposals.onWritten = (p) => {
       const ws = workstreamOf(p);
       if (ws) this.workstreams.rebase(ws, basisFieldsOf(p.intent));
@@ -423,7 +415,6 @@ export class MockBackend implements Backend {
       workstreams: this.workstreams,
       proposals: this.proposals,
       wake: (ws, facts) => void mockQueueWake(ws, facts, this, options.pipPace),
-      hasWaitingWake: mockHasWaitingWake,
       cancelWakes: mockCancelWakes,
     });
     exposeMockClock({
@@ -514,25 +505,11 @@ export class MockBackend implements Backend {
     return this.workstreams.events(id);
   }
 
-  async workstreamsSetMode(id: string, mode: WorkstreamMode) {
-    return this.workstreams.setMode(id, mode, "person");
-  }
-
-  /** The person's "Run another fix round" on a review that still blocks after the automatic fix rounds, as `workstreams_fix_round`. */
-  async workstreamsFixRound(reviewRun: string) {
-    return this.runs.sendPersonFixRound(reviewRun);
-  }
-
-  /** The person's "I'll take it from here", as `workstreams_take_over`: the workstream goes to Advise and nothing else changes. */
-  async workstreamsTakeOver(id: string, reviewRun: string) {
-    return this.workstreams.takeOver(id, reviewRun);
-  }
-
-  /** Holds a workstream and stops Pip's turns in its conversation, as `workstreams_hold` does; its runs carry on. */
-  async workstreamsHold(id: string) {
-    const held = this.workstreams.hold(id, HELD_PERSON, "person");
+  /** Pauses a workstream and stops Pip's turns in its conversation, as `workstreams_pause` does; its runs carry on. */
+  async workstreamsPause(id: string) {
+    const paused = this.workstreams.pause(id, "person", "person");
     mockCancelTurns((c) => c === workstreamConversation(id));
-    return held;
+    return paused;
   }
 
   async workstreamsResume(id: string) {
@@ -615,36 +592,20 @@ export class MockBackend implements Backend {
     return ws;
   }
 
-  /** The person's "Plan anyway", as `workstreams_readiness_override`: records the override; the supervisor's Triage-to-Plan rule then starts the Plan under its own checks. */
+  /** The person's "Plan anyway", as `workstreams_readiness_override`: records the override. */
   async workstreamsReadinessOverride(id: string, triageRun: string) {
     const ws = this.workstreams.overrideReadiness(id, triageRun);
     this.proposals.retireTriageNotes(id, triageRun, OVERRIDDEN_REASON);
     return ws;
   }
 
-  /** The person's "Allow 5 more", as `workstreams_allow_more`: the allowance goes up by 5 and the workstream resumes. */
-  async workstreamsAllowMore(id: string) {
-    return this.workstreams.allowMore(id);
-  }
-
   async workstreamsUndo(id: string, undo: WorkstreamUndo) {
     return this.workstreams.undo(id, undo);
   }
 
-  async workstreamsSetRule(id: string, rule: WorkstreamRule, on: boolean | null) {
-    return this.workstreams.setRule(id, rule, on);
-  }
-
-  /** Holds every workstream and stops Pip's turns in all of their conversations; queued runs wait and drafts stay as they are. */
-  async workstreamsHoldAll() {
-    const held = this.workstreams.holdAll();
-    mockCancelTurns((c) => workstreamOfConversation(c) !== null);
-    return held;
-  }
-
-  /** Holds the workstream, then stops each of its runs that can be stopped, as `stop_workstream` does. */
+  /** Pauses the workstream, then stops each of its runs that can be stopped, as `stop_workstream` does. */
   async workstreamsStop(id: string) {
-    const ws = this.workstreams.hold(id, HELD_PERSON, "person");
+    const ws = this.workstreams.pause(id, "person", "person");
     mockCancelTurns((c) => c === workstreamConversation(id));
     const tally = { stopped: 0, failed: 0 };
     for (const run of this.runs.list().filter((r) => r.spec.workstream === ws.id && STOPPABLE.includes(r.state))) {
@@ -956,24 +917,15 @@ export class MockBackend implements Backend {
     );
   }
 
-  pipWorkstreamHeld(id: string): string | null {
-    return this.workstreams.get(id)?.workstream.heldReason ?? null;
-  }
-
-  pipWorkstreamDrifted(id: string): readonly BasisField[] | null {
-    return this.workstreams.get(id)?.workstream.drifted ?? null;
-  }
-
-  /** The last tripwire that held workstream `id`, until a wake after the one that follows the person's resume: Pip is told once. */
-  pipWorkstreamTrip(id: string): LastTrip | null {
+  /** The last time workstream `id`'s ticket changed in Jira, until a wake after the one that follows it: Pip is told once. */
+  pipWorkstreamDrift(id: string): LastDrift | null {
     if (!this.workstreams.get(id)) return null;
     const events = this.workstreams.events(id);
-    const trip = lastTripOf(events);
-    if (!trip?.resumedAt) return trip;
-    const since = trip.resumedAt;
+    const drift = lastDriftOf(events);
+    if (!drift) return null;
     // One wake turn's lines share their time; the turn asking now has written its own already.
-    const turns = new Set(events.filter((e) => e.actor === "supervisor" && e.action === "wake" && e.at >= since).map((e) => e.at));
-    return turns.size <= 1 ? trip : null;
+    const turns = new Set(events.filter((e) => e.actor === "supervisor" && e.action === "wake" && e.at >= drift.at).map((e) => e.at));
+    return turns.size <= 1 ? drift : null;
   }
 
   pipRunDraft(item: ItemRef, kind: RunKind, fromRun: string | null, focus: string | null, requestId: string) {
@@ -986,10 +938,6 @@ export class MockBackend implements Backend {
 
   pipAnswer(runId: string, message: string, requestId: string) {
     return this.runs.proposeAnswer(runId, message, requestId);
-  }
-
-  pipPersonWrote(id: string) {
-    this.workstreams.personWrote(id);
   }
 
   pipDrafted(requestId: string) {
@@ -1033,17 +981,13 @@ export class MockBackend implements Backend {
   }
 
   async proposalsPostReview(id: string, revisions: number, postAnyway = false) {
-    // Read before the post, while the draft is still pending: posting the review an escalation offered resolves it.
-    const offered = this.workstreams.escalationOffering(id);
-    const posted = await this.proposals.postReview(
+    return this.proposals.postReview(
       id,
       revisions,
       async (p) => this.github.postReview(p.id, p.intent),
       async (p, sent) => this.github.postedReview(p.intent.repo, p.intent.number, sent.commitSha, sent.summary),
       postAnyway,
     );
-    if (offered && posted.state.type === "applied") this.workstreams.escalationPosted(offered.workstream, offered.reviewRun, id);
-    return posted;
   }
 
   /** Someone force-pushes pull request `number` of `repo`: its head is a new commit whose diff lacks the lines it showed, and the old one is gone from it, as `MockCode.movePullHead`. */

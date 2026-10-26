@@ -1,29 +1,12 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test } from "@playwright/test";
 import { agentsHome, needsPane, openAgents, openApp, pipPane, selectWorkstream, startWorkstream, workstreamGroup } from "./support/app";
 
-// Fixes from the ninth dogfood round: the Held toast that goes with Resume (G10) and the words the owner posts to Jira (G3).
-
-const toast = (page: Page) => page.locator("[data-toast]");
-
-test.describe("the Held toast (G10)", () => {
-  test("goes when the workstream is resumed, and offers Undo no more", async ({ page }) => {
-    test.setTimeout(90_000);
-    await openApp(page, "wsManage=1&runs=empty");
-    await startWorkstream(page, "CA-401");
-    await openAgents(page);
-    await selectWorkstream(page, "CA-401");
-    await agentsHome(page).getByRole("button", { name: "Hold", exact: true }).click();
-    await expect(toast(page).filter({ hasText: "Held CA-401." }).getByRole("button", { name: "Undo" })).toBeVisible();
-    await agentsHome(page).getByRole("button", { name: "Resume", exact: true }).click();
-    await expect(pipPane(page).locator("[data-held-banner]")).toHaveCount(0);
-    await expect(toast(page).filter({ hasText: "Held CA-401." })).toHaveCount(0);
-  });
-});
+// Fixes from the ninth dogfood round: the words the owner posts to Jira (G3).
 
 test.describe("the ask to the reporter (G3)", () => {
   test("is in a neutral voice: no 'I', no 'we' and no 'can be planned'", async ({ page }) => {
     test.setTimeout(90_000);
-    await openApp(page, "runs=empty&prSurface=manual&wsManage=1&pipPace=1");
+    await openApp(page, "runs=empty&prSurface=manual&pipPace=1");
     await startWorkstream(page, "CA-408");
     await openAgents(page);
     await selectWorkstream(page, "CA-408");
@@ -38,7 +21,7 @@ test.describe("the ask to the reporter (G3)", () => {
 test.describe("the close confirm (G9)", () => {
   test("opens on Keep, so Enter twice never closes the workstream", async ({ page }) => {
     test.setTimeout(90_000);
-    await openApp(page, "runs=empty&wsManage=1");
+    await openApp(page, "runs=empty");
     await startWorkstream(page, "CA-401");
     await openAgents(page);
     await selectWorkstream(page, "CA-401");

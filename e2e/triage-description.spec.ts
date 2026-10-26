@@ -5,18 +5,18 @@ import { advanceRuns, askPip, commentOnTicket, editTicket, expandNeedsYou, homeC
 // draft the person approves; "Ask the reporter" stays a comment; the reporter's answer is read by the next triage and the
 // plan, which neither ask the questions again nor assume answers to them.
 
-const MANAGED = "runs=empty&prSurface=manual&wsManage=1&pipPace=1";
+const SAMPLE = "runs=empty&prSurface=manual&pipPace=1";
 const KEY = "CA-408";
 const ANSWER = "Done means the winback mail goes to lapsed customers. The open rate should rise. Only the winback flow is in scope. The CRM team asked for it.";
 
 const setup = (page: Page) => page.getByRole("dialog", { name: "Start an agent" });
 const runsOf = async (page: Page, kind: string) => (await mockRuns(page)).filter((r) => r.kind === kind);
 
-/** Asks Pip for an investigation and starts it from the setup sheet, as the person does, in the Pip pane or on Pip home. */
-async function startInvestigation(page: Page, home = false) {
+/** Asks Pip for `what` and starts it from the setup sheet, as the person does, in the Pip pane or on Pip home. */
+async function startStep(page: Page, what: string, home = false) {
   if (home) await homeSettled(page);
   else await paneSettled(page);
-  await askPip(page, "investigate this");
+  await askPip(page, what);
   if (home) await homeSettled(page);
   else await paneSettled(page);
   const where = home ? homeConversationRegion(page) : pipPane(page);
@@ -32,7 +32,7 @@ async function finish(page: Page, id: string) {
   await expect.poll(async () => (await mockRuns(page)).find((r) => r.id === id)?.state).toBe("done");
 }
 
-/** The id of the `n`th run of `kind`, once the rules have started it. */
+/** The id of the `n`th run of `kind`. */
 async function nth(page: Page, kind: string, n: number) {
   await expect.poll(async () => (await runsOf(page, kind)).length).toBeGreaterThanOrEqual(n);
   return (await runsOf(page, kind)).map((r) => r.id).reverse()[n - 1];
@@ -40,11 +40,12 @@ async function nth(page: Page, kind: string, n: number) {
 
 test("the triage's questions go to the description as a draft, the reporter's answer is used, and the plan assumes nothing", async ({ page }) => {
   test.setTimeout(240_000);
-  await openApp(page, MANAGED);
+  await openApp(page, SAMPLE);
   await editTicket(page, KEY, { description: "Fix it." });
   await startWorkstream(page, KEY);
-  await startInvestigation(page);
+  await startStep(page, "investigate this");
   await finish(page, await nth(page, "investigate", 1));
+  await startStep(page, "triage this");
   await finish(page, await nth(page, "triage", 1));
   await openAgents(page);
   await selectWorkstream(page, KEY);
@@ -77,11 +78,12 @@ test("the triage's questions go to the description as a draft, the reporter's an
   await new Promise((r) => setTimeout(r, 50));
   await commentOnTicket(page, KEY, ANSWER);
 
-  // Investigate again: the triage the rule starts reads the answers, so it is ready and asks nothing again.
+  // Investigate again and triage again: the triage reads the answers, so it is ready and asks nothing again.
   await openAgents(page);
   await selectWorkstream(page, KEY);
-  await startInvestigation(page, true);
+  await startStep(page, "investigate this", true);
   await finish(page, await nth(page, "investigate", 2));
+  await startStep(page, "triage this", true);
   const again = await nth(page, "triage", 2);
   await finish(page, again);
   await expect(needOfKind(page, "readiness")).toHaveCount(0);
@@ -92,7 +94,8 @@ test("the triage's questions go to the description as a draft, the reporter's an
   await expect(second.locator('[data-diff="description"]')).toContainText("The answers in the ticket's comments were used");
   await expect(second.locator('[data-diff="description"]')).not.toContainText("Open questions:");
 
-  // The plan the rule starts is told no assumptions, and its description draft invents none.
+  // The plan the person starts is told no assumptions, and its description draft invents none.
+  await startStep(page, "plan this", true);
   const plan = await nth(page, "plan", 1);
   await finish(page, plan);
   await openNeedOfKind(page, "plan");

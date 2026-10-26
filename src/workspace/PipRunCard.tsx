@@ -1,7 +1,7 @@
 import type { Run } from "../types";
 import { itemKey } from "../lib/filter";
 import { labelsByRun } from "../lib/workstreamStage";
-import { AutoStarted, ReadOnlyBadge, RunLabel } from "./AgentCard";
+import { ReadOnlyBadge, RunLabel } from "./AgentCard";
 import { useWorkspace } from "../workspaceStore";
 import { runTitle, waitsForSlot } from "./agentsLogic";
 import { useStateView } from "./useStateView";
@@ -54,7 +54,6 @@ export function PipRunCard({ run, now, ticketTitle, label, onOpen, focusable = f
             </>
           )}
         </span>
-        <AutoStarted run={run} />
       </div>
       <button type="button" onClick={onOpen} aria-label={`Open ${title}`} data-run-open className="shrink-0 rounded-md border border-ws-sep2 px-2 py-px text-sm font-semibold hover:border-ws-pip hover:text-ws-pip focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip">
         Open

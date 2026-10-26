@@ -219,17 +219,17 @@ describe("mockAsk", () => {
       await mockAsk({ requestId, prompt, sessionId: null, context, conversation: `ws:${ws}`, meta: { imageCount: 0 } }, backend, 0);
       return openMockPipTurns().turns(`ws:${ws}`).find((t) => t.requestId === requestId);
     };
-    const first = await answer(vague.id, "v1", "Why is it held?");
+    const first = await answer(vague.id, "v1", "Where are we on this?");
     expect(first?.text.startsWith("CA-408 may be unclear: it has a very short description, doesn't say what done looks like, doesn't say what's in or out of scope, and doesn't say who is waiting on it.\n\n")).toBe(true);
     expect(first?.steps[0]).toBe("Read the ticket");
-    expect((await answer(vague.id, "v2", "Why is it held?"))?.text).not.toContain("may be unclear");
-    expect((await answer(clear.id, "c1", "Why is it held?"))?.text).not.toContain("may be unclear");
+    expect((await answer(vague.id, "v2", "Where are we on this?"))?.text).not.toContain("may be unclear");
+    expect((await answer(clear.id, "c1", "Where are we on this?"))?.text).not.toContain("may be unclear");
     // General's first turn is nobody's workstream: no check.
     await mockAsk({ requestId: "g1", prompt: "What changed?", sessionId: null, context, conversation: "general", meta: { imageCount: 0 } }, backend, 0);
     expect(openMockPipTurns().turns("general").find((t) => t.requestId === "g1")?.text).not.toContain("may be unclear");
   });
 
-  it("answers 'Why is this held?' from the workstream's held reason, and 'Approve the plan' with where to approve it", async () => {
+  it("answers 'Approve the plan' with where to approve it, and drafts nothing", async () => {
     const { MockBackend } = await import("./mock");
     const { itemRef } = await import("./mockConnector");
     const backend = new MockBackend({ runs: { seed: "empty" } });
@@ -240,9 +240,6 @@ describe("mockAsk", () => {
       return openMockPipTurns().turns(`ws:${ws.id}`).find((t) => t.requestId === requestId)?.text ?? "";
     };
     const drafts = backend.proposals.list().length;
-    expect(await answer("h0", "Why is this held?")).toContain("isn't held");
-    await backend.workstreamsHold(ws.id);
-    expect(await answer("h1", "Why is this held?")).toMatch(/^Held by you\. While it is held I'm not woken and nothing starts on its own/);
     const plan = await answer("a1", "Approve the plan");
     expect(plan).toContain("I can't approve anything myself");
     expect(plan).toContain("Plan step");

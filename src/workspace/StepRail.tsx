@@ -204,20 +204,8 @@ export function EarlierStepDrafts({ step, drafts, initialOpen = false }: { step:
   );
 }
 
-/**
- * What the chip says of a run a rule started: a queued one waits for Resume while the workstream is held, and for Manage
- * while it is in Advise, since nothing starts on its own then; otherwise it was started automatically.
- */
-export function autoNote(chip: StepChip, ws: Pick<WorkstreamView["workstream"], "heldReason" | "mode">): string | null {
-  if (!chip.auto) return null;
-  if (chip.newest?.state === "queued" && ws.heldReason) return "waits for Resume";
-  if (chip.newest?.state === "queued" && ws.mode === "advise") return "waits for Manage";
-  return "started automatically";
-}
-
 /** The chip's one line: the newest run's label and state, then what else is worth a glance. */
-function ChipLine({ chip, label, ws }: { chip: StepChip; label?: string; ws: WorkstreamView["workstream"] }) {
-  const auto = autoNote(chip, ws);
+function ChipLine({ chip, label }: { chip: StepChip; label?: string }) {
   if (!chip.newest) return <span className="text-xs text-ws-ink3">Not started</span>;
   return (
     <span className="flex min-w-0 flex-wrap items-center gap-1 text-xs text-ws-ink3">
@@ -226,9 +214,7 @@ function ChipLine({ chip, label, ws }: { chip: StepChip; label?: string; ws: Wor
         {chip.state}
       </span>
       {chip.runs.length > 1 && <span>· {chip.runs.length} runs</span>}
-      {auto && <span data-step-auto>· {auto}</span>}
       {chip.verdict && <span data-step-verdict>· {chip.verdict}</span>}
-      {chip.fixRound && <span data-step-fix-round>· {chip.fixRound}</span>}
     </span>
   );
 }
@@ -437,7 +423,7 @@ export function StepRailView({ view, runs, events, verdicts, changes = NO_CHANGE
                     </span>
                   )}
                 </span>
-                {!quiet && <ChipLine chip={chip} label={chip.newest ? labels.get(chip.newest.id) : undefined} ws={view.workstream} />}
+                {!quiet && <ChipLine chip={chip} label={chip.newest ? labels.get(chip.newest.id) : undefined} />}
                 {/* The one quiet line shows no state: every step says one to a screen reader, as the others' lines do. */}
                 {quiet && <span className="sr-only">Not started</span>}
               </button>

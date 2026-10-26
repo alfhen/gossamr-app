@@ -287,7 +287,7 @@ impl RunKind {
     }
 
     /// The kinds that change nothing, which Claude Code itself keeps from writing (see `READ_ONLY_MODE`). A Build, and a
-    /// fix round sent to one, keeps the person's own permission mode within its worktree.
+    /// follow-up sent to one, keeps the person's own permission mode within its worktree.
     pub fn read_only(self) -> bool {
         match self {
             RunKind::Investigate | RunKind::Triage | RunKind::Plan | RunKind::Review | RunKind::Verify => true,
@@ -877,14 +877,6 @@ pub struct Continuation {
     pub started_at: Option<DateTime<Utc>>,
 }
 
-/// Which rule started a run on its own, and after which run. Not part of the spec, so not part of its digest.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AutoStarted {
-    pub rule: super::workstream::Rule,
-    pub after_run: String,
-}
-
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Run {
@@ -958,9 +950,6 @@ pub struct Run {
     /// Sessions that may be this run carried on, when more than one fits or the match isn't exact.
     #[serde(default)]
     pub possible_continuations: Vec<Continuation>,
-    /// Set when the supervisor started the run by an auto-start rule rather than a person approving it.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub auto_start: Option<AutoStarted>,
     /// Set while an approved run stays `Queued` only because `max_runs` agents are running: it starts by itself, in
     /// approval order, once a slot frees.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1064,7 +1053,6 @@ impl Run {
             passes: 1,
             earlier_sessions: Vec::new(),
             possible_continuations: Vec::new(),
-            auto_start: None,
             slot_wait_since: None,
             read_only: None,
             permission_allowed: None,
@@ -1947,18 +1935,13 @@ mod tests {
     }
 
     #[test]
-    fn an_auto_started_run_round_trips_and_leaves_the_digest_and_old_runs_as_they_were() {
+    fn a_run_stored_with_the_removed_auto_start_field_still_reads() {
         let plain = Run::queued("r".into(), "p".into(), "c".into(), None, spec(), "f".into(), Utc::now());
-        let json = serde_json::to_value(&plain).unwrap();
-        assert!(json.get("autoStart").is_none(), "a person's run stores nothing new");
-        assert_eq!(serde_json::from_value::<Run>(json).unwrap().auto_start, None);
-        let auto = Run { auto_start: Some(AutoStarted { rule: super::super::workstream::Rule::InvestigateTriage, after_run: "r1".into() }), ..plain.clone() };
-        let json = serde_json::to_value(&auto).unwrap();
-        assert_eq!(json["autoStart"], serde_json::json!({ "rule": "investigate_triage", "afterRun": "r1" }));
+        let mut json = serde_json::to_value(&plain).unwrap();
+        json["autoStart"] = serde_json::json!({ "rule": "investigate_triage", "afterRun": "r1" });
         let back: Run = serde_json::from_value(json).unwrap();
-        assert_eq!(back, auto);
-        assert_eq!(back.digest, plain.digest, "the rule is not part of what is approved");
-        assert_eq!(back.spec.digest(), plain.spec.digest());
+        assert_eq!(back, plain);
+        assert!(serde_json::to_value(&back).unwrap().get("autoStart").is_none());
     }
 
     #[test]

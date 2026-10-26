@@ -134,17 +134,6 @@ export function firstAskPosted(events: readonly FollowLine[]): number | null {
 }
 
 /**
- * Whether the reporter answered what a Triage that finished at `since` (ISO; none: any time) left open: a comment from someone but the person
- * (`replies`, their times) came after the first ask was posted and after `since`. A Triage that ran after the reply had the
- * answer in its prompt, so what it still lists is open. As `answered_by_reply` in src-tauri/src/inbox/workstreams.rs.
- */
-export function answeredByReply(events: readonly FollowLine[], replies: readonly string[], since = ""): boolean {
-  const ask = firstAskPosted(events);
-  const from = Date.parse(since);
-  return ask !== null && replies.some((r) => Date.parse(r) > ask && !(Date.parse(r) <= from));
-}
-
-/**
  * Every comment on the ticket from someone but the person that came after the first reporter ask was posted on the workstream
  * (the approval of a `readiness_asked`, `clarity_asked` or `reporter_nudged` comment), oldest first, each as its quote: the
  * replies the timeline keeps telling after the person asks again, which ends the wait they ended. A comment that says nothing is

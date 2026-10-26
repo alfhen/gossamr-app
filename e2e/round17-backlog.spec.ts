@@ -4,22 +4,24 @@ import { advanceRuns, askPip, expandNeedsYou, homeComposer, homeSettled, jiraWri
 // Backlog items of the seventeenth dogfood round: the timeline telling Plan now from Plan anyway (G18), a draft that holds a secret saying so before Post (G22), the skip Undo naming its draft (G27), the Start-an-agent card's
 // names (G28) and Looks fine saying what comes next (G29).
 
-const MANAGED = "runs=empty&prSurface=manual&wsManage=1&pipPace=1";
+const SAMPLE = "runs=empty&prSurface=manual&pipPace=1";
 const VAGUE = "CA-408";
 const toast = (page: Page) => page.locator("[data-toast]");
 const setup = (page: Page) => page.getByRole("dialog", { name: "Start an agent" });
 const newest = async (page: Page, kind: string) => (await mockRuns(page)).find((r) => r.kind === kind) ?? null;
 
-/** Asks Pip for an investigation and starts it from the setup sheet, as the person does. */
-async function startInvestigation(page: Page, key: string) {
+/** Asks Pip for `what` on `key` and starts the draft from the setup sheet, as the person does. */
+async function startStep(page: Page, what: string, key: string) {
   await paneSettled(page);
-  await askPip(page, "investigate this");
+  await askPip(page, what);
   await paneSettled(page);
   await pipPane(page).getByRole("article", { name: `Start an agent: ${key}` }).last().getByRole("button", { name: "Review and start →" }).click();
   await expect(setup(page)).toBeVisible();
   await setup(page).getByRole("button", { name: "Start agent" }).click();
   await expect(setup(page)).toHaveCount(0);
 }
+
+const startInvestigation = (page: Page, key: string) => startStep(page, "investigate this", key);
 
 /** Moves run `id` on to done once Pip has answered. */
 async function finish(page: Page, id: string) {
@@ -28,13 +30,13 @@ async function finish(page: Page, id: string) {
   await expect.poll(async () => (await mockRuns(page)).find((r) => r.id === id)?.state).toBe("done");
 }
 
-/** A managed workstream on the vague ticket, its investigation and the triage a rule started: not ready to plan. Left on Pip home. */
+/** A workstream on the vague ticket, its investigation and the triage the person started after it: not ready to plan. Left on Pip home. */
 async function unclear(page: Page) {
-  await openApp(page, MANAGED);
+  await openApp(page, SAMPLE);
   await startWorkstream(page, VAGUE);
   await startInvestigation(page, VAGUE);
   await finish(page, (await newest(page, "investigate"))!.id);
-  await expect.poll(async () => (await newest(page, "triage"))?.id ?? null).not.toBeNull();
+  await startStep(page, "triage this", VAGUE);
   await finish(page, (await newest(page, "triage"))!.id);
   await openAgents(page);
   await selectWorkstream(page, VAGUE);
@@ -43,7 +45,7 @@ async function unclear(page: Page) {
 
 test.describe("Plan now has its own line (G18)", () => {
   test("a Plan now after asking the reporter is not worded as Plan anyway", async ({ page }) => {
-    await openApp(page, MANAGED);
+    await openApp(page, SAMPLE);
     await startWorkstream(page, VAGUE);
     await openAgents(page);
     await selectWorkstream(page, VAGUE);
@@ -80,7 +82,7 @@ test.describe("a draft that holds a secret says so before Post (G22)", () => {
 
 test.describe("Looks fine says what comes next (G29)", () => {
   test("a short toast says the agent step can be started from the conversation", async ({ page }) => {
-    await openApp(page, MANAGED);
+    await openApp(page, SAMPLE);
     await startWorkstream(page, VAGUE);
     await expect(pipPane(page).locator("[data-clarity-notice]")).toBeVisible();
     await pipPane(page).locator("[data-clarity-notice]").getByRole("button", { name: "Looks fine" }).click();
@@ -92,7 +94,7 @@ test.describe("Looks fine says what comes next (G29)", () => {
 test.describe("the skip Undo names the draft (G27)", () => {
   test("the Undo toast quotes the draft's first words, and a batch leaves the other groups their rows", async ({ page }) => {
     test.setTimeout(120_000);
-    await openApp(page, "wsManage=1");
+    await openApp(page);
     await startWorkstream(page, "CA-401");
     await openAgents(page);
     await selectWorkstream(page, "CA-401");

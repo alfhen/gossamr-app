@@ -225,12 +225,6 @@ describe("mock Pip drafting the next step of a workstream, as propose_run does",
     expect(mockPipTurns.turns(`ws:${ws}`).find((t) => t.requestId === "ws-refused")).toMatchObject({ status: "done", error: null });
   });
 
-  it("says which ticket fields drifted when asked why a workstream is held", () => {
-    const context = { screen: "board", item: null } as unknown as ScreenContext;
-    const ws = { id: "ws1", item: CA401, heldReason: "tripwire:basis_drift", drifted: ["summary", "description"] as const };
-    expect(scriptPip("Why is this held?", context, [], [], NOW, [], null, ws).text).toMatch(/^Held: the ticket's summary and description changed in Jira\./);
-  });
-
   it("names the workstream's newest finished run of the kind before as the one to follow", () => {
     const ws = { id: "ws1", item: CA401 };
     const run = (id: string, kind: RunKind, state: Run["state"], at: string) => ({ id, item: CA401, spec: { kind, workstream: "ws1" }, state, queuedAt: at, endedAt: state === "done" ? at : null }) as unknown as Run;

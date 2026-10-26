@@ -4,9 +4,8 @@ import { dismissed, flaggedGaps, gapList, gapWords, ignoredGaps, learnedDetail, 
 import { GENERAL_CONVERSATION, workstreamConversation, workstreamOfConversation } from "../lib/conversations";
 import { readinessPrompt } from "../lib/needs";
 import { ofItem, runWorkstream, stageText } from "../lib/workstreamStage";
-import { budgetView } from "../lib/workstreamHold";
 import { adoptCount, adoptedText, adoptUndoneText } from "../lib/workstreamAdopt";
-import { HELD_PERSON, type AutoStartSwitches, type ItemRef, type Run, type ScreenContext, type Workstream, type WorkstreamEvent, type WorkstreamMode, type WorkstreamRule, type WorkstreamUndo, type WorkstreamView } from "../types";
+import type { ItemRef, Run, ScreenContext, Workstream, WorkstreamEvent, WorkstreamUndo, WorkstreamView } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { PIP_INPUT_ID } from "./draftKeys";
 import { focusAdopted, focusAdoptButton, focusWorkstreamRow } from "./focusDrawn";
@@ -49,22 +48,10 @@ interface WorkstreamsState {
   reopen(id: string): Promise<boolean>;
   /** The person's "Bring them here": the runs and drafts on the workstream's ticket that sit under General move into it, with an Undo that puts them back. False when nothing moved. */
   adopt(id: string): Promise<boolean>;
-  /** The global auto-start switches, as Settings has them, for what "as in Settings" means; null until read. */
-  globals: AutoStartSwitches | null;
-  /** Reads the global auto-start switches again. */
-  loadGlobals(): Promise<void>;
-  /** The person's Manage switch: in `manage` the supervisor wakes Pip and starts the routine steps. False when it couldn't. */
-  setMode(id: string, mode: WorkstreamMode): Promise<boolean>;
-  /** The person's "Run another fix round" on review `reviewRun`, which still blocks after the automatic rounds. The build it went to, null when it couldn't. */
-  fixRound(reviewRun: string): Promise<Run | null>;
-  /** The person's "I'll take it from here" on review `reviewRun`: workstream `id` goes to Advise. False when it couldn't. */
-  takeOver(id: string, reviewRun: string): Promise<boolean>;
-  /** Holds workstream `id`: no wakes and no automatic steps; its running agents carry on. False when it couldn't. */
-  hold(id: string): Promise<boolean>;
-  /** Lifts workstream `id`'s hold, whatever held it. False when it couldn't. */
+  /** Pauses workstream `id`: Pip isn't woken in it; its running agents carry on. False when it couldn't. */
+  pause(id: string): Promise<boolean>;
+  /** Resumes workstream `id`, whatever paused it. False when it couldn't. */
   resume(id: string): Promise<boolean>;
-  /** The person's "Allow 5 more" on workstream `id`, held for its automatic steps: its allowance goes up by 5 and it resumes. False when it couldn't. */
-  allowMore(id: string): Promise<boolean>;
   /** The person's "Ask the reporter" on workstream `id`, whose triage found its ticket not ready to plan: a Jira comment to the reporter with its open questions is drafted, for them to approve like any other. False when it couldn't. */
   askReporter(id: string): Promise<boolean>;
   /** The person's "Ask the reporter now" on the clarity notice: drafts the comment to the reporter from the gaps and shows it for approval. False when it couldn't. */
@@ -75,13 +62,9 @@ interface WorkstreamsState {
   nudgeReporter(id: string): Promise<boolean>;
   /** The person's "I'll answer": settles the question and opens the workstream's conversation with the open questions quoted in the composer. False when it couldn't. */
   answerSelf(id: string): Promise<boolean>;
-  /** The person's "Plan anyway": records the override; the Triage-to-Plan step starts the Plan under its own checks (Manage, not held, within budget). False when it couldn't. */
+  /** The person's "Plan anyway": records the override, which settles the question. False when it couldn't. */
   planAnyway(id: string): Promise<boolean>;
-  /** The workstream's own switch for one automatic step; null follows Settings again. False when it couldn't. */
-  setRule(id: string, rule: WorkstreamRule, on: boolean | null): Promise<boolean>;
-  /** Holds every open workstream and stops Pip's turns in them, and says how many it held. Null when it couldn't. */
-  holdAll(): Promise<number | null>;
-  /** Holds workstream `id` and stops each of its agents that can be stopped. False when it couldn't. */
+  /** Pauses workstream `id` and stops each of its agents that can be stopped. False when it couldn't. */
   stop(id: string): Promise<boolean>;
 }
 
@@ -96,9 +79,6 @@ let eventsCounter = 0;
 
 /** The readiness stop workstream `id` waits on, if it does. */
 const readinessOf = (list: readonly WorkstreamView[], id: string) => list.find((v) => v.workstream.id === id)?.readiness ?? null;
-
-/** "1 workstream", "2 workstreams". */
-const workstreams = (n: number) => `${n} ${n === 1 ? "workstream" : "workstreams"}`;
 
 /** What Looks fine says comes next, in the same toast as what it taught when there is one: the notice asks nothing more, and the agent step is the person's to start. */
 export const LOOKS_FINE_NEXT = "The agent step can be started from the conversation.";
@@ -187,17 +167,6 @@ export const useWorkstreams = create<WorkstreamsState>()((set, get) => {
   };
   /** The note saying a comment to the reporter is ready, by workstream, so closing the workstream takes it back. */
   const reporterNotes = new Map<string, number>();
-  /** The offer of Undo for each workstream's hold, so Resume, Allow more steps or Close can take it back: it would undo what they just settled. */
-  const holdOffers = new Map<string, number>();
-  /** Hold all's one offer and the workstreams it would still free: one resumed, allowed more or closed since leaves it, and with none left the offer goes. */
-  let batchOffer: { offer: number; ids: Set<string> } | null = null;
-  const withdrawHold = (id: string) => {
-    withdrawUndo(holdOffers.get(id));
-    holdOffers.delete(id);
-    if (!batchOffer?.ids.delete(id) || batchOffer.ids.size) return;
-    withdrawUndo(batchOffer.offer);
-    batchOffer = null;
-  };
   /** The offer of Undo for each workstream's adoption: the backend allows it only while it is the last thing in the audit, so once the workstream moved on the offer is dead. */
   const adoptOffers = new Map<string, number>();
   /** The offer of Undo for each close, with its ticket: a new workstream on that ticket makes Reopen refuse, so starting one takes the offer back. */
@@ -206,21 +175,15 @@ export const useWorkstreams = create<WorkstreamsState>()((set, get) => {
     withdrawUndo(closeOffers.get(id)?.offer);
     closeOffers.delete(id);
   };
-  /** Takes back the adoption offers of workstreams that have moved on since: questions posted (waiting on the reporter), held, or closed (gone from the open list). */
+  /** Takes back the adoption offers of workstreams that have moved on since: questions posted (waiting on the reporter), paused, or closed (gone from the open list). */
   const settleAdoptions = (list: readonly WorkstreamView[]) => {
     for (const [id, offer] of [...adoptOffers]) {
       const v = list.find((x) => x.workstream.id === id);
-      if (v && !v.waitingOnReporter && !v.workstream.heldReason) continue;
+      if (v && !v.waitingOnReporter && !v.workstream.pausedReason) continue;
       withdrawUndo(offer);
       adoptOffers.delete(id);
     }
   };
-  const undoAll = async (ids: readonly string[]) => {
-    const results = await Promise.allSettled(ids.map((id) => undoChange(id, { type: "hold", was: null })));
-    const failed = results.filter((r) => r.status === "rejected");
-    if (failed.length) throw new Error(`${failed.length} of ${ids.length} couldn't be freed: ${messageOf((failed[0] as PromiseRejectedResult).reason)}`);
-  };
-
   return {
     backend: null,
     list: [],
@@ -228,7 +191,6 @@ export const useWorkstreams = create<WorkstreamsState>()((set, get) => {
     closed: [],
     events: {},
     confirmingClose: null,
-    globals: null,
 
     init(backend) {
       get().dispose();
@@ -244,8 +206,6 @@ export const useWorkstreams = create<WorkstreamsState>()((set, get) => {
       const offRuns = backend.onRunsChanged(() => (void get().refresh(), selectedEvents()));
       stop = () => (offWorkstreams(), offRuns());
       void get().refresh();
-      // Settings' auto-start switches, for the Next line; it stays hidden until they are read.
-      void get().loadGlobals();
     },
 
     dispose() {
@@ -254,7 +214,7 @@ export const useWorkstreams = create<WorkstreamsState>()((set, get) => {
       seq++;
       closedSeq++;
       eventsSeq.clear();
-      set({ backend: null, list: [], loaded: false, closed: [], events: {}, confirmingClose: null, globals: null });
+      set({ backend: null, list: [], loaded: false, closed: [], events: {}, confirmingClose: null });
       useWorkView.getState().reset();
     },
 
@@ -303,7 +263,7 @@ export const useWorkstreams = create<WorkstreamsState>()((set, get) => {
         for (const [id, c] of [...closeOffers]) if (c.itemKey !== null && c.itemKey === ws.itemKey) withdrawClose(id);
         if (get().backend === backend) await get().refresh();
         focusPip(ws.id);
-        return get().list.find((v) => v.workstream.id === ws.id) ?? { workstream: ws, stage: "intake", runs: [], labels: [], budget: budgetView(ws) };
+        return get().list.find((v) => v.workstream.id === ws.id) ?? { workstream: ws, stage: "intake", runs: [], labels: [] };
       } catch (e) {
         useToasts.getState().push(`Couldn't start a workstream on ${item.key}. ${messageOf(e)}`);
         return null;
@@ -321,7 +281,6 @@ export const useWorkstreams = create<WorkstreamsState>()((set, get) => {
       }
       try {
         const ws = await backend.workstreamsClose(id);
-        withdrawHold(id);
         withdrawUndo(adoptOffers.get(id));
         adoptOffers.delete(id);
         const note = reporterNotes.get(id);
@@ -345,8 +304,8 @@ export const useWorkstreams = create<WorkstreamsState>()((set, get) => {
       withdrawClose(id);
       showWorkstreamRow(id);
       const name = done.value.itemKey ?? done.value.title;
-      // It comes back as it stood: a hold the person chose is still theirs to lift.
-      useToasts.getState().push(done.value.heldReason === HELD_PERSON ? `Reopened the workstream on ${name}. It is still held by you; Resume it to carry on.` : `Reopened the workstream on ${name}.`, "info");
+      // It comes back as it stood: a pause is still there to lift.
+      useToasts.getState().push(done.value.pausedReason ? `Reopened the workstream on ${name}. It is still paused; Resume it to carry on.` : `Reopened the workstream on ${name}.`, "info");
       return true;
     },
 
@@ -363,61 +322,15 @@ export const useWorkstreams = create<WorkstreamsState>()((set, get) => {
       return true;
     },
 
-    async loadGlobals() {
-      const backend = get().backend ?? useWorkspace.getState().backend;
-      const settings = await backend?.runsSettings().catch(() => null);
-      if (settings && (get().backend ?? useWorkspace.getState().backend) === backend) set({ globals: settings.autostart });
-    },
-
-    async setMode(id, mode) {
-      const before = get().list.find((v) => v.workstream.id === id)?.workstream;
-      const done = await act(mode === "manage" ? "Couldn't let Pip manage the workstream" : "Couldn't stop Pip managing the workstream", (b) => b.workstreamsSetMode(id, mode));
+    async pause(id) {
+      const done = await act("Couldn't pause the workstream", (b) => b.workstreamsPause(id));
       if (!done.ok) return false;
-      // Back to Advise is the one switch that can be taken back: nothing it stopped needs restarting. It restores the mode a tripwire kept, too.
-      if (before && mode === "advise" && before.mode === "manage" && done.value.mode === "advise") {
-        const name = before.itemKey ?? before.title;
-        offerUndo({
-          text: `Switched ${name} to Advise.`,
-          undone: `${name} is back in Manage.`,
-          undo: () => undoChange(id, { type: "mode", was: before.mode, resumeMode: before.resumeMode ?? null }),
-        });
-      }
+      const name = done.value.itemKey ?? done.value.title;
+      useToasts.getState().push(`Paused ${name}. Resume it to wake Pip there again.`, "info");
       return true;
     },
 
-    async fixRound(reviewRun) {
-      const done = await act("Couldn't send another fix round", (b) => b.workstreamsFixRound(reviewRun));
-      if (!done.ok) return null;
-      void useRuns.getState().reload();
-      return done.value;
-    },
-
-    takeOver: (id, reviewRun) => ok("Couldn't take the workstream over", (b) => b.workstreamsTakeOver(id, reviewRun)),
-
-    async hold(id) {
-      const before = get().list.find((v) => v.workstream.id === id)?.workstream;
-      const done = await act("Couldn't hold the workstream", (b) => b.workstreamsHold(id));
-      if (!done.ok) return false;
-      // Only a hold that changed something is offered back; Pip's turn it cancelled is not restarted, only the hold is lifted.
-      if (before && before.heldReason !== done.value.heldReason && done.value.heldReason === HELD_PERSON) {
-        const name = before.itemKey ?? before.title;
-        withdrawHold(id);
-        holdOffers.set(id, offerUndo({ what: "hold", text: `Held ${name}.`, undone: `${name} is free again.`, undo: () => undoChange(id, { type: "hold", was: before.heldReason }) }));
-      }
-      return true;
-    },
-
-    async resume(id) {
-      const done = await ok("Couldn't resume the workstream", (b) => b.workstreamsResume(id));
-      if (done) withdrawHold(id);
-      return done;
-    },
-
-    async allowMore(id) {
-      const done = await ok("Couldn't allow more steps", (b) => b.workstreamsAllowMore(id));
-      if (done) withdrawHold(id);
-      return done;
-    },
+    resume: (id) => ok("Couldn't resume the workstream", (b) => b.workstreamsResume(id)),
 
     async askReporter(id) {
       const stop = readinessOf(get().list, id);
@@ -515,27 +428,9 @@ export const useWorkstreams = create<WorkstreamsState>()((set, get) => {
       plannedAnyway.set(stop.triageRun, stop.replied || stop.changed ? "now" : "anyway");
       const done = await act("Couldn't plan anyway", (b) => b.workstreamsReadinessOverride(id, stop.triageRun));
       if (!done.ok) plannedAnyway.delete(stop.triageRun);
-      const said = stop.replied ? "Planning now with the reporter's reply on the ticket. The plan starts as soon as the workstream's checks allow." : stop.changed ? "Planning now with the ticket as it is. The plan starts as soon as the workstream's checks allow." : "Planning anyway. The plan starts as soon as the workstream's checks allow.";
+      const said = stop.replied ? "Planning now with the reporter's reply on the ticket. Ask Pip to draft the plan." : stop.changed ? "Planning now with the ticket as it is. Ask Pip to draft the plan." : "Planning anyway. Ask Pip to draft the plan.";
       if (done.ok) useToasts.getState().push(said, "info");
       return done.ok;
-    },
-
-    setRule: (id, rule, on) => ok("Couldn't change the automatic step", (b) => b.workstreamsSetRule(id, rule, on)),
-
-    async holdAll() {
-      const done = await act("Couldn't hold the workstreams", (b) => b.workstreamsHoldAll());
-      if (!done.ok) return null;
-      const n = done.value.length;
-      const open = get().list.length;
-      const said = n ? `Held ${workstreams(n)}. ${n === 1 ? "Its" : "Their"} agents carry on; nothing starts on its own until you resume.` : open ? "Every open workstream is held already." : "There are no open workstreams to hold.";
-      // Each one it held was free before, so each goes back to free; Pip's turns it cancelled are not restarted.
-      if (n) {
-        const ids = new Set(done.value.map((w) => w.id));
-        if (batchOffer) withdrawUndo(batchOffer.offer);
-        batchOffer = { ids, offer: offerUndo({ what: "hold", text: said, undone: `${workstreams(n)} ${n === 1 ? "is" : "are"} free again.`, undo: () => undoAll([...ids]) }) };
-      }
-      else useToasts.getState().push(said, "info");
-      return n;
     },
 
     async stop(id) {
@@ -544,22 +439,13 @@ export const useWorkstreams = create<WorkstreamsState>()((set, get) => {
       const { stopped, failed } = done.value;
       const agents = (n: number) => `${n} ${n === 1 ? "agent" : "agents"}`;
       useToasts.getState().push(
-        `Held the workstream${stopped ? ` and stopped ${agents(stopped)}` : ""}.${failed ? ` ${agents(failed)} couldn't be stopped; see the Agents view.` : ""}`,
+        `Paused the workstream${stopped ? ` and stopped ${agents(stopped)}` : ""}.${failed ? ` ${agents(failed)} couldn't be stopped; see the Agents view.` : ""}`,
         failed ? "error" : "info",
       );
       return true;
     },
   };
 });
-
-/**
- * Whether the rail offers Hold all: while any open workstream is in Manage and not held, or Pip is answering in a
- * workstream's conversation (`conversations`, by conversation, as claudeStore keeps them).
- */
-export function holdAllVisible(list: readonly WorkstreamView[], conversations: Readonly<Record<string, { turns: readonly { status: string }[] } | undefined>>): boolean {
-  if (list.some((v) => v.workstream.closedAt === null && v.workstream.mode === "manage" && v.workstream.heldReason === null)) return true;
-  return Object.entries(conversations).some(([c, conv]) => workstreamOfConversation(c) !== null && !!conv?.turns.some((t) => t.status === "running"));
-}
 
 /**
  * Opens the Pip drawer, or keeps it open, and puts the cursor in its composer. On the Agents view it also opens workstream

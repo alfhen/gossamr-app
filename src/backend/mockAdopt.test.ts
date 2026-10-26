@@ -125,7 +125,7 @@ describe("bringing a ticket's runs and drafts into its workstream (the mock of a
     await expect(backend.workstreamsUndo(ws.id, { type: "adopt", ...moved })).rejects.toThrow(/can't be undone/);
 
     await backend.workstreamsAdopt(ws.id);
-    await backend.workstreamsHold(ws.id);
+    await backend.workstreamsPause(ws.id);
     await expect(backend.workstreamsUndo(ws.id, { type: "adopt", ...moved })).rejects.toThrow(/can't be undone/);
     expect((await backend.runsGet(run.id))?.spec.workstream).toBe(ws.id);
 

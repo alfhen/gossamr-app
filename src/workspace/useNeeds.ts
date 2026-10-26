@@ -1,50 +1,49 @@
 import { useEffect, useMemo, useState } from "react";
 import { needs as buildNeeds, type Need } from "../lib/needs";
 import { reporterAsk, type ReporterAsk } from "../lib/reporterWait";
-import { isHeldByYou } from "../lib/workstreamHold";
 import { useWorkspace } from "../workspaceStore";
-import { lastHeldAt } from "./workViewLogic";
+import { lastPausedAt } from "./workViewLogic";
 import { useRuns } from "./runsStore";
 import { useNow } from "./useNow";
 import { useWorkstreams } from "./workstreamsStore";
 
 /**
- * When each held open workstream was last held, read from its audit once per hold, so a hold ranks in the list by when it
- * happened rather than by when the workstream opened. Only reads.
+ * When each paused open workstream was last paused, read from its audit once per pause, so a pause ranks in the list by when
+ * it happened rather than by when the workstream opened. Only reads.
  */
 let lastRead: Record<string, string> = {};
 
-/** The hold times last read, shared so Pip is told the same order and top need as the list shows. */
-export const lastReadHeldTimes = () => lastRead;
-export const setLastReadHeldTimes = (times: Record<string, string>) => void (lastRead = times);
+/** The pause times last read, shared so Pip is told the same order and top need as the list shows. */
+export const lastReadPausedTimes = () => lastRead;
+export const setLastReadPausedTimes = (times: Record<string, string>) => void (lastRead = times);
 
-function useHeldTimes(): Record<string, string> {
+function usePausedTimes(): Record<string, string> {
   const backend = useWorkstreams((s) => s.backend);
-  const holds = useWorkstreams((s) =>
+  const pauses = useWorkstreams((s) =>
     s.list
-      .filter((v) => v.workstream.closedAt === null && v.workstream.heldReason && !isHeldByYou(v.workstream.heldReason))
-      .map((v) => `${v.workstream.id}\n${v.workstream.heldReason}`)
+      .filter((v) => v.workstream.closedAt === null && v.workstream.pausedReason)
+      .map((v) => `${v.workstream.id}\n${v.workstream.pausedReason}`)
       .join("\t"),
   );
   const [times, setTimes] = useState<Record<string, string>>({});
   useEffect(() => {
-    if (!backend || !holds) return;
+    if (!backend || !pauses) return;
     let live = true;
-    const ids = holds.split("\t").map((h) => h.split("\n")[0]);
-    void Promise.all(ids.map((id) => backend.workstreamsEvents(id).then((events) => [id, lastHeldAt(events)] as const, () => [id, null] as const))).then((read) => {
+    const ids = pauses.split("\t").map((h) => h.split("\n")[0]);
+    void Promise.all(ids.map((id) => backend.workstreamsEvents(id).then((events) => [id, lastPausedAt(events)] as const, () => [id, null] as const))).then((read) => {
       if (!live) return;
       const next = Object.fromEntries(read.filter((r): r is readonly [string, string] => r[1] !== null));
-      setLastReadHeldTimes(next);
+      setLastReadPausedTimes(next);
       setTimes(next);
     });
     return () => {
       live = false;
     };
-  }, [backend, holds]);
+  }, [backend, pauses]);
   return times;
 }
 
-/** When the reporter was asked and nudged, as last read; shared like the hold times. */
+/** When the reporter was asked and nudged, as last read; shared like the pause times. */
 let lastAsked: Record<string, ReporterAsk> = {};
 
 /**
@@ -95,11 +94,11 @@ export function useNeedsYou(): Need[] {
   const proposals = useWorkspace((s) => s.proposals);
   const items = useWorkspace((s) => s.items);
   const peeked = useWorkspace((s) => s.peeked);
-  const heldAt = useHeldTimes();
+  const pausedAt = usePausedTimes();
   const asked = useReporterAsks();
   // Quiet runs come and go with the clock, so it ticks with the Agents view's.
   const now = useNow();
-  return useMemo(() => buildNeeds({ workstreams, runs, proposals: Object.values(proposals), dismissed, heldAt, asked, titleOf: titlesOf(items, peeked), now }), [workstreams, runs, proposals, dismissed, heldAt, asked, items, peeked, now]);
+  return useMemo(() => buildNeeds({ workstreams, runs, proposals: Object.values(proposals), dismissed, pausedAt, asked, titleOf: titlesOf(items, peeked), now }), [workstreams, runs, proposals, dismissed, pausedAt, asked, items, peeked, now]);
 }
 
 /** A ticket's title by its key; one peeked from outside the watched projects has its title in the peek. */
@@ -112,7 +111,7 @@ function titlesOf(items: ReturnType<typeof useWorkspace.getState>["items"], peek
 export function currentNeeds(): Need[] {
   const ws = useWorkspace.getState();
   const runs = useRuns.getState();
-  return buildNeeds({ workstreams: useWorkstreams.getState().list, runs: [...runs.runs, ...runs.archived], proposals: Object.values(ws.proposals), dismissed: runs.dismissed, heldAt: lastRead, asked: lastAsked, titleOf: titlesOf(ws.items, ws.peeked), now: Date.now() });
+  return buildNeeds({ workstreams: useWorkstreams.getState().list, runs: [...runs.runs, ...runs.archived], proposals: Object.values(ws.proposals), dismissed: runs.dismissed, pausedAt: lastRead, asked: lastAsked, titleOf: titlesOf(ws.items, ws.peeked), now: Date.now() });
 }
 
 /** "1 thing needs you", "3 things need you": the one count, in the words the rail badge and the launcher say it. */

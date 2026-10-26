@@ -1,4 +1,4 @@
-import { AUTOSTART_DEFAULTS, DIGEST_MINUTES, SUMMARY_ONLY, type AgentSettings, type ChangedFile, type Intent, type WorkDoc, type CleanupResult, type CloneChoice, type ContainerRef, type FreshCopy, type CodeChange, type ItemRef, type LocalClone, type PlanComment, type Preflight, type ReadOnly, PreflightRow, Proposal, Run, RunEvent, RunFailure, RunQuery, RunOutcome, RunReview, RunKind, RunSpec, RunsChanged, RunsEnvironment, RunState, TicketProposal, WorkstreamRule } from "../types";
+import { DIGEST_MINUTES, SUMMARY_ONLY, type AgentSettings, type ChangedFile, type Intent, type WorkDoc, type CleanupResult, type CloneChoice, type ContainerRef, type FreshCopy, type CodeChange, type ItemRef, type LocalClone, type PlanComment, type Preflight, type ReadOnly, PreflightRow, Proposal, Run, RunEvent, RunFailure, RunQuery, RunOutcome, RunReview, RunKind, RunSpec, RunsChanged, RunsEnvironment, RunState, TicketProposal } from "../types";
 import type { ClearFilter, ClearPreview, DeleteResult, WorktreeInfo } from "../types";
 import { isArchivable, runsWithPendingDrafts, selectClearable } from "../lib/archiveRuns";
 import { containerRef, itemRef } from "./mockConnector";
@@ -13,16 +13,12 @@ import { followUpBlocker, followUpProblem } from "../workspace/followUp";
 import { docFromText, docText } from "../lib/docs";
 import { isReporterQuestions, makerName, PLAN_COMMENT_LABEL } from "../lib/proposals";
 import { revisedByPipUnedited, runAnswerProblem, type MockProposals } from "./mockProposals";
-import { ESCALATION_GONE, textDigest, type MockWorkstreams } from "./mockWorkstreams";
-import { fixRoundMessage, marked, triageReadiness, type ReviewFinding } from "./mockSupervisor";
+import { type MockWorkstreams } from "./mockWorkstreams";
+import { triageReadiness } from "./mockSupervisor";
 import { answeredTriageResult, answeredTriageSummary, thinDescription, unclearTriageResult, unclearTriageSummary } from "./mockReadiness";
 import { withWorkstream } from "../lib/workstreamAdopt";
 import { BUILD_ACCOUNT_LIMIT, BUILD_ACCOUNT_PREFACE, BUILD_NEEDS_PLAN, PIP_CHAIN_KINDS, REVIEW_NEEDS_BUILD, REVIEW_NO_FOCUS, WAITING_FOR_PR_HINT, ASSUMPTIONS_PREFACE, FINDINGS_LIMIT, FINDINGS_PREFACE, INSTRUCTIONS, pipPrompt, NEW_TICKET_TAIL, PLAN_FOLLOW, PLAN_FOLLOW_UNEDITED, PLAN_LIMIT, PUSH_ALLOWED, TICKETLESS_STARTER, buildAccountLabel, checkoutParagraph, checksOutPr, readOnlyRules, testsParagraph, findingsLabel, planLabel, reportParagraph, reviewRefusal, specProblem, withoutMarkers } from "./mockRunKinds";
 
-/** Why a person's fix round isn't sent when none of the review's blocking findings cites a file and line, as `NOTHING_TO_FIX` in src-tauri/src/runs/follow_up.rs. */
-export const NOTHING_TO_FIX = "None of the review's blocking findings cites a file and line, so a fix round has nothing to send. Post the review or take it from here.";
-/** Why a person's fix round isn't sent when the review's output holds Gossamr's data markers, as `REVIEW_MARKED`. */
-export const REVIEW_MARKED = "The review's output holds text Gossamr reserves, so a fix round won't carry it. Post the review or take it from here.";
 
 const CONNECTION = "mock";
 const DESCRIPTION_LIMIT = 30_000;
@@ -500,14 +496,13 @@ const freshCopy = (repo: string): FreshCopy => {
 
 const REFUSAL_DELAY_MS = 600;
 
-/** One launch as the mock launcher made it: the restriction it would pass Claude Code, and the rule that started the run, if one did. */
+/** One launch as the mock launcher made it: the restriction it would pass Claude Code. */
 export interface MockLaunch {
   runId: string;
   kind: RunKind;
   readOnly: ReadOnly | null;
   /** The guard as `RunService::spawn` composes it: the base text, then the read-only sentence, then the report tool's. */
   guard: string;
-  autoStart: WorkstreamRule | null;
   at: string;
 }
 
@@ -753,8 +748,8 @@ export class MockRuns {
     return run;
   }
 
-  /** A run waiting to launch for the run draft `proposalId`, which is marked applied; `autoStart` says a rule started it. */
-  private queueRun(proposalId: string, connectionId: string, item: ItemRef | null, spec: RunSpec, digest: string, autoStart: Run["autoStart"] = null): Run {
+  /** A run waiting to launch for the run draft `proposalId`, which is marked applied. */
+  private queueRun(proposalId: string, connectionId: string, item: ItemRef | null, spec: RunSpec, digest: string): Run {
     const expectedWorktree = worktreeOf(spec);
     if (this.runs.some((r) => r.expectedWorktree === expectedWorktree)) throw new Error("a run already uses that worktree");
     const at = this.now();
@@ -782,7 +777,6 @@ export class MockRuns {
       launchedAt: null,
       lastProgressAt: at,
       endedAt: null,
-      ...(autoStart ? { autoStart } : {}),
     };
     this.proposals.applyRun(proposalId, run.id);
     if (spec.report && this.limits.reportResult) this.reports.set(run.id, { offered: true, report: null, revision: 0, calls: 0, rejections: 0, stale: false });
@@ -910,7 +904,7 @@ export class MockRuns {
 
   /** Whether a run approved before `run` waits for a slot and may start, so it has the next one, as `waits_behind`. */
   private waitsBehind(run: Run): boolean {
-    return this.runs.some((r) => r.id !== run.id && r.state === "queued" && !!r.slotWaitSince && byApproval(r, run) < 0 && !this.held(r));
+    return this.runs.some((r) => r.id !== run.id && r.state === "queued" && !!r.slotWaitSince && byApproval(r, run) < 0 && !this.paused(r));
   }
 
   /** Whether as many runs as the settings allow take a slot, leaving `except` out. */
@@ -920,13 +914,13 @@ export class MockRuns {
 
   /**
    * Starts the runs waiting for a slot, oldest approval first, while there is room, as `launch_waiting` does once a slot
-   * frees. A held workstream's runs wait on, and so do the ones a rule started in it. Returns whether any started.
+   * frees. A paused workstream's runs wait on. Returns whether any started.
    */
   private launchWaiting(): boolean {
     let started = false;
     for (const run of this.runs.filter((r) => r.state === "queued" && r.slotWaitSince).sort(byApproval)) {
       if (this.full(run.id)) break;
-      if (this.held(run)) continue;
+      if (this.paused(run)) continue;
       const at = this.now();
       this.markLaunching(run, { lastProgressAt: at }, at);
       started = true;
@@ -942,7 +936,7 @@ export class MockRuns {
   private markLaunching(run: Run, patch: Partial<Run> = {}, at: string = this.now()): Run {
     const readOnly = readOnlyRules(run.spec);
     const guard = [GUARD, readOnly?.guard, run.spec.report ? REPORT_GUARD : null].filter(Boolean).join(" ");
-    this.launchLog.push({ runId: run.id, kind: run.spec.kind, readOnly, guard, autoStart: run.autoStart?.rule ?? null, at });
+    this.launchLog.push({ runId: run.id, kind: run.spec.kind, readOnly, guard, at });
     return this.update(run.id, { ...patch, state: "launching", launchedAt: at, ...(run.slotWaitSince !== undefined ? { slotWaitSince: null } : {}), readOnly });
   }
 
@@ -957,9 +951,6 @@ export class MockRuns {
     if (current && current.state !== run.state) return current;
     const to = NEXT[run.state];
     if (!to) return run;
-    // A held workstream's runs carry on, and one the person just approved starts, as `runs_approve` launches it; one a
-    // rule started waits on until the workstream is set going.
-    if (run.state === "queued" && run.autoStart && this.held(run)) return run;
     // Over the cap a queued run stays queued, waiting for a slot from the first time it found none.
     if (run.state === "queued" && this.full(run.id)) return run.slotWaitSince ? run : this.update(run.id, { slotWaitSince: this.now() });
     const at = this.now();
@@ -1001,10 +992,10 @@ export class MockRuns {
     return next;
   }
 
-  /** Whether `run`'s workstream is held, so nothing in it launches on its own. */
-  private held(run: Run): boolean {
+  /** Whether `run`'s workstream is paused, so nothing waiting in it launches. */
+  private paused(run: Run): boolean {
     const ws = run.spec.workstream;
-    return !!ws && !!this.workstreams?.get(ws)?.workstream.heldReason;
+    return !!ws && !!this.workstreams?.get(ws)?.workstream.pausedReason;
   }
 
   /** A build sent back to the pull request it opened pushes a new commit to it: the same pull request with a new head, shown once a sync finds it. */
@@ -1093,93 +1084,6 @@ export class MockRuns {
   /** How many drafts run `runId` left that still wait for the person. */
   draftsWaitingFrom(runId: string): number {
     return this.proposals.list({ states: ["pending"] }).filter((p) => p.origin.type === "run" && p.origin.runId === runId).length;
-  }
-
-  /**
-   * The run an auto-start `rule` starts after the finished run `fromRun`, as `Core::autostart_run` does: the spec comes
-   * from its kind's template with every handoff filled in here and no focus, it is drafted by the agent side and approved
-   * with its own digest at once, and it waits to launch with `autoStart` set. The audit gets the rule and the digest.
-   */
-  autoStart(kind: RunKind, fromRun: string, rule: WorkstreamRule, assumptions: readonly string[] = []): Run {
-    const source = this.get(fromRun);
-    if (!source?.item) throw new Error(`there is no finished run ${fromRun} on a ticket`);
-    const workstream = source.spec.workstream ?? null;
-    // A triage or plan carries only the investigation the rule names, never the workstream's newest: the supervisor checked that one.
-    const carried = kind === "triage" && source.spec.kind === "investigate" ? source.id : kind === "plan" ? (source.spec.findingsFromRun ?? null) : null;
-    const made = kind === "build" || kind === "review" ? this.chainSpec(source.item, kind, fromRun, null, workstream).spec : this.plainSpec(source.item, kind, fromRun, null, workstream, carried);
-    let spec: RunSpec = { ...made, focus: null, focusFromRun: null, ...(kind === "plan" && assumptions.length ? { assumptions: [...assumptions] } : {}) };
-    if (spec.kind === "build" && workstream) spec = { ...spec, allowPush: true };
-    // A verify after a passing review checks the pull request at the commit that review read, as `fill_chain_slots` does;
-    // a review with no pinned commit starts none, since the verify would check the base branch instead.
-    if (spec.kind === "verify" && source.spec.kind === "review") {
-      if (source.spec.pr == null || !source.spec.prSha) throw new Error(VERIFY_UNPINNED);
-      spec = { ...spec, pr: source.spec.pr, prSha: source.spec.prSha, base: source.spec.base };
-    }
-    const problem = specProblem(spec, true);
-    if (problem) throw new Error(problem);
-    const proposal = this.proposals.fromRun({ type: "startRun", connectionId: CONNECTION, item: source.item, spec }, null, this.fromRun(source));
-    const digest = mockDigest(spec);
-    const run = this.queueRun(proposal.id, CONNECTION, source.item, spec, digest, { rule, afterRun: fromRun });
-    this.workstreams?.record(workstream, "supervisor", "autostart", { runId: run.id, proposalId: proposal.id, digest, detail: `${rule} after ${fromRun}` });
-    this.changed();
-    return run;
-  }
-
-  /**
-   * Sends the workstream's finished build `id` back with a fix round's `message`, as `RunService::send_fix_round` does:
-   * only a build that pushes, Working again for one more pass, and a supervisor line with the message's digest and length.
-   */
-  sendFixRound(id: string, message: string): Run {
-    const run = this.get(id);
-    if (!run) throw new Error("that run no longer exists");
-    if (run.spec.kind !== "build" || !run.spec.allowPush || !run.spec.workstream) throw new Error("only a workstream's build that pushes gets a fix round");
-    const blocker = followUpBlocker(run);
-    if (blocker) throw new Error(`This run can't be sent back: ${blocker}.`);
-    const passes = (run.passes ?? 1) + 1;
-    this.followUps.set(run.id, [...(this.followUps.get(run.id) ?? []), { text: "Gossamr sent the review's blocking findings back to fix", detail: `Pass ${passes}. Started by the fix-round rule.` }]);
-    const at = this.now();
-    const next = this.update(run.id, { state: "working", passes, needs: null, suggestedReply: null, unsentAnswer: null, error: null, endedAt: null, stoppedByLimit: false, continuedAt: at, lastProgressAt: at, lastDetail: "Reading the review's findings" });
-    this.markStale(run.id);
-    this.workstreams?.record(run.spec.workstream, "supervisor", "fix_round_sent", { runId: run.id, digest: textDigest(message), detail: String([...message].length) });
-    this.changed();
-    return next;
-  }
-
-  /**
-   * The person's "Run another fix round" on review `reviewRun`, which still blocks after the automatic fix rounds ran out,
-   * as `RunService::send_person_fix_round`: only while the workstream's escalation is about that review, the same build
-   * checks as an automatic round, and the message `fixRoundMessage` makes of the review's blocking findings. The audit
-   * gets `fix_round_person` (after the review) and then `fix_round_sent`, both by the person; neither is an `autostart`
-   * line, so the supervisor's count of automatic rounds stays as it was.
-   */
-  sendPersonFixRound(reviewRun: string): Run {
-    const review = this.get(reviewRun);
-    const ws = review?.spec.workstream;
-    const escalation = ws ? this.workstreams?.get(ws)?.escalation : null;
-    if (!review || !ws || !escalation || escalation.reviewRun !== review.id) throw new Error(ESCALATION_GONE);
-    const run = this.get(escalation.buildRun);
-    if (!run || run.spec.workstream !== ws) throw new Error("a fix round goes only to a workstream's build");
-    if (run.spec.kind !== "build" || !run.spec.allowPush) throw new Error("a fix round goes only to a workstream's build that pushes to a draft pull request");
-    if (run.state !== "done") throw new Error(`This build is ${run.state}, so it can't be sent a fix round.`);
-    const blocker = followUpBlocker(run);
-    if (blocker) throw new Error(`This build can't be sent back: ${blocker}.`);
-    const findings = (this.resolvedOf(review.id)?.findings ?? []) as ReviewFinding[];
-    const texts = [review.result, review.summary, ...findings.flatMap((f) => [f.text, f.where])].filter((t): t is string => !!t);
-    if (marked(texts)) throw new Error(REVIEW_MARKED);
-    const message = fixRoundMessage(findings);
-    if (!message) throw new Error(NOTHING_TO_FIX);
-    const digest = textDigest(message);
-    // A resume that fails records nothing, so the escalation stays the person's to choose.
-    if (this.wakeFails) throw new Error("Couldn't wake the agent: claude exited.");
-    this.workstreams?.record(ws, "person", "fix_round_person", { runId: run.id, digest, detail: `after ${review.id}` });
-    const passes = (run.passes ?? 1) + 1;
-    this.followUps.set(run.id, [...(this.followUps.get(run.id) ?? []), { text: "You asked for another pass: fix what the review found blocking", detail: `Pass ${passes}. Started by you after the ${escalation.rounds} automatic rounds.` }]);
-    const at = this.now();
-    const next = this.update(run.id, { state: "working", passes, needs: null, suggestedReply: null, unsentAnswer: null, error: null, endedAt: null, stoppedByLimit: false, continuedAt: at, lastProgressAt: at, lastDetail: "Reading the review's findings" });
-    this.markStale(run.id);
-    this.workstreams?.record(ws, "person", "fix_round_sent", { runId: run.id, digest, detail: String([...message].length) });
-    this.changed();
-    return next;
   }
 
   /** The pull request as GitHub has it, or one this backend's own builds opened once it shows. */
@@ -2221,7 +2125,7 @@ export class MockRuns {
     return this.proposals.fromRun({ type: "link", from: itemRef(key), to: item, kind: "blocks" }, `Blocked by ${key}`, this.fromRun(run));
   }
 
-  private limits: AgentSettings = { maxRuns: 3, wallClockMinutes: 60, tokenCap: 3_000_000, terminal: "terminal", draftOnFinish: true, reportResult: false, autostart: AUTOSTART_DEFAULTS, managerTurnsPerDay: 40, notifications: "workstream", digestMinutes: DIGEST_MINUTES };
+  private limits: AgentSettings = { maxRuns: 3, wallClockMinutes: 60, tokenCap: 3_000_000, terminal: "terminal", draftOnFinish: true, reportResult: false, notifications: "workstream", digestMinutes: DIGEST_MINUTES };
   /** Run ids whose worktree holds work that was never pushed; `claude rm` refuses these. */
   readonly unpushed = new Set<string>();
 
@@ -2238,8 +2142,6 @@ export class MockRuns {
       wallClockMinutes: clamp(settings.wallClockMinutes, 0, 10_080),
       tokenCap: clamp(settings.tokenCap, 0, 1_000_000_000),
       // A settings sheet from before these existed sends none; the defaults fill in, as the backend's serde does.
-      autostart: { ...AUTOSTART_DEFAULTS, ...settings.autostart },
-      managerTurnsPerDay: clamp(settings.managerTurnsPerDay ?? 40, 0, 500),
       notifications: settings.notifications ?? "workstream",
       digestMinutes: clamp(settings.digestMinutes ?? DIGEST_MINUTES, 1, 1_440),
     };

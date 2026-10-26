@@ -6,7 +6,7 @@ import { agentsHome, askPip, homeSettled, needOfKind, openAgents, openApp, paneS
 // not queuing (G30), live regions said once (G31), names for a screen reader (G32), where F6 and Enter land (G33), and the Needs
 // you tag's verb (G34).
 
-const MANAGED = "runs=empty&prSurface=manual&wsManage=1&pipPace=1";
+const SAMPLE = "runs=empty&prSurface=manual&pipPace=1";
 const VAGUE = "CA-408";
 const setup = (page: Page) => page.getByRole("dialog", { name: "Start an agent" });
 const safety = (page: Page) => page.getByRole("dialog", { name: "Agents safety and settings" });
@@ -26,7 +26,7 @@ async function openSetup(page: Page, key: string) {
 test.describe("the start review (G22, G23)", () => {
   test("leads with what the agent may do, and keeps the technical checks and the command under a closed Technical details", async ({ page }) => {
     test.setTimeout(90_000);
-    await openApp(page, MANAGED);
+    await openApp(page, SAMPLE);
     await startWorkstream(page, VAGUE);
     await openSetup(page, VAGUE);
     const sheet = setup(page);
@@ -61,7 +61,7 @@ test.describe("the start review (G22, G23)", () => {
 });
 
 test.describe("the workstream controls (G24, G31, G32)", () => {
-  test("say what Manage does in words, hint at Hold, Close and the menu, and say what the empty notes will hold", async ({ page }) => {
+  test("hint at Pause, Close and the menu, and say what the empty notes will hold", async ({ page }) => {
     test.setTimeout(90_000);
     await openApp(page, "runs=empty");
     await allProjects(page);
@@ -69,24 +69,17 @@ test.describe("the workstream controls (G24, G31, G32)", () => {
     await openAgents(page);
     await selectWorkstream(page, VAGUE);
     const controls = pipPane(page).locator("[data-workstream-controls]");
-    await expect(controls.locator("[data-manage-state]")).toHaveText("off: Pip only answers");
-    const manage = controls.getByRole("switch", { name: "Manage this workstream" });
-    await expect(manage).toHaveAccessibleDescription(/Pip advises: it answers when asked/);
-    await manage.click();
-    await expect(controls.locator("[data-manage-state]")).toHaveText("on: Pip starts the next steps");
-    await expect(manage).toHaveAccessibleDescription(/Pip manages: after each step finishes it starts the next one/);
-    await expect(controls.getByRole("button", { name: "Hold" })).toHaveAccessibleDescription("No wakes and no automatic steps; its agents carry on");
+    await expect(controls.getByRole("button", { name: "Pause" })).toHaveAccessibleDescription("Pip isn't woken; its agents carry on");
     await expect(controls.getByRole("button", { name: "Close…" })).toHaveAccessibleDescription("Its conversation goes back to General; its agents and drafts are kept in General");
     await expect(controls.getByRole("button", { name: "More for this workstream" })).toHaveAccessibleDescription("More: stop the workstream");
     await expect(agentsHome(page).getByRole("region", { name: "Pip's notes" })).toContainText("No notes yet. Pip writes here what it decides to remember about this workstream");
   });
-
 });
 
 test.describe("an unclear ticket (G27, G32, G33, G34)", () => {
   test("the Needs you tag of a drafted agent says Review, as its button does", async ({ page }) => {
     test.setTimeout(90_000);
-    await openApp(page, MANAGED);
+    await openApp(page, SAMPLE);
     await startWorkstream(page, "CA-401");
     await openAgents(page);
     await selectWorkstream(page, "CA-401");

@@ -1685,17 +1685,11 @@ mod tests {
             repo: None,
             title: id.into(),
             pip_session: None,
-            mode: Default::default(),
-            held_reason: None,
+            paused_reason: None,
             notes: None,
             created_at: now(),
             closed_at: None,
-            budget: Default::default(),
-            spent: Default::default(),
-            rules: Default::default(),
             basis: None,
-            drifted: Vec::new(),
-            resume_mode: None,
         };
         db.insert_workstream(&ws).unwrap();
     }

@@ -6,12 +6,11 @@ import { itemRef } from "./mockConnector";
 import { commentText, jiraNote } from "./mockRunResult";
 import { ASSUMPTIONS_PREFACE, FINDINGS_LIMIT, FINDINGS_PREFACE, PLAN_FOLLOW, PLAN_FOLLOW_UNEDITED, READ_ONLY_GUARD, readOnlyRules, specProblem, withoutMarkers } from "./mockRunKinds";
 import { MockSupervisor } from "./mockSupervisor";
-import { ESCALATION_GONE, MockWorkstreams } from "./mockWorkstreams";
-import { heldText } from "../lib/workstreamHold";
+import { MockWorkstreams } from "./mockWorkstreams";
 import { DENIED_MESSAGE } from "../lib/permission";
 import { RESUME_TEXT } from "../workspace/runSheetLogic";
 import { mockAsk } from "./mockPip";
-import { GUARD as GUARD_TEXT, MOVED_ON, VERIFY_UNPINNED, findingsFitted, mockDigest, renderPrompt } from "./mockRuns";
+import { GUARD as GUARD_TEXT, MOVED_ON, findingsFitted, mockDigest, renderPrompt } from "./mockRuns";
 
 const spec: RunSpec = {
   kind: "investigate",
@@ -941,7 +940,7 @@ describe("mock runs of a read-only kind launch restricted, as RunService::spawn 
     const launched = b.runs.get(run.id)!;
     expect(launched.state).toBe("launching");
     expect(launched.readOnly).toEqual(readOnlyRules(spec));
-    expect(b.runs.launches()).toEqual([{ runId: run.id, kind: "investigate", readOnly: readOnlyRules(spec), guard: `${GUARD_TEXT} ${READ_ONLY_GUARD}`, autoStart: null, at: launched.launchedAt }]);
+    expect(b.runs.launches()).toEqual([{ runId: run.id, kind: "investigate", readOnly: readOnlyRules(spec), guard: `${GUARD_TEXT} ${READ_ONLY_GUARD}`, at: launched.launchedAt }]);
     b.runs.advance(run.id);
     b.runs.advance(run.id);
     expect(b.runs.get(run.id)).toMatchObject({ state: "done", readOnly: readOnlyRules(spec) });
@@ -957,7 +956,7 @@ describe("mock runs of a read-only kind launch restricted, as RunService::spawn 
     const run = await b.runsApprove(p.id, (await b.runsReview(p.id)).digest);
     b.runs.advance(run.id);
     expect(b.runs.get(run.id)).toMatchObject({ state: "launching", readOnly: null });
-    expect(b.runs.launches()).toEqual([expect.objectContaining({ runId: run.id, kind: "build", readOnly: null, autoStart: null })]);
+    expect(b.runs.launches()).toEqual([expect.objectContaining({ runId: run.id, kind: "build", readOnly: null })]);
   });
 
   it("records the restriction of a run that waited for a slot when launch_waiting starts it", async () => {
@@ -979,45 +978,24 @@ describe("mock runs of a read-only kind launch restricted, as RunService::spawn 
     ]);
   });
 
-  it("records an auto-started triage's restriction with its rule, and a fix round to the build adds no launch", async () => {
-    const b = new MockBackend({ runs: { seed: "empty", prSurfaceMs: null }, wsManage: true, githubRepos: 12 });
+  it("records a triage's read-only restriction on its launch, and none on a build's", async () => {
+    const b = new MockBackend({ runs: { seed: "empty", prSurfaceMs: null }, githubRepos: 12 });
     b.supervisor.dispose();
-    new MockSupervisor({ runs: b.runs, workstreams: b.workstreams, proposals: b.proposals, wake: () => {}, hasWaitingWake: () => false });
     const ws = b.workstreams.open(itemRef("CA-401")).id;
-    b.workstreams.setBudget(ws, { autoTurns: 12 });
-    const newest = (kind: RunSpec["kind"]) => b.runs.list({ workstream: ws }).find((r) => r.spec.kind === kind)!;
-    const finish = (id: string) => {
-      for (let i = 0; i < 3 && b.runs.get(id)?.state !== "done"; i++) b.runs.advance(id);
-      expect(b.runs.get(id)?.state).toBe("done");
+    const start = async (kind: RunSpec["kind"], name: string) => {
+      const made = await b.runsDraft({ ...spec, ...storefront, kind, instruction: "", name, ticketBlock: null, workstream: ws, allowPush: kind === "build" }, itemRef("CA-401"));
+      return b.runsApprove(made.id, (await b.runsReview(made.id)).digest);
     };
-    const made = await b.runsDraft({ ...spec, ...storefront, instruction: "", name: "ca-401-ro", ticketBlock: null, workstream: ws }, itemRef("CA-401"));
-    const r1 = await b.runsApprove(made.id, (await b.runsReview(made.id)).digest);
-    finish(r1.id);
-
-    const triage = newest("triage");
-    expect(triage.autoStart?.rule).toBe("investigate_triage");
+    const triage = await start("triage", "ca-401-ro");
     b.runs.advance(triage.id);
     expect(b.runs.get(triage.id)?.readOnly).toEqual(readOnlyRules(triage.spec));
-    expect(b.runs.launches().find((l) => l.runId === triage.id)).toMatchObject({ kind: "triage", readOnly: { mode: "dontAsk" }, autoStart: "investigate_triage" });
-    finish(triage.id);
-    const plan = newest("plan");
-    finish(plan.id);
-    const planDraft = b.proposals.list({ states: ["pending"] }).find((p) => p.origin.type === "run" && p.origin.runId === plan.id && p.intent.type === "rewrite")!;
-    await b.proposalsApprove(planDraft.id);
-    const buildRun = newest("build");
-    finish(buildRun.id);
-    expect(b.runs.get(buildRun.id)?.readOnly).toBeNull();
-    expect(b.runs.launches().find((l) => l.runId === buildRun.id)).toMatchObject({ readOnly: null, autoStart: "plan_build" });
-    b.runs.surfacePullRequests();
-    const review = newest("review");
-    finish(review.id);
-    expect(b.runs.launches().find((l) => l.runId === review.id)?.readOnly?.allow).toEqual(expect.arrayContaining([`Bash(git fetch origin pull/${review.spec.pr}/head)`, "Bash(cargo test)"]));
-    expect(b.runs.launches().find((l) => l.runId === review.id)?.guard).toContain(READ_ONLY_GUARD);
-    expect(b.runs.launches().find((l) => l.runId === buildRun.id)?.guard).not.toContain(READ_ONLY_GUARD);
-
-    // The review blocked: the fix round resumes the build's session, so nothing new launches and it stays unrestricted.
-    expect(b.runs.get(buildRun.id)).toMatchObject({ state: "working", passes: 2, readOnly: null });
-    expect(b.runs.launches().map((l) => l.runId)).toEqual([r1.id, triage.id, plan.id, buildRun.id, review.id]);
+    expect(b.runs.launches().find((l) => l.runId === triage.id)).toMatchObject({ kind: "triage", readOnly: { mode: "dontAsk" } });
+    const build = await start("build", "ca-401-build");
+    b.runs.advance(build.id);
+    expect(b.runs.get(build.id)?.readOnly).toBeNull();
+    expect(b.runs.launches().find((l) => l.runId === build.id)).toMatchObject({ readOnly: null });
+    expect(b.runs.launches().find((l) => l.runId === triage.id)?.guard).toContain(READ_ONLY_GUARD);
+    expect(b.runs.launches().find((l) => l.runId === build.id)?.guard).not.toContain(READ_ONLY_GUARD);
   });
 
   it("drops the restriction of a run taken over in a session Gossamr didn't launch, as `take_over` does", async () => {
@@ -1026,25 +1004,6 @@ describe("mock runs of a read-only kind launch restricted, as RunService::spawn 
     expect(run.readOnly?.mode).toBe("dontAsk");
     const adopted = b.runs.adoptSession(run.id, "bbb748a7");
     expect(adopted).toMatchObject({ shortId: "bbb748a7", readOnly: null });
-  });
-
-  it("starts a verify after a passing review on the pull request at the commit the review read, as `fill_chain_slots` does", () => {
-    const b = new MockBackend({ runs: { seed: "kinds" } });
-    const review = b.runs.list().find((r) => r.spec.kind === "review" && r.state === "done")!;
-    const verify = b.runs.autoStart("verify", review.id, "review_verify");
-    expect(verify.spec).toMatchObject({ kind: "verify", pr: review.spec.pr, prSha: review.spec.prSha, base: review.spec.base });
-    expect(readOnlyRules(verify.spec)!.allow).toEqual(expect.arrayContaining([`Bash(git fetch origin pull/${review.spec.pr}/head)`, `Bash(git checkout --detach ${review.spec.prSha})`]));
-    expect(renderPrompt(verify.spec)).toContain(`Verify pull request #${review.spec.pr} in ${review.spec.repo} at commit ${review.spec.prSha}, the commit its review read.`);
-    expect(renderPrompt(verify.spec)).not.toContain("as it is on `");
-  });
-
-  it("starts no verify after a review with no pinned commit, which would check the base branch instead", () => {
-    const b = new MockBackend({ runs: { seed: "kinds" } });
-    const review = b.runs.list().find((r) => r.spec.kind === "review" && r.state === "done")!;
-    (b.runs as unknown as { update(id: string, patch: Partial<Run>): Run }).update(review.id, { spec: { ...review.spec, prSha: null } });
-    const before = b.runs.list().length;
-    expect(() => b.runs.autoStart("verify", review.id, "review_verify")).toThrow(VERIFY_UNPINNED);
-    expect(b.runs.list()).toHaveLength(before);
   });
 
   it("drafts a person's verify with no pull request, whatever the caller names, as `Core::draft_run` does", async () => {
@@ -1078,50 +1037,12 @@ describe("mock runs of a read-only kind launch restricted, as RunService::spawn 
   });
 });
 
-// The sample's workstreams, as the backend holds them: what this file's runs make of a workstream's stage and holds.
-describe("the sample's workstreams, held and reviewed", () => {
-  it("puts back on resume the Manage a tripwire took away, unless the person chose a mode meanwhile, as the backend does", () => {
-    const store = new MockWorkstreams(() => [], () => "title", undefined, undefined, false);
-    const ws = store.open(null, "managed");
-    store.setMode(ws.id, "manage");
-    const tripped = store.trip(ws.id, "basis_drift", null, ["description"]);
-    expect([tripped.mode, tripped.resumeMode]).toEqual(["advise", "manage"]);
-    const resumed = store.resume(ws.id);
-    expect([resumed.mode, resumed.resumeMode, resumed.heldReason]).toEqual(["manage", undefined, null]);
-    expect(store.events(ws.id).slice(-2).map((e) => [e.actor, e.action, e.detail])).toEqual([
-      ["person", "resumed", "tripwire:basis_drift"],
-      ["person", "mode_set", "manage"],
-    ]);
-
-    // From Advise there is nothing to put back.
-    store.setMode(ws.id, "advise");
-    expect(store.trip(ws.id, "marker", "r1").resumeMode).toBeUndefined();
-    expect(store.resume(ws.id).mode).toBe("advise");
-
-    // The person's choice while held wins.
-    store.setMode(ws.id, "manage");
-    store.trip(ws.id, "repeated_failure", "r1");
-    expect(store.setMode(ws.id, "advise").resumeMode).toBeUndefined();
-    expect(store.resume(ws.id).mode).toBe("advise");
-    expect(store.events(ws.id).slice(-1)[0]).toMatchObject({ action: "resumed", detail: "tripwire:repeated_failure" });
-
-    // A trip that lands on the person's hold keeps their hold and still remembers Manage, which their Resume puts back.
-    store.setMode(ws.id, "manage");
-    store.hold(ws.id);
-    expect(store.trip(ws.id, "marker", "r1")).toMatchObject({ heldReason: "person", mode: "advise", resumeMode: "manage" });
-    expect(store.resume(ws.id)).toMatchObject({ heldReason: null, mode: "manage" });
-    // One that lands on a budget hold, which a message would lift, takes its place: only Resume lifts a tripwire.
-    store.hold(ws.id, "budget", "supervisor");
-    expect(store.trip(ws.id, "marker", "r1")).toMatchObject({ heldReason: "tripwire:marker", resumeMode: "manage" });
-    store.personWrote(ws.id);
-    expect(store.get(ws.id)?.workstream.heldReason).toBe("tripwire:marker");
-    expect(store.resume(ws.id)).toMatchObject({ heldReason: null, mode: "manage" });
-  });
-
+// The sample's workstreams, as the backend holds them: what this file's runs make of a workstream's stage.
+describe("the sample's workstreams, reviewed", () => {
   it("gives the stage from each finished review's verdict: blocking is review with changes needed, a pass is done", () => {
     const at = (n: number) => new Date(Date.UTC(2026, 8, 30, 10, n)).toISOString();
     const runs: Run[] = [];
-    const store = new MockWorkstreams(() => runs, () => "title", undefined, undefined, false);
+    const store = new MockWorkstreams(() => runs, () => "title");
     const ws = store.open(null, "reviewed");
     const reviewRun = (id: string, n: number) => ({ id, state: "done", queuedAt: at(n), spec: { kind: "review", workstream: ws.id } }) as Run;
     const verdicts: Record<string, "pass" | "blocking"> = { r1: "blocking" };
@@ -1137,25 +1058,6 @@ describe("the sample's workstreams, held and reviewed", () => {
     expect(store.get(ws.id)?.reviewBlocking).toBeUndefined();
   });
 
-  it("says a used-up budget as steps whichever counter ran out, and a message lifts the hold only when the turns did", () => {
-    const store = new MockWorkstreams(() => [], () => "title", undefined, undefined, false);
-    const ws = store.open(null, "spent");
-    store.hold(ws.id, "budget", "supervisor");
-    const spend = (s: object) => {
-      (store as unknown as { all: { id: string; spent: object }[] }).all.find((w) => w.id === ws.id)!.spent = s;
-    };
-    const banner = () => heldText(store.get(ws.id)!.workstream.heldReason, null)!;
-    // The wakes ran out: a message resets only the turns, so a message keeps the hold. The banner says only "steps".
-    spend({ autoTurns: 3, wakes: 12, tokens: 0 });
-    expect(banner()).toBe("Held: automatic steps used up");
-    store.personWrote(ws.id);
-    expect(store.get(ws.id)?.workstream.heldReason).toBe("budget");
-    // The turns ran out: a message lifts it.
-    spend({ autoTurns: 11, wakes: 9, tokens: 0 });
-    expect(banner()).toBe("Held: automatic steps used up");
-    store.personWrote(ws.id);
-    expect(store.get(ws.id)?.workstream.heldReason).toBeNull();
-  });
 });
 
 describe("answering a permission prompt, as runs/permission.rs", () => {
@@ -1164,7 +1066,7 @@ describe("answering a permission prompt, as runs/permission.rs", () => {
 
   /** A Build (or `kind`) in a workstream on CA-401, working, with no supervisor of its own unless `supervised`. */
   async function working(kind: RunSpec["kind"] = "build", supervised = false) {
-    const b = new MockBackend({ runs: { seed: "empty", prSurfaceMs: null }, wsManage: supervised });
+    const b = new MockBackend({ runs: { seed: "empty", prSurfaceMs: null } });
     if (!supervised) b.supervisor.dispose();
     const ws = b.workstreams.open(itemRef("CA-401")).id;
     const made = await b.runsDraft({ ...spec, ...storefront, kind, instruction: "", name: "ca-401-fix", ticketBlock: null, workstream: ws, allowPush: kind === "build" }, itemRef("CA-401"));
@@ -1244,7 +1146,7 @@ describe("answering a permission prompt, as runs/permission.rs", () => {
     b.runs.askPermission(run.id, `approve Bash: ${PUSH}`);
     const asking = b.runs.get(run.id);
     b.supervisor.check();
-    new MockSupervisor({ runs: b.runs, workstreams: b.workstreams, proposals: b.proposals, wake: () => {}, hasWaitingWake: () => false }).check();
+    new MockSupervisor({ runs: b.runs, workstreams: b.workstreams, proposals: b.proposals, wake: () => {} }).check();
     expect(b.runs.get(run.id)).toEqual(asking);
     expect(b.runs.attached).toEqual([]);
     expect(b.workstreams.events(ws).filter((e) => e.action.startsWith("permission"))).toEqual([]);
@@ -1256,23 +1158,12 @@ describe("answering a permission prompt, as runs/permission.rs", () => {
     const stopped = b.runs.get(run.id);
     expect(stopped).toMatchObject({ state: "stopped", stoppedByLimit: true });
     b.supervisor.check();
-    new MockSupervisor({ runs: b.runs, workstreams: b.workstreams, proposals: b.proposals, wake: () => {}, hasWaitingWake: () => false }).check();
+    new MockSupervisor({ runs: b.runs, workstreams: b.workstreams, proposals: b.proposals, wake: () => {} }).check();
     expect(b.runs.get(run.id)).toEqual(stopped);
     expect(b.runs.attached).toEqual([]);
     expect(b.workstreams.events(ws).filter((e) => e.action.includes("resume"))).toEqual([]);
     // The person's Resume is the runs' own answer path, with the words Resume sends.
     expect(await b.runsAnswer(run.id, RESUME_TEXT)).toMatchObject({ state: "working", stoppedByLimit: false, error: null });
-  });
-});
-
-describe("the person's fix round, as RunService::send_person_fix_round", () => {
-  it("is refused unless the review is waiting for the person's choice, and changes nothing then", async () => {
-    const backend = new MockBackend();
-    const done = (await backend.runsList()).find((r) => r.state === "done")!;
-    const before = await backend.runsList();
-    await expect(backend.workstreamsFixRound(done.id)).rejects.toThrow(ESCALATION_GONE);
-    await expect(backend.workstreamsFixRound("no-such-run")).rejects.toThrow(ESCALATION_GONE);
-    expect(await backend.runsList()).toEqual(before);
   });
 });
 

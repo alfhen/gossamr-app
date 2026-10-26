@@ -1,10 +1,9 @@
 import { expect, test, type Page } from "@playwright/test";
-import { agentsHome, closeWorkstreamSheet, groupOpen, needsStack, workstreamSheet, askPip, blockRun, expandNeedsYou, holdBySystem, homeConversation, homeConversationRegion, homeSettled, jiraWrites, loseRun, mockAttached, mockRuns, needRow, needsPane, needsPaneHeading, needsYouCount, needsYouTray, openAgents, openApp, selectWorkstream, startWorkstream, stopRunAtLimit, workstreamGroup } from "./support/app";
+import { agentsHome, closeWorkstreamSheet, groupOpen, needsStack, workstreamSheet, askPip, blockRun, expandNeedsYou, pauseAtCeiling, homeConversation, homeConversationRegion, homeSettled, jiraWrites, loseRun, mockAttached, mockRuns, needRow, needsPane, needsPaneHeading, needsYouCount, needsYouTray, openAgents, openApp, selectWorkstream, startWorkstream, stopRunAtLimit, workstreamGroup } from "./support/app";
 
 // One Needs you (docs/needs-you.md): what waits on the person is one count everywhere, a filter on Agents, and each
 // workstream's decisions are at the top of its detail.
 
-const MANAGED = "wsManage=1";
 
 /** The rail's Pip home and Agents buttons. */
 const homeButton = (page: Page) => page.locator("[data-rail]").getByRole("button", { name: /^Agents/ });
@@ -46,11 +45,11 @@ async function workstreamOnHome(page: Page) {
 }
 
 test("a workstream's needs are one stack at the top of its detail, most urgent first, and one count on the rail, the chip and under the composer", async ({ page }) => {
-  await openApp(page, MANAGED);
+  await openApp(page);
   await expect(agentsButton(page)).toHaveCount(1);
   await workstreamOnHome(page);
-  // The sample leaves CA-401's plan to approve; the workstream gets a hold (a restart's: the person's own Hold is no need) and a draft of Pip's: three needs, one stack.
-  await holdBySystem(page, "CA-401", "restart");
+  // The sample leaves CA-401's plan to approve; the workstream gets a pause (the ceiling's) and a draft of Pip's: three needs, one stack.
+  await pauseAtCeiling(page, "CA-401");
   await askPip(page, "Draft a comment");
   await homeSettled(page);
 
@@ -61,12 +60,12 @@ test("a workstream's needs are one stack at the top of its detail, most urgent f
   await expect(items.nth(0)).toContainText("Approve the plan");
   await expect(items.nth(0)).toContainText("approving its description update is how the plan is approved");
   await expect(items.nth(0).locator("[data-needs-you-chip]")).toHaveText("Decide");
-  await expect(items.nth(1)).toContainText("Held after a restart");
+  await expect(items.nth(1)).toContainText("Paused: Pip was woken too often today");
   await expect(items.nth(2)).toContainText("Draft comment");
   // Only one is open at a time: the first, until another is chosen.
   await expect(items.nth(0)).toHaveAttribute("data-open", "true");
   await expect(needsPane(page)).toHaveCount(1);
-  await needButton(page, /Held after a restart/).click();
+  await needButton(page, /Paused: Pip was woken too often today/).click();
   await expect(items.nth(1)).toHaveAttribute("data-open", "true");
   await expect(needsPane(page)).toHaveCount(1);
 
@@ -133,12 +132,12 @@ test("answering a question from the pane sends it to the run, which leaves Needs
 });
 
 test("approving a draft from the pane writes it to Jira, and focus goes to the next need; Esc comes back to the list", async ({ page }) => {
-  await openApp(page, `${MANAGED}&runs=empty`);
+  await openApp(page, "runs=empty");
   await expect(agentsButton(page)).toHaveCount(1);
   await workstreamOnHome(page);
   await askPip(page, "Draft a comment");
   await homeSettled(page);
-  await holdBySystem(page, "CA-401", "restart");
+  await pauseAtCeiling(page, "CA-401");
   await expect(needsYouCount(page)).toHaveText("2");
 
   await expect(needsStack(page).locator("[data-needs-pane]").first()).toBeVisible();
@@ -159,9 +158,9 @@ test("approving a draft from the pane writes it to Jira, and focus goes to the n
   await expect.poll(async () => (await jiraWrites(page)).map((w) => w.type)).toEqual(["comment"]);
   await expect(need(page, /Draft comment/)).toHaveCount(0);
   await expect(needsYouCount(page)).toHaveText("1");
-  // The hold is next: its decision opens in the pane, with Resume.
-  await expect(pane).toHaveAttribute("data-kind", "hold");
-  await expect(pane.locator("[data-held-banner]").getByRole("button", { name: "Resume" })).toBeVisible();
+  // The pause is next: its decision opens in the pane, with Resume.
+  await expect(pane).toHaveAttribute("data-kind", "paused");
+  await expect(pane.locator("[data-paused-banner]").getByRole("button", { name: "Resume" })).toBeVisible();
   await expect.poll(() => focusInPane(page)).toBe(true);
   await pane.getByRole("button", { name: "Resume" }).click();
   await expect(needsYouCount(page)).toHaveText("0");
@@ -173,7 +172,7 @@ test("approving a draft from the pane writes it to Jira, and focus goes to the n
 });
 
 test("'Approve N safe drafts' approves comments and moves together after one confirm, with what each does shown first", async ({ page }) => {
-  await openApp(page, `${MANAGED}&runs=empty`);
+  await openApp(page, "runs=empty");
   await expect(agentsButton(page)).toHaveCount(1);
   await workstreamOnHome(page);
   await askPip(page, "Draft a comment");
@@ -290,7 +289,7 @@ test("a sign-in reads 'needs you to sign in to Claude'; a limit stop is in the l
 });
 
 test("d on a run's card asks for Enter before it denies, and e goes to the answer box of its question", async ({ page }) => {
-  await onHome(page, MANAGED);
+  await onHome(page);
   const card = (key: string) => agentsHome(page).locator("article[data-run-id]").filter({ hasText: key }).first();
   const permission = card("DEVOPS-471");
   await permission.focus();

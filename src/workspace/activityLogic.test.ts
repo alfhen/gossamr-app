@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { FeedEntry, Proposal, WorkItem, WorkstreamEvent, WorkstreamView } from "../types";
-import { CHIPS, CHIP_LABEL, buildRows, eventText, toWorkstreamEntries, dayBreaks, dayLabel, draftsFor, groupByDay, initials, queryFor, stepIndex, verb, withRead } from "./activityLogic";
+import { CHIPS, CHIP_LABEL, buildRows, toWorkstreamEntries, dayBreaks, dayLabel, draftsFor, groupByDay, initials, queryFor, stepIndex, verb, withRead } from "./activityLogic";
 
 const entry = (id: string, at: string, over: Partial<FeedEntry> = {}): FeedEntry => ({
   id,
@@ -106,11 +106,10 @@ describe("the Pip & agents chip", () => {
       ev(1, "person", "run_approved", "r1"),
       ev(2, "supervisor", "wake", "r1", "r1|done"),
       ev(3, "supervisor", "autostart", "r2", "investigate_triage after r1"),
-      ev(4, "person", "held", null, "person"),
+      ev(4, "person", "paused", null, "person"),
       ev(5, "person", "resumed", null, "person"),
-      ev(6, "supervisor", "autostart", "r3", "fix_round after r2"),
-      ev(7, "supervisor", "fix_round_sent", "r3", "120"),
-      ev(8, "supervisor", "budget", null, "amber"),
+      ev(6, "supervisor", "fix_round_sent", "r3", "120"),
+      ev(7, "supervisor", "budget", null, "amber"),
     ],
   };
 
@@ -123,34 +122,27 @@ describe("the Pip & agents chip", () => {
     const ref = { connectionId: "c", externalId: "A-1", key: "A-1" };
     const entries = toWorkstreamEntries(events, [ws], () => ref);
     expect(entries.map((e) => e.text)).toEqual([
-      "Fix round 1 sent to R3 automatically",
       "You resumed the workstream",
-      "You held the workstream",
-      "Triage R2 started automatically after R1",
+      "You paused the workstream",
       "Pip picked up R1",
       "You started R1",
       "You opened the workstream",
     ]);
-    expect(entries[0]).toMatchObject({ source: "pip", workstreamId: "w1", itemKey: "A-1", item: ref, runId: "r3", action: "fix_round_sent", unread: false });
+    expect(entries[0]).toMatchObject({ source: "pip", workstreamId: "w1", itemKey: "A-1", item: ref, action: "resumed", unread: false });
     expect(new Set(entries.map((e) => e.id)).size).toBe(entries.length);
     expect(toWorkstreamEntries({}, [ws])).toEqual([]);
   });
 
-  it("says a fix round the rules sent was automatic, and one the person chose was not", () => {
-    const label = (id: string | null) => id ?? "a run";
-    expect(eventText(ev(1, "supervisor", "fix_round_sent", "R3"), label, 1)).toBe("Fix round 1 sent to R3 automatically");
-    expect(eventText(ev(2, "person", "fix_round_sent", "R3"), label, 3)).toBe("Fix round 3 sent to R3");
+  it("leaves out what an earlier version recorded: automatic starts, fix rounds, budgets, rules and modes", () => {
+    const old = ["autostart", "fix_round_sent", "fix_rounds_exhausted", "steps_allowed", "budget_reset", "rule_set", "mode_set", "escalation_taken", "escalation_posted"];
+    expect(toWorkstreamEntries({ w1: old.map((a, n) => ev(n + 1, "supervisor", a, "R3", "5")) }, [ws])).toEqual([]);
   });
 
-  it("words the person's Allow 5 more", () => {
-    const allowed = ev(9, "person", "steps_allowed", null, "5");
-    expect(toWorkstreamEntries({ w1: [allowed] }, [ws]).map((e) => e.text)).toEqual(["You allowed 5 more automatic steps"]);
-  });
-
-  it("says a message of the person's gave the automatic steps back, rather than that they reset the budget", () => {
-    const texts = (detail: string | null) => toWorkstreamEntries({ w1: [ev(1, "person", "budget_reset", null, detail)] }, [ws]).map((e) => e.text);
-    expect(texts("message")).toEqual(["Your message gave Pip its automatic steps back"]);
-    expect(texts(null)).toEqual(["You reset the budget"]);
+  it("words a pause and a resume by who made them", () => {
+    const texts = (actor: Parameters<typeof ev>[1], action: string) => toWorkstreamEntries({ w1: [ev(1, actor, action, null, null)] }, [ws]).map((e) => e.text);
+    expect(texts("person", "paused")).toEqual(["You paused the workstream"]);
+    expect(texts("supervisor", "paused")).toEqual(["The workstream was paused"]);
+    expect(texts("person", "resumed")).toEqual(["You resumed the workstream"]);
   });
 
   it("words the person's three choices on a ticket that isn't clear enough to plan, naming the triage", () => {

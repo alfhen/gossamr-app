@@ -32,7 +32,7 @@ import { useRunSetup } from "./runSetupStore";
 import { usePrefs } from "./prefs";
 import { useWorkstreams } from "./workstreamsStore";
 import { labelsByRun } from "../lib/workstreamStage";
-import { AutoStarted, RunLabel, RunRef } from "./AgentCard";
+import { RunLabel, RunRef } from "./AgentCard";
 
 export interface RunSheetActions extends ResultActions {
   close(): void;
@@ -183,13 +183,11 @@ function Attention({ run, label, permissionAnswered, opened, answering, slotPlac
 
 /**
  * Why a queued run waits. One the person approved over the cap starts on its own when a slot frees, `place` in line. One
- * in a workstream starts on its own once the workstream isn't held and a slot is free (one a rule started, only while the
- * workstream is still in Manage with that rule on); any other waits for the person.
+ * in a workstream starts on its own once the workstream isn't paused and a slot is free; any other waits for the person.
  */
 export function waitingText(run: Run, place: number | null = null): string {
   if (run.slotWaitSince && !run.spec.workstream) return `It is approved and starts on its own when one of the running agents finishes${place ? ` (${ordinal(place)} in line)` : ""}. Stop it if you no longer want it.`;
-  if (run.autoStart) return "A rule started it, and it launches on its own once a slot is free, while the workstream is in Manage, not held and has that step on. Until then it waits.";
-  if (run.spec.workstream) return "It is approved and launches on its own once a slot is free and its workstream isn't held. Until then it waits.";
+  if (run.spec.workstream) return "It is approved and launches on its own once a slot is free and its workstream isn't paused. Until then it waits.";
   return "It is approved but has not been launched, as after a restart. Nothing runs until you start it.";
 }
 
@@ -333,7 +331,6 @@ export function RunSheetView({ run, now, ticketTitle, place, label, wide, onWide
           <RunRef run={run} />
         </div>
         <h2 className="m-0 text-[20px] leading-tight font-semibold [overflow-wrap:anywhere]">{title}</h2>
-        <AutoStarted run={run} className="text-sm" />
         <Facts run={run} now={now} ticketTitle={ticketTitle} on={on} />
         {answerSent && <AnswerSent />}
         {permissionAnswered?.kind === "denied" && <PermissionSent answered={permissionAnswered} />}

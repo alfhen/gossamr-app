@@ -113,7 +113,7 @@ export const useToasts = create<ToastState>((set, get) => {
       const id = ++seq;
       set((s) => {
         const toast: Toast = { id, text, tone, action, at: Date.now(), current: options?.current, lifetime: options?.lifetime, keep, ...(options?.spoken === false ? { spoken: false as const } : {}) };
-        // The same offer again (a second Hold of the same workstream) replaces the one before it, on screen or waiting (an error on screen stays).
+        // The same offer again (the same offer made twice) replaces the one before it, on screen or waiting (an error on screen stays).
         const queue = keep ? s.toasts.filter((t, i) => (i === 0 && t.tone === "error") || t.text !== text) : s.toasts;
         // An error goes ahead of the notes waiting, behind the one on screen and any errors before it. An offer to undo goes
         // to the front: it is a few seconds long, and what it undoes is what the person just did. It takes the screen from a

@@ -55,8 +55,6 @@ export interface CommandActions {
   startWorkstream(): void;
   /** Asks, in the peek, to confirm closing the workstream on the ticket the peek shows. */
   closeWorkstream(): void;
-  /** Holds every open workstream and stops Pip's turns in them, as the rail's Hold all does. */
-  holdAllWorkstreams(): void;
   jumpToItem(item: WorkItem): void;
   askPip(query: string): void;
   /** Goes to the Agents screen: every run across every workstream. */
@@ -89,16 +87,6 @@ export interface CommandContext {
   /** How many projects "Looks fine" has taught the clarity notice to leave a gap out for, for "Give back what Looks fine learned". */
   clarityLearned?: number;
 }
-
-/** The shortcut for Hold all workstreams, as the rail and the palette show it. */
-export const HOLD_ALL_HINT = "⌘⇧.";
-
-/**
- * Whether a key press is Hold all (Cmd/Ctrl+Shift+Period). `code` is read first since Shift turns the key into `>` on
- * most layouts; nothing else in Gossamr takes Cmd/Ctrl+Shift.
- */
-export const isHoldAllKey = (ev: Pick<KeyboardEvent, "key" | "code" | "metaKey" | "ctrlKey" | "shiftKey" | "altKey">) =>
-  (ev.metaKey || ev.ctrlKey) && ev.shiftKey && !ev.altKey && (ev.code === "Period" || ev.key === "." || ev.key === ">");
 
 /** Whether the keyboard has no place after a page change: on the body, or on an element that went away with it. */
 export const focusLost = (active: Pick<Element, "isConnected"> | null, body: unknown): boolean => !active || active === body || !active.isConnected;
@@ -159,15 +147,6 @@ export function buildCommands(containers: readonly WorkContainer[], savedViews: 
     { id: "agents:needs", group: "Agents", icon: "✋", label: "Show what needs me", hint: ctx.needsYou ? `${ctx.needsYou} waiting` : undefined, keywords: "needs you agents waiting permission question blocked failed drafts approve decide", run: a.showNeedsYou },
     { id: "agents:stop", group: "Agents", icon: "■", label: "Stop all agents…", keywords: "agents halt kill end everything", run: a.openAgentSafety },
     { id: "agents:safety", group: "Agents", icon: "⛨", label: "Agent safety and settings", keywords: "agents touch permissions", run: a.openAgentSafety },
-    {
-      id: "workstream:hold-all",
-      group: "Agents",
-      icon: "⏸",
-      label: "Hold all workstreams",
-      hint: HOLD_ALL_HINT,
-      keywords: "pause supervisor manage automatic wake pip stop everything",
-      run: a.holdAllWorkstreams,
-    },
     ...(ctx.ticket
       ? [
           {

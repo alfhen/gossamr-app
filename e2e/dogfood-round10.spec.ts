@@ -71,7 +71,7 @@ test.describe("the pause before posting edited words (G4)", () => {
 test.describe("Approve N safe drafts with two identical comments (G2)", () => {
   test("covers a comment and its copy once, says which it left out, and posts nothing until the confirm", async ({ page }) => {
     test.setTimeout(120_000);
-    await openApp(page, "runs=empty&prSurface=manual&wsManage=1&pipPace=1");
+    await openApp(page, "runs=empty&prSurface=manual&pipPace=1");
     await startWorkstream(page, "CA-401");
     await openAgents(page);
     await selectWorkstream(page, "CA-401");

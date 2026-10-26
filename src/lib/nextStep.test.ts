@@ -1,11 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { MockBackend } from "../backend/mock";
-import { AUTOSTART_DEFAULTS, HELD_BUDGET, HELD_PERSON, HELD_RESTART, TRIPWIRE } from "../types";
-import type { Intent, ItemRef, Proposal, Run, RunKind, RunState, WorkstreamRule, WorkstreamStage, WorkstreamView } from "../types";
+import type { Intent, ItemRef, Proposal, Run, RunKind, RunState, PauseReason, WorkstreamStage, WorkstreamView } from "../types";
 import { needs as buildNeeds, type Need } from "./needs";
 import { docFromText } from "./docs";
-import { approvalStartsBuild, fixRoundOnPost, nextStep, planApproved, reviewPostFixRound } from "./nextStep";
-import { budgetView } from "./workstreamHold";
+import { nextStep } from "./nextStep";
 import { followWithReply } from "./reporterWait";
 
 const NOW = Date.parse("2026-09-30T12:00:00Z");
@@ -29,10 +27,7 @@ const run = (id: string, kind: RunKind, state: RunState, over: Partial<Run> = {}
 });
 
 interface Over {
-  mode?: "manage" | "advise";
-  heldReason?: string | null;
-  rules?: Partial<Record<WorkstreamRule, boolean>>;
-  spent?: { autoTurns: number; wakes: number };
+  pausedReason?: PauseReason | null;
   stage?: WorkstreamStage;
   waitingForPr?: string | null;
   reviewBlocking?: boolean;
@@ -40,40 +35,31 @@ interface Over {
 }
 
 /** A workstream on CA-401 whose runs are `runs`, named R1, R2 and so on in the order given. */
-const view = (runs: Run[], over: Over = {}): WorkstreamView => {
-  const workstream = {
+const view = (runs: Run[], over: Over = {}): WorkstreamView => ({
+  workstream: {
     id: "ws-1",
     connectionId: "mock",
     itemKey: "CA-401",
     repo: null,
     title: "CA-401 Something",
     pipSession: null,
-    mode: over.mode ?? "manage",
-    heldReason: over.heldReason ?? null,
+    pausedReason: over.pausedReason ?? null,
     notes: null,
     createdAt: iso(600),
     closedAt: over.closedAt ?? null,
-    budget: { autoTurns: null, wakes: null, tokens: null },
-    spent: { ...(over.spent ?? { autoTurns: 0, wakes: 0 }), tokens: 0 },
-    rules: over.rules ?? {},
     basis: null,
-  };
-  return {
-    workstream,
-    stage: over.stage ?? "intake",
-    runs: runs.map((r) => r.id),
-    labels: runs.map((r, n) => [r.id, `R${n + 1}`]),
-    waitingForPr: over.waitingForPr ?? null,
-    reviewBlocking: over.reviewBlocking ?? false,
-    escalation: null,
-    budget: budgetView(workstream),
-  };
-};
+  },
+  stage: over.stage ?? "intake",
+  runs: runs.map((r) => r.id),
+  labels: runs.map((r, n) => [r.id, `R${n + 1}`]),
+  waitingForPr: over.waitingForPr ?? null,
+  reviewBlocking: over.reviewBlocking ?? false,
+});
 
 const needsOf = (v: WorkstreamView, runs: Run[], proposals: Proposal[] = []): Need[] => buildNeeds({ workstreams: [v], runs, proposals, dismissed: new Set(), now: NOW });
-const next = (runs: Run[], over: Over = {}, proposals: Proposal[] = [], globals = AUTOSTART_DEFAULTS, events: Parameters<typeof nextStep>[5] = []) => {
+const next = (runs: Run[], over: Over = {}, proposals: Proposal[] = []) => {
   const v = view(runs, over);
-  return nextStep(v, runs, proposals, needsOf(v, runs, proposals), globals, events);
+  return nextStep(v, runs, proposals, needsOf(v, runs, proposals));
 };
 const text = (runs: Run[], over: Over = {}, proposals: Proposal[] = []) => next(runs, over, proposals)?.text;
 
@@ -95,71 +81,14 @@ const applied = (id: string, from: string): Proposal =>
   }) as Proposal;
 
 describe("nextStep while a run works", () => {
-  it("says a review starts when a build finishes, as the rules would start it", () => {
-    const result = next([run("b", "build", "working")], { stage: "build" });
-    expect(result).toMatchObject({ kind: "auto", need: null, text: "Next: when R1 (Build) finishes, a review starts automatically." });
-  });
-
-  it("names the other steps' followers: triage after an investigation", () => {
-    expect(text([run("i", "investigate", "working")])).toBe("Next: when R1 (Investigate) finishes, a triage starts automatically.");
-  });
-
-  it("starts nothing after a build that may not push, and says why", () => {
-    const result = next([run("b", "build", "working", { spec: { ...base.spec, kind: "build", workstream: "ws-1", allowPush: false } })]);
-    expect(result?.kind).toBe("manual");
-    expect(result?.text).toBe("Next: when R1 (Build) finishes, nothing starts on its own: it may not push, so there is no pull request to review. Ask Pip or use ⌘K to start the next step.");
-  });
-
-  it("says nothing starts when the rule's own switch is off, naming the rule", () => {
-    expect(text([run("b", "build", "working")], { rules: { build_review: false } })).toBe("Next: when R1 (Build) finishes, nothing starts on its own: “Build's PR → Review” is off. Ask Pip or use ⌘K to start the next step.");
-  });
-
-  it("follows Settings for a rule the workstream has no switch for", () => {
-    const v = view([run("b", "build", "working")]);
-    const off = nextStep(v, [run("b", "build", "working")], [], [], { ...AUTOSTART_DEFAULTS, buildReview: false });
-    expect(off?.kind).toBe("manual");
-    // The workstream's own switch wins over Settings.
-    const v2 = view([run("b", "build", "working")], { rules: { build_review: true } });
-    expect(nextStep(v2, [run("b", "build", "working")], [], [], { ...AUTOSTART_DEFAULTS, buildReview: false })?.kind).toBe("auto");
-  });
-
-  it("says it depends on the verdict while a review works, never promising a fix round or a verify", () => {
-    const result = next([run("r", "review", "working", { spec: { ...base.spec, kind: "review", workstream: "ws-1", buildFromRun: "b" } })]);
-    expect(result).toMatchObject({ kind: "depends", text: "Next: depends on R1's review verdict." });
-  });
-
-  it("says nothing follows a review when fix rounds and verify are both off", () => {
-    const text2 = text([run("r", "review", "working", { spec: { ...base.spec, kind: "review", workstream: "ws-1", buildFromRun: "b" } })], { rules: { fix_round: false, review_verify: false } });
-    expect(text2).toBe("Next: when R1 (Review) finishes, nothing starts on its own: “Blocking review → fix round” and “Passing review → Verify” are off. Ask Pip or use ⌘K to start the next step.");
-  });
-
-  it("says it depends on the triage's result, since a plan starts only if one is recommended", () => {
-    expect(next([run("t", "triage", "working")])).toMatchObject({ kind: "depends", text: "Next: depends on R1's triage: a plan starts automatically only if it recommends one and finds the ticket ready to plan." });
-    expect(next([run("t", "triage", "working")], { rules: { triage_plan: false } })?.kind).toBe("manual");
-  });
-
-  it("says a build starts only once the plan is approved", () => {
-    expect(next([run("p", "plan", "working")])).toMatchObject({ kind: "depends", text: "Next: when R1 (Plan) finishes and you approve its plan, a build starts automatically." });
-    expect(next([run("p", "plan", "working")], { rules: { plan_build: false } })?.kind).toBe("manual");
-  });
-
-  it("says nothing follows a verification", () => {
-    expect(text([run("v", "verify", "working")])).toBe("Next: when R1 (Verify) finishes, nothing starts on its own: nothing follows a verification on its own. Ask Pip or use ⌘K to start the next step.");
-  });
-
-  it("starts nothing after a run that is not on a ticket", () => {
-    expect(text([run("i", "investigate", "working", { item: null })])).toContain("it is not on a ticket");
-  });
-
-  it("mentions the steps left once the budget runs low, and says it is used up once it is", () => {
-    expect(text([run("b", "build", "working")], { spent: { autoTurns: 9, wakes: 0 } })).toBe("Next: when R1 (Build) finishes, a review starts automatically (2 of 11 automatic steps left).");
-    expect(next([run("b", "build", "working")], { spent: { autoTurns: 11, wakes: 0 } })).toMatchObject({ kind: "spent", text: "Next: the automatic steps are used up. Ask Pip or use ⌘K to start the next step." });
-    expect(next([run("b", "build", "working")], { spent: { autoTurns: 0, wakes: 12 } })?.kind).toBe("spent");
+  it("says Pip is woken when it finishes, naming the run and its step", () => {
+    expect(next([run("b", "build", "working")], { stage: "build" })).toMatchObject({ kind: "running", need: null, text: "Next: when R1 (Build) finishes, Pip is woken to decide what comes next." });
+    expect(text([run("i", "investigate", "working")])).toBe("Next: when R1 (Investigate) finishes, Pip is woken to decide what comes next.");
   });
 
   it("is a launching or queued run's line too", () => {
-    expect(next([run("b", "build", "launching")])?.kind).toBe("auto");
-    expect(next([run("b", "build", "queued")])?.kind).toBe("auto");
+    expect(next([run("b", "build", "launching")])?.kind).toBe("running");
+    expect(next([run("b", "build", "queued")])?.kind).toBe("running");
   });
 });
 
@@ -195,17 +124,17 @@ describe("nextStep when the person is waited on", () => {
   it("says the reporter replied, and when, once their answer ended the wait and the person has not chosen", () => {
     const runs = [run("t", "triage", "done")];
     const v = { ...view(runs), reporterReplied: true, reporterRepliedAt: iso(180) } as WorkstreamView;
-    const result = nextStep(v, runs, [], [], AUTOSTART_DEFAULTS, [], new Date(NOW));
+    const result = nextStep(v, runs, [], [], new Date(NOW));
     expect(result).toMatchObject({ kind: "reporter", need: null, text: "Next: the reporter replied 3 hours ago; read it, then Looks fine or ask again." });
-    expect(nextStep({ ...v, reporterRepliedAt: undefined } as WorkstreamView, runs, [], [], AUTOSTART_DEFAULTS, [], new Date(NOW))?.text).toBe("Next: the reporter replied; read it, then Looks fine or ask again.");
+    expect(nextStep({ ...v, reporterRepliedAt: undefined } as WorkstreamView, runs, [], [], new Date(NOW))?.text).toBe("Next: the reporter replied; read it, then Looks fine or ask again.");
     // A need still comes first, and a step in hand carries on.
     const going = [run("b", "build", "working")];
-    expect(nextStep({ ...view(going), reporterReplied: true } as WorkstreamView, going, [], [], AUTOSTART_DEFAULTS, [], new Date(NOW))?.kind).not.toBe("reporter");
-    expect(nextStep(view(runs), runs, [], [], AUTOSTART_DEFAULTS, [], new Date(NOW))?.kind).not.toBe("reporter");
+    expect(nextStep({ ...view(going), reporterReplied: true } as WorkstreamView, going, [], [], new Date(NOW))?.kind).not.toBe("reporter");
+    expect(nextStep(view(runs), runs, [], [], new Date(NOW))?.kind).not.toBe("reporter");
     // "Looks fine" after the reply is choosing (G6): the line moves on to the chain, though the ticket still counts as changed.
     const chosen = followWithReply([{ actor: "person", action: "readiness_asked", proposalId: "d", at: iso(300) }, { actor: "person", action: "draft_approved", proposalId: "d", at: iso(290) }, { actor: "person", action: "clarity_dismissed", proposalId: null, at: iso(100) }], [iso(180)]).follow;
     expect(chosen).toEqual({ waiting: null, changed: true, replied: false });
-    expect(nextStep({ ...view(runs), reporterReplied: chosen.replied } as WorkstreamView, runs, [], [], AUTOSTART_DEFAULTS, [], new Date(NOW))?.text).not.toContain("Looks fine or ask again");
+    expect(nextStep({ ...view(runs), reporterReplied: chosen.replied } as WorkstreamView, runs, [], [], new Date(NOW))?.text).not.toContain("Looks fine or ask again");
   });
 
   it("adds no count when the person is waited on for one thing only", () => {
@@ -220,20 +149,17 @@ describe("nextStep when the person is waited on", () => {
 
   it("does not hide a working run behind a draft that only needs approving, but shows it once nothing works", () => {
     const draft = { ...applied("d1", "b"), state: { type: "pending" } as const, intent: { type: "comment", item: ref("CA-401"), body: docFromText("Hi"), mentions: [] } as unknown as Intent, origin: { type: "chat", requestId: "q", workstream: "ws-1" } } as Proposal;
-    expect(next([run("b", "build", "working")], {}, [draft])?.kind).toBe("auto");
-    const idle = next([run("b", "build", "done")], { stage: "build", rules: { build_review: false } }, [draft]);
+    expect(next([run("b", "build", "working")], {}, [draft])?.kind).toBe("running");
+    const idle = next([run("b", "build", "done")], { stage: "build" }, [draft]);
     expect(idle?.kind).toBe("waiting");
     expect(idle?.need?.kind).toBe("draft");
   });
 
-  it("is not waiting on a draft while a step is queued or about to start by a rule; it is once the line would be idle", () => {
+  it("is not waiting on a draft while a step is queued; it is once nothing is", () => {
     const draft = { ...applied("d1", "b"), state: { type: "pending" } as const, intent: { type: "comment", item: ref("CA-401"), body: docFromText("Hi"), mentions: [] } as unknown as Intent, origin: { type: "chat", requestId: "q", workstream: "ws-1" } } as Proposal;
-    expect(next([run("b", "build", "queued")], { stage: "build" }, [draft])).toMatchObject({ kind: "auto", need: null });
-    // The build has finished and build_review is on: a review is about to start.
-    expect(next([run("b", "build", "done")], { stage: "build", rules: { build_review: true } }, [draft])).toMatchObject({ kind: "auto", need: null, text: "Next: a review starts automatically after R1 (Build)." });
+    expect(next([run("b", "build", "queued")], { stage: "build" }, [draft])).toMatchObject({ kind: "running", need: null });
     expect(next([], {}, [draft])).toMatchObject({ kind: "waiting" });
-    // A draft decides again where the rule is off.
-    expect(next([run("b", "build", "done")], { stage: "build", rules: { build_review: false } }, [draft])?.kind).toBe("waiting");
+    expect(next([run("b", "build", "done")], { stage: "build" }, [draft])?.kind).toBe("waiting");
   });
 
   it("is waiting on a failed run, which stays a need until dealt with", () => {
@@ -241,60 +167,15 @@ describe("nextStep when the person is waited on", () => {
   });
 });
 
-describe("nextStep in Advise", () => {
-  it("says nothing starts on its own, whether a run works or nothing does", () => {
-    const line = "Next: nothing starts on its own while Manage is off. Ask Pip to draft the next step (for example “Build this”), or start an agent from ⌘K.";
-    expect(next([run("b", "build", "working")], { mode: "advise" })).toMatchObject({ kind: "advise", text: line, need: null });
-    expect(text([], { mode: "advise" })).toBe(line);
-    expect(text([run("t", "triage", "done")], { mode: "advise" })).toBe(line);
+describe("nextStep when paused", () => {
+  it("says it is paused with the reason and that Resume continues", () => {
+    expect(next([run("b", "build", "working")], { pausedReason: "person" })).toMatchObject({ kind: "paused", text: "Next: paused. Resume to continue.", need: null });
+    expect(text([], { pausedReason: "ceiling" })).toBe("Next: paused: Pip was woken too often today. Resume to continue.");
   });
 
-  it("offers to draft the Build once the plan is approved, and not before or elsewhere (G14)", () => {
-    const plan = run("p", "plan", "done");
-    const offered = next([plan], { mode: "advise" }, [applied("d1", "p")]);
-    expect(offered).toMatchObject({ kind: "advise", draft: { label: "Draft the Build", ask: "Build this" } });
-    expect(next([plan], { mode: "advise" })?.draft).toBeUndefined();
-    expect(next([plan], { mode: "advise" }, [{ ...applied("d1", "p"), state: { type: "skipped" } } as unknown as Proposal])?.draft).toBeUndefined();
-    expect(next([plan, run("b", "build", "done", { queuedAt: iso(5) })], { mode: "advise" }, [applied("d1", "p")])?.draft).toBeUndefined();
-    expect(next([plan], {}, [applied("d1", "p")])?.draft).toBeUndefined();
-    // Another draft waiting turns the line into "waiting on you", and the Build stays one press away.
-    const comment = { ...applied("d2", "p"), intent: { type: "comment", item: ref("CA-401"), body: docFromText("Hi") } as unknown as Intent, state: { type: "pending" } } as Proposal;
-    expect(next([plan], { mode: "advise" }, [applied("d1", "p"), comment])).toMatchObject({ kind: "waiting", draft: { label: "Draft the Build", ask: "Build this" } });
-  });
-
-  it("never says a rule starts a step", () => {
-    for (const kind of ["investigate", "triage", "plan", "build", "review", "verify"] as const) expect(text([run("x", kind, "working")], { mode: "advise" })).not.toMatch(/automatically/);
-  });
-});
-
-describe("nextStep when held", () => {
-  it("says it is held with the reason and that Resume continues", () => {
-    expect(next([run("b", "build", "working")], { heldReason: HELD_PERSON })).toMatchObject({ kind: "held", text: "Next: held by you. Resume to continue.", need: null });
-    expect(text([], { heldReason: HELD_RESTART })).toBe("Next: held after a restart. Resume to continue.");
-    expect(text([], { heldReason: HELD_BUDGET, mode: "advise" })).toBe("Next: held: budget. Resume to continue.");
-    expect(text([], { heldReason: `${TRIPWIRE}repeated_failure` })).toBe("Next: held: the same step failed twice. Resume to continue.");
-  });
-
-  it("points a budget hold at its question in Needs you, and says nothing of a hold the person chose being a need", () => {
-    const result = next([run("b", "build", "working")], { heldReason: HELD_BUDGET, spent: { autoTurns: 11, wakes: 11 } });
-    expect(result).toMatchObject({ kind: "held", text: "Next: the automatic steps are used up. Choose in Needs you: allow 5 more, or switch to Advise." });
-    expect(result?.need).toMatchObject({ key: "budget:ws-1", kind: "budget", title: "CA-401 used its 11 automatic steps" });
-    expect(next([run("b", "build", "working")], { heldReason: HELD_PERSON })?.need).toBeNull();
-  });
-
-  it("outranks every other line, a waiting need and Advise included", () => {
+  it("outranks every other line, a waiting need included", () => {
     const runs = [run("b", "build", "needsPermission", { needs: "ls" })];
-    expect(next(runs, { heldReason: HELD_PERSON, mode: "advise" })?.kind).toBe("held");
-  });
-});
-
-describe("nextStep when the budget is spent", () => {
-  it("says the click starts the next step, with nothing running too", () => {
-    expect(text([run("t", "triage", "done")], { spent: { autoTurns: 11, wakes: 0 } })).toBe("Next: the automatic steps are used up. Ask Pip or use ⌘K to start the next step.");
-  });
-
-  it("says nothing of a budget while there is plenty left", () => {
-    expect(text([run("b", "build", "working")])).not.toMatch(/budget|steps left|turns/);
+    expect(next(runs, { pausedReason: "person" })?.kind).toBe("paused");
   });
 });
 
@@ -307,10 +188,6 @@ describe("nextStep when the chain is finished", () => {
   it("says verified after a verification", () => {
     expect(text([run("v", "verify", "done")], { stage: "done" })).toBe("Next: nothing left. The PR is verified and waits for you to merge it.");
   });
-
-  it("holds for Advise too, since nothing is left to start", () => {
-    expect(next([run("r", "review", "done")], { stage: "done", mode: "advise" })?.kind).toBe("done");
-  });
 });
 
 describe("nextStep when a run waits for a slot", () => {
@@ -319,61 +196,15 @@ describe("nextStep when a run waits for a slot", () => {
     const first = queued("a", 5, "ws-other");
     const mine = queued("b", 3);
     const v = view([mine]);
-    expect(nextStep(v, [first, mine], [], [], AUTOSTART_DEFAULTS)).toMatchObject({ kind: "slot", text: "Next: R1 starts when a slot frees (2nd in line)." });
-    expect(nextStep(v, [mine], [], [], AUTOSTART_DEFAULTS)?.text).toBe("Next: R1 starts when a slot frees (1st in line).");
+    expect(nextStep(v, [first, mine], [], [])).toMatchObject({ kind: "slot", text: "Next: R1 starts when a slot frees (2nd in line)." });
+    expect(nextStep(v, [mine], [], [])?.text).toBe("Next: R1 starts when a slot frees (1st in line).");
   });
 });
 
 describe("nextStep after the last run finished", () => {
-  it("says the rule starts the next step when it has not started yet", () => {
-    expect(text([run("i", "investigate", "done")])).toBe("Next: a triage starts automatically after R1 (Investigate).");
-    expect(text([run("p", "plan", "done")], {}, [applied("d", "p")])).toBe("Next: a build starts automatically after R1 (Plan).");
-  });
-
-  it("waits for the plan to be approved: no build starts for an unapproved plan", () => {
-    expect(next([run("p", "plan", "done")], {})?.kind).not.toBe("auto");
-  });
-
-  it("says a review is waiting for the build's pull request", () => {
-    expect(next([run("b", "build", "done")], { waitingForPr: "b" })).toMatchObject({ kind: "auto", text: "Next: waiting for R1's pull request to show up; then a review starts automatically." });
-  });
-
-  it("starts a review for a build that has a pull request, once", () => {
-    expect(text([run("b", "build", "done")])).toBe("Next: a review starts automatically after R1 (Build).");
-    // A review of this commit exists already, so the rule has nothing to start.
-    const reviewed = run("r", "review", "done", { spec: { ...base.spec, kind: "review", workstream: "ws-1", buildFromRun: "b", prSha: null } });
-    expect(next([run("b", "build", "done"), reviewed], { stage: "review" })?.kind).not.toBe("auto");
-  });
-
-  it("says a fix round starts after a blocking review, and that it does not when that switch is off", () => {
-    const blocking = run("r", "review", "done", { spec: { ...base.spec, kind: "review", workstream: "ws-1", buildFromRun: "b" } });
-    expect(next([run("b", "build", "done"), blocking], { stage: "review", reviewBlocking: true })).toMatchObject({ kind: "auto", text: "Next: a fix round starts automatically after R2 (Review)." });
-    expect(next([run("b", "build", "done"), blocking], { stage: "review", reviewBlocking: true, rules: { fix_round: false } })?.kind).toBe("manual");
-  });
-
-  it("says no fix round starts once the automatic rounds ran out, counting them as the supervisor does", () => {
-    const blocking = run("r", "review", "done", { spec: { ...base.spec, kind: "review", workstream: "ws-1", buildFromRun: "b" } });
-    const sent = (n: number) => ({ at: iso(30 - n), actor: "supervisor" as const, action: "autostart", runId: "b", detail: `fix_round after r${n}` });
-    const runs = [run("b", "build", "done"), blocking];
-    expect(next(runs, { stage: "review", reviewBlocking: true }, [], AUTOSTART_DEFAULTS, [sent(1)])?.kind).toBe("auto");
-    expect(next(runs, { stage: "review", reviewBlocking: true }, [], AUTOSTART_DEFAULTS, [sent(1), sent(2)])).toMatchObject({ kind: "manual", text: "Next: R2's review still blocks after 2 fix rounds and no fix round starts on its own. Ask Pip or use ⌘K to start the next step." });
-  });
-
-  it("says nothing starts on its own once the person posted a blocking review", () => {
-    const blocking = run("r", "review", "done", { spec: { ...base.spec, kind: "review", workstream: "ws-1", buildFromRun: "b" } });
-    const posted = { at: iso(2), actor: "person" as const, action: "review_posted", runId: null, detail: null };
-    expect(next([run("b", "build", "done"), blocking], { stage: "review", reviewBlocking: true }, [], AUTOSTART_DEFAULTS, [posted])).toMatchObject({ kind: "manual", text: "Next: the review is posted; nothing starts on its own. Ask Pip or use ⌘K to start the next step." });
-  });
-
-  it("says nothing starts after a triage that did not lead to a plan", () => {
-    expect(text([run("t", "triage", "done")])).toBe("Next: nothing starts on its own after R1 (Triage): it did not call for a plan. Ask Pip or use ⌘K to start the next step.");
-  });
-
-  it("says nothing starts after a stopped run, which is waiting on the person only if it asks to be dealt with", () => {
-    expect(text([run("b", "build", "stopped")])).toBe("Next: nothing starts on its own after R1 (Build) stopped. Ask Pip or use ⌘K to start the next step.");
-  });
-
-  it("is nothing running when there are no runs", () => {
+  it("says nothing is running after a run that finished, failed or stopped, and when there are no runs", () => {
+    expect(text([run("t", "triage", "done")])).toBe("Next: nothing is running after R1 (Triage) finished. Ask Pip or use ⌘K to start the next step.");
+    expect(text([run("b", "build", "stopped")])).toBe("Next: nothing is running after R1 (Build) stopped. Ask Pip or use ⌘K to start the next step.");
     expect(next([])).toMatchObject({ kind: "idle", text: "Next: nothing is running. Ask Pip, or start a step yourself." });
   });
 });
@@ -386,12 +217,12 @@ describe("nextStep edge cases", () => {
   it("ignores runs that are not the workstream's", () => {
     const v = view([run("b", "build", "working")]);
     const other = run("o", "investigate", "needsPermission", { needs: "ls" });
-    expect(nextStep(v, [run("b", "build", "working"), other], [], [], AUTOSTART_DEFAULTS)?.kind).toBe("auto");
+    expect(nextStep(v, [run("b", "build", "working"), other], [], [])?.kind).toBe("running");
   });
 
   it("always starts with Next: and is one sentence", () => {
     const cases: Run[][] = [[], [run("a", "investigate", "working")], [run("a", "build", "done")], [run("a", "review", "working")], [run("a", "plan", "failed")]];
-    for (const runs of cases) for (const over of [{}, { mode: "advise" as const }, { heldReason: HELD_PERSON }, { spent: { autoTurns: 11, wakes: 0 } }]) {
+    for (const runs of cases) for (const over of [{}, { pausedReason: "person" as const }, { pausedReason: "ceiling" as const }]) {
       const line = next(runs, over)?.text ?? "";
       expect(line).toMatch(/^Next: /);
       expect(line).toMatch(/[.)]$/);
@@ -402,7 +233,7 @@ describe("nextStep edge cases", () => {
 
 describe("nextStep while the workstream waits on the reporter", () => {
   const waiting = (runs: Run[], over: Over = {}, since = iso(60 * 24 * 3)): WorkstreamView => ({ ...view(runs, over), waitingOnReporter: { since } });
-  const line = (v: WorkstreamView, runs: Run[], proposals: Proposal[] = [], events: Parameters<typeof nextStep>[5] = []) => nextStep(v, runs, proposals, needsOf(v, runs, proposals), AUTOSTART_DEFAULTS, events, new Date(NOW));
+  const line = (v: WorkstreamView, runs: Run[], proposals: Proposal[] = []) => nextStep(v, runs, proposals, needsOf(v, runs, proposals), new Date(NOW));
 
   it("says since when and that nothing starts on its own, and it is not a need", () => {
     const runs = [run("t", "triage", "done")];
@@ -423,10 +254,10 @@ describe("nextStep while the workstream waits on the reporter", () => {
     expect(line(v, runs, [drafted])?.nudge).toBeUndefined();
   });
 
-  it("gives way to a hold, to anything that decides or unblocks, and to a step in hand", () => {
+  it("gives way to a pause, to anything that decides or unblocks, and to a step in hand", () => {
     const going = [run("t", "triage", "working")];
     expect(line(waiting(going, { stage: "triage" }), going)?.kind).not.toBe("reporter");
-    expect(line(waiting([], { heldReason: HELD_PERSON }), [])?.kind).toBe("held");
+    expect(line(waiting([], { pausedReason: "person" }), [])?.kind).toBe("paused");
     const failed = [run("b", "build", "failed")];
     expect(line(waiting(failed), failed)?.kind).toBe("waiting");
   });
@@ -436,64 +267,3 @@ describe("nextStep while the workstream waits on the reporter", () => {
   });
 });
 
-describe("approvalStartsBuild: the plan's description draft (G3)", () => {
-  const plan = run("r1", "plan", "done");
-  const pending = { ...applied("d1", "r1"), state: { type: "pending" } } as Proposal;
-  it("says approving starts a Build only in Manage with the rule on, for a rewrite from a plan run", () => {
-    expect(approvalStartsBuild(pending, plan, view([plan]), AUTOSTART_DEFAULTS)).toBe(true);
-    expect(approvalStartsBuild(pending, plan, view([plan], { mode: "advise" }), AUTOSTART_DEFAULTS)).toBe(false);
-    expect(approvalStartsBuild(pending, plan, view([plan], { rules: { plan_build: false } }), AUTOSTART_DEFAULTS)).toBe(false);
-    expect(approvalStartsBuild(pending, plan, view([plan]), { ...AUTOSTART_DEFAULTS, planBuild: false })).toBe(false);
-    expect(approvalStartsBuild(pending, plan, view([plan], { rules: { plan_build: true } }), { ...AUTOSTART_DEFAULTS, planBuild: false })).toBe(true);
-  });
-  it("says nothing for another kind of run or draft, a closed workstream, a settled draft or unread settings", () => {
-    const triage = run("r1", "triage", "done");
-    expect(approvalStartsBuild(pending, triage, view([triage]), AUTOSTART_DEFAULTS)).toBe(false);
-    expect(approvalStartsBuild({ ...pending, intent: { type: "comment" } } as unknown as Proposal, plan, view([plan]), AUTOSTART_DEFAULTS)).toBe(false);
-    expect(approvalStartsBuild(pending, plan, view([plan], { closedAt: iso(5) }), AUTOSTART_DEFAULTS)).toBe(false);
-    expect(approvalStartsBuild({ ...pending, state: { type: "applied" } } as Proposal, plan, view([plan]), AUTOSTART_DEFAULTS)).toBe(false);
-    expect(approvalStartsBuild(pending, plan, view([plan]), null)).toBe(false);
-    expect(approvalStartsBuild(pending, undefined, view([plan]), AUTOSTART_DEFAULTS)).toBe(false);
-    expect(approvalStartsBuild(pending, plan, undefined, AUTOSTART_DEFAULTS)).toBe(false);
-  });
-  it("says nothing while the workstream is held or its automatic steps are used up: then the person's click starts the Build", () => {
-    expect(approvalStartsBuild(pending, plan, view([plan], { heldReason: "held_by_person" }), AUTOSTART_DEFAULTS)).toBe(false);
-    expect(approvalStartsBuild(pending, plan, view([plan], { spent: { autoTurns: 11, wakes: 0 } }), AUTOSTART_DEFAULTS)).toBe(false);
-    expect(approvalStartsBuild(pending, plan, view([plan], { spent: { autoTurns: 9, wakes: 0 } }), AUTOSTART_DEFAULTS)).toBe(true);
-  });
-});
-
-describe("what posting a review draft also does (G6)", () => {
-  const build = run("r-b", "build", "done");
-  const rev = run("r-rev", "review", "done", { spec: { ...base.spec, kind: "review", workstream: "ws-1", buildFromRun: "r-b" } });
-  const blocked = (over: Over = {}) => view([build, rev], { reviewBlocking: true, ...over });
-  const fixed = (n: number) => Array.from({ length: n }, () => ({ action: "autostart" as const, runId: "r-b", detail: "fix_round after r-rev" }));
-
-  it("says fix round 1 goes to the build when a blocking review is posted in Manage with the rule on", () => {
-    const f = reviewPostFixRound(rev, blocked(), AUTOSTART_DEFAULTS, []);
-    expect(f).toEqual({ round: 1, build: "R1" });
-    expect(fixRoundOnPost(f!)).toBe("Posting also sends fix round 1 to build R1, which pushes to its branch.");
-    expect(reviewPostFixRound(rev, blocked(), AUTOSTART_DEFAULTS, fixed(1))?.round).toBe(2);
-    expect(fixRoundOnPost({ round: null, build: null })).toBe("Posting also sends a fix round to the build, which pushes to its branch.");
-  });
-
-  it("says nothing when the rules would not send one", () => {
-    expect(reviewPostFixRound(rev, view([build, rev]), AUTOSTART_DEFAULTS, [])).toBeNull();
-    expect(reviewPostFixRound(rev, blocked({ mode: "advise" }), AUTOSTART_DEFAULTS, [])).toBeNull();
-    expect(reviewPostFixRound(rev, blocked({ rules: { fix_round: false } }), AUTOSTART_DEFAULTS, [])).toBeNull();
-    expect(reviewPostFixRound(rev, blocked({ heldReason: HELD_PERSON }), AUTOSTART_DEFAULTS, [])).toBeNull();
-    expect(reviewPostFixRound(rev, blocked(), AUTOSTART_DEFAULTS, fixed(2))).toBeNull();
-    expect(reviewPostFixRound(rev, blocked(), null, [])).toBeNull();
-    expect(reviewPostFixRound(run("r-x", "review", "done"), blocked(), AUTOSTART_DEFAULTS, [])).toBeNull();
-  });
-});
-
-describe("planApproved", () => {
-  it("is true only for an applied description update from that plan run", () => {
-    const plan = run("p", "plan", "done");
-    expect(planApproved(plan, [applied("d1", "p")])).toBe(true);
-    expect(planApproved(plan, [applied("d1", "other")])).toBe(false);
-    expect(planApproved(plan, [{ ...applied("d1", "p"), state: { type: "pending" } } as Proposal])).toBe(false);
-    expect(planApproved(plan, [])).toBe(false);
-  });
-});

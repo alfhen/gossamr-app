@@ -153,7 +153,7 @@ function WakeText({ id, text }: { id: string; text: string }) {
   );
 }
 
-/** Why a wake turn ended without an answer, said quietly: the person wrote first, or held it. */
+/** Why a wake turn ended without an answer, said quietly: the person wrote first, or stopped it. */
 const setAside = (turn: Turn) => turn.kind === "wake" && turn.status === "failed" && (turn.error === REMOVED_TURN || turn.error === "Stopped");
 
 /** One question and Pip's answer to it, with the drafts the answer made. `afterQueued` says a queued turn waits behind another queued one. A wake has no question: a muted line says what woke Pip. */
@@ -314,7 +314,7 @@ export function useAnswering(conversation: string): boolean {
 }
 
 /**
- * The one sentence a workstream's empty conversation opens with: what it is for. The commands and what Manage does are
+ * The one sentence a workstream's empty conversation opens with: what it is for. The commands are
  * behind the composer's Commands button, not here.
  */
 export function workstreamIntro(workstream: Pick<Workstream, "itemKey" | "title"> | null): string {
@@ -363,16 +363,16 @@ export function PipConversation({ conversation, proposals, bodyRef, ticket = nul
 }
 
 /**
- * A command typed in the composer (`/stop R1`, `/retry R1`, `/answer R1 text`, and `/hold`, `/resume` in a workstream),
+ * A command typed in the composer (`/stop R1`, `/retry R1`, `/answer R1 text`, and `/pause`, `/resume` in a workstream),
  * carried out with the person's own commands; what it came to is told under the input. Null for anything else, which is
  * a question for Pip. A command never reaches Pip and adds no turn. `R1` is looked up among the runs of the conversation's workstream.
  */
 export function composerVerb(text: string, conversation: string): Promise<VerbOutcome> | null {
   const runs = useRuns.getState();
   const workstream = workstreamOfConversation(conversation);
-  const heldReason = workstream ? (useWorkstreams.getState().list.find((v) => v.workstream.id === workstream)?.workstream.heldReason ?? null) : null;
-  const done = runComposerVerb(text, { runs: runs.runs, workstream, backend: runs.backend ?? useWorkspace.getState().backend, heldReason });
-  // /hold and /resume change the workstream's header at once, not on the next change event.
+  const pausedReason = workstream ? (useWorkstreams.getState().list.find((v) => v.workstream.id === workstream)?.workstream.pausedReason ?? null) : null;
+  const done = runComposerVerb(text, { runs: runs.runs, workstream, backend: runs.backend ?? useWorkspace.getState().backend, pausedReason });
+  // /pause and /resume change the workstream's header at once, not on the next change event.
   return done && workstream ? done.then((outcome) => (outcome.ok && void useWorkstreams.getState().refresh(), outcome)) : done;
 }
 
@@ -404,9 +404,6 @@ export function ComposerFooter({ text }: { text: string }) {
   );
 }
 
-/** What the Commands popover says about Manage: the rules start routine steps, Pip starts nothing, Jira waits. */
-export const MANAGE_NOTE = "Automatic steps: in Manage, routine next steps start on their own by fixed rules. I start nothing myself, and every change to Jira still waits for you.";
-
 /** How a command names its run outside a workstream, where cards show no R labels. */
 const RUN_ID_REF = "<run id>";
 
@@ -423,10 +420,10 @@ export function commandHelp(workstream: boolean): readonly CommandHelp[] {
 }
 
 /**
- * The commands the composer takes, with a line on each; a workstream's own only in a workstream, and Manage's note when it
- * is managed. Outside a workstream, where cards show no R labels, the examples name a run by its id.
+ * The commands the composer takes, with a line on each; a workstream's own only in a workstream. Outside a workstream,
+ * where cards show no R labels, the examples name a run by its id.
  */
-export function CommandsList({ workstream, manage }: { workstream: boolean; manage: boolean }) {
+export function CommandsList({ workstream }: { workstream: boolean }) {
   const shown = commandHelp(workstream);
   return (
     <div className="grid gap-2">
@@ -439,11 +436,6 @@ export function CommandsList({ workstream, manage }: { workstream: boolean; mana
         ))}
       </dl>
       <p className="m-0 text-ws-ink3">{workstream ? RUN_REF_NOTE : GENERAL_RUN_REF_NOTE}</p>
-      {manage && (
-        <p data-manage-note className="m-0 text-ws-ink3">
-          {MANAGE_NOTE}
-        </p>
-      )}
     </div>
   );
 }
@@ -452,7 +444,6 @@ export function CommandsList({ workstream, manage }: { workstream: boolean; mana
 function CommandsHelp({ conversation }: { conversation: string }) {
   const { open, setOpen, root } = usePopover();
   const workstreamId = workstreamOfConversation(conversation);
-  const manage = useWorkstreams((s) => (workstreamId ? s.list.find((v) => v.workstream.id === workstreamId)?.workstream.mode === "manage" : false));
   const panel = `pip-commands-${conversation}`;
   return (
     <div ref={root} className="relative flex">
@@ -472,7 +463,7 @@ function CommandsHelp({ conversation }: { conversation: string }) {
       {open && (
         <div id={panel} role="dialog" aria-label="Commands" className="absolute right-0 bottom-full z-40 mb-2 w-[300px] max-w-[80vw] rounded-xl border border-ws-sep2 bg-ws-win px-3 py-2.5 text-sm shadow-ws-pop">
           <h3 className="m-0 mb-1.5 text-xs font-semibold tracking-wide text-ws-ink3 uppercase">Commands</h3>
-          <CommandsList workstream={workstreamId !== null} manage={manage} />
+          <CommandsList workstream={workstreamId !== null} />
         </div>
       )}
     </div>

@@ -110,35 +110,26 @@ test("a workstream's conversation is apart from General, and both survive a relo
   await expect(peekSheet(page).getByText("Workstream · Intake")).toBeVisible();
 });
 
-type Kept = { workstreams?: { id: string; heldReason: string | null }[]; events?: { workstreamId: string; actor: string; action: string; detail: string | null }[] };
+type Kept = { workstreams?: { id: string; pausedReason: string | null }[]; events?: { workstreamId: string; actor: string; action: string; detail: string | null }[] };
 const store = (page: Page) => page.evaluate((key) => JSON.parse(localStorage.getItem(key) ?? "{}") as Kept, STORE);
 
-test("a restart holds every open workstream once, a reload doesn't, and a held workstream still answers the person", async ({ page, context }) => {
+test("a reload or a restart leaves an open workstream as it was: nothing is paused, and it still answers the person", async ({ page, context }) => {
   await openApp(page);
   await startWorkstream(page, "CA-401");
   await page.reload();
   await showWorkspace(page);
   await expect(page.getByText("CA-401", { exact: true }).first()).toBeVisible();
-  expect((await store(page)).workstreams?.map((w) => w.heldReason)).toEqual([null]);
+  expect((await store(page)).workstreams?.map((w) => w.pausedReason)).toEqual([null]);
 
   await page.close();
   const again = await context.newPage();
   await openApp(again);
   const after = await store(again);
-  expect(after.workstreams?.map((w) => w.heldReason)).toEqual(["restart"]);
-  expect(after.events?.map((e) => [e.actor, e.action, e.detail])).toEqual([
-    ["person", "opened", null],
-    ["supervisor", "held", "restart"],
-  ]);
+  expect(after.workstreams?.map((w) => w.pausedReason)).toEqual([null]);
+  expect(after.events?.map((e) => [e.actor, e.action, e.detail])).toEqual([["person", "opened", null]]);
 
-  // Held, it behaves as before for the person's own question.
   await peekTicket(again, "CA-401");
   await peekSheet(again).getByRole("button", { name: "Open in Pip" }).click();
   await expect(pipConversation(again)).toHaveText(/^Workstream: CA-401 /);
   await askAndWait(again, WORKSTREAM_QUESTION);
-
-  await again.reload();
-  await showWorkspace(again);
-  await expect(again.getByText("CA-401", { exact: true }).first()).toBeVisible();
-  expect((await store(again)).events?.filter((e) => e.action === "held")).toHaveLength(1);
 });

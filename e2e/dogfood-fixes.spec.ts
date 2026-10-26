@@ -1,8 +1,8 @@
 import { expect, test, type Page } from "@playwright/test";
-import { closeWorkstreamSheet, advanceRuns, askPip, editTicket, expandNeedsYou, expectToast, finishOnHome, githubWrites, heldBanner, homeConversation, homeConversationRegion, homeRunCards, homeSettled, inlineStart, jiraWrites, showWorkspace, mockRuns, needsPane, openAgents, openApp, openPip, openTechnical, peekSheet, peekTicket, PIP_INPUT, pipConversation, pipPane, reviewedDraft, scriptNextRun, selectWorkstream, setBudget, startWorkstream, stepChip, stepRail, surfacePullRequests, wakes, workstreamEvents, workstreamGroup, openNeedRow, openRunOf, paneSettled as settled } from "./support/app";
+import { closeWorkstreamSheet, advanceRuns, askPip, expandNeedsYou, expectToast, finishOnHome, githubWrites, homeConversation, homeConversationRegion, homeRunCards, homeSettled, inlineStart, jiraWrites, showWorkspace, mockRuns, needsPane, openAgents, openApp, openPip, openTechnical, peekSheet, peekTicket, PIP_INPUT, pipConversation, pipPane, reviewedDraft, scriptNextRun, selectWorkstream, startWorkstream, stepChip, surfacePullRequests, wakes, workstreamGroup, openNeedRow, openRunOf, paneSettled as settled } from "./support/app";
 
-// New workstreams open in Manage, so the sample supervisor starts the routine next steps; pull requests show only when a test says.
-const MANAGED = "runs=empty&prSurface=manual&wsManage=1";
+// Pull requests show only when a test says.
+const SAMPLE = "runs=empty&prSurface=manual";
 
 const setup = (page: Page) => page.getByRole("dialog", { name: "Start an agent" });
 
@@ -16,15 +16,9 @@ async function finish(page: Page, id: string) {
   await expect.poll(async () => (await mockRuns(page)).find((r) => r.id === id)?.state).toBe("done");
 }
 
-/** Waits for a rule to have started the next run of `kind`, and returns it. */
-async function started(page: Page, kind: string) {
-  await expect.poll(async () => (await newest(page, kind))?.id ?? null).not.toBeNull();
-  return (await newest(page, kind))!;
-}
-
-/** Asks Pip in the pane for an investigation of CA-401, opens its draft and starts it. */
-async function startInvestigation(page: Page) {
-  await askPip(page, "investigate this");
+/** Asks Pip in the pane for `what` on CA-401, opens its draft and starts it. */
+async function startStep(page: Page, what: string) {
+  await askPip(page, what);
   await settled(page);
   const card = pipPane(page).getByRole("article", { name: "Start an agent: CA-401" }).last();
   await card.getByRole("button", { name: "Review and start →" }).click();
@@ -33,28 +27,34 @@ async function startInvestigation(page: Page) {
   await expect(setup(page)).toHaveCount(0);
 }
 
+/** Starts `what` and moves the run it made on to done, returning it. */
+async function runStep(page: Page, what: string, kind: string) {
+  await startStep(page, what);
+  const run = (await newest(page, kind))!;
+  await finish(page, run.id);
+  return run;
+}
+
 /**
- * From a fresh managed workstream on CA-401 in the pane to a finished review of its build: the person starts the
- * investigation and approves the plan's description update, the rules start the rest. `before` runs just before the
- * review finishes.
+ * From a fresh workstream on CA-401 in the pane to a finished review of its build: the person starts each step through
+ * Pip and approves the plan's description update. `before` runs just before the review finishes.
  */
 async function toFinishedReview(page: Page, before: () => Promise<void> = async () => {}) {
-  await openApp(page, MANAGED);
+  await openApp(page, SAMPLE);
   await startWorkstream(page, "CA-401");
-  await setBudget(page, (await workstreamEvents(page))[0].workstreamId, { autoTurns: 12 });
-  await startInvestigation(page);
-  await finish(page, (await newest(page, "investigate"))!.id);
-  await finish(page, (await started(page, "triage")).id);
-  await finish(page, (await started(page, "plan")).id);
+  await runStep(page, "investigate this", "investigate");
+  await runStep(page, "triage this", "triage");
+  await runStep(page, "plan this", "plan");
   await page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "All projects" }).click();
   await peekTicket(page, "CA-401");
   const plan = peekSheet(page).getByRole("article", { name: "Update the description of CA-401" }).filter({ hasText: "Gossamr Plan" });
   await plan.getByRole("button", { name: "Update description" }).click();
   await expect(plan).toHaveCount(0);
-  const build = await started(page, "build");
-  await finish(page, build.id);
+  await expect(pipConversation(page)).toHaveText(/^Workstream: CA-401 /);
+  await runStep(page, "build it", "build");
   await surfacePullRequests(page);
-  const review = await started(page, "review");
+  await startStep(page, "review it");
+  const review = (await newest(page, "review"))!;
   await before();
   await finish(page, review.id);
   await settled(page);
@@ -78,15 +78,11 @@ async function homeStage(page: Page) {
   return { row, header: homeConversation(page) };
 }
 
-test.describe("workstream stage and holds (D3, D10, D18)", () => {
+test.describe("workstream stage (D3, D10, D18)", () => {
   test("a blocking review reads 'Review · changes needed' on the peek, the pane, the Pip home row and its header, never Done", async ({ page }) => {
     test.setTimeout(120_000);
-    // With its fix round switched off, the blocking review is where the workstream stops.
-    await toFinishedReview(page, async () => {
-      await pipPane(page).getByRole("button", { name: "Automatic steps" }).click();
-      await pipPane(page).getByRole("radiogroup", { name: "Blocking review → fix round" }).getByRole("radio", { name: "Off" }).click();
-      await page.keyboard.press("Escape");
-    });
+    // The sample's review blocks by default, and nothing sends the build back: the blocking review is where the workstream stops.
+    await toFinishedReview(page);
     expect((await mockRuns(page)).filter((r) => r.kind === "build").map((r) => r.state)).toEqual(["done"]);
     await expect(await peekStage(page)).toHaveText("Review · changes needed");
     await expect(pipConversation(page)).toHaveText(/^Workstream: CA-401 .* · Review · changes needed$/);
@@ -107,65 +103,6 @@ test.describe("workstream stage and holds (D3, D10, D18)", () => {
     await expect(header).toHaveText(/^Workstream: CA-401 .* · Done$/);
   });
 
-  test("a description drift in Manage says automatic steps are paused until Resume, which turns Manage back on", async ({ page }) => {
-    await openApp(page, "runs=empty&wsManage=1");
-    await startWorkstream(page, "CA-401");
-    await openAgents(page);
-    await selectWorkstream(page, "CA-401");
-    await expect(homeConversation(page)).toHaveText(/^Workstream: CA-401 .* · Intake$/);
-    await askPip(page, "investigate this");
-    await homeSettled(page);
-    const review = await inlineStart(page, homeRunCards(page, "CA-401").last());
-    await review.getByRole("button", { name: "Start agent" }).click();
-    await expect(review).toHaveCount(0);
-    await finishOnHome(page, (await newest(page, "investigate"))!.id);
-    const triage = await started(page, "triage");
-    expect(triage.state).toBe("queued");
-    await expect(stepChip(page, "triage").locator("[data-step-auto]")).toHaveText("· started automatically");
-
-    await editTicket(page, "CA-401", { description: "Someone rewrote the welcome flow: three emails, not two." });
-    const banner = stepRail(page).locator("[data-held-banner]");
-    const manage = stepRail(page).getByRole("switch", { name: "Manage this workstream" });
-    await expect(banner).toContainText("Held: the ticket's description changed in Jira. Automatic steps are paused. Resume turns them back on.");
-    await expect(manage).toHaveAttribute("aria-checked", "false");
-    await expect(stepRail(page).locator("[data-manage-paused]")).toHaveText("paused until Resume");
-    await expect(manage).toHaveAccessibleDescription(/^paused until Resume/);
-    await expect(stepChip(page, "triage").locator("[data-step-auto]")).toHaveText("· waits for Resume");
-    // Held, the queued triage doesn't launch.
-    await advanceRuns(page, 1, triage.id);
-    expect((await mockRuns(page)).find((r) => r.id === triage.id)?.state).toBe("queued");
-
-    await banner.getByRole("button", { name: "Resume" }).click();
-    await expect(banner).toHaveCount(0);
-    await expect(manage).toHaveAttribute("aria-checked", "true");
-    await expect(stepRail(page).locator("[data-manage-paused]")).toHaveCount(0);
-    await expect(stepChip(page, "triage").locator("[data-step-auto]")).toHaveText("· started automatically");
-    const resumed = (await workstreamEvents(page)).slice(-3).map((e) => [e.actor, e.action, e.detail]);
-    expect(resumed).toContainEqual(["person", "mode_set", "manage"]);
-    // Managed again, the triage goes on.
-    await advanceRuns(page, 1, triage.id);
-    await expect.poll(async () => (await mockRuns(page)).find((r) => r.id === triage.id)?.state).not.toBe("queued");
-    expect(await jiraWrites(page)).toEqual([]);
-  });
-
-  test("a used-up budget defines an automatic step, and Allow 5 more lifts it", async ({ page }) => {
-    await openApp(page, MANAGED);
-    await startWorkstream(page, "CA-401");
-    await setBudget(page, (await workstreamEvents(page))[0].workstreamId, { autoTurns: 2 });
-    await startInvestigation(page);
-    await finish(page, (await newest(page, "investigate"))!.id);
-    await finish(page, (await started(page, "triage")).id);
-    await expect(heldBanner(page)).toHaveAttribute("data-held-banner", "budget");
-    await expect(heldBanner(page)).toContainText("Held: automatic steps used up");
-    const help = heldBanner(page).locator("[data-step-help]");
-    await help.locator("summary").click();
-    await expect(help).toContainText("An automatic step is each time Pip acts without you asking, such as reading a finished run. Automatic fix rounds don't count. When they run out you can allow 5 more, or switch to Advise.");
-
-    await heldBanner(page).getByRole("button", { name: "Allow 5 more" }).click();
-    await expect(heldBanner(page)).toHaveCount(0);
-    expect((await workstreamEvents(page)).filter((e) => e.action === "resumed").map((e) => [e.actor, e.detail])).toEqual([["person", "budget"]]);
-    expect(await jiraWrites(page)).toEqual([]);
-  });
 });
 
 const setupSheet = setup;
@@ -445,7 +382,7 @@ test.describe("draft cards: click, Esc, a and s (D2, D7, D23, D28)", () => {
   });
 
   test("an armed card's key hint hangs clear of the next card's title, in the Drafts waiting list where cards sit closest", async ({ page }) => {
-    await openApp(page, MANAGED);
+    await openApp(page, SAMPLE);
     await startWorkstream(page, "CA-401");
     await openAgents(page);
     await selectWorkstream(page, "CA-401");
@@ -455,7 +392,12 @@ test.describe("draft cards: click, Esc, a and s (D2, D7, D23, D28)", () => {
     await review.getByRole("button", { name: "Start agent" }).click();
     await expect(review).toHaveCount(0);
     await finishOnHome(page, (await newest(page, "investigate"))!.id);
-    await finishOnHome(page, (await started(page, "triage")).id);
+    await askPip(page, "triage this");
+    await homeSettled(page);
+    const triageReview = await inlineStart(page, homeRunCards(page, "CA-401").last());
+    await triageReview.getByRole("button", { name: "Start agent" }).click();
+    await expect(triageReview).toHaveCount(0);
+    await finishOnHome(page, (await newest(page, "triage"))!.id);
     // The wakes' drafts wait on the timeline, one under the other.
     const waiting = homeConversationRegion(page).locator('[data-timeline] article[data-draft][data-state="pending"]');
     await expect(waiting.nth(1)).toBeVisible();
@@ -518,13 +460,11 @@ test.describe("starting a workstream and help (D6, D26)", () => {
 test.describe("plan approval (D19)", () => {
   test("the plan's description draft is pending in the conversation, and approving it is signposted", async ({ page }) => {
     test.setTimeout(90_000);
-    await openApp(page, MANAGED);
+    await openApp(page, SAMPLE);
     await startWorkstream(page, "CA-401");
-    await setBudget(page, (await workstreamEvents(page))[0].workstreamId, { autoTurns: 12 });
-    await startInvestigation(page);
-    await finish(page, (await newest(page, "investigate"))!.id);
-    await finish(page, (await started(page, "triage")).id);
-    await finish(page, (await started(page, "plan")).id);
+    await runStep(page, "investigate this", "investigate");
+    await runStep(page, "triage this", "triage");
+    await runStep(page, "plan this", "plan");
     await settled(page);
     await expect(pipPane(page).getByRole("button", { name: "Approve the plan" })).toHaveCount(0);
     // The triage's own description update stands above the plan's in the conversation: the plan's is the newer.

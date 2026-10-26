@@ -2,12 +2,11 @@ import { expect, test, type Page } from "@playwright/test";
 import { agentsHome, editTicket, jiraWrites, needsPane, openAgents, openApp, pipPane, seedWorkstreamEvent, selectWorkstream, startWorkstream, stepChip, workstreamEvents } from "./support/app";
 
 // Backlog items of the sixteenth dogfood round: the ask and the nudge to the reporter (G20, G21), what Close does to agents (G24),
-// the posting pause naming its line (G33), Hold and the other controls drawn as buttons (G30), an Undo that names itself (G29)
+// the posting pause naming its line (G33), Pause and the other controls drawn as buttons (G30)
 // and every step stating its state (G34).
 
 const THIN = "Fix it.";
 const ago = (days: number) => new Date(Date.now() - days * 86_400_000).toISOString();
-const toast = (page: Page) => page.locator("[data-toast]");
 const notice = (page: Page) => agentsHome(page).locator("[data-clarity-notice]");
 
 /** The reporter question draft on a vague ticket: a workstream on it, "Ask the reporter now" pressed, its card in the decision pane. */
@@ -49,15 +48,15 @@ test.describe("the ask and the nudge to the reporter (G21, G20)", () => {
   });
 });
 
-test.describe("Close, Hold and the posting pause (G24, G30, G33)", () => {
-  test("the Close confirm says what happens to agents, and Hold, Close… and ⋯ have a border", async ({ page }) => {
+test.describe("Close, Pause and the posting pause (G24, G30, G33)", () => {
+  test("the Close confirm says what happens to agents, and Pause, Close… and ⋯ have a border", async ({ page }) => {
     test.setTimeout(90_000);
-    await openApp(page, "wsManage=1&runs=empty");
+    await openApp(page, "runs=empty");
     await startWorkstream(page, "CA-401");
     await openAgents(page);
     await selectWorkstream(page, "CA-401");
     const controls = pipPane(page).locator("[data-workstream-controls]");
-    for (const name of ["Hold", "Close…", "More for this workstream"]) await expect(controls.getByRole("button", { name, exact: true })).not.toHaveCSS("border-top-color", "rgba(0, 0, 0, 0)");
+    for (const name of ["Pause", "Close…", "More for this workstream"]) await expect(controls.getByRole("button", { name, exact: true })).not.toHaveCSS("border-top-color", "rgba(0, 0, 0, 0)");
     await controls.getByRole("button", { name: "Close…", exact: true }).click();
     const confirm = controls.getByRole("group", { name: "Close this workstream" });
     await expect(confirm).toContainText("Agents already running carry on; one still queued does not start while it is closed.");
@@ -82,16 +81,13 @@ test.describe("Close, Hold and the posting pause (G24, G30, G33)", () => {
   });
 });
 
-test.describe("an Undo that names itself and steps that say their state (G29, G34)", () => {
-  test("Hold's toast reads Undo hold, and every step of the rail has a state in its name", async ({ page }) => {
+test.describe("steps that say their state (G34)", () => {
+  test("every step of the rail has a state in its name", async ({ page }) => {
     test.setTimeout(90_000);
-    await openApp(page, "wsManage=1&runs=empty");
+    await openApp(page, "runs=empty");
     await startWorkstream(page, "CA-401");
     await openAgents(page);
     await selectWorkstream(page, "CA-401");
-    await agentsHome(page).getByRole("button", { name: "Hold", exact: true }).click();
-    await expect(toast(page).getByRole("button", { name: "Undo hold" })).toBeVisible();
-    await expect(toast(page).getByRole("button", { name: "Undo hold" })).toHaveText("Undo hold");
     for (const kind of ["investigate", "triage", "plan", "build", "review", "verify"]) await expect(stepChip(page, kind).locator("[data-step-chip]")).toHaveAccessibleName(/Not started/);
   });
 });

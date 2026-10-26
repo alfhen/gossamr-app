@@ -10,7 +10,7 @@ import { useWorkstreams } from "./workstreamsStore";
  * The clarity notice unmounts with the button that was pressed (Looks fine, Ask the reporter now, Flag again) and the keyboard
  * would fall to <body>. Once the page has settled, when it has, the keyboard goes to the comment to the reporter that Ask the
  * reporter now drafted, else to what is left of the notice: the quiet note's Flag again, a notice that came back, else the
- * workstream's other buttons, never its Manage switch (a toggle that would be flipped by the next Space). Focus that already moved on is left alone.
+ * workstream's other buttons. Focus that already moved on is left alone.
  */
 export function settleClarityFocus(workstreamId: string) {
   let frames = 0;

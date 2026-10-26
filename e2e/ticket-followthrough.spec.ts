@@ -2,10 +2,9 @@ import { expect, test, type Locator, type Page } from "@playwright/test";
 import { advanceRuns, agentsHome, askPip, commentOnTicket, editTicket, expandNeedsYou, expectToast, homeComposer, homeConversationRegion, homeSettled, jiraWrites, mockRuns, needOfKind, needRow, needsPane, needsYouCount, needsYouRow, needsYouTray, openAgents, openApp, paneSettled, pipPane, selectWorkstream, startWorkstream, workstreamEvents, workstreamGroup, openNeedOfKind, openNeedRow, needsStack } from "./support/app";
 
 // What Pip does with a vague ticket after it speaks up: a free word check says so when the workstream opens (a notice, not a
-// need), asking the reporter records that the workstream waits on them, the answers go to Jira as a comment, and Plan anyway
-// hands the plan the questions it assumes answers to.
+// need), asking the reporter records that the workstream waits on them, and the answers go to Jira as a comment.
 
-const MANAGED = "runs=empty&prSurface=manual&wsManage=1&pipPace=1";
+const SAMPLE = "runs=empty&prSurface=manual&pipPace=1";
 const VAGUE = "CA-408";
 const GAPS = "it has a very short description, doesn't say what done looks like, doesn't say what's in or out of scope, and doesn't say who is waiting on it.";
 const CLEAR = "The welcome flow should send three emails. Only the welcome flow is in scope; the winback flow is not. The CRM team is waiting on it. Done when all three send in the sandbox.";
@@ -17,16 +16,18 @@ const actions = async (page: Page, action: string) => (await workstreamEvents(pa
 const newest = async (page: Page, kind: string) => (await mockRuns(page)).find((r) => r.kind === kind) ?? null;
 const setup = (page: Page) => page.getByRole("dialog", { name: "Start an agent" });
 
-/** Asks Pip for an investigation and starts it from the setup sheet, as the person does. */
-async function startInvestigation(page: Page, key: string) {
+/** Asks Pip for `what` on `key` and starts the draft from the setup sheet, as the person does. */
+async function startStep(page: Page, what: string, key: string) {
   await paneSettled(page);
-  await askPip(page, "investigate this");
+  await askPip(page, what);
   await paneSettled(page);
   await pipPane(page).getByRole("article", { name: `Start an agent: ${key}` }).last().getByRole("button", { name: "Review and start →" }).click();
   await expect(setup(page)).toBeVisible();
   await setup(page).getByRole("button", { name: "Start agent" }).click();
   await expect(setup(page)).toHaveCount(0);
 }
+
+const startInvestigation = (page: Page, key: string) => startStep(page, "investigate this", key);
 
 /** Moves run `id` on to done once Pip has answered, so each finish gets a wake turn of its own. */
 async function finish(page: Page, id: string) {
@@ -35,18 +36,14 @@ async function finish(page: Page, id: string) {
   await expect.poll(async () => (await mockRuns(page)).find((r) => r.id === id)?.state).toBe("done");
 }
 
-async function started(page: Page, kind: string) {
-  await expect.poll(async () => (await newest(page, kind))?.id ?? null).not.toBeNull();
-  return (await newest(page, kind))!;
-}
-
-/** A managed workstream on the vague ticket, its investigation and the triage a rule started: not ready to plan. Left on Pip home. */
+/** A workstream on the vague ticket, its investigation and the triage the person started after it: not ready to plan. Left on Pip home. */
 async function unclear(page: Page) {
-  await openApp(page, MANAGED);
+  await openApp(page, SAMPLE);
   await startWorkstream(page, VAGUE);
   await startInvestigation(page, VAGUE);
   await finish(page, (await newest(page, "investigate"))!.id);
-  await finish(page, (await started(page, "triage")).id);
+  await startStep(page, "triage this", VAGUE);
+  await finish(page, (await newest(page, "triage"))!.id);
   await openAgents(page);
   await selectWorkstream(page, VAGUE);
   await expect(needOfKind(page, "readiness")).toBeVisible();
@@ -64,7 +61,7 @@ async function askAndPost(page: Page) {
 
 test.describe("G13: Pip speaks up when a workstream opens on a vague ticket", () => {
   test("a notice names what is missing the moment the workstream opens, is no need, and a ticket that says it all gets none", async ({ page }) => {
-    await openApp(page, MANAGED);
+    await openApp(page, SAMPLE);
     await startWorkstream(page, VAGUE);
     // Nobody typed anything: Pip's pane already says it.
     await expect(notice(pipPane(page))).toContainText(`${VAGUE} may be unclear: ${GAPS}`);
@@ -88,7 +85,7 @@ test.describe("G13: Pip speaks up when a workstream opens on a vague ticket", ()
   });
 
   test("Pip's first turn names the same gaps, and a clear ticket gets no such line", async ({ page }) => {
-    await openApp(page, MANAGED);
+    await openApp(page, SAMPLE);
     await startWorkstream(page, VAGUE);
     await paneSettled(page);
     await askPip(page, "where do we stand?");
@@ -103,7 +100,7 @@ test.describe("G13: Pip speaks up when a workstream opens on a vague ticket", ()
   });
 
   test("Looks fine dismisses it for the ticket, audited, and writes nothing", async ({ page }) => {
-    await openApp(page, MANAGED);
+    await openApp(page, SAMPLE);
     await startWorkstream(page, VAGUE);
     await notice(pipPane(page)).getByRole("button", { name: "Looks fine" }).click();
     await expect(notice(pipPane(page))).toHaveCount(0);
@@ -117,7 +114,7 @@ test.describe("G13: Pip speaks up when a workstream opens on a vague ticket", ()
   });
 
   test("Ask the reporter now drafts the questions for approval, posts nothing until approved, and then the workstream waits on the reporter", async ({ page }) => {
-    await openApp(page, MANAGED);
+    await openApp(page, SAMPLE);
     await startWorkstream(page, VAGUE);
     await openAgents(page);
     await selectWorkstream(page, VAGUE);
@@ -147,7 +144,7 @@ test.describe("G13: Pip speaks up when a workstream opens on a vague ticket", ()
   });
 
   test("skipping the comment takes the note away too", async ({ page }) => {
-    await openApp(page, MANAGED);
+    await openApp(page, SAMPLE);
     await startWorkstream(page, VAGUE);
     await openAgents(page);
     await selectWorkstream(page, VAGUE);
@@ -194,22 +191,18 @@ test.describe("G14: waiting on the reporter", () => {
     expect((await workstreamEvents(page)).filter((e) => e.action === "basis_drifted")).toEqual([]);
     await needsPane(page).getByRole("button", { name: "Plan now" }).click();
     await expect(needOfKind(page, "readiness")).toHaveCount(0);
-    await started(page, "plan");
+    expect(await newest(page, "plan")).toBeNull();
   });
 
-  test("the ticket changing while waiting brings the question back as 'changed: plan now?', and Plan now starts the plan with the questions it assumes answers to", async ({ page }) => {
+  test("the ticket changing while waiting brings the question back as 'changed: plan now?', and Plan now starts nothing", async ({ page }) => {
     test.setTimeout(120_000);
     await unclear(page);
     await askAndPost(page);
 
     await editTicket(page, VAGUE, { description: "Win back lapsed customers with three emails over two weeks." });
-    // The existing drift holds the workstream; the wait is over.
+    // The wait is over, and nothing is paused: the question is back at once.
     await expect(workstreamGroup(page, VAGUE).locator("[data-status]")).not.toContainText("Waiting on reporter");
-    // The hold says the ticket changed while the workstream waited on the reporter, and where Resume leads.
-    const banner = pipPane(page).locator("[data-held-banner]");
-    await expect(banner).toContainText(`Held: ${VAGUE}'s description changed while waiting on the reporter. Resume, then decide whether to plan now.`);
-    await expect(banner).not.toContainText("changed in Jira");
-    await banner.getByRole("button", { name: "Resume" }).click();
+    await expect(pipPane(page).locator("[data-paused-banner]")).toHaveCount(0);
     const need = needRow(page, "changed: plan now?");
     await expect(need).toContainText(`${VAGUE} changed: plan now?`);
     await need.click();
@@ -222,15 +215,7 @@ test.describe("G14: waiting on the reporter", () => {
     await needsPane(page).getByRole("button", { name: "Plan now" }).click();
     await expect(needOfKind(page, "readiness")).toHaveCount(0);
     expect((await actions(page, "readiness_overridden")).map((e) => e.actor)).toEqual(["person"]);
-    const plan = await started(page, "plan");
-
-    // G17: the plan was told the open questions it assumes answers to, and its description draft lists them.
-    await finish(page, plan.id);
-    await expect(needOfKind(page, "plan")).toBeVisible();
-    await openNeedOfKind(page, "plan");
-    await expect(needsPane(page)).toContainText("Open questions the plan assumes answers to");
-    await expect(needsPane(page)).toContainText("What does done look like for CA-408?");
-    await expect(needsPane(page)).toContainText("Who asked for this, and who is waiting on it?");
+    expect(await newest(page, "plan")).toBeNull();
   });
 
   test("Still unclear (ask again) drafts the comment again for approval and the wait begins with its post", async ({ page }) => {
@@ -238,7 +223,6 @@ test.describe("G14: waiting on the reporter", () => {
     await unclear(page);
     await askAndPost(page);
     await editTicket(page, VAGUE, { description: "Win back lapsed customers somehow." });
-    await pipPane(page).locator("[data-held-banner]").getByRole("button", { name: "Resume" }).click();
     await openNeedOfKind(page, "readiness");
     await needsPane(page).getByRole("button", { name: "Still unclear (ask again)" }).click();
     await expectToast(page, "Here is the comment to the reporter.");
@@ -255,9 +239,9 @@ test.describe("G14: waiting on the reporter", () => {
     test.setTimeout(120_000);
     await unclear(page);
     await askAndPost(page);
-    await agentsHome(page).getByRole("button", { name: "Hold", exact: true }).click();
-    await expect(pipPane(page).locator("[data-held-banner]")).toContainText("Held by you");
-    await pipPane(page).locator("[data-held-banner]").getByRole("button", { name: "Resume" }).click();
+    await agentsHome(page).getByRole("button", { name: "Pause", exact: true }).click();
+    await expect(pipPane(page).locator("[data-paused-banner]")).toContainText("Paused");
+    await pipPane(page).locator("[data-paused-banner]").getByRole("button", { name: "Resume" }).click();
     await expect(workstreamGroup(page, VAGUE).locator("[data-status]")).not.toContainText("Waiting on reporter");
     await expect(nextLine(page)).not.toContainText("Waiting on the reporter");
     // The question is not back: the ticket did not change.
@@ -265,23 +249,13 @@ test.describe("G14: waiting on the reporter", () => {
   });
 });
 
-test.describe("G14b: a drift with no wait keeps the usual banner", () => {
-  test("the ticket changing while nobody waits on the reporter says what it always said", async ({ page }) => {
-    test.setTimeout(120_000);
-    await unclear(page);
-    await editTicket(page, VAGUE, { description: "Win back lapsed customers." });
-    const banner = pipPane(page).locator("[data-held-banner]");
-    await expect(banner).toContainText("changed in Jira");
-    await expect(banner).not.toContainText("waiting on the reporter");
-  });
-
+test.describe("G14b: a long description of the changed ticket", () => {
   test("a long description is cut to its start, the rest a disclosure away", async ({ page }) => {
     test.setTimeout(120_000);
     await unclear(page);
     await askAndPost(page);
     const long = `Win back lapsed customers with three emails over two weeks. ${"Each one names the customer's last order. ".repeat(12)}LAST SENTENCE.`;
     await editTicket(page, VAGUE, { description: long });
-    await pipPane(page).locator("[data-held-banner]").getByRole("button", { name: "Resume" }).click();
     await openNeedRow(page, "changed: plan now?");
     const now = needsPane(page).locator("[data-ticket-now]");
     await expect(now).toContainText("Win back lapsed customers with three emails over two weeks.");
@@ -416,29 +390,9 @@ test.describe("G16b: Plan anyway retires it too", () => {
     await expect(needRow(page, "R2 triage · rewrite")).toHaveCount(1);
     await openNeedOfKind(page, "readiness");
     await needsPane(page).getByRole("button", { name: "Plan anyway" }).click();
-    await started(page, "plan");
     // Nothing of the triage's note is left to approve; the group may be gone altogether.
     await expect(needsStack(page)).not.toContainText("R2 triage · rewrite");
     expect((await actions(page, "draft_superseded")).length).toBe(1);
-    expect(await jiraWrites(page)).toEqual([]);
-  });
-});
-
-test.describe("G17: Plan anyway hands the plan the open questions", () => {
-  test("the plan's description draft lists them as the open questions the plan assumes answers to", async ({ page }) => {
-    test.setTimeout(120_000);
-    await unclear(page);
-    await openNeedOfKind(page, "readiness");
-    await needsPane(page).getByRole("button", { name: "Plan anyway" }).click();
-    const plan = await started(page, "plan");
-    await finish(page, plan.id);
-    await openNeedOfKind(page, "plan");
-    const pane = needsPane(page);
-    await expect(pane).toContainText("Open questions the plan assumes answers to");
-    for (const q of ["What does done look like for CA-408?", "Which behaviour or number should change?", "What is in scope and what is out?", "Who asked for this, and who is waiting on it?"]) await expect(pane).toContainText(q);
-    // The plan's summary says it rests on assumed answers, and each is stated with what the plan assumed.
-    await expect(pane).toContainText("Assumes answers to 4 open questions about the ticket (listed at the end).");
-    expect((await pane.innerText()).match(/Assumed:/g)).toHaveLength(4);
     expect(await jiraWrites(page)).toEqual([]);
   });
 });

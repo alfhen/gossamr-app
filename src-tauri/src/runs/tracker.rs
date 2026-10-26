@@ -18,7 +18,6 @@ use super::redact::redact;
 use super::service::{belongs_to, RunService};
 use super::state::{self, map_state, parse_at, progress_at};
 use super::toolchain::Toolchain;
-use crate::domain::workstream::{Mode, HELD_ALL, HELD_BUDGET, HELD_PERSON};
 use crate::domain::{Intent, Origin, ProposalQuery, ProposalState, Run, RunEvent, RunKind, RunQuery, RunState, StateKind};
 use crate::notify::Notice;
 
@@ -293,7 +292,7 @@ impl RunService {
         let Ok(runs) = self.core.runs_list(&RunQuery { states: Some(asking.to_vec()), ..RunQuery::default() }).await else { return };
         let Ok(drafts) = self.core.proposals(&ProposalQuery { states: Some(vec![StateKind::Pending]), ..ProposalQuery::default() }).await else { return };
         let drafts: Vec<_> = drafts.into_iter().filter(|p| p.state == ProposalState::Pending).collect();
-        // The open workstreams give names, run labels, escalations and holds; the closed ones are only told apart by id,
+        // The open workstreams give names, run labels and pauses; the closed ones are only told apart by id,
         // so what belongs to one is skipped without loading it.
         let (views, closed_ids) = match self.core.scope().await {
             Ok(scope) => (self.core.workstreams(&scope, false).await.unwrap_or_default(), self.core.closed_workstream_ids(&scope).await.unwrap_or_default()),
@@ -331,27 +330,17 @@ impl RunService {
             let what = if run.state == RunState::Failed { format!("{name} failed") } else { format!("{name} stopped at its limit") };
             needs.entry(ws).or_default().push(Need { group: Group::Unblock, run_id: Some(run.id.clone()), what, since: run.ended_at.unwrap_or(run.last_progress_at) });
         }
-        // A review that still blocks after the fix rounds is a decision, and a hold waits to be resumed. The escalation's
-        // review draft is part of the escalation, so it isn't a need of its own.
-        let mut folded = HashSet::new();
+        // A paused workstream waits to be resumed.
         for v in &views {
-            let key = Some(v.workstream.id.clone());
-            if let Some(e) = &v.escalation {
-                folded.extend(e.review_draft.clone());
-                let what = format!("The review still blocks after {} fix {}", e.rounds, if e.rounds == 1 { "round" } else { "rounds" });
-                needs.entry(key.clone()).or_default().push(Need { group: Group::Decide, run_id: Some(e.review_run.clone()), what, since: e.at });
-            }
-            // A hold the person chose is not a need, and a spent budget is a question only in Manage.
-            let held = v.workstream.held_reason.as_deref().filter(|r| !matches!(*r, HELD_PERSON | HELD_ALL) && (*r != HELD_BUDGET || v.workstream.mode == Mode::Manage));
-            if held.is_some() {
-                needs.entry(key).or_default().push(Need { group: Group::Unblock, run_id: None, what: "It is on hold until you resume it".to_owned(), since: v.workstream.created_at });
+            if v.workstream.paused_reason.is_some() {
+                needs.entry(Some(v.workstream.id.clone())).or_default().push(Need { group: Group::Unblock, run_id: None, what: "It is paused until you resume it".to_owned(), since: v.workstream.created_at });
             }
         }
         // Every pending draft waits for approval, a plan or description rewrite as a decision. A reply drafted to a run's
         // question is part of that question.
         for draft in &drafts {
             let workstream = draft.workstream().map(str::to_owned);
-            if closed(&workstream) || folded.contains(&draft.id) || matches!(draft.intent, Intent::RunAnswer { .. }) {
+            if closed(&workstream) || matches!(draft.intent, Intent::RunAnswer { .. }) {
                 continue;
             }
             let from = match &draft.origin {

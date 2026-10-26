@@ -3,7 +3,7 @@ import { UNDO_LIFETIME_MS, messageOf, useToasts } from "./toasts";
 /**
  * Undo for the reversible actions: the action has already happened, a toast says so and offers Undo for a few seconds, and
  * Undo puts back exactly what was there. Nothing here decides what is reversible: the places that act (skip a draft,
- * dismiss a run, hold, Advise) offer it, and anything that reaches Jira, GitHub or an agent never does.
+ * dismiss a run, bring runs and drafts into a workstream) offer it, and anything that reaches Jira, GitHub or an agent never does.
  *
  * An offer is good for `UNDO_VALID_MS`, longer than its toast, so the palette's "Undo" still reaches it after the toast
  * has gone; the backend's own window (`UNSKIP_WINDOW_SECS`, `UNDO_WINDOW_SECS`: 60 s) refuses anything older either way.
@@ -30,7 +30,7 @@ export interface UndoOffer {
   refocus?(): void;
 }
 
-/** An offer's life: offered, being undone, then one of the ends; "withdrawn" is when the person did something else that makes it moot (Resume after Hold). */
+/** An offer's life: offered, being undone, then one of the ends; "withdrawn" is when the person did something else that makes it moot (the workstream was paused or closed). */
 export type UndoState = "offered" | "undoing" | "undone" | "failed" | "expired" | "withdrawn";
 
 export interface UndoEntry {

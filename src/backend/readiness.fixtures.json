@@ -1,5 +1,5 @@
 {
-  "about": "The readiness rules the Rust backend and the mock share. `report` is the Triage report's `Ready to plan:` / `Open questions:` lines: `readiness` in src-tauri/src/runs/result.rs and in src/backend/mockSupervisor.ts (`expect` null is no verdict, which reads as ready). `stop` is the readiness stop of a workstream, the Decide need that the Triage found the ticket not ready to plan, read from its runs and its audit: `readiness_of` in src-tauri/src/inbox/workstreams.rs and `readinessOf` in src/backend/mockWorkstreams.ts. A run reads its `report` as the Triage's written answer, `item` false is a run on no ticket, `workstream` another workstream's run, and `expect` is the stop (null for none). A case's `workstream` and its runs and events leave out what the default has: a managed, open workstream w1 and a ticket.",
+  "about": "The readiness rules the Rust backend and the mock share. `report` is the Triage report's `Ready to plan:` / `Open questions:` lines: `readiness` in src-tauri/src/runs/result.rs and in src/backend/mockSupervisor.ts (`expect` null is no verdict, which reads as ready). `stop` is the readiness stop of a workstream, the Decide need that the Triage found the ticket not ready to plan, read from its runs and its audit: `readiness_of` in src-tauri/src/inbox/workstreams.rs and `readinessOf` in src/backend/mockWorkstreams.ts. A run reads its `report` as the Triage's written answer, `item` false is a run on no ticket, `workstream` another workstream's run, and `expect` is the stop (null for none). A case's `workstream` and its runs and events leave out what the default has: an open workstream w1 and a ticket.",
   "report": [
     { "note": "Ready to plan: yes", "expect": {"ready": true, "questions": []} },
     { "note": "For Jira:\n**Ready to plan:** No\nOpen questions:\n- What does done look like?\n- Who is waiting on it?", "expect": {"ready": false, "questions": ["What does done look like?", "Who is waiting on it?"]} },
@@ -99,15 +99,6 @@
       "expect": null
     },
     {
-      "name": "Advise hides it, as nothing starts on its own there",
-      "workstream": {"mode": "advise"},
-      "runs": [
-        {"id": "t1", "kind": "triage", "state": "done", "queuedAt": "2026-10-12T10:10:00Z", "endedAt": "2026-10-12T10:15:00Z", "report": "Ready to plan: no\nOpen questions:\n- What does done look like?\n- Who is waiting on it?"}
-      ],
-      "events": [],
-      "expect": null
-    },
-    {
       "name": "a closed workstream has none",
       "workstream": {"closed": true},
       "runs": [
@@ -115,24 +106,6 @@
       ],
       "events": [],
       "expect": null
-    },
-    {
-      "name": "a person's hold does not hide it",
-      "workstream": {"held": "person"},
-      "runs": [
-        {"id": "t1", "kind": "triage", "state": "done", "queuedAt": "2026-10-12T10:10:00Z", "endedAt": "2026-10-12T10:15:00Z", "report": "Ready to plan: no\nOpen questions:\n- What does done look like?\n- Who is waiting on it?"}
-      ],
-      "events": [],
-      "expect": {"triageRun": "t1", "questions": ["What does done look like?", "Who is waiting on it?"], "at": "2026-10-12T10:15:00Z"}
-    },
-    {
-      "name": "a budget hold does not hide it",
-      "workstream": {"held": "budget"},
-      "runs": [
-        {"id": "t1", "kind": "triage", "state": "done", "queuedAt": "2026-10-12T10:10:00Z", "endedAt": "2026-10-12T10:15:00Z", "report": "Ready to plan: no\nOpen questions:\n- What does done look like?\n- Who is waiting on it?"}
-      ],
-      "events": [],
-      "expect": {"triageRun": "t1", "questions": ["What does done look like?", "Who is waiting on it?"], "at": "2026-10-12T10:15:00Z"}
     },
     {
       "name": "the person's readiness_asked for that Triage settles it",
@@ -595,32 +568,6 @@
         {"actor": "supervisor", "action": "basis_drifted", "at": "2026-10-12T12:22:00Z"}
       ],
       "expect": null
-    },
-    {
-      "name": "Advise hides the changed question too",
-      "workstream": {"mode": "advise"},
-      "runs": [
-        {"id": "t1", "kind": "triage", "state": "done", "queuedAt": "2026-10-12T10:10:00Z", "endedAt": "2026-10-12T10:15:00Z", "report": "Ready to plan: no\nOpen questions:\n- What does done look like?\n- Who is waiting on it?"}
-      ],
-      "events": [
-        {"actor": "person", "action": "readiness_asked", "runId": "t1", "proposalId": "d1", "at": "2026-10-12T12:20:00Z"},
-        {"actor": "person", "action": "draft_approved", "proposalId": "d1", "at": "2026-10-12T12:21:00Z"},
-        {"actor": "supervisor", "action": "basis_drifted", "at": "2026-10-12T12:22:00Z"}
-      ],
-      "expect": null
-    },
-    {
-      "name": "a changed question stays in a hold",
-      "workstream": {"held": "tripwire:basis_drift"},
-      "runs": [
-        {"id": "t1", "kind": "triage", "state": "done", "queuedAt": "2026-10-12T10:10:00Z", "endedAt": "2026-10-12T10:15:00Z", "report": "Ready to plan: no\nOpen questions:\n- What does done look like?\n- Who is waiting on it?"}
-      ],
-      "events": [
-        {"actor": "person", "action": "readiness_asked", "runId": "t1", "proposalId": "d1", "at": "2026-10-12T12:20:00Z"},
-        {"actor": "person", "action": "draft_approved", "proposalId": "d1", "at": "2026-10-12T12:21:00Z"},
-        {"actor": "supervisor", "action": "basis_drifted", "at": "2026-10-12T12:22:00Z"}
-      ],
-      "expect": {"triageRun": "t1", "questions": ["What does done look like?", "Who is waiting on it?"], "at": "2026-10-12T10:15:00Z", "changed": true}
     }
   ]
 }

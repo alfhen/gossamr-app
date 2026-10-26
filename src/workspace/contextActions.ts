@@ -50,7 +50,6 @@ export const contextDeps: ContextDeps = {
       case "allow":
       case "retry":
       case "resume":
-      case "allowMore":
       case "askReporter":
         return go(plan("approve"));
       // The palette's own Enter is the deliberate step: it records the person's choice, which only the person can make.
@@ -58,8 +57,6 @@ export const contextDeps: ContextDeps = {
         return need.workstreamId ? void useWorkstreams.getState().answerSelf(need.workstreamId) : openNeed(need);
       case "planAnyway":
         return need.workstreamId ? void useWorkstreams.getState().planAnyway(need.workstreamId) : openNeed(need);
-      case "advise":
-        return need.workstreamId ? contextDeps.advise(need.workstreamId) : openNeed(need);
       case "deny":
       case "dismiss":
         return go(plan("dismiss"));
@@ -82,9 +79,8 @@ export const contextDeps: ContextDeps = {
     useWorkView.getState().focus({ type: "draft", id: p.id });
   },
   openRun: (run: Run) => useRuns.getState().openRun(run.id),
-  hold: (id) => void useWorkstreams.getState().hold(id),
+  pause: (id) => void useWorkstreams.getState().pause(id),
   resume: (id) => void useWorkstreams.getState().resume(id),
-  advise: (id) => void useWorkstreams.getState().setMode(id, "advise"),
   openWorkstream: openOnAgents,
   approveSafe(group) {
     // The workstream's own step: its combined preview and confirm. Nothing is approved here.

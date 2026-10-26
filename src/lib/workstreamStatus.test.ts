@@ -1,5 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
-import { HELD_ALL, HELD_BUDGET, HELD_DAILY, HELD_PERSON, HELD_QUOTA, HELD_RESTART, TRIPWIRE, TRIPWIRES } from "../types";
+import { describe, expect, it } from "vitest";
 import type { Run, WorkstreamView } from "../types";
 import { NUDGE_AFTER_DAYS } from "./reporterWait";
 import { OWED_DETAIL, ON_REPORTER_DETAIL, answersOwed, QUIET_DAYS, REPLIED_DETAIL, REPLIED_HINT, STATUS_HINT, UNCLEAR_HINT, hintFor, UNCLEAR_DETAIL, workstreamStatus, type StatusMore, type StatusState } from "./workstreamStatus";
@@ -8,7 +7,7 @@ const NOW = new Date("2026-10-13T09:00:00Z");
 const ago = (days: number) => new Date(NOW.getTime() - days * 86_400_000).toISOString();
 
 const view = (over: Partial<WorkstreamView> = {}, ws: Partial<WorkstreamView["workstream"]> = {}): WorkstreamView =>
-  ({ workstream: { id: "w1", connectionId: "c", itemKey: "CA-401", title: "CA-401 Thing", heldReason: null, closedAt: null, createdAt: ago(1), ...ws }, stage: "intake", runs: ["r1"], labels: [], budget: {}, ...over }) as unknown as WorkstreamView;
+  ({ workstream: { id: "w1", connectionId: "c", itemKey: "CA-401", title: "CA-401 Thing", pausedReason: null, closedAt: null, createdAt: ago(1), ...ws }, stage: "intake", runs: ["r1"], labels: [], budget: {}, ...over }) as unknown as WorkstreamView;
 
 const run = (state: Run["state"], kind: Run["spec"]["kind"] = "build", over: Partial<Run> = {}): Run => ({ id: "r1", state, spec: { kind, workstream: "w1" }, queuedAt: ago(0.5), launchedAt: ago(0.5), endedAt: null, ...over }) as unknown as Run;
 const need = { workstreamId: "w1" };
@@ -42,29 +41,10 @@ describe("workstreamStatus: every state", () => {
     expect(answersOwed("w1", [{ actor: "person", action: "readiness_asked", at: "2026-10-12T10:00:00Z" }] as never, [])).toBe(false);
   });
 
-  it("Needs you: a system hold that has no words of its own falls back to the count", async () => {
-    vi.resetModules();
-    vi.doMock("./workstreamHold", async (orig) => ({ ...(await orig<typeof import("./workstreamHold")>()), shortHeld: () => null }));
-    const { workstreamStatus: status } = await import("./workstreamStatus");
-    vi.doUnmock("./workstreamHold");
-    expect(status(view({}, { heldReason: HELD_RESTART }), [need], { now: NOW })).toMatchObject({ state: "needs-you", detail: "1 waiting" });
-    vi.resetModules();
-  });
-
-  it("Held: by the system with its reason, or by you with no detail", () => {
-    expect(at(view({}, { heldReason: HELD_RESTART }))).toMatchObject({ state: "held", word: "Held", detail: "after a restart" });
-    expect(at(view({}, { heldReason: HELD_BUDGET }))).toMatchObject({ state: "held", detail: "automatic steps used up" });
-    expect(at(view({}, { heldReason: HELD_DAILY })).detail).toBe("today's Pip turns used up");
-    expect(at(view({}, { heldReason: HELD_QUOTA })).detail).toBe("quota");
-    expect(at(view({}, { heldReason: `${TRIPWIRE}basis_drift`, drifted: ["description"] })).detail).toBe("the ticket's description changed in Jira");
-    expect(at(view({}, { heldReason: HELD_PERSON }))).toMatchObject({ state: "held", word: "Held by you", detail: null });
-    expect(at(view({}, { heldReason: HELD_ALL }))).toMatchObject({ state: "held", word: "Held by you (Hold all)", detail: null });
-    // The reporter was asked before (or after) the hold: the held pill still says so (G25).
-    expect(at(view({ waitingOnReporter: { since: ago(3) } }, { heldReason: HELD_PERSON }))).toMatchObject({ state: "held", word: "Held by you", detail: ON_REPORTER_DETAIL });
-  });
-
-  it("never says tripwire", () => {
-    for (const k of [...TRIPWIRES, "other"]) expect(JSON.stringify(at(view({}, { heldReason: `${TRIPWIRE}${k}` })))).not.toMatch(/tripwire/i);
+  it("Needs you: a pause is a need, and its reason is the detail when it is the only one", () => {
+    expect(at(view({}, { pausedReason: "person" }), [need])).toMatchObject({ state: "needs-you", detail: "Paused" });
+    expect(at(view({}, { pausedReason: "ceiling" }), [need]).detail).toBe("Paused: Pip was woken too often today");
+    expect(at(view({}, { pausedReason: "person" }), [need, need]).detail).toBe("2 waiting");
   });
 
   it("Waiting on reporter, with the days", () => {
@@ -122,24 +102,17 @@ describe("workstreamStatus: every state", () => {
 });
 
 describe("workstreamStatus: priority", () => {
-  const everything = view({ waitingOnReporter: { since: ago(3) } }, { heldReason: HELD_PERSON });
+  const everything = view({ waitingOnReporter: { since: ago(3) } }, { pausedReason: "person" });
   const more: StatusMore = { runs: [run("working")] };
 
-  it("goes Needs you, Held, Waiting on reporter, Running, Quiet, Done, Idle, each beating all the ones after it", () => {
+  it("goes Needs you, Waiting on reporter, Running, Quiet, Done, Idle, each beating all the ones after it", () => {
     expect(at(everything, [need], more).state).toBe("needs-you");
-    expect(at(everything, [], more).state).toBe("held");
+    expect(at(everything, [], more).state).toBe("waiting");
     expect(at(view({ waitingOnReporter: { since: ago(3) } }), [], more).state).toBe("waiting");
     expect(at(view(), [], more).state).toBe("running");
     expect(at(view({}, { createdAt: ago(QUIET_DAYS + 2) }), [], {}).state).toBe("quiet");
     expect(at(view({ stage: "done" }), [], {}).state).toBe("done");
     expect(at(view(), [], {}).state).toBe("idle");
-  });
-
-  it("a hold the system made, with its need, says Needs you and gives the hold's reason as the detail; the hold you chose gives a count", () => {
-    expect(at(view({}, { heldReason: HELD_RESTART }), [need])).toMatchObject({ state: "needs-you", detail: "Held after a restart" });
-    expect(at(view({}, { heldReason: `${TRIPWIRE}basis_drift`, drifted: ["status"] }), [need]).detail).toBe("Held: the ticket was moved to Done");
-    expect(at(view({}, { heldReason: HELD_PERSON }), [need, need])).toMatchObject({ state: "needs-you", detail: "2 waiting" });
-    expect(at(view({}, { heldReason: HELD_RESTART }), [need, need]).detail).toBe("2 waiting");
   });
 });
 

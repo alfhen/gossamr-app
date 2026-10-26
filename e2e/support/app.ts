@@ -92,7 +92,7 @@ type Script = { planRecommended?: boolean; ready?: boolean; questions?: string[]
 /** The restriction a read-only run is launched with (`ReadOnly` in src/types.ts). */
 export type ReadOnly = { mode: string; allow: string[]; deny: string[]; guard: string };
 /** One launch as the mock launcher made it (`MockLaunch` in src/backend/mockRuns.ts). */
-export type MockLaunch = { runId: string; kind: string; readOnly: ReadOnly | null; guard: string; autoStart: string | null; at: string };
+export type MockLaunch = { runId: string; kind: string; readOnly: ReadOnly | null; guard: string; at: string };
 interface Handle {
   runs(): { id: string; kind: string; state: string; prSha: string | null; passes: number; key: string | null; shortId: string | null; digest: string; name: string }[];
   launches(): MockLaunch[];
@@ -106,9 +106,8 @@ interface Handle {
   attached(): string[];
   jiraWrites(): { proposalId: string; type: string; key: string | null; text?: string }[];
   reviewDrafts(): ReviewDraftRow[];
-  setBudget(id: string, budget: { autoTurns?: number | null; wakes?: number | null }): void;
   seedWorkstreamEvent(key: string, event: { actor: string; action: string; at: string; runId?: string | null; proposalId?: string | null; detail?: string | null }): void;
-  holdWorkstream(key: string, reason: string): void;
+  pauseWorkstream(key: string, reason: "person" | "ceiling"): void;
   holdPip(on: boolean): void;
   pipIdle(): boolean;
   editTicket(key: string, change: TicketEdit): void;
@@ -290,17 +289,6 @@ export const loseNextReviewAnswer = (page: Page, kept: boolean) =>
     { kept, missing: NO_MOCK },
   );
 
-/** Sets workstream `id`'s own limits for automatic turns and wakes. */
-export const setBudget = (page: Page, id: string, budget: { autoTurns?: number | null; wakes?: number | null }) =>
-  page.evaluate(
-    ({ id, budget, missing }) => {
-      const mock = (globalThis as Mocked).__gossamrMock;
-      if (!mock) throw new Error(missing);
-      mock.setBudget(id, budget);
-    },
-    { id, budget, missing: NO_MOCK },
-  );
-
 /**
  * Adds an audit line to the open workstream on ticket `key` as of `at` (an ISO time), the way to age what depends on the time
  * since: the sample backend's clock is the browser's, which a test can't move.
@@ -337,15 +325,15 @@ export const commentOnTicket = (page: Page, key: string, text: string, by?: stri
     { key, text, by, missing: NO_MOCK },
   );
 
-/** Holds the open workstream on ticket `key` as the system would, for `reason` ("restart", "budget", "daily_cap", ...): the holds that are a need, unlike the person's own Hold. */
-export const holdBySystem = (page: Page, key: string, reason: string) =>
+/** Pauses the open workstream on ticket `key` as the system does at its daily ceiling of Pip wakes: a pause that Resume lifts. */
+export const pauseAtCeiling = (page: Page, key: string) =>
   page.evaluate(
-    ({ key, reason, missing }) => {
+    ({ key, missing }) => {
       const mock = (globalThis as Mocked).__gossamrMock;
       if (!mock) throw new Error(missing);
-      mock.holdWorkstream(key, reason);
+      mock.pauseWorkstream(key, "ceiling");
     },
-    { key, reason, missing: NO_MOCK },
+    { key, missing: NO_MOCK },
   );
 
 /** Makes the scripted Pip wait, still answering, after it starts each turn (`on`), or lets it go on: a turn to act on while it runs. */
@@ -359,32 +347,12 @@ export const holdPip = (page: Page, on: boolean) =>
     { on, missing: NO_MOCK },
   );
 
-/** The Manage switch of the workstream the Pip pane shows. */
-export const manageSwitch = (page: Page) => pipPane(page).getByRole("switch", { name: "Manage this workstream" });
-
-/** Turns Manage on (or off) for the workstream the Pip pane shows, as the person does with its switch. */
-export async function setManage(page: Page, on = true) {
-  const control = manageSwitch(page);
-  if ((await control.getAttribute("aria-checked")) !== String(on)) await control.click();
-  await expect(control).toHaveAttribute("aria-checked", String(on));
-}
-
 /** Pip's wake turns in the pane, the ones nobody asked; `wakeTurns` counts them. */
 export const wakes = (page: Page) => pipPane(page).locator('[data-turn-kind="wake"]');
 export const wakeTurns = (page: Page) => wakes(page).count();
 
-/** The banner saying why the pane's workstream is held, with its Resume. */
-export const heldBanner = (page: Page) => pipPane(page).locator("[data-held-banner]");
-
-/** Presses Hold all: the rail's button, or Cmd/Ctrl+Shift+Period. */
-export async function holdAll(page: Page, by: "button" | "shortcut" = "button") {
-  if (by === "button") await page.getByRole("button", { name: "Hold all workstreams" }).click();
-  else {
-    // From outside any field, as the shortcut does nothing while the person types.
-    await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
-    await page.keyboard.press("ControlOrMeta+Shift+Period");
-  }
-}
+/** The banner saying why the pane's workstream is paused, with its Resume. */
+export const pausedBanner = (page: Page) => pipPane(page).locator("[data-paused-banner]");
 
 /** The Agents view (src/workspace/AgentsView.tsx): the summary chips, the workstreams with their agents, and a workstream's detail beside them. */
 export const agentsHome = (page: Page) => page.locator("[data-agents-home]");
@@ -492,7 +460,7 @@ export const needsStack = (page: Page) => workstreamSheet(page).locator("[data-w
 /** A need in the open detail's Needs you section, by the words it reads; pressing it opens it. */
 export const needRow = (page: Page, name: string | RegExp) => workstreamSheet(page).locator("[data-needs-pane]").filter({ hasText: name }).locator("[data-need-row]");
 
-/** The need of `kind` ("permission", "question", "failure", "escalation", "hold", "draft", ...) in the open detail. */
+/** The need of `kind` ("permission", "question", "failure", "paused", "draft", ...) in the open detail. */
 export const needOfKind = (page: Page, kind: string) => workstreamSheet(page).locator(`[data-needs-pane][data-kind="${kind}"] [data-need-row]`).first();
 
 /**

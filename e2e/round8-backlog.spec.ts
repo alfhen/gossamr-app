@@ -67,15 +67,15 @@ test.describe("the pause before posting edited text (G19)", () => {
   });
 });
 
-test.describe("Close beside Hold (G21)", () => {
+test.describe("Close beside Pause (G21)", () => {
   test("an idle workstream's controls show Close, which asks before closing", async ({ page }) => {
     test.setTimeout(90_000);
-    await openApp(page, "runs=empty&wsManage=1");
+    await openApp(page, "runs=empty");
     await startWorkstream(page, "CA-401");
     await openAgents(page);
     await selectWorkstream(page, "CA-401");
     const controls = pipPane(page).locator("[data-workstream-controls]");
-    await expect(controls.getByRole("button", { name: "Hold", exact: true })).toBeVisible();
+    await expect(controls.getByRole("button", { name: "Pause", exact: true })).toBeVisible();
     await controls.getByRole("button", { name: "Close…" }).click();
     const ask = controls.getByRole("group", { name: "Close this workstream" });
     await expect(ask).toContainText("its agents and drafts are kept");

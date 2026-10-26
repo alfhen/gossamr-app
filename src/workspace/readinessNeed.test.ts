@@ -26,7 +26,7 @@ beforeEach(async () => {
   vi.stubGlobal("localStorage", memory());
   useToasts.getState().clear();
   usePip.getState().clearPrefill();
-  backend = new MockBackend({ runs: { seed: "empty", prSurfaceMs: null }, wsManage: true });
+  backend = new MockBackend({ runs: { seed: "empty", prSurfaceMs: null } });
   backend.supervisor.dispose();
   await useWorkspace.getState().init(backend);
   useWorkstreams.getState().init(backend);
@@ -42,19 +42,17 @@ const finish = (id: string) => {
   expect(backend.runs.get(id)?.state).toBe("done");
 };
 
-/** A managed workstream on the vague CA-408 whose triage said it isn't ready to plan; its id and that triage. */
+/** A workstream on the vague CA-408 whose triage said it isn't ready to plan; its id and that triage. */
 async function stopped(): Promise<{ id: string; triage: Run }> {
-  const { MockSupervisor } = await import("../backend/mockSupervisor");
   const id = (await backend.workstreamsOpen(CA408)).id;
   const spec: RunSpec = { kind: "investigate", repo: "acme/storefront", clonePath: "/Users/sample/Code/storefront", base: "main", name: "ca-408-look", instruction: "", focus: null, focusFromRun: null, ticketBlock: null, workstream: id };
   const draft = await backend.runsDraft(spec, CA408);
   const run = await backend.runsApprove(draft.id, (await backend.runsReview(draft.id)).digest);
-  // The sample supervisor starts the triage after it, as a rule does.
-  const supervisor = new MockSupervisor({ runs: backend.runs, workstreams: backend.workstreams, proposals: backend.proposals, wake: () => {}, hasWaitingWake: () => false });
   finish(run.id);
-  const triage = backend.runs.list({ workstream: id }).find((r) => r.spec.kind === "triage")!;
+  const triageSpec: RunSpec = { ...spec, kind: "triage", name: "ca-408-triage" };
+  const triageDraft = await backend.runsDraft(triageSpec, CA408);
+  const triage = await backend.runsApprove(triageDraft.id, (await backend.runsReview(triageDraft.id)).digest);
   finish(triage.id);
-  supervisor.dispose();
   await useWorkstreams.getState().refresh();
   await useWorkspace.getState().refreshProposals();
   return { id, triage };
@@ -109,11 +107,11 @@ describe("a ticket the triage found not clear enough to plan", () => {
     expect(backend.runs.list({ workstream: id }).some((r) => r.spec.kind === "plan")).toBe(false);
   });
 
-  it("Plan anyway records the override and the plan starts as the rule would have", async () => {
+  it("Plan anyway records the override and starts nothing", async () => {
     const { id, triage } = await stopped();
     expect(await useWorkstreams.getState().planAnyway(id)).toBe(true);
     expect(readinessNeed()).toBeUndefined();
-    expect(texts()).toContain("Planning anyway. The plan starts as soon as the workstream's checks allow.");
+    expect(texts()).toContain("Planning anyway. Ask Pip to draft the plan.");
     const events = await backend.workstreamsEvents(id);
     expect(events.find((e) => e.action === "readiness_overridden")).toMatchObject({ actor: "person", runId: triage.id });
   });

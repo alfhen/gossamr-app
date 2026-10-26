@@ -90,6 +90,11 @@ impl Db {
         Ok(self.conn.query_row("SELECT count(*) FROM pip_turns WHERE role = 'wake' AND created_at >= ?1", params![at], |r| r.get::<_, i64>(0))? as u32)
     }
 
+    /// How many wake turns of `conversation` were recorded at or after `at`.
+    pub fn wake_turns_in_since(&self, conversation: &str, at: &str) -> Result<u32> {
+        Ok(self.conn.query_row("SELECT count(*) FROM pip_turns WHERE role = 'wake' AND conversation = ?1 AND created_at >= ?2", params![conversation, at], |r| r.get::<_, i64>(0))? as u32)
+    }
+
     pub fn set_pip_turn_status(&self, request_id: &str, status: &str) -> Result<()> {
         self.conn.execute("UPDATE pip_turns SET status = ?2 WHERE request_id = ?1 AND role = 'pip'", params![request_id, status])?;
         Ok(())
@@ -319,6 +324,8 @@ mod tests {
         assert_eq!(serde_json::to_value(&turns[1]).unwrap()["kind"], "wake");
         assert_eq!(db.wake_turns_since("2026-10-01T10:00:00.000Z").unwrap(), 1);
         assert_eq!(db.wake_turns_since("2026-10-01T10:00:02.000Z").unwrap(), 0);
+        assert_eq!(db.wake_turns_in_since("ws:w1", "2026-10-01T10:00:00.000Z").unwrap(), 1);
+        assert_eq!(db.wake_turns_in_since("ws:other", "2026-10-01T10:00:00.000Z").unwrap(), 0);
         assert!(db.begin_pip_turn_as("ws:w1", "x", "pip", "p", &TurnMeta::default(), "queued", "t").unwrap());
         assert_eq!(db.pip_turns("ws:w1").unwrap().iter().find(|t| t.request_id == "x").map(|t| t.kind.as_str()), Some("user"), "no other role can start a turn");
         db.delete_pip_turn("w1").unwrap();

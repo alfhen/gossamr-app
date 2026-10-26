@@ -1,82 +1,44 @@
 //! A workstream: one piece of work (usually a ticket) that a person, Pip and the agent runs it links carry from intake
 //! to done. Its stage is derived from the linked runs every time it is read, never stored, so it can't drift.
 
-use std::collections::BTreeMap;
-
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use super::{PersonRef, Run, RunKind, RunState};
 use crate::runs::report::ReviewVerdict;
 
-/// How much Pip may do on its own in a workstream. In `Advise` Pip answers the person and drafts; nothing wakes it and
-/// nothing starts on its own. In `Manage` the supervisor wakes Pip when a linked run finishes and starts the routine
-/// handoffs its rules allow, while the workstream isn't held and is within its budget. Pip itself starts nothing in
-/// either.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum Mode {
-    #[default]
-    Advise,
-    Manage,
+/// Why a workstream is paused. A workstream stored with any other reason reads as paused by the person.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", from = "String")]
+pub enum PauseReason {
+    Person,
+    /// Gossamr paused it for waking Pip too often (`WAKES_PER_WORKSTREAM_PER_DAY`, `WAKE_TURNS_PER_DAY`).
+    Ceiling,
 }
 
-impl Mode {
+impl PauseReason {
     pub fn as_str(self) -> &'static str {
         match self {
-            Mode::Advise => "advise",
-            Mode::Manage => "manage",
+            PauseReason::Person => "person",
+            PauseReason::Ceiling => "ceiling",
         }
     }
 }
 
-/// Pip turns the supervisor may start in a workstream since the person last wrote in it, unless its budget says otherwise.
-pub const AUTO_TURNS_DEFAULT: u32 = 11;
-/// Wakes a workstream may have in all, unless its budget says otherwise.
-pub const WAKES_DEFAULT: u32 = 12;
-/// What the person's "Allow 5 more" adds to a workstream's automatic turns and wakes.
-pub const ALLOW_MORE_STEPS: u32 = 5;
-
-/// Why a workstream is held, as `held_reason` stores it. A tripwire is `tripwire:<kind>`, the kind one of `TRIPWIRES`.
-pub const HELD_RESTART: &str = "restart";
-pub const HELD_PERSON: &str = "person";
-pub const HELD_ALL: &str = "hold_all";
-pub const HELD_BUDGET: &str = "budget";
-pub const HELD_DAILY: &str = "daily_cap";
-pub const HELD_QUOTA: &str = "quota";
-pub const TRIPWIRE: &str = "tripwire:";
-pub const TRIPWIRES: [&str; 4] = ["marker", "basis_drift", "repeated_failure", "chain_refused"];
-
-/// The hold reason of tripwire `kind`.
-pub fn tripwire(kind: &str) -> String {
-    format!("{TRIPWIRE}{kind}")
+impl From<String> for PauseReason {
+    fn from(reason: String) -> Self {
+        if reason == PauseReason::Ceiling.as_str() {
+            PauseReason::Ceiling
+        } else {
+            PauseReason::Person
+        }
+    }
 }
 
-/// Whether `reason` is one a workstream may be held with.
-pub fn valid_hold_reason(reason: &str) -> bool {
-    [HELD_RESTART, HELD_PERSON, HELD_ALL, HELD_BUDGET, HELD_DAILY, HELD_QUOTA].contains(&reason)
-        || reason.strip_prefix(TRIPWIRE).is_some_and(|kind| TRIPWIRES.contains(&kind))
-}
-
-/// Limits for the supervisor in one workstream. `None` is the default (`AUTO_TURNS_DEFAULT`, `WAKES_DEFAULT`; no token
-/// limit).
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", default)]
-pub struct Budget {
-    pub auto_turns: Option<u32>,
-    pub wakes: Option<u32>,
-    pub tokens: Option<u64>,
-}
-
-/// What the workstream has used of its budget. `auto_turns` counts Pip turns the supervisor started since the person
-/// last wrote; only resuming from a budget hold or the person's own message resets it.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", default)]
-pub struct Spend {
-    pub auto_turns: u32,
-    pub wakes: u32,
-    pub tokens: u64,
-}
+/// Wakes of Pip one workstream may have in a day, counted from UTC midnight or the person's last resume.
+pub const WAKES_PER_WORKSTREAM_PER_DAY: u32 = 24;
+/// Wake turns Pip may have in a day across every workstream, counted from UTC midnight.
+pub const WAKE_TURNS_PER_DAY: u32 = 120;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -93,86 +55,18 @@ pub struct Workstream {
     /// The Pip session its conversation resumes.
     #[serde(default)]
     pub pip_session: Option<String>,
-    #[serde(default)]
-    pub mode: Mode,
-    /// Why the workstream is held, while it is.
-    #[serde(default)]
-    pub held_reason: Option<String>,
+    /// Why the workstream is paused, while it is. A paused workstream gets no wakes.
+    #[serde(default, alias = "heldReason")]
+    pub paused_reason: Option<PauseReason>,
     /// Pip's own notes, at most 2 KB of scrubbed text, only ever shown back to Pip as data.
     #[serde(default)]
     pub notes: Option<String>,
     pub created_at: DateTime<Utc>,
     #[serde(default)]
     pub closed_at: Option<DateTime<Utc>>,
-    #[serde(default)]
-    pub budget: Budget,
-    #[serde(default)]
-    pub spent: Spend,
-    /// This workstream's own switches for the auto-start rules; a rule it doesn't name follows the global switch.
-    #[serde(default)]
-    pub rules: RuleSwitches,
-    /// The ticket as it was when the workstream opened, to notice it drifting; none for a ticketless one.
+    /// The ticket as it was when the workstream opened, to notice it changing; none for a ticketless one.
     #[serde(default)]
     pub basis: Option<WorkstreamBasis>,
-    /// The basis fields (`BASIS_SUMMARY`, `BASIS_DESCRIPTION`, `BASIS_STATUS`) whose drift held it, kept while it is
-    /// held for `tripwire:basis_drift`.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub drifted: Vec<String>,
-    /// The mode a tripwire took away, kept while it holds the workstream: resuming puts it back, unless the person
-    /// chose a mode meanwhile.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub resume_mode: Option<Mode>,
-}
-
-/// An auto-start rule: which finished run may start which successor on its own (`agent/autostart.rs`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Rule {
-    InvestigateTriage,
-    TriagePlan,
-    PlanBuild,
-    BuildReview,
-    FixRound,
-    ReviewVerify,
-}
-
-impl Rule {
-    pub const ALL: [Rule; 6] = [Rule::InvestigateTriage, Rule::TriagePlan, Rule::PlanBuild, Rule::BuildReview, Rule::FixRound, Rule::ReviewVerify];
-
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Rule::InvestigateTriage => "investigate_triage",
-            Rule::TriagePlan => "triage_plan",
-            Rule::PlanBuild => "plan_build",
-            Rule::BuildReview => "build_review",
-            Rule::FixRound => "fix_round",
-            Rule::ReviewVerify => "review_verify",
-        }
-    }
-
-    pub fn parse(name: &str) -> Option<Self> {
-        Rule::ALL.into_iter().find(|r| r.as_str() == name)
-    }
-}
-
-/// A workstream's overrides of the global auto-start switches, by rule. A rule that isn't here inherits.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct RuleSwitches(BTreeMap<Rule, bool>);
-
-impl RuleSwitches {
-    /// The override for `rule`; `None` inherits the global switch.
-    pub fn get(&self, rule: Rule) -> Option<bool> {
-        self.0.get(&rule).copied()
-    }
-
-    /// Sets the override for `rule`, or with `None` goes back to inheriting.
-    pub fn set(&mut self, rule: Rule, on: Option<bool>) {
-        match on {
-            Some(on) => self.0.insert(rule, on),
-            None => self.0.remove(&rule),
-        };
-    }
 }
 
 /// What a ticket looked like when its workstream opened: its status, assignee and digests of its summary and
@@ -196,45 +90,6 @@ pub const BASIS_STATUS: &str = "status";
 pub const BASIS_ASSIGNEE: &str = "assignee";
 pub const BASIS_SUMMARY: &str = "summary";
 pub const BASIS_DESCRIPTION: &str = "description";
-
-/// How much of its budget a workstream has used: `Amber` from 80% of either limit, `Spent` at 100%.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum BudgetLevel {
-    Ok,
-    Amber,
-    Spent,
-}
-
-/// The limits a workstream's budget gives, defaults filled in: (automatic turns, wakes).
-pub fn budget_limits(ws: &Workstream) -> (u32, u32) {
-    (ws.budget.auto_turns.unwrap_or(AUTO_TURNS_DEFAULT), ws.budget.wakes.unwrap_or(WAKES_DEFAULT))
-}
-
-/// The budget level of `ws`, from whichever of its automatic turns and wakes is nearer its limit. A limit of 0 allows
-/// none, so it is spent from the start. Mirrored by `budgetLevel` in src/lib/workstreamHold.ts; both run `budget` in
-/// src/lib/workstreamHold.fixtures.json.
-pub fn budget_level(ws: &Workstream) -> BudgetLevel {
-    let (turns, wakes) = budget_limits(ws);
-    let level = |used: u32, limit: u32| {
-        let (used, limit) = (u64::from(used), u64::from(limit));
-        if used >= limit {
-            BudgetLevel::Spent
-        } else if used * 5 >= limit * 4 {
-            BudgetLevel::Amber
-        } else {
-            BudgetLevel::Ok
-        }
-    };
-    let rank = |l: BudgetLevel| l as u8;
-    [level(ws.spent.auto_turns, turns), level(ws.spent.wakes, wakes)].into_iter().max_by_key(|l| rank(*l)).unwrap_or(BudgetLevel::Ok)
-}
-
-/// Whether routine steps in `ws` may start on their own now: it is open, not held, in Manage mode and within its budget.
-/// Whether a given rule is switched on is `config::rule_on`; both together are `config::rule_runs`.
-pub fn starts_steps(ws: &Workstream) -> bool {
-    ws.closed_at.is_none() && ws.held_reason.is_none() && ws.mode == Mode::Manage && budget_level(ws) != BudgetLevel::Spent
-}
 
 /// Where a workstream is, from the runs linked to it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -535,96 +390,37 @@ mod tests {
     }
 
     #[test]
-    fn a_workstream_stored_without_the_reserved_fields_reads_with_defaults() {
+    fn a_workstream_stored_without_the_optional_fields_reads_with_defaults() {
         let json = serde_json::json!({ "id": "w1", "connectionId": "c", "itemKey": "CA-1", "title": "CA-1 Cart", "createdAt": "2026-09-29T10:00:00Z" });
         let ws: Workstream = serde_json::from_value(json).unwrap();
-        assert_eq!(budget_level(&ws), BudgetLevel::Ok);
         let back: Workstream = serde_json::from_value(serde_json::to_value(&ws).unwrap()).unwrap();
         assert_eq!(back, ws);
-        assert!(ws.drifted.is_empty() && serde_json::to_value(&ws).unwrap().get("drifted").is_none());
-        assert_eq!((ws.mode, ws.notes, ws.closed_at, ws.repo, ws.pip_session), (Mode::Advise, None, None, None, None));
-        assert_eq!((ws.budget, ws.spent), (Budget::default(), Spend::default()));
+        assert_eq!((ws.paused_reason, ws.notes, ws.closed_at, ws.repo, ws.pip_session, ws.basis), (None, None, None, None, None, None));
         assert_eq!(serde_json::to_value(Stage::Investigate).unwrap(), "investigate");
-        assert_eq!(serde_json::to_value(Mode::Manage).unwrap(), "manage");
         assert_eq!(Actor::parse("supervisor"), Some(Actor::Supervisor));
-        assert_eq!((ws.rules, ws.basis), (RuleSwitches::default(), None));
-    }
-
-    fn workstream() -> Workstream {
-        serde_json::from_value(serde_json::json!({ "id": "w1", "connectionId": "c", "title": "t", "createdAt": "2026-09-29T10:00:00Z" })).unwrap()
     }
 
     #[test]
-    fn rules_parse_their_names_and_switches_store_only_overrides() {
-        for rule in Rule::ALL {
-            assert_eq!(Rule::parse(rule.as_str()), Some(rule));
-            assert_eq!(serde_json::to_value(rule).unwrap(), rule.as_str());
-        }
-        assert_eq!(Rule::parse("build"), None);
-        let mut ws = workstream();
-        ws.rules.set(Rule::TriagePlan, Some(false));
-        ws.rules.set(Rule::FixRound, Some(true));
-        ws.rules.set(Rule::FixRound, None);
-        assert_eq!(serde_json::to_value(&ws).unwrap()["rules"], serde_json::json!({ "triage_plan": false }));
-        let back: Workstream = serde_json::from_value(serde_json::to_value(&ws).unwrap()).unwrap();
-        assert_eq!((back.rules.get(Rule::TriagePlan), back.rules.get(Rule::FixRound)), (Some(false), None));
-    }
-
-    #[test]
-    fn hold_reasons_are_the_known_ones_and_the_four_tripwires() {
-        for reason in [HELD_RESTART, HELD_PERSON, HELD_ALL, HELD_BUDGET, HELD_DAILY, HELD_QUOTA] {
-            assert!(valid_hold_reason(reason), "{reason}");
-        }
-        for kind in TRIPWIRES {
-            assert!(valid_hold_reason(&tripwire(kind)), "{kind}");
-        }
-        for bad in ["", "tripwire:", "tripwire:other", "because", "Person"] {
-            assert!(!valid_hold_reason(bad), "{bad}");
-        }
-    }
-
-    #[test]
-    fn a_stored_explicit_budget_keeps_its_value_and_only_the_default_changed() {
-        let mut ws = workstream();
-        assert_eq!(budget_limits(&ws), (11, 12), "no stored value is the new default");
-        let mut json = serde_json::to_value(&ws).unwrap();
-        json["budget"] = serde_json::json!({ "autoTurns": 6, "wakes": 8 });
-        ws = serde_json::from_value(json).unwrap();
-        assert_eq!(budget_limits(&ws), (6, 8), "a stored 6 stays 6");
-    }
-
-    #[test]
-    fn the_budget_is_amber_from_80_percent_of_either_limit_and_spent_at_100() {
-        let mut ws = workstream();
-        assert_eq!(budget_limits(&ws), (AUTO_TURNS_DEFAULT, WAKES_DEFAULT));
-        ws.budget.auto_turns = Some(100);
-        ws.budget.wakes = Some(100);
-        let at = |turns: u32, wakes: u32| {
-            let mut ws = ws.clone();
-            ws.spent.auto_turns = turns;
-            ws.spent.wakes = wakes;
-            budget_level(&ws)
+    fn a_workstream_stored_with_the_removed_fields_still_reads_and_any_old_hold_reads_as_paused_by_the_person() {
+        let stored = |reason: serde_json::Value| {
+            serde_json::json!({
+                "id": "w1", "connectionId": "c", "title": "t", "createdAt": "2026-09-29T10:00:00Z", "mode": "manage", "heldReason": reason,
+                "budget": { "autoTurns": 6 }, "spent": { "autoTurns": 2, "wakes": 3, "tokens": 0 }, "rules": { "triage_plan": false },
+                "drifted": ["description"], "resumeMode": "manage"
+            })
         };
-        assert_eq!(at(79, 0), BudgetLevel::Ok);
-        assert_eq!(at(80, 0), BudgetLevel::Amber);
-        assert_eq!(at(0, 80), BudgetLevel::Amber);
-        assert_eq!(at(99, 79), BudgetLevel::Amber);
-        assert_eq!(at(100, 0), BudgetLevel::Spent);
-        assert_eq!(at(0, 100), BudgetLevel::Spent);
-        assert_eq!(at(80, 120), BudgetLevel::Spent);
-
-        let mut fresh = workstream();
-        fresh.spent.auto_turns = 8;
-        assert_eq!(budget_level(&fresh), BudgetLevel::Ok, "8 of the default 11");
-        fresh.spent.auto_turns = 9;
-        assert_eq!(budget_level(&fresh), BudgetLevel::Amber);
-        fresh.spent.auto_turns = 11;
-        assert_eq!(budget_level(&fresh), BudgetLevel::Spent);
-        fresh.spent.auto_turns = 0;
-        fresh.spent.wakes = 10;
-        assert_eq!(budget_level(&fresh), BudgetLevel::Amber, "10 of the default 12");
-        fresh.budget.wakes = Some(0);
-        assert_eq!(budget_level(&fresh), BudgetLevel::Spent, "a limit of 0 allows none");
-        assert_eq!(serde_json::to_value(BudgetLevel::Amber).unwrap(), "amber");
+        for old in ["restart", "budget", "daily_cap", "quota", "hold_all", "tripwire:marker", "person"] {
+            let ws: Workstream = serde_json::from_value(stored(old.into())).unwrap();
+            assert_eq!(ws.paused_reason, Some(PauseReason::Person), "{old}");
+        }
+        let ceiling: Workstream = serde_json::from_value(stored("ceiling".into())).unwrap();
+        assert_eq!(ceiling.paused_reason, Some(PauseReason::Ceiling));
+        assert_eq!(serde_json::to_value(&ceiling).unwrap()["pausedReason"], "ceiling");
+        let free: Workstream = serde_json::from_value(stored(serde_json::Value::Null)).unwrap();
+        assert_eq!(free.paused_reason, None);
+        let json = serde_json::to_value(&free).unwrap();
+        for gone in ["mode", "heldReason", "budget", "spent", "rules", "drifted", "resumeMode"] {
+            assert!(json.get(gone).is_none(), "{gone}");
+        }
     }
 }

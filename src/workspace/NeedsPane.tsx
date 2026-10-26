@@ -1,8 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { docText } from "../lib/docs";
 import { higherPriority, needAfter, leftOutLabel, needGroups, repeatedComments, REPEATED_COMMENT_NOTE, type Need } from "../lib/needs";
-import { ALLOW_MORE_STEPS, type Proposal, type ReporterReply, type Run, type WorkstreamView } from "../types";
-import { stepsOf } from "../lib/workstreamHold";
+import { type Proposal, type ReporterReply, type Run, type WorkstreamView } from "../types";
 import { isReporterNudge, isReporterQuestions } from "../lib/proposals";
 import { maskSecrets } from "../lib/riskyText";
 import { rewriteWhat } from "./RewriteDiff";
@@ -12,9 +11,7 @@ import { Box, BoxTitle, Btn } from "./AgentSheet";
 import { planOpenQuestions } from "./agentsLogic";
 import { draftSummary, draftTitle, LiveDraftCard, useEditedDraft } from "./DraftCard";
 import { draftDecisions } from "./DraftPreview";
-import { useGithubUi } from "./githubUi";
 import { openComment } from "./jump";
-import { escalationActions, EscalationCardView, fixRoundSent, postingReview, TAKEN_OVER } from "./EscalationCard";
 import { failureAction } from "./failureActions";
 import { failureHelp } from "./failureHelp";
 import { inlineStartable, InlineStart, useInlineStarts } from "./InlineStart";
@@ -31,7 +28,7 @@ import { useRuns } from "./runsStore";
 import { BatchConfirm, PlanApproval, confirmBatch, planResultFor } from "./StepRail";
 import { batchLabel, EDITED_ASIDE, editedPending, freezeBatch, type BatchSnapshot } from "./workViewLogic";
 import { speakQuietToasts, useToasts } from "./toasts";
-import { controlActions, HeldBanner } from "./WorkstreamControls";
+import { controlActions, PausedBanner } from "./WorkstreamControls";
 import { takePlannedAnyway, useWorkstreams } from "./workstreamsStore";
 
 const STACK = "[data-workstream-needs]";
@@ -287,9 +284,6 @@ export function firstDecision(root: HTMLElement): HTMLElement | null {
   const body = '[data-needs-pane-body]';
   const decisions = root.querySelector<HTMLElement>(`${body} [data-permission-decisions] button:not(:disabled)`);
   if (decisions) return decisions;
-  // A review that still blocks: its first choice, ahead of the review draft folded under it.
-  const choice = root.querySelector<HTMLElement>(`${body} [data-escalation] button:not(:disabled)`);
-  if (choice) return choice;
   const answer = root.querySelector<HTMLElement>(`${body} textarea:not(:disabled)`);
   if (answer) return answer;
   // A draft: its card, not its post button, so that approving is the key's a and then Enter, never a second Enter by accident.
@@ -373,35 +367,6 @@ function StoppedBody({ run }: { run: Run }) {
         <Dismiss run={run} />
       </div>
     </div>
-  );
-}
-
-/** The choice a workstream that used its automatic steps asks for: allow more, or Advise, where nothing starts on its own. */
-function BudgetBody({ view }: { view: WorkstreamView }) {
-  const id = view.workstream.id;
-  const { used, limit } = stepsOf(view.budget);
-  const [busy, setBusy] = useState(false);
-  // One choice at a time: a second click on Allow 5 more would be refused (the hold is gone) and toast an error.
-  const choose = (call: () => Promise<boolean>) => {
-    setBusy(true);
-    void call().finally(() => setBusy(false));
-  };
-  const store = useWorkstreams.getState();
-  return (
-    <Box tone="warn" label="Automatic steps">
-      <BoxTitle icon="clock" tone="warn">
-        {used} of {limit} automatic steps used
-      </BoxTitle>
-      <p className="m-0 text-ws-ink2">Pip and the automatic steps are paused; its agents carry on. Allow {ALLOW_MORE_STEPS} more to carry on from here, or switch to Advise, where Pip suggests and you start.</p>
-      <div className="flex flex-wrap items-center gap-2">
-        <Btn tone="primary" disabled={busy} onClick={() => choose(() => store.allowMore(id))}>
-          Allow {ALLOW_MORE_STEPS} more
-        </Btn>
-        <Btn tone="plain" disabled={busy} onClick={() => choose(() => store.setMode(id, "advise"))}>
-          Switch to Advise
-        </Btn>
-      </div>
-    </Box>
   );
 }
 
@@ -506,56 +471,6 @@ function ReadinessBody({ view, need }: { view: WorkstreamView; need: Need }) {
   );
 }
 
-/** The three choices on a review that still blocks, and the review draft that folded into it, ready to post as it is. */
-export function EscalationBody({ view }: { view: WorkstreamView }) {
-  const e = view.escalation;
-  const [busy, setBusy] = useState(false);
-  // Post the review as is was pressed: the choices wait, as on the rail's card, until the draft is posted or goes.
-  const [posting, setPosting] = useState(false);
-  const draft = useWorkspace((s) => (e?.reviewDraft ? s.proposals[e.reviewDraft] : undefined));
-  const review = useRef<HTMLDivElement>(null);
-  const pending = draft?.state.type === "pending";
-  const github = useWorkspace((s) => s.connections.some((c) => c.kind === "github"));
-  useEffect(() => {
-    if (posting && !pending) setPosting(false);
-  }, [posting, pending]);
-  if (!e) return null;
-  const actions = escalationActions(view.workstream.id, e);
-  const choose = (call: () => Promise<boolean>, text: string) => {
-    setBusy(true);
-    void call()
-      .then((done) => done && useToasts.getState().push(text, "info"))
-      .finally(() => setBusy(false));
-  };
-  return (
-    <div className="grid gap-2">
-      <EscalationCardView
-        escalation={e}
-        busy={busy}
-        drafting={postingReview(posting, draft)}
-        titled={false}
-        github={github}
-        onConnect={() => useGithubUi.getState().openConnect()}
-        onFixRound={() => choose(actions.onFixRound, fixRoundSent(e.buildLabel))}
-        onTakeOver={() => choose(actions.onTakeOver, TAKEN_OVER)}
-        onPost={() => {
-          setPosting(true);
-          // The draft is under the choices; nothing goes to GitHub until its own Post review.
-          const buttons = Array.from(review.current?.querySelectorAll<HTMLElement>("[data-draft-actions] button:not(:disabled)") ?? []);
-          const post = buttons.pop() ?? review.current?.querySelector<HTMLElement>("button:not(:disabled)");
-          post?.scrollIntoView?.({ block: "nearest" });
-          post?.focus();
-        }}
-      />
-      {draft && draft.state.type === "pending" && (
-        <div ref={review}>
-          <LiveDraftCard proposal={draft} jump={false} headingLevel={3} />
-        </div>
-      )}
-    </div>
-  );
-}
-
 function DraftBody({ need, proposal: p }: { need: Need; proposal: Proposal }) {
   const runs = useRuns((s) => s.runs);
   return (
@@ -604,14 +519,10 @@ function Decision({ need }: { need: Need }) {
       return run ? <FailureBody run={run} /> : null;
     case "stoppedAtLimit":
       return run ? <StoppedBody run={run} /> : null;
-    case "budget":
-      return view ? <BudgetBody view={view} /> : null;
-    case "hold":
-      return view ? <HeldBanner view={view} actions={controlActions(view.workstream.id)} /> : null;
+    case "paused":
+      return view ? <PausedBanner view={view} actions={controlActions(view.workstream.id)} /> : null;
     case "readiness":
       return view ? <ReadinessBody view={view} need={need} /> : null;
-    case "escalation":
-      return view ? <EscalationBody view={view} /> : null;
     case "runStart":
       return proposal ? <StartBody proposal={proposal} /> : null;
     case "plan":

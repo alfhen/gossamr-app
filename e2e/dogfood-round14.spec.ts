@@ -2,19 +2,19 @@ import { expect, test, type Page } from "@playwright/test";
 import { agentsHome, editTicket, expectToast, jiraWrites, needsPane, openAgents, openApp, pipPane, selectWorkstream, startWorkstream } from "./support/app";
 
 // Fixes from the fourteenth dogfood round: the offer on screen is the newest action's (G3), a close offer goes once a new
-// workstream opens on the ticket (G4), Reopen says why it cannot (G5) and the held-by-you banner is exact about Needs you (G10).
+// workstream opens on the ticket (G4), Reopen says why it cannot (G5) and the paused banner says what a pause does (G10).
 
-test.describe("Undo offers, Reopen and the held banner (G3, G4, G5, G10)", () => {
+test.describe("Undo offers, Reopen and the paused banner (G3, G4, G5, G10)", () => {
   test("the close offer goes when the ticket gets a new workstream, and Reopen is disabled with its reason", async ({ page }) => {
     test.setTimeout(120_000);
-    await openApp(page, "runs=empty&wsManage=1");
+    await openApp(page, "runs=empty");
     await page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "All projects" }).click();
     await startWorkstream(page, "CA-401");
     await openAgents(page);
     await selectWorkstream(page, "CA-401");
     const controls = pipPane(page).locator("[data-workstream-controls]");
-    await controls.getByRole("button", { name: "Hold", exact: true }).click();
-    await expect(agentsHome(page).locator("[data-held-by-you]")).toContainText("You chose this, so the hold itself is not in Needs you.");
+    await controls.getByRole("button", { name: "Pause", exact: true }).click();
+    await expect(agentsHome(page).locator("[data-paused-banner]")).toContainText("Pip isn't woken until you resume it.");
     await controls.getByRole("button", { name: "Close…" }).click();
     await controls.getByRole("button", { name: "Close workstream" }).click();
     await expect(page.locator("[data-toast]").filter({ hasText: "Closed the workstream on CA-401" })).toBeVisible();

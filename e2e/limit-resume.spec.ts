@@ -1,56 +1,10 @@
 import { expect, test, type Page } from "@playwright/test";
-import { advanceRuns, askPip, expectToast, groupByState, mockRuns, needsYouCount, openAgents, openApp, pipPane, setBudget, startWorkstream, wakes, workstreamEvents, expandNeedsYou, needsStack } from "./support/app";
+import { advanceRuns, expectToast, groupByState, mockRuns, needsYouCount, openAgents, openApp, expandNeedsYou, needsStack } from "./support/app";
 
-// The automatic step budget shown up front ("N of M automatic steps left", with a default that fits a whole chain), and a
-// run Gossamr stopped at its limit: it needs the person, counted in Needs you, and only the person's Resume carries it on.
+// A run Gossamr stopped at its limit: it needs the person, counted in Needs you, and only the person's Resume carries it on.
 
-const MANAGED = "runs=empty&prSurface=manual&wsManage=1";
-const setup = (page: Page) => page.getByRole("dialog", { name: "Start an agent" });
-const runCards = (page: Page, key: string) => pipPane(page).getByRole("article", { name: `Start an agent: ${key}` });
 const railButton = (page: Page, name: RegExp) => page.locator("[data-rail]").getByRole("button", { name }).first();
 const limitItems = (page: Page) => needsStack(page).locator('[data-needs-pane][data-kind="stoppedAtLimit"]');
-
-/** Waits until Pip has finished answering in the pane. */
-async function settled(page: Page) {
-  await expect(pipPane(page).getByRole("button", { name: "Stop" })).toHaveCount(0);
-}
-
-/** Asks Pip for an investigation of CA-401, opens its draft and starts it, as the person does. */
-async function startInvestigation(page: Page) {
-  await askPip(page, "investigate this");
-  await settled(page);
-  await runCards(page, "CA-401").last().getByRole("button", { name: "Review and start →" }).click();
-  await expect(setup(page)).toBeVisible();
-  await setup(page).getByRole("button", { name: "Start agent" }).click();
-  await expect(setup(page)).toHaveCount(0);
-}
-
-/** Moves run `id` on to done, once Pip has answered, so its finish gets a wake turn of its own. */
-async function finish(page: Page, id: string) {
-  await settled(page);
-  for (let i = 0; i < 3; i++) await advanceRuns(page, 1, id);
-  await expect.poll(async () => (await mockRuns(page)).find((r) => r.id === id)?.state).toBe("done");
-}
-
-test("a managed workstream says how many automatic steps are left up front, from the default of 11, and counts each one down", async ({ page }) => {
-  await openApp(page, MANAGED);
-  await startWorkstream(page, "CA-401");
-  const left = pipPane(page).locator("[data-steps-left]");
-  // The whole chain: investigate, triage, plan, build, review and verify is 6 steps whatever the fix rounds, which cost none, so 5 are spare.
-  await expect(left).toHaveText("11 of 11 automatic steps left");
-  await expect(pipPane(page).locator("[data-budget]")).toHaveCount(0);
-
-  await startInvestigation(page);
-  const investigation = (await mockRuns(page)).find((r) => r.kind === "investigate")!;
-  await finish(page, investigation.id);
-  await expect(wakes(page)).toHaveCount(1);
-  await expect(left).toHaveText("10 of 11 automatic steps left");
-
-  // A workstream's own limit counts, and is what it says.
-  const ws = (await workstreamEvents(page))[0].workstreamId;
-  await setBudget(page, ws, { autoTurns: 6 });
-  await expect(left).toHaveText("5 of 6 automatic steps left");
-});
 
 test("a run stopped at its limit is in Needs you, with its pill in the Agents lane, and only Resume carries it on", async ({ page }) => {
   await openApp(page, "runs=stuck");
@@ -76,7 +30,7 @@ test("a run stopped at its limit is in Needs you, with its pill in the Agents la
   await expect(railButton(page, /^Agents/)).toHaveAccessibleName(`Agents, ${count} ${Number(count) === 1 ? "thing needs" : "things need"} you`);
   await expect(needsYouCount(page)).toHaveText(count);
 
-  // Nothing resumes it by itself: still stopped after the sample's supervisor and Pip have had their turns.
+  // Nothing resumes it by itself: still stopped after the sample's runs have moved on.
   await advanceRuns(page, 3);
   expect((await mockRuns(page)).find((r) => r.id === id)?.state).toBe("stopped");
 

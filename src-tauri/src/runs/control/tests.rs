@@ -110,12 +110,12 @@ async fn stopping_a_workstream_holds_it_and_stops_only_its_stoppable_runs() {
     assert_eq!(stops, expected);
     assert_eq!((rig.get(&first).await.state, rig.get(&second).await.state), (RunState::Stopped, RunState::Stopped));
     assert_eq!(rig.get(&outside).await.state, RunState::Working, "a run outside the workstream goes on");
-    assert_eq!(rig.get(&queued).await.state, RunState::Queued, "a queued one is left for the hold to keep");
+    assert_eq!(rig.get(&queued).await.state, RunState::Queued, "a queued one is left for the pause to keep");
     let view = rig.fx.core.workstream(&rig.fx.scope, &ws).await.unwrap().unwrap();
-    assert_eq!(view.workstream.held_reason.as_deref(), Some("person"));
+    assert_eq!(view.workstream.paused_reason, Some(crate::domain::workstream::PauseReason::Person));
     let events = rig.fx.core.workstream_events(&rig.fx.scope, &ws).await.unwrap();
-    let held: Vec<_> = events.iter().filter(|e| e.action == "held").map(|e| (e.actor, e.detail.as_deref())).collect();
-    assert_eq!(held, [(Actor::Person, Some("person"))]);
+    let paused: Vec<_> = events.iter().filter(|e| e.action == "paused").map(|e| (e.actor, e.detail.as_deref())).collect();
+    assert_eq!(paused, [(Actor::Person, Some("person"))]);
     assert_eq!(rig.run_actions(&ws).await.iter().filter(|(a, _, _)| a == "run_stopped").count(), 2);
 
     assert_eq!(rig.svc.stop_workstream(&rig.fx.scope, &ws).await.unwrap(), StopAll::default(), "nothing is left to stop");

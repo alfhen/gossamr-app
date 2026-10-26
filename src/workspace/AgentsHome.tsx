@@ -24,13 +24,12 @@ export function rowTitle(ws: Pick<WorkstreamView["workstream"], "itemKey" | "tit
 export function DecisionScope({ children }: { children: ReactNode }) {
   const needs = useNeedsYou();
   const deciding = useWorkView((s) => s.deciding);
-  const list = useWorkstreams((s) => s.list);
   const open = useWorkView((s) => s.selected);
   // Only while its workstream's detail, which holds the decision, is open.
   const decided = useMemo(() => {
     const need = needs.find((n) => n.key === deciding);
-    return decisionShown(need && groupId(need.workstreamId) === open ? need : null, list);
-  }, [needs, deciding, list, open]);
+    return decisionShown(need && groupId(need.workstreamId) === open ? need : null);
+  }, [needs, deciding, open]);
   return (
     <InlineStartContext.Provider value={true}>
       <DecisionShownContext.Provider value={decided}>{children}</DecisionShownContext.Provider>

@@ -1,8 +1,8 @@
 import { expect, test, type Page } from "@playwright/test";
-import { advanceRuns, agentsHome, askPip, holdBySystem, homeComposer, homeSettled, jiraWrites, mockRuns, needsPane, openAgents, openApp, paneSettled, pipPane, selectWorkstream, startWorkstream, workstreamGroup, openNeedOfKind, openNeedRow } from "./support/app";
+import { advanceRuns, agentsHome, askPip, homeComposer, homeSettled, jiraWrites, mockRuns, needsPane, openAgents, openApp, paneSettled, pipPane, selectWorkstream, startWorkstream, openNeedOfKind, openNeedRow } from "./support/app";
 
-// Fixes from round 9's backlog: the answers draft saying where it comes from (G20), the keyboard odds and ends (G21), a hold the
-// system made above the person's own (G22) and the pause quoting what tripped it (G23).
+// Fixes from round 9's backlog: the answers draft saying where it comes from (G20), the keyboard odds and ends (G21) and the
+// pause quoting what tripped it (G23).
 
 const toast = (page: Page) => page.locator("[data-toast]");
 const allProjects = (page: Page) => page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "All projects" }).click();
@@ -18,10 +18,10 @@ async function draftOn(page: Page, key: string) {
 }
 
 test.describe("the answers draft says which reply it came from (G20)", () => {
-  /** Asks Pip for an investigation of `key` and starts it, as the person does. */
-  async function startInvestigation(page: Page, key: string) {
+  /** Asks Pip for `what` on `key` and starts it, as the person does. */
+  async function startStep(page: Page, what: string, key: string) {
     await paneSettled(page);
-    await askPip(page, "investigate this");
+    await askPip(page, what);
     await paneSettled(page);
     const setup = page.getByRole("dialog", { name: "Start an agent" });
     await pipPane(page).getByRole("article", { name: `Start an agent: ${key}` }).last().getByRole("button", { name: "Review and start →" }).click();
@@ -38,11 +38,11 @@ test.describe("the answers draft says which reply it came from (G20)", () => {
 
   test("on its card in the app only, never in the comment that goes to Jira", async ({ page }) => {
     test.setTimeout(180_000);
-    await openApp(page, "runs=empty&prSurface=manual&wsManage=1&pipPace=1");
+    await openApp(page, "runs=empty&prSurface=manual&pipPace=1");
     await startWorkstream(page, "CA-408");
-    await startInvestigation(page, "CA-408");
+    await startStep(page, "investigate this", "CA-408");
     await finish(page, (await newest(page, "investigate"))!.id);
-    await expect.poll(async () => (await newest(page, "triage"))?.id ?? null).not.toBeNull();
+    await startStep(page, "triage this", "CA-408");
     await finish(page, (await newest(page, "triage"))!.id);
     await openAgents(page);
     await selectWorkstream(page, "CA-408");
@@ -71,45 +71,19 @@ test.describe("the answers draft says which reply it came from (G20)", () => {
 test.describe("the keyboard odds and ends (G21)", () => {
   test("Esc on the Close confirm keeps the keyboard on Close… with a toast up", async ({ page }) => {
     test.setTimeout(90_000);
-    await openApp(page, "runs=empty&wsManage=1");
+    await openApp(page, "runs=empty");
     await startWorkstream(page, "CA-401");
     await openAgents(page);
     await selectWorkstream(page, "CA-401");
     const controls = pipPane(page).locator("[data-workstream-controls]");
-    await controls.getByRole("button", { name: "Hold", exact: true }).click();
-    await expect(toast(page)).toContainText("Held CA-401.");
+    await controls.getByRole("button", { name: "Pause", exact: true }).click();
+    await expect(toast(page)).toContainText("Paused CA-401.");
     await controls.getByRole("button", { name: "Close…" }).click();
     const ask = controls.getByRole("group", { name: "Close this workstream" });
     await expect(ask.getByRole("button", { name: "Keep" })).toBeFocused();
     await page.keyboard.press("Escape");
     await expect(ask).toHaveCount(0);
     await expect(controls.getByRole("button", { name: "Close…" })).toBeFocused();
-  });
-});
-
-test.describe("the person's own hold under the system's (G22)", () => {
-  test("a hold the system made sorts above Held by you, which is drawn quieter", async ({ page }) => {
-    test.setTimeout(120_000);
-    await openApp(page, "runs=empty&wsManage=0");
-    // CA-401 first, so CA-402 is the newer of the two, as the store keeps them.
-    await allProjects(page);
-    await startWorkstream(page, "CA-401");
-    await startWorkstream(page, "CA-402");
-    await openAgents(page);
-    // The steps used up in Advise ask nothing, so this is a hold and no need; the person holds the other themselves.
-    await holdBySystem(page, "CA-401", "budget");
-    await selectWorkstream(page, "CA-402");
-    await agentsHome(page).getByRole("button", { name: "Hold", exact: true }).click();
-    const system = workstreamGroup(page, "CA-401").locator("[data-status]");
-    const mine = workstreamGroup(page, "CA-402").locator("[data-status]");
-    await expect(system).toHaveAttribute("data-status", "held");
-    await expect(system).toHaveText("Held");
-    await expect(mine).toHaveAttribute("data-status", "held");
-    await expect(mine).toHaveText(/^Held by you/);
-    const keys = await agentsHome(page).locator("[data-workstream-group] h3 b").allInnerTexts();
-    expect(keys).toEqual(expect.arrayContaining(["CA-401", "CA-402"]));
-    await expect(system).toHaveClass(/border-ws-warn/);
-    await expect(mine).not.toHaveClass(/border-ws-warn/);
   });
 });
 

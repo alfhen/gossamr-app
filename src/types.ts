@@ -605,8 +605,6 @@ export interface Run {
   possibleContinuations?: { shortId: string; sessionId?: string | null; startedAt?: string | null }[];
   /** The ticket made from this run's draft once the person approved it. */
   createdItem?: ItemRef | null;
-  /** Set when the supervisor started the run by an auto-start rule, after the run named, rather than a person approving it. */
-  autoStart?: { rule: WorkstreamRule; afterRun: string } | null;
   /** Set while an approved run stays queued only because the most agents allowed are running; it starts by itself once a slot frees. */
   slotWaitSince?: string | null;
   /** The restriction a read-only run was launched with; absent for a Build and for a run that hasn't launched. */
@@ -800,33 +798,16 @@ export interface RunQuery {
 }
 
 /**
- * Mirrors src-tauri/src/domain/workstream.rs. How much Pip may do on its own: in `advise` it answers and drafts; in
- * `manage` the supervisor also wakes it when a run finishes and starts the routine handoffs its rules allow. Pip itself
- * starts nothing in either.
+ * Mirrors `WorkstreamUndo` in src-tauri/src/inbox/workstreams.rs. What the person's Undo takes back: "Bring them here"
+ * (the runs and drafts it moved, which go back to General).
  */
-export type WorkstreamMode = "advise" | "manage";
-
-/**
- * Mirrors `WorkstreamUndo` in src-tauri/src/inbox/workstreams.rs. What the person's Undo takes back, with how the workstream
- * stood before: a hold (`was`: the hold it replaced, if any), a switch of mode (`was`, and the mode a tripwire had kept), or
- * "Bring them here" (the runs and drafts it moved, which go back to General).
- */
-export type WorkstreamUndo = { type: "hold"; was: string | null } | { type: "mode"; was: WorkstreamMode; resumeMode: WorkstreamMode | null } | { type: "adopt"; runs: string[]; drafts: string[] };
+export type WorkstreamUndo = { type: "adopt"; runs: string[]; drafts: string[] };
 
 /** Runs and pending drafts on a workstream's ticket that belong to no workstream (they sit under General), by id; also what bringing them in moved. As `Adoptable` in src-tauri/src/inbox/workstreams.rs. */
 export interface Adoptable {
   runs: string[];
   drafts: string[];
 }
-
-/** An auto-start rule: which finished run may start which successor on its own. */
-export type WorkstreamRule = "investigate_triage" | "triage_plan" | "plan_build" | "build_review" | "fix_round" | "review_verify";
-
-/** Every auto-start rule, in chain order. */
-export const WORKSTREAM_RULES: readonly WorkstreamRule[] = ["investigate_triage", "triage_plan", "plan_build", "build_review", "fix_round", "review_verify"];
-
-/** A workstream's own switches for the auto-start rules; a rule it doesn't name follows the global switch. */
-export type WorkstreamRules = Partial<Record<WorkstreamRule, boolean>>;
 
 /** What a ticket looked like when its workstream opened, to notice it drifting. */
 export interface WorkstreamBasis {
@@ -839,39 +820,15 @@ export interface WorkstreamBasis {
   changing?: string[];
 }
 
-/** Why a workstream is held, as `heldReason` stores it. A tripwire is `tripwire:<kind>`. */
-export const HELD_RESTART = "restart";
-export const HELD_PERSON = "person";
-export const HELD_ALL = "hold_all";
-export const HELD_BUDGET = "budget";
-export const HELD_DAILY = "daily_cap";
-export const HELD_QUOTA = "quota";
-export const TRIPWIRE = "tripwire:";
-export const TRIPWIRES = ["marker", "basis_drift", "repeated_failure", "chain_refused"] as const;
-export type Tripwire = (typeof TRIPWIRES)[number];
-
-/** Automatic Pip turns since the person last wrote, and wakes in all, that a workstream may have unless its budget says otherwise. */
-export const AUTO_TURNS_DEFAULT = 11;
-export const WAKES_DEFAULT = 12;
-/** What the person's "Allow 5 more" adds to a workstream's allowance of automatic steps. */
-export const ALLOW_MORE_STEPS = 5;
+/**
+ * Why a workstream is paused, as `pausedReason` stores it: the person paused it, or Gossamr did for waking Pip too often
+ * in a day (`ceiling`). A paused workstream gets no wakes until the person resumes it. A stored reason this version
+ * doesn't know reads as `person`.
+ */
+export type PauseReason = "person" | "ceiling";
 
 /** Where a workstream is, derived from its runs and never stored. */
 export type WorkstreamStage = "intake" | "investigate" | "triage" | "plan" | "build" | "review" | "verify" | "done";
-
-/** Supervisor limits; `null` is the default (`AUTO_TURNS_DEFAULT`, `WAKES_DEFAULT`; no token limit). */
-export interface WorkstreamBudget {
-  autoTurns: number | null;
-  wakes: number | null;
-  tokens: number | null;
-}
-
-/** What a workstream has used of its budget. `autoTurns` counts since the person last wrote. */
-export interface WorkstreamSpend {
-  autoTurns: number;
-  wakes: number;
-  tokens: number;
-}
 
 /** One piece of work (usually a ticket) that the person, Pip and the runs linked to it carry from intake to done. */
 export interface Workstream {
@@ -883,36 +840,19 @@ export interface Workstream {
   title: string;
   /** The Pip session its conversation resumes. */
   pipSession: string | null;
-  mode: WorkstreamMode;
-  heldReason: string | null;
+  /** Why it is paused, while it is. */
+  pausedReason: PauseReason | null;
   /** Pip's own notes, at most 2 KB. */
   notes: string | null;
   createdAt: string;
   closedAt: string | null;
-  budget: WorkstreamBudget;
-  spent: WorkstreamSpend;
-  rules: WorkstreamRules;
   /** The ticket as it was when the workstream opened; null for a ticketless one. */
   basis: WorkstreamBasis | null;
-  /** The basis fields (`BASIS_FIELDS`) whose drift held it, kept while it is held for `tripwire:basis_drift`. */
-  drifted?: BasisField[];
-  /** The mode a tripwire took away, kept while it holds the workstream: resuming puts it back, unless the person chose a mode meanwhile. */
-  resumeMode?: WorkstreamMode | null;
 }
 
 /** The fields of a workstream's basis, as `BASIS_SUMMARY`, `BASIS_DESCRIPTION` and `BASIS_STATUS` name them. */
 export const BASIS_FIELDS = ["summary", "description", "status"] as const;
 export type BasisField = (typeof BASIS_FIELDS)[number];
-
-/** How much of its budget a workstream has used: `amber` from 80% of either limit, `spent` at 100%. */
-export type BudgetLevel = "ok" | "amber" | "spent";
-
-/** A workstream's budget as the page shows it, defaults filled in. */
-export interface BudgetView {
-  autoTurns: { used: number; limit: number };
-  wakes: { used: number; limit: number };
-  level: BudgetLevel;
-}
 
 /** A workstream with the stage its runs give it, their ids (newest first) and short names (`[runId, "R1"]`, oldest first). */
 export interface WorkstreamView {
@@ -924,17 +864,13 @@ export interface WorkstreamView {
   waitingForPr?: string | null;
   /** The newest finished review asked for changes and nothing is in progress: the stage is review, not done. */
   reviewBlocking?: boolean;
-  /** The newest review still blocks after the automatic fix rounds ran out: the person chooses what happens next. */
-  escalation?: Escalation | null;
   /** The newest Triage found the ticket not ready to plan, and the Plan after it waits for the person's choice. */
   readiness?: ReadinessStop | null;
   /** The ticket's description looks thin to Gossamr's own word check, before any Triage: a notice, never a need. As `Clarity` in src-tauri/src/inbox/workstreams.rs. */
   clarity?: Clarity | null;
   /** The person asked the reporter and the comment was posted; nothing has answered it yet. */
   waitingOnReporter?: ReporterWait | null;
-  /** The ticket changed (a basis drift) while the workstream waited on the reporter, and the person hasn't chosen since: the held banner says so. */
-  changedWhileWaiting?: boolean;
-  /** The wait on the reporter ended with their reply on the ticket (a comment from someone else) and the person hasn't chosen since. Always with `changedWhileWaiting`. */
+  /** The wait on the reporter ended with their reply on the ticket (a comment from someone else) and the person hasn't chosen since. */
   reporterReplied?: boolean;
   /** When that reply was written (the first comment that ended the wait): the timeline says "The reporter replied on the ticket" then. As `reporter_replied_at` in src-tauri/src/inbox/workstreams.rs. */
   reporterRepliedAt?: string;
@@ -944,7 +880,6 @@ export interface WorkstreamView {
   reporterReplies?: ReporterReplyAt[];
   /** Runs and pending drafts on the ticket that are in no workstream, while the workstream is open: the view offers to bring them here (`workstreamsAdopt`), never moves them on its own. As `adoptable` in src-tauri/src/inbox/workstreams.rs. */
   adoptable?: Adoptable | null;
-  budget: BudgetView;
 }
 
 /** What the clarity check found missing in a ticket's description (`ClarityGap` in src/lib/ticketClarity.ts). */
@@ -985,24 +920,6 @@ export interface ReadinessStop {
   replied?: boolean;
 }
 
-/**
- * A review that still blocks after the automatic fix rounds, waiting for the person: run another fix round, take the
- * workstream over (Advise), or post the review draft as it is. Only the person chooses. As `Escalation` in
- * src-tauri/src/inbox/workstreams.rs.
- */
-export interface Escalation {
-  reviewRun: string;
-  buildRun: string;
-  reviewLabel: string;
-  buildLabel: string;
-  /** The automatic fix rounds that were used up. */
-  rounds: number;
-  /** The pending GitHub review draft the person may post as it is: the review's own, else the newest of its pull request. */
-  reviewDraft?: string | null;
-  /** When the supervisor found the rounds used up. */
-  at: string;
-}
-
 /** Who did something recorded in a workstream's audit. */
 export type WorkstreamActor = "person" | "pip" | "supervisor" | "run";
 
@@ -1012,7 +929,7 @@ export interface WorkstreamEvent {
   seq: number;
   at: string;
   actor: WorkstreamActor;
-  /** e.g. `opened`, `closed`, `notes_set`, `run_approved`, `run_stopped`, `run_answered`, `run_retried`, `mode_set`, `held`, `resumed`, `rule_set`, `budget_reset`. */
+  /** e.g. `opened`, `closed`, `notes_set`, `run_approved`, `run_stopped`, `run_answered`, `run_retried`, `paused`, `resumed`. */
   action: string;
   runId: string | null;
   proposalId: string | null;
@@ -1040,10 +957,6 @@ export interface AgentSettings {
   draftOnFinish: boolean;
   /** Offer new runs the run-report tool, through which an agent hands Gossamr its result as data. */
   reportResult: boolean;
-  /** Which routine handoffs start on their own in a workstream Pip manages. */
-  autostart: AutoStartSwitches;
-  /** Pip turns the supervisor may start in a day across every workstream. Zero turns the cap off. */
-  managerTurnsPerDay: number;
   /** Which system notifications about runs to show; a backend that sent none has "workstream". */
   notifications?: NoticeMode;
   /** Minutes between digest notifications. */
@@ -1053,19 +966,6 @@ export interface AgentSettings {
 /** One notification when a workstream starts waiting on you, one summary every so often, or none. */
 export type NoticeMode = "workstream" | "digest" | "off";
 export const DIGEST_MINUTES = 30;
-
-/** The global switches for the auto-start rules; each workstream can override them. */
-export interface AutoStartSwitches {
-  investigateTriage: boolean;
-  triagePlan: boolean;
-  planBuild: boolean;
-  buildReview: boolean;
-  fixRound: boolean;
-  /** A Verify after a passing review; off until the person turns it on. */
-  reviewVerify: boolean;
-}
-
-export const AUTOSTART_DEFAULTS: AutoStartSwitches = { investigateTriage: true, triagePlan: true, planBuild: true, buildReview: true, fixRound: true, reviewVerify: false };
 
 /** What `claude rm` said: it removed the worktree, or refused and explained in its own words. */
 export type CleanupResult = { type: "removed" } | { type: "refused"; message: string };

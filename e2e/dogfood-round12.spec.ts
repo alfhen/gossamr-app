@@ -50,7 +50,7 @@ test.describe("the ask of the reporter (G2, G9)", () => {
 test.describe("keyboard and screen reader (G5, G10, G14)", () => {
   test("closing a workstream takes it off the list and back to General, and the conversation's name is a heading", async ({ page }) => {
     test.setTimeout(90_000);
-    await openApp(page, "runs=empty&wsManage=1");
+    await openApp(page, "runs=empty");
     await startWorkstream(page, "CA-401");
     await openAgents(page);
     await selectWorkstream(page, "CA-401");

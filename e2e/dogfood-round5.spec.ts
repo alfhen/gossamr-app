@@ -4,15 +4,16 @@ import { advanceRuns, agentsHome, askPip, expandNeedsYou, mockRuns, needOfKind, 
 // Fixes from the fifth dogfood round: Needs you on Pip home shows each need once, an unclear ticket's "Ask the reporter" lands
 // on the new draft, and Plan is not "Next" while the ticket waits for a choice.
 
-const MANAGED = "runs=empty&prSurface=manual&wsManage=1&pipPace=1";
+const SAMPLE = "runs=empty&prSurface=manual&pipPace=1";
 const VAGUE = "CA-408";
 
 const setup = (page: Page) => page.getByRole("dialog", { name: "Start an agent" });
 const newest = async (page: Page, kind: string) => (await mockRuns(page)).find((r) => r.kind === kind) ?? null;
 
-async function startInvestigation(page: Page, key: string) {
+/** Asks Pip for `what` on `key` and starts the draft from the setup sheet, as the person does. */
+async function startStep(page: Page, what: string, key: string) {
   await settled(page);
-  await askPip(page, "investigate this");
+  await askPip(page, what);
   await settled(page);
   await page.locator('aside[aria-label="Pip"]').getByRole("article", { name: `Start an agent: ${key}` }).last().getByRole("button", { name: "Review and start →" }).click();
   await expect(setup(page)).toBeVisible();
@@ -26,13 +27,13 @@ async function finish(page: Page, id: string) {
   await expect.poll(async () => (await mockRuns(page)).find((r) => r.id === id)?.state).toBe("done");
 }
 
-/** A managed workstream on the vague ticket whose triage stopped it as unclear; left on Pip home, on its row. */
+/** A workstream on the vague ticket whose triage stopped it as unclear; left on Pip home, on its row. */
 async function unclear(page: Page) {
-  await openApp(page, MANAGED);
+  await openApp(page, SAMPLE);
   await startWorkstream(page, VAGUE);
-  await startInvestigation(page, VAGUE);
+  await startStep(page, "investigate this", VAGUE);
   await finish(page, (await newest(page, "investigate"))!.id);
-  await expect.poll(async () => (await newest(page, "triage"))?.id ?? null).not.toBeNull();
+  await startStep(page, "triage this", VAGUE);
   await finish(page, (await newest(page, "triage"))!.id);
   await openAgents(page);
   await selectWorkstream(page, VAGUE);

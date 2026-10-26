@@ -295,12 +295,9 @@ async fn a_retry_over_the_cap_still_fails_for_it() {
 }
 
 #[tokio::test]
-async fn approved_runs_over_the_cap_launch_in_approval_order_with_a_workstream_s_auto_started_successor() {
-    use crate::domain::workstream::{Mode, Rule};
-    use crate::domain::Actor;
+async fn approved_runs_over_the_cap_launch_in_approval_order_with_a_workstream_s_run_among_them() {
     let rig = build(None, |s| s.with_cap(1)).await;
     let ws = rig.fx.core.open_workstream(&rig.fx.scope, Some(rig.fx.item("CA-1")), None).await.unwrap().id;
-    rig.fx.core.set_workstream_mode(&rig.fx.scope, &ws, Mode::Manage, Actor::Person).await.unwrap();
     let running = rig.queued(1).await;
     rig.svc.launch(&running.id).await.unwrap();
     let older = rig.queued(2).await;
@@ -309,7 +306,6 @@ async fn approved_runs_over_the_cap_launch_in_approval_order_with_a_workstream_s
     let p = rig.fx.core.draft_run(spec, Some(rig.fx.item("CA-1"))).await.unwrap();
     let digest = rig.fx.core.runs_review(&p.id).await.unwrap().digest;
     let successor = rig.fx.core.runs_approve(&p.id, &digest).await.unwrap();
-    let successor = rig.set(&successor, |r| r.auto_start = Some(crate::domain::AutoStarted { rule: Rule::InvestigateTriage, after_run: running.id.clone() })).await;
     let newer = rig.queued(4).await;
     rig.svc.launch(&newer.id).await.unwrap();
     assert!(rig.svc.launch_waiting().await.unwrap().is_empty(), "the one slot is taken");
@@ -1355,7 +1351,7 @@ async fn the_launch_still_refuses_a_path_that_is_not_a_clone_of_the_repository()
 
 mod waiting {
     use super::*;
-    use crate::domain::workstream::HELD_PERSON;
+    use crate::domain::workstream::PauseReason;
     use crate::domain::Actor;
 
     impl Rig {
@@ -1387,14 +1383,14 @@ mod waiting {
         let (a, b) = (rig.open_on("CA-1").await, rig.open_on("CA-2").await);
         let first = rig.queued_in(1, "CA-1", &a).await;
         let second = rig.queued_in(2, "CA-1", &a).await;
-        let held = rig.queued_in(3, "CA-2", &b).await;
+        let paused = rig.queued_in(3, "CA-2", &b).await;
         let loose = rig.queued(4).await;
-        rig.fx.core.hold_workstream(&rig.fx.scope, &b, HELD_PERSON, Actor::Person).await.unwrap();
+        rig.fx.core.pause_workstream(&rig.fx.scope, &b, PauseReason::Person, Actor::Person).await.unwrap();
 
         assert_eq!(rig.svc.launch_waiting().await.unwrap(), std::slice::from_ref(&first.id));
         assert_eq!(rig.get(&first).await.state, RunState::Launching);
-        for waiting in [&second, &held, &loose] {
-            assert_eq!(rig.get(waiting).await.state, RunState::Queued, "over the cap, held or in no workstream: still queued");
+        for waiting in [&second, &paused, &loose] {
+            assert_eq!(rig.get(waiting).await.state, RunState::Queued, "over the cap, paused or in no workstream: still queued");
         }
         assert!(rig.svc.launch_waiting().await.unwrap().is_empty(), "the cap is still full");
         assert_eq!(rig.get(&second).await.state, RunState::Queued, "never failed for the cap");
@@ -1402,32 +1398,25 @@ mod waiting {
         rig.finish(&first).await;
         assert_eq!(rig.svc.launch_waiting().await.unwrap(), std::slice::from_ref(&second.id));
         rig.finish(&second).await;
-        assert!(rig.svc.launch_waiting().await.unwrap().is_empty(), "a held workstream's run is skipped");
+        assert!(rig.svc.launch_waiting().await.unwrap().is_empty(), "a paused workstream's run is skipped");
         rig.fx.core.resume_workstream(&rig.fx.scope, &b).await.unwrap();
-        assert_eq!(rig.svc.launch_waiting().await.unwrap(), std::slice::from_ref(&held.id));
+        assert_eq!(rig.svc.launch_waiting().await.unwrap(), std::slice::from_ref(&paused.id));
         assert_eq!(rig.get(&loose).await.state, RunState::Queued, "a run in no workstream is the person's to start");
         assert_eq!(rig.cli.launches(), 3);
     }
 
     #[tokio::test]
-    async fn a_closed_workstream_s_run_and_one_a_rule_started_in_an_advised_workstream_or_with_its_rule_off_wait() {
-        use crate::domain::workstream::{Mode, Rule};
+    async fn a_closed_workstream_s_run_waits_and_a_paused_one_starts_once_resumed() {
         let rig = ready().await;
         rig.fx.add_item(2).await;
-        let (closed, managed) = (rig.open_on("CA-1").await, rig.open_on("CA-2").await);
+        let (closed, paused) = (rig.open_on("CA-1").await, rig.open_on("CA-2").await);
         let in_closed = rig.queued_in(1, "CA-1", &closed).await;
         rig.fx.core.close_workstream(&rig.fx.scope, &closed).await.unwrap();
-        let (core, scope) = (&rig.fx.core, &rig.fx.scope);
-        core.set_workstream_mode(scope, &managed, Mode::Manage, Actor::Person).await.unwrap();
-        let auto = rig.queued_in(2, "CA-2", &managed).await;
-        let auto = rig.set(&auto, |r| r.auto_start = Some(crate::domain::AutoStarted { rule: Rule::InvestigateTriage, after_run: "r0".into() })).await;
-        core.set_workstream_mode(scope, &managed, Mode::Advise, Actor::Person).await.unwrap();
-        assert!(rig.svc.launch_waiting().await.unwrap().is_empty(), "closed, and advised");
-        core.set_workstream_mode(scope, &managed, Mode::Manage, Actor::Person).await.unwrap();
-        core.set_workstream_rule(scope, &managed, Rule::InvestigateTriage, Some(false)).await.unwrap();
-        assert!(rig.svc.launch_waiting().await.unwrap().is_empty(), "its rule is off");
-        core.set_workstream_rule(scope, &managed, Rule::InvestigateTriage, None).await.unwrap();
-        assert_eq!(rig.svc.launch_waiting().await.unwrap(), std::slice::from_ref(&auto.id));
+        let waiting = rig.queued_in(2, "CA-2", &paused).await;
+        rig.fx.core.pause_workstream(&rig.fx.scope, &paused, PauseReason::Ceiling, Actor::Supervisor).await.unwrap();
+        assert!(rig.svc.launch_waiting().await.unwrap().is_empty(), "closed, and paused");
+        rig.fx.core.resume_workstream(&rig.fx.scope, &paused).await.unwrap();
+        assert_eq!(rig.svc.launch_waiting().await.unwrap(), std::slice::from_ref(&waiting.id));
         assert_eq!(rig.get(&in_closed).await.state, RunState::Queued);
     }
 }

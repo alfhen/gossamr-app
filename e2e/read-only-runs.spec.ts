@@ -1,11 +1,11 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
-import { advanceRuns, askPip, detailsOf, mockLaunches, mockRuns, openApp, openTechnical, peekSheet, peekTicket, pipConversation, pipPane, setBudget, startWorkstream, surfacePullRequests, type MockLaunch, workstreamEvents } from "./support/app";
+import { advanceRuns, askPip, detailsOf, mockLaunches, mockRuns, openApp, openTechnical, peekSheet, peekTicket, pipConversation, pipPane, startWorkstream, surfacePullRequests, type MockLaunch, workstreamEvents } from "./support/app";
 
 // Phase 6: Investigate, Triage, Plan, Review and Verify launch with a restriction Claude Code itself enforces
-// (`--permission-mode dontAsk` and allow/deny rules); a Build, and a fix round sent to one, keeps what it had. The sample
+// (`--permission-mode dontAsk` and allow/deny rules); a Build keeps what it had. The sample
 // launcher records what it would pass for each launch, and the person sees the same rules where a run is started and in
 // what a run was launched with.
-const MANAGED = "runs=empty&prSurface=manual&wsManage=1";
+const SAMPLE = "runs=empty&prSurface=manual";
 const READ_ONLY = "Read-only: Claude Code refuses edits and writes";
 const READ_ONLY_TESTS = "Read-only, except the repository's tests: Claude Code refuses edits and other writes";
 const READ_ONLY_GUARD_START = "This run is read-only: Claude Code itself refuses file edits";
@@ -21,9 +21,14 @@ async function settled(page: Page) {
 
 const newest = async (page: Page, kind: string) => (await mockRuns(page)).find((r) => r.kind === kind) ?? null;
 
-/** Waits for the next run of `kind` (newer than `after`) and returns it. */
-async function started(page: Page, kind: string, after: string | null = null) {
-  await expect.poll(async () => (await newest(page, kind))?.id ?? null).not.toBe(after);
+/** Asks Pip for `what` on CA-401, opens its draft and starts it from the setup sheet, and returns the run it made of `kind`. */
+async function startStep(page: Page, what: string, kind: string) {
+  await askPip(page, what);
+  await settled(page);
+  await runCards(page, "CA-401").last().getByRole("button", { name: "Review and start →" }).click();
+  await expect(setup(page)).toBeVisible();
+  await setup(page).getByRole("button", { name: "Start agent" }).click();
+  await expect(setup(page)).toHaveCount(0);
   return (await newest(page, kind))!;
 }
 
@@ -88,8 +93,8 @@ const approvedDigest = async (page: Page, runId: string) => {
   return events.find((e) => e.action === "run_approved" && e.runId === runId)?.digest ?? null;
 };
 
-test("a person-started investigation shows and launches read-only, and its auto-started triage carries the same rules", async ({ page }) => {
-  await openApp(page, MANAGED);
+test("a person-started investigation shows and launches read-only, and the triage started after it carries the same rules", async ({ page }) => {
+  await openApp(page, SAMPLE);
   await startWorkstream(page, "CA-401");
   await askPip(page, "investigate this");
   await settled(page);
@@ -128,17 +133,14 @@ test("a person-started investigation shows and launches read-only, and its auto-
 
   const first = await launch(page, r1.id);
   restricted(first, "investigate");
-  expect(first.autoStart).toBeNull();
   await expect(runCard(page, r1.id).locator("[data-read-only]")).toHaveAttribute("title", READ_ONLY);
 
-  // The triage starts by the rule, with no click, and launches restricted too.
+  // The triage the person starts next launches restricted too.
   await finish(page, r1.id);
-  const triage = await started(page, "triage");
+  const triage = await startStep(page, "triage this", "triage");
   const second = await launch(page, triage.id);
   restricted(second, "triage");
-  expect(second.autoStart).toBe("investigate_triage");
   expect(second.readOnly).toEqual(first.readOnly);
-  await expect(runCard(page, triage.id)).toContainText("Started automatically after R1");
   await expect(runCard(page, triage.id).locator("[data-read-only]")).toBeVisible();
 
   // What it was launched with is in its brief.
@@ -147,25 +149,20 @@ test("a person-started investigation shows and launches read-only, and its auto-
   await expect(sent).toContainText("--permission-mode dontAsk");
 });
 
-test("a build launches as before; its review is restricted, a fix round goes back to the build with no new launch, and the next review is restricted", async ({ page }) => {
+test("a build launches as before, and its review is restricted", async ({ page }) => {
   test.setTimeout(120_000);
-  await openApp(page, MANAGED);
+  await openApp(page, SAMPLE);
   await startWorkstream(page, "CA-401");
-  await setBudget(page, (await workstreamEvents(page))[0].workstreamId, { autoTurns: 12 });
-  await askPip(page, "investigate this");
-  await settled(page);
-  await runCards(page, "CA-401").last().getByRole("button", { name: "Review and start →" }).click();
-  await expect(setup(page)).toBeVisible();
-  await setup(page).getByRole("button", { name: "Start agent" }).click();
-  await expect(setup(page)).toHaveCount(0);
-  await finish(page, (await newest(page, "investigate"))!.id);
-  await finish(page, (await started(page, "triage")).id);
-  const plan = await started(page, "plan");
+  const investigation = await startStep(page, "investigate this", "investigate");
+  await finish(page, investigation.id);
+  const triage = await startStep(page, "triage this", "triage");
+  await finish(page, triage.id);
+  const plan = await startStep(page, "plan this", "plan");
   await finish(page, plan.id);
   restricted((await mockLaunches(page)).find((l) => l.runId === plan.id)!, "plan");
   await approvePlan(page);
 
-  const build = await started(page, "build");
+  const build = await startStep(page, "build it", "build");
   const built = await launch(page, build.id);
   expect(built).toMatchObject({ kind: "build", readOnly: null });
   expect(built.guard).not.toContain(READ_ONLY_GUARD_START);
@@ -179,24 +176,11 @@ test("a build launches as before; its review is restricted, a fix round goes bac
 
   await finish(page, build.id);
   await surfacePullRequests(page);
-  const review = await started(page, "review");
+  const review = await startStep(page, "review it", "review");
   const reviewed = await launch(page, review.id);
   restricted(reviewed, "review");
-  expect(reviewed.autoStart).toBe("build_review");
   expect(reviewed.readOnly!.allow.some((r) => /^Bash\(git fetch origin pull\/\d+\/head\)$/.test(r))).toBe(true);
   expect(reviewed.readOnly!.allow).toContain("Bash(cargo test)");
   await expect(runCard(page, review.id).locator("[data-read-only]")).toHaveAttribute("title", READ_ONLY_TESTS);
-
-  // The default review blocks: the fix round wakes the build's own session, which adds no launch and no restriction.
-  const before = (await mockLaunches(page)).length;
-  await finish(page, review.id);
-  await expect.poll(async () => (await mockRuns(page)).find((r) => r.id === build.id)).toMatchObject({ state: "working", passes: 2 });
-  expect(await mockLaunches(page)).toHaveLength(before);
   expect((await mockLaunches(page)).filter((l) => l.runId === build.id)).toEqual([built]);
-  await expect(runCard(page, build.id).locator("[data-read-only]")).toHaveCount(0);
-
-  await finish(page, build.id);
-  await surfacePullRequests(page);
-  const next = await started(page, "review", review.id);
-  restricted(await launch(page, next.id), "review");
 });

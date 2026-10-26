@@ -32,7 +32,7 @@ beforeEach(async () => {
   vi.stubGlobal("localStorage", memory());
   usePrefs.setState({ clarityLearning: {} });
   useToasts.getState().clear();
-  backend = new MockBackend({ runs: { seed: "empty", prSurfaceMs: null }, wsManage: true });
+  backend = new MockBackend({ runs: { seed: "empty", prSurfaceMs: null } });
   backend.supervisor.dispose();
   await useWorkspace.getState().init(backend);
   useWorkstreams.getState().init(backend);

@@ -14,9 +14,6 @@ import { PEEK_DRAFT_MARGIN, peekFocusAfterLeaving } from "./peekDrafts";
 import { openPullView, sameCommit, usePullDiff, type PullDiffState } from "./pullViewStore";
 import { takesBackendText } from "./RewriteDiff";
 import { FromRun } from "./RunProvenance";
-import { fixRoundOnPost, reviewPostFixRound } from "../lib/nextStep";
-import { useRuns } from "./runsStore";
-import { useWorkstreams } from "./workstreamsStore";
 import { useWorkspace } from "../workspaceStore";
 
 type Review = Extract<Proposal["intent"], { type: "githubReview" }>;
@@ -240,13 +237,6 @@ export function ReviewDraft({
   const stored = useWorkspace((s) => s.proposals);
   const olderKept = p.state.type === "pending" ? keptOlderNote(p, givenDrafts ?? Object.values(stored)) : null;
   const title = `GitHub review of ${review.repo}#${review.number}`;
-  // Posting a blocking review in Manage also sends a fix round to the build, by the same rule the supervisor follows: said beside Post review.
-  const reviewRun = useRuns((s) => s.runs.find((r) => r.id === review.runId));
-  const reviewWs = reviewRun?.spec.workstream ?? null;
-  const reviewView = useWorkstreams((s) => (reviewWs ? s.list.find((v) => v.workstream.id === reviewWs) : undefined));
-  const globals = useWorkstreams((s) => s.globals);
-  const reviewEvents = useWorkstreams((s) => (reviewWs ? s.events[reviewWs] : undefined));
-  const fixRound = p.state.type === "pending" ? reviewPostFixRound(reviewRun, reviewView, globals, reviewEvents) : null;
   const [summary, setSummary] = useState(initial?.summary ?? review.summary);
   const [comments, setComments] = useState<Held[]>(() => initial?.comments ?? held(review));
   const edited = useRef(false);
@@ -526,11 +516,6 @@ export function ReviewDraft({
         {open && (
           <p data-review-posts className="m-0 text-sm text-ws-ink3">
             {postsWhat(kept.length)} Nothing goes to GitHub until you post it here.
-          </p>
-        )}
-        {open && fixRound && canPost && (
-          <p data-review-fix-round role="note" className="m-0 text-sm text-ws-ink2">
-            {fixRoundOnPost(fixRound)}
           </p>
         )}
         {open && p.maybePosted && (

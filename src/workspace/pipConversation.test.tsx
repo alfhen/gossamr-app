@@ -7,7 +7,7 @@ import type { Intent, Proposal, RunSpec, WorkstreamView, Run, WorkContainer, Wor
 import { useWorkspace } from "../workspaceStore";
 import { draftDecisions } from "./DraftPreview";
 import { DRAFT_CARD, onDraftCardKey, stepDraftCards, upToNewestDraft } from "./draftKeys";
-import { CommandsList, Composer, GENERAL_RUN_REF_NOTE, commandHelp, ComposerFooter, GENERAL_CONVERSATION, MANAGE_NOTE, PipConversation, draftsForTicket, otherTicketsRow, VerbNote, composerVerb, inputAfterCommand, openWakeRun, outcomeBelongs, keepUnsentInput, unsentInputOf, wakeHeader, wakeIsLong, wakeParts, workstreamConversation, workstreamIntro } from "./PipConversation";
+import { CommandsList, Composer, GENERAL_RUN_REF_NOTE, commandHelp, ComposerFooter, GENERAL_CONVERSATION, PipConversation, draftsForTicket, otherTicketsRow, VerbNote, composerVerb, inputAfterCommand, openWakeRun, outcomeBelongs, keepUnsentInput, unsentInputOf, wakeHeader, wakeIsLong, wakeParts, workstreamConversation, workstreamIntro } from "./PipConversation";
 import { useWorkView } from "./workViewStore";
 import { useTabs } from "./tabsStore";
 import { useRuns } from "./runsStore";
@@ -236,55 +236,43 @@ describe("PipConversation", () => {
     expect(general).not.toContain("data-empty-workstream");
   });
 
-  it("names the workstream's ticket in its intro, and leaves Manage's rules and the commands to the Commands popover", () => {
+  it("names the workstream's ticket in its intro, and leaves the commands to the Commands popover", () => {
     setTurns({});
     expect(workstreamIntro({ itemKey: "CA-401", title: "CA-401 Welcome flow refresh" })).toBe("Everything for CA-401 Welcome flow refresh stays here: its agents, drafts and our conversation.");
     expect(workstreamIntro({ itemKey: "CA-401", title: "Welcome flow refresh" })).toBe("Everything for CA-401 Welcome flow refresh stays here: its agents, drafts and our conversation.");
     expect(workstreamIntro({ itemKey: null, title: "Tidy the docs" })).toBe("Everything for Tidy the docs stays here: its agents, drafts and our conversation.");
     const before = useWorkstreams.getInitialState().list;
-    const ws = (mode: "advise" | "manage"): WorkstreamView => ({
-      workstream: { id: "ws-405", connectionId: "mock", itemKey: "CA-405", repo: null, title: "CA-405 Export fix", pipSession: null, mode, heldReason: null, notes: null, createdAt: "2026-10-01T10:00:00Z", closedAt: null, budget: { autoTurns: null, wakes: null, tokens: null }, spent: { autoTurns: 0, wakes: 0, tokens: 0 }, rules: {}, basis: null },
+    const ws: WorkstreamView = {
+      workstream: { id: "ws-405", connectionId: "mock", itemKey: "CA-405", repo: null, title: "CA-405 Export fix", pipSession: null, pausedReason: null, notes: null, createdAt: "2026-10-01T10:00:00Z", closedAt: null, basis: null },
       stage: "intake",
       runs: [],
       labels: [],
-      budget: { autoTurns: { used: 0, limit: 6 }, wakes: { used: 0, limit: 12 }, level: "ok" },
-    });
-    const intro = (mode: "advise" | "manage") => {
-      // Rendered on the server, a store is read through its initial state.
-      useWorkstreams.getInitialState().list = [ws(mode)];
-      return renderToStaticMarkup(<PipConversation conversation={workstreamConversation("ws-405")} proposals={[]} />);
     };
     try {
-      for (const mode of ["advise", "manage"] as const) {
-        const html = intro(mode);
-        expect(html).toContain("Everything for CA-405 Export fix stays here");
-        expect(html).not.toContain("fixed rules");
-        expect(html).not.toContain("/stop");
-        // One sentence.
-        expect(/<p data-empty-workstream="true"[^>]*>([^<]*)<\/p>/.exec(html)?.[1].match(/[.!?](\s|$)/g)).toHaveLength(1);
-      }
+      // Rendered on the server, a store is read through its initial state.
+      useWorkstreams.getInitialState().list = [ws];
+      const html = renderToStaticMarkup(<PipConversation conversation={workstreamConversation("ws-405")} proposals={[]} />);
+      expect(html).toContain("Everything for CA-405 Export fix stays here");
+      expect(html).not.toContain("fixed rules");
+      expect(html).not.toContain("/stop");
+      // One sentence.
+      expect(/<p data-empty-workstream="true"[^>]*>([^<]*)<\/p>/.exec(html)?.[1].match(/[.!?](\s|$)/g)).toHaveLength(1);
     } finally {
       useWorkstreams.getInitialState().list = before;
     }
-    const managed = renderToStaticMarkup(<CommandsList workstream manage />);
-    expect(managed).toContain(MANAGE_NOTE);
-    expect(MANAGE_NOTE).toContain("routine next steps start on their own by fixed rules");
-    expect(MANAGE_NOTE).toContain("I start nothing myself");
-    expect(MANAGE_NOTE).toContain("every change to Jira still waits for you");
-    expect(renderToStaticMarkup(<CommandsList workstream manage={false} />)).not.toContain("data-manage-note");
   });
 
-  it("lists the commands in the popover: the run commands everywhere, /hold and /resume in a workstream, R1 only there", () => {
-    const ws = renderToStaticMarkup(<CommandsList workstream manage={false} />);
-    for (const usage of ["/stop R1", "/retry R1", "/answer R1 your answer", "/hold", "/resume"]) expect(ws).toContain(`>${usage}</dt>`);
+  it("lists the commands in the popover: the run commands everywhere, /pause and /resume in a workstream, R1 only there", () => {
+    const ws = renderToStaticMarkup(<CommandsList workstream />);
+    for (const usage of ["/stop R1", "/retry R1", "/answer R1 your answer", "/pause", "/resume"]) expect(ws).toContain(`>${usage}</dt>`);
     expect(ws).toContain("R1 is a run in this workstream; a run&#x27;s id works anywhere.");
     // Outside a workstream, where cards show no R labels, the examples name a run by its id and say what R1 is.
-    const general = renderToStaticMarkup(<CommandsList workstream={false} manage={false} />);
+    const general = renderToStaticMarkup(<CommandsList workstream={false} />);
     for (const usage of ["/stop &lt;run id&gt;", "/retry &lt;run id&gt;", "/answer &lt;run id&gt; your answer"]) expect(general).toContain(`>${usage}</dt>`);
     expect(general).not.toMatch(/>\/\w+ R1/);
     expect(general).toContain("A run&#x27;s id is on its card in Agents, and at the top of its sheet (Open on a card under Your agents). R1, R2… are the names a workstream gives its runs, and work in its conversation.");
     expect(general).not.toContain("R1 is a run in this workstream");
-    expect(general).not.toContain('data-command="hold"');
+    expect(general).not.toContain('data-command="pause"');
     expect(general).not.toContain('data-command="resume"');
   });
 

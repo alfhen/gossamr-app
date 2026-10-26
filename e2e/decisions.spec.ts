@@ -1,9 +1,8 @@
 import { expect, test, type Page } from "@playwright/test";
-import { advanceRuns, agentsHome, closeWorkstreamSheet, needsStack, askPermission, askPip, expandAllNeeds, expectToast, githubWrites, jiraWrites, mockAttached, mockRuns, needOfKind, needsPane, needsPaneHeading, needsYouTray, openAgents, openApp, peekSheet, peekTicket, pendingReviewDrafts, pipConversation, pipPane, reviewDrafts, setBudget, startWorkstream, surfacePullRequests, workstreamEvents, openNeedOfKind } from "./support/app";
+import { advanceRuns, closeWorkstreamSheet, askPermission, askPip, jiraWrites, mockAttached, mockRuns, needOfKind, needsPane, needsYouTray, openAgents, openApp, peekSheet, peekTicket, pipConversation, pipPane, startWorkstream, workstreamEvents, openNeedOfKind } from "./support/app";
 
-// Decisions only the person makes, in a workstream in Manage mode (`wsManage=1`): a run's permission prompt answered
-// in the app, and a review that still blocks after the automatic fix rounds. Pull requests show only when a test says.
-const MANAGED = "runs=empty&prSurface=manual&wsManage=1";
+// Decisions only the person makes: a run's permission prompt answered in the app. Pull requests show only when a test says.
+const SAMPLE = "runs=empty&prSurface=manual";
 
 const setup = (page: Page) => page.getByRole("dialog", { name: "Start an agent" });
 const runCards = (page: Page, key: string) => pipPane(page).getByRole("article", { name: `Start an agent: ${key}` });
@@ -16,9 +15,9 @@ async function settled(page: Page) {
   await expect(pipPane(page).getByRole("button", { name: "Stop" })).toHaveCount(0);
 }
 
-/** Asks Pip for an investigation of `key`, opens its draft and starts it, as the person does. */
-async function startInvestigation(page: Page, key = "CA-401") {
-  await askPip(page, "investigate this");
+/** Asks Pip for `what` on `key`, opens its draft and starts it, as the person does. */
+async function startStep(page: Page, what: string, key = "CA-401") {
+  await askPip(page, what);
   await settled(page);
   await runCards(page, key).last().getByRole("button", { name: "Review and start →" }).click();
   await expect(setup(page)).toBeVisible();
@@ -38,25 +37,20 @@ async function moveTo(page: Page, id: string, state: string, steps: number) {
   await expect.poll(async () => (await mockRuns(page)).find((r) => r.id === id)?.state).toBe(state);
 }
 
-/** Waits for the next run of `kind` to have been started by a rule and returns it. */
-async function started(page: Page, kind: string) {
-  await expect.poll(async () => (await newest(page, kind))?.id ?? null).not.toBeNull();
-  return (await newest(page, kind))!;
-}
-
-/** Investigation, triage and plan, with the plan approved: returns the build the rules started, working. */
+/** Investigation, triage and plan, each started by the person, with the plan approved and its build started: returns that build, working. */
 async function workingBuild(page: Page) {
-  await startInvestigation(page);
-  await moveTo(page, (await newest(page, "investigate"))!.id, "done", 3);
-  await moveTo(page, (await started(page, "triage")).id, "done", 3);
-  await moveTo(page, (await started(page, "plan")).id, "done", 3);
+  for (const [what, kind] of [["investigate this", "investigate"], ["triage this", "triage"], ["plan this", "plan"]] as const) {
+    await startStep(page, what);
+    await moveTo(page, (await newest(page, kind))!.id, "done", 3);
+  }
   await page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "All projects" }).click();
   await peekTicket(page, "CA-401");
   const draft = peekSheet(page).getByRole("article", { name: "Update the description of CA-401" }).filter({ hasText: "Gossamr Plan" });
   await draft.getByRole("button", { name: "Update description" }).click();
   await expect(draft).toHaveCount(0);
   await expect(pipConversation(page)).toHaveText(/^Workstream: CA-401 /);
-  const build = await started(page, "build");
+  await startStep(page, "build it");
+  const build = (await newest(page, "build"))!;
   await moveTo(page, build.id, "working", 2);
   return (await mockRuns(page)).find((r) => r.id === build.id)!;
 }
@@ -65,7 +59,7 @@ const audited = async (page: Page, action: string) => (await workstreamEvents(pa
 
 test("Allow once on a Build opens it in Terminal for that exact command, and a push Gossamr forbids offers no Allow", async ({ page, context }) => {
   await context.grantPermissions(["clipboard-read", "clipboard-write"]);
-  await openApp(page, MANAGED);
+  await openApp(page, SAMPLE);
   await startWorkstream(page, "CA-401");
   const build = await workingBuild(page);
   const push = `git push -u origin worktree-${build.name}`;
@@ -141,9 +135,9 @@ test("Allow once on a Build opens it in Terminal for that exact command, and a p
 });
 
 test("Deny on a read-only run, which is never offered Allow: Claude carries on without it", async ({ page }) => {
-  await openApp(page, MANAGED);
+  await openApp(page, SAMPLE);
   await startWorkstream(page, "CA-401");
-  await startInvestigation(page);
+  await startStep(page, "investigate this");
   const run = (await newest(page, "investigate"))!;
   await moveTo(page, run.id, "working", 2);
   await askPermission(page, run.id, "approve Bash: rm -rf node_modules");
@@ -170,184 +164,4 @@ test("Deny on a read-only run, which is never offered Allow: Claude carries on w
   await expect(count(page)).toHaveText(String(before - 1));
   expect(await mockAttached(page)).toEqual([]);
   expect(await jiraWrites(page)).toEqual([]);
-});
-
-/** Moves run `id` on to done: queued (or working again), launching, working, done. Only that run moves. */
-async function finish(page: Page, id: string) {
-  await settled(page);
-  for (let i = 0; i < 3; i++) await advanceRuns(page, 1, id);
-  await expect.poll(async () => (await mockRuns(page)).find((r) => r.id === id)?.state).toBe("done");
-}
-
-/** Waits for a run of `kind` newer than `after` to have been started by a rule and returns it. */
-async function startedAfter(page: Page, kind: string, after: string | null) {
-  await expect.poll(async () => (await newest(page, kind))?.id ?? null).not.toBe(after);
-  return (await newest(page, kind))!;
-}
-
-/** The person approves the Gossamr Plan description draft on CA-401 from its peek, as written. */
-async function approvePlan(page: Page) {
-  await page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "All projects" }).click();
-  await peekTicket(page, "CA-401");
-  const draft = peekSheet(page).getByRole("article", { name: "Update the description of CA-401" }).filter({ hasText: "Gossamr Plan" });
-  await draft.getByRole("button", { name: "Update description" }).click();
-  await expect(draft).toHaveCount(0);
-  await expect(pipConversation(page)).toHaveText(/^Workstream: CA-401 /);
-}
-
-/** A workstream in Manage with room for the whole chain: investigation, triage and plan, with the plan approved; returns the build. */
-async function toBuild(page: Page) {
-  // A GitHub connection that watches the build's repository, so each review leaves a review draft.
-  await openApp(page, `${MANAGED}&mockRepos=12`);
-  await startWorkstream(page, "CA-401");
-  await setBudget(page, (await workstreamEvents(page))[0].workstreamId, { autoTurns: 30, wakes: 40 });
-  await startInvestigation(page);
-  await finish(page, (await newest(page, "investigate"))!.id);
-  await finish(page, (await started(page, "triage")).id);
-  await finish(page, (await started(page, "plan")).id);
-  await approvePlan(page);
-  return started(page, "build");
-}
-
-/** The build finishes its pass, its pull request shows, and the review the rule starts finishes (blocking, as the sample's do). Returns the review. */
-async function buildAndReview(page: Page, build: string, after: string | null) {
-  await finish(page, build);
-  await surfacePullRequests(page);
-  const review = (await startedAfter(page, "review", after)).id;
-  await finish(page, review);
-  return review;
-}
-
-const lines = async (page: Page, action: string) => (await workstreamEvents(page)).filter((e) => e.action === action);
-const escalationItem = (page: Page) => needOfKind(page, "escalation");
-/** The review's three choices in the pane; the conversation's own card is the same one. */
-const escalationCard = (page: Page) => needsPane(page).getByRole("group", { name: "Review still blocks" });
-
-test("a review that still blocks after two fix rounds comes to the person with three choices, each theirs alone", async ({ page }) => {
-  test.setTimeout(240_000);
-  const build = (await toBuild(page)).id;
-  let review: string | null = null;
-  for (let round = 0; round < 3; round++) {
-    review = await buildAndReview(page, build, review);
-    // One review of the pull request waits for the person: the newest.
-    await expect.poll(async () => (await pendingReviewDrafts(page)).map((d) => d.runId)).toEqual([review]);
-  }
-  await expect.poll(async () => (await lines(page, "fix_rounds_exhausted")).map((e) => e.runId)).toEqual([review]);
-  expect(await lines(page, "fix_round_sent")).toHaveLength(2);
-
-  await openAgents(page);
-  await openNeedOfKind(page, "escalation");
-  await expect(escalationItem(page)).toHaveCount(1);
-  await expect(escalationItem(page)).toContainText("The review still blocks after 2 fix rounds.");
-  const card = escalationCard(page);
-  // The pane's header says it (and what waiting does); the card doesn't say it a second time, and isn't on the rail as well.
-  await expect(needsPane(page)).toContainText("The review still blocks after 2 fix rounds.");
-  await expect(card).not.toContainText("What next?");
-  await expect(agentsHome(page).locator("[data-escalation]")).toHaveCount(1);
-  await expect(card.getByRole("button")).toHaveText(["Run another fix round", "I'll take it from here", "Post the review as is"]);
-  await expect(needsPaneHeading(page)).toBeFocused();
-
-  // The review draft folded into this need is under the choices, not a second need in the list.
-  const [waiting] = await pendingReviewDrafts(page);
-  const draft = needsPane(page).locator(`article[data-draft="${waiting.id}"]`);
-  await expect(draft).toBeVisible();
-  // And one card of it on the whole screen: the timeline and the rail don't show it as well.
-  await expect(agentsHome(page).locator(`article[data-draft="${waiting.id}"]`)).toHaveCount(1);
-  await expect(needsStack(page).locator('[data-needs-pane][data-kind="review"]')).toHaveCount(0);
-  // Post the review as is: nothing goes to GitHub until the draft's own Post review.
-  await card.getByRole("button", { name: "Post the review as is" }).click();
-  await expect(draft.getByRole("button", { name: "Post review" })).toBeFocused();
-  expect(await githubWrites(page)).toEqual([]);
-  await expect(escalationItem(page)).toHaveCount(1);
-  // As on the rail's card, the choices wait while the draft is open and say why; discarding it brings them back.
-  await expect(card.locator("[data-escalation-draft-open]")).toBeVisible();
-  await expect(card.getByRole("button", { name: "Run another fix round" })).toBeDisabled();
-  await draft.getByRole("button", { name: "Discard" }).click();
-  await expect(card.locator("[data-escalation-draft-open]")).toHaveCount(0);
-  await expect(card.getByRole("button", { name: "Run another fix round" })).toBeEnabled();
-
-  // Run another fix round: the person's, past the cap, recorded as theirs; the item goes.
-  const passes = (await mockRuns(page)).find((r) => r.id === build)!.passes;
-  await card.getByRole("button", { name: "Run another fix round" }).click();
-  // The toast also holds its Dismiss button's text, so the line is matched without an end anchor.
-  await expectToast(page, /^Fix round sent to R\d+\./);
-  expect((await lines(page, "fix_round_person")).map((e) => ({ actor: e.actor, runId: e.runId, detail: e.detail }))).toEqual([{ actor: "person", runId: build, detail: `after ${review}` }]);
-  const rounds = await lines(page, "fix_round_sent");
-  expect(rounds.map((e) => e.actor)).toEqual(["supervisor", "supervisor", "person"]);
-  expect((await mockRuns(page)).find((r) => r.id === build)).toMatchObject({ state: "working", passes: passes + 1 });
-  await expect(escalationItem(page)).toHaveCount(0);
-  await expect(card).toHaveCount(0);
-
-  // The next review blocks too: the need is back and needs a fresh click; the rule sent no third round of its own.
-  review = await buildAndReview(page, build, review);
-  await expandAllNeeds(page);
-  await expect(escalationItem(page)).toHaveCount(1);
-  await escalationItem(page).click();
-  expect(await lines(page, "fix_round_sent")).toHaveLength(3);
-  await expect(card.getByRole("button")).toHaveText(["Run another fix round", "I'll take it from here", "Post the review as is"]);
-
-  // I'll take it from here: Advise, and nothing else changes.
-  const before = { runs: await mockRuns(page), drafts: await pendingReviewDrafts(page), jira: await jiraWrites(page) };
-  await card.getByRole("button", { name: "I'll take it from here" }).click();
-  const over = agentsHome(page).getByRole("status").filter({ hasText: "Over to you" });
-  await expectToast(page, "Over to you: this workstream is on Advise now.");
-  await expect(page.getByRole("switch", { name: "Manage this workstream" }).first()).toHaveAttribute("aria-checked", "false");
-  expect((await lines(page, "escalation_taken")).map((e) => ({ actor: e.actor, runId: e.runId }))).toEqual([{ actor: "person", runId: review }]);
-  await expect(escalationItem(page)).toHaveCount(0);
-  expect(await mockRuns(page)).toEqual(before.runs);
-  expect(await pendingReviewDrafts(page)).toEqual(before.drafts);
-  expect(await jiraWrites(page)).toEqual(before.jira);
-  expect(await githubWrites(page)).toEqual([]);
-
-  // Manage on again: the review taken over stays the person's. No false "on Advise now", and the tray and the card agree.
-  await page.getByRole("switch", { name: "Manage this workstream" }).first().click();
-  await expect(page.getByRole("switch", { name: "Manage this workstream" }).first()).toHaveAttribute("aria-checked", "true");
-  await expect(over).toHaveCount(0);
-  await expect(card).toHaveCount(0);
-  await expect(escalationItem(page)).toHaveCount(0);
-});
-
-test("one review of a pull request waits at a time, except one the person edited, and a posted one is never retired", async ({ page }) => {
-  test.setTimeout(240_000);
-  const build = (await toBuild(page)).id;
-  const r1 = await buildAndReview(page, build, null);
-  const [d1] = await pendingReviewDrafts(page);
-  expect(d1.runId).toBe(r1);
-
-  // The person edits the first review while the build is at its fix round; saving it for the PR view posts nothing.
-  await peekTicket(page, "CA-401");
-  const first = peekSheet(page).locator(`article[data-draft="${d1.id}"]`);
-  await first.getByRole("textbox", { name: "Review summary" }).fill("Mine: the retry loop still needs a back-off.");
-  await first.getByRole("button", { name: "Open PR view" }).click();
-  const view = page.getByRole("dialog", { name: /^Pull request / });
-  await expect(view).toBeVisible();
-  await page.keyboard.press("Escape");
-  await expect(view).toHaveCount(0);
-  await expect.poll(async () => (await reviewDrafts(page)).find((d) => d.id === d1.id)?.edited).toBe(true);
-  await page.keyboard.press("Escape");
-  await expect(peekSheet(page)).toHaveCount(0);
-
-  // The second review leaves the edited one standing beside it, and its card says so.
-  const r2 = await buildAndReview(page, build, r1);
-  await expect.poll(async () => (await pendingReviewDrafts(page)).map((d) => d.runId)).toEqual([r2, r1]);
-  const [d2] = await pendingReviewDrafts(page);
-  expect((await reviewDrafts(page)).find((d) => d.id === d1.id)?.supersededBy).toBeNull();
-  expect((await lines(page, "draft_kept_edited")).map((e) => e.detail)).toEqual([d2.id]);
-  await peekTicket(page, "CA-401");
-  const second = peekSheet(page).locator(`article[data-draft="${d2.id}"]`);
-  await expect(second.locator("[data-review-kept-older]")).toHaveText(/^An older review of #\d+ that you edited is still waiting; this one didn't replace it\.$/);
-
-  // The person posts their edited one; the third review replaces the second and leaves the posted one as it is.
-  await first.getByRole("button", { name: "Post review" }).click();
-  await expect.poll(async () => (await githubWrites(page)).length).toBe(1);
-  await page.keyboard.press("Escape");
-  await expect(peekSheet(page)).toHaveCount(0);
-  const r3 = await buildAndReview(page, build, r2);
-  await expect.poll(async () => (await pendingReviewDrafts(page)).map((d) => d.runId)).toEqual([r3]);
-  const [d3] = await pendingReviewDrafts(page);
-  const all = await reviewDrafts(page);
-  expect(all.find((d) => d.id === d2.id)).toMatchObject({ state: "retired", supersededBy: d3.id });
-  expect(all.find((d) => d.id === d1.id)).toMatchObject({ state: "applied", supersededBy: null });
-  expect(new Set(all.map((d) => d.pull)).size).toBe(1);
-  expect(await githubWrites(page)).toHaveLength(1);
 });

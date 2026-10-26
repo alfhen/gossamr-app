@@ -6,14 +6,13 @@ import { ALL, and, YOUR_TURN_WHY } from "../lib/filter";
 import { useWorkspace } from "../workspaceStore";
 import { BUILT_IN_VIEWS, PRESETS, showsEntry, visibleChips, withProject } from "./filters";
 import { Header, ProjectMenu, ViewSegment } from "./Header";
-import { HOLD_ALL_NOTE, Rail, RailButton, RailTip } from "./Rail";
+import { Rail, RailButton, RailTip } from "./Rail";
 import { ToastHost, toastPlacement } from "./ToastHost";
 import { useToasts, LIFETIME_MS, MAX_QUEUED, STALE_MS } from "./toasts";
 import { MORE_BUTTON, sameWindow, tabWindow } from "./TabBar";
 import { canvasRoom, regionTarget } from "./Workspace";
 import { RowBadges } from "./ListView";
-import { useWorkstreams } from "./workstreamsStore";
-import type { WorkstreamView, Run } from "../types";
+import type { Run } from "../types";
 import { SavedViewsPanel, type SavedViewsPanelProps } from "./SavedViews";
 import { buildTabItems } from "./tabItems";
 import { loadTabs, useTabs, type Tab } from "./tabsStore";
@@ -264,23 +263,6 @@ describe("nothing covers anything", () => {
     expect(buttons.length).toBeGreaterThan(5);
     for (const b of buttons) expect(b).toMatch(/aria-label="[^"]+"/);
     expect(out).not.toContain("⌕");
-  });
-
-  it("draws Hold all as a pause icon with a note on what it does", () => {
-    const ws = useWorkstreams.getInitialState();
-    const before = { list: ws.list };
-    const view = { workstream: { id: "ws-1", closedAt: null, mode: "manage", heldReason: null } } as unknown as WorkstreamView;
-    Object.assign(ws, { list: [view] });
-    try {
-      const out = renderToStaticMarkup(<Rail />);
-      const hold = /<button[^>]*aria-label="Hold all workstreams"[^>]*>(.*?)<\/button>/s.exec(out)![1];
-      expect(hold).toContain("<svg");
-      expect(hold).not.toContain("⏸");
-      expect(HOLD_ALL_NOTE).toMatch(/agents carry on/);
-      for (const b of out.match(/<button[^>]*>/g) ?? []) expect(b).toMatch(/aria-label="[^"]+"/);
-    } finally {
-      Object.assign(ws, { list: before.list });
-    }
   });
 });
 

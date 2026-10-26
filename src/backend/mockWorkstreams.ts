@@ -3,17 +3,19 @@ import { followWithReply, NUDGE_GONE, nudgeOffered, reporterFollow, reporterRepl
 import { clarityGaps, type ClarityGap } from "../lib/ticketClarity";
 import { workstreamOf } from "../lib/proposals";
 import { adoptableOf, adoptWords, NOTHING_TO_ADOPT } from "../lib/workstreamAdopt";
-import { budgetLevel, budgetView } from "../lib/workstreamHold";
 import { byQueue, reviewBlocking, runLabels, stage } from "../lib/workstreamStage";
 import { readStored, writeStored } from "../workspace/storage";
-import { ALLOW_MORE_STEPS, BASIS_FIELDS, HELD_ALL, HELD_BUDGET, HELD_DAILY, HELD_PERSON, HELD_QUOTA, HELD_RESTART, TRIPWIRE, TRIPWIRES, WORKSTREAM_RULES } from "../types";
-import type { Adoptable, BasisField, Clarity, Escalation, ItemRef, ReadinessStop, ReporterReply, ReporterWait, Proposal, ReviewVerdict, Run, WorkItem, Workstream, WorkstreamActor, WorkstreamBasis, WorkstreamBudget, WorkstreamEvent, WorkstreamMode, WorkstreamRule, WorkstreamUndo, WorkstreamView, WorkstreamsChanged } from "../types";
-import { startedFresh } from "./mockPipTurns";
+import { BASIS_FIELDS } from "../types";
+import type { Adoptable, BasisField, Clarity, ItemRef, PauseReason, ReadinessStop, ReporterReply, ReporterWait, Proposal, ReviewVerdict, Run, WorkItem, Workstream, WorkstreamActor, WorkstreamBasis, WorkstreamEvent, WorkstreamUndo, WorkstreamView, WorkstreamsChanged } from "../types";
 
 const CONNECTION = "mock";
 /** Where the sample backend keeps its workstreams and their audit, so both survive a reload. */
-/** How long after a hold or a switch of mode it can be undone, as `UNDO_WINDOW_SECS` in `inbox/workstreams.rs`. */
+/** How long after "Bring them here" it can be undone, as `UNDO_WINDOW_SECS` in `inbox/workstreams.rs`. */
 export const UNDO_WINDOW_MS = 60_000;
+
+/** Wakes of Pip one workstream may have in a day, counted from midnight or the person's last resume, and wake turns Pip may have in a day across workstreams, as `WAKES_PER_WORKSTREAM_PER_DAY` and `WAKE_TURNS_PER_DAY` in src-tauri/src/domain/workstream.rs. */
+export const WAKES_PER_WORKSTREAM_PER_DAY = 24;
+export const WAKE_TURNS_PER_DAY = 120;
 
 export const MOCK_WORKSTREAMS_KEY = "gossamr-mock-workstreams";
 /** Pip's notes are kept up to this many bytes, after scrubbing (NOTES_LIMIT in src-tauri/src/inbox/workstreams.rs). */
@@ -80,23 +82,17 @@ export function driftOf(basis: WorkstreamBasis, ticket: BasisTicket): BasisField
   return fields;
 }
 
-/** The last tripwire that held a workstream, from its audit: its kind, the basis fields that drifted, when, and when the person resumed it after. */
-export interface LastTrip {
-  kind: string;
+/** The last time a workstream's ticket changed in Jira, from its audit: the basis fields that drifted and when, as `LastDrift` in src-tauri/src/agent/workstream.rs. */
+export interface LastDrift {
   fields: BasisField[];
   at: string;
-  resumedAt: string | null;
 }
 
-/** The last tripwire in `events` (oldest first) with its `basis_drifted` fields and the person's first resume after it, as `last_trip`. */
-export function lastTripOf(events: readonly WorkstreamEvent[]): LastTrip | null {
-  const trip = [...events].reverse().find((e) => e.actor === "supervisor" && e.action === "tripwire");
-  if (!trip?.detail || !(TRIPWIRES as readonly string[]).includes(trip.detail)) return null;
-  const after = events.filter((e) => e.seq > trip.seq);
-  const drift = after.find((e) => e.actor === "supervisor" && e.action === "basis_drifted");
-  const fields = (drift?.detail ?? "").split(",").filter((f): f is BasisField => (BASIS_FIELDS as readonly string[]).includes(f));
-  const resumed = after.find((e) => e.actor === "person" && e.action === "resumed");
-  return { kind: trip.detail, fields, at: trip.at, resumedAt: resumed?.at ?? null };
+/** The last `basis_drifted` line by the supervisor in `events` (oldest first), as `last_drift`; fields not known are left out. */
+export function lastDriftOf(events: readonly WorkstreamEvent[]): LastDrift | null {
+  const line = [...events].reverse().find((e) => e.actor === "supervisor" && e.action === "basis_drifted");
+  if (!line) return null;
+  return { fields: (line.detail ?? "").split(",").filter((f): f is BasisField => (BASIS_FIELDS as readonly string[]).includes(f)), at: line.at };
 }
 
 /**
@@ -110,50 +106,10 @@ export function waitingForPr(runs: readonly Run[], prOf: (runId: string) => numb
   return prOf(build.id) == null ? build.id : null;
 }
 
-/** How many automatic fix rounds run before a review that still blocks is the person's, as `autostart::FIX_ROUNDS_MAX`. */
-const FIX_ROUNDS_MAX = 2;
-
-/** Why a choice on a review that still blocks after the fix rounds is refused, as `ESCALATION_GONE` in src-tauri/src/inbox/workstreams.rs. */
-export const ESCALATION_GONE = "This review isn't waiting for your choice any more.";
-
-/**
- * The escalation of `ws`, if its newest review still blocks after the automatic fix rounds, as `escalation_of`: the
- * workstream is open and in Manage (a hold doesn't hide it), its newest review is done, blocking and of a build, the
- * supervisor said the rounds ran out for it (`fix_rounds_exhausted`), the person hasn't sent a fix round after it
- * (`fix_round_person`) or taken it over (`escalation_taken`) or posted its review draft as it is (`escalation_posted`), and the build is done. `drafts` are the pending drafts; only GitHub reviews among them count.
- */
-export function escalationOf(ws: Workstream, runs: readonly Run[], verdictOf: (run: Run) => ReviewVerdict | null, events: readonly WorkstreamEvent[], drafts: readonly Proposal[]): Escalation | null {
-  if (ws.closedAt !== null || ws.mode !== "manage") return null;
-  const mine = runs.filter((r) => r.spec.workstream === ws.id);
-  const review = mine.filter((r) => r.spec.kind === "review").sort(byQueue).pop();
-  if (!review || review.state !== "done" || verdictOf(review) !== "blocking") return null;
-  const build = mine.find((r) => r.id === review.spec.buildFromRun && r.spec.kind === "build");
-  if (!build || build.state !== "done") return null;
-  const exhausted = events.filter((e) => e.action === "fix_rounds_exhausted" && e.runId === review.id).sort((a, b) => a.seq - b.seq).pop();
-  if (!exhausted) return null;
-  // The person sent a round after it, took it over, or posted its review draft as it is: a later switch back to Manage doesn't bring it back.
-  if (events.some((e) => (e.action === "fix_round_person" && e.detail === `after ${review.id}`) || ((e.action === "escalation_taken" || e.action === "escalation_posted") && e.runId === review.id))) return null;
-  const reviews = drafts.filter((p) => p.state.type === "pending").flatMap((p) => (p.intent.type === "githubReview" ? [{ p, i: p.intent }] : []));
-  const own = reviews.find((d) => d.i.runId === review.id)?.p.id;
-  const pr = review.spec.pr;
-  // Only this workstream's own drafts, so a draft is offered by at most one escalation, as in Rust.
-  const ofPull = pr == null ? undefined : reviews.filter((d) => d.i.number === pr && d.i.repo.toLowerCase() === review.spec.repo.toLowerCase() && workstreamOf(d.p) === ws.id).sort((a, b) => a.p.createdAt.localeCompare(b.p.createdAt) || a.p.id.localeCompare(b.p.id)).pop()?.p.id;
-  const labels = new Map(runLabels(mine));
-  return {
-    reviewRun: review.id,
-    buildRun: build.id,
-    reviewLabel: labels.get(review.id) ?? "",
-    buildLabel: labels.get(build.id) ?? "",
-    rounds: FIX_ROUNDS_MAX,
-    reviewDraft: own ?? ofPull ?? null,
-    at: exhausted.at,
-  };
-}
-
 /**
  * The clarity notice of `ws`, as `clarity_of`: the ticket reads thin (`gaps`), no Triage ran in the workstream (its verdict
  * is the authority), no Triage, Plan or Build ran on the ticket anywhere (`itemRuns`: in any workstream or in General), the person hasn't dismissed or asked about it (unless the ticket changed since they asked), and nothing
- * waits on the reporter. Never a need, so any mode shows it.
+ * waits on the reporter. Never a need.
  */
 export function clarityOf(ws: Workstream, runs: readonly Run[], itemRuns: readonly Run[], gaps: readonly ClarityGap[], replies: readonly string[], events: readonly WorkstreamEvent[]): Clarity | null {
   if (ws.closedAt !== null || ws.itemKey === null || !gaps.length) return null;
@@ -189,14 +145,14 @@ export const READINESS_GONE = "This ticket isn't waiting for your choice about i
 
 /**
  * The readiness stop of `ws`, if its newest Triage on a ticket is done and said `Ready to plan: no`, as `readiness_of`: the
- * workstream is open and in Manage, the person hasn't chosen yet (`readiness_asked`, `readiness_answered` or
+ * workstream is open, the person hasn't chosen yet (`readiness_asked`, `readiness_answered` or
  * `readiness_overridden`, theirs, naming that Triage), and no Plan was started since it finished. A newer Triage, which
  * is under way or says ready, takes it away, as does a Plan the person started by hand. `readiness` is what a Triage's
  * written answer resolves to; null is no verdict, which reads as ready. A choice to ask the reporter is undone by the ticket
  * changing while the person waited (`reporterFollow(...).changed`): the stop comes back, flagged `changed`.
  */
 export function readinessOf(ws: Workstream, runs: readonly Run[], readiness: (run: Run) => { ready: boolean; questions: string[] } | null, replies: readonly string[], events: readonly WorkstreamEvent[]): ReadinessStop | null {
-  if (ws.closedAt !== null || ws.mode !== "manage") return null;
+  if (ws.closedAt !== null) return null;
   const mine = runs.filter((r) => r.spec.workstream === ws.id);
   const triage = mine.filter((r) => r.spec.kind === "triage" && !!r.item).sort(byQueue).pop();
   if (!triage || triage.state !== "done") return null;
@@ -216,51 +172,20 @@ export function workstreamIdProblem(id: string): string | null {
   return null;
 }
 
-/** Whether `reason` is one a workstream may be held with, as `valid_hold_reason` checks it. */
-export function validHoldReason(reason: string): boolean {
-  if ([HELD_RESTART, HELD_PERSON, HELD_ALL, HELD_BUDGET, HELD_DAILY, HELD_QUOTA].includes(reason)) return true;
-  return reason.startsWith(TRIPWIRE) && (TRIPWIRES as readonly string[]).includes(reason.slice(TRIPWIRE.length));
+/** Pauses `ws` for `reason` as `pause` in src-tauri/src/inbox/workstreams.rs does: not a closed one, and whichever pause came first stays. Null when nothing changes. */
+function paused(ws: Workstream, reason: PauseReason): Workstream | null {
+  if (ws.closedAt !== null || ws.pausedReason !== null) return null;
+  return { ...ws, pausedReason: reason };
 }
 
-/**
- * Holds `ws` with `reason` as `hold` in src-tauri/src/inbox/workstreams.rs does: not a closed one, and one already held
- * keeps its reason unless the person's hold replaces a restart, budget or quota one. Null when nothing changes.
- */
-function held(ws: Workstream, reason: string): Workstream | null {
-  if (ws.closedAt !== null) return null;
-  // The person's own hold, or a tripwire's, replaces one that would lift by itself or that the person didn't choose.
-  const replaces = reason === HELD_PERSON || reason.startsWith(TRIPWIRE);
-  if (ws.heldReason !== null && !(replaces && [HELD_RESTART, HELD_BUDGET, HELD_QUOTA].includes(ws.heldReason))) return null;
-  return { ...ws, heldReason: reason };
-}
+/** A stored reason this version doesn't know reads as the person's, as `PauseReason`'s `From<String>` does. */
+const pauseReasonOf = (reason: unknown): PauseReason | null => (reason == null ? null : reason === "ceiling" ? "ceiling" : "person");
 
-/**
- * `ws` held for its budget when it is in Manage, open, not held and has used its automatic steps up, as `rehold_spent`
- * does: Allow 5 more is the only way to grant more, so going back to Manage can't skip the question. Null otherwise.
- */
-function reheldForBudget(ws: Workstream): Workstream | null {
-  if (ws.closedAt !== null || ws.mode !== "manage" || ws.heldReason !== null || budgetLevel(ws) !== "spent") return null;
-  return { ...ws, heldReason: HELD_BUDGET };
-}
-
-let restartTaken = false;
-
-/** True for the first store opened on a page that started the app afresh, false for any other: a page restarts once. */
-export function restartOnce(): boolean {
-  if (restartTaken) return false;
-  restartTaken = true;
-  return startedFresh();
-}
-
-/** A stored workstream from before rules and basis were kept, with their defaults. */
-const withDefaults = (w: Workstream): Workstream => ({
-  ...w,
-  heldReason: w.heldReason ?? null,
-  budget: w.budget ?? { autoTurns: null, wakes: null, tokens: null },
-  spent: w.spent ?? { autoTurns: 0, wakes: 0, tokens: 0 },
-  rules: w.rules ?? {},
-  basis: w.basis ?? null,
-});
+/** A stored workstream from before the fields now left out: they are dropped, and any old hold reads as paused by the person. */
+const withDefaults = (w: Workstream & { heldReason?: unknown }): Workstream => {
+  const { heldReason, mode: _mode, budget: _budget, spent: _spent, rules: _rules, drifted: _drifted, resumeMode: _resumeMode, ...rest } = w as Workstream & Record<string, unknown>;
+  return { ...(rest as Workstream), pausedReason: pauseReasonOf(w.pausedReason ?? heldReason), basis: w.basis ?? null };
+};
 
 const isWorkstream = (w: unknown): w is Workstream => {
   const x = w as Partial<Workstream> | null;
@@ -275,7 +200,7 @@ const isEvent = (e: unknown): e is WorkstreamEvent => {
 /**
  * The sample backend's workstreams, kept in this browser so they survive a reload as the app's database keeps them.
  * The stage is never kept: it is worked out from the runs linked to each one (`runs`) every time one is read, as the
- * backend does. Opened after a restart, every open workstream is held, as reopening the app's database holds them.
+ * backend does.
  * Nothing here starts, stops or answers a run or writes to Jira.
  */
 export class MockWorkstreams {
@@ -299,7 +224,7 @@ export class MockWorkstreams {
   repliesOf(ws: Pick<Workstream, "itemKey" | "closedAt">): string[] {
     return ws.itemKey && ws.closedAt === null ? this.repliesTo(ws.itemKey) : [];
   }
-  /** The pending drafts there are, of which an escalation offers a GitHub review to post as it is; set by the backend that owns the drafts. */
+  /** The pending drafts there are, which Bring them here counts; set by the backend that owns the drafts. */
   pendingDrafts: () => readonly Proposal[] = () => [];
   /** Puts run `id` in workstream `workstream`, or back in General with null; set by the backend that owns the runs. */
   moveRun: (id: string, workstream: string | null) => void = () => {};
@@ -317,27 +242,11 @@ export class MockWorkstreams {
     private readonly titleOf: (item: ItemRef) => string | null,
     private readonly now: () => Date = () => new Date(),
     private readonly key: string = MOCK_WORKSTREAMS_KEY,
-    restart: boolean = restartOnce(),
-    /** The mode a new workstream opens in; `?wsManage=1` makes it Manage, for trying the supervisor. */
-    private readonly openMode: WorkstreamMode = "advise",
   ) {
     const stored = readStored(key) as Partial<Stored> | null;
     this.all = Array.isArray(stored?.workstreams) ? stored.workstreams.filter(isWorkstream).map(withDefaults) : [];
     this.audit = Array.isArray(stored?.events) ? stored.events.filter(isEvent) : [];
     this.seq = Math.max(0, ...this.all.map((w) => Number(/^ws-(\d+)$/.exec(w.id)?.[1] ?? 0)));
-    if (restart) this.holdOpen(HELD_RESTART);
-  }
-
-  /** Holds every open workstream not held already, each with one supervisor line, as `hold_open_workstreams` does. */
-  private holdOpen(reason: string) {
-    let any = false;
-    for (const ws of this.all) {
-      if (ws.closedAt !== null || ws.heldReason !== null) continue;
-      this.put({ ...ws, heldReason: reason });
-      this.append(ws.id, "supervisor", "held", { detail: reason });
-      any = true;
-    }
-    if (any) this.save();
   }
 
   private save() {
@@ -367,23 +276,21 @@ export class MockWorkstreams {
   private view(ws: Workstream, runs: readonly Run[]): WorkstreamView {
     const linked = runs.filter((r) => r.spec.workstream === ws.id).sort((a, b) => byQueue(b, a));
     const judged = linked.map((r) => ({ ...r, verdict: r.spec.kind === "review" && r.state === "done" ? this.verdictOf(r) : null }));
-    const view: WorkstreamView = { workstream: ws, stage: stage(judged), runs: linked.map((r) => r.id), labels: runLabels(linked), budget: budgetView(ws) };
+    const view: WorkstreamView = { workstream: ws, stage: stage(judged), runs: linked.map((r) => r.id), labels: runLabels(linked) };
     const waiting = waitingForPr(linked, this.prOf);
-    // The audit is read only for an open workstream, as `escalation_events` does; each reading checks the mode itself.
+    // The audit is read only for an open workstream, as `view_events` does.
     const events = ws.closedAt === null ? this.audit.filter((e) => e.workstreamId === ws.id) : [];
-    const escalation = events.length ? escalationOf(ws, linked, (r) => (r.spec.kind === "review" && r.state === "done" ? this.verdictOf(r) : null), events, this.pendingDrafts()) : null;
     const replies = this.repliesOf(ws);
     const readiness = events.length ? readinessOf(ws, linked, (r) => (r.spec.kind === "triage" && r.state === "done" ? this.readinessOfRun(r) : null), replies, events) : null;
     const ticket = ws.closedAt === null && ws.itemKey ? this.ticketOf(ws.itemKey) : null;
     const clarity = ticket ? clarityOf(ws, linked, runs, clarityGaps(docText(ticket.body)), replies, events) : null;
     const { follow, repliedAt } = ws.closedAt === null ? followWithReply(events, replies) : { follow: null, repliedAt: null };
     const waitingOnReporter: ReporterWait | null = follow?.waiting ? { since: follow.waiting } : null;
-    const changedWhileWaiting = !!follow?.changed;
     const reporterReplied = !!follow?.replied;
     const reporterReply = reporterReplied && repliedAt && ws.itemKey ? this.replyAt(ws.itemKey, repliedAt) : null;
     const reporterReplies = ws.closedAt === null && ws.itemKey ? reporterRepliesOf(events, this.replyCommentsOf(ws.itemKey)) : [];
     const adoptable = ws.closedAt === null && ws.itemKey ? adoptableOf(ws, runs.filter((r) => r.item?.key === ws.itemKey), this.pendingDrafts()) : null;
-    return { ...view, ...(adoptable && (adoptable.runs.length || adoptable.drafts.length) ? { adoptable } : {}), ...(waiting ? { waitingForPr: waiting } : {}), ...(reviewBlocking(judged) ? { reviewBlocking: true } : {}), ...(escalation ? { escalation } : {}), ...(readiness ? { readiness } : {}), ...(clarity ? { clarity } : {}), ...(waitingOnReporter ? { waitingOnReporter } : {}), ...(changedWhileWaiting ? { changedWhileWaiting } : {}), ...(reporterReplied ? { reporterReplied } : {}), ...(reporterReplied && repliedAt ? { reporterRepliedAt: repliedAt } : {}), ...(reporterReply ? { reporterReply } : {}), ...(reporterReplies.length ? { reporterReplies } : {}) };
+    return { ...view, ...(adoptable && (adoptable.runs.length || adoptable.drafts.length) ? { adoptable } : {}), ...(waiting ? { waitingForPr: waiting } : {}), ...(reviewBlocking(judged) ? { reviewBlocking: true } : {}), ...(readiness ? { readiness } : {}), ...(clarity ? { clarity } : {}), ...(waitingOnReporter ? { waitingOnReporter } : {}), ...(reporterReplied ? { reporterReplied } : {}), ...(reporterReplied && repliedAt ? { reporterRepliedAt: repliedAt } : {}), ...(reporterReply ? { reporterReply } : {}), ...(reporterReplies.length ? { reporterReplies } : {}) };
   }
 
   /** Opens a workstream on a cached ticket, or with no ticket and a title. A ticket with an open one gets that one back, unchanged. */
@@ -414,14 +321,10 @@ export class MockWorkstreams {
       repo: null,
       title: [...made].slice(0, TITLE_LIMIT).join(""),
       pipSession: null,
-      mode: this.openMode,
-      heldReason: null,
+      pausedReason: null,
       notes: null,
       createdAt: at,
       closedAt: null,
-      budget: { autoTurns: null, wakes: null, tokens: null },
-      spent: { autoTurns: 0, wakes: 0, tokens: 0 },
-      rules: {},
       basis,
     };
     this.all = [ws, ...this.all];
@@ -520,51 +423,6 @@ export class MockWorkstreams {
     return next;
   }
 
-  /**
-   * Sets how much Pip may do on its own, as `set_workstream_mode` does; the same mode records nothing. The person setting
-   * it forgets the mode a tripwire took away (`resumeMode`), so resuming leaves their choice. Changing to Manage while not
-   * held and with the automatic steps used up holds it for its budget again (a supervisor `held` line), so Allow 5 more is
-   * asked again rather than skipped.
-   */
-  setMode(id: string, mode: WorkstreamMode, actor: WorkstreamActor = "person"): Workstream {
-    let ws = this.openOne(id);
-    if (actor === "person" && ws.resumeMode) {
-      const { resumeMode: _, ...rest } = ws;
-      ws = rest;
-      this.put(ws);
-      this.save();
-    }
-    if (ws.mode === mode) return ws;
-    const reheld = reheldForBudget({ ...ws, mode });
-    const changed = this.changedTo(reheld ?? { ...ws, mode }, actor, "mode_set", { detail: mode });
-    if (reheld) this.record(id, "supervisor", "held", { detail: HELD_BUDGET });
-    return changed;
-  }
-
-  /** The workstream and review whose escalation offers draft `draftId` to post as it is, or null: read before the post, while the draft is still pending. */
-  escalationOffering(draftId: string): { workstream: string; reviewRun: string } | null {
-    const found = this.list().find((v) => v.escalation?.reviewDraft === draftId);
-    return found?.escalation ? { workstream: found.workstream.id, reviewRun: found.escalation.reviewRun } : null;
-  }
-
-  /** The person posted the review draft `draftId` its escalation offered, as `escalation_posted`: records it, and the escalation is resolved. */
-  escalationPosted(workstream: string, reviewRun: string, draftId: string) {
-    this.record(workstream, "person", "escalation_posted", { runId: reviewRun, proposalId: draftId });
-  }
-
-  /**
-   * The person's "I'll take it from here" on a review that still blocks after the automatic fix rounds, as
-   * `take_over_escalation`: records `escalation_taken` and switches the workstream to Advise. Nothing else changes.
-   * Refused with `ESCALATION_GONE` unless the workstream's escalation is about `reviewRun`.
-   */
-  takeOver(id: string, reviewRun: string): Workstream {
-    const view = this.get(id);
-    if (!view) throw new Error(`there is no workstream ${id}`);
-    if (view.escalation?.reviewRun !== reviewRun) throw new Error(ESCALATION_GONE);
-    this.append(id, "person", "escalation_taken", { runId: reviewRun });
-    return this.setMode(id, "advise", "person");
-  }
-
   /** The readiness stop of workstream `id` as it stands, refused with `READINESS_GONE` unless it is about `triage`, as `readiness_stop`. */
   readinessStop(id: string, triage: string): ReadinessStop {
     const view = this.get(id);
@@ -585,8 +443,7 @@ export class MockWorkstreams {
 
   /**
    * The person's "Plan anyway" on a Triage that found its ticket not ready, as `override_readiness`: records
-   * `readiness_overridden`, the one line that lets the Triage-to-Plan rule start the Plan, which then still needs the
-   * workstream in Manage, not held, within budget. Refused with `READINESS_GONE` unless the stop is about `triage`.
+   * `readiness_overridden`, which settles the stop. Refused with `READINESS_GONE` unless the stop is about `triage`.
    */
   overrideReadiness(id: string, triage: string): Workstream {
     this.readinessStop(id, triage);
@@ -642,61 +499,23 @@ export class MockWorkstreams {
     this.record(id, "person", "readiness_asked", { runId: triage, proposalId });
   }
 
-  /** Holds an open workstream, as `hold_workstream` does: an existing reason is kept unless the person's hold replaces a restart, budget or quota one. */
-  hold(id: string, reason: string = HELD_PERSON, actor: WorkstreamActor = "person"): Workstream {
-    if (!validHoldReason(reason)) throw new Error(`"${reason}" isn't a reason to hold a workstream`);
+  /** Pauses an open workstream, as `pause_workstream` does: one already paused keeps its reason. */
+  pause(id: string, reason: PauseReason = "person", actor: WorkstreamActor = "person"): Workstream {
     const ws = this.openOne(id);
-    const next = held(ws, reason);
-    return next ? this.changedTo(next, actor, "held", { detail: reason }) : ws;
+    const next = paused(ws, reason);
+    return next ? this.changedTo(next, actor, "paused", { detail: reason }) : ws;
   }
 
-  /**
-   * Lifts a workstream's hold, as `resume_workstream` does; what was spent is kept, whatever the hold (a budget hold is
-   * lifted without granting steps, so Manage holds it again), and lifting a basis-drift hold takes the basis again from the
-   * ticket as it is now (`basis_captured`). Resuming puts back the mode a tripwire took away (`mode_set` by the person),
-   * whatever the hold, unless the person chose one meanwhile; a restored Manage on a spent budget is held again.
-   */
+  /** Resumes a workstream, whatever paused it, as `resume_workstream` does. One that isn't paused records nothing. */
   resume(id: string): Workstream {
     const ws = this.openOne(id);
-    if (ws.heldReason === null) return ws;
-    const rebase = ws.heldReason === `${TRIPWIRE}basis_drift`;
-    // Whatever the hold, as a trip can land while another is on.
-    const restore = ws.resumeMode ?? null;
-    const { resumeMode: _, ...kept } = ws;
-    let next: Workstream = { ...kept, heldReason: null, mode: restore ?? ws.mode };
-    if (rebase) {
-      const ticket = ws.itemKey ? this.ticketOf(ws.itemKey) : null;
-      const { drifted: _, ...rest } = next;
-      next = { ...rest, basis: ticket ? basisOfItem(ticket) : null };
-    }
-    const reheld = reheldForBudget(next);
-    if (reheld) next = reheld;
-    this.changedTo(next, "person", "resumed", { detail: ws.heldReason });
-    if (restore) this.record(id, "person", "mode_set", { detail: restore });
-    if (rebase && next.basis) this.record(id, "supervisor", "basis_captured");
-    if (reheld) this.record(id, "supervisor", "held", { detail: HELD_BUDGET });
-    return next;
+    if (ws.pausedReason === null) return ws;
+    return this.changedTo({ ...ws, pausedReason: null }, "person", "resumed", { detail: ws.pausedReason });
   }
 
   /**
-   * The person's "Allow 5 more", as `allow_more_steps` does: raises the automatic turns and wakes allowance by
-   * `ALLOW_MORE_STEPS` and lifts the hold, keeping what was spent (`steps_allowed` and `resumed`, the person's). Refused
-   * unless the workstream is held for its budget, so a stale choice changes nothing.
-   */
-  allowMore(id: string): Workstream {
-    const ws = this.openOne(id);
-    if (ws.heldReason !== HELD_BUDGET) throw new Error("this workstream isn't held for its automatic steps");
-    const { autoTurns, wakes } = budgetView(ws);
-    const next: Workstream = { ...ws, heldReason: null, budget: { ...ws.budget, autoTurns: autoTurns.limit + ALLOW_MORE_STEPS, wakes: wakes.limit + ALLOW_MORE_STEPS } };
-    this.changedTo(next, "person", "steps_allowed", { detail: String(ALLOW_MORE_STEPS) });
-    this.record(id, "person", "resumed", { detail: HELD_BUDGET });
-    return next;
-  }
-
-  /**
-   * The person's Undo of a hold or of a switch of mode, as `undo_workstream` does: only while that change is the last line of
-   * the audit, the person's, under `UNDO_WINDOW_MS` old, and the workstream still stands as it left it. It adds an `undone`
-   * line naming what it took back; the line it follows stays.
+   * The person's Undo of "Bring them here", as `undo_workstream` does: only while that change is the last line of the audit,
+   * the person's, and under `UNDO_WINDOW_MS` old. It adds an `undone` line naming what it took back; the line it follows stays.
    */
   undo(id: string, undo: WorkstreamUndo): Workstream {
     const ws = this.openOne(id);
@@ -704,36 +523,32 @@ export class MockWorkstreams {
     const last = events[events.length - 1];
     const gone = () => new Error("That change can't be undone any more: something else happened since, or it was a while ago.");
     const fresh = !!last && last.actor === "person" && this.now().getTime() - Date.parse(last.at) <= UNDO_WINDOW_MS;
-    if (undo.type === "adopt") {
-      if (!fresh || last!.action !== "adopted") throw gone();
-      const mine = new Set(this.runs().filter((r) => r.spec.workstream === id).map((r) => r.id));
-      const pending = new Map(this.pendingDrafts().map((p) => [p.id, p] as const));
-      undo.runs.filter((r) => mine.has(r)).forEach((r) => this.moveRun(r, null));
-      undo.drafts.filter((d) => pending.has(d) && workstreamOf(pending.get(d)!) === id).forEach((d) => this.moveDraft(d, null));
-      return this.changedTo(ws, "person", "undone", { detail: "adopted" });
-    }
-    if (undo.type === "hold") {
-      if (!fresh || last!.action !== "held" || !last!.detail || last!.detail !== ws.heldReason) throw gone();
-      if ((undo.was !== null && !validHoldReason(undo.was)) || undo.was === ws.heldReason) throw new Error("That isn't a hold to go back to.");
-      return this.changedTo({ ...ws, heldReason: undo.was }, "person", "undone", { detail: "held" });
-    }
-    if (!fresh || last!.action !== "mode_set" || last!.detail !== ws.mode) throw gone();
-    if (undo.was === ws.mode) throw new Error("The workstream is in that mode already.");
-    const { resumeMode: _, ...rest } = ws;
-    return this.changedTo({ ...rest, mode: undo.was, ...(undo.resumeMode ? { resumeMode: undo.resumeMode } : {}) }, "person", "undone", { detail: "mode_set" });
+    if (!fresh || last!.action !== "adopted") throw gone();
+    const mine = new Set(this.runs().filter((r) => r.spec.workstream === id).map((r) => r.id));
+    const pending = new Map(this.pendingDrafts().map((p) => [p.id, p] as const));
+    undo.runs.filter((r) => mine.has(r)).forEach((r) => this.moveRun(r, null));
+    undo.drafts.filter((d) => pending.has(d) && workstreamOf(pending.get(d)!) === id).forEach((d) => this.moveDraft(d, null));
+    return this.changedTo(ws, "person", "undone", { detail: "adopted" });
   }
 
   /**
-   * The fields workstream `id`'s ticket drifted from its basis, as `workstream_basis_drift`: a workstream with no basis
-   * yet has it taken now and hasn't drifted; null with nothing to compare (no ticket, or not cached).
+   * Notices workstream `id`'s ticket drifting from its basis, as `note_basis_drift`: the fields that drifted are recorded once in
+   * a supervisor `basis_drifted` line and the basis is taken again from the ticket as it is now (`basis_captured`). Nothing
+   * pauses. A workstream with no basis yet has it captured and hasn't drifted. Whether it drifted; false with nothing to
+   * compare (no ticket, or not cached).
    */
-  basisDrift(id: string): BasisField[] | null {
+  noteBasisDrift(id: string): boolean {
     const ws = this.owned(id);
     const ticket = ws.itemKey ? this.ticketOf(ws.itemKey) : null;
-    if (!ticket) return null;
-    if (ws.basis) return driftOf(ws.basis, ticket);
-    this.changedTo({ ...ws, basis: basisOfItem(ticket) }, "supervisor", "basis_captured");
-    return [];
+    if (!ticket) return false;
+    const fields = ws.basis ? driftOf(ws.basis, ticket) : [];
+    if (ws.basis && !fields.length) return false;
+    this.put({ ...ws, basis: basisOfItem(ticket) });
+    if (fields.length) this.append(id, "supervisor", "basis_drifted", { detail: fields.join(",") });
+    this.append(id, "supervisor", "basis_captured");
+    this.save();
+    this.changed();
+    return fields.length > 0;
   }
 
   /**
@@ -758,124 +573,31 @@ export class MockWorkstreams {
     this.changedTo({ ...ws, basis }, "supervisor", "basis_captured");
   }
 
-  /** The person's switch for one auto-start rule, as `set_workstream_rule` does; null follows the global switch again. */
-  setRule(id: string, rule: WorkstreamRule, on: boolean | null): Workstream {
-    if (!WORKSTREAM_RULES.includes(rule)) throw new Error(`there is no auto-start rule "${rule}"`);
-    const ws = this.openOne(id);
-    if ((ws.rules[rule] ?? null) === on) return ws;
-    const rules = { ...ws.rules };
-    if (on === null) delete rules[rule];
-    else rules[rule] = on;
-    return this.changedTo({ ...ws, rules }, "person", "rule_set", { detail: `${rule}=${on === null ? "inherit" : on ? "on" : "off"}` });
-  }
-
-  /** The person's Hold all, as `hold_all_workstreams` does: every open workstream not held already. Returns those it held. */
-  holdAll(): Workstream[] {
-    const now: Workstream[] = [];
-    for (const ws of this.all) {
-      const next = held(ws, HELD_ALL);
-      if (!next) continue;
-      this.put(next);
-      this.append(ws.id, "person", "held", { detail: HELD_ALL });
-      now.push(next);
-    }
-    if (now.length) {
-      this.save();
-      this.changed();
-    }
-    return now;
-  }
-
-  /** Sets a workstream's own limits for automatic turns and wakes, for tests and for trying the budget; null is the default. */
-  setBudget(id: string, budget: Partial<Pick<WorkstreamBudget, "autoTurns" | "wakes">>): Workstream {
-    const ws = this.openOne(id);
-    const next: Workstream = { ...ws, budget: { ...ws.budget, ...budget } };
-    this.put(next);
-    this.save();
-    this.changed();
-    return next;
-  }
-
   /**
-   * The person wrote in the workstream's conversation, as `person_wrote_in_workstream` records it: the automatic turns
-   * count from zero again (`budget_reset`), and a hold for a used-up budget is lifted unless the wakes still use it up.
-   * Only a person's message does this.
+   * Lets the facts `woken` (run and state key) wake Pip in workstream `id`, as `admit_wake` does: each gets a supervisor
+   * `wake` line. Once the workstream has had `WAKES_PER_WORKSTREAM_PER_DAY` wake turns since midnight or the person's
+   * last resume, or Pip `WAKE_TURNS_PER_DAY` across workstreams since midnight, nothing wakes: the workstream is paused for
+   * `ceiling` with a supervisor `paused` line. A turn is the wake lines recorded at one moment. True when Pip is to be woken.
    */
-  personWrote(id: string) {
+  admitWake(id: string, woken: { run: string; key: string }[]): boolean {
     const ws = this.all.find((w) => w.id === id && w.closedAt === null);
-    if (!ws) return;
-    const reset = ws.spent.autoTurns > 0;
-    const spent = { ...ws.spent, autoTurns: 0 };
-    // The wakes may still use the budget up, and then the hold stays.
-    const resumed = ws.heldReason === HELD_BUDGET && budgetLevel({ ...ws, spent }) !== "spent";
-    if (!reset && !resumed) return;
-    this.put({ ...ws, heldReason: resumed ? null : ws.heldReason, spent });
-    if (resumed) this.append(id, "person", "resumed", { detail: HELD_BUDGET });
-    if (reset) this.append(id, "person", "budget_reset", { detail: "message" });
-    this.save();
-    this.changed();
-  }
-
-  /**
-   * Lets the facts `woken` (run and state key) wake Pip in workstream `id`, as `admit_wake` does once the supervisor
-   * decided (`decision`): each gets a supervisor `wake` line, and a new turn (`spend`) uses one automatic turn and one
-   * wake, with `budget` lines as amber and spent are reached. A decision to hold holds it with a supervisor line. True
-   * when Pip is to be woken.
-   */
-  admitWake(id: string, woken: { run: string; key: string }[], decision: { wake: boolean; hold: string | null }, spend: boolean): boolean {
-    const ws = this.all.find((w) => w.id === id && w.closedAt === null);
-    if (!ws || !woken.length) return false;
-    if (!decision.wake) {
-      if (!decision.hold) return false;
-      this.put({ ...ws, heldReason: decision.hold });
-      this.append(id, "supervisor", "held", { detail: decision.hold });
+    if (!ws || ws.pausedReason !== null || !woken.length) return false;
+    const now = this.now();
+    const midnight = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())).toISOString();
+    const turns = (events: readonly WorkstreamEvent[], since: string) => new Set(events.filter((e) => e.actor === "supervisor" && e.action === "wake" && e.at >= since).map((e) => `${e.workstreamId}@${e.at}`)).size;
+    const resumed = this.events(id).filter((e) => e.actor === "person" && e.action === "resumed").map((e) => e.at).sort().pop();
+    const own = turns(this.audit.filter((e) => e.workstreamId === id), resumed && resumed > midnight ? resumed : midnight);
+    if (own >= WAKES_PER_WORKSTREAM_PER_DAY || turns(this.audit, midnight) >= WAKE_TURNS_PER_DAY) {
+      this.put({ ...ws, pausedReason: "ceiling" });
+      this.append(id, "supervisor", "paused", { detail: "ceiling" });
       this.save();
       this.changed();
       return false;
     }
     for (const f of woken) this.append(id, "supervisor", "wake", { runId: f.run, detail: f.key });
-    if (spend) {
-      const before = budgetLevel(ws);
-      const next: Workstream = { ...ws, spent: { ...ws.spent, autoTurns: ws.spent.autoTurns + 1, wakes: ws.spent.wakes + 1 }, heldReason: decision.hold ?? ws.heldReason };
-      this.put(next);
-      const after = budgetView(next);
-      if (after.level !== before && after.level !== "ok") {
-        this.append(id, "supervisor", "budget", { detail: `${after.level} ${after.autoTurns.used}/${after.autoTurns.limit} turns ${after.wakes.used}/${after.wakes.limit} wakes` });
-      }
-      if (decision.hold) this.append(id, "supervisor", "held", { detail: decision.hold });
-    }
     this.save();
     this.changed();
     return true;
-  }
-
-  /**
-   * A tripwire fired, as `trip_workstream` records it: the tripwire line with its kind (and run), the workstream drops to
-   * Advise and is held with `tripwire:<kind>`. A basis drift records the fields that drifted (`basis_drifted`, kept in
-   * `drifted` while held) and keeps the basis until the person resumes. The mode it dropped from is kept in `resumeMode`
-   * for resuming to put back.
-   */
-  trip(id: string, kind: string, runId: string | null, drifted: readonly BasisField[] = []): Workstream {
-    const reason = `${TRIPWIRE}${kind}`;
-    if (!validHoldReason(reason)) throw new Error(`there is no tripwire "${kind}"`);
-    let ws = this.openOne(id);
-    this.append(id, "supervisor", "tripwire", { runId, detail: kind });
-    if (kind === "basis_drift" && drifted.length) this.append(id, "supervisor", "basis_drifted", { detail: drifted.join(",") });
-    if (ws.mode !== "advise") {
-      // Held already (by the person, say), the trip still takes Manage away, and resuming that hold puts it back.
-      ws = { ...ws, mode: "advise", resumeMode: ws.resumeMode ?? ws.mode };
-      this.append(id, "supervisor", "mode_set", { detail: "advise" });
-    }
-    const next = held(ws, reason);
-    if (next) {
-      ws = next;
-      this.append(id, "supervisor", "held", { detail: reason });
-    }
-    if (kind === "basis_drift" && ws.heldReason === reason) ws = { ...ws, drifted: [...drifted] };
-    this.put(ws);
-    this.save();
-    this.changed();
-    return ws;
   }
 
   /** Whether someone but the person has commented on ticket `key` since the reporter was asked on an open workstream of it: what a Triage run then reads from the comments. */

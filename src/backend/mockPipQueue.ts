@@ -214,7 +214,6 @@ export function mockQueueAsk(req: AskRequest, drafter: Partial<PipDrafter> | nul
   const outcome = enter(conversation, { req, drafter, pace });
   if (workstream) {
     if (again) mockQueueWake(again.workstream, again.facts, drafter, pace);
-    drafter?.pipPersonWrote?.(workstream);
   }
   return outcome;
 }
@@ -247,12 +246,7 @@ export function mockPipIdle(): boolean {
   return queue.conversations().length === 0;
 }
 
-/** Whether a wake waits in `conversation`, which a new one merges into without spending the budget. */
-export function mockHasWaitingWake(conversation: string): boolean {
-  return queue.waitingIn(conversationId(conversation)).some(([, w]) => !!w.wake);
-}
-
-/** Stops every turn of the conversations `which` picks, waiting ones first, as holding or closing a workstream does. */
+/** Stops every turn of the conversations `which` picks, waiting ones first, as closing a workstream does. */
 export function mockCancelTurns(which: (conversation: string) => boolean) {
   for (const conversation of queue.conversations().filter(which)) {
     for (const [id] of queue.waitingIn(conversation)) mockQueueCancel(id);
@@ -264,7 +258,7 @@ export function mockCancelTurns(which: (conversation: string) => boolean) {
   }
 }
 
-/** Stops the wakes of workstream `workstream`, waiting or running, and leaves the person's turns be, as `cancel_workstream_wakes` does when a tripwire fires. */
+/** Stops the wakes of workstream `workstream`, waiting or running, and leaves the person's turns be, as `cancel_workstream_wakes` does when a workstream is paused at its ceiling. */
 export function mockCancelWakes(workstream: string) {
   const conversation = `ws:${workstream}`;
   for (const [id, w] of queue.waitingIn(conversation)) if (w.wake) mockQueueCancel(id);

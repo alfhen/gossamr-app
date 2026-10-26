@@ -12,7 +12,6 @@ import { useActivity } from "./activityStore";
 import { CANVASES } from "./canvases";
 import { useStepKeys } from "./browse";
 import { itemKey, usesCode, withoutCode } from "../lib/filter";
-import { isTypingTarget } from "../lib/keyboard";
 import { workspaceTicketLinks } from "./jump";
 import { workConnections } from "./domains";
 import { FilterBar } from "./FilterBar";
@@ -27,7 +26,6 @@ import { applyTheme, usePrefs } from "./prefs";
 import { useRuns } from "./runsStore";
 import { togglePip, useWorkstreams } from "./workstreamsStore";
 import { Rail } from "./Rail";
-import { isHoldAllKey } from "./commands";
 import { TABBABLE, nextRegion, regionStep, wrapTab, type WorkspaceRegion } from "./workKeys";
 import { Settings } from "./Settings";
 import { Header } from "./Header";
@@ -143,12 +141,6 @@ function useRegionKeys() {
 function useGlobalKeys() {
   useEffect(() => {
     const onKey = (ev: KeyboardEvent) => {
-      // Not while typing: the shortcut must never fire from Pip's input or any other field.
-      if (isHoldAllKey(ev) && !isTypingTarget(document.activeElement)) {
-        ev.preventDefault();
-        void useWorkstreams.getState().holdAll();
-        return;
-      }
       if (!(ev.metaKey || ev.ctrlKey) || ev.altKey || ev.shiftKey) return;
       const prefs = usePrefs.getState();
       if (ev.key === "k") {

@@ -14,7 +14,6 @@ import { activeTab, loadTabs, useTabs } from "./tabsStore";
 import { contextFor, conversationTitle, focusComposer, focusedConversation, paneConversation, paneWorkstream, useWorkstreams, workstreamTicket } from "./workstreamsStore";
 import { useWorkView } from "./workViewStore";
 import { undoLog } from "./undo";
-import { HELD_PERSON } from "../types";
 import { useToasts } from "./toasts";
 import type { WorkstreamView } from "../types";
 import { GENERAL_CONVERSATION, workstreamConversation } from "../lib/conversations";
@@ -284,8 +283,8 @@ describe("the Agents view's conversation", () => {
 
     // Open on Agents, a change to it reads the audit again.
     useWorkView.getState().openWorkstream(id);
-    await backend.workstreamsHold(id);
-    await vi.waitFor(() => expect(useWorkstreams.getState().events[id]?.slice(-1)[0]?.action).toBe("held"));
+    await backend.workstreamsPause(id);
+    await vi.waitFor(() => expect(useWorkstreams.getState().events[id]?.slice(-1)[0]?.action).toBe("paused"));
 
     let release: (events: Awaited<ReturnType<typeof backend.workstreamsEvents>>) => void = () => {};
     const read = vi.spyOn(backend, "workstreamsEvents").mockImplementationOnce(() => new Promise((resolve) => (release = resolve)));
@@ -426,7 +425,7 @@ describe("Undo offers that outlive what they undo (G4, G5)", () => {
     expect(useToasts.getState().toasts.map((t) => t.text)).not.toContain(offer.text);
   });
 
-  for (const how of ["asked", "held", "closed"] as const) {
+  for (const how of ["asked", "paused", "closed"] as const) {
     it(`takes the adoption offer back once the workstream is ${how === "asked" ? "waiting on the reporter" : how}`, async () => {
       undoLog.clear();
       useToasts.getState().clear();
@@ -440,20 +439,20 @@ describe("Undo offers that outlive what they undo (G4, G5)", () => {
         const spy = vi.spyOn(backend, "workstreamsList").mockImplementation(async (all) => (await real(all)).map((v) => ({ ...v, waitingOnReporter: { since: new Date().toISOString() } })));
         await useWorkstreams.getState().refresh();
         spy.mockRestore();
-      } else if (how === "held") await useWorkstreams.getState().hold(ws.workstream.id);
+      } else if (how === "paused") await useWorkstreams.getState().pause(ws.workstream.id);
       else await useWorkstreams.getState().close(ws.workstream.id);
       expect(undoLog.get(offer.id)?.state).toBe("withdrawn");
       expect(useToasts.getState().toasts.map((t) => t.text)).not.toContain(offer.text);
     });
   }
 
-  it("says in the reopen note that the hold the person chose is still theirs", async () => {
+  it("says in the reopen note that the pause the person chose is still theirs", async () => {
     const ws = (await useWorkstreams.getState().start(CA401))!;
-    await useWorkstreams.getState().hold(ws.workstream.id);
+    await useWorkstreams.getState().pause(ws.workstream.id);
     await useWorkstreams.getState().close(ws.workstream.id);
     useToasts.getState().clear();
     expect(await useWorkstreams.getState().reopen(ws.workstream.id)).toBe(true);
-    expect(useWorkstreams.getState().forItem("CA-401")?.workstream.heldReason).toBe(HELD_PERSON);
-    expect(useToasts.getState().toasts.map((t) => t.text)).toContain("Reopened the workstream on CA-401. It is still held by you; Resume it to carry on.");
+    expect(useWorkstreams.getState().forItem("CA-401")?.workstream.pausedReason).toBe("person");
+    expect(useToasts.getState().toasts.map((t) => t.text)).toContain("Reopened the workstream on CA-401. It is still paused; Resume it to carry on.");
   });
 });

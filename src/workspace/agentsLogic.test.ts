@@ -322,11 +322,10 @@ describe("the header", () => {
 
 describe("grouping by workstream", () => {
   const view = (id: string, title: string, stage: WorkstreamView["stage"] = "intake", over: Partial<WorkstreamView> = {}): WorkstreamView => ({
-    workstream: { id, connectionId: "mock", itemKey: null, repo: null, title, pipSession: null, mode: "advise", heldReason: null, notes: null, createdAt: iso(600), closedAt: null, budget: { autoTurns: null, wakes: null, tokens: null }, spent: { autoTurns: 0, wakes: 0, tokens: 0 }, rules: {}, basis: null },
+    workstream: { id, connectionId: "mock", itemKey: null, repo: null, title, pipSession: null, pausedReason: null, notes: null, createdAt: iso(600), closedAt: null, basis: null },
     stage,
     runs: [],
     labels: [],
-    budget: { autoTurns: { used: 0, limit: 6 }, wakes: { used: 0, limit: 12 }, level: "ok" },
     ...over,
   });
   const inWs = (state: RunState, id: string, workstream: string | null, queued: number, over: Partial<Run> = {}) => run(state, { id, queuedAt: iso(queued), spec: { ...base.spec, workstream }, ...over });
@@ -405,7 +404,7 @@ describe("grouping by workstream", () => {
 
 describe("the summary chips and the Needs you filter", () => {
   const view = (id: string): WorkstreamView =>
-    ({ workstream: { id, connectionId: "mock", itemKey: null, repo: null, title: `WS ${id}`, pipSession: null, mode: "advise", heldReason: null, notes: null, createdAt: iso(600), closedAt: null, budget: { autoTurns: null, wakes: null, tokens: null }, spent: { autoTurns: 0, wakes: 0, tokens: 0 }, rules: {}, basis: null }, stage: "intake", runs: [], labels: [] }) as unknown as WorkstreamView;
+    ({ workstream: { id, connectionId: "mock", itemKey: null, repo: null, title: `WS ${id}`, pipSession: null, pausedReason: null, notes: null, createdAt: iso(600), closedAt: null, basis: null }, stage: "intake", runs: [], labels: [] }) as unknown as WorkstreamView;
   const inWs = (state: RunState, id: string, workstream: string | null) => run(state, { id, queuedAt: iso(50), spec: { ...base.spec, workstream } });
   const runs = [inWs("needsAnswer", "q", "ws-a"), inWs("working", "w", "ws-a"), inWs("done", "d", "ws-b"), inWs("needsPermission", "loose", null)];
   const needs = [
@@ -469,17 +468,17 @@ describe("a run waiting for a slot", () => {
     expect(slotPosition(tie[1], tie)).toBe(1);
   });
 
-  it("is placed behind only the runs that can take a slot, not ones in a held or closed workstream", () => {
-    const ws = (id: string, over: { heldReason?: string; closedAt?: string } = {}) =>
-      ({ workstream: { id, heldReason: over.heldReason ?? null, closedAt: over.closedAt ?? null } }) as unknown as WorkstreamView;
+  it("is placed behind only the runs that can take a slot, not ones in a paused or closed workstream", () => {
+    const ws = (id: string, over: { pausedReason?: string; closedAt?: string } = {}) =>
+      ({ workstream: { id, pausedReason: over.pausedReason ?? null, closedAt: over.closedAt ?? null } }) as unknown as WorkstreamView;
     const inWs = (r: Run, workstream: string | null): Run => ({ ...r, spec: { ...r.spec, workstream } });
-    const held = inWs(waiting("h", 1), "ws-held");
+    const held = inWs(waiting("h", 1), "ws-paused");
     const closed = inWs(waiting("c", 2), "ws-closed");
     const open = inWs(waiting("o", 3), "ws-open");
     const loose = waiting("l", 4);
     const unknown = inWs(waiting("u", 5), "ws-unloaded");
     const all = [held, closed, open, loose, unknown];
-    const line = slotQueue(all, [ws("ws-held", { heldReason: "person" }), ws("ws-closed", { closedAt: at(0) }), ws("ws-open")]);
+    const line = slotQueue(all, [ws("ws-paused", { pausedReason: "person" }), ws("ws-closed", { closedAt: at(0) }), ws("ws-open")]);
     expect(line.map((r) => r.id)).toEqual(["o", "l", "u"]);
     expect([open, loose, unknown].map((r) => slotPosition(r, line))).toEqual([1, 2, 3]);
     expect(slotPosition(held, line)).toBeNull();

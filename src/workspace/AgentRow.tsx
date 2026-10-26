@@ -1,7 +1,7 @@
 import { Dot, RowText, StateChip } from "./AgentParts";
 import { KIND_LABEL, ageText, formatTokens, repoName, runTitle } from "./agentsLogic";
 import { useStateView } from "./useStateView";
-import { AutoStarted, InNeedsYou, KeyAsking, ReadOnlyBadge, RunLabel, RunRef, agentId, onActivate, ticketLabel, type AgentItemProps } from "./AgentCard";
+import { InNeedsYou, KeyAsking, ReadOnlyBadge, RunLabel, RunRef, agentId, onActivate, ticketLabel, type AgentItemProps } from "./AgentCard";
 
 /** Shared by the header and the rows so the columns line up. */
 export const ROW_GRID = "grid items-center gap-x-3 px-3.5 grid-cols-[10px_100px_minmax(0,1.3fr)_minmax(0,1.6fr)_44px] @6xl:grid-cols-[10px_100px_minmax(0,1.3fr)_88px_minmax(0,0.8fr)_minmax(0,1.6fr)_72px_44px]";
@@ -51,7 +51,6 @@ export function AgentRow({ run, now, selected, position, total, ticketTitle, lab
         <span className="min-w-[6ch] truncate font-semibold">{title}</span>
         <RunRef run={run} className="shrink-0" />
         <ReadOnlyBadge run={run} compact />
-        <AutoStarted run={run} className="hidden @6xl:inline" />
       </span>
       <span className="hidden truncate text-ws-ink2 @6xl:block">{KIND_LABEL[run.spec.kind]}</span>
       <span className="hidden truncate font-mono text-xs text-ws-ink3 @6xl:block">{repoName(run.spec.repo)}</span>

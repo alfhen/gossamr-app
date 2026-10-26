@@ -1,4 +1,3 @@
-import { AUTOSTART_DEFAULTS } from "../types";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MockBackend } from "../backend/mock";
@@ -85,7 +84,7 @@ describe("what the sheet says about the report tool", () => {
   });
 });
 
-const settings = { maxRuns: 3, wallClockMinutes: 60, tokenCap: 3_000_000, terminal: "terminal" as const, draftOnFinish: true, reportResult: false, autostart: AUTOSTART_DEFAULTS, managerTurnsPerDay: 40 };
+const settings = { maxRuns: 3, wallClockMinutes: 60, tokenCap: 3_000_000, terminal: "terminal" as const, draftOnFinish: true, reportResult: false };
 
 describe("the setting", () => {
   const view = (s: typeof settings | null) =>
@@ -102,7 +101,7 @@ describe("the setting", () => {
   });
 
   it("shows it on when it is on, and disabled until the settings are loaded", () => {
-    expect(view({ ...settings, reportResult: true, autostart: AUTOSTART_DEFAULTS, managerTurnsPerDay: 40 })).toMatch(/aria-label="Offer new runs the result tool"[^>]*checked/);
+    expect(view({ ...settings, reportResult: true })).toMatch(/aria-label="Offer new runs the result tool"[^>]*checked/);
     expect(view(null)).toMatch(/aria-label="Offer new runs the result tool"[^>]*disabled/);
   });
 });

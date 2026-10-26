@@ -25,9 +25,8 @@ export interface ContextDeps {
   skipDraft(p: Proposal): void;
   draftInWorkstream(p: Proposal): void;
   openRun(run: Run): void;
-  hold(id: string): void;
+  pause(id: string): void;
   resume(id: string): void;
-  advise(id: string): void;
   openWorkstream(id: string): void;
   /** Opens the Needs you list on `workstreamId`'s group with its combined preview ready for the person to confirm. */
   approveSafe(group: NeedGroup): void;
@@ -53,22 +52,19 @@ const NEED_ENTRY: Record<NeedActionId, { label?: string; keywords: string; icon:
   dismiss: { keywords: "dismiss skip discard hide remove", icon: "✕" },
   edit: { label: "Edit", keywords: "edit change revise", icon: "✎" },
   retry: { label: "Retry", keywords: "retry again launch", icon: "↻" },
-  allowMore: { label: "Allow 5 more", keywords: "allow more automatic steps budget continue", icon: "＋" },
-  advise: { label: "Switch to Advise", keywords: "advise manage mode pip stop managing", icon: "◇" },
   askReporter: { label: "Ask the reporter", keywords: "ask reporter questions clear ticket comment draft unclear", icon: "✉" },
   answerSelf: { label: "I'll answer", keywords: "answer myself questions unclear ticket pip conversation", icon: "↩" },
   planAnyway: { label: "Plan anyway", keywords: "plan anyway override unclear ticket not ready", icon: "▶" },
-  resume: { label: "Resume", keywords: "resume continue carry on lift hold", icon: "▶" },
+  resume: { label: "Resume", keywords: "resume continue carry on lift pause", icon: "▶" },
   answer: { label: "Answer", keywords: "answer reply respond question", icon: "↩" },
   open: { keywords: "open show look", icon: "→" },
 };
 
-/** The workstream's own controls: Hold or Resume, and Advise while it is in Manage. */
+/** The workstream's own controls: Pause or Resume. */
 function workstreamEntries(view: WorkstreamView, deps: ContextDeps, ticket: string): Command[] {
   const ws = view.workstream;
   return [
-    ws.heldReason ? entry(`resume:${ws.id}`, `Resume the workstream on ${ticket}`, () => deps.resume(ws.id), { icon: "▶", keywords: "resume lift hold workstream" }) : entry(`hold:${ws.id}`, `Hold the workstream on ${ticket}`, () => deps.hold(ws.id), { icon: "⏸", hint: "undo for 8 s", keywords: "hold pause workstream stop waking" }),
-    ...(ws.mode === "manage" ? [entry(`advise:${ws.id}`, `Switch ${ticket} to Advise`, () => deps.advise(ws.id), { icon: "◇", hint: "undo for 8 s", keywords: "advise manage mode pip stop managing workstream" })] : []),
+    ws.pausedReason ? entry(`resume:${ws.id}`, `Resume the workstream on ${ticket}`, () => deps.resume(ws.id), { icon: "▶", keywords: "resume lift pause workstream" }) : entry(`pause:${ws.id}`, `Pause the workstream on ${ticket}`, () => deps.pause(ws.id), { icon: "⏸", keywords: "pause hold workstream stop waking" }),
     entry(`open:${ws.id}`, `Open the workstream on ${ticket}`, () => deps.openWorkstream(ws.id), { icon: "◇", keywords: "open workstream agents conversation" }),
   ];
 }
@@ -76,7 +72,7 @@ function workstreamEntries(view: WorkstreamView, deps: ContextDeps, ticket: stri
 /**
  * The palette's entries for `subject`: whatever its buttons offer, nothing it doesn't. A need offers its own actions
  * (approve, allow once, deny, skip or dismiss, edit, retry, resume, answer), "Open in workstream", and its workstream's
- * Hold or Resume and Advise; a draft offers approve (or review and approve), edit, skip and "Open in workstream"; a run
+ * Pause or Resume; a draft offers approve (or review and approve), edit, skip and "Open in workstream"; a run
  * offers what its need does, else to open it; a workstream offers its controls. Null or a subject that has gone: nothing.
  */
 export function contextCommands(subject: Subject | null, data: ContextData, deps: ContextDeps): Command[] {
@@ -97,7 +93,7 @@ export function contextCommands(subject: Subject | null, data: ContextData, deps
       ...own,
       entry(`need:${need.key}:workstream`, openInWorkstreamLabel(need), () => deps.openInWorkstream(need), { icon: "→", keywords: "open workstream show where it lives" }),
       // "Open in workstream" above is already the way there; a second "Open the workstream on KEY" would be the same thing.
-      ...(view ? workstreamEntries(view, deps, view.workstream.itemKey ?? view.workstream.title).filter((c) => !c.id.startsWith("context:open:") && !((need.kind === "hold" || need.kind === "budget") && c.id.startsWith("context:resume:")) && !(need.kind === "budget" && c.id.startsWith("context:advise:"))) : []),
+      ...(view ? workstreamEntries(view, deps, view.workstream.itemKey ?? view.workstream.title).filter((c) => !c.id.startsWith("context:open:") && !(need.kind === "paused" && c.id.startsWith("context:resume:"))) : []),
     ];
   }
   if (subject.type === "draft") {

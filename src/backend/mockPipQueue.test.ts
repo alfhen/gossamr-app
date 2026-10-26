@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import cases from "../../src-tauri/test-support/pip-queue-cases.json";
 import type { ClaudeEvent } from "./claude";
 import { mockPipEvents } from "./mockPip";
-import { PIP_PROCESSES, createTurnQueue, mockCancelTurns, mockHasWaitingWake, mockQueueAsk, mockQueueCancel, mockQueueWake, resetMockPipQueue } from "./mockPipQueue";
+import { PIP_PROCESSES, createTurnQueue, mockCancelTurns, mockQueueAsk, mockQueueCancel, mockQueueWake, resetMockPipQueue } from "./mockPipQueue";
 import type { EventMeta } from "./claude";
 import type { WakeFact } from "./mockSupervisor";
 import { mockPipTurns } from "./mockPipTurns";
@@ -150,8 +150,7 @@ describe("the scripted Pip's queue", () => {
     });
     afterEach(() => offMeta());
     const turnOf = (id: string) => mockPipTurns.turns("ws:w1").find((t) => t.requestId === id);
-    const wrote: string[] = [];
-    const drafter = { pipPersonWrote: (id: string) => void wrote.push(id) };
+    const drafter = {};
 
     it("keeps a wake as its own kind, with the event lines as its prompt, and says where its events belong", async () => {
       const id = mockQueueWake("w1", [fact("abc12")], null, 1);
@@ -165,7 +164,6 @@ describe("the scripted Pip's queue", () => {
     it("merges wakes that come while one waits into it, so a conversation has one waiting", async () => {
       ask("q1", "ws:w1");
       const first = mockQueueWake("w1", [fact("r1")], null, 1);
-      expect(mockHasWaitingWake("ws:w1")).toBe(true);
       expect(mockQueueWake("w1", [fact("r2"), fact("r1")], null, 1)).toBe(first);
       expect(turnOf(first)?.prompt).toBe("[Event] run r1 (triage) Done\n[Event] run r2 (triage) Done");
       expect(mockPipTurns.turns("ws:w1").filter((t) => t.kind === "wake")).toHaveLength(1);
@@ -173,14 +171,12 @@ describe("the scripted Pip's queue", () => {
     });
 
     it("gives way to the person: a waiting wake is taken out, a running one is set aside and queued again behind the message", async () => {
-      wrote.length = 0;
       const running = mockQueueWake("w1", [fact("r1")], null, 50);
       ask("q0", "ws:w2");
       const waiting = mockQueueWake("w2", [fact("r2")], null, 1);
       mockQueueAsk({ requestId: "q1", prompt: "And now?", sessionId: null, context, conversation: "ws:w1", meta: { imageCount: 0 } }, drafter, 1);
       mockQueueAsk({ requestId: "q2", prompt: "Wait", sessionId: null, context, conversation: "ws:w2", meta: { imageCount: 0 } }, drafter, 1);
       expect(mockPipTurns.turns("ws:w2").find((t) => t.requestId === waiting)).toMatchObject({ status: "failed", error: "Removed before it started" });
-      expect(wrote).toEqual(["w1", "w2"]);
       await settled("q1", "ws:w1");
       expect(turnOf(running)).toMatchObject({ status: "failed", error: "Stopped" });
       const again = mockPipTurns.turns("ws:w1").filter((t) => t.kind === "wake" && t.requestId !== running);
@@ -191,7 +187,7 @@ describe("the scripted Pip's queue", () => {
       await settled("q2", "ws:w2");
     });
 
-    it("stops every turn of a held workstream's conversation and leaves the others", async () => {
+    it("stops every turn of a closed workstream's conversation and leaves the others", async () => {
       const a = mockQueueWake("w1", [fact("r1")], null, 50);
       ask("q1", "ws:w1");
       ask("g1");

@@ -7,6 +7,7 @@ use chrono::{DateTime, Utc};
 use rusqlite::{params, ErrorCode, OptionalExtension};
 
 use super::{stamp, Db};
+use crate::domain::workstream::PauseReason;
 use crate::domain::{Actor, Workstream, WorkstreamEvent};
 use crate::error::{Error, Result};
 
@@ -31,15 +32,14 @@ impl Db {
         self.conn
             .execute(
                 "INSERT INTO workstreams (id, connection_id, item_key, repo, title, mode, held_reason, created_at, closed_at, data)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                 VALUES (?1, ?2, ?3, ?4, ?5, 'manage', ?6, ?7, ?8, ?9)",
                 params![
                     ws.id,
                     ws.connection_id,
                     ws.item_key,
                     ws.repo,
                     ws.title,
-                    ws.mode.as_str(),
-                    ws.held_reason,
+                    ws.paused_reason.map(PauseReason::as_str),
                     stamp(ws.created_at),
                     ws.closed_at.map(stamp),
                     serde_json::to_string(ws)?,
@@ -54,8 +54,8 @@ impl Db {
         let n = self
             .conn
             .execute(
-                "UPDATE workstreams SET repo = ?2, title = ?3, mode = ?4, held_reason = ?5, closed_at = ?6, data = ?7 WHERE id = ?1",
-                params![ws.id, ws.repo, ws.title, ws.mode.as_str(), ws.held_reason, ws.closed_at.map(stamp), serde_json::to_string(ws)?],
+                "UPDATE workstreams SET repo = ?2, title = ?3, held_reason = ?4, closed_at = ?5, data = ?6 WHERE id = ?1",
+                params![ws.id, ws.repo, ws.title, ws.paused_reason.map(PauseReason::as_str), ws.closed_at.map(stamp), serde_json::to_string(ws)?],
             )
             .map_err(clash)?;
         Ok(n > 0)
@@ -107,26 +107,6 @@ impl Db {
             |r| r.get(0),
         )?;
         Ok(n > 0)
-    }
-
-    /// Holds every open workstream that isn't held already with `reason`, each with one `held` line by the supervisor:
-    /// after a restart nothing wakes Pip or starts on its own until the person resumes. One already held keeps its
-    /// reason, so a second call changes nothing. Returns how many it held.
-    pub fn hold_open_workstreams(&self, reason: &str, at: DateTime<Utc>) -> Result<usize> {
-        let mut stmt = self.conn.prepare("SELECT data FROM workstreams WHERE closed_at IS NULL AND held_reason IS NULL ORDER BY created_at, id")?;
-        let rows = stmt.query_map([], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
-        let mut held = 0;
-        for row in rows {
-            let mut ws: Workstream = serde_json::from_str(&row)?;
-            if ws.held_reason.is_some() {
-                continue;
-            }
-            ws.held_reason = Some(reason.to_string());
-            self.save_workstream(&ws)?;
-            self.append_workstream_event(&WorkstreamEvent::new(&ws.id, Actor::Supervisor, "held", at).detail(reason))?;
-            held += 1;
-        }
-        Ok(held)
     }
 
     /// Appends one line to a workstream's audit after its last, numbering it itself, and returns it as stored. `detail`
@@ -186,7 +166,6 @@ mod tests {
 
     use super::*;
     use crate::domain::fixtures::now;
-    use crate::domain::workstream::Mode;
 
     fn ws(id: &str, connection: &str, key: Option<&str>, mins: i64) -> Workstream {
         Workstream {
@@ -196,17 +175,11 @@ mod tests {
             repo: None,
             title: format!("{id} title"),
             pip_session: None,
-            mode: Mode::Advise,
-            held_reason: None,
+            paused_reason: None,
             notes: None,
             created_at: now() + Duration::minutes(mins),
             closed_at: None,
-            budget: Default::default(),
-            spent: Default::default(),
-            rules: Default::default(),
             basis: None,
-            drifted: Vec::new(),
-            resume_mode: None,
         }
     }
 
@@ -252,29 +225,15 @@ mod tests {
     }
 
     #[test]
-    fn a_restart_holds_every_open_workstream_once_and_keeps_an_existing_reason() {
+    fn the_pause_is_kept_in_the_column_lists_read_and_the_mode_column_is_left_as_it_was() {
         let db = Db::in_memory().unwrap();
-        db.insert_workstream(&ws("a", "c", Some("CA-1"), 0)).unwrap();
-        db.insert_workstream(&ws("b", "other", None, 1)).unwrap();
-        let mut held = ws("h", "c", None, 2);
-        held.held_reason = Some("budget".into());
-        db.insert_workstream(&held).unwrap();
-        let mut closed = ws("z", "c", Some("CA-2"), 3);
-        closed.closed_at = Some(now());
-        db.insert_workstream(&closed).unwrap();
-
-        assert_eq!(db.hold_open_workstreams("restart", now()).unwrap(), 2);
-        assert_eq!(db.workstream("a").unwrap().unwrap().held_reason.as_deref(), Some("restart"));
-        assert_eq!(db.workstream("b").unwrap().unwrap().held_reason.as_deref(), Some("restart"), "every connection's");
-        assert_eq!(db.workstream("h").unwrap().unwrap().held_reason.as_deref(), Some("budget"), "an existing reason is kept");
-        assert_eq!(db.workstream("z").unwrap().unwrap().held_reason, None, "a closed one is left alone");
-        let lines = |id: &str| db.workstream_events(id).unwrap().into_iter().map(|e| (e.actor, e.action, e.detail)).collect::<Vec<_>>();
-        assert_eq!(lines("a"), [(Actor::Supervisor, "held".to_string(), Some("restart".to_string()))]);
-        assert!(lines("h").is_empty() && lines("z").is_empty());
-
-        assert_eq!(db.hold_open_workstreams("restart", now()).unwrap(), 0);
-        assert_eq!(lines("a").len(), 1, "a second call adds no line");
-        assert_eq!(lines("b").len(), 1);
+        let a = ws("a", "c", Some("CA-1"), 0);
+        db.insert_workstream(&a).unwrap();
+        let column = |id: &str| -> (String, Option<String>) { db.conn.query_row("SELECT mode, held_reason FROM workstreams WHERE id = ?1", params![id], |r| Ok((r.get(0)?, r.get(1)?))).unwrap() };
+        assert_eq!(column("a"), ("manage".to_string(), None));
+        db.save_workstream(&Workstream { paused_reason: Some(PauseReason::Ceiling), ..a.clone() }).unwrap();
+        assert_eq!(column("a"), ("manage".to_string(), Some("ceiling".to_string())));
+        assert_eq!(db.workstream("a").unwrap().unwrap().paused_reason, Some(PauseReason::Ceiling));
     }
 
     #[test]
@@ -302,20 +261,20 @@ mod tests {
         let e = |action: &str| WorkstreamEvent::new("a", Actor::Person, action, now());
 
         let failed: Result<()> = db.atomically(|db| {
-            db.save_workstream(&Workstream { held_reason: Some("person".into()), ..ws("a", "jira:acme", Some("CA-1"), 0) })?;
+            db.save_workstream(&Workstream { paused_reason: Some(PauseReason::Person), ..ws("a", "jira:acme", Some("CA-1"), 0) })?;
             db.append_workstream_event(&e("undone"))?;
             Err(Error::Proposal("a later write failed".into()))
         });
         assert!(failed.is_err());
-        assert_eq!(db.workstream("a").unwrap().unwrap().held_reason, None);
+        assert_eq!(db.workstream("a").unwrap().unwrap().paused_reason, None);
         assert!(db.workstream_events("a").unwrap().is_empty());
 
         db.atomically(|db| {
-            db.save_workstream(&Workstream { held_reason: Some("person".into()), ..ws("a", "jira:acme", Some("CA-1"), 0) })?;
+            db.save_workstream(&Workstream { paused_reason: Some(PauseReason::Person), ..ws("a", "jira:acme", Some("CA-1"), 0) })?;
             db.append_workstream_event(&e("undone")).map(|_| ())
         })
         .unwrap();
-        assert_eq!(db.workstream("a").unwrap().unwrap().held_reason.as_deref(), Some("person"));
+        assert_eq!(db.workstream("a").unwrap().unwrap().paused_reason, Some(PauseReason::Person));
         assert_eq!(db.workstream_events("a").unwrap().len(), 1);
     }
 }

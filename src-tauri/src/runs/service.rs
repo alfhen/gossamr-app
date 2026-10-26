@@ -514,9 +514,9 @@ impl RunService {
     }
 
     /// Starts the runs that wait, in approval order (`queued_at`, then id), while fewer than the cap are live: queued
-    /// runs in a workstream that is open and not held (ones the supervisor auto-started and ones a person approved,
-    /// in one queue), and runs in no workstream a person approved over the cap. The rest stay queued, never failed for
-    /// the cap: one the cap keeps out is marked as waiting for a slot, and a held workstream's is skipped.
+    /// runs in a workstream that is open and not paused, and runs in no workstream a person approved over the cap. The
+    /// rest stay queued, never failed for the cap: one the cap keeps out is marked as waiting for a slot, and a paused
+    /// workstream's is skipped.
     ///
     /// Each start takes the launch lock itself, and tokio's mutex isn't re-entrant, so this is only ever called with no
     /// lock held: from the supervisor's own task, after the tracker's poll returns, and after a stop has freed a slot.
@@ -538,22 +538,16 @@ impl RunService {
         Ok(started)
     }
 
-    /// Whether the workstream `run` belongs to is open and not held, as the signed-in account has it. A run an auto-start
-    /// rule started also needs the workstream still starting steps on its own with that rule on: one the person switched
-    /// to Advise, or whose rule they switched off, keeps it waiting for them.
+    /// Whether the workstream `run` belongs to is open and not paused, as the signed-in account has it.
     async fn workstream_runs(&self, run: &Run) -> bool {
         let Some(ws) = run.spec.workstream.as_deref() else { return false };
         let Ok(scope) = self.core.scope().await else { return false };
         let Ok(Some(v)) = self.core.workstream(&scope, ws).await else { return false };
-        let ws = v.workstream;
-        match &run.auto_start {
-            Some(auto) => ws.closed_at.is_none() && ws.held_reason.is_none() && ws.mode == crate::domain::workstream::Mode::Manage && crate::config::rule_on(&self.settings(), &ws, auto.rule),
-            None => ws.closed_at.is_none() && ws.held_reason.is_none(),
-        }
+        v.workstream.closed_at.is_none() && v.workstream.paused_reason.is_none()
     }
 
     /// `start` for a waiting run: under the launch lock it is checked again that it is still queued, that its workstream
-    /// isn't held (or, in no workstream, that it is still waiting for a slot) and that there is room under the cap;
+    /// isn't paused (or, in no workstream, that it is still waiting for a slot) and that there is room under the cap;
     /// otherwise it is left as it is, marked as waiting for a slot when the cap is all that keeps it. Returns whether it
     /// launched.
     async fn start_waiting(&self, run_id: &str) -> Result<bool> {
@@ -596,7 +590,7 @@ impl RunService {
 
     /// After a restart: runs that were launching are matched to their sessions for up to the recovery window, adopted
     /// if found and failed if not. Queued runs stay queued; one in no workstream that was waiting for a slot before the
-    /// restart stops waiting, so it is the person's to start again (a workstream's waits behind the restart hold). The
+    /// restart stops waiting, so it is the person's to start again (a workstream's keeps waiting). The
     /// same pass runs again on sign-in; a wait from this session is kept then, so an
     /// approved run still starts when a slot frees. Live runs missing from the index are put back.
     pub async fn recover(&self) {

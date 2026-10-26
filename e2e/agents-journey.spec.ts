@@ -1,22 +1,24 @@
 import { expect, test, type Page } from "@playwright/test";
-import { advanceRuns, agentsHome, askPip, closeWorkstreamSheet, expandNeedsYou, expectPeekInPlace, finishOnHome, githubWrites, holdBySystem, homeConversation, homeConversationRegion, homeRunCards, homeSettled, inlineStart, jiraWrites, mockRuns, needRow, needsPane, needsPaneHeading, needsYouCount, needsYouTray, openAgents, openApp, peekSheet, scriptNextRun, selectWorkstream, setBudget, startWorkstream, stepChip, stepRail, surfacePullRequests, workstreamEvents, workstreamGroup, openNeedRow, needsStack, openRunOf } from "./support/app";
+import { pauseAtCeiling, advanceRuns, agentsHome, askPip, closeWorkstreamSheet, expandNeedsYou, expectPeekInPlace, finishOnHome, githubWrites, homeConversation, homeConversationRegion, homeRunCards, homeSettled, inlineStart, jiraWrites, mockRuns, needRow, needsPane, needsPaneHeading, needsYouCount, needsYouTray, openAgents, openApp, peekSheet, selectWorkstream, startWorkstream, stepChip, stepRail, surfacePullRequests, workstreamEvents, workstreamGroup, openNeedRow, needsStack, openRunOf } from "./support/app";
 
-// A workstream in Manage mode, with pull requests shown only when a test says: the setting the phase's scenarios share.
+// Pull requests are shown only when a test says: the setting the phase's scenarios share.
 // GitHub is signed in with a catalog small enough to be watched whole, so the agents' repository is watched, as the
 // real app needs before it reads a pull request there or drafts a review of one.
-const MANAGED = "runs=empty&prSurface=manual&wsManage=1&mockRepos=12";
+const SAMPLE = "runs=empty&prSurface=manual&mockRepos=12";
 
 /** The newest run of `kind`, as the sample backend holds it. */
 const newest = async (page: Page, kind: string) => (await mockRuns(page)).find((r) => r.kind === kind) ?? null;
 
-/** Waits for the next run of `kind` to have been started by a rule and returns it. */
-async function started(page: Page, kind: string, after: string | null = null) {
-  await expect.poll(async () => (await newest(page, kind))?.id ?? null).not.toBe(after);
-  return (await newest(page, kind))!;
+/** Asks Pip for `what` on CA-401 and starts the draft in place, as the person does. */
+async function startOnHome(page: Page, what: string) {
+  await askPip(page, what);
+  await homeSettled(page);
+  const review = await inlineStart(page, homeRunCards(page, "CA-401").last());
+  await review.getByRole("button", { name: "Start agent" }).click();
+  await expect(review).toHaveCount(0);
 }
 
-
-/** The state line, the verdict and the fix round a step chip shows. */
+/** The state line a step chip shows. */
 const chipState = (page: Page, kind: string) => stepChip(page, kind).locator("[data-step-state]");
 
 /** Opens step `kind`'s chip on the rail, unless it is open. */
@@ -26,35 +28,24 @@ async function openStep(page: Page, kind: string) {
   await expect(chip).toHaveAttribute("aria-expanded", "true");
 }
 
-/**
- * The Jira text drafts waiting under step `kind`, opened if it is closed: not its subtasks or the GitHub review draft. A Triage's
- * note is a description update, the others' a comment.
- */
-async function pendingComments(page: Page, kind: string) {
-  await openStep(page, kind);
-  const title = kind === "triage" ? /^Update the description of CA-401$/ : /^Comment on CA-401$/;
-  return stepChip(page, kind).locator('article[data-draft][data-state="pending"]').filter({ has: page.locator("h3", { hasText: title }) });
-}
-
-/** Starts a workstream on CA-401 from its peek, with room for every automatic turn of the chain, then selects it on Pip home. */
+/** Starts a workstream on CA-401 from its peek, then selects it on Pip home. */
 async function homeWorkstream(page: Page) {
   await startWorkstream(page, "CA-401");
   const ws = (await workstreamEvents(page))[0].workstreamId;
-  await setBudget(page, ws, { autoTurns: 12 });
   await openAgents(page);
   await selectWorkstream(page, "CA-401");
   await expect(homeConversation(page)).toHaveText(/^Workstream: CA-401 .* · Intake$/);
   return ws;
 }
 
-test("intake to review on Pip home: the person talks to Pip, starts the investigation in place, approves the plan and the review's comments, and the rules do the rest", async ({ page }) => {
+test("intake to a build's pull request on Pip home: the person talks to Pip and starts each step, approves the plan, and Pip is woken for each finish", async ({ page }) => {
   test.setTimeout(120_000);
-  await openApp(page, MANAGED);
+  await openApp(page, SAMPLE);
   await homeWorkstream(page);
   const row = workstreamGroup(page, "CA-401");
   await expect(row).toHaveAttribute("aria-current", "true");
   await expect(row.locator("[data-stage]")).toHaveText("Intake");
-  await expect(stepRail(page).getByRole("switch", { name: "Manage this workstream" })).toHaveAttribute("aria-checked", "true");
+  await expect(stepRail(page).getByRole("switch", { name: "Manage this workstream" })).toHaveCount(0);
 
   // Asking Pip to investigate makes a draft, in the conversation and under Investigate.
   await askPip(page, "investigate this");
@@ -76,20 +67,22 @@ test("intake to review on Pip home: the person talks to Pip, starts the investig
   const r1 = (await newest(page, "investigate"))!;
   await expect(stepChip(page, "investigate").locator('[data-run-label="R1"]')).toBeVisible();
 
-  // R1 finishes: one compact wake turn, and Triage R2 starts by the rule.
+  // R1 finishes: one compact wake turn, and nothing starts by itself.
   const wakes = homeConversationRegion(page).locator('[data-turn-kind="wake"]');
   await finishOnHome(page, r1.id);
   await expect(wakes).toHaveCount(1);
   await expect(wakes.first().locator("[data-wake-header]")).toHaveText("Pip picked this up: run R1 finished");
-  const r2 = await started(page, "triage");
-  await expect(stepChip(page, "triage").locator("[data-step-auto]")).toHaveText("· started automatically");
+  expect(await newest(page, "triage")).toBeNull();
   // Its header button opens R1's sheet.
   await wakes.first().getByRole("button", { name: "run R1" }).click();
   await expect(page.locator("#agent-sheet")).toBeVisible();
   await page.locator("#agent-sheet").getByRole("button", { name: "Close", exact: true }).first().click();
   await expect(page.locator("#agent-sheet")).toHaveCount(0);
 
-  // R2 moving along touches only the rail and the footer; its finish starts Plan R3 with a second wake turn.
+  // The person asks for the triage and starts it; moving along touches only the rail and the footer, and its finish is a second wake turn.
+  await startOnHome(page, "triage this");
+  const r2 = (await newest(page, "triage"))!;
+  await expect(stepChip(page, "triage").locator('[data-run-label="R2"]')).toBeVisible();
   await homeSettled(page);
   const turns = await homeConversationRegion(page).locator("[data-turn-kind]").count();
   await advanceRuns(page, 2, r2.id);
@@ -98,10 +91,11 @@ test("intake to review on Pip home: the person talks to Pip, starts the investig
   expect(await homeConversationRegion(page).locator("[data-turn-kind]").count()).toBe(turns);
   await finishOnHome(page, r2.id);
   await expect(wakes).toHaveCount(2);
-  const r3 = await started(page, "plan");
-  await expect(stepChip(page, "plan").locator("[data-step-auto]")).toBeVisible();
+  expect(await newest(page, "plan")).toBeNull();
 
   // The plan finishes: its description draft is under Plan, never batched, and is approved in the peek over Pip home.
+  await startOnHome(page, "plan this");
+  const r3 = (await newest(page, "plan"))!;
   await finishOnHome(page, r3.id);
   await openStep(page, "plan");
   const rewrite = stepChip(page, "plan").getByRole("article", { name: "Update the description of CA-401" });
@@ -118,117 +112,47 @@ test("intake to review on Pip home: the person talks to Pip, starts the investig
   expect((await jiraWrites(page)).map((w) => [w.type, w.key])).toEqual([["rewrite", "CA-401"]]);
   await page.keyboard.press("Escape");
   await expect(peekSheet(page)).toHaveCount(0);
+  expect(await newest(page, "build")).toBeNull();
 
-  // The approved plan starts Build R4; finished, it waits for its pull request, then Review R5 starts.
-  const r4 = await started(page, "build");
-  await expect(stepChip(page, "build").locator("[data-step-auto]")).toBeVisible();
+  // The approved plan is built on the person's say-so, from the full setup sheet; finished, the build waits for its pull request.
+  await askPip(page, "build it");
+  await homeSettled(page);
+  await homeRunCards(page, "CA-401").last().getByRole("button", { name: "Review and start →" }).click();
+  await page.getByRole("dialog", { name: "Start an agent" }).getByRole("button", { name: "Start agent" }).click();
+  await expect(page.getByRole("dialog", { name: "Start an agent" })).toHaveCount(0);
+  const r4 = (await newest(page, "build"))!;
   await finishOnHome(page, r4.id);
   await expect(chipState(page, "build")).toHaveText("waiting for PR");
   const pr = stepChip(page, "build").locator("[data-step-pr]");
   await expect(pr).toHaveCount(0);
   expect(await newest(page, "review")).toBeNull();
-  // A sync finds the draft pull request: the chip stops waiting and names it, before anything else happens on the rail.
+  // A sync finds the draft pull request: the chip stops waiting and names it, and no review starts by itself.
   await surfacePullRequests(page);
   await expect(pr).toHaveText(/^Draft PR#\d+ CA-401: /);
   await expect(chipState(page, "build")).not.toHaveText("waiting for PR");
-  const r5 = await started(page, "review");
-  await expect(stepChip(page, "review").locator("[data-step-auto]")).toBeVisible();
-
-  // The default review blocks: the verdict on the chip, and the build goes into fix round 1.
-  await finishOnHome(page, r5.id);
-  await expect(stepChip(page, "review").locator("[data-step-verdict]")).toHaveText(/^· Blocking · \d+$/);
-  await expect(stepChip(page, "build").locator("[data-step-fix-round]")).toHaveText("· fix round 1/2");
-  await expect.poll(async () => (await mockRuns(page)).find((r) => r.id === r4.id)?.state).toBe("working");
-
-  // The fix round finishes, a second review is scripted to pass.
-  await finishOnHome(page, r4.id);
-  await surfacePullRequests(page);
-  const r6 = await started(page, "review", r5.id);
-  await scriptNextRun(page, "review", { verdict: "pass" });
-  await finishOnHome(page, r6.id);
-  await expect(stepChip(page, "review").locator("[data-step-verdict]")).toHaveText("· Pass");
-  await homeSettled(page);
-
-  // A comment draft retires only an older one of the same run kind: the investigation's, the triage's and the build's
-  // comments are different information the person has not read, so each is still waiting under its own step.
-  const earlier: Record<string, string | null> = {};
-  for (const kind of ["investigate", "triage", "build"]) {
-    const waiting = await pendingComments(page, kind);
-    await expect(waiting, `one pending comment draft under ${kind}`).toHaveCount(1);
-    earlier[kind] = await waiting.getAttribute("data-draft");
-  }
-  expect(new Set(Object.values(earlier)).size).toBe(3);
-
-  // The second review's comment draft replaced the first's on the same ticket (the first is out of date, never approved),
-  // and its GitHub review draft replaced the first's and waits apart. One comment draft is left: approved on its own.
-  await openStep(page, "review");
-  const pending = stepChip(page, "review").locator('article[data-draft][data-state="pending"]');
-  await expect(pending).toHaveCount(2);
-  await expect(pending.filter({ has: page.locator("h3", { hasText: /^GitHub review of / }) })).toHaveCount(1);
-  const drafts = pending.filter({ hasNot: page.locator("h3", { hasText: /^GitHub review of / }) });
-  await expect(drafts).toHaveCount(1);
-  await expect(stepChip(page, "review").getByRole("button", { name: /safe drafts/ })).toHaveCount(0);
-  const id = (await drafts.getAttribute("data-draft"))!;
-  const trayBefore = Number(await needsYouCount(page).innerText());
-  await drafts.getByRole("button", { name: "Review on CA-401 →" }).click();
-  await peekSheet(page).locator(`article[data-draft="${id}"]`).getByRole("button", { name: "Post comment" }).click();
-  await expect
-    .poll(async () =>
-      (await jiraWrites(page))
-        .filter((w) => w.type === "comment")
-        .map((w) => w.proposalId),
-    )
-    .toEqual([id]);
-  await expect(needsYouCount(page)).toHaveText(String(trayBefore - 1));
-  await page.keyboard.press("Escape");
-  await expect(peekSheet(page)).toHaveCount(0);
-  await expect(agentsHome(page)).toBeVisible();
-  // Approving the comment left the GitHub review draft alone: nothing went to GitHub, and it still waits.
-  const github = stepChip(page, "review").locator('article[data-draft]').filter({ has: page.locator("h3", { hasText: /^GitHub review of acme\/storefront#/ }) });
-  await expect(github).toHaveCount(1);
-  await expect(github).toHaveAttribute("data-state", "pending");
+  expect(await newest(page, "review")).toBeNull();
   expect(await githubWrites(page)).toEqual([]);
-
-  // Reviewed and posted from the peek: exactly one comment review of the build's pull request, at the commit R6 read.
-  const name = (await github.locator("h3").first().textContent())!;
-  await github.getByRole("button", { name: "Review and post →" }).click();
-  const card = peekSheet(page).getByRole("article", { name });
-  await card.getByRole("button", { name: "Post review" }).click();
-  await expect.poll(async () => (await githubWrites(page)).length).toBe(1);
-  const [write] = await githubWrites(page);
-  const pull = (await mockRuns(page)).find((r) => r.id === r6.id)!;
-  expect(`GitHub review of ${write.repo}#${write.number}`).toBe(name);
-  expect(write).toMatchObject({ event: "COMMENT", commitId: pull.prSha });
-  await expect(card.locator("[data-review-posted]")).toContainText("Posted to GitHub");
-  expect(await githubWrites(page)).toHaveLength(1);
-  expect((await jiraWrites(page)).filter((w) => w.type === "comment")).toHaveLength(1);
-  // The comments of the other kinds are still waiting, unwritten and untouched.
-  for (const kind of ["investigate", "triage", "build"]) {
-    const waiting = await pendingComments(page, kind);
-    await expect(waiting).toHaveCount(1);
-    await expect(waiting).toHaveAttribute("data-draft", earlier[kind]!);
-  }
 });
 
-test("the Needs you list ranks a hold ahead of a draft to approve, opens each in the pane, and each leaves once dealt with", async ({ page }) => {
-  await openApp(page, MANAGED);
+test("the Needs you list ranks a pause ahead of a draft to approve, opens each in the pane, and each leaves once dealt with", async ({ page }) => {
+  await openApp(page, SAMPLE);
   await homeWorkstream(page);
   const row = workstreamGroup(page, "CA-401");
   await expect(needsYouCount(page)).toHaveText("0");
 
   await askPip(page, "investigate this");
   await homeSettled(page);
-  // Pip can still be idle just after the click, before its turn starts; a hold then would cancel the turn before it drafts.
+  // Pip can still be idle just after the click, before its turn starts; a pause then would cancel the turn before it drafts.
   // The draft's need being there is the sign the turn is done. Pip's scripted turn can take longer than the default wait
   // on a loaded CI runner, so this one wait is given more time; what it checks is unchanged.
   await expect(needsYouCount(page)).toHaveText("1", { timeout: 15_000 });
-  await holdBySystem(page, "CA-401", "restart");
+  await pauseAtCeiling(page, "CA-401");
   await expect(row.locator("[data-status]")).toHaveText("Needs you");
   await expect(row.locator("[data-status-detail]")).toHaveText("· 2 waiting");
-  // One row for the workstream; what is stuck (the hold) ranks ahead of a draft to approve, however old each is (R2).
+  // One row for the workstream; what is stuck (the pause) ranks ahead of a draft to approve, however old each is (R2).
   await expandNeedsYou(page, "CA-401");
   const titles = needsStack(page).locator("[data-needs-you-need-title]");
-  await expect(titles).toHaveText(["Held after a restart", "Start Investigate"]);
+  await expect(titles).toHaveText(["Paused: Pip was woken too often today", "Start Investigate"]);
 
   // From General, the draft's need selects the workstream again and opens its decision; skipped there, it leaves.
   await closeWorkstreamSheet(page);
@@ -237,11 +161,11 @@ test("the Needs you list ranks a hold ahead of a draft to approve, opens each in
   await needsPane(page).getByRole("button", { name: "Skip" }).click();
   await expect(needRow(page, "Start Investigate")).toHaveCount(0);
   await expect(row.locator("[data-status]")).toHaveText("Needs you");
-  await expect(row.locator("[data-status-detail]")).toHaveText("· Held after a restart");
+  await expect(row.locator("[data-status-detail]")).toHaveText("· Paused: Pip was woken too often today");
 
-  // The pane moved on to the hold, with its heading focused (no key lands on Resume by accident); Resume clears the need and the badge.
-  await expect(needsPane(page)).toHaveAttribute("data-kind", "hold");
-  const resume = needsPane(page).locator("[data-held-banner]").getByRole("button", { name: "Resume" });
+  // The pane moved on to the pause, with its heading focused (no key lands on Resume by accident); Resume clears the need and the badge.
+  await expect(needsPane(page)).toHaveAttribute("data-kind", "paused");
+  const resume = needsPane(page).locator("[data-paused-banner]").getByRole("button", { name: "Resume" });
   await expect(needsPaneHeading(page)).toBeFocused();
   await resume.click();
   await expect(needsYouCount(page)).toHaveText("0");

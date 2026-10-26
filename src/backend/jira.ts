@@ -62,9 +62,7 @@ import type {
   WorkItem,
   Workstream,
   WorkstreamEvent,
-  WorkstreamMode,
   WorkstreamUndo,
-  WorkstreamRule,
   WorkstreamView,
   WorkstreamsChanged,
 } from "../types";
@@ -506,18 +504,6 @@ export class JiraBackend implements Backend {
     return invoke<WorkstreamEvent[]>("workstreams_events", { id });
   }
 
-  workstreamsSetMode(id: string, mode: WorkstreamMode) {
-    return invoke<Workstream>("workstreams_set_mode", { id, mode });
-  }
-
-  workstreamsFixRound(reviewRun: string) {
-    return invoke<Run>("workstreams_fix_round", { reviewRun });
-  }
-
-  workstreamsTakeOver(id: string, reviewRun: string) {
-    return invoke<Workstream>("workstreams_take_over", { id, reviewRun });
-  }
-
   workstreamsReadinessAsk(id: string, triageRun: string) {
     return invoke<Proposal>("workstreams_readiness_ask", { id, triageRun });
   }
@@ -546,28 +532,16 @@ export class JiraBackend implements Backend {
     return invoke<Workstream>("workstreams_readiness_override", { id, triageRun });
   }
 
-  workstreamsHold(id: string) {
-    return invoke<Workstream>("workstreams_hold", { id });
+  workstreamsPause(id: string) {
+    return invoke<Workstream>("workstreams_pause", { id });
   }
 
   workstreamsResume(id: string) {
     return invoke<Workstream>("workstreams_resume", { id });
   }
 
-  workstreamsAllowMore(id: string) {
-    return invoke<Workstream>("workstreams_allow_more", { id });
-  }
-
   workstreamsUndo(id: string, undo: WorkstreamUndo) {
     return invoke<Workstream>("workstreams_undo", { id, undo });
-  }
-
-  workstreamsSetRule(id: string, rule: WorkstreamRule, on: boolean | null) {
-    return invoke<Workstream>("workstreams_set_rule", { id, rule, on });
-  }
-
-  workstreamsHoldAll() {
-    return invoke<Workstream[]>("workstreams_hold_all");
   }
 
   workstreamsStop(id: string) {

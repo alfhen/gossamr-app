@@ -30,12 +30,10 @@ mod review_drafts;
 mod rewrites;
 mod ticket_context;
 mod workstreams;
-pub use pip_runs::{PipRunAsk, NOT_ON_ITS_OWN, PR_MOVED};
-#[cfg(test)]
-pub use pip_runs::VERIFY_UNPINNED;
+pub use pip_runs::PipRunAsk;
 #[cfg(test)]
 pub(crate) use workstreams::{basis_of, drifted};
-pub use workstreams::{answered_by_reply, reporter_follow, Adoptable, Admitted, Escalation, ReadinessStop, WakeAdmission, WorkstreamUndo, WorkstreamView, ESCALATION_GONE, NOTES_CLOSE, NOTES_LIMIT, NOTES_OPEN};
+pub use workstreams::{Adoptable, ReadinessStop, WakeAdmission, WorkstreamUndo, WorkstreamView, NOTES_CLOSE, NOTES_LIMIT, NOTES_OPEN};
 pub use rewrites::TextSeen;
 mod watch;
 
@@ -306,8 +304,6 @@ impl Core {
             backfill_cache(&db, &connection)?;
             db.release_interrupted(Utc::now())?;
             db.fail_interrupted_pip_turns()?;
-            // Nothing wakes Pip or starts on its own after a restart until the person resumes the workstream.
-            db.hold_open_workstreams(crate::domain::workstream::HELD_RESTART, Utc::now())?;
             *guard = Some((connection.id.clone(), db));
         }
         f(&guard.as_ref().expect("opened above").1)
@@ -1123,11 +1119,6 @@ pub(crate) mod testing {
         /// Stores `ws` as it is, whatever its connection.
         pub async fn insert_workstream(&self, ws: &crate::domain::Workstream) {
             self.core.with_db_for(&self.scope, |db| db.insert_workstream(ws)).await.unwrap();
-        }
-
-        /// Overwrites the stored `ws`, as nothing but a misbehaving tool would.
-        pub async fn save_workstream(&self, ws: &crate::domain::Workstream) {
-            self.core.with_db_for(&self.scope, |db| db.save_workstream(ws)).await.unwrap();
         }
     }
 

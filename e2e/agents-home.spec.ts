@@ -1,15 +1,14 @@
 import { expect, test, type Page } from "@playwright/test";
-import { agentsHome, closeWorkstreamSheet, holdBySystem, needsChip, needsPane, needsPaneHeading, needsYouCount, needsYouTray, openNeedOfKind, openAgents, openApp, pipConversation, pipPane, selectWorkstream, startWorkstream, workstreamGroup, workstreamOpen, workstreamSheet, groupOpen, showWorkspace } from "./support/app";
+import { agentsHome, closeWorkstreamSheet, pauseAtCeiling, needsChip, needsPane, needsPaneHeading, needsYouCount, needsYouTray, openNeedOfKind, openAgents, openApp, pipConversation, pipPane, selectWorkstream, startWorkstream, workstreamGroup, workstreamOpen, workstreamSheet, groupOpen, showWorkspace } from "./support/app";
 
 // Agents is the one work view (docs/needs-you.md): the summary chips (Needs you is a filter), every workstream with its
 // agents under them, and a workstream's detail as a sheet beside the Pip drawer. There is no separate Pip home.
 
-const MANAGED = "wsManage=1";
 
 const agentsButton = (page: Page) => page.getByRole("button", { name: /^Agents/ });
 
 test("the app opens on Agents, with the summary chips in the header, All on, and the workstreams grouped by default", async ({ page }) => {
-  await page.goto("/?" + MANAGED);
+  await page.goto("/");
   await expect(agentsHome(page)).toBeVisible();
   await expect(page).toHaveTitle("Agents — Gossamr");
   const chips = page.getByRole("group", { name: "Show" });
@@ -23,7 +22,7 @@ test("the app opens on Agents, with the summary chips in the header, All on, and
 });
 
 test("there is no Pip home: no rail button, no ⌘0, no palette entry", async ({ page }) => {
-  await openApp(page, MANAGED);
+  await openApp(page);
   await expect(agentsButton(page)).toHaveCount(1);
   await expect(page.getByRole("button", { name: /Pip home/ })).toHaveCount(0);
   await page.keyboard.press("ControlOrMeta+0");
@@ -38,7 +37,7 @@ test("there is no Pip home: no rail button, no ⌘0, no palette entry", async ({
 });
 
 test("the rail's one badge is the one count, on Agents", async ({ page }) => {
-  await openApp(page, MANAGED);
+  await openApp(page);
   await expect(agentsButton(page)).toHaveCount(1);
   await openAgents(page);
   const count = Number(await needsYouCount(page).innerText());
@@ -48,7 +47,7 @@ test("the rail's one badge is the one count, on Agents", async ({ page }) => {
 });
 
 test("a workstream's Open button opens its detail with the decision at the top, above its runs and steps", async ({ page }) => {
-  await openApp(page, MANAGED);
+  await openApp(page);
   await openAgents(page);
   await expect(needsPane(page)).toHaveCount(0);
   await groupOpen(page, "General").click();
@@ -67,7 +66,7 @@ test("a workstream's Open button opens its detail with the decision at the top, 
 });
 
 test("a run's 'In Needs you' pill opens the same decision, with the Needs you filter on, and nothing else changes screen", async ({ page }) => {
-  await openApp(page, MANAGED);
+  await openApp(page);
   await openAgents(page);
   const pill = agentsHome(page).locator("[data-agents-list] article[data-run-id] button", { hasText: "In Needs you" }).first();
   await pill.click();
@@ -77,7 +76,7 @@ test("a run's 'In Needs you' pill opens the same decision, with the Needs you fi
 });
 
 test("a workstream is a group with its status and an Open button; its detail is a sheet that leaves the Pip drawer on the right", async ({ page }) => {
-  await openApp(page, MANAGED);
+  await openApp(page);
   await startWorkstream(page, "CA-401");
   await openAgents(page);
   const group = workstreamGroup(page, "CA-401");
@@ -108,7 +107,7 @@ test("a workstream is a group with its status and an Open button; its detail is 
 });
 
 test("Esc in the sheet puts it away, and leaving Agents does too", async ({ page }) => {
-  await openApp(page, MANAGED);
+  await openApp(page);
   await startWorkstream(page, "CA-401");
   await openAgents(page);
   await closePipDrawerIfOpen(page);
@@ -131,7 +130,7 @@ async function closePipDrawerIfOpen(page: Page) {
 }
 
 test("the palette's 'Open the workstream' and 'Show what needs me' land on Agents", async ({ page }) => {
-  await openApp(page, MANAGED);
+  await openApp(page);
   await startWorkstream(page, "CA-401");
   await page.keyboard.press("ControlOrMeta+k");
   const palette = page.getByRole("dialog", { name: "Command palette" });
@@ -153,17 +152,17 @@ test("the palette's 'Open the workstream' and 'Show what needs me' land on Agent
 });
 
 test("the rail popover's item turns the Needs you filter on and opens that workstream's detail with the need at the top; a need in no workstream opens No workstream", async ({ page }) => {
-  await openApp(page, MANAGED);
+  await openApp(page);
   await startWorkstream(page, "CA-401");
-  await holdBySystem(page, "CA-401", "restart");
+  await pauseAtCeiling(page, "CA-401");
   await openAgents(page);
   await closePipDrawerIfOpen(page);
   await expect(needsChip(page)).toHaveAttribute("aria-pressed", "false");
-  await openNeedOfKind(page, "hold");
+  await openNeedOfKind(page, "paused");
   await expect(needsChip(page)).toHaveAttribute("aria-pressed", "true");
   await expect(workstreamSheet(page)).toBeVisible();
   await expect(workstreamGroup(page, "CA-401")).toHaveAttribute("aria-current", "true");
-  await expect(needsPane(page)).toHaveAttribute("data-kind", "hold");
+  await expect(needsPane(page)).toHaveAttribute("data-kind", "paused");
   await expect(needsPaneHeading(page)).toBeFocused();
 
   await closeWorkstreamSheet(page);
@@ -174,7 +173,7 @@ test("the rail popover's item turns the Needs you filter on and opens that works
 });
 
 test("Start a workstream… and Show closed are in the toolbar", async ({ page }) => {
-  await openApp(page, MANAGED);
+  await openApp(page);
   await startWorkstream(page, "CA-401");
   await openAgents(page);
   await page.getByRole("button", { name: "Start a workstream…" }).click();
@@ -197,7 +196,7 @@ test("Start a workstream… and Show closed are in the toolbar", async ({ page }
 });
 
 test("Agents keeps the State grouping when it is chosen, and the choice is kept", async ({ page }) => {
-  await openApp(page, MANAGED);
+  await openApp(page);
   await openAgents(page);
   const group = page.getByRole("group", { name: "Group by" });
   await group.getByRole("button", { name: "State" }).click();

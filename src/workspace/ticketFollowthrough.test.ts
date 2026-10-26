@@ -12,7 +12,6 @@ import { useWorkView } from "./workViewStore";
 import { useToasts } from "./toasts";
 import { currentNeeds } from "./useNeeds";
 import { workstreamStatus } from "../lib/workstreamStatus";
-import { heldBanner } from "../lib/workstreamHold";
 import { useWorkstreams } from "./workstreamsStore";
 
 const memory = () => {
@@ -28,7 +27,7 @@ beforeEach(async () => {
   vi.stubGlobal("localStorage", memory());
   useToasts.getState().clear();
   usePip.getState().clearPrefill();
-  backend = new MockBackend({ runs: { seed: "empty", prSurfaceMs: null }, wsManage: true });
+  backend = new MockBackend({ runs: { seed: "empty", prSurfaceMs: null } });
   backend.supervisor.dispose();
   await useWorkspace.getState().init(backend);
   useWorkstreams.getState().init(backend);
@@ -126,8 +125,8 @@ describe("a workstream that waits on the reporter", () => {
     expect(workstreamStatus(stored(id), []).word).toBe("Waiting on reporter");
     expect(currentNeeds().filter((n) => n.workstreamId === id && n.kind !== "draft")).toEqual([]);
     expect(stored(id).clarity ?? null).toBeNull();
-    // Holding and resuming is the person resuming: the wait is over.
-    backend.workstreams.hold(id, undefined, "person");
+    // Pausing and resuming is the person resuming: the wait is over.
+    backend.workstreams.pause(id);
     backend.workstreams.resume(id);
     await useWorkstreams.getState().refresh();
     expect(stored(id).waitingOnReporter ?? null).toBeNull();
@@ -149,16 +148,16 @@ describe("a reporter's reply comment ends the wait", () => {
     await useWorkstreams.getState().refresh();
     expect(stored(id).waitingOnReporter?.since).toBeTruthy();
     expect(stored(id).reporterReplied ?? false).toBe(false);
-    // The reporter's reply ends it, with no audit line and no hold.
+    // The reporter's reply ends it, with no audit line and no pause.
     await new Promise((r) => setTimeout(r, 5));
     backend.commentOnTicket("CA-408", "It should send three emails.");
     await useWorkstreams.getState().refresh();
     expect(stored(id).waitingOnReporter ?? null).toBeNull();
-    expect(stored(id)).toMatchObject({ reporterReplied: true, changedWhileWaiting: true });
+    expect(stored(id)).toMatchObject({ reporterReplied: true });
     expect(Number.isNaN(Date.parse(stored(id).reporterRepliedAt ?? ""))).toBe(false);
     // The view says which comment it was and how it starts (G15).
     expect(stored(id).reporterReply).toEqual({ id: expect.any(String), excerpt: "It should send three emails." });
-    expect(stored(id).workstream.heldReason).toBeNull();
+    expect(stored(id).workstream.pausedReason).toBeNull();
     expect(workstreamStatus(stored(id), []).word).not.toBe("Waiting on reporter");
   });
 });
@@ -176,14 +175,13 @@ describe("Plan now after the reporter replied (G4)", () => {
     const replied = was.map((v) => (v.workstream.id === id ? { ...v, readiness: { ...stop, changed: true, replied: true } } : v));
     useWorkstreams.setState({ list: replied });
     expect(await useWorkstreams.getState().planAnyway(id)).toBe(true);
-    expect(texts()).toContain("Planning now with the reporter's reply on the ticket. The plan starts as soon as the workstream's checks allow.");
+    expect(texts()).toContain("Planning now with the reporter's reply on the ticket. Ask Pip to draft the plan.");
     expect(texts().some((t) => t.startsWith("Planning anyway"))).toBe(false);
   });
 });
 
-describe("what the page says when the ticket changed while it waited on the reporter", () => {
-  /** A workstream on CA-408 whose questions to the reporter were posted, so it waits. */
-  async function waiting() {
+describe("what happens when the ticket changed while it waited on the reporter", () => {
+  it("ends the wait and notes the change, without pausing the workstream", async () => {
     const id = await open("CA-408");
     await useWorkstreams.getState().askReporterNow(id);
     await useWorkspace.getState().refreshProposals();
@@ -191,22 +189,12 @@ describe("what the page says when the ticket changed while it waited on the repo
     await backend.proposalsApprove(asked.id);
     await useWorkstreams.getState().refresh();
     expect(stored(id).waitingOnReporter?.since).toBeTruthy();
-    return id;
-  }
-
-  it("flags the view while the drift's hold is on, so the banner says it, and not for a drift that came with no wait", async () => {
-    const id = await waiting();
-    expect(stored(id).changedWhileWaiting ?? false).toBe(false);
-    backend.workstreams.trip(id, "basis_drift", null, ["description"]);
+    backend.editTicket("CA-408", { description: "Win back lapsed customers with three emails over two weeks." });
+    backend.supervisor.check();
     await useWorkstreams.getState().refresh();
-    expect(stored(id)).toMatchObject({ changedWhileWaiting: true, workstream: { heldReason: "tripwire:basis_drift" } });
-    expect(heldBanner(stored(id).workstream, stored(id).changedWhileWaiting)).toMatch(/^Held: CA-408's description changed while waiting on the reporter\. Resume, then decide whether to plan now\./);
-
-    const other = await open("CA-401");
-    backend.workstreams.trip(other, "basis_drift", null, ["description"]);
-    await useWorkstreams.getState().refresh();
-    expect(stored(other).changedWhileWaiting ?? false).toBe(false);
-    expect(heldBanner(stored(other).workstream, stored(other).changedWhileWaiting)).toMatch(/^Held: the ticket's description changed in Jira\./);
+    expect(stored(id).waitingOnReporter ?? null).toBeNull();
+    expect(stored(id).workstream.pausedReason).toBeNull();
+    expect(events(id).filter((e) => e.action === "basis_drifted").map((e) => [e.actor, e.detail])).toEqual([["supervisor", "description"]]);
   });
 });
 

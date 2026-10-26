@@ -1,4 +1,4 @@
-import { ALLOW_MORE_STEPS, HELD_BUDGET, type Intent, type Proposal, type ReadinessStop, type Run, type WorkstreamView } from "../types";
+import { type Intent, type Proposal, type ReadinessStop, type Run, type WorkstreamView } from "../types";
 import { stoppedAtLimit } from "../workspace/agentsLogic";
 import { failureHelp } from "../workspace/failureHelp";
 import { docText } from "./docs";
@@ -6,12 +6,12 @@ import { parsePermission, permissionOffer, readAs } from "./permission";
 import { inWorkstreamPane, isAnswersDraft, isReporterNudge, isReporterQuestions, targetOf, workstreamOf } from "./proposals";
 import { agoText, type ReporterAsk } from "./reporterWait";
 import { maskSecrets } from "./riskyText";
-import { isHeldByYou, shortHeld, stepsOf } from "./workstreamHold";
+import { pausedText } from "./workstreamPause";
 import { STAGE_LABEL, runWorkstream } from "./workstreamStage";
 
 /**
  * Needs you: the one place that says what waits on the person, and the only source of its count. It reads what the stores
- * hold (proposals, runs, workstreams with their holds and escalations, and the failures the person dismissed) and decides
+ * pause (proposals, runs, workstreams with their pauses, and the failures the person dismissed) and decides
  * nothing. Every screen that counts or lists what needs the person counts these and lists these, as docs/needs-you.md says.
  */
 
@@ -19,7 +19,6 @@ import { STAGE_LABEL, runWorkstream } from "./workstreamStage";
 export type NeedGroupKind = "decide" | "unblock" | "approve";
 
 export type NeedKind =
-  | "escalation"
   | "plan"
   | "description"
   | "permission"
@@ -27,15 +26,14 @@ export type NeedKind =
   | "signIn"
   | "failure"
   | "stoppedAtLimit"
-  | "hold"
-  | "budget"
+  | "paused"
   | "readiness"
   | "draft"
   | "review"
   | "runStart";
 
 /** What the person can do about a need, as the keys and the pane's buttons name it. */
-export type NeedActionId = "approve" | "allow" | "deny" | "dismiss" | "edit" | "retry" | "resume" | "allowMore" | "advise" | "askReporter" | "answerSelf" | "planAnyway" | "answer" | "open";
+export type NeedActionId = "approve" | "allow" | "deny" | "dismiss" | "edit" | "retry" | "resume" | "askReporter" | "answerSelf" | "planAnyway" | "answer" | "open";
 
 export interface ActionSpec {
   id: NeedActionId;
@@ -43,10 +41,9 @@ export interface ActionSpec {
 }
 
 /**
- * What a need brings into view in its workstream's detail: a draft's card, a run's card, the workstream's held banner, or the card of a
- * review that still blocks after the fix rounds.
+ * What a need brings into view in its workstream's detail: a draft's card, a run's card, or the workstream's own controls.
  */
-export type NeedTarget = { type: "draft"; id: string } | { type: "run"; id: string } | { type: "workstream" } | { type: "escalation" };
+export type NeedTarget = { type: "draft"; id: string } | { type: "run"; id: string } | { type: "workstream" };
 
 /** One thing waiting on the person. `workstreamId` null is General. */
 export interface Need {
@@ -63,7 +60,7 @@ export interface Need {
   head: string | null;
   /** The title of the workstream it is in, less the ticket's key; absent for General. */
   workstreamTitle?: string;
-  /** What it is, in a few words: "R1 asks a question", "Draft comment", "Held by you". */
+  /** What it is, in a few words: "R1 asks a question", "Draft comment", "Paused". */
   title: string;
   /** One plain sentence: why the person is asked. */
   why: string;
@@ -91,8 +88,8 @@ export interface NeedsInput {
   dismissed: ReadonlySet<string>;
   /** When the reporter was asked, and nudged, by workstream id, where that is known (`reporterAsk`): the readiness decision says so. */
   asked?: Readonly<Record<string, ReporterAsk>>;
-  /** When each held workstream was last held, by id, where that is known; otherwise its `createdAt` stands in. */
-  heldAt?: Readonly<Record<string, string>>;
+  /** When each paused workstream was last paused, by id, where that is known; otherwise its `createdAt` stands in. */
+  pausedAt?: Readonly<Record<string, string>>;
   /** A ticket's title by its key, when it is cached. */
   titleOf?(key: string): string | null | undefined;
   /** The time the quiet runs are judged by, in ms. */
@@ -174,7 +171,6 @@ export function leftOutLabel(p: Proposal, title: string): string {
 export const REPEATED_COMMENT_NOTE = "Same text as the comment above, left out";
 
 /** What the list says of a review that still blocks after the automatic fix rounds. */
-export const escalationReason = (rounds: number) => `Review still blocks after ${rounds} fix ${rounds === 1 ? "round" : "rounds"}`;
 
 /** What a readiness need says of the open questions: which triage left them and what they are, in one sentence. */
 export function readinessWhy(r: Pick<ReadinessStop, "triageLabel" | "questions">): string {
@@ -329,17 +325,17 @@ export function latestRuns(runs: readonly Pick<Run, "id" | "item" | "spec" | "qu
 }
 
 /**
- * Everything waiting on the person across the open workstreams and General, highest rank first: a decision (an escalation,
- * a plan or description to approve, a workstream that used its automatic steps, a ticket the triage found not clear enough to plan), then what is stuck (a permission, a question, a sign-in, a failure, a run stopped at
- * its limit, a hold the system made), then drafts to approve (a
- * Jira draft, a GitHub review, a run to start). Within a group, oldest first.
+ * Everything waiting on the person across the open workstreams and General, highest rank first: a decision (a plan or
+ * description to approve, a ticket the triage found not clear enough to plan), then what is stuck (a permission, a question,
+ * a sign-in, a failure, a run stopped at its limit, a paused workstream), then drafts to approve (a Jira draft, a GitHub
+ * review, a run to start). Within a group, oldest first.
  *
- * One thing is one need: a run asking a question that has a drafted reply is the question; a review that still blocks
- * after the fix rounds carries its review draft; a retired or superseded draft never shows. A failure or a limit stop is a need only
+ * One thing is one need: a run asking a question that has a drafted reply is the question; a retired or superseded draft
+ * never shows. A failure or a limit stop is a need only
  * while it is the latest run of its kind on its ticket (`latestRuns`), and stays until the person deals with it: Retry, a
  * fix, a resume, or a Dismiss (`dismissed`); looking at it clears nothing. A finished run is a state, not a need.
  */
-export function needs({ workstreams, runs, proposals, dismissed, heldAt, asked, titleOf, now }: NeedsInput): Need[] {
+export function needs({ workstreams, runs, proposals, dismissed, pausedAt, asked, titleOf, now }: NeedsInput): Need[] {
   const kept = workstreamTitles(workstreams);
   const snapped = snapshotTitles(runs, proposals);
   const titleFor = (key: string | null | undefined) => (key ? titleOf?.(key)?.trim() || kept.get(key) || snapped.get(key) : undefined);
@@ -362,8 +358,6 @@ export function needs({ workstreams, runs, proposals, dismissed, heldAt, asked, 
   const latest = latestRuns(runs);
   const answers = answersByRun(proposals, runs);
   const carried = new Set([...answers.values()].map((p) => p.id));
-  // A review that still blocks carries its review draft, so the draft is not a second need.
-  for (const v of open) if (v.escalation?.reviewDraft) carried.add(v.escalation.reviewDraft);
 
   const repeated = new Set(repeatedComments([...proposals].sort((a, b) => a.createdAt.localeCompare(b.createdAt) || (a.id < b.id ? -1 : 1))).map((p) => p.id));
   for (const p of proposals) {
@@ -536,60 +530,22 @@ export function needs({ workstreams, runs, proposals, dismissed, heldAt, asked, 
   }
 
   for (const v of open) {
-    const held = shortHeld(v.workstream.heldReason, v.workstream.drifted);
-    // A hold the person chose is not a need: they know, and the workstream's header says it with a Resume.
-    if (!held || isHeldByYou(v.workstream.heldReason)) continue;
+    const reason = v.workstream.pausedReason;
+    const paused = pausedText(reason);
+    if (!reason || !paused) continue;
     const id = v.workstream.id;
-    if (v.workstream.heldReason === HELD_BUDGET) {
-      // Running out of automatic steps is a question for the person: more, or no more. In Advise nothing starts on its own, so it is answered.
-      if (v.workstream.mode !== "manage") continue;
-      out.push({
-        key: `budget:${id}`,
-        group: "decide",
-        kind: "budget",
-        ...where(id, v.workstream.itemKey),
-        title: `${v.workstream.itemKey ?? "This workstream"} used its ${stepsOf(v.budget).limit} automatic steps`,
-        why: "Pip and the automatic steps are paused until you decide.",
-        ifYouWait: "Nothing more starts on its own; its agents carry on.",
-        at: heldAt?.[id] ?? v.workstream.createdAt,
-        primary: action("allowMore", `Allow ${ALLOW_MORE_STEPS} more`),
-        secondary: [action("advise", "Switch to Advise")],
-        target: { type: "workstream" },
-        batchable: false,
-      });
-      continue;
-    }
     out.push({
-      key: `held:${id}`,
+      key: `paused:${id}`,
       group: "unblock",
-      kind: "hold",
+      kind: "paused",
       ...where(id, v.workstream.itemKey),
-      title: held,
-      why: `${held}.`,
-      ifYouWait: "Pip takes no turns and no automatic step starts; its agents carry on.",
-      at: heldAt?.[id] ?? v.workstream.createdAt,
+      title: paused,
+      why: reason === "ceiling" ? "Pip was woken too often today, so Gossamr paused it." : "You paused it.",
+      ifYouWait: "Pip isn't woken; its agents carry on.",
+      at: pausedAt?.[id] ?? v.workstream.createdAt,
       primary: action("resume", "Resume"),
       secondary: [],
       target: { type: "workstream" },
-      batchable: false,
-    });
-  }
-
-  for (const v of open) {
-    const e = v.escalation;
-    if (!e) continue;
-    out.push({
-      key: `escalation:${e.reviewRun}`,
-      group: "decide",
-      kind: "escalation",
-      ...where(v.workstream.id, v.workstream.itemKey),
-      title: escalationReason(e.rounds),
-      why: `The review still blocks after ${e.rounds} fix ${e.rounds === 1 ? "round" : "rounds"}.`,
-      ifYouWait: "The build stays as it is; no more fix rounds start until you choose.",
-      at: e.at,
-      primary: action("open", "Choose what next"),
-      secondary: [],
-      target: { type: "escalation" },
       batchable: false,
     });
   }

@@ -31,11 +31,10 @@ function seed<S extends object>(store: { getInitialState(): S; setState(patch: P
 
 const view = (id: string, key: string | null, over: Partial<WorkstreamView["workstream"]> = {}): WorkstreamView =>
   ({
-    workstream: { id, itemKey: key, title: key ? `${key} Checkout` : "Loose ends", connectionId: "mock", closedAt: null, createdAt: "2026-09-29T10:00:00Z", heldReason: null, mode: "advise", notes: null, ...over },
+    workstream: { id, itemKey: key, title: key ? `${key} Checkout` : "Loose ends", connectionId: "mock", closedAt: null, createdAt: "2026-09-29T10:00:00Z", pausedReason: null, notes: null, ...over },
     stage: "intake",
     runs: [],
     labels: [],
-    budget: { autoTurns: { used: 0, limit: 6 }, wakes: { used: 0, limit: 12 }, level: "ok" },
   }) as unknown as WorkstreamView;
 
 beforeEach(() => {
@@ -116,7 +115,7 @@ describe("what needs you, in the Agents list and its detail", () => {
       <AgentsScreen runs={[]} status="ready" error={null} environment={{ claude: "ok", version: "2.1.286" }} filters={NO_FILTERS} selectedId={null} earlierOpen={false} introShown={false} view="cards" stopping={false} opened={new Set()} now={NOW} ticketTitle={() => null} on={actions()} {...over} />,
     );
   afterEach(() => seed(useWorkView, { deciding: null, batch: null }));
-  const held = view("ws-1", "CA-401", { heldReason: "restart" });
+  const held = view("ws-1", "CA-401", { pausedReason: "ceiling" });
   const calm = view("ws-2", "CA-402");
 
   it("marks the workstream that holds a need with a badge and an accent, and leaves the others plain", () => {
@@ -148,13 +147,13 @@ describe("what needs you, in the Agents list and its detail", () => {
 
   it("shows the decision at the top of the detail, under Needs you, above the steps", () => {
     seed(useWorkstreams, { list: [held] });
-    seed(useWorkView, { deciding: "held:ws-1" });
+    seed(useWorkView, { deciding: "paused:ws-1" });
     const html = renderToStaticMarkup(<WorkstreamSheet id="ws-1" />);
     const at = (needle: string) => html.indexOf(needle);
     expect(at("data-workstream-needs=")).toBeGreaterThan(-1);
     expect(at("data-workstream-needs=")).toBeLessThan(at("data-step-rail"));
-    expect(html).toContain('data-needs-pane="held:ws-1"');
-    expect(at('data-needs-pane="held:ws-1"')).toBeLessThan(at("data-step-rail"));
+    expect(html).toContain('data-needs-pane="paused:ws-1"');
+    expect(at('data-needs-pane="paused:ws-1"')).toBeLessThan(at("data-step-rail"));
   });
 
   it("opens No workstream's detail, with its needs on top and nothing about a workstream", () => {
@@ -200,8 +199,10 @@ describe("what a workstream's heading says of where it stands", () => {
     expect(html).not.toContain("data-needs-you-badge");
   });
 
-  it("says a held-by-you workstream is held by you", () => {
-    expect(renderToStaticMarkup(<WorkstreamHeadExtras view={view("ws-1", "CA-401", { heldReason: "person" })} />)).toMatch(/data-status="held"[^>]*>Held by you</);
+  it("says a paused workstream is paused", () => {
+    const paused = view("ws-1", "CA-401", { pausedReason: "person" });
+    seed(useWorkstreams, { list: [paused] });
+    expect(renderToStaticMarkup(<WorkstreamHeadExtras view={paused} />)).toMatch(/data-status="needs-you"[^>]*>Needs you/);
   });
 });
 

@@ -1,5 +1,5 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
-import { askPip, homeConversation, homeConversationRegion, mockRuns, openAgents, openApp, openPip, peekSheet, peekTicket, PIP_INPUT, pipIdle, pipPane, reviewedDraft, selectWorkstream, setManage, startWorkstream, stepRail } from "./support/app";
+import { askPip, homeConversation, homeConversationRegion, mockRuns, openAgents, openApp, openPip, peekSheet, peekTicket, PIP_INPUT, pipIdle, pipPane, reviewedDraft, selectWorkstream, startWorkstream, stepRail } from "./support/app";
 
 // The UX polish pass: what the person reads (no ids, tools or machinery words), where things sit (nothing covers
 // anything), draft action bars, and how a new workstream opens.
@@ -269,16 +269,6 @@ test.describe("no overlap", () => {
     await expect(page.getByRole("tooltip")).toHaveText("All projects");
     await page.keyboard.press("Shift+Tab");
     await expect(page.getByRole("tooltip")).toContainText("Search and jump");
-
-    // On a Manage workstream, Hold all is a pause icon with a name and a note on what it does.
-    await startWorkstream(page, "CA-401");
-    await setManage(page);
-    const hold = rail(page).getByRole("button", { name: "Hold all workstreams" });
-    await expect(hold.locator("svg")).toHaveCount(1);
-    await expect(hold).not.toContainText("⏸");
-    await hold.hover();
-    await expect(page.getByRole("tooltip")).toContainText("Hold all workstreams");
-    await expect(page.getByRole("tooltip")).toContainText("Stops automatic steps in every workstream; agents carry on");
   });
 });
 
@@ -409,7 +399,7 @@ test.describe("workstream start", () => {
     const dialog = pane.getByRole("dialog", { name: "Commands" });
     await expect(dialog).toBeVisible();
     await expect(help).toHaveAttribute("aria-expanded", "true");
-    for (const usage of ["/stop R1", "/retry R1", "/answer R1 your answer", "/hold", "/resume"]) await expect(dialog.getByText(usage, { exact: true })).toBeVisible();
+    for (const usage of ["/stop R1", "/retry R1", "/answer R1 your answer", "/pause", "/resume"]) await expect(dialog.getByText(usage, { exact: true })).toBeVisible();
     await expect(dialog).toContainText("R1 is a run in this workstream; a run's id works anywhere.");
     await page.keyboard.press("Escape");
     await expect(dialog).toHaveCount(0);

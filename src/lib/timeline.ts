@@ -6,7 +6,7 @@ import { isReporterFollowUp, isReporterNudge, isReporterQuestions, targetOf, wor
 
 /**
  * One timeline per workstream (docs/needs-you.md, step 3): what Pip said, what the person said, each run from start to end
- * with its verdict, the drafts made and decided, holds, mode switches, escalations and undos, in one list, oldest first.
+ * with its verdict, the drafts made and decided, pauses and undos, in one list, oldest first.
  * It reads what the stores already hold (the conversation's turns, the runs, the drafts, the workstream's audit and Needs
  * you) and decides nothing. A run is one entry, updated in place as it moves; a draft is one entry, which says how it was
  * decided; the audit lines that only repeat a run's or a draft's own story are left out.
@@ -130,16 +130,16 @@ const DRAFT_WORDS: Record<Intent["type"], string> = {
 const MAKER: Record<ProposalMaker, string> = { pip: "Pip", agent: "An agent", user: "You" };
 
 /** The audit lines a run's or a draft's own entry already tells, or that are bookkeeping: left out. */
-const TOLD_ELSEWHERE = new Set(["run_approved", "autostart", "wake", "draft_created", "draft_retired", "notes_set"]);
+const TOLD_ELSEWHERE = new Set(["run_approved", "wake", "draft_created", "draft_retired", "notes_set"]);
 
 /** Audit lines that ask the person to decide something, whoever wrote them. */
-const ASKS = new Set(["fix_rounds_exhausted", "held"]);
+const ASKS = new Set(["paused"]);
 
 /** What the person does to ask the reporter: each is its own line, never merged into "(2 times)", since a second ask is news. */
 const REPORTER_ASKS = new Set(["readiness_asked", "clarity_asked", "reporter_nudged"]);
 
 /** What the person did that counts as deciding something. Opening or closing a workstream and the notes are bookkeeping, not decisions. */
-const DECIDED = new Set(["draft_approved", "draft_skipped", "review_posted", "held", "resumed", "mode_set", "rule_set", "fix_round_sent", "escalation_taken", "dismissed", "undone", "run_stopped", "run_answered", "run_retried", "budget_reset", "steps_allowed", "readiness_asked", "readiness_answered", "readiness_overridden", "clarity_asked", "clarity_dismissed", "reporter_nudged", "clarity_learned", "clarity_reset"]);
+const DECIDED = new Set(["draft_approved", "draft_skipped", "review_posted", "paused", "resumed", "dismissed", "undone", "run_stopped", "run_answered", "run_retried", "readiness_asked", "readiness_answered", "readiness_overridden", "clarity_asked", "clarity_dismissed", "reporter_nudged", "clarity_learned", "clarity_reset"]);
 
 const time = (iso: string | undefined) => {
   const t = iso ? Date.parse(iso) : NaN;
@@ -187,12 +187,11 @@ export function runLifecycle(run: Run): { phase: RunPhase; at: string }[] {
  */
 export function runSentence(run: Run, label: string | undefined, verdict: ReviewOutcome | undefined): string {
   const name = `${KIND_WORD[run.spec.kind]}${label ? ` ${label}` : ""}`;
-  const auto = run.autoStart ? " automatically" : "";
   switch (runPhase(run)) {
     case "queued":
-      return `${name} queued${auto}`;
+      return `${name} queued`;
     case "started":
-      return `${name} started${auto}`;
+      return `${name} started`;
     case "waiting":
       return `${name} is waiting on you: ${run.state === "needsPermission" ? "it needs permission" : run.state === "systemBlocked" ? "sign in to Claude" : "it asks a question"}`;
     case "finished":
@@ -211,10 +210,8 @@ export function runSentence(run: Run, label: string | undefined, verdict: Review
 /** Whose draft it was, for a sentence about the person's decision on it: "Pip", "an agent", "you". */
 const makerWord = (p: Proposal) => (isReporterQuestions(p) || isReporterNudge(p) ? "Gossamr" : p.createdBy === "agent" ? "an agent" : p.createdBy === "user" ? "you" : MAKER[p.createdBy]);
 
-/** What the supervisor's own doing, or an earlier ask, changes in how a draft's entry reads (see `timeline`). */
+/** What an earlier ask changes in how a draft's entry reads (see `timeline`). */
 export interface DraftWording {
-  /** A rule started this run: the supervisor's `autostart`, as its audit says; `afterPlan` when it was the plan's approval that started it. */
-  auto?: { afterPlan: boolean };
   /** The reporter was asked on this workstream before: this ask is the follow-up. */
   followUp?: boolean;
 }
@@ -231,7 +228,7 @@ function appliedSentence(p: Proposal, on: string, wording: DraftWording = {}): s
   }
   if (i.type === "startRun") {
     const kind = KIND_WORD[i.spec.kind].toLowerCase();
-    return wording.auto ? `Gossamr started the ${kind} run automatically${on}${wording.auto.afterPlan ? " after you approved the plan" : ""}` : `You started the ${kind} run that ${makerWord(p)} drafted${on}`;
+    return `You started the ${kind} run that ${makerWord(p)} drafted${on}`;
   }
   // The reporter's drafts are told by what they are, so the first ask, the follow-up and the nudge don't read alike.
   const edited = p.revisions.length ? ", edited by you" : "";
@@ -308,9 +305,9 @@ export function timeline(input: TimelineInput): TimelineEntry[] {
     out.push({ key: `turn:${t.requestId}`, kind: wake ? "pip" : "said", at, updatedAt: at, ticketKey, text, target: null, needKey: null, decision: false, turnId: t.requestId, order: order++ });
   }
 
-  // A run enters the story when it was approved or a rule started it, as the audit says; without such a line, when it was queued.
+  // A run enters the story when it was approved, as the audit says; without such a line, when it was queued.
   const approvedAt = new Map<string, string>();
-  for (const e of events) if (e.runId && (e.action === "run_approved" || e.action === "autostart") && !approvedAt.has(e.runId)) approvedAt.set(e.runId, e.at);
+  for (const e of events) if (e.runId && e.action === "run_approved" && !approvedAt.has(e.runId)) approvedAt.set(e.runId, e.at);
   for (const run of runs) {
     const need = needOfRun.get(run.id);
     const lifecycle = runLifecycle(run);
@@ -332,8 +329,6 @@ export function timeline(input: TimelineInput): TimelineEntry[] {
     });
   }
 
-  // A run a rule started (the supervisor's `autostart`, which carries the draft) is not one the person started.
-  const autoStarted = new Map(events.filter((e) => e.actor === "supervisor" && e.action === "autostart" && e.proposalId).map((e) => [e.proposalId!, { afterPlan: (e.detail ?? "").startsWith("plan_build") }]));
   // The reporter was asked before when another ask of theirs on this workstream was posted earlier.
   const askedBefore = (p: Proposal) => isReporterQuestions(p) && drafts.some((q) => q.id !== p.id && isReporterQuestions(q) && q.state.type === "applied" && time(q.updatedAt) < time(p.updatedAt));
   for (const p of drafts) {
@@ -344,7 +339,7 @@ export function timeline(input: TimelineInput): TimelineEntry[] {
       at: p.createdAt,
       updatedAt: p.state.type === "pending" ? p.createdAt : p.updatedAt,
       ticketKey: targetOf(p.intent)?.key ?? ticketKey,
-      text: draftSentence(p, { auto: autoStarted.get(p.id), followUp: askedBefore(p) }),
+      text: draftSentence(p, { followUp: askedBefore(p) }),
       target: need ? { type: "need", key: need.key } : { type: "draft", id: p.id },
       needKey: need?.key ?? null,
       decision: !!need,
@@ -360,14 +355,11 @@ export function timeline(input: TimelineInput): TimelineEntry[] {
   // The audit: worded as the Activity feed words it, less what a run's or a draft's own entry already tells.
   const byDraft = new Map(drafts.map((p) => [p.id, p]));
   const label = (id: string | null) => (id ? (labels.get(id) ?? `run ${id.length <= 12 ? id : id.slice(0, 8)}`) : "a run");
-  const lastHeld = [...events].reverse().find((e) => e.action === "held" || e.action === "resumed" || (e.action === "undone" && e.detail === "held"));
-  const holdNeed = needs.find((n) => n.kind === "hold" || n.kind === "budget");
-  const escalationNeed = needs.find((n) => n.kind === "escalation");
-  let rounds = 0;
+  const lastPaused = [...events].reverse().find((e) => e.action === "paused" || e.action === "held" || e.action === "resumed");
+  const pausedNeed = needs.find((n) => n.kind === "paused");
   const asked = new Set<string>();
   let previous: (TimelineEntry & { order: number; cause?: string; before?: string }) | null = null;
   for (const e of events) {
-    if (e.action === "fix_round_sent") rounds++;
     if (e.action === "readiness_asked" && e.runId) asked.add(e.runId);
     if (TOLD_ELSEWHERE.has(e.action)) continue;
     const draft = e.proposalId ? byDraft.get(e.proposalId) : undefined;
@@ -379,12 +371,12 @@ export function timeline(input: TimelineInput): TimelineEntry[] {
         continue;
       }
     }
-    const text = (e.proposalId ? draftLine(e, who(e.actor), draft) : null) ?? eventText(e, label, rounds, !!e.runId && asked.has(e.runId));
+    const text = (e.proposalId ? draftLine(e, who(e.actor), draft) : null) ?? eventText(e, label, !!e.runId && asked.has(e.runId));
     if (!text) continue;
-    // A line about something still waiting on the person opens its need: the hold that still holds, the escalation still open.
-    const need = (e.action === "held" || (e.action === "undone" && e.detail === "held")) && e === lastHeld && holdNeed ? holdNeed : e.action === "fix_rounds_exhausted" && escalationNeed ? escalationNeed : e.runId && !REPORTER_ASKS.has(e.action) ? needOfRun.get(e.runId) : undefined;
+    // A line about something still waiting on the person opens its need: the pause that still holds.
+    const need = (e.action === "paused" || e.action === "held") && e === lastPaused && pausedNeed ? pausedNeed : e.runId && !REPORTER_ASKS.has(e.action) ? needOfRun.get(e.runId) : undefined;
     const target: TimelineTarget = need ? { type: "need", key: need.key } : e.proposalId && draft ? { type: "draft", id: e.proposalId } : e.runId && runs.some((r) => r.id === e.runId) ? { type: "run", id: e.runId } : null;
-    // The same line again and again (a rule switched back and forth) is one entry that says how many.
+    // The same line again and again is one entry that says how many.
     if (previous && previous.text.replace(/ \(\d+ times\)$/, "") === text && previous.actor === e.actor && previous.action === e.action && !need && !REPORTER_ASKS.has(e.action)) {
       previous.count = (previous.count ?? 1) + 1;
       previous.text = `${text} (${previous.count} times)`;

@@ -313,8 +313,8 @@
         {"actor": "person", "action": "readiness_asked", "proposalId": "d1", "at": "2026-10-12T10:01:00Z"},
         {"actor": "person", "action": "draft_approved", "proposalId": "d1", "at": "2026-10-12T10:02:00Z"},
         {"actor": "pip", "action": "note", "at": "2026-10-12T10:03:00Z"},
-        {"actor": "supervisor", "action": "held", "at": "2026-10-12T10:03:00Z"},
-        {"actor": "person", "action": "held", "at": "2026-10-12T10:03:00Z"}
+        {"actor": "supervisor", "action": "paused", "at": "2026-10-12T10:03:00Z"},
+        {"actor": "person", "action": "paused", "at": "2026-10-12T10:03:00Z"}
       ],
       "comments": [],
       "me": null,

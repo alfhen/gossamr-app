@@ -1,5 +1,4 @@
 import { repeatedComments, safeToBatch } from "../lib/needs";
-import { shortHeld } from "../lib/workstreamHold";
 import { byQueue, REVIEW_POSTED, reviewPosted, STAGE_LABEL } from "../lib/workstreamStage";
 import type { CodeChange, Proposal, ReviewView, Run, RunKind, WorkstreamEvent } from "../types";
 import { liveCounts, liveWords, needsPerson, runApproved, stateView, stoppedAtLimit, type Tone } from "./agentsLogic";
@@ -9,19 +8,14 @@ import { shownVerdict, verdictChip } from "./runSheetLogic";
 
 /** Pure helpers behind a workstream's step rail and the drawer's footer. They read the live stores' values and decide nothing. */
 
-export { shortHeld };
-
-/** When a workstream was last held, from its audit (`events`, oldest first); null when the audit never says. */
-export function lastHeldAt(events: readonly Pick<WorkstreamEvent, "action" | "at">[]): string | null {
-  for (let i = events.length - 1; i >= 0; i--) if (events[i].action === "held") return events[i].at;
+/** When a workstream was last paused, from its audit (`events`, oldest first; an earlier version's hold counts); null when the audit never says. */
+export function lastPausedAt(events: readonly Pick<WorkstreamEvent, "action" | "at">[]): string | null {
+  for (let i = events.length - 1; i >= 0; i--) if (events[i].action === "paused" || events[i].action === "held") return events[i].at;
   return null;
 }
 
 /** The steps of a workstream's chain, in order, as a workstream's step rail shows them. */
 export const STEP_KINDS: readonly RunKind[] = ["investigate", "triage", "plan", "build", "review", "verify"];
-
-/** How many fix rounds the rules send a build before the review is the person's again, as `fix_round` allows. */
-export const FIX_ROUNDS = 2;
 
 /** Where a draft goes on the step rail: under the step it is about, or with Pip's own drafts at the top. */
 export type StepGroup = RunKind | "pip";
@@ -124,12 +118,8 @@ export interface StepChip {
   /** How the newest run stands ("Working", "Ready to review"), or "waiting for PR" for a build whose pull request isn't found yet. */
   state: string | null;
   tone: Tone | null;
-  /** The newest run was started by an automatic step. */
-  auto: boolean;
   /** A review's verdict once it is read: "Pass", "Blocking · 2". */
   verdict: string | null;
-  /** "fix round 1/2" once the rules sent the build back; "fix round 3 (yours, after 2 automatic)" once the person did. */
-  fixRound: string | null;
   /** Pending drafts under the step, and runs in it asking the person something. */
   needsYou: number;
   /** For Build: the pull request its newest build to have one opened, once a sync has found it. */
@@ -153,15 +143,9 @@ function buildPullRequest(builds: readonly Run[], changes: Readonly<Record<strin
   return null;
 }
 
-/** The build's fix rounds as its chip says them: the automatic ones out of `FIX_ROUNDS`, and the person's after them. */
-export function fixRoundChip(automatic: number, yours: number): string | null {
-  if (!yours) return automatic ? `fix round ${Math.min(automatic, FIX_ROUNDS)}/${FIX_ROUNDS}` : null;
-  return `fix round ${automatic + yours} (${yours === 1 ? "yours" : `${yours} yours`}, after ${automatic} automatic)`;
-}
-
 /**
- * The six step chips of a workstream from its runs (`runs`, only the workstream's own), its audit (`events`, for the
- * fix rounds sent), the reviews' verdicts as read so far and its drafts (`proposals`, for what waits in each step).
+ * The six step chips of a workstream from its runs (`runs`, only the workstream's own), its audit (`events`, for a posted
+ * review), the reviews' verdicts as read so far and its drafts (`proposals`, for what waits in each step).
  */
 export function stepChips(runs: readonly Run[], events: readonly (Pick<WorkstreamEvent, "action" | "runId" | "actor"> & Partial<Pick<WorkstreamEvent, "at">>)[], verdicts: Readonly<Record<string, ReviewView | null>>, proposals: readonly Proposal[], { now = Date.now(), waitingForPr = null, changes = {} }: StepChipOptions = {}): StepChip[] {
   const drafts = stepDrafts(proposals, runs);
@@ -171,9 +155,6 @@ export function stepChips(runs: readonly Run[], events: readonly (Pick<Workstrea
     const view = newest ? stateView(newest, now, runApproved(newest, proposals)) : null;
     const waiting = kind === "build" && !!waitingForPr && newest?.state === "done";
     const review = kind === "review" && newest ? shownVerdict(newest, verdicts) : null;
-    const ids = new Set(own.map((r) => r.id));
-    const sent = kind === "build" ? events.filter((e) => e.action === "fix_round_sent" && e.runId !== null && ids.has(e.runId)) : [];
-    const yours = sent.filter((e) => e.actor === "person").length;
     const pendingDrafts = (drafts[kind] ?? []).filter((p) => p.state.type === "pending");
     // A run asking a question that has a reply drafted waits on the person once, as the tray counts it.
     const answered = new Set(pendingDrafts.flatMap((p) => (p.intent.type === "runAnswer" ? [p.intent.runId] : [])));
@@ -185,9 +166,7 @@ export function stepChips(runs: readonly Run[], events: readonly (Pick<Workstrea
       newest,
       state: waiting ? "waiting for PR" : (view?.label ?? null),
       tone: waiting ? "warn" : (view?.tone ?? null),
-      auto: !!newest?.autoStart,
       verdict: review ? (review.verdict !== "pass" && newest && reviewPosted(events, newest) ? REVIEW_POSTED : verdictChip(review)) : null,
-      fixRound: fixRoundChip(sent.length - yours, yours),
       needsYou: pending + own.filter((r) => (needsPerson(r) || stoppedAtLimit(r)) && !(r.state === "needsAnswer" && answered.has(r.id))).length,
       pr: kind === "build" ? buildPullRequest(own, changes) : null,
     };

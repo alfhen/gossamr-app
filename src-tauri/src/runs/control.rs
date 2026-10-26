@@ -18,7 +18,7 @@ use super::service::RunService;
 use super::toolchain::Toolchain;
 use crate::auth::Scope;
 use crate::config::TerminalChoice;
-use crate::domain::workstream::HELD_PERSON;
+use crate::domain::workstream::PauseReason;
 use crate::domain::{Actor, Run, RunFailure, RunQuery, RunState};
 use crate::error::{Error, Result};
 
@@ -246,11 +246,11 @@ impl RunService {
         Ok(run)
     }
 
-    /// The person's Stop for one of `scope`'s workstreams: holds it, so nothing wakes Pip or starts on its own, then
-    /// stops each of its runs that can be stopped, as `stop` does one. Runs not yet working are left queued, and the
-    /// hold keeps anything from starting them on its own.
+    /// The person's Stop for one of `scope`'s workstreams: pauses it, so nothing wakes Pip, then stops each of its runs
+    /// that can be stopped, as `stop` does one. Runs not yet working are left queued, and the pause keeps anything from
+    /// starting them on its own.
     pub async fn stop_workstream(&self, scope: &Scope, id: &str) -> Result<StopAll> {
-        let ws = self.core.hold_workstream(scope, id, HELD_PERSON, Actor::Person).await?;
+        let ws = self.core.pause_workstream(scope, id, PauseReason::Person, Actor::Person).await?;
         let runs = self.core.runs_in(scope, &RunQuery { workstream: Some(ws.id.clone()), ..Default::default() }).await?;
         let mut tally = StopAll::default();
         for run in runs.iter().filter(|r| can_stop(r.state)) {

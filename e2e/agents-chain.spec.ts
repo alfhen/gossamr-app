@@ -1,8 +1,8 @@
 import { expect, test, type Page } from "@playwright/test";
-import { advanceRuns, agentsHome, askPip, expectPeekInPlace, expectToast, homeConversation, homeConversationRegion, homeSettled, mockRuns, needOfKind, needsPane, openAgents, openApp, openTechnical, peekSheet, peekTicket, selectWorkstream, startWorkstream, stepChip, stepRail, openNeedOfKind } from "./support/app";
+import { advanceRuns, agentsHome, askPip, expectPeekInPlace, expectToast, homeConversation, homeConversationRegion, homeSettled, mockRuns, needOfKind, needsPane, openAgents, openApp, openTechnical, peekSheet, peekTicket, selectWorkstream, startWorkstream, stepChip, openNeedOfKind } from "./support/app";
 
-// A workstream in Manage mode, with pull requests shown only when a test says: the setting the phase's scenarios share.
-const MANAGED = "runs=empty&prSurface=manual&wsManage=1";
+// Pull requests are shown only when a test says: the setting the phase's scenarios share.
+const SAMPLE = "runs=empty&prSurface=manual";
 
 const setup = (page: Page) => page.getByRole("dialog", { name: "Start an agent" });
 /** Pip's run drafts on CA-401 in the drawer's conversation, which opens the setup sheet. */
@@ -62,7 +62,7 @@ async function finish(page: Page, id: string) {
 const newest = async (page: Page, kind: string) => (await mockRuns(page)).find((r) => r.kind === kind) ?? null;
 
 test("an investigation is reviewed and started in place on Pip home: the exact prompt and checks, then Start, and the rail shows R1 running", async ({ page }) => {
-  await openApp(page, MANAGED);
+  await openApp(page, SAMPLE);
   await homeWorkstream(page);
   await ask(page, "investigate this");
   await expect(drawerCards(page)).toHaveCount(1);
@@ -109,12 +109,8 @@ test("an investigation is reviewed and started in place on Pip home: the exact p
 
 test("a build Pip drafts is never started in place: its 'Review and start →' opens the full setup sheet", async ({ page }) => {
   test.setTimeout(90_000);
-  await openApp(page, MANAGED);
+  await openApp(page, SAMPLE);
   await homeWorkstream(page);
-  // The person runs the steps themselves here, so no rule starts one meanwhile.
-  const manage = stepRail(page).getByRole("switch", { name: "Manage this workstream" });
-  await manage.click();
-  await expect(manage).toHaveAttribute("aria-checked", "false");
 
   await ask(page, "investigate this");
   await startInline(page);
@@ -148,7 +144,7 @@ test("a build Pip drafts is never started in place: its 'Review and start →' o
 });
 
 test("a draft edited elsewhere after it was read in place is refused: the banner, the prompt read again, and Start waits for I've read it", async ({ page }) => {
-  await openApp(page, MANAGED);
+  await openApp(page, SAMPLE);
   await homeWorkstream(page);
   await ask(page, "investigate this");
   const review = await expandNewest(page);

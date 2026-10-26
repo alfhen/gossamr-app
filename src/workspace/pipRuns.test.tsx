@@ -172,20 +172,3 @@ describe("the sample Pip and agents", () => {
     expect(backend.runs.list().length).toBe(before);
   });
 });
-
-describe("a run a rule started", () => {
-  it("says on its card which run it started automatically after, by the workstream's label, else its id", () => {
-    const first = run("done", { id: "run-1", queuedAt: iso(30), spec: { ...base.spec, workstream: "ws-1" } });
-    const auto = run("queued", { id: "run-2", queuedAt: iso(20), spec: { ...base.spec, workstream: "ws-1" }, autoStart: { rule: "investigate_triage", afterRun: "run-1" } });
-    useRuns.getInitialState().runs = [first, auto];
-    const card = renderToStaticMarkup(<PipRunCard run={auto} now={NOW} ticketTitle={null} onOpen={() => {}} />);
-    useRuns.getInitialState().runs = [];
-    expect(card).toContain("Queued automatically after R1");
-    const launched = renderToStaticMarkup(<PipRunCard run={{ ...auto, state: "working" }} now={NOW} ticketTitle={null} onOpen={() => {}} />);
-    expect(launched).toContain("Started automatically after");
-    expect(card).toContain('data-auto-start="investigate_triage"');
-    const alone = renderToStaticMarkup(<PipRunCard run={{ ...auto, autoStart: { rule: "build_review", afterRun: "3f9a12bc-0000-4000-8000-000000000000" } }} now={NOW} ticketTitle={null} onOpen={() => {}} />);
-    expect(alone).toContain("Queued automatically after 3f9a12bc");
-    expect(renderToStaticMarkup(<PipRunCard run={first} now={NOW} ticketTitle={null} onOpen={() => {}} />)).not.toMatch(/(Started|Queued) automatically/);
-  });
-});

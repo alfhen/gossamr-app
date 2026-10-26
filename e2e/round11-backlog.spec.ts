@@ -6,22 +6,24 @@ import { advanceRuns, askPip, closeWorkstreamSheet, homeComposer, homeSettled, j
 // keyboard after I'll answer (G27), where opening a need lands (G28) and the screens' names and headings (G29).
 
 
-const MANAGED = "runs=empty&prSurface=manual&wsManage=1&pipPace=1";
+const SAMPLE = "runs=empty&prSurface=manual&pipPace=1";
 const VAGUE = "CA-408";
 
 const setup = (page: Page) => page.getByRole("dialog", { name: "Start an agent" });
 const newest = async (page: Page, kind: string) => (await mockRuns(page)).find((r) => r.kind === kind) ?? null;
 
-/** Asks Pip for an investigation and starts it from the setup sheet, as the person does. */
-async function startInvestigation(page: Page, key: string) {
+/** Asks Pip for `what` on `key` and starts the draft from the setup sheet, as the person does. */
+async function startStep(page: Page, what: string, key: string) {
   await paneSettled(page);
-  await askPip(page, "investigate this");
+  await askPip(page, what);
   await paneSettled(page);
   await pipPane(page).getByRole("article", { name: `Start an agent: ${key}` }).last().getByRole("button", { name: "Review and start →" }).click();
   await expect(setup(page)).toBeVisible();
   await setup(page).getByRole("button", { name: "Start agent" }).click();
   await expect(setup(page)).toHaveCount(0);
 }
+
+const startInvestigation = (page: Page, key: string) => startStep(page, "investigate this", key);
 
 /** Moves run `id` on to done once Pip has answered. */
 async function finish(page: Page, id: string) {
@@ -30,13 +32,13 @@ async function finish(page: Page, id: string) {
   await expect.poll(async () => (await mockRuns(page)).find((r) => r.id === id)?.state).toBe("done");
 }
 
-/** A managed workstream on the vague ticket, its investigation and the triage a rule started: not ready to plan. Left on Pip home. */
+/** A workstream on the vague ticket, its investigation and the triage the person started after it: not ready to plan. Left on Pip home. */
 async function unclear(page: Page) {
-  await openApp(page, MANAGED);
+  await openApp(page, SAMPLE);
   await startWorkstream(page, VAGUE);
   await startInvestigation(page, VAGUE);
   await finish(page, (await newest(page, "investigate"))!.id);
-  await expect.poll(async () => (await newest(page, "triage"))?.id ?? null).not.toBeNull();
+  await startStep(page, "triage this", VAGUE);
   await finish(page, (await newest(page, "triage"))!.id);
   await openAgents(page);
   await selectWorkstream(page, VAGUE);
@@ -45,7 +47,7 @@ async function unclear(page: Page) {
 
 test.describe("dates in the timeline and What Jira saw from me (G22)", () => {
   test("an entry from an earlier day sits under its date, and a timeline of today's entries has none", async ({ page }) => {
-    await openApp(page, MANAGED);
+    await openApp(page, SAMPLE);
     await startWorkstream(page, VAGUE);
     await openAgents(page);
     await selectWorkstream(page, VAGUE);
@@ -53,7 +55,7 @@ test.describe("dates in the timeline and What Jira saw from me (G22)", () => {
     await expect(timeline.locator("[data-timeline-entry]").first()).toBeVisible();
     await expect(timeline.locator("[data-timeline-day]")).toHaveCount(0);
     const yesterday = new Date(Date.now() - 36 * 3_600_000).toISOString();
-    await seedWorkstreamEvent(page, VAGUE, { actor: "person", action: "held", at: yesterday });
+    await seedWorkstreamEvent(page, VAGUE, { actor: "person", action: "paused", at: yesterday });
     await closeWorkstreamSheet(page);
     await selectWorkstream(page, VAGUE);
     const heads = timeline.locator("[data-timeline-day]");
@@ -68,7 +70,7 @@ test.describe("dates in the timeline and What Jira saw from me (G22)", () => {
   test("a timeline left open over local midnight puts today's entries under Yesterday, though no entry changed", async ({ page }) => {
     const now = new Date();
     await page.clock.install({ time: new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 57) });
-    await openApp(page, MANAGED);
+    await openApp(page, SAMPLE);
     await startWorkstream(page, VAGUE);
     await openAgents(page);
     await selectWorkstream(page, VAGUE);

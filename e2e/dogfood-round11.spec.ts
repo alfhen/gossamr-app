@@ -5,22 +5,24 @@ import { advanceRuns, agentsHome, askPip, commentOnTicket, expandNeedsYou, expec
 // @everyone or a secret (G1), What Jira saw from me saying GitHub reviews are not listed (G2), numbered answers paired under
 // their questions (G3), and the chip "Post" on a review draft (G6).
 
-const MANAGED = "runs=empty&prSurface=manual&wsManage=1&pipPace=1";
+const SAMPLE = "runs=empty&prSurface=manual&pipPace=1";
 const VAGUE = "CA-408";
 
 const setup = (page: Page) => page.getByRole("dialog", { name: "Start an agent" });
 const newest = async (page: Page, kind: string) => (await mockRuns(page)).find((r) => r.kind === kind) ?? null;
 
-/** Asks Pip for an investigation and starts it from the setup sheet, as the person does. */
-async function startInvestigation(page: Page, key: string) {
+/** Asks Pip for `what` on `key` and starts the draft from the setup sheet, as the person does. */
+async function startStep(page: Page, what: string, key: string) {
   await paneSettled(page);
-  await askPip(page, "investigate this");
+  await askPip(page, what);
   await paneSettled(page);
   await pipPane(page).getByRole("article", { name: `Start an agent: ${key}` }).last().getByRole("button", { name: "Review and start →" }).click();
   await expect(setup(page)).toBeVisible();
   await setup(page).getByRole("button", { name: "Start agent" }).click();
   await expect(setup(page)).toHaveCount(0);
 }
+
+const startInvestigation = (page: Page, key: string) => startStep(page, "investigate this", key);
 
 /** Moves run `id` on to done once Pip has answered, so each finish gets a wake turn of its own. */
 async function finish(page: Page, id: string) {
@@ -29,13 +31,13 @@ async function finish(page: Page, id: string) {
   await expect.poll(async () => (await mockRuns(page)).find((r) => r.id === id)?.state).toBe("done");
 }
 
-/** A managed workstream on the vague ticket, its investigation and the triage a rule started: not ready to plan. Left on Pip home. */
+/** A workstream on the vague ticket, its investigation and the triage the person started after it: not ready to plan. Left on Pip home. */
 async function unclear(page: Page) {
-  await openApp(page, MANAGED);
+  await openApp(page, SAMPLE);
   await startWorkstream(page, VAGUE);
   await startInvestigation(page, VAGUE);
   await finish(page, (await newest(page, "investigate"))!.id);
-  await expect.poll(async () => (await newest(page, "triage"))?.id ?? null).not.toBeNull();
+  await startStep(page, "triage this", VAGUE);
   await finish(page, (await newest(page, "triage"))!.id);
   await openAgents(page);
   await selectWorkstream(page, VAGUE);
@@ -184,18 +186,18 @@ test.describe("the chip on a GitHub review draft (G6)", () => {
 
 // Keyboard and screen-reader fixes (G5, G7 to G14).
 
-test.describe("Hold and Resume keep the keyboard (G9), Close… is asked as a group (G13)", () => {
-  test("Hold lands on Resume, Resume on Hold, and Tab stays between Close workstream and Keep", async ({ page }) => {
+test.describe("Pause and Resume keep the keyboard (G9), Close… is asked as a group (G13)", () => {
+  test("Pause lands on Resume, Resume on Pause, and Tab stays between Close workstream and Keep", async ({ page }) => {
     test.setTimeout(90_000);
-    await openApp(page, "runs=empty&wsManage=1");
+    await openApp(page, "runs=empty");
     await startWorkstream(page, "CA-401");
     await openAgents(page);
     await selectWorkstream(page, "CA-401");
     const controls = pipPane(page).locator("[data-workstream-controls]");
-    await controls.getByRole("button", { name: "Hold", exact: true }).click();
+    await controls.getByRole("button", { name: "Pause", exact: true }).click();
     await expect(controls.getByRole("button", { name: "Resume" })).toBeFocused();
     await controls.getByRole("button", { name: "Resume" }).click();
-    await expect(controls.getByRole("button", { name: "Hold", exact: true })).toBeFocused();
+    await expect(controls.getByRole("button", { name: "Pause", exact: true })).toBeFocused();
     await controls.getByRole("button", { name: "Close…" }).click();
     const ask = controls.getByRole("group", { name: "Close this workstream" });
     await expect(ask.getByRole("button", { name: "Keep" })).toBeFocused();
@@ -206,15 +208,15 @@ test.describe("Hold and Resume keep the keyboard (G9), Close… is asked as a gr
     await expect(ask.getByRole("button", { name: "Keep" })).toBeFocused();
   });
 
-  test("the held banner and the clarity notice are not live regions that hold buttons (G10)", async ({ page }) => {
+  test("the paused banner and the clarity notice are not live regions that hold buttons (G10)", async ({ page }) => {
     test.setTimeout(90_000);
-    await openApp(page, "runs=empty&wsManage=1");
+    await openApp(page, "runs=empty");
     await startWorkstream(page, "CA-401");
     await openAgents(page);
     await selectWorkstream(page, "CA-401");
     const controls = pipPane(page).locator("[data-workstream-controls]");
-    await controls.getByRole("button", { name: "Hold", exact: true }).click();
-    await expect(controls.locator("[data-held-banner]")).toHaveAttribute("role", "group");
+    await controls.getByRole("button", { name: "Pause", exact: true }).click();
+    await expect(controls.locator("[data-paused-banner]")).toHaveAttribute("role", "group");
     expect(await page.locator('[role="status"]:not([data-toast-host])').evaluateAll((els) => els.filter((el) => el.querySelector("button")).map((el) => el.outerHTML.slice(0, 160)))).toEqual([]);
   });
 });

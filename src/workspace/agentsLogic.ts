@@ -178,11 +178,11 @@ export const SLOT_WAIT = "Waiting for a slot";
 export const waitsForSlot = (run: Pick<Run, "state" | "slotWaitSince">) => run.state === "queued" && !!run.slotWaitSince;
 
 /**
- * The runs that can be given a slot, as `launch_waiting` lines them up: none in a workstream that is held or closed,
+ * The runs that can be given a slot, as `launch_waiting` lines them up: none in a workstream that is paused or closed,
  * which waits for the person rather than for a slot. `workstreams` are the ones loaded; a run in any other stays in line.
  */
 export function slotQueue<R extends Pick<Run, "spec">>(runs: readonly R[], workstreams: readonly WorkstreamView[]): readonly R[] {
-  const stalled = new Set(workstreams.filter((v) => v.workstream.heldReason || v.workstream.closedAt).map((v) => v.workstream.id));
+  const stalled = new Set(workstreams.filter((v) => v.workstream.pausedReason || v.workstream.closedAt).map((v) => v.workstream.id));
   return stalled.size ? runs.filter((r) => !r.spec.workstream || !stalled.has(r.spec.workstream)) : runs;
 }
 

@@ -47,7 +47,6 @@ type CoreState = Arc<Core>;
 type AgentState = Arc<AgentService>;
 type LauncherState = Arc<dyn runs::launcher::RunLauncher>;
 type RunsState = Arc<runs::service::RunService>;
-type SupervisorState = Arc<agent::supervisor::Supervisor>;
 
 /// Sends the latest snapshot to the window and updates the Dock badge. Failures only mean there is nothing to
 /// show yet (e.g. signed out).
@@ -492,12 +491,8 @@ async fn proposals_unskip(app: AppHandle, core: State<'_, CoreState>, id: String
 
 /// Applies the draft. A failed attempt still returns it, back to pending with `error` set.
 #[tauri::command]
-async fn proposals_approve(app: AppHandle, core: State<'_, CoreState>, supervisor: State<'_, SupervisorState>, id: String) -> Result<Proposal> {
+async fn proposals_approve(app: AppHandle, core: State<'_, CoreState>, id: String) -> Result<Proposal> {
     let result = core.approve_proposal(&id).await;
-    // Approving a draft can be what a rule waits on, as a plan's is for its build.
-    if let Some(p) = result.as_ref().ok().filter(|p| p.state == domain::ProposalState::Applied) {
-        supervisor.on_proposal_applied(p.workstream());
-    }
     if let Ok(connection) = core.scope().await.map(|s| Connection::jira_id(&s)) {
         proposals_changed(&app, &connection);
         cache_changed(&app, &connection);
@@ -523,8 +518,6 @@ async fn proposals_post_review(app: AppHandle, core: State<'_, CoreState>, id: S
     let result = core.post_review_draft(&id, revisions, post_anyway.unwrap_or(false)).await;
     if let Ok(connection) = core.scope().await.map(|s| Connection::jira_id(&s)) {
         proposals_changed(&app, &connection);
-        // A review posted as it is resolves its escalation, and the card leaves Needs you.
-        workstreams_changed(&app, &connection);
     }
     publish(&app, &core).await;
     result
@@ -719,38 +712,6 @@ async fn workstreams_set_notes(app: AppHandle, core: State<'_, CoreState>, id: S
     Ok(ws)
 }
 
-/// The person sets how much Pip may do on its own in a workstream: `advise` or `manage`.
-#[tauri::command]
-async fn workstreams_set_mode(app: AppHandle, core: State<'_, CoreState>, id: String, mode: domain::workstream::Mode) -> Result<Workstream> {
-    let ws = core.set_workstream_mode(&core.scope().await?, &id, mode, domain::Actor::Person).await?;
-    workstreams_changed(&app, &ws.connection_id);
-    Ok(ws)
-}
-
-/// The person's "Run another fix round" on a review that still blocks after the automatic fix rounds: sends the build
-/// one more round with the review's blocking findings. Only while that review is waiting for their choice; Pip has no
-/// way to call this.
-#[tauri::command]
-async fn workstreams_fix_round(app: AppHandle, runs: State<'_, RunsState>, review_run: String) -> Result<Run> {
-    let run = runs.send_person_fix_round(&review_run).await;
-    if let Ok(run) = &run {
-        runs_changed(&app, &run.connection_id);
-        workstreams_changed(&app, &run.connection_id);
-    }
-    run
-}
-
-/// The person's "I'll take it from here" on a review that still blocks after the automatic fix rounds: the workstream
-/// goes to Advise and nothing else changes. Pip has no way to call this.
-#[tauri::command]
-async fn workstreams_take_over(app: AppHandle, runs: State<'_, RunsState>, id: String, review_run: String) -> Result<Workstream> {
-    // Under the launch lock, as the person's fix round is, so the two choices can't both go through.
-    let ws = runs.take_over_escalation(&id, &review_run).await?;
-    workstreams_changed(&app, &ws.connection_id);
-    runs_changed(&app, &ws.connection_id);
-    Ok(ws)
-}
-
 /// The person's "Ask the reporter" on a Triage that found its ticket not ready to plan: a Jira comment to the reporter
 /// with its open questions, as a draft the person approves like any other. Pip has no way to call this.
 #[tauri::command]
@@ -810,26 +771,25 @@ async fn workstreams_readiness_answer(app: AppHandle, core: State<'_, CoreState>
     Ok(ws)
 }
 
-/// The person's "Plan anyway" on a Triage that found its ticket not ready to plan: records the override and lets the
-/// Triage-to-Plan rule start the Plan now, under the rule's own checks (Manage, not held, within budget). Pip has no way to call this.
+/// The person's "Plan anyway" on a Triage that found its ticket not ready to plan: records the override. Pip has no way
+/// to call this.
 #[tauri::command]
-async fn workstreams_readiness_override(app: AppHandle, core: State<'_, CoreState>, supervisor: State<'_, SupervisorState>, id: String, triage_run: String) -> Result<Workstream> {
+async fn workstreams_readiness_override(app: AppHandle, core: State<'_, CoreState>, id: String, triage_run: String) -> Result<Workstream> {
     let ws = core.override_readiness(&core.scope().await?, &id, &triage_run).await?;
     workstreams_changed(&app, &ws.connection_id);
-    supervisor.on_proposal_applied(Some(&id));
     Ok(ws)
 }
 
-/// The person holds a workstream: nothing wakes Pip or starts on its own in it; its runs carry on.
+/// The person pauses a workstream: nothing wakes Pip in it; its runs carry on.
 #[tauri::command]
-async fn workstreams_hold(app: AppHandle, core: State<'_, CoreState>, agent: State<'_, AgentState>, id: String) -> Result<Workstream> {
-    let ws = core.hold_workstream(&core.scope().await?, &id, domain::workstream::HELD_PERSON, domain::Actor::Person).await?;
+async fn workstreams_pause(app: AppHandle, core: State<'_, CoreState>, agent: State<'_, AgentState>, id: String) -> Result<Workstream> {
+    let ws = core.pause_workstream(&core.scope().await?, &id, domain::workstream::PauseReason::Person, domain::Actor::Person).await?;
     agent.cancel_workstream_turns(&id).await;
     workstreams_changed(&app, &ws.connection_id);
     Ok(ws)
 }
 
-/// The person lifts a workstream's hold, whatever held it.
+/// The person resumes a workstream, whatever paused it.
 #[tauri::command]
 async fn workstreams_resume(app: AppHandle, core: State<'_, CoreState>, id: String) -> Result<Workstream> {
     let ws = core.resume_workstream(&core.scope().await?, &id).await?;
@@ -837,15 +797,7 @@ async fn workstreams_resume(app: AppHandle, core: State<'_, CoreState>, id: Stri
     Ok(ws)
 }
 
-/// The person's "Allow 5 more" on a workstream held for its automatic steps: its allowance goes up by 5 and it resumes.
-#[tauri::command]
-async fn workstreams_allow_more(app: AppHandle, core: State<'_, CoreState>, id: String) -> Result<Workstream> {
-    let ws = core.allow_more_steps(&core.scope().await?, &id).await?;
-    workstreams_changed(&app, &ws.connection_id);
-    Ok(ws)
-}
-
-/// The person's Undo of a hold or of a switch to Advise, a moment after it: the workstream goes back to how it stood. Refused once anything else happened in it, or after a minute.
+/// The person's Undo of "Bring them here", a moment after it. Refused once anything else happened in it, or after a minute.
 #[tauri::command]
 async fn workstreams_undo(app: AppHandle, core: State<'_, CoreState>, id: String, undo: inbox::WorkstreamUndo) -> Result<Workstream> {
     let ws = core.undo_workstream(&core.scope().await?, &id, &undo).await?;
@@ -856,27 +808,7 @@ async fn workstreams_undo(app: AppHandle, core: State<'_, CoreState>, id: String
     Ok(ws)
 }
 
-/// The person's switch for one auto-start rule in a workstream; `on: null` follows the global switch again.
-#[tauri::command]
-async fn workstreams_set_rule(app: AppHandle, core: State<'_, CoreState>, id: String, rule: String, on: Option<bool>) -> Result<Workstream> {
-    let rule = domain::workstream::Rule::parse(&rule).ok_or_else(|| Error::Proposal(format!("there is no auto-start rule {rule:?}")))?;
-    let ws = core.set_workstream_rule(&core.scope().await?, &id, rule, on).await?;
-    workstreams_changed(&app, &ws.connection_id);
-    Ok(ws)
-}
-
-/// The person's Hold all: holds every open workstream and stops every Pip turn in one, waiting or running. Returns
-/// those it held.
-#[tauri::command]
-async fn workstreams_hold_all(app: AppHandle, core: State<'_, CoreState>, agent: State<'_, AgentState>) -> Result<Vec<Workstream>> {
-    let scope = core.scope().await?;
-    let held = core.hold_all_workstreams(&scope).await?;
-    agent.cancel_all_workstream_turns().await;
-    workstreams_changed(&app, &Connection::jira_id(&scope));
-    Ok(held)
-}
-
-/// The person stops a workstream: holds it, then stops each of its runs that can be stopped.
+/// The person stops a workstream: pauses it, then stops each of its runs that can be stopped.
 #[tauri::command]
 async fn workstreams_stop(app: AppHandle, core: State<'_, CoreState>, runs: State<'_, RunsState>, agent: State<'_, AgentState>, id: String) -> Result<runs::control::StopAll> {
     let scope = core.scope().await?;
@@ -1268,7 +1200,7 @@ async fn cancel_claude(agent: State<'_, AgentState>, request_id: String) -> Resu
     Ok(())
 }
 
-fn spawn_sync_loop(app: AppHandle, core: CoreState, supervisor: SupervisorState) {
+fn spawn_sync_loop(app: AppHandle, core: CoreState) {
     tauri::async_runtime::spawn(async move {
         // Launch catches up straight away, from the cursor the last run left in the cache.
         let mut trigger = Trigger::Now;
@@ -1308,8 +1240,6 @@ fn spawn_sync_loop(app: AppHandle, core: CoreState, supervisor: SupervisorState)
                             if let Ok(scope) = core.scope().await {
                                 workstreams_changed(&app, &Connection::jira_id(&scope));
                             }
-                            // ...and start the review the rules have waiting on it.
-                            supervisor.nudge();
                         }
                     }
                     Err(_) => {
@@ -1426,12 +1356,9 @@ pub fn run() {
             };
             // The supervisor hears about runs from the run service and wakes Pip through the agent service, which is
             // built after both; until it is bound it does nothing.
-            let runs_slot: Arc<std::sync::OnceLock<std::sync::Weak<runs::service::RunService>>> = Arc::default();
-            let (settings_slot, emit_handle, changed_handle) = (runs_slot.clone(), app.handle().clone(), app.handle().clone());
-            let facade = agent::supervisor::CoreFacade::new(core.clone());
+            let (emit_handle, changed_handle) = (app.handle().clone(), app.handle().clone());
             let supervisor = agent::supervisor::Supervisor::new(
-                facade.clone(),
-                Arc::new(move || settings_slot.get().and_then(std::sync::Weak::upgrade).map(|s| s.settings()).unwrap_or_default()),
+                core.clone(),
                 Arc::new(move |conversation, update| wake_update(&emit_handle, conversation, update)),
                 Arc::new(move |connection_id| workstreams_changed(&changed_handle, connection_id)),
             );
@@ -1450,8 +1377,6 @@ pub fn run() {
                 service = service.with_report(channel);
             }
             let service = Arc::new(service);
-            let _ = runs_slot.set(Arc::downgrade(&service));
-            facade.bind_runs(&service);
             let handle = app.handle().clone();
             let view_handle = handle.clone();
             let mcp = tauri::async_runtime::block_on(agent::mcp::McpServer::start(
@@ -1472,9 +1397,8 @@ pub fn run() {
             supervisor.bind(&agent);
             tauri::async_runtime::spawn(supervisor.clone().run_sweeps());
             app.manage::<AgentState>(agent);
-            app.manage::<SupervisorState>(supervisor.clone());
 
-            spawn_sync_loop(app.handle().clone(), core, supervisor);
+            spawn_sync_loop(app.handle().clone(), core);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -1584,9 +1508,6 @@ pub fn run() {
             workstreams_adopt,
             workstreams_set_notes,
             workstreams_events,
-            workstreams_set_mode,
-            workstreams_fix_round,
-            workstreams_take_over,
             workstreams_readiness_ask,
             workstreams_clarity_ask,
             workstreams_clarity_dismiss,
@@ -1594,12 +1515,9 @@ pub fn run() {
             workstreams_nudge_reporter,
             workstreams_readiness_answer,
             workstreams_readiness_override,
-            workstreams_hold,
+            workstreams_pause,
             workstreams_resume,
-            workstreams_allow_more,
             workstreams_undo,
-            workstreams_set_rule,
-            workstreams_hold_all,
             workstreams_stop,
             sync_now,
             mark_seen,

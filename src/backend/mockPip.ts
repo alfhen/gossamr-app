@@ -2,7 +2,7 @@ import { and } from "../lib/filter";
 import { ANSWERS_COMMENT_LABEL, ANSWERS_OPENING, REVIEW_IS_THE_USERS, WORKSTREAM_PENDING_CAP, capRefusal, isRunDraft, leftByRun, targetOf } from "../lib/proposals";
 import { followUpBlocker } from "../workspace/followUp";
 import { docFromText, docText } from "../lib/docs";
-import type { BasisField, Intent, ItemRef, Proposal, ReviewComment, Run, RunKind, ScreenContext, WorkFilter } from "../types";
+import type { Intent, ItemRef, Proposal, ReviewComment, Run, RunKind, ScreenContext, WorkFilter } from "../types";
 import { APPROVE_PLAN, liveCounts, liveWords, needsPerson, planOpenQuestions, resultHeadline, runTitle, stateView } from "../workspace/agentsLogic";
 import type { ImageData } from "../lib/pipImages";
 import { jiraNote, subtaskProposals } from "./mockRunResult";
@@ -10,11 +10,10 @@ import type { AskRequest, ClaudeEvent, EventMeta } from "./claude";
 import { mockPipTurns, mockUsage } from "./mockPipTurns";
 import { GENERAL_CONVERSATION, workstreamOfConversation } from "../lib/conversations";
 import { labelsByRun } from "../lib/workstreamStage";
-import { heldText } from "../lib/workstreamHold";
 import { draftPhrase, runPhrase } from "../lib/runNames";
 import { statusId } from "./mockConnector";
 import { triageReadiness } from "./mockSupervisor";
-import type { LastTrip } from "./mockWorkstreams";
+import type { LastDrift } from "./mockWorkstreams";
 import { clarityText, type ClarityGap } from "../lib/ticketClarity";
 
 /** What the scripted Pip does for one question. */
@@ -182,15 +181,12 @@ const CHAIN_ASKS: { pattern: RegExp; kind: RunKind; from: RunKind }[] = [
 
 const CHAIN_WORDS: Record<RunKind, string> = { investigate: "an investigation", triage: "a triage", plan: "a plan", build: "a build", review: "a review", verify: "a check" };
 
-/** The conversation's workstream, as the scripted Pip knows it: its id, its ticket and why it is held, if it is. */
+/** The conversation's workstream, as the scripted Pip knows it: its id and its ticket. */
 export interface PipWorkstream {
   id: string;
   item: ItemRef | null;
-  heldReason?: string | null;
-  /** The ticket fields whose drift held it, while it is held for that. */
-  drifted?: readonly BasisField[] | null;
-  /** The last tripwire that held it, while Pip hasn't been told of it in a wake since the person resumed it. */
-  lastTrip?: LastTrip | null;
+  /** The last time its ticket changed in Jira, while Pip hasn't been told of it in a wake since. */
+  lastDrift?: LastDrift | null;
   /** Pip's first turn in this conversation, which opens with the readiness check of the ticket. */
   first?: boolean;
   /** The gaps Gossamr's own word check found in the ticket's description, while its notice shows (not dismissed, no triage yet): Pip's first line names them. */
@@ -297,15 +293,15 @@ export function planAfterAnswers(runs: readonly Run[], workstream: PipWorkstream
 }
 
 /**
- * The one line a wake adds after the person resumed a workstream its ticket's drift held, e.g. "The ticket's description
- * changed while I was held; I'll work from it as it reads now." Null for any other tripwire, or before the resume.
+ * The one line a wake adds after the workstream's ticket changed in Jira, e.g. "The ticket's description changed in Jira; I'll
+ * work from it as it reads now." Null when it didn't.
  */
-export function driftLine(trip: LastTrip | null | undefined): string | null {
-  if (trip?.kind !== "basis_drift" || !trip.resumedAt) return null;
-  const changed = (["summary", "description"] as const).filter((f) => trip.fields.includes(f));
-  const done = trip.fields.includes("status");
+export function driftLine(drift: LastDrift | null | undefined): string | null {
+  if (!drift) return null;
+  const changed = (["summary", "description"] as const).filter((f) => drift.fields.includes(f));
+  const done = drift.fields.includes("status");
   const what = changed.length ? `The ticket's ${changed.join(" and ")} changed${done ? " and it was moved to Done" : ""}` : done ? "The ticket was moved to Done" : "The ticket changed";
-  return `${what} while I was held; I'll work from it as it reads now.`;
+  return `${what} in Jira; I'll work from it as it reads now.`;
 }
 
 /** A key the person named ("plan CA-401"), upper case, when it isn't the workstream's own: then it isn't this workstream's next step. */
@@ -365,14 +361,13 @@ function moveScript(prompt: string, context: ScreenContext, workstream: PipWorks
 const onAgents = (view: string | null | undefined) => view === "Agents" || !!view?.startsWith("Agents · ");
 
 const asksToApprovePlan = /^\s*approve the plan\b/i;
-const asksWhyHeld = /^\s*why is (?:this|it|the workstream) held\b/i;
 const asksWhileAway = /\bwhile i was away\b/i;
 const asksWhatRunDoes = /^\s*what is (r\d+) doing\b/i;
 const asksWhatWaitsToStart = /^\s*what is waiting to start\b/i;
 
 /**
- * What Pip says to the workstream questions its chips ask: where the plan is approved (Pip approves nothing), why the
- * workstream is held, what its agents did, and what one of them is doing. Null for anything else.
+ * What Pip says to the workstream questions its chips ask: where the plan is approved (Pip approves nothing), what its
+ * agents did, and what one of them is doing. Null for anything else.
  */
 function workstreamAnswer(prompt: string, runs: readonly Run[], workstream: PipWorkstream, now: number): PipScript | null {
   const key = workstream.item?.key ?? "the ticket";
@@ -380,14 +375,6 @@ function workstreamAnswer(prompt: string, runs: readonly Run[], workstream: PipW
   const say = (text: string, steps: string[] = []): PipScript => ({ steps, text, filter: null, draft: null });
   if (asksToApprovePlan.test(prompt))
     return say(`I can't approve anything myself. The plan's update to the description of **${key}** waits in the Plan step on the right, and in ${key}'s peek: read the change there and press Update description. The build starts only after that.`, ["Read the workstream's drafts"]);
-  if (asksWhyHeld.test(prompt)) {
-    const held = heldText(workstream.heldReason, workstream.drifted);
-    return say(
-      held
-        ? `${held}. While it is held I'm not woken and nothing starts on its own; agents already running carry on. Resume it from the Steps column or type /resume.`
-        : "This workstream isn't held. Its automatic steps run as its rules say, and every change to Jira still waits for you.",
-    );
-  }
   if (asksWhileAway.test(prompt)) return say(agentSummary(own, now), ["Read the workstream's runs"]);
   if (asksWhatWaitsToStart.test(prompt))
     return say(`A run I drafted for **${key}** waits in this conversation and under its step on the right. Press Review and start on it to read the exact prompt, then Start agent. Nothing runs before that, and I can't start it myself.`, ["Read the workstream's drafts"]);
@@ -459,7 +446,7 @@ function wakeScript(prompt: string, runs: readonly Run[], workstream: PipWorkstr
       if (/^Needs|^Blocked/.test(state.trim())) return `${who} ${state.trim().toLowerCase()}. Open it to see what it asks.`;
       return `${who} ${state.trim().toLowerCase()}. Nothing starts after it; tell me what you want to do.`;
     });
-  const drift = driftLine(workstream?.lastTrip);
+  const drift = driftLine(workstream?.lastDrift);
   const said = lines.join("\n\n") || "Something changed in this workstream; nothing needs you yet.";
   return { steps: answers.length ? ["Read the run", "Drafted an answer for a run"] : [], text: drift ? `${drift}\n\n${said}` : said, filter: null, draft: null, answers };
 }
@@ -922,18 +909,12 @@ export interface PipDrafter {
   pipWorkstreamAnswersDue?(id: string): boolean;
   /** Whether the answers comment of workstream `id` was posted and no plan was drafted or started since: Pip proposes the plan on its next turn. */
   pipWorkstreamPlanDue?(id: string): boolean;
-  /** Why workstream `id` is held, or null; only the scripted answer to "Why is this held?" reads it. */
-  pipWorkstreamHeld(id: string): string | null;
-  /** The ticket fields whose drift held workstream `id`, while it is held for that. */
-  pipWorkstreamDrifted?(id: string): readonly BasisField[] | null;
-  /** The last tripwire that held workstream `id`, while no wake told Pip of it since the person resumed it; a wake's script reads it. */
-  pipWorkstreamTrip?(id: string): LastTrip | null;
+  /** The last time workstream `id`'s ticket changed in Jira, while no wake told Pip of it since; a wake's script reads it. */
+  pipWorkstreamDrift?(id: string): LastDrift | null;
   /** Drafts an investigation with no ticket the way propose_run does: Pip gives a repository and a prompt, the backend builds the rest. */
   pipTicketlessRunDraft(repo: string | null, prompt: string, requestId: string): Promise<unknown>;
   /** Whether a draft from the question `requestId` is kept already. */
   pipDrafted(requestId: string): boolean;
-  /** The person wrote in workstream `id`'s conversation, which counts its automatic turns from zero again. */
-  pipPersonWrote(id: string): void;
 }
 
 const listeners = new Set<Listener>();
@@ -991,7 +972,7 @@ export async function mockAsk(req: AskRequest, drafter: Partial<PipDrafter> | nu
   const first = !!wsId && req.kind !== "wake" && mockPipTurns.turns(req.conversation ?? GENERAL_CONVERSATION).every((t) => t.requestId === req.requestId);
   mockPipTurns.begin(req.conversation ?? GENERAL_CONVERSATION, req.requestId, req.prompt, req.meta ?? { imageCount: req.images?.length ?? 0 }, "running", new Date(), undefined, req.kind ?? "user");
   const item = wsId ? (drafter?.pipWorkstreamItem?.(wsId) ?? null) : null;
-  const workstream = wsId ? { id: wsId, item, heldReason: drafter?.pipWorkstreamHeld?.(wsId) ?? null, drifted: drafter?.pipWorkstreamDrifted?.(wsId) ?? null, lastTrip: drafter?.pipWorkstreamTrip?.(wsId) ?? null, first, clarity: drafter?.pipWorkstreamClarity?.(wsId) ?? null, answersDue: drafter?.pipWorkstreamAnswersDue?.(wsId) ?? false, planDue: drafter?.pipWorkstreamPlanDue?.(wsId) ?? false } : null;
+  const workstream = wsId ? { id: wsId, item, lastDrift: drafter?.pipWorkstreamDrift?.(wsId) ?? null, first, clarity: drafter?.pipWorkstreamClarity?.(wsId) ?? null, answersDue: drafter?.pipWorkstreamAnswersDue?.(wsId) ?? false, planDue: drafter?.pipWorkstreamPlanDue?.(wsId) ?? false } : null;
   const script = scriptPip(req.prompt, req.context, req.images, drafter?.pipRuns?.() ?? [], Date.now(), drafter?.pipDrafts?.() ?? [], discussing.get(session) ?? null, workstream);
   if (script.discussed) discussing.set(session, script.discussed);
   emit(req.requestId, { type: "started", sessionId: session });

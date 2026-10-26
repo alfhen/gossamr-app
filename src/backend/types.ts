@@ -60,9 +60,7 @@ import type {
   WorkItem,
   Workstream,
   WorkstreamEvent,
-  WorkstreamMode,
   WorkstreamUndo,
-  WorkstreamRule,
   WorkstreamView,
   WorkstreamsChanged,
 } from "../types";
@@ -303,12 +301,6 @@ export interface Backend {
   workstreamsSetNotes(id: string, notes: string): Promise<Workstream>;
   /** A workstream's append-only audit, oldest first. */
   workstreamsEvents(id: string): Promise<WorkstreamEvent[]>;
-  /** The person sets how much Pip may do on its own in an open workstream. */
-  workstreamsSetMode(id: string, mode: WorkstreamMode): Promise<Workstream>;
-  /** The person's "Run another fix round" on review `reviewRun`, which still blocks after the automatic fix rounds: sends the build its blocking findings again. Only while that review waits for their choice. */
-  workstreamsFixRound(reviewRun: string): Promise<Run>;
-  /** The person's "I'll take it from here" on review `reviewRun`: the workstream goes to Advise and nothing else changes. */
-  workstreamsTakeOver(id: string, reviewRun: string): Promise<Workstream>;
   /** The person's "Ask the reporter" on Triage `triageRun`, which found its ticket not ready to plan: a Jira comment to the reporter with its open questions, as a draft the person approves like any other. Refused when the stop isn't about that Triage any more. */
   workstreamsReadinessAsk(id: string, triageRun: string): Promise<Proposal>;
   /** The person's "Ask the reporter now" on a workstream's clarity notice (a ticket no Triage has judged): the same comment to the reporter, with one question per gap the check found, as a draft the person approves like any other. Refused when the notice isn't showing any more. */
@@ -321,24 +313,18 @@ export interface Backend {
   workstreamsClarityNote(id: string, action: "clarity_learned" | "clarity_reset", detail: string): Promise<void>;
   /** The person's "I'll answer" on Triage `triageRun`: it settles the question and starts nothing. */
   workstreamsReadinessAnswer(id: string, triageRun: string): Promise<Workstream>;
-  /** The person's "Plan anyway" on Triage `triageRun`: records the override and lets the Triage-to-Plan rule start the Plan under its own checks (Manage, not held, within budget). */
+  /** The person's "Plan anyway" on Triage `triageRun`: records the override, which settles the stop. */
   workstreamsReadinessOverride(id: string, triageRun: string): Promise<Workstream>;
-  /** The person holds an open workstream: nothing wakes Pip or starts on its own in it; its runs carry on. */
-  workstreamsHold(id: string): Promise<Workstream>;
-  /** The person lifts a workstream's hold; what was spent is kept, so a budget hold lifted in Advise is held again on the way back to Manage. */
+  /** The person pauses an open workstream: nothing wakes Pip in it; its runs carry on. */
+  workstreamsPause(id: string): Promise<Workstream>;
+  /** The person resumes a workstream, whatever paused it. */
   workstreamsResume(id: string): Promise<Workstream>;
-  /** The person's "Allow 5 more" on a workstream held for its automatic steps: its allowance goes up by 5 and it resumes, keeping what was spent. Refused when it isn't held for its budget. */
-  workstreamsAllowMore(id: string): Promise<Workstream>;
   /**
-   * The person's Undo of a hold or of a switch to Advise, a moment after it: the workstream goes back to how `undo` says it stood.
+   * The person's Undo of "Bring them here", a moment after it: the runs and drafts it moved go back to General.
    * Allowed only while that change is the last line of the audit and under a minute old; it adds its own `undone` line.
    */
   workstreamsUndo(id: string, undo: WorkstreamUndo): Promise<Workstream>;
-  /** The person's switch for one auto-start rule in a workstream; null follows the global switch again. */
-  workstreamsSetRule(id: string, rule: WorkstreamRule, on: boolean | null): Promise<Workstream>;
-  /** The person's Hold all: holds every open workstream. Returns those it held. */
-  workstreamsHoldAll(): Promise<Workstream[]>;
-  /** The person stops a workstream: holds it, then stops each of its runs that can be stopped. */
+  /** The person stops a workstream: pauses it, then stops each of its runs that can be stopped. */
   workstreamsStop(id: string): Promise<{ stopped: number; failed: number }>;
   /** Called when a workstream was opened, closed or changed. Returns an unsubscribe function. */
   onWorkstreamsChanged(listener: (change: WorkstreamsChanged) => void): () => void;

@@ -3,10 +3,7 @@ import { MentionTextarea } from "../components/MentionTextarea";
 import { docText } from "../lib/docs";
 import { autoLink, liveMentions, mentionNote, rewriteNote, subtasksNote, type Mention } from "../lib/mentions";
 import { answersProvenance, isAnswersDraft, isReporterNudge, isReporterQuestions, targetOf, unreachable } from "../lib/proposals";
-import { APPROVAL_STARTS_BUILD, approvalStartsBuild } from "../lib/nextStep";
 import { useClaude } from "../claudeStore";
-import { useWorkstreams } from "./workstreamsStore";
-import { useTabs } from "./tabsStore";
 import { useBackend } from "../backend/useBackend";
 import type { Person, Proposal, ProposalEdit, ProposalStateKind, ReviewAccess } from "../types";
 import { useRepoReviewAccess, useReviewAccess } from "./reviewAccess";
@@ -149,17 +146,6 @@ export function postedNote(p: Proposal, done: Proposal | null): string | null {
   return `${doneText({ title, ticketKey: undefined, workstreamTitle: "" }, true)}${waits ? ` ${waits}.` : ""}`;
 }
 
-/** Whether approving `p` also starts a Build (`approvalStartsBuild`), read from the runs, the workstream and Settings' switches. */
-export function useApprovalStartsBuild(p: Proposal): boolean {
-  const runId = p.origin.type === "run" ? p.origin.runId : null;
-  const run = useRuns((s) => (runId ? s.runs.find((r) => r.id === runId) : undefined));
-  // The plan's own workstream: only a run in it is one the supervisor starts a Build after.
-  const ws = run?.spec.workstream ?? null;
-  const view = useWorkstreams((s) => (ws ? s.list.find((v) => v.workstream.id === ws) : undefined));
-  const globals = useWorkstreams((s) => s.globals);
-  return approvalStartsBuild(p, run, view, globals);
-}
-
 export interface DraftCardProps {
   proposal: Proposal;
   /** The status a transition moves to, by name. */
@@ -258,7 +244,6 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
   const [editing, setEditing] = useState(false);
   const edited = useRef(!!kept?.body);
   const rewrite = intent.type === "rewrite" ? intent : null;
-  const startsBuild = useApprovalStartsBuild(p);
   const runName = useFromRunName(p);
   // The message the answers draft was made from, for its provenance line: the person's reply in the conversation that asked Pip.
   const replyRequest = p.origin.type === "chat" && isAnswersDraft(p) ? p.origin.requestId : null;
@@ -789,21 +774,6 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
         {shownError && (
           <p ref={errorLine} role="alert" className="m-0 text-sm text-ws-blocked">
             {shownError}
-          </p>
-        )}
-        {startsBuild && open && (
-          <p data-approval-starts-build className="m-0 text-sm text-ws-ink2">
-            {APPROVAL_STARTS_BUILD}{" "}
-            <button
-              type="button"
-              onClick={() => {
-                useTabs.getState().setRoute("agents");
-                useRuns.getState().openSafety();
-              }}
-              className="rounded text-ws-ink2 underline hover:bg-ws-hover focus-visible:outline-2 focus-visible:outline-ws-pip"
-            >
-              Agents settings
-            </button>
           </p>
         )}
         {pause && open && <PostingPause risks={pause.risks} quote={pause.quote} subject={youEdited ? "Your edit" : intent.type === "comment" && isAnswersDraft(p) ? "Your reply" : "This draft"} anyway="Post anyway" working={working || state === "applying"} onKeep={keepEditing} onPost={approve} />}

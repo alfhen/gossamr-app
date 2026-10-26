@@ -1,10 +1,9 @@
 import { expect, test, type Page } from "@playwright/test";
-import { agentsHome, homeConversation, jiraWrites, needOfKind, needsPane, needsYouCount, openAgents, openJiraSent, openApp, selectWorkstream, startWorkstream, openNeedOfKind, needsStack } from "./support/app";
+import { agentsHome, homeConversation, jiraWrites, needOfKind, needsPane, needsYouCount, openAgents, openJiraSent, openApp, selectWorkstream, startWorkstream, openNeedOfKind } from "./support/app";
 
 // Fixes from the seventh dogfood round: approving from the Decide pane, the Next line, the reporter's questions and What Jira
 // saw from me.
 
-const MANAGED = "wsManage=1";
 
 /** A workstream on CA-401, opened on Pip home. */
 async function workstreamOnHome(page: Page) {
@@ -18,7 +17,7 @@ test.describe("approving from the Decide pane (G1)", () => {
   test("'Update description' on the plan's decision approves it: the draft leaves, Needs you drops by one, Jira gets the edit", async ({ page }) => {
     test.setTimeout(90_000);
     await page.setViewportSize({ width: 1440, height: 900 });
-    await openApp(page, MANAGED);
+    await openApp(page);
     await workstreamOnHome(page);
     const before = Number(await needsYouCount(page).innerText());
     expect(before).toBeGreaterThan(0);
@@ -28,8 +27,7 @@ test.describe("approving from the Decide pane (G1)", () => {
     await pane.getByRole("button", { name: "Update description" }).click();
     await expect.poll(async () => (await jiraWrites(page)).map((w) => w.type)).toContain("rewrite");
     await expect(needOfKind(page, "plan")).toHaveCount(0);
-    // The plan is no longer a need. (The description Jira now holds is not the one the workstream was opened on, so a hold may take its place in the count.)
-    await expect(needsStack(page)).not.toContainText("approving its description update is how the plan is approved");
+    // The plan is no longer a need.
     expect(Number(await needsYouCount(page).innerText())).toBeLessThanOrEqual(before);
     await expect(agentsHome(page)).toBeVisible();
   });

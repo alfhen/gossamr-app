@@ -14,8 +14,6 @@ export interface MockOptions {
   /** Which scripted agent runs exist, and the moment their ages count back from. */
   /** How long the scripted Pip waits between words, in ms (a step takes six times as long); unset keeps its usual pace. */
   pipPace?: number;
-  /** New workstreams open in Manage mode, so the supervisor wakes Pip and starts the routine steps in them. */
-  wsManage?: boolean;
   /** "none" is a GitHub token that can't write to pull requests anywhere, so no review draft can be posted. */
   reviewAccess?: "none";
   runs?: { seed?: "busy" | "kinds" | "empty" | "many" | "failures" | "stuck" | "reports"; epoch?: number; environment?: "ok" | "missing" | "signedOut"; cap?: number; pipRun?: boolean; planDescription?: boolean; untrusted?: boolean; prSurfaceMs?: number | null };
@@ -106,7 +104,7 @@ export interface MockHandle {
   workstreamEvents(): { workstreamId: string; actor: string; action: string; runId: string | null; detail?: string | null }[];
   /** Every run the sample backend holds, newest first: its id, kind and state. */
   runs(): { id: string; kind: string; state: string; prSha: string | null; passes: number; key: string | null; shortId: string | null; digest: string; name: string }[];
-  /** Every launch so far, oldest first: the run, its kind, the read-only restriction the mock launcher passed (null for a Build) and the auto-start rule that started it, if one did. */
+  /** Every launch so far, oldest first: the run, its kind, and the read-only restriction the mock launcher passed (null for a Build). */
   launches(): MockLaunch[];
   /** Makes the draft pull requests finished builds opened show on the code host now, as a code sync finding them; true when there was one. */
   surfacePullRequests(): boolean;
@@ -131,10 +129,8 @@ export interface MockHandle {
   reviewDrafts(): MockReviewDraft[];
   /** Adds an audit line to the open workstream on ticket `key` as of `at` (an ISO time), the way to age what depends on the time since: the sample's clock is the browser's and can't be moved. */
   seedWorkstreamEvent(key: string, event: { actor: string; action: string; at: string; runId?: string | null; proposalId?: string | null; detail?: string | null }): void;
-  /** Sets workstream `id`'s own limits for automatic turns and wakes. */
-  setBudget(id: string, budget: { autoTurns?: number | null; wakes?: number | null }): void;
-  /** Holds the open workstream on ticket `key` as the system would (`reason` is a restart, the budget, a tripwire...), not as the person: the holds that are in Needs you. */
-  holdWorkstream(key: string, reason: string): void;
+  /** Pauses the open workstream on ticket `key` as the system would (`ceiling`), not as the person. */
+  pauseWorkstream(key: string, reason: "person" | "ceiling"): void;
   /** Makes the scripted Pip wait, answering, after starting each turn (true) until let go (false). */
   holdPip(on: boolean): void;
   /** Whether the scripted Pip has no turn running or waiting anywhere, a wake the supervisor queued included. */
@@ -173,7 +169,7 @@ export interface TicketEdit {
 /** The parts of the sample backend the handle reaches. */
 export interface MockClockParts {
   runs: { advance(id?: string): void; list(): { id: string; spec: { kind: string; prSha?: string | null; name: string }; state: string; passes?: number; item?: { key: string } | null; shortId?: string | null; digest: string }[]; surfacePullRequests(): boolean; launches(): MockLaunch[]; scriptNext(kind: RunKind, script: ScriptedFinish): void; ask(id: string, question: string): unknown; askPermission(id: string, needs: string): unknown; block(id: string): unknown; lose(id: string): unknown; stopAtLimit(id: string): unknown; readonly attached: readonly string[] };
-  workstreams?: { list(includeClosed?: boolean): { workstream: { id: string; itemKey: string | null; closedAt: string | null } }[]; events(id: string): MockHandleEvent[]; setBudget(id: string, budget: { autoTurns?: number | null; wakes?: number | null }): unknown; hold(id: string, reason: string, actor: "supervisor"): unknown; seedEvent(id: string, actor: WorkstreamActor, action: string, at: string, extra?: { runId?: string | null; proposalId?: string | null; detail?: string | null }): unknown };
+  workstreams?: { list(includeClosed?: boolean): { workstream: { id: string; itemKey: string | null; closedAt: string | null } }[]; events(id: string): MockHandleEvent[]; pause(id: string, reason: "person" | "ceiling", actor: "supervisor"): unknown; seedEvent(id: string, actor: WorkstreamActor, action: string, at: string, extra?: { runId?: string | null; proposalId?: string | null; detail?: string | null }): unknown };
   proposals?: { writes: readonly { proposalId: string; intent: Intent }[]; list(): Proposal[] };
   pip?: { hold(on: boolean): void; idle(): boolean };
   tickets?: { edit(key: string, change: TicketEdit): void; comment(key: string, text: string, by?: string): void };
@@ -221,11 +217,10 @@ export function exposeMockClock({ runs, workstreams, proposals, pip, tickets, gi
       if (!ws) throw new Error(`no open workstream on ${key}`);
       workstreams?.seedEvent(ws.workstream.id, actor as WorkstreamActor, action, at, { runId, proposalId, detail });
     },
-    setBudget: (id, budget) => void workstreams?.setBudget(id, budget),
-    holdWorkstream: (key, reason) => {
+    pauseWorkstream: (key, reason) => {
       const ws = workstreams?.list().find((v) => v.workstream.itemKey === key && v.workstream.closedAt === null);
       if (!ws) throw new Error(`no open workstream on ${key}`);
-      workstreams?.hold(ws.workstream.id, reason, "supervisor");
+      workstreams?.pause(ws.workstream.id, reason, "supervisor");
     },
     holdPip: (on) => pip?.hold(on),
     pipIdle: () => pip?.idle() ?? true,
@@ -254,7 +249,7 @@ function writtenKey(intent: Intent): string | null {
 
 type MockHandleEvent = ReturnType<MockHandle["workstreamEvents"]>[number];
 
-/** In a dev browser, `?mockProjects=60` sets how many projects the sample catalog lists, and `?mockRepos=30` signs in a GitHub connection with that many repositories, and `?mockDevice=denied`, `expired` or `slow` makes the GitHub device flow wait 4 seconds and end that way. `?runs=busy` (without the other kinds), `empty`, `many`, `failures` or `reports` (a finished run for each way a result can have been read) changes the scripted agent runs, `?runsEnv=missing` or `signedOut` shows the Claude banners, `?runsCap=3` sets how many agents may run at once `?pipRun=1` starts with a run draft from Pip and `?runsUntrusted=1` makes Claude refuse every clone until Trust this folder is used. `?prSurface=manual` keeps a finished build's draft pull request off the code host until `__gossamrMock.surfacePullRequests()` (or Sync now) shows it, rather than after a moment. `?pipPace=200` slows the scripted Pip to 200ms a word, so a question can be queued behind one it is still answering. `?wsManage=1` opens new workstreams in Manage, where the supervisor wakes Pip and starts the routine steps. `?mockReviewAccess=none` makes the GitHub token unable to write to any pull request, so a review draft can't be posted and its card offers the PR view instead (repositories the sample can only read never take a review either). The runs move only when told to: see `exposeMockClock` above for `__gossamrMock.advanceRuns()`. */
+/** In a dev browser, `?mockProjects=60` sets how many projects the sample catalog lists, and `?mockRepos=30` signs in a GitHub connection with that many repositories, and `?mockDevice=denied`, `expired` or `slow` makes the GitHub device flow wait 4 seconds and end that way. `?runs=busy` (without the other kinds), `empty`, `many`, `failures` or `reports` (a finished run for each way a result can have been read) changes the scripted agent runs, `?runsEnv=missing` or `signedOut` shows the Claude banners, `?runsCap=3` sets how many agents may run at once `?pipRun=1` starts with a run draft from Pip and `?runsUntrusted=1` makes Claude refuse every clone until Trust this folder is used. `?prSurface=manual` keeps a finished build's draft pull request off the code host until `__gossamrMock.surfacePullRequests()` (or Sync now) shows it, rather than after a moment. `?pipPace=200` slows the scripted Pip to 200ms a word, so a question can be queued behind one it is still answering. `?mockReviewAccess=none` makes the GitHub token unable to write to any pull request, so a review draft can't be posted and its card offers the PR view instead (repositories the sample can only read never take a review either). The runs move only when told to: see `exposeMockClock` above for `__gossamrMock.advanceRuns()`. */
 export function mockOptionsFromUrl(): MockOptions {
   if (!import.meta.env.DEV || typeof location === "undefined") return {};
   const params = new URLSearchParams(location.search);
@@ -269,7 +264,6 @@ export function mockOptionsFromUrl(): MockOptions {
   if (repos) options.githubRepos = repos;
   const pace = count("pipPace");
   if (pace) options.pipPace = pace;
-  if (params.get("wsManage") === "1") options.wsManage = true;
   if (params.get("mockReviewAccess") === "none") options.reviewAccess = "none";
   const outcome = params.get("mockDevice");
   if (outcome === "denied" || outcome === "expired" || outcome === "slow") options.device = { delayMs: 4000, outcome: outcome === "slow" ? "authorised" : outcome };
