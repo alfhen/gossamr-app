@@ -437,6 +437,11 @@ impl RunService {
         if !eligible {
             return Ok((run, false));
         }
+        // Only a person reaches `start`, so starting a run an earlier release queued on its own is their approval of it;
+        // without this, one sent to wait for a slot would never pass `workstream_runs`.
+        if run.unapproved_auto_start.take().is_some() {
+            self.store(&run).await?;
+        }
         // A free slot goes to the runs already waiting for one first, in approval order; `launch_waiting` starts them.
         if !retry && (self.live_elsewhere(&run) >= self.cap() || self.waits_behind(&run).await) {
             self.wait_for_slot(&mut run).await?;

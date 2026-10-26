@@ -1431,4 +1431,20 @@ mod waiting {
         assert!(rig.get(&old).await.unapproved_auto_start.is_some());
         assert_eq!(rig.svc.start_now(&old.id).await.unwrap().state, RunState::Launching, "the person can still start it");
     }
+
+    #[tokio::test]
+    async fn starting_an_unapproved_queued_run_over_the_cap_lets_it_launch_when_a_slot_frees() {
+        let rig = build(None, |s| s.with_cap(1)).await;
+        let busy = rig.queued(9).await;
+        assert_eq!(rig.svc.start_now(&busy.id).await.unwrap().state, RunState::Launching);
+        let ws = rig.open_on("CA-1").await;
+        let old = rig.queued_in(1, "CA-1", &ws).await;
+        rig.set(&old, |r| r.unapproved_auto_start = Some(serde_json::json!({ "rule": "investigate_triage", "afterRun": "r0" }))).await;
+        let waiting = rig.svc.start_now(&old.id).await.unwrap();
+        assert_eq!(waiting.state, RunState::Queued);
+        assert!(waiting.slot_wait_since.is_some());
+        assert!(waiting.unapproved_auto_start.is_none(), "starting it is the person's approval");
+        rig.finish(&busy).await;
+        assert_eq!(rig.svc.launch_waiting().await.unwrap(), std::slice::from_ref(&old.id));
+    }
 }
