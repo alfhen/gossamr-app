@@ -33,7 +33,7 @@ use images::ImageInput;
 use mcp::McpServer;
 use queue::{Enqueued, QueueItem, Removed, TurnQueue};
 use sandbox::Sandbox;
-use supervisor::{event_line, WakeFacts, WAKE_REQUEST};
+use supervisor::{event_line, fact_keys, WakeFacts, WAKE_REQUEST};
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(tag = "type", rename_all = "camelCase", rename_all_fields = "camelCase")]
@@ -433,7 +433,7 @@ impl AgentService {
 
     async fn queue_wake(self: &Arc<Self>, scope: Scope, conversation: String, facts: WakeFacts, sink: WakeSink) -> Result<()> {
         let request_id = format!("wake-{}", crate::proposals::new_id()?);
-        recorded(self.core.pip_wake_begin(&scope, &conversation, &request_id, &event_line(&facts), "queued").await);
+        recorded(self.core.pip_wake_begin(&scope, &conversation, &request_id, &event_line(&facts), &fact_keys(&facts), "queued").await);
         let told = bound(&sink, &facts);
         let entered = {
             let mut queue = self.queue.lock().expect("lock poisoned");
@@ -448,12 +448,12 @@ impl AgentService {
                 let waiting = {
                     let queue = self.queue.lock().expect("lock poisoned");
                     match queue.waiting(&id) {
-                        Some(QueueItem::Wake { facts, sink, .. }) => Some((event_line(facts), bound(sink, facts), queue.position(&id).unwrap_or(0))),
+                        Some(QueueItem::Wake { facts, sink, .. }) => Some((event_line(facts), fact_keys(facts), bound(sink, facts), queue.position(&id).unwrap_or(0))),
                         _ => None,
                     }
                 };
-                if let Some((lines, sink, ahead)) = waiting {
-                    recorded(self.core.pip_wake_lines(&scope, &id, &lines).await);
+                if let Some((lines, keys, sink, ahead)) = waiting {
+                    recorded(self.core.pip_wake_lines(&scope, &id, &lines, &keys).await);
                     // The page reads the merged lines from the stored turn when it hears of the wake again.
                     sink(Update { request_id: id, event: AgentEvent::Queued { ahead } });
                 }

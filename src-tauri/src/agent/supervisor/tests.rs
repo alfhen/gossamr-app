@@ -632,7 +632,7 @@ async fn a_workstream_woken_too_often_in_a_day_is_paused_at_its_ceiling_and_resu
 async fn pip_woken_too_often_in_a_day_across_workstreams_pauses_the_workstream_that_asks_next() {
     let t = setup().await;
     for n in 0..WAKE_TURNS_PER_DAY {
-        t.fx.core.pip_wake_begin(&t.fx.scope, "ws:elsewhere", &format!("seed{n}"), "[Event] run x (build) Done", "done").await.unwrap();
+        t.fx.core.pip_wake_begin(&t.fx.scope, "ws:elsewhere", &format!("seed{n}"), "[Event] run x (build) Done", &[], "done").await.unwrap();
     }
     let run = t.run("r1", RunKind::Investigate, RunState::Done, |_| {}).await;
     t.noticed(&run, Attention::Done).await;
@@ -651,13 +651,35 @@ async fn wake_turns_that_never_reached_pip_count_toward_no_ceiling() {
     let t = setup().await;
     for n in 0..WAKES_PER_WORKSTREAM_PER_DAY {
         let id = format!("never{n}");
-        t.fx.core.pip_wake_begin(&t.fx.scope, &t.conversation(), &id, "[Event] run x (build) Done", "queued").await.unwrap();
+        t.fx.core.pip_wake_begin(&t.fx.scope, &t.conversation(), &id, "[Event] run x (build) Done", &[], "queued").await.unwrap();
         t.fx.core.pip_turn_finish(&t.fx.scope, &id, "", false, Some(crate::agent::WAKE_PAUSED), None, None).await.unwrap();
     }
     let run = t.run("r1", RunKind::Investigate, RunState::Done, |_| {}).await;
     t.noticed(&run, Attention::Done).await;
     assert_eq!(t.workstream().await.paused_reason, None);
     assert!(t.wake_turns().await.iter().any(|w| w.status == "done"));
+}
+
+#[tokio::test]
+async fn a_wake_waiting_behind_the_person_when_gossamr_closes_is_woken_for_again_and_counts_toward_no_ceiling() {
+    let t = setup().await;
+    t.fake.0.hold.store(true, Ordering::SeqCst);
+    t.svc.ask(ask("q1", &t.conversation()), Arc::new(|_| {})).await.unwrap();
+    let run = t.run("r0", RunKind::Investigate, RunState::Done, |_| {}).await;
+    t.sup.clone().on_run(run, Attention::Done).await;
+    t.until("a wake waiting", |turns| turns.iter().any(|w| w.kind == "wake" && w.status == "queued")).await;
+    let waiting = t.wake_turns().await[0].request_id.clone();
+
+    // Quitting and opening the app again leaves the wake never run, and its fact free to be woken for.
+    t.fx.core.close_db();
+    let wake = t.wake_turns().await.into_iter().find(|w| w.request_id == waiting).unwrap();
+    assert_eq!((wake.status.as_str(), wake.error.as_deref()), ("failed", Some(crate::db::NEVER_RAN)));
+    assert!(dropped(&t, "done").await);
+    let events = t.fx.core.workstream_events(&t.fx.scope, &t.ws).await.unwrap();
+    assert!(crate::agent::supervisor::woken_in(&events).is_empty());
+    assert!(!crate::agent::supervisor::reached_pip(&wake.status, wake.error.as_deref()));
+    t.fake.open_all();
+    t.idle().await;
 }
 
 // The quota.

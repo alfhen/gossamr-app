@@ -234,6 +234,11 @@ pub fn event_line(facts: &WakeFacts) -> String {
     facts.facts.iter().map(fact_line).collect::<Vec<_>>().join("\n")
 }
 
+/// The `(run, key)` pairs of `facts`, as a wake turn keeps them.
+pub fn fact_keys(facts: &WakeFacts) -> Vec<(String, String)> {
+    facts.facts.iter().map(|f| (f.run.clone(), f.key().to_string())).collect()
+}
+
 /// Whether a turn ended because the person's subscription said no: a rate or usage limit, or sign-in trouble.
 pub fn is_quota_error(message: &str) -> bool {
     let m = message.to_ascii_lowercase();
@@ -283,7 +288,7 @@ pub fn woken_in(events: &[WorkstreamEvent]) -> HashSet<(String, String)> {
 /// Whether a wake turn that ended with `status` and `error` reached Pip, which is what the ceilings count: not one that
 /// never started, or that the subscription refused.
 pub fn reached_pip(status: &str, error: Option<&str>) -> bool {
-    status != "queued" && !error.is_some_and(|e| e == WAKE_PAUSED || e == REMOVED || e.starts_with(WAKE_NOT_STARTED) || is_quota_error(e))
+    status != "queued" && !error.is_some_and(|e| e == WAKE_PAUSED || e == REMOVED || e == crate::db::NEVER_RAN || e.starts_with(WAKE_NOT_STARTED) || is_quota_error(e))
 }
 
 /// Whether the person stopped `run` since it last carried on.

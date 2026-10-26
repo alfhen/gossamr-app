@@ -26,9 +26,9 @@ mod workstreams;
 pub use cache::{stamp, SyncState, Upserted};
 pub use runs::ARCHIVABLE;
 pub use code::CachedHttp;
-pub use pip_turns::{PipTurn, ROLE_WAKE};
+pub use pip_turns::{PipTurn, NEVER_RAN};
 #[cfg(test)]
-pub use pip_turns::{INTERRUPTED, NEVER_RAN};
+pub use pip_turns::INTERRUPTED;
 
 pub struct Db {
     conn: Connection,
