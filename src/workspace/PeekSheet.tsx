@@ -328,7 +328,7 @@ export function PeekView(p: PeekViewProps) {
                   ))}
                 </ul>
               )}
-              {p.composer && <div className="min-w-0 rounded-md border border-ws-sep2 bg-ws-win p-3">{p.composer}</div>}
+              {p.composer}
             </SectionCard>
           </div>
         )}
@@ -404,9 +404,9 @@ function Composer({ item, disabled, reply, onCancelReply }: { item: WorkItem; di
   };
 
   return (
-    <div className="grid gap-1.5">
+    <div className="min-w-0 rounded-md border border-ws-sep2 bg-ws-win focus-within:border-ws-pip">
       {reply && (
-        <div className="flex min-w-0 items-center gap-1.5 text-xs text-ws-ink3">
+        <div className="flex min-w-0 items-center gap-1.5 px-3 pt-2.5 text-xs text-ws-ink3">
           <span className="inline-flex min-w-0 items-center gap-1 rounded-full bg-ws-hover py-0.5 pr-1 pl-2">
             <span className="min-w-0 truncate">↩ Replying to <b className="font-semibold text-ws-ink2">{reply.to.who}</b></span>
             <button type="button" aria-label="Cancel reply" title="Cancel reply" onClick={onCancelReply} className="grid size-4 shrink-0 place-items-center rounded-full leading-none hover:bg-ws-sel">
@@ -428,10 +428,9 @@ function Composer({ item, disabled, reply, onCancelReply }: { item: WorkItem; di
         ticketKey={item.item.key}
         people={people}
         placeholder={reply ? "Write your reply. It becomes a draft you approve." : "Write a comment. It becomes a draft you approve."}
-        className="rounded-md border border-ws-sep2 bg-ws-win"
       />
-      <div className="flex items-center gap-2">
-        <span role="status" className="text-sm text-ws-ink3">
+      <div className="flex items-center gap-2 px-2 pb-2">
+        <span role="status" className="pl-1 text-sm text-ws-ink3">
           {problem ?? (sent ? "Drafted above. Nothing is posted until you approve." : "")}
         </span>
         <button type="button" disabled={!ready || disabled} onClick={() => void submit()} className="ml-auto rounded-md bg-ws-pip px-2.5 py-1 text-sm font-semibold text-ws-on-pip disabled:opacity-45">
