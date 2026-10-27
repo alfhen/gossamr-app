@@ -67,8 +67,9 @@ test("the palette asks Pip to plan the peeked ticket, which opens its workstream
   await palette.getByLabel("Search commands and tickets").fill("plan CA-402");
   await palette.getByText("Ask Pip to plan CA-402", { exact: true }).click();
   await expect(palette).toHaveCount(0);
-  await expect(pipConversation(page)).toHaveText(/^Workstream: CA-402 .+ · Intake$/);
-  await expect(peekSheet(page).getByText("Workstream · Intake")).toBeVisible();
+  // Pip starts the plan agent as soon as it is asked, so the stage may already have moved past Intake.
+  await expect(pipConversation(page)).toHaveText(/^Workstream: CA-402 .+ · \w+$/);
+  await expect(peekSheet(page).getByText(/Workstream · \w+/)).toBeVisible();
 
   // On a ticket that has one, the palette offers to open it instead.
   await page.keyboard.press("ControlOrMeta+k");
