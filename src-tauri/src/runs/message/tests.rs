@@ -279,14 +279,20 @@ async fn a_finished_session_the_person_attached_to_is_not_resumed() {
 }
 
 #[tokio::test]
-async fn a_queued_message_whose_delivery_failed_for_now_is_kept_and_a_newer_one_is_not_overwritten() {
-    let (rig, run, _) = working().await;
+async fn a_queued_message_whose_wake_fails_is_kept_for_a_few_tries_then_dropped_and_a_newer_one_is_not_overwritten() {
+    let (rig, run, ws) = working().await;
     rig.svc.message_agent(&run.id, "Carry on.", Actor::Pip).await.unwrap();
     ends_turn(&rig, &run, "done");
     rig.set(&run, |r| (r.state, r.ended_at) = (RunState::Done, Some(chrono::Utc::now()))).await;
     rig.cli.with(|s| s.resume = Resume::Exits);
     rig.svc.deliver_queued().await;
     assert_eq!(rig.fx.core.run_message(&run.id).await.unwrap().as_deref(), Some("Carry on."), "a wake that failed is tried again");
+    rig.svc.deliver_queued().await;
+    assert!(rig.fx.core.run_message(&run.id).await.unwrap().is_some());
+    rig.svc.deliver_queued().await;
+    assert!(rig.fx.core.run_message(&run.id).await.unwrap().is_none(), "a wake that keeps failing is dropped");
+    assert_eq!(rig.get(&run).await.state, RunState::Done);
+    assert!(pip_lines(&rig, &ws).await.iter().any(|(action, _)| action == "agent_message_dropped"));
 
     rig.fx.core.queue_run_message(&run.id, "Newer.").await.unwrap();
     rig.fx.core.restore_run_message(&run.id, "Older.").await.unwrap();

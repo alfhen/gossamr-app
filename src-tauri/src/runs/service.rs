@@ -78,6 +78,8 @@ pub struct RunService {
     pub(super) cleaning: Mutex<HashSet<String>>,
     /// Repositories being cloned into `~/Gossamr/agents` right now.
     cloning: Mutex<HashSet<String>>,
+    /// Failed deliveries of a queued message, per run, so a wake that keeps failing is dropped instead of retried forever.
+    pub(super) delivery_failures: Mutex<std::collections::HashMap<String, u8>>,
     clones: CloneCache,
     pub(super) roots: Vec<PathBuf>,
     pub(super) changed: Arc<dyn Fn(&str) + Send + Sync>,
@@ -173,6 +175,7 @@ impl RunService {
             in_flight: Mutex::new(HashSet::new()),
             cleaning: Mutex::new(HashSet::new()),
             cloning: Mutex::new(HashSet::new()),
+            delivery_failures: Mutex::new(Default::default()),
             clones: CloneCache::default(),
             roots,
             changed,

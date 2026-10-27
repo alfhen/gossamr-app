@@ -26,6 +26,9 @@ pub enum Delivery {
 /// What a resume says when every slot is taken, so the queued message waits instead of being dropped.
 const NO_SLOT: &str = "Every agent slot is taken; try again when one finishes.";
 
+/// How many times a queued message's wake may fail before the message is dropped.
+const WAKE_TRIES: u8 = 3;
+
 const IN_TERMINAL: &str = "A session is open on it in Terminal, so the person is in it.";
 const NOT_WAITING: &str = "It isn't waiting for an answer any more. Look again in a moment.";
 
@@ -156,11 +159,26 @@ impl RunService {
         Ok(None)
     }
 
+    /// Whether a failed delivery is worth trying again on a later poll: a passing refusal always is, a failed wake only
+    /// until it has failed `WAKE_TRIES` times, since each try holds the launch lock for seconds.
+    fn worth_retrying(&self, run_id: &str, e: &Error) -> bool {
+        match e {
+            Error::Proposal(why) => [NO_SLOT, IN_TERMINAL, NOT_WAITING].contains(&why.as_str()),
+            Error::Claude(_) => {
+                let mut tries = self.delivery_failures.lock().expect("delivery failures lock poisoned");
+                let n = tries.entry(run_id.to_owned()).or_default();
+                *n += 1;
+                *n < WAKE_TRIES
+            }
+            _ => false,
+        }
+    }
+
     /// Hands each run's waiting message to it once it can have it: a run that is done, or ended its turn with a question,
     /// is sent it as an answer or by resume. One that is still working, or waits on a permission prompt or sign-in,
     /// keeps it, as does one whose workstream is closed or paused, or a resume with no free slot. One that failed or was
     /// stopped has no one to take it, so it is dropped and the workstream's audit says so. The message is taken before it
-    /// is sent, so one queued meanwhile isn't lost, and put back when the send failed for a reason that passes.
+    /// is sent, so one queued meanwhile isn't lost, and put back when the send failed for a reason that passes, or a wake failed fewer than three times.
     pub(super) async fn deliver_queued(&self) {
         let Ok(waiting) = self.core.runs_with_messages().await else { return };
         for id in waiting {
@@ -184,28 +202,23 @@ impl RunService {
                 RunState::NeedsAnswer => self.answer_as(&id, &text, Actor::Pip).await.map(drop),
                 _ => Err(refuse(format!("the run is {}", run.state.as_str()))),
             };
-            let Err(e) = sent else { continue };
+            let Err(e) = sent else {
+                self.delivery_failures.lock().expect("delivery failures lock poisoned").remove(&id);
+                continue;
+            };
             eprintln!("couldn't deliver the message waiting for run {id}: {e}");
             if self.load(&id).await.is_ok_and(|r| r.unsent_answer.is_some()) {
                 continue;
             }
-            if retryable(&e) {
+            if self.worth_retrying(&id, &e) {
                 if let Err(e) = self.core.restore_run_message(&id, &text).await {
                     eprintln!("couldn't keep the message waiting for run {id}: {e}");
                 }
             } else {
+                self.delivery_failures.lock().expect("delivery failures lock poisoned").remove(&id);
                 self.note_by(&run, Actor::Pip, "agent_message_dropped", Some(e.to_string())).await;
             }
         }
-    }
-}
-
-/// Whether a failed delivery is worth trying again on a later poll.
-fn retryable(e: &Error) -> bool {
-    match e {
-        Error::Proposal(why) => [NO_SLOT, IN_TERMINAL, NOT_WAITING].contains(&why.as_str()),
-        Error::Claude(_) => true,
-        _ => false,
     }
 }
 
