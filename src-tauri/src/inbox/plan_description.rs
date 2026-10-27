@@ -1,14 +1,14 @@
-//! The description update a finished Plan run leaves: the ticket's description with a `Gossamr Plan` section added, or
+//! The description update a finished run that made a plan leaves: the ticket's description with a `Gossamr Plan` section added, or
 //! replaced when the ticket already has one. Assembled here from the run's own answer, never by a model, and stored
 //! against the description it was written from so an approval can tell when the ticket moved on.
 
 use chrono::Utc;
 use serde::Serialize;
 
-use super::run_results::{label_of, RunDraft};
+use super::run_results::{has_plan, label_of, RunDraft};
 use super::{ticket_of, Core};
 use crate::model::CachedTicket;
-use crate::domain::{Basis, BodyChange, CreatedBy, Doc, Intent, ItemRef, Origin, Proposal, ProposalQuery, ProposalState, ResultKind, Run, RunState, WorkItem, DESCRIPTION_LIMIT, PLAN_HEADING, PLAN_LIMIT};
+use crate::domain::{Basis, BodyChange, CreatedBy, Doc, Intent, ItemRef, Origin, Proposal, ProposalQuery, ProposalState, Run, RunState, WorkItem, DESCRIPTION_LIMIT, PLAN_HEADING, PLAN_LIMIT};
 use crate::error::{Error, Result};
 use crate::proposals::{self, Draft};
 use crate::runs::result::{fit, plan_without_note};
@@ -98,14 +98,14 @@ enum Made {
 impl Core {
     async fn plan_description_for(&self, id: &str) -> Result<(Run, ItemRef, String)> {
         let run = self.run(id).await?.ok_or_else(|| refuse("that run no longer exists"))?;
-        if !run.spec.is(ResultKind::Plan) {
-            return Err(refuse("only a plan run has a plan to add to a description"));
+        let resolved = self.resolved_of(&run).await?;
+        if !has_plan(&run, &resolved) {
+            return Err(refuse("only a run that made a plan has a plan to add to a description"));
         }
         if run.state != RunState::Done {
             return Err(refuse("that run hasn't finished"));
         }
         let item = run.item.clone().ok_or_else(|| refuse("that run isn't about a ticket"))?;
-        let resolved = self.resolved_of(&run).await?;
         let plan = match resolved.plan.clone() {
             Some(plan) => plan,
             None if resolved.complete() => plan_without_note(run.result.as_deref().unwrap_or("")),
@@ -167,8 +167,8 @@ impl Core {
         .await
     }
 
-    /// The description update a finished Plan run leaves, made when it finishes. `None` when the run isn't a Plan on a
-    /// ticket with a plan in full, when the description can't be edited, or when this plan already has a draft.
+    /// The description update a finished run that made a plan leaves, made when it finishes. `None` when the run isn't on
+    /// a ticket with a plan in full, when the description can't be edited, or when this plan already has a draft.
     pub async fn auto_draft_run_plan_description(&self, id: &str) -> Result<Option<Proposal>> {
         let Ok((run, item, plan)) = self.plan_description_for(id).await else { return Ok(None) };
         Ok(match self.make_plan_description(&run, &item, &plan, false).await? {
@@ -189,7 +189,10 @@ impl Core {
 
     /// What the run sheet shows: the draft this run made, or what stops one.
     pub(super) async fn plan_description_of(&self, run: &Run) -> Result<Option<PlanDescription>> {
-        let Some(item) = run.item.clone().filter(|_| run.spec.is(ResultKind::Plan) && run.state == RunState::Done) else { return Ok(None) };
+        let Some(item) = run.item.clone().filter(|_| run.state == RunState::Done) else { return Ok(None) };
+        if !has_plan(run, &self.resolved_of(run).await?) {
+            return Ok(None);
+        }
         let found = self.proposals(&ProposalQuery { item: Some(item.clone()), ..Default::default() }).await?;
         let draft = found.into_iter().find(|p| from_run(p, &run.id)).map(|p| RunDraft { id: p.id, state: p.state });
         let unavailable = match (&draft, self.resolved_of(run).await?.complete()) {
@@ -218,6 +221,7 @@ impl Core {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::ResultKind;
     use crate::inbox::run_results::tests::{approved, next_spec, plan_with, PLAN};
     use crate::inbox::testing::{fixture_watching, Fixture};
     use crate::inbox::Edit;

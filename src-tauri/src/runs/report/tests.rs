@@ -8,19 +8,15 @@ use crate::runs::redact::redact;
 use crate::runs::result::Readiness;
 
 fn ticket_run() -> Target {
-    Target { kind: Some(ResultKind::Investigate), ticketless: false }
+    Target { on_ticket: true, ticketless: false, verdict_required: false }
 }
 
 fn ticketless() -> Target {
-    Target { kind: Some(ResultKind::Investigate), ticketless: true }
+    Target { on_ticket: false, ticketless: true, verdict_required: false }
 }
 
-fn triage() -> Target {
-    Target { kind: Some(ResultKind::Triage), ticketless: false }
-}
-
-fn plan() -> Target {
-    Target { kind: Some(ResultKind::Plan), ticketless: false }
+fn no_ticket() -> Target {
+    Target { on_ticket: false, ticketless: false, verdict_required: false }
 }
 
 fn refused(args: Value, target: Target) -> Vec<String> {
@@ -36,7 +32,7 @@ fn the_tool_and_what_it_asks_for_are_pinned_so_a_change_is_made_on_purpose() {
     use sha2::{Digest, Sha256};
     let all = [definition().to_string(), AGENT_GUARD.to_string(), AGENT_SERVER.to_string(), REPORT_TOOL.to_string(), crate::domain::agent_allow_rules().join(",")];
     let hash: String = Sha256::digest(all.join("\n").as_bytes()).iter().map(|b| format!("{b:02x}")).collect();
-    assert_eq!((REPORT_TOOL_VERSION, hash.as_str()), (3, "0e383b6a1406e0ed17f41921f75a50f42639c000e10240a4d473c56ec1ace148"), "the tool or its guard changed: pin the new hash, and raise REPORT_TOOL_VERSION only if tokens minted under the old one must stop working");
+    assert_eq!((REPORT_TOOL_VERSION, hash.as_str()), (3, "5bd8ebdfb166682b22c182b7cb58a94659d6af28e930c34725c3dd94af39b1d4"), "the tool or its guard changed: pin the new hash, and raise REPORT_TOOL_VERSION only if tokens minted under the old one must stop working");
 }
 
 #[test]
@@ -52,7 +48,7 @@ fn the_published_schema_names_every_field_and_allows_nothing_else() {
     assert_eq!(schema["properties"]["findings"]["items"]["properties"]["severity"]["enum"], json!(["blocking", "should-fix", "nit"]));
     assert_eq!(schema["properties"]["findings"]["items"]["additionalProperties"], false);
     assert!(def["description"].as_str().unwrap().chars().count() < 250, "a description is a sentence or two");
-    assert_eq!(schema["properties"]["verdict"]["description"], "Required for a review: pass only when it tried and found nothing blocking.");
+    assert_eq!(schema["properties"]["verdict"]["description"], "pass only when it tried and found nothing blocking. Required when you review a pull request.");
     assert_eq!(schema["required"], json!(["status"]));
 }
 
@@ -77,8 +73,12 @@ fn only_what_cannot_be_repaired_is_refused_and_the_rest_is_cut_and_said() {
     assert_eq!(ok.notes, ["note cut to 3000 characters"]);
 
     let ok = accepted(json!({ "status": "done", "note": "n", "newTicket": { "title": "t" }, "subtasks": ["a"], "plan": "p" }), ticket_run());
-    assert_eq!((ok.report.new_ticket, ok.report.subtasks, ok.report.plan), (None, vec![], None));
-    assert_eq!(ok.notes.len(), 3, "{:?}", ok.notes);
+    assert_eq!((ok.report.new_ticket, ok.report.subtasks, ok.report.plan.as_deref()), (None, vec!["a".to_string()], Some("p")));
+    assert_eq!(ok.notes, ["newTicket ignored: this run is about a ticket"]);
+
+    let ok = accepted(json!({ "status": "done", "note": "n", "newTicket": { "title": "t" }, "subtasks": ["a"] }), no_ticket());
+    assert_eq!((ok.report.new_ticket.map(|t| t.title), ok.report.subtasks), (Some("t".to_string()), vec![]));
+    assert_eq!(ok.notes, ["subtasks ignored: only a run on a ticket proposes them"]);
 }
 
 #[test]
@@ -106,30 +106,30 @@ fn a_ticketless_investigation_gives_a_new_ticket_and_no_note() {
 }
 
 #[test]
-fn a_triage_may_give_one_to_eight_subtasks_and_the_rest_is_repaired() {
-    let one = accepted(json!({ "status": "done", "note": "n", "subtasks": ["Split the consumer"] }), triage());
+fn a_run_on_a_ticket_may_give_one_to_eight_subtasks_and_the_rest_is_repaired() {
+    let one = accepted(json!({ "status": "done", "note": "n", "subtasks": ["Split the consumer"] }), ticket_run());
     assert_eq!(one.report.subtasks, ["Split the consumer"]);
-    let tidy = accepted(json!({ "status": "done", "note": "n", "subtasks": ["A", "  a ", "", "- B\n", "None", "**C**"] }), triage());
+    let tidy = accepted(json!({ "status": "done", "note": "n", "subtasks": ["A", "  a ", "", "- B\n", "None", "**C**"] }), ticket_run());
     assert_eq!(tidy.report.subtasks, ["A", "- B", "C"]);
     let many: Vec<String> = (1..=11).map(|n| format!("Task {n}")).collect();
-    let cut = accepted(json!({ "status": "done", "note": "n", "subtasks": many }), triage());
+    let cut = accepted(json!({ "status": "done", "note": "n", "subtasks": many }), ticket_run());
     assert_eq!((cut.report.subtasks.len(), cut.notes), (8, vec!["only the first 8 subtasks kept".to_string()]));
-    assert!(accepted(json!({ "status": "done", "note": "n", "subtasks": [] }), triage()).report.subtasks.is_empty());
-    assert_eq!(refused(json!({ "status": "done", "note": "n", "subtasks": "one" }), triage()), ["subtasks: must be a list of one-line summaries."]);
-    assert_eq!(refused(json!({ "status": "done", "note": "n", "subtasks": ["a", 2] }), triage()), ["subtasks: every item must be text."]);
-    let encoded = accepted(json!({ "status": "done", "note": "n", "subtasks": "[\"X\",\"Y\"]" }), triage());
+    assert!(accepted(json!({ "status": "done", "note": "n", "subtasks": [] }), ticket_run()).report.subtasks.is_empty());
+    assert_eq!(refused(json!({ "status": "done", "note": "n", "subtasks": "one" }), ticket_run()), ["subtasks: must be a list of one-line summaries."]);
+    assert_eq!(refused(json!({ "status": "done", "note": "n", "subtasks": ["a", 2] }), ticket_run()), ["subtasks: every item must be text."]);
+    let encoded = accepted(json!({ "status": "done", "note": "n", "subtasks": "[\"X\",\"Y\"]" }), ticket_run());
     assert_eq!(encoded.report.subtasks, ["X", "Y"]);
-    let ignored = accepted(json!({ "status": "done", "note": "n", "subtasks": ["a"] }), ticket_run());
+    let ignored = accepted(json!({ "status": "done", "note": "n", "subtasks": ["a"] }), no_ticket());
     assert!(ignored.report.subtasks.is_empty() && ignored.notes[0].starts_with("subtasks ignored"));
 }
 
 #[test]
-fn a_triage_may_say_whether_it_recommends_a_plan_as_a_flag_only() {
-    assert_eq!(accepted(json!({ "status": "done", "note": "n", "planRecommended": true }), triage()).report.plan_recommended, Some(true));
-    assert_eq!(accepted(json!({ "status": "done", "note": "n", "planRecommended": false }), triage()).report.plan_recommended, Some(false));
-    assert_eq!(accepted(json!({ "status": "done", "note": "n" }), triage()).report.plan_recommended, None);
-    assert_eq!(refused(json!({ "status": "done", "note": "n", "planRecommended": "yes" }), triage()), ["planRecommended: must be true or false."]);
-    let ignored = accepted(json!({ "status": "done", "note": "n", "planRecommended": true }), plan());
+fn a_run_on_a_ticket_may_say_whether_it_recommends_a_plan_as_a_flag_only() {
+    assert_eq!(accepted(json!({ "status": "done", "note": "n", "planRecommended": true }), ticket_run()).report.plan_recommended, Some(true));
+    assert_eq!(accepted(json!({ "status": "done", "note": "n", "planRecommended": false }), ticket_run()).report.plan_recommended, Some(false));
+    assert_eq!(accepted(json!({ "status": "done", "note": "n" }), ticket_run()).report.plan_recommended, None);
+    assert_eq!(refused(json!({ "status": "done", "note": "n", "planRecommended": "yes" }), ticket_run()), ["planRecommended: must be true or false."]);
+    let ignored = accepted(json!({ "status": "done", "note": "n", "planRecommended": true }), no_ticket());
     assert!(ignored.report.plan_recommended.is_none() && ignored.notes[0].starts_with("planRecommended ignored"));
 }
 
@@ -163,19 +163,19 @@ fn a_triage_s_readiness_comes_from_its_whole_written_answer_and_a_missing_verdic
 }
 
 #[test]
-fn a_plan_run_may_give_its_plan_as_markdown_cut_at_a_boundary() {
-    let ok = accepted(json!({ "status": "done", "note": "Plan attached.", "plan": "## Approach\n\n1. Do it.\n2. Test it." }), plan());
+fn a_run_may_give_its_plan_as_markdown_cut_at_a_boundary() {
+    let ok = accepted(json!({ "status": "done", "note": "Plan attached.", "plan": "## Approach\n\n1. Do it.\n2. Test it." }), ticket_run());
     assert_eq!(ok.report.plan.as_deref(), Some("## Approach\n\n1. Do it.\n2. Test it."));
     let long = format!("{}\n\n{}", "First paragraph. ".repeat(200), "word ".repeat(6_000));
-    let cut = accepted(json!({ "status": "done", "note": "n", "plan": long }), plan());
+    let cut = accepted(json!({ "status": "done", "note": "n", "plan": long }), ticket_run());
     let text = cut.report.plan.unwrap();
     assert!(text.chars().count() <= 24_000 && text.contains("[Cut here."), "{}", text.chars().count());
     assert_eq!(cut.notes, ["plan cut to 24000 characters"]);
-    assert_eq!(refused(json!({ "status": "done", "note": "n", "plan": " " }), plan()), ["plan: empty."]);
+    assert_eq!(refused(json!({ "status": "done", "note": "n", "plan": " " }), ticket_run()), ["plan: empty."]);
 }
 
 fn review() -> Target {
-    Target { kind: Some(ResultKind::Review), ticketless: false }
+    Target { on_ticket: true, ticketless: false, verdict_required: true }
 }
 
 #[test]
@@ -240,12 +240,12 @@ fn a_verdict_must_agree_with_its_findings() {
 }
 
 #[test]
-fn a_verdict_or_findings_on_any_other_run_is_ignored_and_said() {
-    for target in [ticket_run(), triage(), plan(), Target { kind: Some(ResultKind::Build), ticketless: false }, Target { kind: Some(ResultKind::Verify), ticketless: false }] {
-        let ok = accepted(json!({ "status": "done", "note": "n", "verdict": "blocking", "findings": [{ "severity": "bogus" }] }), target);
-        assert_eq!((ok.report.verdict, ok.report.findings.len()), (None, 0), "{target:?}");
-        assert_eq!(ok.notes, ["verdict ignored: only a review gives one", "findings ignored: only a review gives them"], "{target:?}");
-    }
+fn any_run_may_give_a_verdict_and_only_a_review_of_a_pull_request_must() {
+    let ok = accepted(json!({ "status": "done", "note": "n", "verdict": "blocking", "findings": [{ "severity": "blocking", "text": "x" }] }), ticket_run());
+    assert_eq!((ok.report.verdict, ok.report.findings.len()), (Some(ReviewVerdict::Blocking), 1));
+    assert_eq!(accepted(json!({ "status": "done", "note": "n" }), ticket_run()).report.verdict, None);
+    assert_eq!(refused(json!({ "status": "done", "note": "n", "findings": [{ "severity": "nit", "text": "x" }] }), ticket_run()), ["verdict: required, pass or blocking."]);
+    assert_eq!(refused(json!({ "status": "done", "note": "n", "verdict": "maybe" }), no_ticket()), ["verdict: required, pass or blocking."]);
 }
 
 #[test]
@@ -272,7 +272,7 @@ fn every_string_is_cleaned_like_the_written_answer_is() {
         }
         assert!(text.contains("[redacted]"));
     }
-    let ticketed = accepted(json!({ "status": "done", "note": hostile, "plan": hostile }), plan());
+    let ticketed = accepted(json!({ "status": "done", "note": hostile, "plan": hostile }), ticket_run());
     for bad in ["<<<TICKET", "AGENT_OUTPUT", "\u{202E}", "\u{1b}", "hunter2hunter2"] {
         assert!(!ticketed.report.note.as_ref().unwrap().contains(bad) && !ticketed.report.plan.as_ref().unwrap().contains(bad), "{bad:?}");
     }
@@ -355,12 +355,15 @@ fn without_a_report_the_written_answer_is_read_and_its_source_is_named() {
 }
 
 #[test]
-fn a_triage_takes_subtasks_from_the_report_and_a_ticketless_run_its_ticket() {
+fn a_report_gives_subtasks_to_any_role_and_a_ticketless_run_its_ticket() {
     let triage_run = Run { spec: RunSpec { role: ResultKind::Triage.role(), ..run_spec() }, ..finished(Some("Subtasks:\n- Text one\n\nFor Jira: n"), true) };
     let with = Report { subtasks: vec!["Tool one".into(), "Tool two".into()], ..report("n") };
     assert_eq!(resolve(&triage_run, Some(&stored(Some(with.clone()), false))).subtasks, ["Tool one", "Tool two"]);
     assert_eq!(resolve(&triage_run, None).subtasks, ["Text one"]);
-    assert!(resolve(&finished(None, false), Some(&stored(Some(with), false))).subtasks.is_empty(), "only a triage on a ticket has them");
+    let free = Run { spec: RunSpec { role: crate::domain::Role::parse("researcher").unwrap(), ..run_spec() }, ..finished(None, false) };
+    assert_eq!(resolve(&free, Some(&stored(Some(with.clone()), false))).subtasks, ["Tool one", "Tool two"], "whatever the role");
+    assert_eq!(resolve(&free, None).subtasks, Vec::<String>::new(), "the written answer is read for them only when it is a triage's");
+    assert!(resolve(&Run { item: None, ..free }, Some(&stored(Some(with), false))).subtasks.is_empty(), "only a run on a ticket has them");
 
     let ticketless_run = Run { item: None, spec: RunSpec { earlier: crate::domain::LegacySpec { project: Some(crate::domain::ContainerRef { connection_id: "c".into(), external_id: "p".into() }), ..Default::default() }, ..run_spec() }, ..finished(None, false) };
     let proposal = crate::runs::result::TicketProposal { title: "T".into(), kind: ItemKind::Bug, body: "B".into() };
@@ -392,14 +395,14 @@ fn a_review_takes_its_verdict_from_a_current_report_else_from_its_whole_written_
 }
 
 #[test]
-fn a_summary_or_another_kind_never_gives_a_verdict() {
+fn a_summary_never_gives_a_verdict_and_another_kind_gives_one_only_in_its_report() {
     let summary = resolve(&review_run(Some("Review complete. Verdict: blocking"), false), None);
     assert_eq!((summary.verdict, summary.findings.len()), (None, 0));
     let bare = resolve(&review_run(Some("Verdict: blocking"), false), None);
     assert_eq!(bare.verdict, None, "a one-line summary is never read for a verdict");
     assert_eq!(resolve(&review_run(Some("Looked at it.\n\nFor Jira: fine."), true), None).verdict, None, "no verdict line, no verdict");
     let verify = Run { spec: RunSpec { role: ResultKind::Verify.role(), ..run_spec() }, ..finished(Some(WRITTEN_REVIEW), true) };
-    assert_eq!(resolve(&verify, None).verdict, None);
+    assert_eq!(resolve(&verify, None).verdict, None, "the written line is read for a review only");
     let reported = Report { verdict: Some(ReviewVerdict::Blocking), ..report("n") };
-    assert_eq!(resolve(&verify, Some(&stored(Some(reported), false))).verdict, None);
+    assert_eq!(resolve(&verify, Some(&stored(Some(reported), false))).verdict, Some(ReviewVerdict::Blocking), "a report's verdict is read whatever the role");
 }

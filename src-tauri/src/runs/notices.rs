@@ -18,7 +18,7 @@ use crate::notify::Notice;
 
 /// The name of the stream of runs that belong to no workstream.
 pub const GENERAL: &str = "General";
-/// How long after it ended a failed or limit-stopped run still notifies. It stays in the page's list however long it is
+/// How long after it ended a failed run still notifies. It stays in the page's list however long it is
 /// left, but past this it is no news, and must not keep its workstream "waiting" and so quiet about what comes next.
 pub const FAILURE_NEWS: Duration = Duration::minutes(30);
 pub const DIGEST_MINUTES: u32 = 30;
@@ -172,7 +172,7 @@ fn digest(waiting: &[&Waiting], name_of: &dyn Fn(&Key) -> String) -> Option<Outg
     Some(Outgoing { notice: Notice { title, body: names.join(", ") }, open_run: first.top().and_then(|n| n.run_id.clone()) })
 }
 
-/// The failed or limit-stopped runs that are Needs you and news: the latest run of their kind on their ticket (their
+/// The failed runs that are Needs you and news: the latest run of their kind on their ticket (their
 /// repository when they have none), ended within `FAILURE_NEWS`. A newer run in any state supersedes an older one, as
 /// `latestRuns` in `src/lib/needs.ts` does for the page's list.
 pub fn stuck_runs(runs: &[Run], now: DateTime<Utc>) -> Vec<&Run> {
@@ -188,7 +188,7 @@ pub fn stuck_runs(runs: &[Run], now: DateTime<Utc>) -> Vec<&Run> {
         }
     }
     runs.iter()
-        .filter(|r| matches!(r.state, RunState::Failed) || (r.state == RunState::Stopped && r.stopped_by_limit))
+        .filter(|r| r.state == RunState::Failed)
         .filter(|r| r.ended_at.is_some_and(|at| now - at <= FAILURE_NEWS))
         .filter(|r| newest[&work(r)].1 == r.id)
         .collect()
@@ -476,11 +476,9 @@ mod tests {
         }
 
         #[test]
-        fn a_recent_failure_and_a_limit_stop_are_stuck() {
-            let mut limit = run("limit", ResultKind::Build, RunState::Stopped, 0, Some(10));
-            limit.stopped_by_limit = true;
-            let runs = [run("failed", ResultKind::Plan, RunState::Failed, 0, Some(10)), limit];
-            assert_eq!(ids(&runs, 60), ["failed", "limit"]);
+        fn a_recent_failure_is_stuck() {
+            let runs = [run("failed", ResultKind::Plan, RunState::Failed, 0, Some(10))];
+            assert_eq!(ids(&runs, 60), ["failed"]);
         }
 
         #[test]

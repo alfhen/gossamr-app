@@ -32,7 +32,7 @@ pub use proposal::{
     Revised, Revision, StateKind, Verdict,
 };
 pub use run::{
-    agent_allow_rules, has_markers, render_prompt, valid_repo, without_markers, ClonePlan, Continuation, EarlierSession, LegacySpec, PermissionAllowed, ReadOnly, ResultKind, Role, Run, RunEvent, RunFailure, RunQuery, RunSpec, RunState, LIMIT_STOP,
+    agent_allow_rules, has_markers, render_prompt, valid_repo, without_markers, ClonePlan, Continuation, EarlierSession, LegacySpec, ResultKind, Role, Run, RunEvent, RefusedMode, RunFailure, RunQuery, RunSpec, RunState,
     PIP_BRIEF_LIMIT, ROLE_LIMIT, GUARD, GUARD_VERSION, AGENT_CALL_TIMEOUT_MS, AGENT_GUARD, AGENT_SERVER, AGENT_TOOLS, ASK_TOOL, READ_TICKET_TOOL, READ_WORKSTREAM_TOOL, REPORT_TOOL, REPORT_TOOL_VERSION, PLAN_LIMIT, TICKET_BLOCK_LIMIT, TITLE_LIMIT,
 };
 pub use snapshot::{ticket_snapshot, SnapComment, TicketFacts};

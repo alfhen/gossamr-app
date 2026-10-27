@@ -37,9 +37,6 @@ pub fn agent_allow_rules() -> Vec<String> {
     AGENT_TOOLS.iter().map(|tool| format!("mcp__{AGENT_SERVER}__{tool}")).collect()
 }
 
-/// Starts the reason Gossamr records when it stops a run for passing a limit.
-pub const LIMIT_STOP: &str = "Stopped by Gossamr: it passed the ";
-
 const BRIEF_LIMIT: usize = 20_000;
 /// The most of its brief that Pip may write.
 pub const PIP_BRIEF_LIMIT: usize = 4_000;
@@ -158,21 +155,6 @@ pub struct LegacySpec {
     /// The project the draft ticket lands in when a run with no ticket finishes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project: Option<ContainerRef>,
-}
-
-/// The restriction an earlier release launched read-only runs with. Kept so a run stored with it still reads, and so
-/// its session is still resumed the way it was started; no new run is restricted.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ReadOnly {
-    pub mode: String,
-    pub allow: Vec<String>,
-    pub deny: Vec<String>,
-    pub guard: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub setting_sources: Option<String>,
-    #[serde(default)]
-    pub strict_mcp_config: bool,
 }
 
 /// Everything that decides what an agent does.
@@ -296,6 +278,12 @@ impl RunSpec {
 
     pub fn is(&self, kind: ResultKind) -> bool {
         self.result_kind() == Some(kind)
+    }
+
+    /// Whether the run was given a pull request and the commit to read it at, so a verdict it reports can become a GitHub
+    /// review draft.
+    pub fn pinned_review(&self) -> bool {
+        self.pr.is_some() && self.pr_sha.is_some()
     }
 
     /// A run that finishes as a new ticket, not as a note on one: one an earlier release started with a project.
@@ -426,11 +414,35 @@ impl RunState {
 #[serde(tag = "type", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum RunFailure {
     UntrustedFolder { path: PathBuf },
+    /// `--bg` refused the person's permission mode until they accept it once in Terminal.
+    ModeRefused { mode: RefusedMode },
     NotSignedIn,
     ClaudeMissing,
     NoClone,
     CapReached,
     Other,
+}
+
+/// A permission mode `--bg` refuses to start in until the person has opted in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RefusedMode {
+    Auto,
+    Bypass,
+}
+
+impl RefusedMode {
+    /// The refusal, as `claude --bg` words it, which stands as the run's reason.
+    pub fn reads(message: &str) -> Option<Self> {
+        let rest = message.trim().strip_prefix("--bg with ")?;
+        if rest.starts_with("auto mode requires") {
+            Some(RefusedMode::Auto)
+        } else if rest.starts_with("bypassPermissions requires") {
+            Some(RefusedMode::Bypass)
+        } else {
+            None
+        }
+    }
 }
 
 impl RunFailure {
@@ -441,7 +453,9 @@ impl RunFailure {
         if let Some((path, _)) = trusted {
             return RunFailure::UntrustedFolder { path: PathBuf::from(path) };
         }
-        if message.starts_with("Claude isn't signed in.") {
+        if let Some(mode) = RefusedMode::reads(message) {
+            RunFailure::ModeRefused { mode }
+        } else if message.starts_with("Claude isn't signed in.") {
             RunFailure::NotSignedIn
         } else if message.starts_with("Claude Code isn't installed") {
             RunFailure::ClaudeMissing
@@ -531,22 +545,13 @@ pub struct Run {
     /// Set when the person archived the run: it leaves the Agents view and Needs you but stays here until deleted.
     #[serde(default)]
     pub archived_at: Option<DateTime<Utc>>,
-    /// Set when the person carried on a finished run in Terminal: it is theirs from then on, so the limits no longer
-    /// stop it and finishing again doesn't announce itself a second time.
+    /// Set when the person carried on a finished run in Terminal: it is theirs from then on, and finishing again
+    /// doesn't announce itself a second time.
     #[serde(default)]
     pub continued_at: Option<DateTime<Utc>>,
     /// The ticket made from this run's draft once the person approved it.
     #[serde(default)]
     pub created_item: Option<ItemRef>,
-    /// Seconds already spent waiting on the person (a question, a permission, a sign-in), which the time limit leaves out.
-    #[serde(default)]
-    pub waited_secs: u64,
-    /// When the wait now under way began; folded into `waited_secs` once the run is back at work.
-    #[serde(default)]
-    pub waiting_since: Option<DateTime<Utc>>,
-    /// Gossamr stopped the run for passing a limit; the person can resume it.
-    #[serde(default)]
-    pub stopped_by_limit: bool,
     /// How many times the agent has been given the job: 1 for the first, one more for each follow-up sent back.
     #[serde(default = "first_pass")]
     pub passes: u32,
@@ -564,27 +569,12 @@ pub struct Run {
     /// person starts it.
     #[serde(default, rename = "autoStart", skip_serializing_if = "Option::is_none")]
     pub unapproved_auto_start: Option<serde_json::Value>,
-    /// The restriction an earlier release launched the run with. No run is launched with one now.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub read_only: Option<ReadOnly>,
-    /// Set when the person chose Allow once for the permission prompt the run is waiting on, which they then answer in
-    /// Terminal (`runs/permission.rs`); cleared once the run moves on or asks something else.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub permission_allowed: Option<PermissionAllowed>,
     /// Who started it: the person, by approving a draft, or Pip, directly.
     #[serde(default)]
     pub created_by: CreatedBy,
     /// The Pip turn that started it, when Pip did.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin: Option<Origin>,
-}
-
-/// The exact command the person chose to allow once, and when.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PermissionAllowed {
-    pub command: String,
-    pub at: DateTime<Utc>,
 }
 
 impl Run {
@@ -598,14 +588,10 @@ impl Run {
         self.short_id.iter().chain(self.earlier_sessions.iter().map(|e| &e.short_id)).cloned().collect()
     }
 
-    /// A failed run stored before `failure` existed gets the kind its message says, and a stopped one stored before
-    /// `stopped_by_limit` existed is marked when its reason is Gossamr's own limit message.
+    /// A failed run stored before `failure` existed gets the kind its message says.
     pub fn with_failure_filled(mut self) -> Self {
         if self.state == RunState::Failed && self.failure.is_none() {
             self.failure = self.error.as_deref().map(RunFailure::from_message);
-        }
-        if self.state == RunState::Stopped && self.error.as_deref().is_some_and(|e| e.starts_with(LIMIT_STOP)) {
-            self.stopped_by_limit = true;
         }
         self
     }
@@ -644,16 +630,11 @@ impl Run {
             archived_at: None,
             continued_at: None,
             created_item: None,
-            waited_secs: 0,
-            waiting_since: None,
-            stopped_by_limit: false,
             passes: 1,
             earlier_sessions: Vec::new(),
             possible_continuations: Vec::new(),
             slot_wait_since: None,
             unapproved_auto_start: None,
-            read_only: None,
-            permission_allowed: None,
             created_by: CreatedBy::User,
             origin: None,
         }
@@ -1013,14 +994,24 @@ mod tests {
     }
 
     #[test]
-    fn a_run_stored_with_a_kind_and_a_restriction_reads_and_keeps_both() {
+    fn a_run_stored_with_a_kind_and_the_removed_restriction_limit_and_permission_fields_still_reads() {
         let mut json = serde_json::to_value(queued(spec())).unwrap();
         json["spec"] = stored_before_roles();
         json["readOnly"] = serde_json::json!({ "mode": "dontAsk", "allow": ["Bash(git fetch origin main)"], "deny": ["Edit"], "guard": "read-only", "settingSources": "", "strictMcpConfig": true });
+        json["permissionAllowed"] = serde_json::json!({ "command": "npm publish", "at": "2026-10-01T10:00:00Z" });
+        json["waitedSecs"] = 120.into();
+        json["waitingSince"] = "2026-10-01T10:00:00Z".into();
+        json["stoppedByLimit"] = true.into();
+        json["state"] = "stopped".into();
+        json["error"] = "Stopped by Gossamr: it passed the 60 minute limit".into();
         let run: Run = serde_json::from_value(json).unwrap();
-        assert_eq!(run.spec.role.as_str(), "build");
-        assert_eq!(run.read_only.as_ref().map(|r| (r.mode.as_str(), r.deny.len())), Some(("dontAsk", 1)));
-        assert_eq!(serde_json::from_value::<Run>(serde_json::to_value(&run).unwrap()).unwrap(), run);
+        assert_eq!((run.spec.role.as_str(), run.state), ("build", RunState::Stopped));
+        assert_eq!(run.error.as_deref(), Some("Stopped by Gossamr: it passed the 60 minute limit"));
+        let saved = serde_json::to_value(&run).unwrap();
+        for key in ["readOnly", "permissionAllowed", "waitedSecs", "waitingSince", "stoppedByLimit"] {
+            assert!(saved.get(key).is_none(), "{key}");
+        }
+        assert_eq!(serde_json::from_value::<Run>(saved).unwrap(), run);
     }
 
     #[test]
@@ -1029,17 +1020,6 @@ mod tests {
         let run = queued(s.clone());
         assert_eq!(run.expected_worktree, PathBuf::from("/Users/me/Code/webshop/.claude/worktrees/eng-1-fix-cart-3f9a"));
         assert_eq!((run.state, run.digest), (RunState::Queued, s.digest()));
-    }
-
-    #[test]
-    fn a_run_stored_before_the_wait_clock_and_the_limit_mark_existed_reads_as_it_was() {
-        let mut json = serde_json::to_value(queued(spec())).unwrap();
-        for key in ["waitedSecs", "waitingSince", "stoppedByLimit", "earlierSessions", "possibleContinuations"] {
-            json.as_object_mut().unwrap().remove(key);
-        }
-        let run: Run = serde_json::from_value(json).unwrap();
-        assert_eq!((run.waited_secs, run.waiting_since, run.stopped_by_limit), (0, None, false));
-        assert!(run.earlier_sessions.is_empty() && run.possible_continuations.is_empty());
     }
 
     #[test]
@@ -1076,30 +1056,6 @@ mod tests {
         let json = serde_json::to_value(&waiting).unwrap();
         assert!(json["slotWaitSince"].is_string());
         assert_eq!(serde_json::from_value::<Run>(json).unwrap(), waiting);
-    }
-
-    #[test]
-    fn a_permission_allowed_once_round_trips_leaves_the_digest_alone_and_old_runs_still_read() {
-        let plain = queued(spec());
-        let json = serde_json::to_value(&plain).unwrap();
-        assert!(json.get("permissionAllowed").is_none(), "a run nobody allowed anything for stores nothing new");
-        assert_eq!(serde_json::from_value::<Run>(json).unwrap().permission_allowed, None);
-        let allowed = Run { permission_allowed: Some(PermissionAllowed { command: "git push origin worktree-x".into(), at: Utc::now() }), ..plain.clone() };
-        let json = serde_json::to_value(&allowed).unwrap();
-        assert_eq!(json["permissionAllowed"]["command"], "git push origin worktree-x");
-        let back: Run = serde_json::from_value(json).unwrap();
-        assert_eq!(back, allowed);
-        assert_eq!((back.digest.as_str(), back.spec.digest()), (plain.digest.as_str(), plain.spec.digest()), "answering a prompt is not part of what is approved");
-    }
-
-    #[test]
-    fn a_stopped_run_whose_reason_is_a_limit_is_marked_when_read_and_no_other_is() {
-        let stopped = |reason: &str| Run { state: RunState::Stopped, error: Some(reason.into()), ..queued(spec()) };
-        assert!(stopped("Stopped by Gossamr: it passed the 60 minute limit").with_failure_filled().stopped_by_limit);
-        assert!(stopped("Stopped by Gossamr: it passed the 3,000,000 token limit").with_failure_filled().stopped_by_limit);
-        assert!(!stopped("Couldn't wake the agent: boom.").with_failure_filled().stopped_by_limit);
-        let working = Run { state: RunState::Working, ..stopped("Stopped by Gossamr: it passed the 60 minute limit") };
-        assert!(!working.with_failure_filled().stopped_by_limit);
     }
 
     #[test]

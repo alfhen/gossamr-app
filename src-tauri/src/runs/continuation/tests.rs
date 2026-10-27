@@ -93,7 +93,6 @@ fn taking_over_keeps_the_old_session_as_an_alias_and_hands_the_state_to_the_list
     let mut run = stopped_run();
     run.session_id = Some("2afa0a22-11e6-47c8-924c-c779e6a25b5c".into());
     run.error = Some("Stopped by Gossamr: it passed the 60 minute limit".into());
-    run.stopped_by_limit = true;
     run.ended_at = Some(Utc::now());
     run.possible_continuations = vec![Continuation { short_id: ShortId::parse("bbb748a7").unwrap(), session_id: None, started_at: None }];
     let to = Candidate { short_id: ShortId::parse("bbb748a7").unwrap(), session_id: Some("bbb748a7-dca2-4f33-9da1-caa7f80584b8".into()), started_at: None, in_worktree: true };
@@ -102,18 +101,8 @@ fn taking_over_keeps_the_old_session_as_an_alias_and_hands_the_state_to_the_list
     assert_eq!((run.short_id.as_ref().map(ShortId::as_str), run.session_id.as_deref()), (Some("bbb748a7"), Some("bbb748a7-dca2-4f33-9da1-caa7f80584b8")));
     assert_eq!(run.earlier_sessions, [EarlierSession { short_id: ShortId::parse("2afa0a22").unwrap(), session_id: Some("2afa0a22-11e6-47c8-924c-c779e6a25b5c".into()), removed: false }]);
     assert_eq!(run.session_ids().iter().map(ShortId::as_str).collect::<Vec<_>>(), ["bbb748a7", "2afa0a22"]);
-    assert_eq!((run.state, run.error, run.ended_at, run.stopped_by_limit, run.continued_at), (RunState::Working, None, None, false, Some(now)));
+    assert_eq!((run.state, run.error, run.ended_at, run.continued_at), (RunState::Working, None, None, Some(now)));
     assert!(run.possible_continuations.is_empty());
-}
-
-/// Gossamr didn't launch the session it takes over, so a run an earlier release restricted no longer claims the restriction.
-#[test]
-fn taking_over_drops_the_read_only_restriction_the_run_launched_with() {
-    let mut run = stopped_run();
-    run.read_only = Some(crate::domain::ReadOnly { mode: "dontAsk".into(), allow: vec![], deny: vec!["Edit".into()], guard: "g".into(), setting_sources: Some(String::new()), strict_mcp_config: true });
-    let to = Candidate { short_id: ShortId::parse("bbb748a7").unwrap(), session_id: None, started_at: None, in_worktree: true };
-    take_over(&mut run, &to, Utc::now());
-    assert_eq!(run.read_only, None);
 }
 
 #[test]

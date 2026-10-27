@@ -1,10 +1,9 @@
 #!/bin/bash
 # Stand-in for `claude` in tests. FAKE_CLAUDE_SCENARIO names a key=value file; sessions, jobs/ and calls.log live
 # beside it. Keys: version, help_bg (0 hides --bg), logged_in (0 prints loggedIn:false and exits 1),
-# config_dir, service_line (1 prints the daemon start line), launch_fail (untrusted|garbage|exit),
+# config_dir, service_line (1 prints the daemon start line), launch_fail (untrusted|auto|bypass|garbage|exit),
 # interactive (1 lists a foreign interactive session), foreign_bg (1 lists a foreign background session),
-# transcript (text a new session's transcript ends with, written under <config_dir>/projects like Claude does),
-# help_ro (0 hides dontAsk, --disallowedTools, --setting-sources and --strict-mcp-config from --help).
+# transcript (text a new session's transcript ends with, written under <config_dir>/projects like Claude does).
 set -u
 scenario=${FAKE_CLAUDE_SCENARIO:?FAKE_CLAUDE_SCENARIO is not set}
 dir=$(dirname "$scenario")
@@ -82,13 +81,7 @@ case "${1-}" in
     echo "Usage: claude [options] [command] [prompt]"
     [ "$(cfg help_bg 1)" != 0 ] && echo "  --bg   Start the session in the background"
     echo "  --worktree [name]   Create a git worktree"
-    if [ "$(cfg help_ro 1)" != 0 ]; then
-      echo "  --permission-mode <mode>   Permission mode (choices: \"acceptEdits\", \"bypassPermissions\", \"dontAsk\", \"plan\")"
-      echo "  --allowedTools, --allowed-tools <tools...>"
-      echo "  --disallowedTools, --disallowed-tools <tools...>"
-      echo "  --setting-sources <sources>   Comma-separated list of setting sources to load (user, project, local)."
-      echo "  --strict-mcp-config   Only use MCP servers from --mcp-config"
-    fi
+    echo "  --allowedTools, --allowed-tools <tools...>"
     exit 0 ;;
   auth)
     if [ "$(cfg logged_in 1)" = 1 ]; then
@@ -131,6 +124,8 @@ done
 
 case "$(cfg launch_fail none)" in
   untrusted) echo "Workspace not trusted: $PWD" >&2; echo "Run claude in this folder once to accept the trust prompt." >&2; exit 1 ;;
+  auto) echo "--bg with auto mode requires opting in first. Run \`claude --permission-mode auto\` once interactively." >&2; exit 1 ;;
+  bypass) echo "--bg with bypassPermissions requires accepting the disclaimer first. Run \`claude --dangerously-skip-permissions\` once interactively." >&2; exit 1 ;;
   exit) echo "something broke" >&2; exit 2 ;;
   garbage) echo "ok, whatever"; exit 0 ;;
 esac

@@ -11,7 +11,6 @@ use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Timelike, Utc};
 
-use super::limits;
 use super::notices::{stuck_runs, Group, Key, Need, Outgoing, Settings as NoticeSettings, Waiting, GENERAL};
 use super::cli::{AgentEntry, JobInfo, ShortId};
 use super::redact::redact;
@@ -53,8 +52,6 @@ pub enum Attention {
     /// A Plan run finished, and a description update that adds its plan is waiting as a draft.
     PlanDrafted,
     Failed,
-    /// Gossamr stopped it for passing a limit.
-    Limit,
 }
 
 pub trait RunNotifier: Send + Sync {
@@ -120,7 +117,6 @@ pub fn notice_text(run: &Run, why: Attention) -> Notice {
             };
             Notice { title: format!("{topic} needs you"), body }
         }
-        Attention::Limit => Notice { title: format!("{topic} was stopped"), body: run.error.clone().unwrap_or_else(|| "It passed a limit".into()) },
         Attention::Drafted => Notice { title: format!("Draft ready on {topic}"), body: "An agent finished. Read its comment before anything is posted".into() },
         Attention::PlanDrafted => Notice { title: format!("Plan finished on {topic}"), body: "Description update ready. Read it before anything is written to the ticket".into() },
         Attention::Breakdown => Notice { title: format!("Breakdown proposed on {topic}"), body: "An agent finished. Read the subtasks before anything is created".into() },
@@ -321,7 +317,7 @@ impl RunService {
             };
             needs.entry(ws).or_default().push(Need { group: Group::Unblock, run_id: Some(run.id.clone()), what, since: run.last_progress_at });
         }
-        // A failure or a stop at the limit is stuck until dealt with, but only the latest run of its kind on its ticket.
+        // A failure is stuck until dealt with, but only the latest run of its kind on its ticket.
         let Ok(all) = self.core.runs_list(&RunQuery::default()).await else { return };
         for run in stuck_runs(&all, now) {
             let ws = run.spec.workstream.clone();
@@ -329,7 +325,7 @@ impl RunService {
                 continue;
             }
             let name = label_of(&run.id, &ws).unwrap_or_else(|| topic(run).to_owned());
-            let what = if run.state == RunState::Failed { format!("{name} failed") } else { format!("{name} stopped at its limit") };
+            let what = format!("{name} failed");
             needs.entry(ws).or_default().push(Need { group: Group::Unblock, run_id: Some(run.id.clone()), what, since: run.ended_at.unwrap_or(run.last_progress_at) });
         }
         // A paused workstream waits to be resumed.
@@ -409,7 +405,7 @@ impl RunService {
     }
 
     /// Applies one run's observation. Returns its connection when anything about it changed.
-    /// A Review that reached Done is added to `reviewed`, for its GitHub review draft to be made once the launch lock is
+    /// A run pinned to a pull request that reached Done is added to `reviewed`, for its GitHub review draft to be made once the launch lock is
     /// let go (`draft_review`).
     async fn track(&self, tc: &Toolchain, config_dir: Option<&Path>, entries: &[AgentEntry], run_id: &str, now: DateTime<Utc>, reviewed: &mut Vec<Run>) -> crate::error::Result<Option<String>> {
         let Some(before) = self.core.run(run_id).await? else { return Ok(None) };
@@ -463,10 +459,8 @@ impl RunService {
         if reopened {
             run.continued_at = Some(now);
             run.ended_at = None;
-            run.stopped_by_limit = false;
             run.possible_continuations.clear();
         }
-        limits::tick(&mut run, now);
         run.needs = match seen.state {
             RunState::NeedsAnswer | RunState::NeedsPermission | RunState::SystemBlocked => seen.text.as_deref().and_then(|t| cleaned(t, NEEDS_KEPT)),
             _ => None,
@@ -484,28 +478,6 @@ impl RunService {
         }
         run.error = matches!(seen.state, RunState::Failed | RunState::Unknown).then(|| seen.error.clone()).flatten();
         let settings = self.settings();
-        let mut overrun = None;
-        if let (Some(over), Some(id)) = (limits::exceeded(&run, now, &settings), run.short_id.clone()) {
-            match tc.cli.stop(&id).await {
-                Ok(()) => {
-                    self.core.asks().cancel(run_id);
-                    overrun = Some(over.reason(&settings));
-                    run.state = RunState::Stopped;
-                    run.needs = None;
-                    run.asking = false;
-                    run.error.clone_from(&overrun);
-                    run.stopped_by_limit = true;
-                    run.last_progress_at = now;
-                    limits::tick(&mut run, now);
-                }
-                Err(e) => eprintln!("couldn't stop run {run_id} for passing a limit: {e}"),
-            }
-        }
-        // Allow once covers the one prompt the person read: once the run is past it or asks something else, the new
-        // prompt is theirs to answer again.
-        if run.state != RunState::NeedsPermission || run.needs != before.needs {
-            run.permission_allowed = None;
-        }
         let ended = matches!(run.state, RunState::Done | RunState::Failed | RunState::Stopped);
         if ended {
             run.ended_at.get_or_insert(now);
@@ -519,10 +491,6 @@ impl RunService {
                 touched = self.core.append_run_events(run_id, &fresh).await? > 0;
             }
         }
-        if let Some(reason) = &overrun {
-            let event = RunEvent { run_id: run.id.clone(), seq: 0, at: now, kind: "limit".into(), text: reason.clone(), detail: None };
-            touched |= self.core.append_run_events(run_id, &[event]).await? > 0;
-        }
         if run != before {
             // Where the run is filed is the person's to change while this poll looked (Bring them here, its Undo).
             self.core.save_observed_run(&run).await?;
@@ -534,7 +502,7 @@ impl RunService {
             }
         }
         let drafted = if run.state == RunState::Done && before.state != RunState::Done && settings.draft_on_finish { self.draft_for(&run).await } else { None };
-        if run.state == RunState::Done && before.state != RunState::Done && run.spec.is(ResultKind::Review) {
+        if run.state == RunState::Done && before.state != RunState::Done && run.spec.pinned_review() {
             reviewed.push(run.clone());
         }
         // A workstream's build pushed its branch and opened a draft pull request; a review of it waits until a code
@@ -550,9 +518,7 @@ impl RunService {
                 eprintln!("couldn't update the run index: {e}");
             }
         }
-        if overrun.is_some() {
-            self.notify_run(&run, Attention::Limit);
-        } else if run.state != before.state {
+        if run.state != before.state {
             match run.state {
                 RunState::NeedsAnswer | RunState::NeedsPermission | RunState::SystemBlocked => self.notify_run(&run, Attention::Needs),
                 // Finishing again after the person carried on is only worth a notice when it makes a draft.
@@ -564,9 +530,9 @@ impl RunService {
         Ok(touched.then(|| run.connection_id.clone()))
     }
 
-    /// The drafts a finished run leaves: a comment on its ticket and, for a Triage, its proposed breakdown, for a Plan the
-    /// description update that adds its plan; or a new ticket when it has none. A Review's GitHub review draft is made
-    /// apart (`draft_review`). `None` when nothing was made. A failure is only logged: the run's result is already
+    /// The drafts a finished run leaves, by what it reported: a comment on its ticket from its note, its proposed
+    /// breakdown, the description update that adds its plan; or a new ticket when it has none. The GitHub review draft
+    /// of a run that reviewed a pull request is made apart (`draft_review`). `None` when nothing was made. A failure is only logged: the run's result is already
     /// saved, and the sheet's own button still drafts it.
     pub(super) async fn draft_for(&self, run: &Run) -> Option<Attention> {
         let mut why = None;
@@ -577,7 +543,7 @@ impl RunService {
             if self.logged(run, self.core.draft_run_subtasks(&run.id).await) {
                 why = Some(Attention::Breakdown);
             }
-            if run.spec.is(ResultKind::Plan) && self.logged(run, self.core.auto_draft_run_plan_description(&run.id).await) {
+            if self.logged(run, self.core.auto_draft_run_plan_description(&run.id).await) {
                 why = Some(Attention::PlanDrafted);
             }
         } else if self.logged(run, self.core.auto_draft_run_ticket(&run.id).await) {

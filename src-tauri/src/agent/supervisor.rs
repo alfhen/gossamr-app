@@ -79,10 +79,9 @@ impl WakeState {
         }
     }
 
-    /// What the tracker's notice `why` about `run` means; `None` for a stop Gossamr made at a limit. Every finish with or
-    /// without a draft is `Done`.
-    pub fn of_attention(run: &Run, why: Attention) -> Option<Self> {
-        Some(match why {
+    /// What the tracker's notice `why` about `run` means. Every finish with or without a draft is `Done`.
+    pub fn of_attention(run: &Run, why: Attention) -> Self {
+        match why {
             Attention::Needs => match run.state {
                 RunState::NeedsPermission => WakeState::NeedsPermission,
                 RunState::SystemBlocked => WakeState::SystemBlocked,
@@ -90,19 +89,18 @@ impl WakeState {
             },
             Attention::Done | Attention::Drafted | Attention::DraftedTicket | Attention::Breakdown | Attention::PlanDrafted => WakeState::Done,
             Attention::Failed => WakeState::Failed,
-            Attention::Limit => return None,
-        })
+        }
     }
 
-    /// A run at rest, or waiting on the person, as the sweep finds it; `None` while it is under way, after a stop
-    /// Gossamr made at a limit, or while it is stopped only to be woken with a message (a failed wake leaves the reason on
+    /// A run at rest, or waiting on the person, as the sweep finds it; `None` while it is under way, or while it is
+    /// stopped only to be woken with a message (a failed wake leaves the reason on
     /// the run, so that one is reported). A question asked while the workstream was paused is noticed this way once it is
     /// resumed, keyed by when it was asked.
     pub fn of_run(run: &Run) -> Option<Self> {
         match run.state {
             RunState::Done => Some(WakeState::Done),
             RunState::Failed => Some(WakeState::Failed),
-            RunState::Stopped if run.stopped_by_limit || (run.unsent_answer.is_some() && run.error.is_none()) => None,
+            RunState::Stopped if run.unsent_answer.is_some() && run.error.is_none() => None,
             RunState::Stopped => Some(WakeState::Stopped),
             RunState::NeedsAnswer => Some(WakeState::NeedsAnswer),
             RunState::NeedsPermission => Some(WakeState::NeedsPermission),
@@ -457,7 +455,7 @@ impl Supervisor {
         if Connection::jira_id(&scope) != run.connection_id {
             return;
         }
-        let Some(state) = WakeState::of_attention(&run, why) else { return };
+        let state = WakeState::of_attention(&run, why);
         let fact = self.fact_of(&scope, &run, state).await;
         self.handle(&ws, vec![fact], Utc::now()).await;
     }

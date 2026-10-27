@@ -135,7 +135,7 @@ async fn a_run_of_any_role_launches_in_the_persons_own_configuration_and_records
         let req = last_launch(&rig);
         assert_eq!(req.guard, GUARD, "{kind:?}");
         let launched = rig.get(&run).await;
-        assert_eq!((launched.state, launched.read_only), (RunState::Launching, None), "{kind:?}");
+        assert_eq!(launched.state, RunState::Launching, "{kind:?}");
         assert_eq!(launched.digest, run.spec.digest());
     }
 }
@@ -149,7 +149,7 @@ async fn a_retried_run_and_one_that_waited_for_a_slot_launch_the_same_way() {
     assert_eq!(rig.get(&run).await.state, RunState::Failed);
     rig.cli.with(|s| s.outcome = Outcome::Starts);
     let again = rig.svc.retry_launch(&run.id).await.unwrap();
-    assert_eq!((again.state, again.read_only.clone()), (RunState::Launching, None));
+    assert_eq!(again.state, RunState::Launching);
 
     let waiting = rig.queued(2).await;
     rig.svc.launch(&waiting.id).await.unwrap();
@@ -158,16 +158,6 @@ async fn a_retried_run_and_one_that_waited_for_a_slot_launch_the_same_way() {
     rig.svc.index.mark_terminal(&again.id).unwrap();
     assert_eq!(rig.svc.launch_waiting().await.unwrap(), std::slice::from_ref(&waiting.id));
     assert_eq!(rig.cli.0.lock().unwrap().launches.iter().map(|l| l.guard.as_str()).collect::<Vec<_>>(), [GUARD; 3]);
-}
-
-#[tokio::test]
-async fn a_run_stored_with_the_restriction_of_an_earlier_release_is_launched_without_it_and_says_so() {
-    let rig = ready().await;
-    let queued = rig.queued(1).await;
-    rig.set(&queued, |r| r.read_only = Some(crate::domain::ReadOnly { mode: "dontAsk".into(), allow: vec![], deny: vec!["Edit".into()], guard: "g".into(), setting_sources: None, strict_mcp_config: false })).await;
-    rig.svc.launch(&queued.id).await.unwrap();
-    assert_eq!(rig.get(&queued).await.read_only, None, "the record is what it was launched with");
-    assert_eq!(last_launch(&rig).guard, GUARD);
 }
 
 #[tokio::test]
@@ -921,7 +911,7 @@ mod through_the_real_spawner {
 
     #[tokio::test]
     async fn the_scripts_launch_modes_map_to_their_failures() {
-        for (mode, text) in [("untrusted", "doesn't trust"), ("exit", "something broke"), ("garbage", "wasn't recognised")] {
+        for (mode, text) in [("untrusted", "doesn't trust"), ("auto", "--bg with auto mode requires opting in first. Run `claude --permission-mode auto` once interactively."), ("bypass", "Run `claude --dangerously-skip-permissions` once interactively."), ("exit", "something broke"), ("garbage", "wasn't recognised")] {
             let real = real().await;
             std::fs::write(real.scenario_dir.join("scenario"), format!("launch_fail={mode}\n")).unwrap();
             let run = real.rig.queued(1).await;

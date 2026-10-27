@@ -292,10 +292,6 @@ fn a_fact_is_keyed_by_its_state_and_a_finish_after_a_continuation_is_another() {
     assert!(WakeFact::new(&run, WakeState::Done).key().starts_with("done@"));
     run.state = RunState::Stopped;
     assert_eq!(WakeState::of_run(&run), Some(WakeState::Stopped));
-    run.stopped_by_limit = true;
-    assert_eq!(WakeState::of_run(&run), None, "a stop Gossamr made at a limit wakes nobody");
-    assert_eq!(WakeState::of_attention(&run, Attention::Limit), None);
-    run.stopped_by_limit = false;
     run.unsent_answer = Some("Use staging.".into());
     assert_eq!(WakeState::of_run(&run), None, "a stop on the way to a resume wakes nobody");
     run.error = Some("The session didn't show as stopped.".into());
@@ -303,9 +299,9 @@ fn a_fact_is_keyed_by_its_state_and_a_finish_after_a_continuation_is_another() {
     run.state = RunState::Working;
     assert_eq!(WakeState::of_run(&run), None, "a run under way is no fact for the sweep");
     run.state = RunState::SystemBlocked;
-    assert_eq!(WakeState::of_attention(&run, Attention::Needs), Some(WakeState::SystemBlocked));
+    assert_eq!(WakeState::of_attention(&run, Attention::Needs), WakeState::SystemBlocked);
     for why in [Attention::Done, Attention::Drafted, Attention::DraftedTicket, Attention::Breakdown, Attention::PlanDrafted] {
-        assert_eq!(WakeState::of_attention(&run, why), Some(WakeState::Done));
+        assert_eq!(WakeState::of_attention(&run, why), WakeState::Done);
     }
 }
 
@@ -357,12 +353,10 @@ async fn a_stop_from_outside_and_a_silent_finish_after_a_continuation_are_caught
 }
 
 #[tokio::test]
-async fn a_stop_the_person_asked_for_wakes_nobody_and_a_stop_at_a_limit_neither() {
+async fn a_stop_the_person_asked_for_wakes_nobody() {
     let t = setup().await;
     let stopped = t.run("r1", ResultKind::Investigate, RunState::Stopped, |_| {}).await;
     t.fx.core.record_run_action_by(&stopped, Actor::Person, "run_stopped", None).await.unwrap();
-    t.run("r2", ResultKind::Triage, RunState::Stopped, |r| r.stopped_by_limit = true).await;
-    t.sup.clone().on_run(t.fx.core.run("r2").await.unwrap().unwrap(), Attention::Limit).await;
     t.sweep().await;
     assert!(t.wake_turns().await.is_empty() && t.wakes().await.is_empty(), "{:?}", t.wakes().await);
 

@@ -231,6 +231,11 @@ fn same_comment(intent: &Intent) -> impl Fn(&Intent) -> bool + '_ {
     move |i| matches!((i, intent), (Intent::Comment { item: a, body: x }, Intent::Comment { item: b, body: y }) if a == b && x.plain_text() == y.plain_text())
 }
 
+/// Whether the run made a plan: it reported one, or it is a plan run, whose whole answer is the plan.
+pub(super) fn has_plan(run: &Run, resolved: &Resolved) -> bool {
+    resolved.plan.is_some() || run.spec.is(ResultKind::Plan)
+}
+
 fn is_plan_comment(p: &Proposal) -> bool {
     p.label.as_deref().is_some_and(|l| l.starts_with(PLAN_LABEL))
 }
@@ -332,10 +337,10 @@ impl Core {
     /// has a size limit; a longer plan is cut at the end of a paragraph or sentence and the comment says so.
     pub async fn draft_run_plan_comment(&self, id: &str) -> Result<PlanComment> {
         let (run, item) = self.finished_run(id).await?;
-        if !run.spec.is(ResultKind::Plan) {
-            return Err(refuse("only a plan run has a plan to draft"));
-        }
         let resolved = self.resolved_of(&run).await?;
+        if !has_plan(&run, &resolved) {
+            return Err(refuse("only a run that made a plan has a plan to draft"));
+        }
         let plan = match resolved.plan.clone() {
             Some(plan) => plan,
             None if resolved.complete() => plan_without_note(run.result.as_deref().unwrap_or("")),
@@ -424,7 +429,7 @@ impl Core {
         let Ok((run, item)) = self.finished_run(id).await else { return Ok(None) };
         let resolved = self.resolved_of(&run).await?;
         let summaries = resolved.subtasks.clone();
-        if !resolved.complete() || !run.spec.is(ResultKind::Triage) || summaries.is_empty() {
+        if !resolved.complete() || summaries.is_empty() {
             return Ok(None);
         }
         let scope = self.scope().await?;
@@ -464,7 +469,7 @@ impl Core {
     async fn project_of(&self, run: &Run) -> Result<ContainerRef> {
         match &run.spec.earlier.project {
             Some(project) => Ok(project.clone()),
-            None => self.repo_project(&run.spec.repo).await?.ok_or_else(|| refuse("there is no project to put the ticket in; start the run again and choose one")),
+            None => self.repo_project(&run.spec.repo).await?.ok_or_else(|| refuse("Gossamr has no project to put the ticket in")),
         }
     }
 
@@ -503,12 +508,12 @@ impl Core {
         self.draft_ticket_once(&run, &proposal).await?.map_err(|existing| refuse(format!("that run already has a ticket draft, {}", state_words(&existing.state))))
     }
 
-    /// The same draft, made when an investigation that was started to end as a ticket finishes. Only a result with a
-    /// `New ticket:` section and a title is used.
+    /// The same draft, made when a run with no ticket finishes: one an earlier release started to end as a ticket, with a
+    /// `New ticket:` section and a title, or one that reported a new ticket.
     pub async fn auto_draft_run_ticket(&self, id: &str) -> Result<Option<Proposal>> {
         let Ok(run) = self.ticketless_run(id).await else { return Ok(None) };
         let resolved = self.resolved_of(&run).await?;
-        let Some(proposal) = resolved.ticket.clone().filter(|_| resolved.complete() && run.spec.ends_as_ticket()) else { return Ok(None) };
+        let Some(proposal) = resolved.ticket.clone().filter(|_| resolved.complete() && (run.spec.ends_as_ticket() || resolved.source == Some(ResultSource::Structured))) else { return Ok(None) };
         Ok(self.draft_ticket_once(&run, &proposal).await?.ok())
     }
 
@@ -1076,7 +1081,7 @@ pub(in crate::inbox) mod tests {
         assert_eq!(*create_of(&p).0, project(&fx).await);
     }
 
-    async fn link_repo_to(fx: &Fixture, links: &[(&str, u64, u32)]) {
+    pub(in crate::inbox) async fn link_repo_to(fx: &Fixture, links: &[(&str, u64, u32)]) {
         use chrono::TimeZone;
         let linked: Vec<crate::domain::DevLink> = links
             .iter()
@@ -1279,7 +1284,7 @@ pub(in crate::inbox) mod tests {
     async fn only_a_finished_complete_plan_run_on_a_ticket_has_a_plan_to_draft() {
         let fx = fixture_watching(&["acme/webshop"]).await;
         let triage = approved(&fx, RunSpec { role: ResultKind::Triage.role(), ..next_spec(&fx) }, Some(fx.item("CA-1")), PLAN, |_| {}).await;
-        assert!(fx.core.draft_run_plan_comment(&triage.id).await.unwrap_err().to_string().contains("only a plan run"));
+        assert!(fx.core.draft_run_plan_comment(&triage.id).await.unwrap_err().to_string().contains("made a plan"));
         let working = approved(&fx, RunSpec { role: ResultKind::Plan.role(), ..next_spec(&fx) }, Some(fx.item("CA-1")), PLAN, |r| r.state = RunState::Working).await;
         assert!(fx.core.draft_run_plan_comment(&working.id).await.unwrap_err().to_string().contains("hasn't finished"));
         let summary = approved(&fx, RunSpec { role: ResultKind::Plan.role(), ..next_spec(&fx) }, Some(fx.item("CA-1")), "One line.", |r| r.result_complete = false).await;

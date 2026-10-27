@@ -90,7 +90,7 @@ async fn the_agents_own_words_come_with_the_reminder_whatever_the_answer_says() 
 #[tokio::test]
 async fn only_a_question_is_answered() {
     let (rig, run) = asking().await;
-    for (state, said) in [(RunState::NeedsPermission, "Allow once or Deny"), (RunState::SystemBlocked, "sign in"), (RunState::Working, "working"), (RunState::Done, "done"), (RunState::Stopped, "stopped"), (RunState::Unknown, "unknown")] {
+    for (state, said) in [(RunState::NeedsPermission, "in Terminal"), (RunState::SystemBlocked, "sign in"), (RunState::Working, "working"), (RunState::Done, "done"), (RunState::Stopped, "stopped"), (RunState::Unknown, "unknown")] {
         rig.set(&run, |r| r.state = state).await;
         let why = rig.svc.answer(&run.id, "Yes").await.unwrap_err().to_string();
         assert!(why.contains(said) || why.contains("isn't waiting"), "{state:?}: {why}");
@@ -182,11 +182,6 @@ async fn asking_as(kind: crate::domain::ResultKind) -> (Rig, Run) {
     (rig, run)
 }
 
-/// What an earlier release launched its read-only runs with.
-fn restricted() -> crate::domain::ReadOnly {
-    crate::domain::ReadOnly { mode: "dontAsk".into(), allow: vec![], deny: vec!["Edit".into()], guard: "g".into(), setting_sources: Some(String::new()), strict_mcp_config: true }
-}
-
 fn copy_state(rig: &Rig) -> Option<Option<String>> {
     let cli = rig.cli.0.lock().unwrap();
     cli.sessions.iter().find(|e| e.id.as_deref().is_some_and(|i| i.starts_with('c'))).map(|e| e.state.clone())
@@ -203,76 +198,6 @@ async fn a_resume_that_starts_a_copy_of_a_build_stops_the_copy_and_keeps_the_run
     assert_eq!((after.state, after.unsent_answer.as_deref()), (RunState::Stopped, Some("Yes")));
     let copies: Vec<_> = after.earlier_sessions.iter().map(|e| (e.short_id.as_str(), e.removed)).collect();
     assert!(matches!(copies.as_slice(), [(copy, false)] if copy.starts_with('c')), "the copy is remembered so it is never taken for another run's session: {copies:?}");
-}
-
-/// A copy is a new job from the resume command line, without the flags the run was launched with, so the copy of a run an
-/// earlier release restricted would run unrestricted: it is removed, not only stopped.
-#[tokio::test]
-async fn a_resume_that_starts_a_copy_of_a_read_only_run_stops_and_removes_the_copy() {
-    let (rig, run) = asking_as(crate::domain::ResultKind::Triage).await;
-    let run = rig.set(&run, |r| r.read_only = Some(restricted())).await;
-    rig.cli.with(|s| s.resume = Resume::Copies);
-    let why = rig.svc.answer(&run.id, "Yes").await.unwrap_err().to_string();
-    assert!(why.contains("started a copy") && why.contains("stopped and removed") && why.contains("read-only restriction"), "{why}");
-    assert_eq!(copy_state(&rig), None, "the copy is gone");
-    let after = rig.get(&run).await;
-    assert_eq!((after.state, after.unsent_answer.as_deref()), (RunState::Stopped, Some("Yes")));
-    let copies: Vec<_> = after.earlier_sessions.iter().map(|e| (e.short_id.as_str(), e.removed)).collect();
-    assert!(matches!(copies.as_slice(), [(copy, true)] if copy.starts_with('c')), "{copies:?}");
-
-    // A copy Claude refuses to remove is called out, and kept for cleanup to retry.
-    let (rig, run) = asking_as(crate::domain::ResultKind::Investigate).await;
-    rig.set(&run, |r| r.read_only = Some(restricted())).await;
-    rig.cli.with(|s| s.resume = Resume::Copies);
-    rig.cli.with(|s| s.rm_refusals = vec!["boom".into()]);
-    let why = rig.svc.answer(&run.id, "Yes").await.unwrap_err().to_string();
-    assert!(why.contains("it was stopped; remove it with `claude rm c") && why.contains("read-only restriction"), "{why}");
-    assert!(rig.get(&run).await.earlier_sessions.iter().any(|e| !e.removed && e.short_id.as_str().starts_with('c')));
-}
-
-#[tokio::test]
-async fn a_run_stopped_for_a_limit_is_resumed_with_the_persons_words_and_the_limit_no_longer_applies() {
-    let (rig, run) = asking().await;
-    std::fs::create_dir_all(&run.expected_worktree).unwrap();
-    rig.svc.set_settings(crate::config::AgentSettings { wall_clock_minutes: 30, ..Default::default() }).unwrap();
-    rig.svc.poll_at(chrono::Utc::now() + chrono::Duration::minutes(31)).await;
-    rig.svc.poll_at(chrono::Utc::now() + chrono::Duration::minutes(90)).await;
-    let id = run.short_id.clone().unwrap();
-    assert_eq!(rig.get(&run).await.state, RunState::NeedsAnswer, "it was waiting on the person, which the clock doesn't count");
-
-    rig.set(&run, |r| {
-        r.state = RunState::Stopped;
-        r.stopped_by_limit = true;
-        r.error = Some("Stopped by Gossamr: it passed the 30 minute limit".into());
-        r.ended_at = Some(chrono::Utc::now());
-    })
-    .await;
-    rig.session(&run, |e| e.state = Some("stopped".into()));
-    let resumed = rig.svc.answer(&run.id, "Go on with the plan").await.unwrap();
-    assert_eq!((resumed.state, resumed.error, resumed.unsent_answer, resumed.ended_at), (RunState::Working, None, None, None));
-    assert!(!resumed.stopped_by_limit && resumed.continued_at.is_some());
-    {
-        let cli = rig.cli.0.lock().unwrap();
-        assert_eq!(cli.calls, [format!("resume:{id}")], "it was already stopped, so there is no second stop");
-        assert_eq!(cli.resumes[0].message, format!("{REMINDER}\n\nGo on with the plan"));
-    }
-    rig.svc.poll_at(chrono::Utc::now() + chrono::Duration::hours(8)).await;
-    assert_eq!(rig.get(&run).await.state, RunState::Working);
-}
-
-#[tokio::test]
-async fn a_failed_resume_of_a_run_stopped_for_a_limit_keeps_the_words_and_the_limit_mark() {
-    let (rig, run) = asking().await;
-    rig.set(&run, |r| {
-        r.state = RunState::Stopped;
-        r.stopped_by_limit = true;
-    })
-    .await;
-    rig.session(&run, |e| e.state = Some("stopped".into()));
-    rig.cli.with(|s| s.resume = Resume::Exits);
-    assert!(rig.svc.answer(&run.id, "Carry on").await.is_err());
-    let after = rig.get(&run).await;
-    assert_eq!((after.state, after.unsent_answer.as_deref(), after.stopped_by_limit), (RunState::Stopped, Some("Carry on"), true));
 }
 
 #[tokio::test]

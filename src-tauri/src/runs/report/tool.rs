@@ -5,7 +5,7 @@
 use serde_json::{json, Value};
 
 use super::{Finding, Report, ReportStatus, ReviewVerdict, Severity};
-use crate::domain::{ResultKind, REPORT_TOOL};
+use crate::domain::REPORT_TOOL;
 use crate::runs::result::{cut, declines_breakdown, fit, one_line, plain, sanitize, title_cut, TicketProposal, BODY_LIMIT, NOTE_LIMIT, SUBTASK_MAX};
 
 /// Calls and refusals a run may make in total; past either the tool records nothing more.
@@ -40,13 +40,13 @@ pub fn definition() -> Value {
                     "required": ["title"],
                     "additionalProperties": false
                 },
-                "subtasks": { "type": "array", "items": { "type": "string" }, "description": "3 to 8 one-line summaries, only for a triage that proposes a breakdown." },
-                "planRecommended": { "type": "boolean", "description": "For a triage: whether a written plan should come before the build." },
-                "plan": { "type": "string", "description": "The whole implementation plan as Markdown, only for a plan run." },
-                "verdict": { "type": "string", "enum": ["pass", "blocking"], "description": "Required for a review: pass only when it tried and found nothing blocking." },
+                "subtasks": { "type": "array", "items": { "type": "string" }, "description": "3 to 8 one-line summaries, when the work is a breakdown of the ticket." },
+                "planRecommended": { "type": "boolean", "description": "Whether a written plan should come before the build." },
+                "plan": { "type": "string", "description": "The whole implementation plan as Markdown." },
+                "verdict": { "type": "string", "enum": ["pass", "blocking"], "description": "pass only when it tried and found nothing blocking. Required when you review a pull request." },
                 "findings": {
                     "type": "array",
-                    "description": "For a review: what it found.",
+                    "description": "What a review found.",
                     "items": {
                         "type": "object",
                         "properties": {
@@ -69,9 +69,12 @@ pub fn definition() -> Value {
 /// What the run is, as far as the rules depend on it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Target {
-    pub kind: Option<ResultKind>,
+    /// The run is about a ticket: only such a run proposes subtasks, and only one without a ticket proposes a new one.
+    pub on_ticket: bool,
     /// An investigation that ends as a new ticket rather than as a note on one.
     pub ticketless: bool,
+    /// A review of a pull request, which must give a verdict.
+    pub verdict_required: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -152,7 +155,7 @@ pub fn check(args: &Value, target: Target) -> Result<Checked, Vec<String>> {
 
     let mut new_ticket = None;
     match object.get("newTicket").filter(|v| !v.is_null()) {
-        Some(_) if !target.ticketless => notes.push("newTicket ignored: this run is about a ticket".to_string()),
+        Some(_) if target.on_ticket => notes.push("newTicket ignored: this run is about a ticket".to_string()),
         Some(raw) => new_ticket = ticket_of(&structured(raw), &mut problems, &mut notes),
         None if target.ticketless => problems.push("newTicket: required, an object with a title.".into()),
         None => {}
@@ -160,15 +163,15 @@ pub fn check(args: &Value, target: Target) -> Result<Checked, Vec<String>> {
 
     let mut subtasks = Vec::new();
     match object.get("subtasks").filter(|v| !v.is_null()) {
-        Some(_) if target.kind != Some(ResultKind::Triage) || target.ticketless => notes.push("subtasks ignored: only a triage on a ticket proposes them".to_string()),
+        Some(_) if !target.on_ticket || target.ticketless => notes.push("subtasks ignored: only a run on a ticket proposes them".to_string()),
         Some(raw) => subtasks = subtasks_of(&structured(raw), &mut problems, &mut notes),
         None => {}
     }
 
-    // Read only as a flag: it decides whether a Plan starts on its own, so prose never stands in for it.
+    // Read only as a flag, so prose never stands in for it.
     let mut plan_recommended = None;
     match object.get("planRecommended").filter(|v| !v.is_null()) {
-        Some(_) if target.kind != Some(ResultKind::Triage) || target.ticketless => notes.push("planRecommended ignored: only a triage on a ticket gives one".to_string()),
+        Some(_) if !target.on_ticket || target.ticketless => notes.push("planRecommended ignored: only a run on a ticket gives one".to_string()),
         Some(Value::Bool(b)) => plan_recommended = Some(*b),
         Some(_) => problems.push("planRecommended: must be true or false.".into()),
         None => {}
@@ -176,9 +179,7 @@ pub fn check(args: &Value, target: Target) -> Result<Checked, Vec<String>> {
 
     let mut plan = None;
     if let Some(raw) = object.get("plan").filter(|v| !v.is_null()) {
-        if target.kind != Some(ResultKind::Plan) {
-            notes.push("plan ignored: only a plan run gives one".to_string());
-        } else if let Some(text) = text_of("plan", raw, &mut problems) {
+        if let Some(text) = text_of("plan", raw, &mut problems) {
             let clean = sanitize(&text).trim().to_string();
             if clean.is_empty() {
                 problems.push("plan: empty.".into());
@@ -195,7 +196,7 @@ pub fn check(args: &Value, target: Target) -> Result<Checked, Vec<String>> {
     let (mut verdict, mut findings) = (None, Vec::new());
     let given_verdict = object.get("verdict").filter(|v| !v.is_null());
     let given_findings = object.get("findings").filter(|v| !v.is_null());
-    if target.kind == Some(ResultKind::Review) {
+    if target.verdict_required || given_verdict.is_some() || given_findings.is_some() {
         verdict = match given_verdict.and_then(Value::as_str) {
             Some("pass") => Some(ReviewVerdict::Pass),
             Some("blocking") => Some(ReviewVerdict::Blocking),
@@ -212,13 +213,6 @@ pub fn check(args: &Value, target: Target) -> Result<Checked, Vec<String>> {
             Some(ReviewVerdict::Blocking) if !blocking && !problems.iter().any(|p| p.starts_with("findings")) => problems.push("verdict: blocking needs at least one finding with severity blocking.".into()),
             Some(ReviewVerdict::Pass) if blocking => problems.push("verdict: pass can't have a finding with severity blocking; give blocking instead.".into()),
             _ => {}
-        }
-    } else {
-        if given_verdict.is_some() {
-            notes.push("verdict ignored: only a review gives one".to_string());
-        }
-        if given_findings.is_some() {
-            notes.push("findings ignored: only a review gives them".to_string());
         }
     }
 

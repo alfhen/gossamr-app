@@ -182,9 +182,7 @@ async fn an_agent_nobody_can_message_is_refused_in_one_sentence_and_nothing_is_t
         rig.set(&run, |r| r.state = state).await;
         refuses(why, say("Hello.").await);
     }
-    rig.set(&run, |r| (r.state, r.stopped_by_limit) = (RunState::Stopped, true)).await;
-    refuses("only the person resumes it", say("Hello.").await);
-    rig.set(&run, |r| (r.state, r.stopped_by_limit, r.unsent_answer) = (RunState::Stopped, false, Some("An earlier answer".into()))).await;
+    rig.set(&run, |r| (r.state, r.unsent_answer) = (RunState::Stopped, Some("An earlier answer".into()))).await;
     refuses("still waiting to be sent", say("Hello.").await);
     assert!(calls(&rig).is_empty());
     assert_eq!(rig.fx.core.run_message(&run.id).await.unwrap(), None, "nothing was queued either");
@@ -299,11 +297,3 @@ async fn a_queued_message_whose_wake_fails_is_kept_for_a_few_tries_then_dropped_
     assert_eq!(rig.fx.core.run_message(&run.id).await.unwrap().as_deref(), Some("Newer."));
 }
 
-#[tokio::test]
-async fn pips_answer_never_resumes_an_agent_gossamr_stopped_at_its_limit() {
-    let (rig, run, _) = working().await;
-    rig.set(&run, |r| (r.state, r.stopped_by_limit, r.ended_at) = (RunState::Stopped, true, Some(chrono::Utc::now()))).await;
-    let why = rig.svc.answer_as(&run.id, "Go on.", Actor::Pip).await.unwrap_err().to_string();
-    assert!(why.contains("only the person resumes it"), "{why}");
-    assert!(rig.get(&run).await.stopped_by_limit);
-}

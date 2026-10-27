@@ -19,7 +19,7 @@ use super::toolchain::Toolchain;
 use crate::auth::Scope;
 use crate::config::TerminalChoice;
 use crate::domain::workstream::PauseReason;
-use crate::domain::{Actor, Run, RunFailure, RunQuery, RunState};
+use crate::domain::{Actor, RefusedMode, Run, RunFailure, RunQuery, RunState};
 use crate::error::{Error, Result};
 
 const STOP_LIMIT: Duration = Duration::from_secs(5);
@@ -118,6 +118,8 @@ pub fn write_attach_file(dir: &Path, claude: &Path, worktree: &Path, id: &ShortI
 pub enum Purpose {
     Trust,
     SignIn,
+    /// Opens Claude where it asks for the one-time opt-in the person's permission mode needs for `--bg`.
+    Mode(RefusedMode),
 }
 
 impl Purpose {
@@ -125,17 +127,30 @@ impl Purpose {
         match self {
             Purpose::Trust => "trust",
             Purpose::SignIn => "signin",
+            Purpose::Mode(RefusedMode::Auto) => "auto",
+            Purpose::Mode(RefusedMode::Bypass) => "bypass",
+        }
+    }
+
+    /// The flag Claude's own message names for the opt-in; fixed text, never from outside.
+    fn flags(self) -> &'static str {
+        match self {
+            Purpose::Trust | Purpose::SignIn => "",
+            Purpose::Mode(RefusedMode::Auto) => " --permission-mode auto",
+            Purpose::Mode(RefusedMode::Bypass) => " --dangerously-skip-permissions",
         }
     }
 
     fn allows(self, failure: Option<&RunFailure>) -> bool {
         matches!((self, failure), (Purpose::Trust, Some(RunFailure::UntrustedFolder { .. })) | (Purpose::SignIn, Some(RunFailure::NotSignedIn)))
+            || matches!((self, failure), (Purpose::Mode(wanted), Some(RunFailure::ModeRefused { mode })) if wanted == *mode)
     }
 
     fn refusal(self) -> &'static str {
         match self {
             Purpose::Trust => "Terminal can be opened to trust a folder only for a run that failed because Claude doesn't trust it.",
             Purpose::SignIn => "Terminal can be opened to sign in only for a run that failed because Claude isn't signed in.",
+            Purpose::Mode(_) => "Terminal can be opened to accept a permission mode only for a run that failed because Claude refused that mode.",
         }
     }
 }
@@ -158,13 +173,13 @@ fn checked_clone(clone: &Path, home: Option<&Path>) -> Result<PathBuf> {
     Ok(real)
 }
 
-/// Writes `<dir>/<trust|signin>-<digest of the folder>.command`: `cd` into the clone, then plain `claude`, which is
-/// interactive. Both paths are checked, and the name is a digest, so no outside text reaches the script or its name.
+/// Writes `<dir>/<trust|signin|auto|bypass>-<digest of the folder>.command`: `cd` into the clone, then `claude`, which is
+/// interactive and, for a refused mode, started in that mode. Both paths are checked, and the name is a digest, so no outside text reaches the script or its name.
 pub fn write_claude_file(dir: &Path, purpose: Purpose, claude: &Path, clone: &Path, home: Option<&Path>) -> Result<PathBuf> {
     let clone = checked_clone(clone, home)?;
     let (claude, clone_text) = (quotable(claude)?, quotable(&clone)?);
     let digest: String = Sha256::digest(clone_text.as_bytes()).iter().take(8).map(|b| format!("{b:02x}")).collect();
-    write_script(dir, &format!("{}-{digest}", purpose.prefix()), &format!("#!/bin/zsh\ncd '{clone_text}'\nexec '{claude}'\n"))
+    write_script(dir, &format!("{}-{digest}", purpose.prefix()), &format!("#!/bin/zsh\ncd '{clone_text}'\nexec '{claude}'{}\n", purpose.flags()))
 }
 
 /// Deletes attach scripts older than a day.
@@ -210,7 +225,6 @@ impl RunService {
         let now = Utc::now();
         run.state = RunState::Stopped;
         run.needs = None;
-        run.permission_allowed = None;
         run.error = None;
         run.failure = None;
         run.ended_at = Some(now);
@@ -350,8 +364,9 @@ impl RunService {
         self.terminal.open(&file, self.settings().terminal).map_err(|e| Error::Claude(format!("Couldn't open Terminal: {e}")))
     }
 
-    /// Opens Terminal in the run's clone running plain `claude`, so Claude can ask its one-time trust question or sign
-    /// the person in. Only for a failed run whose reason is that one, and only for the clone in its stored spec.
+    /// Opens Terminal in the run's clone running `claude`, so Claude can ask its one-time trust question, sign the
+    /// person in or take their opt-in to a permission mode. Only for a failed run whose reason is that one, and only for
+    /// the clone in its stored spec.
     pub async fn open_claude(&self, run_id: &str, purpose: Purpose) -> Result<()> {
         let run = self.load(run_id).await?;
         if run.state != RunState::Failed || !purpose.allows(run.failure.as_ref()) {

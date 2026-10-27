@@ -843,7 +843,10 @@ mod tests {
                 ],
                 "each list flag is followed by another flag, and the person's own MCP servers are not replaced"
             );
-            assert!(!calls.contains("--strict-mcp-config") && !calls.contains("gsr_") && !calls.contains("Bearer"));
+            for restricting in ["dontAsk", "--permission-mode", "--setting-sources", "--strict-mcp-config", "--disallowedTools", "--tools"] {
+                assert!(!calls.contains(restricting), "{restricting}");
+            }
+            assert!(!calls.contains("gsr_") && !calls.contains("Bearer"));
         }
 
         #[tokio::test]
@@ -852,6 +855,13 @@ mod tests {
             let err = untrusted.cli.launch(&untrusted.request("ce-3-x-ef56")).await.unwrap_err();
             assert!(matches!(err, CliError::Failed { code: Some(1), .. }));
             assert!(err.stderr_mentions("Workspace not trusted"));
+
+            let auto = Rig::new("auto", "launch_fail=auto\n");
+            let err = auto.cli.launch(&auto.request("ce-3-x-ef56")).await.unwrap_err();
+            assert!(err.stderr_mentions("--bg with auto mode requires opting in first"));
+            let bypass = Rig::new("bypass", "launch_fail=bypass\n");
+            let err = bypass.cli.launch(&bypass.request("ce-3-x-ef56")).await.unwrap_err();
+            assert!(err.stderr_mentions("--bg with bypassPermissions requires accepting the disclaimer first"));
 
             let broken = Rig::new("broken", "launch_fail=exit\n");
             let err = broken.cli.launch(&broken.request("ce-3-x-ef56")).await.unwrap_err();

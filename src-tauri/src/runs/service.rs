@@ -392,7 +392,6 @@ impl RunService {
         run.error = None;
         run.failure = None;
         run.ended_at = None;
-        run.read_only = None;
         self.store(run).await?;
         self.remember(run);
 

@@ -282,12 +282,12 @@ export class JiraBackend implements Backend {
     return invoke<Run>("runs_answer", { id, text });
   }
 
-  runsDenyPermission(id: string, command: string) {
-    return invoke<Run>("runs_deny_permission", { id, command });
+  runsDenyPermission(_id: string, _command: string): Promise<Run> {
+    return Promise.reject(new Error("A permission prompt is answered in Terminal."));
   }
 
-  runsAllowPermissionOnce(id: string, command: string) {
-    return invoke<Run>("runs_allow_permission_once", { id, command });
+  runsAllowPermissionOnce(_id: string, _command: string): Promise<Run> {
+    return Promise.reject(new Error("A permission prompt is answered in Terminal."));
   }
 
   runsAdoptSession(id: string, session: string) {

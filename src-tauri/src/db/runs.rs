@@ -509,7 +509,6 @@ mod tests {
         let read = db.run("old").unwrap().unwrap();
         assert_eq!((read.spec.role.as_str(), read.spec.brief.as_str(), read.spec.pr), ("review", "Review the pull request.", Some(12)));
         assert_eq!((read.spec.earlier.build_account.as_deref(), read.spec.earlier.build_from_run.as_deref()), (Some("Rounded."), Some("b1")));
-        assert!(read.read_only.is_some());
         db.save_run(&read).unwrap();
         let again = db.run("old").unwrap().unwrap();
         assert_eq!(again, read, "saved and read again it is the same run, under its new names");

@@ -14,6 +14,8 @@ pub enum Outcome {
     Starts,
     /// Exit 1 with `Workspace not trusted` on stderr.
     Untrusted,
+    /// Exit 1 with `claude --bg`'s refusal of an un-opted `auto` mode on stderr.
+    AutoRefused,
     /// Exit 1 with a message, no session.
     Exits,
     /// A session starts but the output has no `backgrounded` line.
@@ -180,6 +182,7 @@ impl ClaudeCli for FakeCli {
         s.in_flight -= 1;
         match s.outcome {
             Outcome::Untrusted => return Err(CliError::Failed { code: Some(1), stderr: "Workspace not trusted. Run `claude` in the folder once and accept the trust prompt, then retry.".into() }),
+            Outcome::AutoRefused => return Err(CliError::Failed { code: Some(1), stderr: "--bg with auto mode requires opting in first. Run `claude --permission-mode auto` once interactively.".into() }),
             Outcome::Exits => return Err(CliError::Failed { code: Some(1), stderr: "something broke".into() }),
             Outcome::Leaks => return Err(CliError::Failed { code: Some(1), stderr: "bad --mcp-config: Authorization Bearer gsr_0123456789abcdef0123456789abcdef0123456789abcdef".into() }),
             Outcome::Starts | Outcome::Garbled => {}

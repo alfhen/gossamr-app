@@ -1,8 +1,8 @@
 use serde_json::{json, Value};
 
 use super::*;
-use crate::domain::{Intent, Run, ResultKind, RunSpec, RunState, REPORT_TOOL_VERSION};
-use crate::inbox::run_results::tests::{approved, body_of, next_spec, project, run_with};
+use crate::domain::{Intent, Role, Run, ResultKind, RunSpec, RunState, REPORT_TOOL_VERSION};
+use crate::inbox::run_results::tests::{approved, body_of, link_repo_to, next_spec, project, run_with};
 use crate::inbox::testing::{fixture_watching, Fixture};
 use crate::runs::report::{new_token, token_hash, ReportStatus, ResultSource, MAX_CALLS, MAX_REJECTIONS};
 
@@ -267,4 +267,62 @@ async fn a_plan_run_carries_the_plan_it_reported() {
     let comment = fx.core.draft_run_plan_comment(&done.id).await.unwrap();
     let text = body_of(&comment.proposal);
     assert!(text.contains("Reported step.") && !text.contains("Written step."), "{text}");
+}
+
+fn researcher(fx: &Fixture) -> RunSpec {
+    RunSpec { role: Role::parse("researcher").unwrap(), ..next_spec(fx) }
+}
+
+#[tokio::test]
+async fn a_free_role_that_reports_a_plan_leaves_the_description_update_and_its_note_as_a_comment() {
+    let fx = fixture_watching(&["acme/webshop"]).await;
+    let (run, token) = open(&fx, researcher(&fx), Some(fx.item("CA-1"))).await;
+    let plan = "## Approach\n\nRound once.\n\n## Steps\n\n1. Fix cart.rs";
+    assert_eq!(call(&fx, &run, &token, json!({ "status": "done", "note": "Plan attached.", "plan": plan })).await, recorded(1));
+    let done = finish(&fx, &run, Some("Prose with no sections.")).await;
+    let update = fx.core.auto_draft_run_plan_description(&done.id).await.unwrap().expect("the plan goes to the description");
+    assert!(matches!(&update.intent, Intent::Rewrite { body: Some(b), .. } if b.to.to_markdown().contains("Round once.")));
+    let comment = fx.core.auto_draft_run_comment(&done.id).await.unwrap().expect("the note goes to a comment");
+    assert!(body_of(&comment).ends_with("Plan attached."), "{}", body_of(&comment));
+    assert!(fx.core.draft_run_plan_comment(&done.id).await.is_ok(), "and the whole plan can be a comment");
+    assert!(fx.tracker.intents().is_empty());
+}
+
+#[tokio::test]
+async fn a_free_role_with_no_plan_in_its_report_leaves_no_description_update() {
+    let fx = fixture_watching(&["acme/webshop"]).await;
+    let (run, token) = open(&fx, researcher(&fx), Some(fx.item("CA-1"))).await;
+    call(&fx, &run, &token, good()).await;
+    let done = finish(&fx, &run, Some("## Approach\n\nRound once.\n\nFor Jira: x")).await;
+    assert_eq!(fx.core.auto_draft_run_plan_description(&done.id).await.unwrap(), None);
+    assert!(fx.core.draft_run_plan_comment(&done.id).await.is_err());
+    assert!(fx.core.auto_draft_run_comment(&done.id).await.unwrap().is_some(), "the note is still a comment");
+}
+
+#[tokio::test]
+async fn a_free_role_that_reports_subtasks_leaves_a_breakdown_draft() {
+    let fx = fixture_watching(&["acme/webshop"]).await;
+    let (run, token) = open(&fx, researcher(&fx), Some(fx.item("CA-1"))).await;
+    call(&fx, &run, &token, json!({ "status": "done", "note": "Too big for one.", "subtasks": ["Split the consumer", "Add the backoff"] })).await;
+    let done = finish(&fx, &run, Some("Prose.")).await;
+    let draft = fx.core.draft_run_subtasks(&done.id).await.unwrap().expect("drafted");
+    assert!(matches!(&draft.intent, Intent::Subtasks { summaries, .. } if summaries == &["Split the consumer", "Add the backoff"]));
+}
+
+#[tokio::test]
+async fn a_free_role_without_a_ticket_drafts_only_the_ticket_it_reported() {
+    let fx = fixture_watching(&["acme/webshop"]).await;
+    link_repo_to(&fx, &[("CA-1", 4, 9)]).await;
+    let (run, token) = open(&fx, researcher(&fx), None).await;
+    let args = json!({ "status": "done", "note": "Found it.", "newTicket": { "title": "Add a backoff to the consumer", "kind": "bug" } });
+    assert_eq!(call(&fx, &run, &token, args).await, recorded(1));
+    let done = finish(&fx, &run, Some("Prose only.")).await;
+    let draft = fx.core.auto_draft_run_ticket(&done.id).await.unwrap().expect("drafted from the report");
+    assert!(matches!(&draft.intent, Intent::Create { fields, .. } if fields.title == "Add a backoff to the consumer"));
+
+    let (quiet, token) = open(&fx, researcher(&fx), None).await;
+    call(&fx, &quiet, &token, good()).await;
+    let written = "I read it.\n\nNew ticket:\nTitle: Something else\nKind: bug\nIt spins.";
+    let done = finish(&fx, &quiet, Some(written)).await;
+    assert_eq!(fx.core.auto_draft_run_ticket(&done.id).await.unwrap(), None, "a note alone is no ticket, and a written section counts only for an older run");
 }
