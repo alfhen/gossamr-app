@@ -81,7 +81,7 @@ describe("a description edit draft", () => {
     expect(lines(html, "del")).toEqual(["Retry failed payment webhooks", "Retries back off.", "Open question: who owns the alert?"]);
     expect(lines(html, "add")).toEqual(["Retry failed payment webhooks with a cap", "Retries back off and cap at five attempts.", "## Scope", "", "- In: webhooks", "- Out: queue replay"].map((t) => t || " "));
     expect(lines(html, "same")).toContain("Backoff starts at two seconds.");
-    expect(html).toContain("Update title and description");
+    expect(html).toContain("Approve");
     expect(html).toContain(">Edit<");
     expect(html).toContain(">Skip<");
     expect(html).not.toContain("data-flattened");

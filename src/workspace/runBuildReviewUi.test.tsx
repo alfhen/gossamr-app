@@ -1,21 +1,13 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MockBackend } from "../backend/mock";
-import type { Run, RunOutcome } from "../types";
+import type { Run } from "../types";
 import { AgentCard } from "./AgentCard";
 import { PromptParts } from "./RunPrompt";
-import { RunSheetView, type RunSheetActions } from "./RunSheet";
 
 const NOW = Date.parse("2026-09-30T12:00:00Z");
 const backend = new MockBackend({ githubRepos: 14, runs: { seed: "kinds", epoch: NOW } });
 const build: Run = backend.runs.list().find((r) => r.spec.role === "builder")!;
-
-const actions = (): RunSheetActions => ({ close: vi.fn(), attach: vi.fn(), askStop: vi.fn(), cancelStop: vi.fn(), stop: vi.fn(), startNow: vi.fn(), answer: vi.fn(), adoptSession: vi.fn(() => Promise.resolve()), retry: vi.fn(), fix: vi.fn(), copied: vi.fn(), openTicket: vi.fn(), reveal: vi.fn(), askPip: vi.fn(), openChange: vi.fn() });
-const outcome = (over: Partial<RunOutcome> = {}): RunOutcome => ({ ...backend.runs.outcome(build.id), ...over });
-const sheet = (run: Run, o: RunOutcome | null, on = actions()) =>
-  renderToStaticMarkup(<RunSheetView run={run} now={NOW} ticketTitle="Cache the category tree" place={null} wide={false} onWide={vi.fn()} events={[]} disk={null} confirmStop={false} outcome={o} tickets={[]} pickBlocker={false} drafting={false} answering={false} opened={false} on={on} />);
-const button = (html: string, label: string) => new RegExp(`<button[^>]*>(?:(?!</button>)[\\s\\S])*${label}`).exec(html)?.[0] ?? "";
-const disabled = (html: string, label: string) => /<button[^>]*disabled=""/.test(button(html, label));
 
 beforeEach(() => vi.stubGlobal("localStorage", { getItem: () => null, setItem: () => {}, removeItem: () => {} }));
 

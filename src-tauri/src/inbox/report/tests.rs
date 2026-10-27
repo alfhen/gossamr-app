@@ -62,6 +62,9 @@ async fn report_tokens_versions_and_limits_are_checked_before_any_report_is_stor
     let fx = fixture_watching(&["acme/webshop"]).await;
     let (run, token) = open(&fx).await;
     assert_eq!(call(&fx, &run, &new_token().unwrap(), good()).await, Reply::Unavailable);
+    let older_token = new_token().unwrap();
+    fx.core.report_reserve(&run.id, &token_hash(&older_token), REPORT_TOOL_VERSION - 1).await.unwrap();
+    assert_eq!(call(&fx, &run, &older_token, good()).await, Reply::Unavailable);
     for _ in 0..MAX_REJECTIONS {
         assert!(matches!(call(&fx, &run, &token, json!({"status":"done"})).await, Reply::Invalid(_)));
     }
@@ -70,4 +73,18 @@ async fn report_tokens_versions_and_limits_are_checked_before_any_report_is_stor
     assert_eq!(stored.rejections, MAX_REJECTIONS);
     assert!(stored.report.is_none());
     assert!(stored.calls <= MAX_CALLS);
+}
+
+#[tokio::test]
+async fn repeated_valid_calls_are_also_capped_and_cannot_change_the_report_after_locking() {
+    let fx = fixture_watching(&["acme/webshop"]).await;
+    let (run, token) = open(&fx).await;
+    assert!(matches!(call(&fx, &run, &token, good()).await, Reply::Recorded { revision: 1, .. }));
+    for _ in 1..MAX_CALLS {
+        assert_eq!(call(&fx, &run, &token, good()).await, Reply::Unchanged);
+    }
+    assert_eq!(call(&fx, &run, &token, json!({"status":"blocked","note":"Changed","revise":true})).await, Reply::Locked);
+    let stored = fx.core.report_stored(&run.id).await.unwrap().unwrap();
+    assert_eq!((stored.calls, stored.revision, stored.rejections), (MAX_CALLS, 1, 0));
+    assert_eq!(stored.report.unwrap().note.as_deref(), Some("## Findings\nA full prose report."));
 }

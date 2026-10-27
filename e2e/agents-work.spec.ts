@@ -172,6 +172,6 @@ test("the rail's batch button approves Pip's two comments and never the descript
   await expect(section.getByRole("button", { name: /^Approve \d+ of / })).toHaveCount(0);
 
   // The update is read in its diff and approved only there.
-  await expect(rewrite.getByRole("button", { name: /Update description/ }).first()).toBeVisible();
+  await expect(rewrite.getByRole("button", { name: "Approve" }).first()).toBeVisible();
   expect((await jiraWrites(page)).map((w) => w.type)).toEqual(["comment", "comment"]);
 });

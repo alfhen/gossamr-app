@@ -148,7 +148,7 @@ describe("runs and drafts in a mock workstream", () => {
     expect(mockDigest({ ...plain, workstream: "ws-1" })).not.toBe(mockDigest(plain));
   });
 
-  it("follows a run from start to done: the stage moves, the result draft is the agent's, and the audit says who did what", async () => {
+  it("follows a run from start to done: the stage moves, finishing leaves no draft, and the audit says who started it", async () => {
     const backend = new MockBackend({ runs: { seed: "empty" } });
     backend.supervisor.dispose();
     const ws = await backend.workstreamsOpen(CA401);
@@ -162,18 +162,13 @@ describe("runs and drafts in a mock workstream", () => {
       expect((await backend.runsGet(run.id))?.state).toBe(state);
       expect(await stageNow()).toBe("investigate");
     }
-    const left = (await backend.proposalsList({ workstream: ws.id })).filter((p) => p.origin.type === "run");
-    expect(left.map((p) => [p.createdBy, p.intent.type])).toEqual([["agent", "comment"]]);
-    await backend.proposalsSkip(left[0].id);
+    expect((await backend.proposalsList({ workstream: ws.id })).filter((p) => p.origin.type === "run")).toEqual([]);
     const events = await backend.workstreamsEvents(ws.id);
     expect(events.map((e) => [e.actor, e.action])).toEqual([
       ["person", "opened"],
       ["pip", "agent_started"],
-      ["run", "draft_created"],
-      ["person", "draft_skipped"],
     ]);
     expect(events[1]).toMatchObject({ runId: run.id, detail: "investigator · conversation" });
-    expect(events[2].proposalId).toBe(left[0].id);
   });
 
   it("records the person stopping and answering a run of the workstream, and nothing for other runs", async () => {

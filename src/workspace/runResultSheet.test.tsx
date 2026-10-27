@@ -112,7 +112,7 @@ describe("a draft made from a run", () => {
     expect(html).not.toContain("1000a000");
     expect(html).not.toContain("font-mono");
     expect(html).toContain("The words are the agent&#x27;s. Read and edit them before you approve.");
-    expect(html).toContain("Post comment");
+    expect(html).toContain("Approve");
     expect(html).toContain("Edit");
   });
 
@@ -125,7 +125,7 @@ describe("a draft made from a run", () => {
     const html = renderToStaticMarkup(<DraftCard proposal={link} {...props} />);
     expect(html).toContain("CA-402</b> blocks <b");
     expect(html).toContain("CA-412");
-    expect(html).toContain("Create link");
+    expect(html).toContain("Approve");
     expect(html).toContain("From <b>the CA-402 run</b>");
     const preview = renderToStaticMarkup(<DraftPreview proposal={link} statusName={null} targetTitle={null} onOpen={vi.fn()} />);
     expect(preview).toContain("CA-402 blocks CA-412");

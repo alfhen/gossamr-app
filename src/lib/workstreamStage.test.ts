@@ -41,10 +41,10 @@ describe("workstream stage, on the fixtures the Rust side also runs", () => {
 
 describe("stage text", () => {
   it("says changes are needed only at review, and the wait for a pull request first", () => {
-    expect(stageText("review")).toBe("Review · changes needed");
-    expect(stageText("review", null, false)).toBe("Review");
-    expect(stageText("done", null, true)).toBe("Done");
-    expect(stageText("build", "r1", false)).toBe("Build · waiting for PR");
+    expect(stageText("review")).toBe("Review");
+    expect(stageText("review", null)).toBe("Review");
+    expect(stageText("done", null)).toBe("Done");
+    expect(stageText("build", "r1")).toBe("Build · waiting for PR");
   });
 });
 

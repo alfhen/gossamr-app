@@ -84,7 +84,7 @@ describe("drafts kept across a reload", () => {
       [{ type: "chat", requestId: "r1" }, "retired"],
       [{ type: "chat", requestId: "sample" }, "pending"],
     ]);
-    expect(new Set(back.map((p) => p.id)).size).toBe(2);
+    expect(new Set(back.map((p) => p.id)).size).toBe(3);
     expect(back[0].id).not.toBe(seeded.id);
     expect(again.draft(comment, null, "r2").id).not.toBe(back[0].id);
   });

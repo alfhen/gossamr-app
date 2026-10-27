@@ -47,7 +47,7 @@ test.describe("the pause names what tripped it (G23)", () => {
     const original = await text.inputValue();
     await text.fill(`${original}\n\ncc @Everyone\nPassword: hunter2`);
     await draft.getByRole("button", { name: "Done editing" }).click();
-    await draft.getByRole("button", { name: "Post comment" }).click();
+    await draft.getByRole("button", { name: "Approve" }).click();
     await expect(pause).toContainText("Your edit mentions everyone");
     await expect(pause).toContainText("at “@Everyone”");
     await expect(pause).not.toContainText("hunter2");
@@ -55,7 +55,7 @@ test.describe("the pause names what tripped it (G23)", () => {
     await draft.getByRole("button", { name: "Keep editing" }).click();
     await text.fill(`${original}\n\nPassword: hunter2`);
     await draft.getByRole("button", { name: "Done editing" }).click();
-    await draft.getByRole("button", { name: "Post comment" }).click();
+    await draft.getByRole("button", { name: "Approve" }).click();
     await expect(pause).toContainText("looks like a password, key or token at “hu…”");
     await expect(pause).not.toContainText("hunter2");
     expect(await jiraWrites(page)).toEqual([]);

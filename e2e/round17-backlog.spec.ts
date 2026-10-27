@@ -20,7 +20,7 @@ test.describe("a draft that holds a secret says so before Post (G22)", () => {
     await draft.getByRole("button", { name: "Done editing" }).click();
     await expect(draft).toContainText("hunter22secret");
     await expect(draft.locator("[data-secret-note]")).toContainText("This holds something that looks like a secret. Gossamr will pause before posting it.");
-    await draft.getByRole("button", { name: "Post comment" }).click();
+    await draft.getByRole("button", { name: "Approve" }).click();
     await expect(draft.locator("[data-post-pause]")).toBeVisible();
     expect(await jiraWrites(page)).toEqual([]);
   });

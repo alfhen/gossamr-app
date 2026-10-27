@@ -531,6 +531,8 @@ export class MockRuns {
   codeConnectionFor: (repo: string) => string | null = () => null;
   /** Told of a draft pull request a build opened once the code host shows it; set by the backend that owns the code. */
   onPullRequest: (change: CodeChange) => void = () => {};
+  /** A run just reached done, before listeners hear it, so a draft it leaves is counted in that wake. */
+  onFinished: (run: Run) => void = () => {};
   /** The workstreams a run may be linked to, and whose audit records what the person does to one; set by the backend that keeps them. */
   workstreams: MockWorkstreams | null = null;
   /** Every launch, oldest first, with the restriction the mock launcher would pass Claude Code (`launches`). */
@@ -831,7 +833,10 @@ export class MockRuns {
     }
     const next = this.update(run.id, patch);
     if (opened) this.schedulePullRequest(run.id, opened);
-    if (to === "done") this.launchWaiting();
+    if (to === "done") {
+      this.onFinished(next);
+      this.launchWaiting();
+    }
     return next;
   }
 

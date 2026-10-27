@@ -71,15 +71,12 @@ export function labelsByRun(runs: readonly (StagedRun & { spec: { workstream?: s
 /** Said after the stage while a finished build's pull request hasn't been found yet. */
 export const WAITING_FOR_PR = "waiting for PR";
 
-/** Said after "Review" while the newest finished review asked for changes. */
-export const CHANGES_NEEDED = "changes needed";
-
 /** Said instead of the blocking verdict once the person posted the review to GitHub. */
 export const REVIEW_POSTED = "Review posted";
 
 /**
- * The stage as its chip says it: "Build", "Build · waiting for PR" while a build waits for its pull request to be found,
- * or "Review · changes needed" while the newest finished review is blocking.
+ * The stage as its chip says it: the role's name, or "Build · waiting for PR" while a build waits for its pull request.
+ * A review's verdict is not part of the stage.
  */
 export function stageText(stage: WorkstreamStage, waitingForPr?: string | null): string {
   if (waitingForPr) return `${STAGE_LABEL[stage]} · ${WAITING_FOR_PR}`;

@@ -30,11 +30,10 @@ describe("G27 polish", () => {
     expect(renderToStaticMarkup(<Rail />)).toMatch(/<aside data-rail="true" aria-label="Workspace sidebar"/);
   });
 
-  it("a move whose button reads only its status is named Move to that status; a verb label is left alone", () => {
-    expect(card(move("QA"), "QA")).toMatch(/<button[^>]*aria-label="Move to QA"[^>]*>QA<\/button>/);
-    expect(card(move("Start progress"), "In Progress")).not.toContain("aria-label=\"Move to");
-    expect(card(move(null), "QA")).toMatch(/<button[^>]*>Move to QA<\/button>/);
-    expect(card(move(null), "QA")).not.toContain("aria-label=\"Move to");
+  it("a move's button is Approve, whichever status it names", () => {
+    expect(card(move("QA"), "QA")).toMatch(/<button[^>]*>Approve<\/button>/);
+    expect(card(move("Start progress"), "In Progress")).toMatch(/<button[^>]*>Approve<\/button>/);
+    expect(card(move(null), "QA")).toMatch(/<button[^>]*>Approve<\/button>/);
   });
 
   it("the Close confirm counts the drafts that stay, and says nothing about them when there are none", () => {

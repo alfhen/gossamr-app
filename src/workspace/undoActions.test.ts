@@ -65,7 +65,7 @@ describe("skipping a draft", () => {
   it("keeps the toast's live region quiet only when the pane is deciding that draft (G6)", async () => {
     const ws = await backend.workstreamsOpen(CA401);
     const a = backend.proposals.draft(comment, null, "r1", ws.id);
-    const b = backend.proposals.draft({ ...comment, body: docFromText("Other") } as Intent, null, "r1", ws.id);
+    const b = backend.proposals.draft({ type: "comment", item: itemRef("CA-402"), body: docFromText("Other") }, null, "r1", ws.id);
     await useWorkspace.getState().refreshProposals();
     await useWorkspace.getState().skip(a.id);
     expect(useToasts.getState().toasts[0].spoken).toBeUndefined();

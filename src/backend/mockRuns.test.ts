@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { Intent, ItemRef, Run, RunSpec } from "../types";
+import type { ItemRef, Run, RunSpec } from "../types";
 import { MockBackend } from "./mock";
 import { itemRef } from "./mockConnector";
 import { MockWorkstreams } from "./mockWorkstreams";
@@ -570,7 +570,7 @@ describe("the base brief around Pip's, as render_prompt", () => {
 
 // The sample's workstreams, as the backend holds them: what this file's runs make of a workstream's stage.
 describe("the sample's workstreams, reviewed", () => {
-  it("gives the stage from each finished review's verdict: blocking is review with changes needed, a pass is done", () => {
+  it("stays on Review after a review finishes", () => {
     const at = (n: number) => new Date(Date.UTC(2026, 8, 30, 10, n)).toISOString();
     const runs: Run[] = [];
     const store = new MockWorkstreams(() => runs, () => "title");

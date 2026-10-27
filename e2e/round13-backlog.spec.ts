@@ -75,7 +75,7 @@ test.describe("a comment draft (G26, G29)", () => {
   test("its tag says Post like its button", async ({ page }) => {
     test.setTimeout(120_000);
     const draft = await commentDraft(page);
-    await expect(draft.getByRole("button", { name: "Post comment" })).toBeVisible();
+    await expect(draft.getByRole("button", { name: "Approve" })).toBeVisible();
     await expect(needsStack(page).locator("[data-needs-you-chip]").filter({ hasText: /^Post$/ })).toHaveCount(1);
     await expect(needsStack(page).locator("[data-needs-you-chip]").filter({ hasText: /^Approve$/ })).toHaveCount(0);
     expect(await jiraWrites(page)).toEqual([]);
@@ -88,7 +88,7 @@ test.describe("a comment draft (G26, G29)", () => {
     const text = needsPane(page).locator("textarea").first();
     await text.fill(`${await text.inputValue()}\n\nPassword: hunter2\ntoken=ghp_abcdefghijklmnopqrstuvwxyz0123`);
     await draft.getByRole("button", { name: "Done editing" }).click();
-    await draft.getByRole("button", { name: "Post comment" }).click();
+    await draft.getByRole("button", { name: "Approve" }).click();
     const pause = draft.locator("[data-post-pause]");
     await expect(pause).toHaveAttribute("role", "group");
     await expect(pause.locator("p[role=alert]")).toHaveCount(1);
@@ -113,7 +113,7 @@ test.describe("a comment draft (G26, G29)", () => {
   test("once posted, the sent page says who drafted it once, and where it came from", async ({ page }) => {
     test.setTimeout(120_000);
     const draft = await commentDraft(page);
-    await draft.getByRole("button", { name: "Post comment" }).click();
+    await draft.getByRole("button", { name: "Approve" }).click();
     await expect.poll(async () => (await jiraWrites(page)).length).toBe(1);
     await page.keyboard.press("ControlOrMeta+k");
     await palette(page).getByRole("combobox").fill("what jira saw");

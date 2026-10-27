@@ -10,7 +10,7 @@ test.describe("a GitHub review with risky words (G1)", () => {
     const review = await reviewedDraft(page);
     const summary = review.locator("[data-review-summary]");
     await summary.fill(`${await summary.inputValue()} cc @everyone`);
-    await review.getByRole("button", { name: /^Post review/ }).click();
+    await review.getByRole("button", { name: "Approve" }).click();
     const pause = review.locator("[data-post-pause]");
     await expect(pause).toContainText("Your edit mentions everyone at “@everyone” (line 6). Everyone on the pull request would see it once it is posted.");
     await expect(pause.getByRole("button", { name: "Keep editing" })).toBeFocused();
@@ -19,7 +19,7 @@ test.describe("a GitHub review with risky words (G1)", () => {
     await expect(pause).toHaveCount(0);
     await expect(summary).toHaveValue(/cc @everyone/);
     expect(await githubWrites(page)).toEqual([]);
-    await review.getByRole("button", { name: /^Post review/ }).click();
+    await review.getByRole("button", { name: "Approve" }).click();
     await expect(pause).toBeVisible();
     await review.getByRole("button", { name: "Post it anyway" }).click();
     await expect.poll(async () => (await githubWrites(page)).length).toBe(1);
@@ -31,7 +31,7 @@ test.describe("a GitHub review with risky words (G1)", () => {
     const review = await reviewedDraft(page);
     const comment = review.getByRole("textbox", { name: /^Comment on src\/consumer\/retry\.ts:42/ });
     await comment.fill(`${await comment.inputValue()} password: hunter22x`);
-    await review.getByRole("button", { name: /^Post review/ }).click();
+    await review.getByRole("button", { name: "Approve" }).click();
     const pause = review.locator("[data-post-pause]");
     await expect(pause).toContainText("like a password, key or token at “hu…”");
     await expect(pause).not.toContainText("hunter22x");
@@ -46,7 +46,7 @@ test.describe("a GitHub review with risky words (G1)", () => {
     const review = await reviewedDraft(page);
     const summary = review.locator("[data-review-summary]");
     await summary.fill(`${await summary.inputValue()} Thanks, @mette.`);
-    await review.getByRole("button", { name: /^Post review/ }).click();
+    await review.getByRole("button", { name: "Approve" }).click();
     await expect.poll(async () => (await githubWrites(page)).length).toBe(1);
     await expect(peekSheet(page).locator("[data-post-pause]")).toHaveCount(0);
   });
@@ -127,7 +127,7 @@ test.describe("Esc at the posting pause (G14)", () => {
     await draft.getByRole("button", { name: "Edit" }).click();
     const field = needsPane(page).locator("textarea").first();
     await field.fill(`${await field.inputValue()}\n\ncc @everyone\nPassword: hunter2`);
-    await draft.getByRole("button", { name: "Post comment" }).click();
+    await draft.getByRole("button", { name: "Approve" }).click();
     await expect(draft.locator("[data-post-pause]")).toBeVisible();
     await field.focus();
     await page.keyboard.press("Escape");

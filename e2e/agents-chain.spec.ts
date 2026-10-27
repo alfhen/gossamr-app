@@ -68,7 +68,7 @@ test("a build follows the approved plan once Pip is asked, and starts with nothi
   await rewrite.getByRole("button", { name: "Review on CA-401 →" }).click();
   await expect(peekSheet(page)).toHaveAttribute("aria-label", "Details for CA-401");
   await expectPeekInPlace(page);
-  await peekSheet(page).getByRole("article", { name: "Update the description of CA-401" }).filter({ hasText: "Gossamr Plan" }).getByRole("button", { name: "Update description" }).click();
+  await peekSheet(page).getByRole("article", { name: "Update the description of CA-401" }).filter({ hasText: "Gossamr Plan" }).getByRole("button", { name: "Approve" }).click();
   await expect(rewrite).toHaveCount(0);
   await page.keyboard.press("Escape");
   await expect(peekSheet(page)).toHaveCount(0);

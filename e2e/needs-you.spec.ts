@@ -150,7 +150,7 @@ test("approving a draft from the pane writes it to Jira, and focus goes to the n
   await expect(needButton(page, /Draft comment/)).toBeFocused();
 
   await need(page, /Draft comment/).click();
-  await pane.getByRole("button", { name: "Post comment" }).click();
+  await pane.getByRole("button", { name: "Approve" }).click();
   await expect.poll(async () => (await jiraWrites(page)).map((w) => w.type)).toEqual(["comment"]);
   await expect(need(page, /Draft comment/)).toHaveCount(0);
   await expect(needsYouCount(page)).toHaveText("1");

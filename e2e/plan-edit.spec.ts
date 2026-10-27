@@ -20,7 +20,7 @@ test("a plan the person edited and approved on the ticket is one folded line the
   // The person's line goes at the end of the plan, inside its Gossamr Plan expand.
   await body.fill((await body.inputValue()).replace(/\n*<\/details>\s*$/, `\n\n${MARKER}\n\n</details>`));
   await draft.getByRole("button", { name: "Done editing" }).click();
-  await draft.getByRole("button", { name: "Update description" }).click();
+  await draft.getByRole("button", { name: "Approve" }).click();
   await expect(draft).toHaveCount(0);
   // On the ticket the plan is one folded line: a collapsed details with the summary "Gossamr Plan".
   const folded = peek(page).locator("details").filter({ has: page.locator("summary", { hasText: /^Gossamr Plan$/ }) });

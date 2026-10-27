@@ -28,7 +28,7 @@ const run = (id: string, kind: string, state: RunState, over: Partial<Run> = {})
   ...over,
 });
 
-const view = (id: string, key: string | null, over: { pausedReason?: PauseReason | null; stage?: WorkstreamStage; runs?: string[]; waitingForPr?: string | null; createdAt?: string; reviewBlocking?: boolean } = {}): WorkstreamView => ({
+const view = (id: string, key: string | null, over: { pausedReason?: PauseReason | null; stage?: WorkstreamStage; runs?: string[]; waitingForPr?: string | null; createdAt?: string } = {}): WorkstreamView => ({
   workstream: {
     id,
     connectionId: "mock",
@@ -46,7 +46,6 @@ const view = (id: string, key: string | null, over: { pausedReason?: PauseReason
   runs: over.runs ?? [],
   labels: (over.runs ?? []).map((r, n) => [r, `R${n + 1}`]),
   waitingForPr: over.waitingForPr ?? null,
-  ...(over.reviewBlocking ? { reviewBlocking: true } : {}),
 });
 
 const draft = (id: string, intent: Intent, minutesAgo: number, over: { state?: ProposalState; workstream?: string | null } = {}): Proposal =>

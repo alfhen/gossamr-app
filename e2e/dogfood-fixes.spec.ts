@@ -41,7 +41,7 @@ async function toFinishedReview(page: Page, before: () => Promise<void> = async 
   await page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "All projects" }).click();
   await peekTicket(page, "CA-401");
   const plan = peekSheet(page).getByRole("article", { name: "Update the description of CA-401" }).filter({ hasText: "Gossamr Plan" });
-  await plan.getByRole("button", { name: "Update description" }).click();
+  await plan.getByRole("button", { name: "Approve" }).click();
   await expect(plan).toHaveCount(0);
   await expect(pipConversation(page)).toHaveText(/^Workstream: CA-401 /);
   await runStep(page, "build it", "build");
@@ -72,28 +72,28 @@ async function homeStage(page: Page) {
 }
 
 test.describe("workstream stage (D3, D10, D18)", () => {
-  test("a blocking review reads 'Review · changes needed' on the peek, the pane, the Pip home row and its header, never Done", async ({ page }) => {
+  test("a finished review reads Review on the peek, the pane, the Pip home row and its header", async ({ page }) => {
     test.setTimeout(120_000);
-    // The sample's review blocks by default, and nothing sends the build back: the blocking review is where the workstream stops.
+    // Nothing sends the build back: the review is where the workstream stops.
     await toFinishedReview(page);
     expect((await mockRuns(page)).filter((r) => r.step === "build").map((r) => r.state)).toEqual(["done"]);
-    await expect(await peekStage(page)).toHaveText("Review · changes needed");
-    await expect(pipConversation(page)).toHaveText(/^Workstream: CA-401 .* · Review · changes needed$/);
+    await expect(await peekStage(page)).toHaveText("Review");
+    await expect(pipConversation(page)).toHaveText(/^Workstream: CA-401 .* · Review$/);
     const { row, header } = await homeStage(page);
-    await expect(row.locator("[data-stage]")).toHaveText("Review · changes needed");
+    await expect(row.locator("[data-stage]")).toHaveText("Review");
     await expect(row).not.toContainText("Done");
-    await expect(header).toHaveText(/^Workstream: CA-401 .* · Review · changes needed$/);
+    await expect(header).toHaveText(/^Workstream: CA-401 .* · Review$/);
     expect((await jiraWrites(page)).map((w) => w.type)).toEqual(["rewrite"]);
   });
 
-  test("a passing review reads Done", async ({ page }) => {
+  test("a review whose report says it passes stays on Review", async ({ page }) => {
     test.setTimeout(120_000);
     await toFinishedReview(page, () => scriptNextRun(page, "review", { verdict: "pass" }));
-    await expect(wakes(page).last()).toContainText("passed");
-    await expect(await peekStage(page)).toHaveText("Done");
+    await expect(wakes(page).last()).toContainText("finished");
+    await expect(await peekStage(page)).toHaveText("Review");
     const { row, header } = await homeStage(page);
-    await expect(row.locator("[data-stage]")).toHaveText("Done");
-    await expect(header).toHaveText(/^Workstream: CA-401 .* · Done$/);
+    await expect(row.locator("[data-stage]")).toHaveText("Review");
+    await expect(header).toHaveText(/^Workstream: CA-401 .* · Review$/);
   });
 
 });
@@ -440,7 +440,7 @@ test.describe("review card (D9, D20, D21, D32)", () => {
     await expect(view).toHaveCount(0);
     await expect(box).toHaveValue(mine);
 
-    await review.getByRole("button", { name: "Post review" }).click();
+    await review.getByRole("button", { name: "Approve" }).click();
     await expect.poll(async () => (await githubWrites(page)).length).toBe(1);
     const [write] = await githubWrites(page);
     expect(write.event).toBe("COMMENT");
@@ -531,7 +531,7 @@ test.describe("description diff (D31)", () => {
     await peekTicket(page, "CA-401");
     const first = await planFromPeek(page);
     const update = peekSheet(page).getByRole("article", { name: "Update the description of CA-401" });
-    await update.getByRole("button", { name: "Update description" }).click();
+    await update.getByRole("button", { name: "Approve" }).click();
     await expect(update).toHaveCount(0);
 
     const second = await planFromPeek(page);

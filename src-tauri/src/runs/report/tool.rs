@@ -42,12 +42,18 @@ pub fn check(args: &Value) -> Result<Checked, Vec<String>> {
     let status = match object.get("status").and_then(Value::as_str) {
         Some("done") => Some(ReportStatus::Done),
         Some("blocked") => Some(ReportStatus::Blocked),
-        _ => { problems.push("status: required, done or blocked.".into()); None }
+        _ => {
+            problems.push("status: required, done or blocked.".into());
+            None
+        }
     };
     let revise = match object.get("revise") {
         None | Some(Value::Null) => false,
         Some(Value::Bool(revise)) => *revise,
-        Some(_) => { problems.push("revise: must be true or false.".into()); false }
+        Some(_) => {
+            problems.push("revise: must be true or false.".into());
+            false
+        }
     };
     let note = object.get("note").and_then(Value::as_str).map(sanitize).map(|note| note.trim().to_string()).filter(|note| !note.is_empty());
     if note.is_none() {

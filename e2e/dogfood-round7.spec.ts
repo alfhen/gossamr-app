@@ -23,7 +23,7 @@ test.describe("approving from the Decide pane (G1)", () => {
     await openNeedOfKind(page, "plan");
     const pane = needsPane(page);
     await expect(pane).toBeVisible();
-    await pane.getByRole("button", { name: "Update description" }).click();
+    await pane.getByRole("button", { name: "Approve" }).click();
     await expect.poll(async () => (await jiraWrites(page)).map((w) => w.type)).toContain("rewrite");
     await expect(needOfKind(page, "plan")).toHaveCount(0);
     // The plan is no longer a need.

@@ -158,12 +158,12 @@ describe("draft moves", () => {
     expect((await s().backend!.cacheItem(card.item))?.status.name).toBe("In Review");
   });
 
-  it("replaces the transition draft still pending for the card, and approving applies it", async () => {
+  it("keeps a transition the person already drafted, and approving the newer one applies it", async () => {
     const card = item("DEVOPS-471");
     const [progress, done] = ["In Progress", "Done"].map((n) => section("DEVOPS").workflow.statuses.find((x) => x.name === n)!);
     const first = await s().draftTransition(card.item, progress);
     const second = await s().draftTransition(card.item, done);
-    expect(s().proposals[first.id].state.type).toBe("skipped");
+    expect(s().proposals[first.id].state.type).toBe("pending");
     expect(pendingMoves(s().proposals).get("mock:DEVOPS-471")?.id).toBe(second.id);
 
     await s().approve(second.id);

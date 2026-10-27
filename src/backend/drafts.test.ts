@@ -12,7 +12,7 @@ const intents: Intent[] = [
   { type: "comment", item, body: docFromText("A report") },
   { type: "transition", item, to: "done" },
   { type: "create", container, fields: { title: "A task", body: docFromText("Details"), kind: "task", parent: null, assignee: null, priority: null, labels: [] }, link: null },
-  { type: "update", item, patch: { assignee: null } },
+  { type: "update", item, patch: { assignee: null, parent: null, priority: null } },
   { type: "rewrite", item, title: { from: "Old", to: "New" }, body: null, flattened: [] },
   { type: "link", from: item, to: other, kind: "blocks" },
   { type: "subtasks", parent: item, summaries: ["One", "Two"] },

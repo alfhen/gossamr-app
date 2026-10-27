@@ -1,10 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { MockBackend } from "./mock";
-import { itemRef } from "./mockConnector";
 import { docFromMarkdown, markdownOf } from "./mockMarkdown";
-import { QUESTIONS_LEAD, TRIAGE_HEADING, isTriageDescription, triageQuestionsOf, triageSectionOf, withTriageSection, withoutTriageSection } from "./mockTriageSection";
+import { QUESTIONS_LEAD, TRIAGE_HEADING, triageQuestionsOf, triageSectionOf, withTriageSection, withoutTriageSection } from "./mockTriageSection";
 import { withPlanSection, planSectionOf } from "./mockPlanSection";
-import type { Proposal, RunSpec } from "../types";
 
 const md = docFromMarkdown;
 const QUESTIONS = ["What does done look like?", "Who is waiting on it?"];

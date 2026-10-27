@@ -4,7 +4,8 @@ use serde::Serialize;
 use super::Core;
 use crate::domain::{CodeChange, CodeChangeKind, Run, RunState};
 use crate::error::{Error, Result};
-use crate::runs::{pr, report::{resolve, ReportStatus, Resolved, ResultSource, StoredReport}};
+use crate::runs::pr;
+use crate::runs::report::{resolve, ReportStatus, Resolved, ResultSource, StoredReport};
 
 pub const SUMMARY_ONLY: &str = "Only Claude's one-line summary could be read, not the agent's full answer.";
 

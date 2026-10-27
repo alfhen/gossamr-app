@@ -259,7 +259,6 @@ describe("the run sheet, by state", () => {
     expect(html).toContain("What it found");
     expect(html).toContain("The lag comes from one consumer.");
     expect(html).toContain('data-copy="The lag comes from one consumer.');
-    expect(html).toContain("Nothing is posted until you approve a draft");
   });
 
   it("offers Start now for a queued run, and no Stop", () => {

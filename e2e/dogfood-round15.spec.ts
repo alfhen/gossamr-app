@@ -51,7 +51,7 @@ test.describe("an edit kept when its card leaves (G1)", () => {
     await expect(draft).toHaveCount(0);
     await needRow(page, /Draft comment/).click();
     await expect(draft).toContainText("Kept after the card left.");
-    await draft.getByRole("button", { name: "Post comment" }).click();
+    await draft.getByRole("button", { name: "Approve" }).click();
     await expect.poll(async () => (await jiraWrites(page)).map((w) => w.text)).toEqual([expect.stringContaining("Kept after the card left.")]);
   });
 });

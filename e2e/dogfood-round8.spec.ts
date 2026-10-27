@@ -15,7 +15,7 @@ test.describe("the Decide pane's Done line (G5)", () => {
     await openNeedRow(page, /Pip drafted a comment/);
     await pauseAtCeiling(page, "CA-401");
     await expect(needsStack(page)).toContainText("Paused: Pip was woken too often today");
-    await needsPane(page).getByRole("button", { name: "Post comment" }).click();
+    await needsPane(page).getByRole("button", { name: "Approve" }).click();
     await expect(page.locator("[data-needs-advanced]")).toHaveText(/^Posted to Jira: Draft comment: “[^”]+” on CA-401\. Now: CA-401 · Paused: Pip was woken too often today$/);
   });
 });

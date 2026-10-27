@@ -34,7 +34,7 @@ test.describe("a long description draft in the Decision pane (G10)", () => {
     const bar = draft.locator("[data-draft-actions]");
     expect(await bar.evaluate((el) => getComputedStyle(el).position)).toBe("static");
     const paneBox = await box(pane);
-    const update = await box(draft.getByRole("button", { name: "Update description" }));
+    const update = await box(draft.getByRole("button", { name: "Approve" }));
     expect(update.y).toBeGreaterThanOrEqual(paneBox.y);
     expect(update.y + update.height).toBeLessThanOrEqual(paneBox.y + paneBox.height + 1);
     expect(update.y + update.height).toBeLessThanOrEqual(900);
@@ -58,7 +58,7 @@ test.describe("the pause before posting edited words (G4)", () => {
     const text = needsPane(page).locator("textarea").first();
     await text.fill(`${await text.inputValue()}\n\ncc @everyone\nPassword: hunter2`);
     await draft.getByRole("button", { name: "Done editing" }).click();
-    await draft.getByRole("button", { name: "Post comment" }).click();
+    await draft.getByRole("button", { name: "Approve" }).click();
     const pause = draft.locator("[data-post-pause]");
     await expect(pause).toContainText("Your edit mentions everyone at “@everyone” (line 3). It also looks like a password, key or token at “hu…” (line 4). Everyone on the ticket would see it once it is posted.");
     await expect(pause).not.toContainText("Post anyway, or keep editing?");
@@ -108,7 +108,7 @@ test.describe("Esc on the posting pause (G1)", () => {
     const text = needsPane(page).locator("textarea").first();
     await text.fill(`${await text.inputValue()}\n\ncc @everyone`);
     await draft.getByRole("button", { name: "Done editing" }).click();
-    await draft.getByRole("button", { name: "Post comment" }).click();
+    await draft.getByRole("button", { name: "Approve" }).click();
     await expect(draft.locator("[data-post-pause]")).toBeVisible();
     await draft.locator("[data-post-pause-keep]").focus();
     await page.keyboard.press("Escape");
@@ -130,7 +130,7 @@ test.describe("Esc on the posting pause (G1)", () => {
     const text = needsPane(page).locator("textarea").first();
     await text.fill(`${await text.inputValue()}\n\ncc @everyone`);
     await draft.getByRole("button", { name: "Done editing" }).click();
-    await draft.getByRole("button", { name: "Post comment" }).click();
+    await draft.getByRole("button", { name: "Approve" }).click();
     await expect(draft.locator("[data-post-pause]")).toBeVisible();
     const anyway = draft.getByRole("button", { name: "Post anyway" });
     await anyway.focus();

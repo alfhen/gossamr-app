@@ -49,7 +49,7 @@ pub enum WakeState {
     NeedsAnswer,
     NeedsPermission,
     SystemBlocked,
-    /// A finished build's pull request was found after Pip was told it was still to come.
+    /// An earlier pull-request wake, kept so recorded wake turns still read.
     PullRequest,
 }
 

@@ -26,7 +26,7 @@ test.describe("a posted secret on What Jira saw from me (G26)", () => {
     const text = needsPane(page).locator("textarea").first();
     await text.fill(`${await text.inputValue()}\n\nPassword: hunter22secret`);
     await draft.getByRole("button", { name: "Done editing" }).click();
-    await draft.getByRole("button", { name: "Post comment" }).click();
+    await draft.getByRole("button", { name: "Approve" }).click();
     await draft.locator("[data-post-pause]").getByRole("button", { name: "Post anyway" }).click();
     await expect.poll(async () => (await jiraWrites(page)).length).toBe(1);
     // The pause's line numbers are for the pause only: the posted text carries none.

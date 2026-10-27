@@ -32,7 +32,7 @@ describe("the desktop backend's wiring", () => {
   });
 
   it("reads a review draft's notes in the backend's words", () => {
-    const rust = read("../../src-tauri/src/inbox/review_drafts.rs").replace(/"\s*\n\s*"/g, "");
+    const rust = read("../../src-tauri/src/inbox/code.rs").replace(/"\s*\n\s*"/g, "");
     expect(rust).toContain(`pub const REVIEW_OUTDATED_NOTE: &str =\n    "${REVIEW_OUTDATED_NOTE}";`);
     expect(rust).toContain(`pub const REVIEW_MAYBE_POSTED_NOTE: &str = "${REVIEW_MAYBE_POSTED_NOTE}";`);
     expect(rust).toContain(`pub const REVIEW_NOT_FOUND_NOTE: &str =\n    "${REVIEW_NOT_FOUND_NOTE}";`);

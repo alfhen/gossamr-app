@@ -49,6 +49,9 @@ describe("mock Pip woken by a finished plan (N6)", () => {
   it("says approving the description update lets Build start, and lists the questions the plan left open", () => {
     const b = new MockBackend({ runs: { seed: "kinds", epoch: NOW, planDescription: true } });
     const plan = b.runs.list().find((r) => r.spec.role === "planner")!;
+    const draft = b.proposals.list().find((p) => p.origin.type === "run" && p.origin.runId === plan.id && p.intent.type === "rewrite");
+    expect(draft?.createdBy).toBe("agent");
+    if (draft?.intent.type === "rewrite") expect(draft.intent.body?.toText).toContain("Gossamr Plan");
     const reply = scriptPip(`[Event] run ${plan.id} (plan) Done; 1 draft`, { screen: "board", item: null } as unknown as ScreenContext, [], [plan], NOW).text;
     expect(reply).toContain("Approve the description update to let Build start.");
     const questions = planOpenQuestions(plan.result);
@@ -114,6 +117,18 @@ describe("mock Pip starting the next step of a workstream, as start_agent does",
     expect(triage.spec.workstream).toBe(ws);
     expect(Object.keys(triage.spec).sort()).toEqual(["base", "brief", "clonePath", "name", "pr", "prSha", "report", "repo", "role", "ticket", "ticketBlock", "workstream"].filter((k) => k in triage.spec).sort());
     expect(investigation.state).toBe("done");
+  });
+
+  it("leaves a triage description and no comment when a one-line ticket cannot be sized", async () => {
+    const b = new MockBackend({ runs: { seed: "empty", planDescription: true } });
+    const ws = (await b.workstreamsOpen(CA401)).id;
+    b.editTicket("CA-401", { description: "Fix it." });
+    const triage = await ran(b, "triager", ws);
+    const drafts = b.proposals.list().filter((p) => p.origin.type === "run" && p.origin.runId === triage.id);
+    expect(drafts.map((p) => p.intent.type)).toEqual(["rewrite"]);
+    const rewrite = drafts[0].intent;
+    expect(rewrite.type === "rewrite" && rewrite.body?.toText).toContain("The ticket cannot be sized yet");
+    expect(rewrite.type === "rewrite" && rewrite.body?.toText).toContain("What does done look like for CA-401?");
   });
 
   it("starts a reviewer on the pull request its build opened, pinned to its head commit", async () => {
@@ -187,7 +202,7 @@ describe("mock Pip discussing and revising a GitHub review draft, as revise_prop
 
   /** A backend whose review of #218 has finished, with the GitHub review draft it left. */
   async function reviewed() {
-    const b = new MockBackend({ githubRepos: 14 });
+    const b = new MockBackend({ githubRepos: 14, runs: { planDescription: true } });
     await b.watchSetMode(GH, "everything");
     const run = b.runs.start(spec, itemRef("CA-402"));
     for (let i = 0; i < 3; i++) b.runs.advance(run.id);

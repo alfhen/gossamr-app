@@ -307,7 +307,7 @@ test.describe("draft action bar", () => {
     await openApp(page);
     await peekTicket(page, "CA-401");
     const card = peekSheet(page).getByRole("article", { name: "Update the description of CA-401" });
-    const bar = barOf(card, "Update description");
+    const bar = barOf(card, "Approve");
     await expect(bar).toBeVisible();
     const view = await box(scroller(page));
     const c = await box(card);
@@ -325,9 +325,9 @@ test.describe("draft action bar", () => {
     await expectSolid(bar);
   });
 
-  test("the GitHub review's Post review bar and the comment draft's Post comment bar sit flush with their cards' bottoms", async ({ page }) => {
+  test("the GitHub review's Approve bar and the comment draft's Approve bar sit flush with their cards' bottoms", async ({ page }) => {
     const review = await reviewedDraft(page);
-    await expectFlushAtEnd(page, review, barOf(review, /^Post review/));
+    await expectFlushAtEnd(page, review, barOf(review, "Approve"));
 
     // The review run's own comment draft, and one Pip writes: each is a short card.
     const comments = peekSheet(page).getByRole("article", { name: "Comment on CA-402" });
@@ -336,7 +336,7 @@ test.describe("draft action bar", () => {
     await askPip(page, "Draft a comment");
     await expect(comments).toHaveCount(before + 1);
     await expect(pipPane(page).getByRole("button", { name: "Stop" })).toHaveCount(0);
-    for (let i = 0; i <= before; i++) await expectFlushAtEnd(page, comments.nth(i), barOf(comments.nth(i), "Post comment"));
+    for (let i = 0; i <= before; i++) await expectFlushAtEnd(page, comments.nth(i), barOf(comments.nth(i), "Approve"));
   });
 
   test("a keyboard-focused draft card in the Pip pane shows its whole focus ring", async ({ page }) => {

@@ -6,8 +6,7 @@ import { itemRef } from "./mockConnector";
 import { basisOfItem, driftOf, type BasisTicket } from "./mockWorkstreams";
 import { docFromText } from "../lib/docs";
 import fixtures from "./supervisor.fixtures.json";
-import readinessFixtures from "./readiness.fixtures.json";
-import { MockSupervisor, eventLine, keysIn, planRecommended, readiness, triageReadiness } from "./mockSupervisor";
+import { MockSupervisor, eventLine, keysIn } from "./mockSupervisor";
 import type { WakeFact } from "./mockSupervisor";
 
 describe("the supervisor fixtures the Rust side runs too", () => {
@@ -17,13 +16,7 @@ describe("the supervisor fixtures the Rust side runs too", () => {
     expect(keysIn(line)).toEqual([]);
   });
 
-  it.each(fixtures.planRecommended.map((c) => [c.note, c.expect] as const))("plan recommended in %j", (note, expected) => {
-    expect(planRecommended(note)).toBe(expected);
-  });
 
-  it.each(readinessFixtures.report.map((c) => [c.note, c.expect] as const))("readiness in %j (readiness.fixtures.json)", (note, expected) => {
-    expect(readiness(note)).toEqual(expected);
-  });
 
   it.each(fixtures.basisDrift.map((c) => [c.name, c] as const))("basis drift: %s", (_, c) => {
     const { basis: b, now: n } = c as typeof c & { basis: { summary?: string; changing?: string[] } };
@@ -61,7 +54,6 @@ vi.stubGlobal("localStorage", {
 afterAll(() => vi.unstubAllGlobals());
 
 const CA401 = itemRef("CA-401");
-/** The sample's deliberately vague ticket: one line of description. */
 const CA408 = itemRef("CA-408");
 
 /** A sample backend with its supervisor waking a recorder instead of the scripted Pip. GitHub is signed in with every repository watched, unless `options` says otherwise. */
@@ -107,13 +99,13 @@ describe("the sample supervisor", () => {
     finish(b, r1.id);
     expect(wakes).toHaveLength(1);
     expect(wakes[0].ws).toBe(ws);
-    expect(eventLine(wakes[0].facts)).toBe(`[Event] run ${r1.id} (investigate) Done; 1 draft`);
+    expect(eventLine(wakes[0].facts)).toBe(`[Event] run ${r1.id} (investigate) Done`);
     expect(b.runs.list({ workstream: ws })).toHaveLength(1);
 
     const triage = await start(b, ws, "triage");
     finish(b, triage.id);
     expect(wakes).toHaveLength(2);
-    expect(wakes[1].facts[0]).toMatchObject({ run: triage.id, role: "triage", state: "done", planRecommended: true });
+    expect(wakes[1].facts[0]).toMatchObject({ run: triage.id, role: "triage", state: "done" });
     expect(b.runs.list({ workstream: ws })).toHaveLength(2);
 
     expect(Object.fromEntries(wakeCount(wakes))).toEqual({ [`${r1.id}:done`]: 1, [`${triage.id}:done`]: 1 });
@@ -241,54 +233,5 @@ describe("the sample supervisor", () => {
     expect(wakes).toHaveLength(1);
     b.supervisor.check();
     expect(supervisorLines(b, ws).filter((l) => l.startsWith("basis_drifted"))).toHaveLength(1);
-  });
-
-  describe("a triage that finds the ticket not ready to plan", () => {
-    /** A workstream on the vague CA-408, its investigation and its triage, finished: not ready, though it recommends a plan. */
-    async function triaged() {
-      const w = world();
-      const ws = w.b.workstreams.open(CA408).id;
-      finish(w.b, (await investigate(w.b, ws, CA408)).id);
-      const triage = await start(w.b, ws, "triage", CA408);
-      finish(w.b, triage.id);
-      return { ...w, ws, triage };
-    }
-
-    it("says Ready to plan: no with its open questions, and tells Pip how many are open", async () => {
-      const { b, ws, triage, wakes } = await triaged();
-      expect(b.runs.get(triage.id)?.result).toContain("Ready to plan: no\nOpen questions:");
-      expect(b.runs.list({ workstream: ws }).some((r) => r.spec.role === "planner")).toBe(false);
-      expect(triageReadiness(b.runs.get(triage.id)!)?.questions).toHaveLength(4);
-      expect(last(wakes).facts[0]).toMatchObject({ run: triage.id, planRecommended: true, openQuestions: 4 });
-      expect(eventLine(last(wakes).facts)).toBe(`[Event] run ${triage.id} (triage) Done; plan recommended: yes; not ready to plan, 4 open questions; 1 draft`);
-    });
-
-    it("is not what the usual sample tickets do: their triage says nothing of readiness, which reads as ready", async () => {
-      const { b } = world();
-      const ws = b.workstreams.open(CA401).id;
-      const triage = await start(b, ws, "triage");
-      finish(b, triage.id);
-      expect(b.runs.get(triage.id)?.result).not.toContain("Ready to plan");
-      expect(triageReadiness(b.runs.get(triage.id)!)).toBeNull();
-    });
-
-    it("leaves its note as one description update, and no comment of its own", async () => {
-      const { b, triage } = await triaged();
-      const pending = b.proposals.list({ states: ["pending"] }).filter((p) => p.origin.type === "run" && p.origin.runId === triage.id);
-      expect(pending.map((p) => p.intent.type)).toEqual(["rewrite"]);
-    });
-
-    it("is replaced by a later triage's verdict, ready or not", async () => {
-      const { b, ws } = await triaged();
-      const again = await start(b, ws, "triage", CA408);
-      b.runs.scriptNext("triage", { ready: false, questions: ["Which segment?"] });
-      finish(b, again.id);
-      expect(triageReadiness(b.runs.get(again.id)!)).toEqual({ ready: false, questions: ["Which segment?"] });
-      const third = await start(b, ws, "triage", CA408);
-      b.runs.scriptNext("triage", { ready: true });
-      finish(b, third.id);
-      expect(triageReadiness(b.runs.get(third.id)!)).toEqual({ ready: true, questions: [] });
-      expect(b.runs.get(third.id)?.result).toContain("Ready to plan: yes");
-    });
   });
 });

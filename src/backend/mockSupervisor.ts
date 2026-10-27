@@ -1,15 +1,13 @@
 import { stepOf } from "../lib/roles";
 import type { Run } from "../types";
 import { byQueue } from "../lib/workstreamStage";
-import { withoutMarkers } from "./mockRunSpec";
 import type { MockWorkstreams } from "./mockWorkstreams";
 import type { MockRuns } from "./mockRuns";
 import type { MockProposals } from "./mockProposals";
 
 /**
- * The supervisor's decisions as the sample backend makes them, mirroring src-tauri/src/agent/supervisor.rs: `eventLine`,
- * `planRecommended` and `readiness` are `event_line`, `plan_recommended` and `readiness` (src-tauri/src/runs/result.rs).
- * Both sides run src/backend/supervisor.fixtures.json.
+ * The supervisor's decisions as the sample backend makes them, mirroring src-tauri/src/agent/supervisor.rs.
+ * `eventLine` is `event_line`. Both sides run src/backend/supervisor.fixtures.json.
  */
 
 /** What a run did that wakes Pip. */
@@ -82,164 +80,8 @@ export function eventLine(facts: WakeFact[]): string {
   return facts.map(factLine).join("\n");
 }
 
-/**
- * A Triage's `Plan recommended: yes|no` line in its written answer, as `plan_recommended` in runs/result.rs: read
- * case-insensitively and through headings, bullets and emphasis, never inside a code fence or a `>` quote, and lines that
- * disagree count as none.
- */
-export function planRecommended(text: string): boolean | null {
-  return yesNoLine(text, "plan recommended");
-}
-
-/** The `label: yes|no` lines of `text` as `plan_recommended` reads them: `null` when there is none or two disagree. */
-function yesNoLine(text: string, label: string): boolean | null {
-  let fence: { mark: string; len: number } | null = null;
-  let said: boolean | null = null;
-  for (const line of text.split("\n")) {
-    const indent = line.length - line.replace(/^ +/, "").length;
-    const t = line.slice(indent);
-    const opener = indent <= 3 ? /^(`{3,}|~{3,})(.*)$/.exec(t) : null;
-    if (fence) {
-      if (opener && opener[1][0] === fence.mark && opener[1].length >= fence.len && opener[2].trim() === "") fence = null;
-      continue;
-    }
-    if (opener && !(opener[1][0] === "`" && opener[2].includes("`"))) {
-      fence = { mark: opener[1][0], len: opener[1].length };
-      continue;
-    }
-    if (line.trimStart().startsWith(">")) continue;
-    const bare = line.trim().replace(/^[#\-+*_`\s]+/, "");
-    if (bare.slice(0, label.length).toLowerCase() !== label) continue;
-    const rest = bare.slice(label.length).replace(/^[*_`\s]+/, "");
-    if (!rest.startsWith(":")) continue;
-    const word = (/^[A-Za-z]*/.exec(rest.slice(1).replace(/^[*_`\s]+/, ""))?.[0] ?? "").toLowerCase();
-    if (word !== "yes" && word !== "no") continue;
-    const now = word === "yes";
-    if (said !== null && said !== now) return null;
-    said = now;
-  }
-  return said;
-}
-
-/** A Triage's verdict on whether its ticket is clear enough to plan, as `Readiness` in runs/result.rs. */
-export interface Readiness {
-  ready: boolean;
-  /** Empty when ready; a verdict of not ready may have none when the answer listed none. */
-  questions: string[];
-}
-
-/** At most this many open questions are kept, each at most `QUESTION_LIMIT` characters (`QUESTIONS_MAX`, `QUESTION_LIMIT`). */
-export const QUESTIONS_MAX = 8;
-export const QUESTION_LIMIT = 300;
-
-/** The text after a bullet or number on a list line, or null for any other line, as `list_marker`. */
-function listMarker(line: string): string | null {
-  const t = line.trimStart();
-  const bullet = /^[-*+•][ \t]+/.exec(t);
-  if (bullet) return t.slice(bullet[0].length);
-  const numbered = /^\d{1,3}[.)][ \t]+/.exec(t);
-  return numbered ? t.slice(numbered[0].length) : null;
-}
-
-/** What follows `open questions` on a line that is that heading, in any of the usual dressings, as `heading_rest`; null for any other line. */
-function openQuestionsRest(line: string): string | null {
-  const trimmed = line.trim();
-  const bare = trimmed.replace(/^[#>]+/, "").replace(/^[*_`\s]+/, "");
-  if (bare.slice(0, "open questions".length).toLowerCase() !== "open questions") return null;
-  const rest = bare.slice("open questions".length).replace(/^[*_`\s]+/, "");
-  if (rest.startsWith(":")) return rest.slice(1).replace(/^[*_`\s]+/, "");
-  return trimmed.startsWith("#") && rest.trim() === "" ? "" : null;
-}
-
-/** `text` without what doesn't show and without data markers, as `scrub` does for what this needs. */
-function scrubbed(text: string): string {
-  const visible = Array.from(text)
-    .filter((c) => c === "\n" || c === "\t" || !/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]/.test(c))
-    .join("");
-  // Taking one kind of marker out can join the halves of the other, so both go until neither is left.
-  let out = visible;
-  for (;;) {
-    let next = withoutMarkers(out);
-    while (/<<<AGENT_OUTPUT|AGENT_OUTPUT>>>/.test(next)) next = next.replace(/<<<AGENT_OUTPUT|AGENT_OUTPUT>>>/g, "");
-    if (next === out) return out;
-    out = next;
-  }
-}
-
-function cut(text: string, limit: number): string {
-  const chars = Array.from(text);
-  return chars.length <= limit ? text : `${chars.slice(0, limit).join("").trimEnd()}…`;
-}
-
-/**
- * A Triage's `Ready to plan: yes|no` line in its written answer, as `readiness` in runs/result.rs: read as the plan
- * recommendation is, and with a `no`, the list under its `Open questions:` heading (or the text after it on the same
- * line). Quoted lines, code fences and disagreeing lines count for nothing. The questions are one line each, cut, at most
- * `QUESTIONS_MAX`. Null without a verdict, which reads as ready. Both run `report` in src/backend/readiness.fixtures.json.
- */
-export function readiness(result: string): Readiness | null {
-  const clean = scrubbed(result);
-  const ready = yesNoLine(clean, "ready to plan");
-  if (ready === null) return null;
-  if (ready) return { ready, questions: [] };
-  // A quoted heading is somebody else's words, as for the verdict line.
-  const lines = clean.split("\n").map((l) => (l.trimStart().startsWith(">") ? "" : l));
-  const questions: string[] = [];
-  let fence: { mark: string; len: number } | null = null;
-  let start = -1;
-  const fenced = (line: string): boolean => {
-    const indent = line.length - line.replace(/^ +/, "").length;
-    const opener = indent <= 3 ? /^(`{3,}|~{3,})(.*)$/.exec(line.slice(indent)) : null;
-    if (fence) {
-      if (opener && opener[1][0] === fence.mark && opener[1].length >= fence.len && opener[2].trim() === "") fence = null;
-      return true;
-    }
-    if (opener && !(opener[1][0] === "`" && opener[2].includes("`"))) {
-      fence = { mark: opener[1][0], len: opener[1].length };
-      return true;
-    }
-    return false;
-  };
-  for (let i = 0; i < lines.length && start < 0; i++) {
-    if (fenced(lines[i])) continue;
-    const rest = openQuestionsRest(listMarker(lines[i]) ?? lines[i]);
-    if (rest === null) continue;
-    start = i;
-    if (rest.trim()) questions.push(rest);
-  }
-  if (start >= 0) {
-    fence = null;
-    for (const line of lines.slice(start + 1)) {
-      if (fenced(line) || !line.trim()) continue;
-      const item = listMarker(line);
-      if (item === null) break;
-      questions.push(item);
-    }
-  }
-  const flat = (q: string) =>
-    q
-      .replace(/^(\[[ xX]\])/, "")
-      .replace(/\*\*([^*\s](?:[^*]*[^*\s])?)\*\*/g, "$1")
-      .split(/\s+/)
-      .filter(Boolean)
-      .join(" ")
-      .replace(/^[*_`\s]+|[*_`\s]+$/g, "");
-  return { ready, questions: oneQuestionEach(questions.map(flat).filter((q) => q !== "")).slice(0, QUESTIONS_MAX).map((q) => cut(q, QUESTION_LIMIT)) };
-}
-
-/** What a finished Triage on a ticket says about a plan, from its whole written answer, as `Resolved.plan_recommended`. */
-function triagePlanRecommended(run: Run): boolean | null {
-  return run.item && run.resultComplete !== false && run.result ? planRecommended(run.result) : null;
-}
-
-/** A listed question that holds several ("What is done? Which number changes?") as one each, so every bullet is one question; as `one_question_each` in runs/result.rs. */
 export function oneQuestionEach(questions: readonly string[]): string[] {
   return questions.flatMap((q) => q.trim().split(/(?<=\?)\s+(?=\p{Lu})/u)).filter((q) => q !== "");
-}
-
-/** What a finished Triage on a ticket says about its ticket being ready to plan, from its whole written answer, as `Resolved.readiness`. */
-export function triageReadiness(run: Run): Readiness | null {
-  return stepOf(run.spec.role) === "triage" && run.item && run.resultComplete !== false && run.result ? readiness(run.result) : null;
 }
 
 /** A description is thin when it is a single non-empty line of fewer than `THIN_LIMIT` characters: the one deliberately vague kind of ticket the sample's Triage recognises. */
@@ -370,11 +212,6 @@ export class MockSupervisor {
   private factOf(run: Run, state: WakeState): KeyedFact {
     const fact: KeyedFact = { run: run.id, role: run.spec.role, state, key: factKey(run, state) };
     if (state !== "done") return fact;
-    if (stepOf(run.spec.role) === "triage") {
-      fact.planRecommended = triagePlanRecommended(run);
-      const found = triageReadiness(run);
-      if (found && !found.ready) fact.openQuestions = found.questions.length;
-    }
     fact.drafts = this.parts.runs.draftsWaitingFrom(run.id);
     if (stepOf(run.spec.role) === "build" && this.parts.runs.pullHeadOf(run.id) === null) fact.waitingForPr = true;
     return fact;
