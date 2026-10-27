@@ -1,6 +1,6 @@
 # Gossamr
 
-A keyboard-first Jira client for macOS. It keeps a local inbox of what changed on the tickets you care about, sends native notifications, lets you transition and comment without opening Jira, and can hand a ticket to Claude Code using your existing Claude login and sessions.
+A keyboard-first Jira client for macOS. It keeps a local inbox of what changed on the tickets you care about, sends native notifications, and lets you transition and comment without opening Jira. Pip, the assistant, works through tickets with you and starts Claude Code agents on them, with your own Claude login and setup.
 
 Built with Tauri 2, React, TypeScript and Tailwind CSS v4.
 
@@ -8,7 +8,7 @@ Built with Tauri 2, React, TypeScript and Tailwind CSS v4.
 
 - macOS with Xcode Command Line Tools
 - Rust (stable) and Node 22 with pnpm
-- [Claude Code](https://code.claude.com) installed and logged in, for the Ask Claude panel
+- [Claude Code](https://code.claude.com) installed and logged in, for Pip and agents
 
 ## Connecting Jira
 
@@ -41,8 +41,8 @@ Gossamr looks for the client in this order, and the setup screen is skipped when
 The app opens in the workspace, a board, list and age view over everything synced from Jira, with a rail of projects and saved views, tabs, a command palette (`⌘K`), a peek sheet for one ticket and Pip, the assistant, docked on the right (`⌘J`). `⌘R` (View > Reload) reloads the window; it only redraws the page and restarts nothing in the app. Everything is read from the local cache, so it starts with the last data when offline. The assistant only proposes: dropping a card on a column, a comment written in the peek sheet and Pip's suggestions all become drafts, and nothing is written to Jira until you approve one.
 
 - **Board:** one section per project with that project's own statuses. Jira only reveals the moves open to a ticket one ticket at a time, so when you pick a card up the app asks Jira where it can go and dims the other columns.
-- **Agents and Plan runs:** a Plan run reads the code and writes an implementation plan. When it finishes, Gossamr drafts two things for you to read, and writes nothing to Jira until you approve them: a short status comment, and an update to the ticket's description that adds the plan as a collapsed `Gossamr Plan` section (a Jira expand, replacing the plan if the ticket already has one), so other agents and people can see and check the agreed work without it filling the description. The description update opens as a before-and-after diff that you can approve, edit, skip or talk over with Pip. The plan text is the agent's own answer, put together without a model; if the ticket's description can't be edited as rich text, or is too long to hold the plan, the run sheet says why and the plan can still be drafted as a comment. Later Build, Review and Verify runs are shown the section as part of the ticket.
-- **Settings:** the Jira site and account, when it last synced, **Sync now**, and **Sign out**.
+- **Workstreams and agents:** a workstream is the work on one ticket. You or Pip open one, and inside it Pip starts Claude Code agents, each with a role Pip names (planner, builder, reviewer or anything else). **Agents** lists every run by workstream. When an agent reports, Gossamr drafts what follows from it for you to approve: a short status comment, and for a planner an update to the ticket's description that adds the plan as a collapsed `Gossamr Plan` section (a Jira expand, replacing the plan if the ticket already has one). The description update opens as a before-and-after diff that you can approve, edit, skip or talk over with Pip. If the description can't be edited as rich text, or is too long to hold the plan, the run sheet says why and the plan can still be drafted as a comment. Later agents on the ticket see the section as part of it.
+- **Settings:** the Jira site and account, when it last synced, **Sync now**, **Sign out**, and how many agents run at once.
 - **Errors** that don't block anything (a failed sync, a move that couldn't be checked) appear as a toast in the corner.
 
 ### Mock mode
@@ -61,13 +61,15 @@ The Jira adapter was written against the REST v3 documentation and tested with r
 - Pip narrowing the view (`pip-view`, `set_view_filter`).
 - Bulk moves offer every status and rely on Jira refusing the ones a ticket can't reach.
 
-## Ask Claude
+## Pip and agents
 
-Press `⌘J` from any screen to open Pip, the drawer on the right (`Esc` closes it), and ask about the ticket on screen. The app runs your installed Claude Code headlessly (`claude -p`) with your existing login, so it uses your subscription. It does not load your CLAUDE.md, memory, skills, hooks, plugins or other MCP servers. It runs in an empty folder inside the app's data directory, and follow-ups continue the session Pip started there. It runs Sonnet at medium effort, whatever your Claude Code default is.
+Press `⌘J` from any screen to open Pip, the drawer on the right (`Esc` closes it). You always talk to Pip, in General or in a workstream's own conversation. Pip sees every workstream and agent run, and drives the work: it opens and closes workstreams, starts, messages and stops agents, answers their questions or passes them to you, and drafts what should go to Jira or GitHub.
 
-Agents are Claude Code sessions. Claude asks once per folder whether to trust it, because a cloned repository's own hooks, MCP servers and settings run with the agent. Gossamr never edits Claude's config or answers that question for you. When a folder isn't trusted yet, the checks before you approve show a Trust this folder button that opens Terminal there with `claude`; accept the question, close Terminal, and the checks run again. If a launch is refused anyway, the run opens with the reason and the same button, and Retry starts the same approved run again.
+Pip runs your installed Claude Code headlessly (`claude -p`) with your existing login, so it uses your subscription. It runs Sonnet at medium effort, whatever your Claude Code default is, in an empty folder inside the app's data directory. It does not load your CLAUDE.md, memory, skills, hooks, plugins or other MCP servers, and it has no built-in Claude Code tools: it can't read local files, run commands, browse the web or write files. It acts only through tools on a local MCP server the app runs. It can't change Jira or GitHub either: comments, transitions, subtasks, new tickets, new titles or descriptions and pull request reviews come back as drafts you approve, edit or skip.
 
-Claude can read the ticket through a local MCP server the app runs, and nothing else: no built-in Claude Code tools, so it can't read local files, run commands, browse the web or write files. It can't change Jira either: comments, transitions, subtasks, new tickets and new titles or descriptions for a ticket come back as cards you approve, edit or skip. A description edit shows as a before-and-after diff.
+Agents are Claude Code background sessions (`claude --bg --worktree`) with your own Claude setup: your settings, CLAUDE.md, skills and MCP servers. Gossamr adds only its own MCP server, with four tools (report, ask, read_workstream and read_ticket), and a short brief: the agent's role, the ticket as data, and to push only its own branch, open draft pull requests and never merge. When an agent asks for a permission, its run shows the command and an **Open in Terminal** button, where you answer Claude yourself.
+
+Claude asks once per folder whether to trust it, because a cloned repository's own hooks, MCP servers and settings run with the agent. Gossamr never edits Claude's config or answers that question for you. If a folder isn't trusted yet, the run says so with a **Trust this folder in Terminal** button that opens Terminal there with `claude`. Accept the question, close Terminal, and Retry the run.
 
 ## Development
 
