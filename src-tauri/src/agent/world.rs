@@ -198,6 +198,27 @@ async fn a_workstream_the_person_drives_writes_jira_once() -> std::result::Resul
     w.sweep().await;
     jira(0, "after the plan finished")?;
 
+    // Finishing drafts nothing. Pip saves the plan as a description draft; the person approves it.
+    let cached = core.cache_item(&fx.item("CA-1")).await.unwrap().ok_or("CA-1 isn't cached")?;
+    let intent = Intent::Rewrite {
+        item: fx.item("CA-1"),
+        title: None,
+        body: Some(crate::domain::BodyChange { from: cached.body.clone(), to: crate::domain::Doc::paragraph("## Plan\n\n1. Fix the rounding") }),
+        flattened: vec![],
+    };
+    core.propose(
+        &fx.scope,
+        crate::proposals::Draft {
+            origin: Origin::Run { run_id: plan.id.clone(), short_id: plan.short_id.as_ref().map(|id| id.as_str().to_string()), workstream: Some(w.ws.clone()) },
+            created_by: crate::domain::CreatedBy::Agent,
+            intent,
+            label: None,
+            basis: None,
+        },
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+
     // The person approves the plan's description draft: the only Jira write there is.
     let draft = core.proposals_in(&fx.scope, &ProposalQuery::default()).await.unwrap().into_iter().find(|p| matches!(&p.origin, Origin::Run { run_id, .. } if *run_id == plan.id) && matches!(p.intent, Intent::Rewrite { .. })).ok_or("no plan description draft")?;
     // Jira's copy of the ticket with its summary as the cache has it, so the write changes only the description.
@@ -279,8 +300,8 @@ async fn a_review_is_posted_to_github_only_on_the_persons_approval() -> std::res
     let body: Value = serde_json::from_str(&post.body).map_err(|e| e.to_string())?;
     let comments = body["comments"].as_array().cloned().unwrap_or_default();
     let inline: Vec<_> = comments.iter().map(|c| (c["path"].as_str().unwrap_or(""), c["line"].as_u64().unwrap_or(0), c["side"].as_str().unwrap_or(""), c["body"].as_str().unwrap_or(""))).collect();
-    if body["event"] != "COMMENT" || body["commit_id"] != FIRST || inline != [("src/cart.ts", 3, "RIGHT", "**Nit:** naming")] {
-        return Err(format!("the review posted isn't the review's comment review at the commit it read: {body}"));
+    if body["event"] != "COMMENT" || body["commit_id"] != FIRST || body["body"] != "Looks good to merge." || !inline.is_empty() {
+        return Err(format!("the review posted isn't the draft the person approved: {body}"));
     }
     if core.post_review_draft(&draft.id, draft.revisions.len(), false).await.is_ok() || writes().len() != 1 {
         return Err("approving the posted review again sent it again".into());
@@ -664,7 +685,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_finished_review_leaves_its_github_review_draft_even_with_drafting_on_finish_turned_off() {
+    async fn a_finished_review_leaves_no_draft_and_posts_nothing() {
         let w = World::start().await;
         w.rig.svc.set_settings(crate::config::AgentSettings { draft_on_finish: false, ..w.rig.svc.settings() }).unwrap();
         let run = w.rig.launched(7).await;
@@ -675,8 +696,8 @@ mod tests {
             .await;
         let done = w.finish(&run, BLOCKING).await;
         let drafts = w.rig.fx.core.proposals_in(&w.rig.fx.scope, &ProposalQuery::default()).await.unwrap();
-        let of_run: Vec<_> = drafts.iter().filter(|p| matches!(&p.origin, Origin::Run { run_id, .. } if *run_id == done.id)).map(|p| p.intent.clone()).collect();
-        assert!(matches!(of_run.as_slice(), [Intent::GithubReview { number: 12, commit_sha, .. }] if commit_sha == FIRST), "only the review draft, which nothing else makes: {of_run:?}");
+        let of_run: Vec<_> = drafts.iter().filter(|p| matches!(&p.origin, Origin::Run { run_id, .. } if *run_id == done.id)).collect();
+        assert!(of_run.is_empty(), "finishing a review drafts nothing; Pip drafts: {of_run:?}");
         assert!(w.rig.fx.github_seen().iter().all(|(method, _)| method == "GET"), "nothing was posted");
     }
 

@@ -1355,16 +1355,18 @@ mod tests {
         let pips = made(&db, in_ws("w1", move_to("1", "review")));
         let other = made(&db, Draft { origin: Origin::Board, created_by: CreatedBy::User, intent: move_to("2", "doing"), label: None, basis: None });
         let comment = made(&db, in_ws("w1", Intent::Comment { item: item_ref("1"), body: Doc::paragraph("hi") }));
+        // Pip's newer move replaced the agent's. The person's own move stays beside it until one is approved.
+        assert_eq!(state_of(&db, &agent.id), ProposalState::Retired(REPLACED_REASON.into()));
+        assert_eq!(db.proposal(&agent.id).unwrap().unwrap().superseded_by.as_deref(), Some(pips.id.as_str()));
+        assert_eq!(state_of(&db, &by_hand.id), ProposalState::Pending);
         assert_eq!(reconcile_pending(&db, &me(), now()).unwrap(), 0, "nothing approved yet");
 
         approve(&db, &tracker, &pips.id).await.unwrap();
-        assert_eq!(reconcile_pending(&db, &me(), now()).unwrap(), 2);
+        assert_eq!(reconcile_pending(&db, &me(), now()).unwrap(), 1);
         let why = ProposalState::Retired(format!("Another move of {} was approved", item_ref("1").key));
         assert_eq!(state_of(&db, &by_hand.id), why);
-        assert_eq!(state_of(&db, &agent.id), why);
-        assert_eq!(db.proposal(&agent.id).unwrap().unwrap().superseded_by, None);
         assert_eq!((state_of(&db, &other.id), state_of(&db, &comment.id)), (ProposalState::Pending, ProposalState::Pending));
-        assert!(db.workstream_events("w2").unwrap().iter().any(|e| e.action == "draft_retired" && e.actor == Actor::Supervisor && e.proposal_id.as_deref() == Some(agent.id.as_str())));
+        assert!(db.workstream_events("w2").unwrap().iter().any(|e| e.action == "draft_superseded" && e.actor == Actor::Pip && e.proposal_id.as_deref() == Some(agent.id.as_str())));
 
         let later = create(&db, Draft { origin: Origin::Board, created_by: CreatedBy::User, intent: move_to("1", "todo"), label: None, basis: None }, Utc::now() + chrono::Duration::seconds(5)).unwrap();
         assert_eq!(reconcile_pending(&db, &me(), Utc::now() + chrono::Duration::seconds(5)).unwrap(), 0, "a move drafted after the approval stays");

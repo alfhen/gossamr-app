@@ -874,7 +874,12 @@ mod tests {
         let plan = insert_run(&fx, "r1", None, "plan", RunState::Done).await;
         insert_run(&fx, "elsewhere", Some("ws-other"), "build", RunState::Done).await;
         let chat = draft_on_ca1(&fx, Origin::chat("q1")).await;
-        let board = draft_on_ca1(&fx, Origin::Board).await;
+        // A second comment on CA-1 would replace the first. The board draft is a different ticket, so both stay.
+        let board = {
+            use crate::domain::{Doc, Intent};
+            let draft = proposals::Draft { origin: Origin::Board, created_by: CreatedBy::Pip, intent: Intent::Comment { item: fx.item("CA-2"), body: Doc::paragraph("hello") }, label: None, basis: None };
+            fx.core.propose(&fx.scope, draft).await.unwrap()
+        };
         let ws = fx.core.open_workstream(&fx.scope, Some(fx.item("CA-1")), None).await.unwrap();
 
         let moved = fx.core.adopt_into_workstream(&fx.scope, &ws.id).await.unwrap();

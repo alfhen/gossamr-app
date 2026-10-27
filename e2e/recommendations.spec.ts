@@ -1,5 +1,5 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
-import { pauseAtCeiling, agentsHome, askPip, expandNeedsYou, groupByState, homeSettled, jiraWrites, needRow, needsPane, needsYouCount, needsYouTray, openAgents, openApp, pipPane, selectWorkstream, startWorkstream, stepRail, openNeedOfKind, groupOpen, needsStack } from "./support/app";
+import { pauseAtCeiling, agentsHome, askPip, expandNeedsYou, groupByState, homeSettled, jiraWrites, keepComments, needRow, needsPane, needsYouCount, needsYouTray, openAgents, openApp, pipPane, selectWorkstream, startWorkstream, stepRail, openNeedOfKind, groupOpen, needsStack } from "./support/app";
 
 // A few layout and keyboard scenarios of Pip home (docs/needs-you.md).
 
@@ -76,6 +76,7 @@ async function twoDrafts(page: Page) {
   await workstreamOnHome(page);
   await askPip(page, "Draft a comment");
   await homeSettled(page);
+  await keepComments(page);
   await askPip(page, "Draft a comment");
   await homeSettled(page);
   await expect(needsYouCount(page)).toHaveText("2");

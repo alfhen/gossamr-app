@@ -142,6 +142,8 @@ export interface MockHandle {
   pipIdle(): boolean;
   /** Changes sample ticket `key` as someone editing it in Jira would (`MockBackend.editTicket`): its summary, description or status (an id or a name). */
   editTicket(key: string, change: TicketEdit): void;
+  /** Marks pending draft `id` as edited by the person, so a newer draft of the same kind stays beside it. */
+  noteEdited(id: string): void;
   /** Every review the sample GitHub was sent, oldest first: the only writes it takes, each from a draft the person approved. */
   githubWrites(): GithubWrite[];
   /** Someone pushes to pull request `number` of `repo`: its head moves to a new commit whose diff lacks the lines it showed. */
@@ -174,7 +176,7 @@ export interface MockClockParts {
   runs: { advance(id?: string): void; list(): { id: string; spec: { role: string; prSha?: string | null; name: string }; state: string; passes?: number; item?: { key: string } | null; shortId?: string | null; digest: string }[]; surfacePullRequests(): boolean; launches(): MockLaunch[]; scriptNext(kind: Step, script: ScriptedFinish): void; pipStart(a: { workstream: string | null; role: string; brief: string | null; repo: string | null; pr?: number | null; item: ItemRef | null }, requestId: string): { id: string }; ask(id: string, question: string): unknown; askPermission(id: string, needs: string): unknown; block(id: string): unknown; lose(id: string): unknown; readonly attached: readonly string[] };
   workstreams?: { list(includeClosed?: boolean): { workstream: { id: string; itemKey: string | null; closedAt: string | null } }[]; events(id: string): MockHandleEvent[]; pause(id: string, reason: "person" | "ceiling", actor: "supervisor"): unknown; seedEvent(id: string, actor: WorkstreamActor, action: string, at: string, extra?: { runId?: string | null; proposalId?: string | null; detail?: string | null }): unknown };
   draftReview: MockHandle["draftReview"];
-  proposals?: { writes: readonly { proposalId: string; intent: Intent }[]; list(): Proposal[] };
+  proposals?: { writes: readonly { proposalId: string; intent: Intent }[]; list(): Proposal[]; noteEdited(id: string): void };
   pip?: { hold(on: boolean): void; idle(): boolean };
   tickets?: { edit(key: string, change: TicketEdit): void };
   github?: { writes: readonly GithubWrite[]; movePullHead(repo: string, number: number): boolean; tried(): number; loseNextAnswer(kept: boolean): void };
@@ -233,6 +235,10 @@ export function exposeMockClock({ runs, workstreams, proposals, pip, tickets, gi
     holdPip: (on) => pip?.hold(on),
     pipIdle: () => pip?.idle() ?? true,
     editTicket: (key, change) => tickets?.edit(key, change),
+    noteEdited: (id) => {
+      if (!proposals) throw new Error("the sample clock has no drafts");
+      proposals.noteEdited(id);
+    },
     githubWrites: () => (github?.writes ?? []).map((w) => ({ ...w, comments: w.comments.map((c) => ({ ...c })) })),
     movePullHead: (repo, number) => github?.movePullHead(repo, number) ?? false,
     githubPostsTried: () => github?.tried() ?? 0,

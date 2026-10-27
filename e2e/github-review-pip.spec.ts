@@ -12,7 +12,7 @@ async function discuss(page: Page, review: Locator) {
   await review.getByRole("button", { name: "Discuss with Pip" }).click();
   await expect(pipPane(page)).toBeVisible();
   await expect(pipPane(page)).toContainText("I read the review of acme/webshop#218 in full, with the diff around each comment");
-  await expect(pipPane(page).locator('[data-turn-kind="user"]').last()).toContainText("Discuss this review");
+  await expect(pipPane(page).locator('[data-turn-kind="user"]').last()).toContainText("Ask Pip about this draft");
   await settled(page);
 }
 

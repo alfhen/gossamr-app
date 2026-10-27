@@ -349,7 +349,9 @@ async fn get(st: &McpState, pip: &PipRun, args: &Value) -> Reply {
         }
     }
     let mut steps: Vec<String> = Vec::new();
-    let mut used: usize = out.iter().map(|l| l.chars().count() + 1).sum::<usize>() + 40;
+    // The heading and the "earlier steps" line are added after the loop, so they count before a step is kept.
+    let earlier_room = format!("\nEarlier steps: call get_run_events with id {} (it holds {}).", run.id, events.len()).chars().count();
+    let mut used: usize = out.iter().map(|l| l.chars().count() + 1).sum::<usize>() + "Latest steps, oldest first:\n".chars().count() + earlier_room;
     for e in events.iter().rev().take(EVENTS_SHOWN) {
         let kind: String = e.kind.chars().filter(char::is_ascii_alphanumeric).take(20).collect();
         let Some(text) = quoted(&e.text, EVENT_CHARS, true) else { continue };

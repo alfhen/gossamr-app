@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { closeWorkstreamSheet, advanceRuns, askPip, expandNeedsYou, expectToast, finishOnHome, githubWrites, homeConversation, homeConversationRegion, homeSettled, jiraWrites, showWorkspace, mockRuns, needsPane, openAgents, openApp, openPip, peekSheet, peekTicket, PIP_INPUT, pipConversation, pipPane, reviewedDraft, scriptNextRun, startAgent, selectWorkstream, startWorkstream, stepChip, surfacePullRequests, wakes, workstreamGroup, openNeedRow, openRunOf, paneSettled as settled } from "./support/app";
+import { closeWorkstreamSheet, advanceRuns, askPip, expandNeedsYou, expectToast, finishOnHome, githubWrites, homeConversation, homeConversationRegion, homeSettled, jiraWrites, keepComments, showWorkspace, mockRuns, needsPane, openAgents, openApp, openPip, peekSheet, peekTicket, PIP_INPUT, pipConversation, pipPane, reviewedDraft, scriptNextRun, startAgent, selectWorkstream, startWorkstream, stepChip, surfacePullRequests, wakes, workstreamGroup, openNeedRow, openRunOf, paneSettled as settled } from "./support/app";
 
 // Pull requests show only when a test says.
 const SAMPLE = "runs=empty&prSurface=manual";
@@ -297,6 +297,7 @@ test.describe("draft cards: click, Esc, a and s (D2, D7, D23, D28)", () => {
     await peekTicket(page, "CA-401");
     await openPip(page);
     for (let i = 1; i <= 2; i++) {
+      if (i > 1) await keepComments(page);
       await askPip(page, "Draft a comment");
       await expect(pipPane(page).getByRole("article", { name: "Comment on CA-401" })).toHaveCount(i);
       await settled(page);
@@ -337,6 +338,7 @@ test.describe("draft cards: click, Esc, a and s (D2, D7, D23, D28)", () => {
     await askPip(page, "investigate this");
     await homeSettled(page);
     await finishOnHome(page, (await newest(page, "investigate"))!.id);
+    await keepComments(page);
     await askPip(page, "triage this");
     await homeSettled(page);
     await finishOnHome(page, (await newest(page, "triage"))!.id);
@@ -499,7 +501,7 @@ test.describe("Discuss with Pip on a review (D22)", () => {
     const review = await reviewedDraft(page);
     await review.getByRole("button", { name: "Discuss with Pip" }).click();
     const drafts = pipPane(page).getByRole("region", { name: "Drafts" });
-    await expect(pipPane(page).getByText("Discuss this review")).toBeInViewport();
+    await expect(pipPane(page).getByText("Ask Pip about this draft")).toBeInViewport();
     const others = drafts.locator("[data-other-tickets]");
     await expect(others).toHaveText(/^▸ \+\d+ drafts? on other tickets$/);
     await expect(others).toHaveAttribute("aria-expanded", "false");

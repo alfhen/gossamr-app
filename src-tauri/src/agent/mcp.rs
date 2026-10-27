@@ -1417,9 +1417,10 @@ mod tests {
     #[tokio::test]
     async fn list_proposals_shows_everyone_s_drafts_and_marks_the_ones_pip_may_change() {
         let r = rig().await;
-        let mine = id_in(&r.ok("propose_comment", json!({ "key": "CA-1", "body": "mine" })).await);
+        // The person's drafts are older, so Pip's comment stays beside them instead of retiring them.
         let users = r.draft_by(CreatedBy::User, "the user's").await;
         let skipped = r.draft_by(CreatedBy::User, "skipped one").await;
+        let mine = id_in(&r.ok("propose_comment", json!({ "key": "CA-1", "body": "mine" })).await);
         r.fx.core.skip_proposal(&skipped.id).await.unwrap();
         r.ok("propose_subtasks", json!({ "key": "CA-2", "summaries": ["x"] })).await;
 
@@ -1441,8 +1442,9 @@ mod tests {
     #[tokio::test]
     async fn pip_may_revise_and_retire_only_its_own_pending_drafts() {
         let r = rig().await;
-        let mine = id_in(&r.ok("propose_comment", json!({ "key": "CA-1", "body": "first try" })).await);
+        // The person's draft is older, so it stays beside Pip's comment on the same ticket.
         let users = r.draft_by(CreatedBy::User, "the user's words").await;
+        let mine = id_in(&r.ok("propose_comment", json!({ "key": "CA-1", "body": "first try" })).await);
         let before = r.drafts().await;
 
         let revise = r.err("revise_proposal", json!({ "id": users.id, "body": "hijacked" })).await;
@@ -1486,8 +1488,9 @@ mod tests {
     #[tokio::test]
     async fn pip_may_revise_the_pending_comment_a_run_left_but_nothing_else_the_person_made() {
         let r = rig().await;
-        let left = r.draft_from(from_run(), CreatedBy::User, "From the run").await;
+        // The person's own comment is older, so the run's comment does not retire it.
         let by_hand = r.draft_by(CreatedBy::User, "typed by the person").await;
+        let left = r.draft_from(from_run(), CreatedBy::User, "From the run").await;
         let before = r.stored(&by_hand.id).await;
 
         let reply = r.ok("revise_proposal", json!({ "id": left.id, "body": "Reworked with the full result" })).await;

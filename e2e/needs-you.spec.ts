@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { agentsHome, closeWorkstreamSheet, groupOpen, needsStack, workstreamSheet, askPip, blockRun, expandNeedsYou, pauseAtCeiling, homeConversation, homeConversationRegion, homeSettled, jiraWrites, loseRun, mockAttached, mockRuns, needRow, needsPane, needsPaneHeading, needsYouCount, needsYouTray, openAgents, openApp, selectWorkstream, startWorkstream, workstreamGroup } from "./support/app";
+import { agentsHome, closeWorkstreamSheet, groupOpen, needsStack, workstreamSheet, askPip, blockRun, expandNeedsYou, pauseAtCeiling, homeConversation, homeConversationRegion, homeSettled, jiraWrites, keepComments, loseRun, mockAttached, mockRuns, needRow, needsPane, needsPaneHeading, needsYouCount, needsYouTray, openAgents, openApp, selectWorkstream, startWorkstream, workstreamGroup } from "./support/app";
 
 // One Needs you (docs/needs-you.md): what waits on the person is one count everywhere, a filter on Agents, and each
 // workstream's decisions are at the top of its detail.
@@ -175,6 +175,7 @@ test("'Approve N safe drafts' approves comments and moves together after one con
   await homeSettled(page);
   await askPip(page, "move it to QA");
   await homeSettled(page);
+  await keepComments(page);
   await askPip(page, "Draft a comment");
   await homeSettled(page);
   await expect(needsYouCount(page)).toHaveText("3");

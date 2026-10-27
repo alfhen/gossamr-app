@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { advanceRuns, agentsHome, askPermission, askPip, expectToast, mockAttached, homeComposer, homeConversationRegion, homeSettled, jiraWrites, mockRuns, needOfKind, needsPane, openAgents, openApp, openPip, peekSheet, PIP_INPUT, pipPane, selectWorkstream, startWorkstream, workstreamEvents, workstreamGroup, openNeedOfKind, workstreamSheet } from "./support/app";
+import { advanceRuns, agentsHome, askPermission, askPip, expectToast, mockAttached, homeComposer, homeConversationRegion, homeSettled, jiraWrites, keepComments, mockRuns, needOfKind, needsPane, openAgents, openApp, openPip, peekSheet, PIP_INPUT, pipPane, selectWorkstream, startWorkstream, workstreamEvents, workstreamGroup, openNeedOfKind, workstreamSheet } from "./support/app";
 
 // Step 4 of the UX overhaul: less ceremony. Reversible actions (skipping a draft, dismissing a failure) act at once and
 // offer Undo for about 8 seconds, instead of asking first; what reaches
@@ -149,6 +149,7 @@ async function commentDrafts(page: Page, n: number) {
   await openPip(page);
   const cards = pipPane(page).getByRole("article", { name: "Comment on CA-401" });
   for (let i = 0; i < n; i++) {
+    if (i > 0) await keepComments(page);
     await askPip(page, NUDGE_DRAFT);
     await expect(cards).toHaveCount(i + 1);
     await expect(pipPane(page).getByRole("button", { name: "Stop" })).toHaveCount(0);
@@ -306,6 +307,7 @@ test("Cmd/Ctrl+K reaches Pause for the selected workstream, and 'Approve all saf
   await workstreamOnHome(page);
   await askPip(page, NUDGE_DRAFT);
   await homeSettled(page);
+  await keepComments(page);
   await askPip(page, "Draft another comment on this one");
   await homeSettled(page);
 

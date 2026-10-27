@@ -57,7 +57,7 @@ test("a post whose answer was lost says the review may be on GitHub, sends nothi
   expect(await githubPostsTried(page)).toBe(1);
   expect(await githubWrites(page)).toEqual([]);
 
-  await review.getByRole("button", { name: "Post anyway" }).click();
+  await review.getByRole("button", { name: "Post again" }).click();
   await expect.poll(async () => (await githubWrites(page)).length).toBe(1);
   const [write] = await githubWrites(page);
   await expect(page.locator(`[data-draft="${write.proposalId}"] [data-review-posted]`).first()).toContainText("Posted to GitHub");

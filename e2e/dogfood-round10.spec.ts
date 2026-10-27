@@ -1,5 +1,5 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
-import { askPip, pipCommentDraft, expandAllNeeds, expandNeedsYou, homeSettled, jiraWrites, needsPane, needsYouCount, openAgents, openApp, selectWorkstream, startWorkstream, openNeedRow, needsStack } from "./support/app";
+import { askPip, pipCommentDraft, expandAllNeeds, expandNeedsYou, homeSettled, jiraWrites, keepComments, needsPane, needsYouCount, openAgents, openApp, selectWorkstream, startWorkstream, openNeedRow, needsStack } from "./support/app";
 
 // Fixes from the tenth dogfood round: the long description draft in the Decision pane keeping its actions in view (G10), the
 // posting pause saying what tripped it, one sentence for each risk (G4), and a batch that does not post one comment twice (G2).
@@ -76,6 +76,7 @@ test.describe("Approve N safe drafts with two identical comments (G2)", () => {
     await selectWorkstream(page, "CA-401");
     // Pip words a check-in three ways, so the fourth asked for says what the first did.
     for (let i = 0; i < 4; i++) {
+      if (i > 0) await keepComments(page);
       await askPip(page, "Draft a comment");
       await homeSettled(page);
     }

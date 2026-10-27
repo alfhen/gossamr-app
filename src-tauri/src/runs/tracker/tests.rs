@@ -752,7 +752,7 @@ async fn a_session_left_open_at_its_prompt_after_answering_is_done_on_the_second
         rig.poll().await;
     }
     assert_eq!(rig.get(&run).await, done, "an idle session leaves a finished run alone");
-    assert_eq!((rig.noticed().len(), comment_drafts(&rig).await.len()), (1, 1));
+    assert_eq!((rig.noticed().len(), comment_drafts(&rig).await.len()), (1, 0));
 
     let tally = rig.svc.stop_all().await.unwrap();
     assert_eq!(tally.stopped, 0);

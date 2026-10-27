@@ -221,6 +221,15 @@ export class MockProposals {
     this.changed();
   }
 
+  /**
+   * Records that the person edited pending draft `id`, without changing what it would post. A newer draft of the same
+   * kind then stays beside it, which is the rule `supersession` applies to an `Edited` revision.
+   */
+  noteEdited(id: string): Proposal {
+    const p = this.pending(id);
+    return this.edited(p, p.intent);
+  }
+
   /** The person's change to a draft, kept as an `Edited` revision as the backend keeps every edit. */
   private edited(p: Proposal, intent: Intent): Proposal {
     return this.set(p.id, { intent, revisions: [...p.revisions, { at: new Date().toISOString(), note: "Edited", intent }], error: null });

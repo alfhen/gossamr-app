@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { agentsHome, askPip, closeWorkstreamSheet, pauseAtCeiling, homeConversation, homeConversationRegion, homeSettled, jiraWrites, mockRuns, needOfKind, needsPane, needsPaneHeading, needsYouCount, needsYouTray, openAgents, openApp, openNeedOfKind, openPip, pipPane, selectWorkstream, startWorkstream, stepChip, stepRail, workstreamGroup } from "./support/app";
+import { agentsHome, askPip, closeWorkstreamSheet, pauseAtCeiling, homeConversation, homeConversationRegion, homeSettled, jiraWrites, keepComments, mockRuns, needOfKind, needsPane, needsPaneHeading, needsYouCount, needsYouTray, openAgents, openApp, openNeedOfKind, openPip, pipPane, selectWorkstream, startWorkstream, stepChip, stepRail, workstreamGroup } from "./support/app";
 
 /** The rail's Agents button. */
 const homeButton = (page: Page) => page.locator("[data-rail]").getByRole("button", { name: /^Agents/ });
@@ -154,6 +154,7 @@ test("the rail's batch button approves Pip's two comments and never the descript
     ["Draft another comment on this one", 2],
     ["Draft a description update", 3],
   ] as const) {
+    if (drafts > 1) await keepComments(page);
     await askPip(page, ask);
     await expect(pane.locator('article[data-draft][data-state="pending"]')).toHaveCount(drafts);
   }
