@@ -277,7 +277,7 @@ const COMMENT_WORDS = 6;
 export function latestRuns(runs: readonly Pick<Run, "id" | "item" | "spec" | "queuedAt" | "connectionId">[]): Set<string> {
   const newest = new Map<string, Pick<Run, "id" | "queuedAt">>();
   for (const run of runs) {
-    const key = `${run.item ? `${run.item.connectionId}\n${run.item.externalId}` : `${run.connectionId}\n${run.spec.repo}`}\n${run.spec.role}`;
+    const key = `${run.item ? `${run.item.connectionId}\n${run.item.externalId}` : `${run.connectionId}\n${run.spec.repo}`}\n${stepOf(run.spec.role) ?? run.spec.role}`;
     const seen = newest.get(key);
     if (!seen || run.queuedAt > seen.queuedAt || (run.queuedAt === seen.queuedAt && run.id > seen.id)) newest.set(key, run);
   }

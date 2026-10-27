@@ -390,8 +390,7 @@ describe("what the list's keys do", () => {
   });
 
   it("allows, retries and resumes only after Enter: they reach an agent or start something", () => {
-    // A permission's primary is an Allow once only where the run offers one; otherwise a opens its decision.
-    expect(["ask", "open"]).toContain(keyPlan(need("run:r-perm"), "approve")?.type);
+    expect(keyPlan(need("run:r-perm"), "approve")).toMatchObject({ type: "open" });
     expect(keyPlan(need("paused:ws-2"), "approve")).toMatchObject({ type: "ask", text: "resume this workstream" });
   });
 

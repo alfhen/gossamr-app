@@ -26,7 +26,7 @@ use crate::tracker::Connection;
 /// Calls a run may make to the tools that read or wait, in total. `report` counts its own, smaller, calls.
 pub(super) const CALL_CAP: u32 = 200;
 /// What `read_workstream` shows of one other run, and of all of them together.
-const RUN_CHARS: usize = 8_000;
+const RUN_CHARS: usize = 16_000;
 const RUNS_CHARS: usize = 30_000;
 const TICKET_CHARS: usize = 12_000;
 const QUESTION_CHARS: usize = 2_000;
@@ -196,7 +196,18 @@ fn fenced(text: &str) -> String {
 fn describe(label: &str, run: &Run, report: Option<&Report>, pull: Option<(u64, Option<String>)>, limit: usize) -> String {
     let head = format!("{label} · run {} · {} · {}", run.id, run.spec.role.as_str(), run.state.as_str());
     let account = match report {
-        Some(report) => quoted(&report_text(report), limit, false).map(|text| format!("Reported through Gossamr ({}):\n{text}", if report.status == ReportStatus::Done { "done" } else { "blocked" })),
+        Some(report) => {
+            let text = report_text(report);
+            let mut block = quoted(&text, limit, false).map(|text| format!("Reported through Gossamr ({}):\n{text}", if report.status == ReportStatus::Done { "done" } else { "blocked" }));
+            let left = limit.saturating_sub(text.chars().count());
+            if report.plan.is_none() && left > 0 {
+                let answer = run.result.as_deref().filter(|_| run.result_complete).and_then(|answer| quoted(answer, left, false));
+                if let Some(answer) = answer {
+                    block = Some(format!("{}\nIts written answer:\n{answer}", block.unwrap_or_default()));
+                }
+            }
+            block
+        }
         None => match run.result.as_deref().filter(|_| run.result_complete) {
             Some(answer) => quoted(answer, limit, false).map(|text| format!("No report; its written answer:\n{text}")),
             None => run.summary.as_deref().and_then(|summary| quoted(summary, limit.min(600), true)).map(|summary| format!("No report; its one-line summary: {summary}")),
@@ -222,7 +233,7 @@ fn report_text(report: &Report) -> String {
         parts.push(format!("Subtasks: {}", report.subtasks.join("; ")));
     }
     if let Some(plan) = &report.plan {
-        parts.push(format!("Plan:\n{plan}"));
+        parts.push(format!("Plan as reported (not reviewed; the agreed plan is in the ticket's Gossamr Plan section when there is one):\n{plan}"));
     }
     match report.verdict {
         Some(ReviewVerdict::Pass) => parts.push("Verdict: pass".into()),

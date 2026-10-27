@@ -86,6 +86,24 @@ test.describe("a queued run (N8)", () => {
   });
 });
 
+test.describe("a free role", () => {
+  test("shows on the run's card and sheet as the role Pip gave it", async ({ page }) => {
+    await page.goto("/?runs=empty&mockRepos=14");
+    await page.getByRole("button", { name: "Start watching" }).click();
+    await showWorkspace(page);
+    await expect(page.getByText("CA-401", { exact: true }).first()).toBeVisible();
+    await startAgent(page, "CA-401", "code auditor");
+    await expect.poll(async () => (await mockRuns(page)).map((r) => r.role)).toEqual(["code auditor"]);
+    const [run] = await mockRuns(page);
+    await railButton(page, /^Agents/).click();
+    const card = page.locator(`main article[data-run-id="${run.id}"]`);
+    await expect(card).toContainText("Code auditor");
+    await card.click();
+    await expect(runSheet(page)).toContainText("Code auditor");
+    await expect(runSheet(page)).toContainText("Role: code auditor.");
+  });
+});
+
 test.describe("the review card (N5, N7, D21)", () => {
   test("once posted, says where and at which commit it went, not to read and edit it before posting", async ({ page }) => {
     const review = await reviewedDraft(page);

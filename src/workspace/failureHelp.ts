@@ -6,7 +6,7 @@ export const INSTALL_URL = "https://code.claude.com/docs/en/setup";
 export type FailureAct = "terminal" | "install";
 
 export interface FailureHelp {
-  kind: "untrustedFolder" | "notSignedIn" | "claudeMissing" | "noClone" | "capReached";
+  kind: "untrustedFolder" | "notSignedIn" | "modeRefused" | "claudeMissing" | "noClone" | "capReached";
   /** One line for a card or row. */
   summary: string;
   /** The sheet's explanation. */
@@ -48,6 +48,17 @@ export function failureHelp(run: Run): FailureHelp | null {
         command: { text: "claude", note: "Then type /login." },
         retryNeedsTerminal: true,
       };
+    case "modeRefused": {
+      const flag = failure.mode === "auto" ? "--permission-mode auto" : "--dangerously-skip-permissions";
+      return {
+        kind: "modeRefused",
+        summary: `Claude hasn't accepted ${failure.mode} mode yet.`,
+        detail: `${sentence(run.error, "Claude refused to run in the background in your permission mode.")} Terminal opens an interactive Claude in ${failure.mode} mode: accept its prompt, then close it and retry.`,
+        primary: { label: `Open Terminal to accept ${failure.mode} mode`, act: "terminal" },
+        command: { text: `claude ${flag}`, note: "Accept the prompt, then exit." },
+        retryNeedsTerminal: true,
+      };
+    }
     case "claudeMissing":
       return {
         kind: "claudeMissing",

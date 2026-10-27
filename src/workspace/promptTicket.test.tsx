@@ -54,7 +54,7 @@ describe("the sample path from a prompt to a ticket", () => {
     if (draft.intent.type !== "create") throw new Error("a ticket draft");
     expect(draft.intent.container).toEqual(containerRef("CA"));
     expect(draft.intent.fields).toMatchObject({ title: "Add a backoff to the order consumer's retries", kind: "bug" });
-    expect(docText(draft.intent.fields.body)).toContain("Found by an agent that was asked to only read code");
+    expect(docText(draft.intent.fields.body)).toContain("Found by an agent run from Gossamr");
     expect(backend.proposals.list({ states: ["applied"] }).filter((p) => p.intent.type === "create")).toHaveLength(0);
 
     const outcome = await backend.runsOutcome(run.id);

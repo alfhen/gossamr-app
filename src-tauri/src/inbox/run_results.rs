@@ -206,7 +206,7 @@ pub fn comment_text(run: &Run, resolved: &Resolved, note: &JiraNote, change: Opt
 /// Said wherever a run's result is only the one-line summary Claude keeps, so nobody takes it for the whole answer.
 pub const SUMMARY_ONLY: &str = "Gossamr could only read a one-line summary of the run, not its full answer. Open the session to see the rest.";
 
-const FOUND_BY: &str = "Found by an agent that was asked to only read code and change nothing.";
+const FOUND_BY: &str = "Found by an agent run from Gossamr.";
 
 fn ticket_drafts(all: Vec<Proposal>, run_id: &str) -> Vec<Proposal> {
     all.into_iter().filter(|p| matches!((&p.origin, &p.intent), (Origin::Run { run_id: r, .. }, Intent::Create { .. }) if r == run_id)).collect()
@@ -350,7 +350,7 @@ impl Core {
             return Err(refuse("the run finished without a written answer, so there is nothing to draft"));
         }
         let fitted = fit(&plan, PLAN_COMMENT_LIMIT, |total| format!("[Cut here. The plan is {total} characters and a Jira comment holds about {PLAN_COMMENT_LIMIT}. The whole plan is in the agent run.]"));
-        let intro = "Implementation plan from an agent that was asked to only read code and change nothing. Read it and change what is wrong before relying on it.";
+        let intro = "Implementation plan from an agent run. Read it and change what is wrong before relying on it.";
         let body = tracker::comment_doc(&format!("{intro}\n\n{}", fitted.text), &[]);
         let intent = Intent::Comment { item: item.clone(), body };
         if self.pending_same(same_comment(&intent)).await?.is_some() {

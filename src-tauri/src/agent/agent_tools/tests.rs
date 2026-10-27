@@ -536,13 +536,13 @@ async fn read_workstream_hands_a_builder_the_plan_and_a_reviewer_the_build_accou
 
     let (seen_by_builder, _) = t.call(&builder, "read_workstream", json!({})).await;
     assert!(seen_by_builder.contains(&format!("R1 · run {} · planner · launching", planner.id)), "{seen_by_builder}");
-    assert!(seen_by_builder.contains("Plan:\n## Approach\n\nRound once, in cart.rs."), "{seen_by_builder}");
+    assert!(seen_by_builder.contains("not reviewed; the agreed plan is in the ticket's Gossamr Plan section when there is one):\n## Approach\n\nRound once, in cart.rs."), "{seen_by_builder}");
 
     let (seen_by_reviewer, _) = t.call(&reviewer, "read_workstream", json!({})).await;
     assert!(seen_by_reviewer.contains(&format!("R2 · run {} · builder", builder.id)), "{seen_by_reviewer}");
     assert!(seen_by_reviewer.contains("Note: Rounded once and added a test; draft PR opened."), "{seen_by_reviewer}");
     assert!(seen_by_reviewer.contains("Pull request: #12 in acme/webshop"), "{seen_by_reviewer}");
-    assert!(seen_by_reviewer.contains("Plan:\n## Approach"), "the plan is there for a reviewer too");
+    assert!(seen_by_reviewer.contains("Plan as reported"), "the plan is there for a reviewer too");
     assert!(!seen_by_reviewer.contains(&format!("run {}", reviewer.id)));
 }
 
@@ -558,6 +558,24 @@ async fn read_workstream_gives_the_written_answer_of_a_run_that_never_reported()
     assert!(!is_error && text.contains("No report; its written answer:") && text.contains("The retry loop has no backoff."), "{text}");
     assert!(!text.contains("One line."), "{text}");
     assert_eq!((text.matches(OPEN).count(), text.matches(CLOSE).count()), (1, 1), "{text}");
+}
+
+#[tokio::test]
+async fn read_workstream_keeps_a_twelve_thousand_character_plan_and_adds_a_builders_written_answer() {
+    let t = live("long").await;
+    let (core, fx) = (t.rig.fx.core.clone(), &t.rig.fx);
+    let ws = core.open_workstream(&fx.scope, Some(fx.item("CA-1")), None).await.unwrap();
+    let planner = t.start(1, Some(&ws.id), "CA-1", ResultKind::Plan).await;
+    let builder = t.start(2, Some(&ws.id), "CA-1", ResultKind::Build).await;
+    let reader = t.start(3, Some(&ws.id), "CA-1", ResultKind::Review).await;
+    let plan = format!("## Approach\n\n{}END-OF-PLAN", "A plan line.\n".repeat(900));
+    assert!(plan.chars().count() > 11_000);
+    t.call(&planner, "report", json!({ "status": "done", "note": "Planned.", "plan": plan })).await;
+    t.call(&builder, "report", json!({ "status": "done", "note": "Done." })).await;
+    t.rig.set(&builder, |r| (r.result, r.result_complete) = (Some("Changed cart.rs and added WHOLE-ANSWER.".into()), true)).await;
+    let (text, _) = t.call(&reader, "read_workstream", json!({})).await;
+    assert!(text.contains("END-OF-PLAN"), "the plan is not cut");
+    assert!(text.contains("Its written answer:") && text.contains("WHOLE-ANSWER"), "{text}");
 }
 
 #[tokio::test]

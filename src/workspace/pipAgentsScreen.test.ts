@@ -137,6 +137,10 @@ describe("starting an agent again after a clone is found", () => {
     const build = failed("builder", { brief: "Build it from the plan." });
     const script = scriptPip(pipAsks.again(build).prompt, blank, [], [build], NOW, [], null, ws);
     expect(script.start).toMatchObject({ role: "builder", brief: "Build it from the plan.", item: ws.item, repo: null });
+    for (const role of ["code reviewer", "code-auditor"]) {
+      const labelled = failed(role, { brief: "Look closely." });
+      expect(scriptPip(pipAsks.again(labelled).prompt, blank, [], [labelled], NOW, [], null, ws).start).toMatchObject({ role, brief: "Look closely." });
+    }
     const other = scriptPip(pipAsks.again(build).prompt, blank, [], [{ ...build, id: "g" }], NOW, [], null, ws);
     expect(other.start ?? null).toBeNull();
   });

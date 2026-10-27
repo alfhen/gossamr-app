@@ -403,7 +403,7 @@ fn comment_run_id(p: &Proposal) -> Option<&str> {
 }
 
 /// What a new run comment does to an older pending one: the same ticket in the same workstream, made by an agent run
-/// of the same role (`role_of` says the role of a run by its id; a run it can't find supersedes nothing). A reviewer's
+/// of the same kind of work (`role_of` says the role of a run by its id; a run it can't find supersedes nothing). A reviewer's
 /// comment never retires an investigator's, whose findings the person has not read yet. The person's edit keeps it;
 /// anything else is replaced. `None` when it is another ticket, workstream or role, a plan's comment, or not pending
 /// (one being posted, or posted, is never touched), or when its last post failed (`error` is set): it is back in
@@ -415,7 +415,7 @@ pub fn run_comment_supersession(older: &Proposal, newer: &Proposal, role_of: imp
         return None;
     }
     let (on, to) = (role_of(comment_run_id(older)?)?, role_of(comment_run_id(newer)?)?);
-    if on != to {
+    if on.work() != to.work() {
         return None;
     }
     Some(if person_edited(older) { Err(KEPT_EDITED) } else { Ok(()) })
@@ -841,6 +841,9 @@ mod tests {
             run_comment_supersession(&older, &newer, move |id| known.iter().find(|(r, _)| *r == id).map(|(_, role)| crate::domain::Role::parse(role).unwrap()))
         };
         assert_eq!(verdict(&[("run-a", "reviewer"), ("run-b", "reviewer")]), Some(Ok(())));
+        assert_eq!(verdict(&[("run-a", "review"), ("run-b", "reviewer")]), Some(Ok(())), "a stored kind and its -er name are one kind of work");
+        assert_eq!(verdict(&[("run-a", "code auditor"), ("run-b", "code auditor")]), Some(Ok(())));
+        assert_eq!(verdict(&[("run-a", "code auditor"), ("run-b", "tester")]), None, "another free role");
         assert_eq!(verdict(&[("run-a", "investigator"), ("run-b", "reviewer")]), None, "another role");
         assert_eq!(verdict(&[("run-b", "reviewer")]), None, "the older run is gone");
         assert_eq!(verdict(&[("run-a", "reviewer")]), None, "the newer run is gone");

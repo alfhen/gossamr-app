@@ -294,7 +294,7 @@ mod tests {
 
     use super::*;
     use crate::domain::fixtures::run_spec;
-    use crate::domain::RunSpec;
+    use crate::domain::{Role, RunSpec};
 
     fn at(mins: i64) -> DateTime<Utc> {
         Utc.with_ymd_and_hms(2026, 9, 29, 10, 0, 0).unwrap() + Duration::minutes(mins)
@@ -330,10 +330,11 @@ mod tests {
                 .iter()
                 .enumerate()
                 .map(|(n, r)| {
-                    let kind: ResultKind = serde_json::from_value(r["kind"].clone()).unwrap();
+                    let role = Role::parse(r["role"].as_str().unwrap()).unwrap();
                     let state: RunState = serde_json::from_value(r["state"].clone()).unwrap();
                     let queued: DateTime<Utc> = serde_json::from_value(r["queuedAt"].clone()).unwrap();
-                    let mut run = run(&format!("r{n}"), kind, state, 0);
+                    let mut run = run(&format!("r{n}"), ResultKind::Plan, state, 0);
+                    run.spec.role = role;
                     run.queued_at = queued;
                     run
                 })

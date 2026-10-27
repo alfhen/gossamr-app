@@ -232,7 +232,7 @@ function chainStep(prompt: string, context: ScreenContext, runs: readonly Run[],
   };
 }
 
-const asksToRestart = /^\s*start the (\w+) agent of run (\S+) again\b/i;
+const asksToRestart = /^\s*start the ([a-z0-9 -]+?) agent of run (\S+) again\b/i;
 
 /** "Start the build agent of run X again": the failed run's role and brief, in its own workstream. */
 function restartStep(prompt: string, runs: readonly Run[], workstream: PipWorkstream): PipScript | null {

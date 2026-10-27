@@ -260,7 +260,7 @@ export function subtaskProposals(result: string): string[] {
 }
 
 /** What the backend adds under a ticket made from a run. */
-export const FOUND_BY = "Found by an agent that was asked to only read code and change nothing.";
+export const FOUND_BY = "Found by an agent run from Gossamr.";
 
 export const ticketBody = (t: TicketProposal) => (t.body ? `${t.body}\n\n${FOUND_BY}` : FOUND_BY);
 

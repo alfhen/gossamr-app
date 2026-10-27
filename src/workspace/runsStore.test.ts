@@ -291,6 +291,18 @@ describe("the run sheet", () => {
       expect(useToasts.getState().toasts[0].text).toMatch(/^Still blocked: Claude asks you once per folder/);
     });
 
+    it("accepts the refused mode through Terminal, then lets Retry through to Queued", async () => {
+      const run = await failing("modeRefused");
+      await s().retryLaunch(run.id);
+      await settle();
+      expect(find(run.id).state).toBe("failed");
+      await s().fix(run.id, "terminal");
+      expect(backend.runs.terminals).toEqual([run.id]);
+      await s().retryLaunch(run.id);
+      await settle();
+      expect(find(run.id).state).toBe("queued");
+    });
+
     it("signs in through Terminal for a run that failed on a sign-in, and not for any other", async () => {
       const run = await failing("notSignedIn");
       await s().fix(run.id, "terminal");

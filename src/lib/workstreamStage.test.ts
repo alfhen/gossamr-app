@@ -5,7 +5,7 @@ import { reviewBlocking, reviewPosted, runLabels, stage, stageText, type StagedR
 
 interface Case {
   name: string;
-  runs: { kind: string; state: string; queuedAt: string; verdict?: string }[];
+  runs: { role: string; state: string; queuedAt: string; verdict?: string }[];
   stage: string;
   /** Whether the newest finished review is blocking with nothing in progress; false when not given. */
   reviewBlocking?: boolean;
@@ -14,7 +14,7 @@ interface Case {
 }
 
 /** Runs as the Rust test builds them from a case: `r0`, `r1`… in the order listed. */
-const runsOf = (c: Case): StagedRun[] => c.runs.map((r, n) => ({ id: `r${n}`, state: r.state as RunState, queuedAt: r.queuedAt, spec: { role: r.kind }, verdict: (r.verdict ?? null) as ReviewVerdict | null }));
+const runsOf = (c: Case): StagedRun[] => c.runs.map((r, n) => ({ id: `r${n}`, state: r.state as RunState, queuedAt: r.queuedAt, spec: { role: r.role }, verdict: (r.verdict ?? null) as ReviewVerdict | null }));
 
 const run = (id: string, role: string, state: RunState, queuedAt: string): StagedRun => ({ id, state, queuedAt, spec: { role } });
 

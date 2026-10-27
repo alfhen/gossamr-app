@@ -467,7 +467,7 @@ These figures come from `wc -l` and the slice reports, and include tests. The "A
 2. **Agents are no longer read-only by enforcement.** A planner or reviewer could write if its brief, or an injected ticket, told it to. Today `dontAsk` and empty setting sources block that. What limits the damage:
    - ticket text stays fenced as data;
    - every agent works in its own worktree;
-   - a reviewer's brief says to change nothing.
+   - Pip's own instructions describe a reviewer as one that changes nothing, which reaches the agent only when Pip repeats it in the brief.
 
 3. **Push and PR rules become requests.** Today, in a mode that asks, Gossamr's classifier refuses these:
    - a push to anything but the agent's own branch;
@@ -476,7 +476,7 @@ These figures come from `wc -l` and the slice reports, and include tests. The "A
 
    After this they are instructions in the brief. In a mode that asks, Claude Code's own prompt still catches them. In `bypassPermissions`, nothing does.
 
-4. **Reviewing a PR runs that PR's Claude config.** An unrestricted reviewer that checks out a PR branch loads that branch's `.claude/settings.json` hooks and CLAUDE.md with the person's permissions. The same-repo rule stays, so a fork's PR is never checked out, but a teammate's branch is trusted as much as the person's own repo. Today the read-only regime's empty setting sources blunt this.
+4. **Reviewing a PR runs that PR's Claude config.** An unrestricted reviewer that checks out a PR branch loads that branch's `.claude/settings.json` hooks and CLAUDE.md with the person's permissions. Gossamr refuses a fork's PR when Pip passes `pr`, and the base brief tells every agent never to check out a fork's branch, but neither is a lock. A teammate's branch is trusted as much as the person's own repo. Today the read-only regime's empty setting sources blunt this.
 
 5. **Pip can start agents on its own judgement, including in a wake turn while the person is away.** A prompt-injected ticket could try to talk Pip into starting an agent with a hostile brief. What limits it:
    - Pip treats ticket and agent text as fenced data.

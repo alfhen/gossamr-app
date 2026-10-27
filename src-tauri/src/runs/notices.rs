@@ -178,7 +178,7 @@ fn digest(waiting: &[&Waiting], name_of: &dyn Fn(&Key) -> String) -> Option<Outg
 pub fn stuck_runs(runs: &[Run], now: DateTime<Utc>) -> Vec<&Run> {
     let work = |r: &Run| {
         let place = r.item.as_ref().map_or_else(|| format!("{}\n{}", r.connection_id, r.spec.repo), |i| format!("{}\n{}", i.connection_id, i.external_id));
-        (place, r.spec.role.as_str().to_string())
+        (place, r.spec.role.work().to_string())
     };
     let mut newest: BTreeMap<(String, String), (DateTime<Utc>, &str)> = BTreeMap::new();
     for r in runs {
@@ -505,6 +505,14 @@ mod tests {
             }
             let runs = [run("old", ResultKind::Plan, RunState::Failed, 0, Some(10)), run("other", ResultKind::Build, RunState::Done, 100, Some(120))];
             assert_eq!(ids(&runs, 150), ["old"]);
+        }
+
+        #[test]
+        fn a_newer_run_under_the_other_name_of_the_same_kind_supersedes_it() {
+            let mut newer = run("new", ResultKind::Plan, RunState::Done, 100, Some(120));
+            newer.spec.role = crate::domain::Role::parse("planner").unwrap();
+            let runs = [run("old", ResultKind::Plan, RunState::Failed, 0, Some(10)), newer];
+            assert!(ids(&runs, 150).is_empty());
         }
 
         #[test]
