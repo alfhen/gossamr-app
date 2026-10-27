@@ -23,6 +23,9 @@ pub enum Delivery {
     Queued,
 }
 
+/// What a resume says when every slot is taken, so the queued message waits instead of being dropped.
+const NO_SLOT: &str = "Every agent slot is taken; try again when one finishes.";
+
 fn refuse(message: impl Into<String>) -> Error {
     Error::Proposal(message.into())
 }
@@ -32,12 +35,27 @@ fn at_rest(state: RunState) -> bool {
 }
 
 impl RunService {
+    /// Why Pip may not wake `run` now: its workstream is closed or paused, as `start_agent` words it.
+    async fn workstream_hold(&self, run: &Run) -> Option<String> {
+        let ws = run.spec.workstream.as_deref()?;
+        let scope = self.core.scope().await.ok()?;
+        let view = self.core.workstream(&scope, ws).await.ok()??.workstream;
+        if view.closed_at.is_some() {
+            return Some(format!("The workstream “{}” is closed.", view.title));
+        }
+        view.paused_reason.is_some().then(|| format!("The workstream “{}” is paused; only the person resumes it.", view.title))
+    }
+
     /// Sends `text` to run `run_id` as `by`. Refused for a run that hasn't started, failed, waits at a permission prompt
     /// or for a sign-in, was stopped at a limit, or has a session open in Terminal.
     pub async fn message_agent(&self, run_id: &str, text: &str, by: Actor) -> Result<(Run, Delivery)> {
         let text = checked(text)?;
         let run = self.load(run_id).await?;
         let asking = !at_rest(run.state) && self.core.asks().question(run_id).is_some();
+        let wakes = asking || matches!(run.state, RunState::NeedsAnswer | RunState::Done | RunState::Stopped);
+        if let Some(why) = self.workstream_hold(&run).await.filter(|_| by == Actor::Pip && wakes) {
+            return Err(refuse(why));
+        }
         match run.state {
             _ if asking => self.answer_as(run_id, text, by).await.map(|r| (r, Delivery::Answered)),
             RunState::Queued | RunState::Launching => Err(refuse("It hasn't started working yet; message it once it is working.")),
@@ -67,6 +85,14 @@ impl RunService {
         }
         if run.short_id.is_none() || !run.session_id.as_deref().is_some_and(is_uuid) {
             return Err(refuse("It has no session to resume."));
+        }
+        if by == Actor::Pip {
+            if let Some(why) = self.workstream_hold(&run).await {
+                return Err(refuse(why));
+            }
+            if self.live_elsewhere(&run) >= self.cap() {
+                return Err(refuse(NO_SLOT));
+            }
         }
         let tc = self.toolchain().await?;
         let listed = tc.cli.agents(true).await?;
@@ -124,7 +150,7 @@ impl RunService {
 
     /// Hands each run's waiting message to it once it can have it: a run that is done, or ended its turn with a question,
     /// is sent it as an answer or by resume. One that is still working, or waits on a permission prompt or sign-in,
-    /// keeps it. One that failed or was stopped has no one to take it, so it is dropped and the workstream's audit says so.
+    /// keeps it, as does one whose workstream is closed or paused, or a resume with no free slot. One that failed or was stopped has no one to take it, so it is dropped and the workstream's audit says so.
     pub(super) async fn deliver_queued(&self) {
         let Ok(waiting) = self.core.runs_with_messages().await else { return };
         for id in waiting {
@@ -133,6 +159,9 @@ impl RunService {
                 let _ = self.core.take_run_message(&id).await;
                 continue;
             };
+            if matches!(run.state, RunState::Done | RunState::NeedsAnswer) && self.workstream_hold(&run).await.is_some() {
+                continue;
+            }
             let sent = match run.state {
                 RunState::Done => self.resume_with(&id, &text, Actor::Pip).await.map(drop),
                 RunState::NeedsAnswer => self.answer_as(&id, &text, Actor::Pip).await.map(drop),
@@ -140,6 +169,9 @@ impl RunService {
                 RunState::Failed | RunState::Stopped => Err(refuse(format!("the run is {}", run.state.as_str()))),
                 _ => continue,
             };
+            if matches!(&sent, Err(Error::Proposal(why)) if why == NO_SLOT) {
+                continue;
+            }
             if let Err(e) = self.core.take_run_message(&id).await {
                 eprintln!("couldn't take the message waiting for run {id}: {e}");
             }

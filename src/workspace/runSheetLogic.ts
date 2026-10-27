@@ -417,6 +417,13 @@ export interface PipAsk {
 
 type RunOf = { id: string; item: { key: string } | null };
 
+/** The run a build, review, triage or plan follows, as `start_agent`'s from_run takes it. */
+export function followedRun(spec: { planFromRun?: string | null; buildFromRun?: string | null; findingsFromRun?: string | null }): string | null {
+  return spec.planFromRun ?? spec.buildFromRun ?? spec.findingsFromRun ?? null;
+}
+
+type AgainOf = RunOf & { spec: { kind: string; repo: string; pr?: number | null; planFromRun?: string | null; buildFromRun?: string | null; findingsFromRun?: string | null } };
+
 /** Every instruction a run's sheet, a draft's card or a draft's peek sends Pip, each paired with its `PIP_SHOWN` line. */
 export const pipAsks = {
   comment: (run: RunOf, draftId: string | null = null): PipAsk => ({ prompt: commentWithPipPrompt(run, draftId), shown: draftId ? PIP_SHOWN.draft : PIP_SHOWN.comment }),
@@ -424,7 +431,11 @@ export const pipAsks = {
   finish: (run: { id: string }, draftId: string): PipAsk => ({ prompt: finishWithPipPrompt(run, draftId), shown: PIP_SHOWN.finish }),
   description: (run: RunOf): PipAsk => ({ prompt: descriptionWithPipPrompt(run), shown: PIP_SHOWN.description }),
   build: (run: { id: string }): PipAsk => ({ prompt: `Build it, following the plan of run ${run.id}.`, shown: PIP_SHOWN.build }),
-  again: (repo: string): PipAsk => ({ prompt: `Start the agent again. ${repo} has a clone now.`, shown: PIP_SHOWN.again }),
+  again: (run: AgainOf): PipAsk => {
+    const from = followedRun(run.spec);
+    const following = from ? `, following run ${from}` : run.spec.pr ? `, on pull request ${run.spec.pr}` : "";
+    return { prompt: `Start the ${run.spec.kind} agent of run ${run.id} again${following}. ${run.spec.repo} has a clone now.`, shown: PIP_SHOWN.again };
+  },
   review: (run: { id: string }): PipAsk => ({ prompt: `Review it: the pull request the build ${run.id} opened.`, shown: PIP_SHOWN.reviewBuild }),
   breakdown: (run: RunOf, draftId: string | null = null): PipAsk => ({ prompt: breakdownWithPipPrompt(run, draftId), shown: draftId ? PIP_SHOWN.breakdown : PIP_SHOWN.subtasks }),
 };

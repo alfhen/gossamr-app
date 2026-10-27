@@ -422,7 +422,9 @@ describe("empty, first-run and errors", () => {
   it("says there are no agents once the explainer is dismissed", () => {
     const out = screen({ runs: [] });
     expect(out).toContain("No agents yet");
-    expect(out).toContain("Nothing runs until you approve it.");
+    expect(out).toContain("When Pip starts one it appears here");
+    expect(out).toContain("You can stop any of them.");
+    expect(out).not.toMatch(/approve/i);
     expect(out).toContain("Nothing running");
   });
 
@@ -435,7 +437,7 @@ describe("empty, first-run and errors", () => {
   it("states the limits honestly in the explainer", () => {
     const out = renderToStaticMarkup(<AgentsIntro onDismiss={vi.fn()} />).replace(/&#x27;/g, "'");
     for (const phrase of [
-      "You approve each one first.",
+      "Pip starts an agent when you ask, and tells you about any it starts on its own.",
       "A Build runs as you, with your own Claude settings: anything your Claude can do, it can do.",
       "Read-only steps are signed in as you but run without your settings.",
       "Investigate, Triage, Plan, Review and Verify are read-only: Claude Code itself refuses their file edits and writing commands, and your own and the repository's allow rules don't apply.",

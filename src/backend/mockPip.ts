@@ -2,6 +2,7 @@ import { and } from "../lib/filter";
 import { REVIEW_IS_THE_USERS, WORKSTREAM_PENDING_CAP, capRefusal, isRunDraft, leftByRun, targetOf } from "../lib/proposals";
 import { docFromText, docText } from "../lib/docs";
 import type { Intent, ItemRef, Proposal, ReviewComment, Run, RunKind, ScreenContext, WorkFilter } from "../types";
+import { followedRun } from "../workspace/runSheetLogic";
 import { APPROVE_PLAN, liveCounts, liveWords, needsPerson, planOpenQuestions, resultHeadline, runTitle, stateView } from "../workspace/agentsLogic";
 import type { ImageData } from "../lib/pipImages";
 import { jiraNote, subtaskProposals } from "./mockRunResult";
@@ -235,6 +236,25 @@ function chainStep(prompt: string, context: ScreenContext, runs: readonly Run[],
   };
 }
 
+const asksToRestart = /^\s*start the (\w+) agent of run (\S+) again\b/i;
+
+/** "Start the build agent of run X again": the failed run's kind and what it followed, in its own workstream, with its note. */
+function restartStep(prompt: string, runs: readonly Run[], workstream: PipWorkstream): PipScript | null {
+  const asked = asksToRestart.exec(prompt);
+  if (!asked) return null;
+  const failed = runs.find((r) => r.id === asked[2] && r.spec.workstream === workstream.id);
+  if (!failed || failed.spec.kind !== asked[1].toLowerCase()) return { steps: [], text: `There is no ${asked[1].toLowerCase()} run ${asked[2]} in this workstream to start again.`, filter: null, draft: null };
+  const { kind, repo } = failed.spec;
+  const item = failed.item ?? workstream.item;
+  return {
+    steps: item ? [`Looked up ${item.key}`, "Started an agent"] : ["Started an agent"],
+    text: `I started ${CHAIN_WORDS[kind]} again${item ? ` of **${item.key}**` : ` in **${repo}**`}.`,
+    filter: null,
+    draft: null,
+    start: { item, role: kind, fromRun: followedRun(failed.spec), brief: failed.spec.focus ?? null, repo: item ? null : repo },
+  };
+}
+
 const asksMeFirst = /^\s*ask me\b[\s,:]*(.*?)\s*[.?!]?\s*$/i;
 const asksToMessage = /^\s*(?:tell|message|send|ping)\s+(r\d+|the agent|it)\s*(?:to|that|:|,)?\s+(.+?)\s*$/i;
 const asksToStop = /^\s*(?:please\s+)?stop\s+(r\d+|the agent|it)\s*[.!]?\s*$/i;
@@ -463,6 +483,8 @@ export function scriptPip(prompt: string, context: ScreenContext, images: ImageD
   if (move) return move;
   const answer = workstream ? workstreamAnswer(prompt, runs, workstream, now) : null;
   if (answer) return answer;
+  const again = workstream ? restartStep(prompt, runs, workstream) : null;
+  if (again) return again;
   const step = workstream ? chainStep(prompt, context, runs, workstream) : null;
   if (step) return step;
   const direct = workstream ? directAgent(prompt, runs, workstream) : null;

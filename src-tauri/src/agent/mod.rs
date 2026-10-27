@@ -37,7 +37,7 @@ use images::ImageInput;
 use mcp::McpServer;
 use queue::{Enqueued, QueueItem, Removed, TurnQueue};
 use sandbox::Sandbox;
-use supervisor::{event_line, fact_keys, WakeFacts, WAKE_REQUEST};
+use supervisor::{event_line, fact_keys, wake_identity, WakeFacts, WAKE_REQUEST};
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(tag = "type", rename_all = "camelCase", rename_all_fields = "camelCase")]
@@ -647,7 +647,8 @@ impl AgentService {
 
         // Registered before the run starts, since the agent may call the tools straight away.
         let workstream_id = workstream.map(|w| w.workstream.id);
-        let pip = mcp::PipRun { scope: scope.clone(), handed, read, workstream: workstream_id.clone(), starts: 0, wake: req.event.is_some() };
+        let wake = self.wakes.lock().expect("lock poisoned").get(&run_id).map(|w| wake_identity(&w.facts));
+        let pip = mcp::PipRun { scope: scope.clone(), handed, read, workstream: workstream_id.clone(), starts: 0, wake };
         self.mcp.runs.lock().expect("lock poisoned").insert(run_id.clone(), pip);
         self.live.lock().expect("lock poisoned").insert(run_id.clone(), LiveTurn::default());
         recorded(self.core.pip_turn_status(&scope, &run_id, "running").await);

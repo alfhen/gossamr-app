@@ -68,8 +68,8 @@ impl Drive {
         self.st.runs.lock().unwrap().insert(request.into(), PipRun::in_workstream(self.rig.fx.scope.clone(), &self.ws));
     }
 
-    fn join_wake(&self, request: &str) {
-        self.st.runs.lock().unwrap().insert(request.into(), PipRun { wake: true, ..PipRun::in_workstream(self.rig.fx.scope.clone(), &self.ws) });
+    fn join_wake(&self, request: &str, wake: &str) {
+        self.st.runs.lock().unwrap().insert(request.into(), PipRun { wake: Some(wake.into()), ..PipRun::in_workstream(self.rig.fx.scope.clone(), &self.ws) });
     }
 
     /// Pip's turn `request` outside any workstream.
@@ -230,7 +230,7 @@ async fn start_agent_starts_an_investigation_with_no_draft_and_hands_it_to_the_l
 #[tokio::test]
 async fn a_start_in_a_wake_turn_says_so_in_the_audit() {
     let d = drive().await;
-    d.join_wake("wake-1");
+    d.join_wake("wake-1", "facts-1");
     d.started("wake-1", "triage", json!({})).await;
     assert_eq!(d.audit().await.last(), Some(&(Actor::Pip, "agent_started".to_string(), Some("triage · wake turn".to_string()))));
 }
@@ -438,7 +438,7 @@ async fn a_repeated_identical_call_in_one_turn_returns_the_run_it_already_starte
     let first = d.ok("in-ws", "start_agent", args.clone()).await;
     let again = d.ok("in-ws", "start_agent", args.clone()).await;
     let id = d.run_named(&first).await.id;
-    assert_eq!(again, format!("Already started in this turn: R1 (run {id})."));
+    assert_eq!(again, format!("Already started: R1 (run {id})."));
     assert_eq!(d.runs().await.len(), 1);
     d.launched(&d.run_by_id(&id).await).await;
     assert_eq!(d.rig.cli.launches(), 1, "it was handed to the launcher once");
@@ -453,6 +453,59 @@ async fn a_repeated_identical_call_in_one_turn_returns_the_run_it_already_starte
     // A retry never counts against the turn's three.
     d.started("in-ws", "investigate", json!({ "brief": "a third" })).await;
     assert!(d.ok("in-ws", "start_agent", args).await.starts_with("Already started"));
+}
+
+#[tokio::test]
+async fn a_wake_given_back_and_run_again_does_not_start_the_same_agent_twice() {
+    let d = drive().await;
+    let args = d.start_args("triage", json!({}));
+    d.join_wake("wake-1", "facts-1");
+    let first = d.ok("wake-1", "start_agent", args.clone()).await;
+    d.join_wake("wake-2", "facts-1");
+    let again = d.ok("wake-2", "start_agent", args.clone()).await;
+    assert_eq!(again, format!("Already started: R1 (run {}).", d.run_named(&first).await.id));
+    assert_eq!(d.runs().await.len(), 1);
+
+    d.join_wake("wake-3", "facts-2");
+    d.started("wake-3", "triage", json!({})).await;
+    assert_eq!(d.runs().await.len(), 2, "a wake for other facts starts its own");
+}
+
+#[tokio::test]
+async fn closing_a_workstream_is_refused_while_an_agent_in_it_is_still_going() {
+    let d = drive().await;
+    let run = working(&d, "in-ws", "the cart").await;
+    let refused = d.err("in-ws", "close_workstream", json!({ "workstream": d.ws })).await;
+    assert!(refused.contains("1 of its agents are still going") && refused.contains("stop_agent"), "{refused}");
+    assert!(d.rig.fx.core.workstream(&d.rig.fx.scope, &d.ws).await.unwrap().unwrap().workstream.closed_at.is_none());
+
+    d.ok("in-ws", "stop_agent", json!({ "id": run.id })).await;
+    assert!(d.ok("in-ws", "close_workstream", json!({ "workstream": d.ws })).await.starts_with("Closed"));
+}
+
+#[tokio::test]
+async fn waking_agents_counts_against_the_turns_three() {
+    let d = drive().await;
+    let mut finished = Vec::new();
+    for n in 1..=4 {
+        let request = format!("s{n}");
+        d.join(&request);
+        let run = working(&d, &request, &format!("look {n}")).await;
+        d.rig.session(&run, |e| {
+            e.state = Some("done".into());
+            e.status = None;
+            e.pid = None;
+        });
+        d.rig.set(&run, |r| (r.state, r.ended_at) = (RunState::Done, Some(chrono::Utc::now()))).await;
+        std::fs::create_dir_all(&run.expected_worktree).unwrap();
+        finished.push(run);
+    }
+    for run in &finished[..3] {
+        d.ok("in-ws", "message_agent", json!({ "id": run.id, "text": "Again." })).await;
+    }
+    let over = d.err("in-ws", "message_agent", json!({ "id": finished[3].id, "text": "Again." })).await;
+    assert!(over.contains("You have started 3 agents in this turn already"), "{over}");
+    assert_eq!(d.run_by_id(&finished[3].id).await.state, RunState::Done);
 }
 
 #[tokio::test]

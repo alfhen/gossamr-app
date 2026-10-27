@@ -212,3 +212,54 @@ async fn a_resume_that_fails_leaves_the_agent_as_it_was_and_tells_pip_why() {
     let after = rig.get(&run).await;
     assert_eq!((after.state, after.passes, after.unsent_answer), (RunState::Done, 1, None));
 }
+
+fn with_cap(rig: &Rig, cap: usize) {
+    let settings = rig.svc.settings();
+    rig.svc.set_settings(crate::config::AgentSettings { max_runs: cap, ..settings }).unwrap();
+}
+
+#[tokio::test]
+async fn pip_cannot_wake_an_agent_in_a_paused_or_closed_workstream_and_a_queued_message_waits() {
+    use crate::domain::workstream::PauseReason;
+    let (rig, run, ws) = working().await;
+    rig.svc.message_agent(&run.id, "Carry on.", Actor::Pip).await.unwrap();
+    ends_turn(&rig, &run, "done");
+    rig.set(&run, |r| (r.state, r.ended_at) = (RunState::Done, Some(chrono::Utc::now()))).await;
+
+    rig.fx.core.pause_workstream(&rig.fx.scope, &ws, PauseReason::Person, Actor::Person).await.unwrap();
+    let why = rig.svc.message_agent(&run.id, "Hello.", Actor::Pip).await.unwrap_err().to_string();
+    assert!(why.contains("is paused; only the person resumes it"), "{why}");
+    rig.svc.deliver_queued().await;
+    assert_eq!(rig.fx.core.run_message(&run.id).await.unwrap().as_deref(), Some("Carry on."), "kept for when the person resumes");
+    assert!(resumes(&rig).is_empty());
+
+    rig.fx.core.resume_workstream(&rig.fx.scope, &ws).await.unwrap();
+    rig.fx.core.close_workstream(&rig.fx.scope, &ws).await.unwrap();
+    let why = rig.svc.message_agent(&run.id, "Hello.", Actor::Pip).await.unwrap_err().to_string();
+    assert!(why.contains("is closed"), "{why}");
+    rig.svc.deliver_queued().await;
+    assert!(resumes(&rig).is_empty() && rig.fx.core.run_message(&run.id).await.unwrap().is_some());
+
+    let (_, how) = rig.svc.message_agent(&run.id, "From the person.", Actor::Person).await.unwrap();
+    assert_eq!(how, Delivery::Resumed, "the pause holds Pip's work, not the person's");
+}
+
+#[tokio::test]
+async fn a_resume_with_no_free_slot_is_refused_and_a_queued_message_waits_for_one() {
+    let (rig, run, _) = working().await;
+    rig.svc.message_agent(&run.id, "Carry on.", Actor::Pip).await.unwrap();
+    ends_turn(&rig, &run, "done");
+    rig.set(&run, |r| (r.state, r.ended_at) = (RunState::Done, Some(chrono::Utc::now()))).await;
+    rig.launched_in_workstream(2).await;
+    with_cap(&rig, 1);
+
+    let why = rig.svc.message_agent(&run.id, "Hello.", Actor::Pip).await.unwrap_err().to_string();
+    assert!(why.contains("Every agent slot is taken"), "{why}");
+    rig.svc.deliver_queued().await;
+    assert_eq!(rig.fx.core.run_message(&run.id).await.unwrap().as_deref(), Some("Carry on."));
+    assert!(resumes(&rig).is_empty());
+
+    with_cap(&rig, 2);
+    rig.svc.deliver_queued().await;
+    assert_eq!((rig.get(&run).await.state, rig.fx.core.run_message(&run.id).await.unwrap()), (RunState::Working, None));
+}

@@ -22,7 +22,7 @@ export function AgentsIntro({ onDismiss }: { onDismiss(): void }) {
       <h2 id="agents-intro" className="m-0 max-w-[56ch] text-xl leading-tight font-semibold text-balance">
         Agents are Claude Code sessions that work in the background
       </h2>
-      <p className="m-0 max-w-[62ch] text-ws-ink2">You approve each one first.</p>
+      <p className="m-0 max-w-[62ch] text-ws-ink2">Pip starts an agent when you ask, and tells you about any it starts on its own.</p>
       <div className="grid grid-cols-[repeat(auto-fit,minmax(240px,1fr))] gap-3">
         <Explain icon="term" title="They run as you">
           A Build runs as you, with your own Claude settings: anything your Claude can do, it can do. Read-only steps are signed in as you but run without your settings.
@@ -51,7 +51,7 @@ export function AgentsEmpty() {
     <div className="mx-auto grid max-w-[560px] justify-items-center gap-2.5 px-5 py-14 text-center">
       <Icon name="term" className="size-16 stroke-[1.2] text-ws-ink3" />
       <h2 className="m-0 text-lg font-semibold">No agents yet</h2>
-      <p className="m-0 text-balance text-ws-ink2">When you start one it appears here, and Gossamr tells you when it needs you or finishes. Nothing runs until you approve it.</p>
+      <p className="m-0 text-balance text-ws-ink2">When Pip starts one it appears here, and Gossamr tells you when it needs you or finishes. You can stop any of them.</p>
     </div>
   );
 }

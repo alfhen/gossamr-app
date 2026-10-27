@@ -16,7 +16,7 @@ export function CloneActions({ run }: { run: Run }) {
   const [choices, setChoices] = useState<CloneChoice | "loading" | null>(null);
   const [busy, setBusy] = useState(false);
   const repo = run.spec.repo;
-  const asked = () => void askPipInWorkstream(run, pipAsks.again(repo));
+  const asked = () => void askPipInWorkstream(run, pipAsks.again(run));
   const guarded = async (what: string, act: () => Promise<unknown>) => {
     setBusy(true);
     try {

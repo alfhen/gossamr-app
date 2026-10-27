@@ -243,7 +243,7 @@ async fn dispatch(st: &McpState, pip: &PipRun, request_id: &str, name: &str, arg
         "get_run" => get(st, pip, args).await,
         "get_run_result" => get_result(st, pip, args).await,
         "get_run_events" => get_events(st, pip, args).await,
-        "message_agent" => message(st, pip, args).await,
+        "message_agent" => message(st, pip, request_id, args).await,
         "stop_agent" => stop(st, pip, args).await,
         _ => start(st, pip, request_id, args).await,
     }
@@ -447,11 +447,13 @@ const START_REVIEW_NEEDS_TARGET: &str = "A review needs a pull request: pass pr,
 /// The most agents Pip may start in one turn.
 pub const MAX_STARTS_PER_TURN: u32 = 3;
 
-/// The key that makes a start happen at most once: the Pip turn and what the call asked for, so an MCP retry of the
-/// same call finds its run and a different call in the same turn doesn't.
-fn start_key(request_id: &str, asked: &Value) -> String {
+/// The key that makes a start happen at most once: the Pip turn, or for a wake turn what it was woken for, and what the
+/// call asked for. An MCP retry of the same call finds its run, and so does a wake given back and run again; a different
+/// call doesn't.
+fn start_key(pip: &PipRun, request_id: &str, asked: &Value) -> String {
     use sha2::{Digest, Sha256};
-    let digest: String = Sha256::digest(format!("{request_id}\0{asked}").as_bytes()).iter().take(16).map(|b| format!("{b:02x}")).collect();
+    let turn = pip.wake.as_deref().unwrap_or(request_id);
+    let digest: String = Sha256::digest(format!("{turn}\0{asked}").as_bytes()).iter().take(16).map(|b| format!("{b:02x}")).collect();
     format!("pip:{digest}")
 }
 
@@ -475,27 +477,32 @@ async fn start(st: &McpState, pip: &PipRun, request_id: &str, args: &Value) -> R
     let role = required(args, "role")?.to_ascii_lowercase();
     let kind = RunKind::parse(&role).ok_or_else(|| format!("role must be {}, not {role}", allowed_kinds().iter().map(|k| k.as_str()).collect::<Vec<_>>().join(", ")))?;
     let (brief, repo, from_run, pr) = (opt(args, "brief"), opt(args, "repo"), opt(args, "from_run"), pull_number(args)?);
-    let key = start_key(request_id, &json!([ws_id, role, brief, repo.map(str::to_ascii_lowercase), from_run, pr]));
+    let key = start_key(pip, request_id, &json!([ws_id, role, brief, repo.map(str::to_ascii_lowercase), from_run, pr]));
     if let Some(run) = st.core.run_started_as(scope, &key).await.map_err(|e| e.to_string())? {
-        return Ok(format!("Already started in this turn: {} (run {}).", name_of(st, pip, &run).await, run.id));
+        return Ok(format!("Already started: {} (run {}).", name_of(st, pip, &run).await, run.id));
     }
-    {
-        let mut runs = st.runs.lock().expect("runs lock poisoned");
-        let taken = runs.get_mut(request_id).ok_or("This run has ended.")?;
-        if taken.starts >= MAX_STARTS_PER_TURN {
-            return Err(format!("You have started {MAX_STARTS_PER_TURN} agents in this turn already; tell the person what is next instead of starting more."));
-        }
-        taken.starts += 1;
-    }
+    take_start(st, request_id)?;
     let made = start_checked(st, pip, request_id, &key, ws_id, kind, StartArgs { brief, repo, from_run, pr }).await;
-    match made {
-        Ok(reply) => Ok(reply),
-        Err(e) => {
-            if let Some(taken) = st.runs.lock().expect("runs lock poisoned").get_mut(request_id) {
-                taken.starts = taken.starts.saturating_sub(1);
-            }
-            Err(e)
-        }
+    if made.is_err() {
+        give_back_start(st, request_id);
+    }
+    made
+}
+
+/// Counts an agent started or woken in the turn against its three.
+fn take_start(st: &McpState, request_id: &str) -> std::result::Result<(), String> {
+    let mut runs = st.runs.lock().expect("runs lock poisoned");
+    let taken = runs.get_mut(request_id).ok_or("This run has ended.")?;
+    if taken.starts >= MAX_STARTS_PER_TURN {
+        return Err(format!("You have started {MAX_STARTS_PER_TURN} agents in this turn already; tell the person what is next instead of starting more."));
+    }
+    taken.starts += 1;
+    Ok(())
+}
+
+fn give_back_start(st: &McpState, request_id: &str) {
+    if let Some(taken) = st.runs.lock().expect("runs lock poisoned").get_mut(request_id) {
+        taken.starts = taken.starts.saturating_sub(1);
     }
 }
 
@@ -524,11 +531,11 @@ async fn start_checked(st: &McpState, pip: &PipRun, request_id: &str, key: &str,
         None => (None, start_without_ticket(st, pip, ws_id, kind, asked).await?),
     };
     let repo = spec.repo.clone();
-    let start = PipStart { request_id, key, wake: pip.wake };
+    let start = PipStart { request_id, key, wake: pip.wake.is_some() };
     let (run, fresh) = st.core.commit_pip_run(scope, &start, item, spec).await.map_err(|e| format!("Couldn't start it: {e}"))?;
     let name = name_of(st, pip, &run).await;
     if !fresh {
-        return Ok(format!("Already started in this turn: {name} (run {}).", run.id));
+        return Ok(format!("Already started: {name} (run {}).", run.id));
     }
     let run = match st.driver.clone().begin(run.id.clone()).await {
         Ok(noted) => noted,
@@ -614,11 +621,19 @@ async fn start_without_ticket(st: &McpState, pip: &PipRun, ws_id: &str, kind: Ru
     st.core.build_pip_ticketless_run(scope, ws_id, prompt, repo, project, plan).await.map_err(|e| e.to_string())
 }
 
-async fn message(st: &McpState, pip: &PipRun, args: &Value) -> Reply {
+async fn message(st: &McpState, pip: &PipRun, request_id: &str, args: &Value) -> Reply {
     let run = visible_run(st, pip, args).await?;
     let text = crate::runs::result::scrub(required(args, "text")?).trim().to_string();
     let name = name_of(st, pip, &run).await;
-    let (_, delivery) = st.driver.message(&run.id, &text).await.map_err(|e| e.to_string())?;
+    let resumes = matches!(run.state, RunState::Done | RunState::Stopped);
+    if resumes {
+        take_start(st, request_id)?;
+    }
+    let sent = st.driver.message(&run.id, &text).await;
+    if resumes && !matches!(sent, Ok((_, Delivery::Resumed))) {
+        give_back_start(st, request_id);
+    }
+    let (_, delivery) = sent.map_err(|e| e.to_string())?;
     (st.workstreams)(&run.connection_id);
     Ok(match delivery {
         Delivery::Answered => format!("Answered {name}'s question."),

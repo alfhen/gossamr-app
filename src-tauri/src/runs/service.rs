@@ -315,7 +315,7 @@ impl RunService {
         self.store(run).await
     }
 
-    fn live_elsewhere(&self, run: &Run) -> usize {
+    pub(super) fn live_elsewhere(&self, run: &Run) -> usize {
         self.index.live().iter().filter(|e| e.run_id != run.id).count()
     }
 

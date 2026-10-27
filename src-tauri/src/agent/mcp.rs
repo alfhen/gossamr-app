@@ -57,14 +57,15 @@ pub struct PipRun {
     pub workstream: Option<String>,
     /// How many agents Pip has started in this request.
     pub starts: u32,
-    /// The request is a wake turn: Gossamr asked Pip, the person didn't.
-    pub wake: bool,
+    /// The request is a wake turn (Gossamr asked Pip, the person didn't): what it was woken for. A wake given back and
+    /// run again has the same facts, so an agent it started comes back instead of starting twice.
+    pub wake: Option<String>,
 }
 
 impl PipRun {
     #[cfg(test)]
     pub fn new(scope: Scope) -> Self {
-        Self { scope, handed: Default::default(), read: Default::default(), workstream: None, starts: 0, wake: false }
+        Self { scope, handed: Default::default(), read: Default::default(), workstream: None, starts: 0, wake: None }
     }
 
     /// A request asked in workstream `id`'s conversation.

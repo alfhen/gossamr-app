@@ -239,6 +239,13 @@ pub fn fact_keys(facts: &WakeFacts) -> Vec<(String, String)> {
     facts.facts.iter().map(|f| (f.run.clone(), f.key().to_string())).collect()
 }
 
+/// What a wake turn is for, the same for any wake of the same facts.
+pub fn wake_identity(facts: &WakeFacts) -> String {
+    let mut keys: Vec<String> = fact_keys(facts).into_iter().map(|(run, key)| format!("{run}\0{key}")).collect();
+    keys.sort();
+    format!("{}\0{}", facts.workstream, keys.join("\0"))
+}
+
 /// Whether a turn ended because the person's subscription said no: a rate or usage limit, or sign-in trouble.
 pub fn is_quota_error(message: &str) -> bool {
     let m = message.to_ascii_lowercase();

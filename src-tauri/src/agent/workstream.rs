@@ -11,7 +11,7 @@ use super::context::draft_line;
 use super::mcp::{item_ref, opt, reachable, required, tool, McpState, PipRun, Reply};
 use crate::auth::Scope;
 use crate::domain::workstream::{run_labels, Stage, BASIS_DESCRIPTION, BASIS_STATUS, BASIS_SUMMARY};
-use crate::domain::{Actor, Proposal, ProposalQuery, Run, RunQuery, StateKind, Workstream, WorkstreamEvent};
+use crate::domain::{Actor, Proposal, ProposalQuery, Run, RunQuery, RunState, StateKind, Workstream, WorkstreamEvent};
 use crate::error::{Error, Result};
 use crate::inbox::{Core, NOTES_CLOSE, NOTES_LIMIT, NOTES_OPEN};
 
@@ -255,7 +255,7 @@ pub(super) fn tools() -> Vec<Value> {
         ),
         tool(
             "close_workstream",
-            "Close a workstream that is finished. Its agents and drafts are left as they are.",
+            "Close a workstream that is finished. It is refused while any of its agents is still going. Its drafts are left as they are.",
             json!({ "workstream": { "type": "string", "description": "A workstream id from list_workstreams" } }),
             &["workstream"],
         ),
@@ -383,6 +383,11 @@ async fn open(st: &McpState, pip: &PipRun, args: &Value) -> Reply {
 async fn close(st: &McpState, pip: &PipRun, args: &Value) -> Reply {
     let id = required(args, "workstream")?;
     reachable_workstream(st, pip, id).await?;
+    let runs = st.core.runs_in(&pip.scope, &RunQuery { workstream: Some(id.to_string()), ..Default::default() }).await.map_err(|e| e.to_string())?;
+    let live = runs.iter().filter(|r| !matches!(r.state, RunState::Done | RunState::Failed | RunState::Stopped | RunState::Unknown)).count();
+    if live > 0 {
+        return Err(format!("{live} of its agents are still going; their questions would go unseen once it is closed. Stop them with stop_agent or ask the person."));
+    }
     let ws = st.core.close_workstream_as(&pip.scope, id, Actor::Pip).await.map_err(|e| format!("Couldn't close it: {e}"))?;
     (st.workstreams)(&ws.connection_id);
     Ok(format!("Closed “{}”.", ws.title))
