@@ -1,0 +1,277 @@
+- generic [active] [ref=f31e1]:
+  - generic [ref=f31e2]:
+    - generic [ref=f31e3]: Gossamr
+    - generic [ref=f31e4]: Design prototype
+    - generic [ref=f31e5]: Scripted fake data. Nothing here talks to a real Claude, Jira or GitHub.
+    - button "Run demo" [ref=f31e6] [cursor=pointer]
+    - button "Scenarios ▾" [ref=f31e9] [cursor=pointer]
+    - button "Switch theme" [ref=f31e10] [cursor=pointer]: Light
+  - generic [ref=f31e13]:
+    - complementary [ref=f31e14]:
+      - navigation "Workspace" [ref=f31e19]:
+        - button "Search and jump" [ref=f31e20] [cursor=pointer]
+        - button "All projects" [ref=f31e24] [cursor=pointer]
+        - button "Cart and checkout A" [ref=f31e30] [cursor=pointer]:
+          - generic [ref=f31e31]: CA
+        - button "Customer experience" [ref=f31e32] [cursor=pointer]:
+          - generic [ref=f31e33]: CE
+        - button "DevOps" [ref=f31e34] [cursor=pointer]:
+          - generic [ref=f31e35]: DE
+        - separator [ref=f31e36]
+        - button "Activity" [ref=f31e37] [cursor=pointer]
+        - button "Agents, 3 need you" [ref=f31e41] [cursor=pointer]:
+          - status "3 need you" [ref=f31e45]: "3"
+        - button "Settings" [ref=f31e46] [cursor=pointer]
+        - button "Pip" [pressed] [ref=f31e50] [cursor=pointer]
+    - main [ref=f31e61]:
+      - generic [ref=f31e62]:
+        - heading "Agents" [level=1] [ref=f31e63]
+        - generic [ref=f31e64]: 2 need you · 1 stuck · 2 running · 2 ready to review · 1 failed
+        - generic "Agents running at the same time" [ref=f31e65]: 5 of 6
+        - button "Safety and settings" [ref=f31e73] [cursor=pointer]
+        - button "Stop all" [ref=f31e77] [cursor=pointer]
+        - button "New agent" [ref=f31e80] [cursor=pointer]
+      - generic [ref=f31e83]:
+        - group "Layout" [ref=f31e84]:
+          - button "Cards" [pressed] [ref=f31e85] [cursor=pointer]
+          - button "List" [ref=f31e89] [cursor=pointer]
+        - combobox "Filter by state" [ref=f31e92]:
+          - option "All states" [selected]
+          - option "Needs you"
+          - option "Running"
+          - option "Done, ready to review"
+          - option "Failed or stuck"
+          - option "Earlier"
+        - combobox "Filter by repo" [ref=f31e93]:
+          - option "All repos" [selected]
+          - option "hobbii/aurora-storefront"
+          - option "hobbii/shopify-theme"
+          - option "hobbii/ops-pipelines"
+          - option "hobbii/legacy-admin"
+        - combobox "Filter by ticket" [ref=f31e94]:
+          - option "All tickets" [selected]
+          - option "CE-788"
+          - option "CA-208"
+          - option "DEVOPS-471"
+          - option "CA-199"
+          - option "CE-781"
+          - option "CA-205"
+          - option "CA-190"
+          - option "DEVOPS-466"
+        - button "How agents work" [ref=f31e95] [cursor=pointer]
+      - generic [ref=f31e100]:
+        - region "Needs you" [ref=f31e101]:
+          - generic [ref=f31e102]:
+            - heading "Needs you" [level=2] [ref=f31e103]
+            - generic [ref=f31e104]: "2"
+            - generic [ref=f31e105]: Waiting on an answer or a permission
+          - generic [ref=f31e106]:
+            - article "Why Aurora images 404 after publish, Needs you" [ref=f31e107] [cursor=pointer]:
+              - generic [ref=f31e108]:
+                - generic [ref=f31e109]: Investigate
+                - button "CE-788" [ref=f31e113]
+                - generic [ref=f31e114]: 23 min
+              - heading [level=3] [ref=f31e115]:
+                - button "Why Aurora images 404 after publish" [ref=f31e116]
+              - generic "hobbii/aurora-storefront on agent/ce-788-aurora-image-404" [ref=f31e117]: aurora-storefront · agent/ce-788-aurora-image-404
+              - generic [ref=f31e124]:
+                - generic [ref=f31e125]: Claude wants to check one of the failing images on the live store, to see which server answers.
+                - button "Review the request" [ref=f31e127]
+              - generic [ref=f31e128]:
+                - generic [ref=f31e129]: 6 steps
+                - generic "Estimated from tokens used" [ref=f31e130]: ≈ $0.38
+            - article "Gift wrap in the cart drawer, Needs you" [ref=f31e131] [cursor=pointer]:
+              - generic [ref=f31e132]:
+                - generic [ref=f31e133]: Build
+                - button "CA-208" [ref=f31e136]
+                - generic [ref=f31e137]: 41 min
+              - heading [level=3] [ref=f31e138]:
+                - button "Gift wrap in the cart drawer" [ref=f31e139]
+              - generic "hobbii/shopify-theme on agent/ca-208-gift-wrap" [ref=f31e140]: shopify-theme · agent/ca-208-gift-wrap
+              - generic [ref=f31e147]:
+                - generic [ref=f31e148]: The ticket says “Gift wrap” but the attached design says “Add a gift message”. Which label should the cart drawer use? I used a neutral placeholder for now and the rest is done.
+                - generic [ref=f31e149]:
+                  - button "Answer" [ref=f31e150]
+                  - generic [ref=f31e151]: 3 quick answers
+              - generic [ref=f31e152]:
+                - generic [ref=f31e153]: 9 steps
+                - generic "Estimated from tokens used" [ref=f31e154]: ≈ $0.91
+                - generic [ref=f31e155]: 3 files
+        - region "Running" [ref=f31e156]:
+          - generic [ref=f31e157]:
+            - heading "Running" [level=2] [ref=f31e158]
+            - generic [ref=f31e159]: "2"
+            - generic [ref=f31e160]: Working in the background
+          - generic [ref=f31e161]:
+            - 'article "Review PR #412: shipping bar rounding, Working" [ref=f31e162] [cursor=pointer]':
+              - generic [ref=f31e163]:
+                - generic [ref=f31e164]: Review
+                - button "CA-199" [ref=f31e168]
+                - generic [ref=f31e169]: 7 min
+              - heading [level=3] [ref=f31e170]:
+                - 'button "Review PR #412: shipping bar rounding" [ref=f31e171]'
+              - generic "hobbii/shopify-theme on ca-199-shipping-bar" [ref=f31e172]: shopify-theme · ca-199-shipping-bar
+              - generic [ref=f31e179]: Reading the tests added in the PR
+              - progressbar "Rough progress" [ref=f31e182]
+              - generic [ref=f31e184]:
+                - generic [ref=f31e185]: 4 steps
+                - generic "Estimated from tokens used" [ref=f31e186]: ≈ $0.17
+            - article "Move the resize job to the new queue, Working" [ref=f31e187] [cursor=pointer]:
+              - generic [ref=f31e188]:
+                - generic [ref=f31e189]: Build
+                - button "DEVOPS-471" [ref=f31e192]
+                - generic [ref=f31e193]: 18 min
+              - heading [level=3] [ref=f31e194]:
+                - button "Move the resize job to the new queue" [ref=f31e195]
+              - generic "hobbii/ops-pipelines on agent/devops-471-resize-queue" [ref=f31e196]: ops-pipelines · agent/devops-471-resize-queue
+              - generic [ref=f31e203]: Updating the worker to read from the new queue
+              - progressbar "Rough progress" [ref=f31e206]
+              - generic [ref=f31e208]:
+                - generic [ref=f31e209]: 5 steps
+                - generic "Estimated from tokens used" [ref=f31e210]: ≈ $0.44
+                - generic [ref=f31e211]: 1 file
+        - region "Done, ready to review" [ref=f31e212]:
+          - generic [ref=f31e213]:
+            - heading "Done, ready to review" [level=2] [ref=f31e214]
+            - generic [ref=f31e215]: "2"
+            - generic [ref=f31e216]: Look over what it made, then close it out
+          - generic [ref=f31e217]:
+            - article "Why the Aurora collection page is slow, Ready to review" [ref=f31e218] [cursor=pointer]:
+              - generic [ref=f31e219]:
+                - generic [ref=f31e220]: Investigate
+                - button "CE-781" [ref=f31e224]
+                - generic [ref=f31e225]: 12 min ago
+              - heading [level=3] [ref=f31e226]:
+                - button "Why the Aurora collection page is slow" [ref=f31e227]
+              - generic "hobbii/aurora-storefront on agent/ce-781-collection-speed" [ref=f31e228]: aurora-storefront · agent/ce-781-collection-speed
+              - generic [ref=f31e235]: Two things explain most of the slowness, and both are small to fix. 2 findings
+              - generic [ref=f31e238]:
+                - generic [ref=f31e239]: 11 steps
+                - generic "Estimated from tokens used" [ref=f31e240]: ≈ $0.62
+              - generic [ref=f31e241]:
+                - button "Review" [ref=f31e242]
+                - button "Draft comment" [ref=f31e243]
+            - article "Sold-out swatch contrast, Ready to review" [ref=f31e246] [cursor=pointer]:
+              - generic [ref=f31e247]:
+                - generic [ref=f31e248]: Build
+                - button "CA-205" [ref=f31e251]
+                - generic [ref=f31e252]: 1 h 24 min ago
+              - heading [level=3] [ref=f31e253]:
+                - button "Sold-out swatch contrast" [ref=f31e254]
+              - generic "hobbii/shopify-theme on agent/ca-205-swatch-contrast" [ref=f31e255]: shopify-theme · agent/ca-205-swatch-contrast
+              - generic [ref=f31e262]: Sold-out swatches now meet AA contrast (4.6:1) and still read as sold out because the diagonal strike stays
+              - generic [ref=f31e265]:
+                - generic [ref=f31e266]: 13 steps
+                - generic "Estimated from tokens used" [ref=f31e267]: ≈ $1.12
+                - generic [ref=f31e268]: 4 files
+                - generic [ref=f31e269]: "PR #418"
+              - generic [ref=f31e275]:
+                - button "Review" [ref=f31e276]
+                - button "Open PR" [ref=f31e277]
+        - region "Failed or stuck" [ref=f31e280]:
+          - generic [ref=f31e281]:
+            - heading "Failed or stuck" [level=2] [ref=f31e282]
+            - generic [ref=f31e283]: "2"
+            - generic [ref=f31e284]: Not going anywhere without you
+          - generic [ref=f31e285]:
+            - article "Check the free-shipping banner, Stuck" [ref=f31e286] [cursor=pointer]:
+              - generic [ref=f31e287]:
+                - generic [ref=f31e288]: Verify
+                - button "CA-190" [ref=f31e292]
+                - generic [ref=f31e293]: 31 min
+              - heading [level=3] [ref=f31e294]:
+                - button "Check the free-shipping banner" [ref=f31e295]
+              - generic "hobbii/shopify-theme on agent/ca-190-banner-check" [ref=f31e296]: shopify-theme · agent/ca-190-banner-check
+              - generic [ref=f31e303]: No progress for 14 min
+              - generic [ref=f31e307]: "Running npm test: no output for 14 min"
+              - generic [ref=f31e309]:
+                - button "Nudge it" [ref=f31e310]
+                - button "Attach" [ref=f31e313]
+                - button "Stop" [ref=f31e317]
+            - article "First look at the nightly feed timeouts, Failed" [ref=f31e318] [cursor=pointer]:
+              - generic [ref=f31e319]:
+                - generic [ref=f31e320]: Triage
+                - button "DEVOPS-466" [ref=f31e323]
+                - generic [ref=f31e324]: 1 h 35 min
+              - heading [level=3] [ref=f31e325]:
+                - button "First look at the nightly feed timeouts" [ref=f31e326]
+              - generic "hobbii/legacy-admin on agent/devops-466-feed-timeouts" [ref=f31e327]: legacy-admin · agent/devops-466-feed-timeouts
+              - generic [ref=f31e334]: Gossamr couldn't clone hobbii/legacy-admin
+              - generic [ref=f31e339]:
+                - button "Retry" [ref=f31e340]
+                - button "See why" [ref=f31e343]
+      - generic [ref=f31e344]:
+        - generic [ref=f31e345]:
+          - generic [ref=f31e346]: j
+          - generic [ref=f31e347]: k
+          - text: move
+        - generic [ref=f31e348]:
+          - generic [ref=f31e349]: ↵
+          - text: open
+        - generic [ref=f31e350]:
+          - generic [ref=f31e351]: "n"
+          - text: new agent
+        - generic [ref=f31e352]:
+          - generic [ref=f31e353]: esc
+          - text: close
+        - generic [ref=f31e354]:
+          - generic [ref=f31e355]: ⌘K
+          - text: search
+        - generic [ref=f31e356]:
+          - generic [ref=f31e357]: ⌘J
+          - text: Pip
+        - generic [ref=f31e358]: Agents use your own Claude settings and account
+    - complementary "Pip" [ref=f31e359]:
+      - generic [ref=f31e360]:
+        - generic [ref=f31e361]:
+          - generic [ref=f31e373]:
+            - heading "Pip" [level=2] [ref=f31e374]
+            - generic [ref=f31e375]: powered by Claude
+          - generic [ref=f31e376]: ⌘J
+          - button "Close Pip" [ref=f31e377] [cursor=pointer]
+        - generic [ref=f31e380]:
+          - generic [ref=f31e381]: "Seeing: Agents · 8 runs"
+          - generic [ref=f31e383]: Anything useful I can do about CE-788?
+          - paragraph [ref=f31e385]: I can’t open the code myself, but I can start an agent that can. CE-788 looks like an image-path problem, so I started an investigation once you said yes. Here is where it is.
+          - button "Why Aurora images 404 after publish, Needs you" [ref=f31e386] [cursor=pointer]:
+            - generic [ref=f31e387]:
+              - generic [ref=f31e389]: Why Aurora images 404 after publish
+              - generic [ref=f31e390]: Needs you
+            - generic [ref=f31e391]:
+              - generic [ref=f31e392]: CE-788
+              - generic [ref=f31e393]: Waiting for you to allow a network check
+          - status [ref=f31e394]:
+            - generic [ref=f31e395]:
+              - generic [ref=f31e396]: "Aurora investigation finished: 2 findings"
+              - generic [ref=f31e397]: Draft a comment on CE-781?
+            - button "Draft comment" [ref=f31e398] [cursor=pointer]
+          - status [ref=f31e399]:
+            - generic [ref=f31e400]:
+              - generic [ref=f31e401]: CE-788 needs you
+              - generic [ref=f31e402]: It wants permission to run a command.
+            - button "Answer" [ref=f31e403] [cursor=pointer]
+          - paragraph [ref=f31e405]: "While you’re here: CE-811 sounds like something an agent could trace in the sync code. It would work in a fresh copy of the repo, since you don’t have it cloned."
+          - 'article "Draft: start an agent" [ref=f31e406]':
+            - generic [ref=f31e407]:
+              - text: Start an agent
+              - generic [ref=f31e410]: Needs your approval
+            - generic [ref=f31e411]:
+              - generic [ref=f31e412]: "Investigate CE-811: Welcome mail shows the wrong currency for Norway"
+              - generic [ref=f31e413]: "Investigate CE-811: Welcome mail shows the wrong currency for Norway. Find out why this happens. Read the code and logs you need, but don't change any files. When you're done, tell me what you found, how sure you are, and what you'd do next. If you need a decision from me, ask."
+              - generic [ref=f31e414]:
+                - generic [ref=f31e415]: No clone found. Fresh copy in ~/Gossamr/agents/hobbii/klaviyo-sync
+                - generic [ref=f31e419]: Uses your own Claude settings and account
+                - generic [ref=f31e423]: Nothing goes to Jira without a draft you approve
+              - generic [ref=f31e427]:
+                - button "Start agent" [ref=f31e428] [cursor=pointer]
+                - button "Edit brief and details" [ref=f31e429] [cursor=pointer]
+                - button "Skip" [ref=f31e430] [cursor=pointer]
+        - generic [ref=f31e431]:
+          - generic [ref=f31e432]:
+            - button "What are my agents doing?" [ref=f31e433] [cursor=pointer]
+            - button "Which ones need me?" [ref=f31e434] [cursor=pointer]
+            - button "Suggest an agent" [ref=f31e435] [cursor=pointer]
+          - generic [ref=f31e436]:
+            - textbox "Message Pip" [ref=f31e437]:
+              - /placeholder: Ask Pip about your agents
+            - button "Send" [ref=f31e438] [cursor=pointer]

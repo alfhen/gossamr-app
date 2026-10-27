@@ -1,0 +1,406 @@
+- generic [ref=f9e2]:
+  - generic [ref=f9e3]:
+    - complementary [ref=f9e4]:
+      - navigation "Workspace" [ref=f9e6]:
+        - button "Search and jump" [ref=f9e8]:
+          - generic [aria-hidden] [ref=f9e9]: ⌕
+        - separator [ref=f9e10]
+        - button "All projects" [ref=f9e12]:
+          - generic [aria-hidden] [ref=f9e13]: ∗
+        - group "Projects" [ref=f9e14]:
+          - button "Campaigns" [ref=f9e16]: CA
+          - button "DevOps" [ref=f9e18]: DE
+          - button "Support" [ref=f9e20]: SU
+          - button "Webshop" [ref=f9e22]: WE
+        - button "More projects" [ref=f9e25]:
+          - generic [aria-hidden] [ref=f9e26]: ⋯
+        - separator [ref=f9e27]
+        - button "Views" [ref=f9e30]:
+          - generic [aria-hidden] [ref=f9e31]: ◎
+      - generic [ref=f9e32]:
+        - button "Activity" [ref=f9e34]:
+          - generic [aria-hidden] [ref=f9e35]: ⚡
+          - generic "24 unread" [ref=f9e36]: "24"
+        - button "Settings" [ref=f9e38]:
+          - generic [aria-hidden] [ref=f9e39]: ⚙
+        - button "Pip" [ref=f9e41]:
+          - generic [aria-hidden] [ref=f9e42]: ✦
+    - main [ref=f9e43]:
+      - generic [ref=f9e44]:
+        - generic [ref=f9e46]:
+          - 'button "Project: All projects" [ref=f9e48]':
+            - text: All projects
+            - generic [aria-hidden] [ref=f9e49]: ▾
+          - group "View" [ref=f9e50]:
+            - button "Board" [ref=f9e51]
+            - button "Map" [ref=f9e52]
+            - button "List" [pressed] [ref=f9e53]
+            - button "Age" [ref=f9e54]
+        - generic [ref=f9e55]:
+          - tablist "Views" [ref=f9e56]:
+            - tab "Needs me 17" [ref=f9e58]:
+              - generic [ref=f9e59]: Needs me
+              - generic [ref=f9e60]: "17"
+            - tab "Mine 8" [ref=f9e62]:
+              - generic [ref=f9e63]: Mine
+              - generic [ref=f9e64]: "8"
+            - tab "Blocked 3" [ref=f9e66]:
+              - generic [ref=f9e67]: Blocked
+              - generic [ref=f9e68]: "3"
+            - tab "Going stale 13" [ref=f9e70]:
+              - generic [ref=f9e71]: Going stale
+              - generic [ref=f9e72]: "13"
+            - tab "Everything 40" [selected] [ref=f9e74]:
+              - generic [ref=f9e75]: Everything
+              - generic [ref=f9e76]: "40"
+          - button "New tab" [ref=f9e77]: +
+          - generic [ref=f9e78]: 40 of 40
+      - generic [ref=f9e79]:
+        - list "Active filters"
+        - textbox "Filter" [ref=f9e80]:
+          - /placeholder: "Filter: type words, then Enter"
+      - generic [ref=f9e82]:
+        - listbox "Items" [ref=f9e84]:
+          - group "Autumn campaign, 5" [ref=f9e85]:
+            - button "CA-400 Autumn campaign 0/5 done 0" [expanded] [ref=f9e86]:
+              - generic [aria-hidden] [ref=f9e87]: ▾
+              - generic [ref=f9e88]: CA-400
+              - generic [ref=f9e89]: Autumn campaign
+              - generic [ref=f9e90]: 0/5 done
+              - progressbar "0 of 5 done" [ref=f9e91]
+            - option "Needs you CA-406 Translate footer Needs you Scheduled BF" [ref=f9e92] [cursor=pointer]:
+              - generic [ref=f9e93]:
+                - img "Needs you" [ref=f9e94]
+                - generic [ref=f9e95]: CA-406
+              - generic [ref=f9e96]:
+                - generic [ref=f9e97]: Translate footer
+                - generic [ref=f9e98]: Needs you
+              - generic [ref=f9e99]: Scheduled
+              - generic "Byron Fichardt" [ref=f9e100]: BF
+            - option "CA-401 Welcome flow refresh 2d Design ML" [ref=f9e101] [cursor=pointer]:
+              - generic [ref=f9e102]: CA-401
+              - generic [ref=f9e104]: Welcome flow refresh
+              - generic "No update for 2 days" [ref=f9e107]: 2d
+              - generic [ref=f9e108]: Design
+              - generic "Maya Lindqvist" [ref=f9e109]: ML
+            - option "Needs you CA-402 Subject line variants Needs you 3d Copy AH" [ref=f9e110] [cursor=pointer]:
+              - generic [ref=f9e111]:
+                - img "Needs you" [ref=f9e112]
+                - generic [ref=f9e113]: CA-402
+              - generic [ref=f9e114]:
+                - generic [ref=f9e115]: Subject line variants
+                - generic [ref=f9e116]: Needs you
+              - generic "No update for 3 days" [ref=f9e118]: 3d
+              - generic [ref=f9e119]: Copy
+              - generic "Alf Henderson" [ref=f9e120]: AH
+            - option "CA-404 Segment for lapsed customers ⛓ blocked 4d QA IP" [ref=f9e121] [cursor=pointer]:
+              - generic [ref=f9e122]: CA-404
+              - generic [ref=f9e124]:
+                - generic [ref=f9e125]: Segment for lapsed customers
+                - generic [ref=f9e126]: ⛓ blocked
+              - generic "No update for 4 days" [ref=f9e128]: 4d
+              - generic [ref=f9e129]: QA
+              - generic "Ida Pedersen" [ref=f9e130]: IP
+            - option "CA-403 Hero banner 6d Design IP" [ref=f9e131] [cursor=pointer]:
+              - generic [ref=f9e132]: CA-403
+              - generic [ref=f9e134]: Hero banner
+              - generic "No update for 6 days" [ref=f9e137]: 6d
+              - generic [ref=f9e138]: Design
+              - generic "Ida Pedersen" [ref=f9e139]: IP
+          - group "Checkout resilience, 2" [ref=f9e140]:
+            - button "DEVOPS-470 Checkout resilience 0/2 done 0" [expanded] [ref=f9e141]:
+              - generic [aria-hidden] [ref=f9e142]: ▾
+              - generic [ref=f9e143]: DEVOPS-470
+              - generic [ref=f9e144]: Checkout resilience
+              - generic [ref=f9e145]: 0/2 done
+              - progressbar "0 of 2 done" [ref=f9e146]
+            - option "Needs you DEVOPS-471 Retry failed payment webhooks Needs you ⛓ blocked In Review AH" [ref=f9e147] [cursor=pointer]:
+              - generic [ref=f9e148]:
+                - img "Needs you" [ref=f9e149]
+                - generic [ref=f9e150]: DEVOPS-471
+              - generic [ref=f9e151]:
+                - generic [ref=f9e152]: Retry failed payment webhooks
+                - generic [ref=f9e153]: Needs you
+                - generic [ref=f9e154]: ⛓ blocked
+              - generic [ref=f9e155]: In Review
+              - generic "Alf Henderson" [ref=f9e156]: AH
+            - option "DEVOPS-472 Add dead-letter queue for webhooks 6d In Progress SH" [ref=f9e157] [cursor=pointer]:
+              - generic [ref=f9e158]: DEVOPS-472
+              - generic [ref=f9e160]: Add dead-letter queue for webhooks
+              - generic "No update for 6 days" [ref=f9e163]: 6d
+              - generic [ref=f9e164]: In Progress
+              - generic "Sam Holt" [ref=f9e165]: SH
+          - group "Product page speed, 3" [ref=f9e166]:
+            - button "WEB-100 Product page speed 0/3 done 0" [expanded] [ref=f9e167]:
+              - generic [aria-hidden] [ref=f9e168]: ▾
+              - generic [ref=f9e169]: WEB-100
+              - generic [ref=f9e170]: Product page speed
+              - generic [ref=f9e171]: 0/3 done
+              - progressbar "0 of 3 done" [ref=f9e172]
+            - option "Needs you WEB-101 Lazy-load swatch images Needs you Code review AH" [ref=f9e173] [cursor=pointer]:
+              - generic [ref=f9e174]:
+                - img "Needs you" [ref=f9e175]
+                - generic [ref=f9e176]: WEB-101
+              - generic [ref=f9e177]:
+                - generic [ref=f9e178]: Lazy-load swatch images
+                - generic [ref=f9e179]: Needs you
+              - generic [ref=f9e180]: Code review
+              - generic "Alf Henderson" [ref=f9e181]: AH
+            - option "Needs you WEB-103 Preload hero font Needs you 2d Testing BF" [ref=f9e182] [cursor=pointer]:
+              - generic [ref=f9e183]:
+                - img "Needs you" [ref=f9e184]
+                - generic [ref=f9e185]: WEB-103
+              - generic [ref=f9e186]:
+                - generic [ref=f9e187]: Preload hero font
+                - generic [ref=f9e188]: Needs you
+              - generic "No update for 2 days" [ref=f9e190]: 2d
+              - generic [ref=f9e191]: Testing
+              - generic "Byron Fichardt" [ref=f9e192]: BF
+            - option "Needs you WEB-104 Fix layout shift on swatches Needs you 5d To Do U" [ref=f9e193] [cursor=pointer]:
+              - generic [ref=f9e194]:
+                - img "Needs you" [ref=f9e195]
+                - generic [ref=f9e196]: WEB-104
+              - generic [ref=f9e197]:
+                - generic [ref=f9e198]: Fix layout shift on swatches
+                - generic [ref=f9e199]: Needs you
+              - generic "No update for 5 days" [ref=f9e201]: 5d
+              - generic [ref=f9e202]: To Do
+              - generic "Unassigned" [ref=f9e203]: U
+          - group "Shopify event pipeline, 6" [ref=f9e204]:
+            - button "DEVOPS-480 Shopify event pipeline 1/6 done 17" [expanded] [ref=f9e205]:
+              - generic [aria-hidden] [ref=f9e206]: ▾
+              - generic [ref=f9e207]: DEVOPS-480
+              - generic [ref=f9e208]: Shopify event pipeline
+              - generic [ref=f9e209]: 1/6 done
+              - progressbar "1 of 6 done" [ref=f9e210]
+            - option "Needs you DEVOPS-490 Backfill missing events Needs you In Progress AH" [ref=f9e212] [cursor=pointer]:
+              - generic [ref=f9e213]:
+                - img "Needs you" [ref=f9e214]
+                - generic [ref=f9e215]: DEVOPS-490
+              - generic [ref=f9e216]:
+                - generic [ref=f9e217]: Backfill missing events
+                - generic [ref=f9e218]: Needs you
+              - generic [ref=f9e219]: In Progress
+              - generic "Alf Henderson" [ref=f9e220]: AH
+            - option "Needs you DEVOPS-493 Replay skips dead-lettered events Needs you In Review SH" [ref=f9e221] [cursor=pointer]:
+              - generic [ref=f9e222]:
+                - img "Needs you" [ref=f9e223]
+                - generic [ref=f9e224]: DEVOPS-493
+              - generic [ref=f9e225]:
+                - generic [ref=f9e226]: Replay skips dead-lettered events
+                - generic [ref=f9e227]: Needs you
+              - generic [ref=f9e228]: In Review
+              - generic "Sam Holt" [ref=f9e229]: SH
+            - option "DEVOPS-474 Dashboard for event lag 3d To Do U" [ref=f9e230] [cursor=pointer]:
+              - generic [ref=f9e231]: DEVOPS-474
+              - generic [ref=f9e233]: Dashboard for event lag
+              - generic "No update for 3 days" [ref=f9e236]: 3d
+              - generic [ref=f9e237]: To Do
+              - generic "Unassigned" [ref=f9e238]: U
+            - option "DEVOPS-491 Idempotency keys for consumers 5d To Do BF" [ref=f9e239] [cursor=pointer]:
+              - generic [ref=f9e240]: DEVOPS-491
+              - generic [ref=f9e242]: Idempotency keys for consumers
+              - generic "No update for 5 days" [ref=f9e245]: 5d
+              - generic [ref=f9e246]: To Do
+              - generic "Byron Fichardt" [ref=f9e247]: BF
+            - option "DEVOPS-473 Duplicate order events on retry ⛓ blocked 9d Blocked JB" [ref=f9e248] [cursor=pointer]:
+              - generic [ref=f9e249]: DEVOPS-473
+              - generic [ref=f9e251]:
+                - generic [ref=f9e252]: Duplicate order events on retry
+                - generic [ref=f9e253]: ⛓ blocked
+              - generic "No update for 9 days" [ref=f9e255]: 9d
+              - generic [ref=f9e256]: Blocked
+              - generic "Jonas Berg" [ref=f9e257]: JB
+            - option "DEVOPS-492 Runbook for event replay Done ML" [ref=f9e258] [cursor=pointer]:
+              - generic [ref=f9e259]: DEVOPS-492
+              - generic [ref=f9e261]: Runbook for event replay
+              - generic [ref=f9e263]: Done
+              - generic "Maya Lindqvist" [ref=f9e264]: ML
+          - group "No epic, 4" [ref=f9e265]:
+            - button "CA No epic 4 items" [expanded] [ref=f9e266]:
+              - generic [aria-hidden] [ref=f9e267]: ▾
+              - generic [ref=f9e268]: CA
+              - generic [ref=f9e269]: No epic
+              - generic [ref=f9e270]: 4 items
+            - option "CA-405 Duplicate back-in-stock emails 2d Backlog U" [ref=f9e271] [cursor=pointer]:
+              - generic [ref=f9e272]: CA-405
+              - generic [ref=f9e274]: Duplicate back-in-stock emails
+              - generic "No update for 2 days" [ref=f9e277]: 2d
+              - generic [ref=f9e278]: Backlog
+              - generic "Unassigned" [ref=f9e279]: U
+            - option "Needs you CA-409 Unsubscribe page copy Needs you 8d Copy AH" [ref=f9e280] [cursor=pointer]:
+              - generic [ref=f9e281]:
+                - img "Needs you" [ref=f9e282]
+                - generic [ref=f9e283]: CA-409
+              - generic [ref=f9e284]:
+                - generic [ref=f9e285]: Unsubscribe page copy
+                - generic [ref=f9e286]: Needs you
+              - generic "No update for 8 days" [ref=f9e288]: 8d
+              - generic [ref=f9e289]: Copy
+              - generic "Alf Henderson" [ref=f9e290]: AH
+            - option "CA-407 Send-time test Sent ML" [ref=f9e291] [cursor=pointer]:
+              - generic [ref=f9e292]: CA-407
+              - generic [ref=f9e294]: Send-time test
+              - generic [ref=f9e296]: Sent
+              - generic "Maya Lindqvist" [ref=f9e297]: ML
+            - option "CA-408 Winback flow 14d Backlog U" [ref=f9e298] [cursor=pointer]:
+              - generic [ref=f9e299]: CA-408
+              - generic [ref=f9e301]: Winback flow
+              - generic "No update for 14 days" [ref=f9e304]: 14d
+              - generic [ref=f9e305]: Backlog
+              - generic "Unassigned" [ref=f9e306]: U
+          - group "No epic, 5" [ref=f9e307]:
+            - button "DEVOPS No epic 5 items" [expanded] [ref=f9e308]:
+              - generic [aria-hidden] [ref=f9e309]: ▾
+              - generic [ref=f9e310]: DEVOPS
+              - generic [ref=f9e311]: No epic
+              - generic [ref=f9e312]: 5 items
+            - option "DEVOPS-476 Add Sentry release tags to worker deploys 2d To Do U" [ref=f9e313] [cursor=pointer]:
+              - generic [ref=f9e314]: DEVOPS-476
+              - generic [ref=f9e316]: Add Sentry release tags to worker deploys
+              - generic "No update for 2 days" [ref=f9e319]: 2d
+              - generic [ref=f9e320]: To Do
+              - generic "Unassigned" [ref=f9e321]: U
+            - option "DEVOPS-477 Worker runs out of memory on large campaigns 4d In Progress PN" [ref=f9e322] [cursor=pointer]:
+              - generic [ref=f9e323]: DEVOPS-477
+              - generic [ref=f9e325]: Worker runs out of memory on large campaigns
+              - generic "No update for 4 days" [ref=f9e328]: 4d
+              - generic [ref=f9e329]: In Progress
+              - generic "Priya Nair" [ref=f9e330]: PN
+            - option "DEVOPS-478 Upgrade queue library Done SH" [ref=f9e331] [cursor=pointer]:
+              - generic [ref=f9e332]: DEVOPS-478
+              - generic [ref=f9e334]: Upgrade queue library
+              - generic [ref=f9e336]: Done
+              - generic "Sam Holt" [ref=f9e337]: SH
+            - option "DEVOPS-475 Rotate API keys 12d To Do AH" [ref=f9e338] [cursor=pointer]:
+              - generic [ref=f9e339]: DEVOPS-475
+              - generic [ref=f9e341]: Rotate API keys
+              - generic "No update for 12 days" [ref=f9e344]: 12d
+              - generic [ref=f9e345]: To Do
+              - generic "Alf Henderson" [ref=f9e346]: AH
+            - option "DEVOPS-479 Document alert thresholds 20d To Do ML" [ref=f9e347] [cursor=pointer]:
+              - generic [ref=f9e348]: DEVOPS-479
+              - generic [ref=f9e350]: Document alert thresholds
+              - generic "No update for 20 days" [ref=f9e353]: 20d
+              - generic [ref=f9e354]: To Do
+              - generic "Maya Lindqvist" [ref=f9e355]: ML
+          - group "No epic, 6" [ref=f9e356]:
+            - button "SUP No epic 6 items" [expanded] [ref=f9e357]:
+              - generic [aria-hidden] [ref=f9e358]: ▾
+              - generic [ref=f9e359]: SUP
+              - generic [ref=f9e360]: No epic
+              - generic [ref=f9e361]: 6 items
+            - option "SUP-11 Order confirmation email is missing New U" [ref=f9e362] [cursor=pointer]:
+              - generic [ref=f9e363]: SUP-11
+              - generic [ref=f9e365]: Order confirmation email is missing
+              - generic [ref=f9e367]: New
+              - generic "Unassigned" [ref=f9e368]: U
+            - option "Needs you SUP-10 Customer can't apply discount code Needs you Investigating KN" [ref=f9e369] [cursor=pointer]:
+              - generic [ref=f9e370]:
+                - img "Needs you" [ref=f9e371]
+                - generic [ref=f9e372]: SUP-10
+              - generic [ref=f9e373]:
+                - generic [ref=f9e374]: Customer can't apply discount code
+                - generic [ref=f9e375]: Needs you
+              - generic [ref=f9e376]: Investigating
+              - generic "Klara Nyberg" [ref=f9e377]: KN
+            - option "Needs you SUP-13 Change delivery address Needs you Resolved KN" [ref=f9e378] [cursor=pointer]:
+              - generic [ref=f9e379]:
+                - img "Needs you" [ref=f9e380]
+                - generic [ref=f9e381]: SUP-13
+              - generic [ref=f9e382]:
+                - generic [ref=f9e383]: Change delivery address
+                - generic [ref=f9e384]: Needs you
+              - generic [ref=f9e385]: Resolved
+              - generic "Klara Nyberg" [ref=f9e386]: KN
+            - option "Needs you SUP-12 Refund stuck in pending Needs you 4d Waiting on customer AH" [ref=f9e387] [cursor=pointer]:
+              - generic [ref=f9e388]:
+                - img "Needs you" [ref=f9e389]
+                - generic [ref=f9e390]: SUP-12
+              - generic [ref=f9e391]:
+                - generic [ref=f9e392]: Refund stuck in pending
+                - generic [ref=f9e393]: Needs you
+              - generic "No update for 4 days" [ref=f9e395]: 4d
+              - generic [ref=f9e396]: Waiting on customer
+              - generic "Alf Henderson" [ref=f9e397]: AH
+            - option "SUP-15 Wholesale account request 6d New U" [ref=f9e398] [cursor=pointer]:
+              - generic [ref=f9e399]: SUP-15
+              - generic [ref=f9e401]: Wholesale account request
+              - generic "No update for 6 days" [ref=f9e404]: 6d
+              - generic [ref=f9e405]: New
+              - generic "Unassigned" [ref=f9e406]: U
+            - option "Needs you SUP-14 Tracking link gives a 404 Needs you 10d Investigating BF" [ref=f9e407] [cursor=pointer]:
+              - generic [ref=f9e408]:
+                - img "Needs you" [ref=f9e409]
+                - generic [ref=f9e410]: SUP-14
+              - generic [ref=f9e411]:
+                - generic [ref=f9e412]: Tracking link gives a 404
+                - generic [ref=f9e413]: Needs you
+              - generic "No update for 10 days" [ref=f9e415]: 10d
+              - generic [ref=f9e416]: Investigating
+              - generic "Byron Fichardt" [ref=f9e417]: BF
+          - group "No epic, 5" [ref=f9e418]:
+            - button "WEB No epic 5 items" [expanded] [ref=f9e419]:
+              - generic [aria-hidden] [ref=f9e420]: ▾
+              - generic [ref=f9e421]: WEB
+              - generic [ref=f9e422]: No epic
+              - generic [ref=f9e423]: 5 items
+            - option "Needs you WEB-105 Swatch labels are cut off on small phones Needs you To Do U" [ref=f9e424] [cursor=pointer]:
+              - generic [ref=f9e425]:
+                - img "Needs you" [ref=f9e426]
+                - generic [ref=f9e427]: WEB-105
+              - generic [ref=f9e428]:
+                - generic [ref=f9e429]: Swatch labels are cut off on small phones
+                - generic [ref=f9e430]: Needs you
+              - generic [ref=f9e431]: To Do
+              - generic "Unassigned" [ref=f9e432]: U
+            - option "Needs you WEB-102 Back-in-stock sign-up form Needs you 3d In Progress PN" [ref=f9e433] [cursor=pointer]:
+              - generic [ref=f9e434]:
+                - img "Needs you" [ref=f9e435]
+                - generic [ref=f9e436]: WEB-102
+              - generic [ref=f9e437]:
+                - generic [ref=f9e438]: Back-in-stock sign-up form
+                - generic [ref=f9e439]: Needs you
+              - generic "No update for 3 days" [ref=f9e441]: 3d
+              - generic [ref=f9e442]: In Progress
+              - generic "Priya Nair" [ref=f9e443]: PN
+            - option "Needs you WEB-108 Size guide modal Needs you 7d In Progress AH" [ref=f9e444] [cursor=pointer]:
+              - generic [ref=f9e445]:
+                - img "Needs you" [ref=f9e446]
+                - generic [ref=f9e447]: WEB-108
+              - generic [ref=f9e448]:
+                - generic [ref=f9e449]: Size guide modal
+                - generic [ref=f9e450]: Needs you
+              - generic "No update for 7 days" [ref=f9e452]: 7d
+              - generic [ref=f9e453]: In Progress
+              - generic "Alf Henderson" [ref=f9e454]: AH
+            - option "WEB-106 Cart badge is off by one Released IP" [ref=f9e455] [cursor=pointer]:
+              - generic [ref=f9e456]: WEB-106
+              - generic [ref=f9e458]: Cart badge is off by one
+              - generic [ref=f9e460]: Released
+              - generic "Ida Pedersen" [ref=f9e461]: IP
+            - option "WEB-107 Update image CDN config 13d To Do JB" [ref=f9e462] [cursor=pointer]:
+              - generic [ref=f9e463]: WEB-107
+              - generic [ref=f9e465]: Update image CDN config
+              - generic "No update for 13 days" [ref=f9e468]: 13d
+              - generic [ref=f9e469]: To Do
+              - generic "Jonas Berg" [ref=f9e470]: JB
+        - paragraph [ref=f9e473]:
+          - generic [ref=f9e474]:
+            - generic [ref=f9e475]: j
+            - generic [ref=f9e476]: k
+            - text: move and peek
+          - generic [ref=f9e477]:
+            - text: ·
+            - generic [ref=f9e478]: Esc
+            - text: close
+          - generic [ref=f9e479]:
+            - text: ·
+            - generic [ref=f9e480]: ⌘J
+            - text: Pip
+          - generic [ref=f9e481]:
+            - text: ·
+            - generic [ref=f9e482]: ⌘K
+            - text: jump
+      - button "Ask Pip" [ref=f9e485]
+  - status

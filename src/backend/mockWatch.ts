@@ -131,6 +131,7 @@ export interface MockHandle {
   jiraWrites(): { proposalId: string; type: string; key: string | null; text?: string }[];
   /** Every GitHub review draft, newest first: its pull request, the run it came from, its state, what replaced it and whether the person edited it. */
   reviewDrafts(): MockReviewDraft[];
+  draftReview(runId: string, reviewedSha: string, summary: string, comments: import("../types").ReviewComment[]): void;
   /** Adds an audit line to the open workstream on ticket `key` as of `at` (an ISO time), the way to age what depends on the time since: the sample's clock is the browser's and can't be moved. */
   seedWorkstreamEvent(key: string, event: { actor: string; action: string; at: string; runId?: string | null; proposalId?: string | null; detail?: string | null }): void;
   /** Pauses the open workstream on ticket `key` as the system would (`ceiling`), not as the person. */
@@ -172,6 +173,7 @@ export interface TicketEdit {
 export interface MockClockParts {
   runs: { advance(id?: string): void; list(): { id: string; spec: { role: string; prSha?: string | null; name: string }; state: string; passes?: number; item?: { key: string } | null; shortId?: string | null; digest: string }[]; surfacePullRequests(): boolean; launches(): MockLaunch[]; scriptNext(kind: Step, script: ScriptedFinish): void; pipStart(a: { workstream: string | null; role: string; brief: string | null; repo: string | null; pr?: number | null; item: ItemRef | null }, requestId: string): { id: string }; ask(id: string, question: string): unknown; askPermission(id: string, needs: string): unknown; block(id: string): unknown; lose(id: string): unknown; readonly attached: readonly string[] };
   workstreams?: { list(includeClosed?: boolean): { workstream: { id: string; itemKey: string | null; closedAt: string | null } }[]; events(id: string): MockHandleEvent[]; pause(id: string, reason: "person" | "ceiling", actor: "supervisor"): unknown; seedEvent(id: string, actor: WorkstreamActor, action: string, at: string, extra?: { runId?: string | null; proposalId?: string | null; detail?: string | null }): unknown };
+  draftReview: MockHandle["draftReview"];
   proposals?: { writes: readonly { proposalId: string; intent: Intent }[]; list(): Proposal[] };
   pip?: { hold(on: boolean): void; idle(): boolean };
   tickets?: { edit(key: string, change: TicketEdit): void };
@@ -192,7 +194,7 @@ declare global {
  * `movePullHead(repo, number)` force-pushes a pull request, `githubPostsTried()` counts the posts asked for and
  * `loseNextReviewAnswer(kept)` loses the next post's answer. The last sample backend made wins.
  */
-export function exposeMockClock({ runs, workstreams, proposals, pip, tickets, github }: MockClockParts) {
+export function exposeMockClock({ runs, workstreams, proposals, pip, tickets, github, draftReview }: MockClockParts) {
   if (!import.meta.env.DEV || typeof window === "undefined") return;
   globalThis.__gossamrMock = {
     advanceRuns: (id) => runs.advance(id),
@@ -211,6 +213,7 @@ export function exposeMockClock({ runs, workstreams, proposals, pip, tickets, gi
     loseRun: (id) => void runs.lose(id),
     attached: () => [...runs.attached],
     jiraWrites: () => (proposals?.writes ?? []).map((w) => ({ proposalId: w.proposalId, type: w.intent.type, key: writtenKey(w.intent), ...(w.intent.type === "comment" ? { text: docText(w.intent.body) } : {}) })),
+    draftReview,
     reviewDrafts: () =>
       (proposals?.list() ?? []).flatMap((p) =>
         p.intent.type === "githubReview"

@@ -1,3 +1,4 @@
+import { reviewText } from "./mockReviewDraft";
 import type { ClearFilter } from "../types";
 import { isTauri } from "@tauri-apps/api/core";
 import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
@@ -388,14 +389,12 @@ export class MockBackend implements Backend {
     // A draft pull request a build opened turns up on the code host, which ends its workstream's wait for it.
     this.runs.onPullRequest = (change) => this.github.code.addPullRequest(change);
     this.workstreams.prOf = (runId) => this.runs.pullRequestOf(runId);
-    this.workstreams.verdictOf = (run) => this.runs.resolvedOf(run.id)?.verdict ?? null;
     this.workstreams.ticketOf = (key) => this.connector.item(itemRef(key));
     // What the person just wrote is the workstream's basis now, so the supervisor doesn't take an approved write for a change.
     this.proposals.onWritten = (p) => {
       const ws = workstreamOf(p);
       if (ws) this.workstreams.rebase(ws, basisFieldsOf(p.intent));
     };
-    this.runs.seedPlanDescriptions();
     this.supervisor = new MockSupervisor({
       runs: this.runs,
       workstreams: this.workstreams,
@@ -404,6 +403,7 @@ export class MockBackend implements Backend {
       cancelWakes: mockCancelWakes,
     });
     exposeMockClock({
+      draftReview: (runId, reviewedSha, summary, comments) => { this.draftReview(runId, reviewedSha, summary, comments); },
       runs: this.runs,
       workstreams: this.workstreams,
       proposals: this.proposals,
@@ -592,26 +592,6 @@ export class MockBackend implements Backend {
     return this.runs.outcome(id);
   }
 
-  async runsDraftComment(id: string) {
-    return this.runs.draftComment(id);
-  }
-
-  async runsDraftPlanComment(id: string) {
-    return this.runs.draftPlanComment(id);
-  }
-
-  async runsDraftPlanDescription(id: string) {
-    return this.runs.draftPlanDescription(id);
-  }
-
-  async runsDraftTicket(id: string) {
-    return this.runs.draftTicket(id);
-  }
-
-  async runsDraftBlocker(id: string, blockerKey: string) {
-    return this.runs.draftBlocker(id, blockerKey);
-  }
-
   async runsEvents(id: string) {
     return this.runs.events(id);
   }
@@ -719,6 +699,17 @@ export class MockBackend implements Backend {
   }
 
   /** Revises a draft the way `revise_proposal` does, from the conversation `requestId` was asked in: a draft of a workstream only from that workstream's. */
+  draftReview(runId: string, reviewedSha: string, summary: string, comments: ReviewComment[]) {
+    const run = this.runs.get(runId);
+    if (!run) throw new Error("that run no longer exists");
+    if (!reviewedSha.trim() || !summary.trim()) throw new Error("a review needs its reviewed commit and summary");
+    const { repo, pr } = run.spec;
+    if (!pr || !this.github.isWatched(repo)) throw new Error("the review needs a watched pull request");
+    const files = this.github.code.change(repo, pr)?.sha === reviewedSha ? this.github.code.pullFiles(repo, pr) : null;
+    const text = reviewText(summary, comments, files);
+    return this.proposals.draft({ type: "githubReview", connectionId: GITHUB_CONNECTION, item: run.item, runId, repo, number: pr, commitSha: reviewedSha, ...text }, "Review from Pip", undefined, run.spec.workstream ?? undefined);
+  }
+
   async pipRevise(id: string, change: string | { body?: string; title?: string; description?: string; summaries?: string[]; comments?: ReviewComment[] }, requestId?: string) {
     const draft = this.proposals.get(id);
     // A review draft's new comments are checked against the pull request's diff at the commit reviewed, which only this

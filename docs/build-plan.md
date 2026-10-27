@@ -1,6 +1,6 @@
 # Gossamr build plan
 
-Source of truth for design: `docs/design-connectors.html`. Visual target: `prototype/claude-companion.html`.
+Historical implementation checklist. The current product is described in `docs/product.md`; remaining simplification work is tracked in `docs/simplification-proposal.md`.
 
 ## How each step is built
 
@@ -42,4 +42,4 @@ Parallel waves: (0a) then (0b, 1b) then (0c, 1a, 1c) then (2a, 3a) then (2b) the
 
 ## Prerequisite
 
-`docs/design-connectors.html` and this file are untracked, so agents in worktrees can't see them. Commit both to a `docs/design` PR first (step D), merge, and branch from there.
+The original design documents have been replaced by `docs/product.md`.

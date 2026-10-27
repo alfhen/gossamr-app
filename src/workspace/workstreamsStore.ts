@@ -403,7 +403,7 @@ export function useItemWorkstream(item: ItemRef | null | undefined): WorkstreamV
 }
 
 /** "Workstream: CA-401 Retry … · Intake", or "General", for the head of the Pip pane. */
-export const conversationTitle = (ws: WorkstreamView | null) => (ws ? `Workstream: ${ws.workstream.title} · ${stageText(ws.stage, ws.waitingForPr, ws.reviewBlocking)}` : "General");
+export const conversationTitle = (ws: WorkstreamView | null) => (ws ? `Workstream: ${ws.workstream.title} · ${stageText(ws.stage, ws.waitingForPr)}` : "General");
 
 /** The ticket of the workstream whose conversation `conversation` is, as the workspace knows it; null for General or a ticket it hasn't loaded. */
 export function workstreamTicket(conversation: string): ItemRef | null {

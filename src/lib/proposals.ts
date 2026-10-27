@@ -157,30 +157,27 @@ export function inWorkstreamPane(p: Proposal, ws: { id: string; itemKey: string 
   return (open || retiredSince) && !!ws.itemKey && target?.key === ws.itemKey && target.connectionId === ws.connectionId;
 }
 
-/** The most drafts a workstream holds waiting for the person before Pip is told to stop drafting, as `WORKSTREAM_PENDING_CAP` in `proposals.rs`. */
-export const WORKSTREAM_PENDING_CAP = 8;
-
-/** Why a draft a newer one of the same kind replaced was retired, as `REPLACED_REASON` in `proposals.rs`. */
 export const REPLACED_REASON = "Replaced by a newer draft";
+export const KEPT_EDITED = "draft_kept_edited";
+export const KEPT_MAYBE_POSTED = "draft_kept_maybe_posted";
+export const PLAN_COMMENT_LABEL = "Plan from agent run";
 
-/**
- * What a newer draft of the same kind replaces in a workstream: one move, one description update, one triage update and
- * one breakdown per ticket, and one review per pull request. Comments accumulate, and the other kinds have rules of their own. As
- * `Intent::supersession_key`.
- */
 export function supersessionKey(intent: Intent): string | null {
+  const itemTarget = (item: ItemRef) => JSON.stringify([item.connectionId, item.externalId]);
   switch (intent.type) {
+    case "comment":
     case "transition":
     case "rewrite":
     case "update":
-      return `${intent.type}:${intent.item.externalId}`;
+      return intent.type + ":" + itemTarget(intent.item);
     case "subtasks":
-      return `subtasks:${intent.parent.externalId}`;
-    case "githubReview":
-      return `githubReview:${intent.repo.toLowerCase()}#${intent.number}`;
-    case "comment":
+      return "subtasks:" + itemTarget(intent.parent);
     case "create":
+      return null;
     case "link":
+      return "link:" + JSON.stringify([itemTarget(intent.from), itemTarget(intent.to)]);
+    case "githubReview":
+      return "githubReview:" + JSON.stringify([intent.connectionId, intent.repo.toLowerCase(), intent.number]);
     case "startRun":
     case "followUp":
     case "runAnswer":
@@ -190,113 +187,25 @@ export function supersessionKey(intent: Intent): string | null {
   }
 }
 
-/**
- * Whether `newer` changes every field `older`, of the same kind and key, changes, so nothing is lost when it replaces it:
- * a triage update sets the assignee, epic and priority apart, and a rewrite the title and description apart. As
- * `Intent::covers`.
- */
-export function covers(newer: Intent, older: Intent): boolean {
-  if (newer.type === "update" && older.type === "update") {
-    const [n, o] = [newer.patch, older.patch];
-    return (o.assignee == null || n.assignee != null) && (o.parent == null || n.parent != null) && (o.priority == null || n.priority != null);
-  }
-  if (newer.type === "rewrite" && older.type === "rewrite") return (older.title == null || newer.title != null) && (older.body == null || newer.body != null);
-  return true;
-}
+export type Supersession = { type: "unrelated" } | { type: "supersede" } | { type: "alongside"; reason: typeof KEPT_EDITED | typeof KEPT_MAYBE_POSTED | "draft_kept_partial" };
 
-/** What a new draft does to an older one in its workstream, as `Supersession` in `proposals.rs`; `refuse` carries the reason. */
-export type Supersession = { type: "unrelated" } | { type: "supersede" } | { type: "alongside" } | { type: "refuse"; reason: string };
-
-/** The plan a build follows; only the person changes it. The same words as `proposals.rs`. */
-export const PLAN_IS_THE_USERS = "this description update carries the Gossamr Plan a build follows, so only the user changes it; tell them what you would change instead";
-
-/** Whether Pip or an agent run made the draft rather than a person; run drafts stored before `agent` existed say `user`. */
-const machineMade = (p: Proposal) => p.createdBy === "pip" || p.createdBy === "agent" || (p.createdBy === "user" && p.origin.type === "run");
-
-/**
- * Whether `newer` replaces `older`: a pending draft of the same kind on the same ticket in the same workstream, both made
- * by Pip or an agent, that changes every field the older one does (`covers`). A draft the person edited is theirs, and the plan a build follows (`isPlanRewrite`) only the person
- * changes. As `supersession` in `proposals.rs`.
- */
-export function supersession(older: Proposal, newer: Proposal, isPlanRewrite: (p: Proposal) => boolean, isTriageDescription: (p: Proposal) => boolean = () => false): Supersession {
-  const ws = workstreamOf(newer);
+export function supersession(older: Proposal, newer: Proposal): Supersession {
   const key = supersessionKey(newer.intent);
-  if (!ws || !key || older.state.type !== "pending" || workstreamOf(older) !== ws || !machineMade(older) || !machineMade(newer)) return { type: "unrelated" };
-  // A newer draft that leaves a field of the older one alone would lose that change, so both stay.
-  if (supersessionKey(older.intent) !== key || !covers(newer.intent, older.intent)) return { type: "unrelated" };
-  // A Triage's description update and a plan's are two things on one description: neither replaces the other.
-  if (isTriageDescription(older) !== isTriageDescription(newer)) return { type: "unrelated" };
-  const byPip = newer.createdBy === "pip";
-  if (older.revisions.some((r) => r.note === "Edited")) {
-    const on = targetOf(older.intent);
-    return byPip ? { type: "refuse", reason: `the user edited draft ${older.id} of the same kind${on ? ` on ${on.key}` : ""}, so it stays theirs; leave it to them rather than drafting another` } : { type: "alongside" };
-  }
-  if (byPip && isPlanRewrite(older)) return { type: "refuse", reason: PLAN_IS_THE_USERS };
+  if (!key || older.id === newer.id || older.state.type !== "pending" || supersessionKey(older.intent) !== key) return { type: "unrelated" };
+  if ((older.createdBy === "user" && older.origin.type !== "run") || older.revisions.some((revision) => revision.note === "Edited")) return { type: "alongside", reason: KEPT_EDITED };
+  if (older.intent.type === "githubReview" && older.maybePosted) return { type: "alongside", reason: KEPT_MAYBE_POSTED };
+  if (older.intent.type === "subtasks" && older.created.length > 0) return { type: "alongside", reason: "draft_kept_partial" };
   return { type: "supersede" };
 }
 
-/** The audit line an older review draft of the same pull request gets when a newer review leaves it standing because the person edited it, as `KEPT_EDITED` in `proposals.rs`. */
-export const KEPT_EDITED = "draft_kept_edited";
-/** The same when GitHub may already have the older one, as `KEPT_MAYBE_POSTED`. */
-export const KEPT_MAYBE_POSTED = "draft_kept_maybe_posted";
-
-/** Whether `p` is a review draft an agent run left, which is tidied by its pull request rather than its workstream (`tidy_reviews`). */
-export const isRunReview = (p: Proposal) => p.createdBy === "agent" && p.origin.type === "run" && p.intent.type === "githubReview";
-
-/**
- * What a new review of a pull request does to an older pending review draft, as `review_supersession` in `proposals.rs`:
- * the person's edit and a post that may be on GitHub keep it (the audit line says which); anything else made by Pip or
- * an agent is replaced. Null when it isn't a review draft of the same pull request on the same code host, or isn't
- * pending (one being posted, or posted, is never touched).
- */
-export function reviewSupersession(older: Proposal, newer: Proposal): "supersede" | typeof KEPT_EDITED | typeof KEPT_MAYBE_POSTED | null {
-  if (newer.intent.type !== "githubReview" || older.intent.type !== "githubReview") return null;
-  const same = older.intent.connectionId === newer.intent.connectionId && supersessionKey(older.intent) === supersessionKey(newer.intent);
-  if (!same || older.id === newer.id || older.state.type !== "pending" || !machineMade(older)) return null;
-  if (older.revisions.some((r) => r.note === "Edited")) return KEPT_EDITED;
-  if (older.maybePosted) return KEPT_MAYBE_POSTED;
-  return "supersede";
-}
-
-/** The label of a comment draft that carries a plan run's whole plan, which no later comment replaces. As `PLAN_COMMENT_LABEL` in `proposals.rs`. */
-export const PLAN_COMMENT_LABEL = "Plan from agent run";
-
-/** Whether `p` is a comment an agent run left for its ticket, other than a plan's: what a finished run drafts on its own. As `is_run_comment`. */
-export const isRunComment = (p: Proposal) => p.origin.type === "run" && p.intent.type === "comment" && machineMade(p) && !p.label?.startsWith(PLAN_COMMENT_LABEL);
-
-/**
- * What a new run comment does to an older pending one, as `run_comment_supersession` in `proposals.rs`: the same ticket in
- * the same workstream, made by an agent run of the same role (`roleOf` says a run's role; a run it can't find supersedes
- * nothing). The person's edit keeps it (the audit line says so); anything else is replaced. Null when it is another
- * ticket, workstream or role, a plan's comment, not pending, or back in Pending after a failed post (`error` is set).
- */
-export function runCommentSupersession(older: Proposal, newer: Proposal, roleOf: (runId: string) => string | null): "supersede" | typeof KEPT_EDITED | null {
-  const ws = workstreamOf(newer);
-  if (!ws || !isRunComment(older) || !isRunComment(newer) || workstreamOf(older) !== ws || older.id === newer.id || older.state.type !== "pending" || older.error) return null;
-  const [on, to] = [targetOf(older.intent), targetOf(newer.intent)];
-  if (!on || !to || on.connectionId !== to.connectionId || on.externalId !== to.externalId) return null;
-  if (older.origin.type !== "run" || newer.origin.type !== "run") return null;
-  const [was, now] = [roleOf(older.origin.runId), roleOf(newer.origin.runId)];
-  if (!was || was !== now) return null;
-  return older.revisions.some((r) => r.note === "Edited") ? KEPT_EDITED : "supersede";
-}
-
-/**
- * The older pending review drafts of the same pull request that a newer review `p` left standing, with why: the person
- * edited them, or GitHub may have them already. Each is still waiting beside `p`.
- */
-export function keptOlderReviews(p: Proposal, all: readonly Proposal[]): { proposal: Proposal; why: typeof KEPT_EDITED | typeof KEPT_MAYBE_POSTED }[] {
-  if (!isRunReview(p)) return [];
+export function keptOlderReviews(proposal: Proposal, all: readonly Proposal[]): { proposal: Proposal; why: typeof KEPT_EDITED | typeof KEPT_MAYBE_POSTED }[] {
+  if (proposal.intent.type !== "githubReview") return [];
   return all.flatMap((older) => {
-    if (older.createdAt > p.createdAt) return [];
-    const why = reviewSupersession(older, p);
-    return why === KEPT_EDITED || why === KEPT_MAYBE_POSTED ? [{ proposal: older, why }] : [];
+    if (older.createdAt > proposal.createdAt) return [];
+    const verdict = supersession(older, proposal);
+    return verdict.type === "alongside" && verdict.reason !== "draft_kept_partial" ? [{ proposal: older, why: verdict.reason }] : [];
   });
 }
-
-/** What Pip is told when a workstream already holds its share of drafts, as in `proposals.rs`. */
-export const capRefusal = (workstream: string) =>
-  `Workstream ${workstream} already has ${WORKSTREAM_PENDING_CAP} drafts waiting for the user. Don't draft more until they decide some; revise one with revise_proposal or withdraw one with retire_proposal.`;
 
 /** Whether an agent run left this draft for the person. Drafts stored before `agent` existed say `user`. */
 export function leftByRun(p: Proposal): boolean {

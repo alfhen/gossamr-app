@@ -370,15 +370,10 @@ export class MockSupervisor {
   private factOf(run: Run, state: WakeState): KeyedFact {
     const fact: KeyedFact = { run: run.id, role: run.spec.role, state, key: factKey(run, state) };
     if (state !== "done") return fact;
-    const resolved = this.parts.runs.resolvedOf(run.id);
     if (stepOf(run.spec.role) === "triage") {
       fact.planRecommended = triagePlanRecommended(run);
       const found = triageReadiness(run);
       if (found && !found.ready) fact.openQuestions = found.questions.length;
-    }
-    if (stepOf(run.spec.role) === "review" && resolved) {
-      fact.verdict = resolved.verdict;
-      fact.blocking = resolved.findings.filter((f) => f.severity === "blocking").length;
     }
     fact.drafts = this.parts.runs.draftsWaitingFrom(run.id);
     if (stepOf(run.spec.role) === "build" && this.parts.runs.pullHeadOf(run.id) === null) fact.waitingForPr = true;

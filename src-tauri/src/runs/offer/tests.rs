@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use serde_json::json;
 
 use super::*;
-use crate::domain::{ResultKind, RunSpec, AGENT_GUARD, GUARD};
+use crate::domain::{RunSpec, AGENT_GUARD, GUARD};
 use crate::runs::launcher::RunLauncher;
 use crate::runs::report::{token_hash, well_formed, Reply};
 use crate::runs::rig::{ready_with, reporting, Rig};
@@ -60,8 +60,8 @@ async fn every_launch_gets_a_config_file_and_a_token_that_is_on_no_command_line(
 async fn every_role_gets_the_tools_and_nothing_else_whether_or_not_its_prompt_mentions_them() {
     let d = dir("offer-build");
     let rig = ready_with(reporting(&d)).await;
-    rig.launched_as(1, ResultKind::Build).await;
-    rig.launched_reporting(2, ResultKind::Investigate).await;
+    rig.launched_as(1, "build").await;
+    rig.launched_reporting(2, "investigate").await;
     for request in rig.cli.0.lock().unwrap().launches.iter() {
         assert!(request.agent.is_some());
         assert_eq!(request.guard, format!("{GUARD} {AGENT_GUARD}"));
@@ -136,7 +136,7 @@ async fn a_launch_error_that_echoes_a_token_never_puts_it_in_the_stored_failure(
 async fn cleaning_up_a_run_ends_its_tokens_and_removes_its_config() {
     let d = dir("cleanup");
     let rig = ready_with(reporting(&d)).await;
-    let run = rig.launched_reporting(1, ResultKind::Investigate).await;
+    let run = rig.launched_reporting(1, "investigate").await;
     let config = first_launch(&rig).agent.unwrap().config;
     let token = token_in(&config);
     rig.set(&run, |r| {
@@ -157,10 +157,10 @@ async fn cleaning_up_a_run_ends_its_tokens_and_removes_its_config() {
 async fn the_sweep_keeps_what_a_live_or_recently_finished_run_may_still_need_and_removes_the_rest() {
     let d = dir("sweep");
     let rig = ready_with(reporting(&d)).await;
-    let live = rig.launched_reporting(1, ResultKind::Investigate).await;
-    let recent = rig.launched_reporting(2, ResultKind::Investigate).await;
-    let old = rig.launched_reporting(3, ResultKind::Investigate).await;
-    let failed = rig.launched_reporting(4, ResultKind::Investigate).await;
+    let live = rig.launched_reporting(1, "investigate").await;
+    let recent = rig.launched_reporting(2, "investigate").await;
+    let old = rig.launched_reporting(3, "investigate").await;
+    let failed = rig.launched_reporting(4, "investigate").await;
     let channel = rig.svc.agents.clone().unwrap();
     channel.write_config("run-with-no-row", "gsr_0").unwrap();
     let now = chrono::Utc::now();
@@ -181,8 +181,8 @@ async fn the_sweep_keeps_what_a_live_or_recently_finished_run_may_still_need_and
 async fn the_config_files_of_the_earlier_report_server_follow_the_same_sweep() {
     let d = dir("legacy");
     let rig = ready_with(reporting(&d)).await;
-    let live = rig.launched_reporting(1, ResultKind::Investigate).await;
-    let failed = rig.launched_reporting(2, ResultKind::Investigate).await;
+    let live = rig.launched_reporting(1, "investigate").await;
+    let failed = rig.launched_reporting(2, "investigate").await;
     rig.set(&failed, |r| r.state = RunState::Failed).await;
     let legacy = crate::runs::agent_config::AgentChannel::new(0, rig.fx.core.data_dir().join("report"));
     for run in [&live, &failed] {
@@ -197,7 +197,7 @@ async fn the_config_files_of_the_earlier_report_server_follow_the_same_sweep() {
 async fn answering_a_question_makes_the_report_made_before_it_stale() {
     let d = dir("answer");
     let rig = ready_with(reporting(&d)).await;
-    let run = rig.launched_reporting(1, ResultKind::Investigate).await;
+    let run = rig.launched_reporting(1, "investigate").await;
     let token = token_in(&first_launch(&rig).agent.unwrap().config);
     rig.poll().await;
     assert_eq!(report_as(&rig, &run, &token, "Early.").await, Reply::Recorded { revision: 1, notes: vec![] });
@@ -219,10 +219,10 @@ async fn answering_a_question_makes_the_report_made_before_it_stale() {
 }
 
 #[tokio::test]
-async fn a_run_that_finishes_after_reporting_drafts_from_the_report_on_the_same_poll() {
+async fn a_run_that_finishes_after_reporting_leaves_its_prose_for_pip_without_drafting() {
     let d = dir("finish");
     let rig = ready_with(reporting(&d)).await;
-    let run = rig.launched_reporting(1, ResultKind::Investigate).await;
+    let run = rig.launched_reporting(1, "investigate").await;
     let token = token_in(&first_launch(&rig).agent.unwrap().config);
     rig.poll().await;
     assert_eq!(report_as(&rig, &run, &token, "Reported: close as a duplicate.").await, Reply::Recorded { revision: 1, notes: vec![] });
@@ -235,12 +235,8 @@ async fn a_run_that_finishes_after_reporting_drafts_from_the_report_on_the_same_
     rig.poll().await;
     assert_eq!(rig.get(&run).await.state, RunState::Done, "the report is not what ends a run");
     let drafts = rig.fx.core.proposals(&crate::domain::ProposalQuery::default()).await.unwrap();
-    let comment = drafts.iter().find(|p| matches!(p.intent, crate::domain::Intent::Comment { .. })).expect("a comment draft");
-    let text = match &comment.intent {
-        crate::domain::Intent::Comment { body, .. } => body.plain_text(),
-        other => panic!("{other:?}"),
-    };
-    assert!(text.ends_with("Reported: close as a duplicate."), "{text}");
+    assert!(drafts.is_empty());
+    assert_eq!(rig.fx.core.run_outcome(&run.id).await.unwrap().note.as_deref(), Some("Reported: close as a duplicate."));
     assert_eq!(report_as(&rig, &run, &token, "Too late.").await, Reply::Unavailable);
     let _ = std::fs::remove_dir_all(&d);
 }
@@ -249,7 +245,7 @@ async fn a_run_that_finishes_after_reporting_drafts_from_the_report_on_the_same_
 async fn a_finished_run_carried_on_in_terminal_no_longer_stands_behind_its_earlier_report() {
     let d = dir("carried");
     let rig = ready_with(reporting(&d)).await;
-    let run = rig.launched_reporting(1, ResultKind::Investigate).await;
+    let run = rig.launched_reporting(1, "investigate").await;
     let token = token_in(&first_launch(&rig).agent.unwrap().config);
     rig.poll().await;
     report_as(&rig, &run, &token, "First turn.").await;

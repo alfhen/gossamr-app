@@ -110,7 +110,7 @@ describe("posting a review draft to the mock GitHub", () => {
     await backend.watchSetMode(GH, "everything");
     const run = backend.runs.start(spec, itemRef("CA-402"));
     for (let i = 0; i < 3; i++) backend.runs.advance(run.id);
-    const draft = backend.proposals.list().find((p) => p.intent.type === "githubReview")!;
+    const draft = backend.draftReview(run.id, backend.runs.get(run.id)!.spec.prSha!, "The retry loop needs a backoff.", [{ path: "src/consumer/retry.ts", line: 42, side: "RIGHT", body: "Add a growing delay between retries." }, { path: "src/consumer/retry.ts", line: 17, side: "RIGHT", body: "Name the limit MAX_ATTEMPTS." }]);
     return { backend, draft, intent: draft.intent as Extract<Intent, { type: "githubReview" }> };
   }
 

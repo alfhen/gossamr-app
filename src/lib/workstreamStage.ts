@@ -1,10 +1,10 @@
-import type { ReviewVerdict, Run, RunState, WorkstreamStage, WorkstreamView } from "../types";
+import type { Run, RunState, WorkstreamStage, WorkstreamView } from "../types";
 import { stageOf, type Step } from "./roles";
 
 /** Mirrors `stage` and `run_labels` in src-tauri/src/domain/workstream.rs; src/lib/workstreamStage.fixtures.json holds cases both sides run. */
 
 /** What `stage` reads of a run: for a finished review, its verdict when one is known. */
-export type StagedRun = Pick<Run, "id" | "state" | "queuedAt"> & { spec: Pick<Run["spec"], "role">; verdict?: ReviewVerdict | null };
+export type StagedRun = Pick<Run, "id" | "state" | "queuedAt"> & { spec: Pick<Run["spec"], "role"> };
 
 const RANK: Record<Step, number> = { investigate: 0, triage: 1, plan: 2, build: 3, review: 4, verify: 5 };
 
@@ -33,31 +33,14 @@ function furthest(runs: readonly StagedRun[], pick: (s: RunState) => boolean): S
   return found;
 }
 
-/** The finished review among `runs` queued last. */
-function newestReview(runs: readonly StagedRun[]): StagedRun | undefined {
-  return runs.filter((r) => stageOf(r.spec.role) === "review" && r.state === "done").sort(byQueue).pop();
-}
-
-/**
- * The stage of a workstream whose linked runs are `runs`, in any order. The first rule that applies decides: no runs is
- * intake; any run in progress gives the furthest step among those; else the furthest step that finished, a finished
- * verify being done and a finished review done only when the newest finished review passed (blocking or no verdict is
- * review); else (every run failed or stopped) the step of the run queued last.
- */
 export function stage(runs: readonly StagedRun[]): WorkstreamStage {
   const going = furthest(runs, inProgress);
   if (going) return going;
   const done = furthest(runs, (s) => s === "done");
   if (done === "verify") return "done";
-  if (done === "review") return newestReview(runs)?.verdict === "pass" ? "done" : "review";
   if (done) return done;
   const last = [...runs].sort(byQueue).pop();
   return last ? stageOf(last.spec.role) : "intake";
-}
-
-/** Whether the workstream stands at review because its newest finished review asked for changes, nothing in progress. */
-export function reviewBlocking(runs: readonly StagedRun[]): boolean {
-  return stage(runs) === "review" && !runs.some((r) => inProgress(r.state)) && newestReview(runs)?.verdict === "blocking";
 }
 
 /** The parts of an audit line `reviewPosted` reads. */
@@ -98,9 +81,8 @@ export const REVIEW_POSTED = "Review posted";
  * The stage as its chip says it: "Build", "Build · waiting for PR" while a build waits for its pull request to be found,
  * or "Review · changes needed" while the newest finished review is blocking.
  */
-export function stageText(stage: WorkstreamStage, waitingForPr?: string | null, reviewBlocking?: boolean): string {
+export function stageText(stage: WorkstreamStage, waitingForPr?: string | null): string {
   if (waitingForPr) return `${STAGE_LABEL[stage]} · ${WAITING_FOR_PR}`;
-  if (reviewBlocking && stage === "review") return `${STAGE_LABEL[stage]} · ${CHANGES_NEEDED}`;
   return STAGE_LABEL[stage];
 }
 

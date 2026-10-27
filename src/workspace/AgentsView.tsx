@@ -50,7 +50,7 @@ import { useBuildChanges, useReviewVerdicts } from "./reviewVerdicts";
 import { showDraft as showTicketDraft } from "./draftTicket";
 import { breakdownTarget, buildFromPlanControl, commentControl, pipAsks, reviewThisControl, runBreakdownDraftOf, runDescriptionDraftOf, runDraftOf, runTicketDraftOf, shownVerdict } from "./runSheetLogic";
 import { setNoticeOpener, useRuns } from "./runsStore";
-import { askPipInWorkstream } from "./askPip";
+import { askPip, askPipInWorkstream } from "./askPip";
 import { focusPip, useWorkstreams } from "./workstreamsStore";
 import { stableGroups } from "./stableOrder";
 import { useNow } from "./useNow";
@@ -316,7 +316,7 @@ function WorkstreamSection({ group, view, current, onOpen, children }: { group: 
         </h3>
         {group.stage && (
           <span data-stage={group.stage} data-waiting-for-pr={group.waitingForPr || undefined} className="shrink-0 rounded-full bg-ws-pip-soft px-2 text-xs font-semibold text-ws-pip">
-            {stageText(group.stage, group.waitingForPr, group.reviewBlocking)}
+            {stageText(group.stage, group.waitingForPr)}
           </span>
         )}
         {view ? <WorkstreamHeadExtras view={view} /> : <NeedsBadge count={mine} total={needs.length} />}
@@ -543,7 +543,7 @@ const actions: AgentsActions = {
   select: (id) => useRuns.getState().select(id),
   open: (id) => useRuns.getState().openRun(id),
   attach: (id) => void useRuns.getState().attach(id),
-  draftComment: (id) => void useRuns.getState().draftComment(id),
+  draftComment: (id) => { const run = useRuns.getState().runs.find((entry) => entry.id === id); if (run) askPip(pipAsks.comment(run)); },
   buildFromPlan: (run) => void askPipInWorkstream(run, pipAsks.build(run)),
   openDraft: (run) => {
     if (run.item) return useRuns.getState().showDraft(run.item);

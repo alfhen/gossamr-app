@@ -7,7 +7,7 @@ use serde_json::Value;
 use super::{stamp, Db};
 use crate::domain::{Run, REPORT_TOOL_VERSION};
 use crate::error::Result;
-use crate::runs::report::{check, Reply, StoredReport, Target, MAX_CALLS, MAX_REJECTIONS};
+use crate::runs::report::{check, Reply, StoredReport, MAX_CALLS, MAX_REJECTIONS};
 
 /// A call is accepted while the run is in one of these states. `done`, `failed` and `stopped` are over; a stopped run
 /// that is being woken with an answer is `working` again by the time its agent can call.
@@ -96,15 +96,14 @@ impl Db {
         }
         let stored: Option<(String, String)> = tx.query_row("SELECT state, data FROM runs WHERE id = ?1", params![run_id], |r| Ok((r.get(0)?, r.get(1)?))).optional()?;
         let Some((_, data)) = stored.filter(|(state, _)| OPEN.contains(&state.as_str())) else { return Ok(Reply::Unavailable) };
-        let Ok(run) = serde_json::from_str::<Run>(&data) else { return Ok(Reply::Unavailable) };
-        let target = Target { on_ticket: run.item.is_some(), ticketless: run.spec.ends_as_ticket(), verdict_required: run.spec.is(crate::domain::ResultKind::Review) && run.spec.pr.is_some() };
+        let Ok(_run) = serde_json::from_str::<Run>(&data) else { return Ok(Reply::Unavailable) };
 
         let mut row = row_of(&tx, run_id)?.unwrap_or(StoredReport { report: None, revision: 0, calls: 0, rejections: 0, stale: false, first_at: None, last_at: None });
         if row.calls >= MAX_CALLS || row.rejections >= MAX_REJECTIONS {
             return Ok(Reply::Locked);
         }
         row.calls += 1;
-        let reply = match check(args, target) {
+        let reply = match check(args) {
             Err(problems) => {
                 row.rejections += 1;
                 Reply::Invalid(problems)

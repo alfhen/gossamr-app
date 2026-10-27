@@ -161,7 +161,7 @@ export function ConversationLine({ conversation, workstream }: { conversation: s
           <>
             {/* Only the title is cut: where the workstream stands is what the person most needs to see. */}
             <span className="min-w-0 truncate">Workstream: {workstream.workstream.title}</span>
-            <span className="shrink-0 whitespace-pre">{` · ${stageText(workstream.stage, workstream.waitingForPr, workstream.reviewBlocking)}`}</span>
+            <span className="shrink-0 whitespace-pre">{` · ${stageText(workstream.stage, workstream.waitingForPr)}`}</span>
           </>
         ) : (
           <span className="truncate">{conversationTitle(null)}</span>

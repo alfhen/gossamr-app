@@ -387,12 +387,6 @@ impl Core {
             Ok(done)
         })
         .await?;
-        if let (Origin::Run { run_id, .. }, Intent::Create { .. }, Some(made)) = (&done.origin, &done.intent, done.created.first().filter(|_| done.state == ProposalState::Applied)) {
-            // The ticket exists either way; the run learns of it again the next time its sheet reads the outcome.
-            if let Err(e) = self.record_created_from_run(run_id, made).await {
-                eprintln!("couldn't note the created ticket on run {run_id}: {e}");
-            }
-        }
         if wrote {
             match done.target() {
                 Some(item) => self.after_write(&scope, &item.key).await,

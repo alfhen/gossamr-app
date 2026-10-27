@@ -1,6 +1,6 @@
 import type { WorkstreamStage } from "../types";
 
-/** The work Gossamr's drafts and workstream stages know how to read a result of. Mirrors `ResultKind` in src-tauri/src/domain/run.rs. */
+/** The work a role names for display in the workstream. */
 export type Step = Exclude<WorkstreamStage, "intake" | "done">;
 
 const NOUNS: Record<string, Step> = { investigator: "investigate", triager: "triage", planner: "plan", builder: "build", reviewer: "review", verifier: "verify" };

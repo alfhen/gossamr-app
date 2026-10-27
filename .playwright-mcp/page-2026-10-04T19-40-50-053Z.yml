@@ -1,0 +1,59 @@
+- generic [active] [ref=f1e1]:
+  - generic [ref=f1e2]:
+    - generic [ref=f1e3]: Prototype
+    - generic [ref=f1e4]: Pip as manager
+    - generic [ref=f1e5]: 0/9 Start. Five agent runs are working and manager mode is off, which is the default. Pip does nothing on its own yet.
+    - button "Toggle light and dark" [ref=f1e17] [cursor=pointer]
+    - button "Reset" [ref=f1e20] [cursor=pointer]
+    - 'button "Next: Turn on manager mode ▸" [ref=f1e21] [cursor=pointer]'
+  - generic [ref=f1e22]:
+    - navigation "Gossamr" [ref=f1e23]:
+      - button "Inbox" [ref=f1e28] [cursor=pointer]
+      - button "Agents" [ref=f1e32] [cursor=pointer]
+      - button "Manager mode" [ref=f1e35] [cursor=pointer]
+      - button "Pip" [pressed] [ref=f1e39] [cursor=pointer]
+    - generic [ref=f1e43]:
+      - generic [ref=f1e44]:
+        - heading "Waiting for you" [level=1] [ref=f1e45]
+        - generic [ref=f1e46]: nothing, newest first
+        - generic [ref=f1e47]:
+          - text: Manager mode
+          - generic [ref=f1e49]: "off"
+          - text: ·
+          - generic [ref=f1e50]: 0/12 reviews this hour
+          - button "Settings" [ref=f1e51] [cursor=pointer]
+      - generic [ref=f1e53]:
+        - generic [ref=f1e54]:
+          - generic [ref=f1e58]:
+            - text: Pip is not reviewing finished runs
+            - paragraph [ref=f1e59]: Runs still end here as Done. Turn on manager mode and Pip reads each result and drafts what is useful.
+          - button "Manager mode" [ref=f1e60] [cursor=pointer]
+        - group "Filter" [ref=f1e61]:
+          - button "All" [pressed] [ref=f1e62] [cursor=pointer]
+          - button "Drafts" [ref=f1e63] [cursor=pointer]
+          - button "Answers" [ref=f1e64] [cursor=pointer]
+          - button "Send-backs" [ref=f1e65] [cursor=pointer]
+          - button "Runs to start" [ref=f1e66] [cursor=pointer]
+        - generic [ref=f1e68]:
+          - generic [ref=f1e71]: Nothing is waiting for you
+          - generic [ref=f1e72]: Pip drafts, you decide. New items land here, so the Agents view is rarely needed.
+    - complementary "Pip" [ref=f1e73]:
+      - generic [ref=f1e74]:
+        - generic [ref=f1e75]:
+          - generic [ref=f1e76]:
+            - generic [ref=f1e81]:
+              - heading "Pip" [level=2] [ref=f1e82]
+              - generic [ref=f1e83]: powered by Claude
+            - button "Close Pip" [ref=f1e84] [cursor=pointer]
+          - generic [ref=f1e87]:
+            - text: Manager mode
+            - generic [ref=f1e89]: "off"
+            - button "Turn on" [ref=f1e90] [cursor=pointer]
+        - paragraph [ref=f1e92]: I follow along as you move around. Tell me what to look into and I will draft it. Nothing changes until you approve. Manager mode is off, so I stay out of finished runs for now.
+        - generic [ref=f1e93]:
+          - button "Look into why checkout rounding is wrong" [ref=f1e95] [cursor=pointer]
+          - generic [ref=f1e96]:
+            - textbox "Ask Pip" [ref=f1e97]:
+              - /placeholder: Ask Pip, or tell it what to look into
+            - button "Ask" [ref=f1e98] [cursor=pointer]
+  - status

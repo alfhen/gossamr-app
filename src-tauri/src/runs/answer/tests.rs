@@ -168,7 +168,7 @@ async fn an_answer_that_was_stopped_on_its_way_can_be_sent_again() {
 }
 
 /// A run asking a question, of `kind`.
-async fn asking_as(kind: crate::domain::ResultKind) -> (Rig, Run) {
+async fn asking_as(kind: &str) -> (Rig, Run) {
     let mut rig = ready().await;
     rig.svc = std::sync::Arc::new(std::sync::Arc::into_inner(rig.svc).expect("sole owner").with_timing(FAST));
     let run = rig.launched_as(1, kind).await;
@@ -189,7 +189,7 @@ fn copy_state(rig: &Rig) -> Option<Option<String>> {
 
 #[tokio::test]
 async fn a_resume_that_starts_a_copy_of_a_build_stops_the_copy_and_keeps_the_run_stopped() {
-    let (rig, run) = asking_as(crate::domain::ResultKind::Build).await;
+    let (rig, run) = asking_as("build").await;
     rig.cli.with(|s| s.resume = Resume::Copies);
     let why = rig.svc.answer(&run.id, "Yes").await.unwrap_err().to_string();
     assert!(why.contains("started a copy") && why.contains("was stopped") && !why.contains("read-only"), "{why}");

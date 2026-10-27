@@ -7,6 +7,7 @@ It is a Tauri 2 app: a Rust backend in `src-tauri/` and a React, TypeScript and 
 ## Read first
 
 - [README.md](README.md): what the app does and how to connect Jira.
+- [docs/product.md](docs/product.md): the product model and the draft approval gate.
 - [docs/simplification-proposal.md](docs/simplification-proposal.md): where the design is going. Section 12 is the order of work; each step lands as its own pull request.
 - [docs/agents-cli-findings.md](docs/agents-cli-findings.md): how the `claude` CLI really behaves (background sessions, resume, MCP timeouts, permission rules). Read it before you change how agents start, stop or resume.
 
@@ -21,7 +22,7 @@ It is a Tauri 2 app: a Rust backend in `src-tauri/` and a React, TypeScript and 
 | `src-tauri/src/claude/` | Pip's turns (`claude -p`) |
 | `src-tauri/src/agent/` | The gossamr MCP server: Pip's tools and the agents' tools |
 | `src-tauri/src/runs/` | Agent runs: launch, track, answer, stop, clean up (`claude --bg --worktree`) |
-| `src-tauri/src/inbox/` | Drafts made from what runs report |
+| `src-tauri/src/inbox/` | Draft storage and approval, prose run outcomes, workstreams |
 | `src/backend/` | The `Backend` interface (`types.ts`), the desktop one (`jira.ts`) and the in-browser mock (`mock*.ts`) |
 | `src/workspace/` | The workspace UI: board, peek, Pip pane, Agents |
 | `src/lib/` | Pure front-end logic |

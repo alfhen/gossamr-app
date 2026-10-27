@@ -384,13 +384,46 @@ async fn a_wake_given_back_and_run_again_does_not_start_the_same_agent_twice() {
     d.join_wake("wake-1", "facts-1");
     let first = d.ok("wake-1", "start_agent", args.clone()).await;
     d.join_wake("wake-2", "facts-1");
-    let again = d.ok("wake-2", "start_agent", args.clone()).await;
+    let again = d.ok("wake-2", "start_agent", d.start_args("triager", json!({ "brief": "Reworded after the quota retry." }))).await;
     assert_eq!(again, format!("Already started: R1 (run {}).", d.run_named(&first).await.id));
     assert_eq!(d.runs().await.len(), 1);
+    assert_eq!(d.st.runs.lock().unwrap().get("wake-2").unwrap().starts, 0);
+
+    d.started("wake-2", "triager", json!({ "start_id": "independent-check", "brief": "An intentional second opinion." })).await;
+    assert_eq!(d.runs().await.len(), 2);
+    d.join_wake("wake-2-retry", "facts-1");
+    assert!(d.ok("wake-2-retry", "start_agent", d.start_args("triager", json!({ "start_id": "independent-check", "brief": "The same second opinion, reworded." }))).await.starts_with("Already started"));
+    assert_eq!(d.runs().await.len(), 2);
 
     d.join_wake("wake-3", "facts-2");
     d.started("wake-3", "triager", json!({})).await;
-    assert_eq!(d.runs().await.len(), 2, "a wake for other facts starts its own");
+    assert_eq!(d.runs().await.len(), 3, "a wake for other facts starts its own");
+}
+
+#[tokio::test]
+async fn a_start_identity_must_be_a_short_nonempty_plain_text_label() {
+    let d = drive().await;
+    for start_id in [json!(""), json!("  "), json!("x".repeat(101)), json!("job\n1"), json!(3)] {
+        assert!(d.refused("in-ws", "investigator", json!({ "start_id": start_id })).await.contains("start_id must be"));
+    }
+    assert!(d.runs().await.is_empty());
+    assert_eq!(d.st.runs.lock().unwrap().get("in-ws").unwrap().starts, 0);
+}
+
+#[tokio::test]
+async fn simultaneous_reworded_starts_in_one_wake_launch_and_count_once() {
+    let d = drive().await;
+    d.join_wake("wake", "facts");
+    let (first, second) = tokio::join!(
+        d.ok("wake", "start_agent", d.start_args("planner", json!({ "brief": "Plan the retry fix." }))),
+        d.ok("wake", "start_agent", d.start_args("planner", json!({ "brief": "Work out a retry-loop plan." })))
+    );
+    let run = d.run_named(&first).await;
+    assert_eq!(run.id, d.run_named(&second).await.id);
+    assert_eq!(d.runs().await.len(), 1);
+    assert_eq!(d.st.runs.lock().unwrap().get("wake").unwrap().starts, 1);
+    d.launched(&run).await;
+    assert_eq!(d.rig.cli.launches(), 1);
 }
 
 #[tokio::test]

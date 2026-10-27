@@ -603,7 +603,7 @@ export interface TicketProposal {
 }
 
 /** How a run's result was read: from its report through the tool, its `For Jira:` section, the whole answer, or only the summary. */
-export type ResultSource = "structured" | "section" | "whole" | "summaryOnly";
+export type ResultSource = "structured" | "whole" | "summaryOnly";
 
 /** What came of offering a run the report tool. */
 export interface ReportView {
@@ -624,31 +624,11 @@ export interface ReportView {
 
 /** What the run sheet shows about a result: the note, the other tickets it names, and the change the run produced. */
 export interface RunOutcome {
-  note: JiraNote | null;
-  keys: string[];
+  note: string | null;
   change: CodeChange | null;
-  /** The comment draft made from this run, in whatever state it is in now. */
-  draft: { id: string; state: ProposalState } | null;
-  /** For a run with no ticket: what its `New ticket:` section proposes, when it has one. */
-  ticket: TicketProposal | null;
-  /** The ticket draft made from this run, in whatever state it is in now. */
-  ticketDraft: { id: string; state: ProposalState } | null;
-  /** For a Triage run on a ticket: the breakdown its `Subtasks:` section proposes. */
-  subtasks: string[];
-  /** The subtasks draft made from this run, in whatever state it is in now. */
-  subtasksDraft: { id: string; state: ProposalState } | null;
-  /** The full answer couldn't be read, so `note` is only the one-line summary. */
-  summaryOnly?: boolean;
-  /** How `note` and the proposals were read. Null while there is no result. */
-  source?: ResultSource | null;
-  /** The report tool's part in this run; null when the run was never asked to use it. */
-  report?: ReportView | null;
-  /** For a Plan run: the draft of the whole plan as a comment, in whatever state it is in now. */
-  planDraft?: { id: string; state: ProposalState } | null;
-  /** For a Plan run on a ticket: the description update that adds its plan, or why there is none. */
-  planDescription?: { draft: { id: string; state: ProposalState } | null; unavailable: string | null } | null;
-  /** For a Review run that gave a verdict: the verdict and its findings. Null for other runs and for a review without one. */
-  review?: ReviewView | null;
+  summaryOnly: boolean;
+  source: ResultSource | null;
+  report: ReportView | null;
 }
 
 /** A review's conclusion: `blocking` when it found something that has to be fixed before the change is ready. */
@@ -794,8 +774,6 @@ export interface WorkstreamView {
   labels: [string, string][];
   /** The newest finished build that published a pull request a sync hasn't found yet, while no review was queued after it. */
   waitingForPr?: string | null;
-  /** The newest finished review asked for changes and nothing is in progress: the stage is review, not done. */
-  reviewBlocking?: boolean;
   /** Runs and pending drafts on the ticket that are in no workstream, while the workstream is open: the view offers to bring them here (`workstreamsAdopt`), never moves them on its own. As `adoptable` in src-tauri/src/inbox/workstreams.rs. */
   adoptable?: Adoptable | null;
   /** The question Pip asked the person (`ask_person`), while neither answered in the conversation nor dismissed. */

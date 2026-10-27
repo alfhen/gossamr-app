@@ -4,10 +4,10 @@
 //! It hears about runs from the run tracker (`RunNotifier::notify`, called while `RunService.launching` is held, so it
 //! only ever spawns) and from its own periodic sweep, which catches what the tracker never says: a run stopped from
 //! outside Gossamr, a run finishing again after a continuation that drafted nothing, a run that finished while the
-//! workstream was paused, a build's pull request turning up. A run the person or Pip stopped wakes nobody.
+//! workstream was paused. A run the person or Pip stopped wakes nobody.
 //!
 //! A wake is Pip's ordinary turn in the workstream's conversation, asked with a prompt Rust writes from ids, roles,
-//! states, counts and parsed flags only (`event_line`), never an agent's words. Each `(workstream, run, state)` wakes
+//! states and counts only (`event_line`), never an agent's words. Each `(workstream, run, state)` wakes
 //! Pip at most once: it is recorded as a `wake` line in the workstream's audit, which is also what a restart rebuilds
 //! from. A paused workstream gets no wakes. Too many wakes pause it (`Core::admit_wake`). A wake the subscription
 //! refused, or that couldn't start, gives its facts back and holds the workstream's wakes off for a backoff; the sweep
@@ -22,10 +22,9 @@ use serde::{Deserialize, Serialize};
 
 use super::{AgentEvent, AgentService, Update, WakeSink, REMOVED, WAKE_NOT_STARTED, WAKE_PAUSED};
 use crate::auth::Scope;
-use crate::domain::{Actor, Origin, ProposalQuery, ResultKind, Role, Run, RunState, StateKind, Workstream, WorkstreamEvent};
+use crate::domain::{Actor, Origin, ProposalQuery, Role, Run, RunState, StateKind, Workstream, WorkstreamEvent};
 use crate::error::{Error, Result};
 use crate::inbox::Core;
-use crate::runs::report::{ReviewVerdict, Severity};
 use crate::runs::tracker::{Attention, RunNotifier};
 use crate::tracker::Connection;
 
@@ -87,7 +86,7 @@ impl WakeState {
                 RunState::SystemBlocked => WakeState::SystemBlocked,
                 _ => WakeState::NeedsAnswer,
             },
-            Attention::Done | Attention::Drafted | Attention::DraftedTicket | Attention::Breakdown | Attention::PlanDrafted => WakeState::Done,
+            Attention::Done => WakeState::Done,
             Attention::Failed => WakeState::Failed,
         }
     }
@@ -110,7 +109,7 @@ impl WakeState {
     }
 }
 
-/// One thing that happened to a run, as Pip is told it: ids, roles, states, counts and parsed flags, nothing an agent
+/// One thing that happened to a run, as Pip is told it: ids, roles, states and counts, nothing an agent
 /// wrote.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -123,25 +122,13 @@ pub struct WakeFact {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub mark: String,
     #[serde(default)]
-    pub plan_recommended: Option<bool>,
-    /// A Triage that found its ticket not ready to plan: how many open questions it listed. `None` is ready, or no verdict.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub open_questions: Option<u32>,
-    #[serde(default)]
-    pub verdict: Option<ReviewVerdict>,
-    #[serde(default)]
-    pub blocking: u32,
-    #[serde(default)]
     pub drafts: u32,
-    /// The build's review waits for a sync to find its pull request.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub waiting_for_pr: bool,
 }
 
 impl WakeFact {
     /// The fact `state` of `run` with no flags yet; its mark tells a finish after a continuation from the first one.
     pub fn new(run: &Run, state: WakeState) -> Self {
-        WakeFact { run: run.id.clone(), role: run.spec.role.clone(), state, mark: mark(run, state), plan_recommended: None, open_questions: None, verdict: None, blocking: 0, drafts: 0, waiting_for_pr: false }
+        WakeFact { run: run.id.clone(), role: run.spec.role.clone(), state, mark: mark(run, state), drafts: 0 }
     }
 
     /// The state part of `(workstream, run, state)`.
@@ -196,40 +183,20 @@ fn plural(n: u32, one: &str, many: &str) -> String {
     format!("{n} {}", if n == 1 { one } else { many })
 }
 
-/// `[Event] run abc12345 (triage) Done; plan recommended: yes; not ready to plan, 2 open questions; 2 drafts`
+/// `[Event] run abc12345 (triager) Done; 2 drafts`
 fn fact_line(f: &WakeFact) -> String {
     let run = match shown_id(&f.run) {
         Some(id) => format!("run {id}"),
         None => "a run".to_string(),
     };
     let mut line = format!("[Event] {run} ({}) {}", f.role.as_str(), f.state.words());
-    if let Some(yes) = f.plan_recommended {
-        line.push_str(if yes { "; plan recommended: yes" } else { "; plan recommended: no" });
-    }
-    match f.open_questions {
-        Some(0) => line.push_str("; not ready to plan"),
-        Some(n) => line.push_str(&format!("; not ready to plan, {}", plural(n, "open question", "open questions"))),
-        None => {}
-    }
-    if let Some(verdict) = f.verdict {
-        line.push_str(match verdict {
-            ReviewVerdict::Pass => "; verdict: pass",
-            ReviewVerdict::Blocking => "; verdict: blocking",
-        });
-        if f.blocking > 0 {
-            line.push_str(&format!("; {}", plural(f.blocking, "blocking finding", "blocking findings")));
-        }
-    }
     if f.drafts > 0 {
         line.push_str(&format!("; {}", plural(f.drafts, "draft", "drafts")));
-    }
-    if f.waiting_for_pr {
-        line.push_str("; waiting for its pull request");
     }
     line
 }
 
-/// The wake prompt's event lines, one per fact. Only ids, roles, states, counts and parsed flags.
+/// The wake prompt's event lines, one per fact. Only ids, roles, states and counts.
 pub fn event_line(facts: &WakeFacts) -> String {
     facts.facts.iter().map(fact_line).collect::<Vec<_>>().join("\n")
 }
@@ -303,9 +270,8 @@ fn stopped_on_purpose(events: &[WorkstreamEvent], run: &Run) -> bool {
     events.iter().any(|e| matches!(e.actor, Actor::Person | Actor::Pip) && e.action == "run_stopped" && e.run_id.as_deref() == Some(run.id.as_str()) && run.continued_at.is_none_or(|at| e.at >= at))
 }
 
-/// Whether Pip was told, in the wake with key `key`, that the build `run` is still waiting for its pull request.
-pub fn told_waiting_for_pr(events: &[WorkstreamEvent], run: &str, key: &str) -> bool {
-    events.iter().any(|e| e.actor == Actor::Supervisor && e.action == "waiting_for_pr" && e.run_id.as_deref() == Some(run) && e.detail.as_deref() == Some(key))
+fn settling_after_resume(run: &Run, now: DateTime<Utc>) -> bool {
+    run.error.is_none() && run.continued_at.is_some_and(|at| now.signed_duration_since(at).to_std().map_or(true, |age| age < SWEEP_EVERY * 2))
 }
 
 /// Tells every notifier in turn: today's notices and the supervisor.
@@ -382,8 +348,7 @@ impl Supervisor {
     }
 
     /// One sweep at `now`: every open workstream that isn't paused has its ticket checked for drift, and each linked
-    /// run at rest that Pip wasn't woken for yet becomes a fact, as does a pull request found for a build Pip was told
-    /// was waiting for one.
+    /// run at rest that Pip wasn't woken for yet becomes a fact.
     pub async fn sweep_at(&self, now: DateTime<Utc>) {
         if self.agent().is_none() {
             return;
@@ -395,23 +360,18 @@ impl Supervisor {
             if ws.paused_reason.is_some() {
                 continue;
             }
-            let Ok(events) = self.core.workstream_events(&scope, &ws.id).await else { continue };
             let Ok(runs) = self.linked(&scope, &ws.id).await else { continue };
-            let woken = self.woken(&ws.id, &events);
+            let Ok(events) = self.core.workstream_events(&scope, &ws.id).await else { continue };
+            let woken = woken_in(&events);
             let is_new = |fact: &WakeFact| !woken.contains(&(fact.run.clone(), fact.key().to_string()));
             let mut facts = Vec::new();
             for run in &runs {
                 let Some(state) = WakeState::of_run(run) else { continue };
-                if state == WakeState::Stopped && stopped_on_purpose(&events, run) {
+                if state == WakeState::Stopped && (stopped_on_purpose(&events, run) || settling_after_resume(run, now)) {
                     continue;
                 }
                 if is_new(&WakeFact::new(run, state)) {
                     facts.push(self.fact_of(&scope, run, state).await);
-                }
-                let found = WakeFact::new(run, WakeState::PullRequest);
-                let done = WakeFact::new(run, WakeState::Done);
-                if state == WakeState::Done && is_new(&found) && !is_new(&done) && told_waiting_for_pr(&events, &run.id, done.key()) && matches!(self.core.pull_head_of(run), Ok(Some(_))) {
-                    facts.push(found);
                 }
             }
             self.handle(&ws.id, facts, now).await;
@@ -422,29 +382,15 @@ impl Supervisor {
         self.core.runs_in(scope, &crate::domain::RunQuery { workstream: Some(ws.to_string()), ..Default::default() }).await
     }
 
-    /// The fact `state` of `run` with its flags: a Triage's plan recommendation and readiness, a Review's verdict and
-    /// blocking count, how many drafts it left waiting, and whether a finished build's pull request is still to be found.
+    /// The fact `state` of `run` and how many drafts it left waiting.
     async fn fact_of(&self, scope: &Scope, run: &Run, state: WakeState) -> WakeFact {
         let mut fact = WakeFact::new(run, state);
         if state != WakeState::Done {
             return fact;
         }
-        if let Ok(resolved) = self.core.resolved_of(run).await {
-            if run.spec.is(ResultKind::Triage) {
-                fact.plan_recommended = resolved.plan_recommended;
-                fact.open_questions = resolved.readiness.as_ref().filter(|r| !r.ready).map(|r| r.questions.len() as u32);
-            }
-            if run.spec.is(ResultKind::Review) {
-                fact.verdict = resolved.verdict;
-                fact.blocking = resolved.findings.iter().filter(|f| f.severity == Severity::Blocking).count() as u32;
-            }
-        }
         let open = ProposalQuery { states: Some(vec![StateKind::Pending]), workstream: run.spec.workstream.clone(), ..Default::default() };
         if let Ok(drafts) = self.core.proposals_in(scope, &open).await {
             fact.drafts = drafts.iter().filter(|p| matches!(&p.origin, Origin::Run { run_id, .. } if *run_id == run.id)).count() as u32;
-        }
-        if run.spec.is(ResultKind::Build) && run.spec.workstream.is_some() && matches!(self.core.pull_head_of(run), Ok(None)) {
-            fact.waiting_for_pr = true;
         }
         fact
     }
@@ -478,6 +424,11 @@ impl Supervisor {
     /// A wake that never ran (its workstream was paused or closed first, the quota refused it, or Pip couldn't start):
     /// its facts are taken back with a `wake_dropped` line each, so Pip is woken for them again.
     async fn unmark(&self, facts: WakeFacts) {
+        let _one = self.work.lock().await;
+        self.unmark_locked(facts).await;
+    }
+
+    async fn unmark_locked(&self, facts: WakeFacts) {
         let ws = facts.workstream.clone();
         {
             let mut seen = self.seen.lock().expect("lock poisoned");
@@ -511,10 +462,20 @@ impl Supervisor {
         if self.backing_off(ws_id) {
             return;
         }
+        let Ok(runs) = self.linked(&scope, ws_id).await else { return };
         let Ok(events) = self.core.workstream_events(&scope, ws_id).await else { return };
         let woken = self.woken(ws_id, &events);
         let mut fresh: Vec<WakeFact> = Vec::new();
         for f in facts {
+            let Some(run) = runs.iter().find(|run| run.id == f.run) else { continue };
+            if Connection::jira_id(&scope) != run.connection_id
+                || run.spec.workstream.as_deref() != Some(ws_id)
+                || WakeState::of_run(run) != Some(f.state)
+                || WakeFact::new(run, f.state).key() != f.key()
+                || (f.state == WakeState::Stopped && (stopped_on_purpose(&events, run) || settling_after_resume(run, now)))
+            {
+                continue;
+            }
             let seen = woken.contains(&(f.run.clone(), f.key().to_string()));
             if !seen && !fresh.iter().any(|g| g.run == f.run && g.key() == f.key()) {
                 fresh.push(f);
@@ -553,15 +514,12 @@ impl Supervisor {
                 seen.insert((ws_id.to_string(), f.run.clone(), f.key().to_string()));
             }
         }
-        if admitted.facts.iter().any(|f| f.waiting_for_pr) {
-            self.core.request_code_sync();
-        }
         let facts = WakeFacts { workstream: ws_id.to_string(), facts: admitted.facts };
         if let Err(e) = agent.wake(ws_id, facts.clone(), self.sink(&conversation)).await {
             // A wake that failed to start was told through its sink, which takes the facts back. Any other error came
             // before the sink was ever called, so the facts go back here.
             if !matches!(&e, Error::Claude(m) if m.starts_with(WAKE_NOT_STARTED)) {
-                self.unmark(facts).await;
+                self.unmark_locked(facts).await;
             }
             eprintln!("couldn't wake Pip in workstream {ws_id}: {e}");
         }

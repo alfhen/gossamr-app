@@ -21,7 +21,7 @@ export function WorkstreamLine({ workstream, onOpen }: { workstream: WorkstreamV
       </span>
       <span className="min-w-0 truncate">Workstream: {workstream.workstream.title}</span>
       <span className="shrink-0 rounded-full bg-ws-pip-soft px-2 text-xs font-semibold text-ws-pip" data-stage={workstream.stage} data-waiting-for-pr={workstream.waitingForPr || undefined}>
-        {stageText(workstream.stage, workstream.waitingForPr, workstream.reviewBlocking)}
+        {stageText(workstream.stage, workstream.waitingForPr)}
       </span>
       {onOpen && (
         <button

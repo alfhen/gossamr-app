@@ -538,7 +538,7 @@ async fn a_review_that_fails_at_the_gateway_is_not_sent_again() {
 }
 
 #[tokio::test]
-async fn refused_reviews_read_plainly_and_a_403_means_the_repository_cannot_take_reviews() {
+async fn refused_reviews_read_plainly_without_caching_a_tokens_access() {
     let server = serve(vec![
         ("/repos/acme/webshop", vec![Reply::ok("{\"full_name\":\"acme/webshop\",\"name\":\"webshop\",\"private\":true,\"permissions\":{\"pull\":true,\"push\":true}}")]),
         (REVIEWS_POST, vec![Reply::status(403, "{\"message\":\"Resource not accessible by personal access token\"}")]),
@@ -551,7 +551,7 @@ async fn refused_reviews_read_plainly_and_a_403_means_the_repository_cannot_take
     let err = host.post_review("acme/webshop", 218, "a1b2c3d4e5f6", "s", &[]).await.unwrap_err();
     assert_eq!(err.to_string(), "GitHub refused to post the review: the token can't write to pull requests in acme/webshop. Open the PR view instead, or reconnect GitHub with write access.");
     let access = host.review_access("acme/webshop").await.unwrap();
-    assert!(!access.can_post && access.reason.as_deref() == Some(err.to_string().as_str()), "the refusal wins over the permissions: {access:?}");
+    assert!(access.can_post, "a failed post is not stored as a token pre-check: {access:?}");
     let err = host.post_review("acme/webshop", 219, "a1b2c3d4e5f6", "s", &[]).await.unwrap_err();
     assert_eq!(err.to_string(), "GitHub couldn't find pull request #219 in acme/webshop, or the token can't see it.");
     let err = host.post_review("acme/webshop", 220, "a1b2c3d4e5f6", "s", &review_comments()).await.unwrap_err();
@@ -592,7 +592,6 @@ async fn a_post_refused_for_single_sign_on_isnt_remembered_as_the_repository_ref
     let host = host(&server);
     let err = host.post_review("acme/webshop", 218, "a1b2c3d4e5f6", "s", &[]).await.unwrap_err();
     assert!(err.to_string().contains("SAML single sign-on"), "{err}");
-    assert!(host.refused_reviews.lock().unwrap().is_empty(), "authorising single sign-on lifts it");
     assert!(host.review_access("acme/webshop").await.unwrap().can_post);
 }
 
@@ -608,7 +607,6 @@ async fn a_403_that_isnt_about_the_tokens_access_keeps_githubs_words_and_isnt_re
     let Error::CodeHost { status: 403, message } = &err else { panic!("{err:?}") };
     assert!(message.contains("Repository was archived so is read-only"), "{message}");
     assert_ne!(*message, super::write::no_write_access("acme/webshop"));
-    assert!(host.refused_reviews.lock().unwrap().is_empty(), "it says nothing lasting about the token");
     assert!(host.review_access("acme/webshop").await.unwrap().can_post);
 }
 
@@ -627,7 +625,6 @@ async fn a_rate_limited_post_says_so_rather_than_blaming_the_token() {
     let server = serve(vec![(REVIEWS_POST, vec![Reply::status(403, "{\"message\":\"API rate limit exceeded\"}").header("x-ratelimit-remaining", "0").header("x-ratelimit-reset", "4102444800")])]).await;
     let host = host(&server);
     assert!(matches!(host.post_review("acme/webshop", 218, "a1b2c3d4e5f6", "s", &[]).await, Err(Error::RateLimited { .. })));
-    assert!(host.refused_reviews.lock().unwrap().is_empty(), "a rate limit says nothing about access");
 }
 
 #[tokio::test]

@@ -20,7 +20,7 @@ use crate::runs::agent_config::plain_id;
 use crate::runs::answer;
 use crate::runs::ask::{AlreadyAsking, Outcome};
 use crate::runs::message::take_for_ask;
-use crate::runs::report::{self, token_hash, Report, ReportStatus, ReviewVerdict, Severity, UNAVAILABLE};
+use crate::runs::report::{self, token_hash, Report, ReportStatus, UNAVAILABLE};
 use crate::tracker::Connection;
 
 /// Calls a run may make to the tools that read or wait, in total. `report` counts its own, smaller, calls.
@@ -200,7 +200,7 @@ fn describe(label: &str, run: &Run, report: Option<&Report>, pull: Option<(u64, 
             let text = report_text(report);
             let mut block = quoted(&text, limit, false).map(|text| format!("Reported through Gossamr ({}):\n{text}", if report.status == ReportStatus::Done { "done" } else { "blocked" }));
             let left = limit.saturating_sub(text.chars().count());
-            if report.plan.is_none() && left > 0 {
+            if left > 0 {
                 let answer = run.result.as_deref().filter(|_| run.result_complete).and_then(|answer| quoted(answer, left, false));
                 if let Some(answer) = answer {
                     block = Some(format!("{}\nIts written answer:\n{answer}", block.unwrap_or_default()));
@@ -222,34 +222,7 @@ fn describe(label: &str, run: &Run, report: Option<&Report>, pull: Option<(u64, 
 }
 
 fn report_text(report: &Report) -> String {
-    let mut parts = Vec::new();
-    if let Some(note) = &report.note {
-        parts.push(format!("Note: {note}"));
-    }
-    if let Some(ticket) = &report.new_ticket {
-        parts.push(format!("New ticket: {}", ticket.title));
-    }
-    if !report.subtasks.is_empty() {
-        parts.push(format!("Subtasks: {}", report.subtasks.join("; ")));
-    }
-    if let Some(plan) = &report.plan {
-        parts.push(format!("Plan as reported (not reviewed; the agreed plan is in the ticket's Gossamr Plan section when there is one):\n{plan}"));
-    }
-    match report.verdict {
-        Some(ReviewVerdict::Pass) => parts.push("Verdict: pass".into()),
-        Some(ReviewVerdict::Blocking) => parts.push("Verdict: blocking".into()),
-        None => {}
-    }
-    for finding in &report.findings {
-        let place = finding.where_.as_deref().map(|w| format!(" ({w})")).unwrap_or_default();
-        let severity = match finding.severity {
-            Severity::Blocking => "blocking",
-            Severity::ShouldFix => "should-fix",
-            Severity::Nit => "nit",
-        };
-        parts.push(format!("Finding [{severity}]: {}{place}", finding.text));
-    }
-    parts.join("\n")
+    report.note.clone().unwrap_or_default()
 }
 
 #[cfg(test)]

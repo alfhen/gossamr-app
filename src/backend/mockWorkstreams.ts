@@ -2,10 +2,10 @@ import { docText } from "../lib/docs";
 import { workstreamOf } from "../lib/proposals";
 import { stepOf } from "../lib/roles";
 import { adoptableOf, adoptWords, NOTHING_TO_ADOPT } from "../lib/workstreamAdopt";
-import { byQueue, reviewBlocking, runLabels, stage } from "../lib/workstreamStage";
+import { byQueue, runLabels, stage } from "../lib/workstreamStage";
 import { readStored, writeStored } from "../workspace/storage";
 import { BASIS_FIELDS } from "../types";
-import type { Adoptable, BasisField, ItemRef, PauseReason, PipQuestion, Proposal, ReviewVerdict, Run, WorkItem, Workstream, WorkstreamActor, WorkstreamBasis, WorkstreamEvent, WorkstreamUndo, WorkstreamView, WorkstreamsChanged } from "../types";
+import type { Adoptable, BasisField, ItemRef, PauseReason, PipQuestion, Proposal, Run, WorkItem, Workstream, WorkstreamActor, WorkstreamBasis, WorkstreamEvent, WorkstreamUndo, WorkstreamView, WorkstreamsChanged } from "../types";
 
 const CONNECTION = "mock";
 /** Where the sample backend keeps its workstreams and their audit, so both survive a reload. */
@@ -161,8 +161,6 @@ export class MockWorkstreams {
   private seq = 0;
   /** The number of the pull request run `runId` opened, as far as the code host shows it; set by the backend that owns the code. */
   prOf: (runId: string) => number | null = () => null;
-  /** A finished review's verdict as its sheet resolves it, null without one; set by the backend that owns the runs. */
-  verdictOf: (run: Run) => ReviewVerdict | null = () => null;
   /** A cached ticket as it is now, by key, which a workstream's basis is taken from; set by the backend that owns the tickets. */
   ticketOf: (key: string) => BasisTicket | null = () => null;
   /** The pending drafts there are, which Bring them here counts; set by the backend that owns the drafts. */
@@ -214,12 +212,11 @@ export class MockWorkstreams {
 
   private view(ws: Workstream, runs: readonly Run[]): WorkstreamView {
     const linked = runs.filter((r) => r.spec.workstream === ws.id).sort((a, b) => byQueue(b, a));
-    const judged = linked.map((r) => ({ ...r, verdict: stepOf(r.spec.role) === "review" && r.state === "done" ? this.verdictOf(r) : null }));
-    const view: WorkstreamView = { workstream: ws, stage: stage(judged), runs: linked.map((r) => r.id), labels: runLabels(linked) };
+    const view: WorkstreamView = { workstream: ws, stage: stage(linked), runs: linked.map((r) => r.id), labels: runLabels(linked) };
     const pipAsk = openPipAsk(this.audit.filter((e) => e.workstreamId === ws.id));
     const waiting = waitingForPr(linked, this.prOf);
     const adoptable = ws.closedAt === null && ws.itemKey ? adoptableOf(ws, runs.filter((r) => r.item?.key === ws.itemKey), this.pendingDrafts()) : null;
-    return { ...view, ...(pipAsk ? { pipAsk } : {}), ...(adoptable && (adoptable.runs.length || adoptable.drafts.length) ? { adoptable } : {}), ...(waiting ? { waitingForPr: waiting } : {}), ...(reviewBlocking(judged) ? { reviewBlocking: true } : {}) };
+    return { ...view, ...(pipAsk ? { pipAsk } : {}), ...(adoptable && (adoptable.runs.length || adoptable.drafts.length) ? { adoptable } : {}), ...(waiting ? { waitingForPr: waiting } : {}) };
   }
 
   /** Opens a workstream on a cached ticket, or with no ticket and a title. A ticket with an open one gets that one back, unchanged. */

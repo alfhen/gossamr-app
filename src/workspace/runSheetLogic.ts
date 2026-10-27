@@ -210,13 +210,6 @@ export function runDescriptionDraftOf(proposals: Record<string, Proposal> | read
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
 }
 
-/** What the sheet says about a plan's description update. */
-export function planDescriptionStatus(outcome: Pick<RunOutcome, "planDescription"> | null): "none" | "waiting" | "applied" | "skipped" | "retired" {
-  const state = outcome?.planDescription?.draft?.state.type;
-  if (!state) return "none";
-  return state === "pending" || state === "applying" ? "waiting" : state === "applied" ? "applied" : state === "skipped" ? "skipped" : "retired";
-}
-
 /** What "Chat it over with Pip" sends. Pip reads the run and the ticket itself, so the prompt names them and never carries their text. */
 export function planDescriptionWithPipPrompt(run: { id: string; item: { key: string } | null }, draftId: string): string {
   const key = run.item?.key ?? "its ticket";
@@ -313,8 +306,7 @@ export const SEVERITY_LABEL: Record<ReviewSeverity, string> = { blocking: "Block
 /** How the result on the sheet was read, as a short chip: where it came from, and whether Gossamr understood its shape. */
 export const SOURCE_CHIP: Record<ResultSource, { label: string; warn: boolean }> = {
   structured: { label: "Reported to Gossamr", warn: false },
-  section: { label: "Parsed from its For Jira section", warn: false },
-  whole: { label: "Not parsed", warn: true },
+  whole: { label: "Agent’s written answer", warn: false },
   summaryOnly: { label: "Summary only", warn: true },
 };
 
@@ -332,13 +324,6 @@ export function reportNotes(outcome: Pick<RunOutcome, "source" | "report"> | nul
   else if (!structured) notes.push("Every report it made was refused, so Gossamr read its written answer.");
   if (structured && (report.calls > 1 || report.rejections > 0)) notes.push(`It called the tool ${report.calls} times: ${report.rejections} refused, ${report.revision} recorded.`);
   return notes;
-}
-
-/** What the sheet says about the ticket a run proposed. */
-export function ticketStatus(outcome: Pick<RunOutcome, "ticketDraft"> | null): "none" | "waiting" | "created" | "skipped" | "retired" {
-  const state = outcome?.ticketDraft?.state.type;
-  if (!state) return "none";
-  return state === "pending" || state === "applying" ? "waiting" : state === "applied" ? "created" : state === "skipped" ? "skipped" : "retired";
 }
 
 /** What "Discuss with Pip" on a breakdown sends, or, with no draft, a request for Pip to propose one. Pip reads the run itself, so the prompt never carries its text. */
@@ -402,13 +387,6 @@ export function pendingBreakdownOn(proposals: Record<string, Proposal> | readonl
   return all
     .filter((p) => p.state.type === "pending" && p.intent.type === "subtasks" && p.intent.parent.connectionId === item.connectionId && p.intent.parent.externalId === item.externalId)
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
-}
-
-/** What the sheet says about the breakdown a run proposed. */
-export function breakdownStatus(outcome: Pick<RunOutcome, "subtasksDraft"> | null): "none" | "waiting" | "created" | "skipped" | "retired" {
-  const state = outcome?.subtasksDraft?.state.type;
-  if (!state) return "none";
-  return state === "pending" || state === "applying" ? "waiting" : state === "applied" ? "created" : state === "skipped" ? "skipped" : "retired";
 }
 
 export function blockerControl(run: Pick<Run, "item">): DraftControl {

@@ -92,7 +92,7 @@ export function reviewRisks(review: Review, summary: string, comments: readonly 
   return { risks: (["broadcast", "secret"] as const).filter((r) => risks.has(r)), quote };
 }
 
-/** What 'Discuss with Pip' asks about a review draft: read it and the pull request's comments, change it only when asked, and it stays a draft. */
+/** What 'Ask Pip' asks about a review draft: read it and the pull request's comments, change it only when asked, and it stays a draft. */
 export function reviewWithPipPrompt(p: Proposal): string {
   const r = p.intent as Review;
   const run = p.origin.type === "run" ? p.origin.runId : r.runId;
@@ -560,23 +560,24 @@ export function ReviewDraft({
           </button>
           {open && (
             <>
+              <button type="button" data-draft-edit disabled={working} onClick={() => card.current?.querySelector<HTMLTextAreaElement>("textarea")?.focus()} className={button}>Edit</button>
               {onDiscuss && (
                 <button type="button" disabled={working || !!problem} title={problem ?? "Pip reads this review and the pull request's comments, and changes the draft if you ask. Your edit is saved first."} onClick={() => onDiscuss(edit)} className={button}>
                   Discuss with Pip
                 </button>
               )}
               <button type="button" disabled={working} onClick={onSkip} className={button}>
-                Discard
+                Skip
               </button>
               {canPost && p.maybePosted?.checkedAt && (
                 <button type="button" data-review-post-anyway disabled={working || state === "applying" || !!problem} title={problem ?? "Sends this review though it may already be on GitHub."} onClick={() => post({ postAnyway: true })} className={button}>
-                  Post anyway
+                  Post again
                 </button>
               )}
               {/* While the pause shows, its own Post it anyway stands in for this button, beside Keep editing. */}
               {canPost && !pause && (
                 <button type="button" disabled={working || state === "applying" || !!problem} title={problem ?? undefined} onClick={() => post()} className={primary}>
-                  {working || state === "applying" ? "Posting…" : postLabel(kept.length)}
+                  {working || state === "applying" ? "Posting…" : "Approve"}
                 </button>
               )}
             </>

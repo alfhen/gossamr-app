@@ -10,7 +10,6 @@ import { editThenPost, ReviewDraft, reviewWithPipPrompt } from "./ReviewDraft";
 import { draftStatus } from "./boardLogic";
 import { showMe } from "./jump";
 import { askPip } from "./askPip";
-import { PIP_SHOWN, pipAsks } from "./runSheetLogic";
 import { useRuns } from "./runsStore";
 import { useWorkspace, workflowOfItem } from "../workspaceStore";
 import { PEEK_DRAFT_MARGIN, peekFocusAfterLeaving } from "./peekDrafts";
@@ -401,23 +400,8 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
     open: onShow,
     primary: () => focusField("[data-draft-actions] button:not(:disabled):last-of-type"),
   });
-  const action =
-    intent.type === "comment"
-      ? "Post comment"
-      : intent.type === "transition"
-        ? (p.label ?? `Move to ${statusName ?? ""}`.trim())
-        : intent.type === "create"
-          ? `Create ${intent.fields.kind}`
-          : intent.type === "subtasks"
-            ? `Create ${remaining} subtask${remaining === 1 ? "" : "s"}`
-            : intent.type === "link"
-              ? "Create link"
-              : rewrite
-                ? `Update ${rewriteWhat(rewrite)}`
-                : "Apply";
-
-  // A move whose button reads only the status it goes to ("QA") says the verb to a screen reader; a label that is already a phrase is left alone.
-  const moveName = intent.type === "transition" && p.label && statusName && p.label.trim().toLowerCase() === statusName.toLowerCase() ? `Move to ${p.label.trim()}` : undefined;
+  const action = "Approve";
+  const moveName = undefined;
   const Title = headingLevel === 4 ? "h4" : "h3";
   const titleId = useId();
   return (
@@ -565,7 +549,7 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
               <>
                 {onDiscuss && (
                   <button type="button" disabled={working} onClick={() => onDiscuss()} title="Pip reads the whole run and this draft, and changes the draft if you ask" className={button}>
-                    Discuss with Pip
+                    Ask Pip
                   </button>
                 )}
                 {(intent.type === "comment" || rewrite) && (
@@ -646,7 +630,6 @@ export function LiveDraftCard({ proposal: p, jump = true, headingLevel }: { prop
     }
   };
 
-  const discuss = () => p.origin.type === "run" && askPip(pipAsks.comment({ id: p.origin.runId, item: target ?? null }, p.id));
   const review = p.intent.type === "githubReview" ? p.intent : null;
   const access = useRepoReviewAccess(review?.connectionId ?? null, review?.repo ?? null);
 
@@ -661,19 +644,11 @@ export function LiveDraftCard({ proposal: p, jump = true, headingLevel }: { prop
       onShow={jump && target && item ? () => showMe(target) : undefined}
       onSkip={() => void run(() => useWorkspace.getState().skip(p.id))}
       onOpenRun={(id) => useRuns.getState().openRun(id)}
-      onDiscuss={
-        p.origin.type === "run" && p.intent.type === "comment"
-          ? discuss
-          : review
-            ? (edit) =>
-                void run(async () => {
-                  // The person's edit is saved first, so Pip reads their version, and it is theirs from then on.
-                  if (edit && backend) await backend.proposalsEdit(p.id, edit);
-                  askPip({ prompt: reviewWithPipPrompt(p), shown: PIP_SHOWN.review });
-                  return null;
-                })
-            : undefined
-      }
+      onDiscuss={(edit) => void run(async () => {
+        if (edit && backend) await backend.proposalsEdit(p.id, edit);
+        askPip({ prompt: review ? reviewWithPipPrompt(p) : `Read draft ${p.id} in full with get_proposal, then help me improve it. Change it only if I ask. Nothing is posted until I approve it.`, shown: "Ask Pip about this draft" });
+        return null;
+      })}
       access={access}
       onApprove={(edit, options) =>
         void run(async () => {

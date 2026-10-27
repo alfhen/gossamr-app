@@ -456,7 +456,6 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
   async draftTransition(item, to) {
     const backend = get().backend!;
     const mine = generation;
-    const old = draftsForItem(get(), item).filter((d) => d.intent.type === "transition");
     const current = get().items[itemKey(item)];
     const wf = current && workflowOfItem(get(), current);
     if (current && wf && movesAreOpaque(wf)) {
@@ -467,7 +466,6 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     }
     try {
       const p = await backend.proposalsCreate({ type: "transition", item, to: to.id }, to.name);
-      for (const d of old) await backend.proposalsSkip(d.id);
       return p;
     } finally {
       if (backend === get().backend && mine === generation) await get().refreshProposals();

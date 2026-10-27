@@ -1,7 +1,7 @@
 import type { WorkBlock, WorkDoc, WorkInline } from "../types";
 import { docFromText } from "../lib/docs";
 import { PLAN_LIMIT } from "./mockRunSpec";
-import { fit, planWithoutNote } from "./mockRunResult";
+import { fit } from "./mockRunResult";
 import { markdownOf } from "./mockMarkdown";
 
 /** The marker of a description's plan section, as `PLAN_HEADING` in `domain/doc/plan.rs`. */
@@ -76,7 +76,7 @@ export function planIntro(run: Pick<RunLike, "endedAt" | "queuedAt">): string {
 
 /** The description with the plan in it, or why that can't be done; the plan is cut to what the description has room for. */
 export function assemblePlan(run: RunLike, body: WorkDoc, parse: (markdown: string) => WorkDoc): { to: WorkDoc; cut: boolean } | { problem: string } {
-  const plan = planWithoutNote(run.result ?? "");
+  const plan = (run.result ?? "").trim();
   const intro = planIntro(run);
   const rest = [...markdownOf(withoutPlanSection(body))].length;
   const which = run.shortId ?? run.id;

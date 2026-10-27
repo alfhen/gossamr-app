@@ -1,15 +1,9 @@
-import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { docText } from "../lib/docs";
-import type { Intent, Proposal, ScreenContext } from "../types";
-import type { AskRequest } from "./claude";
-import { mockAsk, mockPipEvents } from "./mockPip";
-import { mockPipTurns } from "./mockPipTurns";
-import { KEPT_EDITED, KEPT_MAYBE_POSTED, keptOlderReviews, PLAN_IS_THE_USERS, REPLACED_REASON, REVIEW_EDIT_KEEPS_POSITIONS, reviewSupersession, runCommentSupersession, WORKSTREAM_PENDING_CAP } from "../lib/proposals";
+import type { Intent } from "../types";
+import { REVIEW_EDIT_KEEPS_POSITIONS } from "../lib/proposals";
 import { MockBackend } from "./mock";
 import { MockProposals } from "./mockProposals";
-import { bodyChange } from "./mockMarkdown";
-import { itemRef, statusId } from "./mockConnector";
 
 const ref = { connectionId: "mock", externalId: "CA-412", key: "CA-412" };
 const comment: Intent = { type: "comment", item: ref, body: { blocks: [{ type: "paragraph", content: [{ type: "text", text: "Hi", marks: [] }] }] } };
@@ -79,14 +73,15 @@ describe("drafts kept across a reload", () => {
     const asked = first.draft(comment, null, "r1");
     first.draft(comment, null, "gone");
     void first.create(comment);
-    void first.skip(asked.id);
+    void first.skip(first.get(asked.id)!.state.type === "pending" ? asked.id : first.draft({ type: "comment", item: { ...ref, externalId: "CA-99" }, body: { blocks: [] } }, null, "other").id);
 
     const again = new MockProposals(async () => []);
     const seeded = again.draft(comment, null, "sample");
     again.keep("kept", fromChat);
     const back = again.list();
     expect(back.map((p) => [p.origin, p.state.type])).toEqual([
-      [{ type: "chat", requestId: "r1" }, "skipped"],
+      [{ type: "chat", requestId: "other" }, "skipped"],
+      [{ type: "chat", requestId: "r1" }, "retired"],
       [{ type: "chat", requestId: "sample" }, "pending"],
     ]);
     expect(new Set(back.map((p) => p.id)).size).toBe(2);
@@ -104,7 +99,7 @@ describe("drafts an agent run left", () => {
   it("are the agent's, listed under their run's workstream, and Pip revises them only from that workstream", () => {
     const proposals = new MockProposals(async () => []);
     const inWs = fromRun(proposals, "ws-1");
-    const loose = fromRun(proposals, null);
+    const loose = proposals.fromRun({ ...comment, item: { ...ref, externalId: "CA-99", key: "CA-99" } }, "From agent run", { type: "run", runId: "r1", shortId: null, workstream: null });
     expect(inWs.createdBy).toBe("agent");
     expect(proposals.list({ workstream: "ws-1" }).map((p) => p.id)).toEqual([inWs.id]);
 
@@ -155,107 +150,6 @@ describe("drafts an agent run left", () => {
   });
 });
 
-describe("mock draft hygiene, as proposals.rs keeps it", () => {
-  const item = (key: string) => ({ connectionId: "mock", externalId: key, key });
-  const move = (key: string, to: string): Intent => ({ type: "transition", item: item(key), to });
-  const note = (text: string): Intent => ({ type: "comment", item: item("CA-1"), body: { blocks: [{ type: "paragraph", content: [{ type: "text", text, marks: [] }] }] } });
-  const store = () => {
-    const lines: [string, string, string, string | undefined][] = [];
-    const proposals = new MockProposals(async () => []);
-    proposals.audit = (p, actor, action, detail) => void lines.push([p.id, actor, action, detail]);
-    return { proposals, lines };
-  };
-  const runOrigin = (workstream: string) => ({ type: "run" as const, runId: "r1", shortId: null, workstream });
-
-  it("a newer Pip move of the same ticket in the workstream retires the older one, and says so in the audit", () => {
-    const { proposals, lines } = store();
-    const old = proposals.draft(move("CA-1", "ca-copy"), "Copy", "q1", "ws-1");
-    const other = proposals.draft(move("CA-2", "ca-copy"), "Copy", "q1", "ws-1");
-    const elsewhere = proposals.draft(move("CA-1", "ca-copy"), "Copy", "q1", "ws-2");
-    const comment = proposals.draft(note("one"), null, "q1", "ws-1");
-    const byHand = proposals.draft(move("CA-1", "ca-qa"), "QA", "q0");
-    const next = proposals.draft(move("CA-1", "ca-qa"), "QA", "q2", "ws-1");
-    proposals.draft(note("two"), null, "q2", "ws-1");
-    const back = proposals.get(old.id)!;
-    expect(back.state).toEqual({ type: "retired", reason: "Replaced by a newer draft" });
-    expect(back.supersededBy).toBe(next.id);
-    expect(lines).toContainEqual([old.id, "pip", "draft_superseded", next.id]);
-    for (const p of [other, elsewhere, comment, byHand]) expect(proposals.get(p.id)!.state.type).toBe("pending");
-  });
-
-  it("a draft the person edited refuses Pip's and keeps an agent's alongside; a run's plan is never replaced by Pip", async () => {
-    const { proposals } = store();
-    const old = proposals.draft({ type: "subtasks", parent: item("CA-1"), summaries: ["a"] }, null, "q", "ws-1");
-    await proposals.edit(old.id, { type: "subtasks", summaries: ["mine"] });
-    expect(() => proposals.draft({ type: "subtasks", parent: item("CA-1"), summaries: ["b"] }, null, "q", "ws-1")).toThrow(`the user edited draft ${old.id} of the same kind on CA-1`);
-    const agent = proposals.fromRun({ type: "subtasks", parent: item("CA-1"), summaries: ["c"] }, null, runOrigin("ws-1"));
-    expect([proposals.get(old.id)!.state.type, agent.state.type]).toEqual(["pending", "pending"]);
-    expect(proposals.list().length).toBe(2);
-
-    const plan = proposals.fromRun({ type: "rewrite", item: item("CA-2"), title: null, body: bodyChange({ blocks: [] }, "## Gossamr Plan\n\n1. Do it"), flattened: [] }, null, runOrigin("ws-1"));
-    expect(() => proposals.draft({ type: "rewrite", item: item("CA-2"), title: { from: "Old", to: "New" }, body: bodyChange({ blocks: [] }, "Pip's description"), flattened: [] }, null, "q", "ws-1")).toThrow("only the user changes it");
-    expect(proposals.get(plan.id)!.state.type).toBe("pending");
-    // A title change leaves the plan alone, so both stay.
-    const title = proposals.draft({ type: "rewrite", item: item("CA-2"), title: { from: "Old", to: "New" }, body: null, flattened: [] }, null, "q", "ws-1");
-    expect([proposals.get(plan.id)!.state.type, title.state.type]).toEqual(["pending", "pending"]);
-  });
-
-  it("refuses Pip's ninth waiting draft in a workstream without storing it, never an agent's, and a replacement frees a slot", () => {
-    const { proposals } = store();
-    for (let n = 1; n < 8; n++) proposals.draft(note(`c${n}`), null, "q", "ws-1");
-    const old = proposals.draft(move("CA-1", "ca-copy"), "Copy", "q", "ws-1");
-    const next = proposals.draft(move("CA-1", "ca-qa"), "QA", "q", "ws-1");
-    expect(proposals.get(old.id)!.supersededBy).toBe(next.id);
-    const before = proposals.list().length;
-    expect(() => proposals.draft(note("ninth"), null, "q", "ws-1")).toThrow("Workstream ws-1 already has 8 drafts waiting for the user. Don't draft more until they decide some; revise one with revise_proposal or withdraw one with retire_proposal.");
-    expect(proposals.list().length).toBe(before);
-    expect(proposals.fromRun(note("found"), null, runOrigin("ws-1")).state.type).toBe("pending");
-    expect(proposals.draft(note("elsewhere"), null, "q").state.type).toBe("pending");
-  });
-
-  it("approving one move retires the other waiting moves of that ticket, whoever made them", async () => {
-    const backend = new MockBackend();
-    const key = "CA-401";
-    const ticket = itemRef(key);
-    const mine = await backend.proposalsCreate({ type: "transition", item: ticket, to: statusId("CA", "Copy") }, "Copy");
-    const pips = backend.proposals.draft({ type: "transition", item: ticket, to: statusId("CA", "QA") }, "QA", "q");
-    const other = backend.proposals.draft({ type: "comment", item: ticket, body: { blocks: [] } });
-    const done = await backend.proposalsApprove(pips.id);
-    expect([done.state.type, done.error]).toEqual(["applied", null]);
-    expect(backend.proposals.get(mine.id)!.state).toEqual({ type: "retired", reason: `Another move of ${key} was approved` });
-    expect(backend.proposals.get(other.id)!.state.type).toBe("pending");
-    expect(backend.proposals.writes.filter((w) => w.intent.type === "transition" && w.intent.item.key === key)).toHaveLength(1);
-  });
-});
-
-describe("mock draft hygiene in Pip's words", () => {
-  it("uses the backend's words and cap", () => {
-    const rust = readFileSync(new URL("../../src-tauri/src/proposals.rs", import.meta.url), "utf8");
-    expect(/pub const WORKSTREAM_PENDING_CAP: usize = (\d+);/.exec(rust)?.[1]).toBe(String(WORKSTREAM_PENDING_CAP));
-    expect(/pub const REPLACED_REASON: &str = "([^"]*)";/.exec(rust)?.[1]).toBe(REPLACED_REASON);
-    expect(rust.replace(/"\s*\n\s*"/g, "")).toContain(PLAN_IS_THE_USERS);
-    expect(rust).toContain("drafts waiting for the user. Don't draft more until they decide some; revise one with revise_proposal or withdraw one with retire_proposal.");
-    expect(rust).toContain('format!("Another move of {} was approved", item.key)');
-  });
-
-  it("has the scripted Pip say why a draft was refused, as a real turn reports a tool's refusal", async () => {
-    const b = new MockBackend({ runs: { seed: "empty" } });
-    const ticket = { connectionId: "mock", externalId: "CA-401", key: "CA-401" };
-    const ws = await b.workstreamsOpen(ticket);
-    for (let n = 0; n < WORKSTREAM_PENDING_CAP; n++) b.proposals.draft({ type: "comment", item: ticket, body: { blocks: [] } }, null, "q", ws.id);
-    mockPipTurns.begin(`ws:${ws.id}`, "ws-capped", "move it", { imageCount: 0 });
-    let said = "";
-    const stop = mockPipEvents.on((id, e) => {
-      if (id === "ws-capped" && e.type === "text") said += e.text;
-    });
-    await mockAsk({ requestId: "ws-capped", prompt: "move it to QA", context: { screen: "board", item: ticket, selection: [] } as unknown as ScreenContext, conversation: `ws:${ws.id}` } as AskRequest, b, 0);
-    stop();
-    // In the person's words: no workstream id or tool names.
-    expect(said).toBe("I couldn't draft that: this workstream already has 8 drafts waiting for you. Decide some and I'll draft more");
-    expect(b.proposals.list().filter((p) => p.intent.type === "transition")).toEqual([]);
-  });
-});
-
 describe("the person's edit of a review draft", () => {
   const at = (line: number, body: string) => ({ path: "src/consumer/retry.ts", line, side: "RIGHT" as const, body });
   const review: Intent = { type: "githubReview", connectionId: "github:sample", item: ref, runId: "run-1", repo: "acme/webshop", number: 218, commitSha: "a1b2c3d4e5f6", summary: "Gossamr review of #218.", comments: [at(42, "No backoff."), at(17, "Nit: name.")] };
@@ -279,82 +173,5 @@ describe("the person's edit of a review draft", () => {
     await expect(proposals.edit(p.id, { type: "githubReview", comments: [at(42, " ")] })).rejects.toThrow("comment can't be empty");
     expect(proposals.get(p.id)!.intent).toEqual(review);
     expect(proposals.get(p.id)!.revisions).toEqual([]);
-  });
-});
-
-describe("one review of a pull request waiting at a time, as tidy_reviews in proposals.rs", () => {
-  const review = (runId: string, repo = "acme/webshop", number = 218, connectionId = "github:sample"): Intent => ({ type: "githubReview", connectionId, item: null, runId, repo, number, commitSha: "a1b2c3d4e5f6", summary: "S.", comments: [] });
-  const origin = (runId: string, workstream?: string) => ({ type: "run" as const, runId, shortId: null, ...(workstream ? { workstream } : {}) });
-  const store = () => {
-    const lines: [string, string, string, string | undefined, string | null | undefined][] = [];
-    const proposals = new MockProposals(async () => []);
-    proposals.audit = (p, actor, action, detail, workstream) => void lines.push([p.id, actor, action, detail, workstream]);
-    return { proposals, lines };
-  };
-
-  it("replaces the older pending review of the same pull request in any workstream or none, and leaves other pull requests alone", () => {
-    const { proposals, lines } = store();
-    const w1 = proposals.fromRun(review("r1"), null, origin("r1", "ws-1"));
-    const w2 = proposals.fromRun(review("r2"), null, origin("r2", "ws-2"));
-    expect(proposals.get(w1.id)).toMatchObject({ state: { type: "retired", reason: REPLACED_REASON }, supersededBy: w2.id });
-    const none = proposals.fromRun(review("r3", "ACME/Webshop"), null, origin("r3"));
-    expect(proposals.get(w2.id)?.supersededBy).toBe(none.id);
-    const other = proposals.fromRun(review("r4", "acme/webshop", 219), null, origin("r4", "ws-1"));
-    const elsewhere = proposals.fromRun(review("r5", "acme/webshop", 218, "github:other"), null, origin("r5", "ws-1"));
-    const newest = proposals.fromRun(review("r6"), null, origin("r6", "ws-1"));
-    expect(proposals.get(none.id)?.supersededBy).toBe(newest.id);
-    expect([other, elsewhere, newest].map((p) => proposals.get(p.id)!.state.type)).toEqual(["pending", "pending", "pending"]);
-    const pending = proposals.list({ states: ["pending"] }).filter((p) => p.intent.type === "githubReview" && p.intent.number === 218 && p.intent.connectionId === "github:sample");
-    expect(pending.map((p) => p.id)).toEqual([newest.id]);
-    // Said in the older draft's workstream, or in the new one's for an older draft in none.
-    expect(lines.filter((l) => l[2] === "draft_superseded")).toEqual([
-      [w1.id, "run", "draft_superseded", w2.id, undefined],
-      [w2.id, "run", "draft_superseded", none.id, undefined],
-      [none.id, "run", "draft_superseded", newest.id, "ws-1"],
-    ]);
-  });
-
-  it("keeps one the person edited beside the new one, says so, and the new one's card can tell", async () => {
-    const { proposals, lines } = store();
-    const mine = proposals.fromRun(review("r1"), null, origin("r1", "ws-1"));
-    await proposals.edit(mine.id, { type: "githubReview", summary: "Mine." });
-    const next = proposals.fromRun(review("r2"), null, origin("r2", "ws-1"));
-    expect(proposals.get(mine.id)).toMatchObject({ state: { type: "pending" } });
-    expect(proposals.get(mine.id)?.supersededBy).toBeFalsy();
-    expect(lines).toContainEqual([mine.id, "run", KEPT_EDITED, next.id, undefined]);
-    expect(keptOlderReviews(next, proposals.list()).map((k) => [k.proposal.id, k.why])).toEqual([[mine.id, KEPT_EDITED]]);
-    expect(keptOlderReviews(proposals.get(mine.id)!, proposals.list())).toEqual([]);
-  });
-
-  it("keeps one that may be on GitHub, never touches one posted or posting, and replaces Pip's unedited revision", () => {
-    const made = (id: string, over: Partial<Proposal> = {}): Proposal =>
-      ({ id, createdAt: "2026-10-01T10:00:00Z", updatedAt: "2026-10-01T10:00:00Z", origin: origin(id, "ws-1"), createdBy: "agent", intent: review(id), label: null, basis: null, state: { type: "pending" }, revisions: [], created: [], error: null, run: null, ...over }) as Proposal;
-    const newer = made("new", { createdAt: "2026-10-01T11:00:00Z" });
-    const unsure = made("unsure", { maybePosted: { at: "2026-10-01T10:30:00Z", commitSha: "a1b2c3d4e5f6", summary: "S.", checkedAt: null } });
-    expect(reviewSupersession(unsure, newer)).toBe(KEPT_MAYBE_POSTED);
-    expect(reviewSupersession(made("posted", { state: { type: "applied" } }), newer)).toBeNull();
-    expect(reviewSupersession(made("posting", { state: { type: "applying" } }), newer)).toBeNull();
-    expect(reviewSupersession(made("pips", { revisions: [{ at: "2026-10-01T10:10:00Z", note: "Revised by Pip", intent: review("pips") }] }), newer)).toBe("supersede");
-    expect(reviewSupersession(made("other", { intent: review("other", "acme/webshop", 219) }), newer)).toBeNull();
-    expect(keptOlderReviews(newer, [unsure, made("posted", { state: { type: "applied" } }), newer]).map((k) => k.why)).toEqual([KEPT_MAYBE_POSTED]);
-  });
-
-  it("replaces a run comment only with one of a run of the same kind that can be found", () => {
-    const made = (id: string, runId: string): Proposal =>
-      ({ id, createdAt: "2026-10-01T10:00:00Z", updatedAt: "2026-10-01T10:00:00Z", origin: { type: "run", runId, shortId: null, workstream: "ws-1" }, createdBy: "agent", intent: comment, label: null, basis: null, state: { type: "pending" }, revisions: [], created: [], error: null, run: null, supersededBy: null }) as unknown as Proposal;
-    const [older, newer] = [made("a", "run-a"), made("b", "run-b")];
-    const kinds = (known: Record<string, string>) => (id: string) => known[id] ?? null;
-    expect(runCommentSupersession(older, newer, kinds({ "run-a": "review", "run-b": "review" }))).toBe("supersede");
-    expect(runCommentSupersession(older, newer, kinds({ "run-a": "investigate", "run-b": "review" }))).toBeNull();
-    expect(runCommentSupersession(older, newer, kinds({ "run-b": "review" }))).toBeNull();
-    expect(runCommentSupersession(older, newer, kinds({ "run-a": "review" }))).toBeNull();
-  });
-
-  it("keeps a run comment whose post failed and is back in Pending", () => {
-    const made = (id: string, runId: string, error: string | null): Proposal =>
-      ({ id, createdAt: "2026-10-01T10:00:00Z", updatedAt: "2026-10-01T10:00:00Z", origin: { type: "run", runId, shortId: null, workstream: "ws-1" }, createdBy: "agent", intent: comment, label: null, basis: null, state: { type: "pending" }, revisions: [], created: [], error, run: null, supersededBy: null }) as unknown as Proposal;
-    const kinds = () => "review" as string;
-    expect(runCommentSupersession(made("a", "run-a", null), made("b", "run-b", null), kinds)).toBe("supersede");
-    expect(runCommentSupersession(made("a", "run-a", "Jira is down"), made("b", "run-b", null), kinds)).toBeNull();
   });
 });

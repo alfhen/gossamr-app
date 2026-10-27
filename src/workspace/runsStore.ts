@@ -1,16 +1,13 @@
 import { create } from "zustand";
 import type { Backend } from "../backend/types";
-import { targetOf } from "../lib/proposals";
 import { labelsByRun } from "../lib/workstreamStage";
-import type { CleanupResult, ClearFilter, DeleteResult, ItemRef, PlanComment, Proposal, Run } from "../types";
+import type { CleanupResult, ClearFilter, DeleteResult, ItemRef, Run } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { clearSentence } from "../lib/archiveRuns";
 import { INSTALL_URL, failureHelp, type FailureAct } from "./failureHelp";
 import { NO_FILTERS, agentGroups, stepRun, stopAllText, type AgentFilters, type NeedsScope } from "./agentsLogic";
-import { showDraft } from "./draftTicket";
 import { openTicketByKey, showMe } from "./jump";
 import { forgetSettledAnswers } from "./keptAnswers";
-import { planCommentMessage } from "./runSheetLogic";
 import { readStored, writeStored } from "./storage";
 import { messageOf, useToasts } from "./toasts";
 import { usePrefs } from "./prefs";
@@ -110,16 +107,6 @@ interface RunsState {
   /** Puts run `id` back in Needs you if it is dismissed, leaving every other dismissal as it is. */
   undismiss(id: string, before?: ReadonlySet<string>): void;
   attach(id: string): Promise<void>;
-  /** Drafts a comment from the run's result and takes the person to it. Nothing is posted. */
-  draftComment(id: string): Promise<void>;
-  /** Drafts the whole plan of a plan run as a comment, and says when it had to be cut to fit. */
-  draftPlanComment(id: string): Promise<void>;
-  /** Drafts the ticket's description with the plan added and opens the diff. Nothing is written. */
-  draftPlanDescription(id: string): Promise<void>;
-  /** Drafts a link saying the run's ticket is blocked by `blockerKey` and takes the person to it. Nothing is posted. */
-  draftBlocker(id: string, blockerKey: string): Promise<void>;
-  /** Drafts a new ticket from a finished run that has no ticket and opens the draft. Nothing is created. */
-  draftTicket(id: string): Promise<void>;
   stopAll(): Promise<void>;
   /** Removes a finished run's worktree. Null when the call failed, which is shown as a message. */
   cleanup(id: string): Promise<CleanupResult | null>;
@@ -186,28 +173,8 @@ function announceFailedLaunches(get: () => RunsState, set: (patch: Partial<RunsS
   set({ launching: still });
 }
 
-const READY = "Draft ready. Nothing is posted until you approve it.";
 
 const openDraftsOn = (target: ItemRef) => showMe(target, { peek: true }) || void openTicketByKey(target.key);
-
-/** Makes a draft from a run and shows it where it is approved: on the ticket it is about. */
-async function draftFromRun(get: () => RunsState, set: (patch: Partial<RunsState>) => void, id: string, what: "comment" | "link" | "description", make: (backend: Backend) => Promise<Proposal>, ready: () => string = () => READY) {
-  const { backend, drafting } = get();
-  if (!backend || drafting) return;
-  set({ drafting: id });
-  try {
-    const draft = await make(backend);
-    await useWorkspace.getState().refreshProposals();
-    const target = targetOf(draft.intent);
-    get().closeSheet();
-    useToasts.getState().push(ready(), "info", target ? { label: `Open ${target.key}`, run: () => openDraftsOn(target) } : undefined);
-    if (target) openDraftsOn(target);
-  } catch (e) {
-    useToasts.getState().push(`Couldn't draft the ${what === "link" ? "blocker" : what}: ${messageOf(e)}`);
-  } finally {
-    set({ drafting: null });
-  }
-}
 
 /** The toast for archived runs, with an Undo that brings them all back. */
 function offerRestore(get: () => RunsState, ids: readonly string[], text: string) {
@@ -224,7 +191,6 @@ function offerRestore(get: () => RunsState, ids: readonly string[], text: string
   });
 }
 
-const TICKET_READY = "Draft ticket ready. Nothing is created until you approve it.";
 
 let stop: (() => void) | null = null;
 let seq = 0;
@@ -441,51 +407,6 @@ export const useRuns = create<RunsState>((set, get) => ({
       await backend.runsAttach(id);
     } catch (e) {
       useToasts.getState().push(`Couldn't open Terminal: ${messageOf(e)}`);
-    }
-  },
-
-  async draftComment(id) {
-    await draftFromRun(get, set, id, "comment", (backend) => backend.runsDraftComment(id));
-  },
-
-  async draftPlanComment(id) {
-    let made: PlanComment | null = null;
-    const message = () => (made ? planCommentMessage(made) : READY);
-    await draftFromRun(
-      get,
-      set,
-      id,
-      "comment",
-      async (backend) => {
-        made = await backend.runsDraftPlanComment(id);
-        return made.proposal;
-      },
-      message,
-    );
-  },
-
-  async draftPlanDescription(id) {
-    await draftFromRun(get, set, id, "description", (backend) => backend.runsDraftPlanDescription(id), () => "Description update ready. Nothing is written to Jira until you approve it.");
-  },
-
-  async draftBlocker(id, blockerKey) {
-    await draftFromRun(get, set, id, "link", (backend) => backend.runsDraftBlocker(id, blockerKey));
-  },
-
-  async draftTicket(id) {
-    const { backend, drafting } = get();
-    if (!backend || drafting) return;
-    set({ drafting: id });
-    try {
-      const draft = await backend.runsDraftTicket(id);
-      await useWorkspace.getState().refreshProposals();
-      get().closeSheet();
-      useToasts.getState().push(TICKET_READY, "info", { label: "Open", run: () => showDraft(draft.id) });
-      showDraft(draft.id);
-    } catch (e) {
-      useToasts.getState().push(`Couldn't draft the ticket: ${messageOf(e)}`);
-    } finally {
-      set({ drafting: null });
     }
   },
 

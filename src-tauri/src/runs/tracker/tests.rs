@@ -78,7 +78,7 @@ async fn a_run_follows_its_session_from_working_to_a_permission_prompt_and_back_
     assert_eq!((done.summary.as_deref(), done.result_complete), (Some(SUMMARY), true));
     assert_eq!((done.tokens, done.branch.as_deref()), (Some(578_000), Some("worktree-eng-1-fix-cart-0001")));
     assert!(done.ended_at.is_some());
-    assert_eq!(rig.noticed().last(), Some(&(Attention::Drafted, RunState::Done)));
+    assert_eq!(rig.noticed().last(), Some(&(Attention::Done, RunState::Done)));
     assert!(rig.svc.index.live().is_empty(), "a finished run leaves the index's live list");
     assert!(!rig.changes.lock().unwrap().is_empty());
 
@@ -451,7 +451,7 @@ async fn comment_drafts(rig: &Rig) -> Vec<crate::domain::Proposal> {
 }
 
 #[tokio::test]
-async fn an_answer_over_the_limit_keeps_its_closing_note_and_the_draft_is_made_from_it() {
+async fn an_answer_over_the_limit_is_cut_as_prose_without_preserving_draft_headings() {
     let (rig, run) = launched().await;
     rig.poll().await;
     let long = format!("{}\n\nFor Jira:\nClose it as a duplicate of CA-9.", "Findings, at length. ".repeat(1_500));
@@ -459,253 +459,37 @@ async fn an_answer_over_the_limit_keeps_its_closing_note_and_the_draft_is_made_f
     finish_with(&rig, &run, &long);
     rig.poll().await;
     let done = rig.get(&run).await;
-    let result = done.result.as_deref().unwrap();
-    assert!(result.chars().count() <= RESULT_KEPT && result.ends_with("For Jira:\nClose it as a duplicate of CA-9."), "{}", &result[result.len() - 80..]);
+    assert_eq!(done.result.as_deref(), Some(long.chars().take(RESULT_KEPT).collect::<String>().as_str()));
     assert!(done.result_complete);
-    let drafts = comment_drafts(&rig).await;
-    let [draft] = drafts.as_slice() else { panic!("{drafts:?}") };
-    assert!(matches!(&draft.intent, crate::domain::Intent::Comment { body, .. } if body.plain_text().contains("Close it as a duplicate of CA-9.")), "the note survived the cut");
-}
-
-#[tokio::test]
-async fn a_finished_run_with_a_for_jira_section_leaves_one_comment_draft_and_a_restart_does_not_make_another() {
-    let (rig, run) = launched().await;
-    rig.poll().await;
-    finish_with(&rig, &run, "Found the cause.\n\nFor Jira:\nThe consumer retries without a backoff.");
-    rig.poll().await;
-    let drafts = comment_drafts(&rig).await;
-    let [draft] = drafts.as_slice() else { panic!("{drafts:?}") };
-    assert_eq!((draft.state.clone(), draft.created_by), (crate::domain::ProposalState::Pending, crate::domain::CreatedBy::Agent));
-    assert!(matches!(&draft.origin, crate::domain::Origin::Run { run_id, .. } if *run_id == run.id));
-    assert!(matches!(&draft.intent, crate::domain::Intent::Comment { body, .. } if body.plain_text().contains("The consumer retries without a backoff.")));
-    assert!(rig.fx.tracker.intents().is_empty(), "a draft writes nothing to Jira");
-    assert_eq!(rig.drafted.lock().unwrap().len(), 1);
-    assert_eq!(rig.noticed().last(), Some(&(Attention::Drafted, RunState::Done)));
-    assert_eq!(notice_text(&rig.get(&run).await, Attention::Drafted).title, "Draft ready on CA-1");
-
-    rig.poll().await;
-    assert_eq!(comment_drafts(&rig).await.len(), 1);
-    rig.fx.core.skip_proposal(&draft.id).await.unwrap();
-    rig.set(&run, |r| r.state = RunState::Working).await;
-    rig.session(&run, working);
-    rig.poll().await;
-    finish_with(&rig, &run, "Found the cause.\n\nFor Jira:\nThe consumer retries without a backoff.");
-    rig.poll().await;
-    assert_eq!(comment_drafts(&rig).await.len(), 1, "a skipped draft is not made again when the run finishes again");
-    assert_eq!(rig.noticed().last(), Some(&(Attention::Done, RunState::Done)));
-}
-
-#[tokio::test]
-async fn a_result_without_a_for_jira_section_is_not_drafted() {
-    let (rig, run) = launched().await;
-    rig.poll().await;
-    finish_with(&rig, &run, "It is the rounding, nothing marked for Jira.");
-    rig.poll().await;
     assert!(comment_drafts(&rig).await.is_empty());
-    assert!(rig.drafted.lock().unwrap().is_empty());
-    assert_eq!(rig.noticed().last(), Some(&(Attention::Done, RunState::Done)));
 }
 
 #[tokio::test]
-async fn turning_the_setting_off_stops_the_automatic_draft() {
-    let (rig, run) = launched().await;
-    rig.svc.set_settings(crate::config::AgentSettings { draft_on_finish: false, ..rig.svc.settings() }).unwrap();
-    rig.poll().await;
-    finish_with(&rig, &run, "For Jira: done.");
-    rig.poll().await;
-    assert!(comment_drafts(&rig).await.is_empty());
-    assert_eq!(rig.noticed().last(), Some(&(Attention::Done, RunState::Done)));
+async fn finishing_any_role_leaves_the_report_for_pip_without_drafting_or_writing() {
+    for role in ["investigate", "triage", "plan", "build", "review", "verify", "custom-role"] {
+        let rig = ready().await;
+        let run = rig.launched_as(1, role).await;
+        rig.poll().await;
+        let answer = "# Plan\nRound once.\n\nFor Jira:\nFound the cause.\n\nSubtasks:\n- One\n- Two\n- Three\n\nVerdict: pass";
+        finish_with(&rig, &run, answer);
+        rig.poll().await;
+        rig.poll().await;
+        assert!(rig.fx.core.proposals(&crate::domain::ProposalQuery::default()).await.unwrap().is_empty(), "{role}");
+        assert!(rig.fx.tracker.intents().is_empty());
+        assert_eq!(rig.fx.core.run_outcome(&run.id).await.unwrap().note.as_deref(), Some(answer));
+        assert_eq!(rig.noticed().last(), Some(&(Attention::Done, RunState::Done)));
+    }
 }
-
-async fn ticket_drafts(rig: &Rig) -> Vec<crate::domain::Proposal> {
-    let all = rig.fx.core.proposals(&crate::domain::ProposalQuery::default()).await.unwrap();
-    all.into_iter().filter(|p| matches!(p.intent, crate::domain::Intent::Create { .. })).collect()
-}
-
-const TICKET_ANSWER: &str = "I read the consumer.\n\nNew ticket:\nTitle: Add a backoff to the order consumer\nKind: bug\nIt retries in a tight loop.";
 
 #[tokio::test]
-async fn a_finished_investigation_with_no_ticket_leaves_one_draft_ticket_and_a_restart_does_not_make_another() {
+async fn a_ticketless_report_never_creates_an_automatic_ticket_draft() {
     let rig = ready().await;
     let run = rig.launched_ticketless(1).await;
     rig.poll().await;
-    finish_with(&rig, &run, TICKET_ANSWER);
+    finish_with(&rig, &run, "New ticket:\nTitle: Add backoff\nKind: bug\nA description");
     rig.poll().await;
-    let drafts = ticket_drafts(&rig).await;
-    let [draft] = drafts.as_slice() else { panic!("{drafts:?}") };
-    assert_eq!((draft.state.clone(), draft.created_by), (crate::domain::ProposalState::Pending, crate::domain::CreatedBy::Agent));
-    assert!(matches!(&draft.origin, crate::domain::Origin::Run { run_id, .. } if *run_id == run.id));
-    assert!(matches!(&draft.intent, crate::domain::Intent::Create { fields, .. } if fields.title == "Add a backoff to the order consumer"));
-    assert!(comment_drafts(&rig).await.is_empty() && rig.fx.tracker.intents().is_empty(), "nothing is posted or created");
-    assert_eq!(rig.drafted.lock().unwrap().len(), 1);
-    assert_eq!(rig.noticed().last(), Some(&(Attention::DraftedTicket, RunState::Done)));
-    assert_eq!(notice_text(&rig.get(&run).await, Attention::DraftedTicket).title, "Draft ticket ready");
-
-    rig.fx.core.skip_proposal(&draft.id).await.unwrap();
-    rig.set(&run, |r| r.state = RunState::Working).await;
-    rig.session(&run, working);
-    rig.poll().await;
-    finish_with(&rig, &run, TICKET_ANSWER);
-    rig.poll().await;
-    assert_eq!(ticket_drafts(&rig).await.len(), 1, "a skipped draft is not made again when the run finishes again");
-    assert_eq!(rig.noticed().last(), Some(&(Attention::Done, RunState::Done)));
-}
-
-#[tokio::test]
-async fn an_investigation_with_no_ticket_and_no_section_is_not_drafted_and_the_setting_applies_too() {
-    let rig = ready().await;
-    let run = rig.launched_ticketless(1).await;
-    rig.poll().await;
-    finish_with(&rig, &run, "It is the rounding, nothing marked.");
-    rig.poll().await;
-    assert!(ticket_drafts(&rig).await.is_empty() && rig.drafted.lock().unwrap().is_empty());
-    assert_eq!(rig.noticed().last(), Some(&(Attention::Done, RunState::Done)));
-
-    let rig = ready().await;
-    rig.svc.set_settings(crate::config::AgentSettings { draft_on_finish: false, ..rig.svc.settings() }).unwrap();
-    let run = rig.launched_ticketless(1).await;
-    rig.poll().await;
-    finish_with(&rig, &run, TICKET_ANSWER);
-    rig.poll().await;
-    assert!(ticket_drafts(&rig).await.is_empty());
-}
-
-async fn rewrite_drafts(rig: &Rig) -> Vec<crate::domain::Proposal> {
-    let all = rig.fx.core.proposals(&crate::domain::ProposalQuery::default()).await.unwrap();
-    all.into_iter().filter(|p| matches!(p.intent, crate::domain::Intent::Rewrite { .. })).collect()
-}
-
-async fn subtask_drafts(rig: &Rig) -> Vec<crate::domain::Proposal> {
-    let all = rig.fx.core.proposals(&crate::domain::ProposalQuery::default()).await.unwrap();
-    all.into_iter().filter(|p| matches!(p.intent, crate::domain::Intent::Subtasks { .. })).collect()
-}
-
-const BREAKDOWN_ANSWER: &str = "Sizing: large.\n\nSubtasks:\n- Add a backoff to the consumer\n- Report the consumer lag\n- Survive a restart\n\nFor Jira:\nToo big for one piece; a breakdown is proposed below.";
-
-#[tokio::test]
-async fn a_triage_that_proposes_a_breakdown_leaves_subtasks_beside_its_description_update_and_a_restart_does_not_make_another() {
-    let rig = ready().await;
-    let run = rig.launched_as(1, crate::domain::ResultKind::Triage).await;
-    rig.poll().await;
-    finish_with(&rig, &run, BREAKDOWN_ANSWER);
-    rig.poll().await;
-    let drafts = subtask_drafts(&rig).await;
-    let [draft] = drafts.as_slice() else { panic!("{drafts:?}") };
-    assert_eq!((draft.state.clone(), draft.created_by), (crate::domain::ProposalState::Pending, crate::domain::CreatedBy::Agent));
-    assert!(matches!(&draft.origin, crate::domain::Origin::Run { run_id, .. } if *run_id == run.id));
-    assert!(matches!(&draft.intent, crate::domain::Intent::Subtasks { parent, summaries } if parent.key == "CA-1" && summaries == &["Add a backoff to the consumer", "Report the consumer lag", "Survive a restart"]));
-    assert!(comment_drafts(&rig).await.is_empty(), "a triage's note goes to the description, not to a comment");
-    let updates = rewrite_drafts(&rig).await;
-    assert!(matches!(updates.as_slice(), [update] if update.is_triage_description()), "the status note is still drafted, as the description's Triage section: {updates:?}");
-    assert!(rig.fx.tracker.intents().is_empty(), "nothing is created or posted");
-    assert_eq!(rig.drafted.lock().unwrap().len(), 1);
-    assert_eq!(rig.noticed().last(), Some(&(Attention::Breakdown, RunState::Done)));
-    assert_eq!(notice_text(&rig.get(&run).await, Attention::Breakdown).title, "Breakdown proposed on CA-1");
-
-    rig.fx.core.skip_proposal(&draft.id).await.unwrap();
-    rig.fx.core.skip_proposal(&rewrite_drafts(&rig).await[0].id).await.unwrap();
-    rig.set(&run, |r| r.state = RunState::Working).await;
-    rig.session(&run, working);
-    rig.poll().await;
-    finish_with(&rig, &run, BREAKDOWN_ANSWER);
-    rig.poll().await;
-    assert_eq!(subtask_drafts(&rig).await.len(), 1, "a skipped breakdown is not proposed again when the run finishes again");
-    assert_eq!(rig.noticed().last(), Some(&(Attention::Done, RunState::Done)));
-}
-
-#[tokio::test]
-async fn only_a_triage_with_a_subtasks_section_proposes_one_and_the_setting_applies() {
-    let rig = ready().await;
-    let plain = rig.launched_as(1, crate::domain::ResultKind::Triage).await;
-    rig.poll().await;
-    finish_with(&rig, &plain, "It fits as one piece.\n\nFor Jira:\nSmall; do it as one ticket.");
-    rig.poll().await;
-    assert!(subtask_drafts(&rig).await.is_empty());
-    assert_eq!(rig.noticed().last(), Some(&(Attention::Drafted, RunState::Done)));
-
-    let rig = ready().await;
-    let investigate = rig.launched(1).await;
-    rig.poll().await;
-    finish_with(&rig, &investigate, BREAKDOWN_ANSWER);
-    rig.poll().await;
-    assert!(subtask_drafts(&rig).await.is_empty(), "a breakdown is Triage's");
-
-    let rig = ready().await;
-    rig.svc.set_settings(crate::config::AgentSettings { draft_on_finish: false, ..rig.svc.settings() }).unwrap();
-    let triage = rig.launched_as(1, crate::domain::ResultKind::Triage).await;
-    rig.poll().await;
-    finish_with(&rig, &triage, BREAKDOWN_ANSWER);
-    rig.poll().await;
-    assert!(subtask_drafts(&rig).await.is_empty() && comment_drafts(&rig).await.is_empty());
-}
-
-async fn description_drafts(rig: &Rig) -> Vec<crate::domain::Proposal> {
-    let all = rig.fx.core.proposals(&crate::domain::ProposalQuery::default()).await.unwrap();
-    all.into_iter().filter(|p| matches!(p.intent, crate::domain::Intent::Rewrite { .. })).collect()
-}
-
-const PLAN_ANSWER: &str = "## Approach\n\nRound once.\n\n## Steps\n\n1. Fix cart.rs\n\nFor Jira:\nPlan attached to the run.";
-const SECOND_PLAN_ANSWER: &str = "## Approach\n\nRound twice.\n\nFor Jira:\nPlan attached to the run, revised.";
-
-#[tokio::test]
-async fn a_plan_that_finishes_leaves_its_status_comment_and_a_description_update_and_says_so_once() {
-    let rig = ready().await;
-    let run = rig.launched_as(1, crate::domain::ResultKind::Plan).await;
-    rig.poll().await;
-    finish_with(&rig, &run, PLAN_ANSWER);
-    rig.poll().await;
-    let drafts = description_drafts(&rig).await;
-    let [draft] = drafts.as_slice() else { panic!("{drafts:?}") };
-    assert!(matches!(&draft.origin, crate::domain::Origin::Run { run_id, .. } if *run_id == run.id));
-    assert_eq!(draft.created_by, crate::domain::CreatedBy::Agent);
-    assert!(matches!(&draft.intent, crate::domain::Intent::Rewrite { body: Some(b), .. } if b.to.to_markdown().contains("<summary>Gossamr Plan</summary>") && !b.to.to_markdown().contains("## Gossamr Plan") && b.to.to_markdown().contains("Round once.") && !b.to.to_markdown().contains("For Jira")));
-    assert_eq!(comment_drafts(&rig).await.len(), 1, "the status comment is still drafted");
-    assert!(rig.fx.tracker.intents().is_empty(), "nothing is written");
-    assert_eq!(rig.drafted.lock().unwrap().len(), 1);
-    assert_eq!(rig.noticed(), [(Attention::PlanDrafted, RunState::Done)]);
-    let notice = notice_text(&rig.get(&run).await, Attention::PlanDrafted);
-    assert_eq!((notice.title.as_str(), notice.body.starts_with("Description update ready")), ("Plan finished on CA-1", true));
-    rig.poll().await;
-    assert_eq!(description_drafts(&rig).await.len(), 1, "polling again makes no second");
-}
-
-#[tokio::test]
-async fn a_continued_plan_that_finishes_again_replaces_the_waiting_description_update() {
-    let rig = ready().await;
-    let run = rig.launched_as(1, crate::domain::ResultKind::Plan).await;
-    rig.poll().await;
-    finish_with(&rig, &run, PLAN_ANSWER);
-    rig.poll().await;
-    rig.set(&run, |r| r.state = RunState::Working).await;
-    rig.session(&run, working);
-    rig.poll().await;
-    finish_with(&rig, &run, SECOND_PLAN_ANSWER);
-    rig.poll().await;
-    let drafts = description_drafts(&rig).await;
-    let waiting: Vec<_> = drafts.iter().filter(|p| p.state == crate::domain::ProposalState::Pending).collect();
-    let [now] = waiting.as_slice() else { panic!("{drafts:?}") };
-    assert!(matches!(&now.intent, crate::domain::Intent::Rewrite { body: Some(b), .. } if b.to.to_markdown().contains("Round twice.") && !b.to.to_markdown().contains("Round once.")));
-    assert_eq!(drafts.len(), 2, "the first was retired, not duplicated");
-}
-
-#[tokio::test]
-async fn a_plan_on_a_tracker_that_cannot_edit_text_notifies_like_any_other_and_the_setting_applies() {
-    let rig = ready().await;
-    rig.fx.tracker.cannot_edit_text.store(true, std::sync::atomic::Ordering::SeqCst);
-    let run = rig.launched_as(1, crate::domain::ResultKind::Plan).await;
-    rig.poll().await;
-    finish_with(&rig, &run, PLAN_ANSWER);
-    rig.poll().await;
-    assert!(description_drafts(&rig).await.is_empty());
-    assert_eq!(rig.noticed().last(), Some(&(Attention::Drafted, RunState::Done)));
-
-    let rig = ready().await;
-    rig.svc.set_settings(crate::config::AgentSettings { draft_on_finish: false, ..rig.svc.settings() }).unwrap();
-    let run = rig.launched_as(1, crate::domain::ResultKind::Plan).await;
-    rig.poll().await;
-    finish_with(&rig, &run, PLAN_ANSWER);
-    rig.poll().await;
-    assert!(description_drafts(&rig).await.is_empty() && comment_drafts(&rig).await.is_empty());
+    assert!(rig.fx.core.proposals(&crate::domain::ProposalQuery::default()).await.unwrap().is_empty());
+    assert!(rig.fx.tracker.intents().is_empty());
 }
 
 fn finish_without_a_transcript(rig: &Rig, run: &Run, summary: &str) {
@@ -731,12 +515,11 @@ async fn a_run_whose_transcript_never_appears_keeps_the_summary_says_so_and_draf
     assert_eq!((done.result.as_deref(), done.summary.as_deref(), done.result_complete), (done.summary.as_deref(), Some("Triage complete. For Jira:\nA marker inside a summary."), false));
     assert_eq!(rig.cli.0.lock().unwrap().answer_reads.len(), 1, "one look at the transition, no sleeping while the tracker holds its lock");
     assert!(comment_drafts(&rig).await.is_empty(), "a bare summary is never drafted from, whatever it says");
-    assert!(rig.drafted.lock().unwrap().is_empty());
     assert_eq!(rig.noticed().last(), Some(&(Attention::Done, RunState::Done)));
 }
 
 #[tokio::test]
-async fn a_final_message_that_lands_after_the_session_is_listed_done_is_found_by_a_later_poll_and_drafted_then() {
+async fn a_final_message_that_lands_after_the_session_is_listed_done_is_found_without_drafting() {
     let (rig, run) = launched().await;
     rig.poll().await;
     rig.cli.with(|s| s.answer_misses = 2);
@@ -751,8 +534,8 @@ async fn a_final_message_that_lands_after_the_session_is_listed_done_is_found_by
     assert_eq!((done.result.as_deref(), done.result_complete), (Some("Found it.\n\nFor Jira:\nAdd a backoff."), true));
     assert_eq!(done.summary.as_deref(), Some(SUMMARY));
     assert_eq!(rig.cli.0.lock().unwrap().answer_reads.len(), 3);
-    assert_eq!(comment_drafts(&rig).await.len(), 1);
-    assert_eq!(rig.noticed().last(), Some(&(Attention::Drafted, RunState::Done)));
+    assert!(comment_drafts(&rig).await.is_empty());
+    assert_eq!(rig.noticed().last(), Some(&(Attention::Done, RunState::Done)));
 }
 
 #[tokio::test]
@@ -781,7 +564,7 @@ async fn the_timelines_done_text_stands_in_when_the_transcript_cannot_be_read() 
     rig.poll().await;
     let done = rig.get(&run).await;
     assert_eq!((done.result.as_deref(), done.result_complete), (Some(answer), true));
-    assert_eq!(comment_drafts(&rig).await.len(), 1);
+    assert!(comment_drafts(&rig).await.is_empty());
 
     let (rig, run) = launched().await;
     rig.poll().await;
@@ -804,7 +587,7 @@ async fn the_stored_answer_is_cleaned_like_any_other_agent_text() {
     let result = done.result.unwrap();
     assert!(!result.contains(FAKE_TOKEN) && result.contains("Add a backoff."), "{result}");
     let drafts = comment_drafts(&rig).await;
-    assert!(matches!(&drafts[0].intent, crate::domain::Intent::Comment { body, .. } if !body.plain_text().contains(FAKE_TOKEN)));
+    assert!(drafts.is_empty());
 }
 
 #[tokio::test]
@@ -853,7 +636,7 @@ async fn a_run_stored_before_summaries_were_kept_separately_gets_its_old_result_
 }
 
 #[tokio::test]
-async fn a_run_that_finished_a_moment_ago_is_polled_for_its_answer_and_then_drafted() {
+async fn a_run_that_finished_a_moment_ago_is_polled_for_its_answer_without_drafting() {
     let (rig, run) = launched().await;
     rig.poll().await;
     finish_without_a_transcript(&rig, &run, SUMMARY);
@@ -866,11 +649,11 @@ async fn a_run_that_finished_a_moment_ago_is_polled_for_its_answer_and_then_draf
     });
     assert!(rig.svc.poll_at(Utc::now()).await.busy, "a run waiting for its answer keeps the next look soon");
     assert!(rig.get(&run).await.result_complete);
-    assert_eq!(comment_drafts(&rig).await.len(), 1);
-    assert_eq!(rig.noticed().last(), Some(&(Attention::Drafted, RunState::Done)));
+    assert!(comment_drafts(&rig).await.is_empty());
+    assert_eq!(rig.noticed().last(), Some(&(Attention::Done, RunState::Done)));
 
     rig.poll().await;
-    assert_eq!(comment_drafts(&rig).await.len(), 1, "once complete it is left alone");
+    assert!(comment_drafts(&rig).await.is_empty(), "once complete it is left alone");
 }
 
 #[tokio::test]
@@ -961,8 +744,8 @@ async fn a_session_left_open_at_its_prompt_after_answering_is_done_on_the_second
     let done = rig.get(&run).await;
     assert_eq!((done.state, done.result.as_deref(), done.result_complete), (RunState::Done, Some(ANSWER), true));
     assert!(done.ended_at.is_some() && done.continued_at.is_none());
-    assert_eq!(rig.noticed(), [(Attention::Drafted, RunState::Done)]);
-    assert_eq!(comment_drafts(&rig).await.len(), 1);
+    assert_eq!(rig.noticed(), [(Attention::Done, RunState::Done)]);
+    assert!(comment_drafts(&rig).await.is_empty());
     assert!(rig.svc.index.live().is_empty());
 
     for _ in 0..3 {
@@ -1042,8 +825,8 @@ async fn a_finished_run_whose_session_carries_on_goes_back_to_working_and_finish
     assert_eq!((second.state, second.result.as_deref()), (RunState::Done, Some(SECOND_ANSWER)));
     assert!(second.ended_at.is_some() && second.continued_at.is_some());
     assert!(rig.svc.index.live().is_empty());
-    assert_eq!(rig.noticed(), [(Attention::Drafted, RunState::Done)], "no second notice");
-    assert_eq!((comment_drafts(&rig).await.len(), rig.drafted.lock().unwrap().len()), (1, 1), "no second draft");
+    assert_eq!(rig.noticed(), [(Attention::Done, RunState::Done)], "no second notice");
+    assert!(comment_drafts(&rig).await.is_empty(), "no automatic draft");
 }
 
 #[tokio::test]
@@ -1220,9 +1003,9 @@ async fn sync_requested(rig: &Rig) -> bool {
 }
 
 /// Approved and launched in a workstream opened on the ticket, as a run of `kind`.
-async fn launched_in_workstream_as(rig: &Rig, n: u32, kind: ResultKind) -> Run {
+async fn launched_in_workstream_as(rig: &Rig, n: u32, kind: &str) -> Run {
     let ws = rig.fx.core.open_workstream(&rig.fx.scope, Some(rig.fx.item("CA-1")), None).await.unwrap();
-    let spec = crate::domain::RunSpec { role: kind.role(), workstream: Some(ws.id.clone()), ..rig.spec(n) };
+    let spec = crate::domain::RunSpec { role: crate::domain::Role::parse(kind).unwrap(), workstream: Some(ws.id.clone()), ..rig.spec(n) };
     let queued = rig.fx.core.queue_test_run(spec, Some(rig.fx.item("CA-1"))).await.unwrap();
     rig.svc.start_now(&queued.id).await.unwrap()
 }
@@ -1244,18 +1027,18 @@ async fn finishing_requests_a_sync(rig: &Rig, run: &Run) -> bool {
 #[tokio::test]
 async fn a_workstream_build_that_finishes_asks_for_a_code_sync_so_its_pull_request_is_found() {
     let rig = ready().await;
-    let run = launched_in_workstream_as(&rig, 1, ResultKind::Build).await;
+    let run = launched_in_workstream_as(&rig, 1, "build").await;
     assert!(finishing_requests_a_sync(&rig, &run).await);
 }
 
 #[tokio::test]
-async fn other_roles_and_builds_outside_a_workstream_ask_for_no_code_sync() {
+async fn every_role_in_a_workstream_requests_code_sync_but_unfiled_runs_do_not() {
     let rig = ready().await;
-    let plan = launched_in_workstream_as(&rig, 1, ResultKind::Plan).await;
-    assert!(!finishing_requests_a_sync(&rig, &plan).await, "a plan in a workstream");
+    let plan = launched_in_workstream_as(&rig, 1, "plan").await;
+    assert!(finishing_requests_a_sync(&rig, &plan).await, "any role in a workstream");
 
     let rig = ready().await;
-    let build = rig.launched_as(2, ResultKind::Build).await;
+    let build = rig.launched_as(2, "build").await;
     assert!(build.spec.workstream.is_none());
     assert!(!finishing_requests_a_sync(&rig, &build).await, "a build outside a workstream");
 }

@@ -291,197 +291,52 @@ fn record_beside(db: &Db, old: &Proposal, new: &Proposal, action: &str, at: Date
     }
 }
 
-/// The most drafts a workstream holds waiting for the person before Pip is told to stop drafting.
-pub const WORKSTREAM_PENDING_CAP: usize = 8;
-
-/// Why a draft a newer one of the same kind replaced was retired.
 pub const REPLACED_REASON: &str = "Replaced by a newer draft";
+pub const KEPT_EDITED: &str = "draft_kept_edited";
+pub const KEPT_MAYBE_POSTED: &str = "draft_kept_maybe_posted";
+pub const KEPT_PARTIAL: &str = "draft_kept_partial";
 
-const TRIAGE_KEEPS_THE_REST: &str = "a Triage description draft can change only its Triage section; the rest of the description, the Gossamr Plan included, stays as it is";
-
-const PLAN_IS_THE_USERS: &str =
-    "this description update carries the Gossamr Plan a build follows, so only the user changes it; tell them what you would change instead";
-
-/// What a new draft does to an older one in its workstream.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Supersession {
-    /// Nothing: another kind, ticket or workstream, a decided draft, or one a person made.
     Unrelated,
-    /// The older one is retired in favour of the new one.
     Supersede,
-    /// Both stay: the person edited the older one, and what a run left is never lost.
     Alongside,
-    /// The new one isn't stored, for this reason addressed to Pip.
-    Refuse(String),
 }
 
-/// Whether Pip or an agent run made the draft, rather than a person. Run drafts stored before `CreatedBy::Agent` existed
-/// say `User`.
-fn machine_made(p: &Proposal) -> bool {
-    matches!(p.created_by, CreatedBy::Pip | CreatedBy::Agent) || (p.created_by == CreatedBy::User && matches!(p.origin, Origin::Run { .. }))
-}
-
-/// Whether `newer` replaces `older`: a pending draft of the same kind on the same ticket in the same workstream, both
-/// made by Pip or an agent, that changes every field the older one does (`Intent::covers`). A draft the person edited is theirs, and the plan a build follows only the person changes.
 pub fn supersession(older: &Proposal, newer: &Proposal) -> Supersession {
-    let Some(ws) = newer.workstream() else { return Supersession::Unrelated };
+    if older.id == newer.id || older.state != ProposalState::Pending || newer.state != ProposalState::Pending {
+        return Supersession::Unrelated;
+    }
     let Some(key) = newer.intent.supersession_key() else { return Supersession::Unrelated };
-    if older.state != ProposalState::Pending || older.workstream() != Some(ws) || !machine_made(older) || !machine_made(newer) {
+    if older.intent.supersession_key().as_ref() != Some(&key) {
         return Supersession::Unrelated;
     }
-    // A newer draft that leaves a field of the older one alone would lose that change, so both stay.
-    if older.intent.supersession_key().as_ref() != Some(&key) || !newer.intent.covers(&older.intent) {
-        return Supersession::Unrelated;
-    }
-    // A Triage's description update and a plan's are two things on one description: neither replaces the other.
-    if older.is_triage_description() != newer.is_triage_description() {
-        return Supersession::Unrelated;
-    }
-    let by_pip = newer.created_by == CreatedBy::Pip;
-    if person_edited(older) {
-        let on = older.target().map_or(String::new(), |t| format!(" on {}", t.key));
-        return match by_pip {
-            true => Supersession::Refuse(format!("the user edited draft {} of the same kind{on}, so it stays theirs; leave it to them rather than drafting another", older.id)),
-            false => Supersession::Alongside,
-        };
-    }
-    if by_pip && is_run_plan_rewrite(older) {
-        return Supersession::Refuse(PLAN_IS_THE_USERS.into());
+    if person_owned(older) || older.maybe_posted.is_some() || !older.created.is_empty() {
+        return Supersession::Alongside;
     }
     Supersession::Supersede
 }
 
-/// The audit line an older review draft of the same pull request gets when a newer review leaves it standing because
-/// the person edited it: theirs to post or discard. Its detail is the newer draft's id.
-pub const KEPT_EDITED: &str = "draft_kept_edited";
-/// The same when GitHub may already have the older one: its next post looks for it there first.
-pub const KEPT_MAYBE_POSTED: &str = "draft_kept_maybe_posted";
-
-/// What a new draft does to the drafts already stored: the ones it replaces, and the ones it would have replaced but
-/// leaves standing, each with the audit line that says why.
 #[derive(Debug, Default)]
 struct Tidied {
     replaced: Vec<Proposal>,
     kept: Vec<(Proposal, &'static str)>,
 }
 
-/// What a new review of a pull request does to an older pending review draft: the person's edit and a post that may be
-/// on GitHub keep it; anything else made by Pip or an agent is replaced. `None` when it isn't a review draft of the same
-/// pull request on the same code host, or isn't pending (one being posted, or posted, is never touched).
-pub fn review_supersession(older: &Proposal, newer: &Proposal) -> Option<std::result::Result<(), &'static str>> {
-    let Intent::GithubReview { connection_id: new_on, .. } = &newer.intent else { return None };
-    let Intent::GithubReview { connection_id: old_on, .. } = &older.intent else { return None };
-    let same = old_on == new_on && older.intent.supersession_key() == newer.intent.supersession_key();
-    if !same || older.id == newer.id || older.state != ProposalState::Pending || !machine_made(older) {
-        return None;
-    }
-    if person_edited(older) {
-        return Some(Err(KEPT_EDITED));
-    }
-    if older.maybe_posted.is_some() {
-        return Some(Err(KEPT_MAYBE_POSTED));
-    }
-    Some(Ok(()))
-}
-
-/// The label of a comment draft that carries a plan run's whole plan, which no later comment replaces.
-pub const PLAN_COMMENT_LABEL: &str = "Plan from agent run";
-
-/// Whether `p` is a comment an agent run left for its ticket, other than a plan's: what a finished run drafts on its own.
-fn is_run_comment(p: &Proposal) -> bool {
-    matches!((&p.origin, &p.intent), (Origin::Run { .. }, Intent::Comment { .. }))
-        && machine_made(p)
-        && !p.label.as_deref().is_some_and(|l| l.starts_with(PLAN_COMMENT_LABEL))
-}
-
-/// The id of the run a run comment was made from.
-fn comment_run_id(p: &Proposal) -> Option<&str> {
-    match &p.origin {
-        Origin::Run { run_id, .. } => Some(run_id),
-        _ => None,
-    }
-}
-
-/// What a new run comment does to an older pending one: the same ticket in the same workstream, made by an agent run
-/// of the same kind of work (`role_of` says the role of a run by its id; a run it can't find supersedes nothing). A reviewer's
-/// comment never retires an investigator's, whose findings the person has not read yet. The person's edit keeps it;
-/// anything else is replaced. `None` when it is another ticket, workstream or role, a plan's comment, or not pending
-/// (one being posted, or posted, is never touched), or when its last post failed (`error` is set): it is back in
-/// Pending for the person to retry, and a newer comment doesn't take it away.
-pub fn run_comment_supersession(older: &Proposal, newer: &Proposal, role_of: impl Fn(&str) -> Option<crate::domain::Role>) -> Option<std::result::Result<(), &'static str>> {
-    let ws = newer.workstream()?;
-    let same = is_run_comment(older) && is_run_comment(newer) && older.workstream() == Some(ws) && older.target() == newer.target();
-    if !same || older.id == newer.id || older.state != ProposalState::Pending || older.error.is_some() {
-        return None;
-    }
-    let (on, to) = (role_of(comment_run_id(older)?)?, role_of(comment_run_id(newer)?)?);
-    if on.work() != to.work() {
-        return None;
-    }
-    Some(if person_edited(older) { Err(KEPT_EDITED) } else { Ok(()) })
-}
-
-/// A new comment an agent run left replaces the older pending ones of the same ticket and run role in its workstream, so
-/// a second round's reworded comment doesn't pile up beside the first. Writes nothing.
-fn tidy_run_comments(db: &Db, p: &Proposal) -> Result<Tidied> {
-    let pending = db.proposals(&ProposalQuery { states: Some(vec![StateKind::Pending]), ..Default::default() })?;
-    let mut tidied = Tidied::default();
-    for older in pending {
-        let role_of = |run_id: &str| db.run(run_id).ok().flatten().map(|r| r.spec.role);
-        match run_comment_supersession(&older, p, role_of) {
-            Some(Ok(())) => tidied.replaced.push(older),
-            Some(Err(why)) => tidied.kept.push((older, why)),
-            None => {}
-        }
-    }
-    Ok(tidied)
-}
-
-/// A new review an agent run left replaces the older pending review drafts of the same pull request, whichever
-/// workstream they are in or none: one pull request has one review waiting for the person. Writes nothing.
-fn tidy_reviews(db: &Db, p: &Proposal) -> Result<Tidied> {
-    let pending = db.proposals(&ProposalQuery { states: Some(vec![StateKind::Pending]), ..Default::default() })?;
-    let mut tidied = Tidied::default();
-    for older in pending {
-        match review_supersession(&older, p) {
-            Some(Ok(())) => tidied.replaced.push(older),
-            Some(Err(why)) => tidied.kept.push((older, why)),
-            None => {}
-        }
-    }
-    Ok(tidied)
-}
-
-/// Keeps a workstream's drafts tidy: says which older drafts `p` replaces, or refuses it when it would replace one the
-/// person owns, or when Pip already has the workstream's full share of drafts waiting. A review an agent run left is
-/// tidied by its pull request instead (`tidy_reviews`), and a comment one left by its ticket (`tidy_run_comments`). Writes nothing.
 fn tidy(db: &Db, p: &Proposal) -> Result<Tidied> {
-    if p.created_by == CreatedBy::Agent && matches!(p.origin, Origin::Run { .. }) && matches!(p.intent, Intent::GithubReview { .. }) {
-        return tidy_reviews(db, p);
-    }
-    if p.created_by == CreatedBy::Agent && is_run_comment(p) {
-        return tidy_run_comments(db, p);
-    }
-    let Some(ws) = p.workstream() else { return Ok(Tidied::default()) };
-    if !machine_made(p) {
-        return Ok(Tidied::default());
-    }
-    let open = db.proposals(&ProposalQuery { workstream: Some(ws.into()), states: Some(vec![StateKind::Pending, StateKind::Applying]), ..Default::default() })?;
-    let mut replaced = Vec::new();
-    for older in &open {
-        match supersession(older, p) {
-            Supersession::Refuse(why) => return Err(refuse(why)),
-            Supersession::Supersede => replaced.push(older.clone()),
-            Supersession::Unrelated | Supersession::Alongside => {}
+    let pending = db.proposals(&ProposalQuery { states: Some(vec![StateKind::Pending]), ..Default::default() })?;
+    let mut tidied = Tidied::default();
+    for older in pending {
+        match supersession(&older, p) {
+            Supersession::Supersede => tidied.replaced.push(older),
+            Supersession::Alongside => {
+                let reason = if person_owned(&older) { KEPT_EDITED } else if older.maybe_posted.is_some() { KEPT_MAYBE_POSTED } else { KEPT_PARTIAL };
+                tidied.kept.push((older, reason));
+            }
+            Supersession::Unrelated => {}
         }
     }
-    // What a run reported is never refused; Pip is told to settle what is waiting first.
-    if p.created_by == CreatedBy::Pip && open.len() - replaced.len() >= WORKSTREAM_PENDING_CAP {
-        return Err(refuse(format!(
-            "Workstream {ws} already has {WORKSTREAM_PENDING_CAP} drafts waiting for the user. Don't draft more until they decide some; revise one with revise_proposal or withdraw one with retire_proposal."
-        )));
-    }
-    Ok(Tidied { replaced, kept: Vec::new() })
+    Ok(tidied)
 }
 
 fn load(db: &Db, id: &str) -> Result<Proposal> {
@@ -537,12 +392,6 @@ pub fn edit_noted(db: &Db, id: &str, intent: Intent, note: &str, at: DateTime<Ut
             return Err(refuse("an edit can't change which text the rewrite was drafted against"));
         }
     }
-    // A Triage's description update changes only its Triage section; Pip's revision keeps that section and leaves the rest, the plan included, as it was.
-    if let (Intent::Rewrite { body: Some(ob), .. }, Intent::Rewrite { body: Some(nb), .. }) = (&p.intent, &intent) {
-        if note != EDITED_NOTE && p.is_triage_description() && (nb.to.triage_section().is_none() || nb.to.without_triage_section() != ob.to.without_triage_section()) {
-            return Err(refuse(TRIAGE_KEEPS_THE_REST));
-        }
-    }
     // A transition's label named the old target, so the approve button falls back to the new status's name.
     if matches!((&p.intent, &intent), (Intent::Transition { to: a, .. }, Intent::Transition { to: b, .. }) if a != b) {
         p.label = None;
@@ -571,6 +420,10 @@ pub fn person_edited(p: &Proposal) -> bool {
     p.revisions.iter().any(|r| r.note == EDITED_NOTE)
 }
 
+fn person_owned(p: &Proposal) -> bool {
+    person_edited(p) || (p.created_by == CreatedBy::User && !matches!(p.origin, Origin::Run { .. }))
+}
+
 /// Whether the person has changed a rewrite's text. Their words are theirs to keep.
 pub fn person_edited_rewrite(p: &Proposal) -> bool {
     matches!(p.intent, Intent::Rewrite { .. }) && p.revisions.iter().any(|r| r.note == EDITED_NOTE)
@@ -581,12 +434,6 @@ pub fn person_edited_rewrite(p: &Proposal) -> bool {
 pub fn left_by_run(p: &Proposal) -> bool {
     matches!((&p.origin, &p.intent), (Origin::Run { .. }, Intent::Comment { .. } | Intent::Create { .. } | Intent::Subtasks { .. } | Intent::Rewrite { .. } | Intent::GithubReview { .. }))
         && matches!(p.created_by, CreatedBy::Agent | CreatedBy::User)
-}
-
-/// Whether the draft is a description update carrying a `Gossamr Plan` section that an agent run left: the plan a build
-/// is made from once the person approves it.
-pub fn is_run_plan_rewrite(p: &Proposal) -> bool {
-    matches!(p.origin, Origin::Run { .. }) && matches!(&p.intent, Intent::Rewrite { body: Some(b), .. } if b.to.plan_section().is_some()) && !p.is_triage_description()
 }
 
 /// What Pip may revise: its own pending drafts, and a pending comment, new ticket, breakdown into subtasks or description
@@ -603,10 +450,6 @@ pub fn require_pip_may_revise(p: &Proposal, workstream: Option<&str>) -> Result<
     // Person edits are final: a comment, new ticket or breakdown an agent left is the person's once they have edited it.
     if left_by_run(p) && person_edited(p) {
         return Err(refuse("the user edited this draft, so Pip can't change it any more"));
-    }
-    // A build follows the plan the person approves here and is told a person settled it, so none of it may be Pip's.
-    if left_by_run(p) && is_run_plan_rewrite(p) {
-        return Err(refuse(PLAN_IS_THE_USERS));
     }
     if p.created_by != CreatedBy::Pip && !left_by_run(p) {
         return Err(refuse("that draft wasn't made by Pip or from an agent run's result, so Pip can't change it"));
@@ -826,45 +669,7 @@ mod tests {
         Draft::from_pip("run", None, Intent::Comment { item: item_ref(id), body: Doc::paragraph("hello") }, None)
     }
 
-    #[test]
-    fn a_run_comment_is_replaced_only_by_one_of_a_run_of_the_same_role_that_can_be_found() {
-        let db = Db::in_memory().unwrap();
-        let comment = |id: &str, run: &str| {
-            let mut p = made(&db, comment_draft("1"));
-            p.id = id.into();
-            p.created_by = CreatedBy::Agent;
-            p.origin = Origin::Run { run_id: run.into(), short_id: None, workstream: Some("w".into()) };
-            p
-        };
-        let (older, newer) = (comment("a", "run-a"), comment("b", "run-b"));
-        let verdict = |known: &'static [(&'static str, &'static str)]| {
-            run_comment_supersession(&older, &newer, move |id| known.iter().find(|(r, _)| *r == id).map(|(_, role)| crate::domain::Role::parse(role).unwrap()))
-        };
-        assert_eq!(verdict(&[("run-a", "reviewer"), ("run-b", "reviewer")]), Some(Ok(())));
-        assert_eq!(verdict(&[("run-a", "review"), ("run-b", "reviewer")]), Some(Ok(())), "a stored kind and its -er name are one kind of work");
-        assert_eq!(verdict(&[("run-a", "code auditor"), ("run-b", "code auditor")]), Some(Ok(())));
-        assert_eq!(verdict(&[("run-a", "code auditor"), ("run-b", "tester")]), None, "another free role");
-        assert_eq!(verdict(&[("run-a", "investigator"), ("run-b", "reviewer")]), None, "another role");
-        assert_eq!(verdict(&[("run-b", "reviewer")]), None, "the older run is gone");
-        assert_eq!(verdict(&[("run-a", "reviewer")]), None, "the newer run is gone");
-    }
 
-    #[test]
-    fn a_run_comment_whose_post_failed_is_kept() {
-        let db = Db::in_memory().unwrap();
-        let comment = |id: &str, run: &str| {
-            let mut p = made(&db, comment_draft("1"));
-            p.id = id.into();
-            p.created_by = CreatedBy::Agent;
-            p.origin = Origin::Run { run_id: run.into(), short_id: None, workstream: Some("w".into()) };
-            p
-        };
-        let (mut older, newer) = (comment("a", "run-a"), comment("b", "run-b"));
-        let role_of = |_: &str| Some(crate::domain::ResultKind::Review.role());
-        assert_eq!(run_comment_supersession(&older, &newer, role_of), Some(Ok(())));
-        older.error = Some("Jira is down".into());
-        assert_eq!(run_comment_supersession(&older, &newer, role_of), None);
-    }
 
     fn subtasks_draft(summaries: &[&str]) -> Draft {
         let summaries = summaries.iter().map(|s| s.to_string()).collect();
@@ -1238,25 +1043,6 @@ mod tests {
         assert!(edit(&db, &p.id, rewrite(Some(("Old", "Same")), Some(("old text", "old text"))), now()).is_err(), "an edit goes through the same checks");
     }
 
-    #[test]
-    fn pips_revision_of_a_triage_description_draft_changes_only_its_triage_section() {
-        let db = Db::in_memory().unwrap();
-        let from = "Fix it.\n\n## Gossamr Plan\n\nThe plan.";
-        let draft = Draft { origin: Origin::Run { run_id: "run-1".into(), short_id: None, workstream: None }, created_by: CreatedBy::Agent, intent: rewrite(None, Some((from, "Fix it.\n\n## Triage\n\nSize: 3.\n\n## Gossamr Plan\n\nThe plan."))), label: None, basis: None };
-        let p = made(&db, draft);
-        assert!(p.is_triage_description());
-        for (why, to) in [
-            ("plan changed", "Fix it.\n\n## Triage\n\nSize: 3.\n\n## Gossamr Plan\n\nMy plan."),
-            ("plan dropped", "Fix it.\n\n## Triage\n\nSize: 3."),
-            ("the person's text changed", "Fix it now.\n\n## Triage\n\nSize: 3.\n\n## Gossamr Plan\n\nThe plan."),
-            ("Triage section dropped", "Fix it.\n\nSize: 3.\n\n## Gossamr Plan\n\nThe plan."),
-        ] {
-            let refused = edit_noted(&db, &p.id, rewrite(None, Some((from, to))), REVISED_BY_PIP, now()).unwrap_err();
-            assert!(refused.to_string().contains("can change only its Triage section"), "{why}: {refused}");
-        }
-        let revised = edit_noted(&db, &p.id, rewrite(None, Some((from, "Fix it.\n\n## Triage\n\nSize: 5.\n\n## Gossamr Plan\n\nThe plan."))), REVISED_BY_PIP, now()).unwrap();
-        assert!(matches!(&revised.intent, Intent::Rewrite { body: Some(b), .. } if b.to.triage_section().unwrap().plain_text() == "Size: 5."));
-    }
 
     #[test]
     fn pip_may_revise_its_rewrite_until_the_person_edits_it() {
@@ -1407,10 +1193,10 @@ mod tests {
         let db = Db::in_memory().unwrap();
         stored_workstream(&db, "w1");
         let agent = made(&db, from_run(Some("w1"), CreatedBy::Agent));
-        let pip = made(&db, Draft { origin: Origin::Chat { request_id: "q".into(), workstream: Some("w1".into()) }, ..comment_draft("1") });
+        let pip = made(&db, Draft { origin: Origin::Chat { request_id: "q".into(), workstream: Some("w1".into()) }, ..comment_draft("2") });
         let person = made(&db, Draft { origin: Origin::Chat { request_id: "p".into(), workstream: Some("w1".into()) }, intent: move_to("1", "doing"), ..comment_draft("1") });
-        made(&db, comment_draft("1"));
-        made(&db, from_run(Some("unknown"), CreatedBy::Agent));
+        made(&db, comment_draft("3"));
+        made(&db, Draft { intent: comment_draft("4").intent, ..from_run(Some("unknown"), CreatedBy::Agent) });
 
         let in_w1 = ProposalQuery { workstream: Some("w1".into()), ..Default::default() };
         let mut ids: Vec<String> = db.proposals(&in_w1).unwrap().into_iter().map(|p| p.id).collect();
@@ -1450,6 +1236,82 @@ mod tests {
     }
 
     #[test]
+    fn every_targeted_write_kind_replaces_the_same_target_across_workstreams() {
+        let item = item_ref("1");
+        let intents = [
+            Intent::Comment { item: item.clone(), body: Doc::paragraph("note") },
+            move_to("1", "doing"),
+            Intent::Update { item: item.clone(), patch: crate::domain::Patch { assignee: Some(person("ann")), ..Default::default() } },
+            rewrite(Some(("Old", "New")), None),
+            Intent::Link { from: item.clone(), to: item_ref("2"), kind: crate::domain::LinkKind::Blocks },
+            Intent::Subtasks { parent: item, summaries: vec!["One".into()] },
+            review_intent(vec![]),
+        ];
+        for intent in intents {
+            let db = Db::in_memory().unwrap();
+            stored_workstream(&db, "w1");
+            stored_workstream(&db, "w2");
+            let old = made(&db, agent_in("w1", intent.clone()));
+            let next = made(&db, in_ws("w2", intent));
+            assert_eq!(replaced_by(&db, &old.id), Some(next.id), "{:?}", old.intent);
+        }
+    }
+
+    #[test]
+    fn a_persons_original_words_are_kept_as_surely_as_their_edits() {
+        let db = Db::in_memory().unwrap();
+        let old = made(&db, Draft { origin: Origin::Board, created_by: CreatedBy::User, ..comment_draft("1") });
+        made(&db, comment_draft("1"));
+        assert_eq!(state_of(&db, &old.id), ProposalState::Pending);
+    }
+
+    #[test]
+    fn new_tickets_have_no_existing_target_and_never_replace_each_other() {
+        let db = Db::in_memory().unwrap();
+        let create = |title: &str| Intent::Create {
+            container: ContainerRef { connection_id: "jira".into(), external_id: "project".into() },
+            fields: crate::domain::NewItem { title: title.into(), body: Doc::default(), kind: crate::domain::ItemKind::Task, assignee: None, parent: None, priority: None, labels: vec![] },
+            link: None,
+        };
+        let first = made(&db, in_ws("w1", create("First")));
+        let second = made(&db, in_ws("w1", create("Second")));
+        assert_eq!(state_of(&db, &first.id), ProposalState::Pending);
+        assert_eq!(state_of(&db, &second.id), ProposalState::Pending);
+    }
+
+    #[test]
+    fn an_edited_older_draft_stays_beside_the_new_one_without_refusing_it() {
+        let db = Db::in_memory().unwrap();
+        let old = made(&db, comment_draft("1"));
+        let mine = Intent::Comment { item: item_ref("1"), body: Doc::paragraph("My words") };
+        edit(&db, &old.id, mine.clone(), now()).unwrap();
+        let new = made(&db, comment_draft("1"));
+        assert_eq!(db.proposal(&old.id).unwrap().unwrap().intent, mine);
+        assert_eq!(state_of(&db, &old.id), ProposalState::Pending);
+        assert_eq!(state_of(&db, &new.id), ProposalState::Pending);
+    }
+
+    #[test]
+    fn different_connections_targets_and_kinds_never_replace_each_other() {
+        let db = Db::in_memory().unwrap();
+        let old = made(&db, comment_draft("1"));
+        let mut other = item_ref("1");
+        other.connection_id = "elsewhere".into();
+        made(&db, Draft::from_pip("r", None, Intent::Comment { item: other, body: Doc::paragraph("note") }, None));
+        made(&db, comment_draft("2"));
+        made(&db, in_ws("w2", move_to("1", "doing")));
+        assert_eq!(state_of(&db, &old.id), ProposalState::Pending);
+    }
+
+    #[test]
+    fn a_new_rewrite_replaces_the_whole_older_draft_even_when_it_changes_another_field() {
+        let db = Db::in_memory().unwrap();
+        let old = made(&db, in_ws("w1", rewrite(None, Some(("old", "old\n\n## Gossamr Plan\n\nSteps")))));
+        let new = made(&db, in_ws("w2", rewrite(Some(("Old", "New")), None)));
+        assert_eq!(replaced_by(&db, &old.id), Some(new.id));
+    }
+
+    #[test]
     fn supersedes_same_kind_same_target_in_workstream_and_audits() {
         let db = Db::in_memory().unwrap();
         stored_workstream(&db, "w1");
@@ -1475,123 +1337,12 @@ mod tests {
         assert_eq!(db.proposals(&ProposalQuery::default()).unwrap().len(), 8, "nothing is deleted");
     }
 
-    #[test]
-    fn never_supersedes_person_drafts_or_across_workstreams_or_comments() {
-        let db = Db::in_memory().unwrap();
-        stored_workstream(&db, "w1");
-        stored_workstream(&db, "w2");
-        let by_hand = made(&db, Draft { origin: Origin::Board, created_by: CreatedBy::User, intent: move_to("1", "doing"), label: None, basis: None }).id;
-        let elsewhere = made(&db, in_ws("w2", move_to("1", "doing")));
-        let loose = made(&db, Draft::from_pip("r", None, move_to("1", "doing"), None));
-        let comment = made(&db, in_ws("w1", Intent::Comment { item: item_ref("1"), body: Doc::paragraph("one") }));
-        let other_ticket = made(&db, in_ws("w1", move_to("2", "doing")));
-        made(&db, in_ws("w1", move_to("1", "review")));
-        made(&db, in_ws("w1", Intent::Comment { item: item_ref("1"), body: Doc::paragraph("two") }));
-        for id in [&by_hand, &elsewhere.id, &loose.id, &comment.id, &other_ticket.id] {
-            assert_eq!(state_of(&db, id), ProposalState::Pending, "{id}");
-        }
 
-        let pip = made(&db, in_ws("w1", move_to("3", "doing")));
-        let person = Draft { created_by: CreatedBy::User, ..in_ws("w1", move_to("3", "review")) };
-        made(&db, person);
-        assert_eq!(state_of(&db, &pip.id), ProposalState::Pending, "only Pip or an agent supersedes");
-    }
 
-    #[test]
-    fn person_edited_older_draft_refuses_pip_and_keeps_agent_alongside() {
-        let db = Db::in_memory().unwrap();
-        stored_workstream(&db, "w1");
-        let old = made(&db, in_ws("w1", move_to("1", "doing")));
-        edit(&db, &old.id, move_to("1", "done"), now()).unwrap();
-        let err = create(&db, in_ws("w1", move_to("1", "review")), now()).unwrap_err().to_string();
-        assert!(err.contains(&format!("the user edited draft {} of the same kind on {}", old.id, item_ref("1").key)), "{err}");
-        assert_eq!(db.proposals(&ProposalQuery::default()).unwrap().len(), 1, "the refused draft isn't stored");
 
-        let theirs = made(&db, agent_in("w1", rewrite(Some(("Old", "A")), None)));
-        edit(&db, &theirs.id, rewrite(Some(("Old", "Mine")), None), now()).unwrap();
-        let again = made(&db, agent_in("w1", rewrite(Some(("Old", "B")), None)));
-        assert_eq!(state_of(&db, &theirs.id), ProposalState::Pending, "the person's edit is kept");
-        assert_eq!(state_of(&db, &again.id), ProposalState::Pending, "what the run reported isn't lost");
-        assert_eq!(state_of(&db, &old.id), ProposalState::Pending);
-    }
 
-    #[test]
-    fn pip_rewrite_never_supersedes_run_plan_rewrite() {
-        let db = Db::in_memory().unwrap();
-        stored_workstream(&db, "w1");
-        let planned = rewrite(None, Some(("old", "old\n\n## Gossamr Plan\n\n1. Do it")));
-        let plan = made(&db, agent_in("w1", planned));
-        assert!(is_run_plan_rewrite(&plan));
-        let err = create(&db, in_ws("w1", rewrite(Some(("Old", "New")), Some(("old", "Pip's description")))), now()).unwrap_err().to_string();
-        assert!(err.contains("only the user changes it"), "{err}");
-        assert_eq!(state_of(&db, &plan.id), ProposalState::Pending);
-        assert_eq!(db.proposals(&ProposalQuery::default()).unwrap().len(), 1);
 
-        let title = made(&db, in_ws("w1", rewrite(Some(("Old", "New")), None)));
-        assert_eq!((state_of(&db, &plan.id), state_of(&db, &title.id)), (ProposalState::Pending, ProposalState::Pending), "a title change leaves the plan alone, so both stay");
-    }
 
-    #[test]
-    fn a_newer_draft_replaces_an_older_one_only_when_it_changes_every_field_the_older_one_does() {
-        use crate::domain::{Patch, PersonRef, Priority};
-        let db = Db::in_memory().unwrap();
-        stored_workstream(&db, "w1");
-        let update = |patch: Patch| Intent::Update { item: item_ref("1"), patch };
-        let alice = || Some(PersonRef { connection_id: "c".into(), account_id: "alice".into() });
-        let assignee = made(&db, in_ws("w1", update(Patch { assignee: alice(), ..Patch::default() })));
-        let priority = made(&db, in_ws("w1", update(Patch { priority: Some(Priority::High), ..Patch::default() })));
-        assert_eq!(state_of(&db, &assignee.id), ProposalState::Pending, "the assignee change isn't lost to a priority change");
-        let both = made(&db, in_ws("w1", update(Patch { assignee: alice(), priority: Some(Priority::Low), ..Patch::default() })));
-        assert!(matches!(state_of(&db, &assignee.id), ProposalState::Retired(_)) && matches!(state_of(&db, &priority.id), ProposalState::Retired(_)));
-        assert_eq!(state_of(&db, &both.id), ProposalState::Pending);
-
-        let title = made(&db, in_ws("w1", rewrite(Some(("Old", "A")), None)));
-        let body = made(&db, in_ws("w1", rewrite(None, Some(("old", "new")))));
-        assert_eq!((state_of(&db, &title.id), state_of(&db, &body.id)), (ProposalState::Pending, ProposalState::Pending));
-    }
-
-    #[test]
-    fn ninth_pending_pip_draft_refused_and_refusal_writes_nothing() {
-        let db = Db::in_memory().unwrap();
-        stored_workstream(&db, "w1");
-        for n in 0..WORKSTREAM_PENDING_CAP {
-            made(&db, in_ws("w1", Intent::Comment { item: item_ref("1"), body: Doc::paragraph(&format!("c{n}")) }));
-        }
-        let before = (db.proposals(&ProposalQuery::default()).unwrap(), db.workstream_events("w1").unwrap());
-        let err = create(&db, in_ws("w1", move_to("1", "doing")), now()).unwrap_err().to_string();
-        assert!(err.contains("Workstream w1 already has 8 drafts waiting for the user") && err.contains("revise_proposal") && err.contains("retire_proposal"), "{err}");
-        assert_eq!((db.proposals(&ProposalQuery::default()).unwrap(), db.workstream_events("w1").unwrap()), before);
-
-        assert!(create(&db, Draft::from_pip("r", None, move_to("1", "doing"), None), now()).is_ok(), "outside the workstream there's no cap");
-        assert!(create(&db, in_ws("w2", move_to("1", "doing")), now()).is_ok(), "another workstream has its own");
-        let first = db.proposals(&ProposalQuery { workstream: Some("w1".into()), ..Default::default() }).unwrap();
-        skip(&db, &first[0].id, now()).unwrap();
-        assert!(create(&db, in_ws("w1", move_to("1", "doing")), now()).is_ok(), "deciding one makes room");
-    }
-
-    #[test]
-    fn superseding_frees_a_slot_under_the_cap() {
-        let db = Db::in_memory().unwrap();
-        stored_workstream(&db, "w1");
-        for n in 1..WORKSTREAM_PENDING_CAP {
-            made(&db, in_ws("w1", Intent::Comment { item: item_ref("1"), body: Doc::paragraph(&format!("c{n}")) }));
-        }
-        let old = made(&db, in_ws("w1", move_to("1", "doing")));
-        let new = made(&db, in_ws("w1", move_to("1", "review")));
-        assert_eq!(db.proposal(&old.id).unwrap().unwrap().superseded_by, Some(new.id));
-        assert!(create(&db, in_ws("w1", move_to("2", "doing")), now()).is_err(), "the cap still holds for a new kind");
-    }
-
-    #[test]
-    fn agent_drafts_ignore_the_cap() {
-        let db = Db::in_memory().unwrap();
-        stored_workstream(&db, "w1");
-        for n in 0..WORKSTREAM_PENDING_CAP {
-            made(&db, in_ws("w1", Intent::Comment { item: item_ref("1"), body: Doc::paragraph(&format!("c{n}")) }));
-        }
-        assert!(create(&db, agent_in("w1", Intent::Comment { item: item_ref("1"), body: Doc::paragraph("found") }), now()).is_ok());
-        assert!(create(&db, agent_in("w1", rewrite(Some(("Old", "New")), None)), now()).is_ok());
-    }
 
     #[tokio::test]
     async fn approving_a_transition_retires_its_pending_siblings_even_uncached() {
@@ -1631,60 +1382,6 @@ mod tests {
         assert_eq!(set["supersededBy"], "n");
         set.as_object_mut().unwrap().remove("supersededBy");
         assert_eq!(serde_json::from_value::<Proposal>(set).unwrap().superseded_by, None);
-    }
-
-    /// A draft as `src/lib/draftHygiene.fixtures.json` describes it.
-    fn fixture_draft(v: &serde_json::Value, id: &str) -> Proposal {
-        let ws = v["workstream"].as_str().map(String::from);
-        let origin = match v["origin"].as_str().unwrap() {
-            "chat" => Origin::Chat { request_id: "r".into(), workstream: ws },
-            "run" => Origin::Run { run_id: "run-1".into(), short_id: None, workstream: ws },
-            "board" => Origin::Board,
-            other => panic!("{other}"),
-        };
-        let mut intent: Intent = serde_json::from_value(v["intent"].clone()).unwrap();
-        if v["planRewrite"].as_bool() == Some(true) {
-            if let Intent::Rewrite { body, .. } = &mut intent {
-                *body = Some(BodyChange { from: Doc::from_markdown("old", &[]), to: Doc::from_markdown("old\n\n## Gossamr Plan\n\n1. Do it", &[]) });
-            }
-        }
-        let state = match v["state"].as_str() {
-            Some("skipped") => ProposalState::Skipped,
-            _ => ProposalState::Pending,
-        };
-        let revisions = match v["edited"].as_bool() == Some(true) {
-            true => vec![Revision { at: now(), note: EDITED_NOTE.into(), intent: intent.clone() }],
-            false => vec![],
-        };
-        let created_by = serde_json::from_value(v["by"].clone()).unwrap();
-        Proposal { id: id.into(), created_at: now(), updated_at: now(), origin, created_by, intent, label: None, basis: None, state, revisions, created: vec![], error: None, run: None, superseded_by: None, posted: None, maybe_posted: None }
-    }
-
-    #[test]
-    fn matches_the_draft_hygiene_fixtures_the_frontend_mirror_also_runs() {
-        let cases: serde_json::Value = serde_json::from_str(include_str!("../../src/lib/draftHygiene.fixtures.json")).unwrap();
-        for case in cases.as_array().unwrap() {
-            let name = case["name"].as_str().unwrap();
-            match case["kind"].as_str().unwrap() {
-                "key" => {
-                    let a: Intent = serde_json::from_value(case["a"].clone()).unwrap();
-                    let b: Intent = serde_json::from_value(case["b"].clone()).unwrap();
-                    let same = a.supersession_key().is_some() && a.supersession_key() == b.supersession_key();
-                    assert_eq!(same, case["same"].as_bool().unwrap(), "{name}");
-                }
-                "decide" => {
-                    let got = supersession(&fixture_draft(&case["older"], "old"), &fixture_draft(&case["newer"], "new"));
-                    let got = match got {
-                        Supersession::Unrelated => "unrelated",
-                        Supersession::Supersede => "supersede",
-                        Supersession::Alongside => "alongside",
-                        Supersession::Refuse(_) => "refuse",
-                    };
-                    assert_eq!(got, case["expect"].as_str().unwrap(), "{name}");
-                }
-                other => panic!("{other}"),
-            }
-        }
     }
 
     fn review_intent(comments: Vec<crate::domain::ReviewComment>) -> Intent {

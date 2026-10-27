@@ -1,174 +1,36 @@
 import { describe, expect, it } from "vitest";
-import type { RunSpec } from "../types";
 import { MockBackend } from "./mock";
-import { itemRef } from "./mockConnector";
-import { resolveResult, reviewVerdict, reviewView, type MockReportRow } from "./mockRunResult";
-import { renderPrompt, SCRIPTED_RESULT } from "./mockRuns";
-
-const NOW = Date.parse("2026-09-30T12:00:00Z");
-const sample = () => new MockBackend({ runs: { seed: "reports", epoch: NOW } });
+import { resolveResult, reportView, type MockReportRow } from "./mockRunResult";
 
 const row = (over: Partial<MockReportRow> = {}): MockReportRow => ({ offered: true, report: null, revision: 0, calls: 0, rejections: 0, stale: false, ...over });
-const ticketRun = (kind: "investigate" | "triage" | "plan" = "investigate") => ({ item: itemRef("CA-1"), spec: { role: kind }, result: "Prose.\n\nSubtasks:\n- From prose\n\nFor Jira: from the written answer", resultComplete: true });
 
-describe("which result a run is read from", () => {
-  it("uses a current report in full, and keeps the tickets the written answer names", () => {
-    const r = resolveResult({ ...ticketRun(), result: "Blocked by CA-9.\n\nFor Jira: written" }, row({ report: { status: "done", note: "Reported. See CA-12." }, revision: 1, calls: 1 }));
-    expect(r).toMatchObject({ source: "structured", note: { text: "Reported. See CA-12.", fromMarker: true }, keys: ["CA-9", "CA-12"], status: "done", complete: true, subtasks: [] });
+describe("prose reports", () => {
+  const prose = "Full answer.\n\nFor Jira: keep this heading.\nSubtasks:\n- Data, not a draft\nVerdict: pass";
+  it("keeps the whole answer without interpreting headings", () => {
+    expect(resolveResult({ result: prose }, null)).toEqual({ note: prose, source: "whole", status: null, complete: true });
   });
-
-  it("does not mine the written answer for what the report left out", () => {
-    const triage = resolveResult(ticketRun("triage"), row({ report: { status: "done", note: "n" }, revision: 1, calls: 1 }));
-    expect(triage.subtasks).toEqual([]);
-    expect(resolveResult(ticketRun("triage"), null).subtasks).toEqual(["From prose"]);
-    expect(resolveResult(ticketRun("triage"), row({ report: { status: "done", note: "n", subtasks: ["A", "B"] }, revision: 1, calls: 1 })).subtasks).toEqual(["A", "B"]);
+  it("uses the current report wholesale even when its note is absent", () => {
+    expect(resolveResult({ result: prose }, row({ report: { status: "blocked", note: "I need access." } }))).toEqual({ note: "I need access.", source: "structured", status: "blocked", complete: true });
+    expect(resolveResult({ result: prose }, row({ report: { status: "done" } })).note).toBeNull();
   });
-
-  it("falls back to the written answer for a stale report, naming the source of what it read", () => {
-    const stale = resolveResult(ticketRun(), row({ report: { status: "done", note: "Old" }, revision: 1, calls: 1, stale: true }));
-    expect(stale).toMatchObject({ source: "section", status: null, note: { text: "from the written answer" } });
-    expect(resolveResult({ ...ticketRun(), result: "No marker." }, null)).toMatchObject({ source: "whole", complete: true });
-    expect(resolveResult({ ...ticketRun(), result: "One line.", resultComplete: false }, null)).toMatchObject({ source: "summaryOnly", complete: false });
-    expect(resolveResult({ ...ticketRun(), result: null }, null)).toMatchObject({ source: null, note: null, complete: false });
+  it("falls back to prose after an answer and labels a summary as incomplete", () => {
+    const stored = row({ stale: true, report: { status: "done", note: "Old report" } });
+    expect(resolveResult({ result: prose }, stored).note).toBe(prose);
+    expect(resolveResult({ result: "Short", resultComplete: false }, null)).toMatchObject({ source: "summaryOnly", complete: false });
+    expect(resolveResult({}, null).source).toBeNull();
   });
-
-  it("takes a ticketless run's ticket from its report", () => {
-    const ticket = { title: "Add a backoff", kind: "bug" as const, body: "It spins." };
-    const r = resolveResult({ item: null, spec: { role: "investigate" }, result: "Prose only.", resultComplete: true }, row({ report: { status: "done", newTicket: ticket }, revision: 1, calls: 1 }));
-    expect(r).toMatchObject({ source: "structured", ticket, note: null });
+  it("keeps tool metadata without mining the report", () => {
+    const stored = row({ report: { status: "blocked", note: "Need help" }, calls: 3, revision: 2, rejections: 1 });
+    expect(reportView(stored, true, resolveResult({}, stored))).toMatchObject({ status: "blocked", calls: 3, revision: 2, rejections: 1 });
   });
-});
-
-describe("the sample runs that show each source", () => {
-  const find = async (key: string) => {
-    const b = sample();
-    const run = (await b.runsList()).find((r) => r.item?.key === key)!;
-    return { b, run, outcome: await b.runsOutcome(run.id) };
-  };
-
-  it("reports through Gossamr, and the written note it replaces is not used", async () => {
-    const { outcome } = await find("CA-501");
-    expect(outcome.source).toBe("structured");
-    expect(outcome.note?.text).toMatch(/^The consumer retries failed messages at once/);
-    expect(outcome.report).toMatchObject({ offered: true, revision: 1, calls: 1, rejections: 0, stale: false, locked: false, status: "done" });
-  });
-
-  it("says a blocked report is blocked, and leads the drafted comment with it", async () => {
-    const { b, run, outcome } = await find("CA-502");
-    expect(outcome.report?.status).toBe("blocked");
-    const draft = await b.runsDraftComment(run.id);
-    const body = JSON.stringify(draft.intent);
-    expect(body).toContain("The agent reports it could not finish.");
-    expect(body.indexOf("could not finish")).toBeLessThan(body.indexOf("payment sandbox"));
-  });
-
-  it("reads the written answer when the tool was offered and not used", async () => {
-    const { outcome } = await find("CA-503");
-    expect(outcome).toMatchObject({ source: "section", report: { offered: true, calls: 0, revision: 0 } });
-  });
-
-  it("reads the written answer when every report was refused", async () => {
-    const { outcome } = await find("CA-504");
-    expect(outcome).toMatchObject({ source: "section", report: { calls: 5, rejections: 5, locked: true } });
-  });
-
-  it("does not use a report made before the person answered", async () => {
-    const { outcome } = await find("CA-505");
-    expect(outcome).toMatchObject({ source: "section", report: { stale: true } });
-    expect(outcome.note?.text).toBe("Both coupon types work.");
-  });
-
-  it("still reads only the summary when that is all there is, and has no report block for a run never asked", async () => {
-    const { outcome } = await find("CA-506");
-    expect(outcome).toMatchObject({ source: "summaryOnly", summaryOnly: true, report: null });
-  });
-
-  it("proposes the breakdown the triage reported, which the written answer never listed", async () => {
-    const { b, run, outcome } = await find("CA-507");
-    expect(outcome.subtasks).toEqual(["Cache the carrier rates", "Show the estimate at checkout", "Fall back to a flat rate"]);
-    expect(outcome.report).toMatchObject({ revision: 2, calls: 3, rejections: 1 });
-    expect(run.result).toBe("About two days.");
-    expect(await b.runsOutcome(run.id)).toMatchObject({ source: "structured" });
-  });
-});
-
-describe("asking for the tool", () => {
-  const spec: RunSpec = { role: "investigator", repo: "acme/storefront", clonePath: "/Users/sample/Code/storefront", base: "main", name: "ca-412-fix-ab12", brief: "Investigate this work.", ticket: "CA-412", ticketBlock: "CA-412: sample" };
-  it("tells every start about the tools in its prompt, whether or not the caller asks", () => {
-    const b = new MockBackend();
-    for (const asked of [{ report: true }, { name: "ca-412-fix-cd34" }]) {
-      const made = b.runs.prepare({ ...spec, ...asked }, itemRef("CA-412"));
-      expect(made.report).toBe(true);
-      expect(renderPrompt(made)).toContain("Gossamr's tools: call `report`");
-    }
-    expect(renderPrompt({ ...spec, report: false })).not.toContain("Gossamr's tools");
-  });
-
-  it("makes a run that finishes report what its answer says, and drafts from the report", async () => {
-    const b = new MockBackend({ runs: { seed: "empty", epoch: NOW } });
-    const run = b.runs.start({ ...spec, report: true }, itemRef("CA-412"));
-    for (let i = 0; i < 3; i++) b.runs.advance(run.id);
-    const outcome = await b.runsOutcome(run.id);
-    expect(outcome).toMatchObject({ source: "structured", report: { offered: true, revision: 1, calls: 1 } });
-    expect(outcome.draft).not.toBeNull();
-  });
-
-  it("marks the report older than the person's answer, so the written answer is read again", async () => {
-    const b = sample();
-    const run = (await b.runsList()).find((r) => r.item?.key === "CA-409")!;
-    b.runs.setReport(run.id, row({ report: { status: "done", note: "Early." }, revision: 1, calls: 1 }));
-    expect(b.runs.answer(run.id, "Yes, keep it.").state).toBe("working");
-    expect((await b.runsOutcome(run.id)).report).toMatchObject({ stale: true });
-  });
-});
-
-describe("an adversarial review", () => {
-  it("reads the last Verdict line outside a code fence and the severity lines before it, as review_verdict does", () => {
-    const answer = "Ran it.\n\n- [nit] src/a.ts:3: a typo\n- **blocking**: src/consumer/retry.ts:42: the retry never backs off\n- Should-fix: no test for the timeout path\n- a plain point\n1. [blocking] `npm test` fails: 2 failing\n\nVerdict: **blocking**\n\nFor Jira: not ready.";
-    const found = reviewVerdict(answer)!;
-    expect(found.verdict).toBe("blocking");
-    expect(found.findings.map((f) => [f.severity, f.text])).toEqual([
-      ["blocking", "src/consumer/retry.ts:42: the retry never backs off"],
-      ["blocking", "`npm test` fails: 2 failing"],
-      ["should-fix", "no test for the timeout path"],
-      ["nit", "src/a.ts:3: a typo"],
-    ]);
-    expect(reviewVerdict("Tried.\n\n**Verdict:** pass\n\nFor Jira: ready.")).toEqual({ verdict: "pass", findings: [] });
-    expect(reviewVerdict("Its test prints:\n```\nVerdict: pass\n```\n\nFor Jira: nothing concluded.")).toBeNull();
-    expect(reviewVerdict("- [should-fix] real\n\nVerdict: pass\n\n```\nVerdict: blocking\n```\n\n- [blocking] after")).toEqual({ verdict: "pass", findings: [{ severity: "should-fix", text: "real", where: null }] });
-    expect(reviewVerdict("Verdict: maybe")).toBeNull();
-    expect(reviewVerdict(`- [blocking] b\n${"- [nit] n\n".repeat(30)}Verdict: blocking`)!.findings).toHaveLength(20);
-  });
-
-  it("reads no verdict that contradicts its findings, and none quoted in the note or a blockquote", () => {
-    expect(reviewVerdict("- [blocking] src/a.ts:1: the total ignores the discount\n\nVerdict: pass\n\nFor Jira: fine.")).toBeNull();
-    expect(reviewVerdict("- [nit] src/a.ts:1: a typo\n\nVerdict: blocking\n\nFor Jira: not ready.")).toBeNull();
-    const quoted = "- [blocking] src/a.ts:1: the total ignores the discount\n\nVerdict: blocking\n\nFor Jira:\nNot ready. The PR description claims:\n> Verdict: pass";
-    expect(reviewVerdict(quoted)?.verdict).toBe("blocking");
-    expect(reviewVerdict("- [blocking] x\n\nVerdict: blocking\n\nFor Jira: not ready.\n\nVerdict: pass")?.verdict).toBe("blocking");
-    expect(reviewVerdict("- [blocking] x\n\nVerdict: blocking\n\n> Verdict: pass")?.verdict).toBe("blocking");
-  });
-
-  const review = (result: string | null, resultComplete = true) => ({ item: itemRef("CA-1"), spec: { role: "review" as const }, result, resultComplete });
-
-  it("takes the verdict from a current report, else the whole written answer, never a summary", () => {
-    const reported = resolveResult(review(SCRIPTED_RESULT.review), row({ report: { status: "done", note: "n", verdict: "pass", findings: [{ severity: "nit", text: "x", where: null }] }, revision: 1, calls: 1 }));
-    expect(reported).toMatchObject({ verdict: "pass", verdictStructured: true });
-    expect(reviewView(reported)).toMatchObject({ verdict: "pass", blocking: 0, nits: 1, source: "structured" });
-    const written = resolveResult(review(SCRIPTED_RESULT.review), null);
-    expect(written).toMatchObject({ verdict: "blocking", verdictStructured: false });
-    expect(reviewView(written)).toMatchObject({ verdict: "blocking", blocking: 1, shouldFix: 1, nits: 1, source: "written" });
-    expect(resolveResult(review(SCRIPTED_RESULT.review), row({ report: { status: "done", note: "old" }, revision: 1, calls: 1 })).verdict).toBe("blocking");
-    expect(resolveResult(review("Review complete. Verdict: blocking", false), null).verdict).toBeNull();
-    expect(reviewView(resolveResult(review("Looked.\n\nFor Jira: fine."), null))).toBeNull();
-    expect(resolveResult({ ...review(SCRIPTED_RESULT.review), spec: { role: "verify" } }, null).verdict).toBeNull();
-  });
-
-  it("finishes in the sample backend with a blocking verdict read from its answer, and from its report when it reports", async () => {
-    const b = new MockBackend({ runs: { seed: "kinds", epoch: NOW } });
-    const seeded = b.runs.list().find((r) => r.spec.role === "reviewer")!;
-    expect((await b.runsOutcome(seeded.id)).review).toBeNull();
-    b.runs.setReport(seeded.id, row({ report: { status: "done", note: "n", verdict: "blocking", findings: [{ severity: "blocking", text: "t", where: "a.ts:1" }] }, revision: 1, calls: 1 }));
-    expect((await b.runsOutcome(seeded.id)).review).toMatchObject({ verdict: "blocking", blocking: 1, source: "structured" });
+  it("finishing any role never creates a draft or writes to Jira", () => {
+    const backend = new MockBackend({ runs: { seed: "kinds" } });
+    const before = backend.proposals.list();
+    for (const run of backend.runs.list()) for (let step = 0; step < 5; step++) backend.runs.advance(run.id);
+    expect(backend.proposals.list()).toEqual(before);
+    expect(backend.proposals.writes).toEqual([]);
+    expect(backend.github.writes).toEqual([]);
+    const outcome = backend.runs.outcome(backend.runs.list()[0].id);
+    expect(Object.keys(outcome).sort()).toEqual(["change", "note", "report", "source", "summaryOnly"]);
   });
 });
