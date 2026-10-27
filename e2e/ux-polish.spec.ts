@@ -375,42 +375,18 @@ test.describe("draft action bar", () => {
 });
 
 test.describe("workstream start", () => {
-  test("a new workstream opens with one sentence, with the commands behind the '?' button", async ({ page }) => {
+  test("a new workstream opens with one sentence", async ({ page }) => {
     await openApp(page);
     await startWorkstream(page, "CA-401");
     const pane = pipPane(page);
 
-    // One short sentence on what the workstream is for, and no commands in it.
+    // One short sentence on what the workstream is for.
     const intro = pane.locator("[data-empty-workstream]");
     await expect(intro).toHaveText(/^Everything for CA-401 .+ stays here: its agents, drafts and our conversation\.$/);
     const text = (await intro.textContent()) ?? "";
     expect(text.length).toBeLessThanOrEqual(140);
     expect(text.match(/[.!?](\s|$)/g)).toHaveLength(1);
     await expect(pane.getByText("/stop R1")).toHaveCount(0);
-
-    // The commands are a Tab away from the input, open with Enter and close with Esc, leaving the pane open.
-    await page.locator(PIP_INPUT).focus();
-    await page.keyboard.press("Tab");
-    const help = pane.getByRole("button", { name: "Commands", exact: true });
-    await expect(help).toBeFocused();
-    await expect(help).toHaveText("?");
-    await expect(help).toHaveAttribute("aria-expanded", "false");
-    await page.keyboard.press("Enter");
-    const dialog = pane.getByRole("dialog", { name: "Commands" });
-    await expect(dialog).toBeVisible();
-    await expect(help).toHaveAttribute("aria-expanded", "true");
-    for (const usage of ["/stop R1", "/retry R1", "/answer R1 your answer", "/pause", "/resume"]) await expect(dialog.getByText(usage, { exact: true })).toBeVisible();
-    await expect(dialog).toContainText("R1 is a run in this workstream; a run's id works anywhere.");
-    await page.keyboard.press("Escape");
-    await expect(dialog).toHaveCount(0);
-    await expect(pane).toBeVisible();
-    await expect(help).toBeFocused();
-    // Space opens it as well.
-    await page.keyboard.press(" ");
-    await expect(dialog).toBeVisible();
-    await page.keyboard.press("Escape");
-    await expect(dialog).toHaveCount(0);
-    await expect(pane).toBeVisible();
   });
 
   test("Pip home's Steps rail marks Investigate as next and keeps the later steps to one quiet line each", async ({ page }) => {
@@ -423,7 +399,6 @@ test.describe("workstream start", () => {
     // The same intro as in the pane.
     const region = homeConversationRegion(page);
     await expect(region.locator("[data-empty-workstream]")).toHaveText(/^Everything for CA-401 /);
-    await expect(region.getByRole("button", { name: "Commands", exact: true })).toBeVisible();
 
     const rail = stepRail(page);
     const next = rail.locator('[data-step-next="investigate"]');

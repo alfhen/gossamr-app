@@ -1,5 +1,5 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
-import { advanceRuns, askPip, detailsOf, mockLaunches, mockRuns, openApp, openTechnical, peekSheet, peekTicket, pipConversation, pipPane, startWorkstream, surfacePullRequests, type MockLaunch, workstreamEvents } from "./support/app";
+import { advanceRuns, askPip, detailsOf, mockLaunches, mockRuns, openApp, openTechnical, peekSheet, peekTicket, pipConversation, pipPane, startWorkstream, surfacePullRequests, type MockLaunch } from "./support/app";
 
 // Phase 6: Investigate, Triage, Plan, Review and Verify launch with a restriction Claude Code itself enforces
 // (`--permission-mode dontAsk` and allow/deny rules); a Build keeps what it had. The sample
@@ -10,9 +10,7 @@ const READ_ONLY = "Read-only: Claude Code refuses edits and writes";
 const READ_ONLY_TESTS = "Read-only, except the repository's tests: Claude Code refuses edits and other writes";
 const READ_ONLY_GUARD_START = "This run is read-only: Claude Code itself refuses file edits";
 
-const setup = (page: Page) => page.getByRole("dialog", { name: "Start an agent" });
 const runSheet = (page: Page) => page.getByRole("dialog", { name: "Agent run" });
-const runCards = (page: Page, key: string) => pipPane(page).getByRole("article", { name: `Start an agent: ${key}` });
 const runCard = (page: Page, id: string) => pipPane(page).locator(`article[data-run-id="${id}"]`);
 
 async function settled(page: Page) {
@@ -21,14 +19,10 @@ async function settled(page: Page) {
 
 const newest = async (page: Page, kind: string) => (await mockRuns(page)).find((r) => r.kind === kind) ?? null;
 
-/** Asks Pip for `what` on CA-401, opens its draft and starts it from the setup sheet, and returns the run it made of `kind`. */
+/** Asks Pip for `what` on CA-401, which starts it, and returns the run it made of `kind`. */
 async function startStep(page: Page, what: string, kind: string) {
   await askPip(page, what);
   await settled(page);
-  await runCards(page, "CA-401").last().getByRole("button", { name: "Review and start →" }).click();
-  await expect(setup(page)).toBeVisible();
-  await setup(page).getByRole("button", { name: "Start agent" }).click();
-  await expect(setup(page)).toHaveCount(0);
   return (await newest(page, kind))!;
 }
 
@@ -53,7 +47,7 @@ async function openDetails(scope: Locator, summary: string) {
   // The launch command sits inside the review's Technical details.
   if (summary === "Show the command (illustrative)" && (await scope.locator("[data-technical-details]").count())) await openTechnical(scope);
   const details = detailsOf(scope, summary);
-  await details.locator("summary").click();
+  await details.locator("> summary").first().click();
   await expect(details).toHaveAttribute("open", "");
   return details;
 }
@@ -85,57 +79,19 @@ async function approvePlan(page: Page) {
 async function brief(page: Page, id: string) {
   await runCard(page, id).getByRole("button", { name: /^Open / }).click();
   await expect(runSheet(page)).toBeVisible();
-  return openDetails(runSheet(page), "The brief as it was sent");
+  return openDetails(runSheet(page), "What the agent was told");
 }
 
-const approvedDigest = async (page: Page, runId: string) => {
-  const events = (await workstreamEvents(page)) as { action: string; runId: string | null; digest?: string }[];
-  return events.find((e) => e.action === "run_approved" && e.runId === runId)?.digest ?? null;
-};
-
-test("a person-started investigation shows and launches read-only, and the triage started after it carries the same rules", async ({ page }) => {
+test("an investigation Pip starts launches read-only, and the triage started after it carries the same rules", async ({ page }) => {
   await openApp(page, SAMPLE);
   await startWorkstream(page, "CA-401");
-  await askPip(page, "investigate this");
-  await settled(page);
-  await runCards(page, "CA-401").last().getByRole("button", { name: "Review and start →" }).click();
-  await expect(setup(page)).toBeVisible();
-
-  // The sheet says so where the person decides, and lists the exact flag and rules.
-  await expect(setup(page).locator("[data-read-only]")).toHaveText(READ_ONLY);
-  await expect(setup(page)).not.toContainText("this is a request, not a lock");
-  const adds = await openDetails(setup(page), "What Gossamr adds for the model");
-  await expect(adds).toContainText("--permission-mode dontAsk");
-  await expect(adds).toContainText("runs without asking you");
-  const deny = adds.locator("[data-read-only-rules] li");
-  for (const rule of ["Edit", "Write", "Bash(git push *)"]) await expect(deny.getByText(rule, { exact: true })).toHaveCount(1);
-  await expect(adds).toContainText(READ_ONLY_GUARD_START);
-
-  // The command is the restricted launch, flag for flag, and its guard carries the read-only sentence.
-  const command = await openDetails(setup(page), "Show the command (illustrative)");
-  await expect(command).toContainText("--permission-mode 'dontAsk' --setting-sources '' --strict-mcp-config --allowedTools 'mcp__gossamr__report' 'mcp__gossamr__ask' 'mcp__gossamr__read_workstream' 'mcp__gossamr__read_ticket' 'Bash(git fetch origin main)'");
-  await expect(command).toContainText("--disallowedTools 'Edit' 'Write'");
-  await expect(command).toContainText(READ_ONLY_GUARD_START);
-  // It names the agent tools' config, written at launch, so it is illustrative and offered without Copy.
-  await expect(command).toContainText("--mcp-config '<agent tools config, written at launch>'");
-  await expect(command.getByRole("button", { name: "Copy the command" })).toHaveCount(0);
-  await expect(command.locator("[data-command-illustrative]")).toHaveCount(1);
-
-  // The digest the checks show is the one the approval carries. That the restriction is part of that digest is proven
-  // by mockRuns.test.ts and the Rust `pre_phase_6_digest` tests, not here: both sides of this check come from one digest.
-  const checks = setup(page).getByRole("group", { name: "Checks before you approve" });
-  const shown = /What runs: ([0-9a-f]+)/.exec((await checks.textContent()) ?? "")?.[1];
-  expect(shown).toBeTruthy();
-  await setup(page).getByRole("button", { name: "Start agent" }).click();
-  await expect(setup(page)).toHaveCount(0);
-  const r1 = (await newest(page, "investigate"))!;
-  expect(await approvedDigest(page, r1.id)).toBe(`mock-${shown}`);
+  const r1 = await startStep(page, "investigate this", "investigate");
 
   const first = await launch(page, r1.id);
   restricted(first, "investigate");
   await expect(runCard(page, r1.id).locator("[data-read-only]")).toHaveAttribute("title", READ_ONLY);
 
-  // The triage the person starts next launches restricted too.
+  // The triage started next launches restricted too.
   await finish(page, r1.id);
   const triage = await startStep(page, "triage this", "triage");
   const second = await launch(page, triage.id);

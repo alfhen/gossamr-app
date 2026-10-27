@@ -328,11 +328,11 @@ export type Intent =
   | { type: "subtasks"; parent: ItemRef; summaries: string[] }
   /** A new title and/or description, each with the text it was drafted against; an approval refuses when the ticket no longer reads that way. */
   | { type: "rewrite"; item: ItemRef; title: TitleChange | null; body: BodyChange | null; /** What the old description holds that this turns into plain text, such as `tables`. */ flattened: string[] }
-  /** Never applied with `proposalsApprove`; `runsApprove` starts it, bound to the digest the person read. */
+  /** History only: Pip starts agents directly now. Stored drafts of it still read; none can be made or applied. */
   | { type: "startRun"; connectionId: string; item: ItemRef | null; spec: RunSpec }
-  /** Never applied with `proposalsApprove`; `runsSendFollowUp` sends the finished run back with this message, which the person may edit first. */
+  /** History only: Pip messages agents directly now. */
   | { type: "followUp"; connectionId: string; runId: string; shortId?: string | null; item: ItemRef | null; message: string; reason: string }
-  /** Never applied with `proposalsApprove`; `runsAnswerDraft` sends this answer to the run that asked `question`, as the person's own answer goes. The person may edit it first. */
+  /** History only: Pip messages agents directly now. */
   | { type: "runAnswer"; connectionId: string; runId: string; shortId: string | null; item: ItemRef | null; message: string; question: string | null }
   /** Never applied with `proposalsApprove`: a plain comment review of pull request `number` in `repo` at `commitSha`, built by Gossamr from a Review run's findings. `connectionId` is the code host's; `item` is the run's ticket, for grouping only. */
   | { type: "githubReview"; connectionId: string; item: ItemRef | null; runId: string; repo: string; number: number; commitSha: string; summary: string; comments: ReviewComment[] };
@@ -481,13 +481,8 @@ export type ProposalEdit =
   | { type: "rewrite"; title?: string; body?: string }
   /** A new item's fields; the ones left out stay as they are. */
   | { type: "create"; title?: string; body?: string; mentions?: { accountId: string; name: string }[]; kind?: WorkItemKind; container?: ContainerRef }
-  /** A run draft's settings, as the person edits them; the ones left out stay as they are. */
-  | { type: "followUp"; message: string }
-  /** The answer an answer draft sends. */
-  | { type: "runAnswer"; message: string }
   /** A review draft's summary and comments, as the person rewords and drops them; the ones left out stay as they are. A person's edit never moves a comment or adds one. */
-  | { type: "githubReview"; summary?: string; comments?: ReviewComment[] }
-  | { type: "run"; instruction?: string; base?: string; clonePath?: string; kind?: RunKind; name?: string; pr?: number | null; allowPush?: boolean; plan?: string; buildAccount?: string; project?: ContainerRef };
+  | { type: "githubReview"; summary?: string; comments?: ReviewComment[] };
 
 /** Emitted as the `proposals-changed` event when a draft was created, edited, applied, revised or retired. */
 export interface ProposalsChanged {
@@ -554,6 +549,7 @@ export type RunFailure =
 
 export interface Run {
   id: string;
+  /** The draft an older run was approved from; empty for a run Pip started. */
   proposalId: string;
   connectionId: string;
   item: ItemRef | null;
@@ -612,6 +608,10 @@ export interface Run {
    * Cleared once the run leaves the prompt or asks something else.
    */
   permissionAllowed?: { command: string; at: string } | null;
+  /** Who started it; absent in sample data and in runs stored before Pip started agents, which are the person's. */
+  createdBy?: ProposalMaker;
+  /** The Pip turn that started it, when Pip did. */
+  origin?: ProposalOrigin | null;
 }
 
 /**
@@ -722,30 +722,6 @@ export interface PlanComment {
   proposal: Proposal;
   cut: boolean;
   total: number;
-}
-
-/** What the person reads before approving; `digest` is sent back with the approval. */
-export interface RunReview {
-  digest: string;
-  prompt: string;
-  instruction: string;
-  focus: string | null;
-  ticketBlock: string | null;
-  /** For a build made from a plan: the plan as it will be sent. */
-  plan?: string | null;
-  /** For a review made from a build: the builder's account as it will be sent. */
-  buildAccount?: string | null;
-  /** For a triage or plan made after an investigation: the findings as they will be sent. */
-  findings?: string | null;
-  guard: string;
-  /** What the session is also given when Gossamr's server is running: its four tools, their allow rules and the line added to the guard. */
-  report?: { allowed: string; guard: string } | null;
-  /** For a read-only kind: what Claude Code is told to refuse, and the sentence added to the guard. */
-  readOnly?: ReadOnly | null;
-  spec: RunSpec;
-  /** The reviewed pull request, as GitHub names it now. */
-  prTitle?: string | null;
-  prUrl?: string | null;
 }
 
 /** One line of what the agent did, kept for the run sheet's timeline. */
@@ -865,6 +841,14 @@ export interface WorkstreamView {
   reviewBlocking?: boolean;
   /** Runs and pending drafts on the ticket that are in no workstream, while the workstream is open: the view offers to bring them here (`workstreamsAdopt`), never moves them on its own. As `adoptable` in src-tauri/src/inbox/workstreams.rs. */
   adoptable?: Adoptable | null;
+  /** The question Pip asked the person (`ask_person`), while neither answered in the conversation nor dismissed. */
+  pipAsk?: PipQuestion | null;
+}
+
+/** A question Pip asked the person, and when. */
+export interface PipQuestion {
+  question: string;
+  at: string;
 }
 
 /** Who did something recorded in a workstream's audit. */
@@ -876,7 +860,7 @@ export interface WorkstreamEvent {
   seq: number;
   at: string;
   actor: WorkstreamActor;
-  /** e.g. `opened`, `closed`, `notes_set`, `run_approved`, `run_stopped`, `run_answered`, `run_retried`, `paused`, `resumed`. */
+  /** e.g. `opened`, `closed`, `notes_set`, `agent_started`, `agent_message_queued`, `run_resumed`, `run_stopped`, `run_answered`, `run_retried`, `pip_asked`, `pip_ask_cleared`, `paused`, `resumed`. */
   action: string;
   runId: string | null;
   proposalId: string | null;
@@ -939,25 +923,6 @@ export interface WorktreeInfo {
 
 /** Deleted, or Claude refused to remove the worktree (its own words) and nothing was deleted. */
 export type DeleteResult = { type: "deleted" } | { type: "refused"; message: string };
-
-/** One line of a pre-flight check. */
-export interface PreflightRow {
-  level: "green" | "amber" | "red";
-  text: string;
-  /** A step the row offers: Terminal in this folder to trust it. */
-  action?: { type: "trustFolder"; path: string };
-}
-
-export interface Preflight {
-  rows: PreflightRow[];
-  blocking: boolean;
-}
-
-/** Whether Claude Code is there to run agents at all, ahead of any one run. `unknown` when the check could not be made. */
-export interface RunsEnvironment {
-  claude: "ok" | "missing" | "signedOut" | "unknown";
-  version: string | null;
-}
 
 /** A comment on a work item, mirroring the domain model. */
 export interface WorkComment {

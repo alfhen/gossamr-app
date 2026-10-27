@@ -51,6 +51,8 @@ interface WorkstreamsState {
   resume(id: string): Promise<boolean>;
   /** Pauses workstream `id` and stops each of its agents that can be stopped. False when it couldn't. */
   stop(id: string): Promise<boolean>;
+  /** Dismisses the question Pip asked in workstream `id`, so it leaves Needs you. False when it couldn't. */
+  dismissAsk(id: string): Promise<boolean>;
 }
 
 let stop: (() => void) | null = null;
@@ -259,6 +261,10 @@ export const useWorkstreams = create<WorkstreamsState>()((set, get) => {
     },
 
     resume: (id) => ok("Couldn't resume the workstream", (b) => b.workstreamsResume(id)),
+
+    async dismissAsk(id) {
+      return (await act("Couldn't dismiss the question", (b) => b.workstreamsDismissAsk(id))).ok;
+    },
 
     async stop(id) {
       const done = await act("Couldn't stop the workstream", (b) => b.workstreamsStop(id));

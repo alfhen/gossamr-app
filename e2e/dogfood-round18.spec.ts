@@ -1,18 +1,18 @@
 import { expect, test } from "@playwright/test";
 import { askRun, expandNeedsYou, mockRuns, needsPane, openAgents, openApp, pipCommentDraft, selectWorkstream, startWorkstream, openNeedRow } from "./support/app";
 
-// Fixes from the eighteenth dogfood round: 'start CA-408' in the palette offers the workstream, not only Ask Pip (G8).
+// Fixes from the eighteenth dogfood round: 'plan CA-408' in the palette offers Ask Pip to plan it (G8).
 
-test.describe("'start KEY' in the palette (G8)", () => {
-  test("offers to start a workstream on the ticket", async ({ page }) => {
+test.describe("'plan KEY' in the palette (G8)", () => {
+  test("offers to ask Pip to plan the ticket", async ({ page }) => {
     test.setTimeout(120_000);
     await openApp(page, "runs=empty");
     await page.keyboard.press("ControlOrMeta+k");
     const dialog = page.getByRole("dialog", { name: "Command palette" });
-    await dialog.getByRole("combobox").fill("start CA-402");
-    await expect(dialog.getByRole("option", { name: /^Start a workstream on CA-402/ })).toBeVisible();
-    await dialog.getByRole("combobox").fill("start on ca-402");
-    await expect(dialog.getByRole("option", { name: /^Start a workstream on CA-402/ })).toBeVisible();
+    await dialog.getByRole("combobox").fill("plan CA-402");
+    await expect(dialog.getByRole("option", { name: /^Ask Pip to plan CA-402/ })).toBeVisible();
+    await dialog.getByRole("combobox").fill("plan ca-402");
+    await expect(dialog.getByRole("option", { name: /^Ask Pip to plan CA-402/ })).toBeVisible();
   });
 });
 

@@ -1,18 +1,16 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { higherPriority, needAfter, leftOutLabel, needGroups, repeatedComments, REPEATED_COMMENT_NOTE, type Need } from "../lib/needs";
-import { type Proposal, type Run } from "../types";
+import { type Proposal, type Run, type WorkstreamView } from "../types";
 import { rewriteWhat } from "./RewriteDiff";
 import { useWorkspace } from "../workspaceStore";
 import { OpenInTerminal, FailureNext } from "./AgentParts";
 import { Box, BoxTitle, Btn } from "./AgentSheet";
 import { planOpenQuestions } from "./agentsLogic";
 import { draftSummary, draftTitle, LiveDraftCard, useEditedDraft } from "./DraftCard";
-import { draftDecisions } from "./DraftPreview";
 import { failureAction } from "./failureActions";
 import { failureHelp } from "./failureHelp";
-import { inlineStartable, InlineStart, useInlineStarts } from "./InlineStart";
 import { GroupBatch, GroupChip } from "./NeedsYou";
-import { groupId, openNeed, setPaneIntent, takePaneIntent } from "./needsActions";
+import { groupId, openNeed, openPipAsk, setPaneIntent, takePaneIntent } from "./needsActions";
 import { chipLabel, editedTitle } from "../lib/needs";
 import { PermissionAsk } from "./PermissionAsk";
 import { useWorkView } from "./workViewStore";
@@ -322,25 +320,25 @@ function DraftBody({ need, proposal: p }: { need: Need; proposal: Proposal }) {
   );
 }
 
-/** A run draft: one of a kind that needs nothing chosen is read in place, with Start under it; any other opens its setup sheet from its card. */
-function StartBody({ proposal: p }: { proposal: Proposal }) {
-  const phase = useInlineStarts((s) => s.entries[p.id]?.phase ?? "closed");
-  if (!inlineStartable(p)) return <LiveDraftCard proposal={p} jump={false} headingLevel={3} />;
+/** The question Pip asked, with the way to answer it where it was asked, or to dismiss it. */
+function PipAskBody({ need, view }: { need: Need; view: WorkstreamView }) {
   return (
-    <div className="grid gap-2">
-      <p className="m-0 text-sm text-ws-ink2">
-        <b className="font-semibold text-ws-ink">{draftTitle(p)}</b> · {draftSummary(p, null)}
+    <Box tone="needs" label="Pip asks you">
+      <BoxTitle icon="spark" tone="needs">
+        Pip asks you
+      </BoxTitle>
+      <p data-pip-ask className="selectable m-0 whitespace-pre-wrap text-ws-ink [overflow-wrap:anywhere]">
+        {view.pipAsk?.question}
       </p>
-      {phase === "closed" && (
-        <div className="flex flex-wrap items-center gap-2">
-          <Btn tone="primary" icon="play" onClick={() => void useInlineStarts.getState().open(p.id)}>
-            Review and start
-          </Btn>
-          <Btn onClick={draftDecisions(p.id, p).skip}>Skip</Btn>
-        </div>
-      )}
-      <InlineStart proposal={p} />
-    </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <Btn tone="primary" icon="spark" onClick={() => openPipAsk(need)}>
+          Answer in Pip
+        </Btn>
+        <Btn tone="plain" icon="x" onClick={() => void useWorkstreams.getState().dismissAsk(view.workstream.id)} title="Takes it out of Needs you. Pip carries on without an answer.">
+          Dismiss
+        </Btn>
+      </div>
+    </Box>
   );
 }
 
@@ -353,7 +351,9 @@ function Decision({ need }: { need: Need }) {
     case "permission":
       return run ? <PermissionBody run={run} /> : null;
     case "question":
-      return proposal ? <LiveDraftCard proposal={proposal} jump={false} headingLevel={3} /> : run ? <AnswerBody run={run} /> : null;
+      return run ? <AnswerBody run={run} /> : null;
+    case "pipAsk":
+      return view?.pipAsk ? <PipAskBody need={need} view={view} /> : null;
     case "signIn":
       return run ? <SignInBox run={run} onAttach={() => void useRuns.getState().attach(run.id)} /> : null;
     case "failure":
@@ -362,8 +362,6 @@ function Decision({ need }: { need: Need }) {
       return run ? <StoppedBody run={run} /> : null;
     case "paused":
       return view ? <PausedBanner view={view} actions={controlActions(view.workstream.id)} /> : null;
-    case "runStart":
-      return proposal ? <StartBody proposal={proposal} /> : null;
     case "plan":
     case "description":
     case "draft":

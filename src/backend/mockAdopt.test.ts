@@ -21,8 +21,7 @@ const lines = (backend: MockBackend, id: string) => backend.workstreamsEvents(id
 
 /** A run on CA-401 approved in General, as the board does it. */
 async function runInGeneral(backend: MockBackend) {
-  const draft = await backend.runsDraft(spec(), CA401);
-  return backend.runsApprove(draft.id, (await backend.runsReview(draft.id)).digest);
+  return backend.runs.start(spec(), CA401);
 }
 
 beforeEach(() => saved.clear());
@@ -80,31 +79,19 @@ describe("bringing a ticket's runs and drafts into its workstream (the mock of a
   it("leaves what belongs to another workstream, another ticket and a closed one, and a draft with nowhere to record one", async () => {
     const backend = new MockBackend({ runs: { seed: "empty" } });
     const other = await backend.workstreamsOpen(itemRef("CA-402"));
-    const draftElsewhere = await backend.runsDraft(spec({ workstream: other.id }), itemRef("CA-402"));
+    const runElsewhere = backend.runs.start(spec({ workstream: other.id }), itemRef("CA-402"));
     const board = await backend.proposalsCreate(comment, null);
     const ws = await backend.workstreamsOpen(CA401);
     expect((await backend.workstreamsGet(ws.id))?.adoptable).toBeUndefined();
     await expect(backend.workstreamsAdopt(ws.id)).rejects.toThrow(NOTHING_TO_ADOPT);
     expect((await backend.proposalsGet(board.id))?.origin.type).toBe("board");
-    expect((await backend.proposalsGet(draftElsewhere.id))?.intent).toMatchObject({ spec: { workstream: other.id } });
+    expect((await backend.runsGet(runElsewhere.id))?.spec.workstream).toBe(other.id);
     await backend.workstreamsClose(ws.id);
     backend.proposals.draft(comment, null, "q2");
     expect((await backend.workstreamsGet(ws.id))?.adoptable).toBeUndefined();
     await expect(backend.workstreamsAdopt(ws.id)).rejects.toThrow("is closed");
     const ticketless = await backend.workstreamsOpen(null, "Why is it slow?");
     await expect(backend.workstreamsAdopt(ticketless.id)).rejects.toThrow("no ticket");
-  });
-
-  it("puts a draft that would start a run into the workstream by its spec and back by the same", async () => {
-    const backend = new MockBackend({ runs: { seed: "empty" } });
-    const start = await backend.runsDraft(spec(), CA401);
-    const ws = await backend.workstreamsOpen(CA401);
-    const moved = await backend.workstreamsAdopt(ws.id);
-    expect(moved.drafts).toEqual([start.id]);
-    expect((await backend.proposalsGet(start.id))?.intent).toMatchObject({ spec: { workstream: ws.id } });
-    await backend.workstreamsUndo(ws.id, { type: "adopt", ...moved });
-    const back = await backend.proposalsGet(start.id);
-    expect(back?.intent.type === "startRun" && back.intent.spec.workstream).toBeFalsy();
   });
 
   it("is undone right after, putting each back in General, and refused once anything else happened or after the window", async () => {

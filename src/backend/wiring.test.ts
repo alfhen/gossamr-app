@@ -17,9 +17,7 @@ describe("the desktop backend's wiring", () => {
     expect(commands.size).toBeGreaterThan(50);
     const invoked = [...read("./jira.ts").matchAll(/invoke(?:<[^(]*>)?\(\s*"([a-z0-9_]+)"/g)].map((m) => m[1]);
     expect(invoked).toContain("proposals_post_review");
-    // Removed from lib.rs when Pip took over starting and messaging agents; the setup sheet that calls them goes with the page's own step.
-    const removed = ["runs_review", "runs_draft", "runs_approve", "runs_preflight", "runs_repos", "runs_suggest_name", "runs_send_follow_up", "runs_answer_draft", "runs_repo_project", "runs_trust_path", "runs_refresh_plan", "runs_refresh_build_account"];
-    expect(invoked.filter((c) => !commands.has(c) && !removed.includes(c))).toEqual([]);
+    expect(invoked.filter((c) => !commands.has(c))).toEqual([]);
   });
 
   it("sends a review draft's post, files, diff and access with the argument names the commands take", () => {

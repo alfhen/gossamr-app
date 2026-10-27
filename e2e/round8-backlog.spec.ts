@@ -1,22 +1,10 @@
 import { expect, test, type Page } from "@playwright/test";
-import { agentsHome, jiraWrites, needsPane, needsYouCount, openAgents, openApp, pipCommentDraft, pipPane, selectWorkstream, startWorkstream, workstreamGroup } from "./support/app";
+import { jiraWrites, needsPane, needsYouCount, openAgents, openApp, pipCommentDraft, pipPane, selectWorkstream, startWorkstream, workstreamGroup } from "./support/app";
 
 // Fixes from round 8's backlog: the workstream step says why a key has nothing to start, a pause before posting edited text that
 // reaches everyone or looks like a secret, and Close beside Hold.
 
 const allProjects = (page: Page) => page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "All projects" }).click();
-
-test.describe("the workstream step with nothing to start (G16)", () => {
-  test("says why a typed key has no ticket to start a workstream on", async ({ page }) => {
-    await openApp(page, "runs=empty");
-    await openAgents(page);
-    await agentsHome(page).getByRole("button", { name: "Start a workstream…" }).click();
-    const dialog = page.getByRole("dialog", { name: "Command palette" });
-    await dialog.getByRole("combobox").fill("CA-9999");
-    await expect(dialog.getByRole("option")).toHaveCount(0);
-    await expect(dialog).toContainText("No open ticket CA-9999 here. It may be Done, already have a workstream, or not be loaded.");
-  });
-});
 
 test.describe("the pause before posting edited text (G19)", () => {
   /** A comment on `key` drafted by Pip and left waiting in the decision pane. */

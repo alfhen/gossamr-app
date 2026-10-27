@@ -1,10 +1,7 @@
 import { docFromText, docText, quoteAfterFirst } from "../lib/docs";
-import { BUILD_ACCOUNT_LIMIT, INSTRUCTIONS, PLAN_LIMIT } from "./mockRunKinds";
 import { canJoinWorkstream, withWorkstream } from "../lib/workstreamAdopt";
 import { capRefusal, isRunComment, isRunReview, leftByRun, offTheDiff, PLAN_IS_THE_USERS, REPLACED_REASON, REVIEW_CHANGED, REVIEW_IS_THE_USERS, REVIEW_MAYBE_POSTED_NOTE, REVIEW_NOT_FOUND_NOTE, REVIEW_OUTDATED_NOTE, reviewEditProblem, reviewSupersession, runCommentSupersession, supersession, targetOf, WORKSTREAM_PENDING_CAP, workstreamOf } from "../lib/proposals";
 import { commentable } from "../lib/diffHunks";
-import { followUpProblem } from "../workspace/followUp";
-import { answerProblem } from "../lib/answer";
 import { bodyChange, markdownOf } from "./mockMarkdown";
 import { planSectionOf } from "./mockPlanSection";
 import { isTriageDescription, triageSectionOf, withoutTriageSection } from "./mockTriageSection";
@@ -48,12 +45,8 @@ function rewriteProblem(i: Extract<Intent, { type: "rewrite" }>): string | null 
   return null;
 }
 
-/** The backend's checks on an answer's text, in the backend's words (`check_answer` in `proposals.rs`). */
-export function runAnswerProblem(message: string): string | null {
-  const problem = answerProblem(message);
-  if (problem) return problem;
-  return RESERVED.some((m) => message.includes(m)) ? "the answer contains text Gossamr reserves; remove it" : null;
-}
+/** Why a draft that starts or messages an agent can't be made or approved any more, as `AGENTS_DIRECT` in src-tauri/src/proposals.rs. */
+export const AGENTS_DIRECT = "Pip starts and messages agents directly now";
 
 /** Who an audit line names for a draft's maker (`actor_of` in src-tauri/src/proposals.rs). */
 export function actorOf(by: Proposal["createdBy"]): WorkstreamActor {
@@ -104,10 +97,9 @@ export class MockProposals {
     if (intent.type === "create") {
       if (!intent.fields.title.trim()) return Promise.reject(new Error("a new item needs a title"));
       if (intent.container.connectionId !== CONNECTION) return Promise.reject(new Error("that item belongs to another connection"));
-    } else if (intent.type === "followUp") return Promise.reject(new Error("only Pip proposes a follow-up"));
-    else if (intent.type === "runAnswer") return Promise.reject(new Error("only Pip proposes an answer; answer the run yourself from its card"));
+    } else if (intent.type === "startRun" || intent.type === "followUp" || intent.type === "runAnswer") return Promise.reject(new Error(AGENTS_DIRECT));
     else if (intent.type === "githubReview") return Promise.reject(new Error("a review draft is made from a review run's findings"));
-    else if (intent.type !== "startRun" && !targetOf(intent)) return Promise.reject(new Error("a draft made by hand has to be about an existing item"));
+    else if (!targetOf(intent)) return Promise.reject(new Error("a draft made by hand has to be about an existing item"));
     if (intent.type === "transition" && !intent.to.trim()) return Promise.reject(new Error("a transition needs a target status"));
     const problem = intent.type === "rewrite" ? rewriteProblem(intent) : null;
     if (problem) return Promise.reject(new Error(problem));
@@ -235,8 +227,7 @@ export class MockProposals {
     const p = this.get(id);
     if (!p || !canJoinWorkstream(p)) return;
     const origin = p.origin.type === "chat" || p.origin.type === "run" ? withWorkstream(p.origin, workstream) : p.origin;
-    const intent = p.intent.type === "startRun" ? { ...p.intent, spec: withWorkstream(p.intent.spec, workstream) } : p.intent;
-    this.set(id, { origin, intent });
+    this.set(id, { origin });
   }
 
   /** Tells the listeners the drafts may read differently, as when the pull request a review draft is about moved on. */
@@ -299,17 +290,6 @@ export class MockProposals {
       if (problem) throw new Error(problem);
       return this.set(id, { intent: next, revisions: [...p.revisions, { at: new Date().toISOString(), note: "Edited", intent: next }], error: null });
     }
-    if (edit.type === "followUp" && intent.type === "followUp") {
-      const problem = followUpProblem(edit.message);
-      if (problem) throw new Error(problem);
-      const next: Intent = { ...intent, message: edit.message.trim() };
-      return this.set(id, { intent: next, revisions: [...p.revisions, { at: new Date().toISOString(), note: "Edited", intent: next }], error: null });
-    }
-    if (edit.type === "runAnswer" && intent.type === "runAnswer") {
-      const problem = runAnswerProblem(edit.message);
-      if (problem) throw new Error(problem);
-      return this.edited(p, { ...intent, message: edit.message.trim() });
-    }
     if (edit.type === "githubReview" && intent.type === "githubReview") {
       const next: Intent = {
         ...intent,
@@ -319,36 +299,6 @@ export class MockProposals {
       const problem = reviewEditProblem(intent, next);
       if (problem) throw new Error(problem);
       return this.edited(p, next);
-    }
-    if (edit.type === "run" && intent.type === "startRun") {
-      if (edit.instruction !== undefined && !edit.instruction.trim()) throw new Error("the instruction can't be empty");
-      const { instruction, base, clonePath, kind, name, pr, allowPush, plan, buildAccount, project } = edit;
-      if (project && project.connectionId !== CONNECTION) throw new Error("the project belongs to another connection");
-      const was = intent.spec;
-      const switched = kind && kind !== was.kind;
-      const untouched = instruction === undefined && was.instruction.trim() === INSTRUCTIONS[was.kind];
-      const spec = {
-        ...was,
-        ...(instruction !== undefined ? { instruction } : {}),
-        ...(base !== undefined ? { base: base.trim() } : {}),
-        ...(clonePath !== undefined ? { clonePath } : {}),
-        ...(kind ? { kind } : {}),
-        ...(switched ? { pr: null, prSha: null, allowPush: kind === "build", ...(kind !== "build" ? { plan: null, planFromRun: null, planApproved: false } : {}), ...(kind !== "review" ? { buildAccount: null, buildFromRun: null } : {}), ...(kind !== "triage" && kind !== "plan" ? { findings: null, findingsFromRun: null } : {}), ...(untouched ? { instruction: INSTRUCTIONS[kind] } : {}), ...(kind !== "investigate" ? { project: null } : {}) } : {}),
-        ...(project ? { project } : {}),
-        ...(pr !== undefined ? { pr, prSha: null, ...(pr !== was.pr ? { buildAccount: null, buildFromRun: null } : {}) } : {}),
-        ...(allowPush !== undefined ? { allowPush } : {}),
-        // Plan text the person changed here is theirs, so the build is told a person settled it.
-        ...(plan !== undefined ? (plan.trim() ? { plan, planApproved: !!was.planApproved || plan !== was.plan } : { plan: null, planFromRun: null, planApproved: false }) : {}),
-        ...(buildAccount !== undefined ? (buildAccount.trim() ? { buildAccount } : { buildAccount: null, buildFromRun: null }) : {}),
-        ...(name !== undefined ? { name: name.trim() } : {}),
-      };
-      if (spec.allowPush && spec.kind !== "build") throw new Error("Only a build can push.");
-      if (allowPush === false && spec.kind === "build" && spec.workstream) throw new Error("a workstream's build always publishes a draft pull request");
-      if (plan?.trim() && !was.planFromRun) throw new Error("this draft doesn't carry a plan");
-      if (buildAccount?.trim() && !was.buildFromRun) throw new Error("this draft doesn't carry a builder's account");
-      if (buildAccount && [...buildAccount].length > BUILD_ACCOUNT_LIMIT) throw new Error(`The builder's account must be text of at most ${BUILD_ACCOUNT_LIMIT} characters.`);
-      if (plan && [...plan].length > PLAN_LIMIT) throw new Error(`The plan must be text of at most ${PLAN_LIMIT} characters.`);
-      return this.set(id, { intent: { ...intent, spec }, error: null });
     }
     throw new Error("that edit doesn't fit this draft");
   }
@@ -364,6 +314,7 @@ export class MockProposals {
     const { body, title, description, kind, summaries } = typeof change === "string" ? { body: change, title: undefined, description: undefined, kind: undefined, summaries: undefined } : change;
     const comments = typeof change === "string" ? undefined : change.comments;
     const p = this.pending(id);
+    if (p.intent.type === "startRun" || p.intent.type === "followUp" || p.intent.type === "runAnswer") throw new Error("this kind of draft can't be revised");
     const ownWorkstream = () => {
       const of = workstreamOf(p);
       if (of !== null && of !== workstream) throw new Error("that draft belongs to another workstream");
@@ -412,24 +363,6 @@ export class MockProposals {
       if (isTriageDescription(p) && (!now || !triageSectionOf(now.to) || rest(was.body) !== rest(now))) throw new Error(TRIAGE_KEEPS_THE_REST);
       const problem = rewriteProblem(intent as Extract<Intent, { type: "rewrite" }>);
       if (problem) throw new Error(problem);
-      return this.set(id, { intent, revisions: [...p.revisions, { at: new Date().toISOString(), note: "Revised by Pip", intent }], error: null });
-    }
-    if (p.intent.type === "runAnswer") {
-      if (p.revisions.some((r) => r.note === "Edited")) throw new Error("the user edited this answer, so Pip can't change it any more");
-      if (p.createdBy !== "pip") throw new Error("that draft wasn't made by Pip, so Pip can't change it");
-      ownWorkstream();
-      const problem = runAnswerProblem(body ?? "");
-      if (problem) throw new Error(problem);
-      const intent: Intent = { ...p.intent, message: (body ?? "").trim() };
-      return this.set(id, { intent, revisions: [...p.revisions, { at: new Date().toISOString(), note: "Revised by Pip", intent }], error: null });
-    }
-    if (p.intent.type === "followUp") {
-      if (p.revisions.some((r) => r.note === "Edited")) throw new Error("the user edited this follow-up, so Pip can't change it any more");
-      if (p.createdBy !== "pip") throw new Error("that draft wasn't made by Pip, so Pip can't change it");
-      ownWorkstream();
-      const problem = followUpProblem(body ?? "");
-      if (problem) throw new Error(problem);
-      const intent: Intent = { ...p.intent, message: (body ?? "").trim() };
       return this.set(id, { intent, revisions: [...p.revisions, { at: new Date().toISOString(), note: "Revised by Pip", intent }], error: null });
     }
     const left = leftByRun(p) && (p.intent.type === "comment" || p.intent.type === "create" || p.intent.type === "subtasks");
@@ -481,34 +414,6 @@ export class MockProposals {
     return back;
   }
 
-  /** A pending build draft's plan read again from its run, for `MockRuns.refreshPlan`: the text and whether it was settled, both replaced. */
-  readPlanAgain(id: string, carried: { plan: string; planApproved: boolean }): Proposal {
-    const p = this.pending(id);
-    if (p.intent.type !== "startRun") throw new Error("that draft doesn't start a run");
-    return this.set(id, { intent: { ...p.intent, spec: { ...p.intent.spec, ...carried } }, error: null });
-  }
-
-  /** Marks a run draft applied, for `MockRuns.approve`. */
-  applyRun(id: string, runId: string): Proposal {
-    this.pending(id);
-    return this.set(id, { state: { type: "applied" }, run: runId, error: null });
-  }
-
-  /** Marks an answer draft sent with the text that went, kept as the person's revision when it differs, as `answer_draft_sent`. */
-  answerSent(id: string, runId: string, sent: string): Proposal {
-    const p = this.pending(id);
-    if (p.intent.type !== "runAnswer") throw new Error("that draft isn't an answer");
-    const changed = p.intent.message.trim() !== sent.trim();
-    const intent: Intent = changed ? { ...p.intent, message: sent.trim() } : p.intent;
-    const revisions = changed ? [...p.revisions, { at: new Date().toISOString(), note: "Edited", intent }] : p.revisions;
-    return this.set(id, { intent, revisions, state: { type: "applied" }, run: runId, error: null });
-  }
-
-  /** Keeps a pending draft with the reason sending it failed. */
-  failed(id: string, why: string) {
-    if (this.get(id)?.state.type === "pending") this.set(id, { error: why });
-  }
-
   /**
    * Posts a pending review draft with `post`, as `Core::post_review_draft`: refused when it has other than the `seen`
    * revisions the person looked at, claimed first, so it goes at most once, and never through the tracker. A refusal leaves
@@ -558,9 +463,7 @@ export class MockProposals {
 
   async approve(id: string) {
     const p = this.pending(id);
-    if (p.intent.type === "startRun") throw new Error("A run is approved with its own button");
-    if (p.intent.type === "followUp") throw new Error("A follow-up is sent back with its own button");
-    if (p.intent.type === "runAnswer") throw new Error("An answer is sent with its own button");
+    if (p.intent.type === "startRun" || p.intent.type === "followUp" || p.intent.type === "runAnswer") throw new Error(AGENTS_DIRECT);
     if (p.intent.type === "githubReview") throw new Error("A review is posted to GitHub with its own button");
     this.set(id, { state: { type: "applying" } });
     try {

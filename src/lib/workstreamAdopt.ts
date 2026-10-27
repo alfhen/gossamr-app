@@ -4,8 +4,8 @@ import type { Adoptable, Proposal, Run, Workstream } from "../types";
 /** Why bringing a ticket's runs and drafts in is refused when there are none (any more), as `NOTHING_TO_ADOPT` in src-tauri/src/inbox/workstreams.rs. */
 export const NOTHING_TO_ADOPT = "There is nothing on this ticket to bring into the workstream.";
 
-/** Whether a draft can be put in a workstream after it was made, as `can_join_workstream`: Pip's, a run's and any run start record one. */
-export const canJoinWorkstream = (p: Proposal) => p.origin.type === "chat" || p.origin.type === "run" || p.intent.type === "startRun";
+/** Whether a draft can be put in a workstream after it was made, as `can_join_workstream`: Pip's and a run's record one. */
+export const canJoinWorkstream = (p: Proposal) => p.origin.type === "chat" || p.origin.type === "run";
 
 /**
  * What an open workstream on a ticket could take in, as `adoptable_of`: the ticket's runs in `itemRuns` and the pending

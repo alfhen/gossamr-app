@@ -6,12 +6,10 @@ import type {
   CatalogPage,
   CloneChoice,
   LocalClone,
-  ContainerRef,
   Intent,
   ItemRef,
   Person,
   PlanComment,
-  Preflight,
   Proposal,
   ProposalEdit,
   ProposalQuery,
@@ -19,13 +17,10 @@ import type {
   Run,
   RunEvent,
   RunQuery,
-  RunReview,
-  RunSpec,
   RunOutcome,
   RunsChanged,
   AgentSettings,
   CleanupResult,
-  RunsEnvironment,
   Snapshot,
   ChangedFile,
   PullDiff,
@@ -178,13 +173,6 @@ export interface Backend {
   /** Background agent runs, newest first. */
   runsList(query?: RunQuery): Promise<Run[]>;
   runsGet(id: string): Promise<Run | null>;
-  /** The exact prompt a `startRun` draft would send, and the digest that approves it. */
-  runsReview(proposalId: string): Promise<RunReview>;
-  /**
-   * Starts a `startRun` draft, the only way one is approved. `digest` is from the review the person read; a draft that
-   * changed since rejects with "This draft changed after you read it. Review it again."
-   */
-  runsApprove(proposalId: string, digest: string): Promise<Run>;
   /** Stops a working run; rejects until it is working. */
   runsStop(id: string): Promise<Run>;
   /** Answers a run that is asking a question: hands the answer to the agent waiting in its ask call, or stops its session and wakes it when its turn ended. Also sends again an answer that was stopped on its way. */
@@ -201,14 +189,6 @@ export interface Backend {
    * in Terminal for the person to answer Yes there. The session is neither stopped nor resumed. Rejects with the reason otherwise.
    */
   runsAllowPermissionOnce(id: string, command: string): Promise<Run>;
-  /** Sends a finished run back for another pass with a `followUp` draft's message. `message` is what the person read; a draft that changed since rejects with "The message changed after you read it. Read it again." Rejects with the reason when the run can't be resumed; the draft stays pending. */
-  runsSendFollowUp(proposalId: string, message: string): Promise<Run>;
-  /**
-   * Sends a `runAnswer` draft's message to the run that asked, exactly as `runsAnswer` sends the person's own, and marks
-   * the draft applied. `message` is what the person read; a draft that changed since rejects with "The answer changed
-   * after you read it. Read it again." Rejects with the reason when the run can't be answered; the draft stays pending.
-   */
-  runsAnswerDraft(proposalId: string, message: string): Promise<Run>;
   /** Takes a listed session over as the continuation of a stopped or finished run. */
   runsAdoptSession(id: string, session: string): Promise<Run>;
   /** Stops every active run, across accounts, and the runs waiting for a slot (`waiting`); nothing starts in the slots it frees. */
@@ -217,23 +197,13 @@ export interface Backend {
   runsAttach(id: string): Promise<void>;
   /** Opens Terminal in the run's clone running `claude`, so the person can accept Claude's trust question. Rejects unless the run failed because its folder isn't trusted. */
   runsTrustFolder(id: string): Promise<void>;
-  /** Opens Terminal in a clone running `claude`, before any run exists, so the person can accept Claude's trust question. Rejects for a folder that isn't in a place Gossamr looks for clones. */
-  runsTrustPath(path: string): Promise<void>;
   /** Opens Terminal in the run's clone running `claude`, so the person can sign in. Rejects unless the run failed because Claude isn't signed in. */
   runsSignIn(id: string): Promise<void>;
-  /** What a run would need and run as; with no spec, only the environment and capacity. */
-  runsPreflight(spec: RunSpec | null): Promise<Preflight>;
-  /** Drafts a run by hand. The backend fills in the ticket text; nothing starts until `runsApprove`. */
-  runsDraft(spec: RunSpec, item: ItemRef | null): Promise<Proposal>;
-  /** Every repository watched on any GitHub connection as owner/name, sorted. */
-  runsRepos(): Promise<string[]>;
   /** Local clones of a watched repository, the one the person chose first. */
   runsClones(repo: string): Promise<CloneChoice>;
   runsPickClone(repo: string, path: string): Promise<void>;
   /** Clones a watched repository into `~/Gossamr/agents/<owner>/<repo>` (or fetches into the copy already there). Only after the person chose it, having seen `CloneChoice.fresh`. */
   runsCloneFresh(repo: string): Promise<LocalClone>;
-  /** A worktree name for a new run in `clonePath` that nothing there uses yet. */
-  runsSuggestName(clonePath: string, key: string, title: string): Promise<string>;
   runsEvents(id: string): Promise<RunEvent[]>;
   /** The part of the result meant for Jira, the tickets it names, and the pull request or branch the run produced. */
   runsOutcome(id: string): Promise<RunOutcome>;
@@ -243,14 +213,8 @@ export interface Backend {
   runsDraftPlanComment(id: string): Promise<PlanComment>;
   /** Drafts the ticket's description with the plan of a finished Plan run added. A draft only. */
   runsDraftPlanDescription(id: string): Promise<Proposal>;
-  /** Reads a pending build draft's plan again from its plan run, replacing the person's edits. Only this changes the plan. */
-  runsRefreshPlan(id: string): Promise<Proposal>;
-  /** Reads a pending review draft's builder account again from its build run, replacing the person's edits. Only this changes it. */
-  runsRefreshBuildAccount(id: string): Promise<Proposal>;
   /** Drafts a new ticket from a finished run that has no ticket: the one its `New ticket:` section proposes, else its answer for the person to edit. A draft only; a run gets one. */
   runsDraftTicket(id: string): Promise<Proposal>;
-  /** The watched project the tickets linked to this repository's pull requests most recently belong to, if any. */
-  runsRepoProject(repo: string): Promise<ContainerRef | null>;
   /** Drafts a link saying the run's ticket is blocked by `blockerKey`. A draft only. */
   runsDraftBlocker(id: string, blockerKey: string): Promise<Proposal>;
   /** Starts a run that is still queued, as after a restart. */
@@ -258,8 +222,6 @@ export interface Backend {
   /** How many agents carry on if the app quits or the person signs out. */
   runsKeepRunning(): Promise<number>;
   revealPath(path: string): Promise<void>;
-  /** Whether Claude Code is installed and signed in, for the banners on the Agents view. Never rejects. */
-  runsEnvironment(): Promise<RunsEnvironment>;
   runsSettings(): Promise<AgentSettings>;
   /** Saves the limits, clamped by the backend, and returns what was saved. */
   runsSetSettings(settings: AgentSettings): Promise<AgentSettings>;
@@ -304,6 +266,8 @@ export interface Backend {
   workstreamsPause(id: string): Promise<Workstream>;
   /** The person resumes a workstream, whatever paused it. */
   workstreamsResume(id: string): Promise<Workstream>;
+  /** The person dismisses the question Pip asked in a workstream (`pipAsk`); false when none was open. */
+  workstreamsDismissAsk(id: string): Promise<boolean>;
   /**
    * The person's Undo of "Bring them here", a moment after it: the runs and drafts it moved go back to General.
    * Allowed only while that change is the last line of the audit and under a minute old; it adds its own `undone` line.

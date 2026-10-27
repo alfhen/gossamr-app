@@ -126,14 +126,3 @@ test.describe("a comment draft (G26, G29)", () => {
     await expect(entry.locator("[data-sent-from]")).not.toContainText("Gossamr");
   });
 });
-
-test.describe("the workstream step for a Done ticket (G30)", () => {
-  test("names the one real reason, not three possible ones", async ({ page }) => {
-    await openApp(page, "runs=empty");
-    await openAgents(page);
-    await agentsHome(page).getByRole("button", { name: "Start a workstream…" }).click();
-    await palette(page).getByRole("combobox").fill("DEVOPS-478");
-    await expect(palette(page)).toContainText("DEVOPS-478 is Done in Jira.");
-    await expect(palette(page)).not.toContainText("It may be Done, already have a workstream, or not be loaded");
-  });
-});

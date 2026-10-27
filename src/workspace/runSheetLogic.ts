@@ -1,6 +1,5 @@
 import { answerProblem } from "../lib/answer";
-import { containerKey, itemKey } from "../lib/filter";
-import { SUMMARY_ONLY, type CodeChange, type ContainerRef, type DevLink, type ItemRef, type Preflight, type Proposal, type ResultSource, type ReviewSeverity, type ReviewView, type ReadOnly, type Run, type RunKind, type RunOutcome, type RunState, type RunReview, type RunSpec, type WorkContainer } from "../types";
+import { SUMMARY_ONLY, type CodeChange, type ItemRef, type Proposal, type ResultSource, type ReviewSeverity, type ReviewView, type ReadOnly, type Run, type RunOutcome, type RunState } from "../types";
 import type { IconName } from "./AgentIcons";
 
 /** What the interface says about safety. These sentences are mandatory wherever an agent is started or described. */
@@ -63,102 +62,6 @@ export const readOnlyHeadline = (readOnly: ReadOnly) => (runsTests(readOnly) ? C
 /** What the read-only rules mean, with the sentence about tests only for a step that runs them. */
 export const readOnlyNote = (readOnly: ReadOnly) => (runsTests(readOnly) ? `${COPY.readOnlyNote} ${COPY.readOnlyTestsNote}` : COPY.readOnlyNote);
 
-/** Who the agent runs as, said for the kind it is. */
-export const runAsYou = (readOnly: ReadOnly | null | undefined) => (readOnly ? COPY.runAsYouReadOnly : COPY.runAsYou);
-
-export const START_STEPS: readonly string[] = [
-  "Gossamr makes the worktree and starts claude --bg in it with the prompt above. It is the same Claude Code you use yourself, with your own settings and permissions.",
-  "It works in the background. If your settings would ask you something, it stops under Needs you. Answer a question in Gossamr; for a permission prompt, Deny it in Gossamr or Allow it once in Terminal.",
-  "When it is done it is under Ready to review. Anything for Jira comes back in its answer; nothing is posted without a draft you approve.",
-];
-
-/** What a ticketless investigation starts with, for the person to replace with their own question. As `TICKETLESS_STARTER` in `domain/run.rs`. */
-export const TICKETLESS_STARTER = "Look into this: ";
-
-/** An investigation with no ticket is the one that ends as a draft ticket in a project the person picks. */
-export const ticketlessShape = (item: ItemRef | null, kind: RunKind) => !item && kind === "investigate";
-
-/** The project a new ticket goes in without asking: the repository's usual one, else the last one chosen, else the first watched. Only a project the person watches can be it. */
-export function defaultProject(options: { repoProject: ContainerRef | null; last: ContainerRef | null; projects: readonly WorkContainer[] }): ContainerRef | null {
-  const known = (ref: ContainerRef | null) => (ref ? options.projects.find((c) => containerKey(c.ref) === containerKey(ref))?.ref : undefined);
-  return known(options.repoProject) ?? known(options.last) ?? options.projects[0]?.ref ?? null;
-}
-
-/** The first two steps for a read-only kind: it runs without the person's settings, and Claude Code refuses instead of asking, so it never stops for a permission prompt. */
-export const READ_ONLY_STEPS: readonly string[] = [
-  "Gossamr makes the worktree and starts claude --bg in it with the prompt above and the read-only rules. It is the same Claude Code you use yourself, signed in as you, without your own Claude settings.",
-  "It works in the background, read-only. It never stops for a permission prompt: Claude Code refuses anything not allowed, and the run says in its answer what was refused. If it has a question, it stops under Needs you and you answer it in Gossamr.",
-];
-
-export function startSteps(ticketless: boolean, readOnly = false): readonly string[] {
-  const first = readOnly ? READ_ONLY_STEPS : START_STEPS.slice(0, 2);
-  return [...first, ticketless ? "When it is done it is under Ready to review, and one draft ticket made from its answer waits for you. Nothing is created in Jira until you approve it." : START_STEPS[2]];
-}
-
-export interface PromptPart {
-  id: "base" | "template" | "extra" | "focus" | "findings" | "plan" | "account" | "ticket" | "all";
-  label: string;
-  text: string;
-}
-
-/** Starts the plan part of a build's prompt: the sentence about following it, then the plan between its markers. As `PLAN_FOLLOW` in `domain/run.rs`. */
-export const PLAN_INTRO = "A person read, edited and approved the plan below.";
-
-/** Starts the plan part instead when the plan is the planning run's own answer, which nobody settled. As `PLAN_FOLLOW_UNEDITED` in `domain/run.rs`. */
-export const PLAN_INTRO_UNEDITED = "The plan below is the planning run's own answer.";
-
-/** Starts the builder's account part of a review's prompt: the sentence about checking it, then the account between its markers. As `BUILD_ACCOUNT_PREFACE` in `domain/run.rs`. */
-export const ACCOUNT_INTRO = "The builder's own account of what it did is below.";
-
-/** Starts the findings part of a triage's or plan's prompt: the sentence about weighing them, then the findings between their markers. As `FINDINGS_PREFACE` in `domain/run.rs`. */
-export const FINDINGS_INTRO = "What an earlier investigation found is below.";
-
-/**
- * Cuts the prompt the backend rendered into the parts the person reads. The parts are slices of that prompt, so
- * joined with a blank line they give the prompt back exactly; when the prompt does not have the expected shape it
- * is one part.
- */
-export function splitPrompt(review: Pick<RunReview, "prompt" | "instruction">): PromptPart[] {
-  const { prompt } = review;
-  const instruction = review.instruction.trim();
-  const boundary = instruction ? prompt.indexOf(`\n\n${instruction}`) : -1;
-  const at = boundary >= 0 ? boundary + 2 : instruction && prompt.startsWith(instruction) ? 0 : -1;
-  const whole: PromptPart[] = [{ id: "all", label: "What the agent receives", text: prompt }];
-  if (at < 0) return whole;
-  const base = prompt.slice(0, at).trimEnd();
-  const rest = prompt.slice(at + instruction.length).replace(/^\n\n/, "");
-  const find = (marker: string) => {
-    if (rest.startsWith(marker)) return 0;
-    const i = rest.indexOf(`\n\n${marker}`);
-    return i < 0 ? -1 : i + 2;
-  };
-  const ticketFound = find("Ticket (data from Jira");
-  // Each carried part sits between its own markers, which its text can't contain, so what follows them is the ticket.
-  // A part's opening sentence only counts ahead of the ticket, whose text can say anything.
-  const block = (intro: string, close: string) => {
-    const at = find(intro);
-    if (at < 0 || (ticketFound >= 0 && at > ticketFound)) return { at: -1, end: 0, open: false };
-    const end = rest.indexOf(close, at);
-    return { at, end: end >= 0 ? end + close.length : 0, open: end < 0 };
-  };
-  const plans = [block(PLAN_INTRO, "\nPLAN>>>"), block(PLAN_INTRO_UNEDITED, "\nPLAN>>>")].filter((b) => b.at >= 0);
-  const plan = plans.sort((a, b) => a.at - b.at)[0] ?? { at: -1, end: 0, open: false };
-  const account = block(ACCOUNT_INTRO, "\nBUILD>>>");
-  const findings = block(FINDINGS_INTRO, "\nFINDINGS>>>");
-  const ticketAt = plan.open || account.open || findings.open ? -1 : ticketFound >= Math.max(plan.end, account.end, findings.end) ? ticketFound : -1;
-  const focusFound = find("Focus from Pip (");
-  const focusAt = focusFound >= 0 && [findings.at, plan.at, account.at, ticketAt].every((at) => at < 0 || focusFound < at) ? focusFound : -1;
-  const starts = ([["focus", focusAt], ["findings", findings.at], ["plan", plan.at], ["account", account.at], ["ticket", ticketAt]] as const).filter(([, at]) => at >= 0).sort((a, b) => a[1] - b[1]);
-  const extra = rest.slice(0, starts.length ? starts[0][1] : undefined).trim();
-  const parts: PromptPart[] = [];
-  if (base) parts.push({ id: "base", label: "Which branch it starts from", text: base });
-  parts.push({ id: "template", label: "What to do", text: instruction });
-  if (extra) parts.push({ id: "extra", label: "Added for this run", text: extra });
-  starts.forEach(([id, at], i) => parts.push({ id, label: id === "ticket" ? "Ticket" : id === "focus" ? "Focus" : id === "findings" ? "Findings" : id === "plan" ? "Plan" : "The builder's account", text: rest.slice(at, starts[i + 1]?.[1]).trim() }));
-  const joined = parts.map((p) => p.text).join("\n\n");
-  return joined === prompt ? parts : whole;
-}
-
 export type Flag = "link" | "shell" | "override";
 
 export interface Span {
@@ -198,50 +101,6 @@ export function flagCounts(spans: readonly Span[]): { flag: Flag; count: number 
   const counts = new Map<Flag, number>();
   for (const s of spans) if (s.flag) counts.set(s.flag, (counts.get(s.flag) ?? 0) + 1);
   return [...counts].map(([flag, count]) => ({ flag, count }));
-}
-
-/** Why Start cannot be pressed yet, or null when it can. */
-export function startBlock(s: {
-  draft: boolean;
-  review: RunReview | null;
-  preflight: Preflight | null;
-  busy: boolean;
-  starting: boolean;
-  changedBanner: boolean;
-  noClone?: string | null;
-  repoMissing?: boolean;
-  /** What the chosen kind still needs, from `kindBlock`. */
-  kindBlock?: string | null;
-  /** What is typed in the instruction, base and plan fields, when they can differ from the saved draft. */
-  typed?: { instruction: string; base: string; plan?: string; buildAccount?: string };
-  /** Set for an investigation with no ticket: it needs the person's own question and a project for the ticket. */
-  ticketless?: { project: boolean };
-}): string | null {
-  if (s.starting) return "Starting…";
-  if (s.repoMissing) return "Choose a repository first";
-  if (s.noClone) return s.noClone;
-  if (s.kindBlock) return s.kindBlock;
-  if (!s.draft || !s.review) return s.busy ? "Getting the draft ready…" : "There is no draft to start";
-  if (s.changedBanner) return "Read the change above first";
-  if (s.busy) return "Checking the changes…";
-  const written = (s.typed?.instruction ?? s.review.instruction).trim();
-  if (s.ticketless && (!written || written === TICKETLESS_STARTER.trim())) return "Write what it should look into first";
-  if (s.ticketless && !s.ticketless.project) return "Choose the project for the ticket first";
-  if (!written) return "Write what it should do first";
-  if (s.typed && !s.typed.base.trim()) return "Name the branch it starts from first";
-  if (s.review.plan && s.typed?.plan !== undefined && !s.typed.plan.trim()) return "Write the plan first, or remove it";
-  if (s.review.buildAccount && s.typed?.buildAccount !== undefined && !s.typed.buildAccount.trim()) return "Write the builder's account first, or remove it";
-  if (!s.preflight) return "Checking that it can start…";
-  const red = s.preflight.rows.find((r) => r.level === "red");
-  if (red) return red.text;
-  return s.preflight.blocking ? "Fix the red item above" : null;
-}
-
-/** Whether the draft stored in the backend is what is typed in the fields, so approving it approves what the person sees. */
-export function savedAsTyped(review: Pick<RunReview, "instruction" | "spec" | "plan" | "buildAccount"> | null, typed: { instruction: string; base: string; plan?: string; buildAccount?: string }): boolean {
-  const plan = !review?.plan || typed.plan === undefined || typed.plan === review.plan;
-  const account = !review?.buildAccount || typed.buildAccount === undefined || typed.buildAccount === review.buildAccount;
-  return !!review && !!typed.instruction.trim() && typed.instruction === review.instruction && typed.base.trim() === review.spec.base && plan && account;
 }
 
 export interface StopControl {
@@ -311,49 +170,6 @@ export function formatBytes(bytes: number): string {
   return `${value >= 10 || Number.isInteger(value) ? Math.round(value) : value.toFixed(1)} ${units[unit]}`;
 }
 
-const quote = (text: string) => `'${text.replace(/'/g, `'\\''`)}'`;
-
-/** What a launch adds beside the prompt and the guard: a read-only kind's restriction and Gossamr's agent tools. */
-export interface LaunchExtras {
-  readOnly?: ReadOnly | null;
-  report?: { allowed: string; guard: string } | null;
-}
-
-/** Where the agent tools' config file goes; Gossamr writes it as the run launches. */
-export const REPORT_CONFIG_SHOWN = "<agent tools config, written at launch>";
-
-/**
- * How the setup sheet offers the launch command. Without the agent tools it is the exact command and can be copied.
- * With them, the `--mcp-config` path is `REPORT_CONFIG_SHOWN`: the file, with a key for that run only, exists only once the
- * run launches, so the command is labelled illustrative and offered without Copy.
- */
-export function commandShown(report: LaunchExtras["report"]): { summary: string; copy: boolean; note: string | null } {
-  if (!report) return { summary: "Show the exact command", copy: true, note: null };
-  return { summary: "Show the command (illustrative)", copy: false, note: `Illustrative, so there is no Copy: ${REPORT_CONFIG_SHOWN} stands for the agent tools' config file, which Gossamr writes with a key for this run only as the run launches.` };
-}
-
-/**
- * The launch as a shell would read it, flag for flag as `SystemCli::launch` in runs/cli.rs builds it, with the guard
- * as `RunService::spawn` composes it. Gossamr passes each part as its own argument, so nothing is run through a shell.
- */
-export function launchCommand(spec: Pick<RunSpec, "clonePath" | "name" | "repo" | "kind">, key: string | null, guard: string, prompt: string, extras: LaunchExtras = {}): string {
-  const name = `${key ?? spec.repo} ${spec.kind}`;
-  const { readOnly, report } = extras;
-  const args = ["claude", "--bg", "--name", quote(name), "--worktree", quote(spec.name)];
-  if (report) args.push("--mcp-config", quote(REPORT_CONFIG_SHOWN));
-  if (readOnly) {
-    args.push("--permission-mode", quote(readOnly.mode));
-    if (readOnly.settingSources != null) args.push("--setting-sources", quote(readOnly.settingSources));
-    if (readOnly.strictMcpConfig) args.push("--strict-mcp-config");
-  }
-  const allowed = [...(report ? report.allowed.split(", ") : []), ...(readOnly?.allow ?? [])];
-  if (allowed.length) args.push("--allowedTools", ...allowed.map(quote));
-  if (readOnly?.deny.length) args.push("--disallowedTools", ...readOnly.deny.map(quote));
-  const fullGuard = [guard, readOnly?.guard, report?.guard].filter(Boolean).join(" ");
-  args.push("--append-system-prompt", quote(fullGuard), "--", quote(prompt));
-  return [`cd ${quote(spec.clonePath)}`, args.join(" ")].join("\n");
-}
-
 const TIMELINE_ICON: Record<string, IconName> = {
   start: "branch",
   read: "file",
@@ -373,79 +189,8 @@ export type TimelineTone = "find" | "ask" | "err" | "plain";
 
 export const timelineTone = (kind: string): TimelineTone => (kind === "done" ? "find" : kind === "ask" ? "ask" : kind === "error" ? "err" : "plain");
 
-/** The finished run a build or review draft follows: the plan run of a build, the build run of a review. */
-export interface RunDraftSource {
-  planFromRun?: string | null;
-  buildFromRun?: string | null;
-}
-
-/**
- * A pending run draft for the same ticket and kind, so choosing Investigate twice opens one draft. With no ticket only the person's own draft is reused: Pip's question is its own, reached from where it was proposed.
- * With `from`, the draft of that kind that follows that run, whoever made it, Pip included: 'Build from this plan' opens Pip's chain draft rather than making a second one.
- */
-export function findRunDraft(proposals: Record<string, Proposal> | readonly Proposal[], item: ItemRef | null, kind: RunKind, pr?: number, from?: RunDraftSource): Proposal | undefined {
-  const all = Array.isArray(proposals) ? proposals : Object.values(proposals);
-  const wanted = item ? itemKey(item) : null;
-  const follows = (p: Proposal) => {
-    if (p.intent.type !== "startRun" || !from) return false;
-    const spec = p.intent.spec;
-    return from.planFromRun ? spec.planFromRun === from.planFromRun : !!from.buildFromRun && spec.buildFromRun === from.buildFromRun;
-  };
-  const chained = !!(from?.planFromRun || from?.buildFromRun);
-  return all
-    .filter(
-      (p) =>
-        p.state.type === "pending" &&
-        p.intent.type === "startRun" &&
-        p.intent.spec.kind === kind &&
-        (chained
-          ? follows(p)
-          : (pr === undefined || p.intent.spec.pr === pr) && (p.intent.item ? itemKey(p.intent.item) : null) === wanted && (wanted !== null || p.createdBy !== "pip")),
-    )
-    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
-}
-
-export function repoChoices(watched: readonly string[], runs: readonly Pick<Run, "spec">[]): string[] {
-  return [...new Set([...watched, ...runs.map((r) => r.spec.repo)])].sort((a, b) => a.localeCompare(b));
-}
-
-/** The watched repository of the most recently updated change linked to a ticket, spelled as it is watched. */
-export function linkedRepo(links: readonly Pick<DevLink, "change">[], watched: readonly string[]): string | null {
-  const newest = [...links].sort((a, b) => b.change.updatedAt.localeCompare(a.change.updatedAt));
-  for (const { change } of newest) {
-    const found = watched.find((w) => w.toLowerCase() === change.repo.toLowerCase());
-    if (found) return found;
-  }
-  return null;
-}
-
-/**
- * The repository to start from without asking: the one this ticket's last run used, else the one its newest linked
- * change is in, else the one used last, else the only one.
- */
-export function defaultRepo(options: readonly string[], item: ItemRef | null, runs: readonly Pick<Run, "item" | "spec" | "queuedAt">[], lastUsed: string | null, linked: string | null = null): string | null {
-  const known = (repo: string | null | undefined): repo is string => !!repo && options.includes(repo);
-  const own = item ? runs.filter((r) => r.item && itemKey(r.item) === itemKey(item)).sort((a, b) => b.queuedAt.localeCompare(a.queuedAt))[0]?.spec.repo : null;
-  if (known(own)) return own;
-  if (known(linked)) return linked;
-  if (known(lastUsed)) return lastUsed;
-  return options.length === 1 ? options[0] : null;
-}
-
-export type RepoShortage = "loading" | "failed" | "connect" | "watch";
-
-/** Why the repository list is empty, and so what to do next; null while there is something to choose. */
-export function repoShortage(p: { repos: readonly string[]; loading: boolean; failed: boolean; githubConnected: boolean }): RepoShortage | null {
-  if (p.loading) return p.repos.length > 0 ? null : "loading";
-  if (p.failed) return "failed";
-  if (p.repos.length > 0) return null;
-  return p.githubConnected ? "watch" : "connect";
-}
-
 /** A path under the person's home with `~` for the home folder. */
 export const homeShort = (path: string) => path.replace(/^\/Users\/[^/]+/, "~");
-
-export const worktreeBranch = (name: string) => `worktree-${name}`;
 
 export type SheetKey = "close" | "next" | "previous";
 
@@ -483,6 +228,9 @@ export const PIP_SHOWN = {
   description: "Draft a description update from this run",
   breakdown: "Discuss this breakdown",
   subtasks: "Suggest subtasks from this run",
+  build: "Ask Pip to build",
+  reviewBuild: "Ask Pip to review",
+  again: "Ask Pip to start it again",
 } as const;
 
 /**
@@ -545,11 +293,6 @@ export const buildFromPlanControl = (run: PlanRun): DraftControl =>
 /** Drafting the whole plan as a comment: the same conditions, and the comment is the person's to edit. */
 export const planCommentControl = (run: PlanRun): DraftControl => planRunControl(run, { noTicket: "This plan isn't about a ticket, so there is nothing to comment on.", summary: `${SUMMARY_ONLY} There is no plan to draft.` });
 
-/** What opens the Build draft for a finished plan run: the same ticket and repository, carrying the run's plan. */
-export function buildFromPlanOptions(run: Pick<Run, "id" | "item" | "spec">) {
-  return { item: run.item, kind: "build" as const, repo: run.spec.repo, planFromRun: run.id };
-}
-
 type BuiltRun = Pick<Run, "spec" | "item" | "state" | "result" | "resultComplete">;
 
 /**
@@ -571,11 +314,6 @@ export function reviewThisControl(run: BuiltRun, change: Pick<CodeChange, "kind"
   if (change.repo.toLowerCase() !== run.spec.repo.toLowerCase() || (change.headRepo && change.headRepo.toLowerCase() !== run.spec.repo.toLowerCase())) return no("Its pull request isn't from a branch in the same repository, which Gossamr doesn't review yet.");
   if (change.state === "merged" || change.state === "closed") return no(`Its pull request is ${change.state}, so there is nothing to review.`);
   return { enabled: true, reason: null };
-}
-
-/** What opens the Review draft for a finished build run: the same ticket and repository, pinned to the run's pull request and carrying its answer. */
-export function reviewThisOptions(run: Pick<Run, "id" | "item" | "spec">, change: Pick<CodeChange, "number">) {
-  return { item: run.item, kind: "review" as const, repo: run.spec.repo, pr: change.number ?? undefined, buildFromRun: run.id };
 }
 
 /** What "Draft the plan as a comment" tells the person: the comment holds the whole plan, and says when it was cut. */
@@ -685,6 +423,9 @@ export const pipAsks = {
   planDescription: (run: RunOf, draftId: string): PipAsk => ({ prompt: planDescriptionWithPipPrompt(run, draftId), shown: PIP_SHOWN.plan }),
   finish: (run: { id: string }, draftId: string): PipAsk => ({ prompt: finishWithPipPrompt(run, draftId), shown: PIP_SHOWN.finish }),
   description: (run: RunOf): PipAsk => ({ prompt: descriptionWithPipPrompt(run), shown: PIP_SHOWN.description }),
+  build: (run: { id: string }): PipAsk => ({ prompt: `Build it, following the plan of run ${run.id}.`, shown: PIP_SHOWN.build }),
+  again: (repo: string): PipAsk => ({ prompt: `Start the agent again. ${repo} has a clone now.`, shown: PIP_SHOWN.again }),
+  review: (run: { id: string }): PipAsk => ({ prompt: `Review it: the pull request the build ${run.id} opened.`, shown: PIP_SHOWN.reviewBuild }),
   breakdown: (run: RunOf, draftId: string | null = null): PipAsk => ({ prompt: breakdownWithPipPrompt(run, draftId), shown: draftId ? PIP_SHOWN.breakdown : PIP_SHOWN.subtasks }),
 };
 
@@ -766,53 +507,6 @@ export function changeSummary(change: Pick<CodeChange, "kind" | "changedFiles" |
   if (change.review === "approved") out.push("Approved");
   else if (change.review === "changesRequested") out.push("Changes requested");
   return out;
-}
-
-/** What a kind needs before there is a draft: a build works from a ticket, a review reads one pull request. */
-export function kindBlock(kind: RunKind, item: ItemRef | null, pr: number | null): string | null {
-  if (kind === "build" && !item) return "Build needs a ticket";
-  if (kind === "review" && pr === null) return "Choose the pull request to review";
-  return null;
-}
-
-export interface PrChoice {
-  change: CodeChange;
-  selectable: boolean;
-  /** Why it can't be chosen, or what is still to be checked. */
-  note: string | null;
-}
-
-const sameRepo = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
-
-/**
- * The pull requests of `repo` a review could read. Only an open pull request (a draft counts) from the same repository can be
- * chosen; one whose head repository isn't known yet is chosen and GitHub is asked when the draft is made.
- */
-export function prChoices(changes: readonly CodeChange[], repo: string): PrChoice[] {
-  return changes
-    .filter((c) => c.kind === "pullRequest" && c.number !== null && sameRepo(c.repo, repo))
-    .map((change): PrChoice => {
-      if (change.state === "merged") return { change, selectable: false, note: "Merged" };
-      if (change.state === "closed") return { change, selectable: false, note: "Closed" };
-      if (change.headRepo && !sameRepo(change.headRepo, change.repo)) return { change, selectable: false, note: "From a fork" };
-      return { change, selectable: true, note: change.headRepo ? (change.state === "draft" ? "Draft pull request" : null) : "Checked on GitHub when you choose it" };
-    })
-    .sort((a, b) => Number(b.selectable) - Number(a.selectable) || b.change.updatedAt.localeCompare(a.change.updatedAt));
-}
-
-/** The newest open pull request linked to a ticket that a review could take, or null. */
-export function reviewablePr(links: readonly Pick<DevLink, "change">[]): CodeChange | null {
-  const found = links.flatMap((l) => prChoices([l.change], l.change.repo)).filter((c) => c.selectable);
-  return found.sort((a, b) => b.change.updatedAt.localeCompare(a.change.updatedAt))[0]?.change ?? null;
-}
-
-/** The permission mode the pre-flight reported ("auto"), so the sheet can name it beside the push option. */
-export function permissionMode(preflight: Preflight | null): string | null {
-  for (const row of preflight?.rows ?? []) {
-    const found = /permission mode: (\S+)$/.exec(row.text);
-    if (found) return found[1];
-  }
-  return null;
 }
 
 /**

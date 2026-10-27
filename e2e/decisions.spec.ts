@@ -1,11 +1,9 @@
 import { expect, test, type Page } from "@playwright/test";
-import { advanceRuns, closeWorkstreamSheet, askPermission, askPip, githubWrites, jiraWrites, mockAttached, mockRuns, needOfKind, needsPane, needsYouTray, openAgents, openApp, peekSheet, peekTicket, pendingReviewDrafts, pipConversation, pipPane, reviewDrafts, reviewedDraft, startWorkstream, workstreamEvents, openNeedOfKind } from "./support/app";
+import { advanceRuns, closeWorkstreamSheet, askPermission, askPip, githubWrites, jiraWrites, mockAttached, mockRuns, needOfKind, needsPane, needsYouTray, openAgents, openApp, peekSheet, peekTicket, pendingReviewDrafts, pipConversation, pipPane, reviewDrafts, reviewedDraft, startAgent, startWorkstream, workstreamEvents, openNeedOfKind } from "./support/app";
 
 // Decisions only the person makes: a run's permission prompt answered in the app. Pull requests show only when a test says.
 const SAMPLE = "runs=empty&prSurface=manual";
 
-const setup = (page: Page) => page.getByRole("dialog", { name: "Start an agent" });
-const runCards = (page: Page, key: string) => pipPane(page).getByRole("article", { name: `Start an agent: ${key}` });
 /** A permission's decision, in the pane beside the conversation. */
 const asking = (page: Page) => needsPane(page).locator("[data-permission-ask]");
 const count = (page: Page) => needsYouTray(page).locator("[data-needs-you-count]");
@@ -15,14 +13,10 @@ async function settled(page: Page) {
   await expect(pipPane(page).getByRole("button", { name: "Stop" })).toHaveCount(0);
 }
 
-/** Asks Pip for `what` on `key`, opens its draft and starts it, as the person does. */
-async function startStep(page: Page, what: string, key = "CA-401") {
+/** Asks Pip for `what`, which starts the agent. */
+async function startStep(page: Page, what: string) {
   await askPip(page, what);
   await settled(page);
-  await runCards(page, key).last().getByRole("button", { name: "Review and start →" }).click();
-  await expect(setup(page)).toBeVisible();
-  await setup(page).getByRole("button", { name: "Start agent" }).click();
-  await expect(setup(page)).toHaveCount(0);
 }
 
 /** The newest run of `kind`, as the sample backend holds it. */
@@ -166,21 +160,13 @@ test("Deny on a read-only run, which is never offered Allow: Claude carries on w
   expect(await jiraWrites(page)).toEqual([]);
 });
 
-/** The person starts another Review of CA-402's build from its card in Agents and moves it to done; its draft then waits in CA-402's peek. */
+/** Another Review of CA-402's build is started, as Pip does, and moved to done; its draft then waits in CA-402's peek. */
 async function reviewAgain(page: Page) {
   await page.keyboard.press("Escape");
-  await openAgents(page);
-  const cards = page.locator('main article[data-run-id]:not(aside[aria-label="Pip"] *):not(#workstream-sheet *)');
-  const before = await cards.evaluateAll((els) => els.map((e) => e.getAttribute("data-run-id")));
-  await cards.filter({ hasText: "Build" }).filter({ hasText: "CA-402" }).getByRole("button", { name: "Review this" }).click();
-  await expect(setup(page)).toBeVisible();
-  await setup(page).getByRole("button", { name: "Start agent" }).click();
-  await expect(setup(page)).toHaveCount(0);
-  await expect.poll(async () => (await cards.evaluateAll((els) => els.map((e) => e.getAttribute("data-run-id")))).length).toBe(before.length + 1);
-  const id = (await cards.evaluateAll((els) => els.map((e) => e.getAttribute("data-run-id")))).find((r) => !before.includes(r))!;
+  const build = (await mockRuns(page)).find((r) => r.kind === "build" && r.key === "CA-402")!;
+  const id = await startAgent(page, "CA-402", "review", { fromRun: build.id });
   await advanceRuns(page, 3, id);
   await expect.poll(async () => (await mockRuns(page)).find((r) => r.id === id)?.state).toBe("done");
-  await page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "All projects" }).click();
   await peekTicket(page, "CA-402");
   return id;
 }

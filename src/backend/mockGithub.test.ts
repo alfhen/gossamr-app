@@ -108,8 +108,7 @@ describe("posting a review draft to the mock GitHub", () => {
   async function reviewed(options: MockOptions = {}) {
     const backend = new MockBackend({ githubRepos: 14, ...options });
     await backend.watchSetMode(GH, "everything");
-    const made = await backend.runsDraft(spec, itemRef("CA-402"));
-    const run = await backend.runsApprove(made.id, (await backend.runsReview(made.id)).digest);
+    const run = backend.runs.start(spec, itemRef("CA-402"));
     for (let i = 0; i < 3; i++) backend.runs.advance(run.id);
     const draft = backend.proposals.list().find((p) => p.intent.type === "githubReview")!;
     return { backend, draft, intent: draft.intent as Extract<Intent, { type: "githubReview" }> };

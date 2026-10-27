@@ -5,14 +5,13 @@ import { draftKeyAction } from "./draftKeys";
 import { liveDraft } from "./draftLive";
 import { keptEditsOfDraft } from "./DraftCard";
 import { draftDecisions } from "./DraftPreview";
-import { inlineStartable, useInlineStarts } from "./InlineStart";
 import { NO_WORKSTREAM_ID, setPaneIntent, takePaneIntent, useWorkView } from "./workViewStore";
 import { usePrefs } from "./prefs";
 import { ALL } from "./agentsLogic";
 import { useRuns } from "./runsStore";
 import { currentNeeds } from "./useNeeds";
 import { useTabs } from "./tabsStore";
-import { useWorkstreams } from "./workstreamsStore";
+import { focusPip, useWorkstreams } from "./workstreamsStore";
 import { useToasts } from "./toasts";
 
 /**
@@ -65,6 +64,12 @@ export function openInWorkstream(need: Need) {
   if (need.target.type === "run") useRuns.getState().openRun(need.target.id, { stay: true });
 }
 
+/** Shows the conversation Pip asked in, where the person's next message answers it. */
+export function openPipAsk(need: Need) {
+  showGroup(need.workstreamId);
+  focusPip(need.workstreamId ?? undefined);
+}
+
 /** A run from a notification: its need when it holds one, else its sheet. */
 export function openRunOrNeed(runId: string) {
   const need = currentNeeds().find((n) => n.runId === runId);
@@ -107,7 +112,7 @@ function needsCard(p: NonNullable<ReturnType<typeof proposalOf>>): boolean {
 }
 
 /** "this comment", "this move": what an approval would approve, for the line that asks for Enter. */
-const thing = (need: Need) => (need.kind === "question" ? "this reply" : need.kind === "review" ? "this review" : "this draft");
+const thing = (need: Need) => (need.kind === "review" ? "this review" : "this draft");
 
 /**
  * What key `which` does on `need`. Anything that writes, posts, starts or answers an agent asks for Enter first, as a draft's
@@ -137,15 +142,16 @@ export function keyPlan(need: Need, which: NeedKey): KeyPlan | null {
         return need.kind === "paused" && need.workstreamId
           ? { type: "ask", text: "resume this workstream", run: () => void useWorkstreams.getState().resume(need.workstreamId!) }
           : { type: "open", edit: false };
+      case "reply":
+        return { type: "do", run: () => openPipAsk(need) };
       default:
-        // A run draft that needs nothing chosen is read in place, which starts nothing.
-        if (p && inlineStartable(p)) void useInlineStarts.getState().open(p.id);
         return { type: "open", edit: false };
     }
   }
   if (which === "skip") return p && all.some((a) => a.id === "dismiss") ? { type: "do", run: draftDecisions(p.id, p).skip } : null;
   const stop = all.find((a) => a.id === "deny" || a.id === "dismiss");
   if (!stop) return null;
+  if (need.kind === "pipAsk" && need.workstreamId) return { type: "do", run: () => void useWorkstreams.getState().dismissAsk(need.workstreamId!) };
   // A deny reaches the agent, so it keeps its Enter; the rest are the person's own and can be undone.
   if (stop.id === "deny") return run ? { type: "ask", text: "deny it; Claude carries on without it", run: () => void useRuns.getState().denyPermission(run.id, readAs(run.needs)) } : null;
   if (p) return { type: "do", run: draftDecisions(p.id, p).skip };

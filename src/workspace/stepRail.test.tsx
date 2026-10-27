@@ -224,8 +224,7 @@ describe("the step rail", () => {
       expect(stepOf(html, kind)).not.toContain("data-step-next");
     }
     expect(stepOf(html, "verify")).toContain('data-step-next="verify"');
-    const start: Intent = { type: "startRun", connectionId: "mock", item: ref("CA-401"), spec: { ...base.spec, kind: "plan", workstream: "ws-1" } };
-    const waiting = renderToStaticMarkup(<StepRailView {...props({ runs: [], view: { ...view, runs: [], labels: [] }, proposals: [draft("d-plan", start, 3)] })} />);
+    const waiting = renderToStaticMarkup(<StepRailView {...props({ proposals: [fromRun("d-plan", comment, "r3", 3)] })} />);
     expect(stepOf(waiting, "plan")).not.toContain("data-step-quiet");
     expect(stepOf(waiting, "plan")).toContain("data-step-needs-you");
   });
@@ -243,8 +242,10 @@ describe("the step rail", () => {
   });
 
   it("keeps each chip closed until opened; opened, it lists its runs and the drafts about it", () => {
-    const proposals = [fromRun("c1", comment, "r5", 8), fromRun("c2", comment, "r5", 6), draft("pip1", comment, 4), draft("run1", { type: "startRun", connectionId: "mock", item: ref("CA-401"), spec: { ...base.spec, kind: "verify", workstream: "ws-1" } } as unknown as Intent, 3)];
-    const closed = renderToStaticMarkup(<StepRailView {...props({ proposals })} />);
+    const verify = run("r6", "verify", "done", 40);
+    const proposals = [fromRun("c1", comment, "r5", 8), fromRun("c2", comment, "r5", 6), draft("pip1", comment, 4), fromRun("run1", comment, "r6", 3)];
+    const withVerify = { runs: [...RUNS, verify], view: { ...view, runs: [...view.runs, "r6"], labels: [...view.labels, ["r6", "R6"]] as [string, string][] } };
+    const closed = renderToStaticMarkup(<StepRailView {...props({ proposals, ...withVerify })} />);
     expect(closed).toMatch(/aria-expanded="false" aria-controls="step-ws-1-review"/);
     expect(closed).not.toContain('data-draft="c1"');
     // Pip's own drafts are always shown, at the top, before the steps.
@@ -253,7 +254,7 @@ describe("the step rail", () => {
     expect(stepOf(closed, "review")).toMatch(/data-step-needs-you[^>]*>2 need you</);
     expect(stepOf(closed, "verify")).toMatch(/data-step-needs-you[^>]*>1 needs you</);
 
-    const open = renderToStaticMarkup(<StepRailView {...props({ proposals, initialOpen: ["review", "verify"] })} />);
+    const open = renderToStaticMarkup(<StepRailView {...props({ proposals, ...withVerify, initialOpen: ["review", "verify"] })} />);
     const review = stepOf(open, "review");
     expect(review).toMatch(/aria-expanded="true" aria-controls="step-ws-1-review"/);
     expect(review).toContain('data-run-id="r5"');

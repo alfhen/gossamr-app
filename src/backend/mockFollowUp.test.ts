@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { workstreamConversation } from "../lib/conversations";
 import { MockBackend } from "./mock";
 import { mockAsk } from "./mockPip";
 import { SCRIPTED_PLAN_ANSWERED } from "./mockRuns";
@@ -7,37 +8,31 @@ import type { ScreenContext } from "../types";
 const NOW = Date.parse("2026-09-30T12:00:00Z");
 const sample = () => new MockBackend({ runs: { seed: "kinds", epoch: NOW, planDescription: true } });
 const planRun = (b: MockBackend) => b.runs.list().find((r) => r.spec.kind === "plan")!;
-const followUps = (b: MockBackend) => b.proposals.list().filter((p) => p.intent.type === "followUp");
 
-async function ask(b: MockBackend, prompt: string, item: ScreenContext["item"]) {
+async function ask(b: MockBackend, prompt: string, item: ScreenContext["item"], conversation?: string) {
   const context = { view: "board", item } as unknown as ScreenContext;
-  await mockAsk({ requestId: `r${Math.random()}`, prompt, context, images: [], sessionId: undefined } as never, b, 0);
+  await mockAsk({ requestId: `r${Math.random()}`, prompt, context, images: [], sessionId: undefined, conversation } as never, b, 0);
+}
+
+/** The plan run of the sample, put in a workstream on its ticket, where Pip knows it as R1. */
+function inWorkstream(b: MockBackend) {
+  const run = planRun(b);
+  const ws = b.workstreams.open(run.item);
+  b.runs.setWorkstream(run.id, ws.id);
+  return { run, conversation: workstreamConversation(ws.id) };
 }
 
 describe("a finished plan run with open questions in the sample build", () => {
-  it("is sent back after Pip proposes a follow-up the person approves, goes to Working and finishes again with the questions settled", async () => {
+  it("is woken by Pip's message, goes to Working and finishes again with the questions settled", async () => {
     const b = sample();
-    const run = planRun(b);
+    const { run, conversation } = inWorkstream(b);
     expect(run.state).toBe("done");
-    await ask(b, "Send it back for another pass to settle the open questions", run.item);
-    const [draft] = followUps(b);
-    expect(draft.createdBy).toBe("pip");
-    if (draft.intent.type !== "followUp") throw new Error("a follow-up");
-    expect(draft.intent.runId).toBe(run.id);
-    expect(draft.intent.message).toContain("Do the Klaviyo flows read the subject lines");
-    expect(b.runs.get(run.id)?.state).toBe("done");
-
-    await b.proposalsEdit(draft.id, { type: "followUp", message: "Settle both questions yourself and say which you chose." });
-    await expect(b.proposalsApprove(draft.id)).rejects.toThrow("own button");
-    await expect(b.runsSendFollowUp(draft.id, "Something else.")).rejects.toThrow("changed after you read it");
-    const sent = await b.runsSendFollowUp(draft.id, "Settle both questions yourself and say which you chose.");
-    expect(sent.state).toBe("working");
-    expect(sent.passes).toBe(2);
-    expect(sent.continuedAt).toBeTruthy();
-    expect(b.proposals.get(draft.id)?.state.type).toBe("applied");
-    const line = b.runs.events(run.id).find((e) => e.kind === "follow_up");
-    expect(line?.text).toBe("Pip asked for another pass: the plan left open questions");
-    expect(line?.detail).toBe("Pass 2. Approved by you.");
+    await ask(b, "tell R1 to settle both open questions yourself and say which you chose", run.item, conversation);
+    const woken = b.runs.get(run.id)!;
+    expect(woken).toMatchObject({ state: "working", passes: 2 });
+    expect(woken.continuedAt).toBeTruthy();
+    expect(b.proposals.list().filter((p) => p.intent.type === "followUp")).toEqual([]);
+    expect(b.runs.events(run.id).find((e) => e.kind === "follow_up")).toMatchObject({ text: "Pip sent a message", detail: "Pass 2." });
 
     b.runs.advance(run.id);
     const again = b.runs.get(run.id)!;
@@ -48,37 +43,14 @@ describe("a finished plan run with open questions in the sample build", () => {
     expect(again.summary).not.toContain("open questions");
   });
 
-  it("is not sent back twice at once, and a run that did its job is not sent back at all", async () => {
+  it("is not messaged while it works, and Pip says why when a message is refused", async () => {
     const b = sample();
-    const run = planRun(b);
-    await ask(b, "send it back for another pass", run.item);
-    await ask(b, "send it back for another pass", run.item);
-    expect(followUps(b)).toHaveLength(1);
-    const other = b.runs.list().find((r) => r.state === "done" && r.spec.kind === "investigate" && r.item)!;
-    await ask(b, "send it back for another pass", other.item);
-    expect(followUps(b)).toHaveLength(1);
-  });
-
-  it("keeps a follow-up off a run that is working and lets Pip revise its own until the person edits it", async () => {
-    const b = sample();
-    const run = planRun(b);
-    await ask(b, "send it back for another pass", run.item);
-    const [draft] = followUps(b);
-    b.proposals.pipRevise(draft.id, "Revised message.");
-    expect(b.proposals.get(draft.id)?.intent).toMatchObject({ message: "Revised message." });
-    await b.proposalsEdit(draft.id, { type: "followUp", message: "Mine." });
-    expect(() => b.proposals.pipRevise(draft.id, "Pip again")).toThrow("edited this follow-up");
-    await b.runsSendFollowUp(draft.id, "Mine.");
-    await expect(b.runs.pipFollowUp(run.id, "More", "x", "r")).rejects.toThrow("can't be sent back");
-    await expect(b.runsSendFollowUp(draft.id, "Mine.")).rejects.toThrow("already been decided");
-  });
-});
-
-describe("the chip on an open finished run", () => {
-  it("asks about the run that is open in the sheet, whatever ticket is on screen", async () => {
-    const b = sample();
-    const run = planRun(b);
-    await mockAsk({ requestId: "chip", prompt: "Send it back for another pass", context: { view: "agents", item: null, run: run.id } as never, images: [], sessionId: undefined } as never, b, 0);
-    expect(followUps(b)).toHaveLength(1);
+    const { run, conversation } = inWorkstream(b);
+    await ask(b, "tell R1 to carry on", run.item, conversation);
+    expect(b.runs.get(run.id)?.state).toBe("working");
+    // Working now: the message waits for its next question instead of waking it again.
+    await ask(b, "tell R1 to skip the tests", run.item, conversation);
+    expect(b.runs.get(run.id)).toMatchObject({ state: "working", passes: 2 });
+    expect(b.runs.queuedMessage(run.id)).toBe("skip the tests");
   });
 });

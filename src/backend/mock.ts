@@ -30,7 +30,6 @@ import type {
   ReviewComment,
   RunKind,
   RunQuery,
-  RunSpec,
   RunsChanged,
   AgentSettings,
   Snapshot,
@@ -413,7 +412,6 @@ export class MockBackend implements Backend {
       tickets: { edit: (key, change) => this.editTicket(key, change) },
       github: { writes: this.github.writes, movePullHead: (repo, number) => this.movePullHead(repo, number), tried: () => this.github.tried, loseNextAnswer: (kept) => this.github.loseNextAnswer(kept) },
     });
-    if (this.runs.pipRun) void this.runs.seedPipDraft(itemRef("CA-402"));
     // Drafts Pip made in a conversation live as long as the conversation does, as both live in the app's database.
     this.proposals.keep(KEPT_DRAFTS, (p) => p.origin.type === "chat" && mockPipTurns.has(p.origin.requestId));
   }
@@ -439,12 +437,6 @@ export class MockBackend implements Backend {
       }
       case "create":
         return [this.connector.createItem(intent.container, intent.fields)];
-      case "startRun":
-        throw new Error("A run is approved with its own button");
-      case "followUp":
-        throw new Error("A follow-up is sent back with its own button");
-      case "runAnswer":
-        throw new Error("An answer is sent with its own button");
       default:
         throw new Error("the sample data can't apply that");
     }
@@ -504,6 +496,10 @@ export class MockBackend implements Backend {
     return this.workstreams.resume(id);
   }
 
+  async workstreamsDismissAsk(id: string) {
+    return this.workstreams.clearAsk(id, "dismissed");
+  }
+
   async workstreamsUndo(id: string, undo: WorkstreamUndo) {
     return this.workstreams.undo(id, undo);
   }
@@ -549,20 +545,8 @@ export class MockBackend implements Backend {
     return this.runs.get(id);
   }
 
-  async runsReview(proposalId: string) {
-    return this.runs.review(proposalId);
-  }
-
-  runsApprove(proposalId: string, digest: string) {
-    return this.runs.approve(proposalId, digest);
-  }
-
   async runsStop(id: string) {
     return this.runs.stop(id);
-  }
-
-  async runsSendFollowUp(proposalId: string, message: string) {
-    return this.runs.sendFollowUp(proposalId, message);
   }
 
   async runsAnswer(id: string, text: string) {
@@ -575,10 +559,6 @@ export class MockBackend implements Backend {
 
   async runsAllowPermissionOnce(id: string, command: string) {
     return this.runs.allowPermissionOnce(id, command);
-  }
-
-  async runsAnswerDraft(proposalId: string, message: string) {
-    return this.runs.answerDraft(proposalId, message);
   }
 
   async runsAdoptSession(id: string, session: string) {
@@ -597,24 +577,8 @@ export class MockBackend implements Backend {
     this.runs.trustFolder(id);
   }
 
-  async runsTrustPath(path: string) {
-    this.runs.trustPath(path);
-  }
-
   async runsSignIn(id: string) {
     this.runs.signIn(id);
-  }
-
-  async runsPreflight(spec: RunSpec | null) {
-    return this.runs.preflight(spec);
-  }
-
-  runsDraft(spec: RunSpec, item: ItemRef | null) {
-    return this.runs.draft(spec, item);
-  }
-
-  async runsRepos() {
-    return this.github.watchedRepos();
   }
 
   async runsClones(repo: string) {
@@ -627,10 +591,6 @@ export class MockBackend implements Backend {
 
   async runsPickClone(repo: string, path: string) {
     this.runs.pickClone(repo, path);
-  }
-
-  async runsSuggestName(_clonePath: string, key: string, title: string) {
-    return this.runs.suggestName(key, title);
   }
 
   async runsOutcome(id: string) {
@@ -649,20 +609,8 @@ export class MockBackend implements Backend {
     return this.runs.draftPlanDescription(id);
   }
 
-  async runsRefreshPlan(id: string) {
-    return this.runs.refreshPlan(id);
-  }
-
-  async runsRefreshBuildAccount(id: string) {
-    return this.runs.refreshBuildAccount(id);
-  }
-
   async runsDraftTicket(id: string) {
     return this.runs.draftTicket(id);
-  }
-
-  async runsRepoProject(repo: string) {
-    return this.runs.repoProject(repo);
   }
 
   async runsDraftBlocker(id: string, blockerKey: string) {
@@ -683,10 +631,6 @@ export class MockBackend implements Backend {
 
   async revealPath(path: string) {
     if (isTauri()) await revealItemInDir(path);
-  }
-
-  async runsEnvironment() {
-    return this.runs.environment();
   }
 
   async runsDisk(id: string) {
@@ -810,24 +754,33 @@ export class MockBackend implements Backend {
     return turns.size <= 1 ? drift : null;
   }
 
-  pipRunDraft(item: ItemRef, kind: RunKind, fromRun: string | null, focus: string | null, requestId: string) {
-    return this.runs.pipDraft(item, kind, fromRun, focus, requestId, this.workstreamOfRequest(requestId));
+  pipOpenWorkstream(item: ItemRef | null, title: string) {
+    return this.workstreams.open(item, item ? null : title, "pip").id;
   }
 
-  pipFollowUp(runId: string, message: string, reason: string, requestId: string) {
-    return this.runs.pipFollowUp(runId, message, reason, requestId);
+  pipStartAgent(workstream: string, role: RunKind, brief: string | null, repo: string | null, fromRun: string | null, requestId: string) {
+    return this.runs.pipStart({ workstream, role, brief, repo, fromRun, item: this.pipWorkstreamItem(workstream) }, requestId);
   }
 
-  pipAnswer(runId: string, message: string, requestId: string) {
-    return this.runs.proposeAnswer(runId, message, requestId);
+  pipMessageAgent(runId: string, text: string) {
+    return this.runs.messageAgent(runId, text);
+  }
+
+  pipStopAgent(runId: string) {
+    return this.runs.stop(runId, "pip");
+  }
+
+  /** The person wrote in workstream `workstream`'s conversation: the question Pip had open there is answered. */
+  pipAskAnswered(workstream: string) {
+    return this.workstreams.clearAsk(workstream, "answered");
+  }
+
+  pipAskPerson(workstream: string, question: string) {
+    return this.workstreams.pipAsks(workstream, question);
   }
 
   pipDrafted(requestId: string) {
     return this.proposals.list().some((p) => p.origin.type === "chat" && p.origin.requestId === requestId);
-  }
-
-  pipTicketlessRunDraft(repo: string | null, prompt: string, requestId: string) {
-    return this.runs.pipTicketlessDraft(repo, prompt, requestId, this.workstreamOfRequest(requestId));
   }
 
   proposalsEdit(id: string, edit: ProposalEdit) {
@@ -926,12 +879,6 @@ export class MockBackend implements Backend {
         this.connector.rewrite(intent.item, { title: intent.title?.to, body: intent.body?.to });
         return true;
       }
-      case "startRun":
-        throw new Error("A run is approved with its own button");
-      case "followUp":
-        throw new Error("A follow-up is sent back with its own button");
-      case "runAnswer":
-        throw new Error("An answer is sent with its own button");
       default:
         throw new Error("the sample data can't apply that");
     }

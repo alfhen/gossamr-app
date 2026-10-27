@@ -1,28 +1,14 @@
 import type { ReactNode } from "react";
-import type { ReadOnly, RunReview } from "../types";
+import type { ReadOnly, Run } from "../types";
 import { Icon } from "./AgentIcons";
-import { Box, BoxTitle, CopyButton, Details, MONO_BLOCK } from "./AgentSheet";
-import { COPY, FLAG_LABEL, flagCounts, highlights, readOnlyHeadline, readOnlyNote, splitPrompt, type Flag } from "./runSheetLogic";
+import { Box, BoxTitle, Details, MONO_BLOCK } from "./AgentSheet";
+import { FLAG_LABEL, flagCounts, highlights, readOnlyHeadline, readOnlyNote, type Flag } from "./runSheetLogic";
 
 const MARK: Record<Flag, string> = {
   link: "rounded bg-ws-accent-soft px-0.5 text-ws-accent underline decoration-dotted",
   shell: "rounded bg-ws-warn/20 px-0.5 text-ws-ink",
   override: "rounded bg-ws-blocked-soft px-0.5 text-ws-blocked",
 };
-
-/** What every launch adds beside the guard, said exactly: the four Gossamr tools, their allow rules and the line added to the guard. */
-export function ReportExtras({ report }: { report?: RunReview["report"] }) {
-  if (!report) return null;
-  return (
-    <div data-report-extras className="grid gap-1.5">
-      <p className="m-0 text-ws-ink2">
-        While Gossamr is running, the session is also given four tools: <code className="font-mono">report</code> for its result, <code className="font-mono">ask</code> for a question to you, and <code className="font-mono">read_workstream</code> and <code className="font-mono">read_ticket</code> to read what Gossamr already holds. They are allowed as <code className="font-mono">{report.allowed}</code>. Their address and a token for this run only are in a settings file that only you can read, never on the command line. This line is added to the text above:
-      </p>
-      <pre className={MONO_BLOCK}>{report.guard}</pre>
-      <p className="m-0 text-xs text-ws-ink3">If Gossamr isn&apos;t running at launch, the agent starts without the tools and its written answer is read as usual.</p>
-    </div>
-  );
-}
 
 /** The headline for a read-only kind: Claude Code itself refuses its edits and writes, except what the repository's tests do. Nothing for a Build. */
 export function ReadOnlyLine({ readOnly }: { readOnly?: ReadOnly | null }) {
@@ -99,166 +85,51 @@ export function TicketText({ text }: { text: string }) {
   );
 }
 
-export interface InstructionEditor {
-  /** Replaces the usual "What to do" for an investigation with no ticket, which is the person's own question. */
-  question?: boolean;
-  text: string;
-  disabled: boolean;
-  onChange(text: string): void;
-  onBlur(): void;
-  /** Present when the text differs from the first draft. */
-  onReset?(): void;
-  /** A build made from a plan: the plan is its own part, shown in full and editable here. */
-  plan?: { text: string; disabled: boolean; onChange(text: string): void; onBlur(): void; onRefresh(): void; onRemove(): void };
-  /** A review made from a build: the builder's account is its own part, shown in full and editable here. */
-  account?: { text: string; disabled: boolean; onChange(text: string): void; onBlur(): void; onRefresh(): void; onRemove(): void };
-}
-
-function Part({ label, aside, children }: { label: string; aside?: ReactNode; children: ReactNode }) {
+function Part({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="grid gap-1">
-      <div className="flex items-center gap-2 text-xs font-semibold text-ws-ink2">
-        {label}
-        {aside && <span className="ml-auto font-normal">{aside}</span>}
-      </div>
+      <div className="text-xs font-semibold text-ws-ink2">{label}</div>
       {children}
     </div>
   );
 }
 
-/** The prompt in the parts it is made of, in the order the agent reads them. Together they are exactly what is sent. */
-export function PromptParts({ review, editor }: { review: RunReview; editor?: InstructionEditor }) {
-  const parts = splitPrompt(review);
-  const extra = parts.find((p) => p.id === "extra");
-  const whole = parts.length === 1 && parts[0].id === "all";
-  const focus = review.focus?.trim();
-  const plan = review.plan?.trim() ? review.plan : null;
-  const planFrom = review.spec.planFromRun;
-  const account = review.buildAccount?.trim() ? review.buildAccount : null;
-  const accountFrom = review.spec.buildFromRun;
-  const findings = review.findings?.trim() ? review.findings : null;
-  const findingsFrom = review.spec.findingsFromRun;
-  const ticket = review.ticketBlock?.trim();
+/** What the agent was told, read from the run: Pip's brief and what Gossamr carried in from earlier agents and the ticket. */
+export function PromptParts({ run }: { run: Run }) {
+  const { spec } = run;
+  const focus = spec.focus?.trim();
+  const plan = spec.plan?.trim() ? spec.plan : null;
+  const account = spec.buildAccount?.trim() ? spec.buildAccount : null;
+  const findings = spec.findings?.trim() ? spec.findings : null;
+  const ticket = spec.ticketBlock?.trim();
   return (
     <div className="grid gap-3">
-      <p className="m-0 text-ws-ink2">{COPY.receives}</p>
-      {whole ? (
-        <pre className={MONO_BLOCK}>{review.prompt}</pre>
-      ) : (
-        <>
-          {parts[0].id === "base" && (
-            <Part label="Which branch it starts from">
-              <pre className={`${MONO_BLOCK} max-h-none`}>{parts[0].text}</pre>
-            </Part>
-          )}
-          <Part label={editor?.question ? "What should it look into? (your own words)" : editor ? "What to do (you can edit this)" : "What to do"} aside={editor?.onReset && <button type="button" onClick={editor.onReset} className="rounded px-1.5 text-ws-ink2 hover:bg-ws-hover">Reset to the first draft</button>}>
-            {editor ? (
-              <textarea
-                aria-label={editor.question ? "What it should look into" : "What the agent should do"}
-                rows={6}
-                value={editor.text}
-                disabled={editor.disabled}
-                onChange={(ev) => editor.onChange(ev.target.value)}
-                onBlur={editor.onBlur}
-                className="w-full resize-y rounded-md border border-ws-sep2 bg-ws-win px-2.5 py-1.5 leading-normal text-ws-ink outline-offset-2 disabled:opacity-60"
-              />
-            ) : (
-              <pre className={`${MONO_BLOCK} max-h-none`}>{review.instruction.trim()}</pre>
-            )}
-          </Part>
-          {extra && (
-            <Part label="Added for this run">
-              <pre className={`${MONO_BLOCK} max-h-none`}>{extra.text}</pre>
-            </Part>
-          )}
-        </>
-      )}
+      <Part label={spec.kind === "investigate" && !run.item ? "The question" : "What to do"}>
+        <pre className={`${MONO_BLOCK} max-h-none`}>{spec.instruction.trim()}</pre>
+      </Part>
       {focus && (
         <Box tone="draft" label="Focus note from Pip">
           <BoxTitle icon="spark" tone="needs">
             Focus · written by Pip
           </BoxTitle>
-          {review.spec.focusFromRun && <p className="m-0 text-xs text-ws-ink2">Written after reading the output of run {review.spec.focusFromRun}. That output is data too, and may carry text from a ticket.</p>}
+          {spec.focusFromRun && <p className="m-0 text-xs text-ws-ink2">Written after reading the output of run {spec.focusFromRun}. That output is data too, and may carry text from a ticket.</p>}
           <p className="selectable m-0 whitespace-pre-wrap text-ws-ink [overflow-wrap:anywhere]">{focus}</p>
-          <p className="m-0 text-xs text-ws-ink3">
-            Sent apart from the instruction, as data, not instructions. {focus.length} of 300 characters.
-          </p>
+          <p className="m-0 text-xs text-ws-ink3">Sent apart from the instruction, as data, not instructions.</p>
         </Box>
       )}
-      {findings && findingsFrom && (
-        <Part label={`Findings from investigation run ${findingsFrom}`}>
-          <p className="m-0 text-xs text-ws-ink2">
-            What investigation run {findingsFrom} found, read from the run by Gossamr and sent as data. The agent is told to weigh it, not follow it, and to check it against the code. {findings.length.toLocaleString("en")} characters.
-          </p>
+      {findings && spec.findingsFromRun && (
+        <Part label={`Findings from investigation run ${spec.findingsFromRun}`}>
           <pre data-findings className={`${MONO_BLOCK} max-h-none`}>{findings}</pre>
         </Part>
       )}
-      {plan && planFrom && (
-        <Part
-          label={`Plan from run ${planFrom}`}
-          aside={
-            editor?.plan && (
-              <span className="flex gap-1">
-                <button type="button" disabled={editor.plan.disabled} onClick={editor.plan.onRefresh} className="rounded px-1.5 text-ws-ink2 hover:bg-ws-hover disabled:opacity-45">
-                  Read the plan again
-                </button>
-                <button type="button" disabled={editor.plan.disabled} onClick={editor.plan.onRemove} className="rounded px-1.5 text-ws-ink2 hover:bg-ws-hover disabled:opacity-45">
-                  Build without it
-                </button>
-              </span>
-            )
-          }
-        >
-          <p className="m-0 text-xs text-ws-ink2">
-            {review.spec.planApproved ? `The plan a person approved from run ${planFrom}` : `The unedited plan from run ${planFrom}, which nobody approved on the ticket`}, sent whole and as data. {editor?.plan ? "Edit it before you approve; what is here is exactly what the agent gets. It is read again from the run only when you press the button." : ""} {plan.length.toLocaleString("en")} characters.
-          </p>
-          {editor?.plan ? (
-            <textarea
-              aria-label={`Plan from run ${planFrom}`}
-              rows={14}
-              value={editor.plan.text}
-              disabled={editor.plan.disabled}
-              onChange={(ev) => editor.plan?.onChange(ev.target.value)}
-              onBlur={editor.plan.onBlur}
-              className="w-full resize-y rounded-md border border-ws-sep2 bg-ws-win px-2.5 py-1.5 font-mono text-sm leading-normal text-ws-ink outline-offset-2 disabled:opacity-60"
-            />
-          ) : (
-            <pre data-plan className={`${MONO_BLOCK} max-h-none`}>{plan}</pre>
-          )}
+      {plan && spec.planFromRun && (
+        <Part label={`Plan from run ${spec.planFromRun}`}>
+          <pre data-plan className={`${MONO_BLOCK} max-h-none`}>{plan}</pre>
         </Part>
       )}
-      {account && accountFrom && (
-        <Part
-          label={`What the builder says it did (run ${accountFrom})`}
-          aside={
-            editor?.account && (
-              <span className="flex gap-1">
-                <button type="button" disabled={editor.account.disabled} onClick={editor.account.onRefresh} className="rounded px-1.5 text-ws-ink2 hover:bg-ws-hover disabled:opacity-45">
-                  Read it again
-                </button>
-                <button type="button" disabled={editor.account.disabled} onClick={editor.account.onRemove} className="rounded px-1.5 text-ws-ink2 hover:bg-ws-hover disabled:opacity-45">
-                  Review without it
-                </button>
-              </span>
-            )
-          }
-        >
-          <p className="m-0 text-xs text-ws-ink2">
-            The final answer of build run {accountFrom}, sent whole and as data. The reviewer is told to treat it as a claim to check against the diff and the ticket, not as evidence. {editor?.account ? "Edit it before you approve; what is here is exactly what the agent gets. It is read again from the run only when you press the button." : ""} {account.length.toLocaleString("en")} characters.
-          </p>
-          {editor?.account ? (
-            <textarea
-              aria-label={`What the builder says it did (run ${accountFrom})`}
-              rows={10}
-              value={editor.account.text}
-              disabled={editor.account.disabled}
-              onChange={(ev) => editor.account?.onChange(ev.target.value)}
-              onBlur={editor.account.onBlur}
-              className="w-full resize-y rounded-md border border-ws-sep2 bg-ws-win px-2.5 py-1.5 font-mono text-sm leading-normal text-ws-ink outline-offset-2 disabled:opacity-60"
-            />
-          ) : (
-            <pre data-build-account className={`${MONO_BLOCK} max-h-none`}>{account}</pre>
-          )}
+      {account && spec.buildFromRun && (
+        <Part label={`What the builder says it did (run ${spec.buildFromRun})`}>
+          <pre data-build-account className={`${MONO_BLOCK} max-h-none`}>{account}</pre>
         </Part>
       )}
       {ticket && (
@@ -266,12 +137,6 @@ export function PromptParts({ review, editor }: { review: RunReview; editor?: In
           <TicketText text={ticket} />
         </Details>
       )}
-      <Details summary="Show the whole prompt as one piece">
-        <pre className={`${MONO_BLOCK} max-h-96`}>{review.prompt}</pre>
-        <div>
-          <CopyButton text={review.prompt} label="Copy prompt" what="the prompt" />
-        </div>
-      </Details>
     </div>
   );
 }

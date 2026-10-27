@@ -178,24 +178,8 @@ describe("a triage's description update and a plan's", () => {
   });
 });
 
-describe("draftExcerpt of a follow-up draft", () => {
-  const followUp = (message: string): Intent => ({ type: "followUp", connectionId: "c", runId: "r1", item: ref("CA-1"), message, reason: "checks failed" });
-
-  it("names a follow-up by its message, cut to the length asked", () => {
-    expect(draftExcerpt(followUp("Please rerun the failing checks"))).toBe("Please rerun the failing checks");
-    expect(draftExcerpt(followUp("Please rerun the failing checks and report back"), 10)).toBe("Please rer…");
-  });
-
-  it("masks a secret in the message", () => {
-    const out = draftExcerpt(followUp("use token ghp_abcdefghijklmnopqrstuvwxyz0123456789 now"));
-    expect(out).not.toContain("ghp_abcdefghijklmnopqrstuvwxyz0123456789");
-  });
-});
 describe("draftExcerpt with an edit", () => {
-  it("names a follow-up or a comment by its edited words when there are any", () => {
-    const followUp = { type: "followUp", message: "Stored message" } as unknown as Intent;
-    expect(draftExcerpt(followUp, 40, { message: "Edited message" })).toBe("Edited message");
-    expect(draftExcerpt(followUp)).toBe("Stored message");
+  it("names a comment by its edited words when there are any", () => {
     const comment = { type: "comment", item: { connectionId: "c", key: "CA-1" }, body: docFromText("Stored") } as unknown as Intent;
     expect(draftExcerpt(comment, 40, { body: { text: "Edited" } })).toBe("Edited");
   });

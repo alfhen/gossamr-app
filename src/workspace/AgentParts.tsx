@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import type { Run } from "../types";
 import { Icon, STATE_ICON } from "./AgentIcons";
 import { useDecisionShown } from "./decisionShown";
+import { CloneActions } from "./CloneActions";
 import { failureHelp, retryEnabled, type FailureAct } from "./failureHelp";
 import { createdFrom } from "./runSheetLogic";
 import { useRuns } from "./runsStore";
@@ -76,9 +77,10 @@ export function FailureNext({ run, failure }: { run: Run; failure: FailureState 
   const why = `retry-waits-${run.id}`;
   return (
     <div className="flex flex-wrap items-center gap-2">
+      {help.kind === "noClone" && <CloneActions run={run} />}
       {help.primary && (
         <button type="button" onClick={(ev) => (ev.stopPropagation(), failure.on.act(help.primary!.act))} className={`${BUTTON} ${next ? "border-ws-pip bg-ws-pip font-semibold text-ws-on-pip hover:brightness-110" : "border-ws-sep2 text-ws-ink hover:bg-ws-hover"}`}>
-          <Icon name={help.primary.act === "terminal" ? "term" : help.primary.act === "install" ? "ext" : "play"} />
+          <Icon name={help.primary.act === "terminal" ? "term" : "ext"} />
           {help.primary.label}
         </button>
       )}

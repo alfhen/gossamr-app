@@ -63,7 +63,7 @@ describe("a pasted secret in the app (G16)", () => {
   it("is masked in a reply the preview shows for an agent's question, but not on the card being edited", () => {
     const reply = draft("d2", "x", { intent: { type: "runAnswer", runId: "r1", message: `The password is ${SECRET}`, question: "Which password?" } as Proposal["intent"] });
     expect(renderToStaticMarkup(<TurnView turn={turn({ prompt: "ok" })} proposals={[reply]} />)).not.toContain(SECRET);
-    const card = renderToStaticMarkup(<DraftCard proposal={draft("d3", `Password: ${SECRET}`)} statusName={null} people={[]} working={false} error={null} onApprove={vi.fn()} onSkip={vi.fn()} onReview={vi.fn()} />);
+    const card = renderToStaticMarkup(<DraftCard proposal={draft("d3", `Password: ${SECRET}`)} statusName={null} people={[]} working={false} error={null} onApprove={vi.fn()} onSkip={vi.fn()} />);
     expect(card).toContain(SECRET);
   });
 });

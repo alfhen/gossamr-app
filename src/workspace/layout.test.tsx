@@ -12,12 +12,9 @@ import { useToasts, LIFETIME_MS, MAX_QUEUED, STALE_MS } from "./toasts";
 import { MORE_BUTTON, sameWindow, tabWindow } from "./TabBar";
 import { canvasRoom, regionTarget } from "./Workspace";
 import { RowBadges } from "./ListView";
-import type { Run } from "../types";
 import { SavedViewsPanel, type SavedViewsPanelProps } from "./SavedViews";
 import { buildTabItems } from "./tabItems";
 import { loadTabs, useTabs, type Tab } from "./tabsStore";
-import { afterRunStarted } from "./runSetupStore";
-import { useRuns } from "./runsStore";
 
 const tab = (id: string, filter = ALL, title: string | null = null): Tab => ({ id, title, filter, view: "list" });
 const names = (items: ReturnType<typeof buildTabItems>) => items.map((i) => i.label);
@@ -267,8 +264,6 @@ describe("nothing covers anything", () => {
 });
 
 describe("the toast queue", () => {
-  const SAMPLE: Run = new MockBackend().runs.list()[0];
-
   const texts = () => useToasts.getState().toasts.map((t) => t.text);
   const shown = () => useToasts.getState().toasts[0]?.text;
 
@@ -430,29 +425,6 @@ describe("the toast queue", () => {
       useToasts.getState().push("Couldn't reach Jira", "error", undefined, { current: () => false });
       useToasts.getState().dismiss(useToasts.getState().toasts[0].id);
       expect(texts()).toEqual(["Couldn't reach Jira"]);
-    });
-  });
-
-  describe("the note that an agent started", () => {
-    beforeEach(() => useToasts.getState().clear());
-
-    it("is old news once its run has finished or got the slot it waited for, and is not shown late", () => {
-      const run = (state: Run["state"], over: Partial<Run> = {}) => ({ ...SAMPLE, state, ...over }) as Run;
-      for (const [started, now, news] of [
-        [run("launching"), "working", true],
-        [run("launching"), "done", false],
-        [run("launching"), "needsAnswer", false],
-        [run("queued", { slotWaitSince: "2026-10-01T10:00:00Z" }), "queued", true],
-        [run("queued", { slotWaitSince: "2026-10-01T10:00:00Z" }), "working", false],
-      ] as const) {
-        useToasts.getState().clear();
-        useRuns.setState({ runs: [] });
-        useToasts.getState().push("on screen", "info");
-        afterRunStarted(started, null, { switchToAgents: false });
-        useRuns.setState({ runs: [{ ...started, state: now }] });
-        useToasts.getState().dismiss(useToasts.getState().toasts[0].id);
-        expect(texts().length, `${started.state} then ${now}`).toBe(news ? 1 : 0);
-      }
     });
   });
 });

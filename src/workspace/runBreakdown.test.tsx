@@ -14,12 +14,10 @@ import { breakdownStatus, breakdownTarget, breakdownWithPipPrompt, pendingBreakd
 
 const blank: ScreenContext = { view: null, item: null, filter: null, selection: [] };
 
-const spec = (kind: RunKind): RunSpec => ({ kind, repo: "acme/web", clonePath: "/Users/sample/Code/web", base: "main", name: `ca-412-${kind}-ab12`, instruction: "Do it.", focus: null, focusFromRun: null, ticketBlock: "CA-412: sample" });
+const spec = (kind: RunKind): RunSpec => ({ kind, repo: "acme/storefront", clonePath: "/Users/sample/Code/storefront", base: "main", name: `ca-412-${kind}-ab12`, instruction: "Do it.", focus: null, focusFromRun: null, ticketBlock: "CA-412: sample" });
 
 async function finished(backend: MockBackend, kind: RunKind, item: ReturnType<typeof itemRef> | null = itemRef("CA-412")): Promise<Run> {
-  const intent: Intent = { type: "startRun", connectionId: "mock", item, spec: spec(kind) };
-  const p = await backend.proposalsCreate(intent);
-  const queued = await backend.runsApprove(p.id, (await backend.runsReview(p.id)).digest);
+  const queued = backend.runs.start(spec(kind), item);
   for (let i = 0; i < 4; i++) backend.runs.advance(queued.id);
   return (await backend.runsGet(queued.id))!;
 }

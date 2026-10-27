@@ -19,12 +19,11 @@ async function askAndWait(page: Page, question: string) {
   await expect(pipPane(page).getByRole("button", { name: "Stop" })).toHaveCount(0);
 }
 
-test("Start a workstream in the peek opens its own conversation in Pip, at intake", async ({ page }) => {
+test("Ask Pip in the peek opens its own conversation in Pip, at intake", async ({ page }) => {
   await openApp(page);
   await startWorkstream(page, "CA-401");
   await expect(pipConversation(page)).toHaveText(/^Workstream: CA-401 .+ · Intake$/);
   const peek = peekSheet(page);
-  await expect(peek.getByRole("button", { name: "Start a workstream" })).toHaveCount(0);
   await expect(peek.getByText("Workstream · Intake")).toBeVisible();
   await expect(peek.locator("#peek-agents").getByText(/^Workstream: CA-401 /)).toBeVisible();
   await expect(peek.locator("#peek-agents [data-stage=intake]")).toHaveText("Intake");
@@ -33,7 +32,7 @@ test("Start a workstream in the peek opens its own conversation in Pip, at intak
   // Another ticket has none: the pane goes back to General.
   await peekTicket(page, "CA-402");
   await expect(pipConversation(page)).toHaveText("General");
-  await expect(peekSheet(page).getByRole("button", { name: "Start a workstream" })).toBeVisible();
+  await expect(peekSheet(page).getByRole("button", { name: "Ask Pip" })).toBeVisible();
 });
 
 test("Open in Pip puts the cursor in the workstream's conversation, and Close, once confirmed, gives the ticket General back", async ({ page }) => {
@@ -56,17 +55,17 @@ test("Open in Pip puts the cursor in the workstream's conversation, and Close, o
   await peek.getByRole("button", { name: "Close…" }).click();
   await confirm.getByRole("button", { name: "Close workstream" }).click();
   await expect(pipConversation(page)).toHaveText("General");
-  await expect(peek.getByRole("button", { name: "Start a workstream" })).toBeVisible();
+  await expect(peek.getByRole("button", { name: "Ask Pip" })).toBeVisible();
   expect(await page.evaluate((key) => (JSON.parse(localStorage.getItem(key) ?? "{}") as { events?: { action: string }[] }).events?.map((e) => e.action), STORE)).toEqual(["opened", "closed"]);
 });
 
-test("the palette starts a workstream on the peeked ticket", async ({ page }) => {
+test("the palette asks Pip to plan the peeked ticket, which opens its workstream", async ({ page }) => {
   await openApp(page);
   await peekTicket(page, "CA-402");
   await page.keyboard.press("ControlOrMeta+k");
   const palette = page.getByRole("dialog", { name: "Command palette" });
-  await palette.getByLabel("Search commands and tickets").fill("start a workstream");
-  await palette.getByText("Start a workstream on CA-402", { exact: true }).click();
+  await palette.getByLabel("Search commands and tickets").fill("plan CA-402");
+  await palette.getByText("Ask Pip to plan CA-402", { exact: true }).click();
   await expect(palette).toHaveCount(0);
   await expect(pipConversation(page)).toHaveText(/^Workstream: CA-402 .+ · Intake$/);
   await expect(peekSheet(page).getByText("Workstream · Intake")).toBeVisible();
@@ -75,7 +74,6 @@ test("the palette starts a workstream on the peeked ticket", async ({ page }) =>
   await page.keyboard.press("ControlOrMeta+k");
   await palette.getByLabel("Search commands and tickets").fill("workstream");
   await expect(palette.getByText("Open the workstream on CA-402", { exact: true })).toBeVisible();
-  await expect(palette.getByText("Start a workstream on CA-402", { exact: true })).toHaveCount(0);
 });
 
 test("a workstream's conversation is apart from General, and both survive a reload", async ({ page }) => {

@@ -9,7 +9,6 @@ import { usePaneWidths } from "./PaneResizers";
 import { isStillFiltered, usePip, type PipFiltered } from "./pipStore";
 import { usePrefs } from "./prefs";
 import { useRuns } from "./runsStore";
-import { useRunSetup } from "./runSetupStore";
 import { useTabs } from "./tabsStore";
 import { focusedConversation } from "./workstreamsStore";
 
@@ -99,10 +98,9 @@ export function PipLauncher() {
   const needs = useNeedsYou().length;
   const peekOpen = useTabs((s) => !!s.selected && s.marked.length <= 1);
   const peekWidth = usePaneWidths().peek;
-  // An agent sheet's own buttons sit where the launcher does, Start agent among them: it steps aside while one is open.
+  // An agent sheet's own buttons sit where the launcher does: it steps aside while one is open.
   const runSheetOpen = useRuns((s) => s.sheet !== null);
-  const setupOpen = useRunSetup((s) => s.open);
-  if (runSheetOpen || setupOpen) return null;
+  if (runSheetOpen) return null;
   return <Launcher clearRight={peekOpen ? peekWidth : 0} needs={needs} thinking={thinking} onOpen={() => usePrefs.getState().setPipOpen(true)} />;
 }
 

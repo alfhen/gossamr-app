@@ -1,4 +1,4 @@
-import { useContext, useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { useId, useLayoutEffect, useRef, useState } from "react";
 import { docText } from "../lib/docs";
 import { itemKey } from "../lib/filter";
 import { REVIEW_OUTDATED_NOTE, targetOf, unreachable } from "../lib/proposals";
@@ -8,21 +8,16 @@ import { draftStatus } from "./boardLogic";
 import { draftSummary, draftTitle, linkSentence, useEditedDraft } from "./DraftCard";
 import { collapsible, draftFacts, isCreate, showDraft } from "./draftTicket";
 import { showMe } from "./jump";
-import { useRunSetup } from "./runSetupStore";
-import { useRuns } from "./runsStore";
-import { nextPass } from "./followUp";
 import { useRepoReviewAccess, useReviewAccess } from "./reviewAccess";
 import { openPullView, sameCommit, usePullDiff } from "./pullViewStore";
-import { FROM_INPUT, PIP_INPUT_ID, PIP_ROOT, draftKeyHint, draftKeyShortcuts, escapeCollapses, focusAfterLeaving, onDraftCardKey, setDraftEditIntent, type Asking } from "./draftKeys";
+import { FROM_INPUT, PIP_INPUT_ID, PIP_ROOT, draftKeyHint, draftKeyShortcuts, focusAfterLeaving, onDraftCardKey, setDraftEditIntent, type Asking } from "./draftKeys";
 import { usePip } from "./pipStore";
-import { InlineStart, InlineStartContext, inlineStartId, inlineStartKey, inlineStartable, useInlineStarts } from "./InlineStart";
 import { focusPeekDraft } from "./peekDrafts";
 import { plainMarkdown } from "../lib/markdown";
 import { maskSecrets } from "../lib/riskyText";
 import { useTabs } from "./tabsStore";
 import { KeyHint } from "./KeyHint";
 import { RetiredDraft } from "./RetiredDraft";
-import { NOT_WAITING, useAnswerRun, type AnswerRun } from "./runAnswerLogic";
 
 const ICON: Record<Proposal["intent"]["type"], string> = { comment: "✎", transition: "⇄", subtasks: "☰", create: "＋", update: "✦", rewrite: "✎", link: "✦", startRun: "▶", followUp: "↺", runAnswer: "↩", githubReview: "◎" };
 
@@ -42,7 +37,7 @@ const clipText = (text: string) => {
   return flat.length > 200 ? `${flat.slice(0, 200)}…` : flat;
 };
 
-export function draftPreviewBody(p: Proposal, statusName: string | null, pass?: number): string {
+export function draftPreviewBody(p: Proposal, statusName: string | null): string {
   const i = p.intent;
   switch (i.type) {
     case "comment":
@@ -60,24 +55,16 @@ export function draftPreviewBody(p: Proposal, statusName: string | null, pass?: 
     case "link":
       return linkSentence(i);
     case "startRun":
-      return `Start an agent: ${i.item?.key ?? `${i.spec.repo}, no ticket`}\n${!i.item && i.spec.instruction.trim() ? `${clipText(i.spec.instruction)}\n` : ""}${i.spec.focus?.trim() ? `Focus from Pip: ${i.spec.focus.trim()}\n` : ""}${p.state.type === "applied" ? "Started: see its run in the steps." : "Read the exact prompt, then start it. Nothing runs before that."}`;
+      return `${clipText(i.spec.instruction)}\n\nPip starts agents directly now; this draft is kept as history.`;
     case "followUp":
-      return `Send the agent back for another pass${pass ? ` (pass ${pass})` : ""}. Why: ${i.reason}\n\n${i.message}\n\nNothing is sent until you read this and send it.`;
+      return `${i.reason}\n\n${i.message}\n\nPip messages agents directly now; this draft is kept as history.`;
     case "runAnswer":
-      return `${i.question ? `The agent asks: ${i.question}\n\n` : ""}${i.message}\n\nNothing is sent until you read this and send it.`;
+      return `${i.question ? `The agent asked: ${i.question}\n\n` : ""}${i.message}\n\nPip messages agents directly now; this draft is kept as history.`;
     case "githubReview":
       return [plainMarkdown(i.summary), ...i.comments.map((c) => `${c.path}:${c.line}: ${plainMarkdown(c.body)}`), "Nothing is posted to GitHub until you approve it."].join("\n\n");
     default:
       return unreachable(i);
   }
-}
-
-interface Props {
-  proposal: Proposal;
-  statusName: string | null;
-  /** The target ticket's title when it is cached. */
-  targetTitle: string | null;
-  onOpen(): void;
 }
 
 /** Text a card shows in full up to a few lines, and whole on request; it fades out rather than ending in an ellipsis. */
@@ -103,10 +90,6 @@ interface Props {
   statusName: string | null;
   /** The target ticket's title when it is cached. */
   targetTitle: string | null;
-  /** For a follow-up, the pass the agent would be on once it is sent. */
-  pass?: number;
-  /** For an answer, how the run it answers stands now. */
-  answer?: AnswerRun | null;
   onOpen(): void;
   /** What the a key does on a focused card, for drafts that may be approved in place. */
   onApprove?(): void;
@@ -116,11 +99,6 @@ interface Props {
   onPullView?(): void;
   /** What the s key does on a focused card. */
   onSkip?(): void;
-  /**
-   * A run draft started in place on the Agents view: its action shows or hides `panel`, the review under the card, instead of
-   * opening the setup sheet; `onKey` takes the review's own keys (⌘↵) pressed on the card itself, and says whether it did.
-   */
-  expander?: { open: boolean; panel: ReactNode; onKey?(ev: KeyboardEvent<HTMLElement>): boolean; onClose?(): void };
 }
 
 /**
@@ -131,12 +109,6 @@ interface Props {
 export const KEY_HINT = "pointer-events-none absolute top-full left-2.5 z-10 m-0 mt-0.5 max-w-[calc(100%-1.25rem)] truncate rounded-md border border-ws-sep2 px-2 py-px text-xs leading-4 shadow-sm";
 /** The room under every draft card that its key hint hangs in: the hint's 20px and its 2px gap. */
 export const KEY_HINT_ROOM = "mb-[22px]";
-
-/** Hides the open review under `card` and keeps the keyboard on the card. */
-export function collapseReview(card: { focus(options?: FocusOptions): void }, close: () => void) {
-  close();
-  card.focus({ preventScroll: true });
-}
 
 /** Hands typing that landed on a card back to Pip's input, after what is already there. */
 function typeIntoInput(text: string): boolean {
@@ -156,39 +128,13 @@ export function DraftPreview(props: Props) {
   const p = props.proposal;
   if (p.state.type !== "retired") return <DraftPreviewCard {...props} />;
   return (
-    <RetiredDraft proposal={p} title={draftTitle(p, props.answer?.label)} state={STATE.retired}>
+    <RetiredDraft proposal={p} title={draftTitle(p)} state={STATE.retired}>
       <DraftPreviewCard {...props} />
     </RetiredDraft>
   );
 }
 
-/**
- * An answer's question and reply, both whole: the run's question as the agent's words (its live one while it waits), then
- * the reply that would go. One that can't be sent any more says why.
- */
-function AnswerBody({ intent, answer, pending, byPip }: { intent: Extract<Proposal["intent"], { type: "runAnswer" }>; answer: AnswerRun | null; pending: boolean; byPip: boolean }) {
-  const question = answer?.question ?? intent.question;
-  return (
-    <div data-run-answer className="grid gap-1.5 px-2.5 py-2">
-      {question && (
-        <blockquote data-question className="m-0 rounded-md border-l-2 border-ws-sep2 bg-ws-sel px-2 py-1 text-sm whitespace-pre-wrap text-ws-ink2 [overflow-wrap:anywhere]">
-          <b className="font-semibold">{answer?.label ?? "The agent"} asks:</b> {maskSecrets(question)}
-        </blockquote>
-      )}
-      <span className="text-xs font-semibold text-ws-ink3">{pending ? (byPip ? "Pip suggests this reply" : "Suggested reply") : "Reply"}</span>
-      <p data-reply className="m-0 whitespace-pre-wrap [overflow-wrap:anywhere]">
-        {maskSecrets(intent.message)}
-      </p>
-      {pending && answer && !answer.waiting && (
-        <p data-not-waiting className="m-0 text-sm font-semibold text-ws-blocked">
-          {NOT_WAITING}. Skip this draft.
-        </p>
-      )}
-    </div>
-  );
-}
-
-function DraftPreviewCard({ proposal: p, statusName, targetTitle, pass, answer = null, onOpen, onApprove, onSkip, canPost = false, onPullView, expander }: Props) {
+function DraftPreviewCard({ proposal: p, statusName, targetTitle, onOpen, onApprove, onSkip, canPost = false, onPullView }: Props) {
   /** Focused from the keyboard: only then does the card take its keys and show them. */
   const [armed, setArmed] = useState(false);
   const [asking, setAsking] = useState<Asking | null>(null);
@@ -203,11 +149,9 @@ function DraftPreviewCard({ proposal: p, statusName, targetTitle, pass, answer =
   const pending = state === "pending" || state === "applying";
   const revision = p.revisions[p.revisions.length - 1];
   const made = p.intent.type === "create" && state === "applied" ? p.created[0] : undefined;
-  /** An answer whose run moved on can only be skipped. */
-  const stale = p.intent.type === "runAnswer" && state === "pending" && !!answer && !answer.waiting;
-  /** Whether a may decide the draft in place: not an answer whose run moved on, nor a review the token can't post. */
-  const canApprove = !stale && (p.intent.type !== "githubReview" || canPost);
-  const title = draftTitle(p, answer?.label);
+  /** Whether a may decide the draft in place: not a review the token can't post. */
+  const canApprove = p.intent.type !== "githubReview" || canPost;
+  const title = draftTitle(p);
   const titleId = useId();
   const review = p.intent.type === "githubReview" && state === "pending" ? p.intent : null;
   // A review the keys may post reads where its pull request is now, once the card is reached from the keyboard, so it
@@ -217,13 +161,13 @@ function DraftPreviewCard({ proposal: p, statusName, targetTitle, pass, answer =
   const warning = !review || !armed ? null : p.error === REVIEW_OUTDATED_NOTE ? REVIEW_OUTDATED_NOTE : p.maybePosted ? "This review may already be on GitHub; posting looks for it there first and sends nothing while Gossamr can't be sure." : head && !sameCommit(head, review.commitSha) ? `The pull request has moved on since this review: reviewed ${review.commitSha.slice(0, 8)}, now at ${head.slice(0, 8)}. GitHub may mark these comments outdated.` : null;
   /** A review the token can't post is read in the pull request view rather than posted. */
   const toPullView = p.intent.type === "githubReview" && !canPost && !!onPullView;
-  const go = pending ? (p.intent.type === "githubReview" ? (toPullView ? "Open PR view →" : "Review and post →") : p.intent.type === "startRun" ? (expander ? "Review and start" : "Review and start →") : p.intent.type === "followUp" ? "Review and send back →" : p.intent.type === "runAnswer" ? (stale ? "" : "Review and answer →") : target ? `Review on ${target.key} →` : "Review draft →") : (target ?? made) ? `Open ${(target ?? made)!.key} →` : "";
+  const go = pending ? (p.intent.type === "githubReview" ? (toPullView ? "Open PR view →" : "Review and post →") : target ? `Review on ${target.key} →` : "Review draft →") : (target ?? made) ? `Open ${(target ?? made)!.key} →` : "";
   const create = isCreate(p) ? p : null;
   // A secret in a draft's text shows masked on the card, as on What Jira saw from me; the card being edited keeps the real text.
   // A comment the person edited and has not posted shows its words as edited, with a note that it is.
   const { edited, text: typed } = useEditedDraft(p.id);
   const changed = pending && edited;
-  const body = maskSecrets(create ? docText(create.intent.fields.body) || "No description." : p.intent.type === "comment" && changed && typed !== undefined ? typed : draftPreviewBody(p, statusName, pass));
+  const body = maskSecrets(create ? docText(create.intent.fields.body) || "No description." : p.intent.type === "comment" && changed && typed !== undefined ? typed : draftPreviewBody(p, statusName));
   const decide = (run?: () => void) =>
     run &&
     (() => {
@@ -260,9 +204,8 @@ function DraftPreviewCard({ proposal: p, statusName, targetTitle, pass, answer =
       aria-labelledby={titleId}
       data-draft={p.id}
       data-state={state}
-      // While a decision waits for Enter, Esc is the card's: it cancels the ask, and stops nothing else. So it is while the
-      // card's review is open under it: Esc hides the review.
-      data-esc-local={asking || expander?.open ? "" : undefined}
+      // While a decision waits for Enter, Esc is the card's: it cancels the ask, and stops nothing else.
+      data-esc-local={asking ? "" : undefined}
       tabIndex={0}
       aria-keyshortcuts={draftKeyShortcuts(p)}
       onMouseDown={() => {
@@ -270,16 +213,6 @@ function DraftPreviewCard({ proposal: p, statusName, targetTitle, pass, answer =
         setTimeout(() => (pointer.current = false), 0);
       }}
       onKeyDown={(ev) => {
-        // Esc hides an open review, from the card or from inside the review, and leaves the keyboard on the card; a pending
-        // ask keeps Esc for cancelling itself.
-        if (expander?.open && expander.onClose && escapeCollapses(ev, asking)) {
-          ev.preventDefault();
-          ev.stopPropagation();
-          collapseReview(ev.currentTarget, expander.onClose);
-          return;
-        }
-        // ⌘↵ starts an open review from the card that opened it too, on the same terms as its Start.
-        if (ev.target === ev.currentTarget && expander?.open && expander.onKey?.(ev)) return;
         if (!armed) return;
         const fromInput = ev.target === ev.currentTarget && ev.currentTarget.hasAttribute(FROM_INPUT);
         if (ev.target === ev.currentTarget) ev.currentTarget.removeAttribute(FROM_INPUT);
@@ -318,7 +251,7 @@ function DraftPreviewCard({ proposal: p, statusName, targetTitle, pass, answer =
             <p className="m-0 px-2.5 pt-0.5 text-sm text-ws-ink2">{draftFacts(create).join(" · ")}</p>
           </>
         )}
-        {p.intent.type === "runAnswer" ? <AnswerBody intent={p.intent} answer={answer} pending={pending} byPip={p.createdBy === "pip"} /> : <Expandable id={`draft-body-${p.id}`} text={body} />}
+        <Expandable id={`draft-body-${p.id}`} text={body} />
         {p.state.type === "retired" ? (
           <span className="mx-2.5 mb-1.5 block text-xs font-semibold text-ws-ink3">✕ {p.state.reason}</span>
         ) : (
@@ -327,20 +260,11 @@ function DraftPreviewCard({ proposal: p, statusName, targetTitle, pass, answer =
         <div className="flex items-center gap-1.5 border-t border-ws-sep px-2.5 py-1.5 text-xs text-ws-ink3">
           <span className="shrink-0 font-mono font-semibold whitespace-nowrap">{target?.key ?? "new ticket"}</span>
           {targetTitle && <span className="min-w-0 truncate">{targetTitle}</span>}
-          {stale && onSkip && (
-            <button type="button" onClick={onSkip} className="ml-auto shrink-0 rounded-md border border-ws-sep2 px-2.5 py-1 text-sm font-semibold text-ws-ink2 hover:bg-ws-hover">
-              Skip
-            </button>
-          )}
           {go &&
-            // An open review has its own Start and Hide; the card's button would only say the same again.
-            !expander?.open &&
             (pending ? (
               <button
                 type="button"
                 onClick={toPullView ? onPullView : onOpen}
-                aria-expanded={expander ? expander.open : undefined}
-                aria-controls={expander?.open ? inlineStartId(p.id) : undefined}
                 className="ml-auto shrink-0 rounded-md bg-ws-pip px-2.5 py-1 text-sm font-semibold text-ws-on-pip hover:brightness-110 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip"
               >
                 {go}
@@ -351,7 +275,6 @@ function DraftPreviewCard({ proposal: p, statusName, targetTitle, pass, answer =
               </button>
             ))}
         </div>
-        {expander?.open && expander.panel}
         {warning && (
           <p data-preview-warning className="m-0 border-t border-ws-sep bg-ws-blocked-soft px-2.5 py-1 text-xs font-semibold text-ws-blocked">
             {warning}
@@ -367,8 +290,7 @@ const deciding = new Set<string>();
 
 /**
  * Approving and skipping from a card's keys, through the store, one decision at a time per draft; a failure shows as a
- * toast. An answer is sent with the reply the card shows, as its own button sends it, and a review is posted only as
- * `seen`, the draft as the card showed it: one revised since is refused.
+ * toast. A review is posted only as `seen`, the draft as the card showed it: one revised since is refused.
  */
 export function draftDecisions(id: string, seen?: Proposal): { approve(): void; skip(): void } {
   const decide = (verb: string, job: () => Promise<Proposal>) => {
@@ -392,28 +314,20 @@ export function draftDecisions(id: string, seen?: Proposal): { approve(): void; 
           return done;
         });
       }
-      if (p?.intent.type !== "runAnswer") return decide("approve", () => useWorkspace.getState().approve(id));
-      const shown = p.intent.message;
-      decide("send", async () => {
-        await useWorkspace.getState().sendAnswerDraft(id, shown);
-        return useWorkspace.getState().proposals[id] ?? p;
-      });
+      decide("approve", () => useWorkspace.getState().approve(id));
     },
     skip: () => decide("skip", () => useWorkspace.getState().skip(id)),
   };
 }
 
 /**
- * What a draft card's action does: a run draft opens the setup sheet, or on the Agents view (`inline`) one of a kind started
- * in place shows its review under the card; a ticket's draft shows the ticket (on Agents its peek opens over Agents
- * rather than going to the canvas, where a rewrite's diff is read and approved as anywhere); a draft of a ticket that
- * doesn't exist yet shows that draft.
+ * What a draft card's action does: a ticket's draft shows the ticket (on Agents its peek opens over Agents rather than
+ * going to the canvas, where a rewrite's diff is read and approved as anywhere); a draft of a ticket that doesn't exist
+ * yet shows that draft.
  */
 export function openLiveDraft(p: Proposal, { inline = false }: { inline?: boolean } = {}) {
   const target = targetOf(p.intent);
-  if (inline && inlineStartable(p)) return useInlineStarts.getState().toggle(p.id);
-  if (p.intent.type === "startRun" && p.state.type === "pending") void useRunSetup.getState().begin({ proposalId: p.id });
-  else if (target && inline && useWorkspace.getState().items[itemKey(target)]) {
+  if (target && inline && useWorkspace.getState().items[itemKey(target)]) {
     useTabs.getState().select(itemKey(target));
     // The keyboard goes with it, to the draft in the peek; closing the peek gives it back to where it was.
     focusPeekDraft(p.id);
@@ -423,28 +337,12 @@ export function openLiveDraft(p: Proposal, { inline = false }: { inline?: boolea
   else if (p.created[0] && !showMe(p.created[0])) showDraft(p.id);
 }
 
-/** ⌘↵ on the card of run draft `id` while its review is open: as in the review, it starts when Start would; true when the key was taken. */
-function startKey(id: string, ev: KeyboardEvent<HTMLElement>): boolean {
-  const inline = useInlineStarts.getState();
-  const entry = inline.entries[id];
-  const key = entry ? inlineStartKey(ev, entry) : null;
-  if (!key) return false;
-  ev.preventDefault();
-  if (key === "start") void inline.start(id);
-  return true;
-}
-
 /** The preview wired to the workspace: opening it shows the ticket, or the draft of a ticket that doesn't exist yet. */
 export function LiveDraftPreview({ proposal: p }: { proposal: Proposal }) {
   const containers = useWorkspace((s) => s.containers);
-  const inline = useContext(InlineStartContext);
   const target = targetOf(p.intent);
   const item = useWorkspace((s) => (target ? s.items[itemKey(target)] : undefined));
   const statusName = item && p.intent.type === "transition" ? (draftStatus(p, workflowOfItem({ containers }, item))?.name ?? null) : null;
-  const startable = inline && inlineStartable(p);
-  const expanded = useInlineStarts((s) => startable && (s.entries[p.id]?.phase ?? "closed") !== "closed");
-  const pass = useRuns((s) => (p.intent.type === "followUp" && p.state.type === "pending" ? nextPass(s.runs.find((r) => r.id === (p.intent as { runId: string }).runId)) : undefined));
-  const answer = useAnswerRun(p);
   const { approve, skip } = draftDecisions(p.id, p);
   const review = p.intent.type === "githubReview" ? p.intent : null;
   const access = useRepoReviewAccess(review?.connectionId ?? null, review?.repo ?? null);
@@ -453,14 +351,11 @@ export function LiveDraftPreview({ proposal: p }: { proposal: Proposal }) {
       proposal={p}
       statusName={statusName}
       targetTitle={item?.title ?? null}
-      pass={pass}
-      answer={answer}
       canPost={!!access?.canPost}
       onPullView={review ? () => openPullView({ connectionId: review.connectionId, repo: review.repo, number: review.number, proposalId: p.id }) : undefined}
-      onOpen={() => openLiveDraft(p, { inline })}
+      onOpen={() => openLiveDraft(p, { inline: useTabs.getState().route === "agents" })}
       onApprove={approve}
       onSkip={skip}
-      expander={startable ? { open: expanded, panel: <InlineStart proposal={p} />, onKey: (ev) => startKey(p.id, ev), onClose: () => useInlineStarts.getState().close(p.id) } : undefined}
     />
   );
 }

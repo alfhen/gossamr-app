@@ -89,7 +89,7 @@ Agents is the one work view (`AgentsView.tsx`, the rest in `AgentsHome.tsx`). Th
   - EscalationCardView
   - the held banner Resume
   - PlanApproval
-  - InlineStart (run start)
+  - PipAskBody (a question Pip asked, with "Answer in Pip" and Dismiss)
   - the trust-folder step and the budget's "Allow 5 more"
   The most urgent need is open when the detail opens, unless a link already chose another. Only one is open at a time: "Decide" opens another, "Hide" closes the open one. Once a need is dealt with the next one of the same workstream opens in its place and a line says what was done; with none left a toast says it and the section goes away. A "Approve N safe drafts" preview (the palette's "Approve all safe drafts in …") opens above the stack, with the one confirm ("Yes, approve N"); Cancel, ×, Esc or opening a need keeps every draft as it is.
 - **One decision, shown once.** The open need is not repeated anywhere else while its workstream's detail is open (`DecisionShownContext`, `decisionShown` in `src/workspace/decisionShown.ts`):

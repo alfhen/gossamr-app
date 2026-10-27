@@ -40,6 +40,6 @@ test("focus in the list holds the order as well, until focus leaves it", async (
   await askRun(page, "run-seed-3", "Which branch?");
   await expect(card(page, "run-seed-3")).toHaveAttribute("data-state", "needsAnswer");
   expect(await shownIds(page)).toEqual(before);
-  await page.getByRole("button", { name: "Start an agent" }).first().focus();
+  await page.getByRole("button", { name: "Ask Pip" }).first().focus();
   await expect.poll(() => shownIds(page)).not.toEqual(before);
 });

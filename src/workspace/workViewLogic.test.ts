@@ -161,8 +161,8 @@ describe("the step chips", () => {
   });
 
   it("count what needs the person in each step: its pending drafts and its runs asking", () => {
-    const runs = [run("r1", "investigate", "needsAnswer"), run("r3", "plan", "done")];
-    const proposals = [draft("d1", startRun("CA-401", "triage", "ws-1"), 5), fromRun("d2", comment("CA-401"), "r3"), draft("d3", comment("CA-401"), 4, { state: { type: "applied" } as ProposalState })];
+    const runs = [run("r1", "investigate", "needsAnswer"), run("r2", "triage", "done"), run("r3", "plan", "done")];
+    const proposals = [fromRun("d1", comment("CA-401"), "r2"), fromRun("d2", comment("CA-401"), "r3"), draft("d3", comment("CA-401"), 4, { state: { type: "applied" } as ProposalState })];
     const chips = stepChips(runs, [], {}, proposals, { now: NOW });
     expect(chips.map((c) => c.needsYou)).toEqual([1, 1, 1, 0, 0, 0]);
   });

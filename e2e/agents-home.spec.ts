@@ -172,16 +172,10 @@ test("the rail popover's item turns the Needs you filter on and opens that works
   await expect(agentsHome(page).locator('[data-workstream-group="none"]')).toHaveAttribute("aria-current", "true");
 });
 
-test("Start a workstream… and Show closed are in the toolbar", async ({ page }) => {
+test("Show closed is in the toolbar", async ({ page }) => {
   await openApp(page);
   await startWorkstream(page, "CA-401");
   await openAgents(page);
-  await page.getByRole("button", { name: "Start a workstream…" }).click();
-  const palette = page.getByRole("dialog", { name: "Command palette" });
-  await expect(palette.getByLabel(/Start a workstream/)).toBeVisible();
-  await expect(palette.getByText("Start a workstream on CA-401", { exact: true })).toHaveCount(0);
-  await page.keyboard.press("Escape");
-
   await closePipDrawerIfOpen(page);
   await selectWorkstream(page, "CA-401");
   await workstreamSheet(page).getByRole("button", { name: "Close…" }).first().click();

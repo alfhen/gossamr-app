@@ -96,22 +96,19 @@ describe("the sample runs that show each source", () => {
 
 describe("asking for the tool", () => {
   const spec: RunSpec = { kind: "investigate", repo: "acme/storefront", clonePath: "/Users/sample/Code/storefront", base: "main", name: "ca-412-fix-ab12", instruction: "Investigate this work.", focus: null, focusFromRun: null, ticketBlock: "CA-412: sample" };
-  it("puts the report paragraph in the prompt and digest when the draft asks, and offers the four tools either way", async () => {
+  it("puts the report paragraph in the prompt of every start, whether or not the caller asks", () => {
     const b = new MockBackend();
-    const made = await b.runsDraft({ ...spec, report: true }, itemRef("CA-412"));
-    const plain = await b.runsDraft({ ...spec, name: "ca-412-fix-cd34" }, itemRef("CA-412"));
-    const review = await b.runsReview(made.id);
-    expect(review.prompt).toContain("If the Gossamr tool `report` is available");
-    expect(review.report?.allowed).toBe("mcp__gossamr__report, mcp__gossamr__ask, mcp__gossamr__read_workstream, mcp__gossamr__read_ticket");
-    expect(review.digest).not.toBe((await b.runsReview(plain.id)).digest);
-    expect((await b.runsReview(plain.id)).report).toMatchObject({ allowed: review.report?.allowed });
+    for (const asked of [{ report: true }, { name: "ca-412-fix-cd34" }]) {
+      const made = b.runs.prepare({ ...spec, ...asked }, itemRef("CA-412"));
+      expect(made.report).toBe(true);
+      expect(renderPrompt(made)).toContain("If the Gossamr tool `report` is available");
+    }
     expect(renderPrompt({ ...spec, report: false })).not.toContain("Gossamr tool");
   });
 
   it("makes a run that finishes report what its answer says, and drafts from the report", async () => {
     const b = new MockBackend({ runs: { seed: "empty", epoch: NOW } });
-    const made = await b.runsDraft({ ...spec, report: true }, itemRef("CA-412"));
-    const run = await b.runsApprove(made.id, (await b.runsReview(made.id)).digest);
+    const run = b.runs.start({ ...spec, report: true }, itemRef("CA-412"));
     for (let i = 0; i < 3; i++) b.runs.advance(run.id);
     const outcome = await b.runsOutcome(run.id);
     expect(outcome).toMatchObject({ source: "structured", report: { offered: true, revision: 1, calls: 1 } });

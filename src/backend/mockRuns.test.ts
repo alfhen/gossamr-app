@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import type { Intent, Run, RunSpec, ScreenContext } from "../types";
+import type { Intent, ItemRef, Run, RunSpec } from "../types";
 import { MockBackend } from "./mock";
 import { itemRef } from "./mockConnector";
 import { commentText, jiraNote } from "./mockRunResult";
@@ -9,13 +9,12 @@ import { MockSupervisor } from "./mockSupervisor";
 import { MockWorkstreams } from "./mockWorkstreams";
 import { DENIED_MESSAGE } from "../lib/permission";
 import { RESUME_TEXT } from "../workspace/runSheetLogic";
-import { mockAsk } from "./mockPip";
-import { AGENT_GUARD, GUARD as GUARD_TEXT, MOVED_ON, findingsFitted, mockDigest, renderPrompt } from "./mockRuns";
+import { AGENT_GUARD, GUARD as GUARD_TEXT, findingsFitted, mockDigest, renderPrompt } from "./mockRuns";
 
 const spec: RunSpec = {
   kind: "investigate",
-  repo: "acme/web",
-  clonePath: "/Users/sample/Code/web",
+  repo: "acme/storefront",
+  clonePath: "/Users/sample/Code/storefront",
   base: "main",
   name: "ca-412-fix-ab12",
   instruction: "Investigate this work.",
@@ -23,11 +22,20 @@ const spec: RunSpec = {
   focusFromRun: null,
   ticketBlock: "CA-412: sample",
 };
-const startRun = (over: Partial<RunSpec> = {}): Intent => ({ type: "startRun", connectionId: "mock", item: itemRef("CA-412"), spec: { ...spec, ...over } });
 
-async function draft(backend: MockBackend, over: Partial<RunSpec> = {}) {
-  return backend.proposalsCreate(startRun(over));
-}
+/** Queues a run the way Pip's start does, with the ticket text and everything carried in from earlier runs read here. */
+const queue = (backend: MockBackend, over: Partial<RunSpec> = {}, item: ItemRef | null = itemRef("CA-412")): Run => backend.runs.start({ ...spec, ...over }, item);
+/** The spec a start would store for `over`, or why it is refused. */
+const prepared = (backend: MockBackend, over: Partial<RunSpec>, item: ItemRef | null = itemRef("CA-412")): RunSpec => backend.runs.prepare({ ...spec, ...over }, item);
+/** Why a start of `over` is refused, or "started". */
+const refusal = (backend: MockBackend, over: Partial<RunSpec>, item: ItemRef | null = itemRef("CA-412")): string => {
+  try {
+    queue(backend, over, item);
+    return "started";
+  } catch (e) {
+    return (e as Error).message;
+  }
+};
 
 describe("mock runs", () => {
   it("starts with eight scripted runs covering every lane", async () => {
@@ -46,27 +54,21 @@ describe("mock runs", () => {
     expect(a).toEqual(b);
   });
 
-  it("refuses a wrong digest and leaves no run behind", async () => {
+  it("queues a run Pip started: no draft behind it, the digest of what it was given, and a line in its workstream", async () => {
     const backend = new MockBackend();
-    const p = await draft(backend);
-    const before = (await backend.runsList()).length;
-    await expect(backend.runsApprove(p.id, "mock-0000")).rejects.toThrow(/changed after you read it/);
-    expect(await backend.runsList()).toHaveLength(before);
-    expect((await backend.proposalsGet(p.id))?.state.type).toBe("pending");
+    const ws = backend.workstreams.open(itemRef("CA-401")).id;
+    const run = queue(backend, { workstream: ws }, itemRef("CA-401"));
+    expect(run).toMatchObject({ state: "queued", proposalId: "", createdBy: "pip", digest: mockDigest({ ...spec, ...run.spec }), expectedWorktree: "/Users/sample/Code/storefront/.claude/worktrees/ca-412-fix-ab12" });
+    expect(run.origin).toMatchObject({ type: "chat", workstream: ws });
+    expect(backend.workstreams.events(ws).filter((e) => e.action === "agent_started")).toEqual([expect.objectContaining({ actor: "pip", runId: run.id, detail: "investigate · conversation" })]);
+    expect((await backend.runsGet(run.id))?.id).toBe(run.id);
+    expect(() => queue(backend, { workstream: ws }, itemRef("CA-401"))).toThrow(/already uses that worktree/);
   });
 
-  it("approves with the digest from the review, once", async () => {
+  it("makes no run draft by hand and approves none", async () => {
     const backend = new MockBackend();
-    const p = await draft(backend);
-    const review = await backend.runsReview(p.id);
-    expect(review.digest).toBe(mockDigest(spec));
-    expect(review.prompt).toContain("Investigate this work.");
-    const run = await backend.runsApprove(p.id, review.digest);
-    expect(run).toMatchObject({ state: "queued", proposalId: p.id, digest: review.digest, expectedWorktree: "/Users/sample/Code/web/.claude/worktrees/ca-412-fix-ab12" });
-    const stored = await backend.proposalsGet(p.id);
-    expect(stored).toMatchObject({ state: { type: "applied" }, run: run.id });
-    await expect(backend.runsApprove(p.id, review.digest)).rejects.toThrow(/applied/);
-    expect((await backend.runsGet(run.id))?.id).toBe(run.id);
+    await expect(backend.proposalsCreate({ type: "startRun", connectionId: "mock", item: itemRef("CA-412"), spec })).rejects.toThrow("Pip starts and messages agents directly now");
+    expect(await backend.runsList({ item: itemRef("CA-412") })).toHaveLength(0);
   });
 
   it("changes its digest when anything the agent receives changes", () => {
@@ -76,17 +78,9 @@ describe("mock runs", () => {
     }
   });
 
-  it("never approves a run draft through the generic path", async () => {
-    const backend = new MockBackend();
-    const p = await draft(backend);
-    await expect(backend.proposalsApprove(p.id)).rejects.toThrow(/own button/);
-    expect((await backend.proposalsGet(p.id))?.state.type).toBe("pending");
-    expect(await backend.runsList({ item: itemRef("CA-412") })).toHaveLength(0);
-  });
-
   it("walks a run through its states with advance", async () => {
     const backend = new MockBackend();
-    const run = await backend.runsApprove((await draft(backend)).id, mockDigest(spec));
+    const run = queue(backend);
     const state = () => backend.runs.get(run.id)!.state;
     const seen = [state()];
     for (let i = 0; i < 4; i++) {
@@ -161,31 +155,20 @@ describe("mock runs", () => {
     expect(JSON.stringify(events)).not.toContain('"Yes"');
   });
 
-  it("says how many agent slots are in use, counting the runs waiting on the person, in its pre-flight", async () => {
-    const backend = new MockBackend();
-    const rows = (await backend.runsPreflight(null)).rows.map((r) => r.text);
-    expect(rows).toContainEqual(expect.stringMatching(/^\d+ of \d+ agent slots in use \(including ones waiting on you\)$/));
-    expect(rows.some((t) => / agents running$/.test(t))).toBe(false);
-  });
-
   it("cancels a run that is only queued, before it launches, and refuses one that is launching (N8)", async () => {
     const backend = new MockBackend();
-    const run = await backend.runsApprove((await draft(backend)).id, mockDigest(spec));
+    const run = queue(backend);
     expect(await backend.runsStop(run.id)).toMatchObject({ state: "stopped", error: "Stopped before it started", shortId: null });
-    const other = { ...spec, name: `${spec.name}-2` };
-    const next = await backend.runsApprove((await draft(backend, other)).id, mockDigest(other));
+    const next = queue(backend, { name: `${spec.name}-2` });
     backend.runs.advance(next.id);
     await expect(backend.runsStop(next.id)).rejects.toThrow(/once it is working/);
   });
 
   it("offers the agent tools from launch, so a run stopped before it started was never offered them", async () => {
     const backend = new MockBackend();
-    const made = await draft(backend);
-    const run = await backend.runsApprove(made.id, mockDigest(spec));
-    expect((await backend.runsReview(made.id)).report).not.toBeNull();
+    const run = queue(backend);
     await backend.runsStop(run.id);
-    expect((await backend.runsOutcome(run.id)).report).toBeNull();
-    expect((await backend.runsReview(made.id)).report).toBeNull();
+    expect((await backend.runsOutcome(run.id)).report).toMatchObject({ offered: false });
   });
 
   it("emits runs-changed and open-run", async () => {
@@ -193,7 +176,7 @@ describe("mock runs", () => {
     const changes: string[] = [];
     const opened: string[] = [];
     const off = [backend.onRunsChanged((c) => changes.push(c.connectionId)), backend.onOpenRun((id) => opened.push(id))];
-    await backend.runsApprove((await draft(backend)).id, mockDigest(spec));
+    queue(backend);
     backend.runs.advance();
     backend.runs.open("run-seed-1");
     off.forEach((f) => f());
@@ -244,24 +227,13 @@ describe("mock runs", () => {
     await expect(backend.runsTrustFolder(untrusted.id)).rejects.toThrow(/doesn't trust/);
   });
 
-  it("reports Claude as signed in, and clears the blocking row, once signing in through Terminal worked", async () => {
-    const backend = new MockBackend({ runs: { seed: "failures", environment: "signedOut" } });
-    expect((await backend.runsEnvironment()).claude).toBe("signedOut");
-    expect((await backend.runsPreflight(null)).blocking).toBe(true);
-    await backend.runsSignIn((await backend.runsList()).find((r) => r.failure?.type === "notSignedIn")!.id);
-    expect(await backend.runsEnvironment()).toEqual({ claude: "ok", version: "2.1.286" });
-    expect((await backend.runsPreflight(null)).blocking).toBe(false);
-  });
-
-  it("can start empty, with many runs, or with Claude missing, and counts ages back from a chosen moment", async () => {
+  it("can start empty or with many runs, and counts ages back from a chosen moment", async () => {
     expect(await new MockBackend({ runs: { seed: "empty" } }).runsList()).toEqual([]);
     const many = await new MockBackend({ runs: { seed: "many" } }).runsList();
     expect(many).toHaveLength(24);
     expect(new Set(many.map((r) => r.id)).size).toBe(24);
     expect(new Set(many.map((r) => r.expectedWorktree)).size).toBe(24);
     expect(many.some((r) => r.state === "stopped")).toBe(true);
-    expect(await new MockBackend({ runs: { environment: "missing" } }).runsEnvironment()).toEqual({ claude: "missing", version: null });
-    expect(await new MockBackend().runsEnvironment()).toEqual({ claude: "ok", version: "2.1.286" });
     const epoch = Date.parse("2026-10-01T09:00:00Z");
     const [newest] = await new MockBackend({ runs: { epoch } }).runsList();
     expect(epoch - Date.parse(newest.queuedAt)).toBeLessThan(60 * 60_000);
@@ -284,16 +256,15 @@ describe("mock runs of every kind", () => {
   it("fills each kind's own instruction when the draft leaves it empty", async () => {
     const backend = new MockBackend();
     const item = itemRef("CA-412");
-    const triage = await backend.runsDraft({ ...spec, ...storefront, kind: "triage", instruction: "" }, item);
-    expect(triage.intent.type === "startRun" && triage.intent.spec.instruction).toMatch(/^Triage this work/);
+    expect(prepared(backend, { ...storefront, kind: "triage", instruction: "" }, item).instruction).toMatch(/^Triage this work/);
   });
 
   it("refuses a build without a ticket, a push outside a build and a pull request outside a review", async () => {
     const backend = new MockBackend();
-    await expect(backend.runsDraft({ ...spec, ...storefront, kind: "build" }, null)).rejects.toThrow("Build needs a ticket");
-    await expect(backend.runsDraft({ ...spec, ...storefront, allowPush: true }, itemRef("CA-412"))).rejects.toThrow("Only a build can push");
-    await expect(backend.runsDraft({ ...spec, ...storefront, pr: 3 }, itemRef("CA-412"))).rejects.toThrow("Only a review, or a verify after one, reads a pull request");
-    await expect(backend.runsDraft({ ...spec, ...storefront, kind: "review" }, itemRef("CA-412"))).rejects.toThrow("needs a pull request");
+    expect(refusal(backend, { ...storefront, kind: "build" }, null)).toContain("Build needs a ticket");
+    expect(refusal(backend, { ...storefront, allowPush: true })).toContain("Only a build can push");
+    expect(refusal(backend, { ...storefront, pr: 3 })).toContain("Only a review, or a verify after one, reads a pull request");
+    expect(refusal(backend, { ...storefront, kind: "review" })).toContain("needs a pull request");
   });
 
   it("changes the digest with the push permission and the pull request", async () => {
@@ -305,13 +276,11 @@ describe("mock runs of every kind", () => {
   it("refuses to review a fork, a closed or a missing pull request at every step", async () => {
     const backend = new MockBackend({ githubRepos: 14 });
     await backend.watchSetMode("github:ada", "everything");
-    const review = (pr: number) => backend.runsDraft({ ...spec, ...webshop, kind: "review", pr }, itemRef("CA-402"));
-    await expect(review(215)).rejects.toThrow("comes from a fork");
-    await expect(review(190)).rejects.toThrow("is closed");
-    await expect(review(999)).rejects.toThrow("wasn't found");
-    const ok = await review(212);
-    expect(ok.intent.type === "startRun" && ok.intent.spec).toMatchObject({ pr: 212, prSha: "sha2120000", base: "main" });
-    expect(await backend.runsReview(ok.id)).toMatchObject({ prTitle: "CA-402: Cache the category tree", prUrl: "https://github.com/acme/webshop/pull/212" });
+    const review = (pr: number) => ({ ...webshop, kind: "review" as const, pr });
+    expect(refusal(backend, review(215), itemRef("CA-402"))).toContain("comes from a fork");
+    expect(refusal(backend, review(190), itemRef("CA-402"))).toContain("is closed");
+    expect(refusal(backend, review(999), itemRef("CA-402"))).toContain("wasn't found");
+    expect(prepared(backend, review(212), itemRef("CA-402"))).toMatchObject({ pr: 212, prSha: "sha2120000", base: "main" });
   });
 
   it("leaves one GitHub review draft when a review finishes, with inline comments at the lines the diff shows, and the next round's replaces it", async () => {
@@ -320,8 +289,7 @@ describe("mock runs of every kind", () => {
     const ws = backend.workstreams.open(itemRef("CA-402")).id;
     let round = 0;
     const reviewOf218 = async () => {
-      const made = await backend.runsDraft({ ...spec, ...webshop, kind: "review", pr: 218, instruction: "", workstream: ws, name: `ca-402-review-${++round}` }, itemRef("CA-402"));
-      const run = await backend.runsApprove(made.id, (await backend.runsReview(made.id)).digest);
+      const run = queue(backend, { ...webshop, kind: "review", pr: 218, instruction: "", workstream: ws, name: `ca-402-review-${++round}` }, itemRef("CA-402"));
       for (let i = 0; i < 3; i++) backend.runs.advance(run.id);
       expect(backend.runs.get(run.id)?.state).toBe("done");
       return run;
@@ -353,8 +321,7 @@ describe("mock runs of every kind", () => {
   it("leaves one pending comment draft when a second run finishes with the same note for the ticket", async () => {
     const backend = new MockBackend();
     const finish = async (n: string) => {
-      const made = await backend.runsDraft({ ...spec, ...storefront, kind: "investigate", instruction: "", name: `ca-401-${n}-0001` }, itemRef("CA-401"));
-      const run = await backend.runsApprove(made.id, (await backend.runsReview(made.id)).digest);
+      const run = queue(backend, { ...storefront, kind: "investigate", instruction: "", name: `ca-401-${n}-0001` }, itemRef("CA-401"));
       for (let i = 0; i < 3; i++) backend.runs.advance(run.id);
       expect(backend.runs.get(run.id)?.state).toBe("done");
       return run;
@@ -376,8 +343,7 @@ describe("mock runs of every kind", () => {
     let n = 0;
     const finish = async (key: string, ws: string, kind: "investigate" | "review", reworded = false) => {
       const over = kind === "review" ? { ...webshop, pr: 218 } : storefront;
-      const made = await backend.runsDraft({ ...spec, ...over, kind, instruction: "", workstream: ws, name: `${key.toLowerCase()}-${kind}-${++n}` }, itemRef(key));
-      const run = await backend.runsApprove(made.id, (await backend.runsReview(made.id)).digest);
+      const run = queue(backend, { ...over, kind, instruction: "", workstream: ws, name: `${key.toLowerCase()}-${kind}-${++n}` }, itemRef(key));
       if (reworded) backend.runs.scriptNext("review", { verdict: "pass" });
       for (let i = 0; i < 3; i++) backend.runs.advance(run.id);
       expect(backend.runs.get(run.id)?.state).toBe("done");
@@ -413,8 +379,7 @@ describe("mock runs of every kind", () => {
     const backend = new MockBackend({ githubRepos: 14 });
     await backend.watchSetMode("github:ada", "everything");
     await backend.runsSetSettings({ ...(await backend.runsSettings()), draftOnFinish: false });
-    const made = await backend.runsDraft({ ...spec, ...webshop, kind: "review", pr: 218, instruction: "" }, itemRef("CA-402"));
-    const run = await backend.runsApprove(made.id, (await backend.runsReview(made.id)).digest);
+    const run = queue(backend, { ...webshop, kind: "review", pr: 218, instruction: "" }, itemRef("CA-402"));
     for (let i = 0; i < 3; i++) backend.runs.advance(run.id);
     expect(backend.runs.get(run.id)?.state).toBe("done");
     const fromRun = backend.proposals.list().filter((p) => p.origin.type === "run" && p.origin.runId === run.id);
@@ -422,27 +387,6 @@ describe("mock runs of every kind", () => {
     expect(backend.proposals.writes).toEqual([]);
   });
 
-  it("swaps an untouched template when the kind is edited and clears what belongs to the old kind", async () => {
-    const backend = new MockBackend();
-    const made = await backend.runsDraft({ ...spec, ...storefront, kind: "build", instruction: "", allowPush: true }, itemRef("CA-412"));
-    const edited = await backend.proposalsEdit(made.id, { type: "run", kind: "verify" });
-    const next = edited.intent.type === "startRun" ? edited.intent.spec : null;
-    expect(next).toMatchObject({ kind: "verify", allowPush: false, pr: null });
-    expect(next!.instruction).toMatch(/^Check that the change/);
-    const custom = await backend.proposalsEdit(made.id, { type: "run", instruction: "My own words." });
-    const kept = await backend.proposalsEdit(custom.id, { type: "run", kind: "triage" });
-    expect(kept.intent.type === "startRun" && kept.intent.spec.instruction).toBe("My own words.");
-  });
-
-  it("shows the amber push row and the review row in the pre-flight", async () => {
-    const backend = new MockBackend({ githubRepos: 14 });
-    await backend.watchSetMode("github:ada", "everything");
-    const push = await backend.runsPreflight({ ...spec, ...storefront, kind: "build", allowPush: true });
-    expect(push.rows.find((r) => r.level === "amber" && /may push/.test(r.text))).toBeTruthy();
-    expect((await backend.runsPreflight({ ...spec, ...storefront, kind: "build" })).rows.some((r) => /may push/.test(r.text))).toBe(false);
-    const fork = await backend.runsPreflight({ ...spec, ...webshop, kind: "review", pr: 215 });
-    expect(fork.blocking).toBe(true);
-  });
 });
 
 describe("a build from a plan run says whether a person settled the plan, as the backend does", () => {
@@ -451,11 +395,11 @@ describe("a build from a plan run says whether a person settled the plan, as the
   const planRun = (b: MockBackend) => b.runs.list().find((r) => r.spec.kind === "plan")!;
   const descriptionDraft = (b: MockBackend) => b.proposals.list().find((p) => p.intent.type === "rewrite" && p.state.type === "pending")!;
   let n = 0;
-  const build = async (b: MockBackend) => {
+  /** What a start of a build from the sample plan run stores, and the prompt the agent gets. */
+  const build = (b: MockBackend) => {
     const plan = planRun(b);
-    const made = await b.runsDraft({ ...plan.spec, kind: "build", instruction: "", plan: null, planFromRun: plan.id, name: `ca-401-build-${(n++).toString(16).padStart(4, "0")}` }, plan.item);
-    if (made.intent.type !== "startRun") throw new Error("a run draft");
-    return { made, spec: made.intent.spec, review: b.runs.review(made.id) };
+    const run = b.runs.start({ ...plan.spec, kind: "build", instruction: "", plan: null, planFromRun: plan.id, name: `ca-401-build-${(n++).toString(16).padStart(4, "0")}` }, plan.item);
+    return { run, spec: run.spec, prompt: renderPrompt(run.spec) };
   };
   const settle = async (b: MockBackend, extra: string) => {
     const draft = descriptionDraft(b);
@@ -473,78 +417,45 @@ describe("a build from a plan run says whether a person settled the plan, as the
     expect(PLAN_FOLLOW_UNEDITED).toContain("do not deviate silently");
   });
 
-  it("carries the run's raw answer, marked unsettled, while the description draft waits, with an amber preflight row", async () => {
+  it("carries the run's raw answer, marked unsettled, while the description draft waits", async () => {
     const b = sample();
     const plan = planRun(b);
-    const { spec, review } = await build(b);
+    const { spec, prompt } = build(b);
     expect(spec.planApproved).toBe(false);
     expect(spec.plan).toBe(plan.result);
-    expect(review.prompt).toContain(`${PLAN_FOLLOW_UNEDITED}\n\nPlan from run ${plan.id}:\n<<<PLAN\n## Approach`);
-    expect(review.prompt).not.toContain("edited and approved");
-    const pre = await b.runsPreflight(spec);
-    expect(pre.rows).toContainEqual({ level: "amber", text: `This build follows run ${plan.id}'s own plan, which nobody edited or approved on the ticket. Approve the Gossamr Plan draft first, or edit the plan below.` });
-    expect(pre.blocking).toBe(false);
+    expect(prompt).toContain(`${PLAN_FOLLOW_UNEDITED}\n\nPlan from run ${plan.id}:\n<<<PLAN\n## Approach`);
+    expect(prompt).not.toContain("edited and approved");
   });
 
   it("carries the description draft the person edited and approved, without its intro, and says a person settled it", async () => {
     const b = sample();
     const plan = planRun(b);
     await settle(b, "Marker line the person added.");
-    const { spec, review } = await build(b);
+    const { spec, prompt } = build(b);
     expect(spec.planApproved).toBe(true);
     expect(spec.plan).toContain("Marker line the person added.");
     expect(spec.plan).toContain("Move the three welcome emails");
     expect(spec.plan).not.toContain("Drafted by an agent run");
-    expect(review.prompt).toContain(`${PLAN_FOLLOW}\n\nPlan from run ${plan.id}:\n<<<PLAN\n${spec.plan}\nPLAN>>>`);
-    const pre = await b.runsPreflight(spec);
-    expect(pre.rows.some((r) => r.level === "green" && r.text.includes(`follows the plan from run ${plan.id}`))).toBe(true);
+    expect(prompt).toContain(`${PLAN_FOLLOW}\n\nPlan from run ${plan.id}:\n<<<PLAN\n${spec.plan}\nPLAN>>>`);
   });
 
-  it("puts the mark into the digest", async () => {
-    const { spec } = await build(sample());
+  it("puts the mark into the digest", () => {
+    const { spec } = build(sample());
     expect(mockDigest({ ...spec, planApproved: true })).not.toBe(mockDigest(spec));
     expect(mockDigest({ ...spec, planApproved: false })).toBe(mockDigest({ ...spec, planApproved: undefined }));
-  });
-
-  it("reads the settled plan when asked again after approving, and a plan the person edits in the draft is theirs until it is removed", async () => {
-    const b = sample();
-    const { made } = await build(b);
-    await settle(b, "Settled later.");
-    const fresh = await b.runsRefreshPlan(made.id);
-    expect(fresh.intent.type === "startRun" && fresh.intent.spec).toMatchObject({ planApproved: true });
-    expect(fresh.intent.type === "startRun" && fresh.intent.spec.plan).toContain("Settled later.");
-
-    const c = sample();
-    const own = await build(c);
-    const unchanged = await c.proposalsEdit(own.made.id, { type: "run", plan: own.spec.plan! });
-    expect(unchanged.intent.type === "startRun" && unchanged.intent.spec.planApproved).toBe(false);
-    const edited = await c.proposalsEdit(own.made.id, { type: "run", plan: "1. My own plan." });
-    expect(edited.intent.type === "startRun" && edited.intent.spec.planApproved).toBe(true);
-    expect(c.runs.review(own.made.id).prompt).toContain(PLAN_FOLLOW);
-    const removed = await c.proposalsEdit(own.made.id, { type: "run", plan: "" });
-    expect(removed.intent.type === "startRun" && removed.intent.spec).toMatchObject({ plan: null, planFromRun: null, planApproved: false });
-    const again = await build(c);
-    await c.proposalsEdit(again.made.id, { type: "run", plan: "1. Mine." });
-    const triage = await c.proposalsEdit(again.made.id, { type: "run", kind: "triage" });
-    expect(triage.intent.type === "startRun" && triage.intent.spec).toMatchObject({ plan: null, planApproved: false });
   });
 });
 
 describe("a workstream's build always publishes a draft pull request, as the backend does", () => {
-  it("is drafted pushing whatever the caller asked, and turning that off is refused; outside a workstream the choice stands", async () => {
+  it("starts pushing whatever the caller asked; outside a workstream the choice stands", () => {
     const b = new MockBackend({ runs: { seed: "empty" } });
-    const ws = await b.workstreamsOpen(itemRef("CA-401"));
+    const ws = b.workstreams.open(itemRef("CA-401")).id;
     const build = (name: string, over: Partial<RunSpec> = {}): RunSpec => ({ ...spec, repo: "acme/storefront", clonePath: "/Users/sample/Code/storefront", kind: "build", instruction: "", name, allowPush: false, ...over });
-    const linked = await b.runsDraft(build("ca-401-ws-build-0001", { workstream: ws.id }), itemRef("CA-401"));
-    expect(linked.intent.type === "startRun" && linked.intent.spec.allowPush).toBe(true);
-    expect((await b.runsReview(linked.id)).prompt).toContain("gh pr create --draft");
-    await expect(b.proposalsEdit(linked.id, { type: "run", allowPush: false })).rejects.toThrow("a workstream's build always publishes a draft pull request");
-    const loose = await b.runsDraft(build("ca-401-build-0002"), itemRef("CA-401"));
-    expect(loose.intent.type === "startRun" && loose.intent.spec.allowPush).toBe(false);
-    const on = await b.proposalsEdit(loose.id, { type: "run", allowPush: true });
-    expect(on.intent.type === "startRun" && on.intent.spec.allowPush).toBe(true);
-    const off = await b.proposalsEdit(loose.id, { type: "run", allowPush: false });
-    expect(off.intent.type === "startRun" && off.intent.spec.allowPush).toBe(false);
+    const linked = b.runs.start(build("ca-401-ws-build-0001", { workstream: ws }), itemRef("CA-401"));
+    expect(linked.spec.allowPush).toBe(true);
+    expect(renderPrompt(linked.spec)).toContain("gh pr create --draft");
+    expect(b.runs.start(build("ca-401-build-0002"), itemRef("CA-401")).spec.allowPush).toBe(false);
+    expect(b.runs.start(build("ca-401-build-0003", { allowPush: true }), itemRef("CA-401")).spec.allowPush).toBe(true);
   });
 });
 
@@ -553,8 +464,7 @@ describe("a triage or plan after an investigation carries its findings, as the b
   let n = 0;
   const name = (what: string) => `ca-401-${what}-${(n++).toString(16).padStart(4, "0")}`;
   const finished = async (b: MockBackend, kind: RunSpec["kind"] = "investigate", item = itemRef("CA-401")) => {
-    const made = await b.runsDraft({ ...spec, ...storefront, kind, instruction: "", name: name(kind) }, item);
-    const run = await b.runsApprove(made.id, (await b.runsReview(made.id)).digest);
+    const run = b.runs.start({ ...spec, ...storefront, kind, instruction: "", name: name(kind) }, item);
     for (let i = 0; i < 3; i++) b.runs.advance(run.id);
     expect(b.runs.get(run.id)!.state).toBe("done");
     return b.runs.get(run.id)!;
@@ -572,42 +482,36 @@ describe("a triage or plan after an investigation carries its findings, as the b
     const b = new MockBackend();
     const investigation = await finished(b);
     for (const kind of ["triage", "plan"] as const) {
-      const made = await b.runsDraft(after(investigation.id, kind, { focus: "Look at the retry path." }), itemRef("CA-401"));
-      if (made.intent.type !== "startRun") throw new Error("a run draft");
-      const carried = made.intent.spec;
+      const carried = b.runs.prepare(after(investigation.id, kind, { focus: "Look at the retry path." }), itemRef("CA-401"));
       expect(carried.findingsFromRun).toBe(investigation.id);
       expect(carried.findings).toMatch(/^The consumer retries failed messages immediately/);
       expect(carried.findings).not.toContain("forged");
-      const review = await b.runsReview(made.id);
-      expect(review.findings).toBe(carried.findings);
+      const prompt = renderPrompt(carried);
       const block = `What investigation run ${investigation.id} found:\n<<<FINDINGS\n${carried.findings}\nFINDINGS>>>`;
-      const at = (s: string) => review.prompt.indexOf(s);
+      const at = (s: string) => prompt.indexOf(s);
       expect(at(block)).toBeGreaterThan(at("FOCUS>>>"));
       expect(at(FINDINGS_PREFACE)).toBeLessThan(at(block));
       expect(at("FINDINGS>>>")).toBeLessThan(at("<<<TICKET"));
-      expect(review.digest).not.toBe(mockDigest({ ...carried, findings: null, findingsFromRun: null }));
+      expect(mockDigest(carried)).not.toBe(mockDigest({ ...carried, findings: null, findingsFromRun: null }));
     }
-    const plain = await b.runsDraft({ ...spec, ...storefront, kind: "triage", name: name("plain"), findings: "made up" }, itemRef("CA-401"));
-    expect(plain.intent.type === "startRun" && plain.intent.spec).toMatchObject({ findings: null, findingsFromRun: null });
+    expect(b.runs.prepare({ ...spec, ...storefront, kind: "triage", name: name("plain"), findings: "made up" }, itemRef("CA-401"))).toMatchObject({ findings: null, findingsFromRun: null });
   });
 
   it("refuses findings from an unfinished, summary-only, other-kind or other-ticket run, and outside a triage or plan", async () => {
     const b = new MockBackend({ runs: { seed: "reports" } });
     const done = await finished(b);
-    const reason = (s: RunSpec, item = itemRef("CA-401")) => b.runsDraft(s, item).then(() => "drafted", (e: Error) => e.message);
-    expect(await reason(after(done.id), itemRef("CA-402"))).toContain("another ticket");
-    expect(await reason(after(done.id, "verify"))).toContain("only a triage or a plan carries findings");
-    expect(await reason(after(done.id, "investigate"))).toContain("only a triage or a plan carries findings");
-    expect(await reason(after("missing"))).toContain("no longer exists");
-    const waiting = await b.runsDraft({ ...spec, ...storefront, kind: "investigate", instruction: "", name: name("wait") }, itemRef("CA-401"));
-    const working = await b.runsApprove(waiting.id, (await b.runsReview(waiting.id)).digest);
-    expect(await reason(after(working.id))).toContain("hasn't finished");
+    const reason = (s: RunSpec, item: ItemRef | null = itemRef("CA-401")) => refusal(b, s, item);
+    expect(reason(after(done.id), itemRef("CA-402"))).toContain("another ticket");
+    expect(reason(after(done.id, "verify"))).toContain("only a triage or a plan carries findings");
+    expect(reason(after(done.id, "investigate"))).toContain("only a triage or a plan carries findings");
+    expect(reason(after("missing"))).toContain("no longer exists");
+    const working = b.runs.start({ ...spec, ...storefront, kind: "investigate", instruction: "", name: name("wait") }, itemRef("CA-401"));
+    expect(reason(after(working.id))).toContain("hasn't finished");
     const summary = b.runs.list().find((r) => r.spec.kind === "investigate" && r.resultComplete === false && r.state === "done")!;
-    expect(await reason(after(summary.id, "plan", { ...summary.spec, kind: "plan", name: name("sum"), instruction: "" }), summary.item!)).toContain("one-line summary");
+    expect(reason(after(summary.id, "plan", { ...summary.spec, kind: "plan", name: name("sum"), instruction: "" }), summary.item!)).toContain("one-line summary");
     const triage = await finished(b, "triage");
-    expect(await reason(after(triage.id, "plan"))).toContain("isn't an investigation");
-    const b2 = new MockBackend();
-    await expect(b2.runsDraft(after(done.id), null)).rejects.toThrow("need a ticket");
+    expect(reason(after(triage.id, "plan"))).toContain("isn't an investigation");
+    expect(refusal(new MockBackend(), after(done.id), null)).toContain("need a ticket");
   });
 
   it("keeps every digest of a spec without findings, and the findings and their source change it", () => {
@@ -651,181 +555,92 @@ describe("a triage or plan after an investigation carries its findings, as the b
     expect(findingsFitted("short", "run-7")).toBe("short");
   });
 
-  it("drops the findings when the kind is edited away from triage or plan", async () => {
-    const b = new MockBackend();
-    const investigation = await finished(b);
-    const made = await b.runsDraft(after(investigation.id), itemRef("CA-401"));
-    const plan = await b.proposalsEdit(made.id, { type: "run", kind: "plan" });
-    expect(plan.intent.type === "startRun" && plan.intent.spec.findingsFromRun).toBe(investigation.id);
-    const verify = await b.proposalsEdit(made.id, { type: "run", kind: "verify" });
-    expect(verify.intent.type === "startRun" && verify.intent.spec).toMatchObject({ findings: null, findingsFromRun: null });
-  });
 });
 
-describe("mock answer drafts, as propose_answer and runs_answer_draft", () => {
-  const CA401 = itemRef("CA-401");
-
-  /** A backend with run R1 investigating CA-401 in a workstream (not managed, so nothing wakes Pip), working and then asking `question`. */
-  async function asking(question = "Should the refund path keep the old rounding?") {
+describe("Pip's messages to an agent, as message_agent", () => {
+  /** A backend with run R1 in a workstream on CA-401, working. */
+  function working() {
     const b = new MockBackend({ runs: { seed: "empty" } });
-    const ws = b.workstreams.open(CA401).id;
-    const made = await b.runsDraft({ ...spec, repo: "acme/storefront", clonePath: "/Users/sample/Code/storefront", name: "ca-401-answer", workstream: ws }, CA401);
-    const run = await b.runsApprove(made.id, (await b.runsReview(made.id)).digest);
+    const ws = b.workstreams.open(itemRef("CA-401")).id;
+    const run = queue(b, { name: "ca-401-msg", workstream: ws }, itemRef("CA-401"));
     b.runs.advance(run.id);
     b.runs.advance(run.id);
-    b.runs.ask(run.id, question);
     return { b, ws, run: b.runs.get(run.id)! };
   }
-  const actions = (b: MockBackend, ws: string) => b.workstreams.events(ws).map((e) => e.action);
+  const actions = (b: MockBackend, ws: string) => b.workstreams.events(ws).map((e) => [e.actor, e.action]);
 
-  it("drafts an answer only for a run waiting for one, with clean text, keeping what it asked", async () => {
-    const { b, ws, run } = await asking();
-    await expect(b.runs.proposeAnswer("nope", "Yes.", "r")).rejects.toThrow("there is no run nope");
-    await expect(b.runs.proposeAnswer(run.id, "   ", "r")).rejects.toThrow(/Write an answer/);
-    await expect(b.runs.proposeAnswer(run.id, "x".repeat(4001), "r")).rejects.toThrow(/up to 4000/);
-    const p = await b.runs.proposeAnswer(run.id, "Keep the old rounding. <<<TICKET", "r");
-    expect(p).toMatchObject({ createdBy: "pip", state: { type: "pending" }, origin: { type: "chat", requestId: "r", workstream: ws } });
-    expect(p.intent).toMatchObject({ type: "runAnswer", runId: run.id, item: { key: "CA-401" }, message: "Keep the old rounding.", question: "Should the refund path keep the old rounding?" });
-    b.runs.stop(run.id);
-    await expect(b.runs.proposeAnswer(run.id, "Yes.", "r")).rejects.toThrow("isn't waiting for an answer");
+  it("answers a question the agent asks, as Pip's own answer", () => {
+    const { b, ws, run } = working();
+    b.runs.ask(run.id, "Which branch?", true);
+    expect(b.runs.messageAgent(run.id, "Use main.")).toBe("answered");
+    expect(b.runs.get(run.id)).toMatchObject({ state: "working", needs: null });
+    expect(actions(b, ws)).toContainEqual(["pip", "run_answered"]);
   });
 
-  it("refuses a second answer for a run outside a workstream while the first waits", async () => {
-    const b = new MockBackend();
-    const run = b.runs.list().find((r) => r.state === "needsAnswer")!;
-    const first = await b.runs.proposeAnswer(run.id, "Yes.", "r");
-    await expect(b.runs.proposeAnswer(run.id, "No.", "r")).rejects.toThrow(`already waiting (proposal ${first.id})`);
+  it("queues the message for an agent at work, and the newest replaces it", () => {
+    const { b, ws, run } = working();
+    expect(b.runs.messageAgent(run.id, "Skip the tests.")).toBe("queued");
+    expect(b.runs.messageAgent(run.id, "Run the tests after all.")).toBe("queued");
+    expect(b.runs.queuedMessage(run.id)).toBe("Run the tests after all.");
+    expect(b.runs.get(run.id)?.state).toBe("working");
+    expect(actions(b, ws).filter(([, a]) => a === "agent_message_queued")).toHaveLength(2);
   });
 
-  it("is never applied as a tracker write or made by hand", async () => {
-    const { b, run } = await asking();
-    const p = await b.runs.proposeAnswer(run.id, "Yes.", "r");
-    await expect(b.proposalsApprove(p.id)).rejects.toThrow("An answer is sent with its own button");
-    await expect(b.proposalsCreate(p.intent)).rejects.toThrow("only Pip proposes an answer");
-    expect(b.proposals.writes).toEqual([]);
-  });
-
-  it("sends the answer the person read as their own answer goes: the run resumes and the draft is applied", async () => {
-    const { b, ws, run } = await asking();
-    const p = await b.runs.proposeAnswer(run.id, "Keep the old rounding.", "r");
-    const resumed = await b.runsAnswerDraft(p.id, "Keep the old rounding.");
-    expect(resumed).toMatchObject({ id: run.id, state: "working", needs: null });
-    expect(b.proposals.get(p.id)).toMatchObject({ state: { type: "applied" }, run: run.id, error: null });
-    expect(actions(b, ws).slice(-2)).toEqual(["run_answered", "draft_approved"]);
-    expect(b.proposals.writes).toEqual([]);
-    await expect(b.runsAnswerDraft(p.id, "Keep the old rounding.")).rejects.toThrow("already been decided");
-  });
-
-  it("refuses an answer that changed after it was read, and leaves the run asking", async () => {
-    const { b, run } = await asking();
-    const p = await b.runs.proposeAnswer(run.id, "Keep the old rounding.", "r");
-    await expect(b.runsAnswerDraft(p.id, "Something else.")).rejects.toThrow("The answer changed after you read it. Read it again.");
-    expect(b.runs.get(run.id)?.state).toBe("needsAnswer");
-    expect(b.proposals.get(p.id)?.state.type).toBe("pending");
-  });
-
-  it("sends the person's edit, after which Pip can't revise it or draft over it", async () => {
-    const { b, run } = await asking();
-    const p = await b.runs.proposeAnswer(run.id, "Keep the old rounding.", "r");
-    await expect(b.proposalsEdit(p.id, { type: "runAnswer", message: "  " })).rejects.toThrow(/Write an answer/);
-    const edited = await b.proposalsEdit(p.id, { type: "runAnswer", message: "Use the new rounding everywhere." });
-    expect(edited.revisions.map((r) => r.note)).toEqual(["Edited"]);
-    expect(() => b.proposals.pipRevise(p.id, "Pip's words")).toThrow("the user edited this answer");
-    await expect(b.runs.proposeAnswer(run.id, "Keep it.", "r")).rejects.toThrow(`the user edited draft ${p.id}`);
-    await b.runsAnswerDraft(p.id, "Use the new rounding everywhere.");
-    expect(b.proposals.get(p.id)?.intent).toMatchObject({ message: "Use the new rounding everywhere." });
-  });
-
-  it("retires the draft once the run is answered in Terminal, so it is never sent to its next question", async () => {
-    const { b, run } = await asking();
-    const p = await b.runs.proposeAnswer(run.id, "Yes.", "r");
-    // Answered in Terminal: working again.
+  it("wakes a finished agent with it: working again, one more pass", () => {
+    const { b, ws, run } = working();
     b.runs.advance(run.id);
-    expect(b.proposals.get(p.id)?.state).toEqual({ type: "retired", reason: MOVED_ON });
-    await expect(b.runsAnswerDraft(p.id, "Yes.")).rejects.toThrow("already been decided");
-    // It asks again, and Pip may suggest for the new question.
-    b.runs.ask(run.id, "Which branch?");
-    const next = await b.runs.proposeAnswer(run.id, "Use main.", "r2");
-    expect(next.intent).toMatchObject({ type: "runAnswer", question: "Which branch?" });
+    expect(b.runs.get(run.id)?.state).toBe("done");
+    expect(b.runs.messageAgent(run.id, "Also check the retry path.")).toBe("resumed");
+    expect(b.runs.get(run.id)).toMatchObject({ state: "working", passes: 2 });
+    expect(actions(b, ws)).toContainEqual(["pip", "run_resumed"]);
+    expect(b.runs.events(run.id).some((e) => e.kind === "follow_up")).toBe(true);
   });
 
-  it("never sends an answer to a question the run no longer asks, and retires it when the question changes", async () => {
-    const { b, run } = await asking();
-    const p = await b.runs.proposeAnswer(run.id, "Yes.", "r");
-    b.runs.ask(run.id, "A different question?");
-    expect(b.proposals.get(p.id)?.state).toEqual({ type: "retired", reason: MOVED_ON });
-    await expect(b.runsAnswerDraft(p.id, "Yes.")).rejects.toThrow();
-    expect(b.runs.get(run.id)).toMatchObject({ state: "needsAnswer", needs: "A different question?" });
+  it("refuses an agent at a permission prompt, one that hasn't started, a failed one and one stopped at its limit", () => {
+    const { b, run } = working();
+    b.runs.askPermission(run.id, "approve Bash: git push");
+    expect(() => b.runs.messageAgent(run.id, "Go on.")).toThrow(/permission prompt/);
+    const queued = queue(b, { name: "ca-401-other" }, itemRef("CA-401"));
+    expect(() => b.runs.messageAgent(queued.id, "Go on.")).toThrow(/hasn't started/);
+    const failed = b.runs.list({ states: ["failed"] })[0];
+    const limited = new MockBackend({ runs: { seed: "stuck" } }).runs;
+    expect(() => limited.messageAgent(limited.list().find((r) => r.stoppedByLimit)!.id, "Go on.")).toThrow(/Only the person resumes it/);
+    if (failed) expect(() => b.runs.messageAgent(failed.id, "Go on.")).toThrow();
+    expect(() => b.runs.messageAgent(run.id, "   ")).toThrow();
   });
 
-  it("keeps the draft while the run is unclear, and when it asks the same again", async () => {
-    const { b, run } = await asking();
-    const p = await b.runs.proposeAnswer(run.id, "Yes.", "r");
-    b.runs.lose(run.id);
-    expect(b.proposals.get(p.id)?.state.type).toBe("pending");
-    b.runs.ask(run.id, "Should the refund path keep the old rounding?");
-    expect(b.proposals.get(p.id)?.state.type).toBe("pending");
+  it("stops an agent as Pip, recorded under Pip", () => {
+    const { b, ws, run } = working();
+    expect(b.runs.stop(run.id, "pip").state).toBe("stopped");
+    expect(actions(b, ws)).toContainEqual(["pip", "run_stopped"]);
   });
 
-  it("retires the draft when an unclear run works again or asks something else, as the question it asks now decides", async () => {
-    const working = await asking();
-    const p = await working.b.runs.proposeAnswer(working.run.id, "Yes.", "r");
-    working.b.runs.lose(working.run.id);
-    working.b.runs.regain(working.run.id);
-    expect(working.b.proposals.get(p.id)?.state).toEqual({ type: "retired", reason: MOVED_ON });
-
-    const other = await asking();
-    const q = await other.b.runs.proposeAnswer(other.run.id, "Yes.", "r");
-    other.b.runs.lose(other.run.id);
-    other.b.runs.ask(other.run.id, "Which branch?");
-    expect(other.b.proposals.get(q.id)?.state).toEqual({ type: "retired", reason: MOVED_ON });
+  it("starts the same call once: a repeat in the same turn gives the same agent", () => {
+    const b = new MockBackend({ runs: { seed: "empty" } });
+    const ws = b.workstreams.open(itemRef("CA-401")).id;
+    const ask = { workstream: ws, role: "investigate" as const, brief: null, repo: null, fromRun: null, item: itemRef("CA-401") };
+    const first = b.runs.pipStart(ask, "turn-1");
+    expect(b.runs.pipStart(ask, "turn-1").id).toBe(first.id);
+    expect(b.runs.pipStart({ ...ask, role: "plan" }, "turn-1").id).not.toBe(first.id);
+    expect(b.runs.list()).toHaveLength(2);
   });
 
-  it("retires a draft that kept no question once the run asks one or stops asking", async () => {
-    const { b, run } = await asking();
-    const draft = (message: string) => b.proposals.draft({ type: "runAnswer", connectionId: run.connectionId, runId: run.id, shortId: null, item: CA401, message, question: null });
-    const p = draft("Yes.");
-    b.runs.lose(run.id);
-    expect(b.proposals.get(p.id)?.state.type).toBe("pending");
-    b.runs.ask(run.id, "Which branch?");
-    expect(b.proposals.get(p.id)?.state).toEqual({ type: "retired", reason: MOVED_ON });
-    const q = draft("No.");
-    b.runs.lose(run.id);
-    b.runs.regain(run.id);
-    expect(b.proposals.get(q.id)?.state).toEqual({ type: "retired", reason: MOVED_ON });
-  });
-
-  it("replaces Pip's older answer for the run in its workstream", async () => {
-    const { b, ws, run } = await asking();
-    const older = await b.runs.proposeAnswer(run.id, "Yes.", "r1");
-    const newer = await b.runs.proposeAnswer(run.id, "No, use the new rounding.", "r2");
-    expect(b.proposals.get(older.id)).toMatchObject({ state: { type: "retired", reason: "Replaced by a newer draft" }, supersededBy: newer.id });
-    expect(actions(b, ws)).toContain("draft_superseded");
-  });
-
-  it("retires a run's waiting answers once it is answered, and once it stops asking", async () => {
-    const answered = await asking();
-    const p = await answered.b.runs.proposeAnswer(answered.run.id, "Yes.", "r");
-    await answered.b.runsAnswer(answered.run.id, "My own answer.");
-    expect(answered.b.proposals.get(p.id)?.state).toEqual({ type: "retired", reason: "The run was answered" });
-    expect(actions(answered.b, answered.ws)).toContain("draft_retired");
-
-    const stopped = await asking();
-    const q = await stopped.b.runs.proposeAnswer(stopped.run.id, "Yes.", "r");
-    stopped.b.runs.stop(stopped.run.id);
-    expect(stopped.b.proposals.get(q.id)?.state).toEqual({ type: "retired", reason: "The run isn't asking any more" });
+  it("starts an investigation with no ticket in a watched repository, and refuses a build without a plan", () => {
+    const b = new MockBackend({ runs: { seed: "empty" } });
+    const ws = b.workstreams.open(null, "Why is checkout slow?").id;
+    const run = b.runs.pipStart({ workstream: ws, role: "investigate", brief: "Why is checkout slow on mobile?", repo: "acme/storefront", fromRun: null, item: null }, "turn-2");
+    expect(run.spec).toMatchObject({ kind: "investigate", repo: "acme/storefront", instruction: "Why is checkout slow on mobile?", workstream: ws });
+    expect(() => b.runs.pipStart({ workstream: ws, role: "investigate", brief: "Why?", repo: null, fromRun: null, item: null }, "turn-3")).toThrow(/name the repository/);
+    const ticketWs = b.workstreams.open(itemRef("CA-401")).id;
+    expect(() => b.runs.pipStart({ workstream: ticketWs, role: "build", brief: null, repo: null, fromRun: null, item: itemRef("CA-401") }, "turn-4")).toThrow(/finished plan/);
   });
 });
 
-describe("mock runs over the cap wait for a slot, as runs_approve and launch_waiting", () => {
-  /** A backend with room for three agents and none running, and a way to approve run `n` on a CA ticket. */
+describe("mock runs over the cap wait for a slot, as begin and launch_waiting", () => {
+  /** A backend with room for three agents and none running, and a way to start run `n` on a CA ticket. */
   function capped() {
     const b = new MockBackend({ runs: { seed: "empty", cap: 3 } });
-    const approve = async (n: number) => {
-      const key = `CA-40${n}`;
-      const made = await b.runsDraft({ ...spec, repo: "acme/storefront", clonePath: "/Users/sample/Code/storefront", name: `ca-40${n}-slot` }, itemRef(key));
-      return b.runsApprove(made.id, (await b.runsReview(made.id)).digest);
-    };
+    const approve = async (n: number) => queue(b, { name: `ca-40${n}-slot` }, itemRef(`CA-40${n}`));
     const live = () => b.runs.list().filter((r) => ["launching", "working", "needsAnswer", "needsPermission", "systemBlocked"].includes(r.state)).length;
     return { b, approve, live };
   }
@@ -835,10 +650,6 @@ describe("mock runs over the cap wait for a slot, as runs_approve and launch_wai
     const first = [await approve(1), await approve(2), await approve(3)];
     for (const r of first) b.runs.advance(r.id);
     expect(live()).toBe(3);
-    const preflight = await b.runsPreflight(null);
-    expect(preflight.blocking).toBe(false);
-    expect(preflight.rows.find((r) => r.level === "amber")?.text).toBe("3 of 3 agent slots are in use, including ones waiting on you. This one will wait for a slot and start when one finishes.");
-
     const fourth = await approve(4);
     expect(fourth).toMatchObject({ state: "queued", slotWaitSince: expect.any(String) });
     b.runs.advance();
@@ -910,8 +721,7 @@ describe("mock runs over the cap wait for a slot, as runs_approve and launch_wai
     const { b, approve } = capped();
     const ws = b.workstreams.open(itemRef("CA-401")).id;
     for (const n of [1, 2, 3]) b.runs.advance((await approve(n)).id);
-    const made = await b.runsDraft({ ...spec, repo: "acme/storefront", clonePath: "/Users/sample/Code/storefront", name: "ca-401-waits", workstream: ws }, itemRef("CA-401"));
-    const waiting = await b.runsApprove(made.id, (await b.runsReview(made.id)).digest);
+    const waiting = queue(b, { name: "ca-401-waits", workstream: ws }, itemRef("CA-401"));
     const stopped = b.runs.stop(waiting.id);
     expect(stopped).toMatchObject({ state: "stopped", error: "Stopped before it started", slotWaitSince: null, shortId: null });
     expect(b.workstreams.events(ws).map((e) => e.action)).toContain("run_stopped");
@@ -929,29 +739,22 @@ describe("mock runs of a read-only kind launch restricted, as RunService::spawn 
 
   it("keeps a Build's digest as it was before Phase 6", () => {
     // Computed before the restriction joined the digest: a Build carries none, so nothing about it changed.
-    expect(readOnlyRules(build)).toBeNull();
-    expect(mockDigest(build)).toBe("mock-ea00e03f");
-    expect(mockDigest({ ...build, allowPush: true, workstream: "ws-1" })).toBe("mock-78e0261c");
+    const old = { ...build, repo: "acme/web", clonePath: "/Users/sample/Code/web" };
+    expect(readOnlyRules(old)).toBeNull();
+    expect(mockDigest(old)).toBe("mock-ea00e03f");
+    expect(mockDigest({ ...old, allowPush: true, workstream: "ws-1" })).toBe("mock-78e0261c");
   });
 
-  it("shows a read-only draft's rules in its review and binds them into the digest", async () => {
-    const b = new MockBackend({ runs: { seed: "empty" } });
-    const p = await draft(b);
-    const review = await b.runsReview(p.id);
-    expect(review.readOnly).toEqual(readOnlyRules(spec));
-    expect(review.readOnly).toMatchObject({ mode: "dontAsk", allow: ["Bash(git fetch origin main)", "Bash(git checkout --detach origin/main)"] });
-    expect(review.readOnly?.deny).toEqual(expect.arrayContaining(["Edit", "Write", "Bash(git push *)"]));
-    // The same spec as digested before Phase 6.
+  it("binds a read-only kind's rules into the digest, and a Build has none", async () => {
+    expect(readOnlyRules(spec)).toMatchObject({ mode: "dontAsk", allow: ["Bash(git fetch origin main)", "Bash(git checkout --detach origin/main)"] });
+    expect(readOnlyRules(spec)?.deny).toEqual(expect.arrayContaining(["Edit", "Write", "Bash(git push *)"]));
     expect(mockDigest(spec)).not.toBe("mock-bf4bc947");
-    expect(review.digest).toBe(mockDigest(spec));
-    const buildDraft = await draft(b, { kind: "build", name: "ca-412-build-cd34" });
-    expect((await b.runsReview(buildDraft.id)).readOnly).toBeNull();
+    expect(readOnlyRules({ ...spec, kind: "build" })).toBeNull();
   });
 
   it("records one restricted launch when an approved investigation launches, and nothing more as it works and finishes", async () => {
     const b = new MockBackend({ runs: { seed: "empty" } });
-    const p = await draft(b);
-    const run = await b.runsApprove(p.id, (await b.runsReview(p.id)).digest);
+    const run = queue(b);
     expect(b.runs.launches()).toEqual([]);
     expect(run.readOnly).toBeUndefined();
     b.runs.advance(run.id);
@@ -970,8 +773,7 @@ describe("mock runs of a read-only kind launch restricted, as RunService::spawn 
 
   it("records a Build's launch with no restriction", async () => {
     const b = new MockBackend({ runs: { seed: "empty" } });
-    const p = await draft(b, { ...build, ...storefront, name: "ca-412-build-cd34" });
-    const run = await b.runsApprove(p.id, (await b.runsReview(p.id)).digest);
+    const run = queue(b, { ...build, ...storefront, name: "ca-412-build-cd34" });
     b.runs.advance(run.id);
     expect(b.runs.get(run.id)).toMatchObject({ state: "launching", readOnly: null });
     expect(b.runs.launches()).toEqual([expect.objectContaining({ runId: run.id, kind: "build", readOnly: null })]);
@@ -979,10 +781,7 @@ describe("mock runs of a read-only kind launch restricted, as RunService::spawn 
 
   it("records the restriction of a run that waited for a slot when launch_waiting starts it", async () => {
     const b = new MockBackend({ runs: { seed: "empty", cap: 1 } });
-    const approve = async (n: number, kind: RunSpec["kind"]) => {
-      const made = await b.runsDraft({ ...spec, ...storefront, kind, instruction: "", name: `ca-40${n}-slot` }, itemRef(`CA-40${n}`));
-      return b.runsApprove(made.id, (await b.runsReview(made.id)).digest);
-    };
+    const approve = async (n: number, kind: RunSpec["kind"]) => queue(b, { ...storefront, kind, instruction: "", name: `ca-40${n}-slot` }, itemRef(`CA-40${n}`));
     const first = await approve(1, "investigate");
     b.runs.advance(first.id);
     const waiting = await approve(2, "triage");
@@ -1000,10 +799,7 @@ describe("mock runs of a read-only kind launch restricted, as RunService::spawn 
     const b = new MockBackend({ runs: { seed: "empty", prSurfaceMs: null }, githubRepos: 12 });
     b.supervisor.dispose();
     const ws = b.workstreams.open(itemRef("CA-401")).id;
-    const start = async (kind: RunSpec["kind"], name: string) => {
-      const made = await b.runsDraft({ ...spec, ...storefront, kind, instruction: "", name, ticketBlock: null, workstream: ws, allowPush: kind === "build" }, itemRef("CA-401"));
-      return b.runsApprove(made.id, (await b.runsReview(made.id)).digest);
-    };
+    const start = async (kind: RunSpec["kind"], name: string) => queue(b, { ...storefront, kind, instruction: "", name, ticketBlock: null, workstream: ws, allowPush: kind === "build" }, itemRef("CA-401"));
     const triage = await start("triage", "ca-401-ro");
     b.runs.advance(triage.id);
     expect(b.runs.get(triage.id)?.readOnly).toEqual(readOnlyRules(triage.spec));
@@ -1024,34 +820,26 @@ describe("mock runs of a read-only kind launch restricted, as RunService::spawn 
     expect(adopted).toMatchObject({ shortId: "bbb748a7", readOnly: null });
   });
 
-  it("drafts a person's verify with no pull request, whatever the caller names, as `Core::draft_run` does", async () => {
+  it("prepares a verify with no pull request, whatever the caller names", async () => {
     const backend = new MockBackend();
     for (const named of [{ pr: 3, prSha: "abc1234" }, { pr: 3, prSha: null }]) {
-      const made = await backend.runsDraft({ ...spec, ...storefront, kind: "verify", ...named }, itemRef("CA-412"));
-      expect(made.intent.type === "startRun" && made.intent.spec).toMatchObject({ kind: "verify", pr: null, prSha: null });
+      expect(prepared(backend, { ...storefront, kind: "verify", ...named })).toMatchObject({ kind: "verify", pr: null, prSha: null });
     }
   });
 
-  it("adds no launch for an answer or a follow-up, which resume the session with what it was launched with", async () => {
+  it("adds no launch for an answer or a message, which resume the session with what it was launched with", async () => {
     const b = new MockBackend({ runs: { seed: "empty" } });
-    const p = await draft(b);
-    const run = await b.runsApprove(p.id, (await b.runsReview(p.id)).digest);
+    const run = queue(b);
     b.runs.advance(run.id);
     b.runs.advance(run.id);
     b.runs.ask(run.id, "Which branch?");
     await b.runsAnswer(run.id, "main");
     expect(b.runs.get(run.id)).toMatchObject({ state: "working", readOnly: readOnlyRules(spec) });
     expect(b.runs.launches()).toHaveLength(1);
-
-    // A finished plan run of the sample, sent back for another pass through Pip's follow-up draft.
-    const kinds = new MockBackend({ runs: { seed: "kinds", planDescription: true } });
-    const plan = kinds.runs.list().find((r) => r.spec.kind === "plan")!;
-    await mockAsk({ requestId: "r1", prompt: "Send it back for another pass to settle the open questions", context: { view: "board", item: plan.item } as unknown as ScreenContext, images: [], sessionId: undefined } as never, kinds, 0);
-    const followUp = kinds.proposals.list().find((d) => d.intent.type === "followUp")!;
-    await kinds.runsSendFollowUp(followUp.id, (followUp.intent as { message: string }).message);
-    expect(kinds.runs.get(plan.id)).toMatchObject({ state: "working", passes: 2 });
-    expect(kinds.runs.get(plan.id)?.readOnly).toBe(plan.readOnly);
-    expect(kinds.runs.launches()).toEqual([]);
+    b.runs.advance(run.id);
+    expect(b.runs.messageAgent(run.id, "Also check the retry path.")).toBe("resumed");
+    expect(b.runs.get(run.id)).toMatchObject({ state: "working", passes: 2, readOnly: readOnlyRules(spec) });
+    expect(b.runs.launches()).toHaveLength(1);
   });
 });
 
@@ -1087,8 +875,7 @@ describe("answering a permission prompt, as runs/permission.rs", () => {
     const b = new MockBackend({ runs: { seed: "empty", prSurfaceMs: null } });
     if (!supervised) b.supervisor.dispose();
     const ws = b.workstreams.open(itemRef("CA-401")).id;
-    const made = await b.runsDraft({ ...spec, ...storefront, kind, instruction: "", name: "ca-401-fix", ticketBlock: null, workstream: ws, allowPush: kind === "build" }, itemRef("CA-401"));
-    const run = await b.runsApprove(made.id, (await b.runsReview(made.id)).digest);
+    const run = queue(b, { ...storefront, kind, instruction: "", name: "ca-401-fix", ticketBlock: null, workstream: ws, allowPush: kind === "build" }, itemRef("CA-401"));
     b.runs.advance(run.id);
     b.runs.advance(run.id);
     expect(b.runs.get(run.id)?.state).toBe("working");

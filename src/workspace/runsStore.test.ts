@@ -31,13 +31,12 @@ beforeEach(() => {
 });
 
 describe("the runs store", () => {
-  it("loads the runs and the state of Claude", async () => {
+  it("loads the runs", async () => {
     s().init(backend);
     expect(s()).toMatchObject({ status: "loading", runs: [] });
     await settle();
     expect(s().status).toBe("ready");
     expect(s().runs).toHaveLength(8);
-    expect(s().environment).toEqual({ claude: "ok", version: "2.1.286" });
   });
 
   it("refreshes when the backend says runs changed", async () => {
@@ -200,8 +199,7 @@ describe("the run sheet", () => {
 
   it("browses in group order when the view groups by workstream, as the list on screen is", async () => {
     const ws = await backend.workstreamsOpen(itemRef("CA-401"));
-    const draft = await backend.runsDraft({ kind: "investigate", repo: "acme/storefront", clonePath: "/Users/sample/Code/storefront", base: "main", name: "ca-401-browse-1a2b", instruction: "", workstream: ws.id }, itemRef("CA-401"));
-    const run = await backend.runsApprove(draft.id, (await backend.runsReview(draft.id)).digest);
+    const run = backend.runs.start({ kind: "investigate", repo: "acme/storefront", clonePath: "/Users/sample/Code/storefront", base: "main", name: "ca-401-browse-1a2b", instruction: "", workstream: ws.id }, itemRef("CA-401"));
     // Finished, it is in the Done lane by state, behind the runs still working, and first by workstream.
     for (let i = 0; i < 3; i++) backend.runs.advance(run.id);
     useWorkstreams.getState().init(backend);

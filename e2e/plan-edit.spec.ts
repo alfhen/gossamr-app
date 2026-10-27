@@ -1,53 +1,17 @@
-import { expect, test, type Page } from "@playwright/test";
-import { openApp } from "./support/app";
+import { expect, test } from "@playwright/test";
+import { mockRuns, openApp, startAgent } from "./support/app";
 
-// The sentences the build is told before its plan, as PLAN_FOLLOW and PLAN_FOLLOW_UNEDITED in src-tauri/src/domain/run.rs.
-const SETTLED = "A person read, edited and approved the plan below.";
-const UNEDITED = "The plan below is the planning run's own answer. A person chose to build from it without settling it on the ticket first.";
 const MARKER = "Marker: also check the unsubscribe link in all three emails.";
 
-const peek = (page: Page) => page.locator("#peek-sheet");
-const setup = (page: Page) => page.getByRole("dialog", { name: "Start an agent" });
+const peek = (page: import("@playwright/test").Page) => page.locator("#peek-sheet");
 
 /** Opens CA-401's peek. */
-async function peekCa401(page: Page) {
+async function peekCa401(page: import("@playwright/test").Page) {
   await page.getByRole("listbox", { name: "Items" }).getByText("CA-401", { exact: true }).click();
   await expect(peek(page)).toHaveAttribute("aria-label", "Details for CA-401");
 }
 
-/** From CA-401's done Plan run, chooses 'Build from this plan' and waits for the setup sheet. */
-async function buildFromPlan(page: Page) {
-  await peekCa401(page);
-  await peek(page).getByRole("button", { name: /Welcome flow refresh (Ready to review|Approved)/ }).click();
-  await page.getByRole("button", { name: "Build from this plan" }).click();
-  await expect(setup(page)).toBeVisible();
-  await expect(setup(page).getByRole("textbox", { name: /^Plan from run / })).toBeVisible();
-}
-
-/** The whole prompt as the setup sheet shows it, and the plan part of it: from the sentence before the plan to its closing marker. */
-async function prompt(page: Page) {
-  const whole = setup(page).locator("details").filter({ hasText: "Show the whole prompt as one piece" });
-  await whole.locator("summary").click();
-  const text = (await whole.locator("pre").textContent()) ?? "";
-  const close = text.indexOf("\nPLAN>>>");
-  const open = text.lastIndexOf("\n\n", text.indexOf("\n\nPlan from run ") - 1);
-  return { text, plan: open >= 0 && close > open ? text.slice(open + 2, close + "\nPLAN>>>".length) : "" };
-}
-
-test("a build from a plan nobody approved on the ticket says it follows the unedited plan", async ({ page }) => {
-  await openApp(page);
-  await buildFromPlan(page);
-  const note = setup(page).getByRole("note").filter({ hasText: "follows the unedited plan" });
-  await expect(note).toBeVisible();
-  await expect(note).toContainText("the description draft that adds this plan to the ticket wasn't approved");
-  await expect(note.getByRole("button", { name: "Read the plan again" })).toBeVisible();
-  const { text, plan } = await prompt(page);
-  expect(plan.startsWith(UNEDITED)).toBe(true);
-  expect(plan).toContain("<<<PLAN\n## Approach");
-  expect(text).not.toContain("edited and approved");
-});
-
-test("a build from a plan the person edited and approved on the ticket carries their text and no notice", async ({ page }) => {
+test("a build from a plan the person edited and approved on the ticket carries their text", async ({ page }) => {
   await openApp(page);
   await peekCa401(page);
   const draft = peek(page).getByRole("article", { name: "Update the description of CA-401" });
@@ -64,12 +28,11 @@ test("a build from a plan the person edited and approved on the ticket carries t
   expect(await folded.evaluate((el: HTMLDetailsElement) => el.open)).toBe(false);
   await page.keyboard.press("Escape");
 
-  await buildFromPlan(page);
-  await expect(setup(page).getByRole("note").filter({ hasText: "follows the unedited plan" })).toHaveCount(0);
-  await expect(setup(page)).toContainText("This build follows the plan from run");
-  await expect(setup(page).getByRole("textbox", { name: /^Plan from run / })).toHaveValue(new RegExp(MARKER));
-  const { plan } = await prompt(page);
-  expect(plan.startsWith(SETTLED)).toBe(true);
-  expect(plan).toContain(MARKER);
-  expect(plan).not.toContain("Drafted by an agent run");
+  const plan = (await mockRuns(page)).find((r) => r.kind === "plan" && r.key === "CA-401")!;
+  const id = await startAgent(page, "CA-401", "build", { fromRun: plan.id });
+  await page.getByRole("button", { name: /^Agents/ }).click();
+  await page.locator(`main article[data-run-id="${id}"]`).first().click();
+  const told = page.locator("#agent-sheet").locator("details").filter({ hasText: "What the agent was told" });
+  await told.locator("> summary").first().click();
+  await expect(told.locator("[data-plan]")).toContainText(MARKER);
 });

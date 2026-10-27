@@ -4,7 +4,7 @@ import { adoptableOf, adoptWords, NOTHING_TO_ADOPT } from "../lib/workstreamAdop
 import { byQueue, reviewBlocking, runLabels, stage } from "../lib/workstreamStage";
 import { readStored, writeStored } from "../workspace/storage";
 import { BASIS_FIELDS } from "../types";
-import type { Adoptable, BasisField, ItemRef, PauseReason, Proposal, ReviewVerdict, Run, WorkItem, Workstream, WorkstreamActor, WorkstreamBasis, WorkstreamEvent, WorkstreamUndo, WorkstreamView, WorkstreamsChanged } from "../types";
+import type { Adoptable, BasisField, ItemRef, PauseReason, PipQuestion, Proposal, ReviewVerdict, Run, WorkItem, Workstream, WorkstreamActor, WorkstreamBasis, WorkstreamEvent, WorkstreamUndo, WorkstreamView, WorkstreamsChanged } from "../types";
 
 const CONNECTION = "mock";
 /** Where the sample backend keeps its workstreams and their audit, so both survive a reload. */
@@ -19,6 +19,8 @@ export const MOCK_WORKSTREAMS_KEY = "gossamr-mock-workstreams";
 /** Pip's notes are kept up to this many bytes, after scrubbing (NOTES_LIMIT in src-tauri/src/inbox/workstreams.rs). */
 export const NOTES_LIMIT = 2_048;
 const TITLE_LIMIT = 200;
+/** The most of Pip's question the audit keeps, as `PIP_ASK_LIMIT` in src-tauri/src/domain/workstream.rs. */
+const PIP_ASK_LIMIT = 500;
 /** What a workstream id may be, as `RunSpec::validate` checks it. */
 const ID_LIMIT = 64;
 /** The markers prompts and Pip's context fence data with; notes holding any of them are refused rather than cleaned. */
@@ -102,6 +104,16 @@ export function waitingForPr(runs: readonly Run[], prOf: (runId: string) => numb
   if (!build) return null;
   if (runs.some((r) => r.spec.kind === "review" && (byQueue(r, build) > 0 || r.spec.buildFromRun === build.id))) return null;
   return prOf(build.id) == null ? build.id : null;
+}
+
+/** The question still open in a workstream's audit (oldest first): the newest `pip_asked`, unless a `pip_ask_cleared` follows it. */
+export function openPipAsk(events: readonly WorkstreamEvent[]): PipQuestion | null {
+  let open: PipQuestion | null = null;
+  for (const e of events) {
+    if (e.action === "pip_asked") open = { question: e.detail ?? "", at: e.at };
+    else if (e.action === "pip_ask_cleared") open = null;
+  }
+  return open;
 }
 
 /** Why `id` can't be a workstream id at all, as `RunSpec::validate` refuses it; null when it can. */
@@ -203,13 +215,14 @@ export class MockWorkstreams {
     const linked = runs.filter((r) => r.spec.workstream === ws.id).sort((a, b) => byQueue(b, a));
     const judged = linked.map((r) => ({ ...r, verdict: r.spec.kind === "review" && r.state === "done" ? this.verdictOf(r) : null }));
     const view: WorkstreamView = { workstream: ws, stage: stage(judged), runs: linked.map((r) => r.id), labels: runLabels(linked) };
+    const pipAsk = openPipAsk(this.audit.filter((e) => e.workstreamId === ws.id));
     const waiting = waitingForPr(linked, this.prOf);
     const adoptable = ws.closedAt === null && ws.itemKey ? adoptableOf(ws, runs.filter((r) => r.item?.key === ws.itemKey), this.pendingDrafts()) : null;
-    return { ...view, ...(adoptable && (adoptable.runs.length || adoptable.drafts.length) ? { adoptable } : {}), ...(waiting ? { waitingForPr: waiting } : {}), ...(reviewBlocking(judged) ? { reviewBlocking: true } : {}) };
+    return { ...view, ...(pipAsk ? { pipAsk } : {}), ...(adoptable && (adoptable.runs.length || adoptable.drafts.length) ? { adoptable } : {}), ...(waiting ? { waitingForPr: waiting } : {}), ...(reviewBlocking(judged) ? { reviewBlocking: true } : {}) };
   }
 
   /** Opens a workstream on a cached ticket, or with no ticket and a title. A ticket with an open one gets that one back, unchanged. */
-  open(item: ItemRef | null, title: string | null = null): Workstream {
+  open(item: ItemRef | null, title: string | null = null, actor: WorkstreamActor = "person"): Workstream {
     if (item && item.connectionId !== CONNECTION) throw new Error("that item belongs to another connection");
     const named = title === null ? "" : flat(title);
     let itemKey: string | null = null;
@@ -243,7 +256,7 @@ export class MockWorkstreams {
       basis,
     };
     this.all = [ws, ...this.all];
-    this.append(ws.id, "person", "opened");
+    this.append(ws.id, actor, "opened");
     this.save();
     this.changed();
     return ws;
@@ -487,6 +500,21 @@ export class MockWorkstreams {
     this.save();
     this.changed();
     return event;
+  }
+
+  /** Pip asks the person `question` in workstream `id`, as `pip_asks_person` does; a newer question replaces an older open one. */
+  pipAsks(id: string, question: string): PipQuestion {
+    this.owned(id);
+    const event = this.record(id, "pip", "pip_asked", { detail: flat(question).slice(0, PIP_ASK_LIMIT) })!;
+    return { question: event.detail ?? "", at: event.at };
+  }
+
+  /** Ends the open question of workstream `id` (`how`: `answered` or `dismissed`), as `clear_pip_ask`; false when none was open. */
+  clearAsk(id: string, how: "answered" | "dismissed"): boolean {
+    this.owned(id);
+    if (!openPipAsk(this.events(id))) return false;
+    this.record(id, "person", "pip_ask_cleared", { detail: how });
+    return true;
   }
 
   /** Whether the audit names run `id`. */

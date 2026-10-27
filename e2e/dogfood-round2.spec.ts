@@ -1,23 +1,14 @@
 import { expect, test, type Page } from "@playwright/test";
-import { expandNeedsYou, showWorkspace, mockRuns, openAgents, openApp, openPip, peekSheet, peekTicket, PIP_INPUT, pipPane, reviewedDraft, needsStack } from "./support/app";
+import { expandNeedsYou, showWorkspace, mockRuns, openAgents, openApp, openPip, peekSheet, peekTicket, PIP_INPUT, pipPane, reviewedDraft, needsStack, startAgent } from "./support/app";
 
 // Fixes from the second dogfood round: counts that agree, keys that work after a skip, Esc and F6 in the workspace layout,
 // and the copy and scroll fixes on the review card and the plan.
 
-const setup = (page: Page) => page.getByRole("dialog", { name: "Start an agent" });
 const runSheet = (page: Page) => page.getByRole("dialog", { name: "Agent run" });
 const railButton = (page: Page, name: RegExp) => page.locator("[data-rail]").getByRole("button", { name }).first();
 
 /** Whether the focused element sits inside `selector`. */
 const focusIn = (page: Page, selector: string) => page.evaluate((s) => !!document.activeElement?.closest(s), selector);
-
-/** Opens the peek's Agent menu on CA-401 and picks Investigate, which opens the setup sheet. */
-async function investigateFromPeek(page: Page) {
-  await peekTicket(page, "CA-401");
-  await peekSheet(page).getByRole("button", { name: "Agent", exact: true }).click();
-  await page.getByRole("menuitem", { name: /^Investigate this ticket/ }).click();
-  await expect(setup(page)).toBeVisible();
-}
 
 test.describe("counts that mean one thing (D4, D5, N3)", () => {
   test("Needs you rows for tickets outside the watched projects still read KEY · Title (D27)", async ({ page }) => {
@@ -65,10 +56,8 @@ test.describe("Esc and F6 in the workspace layout (N4, D29)", () => {
     await page.keyboard.press("Shift+F6");
     await expect.poll(() => page.evaluate(() => document.activeElement?.id)).toBe("workspace-main");
 
-    // Tab from the composer: Commands, then on to the next region rather than the page itself.
+    // Tab from the composer goes on to the next region rather than the page itself.
     await input.focus();
-    await page.keyboard.press("Tab");
-    await expect(pipPane(page).getByRole("button", { name: "Commands", exact: true })).toBeFocused();
     await page.keyboard.press("Tab");
     const at = await page.evaluate(() => ({ tag: document.activeElement?.tagName ?? null, id: document.activeElement?.id ?? null }));
     expect(at.tag).not.toBe("BODY");
@@ -82,10 +71,7 @@ test.describe("a queued run (N8)", () => {
     await page.getByRole("button", { name: "Start watching" }).click();
     await showWorkspace(page);
     await expect(page.getByText("CA-401", { exact: true }).first()).toBeVisible();
-    await investigateFromPeek(page);
-    await setup(page).getByRole("combobox", { name: "Repository" }).selectOption("acme/webshop");
-    await setup(page).getByRole("button", { name: "Start agent" }).click();
-    await expect(setup(page)).toHaveCount(0);
+    await startAgent(page, "CA-401", "investigate");
     await expect.poll(async () => (await mockRuns(page)).map((r) => r.state)).toEqual(["queued"]);
     const [queued] = await mockRuns(page);
     await railButton(page, /^Agents/).click();

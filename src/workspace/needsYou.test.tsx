@@ -68,7 +68,6 @@ const draft = (id: string, intent: Intent, minutes: number, workstream: string |
 const comment = (key: string, text = "Checking in."): Intent => ({ type: "comment", item: ref(key), body: docFromText(text), mentions: [] }) as unknown as Intent;
 const transition = (key: string): Intent => ({ type: "transition", item: ref(key), to: "done" }) as unknown as Intent;
 const rewrite = (key: string): Intent => ({ type: "rewrite", item: ref(key), title: null, body: { from: docFromText("a"), to: docFromText("b"), fromText: "a", toText: "b" }, flattened: [] }) as unknown as Intent;
-const startRun = (key: string): Intent => ({ type: "startRun", connectionId: "mock", item: ref(key), spec: { ...base.spec, kind: "investigate", workstream: "ws-1" } }) as unknown as Intent;
 
 const ws1 = view("ws-1", "CA-401", "CA-401 Welcome flow refresh", { runs: ["r-perm", "r-q", "r-fail"] });
 const ws2 = view("ws-2", "CA-402", "CA-402 Cart merge", { pausedReason: "ceiling" });
@@ -346,7 +345,7 @@ describe("opening a need", () => {
 });
 
 describe("what the list's keys do", () => {
-  const proposals = [...input().proposals, draft("rw", rewrite("CA-401"), 40, "ws-1"), draft("st", startRun("CA-401"), 35, "ws-1")];
+  const proposals = [...input().proposals, draft("rw", rewrite("CA-401"), 40, "ws-1")];
   const list = needs(input({ proposals }));
   const need = (key: string) => list.find((n) => n.key === key)!;
 
@@ -393,10 +392,9 @@ describe("what the list's keys do", () => {
     expect(keyPlan(need("paused:ws-2"), "approve")).toMatchObject({ type: "ask", text: "resume this workstream" });
   });
 
-  it("opens the decision where there is something to read first: a rewrite's diff, a question, a run to start", () => {
+  it("opens the decision where there is something to read first: a rewrite's diff and a question", () => {
     expect(keyPlan(need("draft:rw"), "approve")).toEqual({ type: "open", edit: false });
     expect(keyPlan(need("run:r-q"), "approve")).toEqual({ type: "open", edit: false });
-    expect(keyPlan(need("draft:st"), "approve")).toEqual({ type: "open", edit: false });
     expect(keyPlan(need("paused:ws-2"), "approve")).toMatchObject({ type: "ask", text: "resume this workstream" });
   });
 
@@ -543,8 +541,7 @@ describe("the decision pane", () => {
 describe("every count of needs you and of agents, from one fixture (D4, D5, N3)", () => {
   const runs = sample;
   const at = NOW;
-  const ticket = ref("CA-401");
-  const proposals = [draft("p1", comment("CA-401"), 3), { ...draft("p2", { type: "startRun", connectionId: "mock", item: ticket, spec: { ...runs[0].spec, kind: "investigate" } } as unknown as Intent, 3) }];
+  const proposals = [draft("p1", comment("CA-401"), 3), draft("p2", rewrite("CA-401"), 3)];
   const failed = runs.find((r) => r.state === "failed")!;
 
   for (const dismissed of [new Set<string>(), new Set([failed.id])]) {

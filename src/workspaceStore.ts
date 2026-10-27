@@ -99,10 +99,6 @@ interface WorkspaceState {
   /** Posts a review draft to GitHub as one comment review, on the person's approval. A refusal resolves with the draft pending and `error` set. */
   /** Posts review draft `id` as the person saw it, with `revisions` revisions; one changed since is refused. */
   postReview(id: string, revisions: number, postAnyway?: boolean): Promise<Proposal>;
-  /** Sends a follow-up draft back to its run. Rejects with the reason when it can't be sent; the draft stays pending. */
-  sendFollowUp(id: string, message: string): Promise<void>;
-  /** Sends an answer draft to the run that asked. Rejects with the reason when it can't be sent; the draft stays pending. */
-  sendAnswerDraft(id: string, message: string): Promise<void>;
   /** Skips a pending draft, and offers Undo for a few seconds: nothing was written anywhere, so it can be put back. */
   skip(id: string): Promise<Proposal>;
   /** Brings a draft skipped a moment ago back to pending, as Undo does. */
@@ -413,9 +409,8 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
   async approve(id) {
     const backend = get().backend!;
     const mine = generation;
-    if (get().proposals[id]?.intent.type === "startRun") throw new Error("A run is approved with its own button, after its prompt is shown.");
-    if (get().proposals[id]?.intent.type === "followUp") throw new Error("A follow-up is sent back with its own button.");
-    if (get().proposals[id]?.intent.type === "runAnswer") throw new Error("An answer is sent with its own button.");
+    const kind = get().proposals[id]?.intent.type;
+    if (kind === "startRun" || kind === "followUp" || kind === "runAnswer") throw new Error("Pip starts and messages agents directly now.");
     if (get().proposals[id]?.intent.type === "githubReview") throw new Error("A review is posted to GitHub with its own button.");
     const p = await backend.proposalsApprove(id);
     if (backend !== get().backend || mine !== generation) return p;
@@ -430,28 +425,6 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     if (backend !== get().backend || mine !== generation) return p;
     set((s) => ({ proposals: { ...s.proposals, [p.id]: p } }));
     return p;
-  },
-
-  async sendFollowUp(id, message) {
-    const backend = get().backend!;
-    const mine = generation;
-    try {
-      await backend.runsSendFollowUp(id, message);
-    } finally {
-      const p = await backend.proposalsGet(id).catch(() => null);
-      if (p && backend === get().backend && mine === generation) set((s) => ({ proposals: { ...s.proposals, [p.id]: p } }));
-    }
-  },
-
-  async sendAnswerDraft(id, message) {
-    const backend = get().backend!;
-    const mine = generation;
-    try {
-      await backend.runsAnswerDraft(id, message);
-    } finally {
-      const p = await backend.proposalsGet(id).catch(() => null);
-      if (p && backend === get().backend && mine === generation) set((s) => ({ proposals: { ...s.proposals, [p.id]: p } }));
-    }
   },
 
   async skip(id) {

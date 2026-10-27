@@ -4,7 +4,7 @@ import { draftsForTurn, targetOf } from "../lib/proposals";
 import { REMOVED_TURN } from "../backend/claude";
 import { useClaude, type Turn } from "../claudeStore";
 import { filesIn } from "../lib/attachments";
-import { COMMAND_HELP, RUN_REF_NOTE, WORKSTREAM_VERBS, runComposerVerb, runRef, type CommandHelp, type VerbOutcome } from "../lib/composerVerbs";
+import { runRef } from "../lib/runNames";
 import { labelsByRun } from "../lib/workstreamStage";
 import { workstreamOfConversation } from "../lib/conversations";
 import { MAX_IMAGES, defaultQuestion } from "../lib/pipImages";
@@ -16,11 +16,9 @@ import { upToTimeline } from "./timelineKeys";
 import { AttachButton, AttachedThumbs, TurnImages, type useAttachments } from "./PipImages";
 import { currentContext } from "./pipHooks";
 import { appliedState, usePip, type AppliedState } from "./pipStore";
-import { usePopover } from "./Popover";
 import { useRuns } from "./runsStore";
 import { useTabs, type Route } from "./tabsStore";
 import { contextFor, useWorkstreams } from "./workstreamsStore";
-import { useWorkspace } from "../workspaceStore";
 import { maskSecrets } from "../lib/riskyText";
 import { BUILD_ON_GITHUB } from "./githubSafety";
 
@@ -314,8 +312,7 @@ export function useAnswering(conversation: string): boolean {
 }
 
 /**
- * The one sentence a workstream's empty conversation opens with: what it is for. The commands are
- * behind the composer's Commands button, not here.
+ * The one sentence a workstream's empty conversation opens with: what it is for.
  */
 export function workstreamIntro(workstream: Pick<Workstream, "itemKey" | "title"> | null): string {
   const key = workstream?.itemKey ?? null;
@@ -363,36 +360,6 @@ export function PipConversation({ conversation, proposals, bodyRef, ticket = nul
 }
 
 /**
- * A command typed in the composer (`/stop R1`, `/retry R1`, `/answer R1 text`, and `/pause`, `/resume` in a workstream),
- * carried out with the person's own commands; what it came to is told under the input. Null for anything else, which is
- * a question for Pip. A command never reaches Pip and adds no turn. `R1` is looked up among the runs of the conversation's workstream.
- */
-export function composerVerb(text: string, conversation: string): Promise<VerbOutcome> | null {
-  const runs = useRuns.getState();
-  const workstream = workstreamOfConversation(conversation);
-  const pausedReason = workstream ? (useWorkstreams.getState().list.find((v) => v.workstream.id === workstream)?.workstream.pausedReason ?? null) : null;
-  const done = runComposerVerb(text, { runs: runs.runs, workstream, backend: runs.backend ?? useWorkspace.getState().backend, pausedReason });
-  // /pause and /resume change the workstream's header at once, not on the next change event.
-  return done && workstream ? done.then((outcome) => (outcome.ok && void useWorkstreams.getState().refresh(), outcome)) : done;
-}
-
-/**
- * What the composer's input holds once a command typed as `typed` came to `outcome`, while it now holds `now`: cleared
- * when it worked (unless the person has typed on since), kept when it was refused so it can be put right.
- */
-export const inputAfterCommand = (outcome: VerbOutcome, typed: string, now: string) => (outcome.ok && now === typed ? "" : now);
-
-/** The muted line under the composer saying what the last command came to. */
-export function VerbNote({ outcome }: { outcome: VerbOutcome | null }) {
-  if (!outcome) return null;
-  return (
-    <p role="status" data-verb-note={outcome.ok ? "ok" : "problem"} className="m-0 -mt-2 px-3 pb-2 text-sm text-ws-ink3">
-      {outcome.message}
-    </p>
-  );
-}
-
-/**
  * What the agents are doing, under the composer: updated as runs move, and never a turn in the conversation. It is not a live
  * region: it changes with every run that moves, which the toasts and Needs you already say once, and a screen reader reads it where it is.
  */
@@ -401,72 +368,6 @@ export function ComposerFooter({ text }: { text: string }) {
     <p data-composer-footer className="m-0 -mt-1 px-3 pb-2 text-xs text-ws-ink3">
       {text}
     </p>
-  );
-}
-
-/** How a command names its run outside a workstream, where cards show no R labels. */
-const RUN_ID_REF = "<run id>";
-
-/** What a run's id is, and what R1 is, outside a workstream. */
-export const GENERAL_RUN_REF_NOTE = "A run's id is on its card in Agents, and at the top of its sheet (Open on a card under Your agents). R1, R2… are the names a workstream gives its runs, and work in its conversation.";
-
-/**
- * The commands as the Commands popover lists them: in a workstream all of them, naming runs R1 as its cards do; elsewhere
- * the run commands only, naming the run by its id.
- */
-export function commandHelp(workstream: boolean): readonly CommandHelp[] {
-  if (workstream) return COMMAND_HELP;
-  return COMMAND_HELP.filter((c) => !(WORKSTREAM_VERBS as readonly string[]).includes(c.verb)).map((c) => ({ ...c, usage: c.usage.replace(/\bR1\b/, RUN_ID_REF) }));
-}
-
-/**
- * The commands the composer takes, with a line on each; a workstream's own only in a workstream. Outside a workstream,
- * where cards show no R labels, the examples name a run by its id.
- */
-export function CommandsList({ workstream }: { workstream: boolean }) {
-  const shown = commandHelp(workstream);
-  return (
-    <div className="grid gap-2">
-      <dl className="m-0 grid gap-1.5">
-        {shown.map((c) => (
-          <div key={c.verb} data-command={c.verb} className="grid">
-            <dt className="font-mono text-xs font-semibold text-ws-ink">{c.usage}</dt>
-            <dd className="m-0 text-ws-ink2">{c.meaning}</dd>
-          </div>
-        ))}
-      </dl>
-      <p className="m-0 text-ws-ink3">{workstream ? RUN_REF_NOTE : GENERAL_RUN_REF_NOTE}</p>
-    </div>
-  );
-}
-
-/** The composer's "?" button and the popover it opens with the commands; Esc closes the popover first and hands focus back. */
-function CommandsHelp({ conversation }: { conversation: string }) {
-  const { open, setOpen, root } = usePopover();
-  const workstreamId = workstreamOfConversation(conversation);
-  const panel = `pip-commands-${conversation}`;
-  return (
-    <div ref={root} className="relative flex">
-      <button
-        type="button"
-        data-popover-trigger
-        aria-label="Commands"
-        aria-haspopup="dialog"
-        aria-expanded={open}
-        aria-controls={open ? panel : undefined}
-        title="Commands"
-        onClick={() => setOpen(!open)}
-        className={`w-8 rounded-md border font-semibold text-ws-ink2 hover:border-ws-pip hover:text-ws-pip focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip ${open ? "border-ws-pip text-ws-pip" : "border-ws-sep2"}`}
-      >
-        ?
-      </button>
-      {open && (
-        <div id={panel} role="dialog" aria-label="Commands" className="absolute right-0 bottom-full z-40 mb-2 w-[300px] max-w-[80vw] rounded-xl border border-ws-sep2 bg-ws-win px-3 py-2.5 text-sm shadow-ws-pop">
-          <h3 className="m-0 mb-1.5 text-xs font-semibold tracking-wide text-ws-ink3 uppercase">Commands</h3>
-          <CommandsList workstream={workstreamId !== null} />
-        </div>
-      )}
-    </div>
   );
 }
 
@@ -490,12 +391,6 @@ interface ComposerProps {
   scene: Omit<Parameters<typeof placeholderFor>[0], "images" | "quote">;
   /** A muted line under the input, such as "4 agents working · 2 need you". */
   footer?: string | null;
-}
-
-/** Whether a command typed in `asked` may still change the composer: not once the person has moved to another conversation,
- * where its note and the input it would clear belong to something else. */
-export function outcomeBelongs(asked: string, shown: string): boolean {
-  return asked === shown;
 }
 
 /** Text typed but not sent, per conversation, so moving to another workstream neither carries it along nor loses it. */
@@ -533,14 +428,6 @@ export function Composer({ conversation, attached, looking, scene, footer = null
     setInput(unsentInputOf(conversation));
   }, [conversation]);
   useEffect(() => () => keepUnsentInput(inputOf.current, inputNow.current), []);
-  /** What the last command typed here came to, under the input. */
-  const [note, setNote] = useState<VerbOutcome | null>(null);
-  // A note is about the conversation it was typed in.
-  useEffect(() => setNote(null), [conversation]);
-  /** The conversation shown now, for a command that finishes after the person moved to another one. */
-  const shown = useRef(conversation);
-  shown.current = conversation;
-
   useEffect(() => {
     document.getElementById(PIP_INPUT_ID)?.focus();
   }, []);
@@ -557,17 +444,6 @@ export function Composer({ conversation, attached, looking, scene, footer = null
     const count = attached.images.length;
     const text = prompt.trim() || (count ? defaultQuestion(count) : "");
     if (!text) return;
-    setNote(null);
-    const command = composerVerb(text, conversation);
-    if (command) {
-      const asked = conversation;
-      void command.then((outcome) => {
-        if (!outcomeBelongs(asked, shown.current)) return;
-        setNote(outcome);
-        setInput((now) => inputAfterCommand(outcome, prompt, now));
-      });
-      return;
-    }
     setInput("");
     const images = attached.take();
     const pip = usePip.getState();
@@ -618,7 +494,6 @@ export function Composer({ conversation, attached, looking, scene, footer = null
           autoComplete="off"
           className="min-w-0 flex-1 rounded-[10px] border border-ws-sep2 bg-ws-bar px-2.5 py-1.5 focus:border-ws-pip focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip"
         />
-        <CommandsHelp conversation={conversation} />
         {running && (
           <button type="button" onClick={() => useClaude.getState().cancel(conversation)} className="rounded-md border border-ws-sep2 px-3 font-semibold">
             Stop
@@ -628,7 +503,6 @@ export function Composer({ conversation, attached, looking, scene, footer = null
           Ask
         </button>
       </form>
-      <VerbNote outcome={note} />
       {footer && <ComposerFooter text={footer} />}
     </>
   );

@@ -1,7 +1,6 @@
 import type { CodeChange, ReadOnly, RunKind, RunSpec } from "../types";
-import { TICKETLESS_STARTER } from "../workspace/runSheetLogic";
-
-export { TICKETLESS_STARTER };
+/** What a ticketless investigation starts with when its question is left empty. As `TICKETLESS_STARTER` in `domain/run.rs`. */
+export const TICKETLESS_STARTER = "Look into this: ";
 
 const STATUS_NOTE = "Finish your answer with a short, factual note for the ticket under 'For Jira:': what you did or found, what state things are in, a link to the pull request if there is one, and what a person needs to do next. The note may be posted to the ticket, after a person reads and approves it, for people who do not use Gossamr, so name no runs, workstreams, worktrees, Pip, Gossamr or other app internals and point at nothing only the app holds; write it in a neutral voice without 'I' or 'we'; and say only what is new since the last comment on the ticket.";
 
@@ -210,10 +209,6 @@ export const findingsLabel = (from: string) => `What investigation run ${without
 
 export const PUSH_ALLOWED =
   "You may push your branch and open a draft pull request: push it, then run `gh pr create --draft` with a clear title and a description of what changed and why. Never mark the pull request ready for review and never merge it. Put the link to the pull request in your note under 'For Jira:'.";
-
-/** Pip's refusals for a build or review that doesn't follow a finished run, as in src-tauri/src/agent/runs.rs. */
-export const BUILD_NEEDS_PLAN = "A build can only follow a finished plan run: pass from_run with the plan run's id from list_runs. Pip can't propose a build or review on its own.";
-export const REVIEW_NEEDS_BUILD = "A review can only follow a finished build whose pull request has been found: pass from_run with the build run's id from list_runs. Pip can't propose a build or review on its own.";
 
 export const REVIEW_NO_FOCUS = "A review judges the change on its own; it takes no focus note.";
 /** Told to Pip with the refusal of a review whose build's pull request hasn't been found yet, as WAITING_FOR_PR_HINT in src-tauri/src/inbox/workstreams.rs. */

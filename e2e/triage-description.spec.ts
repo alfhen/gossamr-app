@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { advanceRuns, askPip, editTicket, expandNeedsYou, homeConversationRegion, homeSettled, jiraWrites, mockRuns, needRow, needsPane, openAgents, openApp, paneSettled, pipPane, selectWorkstream, startWorkstream, openNeedRow } from "./support/app";
+import { advanceRuns, askPip, editTicket, expandNeedsYou, homeSettled, jiraWrites, mockRuns, needRow, needsPane, openAgents, openApp, paneSettled, selectWorkstream, startWorkstream, openNeedRow } from "./support/app";
 
 // Round 18 dogfood, CA-408 with the description "Fix it.": the triage's open questions go to the ticket's description as a
 // draft the person approves.
@@ -7,21 +7,15 @@ import { advanceRuns, askPip, editTicket, expandNeedsYou, homeConversationRegion
 const SAMPLE = "runs=empty&prSurface=manual&pipPace=1";
 const KEY = "CA-408";
 
-const setup = (page: Page) => page.getByRole("dialog", { name: "Start an agent" });
 const runsOf = async (page: Page, kind: string) => (await mockRuns(page)).filter((r) => r.kind === kind);
 
-/** Asks Pip for `what` and starts it from the setup sheet, as the person does, in the Pip pane or on Pip home. */
+/** Asks Pip for `what` which starts it, in the Pip pane or on Pip home. */
 async function startStep(page: Page, what: string, home = false) {
   if (home) await homeSettled(page);
   else await paneSettled(page);
   await askPip(page, what);
   if (home) await homeSettled(page);
   else await paneSettled(page);
-  const where = home ? homeConversationRegion(page) : pipPane(page);
-  await where.getByRole("article", { name: `Start an agent: ${KEY}` }).last().getByRole("button", { name: /^Review and start/ }).click();
-  await expect(setup(page)).toBeVisible();
-  await setup(page).getByRole("button", { name: "Start agent" }).click();
-  await expect(setup(page)).toHaveCount(0);
 }
 
 async function finish(page: Page, id: string) {

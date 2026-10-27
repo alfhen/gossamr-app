@@ -4,8 +4,6 @@ import { advanceRuns, askPermission, askPip, mockRuns, needsPane, openApp, pipPa
 // Every workstream header says what happens next and why, in one line (src/lib/nextStep.ts). Pull requests show only when a test says, as supervisor.spec.ts has it.
 const SAMPLE = "runs=empty&prSurface=manual";
 
-const setup = (page: Page) => page.getByRole("dialog", { name: "Start an agent" });
-const runCards = (page: Page, key: string) => pipPane(page).getByRole("article", { name: `Start an agent: ${key}` });
 
 /** The line under the workstream's controls in the Pip pane. */
 const nextLine = (page: Page) => pipPane(page).locator("[data-next-step]");
@@ -15,14 +13,10 @@ async function settled(page: Page) {
   await expect(pipPane(page).getByRole("button", { name: "Stop" })).toHaveCount(0);
 }
 
-/** Asks Pip for an investigation of CA-401, opens its draft and starts it, as the person does. */
+/** Asks Pip for an investigation of CA-401, which starts it. */
 async function startInvestigation(page: Page) {
   await askPip(page, "investigate this");
   await settled(page);
-  await runCards(page, "CA-401").last().getByRole("button", { name: "Review and start →" }).click();
-  await expect(setup(page)).toBeVisible();
-  await setup(page).getByRole("button", { name: "Start agent" }).click();
-  await expect(setup(page)).toHaveCount(0);
 }
 
 /** The newest run of `kind`, as the sample backend holds it. */

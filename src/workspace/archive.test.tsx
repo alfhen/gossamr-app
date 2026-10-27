@@ -193,7 +193,7 @@ describe("the Clear finished popover", () => {
 describe("the run sheet's Archive", () => {
   const actions = (): RunSheetActions => new Proxy({ archive: vi.fn() } as unknown as RunSheetActions, { get: (t, k) => (k in t ? (t as never)[k] : vi.fn()) });
   const sheet = (r: Run) =>
-    renderToStaticMarkup(<RunSheetView run={r} now={NOW} ticketTitle="T" place={null} wide={false} onWide={vi.fn()} events={[]} disk={null} brief={null} confirmStop={false} outcome={null} tickets={[]} pickBlocker={false} drafting={false} answering={false} opened={false} on={actions()} />);
+    renderToStaticMarkup(<RunSheetView run={r} now={NOW} ticketTitle="T" place={null} wide={false} onWide={vi.fn()} events={[]} disk={null} confirmStop={false} outcome={null} tickets={[]} pickBlocker={false} drafting={false} answering={false} opened={false} on={actions()} />);
   const base = new MockBackend().runs.list();
 
   it("is enabled for a finished run and disabled, with the reason, while it is going", () => {

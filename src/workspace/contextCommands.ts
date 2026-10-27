@@ -54,6 +54,7 @@ const NEED_ENTRY: Record<NeedActionId, { label?: string; keywords: string; icon:
   retry: { label: "Retry", keywords: "retry again launch", icon: "↻" },
   resume: { label: "Resume", keywords: "resume continue carry on lift pause", icon: "▶" },
   answer: { label: "Answer", keywords: "answer reply respond question", icon: "↩" },
+  reply: { label: "Answer in Pip", keywords: "answer reply respond pip question conversation", icon: "↩" },
   open: { keywords: "open show look", icon: "→" },
 };
 
@@ -100,7 +101,7 @@ export function contextCommands(subject: Subject | null, data: ContextData, deps
     const on = p.intent.type === "githubReview" ? "review" : "draft";
     const approves = draftKeyAction(p, "a", true) === "approve";
     return [
-      ...(pending ? [approves ? entry(`draft:${p.id}:approve`, p.intent.type === "githubReview" ? "Post this review" : p.intent.type === "runAnswer" ? "Send this reply" : "Approve this draft", () => deps.approveDraft(p), { icon: "✓", keywords: NEED_ENTRY.approve.keywords }) : entry(`draft:${p.id}:approve`, "Review and approve this draft", () => deps.openDraft(p), { icon: "✓", keywords: NEED_ENTRY.approve.keywords })] : []),
+      ...(pending ? [approves ? entry(`draft:${p.id}:approve`, p.intent.type === "githubReview" ? "Post this review" : "Approve this draft", () => deps.approveDraft(p), { icon: "✓", keywords: NEED_ENTRY.approve.keywords }) : entry(`draft:${p.id}:approve`, "Review and approve this draft", () => deps.openDraft(p), { icon: "✓", keywords: NEED_ENTRY.approve.keywords })] : []),
       ...(pending && draftKeyAction(p, "e") ? [entry(`draft:${p.id}:edit`, `Edit this ${on}`, () => deps.openDraft(p), { icon: "✎", keywords: NEED_ENTRY.edit.keywords })] : []),
       ...(pending ? [entry(`draft:${p.id}:skip`, `Skip this ${on}`, () => deps.skipDraft(p), { icon: "✕", hint: "undo for 8 s", keywords: NEED_ENTRY.dismiss.keywords })] : []),
       entry(`draft:${p.id}:workstream`, "Open in workstream", () => deps.draftInWorkstream(p), { icon: "→", keywords: "open workstream show where it lives" }),

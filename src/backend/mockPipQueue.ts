@@ -284,7 +284,7 @@ export function mockQueueCancel(requestId: string) {
 /** The drafting a resumed turn does again, minus any draft its first run already made: those outlived the reload. */
 function drafterFor(requestId: string, drafter: Partial<PipDrafter> | null): Partial<PipDrafter> | null {
   if (!drafter?.pipDrafted?.(requestId)) return drafter;
-  const { pipDraft: _d, pipRewrite: _r, pipFollowUp: _f, pipRunDraft: _g, pipTicketlessRunDraft: _t, ...rest } = drafter;
+  const { pipDraft: _d, pipRewrite: _r, ...rest } = drafter;
   return rest;
 }
 

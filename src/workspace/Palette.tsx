@@ -7,15 +7,13 @@ import { openNeed } from "./needsActions";
 import { askPip } from "./askPip";
 import { useToasts } from "./toasts";
 import { useActivity } from "./activityStore";
-import { SUGGESTED_TICKETS, START_WORKSTREAM, buildCommands, agentCommands, askToPlanCommands, startWorkstreamCommands, noStartableTicket, workstreamCommands, keyCommand, newTicketIntent, projectChoices, pullCommand, rankCommands, searchOrder, ticketCommands, unwatchCommands, watchCommands, withAskPip, type Command, type CommandActions, type CommandContext } from "./commands";
+import { buildCommands, askToPlanCommands, workstreamCommands, keyCommand, newTicketIntent, projectChoices, pullCommand, rankCommands, searchOrder, ticketCommands, unwatchCommands, watchCommands, withAskPip, type Command, type CommandActions, type CommandContext } from "./commands";
 import { workContainers } from "./domains";
-import { ticketKeyOf } from "./watchLogic";
 import { projectOf, withProject } from "./filters";
 import { usePrefs } from "./prefs";
-import { useRunSetup } from "./runSetupStore";
 import { useRuns } from "./runsStore";
 import { activeTab, allSavedViews, useTabs } from "./tabsStore";
-import { openTicketByKey, useKeyConnectionId } from "./jump";
+import { openTicketByKey } from "./jump";
 import { focusPeekOf } from "./PeekSheet";
 import { useGithubUi } from "./githubUi";
 import { openPull } from "./openPull";
@@ -36,12 +34,6 @@ export const SEARCH_NAME = "Search commands and tickets";
 /** The input's accessible name: the question a mode asks ("Which ticket should the agent work on?"), since the placeholder alone is not reliably read; plain search keeps its name (G9). */
 export const inputName = (placeholder: string) => (placeholder === DEFAULT_PLACEHOLDER ? SEARCH_NAME : placeholder.replace(/…$/, ""));
 
-/** The footer line of "Start a workstream": what picking a ticket there does and does not do. */
-export const START_WORKSTREAM_NOTE = "Opens a workstream; starts no agent and posts nothing.";
-
-/** Above the list in "Start a workstream" until something is typed: the list is only some of the tickets, and typing narrows it to others. */
-export const START_WORKSTREAM_HINT = "Only some tickets are listed. Type a key or words to find others.";
-
 /**
  * Where the keyboard goes when the palette closes: back to what had it, else the main area. Left alone when it already
  * moved on to something on the page (a view the pick opened took it), which this would otherwise take back.
@@ -59,8 +51,6 @@ export function PaletteView({
   placeholder = DEFAULT_PLACEHOLDER,
   empty,
   hints = ["↑↓ move", "↵ select", "esc close"],
-  note,
-  lead,
   onQuery,
   onActive,
   onRun,
@@ -74,10 +64,6 @@ export function PaletteView({
   empty?: string;
   /** Key hints for the footer, each "key label". */
   hints?: string[];
-  /** A line under the list, above the key hints: what picking a result does. */
-  note?: string;
-  /** A line between the input and the list. */
-  lead?: string;
   onQuery(q: string): void;
   onActive(i: number): void;
   onRun(c: Command): void;
@@ -126,11 +112,6 @@ export function PaletteView({
           onChange={(ev) => onQuery(ev.target.value)}
           className="w-full border-b border-ws-sep bg-transparent px-4 py-3.5 text-[15px] outline-none placeholder:text-ws-ink3"
         />
-        {lead && (
-          <p data-palette-lead className="m-0 border-b border-ws-sep px-3.5 py-1.5 text-xs text-ws-ink3">
-            {lead}
-          </p>
-        )}
         <ul id="palette-list" role="listbox" aria-label="Results" className="m-0 max-h-[min(380px,50vh)] list-none overflow-auto p-1.5">
           {results.map((c, i) => (
             <Fragment key={c.id}>
@@ -159,12 +140,7 @@ export function PaletteView({
           ))}
           {!results.length && <li role="presentation" className="px-3 py-3 text-ws-ink3">{empty ?? `Nothing matches “${query}”.`}</li>}
         </ul>
-        {note && (
-          <p data-palette-note className="m-0 border-t border-ws-sep bg-ws-bar px-3.5 pt-2 text-xs text-ws-ink3">
-            {note}
-          </p>
-        )}
-        <div className={`flex gap-3.5 bg-ws-bar px-3.5 py-2 text-xs text-ws-ink3 ${note ? "" : "border-t border-ws-sep"}`}>
+        <div className="flex gap-3.5 border-t border-ws-sep bg-ws-bar px-3.5 py-2 text-xs text-ws-ink3">
           {hints.map((h) => {
             const [key, ...label] = h.split(" ");
             return (
@@ -224,10 +200,7 @@ export function appActions(): CommandActions {
     openPull: (ref) => void openPull(ref),
     newTab: () => void tabs.openTab(),
     newTicket: () => {},
-    chooseWorkstream: () => {},
     togglePip,
-    startAgent: () => useRuns.getState().setPicking(true),
-    startAgentOn: (item, kind) => void useRunSetup.getState().begin({ item: item.item, kind }),
     showNeedsYou: () => {
       // Agents with the Needs you filter on and the most urgent need open; with nothing waiting, just Agents.
       useRuns.setState({ sheet: null });
@@ -256,19 +229,13 @@ export function appActions(): CommandActions {
     openAgents: showAllRuns,
     openWorkstream: openOnAgents,
     askPipToPlan: (item) => void askPipToPlan(item),
-    // Starting one moves nothing on screen the palette owns, so say it in the live region; a failure is already toasted by start().
-    startWorkstreamOn: (item) =>
-      void useWorkstreams
-        .getState()
-        .start(item.item)
-        .then((view) => view && useToasts.getState().push(`Started a workstream on ${item.item.key}.`, "info")),
     openJiraSent: () => tabs.setRoute("sent"),
   };
 }
 
 /**
- * The palette's "Ask Pip to plan KEY": opens or finds the workstream on the ticket (as the person's own Start a
- * workstream does), shows it on Agents and asks Pip to plan it. Pip only drafts the plan run; nothing starts.
+ * The palette's "Ask Pip to plan KEY": opens or finds the workstream on the ticket (as the peek's Ask Pip does), shows it
+ * on Agents and asks Pip to plan it.
  */
 export async function askPipToPlan(item: WorkItem) {
   useTabs.getState().setRoute("agents");
@@ -284,8 +251,8 @@ function undoEntries(): Command[] {
   return last ? [{ id: "undo:last", group: "App", icon: "↶", label: `Undo: ${last.text}`, hint: "put it back", keywords: "undo put back restore take back", run: () => void undoLog.run(last.id) }] : [];
 }
 
-/** What the palette asks: anything, a new ticket's project, then its title, or (opened by 'Start a workstream…') the ticket to start a workstream on. */
-type Step = { type: "search" } | { type: "project" } | { type: "title"; container: WorkContainer } | { type: "workstream" };
+/** What the palette asks: anything, or a new ticket's project, then its title. */
+type Step = { type: "search" } | { type: "project" } | { type: "title"; container: WorkContainer };
 
 const currentProject = (): ContainerRef | null => {
   const f = activeTab(useTabs.getState()).filter;
@@ -341,13 +308,10 @@ export function Palette() {
   const selected = useTabs((s) => s.selected);
   const workstreams = useWorkstreams((s) => s.list);
   const tab = useTabs((s) => activeTab(s));
-  // Opened to do one thing, the search starts with its words; opened by Agents' 'Start a workstream…', it asks for the
-  // ticket alone, offering the person's own first.
-  const [seed] = useState(() => usePrefs.getState().paletteSeed);
-  const [query, setQuery] = useState(() => (seed === START_WORKSTREAM ? "" : seed));
+  // Opened to do one thing, the search starts with its words.
+  const [query, setQuery] = useState(() => usePrefs.getState().paletteSeed);
   const [active, setActive] = useState(0);
-  const [step, setStep] = useState<Step>(() => (seed === START_WORKSTREAM ? { type: "workstream" } : { type: "search" }));
-  const me = useWorkspace((s) => s.me);
+  const [step, setStep] = useState<Step>({ type: "search" });
   const unwatched = useUnwatchedMatches(query, step.type === "search");
 
   const [opener] = useState(() => document.activeElement as HTMLElement | null);
@@ -366,8 +330,7 @@ export function Palette() {
       const { container } = step;
       return title ? [{ id: "new:create", group: "Create" as const, icon: "＋", label: `Draft “${title}” in ${container.name}`, hint: "↵", run: () => void draftTicket(container, title) }] : [];
     }
-    const actions = { ...appActions(), newTicket: () => go({ type: "project" }), chooseWorkstream: () => go({ type: "workstream" }) };
-    if (step.type === "workstream") return startWorkstreamCommands(Object.values(items), START_WORKSTREAM + query, workstreams, actions, SUGGESTED_TICKETS, me);
+    const actions = { ...appActions(), newTicket: () => go({ type: "project" }) };
     const ticket = peekedTicket();
     const ctx: CommandContext = {
       project: projectOf(tab.filter) ?? null,
@@ -390,42 +353,23 @@ export function Palette() {
       ...keyCommand(query, all, actions.openTicket),
       ...pullCommand(query, actions.openPull),
       ...askToPlanCommands(all, query, actions),
-      ...agentCommands(all, query, actions.startAgentOn),
       ...workstreamCommands(workstreams, query, actions),
-      // The peeked ticket's own "Start a workstream" is in the commands already.
-      ...startWorkstreamCommands(all, query, workstreams, actions).filter((c) => !ticket || c.id !== `workstream:start:${itemKey(ticket.item)}`),
       ...order.commands,
       ...watchCommands(unwatched.map((e) => ({ ref: e.ref, key: e.key, name: e.name })), actions),
     ];
     return withAskPip(found, query, actions.askPip);
-  }, [containers, items, watch, proposals, github, unread, needingMe, savedViews, tab.filter, tab.view, query, step, unwatched, selected, workstreams, me, subject]);
+  }, [containers, items, watch, proposals, github, unread, needingMe, savedViews, tab.filter, tab.view, query, step, unwatched, selected, workstreams, subject]);
 
-  // A typed key that isn't among the watched tickets is looked up in the full cache (or read live), so a Done ticket there is said to be Done.
-  const typedKey = step.type === "workstream" ? ticketKeyOf(query) : null;
-  const unlisted = typedKey && !Object.values(items).some((i) => i.item.key.toUpperCase() === typedKey) ? typedKey : null;
-  const [looked, setLooked] = useState<{ key: string; item: WorkItem | null } | null>(null);
-  const connectionId = useKeyConnectionId();
-  useEffect(() => {
-    if (!unlisted || !connectionId) return;
-    let current = true;
-    const found = (item: WorkItem | null) => current && setLooked({ key: unlisted, item });
-    useWorkspace.getState().peekItem({ connectionId, externalId: unlisted, key: unlisted }).then(found, () => found(null));
-    return () => {
-      current = false;
-    };
-  }, [unlisted, connectionId]);
-  // A new ticket's project and title are steps back to the search; the workstream's ticket is all the palette was opened for.
+  // A new ticket's project and title are steps back to the search.
   const prompting = step.type === "project" || step.type === "title";
   return (
     <PaletteView
       query={query}
       results={results}
       active={Math.min(active, Math.max(0, results.length - 1))}
-      placeholder={step.type === "project" ? "Which project is the ticket for?" : step.type === "title" ? `Title of the new ${step.container.name} ticket` : step.type === "workstream" ? "Start a workstream: type a ticket key or words" : undefined}
-      empty={step.type === "title" ? "Type a title, then press Enter. Pip drafts it; you approve it." : step.type === "workstream" ? noStartableTicket(Object.values(items), query, workstreams, looked?.key === ticketKeyOf(query) ? looked.item : null) : undefined}
+      placeholder={step.type === "project" ? "Which project is the ticket for?" : step.type === "title" ? `Title of the new ${step.container.name} ticket` : undefined}
+      empty={step.type === "title" ? "Type a title, then press Enter. Pip drafts it; you approve it." : undefined}
       hints={prompting ? ["↑↓ move", "↵ select", "esc back"] : undefined}
-      note={step.type === "workstream" ? START_WORKSTREAM_NOTE : undefined}
-      lead={step.type === "workstream" && !query.trim() ? START_WORKSTREAM_HINT : undefined}
       onQuery={(q) => (setQuery(q), setActive(0))}
       onActive={setActive}
       onRun={(c) => (c.stay ? c.run() : (close(false), c.run()))}

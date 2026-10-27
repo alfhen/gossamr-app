@@ -126,10 +126,7 @@ describe("a finished plan run in the sample build", () => {
     const b = new MockBackend({ runs: { seed: "empty", epoch: NOW } });
     const item = itemRef("CA-402");
     const spec = { ...planRun(sample()).spec, name: "ca-402-plan-0001" };
-    const started = async (name: string) => {
-      const draft = await b.runs.draft({ ...spec, name, kind: "plan" }, item);
-      return b.runs.approve(draft.id, (await b.runs.review(draft.id)).digest);
-    };
+    const started = async (name: string) => b.runs.start({ ...spec, name, kind: "plan" }, item);
     const run = await started("ca-402-plan-0001");
     b.runs.startNow(run.id);
     b.runs.advance(run.id);

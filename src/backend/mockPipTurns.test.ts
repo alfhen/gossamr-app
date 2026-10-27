@@ -170,36 +170,36 @@ describe("mockUsage", () => {
 describe("mockAsk", () => {
   beforeEach(() => localStorage.removeItem(KEY));
 
-  it("drafts what is asked in a workstream's conversation into that workstream", async () => {
+  it("starts what is asked in a workstream's conversation in that workstream, and opens one for General", async () => {
     const { MockBackend } = await import("./mock");
     const { itemRef } = await import("./mockConnector");
     const backend = new MockBackend({ runs: { seed: "empty" } });
     const ws = await backend.workstreamsOpen(itemRef("CA-401"));
     const context: ScreenContext = { view: null, item: itemRef("CA-401"), filter: null, selection: [] };
     await mockAsk({ requestId: "w1", prompt: "investigate this", sessionId: null, context, conversation: `ws:${ws.id}`, meta: { imageCount: 0 } }, backend, 0);
-    const [draft] = backend.proposals.list({ workstream: ws.id });
-    expect(draft.origin).toEqual({ type: "chat", requestId: "w1", workstream: ws.id });
-    expect(draft.intent.type === "startRun" && draft.intent.spec.workstream).toBe(ws.id);
+    const [run] = backend.runs.list();
+    expect(run).toMatchObject({ createdBy: "pip", origin: { type: "chat", requestId: "w1", workstream: ws.id }, spec: { workstream: ws.id } });
+    expect(backend.workstreams.list()).toHaveLength(1);
+    // In General the ticket on screen gets a workstream of its own first (closed, so it is not the one above).
+    await backend.workstreamsClose(ws.id);
     await mockAsk({ requestId: "g1", prompt: "investigate this", sessionId: null, context, conversation: "general", meta: { imageCount: 0 } }, backend, 0);
-    const general = backend.proposals.list().find((p) => p.origin.type === "chat" && p.origin.requestId === "g1");
-    expect(general?.origin).toEqual({ type: "chat", requestId: "g1" });
+    const general = backend.runs.list().find((r) => r.origin?.type === "chat" && r.origin.requestId === "g1");
+    expect(general?.spec.workstream).toBeTruthy();
+    expect(general?.spec.workstream).not.toBe(ws.id);
   });
 
-  it("drafts a plan run for 'plan CA-401' in that ticket's workstream, and nothing starts", async () => {
+  it("starts a plan for 'plan CA-401' in that ticket's workstream", async () => {
     const { MockBackend } = await import("./mock");
     const { itemRef } = await import("./mockConnector");
     const backend = new MockBackend({ runs: { seed: "empty" } });
     const ws = await backend.workstreamsOpen(itemRef("CA-401"));
     const context: ScreenContext = { view: null, item: null, filter: null, selection: [] };
     await mockAsk({ requestId: "p1", prompt: "plan CA-401", sessionId: null, context, conversation: `ws:${ws.id}`, meta: { imageCount: 0 } }, backend, 0);
-    const [draft] = backend.proposals.list({ workstream: ws.id });
-    expect(draft.state.type).toBe("pending");
-    expect(draft.intent.type === "startRun" && draft.intent.spec.kind).toBe("plan");
-    expect(draft.intent.type === "startRun" && draft.intent.item?.key).toBe("CA-401");
-    expect(backend.runs.list()).toHaveLength(0);
+    const [run] = backend.runs.list();
+    expect(run).toMatchObject({ state: "queued", item: { key: "CA-401" }, spec: { kind: "plan", workstream: ws.id } });
     // Another ticket's key isn't this workstream's next step.
     await mockAsk({ requestId: "p2", prompt: "plan CA-402", sessionId: null, context, conversation: `ws:${ws.id}`, meta: { imageCount: 0 } }, backend, 0);
-    expect(backend.proposals.list({ workstream: ws.id }).filter((p) => p.origin.type === "chat" && p.origin.requestId === "p2" && p.intent.type === "startRun")).toHaveLength(0);
+    expect(backend.runs.list().filter((r) => r.origin?.type === "chat" && r.origin.requestId === "p2")).toHaveLength(0);
   });
 
   it("answers 'Approve the plan' with where to approve it, and drafts nothing", async () => {
@@ -220,22 +220,16 @@ describe("mockAsk", () => {
     expect(backend.proposals.list()).toHaveLength(drafts);
   });
 
-  it("answers 'What is waiting to start?' with where the run draft is read and started, and on Agents speaks of the agents, not a board", async () => {
+  it("speaks of the agents, not a board, on Agents, and says where a filter landed", async () => {
     const { MockBackend } = await import("./mock");
-    const { itemRef } = await import("./mockConnector");
     const backend = new MockBackend({ runs: { seed: "empty" } });
-    const ws = await backend.workstreamsOpen(itemRef("CA-401"));
     const answer = async (requestId: string, prompt: string, conversation: string, context: ScreenContext) => {
       await mockAsk({ requestId, prompt, sessionId: null, context, conversation, meta: { imageCount: 0 } }, backend, 0);
       return openMockPipTurns().turns(conversation).find((t) => t.requestId === requestId)?.text ?? "";
     };
     const home: ScreenContext = { view: "Agents · All · 0 runs", item: null, filter: null, selection: [] };
-    const waiting = await answer("wait-1", "What is waiting to start?", `ws:${ws.id}`, home);
-    expect(waiting).toContain("Review and start");
-    expect(waiting).toContain("can't start it myself");
-    expect(backend.runs.list()).toHaveLength(0);
     const general = await answer("home-1", "Catch me up", "general", home);
-    expect(general).toMatch(/^You have no agent runs\./);
+    expect(general).toMatch(/^You have no agent runs\. Ask me to start one\./);
     expect(general).not.toMatch(/stale|blocked/);
     // A filter asked for there lands on the workspace tab, and says so.
     const filtered = await answer("home-2", "Show stale tickets", "general", home);

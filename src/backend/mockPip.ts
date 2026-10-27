@@ -1,6 +1,5 @@
 import { and } from "../lib/filter";
 import { REVIEW_IS_THE_USERS, WORKSTREAM_PENDING_CAP, capRefusal, isRunDraft, leftByRun, targetOf } from "../lib/proposals";
-import { followUpBlocker } from "../workspace/followUp";
 import { docFromText, docText } from "../lib/docs";
 import type { Intent, ItemRef, Proposal, ReviewComment, Run, RunKind, ScreenContext, WorkFilter } from "../types";
 import { APPROVE_PLAN, liveCounts, liveWords, needsPerson, planOpenQuestions, resultHeadline, runTitle, stateView } from "../workspace/agentsLogic";
@@ -20,18 +19,22 @@ export interface PipScript {
   text: string;
   filter: { filter: WorkFilter; note: string } | null;
   draft: { intent: Intent; label: string | null } | null;
-  /** An agent run to propose on a ticket: its kind, the run it follows (a build or review needs one) and an optional focus note. */
-  runDraft?: { item: ItemRef; kind: RunKind; fromRun: string | null; focus: string | null } | null;
-  /** An investigation with no ticket to propose: a watched repository, when the request named one, and the question. */
-  ticketlessRun?: { repo: string | null; prompt: string } | null;
+  /**
+   * An agent to start, as `start_agent` does: its role, the run it follows (a build or review needs one), a focus note or, with
+   * no ticket, the question and the repository. `open` is a workstream to open first, as `open_workstream` does, when the
+   * request came in General.
+   */
+  start?: { item: ItemRef | null; role: RunKind; fromRun: string | null; brief: string | null; repo: string | null; open?: { item: ItemRef | null; title: string } } | null;
+  /** A message for an agent, as `message_agent` sends it. */
+  message?: { runId: string; text: string } | null;
+  /** An agent to stop, as `stop_agent` does. */
+  stop?: { runId: string } | null;
+  /** A question for the person, as `ask_person` asks it. */
+  ask?: string | null;
   /** A change to the text of a comment, new-ticket or breakdown draft that came from a run; for a review draft its summary (`body`) and its complete new list of comments. */
   revise?: { id: string; body?: string; title?: string; description?: string; summaries?: string[]; comments?: ReviewComment[] } | null;
   /** A new description or title to draft for a ticket, shown to the person as a diff. */
   rewrite?: { item: ItemRef; part: "title" | "description" } | null;
-  /** A follow-up to propose for a finished run, the way propose_follow_up does. */
-  followUp?: { runId: string; message: string; reason: string } | null;
-  /** Answers to suggest to runs that are asking a question, the way propose_answer does: one per run. */
-  answers?: { runId: string; message: string }[];
   /** The draft this turn was about, remembered for the rest of the conversation. */
   discussed?: string;
 }
@@ -167,8 +170,6 @@ export function openQuestions(markdown: string): string | null {
   return text || null;
 }
 
-const asksToSendBack = /another pass|second pass|\bsend (?:it|them|that|the agent|the run) back\b/i;
-
 /** The next step a person asks for in a workstream's conversation, and the kind of finished run it follows. */
 const CHAIN_ASKS: { pattern: RegExp; kind: RunKind; from: RunKind }[] = [
   { pattern: /\btriage (?:it|this)\b|^\s*triage [a-z][a-z0-9]+-\d+\b/, kind: "triage", from: "investigate" },
@@ -206,9 +207,9 @@ const otherKey = (q: string, item: ItemRef | null) => {
 };
 
 /**
- * What Pip does when asked for the next step in a workstream: it drafts that kind and names as the run it follows the
+ * What Pip does when asked for the next step in a workstream: it starts that kind and names as the run it follows the
  * workstream's newest finished run of the kind that comes before, else its newest of that kind at all, so the backend says
- * why it can't follow it yet; with none, no run, and the backend refuses. Whatever the draft carries from that run is
+ * why it can't follow it yet; with none, no run, and the backend refuses. Whatever the agent carries from that run is
  * Gossamr's to fill in.
  */
 function chainStep(prompt: string, context: ScreenContext, runs: readonly Run[], workstream: PipWorkstream): PipScript | null {
@@ -216,7 +217,7 @@ function chainStep(prompt: string, context: ScreenContext, runs: readonly Run[],
   const ask = CHAIN_ASKS.find((a) => a.pattern.test(q));
   if (!ask || otherKey(q, workstream.item)) return null;
   const item = workstream.item ?? context.item;
-  if (!item) return { steps: [], text: "This workstream has no ticket, so there is nothing to run that on. Investigate a question instead.", filter: null, draft: null };
+  if (!item) return { steps: [], text: "This workstream has no ticket, so there is nothing to run that on. Ask me to investigate a question instead.", filter: null, draft: null };
   const newest = (done: boolean) =>
     runs
       .filter((r) => r.spec.workstream === workstream.id && r.spec.kind === ask.from && (!done || r.state === "done"))
@@ -226,12 +227,37 @@ function chainStep(prompt: string, context: ScreenContext, runs: readonly Run[],
   const following = source ? ` following ${runPhrase(source)}` : "";
   const carried = ask.kind === "build" ? " Gossamr filled in the plan from that run; I didn't write it." : ask.kind === "review" ? " Gossamr filled in the builder's account and pinned the pull request; I didn't write them." : "";
   return {
-    steps: [`Looked up ${item.key}`, "Read the workstream's runs", "Drafted an agent run"],
-    text: `I drafted ${CHAIN_WORDS[ask.kind]} of **${item.key}**${following}.${carried} It has not started. Open the draft to read the exact prompt, then start it.`,
+    steps: [`Looked up ${item.key}`, "Read the workstream's agents", "Started an agent"],
+    text: `I started ${CHAIN_WORDS[ask.kind]} of **${item.key}**${following}.${carried}`,
     filter: null,
     draft: null,
-    runDraft: { item, kind: ask.kind, fromRun, focus: null },
+    start: { item, role: ask.kind, fromRun, brief: null, repo: null },
   };
+}
+
+const asksMeFirst = /^\s*ask me\b[\s,:]*(.*?)\s*[.?!]?\s*$/i;
+const asksToMessage = /^\s*(?:tell|message|send|ping)\s+(r\d+|the agent|it)\s*(?:to|that|:|,)?\s+(.+?)\s*$/i;
+const asksToStop = /^\s*(?:please\s+)?stop\s+(r\d+|the agent|it)\s*[.!]?\s*$/i;
+
+/** "Ask me which clone to use", "tell R1 to skip the tests" and "stop R1": Pip asks the person, or messages or stops an agent of this workstream. */
+function directAgent(prompt: string, runs: readonly Run[], workstream: PipWorkstream): PipScript | null {
+  const say = (text: string, steps: string[] = [], extra: Partial<PipScript> = {}): PipScript => ({ steps, text, filter: null, draft: null, ...extra });
+  const asked = asksMeFirst.exec(prompt);
+  if (asked) {
+    const question = asked[1] ? `${asked[1].charAt(0).toUpperCase()}${asked[1].slice(1)}?` : "What should I do next?";
+    return say(`I asked you: ${question} It is under Needs you until you answer here or dismiss it.`, ["Asked you"], { ask: question });
+  }
+  const message = asksToMessage.exec(prompt);
+  const stop = asksToStop.exec(prompt);
+  const who = message?.[1] ?? stop?.[1];
+  if (!who) return null;
+  const own = runs.filter((r) => r.spec.workstream === workstream.id);
+  const labels = labelsByRun(runs);
+  const run = /^r\d+$/i.test(who) ? own.find((r) => labels.get(r.id) === who.toUpperCase()) : own.filter((r) => !["failed", "stopped"].includes(r.state))[0];
+  if (!run) return say(`There is no ${/^r\d+$/i.test(who) ? who.toUpperCase() : "agent"} in this workstream to ${stop ? "stop" : "message"}.`);
+  const name = labels.get(run.id) ?? "the agent";
+  if (stop) return say(`I stopped ${name}.`, ["Stopped an agent"], { stop: { runId: run.id } });
+  return say(`I sent ${name} your message.`, ["Messaged an agent"], { message: { runId: run.id, text: message![2] } });
 }
 
 const asksToMove = /^\s*(?:please\s+)?move\s+(?:it|this|([A-Z][A-Z0-9]*-\d+))\s+to\s+(.+?)\s*[.!]?\s*$/i;
@@ -258,8 +284,6 @@ const onAgents = (view: string | null | undefined) => view === "Agents" || !!vie
 const asksToApprovePlan = /^\s*approve the plan\b/i;
 const asksWhileAway = /\bwhile i was away\b/i;
 const asksWhatRunDoes = /^\s*what is (r\d+) doing\b/i;
-const asksWhatWaitsToStart = /^\s*what is waiting to start\b/i;
-
 /**
  * What Pip says to the workstream questions its chips ask: where the plan is approved (Pip approves nothing), what its
  * agents did, and what one of them is doing. Null for anything else.
@@ -271,8 +295,6 @@ function workstreamAnswer(prompt: string, runs: readonly Run[], workstream: PipW
   if (asksToApprovePlan.test(prompt))
     return say(`I can't approve anything myself. The plan's update to the description of **${key}** waits in the Plan step on the right, and in ${key}'s peek: read the change there and press Update description. The build starts only after that.`, ["Read the workstream's drafts"]);
   if (asksWhileAway.test(prompt)) return say(agentSummary(own, now), ["Read the workstream's runs"]);
-  if (asksWhatWaitsToStart.test(prompt))
-    return say(`A run I drafted for **${key}** waits in this conversation and under its step on the right. Press Review and start on it to read the exact prompt, then Start agent. Nothing runs before that, and I can't start it myself.`, ["Read the workstream's drafts"]);
   const named = asksWhatRunDoes.exec(prompt)?.[1]?.toUpperCase();
   if (named) {
     const run = own.find((r) => labelsByRun(runs).get(r.id) === named);
@@ -287,20 +309,13 @@ const EVENT_LINE = /^\[Event\] (?:run (\S+)|a run) \((\w+)\) ([^;]+)(.*)$/;
 
 const KIND_WORD: Record<RunKind, string> = { investigate: "Investigate", triage: "Triage", plan: "Plan", build: "Build", review: "Review", verify: "Verify" };
 
-/** The reply Pip suggests to a run's question: the run's own suggestion when it made one, else a careful default grounded in its ticket. */
-export function suggestedAnswer(run: Run): string {
-  if (run.suggestedReply?.trim()) return run.suggestedReply.trim();
-  const ticket = run.item ? `what ${run.item.key} asks for` : "what you were asked";
-  return `Do what changes the least and still meets ${ticket}. If you're unsure, say why in your result instead of guessing.`;
-}
-
 /**
  * What Pip says when the supervisor wakes it: one short line for each event, at most three, from the event lines
- * alone. Nothing Pip says starts anything. A run asking a question gets a suggested reply drafted for the person to
- * check; Pip never sends it.
+ * alone. Nothing Pip says starts anything. An agent asking a question is put to the person with `ask_person`; Pip never
+ * answers for them.
  */
 function wakeScript(prompt: string, runs: readonly Run[], workstream: PipWorkstream | null = null): PipScript {
-  const answers: { runId: string; message: string }[] = [];
+  let ask: string | null = null;
   const labels = labelsByRun(runs);
   // A run by its workstream label (R1), else by ticket and step; never by its id.
   const name = (id: string | undefined) => (id ? (labels.get(id) ?? capital(runPhrase(runs.find((r) => r.id === id)))) : "A run");
@@ -327,36 +342,15 @@ function wakeScript(prompt: string, runs: readonly Run[], workstream: PipWorkstr
       }
       const asking = state.trim() === "Needs an answer" ? runs.find((r) => r.id === id && r.state === "needsAnswer") : undefined;
       if (asking) {
-        if (!answers.some((a) => a.runId === asking.id)) answers.push({ runId: asking.id, message: suggestedAnswer(asking) });
-        return `${name(id)} asks${asking.needs ? `: “${asking.needs.trim()}”` : " a question."} I drafted a reply for you to check.`;
+        ask ??= `${name(id)} asks${asking.needs ? `: “${asking.needs.trim()}”` : " a question."} What should I tell it?`;
+        return `${name(id)} asks${asking.needs ? `: “${asking.needs.trim()}”` : " a question."} I asked you what to tell it.`;
       }
       if (/^Needs|^Blocked/.test(state.trim())) return `${who} ${state.trim().toLowerCase()}. Open it to see what it asks.`;
       return `${who} ${state.trim().toLowerCase()}. Nothing starts after it; tell me what you want to do.`;
     });
   const drift = driftLine(workstream?.lastDrift);
   const said = lines.join("\n\n") || "Something changed in this workstream; nothing needs you yet.";
-  return { steps: answers.length ? ["Read the run", "Drafted an answer for a run"] : [], text: drift ? `${drift}\n\n${said}` : said, filter: null, draft: null, answers };
-}
-
-/** What Pip does when asked to send a finished run back: only a run that left open questions gets a follow-up, and only one at a time. */
-function sendBack(context: ScreenContext, runs: readonly Run[], drafts: readonly Proposal[], discussed: string | null): PipScript {
-  const none = (text: string): PipScript => ({ steps: [], text, filter: null, draft: null });
-  const from = drafts.find((d) => d.id === discussed)?.origin;
-  const run = (context.run ? runs.find((r) => r.id === context.run) : undefined) ?? (from?.type === "run" ? runs.find((r) => r.id === from.runId) : undefined) ?? runs.find((r) => r.state === "done" && !!r.item && r.item.externalId === context.item?.externalId);
-  if (!run) return none("Which run do you mean? Open the ticket it ran on, or use Discuss with Pip on one of its drafts, and ask again.");
-  const blocker = followUpBlocker(run);
-  if (blocker) return none(`I can't send ${runPhrase(run)} back: ${blocker}.`);
-  const waiting = drafts.find((d) => d.state.type === "pending" && d.intent.type === "followUp" && d.intent.runId === run.id);
-  if (waiting) return none(`A follow-up for ${runPhrase(run)} is already waiting for you. Read it, edit it if you like, and send it back.`);
-  const questions = openQuestions(run.result ?? "");
-  if (!questions) return { steps: ["Read the run", "Read the rest of its result"], text: `I read the whole result of ${runPhrase(run)}: it did its job and left nothing open, so I won't send it back.`, filter: null, draft: null };
-  return {
-    steps: ["Read the run", "Read the rest of its result", "Drafted a follow-up"],
-    text: `${capital(runPhrase(run))} left open questions, so I drafted a follow-up with the exact message. Nothing is sent: read it, change it if you like, and press Send back.`,
-    filter: null,
-    draft: null,
-    followUp: { runId: run.id, message: `Please settle the open questions you left in your plan, then update the plan to match.\n\nOpen questions:\n${questions}\n\nKeep everything else in the plan as it is.`, reason: "the plan left open questions" },
-  };
+  return { steps: ask ? ["Read the agent", "Asked you"] : [], text: drift ? `${drift}\n\n${said}` : said, filter: null, draft: null, ask };
 }
 
 /** The pending draft a question is about: the one discussed, else the only one on the open ticket. */
@@ -410,7 +404,7 @@ function revisedBody(text: string, shorter: boolean): string {
 
 /** What the agents are doing, one line each, from the runs the person has. */
 export function agentSummary(runs: readonly Run[], now: number): string {
-  if (!runs.length) return "You have no agent runs. Open a ticket and choose Agent to start one.";
+  if (!runs.length) return "You have no agent runs. Ask me to start one.";
   const waiting = runs.filter(needsPerson);
   const going = runs.filter((r) => r.state === "working" || r.state === "launching" || r.state === "queued");
   const done = runs.filter((r) => r.state === "done");
@@ -465,13 +459,14 @@ function nudgeText(drafts: readonly Proposal[], item: ItemRef): string {
 export function scriptPip(prompt: string, context: ScreenContext, images: ImageData[] = [], runs: readonly Run[] = [], now = Date.now(), drafts: readonly Proposal[] = [], discussed: string | null = null, workstream: PipWorkstream | null = null): PipScript {
   if (prompt.startsWith(EVENT)) return wakeScript(prompt, runs, workstream);
   const q = prompt.toLowerCase();
-  if (asksToSendBack.test(prompt)) return sendBack(context, runs, drafts, discussed);
   const move = moveScript(prompt, context, workstream);
   if (move) return move;
   const answer = workstream ? workstreamAnswer(prompt, runs, workstream, now) : null;
   if (answer) return answer;
   const step = workstream ? chainStep(prompt, context, runs, workstream) : null;
   if (step) return step;
+  const direct = workstream ? directAgent(prompt, runs, workstream) : null;
+  if (direct) return direct;
   const review = reviewScript(prompt, drafts, discussed);
   if (review) return review;
   const finishing = finishes.exec(prompt);
@@ -634,31 +629,34 @@ export function scriptPip(prompt: string, context: ScreenContext, images: ImageD
   }
   if (asksForAgent.test(q)) {
     const key = KEY.exec(prompt)?.[1];
-    const item: ItemRef | null = key
+    const named: ItemRef | null = key
       ? context.item?.key === key
         ? context.item
         : { connectionId: context.item?.connectionId ?? context.selection[0]?.connectionId ?? "mock", externalId: key, key }
-      : context.item;
+      : null;
+    const item = named ?? workstream?.item ?? (workstream ? null : context.item);
     if (item) {
       const focus = /(?:focus on|look at|check)\s+(.+)$/i.exec(prompt.trim())?.[1]?.trim().slice(0, 300) ?? null;
+      const open = !workstream || workstream.item?.key !== item.key ? { item, title: item.key } : undefined;
       return {
-        steps: [`Looked up ${item.key}`, "Drafted an agent run"],
-        text: `I drafted an investigation of **${item.key}**${focus ? ` with a focus note: “${focus}”` : ""}. It has not started. Open the draft to read the exact prompt, then start it.`,
+        steps: [`Looked up ${item.key}`, ...(open ? [`Opened a workstream on ${item.key}`] : []), "Started an agent"],
+        text: `I started an investigation of **${item.key}**${focus ? ` with a focus note: “${focus}”` : ""}.${open ? " I opened a workstream for it." : ""} It shows under Agents, and I'll tell you when it finishes.`,
         filter: null,
         draft: null,
-        runDraft: { item, kind: "investigate", fromRun: null, focus },
+        start: { item, role: "investigate", fromRun: null, brief: focus, repo: null, ...(open ? { open } : {}) },
       };
     }
     const ask = ticketlessQuestion(prompt);
-    if (ask) {
+    if (ask?.repo) {
       return {
-        steps: ["Drafted an agent run"],
-        text: `No ticket covers this, so I drafted an investigation in **${ask.repo ?? "your repository"}** with no ticket: “${ask.prompt}” It has not started. Open the draft to read and edit the exact prompt, then start it. When the agent finishes, you get a draft ticket from what it found, and you approve that too.`,
+        steps: ["Started an agent"],
+        text: `No ticket covers this, so I started an investigation in **${ask.repo}** with no ticket: “${ask.prompt}” When it finishes I'll draft a ticket from what it found, and you approve that.`,
         filter: null,
         draft: null,
-        ticketlessRun: ask,
+        start: { item: null, role: "investigate", fromRun: null, brief: ask.prompt, repo: ask.repo, ...(workstream ? {} : { open: { item: null, title: ask.prompt.slice(0, 80) } }) },
       };
     }
+    if (ask) return { steps: [], text: "Which repository should it look in? Name it, for example acme/storefront.", filter: null, draft: null };
   }
   const wanted = FILTERS.find((f) => f.pattern.test(q));
   if (wanted && (asksToShow.test(q) || !context.item)) {
@@ -761,18 +759,22 @@ export interface PipDrafter {
   pipRevise(id: string, change: string | { body?: string; title?: string; description?: string; summaries?: string[]; comments?: ReviewComment[] }, requestId?: string): Promise<unknown>;
   /** Drafts a title or description edit the way propose_description_edit does. */
   pipRewrite(item: ItemRef, part: "title" | "description", requestId: string): Promise<unknown>;
-  /** Drafts a follow-up for a finished run the way propose_follow_up does. */
-  pipFollowUp(runId: string, message: string, reason: string, requestId: string): Promise<unknown>;
-  /** Drafts an answer to a run that is asking a question the way propose_answer does. */
-  pipAnswer(runId: string, message: string, requestId: string): Promise<unknown>;
-  /** Drafts a run the way propose_run does: Pip names the ticket, the kind, the run it follows and a focus note, the backend builds the rest. */
-  pipRunDraft(item: ItemRef, kind: RunKind, fromRun: string | null, focus: string | null, requestId: string): Promise<unknown>;
   /** The ticket of workstream `id`, for a turn asked in its conversation. */
   pipWorkstreamItem(id: string): ItemRef | null;
   /** The last time workstream `id`'s ticket changed in Jira, while no wake told Pip of it since; a wake's script reads it. */
   pipWorkstreamDrift?(id: string): LastDrift | null;
-  /** Drafts an investigation with no ticket the way propose_run does: Pip gives a repository and a prompt, the backend builds the rest. */
-  pipTicketlessRunDraft(repo: string | null, prompt: string, requestId: string): Promise<unknown>;
+  /** Opens a workstream on `item` (none for a question with no ticket) the way `open_workstream` does, and returns its id. */
+  pipOpenWorkstream(item: ItemRef | null, title: string): string;
+  /** Starts an agent in workstream `workstream` the way `start_agent` does. */
+  pipStartAgent(workstream: string, role: RunKind, brief: string | null, repo: string | null, fromRun: string | null, requestId: string): unknown;
+  /** Messages an agent the way `message_agent` does. */
+  pipMessageAgent(runId: string, text: string): unknown;
+  /** Stops an agent the way `stop_agent` does. */
+  pipStopAgent(runId: string): unknown;
+  /** The person wrote in workstream `workstream`'s conversation, which answers the question Pip had open there. */
+  pipAskAnswered(workstream: string): unknown;
+  /** Asks the person a question in workstream `workstream` the way `ask_person` does. */
+  pipAskPerson(workstream: string, question: string): unknown;
   /** Whether a draft from the question `requestId` is kept already. */
   pipDrafted(requestId: string): boolean;
 }
@@ -830,6 +832,7 @@ export async function mockAsk(req: AskRequest, drafter: Partial<PipDrafter> | nu
   mockPipTurns.begin(req.conversation ?? GENERAL_CONVERSATION, req.requestId, req.prompt, req.meta ?? { imageCount: req.images?.length ?? 0 }, "running", new Date(), undefined, req.kind ?? "user");
   const item = wsId ? (drafter?.pipWorkstreamItem?.(wsId) ?? null) : null;
   const workstream = wsId ? { id: wsId, item, lastDrift: drafter?.pipWorkstreamDrift?.(wsId) ?? null } : null;
+  if (wsId && req.kind !== "wake") await drafter?.pipAskAnswered?.(wsId);
   const script = scriptPip(req.prompt, req.context, req.images, drafter?.pipRuns?.() ?? [], Date.now(), drafter?.pipDrafts?.() ?? [], discussing.get(session) ?? null, workstream);
   if (script.discussed) discussing.set(session, script.discussed);
   emit(req.requestId, { type: "started", sessionId: session });
@@ -866,18 +869,34 @@ export async function mockAsk(req: AskRequest, drafter: Partial<PipDrafter> | nu
       const refused = await drafter?.pipRewrite?.(script.rewrite.item, script.rewrite.part, req.requestId).then(() => null, refusal);
       if (refused) script.text = `I couldn't draft that: ${refused}`;
     }
-    if (!stopped && script.followUp) await drafter?.pipFollowUp?.(script.followUp.runId, script.followUp.message, script.followUp.reason, req.requestId);
-    for (const answer of script.answers ?? []) {
-      if (stopped) break;
-      const refused = await drafter?.pipAnswer?.(answer.runId, answer.message, req.requestId).then(() => null, refusal);
-      if (refused) script.text = `${script.text}\n\nI couldn't draft a reply for that run: ${refused}`;
+    // A refused call is Pip's to report, as the tool's refusal is in a real turn.
+    const tried = async (call: () => unknown) => {
+      try {
+        await call();
+        return null;
+      } catch (e) {
+        return e instanceof Error ? e.message : String(e);
+      }
+    };
+    if (!stopped && script.start && drafter?.pipStartAgent) {
+      const { role, fromRun, brief, repo, open } = script.start;
+      let workstream = wsId;
+      const refused = await tried(() => {
+        if (open) workstream = drafter.pipOpenWorkstream!(open.item, open.title);
+        if (!workstream) throw new Error("this conversation has no workstream");
+        return drafter.pipStartAgent!(workstream, role, brief, repo, fromRun, req.requestId);
+      });
+      if (refused) script.text = `I couldn't start it: ${refused}`;
     }
-    if (!stopped && script.runDraft) {
-      const { item, kind, fromRun, focus } = script.runDraft;
-      const refused = await drafter?.pipRunDraft?.(item, kind, fromRun, focus, req.requestId).then(() => null, refusal);
-      if (refused) script.text = `I couldn't draft that: ${refused}`;
+    if (!stopped && script.message) {
+      const refused = await tried(() => drafter?.pipMessageAgent?.(script.message!.runId, script.message!.text));
+      if (refused) script.text = `I couldn't message it: ${refused}`;
     }
-    if (!stopped && script.ticketlessRun) await drafter?.pipTicketlessRunDraft?.(script.ticketlessRun.repo, script.ticketlessRun.prompt, req.requestId);
+    if (!stopped && script.stop) {
+      const refused = await tried(() => drafter?.pipStopAgent?.(script.stop!.runId));
+      if (refused) script.text = `I couldn't stop it: ${refused}`;
+    }
+    if (!stopped && script.ask && wsId) await drafter?.pipAskPerson?.(wsId, script.ask);
     if (!stopped && script.filter) viewListeners.forEach((l) => l(req.requestId, script.filter!.filter, script.filter!.note));
     for (const word of script.text.match(/\S+\s*/g) ?? []) {
       if (stopped) break;

@@ -1,12 +1,12 @@
 import type { KeyboardEvent } from "react";
 import { archiveControl } from "../lib/archiveRuns";
-import { runRef } from "../lib/composerVerbs";
 import type { ReviewView, Run } from "../types";
 import { Icon, KIND_ICON } from "./AgentIcons";
 import { RunBody, StateChip, TONE, type FailureState } from "./AgentParts";
 import { ownKey } from "./agentKeys";
 import { KIND_LABEL, ageSince, ageText, branchOf, formatTokens, repoName, runTitle } from "./agentsLogic";
 import { useStateView } from "./useStateView";
+import { runRef } from "../lib/runNames";
 import { readOnlyHeadline, verdictChip, verdictText } from "./runSheetLogic";
 
 export const agentId = (id: string) => `agent-${id}`;
@@ -107,7 +107,7 @@ export function onActivate(open: () => void) {
 export function RunRef({ run, className = "" }: { run: Run; className?: string }) {
   const ref = runRef(run);
   return (
-    <span data-run-ref={ref} title={`This run's id. In Pip, /stop ${ref}, /retry ${ref} or /answer ${ref} act on it.`} className={`font-mono text-xs text-ws-ink3 ${className}`}>
+    <span data-run-ref={ref} title="This run's id" className={`font-mono text-xs text-ws-ink3 ${className}`}>
       {ref}
     </span>
   );
@@ -235,10 +235,10 @@ export function AgentCard({ run, now, selected, position, total, ticketTitle, la
             type="button"
             onClick={(ev) => (ev.stopPropagation(), onBuildFromPlan())}
             onKeyDown={ownKey}
-            title="Opens a Build draft that carries this plan, for you to read and edit. Nothing starts."
+            title="Asks Pip to start a build from this plan"
             className="rounded-md border border-ws-pip px-2 py-px text-sm text-ws-pip hover:bg-ws-pip-soft"
           >
-            Build from plan
+            Ask Pip to build
           </button>
         )}
         {onReviewThis && (
@@ -246,10 +246,10 @@ export function AgentCard({ run, now, selected, position, total, ticketTitle, la
             type="button"
             onClick={(ev) => (ev.stopPropagation(), onReviewThis())}
             onKeyDown={ownKey}
-            title="Opens a Review draft for this build's pull request, for you to read and edit. Nothing starts."
+            title="Asks Pip to review this build's pull request"
             className="rounded-md border border-ws-pip px-2 py-px text-sm text-ws-pip hover:bg-ws-pip-soft"
           >
-            Review this
+            Ask Pip to review
           </button>
         )}
         {descriptionReady && onOpenDescription && (

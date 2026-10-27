@@ -43,29 +43,6 @@ describe("palette focus (G8)", () => {
   });
 });
 
-describe("palette start a workstream (G10)", () => {
-  it("says it started one, and leaves a failure to the store's own toast", async () => {
-    const { appActions } = await import("./Palette");
-    const { useToasts } = await import("./toasts");
-    const { useWorkstreams } = await import("./workstreamsStore");
-    const item = { item: { key: "CA-401" } } as never;
-    const start = vi.spyOn(useWorkstreams.getState(), "start");
-    useToasts.setState({ toasts: [] });
-    start.mockResolvedValueOnce({} as never);
-    appActions().startWorkstreamOn(item);
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(useToasts.getState().toasts.map((t) => [t.text, t.tone])).toEqual([["Started a workstream on CA-401.", "info"]]);
-    useToasts.setState({ toasts: [] });
-    start.mockResolvedValueOnce(null);
-    appActions().startWorkstreamOn(item);
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(useToasts.getState().toasts).toEqual([]);
-    start.mockRestore();
-  });
-});
-
 describe("the input's name (G9)", () => {
   const named = (placeholder?: string) => renderToStaticMarkup(<PaletteView query="" results={[]} active={0} placeholder={placeholder} onQuery={vi.fn()} onActive={vi.fn()} onRun={vi.fn()} onClose={vi.fn()} />).match(/<input[^>]*aria-label="([^"]*)"/)?.[1];
 

@@ -326,7 +326,7 @@ function Breakdown({ run, outcome, drafting, waitingBreakdown = false, on }: Pic
   );
 }
 
-/** What to do with a finished build: have its pull request reviewed against the ticket. It opens a draft and starts nothing. */
+/** What to do with a finished build: ask Pip to have its pull request reviewed against the ticket. */
 function ReviewBox({ run, outcome, drafting, on }: Pick<ResultProps, "run" | "outcome" | "drafting" | "on">) {
   const control = outcome ? reviewThisControl(run, outcome.change) : { enabled: false, reason: "Looking for its pull request…" };
   const change = outcome?.change?.kind === "pullRequest" ? outcome.change : null;
@@ -337,8 +337,8 @@ function ReviewBox({ run, outcome, drafting, on }: Pick<ResultProps, "run" | "ou
         {change ? `Pull request #${change.number}${change.state === "draft" ? " (a draft)" : ""} is what a review would read, at the commit GitHub has now.` : "A review reads the build's pull request at the commit GitHub has now."} The reviewer tries to show the change is not ready: a failing case, an acceptance point of the ticket it misses, a missing test, a regression or a security issue. It may check the pull request out in its own worktree and run the existing tests, treats what the builder says it did as a claim to verify, cites a file and line, a command or an acceptance point for every finding, and ends with a verdict: pass or blocking. It only reads, and never comments on, approves or changes the pull request.
       </p>
       <div className="flex flex-wrap items-center gap-2">
-        <Btn tone="primary" icon="eye" disabled={!control.enabled || drafting} title={control.reason ?? "Opens a Review draft that carries the builder's answer as a claim to check, for you to read and edit before it starts"} onClick={on.reviewThis}>
-          Review this
+        <Btn tone="primary" icon="eye" disabled={!control.enabled || drafting} title={control.reason ?? "Asks Pip to start a review of this pull request"} onClick={on.reviewThis}>
+          Ask Pip to review
         </Btn>
       </div>
       {control.reason && (
@@ -428,8 +428,8 @@ function PlanBox({ run, outcome, drafting, on }: Pick<ResultProps, "run" | "outc
         </p>
       )}
       <div className="flex flex-wrap items-center gap-2">
-        <Btn tone="primary" icon="code" disabled={!build.enabled || drafting} title={build.reason ?? "Opens a Build draft that carries this plan, for you to read and edit before it starts"} onClick={on.buildFromPlan}>
-          Build from this plan
+        <Btn tone="primary" icon="code" disabled={!build.enabled || drafting} title={build.reason ?? "Asks Pip to start a build from this plan"} onClick={on.buildFromPlan}>
+          Ask Pip to build
         </Btn>
         {waiting ? (
           <Btn icon="ext" onClick={on.openPlanDraft}>

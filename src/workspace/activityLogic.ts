@@ -393,6 +393,20 @@ export function eventText(e: WorkstreamEvent, label: (id: string | null) => stri
       return `${who} resumed the workstream`;
     case "run_approved":
       return `${who} started ${label(e.runId)}`;
+    case "agent_started": {
+      const role = e.detail?.split(" · ")[0]?.trim();
+      return `${who} started an agent, ${label(e.runId)}${role ? ` (${role})` : ""}`;
+    }
+    case "agent_message_queued":
+      return `${who} queued a message for ${label(e.runId)}`;
+    case "agent_message_dropped":
+      return `${who}'s queued message for ${label(e.runId)} was dropped`;
+    case "run_resumed":
+      return `${who} sent ${label(e.runId)} a message to carry on`;
+    case "pip_asked":
+      return "Pip asked you a question";
+    case "pip_ask_cleared":
+      return e.detail === "answered" ? "You answered Pip's question" : "You dismissed Pip's question";
     case "run_stopped":
       return `${who} stopped ${label(e.runId)}`;
     case "run_answered":

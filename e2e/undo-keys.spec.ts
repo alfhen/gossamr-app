@@ -231,7 +231,6 @@ test("the Activity Drafts list and the ticket's peek take the same keys on their
 });
 
 // A permission a Build asks for can be allowed once in Terminal as well as denied; a read-only run's can only be denied.
-const setup = (page: Page) => page.getByRole("dialog", { name: "Start an agent" });
 
 async function newest(page: Page, kind: string) {
   return (await mockRuns(page)).find((r) => r.kind === kind) ?? null;
@@ -246,10 +245,6 @@ async function workingBuild(page: Page) {
   const startStep = async (what: string) => {
     await askPip(page, what);
     await expect(pipPane(page).getByRole("button", { name: "Stop" })).toHaveCount(0);
-    await pipPane(page).getByRole("article", { name: "Start an agent: CA-401" }).last().getByRole("button", { name: "Review and start →" }).click();
-    await expect(setup(page)).toBeVisible();
-    await setup(page).getByRole("button", { name: "Start agent" }).click();
-    await expect(setup(page)).toHaveCount(0);
   };
   for (const [what, kind] of [["investigate this", "investigate"], ["triage this", "triage"], ["plan this", "plan"]] as const) {
     await startStep(what);

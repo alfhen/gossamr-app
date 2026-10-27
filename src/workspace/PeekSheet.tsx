@@ -18,7 +18,8 @@ import { PEEK_DEFAULT } from "./paneSizes";
 import { usePrefs } from "./prefs";
 import { CommentCard, HistoryRow, SectionCard, SectionNav, showComment } from "./PeekParts";
 import { displayName, historyNotes, isCollapsed, linkRows, parentCrumb, replyDraft, sectionChips, shownComments, subtasksOf, type Collapsed, type Crumb, type LinkRow, type Note, type PeekSectionId, type ReplyDraft, type Subtasks } from "./peekLogic";
-import { AgentMenu, TicketAgents, runsOfTicket } from "./AgentMenu";
+import { Icon } from "./AgentIcons";
+import { TicketAgents, runsOfTicket } from "./TicketAgents";
 import { CLOSE_RUNS_NOTE } from "./WorkstreamControls";
 import { Development } from "./DevelopmentSection";
 import { useRuns } from "./runsStore";
@@ -442,9 +443,7 @@ function Composer({ item, disabled, reply, onCancelReply }: { item: WorkItem; di
 }
 
 interface WorkstreamControlProps {
-  item: ItemRef;
   workstream: WorkstreamView | null;
-  onStart(): void;
   onOpen(): void;
   /** Whether Close is waiting for the person to confirm it. */
   confirmingClose?: boolean;
@@ -454,23 +453,10 @@ interface WorkstreamControlProps {
 }
 
 /**
- * Beside the Agent menu: a way to start a workstream on the ticket, or, once it has one, its stage, a way to its
- * conversation, and Close behind a confirm.
+ * Beside Ask Pip: once the ticket has a workstream, its stage, a way to its conversation, and Close behind a confirm.
  */
-export function WorkstreamControl({ item, workstream, onStart, onOpen, confirmingClose = false, onAskClose, onClose }: WorkstreamControlProps) {
-  if (!workstream) {
-    return (
-      <button
-        type="button"
-        onClick={onStart}
-        title={`Give ${item.key} its own conversation with Pip, where its agents and drafts are grouped`}
-        className="inline-flex items-center gap-1.5 rounded-md border border-ws-sep2 px-2.5 py-0.5 text-sm font-semibold text-ws-ink2 hover:border-ws-pip hover:text-ws-pip"
-      >
-        <span aria-hidden>◇</span>
-        Start a workstream
-      </button>
-    );
-  }
+export function WorkstreamControl({ workstream, onOpen, confirmingClose = false, onAskClose, onClose }: WorkstreamControlProps) {
+  if (!workstream) return null;
   return (
     <span data-workstream={workstream.workstream.id} className="inline-flex items-center gap-2 rounded-md bg-ws-pip-soft px-2.5 py-0.5 text-sm text-ws-pip">
       <span title={workstream.workstream.title}>
@@ -499,7 +485,7 @@ export function WorkstreamControl({ item, workstream, onStart, onOpen, confirmin
             </button>
           </span>
         ) : (
-          <button type="button" onClick={() => onAskClose(true)} title={`Close ${item.key}'s workstream; its conversation goes back to General, and its agents and drafts are kept in General`} className="text-ws-ink2 underline">
+          <button type="button" onClick={() => onAskClose(true)} title={`Close ${workstream.workstream.itemKey ?? "this"} workstream; its conversation goes back to General, and its agents and drafts are kept in General`} className="text-ws-ink2 underline">
             Close…
           </button>
         ))}
@@ -768,11 +754,18 @@ function OpenPeek({ item, motion, wide, onWide, onMotionEnd }: { item: WorkItem 
       agentMenu={
         !readOnly ? (
           <div className="flex flex-wrap items-center gap-2">
-            <AgentMenu item={ref} />
+            <button
+              type="button"
+              data-ask-pip
+              onClick={() => (workstream ? focusPip(workstream.workstream.id) : void startFromPeek(ref))}
+              title={`Ask Pip about ${ref.key}: it can start agents, and they stay with the ticket`}
+              className="inline-flex items-center gap-1.5 rounded-md border border-ws-pip px-2.5 py-0.5 text-sm font-semibold text-ws-pip hover:bg-ws-pip-soft"
+            >
+              <Icon name="spark" />
+              Ask Pip
+            </button>
             <WorkstreamControl
-              item={ref}
               workstream={workstream}
-              onStart={() => void startFromPeek(ref)}
               onOpen={() => focusPip(workstream?.workstream.id)}
               confirmingClose={!!workstream && confirmingClose === workstream.workstream.id}
               onAskClose={(ask) => useWorkstreams.getState().askClose(ask && workstream ? workstream.workstream.id : null)}

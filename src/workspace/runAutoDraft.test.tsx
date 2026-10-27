@@ -9,7 +9,7 @@ import { SCRIPTED_RESULT } from "../backend/mockRuns";
 import { docFromText, docText } from "../lib/docs";
 import { withRunNamed } from "../lib/runNames";
 import type { Backend } from "../backend/types";
-import type { Intent, Proposal, Run, RunKind, RunOutcome, RunSpec, ScreenContext } from "../types";
+import type { Proposal, Run, RunKind, RunOutcome, RunSpec, ScreenContext } from "../types";
 import { toRunEntries } from "./activityLogic";
 import { AgentCard } from "./AgentCard";
 import { AgentsSettingsView } from "./AgentsSettings";
@@ -22,8 +22,8 @@ const blank: ScreenContext = { view: null, item: null, filter: null, selection: 
 
 const spec = (kind: RunKind = "investigate", over: Partial<RunSpec> = {}): RunSpec => ({
   kind,
-  repo: "acme/web",
-  clonePath: "/Users/sample/Code/web",
+  repo: "acme/storefront",
+  clonePath: "/Users/sample/Code/storefront",
   base: "main",
   name: `ca-412-${kind}-ab12`,
   instruction: "Do it.",
@@ -34,9 +34,7 @@ const spec = (kind: RunKind = "investigate", over: Partial<RunSpec> = {}): RunSp
 });
 
 async function finished(backend: MockBackend, kind: RunKind = "investigate", item: ReturnType<typeof itemRef> | null = itemRef("CA-412")): Promise<Run> {
-  const intent: Intent = { type: "startRun", connectionId: "mock", item, spec: spec(kind, kind === "review" ? { pr: 331, prSha: "a1b2c3d4e5f6" } : {}) };
-  const p = await backend.proposalsCreate(intent);
-  const queued = await backend.runsApprove(p.id, (await backend.runsReview(p.id)).digest);
+  const queued = backend.runs.start(spec(kind, kind === "review" ? { pr: 331, prSha: "a1b2c3d4e5f6" } : {}), item);
   for (let i = 0; i < 4; i++) backend.runs.advance(queued.id);
   return (await backend.runsGet(queued.id))!;
 }
@@ -65,13 +63,12 @@ describe("the sample backend drafts a comment when a run finishes", () => {
 
   it("leaves the comment in the run's workstream, as the agent's", async () => {
     const backend = new MockBackend({ runs: { seed: "empty" } });
-    const intent: Intent = { type: "startRun", connectionId: "mock", item: itemRef("CA-412"), spec: spec("investigate", { workstream: "ws-1", name: "ca-412-in-a-workstream" }) };
-    const p = await backend.proposalsCreate(intent);
-    const queued = await backend.runsApprove(p.id, (await backend.runsReview(p.id)).digest);
+    const ws = backend.workstreams.open(itemRef("CA-401")).id;
+    const queued = backend.runs.start(spec("investigate", { workstream: ws, name: "ca-401-in-a-workstream" }), itemRef("CA-401"));
     for (let i = 0; i < 4; i++) backend.runs.advance(queued.id);
     const run = (await backend.runsGet(queued.id))!;
     const [draft] = commentsOf(backend, run);
-    expect(draft).toMatchObject({ createdBy: "agent", origin: { type: "run", runId: run.id, workstream: "ws-1" } });
+    expect(draft).toMatchObject({ createdBy: "agent", origin: { type: "run", runId: run.id, workstream: run.spec.workstream } });
     expect((await backend.proposalsList({ workstream: "ws-1" })).map((d) => d.id)).toContain(draft.id);
     const [loose] = commentsOf(backend, await finished(backend, "investigate", itemRef("CA-413")));
     expect(loose.origin).toMatchObject({ type: "run", workstream: null });

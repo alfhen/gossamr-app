@@ -19,8 +19,8 @@ describe("what a workstream could take in from its ticket (G17)", () => {
     const board = draft("d5", "CA-401", { origin: { type: "board" } as Proposal["origin"] });
     expect(canJoinWorkstream(board)).toBe(false);
     const start = draft("d6", "CA-401", { origin: { type: "board" } as Proposal["origin"], intent: { type: "startRun", item: ref("CA-401"), spec: { kind: "plan" } } as unknown as Intent });
-    expect(canJoinWorkstream(start)).toBe(true);
-    expect(adoptableOf(ws, [], [board, start]).drafts).toEqual(["d6"]);
+    expect(canJoinWorkstream(start)).toBe(false);
+    expect(adoptableOf(ws, [], [board, start]).drafts).toEqual([]);
     expect(adoptableOf({ ...ws, itemKey: null }, [run("r1", "CA-401")], [])).toEqual({ runs: [], drafts: [] });
     expect(adoptableOf({ ...ws, closedAt: "2026-10-01T10:00:00Z" }, [run("r1", "CA-401")], [])).toEqual({ runs: [], drafts: [] });
   });
