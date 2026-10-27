@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react"
 import { itemKey } from "../lib/filter";
 import { leftOutLabel, repeatedComments, REPEATED_COMMENT_NOTE } from "../lib/needs";
 import { inWorkstreamPane } from "../lib/proposals";
+import { stageOf } from "../lib/roles";
 import type { CodeChange, Proposal, ReviewView, Run, WorkstreamEvent, WorkstreamView } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { RunLabel } from "./AgentCard";
@@ -336,7 +337,8 @@ export function StepRailView({ view, runs, events, verdicts, changes = NO_CHANGE
   const [open, setOpen] = useState<ReadonlySet<StepGroup>>(() => new Set(initialOpen));
   const chips = useMemo(() => stepChips([...runs], events, verdicts, proposals, { now, waitingForPr: view.waitingForPr, changes }), [runs, events, verdicts, proposals, now, view.waitingForPr, changes]);
   const next = nextStep(chips);
-  const revealIn = reveal ? (runs.find((r) => r.id === reveal)?.spec.kind ?? null) : null;
+  const revealed = reveal ? runs.find((r) => r.id === reveal) : undefined;
+  const revealIn = revealed ? stageOf(revealed.spec.role) : null;
   useEffect(() => {
     if (revealIn) setOpen((was) => (was.has(revealIn) ? was : new Set([...was, revealIn])));
   }, [reveal, revealIn]);

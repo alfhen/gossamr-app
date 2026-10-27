@@ -1,8 +1,9 @@
 /** How runs, drafts and spans of time read to the person: by what they are, never by an id or a raw count of hours. */
-import type { Proposal, Run, RunKind } from "../types";
+import type { Proposal, Run } from "../types";
+import { stepOf, type Step } from "./roles";
 
-/** A run's step as a noun, for "the CA-402 review". The same steps the Agents view labels Investigate, Plan, Review... */
-const KIND_NOUN: Record<RunKind, string> = { investigate: "investigation", triage: "triage", plan: "plan", build: "build", review: "review", verify: "verification" };
+/** A run's role as a noun, for "the CA-402 review". The same steps the Agents view labels Investigate, Plan, Review... */
+const STEP_NOUN: Record<Step, string> = { investigate: "investigation", triage: "triage", plan: "plan", build: "build", review: "review", verify: "verification" };
 
 type Named = Pick<Run, "spec" | "item">;
 
@@ -15,7 +16,8 @@ export const runRef = (run: Pick<Run, "id">) => (run.id.length <= 12 ? run.id : 
  */
 export function runPhrase(run: Named | null | undefined): string {
   if (!run) return "an agent run";
-  const noun = KIND_NOUN[run.spec.kind] ?? "run";
+  const step = stepOf(run.spec.role);
+  const noun = step ? STEP_NOUN[step] : run.spec.role || "run";
   if (run.item?.key) return `the ${run.item.key} ${noun}`;
   if (run.spec.repo) return `the ${noun} on ${run.spec.repo}`;
   return `the ${noun}`;

@@ -28,7 +28,6 @@ import type {
   ProposalQuery,
   ProposalsChanged,
   ReviewComment,
-  RunKind,
   RunQuery,
   RunsChanged,
   AgentSettings,
@@ -370,7 +369,7 @@ export class MockBackend implements Backend {
     );
     this.runs.workstreams = this.workstreams;
     // A draft made, approved or skipped in a workstream goes in its audit, by whoever did it.
-    this.proposals.runKind = (id) => this.runs.get(id)?.spec.kind ?? null;
+    this.proposals.runRole = (id) => this.runs.get(id)?.spec.role ?? null;
     this.proposals.audit = (p, actor, action, detail, workstream) => void this.workstreams.record(workstream ?? workstreamOf(p), actor, action, { proposalId: p.id, ...(detail ? { detail } : {}) });
     this.workstreams.pendingDrafts = () => this.proposals.list({ states: ["pending"] });
     this.workstreams.moveRun = (id, workstream) => this.runs.setWorkstream(id, workstream);
@@ -553,14 +552,6 @@ export class MockBackend implements Backend {
     return this.runs.answer(id, text);
   }
 
-  async runsDenyPermission(id: string, command: string) {
-    return this.runs.denyPermission(id, command);
-  }
-
-  async runsAllowPermissionOnce(id: string, command: string) {
-    return this.runs.allowPermissionOnce(id, command);
-  }
-
   async runsAdoptSession(id: string, session: string) {
     return this.runs.adoptSession(id, session);
   }
@@ -575,6 +566,10 @@ export class MockBackend implements Backend {
 
   async runsTrustFolder(id: string) {
     this.runs.trustFolder(id);
+  }
+
+  async runsAcceptMode(id: string, mode: "auto" | "bypass") {
+    this.runs.acceptMode(id, mode);
   }
 
   async runsSignIn(id: string) {
@@ -758,8 +753,12 @@ export class MockBackend implements Backend {
     return this.workstreams.open(item, item ? null : title, "pip").id;
   }
 
-  pipStartAgent(workstream: string, role: RunKind, brief: string | null, repo: string | null, fromRun: string | null, requestId: string) {
-    return this.runs.pipStart({ workstream, role, brief, repo, fromRun, item: this.pipWorkstreamItem(workstream) }, requestId);
+  pipStartAgent(workstream: string, role: string, brief: string | null, repo: string | null, pr: number | null, requestId: string) {
+    return this.runs.pipStart({ workstream, role, brief, repo, pr, item: this.pipWorkstreamItem(workstream) }, requestId);
+  }
+
+  pipPullRequestOf(runId: string) {
+    return this.runs.pullRequestOf(runId);
   }
 
   pipMessageAgent(runId: string, text: string) {

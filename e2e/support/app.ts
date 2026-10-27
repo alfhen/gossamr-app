@@ -89,21 +89,18 @@ export async function surfacePullRequests(page: Page) {
 
 /** What the sample backend's handle offers the tests (MockHandle in src/backend/mockWatch.ts). */
 type Script = { planRecommended?: boolean; ready?: boolean; questions?: string[]; verdict?: "pass" | "blocking"; marker?: boolean };
-/** The restriction a read-only run is launched with (`ReadOnly` in src/types.ts). */
-export type ReadOnly = { mode: string; allow: string[]; deny: string[]; guard: string };
 /** One launch as the mock launcher made it (`MockLaunch` in src/backend/mockRuns.ts). */
-export type MockLaunch = { runId: string; kind: string; readOnly: ReadOnly | null; guard: string; at: string };
+export type MockLaunch = { runId: string; role: string; guard: string; at: string };
 interface Handle {
-  runs(): { id: string; kind: string; state: string; prSha: string | null; passes: number; key: string | null; shortId: string | null; digest: string; name: string }[];
+  runs(): { id: string; role: string; state: string; prSha: string | null; passes: number; key: string | null; shortId: string | null; digest: string; name: string }[];
   launches(): MockLaunch[];
   workstreamEvents(): { workstreamId: string; actor: string; action: string; runId: string | null; detail?: string | null }[];
   scriptNext(kind: string, script: Script): void;
-  startAgent(key: string, kind: string, over?: { fromRun?: string; brief?: string }): string;
+  startAgent(key: string, role: string, over?: { brief?: string; pr?: number; repo?: string }): string;
   askRun(id: string, question: string): void;
   askPermission(id: string, needs: string): void;
   blockRun(id: string): void;
   loseRun(id: string): void;
-  stopRunAtLimit(id: string): void;
   attached(): string[];
   jiraWrites(): { proposalId: string; type: string; key: string | null; text?: string }[];
   reviewDrafts(): ReviewDraftRow[];
@@ -135,15 +132,21 @@ type TicketEdit = { summary?: string; description?: string; statusId?: string };
 type Mocked = { __gossamrMock?: Handle };
 const NO_MOCK = "the sample backend isn't there; is this a dev build in mock mode?";
 
-/** Every run the sample backend holds, newest first. */
-export const mockRuns = (page: Page) =>
-  page.evaluate((missing) => {
+const STEPS: Record<string, string> = { investigator: "investigate", triager: "triage", planner: "plan", builder: "build", reviewer: "review", verifier: "verify" };
+/** The step a role names (`planner` is `plan`), or the role itself for any other label. */
+export const stepOf = (role: string) => STEPS[role] ?? role;
+
+/** Every run the sample backend holds, newest first, with the step its role names. */
+export const mockRuns = async (page: Page) => {
+  const runs = await page.evaluate((missing) => {
     const mock = (globalThis as Mocked).__gossamrMock;
     if (!mock) throw new Error(missing);
     return mock.runs();
   }, NO_MOCK);
+  return runs.map((r) => ({ ...r, step: stepOf(r.role) }));
+};
 
-/** Every launch the sample backend made, oldest first, with the read-only restriction it would pass Claude Code. */
+/** Every launch the sample backend made, oldest first, with the guard it would pass Claude Code. */
 export const mockLaunches = (page: Page) =>
   page.evaluate((missing) => {
     const mock = (globalThis as Mocked).__gossamrMock;
@@ -170,15 +173,15 @@ export const scriptNextRun = (page: Page, kind: string, script: Script) =>
     { kind, script, missing: NO_MOCK },
   );
 
-/** Starts an agent of `kind` on ticket `key` as Pip's start_agent does and returns its run id; a build or review follows `over.fromRun`. */
-export const startAgent = (page: Page, key: string, kind: string, over: { fromRun?: string; brief?: string } = {}) =>
+/** Starts an agent with `role` on ticket `key` as Pip's start_agent does and returns its run id; `over.pr` and `over.repo` have it check out a pull request. */
+export const startAgent = (page: Page, key: string, role: string, over: { brief?: string; pr?: number; repo?: string } = {}) =>
   page.evaluate(
-    ({ key, kind, over, missing }) => {
+    ({ key, role, over, missing }) => {
       const mock = (globalThis as Mocked).__gossamrMock;
       if (!mock) throw new Error(missing);
-      return mock.startAgent(key, kind, over);
+      return mock.startAgent(key, role, over);
     },
-    { key, kind, over, missing: NO_MOCK },
+    { key, role, over, missing: NO_MOCK },
   );
 
 /** Has working run `id` ask the person `question`, as a run stopping to ask does (`MockRuns.ask`). */
@@ -221,17 +224,6 @@ export const loseRun = (page: Page, id: string) =>
       const mock = (globalThis as Mocked).__gossamrMock;
       if (!mock) throw new Error(missing);
       mock.loseRun(id);
-    },
-    { id, missing: NO_MOCK },
-  );
-
-/** Has Gossamr stop run `id` at its limit, as it does a run that passes its time limit (`MockRuns.stopAtLimit`). */
-export const stopRunAtLimit = (page: Page, id: string) =>
-  page.evaluate(
-    ({ id, missing }) => {
-      const mock = (globalThis as Mocked).__gossamrMock;
-      if (!mock) throw new Error(missing);
-      mock.stopRunAtLimit(id);
     },
     { id, missing: NO_MOCK },
   );
@@ -613,8 +605,7 @@ export async function reviewedDraft(page: Page, query = "") {
   await page.getByRole("button", { name: "Start watching" }).click();
   await showWorkspace(page);
   await expect(page.getByText("CA-401", { exact: true }).first()).toBeVisible();
-  const build = (await mockRuns(page)).find((r) => r.kind === "build" && r.key === "CA-402")!;
-  const id = await startAgent(page, "CA-402", "review", { fromRun: build.id });
+  const id = await startAgent(page, "CA-402", "reviewer", { repo: "acme/webshop", pr: 218 });
   await advanceRuns(page, 3, id);
   await expect.poll(async () => (await mockRuns(page)).find((r) => r.id === id)?.state).toBe("done");
   await peekTicket(page, "CA-402");

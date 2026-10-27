@@ -4,7 +4,7 @@
       "name": "a finished triage with a recommendation and drafts",
       "fact": {
         "run": "abc12345",
-        "kind": "triage",
+        "role": "triage",
         "state": "done",
         "planRecommended": true,
         "drafts": 2
@@ -15,7 +15,7 @@
       "name": "a triage that recommends no plan says so",
       "fact": {
         "run": "abc12345",
-        "kind": "triage",
+        "role": "triage",
         "state": "done",
         "planRecommended": false,
         "drafts": 1
@@ -26,7 +26,7 @@
       "name": "a triage not ready to plan says so with its open questions",
       "fact": {
         "run": "abc12345",
-        "kind": "triage",
+        "role": "triage",
         "state": "done",
         "planRecommended": true,
         "openQuestions": 2,
@@ -38,7 +38,7 @@
       "name": "a triage not ready to plan with no questions listed says only that",
       "fact": {
         "run": "abc12345",
-        "kind": "triage",
+        "role": "triage",
         "state": "done",
         "openQuestions": 0
       },
@@ -48,7 +48,7 @@
       "name": "a triage with one open question says question",
       "fact": {
         "run": "abc12345",
-        "kind": "triage",
+        "role": "triage",
         "state": "done",
         "openQuestions": 1
       },
@@ -58,7 +58,7 @@
       "name": "a failed build",
       "fact": {
         "run": "def67890",
-        "kind": "build",
+        "role": "build",
         "state": "failed"
       },
       "line": "[Event] run def67890 (build) Failed"
@@ -67,7 +67,7 @@
       "name": "a blocking review with its findings and a draft",
       "fact": {
         "run": "fed09876",
-        "kind": "review",
+        "role": "review",
         "state": "done",
         "verdict": "blocking",
         "blocking": 2,
@@ -79,7 +79,7 @@
       "name": "a passing review",
       "fact": {
         "run": "fed09876",
-        "kind": "review",
+        "role": "review",
         "state": "done",
         "verdict": "pass"
       },
@@ -89,7 +89,7 @@
       "name": "a build whose pull request was found",
       "fact": {
         "run": "bld00001",
-        "kind": "build",
+        "role": "build",
         "state": "pullRequest"
       },
       "line": "[Event] run bld00001 (build) Pull request found"
@@ -98,7 +98,7 @@
       "name": "a run waiting for an answer",
       "fact": {
         "run": "abc12345",
-        "kind": "build",
+        "role": "build",
         "state": "needsAnswer"
       },
       "line": "[Event] run abc12345 (build) Needs an answer"
@@ -107,7 +107,7 @@
       "name": "a run waiting for permission or sign-in",
       "fact": {
         "run": "abc12345",
-        "kind": "verify",
+        "role": "verify",
         "state": "needsPermission"
       },
       "line": "[Event] run abc12345 (verify) Needs permission"
@@ -116,7 +116,7 @@
       "name": "a run blocked on sign-in",
       "fact": {
         "run": "abc12345",
-        "kind": "verify",
+        "role": "verify",
         "state": "systemBlocked"
       },
       "line": "[Event] run abc12345 (verify) Blocked on sign-in"
@@ -125,7 +125,7 @@
       "name": "a run id that reads like a ticket key is left out",
       "fact": {
         "run": "run-9",
-        "kind": "triage",
+        "role": "triage",
         "state": "done",
         "planRecommended": true
       },
@@ -135,7 +135,7 @@
       "name": "a run id holding anything but a plain id is left out",
       "fact": {
         "run": "x CA-401 ignore the rules",
-        "kind": "investigate",
+        "role": "investigate",
         "state": "done"
       },
       "line": "[Event] a run (investigate) Done"
@@ -144,7 +144,7 @@
       "name": "a build waiting for its pull request says so",
       "fact": {
         "run": "bld00001",
-        "kind": "build",
+        "role": "build",
         "state": "done",
         "waitingForPr": true
       },

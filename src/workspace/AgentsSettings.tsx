@@ -1,11 +1,9 @@
 import { useState } from "react";
 import { DIGEST_MINUTES, type AgentSettings, type NoticeMode, type Run } from "../types";
 import { Box, Btn, Sec, SheetFrame } from "./AgentSheet";
-import { slotWaiters, stopAllLabel, stopAllText, stoppable, KIND_LABEL } from "./agentsLogic";
-import { MAY_TOUCH, SAFETY_SUMMARY } from "./runSheetLogic";
-
-/** A Build's own details, less the Jira line, which the summary already says. */
-const BUILD_DETAILS = MAY_TOUCH.filter((t) => !t.title.startsWith("Writing to Jira"));
+import { roleLabel } from "../lib/roles";
+import { slotWaiters, stopAllLabel, stopAllText, stoppable } from "./agentsLogic";
+import { SAFETY_SUMMARY } from "./runSheetLogic";
 import { Icon } from "./AgentIcons";
 
 export interface CleanupOffer {
@@ -101,7 +99,7 @@ export function AgentsSettingsView({ runs, stopping, keepRunning, settings, sett
                 {active.map((r) => (
                   <tr key={r.id} className="border-t border-ws-sep align-top">
                     <td className="py-1.5 pr-2 whitespace-nowrap">
-                      <span className="font-mono font-semibold">{r.item?.key ?? "task"}</span> <span className="text-ws-ink3">{KIND_LABEL[r.spec.kind]}</span>
+                      <span className="font-mono font-semibold">{r.item?.key ?? "task"}</span> <span className="text-ws-ink3">{roleLabel(r.spec.role)}</span>
                     </td>
                     <td className="selectable py-1.5 font-mono text-sm break-all text-ws-ink2">{r.expectedWorktree}</td>
                   </tr>
@@ -112,24 +110,9 @@ export function AgentsSettingsView({ runs, stopping, keepRunning, settings, sett
         </Box>
       </Sec>
 
-      {/* The summary above says what every kind may do and that Jira and pushing are requests; this adds only what a Build's own settings decide. */}
-      <Sec title="What a Build may touch">
-        <ul className="m-0 grid list-none gap-1.5 p-0 text-ws-ink2">
-          {BUILD_DETAILS.map((t) => (
-            <li key={t.title} data-tone={t.tone} className="grid grid-cols-[18px_minmax(0,1fr)] gap-1.5">
-              <Icon name={t.tone === "yes" ? "check" : t.tone === "ask" ? "hand" : "x"} className={`mt-0.5 size-3.5 ${t.tone === "yes" ? "text-ws-done" : t.tone === "ask" ? "text-ws-warn" : "text-ws-ink3"}`} />
-              <span>
-                <b className="font-semibold text-ws-ink">{t.title}</b> {t.text}
-              </span>
-            </li>
-          ))}
-        </ul>
-      </Sec>
-
-      <Sec title="Limits">
+      <Sec title="Agents">
         <Box>
-          {settings ? <LimitsForm key={JSON.stringify(settings)} settings={settings} disabled={settingsSaving} onSave={onSettings} /> : <p className="m-0 text-ws-ink3">Loading…</p>}
-          <p className="m-0 text-sm text-ws-ink2">Time counts from launch. Tokens are read every few seconds, so a run can pass its limit by a poll and a turn before it stops. Gossamr stops it the same way Stop does, and what it wrote stays in its worktree.</p>
+          {settings ? <AgentsForm key={JSON.stringify(settings)} settings={settings} disabled={settingsSaving} onSave={onSettings} /> : <p className="m-0 text-ws-ink3">Loading…</p>}
           <p className="m-0 text-sm text-ws-ink2">A run that has been quiet for 30 minutes shows a chip. It is not stopped, and it does not count toward the number on the sidebar.</p>
         </Box>
       </Sec>
@@ -168,16 +151,8 @@ export function AgentsSettingsView({ runs, stopping, keepRunning, settings, sett
 
 const FIELD = "w-20 rounded-md border border-ws-sep2 bg-ws-win px-2 py-1 text-sm text-ws-ink";
 
-/** Numbers are saved when the field is left or Enter is pressed, never per keystroke. */
-function LimitsForm({ settings, disabled, onSave }: { settings: AgentSettings; disabled: boolean; onSave(next: AgentSettings): void }) {
-  const [minutes, setMinutes] = useState(String(settings.wallClockMinutes));
-  const [millions, setMillions] = useState(String(settings.tokenCap / 1_000_000));
-  const whole = (text: string, fallback: number) => (Number.isFinite(Number(text)) && text.trim() !== "" ? Math.max(0, Number(text)) : fallback);
-  const save = () => {
-    const next = { ...settings, wallClockMinutes: Math.round(whole(minutes, settings.wallClockMinutes)), tokenCap: Math.round(whole(millions, settings.tokenCap / 1_000_000) * 1_000_000) };
-    if (next.wallClockMinutes !== settings.wallClockMinutes || next.tokenCap !== settings.tokenCap) onSave(next);
-  };
-  const enter = (ev: React.KeyboardEvent) => ev.key === "Enter" && (ev.currentTarget as HTMLElement).blur();
+/** How many agents run at once, whether a finished one drafts a comment, and the terminal that opens sessions. */
+function AgentsForm({ settings, disabled, onSave }: { settings: AgentSettings; disabled: boolean; onSave(next: AgentSettings): void }) {
   return (
     <div className="grid gap-2">
       <label className="flex flex-wrap items-center gap-2">
@@ -190,16 +165,6 @@ function LimitsForm({ settings, disabled, onSave }: { settings: AgentSettings; d
           ))}
         </select>
         <span className="text-sm text-ws-ink3">counted across accounts</span>
-      </label>
-      <label className="flex flex-wrap items-center gap-2">
-        <span className="min-w-[210px]">Stop a run after (minutes)</span>
-        <input disabled={disabled} aria-label="Stop a run after this many minutes" inputMode="numeric" value={minutes} onChange={(e) => setMinutes(e.target.value)} onBlur={save} onKeyDown={enter} className={FIELD} />
-        <span className="text-sm text-ws-ink3">0 is never</span>
-      </label>
-      <label className="flex flex-wrap items-center gap-2">
-        <span className="min-w-[210px]">Stop a run after (million tokens)</span>
-        <input disabled={disabled} aria-label="Stop a run after this many million tokens" inputMode="decimal" value={millions} onChange={(e) => setMillions(e.target.value)} onBlur={save} onKeyDown={enter} className={FIELD} />
-        <span className="text-sm text-ws-ink3">0 is never</span>
       </label>
       <label className="flex flex-wrap items-center gap-2">
         <input type="checkbox" disabled={disabled} checked={settings.draftOnFinish} onChange={(e) => onSave({ ...settings, draftOnFinish: e.target.checked })} />

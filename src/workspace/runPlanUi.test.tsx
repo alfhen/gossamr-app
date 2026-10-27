@@ -4,14 +4,12 @@ import { MockBackend } from "../backend/mock";
 import type { Run, RunOutcome } from "../types";
 import { toRunEntries } from "./activityLogic";
 import { AgentCard } from "./AgentCard";
-import { KIND_ICON } from "./AgentIcons";
-import { KIND_LABEL } from "./agentsLogic";
 import { RunSheetView, type RunSheetActions } from "./RunSheet";
 import { buildFromPlanControl, planCommentControl, planCommentMessage } from "./runSheetLogic";
 
 const NOW = Date.parse("2026-09-30T12:00:00Z");
 const backend = new MockBackend({ runs: { seed: "kinds", epoch: NOW } });
-const plan: Run = backend.runs.list().find((r) => r.spec.kind === "plan")!;
+const plan: Run = backend.runs.list().find((r) => r.spec.role === "planner")!;
 
 const actions = (): RunSheetActions => ({ close: vi.fn(), attach: vi.fn(), askStop: vi.fn(), cancelStop: vi.fn(), stop: vi.fn(), startNow: vi.fn(), answer: vi.fn(), adoptSession: vi.fn(() => Promise.resolve()), retry: vi.fn(), fix: vi.fn(), copied: vi.fn(), openTicket: vi.fn(), reveal: vi.fn(), draftComment: vi.fn(), askPip: vi.fn(), openDraft: vi.fn(), pickBlocker: vi.fn(), cancelBlocker: vi.fn(), draftBlocker: vi.fn(), openChange: vi.fn(), draftTicket: vi.fn(), openTicketDraft: vi.fn(), finishWithPip: vi.fn(), openCreated: vi.fn(), askPipBreakdown: vi.fn(), buildFromPlan: vi.fn(), draftPlanComment: vi.fn(), openPlanDraft: vi.fn(), reviewThis: vi.fn() });
 const outcome = (over: Partial<RunOutcome> = {}): RunOutcome => ({ ...backend.runs.outcome(plan.id), ...over });
@@ -22,17 +20,12 @@ const disabled = (html: string, label: string) => /<button[^>]*disabled=""/.test
 
 beforeEach(() => vi.stubGlobal("localStorage", { getItem: () => null, setItem: () => {}, removeItem: () => {} }));
 
-describe("every surface knows the plan kind", () => {
-  it("has a label and an icon", () => {
-    expect(KIND_LABEL.plan).toBe("Plan");
-    expect(KIND_ICON.plan).toBe("plan");
-  });
-
-  it("names the kind on the card and in Activity", () => {
+describe("every surface shows the plan run's role", () => {
+  it("names the role on the card and in Activity", () => {
     const card = renderToStaticMarkup(<AgentCard run={plan} now={NOW} selected={false} position={1} total={1} ticketTitle={null} onOpen={vi.fn()} onAttach={vi.fn()} failure={{ opened: false, on: { act: vi.fn(), retry: vi.fn(), copied: vi.fn() } }} />);
-    expect(card).toContain(">Plan<");
+    expect(card).toContain(">Planner<");
     const entries = toRunEntries([plan], new Set<string>(), NOW, new Set<string>(), new Set<string>());
-    expect(entries.map((e) => e.text).join("\n")).toContain("Plan agent started");
+    expect(entries.map((e) => e.text).join("\n")).toContain("Planner agent started");
   });
 });
 
@@ -52,7 +45,7 @@ describe("Ask Pip to build on a card", () => {
     expect(off({ item: null }).reason).toContain("needs a ticket");
     expect(off({ result: "  " }).reason).toContain("no plan");
     expect(off({ resultComplete: false }).reason).toContain("read in full");
-    expect(off({ spec: { ...plan.spec, kind: "triage" } }).reason).toContain("Only a plan run");
+    expect(off({ spec: { ...plan.spec, role: "triager" } }).reason).toContain("Only a plan run");
   });
 });
 
@@ -87,7 +80,7 @@ describe("the run sheet for a finished plan", () => {
   });
 
   it("has no plan box for other kinds", () => {
-    const triage = backend.runs.list().find((r) => r.spec.kind === "triage")!;
+    const triage = backend.runs.list().find((r) => r.spec.role === "triager")!;
     expect(sheet(triage, backend.runs.outcome(triage.id))).not.toContain("data-plan-box");
   });
 

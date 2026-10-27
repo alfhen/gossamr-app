@@ -6,7 +6,6 @@ import type { CleanupResult, ClearFilter, DeleteResult, ItemRef, PlanComment, Pr
 import { useWorkspace } from "../workspaceStore";
 import { clearSentence } from "../lib/archiveRuns";
 import { INSTALL_URL, failureHelp, type FailureAct } from "./failureHelp";
-import { copyText } from "./AgentSheet";
 import { NO_FILTERS, agentGroups, stepRun, stopAllText, type AgentFilters, type NeedsScope } from "./agentsLogic";
 import { showDraft } from "./draftTicket";
 import { openTicketByKey, showMe } from "./jump";
@@ -76,12 +75,6 @@ interface RunsState {
   browseOrder: readonly string[] | null;
   /** Runs whose answer went through, with the progress time they had then: "Answer sent" shows until it moves on. */
   answered: Readonly<Record<string, string>>;
-  /**
-   * The person's last answer to each run's permission prompt, with the exact command: a denial shows its confirmation
-   * until the run reports something new (`at`, its progress time then), an Allow once while the run still waits on that
-   * command in Terminal. `copied` says whether the command reached the clipboard.
-   */
-  permissionAnswered: Readonly<Record<string, PermissionAnswered>>;
   init(backend: Backend): void;
   dispose(): void;
   reload(): Promise<void>;
@@ -102,10 +95,6 @@ interface RunsState {
   startNow(id: string): Promise<void>;
   /** Sends the person's answer to a run that is asking a question; the run carries on under the same id. */
   answer(id: string, text: string): Promise<boolean>;
-  /** The person's Deny for the permission prompt they read as `command`: Claude is told no and carries on without it. */
-  denyPermission(id: string, command: string): Promise<void>;
-  /** The person's Allow once for the permission prompt they read as `command`: opens the run in Terminal, where they answer Yes, and copies the command. */
-  allowPermissionOnce(id: string, command: string): Promise<void>;
   /** Takes a listed session over as the continuation of a stopped or finished run, after the person chose it. */
   adoptSession(id: string, session: string): Promise<void>;
   retryLaunch(id: string): Promise<void>;
@@ -114,7 +103,7 @@ interface RunsState {
   /** Notes that the person copied the command to run it themselves, which is as good as opening Terminal. */
   noteCopied(id: string): void;
   /**
-   * Takes run `id` out of Needs you: the person's explicit Dismiss of its failure, limit stop, unclear state or possible
+   * Takes run `id` out of Needs you: the person's explicit Dismiss of its failure, unclear state or possible
    * continuation. It is local (nothing reaches the run), so it offers Undo; `undismiss` is what Undo calls.
    */
   dismiss(id: string): void;
@@ -146,21 +135,6 @@ interface RunsState {
   /** Deletes an archived run for good, and its worktree when asked. Null when the call failed, which is shown as a message. */
   deleteArchived(id: string, removeWorktree: boolean): Promise<DeleteResult | null>;
   setIntroOpen(open: boolean): void;
-}
-
-/** What the person answered to a run's permission prompt (`permissionAnswered`). */
-export interface PermissionAnswered {
-  kind: "denied" | "allowed";
-  command: string;
-  at: string;
-  copied: boolean;
-}
-
-/** The confirmation for a run's answered permission prompt while it still applies: a denial until the run moves on, an Allow once while it waits on that command. */
-export function permissionConfirmation(run: Pick<Run, "lastProgressAt" | "permissionAllowed" | "state">, answered: PermissionAnswered | undefined): PermissionAnswered | null {
-  if (!answered) return null;
-  if (answered.kind === "denied") return answered.at === run.lastProgressAt ? answered : null;
-  return run.state === "needsPermission" && run.permissionAllowed?.command === answered.command ? answered : null;
 }
 
 const idle = { runs: [] as Run[], archived: [] as Run[], launching: new Set<string>() as ReadonlySet<string>, status: "idle" as const, error: null, selectedId: null, sheet: null as RunSheetTarget | null, browseOrder: null };
@@ -235,27 +209,6 @@ async function draftFromRun(get: () => RunsState, set: (patch: Partial<RunsState
   }
 }
 
-/** Sends the person's Deny or Allow once and keeps the run as it came back, so the confirmation shows at once; a refusal is a toast. */
-async function answerPermission(get: () => RunsState, set: (patch: Partial<RunsState>) => void, id: string, kind: PermissionAnswered["kind"], command: string) {
-  const { backend, answering } = get();
-  if (!backend || answering.has(id)) return;
-  set({ answering: new Set([...answering, id]) });
-  try {
-    const run = kind === "denied" ? await backend.runsDenyPermission(id, command) : await backend.runsAllowPermissionOnce(id, command);
-    // Only once Terminal is open: the command goes on the clipboard for the person to compare with Claude Code's prompt.
-    const copied = kind === "allowed" && (await copyText(command));
-    const at = kind === "allowed" ? (run.permissionAllowed?.at ?? run.lastProgressAt) : run.lastProgressAt;
-    set({ runs: get().runs.map((r) => (r.id === id ? run : r)), permissionAnswered: { ...get().permissionAnswered, [id]: { kind, command, at, copied } } });
-    // The Needs-you pane moves on before the card's own line can show; Deny reached the agent, so no Undo.
-    if (kind === "denied") useToasts.getState().push(`Denied. ${labelsByRun(get().runs).get(id) ?? run.item?.key ?? "The run"} carries on without it.`, "info");
-  } catch (e) {
-    useToasts.getState().push(`Couldn't ${kind === "denied" ? "deny it" : "open it to allow"}: ${messageOf(e)}`);
-  } finally {
-    set({ answering: new Set([...get().answering].filter((x) => x !== id)) });
-    void get().reload();
-  }
-}
-
 /** The toast for archived runs, with an Undo that brings them all back. */
 function offerRestore(get: () => RunsState, ids: readonly string[], text: string) {
   offerUndo({
@@ -288,7 +241,6 @@ export const useRuns = create<RunsState>((set, get) => ({
   drafting: null,
   answering: new Set<string>(),
   answered: {},
-  permissionAnswered: {},
   ...idle,
 
   init(backend) {
@@ -390,13 +342,11 @@ export const useRuns = create<RunsState>((set, get) => ({
   async answer(id, text) {
     const { backend, answering } = get();
     if (!backend || answering.has(id)) return false;
-    const before = get().runs.find((r) => r.id === id);
-    const resuming = before?.state === "stopped" && !!before.stoppedByLimit;
     set({ answering: new Set([...answering, id]) });
     try {
       const run = await backend.runsAnswer(id, text);
       set({ answered: { ...get().answered, [id]: run.lastProgressAt } });
-      useToasts.getState().push(resuming ? "Resumed. Claude is picking it back up." : "Answer sent. Claude is picking it back up. Only the agent sees your answer; nothing goes to Jira.", "info");
+      useToasts.getState().push("Answer sent. Claude is picking it back up. Only the agent sees your answer; nothing goes to Jira.", "info");
       return true;
     } catch (e) {
       useToasts.getState().push(`Couldn't send the answer: ${messageOf(e)}`);
@@ -405,14 +355,6 @@ export const useRuns = create<RunsState>((set, get) => ({
       set({ answering: new Set([...get().answering].filter((x) => x !== id)) });
       void get().reload();
     }
-  },
-
-  async denyPermission(id, command) {
-    await answerPermission(get, set, id, "denied", command);
-  },
-
-  async allowPermissionOnce(id, command) {
-    await answerPermission(get, set, id, "allowed", command);
   },
 
   async adoptSession(id, session) {
@@ -454,8 +396,9 @@ export const useRuns = create<RunsState>((set, get) => ({
     if (!backend) return;
     try {
       if (act === "install") return await backend.openUrl(INSTALL_URL);
-      const kind = get().runs.find((r) => r.id === id)?.failure?.type;
-      await (kind === "notSignedIn" ? backend.runsSignIn(id) : backend.runsTrustFolder(id));
+      const failure = get().runs.find((r) => r.id === id)?.failure;
+      if (failure?.type === "modeRefused") await backend.runsAcceptMode(id, failure.mode);
+      else await (failure?.type === "notSignedIn" ? backend.runsSignIn(id) : backend.runsTrustFolder(id));
       get().noteCopied(id);
     } catch (e) {
       useToasts.getState().push(`Couldn't open ${act === "install" ? "the install page" : "Terminal"}: ${messageOf(e)}`);

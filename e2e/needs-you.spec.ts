@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { agentsHome, closeWorkstreamSheet, groupOpen, needsStack, workstreamSheet, askPip, blockRun, expandNeedsYou, pauseAtCeiling, homeConversation, homeConversationRegion, homeSettled, jiraWrites, loseRun, mockAttached, mockRuns, needRow, needsPane, needsPaneHeading, needsYouCount, needsYouTray, openAgents, openApp, selectWorkstream, startWorkstream, stopRunAtLimit, workstreamGroup } from "./support/app";
+import { agentsHome, closeWorkstreamSheet, groupOpen, needsStack, workstreamSheet, askPip, blockRun, expandNeedsYou, pauseAtCeiling, homeConversation, homeConversationRegion, homeSettled, jiraWrites, loseRun, mockAttached, mockRuns, needRow, needsPane, needsPaneHeading, needsYouCount, needsYouTray, openAgents, openApp, selectWorkstream, startWorkstream, workstreamGroup } from "./support/app";
 
 // One Needs you (docs/needs-you.md): what waits on the person is one count everywhere, a filter on Agents, and each
 // workstream's decisions are at the top of its detail.
@@ -82,7 +82,7 @@ test("a workstream's needs are one stack at the top of its detail, most urgent f
   await expect(workstreamGroup(page, "CA-401").locator("[data-status-detail]")).toHaveText("· 3 waiting");
 });
 
-test("deciding a permission from the pane: Deny, then focus is on the next need", async ({ page }) => {
+test("deciding a permission from the pane: Open in Terminal opens the run there, and the need waits for the person's answer in Terminal", async ({ page }) => {
   await onHome(page);
   await expandGeneral(page);
   const before = await needsYouCount(page).innerText();
@@ -95,18 +95,14 @@ test("deciding a permission from the pane: Deny, then focus is on the next need"
   await expect(pane).toContainText("If you wait:");
   await expect(pane).toContainText("The run stays paused; nothing else in DEVOPS-471 moves.");
   await expect(pane.locator("[data-permission-ask]")).toBeVisible();
-  const first = (await pane.getAttribute("data-needs-pane"))!;
+  await expect(pane.getByRole("button", { name: "Deny" })).toHaveCount(0);
 
   const run = await runOn(page, "DEVOPS-471");
   expect(await stateOf(page, run.id)).toBe("needsPermission");
-  await pane.getByRole("button", { name: "Deny", exact: true }).click();
-  await expect.poll(() => stateOf(page, run.id)).toBe("working");
-  // It leaves the list, the count drops by one, and the next need opens in the pane with the keyboard in it.
-  await expect(needsYouCount(page)).toHaveText(String(Number(before) - 1));
-  await expect(need(page, /DEVOPS-471/)).toHaveCount(0);
-  await expect(pane).not.toHaveAttribute("data-needs-pane", first);
-  await expect(pane).toHaveAttribute("data-needs-pane", /./);
-  await expect.poll(() => focusInPane(page)).toBe(true);
+  await pane.locator("[data-permission-ask]").getByRole("button", { name: "Open in Terminal" }).click();
+  await expect.poll(() => mockAttached(page)).toContain(run.id);
+  expect(await stateOf(page, run.id)).toBe("needsPermission");
+  await expect(needsYouCount(page)).toHaveText(before);
 });
 
 test("answering a question from the pane sends it to the run, which leaves Needs you", async ({ page }) => {
@@ -243,29 +239,7 @@ test("a failure stays in Needs you after Agents is opened, and only a Dismiss (o
   await expect(needsYouCount(page)).toHaveText(String(count - 1));
 });
 
-test("a run Gossamr stopped at its limit appears in Needs you, with Resume, and leaves once resumed", async ({ page }) => {
-  await onHome(page);
-  const before = Number(await needsYouCount(page).innerText());
-  const run = await runOn(page, "WEB-108");
-  expect(await stateOf(page, run.id)).toBe("working");
-  await stopRunAtLimit(page, run.id);
-
-  await expect(needsYouCount(page)).toHaveText(String(before + 1));
-  await expandGeneral(page);
-  const limit = need(page, /WEB-108.*stopped at its limit/);
-  await expect(limit).toHaveCount(1);
-  await limit.click();
-  const pane = needsPane(page);
-  await expect(pane).toContainText("was stopped at its limit");
-  await expect(pane).toContainText("It stays stopped; its conversation and worktree are kept.");
-  await expect(needsPaneHeading(page)).toBeFocused();
-  await pane.getByRole("button", { name: "Resume" }).click();
-  await expect.poll(() => stateOf(page, run.id)).toBe("working");
-  await expect(need(page, /WEB-108/)).toHaveCount(0);
-  await expect(needsYouCount(page)).toHaveText(String(before));
-});
-
-test("a sign-in reads 'needs you to sign in to Claude'; a limit stop is in the list, and an unclear run, a quiet one and a possible continuation are not", async ({ page }) => {
+test("a sign-in reads 'needs you to sign in to Claude'; an unclear run, a quiet one and a possible continuation are not in the list", async ({ page }) => {
   await onHome(page, "runs=stuck");
   await expandGeneral(page);
   const signed = await runOn(page, "SUP-12");
@@ -275,8 +249,7 @@ test("a sign-in reads 'needs you to sign in to Claude'; a limit stop is in the l
 
   await expect(need(page, /SUP-12.*needs you to sign in to Claude/)).toHaveCount(1);
   await expect(need(page, /SUP-12/)).not.toContainText(/permission/i);
-  // The sample's stuck runs: a limit stop is a need; the run Gossamr lost track of, the two that may have carried on elsewhere and the run quiet for 40 minutes are states, not needs.
-  await expect(need(page, /CA-277.*stopped at its limit/)).toHaveCount(1);
+  // The sample's stuck runs: the run Gossamr lost track of, the two that may have carried on elsewhere and the run quiet for 40 minutes are states, not needs.
   await expect(need(page, /WEB-108.*can't read/)).toHaveCount(0);
   await expect(need(page, /CA-278/)).toHaveCount(0);
   await expect(need(page, /CA-279/)).toHaveCount(0);
@@ -288,21 +261,16 @@ test("a sign-in reads 'needs you to sign in to Claude'; a limit stop is in the l
   await expect.poll(() => mockAttached(page)).toContain(signed.id);
 });
 
-test("d on a run's card asks for Enter before it denies, and e goes to the answer box of its question", async ({ page }) => {
+test("a permission has no key to deny it, and e goes to the answer box of a question", async ({ page }) => {
   await onHome(page);
   const card = (key: string) => agentsHome(page).locator("article[data-run-id]").filter({ hasText: key }).first();
   const permission = card("DEVOPS-471");
   await permission.focus();
-  // The sample's permission is a read-only run's: nothing to allow, so a only opens it; d denies after Enter.
+  // A permission is answered in Terminal: d asks for nothing and changes nothing.
   await page.keyboard.press("d");
-  await expect(permission.locator("[data-needs-asking]")).toHaveText("↵ deny it; Claude carries on without it · any other key cancels");
-  await page.keyboard.press("Escape");
   await expect(permission.locator("[data-needs-asking]")).toHaveCount(0);
   const run = await runOn(page, "DEVOPS-471");
   expect(await stateOf(page, run.id)).toBe("needsPermission");
-  await page.keyboard.press("d");
-  await page.keyboard.press("Enter");
-  await expect.poll(() => stateOf(page, run.id)).toBe("working");
 
   // e on the question opens its decision with the answer box focused.
   const question = card("CA-409");

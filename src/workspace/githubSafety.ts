@@ -1,6 +1,5 @@
 /** What Gossamr does on GitHub, said once for the settings that mention it. */
-export const GITHUB_SAFETY =
-  "Gossamr reads pull requests, branches and checks. It posts a review only when you approve a review draft, and a Build pushes only its own branch to a draft pull request. It never merges.";
+export const GITHUB_SAFETY = "Gossamr reads pull requests, branches and checks. It posts a review only when you approve a review draft, and it never merges. Agents run with your own Claude Code settings.";
 
-/** What limits a build on GitHub, as the safety sheet says it: it runs as the person, and the branch rule is a request. Kept short: the first-run strip shows it on one line with the purpose. */
-export const BUILD_ON_GITHUB = "On GitHub, a Build runs as you. It is asked to push only its branch to a draft pull request: a request, not a lock; see Agent safety.";
+/** What limits an agent on GitHub, as the safety sheet says it. Kept short: the first-run strip shows it on one line with the purpose. */
+export const AGENTS_ON_GITHUB = "On GitHub, agents run with your own Claude Code settings; see Agent safety.";

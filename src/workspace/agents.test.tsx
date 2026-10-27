@@ -16,7 +16,7 @@ vi.mock("./useStateView", async () => {
   return { useStateView: (run: Parameters<typeof logic.stateView>[0], now: number) => logic.stateView(run, now) };
 });
 import { LAUNCHER_GUTTER } from "./PipExtras";
-import { DENY_QUESTION, DenyConfirm, StopRunConfirm, stopRunQuestion } from "./PermissionAsk";
+import { PERMISSION_NOTE } from "./PermissionAsk";
 import { useActivity } from "./activityStore";
 import { Rail, railBadgeText } from "./Rail";
 import { useRuns } from "./runsStore";
@@ -32,7 +32,6 @@ const on = (): AgentsActions => ({
   attach: vi.fn(),
   draftComment: vi.fn(),
   buildFromPlan: vi.fn(),
-  resume: vi.fn(),
   filter: vi.fn(),
   clearFilters: vi.fn(),
   setView: vi.fn(),
@@ -190,7 +189,7 @@ describe("grouped by workstream", () => {
     runs: ["w1"],
     labels: [["w1", "R1"]],
   };
-  const linked = () => run("working", { id: "w1", queuedAt: iso(1), spec: { ...eight()[0].spec, kind: "investigate", workstream: "ws-1" } });
+  const linked = () => run("working", { id: "w1", queuedAt: iso(1), spec: { ...eight()[0].spec, role: "investigate", workstream: "ws-1" } });
 
   it("says on the workstream's stage chip that its build waits for its pull request", () => {
     const out = screen({ runs: [linked()], group: "workstream", workstreams: [{ ...ws, waitingForPr: "b9" }] });
@@ -259,31 +258,15 @@ describe("the Agents screen as the operations view", () => {
 });
 
 describe("cards", () => {
-  it("shows the exact command a permission prompt waits on, with Allow once only on a Build, Deny, and Stop said to abandon the run", () => {
-    const asking = run("needsPermission", { needs: "approve Bash: git push -u origin worktree-ca-401-fix", shortId: "1000a000", readOnly: null });
-    const build = card({ ...asking, spec: { ...asking.spec, kind: "build", allowPush: true, name: "ca-401-fix" } });
-    expect(build).toContain("git push -u origin worktree-ca-401-fix");
-    expect(buttonsOf(build)).toEqual(["Copy", "Allow once in Terminal", "Deny", "Stop the run (abandons it)"]);
-    const ro = card({ ...asking, spec: { ...asking.spec, kind: "investigate" } });
-    expect(ro).toContain("This run is read-only, so this command would be refused anyway.");
-    expect(buttonsOf(ro)).toEqual(["Copy", "Deny", "Stop the run (abandons it)"]);
-    for (const html of [build, ro]) for (const word of ["Approve", "Nudge", "Always"]) expect(html).not.toContain(word);
-  });
-
-  it("asks before a card's Stop abandons the run, as the sheet does", () => {
-    const html = renderToStaticMarkup(<StopRunConfirm name="R4" onStop={vi.fn()} onKeep={vi.fn()} />);
-    expect(html).toContain('role="group" aria-label="Stop this run"');
-    expect(html).toContain(stopRunQuestion("R4"));
-    expect(stopRunQuestion("R4")).toBe("Stop R4? It abandons the run.");
-    expect(buttonsOf(html)).toEqual(["Yes, stop", "Keep going"]);
-  });
-
-  it("asks before a card's Deny tells the agent no: Escape and Keep waiting leave it asking", () => {
-    const html = renderToStaticMarkup(<DenyConfirm onDeny={vi.fn()} onKeep={vi.fn()} />);
-    expect(html).toContain('role="group" aria-label="Deny this request"');
-    expect(html).toContain(DENY_QUESTION);
-    expect(DENY_QUESTION).toBe("Deny this?");
-    expect(buttonsOf(html)).toEqual(["Yes, deny", "Keep waiting"]);
+  it("shows the exact command a permission prompt waits on, with one way to answer it: Open in Terminal", () => {
+    const asking = run("needsPermission", { needs: "approve Bash: git push -u origin worktree-ca-401-fix", shortId: "1000a000" });
+    for (const role of ["builder", "investigator", "profiler"]) {
+      const html = card({ ...asking, spec: { ...asking.spec, role, name: "ca-401-fix" } });
+      expect(html).toContain("git push -u origin worktree-ca-401-fix");
+      expect(html).toContain(PERMISSION_NOTE);
+      expect(buttonsOf(html)).toEqual(["Copy", "Open in Terminal"]);
+      for (const word of ["Allow once", "Deny", "read-only", "Approve", "Nudge", "Always"]) expect(html).not.toContain(word);
+    }
   });
 
   it("names each Draft comment button by its ticket, or by the card's title without one (G9)", () => {
@@ -299,18 +282,11 @@ describe("cards", () => {
     expect(name(withDraft({ ...base, item: null }))).toMatch(/^Draft comment on \S/);
   });
 
-  it("offers Resume on a run stopped at its limit, only when the person can act on it, and says it stopped at its limit", () => {
-    const limit = run("stopped", { stoppedByLimit: true, error: "Stopped by Gossamr: it passed the 60 minute limit" });
-    const resume = vi.fn();
-    const withResume = (r: Run, onResume?: () => void) =>
-      renderToStaticMarkup(<AgentCard run={r} now={NOW} selected={false} position={1} total={1} ticketTitle={null} onOpen={vi.fn()} onAttach={vi.fn()} onResume={onResume} failure={{ opened: false, on: { act: vi.fn(), retry: vi.fn(), copied: vi.fn() } }} />);
-    expect(buttonsOf(withResume(limit, resume))).toContain("Resume");
-    expect(buttonsOf(withResume(limit))).not.toContain("Resume");
-    expect(buttonsOf(card(run("stopped")))).not.toContain("Resume");
-    expect(card(limit)).toContain("Stopped at limit");
-    // The lane it sits in is Failed or stuck; Needs you lists it too.
-    const html = screen({ runs: [limit, run("failed", { id: "f", failure: null })] });
-    expect(html).toMatch(/data-lane="bad"[\s\S]*Stopped at limit/);
+  it("says a stopped run was stopped, and offers nothing to resume", () => {
+    const stopped = run("stopped", { error: null, lastDetail: null });
+    expect(buttonsOf(card(stopped))).not.toContain("Resume");
+    expect(card(stopped)).toContain("Stopped");
+    expect(card(stopped)).not.toContain("limit");
   });
 
   it("shows a question with Open in Terminal and no answer box", () => {
@@ -438,11 +414,8 @@ describe("empty, first-run and errors", () => {
     const out = renderToStaticMarkup(<AgentsIntro onDismiss={vi.fn()} />).replace(/&#x27;/g, "'");
     for (const phrase of [
       "Pip starts an agent when you ask, and tells you about any it starts on its own.",
-      "A Build runs as you, with your own Claude settings: anything your Claude can do, it can do.",
-      "Read-only steps are signed in as you but run without your settings.",
-      "Investigate, Triage, Plan, Review and Verify are read-only: Claude Code itself refuses their file edits and writing commands, and your own and the repository's allow rules don't apply.",
-      "Review and Verify may run the repository's tests, whose code runs as written.",
-      "A Build changes code in its worktree and is told not to write to Jira, but that is a request, not a lock.",
+      "Agents run with your own Claude Code settings: anything your Claude can do, they can do.",
+      "They are told not to write to Jira, but that is a request, not a lock.",
       "They work in their own worktree of your clone, so your own files and branch are not touched.",
       "Stop any run from its details, or Stop all above.",
       "Agents you start from Terminal are not shown here, and Gossamr's runs also show in your own",

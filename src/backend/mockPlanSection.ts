@@ -1,6 +1,6 @@
 import type { WorkBlock, WorkDoc, WorkInline } from "../types";
 import { docFromText } from "../lib/docs";
-import { PLAN_LIMIT } from "./mockRunKinds";
+import { PLAN_LIMIT } from "./mockRunSpec";
 import { fit, planWithoutNote } from "./mockRunResult";
 import { markdownOf } from "./mockMarkdown";
 

@@ -73,7 +73,7 @@ describe("the Triage section of a description in the sample build", () => {
 describe("a Triage on the vague CA-408 in the sample build", () => {
   const CA408 = itemRef("CA-408");
   const sample = () => new MockBackend({ runs: { seed: "empty", prSurfaceMs: null } });
-  const spec = (ws: string): RunSpec => ({ kind: "triage", repo: "acme/storefront", clonePath: "/Users/sample/Code/storefront", base: "main", name: `ca-408-${Math.random().toString(16).slice(2, 6)}`, instruction: "", focus: null, focusFromRun: null, ticketBlock: null, workstream: ws });
+  const spec = (ws: string): RunSpec => ({ role: "triage", repo: "acme/storefront", clonePath: "/Users/sample/Code/storefront", base: "main", name: `ca-408-${Math.random().toString(16).slice(2, 6)}`, brief: "", ticketBlock: null, workstream: ws });
   async function triage(b: MockBackend, ws: string) {
     const run = b.runs.start(spec(ws), CA408);
     for (let i = 0; i < 3 && b.runs.get(run.id)?.state !== "done"; i++) b.runs.advance(run.id);

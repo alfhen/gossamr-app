@@ -15,9 +15,7 @@ import { chipLabel, editedTitle } from "../lib/needs";
 import { PermissionAsk } from "./PermissionAsk";
 import { useWorkView } from "./workViewStore";
 import { RunAnswer } from "./RunAnswer";
-import { RunContinuation } from "./RunContinuation";
 import { SignInBox } from "./RunSheet";
-import { resumable } from "./runSheetLogic";
 import { useRuns } from "./runsStore";
 import { BatchConfirm, PlanApproval, confirmBatch, planResultFor } from "./StepRail";
 import { batchLabel, EDITED_ASIDE, editedPending, freezeBatch, type BatchSnapshot } from "./workViewLogic";
@@ -249,7 +247,7 @@ export function endEditing(root: ParentNode): boolean {
 
 function PermissionBody({ run }: { run: Run }) {
   const store = useRuns.getState();
-  return <PermissionAsk run={run} onAttach={() => void store.attach(run.id)} onStop={() => void store.stop(run.id)} confirmStop />;
+  return <PermissionAsk run={run} onAttach={() => void store.attach(run.id)} />;
 }
 
 function AnswerBody({ run }: { run: Run }) {
@@ -294,19 +292,6 @@ function FailureBody({ run }: { run: Run }) {
         <Dismiss run={run} />
       </div>
     </Box>
-  );
-}
-
-function StoppedBody({ run }: { run: Run }) {
-  const store = useRuns.getState();
-  return (
-    <div className="grid gap-2">
-      {resumable(run) && <AnswerBody run={run} />}
-      <RunContinuation key={`continue-${run.id}`} run={run} adopt={(session) => store.adoptSession(run.id, session)} />
-      <div>
-        <Dismiss run={run} />
-      </div>
-    </div>
   );
 }
 
@@ -358,8 +343,6 @@ function Decision({ need }: { need: Need }) {
       return run ? <SignInBox run={run} onAttach={() => void useRuns.getState().attach(run.id)} /> : null;
     case "failure":
       return run ? <FailureBody run={run} /> : null;
-    case "stoppedAtLimit":
-      return run ? <StoppedBody run={run} /> : null;
     case "paused":
       return view ? <PausedBanner view={view} actions={controlActions(view.workstream.id)} /> : null;
     case "plan":

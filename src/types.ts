@@ -489,50 +489,29 @@ export interface ProposalsChanged {
   connectionId: string;
 }
 
-/** Mirrors src-tauri/src/domain/run.rs. */
-export type RunKind = "investigate" | "triage" | "plan" | "build" | "review" | "verify";
-
-/** Everything that decides what an agent does, as the person approves it. */
+/** What Pip asks an agent to do, as stored. Mirrors src-tauri/src/domain/run.rs. */
 export interface RunSpec {
-  kind: RunKind;
+  /** A short free label such as planner, builder or reviewer. */
+  role: string;
   /** `owner/name`. */
   repo: string;
   clonePath: string;
   base: string;
   /** The worktree folder; with `worktree-` in front it is also the branch. */
   name: string;
-  instruction: string;
-  /** Pip's note, up to 300 characters, sent as data apart from the instruction. */
-  focus?: string | null;
-  /** The run whose output led Pip to propose this one. */
-  focusFromRun?: string | null;
+  /** Pip's brief for the agent. */
+  brief: string;
+  /** The key of the ticket the run is about. */
+  ticket?: string | null;
   /** Snapshot of the ticket made by the backend, never taken from a model. */
   ticketBlock?: string | null;
-  /** The pull request a review reads; reviews only. */
+  /** The pull request the run checks out. */
   pr?: number | null;
-  /** The pull request's head commit when the draft was read; the backend fills it in. */
+  /** The pull request's head commit when the run was started. */
   prSha?: string | null;
-  /** For a build made from a plan run: the plan as the person read and edited it, sent as data apart from the instruction. */
-  plan?: string | null;
-  /** The plan run it came from. Set with `plan`, builds only. */
-  planFromRun?: string | null;
-  /** Whether `plan` is text a person settled: the applied Gossamr Plan description draft, or a plan edited in this draft. */
-  planApproved?: boolean;
-  /** For a review made from a build run: the builder's final answer, sent as data apart from the instruction. */
-  buildAccount?: string | null;
-  /** The build run it came from. Set with `buildAccount`, reviews only. */
-  buildFromRun?: string | null;
-  /** For a triage or plan made after an investigation: what it found, sent as data apart from the instruction. Filled by the backend from that run, never by the caller. */
-  findings?: string | null;
-  /** The investigation run the findings came from. Set with `findings`, triage and plans only. */
-  findingsFromRun?: string | null;
-  /** Whether a build is told it may push and open a draft pull request. Builds only. */
-  allowPush?: boolean;
-  /** Where the draft ticket of an investigation with no ticket lands. Its presence makes the run end as a ticket; the agent never chooses it. */
-  project?: ContainerRef | null;
-  /** Whether the prompt spells out what the report tool is to be given. Every launch offers the tool. */
+  /** Whether the prompt tells the agent about Gossamr's tools. Every launch offers them. */
   report?: boolean;
-  /** The workstream the run belongs to. Part of what the person approves, never part of the prompt. */
+  /** The workstream the run belongs to. Never part of the prompt. */
   workstream?: string | null;
 }
 
@@ -543,6 +522,7 @@ export type RunFailure =
   | { type: "untrustedFolder"; path: string }
   | { type: "notSignedIn" }
   | { type: "claudeMissing" }
+  | { type: "modeRefused"; mode: "auto" | "bypass" }
   | { type: "noClone" }
   | { type: "capReached" }
   | { type: "other" };
@@ -592,8 +572,6 @@ export interface Run {
   continuedAt?: string | null;
   /** How many times the agent has been given the job: 1 for the first, one more for each follow-up sent back. */
   passes?: number;
-  /** Gossamr stopped the run for passing its time or token limit. It can be resumed. */
-  stoppedByLimit?: boolean;
   /** Sessions this run left behind when it carried on under a new id. */
   earlierSessions?: { shortId: string; sessionId?: string | null; removed?: boolean }[];
   /** Listed sessions that may be this run carried on, offered when Gossamr can't be sure which one. */
@@ -602,31 +580,10 @@ export interface Run {
   createdItem?: ItemRef | null;
   /** Set while an approved run stays queued only because the most agents allowed are running; it starts by itself once a slot frees. */
   slotWaitSince?: string | null;
-  /** The restriction a read-only run was launched with; absent for a Build and for a run that hasn't launched. */
-  readOnly?: ReadOnly | null;  /**
-   * The person chose Allow once for this prompt, the exact command, and Terminal was opened for them to answer Yes there.
-   * Cleared once the run leaves the prompt or asks something else.
-   */
-  permissionAllowed?: { command: string; at: string } | null;
   /** Who started it; absent in sample data and in runs stored before Pip started agents, which are the person's. */
   createdBy?: ProposalMaker;
   /** The Pip turn that started it, when Pip did. */
   origin?: ProposalOrigin | null;
-}
-
-/**
- * What Claude Code itself is told to refuse for a read-only kind (`ReadOnly` in domain/run.rs): the permission mode, the
- * exact commands allowed, the tools and commands denied, and the sentence added to the guard.
- */
-export interface ReadOnly {
-  mode: string;
-  allow: string[];
-  deny: string[];
-  guard: string;
-  /** `--setting-sources`: the settings files the run reads; empty for none. Absent on a run launched before it existed. */
-  settingSources?: string | null;
-  /** `--strict-mcp-config`: only the MCP servers Gossamr passes are loaded. */
-  strictMcpConfig?: boolean;
 }
 
 /** Said wherever a result is only the one-line summary Claude keeps, so nobody takes it for the whole answer. */
@@ -878,11 +835,9 @@ export interface RunsChanged {
   connectionId: string;
 }
 
-/** What the person controls about runs. Zero turns a limit off. */
+/** What the person controls about runs. */
 export interface AgentSettings {
   maxRuns: number;
-  wallClockMinutes: number;
-  tokenCap: number;
   terminal: "terminal" | "iTerm";
   /** Draft a Jira comment on the run's ticket when it finishes with a `For Jira:` section. */
   draftOnFinish: boolean;

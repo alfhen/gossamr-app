@@ -8,7 +8,7 @@ import { DraftCard, SECRET_NOTE, rewriteRisks, postedNote, keepEditsOfDraft, kep
 import { KeyHint } from "./KeyHint";
 import { DraftPreview, draftPreviewBody } from "./DraftPreview";
 
-const spec: RunSpec = { kind: "investigate", repo: "acme/web", clonePath: "/Users/sample/Code/web", base: "main", name: "ca-412-fix-ab12", instruction: "Investigate this work." };
+const spec: RunSpec = { role: "investigate", repo: "acme/web", clonePath: "/Users/sample/Code/web", base: "main", name: "ca-412-fix-ab12", brief: "Investigate this work." };
 
 const runDraft = (state: Proposal["state"]): Proposal => ({
   id: "p1",

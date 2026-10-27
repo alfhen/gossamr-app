@@ -1,8 +1,8 @@
 import { and } from "../lib/filter";
 import { REVIEW_IS_THE_USERS, WORKSTREAM_PENDING_CAP, capRefusal, isRunDraft, leftByRun, targetOf } from "../lib/proposals";
 import { docFromText, docText } from "../lib/docs";
-import type { Intent, ItemRef, Proposal, ReviewComment, Run, RunKind, ScreenContext, WorkFilter } from "../types";
-import { followedRun } from "../workspace/runSheetLogic";
+import type { Intent, ItemRef, Proposal, ReviewComment, Run, ScreenContext, WorkFilter } from "../types";
+import { roleLabel, stepOf, type Step } from "../lib/roles";
 import { APPROVE_PLAN, liveCounts, liveWords, needsPerson, planOpenQuestions, resultHeadline, runTitle, stateView } from "../workspace/agentsLogic";
 import type { ImageData } from "../lib/pipImages";
 import { jiraNote, subtaskProposals } from "./mockRunResult";
@@ -21,11 +21,11 @@ export interface PipScript {
   filter: { filter: WorkFilter; note: string } | null;
   draft: { intent: Intent; label: string | null } | null;
   /**
-   * An agent to start, as `start_agent` does: its role, the run it follows (a build or review needs one), a focus note or, with
-   * no ticket, the question and the repository. `open` is a workstream to open first, as `open_workstream` does, when the
-   * request came in General.
+   * An agent to start, as `start_agent` does: its role, its brief, the repository when no ticket covers the work and a pull
+   * request to check out: `pr`, or `prOfRun` for the build whose pull request that is, as Pip reads it from `read_workstream`.
+   * `open` is a workstream to open first, as `open_workstream` does, when the request came in General.
    */
-  start?: { item: ItemRef | null; role: RunKind; fromRun: string | null; brief: string | null; repo: string | null; open?: { item: ItemRef | null; title: string } } | null;
+  start?: { item: ItemRef | null; role: string; brief: string; repo: string | null; pr?: number | null; prOfRun?: string | null; open?: { item: ItemRef | null; title: string } } | null;
   /** A message for an agent, as `message_agent` sends it. */
   message?: { runId: string; text: string } | null;
   /** An agent to stop, as `stop_agent` does. */
@@ -171,15 +171,13 @@ export function openQuestions(markdown: string): string | null {
   return text || null;
 }
 
-/** The next step a person asks for in a workstream's conversation, and the kind of finished run it follows. */
-const CHAIN_ASKS: { pattern: RegExp; kind: RunKind; from: RunKind }[] = [
-  { pattern: /\btriage (?:it|this)\b|^\s*triage [a-z][a-z0-9]+-\d+\b/, kind: "triage", from: "investigate" },
-  { pattern: /\bplan (?:it|this)\b|^\s*plan [a-z][a-z0-9]+-\d+\b/, kind: "plan", from: "investigate" },
-  { pattern: /\bbuild (?:it|this)\b/, kind: "build", from: "plan" },
-  { pattern: /\breview (?:it|this)\b/, kind: "review", from: "build" },
+/** The next step a person asks for in a workstream's conversation: the role Pip names, the finished run it follows and what it asks of the agent. */
+const CHAIN_ASKS: { pattern: RegExp; role: string; from: Step; words: string; brief: (key: string, from: string | null) => string }[] = [
+  { pattern: /\btriage (?:it|this)\b|^\s*triage [a-z][a-z0-9]+-\d+\b/, role: "triager", from: "investigate", words: "a triage", brief: (key, from) => `Triage ${key}: size it, say how sure you are, and name the areas of the code it touches. ${from ? `Start from what ${from} reported. ` : ""}Propose subtasks in your report only if the work is too big for one piece.` },
+  { pattern: /\bplan (?:it|this)\b|^\s*plan [a-z][a-z0-9]+-\d+\b/, role: "planner", from: "investigate", words: "a plan", brief: (key, from) => `Plan ${key}: write an implementation plan a person will read and approve before anyone builds it. ${from ? `Start from what ${from} reported. ` : ""}Put the whole plan in your report.` },
+  { pattern: /\bbuild (?:it|this)\b/, role: "builder", from: "plan", words: "a build", brief: (key, from) => `Build ${key}${from ? `, following the plan ${from} reported` : ""}. Keep the change small, run the tests, push your own branch and open a draft pull request.` },
+  { pattern: /\breview (?:it|this)\b/, role: "reviewer", from: "build", words: "a review", brief: (key, from) => `Review the pull request ${from ?? "the build"} opened for ${key}. Try to show the change is not ready, and report a verdict with findings.` },
 ];
-
-const CHAIN_WORDS: Record<RunKind, string> = { investigate: "an investigation", triage: "a triage", plan: "a plan", build: "a build", review: "a review", verify: "a check" };
 
 /** The conversation's workstream, as the scripted Pip knows it: its id and its ticket. */
 export interface PipWorkstream {
@@ -208,10 +206,9 @@ const otherKey = (q: string, item: ItemRef | null) => {
 };
 
 /**
- * What Pip does when asked for the next step in a workstream: it starts that kind and names as the run it follows the
- * workstream's newest finished run of the kind that comes before, else its newest of that kind at all, so the backend says
- * why it can't follow it yet; with none, no run, and the backend refuses. Whatever the agent carries from that run is
- * Gossamr's to fill in.
+ * What Pip does when asked for the next step in a workstream: it starts that role with a brief that names the
+ * workstream's newest finished run of the step that comes before, else its newest of that step at all, so the agent reads
+ * what it reported; a review is given the pull request its build opened, and refused while it isn't found.
  */
 function chainStep(prompt: string, context: ScreenContext, runs: readonly Run[], workstream: PipWorkstream): PipScript | null {
   const q = prompt.toLowerCase();
@@ -221,37 +218,36 @@ function chainStep(prompt: string, context: ScreenContext, runs: readonly Run[],
   if (!item) return { steps: [], text: "This workstream has no ticket, so there is nothing to run that on. Ask me to investigate a question instead.", filter: null, draft: null };
   const newest = (done: boolean) =>
     runs
-      .filter((r) => r.spec.workstream === workstream.id && r.spec.kind === ask.from && (!done || r.state === "done"))
+      .filter((r) => r.spec.workstream === workstream.id && stepOf(r.spec.role) === ask.from && (!done || r.state === "done"))
       .sort((a, b) => (b.endedAt ?? b.queuedAt).localeCompare(a.endedAt ?? a.queuedAt))[0];
-  const source = newest(true) ?? (ask.kind === "build" || ask.kind === "review" ? newest(false) : undefined);
-  const fromRun = source?.id ?? null;
+  const source = newest(true) ?? (ask.role === "builder" || ask.role === "reviewer" ? newest(false) : undefined);
+  const from = source ? (labelsByRun(runs).get(source.id) ?? null) : null;
   const following = source ? ` following ${runPhrase(source)}` : "";
-  const carried = ask.kind === "build" ? " Gossamr filled in the plan from that run; I didn't write it." : ask.kind === "review" ? " Gossamr filled in the builder's account and pinned the pull request; I didn't write them." : "";
   return {
     steps: [`Looked up ${item.key}`, "Read the workstream's agents", "Started an agent"],
-    text: `I started ${CHAIN_WORDS[ask.kind]} of **${item.key}**${following}.${carried}`,
+    text: `I started ${ask.words} of **${item.key}**${following}.`,
     filter: null,
     draft: null,
-    start: { item, role: ask.kind, fromRun, brief: null, repo: null },
+    start: { item, role: ask.role, brief: ask.brief(item.key, from), repo: null, prOfRun: ask.role === "reviewer" ? (source?.id ?? null) : null },
   };
 }
 
 const asksToRestart = /^\s*start the (\w+) agent of run (\S+) again\b/i;
 
-/** "Start the build agent of run X again": the failed run's kind and what it followed, in its own workstream, with its note. */
+/** "Start the build agent of run X again": the failed run's role and brief, in its own workstream. */
 function restartStep(prompt: string, runs: readonly Run[], workstream: PipWorkstream): PipScript | null {
   const asked = asksToRestart.exec(prompt);
   if (!asked) return null;
   const failed = runs.find((r) => r.id === asked[2] && r.spec.workstream === workstream.id);
-  if (!failed || failed.spec.kind !== asked[1].toLowerCase()) return { steps: [], text: `There is no ${asked[1].toLowerCase()} run ${asked[2]} in this workstream to start again.`, filter: null, draft: null };
-  const { kind, repo } = failed.spec;
+  if (!failed || failed.spec.role !== asked[1].toLowerCase()) return { steps: [], text: `There is no ${asked[1].toLowerCase()} run ${asked[2]} in this workstream to start again.`, filter: null, draft: null };
+  const { role, repo, brief, pr } = failed.spec;
   const item = failed.item ?? workstream.item;
   return {
     steps: item ? [`Looked up ${item.key}`, "Started an agent"] : ["Started an agent"],
-    text: `I started ${CHAIN_WORDS[kind]} again${item ? ` of **${item.key}**` : ` in **${repo}**`}.`,
+    text: `I started the ${role} again${item ? ` of **${item.key}**` : ` in **${repo}**`}.`,
     filter: null,
     draft: null,
-    start: { item, role: kind, fromRun: followedRun(failed.spec), brief: failed.spec.focus ?? null, repo: item ? null : repo },
+    start: { item, role, brief, repo: item ? null : repo, pr },
   };
 }
 
@@ -327,8 +323,6 @@ function workstreamAnswer(prompt: string, runs: readonly Run[], workstream: PipW
 const EVENT = "[Event] ";
 const EVENT_LINE = /^\[Event\] (?:run (\S+)|a run) \((\w+)\) ([^;]+)(.*)$/;
 
-const KIND_WORD: Record<RunKind, string> = { investigate: "Investigate", triage: "Triage", plan: "Plan", build: "Build", review: "Review", verify: "Verify" };
-
 /**
  * What Pip says when the supervisor wakes it: one short line for each event, at most three, from the event lines
  * alone. Nothing Pip says starts anything. An agent asking a question is put to the person with `ask_person`; Pip never
@@ -345,7 +339,7 @@ function wakeScript(prompt: string, runs: readonly Run[], workstream: PipWorkstr
     .filter((m): m is RegExpExecArray => m !== null)
     .slice(0, 3)
     .map(([, id, kind, state, rest]) => {
-      const who = id && !labels.has(id) ? name(id) : `${KIND_WORD[kind as RunKind] ?? "The run"} ${name(id)}`;
+      const who = id && !labels.has(id) ? name(id) : `${roleLabel(kind)} ${name(id)}`;
       if (rest.includes("; waiting for its pull request")) return `${who} finished. Its pull request isn't up yet; I'll draft the review when it is.`;
       if (state.trim() === "Pull request found") return `${who}'s pull request is up. I can draft its review now.`;
       if (rest.includes("; plan recommended: no")) return `${who} finished and doesn't recommend a plan, so nothing starts on its own. Tell me if you want one.`;
@@ -354,7 +348,7 @@ function wakeScript(prompt: string, runs: readonly Run[], workstream: PipWorkstr
         const drafts = /; (\d+) drafts?/.exec(rest)?.[1];
         const done = `${who} finished.${drafts ? ` It left ${drafts === "1" ? "a draft" : `${drafts} drafts`} for you.` : ""}`;
         // A plan that left no draft has no description update to approve.
-        if (kind !== "plan" || !drafts) return done;
+        if (stepOf(kind) !== "plan" || !drafts) return done;
         // Approving the plan is approving its description update: say so, and what the plan left open for a person.
         const questions = planOpenQuestions(runs.find((r) => r.id === id)?.result);
         const open = questions.length ? `\n\nIt leaves ${questions.length === 1 ? "an open question" : `${questions.length} open questions`} for you, worth answering first if they change the plan:\n${questions.map((q) => `- ${q}`).join("\n")}` : "";
@@ -665,7 +659,7 @@ export function scriptPip(prompt: string, context: ScreenContext, images: ImageD
         text: `I started an investigation of **${item.key}**${focus ? ` with a focus note: “${focus}”` : ""}.${open ? " I opened a workstream for it." : ""} It shows under Agents, and I'll tell you when it finishes.`,
         filter: null,
         draft: null,
-        start: { item, role: "investigate", fromRun: null, brief: focus, repo: null, ...(open ? { open } : {}) },
+        start: { item, role: "investigator", brief: focus ? `Look into ${item.key} and report what you found. Focus on ${focus}.` : `Look into ${item.key} and report what you found.`, repo: null, ...(open ? { open } : {}) },
       };
     }
     const ask = ticketlessQuestion(prompt);
@@ -675,7 +669,7 @@ export function scriptPip(prompt: string, context: ScreenContext, images: ImageD
         text: `No ticket covers this, so I started an investigation in **${ask.repo}** with no ticket: “${ask.prompt}” When it finishes I'll draft a ticket from what it found, and you approve that.`,
         filter: null,
         draft: null,
-        start: { item: null, role: "investigate", fromRun: null, brief: ask.prompt, repo: ask.repo, ...(workstream ? {} : { open: { item: null, title: ask.prompt.slice(0, 80) } }) },
+        start: { item: null, role: "investigator", brief: ask.prompt, repo: ask.repo, ...(workstream ? {} : { open: { item: null, title: ask.prompt.slice(0, 80) } }) },
       };
     }
     if (ask) return { steps: [], text: "Which repository should it look in? Name it, for example acme/storefront.", filter: null, draft: null };
@@ -788,7 +782,9 @@ export interface PipDrafter {
   /** Opens a workstream on `item` (none for a question with no ticket) the way `open_workstream` does, and returns its id. */
   pipOpenWorkstream(item: ItemRef | null, title: string): string;
   /** Starts an agent in workstream `workstream` the way `start_agent` does. */
-  pipStartAgent(workstream: string, role: RunKind, brief: string | null, repo: string | null, fromRun: string | null, requestId: string): unknown;
+  pipStartAgent(workstream: string, role: string, brief: string | null, repo: string | null, pr: number | null, requestId: string): unknown;
+  /** The pull request a run opened, as far as the code host shows it. */
+  pipPullRequestOf?(runId: string): number | null;
   /** Messages an agent the way `message_agent` does. */
   pipMessageAgent(runId: string, text: string): unknown;
   /** Stops an agent the way `stop_agent` does. */
@@ -901,12 +897,15 @@ export async function mockAsk(req: AskRequest, drafter: Partial<PipDrafter> | nu
       }
     };
     if (!stopped && script.start && drafter?.pipStartAgent) {
-      const { role, fromRun, brief, repo, open } = script.start;
+      const { role, brief, repo, prOfRun, open } = script.start;
+      const named = script.start.pr ?? null;
       let workstream = wsId;
       const refused = await tried(() => {
         if (open) workstream = drafter.pipOpenWorkstream!(open.item, open.title);
         if (!workstream) throw new Error("this conversation has no workstream");
-        return drafter.pipStartAgent!(workstream, role, brief, repo, fromRun, req.requestId);
+        const pr = prOfRun ? (drafter.pipPullRequestOf?.(prOfRun) ?? null) : named;
+        if (prOfRun && pr === null) throw new Error("that build has no pull request yet. Gossamr asked GitHub for it; draft the review once get_workstream no longer says the build is waiting for its pull request.");
+        return drafter.pipStartAgent!(workstream, role, brief, repo, pr, req.requestId);
       });
       if (refused) script.text = `I couldn't start it: ${refused}`;
     }

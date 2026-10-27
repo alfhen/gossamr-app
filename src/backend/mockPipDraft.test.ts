@@ -8,13 +8,13 @@ import { itemRef } from "./mockConnector";
 import { renderPrompt } from "./mockRuns";
 import type { AskRequest } from "./claude";
 import { planOpenQuestions } from "../workspace/agentsLogic";
-import type { Intent, Proposal, Run, RunKind, RunSpec, ScreenContext } from "../types";
+import type { Intent, Proposal, Run, RunSpec, ScreenContext } from "../types";
 
 const NOW = Date.parse("2026-09-30T12:00:00Z");
 
 describe("mock Pip reading a draft in full", () => {
   const b = new MockBackend({ runs: { seed: "kinds", epoch: NOW, planDescription: true } });
-  const run = b.runs.list().find((r) => r.spec.kind === "plan")!;
+  const run = b.runs.list().find((r) => r.spec.role === "planner")!;
   const drafts = b.proposals.list();
   const context = { screen: "board", item: run.item } as unknown as ScreenContext;
 
@@ -48,7 +48,7 @@ describe("open questions in a run result", () => {
 describe("mock Pip woken by a finished plan (N6)", () => {
   it("says approving the description update lets Build start, and lists the questions the plan left open", () => {
     const b = new MockBackend({ runs: { seed: "kinds", epoch: NOW, planDescription: true } });
-    const plan = b.runs.list().find((r) => r.spec.kind === "plan")!;
+    const plan = b.runs.list().find((r) => r.spec.role === "planner")!;
     const reply = scriptPip(`[Event] run ${plan.id} (plan) Done; 1 draft`, { screen: "board", item: null } as unknown as ScreenContext, [], [plan], NOW).text;
     expect(reply).toContain("Approve the description update to let Build start.");
     const questions = planOpenQuestions(plan.result);
@@ -65,7 +65,7 @@ describe("mock Pip woken by a finished plan (N6)", () => {
 describe("mock Pip starting the next step of a workstream, as start_agent does", () => {
   const CA401 = itemRef("CA-401");
   const storefront = { repo: "acme/storefront", clonePath: "/Users/sample/Code/storefront" };
-  const base: RunSpec = { kind: "investigate", ...storefront, base: "main", name: "x", instruction: "", focus: null, focusFromRun: null, ticketBlock: null };
+  const base: RunSpec = { role: "investigator", ...storefront, base: "main", name: "x", brief: "", ticket: "CA-401", ticketBlock: null };
   let n = 0;
 
   /** A backend with a workstream on CA-401 and Pip's conversation in it as request `ws-chain`. */
@@ -76,130 +76,79 @@ describe("mock Pip starting the next step of a workstream, as start_agent does",
     return { b, ws: ws.id };
   }
 
-  /** What Pip's `start_agent` does for `role` on CA-401 in workstream `ws` (none: General). */
-  const start = (b: MockBackend, role: RunKind, ws: string | null, fromRun: string | null = null, brief: string | null = null, item = CA401) => b.runs.pipStart({ workstream: ws, role, brief, repo: null, fromRun, item }, `ws-chain-${n++}`);
-
-  /** A run of `kind` on CA-401 in workstream `ws`, stepped to done unless `steps` says otherwise. */
-  async function ran(b: MockBackend, kind: RunKind, ws: string | null, steps = 3, item = CA401) {
-    const run = b.runs.start({ ...base, kind, name: `ca-401-${kind}-${(n++).toString(16).padStart(4, "0")}`, ...(ws ? { workstream: ws } : {}) }, item);
+  /** A run with `role` on CA-401 in workstream `ws`, stepped to done unless `steps` says otherwise. */
+  async function ran(b: MockBackend, role: string, ws: string | null, steps = 3, item = CA401) {
+    const run = b.runs.start({ ...base, role, name: `ca-401-${role}-${(n++).toString(16).padStart(4, "0")}`, ...(ws ? { workstream: ws } : {}) }, item);
     for (let i = 0; i < steps; i++) b.runs.advance(run.id);
     return b.runs.get(run.id)!;
   }
 
-  /** The person adds `extra` to the plan run's description draft and approves it. */
-  async function settle(b: MockBackend, plan: Run, extra: string) {
-    const draft = b.proposals.list({ states: ["pending"] }).find((p) => p.origin.type === "run" && p.origin.runId === plan.id && p.intent.type === "rewrite")!;
-    if (draft.intent.type !== "rewrite" || !draft.intent.body) throw new Error("a description draft");
-    await b.proposalsEdit(draft.id, { type: "rewrite", body: draft.intent.body.toText.replace(/\n*<\/details>\s*$/, `\n\n${extra}\n\n</details>`) });
-    await b.proposalsApprove(draft.id);
-    return draft;
+  /** What Pip says to `prompt` in workstream `ws`, and the agents it started. */
+  async function say(b: MockBackend, ws: string, prompt: string) {
+    let said = "";
+    const stop = mockPipEvents.on((id, e) => {
+      if (id === "ws-said" && e.type === "text") said += e.text;
+    });
+    await mockAsk({ requestId: "ws-said", prompt, context: { screen: "board", item: CA401, selection: [] } as unknown as ScreenContext, conversation: `ws:${ws}` } as AskRequest, b, 0);
+    stop();
+    return said;
   }
 
-  it("starts a build only from a plan the person approved or skipped, never one they weren't shown or Pip revised", async () => {
+  it("starts an agent with Pip's role and brief, as Pip's own, in the workstream, with the ticket's text", async () => {
     const { b, ws } = await workstream();
-    const plan = await ran(b, "plan", ws);
-    const draft = b.proposals.list({ states: ["pending"] }).find((p) => p.origin.type === "run" && p.origin.runId === plan.id && p.intent.type === "rewrite")!;
-    expect(() => b.proposals.pipRevise(draft.id, { description: "Pip's plan" }, ws)).toThrow("carries the Gossamr Plan a build follows");
-    // A draft Gossamr retired for a newer plan was never decided by the person.
-    await ran(b, "plan", ws);
-    expect(b.proposals.get(draft.id)?.state.type).toBe("retired");
-    expect(() => start(b, "build", ws, plan.id)).toThrow("was retired (replaced by a newer plan) before the person decided on it");
-    const skipped = await ran(b, "plan", ws);
-    const its = b.proposals.list({ states: ["pending"] }).find((p) => p.origin.type === "run" && p.origin.runId === skipped.id)!;
-    await b.proposalsSkip(its.id);
-    expect(start(b, "build", ws, skipped.id).spec).toMatchObject({ planFromRun: skipped.id, planApproved: false });
+    const run = b.runs.pipStart({ workstream: ws, role: "Triager", brief: "Size it.", repo: null, item: CA401 }, "ws-chain");
+    expect(run).toMatchObject({ createdBy: "pip", origin: { type: "chat", workstream: ws } });
+    expect(run.spec).toMatchObject({ role: "triager", brief: "Size it.", ticket: "CA-401", report: true, workstream: ws, pr: null });
+    expect(run.spec.ticketBlock).toBeTruthy();
+    const prompt = renderPrompt(run.spec);
+    expect(prompt).toContain("You are working as a triager on CA-401.");
+    expect(prompt).toContain("Size it.");
   });
 
-  it("starts a triage and a plan carrying the workstream's investigation's findings", async () => {
+  it("starts the next step with a brief that points at the run it follows, and no typed hand-off", async () => {
     const { b, ws } = await workstream();
-    const investigation = await ran(b, "investigate", ws);
-    const triage = start(b, "triage", ws);
-    expect(triage.createdBy).toBe("pip");
-    expect(triage.spec).toMatchObject({ kind: "triage", findingsFromRun: investigation.id, workstream: ws });
-    expect(triage.spec.findings).toMatch(/^The consumer retries failed messages immediately/);
-    expect(start(b, "plan", ws, investigation.id).spec).toMatchObject({ kind: "plan", findingsFromRun: investigation.id });
-    // In General nothing is taken from a workstream unless Pip names the run.
-    const loose = start(b, "triage", null).spec;
-    expect([loose.findings ?? null, loose.findingsFromRun ?? null]).toEqual([null, null]);
+    const investigation = await ran(b, "investigator", ws);
+    expect(await say(b, ws, "triage this")).toContain("I started a triage of **CA-401**");
+    const triage = b.runs.list().find((r) => r.spec.role === "triager")!;
+    expect(triage.spec.brief).toContain("Start from what R1 reported.");
+    expect(triage.spec.workstream).toBe(ws);
+    expect(Object.keys(triage.spec).sort()).toEqual(["base", "brief", "clonePath", "name", "pr", "prSha", "report", "repo", "role", "ticket", "ticketBlock", "workstream"].filter((k) => k in triage.spec).sort());
+    expect(investigation.state).toBe("done");
   });
 
-  it("starts a build only after a finished plan the person settled, with the edited plan and a draft pull request in a workstream", async () => {
-    const { b, ws } = await workstream();
-    expect(() => start(b, "build", ws)).toThrow("A build can only follow a finished plan run");
-    const working = await ran(b, "plan", ws, 2);
-    expect(() => start(b, "build", ws, working.id)).toThrow("that plan run hasn't finished");
-    b.runs.advance(working.id);
-    expect(() => start(b, "build", ws, working.id)).toThrow("the person hasn't settled the plan yet: they approve or skip the Gossamr Plan draft first");
-    await settle(b, working, "Marker: the person's line.");
-    const investigation = await ran(b, "investigate", ws);
-    expect(() => start(b, "build", ws, investigation.id)).toThrow(`A build can only follow a finished plan run; run ${investigation.id} is a investigate run.`);
-    expect(() => start(b, "build", null, working.id)).toThrow(`run ${working.id} belongs to another workstream; ask in that workstream's conversation`);
-    const loose = await ran(b, "plan", null);
-    expect(() => start(b, "build", ws, loose.id)).toThrow(`run ${loose.id} isn't part of this workstream; Pip can only follow a run of the workstream it is asked in`);
-    expect(() => start(b, "build", null, loose.id, null, itemRef("CA-402"))).toThrow("that plan run is about another ticket");
-    const count = b.runs.list().length;
-
-    const build = start(b, "build", ws, working.id, "Keep it small");
-    expect(build).toMatchObject({ createdBy: "pip", origin: { type: "chat", workstream: ws } });
-    expect(build.spec).toMatchObject({ kind: "build", planFromRun: working.id, planApproved: true, allowPush: true, focus: "Keep it small", focusFromRun: working.id, workstream: ws });
-    expect(build.spec.plan).toContain("Marker: the person's line.");
-    const prompt = renderPrompt(build.spec);
-    expect(prompt).toContain("gh pr create --draft");
-    expect(prompt).toContain("Never mark the pull request ready");
-    expect(b.runs.list().length).toBe(count + 1);
-
-    // Outside a workstream Pip's build doesn't push.
-    try {
-      start(b, "build", null, loose.id);
-    } catch (e) {
-      expect((e as Error).message).toContain("hasn't settled the plan");
-    }
-    await settle(b, loose, "Another line.");
-    expect(start(b, "build", null, loose.id).spec).toMatchObject({ allowPush: false });
-  });
-
-  it("starts a review only of a finished build whose pull request was found, pinned to it, reporting and with no focus", async () => {
-    const { b, ws } = await workstream();
-    expect(() => start(b, "review", ws)).toThrow("A review needs a pull request");
-    const unpublished = await ran(b, "build", ws);
-    expect(() => start(b, "review", ws, unpublished.id)).toThrow("that build has no pull request in this repository yet");
-    expect(() => start(b, "review", ws, unpublished.id, "the tests")).toThrow();
-
-    const seeded = new MockBackend({ runs: { seed: "kinds" }, githubRepos: 14 });
-    const build = seeded.runs.list().find((r) => r.spec.kind === "build" && r.state === "done" && r.item?.key === "CA-402")!;
-    const review = start(seeded, "review", null, build.id, null, build.item!);
+  it("starts a reviewer on the pull request its build opened, pinned to its head commit", async () => {
+    const b = new MockBackend({ runs: { seed: "kinds" }, githubRepos: 14 });
+    const build = b.runs.list().find((r) => r.spec.role === "builder" && r.state === "done" && r.item?.key === "CA-402")!;
+    const review = b.runs.pipStart({ workstream: null, role: "reviewer", brief: "Review it.", repo: "acme/webshop", pr: b.runs.pullRequestOf(build.id), item: build.item }, "ws-chain");
     expect(review.createdBy).toBe("pip");
-    expect(review.spec).toMatchObject({ kind: "review", pr: 218, buildFromRun: build.id, report: true, focus: null, allowPush: false });
+    expect(review.spec).toMatchObject({ role: "reviewer", pr: 218, report: true });
     expect(review.spec.prSha).toBeTruthy();
-    expect(renderPrompt(review.spec)).toContain(`Review pull request #218 in acme/webshop at commit ${review.spec.prSha}.`);
+    expect(renderPrompt(review.spec)).toContain(`Pull request #218 in acme/webshop at commit ${review.spec.prSha}`);
   });
 
   it("turns a refused start into what Pip says, not a failed turn", async () => {
     const { b, ws } = await workstream();
-    let said = "";
-    const stop = mockPipEvents.on((id, e) => {
-      if (id === "ws-refused" && e.type === "text") said += e.text;
-    });
-    await mockAsk({ requestId: "ws-refused", prompt: "build it", context: { screen: "board", item: CA401, selection: [] } as unknown as ScreenContext, conversation: `ws:${ws}` } as AskRequest, b, 0);
-    stop();
-    expect(said).toBe("I couldn't start it: A build can only follow a finished plan run: pass from_run with the plan run's id from list_runs.");
-    expect(b.runs.list()).toEqual([]);
-    expect(mockPipTurns.turns(`ws:${ws}`).find((t) => t.requestId === "ws-refused")).toMatchObject({ status: "done", error: null });
+    await ran(b, "builder", ws);
+    const said = await say(b, ws, "review it");
+    expect(said).toMatch(/^I couldn't start it: that build has no pull request yet\./);
+    expect(b.runs.list()).toHaveLength(1);
+    expect(mockPipTurns.turns(`ws:${ws}`).find((t) => t.requestId === "ws-said")).toMatchObject({ status: "done", error: null });
   });
 
-  it("names the workstream's newest finished run of the kind before as the one to follow", () => {
+  it("names the workstream's newest finished run of the step before in the brief it writes", () => {
     const ws = { id: "ws1", item: CA401 };
-    const run = (id: string, kind: RunKind, state: Run["state"], at: string) => ({ id, item: CA401, spec: { kind, workstream: "ws1" }, state, queuedAt: at, endedAt: state === "done" ? at : null }) as unknown as Run;
-    const runs = [run("p1", "plan", "done", "2026-09-30T10:00:00Z"), run("p2", "plan", "done", "2026-09-30T11:00:00Z"), run("i1", "investigate", "done", "2026-09-30T09:00:00Z")];
+    const run = (id: string, role: string, state: Run["state"], at: string) => ({ id, item: CA401, spec: { role, workstream: "ws1" }, state, queuedAt: at, endedAt: state === "done" ? at : null }) as unknown as Run;
+    const runs = [run("p1", "planner", "done", "2026-09-30T10:00:00Z"), run("p2", "planner", "done", "2026-09-30T11:00:00Z"), run("i1", "investigator", "done", "2026-09-30T09:00:00Z")];
     const context = { screen: "board", item: null } as unknown as ScreenContext;
-    expect(scriptPip("build it", context, [], runs, NOW, [], null, ws).start).toMatchObject({ item: CA401, role: "build", fromRun: "p2" });
-    expect(scriptPip("triage this", context, [], runs, NOW, [], null, ws).start).toMatchObject({ role: "triage", fromRun: "i1" });
+    const start = (prompt: string, over: Run[] = runs) => scriptPip(prompt, context, [], over, NOW, [], null, ws).start;
+    expect(start("build it")).toMatchObject({ item: CA401, role: "builder", brief: expect.stringContaining("following the plan R3 reported") });
+    expect(start("triage this")).toMatchObject({ role: "triager", brief: expect.stringContaining("Start from what R1 reported") });
     // A question about a step starts nothing.
-    expect(scriptPip("what did the triage find?", context, [], runs, NOW, [], null, ws).start ?? null).toBeNull();
-    expect(scriptPip("plan this", context, [], runs, NOW, [], null, ws).start).toMatchObject({ role: "plan", fromRun: "i1" });
-    expect(scriptPip("review it", context, [], runs, NOW, [], null, ws).start).toMatchObject({ role: "review", fromRun: null });
-    // A plan still working is named, so the backend says it hasn't finished.
-    expect(scriptPip("build it", context, [], [run("w1", "plan", "working", "2026-09-30T12:00:00Z")], NOW, [], null, ws).start).toMatchObject({ fromRun: "w1" });
+    expect(start("what did the triage find?") ?? null).toBeNull();
+    expect(start("plan this")).toMatchObject({ role: "planner", brief: expect.stringContaining("what R1 reported") });
+    expect(start("review it")).toMatchObject({ role: "reviewer", prOfRun: null });
+    // A build still working is named, so the person is told its pull request isn't found.
+    expect(start("review it", [run("b1", "builder", "working", "2026-09-30T12:00:00Z")])).toMatchObject({ role: "reviewer", prOfRun: "b1" });
     expect(scriptPip("build it", context, [], runs, NOW, [], null, null).start ?? null).toBeNull();
   });
 });
@@ -210,7 +159,7 @@ describe("mock Pip woken by an agent that asks a question, as ask_person does", 
   it("asks the person what to tell it, and starts, stops or answers nothing", async () => {
     const b = new MockBackend({ runs: { seed: "empty" } });
     const ws = b.workstreams.open(CA401).id;
-    const run = b.runs.start({ kind: "investigate", repo: "acme/storefront", clonePath: "/Users/sample/Code/storefront", base: "main", name: "ca-401-asks", instruction: "", focus: null, focusFromRun: null, ticketBlock: null, workstream: ws }, CA401);
+    const run = b.runs.start({ role: "investigator", repo: "acme/storefront", clonePath: "/Users/sample/Code/storefront", base: "main", name: "ca-401-asks", brief: "", ticketBlock: null, workstream: ws }, CA401);
     b.runs.advance(run.id);
     b.runs.advance(run.id);
     b.runs.ask(run.id, "Should the refund path keep the old rounding?");
@@ -219,7 +168,7 @@ describe("mock Pip woken by an agent that asks a question, as ask_person does", 
     const stop = mockPipEvents.on((id, e) => {
       if (id === "wake-asks" && e.type === "text") said += e.text;
     });
-    const prompt = eventLine([{ run: run.id, kind: "investigate", state: "needsAnswer" }]);
+    const prompt = eventLine([{ run: run.id, role: "investigate", state: "needsAnswer" }]);
     await mockAsk({ requestId: "wake-asks", prompt, context: { screen: "board", item: CA401, selection: [] } as unknown as ScreenContext, conversation: `ws:${ws}`, kind: "wake" } as AskRequest, b, 0);
     stop();
     expect(said).toBe("R1 asks: “Should the refund path keep the old rounding?” I asked you what to tell it.");
@@ -232,7 +181,7 @@ describe("mock Pip woken by an agent that asks a question, as ask_person does", 
 
 describe("mock Pip discussing and revising a GitHub review draft, as revise_proposal does", () => {
   const GH = "github:ada";
-  const spec: RunSpec = { kind: "review", repo: "acme/webshop", clonePath: "/Users/sample/Code/webshop", base: "main", name: "ca-402-review", instruction: "", pr: 218, focus: null, focusFromRun: null, ticketBlock: "CA-402: sample" };
+  const spec: RunSpec = { role: "review", repo: "acme/webshop", clonePath: "/Users/sample/Code/webshop", base: "main", name: "ca-402-review", brief: "", pr: 218, ticketBlock: "CA-402: sample" };
   const context = { screen: "board", item: itemRef("CA-402"), selection: [] } as unknown as ScreenContext;
   let n = 0;
 

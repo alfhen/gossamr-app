@@ -7,7 +7,7 @@ import { planSectionOf } from "./mockPlanSection";
 import { isTriageDescription, triageSectionOf, withoutTriageSection } from "./mockTriageSection";
 import { readStored, writeStored } from "../workspace/storage";
 import { AnswerLostError, ReviewOutdatedError } from "./mockGithub";
-import type { ChangedFile, Intent, ItemRef, MaybePosted, PostedReview, Proposal, ProposalEdit, ProposalOrigin, ProposalQuery, ProposalsChanged, ReviewComment, RunKind, WorkItemKind, WorkstreamActor } from "../types";
+import type { ChangedFile, Intent, ItemRef, MaybePosted, PostedReview, Proposal, ProposalEdit, ProposalOrigin, ProposalQuery, ProposalsChanged, ReviewComment, WorkItemKind, WorkstreamActor } from "../types";
 
 /** A description update carrying a `Gossamr Plan` section that an agent run left: the plan a build follows once the person approves it. As `is_run_plan_rewrite` in `proposals.rs`. */
 const TRIAGE_KEEPS_THE_REST = "a Triage description draft can change only its Triage section; the rest of the description, the Gossamr Plan included, stays as it is";
@@ -80,8 +80,8 @@ export class MockProposals {
   /** Called when a draft was made, approved, skipped or retired, for the audit of its workstream (or of `workstream` when given); set by the backend that keeps them. */
   audit: (p: Proposal, actor: WorkstreamActor, action: string, detail?: string, workstream?: string | null) => void = () => {};
 
-  /** The kind of a run by its id, null when there is no such run; set by the backend that keeps the runs. */
-  runKind: (runId: string) => RunKind | null = () => null;
+  /** The role of a run by its id, null when there is no such run; set by the backend that keeps the runs. */
+  runRole: (runId: string) => string | null = () => null;
 
   constructor(private readonly apply: (intent: Intent, already: ItemRef[]) => Promise<ItemRef[]>) {}
 
@@ -151,7 +151,7 @@ export class MockProposals {
       const replaced: Proposal[] = [];
       const kept: { proposal: Proposal; why: string }[] = [];
       for (const older of this.drafts.filter((d) => d.state.type === "pending")) {
-        const verdict = byTicket ? runCommentSupersession(older, p, this.runKind) : reviewSupersession(older, p);
+        const verdict = byTicket ? runCommentSupersession(older, p, this.runRole) : reviewSupersession(older, p);
         if (verdict === "supersede") replaced.push(older);
         else if (verdict) kept.push({ proposal: older, why: verdict });
       }

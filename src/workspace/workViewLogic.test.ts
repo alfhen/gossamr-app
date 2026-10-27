@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { MockBackend } from "../backend/mock";
-import type { CodeChange, Intent, ItemRef, PauseReason, Proposal, ProposalState, Run, RunKind, RunState, WorkstreamStage, WorkstreamView } from "../types";
+import type { CodeChange, Intent, ItemRef, PauseReason, Proposal, ProposalState, Run, RunState, WorkstreamStage, WorkstreamView } from "../types";
 import { agentSummary } from "../backend/mockPip";
 import { needs } from "../lib/needs";
 import { docFromText } from "../lib/docs";
@@ -15,12 +15,12 @@ const iso = (minutesAgo: number) => new Date(NOW - minutesAgo * 60_000).toISOStr
 const ref = (key: string): ItemRef => ({ connectionId: "mock", externalId: key, key });
 
 const base = new MockBackend().runs.list()[0];
-const run = (id: string, kind: RunKind, state: RunState, over: Partial<Run> = {}): Run => ({
+const run = (id: string, kind: string, state: RunState, over: Partial<Run> = {}): Run => ({
   ...base,
   id,
   state,
   item: ref("CA-401"),
-  spec: { ...base.spec, kind, workstream: "ws-1" },
+  spec: { ...base.spec, role: kind, workstream: "ws-1" },
   failure: null,
   queuedAt: iso(60),
   lastProgressAt: iso(30),
@@ -67,7 +67,7 @@ const draft = (id: string, intent: Intent, minutesAgo: number, over: { state?: P
   }) as Proposal;
 
 const comment = (key: string): Intent => ({ type: "comment", item: ref(key), body: docFromText("Looks good"), mentions: [] }) as unknown as Intent;
-const startRun = (key: string, kind: RunKind, workstream: string | null): Intent => ({ type: "startRun", item: ref(key), spec: { ...base.spec, kind, workstream } }) as unknown as Intent;
+const startRun = (key: string, kind: string, workstream: string | null): Intent => ({ type: "startRun", item: ref(key), spec: { ...base.spec, role: kind, workstream } }) as unknown as Intent;
 
 describe("lastPausedAt", () => {
   it("takes the last pause in the audit, an earlier version's hold included", () => {
@@ -98,7 +98,7 @@ describe("nextStep", () => {
 
 describe("the step chips", () => {
   const fromRun = (id: string, intent: Intent, runId: string, minutesAgo = 5): Proposal => ({ ...draft(id, intent, minutesAgo), origin: { type: "run", runId, shortId: null, workstream: "ws-1" }, createdBy: "agent" }) as Proposal;
-  const chip = (chips: ReturnType<typeof stepChips>, kind: RunKind) => chips.find((c) => c.kind === kind)!;
+  const chip = (chips: ReturnType<typeof stepChips>, kind: string) => chips.find((c) => c.kind === kind)!;
 
   it("are the six steps in order, empty until a run of each starts", () => {
     const chips = stepChips([], [], {}, [], { now: NOW });
@@ -248,7 +248,7 @@ describe("composerFooter", () => {
   it("counts every run at work, in a workstream or General, the queued ones apart, and everything that needs the person", () => {
     const ws = view("ws-1", "CA-401", { runs: ["a", "b", "c", "d"] });
     const fresh = { lastProgressAt: iso(1) };
-    const runs = [run("a", "investigate", "working", fresh), run("b", "triage", "queued"), run("c", "plan", "launching"), run("d", "build", "done"), run("x", "plan", "working", { ...fresh, item: ref("CA-999"), spec: { ...base.spec, kind: "plan", workstream: null } })];
+    const runs = [run("a", "investigate", "working", fresh), run("b", "triage", "queued"), run("c", "plan", "launching"), run("d", "build", "done"), run("x", "plan", "working", { ...fresh, item: ref("CA-999"), spec: { ...base.spec, role: "plan", workstream: null } })];
     const waiting = needs({ workstreams: [ws], runs: [], proposals: [draft("p1", comment("CA-401"), 5), draft("p2", comment("CA-401"), 4)], dismissed: new Set() }).length;
     // "Running", the word the Agents view's lane uses for runs at work.
     expect(composerFooter(runs, waiting, NOW)).toBe("3 agents running · 1 queued · 2 need you");

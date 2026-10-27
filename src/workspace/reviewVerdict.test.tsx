@@ -9,7 +9,7 @@ import { shownVerdict, verdictChip, verdictText } from "./runSheetLogic";
 
 const NOW = Date.parse("2026-09-30T12:00:00Z");
 const backend = new MockBackend({ githubRepos: 14, runs: { seed: "kinds", epoch: NOW } });
-const seeded: Run = backend.runs.list().find((r) => r.spec.kind === "review")!;
+const seeded: Run = backend.runs.list().find((r) => r.spec.role === "reviewer")!;
 /** The seeded review as if it had finished with the scripted adversarial answer. */
 const finished: Run = { ...seeded, result: SCRIPTED_RESULT.review, resultComplete: true };
 

@@ -48,7 +48,7 @@ import type { FailureAct } from "./failureHelp";
 import { AGENTS_VIEWS, usePrefs, type AgentsViewMode } from "./prefs";
 import { useBuildChanges, useReviewVerdicts } from "./reviewVerdicts";
 import { showDraft as showTicketDraft } from "./draftTicket";
-import { RESUME_TEXT, breakdownTarget, buildFromPlanControl, commentControl, pipAsks, reviewThisControl, resumable, runBreakdownDraftOf, runDescriptionDraftOf, runDraftOf, runTicketDraftOf, shownVerdict } from "./runSheetLogic";
+import { breakdownTarget, buildFromPlanControl, commentControl, pipAsks, reviewThisControl, runBreakdownDraftOf, runDescriptionDraftOf, runDraftOf, runTicketDraftOf, shownVerdict } from "./runSheetLogic";
 import { setNoticeOpener, useRuns } from "./runsStore";
 import { askPipInWorkstream } from "./askPip";
 import { focusPip, useWorkstreams } from "./workstreamsStore";
@@ -146,8 +146,6 @@ export interface AgentsActions {
   attach(id: string): void;
   draftComment(id: string): void;
   buildFromPlan(run: Run): void;
-  /** Resumes a run stopped at its limit, the one way it carries on. */
-  resume(id: string): void;
   /** Shows the comment draft a finished run left on its ticket. */
   openDraft?(run: Run): void;
   openBreakdown?(run: Run): void;
@@ -430,7 +428,6 @@ export function AgentsScreen({ runs, status, error, filters, selectedId, earlier
     descriptionReady: !!descriptionReady?.(run),
     onOpenDescription: on.openDescription ? () => on.openDescription?.(run) : undefined,
     onBuildFromPlan: buildFromPlanControl(run).enabled ? () => on.buildFromPlan(run) : undefined,
-    onResume: resumable(run) ? () => on.resume(run.id) : undefined,
     onArchive: on.archive && isArchivable(run) ? () => on.archive?.(run.id) : undefined,
     onReviewThis: reviewThis?.(run),
     review: reviewOf?.(run),
@@ -547,7 +544,6 @@ const actions: AgentsActions = {
   open: (id) => useRuns.getState().openRun(id),
   attach: (id) => void useRuns.getState().attach(id),
   draftComment: (id) => void useRuns.getState().draftComment(id),
-  resume: (id) => void useRuns.getState().answer(id, RESUME_TEXT),
   buildFromPlan: (run) => void askPipInWorkstream(run, pipAsks.build(run)),
   openDraft: (run) => {
     if (run.item) return useRuns.getState().showDraft(run.item);

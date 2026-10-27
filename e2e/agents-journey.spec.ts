@@ -7,7 +7,7 @@ import { pauseAtCeiling, advanceRuns, agentsHome, askPip, closeWorkstreamSheet, 
 const SAMPLE = "runs=empty&prSurface=manual&mockRepos=12";
 
 /** The newest run of `kind`, as the sample backend holds it. */
-const newest = async (page: Page, kind: string) => (await mockRuns(page)).find((r) => r.kind === kind) ?? null;
+const newest = async (page: Page, kind: string) => (await mockRuns(page)).find((r) => r.step === kind) ?? null;
 
 /** Asks Pip for `what` on CA-401, which starts the agent. */
 async function startOnHome(page: Page, what: string) {

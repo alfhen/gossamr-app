@@ -135,7 +135,7 @@ test("the palette: 'Ask Pip to plan CA-401' lands on its workstream and Pip star
   await expect(homeConversation(page)).toHaveText(/^Workstream: CA-401 .* · Intake$/);
   await expect(homeConversationRegion(page).getByText("plan CA-401", { exact: true })).toBeVisible();
   await settled(page);
-  await expect.poll(async () => (await mockRuns(page)).map((r) => r.kind)).toEqual(["plan"]);
+  await expect.poll(async () => (await mockRuns(page)).map((r) => r.step)).toEqual(["plan"]);
   await expect(stepChip(page, "plan").locator('[data-run-label="R1"]')).toBeVisible();
 
   // From General, the palette finds the workstream again by its key.

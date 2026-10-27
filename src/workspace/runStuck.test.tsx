@@ -6,42 +6,26 @@ import { laneOf, stateView, stoppedText } from "./agentsLogic";
 import { cleanable } from "./cleanupLogic";
 import { RunCleanupView } from "./RunCleanup";
 import { useRuns } from "./runsStore";
-import { answerable, answerDraft, offeredSessions, resumable, RESUME_TEXT } from "./runSheetLogic";
+import { answerable, answerDraft, offeredSessions } from "./runSheetLogic";
 import { useToasts } from "./toasts";
 
 const NOW = Date.parse("2026-09-30T12:00:00Z");
 const base = (): Run => new MockBackend().runs.list()[0];
 const stopped = (over: Partial<Run> = {}): Run => ({ ...base(), state: "stopped", needs: null, unsentAnswer: null, suggestedReply: null, lastProgressAt: new Date(NOW - 60_000).toISOString(), ...over });
 
-describe("a run Gossamr stopped at its limit", () => {
-  const limit = stopped({ stoppedByLimit: true, error: "Stopped by Gossamr: it passed the 60 minute limit" });
-
-  it("is called that, sits where the person looks, and says why", () => {
-    expect(stateView(limit, NOW)).toMatchObject({ label: "Stopped at limit", tone: "warn" });
-    expect(stateView(stopped(), NOW).label).toBe("Stopped");
-    expect(laneOf(limit, NOW)).toBe("bad");
+describe("a stopped run", () => {
+  it("is called Stopped, sits with the earlier ones, and says where it stopped", () => {
+    expect(stateView(stopped(), NOW)).toMatchObject({ label: "Stopped", tone: "muted" });
     expect(laneOf(stopped(), NOW)).toBe("earlier");
-    expect(stoppedText(limit)).toBe("Stopped by Gossamr: it passed the 60 minute limit");
-  });
-
-  it("says both when it may also have continued elsewhere, and each alone otherwise", () => {
-    const offer = [{ shortId: "bbb748a7", sessionId: null, startedAt: null }];
-    expect(stoppedText({ ...limit, possibleContinuations: offer })).toBe("Stopped by Gossamr: it passed the 60 minute limit. May have continued in another session");
-    expect(stoppedText({ ...limit, error: "  ", possibleContinuations: offer })).toBe("Stopped at its limit. May have continued in another session");
-    expect(stoppedText({ ...limit, possibleContinuations: [] })).toBe("Stopped by Gossamr: it passed the 60 minute limit");
-    expect(stoppedText(stopped({ possibleContinuations: offer }))).toBe("May have continued in another session");
     expect(stoppedText(stopped({ lastDetail: "Reading the cart" }))).toBe("Reading the cart");
+    expect(stoppedText(stopped({ lastDetail: null }))).toBe("Stopped before it finished");
   });
 
-  it("is resumed with words of the person's, starting from a plain nudge; what Claude suggested is only offered", () => {
-    expect(resumable(limit) && answerable(limit)).toBe(true);
-    expect(answerDraft(limit)).toBe(RESUME_TEXT);
-    expect(answerDraft({ ...limit, unsentAnswer: "Use staging." })).toBe("Use staging.");
+  it("is answered only when an answer of the person's was stopped on its way", () => {
+    expect(answerable(stopped())).toBe(false);
+    expect(answerable(stopped({ unsentAnswer: "Use staging." }))).toBe(true);
+    expect(answerDraft(stopped({ unsentAnswer: "Use staging." }))).toBe("Use staging.");
     expect(answerDraft(stopped())).toBe("");
-    expect(resumable(stopped())).toBe(false);
-    expect(resumable({ ...limit, unsentAnswer: "Yes" })).toBe(false);
-    expect(answerable({ ...limit, unsentAnswer: "Yes" })).toBe(true);
-    expect(resumable({ ...limit, state: "working" })).toBe(false);
   });
 });
 
@@ -68,16 +52,6 @@ describe("the sample backend and the store follow the same rules", () => {
     useToasts.getState().clear();
     backend = new MockBackend({ runs: { seed: "stuck" } });
     s().init(backend);
-  });
-
-  it("resumes a run stopped at its limit, once, and the limit mark is gone", async () => {
-    await settle();
-    const limit = s().runs.find((r) => r.stoppedByLimit)!;
-    expect(limit.state).toBe("stopped");
-    await s().answer(limit.id, "Go ahead and build it");
-    await settle();
-    expect(s().runs.find((r) => r.id === limit.id)).toMatchObject({ state: "working", stoppedByLimit: false, error: null, shortId: limit.shortId });
-    expect(s().runs.find((r) => r.id === limit.id)?.continuedAt).toBeTruthy();
   });
 
   it("adopts one of the offered sessions: the run follows it and keeps the old id", async () => {

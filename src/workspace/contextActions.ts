@@ -47,18 +47,18 @@ export const contextDeps: ContextDeps = {
     const go = (p: ReturnType<typeof keyPlan>) => (p && p.type !== "open" ? p.run() : openNeed(need));
     switch (id) {
       case "approve":
-      case "allow":
       case "retry":
       case "resume":
         return go(plan("approve"));
-      case "deny":
       case "dismiss":
         return go(plan("dismiss"));
       case "edit":
         return openNeed(need, { edit: true });
       case "answer":
-      case "open":
         return openNeed(need);
+      case "open":
+        // A permission or a sign-in is answered in Terminal: its button opens it there.
+        return need.runId && (need.kind === "permission" || need.kind === "signIn") ? void useRuns.getState().attach(need.runId) : openNeed(need);
     }
   },
   openInWorkstream,

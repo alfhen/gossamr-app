@@ -32,7 +32,7 @@ beforeEach(() => start());
 afterEach(() => vi.useRealTimers());
 
 describe("starting in a folder Claude refuses", () => {
-  const startOne = () => backend.runs.pipStart({ workstream: null, role: "investigate", brief: null, repo: "acme/storefront", fromRun: null, item: CA }, `turn-${Math.random()}`);
+  const startOne = () => backend.runs.pipStart({ workstream: null, role: "investigator", brief: "Look into it.", repo: "acme/storefront", item: CA }, `turn-${Math.random()}`);
 
   it("announces the failure, and Retry goes through once trusted", async () => {
     const started = startOne();

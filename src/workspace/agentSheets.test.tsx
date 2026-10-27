@@ -6,10 +6,9 @@ import { TicketAgentRows, TicketAgentsView } from "./TicketAgents";
 import { AgentsIntro } from "./AgentsEmpty";
 import { AgentsSettingsView, type CleanupOffer } from "./AgentsSettings";
 import { sheetFocusTarget } from "./AgentSheet";
-import { focusDecision, READ_ONLY_STEP_NOTE } from "./PermissionAsk";
+import { focusDecision, PERMISSION_NOTE } from "./PermissionAsk";
 import { RunSheetView, type RunSheetActions, type RunSheetViewProps } from "./RunSheet";
-import { INSTRUCTIONS } from "../backend/mockRunKinds";
-import { COPY, MAY_TOUCH, SAFETY_SUMMARY, sheetTopOn } from "./runSheetLogic";
+import { SAFETY_SUMMARY, sheetTopOn } from "./runSheetLogic";
 import { PipLauncher } from "./PipExtras";
 import { useRuns } from "./runsStore";
 import { placesOf } from "./RunWhere";
@@ -17,7 +16,7 @@ import { offsetText } from "./RunTimeline";
 
 const NOW = Date.parse("2026-09-30T12:00:00Z");
 const iso = (minutesAgo: number) => new Date(NOW - minutesAgo * 60_000).toISOString();
-const SETTINGS: AgentSettings = { maxRuns: 3, wallClockMinutes: 60, tokenCap: 3_000_000, terminal: "terminal", draftOnFinish: true };
+const SETTINGS: AgentSettings = { maxRuns: 3, terminal: "terminal", draftOnFinish: true };
 const seeded = () => new MockBackend().runs.list();
 
 const run = (state: RunState, over: Partial<Run> = {}): Run => ({ ...seeded()[0], id: `r-${state}`, state, needs: null, lastDetail: null, tokens: 212_000, result: null, error: null, shortId: "1000a000", lastProgressAt: iso(1), queuedAt: iso(10), endedAt: null, ...over });
@@ -69,84 +68,36 @@ describe("focus around the run sheet", () => {
 
 describe("the run sheet, by state", () => {
   describe("a permission prompt", () => {
-    const build = (needs: string, over: Partial<Run> = {}) => {
-      const base = run("needsPermission", { needs, ...over });
-      return { ...base, spec: { ...base.spec, kind: "build" as const, allowPush: true, name: "ca-401-fix" }, readOnly: null };
-    };
-    const investigate = (needs: string) => {
+    const asking = (needs: string, role = "builder") => {
       const base = run("needsPermission", { needs });
-      return { ...base, spec: { ...base.spec, kind: "investigate" as const } };
+      return { ...base, spec: { ...base.spec, role, name: "ca-401-fix" } };
     };
     /** The permission box's buttons, in tab order: the document's, as none of them is taken out of it. */
-    const asked = (html: string) => /<div data-permission-ask[\s\S]*?(?=<section)/.exec(html)?.[0] ?? "";
-    const primary = (html: string) => [...asked(html).matchAll(/<button[^>]*border-ws-pip bg-ws-pip[^>]*>([\s\S]*?)<\/button>/g)].map((m) => m[1].replace(/<[^>]+>/g, "").trim());
+    const asked = (html: string) => /<div[^>]*data-permission-ask[\s\S]*?(?=<section)/.exec(html)?.[0] ?? "";
 
-    it("says why a read-only run's card offers only Deny (R10)", () => {
-      const html = sheet(investigate("approve Bash: ls"));
-      expect(html).toContain(READ_ONLY_STEP_NOTE.replace("'", "&#x27;"));
-      expect(sheet(build("approve Bash: ls"))).not.toContain("data-permission-read-only");
+    it("says plainly what it wants to run, and offers one answer: Open in Terminal, the same for every role", () => {
+      for (const role of ["builder", "investigator", "profiler"]) {
+        const html = sheet(asking("approve Bash: mkdir -p dist && echo 'done'", role), { label: "R3" });
+        expect(html).toContain("R3 wants to run this command:");
+        expect(html).toContain('data-copy="mkdir -p dist &amp;&amp; echo &#x27;done&#x27;"');
+        expect(buttons(asked(html))).toEqual(["Copy", "Open in Terminal"]);
+        expect(html).toContain(PERMISSION_NOTE);
+        for (const word of ["Allow", "Deny", "read-only", "Send answer", "Always"]) expect(asked(html)).not.toContain(word);
+      }
     });
 
-    it("says what Deny does right under the refusal, before the buttons (G24)", () => {
-      const html = asked(sheet(investigate("approve Bash: ls")));
-      expect(html.indexOf("data-permission-refusal")).toBeGreaterThan(-1);
-      expect(html.indexOf("data-permission-read-only")).toBeGreaterThan(html.indexOf("data-permission-refusal"));
-      expect(html.indexOf("data-permission-read-only")).toBeLessThan(html.indexOf("data-permission-decisions"));
-      expect(html).toContain("Deny lets it carry on without it.");
-    });
-
-    it("on a Build, says plainly what it wants to run and offers Allow once as the one primary button, then Deny and Stop", () => {
-      const html = sheet(build("approve Bash: mkdir -p dist && echo 'done'"), { label: "R3" });
-      expect(html).toContain("R3 wants to run this command:");
-      expect(html).toContain('data-copy="mkdir -p dist &amp;&amp; echo &#x27;done&#x27;"');
-      expect(buttons(asked(html))).toEqual(["Copy", "Allow once in Terminal", "Deny", "Stop the run (abandons it)"]);
-      expect(primary(html)).toEqual(["Allow once in Terminal"]);
-      expect(asked(html)).not.toContain('tabindex="-1"');
-      expect(html).toContain("Claude Code takes a yes only in its own prompt. Allow once opens this run in Terminal and copies the command: choose Yes there for this command only.");
-      expect(html).toContain("Claude is told you said no and carries on without it.");
-      for (const word of ["Open in Terminal", "Send answer", "don&#x27;t ask again", "Always"]) expect(asked(html)).not.toContain(word);
-    });
-
-    it("on a Build asking for a command Gossamr can't check, offers no Allow: it says why and opens Terminal instead", () => {
-      const html = sheet(build("approve Bash: pnpm test"));
-      expect(html).toContain("Gossamr offers Allow once only for commands it can check are safe, such as git status or ls inside the run&#x27;s folder. It can&#x27;t check this one.");
-      expect(buttons(asked(html))).toEqual(["Copy", "Deny", "Open in Terminal", "Stop the run (abandons it)"]);
-      expect(primary(html)).toEqual(["Open in Terminal"]);
-    });
-
-    it("on a read-only run, says Claude Code refuses it and renders no Allow at all: Deny is the primary answer", () => {
-      const html = sheet(investigate("approve Bash: rm -rf node_modules"));
-      expect(html).toContain("This run is read-only, so this command would be refused anyway.");
-      expect(html).not.toContain("Allow");
-      expect(buttons(asked(html))).toEqual(["Copy", "Deny", "Stop the run (abandons it)"]);
-      expect(primary(html)).toEqual(["Deny"]);
-    });
-
-    it("on a push Gossamr forbids, gives the rule and no Allow; on a request it can't read whole, Open in Terminal", () => {
-      const forbidden = sheet(build("approve Bash: git push origin main"));
-      expect(forbidden).toContain("A Build may push only its own branch, worktree-ca-401-fix, to origin, without force: Gossamr doesn&#x27;t allow this push.");
-      expect(buttons(asked(forbidden))).toEqual(["Copy", "Deny", "Stop the run (abandons it)"]);
-      const odd = sheet(build("Claude wants to do something"));
+    it("names the tool when the request is for something other than a command, and says so when it can't be read", () => {
+      expect(sheet(asking("approve Edit: src/cart.ts"))).toContain("Claude wants to use Edit on:");
+      const odd = sheet(asking("Claude wants to do something"));
       expect(odd).toContain("Claude is asking permission:");
-      expect(odd).toContain("Gossamr can&#x27;t show this request whole");
-      expect(buttons(asked(odd))).toEqual(["Copy", "Deny", "Open in Terminal", "Stop the run (abandons it)"]);
+      expect(odd).toContain("Claude wants to do something");
+      expect(buttons(asked(odd))).toEqual(["Copy", "Open in Terminal"]);
     });
 
-    it("after Allow once, confirms in a status line the keyboard can land on, and Allow is gone", () => {
-      const command = "git push -u origin worktree-ca-401-fix";
-      const r = build(`approve Bash: ${command}`, { permissionAllowed: { command, at: iso(0) } });
-      const html = sheet(r, { permissionAnswered: { kind: "allowed", command, at: iso(0), copied: true } });
-      expect(html).toMatch(/<p tabindex="-1" role="status" data-permission-sent="allowed"[^>]*>[\s\S]*Opened in Terminal, command copied. Choose Yes there for this command only.<\/p>/);
-      expect(buttons(asked(html))).toEqual(["Copy", "Deny", "Open in Terminal", "Stop the run (abandons it)"]);
-      // Not copied: the line doesn't say it was.
-      expect(sheet(r, { permissionAnswered: { kind: "allowed", command, at: iso(0), copied: false } })).toContain("Opened in Terminal. Choose Yes there for this command only.");
-    });
-
-    it("after Deny, the run is working again and the sheet confirms it at the top until the run reports something new", () => {
-      const r = run("working", { lastProgressAt: iso(0) });
-      const denied = { kind: "denied" as const, command: "rm -rf node_modules", at: iso(0), copied: false };
-      expect(sheet(r, { permissionAnswered: denied })).toMatch(/<p tabindex="-1" role="status" data-permission-sent="denied"[^>]*>[\s\S]*Denied. Claude is carrying on without it.<\/p>/);
-      expect(sheet(r)).not.toContain("data-permission-sent");
+    it("is stopped from the sheet's own Stop, which is not part of the prompt", () => {
+      const html = sheet(asking("approve Bash: ls"));
+      expect(buttons(html)).toContain("Stop");
+      expect(asked(html)).not.toContain("Stop");
     });
   });
 
@@ -402,13 +353,15 @@ describe("what it did", () => {
 });
 
 describe("what the agent was told", () => {
-  it("is on the sheet from the run's own spec, with Pip's focus note apart from the instruction", () => {
-    const spec: RunSpec = { ...seeded()[0].spec, focus: "Look at the retry loop.", ticketBlock: "CA-1: t" };
+  it("is on the sheet from the run's own spec: the base brief, then Pip's brief", () => {
+    const spec: RunSpec = { ...seeded()[0].spec, role: "builder", brief: "Fix the retry loop.", ticketBlock: "CA-1: t" };
     const html = sheet(run("working", { spec }));
     expect(html).toContain("What the agent was told");
-    expect(html).toContain("Focus · written by Pip");
-    expect(html).toContain("Look at the retry loop.");
+    expect(html).toContain("Base brief from Gossamr");
+    expect(html).toContain("Role: builder.");
+    expect(html).toContain("Fix the retry loop.");
     expect(html).not.toContain("What you approved:");
+    expect(html).not.toContain("Focus");
   });
 });
 
@@ -420,15 +373,15 @@ describe("the honest wording", () => {
     for (const p of phrases) expect(html).toContain(p);
   });
 
-  it("is in the safety sheet once each, with what a Build may touch and nothing said twice (D25)", () => {
+  it("is in the safety sheet once each, and nothing is said twice (D25)", () => {
     const html = renderToStaticMarkup(<AgentsSettingsView runs={seeded()} stopping={false} keepRunning={3} settings={SETTINGS} cleanup={null} onSettings={vi.fn()} onCleanup={vi.fn()} onStopAll={vi.fn()} onClose={vi.fn()} />);
     const text = html.replace(/<[^>]+>/g, " ");
     const times = (re: RegExp) => text.match(re)?.length ?? 0;
-    // That Jira and pushing are only asked, that the read-only kinds only read, and that Review and Verify may run tests: once each.
+    // That Jira and pushing are only asked, and that agents run with the person's own settings: once each.
     expect(times(/not (?:a )?locks?\b/g)).toBe(1);
-    expect(times(/Investigate, Triage, Plan, Review and Verify/g)).toBe(1);
-    expect(times(/may run the repository/g)).toBe(1);
-    for (const p of ["your own Claude settings", "Gossamr adds no fence of its own", "What a Build may touch", "your Claude settings decide"]) expect(html).toContain(p);
+    expect(times(/with your own Claude Code settings/g)).toBe(1);
+    for (const p of ["your own Claude Code settings", "your Claude Code settings, not Gossamr, decide that"]) expect(html).toContain(p);
+    for (const gone of ["read-only", "What a Build may touch", "Gossamr adds no fence"]) expect(html).not.toContain(gone);
     expect(html).not.toMatch(/never write to jira|can&#x27;t write to jira/i);
   });
 });
@@ -443,19 +396,19 @@ describe("safety and settings", () => {
     expect(html).not.toContain("This is fixed for now");
   });
 
-  it("shows the limits as fields and says how far a token limit can be overshot", () => {
-    const html = renderToStaticMarkup(<AgentsSettingsView runs={[]} stopping={false} keepRunning={0} settings={{ ...SETTINGS, wallClockMinutes: 45, tokenCap: 2_500_000, terminal: "iTerm" }} cleanup={null} onSettings={vi.fn()} onCleanup={vi.fn()} onStopAll={vi.fn()} onClose={vi.fn()} />);
-    expect(html).toMatch(/aria-label="Stop a run after this many minutes"[^>]*value="45"/);
-    expect(html).toMatch(/aria-label="Stop a run after this many million tokens"[^>]*value="2.5"/);
+  it("shows the agents at once and the terminal as fields, and no time or token limit", () => {
+    const html = renderToStaticMarkup(<AgentsSettingsView runs={[]} stopping={false} keepRunning={0} settings={{ ...SETTINGS, terminal: "iTerm" }} cleanup={null} onSettings={vi.fn()} onCleanup={vi.fn()} onStopAll={vi.fn()} onClose={vi.fn()} />);
+    expect(html).toMatch(/<option value="3" selected/);
     expect(html).toMatch(/<option value="iTerm" selected/);
-    expect(html).toContain("a run can pass its limit by a poll and a turn before it stops");
+    expect(html).not.toContain("Stop a run after");
+    expect(html).not.toContain("tokens");
   });
 
   it("holds the fields while a save is under way so a second one can't send stale values", () => {
     const view = (settingsSaving: boolean) => renderToStaticMarkup(<AgentsSettingsView runs={[]} stopping={false} keepRunning={0} settings={SETTINGS} settingsSaving={settingsSaving} cleanup={null} onSettings={vi.fn()} onCleanup={vi.fn()} onStopAll={vi.fn()} onClose={vi.fn()} />);
-    const fields = (html: string) => [...html.matchAll(/<(?:input|select)[^>]*aria-label="(?:Stop a run|Agents running|Terminal app)[^>]*>/g)].map((m) => /disabled/.test(m[0]));
-    expect(fields(view(false))).toEqual([false, false, false, false]);
-    expect(fields(view(true))).toEqual([true, true, true, true]);
+    const fields = (html: string) => [...html.matchAll(/<(?:input|select)[^>]*aria-label="(?:Agents running|Terminal app)[^>]*>/g)].map((m) => /disabled/.test(m[0]));
+    expect(fields(view(false))).toEqual([false, false]);
+    expect(fields(view(true))).toEqual([true, true]);
   });
 
   it("waits for the backend's answer before showing fields", () => {
@@ -560,28 +513,14 @@ describe("what an agent sheet keeps clear", () => {
 describe("the safety sheet", () => {
   const sheet = () => renderToStaticMarkup(<AgentsSettingsView runs={[]} stopping={false} keepRunning={0} settings={SETTINGS} cleanup={null} onSettings={vi.fn()} onCleanup={vi.fn()} onStopAll={vi.fn()} onClose={vi.fn()} />);
 
-  it("starts with three lines that are true for each kind, before the longer explanation", () => {
+  it("starts with three lines that are true for every role, before the longer explanation", () => {
     const html = sheet();
     const lines = [...html.matchAll(/data-safety-summary[\s\S]*?<\/ul>/g)][0][0].match(/<span>([^<]+)<\/span>/g)!.map((m) => m.slice(6, -7).replace(/&#x27;/g, "'"));
     expect(lines).toEqual(SAFETY_SUMMARY.map((l) => l.text));
-    expect(lines[0]).toMatch(/^Investigate, Triage, Plan, Review and Verify only read/);
-    expect(lines[1]).toMatch(/^Build changes code in its own worktree/);
-    // As the detail below says: the person's Claude settings decide pushing, and Pushing ticked or not is only asked.
-    expect(lines[1]).toContain("your own Claude settings, which decide whether it can push a branch or open a pull request");
-    expect(MAY_TOUCH.find((t) => t.title.startsWith("Pushing a branch"))?.text).toMatch(/^your Claude settings decide/);
-    expect(lines[1]).not.toMatch(/only when you allow it|until you approve/);
-    // Nothing enforces it, as the detail below says: the line can't promise a lock.
+    expect(lines[0]).toMatch(/^Agents run with your own Claude Code settings/);
+    expect(lines[0]).toContain("where you answer it in Terminal");
+    // Nothing enforces it: the line can't promise a lock.
     expect(lines[1]).toContain("both are requests, not locks");
-    expect(lines[2]).toBe("Gossamr posts to Jira or GitHub only what you approve. A Build runs with your Claude settings and could reach Jira or GitHub on its own: your Claude settings, not Gossamr, decide that.");
-    expect(html.indexOf("data-safety-summary")).toBeLessThan(html.indexOf("What a Build may touch"));
-  });
-});
-
-describe("start review copy (G13)", () => {
-  it("says the note may be posted after a person approves it, and names no rules that are not shown", () => {
-    expect(INSTRUCTIONS.investigate).toContain("The note may be posted to the ticket, after a person reads and approves it, for people who do not use Gossamr");
-    expect(INSTRUCTIONS.investigate).not.toContain("The note is posted to the ticket");
-    expect(COPY.readOnlyNote).toContain("every command outside its read-only rules");
-    expect(COPY.readOnlyNote).not.toContain("rules above");
+    expect(lines[2]).toBe("Gossamr posts to Jira or GitHub only what you approve. An agent could reach Jira or GitHub on its own: your Claude Code settings, not Gossamr, decide that.");
   });
 });

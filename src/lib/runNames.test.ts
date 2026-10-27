@@ -1,14 +1,14 @@
 import { describe, expect, it } from "vitest";
-import type { Intent, Proposal, Run, RunKind } from "../types";
+import type { Intent, Proposal, Run } from "../types";
 import { draftPhrase, fromRunPhrase, runPhrase, humanDuration } from "./runNames";
 
 const ref = (key: string) => ({ connectionId: "mock", externalId: key, key });
-const run = (kind: RunKind, key: string | null, id = "run-1") => ({ id, item: key ? ref(key) : null, spec: { kind, repo: "acme/webshop" } }) as unknown as Pick<Run, "id" | "spec" | "item">;
+const run = (kind: string, key: string | null, id = "run-1") => ({ id, item: key ? ref(key) : null, spec: { role: kind, repo: "acme/webshop" } }) as unknown as Pick<Run, "id" | "spec" | "item">;
 const draft = (intent: Intent): Pick<Proposal, "intent"> => ({ intent });
 
 describe("runPhrase", () => {
   it("names a run by its ticket and step", () => {
-    const named: [RunKind, string][] = [
+    const named: [string, string][] = [
       ["investigate", "the CA-401 investigation"],
       ["triage", "the CA-401 triage"],
       ["plan", "the CA-401 plan"],

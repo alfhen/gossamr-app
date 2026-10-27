@@ -6,7 +6,7 @@ import { keyIntent } from "./keyMap";
 import { DRAFT_CARD, FROM_INPUT, draftKeyAction, draftKeyHint, draftKeyShortcuts, focusAfterLeaving, onDraftCardKey, stepDraftCards, upToNewestDraft, type Asking } from "./draftKeys";
 
 const ref = itemRef("CA-412");
-const spec: RunSpec = { kind: "investigate", repo: "acme/web", clonePath: "/Users/sample/Code/web", base: "main", name: "ca-412-fix-ab12", instruction: "Investigate this work." };
+const spec: RunSpec = { role: "investigate", repo: "acme/web", clonePath: "/Users/sample/Code/web", base: "main", name: "ca-412-fix-ab12", brief: "Investigate this work." };
 
 const INTENTS: Record<Intent["type"], Intent> = {
   comment: { type: "comment", item: ref, body: docFromText("Checking in.") },

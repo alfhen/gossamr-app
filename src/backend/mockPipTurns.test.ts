@@ -196,7 +196,7 @@ describe("mockAsk", () => {
     const context: ScreenContext = { view: null, item: null, filter: null, selection: [] };
     await mockAsk({ requestId: "p1", prompt: "plan CA-401", sessionId: null, context, conversation: `ws:${ws.id}`, meta: { imageCount: 0 } }, backend, 0);
     const [run] = backend.runs.list();
-    expect(run).toMatchObject({ state: "queued", item: { key: "CA-401" }, spec: { kind: "plan", workstream: ws.id } });
+    expect(run).toMatchObject({ state: "queued", item: { key: "CA-401" }, spec: { role: "planner", workstream: ws.id } });
     // Another ticket's key isn't this workstream's next step.
     await mockAsk({ requestId: "p2", prompt: "plan CA-402", sessionId: null, context, conversation: `ws:${ws.id}`, meta: { imageCount: 0 } }, backend, 0);
     expect(backend.runs.list().filter((r) => r.origin?.type === "chat" && r.origin.requestId === "p2")).toHaveLength(0);

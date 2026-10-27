@@ -1,10 +1,8 @@
 import { expect, test, type Page } from "@playwright/test";
-import { expandNeedsYou, expectToast, mockRuns, needsPane, needsYouTray, openAgents, openApp, openNeedRow, needsStack } from "./support/app";
+import { expandNeedsYou, mockRuns, needsPane, needsYouTray, openAgents, openApp, openNeedRow, needsStack } from "./support/app";
 
-// Fixes from the fourth dogfood round: Deny asks before it tells the agent no on a Build, Needs-you titles wrap instead of
-// truncating, and the Decisions count leaves out bookkeeping.
-
-const stateOf = async (page: Page, id: string) => (await mockRuns(page)).find((r) => r.id === id)?.state;
+// Fixes from the fourth dogfood round: Needs-you titles wrap instead of truncating, and the Decisions count leaves out
+// bookkeeping.
 
 /** Pip home on the sample's own runs, with the permission need's decision open in the pane. */
 async function onPermission(page: Page) {
@@ -18,18 +16,6 @@ async function onPermission(page: Page) {
   await expect(pane.locator("[data-permission-ask]")).toBeVisible();
   return { run, pane };
 }
-
-test.describe("Deny on a permission prompt (F1)", () => {
-  // A read-only run was refused anyway, so one click tells it no; the confirm step is for a Build (e2e/decisions.spec.ts).
-  test("one click on a read-only run's Deny goes through and says so", async ({ page }) => {
-    const { run, pane } = await onPermission(page);
-    expect(await stateOf(page, run.id)).toBe("needsPermission");
-    await pane.getByRole("button", { name: "Deny", exact: true }).click();
-    await expect(pane.getByRole("group", { name: "Deny this request" })).toHaveCount(0);
-    await expect.poll(() => stateOf(page, run.id)).toBe("working");
-    await expectToast(page, /^Denied\. .+ carries on without it\./);
-  });
-});
 
 test.describe("Needs-you titles wrap (F10)", () => {
   test("a need's title may take two lines instead of truncating, and the header stays in view", async ({ page }) => {

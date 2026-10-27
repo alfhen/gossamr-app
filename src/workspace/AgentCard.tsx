@@ -1,13 +1,14 @@
 import type { KeyboardEvent } from "react";
 import { archiveControl } from "../lib/archiveRuns";
+import { roleLabel } from "../lib/roles";
 import type { ReviewView, Run } from "../types";
-import { Icon, KIND_ICON } from "./AgentIcons";
+import { Icon } from "./AgentIcons";
 import { RunBody, StateChip, TONE, type FailureState } from "./AgentParts";
 import { ownKey } from "./agentKeys";
-import { KIND_LABEL, ageSince, ageText, branchOf, formatTokens, repoName, runTitle } from "./agentsLogic";
+import { ageSince, ageText, branchOf, formatTokens, repoName, runTitle } from "./agentsLogic";
 import { useStateView } from "./useStateView";
 import { runRef } from "../lib/runNames";
-import { readOnlyHeadline, verdictChip, verdictText } from "./runSheetLogic";
+import { verdictChip, verdictText } from "./runSheetLogic";
 
 export const agentId = (id: string) => `agent-${id}`;
 
@@ -29,8 +30,6 @@ export interface AgentItemProps {
   onBuildFromPlan?(): void;
   /** Present on a run that is over: takes it out of Agents and Needs you. */
   onArchive?(): void;
-  /** Present on a run stopped at its limit: wakes it with the standard words, as Resume in its sheet does. Only the person's click does this. */
-  onResume?(): void;
   /** Present on a finished build that opened a pull request that can be reviewed. */
   onReviewThis?(): void;
   /** A comment draft from this run is waiting. */
@@ -124,30 +123,16 @@ export function RunLabel({ label }: { label?: string }) {
   );
 }
 
-/**
- * A small mark on a run launched read-only: Claude Code itself refused its edits and writes. Nothing for a Build, a run
- * from before, or one that carried on in a session Gossamr didn't launch. `compact` shows the shield alone, for a list
- * row whose title needs the room.
- */
-export function ReadOnlyBadge({ run, compact = false }: { run: Run; compact?: boolean }) {
-  if (!run.readOnly) return null;
-  const headline = readOnlyHeadline(run.readOnly);
-  if (compact) {
-    return (
-      <span data-read-only title={headline} aria-label={headline} role="img" className="inline-flex shrink-0 items-center text-ws-ink3">
-        <Icon name="shield" className="size-3" />
-      </span>
-    );
-  }
+/** The run's role, as a plain label. */
+export function RoleChip({ role }: { role: string }) {
   return (
-    <span data-read-only title={headline} className="inline-flex shrink-0 items-center gap-0.5 rounded bg-ws-hover px-1 text-xs font-medium text-ws-ink2">
-      <Icon name="shield" className="size-3" />
-      Read-only
+    <span data-role={role} className="shrink-0 text-xs font-medium text-ws-ink2">
+      {roleLabel(role)}
     </span>
   );
 }
 
-export function AgentCard({ run, now, selected, position, total, ticketTitle, label, onOpen, onAttach, onDraftComment, onBuildFromPlan, onReviewThis, onResume, onArchive, draftReady, breakdownReady, onOpenDraft, onOpenBreakdown, descriptionReady, onOpenDescription, review, failure, onOpenNeed, asking }: AgentItemProps) {
+export function AgentCard({ run, now, selected, position, total, ticketTitle, label, onOpen, onAttach, onDraftComment, onBuildFromPlan, onReviewThis, onArchive, draftReady, breakdownReady, onOpenDraft, onOpenBreakdown, descriptionReady, onOpenDescription, review, failure, onOpenNeed, asking }: AgentItemProps) {
   const view = useStateView(run, now);
   const tone = TONE[view.tone];
   const title = runTitle(run, ticketTitle);
@@ -171,11 +156,7 @@ export function AgentCard({ run, now, selected, position, total, ticketTitle, la
     >
       <div className="flex min-w-0 items-center gap-2">
         <RunLabel label={label} />
-        <span className="inline-flex items-center gap-1 text-xs font-medium text-ws-ink2">
-          <Icon name={KIND_ICON[run.spec.kind]} className="size-[13px] text-ws-ink3" />
-          {KIND_LABEL[run.spec.kind]}
-        </span>
-        <ReadOnlyBadge run={run} />
+        <RoleChip role={run.spec.role} />
         {ticketLabel(run) && <span className="font-mono text-sm font-semibold text-ws-ink2">{ticketLabel(run)}</span>}
         <span className="ml-auto flex shrink-0 items-center gap-1">
           {review && <VerdictChip review={review} />}
@@ -217,18 +198,6 @@ export function AgentCard({ run, now, selected, position, total, ticketTitle, la
               Draft comment
             </button>
           )
-        )}
-        {onResume && (
-          <button
-            type="button"
-            data-resume
-            onClick={(ev) => (ev.stopPropagation(), onResume())}
-            onKeyDown={ownKey}
-            title="Wakes the agent to carry on from where it stopped. Its conversation and worktree are kept."
-            className="rounded-md border border-ws-pip bg-ws-pip-soft px-2 py-px text-sm font-semibold text-ws-pip hover:brightness-95"
-          >
-            Resume
-          </button>
         )}
         {onBuildFromPlan && (
           <button

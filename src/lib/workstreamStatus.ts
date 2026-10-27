@@ -1,6 +1,6 @@
 import type { Run, WorkstreamView } from "../types";
 import { needsIn, type Need } from "./needs";
-import { STAGE_LABEL } from "./workstreamStage";
+import { roleLabel } from "./roles";
 
 /**
  * One status word per workstream, the first of these that applies. The order is the one docs/needs-you.md gives its
@@ -67,8 +67,8 @@ export function workstreamStatus(view: WorkstreamView, needs: readonly Pick<Need
   }
   const furthest = (pick: (r: Run) => boolean) => own.filter(pick).sort((a, b) => a.queuedAt.localeCompare(b.queuedAt)).pop();
   const going = furthest((r) => RUNNING.has(r.state)) ?? furthest((r) => r.state === "queued");
-  if (going) return make("running", `${STAGE_LABEL[going.spec.kind]}${going.state === "queued" ? " queued" : ""}`);
+  if (going) return make("running", `${roleLabel(going.spec.role)}${going.state === "queued" ? " queued" : ""}`);
   if (ws.closedAt || view.stage === "done") return make("done");
   const failed = [...own].sort((a, b) => a.queuedAt.localeCompare(b.queuedAt)).pop();
-  return make("idle", failed?.state === "failed" ? `${STAGE_LABEL[failed.spec.kind]} failed` : null);
+  return make("idle", failed?.state === "failed" ? `${roleLabel(failed.spec.role)} failed` : null);
 }

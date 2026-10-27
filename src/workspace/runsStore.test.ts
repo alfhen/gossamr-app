@@ -84,13 +84,13 @@ describe("the runs store", () => {
     s().init(new MockBackend({ runs: { seed: "failures" } }));
     await settle();
     const waiting = () => s().runs.filter((r) => needsAttention(r, s().dismissed)).length;
-    expect(waiting()).toBe(6);
-    // Nothing the store does on its own is a look that clears a failure: reloading leaves all six.
+    expect(waiting()).toBe(7);
+    // Nothing the store does on its own is a look that clears a failure: reloading leaves all seven.
     await s().reload();
-    expect(waiting()).toBe(6);
+    expect(waiting()).toBe(7);
     const [first] = s().runs;
     s().dismiss(first.id);
-    expect(waiting()).toBe(5);
+    expect(waiting()).toBe(6);
     expect(s().dismissed.has(first.id)).toBe(true);
     expect(JSON.parse(localStorage.getItem("gossamr-runs-dismissed")!)).toEqual([first.id]);
     // Dismissing twice is one.
@@ -199,7 +199,7 @@ describe("the run sheet", () => {
 
   it("browses in group order when the view groups by workstream, as the list on screen is", async () => {
     const ws = await backend.workstreamsOpen(itemRef("CA-401"));
-    const run = backend.runs.start({ kind: "investigate", repo: "acme/storefront", clonePath: "/Users/sample/Code/storefront", base: "main", name: "ca-401-browse-1a2b", instruction: "", workstream: ws.id }, itemRef("CA-401"));
+    const run = backend.runs.start({ role: "investigate", repo: "acme/storefront", clonePath: "/Users/sample/Code/storefront", base: "main", name: "ca-401-browse-1a2b", brief: "", workstream: ws.id }, itemRef("CA-401"));
     // Finished, it is in the Done lane by state, behind the runs still working, and first by workstream.
     for (let i = 0; i < 3; i++) backend.runs.advance(run.id);
     useWorkstreams.getState().init(backend);
@@ -383,15 +383,6 @@ describe("the run sheet", () => {
       expect(s().answered[run.id]).toBe(now.lastProgressAt);
     });
 
-    it("toasts Resumed, not Answer sent, for a run stopped at its limit (R11)", async () => {
-      const run = await asking();
-      useRuns.setState({ runs: s().runs.map((r) => (r.id === run.id ? { ...r, state: "stopped" as const, stoppedByLimit: true } : r)) });
-      await s().answer(run.id, "Carry on.");
-      const texts = useToasts.getState().toasts.map((t) => t.text);
-      expect(texts).toContain("Resumed. Claude is picking it back up.");
-      expect(texts).not.toContain("Answer sent. Claude is picking it back up.");
-    });
-
     it("keeps the run sheet's place in the browse order when the answered run changes lane", async () => {
       const run = await asking();
       s().openRun(run.id);
@@ -451,53 +442,11 @@ describe("the run sheet", () => {
       expect(send.mock.calls).toEqual([[first.id, "Yes"], [second.id, "No"]]);
     });
 
-    it("denies a permission prompt and confirms it until the run moves on; a refused Allow once is a toast and records nothing", async () => {
-      await settle();
-      const run = s().runs.find((r) => r.state === "needsPermission")!;
-      await s().allowPermissionOnce(run.id, "git push origin HEAD");
-      expect(useToasts.getState().toasts[0].text).toMatch(/^Couldn't open it to allow: /);
-      expect(s().permissionAnswered[run.id]).toBeUndefined();
-      expect(backend.runs.attached).toEqual([]);
-      await s().denyPermission(run.id, "git push origin HEAD");
-      const after = s().runs.find((r) => r.id === run.id)!;
-      expect(after.state).toBe("working");
-      expect(s().permissionAnswered[run.id]).toEqual({ kind: "denied", command: "git push origin HEAD", at: after.lastProgressAt, copied: false });
-    });
-
-    it("says in a toast, with no Undo, that a deny went through, because it reached the agent", async () => {
-      await settle();
-      const run = s().runs.find((r) => r.state === "needsPermission")!;
-      useToasts.getState().clear();
-      await s().denyPermission(run.id, "git push origin HEAD");
-      const [toast, ...rest] = useToasts.getState().toasts;
-      expect(rest).toEqual([]);
-      expect(toast.tone).toBe("info");
-      expect(toast.text).toMatch(/^Denied\. .+ carries on without it\.$/);
-      expect(toast.action).toBeUndefined();
-    });
-
-    it("copies the command after Allow once opens Terminal, and says so only when the clipboard took it", async () => {
-      await settle();
-      const run = s().runs.find((r) => r.state === "needsPermission")!;
-      const allowed = { ...run, permissionAllowed: { command: "ls", at: run.lastProgressAt } };
-      vi.spyOn(backend, "runsAllowPermissionOnce").mockResolvedValue(allowed);
-      const writeText = vi.fn(() => Promise.resolve());
-      const real = globalThis.navigator;
-      vi.stubGlobal("navigator", { clipboard: { writeText } });
-      await s().allowPermissionOnce(run.id, "ls");
-      expect(writeText).toHaveBeenCalledWith("ls");
-      expect(s().permissionAnswered[run.id]).toMatchObject({ kind: "allowed", command: "ls", copied: true });
-      vi.stubGlobal("navigator", {});
-      await s().allowPermissionOnce(run.id, "ls");
-      expect(s().permissionAnswered[run.id]).toMatchObject({ kind: "allowed", copied: false });
-      vi.stubGlobal("navigator", real);
-    });
-
     it("is refused for a permission prompt", async () => {
       await settle();
       const run = s().runs.find((r) => r.state === "needsPermission")!;
       await s().answer(run.id, "Yes");
-      expect(useToasts.getState().toasts[0].text).toMatch(/asking permission: answer it with Allow once or Deny/);
+      expect(useToasts.getState().toasts[0].text).toMatch(/asking permission, which is answered in Terminal/);
       expect(s().runs.find((r) => r.id === run.id)?.state).toBe("needsPermission");
     });
   });

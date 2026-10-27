@@ -124,20 +124,19 @@ describe("the sample Pip on the Agents screen", () => {
 
 describe("starting an agent again after a clone is found", () => {
   const blank: ScreenContext = { view: null, item: null, selection: [], filter: null, notes: [] } as unknown as ScreenContext;
-  const failed = (kind: Run["spec"]["kind"], spec: Partial<Run["spec"]> = {}) => run("f", "failed", { item: { connectionId: "mock", externalId: "CA-1", key: "CA-1" }, spec: { ...seed[0].spec, kind, workstream: "w1", ...spec } });
+  const failed = (kind: Run["spec"]["role"], spec: Partial<Run["spec"]> = {}) => run("f", "failed", { item: { connectionId: "mock", externalId: "CA-1", key: "CA-1" }, spec: { ...seed[0].spec, role: kind, workstream: "w1", ...spec } });
   const ws = { id: "w1", item: { connectionId: "mock", externalId: "CA-1", key: "CA-1" } };
 
-  it("names the run, its kind and what it followed", () => {
-    expect(pipAsks.again(failed("investigate")).prompt).toBe(`Start the investigate agent of run f again. ${seed[0].spec.repo} has a clone now.`);
-    expect(pipAsks.again(failed("build", { planFromRun: "p1" })).prompt).toContain("Start the build agent of run f again, following run p1.");
-    expect(pipAsks.again(failed("review", { buildFromRun: "b1" })).prompt).toContain("review agent of run f again, following run b1.");
-    expect(pipAsks.again(failed("review", { pr: 12 })).prompt).toContain("review agent of run f again, on pull request 12.");
+  it("names the run, its role and the pull request it read", () => {
+    expect(pipAsks.again(failed("investigator")).prompt).toBe(`Start the investigator agent of run f again. ${seed[0].spec.repo} has a clone now.`);
+    expect(pipAsks.again(failed("builder")).prompt).toContain("Start the builder agent of run f again.");
+    expect(pipAsks.again(failed("reviewer", { pr: 12 })).prompt).toContain("reviewer agent of run f again, on pull request 12.");
   });
 
-  it("is answered by starting that kind again, not an investigation", () => {
-    const build = failed("build", { planFromRun: "p1" });
+  it("is answered by starting that role again with its brief, not an investigation", () => {
+    const build = failed("builder", { brief: "Build it from the plan." });
     const script = scriptPip(pipAsks.again(build).prompt, blank, [], [build], NOW, [], null, ws);
-    expect(script.start).toMatchObject({ role: "build", fromRun: "p1", item: ws.item, repo: null });
+    expect(script.start).toMatchObject({ role: "builder", brief: "Build it from the plan.", item: ws.item, repo: null });
     const other = scriptPip(pipAsks.again(build).prompt, blank, [], [{ ...build, id: "g" }], NOW, [], null, ws);
     expect(other.start ?? null).toBeNull();
   });

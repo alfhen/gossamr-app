@@ -282,14 +282,6 @@ export class JiraBackend implements Backend {
     return invoke<Run>("runs_answer", { id, text });
   }
 
-  runsDenyPermission(_id: string, _command: string): Promise<Run> {
-    return Promise.reject(new Error("A permission prompt is answered in Terminal."));
-  }
-
-  runsAllowPermissionOnce(_id: string, _command: string): Promise<Run> {
-    return Promise.reject(new Error("A permission prompt is answered in Terminal."));
-  }
-
   runsAdoptSession(id: string, session: string) {
     return invoke<Run>("runs_adopt_session", { id, session });
   }
@@ -304,6 +296,10 @@ export class JiraBackend implements Backend {
 
   runsTrustFolder(id: string) {
     return invoke<void>("runs_trust_folder", { id });
+  }
+
+  runsAcceptMode(id: string, mode: "auto" | "bypass") {
+    return invoke<void>("runs_accept_mode", { id, mode });
   }
 
   runsSignIn(id: string) {

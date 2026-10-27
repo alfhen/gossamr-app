@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { MockBackend } from "../backend/mock";
-import type { Intent, ItemRef, Proposal, Run, RunKind, RunState, PauseReason, WorkstreamStage, WorkstreamView } from "../types";
+import type { Intent, ItemRef, Proposal, Run, RunState, PauseReason, WorkstreamStage, WorkstreamView } from "../types";
 import { needs as buildNeeds, type Need } from "./needs";
 import { docFromText } from "./docs";
 import { nextStep } from "./nextStep";
@@ -10,12 +10,12 @@ const iso = (minutesAgo: number) => new Date(NOW - minutesAgo * 60_000).toISOStr
 const ref = (key: string): ItemRef => ({ connectionId: "mock", externalId: key, key });
 
 const base = new MockBackend().runs.list()[0];
-const run = (id: string, kind: RunKind, state: RunState, over: Partial<Run> = {}): Run => ({
+const run = (id: string, kind: string, state: RunState, over: Partial<Run> = {}): Run => ({
   ...base,
   id,
   state,
   item: ref("CA-401"),
-  spec: { ...base.spec, kind, workstream: "ws-1", allowPush: kind === "build" },
+  spec: { ...base.spec, role: kind, workstream: "ws-1" },
   failure: null,
   needs: null,
   queuedAt: iso(60),
@@ -103,7 +103,7 @@ describe("nextStep when the person is waited on", () => {
   });
 
   it("takes the highest-ranked need of the workstream, not another workstream's", () => {
-    const runs = [run("b", "build", "needsAnswer", { needs: "Which branch?" }), run("x", "build", "needsPermission", { needs: "rm -rf x", spec: { ...base.spec, kind: "build", workstream: "ws-other" } })];
+    const runs = [run("b", "build", "needsAnswer", { needs: "Which branch?" }), run("x", "build", "needsPermission", { needs: "rm -rf x", spec: { ...base.spec, role: "build", workstream: "ws-other" } })];
     const v = view(runs.slice(0, 1));
     const result = nextStep(v, runs, needsOf(v, runs));
     expect(result?.need?.key).toBe("run:b");
@@ -175,7 +175,7 @@ describe("nextStep when the chain is finished", () => {
 
 describe("nextStep when a run waits for a slot", () => {
   it("says it starts when a slot frees, with its place in line", () => {
-    const queued = (id: string, minutesAgo: number, workstream = "ws-1") => run(id, "review", "queued", { slotWaitSince: iso(minutesAgo), queuedAt: iso(minutesAgo), spec: { ...base.spec, kind: "review", workstream } });
+    const queued = (id: string, minutesAgo: number, workstream = "ws-1") => run(id, "review", "queued", { slotWaitSince: iso(minutesAgo), queuedAt: iso(minutesAgo), spec: { ...base.spec, role: "review", workstream } });
     const first = queued("a", 5, "ws-other");
     const mine = queued("b", 3);
     const v = view([mine]);

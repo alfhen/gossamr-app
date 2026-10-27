@@ -1,4 +1,3 @@
-import type { RunKind } from "../types";
 import type { RunIcon } from "./agentsLogic";
 
 const PATHS = {
@@ -43,4 +42,3 @@ export function Icon({ name, className = "size-[13px]" }: { name: IconName; clas
 
 export const STATE_ICON: Record<RunIcon, IconName> = { hand: "hand", spark: "spark", check: "check", clock: "clock", alert: "alert", stop: "stop", lock: "lock", help: "help" };
 
-export const KIND_ICON: Record<RunKind, IconName> = { investigate: "search", triage: "funnel", plan: "plan", build: "code", review: "eye", verify: "verify" };

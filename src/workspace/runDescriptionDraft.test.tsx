@@ -8,9 +8,9 @@ import { commentWithPipPrompt, descriptionWithPipPrompt } from "./runSheetLogic"
 
 const base: ResultActions = { draftComment: vi.fn(), askPip: vi.fn(), openDraft: vi.fn(), pickBlocker: vi.fn(), cancelBlocker: vi.fn(), draftBlocker: vi.fn(), openChange: vi.fn(), draftTicket: vi.fn(), openTicketDraft: vi.fn(), finishWithPip: vi.fn(), openCreated: vi.fn(), askPipBreakdown: vi.fn(), buildFromPlan: vi.fn(), draftPlanComment: vi.fn(), openPlanDraft: vi.fn(), reviewThis: vi.fn() };
 const outcome: RunOutcome = { note: { text: "Size 8.", fromMarker: true }, keys: [], change: null, draft: null, ticket: null, ticketDraft: null, subtasks: [], subtasksDraft: null };
-const doneRun = (kind: Run["spec"]["kind"]): Run => {
+const doneRun = (kind: Run["spec"]["role"]): Run => {
   const run = new MockBackend().runs.list().find((r) => r.state === "done" && r.item)!;
-  return { ...run, spec: { ...run.spec, kind }, result: SCRIPTED_RESULT.triage };
+  return { ...run, spec: { ...run.spec, role: kind }, result: SCRIPTED_RESULT.triage };
 };
 const view = (run: Run, on: ResultActions) => renderToStaticMarkup(<Found run={run} outcome={outcome} tickets={[]} pickBlocker={false} drafting={false} on={on} />);
 

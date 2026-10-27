@@ -5,7 +5,7 @@ import { advanceRuns, askPip, jiraWrites, mockRuns, needsPane, openAgents, openA
 // draft is posted (G17), an edited draft reopening as a preview with Edit (G26), and the rail being a named region (G27).
 
 const SAMPLE = "runs=empty&prSurface=manual";
-const newest = async (page: Page, kind: string) => (await mockRuns(page)).find((r) => r.kind === kind) ?? null;
+const newest = async (page: Page, kind: string) => (await mockRuns(page)).find((r) => r.step === kind) ?? null;
 
 /** Pip has finished its turn. A turn can take a while on a busy runner, so this waits longer than the default. */
 async function settled(page: Page) {

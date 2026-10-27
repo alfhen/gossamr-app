@@ -2,7 +2,7 @@ import { isValidElement, type ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MockBackend } from "../backend/mock";
-import type { CodeChange, Intent, ItemRef, Proposal, ReviewView, Run, RunKind, RunState, WorkstreamEvent, WorkstreamView } from "../types";
+import type { CodeChange, Intent, ItemRef, Proposal, ReviewView, Run, RunState, WorkstreamEvent, WorkstreamView } from "../types";
 import { DecisionShownContext } from "./decisionShown";
 import { EDITED_ASIDE, freezeBatch } from "./workViewLogic";
 import { setLiveDraft } from "./draftLive";
@@ -18,13 +18,13 @@ const iso = (minutesAgo: number) => new Date(NOW - minutesAgo * 60_000).toISOStr
 const ref = (key: string): ItemRef => ({ connectionId: "mock", externalId: key, key });
 
 const base = new MockBackend().runs.list()[0];
-const run = (id: string, kind: RunKind, state: RunState, minutesAgo: number, over: Partial<Run> = {}): Run => ({
+const run = (id: string, kind: string, state: RunState, minutesAgo: number, over: Partial<Run> = {}): Run => ({
   ...base,
   id,
   shortId: id,
   state,
   item: ref("CA-401"),
-  spec: { ...base.spec, kind, workstream: "ws-1" },
+  spec: { ...base.spec, role: kind, workstream: "ws-1" },
   failure: null,
   queuedAt: iso(minutesAgo),
   lastProgressAt: iso(minutesAgo - 1),
@@ -85,7 +85,7 @@ const props = (over: Partial<StepRailViewProps> = {}): StepRailViewProps => ({
 });
 
 /** The rendered `<li>` of step `kind`: up to the next step's, or the end of the list. */
-const stepOf = (html: string, kind: RunKind) => {
+const stepOf = (html: string, kind: string) => {
   const start = html.indexOf(`data-step="${kind}"`);
   const next = html.indexOf('data-step="', start + 1);
   return html.slice(start, next > -1 ? next : html.indexOf("</ol>", start));

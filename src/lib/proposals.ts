@@ -1,6 +1,6 @@
 import { docText } from "./docs";
 import { maskSecrets } from "./riskyText";
-import type { BasisField, Intent, ItemRef, Proposal, ProposalMaker, ReviewComment, RunKind } from "../types";
+import type { BasisField, Intent, ItemRef, Proposal, ProposalMaker, ReviewComment } from "../types";
 
 /** Fails to compile when a switch over a union misses a case, and throws if one slips through at run time. */
 export function unreachable(value: never): never {
@@ -266,17 +266,17 @@ export const isRunComment = (p: Proposal) => p.origin.type === "run" && p.intent
 
 /**
  * What a new run comment does to an older pending one, as `run_comment_supersession` in `proposals.rs`: the same ticket in
- * the same workstream, made by an agent run of the same kind (`kindOf` says a run's kind; a run it can't find supersedes
+ * the same workstream, made by an agent run of the same role (`roleOf` says a run's role; a run it can't find supersedes
  * nothing). The person's edit keeps it (the audit line says so); anything else is replaced. Null when it is another
- * ticket, workstream or kind, a plan's comment, not pending, or back in Pending after a failed post (`error` is set).
+ * ticket, workstream or role, a plan's comment, not pending, or back in Pending after a failed post (`error` is set).
  */
-export function runCommentSupersession(older: Proposal, newer: Proposal, kindOf: (runId: string) => RunKind | null): "supersede" | typeof KEPT_EDITED | null {
+export function runCommentSupersession(older: Proposal, newer: Proposal, roleOf: (runId: string) => string | null): "supersede" | typeof KEPT_EDITED | null {
   const ws = workstreamOf(newer);
   if (!ws || !isRunComment(older) || !isRunComment(newer) || workstreamOf(older) !== ws || older.id === newer.id || older.state.type !== "pending" || older.error) return null;
   const [on, to] = [targetOf(older.intent), targetOf(newer.intent)];
   if (!on || !to || on.connectionId !== to.connectionId || on.externalId !== to.externalId) return null;
   if (older.origin.type !== "run" || newer.origin.type !== "run") return null;
-  const [was, now] = [kindOf(older.origin.runId), kindOf(newer.origin.runId)];
+  const [was, now] = [roleOf(older.origin.runId), roleOf(newer.origin.runId)];
   if (!was || was !== now) return null;
   return older.revisions.some((r) => r.note === "Edited") ? KEPT_EDITED : "supersede";
 }

@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { stepOf } from "../lib/roles";
 import { SUMMARY_ONLY, type CodeChange, type ReviewView, type Run, type RunOutcome } from "../types";
 import { Box, Btn, CopyButton, Details, Sec } from "./AgentSheet";
 import { planDescriptionStatus, blockerChoices, blockerControl, breakdownStatus, buildFromPlanControl, changeSummary, commentControl, createdFrom, planCommentControl, reportNotes, reviewThisControl, SEVERITY_LABEL, SOURCE_CHIP, ticketControl, ticketStatus, verdictText } from "./runSheetLogic";
@@ -268,7 +269,7 @@ export function ReviewVerdictBlock({ outcome }: { outcome: RunOutcome | null }) 
 /** What the agent found. Drafting from it is one click and posts nothing. */
 export function Found(props: ResultProps) {
   const found = props.run.item ? <TicketRunFound {...props} /> : <TicketFound run={props.run} outcome={props.outcome} drafting={props.drafting} on={props.on} />;
-  if (props.run.spec.kind !== "review") return found;
+  if (stepOf(props.run.spec.role) !== "review") return found;
   return (
     <>
       <ReviewVerdictBlock outcome={props.outcome} />
@@ -460,9 +461,9 @@ function TicketRunFound({ run, outcome, tickets, pickBlocker, drafting, waitingB
   const draft = outcome?.draft?.state.type === "pending" ? outcome.draft : null;
   const decided = outcome?.draft && !draft ? outcome.draft.state.type : null;
   return (
-    <Sec title={run.spec.kind === "plan" ? "The plan it wrote" : "What it found"}>
+    <Sec title={stepOf(run.spec.role) === "plan" ? "The plan it wrote" : "What it found"}>
       <Box>
-        {run.spec.kind === "plan" && <PlanBox run={run} outcome={outcome} drafting={drafting} on={on} />}
+        {stepOf(run.spec.role) === "plan" && <PlanBox run={run} outcome={outcome} drafting={drafting} on={on} />}
         {note?.text ? (
           <>
             <p className="m-0 flex flex-wrap items-center gap-2 text-xs font-semibold text-ws-ink3">
@@ -491,7 +492,7 @@ function TicketRunFound({ run, outcome, tickets, pickBlocker, drafting, waitingB
           </Details>
         )}
         <Breakdown run={run} outcome={outcome} drafting={drafting} waitingBreakdown={waitingBreakdown} on={on} />
-        {run.spec.kind === "build" && <ReviewBox run={run} outcome={outcome} drafting={drafting} on={on} />}
+        {stepOf(run.spec.role) === "build" && <ReviewBox run={run} outcome={outcome} drafting={drafting} on={on} />}
         {draft && (
           <p data-draft="ready" role="status" className="m-0 rounded-md border border-dashed border-ws-pip bg-ws-pip-soft px-2.5 py-1.5 text-sm">
             <b className="font-semibold text-ws-pip">A comment is drafted on {run.item?.key ?? "the ticket"}.</b> Read it, edit it or skip it. Nothing is posted until you approve it.
@@ -522,7 +523,7 @@ function TicketRunFound({ run, outcome, tickets, pickBlocker, drafting, waitingB
               </Btn>
             </>
           )}
-          {run.spec.kind === "triage" && on.askPipDescription && (
+          {stepOf(run.spec.role) === "triage" && on.askPipDescription && (
             <Btn icon="spark" disabled={!comment.enabled || drafting} title={comment.reason ?? "Pip reads the whole run and the ticket, and drafts a new description for you to review as a diff"} onClick={on.askPipDescription}>
               Draft a description update
             </Btn>

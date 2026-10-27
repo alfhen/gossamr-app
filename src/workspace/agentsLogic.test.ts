@@ -16,7 +16,6 @@ import {
   chipFilters,
   needsScope,
   needsAttention,
-  stoppedAtLimit,
   yourAgents,
   filterOptions,
   formatTokens,
@@ -146,7 +145,7 @@ describe("how a state looks", () => {
     expect(runApproved(done, [draft("startRun", "pending", 9), draft("comment", "applied", 5)])).toBe(true);
     expect(runApproved(done, [draft("rewrite", "applied", 5, "other")])).toBe(false);
     // A plan's main draft is its description update, whatever else it drafted first.
-    const plan = run("done", { id: "r1", spec: { ...base.spec, kind: "plan" } });
+    const plan = run("done", { id: "r1", spec: { ...base.spec, role: "plan" } });
     expect(runApproved(plan, [draft("comment", "pending", 9), draft("rewrite", "applied", 5)])).toBe(true);
     expect(runApproved(plan, [draft("comment", "applied", 9), draft("rewrite", "pending", 5)])).toBe(false);
     expect(runApproved(plan, [draft("comment", "applied", 9)])).toBe(false);
@@ -174,19 +173,11 @@ describe("the runs that wait on the person", () => {
     expect(runs.filter((r) => needsAttention(r, none))).toEqual([]);
   });
 
-  it("counts a run stopped at its limit, which only the person resumes, and nothing else that stopped", () => {
-    const limit = run("stopped", { id: "l", stoppedByLimit: true, error: "Stopped by Gossamr: it passed the 60 minute limit" });
-    expect(stoppedAtLimit(limit)).toBe(true);
-    expect(stoppedAtLimit(run("stopped", { id: "s" }))).toBe(false);
-    expect(laneOf(limit, NOW)).toBe("bad");
-    expect(laneOf(run("stopped", { id: "s" }), NOW)).toBe("earlier");
-    expect(laneOf(run("stopped", { id: "s", stoppedByLimit: false }), NOW)).toBe("earlier");
-    expect(needsAttention(limit, none)).toBe(true);
-    expect(needsAttention(run("stopped", { id: "s" }), none)).toBe(false);
-    // Dismissing doesn't change what Your agents counts: it waits until it is resumed.
-    expect(needsAttention(limit, new Set(["l"]))).toBe(true);
-    expect(needsAttention({ ...limit, state: "working", stoppedByLimit: false }, none)).toBe(false);
-    expect(yourAgents([limit], none)).toEqual([limit]);
+  it("counts nothing that stopped: it is over, or the person's to dismiss", () => {
+    const stopped = run("stopped", { id: "s", error: "Stopped before it started" });
+    expect(laneOf(stopped, NOW)).toBe("earlier");
+    expect(needsAttention(stopped, none)).toBe(false);
+    expect(yourAgents([stopped], none)).toEqual([]);
   });
 });
 
@@ -281,8 +272,9 @@ describe("words on a card", () => {
   it("names a run by its ticket's title, else by what it is for", () => {
     const r = run("working");
     expect(runTitle(r, "Fix the totals")).toBe("Fix the totals");
-    expect(runTitle(r, "  ")).toBe(`Investigate ${r.item!.key}`);
-    expect(runTitle({ ...r, item: null }, null)).toBe("Investigate payments");
+    expect(runTitle(r, "  ")).toBe(`Investigator ${r.item!.key}`);
+    expect(runTitle({ ...r, item: null, spec: { ...r.spec, brief: "Why is checkout\n slow?" } }, null)).toBe("Why is checkout slow?");
+    expect(runTitle({ ...r, item: null, spec: { ...r.spec, brief: "  " } }, null)).toBe("Investigator payments");
   });
 
   it("shows the first sentence of a result", () => {
@@ -330,8 +322,8 @@ describe("grouping by workstream", () => {
   });
   const inWs = (state: RunState, id: string, workstream: string | null, queued: number, over: Partial<Run> = {}) => run(state, { id, queuedAt: iso(queued), spec: { ...base.spec, workstream }, ...over });
   const runs = [
-    inWs("done", "a1", "ws-a", 300, { spec: { ...base.spec, kind: "investigate", workstream: "ws-a" }, endedAt: iso(200) }),
-    inWs("working", "a2", "ws-a", 100, { spec: { ...base.spec, kind: "plan", workstream: "ws-a" } }),
+    inWs("done", "a1", "ws-a", 300, { spec: { ...base.spec, role: "investigate", workstream: "ws-a" }, endedAt: iso(200) }),
+    inWs("working", "a2", "ws-a", 100, { spec: { ...base.spec, role: "plan", workstream: "ws-a" } }),
     inWs("working", "b1", "ws-b", 5),
     inWs("needsAnswer", "loose1", null, 50),
     inWs("done", "loose2", null, 400, { endedAt: iso(1) }),
@@ -348,7 +340,7 @@ describe("grouping by workstream", () => {
   });
 
   it("takes the stage from the workstream's view, which knows each review's verdict, and from the runs only without one", () => {
-    const reviewed = [inWs("done", "r1", "ws-r", 10, { spec: { ...base.spec, kind: "review", workstream: "ws-r" } })];
+    const reviewed = [inWs("done", "r1", "ws-r", 10, { spec: { ...base.spec, role: "review", workstream: "ws-r" } })];
     const [blocking] = groupRunsByWorkstream(reviewed, [view("ws-r", "CA-403", "review", { reviewBlocking: true })], NO_FILTERS, NOW);
     expect([blocking.stage, blocking.reviewBlocking]).toEqual(["review", true]);
     const [closed] = groupRunsByWorkstream(reviewed, [], NO_FILTERS, NOW);
@@ -356,7 +348,7 @@ describe("grouping by workstream", () => {
   });
 
   it("orders workstreams by their latest activity", () => {
-    const later = [...runs, inWs("queued", "a3", "ws-a", 1, { spec: { ...base.spec, kind: "build", workstream: "ws-a" } })];
+    const later = [...runs, inWs("queued", "a3", "ws-a", 1, { spec: { ...base.spec, role: "build", workstream: "ws-a" } })];
     expect(groupRunsByWorkstream(later, workstreams, NO_FILTERS, NOW).map((g) => g.id)).toEqual(["ws-a", "ws-b", null]);
   });
 

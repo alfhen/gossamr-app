@@ -1,6 +1,6 @@
 import { commentable, parseWhere, relativePath } from "../lib/diffHunks";
 import type { ChangedFile, ReviewComment, ReviewFinding, ReviewSeverity, ReviewVerdict } from "../types";
-import { withoutMarkers } from "./mockRunKinds";
+import { withoutMarkers } from "./mockRunSpec";
 import { FINDING_TEXT_LIMIT } from "./mockRunResult";
 
 /** The longest summary a review draft posts and the most inline comments it carries, as in `proposals.rs`. */

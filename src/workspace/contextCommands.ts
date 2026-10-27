@@ -44,11 +44,9 @@ const GROUP = "This item" as const;
 
 const entry = (id: string, label: string, run: () => void, extra: Partial<Command> = {}): Command => ({ id: `context:${id}`, group: GROUP, icon: "→", label, keywords: "this selected focused item action", run, ...extra });
 
-/** What a need's button is called in the palette, with a word that finds it: "Allow once" for "Allow once in Terminal". */
+/** What a need's button is called in the palette, with a word that finds it. */
 const NEED_ENTRY: Record<NeedActionId, { label?: string; keywords: string; icon: string }> = {
   approve: { keywords: "approve post send apply yes", icon: "✓" },
-  allow: { label: "Allow once", keywords: "allow permit yes terminal permission", icon: "✓" },
-  deny: { label: "Deny", keywords: "deny refuse no permission", icon: "✕" },
   dismiss: { keywords: "dismiss skip discard hide remove", icon: "✕" },
   edit: { label: "Edit", keywords: "edit change revise", icon: "✎" },
   retry: { label: "Retry", keywords: "retry again launch", icon: "↻" },
@@ -69,7 +67,7 @@ function workstreamEntries(view: WorkstreamView, deps: ContextDeps, ticket: stri
 
 /**
  * The palette's entries for `subject`: whatever its buttons offer, nothing it doesn't. A need offers its own actions
- * (approve, allow once, deny, skip or dismiss, edit, retry, resume, answer), "Open in workstream", and its workstream's
+ * (approve, skip or dismiss, edit, retry, resume, answer), "Open in workstream", and its workstream's
  * Pause or Resume; a draft offers approve (or review and approve), edit, skip and "Open in workstream"; a run
  * offers what its need does, else to open it; a workstream offers its controls. Null or a subject that has gone: nothing.
  */

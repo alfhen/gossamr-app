@@ -1,5 +1,5 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ItemRef, Run, RunKind, RunSpec } from "../types";
+import type { ItemRef, Run, RunSpec } from "../types";
 import { MockBackend } from "./mock";
 import type { MockOptions } from "./mockWatch";
 import { itemRef } from "./mockConnector";
@@ -37,8 +37,8 @@ describe("the supervisor fixtures the Rust side runs too", () => {
 describe("the wake prompt", () => {
   it("gives merged facts one line each", () => {
     const facts: WakeFact[] = [
-      { run: "r1", kind: "investigate", state: "done" },
-      { run: "r2", kind: "review", state: "done", verdict: "blocking", blocking: 1, drafts: 2 },
+      { run: "r1", role: "investigate", state: "done" },
+      { run: "r2", role: "review", state: "done", verdict: "blocking", blocking: 1, drafts: 2 },
     ];
     expect(eventLine(facts)).toBe("[Event] run r1 (investigate) Done\n[Event] run r2 (review) Done; verdict: blocking; 1 blocking finding; 2 drafts");
   });
@@ -73,9 +73,9 @@ function world(options: MockOptions = { githubRepos: 12 }) {
   return { b, supervisor, wakes };
 }
 
-/** A `kind` run on `item` in workstream `ws`, as Pip's start_agent does. */
-async function start(b: MockBackend, ws: string, kind: RunKind, item: ItemRef | null = CA401): Promise<Run> {
-  const spec: RunSpec = { kind, repo: "acme/storefront", clonePath: "/Users/sample/Code/storefront", base: "main", name: `${(item?.key ?? "none").toLowerCase()}-${Math.random().toString(16).slice(2, 8)}`, instruction: "", focus: null, focusFromRun: null, ticketBlock: null, workstream: ws };
+/** A run with `role` on `item` in workstream `ws`, as Pip's start_agent does. */
+async function start(b: MockBackend, ws: string, role: string, item: ItemRef | null = CA401): Promise<Run> {
+  const spec: RunSpec = { role, repo: "acme/storefront", clonePath: "/Users/sample/Code/storefront", base: "main", name: `${(item?.key ?? "none").toLowerCase()}-${Math.random().toString(16).slice(2, 8)}`, brief: "", ticketBlock: null, workstream: ws };
   return b.runs.start(spec, item);
 }
 
@@ -113,7 +113,7 @@ describe("the sample supervisor", () => {
     const triage = await start(b, ws, "triage");
     finish(b, triage.id);
     expect(wakes).toHaveLength(2);
-    expect(wakes[1].facts[0]).toMatchObject({ run: triage.id, kind: "triage", state: "done", planRecommended: true });
+    expect(wakes[1].facts[0]).toMatchObject({ run: triage.id, role: "triage", state: "done", planRecommended: true });
     expect(b.runs.list({ workstream: ws })).toHaveLength(2);
 
     expect(Object.fromEntries(wakeCount(wakes))).toEqual({ [`${r1.id}:done`]: 1, [`${triage.id}:done`]: 1 });
@@ -198,17 +198,13 @@ describe("the sample supervisor", () => {
     expect(b.workstreams.get(ws)?.workstream.pausedReason).toBeNull();
   });
 
-  it("wakes nobody for a stop the person asked for or one Gossamr made at a limit, and somebody for any other", async () => {
+  it("wakes nobody for a stop the person asked for", async () => {
     const { b, wakes } = world();
     const ws = b.workstreams.open(CA401).id;
     const stopped = await investigate(b, ws);
     b.runs.advance(stopped.id);
     b.runs.advance(stopped.id);
     b.runs.stop(stopped.id);
-    const limited = await start(b, ws, "triage");
-    b.runs.advance(limited.id);
-    b.runs.advance(limited.id);
-    b.runs.stopAtLimit(limited.id);
     b.supervisor.check();
     expect(wakes).toEqual([]);
     const all = await start(b, ws, "plan");
@@ -261,7 +257,7 @@ describe("the sample supervisor", () => {
     it("says Ready to plan: no with its open questions, and tells Pip how many are open", async () => {
       const { b, ws, triage, wakes } = await triaged();
       expect(b.runs.get(triage.id)?.result).toContain("Ready to plan: no\nOpen questions:");
-      expect(b.runs.list({ workstream: ws }).some((r) => r.spec.kind === "plan")).toBe(false);
+      expect(b.runs.list({ workstream: ws }).some((r) => r.spec.role === "planner")).toBe(false);
       expect(triageReadiness(b.runs.get(triage.id)!)?.questions).toHaveLength(4);
       expect(last(wakes).facts[0]).toMatchObject({ run: triage.id, planRecommended: true, openQuestions: 4 });
       expect(eventLine(last(wakes).facts)).toBe(`[Event] run ${triage.id} (triage) Done; plan recommended: yes; not ready to plan, 4 open questions; 1 draft`);

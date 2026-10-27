@@ -8,7 +8,7 @@ import { RunSheetView, type RunSheetActions } from "./RunSheet";
 
 const NOW = Date.parse("2026-09-30T12:00:00Z");
 const backend = new MockBackend({ githubRepos: 14, runs: { seed: "kinds", epoch: NOW } });
-const build: Run = backend.runs.list().find((r) => r.spec.kind === "build")!;
+const build: Run = backend.runs.list().find((r) => r.spec.role === "builder")!;
 
 const actions = (): RunSheetActions => ({ close: vi.fn(), attach: vi.fn(), askStop: vi.fn(), cancelStop: vi.fn(), stop: vi.fn(), startNow: vi.fn(), answer: vi.fn(), adoptSession: vi.fn(() => Promise.resolve()), retry: vi.fn(), fix: vi.fn(), copied: vi.fn(), openTicket: vi.fn(), reveal: vi.fn(), draftComment: vi.fn(), askPip: vi.fn(), openDraft: vi.fn(), pickBlocker: vi.fn(), cancelBlocker: vi.fn(), draftBlocker: vi.fn(), openChange: vi.fn(), draftTicket: vi.fn(), openTicketDraft: vi.fn(), finishWithPip: vi.fn(), openCreated: vi.fn(), askPipBreakdown: vi.fn(), buildFromPlan: vi.fn(), draftPlanComment: vi.fn(), openPlanDraft: vi.fn(), reviewThis: vi.fn() });
 const outcome = (over: Partial<RunOutcome> = {}): RunOutcome => ({ ...backend.runs.outcome(build.id), ...over });
@@ -48,14 +48,9 @@ describe("the run sheet for a finished build", () => {
   });
 
   it("turns it off, with the reason, when there is no pull request or it is not in the same repository", () => {
-    const unpushed = sheet({ ...build, spec: { ...build.spec, allowPush: false } }, outcome({ change: null }));
-    expect(disabled(unpushed, "Ask Pip to review")).toBe(true);
-    expect(unpushed).toContain("This build has no pull request yet. Push it and open one");
-    // A build that was asked to push opened its own; the person isn't told to push it again while a sync finds it.
-    const waiting = sheet({ ...build, spec: { ...build.spec, allowPush: true } }, outcome({ change: null }));
+    const waiting = sheet(build, outcome({ change: null }));
     expect(disabled(waiting, "Ask Pip to review")).toBe(true);
-    expect(waiting).toContain("Its draft pull request hasn&#x27;t been found on GitHub yet");
-    expect(waiting).not.toContain("Push it and open one");
+    expect(waiting).toContain("Its pull request hasn&#x27;t been found on GitHub yet");
     const fork = sheet(build, outcome({ change: { ...outcome().change!, headRepo: "mallory/webshop" } }));
     expect(disabled(fork, "Ask Pip to review")).toBe(true);
     expect(fork).toContain("isn&#x27;t from a branch in the same repository");
@@ -70,34 +65,30 @@ describe("the run sheet for a finished build", () => {
   });
 
   it("is not there for other kinds", () => {
-    const triage = backend.runs.list().find((r) => r.spec.kind === "triage")!;
+    const triage = backend.runs.list().find((r) => r.spec.role === "triager")!;
     expect(sheet(triage, backend.runs.outcome(triage.id))).not.toContain("data-review-box");
   });
 });
 
 describe("what the agent was told, on the run sheet", () => {
   const html = (run: Run) => renderToStaticMarkup(<PromptParts run={run} />);
-  const review = (): Run => ({ ...build, id: "run-review", spec: { ...build.spec, kind: "review", pr: 218, buildAccount: build.result, buildFromRun: build.id, instruction: "Review it." } });
 
-  it("shows the builder's account whole as a part of its own, labelled with the run, read-only", () => {
-    const out = html(review());
-    expect(out).toContain(`What the builder says it did (run ${build.id})`);
-    expect(out).toContain("data-build-account");
-    expect(out).toContain("Cached the category tree");
+  it("shows the base brief and Pip's brief, and the ticket as data, read-only", () => {
+    const out = html({ ...build, spec: { ...build.spec, role: "reviewer", pr: 218, brief: "Review it and report a verdict." } });
+    expect(out).toContain("Base brief from Gossamr");
+    expect(out).toContain("Role: reviewer.");
+    expect(out).toContain("then checks out pull request 218");
+    expect(out).toContain("Pip&#x27;s brief");
+    expect(out).toContain("Review it and report a verdict.");
+    expect(out).toContain("Ticket from Jira, with its comments");
     expect(out).not.toContain("<textarea");
+    expect(out).not.toContain("data-build-account");
+    expect(out).not.toContain("data-findings");
   });
 
-  it("puts nothing about a builder into a review without one", () => {
-    expect(html({ ...review(), spec: { ...review().spec, buildAccount: null, buildFromRun: null } })).not.toContain("What the builder says");
-  });
-
-  it("shows an investigation's findings read-only as a part of their own, labelled with the run", () => {
-    const run: Run = { ...build, spec: { ...build.spec, kind: "plan", allowPush: false, pr: null, prSha: null, instruction: "Plan it.", findings: "It retries without backoff.", findingsFromRun: "run-3" } };
-    const out = html(run);
-    expect(out).toContain("Findings from investigation run run-3");
-    expect(out).toContain("data-findings");
-    expect(out).toContain("It retries without backoff.");
-    expect(out).not.toContain("<textarea");
-    expect(html({ ...run, spec: { ...run.spec, findings: null, findingsFromRun: null } })).not.toContain("Findings from");
+  it("leaves out the pull request step without one, and the ticket without its text", () => {
+    const out = html({ ...build, spec: { ...build.spec, pr: null, ticketBlock: null } });
+    expect(out).not.toContain("checks out pull request");
+    expect(out).not.toContain("Ticket from Jira");
   });
 });

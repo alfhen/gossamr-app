@@ -141,7 +141,7 @@ describe("the scripted Pip's queue", () => {
   });
 
   describe("wakes", () => {
-    const fact = (run: string): WakeFact => ({ run, kind: "triage", state: "done" });
+    const fact = (run: string): WakeFact => ({ run, role: "triage", state: "done" });
     const metas: [string, EventMeta | undefined][] = [];
     let offMeta = () => {};
     beforeEach(() => {

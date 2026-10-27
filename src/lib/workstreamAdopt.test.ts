@@ -3,7 +3,7 @@ import type { Intent, Proposal, Run } from "../types";
 import { adoptableOf, adoptCount, adoptedText, adoptOfferText, adoptUndoneText, adoptWords, canJoinWorkstream, withWorkstream } from "./workstreamAdopt";
 
 const ref = (key: string) => ({ connectionId: "mock", externalId: key, key });
-const run = (id: string, key: string, workstream?: string): Run => ({ id, connectionId: "mock", item: ref(key), spec: { kind: "plan", ...(workstream ? { workstream } : {}) } }) as unknown as Run;
+const run = (id: string, key: string, workstream?: string): Run => ({ id, connectionId: "mock", item: ref(key), spec: { role: "plan", ...(workstream ? { workstream } : {}) } }) as unknown as Run;
 const draft = (id: string, key: string, over: Partial<Proposal> = {}): Proposal =>
   ({ id, origin: { type: "chat", requestId: "q" }, intent: { type: "comment", item: ref(key), body: { blocks: [] } } as unknown as Intent, state: { type: "pending" }, ...over }) as unknown as Proposal;
 const ws = { itemKey: "CA-401", connectionId: "mock", closedAt: null };
@@ -18,7 +18,7 @@ describe("what a workstream could take in from its ticket (G17)", () => {
   it("leaves a draft with nowhere to record a workstream, and offers nothing without a ticket or once closed", () => {
     const board = draft("d5", "CA-401", { origin: { type: "board" } as Proposal["origin"] });
     expect(canJoinWorkstream(board)).toBe(false);
-    const start = draft("d6", "CA-401", { origin: { type: "board" } as Proposal["origin"], intent: { type: "startRun", item: ref("CA-401"), spec: { kind: "plan" } } as unknown as Intent });
+    const start = draft("d6", "CA-401", { origin: { type: "board" } as Proposal["origin"], intent: { type: "startRun", item: ref("CA-401"), spec: { role: "plan" } } as unknown as Intent });
     expect(canJoinWorkstream(start)).toBe(false);
     expect(adoptableOf(ws, [], [board, start]).drafts).toEqual([]);
     expect(adoptableOf({ ...ws, itemKey: null }, [run("r1", "CA-401")], [])).toEqual({ runs: [], drafts: [] });

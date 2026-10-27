@@ -55,7 +55,7 @@ export function draftPreviewBody(p: Proposal, statusName: string | null): string
     case "link":
       return linkSentence(i);
     case "startRun":
-      return `${clipText(i.spec.instruction)}\n\nPip starts agents directly now; this draft is kept as history.`;
+      return `${clipText(i.spec.brief)}\n\nPip starts agents directly now; this draft is kept as history.`;
     case "followUp":
       return `${i.reason}\n\n${i.message}\n\nPip messages agents directly now; this draft is kept as history.`;
     case "runAnswer":

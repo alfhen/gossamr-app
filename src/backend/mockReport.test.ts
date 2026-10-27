@@ -9,7 +9,7 @@ const NOW = Date.parse("2026-09-30T12:00:00Z");
 const sample = () => new MockBackend({ runs: { seed: "reports", epoch: NOW } });
 
 const row = (over: Partial<MockReportRow> = {}): MockReportRow => ({ offered: true, report: null, revision: 0, calls: 0, rejections: 0, stale: false, ...over });
-const ticketRun = (kind: "investigate" | "triage" | "plan" = "investigate") => ({ item: itemRef("CA-1"), spec: { kind }, result: "Prose.\n\nSubtasks:\n- From prose\n\nFor Jira: from the written answer", resultComplete: true });
+const ticketRun = (kind: "investigate" | "triage" | "plan" = "investigate") => ({ item: itemRef("CA-1"), spec: { role: kind }, result: "Prose.\n\nSubtasks:\n- From prose\n\nFor Jira: from the written answer", resultComplete: true });
 
 describe("which result a run is read from", () => {
   it("uses a current report in full, and keeps the tickets the written answer names", () => {
@@ -34,7 +34,7 @@ describe("which result a run is read from", () => {
 
   it("takes a ticketless run's ticket from its report", () => {
     const ticket = { title: "Add a backoff", kind: "bug" as const, body: "It spins." };
-    const r = resolveResult({ item: null, spec: { kind: "investigate" }, result: "Prose only.", resultComplete: true }, row({ report: { status: "done", newTicket: ticket }, revision: 1, calls: 1 }));
+    const r = resolveResult({ item: null, spec: { role: "investigate" }, result: "Prose only.", resultComplete: true }, row({ report: { status: "done", newTicket: ticket }, revision: 1, calls: 1 }));
     expect(r).toMatchObject({ source: "structured", ticket, note: null });
   });
 });
@@ -93,15 +93,15 @@ describe("the sample runs that show each source", () => {
 });
 
 describe("asking for the tool", () => {
-  const spec: RunSpec = { kind: "investigate", repo: "acme/storefront", clonePath: "/Users/sample/Code/storefront", base: "main", name: "ca-412-fix-ab12", instruction: "Investigate this work.", focus: null, focusFromRun: null, ticketBlock: "CA-412: sample" };
-  it("puts the report paragraph in the prompt of every start, whether or not the caller asks", () => {
+  const spec: RunSpec = { role: "investigator", repo: "acme/storefront", clonePath: "/Users/sample/Code/storefront", base: "main", name: "ca-412-fix-ab12", brief: "Investigate this work.", ticket: "CA-412", ticketBlock: "CA-412: sample" };
+  it("tells every start about the tools in its prompt, whether or not the caller asks", () => {
     const b = new MockBackend();
     for (const asked of [{ report: true }, { name: "ca-412-fix-cd34" }]) {
       const made = b.runs.prepare({ ...spec, ...asked }, itemRef("CA-412"));
       expect(made.report).toBe(true);
-      expect(renderPrompt(made)).toContain("If the Gossamr tool `report` is available");
+      expect(renderPrompt(made)).toContain("Gossamr's tools: call `report`");
     }
-    expect(renderPrompt({ ...spec, report: false })).not.toContain("Gossamr tool");
+    expect(renderPrompt({ ...spec, report: false })).not.toContain("Gossamr's tools");
   });
 
   it("makes a run that finishes report what its answer says, and drafts from the report", async () => {
@@ -149,7 +149,7 @@ describe("an adversarial review", () => {
     expect(reviewVerdict("- [blocking] x\n\nVerdict: blocking\n\n> Verdict: pass")?.verdict).toBe("blocking");
   });
 
-  const review = (result: string | null, resultComplete = true) => ({ item: itemRef("CA-1"), spec: { kind: "review" as const }, result, resultComplete });
+  const review = (result: string | null, resultComplete = true) => ({ item: itemRef("CA-1"), spec: { role: "review" as const }, result, resultComplete });
 
   it("takes the verdict from a current report, else the whole written answer, never a summary", () => {
     const reported = resolveResult(review(SCRIPTED_RESULT.review), row({ report: { status: "done", note: "n", verdict: "pass", findings: [{ severity: "nit", text: "x", where: null }] }, revision: 1, calls: 1 }));
@@ -161,12 +161,12 @@ describe("an adversarial review", () => {
     expect(resolveResult(review(SCRIPTED_RESULT.review), row({ report: { status: "done", note: "old" }, revision: 1, calls: 1 })).verdict).toBe("blocking");
     expect(resolveResult(review("Review complete. Verdict: blocking", false), null).verdict).toBeNull();
     expect(reviewView(resolveResult(review("Looked.\n\nFor Jira: fine."), null))).toBeNull();
-    expect(resolveResult({ ...review(SCRIPTED_RESULT.review), spec: { kind: "verify" } }, null).verdict).toBeNull();
+    expect(resolveResult({ ...review(SCRIPTED_RESULT.review), spec: { role: "verify" } }, null).verdict).toBeNull();
   });
 
   it("finishes in the sample backend with a blocking verdict read from its answer, and from its report when it reports", async () => {
     const b = new MockBackend({ runs: { seed: "kinds", epoch: NOW } });
-    const seeded = b.runs.list().find((r) => r.spec.kind === "review")!;
+    const seeded = b.runs.list().find((r) => r.spec.role === "reviewer")!;
     expect((await b.runsOutcome(seeded.id)).review).toBeNull();
     b.runs.setReport(seeded.id, row({ report: { status: "done", note: "n", verdict: "blocking", findings: [{ severity: "blocking", text: "t", where: "a.ts:1" }] }, revision: 1, calls: 1 }));
     expect((await b.runsOutcome(seeded.id)).review).toMatchObject({ verdict: "blocking", blocking: 1, source: "structured" });

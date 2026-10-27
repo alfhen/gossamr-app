@@ -161,7 +161,7 @@ describe("skipping a draft", () => {
 });
 
 describe("dismissing a failed run", () => {
-  const failed = { id: "r-fail", state: "failed", item: CA401, spec: { kind: "build", workstream: null } } as unknown as Run;
+  const failed = { id: "r-fail", state: "failed", item: CA401, spec: { role: "build", workstream: null } } as unknown as Run;
 
   beforeEach(() => useRuns.setState({ runs: [failed], dismissed: new Set() }));
   afterEach(() => useRuns.setState({ runs: [], dismissed: new Set() }));

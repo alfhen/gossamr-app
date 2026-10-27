@@ -1,11 +1,12 @@
-import type { ReviewVerdict, Run, RunKind, RunState, WorkstreamStage, WorkstreamView } from "../types";
+import type { ReviewVerdict, Run, RunState, WorkstreamStage, WorkstreamView } from "../types";
+import { stageOf, type Step } from "./roles";
 
 /** Mirrors `stage` and `run_labels` in src-tauri/src/domain/workstream.rs; src/lib/workstreamStage.fixtures.json holds cases both sides run. */
 
 /** What `stage` reads of a run: for a finished review, its verdict when one is known. */
-export type StagedRun = Pick<Run, "id" | "state" | "queuedAt"> & { spec: Pick<Run["spec"], "kind">; verdict?: ReviewVerdict | null };
+export type StagedRun = Pick<Run, "id" | "state" | "queuedAt"> & { spec: Pick<Run["spec"], "role">; verdict?: ReviewVerdict | null };
 
-const RANK: Record<RunKind, number> = { investigate: 0, triage: 1, plan: 2, build: 3, review: 4, verify: 5 };
+const RANK: Record<Step, number> = { investigate: 0, triage: 1, plan: 2, build: 3, review: 4, verify: 5 };
 
 const inProgress = (state: RunState) => state !== "done" && state !== "failed" && state !== "stopped";
 
@@ -25,23 +26,23 @@ export function byQueue(a: Pick<StagedRun, "id" | "queuedAt">, b: Pick<StagedRun
   return x[0] - y[0] || x[1] - y[1] || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
 }
 
-/** The kind furthest along among `runs` whose state `pick` accepts. */
-function furthest(runs: readonly StagedRun[], pick: (s: RunState) => boolean): RunKind | null {
-  let found: RunKind | null = null;
-  for (const r of runs) if (pick(r.state) && (found === null || RANK[r.spec.kind] >= RANK[found])) found = r.spec.kind;
+/** The step furthest along among `runs` whose state `pick` accepts. */
+function furthest(runs: readonly StagedRun[], pick: (s: RunState) => boolean): Step | null {
+  let found: Step | null = null;
+  for (const r of runs) if (pick(r.state) && (found === null || RANK[stageOf(r.spec.role)] >= RANK[found])) found = stageOf(r.spec.role);
   return found;
 }
 
 /** The finished review among `runs` queued last. */
 function newestReview(runs: readonly StagedRun[]): StagedRun | undefined {
-  return runs.filter((r) => r.spec.kind === "review" && r.state === "done").sort(byQueue).pop();
+  return runs.filter((r) => stageOf(r.spec.role) === "review" && r.state === "done").sort(byQueue).pop();
 }
 
 /**
  * The stage of a workstream whose linked runs are `runs`, in any order. The first rule that applies decides: no runs is
- * intake; any run in progress gives the furthest kind among those; else the furthest kind that finished, a finished
+ * intake; any run in progress gives the furthest step among those; else the furthest step that finished, a finished
  * verify being done and a finished review done only when the newest finished review passed (blocking or no verdict is
- * review); else (every run failed or stopped) the kind of the run queued last.
+ * review); else (every run failed or stopped) the step of the run queued last.
  */
 export function stage(runs: readonly StagedRun[]): WorkstreamStage {
   const going = furthest(runs, inProgress);
@@ -51,7 +52,7 @@ export function stage(runs: readonly StagedRun[]): WorkstreamStage {
   if (done === "review") return newestReview(runs)?.verdict === "pass" ? "done" : "review";
   if (done) return done;
   const last = [...runs].sort(byQueue).pop();
-  return last ? last.spec.kind : "intake";
+  return last ? stageOf(last.spec.role) : "intake";
 }
 
 /** Whether the workstream stands at review because its newest finished review asked for changes, nothing in progress. */

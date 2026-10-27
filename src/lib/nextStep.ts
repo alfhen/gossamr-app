@@ -2,7 +2,8 @@ import { slotPosition, slotQueue, ordinal } from "../workspace/agentsLogic";
 import type { Run, WorkstreamView } from "../types";
 import { byRank, type Need } from "./needs";
 import { pausedText } from "./workstreamPause";
-import { byQueue, STAGE_LABEL } from "./workstreamStage";
+import { roleLabel, stepOf } from "./roles";
+import { byQueue } from "./workstreamStage";
 
 /**
  * What happens next in a workstream, and why, as one line for its header ("Next: when R5 (Build) finishes, Pip is woken to
@@ -34,11 +35,11 @@ export interface NextStep {
 /** "R5 (Build)": the run as the header names it, by its short name in the workstream and its step. */
 function nameOf(run: Run, view: WorkstreamView): string {
   const label = view.labels.find(([id]) => id === run.id)?.[1];
-  return label ? `${label} (${STAGE_LABEL[run.spec.kind]})` : `The ${STAGE_LABEL[run.spec.kind].toLowerCase()} agent`;
+  return label ? `${label} (${roleLabel(run.spec.role)})` : `The ${run.spec.role} agent`;
 }
 
 /** Just the short name, "R5", for a sentence that already says the step. */
-const shortOf = (run: Run, view: WorkstreamView): string => view.labels.find(([id]) => id === run.id)?.[1] ?? `The ${STAGE_LABEL[run.spec.kind].toLowerCase()} agent`;
+const shortOf = (run: Run, view: WorkstreamView): string => view.labels.find(([id]) => id === run.id)?.[1] ?? `The ${run.spec.role} agent`;
 
 const inProgress = (run: Run) => run.state !== "done" && run.state !== "failed" && run.state !== "stopped";
 
@@ -85,7 +86,7 @@ function chain(view: WorkstreamView, runs: readonly Run[], mine: readonly Run[],
   }
 
   if (view.stage === "done" && going.length === 0) {
-    const verified = mine.some((r) => r.spec.kind === "verify" && r.state === "done");
+    const verified = mine.some((r) => stepOf(r.spec.role) === "verify" && r.state === "done");
     return step("done", `nothing left. The PR is ${verified ? "verified" : "reviewed"} and waits for you to merge it.`);
   }
 

@@ -102,7 +102,7 @@ describe("the mock GitHub connection", () => {
 });
 
 describe("posting a review draft to the mock GitHub", () => {
-  const spec: RunSpec = { kind: "review", repo: "acme/webshop", clonePath: "/Users/sample/Code/webshop", base: "main", name: "ca-402-review", instruction: "", pr: 218, focus: null, focusFromRun: null, ticketBlock: "CA-402: sample" };
+  const spec: RunSpec = { role: "review", repo: "acme/webshop", clonePath: "/Users/sample/Code/webshop", base: "main", name: "ca-402-review", brief: "", pr: 218, ticketBlock: "CA-402: sample" };
 
   /** A backend whose review of #218 has finished, and the GitHub review draft it left. */
   async function reviewed(options: MockOptions = {}) {

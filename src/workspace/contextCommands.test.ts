@@ -45,36 +45,31 @@ const deps = (): ContextDeps => ({
 const data = (over: Partial<ContextData> = {}): ContextData => ({ needs: [], proposals: {}, runs: [], workstreams: [view()], ...over });
 const labels = (cs: { label: string }[]) => cs.map((c) => c.label);
 
-const permission = need({ key: "run:r-1", kind: "permission", runId: "r-1", primary: spec("allow", "Allow once in Terminal"), secondary: [spec("deny", "Deny")] });
+const permission = need({ key: "run:r-1", kind: "permission", runId: "r-1", primary: spec("open", "Open in Terminal") });
 
 describe("the palette's entries for the focused item", () => {
-  it("a permission need offers Allow once and Deny, then Open in workstream and its workstream's controls", () => {
+  it("a permission need offers Open in Terminal, then Open in workstream and its workstream's controls", () => {
     const d = deps();
     const subject: Subject = { type: "need", key: permission.key };
     const entries = contextCommands(subject, data({ needs: [permission] }), d);
-    expect(labels(entries)).toEqual(["Allow once", "Deny", "Open in workstream", "Pause the workstream on CA-401"]);
+    expect(labels(entries)).toEqual(["Open in Terminal", "Open in workstream", "Pause the workstream on CA-401"]);
     expect(entries.every((c) => c.group === "This item")).toBe(true);
     // Each one calls the need's own button of that name, and the palette adds nothing to it.
     entries[0].run();
     entries[1].run();
-    entries[2].run();
-    expect(d.needAct).toHaveBeenNthCalledWith(1, permission, "allow");
-    expect(d.needAct).toHaveBeenNthCalledWith(2, permission, "deny");
+    expect(d.needAct).toHaveBeenNthCalledWith(1, permission, "open");
     expect(d.openInWorkstream).toHaveBeenCalledWith(permission);
   });
 
   it("finds them by the words a person would type", () => {
     const entries = contextCommands({ type: "need", key: permission.key }, data({ needs: [permission] }), deps());
-    expect(labels(rankCommands(entries, "allow"))[0]).toBe("Allow once");
-    expect(labels(rankCommands(entries, "deny"))[0]).toBe("Deny");
+    expect(labels(rankCommands(entries, "terminal"))[0]).toBe("Open in Terminal");
     expect(labels(rankCommands(entries, "pause"))).toContain("Pause the workstream on CA-401");
   });
 
-  it("a failed run offers Retry and Dismiss; a limit stop Resume; a paused workstream Resume, and not Pause", () => {
+  it("a failed run offers Retry and Dismiss; a paused workstream Resume, and not Pause", () => {
     const failed = need({ key: "run:r-2", kind: "failure", runId: "r-2", primary: spec("retry", "Retry"), secondary: [spec("dismiss", "Dismiss")] });
     expect(labels(contextCommands({ type: "need", key: failed.key }, data({ needs: [failed] }), deps())).slice(0, 2)).toEqual(["Retry", "Dismiss"]);
-    const limit = need({ key: "run:r-3", kind: "stoppedAtLimit", runId: "r-3", primary: spec("resume", "Resume"), secondary: [spec("dismiss", "Dismiss")] });
-    expect(labels(contextCommands({ type: "need", key: limit.key }, data({ needs: [limit] }), deps())).slice(0, 2)).toEqual(["Resume", "Dismiss"]);
     const paused = need({ key: "paused:ws-1", kind: "paused", target: { type: "workstream" }, primary: spec("resume", "Resume") });
     const entries = contextCommands({ type: "need", key: paused.key }, data({ needs: [paused], workstreams: [view({ pausedReason: "person" })] }), deps());
     expect(labels(entries)).toEqual(["Resume", "Open in workstream"]);
@@ -135,7 +130,7 @@ describe("the palette's entries for the focused item", () => {
   it("a run in Needs you offers what its need does; any other run only opens", () => {
     const run = { id: "r-1" } as Run;
     const viaNeed = contextCommands({ type: "run", id: "r-1" }, data({ needs: [permission], runs: [run] }), deps());
-    expect(labels(viaNeed).slice(0, 2)).toEqual(["Allow once", "Deny"]);
+    expect(labels(viaNeed).slice(0, 1)).toEqual(["Open in Terminal"]);
     const d = deps();
     const plain = contextCommands({ type: "run", id: "r-9" }, data({ runs: [{ id: "r-9" } as Run] }), d);
     expect(labels(plain)).toEqual(["Open this run"]);

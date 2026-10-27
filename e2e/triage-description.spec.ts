@@ -7,7 +7,7 @@ import { advanceRuns, askPip, editTicket, expandNeedsYou, homeSettled, jiraWrite
 const SAMPLE = "runs=empty&prSurface=manual&pipPace=1";
 const KEY = "CA-408";
 
-const runsOf = async (page: Page, kind: string) => (await mockRuns(page)).filter((r) => r.kind === kind);
+const runsOf = async (page: Page, kind: string) => (await mockRuns(page)).filter((r) => r.step === kind);
 
 /** Asks Pip for `what` which starts it, in the Pip pane or on Pip home. */
 async function startStep(page: Page, what: string, home = false) {
@@ -44,8 +44,8 @@ test("the triage's questions go to the description as a draft, and nothing is po
 
   // The triage's note and open questions are a description update, not a comment on the ticket.
   await expandNeedsYou(page, KEY);
-  await expect(needRow(page, /triage · comment/)).toHaveCount(0);
-  await openNeedRow(page, "R2 triage · rewrite");
+  await expect(needRow(page, /triager · comment/)).toHaveCount(0);
+  await openNeedRow(page, "R2 triager · rewrite");
   const update = needsPane(page).getByRole("article", { name: `Update the description of ${KEY}` });
   await expect(update).toBeVisible();
   const diff = update.locator('[data-diff="description"]');

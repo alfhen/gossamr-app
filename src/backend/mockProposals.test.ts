@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { docText } from "../lib/docs";
-import type { Intent, Proposal, RunKind, ScreenContext } from "../types";
+import type { Intent, Proposal, ScreenContext } from "../types";
 import type { AskRequest } from "./claude";
 import { mockAsk, mockPipEvents } from "./mockPip";
 import { mockPipTurns } from "./mockPipTurns";
@@ -343,7 +343,7 @@ describe("one review of a pull request waiting at a time, as tidy_reviews in pro
     const made = (id: string, runId: string): Proposal =>
       ({ id, createdAt: "2026-10-01T10:00:00Z", updatedAt: "2026-10-01T10:00:00Z", origin: { type: "run", runId, shortId: null, workstream: "ws-1" }, createdBy: "agent", intent: comment, label: null, basis: null, state: { type: "pending" }, revisions: [], created: [], error: null, run: null, supersededBy: null }) as unknown as Proposal;
     const [older, newer] = [made("a", "run-a"), made("b", "run-b")];
-    const kinds = (known: Record<string, RunKind>) => (id: string) => known[id] ?? null;
+    const kinds = (known: Record<string, string>) => (id: string) => known[id] ?? null;
     expect(runCommentSupersession(older, newer, kinds({ "run-a": "review", "run-b": "review" }))).toBe("supersede");
     expect(runCommentSupersession(older, newer, kinds({ "run-a": "investigate", "run-b": "review" }))).toBeNull();
     expect(runCommentSupersession(older, newer, kinds({ "run-b": "review" }))).toBeNull();
@@ -353,7 +353,7 @@ describe("one review of a pull request waiting at a time, as tidy_reviews in pro
   it("keeps a run comment whose post failed and is back in Pending", () => {
     const made = (id: string, runId: string, error: string | null): Proposal =>
       ({ id, createdAt: "2026-10-01T10:00:00Z", updatedAt: "2026-10-01T10:00:00Z", origin: { type: "run", runId, shortId: null, workstream: "ws-1" }, createdBy: "agent", intent: comment, label: null, basis: null, state: { type: "pending" }, revisions: [], created: [], error, run: null, supersededBy: null }) as unknown as Proposal;
-    const kinds = () => "review" as RunKind;
+    const kinds = () => "review" as string;
     expect(runCommentSupersession(made("a", "run-a", null), made("b", "run-b", null), kinds)).toBe("supersede");
     expect(runCommentSupersession(made("a", "run-a", "Jira is down"), made("b", "run-b", null), kinds)).toBeNull();
   });

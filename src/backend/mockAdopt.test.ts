@@ -16,7 +16,7 @@ afterAll(() => vi.unstubAllGlobals());
 
 const CA401 = itemRef("CA-401");
 const comment: Intent = { type: "comment", item: CA401, body: docFromText("Hi") };
-const spec = (over: Partial<RunSpec> = {}): RunSpec => ({ kind: "investigate", repo: "acme/storefront", clonePath: "/Users/sample/Code/storefront", base: "main", name: `ca-401-${Math.random().toString(16).slice(2, 8)}`, instruction: "", focus: null, focusFromRun: null, ticketBlock: null, ...over });
+const spec = (over: Partial<RunSpec> = {}): RunSpec => ({ role: "investigate", repo: "acme/storefront", clonePath: "/Users/sample/Code/storefront", base: "main", name: `ca-401-${Math.random().toString(16).slice(2, 8)}`, brief: "", ticketBlock: null, ...over });
 const lines = (backend: MockBackend, id: string) => backend.workstreamsEvents(id).then((events) => events.map((e) => [e.actor, e.action, e.detail ?? null]));
 
 /** A run on CA-401 approved in General, as the board does it. */

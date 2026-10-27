@@ -177,18 +177,6 @@ export interface Backend {
   runsStop(id: string): Promise<Run>;
   /** Answers a run that is asking a question: hands the answer to the agent waiting in its ask call, or stops its session and wakes it when its turn ended. Also sends again an answer that was stopped on its way. */
   runsAnswer(id: string, text: string): Promise<Run>;
-  /**
-   * The person's Deny for the permission prompt they read as `command`: the session is stopped, which drops the prompt,
-   * and woken in place told the person said no, so the agent carries on without it. Rejects when the run isn't asking
-   * that any more.
-   */
-  runsDenyPermission(id: string, command: string): Promise<Run>;
-  /**
-   * The person's Allow once for the permission prompt they read as `command`, which only Claude Code itself can grant:
-   * when Gossamr's policy offers it (`permissionOffer`), records the choice with the exact command and opens the session
-   * in Terminal for the person to answer Yes there. The session is neither stopped nor resumed. Rejects with the reason otherwise.
-   */
-  runsAllowPermissionOnce(id: string, command: string): Promise<Run>;
   /** Takes a listed session over as the continuation of a stopped or finished run. */
   runsAdoptSession(id: string, session: string): Promise<Run>;
   /** Stops every active run, across accounts, and the runs waiting for a slot (`waiting`); nothing starts in the slots it frees. */
@@ -197,6 +185,8 @@ export interface Backend {
   runsAttach(id: string): Promise<void>;
   /** Opens Terminal in the run's clone running `claude`, so the person can accept Claude's trust question. Rejects unless the run failed because its folder isn't trusted. */
   runsTrustFolder(id: string): Promise<void>;
+  /** Opens Terminal in the run's clone running claude in the refused permission mode, so the person can accept it once. Rejects unless the run failed because `--bg` refused that mode. */
+  runsAcceptMode(id: string, mode: "auto" | "bypass"): Promise<void>;
   /** Opens Terminal in the run's clone running `claude`, so the person can sign in. Rejects unless the run failed because Claude isn't signed in. */
   runsSignIn(id: string): Promise<void>;
   /** Local clones of a watched repository, the one the person chose first. */

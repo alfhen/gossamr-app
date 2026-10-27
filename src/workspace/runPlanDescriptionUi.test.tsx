@@ -8,7 +8,7 @@ import { planDescriptionStatus, planDescriptionWithPipPrompt, runDescriptionDraf
 
 const NOW = Date.parse("2026-09-30T12:00:00Z");
 const backend = new MockBackend({ runs: { seed: "kinds", epoch: NOW, planDescription: true } });
-const plan: Run = backend.runs.list().find((r) => r.spec.kind === "plan")!;
+const plan: Run = backend.runs.list().find((r) => r.spec.role === "planner")!;
 
 const actions = (): RunSheetActions => ({ close: vi.fn(), attach: vi.fn(), askStop: vi.fn(), cancelStop: vi.fn(), stop: vi.fn(), startNow: vi.fn(), answer: vi.fn(), adoptSession: vi.fn(() => Promise.resolve()), retry: vi.fn(), fix: vi.fn(), copied: vi.fn(), openTicket: vi.fn(), reveal: vi.fn(), draftComment: vi.fn(), askPip: vi.fn(), openDraft: vi.fn(), pickBlocker: vi.fn(), cancelBlocker: vi.fn(), draftBlocker: vi.fn(), openChange: vi.fn(), draftTicket: vi.fn(), openTicketDraft: vi.fn(), finishWithPip: vi.fn(), openCreated: vi.fn(), askPipBreakdown: vi.fn(), buildFromPlan: vi.fn(), draftPlanComment: vi.fn(), openPlanDraft: vi.fn(), reviewThis: vi.fn(), draftPlanDescription: vi.fn(), openPlanDescription: vi.fn(), discussPlanDescription: vi.fn() });
 const outcome = (over: Partial<RunOutcome> = {}): RunOutcome => ({ ...backend.runs.outcome(plan.id), ...over });
@@ -57,7 +57,7 @@ describe("the finished plan's description update on the run sheet", () => {
 
   it("shows nothing about a description for an older backend or another kind", () => {
     expect(sheet(outcome({ planDescription: undefined }))).not.toContain("data-plan-description");
-    const triage = backend.runs.list().find((r) => r.spec.kind === "triage")!;
+    const triage = backend.runs.list().find((r) => r.spec.role === "triager")!;
     expect(backend.runs.outcome(triage.id).planDescription ?? null).toBeNull();
   });
 

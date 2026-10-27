@@ -1,7 +1,7 @@
 import type { Run } from "../types";
 import { itemKey } from "../lib/filter";
 import { labelsByRun } from "../lib/workstreamStage";
-import { ReadOnlyBadge, RunLabel } from "./AgentCard";
+import { RoleChip, RunLabel } from "./AgentCard";
 import { useWorkspace } from "../workspaceStore";
 import { runTitle, waitsForSlot } from "./agentsLogic";
 import { useStateView } from "./useStateView";
@@ -39,9 +39,9 @@ export function PipRunCard({ run, now, ticketTitle, label, onOpen, focusable = f
       <div className="grid min-w-0 flex-1 leading-snug">
         <span className="flex min-w-0 items-baseline gap-1.5">
           <RunLabel label={label} />
+          <RoleChip role={run.spec.role} />
           {run.item && <span className="shrink-0 font-mono text-xs font-semibold text-ws-ink2">{run.item.key}</span>}
           <b className="min-w-0 truncate text-sm font-semibold">{title}</b>
-          <ReadOnlyBadge run={run} />
         </span>
         <span className="min-w-0 truncate text-xs text-ws-ink3">
           {waitsForSlot(run) ? (
