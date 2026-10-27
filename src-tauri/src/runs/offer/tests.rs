@@ -26,9 +26,7 @@ fn first_launch(rig: &Rig) -> crate::runs::cli::LaunchRequest {
 }
 
 async fn queued_reporting(rig: &Rig, n: u32) -> Run {
-    let p = rig.fx.core.draft_run(RunSpec { report: true, ..rig.spec(n) }, Some(rig.fx.item("CA-1"))).await.unwrap();
-    let digest = rig.fx.core.runs_review(&p.id).await.unwrap().digest;
-    rig.fx.core.runs_approve(&p.id, &digest).await.unwrap()
+    rig.fx.core.queue_test_run(RunSpec { report: true, ..rig.spec(n) }, Some(rig.fx.item("CA-1"))).await.unwrap()
 }
 
 async fn report_as(rig: &Rig, run: &Run, token: &str, note: &str) -> Reply {

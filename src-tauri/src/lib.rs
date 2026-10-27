@@ -31,11 +31,10 @@ use tracker::{Connection, Move};
 use inbox::{CatalogPage, CodeRef, ConnectionInfo, Core, Edit, WatchState, WorkstreamView};
 use error::{Error, Result};
 use domain::{
-    CodeChange, CodeFile, CodeHit, CommitQuery, Comment, Container, DevLink, Event, FeedPage, FeedQuery, Filter, Footprint, Identity, Intent, ItemRef, Proposal, ProposalQuery, PullRequestDetail, Run, RunEvent, RunQuery, RunReview, RunSpec, Stray,
+    CodeChange, CodeFile, CodeHit, CommitQuery, Comment, Container, DevLink, Event, FeedPage, FeedQuery, Filter, Footprint, Identity, Intent, ItemRef, Proposal, ProposalQuery, PullRequestDetail, Run, RunEvent, RunQuery, Stray,
     TreeEntry, WatchChange, WatchMode, WorkItem, Workstream, WorkstreamEvent,
 };
 use model::Snapshot;
-use runs::preflight::Preflight;
 use runs::service::CloneChoice;
 use sync::Trigger;
 
@@ -536,20 +535,6 @@ async fn code_pull_diff(core: State<'_, CoreState>, connection_id: String, repo:
     core.code_pull_diff(&connection_id, &repo, number).await
 }
 
-/// The prompt a run draft would send and the digest to approve it with.
-#[tauri::command]
-async fn runs_review(core: State<'_, CoreState>, proposal_id: String) -> Result<RunReview> {
-    core.runs_review(&proposal_id).await
-}
-
-/// Drafts a run by hand. It stays a draft until `runs_approve`.
-#[tauri::command]
-async fn runs_draft(app: AppHandle, core: State<'_, CoreState>, spec: RunSpec, item: Option<ItemRef>) -> Result<Proposal> {
-    let made = core.draft_run(spec, item).await?;
-    proposals_changed(&app, &Connection::jira_id(&core.scope().await?));
-    Ok(made)
-}
-
 /// The limits on runs and the terminal to open.
 #[tauri::command]
 fn runs_settings(runs: State<'_, RunsState>) -> config::AgentSettings {
@@ -600,43 +585,6 @@ async fn runs_worktree_info(runs: State<'_, RunsState>, id: String) -> Result<ru
 #[tauri::command]
 async fn runs_delete(runs: State<'_, RunsState>, id: String, remove_worktree: bool) -> Result<runs::archive::Deleted> {
     runs.delete(&id, remove_worktree).await
-}
-
-/// Approves a run draft the person has read (`digest` is from `runs_review`) and hands the queued run to the launcher.
-#[tauri::command]
-async fn runs_approve(
-    app: AppHandle,
-    core: State<'_, CoreState>,
-    launcher: State<'_, LauncherState>,
-    runs: State<'_, RunsState>,
-    proposal_id: String,
-    digest: String,
-) -> Result<Run> {
-    let run = core.runs_approve(&proposal_id, &digest).await?;
-    // Over the cap it is marked as waiting for a slot now, so the page can say it waits rather than that it started.
-    let run = match runs.note_slot_wait(&run.id).await {
-        Ok(noted) => noted,
-        Err(e) => {
-            eprintln!("couldn't check the slots for run {}: {e}", run.id);
-            run
-        }
-    };
-    proposals_changed(&app, &run.connection_id);
-    runs_changed(&app, &run.connection_id);
-    let (launcher, run_id) = (launcher.inner().clone(), run.id.clone());
-    tauri::async_runtime::spawn(async move {
-        // A failed launch is recorded on the run itself; an error here means it couldn't be recorded.
-        if let Err(e) = launcher.launch(&run_id).await {
-            eprintln!("couldn't start run {run_id}: {e}");
-        }
-    });
-    Ok(run)
-}
-
-/// What a run would need and run as, or with no spec only the environment and capacity.
-#[tauri::command]
-async fn runs_preflight(runs: State<'_, RunsState>, spec: Option<RunSpec>) -> Result<Preflight> {
-    runs.preflight(spec).await
 }
 
 /// Starts a run that is still queued, as after a restart.
@@ -765,12 +713,6 @@ async fn workstreams_events(core: State<'_, CoreState>, id: String) -> Result<Ve
     core.workstream_events(&core.scope().await?, &id).await
 }
 
-/// Every watched GitHub repository as owner/name.
-#[tauri::command]
-async fn runs_repos(runs: State<'_, RunsState>) -> Result<Vec<String>> {
-    runs.repos()
-}
-
 /// Local clones of a watched repository.
 #[tauri::command]
 async fn runs_clones(runs: State<'_, RunsState>, repo: String) -> Result<CloneChoice> {
@@ -778,7 +720,7 @@ async fn runs_clones(runs: State<'_, RunsState>, repo: String) -> Result<CloneCh
 }
 
 /// Clones a watched repository into `~/Gossamr/agents/<owner>/<repo>`. Only for the person's own button press, after the
-/// setup sheet showed the folder and the command.
+/// folder and the command were shown.
 #[tauri::command]
 async fn runs_clone_fresh(runs: State<'_, RunsState>, repo: String) -> Result<runs::repo::LocalClone> {
     runs.clone_fresh(&repo).await
@@ -787,12 +729,6 @@ async fn runs_clone_fresh(runs: State<'_, RunsState>, repo: String) -> Result<ru
 #[tauri::command]
 async fn runs_pick_clone(runs: State<'_, RunsState>, repo: String, path: std::path::PathBuf) -> Result<()> {
     runs.pick_clone(&repo, &path).await
-}
-
-/// A worktree name for a new run in `clone_path` that nothing there uses yet.
-#[tauri::command]
-async fn runs_suggest_name(runs: State<'_, RunsState>, clone_path: std::path::PathBuf, key: String, title: String) -> Result<String> {
-    runs.suggest_name(&clone_path, &key, &title).await
 }
 
 /// Stops a run that is working or waiting on the person. Its conversation and worktree are kept.
@@ -828,29 +764,6 @@ async fn runs_allow_permission_once(app: AppHandle, runs: State<'_, RunsState>, 
     Ok(run)
 }
 
-/// Approves a follow-up the person has read (`message` is what they saw; a draft that changed since is refused): sends the finished agent back for another pass with its message.
-#[tauri::command]
-async fn runs_send_follow_up(app: AppHandle, runs: State<'_, RunsState>, proposal_id: String, message: String) -> Result<Run> {
-    let result = runs.send_follow_up(&proposal_id, &message).await;
-    if let Ok(run) = &result {
-        proposals_changed(&app, &run.connection_id);
-        runs_changed(&app, &run.connection_id);
-    }
-    result
-}
-
-/// Sends an answer Pip suggested that the person has read (`message` is what they saw; a draft that changed since is
-/// refused) to the run that asked, exactly as their own answer goes, and marks the draft applied.
-#[tauri::command]
-async fn runs_answer_draft(app: AppHandle, runs: State<'_, RunsState>, proposal_id: String, message: String) -> Result<Run> {
-    let result = runs.answer_draft(&proposal_id, &message).await;
-    if let Ok(run) = &result {
-        proposals_changed(&app, &run.connection_id);
-        runs_changed(&app, &run.connection_id);
-    }
-    result
-}
-
 /// Takes a listed session over as the continuation of a stopped or finished run, when it still passes every check.
 #[tauri::command]
 async fn runs_adopt_session(runs: State<'_, RunsState>, id: String, session: String) -> Result<Run> {
@@ -875,13 +788,6 @@ async fn runs_attach(runs: State<'_, RunsState>, id: String) -> Result<()> {
 #[tauri::command]
 async fn runs_trust_folder(runs: State<'_, RunsState>, id: String) -> Result<()> {
     runs.open_claude(&id, runs::control::Purpose::Trust).await
-}
-
-/// Opens Terminal in a clone running `claude`, before any run, so the person can accept Claude's trust question. Only
-/// for a folder in a place Gossamr looks for clones.
-#[tauri::command]
-async fn runs_trust_path(runs: State<'_, RunsState>, path: std::path::PathBuf) -> Result<()> {
-    runs.trust_folder(&path).await
 }
 
 /// Opens Terminal in the run's clone running `claude`, so the person can sign in. Only for a run that failed because
@@ -945,34 +851,12 @@ async fn runs_draft_plan_description(app: AppHandle, core: State<'_, CoreState>,
     Ok(made)
 }
 
-/// Reads a build draft's plan again from the plan run it came from, replacing the person's edits to it.
-#[tauri::command]
-async fn runs_refresh_plan(app: AppHandle, core: State<'_, CoreState>, id: String) -> Result<Proposal> {
-    let made = core.runs_refresh_plan(&id).await?;
-    proposals_changed(&app, &Connection::jira_id(&core.scope().await?));
-    Ok(made)
-}
-
-/// Reads a review draft's builder account again from the build run it came from, replacing the person's edits to it.
-#[tauri::command]
-async fn runs_refresh_build_account(app: AppHandle, core: State<'_, CoreState>, id: String) -> Result<Proposal> {
-    let made = core.runs_refresh_build_account(&id).await?;
-    proposals_changed(&app, &Connection::jira_id(&core.scope().await?));
-    Ok(made)
-}
-
 /// Drafts a new ticket from a finished run that has no ticket. A draft only: the person edits and approves it.
 #[tauri::command]
 async fn runs_draft_ticket(app: AppHandle, core: State<'_, CoreState>, id: String) -> Result<Proposal> {
     let made = core.draft_run_ticket(&id).await?;
     proposals_changed(&app, &Connection::jira_id(&core.scope().await?));
     Ok(made)
-}
-
-/// The project a new ticket from `repo` would most likely belong in, from the tickets its pull requests carry out.
-#[tauri::command]
-async fn runs_repo_project(core: State<'_, CoreState>, repo: String) -> Result<Option<domain::ContainerRef>> {
-    core.repo_project(&repo).await
 }
 
 /// Drafts a link saying the run's ticket is blocked by `blocker_key`. A draft only.
@@ -1293,28 +1177,19 @@ pub fn run() {
             runs_clear,
             runs_worktree_info,
             runs_delete,
-            runs_review,
-            runs_draft,
-            runs_approve,
-            runs_preflight,
             runs_start_now,
             runs_retry_launch,
-            runs_repos,
             runs_clones,
             runs_clone_fresh,
             runs_pick_clone,
-            runs_suggest_name,
             runs_stop,
             runs_answer,
             runs_deny_permission,
             runs_allow_permission_once,
-            runs_send_follow_up,
-            runs_answer_draft,
             runs_adopt_session,
             runs_stop_all,
             runs_attach,
             runs_trust_folder,
-            runs_trust_path,
             runs_sign_in,
             runs_disk,
             runs_events,
@@ -1326,10 +1201,7 @@ pub fn run() {
             runs_draft_blocker,
             runs_draft_plan_comment,
             runs_draft_plan_description,
-            runs_refresh_plan,
-            runs_refresh_build_account,
             runs_draft_ticket,
-            runs_repo_project,
             runs_get,
             workstreams_open,
             workstreams_get,

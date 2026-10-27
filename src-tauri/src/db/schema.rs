@@ -365,7 +365,16 @@ CREATE TABLE run_messages (
   queued_at TEXT NOT NULL
 ) WITHOUT ROWID;";
 
-const STEPS: &[&str] = &[INBOX, CACHE, PROPOSALS, WATCH, CODE, LINKS, RUNS, RUN_REPORTS, PIP_TURNS, WORKSTREAMS, PROPOSAL_WORKSTREAMS, GENERAL_CONVERSATION, RUN_ARCHIVE, WAKE_LEDGER, RUN_START_KEYS];
+/// Pip starts and messages agents itself, so drafts to start a run, send a follow-up or answer a question are no longer
+/// made. Those still waiting are retired; decided ones stay as history.
+const RETIRE_AGENT_DRAFTS: &str = "
+UPDATE proposals SET state = 'retired',
+  updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now'),
+  data = json_set(data, '$.state', json_object('type', 'retired', 'reason', 'Pip starts and messages agents directly now'),
+    '$.updatedAt', strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+  WHERE state = 'pending' AND json_valid(data) AND json_extract(data, '$.intent.type') IN ('startRun', 'followUp', 'runAnswer');";
+
+const STEPS: &[&str] = &[INBOX, CACHE, PROPOSALS, WATCH, CODE, LINKS, RUNS, RUN_REPORTS, PIP_TURNS, WORKSTREAMS, PROPOSAL_WORKSTREAMS, GENERAL_CONVERSATION, RUN_ARCHIVE, WAKE_LEDGER, RUN_START_KEYS, RETIRE_AGENT_DRAFTS];
 
 pub fn migrate(conn: &mut Connection) -> Result<()> {
     let applied: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
@@ -813,5 +822,40 @@ mod tests {
         assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), STEPS.len() as i64);
         migrate(&mut conn).unwrap();
         assert_eq!(conn.query_row("SELECT count(*) FROM runs", [], |r| r.get::<_, i64>(0)).unwrap(), 4);
+    }
+
+    #[test]
+    fn waiting_drafts_to_start_message_or_answer_an_agent_are_retired_and_everything_else_stays() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        for step in &STEPS[..15] {
+            conn.execute_batch(step).unwrap();
+        }
+        conn.pragma_update(None, "user_version", 15).unwrap();
+        let add = |id: &str, state: &str, kind: &str| {
+            let data = format!(r#"{{"id":"{id}","state":{{"type":"{state}"}},"updatedAt":"2026-01-01T00:00:00Z","intent":{{"type":"{kind}"}}}}"#);
+            conn.execute("INSERT INTO proposals (id, connection_id, state, created_at, updated_at, data) VALUES (?1, 'c', ?2, 't', 't', ?3)", rusqlite::params![id, state, data]).unwrap();
+        };
+        add("start", "pending", "startRun");
+        add("follow", "pending", "followUp");
+        add("answer", "pending", "runAnswer");
+        add("comment", "pending", "comment");
+        add("sent", "applied", "startRun");
+
+        migrate(&mut conn).unwrap();
+
+        let row = |id: &str| conn.query_row("SELECT state, data FROM proposals WHERE id = ?1", [id], |r| Ok((r.get::<_, String>(0)?, serde_json::from_str::<serde_json::Value>(&r.get::<_, String>(1)?).unwrap()))).unwrap();
+        for id in ["start", "follow", "answer"] {
+            let (state, data) = row(id);
+            assert_eq!(state, "retired", "{id}");
+            assert_eq!(data["state"], serde_json::json!({ "type": "retired", "reason": "Pip starts and messages agents directly now" }));
+            let read: crate::domain::Proposal = serde_json::from_value(serde_json::json!({
+                "id": id, "createdAt": "2026-01-01T00:00:00Z", "updatedAt": data["updatedAt"], "origin": { "type": "board" }, "createdBy": "user",
+                "intent": { "type": "runAnswer", "connectionId": "c", "runId": "r", "item": null, "message": "Yes." }, "label": null, "basis": null, "state": data["state"], "error": null
+            })).unwrap();
+            assert_eq!(read.state, crate::domain::ProposalState::Retired("Pip starts and messages agents directly now".into()));
+        }
+        assert_eq!(row("comment").0, "pending");
+        assert_eq!(row("sent").0, "applied");
+        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), STEPS.len() as i64);
     }
 }

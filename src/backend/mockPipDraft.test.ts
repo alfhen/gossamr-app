@@ -64,7 +64,6 @@ describe("mock Pip woken by a finished plan (N6)", () => {
 });
 
 describe("mock Pip drafting the next step of a workstream, as propose_run does", () => {
-  const rustRuns = readFileSync(new URL("../../src-tauri/src/agent/runs.rs", import.meta.url), "utf8");
   const rustPip = readFileSync(new URL("../../src-tauri/src/inbox/pip_runs.rs", import.meta.url), "utf8");
   const rustPlan = readFileSync(new URL("../../src-tauri/src/inbox/plan_description.rs", import.meta.url), "utf8");
   const CA401 = itemRef("CA-401");
@@ -100,10 +99,6 @@ describe("mock Pip drafting the next step of a workstream, as propose_run does",
   }
 
   it("refuses with the backend's words", () => {
-    const constant = (name: string) => new RegExp(`const ${name}: &str = "([^"]*)";`).exec(rustRuns)?.[1];
-    expect(constant("BUILD_NEEDS_PLAN")).toBe(BUILD_NEEDS_PLAN);
-    expect(constant("REVIEW_NEEDS_BUILD")).toBe(REVIEW_NEEDS_BUILD);
-    expect(constant("REVIEW_NO_FOCUS")).toBe(REVIEW_NO_FOCUS);
     const rustWorkstreams = readFileSync(new URL("../../src-tauri/src/inbox/workstreams.rs", import.meta.url), "utf8");
     expect(new RegExp(`const WAITING_FOR_PR_HINT: &str = "([^"]*)";`).exec(rustWorkstreams)?.[1]).toBe(WAITING_FOR_PR_HINT);
     for (const words of [

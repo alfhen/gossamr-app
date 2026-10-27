@@ -1365,9 +1365,7 @@ async fn sync_requested(rig: &Rig) -> bool {
 async fn launched_in_workstream_as(rig: &Rig, n: u32, kind: RunKind) -> Run {
     let ws = rig.fx.core.open_workstream(&rig.fx.scope, Some(rig.fx.item("CA-1")), None).await.unwrap();
     let spec = crate::domain::RunSpec { kind, workstream: Some(ws.id.clone()), ..rig.spec(n) };
-    let p = rig.fx.core.draft_run(spec, Some(rig.fx.item("CA-1"))).await.unwrap();
-    let digest = rig.fx.core.runs_review(&p.id).await.unwrap().digest;
-    let queued = rig.fx.core.runs_approve(&p.id, &digest).await.unwrap();
+    let queued = rig.fx.core.queue_test_run(spec, Some(rig.fx.item("CA-1"))).await.unwrap();
     rig.svc.start_now(&queued.id).await.unwrap()
 }
 

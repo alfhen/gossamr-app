@@ -81,9 +81,7 @@ async fn asking(kind: RunKind, allow_push: bool, needs: &str) -> (Rig, Run, Stri
     // made a review afterwards; it is held to the same restriction.
     let drafted = if kind == RunKind::Review { RunKind::Verify } else { kind };
     let spec = RunSpec { kind: drafted, allow_push, workstream: Some(ws.id.clone()), ..rig.spec(1) };
-    let p = rig.fx.core.draft_run(spec, Some(rig.fx.item("CA-1"))).await.unwrap();
-    let digest = rig.fx.core.runs_review(&p.id).await.unwrap().digest;
-    let queued = rig.fx.core.runs_approve(&p.id, &digest).await.unwrap();
+    let queued = rig.fx.core.queue_test_run(spec, Some(rig.fx.item("CA-1"))).await.unwrap();
     let mut run = rig.svc.start_now(&queued.id).await.unwrap();
     if kind == RunKind::Review {
         run = rig.set(&run, |r| r.spec.kind = RunKind::Review).await;

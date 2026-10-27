@@ -1,11 +1,13 @@
 //! Pip's messages to an agent. What happens to one depends on what the agent is doing: a question it waits on in `ask`
 //! is answered at once, a session that has stopped or finished is resumed, and an agent that is still working gets the
-//! message when it next asks or when its turn ends. The stop, settle and resume are the answer's and the follow-up's.
+//! message when it next asks or when its turn ends. The resume is `claude --bg --resume <session id> -- <message>` with
+//! no other flag, on a session that is no longer running, checking that the id that comes back is the run's.
 
 use chrono::Utc;
 
 use super::answer::checked;
 use super::cli::is_uuid;
+use super::limits;
 use super::service::{belongs_to, RunService};
 use crate::domain::{Actor, Run, RunEvent, RunState};
 use crate::error::{Error, Result};
@@ -55,8 +57,8 @@ impl RunService {
         }
     }
 
-    /// Wakes the finished or stopped session of `run_id` with `text`, as the follow-up does, unless a session is open on
-    /// it in Terminal: stopping that would end what the person is doing there.
+    /// Wakes the finished or stopped session of `run_id` with `text`, unless a session is open on it in Terminal:
+    /// stopping that would end what the person is doing there.
     async fn resume_with(&self, run_id: &str, text: &str, by: Actor) -> Result<Run> {
         let _turn = self.launching.lock().await;
         let mut run = self.load(run_id).await?;
@@ -71,7 +73,7 @@ impl RunService {
         if listed.iter().find(|e| belongs_to(e, &run)).is_some_and(|e| !matches!(e.state.as_deref(), Some("stopped" | "done"))) {
             return Err(refuse("A session is open on it in Terminal, so the person is in it."));
         }
-        if let Some(why) = self.another_pass(&mut run, text, false).await? {
+        if let Some(why) = self.another_pass(&mut run, text).await? {
             return Err(Error::Claude(why));
         }
         let event = RunEvent {
@@ -87,6 +89,37 @@ impl RunService {
         }
         self.note_by(&run, by, "run_resumed", Some(text.chars().count().to_string())).await;
         Ok(run)
+    }
+
+    /// Sends `run` back for another pass with `message`: resumes its finished or stopped session and on success stores
+    /// it working on its next pass. `Ok(Some(why))` when the session couldn't be woken; the run is then left for the
+    /// caller to store.
+    async fn another_pass(&self, run: &mut Run, message: &str) -> Result<Option<String>> {
+        let id = run.short_id.clone().ok_or_else(|| refuse("This run has no session to resume."))?;
+        let session = run.session_id.clone().filter(|s| is_uuid(s)).ok_or_else(|| refuse("This run has no session to resume."))?;
+        let tc = self.toolchain().await?;
+        if let Some(why) = self.wake_from(&tc, run, &id, &session, message, true, &["stopped", "done"]).await {
+            return Ok(Some(why));
+        }
+        let now = Utc::now();
+        run.state = RunState::Working;
+        run.needs = None;
+        run.suggested_reply = None;
+        run.unsent_answer = None;
+        run.error = None;
+        run.failure = None;
+        run.ended_at = None;
+        run.last_progress_at = now;
+        run.stopped_by_limit = false;
+        run.continued_at = Some(now);
+        run.passes = run.passes.saturating_add(1);
+        limits::tick(run, now);
+        self.remember(run);
+        self.store(run).await?;
+        if let Err(e) = self.core.report_stale(&run.id).await {
+            eprintln!("couldn't mark the report of run {} as older than the message: {e}", run.id);
+        }
+        Ok(None)
     }
 
     /// Hands each run's waiting message to it once it can have it: a run that is done, or ended its turn with a question,

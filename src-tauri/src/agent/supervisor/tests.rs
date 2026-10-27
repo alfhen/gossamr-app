@@ -1211,8 +1211,7 @@ mod launching {
         let mut queued = Vec::new();
         for n in 1..=3 {
             let spec = RunSpec { workstream: Some(w.ws.clone()), ..w.rig.spec(n) };
-            let p = core.draft_run(spec, Some(w.rig.fx.item("CA-1"))).await.unwrap();
-            queued.push(core.runs_approve(&p.id, &core.runs_review(&p.id).await.unwrap().digest).await.unwrap());
+            queued.push(core.queue_test_run(spec, Some(w.rig.fx.item("CA-1"))).await.unwrap());
         }
         let (svc, other) = (w.rig.svc.clone(), w.rig.svc.clone());
         let raced = async { tokio::join!(svc.launch_waiting(), other.poll(), svc.launch_waiting()) };
@@ -1241,8 +1240,7 @@ mod launching {
         let mut approved = Vec::new();
         for n in 1..=6 {
             let spec = RunSpec { workstream: (n % 2 == 0).then(|| w.ws.clone()), ..w.rig.spec(n) };
-            let p = core.draft_run(spec, Some(w.rig.fx.item("CA-1"))).await.unwrap();
-            approved.push(core.runs_approve(&p.id, &core.runs_review(&p.id).await.unwrap().digest).await.unwrap());
+            approved.push(core.queue_test_run(spec, Some(w.rig.fx.item("CA-1"))).await.unwrap());
             tokio::time::sleep(Duration::from_millis(2)).await;
         }
         let stop_sampling = Arc::new(AtomicBool::new(false));

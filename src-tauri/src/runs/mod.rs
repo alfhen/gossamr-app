@@ -12,7 +12,6 @@ mod continuation;
 pub mod control;
 pub mod env;
 pub mod failure;
-mod follow_up;
 pub mod message;
 mod final_answer;
 mod finder;
@@ -24,7 +23,6 @@ pub mod launcher;
 pub mod limits;
 pub mod notices;
 pub mod pr;
-pub mod preflight;
 pub mod redact;
 pub mod report;
 pub mod repo;
@@ -34,7 +32,6 @@ pub mod state;
 pub mod toolchain;
 pub mod transcript;
 pub mod tracker;
-pub mod trust;
 
 #[cfg(test)]
 mod real_tests;

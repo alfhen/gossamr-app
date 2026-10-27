@@ -359,9 +359,7 @@ async fn real_approved_run_launches_into_its_worktree_is_adopted_by_retry_then_s
     let svc = RunService::new(fx.core.clone(), Arc::new(tools), RunIndex::load(&fx.dir.join("index")), vec![], Arc::new(|_| {}));
 
     let spec = RunSpec { clone_path: clone.canonicalize().unwrap(), name: "ce-4-spike-0a1b".into(), base: "feature".into(), ..crate::domain::fixtures::run_spec() };
-    let draft = fx.core.draft_run(spec, Some(fx.item("CA-1"))).await.unwrap();
-    let digest = fx.core.runs_review(&draft.id).await.unwrap().digest;
-    let run = fx.core.runs_approve(&draft.id, &digest).await.unwrap();
+    let run = fx.core.queue_test_run(spec, Some(fx.item("CA-1"))).await.unwrap();
     svc.start_now(&run.id).await.unwrap();
 
     let mut run = fx.core.run(&run.id).await.unwrap().unwrap();
@@ -412,9 +410,7 @@ async fn real_signed_out_session_is_tracked_as_a_system_block_then_stops_and_a_f
 
     let foreign = s.launch("foreign-0a1b").await;
     let spec = RunSpec { clone_path: clone.canonicalize().unwrap(), name: "ce-5-track-0a1b".into(), base: "feature".into(), ..crate::domain::fixtures::run_spec() };
-    let draft = fx.core.draft_run(spec, Some(fx.item("CA-1"))).await.unwrap();
-    let digest = fx.core.runs_review(&draft.id).await.unwrap().digest;
-    let run = fx.core.runs_approve(&draft.id, &digest).await.unwrap();
+    let run = fx.core.queue_test_run(spec, Some(fx.item("CA-1"))).await.unwrap();
     svc.start_now(&run.id).await.unwrap();
     let id = fx.core.run(&run.id).await.unwrap().unwrap().short_id.expect("a short id");
     s.launched.push(id.clone());

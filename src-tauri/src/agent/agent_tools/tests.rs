@@ -6,7 +6,7 @@ use serde_json::{json, Value};
 
 use super::*;
 use crate::agent::mcp::{bind, McpServer, PipRun};
-use crate::domain::{Actor, Link, LinkKind, ProposalState, RunKind, RunSpec, RunState};
+use crate::domain::{Actor, Link, LinkKind, RunKind, RunSpec, RunState};
 use crate::runs::ask::ASK_WAIT;
 use crate::runs::report::new_token;
 use crate::runs::rig::{ready_with, Rig};
@@ -84,9 +84,7 @@ impl Live {
     async fn start(&self, n: u32, workstream: Option<&str>, key: &str, kind: RunKind) -> Run {
         let (core, fx) = (&self.rig.fx.core, &self.rig.fx);
         let spec = RunSpec { kind, workstream: workstream.map(Into::into), ..self.rig.spec(n) };
-        let p = core.draft_run(spec, Some(fx.item(key))).await.unwrap();
-        let digest = core.runs_review(&p.id).await.unwrap().digest;
-        let queued = core.runs_approve(&p.id, &digest).await.unwrap();
+        let queued = core.queue_test_run(spec, Some(fx.item(key))).await.unwrap();
         self.rig.svc.start_now(&queued.id).await.unwrap()
     }
 
@@ -355,23 +353,6 @@ async fn an_agents_question_reads_as_needing_an_answer_until_it_is_answered_thro
     assert!(t.rig.fx.core.asks().question(&run.id).is_none());
     let events = t.rig.fx.core.run_events(&run.id).await.unwrap();
     assert!(events.iter().any(|e| e.kind == "answered"));
-}
-
-#[tokio::test]
-async fn an_approved_answer_draft_is_delivered_as_the_result_of_the_ask_too() {
-    let t = live("ask-draft").await;
-    let run = t.working(1).await;
-    let call = t.asking(&run, "Which database?");
-    t.until_asked(&run).await;
-    t.rig.poll().await;
-
-    let draft = t.rig.fx.core.propose_answer_as_pip(&t.rig.fx.scope, "r", &run.id, "Use staging.").await.unwrap();
-    assert!(matches!(&draft.intent, crate::domain::Intent::RunAnswer { question, .. } if question.as_deref() == Some("Which database?")));
-    t.rig.svc.answer_draft(&draft.id, "Use staging.").await.unwrap();
-    let reply = call.await.unwrap();
-    assert!(text_of(&reply).0.ends_with("Use staging."));
-    assert_eq!(t.rig.fx.core.proposal(&draft.id).await.unwrap().unwrap().state, ProposalState::Applied);
-    assert!(t.rig.cli.0.lock().unwrap().calls.is_empty());
 }
 
 #[tokio::test]

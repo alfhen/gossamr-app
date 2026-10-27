@@ -38,12 +38,12 @@ pub struct StopAll {
     pub waiting: usize,
 }
 
-/// An approved run queued only because the cap was full: it has no session, and it would start on its own.
+/// A run queued only because the cap was full: it has no session, and it would start on its own.
 fn waits_for_slot(run: &Run) -> bool {
     run.state == RunState::Queued && run.slot_wait_since.is_some() && run.short_id.is_none()
 }
 
-/// An approved run that hasn't launched: queued with no session, whether it waits for a slot or not. Under the launch
+/// A run that hasn't launched: queued with no session, whether it waits for a slot or not. Under the launch
 /// lock nothing can launch it, so it is withdrawn (stopped before it started) without asking Claude anything.
 fn withdrawable(run: &Run) -> bool {
     run.state == RunState::Queued && run.short_id.is_none()
@@ -283,7 +283,7 @@ impl RunService {
         Ok(())
     }
 
-    /// Stops the runs Gossamr started, in any account, and, in this one, the approved runs waiting for a slot, all under
+    /// Stops the runs Gossamr started, in any account, and, in this one, the queued runs waiting for a slot, all under
     /// one hold of the launch lock: the slots it frees are never taken by a waiting run. A session that isn't in the run
     /// index is never touched.
     pub async fn stop_all(&self) -> Result<StopAll> {

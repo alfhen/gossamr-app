@@ -1,7 +1,7 @@
-//! Starts approved runs and finds the ones a restart interrupted.
+//! Starts queued runs and finds the ones a restart interrupted.
 //!
-//! Approval already committed a `Queued` run (`Core::runs_approve`); everything here belongs to that run. A launch that
-//! fails leaves the run `Failed` with the reason, and nothing is retried on its own. An approved run over the cap is not
+//! Pip's start committed a `Queued` run (`Core::commit_pip_run`); everything here belongs to that run. A launch that
+//! fails leaves the run `Failed` with the reason, and nothing is retried on its own. A run over the cap is not
 //! a failure: it stays `Queued`, waiting for a slot, and `launch_waiting` starts it once one frees. A run is joined to its session by
 //! the worktree path chosen before launch, or by the short id once known, never by name or start time.
 
@@ -19,13 +19,12 @@ use super::redact::redact;
 use super::failure::Failure;
 use super::index::{Entry, RunIndex};
 use super::launcher::RunLauncher;
-use super::preflight::{preflight, Preflight};
 use super::repo::{default_roots, existing_names, find_clones, new_name, origin_matches, CloneCache, Git, LocalClone};
 use super::toolchain::{Toolchain, ToolchainSource};
 use super::control::{MacTerminal, Terminal};
 use super::tracker::{Attention, NoNotices, RunNotifier};
 use crate::config::{AgentSettings, AppConfig};
-use crate::domain::{render_prompt, Actor, Run, RunKind, RunQuery, RunSpec, RunState, GUARD, AGENT_GUARD};
+use crate::domain::{render_prompt, Actor, Run, RunKind, RunQuery, RunState, GUARD, AGENT_GUARD};
 use crate::error::{Error, Result};
 use crate::inbox::Core;
 
@@ -324,6 +323,7 @@ impl RunService {
     async fn check(&self, run: &Run, tc: &Toolchain) -> std::result::Result<(), Failure> {
         let spec = &run.spec;
         spec.validate().map_err(|e| Failure::Invalid(e.to_string()))?;
+        self.core.require_watched_repo(&spec.repo).map_err(|e| Failure::Invalid(e.to_string()))?;
         if spec.kind == RunKind::Review {
             self.core.review_current(spec).await.map_err(|e| Failure::Invalid(e.to_string()))?;
         }
@@ -336,7 +336,7 @@ impl RunService {
             return Err(Failure::NoClone(format!("{} isn't a git clone any more", clone.display())));
         }
         if clone.canonicalize().ok().as_ref() != Some(clone) {
-            return Err(Failure::NoClone(format!("{} isn't its real path any more; edit the draft and review it again", clone.display())));
+            return Err(Failure::NoClone(format!("{} isn't its real path any more", clone.display())));
         }
         match Git::new(tc.env.clone()).origin_or_why(clone).await {
             Ok(url) if origin_matches(&url, &spec.repo) => {}
@@ -492,7 +492,7 @@ impl RunService {
         Ok((self.load(run_id).await?, launched))
     }
 
-    /// Marks a freshly approved run as waiting for a slot when it will have to wait for one, before the launcher gets to
+    /// Marks a freshly queued run as waiting for a slot when it will have to wait for one, before the launcher gets to
     /// it, so the approval can say so. The launch checks again under the lock.
     pub async fn note_slot_wait(&self, run_id: &str) -> Result<Run> {
         let _turn = self.launching.lock().await;
@@ -607,7 +607,7 @@ impl RunService {
     /// if found and failed if not. Queued runs stay queued; one in no workstream that was waiting for a slot before the
     /// restart stops waiting, so it is the person's to start again (a workstream's keeps waiting). The
     /// same pass runs again on sign-in; a wait from this session is kept then, so an
-    /// approved run still starts when a slot frees. Live runs missing from the index are put back.
+    /// queued run still starts when a slot frees. Live runs missing from the index are put back.
     pub async fn recover(&self) {
         let _only_pass = self.recovery.lock().await;
         self.forget_slot_waits().await;
@@ -668,14 +668,6 @@ impl RunService {
         }
     }
 
-    pub async fn preflight(&self, spec: Option<RunSpec>) -> Result<Preflight> {
-        let pr = match spec.as_ref().filter(|s| s.kind == RunKind::Review) {
-            Some(s) => Some(self.core.review_target(s).await.map_err(|e| e.to_string())),
-            None => None,
-        };
-        Ok(preflight(spec.as_ref(), &*self.tools, &self.index, self.cap(), pr).await)
-    }
-
     async fn git(&self) -> Result<Git> {
         Ok(Git::new(self.tools.get().await.map_err(|e| claude_error(e.into()))?.env))
     }
@@ -687,11 +679,6 @@ impl RunService {
         found.extend(self.existing_fresh(&git, repo).await.filter(|c| !found.iter().any(|f| f.path == c.path)));
         found.sort_by(|a, b| a.path.cmp(&b.path));
         Ok(found)
-    }
-
-    /// The repositories a run can be set up in: every one watched on any GitHub connection.
-    pub fn repos(&self) -> Result<Vec<String>> {
-        self.core.watched_repo_names()
     }
 
     /// Local clones of a watched repository, from a scan cached for ten minutes. The one the person chose, if it is
@@ -728,7 +715,7 @@ impl RunService {
     }
 
     /// A worktree name for a new run in `clone`, not used by any worktree or leftover branch there.
-    pub async fn suggest_name(&self, clone: &Path, key: &str, title: &str) -> Result<String> {
+    pub(super) async fn suggest_name(&self, clone: &Path, key: &str, title: &str) -> Result<String> {
         if !(clone.is_absolute() && clone.is_dir()) {
             return Err(Error::Proposal(format!("{} isn't a folder that exists", clone.display())));
         }
@@ -739,7 +726,7 @@ impl RunService {
 
 #[async_trait]
 impl RunLauncher for RunService {
-    /// Starts a freshly approved run. A run that isn't queued is left alone, so calling this twice never starts two.
+    /// Starts a freshly queued run. A run that isn't queued is left alone, so calling this twice never starts two.
     async fn launch(&self, run_id: &str) -> Result<()> {
         self.start_in_line(run_id).await.map(drop)
     }

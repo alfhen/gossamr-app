@@ -8,6 +8,7 @@ use super::*;
 use crate::agent::mcp::{call_tool, PipRuns};
 use crate::codehost::github::testserver::{draft_pull_reply, pull_reply_at};
 use crate::domain::workstream::PauseReason;
+use crate::domain::{default_instruction, Intent};
 use crate::domain::{CodeChangeState, ContainerRef, CreatedBy, Origin, Proposal, ProposalQuery, ProposalState, INVESTIGATE_INSTRUCTION};
 use crate::inbox::testing::fixture_watching_with;
 use crate::runs::rig::{ready_on, Rig};
@@ -148,9 +149,7 @@ impl Drive {
     /// A finished run of `kind` on `key`, in workstream `ws` or none, whose whole answer is `result`.
     async fn finished(&self, n: u32, key: &str, kind: RunKind, ws: Option<&str>, result: &str) -> Run {
         let spec = RunSpec { kind, instruction: String::new(), name: format!("eng-1-chain-{n:04x}"), workstream: ws.map(Into::into), ..self.rig.spec(n) };
-        let p = self.rig.fx.core.draft_run(spec, Some(self.rig.fx.item(key))).await.unwrap();
-        let digest = self.rig.fx.core.runs_review(&p.id).await.unwrap().digest;
-        let mut run = self.rig.fx.core.runs_approve(&p.id, &digest).await.unwrap();
+        let mut run = self.rig.fx.core.queue_test_run(spec, Some(self.rig.fx.item(key))).await.unwrap();
         run.state = RunState::Done;
         run.result = Some(result.into());
         run.result_complete = true;
@@ -283,7 +282,7 @@ async fn a_chain_step_gossamr_refuses_is_recorded_as_pips_without_its_text() {
     d.err("in-ws", "start_agent", d.start_args("review", json!({ "from_run": triage.id }))).await;
     let refused: Vec<_> = d.audit().await.into_iter().filter(|(_, action, _)| action == "chain_refused").collect();
     assert_eq!(refused, [(Actor::Pip, "chain_refused".to_string(), Some("build".to_string())), (Actor::Pip, "chain_refused".to_string(), Some("review".to_string()))]);
-    assert!(d.runs().await.iter().all(|r| r.created_by != CreatedBy::Pip), "nothing was started");
+    assert_eq!(d.runs().await.len(), 1, "nothing was started beside the triage");
 }
 
 #[tokio::test]
@@ -373,6 +372,35 @@ async fn start_agent_refuses_what_pip_may_not_do_and_starts_nothing() {
     d.rig.fx.core.close_workstream(&d.rig.fx.scope, &d.ws).await.unwrap();
     assert!(go(d.start_args("plan", json!({}))).await.contains("is closed"));
     assert!(d.runs().await.is_empty());
+}
+
+#[tokio::test]
+async fn a_start_needs_a_real_git_clone_inside_home() {
+    use crate::domain::ClonePlan;
+    use crate::inbox::PipRunAsk;
+    let d = drive().await;
+    let fx = &d.rig.fx;
+    let outside = std::env::temp_dir().join(format!("gossamr-outside-{}", std::process::id()));
+    std::fs::create_dir_all(outside.join(".git")).unwrap();
+    let link = fx.home.join("link");
+    std::os::unix::fs::symlink(&outside, &link).unwrap();
+    let plain = fx.home.join("plain");
+    std::fs::create_dir_all(&plain).unwrap();
+    let ask = || PipRunAsk { key: "CA-1".into(), kind: RunKind::Investigate, focus: None, from_run: None };
+    let plan = |path: &std::path::Path| ClonePlan { path: path.to_path_buf(), base: "main".into(), name: "eng-1-cart-0001".into() };
+    let ws = d.ws.clone();
+    let build = |path: std::path::PathBuf| {
+        let ws = ws.clone();
+        async move { fx.core.build_pip_run(&fx.scope, &ws, ask(), None, "acme/webshop".into(), plan(&path)).await }
+    };
+
+    for (bad, why) in [(fx.home.join("missing"), "isn't a folder that exists"), (plain, "isn't a git clone"), (outside.clone(), "isn't inside your home folder"), (link, "isn't inside your home folder")] {
+        let err = build(bad.clone()).await.unwrap_err().to_string();
+        assert!(err.contains(why), "{bad:?}: {err}");
+    }
+    let (spec, _) = build(d.rig.clone.clone()).await.unwrap();
+    assert_eq!(spec.clone_path, d.rig.clone);
+    std::fs::remove_dir_all(outside).unwrap();
 }
 
 #[tokio::test]

@@ -415,8 +415,8 @@ fn tool_list() -> Vec<Value> {
         ),
         tool(
             "revise_proposal",
-            "Change one of YOUR OWN pending drafts, or the pending comment, new ticket or subtask breakdown an agent run drafted for the user from its result (its text; for a ticket its type; for a breakdown only the summaries). Never anything else the user made, nor a description update carrying a run's Gossamr Plan: a build follows that plan, so only the user changes it. Pass the field that fits its kind: body for a comment, the message of a follow-up for a run or the answer to a run's question, status_id for a transition, summaries for subtasks, title, description and/or kind (task, bug, story or epic) for a new item, title and/or description (the complete new text) for a ticket text edit, focus and/or kind (investigate, triage, plan or verify) for an agent run on a ticket, prompt for an investigation with no ticket. For a GitHub review draft pass body for its new summary and/or comments for the COMPLETE new list of inline comments (each {path, line, side, body}, side RIGHT unless it is on a deleted line; comments you leave out are dropped, and a new one must sit on a line the pull request's diff shows, as get_proposal lists them); it stays a draft the user posts. An agent run or review the user has edited is theirs and can't be revised.",
-            json!({ "id": id, "body": { "type": "string" }, "comments": review_comments, "status_id": { "type": "string" }, "summaries": summaries, "title": { "type": "string" }, "description": { "type": "string" }, "focus": { "type": "string" }, "kind": { "type": "string" }, "prompt": { "type": "string" } }),
+            "Change one of YOUR OWN pending drafts, or the pending comment, new ticket or subtask breakdown an agent run drafted for the user from its result (its text; for a ticket its type; for a breakdown only the summaries). Never anything else the user made, nor a description update carrying a run's Gossamr Plan: a build follows that plan, so only the user changes it. Pass the field that fits its kind: body for a comment, status_id for a transition, summaries for subtasks, title, description and/or kind (task, bug, story or epic) for a new item, title and/or description (the complete new text) for a ticket text edit. For a GitHub review draft pass body for its new summary and/or comments for the COMPLETE new list of inline comments (each {path, line, side, body}, side RIGHT unless it is on a deleted line; comments you leave out are dropped, and a new one must sit on a line the pull request's diff shows, as get_proposal lists them); it stays a draft the user posts. A review the user has edited is theirs and can't be revised.",
+            json!({ "id": id, "body": { "type": "string" }, "comments": review_comments, "status_id": { "type": "string" }, "summaries": summaries, "title": { "type": "string" }, "description": { "type": "string" }, "kind": { "type": "string" } }),
             &["id"],
         ),
         tool(
@@ -744,23 +744,6 @@ async fn run_tool(st: &McpState, run: &PipRun, run_id: &str, name: &str, args: &
                         flattened: flattened.clone(),
                     }
                 }
-                Intent::StartRun { connection_id, item, spec } => super::runs::revised(connection_id, item, spec, args)?,
-                Intent::FollowUp { connection_id, run_id, short_id, item, reason, .. } => Intent::FollowUp {
-                    connection_id: connection_id.clone(),
-                    run_id: run_id.clone(),
-                    short_id: short_id.clone(),
-                    item: item.clone(),
-                    message: crate::runs::result::scrub(required(args, "body")?).trim().to_string(),
-                    reason: reason.clone(),
-                },
-                Intent::RunAnswer { connection_id, run_id, short_id, item, question, .. } => Intent::RunAnswer {
-                    connection_id: connection_id.clone(),
-                    run_id: run_id.clone(),
-                    short_id: short_id.clone(),
-                    item: item.clone(),
-                    message: crate::runs::result::scrub(required(args, "body")?).trim().to_string(),
-                    question: question.clone(),
-                },
                 _ => return Err("this kind of draft can't be revised".into()),
             };
             let revised = core.revise_as_pip(scope, run.workstream.as_deref(), id, intent).await.map_err(|e| e.to_string())?;
@@ -1121,8 +1104,9 @@ mod tests {
         let said = revise["description"].as_str().unwrap();
         let fields = said.split("Pass the field that fits its kind: ").nth(1).unwrap();
         let body = fields.split(", status_id").next().unwrap();
-        for kind in ["a comment", "a follow-up for a run", "the answer to a run's question"] {
-            assert!(body.contains(kind), "{kind}: {body}");
+        assert!(body.contains("a comment"), "{body}");
+        for gone in ["follow-up", "answer to a run", "agent run on a ticket", "prompt for"] {
+            assert!(!said.contains(gone), "{gone}: {said}");
         }
     }
 

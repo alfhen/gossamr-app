@@ -546,11 +546,6 @@ describe("a workstream's build always publishes a draft pull request, as the bac
     const off = await b.proposalsEdit(loose.id, { type: "run", allowPush: false });
     expect(off.intent.type === "startRun" && off.intent.spec.allowPush).toBe(false);
   });
-
-  it("uses the backend's words for the refusal", () => {
-    const rust = readFileSync(new URL("../../src-tauri/src/inbox/drafts.rs", import.meta.url), "utf8");
-    expect(rust).toContain(`"a workstream's build always publishes a draft pull request"`);
-  });
 });
 
 describe("a triage or plan after an investigation carries its findings, as the backend does", () => {

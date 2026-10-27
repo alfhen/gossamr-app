@@ -119,46 +119,13 @@ fn refuse(message: impl Into<String>) -> Error {
     Error::Proposal(message.into())
 }
 
+/// Why a draft to start, message or answer an agent is refused: Pip does those itself.
+pub const AGENTS_DIRECT: &str = "Pip starts and messages agents directly now";
+
 pub(crate) fn new_id() -> Result<String> {
     let mut bytes = [0u8; 12];
     getrandom::fill(&mut bytes).map_err(|e| refuse(format!("no randomness available: {e}")))?;
     Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
-}
-
-pub const FOLLOW_UP_REASON_LIMIT: usize = 200;
-/// Marks the revision that records which message a failed send left on its run.
-pub const SEND_FAILED_NOTE: &str = "The send failed; the message is kept";
-
-fn check_follow_up(message: &str, reason: &str) -> Result<()> {
-    if message.trim().is_empty() {
-        return Err(refuse("write the message to send first"));
-    }
-    if message.contains('\0') || message.chars().count() > crate::runs::answer::MAX_ANSWER_CHARS {
-        return Err(refuse(format!("a follow-up message is up to {} characters of plain text", crate::runs::answer::MAX_ANSWER_CHARS)));
-    }
-    if without_markers(message) != message || reason.contains(['\n', '\0']) || reason.chars().count() > FOLLOW_UP_REASON_LIMIT {
-        return Err(refuse("the follow-up contains text Gossamr reserves, or its reason isn't one short line"));
-    }
-    Ok(())
-}
-
-/// The most of a run's question an answer draft keeps, to show next to the answer.
-pub const ANSWER_QUESTION_LIMIT: usize = 500;
-
-/// An answer goes to the agent the way the person's own does, so it is held to the same limits, and to the markers
-/// Gossamr reserves.
-fn check_answer(message: &str) -> Result<()> {
-    let max = crate::runs::answer::MAX_ANSWER_CHARS;
-    if message.trim().is_empty() {
-        return Err(refuse("write the answer to send first"));
-    }
-    if message.contains('\0') || message.trim().chars().count() > max {
-        return Err(refuse(format!("an answer is up to {max} characters of plain text")));
-    }
-    if without_markers(message) != message {
-        return Err(refuse("the answer contains text Gossamr reserves; remove it"));
-    }
-    Ok(())
 }
 
 /// The longest summary a review draft posts, the most inline comments it carries, and the longest of each.
@@ -228,38 +195,7 @@ fn check(intent: &Intent) -> Result<()> {
         Intent::Create { fields, .. } if blank(&fields.title) => Err(refuse("a new item needs a title")),
         Intent::Rewrite { title, body, .. } => check_rewrite(title.as_ref(), body.as_ref()),
         Intent::GithubReview { .. } => check_review(intent),
-        Intent::FollowUp { connection_id, item, message, reason, .. } => {
-            if item.as_ref().is_some_and(|i| i.connection_id != *connection_id) {
-                return Err(refuse("the ticket belongs to another connection"));
-            }
-            check_follow_up(message, reason)
-        }
-        Intent::RunAnswer { connection_id, item, message, question, .. } => {
-            if item.as_ref().is_some_and(|i| i.connection_id != *connection_id) {
-                return Err(refuse("the ticket belongs to another connection"));
-            }
-            if question.as_ref().is_some_and(|q| q.chars().count() > ANSWER_QUESTION_LIMIT) {
-                return Err(refuse(format!("the question an answer shows is up to {ANSWER_QUESTION_LIMIT} characters")));
-            }
-            check_answer(message)
-        }
-        Intent::StartRun { connection_id, item, spec } => {
-            if item.as_ref().is_some_and(|i| i.connection_id != *connection_id) {
-                return Err(refuse("the ticket belongs to another connection"));
-            }
-            if item.is_none() && spec.kind == crate::domain::RunKind::Build {
-                return Err(refuse("Build needs a ticket"));
-            }
-            if let Some(project) = &spec.project {
-                if item.is_some() {
-                    return Err(refuse("a run on a ticket doesn't make a new one"));
-                }
-                if project.connection_id != *connection_id {
-                    return Err(refuse("the project belongs to another connection"));
-                }
-            }
-            spec.validate()
-        }
+        Intent::StartRun { .. } | Intent::FollowUp { .. } | Intent::RunAnswer { .. } => Err(refuse(AGENTS_DIRECT)),
         _ => Ok(()),
     }
 }
@@ -577,12 +513,6 @@ pub fn edit_noted(db: &Db, id: &str, intent: Intent, note: &str, at: DateTime<Ut
         return Err(refuse("an edit can't change what the draft is about"));
     }
     check(&intent)?;
-    if matches!((&p.intent, &intent), (Intent::FollowUp { connection_id: a, run_id: x, .. }, Intent::FollowUp { connection_id: b, run_id: y, .. }) if a != b || x != y) {
-        return Err(refuse("an edit can't change which run a follow-up is for"));
-    }
-    if matches!((&p.intent, &intent), (Intent::RunAnswer { connection_id: a, run_id: x, .. }, Intent::RunAnswer { connection_id: b, run_id: y, .. }) if a != b || x != y) {
-        return Err(refuse("an edit can't change which run an answer is for"));
-    }
     if let (Intent::GithubReview { connection_id: a, run_id: x, repo: r, number: n, commit_sha: c, .. }, Intent::GithubReview { connection_id: b, run_id: y, repo: s, number: m, commit_sha: d, .. }) = (&p.intent, &intent) {
         if a != b || x != y || r != s || n != m || c != d {
             return Err(refuse("an edit can't change which pull request, commit or run a review is for"));
@@ -593,12 +523,6 @@ pub fn edit_noted(db: &Db, id: &str, intent: Intent, note: &str, at: DateTime<Ut
         if note == EDITED_NOTE && new.iter().any(|c| !old.iter().any(|o| (o.path.as_str(), o.line, o.side) == (c.path.as_str(), c.line, c.side))) {
             return Err(refuse(REVIEW_EDIT_KEEPS_POSITIONS));
         }
-    }
-    if matches!((&p.intent, &intent), (Intent::StartRun { connection_id: a, .. }, Intent::StartRun { connection_id: b, .. }) if a != b) {
-        return Err(refuse("an edit can't change what the draft is about"));
-    }
-    if matches!((&p.intent, &intent), (Intent::StartRun { spec: a, .. }, Intent::StartRun { spec: b, .. }) if a.workstream != b.workstream) {
-        return Err(refuse("an edit can't move a run to another workstream"));
     }
     if let (Intent::Subtasks { summaries: old, .. }, Intent::Subtasks { summaries: new, .. }) = (&p.intent, &intent) {
         let made = p.created.len().min(old.len());
@@ -647,12 +571,6 @@ pub fn person_edited(p: &Proposal) -> bool {
     p.revisions.iter().any(|r| r.note == EDITED_NOTE)
 }
 
-/// Whether the person has changed what an agent run draft would do. Their edit is theirs to keep: Pip's later revision
-/// would silently replace what they wrote.
-pub fn person_edited_run(p: &Proposal) -> bool {
-    matches!(p.intent, Intent::StartRun { .. }) && p.revisions.iter().any(|r| r.note == EDITED_NOTE)
-}
-
 /// Whether the person has changed a rewrite's text. Their words are theirs to keep.
 pub fn person_edited_rewrite(p: &Proposal) -> bool {
     matches!(p.intent, Intent::Rewrite { .. }) && p.revisions.iter().any(|r| r.note == EDITED_NOTE)
@@ -681,17 +599,8 @@ pub fn revised_by_pip_unedited(p: &Proposal) -> bool {
 /// A draft that belongs to a workstream is revised only from that workstream's conversation (`workstream`); one in no
 /// workstream from any conversation.
 pub fn require_pip_may_revise(p: &Proposal, workstream: Option<&str>) -> Result<()> {
-    if matches!(p.intent, Intent::FollowUp { .. }) && person_edited(p) {
-        return Err(refuse("the user edited this follow-up, so Pip can't change it any more"));
-    }
-    if matches!(p.intent, Intent::RunAnswer { .. }) && person_edited(p) {
-        return Err(refuse("the user edited this answer, so Pip can't change it any more"));
-    }
     if matches!(p.intent, Intent::GithubReview { .. }) && person_edited(p) {
         return Err(refuse(REVIEW_IS_THE_USERS));
-    }
-    if person_edited_run(p) {
-        return Err(refuse("the user edited this agent run draft, so Pip can't change it any more"));
     }
     if person_edited_rewrite(p) {
         return Err(refuse("the user edited this description draft, so Pip can't change it any more"));
@@ -1248,152 +1157,32 @@ mod tests {
         assert_eq!(db.proposal(&p.id).unwrap().unwrap().state, ProposalState::Skipped);
     }
 
-    fn start_run_intent() -> Intent {
-        Intent::StartRun { connection_id: "c".into(), item: Some(item_ref("1")), spec: crate::domain::fixtures::run_spec() }
-    }
-
-    fn run_draft(origin: Origin, by: CreatedBy) -> Draft {
-        Draft { origin, created_by: by, intent: start_run_intent(), label: None, basis: None }
-    }
-
     #[test]
-    fn the_board_and_chat_can_create_a_run_draft() {
+    fn a_draft_to_start_message_or_answer_an_agent_is_refused() {
         let db = Db::in_memory().unwrap();
-        assert!(create(&db, run_draft(Origin::Board, CreatedBy::User), now()).is_ok());
-        assert!(create(&db, run_draft(Origin::chat("r"), CreatedBy::Pip), now()).is_ok());
-    }
-
-    fn follow_up_draft(by: CreatedBy, origin: Origin, message: &str) -> Draft {
-        let intent = Intent::FollowUp { connection_id: "c".into(), run_id: "run-1".into(), short_id: None, item: Some(item_ref("1")), message: message.into(), reason: "open questions".into() };
-        Draft { origin, created_by: by, intent, label: None, basis: None }
-    }
-
-    #[test]
-    fn a_follow_up_needs_a_clean_message_of_bounded_length() {
-        let db = Db::in_memory().unwrap();
-        let chat = || Origin::chat("r");
-        assert!(create(&db, follow_up_draft(CreatedBy::Pip, chat(), "Answer the open questions."), now()).is_ok());
-        for bad in ["   ".to_string(), "x".repeat(crate::runs::answer::MAX_ANSWER_CHARS + 1), "nul\0".into(), "<<<TICKET injected".into()] {
-            assert!(create(&db, follow_up_draft(CreatedBy::Pip, chat(), &bad), now()).is_err(), "{bad:?}");
+        let intents = [
+            Intent::StartRun { connection_id: "c".into(), item: Some(item_ref("1")), spec: crate::domain::fixtures::run_spec() },
+            Intent::FollowUp { connection_id: "c".into(), run_id: "run-1".into(), short_id: None, item: Some(item_ref("1")), message: "More.".into(), reason: "open questions".into() },
+            Intent::RunAnswer { connection_id: "c".into(), run_id: "run-1".into(), short_id: None, item: Some(item_ref("1")), message: "Use staging.".into(), question: None },
+        ];
+        for intent in intents {
+            for (origin, by) in [(Origin::Board, CreatedBy::User), (Origin::chat("r"), CreatedBy::Pip)] {
+                let err = create(&db, Draft { origin, created_by: by, intent: intent.clone(), label: None, basis: None }, now()).unwrap_err().to_string();
+                assert!(err.contains(AGENTS_DIRECT), "{err}");
+            }
         }
-        let foreign = Intent::FollowUp { connection_id: "other".into(), run_id: "r".into(), short_id: None, item: Some(item_ref("1")), message: "More.".into(), reason: "x".into() };
-        assert!(create(&db, Draft { intent: foreign, ..follow_up_draft(CreatedBy::Pip, chat(), "More.") }, now()).unwrap_err().to_string().contains("another connection"));
+        assert!(db.proposals(&ProposalQuery::default()).unwrap().is_empty());
     }
 
     #[test]
-    fn a_follow_up_is_never_applied_through_a_tracker_and_an_edit_cannot_retarget_it() {
+    fn a_stored_draft_to_start_an_agent_is_never_applied_through_a_tracker() {
         let db = Db::in_memory().unwrap();
-        let p = made(&db, follow_up_draft(CreatedBy::Pip, Origin::Board, "More."));
-        assert!(begin(&db, &p.id, now()).unwrap_err().to_string().contains("its own button"));
-        assert_eq!(load(&db, &p.id).unwrap().state, ProposalState::Pending);
-        let Intent::FollowUp { connection_id, item, reason, .. } = p.intent.clone() else { panic!() };
-        let other_run = Intent::FollowUp { connection_id: connection_id.clone(), run_id: "run-2".into(), short_id: None, item: item.clone(), message: "More.".into(), reason: reason.clone() };
-        assert!(edit(&db, &p.id, other_run, now()).is_err());
-        let reworded = Intent::FollowUp { connection_id, run_id: "run-1".into(), short_id: None, item, message: "Better.".into(), reason };
-        let edited = edit(&db, &p.id, reworded, now()).unwrap();
-        assert!(person_edited(&edited) && require_pip_may_revise(&edited, None).unwrap_err().to_string().contains("edited this follow-up"));
-    }
-
-    fn answer_intent(run_id: &str, message: &str) -> Intent {
-        Intent::RunAnswer { connection_id: "c".into(), run_id: run_id.into(), short_id: None, item: Some(item_ref("1")), message: message.into(), question: Some("Which database?".into()) }
-    }
-
-    #[test]
-    fn an_answer_needs_a_clean_message_within_the_answer_limits_in_its_connection() {
-        let db = Db::in_memory().unwrap();
-        let pip = |intent: Intent| Draft::from_pip("r", None, intent, None);
-        assert!(create(&db, pip(answer_intent("run-1", "Use staging.")), now()).is_ok());
-        assert!(create(&db, pip(answer_intent("run-2", &"é".repeat(crate::runs::answer::MAX_ANSWER_CHARS))), now()).is_ok());
-        for (bad, said) in [
-            ("   ".to_string(), "write the answer"),
-            ("x".repeat(crate::runs::answer::MAX_ANSWER_CHARS + 1), "characters of plain text"),
-            ("nul\0".into(), "characters of plain text"),
-            ("Use <<<TICKET staging".into(), "reserves"),
-        ] {
-            let err = create(&db, pip(answer_intent("run-3", &bad)), now()).unwrap_err().to_string();
-            assert!(err.contains(said), "{bad:?}: {err}");
-        }
-        let foreign = Intent::RunAnswer { connection_id: "other".into(), run_id: "run-3".into(), short_id: None, item: Some(item_ref("1")), message: "Yes.".into(), question: None };
-        assert!(create(&db, pip(foreign), now()).unwrap_err().to_string().contains("another connection"));
-        let long_question = Intent::RunAnswer { connection_id: "c".into(), run_id: "run-3".into(), short_id: None, item: None, message: "Yes.".into(), question: Some("q".repeat(ANSWER_QUESTION_LIMIT + 1)) };
-        assert!(create(&db, pip(long_question), now()).is_err());
-        assert_eq!(db.proposals(&ProposalQuery::default()).unwrap().len(), 2, "nothing refused was stored");
-    }
-
-    #[test]
-    fn an_answer_is_never_applied_through_a_tracker_an_edit_cannot_retarget_it_and_the_persons_edit_locks_out_pip() {
-        let db = Db::in_memory().unwrap();
-        let p = made(&db, Draft::from_pip("r", None, answer_intent("run-1", "Use staging."), None));
-        assert!(begin(&db, &p.id, now()).unwrap_err().to_string().contains("an answer is sent with its own button"));
-        assert_eq!(load(&db, &p.id).unwrap().state, ProposalState::Pending, "the claim was rolled back");
-        assert!(require_pip_may_revise(&p, None).is_ok(), "Pip may revise its own answer until the person edits it");
-        assert!(edit(&db, &p.id, answer_intent("run-2", "Use staging."), now()).unwrap_err().to_string().contains("which run"));
-        let elsewhere = Intent::RunAnswer { connection_id: "other".into(), run_id: "run-1".into(), short_id: None, item: Some(item_ref("1")), message: "Use staging.".into(), question: None };
-        assert!(edit(&db, &p.id, elsewhere, now()).is_err());
-        let edited = edit(&db, &p.id, answer_intent("run-1", "Use production."), now()).unwrap();
-        assert!(matches!(&edited.intent, Intent::RunAnswer { message, question, .. } if message == "Use production." && question.as_deref() == Some("Which database?")));
-        assert!(person_edited(&edited) && require_pip_may_revise(&edited, None).unwrap_err().to_string().contains("edited this answer"));
-    }
-
-    #[test]
-    fn a_draft_answer_left_applying_is_not_released_as_a_maybe_written_write() {
-        let db = Db::in_memory().unwrap();
-        let p = made(&db, Draft::from_pip("r", None, answer_intent("run-1", "Use staging."), None));
-        let mut stuck = db.proposal(&p.id).unwrap().unwrap();
-        stuck.state = ProposalState::Applying;
-        db.save_proposal(&stuck).unwrap();
-        assert_eq!(db.release_interrupted(now()).unwrap(), 0);
-        let back = db.proposal(&p.id).unwrap().unwrap();
-        assert_eq!((back.state, back.error), (ProposalState::Applying, None));
-    }
-
-    #[test]
-    fn a_newer_answer_from_pip_replaces_its_older_one_for_the_same_run_but_not_one_the_person_edited() {
-        let db = Db::in_memory().unwrap();
-        stored_workstream(&db, "w1");
-        let old = made(&db, in_ws("w1", answer_intent("run-1", "Use staging.")));
-        let other_run = made(&db, in_ws("w1", answer_intent("run-2", "Yes.")));
-        let new = made(&db, in_ws("w1", answer_intent("run-1", "Use staging, with the new schema.")));
-        let back = db.proposal(&old.id).unwrap().unwrap();
-        assert_eq!((back.state, back.superseded_by.as_deref()), (ProposalState::Retired(REPLACED_REASON.into()), Some(new.id.as_str())));
-        assert_eq!(state_of(&db, &other_run.id), ProposalState::Pending, "another run's answer stays");
-        assert!(db.workstream_events("w1").unwrap().iter().any(|e| e.action == "draft_superseded" && e.proposal_id.as_deref() == Some(old.id.as_str())));
-
-        edit(&db, &new.id, answer_intent("run-1", "The person's words."), now()).unwrap();
-        let err = create(&db, in_ws("w1", answer_intent("run-1", "Pip again.")), now()).unwrap_err().to_string();
-        assert!(err.contains(&format!("the user edited draft {}", new.id)), "{err}");
-        assert_eq!(state_of(&db, &new.id), ProposalState::Pending);
-    }
-
-    #[test]
-    fn a_run_draft_must_have_a_valid_spec_and_stay_in_its_connection() {
-        let db = Db::in_memory().unwrap();
-        let Intent::StartRun { connection_id, item, spec } = start_run_intent() else { panic!() };
-        let with = |spec: crate::domain::RunSpec| Draft { intent: Intent::StartRun { connection_id: connection_id.clone(), item: item.clone(), spec }, ..run_draft(Origin::Board, CreatedBy::User) };
-        assert!(create(&db, with(crate::domain::RunSpec { repo: "a/b/c".into(), ..spec.clone() }), now()).is_err());
-        assert!(create(&db, with(crate::domain::RunSpec { instruction: " ".into(), ..spec.clone() }), now()).is_err());
-        let foreign = Draft { intent: Intent::StartRun { connection_id: "other".into(), item, spec }, ..run_draft(Origin::Board, CreatedBy::User) };
-        assert!(create(&db, foreign, now()).unwrap_err().to_string().contains("another connection"));
-    }
-
-    #[test]
-    fn the_generic_approval_refuses_a_run_draft_and_leaves_it_pending() {
-        let db = Db::in_memory().unwrap();
-        let p = made(&db, run_draft(Origin::Board, CreatedBy::User));
-        let err = begin(&db, &p.id, now()).unwrap_err().to_string();
-        assert!(err.contains("own button"), "{err}");
-        assert_eq!(db.proposal(&p.id).unwrap().unwrap().state, ProposalState::Pending);
-    }
-
-    #[test]
-    fn an_edit_cannot_move_a_run_draft_to_another_connection() {
-        let db = Db::in_memory().unwrap();
-        let p = made(&db, run_draft(Origin::Board, CreatedBy::User));
-        let Intent::StartRun { item, spec, .. } = start_run_intent() else { panic!() };
-        let elsewhere = Intent::StartRun { connection_id: "other".into(), item: None, spec: spec.clone() };
-        assert!(edit(&db, &p.id, elsewhere, now()).is_err());
-        let same = Intent::StartRun { connection_id: "c".into(), item, spec: crate::domain::RunSpec { base: "develop".into(), ..spec } };
-        assert_eq!(edit(&db, &p.id, same, now()).unwrap().revisions.len(), 1);
+        let p = comment_draft("1");
+        let mut stored = made(&db, p);
+        stored.intent = Intent::RunAnswer { connection_id: "c".into(), run_id: "run-1".into(), short_id: None, item: Some(item_ref("1")), message: "Use staging.".into(), question: None };
+        db.save_proposal(&stored).unwrap();
+        assert!(begin(&db, &stored.id, now()).unwrap_err().to_string().contains(AGENTS_DIRECT));
+        assert_eq!(load(&db, &stored.id).unwrap().state, ProposalState::Pending, "the claim was rolled back");
     }
 
     #[test]
@@ -1622,8 +1411,7 @@ mod tests {
         stored_workstream(&db, "w1");
         let agent = made(&db, from_run(Some("w1"), CreatedBy::Agent));
         let pip = made(&db, Draft { origin: Origin::Chat { request_id: "q".into(), workstream: Some("w1".into()) }, ..comment_draft("1") });
-        let spec = crate::domain::RunSpec { workstream: Some("w1".into()), ..crate::domain::fixtures::run_spec() };
-        let person = made(&db, Draft { intent: Intent::StartRun { connection_id: "c".into(), item: Some(item_ref("1")), spec }, ..run_draft(Origin::Board, CreatedBy::User) });
+        let person = made(&db, Draft { origin: Origin::Chat { request_id: "p".into(), workstream: Some("w1".into()) }, intent: move_to("1", "doing"), ..comment_draft("1") });
         made(&db, comment_draft("1"));
         made(&db, from_run(Some("unknown"), CreatedBy::Agent));
 
@@ -1643,7 +1431,7 @@ mod tests {
         let seen: Vec<(Actor, &str, Option<&str>)> = events.iter().map(|e| (e.actor, e.action.as_str(), e.proposal_id.as_deref())).collect();
         assert_eq!(
             seen,
-            [(Actor::Run, "draft_created", Some(agent.id.as_str())), (Actor::Pip, "draft_created", Some(pip.id.as_str())), (Actor::Person, "draft_created", Some(person.id.as_str()))]
+            [(Actor::Run, "draft_created", Some(agent.id.as_str())), (Actor::Pip, "draft_created", Some(pip.id.as_str())), (Actor::Pip, "draft_created", Some(person.id.as_str()))]
         );
         assert!(db.workstream_events("unknown").unwrap().is_empty(), "nothing is recorded for a workstream that isn't stored");
     }
@@ -1806,7 +1594,6 @@ mod tests {
         }
         assert!(create(&db, agent_in("w1", Intent::Comment { item: item_ref("1"), body: Doc::paragraph("found") }), now()).is_ok());
         assert!(create(&db, agent_in("w1", rewrite(Some(("Old", "New")), None)), now()).is_ok());
-        assert!(create(&db, Draft { origin: Origin::Board, created_by: CreatedBy::User, intent: Intent::StartRun { connection_id: "c".into(), item: Some(item_ref("1")), spec: crate::domain::RunSpec { workstream: Some("w1".into()), ..crate::domain::fixtures::run_spec() } }, label: None, basis: None }, now()).is_ok(), "nor does the person");
     }
 
     #[tokio::test]

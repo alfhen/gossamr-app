@@ -3,6 +3,7 @@ use std::sync::Mutex;
 
 use super::*;
 use crate::domain::fixtures::run_spec;
+use crate::domain::RunSpec;
 use crate::domain::{RunFailure, READ_ONLY_GUARD};
 use crate::codehost::github::testserver::{pull_reply, Reply};
 use crate::inbox::testing::{fixture_watching, fixture_watching_with, Fixture};
@@ -66,9 +67,7 @@ impl Rig {
     }
 
     async fn queued(&self, n: u32) -> Run {
-        let p = self.fx.core.draft_run(self.spec(n), Some(self.fx.item("CA-1"))).await.unwrap();
-        let digest = self.fx.core.runs_review(&p.id).await.unwrap().digest;
-        self.fx.core.runs_approve(&p.id, &digest).await.unwrap()
+        self.fx.core.queue_test_run(self.spec(n), Some(self.fx.item("CA-1"))).await.unwrap()
     }
 
     async fn get(&self, run: &Run) -> Run {
@@ -121,9 +120,7 @@ fn build_spec(rig: &Rig, n: u32) -> RunSpec {
 }
 
 async fn approved(rig: &Rig, spec: RunSpec) -> Run {
-    let p = rig.fx.core.draft_run(spec, Some(rig.fx.item("CA-1"))).await.unwrap();
-    let digest = rig.fx.core.runs_review(&p.id).await.unwrap().digest;
-    rig.fx.core.runs_approve(&p.id, &digest).await.unwrap()
+    rig.fx.core.queue_test_run(spec, Some(rig.fx.item("CA-1"))).await.unwrap()
 }
 
 fn last_launch(rig: &Rig) -> LaunchRequest {
@@ -303,9 +300,7 @@ async fn approved_runs_over_the_cap_launch_in_approval_order_with_a_workstream_s
     let older = rig.queued(2).await;
     rig.svc.launch(&older.id).await.unwrap();
     let spec = RunSpec { workstream: Some(ws.clone()), ..rig.spec(3) };
-    let p = rig.fx.core.draft_run(spec, Some(rig.fx.item("CA-1"))).await.unwrap();
-    let digest = rig.fx.core.runs_review(&p.id).await.unwrap().digest;
-    let successor = rig.fx.core.runs_approve(&p.id, &digest).await.unwrap();
+    let successor = rig.fx.core.queue_test_run(spec, Some(rig.fx.item("CA-1"))).await.unwrap();
     let newer = rig.queued(4).await;
     rig.svc.launch(&newer.id).await.unwrap();
     assert!(rig.svc.launch_waiting().await.unwrap().is_empty(), "the one slot is taken");
@@ -378,9 +373,7 @@ async fn recovery_clears_the_slot_wait_of_a_run_in_no_workstream_and_keeps_a_wor
     let before_restart = rig.svc.started_at - chrono::Duration::minutes(5);
     let loose = rig.set(&rig.queued(1).await, |r| r.slot_wait_since = Some(before_restart)).await;
     let spec = RunSpec { workstream: Some(ws), ..rig.spec(2) };
-    let p = rig.fx.core.draft_run(spec, Some(rig.fx.item("CA-1"))).await.unwrap();
-    let digest = rig.fx.core.runs_review(&p.id).await.unwrap().digest;
-    let in_ws = rig.fx.core.runs_approve(&p.id, &digest).await.unwrap();
+    let in_ws = rig.fx.core.queue_test_run(spec, Some(rig.fx.item("CA-1"))).await.unwrap();
     let in_ws = rig.set(&in_ws, |r| r.slot_wait_since = Some(before_restart)).await;
     rig.svc.recover().await;
     let loose = rig.get(&loose).await;
@@ -618,9 +611,7 @@ async fn a_launch_that_never_started_can_be_retried_once_the_cause_is_fixed() {
 async fn retrying_a_workstream_run_is_recorded_in_its_audit_and_a_refused_retry_is_not() {
     let rig = ready().await;
     let ws = rig.fx.core.open_workstream(&rig.fx.scope, Some(rig.fx.item("CA-1")), None).await.unwrap();
-    let p = rig.fx.core.draft_run(RunSpec { workstream: Some(ws.id.clone()), ..rig.spec(1) }, Some(rig.fx.item("CA-1"))).await.unwrap();
-    let digest = rig.fx.core.runs_review(&p.id).await.unwrap().digest;
-    let run = rig.fx.core.runs_approve(&p.id, &digest).await.unwrap();
+    let run = rig.fx.core.queue_test_run(RunSpec { workstream: Some(ws.id.clone()), ..rig.spec(1) }, Some(rig.fx.item("CA-1"))).await.unwrap();
     let retried = || async {
         let events = rig.fx.core.workstream_events(&rig.fx.scope, &ws.id).await.unwrap();
         events.into_iter().filter(|e| e.action == "run_retried").map(|e| e.run_id).collect::<Vec<_>>()
@@ -818,12 +809,6 @@ async fn clones_of_a_watched_repository_are_found_and_the_chosen_one_comes_first
 }
 
 #[tokio::test]
-async fn the_repositories_to_run_in_are_the_watched_ones() {
-    let rig = ready().await;
-    assert_eq!(rig.svc.repos().unwrap(), ["acme/webshop"]);
-}
-
-#[tokio::test]
 async fn only_a_clone_that_was_found_can_be_picked_and_only_for_a_watched_repository() {
     let rig = ready().await;
     let stranger = rig.fx.home.join("not-a-clone");
@@ -848,154 +833,25 @@ async fn a_suggested_name_avoids_worktrees_and_leftover_branches() {
 }
 
 #[tokio::test]
-async fn the_draft_must_be_in_a_watched_repository() {
+async fn a_run_must_be_in_a_watched_repository() {
     let rig = ready().await;
     let spec = RunSpec { repo: "acme/unwatched".into(), ..rig.spec(1) };
-    let err = rig.fx.core.draft_run(spec, None).await.unwrap_err();
+    let err = rig.fx.core.queue_test_run(spec, None).await.unwrap_err();
     assert!(err.to_string().contains("isn't a repository you watch"), "{err}");
     let spec = RunSpec { repo: "ACME/WebShop".into(), ..rig.spec(2) };
-    assert!(rig.fx.core.draft_run(spec, None).await.is_ok(), "GitHub names ignore case");
+    assert!(rig.fx.core.queue_test_run(spec, None).await.is_ok(), "GitHub names ignore case");
 }
 
 #[tokio::test]
-async fn approval_refuses_a_repository_that_is_no_longer_watched() {
+async fn a_queued_run_is_not_launched_into_a_repository_that_is_no_longer_watched() {
     let rig = ready().await;
-    let draft = rig.fx.core.draft_run(rig.spec(1), None).await.unwrap();
-    let digest = rig.fx.core.runs_review(&draft.id).await.unwrap().digest;
+    let run = rig.fx.core.queue_test_run(rig.spec(1), None).await.unwrap();
     let connection = rig.fx.core.watched_code_repos().unwrap()[0].0.clone();
-    let off = crate::domain::WatchMode::Selected;
-    rig.fx.core.watch_set_mode(&connection, off).await.unwrap();
-    let err = rig.fx.core.runs_approve(&draft.id, &digest).await.unwrap_err();
-    assert!(err.to_string().contains("isn't a repository you watch"), "{err}");
-    assert!(rig.fx.core.runs_list(&Default::default()).await.unwrap().is_empty());
-}
-
-mod preflight_rows {
-    use super::*;
-    use crate::runs::preflight::Level;
-
-    async fn rows(rig: &Rig, spec: Option<RunSpec>) -> Preflight {
-        rig.svc.preflight(spec).await.unwrap()
-    }
-
-    fn has(p: &Preflight, level: Level, text: &str) -> bool {
-        p.rows.iter().any(|r| r.level == level && r.text.contains(text))
-    }
-
-    #[tokio::test]
-    async fn a_folder_claude_has_not_accepted_is_an_amber_row_with_a_trust_step_and_nothing_is_written() {
-        let rig = ready().await;
-        let config = rig.fx.dir.join("claude-config");
-        std::fs::create_dir_all(&config).unwrap();
-        let file = config.join(".claude.json");
-        let text = serde_json::json!({ "projects": { "/somewhere/else": { "hasTrustDialogAccepted": true } } }).to_string();
-        std::fs::write(&file, &text).unwrap();
-        let p = rows(&rig, Some(rig.spec(1))).await;
-        let row = p.rows.iter().find(|r| r.text.contains("hasn't been opened")).expect("a trust row");
-        assert_eq!((row.level, row.action.clone()), (Level::Amber, Some(crate::runs::preflight::RowAction::TrustFolder { path: rig.clone.clone() })));
-        assert!(row.text.contains(&rig.clone.display().to_string()));
-        assert!(!p.blocking, "uncertain, so it warns and lets Start through");
-        assert_eq!(std::fs::read_to_string(&file).unwrap(), text, "the config is only read");
-
-        std::fs::write(&file, serde_json::json!({ "projects": { rig.clone.to_string_lossy(): { "hasTrustDialogAccepted": true } } }).to_string()).unwrap();
-        assert!(!rows(&rig, Some(rig.spec(1))).await.rows.iter().any(|r| r.text.contains("hasn't been opened")));
-        std::fs::remove_file(&file).unwrap();
-        assert!(!rows(&rig, Some(rig.spec(1))).await.rows.iter().any(|r| r.text.contains("hasn't been opened")), "no config, no claim");
-    }
-
-    #[tokio::test]
-    async fn a_ready_machine_is_all_green_and_reads_the_permission_mode_without_writing() {
-        let rig = ready().await;
-        let config = rig.fx.dir.join("claude-config");
-        std::fs::create_dir_all(&config).unwrap();
-        let settings = config.join("settings.json");
-        std::fs::write(&settings, r#"{"permissions":{"defaultMode":"auto"},"env":{"TOKEN":"never shown"}}"#).unwrap();
-        let before = std::fs::read(&settings).unwrap();
-        let spec = rig.spec(1);
-        let p = rows(&rig, Some(spec.clone())).await;
-        assert!(!p.blocking && p.rows.iter().all(|r| r.level == Level::Green), "{p:?}");
-        assert!(has(&p, Level::Green, "Claude Code 2.1.286"));
-        assert!(has(&p, Level::Green, "Signed in"));
-        assert!(has(&p, Level::Green, "Background agents are supported"));
-        assert!(has(&p, Level::Green, "Agents get this PATH: "));
-        assert!(has(&p, Level::Green, &format!("Clone: {} on main", rig.clone.display())));
-        assert!(has(&p, Level::Green, "0 of 3 agent slots in use (including ones waiting on you)"));
-        assert!(has(&p, Level::Green, "Read-only steps are supported"));
-        assert!(has(&p, Level::Green, "This step runs read-only, in permission mode dontAsk, without your or the repository's Claude settings and MCP servers"));
-        assert!(has(&p, Level::Green, "Your own mode, auto, applies to a Build."));
-        assert!(!has(&p, Level::Green, "Agents run as you"), "a read-only step doesn't run in the person's mode: {p:?}");
-        assert!(has(&p, Level::Green, &format!("What runs: {}", &spec.digest()[..12])));
-        let built = rows(&rig, Some(build_spec(&rig, 2))).await;
-        assert!(has(&built, Level::Green, "Agents run as you, in your permission mode: auto"));
-        assert!(!has(&built, Level::Green, "read-only"), "{built:?}");
-        assert!(!format!("{p:?}").contains("never shown"));
-        assert_eq!(std::fs::read(&settings).unwrap(), before);
-
-        std::fs::write(&settings, r#"{"defaultMode":"bypassPermissions"}"#).unwrap();
-        assert!(has(&rows(&rig, None).await, Level::Amber, "bypassPermissions"));
-        std::fs::remove_file(&settings).unwrap();
-        assert!(has(&rows(&rig, None).await, Level::Green, "no default permission mode is set"));
-    }
-
-    #[tokio::test]
-    async fn each_failure_is_a_red_row_that_blocks() {
-        let rig = ready().await;
-        rig.cli.with(|s| s.logged_in = false);
-        let p = rows(&rig, Some(rig.spec(1))).await;
-        assert!(p.blocking && has(&p, Level::Red, "isn't signed in"));
-
-        let rig = rig_with(|c| c.with(|s| s.bg = false)).await;
-        assert!(has(&rows(&rig, None).await, Level::Red, "too old"));
-
-        let rig = ready().await;
-        rig.cli.with(|s| s.read_only = false);
-        let p = rows(&rig, Some(rig.spec(1))).await;
-        assert!(p.blocking && has(&p, Level::Red, "can't run a step read-only"), "{p:?}");
-        assert!(!rows(&rig, Some(build_spec(&rig, 2))).await.blocking, "a build doesn't need it");
-
-        let rig = ready().await;
-        std::fs::remove_dir_all(&rig.clone).unwrap();
-        let p = rows(&rig, Some(rig.spec(1))).await;
-        assert!(p.blocking && has(&p, Level::Red, "isn't a git clone"));
-
-        let rig = build(Some(ToolchainError::ClaudeMissing), |s| s).await;
-        let p = rows(&rig, None).await;
-        assert!(p.blocking && has(&p, Level::Red, "isn't installed"));
-        let rig = build(Some(ToolchainError::NoEnvironment("Couldn't read your shell environment: it printed no variables.".into())), |s| s).await;
-        assert!(has(&rows(&rig, None).await, Level::Red, "Couldn't read your shell environment"));
-
-    }
-
-    #[tokio::test]
-    async fn at_the_cap_the_row_is_amber_and_does_not_block() {
-        let rig = build(None, |s| s.with_cap(1)).await;
-        let run = rig.queued(1).await;
-        rig.svc.launch(&run.id).await.unwrap();
-        let p = rows(&rig, Some(rig.spec(2))).await;
-        assert!(!p.blocking, "{p:?}");
-        assert!(has(&p, Level::Amber, "1 of 1 agent slots are in use, including ones waiting on you. This one will wait for a slot and start when one finishes."));
-        assert!(!p.rows.iter().any(|r| r.level == Level::Red));
-    }
-
-    #[tokio::test]
-    async fn a_dirty_clone_or_another_branch_is_amber_and_does_not_block() {
-        let rig = ready().await;
-        std::fs::write(rig.clone.join(".fake-dirty"), " M cart.js\n").unwrap();
-        let p = rows(&rig, Some(rig.spec(1))).await;
-        assert!(!p.blocking && has(&p, Level::Amber, "uncommitted changes"));
-        std::fs::remove_file(rig.clone.join(".fake-dirty")).unwrap();
-        std::fs::write(rig.clone.join(".fake-branch"), "feature/x\n").unwrap();
-        let p = rows(&rig, Some(rig.spec(1))).await;
-        assert!(!p.blocking && has(&p, Level::Amber, "It is on feature/x, not main"));
-    }
-
-    #[tokio::test]
-    async fn without_a_spec_only_the_environment_and_capacity_are_checked() {
-        let rig = ready().await;
-        let p = rows(&rig, None).await;
-        assert!(!p.rows.iter().any(|r| r.text.contains("Clone:") || r.text.contains("What runs")));
-        assert!(has(&p, Level::Green, "agent slots in use"));
-    }
+    rig.fx.core.watch_set_mode(&connection, crate::domain::WatchMode::Selected).await.unwrap();
+    let launched = rig.svc.start_now(&run.id).await.unwrap();
+    assert_eq!(launched.state, RunState::Failed);
+    assert!(launched.error.as_deref().is_some_and(|e| e.contains("isn't a repository you watch")), "{:?}", launched.error);
+    assert_eq!(rig.cli.launches(), 0);
 }
 
 mod through_the_real_spawner {
@@ -1084,9 +940,7 @@ mod through_the_real_spawner {
         }
 
         let build = RunSpec { kind: RunKind::Build, ..real.rig.spec(2) };
-        let p = real.rig.fx.core.draft_run(build, Some(real.rig.fx.item("CA-1"))).await.unwrap();
-        let digest = real.rig.fx.core.runs_review(&p.id).await.unwrap().digest;
-        let build = real.rig.fx.core.runs_approve(&p.id, &digest).await.unwrap();
+        let build = real.rig.fx.core.queue_test_run(build, Some(real.rig.fx.item("CA-1"))).await.unwrap();
         real.rig.svc.launch(&build.id).await.unwrap();
         let after = calls(&real);
         let built = after.split("---\n").filter(|call| call.contains("\n--bg\n")).nth(1).unwrap();
@@ -1141,7 +995,6 @@ mod through_the_real_spawner {
 
 mod kinds {
     use super::*;
-    use crate::runs::preflight::Level;
 
     const PULL: &str = "/repos/acme/webshop/pulls/12";
 
@@ -1151,9 +1004,7 @@ mod kinds {
     }
 
     async fn approved(rig: &Rig, spec: RunSpec) -> Run {
-        let p = rig.fx.core.draft_run(spec, Some(rig.fx.item("CA-1"))).await.unwrap();
-        let digest = rig.fx.core.runs_review(&p.id).await.unwrap().digest;
-        rig.fx.core.runs_approve(&p.id, &digest).await.unwrap()
+        rig.fx.core.queue_test_run(spec, Some(rig.fx.item("CA-1"))).await.unwrap()
     }
 
     #[tokio::test]
@@ -1174,7 +1025,7 @@ mod kinds {
     async fn a_review_is_checked_again_just_before_launch_and_never_spawns_for_a_fork() {
         let same = pull_reply(12, "open", Some("acme/webshop"), "main");
         let fork = pull_reply(12, "open", Some("mallory/webshop"), "main");
-        let rig = build_with(vec![(PULL, vec![same.clone(), same.clone(), same, fork])], None, |s| s).await;
+        let rig = build_with(vec![(PULL, vec![same, fork])], None, |s| s).await;
         let run = approved(&rig, of(&rig, RunKind::Review, 1)).await;
         rig.svc.launch(&run.id).await.unwrap();
         let after = rig.get(&run).await;
@@ -1184,25 +1035,7 @@ mod kinds {
     }
 
     #[tokio::test]
-    async fn preflight_says_what_a_push_allows_and_whom_a_review_reads() {
-        let rig = build_with(vec![(PULL, vec![pull_reply(12, "open", Some("acme/webshop"), "main")])], None, |s| s).await;
-        let config = rig.fx.dir.join("claude-config");
-        std::fs::create_dir_all(&config).unwrap();
-        std::fs::write(config.join("settings.json"), r#"{"permissions":{"defaultMode":"auto"}}"#).unwrap();
-        let has = |p: &Preflight, level: Level, text: &str| p.rows.iter().any(|r| r.level == level && r.text.contains(text));
-
-        let quiet = rig.svc.preflight(Some(of(&rig, RunKind::Build, 1))).await.unwrap();
-        assert!(!quiet.rows.iter().any(|r| r.text.contains("push")), "no push row without the tick");
-        let build = RunSpec { allow_push: true, ..of(&rig, RunKind::Build, 1) };
-        let p = rig.svc.preflight(Some(build)).await.unwrap();
-        assert!(has(&p, Level::Amber, "may push a branch and open a draft pull request if your Claude settings allow it. Your permission mode is auto: with auto mode"), "{p:?}");
-
-        let p = rig.svc.preflight(Some(of(&rig, RunKind::Review, 2))).await.unwrap();
-        assert!(has(&p, Level::Green, "Reviews pull request #12 in acme/webshop. Its branch is in acme/webshop"), "{p:?}");
-    }
-
-    #[tokio::test]
-    async fn a_build_from_a_plan_launches_with_the_plan_that_was_approved_and_preflight_names_it() {
+    async fn a_build_from_a_plan_launches_with_the_plan_it_follows() {
         let rig = build_with(vec![], None, |s| s.with_cap(10)).await;
         let mut plan = approved(&rig, of(&rig, RunKind::Plan, 1)).await;
         plan.state = RunState::Done;
@@ -1211,20 +1044,10 @@ mod kinds {
         rig.fx.core.save_run(&plan).await.unwrap();
 
         let build = RunSpec { plan_from_run: Some(plan.id.clone()), ..of(&rig, RunKind::Build, 2) };
-        let p = rig.fx.core.draft_run(build, Some(rig.fx.item("CA-1"))).await.unwrap();
-        let review = rig.fx.core.runs_review(&p.id).await.unwrap();
-        let run = rig.fx.core.runs_approve(&p.id, &review.digest).await.unwrap();
-        let pre = rig.svc.preflight(Some(run.spec.clone())).await.unwrap();
-        let unedited = format!("This build follows run {}'s own plan, which nobody edited or approved on the ticket. Approve the Gossamr Plan draft first, or edit the plan below.", plan.id);
-        assert!(pre.rows.iter().any(|r| r.level == Level::Amber && r.text == unedited), "{pre:?}");
-        assert!(!pre.blocking, "an unedited plan warns and doesn't block");
-        assert!(!pre.rows.iter().any(|r| r.level == Level::Green && r.text.contains("follows the plan from run")));
-        let settled = rig.svc.preflight(Some(RunSpec { plan_approved: true, ..run.spec.clone() })).await.unwrap();
-        assert!(settled.rows.iter().any(|r| r.level == Level::Green && r.text.contains(&format!("follows the plan from run {}", plan.id))), "{settled:?}");
-        assert!(!settled.rows.iter().any(|r| r.text.contains("nobody edited")));
+        let run = rig.fx.core.queue_test_run(build, Some(rig.fx.item("CA-1"))).await.unwrap();
         rig.svc.launch(&run.id).await.unwrap();
         let req = rig.cli.0.lock().unwrap().launches.last().unwrap().clone();
-        assert_eq!(req.prompt, review.prompt);
+        assert_eq!(req.prompt, render_prompt(&run.spec));
         assert!(req.prompt.contains("<<<PLAN\n## Approach\n\nRound once.") && req.prompt.contains("do not deviate silently") && req.prompt.contains("do not push"));
         assert!(req.prompt.contains("planning run's own answer") && !req.prompt.contains("edited and approved"));
     }
@@ -1243,7 +1066,7 @@ mod kinds {
     }
 
     #[tokio::test]
-    async fn a_review_from_a_build_launches_with_the_account_that_was_approved_and_preflight_names_it() {
+    async fn a_review_from_a_build_launches_with_the_account_it_carries() {
         let rig = build_with(vec![(PULL, vec![crate::codehost::github::testserver::draft_pull_reply(12, Some("acme/webshop"), "main")])], None, |s| s.with_cap(10)).await;
         let mut build = approved(&rig, RunSpec { allow_push: true, ..of(&rig, RunKind::Build, 1) }).await;
         build.state = RunState::Done;
@@ -1254,23 +1077,13 @@ mod kinds {
         rig.fx.core.with_code_db("github:ann", |db| db.upsert_code_changes(&[pr], "2026-09-29T00:00:00Z")).unwrap();
 
         let review = RunSpec { build_from_run: Some(build.id.clone()), ..of(&rig, RunKind::Review, 2) };
-        let p = rig.fx.core.draft_run(review, Some(rig.fx.item("CA-1"))).await.unwrap();
-        let read = rig.fx.core.runs_review(&p.id).await.unwrap();
-        let run = rig.fx.core.runs_approve(&p.id, &read.digest).await.unwrap();
-        let pre = rig.svc.preflight(Some(run.spec.clone())).await.unwrap();
-        assert!(pre.rows.iter().any(|r| r.level == Level::Green && r.text.contains(&format!("builder's account from run {}", build.id))), "{pre:?}");
+        let run = rig.fx.core.queue_test_run(review, Some(rig.fx.item("CA-1"))).await.unwrap();
         rig.svc.launch(&run.id).await.unwrap();
         let req = rig.cli.0.lock().unwrap().launches.last().unwrap().clone();
-        assert_eq!(req.prompt, read.prompt);
+        assert_eq!(req.prompt, render_prompt(&run.spec));
         assert!(req.prompt.contains("<<<BUILD\nRounded once and added a test.") && req.prompt.contains("at commit a1b2c3d4e5f6") && req.prompt.contains("claim to check"));
     }
 
-    #[tokio::test]
-    async fn preflight_blocks_a_review_of_a_fork() {
-        let rig = build_with(vec![(PULL, vec![pull_reply(12, "open", Some("mallory/webshop"), "main")])], None, |s| s).await;
-        let p = rig.svc.preflight(Some(of(&rig, RunKind::Review, 1))).await.unwrap();
-        assert!(p.blocking && p.rows.iter().any(|r| r.level == Level::Red && r.text.contains("comes from a fork")), "{p:?}");
-    }
 }
 
 fn fresh_path_of(rig: &Rig) -> PathBuf {
@@ -1317,9 +1130,7 @@ async fn cloning_makes_the_copy_a_clone_that_can_be_drafted_approved_and_launche
     assert_eq!(choice.clones.len(), 1);
 
     let spec = RunSpec { clone_path: clone.path.clone(), ..rig.spec(7) };
-    let p = rig.fx.core.draft_run(spec, Some(rig.fx.item("CA-1"))).await.unwrap();
-    let digest = rig.fx.core.runs_review(&p.id).await.unwrap().digest;
-    let queued = rig.fx.core.runs_approve(&p.id, &digest).await.unwrap();
+    let queued = rig.fx.core.queue_test_run(spec, Some(rig.fx.item("CA-1"))).await.unwrap();
     rig.svc.launch(&queued.id).await.unwrap();
     assert_eq!(rig.get(&queued).await.state, RunState::Launching);
     assert_eq!(rig.cli.0.lock().unwrap().launches[0].cwd, clone.path);
@@ -1341,9 +1152,7 @@ async fn the_launch_still_refuses_a_path_that_is_not_a_clone_of_the_repository()
     let rig = ready().await;
     let wrong = fresh_path_of(&rig);
     clone_with_origin(&wrong, "https://github.com/acme/other");
-    let queued = rig.fx.core.draft_run(RunSpec { clone_path: wrong, ..rig.spec(8) }, Some(rig.fx.item("CA-1"))).await.unwrap();
-    let digest = rig.fx.core.runs_review(&queued.id).await.unwrap().digest;
-    let run = rig.fx.core.runs_approve(&queued.id, &digest).await.unwrap();
+    let run = rig.fx.core.queue_test_run(RunSpec { clone_path: wrong, ..rig.spec(8) }, Some(rig.fx.item("CA-1"))).await.unwrap();
     rig.svc.launch(&run.id).await.unwrap();
     assert_eq!(rig.get(&run).await.state, RunState::Failed);
     assert_eq!(rig.cli.launches(), 0);
@@ -1358,9 +1167,7 @@ mod waiting {
         /// Approved into workstream `ws` on `key`, and left queued.
         async fn queued_in(&self, n: u32, key: &str, ws: &str) -> Run {
             let spec = RunSpec { workstream: Some(ws.into()), ..self.spec(n) };
-            let p = self.fx.core.draft_run(spec, Some(self.fx.item(key))).await.unwrap();
-            let digest = self.fx.core.runs_review(&p.id).await.unwrap().digest;
-            self.fx.core.runs_approve(&p.id, &digest).await.unwrap()
+            self.fx.core.queue_test_run(spec, Some(self.fx.item(key))).await.unwrap()
         }
 
         async fn open_on(&self, key: &str) -> String {

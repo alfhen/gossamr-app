@@ -84,15 +84,13 @@ pub enum Intent {
     /// can tell the text moved and refuse instead of overwriting someone else's edit. `flattened` names what the
     /// description holds that a rewrite turns into plain text (images, tables, panels).
     Rewrite { item: ItemRef, title: Option<TitleChange>, body: Option<BodyChange>, #[serde(default)] flattened: Vec<String> },
-    /// Starts a background agent. Never applied through a tracker: it has its own approval, bound to a digest.
+    /// Legacy: a draft to start an agent, from before Pip started agents itself. Stored ones stay readable; none is written.
     #[serde(rename_all = "camelCase")]
     StartRun { connection_id: String, item: Option<ItemRef>, spec: RunSpec },
-    /// Sends a finished agent back for another pass with this exact message. Never applied through a tracker: the
-    /// person's approval resumes the run.
+    /// Legacy: a draft to send a finished agent back with a message. Stored ones stay readable; none is written.
     #[serde(rename_all = "camelCase")]
     FollowUp { connection_id: String, run_id: String, #[serde(default)] short_id: Option<String>, item: Option<ItemRef>, message: String, reason: String },
-    /// Answers a run that is asking a question with this exact message. Never applied through a tracker: the person's
-    /// approval sends it the way their own answer is sent. `question` is what the run asked when this was drafted.
+    /// Legacy: a draft answer to an agent's question. Stored ones stay readable; none is written.
     #[serde(rename_all = "camelCase")]
     RunAnswer {
         connection_id: String,
@@ -178,18 +176,16 @@ impl Intent {
     }
 
     /// What a newer draft of the same kind replaces in a workstream: one move, one description update, one triage
-    /// update and one breakdown per ticket, one answer per run, and one review per pull request (its repository
-    /// compared without regard to case). Comments legitimately accumulate, and new tickets,
-    /// links, run starts and follow-ups have rules of their own, so they have no key.
+    /// update and one breakdown per ticket, and one review per pull request (its repository compared without regard
+    /// to case). Comments legitimately accumulate, and new tickets and links have rules of their own, so they have no key.
     pub fn supersession_key(&self) -> Option<(&'static str, String)> {
         match self {
             Intent::Transition { item, .. } => Some(("transition", item.external_id.clone())),
             Intent::Rewrite { item, .. } => Some(("rewrite", item.external_id.clone())),
             Intent::Update { item, .. } => Some(("update", item.external_id.clone())),
             Intent::Subtasks { parent, .. } => Some(("subtasks", parent.external_id.clone())),
-            Intent::RunAnswer { run_id, .. } => Some(("runAnswer", run_id.clone())),
             Intent::GithubReview { repo, number, .. } => Some(("githubReview", format!("{}#{number}", repo.to_lowercase()))),
-            Intent::Comment { .. } | Intent::Create { .. } | Intent::Link { .. } | Intent::StartRun { .. } | Intent::FollowUp { .. } => None,
+            Intent::Comment { .. } | Intent::Create { .. } | Intent::Link { .. } | Intent::StartRun { .. } | Intent::FollowUp { .. } | Intent::RunAnswer { .. } => None,
         }
     }
 
@@ -381,7 +377,7 @@ pub struct Proposal {
     pub created: Vec<ItemRef>,
     /// Why the last attempt to apply it failed.
     pub error: Option<String>,
-    /// The run an approved `StartRun` became.
+    /// The run an approved legacy `StartRun` became.
     #[serde(default)]
     pub run: Option<String>,
     /// The newer draft of the same kind that replaced this one in its workstream.
@@ -425,7 +421,7 @@ impl Proposal {
         self.intent.target()
     }
 
-    /// The workstream the draft belongs to: the one it was made in, else the one a run it would start is linked to.
+    /// The workstream the draft belongs to: the one it was made in, else the one a run a legacy draft would start is linked to.
     pub fn workstream(&self) -> Option<&str> {
         self.origin.workstream().or(match &self.intent {
             Intent::StartRun { spec, .. } => spec.workstream.as_deref(),
@@ -434,10 +430,9 @@ impl Proposal {
     }
 
     /// Whether the draft can be put in a workstream after it was made: one Pip or a run made records its workstream in
-    /// its origin, and one that starts a run in the run's spec. A board draft of anything else has no place
-    /// to record one.
+    /// its origin. A board draft has no place to record one.
     pub fn can_join_workstream(&self) -> bool {
-        matches!(self.origin, Origin::Chat { .. } | Origin::Run { .. }) || matches!(self.intent, Intent::StartRun { .. })
+        matches!(self.origin, Origin::Chat { .. } | Origin::Run { .. })
     }
 
     /// Puts the draft in workstream `id`, or back in General with `None`, wherever it records one (`workstream`). Returns
@@ -448,9 +443,6 @@ impl Proposal {
         }
         if let Origin::Chat { workstream, .. } | Origin::Run { workstream, .. } = &mut self.origin {
             *workstream = id.map(Into::into);
-        }
-        if let Intent::StartRun { spec, .. } = &mut self.intent {
-            spec.workstream = id.map(Into::into);
         }
         true
     }
@@ -781,27 +773,7 @@ mod tests {
     }
 
     #[test]
-    fn a_run_draft_is_kept_while_its_item_exists_and_retired_when_it_is_gone_and_its_spec_never_changes() {
-        let item = work_item("1", "todo");
-        let intent = Intent::StartRun { connection_id: "c".into(), item: Some(item.item.clone()), spec: run_spec() };
-        let mut p = proposal(intent.clone(), &item);
-        assert_eq!(run(&p, std::slice::from_ref(&item)), Verdict::Keep);
-
-        let mut changed = work_item("1", "doing");
-        changed.title = "Something else entirely".into();
-        changed.comment_count = 4;
-        let verdict = run(&p, std::slice::from_ref(&changed));
-        assert_eq!(verdict, Verdict::Keep);
-        p.absorb(verdict, now());
-        assert_eq!((p.intent.clone(), p.revisions.len()), (intent, 0));
-
-        assert!(matches!(run(&p, &[]), Verdict::Retire { .. }));
-        let itemless = proposal(Intent::StartRun { connection_id: "c".into(), item: None, spec: run_spec() }, &item);
-        assert_eq!(run(&itemless, &[]), Verdict::Keep);
-    }
-
-    #[test]
-    fn a_run_draft_serialises_with_a_start_run_tag_and_camel_case_fields() {
+    fn a_stored_run_draft_still_reads_with_its_start_run_tag_and_camel_case_fields() {
         let json = serde_json::to_value(Intent::StartRun { connection_id: "c".into(), item: Some(item_ref("1")), spec: run_spec() }).unwrap();
         assert_eq!(json["type"], "startRun");
         assert_eq!(json["connectionId"], "c");
@@ -920,7 +892,7 @@ mod tests {
     }
 
     #[test]
-    fn an_answer_serialises_with_a_run_answer_tag_reads_back_and_is_kept_by_reconcile() {
+    fn a_stored_answer_still_reads_with_its_run_answer_tag_and_is_kept_by_reconcile() {
         let intent = answer(Some("Which database?"));
         let json = serde_json::to_value(&intent).unwrap();
         assert_eq!(json["type"], "runAnswer");
@@ -928,7 +900,7 @@ mod tests {
         assert_eq!((json["message"].as_str(), json["question"].as_str()), (Some("Use staging."), Some("Which database?")));
         assert_eq!(serde_json::from_value::<Intent>(json).unwrap(), intent);
         assert_eq!(intent.target(), Some(&item_ref("1")));
-        assert_eq!(intent.supersession_key(), Some(("runAnswer", "run-1".to_string())));
+        assert_eq!(intent.supersession_key(), None);
         let item = work_item("1", "todo");
         let mut moved = work_item("1", "done");
         moved.comment_count = 3;
@@ -968,12 +940,6 @@ mod tests {
         assert_eq!(chat.workstream(), Some("w1"));
         assert!(chat.set_workstream(None));
         assert_eq!(chat.workstream(), None);
-        let mut start = proposal(Intent::StartRun { connection_id: "c".into(), item: None, spec: run_spec() }, &item);
-        start.origin = Origin::Board;
-        assert!(start.can_join_workstream() && start.set_workstream(Some("w2")));
-        assert_eq!((start.workstream(), start.origin.workstream()), (Some("w2"), None));
-        assert!(start.set_workstream(None));
-        assert_eq!(start.workstream(), None);
         let mut board = comment_on(&item);
         board.origin = Origin::Board;
         let before = board.clone();

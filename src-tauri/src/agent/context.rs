@@ -197,7 +197,7 @@ pub fn draft_line(p: &Proposal) -> String {
     };
     let pending = p.state == ProposalState::Pending;
     let mine = match &p.origin {
-        _ if p.created_by == CreatedBy::Pip && pending && (proposals::person_edited_run(p) || proposals::person_edited_rewrite(p)) => " · edited by the user: retire it if it is wrong, don't revise it".to_string(),
+        _ if p.created_by == CreatedBy::Pip && pending && (proposals::person_edited_rewrite(p)) => " · edited by the user: retire it if it is wrong, don't revise it".to_string(),
         _ if p.created_by == CreatedBy::Pip && pending => " · yours to revise or retire".to_string(),
         Origin::Run { run_id, .. } if matches!(p.intent, Intent::Comment { .. } | Intent::Create { .. } | Intent::Subtasks { .. } | Intent::Rewrite { .. }) => {
             let may = if pending && proposals::left_by_run(p) && !proposals::person_edited_rewrite(p) { "; you may revise its text but not retire it" } else { "" };

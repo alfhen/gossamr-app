@@ -116,7 +116,7 @@ pub trait AgentDriver: Send + Sync {
     /// ticket `key` titled `title`. The error is in words Pip can pass on.
     async fn plan(&self, repo: &str, key: &str, title: &str) -> std::result::Result<ClonePlan, String>;
 
-    /// Hands the queued run to the launcher in the background, as an approved run is: first marked as waiting for a slot
+    /// Hands the queued run to the launcher in the background: first marked as waiting for a slot
     /// when the cap or an earlier run holds it back. Returns the run as it then stands.
     async fn begin(self: Arc<Self>, run_id: String) -> Result<Run>;
 

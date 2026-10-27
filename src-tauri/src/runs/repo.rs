@@ -188,7 +188,7 @@ pub async fn find_clones(git: &Git, repo: &str, roots: &[PathBuf]) -> Vec<LocalC
     found
 }
 
-/// Clone lists kept for ten minutes, so opening the setup sheet repeatedly doesn't rescan the disk.
+/// Clone lists kept for ten minutes, so asking again doesn't rescan the disk.
 #[derive(Default)]
 pub struct CloneCache {
     entries: Mutex<HashMap<String, (Instant, Vec<LocalClone>)>>,

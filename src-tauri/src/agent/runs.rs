@@ -9,7 +9,7 @@ use serde_json::{json, Value};
 use super::mcp::{item_ref, opt, reachable, required, tool, McpState, PipRun, Reply};
 use crate::auth::Scope;
 use crate::domain::workstream::run_labels;
-use crate::domain::{allowed_kinds, clip, default_instruction, pip_chain_kinds, pip_kinds, without_markers, Actor, Intent, ItemRef, Run, RunKind, RunQuery, RunSpec, RunState, WorkstreamEvent, FOCUS_LIMIT, PIP_PROMPT_LIMIT};
+use crate::domain::{allowed_kinds, clip, without_markers, Actor, ItemRef, Run, RunKind, RunQuery, RunSpec, RunState, WorkstreamEvent, FOCUS_LIMIT, PIP_PROMPT_LIMIT};
 use crate::inbox::{Core, PipRunAsk, PipStart};
 use crate::runs::message::Delivery;
 use crate::runs::redact::redact;
@@ -442,30 +442,8 @@ pub(super) fn valid_prompt(text: &str) -> std::result::Result<String, String> {
     Ok(prompt.to_string())
 }
 
-pub(super) const BUILD_NEEDS_PLAN: &str = "A build can only follow a finished plan run: pass from_run with the plan run's id from list_runs. Pip can't propose a build or review on its own.";
 const START_BUILD_NEEDS_PLAN: &str = "A build can only follow a finished plan run: pass from_run with the plan run's id from list_runs.";
-pub(super) const REVIEW_NEEDS_BUILD: &str = "A review can only follow a finished build whose pull request has been found: pass from_run with the build run's id from list_runs. Pip can't propose a build or review on its own.";
 const START_REVIEW_NEEDS_TARGET: &str = "A review needs a pull request: pass pr, or from_run with the id of a finished build whose pull request has been found.";
-const REVIEW_NO_FOCUS: &str = "A review judges the change on its own; it takes no focus note.";
-const CHAIN_KEEPS_KIND: &str = "a chained build or review keeps its kind; retire it and propose another";
-
-/// Whether `kind` follows a finished run of another kind (`pip_chain_kinds`).
-fn chained(kind: RunKind) -> bool {
-    pip_chain_kinds().iter().any(|(k, _)| *k == kind)
-}
-
-/// The kind of a draft Pip made earlier, as revising one reads it.
-fn kind_of(name: &str, from_run: Option<&str>) -> std::result::Result<RunKind, String> {
-    let parsed = RunKind::parse(name);
-    match parsed {
-        Some(RunKind::Build) if from_run.is_none() => return Err(BUILD_NEEDS_PLAN.into()),
-        Some(RunKind::Review) if from_run.is_none() => return Err(REVIEW_NEEDS_BUILD.into()),
-        _ => {}
-    }
-    let allowed: Vec<&str> = pip_kinds().iter().chain(pip_chain_kinds().iter().map(|(k, _)| k)).map(|k| k.as_str()).collect();
-    parsed.filter(|k| pip_kinds().contains(k) || chained(*k)).ok_or_else(|| format!("kind must be {}, not {name}", allowed.join(" or ")))
-}
-
 /// The most agents Pip may start in one turn.
 pub const MAX_STARTS_PER_TURN: u32 = 3;
 
@@ -657,56 +635,6 @@ async fn stop(st: &McpState, pip: &PipRun, args: &Value) -> Reply {
     Ok(format!("Stopped {name}."))
 }
 
-/// A Pip draft of a run with its focus and/or kind changed, or, for one with no ticket, its prompt. Everything else
-/// about it stays as Rust built it.
-pub(super) fn revised(connection_id: &str, item: &Option<ItemRef>, spec: &RunSpec, args: &Value) -> std::result::Result<Intent, String> {
-    let (focus, kind, prompt) = (opt(args, "focus"), opt(args, "kind"), opt(args, "prompt"));
-    if item.is_none() {
-        return revised_ticketless(connection_id, spec, kind, focus, prompt);
-    }
-    if prompt.is_some() {
-        return Err("the instructions of a run on a ticket are not yours to write; pass focus and/or kind".into());
-    }
-    if focus.is_none() && kind.is_none() {
-        return Err("pass focus and/or kind to revise an agent run draft; the rest of it is not yours to change".into());
-    }
-    let wanted = kind.and_then(RunKind::parse).filter(|k| *k != spec.kind);
-    if wanted.is_some_and(|k| chained(k) || chained(spec.kind)) {
-        return Err(CHAIN_KEEPS_KIND.into());
-    }
-    let kind = match kind {
-        Some(name) if RunKind::parse(name) == Some(spec.kind) => spec.kind,
-        Some(name) => kind_of(name, None)?,
-        None => spec.kind,
-    };
-    if kind == RunKind::Review && focus.is_some() {
-        return Err(REVIEW_NO_FOCUS.into());
-    }
-    let mut spec = if kind == spec.kind { spec.clone() } else { RunSpec { kind, instruction: default_instruction(kind).into(), ..spec.clone() } };
-    if !matches!(kind, RunKind::Triage | RunKind::Plan) {
-        spec.findings = None;
-        spec.findings_from_run = None;
-    }
-    if let Some(focus) = focus.map(valid_focus).transpose()? {
-        spec.focus = Some(focus);
-    }
-    Ok(Intent::StartRun { connection_id: connection_id.to_string(), item: item.clone(), spec })
-}
-
-fn revised_ticketless(connection_id: &str, spec: &RunSpec, kind: Option<&str>, focus: Option<&str>, prompt: Option<&str>) -> std::result::Result<Intent, String> {
-    let Some(prompt) = prompt else {
-        return Err("pass prompt to revise an investigation that has no ticket; the rest of it is not yours to change".into());
-    };
-    if focus.is_some() {
-        return Err("A run with no ticket takes no focus note; put what to look at in the prompt.".into());
-    }
-    if let Some(kind) = kind.map(|k| kind_of(k, None)).transpose()?.filter(|k| *k != RunKind::Investigate) {
-        return Err(format!("Only an investigation can run without a ticket; {} needs one.", kind.as_str()));
-    }
-    let spec = RunSpec { instruction: valid_prompt(prompt)?, ..spec.clone() };
-    Ok(Intent::StartRun { connection_id: connection_id.to_string(), item: None, spec })
-}
-
 #[cfg(test)]
 pub(crate) mod testing {
     use std::path::PathBuf;
@@ -826,12 +754,10 @@ mod tests {
             text
         }
 
-        /// An approved run on `key`, changed by `f` and saved.
+        /// A run on `key`, changed by `f` and saved.
         async fn seed(&self, n: u32, key: &str, f: impl FnOnce(&mut Run)) -> Run {
             let spec = RunSpec { clone_path: self.clone.clone(), name: format!("eng-1-fix-cart-{n:04x}"), ..run_spec() };
-            let p = self.fx.core.draft_run(spec, Some(self.fx.item(key))).await.unwrap();
-            let digest = self.fx.core.runs_review(&p.id).await.unwrap().digest;
-            let mut run = self.fx.core.runs_approve(&p.id, &digest).await.unwrap();
+            let mut run = self.fx.core.queue_test_run(spec, Some(self.fx.item(key))).await.unwrap();
             f(&mut run);
             run.result_complete = run.result.is_some();
             self.fx.core.save_run(&run).await.unwrap();

@@ -109,7 +109,7 @@ mod tests {
 
     /// The drafts about the ticket's text: not the drafts that started the runs.
     async fn all(fx: &Fixture) -> Vec<Proposal> {
-        fx.core.proposals(&ProposalQuery::default()).await.unwrap().into_iter().filter(|p| !matches!(p.intent, Intent::StartRun { .. })).collect()
+        fx.core.proposals(&ProposalQuery::default()).await.unwrap().into_iter().collect()
     }
 
     async fn describe(fx: &Fixture, markdown: &str) {

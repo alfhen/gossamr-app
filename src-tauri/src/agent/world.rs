@@ -138,9 +138,7 @@ impl World {
     pub async fn person_starts_as(&self, n: u32, kind: crate::domain::RunKind) -> Run {
         let spec = RunSpec { kind, workstream: Some(self.ws.clone()), ..self.rig.spec(n) };
         let core = &self.rig.fx.core;
-        let p = core.draft_run(spec, Some(self.rig.fx.item("CA-1"))).await.unwrap();
-        let digest = core.runs_review(&p.id).await.unwrap().digest;
-        let queued = core.runs_approve(&p.id, &digest).await.unwrap();
+        let queued = core.queue_test_run(spec, Some(self.rig.fx.item("CA-1"))).await.unwrap();
         self.rig.svc.start_now(&queued.id).await.unwrap()
     }
 
@@ -461,7 +459,7 @@ async fn a_wake_turn_may_drive_agents_but_never_approve_or_write() -> std::resul
     if triage.created_by != crate::domain::CreatedBy::Pip {
         return Err(format!("the triage isn't marked as Pip's: {:?}", triage.created_by));
     }
-    let started = w.events().await.into_iter().find(|e| e.action == "agent_started");
+    let started = w.events().await.into_iter().find(|e| e.action == "agent_started" && e.run_id.as_deref() == Some(triage.id.as_str()));
     if !started.is_some_and(|e| e.actor == crate::domain::Actor::Pip && e.run_id.as_deref() == Some(triage.id.as_str()) && e.detail.as_deref() == Some("triage · wake turn")) {
         return Err("the start isn't recorded as Pip's, in a wake turn".into());
     }
@@ -530,9 +528,7 @@ async fn a_wake_turn_leaves_what_pip_drafts_waiting_for_the_person() -> std::res
 async fn asking_permission(w: &World, n: u32, kind: crate::domain::RunKind, needs: &str) -> Run {
     let (core, rig) = (&w.rig.fx.core, &w.rig);
     let spec = RunSpec { kind, allow_push: kind == crate::domain::RunKind::Build, workstream: Some(w.ws.clone()), ..rig.spec(n) };
-    let p = core.draft_run(spec, Some(rig.fx.item("CA-1"))).await.unwrap();
-    let digest = core.runs_review(&p.id).await.unwrap().digest;
-    let queued = core.runs_approve(&p.id, &digest).await.unwrap();
+    let queued = core.queue_test_run(spec, Some(rig.fx.item("CA-1"))).await.unwrap();
     let run = rig.svc.start_now(&queued.id).await.unwrap();
     rig.poll().await;
     rig.job(run.short_id.as_ref().unwrap(), |j| j.needs = Some(needs.into()));
@@ -677,8 +673,7 @@ async fn read_only_runs_always_launch_restricted() -> std::result::Result<(), St
     w.rig.svc.set_settings(crate::config::AgentSettings { max_runs: 1, ..w.rig.svc.settings() }).map_err(|e| e.to_string())?;
     let core = &w.rig.fx.core;
     let spec = RunSpec { kind: RunKind::Triage, workstream: Some(w.ws.clone()), ..w.rig.spec(3) };
-    let p = core.draft_run(spec, Some(w.rig.fx.item("CA-1"))).await.unwrap();
-    let queued = core.runs_approve(&p.id, &core.runs_review(&p.id).await.unwrap().digest).await.unwrap();
+    let queued = core.queue_test_run(spec, Some(w.rig.fx.item("CA-1"))).await.unwrap();
     w.rig.svc.launch_waiting().await.map_err(|e| e.to_string())?;
     let waiting = w.rig.get(&queued).await;
     if waiting.state != RunState::Queued || waiting.slot_wait_since.is_none() || w.rig.cli.launches() != 2 {

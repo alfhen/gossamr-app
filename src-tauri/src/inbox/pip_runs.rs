@@ -9,7 +9,7 @@ use super::ticket_context::snapshot;
 use super::Core;
 use crate::auth::Scope;
 use crate::domain::{
-    default_instruction, pip_chain_kinds, pip_kinds, Actor, ClonePlan, CodeChangeKind, ContainerRef, Intent, ItemRef, Proposal, ProposalQuery, Run, RunEvent, RunKind, RunQuery, RunSpec, StateKind, WorkstreamEvent,
+    default_instruction, pip_chain_kinds, pip_kinds, Actor, ClonePlan, CodeChangeKind, ContainerRef, ItemRef, Run, RunEvent, RunKind, RunQuery, RunSpec, WorkstreamEvent,
 };
 use crate::error::{Error, Result};
 use crate::proposals;
@@ -279,8 +279,8 @@ impl Core {
         Ok((source, work.title))
     }
 
-    /// The spec of a build or review Pip starts as the successor of the finished run `ask.from_run`. It runs the same
-    /// handoff steps as the person's `draft_run`, so what it carries comes from that run and its drafts, never from Pip:
+    /// The spec of a build or review Pip starts as the successor of the finished run `ask.from_run`. It carries what
+    /// comes from that run and its drafts, never from Pip:
     /// a build the plan the person settled on the ticket (approved, or skipped for the run's own answer; refused before
     /// that) and a review the builder's account and the pull request pinned to its commit. Its repository is the source
     /// run's and its clone what `plan` found. Pip's own words are only a focus note, and a review takes none. A build
@@ -413,142 +413,60 @@ fn chain_ticket(db: &crate::db::Db, connection_id: &str, item: &crate::domain::I
     Ok(work)
 }
 
+#[cfg(test)]
 impl Core {
-    /// Marks a follow-up as sent: applied, with the run it resumed.
-    pub async fn follow_up_sent(&self, id: &str, run_id: &str) -> Result<Proposal> {
-        self.with_proposals(|db| {
-            let mut p = db.proposal(id)?.ok_or_else(|| refuse("that draft no longer exists"))?;
-            p.state = crate::domain::ProposalState::Applied;
-            p.run = Some(run_id.to_string());
-            p.error = None;
-            p.updated_at = Utc::now();
-            db.save_proposal(&p)?;
-            proposals::record(db, &p, crate::domain::Actor::Person, "draft_approved", p.updated_at);
-            Ok(p)
-        })
-        .await
-    }
-
-    /// Keeps a follow-up pending with the reason sending it failed, so the person can try again. `kept_on_run` is the message that
-    /// now waits on the stopped run, as it was when the send began, which is what lets a retry (even of an edited message) go ahead.
-    pub async fn follow_up_failed(&self, id: &str, why: &str, kept_on_run: Option<&str>) -> Result<()> {
-        self.with_proposals(|db| {
-            if let Some(mut p) = db.proposal(id)? {
-                if let Some(sent) = kept_on_run {
-                    let mut attempted = p.intent.clone();
-                    if let Intent::FollowUp { message, .. } = &mut attempted {
-                        *message = sent.to_string();
-                    }
-                    p.revisions.push(crate::domain::Revision { at: Utc::now(), note: proposals::SEND_FAILED_NOTE.into(), intent: attempted });
-                }
-                p.error = Some(why.to_string());
-                p.updated_at = Utc::now();
-                db.save_proposal(&p)?;
-            }
-            Ok(())
-        })
-        .await
-    }
-
-    /// An answer Pip suggests to a run that is asking a question, while answering `request_id`: the exact message the
-    /// person reads, may edit and sends. Nothing is sent; approving the draft answers the run the way the person's own
-    /// answer does. Refused unless the run belongs to the account and is waiting for an answer. The draft keeps what the
-    /// run asked and belongs to the run's workstream, if it has one, whichever conversation asked; there a newer answer
-    /// replaces Pip's older one, and outside one a second is refused while the first waits.
-    #[cfg(test)]
-    pub async fn propose_answer_as_pip(&self, scope: &Scope, request_id: &str, run_id: &str, message: &str) -> Result<Proposal> {
-        let message = crate::runs::result::scrub(message).trim().to_string();
-        let run = self.run_in(scope, run_id).await?.ok_or_else(|| refuse(format!("there is no run {run_id} for this account")))?;
-        if run.state != crate::domain::RunState::NeedsAnswer {
-            return Err(refuse(format!("Run {run_id} is {}, so it isn't waiting for an answer.", run.state.as_str())));
+    /// Queues a run for `spec` the way a Pip start does, for tests that need a run and not the tool call: the clone is
+    /// resolved, what the spec follows is read from the run it names, and the ticket text from the cache.
+    pub async fn queue_test_run(&self, mut spec: RunSpec, item: Option<ItemRef>) -> Result<Run> {
+        let scope = self.scope().await?;
+        self.require_watched_repo(&spec.repo)?;
+        spec.report = true;
+        spec.clone_path = self.resolve_clone(&spec.clone_path)?;
+        if spec.instruction.trim().is_empty() {
+            spec.instruction = if spec.project.is_some() { "Look into this: ".into() } else { default_instruction(spec.kind).into() };
         }
-        let question = crate::runs::answer::asked(run.needs.as_deref());
-        let connection_id = Connection::jira_id(scope);
-        let intent = Intent::RunAnswer { connection_id, run_id: run.id.clone(), short_id: run.short_id.as_ref().map(ToString::to_string), item: run.item.clone(), message, question };
-        let at = Utc::now();
-        self.with_db_for(scope, |db| {
-            if run.spec.workstream.is_none() {
-                let query = ProposalQuery { states: Some(vec![StateKind::Pending]), ..Default::default() };
-                if let Some(open) = db.proposals(&query)?.into_iter().find(|p| matches!(&p.intent, Intent::RunAnswer { run_id: r, .. } if *r == run.id)) {
-                    return Err(refuse(format!("An answer for run {} is already waiting (proposal {}). Revise it or leave it to the user; see list_proposals.", run.id, open.id)));
-                }
+        if spec.kind == RunKind::Build && spec.workstream.is_some() {
+            spec.allow_push = true;
+        }
+        spec.build_account = None;
+        if let Some(from) = spec.build_from_run.take() {
+            if item.is_none() {
+                return Err(refuse("A review of a build needs a ticket"));
             }
-            proposals::create(db, proposals::Draft::from_pip(request_id, run.spec.workstream.as_deref(), intent, None), at)
-        })
-        .await
-    }
-
-    /// Marks an answer draft as sent: applied, with the run it answered, by the person. `sent` is the text that went,
-    /// which is recorded as the person's revision when it differs from the draft's.
-    pub async fn answer_draft_sent(&self, id: &str, run_id: &str, sent: &str) -> Result<Proposal> {
-        self.with_proposals(|db| {
-            let mut p = db.proposal(id)?.ok_or_else(|| refuse("that draft no longer exists"))?;
-            let at = Utc::now();
-            if let Intent::RunAnswer { message, .. } = &p.intent {
-                if message.trim() != sent.trim() {
-                    let mut went = p.intent.clone();
-                    if let Intent::RunAnswer { message, .. } = &mut went {
-                        *message = sent.trim().to_string();
-                    }
-                    p.revisions.push(crate::domain::Revision { at, note: proposals::EDITED_NOTE.into(), intent: went.clone() });
-                    p.intent = went;
-                }
+            spec.build_from_run = Some(self.attach_build_account(&mut spec, &from, item.as_ref()).await?);
+        }
+        if spec.kind == RunKind::Verify {
+            spec.pr = None;
+            spec.pr_sha = None;
+        }
+        if spec.kind == RunKind::Review {
+            let change = self.review_target(&spec).await?;
+            spec.base = change.base_ref.unwrap_or(spec.base);
+            spec.pr_sha = change.sha;
+        }
+        spec.plan = None;
+        spec.plan_approved = false;
+        if let Some(from) = spec.plan_from_run.take() {
+            if item.is_none() {
+                return Err(refuse("Build needs a ticket"));
             }
-            p.state = crate::domain::ProposalState::Applied;
-            p.run = Some(run_id.to_string());
-            p.error = None;
-            p.updated_at = at;
-            db.save_proposal(&p)?;
-            proposals::record(db, &p, crate::domain::Actor::Person, "draft_approved", at);
-            Ok(p)
-        })
-        .await
-    }
-
-    /// Keeps an answer draft pending with the reason sending it failed, so the person can try again. A draft decided
-    /// meanwhile is left as it is.
-    pub async fn answer_draft_failed(&self, id: &str, why: &str) -> Result<()> {
-        self.with_proposals(|db| {
-            if let Some(mut p) = db.proposal(id)?.filter(|p| p.state == crate::domain::ProposalState::Pending) {
-                p.error = Some(why.to_string());
-                p.updated_at = Utc::now();
-                db.save_proposal(&p)?;
+            spec.plan_from_run = Some(self.attach_plan(&mut spec, &from, item.as_ref()).await?);
+        }
+        spec.findings = None;
+        if let Some(from) = spec.findings_from_run.take() {
+            if item.is_none() {
+                return Err(refuse("Findings from an investigation need a ticket"));
             }
+            spec.findings_from_run = Some(self.attach_findings(&mut spec, &from, item.as_ref()).await?);
+        }
+        let links = item.as_ref().map(|i| self.ticket_dev_links(i)).unwrap_or_default();
+        self.with_db_for(&scope, |db| {
+            spec.ticket_block = item.as_ref().map(|i| db.item(i)).transpose()?.flatten().map(|w| snapshot(db, &w, &links, spec.plan.is_some()));
             Ok(())
         })
-        .await
-    }
-
-    /// Retires the pending answer drafts for `run_id` but `except`, with `reason`: the run was answered, or stopped
-    /// asking. Returns how many there were.
-    pub async fn retire_answer_drafts(&self, run_id: &str, except: Option<&str>, reason: &str) -> Result<usize> {
-        self.retire_answers_where(run_id, reason, |p, _| Some(p.id.as_str()) != except).await
-    }
-
-    /// Retires the pending answer drafts for `run_id` that don't answer what it asks now, with `reason`: every one when
-    /// it isn't `asking`, else those that kept another `question` than the one it asks, as `answer::asked` keeps it. A
-    /// draft that kept no question stays only while the run asks one without words, as when it was drafted. Returns
-    /// how many there were.
-    pub async fn retire_answer_drafts_not_for(&self, run_id: &str, asking: bool, question: Option<&str>, reason: &str) -> Result<usize> {
-        self.retire_answers_where(run_id, reason, |_, kept| !asking || kept != question).await
-    }
-
-    /// Retires the pending answer drafts for `run_id` that `retire` picks, given each with the question it kept.
-    async fn retire_answers_where(&self, run_id: &str, reason: &str, retire: impl Fn(&Proposal, Option<&str>) -> bool) -> Result<usize> {
-        self.with_proposals(|db| {
-            let query = ProposalQuery { states: Some(vec![StateKind::Pending]), ..Default::default() };
-            let open: Vec<Proposal> = db
-                .proposals(&query)?
-                .into_iter()
-                .filter(|p| matches!(&p.intent, Intent::RunAnswer { run_id: r, question, .. } if r == run_id && retire(p, question.as_deref())))
-                .collect();
-            let at = Utc::now();
-            for p in &open {
-                let retired = proposals::retire(db, &p.id, reason, at)?;
-                proposals::record(db, &retired, crate::domain::Actor::Supervisor, "draft_retired", at);
-            }
-            Ok(open.len())
-        })
-        .await
+        .await?;
+        let key = format!("test:{}", proposals::new_id()?);
+        let start = PipStart { request_id: "test", key: &key, wake: false };
+        self.commit_pip_run(&scope, &start, item, spec).await.map(|(run, _)| run)
     }
 }

@@ -96,27 +96,21 @@ impl Rig {
         RunSpec { clone_path: self.clone.clone(), name: format!("eng-1-fix-cart-{n:04x}"), ..run_spec() }
     }
 
-    /// Approved and launched through the scripted CLI: `Launching`, with a short id and a listed session.
+    /// Queued and launched through the scripted CLI: `Launching`, with a short id and a listed session.
     pub async fn launched(&self, n: u32) -> Run {
-        let p = self.fx.core.draft_run(self.spec(n), Some(self.fx.item("CA-1"))).await.unwrap();
-        let digest = self.fx.core.runs_review(&p.id).await.unwrap().digest;
-        let queued = self.fx.core.runs_approve(&p.id, &digest).await.unwrap();
+        let queued = self.fx.core.queue_test_run(self.spec(n), Some(self.fx.item("CA-1"))).await.unwrap();
         self.svc.start_now(&queued.id).await.unwrap()
     }
 
-    /// Approved with the report paragraph asked for and launched; the service must have been built with `reporting` to offer the tools.
+    /// Queued with the report paragraph asked for and launched; the service must have been built with `reporting` to offer the tools.
     pub async fn launched_reporting(&self, n: u32, kind: crate::domain::RunKind) -> Run {
-        let p = self.fx.core.draft_run(RunSpec { kind, report: true, ..self.spec(n) }, Some(self.fx.item("CA-1"))).await.unwrap();
-        let digest = self.fx.core.runs_review(&p.id).await.unwrap().digest;
-        let queued = self.fx.core.runs_approve(&p.id, &digest).await.unwrap();
+        let queued = self.fx.core.queue_test_run(RunSpec { kind, report: true, ..self.spec(n) }, Some(self.fx.item("CA-1"))).await.unwrap();
         self.svc.start_now(&queued.id).await.unwrap()
     }
 
     /// Like `launched`, for a run of another kind on the ticket.
     pub async fn launched_as(&self, n: u32, kind: crate::domain::RunKind) -> Run {
-        let p = self.fx.core.draft_run(RunSpec { kind, ..self.spec(n) }, Some(self.fx.item("CA-1"))).await.unwrap();
-        let digest = self.fx.core.runs_review(&p.id).await.unwrap().digest;
-        let queued = self.fx.core.runs_approve(&p.id, &digest).await.unwrap();
+        let queued = self.fx.core.queue_test_run(RunSpec { kind, ..self.spec(n) }, Some(self.fx.item("CA-1"))).await.unwrap();
         self.svc.start_now(&queued.id).await.unwrap()
     }
 
@@ -124,31 +118,25 @@ impl Rig {
     pub async fn launched_ticketless(&self, n: u32) -> Run {
         let project = self.fx.core.containers_in(&self.fx.scope).await.unwrap()[0].container_ref.clone();
         let spec = RunSpec { project: Some(project), instruction: String::new(), ..self.spec(n) };
-        let p = self.fx.core.draft_run(spec, None).await.unwrap();
-        let digest = self.fx.core.runs_review(&p.id).await.unwrap().digest;
-        let queued = self.fx.core.runs_approve(&p.id, &digest).await.unwrap();
+        let queued = self.fx.core.queue_test_run(spec, None).await.unwrap();
         self.svc.start_now(&queued.id).await.unwrap()
     }
 
     /// Like `launched`, for a run in a workstream opened on the ticket; with the workstream's id.
     pub async fn launched_in_workstream(&self, n: u32) -> (Run, String) {
         let ws = self.fx.core.open_workstream(&self.fx.scope, Some(self.fx.item("CA-1")), None).await.unwrap();
-        let p = self.fx.core.draft_run(RunSpec { workstream: Some(ws.id.clone()), ..self.spec(n) }, Some(self.fx.item("CA-1"))).await.unwrap();
-        let digest = self.fx.core.runs_review(&p.id).await.unwrap().digest;
-        let queued = self.fx.core.runs_approve(&p.id, &digest).await.unwrap();
+        let queued = self.fx.core.queue_test_run(RunSpec { workstream: Some(ws.id.clone()), ..self.spec(n) }, Some(self.fx.item("CA-1"))).await.unwrap();
         (self.svc.start_now(&queued.id).await.unwrap(), ws.id)
     }
 
     /// What the person did to runs, as workstream `ws`'s audit has it: action, run id and detail.
     pub async fn run_actions(&self, ws: &str) -> Vec<(String, Option<String>, Option<String>)> {
         let events = self.fx.core.workstream_events(&self.fx.scope, ws).await.unwrap();
-        events.into_iter().filter(|e| e.action.starts_with("run_") && e.action != "run_approved").map(|e| (e.action, e.run_id, e.detail)).collect()
+        events.into_iter().filter(|e| e.action.starts_with("run_") && e.action != "agent_started").map(|e| (e.action, e.run_id, e.detail)).collect()
     }
 
     pub async fn queued(&self, n: u32) -> Run {
-        let p = self.fx.core.draft_run(self.spec(n), Some(self.fx.item("CA-1"))).await.unwrap();
-        let digest = self.fx.core.runs_review(&p.id).await.unwrap().digest;
-        self.fx.core.runs_approve(&p.id, &digest).await.unwrap()
+        self.fx.core.queue_test_run(self.spec(n), Some(self.fx.item("CA-1"))).await.unwrap()
     }
 
     pub async fn get(&self, run: &Run) -> Run {

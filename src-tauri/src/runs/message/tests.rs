@@ -32,7 +32,7 @@ fn resumes(rig: &Rig) -> Vec<ResumeCall> {
 /// What Pip did to the workstream's runs, as its audit has it: actor, action and detail.
 async fn pip_lines(rig: &Rig, ws: &str) -> Vec<(String, Option<String>)> {
     let events = rig.fx.core.workstream_events(&rig.fx.scope, ws).await.unwrap();
-    events.into_iter().filter(|e| e.actor == Actor::Pip).map(|e| (e.action, e.detail)).collect()
+    events.into_iter().filter(|e| e.actor == Actor::Pip && e.action != "agent_started").map(|e| (e.action, e.detail)).collect()
 }
 
 /// The session lists as finished, as it does once its turn is over.
