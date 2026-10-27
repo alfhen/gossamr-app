@@ -20,7 +20,7 @@ async function startInvestigation(page: Page) {
 }
 
 /** The newest run of `kind`, as the sample backend holds it. */
-const newest = async (page: Page, kind: string) => (await mockRuns(page)).find((r) => r.kind === kind) ?? null;
+const newest = async (page: Page, kind: string) => (await mockRuns(page)).find((r) => r.step === kind) ?? null;
 
 test("while a run works, the header says Pip is woken when it finishes", async ({ page }) => {
   await openApp(page, SAMPLE);
@@ -30,7 +30,7 @@ test("while a run works, the header says Pip is woken when it finishes", async (
   await advanceRuns(page, 2, r1.id);
   await expect.poll(async () => (await mockRuns(page)).find((r) => r.id === r1.id)?.state).toBe("working");
   await expect(nextLine(page)).toHaveAttribute("data-next-step", "running");
-  await expect(nextLine(page)).toHaveText("Next: when R1 (Investigate) finishes, Pip is woken to decide what comes next.");
+  await expect(nextLine(page)).toHaveText("Next: when R1 (Investigator) finishes, Pip is woken to decide what comes next.");
   await expect(nextLine(page).locator("button")).toHaveCount(0);
 });
 

@@ -352,7 +352,6 @@ async fn words_from_a_job_are_capped() {
 async fn being_quiet_never_notifies_and_new_tokens_reset_the_clock() {
     let (rig, run) = launched().await;
     let id = run.short_id.clone().unwrap();
-    rig.svc.set_settings(crate::config::AgentSettings { wall_clock_minutes: 0, ..Default::default() }).unwrap();
     rig.poll().await;
     rig.set(&run, |r| {
         r.launched_at = Some(Utc::now() - Span::hours(3));
@@ -424,54 +423,10 @@ fn focusing_within_30_seconds_opens_the_run_once_and_later_opens_nothing() {
 }
 
 #[tokio::test]
-async fn a_run_past_the_time_limit_is_stopped_once_with_the_reason_recorded_and_one_notice() {
+async fn a_run_is_never_stopped_for_how_long_it_has_run_or_how_many_tokens_it_used() {
     let (rig, run) = launched().await;
-    rig.poll().await;
-    rig.svc.set_settings(crate::config::AgentSettings { wall_clock_minutes: 30, ..Default::default() }).unwrap();
-    let id = run.short_id.clone().unwrap();
-
-    rig.svc.poll_at(Utc::now() + Span::minutes(29)).await;
-    assert_eq!(rig.get(&run).await.state, RunState::Working);
-    assert!(rig.cli.0.lock().unwrap().stops.is_empty());
-
-    rig.svc.poll_at(Utc::now() + Span::minutes(31)).await;
-    let stopped = rig.get(&run).await;
-    assert_eq!(stopped.state, RunState::Stopped);
-    assert_eq!(stopped.error.as_deref(), Some("Stopped by Gossamr: it passed the 30 minute limit"));
-    assert!(stopped.ended_at.is_some());
-    assert_eq!(rig.cli.0.lock().unwrap().stops, [id.to_string()]);
-    let events = rig.fx.core.run_events(&run.id).await.unwrap();
-    assert_eq!(events.last().map(|e| (e.kind.as_str(), e.text.as_str())), Some(("limit", "Stopped by Gossamr: it passed the 30 minute limit")));
-    assert_eq!(rig.noticed(), [(Attention::Limit, RunState::Stopped)]);
-    assert!(rig.svc.index.live().is_empty());
-
-    rig.svc.poll_at(Utc::now() + Span::minutes(90)).await;
-    assert_eq!(rig.cli.0.lock().unwrap().stops.len(), 1, "a stopped run is not stopped again");
-    assert_eq!(rig.noticed().len(), 1);
-}
-
-#[tokio::test]
-async fn a_run_past_the_token_limit_is_stopped_and_one_waiting_on_you_is_too() {
-    let (rig, run) = launched().await;
-    let id = run.short_id.clone().unwrap();
-    rig.svc.set_settings(crate::config::AgentSettings { token_cap: 2_000, wall_clock_minutes: 0, ..Default::default() }).unwrap();
-    rig.job(&id, |j| j.tokens = Some(1_999));
-    rig.poll().await;
-    assert_eq!(rig.get(&run).await.state, RunState::Working);
-
-    rig.job(&id, |j| j.tokens = Some(2_000));
-    rig.session(&run, permission);
-    rig.poll().await;
-    let stopped = rig.get(&run).await;
-    assert_eq!((stopped.state, stopped.needs), (RunState::Stopped, None));
-    assert_eq!(stopped.error.as_deref(), Some("Stopped by Gossamr: it passed the 2,000 token limit"));
-}
-
-#[tokio::test]
-async fn limits_of_zero_never_stop_a_run() {
-    let (rig, run) = launched().await;
-    rig.svc.set_settings(crate::config::AgentSettings { token_cap: 0, wall_clock_minutes: 0, ..Default::default() }).unwrap();
     rig.job(run.short_id.as_ref().unwrap(), |j| j.tokens = Some(u64::MAX / 2));
+    rig.set(&run, |r| r.launched_at = Some(Utc::now() - Span::days(3))).await;
     rig.svc.poll_at(Utc::now() + Span::days(3)).await;
     assert_eq!(rig.get(&run).await.state, RunState::Working);
     assert!(rig.cli.0.lock().unwrap().stops.is_empty());
@@ -630,7 +585,7 @@ const BREAKDOWN_ANSWER: &str = "Sizing: large.\n\nSubtasks:\n- Add a backoff to 
 #[tokio::test]
 async fn a_triage_that_proposes_a_breakdown_leaves_subtasks_beside_its_description_update_and_a_restart_does_not_make_another() {
     let rig = ready().await;
-    let run = rig.launched_as(1, crate::domain::RunKind::Triage).await;
+    let run = rig.launched_as(1, crate::domain::ResultKind::Triage).await;
     rig.poll().await;
     finish_with(&rig, &run, BREAKDOWN_ANSWER);
     rig.poll().await;
@@ -661,7 +616,7 @@ async fn a_triage_that_proposes_a_breakdown_leaves_subtasks_beside_its_descripti
 #[tokio::test]
 async fn only_a_triage_with_a_subtasks_section_proposes_one_and_the_setting_applies() {
     let rig = ready().await;
-    let plain = rig.launched_as(1, crate::domain::RunKind::Triage).await;
+    let plain = rig.launched_as(1, crate::domain::ResultKind::Triage).await;
     rig.poll().await;
     finish_with(&rig, &plain, "It fits as one piece.\n\nFor Jira:\nSmall; do it as one ticket.");
     rig.poll().await;
@@ -677,7 +632,7 @@ async fn only_a_triage_with_a_subtasks_section_proposes_one_and_the_setting_appl
 
     let rig = ready().await;
     rig.svc.set_settings(crate::config::AgentSettings { draft_on_finish: false, ..rig.svc.settings() }).unwrap();
-    let triage = rig.launched_as(1, crate::domain::RunKind::Triage).await;
+    let triage = rig.launched_as(1, crate::domain::ResultKind::Triage).await;
     rig.poll().await;
     finish_with(&rig, &triage, BREAKDOWN_ANSWER);
     rig.poll().await;
@@ -695,7 +650,7 @@ const SECOND_PLAN_ANSWER: &str = "## Approach\n\nRound twice.\n\nFor Jira:\nPlan
 #[tokio::test]
 async fn a_plan_that_finishes_leaves_its_status_comment_and_a_description_update_and_says_so_once() {
     let rig = ready().await;
-    let run = rig.launched_as(1, crate::domain::RunKind::Plan).await;
+    let run = rig.launched_as(1, crate::domain::ResultKind::Plan).await;
     rig.poll().await;
     finish_with(&rig, &run, PLAN_ANSWER);
     rig.poll().await;
@@ -717,7 +672,7 @@ async fn a_plan_that_finishes_leaves_its_status_comment_and_a_description_update
 #[tokio::test]
 async fn a_continued_plan_that_finishes_again_replaces_the_waiting_description_update() {
     let rig = ready().await;
-    let run = rig.launched_as(1, crate::domain::RunKind::Plan).await;
+    let run = rig.launched_as(1, crate::domain::ResultKind::Plan).await;
     rig.poll().await;
     finish_with(&rig, &run, PLAN_ANSWER);
     rig.poll().await;
@@ -737,7 +692,7 @@ async fn a_continued_plan_that_finishes_again_replaces_the_waiting_description_u
 async fn a_plan_on_a_tracker_that_cannot_edit_text_notifies_like_any_other_and_the_setting_applies() {
     let rig = ready().await;
     rig.fx.tracker.cannot_edit_text.store(true, std::sync::atomic::Ordering::SeqCst);
-    let run = rig.launched_as(1, crate::domain::RunKind::Plan).await;
+    let run = rig.launched_as(1, crate::domain::ResultKind::Plan).await;
     rig.poll().await;
     finish_with(&rig, &run, PLAN_ANSWER);
     rig.poll().await;
@@ -746,7 +701,7 @@ async fn a_plan_on_a_tracker_that_cannot_edit_text_notifies_like_any_other_and_t
 
     let rig = ready().await;
     rig.svc.set_settings(crate::config::AgentSettings { draft_on_finish: false, ..rig.svc.settings() }).unwrap();
-    let run = rig.launched_as(1, crate::domain::RunKind::Plan).await;
+    let run = rig.launched_as(1, crate::domain::ResultKind::Plan).await;
     rig.poll().await;
     finish_with(&rig, &run, PLAN_ANSWER);
     rig.poll().await;
@@ -1107,30 +1062,6 @@ async fn a_finished_run_that_is_asked_something_or_blocked_after_carrying_on_not
 }
 
 #[tokio::test]
-async fn limits_never_stop_a_finished_idle_session_or_one_the_person_carried_on() {
-    let (rig, run) = attached_and_answered().await;
-    rig.svc.set_settings(crate::config::AgentSettings { wall_clock_minutes: 30, token_cap: 1, ..Default::default() }).unwrap();
-    rig.set(&run, |r| {
-        r.launched_at = Some(Utc::now() - Span::hours(5));
-        r.tokens = Some(900_000);
-    })
-    .await;
-    for _ in 0..3 {
-        rig.poll().await;
-    }
-    assert_eq!(rig.get(&run).await.state, RunState::Done);
-
-    typed(&rig, &run, "2026-01-01T00:10:00Z");
-    rig.session(&run, working);
-    rig.job(run.short_id.as_ref().unwrap(), |j| j.tokens = Some(950_000));
-    rig.poll().await;
-    rig.poll().await;
-    assert_eq!(rig.get(&run).await.state, RunState::Working);
-    assert!(rig.cli.0.lock().unwrap().stops.is_empty(), "the session was never stopped for a limit");
-    assert!(!rig.noticed().iter().any(|(why, _)| *why == Attention::Limit));
-}
-
-#[tokio::test]
 async fn a_finished_run_is_only_reopened_by_a_live_session_that_is_working_or_asking() {
     let (rig, run) = attached_and_answered().await;
     let before = rig.get(&run).await;
@@ -1205,60 +1136,6 @@ fn restarted(rig: &Rig) -> RunService {
 }
 
 #[tokio::test]
-async fn a_run_that_waits_three_hours_for_an_answer_and_then_works_ten_minutes_is_not_stopped_by_the_hour_limit() {
-    let (rig, run) = launched().await;
-    rig.svc.set_settings(crate::config::AgentSettings { wall_clock_minutes: 60, ..Default::default() }).unwrap();
-    let t0 = Utc::now();
-    let at = |minutes: i64| t0 + Span::minutes(minutes);
-    rig.poll().await;
-    rig.svc.poll_at(at(5)).await;
-
-    rig.session(&run, asking);
-    rig.svc.poll_at(at(6)).await;
-    assert_eq!(rig.get(&run).await.state, RunState::NeedsAnswer);
-
-    rig.svc.poll_at(at(60 + 6)).await;
-    rig.svc.poll_at(at(180)).await;
-    let waiting = rig.get(&run).await;
-    assert_eq!((waiting.state, waiting.error), (RunState::NeedsAnswer, None), "three hours of waiting is not three hours of work");
-    assert!(rig.cli.0.lock().unwrap().stops.is_empty());
-
-    let app = restarted(&rig);
-    let kept = rig.get(&run).await;
-    assert_eq!(kept.waiting_since.map(|s| (s - t0).num_minutes()), Some(6), "the wait is stored on the run, not in memory");
-    rig.session(&run, working);
-    app.poll_at(at(186)).await;
-    let back = rig.get(&run).await;
-    assert_eq!((back.state, back.waiting_since), (RunState::Working, None));
-    assert_eq!(back.waited_secs / 60, 180, "the wait was added to the run once it was back at work");
-
-    app.poll_at(at(196)).await;
-    assert_eq!(rig.get(&run).await.state, RunState::Working, "15 minutes of work in 196");
-    app.poll_at(at(186 + 55)).await;
-    let over = rig.get(&run).await;
-    assert_eq!(over.state, RunState::Stopped, "an hour of work in 241 minutes");
-    assert_eq!(over.error.as_deref(), Some("Stopped by Gossamr: it passed the 60 minute limit"));
-    assert!(over.stopped_by_limit);
-}
-
-#[tokio::test]
-async fn waiting_for_a_permission_or_a_sign_in_pauses_the_clock_as_well() {
-    for waiting in [permission as fn(&mut AgentEntry), |e| {
-        e.state = Some("blocked".into());
-        e.needs = Some("login required \u{2014} run /login".into());
-    }] {
-        let (rig, run) = launched().await;
-        rig.svc.set_settings(crate::config::AgentSettings { wall_clock_minutes: 30, ..Default::default() }).unwrap();
-        rig.poll().await;
-        rig.session(&run, waiting);
-        rig.svc.poll_at(Utc::now() + Span::minutes(1)).await;
-        rig.svc.poll_at(Utc::now() + Span::hours(5)).await;
-        let held = rig.get(&run).await;
-        assert!(matches!(held.state, RunState::NeedsPermission | RunState::SystemBlocked), "{:?}", held.state);
-    }
-}
-
-#[tokio::test]
 async fn a_listing_read_while_an_answer_is_in_flight_is_not_applied_over_the_answer() {
     let (rig, run) = launched().await;
     rig.poll().await;
@@ -1312,7 +1189,7 @@ async fn a_stopped_run_whose_session_is_live_again_is_picked_up_and_follows_it()
     rig.svc.poll_at(Utc::now() + Span::minutes(2)).await;
     let asking = rig.get(&run).await;
     assert_eq!((asking.state, asking.needs.as_deref(), asking.ended_at), (RunState::NeedsAnswer, Some("Which branch?"), None));
-    assert!(asking.continued_at.is_some() && asking.error.is_none() && !asking.stopped_by_limit);
+    assert!(asking.continued_at.is_some() && asking.error.is_none());
     assert_eq!(rig.noticed().last(), Some(&(Attention::Needs, RunState::NeedsAnswer)));
     assert!(rig.svc.index.live().iter().any(|e| e.run_id == run.id));
 
@@ -1337,34 +1214,15 @@ async fn a_stopped_run_is_not_picked_up_while_its_answer_is_unsent_or_it_was_rem
     assert_eq!(rig.get(&run).await.state, RunState::Stopped);
 }
 
-#[tokio::test]
-async fn a_run_stopped_for_a_limit_is_picked_up_when_the_person_carries_on_and_is_then_theirs() {
-    let (rig, run) = launched().await;
-    rig.svc.set_settings(crate::config::AgentSettings { wall_clock_minutes: 30, ..Default::default() }).unwrap();
-    rig.poll().await;
-    rig.svc.poll_at(Utc::now() + Span::minutes(31)).await;
-    let stopped = rig.get(&run).await;
-    assert!(stopped.state == RunState::Stopped && stopped.stopped_by_limit);
-
-    rig.session(&run, working);
-    rig.svc.poll_at(Utc::now() + Span::minutes(40)).await;
-    let carried = rig.get(&run).await;
-    assert_eq!(carried.state, RunState::Working);
-    assert!(!carried.stopped_by_limit && carried.continued_at.is_some() && carried.error.is_none());
-    rig.svc.poll_at(Utc::now() + Span::hours(9)).await;
-    assert_eq!(rig.get(&run).await.state, RunState::Working, "the limit doesn't stop it a second time");
-    assert_eq!(rig.cli.0.lock().unwrap().stops.len(), 1);
-}
-
 /// Whether a code sync was asked for since the last look: the sync loop's `Notify` holds one permit until taken.
 async fn sync_requested(rig: &Rig) -> bool {
     tokio::time::timeout(std::time::Duration::from_millis(200), rig.fx.core.wake.notified()).await.is_ok()
 }
 
 /// Approved and launched in a workstream opened on the ticket, as a run of `kind`.
-async fn launched_in_workstream_as(rig: &Rig, n: u32, kind: RunKind) -> Run {
+async fn launched_in_workstream_as(rig: &Rig, n: u32, kind: ResultKind) -> Run {
     let ws = rig.fx.core.open_workstream(&rig.fx.scope, Some(rig.fx.item("CA-1")), None).await.unwrap();
-    let spec = crate::domain::RunSpec { kind, workstream: Some(ws.id.clone()), ..rig.spec(n) };
+    let spec = crate::domain::RunSpec { role: kind.role(), workstream: Some(ws.id.clone()), ..rig.spec(n) };
     let queued = rig.fx.core.queue_test_run(spec, Some(rig.fx.item("CA-1"))).await.unwrap();
     rig.svc.start_now(&queued.id).await.unwrap()
 }
@@ -1386,47 +1244,20 @@ async fn finishing_requests_a_sync(rig: &Rig, run: &Run) -> bool {
 #[tokio::test]
 async fn a_workstream_build_that_finishes_asks_for_a_code_sync_so_its_pull_request_is_found() {
     let rig = ready().await;
-    let run = launched_in_workstream_as(&rig, 1, RunKind::Build).await;
-    assert!(run.spec.allow_push, "a workstream's build always pushes");
+    let run = launched_in_workstream_as(&rig, 1, ResultKind::Build).await;
     assert!(finishing_requests_a_sync(&rig, &run).await);
 }
 
 #[tokio::test]
-async fn other_kinds_and_builds_outside_a_workstream_ask_for_no_code_sync() {
+async fn other_roles_and_builds_outside_a_workstream_ask_for_no_code_sync() {
     let rig = ready().await;
-    let plan = launched_in_workstream_as(&rig, 1, RunKind::Plan).await;
+    let plan = launched_in_workstream_as(&rig, 1, ResultKind::Plan).await;
     assert!(!finishing_requests_a_sync(&rig, &plan).await, "a plan in a workstream");
 
     let rig = ready().await;
-    let build = rig.launched_as(2, RunKind::Build).await;
-    assert!(!build.spec.allow_push && build.spec.workstream.is_none());
+    let build = rig.launched_as(2, ResultKind::Build).await;
+    assert!(build.spec.workstream.is_none());
     assert!(!finishing_requests_a_sync(&rig, &build).await, "a build outside a workstream");
-}
-
-#[tokio::test]
-async fn an_allow_once_is_forgotten_when_the_run_moves_on_or_asks_something_else_and_kept_while_it_still_asks() {
-    let (rig, run) = launched().await;
-    let id = run.short_id.clone().unwrap();
-    rig.poll().await;
-    rig.job(&id, |j| j.needs = Some("approve Bash: npm publish".into()));
-    rig.session(&run, permission);
-    rig.poll().await;
-    let allowed = Some(crate::domain::PermissionAllowed { command: "npm publish".into(), at: Utc::now() });
-    rig.set(&run, |r| r.permission_allowed = allowed.clone()).await;
-    rig.poll().await;
-    assert_eq!(rig.get(&run).await.permission_allowed, allowed, "the same prompt keeps it");
-
-    rig.job(&id, |j| j.needs = Some("approve Bash: npm publish --tag next".into()));
-    rig.poll().await;
-    let other = rig.get(&run).await;
-    assert_eq!((other.state, other.permission_allowed), (RunState::NeedsPermission, None), "another prompt is answered afresh");
-
-    rig.set(&run, |r| r.permission_allowed = allowed.clone()).await;
-    rig.job(&id, |j| j.needs = None);
-    rig.session(&run, working);
-    rig.poll().await;
-    let working = rig.get(&run).await;
-    assert_eq!((working.state, working.permission_allowed), (RunState::Working, None));
 }
 
 #[derive(Default)]

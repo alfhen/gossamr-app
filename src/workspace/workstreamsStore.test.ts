@@ -108,7 +108,7 @@ describe("the workstreams store", () => {
     const ws = (await useWorkstreams.getState().start(CA401))!;
     useTabs.getState().select(itemKey(CA401));
     expect(paneConversation()).toBe(`ws:${ws.workstream.id}`);
-    const run = backend.runs.start({ kind: "investigate", repo: "acme/storefront", clonePath: "/Users/sample/Code/storefront", base: "main", name: "ca-401-pane-1a2b", instruction: "", workstream: ws.workstream.id }, CA401);
+    const run = backend.runs.start({ role: "investigate", repo: "acme/storefront", clonePath: "/Users/sample/Code/storefront", base: "main", name: "ca-401-pane-1a2b", brief: "", workstream: ws.workstream.id }, CA401);
     useRuns.getState().init(backend);
     await useRuns.getState().reload();
     // Starting it opens its sheet on the Agents view, where no ticket is peeked.
@@ -122,7 +122,7 @@ describe("the workstreams store", () => {
     useRuns.getState().select(null);
     expect(paneConversation()).toBe("general");
     // A run in no workstream on a ticket that has one open brings that one.
-    const looseRun = backend.runs.start({ kind: "investigate", repo: "acme/storefront", clonePath: "/Users/sample/Code/storefront", base: "main", name: "ca-401-pane-3c4d", instruction: "" }, CA401);
+    const looseRun = backend.runs.start({ role: "investigate", repo: "acme/storefront", clonePath: "/Users/sample/Code/storefront", base: "main", name: "ca-401-pane-3c4d", brief: "" }, CA401);
     await useRuns.getState().reload();
     useRuns.getState().select(looseRun.id);
     expect(paneConversation()).toBe(`ws:${ws.workstream.id}`);
@@ -399,7 +399,7 @@ describe("closing, reopening and bringing a ticket's runs here (G23, G17)", () =
 
   it("moves what is in General only when asked, and its Undo puts it back", async () => {
     undoLog.clear();
-    const run = backend.runs.start({ kind: "investigate", repo: "acme/storefront", clonePath: "/Users/sample/Code/storefront", base: "main", name: "ca-401-adopt-1a2b", instruction: "" }, CA401);
+    const run = backend.runs.start({ role: "investigate", repo: "acme/storefront", clonePath: "/Users/sample/Code/storefront", base: "main", name: "ca-401-adopt-1a2b", brief: "" }, CA401);
     const ws = (await useWorkstreams.getState().start(CA401))!;
     expect(useWorkstreams.getState().forItem("CA-401")?.adoptable).toEqual({ runs: [run.id], drafts: [] });
     expect((await backend.runsGet(run.id))?.spec.workstream).toBeUndefined();
@@ -419,7 +419,7 @@ describe("closing, reopening and bringing a ticket's runs here (G23, G17)", () =
 
 describe("Undo offers that outlive what they undo (G4, G5)", () => {
   const draftInGeneral = async () => {
-    backend.runs.start({ kind: "investigate", repo: "acme/storefront", clonePath: "/Users/sample/Code/storefront", base: "main", name: "ca-401-adopt-1a2b", instruction: "" }, CA401);
+    backend.runs.start({ role: "investigate", repo: "acme/storefront", clonePath: "/Users/sample/Code/storefront", base: "main", name: "ca-401-adopt-1a2b", brief: "" }, CA401);
   };
 
   it("takes the close offer back once a new workstream starts on the same ticket", async () => {

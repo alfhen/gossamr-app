@@ -6,7 +6,7 @@ import { scriptPip } from "../backend/mockPip";
 import { jiraNote, subtaskProposals } from "../backend/mockRunResult";
 import { SCRIPTED_RESULT } from "../backend/mockRuns";
 import subtaskFixtures from "../../src-tauri/test-fixtures/agents/subtask-results.json";
-import type { Intent, Proposal, Run, RunKind, RunOutcome, RunSpec, ScreenContext } from "../types";
+import type { Intent, Proposal, Run, RunOutcome, RunSpec, ScreenContext } from "../types";
 import { toRunEntries } from "./activityLogic";
 import { AgentCard } from "./AgentCard";
 import { Found, type ResultActions } from "./RunResult";
@@ -14,9 +14,9 @@ import { breakdownStatus, breakdownTarget, breakdownWithPipPrompt, pendingBreakd
 
 const blank: ScreenContext = { view: null, item: null, filter: null, selection: [] };
 
-const spec = (kind: RunKind): RunSpec => ({ kind, repo: "acme/storefront", clonePath: "/Users/sample/Code/storefront", base: "main", name: `ca-412-${kind}-ab12`, instruction: "Do it.", focus: null, focusFromRun: null, ticketBlock: "CA-412: sample" });
+const spec = (kind: string): RunSpec => ({ role: kind, repo: "acme/storefront", clonePath: "/Users/sample/Code/storefront", base: "main", name: `ca-412-${kind}-ab12`, brief: "Do it.", ticketBlock: "CA-412: sample" });
 
-async function finished(backend: MockBackend, kind: RunKind, item: ReturnType<typeof itemRef> | null = itemRef("CA-412")): Promise<Run> {
+async function finished(backend: MockBackend, kind: string, item: ReturnType<typeof itemRef> | null = itemRef("CA-412")): Promise<Run> {
   const queued = backend.runs.start(spec(kind), item);
   for (let i = 0; i < 4; i++) backend.runs.advance(queued.id);
   return (await backend.runsGet(queued.id))!;

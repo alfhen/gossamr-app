@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { advanceRuns, githubWrites, jiraWrites, mockRuns, showWorkspace, openApp, peekSheet, peekTicket, startAgent } from "./support/app";
+import { advanceRuns, githubWrites, jiraWrites, showWorkspace, openApp, peekSheet, peekTicket, startAgent } from "./support/app";
 
 /** The Agents view's cards; Pip's strip of agents shows runs too, and only the view counts. */
 const cards = (page: Page) => page.locator('main article[data-run-id]:not(aside[aria-label="Pip"] *)');
@@ -18,8 +18,7 @@ test("a Review Pip starts for the finished build finishes with a blocking verdic
   await expect(cards(page).first()).toBeVisible();
   const before = await runIds(page);
 
-  const build = (await mockRuns(page)).find((r) => r.kind === "build" && r.key === "CA-402")!;
-  await startAgent(page, "CA-402", "review", { fromRun: build.id });
+  await startAgent(page, "CA-402", "reviewer", { repo: "acme/webshop", pr: 218 });
 
   await expect.poll(async () => (await runIds(page)).length).toBe(before.length + 1);
   const id = (await runIds(page)).find((r) => !before.includes(r))!;

@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { expandNeedsYou, needsPane, openAgents, openApp, openNeedRow, groupOpen, needsStack } from "./support/app";
+import { expandNeedsYou, mockAttached, needsPane, openAgents, openApp, openNeedRow, groupOpen, needsStack } from "./support/app";
 
 // Fixes from the fifth dogfood round: Needs you on Pip home shows each need once.
 
@@ -16,16 +16,20 @@ test.describe("Needs you on Pip home (G5)", () => {
   });
 });
 
-test.describe("the permission panel says what Deny does (G11)", () => {
-  test("says it under the buttons; a read-only run's Deny needs no confirm", async ({ page }) => {
+test.describe("the permission panel", () => {
+  test("shows the command and one way to answer it: Open in Terminal, said in one sentence", async ({ page }) => {
     await openApp(page);
     await openAgents(page);
     await expandNeedsYou(page, "General");
     await openNeedRow(page, /DEVOPS-471.*asks to run a command/);
     const pane = needsPane(page);
-    await expect(pane.locator("[data-permission-ask]")).toContainText("Claude is told you said no");
-    await pane.getByRole("button", { name: "Deny", exact: true }).click();
-    await expect(pane.getByRole("group", { name: "Deny this request" })).toHaveCount(0);
+    const ask = pane.locator("[data-permission-ask]");
+    await expect(ask).toContainText("git push origin HEAD");
+    await expect(ask).toContainText("you answer it in Terminal");
+    await expect(ask.getByRole("button")).toHaveText(["Copy", "Open in Terminal"]);
+    await expect(pane.getByRole("button", { name: "Deny" })).toHaveCount(0);
+    await ask.getByRole("button", { name: "Open in Terminal" }).click();
+    await expect.poll(async () => (await mockAttached(page)).length).toBe(1);
   });
 });
 

@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { MockBackend } from "../backend/mock";
-import type { Intent, ItemRef, PauseReason, Proposal, ProposalState, Run, RunKind, RunState, WorkstreamActor, WorkstreamEvent, WorkstreamView } from "../types";
+import type { Intent, ItemRef, PauseReason, Proposal, ProposalState, Run, RunState, WorkstreamActor, WorkstreamEvent, WorkstreamView } from "../types";
 import { needs, type Need } from "./needs";
 import { EMPTY_FILTER, FILTER_LABEL, TIMELINE_FILTERS, draftSentence, filterCounts, filterTimeline, runLifecycle, runPhase, runSentence, shows, timeline, type TimelineEntry, type TimelineTurn } from "./timeline";
 
@@ -9,16 +9,15 @@ const iso = (minutesAgo: number) => new Date(NOW - minutesAgo * 60_000).toISOStr
 const ref = (key: string): ItemRef => ({ connectionId: "mock", externalId: key, key });
 
 const base = new MockBackend().runs.list()[0];
-const run = (id: string, kind: RunKind, state: RunState, queuedAgo: number, over: Partial<Run> = {}): Run => ({
+const run = (id: string, kind: string, state: RunState, queuedAgo: number, over: Partial<Run> = {}): Run => ({
   ...base,
   id,
   state,
   item: ref("CA-401"),
-  spec: { ...base.spec, kind, workstream: "ws-1" },
+  spec: { ...base.spec, role: kind, workstream: "ws-1" },
   failure: null,
   needs: null,
   error: null,
-  stoppedByLimit: false,
   queuedAt: iso(queuedAgo),
   launchedAt: state === "queued" ? null : iso(queuedAgo - 1),
   lastProgressAt: iso(Math.max(0, queuedAgo - 5)),
@@ -224,20 +223,19 @@ describe("timeline: a run is one entry, updated in place", () => {
   });
 
   it("names each phase", () => {
-    const cases: [RunState, Partial<Run>, string][] = [
-      ["queued", {}, "queued"],
-      ["launching", {}, "started"],
-      ["working", {}, "started"],
-      ["needsAnswer", {}, "waiting"],
-      ["needsPermission", {}, "waiting"],
-      ["systemBlocked", {}, "waiting"],
-      ["done", {}, "finished"],
-      ["failed", {}, "failed"],
-      ["stopped", {}, "stopped"],
-      ["stopped", { stoppedByLimit: true }, "limit"],
-      ["unknown", {}, "unknown"],
+    const cases: [RunState, string][] = [
+      ["queued", "queued"],
+      ["launching", "started"],
+      ["working", "started"],
+      ["needsAnswer", "waiting"],
+      ["needsPermission", "waiting"],
+      ["systemBlocked", "waiting"],
+      ["done", "finished"],
+      ["failed", "failed"],
+      ["stopped", "stopped"],
+      ["unknown", "unknown"],
     ];
-    for (const [state, over, phase] of cases) expect(runPhase({ state, stoppedByLimit: over.stoppedByLimit })).toBe(phase);
+    for (const [state, phase] of cases) expect(runPhase({ state })).toBe(phase);
   });
 
   it("says each phase in a plain sentence, with a finished review's verdict", () => {
@@ -251,7 +249,6 @@ describe("timeline: a run is one entry, updated in place", () => {
     expect(runSentence(run("r1", "build", "failed", 5, { error: "Folder not trusted\nstack…" }), "R1", undefined)).toBe("Build R1 failed");
     expect(runSentence(run("r1", "build", "failed", 5), undefined, undefined)).toBe("Build failed");
     expect(runSentence(run("r1", "build", "stopped", 5), "R1", undefined)).toBe("Build R1 was stopped");
-    expect(runSentence(run("r1", "build", "stopped", 5, { stoppedByLimit: true }), "R1", undefined)).toBe("Build R1 stopped at its limit");
     expect(runSentence(run("r1", "build", "unknown", 5), "R1", undefined)).toMatch(/^Build R1: /);
   });
 
@@ -302,7 +299,7 @@ describe("timeline: drafts", () => {
   it("says a run draft was started and an answer sent", () => {
     expect(draftSentence(draft("d1", answer("r1"), 5, { state: { type: "applied" } }))).toBe("You approved an answer on CA-401, drafted by an agent: sent");
     const start = { type: "startRun", item: ref("CA-401"), spec: { ...base.spec } } as unknown as Intent;
-    expect(draftSentence(draft("d2", start, 5, { createdBy: "pip", state: { type: "applied" } }))).toBe("You started the investigate run that Pip drafted on CA-401");
+    expect(draftSentence(draft("d2", start, 5, { createdBy: "pip", state: { type: "applied" } }))).toBe("You started the investigator run that Pip drafted on CA-401");
     expect(draftSentence(draft("d3", comment("CA-401"), 5, { state: { type: "retired", reason: "gone" } }))).toBe("An agent drafted a comment on CA-401: no longer needed");
   });
 
@@ -320,10 +317,10 @@ describe("timeline: drafts", () => {
   });
 
   it("says the person started the run Pip drafted", () => {
-    const start = { type: "startRun", item: ref("CA-401"), spec: { ...base.spec, kind: "build" } } as unknown as Intent;
+    const start = { type: "startRun", item: ref("CA-401"), spec: { ...base.spec, role: "builder" } } as unknown as Intent;
     const d = draft("d1", start, 5, { createdBy: "pip", state: { type: "applied" } });
-    expect(draftSentence(d)).toBe("You started the build run that Pip drafted on CA-401");
-    expect(timeline({ drafts: [d] })[0].text).toBe("You started the build run that Pip drafted on CA-401");
+    expect(draftSentence(d)).toBe("You started the builder run that Pip drafted on CA-401");
+    expect(timeline({ drafts: [d] })[0].text).toBe("You started the builder run that Pip drafted on CA-401");
   });
 
 

@@ -99,7 +99,7 @@ describe("What Jira saw from me", () => {
   it("names a run outside the workstream's labels as the app does, never by its hex id", () => {
     const from = (runId: string, shortId: string | null, runs: Parameters<typeof jiraSent>[0]["runs"]) =>
       jiraSent({ proposals: [draft("g", comment("CA-401", "x"), { origin: { type: "run", runId, shortId, workstream: null }, createdBy: "agent" })], events: {}, workstreams: [view("w1", "CA-401")], runs })[0].from;
-    const plan = { id: "r9", item: ref("CA-401"), spec: { kind: "plan" } } as unknown as Run;
+    const plan = { id: "r9", item: ref("CA-401"), spec: { role: "plan" } } as unknown as Run;
     expect(from("r9", "1000addd", [plan])).toBe("the CA-401 plan");
     // Not known here: the draft's own ticket names it.
     expect(from("r8", "1000addd", [plan])).toBe("the CA-401 run");

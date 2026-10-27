@@ -14,6 +14,8 @@ pub enum Outcome {
     Starts,
     /// Exit 1 with `Workspace not trusted` on stderr.
     Untrusted,
+    /// Exit 1 with `claude --bg`'s refusal of an un-opted `auto` mode on stderr.
+    AutoRefused,
     /// Exit 1 with a message, no session.
     Exits,
     /// A session starts but the output has no `backgrounded` line.
@@ -45,8 +47,6 @@ pub struct Scripted {
     pub version: String,
     pub logged_in: bool,
     pub bg: bool,
-    /// Whether `--help` lists the flags a read-only run needs.
-    pub read_only: bool,
     pub config_dir: std::path::PathBuf,
     pub outcome: Outcome,
     /// How long a launch takes, so overlapping launches can be told apart.
@@ -93,7 +93,6 @@ impl FakeCli {
             version: "2.1.286 (Claude Code)".into(),
             logged_in: true,
             bg: true,
-            read_only: true,
             config_dir: std::env::temp_dir().join("gossamr-fake-claude-config"),
             outcome: Outcome::Starts,
             delay: Duration::ZERO,
@@ -170,10 +169,6 @@ impl ClaudeCli for FakeCli {
         Ok(self.0.lock().unwrap().bg)
     }
 
-    async fn supports_read_only(&self) -> CliResult<bool> {
-        Ok(self.0.lock().unwrap().read_only)
-    }
-
     async fn launch(&self, req: &LaunchRequest) -> CliResult<Launched> {
         let delay = {
             let mut s = self.0.lock().unwrap();
@@ -187,6 +182,7 @@ impl ClaudeCli for FakeCli {
         s.in_flight -= 1;
         match s.outcome {
             Outcome::Untrusted => return Err(CliError::Failed { code: Some(1), stderr: "Workspace not trusted. Run `claude` in the folder once and accept the trust prompt, then retry.".into() }),
+            Outcome::AutoRefused => return Err(CliError::Failed { code: Some(1), stderr: "--bg with auto mode requires opting in first. Run `claude --permission-mode auto` once interactively.".into() }),
             Outcome::Exits => return Err(CliError::Failed { code: Some(1), stderr: "something broke".into() }),
             Outcome::Leaks => return Err(CliError::Failed { code: Some(1), stderr: "bad --mcp-config: Authorization Bearer gsr_0123456789abcdef0123456789abcdef0123456789abcdef".into() }),
             Outcome::Starts | Outcome::Garbled => {}

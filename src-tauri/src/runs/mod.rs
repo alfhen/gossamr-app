@@ -16,7 +16,6 @@ pub mod message;
 mod final_answer;
 mod finder;
 mod offer;
-pub mod permission;
 pub mod fresh;
 pub mod index;
 pub mod launcher;

@@ -57,7 +57,7 @@ describe("earlierDrafts", () => {
   });
 });
 
-const runSpec: RunSpec = { kind: "investigate", repo: "acme/web", clonePath: "/Users/x/Code/web", base: "main", name: "ca-1-fix-ab12", instruction: "Look into it." };
+const runSpec: RunSpec = { role: "investigate", repo: "acme/web", clonePath: "/Users/x/Code/web", base: "main", name: "ca-1-fix-ab12", brief: "Look into it." };
 const startRun = (item: ReturnType<typeof ref> | null): Intent => ({ type: "startRun", connectionId: "c", item, spec: runSpec });
 
 describe("startRun drafts", () => {

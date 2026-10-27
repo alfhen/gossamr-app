@@ -4,7 +4,8 @@ import type { ContainerRef, FeedEntry, FeedQuery, ItemRef, PersonRef, Proposal, 
 import { targetOf } from "../lib/proposals";
 import { itemKey, YOUR_TURN } from "../lib/filter";
 import type { WorkItem } from "../types";
-import { KIND_LABEL, permissionRequest, resultHeadline } from "./agentsLogic";
+import { roleLabel } from "../lib/roles";
+import { permissionRequest, resultHeadline } from "./agentsLogic";
 
 /** The chip that shows what Pip and the agents did in the workstreams, from their audit. */
 export const PIP_CHIP = "pip";
@@ -310,7 +311,7 @@ export function codeMatchesChip(chip: ActivityChip, e: Pick<CodeEntry, "kind" | 
 const firstLine = (text: string | null) => text?.trim().split(/\n+/)[0]?.trim() ?? "";
 
 function attention(run: Run, drafted: boolean, breakdown: boolean): { kind: RunEntryKind; what: string; at: string; text: string } | null {
-  const kind = KIND_LABEL[run.spec.kind];
+  const kind = roleLabel(run.spec.role);
   switch (run.state) {
     case "needsAnswer":
       return { kind: "needsYou", what: "needsAnswer", at: run.lastProgressAt, text: `${kind} agent is asking you: ${firstLine(run.needs) || "it is waiting for you"}` };
@@ -343,7 +344,7 @@ export function toRunEntries(runs: readonly Run[], read: ReadonlySet<string>, no
     out.push({ ...rest, source: "agents", mention: false, needsYou: watch, unread: watch && now - Date.parse(e.at) < CODE_UNREAD_DAYS * 864e5 && !read.has(e.id) });
   };
   for (const run of runs) {
-    if (run.launchedAt && run.shortId) add({ id: `run:${run.id}:started`, at: run.launchedAt, kind: "started", runId: run.id, item: run.item, text: `${KIND_LABEL[run.spec.kind]} agent started`, watch: false });
+    if (run.launchedAt && run.shortId) add({ id: `run:${run.id}:started`, at: run.launchedAt, kind: "started", runId: run.id, item: run.item, text: `${roleLabel(run.spec.role)} agent started`, watch: false });
     const now_ = attention(run, drafted.has(run.id), breakdown.has(run.id));
     if (now_) add({ id: `run:${run.id}:${now_.what}`, at: now_.at, kind: now_.kind, runId: run.id, item: run.item, text: now_.text, watch: true });
   }

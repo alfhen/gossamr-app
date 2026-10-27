@@ -86,7 +86,7 @@ pub enum Intent {
     Rewrite { item: ItemRef, title: Option<TitleChange>, body: Option<BodyChange>, #[serde(default)] flattened: Vec<String> },
     /// Legacy: a draft to start an agent, from before Pip started agents itself. Stored ones stay readable; none is written.
     #[serde(rename_all = "camelCase")]
-    StartRun { connection_id: String, item: Option<ItemRef>, spec: RunSpec },
+    StartRun { connection_id: String, item: Option<ItemRef>, spec: Box<RunSpec> },
     /// Legacy: a draft to send a finished agent back with a message. Stored ones stay readable; none is written.
     #[serde(rename_all = "camelCase")]
     FollowUp { connection_id: String, run_id: String, #[serde(default)] short_id: Option<String>, item: Option<ItemRef>, message: String, reason: String },
@@ -774,7 +774,7 @@ mod tests {
 
     #[test]
     fn a_stored_run_draft_still_reads_with_its_start_run_tag_and_camel_case_fields() {
-        let json = serde_json::to_value(Intent::StartRun { connection_id: "c".into(), item: Some(item_ref("1")), spec: run_spec() }).unwrap();
+        let json = serde_json::to_value(Intent::StartRun { connection_id: "c".into(), item: Some(item_ref("1")), spec: run_spec().into() }).unwrap();
         assert_eq!(json["type"], "startRun");
         assert_eq!(json["connectionId"], "c");
         assert_eq!(json["item"]["externalId"], "1");
@@ -923,7 +923,7 @@ mod tests {
         p.origin = Origin::Chat { request_id: "r".into(), workstream: Some("w1".into()) };
         assert_eq!(p.workstream(), Some("w1"));
         let spec = RunSpec { workstream: Some("w2".into()), ..run_spec() };
-        let mut start = proposal(Intent::StartRun { connection_id: "c".into(), item: None, spec }, &item);
+        let mut start = proposal(Intent::StartRun { connection_id: "c".into(), item: None, spec: spec.into() }, &item);
         assert_eq!(start.workstream(), Some("w2"));
         start.origin = Origin::Board;
         assert_eq!((start.workstream(), start.origin.kind()), (Some("w2"), "board"));

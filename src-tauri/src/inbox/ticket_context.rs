@@ -37,7 +37,7 @@ impl Core {
             .await?;
         let Some(item) = reachable else { return Ok(TicketRead::NotLinked) };
         let links = self.ticket_dev_links(&item);
-        self.with_db(|db| Ok(db.item(&item)?.map_or(TicketRead::NotCached, |work| TicketRead::Found(snapshot(db, &work, &links, false))))).await
+        self.with_db(|db| Ok(db.item(&item)?.map_or(TicketRead::NotCached, |work| TicketRead::Found(snapshot(db, &work, &links))))).await
     }
 
     /// The code changes linked to `item`, or none when the code index can't be read: a missing link must not stop a draft.
@@ -47,12 +47,11 @@ impl Core {
 }
 
 /// The text the agent is shown for `work`. `links` come from `Core::ticket_dev_links`, read before the database is locked.
-/// `plan_followed` is set when the run is also given an approved plan, which the ticket's own plan section would repeat.
-pub(super) fn snapshot(db: &Db, work: &WorkItem, links: &[DevLink], plan_followed: bool) -> String {
-    ticket_snapshot(&facts(db, work, links, plan_followed))
+pub(super) fn snapshot(db: &Db, work: &WorkItem, links: &[DevLink]) -> String {
+    ticket_snapshot(&facts(db, work, links))
 }
 
-fn facts(db: &Db, work: &WorkItem, links: &[DevLink], plan_followed: bool) -> TicketFacts {
+fn facts(db: &Db, work: &WorkItem, links: &[DevLink]) -> TicketFacts {
     // The cache keeps the whole ticket in `extra`, with the names the item itself only has as account ids.
     let cached: Option<CachedTicket> = serde_json::from_value(work.extra.clone()).ok();
     let title_of = |item: &ItemRef| db.item(item).ok().flatten().map(|w| w.title);
@@ -83,7 +82,6 @@ fn facts(db: &Db, work: &WorkItem, links: &[DevLink], plan_followed: bool) -> Ti
         code: links.iter().map(|l| change_line(&l.change)).collect(),
         description: work.body.without_plan_section().plain_text(),
         plan: work.body.plan_section().map(|d| d.to_markdown()),
-        plan_followed,
         comments: cached.as_ref().map(|t| t.comments.iter().map(|c| SnapComment { author: c.author.name.clone(), at: parse_time(&c.created), text: c.body.clone() }).collect()),
     }
 }

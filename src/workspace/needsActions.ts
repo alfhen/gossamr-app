@@ -1,4 +1,3 @@
-import { readAs } from "../lib/permission";
 import type { Need } from "../lib/needs";
 import { useWorkspace } from "../workspaceStore";
 import { draftKeyAction } from "./draftKeys";
@@ -134,8 +133,6 @@ export function keyPlan(need: Need, which: NeedKey): KeyPlan | null {
         }
         // An edit or a pause is why a approves nothing here: the card does, so say so.
         return { type: "open", edit: false, ...(p && draftKeyAction(p, "a") === "approve" ? { note: OPENED_NOT_POSTED } : {}) };
-      case "allow":
-        return run ? { type: "ask", text: "allow this once in Terminal", run: () => void useRuns.getState().allowPermissionOnce(run.id, readAs(run.needs)) } : null;
       case "retry":
         return run ? { type: "ask", text: "retry this run", run: () => void useRuns.getState().retryLaunch(run.id) } : null;
       case "resume":
@@ -149,11 +146,9 @@ export function keyPlan(need: Need, which: NeedKey): KeyPlan | null {
     }
   }
   if (which === "skip") return p && all.some((a) => a.id === "dismiss") ? { type: "do", run: draftDecisions(p.id, p).skip } : null;
-  const stop = all.find((a) => a.id === "deny" || a.id === "dismiss");
+  const stop = all.find((a) => a.id === "dismiss");
   if (!stop) return null;
   if (need.kind === "pipAsk" && need.workstreamId) return { type: "do", run: () => void useWorkstreams.getState().dismissAsk(need.workstreamId!) };
-  // A deny reaches the agent, so it keeps its Enter; the rest are the person's own and can be undone.
-  if (stop.id === "deny") return run ? { type: "ask", text: "deny it; Claude carries on without it", run: () => void useRuns.getState().denyPermission(run.id, readAs(run.needs)) } : null;
   if (p) return { type: "do", run: draftDecisions(p.id, p).skip };
   return run ? { type: "do", run: () => useRuns.getState().dismiss(run.id) } : null;
 }

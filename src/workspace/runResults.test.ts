@@ -104,9 +104,9 @@ describe("agent entries in the activity feed", () => {
       ["run:s:started", "started", false],
       ["run:w:started", "started", false],
     ]);
-    expect(entries.find((e) => e.id === "run:d:done")?.text).toBe("Investigate agent finished: The lag comes from one consumer.");
-    expect(entries.find((e) => e.id === "run:p:needsPermission")?.text).toBe("Investigate agent needs permission: git push");
-    expect(entries.find((e) => e.id === "run:f:failed")?.text).toBe("Investigate agent failed: Claude isn't signed in.");
+    expect(entries.find((e) => e.id === "run:d:done")?.text).toBe("Investigator agent finished: The lag comes from one consumer.");
+    expect(entries.find((e) => e.id === "run:p:needsPermission")?.text).toBe("Investigator agent needs permission: git push");
+    expect(entries.find((e) => e.id === "run:f:failed")?.text).toBe("Investigator agent failed: Claude isn't signed in.");
   });
 
   it("gives the same run the same ids however often it is read, so a read mark sticks", () => {

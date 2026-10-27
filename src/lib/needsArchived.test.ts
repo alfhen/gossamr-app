@@ -12,7 +12,7 @@ const failed = (id: string, minutesAgo: number, over: Partial<Run> = {}): Run =>
   id,
   state: "failed",
   item: ref,
-  spec: { ...base.spec, kind: "investigate", workstream: null },
+  spec: { ...base.spec, role: "investigate", workstream: null },
   failure: null,
   needs: null,
   error: "boom",

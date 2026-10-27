@@ -41,7 +41,7 @@ const ref = (key: string) => ({ connectionId: "mock", externalId: key, key });
 const backend = new MockBackend();
 const sample = backend.runs.list();
 const base = sample[0];
-const run = (id: string, state: Run["state"], over: Partial<Run> = {}): Run => ({ ...base, id, state, item: ref("CA-401"), spec: { ...base.spec, kind: "build", workstream: "ws-1" }, failure: null, needs: null, lastProgressAt: ago(5), queuedAt: ago(60), endedAt: null, ...over });
+const run = (id: string, state: Run["state"], over: Partial<Run> = {}): Run => ({ ...base, id, state, item: ref("CA-401"), spec: { ...base.spec, role: "build", workstream: "ws-1" }, failure: null, needs: null, lastProgressAt: ago(5), queuedAt: ago(60), endedAt: null, ...over });
 
 const view = (id: string, key: string | null, title: string, over: { pausedReason?: PauseReason | null; runs?: string[] } = {}): WorkstreamView => ({
   workstream: {
@@ -77,7 +77,7 @@ const input = (over: Partial<NeedsInput> = {}): NeedsInput => ({
   runs: [
     run("r-perm", "needsPermission", { needs: "approve Bash: git push origin ca-401", lastProgressAt: ago(14) }),
     run("r-q", "needsAnswer", { needs: "Which cache should it keep?", lastProgressAt: ago(9) }),
-    run("r-fail", "failed", { error: "Launch was interrupted", lastProgressAt: ago(8), endedAt: ago(8), spec: { ...base.spec, kind: "verify", workstream: "ws-1" } }),
+    run("r-fail", "failed", { error: "Launch was interrupted", lastProgressAt: ago(8), endedAt: ago(8), spec: { ...base.spec, role: "verify", workstream: "ws-1" } }),
   ],
   proposals: [draft("c1", comment("CA-401"), 30, "ws-1"), draft("c2", transition("CA-401"), 25, "ws-1"), draft("c3", comment("CA-401", "Another"), 24, "ws-1"), draft("g1", comment("CA-500"), 10)],
   dismissed: new Set(),
@@ -354,16 +354,19 @@ describe("what the list's keys do", () => {
     useRuns.setState({ runs: [...input().runs] });
   });
 
-  it("asks for Enter before it approves a comment or a move, or denies, and only then does it", () => {
+  it("asks for Enter before it approves a comment or a move, or dismisses, and only then does it", () => {
     const plan = keyPlan(need("draft:c1"), "approve");
     expect(plan).toMatchObject({ type: "ask", text: "approve this draft" });
     expect(keyPlan(need("draft:c2"), "approve")).toMatchObject({ type: "ask" });
-    const deny = keyPlan(need("run:r-perm"), "dismiss");
-    expect(deny).toMatchObject({ type: "ask", text: "deny it; Claude carries on without it" });
-    if (deny?.type !== "ask") throw new Error("a deny reaches the agent, so it asks first");
+    // A permission prompt is answered in Terminal: its key only opens, and there is nothing to dismiss.
+    expect(keyPlan(need("run:r-perm"), "approve")).toEqual({ type: "open", edit: false });
+    expect(keyPlan(need("run:r-perm"), "dismiss")).toBeNull();
+    const dismiss = keyPlan(need("run:r-fail"), "dismiss");
+    expect(dismiss).toMatchObject({ type: "do" });
+    if (plan?.type !== "ask") throw new Error("an approval asks first");
     // Nothing happens until Enter confirms what was asked.
-    arm(need("run:r-perm"), deny);
-    expect(useWorkView.getState().asking).toEqual({ key: "run:r-perm", text: "↵ deny it; Claude carries on without it · any other key cancels" });
+    arm(need("draft:c1"), plan);
+    expect(useWorkView.getState().asking).toEqual({ key: "draft:c1", text: "↵ approve this draft · any other key cancels" });
     expect(useWorkView.getState().asking).not.toBeNull();
     disarm();
     expect(useWorkView.getState().asking).toBeNull();
@@ -387,8 +390,7 @@ describe("what the list's keys do", () => {
   });
 
   it("allows, retries and resumes only after Enter: they reach an agent or start something", () => {
-    // A permission's primary is an Allow once only where the run offers one; otherwise a opens its decision.
-    expect(["ask", "open"]).toContain(keyPlan(need("run:r-perm"), "approve")?.type);
+    expect(keyPlan(need("run:r-perm"), "approve")).toMatchObject({ type: "open" });
     expect(keyPlan(need("paused:ws-2"), "approve")).toMatchObject({ type: "ask", text: "resume this workstream" });
   });
 
@@ -483,13 +485,10 @@ describe("the decision pane", () => {
     expect(pane(launch, "run:r-x")).toContain("Retry launch");
   });
 
-  it("decides a sign-in with the sign-in box and a limit stop with the resume box", () => {
-    const list = set({ runs: [run("r-s", "systemBlocked"), run("r-l", "stopped", { stoppedByLimit: true, error: "Stopped by Gossamr: it passed the 60 minute limit", spec: { ...base.spec, kind: "plan", workstream: "ws-1" } })], proposals: [], workstreams: [view("ws-1", "CA-401", "CA-401 Welcome flow refresh", { runs: ["r-s", "r-l"] })] });
+  it("decides a sign-in with the sign-in box", () => {
+    const list = set({ runs: [run("r-s", "systemBlocked")], proposals: [], workstreams: [view("ws-1", "CA-401", "CA-401 Welcome flow refresh", { runs: ["r-s", "r-l"] })] });
     expect(pane(list, "run:r-s")).toContain("Claude needs you to sign in");
     expect(pane(list, "run:r-s")).toContain("R1 needs you to sign in to Claude.");
-    const limit = pane(list, "run:r-l");
-    expect(limit).toContain('aria-label="What to tell it"');
-    expect(limit).toContain("Resume");
   });
 
   it("decides a pause with the paused banner's Resume, and a draft with its card", () => {
@@ -503,7 +502,7 @@ describe("the decision pane", () => {
   });
 
   it("decides a plan with its approval note", () => {
-    const planRun = run("r-plan", "done", { spec: { ...base.spec, kind: "plan", workstream: "ws-1" } });
+    const planRun = run("r-plan", "done", { spec: { ...base.spec, role: "plan", workstream: "ws-1" } });
     const list = set({ workstreams: [view("ws-1", "CA-401", "CA-401 Welcome flow refresh", { runs: ["r-plan"] })], runs: [planRun], proposals: [{ ...draft("plan", rewrite("CA-401"), 4, "ws-1"), origin: { type: "run", runId: "r-plan", shortId: null, workstream: "ws-1" } } as Proposal], dismissed: new Set() });
     expect(pane(list, "draft:plan")).toContain("data-plan-approve");
   });
@@ -573,7 +572,7 @@ describe("every count of needs you and of agents, from one fixture (D4, D5, N3)"
 
   it("keeps a folder to trust, and every other failure, in the count until it is dismissed (R5)", () => {
     const trust = runs.find((r) => r.failure?.type === "untrustedFolder")!;
-    const other = { ...trust, id: "r-other", failure: { type: "other" }, spec: { ...trust.spec, kind: trust.spec.kind === "verify" ? "review" : "verify" } } as unknown as typeof trust;
+    const other = { ...trust, id: "r-other", failure: { type: "other" }, spec: { ...trust.spec, role: trust.spec.role === "verifier" ? "reviewer" : "verifier" } } as unknown as typeof trust;
     const all = [...runs, other];
     useRuns.setState({ runs: all, dismissed: new Set() });
     // Opening Agents once marked every failure but the folder as seen; nothing does that now.

@@ -32,8 +32,8 @@ pub use proposal::{
     Revised, Revision, StateKind, Verdict,
 };
 pub use run::{
-    agent_allow_rules, allowed_kinds, default_instruction, has_markers, pip_chain_kinds, pip_kinds, render_prompt, valid_repo, without_markers, ClonePlan, Continuation, EarlierSession, PermissionAllowed, ReadOnly, Run, RunEvent, RunFailure, RunKind, RunQuery, RunSpec, RunState, FOCUS_LIMIT, LIMIT_STOP, PIP_PROMPT_LIMIT, GUARD, GUARD_VERSION, INVESTIGATE_INSTRUCTION, AGENT_CALL_TIMEOUT_MS, AGENT_GUARD, AGENT_SERVER, AGENT_TOOLS, ASK_TOOL, READ_TICKET_TOOL, READ_WORKSTREAM_TOOL, REPORT_TOOL, REPORT_TOOL_VERSION,
-    READ_ONLY_DENY, READ_ONLY_GUARD, READ_ONLY_MODE, TEST_RUNNERS, NEW_TICKET_TAIL, PLAN_LIMIT, BUILD_ACCOUNT_LIMIT, FINDINGS_LIMIT, plan_label, build_account_label, findings_label, TICKET_BLOCK_LIMIT, TITLE_LIMIT,
+    agent_allow_rules, has_markers, render_prompt, valid_repo, without_markers, ClonePlan, Continuation, EarlierSession, LegacySpec, ResultKind, Role, Run, RunEvent, RefusedMode, RunFailure, RunQuery, RunSpec, RunState,
+    PIP_BRIEF_LIMIT, ROLE_LIMIT, GUARD, GUARD_VERSION, AGENT_CALL_TIMEOUT_MS, AGENT_GUARD, AGENT_SERVER, AGENT_TOOLS, ASK_TOOL, READ_TICKET_TOOL, READ_WORKSTREAM_TOOL, REPORT_TOOL, REPORT_TOOL_VERSION, PLAN_LIMIT, TICKET_BLOCK_LIMIT, TITLE_LIMIT,
 };
 pub use snapshot::{ticket_snapshot, SnapComment, TicketFacts};
 pub use watch::{
@@ -72,28 +72,19 @@ pub(crate) mod fixtures {
 
     pub fn run_spec() -> RunSpec {
         RunSpec {
-            kind: RunKind::Investigate,
+            role: ResultKind::Investigate.role(),
             repo: "acme/webshop".into(),
             clone_path: "/Users/me/Code/webshop".into(),
             base: "main".into(),
             name: "eng-1-fix-cart-3f9a".into(),
-            instruction: "Find out why the cart total is wrong.".into(),
-            focus: None,
-            focus_from_run: None,
+            brief: "Find out why the cart total is wrong.".into(),
+            ticket: None,
             ticket_block: None,
             pr: None,
             pr_sha: None,
-            plan: None,
-            plan_from_run: None,
-            plan_approved: false,
-            build_account: None,
-            build_from_run: None,
-            findings: None,
-            findings_from_run: None,
-            allow_push: false,
-            project: None,
             report: false,
             workstream: None,
+            earlier: LegacySpec::default(),
         }
     }
 

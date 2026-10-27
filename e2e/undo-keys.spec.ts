@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { advanceRuns, agentsHome, askPermission, askPip, expectToast, homeComposer, homeConversationRegion, homeSettled, jiraWrites, mockRuns, needOfKind, needsPane, openAgents, openApp, openPip, peekSheet, peekTicket, PIP_INPUT, pipConversation, pipPane, selectWorkstream, startWorkstream, workstreamEvents, workstreamGroup, openNeedOfKind, workstreamSheet } from "./support/app";
+import { advanceRuns, agentsHome, askPermission, askPip, expectToast, mockAttached, homeComposer, homeConversationRegion, homeSettled, jiraWrites, mockRuns, needOfKind, needsPane, openAgents, openApp, openPip, peekSheet, PIP_INPUT, pipPane, selectWorkstream, startWorkstream, workstreamEvents, workstreamGroup, openNeedOfKind, workstreamSheet } from "./support/app";
 
 // Step 4 of the UX overhaul: less ceremony. Reversible actions (skipping a draft, dismissing a failure) act at once and
 // offer Undo for about 8 seconds, instead of asking first; what reaches
@@ -104,7 +104,7 @@ test("pausing a workstream says so and needs no Undo: Resume is the way back, an
   expect(paused.slice(paused.indexOf("paused"))).toEqual(["paused", "resumed"]);
 });
 
-test("the Agents list takes the same keys: o opens, d dismisses a failure at once with Undo, and d on a permission asks first", async ({ page }) => {
+test("the Agents list takes the same keys: o opens, d dismisses a failure at once with Undo, and d on a permission does nothing", async ({ page }) => {
   await openApp(page);
   await expect(agentsButton(page)).toHaveCount(1);
   await agentsButton(page).click();
@@ -132,18 +132,13 @@ test("the Agents list takes the same keys: o opens, d dismisses a failure at onc
   await undo(page).click();
   await expect(failed.locator("[data-in-needs-you]")).toHaveCount(1);
 
-  // d on a permission reaches the agent, so it asks for Enter; any other key cancels and nothing is denied.
+  // A permission is answered in Terminal: d asks for nothing and denies nothing.
   const permission = page.locator('main article[data-state="needsPermission"]').first();
   await permission.focus();
   await page.keyboard.press("d");
-  await expect(permission.locator("[data-needs-asking]")).toHaveText("↵ deny it; Claude carries on without it · any other key cancels");
-  await page.keyboard.press("x");
   await expect(permission.locator("[data-needs-asking]")).toHaveCount(0);
   const id = (await permission.getAttribute("data-run-id"))!;
   expect((await mockRuns(page)).find((r) => r.id === id)?.state).toBe("needsPermission");
-  await page.keyboard.press("d");
-  await page.keyboard.press("Enter");
-  await expect.poll(async () => (await mockRuns(page)).find((r) => r.id === id)?.state).toBe("working");
 });
 
 /** Pip's pane open on CA-401's peek, so Pip's drafts land on it, with `n` comment drafts waiting. */
@@ -230,69 +225,42 @@ test("the Activity Drafts list and the ticket's peek take the same keys on their
   expect(await jiraWrites(page)).toEqual([]);
 });
 
-// A permission a Build asks for can be allowed once in Terminal as well as denied; a read-only run's can only be denied.
-
-async function newest(page: Page, kind: string) {
-  return (await mockRuns(page)).find((r) => r.kind === kind) ?? null;
-}
-async function moveTo(page: Page, id: string, state: string, steps: number) {
-  await expect(pipPane(page).getByRole("button", { name: "Stop" })).toHaveCount(0);
-  for (let i = 0; i < steps; i++) await advanceRuns(page, 1, id);
-  await expect.poll(async () => (await mockRuns(page)).find((r) => r.id === id)?.state).toBe(state);
-}
-/** A working Build in a workstream on CA-401 (investigation, triage and plan done, the plan approved, the build started), as e2e/decisions.spec.ts gets one. */
+/** A working build in a workstream on CA-401, started by Pip when asked. */
 async function workingBuild(page: Page) {
-  const startStep = async (what: string) => {
-    await askPip(page, what);
-    await expect(pipPane(page).getByRole("button", { name: "Stop" })).toHaveCount(0);
-  };
-  for (const [what, kind] of [["investigate this", "investigate"], ["triage this", "triage"], ["plan this", "plan"]] as const) {
-    await startStep(what);
-    await moveTo(page, (await newest(page, kind))!.id, "done", 3);
-  }
-  await page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "All projects" }).click();
-  await peekTicket(page, "CA-401");
-  const draft = peekSheet(page).getByRole("article", { name: "Update the description of CA-401" }).filter({ hasText: "Gossamr Plan" });
-  await draft.getByRole("button", { name: "Update description" }).click();
-  await expect(draft).toHaveCount(0);
-  await expect(pipConversation(page)).toHaveText(/^Workstream: CA-401 /);
-  await startStep("build it");
-  const build = (await newest(page, "build"))!;
-  await moveTo(page, build.id, "working", 2);
+  await askPip(page, "build it");
+  await expect(pipPane(page).getByRole("button", { name: "Stop" })).toHaveCount(0);
+  const build = (await mockRuns(page)).find((r) => r.step === "build")!;
+  for (let i = 0; i < 2; i++) await advanceRuns(page, 1, build.id);
+  await expect.poll(async () => (await mockRuns(page)).find((r) => r.id === build.id)?.state).toBe("working");
   return (await mockRuns(page)).find((r) => r.id === build.id)!;
 }
 
-test("Cmd/Ctrl+K on a focused permission need offers Allow once and Deny, and Deny goes through to the run", async ({ page }) => {
+test("Cmd/Ctrl+K on a focused permission need offers Open in Terminal, and it opens the run there", async ({ page }) => {
   await openApp(page, "runs=empty&prSurface=manual");
   await startWorkstream(page, "CA-401");
   const build = await workingBuild(page);
   await askPermission(page, build.id, `approve Bash: git push -u origin worktree-${build.name}`);
   await openAgents(page);
   await openNeedOfKind(page, "permission");
-  await expect(needOfKind(page, "permission")).toContainText("R4 wants to run `git push -u origin");
+  await expect(needOfKind(page, "permission")).toContainText("wants to run `git push -u origin");
   await workstreamSheet(page).locator('[data-needs-pane][data-kind="permission"] button[data-need-key]').focus();
 
   await page.keyboard.press("ControlOrMeta+k");
   const palette = page.getByRole("dialog", { name: "Command palette" });
   await expect(palette).toBeVisible();
-  // What its buttons offer, first, under "This item".
+  // What its button offers, first, under "This item".
   const options = palette.getByRole("option");
-  await expect(options.nth(0)).toContainText("Allow once");
-  await expect(options.nth(1)).toContainText("Deny");
+  await expect(options.nth(0)).toContainText("Open in Terminal");
   await expect(palette.getByRole("option", { name: /Open in workstream/ })).toBeVisible();
   await expect(palette.getByRole("option", { name: /Pause the workstream on CA-401/ })).toBeVisible();
   await expect(palette.getByText("This item", { exact: true })).toBeVisible();
-  // Typing narrows them as for any command.
-  await page.keyboard.type("deny");
-  await expect(options.first()).toContainText("Deny");
-  expect((await mockRuns(page)).find((r) => r.id === build.id)?.state).toBe("needsPermission");
+  await expect(palette.getByRole("option", { name: /Deny|Allow once/ })).toHaveCount(0);
   await page.keyboard.press("Enter");
 
-  // Deny reached the run: Claude carries on without it, and it is audited as the person's.
-  await expect.poll(async () => (await mockRuns(page)).find((r) => r.id === build.id)?.state).toBe("working");
-  const denied = (await workstreamEvents(page)).filter((e) => e.action === "permission_denied");
-  expect(denied.map((e) => ({ actor: e.actor, runId: e.runId }))).toEqual([{ actor: "person", runId: build.id }]);
-  await expect(needOfKind(page, "permission")).toHaveCount(0);
+  // The run is opened in Terminal for the person to answer there; nothing was answered for them.
+  await expect.poll(async () => await mockAttached(page)).toEqual([build.id]);
+  expect((await mockRuns(page)).find((r) => r.id === build.id)?.state).toBe("needsPermission");
+  expect((await workstreamEvents(page)).filter((e) => e.action.startsWith("permission"))).toEqual([]);
 });
 
 /** Pauses the workstream on CA-401 from the palette, with the keyboard on its row in the list. */

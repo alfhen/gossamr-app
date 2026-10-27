@@ -5,9 +5,9 @@ use std::time::{Duration, Instant};
 
 use super::mcp::McpServer;
 use super::{AgentEvent, AgentService, AskRequest};
-use crate::domain::{Actor, CreatedBy, RunKind, RunQuery};
+use crate::domain::{Actor, CreatedBy, RunQuery};
 
-/// A real Pip turn, asked in a workstream to start an investigation, against a test core whose agent launcher is the
+/// A real Pip turn, asked in a workstream to start an investigator, against a test core whose agent launcher is the
 /// scripted CLI. Settles that the model calls `start_agent` from the tool list and description it is given, and that
 /// the run it starts is Pip's, in the workstream, and launched. Uses the person's real, signed-in config and does model
 /// work with one short prompt; nothing real is started, since the launcher is scripted.
@@ -24,7 +24,7 @@ async fn real_pip_turn_calls_start_agent_for_an_investigation_in_its_workstream(
     let seen = events.clone();
     let ask = AskRequest {
         request_id: "real-1".into(),
-        prompt: "Start an investigate agent in this workstream with the brief 'the cart rounding'. Then say which agent you started.".into(),
+        prompt: "Start an investigator agent in this workstream with the brief 'Find out why the cart rounding is wrong and report what you found'. Then say which agent you started.".into(),
         session_id: None,
         context: Default::default(),
         images: Vec::new(),
@@ -51,7 +51,7 @@ async fn real_pip_turn_calls_start_agent_for_an_investigation_in_its_workstream(
     assert!(steps.iter().any(|s| s == "Started an agent"), "start_agent was never called: {steps:?}");
     let runs = core.runs_in(&rig.fx.scope, &RunQuery { workstream: Some(ws.id.clone()), ..Default::default() }).await.unwrap();
     let [run] = runs.as_slice() else { panic!("expected one run, found {runs:?}") };
-    assert_eq!((run.spec.kind, run.created_by), (RunKind::Investigate, CreatedBy::Pip));
+    assert_eq!((run.spec.role.as_str(), run.created_by), ("investigator", CreatedBy::Pip));
     let audit = core.workstream_events(&rig.fx.scope, &ws.id).await.unwrap();
     assert!(audit.iter().any(|e| e.actor == Actor::Pip && e.action == "agent_started" && e.run_id.as_deref() == Some(run.id.as_str())));
     for _ in 0..200 {

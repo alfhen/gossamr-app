@@ -39,7 +39,7 @@ beforeEach(async () => {
 
 describe("the sample path from a prompt to a ticket", () => {
   async function ticketless(): Promise<Run> {
-    const started = backend.runs.pipStart({ workstream: null, role: "investigate", brief: "Why does the order consumer retry so fast?", repo: "acme/storefront", fromRun: null, item: null }, "turn-ticketless");
+    const started = backend.runs.pipStart({ workstream: null, role: "investigator", brief: "Why does the order consumer retry so fast?", repo: "acme/storefront", item: null }, "turn-ticketless");
     for (let i = 0; i < 4; i++) backend.runs.advance(started.id);
     return (await backend.runsGet(started.id))!;
   }
@@ -54,7 +54,7 @@ describe("the sample path from a prompt to a ticket", () => {
     if (draft.intent.type !== "create") throw new Error("a ticket draft");
     expect(draft.intent.container).toEqual(containerRef("CA"));
     expect(draft.intent.fields).toMatchObject({ title: "Add a backoff to the order consumer's retries", kind: "bug" });
-    expect(docText(draft.intent.fields.body)).toContain("Found by an agent that was asked to only read code");
+    expect(docText(draft.intent.fields.body)).toContain("Found by an agent run from Gossamr");
     expect(backend.proposals.list({ states: ["applied"] }).filter((p) => p.intent.type === "create")).toHaveLength(0);
 
     const outcome = await backend.runsOutcome(run.id);
@@ -99,7 +99,7 @@ describe("the sample path from a prompt to a ticket", () => {
   });
 
   it("refuses to draft before the run has finished", async () => {
-    const started = backend.runs.pipStart({ workstream: null, role: "investigate", brief: "Why is it slow here?", repo: "acme/storefront", fromRun: null, item: null }, "turn-why");
+    const started = backend.runs.pipStart({ workstream: null, role: "investigator", brief: "Why is it slow here?", repo: "acme/storefront", item: null }, "turn-why");
     await expect(backend.runsDraftTicket(started.id)).rejects.toThrow(/hasn't finished/);
   });
 
@@ -212,7 +212,7 @@ describe("the draft ticket made from a run", () => {
 describe("drafting a ticket from the run sheet", () => {
   it("opens the draft and says nothing is created, and a refusal is a message, not a crash", async () => {
     await backend.runsSetSettings({ ...(await backend.runsSettings()), draftOnFinish: false });
-    const started = backend.runs.pipStart({ workstream: null, role: "investigate", brief: "Why is it slow here?", repo: "acme/storefront", fromRun: null, item: null }, "turn-why");
+    const started = backend.runs.pipStart({ workstream: null, role: "investigator", brief: "Why is it slow here?", repo: "acme/storefront", item: null }, "turn-why");
     for (let i = 0; i < 4; i++) backend.runs.advance(started.id);
     await useRuns.getState().reload();
     useRuns.getState().openRun(started.id);

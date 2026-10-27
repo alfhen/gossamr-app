@@ -16,7 +16,7 @@ test.describe("the safety sheet (G23)", () => {
     await page.getByRole("dialog", { name: "Command palette" }).getByRole("combobox").fill("agents safety");
     await page.keyboard.press("Enter");
     const lines = safety(page).locator("[data-safety-summary] li");
-    await expect(lines.nth(2)).toHaveText("Gossamr posts to Jira or GitHub only what you approve. A Build runs with your Claude settings and could reach Jira or GitHub on its own: your Claude settings, not Gossamr, decide that.");
+    await expect(lines.nth(2)).toHaveText("Gossamr posts to Jira or GitHub only what you approve. An agent could reach Jira or GitHub on its own: your Claude Code settings, not Gossamr, decide that.");
   });
 });
 

@@ -1,6 +1,7 @@
-import type { Run, RunKind } from "../types";
+import { stepOf } from "../lib/roles";
+import type { Run } from "../types";
 import { byQueue } from "../lib/workstreamStage";
-import { withoutMarkers } from "./mockRunKinds";
+import { withoutMarkers } from "./mockRunSpec";
 import type { MockWorkstreams } from "./mockWorkstreams";
 import type { MockRuns } from "./mockRuns";
 import type { MockProposals } from "./mockProposals";
@@ -14,10 +15,10 @@ import type { MockProposals } from "./mockProposals";
 /** What a run did that wakes Pip. */
 export type WakeState = "done" | "failed" | "stopped" | "needsAnswer" | "needsPermission" | "systemBlocked" | "pullRequest";
 
-/** One thing that happened to a run, as Pip is told it: ids, kinds, states, counts and parsed flags only. */
+/** One thing that happened to a run, as Pip is told it: ids, roles, states, counts and parsed flags only. */
 export interface WakeFact {
   run: string;
-  kind: RunKind;
+  role: string;
   state: WakeState;
   planRecommended?: boolean | null;
   /** A Triage that found its ticket not ready to plan: how many open questions it listed. Absent is ready, or no verdict. */
@@ -63,7 +64,7 @@ const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one :
 
 function factLine(f: WakeFact): string {
   const id = shownId(f.run);
-  let line = `[Event] ${id ? `run ${id}` : "a run"} (${f.kind}) ${STATE_WORDS[f.state]}`;
+  let line = `[Event] ${id ? `run ${id}` : "a run"} (${f.role}) ${STATE_WORDS[f.state]}`;
   if (f.planRecommended != null) line += f.planRecommended ? "; plan recommended: yes" : "; plan recommended: no";
   if (f.openQuestions === 0) line += "; not ready to plan";
   else if (f.openQuestions != null) line += `; not ready to plan, ${plural(f.openQuestions, "open question", "open questions")}`;
@@ -238,7 +239,7 @@ export function oneQuestionEach(questions: readonly string[]): string[] {
 
 /** What a finished Triage on a ticket says about its ticket being ready to plan, from its whole written answer, as `Resolved.readiness`. */
 export function triageReadiness(run: Run): Readiness | null {
-  return run.spec.kind === "triage" && run.item && run.resultComplete !== false && run.result ? readiness(run.result) : null;
+  return stepOf(run.spec.role) === "triage" && run.item && run.resultComplete !== false && run.result ? readiness(run.result) : null;
 }
 
 /** A description is thin when it is a single non-empty line of fewer than `THIN_LIMIT` characters: the one deliberately vague kind of ticket the sample's Triage recognises. */
@@ -296,17 +297,16 @@ export function factKey(run: Pick<Run, "continuedAt" | "lastProgressAt">, state:
   return `${base}@${secs(run.lastProgressAt)}`;
 }
 
-/** What `run` did that wakes Pip, if it is at rest or waiting on the person; null while it is under way, or after a stop Gossamr made at a limit. */
-export function wakeStateOf(run: Pick<Run, "state" | "stoppedByLimit">): WakeState | null {
+/** What `run` did that wakes Pip, if it is at rest or waiting on the person; null while it is under way. */
+export function wakeStateOf(run: Pick<Run, "state">): WakeState | null {
   switch (run.state) {
     case "done":
     case "failed":
+    case "stopped":
     case "needsAnswer":
     case "needsPermission":
     case "systemBlocked":
       return run.state;
-    case "stopped":
-      return run.stoppedByLimit ? null : "stopped";
     default:
       return null;
   }
@@ -368,20 +368,20 @@ export class MockSupervisor {
 
   /** The fact `state` of `run`, with a Triage's plan recommendation, a Review's verdict and blocking count, and its drafts. */
   private factOf(run: Run, state: WakeState): KeyedFact {
-    const fact: KeyedFact = { run: run.id, kind: run.spec.kind, state, key: factKey(run, state) };
+    const fact: KeyedFact = { run: run.id, role: run.spec.role, state, key: factKey(run, state) };
     if (state !== "done") return fact;
     const resolved = this.parts.runs.resolvedOf(run.id);
-    if (run.spec.kind === "triage") {
+    if (stepOf(run.spec.role) === "triage") {
       fact.planRecommended = triagePlanRecommended(run);
       const found = triageReadiness(run);
       if (found && !found.ready) fact.openQuestions = found.questions.length;
     }
-    if (run.spec.kind === "review" && resolved) {
+    if (stepOf(run.spec.role) === "review" && resolved) {
       fact.verdict = resolved.verdict;
       fact.blocking = resolved.findings.filter((f) => f.severity === "blocking").length;
     }
     fact.drafts = this.parts.runs.draftsWaitingFrom(run.id);
-    if (run.spec.kind === "build" && run.spec.allowPush && this.parts.runs.pullHeadOf(run.id) === null) fact.waitingForPr = true;
+    if (stepOf(run.spec.role) === "build" && this.parts.runs.pullHeadOf(run.id) === null) fact.waitingForPr = true;
     return fact;
   }
 
@@ -402,7 +402,7 @@ export class MockSupervisor {
       if (!state || (state === "stopped" && stoppedByPerson(run))) continue;
       const fact = this.factOf(run, state);
       if (!woken.has(`${fact.run}|${fact.key}`)) fresh.push(fact);
-      const found: KeyedFact = { run: run.id, kind: run.spec.kind, state: "pullRequest", key: factKey(run, "pullRequest") };
+      const found: KeyedFact = { run: run.id, role: run.spec.role, state: "pullRequest", key: factKey(run, "pullRequest") };
       if (state === "done" && woken.has(`${fact.run}|${fact.key}`) && !woken.has(`${found.run}|${found.key}`) && toldWaiting(run, fact.key) && runs.pullHeadOf(run.id) !== null) fresh.push(found);
     }
     if (!fresh.length) return;

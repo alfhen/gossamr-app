@@ -9,7 +9,7 @@ import { SCRIPTED_RESULT } from "../backend/mockRuns";
 import { docFromText, docText } from "../lib/docs";
 import { withRunNamed } from "../lib/runNames";
 import type { Backend } from "../backend/types";
-import type { Proposal, Run, RunKind, RunOutcome, RunSpec, ScreenContext } from "../types";
+import type { Proposal, Run, RunOutcome, RunSpec, ScreenContext } from "../types";
 import { toRunEntries } from "./activityLogic";
 import { AgentCard } from "./AgentCard";
 import { AgentsSettingsView } from "./AgentsSettings";
@@ -20,20 +20,18 @@ import { commentWithPipPrompt, runDraftOf } from "./runSheetLogic";
 
 const blank: ScreenContext = { view: null, item: null, filter: null, selection: [] };
 
-const spec = (kind: RunKind = "investigate", over: Partial<RunSpec> = {}): RunSpec => ({
-  kind,
+const spec = (kind: string = "investigate", over: Partial<RunSpec> = {}): RunSpec => ({
+  role: kind,
   repo: "acme/storefront",
   clonePath: "/Users/sample/Code/storefront",
   base: "main",
   name: `ca-412-${kind}-ab12`,
-  instruction: "Do it.",
-  focus: null,
-  focusFromRun: null,
+  brief: "Do it.",
   ticketBlock: "CA-412: sample",
   ...over,
 });
 
-async function finished(backend: MockBackend, kind: RunKind = "investigate", item: ReturnType<typeof itemRef> | null = itemRef("CA-412")): Promise<Run> {
+async function finished(backend: MockBackend, kind: string = "investigate", item: ReturnType<typeof itemRef> | null = itemRef("CA-412")): Promise<Run> {
   const queued = backend.runs.start(spec(kind, kind === "review" ? { pr: 331, prSha: "a1b2c3d4e5f6" } : {}), item);
   for (let i = 0; i < 4; i++) backend.runs.advance(queued.id);
   return (await backend.runsGet(queued.id))!;
@@ -334,8 +332,8 @@ describe("what the person sees", () => {
     expect(row(new Set([run.id])).id).toBe(row(new Set()).id);
   });
 
-  it("has the setting in the safety sheet's limits, on by default", () => {
-    const settings = { maxRuns: 3, wallClockMinutes: 60, tokenCap: 3_000_000, terminal: "terminal" as const, draftOnFinish: true };
+  it("has the setting in the agent settings, on by default", () => {
+    const settings = { maxRuns: 3, terminal: "terminal" as const, draftOnFinish: true };
     const html = renderToStaticMarkup(<AgentsSettingsView runs={[]} stopping={false} keepRunning={0} settings={settings} cleanup={null} onSettings={vi.fn()} onCleanup={vi.fn()} onStopAll={vi.fn()} onClose={vi.fn()} />);
     expect(html).toContain("Draft a Jira comment when an agent finishes");
     expect(html).toMatch(/<input type="checkbox"[^>]*checked/);
@@ -344,7 +342,7 @@ describe("what the person sees", () => {
 
 describe("a plan's description update, on its card", () => {
   const backend = new MockBackend({ runs: { seed: "kinds", epoch: Date.parse("2026-09-30T12:00:00Z"), planDescription: true } });
-  const plan: Run = backend.runs.list().find((r) => r.spec.kind === "plan")!;
+  const plan: Run = backend.runs.list().find((r) => r.spec.role === "planner")!;
 
   it("writes the same intro on the card and to Jira: no run id and no app name", () => {
     const draft = backend.proposals.list({ states: ["pending"] }).find((p) => p.intent.type === "rewrite" && p.origin.type === "run" && p.origin.runId === plan.id)!;

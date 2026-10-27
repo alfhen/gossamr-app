@@ -1,7 +1,8 @@
-import type { Intent, Proposal, ProposalMaker, Run, RunKind, WorkstreamActor, WorkstreamEvent, WorkstreamView } from "../types";
+import type { Intent, Proposal, ProposalMaker, Run, WorkstreamActor, WorkstreamEvent, WorkstreamView } from "../types";
 import { eventText } from "../workspace/activityLogic";
 import type { Need } from "./needs";
 import { targetOf, workstreamOf } from "./proposals";
+import { roleLabel } from "./roles";
 
 /**
  * One timeline per workstream (docs/needs-you.md, step 3): what Pip said, what the person said, each run from start to end
@@ -29,7 +30,7 @@ export const FILTER_LABEL: Record<TimelineFilter, string> = { all: "All", runs: 
 export type TimelineTarget = { type: "run"; id: string } | { type: "draft"; id: string } | { type: "need"; key: string } | null;
 
 /** Where a run is in its life, as its one entry says it. */
-export type RunPhase = "queued" | "started" | "waiting" | "finished" | "failed" | "stopped" | "limit" | "unknown";
+export type RunPhase = "queued" | "started" | "waiting" | "finished" | "failed" | "stopped" | "unknown";
 
 export interface TimelineEntry {
   /** Stable across reads: `turn:<request id>`, `run:<id>`, `draft:<id>`, `audit:<workstream id>:<seq>`. */
@@ -101,8 +102,6 @@ export interface TimelineInput {
   ticketKey?: string | null;
 }
 
-const KIND_WORD: Record<RunKind, string> = { investigate: "Investigate", triage: "Triage", plan: "Plan", build: "Build", review: "Review", verify: "Verify" };
-
 /** What a draft is, in a few words: "a comment", "a move". */
 const DRAFT_WORDS: Record<Intent["type"], string> = {
   comment: "a comment",
@@ -137,7 +136,7 @@ const time = (iso: string | undefined) => {
 const firstLine = (text: string | null | undefined) => text?.trim().split(/\n+/)[0]?.trim() ?? "";
 
 /** Where a run is in its life, from its state. */
-export function runPhase(run: Pick<Run, "state" | "stoppedByLimit">): RunPhase {
+export function runPhase(run: Pick<Run, "state">): RunPhase {
   switch (run.state) {
     case "queued":
       return "queued";
@@ -153,7 +152,7 @@ export function runPhase(run: Pick<Run, "state" | "stoppedByLimit">): RunPhase {
     case "failed":
       return "failed";
     case "stopped":
-      return run.stoppedByLimit ? "limit" : "stopped";
+      return "stopped";
     default:
       return "unknown";
   }
@@ -174,7 +173,7 @@ export function runLifecycle(run: Run): { phase: RunPhase; at: string }[] {
  * asks a question". A failure is as short ("Build R2 failed"); what the run said went wrong is the entry's `detail`.
  */
 export function runSentence(run: Run, label: string | undefined, verdict: ReviewOutcome | undefined): string {
-  const name = `${KIND_WORD[run.spec.kind]}${label ? ` ${label}` : ""}`;
+  const name = `${roleLabel(run.spec.role)}${label ? ` ${label}` : ""}`;
   switch (runPhase(run)) {
     case "queued":
       return `${name} queued`;
@@ -188,8 +187,6 @@ export function runSentence(run: Run, label: string | undefined, verdict: Review
       return `${name} failed`;
     case "stopped":
       return `${name} was stopped`;
-    case "limit":
-      return `${name} stopped at its limit`;
     default:
       return `${name}: Gossamr can't tell what it is doing`;
   }
@@ -206,8 +203,7 @@ function appliedSentence(p: Proposal, on: string): string {
     return `You posted ${p.createdBy === "user" ? "your" : `${makerWord(p)}'s`} GitHub review on ${i.repo}#${i.number}: ${n} inline comment${n === 1 ? "" : "s"}${p.revisions.length ? ", edited by you" : ""}`;
   }
   if (i.type === "startRun") {
-    const kind = KIND_WORD[i.spec.kind].toLowerCase();
-    return `You started the ${kind} run that ${makerWord(p)} drafted${on}`;
+    return `You started the ${i.spec.role} run that ${makerWord(p)} drafted${on}`;
   }
   return `You approved ${DRAFT_WORDS[i.type]}${on}${p.createdBy === "user" ? "" : `, drafted by ${makerWord(p)}`}: ${i.type === "runAnswer" ? "sent" : "posted"}`;
 }

@@ -5,7 +5,7 @@ import { closeWorkstreamSheet, advanceRuns, askPip, expandNeedsYou, expectToast,
 const SAMPLE = "runs=empty&prSurface=manual";
 
 /** The newest run of `kind`, as the sample backend holds it. */
-const newest = async (page: Page, kind: string) => (await mockRuns(page)).find((r) => r.kind === kind) ?? null;
+const newest = async (page: Page, kind: string) => (await mockRuns(page)).find((r) => r.step === kind) ?? null;
 
 /** Moves run `id` on to done once Pip has answered, so each finish gets a wake of its own. */
 async function finish(page: Page, id: string) {
@@ -76,7 +76,7 @@ test.describe("workstream stage (D3, D10, D18)", () => {
     test.setTimeout(120_000);
     // The sample's review blocks by default, and nothing sends the build back: the blocking review is where the workstream stops.
     await toFinishedReview(page);
-    expect((await mockRuns(page)).filter((r) => r.kind === "build").map((r) => r.state)).toEqual(["done"]);
+    expect((await mockRuns(page)).filter((r) => r.step === "build").map((r) => r.state)).toEqual(["done"]);
     await expect(await peekStage(page)).toHaveText("Review · changes needed");
     await expect(pipConversation(page)).toHaveText(/^Workstream: CA-401 .* · Review · changes needed$/);
     const { row, header } = await homeStage(page);
@@ -114,7 +114,7 @@ test.describe("starting an agent from the peek (D1)", () => {
   test("Pip's intro says nothing is posted to Jira until the person approves", async ({ page }) => {
     await openApp(page);
     await openPip(page);
-    await expect(pipPane(page)).toContainText("Nothing is posted to Jira until you approve it. On GitHub, a Build runs as you. It is asked to push only its branch to a draft pull request: a request, not a lock; see Agent safety.");
+    await expect(pipPane(page)).toContainText("Nothing is posted to Jira until you approve it. On GitHub, agents run with your own Claude Code settings; see Agent safety.");
     await expect(pipPane(page)).not.toContainText("Nothing changes until you approve");
   });
 });

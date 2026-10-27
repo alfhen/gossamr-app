@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { mockRuns, openApp, startAgent } from "./support/app";
+import { openApp, startAgent } from "./support/app";
 
 const MARKER = "Marker: also check the unsubscribe link in all three emails.";
 
@@ -11,7 +11,7 @@ async function peekCa401(page: import("@playwright/test").Page) {
   await expect(peek(page)).toHaveAttribute("aria-label", "Details for CA-401");
 }
 
-test("a build from a plan the person edited and approved on the ticket carries their text", async ({ page }) => {
+test("a plan the person edited and approved on the ticket is one folded line there, and a build Pip starts is told by its brief", async ({ page }) => {
   await openApp(page);
   await peekCa401(page);
   const draft = peek(page).getByRole("article", { name: "Update the description of CA-401" });
@@ -28,11 +28,10 @@ test("a build from a plan the person edited and approved on the ticket carries t
   expect(await folded.evaluate((el: HTMLDetailsElement) => el.open)).toBe(false);
   await page.keyboard.press("Escape");
 
-  const plan = (await mockRuns(page)).find((r) => r.kind === "plan" && r.key === "CA-401")!;
-  const id = await startAgent(page, "CA-401", "build", { fromRun: plan.id });
+  const id = await startAgent(page, "CA-401", "builder", { brief: "Build CA-401 following the plan on the ticket." });
   await page.getByRole("button", { name: /^Agents/ }).click();
   await page.locator(`main article[data-run-id="${id}"]`).first().click();
   const told = page.locator("#agent-sheet").locator("details").filter({ hasText: "What the agent was told" });
   await told.locator("> summary").first().click();
-  await expect(told.locator("[data-plan]")).toContainText(MARKER);
+  await expect(told).toContainText("Build CA-401 following the plan on the ticket.");
 });

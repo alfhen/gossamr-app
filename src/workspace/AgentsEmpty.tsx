@@ -25,10 +25,7 @@ export function AgentsIntro({ onDismiss }: { onDismiss(): void }) {
       <p className="m-0 max-w-[62ch] text-ws-ink2">Pip starts an agent when you ask, and tells you about any it starts on its own.</p>
       <div className="grid grid-cols-[repeat(auto-fit,minmax(240px,1fr))] gap-3">
         <Explain icon="term" title="They run as you">
-          A Build runs as you, with your own Claude settings: anything your Claude can do, it can do. Read-only steps are signed in as you but run without your settings.
-        </Explain>
-        <Explain icon="shield" title="Read-only steps are locked">
-          Investigate, Triage, Plan, Review and Verify are read-only: Claude Code itself refuses their file edits and writing commands, and your own and the repository&apos;s allow rules don&apos;t apply. Review and Verify may run the repository&apos;s tests, whose code runs as written. A Build changes code in its worktree and is told not to write to Jira, but that is a request, not a lock.
+          Agents run with your own Claude Code settings: anything your Claude can do, they can do. They are told not to write to Jira, but that is a request, not a lock.
         </Explain>
         <Explain icon="branch" title="Where they work">
           They work in their own worktree of your clone, so your own files and branch are not touched.

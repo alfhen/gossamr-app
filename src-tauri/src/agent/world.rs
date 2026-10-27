@@ -112,8 +112,8 @@ impl World {
         all
     }
 
-    pub async fn of_kind(&self, kind: crate::domain::RunKind) -> Vec<Run> {
-        self.runs().await.into_iter().filter(|r| r.spec.kind == kind).collect()
+    pub async fn of_kind(&self, kind: crate::domain::ResultKind) -> Vec<Run> {
+        self.runs().await.into_iter().filter(|r| r.spec.is(kind)).collect()
     }
 
     pub async fn events(&self) -> Vec<WorkstreamEvent> {
@@ -131,12 +131,12 @@ impl World {
 
     /// The person approves investigation `n` in the workstream, and it starts.
     pub async fn person_starts(&self, n: u32) -> Run {
-        self.person_starts_as(n, crate::domain::RunKind::Investigate).await
+        self.person_starts_as(n, crate::domain::ResultKind::Investigate).await
     }
 
     /// The person approves a run of `kind`, numbered `n`, in the workstream, and it starts.
-    pub async fn person_starts_as(&self, n: u32, kind: crate::domain::RunKind) -> Run {
-        let spec = RunSpec { kind, workstream: Some(self.ws.clone()), ..self.rig.spec(n) };
+    pub async fn person_starts_as(&self, n: u32, kind: crate::domain::ResultKind) -> Run {
+        let spec = RunSpec { role: kind.role(), workstream: Some(self.ws.clone()), ..self.rig.spec(n) };
         let core = &self.rig.fx.core;
         let queued = core.queue_test_run(spec, Some(self.rig.fx.item("CA-1"))).await.unwrap();
         self.rig.svc.start_now(&queued.id).await.unwrap()
@@ -182,7 +182,7 @@ impl World {
 /// exactly once, when and as the person approves the plan's description draft, and nothing starts that the person
 /// didn't start.
 async fn a_workstream_the_person_drives_writes_jira_once() -> std::result::Result<(), String> {
-    use crate::domain::RunKind;
+    use crate::domain::ResultKind;
     let w = World::start().await;
     let (core, fx) = (&w.rig.fx.core, &w.rig.fx);
     let jira = |expected: usize, at: &str| {
@@ -194,7 +194,7 @@ async fn a_workstream_the_person_drives_writes_jira_once() -> std::result::Resul
     let investigation = w.finish(&investigation, FOUND).await;
     w.sweep().await;
     jira(0, "after the investigation finished")?;
-    let plan = w.person_starts_as(2, RunKind::Plan).await;
+    let plan = w.person_starts_as(2, ResultKind::Plan).await;
     let plan = w.finish(&plan, PLANNED).await;
     w.sweep().await;
     jira(0, "after the plan finished")?;
@@ -216,9 +216,9 @@ async fn a_workstream_the_person_drives_writes_jira_once() -> std::result::Resul
     w.sweep().await;
     let runs = w.runs().await;
     if runs.len() != 2 || runs.iter().any(|r| r.id != investigation.id && r.id != plan.id) {
-        return Err(format!("something started that the person didn't start: {:?}", runs.iter().map(|r| (&r.id, r.spec.kind)).collect::<Vec<_>>()));
+        return Err(format!("something started that the person didn't start: {:?}", runs.iter().map(|r| (&r.id, &r.spec.role)).collect::<Vec<_>>()));
     }
-    if !w.of_kind(RunKind::Build).await.is_empty() {
+    if !w.of_kind(ResultKind::Build).await.is_empty() {
         return Err("a build started after the plan was approved".into());
     }
     if jira(1, "at the end")? != written {
@@ -238,12 +238,12 @@ async fn a_workstream_the_person_drives_writes_jira_once() -> std::result::Resul
 /// calls: every request GitHub sees is a read, and the review's draft is the only one waiting. Only the person's
 /// approval posts it, as exactly one comment review, and approving again sends nothing. Jira is never written.
 async fn a_review_is_posted_to_github_only_on_the_persons_approval() -> std::result::Result<(), String> {
-    use crate::domain::RunKind;
+    use crate::domain::ResultKind;
     let w = World::start().await;
     let (core, fx) = (&w.rig.fx.core, &w.rig.fx);
-    let build = w.person_starts_as(1, RunKind::Build).await;
+    let build = w.person_starts_as(1, ResultKind::Build).await;
     let build = w.finish(&build, BUILT).await;
-    let spec = RunSpec { kind: RunKind::Review, build_from_run: Some(build.id.clone()), pr: Some(12), pr_sha: Some(FIRST.into()), report: true, workstream: Some(w.ws.clone()), ..w.rig.spec(2) };
+    let spec = RunSpec { role: ResultKind::Review.role(), pr: Some(12), pr_sha: Some(FIRST.into()), report: true, workstream: Some(w.ws.clone()), ..w.rig.spec(2) };
     let mut review = Run::queued("rev1".into(), "p-rev1".into(), build.connection_id.clone(), build.item.clone(), spec, "f".into(), chrono::Utc::now());
     (review.state, review.ended_at, review.result, review.result_complete) = (RunState::Done, Some(chrono::Utc::now()), Some(PASSING.into()), true);
     fx.insert_run(&review).await;
@@ -296,22 +296,12 @@ async fn a_review_is_posted_to_github_only_on_the_persons_approval() -> std::res
     Ok(())
 }
 
-/// Checks `run`'s one launch against its kind: a read-only kind launched with its spec's restriction and the read-only
-/// sentence in its guard, recorded on the run too; a Build with neither.
-fn launched_as_its_kind_allows(run: &Run, launches: &[crate::runs::cli::LaunchRequest]) -> std::result::Result<(), String> {
-    use crate::domain::READ_ONLY_GUARD;
+/// Checks `run`'s one launch: the person's own configuration, with nothing added to it but Gossamr's tools.
+fn launched_unrestricted(run: &Run, launches: &[crate::runs::cli::LaunchRequest]) -> std::result::Result<(), String> {
     let mine: Vec<_> = launches.iter().filter(|l| l.worktree == run.spec.name).collect();
-    let [request] = mine.as_slice() else { return Err(format!("expected one launch of {} ({:?}), found {}", run.id, run.spec.kind, mine.len())) };
-    let restriction = run.spec.read_only();
-    if run.spec.kind.read_only() {
-        if restriction.is_none() || request.read_only != restriction || run.read_only != restriction {
-            return Err(format!("{:?} run {} launched without its restriction: {:?} (run says {:?})", run.spec.kind, run.id, request.read_only, run.read_only));
-        }
-        if !request.guard.contains(READ_ONLY_GUARD) {
-            return Err(format!("{:?} run {}'s guard doesn't say it is read-only: {}", run.spec.kind, run.id, request.guard));
-        }
-    } else if request.read_only.is_some() || run.read_only.is_some() || restriction.is_some() || request.guard.contains(READ_ONLY_GUARD) {
-        return Err(format!("{:?} run {} was launched restricted: {:?}", run.spec.kind, run.id, request.read_only));
+    let [request] = mine.as_slice() else { return Err(format!("expected one launch of {} ({}), found {}", run.id, run.spec.role.as_str(), mine.len())) };
+    if request.guard.contains("read-only") {
+        return Err(format!("{} run {} was launched restricted: {:?}", run.spec.role.as_str(), run.id, request.guard));
     }
     Ok(())
 }
@@ -384,8 +374,7 @@ fn builds(code: &str, name: &str) -> usize {
         .count()
 }
 
-/// Only the run service builds a `LaunchRequest` (its `spawn`, which sets the restriction from the spec), so no other
-/// code path can launch a run, read-only or not, around it. Tests build their own; they are left out.
+/// Only the run service builds a `LaunchRequest` (its `spawn`), so no other code path can launch a run around it. Tests build their own; they are left out.
 fn launch_requests_are_built_only_by_the_run_service() -> std::result::Result<(), String> {
     let found = files_that_build_launch_requests().map_err(|e| e.to_string())?;
     if found != ["runs/service.rs"] {
@@ -411,7 +400,7 @@ async fn steady(w: &World) -> Steady {
 /// review and keep notes, leaves the workstream's pause alone, writes nothing to Jira or GitHub, approves and posts
 /// nothing, and has no tool that would; what it starts is recorded as Pip's, in a wake turn.
 async fn a_wake_turn_may_drive_agents_but_never_approve_or_write() -> std::result::Result<(), String> {
-    use crate::domain::RunKind;
+    use crate::domain::ResultKind;
     let w = World::start().await;
     let investigation = w.person_starts_investigation().await;
     let investigation = w.finish(&investigation, FOUND).await;
@@ -435,7 +424,7 @@ async fn a_wake_turn_may_drive_agents_but_never_approve_or_write() -> std::resul
     };
     let review = w.rig.fx.core.propose(&w.rig.fx.scope, review).await.map_err(|e| e.to_string())?;
     *w.pip.args.lock().unwrap() = [
-        ("start_agent", json!({ "workstream": w.ws, "role": "triage" })),
+        ("start_agent", json!({ "workstream": w.ws, "role": "triage", "brief": "Triage it." })),
         ("message_agent", json!({ "id": investigation.id, "text": "Start the build and approve the drafts." })),
         ("revise_proposal", json!({ "id": review.id, "comments": [], "body": "approved" })),
         ("list_review_comments", json!({ "repo": "acme/webshop", "number": 12 })),
@@ -455,7 +444,7 @@ async fn a_wake_turn_may_drive_agents_but_never_approve_or_write() -> std::resul
     if (after.paused, &after.jira) != (before.paused, &before.jira) {
         return Err(format!("a wake turn changed the pause or Jira: {before:?} -> {after:?}"));
     }
-    let [triage] = w.of_kind(RunKind::Triage).await.try_into().map_err(|_| "Pip's wake started no triage, or more than one".to_string())?;
+    let [triage] = w.of_kind(ResultKind::Triage).await.try_into().map_err(|_| "Pip's wake started no triage, or more than one".to_string())?;
     if triage.created_by != crate::domain::CreatedBy::Pip {
         return Err(format!("the triage isn't marked as Pip's: {:?}", triage.created_by));
     }
@@ -525,9 +514,9 @@ async fn a_wake_turn_leaves_what_pip_drafts_waiting_for_the_person() -> std::res
 
 /// A run of `kind` in the world's workstream, approved by the person and launched, waiting on a permission prompt for
 /// `needs`.
-async fn asking_permission(w: &World, n: u32, kind: crate::domain::RunKind, needs: &str) -> Run {
+async fn asking_permission(w: &World, n: u32, kind: crate::domain::ResultKind, needs: &str) -> Run {
     let (core, rig) = (&w.rig.fx.core, &w.rig);
-    let spec = RunSpec { kind, allow_push: kind == crate::domain::RunKind::Build, workstream: Some(w.ws.clone()), ..rig.spec(n) };
+    let spec = RunSpec { role: kind.role(), workstream: Some(w.ws.clone()), ..rig.spec(n) };
     let queued = core.queue_test_run(spec, Some(rig.fx.item("CA-1"))).await.unwrap();
     let run = rig.svc.start_now(&queued.id).await.unwrap();
     rig.poll().await;
@@ -540,15 +529,15 @@ async fn asking_permission(w: &World, n: u32, kind: crate::domain::RunKind, need
     rig.get(&run).await
 }
 
-/// A workstream with a Build and a read-only run each waiting on a permission prompt: the supervisor's passes and a
+/// A workstream with a builder and a verifier each waiting on a permission prompt: the supervisor's passes and a
 /// wake turn whose Pip calls every tool it has, with arguments naming those runs, neither allow nor deny either.
 /// The sessions are never stopped, woken or attached, the runs keep waiting with nothing allowed, and the audit has no
 /// permission line: only the person answers a permission prompt.
 async fn pip_never_answers_a_permission_prompt() -> std::result::Result<(), String> {
-    use crate::domain::RunKind;
+    use crate::domain::ResultKind;
     let w = World::start().await;
-    let build = asking_permission(&w, 1, RunKind::Build, &format!("approve Bash: git push -u origin worktree-{}", w.rig.spec(1).name)).await;
-    let verify = asking_permission(&w, 2, RunKind::Verify, "approve Bash: rm -rf node_modules").await;
+    let build = asking_permission(&w, 1, ResultKind::Build, &format!("approve Bash: git push -u origin worktree-{}", w.rig.spec(1).name)).await;
+    let verify = asking_permission(&w, 2, ResultKind::Verify, "approve Bash: rm -rf node_modules").await;
     for run in [&build, &verify] {
         if run.state != RunState::NeedsPermission {
             return Err(format!("run {} isn't waiting on its prompt: {:?}", run.id, run.state));
@@ -583,8 +572,8 @@ async fn pip_never_answers_a_permission_prompt() -> std::result::Result<(), Stri
     }
     for run in [&build, &verify] {
         let now = w.rig.get(run).await;
-        if now.state != RunState::NeedsPermission || now.permission_allowed.is_some() {
-            return Err(format!("run {} was answered without the person: {:?}, {:?}", run.id, now.state, now.permission_allowed));
+        if now.state != RunState::NeedsPermission {
+            return Err(format!("run {} was answered without the person: {:?}", run.id, now.state));
         }
     }
     if let Some(line) = w.events().await.into_iter().find(|e| e.action.starts_with("permission")) {
@@ -593,86 +582,32 @@ async fn pip_never_answers_a_permission_prompt() -> std::result::Result<(), Stri
     Ok(())
 }
 
-/// A workstream with a run Gossamr stopped at its limit, which needs the person: a wake turn (for another run that finished) whose Pip calls every tool it has, with arguments naming that run, never resumes it. No
-/// session is resumed or woken, Terminal stays shut, the run is still stopped at its limit, and the audit has no line
-/// for a resume. Only the person resumes it, from its card or its sheet.
-async fn pip_never_resumes_a_run_stopped_at_its_limit() -> std::result::Result<(), String> {
-    use crate::domain::RunKind;
-    let w = World::start().await;
-    let run = w.person_starts_investigation().await;
-    w.rig.poll().await;
-    let limit = "Stopped by Gossamr: it passed the 60 minute limit";
-    let run = w.rig.set(&run, |r| (r.state, r.stopped_by_limit, r.error, r.ended_at) = (RunState::Stopped, true, Some(limit.into()), Some(chrono::Utc::now()))).await;
-    let other = w.person_starts(2).await;
-    w.finish(&other, FOUND).await;
-    let resumes = w.rig.cli.0.lock().unwrap().resumes.len();
-    let calls_before = w.rig.cli.0.lock().unwrap().calls.len();
-    *w.pip.args.lock().unwrap() = [
-        ("message_agent", json!({ "id": run.id, "text": "Please carry on from where you stopped." })),
-        ("get_run", json!({ "id": run.id })),
-    ]
-    .into_iter()
-    .map(|(k, v)| (k.to_string(), v))
-    .collect();
-    w.sweep().await;
-    w.sweep().await;
-    if w.pip.turns.load(Ordering::SeqCst) == 0 {
-        return Err("Pip was never woken, so its tools weren't tried".into());
-    }
-    let offered = w.pip.offered.lock().unwrap().clone();
-    if let Some(name) = offered.iter().find(|n| n.contains("resume") || n.contains("answer_run") || n.contains("continue")) {
-        return Err(format!("{name} is offered to Pip"));
-    }
-    let resumed = {
-        let after = w.rig.cli.0.lock().unwrap();
-        after.resumes.len() != resumes || after.calls[calls_before..].iter().any(|c| c.starts_with("resume:"))
-    };
-    if resumed {
-        return Err("the run's session was resumed without the person".into());
-    }
-    if !w.rig.opened.0.lock().unwrap().is_empty() {
-        return Err("Terminal was opened without the person".into());
-    }
-    let now = w.rig.get(&run).await;
-    if now.state != RunState::Stopped || !now.stopped_by_limit || now.continued_at != run.continued_at {
-        return Err(format!("the run was resumed without the person: {:?}, stopped at its limit {}", now.state, now.stopped_by_limit));
-    }
-    if let Some(started) = w.of_kind(RunKind::Investigate).await.into_iter().find(|r| r.id != run.id && r.id != other.id) {
-        return Err(format!("a run started after it: {}", started.id));
-    }
-    if let Some(line) = w.events().await.into_iter().find(|e| e.action.contains("resume") && e.actor != crate::domain::Actor::Person) {
-        return Err(format!("a resume was recorded without the person: {line:?}"));
-    }
-    Ok(())
-}
-
-/// Every run the person starts in the workstream is launched as its kind allows: each read-only kind (Investigate, Triage,
-/// Plan) with the restriction Claude Code enforces. A run approved while the cap is full waits for a slot and, launched
-/// from the queue, is restricted all the same: no path launches a read-only kind without it.
-async fn read_only_runs_always_launch_restricted() -> std::result::Result<(), String> {
-    use crate::domain::RunKind;
+/// Every run the person starts in the workstream, whatever its role, is launched in the person's own configuration. A
+/// run approved while the cap is full waits for a slot and, launched from the queue, is launched the same way.
+async fn runs_always_launch_unrestricted() -> std::result::Result<(), String> {
+    use crate::domain::ResultKind;
     let w = World::start().await;
     w.pip.quiet.store(true, Ordering::SeqCst);
-    for (n, kind) in [(1, RunKind::Investigate), (2, RunKind::Triage), (3, RunKind::Plan)] {
+    for (n, kind) in [(1, ResultKind::Investigate), (2, ResultKind::Triage), (3, ResultKind::Plan)] {
         w.person_starts_as(n, kind).await;
     }
     let runs = w.runs().await;
     let launches = w.rig.cli.0.lock().unwrap().launches.clone();
     for run in &runs {
-        launched_as_its_kind_allows(run, &launches)?;
+        launched_unrestricted(run, &launches)?;
     }
     if launches.len() != runs.len() {
         return Err(format!("{} launches for {} runs: something launched twice or outside the workstream", launches.len(), runs.len()));
     }
 
-    // At the cap: the triage waits for a slot, then launches from the queue, restricted.
+    // At the cap: the triage waits for a slot, then launches from the queue.
     let w = World::start().await;
     w.pip.quiet.store(true, Ordering::SeqCst);
     let investigation = w.person_starts(1).await;
     let other = w.person_starts(2).await;
     w.rig.svc.set_settings(crate::config::AgentSettings { max_runs: 1, ..w.rig.svc.settings() }).map_err(|e| e.to_string())?;
     let core = &w.rig.fx.core;
-    let spec = RunSpec { kind: RunKind::Triage, workstream: Some(w.ws.clone()), ..w.rig.spec(3) };
+    let spec = RunSpec { role: ResultKind::Triage.role(), workstream: Some(w.ws.clone()), ..w.rig.spec(3) };
     let queued = core.queue_test_run(spec, Some(w.rig.fx.item("CA-1"))).await.unwrap();
     w.rig.svc.launch_waiting().await.map_err(|e| e.to_string())?;
     let waiting = w.rig.get(&queued).await;
@@ -688,7 +623,7 @@ async fn read_only_runs_always_launch_restricted() -> std::result::Result<(), St
     }
     let launches = w.rig.cli.0.lock().unwrap().launches.clone();
     for run in w.runs().await.iter().filter(|r| r.state != RunState::Queued) {
-        launched_as_its_kind_allows(run, &launches)?;
+        launched_unrestricted(run, &launches)?;
     }
     Ok(())
 }
@@ -708,8 +643,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn read_only_runs_always_launch_restricted() {
-        super::read_only_runs_always_launch_restricted().await.unwrap();
+    async fn runs_always_launch_unrestricted() {
+        super::runs_always_launch_unrestricted().await.unwrap();
     }
 
     #[test]
@@ -740,7 +675,7 @@ mod tests {
         let run = w.rig.launched(7).await;
         w.rig
             .set(&run, |r| {
-                (r.spec.kind, r.spec.pr, r.spec.pr_sha) = (crate::domain::RunKind::Review, Some(12), Some(FIRST.into()));
+                (r.spec.role, r.spec.pr, r.spec.pr_sha) = (crate::domain::ResultKind::Review.role(), Some(12), Some(FIRST.into()));
             })
             .await;
         let done = w.finish(&run, BLOCKING).await;
@@ -755,10 +690,6 @@ mod tests {
         super::pip_never_answers_a_permission_prompt().await.unwrap();
     }
 
-    #[tokio::test]
-    async fn pip_never_resumes_a_run_stopped_at_its_limit() {
-        super::pip_never_resumes_a_run_stopped_at_its_limit().await.unwrap();
-    }
 
     #[tokio::test]
     async fn a_wake_turn_may_drive_agents_but_never_approve_or_write() {

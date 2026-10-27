@@ -19,7 +19,7 @@ async function startInvestigation(page: Page) {
 
 /** The newest run of `kind`, as the sample backend holds it. */
 async function newest(page: Page, kind: string) {
-  return (await mockRuns(page)).find((r) => r.kind === kind) ?? null;
+  return (await mockRuns(page)).find((r) => r.step === kind) ?? null;
 }
 
 /**
@@ -45,7 +45,7 @@ test("a finished investigation wakes Pip once and starts nothing; asked again, n
   await expect(wakes(page)).toHaveCount(1);
   await expect(wakes(page).locator("[data-wake-header]")).toHaveText("Pip picked this up: run R1 finished");
   await settled(page);
-  expect((await mockRuns(page)).filter((r) => r.kind !== "investigate")).toEqual([]);
+  expect((await mockRuns(page)).filter((r) => r.step !== "investigate")).toEqual([]);
   expect((await actions(page, "autostart")).length).toBe(0);
 
   // The same finish again, and a look over everything, wake nobody.
@@ -79,7 +79,7 @@ test("a paused workstream wakes nobody; Resume wakes Pip once for what finished 
   await settled(page);
   expect(await wakeTurns(page)).toBe(0);
   expect(await actions(page, "wake")).toEqual([]);
-  expect((await mockRuns(page)).filter((r) => r.kind !== "investigate")).toEqual([]);
+  expect((await mockRuns(page)).filter((r) => r.step !== "investigate")).toEqual([]);
 
   await pausedBanner(page).getByRole("button", { name: "Resume" }).click();
   await expect(pausedBanner(page)).toHaveCount(0);

@@ -20,7 +20,7 @@ import { useRuns } from "./runsStore";
 import { useTabs, type Route } from "./tabsStore";
 import { contextFor, useWorkstreams } from "./workstreamsStore";
 import { maskSecrets } from "../lib/riskyText";
-import { BUILD_ON_GITHUB } from "./githubSafety";
+import { AGENTS_ON_GITHUB } from "./githubSafety";
 
 export { PIP_INPUT_ID };
 /** The Pip pane's conversation when no workstream is in focus, and each workstream's own (`ws:<id>`). */
@@ -61,7 +61,7 @@ function LiveApplied({ requestId }: { requestId: string }) {
 }
 
 const WAKE_LINE = /^\[Event\] (?:run (\S+)|a run) \(\w+\) ([^;]+)/;
-const WAKE_STATE: Record<string, string> = { Done: "finished", Failed: "failed", Stopped: "stopped", "Stopped at a limit": "stopped at a limit" };
+const WAKE_STATE: Record<string, string> = { Done: "finished", Failed: "failed", Stopped: "stopped" };
 
 /** What a wake turn's muted line says, in parts: the run it names (by its label, else its short id) and that run's id, so the line can link to it. */
 export interface WakeParts {
@@ -322,7 +322,7 @@ export function workstreamIntro(workstream: Pick<Workstream, "itemKey" | "title"
 }
 
 /** What General's empty conversation opens with. */
-export const GENERAL_INTRO = `I follow along as you move around. Tell me what to show, or ask about what is on screen. I can filter this view and draft comments, moves and subtasks. Nothing is posted to Jira until you approve it. ${BUILD_ON_GITHUB}`;
+export const GENERAL_INTRO = `I follow along as you move around. Tell me what to show, or ask about what is on screen. I can filter this view and draft comments, moves and subtasks. Nothing is posted to Jira until you approve it. ${AGENTS_ON_GITHUB}`;
 
 /**
  * The conversation itself: running agents, drafts left from before, then each question with its answer. Up and down move

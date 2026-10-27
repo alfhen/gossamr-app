@@ -1,5 +1,6 @@
 import { docText } from "../lib/docs";
 import { workstreamOf } from "../lib/proposals";
+import { stepOf } from "../lib/roles";
 import { adoptableOf, adoptWords, NOTHING_TO_ADOPT } from "../lib/workstreamAdopt";
 import { byQueue, reviewBlocking, runLabels, stage } from "../lib/workstreamStage";
 import { readStored, writeStored } from "../workspace/storage";
@@ -96,13 +97,13 @@ export function lastDriftOf(events: readonly WorkstreamEvent[]): LastDrift | nul
 }
 
 /**
- * The newest finished build among `runs` that pushes a branch, when no review was queued after it and `prOf` finds no
- * pull request for it yet: what a review waits for, as `pushed_build` and `view_of` in src-tauri/src/inbox/workstreams.rs.
+ * The newest finished build among `runs`, when no review was queued after it and `prOf` finds no pull request for it
+ * yet: what a review waits for, as `pushed_build` and `view_of` in src-tauri/src/inbox/workstreams.rs.
  */
 export function waitingForPr(runs: readonly Run[], prOf: (runId: string) => number | null): string | null {
-  const build = runs.filter((r) => r.spec.kind === "build" && r.state === "done" && r.spec.allowPush).sort(byQueue).pop();
+  const build = runs.filter((r) => stepOf(r.spec.role) === "build" && r.state === "done").sort(byQueue).pop();
   if (!build) return null;
-  if (runs.some((r) => r.spec.kind === "review" && (byQueue(r, build) > 0 || r.spec.buildFromRun === build.id))) return null;
+  if (runs.some((r) => stepOf(r.spec.role) === "review" && byQueue(r, build) > 0)) return null;
   return prOf(build.id) == null ? build.id : null;
 }
 
@@ -213,7 +214,7 @@ export class MockWorkstreams {
 
   private view(ws: Workstream, runs: readonly Run[]): WorkstreamView {
     const linked = runs.filter((r) => r.spec.workstream === ws.id).sort((a, b) => byQueue(b, a));
-    const judged = linked.map((r) => ({ ...r, verdict: r.spec.kind === "review" && r.state === "done" ? this.verdictOf(r) : null }));
+    const judged = linked.map((r) => ({ ...r, verdict: stepOf(r.spec.role) === "review" && r.state === "done" ? this.verdictOf(r) : null }));
     const view: WorkstreamView = { workstream: ws, stage: stage(judged), runs: linked.map((r) => r.id), labels: runLabels(linked) };
     const pipAsk = openPipAsk(this.audit.filter((e) => e.workstreamId === ws.id));
     const waiting = waitingForPr(linked, this.prOf);

@@ -427,9 +427,9 @@ mod tests {
 
     #[test]
     fn the_real_items_merge_only_wakes_of_the_same_workstream() {
-        use crate::domain::RunKind;
+        use crate::domain::ResultKind;
         use crate::agent::supervisor::{WakeFact, WakeState};
-        let fact = |run: &str| WakeFact { run: run.into(), kind: RunKind::Triage, state: WakeState::Done, mark: String::new(), plan_recommended: None, open_questions: None, verdict: None, blocking: 0, drafts: 0, waiting_for_pr: false };
+        let fact = |run: &str| WakeFact { run: run.into(), role: ResultKind::Triage.role(), state: WakeState::Done, mark: String::new(), plan_recommended: None, open_questions: None, verdict: None, blocking: 0, drafts: 0, waiting_for_pr: false };
         let scope = Scope { cloud_id: "s".into(), account_id: "me".into() };
         let sink: WakeSink = std::sync::Arc::new(|_, _| {});
         let mut item = QueueItem::Wake { scope: scope.clone(), facts: WakeFacts { workstream: "w1".into(), facts: vec![fact("r1")] }, sink: sink.clone() };

@@ -1,8 +1,8 @@
-import { parsePermission } from "../lib/permission";
 import { humanDuration } from "../lib/runNames";
 import { relativeTime } from "../lib/views";
+import { roleLabel, stepOf } from "../lib/roles";
 import { runLabels, stage } from "../lib/workstreamStage";
-import type { Proposal, Run, RunKind, RunState, WorkstreamStage, WorkstreamView } from "../types";
+import type { Proposal, Run, RunState, WorkstreamStage, WorkstreamView } from "../types";
 
 export const QUIET_MINUTES = 30;
 const MINUTE = 60_000;
@@ -20,9 +20,6 @@ export const LANES: Record<LaneId, { title: string; why: string }> = {
 const NEEDS: readonly RunState[] = ["needsAnswer", "needsPermission", "systemBlocked"];
 
 export const needsPerson = (run: Pick<Run, "state">) => NEEDS.includes(run.state);
-
-/** A run Gossamr stopped at its time or token limit, with no answer of the person's waiting on it: the person resumes it, nothing else does. */
-export const stoppedAtLimit = (run: Pick<Run, "state" | "stoppedByLimit">) => run.state === "stopped" && !!run.stoppedByLimit;
 
 /** Minutes without progress once a working run has been quiet for `QUIET_MINUTES` or more; null otherwise. */
 export function quietMinutes(run: Pick<Run, "state" | "lastProgressAt">, now: number): number | null {
@@ -51,8 +48,8 @@ export function laneOf(run: Run, now: number): LaneId {
     case "unknown":
       return "bad";
     case "stopped":
-      // A stopped run that may be continued is an unblock need in Needs you, so it is not folded away with the earlier ones.
-      return stoppedAtLimit(run) || run.possibleContinuations?.length ? "bad" : "earlier";
+      // A stopped run that may be continued stays among the live ones rather than folded away with the earlier ones.
+      return run.possibleContinuations?.length ? "bad" : "earlier";
   }
 }
 
@@ -90,10 +87,10 @@ const ACTS_ON_RUN: readonly Proposal["intent"]["type"][] = ["startRun", "followU
  * Whether a done run's main draft was applied: a plan's description update, else the first draft its result made (a comment, a review's post).
  * A run whose draft is still open, skipped or replaced, or that made none, is still to review.
  */
-export function runApproved(run: Pick<Run, "id" | "state"> & { spec: Pick<Run["spec"], "kind"> }, proposals: Iterable<Proposal>): boolean {
+export function runApproved(run: Pick<Run, "id" | "state"> & { spec: Pick<Run["spec"], "role"> }, proposals: Iterable<Proposal>): boolean {
   if (run.state !== "done") return false;
   let main: Proposal | null = null;
-  const plan = run.spec.kind === "plan";
+  const plan = stepOf(run.spec.role) === "plan";
   for (const p of proposals) {
     if (p.origin.type !== "run" || p.origin.runId !== run.id || ACTS_ON_RUN.includes(p.intent.type) || p.state.type === "retired") continue;
     // A plan's comment is not what it was made for: the description is.
@@ -104,25 +101,19 @@ export function runApproved(run: Pick<Run, "id" | "state"> & { spec: Pick<Run["s
 }
 
 /** What a run is called and coloured, with the quiet colour taking over from the working one. `approved` is `runApproved`: a done run reads "Approved" instead of "Ready to review". */
-export function stateView(run: Pick<Run, "state" | "lastProgressAt" | "stoppedByLimit" | "slotWaitSince">, now: number, approved = false): StateView {
-  if (run.state === "stopped" && run.stoppedByLimit) return { label: "Stopped at limit", tone: "warn", icon: "stop", live: false };
+export function stateView(run: Pick<Run, "state" | "lastProgressAt" | "slotWaitSince">, now: number, approved = false): StateView {
   if (waitsForSlot(run)) return { ...VIEWS.queued, label: SLOT_WAIT };
   if (approved && run.state === "done") return { ...VIEWS.done, label: APPROVED_LABEL };
   const view = VIEWS[run.state];
   return quietMinutes(run, now) === null ? view : { ...view, tone: "warn", live: false };
 }
 
-/** What a stopped run says it was left at: that Gossamr stopped it at a limit, that it may have carried on elsewhere, or where it stopped. */
-export function stoppedText(run: Pick<Run, "stoppedByLimit" | "error" | "lastDetail" | "possibleContinuations"> & Partial<Pick<Run, "launchedAt">>): string {
+/** What a stopped run says it was left at: that it may have carried on elsewhere, or where it stopped. */
+export function stoppedText(run: Pick<Run, "error" | "lastDetail" | "possibleContinuations"> & Partial<Pick<Run, "launchedAt">>): string {
   // Stopped while it waited for a slot: it never had a session, and the reason says so.
-  if (run.launchedAt === null && !run.stoppedByLimit && run.error?.trim()) return run.error.trim();
-  const continued = run.possibleContinuations?.length ? "May have continued in another session" : null;
-  const limit = run.stoppedByLimit ? run.error?.trim() || "Stopped at its limit" : null;
-  if (continued && limit) return `${limit.replace(/\.+$/, "")}. ${continued}`;
-  return continued ?? limit ?? (run.lastDetail?.trim() || "Stopped before it finished");
+  if (run.launchedAt === null && run.error?.trim()) return run.error.trim();
+  return run.possibleContinuations?.length ? "May have continued in another session" : run.lastDetail?.trim() || "Stopped before it finished";
 }
-
-export const KIND_LABEL: Record<RunKind, string> = { investigate: "Investigate", triage: "Triage", plan: "Plan", build: "Build", review: "Review", verify: "Verify" };
 
 /** "Quiet for 40 min", "Quiet for 3 h", "Quiet for 10 days". */
 export function quietText(minutes: number): string {
@@ -148,20 +139,21 @@ export const repoName = (repo: string) => repo.split("/").pop() ?? repo;
 
 export const branchOf = (run: Pick<Run, "branch" | "spec">) => run.branch ?? `worktree-${run.spec.name}`;
 
-/** The ticket's own title when it is cached; for an investigation with no ticket, the person's question; otherwise what the run is for, from the kind and the key. */
+/** The ticket's own title when it is cached; for a run with no ticket, its brief; otherwise what the run is for, from the role and the key. */
 export function runTitle(run: Pick<Run, "item" | "spec">, ticketTitle: string | null | undefined): string {
   if (ticketTitle?.trim()) return ticketTitle.trim();
-  const question = !run.item && run.spec.project ? run.spec.instruction.trim().replace(/\s+/g, " ") : "";
-  if (question) return question.length > 90 ? `${question.slice(0, 89).trimEnd()}…` : question;
-  const kind = KIND_LABEL[run.spec.kind] ?? "Run";
-  return run.item ? `${kind} ${run.item.key}` : `${kind} ${repoName(run.spec.repo)}`;
+  const brief = !run.item ? run.spec.brief.trim().replace(/\s+/g, " ") : "";
+  if (brief) return brief.length > 90 ? `${brief.slice(0, 89).trimEnd()}…` : brief;
+  const role = roleLabel(run.spec.role);
+  return run.item ? `${role} ${run.item.key}` : `${role} ${repoName(run.spec.repo)}`;
 }
 
 /** `approve Bash: git push` as `{ tool: "Bash", command: "git push" }`; anything else is shown whole. */
 export function permissionRequest(needs: string | null): { tool: string | null; command: string } | null {
   const text = needs?.trim();
   if (!text) return null;
-  return parsePermission(text) ?? { tool: null, command: text };
+  const m = /^approve\s+([^:\s]+):\s*([\s\S]*)$/i.exec(text);
+  return m ? { tool: m[1], command: m[2] } : { tool: null, command: text };
 }
 
 /** The first line or sentence of a result, for the card; the full text is for the run sheet. */
@@ -373,9 +365,9 @@ export function stepRun(order: readonly string[], current: string | null, delta:
   return order[Math.min(order.length - 1, Math.max(0, at + delta))];
 }
 
-/** A run that needs the person, one stopped at its limit, or a failed one they haven't dismissed: the runs `yourAgents` counts as waiting on the person. */
-export const needsAttention = (run: Pick<Run, "id" | "state"> & Partial<Pick<Run, "stoppedByLimit">>, dismissed: ReadonlySet<string>) =>
-  needsPerson(run) || stoppedAtLimit({ state: run.state, stoppedByLimit: run.stoppedByLimit }) || (run.state === "failed" && !dismissed.has(run.id));
+/** A run that needs the person, or a failed one they haven't dismissed: the runs `yourAgents` counts as waiting on the person. */
+export const needsAttention = (run: Pick<Run, "id" | "state">, dismissed: ReadonlySet<string>) =>
+  needsPerson(run) || (run.state === "failed" && !dismissed.has(run.id));
 
 const AT_WORK: readonly RunState[] = ["queued", "launching", "working"];
 

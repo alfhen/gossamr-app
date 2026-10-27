@@ -7,7 +7,7 @@ const SAMPLE = "runs=empty&prSurface=manual";
 const timeline = (page: Page) => homeConversationRegion(page).locator("[data-timeline]");
 
 /** The newest run of `kind`, as the sample backend holds it. */
-const newest = async (page: Page, kind: string) => (await mockRuns(page)).find((r) => r.kind === kind) ?? null;
+const newest = async (page: Page, kind: string) => (await mockRuns(page)).find((r) => r.step === kind) ?? null;
 
 
 /**

@@ -20,14 +20,13 @@ const CA401 = itemRef("CA-401");
 
 /** A run on CA-401 in a sample clone, as Pip's start_agent does. */
 const spec = (over: Partial<RunSpec> = {}): RunSpec => ({
-  kind: "investigate",
+  role: "investigator",
   repo: "acme/storefront",
   clonePath: "/Users/sample/Code/storefront",
   base: "main",
   name: `ca-401-${Math.random().toString(16).slice(2, 8)}`,
-  instruction: "",
-  focus: null,
-  focusFromRun: null,
+  brief: "Look into it.",
+  ticket: "CA-401",
   ticketBlock: null,
   ...over,
 });
@@ -173,7 +172,7 @@ describe("runs and drafts in a mock workstream", () => {
       ["run", "draft_created"],
       ["person", "draft_skipped"],
     ]);
-    expect(events[1]).toMatchObject({ runId: run.id, detail: "investigate · conversation" });
+    expect(events[1]).toMatchObject({ runId: run.id, detail: "investigator · conversation" });
     expect(events[2].proposalId).toBe(left[0].id);
   });
 
@@ -267,11 +266,11 @@ describe("runs and drafts in a mock workstream", () => {
     const backend = new MockBackend({ runs: { seed: "empty" } });
     const ws = await backend.workstreamsOpen(CA401);
     mockPipTurns.begin(`ws:${ws.id}`, "ws-ask-1", "investigate this", { imageCount: 0 });
-    const run = backend.pipStartAgent(ws.id, "investigate", null, null, null, "ws-ask-1");
+    const run = backend.pipStartAgent(ws.id, "investigator", "Look into it.", null, null, "ws-ask-1");
     expect(run).toMatchObject({ createdBy: "pip", origin: { type: "chat", requestId: "ws-ask-1", workstream: ws.id }, spec: { workstream: ws.id } });
     const comment = await backend.pipDraft({ type: "comment", item: CA401, body: { blocks: [] } }, null, "ws-ask-1");
     expect(comment.origin).toEqual({ type: "chat", requestId: "ws-ask-1", workstream: ws.id });
-    expect(() => backend.pipStartAgent(ws.id, "build", null, null, null, "ws-ask-1")).toThrow(/finished plan/);
+    expect(() => backend.pipStartAgent(ws.id, "builder", "  ", null, null, "ws-ask-1")).toThrow(/brief is empty/);
     expect((await backend.workstreamsEvents(ws.id)).map((e) => [e.actor, e.action])).toEqual([
       ["person", "opened"],
       ["pip", "agent_started"],
@@ -312,7 +311,7 @@ describe("a workstream's build waiting for its pull request", () => {
   async function finishedBuild(prSurfaceMs: number | null) {
     const b = new MockBackend({ runs: { seed: "empty", prSurfaceMs } });
     const ws = await b.workstreamsOpen(CA401);
-    const run = b.runs.start(spec({ kind: "build", workstream: ws.id }), CA401);
+    const run = b.runs.start(spec({ role: "builder", workstream: ws.id }), CA401);
     for (let i = 0; i < 3; i++) b.runs.advance(run.id);
     mockPipTurns.begin(`ws:${ws.id}`, `ws-pr-${run.id}`, "review it", { imageCount: 0 });
     return { b, ws: ws.id, build: b.runs.get(run.id)!, request: `ws-pr-${run.id}` };
@@ -320,13 +319,13 @@ describe("a workstream's build waiting for its pull request", () => {
 
   it("waits until the code host shows the draft pull request the build opened, then lets Pip start the review pinned to it", async () => {
     const { b, ws, build, request } = await finishedBuild(null);
-    expect(build).toMatchObject({ state: "done", spec: { allowPush: true }, branch: `worktree-${build.spec.name}` });
+    expect(build).toMatchObject({ state: "done", branch: `worktree-${build.spec.name}` });
     expect(build.result).toContain("opened a draft pull request");
     expect(build.result).toMatch(/For Jira:\n.*https:\/\/github\.com\/acme\/storefront\/pull\/300/);
     expect((await b.workstreamsGet(ws))?.waitingForPr).toBe(build.id);
     expect((await b.workstreamsGet(ws))?.stage).toBe("build");
     expect((await b.runsOutcome(build.id)).change).toBeNull();
-    expect(() => b.pipStartAgent(ws, "review", null, null, build.id, request)).toThrow(/^that build has no pull request in this repository yet\. Gossamr asked GitHub/);
+    expect(b.runs.pullRequestOf(build.id)).toBeNull();
     const runs = b.runs.list().length;
 
     let told = 0;
@@ -343,9 +342,9 @@ describe("a workstream's build waiting for its pull request", () => {
     expect(change.sha).toMatch(/^[0-9a-f]{40}$/);
     expect(b.github.code.changes.some((c) => c.externalId === change.externalId)).toBe(true);
 
-    const review = b.pipStartAgent(ws, "review", null, null, build.id, request) as Run;
-    expect(review.spec).toMatchObject({ kind: "review", pr: 300, prSha: change.sha, buildFromRun: build.id, report: true, workstream: ws });
-    expect(renderPrompt(review.spec)).toContain(`Review pull request #300 in acme/storefront at commit ${change.sha}.`);
+    const review = b.pipStartAgent(ws, "reviewer", "Review the pull request.", null, b.runs.pullRequestOf(build.id), request) as Run;
+    expect(review.spec).toMatchObject({ role: "reviewer", pr: 300, prSha: change.sha, report: true, workstream: ws });
+    expect(renderPrompt(review.spec)).toContain(`Pull request #300 in acme/storefront at commit ${change.sha}`);
     expect(b.runs.list().length).toBe(runs + 1);
   });
 
@@ -358,19 +357,17 @@ describe("a workstream's build waiting for its pull request", () => {
     expect(b.runs.pullRequestOf(build.id)).toBe(300);
   });
 
-  it("is derived like the backend: the newest finished pushing build, unless reviewed since or its pull request is found", () => {
-    const run = (id: string, kind: Run["spec"]["kind"], state: Run["state"], minute: number, over: Partial<RunSpec> = {}) =>
-      ({ id, state, queuedAt: `2026-09-30T10:${String(minute).padStart(2, "0")}:00Z`, spec: { ...spec({ kind, workstream: "ws-1" }), ...over } }) as Run;
+  it("is derived like the backend: the newest finished build, unless reviewed since or its pull request is found", () => {
+    const run = (id: string, kind: Run["spec"]["role"], state: Run["state"], minute: number, over: Partial<RunSpec> = {}) =>
+      ({ id, state, queuedAt: `2026-09-30T10:${String(minute).padStart(2, "0")}:00Z`, spec: { ...spec({ role: kind, workstream: "ws-1" }), ...over } }) as Run;
     const none = () => null;
-    expect(waitingForPr([run("b1", "build", "done", 0)], none)).toBeNull();
-    expect(waitingForPr([run("b1", "build", "working", 0, { allowPush: true })], none)).toBeNull();
-    const pushed = run("b1", "build", "done", 1, { allowPush: true });
+    expect(waitingForPr([run("b1", "build", "working", 0)], none)).toBeNull();
+    const pushed = run("b1", "build", "done", 1);
     expect(waitingForPr([pushed, run("p1", "plan", "done", 0)], none)).toBe("b1");
     expect(waitingForPr([pushed], (id) => (id === "b1" ? 300 : null))).toBeNull();
     expect(waitingForPr([pushed, run("r1", "review", "queued", 2)], none)).toBeNull();
-    expect(waitingForPr([pushed, run("r0", "review", "done", 0, { buildFromRun: "b1" })], none)).toBeNull();
     expect(waitingForPr([pushed, run("r0", "review", "done", 0)], none)).toBe("b1");
-    expect(waitingForPr([pushed, run("b2", "build", "done", 3, { allowPush: true })], (id) => (id === "b1" ? null : 301))).toBeNull();
+    expect(waitingForPr([pushed, run("b2", "build", "done", 3)], (id) => (id === "b1" ? null : 301))).toBeNull();
   });
 });
 

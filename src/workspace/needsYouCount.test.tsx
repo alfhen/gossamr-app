@@ -19,12 +19,12 @@ const NOW = Date.parse("2026-09-30T12:00:00Z");
 const ago = (minutes: number) => new Date(NOW - minutes * 60_000).toISOString();
 const ref = (key: string) => ({ connectionId: "mock", externalId: key, key });
 const base = new MockBackend().runs.list()[0];
-const run = (id: string, state: Run["state"], kind: Run["spec"]["kind"], minutesAgo: number, over: Partial<Run> = {}): Run => ({
+const run = (id: string, state: Run["state"], kind: Run["spec"]["role"], minutesAgo: number, over: Partial<Run> = {}): Run => ({
   ...base,
   id,
   state,
   item: ref("CA-401"),
-  spec: { ...base.spec, kind, workstream: null },
+  spec: { ...base.spec, role: kind, workstream: null },
   failure: null,
   needs: null,
   queuedAt: ago(minutesAgo),

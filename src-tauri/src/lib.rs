@@ -535,7 +535,7 @@ async fn code_pull_diff(core: State<'_, CoreState>, connection_id: String, repo:
     core.code_pull_diff(&connection_id, &repo, number).await
 }
 
-/// The limits on runs and the terminal to open.
+/// How many agents run at once, the terminal to open and the notices.
 #[tauri::command]
 fn runs_settings(runs: State<'_, RunsState>) -> config::AgentSettings {
     runs.settings()
@@ -745,25 +745,6 @@ async fn runs_answer(runs: State<'_, RunsState>, id: String, text: String) -> Re
     runs.answer(&id, &text).await
 }
 
-/// The person's Deny for the permission prompt they read as `command`: stops the session and wakes it in place, told
-/// the request was refused. Pip has no way to call this.
-#[tauri::command]
-async fn runs_deny_permission(app: AppHandle, runs: State<'_, RunsState>, id: String, command: String) -> Result<Run> {
-    let run = runs.deny_permission(&id, &command).await?;
-    runs_changed(&app, &run.connection_id);
-    Ok(run)
-}
-
-/// The person's Allow once for the permission prompt they read as `command`, when Gossamr's policy offers it: records
-/// the choice and opens the session in Terminal, where the person answers Claude Code's own prompt. Pip has no way to
-/// call this.
-#[tauri::command]
-async fn runs_allow_permission_once(app: AppHandle, runs: State<'_, RunsState>, id: String, command: String) -> Result<Run> {
-    let run = runs.allow_permission_once(&id, &command).await?;
-    runs_changed(&app, &run.connection_id);
-    Ok(run)
-}
-
 /// Takes a listed session over as the continuation of a stopped or finished run, when it still passes every check.
 #[tauri::command]
 async fn runs_adopt_session(runs: State<'_, RunsState>, id: String, session: String) -> Result<Run> {
@@ -788,6 +769,13 @@ async fn runs_attach(runs: State<'_, RunsState>, id: String) -> Result<()> {
 #[tauri::command]
 async fn runs_trust_folder(runs: State<'_, RunsState>, id: String) -> Result<()> {
     runs.open_claude(&id, runs::control::Purpose::Trust).await
+}
+
+/// Opens Terminal in the run's clone running `claude` in the permission mode `--bg` refused, so the person can accept
+/// it once. Only for a run that failed because of that mode.
+#[tauri::command]
+async fn runs_accept_mode(runs: State<'_, RunsState>, id: String, mode: domain::RefusedMode) -> Result<()> {
+    runs.open_claude(&id, runs::control::Purpose::Mode(mode)).await
 }
 
 /// Opens Terminal in the run's clone running `claude`, so the person can sign in. Only for a run that failed because
@@ -1184,12 +1172,11 @@ pub fn run() {
             runs_pick_clone,
             runs_stop,
             runs_answer,
-            runs_deny_permission,
-            runs_allow_permission_once,
             runs_adopt_session,
             runs_stop_all,
             runs_attach,
             runs_trust_folder,
+            runs_accept_mode,
             runs_sign_in,
             runs_disk,
             runs_events,

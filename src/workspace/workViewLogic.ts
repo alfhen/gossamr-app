@@ -1,8 +1,9 @@
 import { repeatedComments, safeToBatch } from "../lib/needs";
 import { isRunDraft } from "../lib/proposals";
+import { stageOf, type Step } from "../lib/roles";
 import { byQueue, REVIEW_POSTED, reviewPosted, STAGE_LABEL } from "../lib/workstreamStage";
-import type { CodeChange, Proposal, ReviewView, Run, RunKind, WorkstreamEvent } from "../types";
-import { liveCounts, liveWords, needsPerson, runApproved, stateView, stoppedAtLimit, type Tone } from "./agentsLogic";
+import type { CodeChange, Proposal, ReviewView, Run, WorkstreamEvent } from "../types";
+import { liveCounts, liveWords, needsPerson, runApproved, stateView, type Tone } from "./agentsLogic";
 import { keptEditsOfDraft } from "./DraftCard";
 import { liveDraft } from "./draftLive";
 import { shownVerdict, verdictChip } from "./runSheetLogic";
@@ -16,21 +17,22 @@ export function lastPausedAt(events: readonly Pick<WorkstreamEvent, "action" | "
 }
 
 /** The steps of a workstream's chain, in order, as a workstream's step rail shows them. */
-export const STEP_KINDS: readonly RunKind[] = ["investigate", "triage", "plan", "build", "review", "verify"];
+export const STEP_KINDS: readonly Step[] = ["investigate", "triage", "plan", "build", "review", "verify"];
 
 /** Where a draft goes on the step rail: under the step it is about, or with Pip's own drafts at the top. */
-export type StepGroup = RunKind | "pip";
+export type StepGroup = Step | "pip";
 
 const isOpen = (p: Proposal) => p.state.type === "pending" || p.state.type === "applying";
 
 /**
- * The step a workstream's draft is about: a run draft's own kind; a draft a run left, or a follow-up or answer to a run,
- * that run's kind; anything else (a comment Pip drafted in the conversation, say) is one of Pip's drafts.
+ * The step a workstream's draft is about: a run draft's own role; a draft a run left, or a follow-up or answer to a run,
+ * that run's; anything else (a comment Pip drafted in the conversation, say) is one of Pip's drafts.
  */
 export function draftStep(p: Proposal, runs: readonly Pick<Run, "id" | "spec">[]): StepGroup {
-  if (p.intent.type === "startRun") return p.intent.spec.kind;
+  if (p.intent.type === "startRun") return stageOf(p.intent.spec.role);
   const runId = p.origin.type === "run" ? p.origin.runId : p.intent.type === "followUp" || p.intent.type === "runAnswer" ? p.intent.runId : null;
-  return runs.find((r) => r.id === runId)?.spec.kind ?? "pip";
+  const run = runs.find((r) => r.id === runId);
+  return run ? stageOf(run.spec.role) : "pip";
 }
 
 /** The workstream's open drafts by the step they are about, oldest first; a step with none is absent. */
@@ -108,7 +110,7 @@ export function batchToApprove(frozen: BatchSnapshot, drafts: readonly Proposal[
 
 /** One step on the rail: its runs and how the newest stands, and what waits on the person in it. */
 export interface StepChip {
-  kind: RunKind;
+  kind: Step;
   label: string;
   /** The step's runs in the workstream, oldest first. */
   runs: Run[];
@@ -148,7 +150,7 @@ function buildPullRequest(builds: readonly Run[], changes: Readonly<Record<strin
 export function stepChips(runs: readonly Run[], events: readonly (Pick<WorkstreamEvent, "action" | "runId" | "actor"> & Partial<Pick<WorkstreamEvent, "at">>)[], verdicts: Readonly<Record<string, ReviewView | null>>, proposals: readonly Proposal[], { now = Date.now(), waitingForPr = null, changes = {} }: StepChipOptions = {}): StepChip[] {
   const drafts = stepDrafts(proposals, runs);
   return STEP_KINDS.map((kind) => {
-    const own = runs.filter((r) => r.spec.kind === kind).sort(byQueue);
+    const own = runs.filter((r) => stageOf(r.spec.role) === kind).sort(byQueue);
     const newest = own[own.length - 1] ?? null;
     const view = newest ? stateView(newest, now, runApproved(newest, proposals)) : null;
     const waiting = kind === "build" && !!waitingForPr && newest?.state === "done";
@@ -163,7 +165,7 @@ export function stepChips(runs: readonly Run[], events: readonly (Pick<Workstrea
       state: waiting ? "waiting for PR" : (view?.label ?? null),
       tone: waiting ? "warn" : (view?.tone ?? null),
       verdict: review ? (review.verdict !== "pass" && newest && reviewPosted(events, newest) ? REVIEW_POSTED : verdictChip(review)) : null,
-      needsYou: pending + own.filter((r) => (needsPerson(r) || stoppedAtLimit(r))).length,
+      needsYou: pending + own.filter((r) => needsPerson(r)).length,
       pr: kind === "build" ? buildPullRequest(own, changes) : null,
     };
   });
@@ -174,7 +176,7 @@ export function stepChips(runs: readonly Run[], events: readonly (Pick<Workstrea
  * while its newest run hasn't finished well; once it has, the step after it. The first step when nothing has run, and
  * null once Verify is done.
  */
-export function nextStep(chips: readonly Pick<StepChip, "kind" | "newest">[]): RunKind | null {
+export function nextStep(chips: readonly Pick<StepChip, "kind" | "newest">[]): Step | null {
   let furthest = -1;
   chips.forEach((c, i) => {
     if (c.newest) furthest = i;

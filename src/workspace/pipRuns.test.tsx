@@ -118,7 +118,7 @@ describe("what Pip is told about agents", () => {
 
   it("names the open run for what Pip can see", () => {
     expect(describeRun(run("working", { item: { connectionId: "mock", externalId: "CA-1", key: "CA-1" } }), "Checkout totals", NOW)).toBe("Checkout totals · Working");
-    expect(describeRun(run("needsAnswer"), null, NOW)).toMatch(/^Investigate .+ · Needs an answer$/);
+    expect(describeRun(run("needsAnswer"), null, NOW)).toMatch(/^Investigator .+ · Needs an answer$/);
   });
 });
 
@@ -148,10 +148,10 @@ describe("the sample Pip and agents", () => {
     expect(scriptPip("which agents are running?", { ...blank, item: open }).start ?? null).toBeNull();
   });
 
-  it("starts an investigation with a focus note, opening the ticket's workstream, and tells the person", async () => {
+  it("starts an investigator whose brief carries the focus, opening the ticket's workstream, and tells the person", async () => {
     const item = { connectionId: "mock", externalId: "CA-402", key: "CA-402" };
     const s = scriptPip("Start an agent on CA-402 and look at the retry loop", { ...blank, item });
-    expect(s.start).toMatchObject({ item, role: "investigate", fromRun: null, brief: "the retry loop", open: { item } });
+    expect(s.start).toMatchObject({ item, role: "investigator", brief: expect.stringContaining("the retry loop"), open: { item } });
     expect(s.text).toContain("It shows under Agents");
 
     const backend = new MockBackend({ runs: { seed: "empty" } });
@@ -162,7 +162,7 @@ describe("the sample Pip and agents", () => {
     await mockAsk(req, backend, 0);
     off();
     const [run] = backend.runs.list();
-    expect(run).toMatchObject({ createdBy: "pip", state: "queued", spec: { kind: "investigate", focus: "the retry loop" }, origin: { type: "chat", requestId: "req-1" } });
+    expect(run).toMatchObject({ createdBy: "pip", state: "queued", spec: { role: "investigator", brief: expect.stringContaining("the retry loop"), ticket: "CA-402" }, origin: { type: "chat", requestId: "req-1" } });
     expect(backend.workstreams.forItem("CA-402")?.id).toBe(run.spec.workstream);
     expect(backend.proposals.list().filter((p) => p.intent.type === "startRun")).toEqual([]);
   });

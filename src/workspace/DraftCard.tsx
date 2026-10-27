@@ -97,7 +97,7 @@ export function draftSummary(p: Proposal, statusName: string | null): string {
     case "link":
       return linkSentence(i);
     case "startRun":
-      return `${i.spec.kind} in ${i.spec.repo}`;
+      return `${i.spec.role} in ${i.spec.repo}`;
     case "followUp":
       return i.reason;
     case "runAnswer":
@@ -595,7 +595,7 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
 
 /** A draft that started or messaged an agent, from before Pip did that directly: read-only, with what it was and how it ended. */
 function AgentDraftHistory({ proposal: p, onOpenRun }: DraftCardProps) {
-  const text = p.intent.type === "startRun" ? p.intent.spec.instruction : draftSummary(p, null);
+  const text = p.intent.type === "startRun" ? p.intent.spec.brief : draftSummary(p, null);
   const runId = p.run ?? (p.intent.type === "followUp" || p.intent.type === "runAnswer" ? p.intent.runId : null);
   return (
     <article data-draft={p.id} data-agent-draft-history className="ws-legacy grid gap-1.5 rounded-[10px] border border-ws-sep bg-ws-win px-3 py-2.5 text-base opacity-80">

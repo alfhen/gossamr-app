@@ -2,7 +2,7 @@
 //! answer as the parsers read it. One source per run, never a mixture, and the source is said wherever the result is.
 
 use super::{Finding, Report, ReportStatus, ResultSource, ReviewVerdict, StoredReport};
-use crate::domain::{Run, RunKind};
+use crate::domain::{ResultKind, Run};
 use crate::runs::result::{jira_note, plan_recommended, readiness, review_verdict, subtask_proposals, ticket_keys, ticket_proposal, JiraNote, Readiness, TicketProposal};
 
 #[derive(Clone, Debug, PartialEq)]
@@ -12,19 +12,19 @@ pub struct Resolved {
     pub note: Option<JiraNote>,
     /// For a run with no ticket: the ticket it proposes.
     pub ticket: Option<TicketProposal>,
-    /// For a Triage on a ticket: the breakdown it proposes.
+    /// For a run on a ticket: the breakdown it proposes.
     pub subtasks: Vec<String>,
     pub keys: Vec<String>,
-    /// For a Plan run that reported its plan.
+    /// The plan the run reported.
     pub plan: Option<String>,
     pub status: Option<ReportStatus>,
-    /// For a Review: its verdict, from the report when that gave one, else from the `Verdict:` line of its whole written
+    /// Its verdict, from the report when that gave one, else for a review from the `Verdict:` line of its whole written
     /// answer. Never from a one-line summary.
     pub verdict: Option<ReviewVerdict>,
     pub findings: Vec<Finding>,
     /// Whether `verdict` came from the report rather than the written answer.
     pub verdict_structured: bool,
-    /// For a Triage on a ticket: whether it recommends a plan, from the report when that gave it, else from the
+    /// For a run on a ticket: whether it recommends a plan, from the report when that gave it, else for a triage from the
     /// `Plan recommended:` lines of its whole written answer (`plan_recommended`). Never from a one-line summary.
     pub plan_recommended: Option<bool>,
     /// For a Triage on a ticket: whether the ticket is clear enough to plan, with the open questions when it is not, from
@@ -52,19 +52,18 @@ fn keys_of(texts: &[&str], own: Option<&str>) -> Vec<String> {
 
 pub fn resolve(run: &Run, stored: Option<&StoredReport>) -> Resolved {
     let mut resolved = read(run, stored);
-    if run.spec.kind == RunKind::Review {
-        let reported = stored.and_then(StoredReport::current).and_then(|r| r.verdict.map(|v| (v, r.findings.clone())));
-        let written = || run.result.as_deref().filter(|_| run.result_complete).and_then(review_verdict);
-        resolved.verdict_structured = reported.is_some();
-        if let Some((verdict, findings)) = reported.or_else(written) {
-            (resolved.verdict, resolved.findings) = (Some(verdict), findings);
-        }
+    let current = stored.and_then(StoredReport::current);
+    let reported = current.and_then(|r| r.verdict.map(|v| (v, r.findings.clone())));
+    let written = || run.result.as_deref().filter(|_| run.spec.is(ResultKind::Review) && run.result_complete).and_then(review_verdict);
+    resolved.verdict_structured = reported.is_some();
+    if let Some((verdict, findings)) = reported.or_else(written) {
+        (resolved.verdict, resolved.findings) = (Some(verdict), findings);
     }
-    if run.spec.kind == RunKind::Triage && run.item.is_some() {
-        let reported = stored.and_then(StoredReport::current).and_then(|r| r.plan_recommended);
-        let written = || run.result.as_deref().filter(|_| run.result_complete).and_then(plan_recommended);
-        resolved.plan_recommended = reported.or_else(written);
-        resolved.readiness = run.result.as_deref().filter(|_| run.result_complete).and_then(readiness);
+    if run.item.is_some() {
+        let triaged = run.spec.is(ResultKind::Triage);
+        let whole = || run.result.as_deref().filter(|_| triaged && run.result_complete);
+        resolved.plan_recommended = current.and_then(|r| r.plan_recommended).or_else(|| whole().and_then(plan_recommended));
+        resolved.readiness = whole().and_then(readiness);
     }
     resolved
 }
@@ -74,7 +73,7 @@ fn read(run: &Run, stored: Option<&StoredReport>) -> Resolved {
     let result = run.result.as_deref().map(str::trim).filter(|r| !r.is_empty());
     let on_ticket = run.item.is_some();
     if let Some(report) = stored.and_then(StoredReport::current) {
-        return structured(run, report, result, own.as_deref(), on_ticket);
+        return structured(report, result, own.as_deref(), on_ticket);
     }
     Resolved {
         source: result.map(|_| match (run.result_complete, result.map(jira_note)) {
@@ -84,7 +83,7 @@ fn read(run: &Run, stored: Option<&StoredReport>) -> Resolved {
         }),
         note: result.map(jira_note),
         ticket: result.filter(|_| !on_ticket).and_then(ticket_proposal),
-        subtasks: result.filter(|_| run.spec.kind == RunKind::Triage && on_ticket).map(subtask_proposals).unwrap_or_default(),
+        subtasks: result.filter(|_| run.spec.is(ResultKind::Triage) && on_ticket).map(subtask_proposals).unwrap_or_default(),
         keys: result.map(|r| keys_of(&[r], own.as_deref())).unwrap_or_default(),
         plan: None,
         status: None,
@@ -96,7 +95,7 @@ fn read(run: &Run, stored: Option<&StoredReport>) -> Resolved {
     }
 }
 
-fn structured(run: &Run, report: &Report, result: Option<&str>, own: Option<&str>, on_ticket: bool) -> Resolved {
+fn structured(report: &Report, result: Option<&str>, own: Option<&str>, on_ticket: bool) -> Resolved {
     let note = report.note.as_ref().map(|text| JiraNote { text: text.clone(), from_marker: true });
     let mut texts: Vec<&str> = result.into_iter().collect();
     texts.extend(report.note.as_deref());
@@ -104,7 +103,7 @@ fn structured(run: &Run, report: &Report, result: Option<&str>, own: Option<&str
         source: Some(ResultSource::Structured),
         note,
         ticket: report.new_ticket.clone().filter(|_| !on_ticket),
-        subtasks: if run.spec.kind == RunKind::Triage && on_ticket { report.subtasks.clone() } else { Vec::new() },
+        subtasks: if on_ticket { report.subtasks.clone() } else { Vec::new() },
         keys: keys_of(&texts, own),
         plan: report.plan.clone(),
         status: Some(report.status),

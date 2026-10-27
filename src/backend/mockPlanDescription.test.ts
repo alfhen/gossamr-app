@@ -7,7 +7,7 @@ import { scriptPip } from "./mockPip";
 
 const NOW = Date.parse("2026-09-30T12:00:00Z");
 const sample = () => new MockBackend({ runs: { seed: "kinds", epoch: NOW, planDescription: true } });
-const planRun = (b: MockBackend) => b.runs.list().find((r) => r.spec.kind === "plan")!;
+const planRun = (b: MockBackend) => b.runs.list().find((r) => r.spec.role === "planner")!;
 const rewrites = (b: MockBackend) => b.proposals.list().filter((p) => p.intent.type === "rewrite");
 
 describe("the Gossamr Plan section of a description in the sample build", () => {
@@ -126,7 +126,7 @@ describe("a finished plan run in the sample build", () => {
     const b = new MockBackend({ runs: { seed: "empty", epoch: NOW } });
     const item = itemRef("CA-402");
     const spec = { ...planRun(sample()).spec, name: "ca-402-plan-0001" };
-    const started = async (name: string) => b.runs.start({ ...spec, name, kind: "plan" }, item);
+    const started = async (name: string) => b.runs.start({ ...spec, name, role: "plan" }, item);
     const run = await started("ca-402-plan-0001");
     b.runs.startNow(run.id);
     b.runs.advance(run.id);

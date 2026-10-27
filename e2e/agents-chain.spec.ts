@@ -27,7 +27,7 @@ async function finish(page: Parameters<typeof startWorkstream>[0], id: string) {
 }
 
 /** The newest run of `kind`, as the sample backend holds it. */
-const newest = async (page: Parameters<typeof startWorkstream>[0], kind: string) => (await mockRuns(page)).find((r) => r.kind === kind) ?? null;
+const newest = async (page: Parameters<typeof startWorkstream>[0], kind: string) => (await mockRuns(page)).find((r) => r.step === kind) ?? null;
 
 test("asking Pip to investigate starts the agent: no review, and the rail shows R1 running", async ({ page }) => {
   await openApp(page, SAMPLE);

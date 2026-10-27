@@ -2,7 +2,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::sync::Arc;
 
 use super::*;
-use crate::domain::{RunFailure, RunSpec};
+use crate::domain::{RefusedMode, RunFailure, RunSpec};
 use crate::runs::index::Entry;
 use crate::runs::rig::{ready, Rig};
 use crate::runs::testing::FakeCli;
@@ -482,6 +482,24 @@ async fn trusting_a_folder_opens_terminal_in_the_clone_of_the_stored_run_with_pl
 }
 
 #[tokio::test]
+async fn a_permission_mode_claude_refuses_is_reported_in_its_words_and_opens_claude_in_that_mode_in_terminal() {
+    let rig = ready().await;
+    rig.cli.with(|s| s.outcome = crate::runs::testing::Outcome::AutoRefused);
+    let run = rig.queued(1).await;
+    rig.svc.start_now(&run.id).await.unwrap();
+    let run = rig.get(&run).await;
+    let said = "--bg with auto mode requires opting in first. Run `claude --permission-mode auto` once interactively.";
+    assert_eq!((run.state, run.failure.clone(), run.error.as_deref()), (RunState::Failed, Some(RunFailure::ModeRefused { mode: RefusedMode::Auto }), Some(said)));
+
+    assert!(rig.svc.open_claude(&run.id, Purpose::Trust).await.is_err() && rig.svc.open_claude(&run.id, Purpose::Mode(RefusedMode::Bypass)).await.is_err());
+    nothing_opened(&rig);
+    rig.svc.open_claude(&run.id, Purpose::Mode(RefusedMode::Auto)).await.unwrap();
+    let opened = rig.opened.0.lock().unwrap().clone();
+    assert_eq!(std::fs::read_to_string(&opened[0]).unwrap(), format!("#!/bin/zsh\ncd '{}'\nexec '/opt/fake/bin/claude' --permission-mode auto\n", rig.clone.display()));
+    assert_eq!(rig.get(&run).await, run, "opening Terminal changes nothing about the run");
+}
+
+#[tokio::test]
 async fn trusting_is_refused_unless_the_run_failed_because_the_folder_is_untrusted() {
     let rig = ready().await;
     let untrusted = RunFailure::UntrustedFolder { path: rig.clone.clone() };
@@ -502,6 +520,7 @@ async fn trusting_is_refused_unless_the_run_failed_because_the_folder_is_untrust
         run_in(RunState::Failed, Some(RunFailure::ClaudeMissing)),
         run_in(RunState::Failed, Some(RunFailure::NoClone)),
         run_in(RunState::Failed, Some(RunFailure::CapReached)),
+        run_in(RunState::Failed, Some(RunFailure::ModeRefused { mode: RefusedMode::Auto })),
     ];
     for (run, state, failure) in cases {
         let run = rig.set(&run.await, |r| {

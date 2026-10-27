@@ -295,10 +295,10 @@ impl Core {
     pub(crate) async fn review_current(&self, spec: &RunSpec) -> Result<CodeChange> {
         let change = self.review_target(spec).await?;
         if change.base_ref.as_deref() != Some(spec.base.as_str()) {
-            return Err(Error::Proposal("The pull request's base branch changed. Ask for the review again.".into()));
+            return Err(Error::Proposal("The pull request's base branch changed. Start the run again.".into()));
         }
         if change.sha.is_none() || change.sha != spec.pr_sha {
-            return Err(Error::Proposal("The pull request has new commits since the review was asked for. Ask for it again.".into()));
+            return Err(Error::Proposal("The pull request has new commits since the run was queued. Start it again.".into()));
         }
         Ok(change)
     }

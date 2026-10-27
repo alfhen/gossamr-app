@@ -1,4 +1,5 @@
-import { SUMMARY_ONLY, type CodeChange, type ItemRef, type JiraNote, type ReportView, type ResultSource, type ReviewFinding, type ReviewSeverity, type ReviewVerdict, type ReviewView, type RunKind, type TicketProposal, type WorkItemKind } from "../types";
+import { stepOf, type Step } from "../lib/roles";
+import { SUMMARY_ONLY, type CodeChange, type ItemRef, type JiraNote, type ReportView, type ResultSource, type ReviewFinding, type ReviewSeverity, type ReviewVerdict, type ReviewView, type TicketProposal, type WorkItemKind } from "../types";
 import { parsePullRef } from "../lib/githubUrl";
 
 const KEY = /\b[A-Za-z][A-Za-z0-9_]*-\d+\b/g;
@@ -259,7 +260,7 @@ export function subtaskProposals(result: string): string[] {
 }
 
 /** What the backend adds under a ticket made from a run. */
-export const FOUND_BY = "Found by an agent that was asked to only read code and change nothing.";
+export const FOUND_BY = "Found by an agent run from Gossamr.";
 
 export const ticketBody = (t: TicketProposal) => (t.body ? `${t.body}\n\n${FOUND_BY}` : FOUND_BY);
 
@@ -275,8 +276,8 @@ export function namesUrl(text: string, url: string): boolean {
 }
 
 /** The comment as the backend first drafts it, for the sample data. */
-export function commentText(note: JiraNote, change: CodeChange | null, kind: RunKind = "investigate", summaryOnly = false, blocked = false, pr: number | null = null, repo: string | null = null): string {
-  const intro: Partial<Record<RunKind, string>> = {
+export function commentText(note: JiraNote, change: CodeChange | null, kind: Step = "investigate", summaryOnly = false, blocked = false, pr: number | null = null, repo: string | null = null): string {
+  const intro: Partial<Record<Step, string>> = {
     investigate: "Investigated with an agent.",
     plan: "Planned with an agent.",
     triage: "Triaged with an agent.",
@@ -397,16 +398,15 @@ interface Resolvable {
   result?: string | null;
   resultComplete?: boolean;
   item: ItemRef | null;
-  spec: { kind: RunKind };
+  spec: { role: string };
 }
 
 /** Which result a run's drafts and sheet use, as `runs::report::resolve`: a current report wins wholesale, else the written answer. */
 export function resolveResult(run: Resolvable, row: MockReportRow | null): Resolved {
   const resolved = readResult(run, row);
-  if (run.spec.kind !== "review") return resolved;
   const current = row?.report && !row.stale ? row.report : null;
   const reported = current?.verdict ? { verdict: current.verdict, findings: current.findings ?? [] } : null;
-  const written = !reported && run.result && run.resultComplete !== false ? reviewVerdict(run.result) : null;
+  const written = !reported && stepOf(run.spec.role) === "review" && run.result && run.resultComplete !== false ? reviewVerdict(run.result) : null;
   const found = reported ?? written;
   return { ...resolved, verdict: found?.verdict ?? null, findings: found?.findings ?? [], verdictStructured: !!reported };
 }
@@ -422,7 +422,7 @@ function readResult(run: Resolvable, row: MockReportRow | null): Resolved {
       source: "structured",
       note: current.note ? { text: current.note, fromMarker: true } : null,
       ticket: current.newTicket ?? null,
-      subtasks: run.spec.kind === "triage" && onTicket ? (current.subtasks ?? []) : [],
+      subtasks: onTicket ? (current.subtasks ?? []) : [],
       keys,
       plan: current.plan ?? null,
       status: current.status,
@@ -438,7 +438,7 @@ function readResult(run: Resolvable, row: MockReportRow | null): Resolved {
     source,
     note,
     ticket: result && !onTicket ? ticketProposal(result) : null,
-    subtasks: result && onTicket && run.spec.kind === "triage" ? subtaskProposals(result) : [],
+    subtasks: result && onTicket && stepOf(run.spec.role) === "triage" ? subtaskProposals(result) : [],
     keys: result ? ticketKeys(result).filter((k) => k !== own) : [],
     plan: null,
     status: null,
@@ -490,7 +490,7 @@ function beforeNote(text: string, line: string): string {
 }
 
 /** The answer a scripted run of `kind` finishes with, from its usual `base`, changed as `script` asks. */
-export function scriptedFinish(kind: RunKind, base: string, script: ScriptedFinish): string {
+export function scriptedFinish(kind: Step, base: string, script: ScriptedFinish): string {
   let text = base;
   if (kind === "triage" && script.planRecommended !== undefined) {
     const line = `Plan recommended: ${script.planRecommended ? "yes" : "no"}`;

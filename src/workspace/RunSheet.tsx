@@ -1,28 +1,28 @@
 import { archiveControl } from "../lib/archiveRuns";
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useBackend } from "../backend/useBackend";
 import { itemKey } from "../lib/filter";
 import type { Run, RunEvent, RunOutcome } from "../types";
 import { useWorkspace } from "../workspaceStore";
-import { Icon, KIND_ICON } from "./AgentIcons";
+import { roleLabel } from "../lib/roles";
+import { Icon } from "./AgentIcons";
 import { Box, BoxTitle, Btn, CodeBox, Details, Sec, SheetFrame } from "./AgentSheet";
 import { StateChip, useSlotQueue } from "./AgentParts";
-import { KIND_LABEL, agentGroups, ageText, formatTokens, ordinal, progressText, quietMinutes, quietText, repoName, runTitle, slotPosition } from "./agentsLogic";
+import { agentGroups, ageText, formatTokens, ordinal, progressText, quietMinutes, quietText, repoName, runTitle, slotPosition } from "./agentsLogic";
 import { useStateView } from "./useStateView";
 import { openTicketByKey } from "./jump";
 import { failureHelp, retryEnabled, type FailureAct } from "./failureHelp";
 import { CloneActions } from "./CloneActions";
 import { failureAction } from "./failureActions";
-import { PromptParts, ReadOnlyExtras, ReadOnlyLine } from "./RunPrompt";
+import { PromptParts } from "./RunPrompt";
 import { RunTimeline } from "./RunTimeline";
 import { RunWhere, useDisk } from "./RunWhere";
 import { RunCleanup } from "./RunCleanup";
 import { cleanupReason } from "./cleanupLogic";
-import { answerable, sheetTopOn, mayTouch, readOnlyNote, canStartNow, pendingBreakdownOn, pipAsks, stopControl } from "./runSheetLogic";
+import { answerable, sheetTopOn, canStartNow, pendingBreakdownOn, pipAsks, stopControl } from "./runSheetLogic";
 import { showDraft } from "./draftTicket";
 import { RunAnswer } from "./RunAnswer";
-import { PermissionAsk, PermissionSent } from "./PermissionAsk";
-import { permissionConfirmation, type PermissionAnswered } from "./runsStore";
+import { PermissionAsk } from "./PermissionAsk";
 import { RunContinuation } from "./RunContinuation";
 import { Changes, Found, type ResultActions } from "./RunResult";
 import { openOnGithub } from "./githubUi";
@@ -78,8 +78,6 @@ export interface RunSheetViewProps {
   opened: boolean;
   /** The person's answer went through and the run hasn't reported anything since. */
   answerSent?: boolean;
-  /** The person's answer to the run's permission prompt while it still applies (`permissionConfirmation`): a denial shows at the top, an Allow once in the prompt. */
-  permissionAnswered?: PermissionAnswered | null;
   /** Why this run is worth cleaning up, when it is. */
   cleanup?: string | null;
   /** Where the run is in line for a slot, 1 for next, when it waits for one. */
@@ -135,7 +133,7 @@ export function SignInBox({ run, onAttach }: { run: Run; onAttach(): void }) {
   );
 }
 
-function Attention({ run, label, permissionAnswered, opened, answering, slotPlace, on }: { run: Run; label?: string; permissionAnswered: PermissionAnswered | null; opened: boolean; answering: boolean; slotPlace: number | null; on: RunSheetActions }) {
+function Attention({ run, label, opened, answering, slotPlace, on }: { run: Run; label?: string; opened: boolean; answering: boolean; slotPlace: number | null; on: RunSheetActions }) {
   switch (run.state) {
     case "needsPermission":
       return (
@@ -143,7 +141,7 @@ function Attention({ run, label, permissionAnswered, opened, answering, slotPlac
           <BoxTitle icon="hand" tone="needs">
             Claude is asking permission
           </BoxTitle>
-          <PermissionAsk run={run} label={label} answered={permissionAnswered} onAttach={on.attach} onStop={on.askStop} />
+          <PermissionAsk run={run} label={label} onAttach={on.attach} />
         </Box>
       );
     case "needsAnswer":
@@ -278,18 +276,8 @@ function Facts({ run, now, ticketTitle, on }: { run: Run; now: number; ticketTit
   );
 }
 
-/** What the agent was told, and the read-only rules it was launched with; a run from before they existed shows none. */
-function BriefBody({ run }: { run: Run }): ReactNode {
-  return (
-    <>
-      <PromptParts run={run} />
-      <ReadOnlyExtras readOnly={run.readOnly} />
-    </>
-  );
-}
-
 /** The whole sheet as a function of what it is shown; `RunSheet` loads the data and connects the actions. */
-export function RunSheetView({ run, now, ticketTitle, place, label, wide, onWide, events, disk, confirmStop, outcome, tickets, pickBlocker, waitingBreakdown, drafting, answering, opened, answerSent = false, permissionAnswered = null, cleanup = null, slotPlace = null, stoppedHere = false, on }: RunSheetViewProps) {
+export function RunSheetView({ run, now, ticketTitle, place, label, wide, onWide, events, disk, confirmStop, outcome, tickets, pickBlocker, waitingBreakdown, drafting, answering, opened, answerSent = false, cleanup = null, slotPlace = null, stoppedHere = false, on }: RunSheetViewProps) {
   const view = useStateView(run, now);
   const stop = stopControl(run);
   const title = runTitle(run, ticketTitle);
@@ -312,8 +300,7 @@ export function RunSheetView({ run, now, ticketTitle, place, label, wide, onWide
       <div data-state={run.state} data-tone={view.tone} className="grid gap-2.5">
         <div className="flex items-center gap-1.5 text-xs font-medium text-ws-ink2">
           <RunLabel label={label} />
-          <Icon name={KIND_ICON[run.spec.kind]} className="size-[13px] text-ws-ink3" />
-          {KIND_LABEL[run.spec.kind]}
+          {roleLabel(run.spec.role)}
           <span aria-hidden className="text-ws-ink3">
             ·
           </span>
@@ -326,7 +313,6 @@ export function RunSheetView({ run, now, ticketTitle, place, label, wide, onWide
         <h2 className="m-0 text-[20px] leading-tight font-semibold [overflow-wrap:anywhere]">{title}</h2>
         <Facts run={run} now={now} ticketTitle={ticketTitle} on={on} />
         {answerSent && <AnswerSent />}
-        {permissionAnswered?.kind === "denied" && <PermissionSent answered={permissionAnswered} />}
       </div>
 
       <div className="flex flex-wrap items-center gap-2">
@@ -374,7 +360,7 @@ export function RunSheetView({ run, now, ticketTitle, place, label, wide, onWide
       </div>
 
       <RunContinuation key={`continue-${run.id}`} run={run} adopt={on.adoptSession} />
-      {attention && <Attention run={run} label={label} permissionAnswered={permissionAnswered} opened={opened} answering={answering} slotPlace={slotPlace} on={on} />}
+      {attention && <Attention run={run} label={label} opened={opened} answering={answering} slotPlace={slotPlace} on={on} />}
       {run.state === "done" && <Found run={run} outcome={outcome} tickets={tickets} pickBlocker={pickBlocker} waitingBreakdown={waitingBreakdown} drafting={drafting} on={on} />}
       {outcome?.change && <Changes change={outcome.change} on={on} />}
 
@@ -385,27 +371,8 @@ export function RunSheetView({ run, now, ticketTitle, place, label, wide, onWide
       <RunWhere run={run} disk={disk} onReveal={on.reveal} />
       <RunCleanup key={`cleanup-${run.id}`} run={run} reason={cleanup} />
 
-      <Sec title="What this agent may touch">
-        {run.readOnly && (
-          <>
-            <ReadOnlyLine readOnly={run.readOnly} />
-            <p className="m-0 text-ws-ink2">{readOnlyNote(run.readOnly)}</p>
-          </>
-        )}
-        <ul className="m-0 grid list-none gap-1.5 p-0 text-ws-ink2">
-          {mayTouch(run.readOnly).map((t) => (
-            <li key={t.title} data-tone={t.tone} className="grid grid-cols-[18px_minmax(0,1fr)] gap-1.5">
-              <Icon name={t.tone === "yes" ? "check" : t.tone === "ask" ? "hand" : "x"} className={`mt-0.5 size-3.5 ${t.tone === "yes" ? "text-ws-done" : t.tone === "ask" ? "text-ws-warn" : "text-ws-ink3"}`} />
-              <span>
-                <b className="font-semibold text-ws-ink">{t.title}</b> {t.text}
-              </span>
-            </li>
-          ))}
-        </ul>
-      </Sec>
-
       <Details summary="What the agent was told">
-        <BriefBody run={run} />
+        <PromptParts run={run} />
       </Details>
     </SheetFrame>
   );
@@ -437,7 +404,6 @@ export function RunSheet({ id }: { id: string }) {
   const disk = useDisk(backend, id);
   const opened = useRuns((s) => s.terminalOpened.has(id));
   const sentAt = useRuns((s) => s.answered[id]);
-  const permissionAnswered = useRuns((s) => s.permissionAnswered[id]);
   const browseOrder = useRuns((s) => s.browseOrder);
 
   useEffect(() => {
@@ -557,6 +523,6 @@ export function RunSheet({ id }: { id: string }) {
     },
     openChange: (url) => void openOnGithub(url),
   };
-  return <RunSheetView run={run} now={now} ticketTitle={ticket?.title ?? null} place={place} label={label} wide={wide} onWide={() => setWide((w) => !w)} events={events} disk={disk} confirmStop={confirmStop} outcome={outcome} tickets={tickets} pickBlocker={pickBlocker} waitingBreakdown={waitingOn !== null} drafting={drafting} answering={answering} opened={opened} answerSent={sentAt !== undefined && sentAt === run.lastProgressAt} permissionAnswered={permissionConfirmation(run, permissionAnswered)} cleanup={cleanupReason(run, now, { disk: typeof disk === "number" ? disk : null, change: outcome?.change ?? null })} slotPlace={slotPosition(run, slotLine)} stoppedHere={stoppedHere} on={on} />;
+  return <RunSheetView run={run} now={now} ticketTitle={ticket?.title ?? null} place={place} label={label} wide={wide} onWide={() => setWide((w) => !w)} events={events} disk={disk} confirmStop={confirmStop} outcome={outcome} tickets={tickets} pickBlocker={pickBlocker} waitingBreakdown={waitingOn !== null} drafting={drafting} answering={answering} opened={opened} answerSent={sentAt !== undefined && sentAt === run.lastProgressAt} cleanup={cleanupReason(run, now, { disk: typeof disk === "number" ? disk : null, change: outcome?.change ?? null })} slotPlace={slotPosition(run, slotLine)} stoppedHere={stoppedHere} on={on} />;
 }
 

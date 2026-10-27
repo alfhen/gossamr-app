@@ -9,7 +9,6 @@ use std::path::PathBuf;
 use chrono::Utc;
 
 use super::cli::is_uuid;
-use super::limits;
 use super::service::{belongs_to, RunService};
 use crate::domain::{Actor, EarlierSession, Run, RunEvent, RunState};
 use crate::error::{Error, Result};
@@ -46,22 +45,17 @@ pub(super) fn back_at_work(run: &mut Run, now: chrono::DateTime<Utc>) {
     run.asking = false;
     run.suggested_reply = None;
     run.unsent_answer = None;
-    run.permission_allowed = None;
     // What it said while it asked ("waiting for an answer") is over; the tracker fills in what it does next.
     run.last_detail = None;
     run.error = None;
     run.failure = None;
     run.ended_at = None;
     run.last_progress_at = now;
-    if std::mem::take(&mut run.stopped_by_limit) {
-        run.continued_at = Some(now);
-    }
-    limits::tick(run, now);
 }
 
 impl RunService {
-    /// Answers a run that is asking a question, sends again an answer that was stopped on its way, or resumes a run
-    /// Gossamr stopped for passing a limit. The run carries on under the same id. Once the session has been stopped,
+    /// Answers a run that is asking a question, or sends again an answer that was stopped on its way. The run carries
+    /// on under the same id. Once the session has been stopped,
     /// a failure leaves the run `Stopped` with the reason and the answer kept on it, so nothing the person wrote is
     /// lost.
     pub async fn answer(&self, run_id: &str, text: &str) -> Result<Run> {
@@ -79,13 +73,10 @@ impl RunService {
             }
             self.core.asks().cancel(run_id);
         }
-        if by == Actor::Pip && run.state == RunState::Stopped && run.stopped_by_limit {
-            return Err(refuse("Gossamr stopped it at its limit; only the person resumes it."));
-        }
-        let again = run.state == RunState::Stopped && (run.unsent_answer.is_some() || run.stopped_by_limit);
+        let again = run.state == RunState::Stopped && run.unsent_answer.is_some();
         if run.state != RunState::NeedsAnswer && !again {
             return Err(refuse(match run.state {
-                RunState::NeedsPermission => "This run is asking permission: answer it with Allow once or Deny.".to_owned(),
+                RunState::NeedsPermission => "This run is asking permission: the person answers it in Terminal.".to_owned(),
                 RunState::SystemBlocked => "Claude needs you to sign in, in Terminal.".to_owned(),
                 other => format!("This run is {}, so it isn't waiting for an answer.", other.as_str()),
             }));
@@ -203,18 +194,8 @@ impl RunService {
             Ok(woken) if woken.short_id == *id => None,
             Ok(copy) => {
                 let stopped = tc.cli.stop(&copy.short_id).await.is_ok();
-                // A copy is a new job built from the resume command line, so it has none of the flags the run was launched
-                // with: a read-only run's copy runs unrestricted. It is removed as well as stopped, and the person is told
-                // plainly if neither worked.
-                let removed = run.spec.kind.read_only() && matches!(self.remove_session(tc, &copy.short_id).await, Ok(super::cleanup::Removal::Gone));
-                let copy_note = match (stopped || removed, run.spec.kind.read_only()) {
-                    (true, false) => "it was stopped".to_owned(),
-                    (true, true) if removed => "it was stopped and removed, because a copy doesn't keep the read-only restriction".to_owned(),
-                    (true, true) => format!("it was stopped; remove it with `claude rm {}`, because a copy doesn't keep the read-only restriction", copy.short_id),
-                    (false, false) => format!("stop it with `claude stop {}`", copy.short_id),
-                    (false, true) => format!("it runs without the read-only restriction: stop it now with `claude stop {}`", copy.short_id),
-                };
-                run.earlier_sessions.push(EarlierSession { short_id: copy.short_id.clone(), session_id: None, removed });
+                let copy_note = if stopped { "it was stopped".to_owned() } else { format!("stop it with `claude stop {}`", copy.short_id) };
+                run.earlier_sessions.push(EarlierSession { short_id: copy.short_id.clone(), session_id: None, removed: false });
                 Some(format!("Claude started a copy ({}) instead of continuing this agent; {copy_note}.", copy.short_id))
             }
             Err(e) => Some(format!("Couldn't wake the agent: {e}.")),

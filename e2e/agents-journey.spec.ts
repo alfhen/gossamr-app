@@ -7,7 +7,7 @@ import { pauseAtCeiling, advanceRuns, agentsHome, askPip, closeWorkstreamSheet, 
 const SAMPLE = "runs=empty&prSurface=manual&mockRepos=12";
 
 /** The newest run of `kind`, as the sample backend holds it. */
-const newest = async (page: Page, kind: string) => (await mockRuns(page)).find((r) => r.kind === kind) ?? null;
+const newest = async (page: Page, kind: string) => (await mockRuns(page)).find((r) => r.step === kind) ?? null;
 
 /** Asks Pip for `what` on CA-401, which starts the agent. */
 async function startOnHome(page: Page, what: string) {
@@ -152,6 +152,19 @@ test("the Needs you list ranks a question from Pip ahead of a pause, opens each 
   await expect(needsYouCount(page)).toHaveText("0");
   await expect(row.locator('[data-status="paused"]')).toHaveCount(0);
   await expect(needsYouTray(page)).toContainText("Nothing needs you.");
+});
+
+test("a launch --bg refused for the permission mode offers Terminal to accept it, and Retry waits for that", async ({ page }) => {
+  await openApp(page, "runs=failures");
+  await openAgents(page);
+  await expandNeedsYou(page);
+  await needRow(page, /WEB-122/).click();
+  const retry = needsPane(page).getByRole("button", { name: "Retry", exact: true });
+  await expect(retry).toBeDisabled();
+  await needsPane(page).getByRole("button", { name: "Open Terminal to accept auto mode" }).click();
+  await expect(retry).toBeEnabled();
+  await retry.click();
+  await expect(needRow(page, /WEB-122/)).toHaveCount(0);
 });
 
 test("a failed run waits in the list under General, opens its decision, and stays until it is dealt with, not just seen", async ({ page }) => {

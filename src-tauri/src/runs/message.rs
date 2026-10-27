@@ -7,7 +7,6 @@ use chrono::Utc;
 
 use super::answer::checked;
 use super::cli::{is_uuid, AgentEntry};
-use super::limits;
 use super::service::{belongs_to, RunService};
 use crate::domain::{Actor, Run, RunEvent, RunState};
 use crate::error::{Error, Result};
@@ -53,7 +52,7 @@ impl RunService {
     }
 
     /// Sends `text` to run `run_id` as `by`. Refused for a run that hasn't started, failed, waits at a permission prompt
-    /// or for a sign-in, was stopped at a limit, or has a session open in Terminal.
+    /// or for a sign-in, or has a session open in Terminal.
     pub async fn message_agent(&self, run_id: &str, text: &str, by: Actor) -> Result<(Run, Delivery)> {
         let text = checked(text)?;
         let run = self.load(run_id).await?;
@@ -75,7 +74,6 @@ impl RunService {
                 self.note_by(&run, by, "agent_message_queued", Some(text.chars().count().to_string())).await;
                 Ok((run, Delivery::Queued))
             }
-            RunState::Stopped if run.stopped_by_limit => Err(refuse("Gossamr stopped it at its limit; only the person resumes it.")),
             RunState::Stopped if run.unsent_answer.is_some() => Err(refuse("A message is still waiting to be sent to it; the person sends it again from the run.")),
             RunState::Done | RunState::Stopped => self.resume_with(run_id, text, by).await.map(|r| (r, Delivery::Resumed)),
         }
@@ -147,10 +145,8 @@ impl RunService {
         run.failure = None;
         run.ended_at = None;
         run.last_progress_at = now;
-        run.stopped_by_limit = false;
         run.continued_at = Some(now);
         run.passes = run.passes.saturating_add(1);
-        limits::tick(run, now);
         self.remember(run);
         self.store(run).await?;
         if let Err(e) = self.core.report_stale(&run.id).await {

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { stepOf } from "../lib/roles";
 import type { CodeChange, ReviewView, Run } from "../types";
 import { useRuns } from "./runsStore";
 
@@ -10,7 +11,7 @@ export function useReviewVerdicts(runs: readonly Run[]) {
   useEffect(() => {
     if (!backend) return;
     for (const run of runs) {
-      if (run.spec.kind !== "review" || run.state !== "done") continue;
+      if (stepOf(run.spec.role) !== "review" || run.state !== "done") continue;
       const version = `${run.lastProgressAt}|${run.endedAt ?? ""}`;
       if (asked.current.get(run.id) === version) continue;
       asked.current.set(run.id, version);
@@ -43,7 +44,7 @@ export function useBuildChanges(runs: readonly Run[], again: unknown = null) {
     if (!backend) return;
     const at = Date.now();
     for (const run of runs) {
-      if (run.spec.kind !== "build" || run.state !== "done" || !run.item || run.resultComplete === false || changes[run.id]?.number != null) continue;
+      if (stepOf(run.spec.role) !== "build" || run.state !== "done" || !run.item || run.resultComplete === false || changes[run.id]?.number != null) continue;
       if (at - (asked.current.get(run.id) ?? 0) < CHANGE_RECHECK_MS) continue;
       asked.current.set(run.id, at);
       backend.runsOutcome(run.id).then(

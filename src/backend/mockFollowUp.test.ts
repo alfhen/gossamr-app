@@ -7,7 +7,7 @@ import type { ScreenContext } from "../types";
 
 const NOW = Date.parse("2026-09-30T12:00:00Z");
 const sample = () => new MockBackend({ runs: { seed: "kinds", epoch: NOW, planDescription: true } });
-const planRun = (b: MockBackend) => b.runs.list().find((r) => r.spec.kind === "plan")!;
+const planRun = (b: MockBackend) => b.runs.list().find((r) => r.spec.role === "planner")!;
 
 async function ask(b: MockBackend, prompt: string, item: ScreenContext["item"], conversation?: string) {
   const context = { view: "board", item } as unknown as ScreenContext;

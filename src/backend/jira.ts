@@ -282,14 +282,6 @@ export class JiraBackend implements Backend {
     return invoke<Run>("runs_answer", { id, text });
   }
 
-  runsDenyPermission(id: string, command: string) {
-    return invoke<Run>("runs_deny_permission", { id, command });
-  }
-
-  runsAllowPermissionOnce(id: string, command: string) {
-    return invoke<Run>("runs_allow_permission_once", { id, command });
-  }
-
   runsAdoptSession(id: string, session: string) {
     return invoke<Run>("runs_adopt_session", { id, session });
   }
@@ -304,6 +296,10 @@ export class JiraBackend implements Backend {
 
   runsTrustFolder(id: string) {
     return invoke<void>("runs_trust_folder", { id });
+  }
+
+  runsAcceptMode(id: string, mode: "auto" | "bypass") {
+    return invoke<void>("runs_accept_mode", { id, mode });
   }
 
   runsSignIn(id: string) {

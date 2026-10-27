@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { MockBackend } from "../backend/mock";
-import type { Intent, ItemRef, PauseReason, Proposal, ProposalState, Run, RunKind, RunState, WorkstreamStage, WorkstreamView } from "../types";
+import type { Intent, ItemRef, PauseReason, Proposal, ProposalState, Run, RunState, WorkstreamStage, WorkstreamView } from "../types";
 import { docFromText } from "./docs";
 import { BATCHABLE, GROUP_RANK, chipLabel, byRank, higherPriority, needAfter, needGroups, needs, needsIn, leftOutLabel, repeatedComments, safeToBatch, titleFromTicketBlock, type Need, type NeedKind, type NeedsInput } from "./needs";
 
@@ -9,12 +9,12 @@ const iso = (minutesAgo: number) => new Date(NOW - minutesAgo * 60_000).toISOStr
 const ref = (key: string): ItemRef => ({ connectionId: "mock", externalId: key, key });
 
 const base = new MockBackend().runs.list()[0];
-const run = (id: string, kind: RunKind, state: RunState, over: Partial<Run> = {}): Run => ({
+const run = (id: string, kind: string, state: RunState, over: Partial<Run> = {}): Run => ({
   ...base,
   id,
   state,
   item: ref("CA-401"),
-  spec: { ...base.spec, kind, workstream: "ws-1" },
+  spec: { ...base.spec, role: kind, workstream: "ws-1" },
   failure: null,
   needs: null,
   queuedAt: iso(60),
@@ -66,7 +66,7 @@ const comment = (key: string): Intent => ({ type: "comment", item: ref(key), bod
 const transition = (key: string): Intent => ({ type: "transition", item: ref(key), to: "done" }) as unknown as Intent;
 const subtasks = (key: string): Intent => ({ type: "subtasks", parent: ref(key), summaries: ["a", "b"] }) as unknown as Intent;
 const rewrite = (key: string): Intent => ({ type: "rewrite", item: ref(key), title: null, body: { from: {}, to: {}, fromText: "a", toText: "b" } }) as unknown as Intent;
-const startRun = (key: string, kind: RunKind, workstream: string | null): Intent => ({ type: "startRun", item: ref(key), spec: { ...base.spec, kind, workstream } }) as unknown as Intent;
+const startRun = (key: string, kind: string, workstream: string | null): Intent => ({ type: "startRun", item: ref(key), spec: { ...base.spec, kind, workstream } }) as unknown as Intent;
 const answer = (runId: string): Intent => ({ type: "runAnswer", item: ref("CA-401"), runId, message: "Yes", question: "q" }) as unknown as Intent;
 const review = (): Intent => ({ type: "githubReview", item: ref("CA-401"), connectionId: "github", repo: "acme/shop", number: 7, runId: "r-rev", summary: "s", comments: [] }) as unknown as Intent;
 
@@ -89,9 +89,8 @@ describe("needs: every kind", () => {
           run("r-q", "triage", "needsAnswer", { needs: "Which cache?" }),
           run("r-p", "build", "needsPermission", { needs: "approve Bash: git push origin ca-401" }),
           run("r-f", "verify", "failed", { error: "boom", endedAt: iso(13) }),
-          run("r-limit", "review", "stopped", { stoppedByLimit: true, error: "Stopped by Gossamr: it passed the 60 minute limit" }),
           run("r-plan", "plan", "done"),
-          run("r-sign", "investigate", "systemBlocked", { spec: { ...base.spec, kind: "investigate", workstream: null }, item: null }),
+          run("r-sign", "investigate", "systemBlocked", { spec: { ...base.spec, role: "investigate", workstream: null }, item: null }),
         ],
       }),
     );
@@ -102,13 +101,12 @@ describe("needs: every kind", () => {
       question: "unblock",
       permission: "unblock",
       failure: "unblock",
-      stoppedAtLimit: "unblock",
       signIn: "unblock",
       paused: "unblock",
       draft: "approve",
       review: "approve",
     });
-    expect(list).toHaveLength(10);
+    expect(list).toHaveLength(9);
     expect(by("plan")[0].target).toEqual({ type: "draft", id: "d-plan" });
     // The run's label is a parenthesis, not the subject: "R1 plan wrote the plan" reads wrong once the run is brought into a workstream (G12).
     expect(by("plan")[0].why).toMatch(/^An agent wrote the plan for CA-401 \(run R\d+\); approving/);
@@ -117,7 +115,6 @@ describe("needs: every kind", () => {
     expect(by("question")[0]).toMatchObject({ title: "R1 asks a question", target: { type: "run", id: "r-q" }, runId: "r-q" });
     expect(by("permission")[0].title).toBe("R2 asks to run a command");
     expect(by("failure")[0].title).toBe("R3 failed");
-    expect(by("stoppedAtLimit")[0].title).toBe("R4 stopped at its limit");
     expect(by("draft")[0].target).toEqual({ type: "draft", id: "d-comment" });
     expect(by("review")[0].title).toBe("Draft review");
   });
@@ -131,12 +128,11 @@ describe("needs: every kind", () => {
           run("r1", "triage", "needsAnswer", { needs: "Which cache?" }),
           run("r2", "build", "needsPermission", { needs: "approve Bash: git push origin ca-401" }),
           run("r3", "verify", "failed", { error: "boom" }),
-          run("r4", "review", "stopped", { stoppedByLimit: true }),
           run("r7", "investigate", "systemBlocked"),
         ],
       }),
     );
-    expect(list.length).toBeGreaterThanOrEqual(10);
+    expect(list.length).toBeGreaterThanOrEqual(8);
     for (const n of list) {
       for (const text of [n.why, n.ifYouWait]) {
         expect(text, `${n.kind}`).toMatch(/\S/);
@@ -157,24 +153,12 @@ describe("needs: every kind", () => {
     expect(n.why).toBe("R1 wants to use Edit on `src/cart.ts`.");
   });
 
-  it("keeps a permission prompt the person chose Allow once for as waiting in Terminal, and asks again once the run asks something else", () => {
-    const ws = view("ws-1", "CA-401", { runs: ["r-p"] });
-    const asking = run("r-p", "build", "needsPermission", { needs: "approve Bash: git push -u origin worktree-x" });
-    const titles = (r: Run) => needs(input({ workstreams: [ws], runs: [r] })).map((n) => n.title);
-    expect(titles(asking)).toEqual(["R1 asks to run a command"]);
-    const allowed = { ...asking, permissionAllowed: { command: "git push -u origin worktree-x", at: iso(1) } };
-    expect(titles(allowed)).toEqual(["R1 waits for your Yes in Terminal"]);
-    expect(needs(input({ workstreams: [ws], runs: [allowed] }))[0].primary.id).toBe("open");
-    expect(titles({ ...allowed, needs: "approve Bash: pnpm install" })).toEqual(["R1 asks to run a command"]);
-  });
-
-  it("offers Allow once only where it is offered: a Build's plain command, never a read-only run's", () => {
+  it("offers one way on for a permission prompt: Open in Terminal, whichever role asks", () => {
     const ws = view("ws-1", "CA-401", { runs: ["r1"] });
-    const [read] = needs(input({ workstreams: [ws], runs: [run("r1", "investigate", "needsPermission", { needs: "approve Bash: git push" })] }));
-    expect(read.primary.id).toBe("deny");
-    expect(read.secondary).toEqual([]);
-    const [build] = needs(input({ workstreams: [ws], runs: [run("r1", "build", "needsPermission", { needs: "approve Bash: git status", spec: { ...base.spec, kind: "build", workstream: "ws-1" } })] }));
-    expect([build.primary.id, ...build.secondary.map((a) => a.id)]).toEqual(["allow", "deny"]);
+    for (const role of ["investigate", "build", "profiler"]) {
+      const [n] = needs(input({ workstreams: [ws], runs: [run("r1", role, "needsPermission", { needs: "approve Bash: git push", spec: { ...base.spec, role, workstream: "ws-1" } })] }));
+      expect([n.title, n.primary, n.secondary]).toEqual(["R1 asks to run a command", { id: "open", label: "Open in Terminal" }, []]);
+    }
   });
 });
 
@@ -334,17 +318,13 @@ describe("needs: failures persist until they are dealt with", () => {
   });
 });
 
-describe("needs: stopped at the limit, and the runs that are never a need", () => {
+describe("needs: the runs that are never a need", () => {
   const ws = view("ws-1", "CA-401", { runs: ["r1"] });
   const only = (r: Run, extra: Partial<NeedsInput> = {}) => needs(input({ workstreams: [ws], runs: [r], ...extra }));
 
-  it("includes a run Gossamr stopped at its limit, with Resume, until it is resumed or dismissed", () => {
-    const stopped = run("r1", "plan", "stopped", { stoppedByLimit: true, error: "Stopped by Gossamr: it passed the 60 minute limit" });
-    const [n] = only(stopped);
-    expect(n).toMatchObject({ kind: "stoppedAtLimit", group: "unblock", primary: { id: "resume" }, secondary: [{ id: "dismiss" }] });
-    expect(n.why).toBe("R1 was stopped at its limit: Stopped by Gossamr: it passed the 60 minute limit.");
-    expect(only(stopped, { dismissed: new Set(["r1"]) })).toEqual([]);
-    expect(only({ ...stopped, state: "working", stoppedByLimit: false })).toEqual([]);
+  it("never makes a need of a stopped run", () => {
+    const stopped = run("r1", "plan", "stopped", { error: "Stopped before it started" });
+    expect(only(stopped)).toEqual([]);
   });
 
   it("leaves out a run stopped by the person, a finished run and a queued one", () => {
@@ -402,10 +382,7 @@ describe("needs: a failure is a need only while it is the latest of its kind on 
     expect(only([failed, run("r2", "plan", "done", { queuedAt: iso(5) })])).toEqual([]);
   });
 
-  it("drops a limit stop the same way, and a failure the person dismissed", () => {
-    const limit = run("r1", "plan", "stopped", { stoppedByLimit: true, queuedAt: iso(60) });
-    expect(kinds(only([limit]))).toEqual(["stoppedAtLimit"]);
-    expect(only([limit, run("r2", "plan", "working", { queuedAt: iso(5) })])).toEqual([]);
+  it("drops a failure the person dismissed", () => {
     expect(only([failedAt("r1", 60)], { dismissed: new Set(["r1"]) })).toEqual([]);
   });
 
@@ -428,7 +405,7 @@ describe("needs: where a need is", () => {
           draft("closed-ws", comment("CA-777"), 3, { workstream: "ws-gone" }),
           draft("elsewhere", comment("CA-500"), 2),
         ],
-        runs: [run("own", "investigate", "needsAnswer"), run("loose", "investigate", "needsAnswer", { spec: { ...base.spec, kind: "investigate", workstream: null }, item: ref("CA-500") })],
+        runs: [run("own", "investigate", "needsAnswer"), run("loose", "investigate", "needsAnswer", { spec: { ...base.spec, role: "investigate", workstream: null }, item: ref("CA-500") })],
       }),
     );
     expect(Object.fromEntries(list.map((n) => [n.key, n.workstreamId]))).toEqual({ "draft:made-in": "ws-3", "draft:on-ticket": "ws-1", "draft:closed-ws": null, "draft:elsewhere": null, "run:own": "ws-1", "run:loose": null });
@@ -441,7 +418,7 @@ describe("needs: where a need is", () => {
     expect(titleFromTicketBlock("SUP-9: Export timeout\nKind: task | Status: Open", "SUP-9")).toBe("Export timeout");
     expect(titleFromTicketBlock("SUP-90: Something else", "SUP-9")).toBeNull();
     expect(titleFromTicketBlock(null, "SUP-9")).toBeNull();
-    const failed = run("f", "investigate", "failed", { item: ref("SUP-9"), spec: { ...base.spec, kind: "investigate", workstream: null, ticketBlock: "SUP-9: Export timeout\nDescription: none." } });
+    const failed = run("f", "investigate", "failed", { item: ref("SUP-9"), spec: { ...base.spec, role: "investigate", workstream: null, ticketBlock: "SUP-9: Export timeout\nDescription: none." } });
     expect(needs(input({ runs: [failed] })).map((n) => n.head)).toEqual(["SUP-9 · Export timeout"]);
     // A cached title still comes first.
     expect(needs(input({ runs: [failed], titleOf: (k) => (k === "SUP-9" ? "Export times out" : null) }))[0].head).toBe("SUP-9 · Export times out");

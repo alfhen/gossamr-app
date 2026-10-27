@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { RunState } from "../types";
-import { COPY, MAY_TOUCH, MAY_TOUCH_READ_ONLY, canStartNow, sheetKey, flagCounts, formatBytes, highlights, stopControl, timelineTone } from "./runSheetLogic";
+import { COPY, SAFETY_SUMMARY, canStartNow, sheetKey, flagCounts, formatBytes, highlights, stopControl, timelineTone } from "./runSheetLogic";
 
 describe("weak marks on ticket text", () => {
   it("marks links, commands and words aimed at the model, and nothing in plain text", () => {
@@ -54,12 +54,13 @@ describe("small helpers", () => {
     expect(timelineTone("read")).toBe("plain");
   });
 
-  it("lists what an agent may touch without promising a fence", () => {
-    const text = MAY_TOUCH.map((t) => `${t.title} ${t.text}`).join(" ");
-    expect(text).toContain("Nothing enforces that");
-    expect(text).not.toMatch(/never write|can't write|cannot write/i);
-    // It is what a Build (or a run launched without the read-only rules) may touch: it says nothing of a read-only step's rules.
-    expect(text).not.toMatch(/read-only/i);
+  it("says agents run with the person's own settings, and that Jira and pushing are requests, not locks", () => {
+    expect(COPY.runAsYou).toContain("your own Claude Code settings");
+    expect(COPY.notALock).toContain("a request, not a lock");
+    const text = SAFETY_SUMMARY.map((t) => t.text).join(" ");
+    expect(text).toContain("your own Claude Code settings");
+    expect(text).toContain("requests, not locks");
+    expect(text).not.toMatch(/read-only|Investigate, Triage|a Build/i);
   });
 });
 
@@ -85,18 +86,3 @@ describe("keys while a run sheet is open", () => {
     expect(sheetKey("Escape", { ...ctx, browsing: false })).toBe("close");
   });
 });
-
-describe("what a read-only step may touch", () => {
-  it("says commands the rules don't allow are refused, not the listed ones", () => {
-    expect(COPY.readOnlyNote).toContain("every command outside its read-only rules");
-    expect(COPY.readOnlyNote).not.toContain("the commands listed");
-  });
-
-  it("refuses unapproved network commands, except the allowed fetches and read-only GitHub commands", () => {
-    const network = MAY_TOUCH_READ_ONLY.find((t) => t.title.startsWith("Pushing a branch"))!;
-    expect(network.text).toMatch(/^refused unless approved\./);
-    expect(network.text).toContain("`git fetch origin <base>`");
-    expect(network.text).toContain("read-only GitHub commands");
-  });
-});
-

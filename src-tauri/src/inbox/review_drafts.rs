@@ -8,7 +8,7 @@ use super::run_results::label_of;
 use super::Core;
 use crate::codehost::diff::{commentable, parse_where, relative_path};
 use crate::domain::{
-    clip, without_markers, Actor, Basis, ChangedFile, CreatedBy, DiffSide, Intent, MaybePosted, Origin, Proposal, ProposalQuery, ProposalState, ReviewComment, RunKind,
+    clip, without_markers, Actor, Basis, ChangedFile, CreatedBy, DiffSide, Intent, MaybePosted, Origin, Proposal, ProposalQuery, ProposalState, ReviewComment,
     RunState, WorkstreamEvent,
 };
 use crate::auth::Scope;
@@ -181,17 +181,17 @@ fn of_run(p: &Proposal, run_id: &str) -> bool {
 }
 
 impl Core {
-    /// The GitHub review draft of a Review run that reached Done with its whole answer read, the pull request and the
-    /// commit it read, and a verdict. Built from the verdict and findings alone. `None` for any other run, and for a
-    /// review that already has a review draft in any state, even a skipped one. Nothing is posted.
+    /// The GitHub review draft of a run that reached Done with its whole result read, the pull request and the commit it
+    /// read, and a verdict. Built from the verdict and findings alone. `None` for any other run, and for a review that
+    /// already has a review draft in any state, even a skipped one. Nothing is posted.
     pub async fn auto_draft_run_review(&self, id: &str) -> Result<Option<Proposal>> {
         let Some(run) = self.run(id).await? else { return Ok(None) };
-        if run.spec.kind != RunKind::Review || run.state != RunState::Done || !run.result_complete {
+        if run.state != RunState::Done {
             return Ok(None);
         }
         let (Some(number), Some(sha)) = (run.spec.pr, run.spec.pr_sha.clone()) else { return Ok(None) };
         let resolved = self.resolved_of(&run).await?;
-        let Some(verdict) = resolved.verdict else { return Ok(None) };
+        let (true, Some(verdict)) = (resolved.complete(), resolved.verdict) else { return Ok(None) };
         let scope = self.scope().await?;
         if self.with_db_for(&scope, |db| db.proposals(&ProposalQuery::default())).await?.iter().any(|p| of_run(p, &run.id)) {
             return Ok(None);
@@ -409,7 +409,7 @@ fn drafted_by(ticket: Option<&str>) -> String {
 mod tests {
     use super::*;
     use crate::codehost::github::testserver::{pull_reply, pull_reply_at, Reply};
-    use crate::domain::{ProposalState, Run};
+    use crate::domain::{ProposalState, ResultKind, Run};
     use crate::inbox::run_results::tests::run_with;
     use crate::inbox::testing::{fixture_watching, fixture_watching_with, Fixture};
 
@@ -510,7 +510,7 @@ mod tests {
 
     async fn review(fx: &Fixture, result: &str) -> Run {
         run_with(fx, |r| {
-            (r.spec.kind, r.spec.pr, r.spec.pr_sha, r.spec.instruction) = (RunKind::Review, Some(12), Some("a1b2c3d4e5f6".into()), String::new());
+            (r.spec.role, r.spec.pr, r.spec.pr_sha) = (ResultKind::Review.role(), Some(12), Some("a1b2c3d4e5f6".into()));
             r.result = Some(result.into());
         })
         .await
@@ -572,26 +572,56 @@ mod tests {
         let fx = fixture_watching_with(&["acme/webshop"], vec![pull_route(), (FILES_ROUTE, vec![files_reply()])]).await;
         let investigate = run_with(&fx, |r| r.result = Some(WRITTEN.into())).await;
         let unfinished = run_with(&fx, |r| {
-            (r.spec.kind, r.spec.pr, r.spec.pr_sha) = (RunKind::Review, Some(12), Some("a1b2c3d4e5f6".into()));
+            (r.spec.role, r.spec.pr, r.spec.pr_sha) = (ResultKind::Review.role(), Some(12), Some("a1b2c3d4e5f6".into()));
             (r.result, r.state) = (Some(WRITTEN.into()), RunState::Working);
         })
         .await;
         let summary_only = run_with(&fx, |r| {
-            (r.spec.kind, r.spec.pr, r.spec.pr_sha) = (RunKind::Review, Some(12), Some("a1b2c3d4e5f6".into()));
+            (r.spec.role, r.spec.pr, r.spec.pr_sha) = (ResultKind::Review.role(), Some(12), Some("a1b2c3d4e5f6".into()));
             (r.result, r.result_complete) = (Some(WRITTEN.into()), false);
         })
         .await;
         let unpinned = run_with(&fx, |r| {
-            (r.spec.kind, r.spec.pr) = (RunKind::Review, Some(12));
+            (r.spec.role, r.spec.pr) = (ResultKind::Review.role(), Some(12));
             r.result = Some(WRITTEN.into());
         })
         .await;
         let no_verdict = review(&fx, "Looked.\n\nFor Jira: fine.").await;
         for run in [investigate, unfinished, summary_only, unpinned, no_verdict] {
-            assert_eq!(fx.core.auto_draft_run_review(&run.id).await.unwrap(), None, "{:?} {:?}", run.spec.kind, run.state);
+            assert_eq!(fx.core.auto_draft_run_review(&run.id).await.unwrap(), None, "{:?} {:?}", run.spec.role, run.state);
         }
         assert!(fx.core.proposals(&ProposalQuery::default()).await.unwrap().iter().all(|p| !matches!(p.intent, Intent::GithubReview { .. })));
         assert_eq!(fx.core.auto_draft_run_review("missing").await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn a_free_role_pinned_to_a_pull_request_that_reports_a_verdict_leaves_the_review_draft() {
+        use crate::runs::report::{new_token, token_hash};
+        let fx = fixture_watching_with(&["acme/webshop"], vec![pull_route(), (FILES_ROUTE, vec![files_reply()])]).await;
+        let pinned = |r: &mut Run| {
+            (r.spec.role, r.spec.pr, r.spec.pr_sha, r.spec.report) = (crate::domain::Role::parse("code checker").unwrap(), Some(12), Some("a1b2c3d4e5f6".into()), true);
+            (r.state, r.result, r.result_complete) = (RunState::Working, None, false);
+        };
+        let run = run_with(&fx, pinned).await;
+        let token = new_token().unwrap();
+        fx.core.report_reserve(&run.id, &token_hash(&token), crate::domain::REPORT_TOOL_VERSION).await.unwrap();
+        let args = serde_json::json!({ "status": "done", "note": "Not ready.", "verdict": "blocking", "findings": [{ "severity": "blocking", "text": "The retry loop never backs off.", "where": "src/consumer/retry.ts:42" }] });
+        fx.core.report_call(&run.id, &token_hash(&token), &args).await;
+        let mut done = fx.core.run(&run.id).await.unwrap().unwrap();
+        (done.state, done.result, done.result_complete) = (RunState::Done, Some("Prose with no verdict line.".into()), true);
+        fx.core.save_run(&done).await.unwrap();
+
+        let p = fx.core.auto_draft_run_review(&run.id).await.unwrap().expect("a review draft from the report");
+        let (_, _, number, sha, summary, comments) = intent_of(&p);
+        assert_eq!((number, sha, comments.len()), (12, "a1b2c3d4e5f6", 1));
+        assert!(summary.starts_with("Not ready to merge yet: 1 blocking issue"), "{summary}");
+
+        let silent = run_with(&fx, |r| {
+            pinned(r);
+            (r.state, r.result, r.result_complete) = (RunState::Done, Some("Verdict: blocking".into()), true);
+        })
+        .await;
+        assert_eq!(fx.core.auto_draft_run_review(&silent.id).await.unwrap(), None, "the written line is read only for a review");
     }
 
     #[tokio::test]

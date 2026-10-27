@@ -14,7 +14,7 @@ test.describe("hidden machinery", () => {
 
   test("Discuss with Pip on an agent's comment draft shows a short line, never the instruction, its ids or Pip's tools", async ({ page }) => {
     await reviewedDraft(page);
-    const reviewRun = (await mockRuns(page)).find((r) => r.kind === "review" && r.key === "CA-402")!;
+    const reviewRun = (await mockRuns(page)).find((r) => r.step === "review" && r.key === "CA-402")!;
     const comment = peekSheet(page).getByRole("article", { name: "Comment on CA-402" });
     await expect(comment).toHaveCount(1);
     const draftId = await comment.evaluate((el) => el.closest("[data-draft]")?.getAttribute("data-draft") ?? el.getAttribute("data-draft"));
@@ -33,7 +33,7 @@ test.describe("hidden machinery", () => {
 
   test("Discuss with Pip on a run's sheet shows its short line too, and sends Pip the draft by id, out of sight", async ({ page }) => {
     await reviewedDraft(page);
-    const reviewRun = (await mockRuns(page)).find((r) => r.kind === "review" && r.key === "CA-402")!;
+    const reviewRun = (await mockRuns(page)).find((r) => r.step === "review" && r.key === "CA-402")!;
     const comment = peekSheet(page).getByRole("article", { name: "Comment on CA-402" });
     await expect(comment).toHaveCount(1);
     const draftId = await comment.getAttribute("data-draft");

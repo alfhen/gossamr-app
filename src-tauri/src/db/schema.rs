@@ -374,7 +374,11 @@ UPDATE proposals SET state = 'retired',
     '$.updatedAt', strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
   WHERE state = 'pending' AND json_valid(data) AND json_extract(data, '$.intent.type') IN ('startRun', 'followUp', 'runAnswer');";
 
-const STEPS: &[&str] = &[INBOX, CACHE, PROPOSALS, WATCH, CODE, LINKS, RUNS, RUN_REPORTS, PIP_TURNS, WORKSTREAMS, PROPOSAL_WORKSTREAMS, GENERAL_CONVERSATION, RUN_ARCHIVE, WAKE_LEDGER, RUN_START_KEYS, RETIRE_AGENT_DRAFTS];
+/// A run's kind is its role: a label Pip picks. The six kind names read as roles of the same name.
+const RUN_ROLES: &str = "
+ALTER TABLE runs RENAME COLUMN kind TO role;";
+
+const STEPS: &[&str] = &[INBOX, CACHE, PROPOSALS, WATCH, CODE, LINKS, RUNS, RUN_REPORTS, PIP_TURNS, WORKSTREAMS, PROPOSAL_WORKSTREAMS, GENERAL_CONVERSATION, RUN_ARCHIVE, WAKE_LEDGER, RUN_START_KEYS, RETIRE_AGENT_DRAFTS, RUN_ROLES];
 
 pub fn migrate(conn: &mut Connection) -> Result<()> {
     let applied: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
@@ -778,6 +782,31 @@ mod tests {
     }
 
     #[test]
+    fn a_file_from_before_roles_keeps_every_run_and_its_kind_as_a_role_of_the_same_name() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        for step in &STEPS[..16] {
+            conn.execute_batch(step).unwrap();
+        }
+        conn.pragma_update(None, "user_version", 16).unwrap();
+        for (id, kind, worktree) in [("r1", "investigate", "/w1"), ("r2", "build", "/w2")] {
+            conn.execute(
+                "INSERT INTO runs (id, proposal_id, start_key, connection_id, kind, repo, expected_worktree, state, queued_at, last_progress_at, data) VALUES (?1, ?1, ?1, 'c', ?2, 'a/b', ?3, 'done', 't', 't', '{}')",
+                rusqlite::params![id, kind, worktree],
+            )
+            .unwrap();
+        }
+
+        migrate(&mut conn).unwrap();
+
+        let roles: Vec<(String, String)> = conn.prepare("SELECT id, role FROM runs ORDER BY id").unwrap().query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().collect::<rusqlite::Result<_>>().unwrap();
+        assert_eq!(roles, [("r1".to_string(), "investigate".to_string()), ("r2".to_string(), "build".to_string())]);
+        assert!(conn.prepare("SELECT kind FROM runs").is_err(), "the column is the role now");
+        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), STEPS.len() as i64);
+        migrate(&mut conn).unwrap();
+        assert_eq!(conn.query_row("SELECT count(*) FROM runs", [], |r| r.get::<_, i64>(0)).unwrap(), 2);
+    }
+
+    #[test]
     fn a_file_from_before_pip_started_agents_keeps_every_run_and_may_now_hold_one_with_no_draft() {
         let mut conn = Connection::open_in_memory().unwrap();
         for step in &STEPS[..14] {
@@ -806,7 +835,7 @@ mod tests {
 
         let add = |id: &str, draft: Option<&str>, key: &str, worktree: &str| {
             conn.execute(
-                "INSERT INTO runs (id, proposal_id, start_key, connection_id, kind, repo, expected_worktree, state, queued_at, last_progress_at, data) VALUES (?1, ?2, ?3, 'c', 'build', 'a/b', ?4, 'queued', 't', 't', '{}')",
+                "INSERT INTO runs (id, proposal_id, start_key, connection_id, role, repo, expected_worktree, state, queued_at, last_progress_at, data) VALUES (?1, ?2, ?3, 'c', 'build', 'a/b', ?4, 'queued', 't', 't', '{}')",
                 rusqlite::params![id, draft, key, worktree],
             )
         };

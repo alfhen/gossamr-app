@@ -127,7 +127,7 @@ describe("what needs you, in the Agents list and its detail", () => {
   });
 
   it("gives No workstream a badge and an Open button when it holds a need, which opens its detail", () => {
-    const loose = { id: "r-loose", state: "needsAnswer", spec: { workstream: null, repo: "acme/web", kind: "plan" }, queuedAt: "2026-09-30T11:00:00Z", lastProgressAt: "2026-09-30T11:30:00Z", needs: "Which one?" } as unknown as Run;
+    const loose = { id: "r-loose", state: "needsAnswer", spec: { workstream: null, repo: "acme/web", role: "plan", brief: "Plan it." }, queuedAt: "2026-09-30T11:00:00Z", lastProgressAt: "2026-09-30T11:30:00Z", needs: "Which one?" } as unknown as Run;
     seed(useRuns, { runs: [loose] });
     const html = screen({ runs: [loose], needsYou: 1 });
     expect(html).toMatch(/data-workstream-group="none" data-has-needs/);
@@ -157,7 +157,7 @@ describe("what needs you, in the Agents list and its detail", () => {
   });
 
   it("opens No workstream's detail, with its needs on top and nothing about a workstream", () => {
-    const loose = { id: "r-loose", state: "needsAnswer", spec: { workstream: null, repo: "acme/web", kind: "plan" }, queuedAt: "2026-09-30T11:00:00Z", lastProgressAt: "2026-09-30T11:30:00Z", needs: "Which one?" } as unknown as Run;
+    const loose = { id: "r-loose", state: "needsAnswer", spec: { workstream: null, repo: "acme/web", role: "plan", brief: "Plan it." }, queuedAt: "2026-09-30T11:00:00Z", lastProgressAt: "2026-09-30T11:30:00Z", needs: "Which one?" } as unknown as Run;
     seed(useRuns, { runs: [loose] });
     seed(useWorkView, { deciding: "run:r-loose" });
     const html = renderToStaticMarkup(<WorkstreamSheet id="general" />);

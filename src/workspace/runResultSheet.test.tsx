@@ -249,7 +249,7 @@ describe("an agent row in Activity", () => {
     const [entry] = toRunEntries([run("done", { result: "The lag comes from one consumer." })], new Set(), NOW).filter((e) => e.kind === "finished");
     const html = renderToStaticMarkup(<RunFeedRow entry={entry} ticketTitle="Retry failed payment webhooks" now={new Date(NOW)} selected={false} position={1} total={3} onOpen={vi.fn()} onMarkRead={vi.fn()} />);
     expect(html).toContain('data-source="agents"');
-    expect(html).toContain("Investigate agent finished: The lag comes from one consumer.");
+    expect(html).toContain("Investigator agent finished: The lag comes from one consumer.");
     expect(html).toContain("Retry failed payment webhooks");
     expect(html).toContain("Open run");
     expect(html).toContain("Mark read");

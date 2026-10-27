@@ -24,7 +24,7 @@ use super::toolchain::{Toolchain, ToolchainSource};
 use super::control::{MacTerminal, Terminal};
 use super::tracker::{Attention, NoNotices, RunNotifier};
 use crate::config::{AgentSettings, AppConfig};
-use crate::domain::{render_prompt, Actor, Run, RunEvent, RunKind, RunQuery, RunState, GUARD, AGENT_GUARD};
+use crate::domain::{render_prompt, Actor, Role, Run, RunEvent, RunQuery, RunState, GUARD, AGENT_GUARD};
 use crate::error::{Error, Result};
 use crate::inbox::Core;
 
@@ -139,13 +139,13 @@ pub(super) fn belongs_to(entry: &AgentEntry, run: &Run) -> bool {
 
 /// How a session is titled in Claude's own lists. Only the title carries the prefix: the worktree folder and branch
 /// take `spec.name`, and the spec (and so its digest) is left as approved.
-fn session_name(label: &str, kind: RunKind) -> String {
-    format!("{SESSION_PREFIX}{label} {}", kind.as_str())
+fn session_name(label: &str, role: &Role) -> String {
+    format!("{SESSION_PREFIX}{label} {}", role.as_str())
 }
 
 /// The title Gossamr gave the run's session when it launched it.
 pub(super) fn title_of(run: &Run) -> String {
-    session_name(run.item.as_ref().map_or("Agent", |i| i.key.as_str()), run.spec.kind)
+    session_name(run.item.as_ref().map_or("Agent", |i| i.key.as_str()), &run.spec.role)
 }
 
 const SESSION_PREFIX: &str = "Gossamr: ";
@@ -327,7 +327,7 @@ impl RunService {
         let spec = &run.spec;
         spec.validate().map_err(|e| Failure::Invalid(e.to_string()))?;
         self.core.require_watched_repo(&spec.repo).map_err(|e| Failure::Invalid(e.to_string()))?;
-        if spec.kind == RunKind::Review {
+        if spec.pr.is_some() {
             self.core.review_current(spec).await.map_err(|e| Failure::Invalid(e.to_string()))?;
         }
         let live = self.live_elsewhere(run);
@@ -352,10 +352,6 @@ impl RunService {
         }
         if !tc.cli.supports_bg().await.map_err(|e| Failure::from_cli(e, clone))? {
             return Err(Failure::TooOld);
-        }
-        // Fails closed: a read-only kind is never launched without the restriction.
-        if spec.kind.read_only() && !tc.cli.supports_read_only().await.map_err(|e| Failure::from_cli(e, clone))? {
-            return Err(Failure::CantRestrict);
         }
         Ok(())
     }
@@ -396,17 +392,12 @@ impl RunService {
         run.error = None;
         run.failure = None;
         run.ended_at = None;
-        // Recorded before the launch, so a run adopted or retried after a lost answer still says what it was given.
-        run.read_only = run.spec.read_only();
         self.store(run).await?;
         self.remember(run);
 
         let agent = self.offer_tools(run).await;
         let spec = &run.spec;
         let mut guard = GUARD.to_string();
-        if let Some(ro) = &run.read_only {
-            guard = format!("{guard} {}", ro.guard);
-        }
         if agent.is_some() {
             guard = format!("{guard} {AGENT_GUARD}");
         }
@@ -417,7 +408,6 @@ impl RunService {
             guard,
             prompt: render_prompt(spec),
             agent,
-            read_only: run.read_only.clone(),
         };
         self.in_flight.lock().expect("in-flight lock poisoned").insert(run.id.clone());
         let outcome = tc.cli.launch(&request).await;

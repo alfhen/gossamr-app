@@ -13,8 +13,8 @@ test("Ask Pip on a ticket starts an investigation agent, which shows on the Work
   await homeSettled(page);
 
   const timeline = homeConversationRegion(page).locator("[data-timeline-entry]");
-  await expect(timeline.filter({ hasText: /Investigate R1/ })).toHaveCount(1);
-  const run = (await mockRuns(page)).find((r) => r.kind === "investigate" && r.key === "CA-401");
+  await expect(timeline.filter({ hasText: /Investigator R1/ })).toHaveCount(1);
+  const run = (await mockRuns(page)).find((r) => r.step === "investigate" && r.key === "CA-401");
   expect(run).toBeTruthy();
   await expect(page.locator(`main article[data-run-id="${run!.id}"]`).first()).toBeVisible();
   await expect(page.getByRole("dialog", { name: "Start an agent" })).toHaveCount(0);
@@ -50,6 +50,6 @@ test("when Pip stops an agent the conversation says so", async ({ page }) => {
   await askPip(page, "stop R1");
   await homeSettled(page);
 
-  await expect.poll(async () => (await mockRuns(page)).find((r) => r.kind === "investigate")?.state).toBe("stopped");
+  await expect.poll(async () => (await mockRuns(page)).find((r) => r.step === "investigate")?.state).toBe("stopped");
   await expect(homeConversationRegion(page).locator("[data-timeline-entry]").filter({ hasText: "Pip stopped R1" })).toHaveCount(1);
 });

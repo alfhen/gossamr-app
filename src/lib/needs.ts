@@ -1,12 +1,12 @@
 import { type Intent, type Proposal, type Run, type WorkstreamView } from "../types";
-import { stoppedAtLimit } from "../workspace/agentsLogic";
+import { permissionRequest } from "../workspace/agentsLogic";
 import { failureHelp } from "../workspace/failureHelp";
 import { docText } from "./docs";
-import { parsePermission, permissionOffer, readAs } from "./permission";
 import { inWorkstreamPane, targetOf, workstreamOf } from "./proposals";
 import { maskSecrets } from "./riskyText";
 import { pausedText } from "./workstreamPause";
-import { STAGE_LABEL, runWorkstream } from "./workstreamStage";
+import { roleLabel, stepOf } from "./roles";
+import { runWorkstream } from "./workstreamStage";
 
 /**
  * Needs you: the one place that says what waits on the person, and the only source of its count. It reads what the stores
@@ -24,14 +24,13 @@ export type NeedKind =
   | "question"
   | "signIn"
   | "failure"
-  | "stoppedAtLimit"
   | "paused"
   | "draft"
   | "review"
   | "pipAsk";
 
 /** What the person can do about a need, as the keys and the pane's buttons name it. */
-export type NeedActionId = "approve" | "allow" | "deny" | "dismiss" | "edit" | "retry" | "resume" | "answer" | "reply" | "open";
+export type NeedActionId = "approve" | "dismiss" | "edit" | "retry" | "resume" | "answer" | "reply" | "open";
 
 export interface ActionSpec {
   id: NeedActionId;
@@ -203,9 +202,9 @@ function draftWorkstream(p: Proposal, open: readonly WorkstreamView[]): string |
   return open.find((v) => inWorkstreamPane(p, v.workstream))?.workstream.id ?? null;
 }
 
-/** "R2" in its workstream, else the run's kind. */
+/** "R2" in its workstream, else the run's role. */
 function runName(run: Run, ws: WorkstreamView | null): string {
-  return ws?.labels.find(([id]) => id === run.id)?.[1] ?? `${STAGE_LABEL[run.spec.kind]} agent`;
+  return ws?.labels.find(([id]) => id === run.id)?.[1] ?? `${roleLabel(run.spec.role)} agent`;
 }
 
 /** The title a workstream gives its ticket, which it took when it opened: "KEY title" less the key. */
@@ -271,14 +270,14 @@ const COMMENT_WORDS = 6;
 
 
 /**
- * The runs no newer run of the same kind on the same ticket (or repository of the same connection, for one without a ticket) has followed, in any
- * state: a failure or a limit stop only asks for a decision while it is the last word on that work, so a retry that is
+ * The runs no newer run of the same role on the same ticket (or repository of the same connection, for one without a ticket) has followed, in any
+ * state: a failure only asks for a decision while it is the last word on that work, so a retry that is
  * running or finished, or one that failed the same way again, leaves exactly one run to deal with.
  */
 export function latestRuns(runs: readonly Pick<Run, "id" | "item" | "spec" | "queuedAt" | "connectionId">[]): Set<string> {
   const newest = new Map<string, Pick<Run, "id" | "queuedAt">>();
   for (const run of runs) {
-    const key = `${run.item ? `${run.item.connectionId}\n${run.item.externalId}` : `${run.connectionId}\n${run.spec.repo}`}\n${run.spec.kind}`;
+    const key = `${run.item ? `${run.item.connectionId}\n${run.item.externalId}` : `${run.connectionId}\n${run.spec.repo}`}\n${stepOf(run.spec.role) ?? run.spec.role}`;
     const seen = newest.get(key);
     if (!seen || run.queuedAt > seen.queuedAt || (run.queuedAt === seen.queuedAt && run.id > seen.id)) newest.set(key, run);
   }
@@ -288,12 +287,12 @@ export function latestRuns(runs: readonly Pick<Run, "id" | "item" | "spec" | "qu
 /**
  * Everything waiting on the person across the open workstreams and General, highest rank first: a decision (a plan or
  * description to approve, a ticket the triage found not clear enough to plan), then what is stuck (a permission, a question,
- * a sign-in, a failure, a run stopped at its limit, a paused workstream, a question Pip asked), then drafts to approve (a
+ * a sign-in, a failure, a paused workstream, a question Pip asked), then drafts to approve (a
  * Jira draft, a GitHub review). Within a group, oldest first.
  *
- * A retired or superseded draft never shows. A failure or a limit stop is a need only
- * while it is the latest run of its kind on its ticket (`latestRuns`), and stays until the person deals with it: Retry, a
- * fix, a resume, or a Dismiss (`dismissed`); looking at it clears nothing. A finished run is a state, not a need.
+ * A retired or superseded draft never shows. A failure is a need only
+ * while it is the latest run of its role on its ticket (`latestRuns`), and stays until the person deals with it: Retry, a
+ * fix, or a Dismiss (`dismissed`); looking at it clears nothing. A finished run is a state, not a need.
  */
 export function needs({ workstreams, runs, proposals, dismissed, pausedAt, titleOf }: NeedsInput): Need[] {
   const kept = workstreamTitles(workstreams);
@@ -328,20 +327,20 @@ export function needs({ workstreams, runs, proposals, dismissed, pausedAt, title
     // A draft a run left says which run, so a review's comments can be told apart: "R5 review · comment".
     const from = p.origin.type === "run" ? p.origin.runId : null;
     const label = from && ws?.labels.find(([id]) => id === from)?.[1];
-    const step = from ? runs.find((r) => r.id === from)?.spec.kind : undefined;
+    const step = from ? runs.find((r) => r.id === from)?.spec.role : undefined;
     // "GitHub review", not "review": beside a Review run's stage it would read "Review · review".
     const intent = p.intent.type as Drafted;
     const what = intent === "githubReview" ? "GitHub review" : DRAFT_TEXT[intent].replace(/^Draft /, "");
-    const title = label ? (step ? `${label} ${STAGE_LABEL[step].toLowerCase()} · ${what}` : `${label} ${what}`) : step ? `${STAGE_LABEL[step]} · ${what}` : p.intent.type === "comment" && !from ? commentTitle(p.intent.body) : DRAFT_TEXT[intent];
-    const by = label ? (step ? `${label} ${STAGE_LABEL[step].toLowerCase()}` : label) : p.createdBy === "pip" ? "Pip" : p.createdBy === "agent" ? "An agent" : "You";
+    const title = label ? (step ? `${label} ${step} · ${what}` : `${label} ${what}`) : step ? `${roleLabel(step)} · ${what}` : p.intent.type === "comment" && !from ? commentTitle(p.intent.body) : DRAFT_TEXT[intent];
+    const by = label ? (step ? `${label} ${step}` : label) : p.createdBy === "pip" ? "Pip" : p.createdBy === "agent" ? "An agent" : "You";
     const drafted = `${by} drafted ${DRAFT_WHAT[intent](key)}.`;
     const edit = EDITABLE.has(p.intent.type) ? [action("edit", "Edit")] : [];
     if (p.intent.type === "rewrite") {
       // A plan run's description update is how the plan is approved; any other rewrite is read in its diff first.
-      const plan = from !== null && runs.find((r) => r.id === from)?.spec.kind === "plan" && !!p.intent.body;
+      const plan = from !== null && stepOf(runs.find((r) => r.id === from)?.spec.role ?? "") === "plan" && !!p.intent.body;
       // A Triage's description update stands where its comment did: a draft that waits for a go-ahead, read in its diff first
       // (never in a batch), and nothing the workstream waits on, so it does not outrank the question or the wait it sits beside.
-      const triage = from !== null && step === "triage" && !!p.intent.body;
+      const triage = from !== null && stepOf(step ?? "") === "triage" && !!p.intent.body;
       out.push({
         ...base,
         group: triage ? "approve" : "decide",
@@ -390,22 +389,18 @@ export function needs({ workstreams, runs, proposals, dismissed, pausedAt, title
         batchable: false,
       });
     } else if (run.state === "needsPermission") {
-      // A prompt the person chose Allow once for is theirs to answer in Terminal now, and stays a need until it is answered,
-      // so a run left waiting there isn't forgotten. One it asks after is asked again.
-      const allowed = run.permissionAllowed?.command === readAs(run.needs);
-      const ask = parsePermission(run.needs);
-      const command = readAs(run.needs);
-      const offer = permissionOffer(run);
-      const wants = !command ? `${name} asks permission.` : !ask || ask.tool === "Bash" ? `${name} wants to run \`${clip(command, 90)}\`.` : `${name} wants to use ${ask.tool} on \`${clip(command, 90)}\`.`;
+      const ask = permissionRequest(run.needs);
+      const command = ask?.command ?? "";
+      const wants = !command ? `${name} asks permission.` : ask?.tool && ask.tool !== "Bash" ? `${name} wants to use ${ask.tool} on \`${clip(command, 90)}\`.` : `${name} wants to run \`${clip(command, 90)}\`.`;
       out.push({
         ...base,
         group: "unblock",
         kind: "permission",
-        title: allowed ? `${name} waits for your Yes in Terminal` : `${name} asks to run a command`,
-        why: allowed ? `${name} waits for your Yes in Terminal for \`${clip(command, 90)}\`.` : wants,
+        title: `${name} asks to run a command`,
+        why: wants,
         ifYouWait: `The run stays paused; ${stays}.`,
-        primary: allowed ? action("open", "Open in Terminal") : offer.allow === "offered" ? action("allow", "Allow once in Terminal") : action("deny", "Deny"),
-        secondary: allowed || offer.allow === "offered" ? [action("deny", "Deny")] : [],
+        primary: action("open", "Open in Terminal"),
+        secondary: [],
         batchable: false,
       });
     } else if (run.state === "systemBlocked") {
@@ -431,18 +426,6 @@ export function needs({ workstreams, runs, proposals, dismissed, pausedAt, title
         why: `${name} ${trust ? "can't start until its folder is trusted" : "failed"}: ${sentence(help?.summary ?? (run.error?.trim() || "no reason was recorded"))}`,
         ifYouWait: "Nothing retries by itself; it stays here until you retry or dismiss it.",
         primary: help?.primary ? action("open", help.primary.label) : action("retry", run.shortId ? "Open in Terminal" : "Retry"),
-        secondary: [action("dismiss", "Dismiss")],
-        batchable: false,
-      });
-    } else if (run.state === "stopped" && !dismissed.has(run.id) && stoppedAtLimit(run) && latest.has(run.id)) {
-      out.push({
-        ...base,
-        group: "unblock",
-        kind: "stoppedAtLimit",
-        title: `${name} stopped at its limit`,
-        why: `${name} was stopped at its limit: ${sentence(run.error?.trim() || "it passed its limit")}`,
-        ifYouWait: "It stays stopped; its conversation and worktree are kept.",
-        primary: action("resume", "Resume"),
         secondary: [action("dismiss", "Dismiss")],
         batchable: false,
       });

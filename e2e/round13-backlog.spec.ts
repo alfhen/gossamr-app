@@ -2,7 +2,7 @@ import { expect, test, type Page } from "@playwright/test";
 import { agentsHome, expandAllNeeds, expectToast, homeConversationRegion, homeSettled, jiraWrites, needsPane, openAgents, openApp, pipCommentDraft, selectWorkstream, startWorkstream, workstreamEvents, openNeedOfKind, needsStack } from "./support/app";
 
 // Backlog items of the thirteenth dogfood round: a workstream's offer to bring in what its ticket already has in General (G17),
-// Close with an Undo and a Reopen (G23), a read-only run's permission prompt saying what Deny does (G24), the posting
+// Close with an Undo and a Reopen (G23), a permission prompt saying it is answered in Terminal (G24), the posting
 // pause's two buttons (G26), names a screen reader hears once (G28), the posted entry's footer (G29), the Done ticket's
 // one reason (G30).
 
@@ -57,18 +57,17 @@ test.describe("a workstream opened on a ticket with runs in General (G17)", () =
   });
 });
 
-test.describe("a read-only run's permission prompt (G24)", () => {
-  test("says what Deny does next to the refusal, ahead of the buttons", async ({ page }) => {
+test.describe("a permission prompt", () => {
+  test("says it is answered in Terminal, ahead of the one button", async ({ page }) => {
     test.setTimeout(90_000);
     await openApp(page);
     await openAgents(page);
     await expandAllNeeds(page);
     await openNeedOfKind(page, "permission");
     const ask = needsPane(page).locator("[data-permission-ask]");
-    await expect(ask.locator("[data-permission-refusal]")).toContainText("This run is read-only, so this command would be refused anyway.");
-    const note = ask.locator("[data-permission-read-only]");
-    await expect(note).toHaveText("This is a read-only step, so it can't be allowed. Deny lets it carry on without it.");
-    expect(await ask.evaluate((el) => !!(el.querySelector("[data-permission-read-only]")!.compareDocumentPosition(el.querySelector("[data-permission-decisions]")!) & Node.DOCUMENT_POSITION_FOLLOWING))).toBe(true);
+    const note = ask.locator("p").filter({ hasText: "you answer it in Terminal" });
+    await expect(note).toBeVisible();
+    expect(await ask.evaluate((el) => !!(el.querySelector("p:last-of-type")!.compareDocumentPosition(el.querySelector("[data-permission-decisions]")!) & Node.DOCUMENT_POSITION_FOLLOWING))).toBe(true);
   });
 });
 

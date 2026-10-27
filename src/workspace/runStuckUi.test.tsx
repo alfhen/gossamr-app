@@ -3,7 +3,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MockBackend } from "../backend/mock";
 import type { Run, RunState } from "../types";
 import { RunSheetView, type RunSheetActions, type RunSheetViewProps } from "./RunSheet";
-import { rowText } from "./AgentParts";
 import { CodeBox } from "./AgentSheet";
 
 const NOW = Date.parse("2026-09-30T12:00:00Z");
@@ -23,40 +22,20 @@ beforeEach(() => {
   vi.stubGlobal("localStorage", { getItem: () => null, setItem: () => {}, removeItem: () => {} });
 });
 
-describe("a run stopped at its limit", () => {
-  const limit = (over: Partial<Run> = {}) => run("stopped", { stoppedByLimit: true, error: "Stopped by Gossamr: it passed the 60 minute limit", lastDetail: "plan complete; awaiting PR #176", ...over });
-
-  it("is never called finished: it says it was stopped at its limit and offers to resume it", () => {
-    const html = sheet(limit());
-    expect(html).toContain("Stopped at limit");
-    expect(html).not.toContain("Finished");
-    expect(html).toContain("Stopped by Gossamr: it passed the 60 minute limit");
-    expect(html).toContain("It was at: plan complete; awaiting PR #176");
-    expect(html).toContain('aria-label="What to tell it"');
-    expect(html).toContain("Please carry on from where you stopped.");
-    expect(buttons(html)).toEqual(expect.arrayContaining(["Resume", "Open in Terminal"]));
-    expect(html).toContain("After a resume the limits no longer stop this run.");
-  });
-
-  it("offers the reply Claude suggested beside the box, and the list says why it stopped", () => {
-    const html = sheet(limit({ suggestedReply: "Go ahead and build it with the plan as written" }));
-    expect(html).toContain("Claude suggests:</b> “Go ahead and build it with the plan as written”");
-    expect(/<textarea[^>]*>([^<]*)<\/textarea>/.exec(html)?.[1]).toBe("Please carry on from where you stopped.");
-    expect(rowText(limit(), NOW)).toBe("Stopped by Gossamr: it passed the 60 minute limit");
-  });
-
-  it("with an answer that didn't get through shows that answer to send again, not a resume", () => {
-    const html = sheet(limit({ unsentAnswer: "Use staging.", error: "Couldn't wake the agent: boom." }));
-    expect(html).toContain("Your answer didn&#x27;t get through");
-    expect(buttons(html)).toContain("Start it again with your answer");
+describe("a stopped run", () => {
+  it("says Stopped and offers nothing to resume or answer", () => {
+    const html = sheet(run("stopped"));
+    expect(html).toContain("Stopped");
+    expect(html).not.toContain("limit");
+    expect(html).not.toContain("<textarea");
     expect(buttons(html)).not.toContain("Resume");
   });
 
-  it("a stopped run that wasn't stopped at a limit says Stopped and offers nothing to resume", () => {
-    const html = sheet(run("stopped"));
-    expect(html).toContain("Stopped");
-    expect(html).not.toContain("Stopped at limit");
-    expect(html).not.toContain("<textarea");
+  it("with an answer that didn't get through shows that answer to send again", () => {
+    const html = sheet(run("stopped", { unsentAnswer: "Use staging.", error: "Couldn't wake the agent: boom." }));
+    expect(html).toContain("Your answer didn&#x27;t get through");
+    expect(buttons(html)).toContain("Start it again with your answer");
+    expect(buttons(html)).not.toContain("Resume");
   });
 });
 

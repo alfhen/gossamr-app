@@ -4,7 +4,7 @@ import { MockBackend } from "../backend/mock";
 import type { AgentSettings } from "../types";
 import { AgentsSettingsView, withDigestMinutes } from "./AgentsSettings";
 
-const SETTINGS: AgentSettings = { maxRuns: 3, wallClockMinutes: 60, tokenCap: 3_000_000, terminal: "terminal", draftOnFinish: true };
+const SETTINGS: AgentSettings = { maxRuns: 3, terminal: "terminal", draftOnFinish: true };
 const view = (settings: AgentSettings | null, settingsSaving = false) =>
   renderToStaticMarkup(<AgentsSettingsView runs={[]} stopping={false} keepRunning={0} settings={settings} settingsSaving={settingsSaving} cleanup={null} onSettings={vi.fn()} onCleanup={vi.fn()} onStopAll={vi.fn()} onClose={vi.fn()} />);
 
@@ -13,7 +13,11 @@ describe("Settings", () => {
     const html = view(SETTINGS);
     expect(html).not.toContain("Automatic steps");
     expect(html).not.toContain("Pip turns per day");
-    expect(html).toContain("Limits");
+    expect(html).toContain("Agents running at once");
+    expect(html).not.toContain("Stop a run after");
+    expect(html).not.toContain("Limits");
+    expect(html).not.toContain("read-only");
+    expect(html).toContain("own Claude Code settings");
     expect(html).not.toContain("Result tool");
   });
 });
