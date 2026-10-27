@@ -1,4 +1,4 @@
-import { AUTO_WATCH_EVERYTHING_MAX, type ContainerRef, type Intent, type Proposal, type RunKind, type WatchChange, type WatchMode, type WatchRow, type WatchState, type WorkstreamActor } from "../types";
+import { AUTO_WATCH_EVERYTHING_MAX, type ContainerRef, type Intent, type ItemRef, type Proposal, type RunKind, type WatchChange, type WatchMode, type WatchRow, type WatchState, type WorkstreamActor } from "../types";
 import { docText } from "../lib/docs";
 import type { GithubWrite } from "./mockGithub";
 import type { ScriptedFinish } from "./mockRunResult";
@@ -16,7 +16,7 @@ export interface MockOptions {
   pipPace?: number;
   /** "none" is a GitHub token that can't write to pull requests anywhere, so no review draft can be posted. */
   reviewAccess?: "none";
-  runs?: { seed?: "busy" | "kinds" | "empty" | "many" | "failures" | "stuck" | "reports"; epoch?: number; environment?: "ok" | "missing" | "signedOut"; cap?: number; pipRun?: boolean; planDescription?: boolean; untrusted?: boolean; prSurfaceMs?: number | null };
+  runs?: { seed?: "busy" | "kinds" | "empty" | "many" | "failures" | "stuck" | "reports"; epoch?: number; cap?: number; planDescription?: boolean; untrusted?: boolean; prSurfaceMs?: number | null };
 }
 
 interface Stored {
@@ -110,6 +110,11 @@ export interface MockHandle {
   surfacePullRequests(): boolean;
   /** The next run of `kind` to finish writes this: a triage's plan recommendation, a review's verdict, or a data marker. */
   scriptNext(kind: RunKind, script: ScriptedFinish): void;
+  /**
+   * Starts an agent of `kind` on ticket `key` as Pip's `start_agent` does, in the ticket's open workstream when it has one;
+   * a build or review names the run it follows in `fromRun`. Returns the run's id.
+   */
+  startAgent(key: string, kind: RunKind, over?: { fromRun?: string; brief?: string }): string;
   /** Has working run `id` ask the person `question`, as `MockRuns.ask` does. */
   askRun(id: string, question: string): void;
   /** Has working run `id` ask permission for `needs` (`approve Bash: git push`), as `MockRuns.askPermission` does. */
@@ -166,7 +171,7 @@ export interface TicketEdit {
 
 /** The parts of the sample backend the handle reaches. */
 export interface MockClockParts {
-  runs: { advance(id?: string): void; list(): { id: string; spec: { kind: string; prSha?: string | null; name: string }; state: string; passes?: number; item?: { key: string } | null; shortId?: string | null; digest: string }[]; surfacePullRequests(): boolean; launches(): MockLaunch[]; scriptNext(kind: RunKind, script: ScriptedFinish): void; ask(id: string, question: string): unknown; askPermission(id: string, needs: string): unknown; block(id: string): unknown; lose(id: string): unknown; stopAtLimit(id: string): unknown; readonly attached: readonly string[] };
+  runs: { advance(id?: string): void; list(): { id: string; spec: { kind: string; prSha?: string | null; name: string }; state: string; passes?: number; item?: { key: string } | null; shortId?: string | null; digest: string }[]; surfacePullRequests(): boolean; launches(): MockLaunch[]; scriptNext(kind: RunKind, script: ScriptedFinish): void; pipStart(a: { workstream: string | null; role: RunKind; brief: string | null; repo: string | null; fromRun: string | null; item: ItemRef | null }, requestId: string): { id: string }; ask(id: string, question: string): unknown; askPermission(id: string, needs: string): unknown; block(id: string): unknown; lose(id: string): unknown; stopAtLimit(id: string): unknown; readonly attached: readonly string[] };
   workstreams?: { list(includeClosed?: boolean): { workstream: { id: string; itemKey: string | null; closedAt: string | null } }[]; events(id: string): MockHandleEvent[]; pause(id: string, reason: "person" | "ceiling", actor: "supervisor"): unknown; seedEvent(id: string, actor: WorkstreamActor, action: string, at: string, extra?: { runId?: string | null; proposalId?: string | null; detail?: string | null }): unknown };
   proposals?: { writes: readonly { proposalId: string; intent: Intent }[]; list(): Proposal[] };
   pip?: { hold(on: boolean): void; idle(): boolean };
@@ -197,6 +202,10 @@ export function exposeMockClock({ runs, workstreams, proposals, pip, tickets, gi
     launches: () => runs.launches().map((l) => ({ ...l, readOnly: l.readOnly && { ...l.readOnly, allow: [...l.readOnly.allow], deny: [...l.readOnly.deny] } })),
     surfacePullRequests: () => runs.surfacePullRequests(),
     scriptNext: (kind, script) => runs.scriptNext(kind, script),
+    startAgent: (key, kind, over = {}) => {
+      const ws = workstreams?.list().find((v) => v.workstream.itemKey === key && v.workstream.closedAt === null)?.workstream.id ?? null;
+      return runs.pipStart({ workstream: ws, role: kind, brief: over.brief ?? null, repo: null, fromRun: over.fromRun ?? null, item: { connectionId: "mock", externalId: key, key } }, `handle-${Date.now()}-${Math.random()}`).id;
+    },
     askRun: (id, question) => void runs.ask(id, question),
     askPermission: (id, needs) => void runs.askPermission(id, needs),
     blockRun: (id) => void runs.block(id),
@@ -246,7 +255,7 @@ function writtenKey(intent: Intent): string | null {
 
 type MockHandleEvent = ReturnType<MockHandle["workstreamEvents"]>[number];
 
-/** In a dev browser, `?mockProjects=60` sets how many projects the sample catalog lists, and `?mockRepos=30` signs in a GitHub connection with that many repositories, and `?mockDevice=denied`, `expired` or `slow` makes the GitHub device flow wait 4 seconds and end that way. `?runs=busy` (without the other kinds), `empty`, `many`, `failures` or `reports` (a finished run for each way a result can have been read) changes the scripted agent runs, `?runsEnv=missing` or `signedOut` shows the Claude banners, `?runsCap=3` sets how many agents may run at once `?pipRun=1` starts with a run draft from Pip and `?runsUntrusted=1` makes Claude refuse every clone until Trust this folder is used. `?prSurface=manual` keeps a finished build's draft pull request off the code host until `__gossamrMock.surfacePullRequests()` (or Sync now) shows it, rather than after a moment. `?pipPace=200` slows the scripted Pip to 200ms a word, so a question can be queued behind one it is still answering. `?mockReviewAccess=none` makes the GitHub token unable to write to any pull request, so a review draft can't be posted and its card offers the PR view instead (repositories the sample can only read never take a review either). The runs move only when told to: see `exposeMockClock` above for `__gossamrMock.advanceRuns()`. */
+/** In a dev browser, `?mockProjects=60` sets how many projects the sample catalog lists, and `?mockRepos=30` signs in a GitHub connection with that many repositories, and `?mockDevice=denied`, `expired` or `slow` makes the GitHub device flow wait 4 seconds and end that way. `?runs=busy` (without the other kinds), `empty`, `many`, `failures` or `reports` (a finished run for each way a result can have been read) changes the scripted agent runs, `?runsCap=3` sets how many agents may run at once `?runsUntrusted=1` makes Claude refuse every clone until Trust this folder is used. `?prSurface=manual` keeps a finished build's draft pull request off the code host until `__gossamrMock.surfacePullRequests()` (or Sync now) shows it, rather than after a moment. `?pipPace=200` slows the scripted Pip to 200ms a word, so a question can be queued behind one it is still answering. `?mockReviewAccess=none` makes the GitHub token unable to write to any pull request, so a review draft can't be posted and its card offers the PR view instead (repositories the sample can only read never take a review either). The runs move only when told to: see `exposeMockClock` above for `__gossamrMock.advanceRuns()`. */
 export function mockOptionsFromUrl(): MockOptions {
   if (!import.meta.env.DEV || typeof location === "undefined") return {};
   const params = new URLSearchParams(location.search);
@@ -265,14 +274,11 @@ export function mockOptionsFromUrl(): MockOptions {
   const outcome = params.get("mockDevice");
   if (outcome === "denied" || outcome === "expired" || outcome === "slow") options.device = { delayMs: 4000, outcome: outcome === "slow" ? "authorised" : outcome };
   const seed = params.get("runs");
-  const environment = params.get("runsEnv");
   options.runs = {
     // The scripted ages count back from now, so the runs look recent whenever the page is opened.
     epoch: Date.now(),
     seed: seed === "empty" || seed === "many" || seed === "failures" || seed === "busy" || seed === "stuck" || seed === "reports" ? seed : "kinds",
-    environment: environment === "missing" || environment === "signedOut" ? environment : "ok",
     cap: count("runsCap"),
-    pipRun: params.get("pipRun") === "1",
     planDescription: true,
     untrusted: params.get("runsUntrusted") === "1",
     prSurfaceMs: params.get("prSurface") === "manual" ? null : undefined,

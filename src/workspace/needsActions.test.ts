@@ -132,10 +132,10 @@ describe("a then Enter on a comment draft (G1)", () => {
 
   it("keeps the edits of sibling drafts apart (G1)", () => {
     keepEditsOnLeave("p1", "pending", { body: { text: "One", mentions: [] } });
-    keepEditsOnLeave("p2", "pending", { message: "Two" });
+    keepEditsOnLeave("p2", "pending", { body: { text: "Two", mentions: [] } });
     try {
       expect(keptEditsOfDraft("p1")?.body?.text).toBe("One");
-      expect(keptEditsOfDraft("p2")?.message).toBe("Two");
+      expect(keptEditsOfDraft("p2")?.body?.text).toBe("Two");
     } finally {
       keepEditsOfDraft("p1", {});
       keepEditsOfDraft("p2", {});

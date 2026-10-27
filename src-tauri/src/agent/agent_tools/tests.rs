@@ -6,7 +6,7 @@ use serde_json::{json, Value};
 
 use super::*;
 use crate::agent::mcp::{bind, McpServer, PipRun};
-use crate::domain::{Actor, Link, LinkKind, ProposalState, RunKind, RunSpec, RunState};
+use crate::domain::{Actor, Link, LinkKind, RunKind, RunSpec, RunState};
 use crate::runs::ask::ASK_WAIT;
 use crate::runs::report::new_token;
 use crate::runs::rig::{ready_with, Rig};
@@ -36,7 +36,7 @@ async fn live(tag: &str) -> Live {
     let channel = bound.channel();
     let port = channel.port();
     let rig = ready_with(move |svc| svc.with_agent_channel(channel).with_cap(6)).await;
-    let server = McpServer::start_on(bound, rig.fx.core.clone(), rig.svc.clone(), Arc::new(|_| {}), Arc::new(|_, _, _| {})).unwrap();
+    let server = McpServer::start_on(bound, rig.fx.core.clone(), rig.svc.clone(), Arc::new(|_| {}), Arc::new(|_| {}), Arc::new(|_, _, _| {})).unwrap();
     Live { rig, server, port, dir, http: reqwest::Client::new() }
 }
 
@@ -84,9 +84,7 @@ impl Live {
     async fn start(&self, n: u32, workstream: Option<&str>, key: &str, kind: RunKind) -> Run {
         let (core, fx) = (&self.rig.fx.core, &self.rig.fx);
         let spec = RunSpec { kind, workstream: workstream.map(Into::into), ..self.rig.spec(n) };
-        let p = core.draft_run(spec, Some(fx.item(key))).await.unwrap();
-        let digest = core.runs_review(&p.id).await.unwrap().digest;
-        let queued = core.runs_approve(&p.id, &digest).await.unwrap();
+        let queued = core.queue_test_run(spec, Some(fx.item(key))).await.unwrap();
         self.rig.svc.start_now(&queued.id).await.unwrap()
     }
 
@@ -135,12 +133,38 @@ async fn an_agent_token_lists_the_four_tools_and_never_pips_and_pips_token_never
     t.server.runs.lock().unwrap().insert("req-1".into(), PipRun::new(t.rig.fx.scope.clone()));
     let pips = t.tool_names(&pip.url, &pip.token).await;
     assert!(pips.contains(&"get_item".to_string()) && pips.contains(&"propose_comment".to_string()));
-    assert!(pips.iter().all(|n| !["report", "ask", "read_workstream", "read_ticket"].contains(&n.as_str())), "{pips:?}");
+    for drives in ["start_agent", "message_agent", "stop_agent", "ask_person", "open_workstream", "close_workstream"] {
+        assert!(pips.contains(&drives.to_string()), "{drives}");
+    }
+    assert!(pips.iter().all(|n| !["report", "ask", "read_workstream", "read_ticket", "propose_run", "propose_follow_up", "propose_answer"].contains(&n.as_str())), "{pips:?}");
 
     let agent_tool_on_pips_route = t.rpc_at(&pip.url, &pip.token, "tools/call", json!({ "name": "report", "arguments": { "status": "done", "note": "n" } })).await;
     assert!(text_of(&agent_tool_on_pips_route).1);
     let pip_tool_on_agents_route = t.rpc(&run, "tools/call", json!({ "name": "get_item", "arguments": { "key": "CA-1" } })).await;
     assert_eq!(text_of(&pip_tool_on_agents_route), ("Unknown tool.", true));
+    for drives in ["start_agent", "message_agent", "stop_agent", "ask_person", "open_workstream", "close_workstream"] {
+        let reply = t.rpc(&run, "tools/call", json!({ "name": drives, "arguments": { "id": run.id, "text": "x", "role": "plan", "workstream": "w", "question": "q" } })).await;
+        assert_eq!(text_of(&reply), ("Unknown tool.", true), "{drives}: an agent can't drive agents");
+    }
+    assert_eq!(t.rig.fx.core.runs_in(&t.rig.fx.scope, &RunQuery::default()).await.unwrap().len(), 1, "nothing was started");
+}
+
+#[tokio::test]
+async fn a_message_pip_queued_is_the_result_of_the_agents_next_ask_and_the_agent_never_waits() {
+    let t = live("ask-queued").await;
+    let run = t.working(1).await;
+    t.rig.svc.message_agent(&run.id, "  Use staging.\n", Actor::Pip).await.unwrap();
+
+    let (text, is_error) = t.call(&run, "ask", json!({ "question": "Which database?" })).await;
+    assert!(!is_error && text.starts_with(crate::runs::answer::REMINDER) && text.ends_with("Use staging."), "{text}");
+    assert!(t.rig.fx.core.asks().question(&run.id).is_none(), "no question was ever put up, so the run never reads as needing an answer");
+    assert_eq!(t.rig.fx.core.run_message(&run.id).await.unwrap(), None);
+    t.rig.poll().await;
+    assert_eq!(t.rig.get(&run).await.state, RunState::Working);
+
+    t.rig.fx.core.asks().set_wait(Duration::from_millis(40));
+    let (text, _) = t.call(&run, "ask", json!({ "question": "Anything else?" })).await;
+    assert_eq!(text, NO_ANSWER, "a message is delivered once");
 }
 
 #[tokio::test]
@@ -293,7 +317,7 @@ async fn a_server_that_restarts_on_the_same_port_is_invisible_because_each_reque
     let t = live("restart").await;
     let run = t.rig.launched(1).await;
     let token = t.token(&run);
-    let second = McpServer::start_on(bind(t.dir.join("again")).await.unwrap(), t.rig.fx.core.clone(), t.rig.svc.clone(), Arc::new(|_| {}), Arc::new(|_, _, _| {})).unwrap();
+    let second = McpServer::start_on(bind(t.dir.join("again")).await.unwrap(), t.rig.fx.core.clone(), t.rig.svc.clone(), Arc::new(|_| {}), Arc::new(|_| {}), Arc::new(|_, _, _| {})).unwrap();
     let elsewhere = format!("http://127.0.0.1:{}/agent/{}", second.port, run.id);
     let reply = t.rpc_at(&elsewhere, &token, "tools/call", json!({ "name": "report", "arguments": { "status": "done", "note": "After the restart." } })).await;
     assert!(text_of(&reply).0.starts_with("Recorded"), "a new server answers a session that never said initialize to it: {reply}");
@@ -329,23 +353,6 @@ async fn an_agents_question_reads_as_needing_an_answer_until_it_is_answered_thro
     assert!(t.rig.fx.core.asks().question(&run.id).is_none());
     let events = t.rig.fx.core.run_events(&run.id).await.unwrap();
     assert!(events.iter().any(|e| e.kind == "answered"));
-}
-
-#[tokio::test]
-async fn an_approved_answer_draft_is_delivered_as_the_result_of_the_ask_too() {
-    let t = live("ask-draft").await;
-    let run = t.working(1).await;
-    let call = t.asking(&run, "Which database?");
-    t.until_asked(&run).await;
-    t.rig.poll().await;
-
-    let draft = t.rig.fx.core.propose_answer_as_pip(&t.rig.fx.scope, "r", &run.id, "Use staging.").await.unwrap();
-    assert!(matches!(&draft.intent, crate::domain::Intent::RunAnswer { question, .. } if question.as_deref() == Some("Which database?")));
-    t.rig.svc.answer_draft(&draft.id, "Use staging.").await.unwrap();
-    let reply = call.await.unwrap();
-    assert!(text_of(&reply).0.ends_with("Use staging."));
-    assert_eq!(t.rig.fx.core.proposal(&draft.id).await.unwrap().unwrap().state, ProposalState::Applied);
-    assert!(t.rig.cli.0.lock().unwrap().calls.is_empty());
 }
 
 #[tokio::test]

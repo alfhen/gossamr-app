@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { askPip, finishOnHome, homeConversation, homeConversationRegion, homeRunCards, homeSettled, inlineStart, mockRuns, openAgents, openApp, selectWorkstream, startWorkstream } from "./support/app";
+import { askPip, finishOnHome, homeConversation, homeConversationRegion, homeSettled, mockRuns, openAgents, openApp, selectWorkstream, startWorkstream } from "./support/app";
 
 // Pull requests show only when a test says.
 const SAMPLE = "runs=empty&prSurface=manual";
@@ -11,7 +11,7 @@ const newest = async (page: Page, kind: string) => (await mockRuns(page)).find((
 
 
 /**
- * A workstream on CA-401 opened on Pip home, its investigation asked of Pip and started in place: the chain's
+ * A workstream on CA-401 opened on Pip home, its investigation asked of Pip: the chain's
  * first run. Returns the investigation.
  */
 async function investigating(page: Page) {
@@ -22,9 +22,7 @@ async function investigating(page: Page) {
   await expect(homeConversation(page)).toHaveText(/^Workstream: CA-401 /);
   await askPip(page, "investigate this");
   await homeSettled(page);
-  const review = await inlineStart(page, homeRunCards(page, "CA-401").last());
-  await review.getByRole("button", { name: "Start agent" }).click();
-  await expect(review).toHaveCount(0);
+  await expect.poll(() => newest(page, "investigate")).not.toBeNull();
   return (await newest(page, "investigate"))!;
 }
 

@@ -121,13 +121,13 @@ const DRAFT_WORDS: Record<Intent["type"], string> = {
 const MAKER: Record<ProposalMaker, string> = { pip: "Pip", agent: "An agent", user: "You" };
 
 /** The audit lines a run's or a draft's own entry already tells, or that are bookkeeping: left out. */
-const TOLD_ELSEWHERE = new Set(["run_approved", "wake", "draft_created", "draft_retired", "notes_set"]);
+const TOLD_ELSEWHERE = new Set(["run_approved", "agent_started", "wake", "draft_created", "draft_retired", "notes_set"]);
 
 /** Audit lines that ask the person to decide something, whoever wrote them. */
-const ASKS = new Set(["paused"]);
+const ASKS = new Set(["paused", "pip_asked"]);
 
 /** What the person did that counts as deciding something. Opening or closing a workstream and the notes are bookkeeping, not decisions. */
-const DECIDED = new Set(["draft_approved", "draft_skipped", "review_posted", "paused", "resumed", "dismissed", "undone", "run_stopped", "run_answered", "run_retried"]);
+const DECIDED = new Set(["draft_approved", "draft_skipped", "review_posted", "paused", "resumed", "dismissed", "undone", "run_stopped", "run_answered", "run_retried", "pip_ask_cleared"]);
 
 const time = (iso: string | undefined) => {
   const t = iso ? Date.parse(iso) : NaN;
@@ -278,9 +278,9 @@ export function timeline(input: TimelineInput): TimelineEntry[] {
     out.push({ key: `turn:${t.requestId}`, kind: wake ? "pip" : "said", at, updatedAt: at, ticketKey, text, target: null, needKey: null, decision: false, turnId: t.requestId, order: order++ });
   }
 
-  // A run enters the story when it was approved, as the audit says; without such a line, when it was queued.
+  // A run enters the story when it was started, as the audit says; without such a line, when it was queued.
   const approvedAt = new Map<string, string>();
-  for (const e of events) if (e.runId && e.action === "run_approved" && !approvedAt.has(e.runId)) approvedAt.set(e.runId, e.at);
+  for (const e of events) if (e.runId && (e.action === "run_approved" || e.action === "agent_started") && !approvedAt.has(e.runId)) approvedAt.set(e.runId, e.at);
   for (const run of runs) {
     const need = needOfRun.get(run.id);
     const lifecycle = runLifecycle(run);

@@ -2,17 +2,15 @@ import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "re
 import { MentionTextarea } from "../components/MentionTextarea";
 import { docText } from "../lib/docs";
 import { autoLink, liveMentions, rewriteNote, subtasksNote, type Mention } from "../lib/mentions";
-import { targetOf, unreachable } from "../lib/proposals";
+import { isRunDraft as isAgentDraft, targetOf, unreachable } from "../lib/proposals";
 import { useBackend } from "../backend/useBackend";
 import type { Person, Proposal, ProposalEdit, ProposalStateKind, ReviewAccess } from "../types";
 import { useRepoReviewAccess, useReviewAccess } from "./reviewAccess";
 import { editThenPost, ReviewDraft, reviewWithPipPrompt } from "./ReviewDraft";
 import { draftStatus } from "./boardLogic";
 import { showMe } from "./jump";
-import { KIND_LABEL } from "./agentsLogic";
 import { askPip } from "./askPip";
 import { PIP_SHOWN, pipAsks } from "./runSheetLogic";
-import { useRunSetup } from "./runSetupStore";
 import { useRuns } from "./runsStore";
 import { useWorkspace, workflowOfItem } from "../workspaceStore";
 import { PEEK_DRAFT_MARGIN, peekFocusAfterLeaving } from "./peekDrafts";
@@ -23,17 +21,14 @@ import { doneText, postedToJira } from "./NeedsPane";
 import { escLeavesPause, useCardKeys } from "./draftCardKeys";
 import { takeDraftEditIntent } from "./draftKeys";
 import { itemKey } from "../lib/filter";
-import { FOLLOW_UP_LIMIT, followUpProblem, followUpTitle, nextPass } from "./followUp";
 import { RetiredDraft } from "./RetiredDraft";
-import { answerProblem, MAX_ANSWER } from "../lib/answer";
-import { answerTitle, editThenSend, isSendKey, NOT_WAITING, useAnswerRun, type AnswerRun } from "./runAnswerLogic";
 import { bodyChangeSize, RewriteView, rewriteBlocked, rewriteEdit, rewriteFields, rewriteWhat, takesBackendText } from "./RewriteDiff";
 import { newRiskQuote, newRisks, type Risk, type RiskQuotes } from "../lib/riskyText";
 import { PostingPause } from "./PostingPause";
 import { liveDraft, setLiveDraft, touchDrafts, useDraftsRev } from "./draftLive";
 import { focusWhenDrawn } from "./focusDrawn";
 
-import { FromRun, RunName, useFromRunName } from "./RunProvenance";
+import { FromRun, useFromRunName } from "./RunProvenance";
 
 export { focusWhenDrawn };
 
@@ -50,8 +45,8 @@ const LINK_VERB: Record<Extract<Proposal["intent"], { type: "link" }>["kind"], s
 /** What a link draft says, such as `CA-2 blocks CA-1`. */
 export const linkSentence = (i: Extract<Proposal["intent"], { type: "link" }>) => `${i.from.key} ${LINK_VERB[i.kind]} ${i.to.key}`;
 
-/** A draft's title; an answer names its run by `runLabel` ("R1") when the caller knows it. */
-export function draftTitle(p: Proposal, runLabel?: string | null): string {
+/** A draft's title. Drafts that started or messaged an agent are history: Pip does that directly now. */
+export function draftTitle(p: Proposal): string {
   const i = p.intent;
   switch (i.type) {
     case "comment":
@@ -69,11 +64,11 @@ export function draftTitle(p: Proposal, runLabel?: string | null): string {
     case "link":
       return `Link ${i.from.key}`;
     case "startRun":
-      return `Start an agent: ${i.item?.key ?? `${i.spec.repo}, no ticket`}`;
+      return `Agent run: ${i.item?.key ?? `${i.spec.repo}, no ticket`}`;
     case "followUp":
-      return followUpTitle(i);
+      return i.item ? `Follow-up for the ${i.item.key} run` : "Follow-up for a run";
     case "runAnswer":
-      return answerTitle(i, runLabel);
+      return i.item ? `Answer for the ${i.item.key} run` : "Answer for a run";
     case "githubReview":
       return `GitHub review of ${i.repo}#${i.number}`;
     default:
@@ -152,22 +147,12 @@ export interface DraftCardProps {
   /** `postAnyway` is a review's Post anyway: the person's choice to send one that may already be on GitHub. */
   onApprove(edit: ProposalEdit | null, options?: { postAnyway?: boolean }): void;
   onSkip(): void;
-  /** Opens the setup sheet for a run draft, the one place it is approved. */
-  onReview?(): void;
   /** Present when the draft's item may be off screen. */
   onShow?(): void;
   /** Opens the agent run a draft was made from. */
   onOpenRun?(runId: string): void;
   /** Present on a comment or a review made from a run's result: opens Pip on the run and this draft. A review card hands over the person's unsent edit, saved first so Pip reads their version. */
   onDiscuss?(edit?: ProposalEdit | null): void;
-  /** For a follow-up, the pass the agent would be on once it is sent. */
-  pass?: number;
-  /** Sends a follow-up back to its run, after saving the edit. */
-  onSendBack?(edit: ProposalEdit | null, message: string): void;
-  /** For an answer, how the run it answers stands now. */
-  answer?: AnswerRun | null;
-  /** Sends an answer to its run, after saving the edit. */
-  onSendAnswer?(edit: ProposalEdit | null, message: string): void;
   /** For a GitHub review, whether the token may post it; null while that is being asked. Approving a review posts it. */
   access?: ReviewAccess | null;
   /** The level of the headings inside the card, one below the heading of the surface it sits in (the decision pane's is 2, so 3). */
@@ -183,10 +168,10 @@ export const SECRET_NOTE = "This holds something that looks like a secret. Gossa
 export function DraftCard(props: DraftCardProps) {
   const p = props.proposal;
   // A review has a card of its own: its comments sit over their lines of the diff, and it is posted to GitHub, not applied.
-  const Body = p.intent.type === "githubReview" ? ReviewDraft : DraftCardBody;
+  const Body = p.intent.type === "githubReview" ? ReviewDraft : isAgentDraft(p.intent) ? AgentDraftHistory : DraftCardBody;
   if (p.state.type !== "retired") return <Body {...props} />;
   return (
-    <RetiredDraft proposal={p} title={draftTitle(p, props.answer?.label)} state={BADGE.retired}>
+    <RetiredDraft proposal={p} title={draftTitle(p)} state={BADGE.retired}>
       <Body {...props} />
     </RetiredDraft>
   );
@@ -196,7 +181,7 @@ export type { KeptEdits } from "./keptEdits";
 
 /** Remember the unsaved `edits` of draft `id`, until the draft is posted or retired; no edits leave nothing kept. */
 export function keepEditsOfDraft(id: string, edits: KeptEdits): void {
-  if (edits.body || edits.rewrite || edits.message !== undefined || edits.picked) keptEdits.set(id, edits);
+  if (edits.body || edits.rewrite || edits.picked) keptEdits.set(id, edits);
   else keptEdits.delete(id);
   touchDrafts();
 }
@@ -222,7 +207,7 @@ export function useEditedDraft(id: string): { edited: boolean; text?: string } {
   return { edited: !!live?.edited || !!kept, text: live?.text ?? kept?.body?.text };
 }
 
-function DraftCardBody({ proposal: p, statusName, people, working, error, onApprove, onSkip, onReview, onShow, onOpenRun, onDiscuss, pass, onSendBack, answer, onSendAnswer, headingLevel }: DraftCardProps) {
+function DraftCardBody({ proposal: p, statusName, people, working, error, onApprove, onSkip, onShow, onOpenRun, onDiscuss, headingLevel }: DraftCardProps) {
   const intent = p.intent;
   const key = targetOf(intent)?.key ?? "";
   const stored = intent.type === "comment" ? docText(intent.body) : "";
@@ -262,19 +247,6 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
     setNewText(rewriteFields(rewrite).text);
   }, [rewrite?.title?.to, rewrite?.body?.toText]);
   const rewriteBlock = !!rewrite && rewriteBlocked(rewrite, newTitle, newText);
-  const followUp = intent.type === "followUp" ? intent : null;
-  const reply = intent.type === "runAnswer" ? intent : null;
-  const sentMessage = followUp?.message ?? reply?.message ?? "";
-  const [message, setMessage] = useState(kept?.message ?? sentMessage);
-  const messageEdited = useRef(kept?.message !== undefined);
-  useEffect(() => {
-    if (!takesBackendText(messageEdited.current, attempting.current)) return;
-    messageEdited.current = false;
-    setMessage(sentMessage);
-  }, [sentMessage]);
-  const messageProblem = followUp ? followUpProblem(message) : reply ? answerProblem(message) : null;
-  /** Why an answer can't be sent now: what is wrong with the reply, or the run moved on. */
-  const replyBlock = reply ? (messageProblem ?? (answer?.waiting ? null : NOT_WAITING)) : null;
   const summaries = intent.type === "subtasks" ? intent.summaries : [];
   const made = p.created.length;
   const [picked, setPicked] = useState<boolean[]>(() => (kept?.picked?.length === summaries.length ? kept.picked : summaries.map(() => true)));
@@ -316,13 +288,12 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
   const typed = (): KeptEdits => ({
     ...(intent.type === "comment" && edited.current ? { body: { text: body, mentions } } : {}),
     ...(rewrite && rewriteEdited.current ? { rewrite: { title: newTitle, text: newText } } : {}),
-    ...((followUp || reply) && messageEdited.current ? { message } : {}),
     ...(intent.type === "subtasks" && picked.some((on) => !on) ? { picked } : {}),
   });
   // A card restored with kept edits keeps its saved copy current, so it survives the card going away before it is posted.
   useEffect(() => {
     if (keptEditsOfDraft(p.id)) keepEditsOfDraft(p.id, typed());
-  }, [body, mentions, newTitle, newText, message, picked]);
+  }, [body, mentions, newTitle, newText, picked]);
 
   /** Skip, taking what was typed along, so Undo shows it again. */
   const skip = () => {
@@ -333,8 +304,6 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
   const edit = (): ProposalEdit | null => {
     if (intent.type === "comment" && edited.current) return { type: "comment", body, mentions: liveMentions(body, mentions) };
     if (rewrite && rewriteEdited.current) return rewriteEdit(rewrite, newTitle, newText);
-    if (followUp && messageEdited.current) return { type: "followUp", message };
-    if (reply && messageEdited.current) return { type: "runAnswer", message };
     if (intent.type === "subtasks") {
       const wanted = summaries.filter((_, i) => i < made || picked[i]);
       return wanted.length === summaries.length ? null : { type: "subtasks", summaries: wanted };
@@ -398,11 +367,6 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
   // Another edit takes the pause back: it said what the earlier words held.
   useEffect(() => setPause(null), [body, newTitle, newText]);
 
-  const runDraft = intent.type === "startRun";
-  const sendAnswer = () => {
-    if (!reply || working || state !== "pending" || replyBlock) return;
-    if (onSendAnswer) onSendAnswer(edit(), message.trim());
-  };
   /** The field of the card the keyboard goes to for e: a text box, or the first choice. */
   const focusField = (selector: string) => requestAnimationFrame(() => card.current?.querySelector<HTMLElement>(selector)?.focus());
   const approvable = open && !working && state !== "applying";
@@ -410,15 +374,9 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
     ? undefined
     : intent.type === "comment" || rewrite
       ? () => (setEditing(true), focusField("textarea, input:not([type]), input[type=text]"))
-      : followUp
-        ? () => focusField(`#follow-up-${p.id}`)
-        : reply
-          ? () => focusField(`#run-answer-${p.id}`)
-          : intent.type === "subtasks"
-            ? () => focusField("input[type=checkbox]")
-            : runDraft && onReview
-              ? onReview
-              : undefined;
+      : intent.type === "subtasks"
+        ? () => focusField("input[type=checkbox]")
+        : undefined;
   // Opened by e on the compact card (in the peek, after it): it starts in editing, as e on this card would.
   useEffect(() => {
     if (takeDraftEditIntent(p.id)) startEditing?.();
@@ -427,21 +385,17 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
     // Approving by key is the same step the button takes, asked for Enter first; what needs reading first has no key.
     approve: !approvable
       ? undefined
-      : reply
-        ? replyBlock
-          ? undefined
-          : sendAnswer
-        : intent.type === "comment"
-          ? body.trim()
-            ? approve
+      : intent.type === "comment"
+        ? body.trim()
+          ? approve
+          : undefined
+        : intent.type === "subtasks"
+          ? remaining > 0
+            ? () => onApprove(edit())
             : undefined
-          : intent.type === "subtasks"
-            ? remaining > 0
-              ? () => onApprove(edit())
-              : undefined
-            : rewrite
-              ? approve
-              : () => onApprove(edit()),
+          : rewrite
+            ? approve
+            : () => onApprove(edit()),
     skip: open && !working ? skip : undefined,
     edit: startEditing,
     open: onShow,
@@ -486,7 +440,7 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
         <span aria-hidden>✦</span>
         {/* The card is named by this heading, so a screen reader says the title once. */}
         <Title id={titleId} className="m-0 text-sm font-semibold">
-          {draftTitle(p, answer?.label)}
+          {draftTitle(p)}
         </Title>
         <span ref={doneLine} tabIndex={-1} data-draft-state className="ml-auto font-normal text-ws-ink3 focus-visible:outline-2 focus-visible:outline-ws-pip">
           {BADGE[state]}
@@ -581,138 +535,6 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
               {i < made && <span className="ml-auto font-mono text-ws-ink3">{p.created[i].key}</span>}
             </label>
           ))}
-        {intent.type === "startRun" && (
-          <div className="grid gap-1.5">
-            <p className="m-0 flex items-baseline gap-2 font-semibold">
-              {KIND_LABEL[intent.spec.kind]} {intent.item?.key ?? `in ${intent.spec.repo}, no ticket`}
-              {p.createdBy === "pip" && <span className="rounded-full bg-ws-pip-soft px-2 text-xs font-semibold text-ws-pip">Proposed by Pip</span>}
-            </p>
-            <p className="m-0 line-clamp-3 whitespace-pre-wrap text-ws-ink2 [overflow-wrap:anywhere]">{intent.spec.instruction}</p>
-            {!intent.item && intent.spec.project && (
-              <p data-ticketless className="m-0 text-sm text-ws-ink2">
-                {p.createdBy === "pip" ? "Pip wrote this question; read and edit it in the prompt before you start. " : ""}When the agent finishes, Gossamr drafts one new ticket from what it found, for you to approve.
-              </p>
-            )}
-            {intent.spec.plan?.trim() && intent.spec.planFromRun && (
-              <p data-plan-from className="m-0 text-sm text-ws-ink2">
-                Follows the {intent.spec.planApproved ? "" : "unedited "}plan from <RunName id={intent.spec.planFromRun} /> ({intent.spec.plan.length.toLocaleString("en")} characters, shown whole in the prompt).
-              </p>
-            )}
-            {intent.spec.buildAccount?.trim() && intent.spec.buildFromRun && (
-              <p data-build-from className="m-0 text-sm text-ws-ink2">
-                Checks the builder&apos;s account from <RunName id={intent.spec.buildFromRun} /> ({intent.spec.buildAccount.length.toLocaleString("en")} characters, shown whole in the prompt) as a claim, not as evidence.
-              </p>
-            )}
-            {intent.spec.focus?.trim() && (
-              <p className="m-0 rounded-md border border-dashed border-ws-pip bg-ws-pip-soft px-2 py-1 text-sm [overflow-wrap:anywhere]">
-                <b className="font-semibold text-ws-pip">Focus from Pip{intent.spec.focusFromRun ? `, after reading run ${intent.spec.focusFromRun}` : ""}:</b> {intent.spec.focus.trim()}
-              </p>
-            )}
-            <p className="m-0 text-sm text-ws-ink3">Runs as you, with your Claude settings, in a new worktree of {intent.spec.clonePath}. {state === "applied" ? "Started: see its run in the steps." : "Read the exact prompt and checks, then start it. Nothing runs before that."}</p>
-          </div>
-        )}
-        {followUp && (
-          <div className="grid gap-1.5" data-follow-up>
-            <p className="m-0 flex flex-wrap items-baseline gap-2 font-semibold">
-              Send the agent back for another pass
-              {open && <span className="rounded-full bg-ws-pip-soft px-2 text-xs font-semibold text-ws-pip">Pass {pass ?? 2}</span>}
-              {p.createdBy === "pip" && <span className="rounded-full bg-ws-pip-soft px-2 text-xs font-semibold text-ws-pip">Proposed by Pip</span>}
-            </p>
-            <p className="m-0 text-sm text-ws-ink2">
-              Why: {followUp.reason}
-              {onOpenRun && (
-                <>
-                  {" · "}
-                  <button type="button" onClick={() => onOpenRun(followUp.runId)} className="text-ws-pip hover:underline">
-                    Open the run
-                  </button>
-                </>
-              )}
-            </p>
-            <label className="grid gap-1 text-sm font-semibold" htmlFor={`follow-up-${p.id}`}>
-              Message the agent will get
-              <textarea
-                id={`follow-up-${p.id}`}
-                value={message}
-                disabled={!open || working}
-                rows={Math.min(14, Math.max(5, message.split("\n").length + 1))}
-                maxLength={FOLLOW_UP_LIMIT}
-                onChange={(e) => {
-                  messageEdited.current = true;
-                  setMessage(e.target.value);
-                }}
-                className="w-full resize-y rounded-md border border-ws-sep2 bg-ws-win px-2 py-1.5 text-base font-normal [overflow-wrap:anywhere]"
-              />
-            </label>
-            <p className="m-0 text-sm text-ws-ink3">
-              {open
-                ? "Gossamr puts its standing reminder in front, then resumes the agent in its worktree with this message. Nothing is sent before you press Send back."
-                : state === "applied"
-                  ? "Sent back."
-                  : "Not sent."}
-            </p>
-          </div>
-        )}
-        {reply && (
-          <div className="grid gap-1.5" data-run-answer>
-            <p className="m-0 flex flex-wrap items-baseline gap-2 font-semibold">
-              Answer the agent&apos;s question
-              {p.createdBy === "pip" && <span className="rounded-full bg-ws-pip-soft px-2 text-xs font-semibold text-ws-pip">Suggested by Pip</span>}
-            </p>
-            {(answer?.question ?? reply.question) && (
-              <blockquote data-question className="m-0 rounded-md border-l-2 border-ws-sep2 bg-ws-sel px-2 py-1 text-sm whitespace-pre-wrap text-ws-ink2 [overflow-wrap:anywhere]">
-                <b className="font-semibold">{answer?.label ?? "The agent"} asks:</b> {answer?.question ?? reply.question}
-              </blockquote>
-            )}
-            <p className="m-0 text-sm text-ws-ink3">
-              The question is the agent&apos;s words.
-              {onOpenRun && (
-                <>
-                  {" "}
-                  <button type="button" onClick={() => onOpenRun(reply.runId)} className="text-ws-pip hover:underline">
-                    Open the run
-                  </button>
-                </>
-              )}
-            </p>
-            <label className="grid gap-1 text-sm font-semibold" htmlFor={`run-answer-${p.id}`}>
-              Reply the agent will get
-              <textarea
-                id={`run-answer-${p.id}`}
-                value={message}
-                disabled={!open || working}
-                rows={Math.min(14, Math.max(4, message.split("\n").length + 1))}
-                maxLength={MAX_ANSWER}
-                aria-keyshortcuts="Meta+Enter Control+Enter"
-                onChange={(e) => {
-                  messageEdited.current = true;
-                  setMessage(e.target.value);
-                }}
-                onKeyDown={(e) => {
-                  // Esc leaves the reply with the edit kept, so the next Esc closes the peek, as its other fields do.
-                  if (e.key === "Escape") {
-                    e.preventDefault();
-                    e.currentTarget.blur();
-                    return;
-                  }
-                  if (!isSendKey(e)) return;
-                  e.preventDefault();
-                  sendAnswer();
-                }}
-                className="w-full resize-y rounded-md border border-ws-sep2 bg-ws-win px-2 py-1.5 text-base font-normal [overflow-wrap:anywhere]"
-              />
-            </label>
-            <p className="m-0 text-sm text-ws-ink3">
-              {open
-                ? answer?.waiting === false
-                  ? `${NOT_WAITING}. Skip this draft.`
-                  : "Gossamr puts its standing reminder in front, then resumes the agent with this reply, as your own answer goes. Nothing is sent before you press Send answer (⌘↵)."
-                : state === "applied"
-                  ? "Sent."
-                  : "Not sent."}
-            </p>
-          </div>
-        )}
         {p.origin.type === "run" && (
           <p data-provenance="run" className="m-0 text-sm text-ws-ink3">
             {p.createdBy === "agent" && (
@@ -754,23 +576,8 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
                 <button type="button" disabled={working} onClick={skip} className={button}>
                   Skip
                 </button>
-                {runDraft && onReview && (
-                  <button type="button" disabled={working} onClick={onReview} className={primary}>
-                    Review and start
-                  </button>
-                )}
-                {followUp && (
-                  <button type="button" disabled={working || state === "applying" || !!messageProblem} title={messageProblem ?? undefined} onClick={() => (onSendBack ? onSendBack(edit(), message.trim()) : onApprove(edit()))} className={`${primary} px-5 py-2 text-base`}>
-                    {working || state === "applying" ? "Sending…" : "Send back"}
-                  </button>
-                )}
-                {reply && (
-                  <button type="button" disabled={working || state === "applying" || !!replyBlock} title={replyBlock ?? undefined} onClick={sendAnswer} className={`${primary} px-5 py-2 text-base`}>
-                    {working || state === "applying" ? "Sending…" : "Send answer"}
-                  </button>
-                )}
                 {/* While the pause shows, its own Post anyway stands in for this button, beside Keep editing. */}
-                {!runDraft && !followUp && !reply && !pause && (
+                {!pause && (
                   <button type="button" disabled={working || state === "applying" || (intent.type === "comment" && !body.trim()) || (intent.type === "subtasks" && remaining === 0) || rewriteBlock} aria-label={working || state === "applying" ? undefined : moveName} onClick={approve} className={primary}>
                     {working || state === "applying" ? "Working…" : action}
                   </button>
@@ -782,6 +589,34 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
       </div>
       {/* Always mounted, so the live region is there before the confirm that fills it. */}
       <KeyHint hint={keys.hint ?? ""} asking={!!keys.asking} className={`m-0 border-t border-ws-sep px-3 py-1 text-xs ${keys.asking ? "bg-ws-pip-soft font-semibold text-ws-pip" : "bg-ws-bar text-ws-ink3"}`} />
+    </article>
+  );
+}
+
+/** A draft that started or messaged an agent, from before Pip did that directly: read-only, with what it was and how it ended. */
+function AgentDraftHistory({ proposal: p, onOpenRun }: DraftCardProps) {
+  const text = p.intent.type === "startRun" ? p.intent.spec.instruction : draftSummary(p, null);
+  const runId = p.run ?? (p.intent.type === "followUp" || p.intent.type === "runAnswer" ? p.intent.runId : null);
+  return (
+    <article data-draft={p.id} data-agent-draft-history className="ws-legacy grid gap-1.5 rounded-[10px] border border-ws-sep bg-ws-win px-3 py-2.5 text-base opacity-80">
+      <p className="m-0 flex items-baseline gap-2 font-semibold">
+        {draftTitle(p)}
+        <span data-draft-state className="ml-auto text-sm font-normal text-ws-ink3">
+          {BADGE[p.state.type]}
+        </span>
+      </p>
+      <p className="m-0 line-clamp-3 whitespace-pre-wrap text-ws-ink2 [overflow-wrap:anywhere]">{text}</p>
+      <p className="m-0 text-sm text-ws-ink3">
+        Pip starts and messages agents directly now, so this kind of draft is kept only as history.
+        {runId && onOpenRun && (
+          <>
+            {" "}
+            <button type="button" onClick={() => onOpenRun(runId)} className="text-ws-pip hover:underline">
+              Open the run
+            </button>
+          </>
+        )}
+      </p>
     </article>
   );
 }
@@ -811,8 +646,6 @@ export function LiveDraftCard({ proposal: p, jump = true, headingLevel }: { prop
     }
   };
 
-  const pass = useRuns((s) => (p.intent.type === "followUp" && p.state.type === "pending" ? nextPass(s.runs.find((r) => r.id === (p.intent as { runId: string }).runId)) : undefined));
-  const answer = useAnswerRun(p);
   const discuss = () => p.origin.type === "run" && askPip(pipAsks.comment({ id: p.origin.runId, item: target ?? null }, p.id));
   const review = p.intent.type === "githubReview" ? p.intent : null;
   const access = useRepoReviewAccess(review?.connectionId ?? null, review?.repo ?? null);
@@ -841,23 +674,6 @@ export function LiveDraftCard({ proposal: p, jump = true, headingLevel }: { prop
                 })
             : undefined
       }
-      pass={pass}
-      onSendBack={(edit, message) =>
-        void run(async () => {
-          if (edit && backend) await backend.proposalsEdit(p.id, edit);
-          await useWorkspace.getState().sendFollowUp(p.id, message);
-          return null;
-        })
-      }
-      answer={answer}
-      onSendAnswer={(edit, message) =>
-        void run(async () => {
-          if (!backend) return null;
-          await editThenSend(p.id, edit, message, { saveEdit: (id, e) => backend.proposalsEdit(id, e), send: (id, m) => useWorkspace.getState().sendAnswerDraft(id, m) });
-          return null;
-        })
-      }
-      onReview={p.intent.type === "startRun" ? () => void useRunSetup.getState().begin({ proposalId: p.id }) : undefined}
       access={access}
       onApprove={(edit, options) =>
         void run(async () => {

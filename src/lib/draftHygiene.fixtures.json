@@ -274,68 +274,6 @@
     "same": false
   },
   {
-    "name": "two answers for the same run",
-    "kind": "key",
-    "a": {
-      "type": "runAnswer",
-      "connectionId": "c",
-      "runId": "r1",
-      "shortId": null,
-      "item": {
-        "connectionId": "c",
-        "externalId": "1",
-        "key": "CA-1"
-      },
-      "message": "Yes.",
-      "question": "Which one?"
-    },
-    "b": {
-      "type": "runAnswer",
-      "connectionId": "c",
-      "runId": "r1",
-      "shortId": null,
-      "item": {
-        "connectionId": "c",
-        "externalId": "1",
-        "key": "CA-1"
-      },
-      "message": "No.",
-      "question": "Which one?"
-    },
-    "same": true
-  },
-  {
-    "name": "answers for different runs",
-    "kind": "key",
-    "a": {
-      "type": "runAnswer",
-      "connectionId": "c",
-      "runId": "r1",
-      "shortId": null,
-      "item": {
-        "connectionId": "c",
-        "externalId": "1",
-        "key": "CA-1"
-      },
-      "message": "Yes.",
-      "question": "Which one?"
-    },
-    "b": {
-      "type": "runAnswer",
-      "connectionId": "c",
-      "runId": "r2",
-      "shortId": null,
-      "item": {
-        "connectionId": "c",
-        "externalId": "1",
-        "key": "CA-1"
-      },
-      "message": "Yes.",
-      "question": "Which one?"
-    },
-    "same": false
-  },
-  {
     "name": "Pip replaces its own older move",
     "kind": "decide",
     "older": {

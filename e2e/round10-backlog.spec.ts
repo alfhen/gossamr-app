@@ -13,21 +13,6 @@ async function begin(page: Page, key: string) {
   await startWorkstream(page, key);
 }
 
-test.describe("what the palette says (G31)", () => {
-  test("'Start a workstream' says it starts no agent and posts nothing", async ({ page }) => {
-    await openApp(page, "runs=empty");
-    await openAgents(page);
-    await agentsHome(page).getByRole("button", { name: "Start a workstream…" }).click();
-    const dialog = page.getByRole("dialog", { name: "Command palette" });
-    await expect(dialog.locator("[data-palette-note]")).toHaveText("Opens a workstream; starts no agent and posts nothing.");
-    await page.keyboard.press("Escape");
-    await page.keyboard.press("ControlOrMeta+k");
-    await expect(dialog).toBeVisible();
-    await expect(dialog.locator("[data-palette-note]")).toHaveCount(0);
-  });
-
-});
-
 test.describe("toasts leave with the page and clear the launcher (G32)", () => {
   test("one without Undo is dismissed when the route changes", async ({ page }) => {
     test.setTimeout(90_000);

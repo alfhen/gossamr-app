@@ -104,14 +104,8 @@ impl Db {
         }
         let data: String = tx.query_row("SELECT data FROM proposals WHERE id = ?1", params![id], |r| r.get(0))?;
         let mut p: Proposal = serde_json::from_str(&data)?;
-        if matches!(p.intent, Intent::StartRun { .. }) {
-            return Err(Error::Proposal("a run is approved with its own button".into()));
-        }
-        if matches!(p.intent, Intent::FollowUp { .. }) {
-            return Err(Error::Proposal("a follow-up is sent back with its own button".into()));
-        }
-        if matches!(p.intent, Intent::RunAnswer { .. }) {
-            return Err(Error::Proposal("an answer is sent with its own button".into()));
+        if matches!(p.intent, Intent::StartRun { .. } | Intent::FollowUp { .. } | Intent::RunAnswer { .. }) {
+            return Err(Error::Proposal(crate::proposals::AGENTS_DIRECT.into()));
         }
         if matches!(p.intent, Intent::GithubReview { .. }) {
             return Err(Error::Proposal("a review is posted to GitHub with its own button".into()));
@@ -154,11 +148,9 @@ impl Db {
     }
 
     /// Puts proposals left `Applying` by a run that never finished back to pending, with a note that the write may
-    /// have gone through. A `StartRun`, follow-up or answer is left alone: none passes through `Applying`, so there is no
-    /// write to doubt.
+    /// have gone through.
     pub fn release_interrupted(&self, at: DateTime<Utc>) -> Result<usize> {
         let stuck = self.proposals(&ProposalQuery { states: Some(vec![StateKind::Applying]), ..Default::default() })?;
-        let stuck: Vec<Proposal> = stuck.into_iter().filter(|p| !matches!(p.intent, Intent::StartRun { .. } | Intent::FollowUp { .. } | Intent::RunAnswer { .. })).collect();
         for mut p in stuck.iter().cloned() {
             p.state = ProposalState::Pending;
             p.updated_at = at;

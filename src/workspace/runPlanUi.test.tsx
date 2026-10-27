@@ -1,40 +1,31 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MockBackend } from "../backend/mock";
-import { renderPrompt, SCRIPTED_PLAN_RESULT } from "../backend/mockRuns";
-import type { Proposal, Run, RunOutcome, RunReview } from "../types";
+import type { Run, RunOutcome } from "../types";
 import { toRunEntries } from "./activityLogic";
 import { AgentCard } from "./AgentCard";
 import { KIND_ICON } from "./AgentIcons";
-import { AgentMenuView } from "./AgentMenu";
-import { DraftCard } from "./DraftCard";
 import { KIND_LABEL } from "./agentsLogic";
-import { PromptParts } from "./RunPrompt";
-import { RunSetupView, type SetupViewProps } from "./RunSetup";
 import { RunSheetView, type RunSheetActions } from "./RunSheet";
-import { buildFromPlanControl, buildFromPlanOptions, planCommentControl, planCommentMessage, savedAsTyped, startBlock } from "./runSheetLogic";
+import { buildFromPlanControl, planCommentControl, planCommentMessage } from "./runSheetLogic";
 
 const NOW = Date.parse("2026-09-30T12:00:00Z");
 const backend = new MockBackend({ runs: { seed: "kinds", epoch: NOW } });
 const plan: Run = backend.runs.list().find((r) => r.spec.kind === "plan")!;
 
-const actions = (): RunSheetActions => ({ close: vi.fn(), attach: vi.fn(), askStop: vi.fn(), cancelStop: vi.fn(), stop: vi.fn(), startNow: vi.fn(), answer: vi.fn(), adoptSession: vi.fn(() => Promise.resolve()), retry: vi.fn(), fix: vi.fn(), copied: vi.fn(), openTicket: vi.fn(), reveal: vi.fn(), loadBrief: vi.fn(), draftComment: vi.fn(), askPip: vi.fn(), openDraft: vi.fn(), pickBlocker: vi.fn(), cancelBlocker: vi.fn(), draftBlocker: vi.fn(), openChange: vi.fn(), draftTicket: vi.fn(), openTicketDraft: vi.fn(), finishWithPip: vi.fn(), openCreated: vi.fn(), askPipBreakdown: vi.fn(), buildFromPlan: vi.fn(), draftPlanComment: vi.fn(), openPlanDraft: vi.fn(), reviewThis: vi.fn() });
+const actions = (): RunSheetActions => ({ close: vi.fn(), attach: vi.fn(), askStop: vi.fn(), cancelStop: vi.fn(), stop: vi.fn(), startNow: vi.fn(), answer: vi.fn(), adoptSession: vi.fn(() => Promise.resolve()), retry: vi.fn(), fix: vi.fn(), copied: vi.fn(), openTicket: vi.fn(), reveal: vi.fn(), draftComment: vi.fn(), askPip: vi.fn(), openDraft: vi.fn(), pickBlocker: vi.fn(), cancelBlocker: vi.fn(), draftBlocker: vi.fn(), openChange: vi.fn(), draftTicket: vi.fn(), openTicketDraft: vi.fn(), finishWithPip: vi.fn(), openCreated: vi.fn(), askPipBreakdown: vi.fn(), buildFromPlan: vi.fn(), draftPlanComment: vi.fn(), openPlanDraft: vi.fn(), reviewThis: vi.fn() });
 const outcome = (over: Partial<RunOutcome> = {}): RunOutcome => ({ ...backend.runs.outcome(plan.id), ...over });
 const sheet = (run: Run, o: RunOutcome | null, on = actions()) =>
-  renderToStaticMarkup(<RunSheetView run={run} now={NOW} ticketTitle="Welcome flow refresh" place={null} wide={false} onWide={vi.fn()} events={[]} disk={null} brief={null} confirmStop={false} outcome={o} tickets={[]} pickBlocker={false} drafting={false} answering={false} opened={false} on={on} />);
+  renderToStaticMarkup(<RunSheetView run={run} now={NOW} ticketTitle="Welcome flow refresh" place={null} wide={false} onWide={vi.fn()} events={[]} disk={null} confirmStop={false} outcome={o} tickets={[]} pickBlocker={false} drafting={false} answering={false} opened={false} on={on} />);
 const button = (html: string, label: string) => new RegExp(`<button[^>]*>(?:(?!</button>)[\\s\\S])*${label}`).exec(html)?.[0] ?? "";
 const disabled = (html: string, label: string) => /<button[^>]*disabled=""/.test(button(html, label));
 
 beforeEach(() => vi.stubGlobal("localStorage", { getItem: () => null, setItem: () => {}, removeItem: () => {} }));
 
 describe("every surface knows the plan kind", () => {
-  it("has a label and an icon, and the Agent menu offers it after Triage", () => {
+  it("has a label and an icon", () => {
     expect(KIND_LABEL.plan).toBe("Plan");
     expect(KIND_ICON.plan).toBe("plan");
-    const html = renderToStaticMarkup(<AgentMenuView ticketKey="CA-401" open onOpen={vi.fn()} onStart={vi.fn()} />);
-    expect(html).toContain("Plan this ticket");
-    expect(html.indexOf("Triage this ticket")).toBeLessThan(html.indexOf("Plan this ticket"));
-    expect(html.indexOf("Plan this ticket")).toBeLessThan(html.indexOf("Build this"));
   });
 
   it("names the kind on the card and in Activity", () => {
@@ -45,13 +36,13 @@ describe("every surface knows the plan kind", () => {
   });
 });
 
-describe("Build from plan on a card", () => {
+describe("Ask Pip to build on a card", () => {
   const card = (run: Run, onBuildFromPlan?: () => void) =>
     renderToStaticMarkup(<AgentCard run={run} now={NOW} selected={false} position={1} total={1} ticketTitle={null} onOpen={vi.fn()} onAttach={vi.fn()} onBuildFromPlan={onBuildFromPlan} failure={{ opened: false, on: { act: vi.fn(), retry: vi.fn(), copied: vi.fn() } }} />);
 
   it("shows the button only when it is given one", () => {
-    expect(card(plan, vi.fn())).toContain("Build from plan");
-    expect(card(plan)).not.toContain("Build from plan");
+    expect(card(plan, vi.fn())).toContain("Ask Pip to build");
+    expect(card(plan)).not.toContain("Ask Pip to build");
   });
 
   it("is enabled for a finished, fully read plan run on a ticket, and for nothing else", () => {
@@ -62,10 +53,6 @@ describe("Build from plan on a card", () => {
     expect(off({ result: "  " }).reason).toContain("no plan");
     expect(off({ resultComplete: false }).reason).toContain("read in full");
     expect(off({ spec: { ...plan.spec, kind: "triage" } }).reason).toContain("Only a plan run");
-  });
-
-  it("opens the Build draft for the same ticket and repository", () => {
-    expect(buildFromPlanOptions(plan)).toEqual({ item: plan.item, kind: "build", repo: plan.spec.repo, planFromRun: plan.id });
   });
 });
 
@@ -78,7 +65,7 @@ describe("the run sheet for a finished plan", () => {
     expect(html).toContain("Open questions for a person");
     expect(html).toContain("For Jira, as the agent wrote it");
     expect(html.indexOf("The plan</p>")).toBeLessThan(html.indexOf("For Jira, as the agent wrote it"));
-    expect(disabled(html, "Build from this plan")).toBe(false);
+    expect(disabled(html, "Ask Pip to build")).toBe(false);
     expect(disabled(html, "Draft the plan as a comment")).toBe(false);
     expect(html).toContain("holds only the short note for Jira");
   });
@@ -94,7 +81,7 @@ describe("the run sheet for a finished plan", () => {
 
   it("turns both off, with the reason, when only a summary was read", () => {
     const html = sheet({ ...plan, resultComplete: false }, outcome({ summaryOnly: true }));
-    expect(disabled(html, "Build from this plan")).toBe(true);
+    expect(disabled(html, "Ask Pip to build")).toBe(true);
     expect(disabled(html, "Draft the plan as a comment")).toBe(true);
     expect(html).toContain("read in full");
   });
@@ -110,127 +97,5 @@ describe("the run sheet for a finished plan", () => {
     expect(planCommentControl(plan).enabled).toBe(true);
     expect(planCommentControl({ ...plan, item: null }).reason).toContain("nothing to comment on");
     expect(planCommentControl({ ...plan, resultComplete: false }).reason).toContain("There is no plan to draft");
-  });
-});
-
-describe("the build's plan in the exact-prompt review", () => {
-  const build = async () => {
-    const made = await backend.runsDraft({ ...plan.spec, kind: "build", instruction: "", plan: null, planFromRun: plan.id }, plan.item);
-    const review = backend.runs.review(made.id);
-    return review;
-  };
-  const editor = (over: Record<string, unknown> = {}) => ({ text: "", disabled: false, onChange: vi.fn(), onBlur: vi.fn(), plan: { text: "edited plan", disabled: false, onChange: vi.fn(), onBlur: vi.fn(), onRefresh: vi.fn(), onRemove: vi.fn(), ...over } });
-
-  it("shows the plan whole as a part of its own, labelled with the run, read-only when nothing edits it", async () => {
-    const review = await build();
-    const html = renderToStaticMarkup(<PromptParts review={review} />);
-    expect(html).toContain(`Plan from run ${plan.id}`);
-    expect(html).toContain("sent whole and as data");
-    expect(html).toContain("data-plan");
-    expect(html).toContain("Open questions for a person");
-    expect(html).not.toContain("<textarea");
-    expect(html).toContain(`${SCRIPTED_PLAN_RESULT.length.toLocaleString("en")} characters`);
-  });
-
-  it("edits it in the setup sheet, with the two buttons that change it", async () => {
-    const review = await build();
-    const html = renderToStaticMarkup(<PromptParts review={review} editor={editor()} />);
-    expect(html).toContain(`aria-label="Plan from run ${plan.id}"`);
-    expect(html).toContain("edited plan");
-    expect(html).toContain("Read the plan again");
-    expect(html).toContain("Build without it");
-    expect(html).toContain("only when you press the button");
-  });
-
-  it("puts nothing about a plan into a review without one", () => {
-    const spec = { ...plan.spec, kind: "build" as const, instruction: "Do it." };
-    const review: RunReview = { digest: "d", prompt: renderPrompt(spec), instruction: "Do it.", focus: null, ticketBlock: null, guard: "g", spec };
-    expect(renderToStaticMarkup(<PromptParts review={review} />)).not.toContain("Plan from run");
-  });
-
-  it("blocks Start while the typed plan is empty or differs from the saved one", async () => {
-    const review = await build();
-    expect(savedAsTyped(review, { instruction: review.instruction, base: review.spec.base, plan: review.plan! })).toBe(true);
-    expect(savedAsTyped(review, { instruction: review.instruction, base: review.spec.base, plan: "changed" })).toBe(false);
-    expect(savedAsTyped(review, { instruction: review.instruction, base: review.spec.base })).toBe(true);
-    const ready = { draft: true, review, preflight: { rows: [], blocking: false }, busy: false, starting: false, changedBanner: false };
-    expect(startBlock({ ...ready, typed: { instruction: review.instruction, base: "main", plan: "  " } })).toBe("Write the plan first, or remove it");
-    expect(startBlock({ ...ready, typed: { instruction: review.instruction, base: "main", plan: "x" } })).toBeNull();
-  });
-});
-
-describe("a build draft that follows a plan", () => {
-  const card = (p: Proposal) => renderToStaticMarkup(<DraftCard proposal={p} statusName={null} people={[]} working={false} error={null} onApprove={vi.fn()} onSkip={vi.fn()} />);
-
-  it("says so on its card, with the plan's size, and not for other drafts", async () => {
-    const made = await backend.runsDraft({ ...plan.spec, kind: "build", instruction: "", plan: null, planFromRun: plan.id }, plan.item);
-    const html = card(made);
-    expect(html).toContain("Follows the unedited plan from <b");
-    expect(html).toContain("shown whole in the prompt");
-    if (made.intent.type !== "startRun") throw new Error("a run draft");
-    const settled = card({ ...made, intent: { ...made.intent, spec: { ...made.intent.spec, planApproved: true } } });
-    expect(settled).toContain("Follows the plan from <b");
-    expect(settled).not.toContain("unedited");
-    const plain = await backend.runsDraft({ ...plan.spec, kind: "build", instruction: "", plan: null, planFromRun: null, name: "ca-401-other-0a1b" }, plan.item);
-    expect(card(plain)).not.toContain("Follows the plan");
-  });
-});
-
-describe("the setup sheet of a build that follows a plan", () => {
-  const props = (review: RunReview, refreshPlan = vi.fn()): SetupViewProps => ({
-    item: plan.item,
-    ticketTitle: "Welcome flow refresh",
-    kind: "build",
-    kindEditable: false,
-    pr: null,
-    prs: { status: "idle", query: "", choices: [], error: null },
-    repo: plan.spec.repo,
-    repos: [plan.spec.repo],
-    shortage: null,
-    reposError: null,
-    repoEditable: false,
-    ticketless: false,
-    project: null,
-    projects: [],
-    choice: null,
-    review,
-    preflight: null,
-    phase: "ready",
-    busy: false,
-    error: null,
-    cloning: false,
-    cloneError: null,
-    changed: false,
-    fromPip: false,
-    instruction: review.instruction,
-    onInstruction: vi.fn(),
-    base: review.spec.base,
-    onBase: vi.fn(),
-    wide: false,
-    onWide: vi.fn(),
-    on: { close: vi.fn(), discard: vi.fn(), start: vi.fn(), chooseRepo: vi.fn(), chooseClone: vi.fn(), cloneFresh: vi.fn(), retryRepos: vi.fn(), openSettings: vi.fn(), dismissChanged: vi.fn(), commit: vi.fn(), chooseKind: vi.fn(), chooseProject: vi.fn(), searchPrs: vi.fn(), choosePr: vi.fn(), setAllowPush: vi.fn(), refreshPlan },
-  });
-  const drafted = async (planApproved?: boolean) => {
-    const made = await backend.runsDraft({ ...plan.spec, kind: "build", instruction: "", plan: null, planFromRun: plan.id, name: `ca-401-setup-${planApproved ? "a" : "b"}${Math.random().toString(16).slice(2, 6)}` }, plan.item);
-    const review = backend.runs.review(made.id);
-    return planApproved === undefined ? review : { ...review, spec: { ...review.spec, planApproved } };
-  };
-
-  it("says, as a note, that the build follows the unedited plan when no plan draft was approved, and offers to read it again", async () => {
-    const review = await drafted();
-    expect(review.spec.planApproved).toBe(false);
-    const html = renderToStaticMarkup(<RunSetupView {...props(review)} />);
-    expect(html).toMatch(/<div data-plan-unedited="true" role="note"/);
-    expect(html).toContain(`follows the unedited plan from run ${plan.id}`);
-    expect(html).toContain("the description draft that adds this plan to the ticket wasn&#x27;t approved");
-    expect(button(html, "Read the plan again")).toBeTruthy();
-    expect(html).not.toContain("This build follows the plan from run");
-  });
-
-  it("keeps today's sentence and shows no note when a person settled the plan", async () => {
-    const html = renderToStaticMarkup(<RunSetupView {...props(await drafted(true))} />);
-    expect(html).not.toContain("data-plan-unedited");
-    expect(html).not.toContain("unedited");
-    expect(html).toContain(`This build follows the plan from run ${plan.id}.`);
   });
 });

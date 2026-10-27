@@ -37,15 +37,4 @@ test.describe("keyboard and screen reader (G5, G10, G14)", () => {
     await expect(workstreamGroup(page, "CA-401")).toHaveCount(0);
     await expect(pipPane(page).getByRole("heading", { level: 2, name: "General" })).toBeVisible();
   });
-
-  test("the palette offers Start a workstream… for 'start' and asks for the ticket", async ({ page }) => {
-    test.setTimeout(90_000);
-    await openApp(page, "runs=empty");
-    await page.keyboard.press("ControlOrMeta+k");
-    await page.keyboard.type("start");
-    const dialog = page.getByRole("dialog", { name: "Command palette" });
-    await dialog.getByRole("option", { name: /Start a workstream…/ }).click();
-    await expect(dialog).toBeVisible();
-    await expect(dialog.getByText("Opens a workstream; starts no agent and posts nothing.")).toBeVisible();
-  });
 });

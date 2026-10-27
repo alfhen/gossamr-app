@@ -295,6 +295,11 @@ fn a_fact_is_keyed_by_its_state_and_a_finish_after_a_continuation_is_another() {
     run.stopped_by_limit = true;
     assert_eq!(WakeState::of_run(&run), None, "a stop Gossamr made at a limit wakes nobody");
     assert_eq!(WakeState::of_attention(&run, Attention::Limit), None);
+    run.stopped_by_limit = false;
+    run.unsent_answer = Some("Use staging.".into());
+    assert_eq!(WakeState::of_run(&run), None, "a stop on the way to a resume wakes nobody");
+    run.error = Some("The session didn't show as stopped.".into());
+    assert_eq!(WakeState::of_run(&run), Some(WakeState::Stopped), "a resume that failed is news");
     run.state = RunState::Working;
     assert_eq!(WakeState::of_run(&run), None, "a run under way is no fact for the sweep");
     run.state = RunState::SystemBlocked;
@@ -355,7 +360,7 @@ async fn a_stop_from_outside_and_a_silent_finish_after_a_continuation_are_caught
 async fn a_stop_the_person_asked_for_wakes_nobody_and_a_stop_at_a_limit_neither() {
     let t = setup().await;
     let stopped = t.run("r1", RunKind::Investigate, RunState::Stopped, |_| {}).await;
-    t.fx.core.record_run_action(&stopped, "run_stopped", None).await.unwrap();
+    t.fx.core.record_run_action_by(&stopped, Actor::Person, "run_stopped", None).await.unwrap();
     t.run("r2", RunKind::Triage, RunState::Stopped, |r| r.stopped_by_limit = true).await;
     t.sup.clone().on_run(t.fx.core.run("r2").await.unwrap().unwrap(), Attention::Limit).await;
     t.sweep().await;
@@ -365,6 +370,21 @@ async fn a_stop_the_person_asked_for_wakes_nobody_and_a_stop_at_a_limit_neither(
     t.fx.core.save_run(&Run { continued_at: Some(Utc::now() + chrono::Duration::seconds(5)), ..t.fx.core.run("r1").await.unwrap().unwrap() }).await.unwrap();
     t.sweep().await;
     assert_eq!(t.wakes().await.len(), 1);
+}
+
+#[tokio::test]
+async fn a_stop_pip_made_wakes_nobody_and_neither_does_a_stop_that_is_only_the_start_of_a_resume() {
+    let t = setup().await;
+    let stopped = t.run("r1", RunKind::Investigate, RunState::Stopped, |_| {}).await;
+    t.fx.core.record_run_action_by(&stopped, Actor::Pip, "run_stopped", None).await.unwrap();
+    t.run("r2", RunKind::Triage, RunState::Stopped, |r| r.unsent_answer = Some("Use staging.".into())).await;
+    t.sweep().await;
+    assert!(t.wake_turns().await.is_empty() && t.wakes().await.is_empty(), "{:?}", t.wakes().await);
+
+    // The message that was to wake r2 failed for good and the person cleared it: a stop nobody asked for is news again.
+    t.fx.core.save_run(&Run { unsent_answer: None, ..t.fx.core.run("r2").await.unwrap().unwrap() }).await.unwrap();
+    t.sweep().await;
+    assert_eq!(t.wakes().await, [("r2".to_string(), "stopped".to_string())]);
 }
 
 #[tokio::test]
@@ -1196,8 +1216,7 @@ mod launching {
         let mut queued = Vec::new();
         for n in 1..=3 {
             let spec = RunSpec { workstream: Some(w.ws.clone()), ..w.rig.spec(n) };
-            let p = core.draft_run(spec, Some(w.rig.fx.item("CA-1"))).await.unwrap();
-            queued.push(core.runs_approve(&p.id, &core.runs_review(&p.id).await.unwrap().digest).await.unwrap());
+            queued.push(core.queue_test_run(spec, Some(w.rig.fx.item("CA-1"))).await.unwrap());
         }
         let (svc, other) = (w.rig.svc.clone(), w.rig.svc.clone());
         let raced = async { tokio::join!(svc.launch_waiting(), other.poll(), svc.launch_waiting()) };
@@ -1226,8 +1245,7 @@ mod launching {
         let mut approved = Vec::new();
         for n in 1..=6 {
             let spec = RunSpec { workstream: (n % 2 == 0).then(|| w.ws.clone()), ..w.rig.spec(n) };
-            let p = core.draft_run(spec, Some(w.rig.fx.item("CA-1"))).await.unwrap();
-            approved.push(core.runs_approve(&p.id, &core.runs_review(&p.id).await.unwrap().digest).await.unwrap());
+            approved.push(core.queue_test_run(spec, Some(w.rig.fx.item("CA-1"))).await.unwrap());
             tokio::time::sleep(Duration::from_millis(2)).await;
         }
         let stop_sampling = Arc::new(AtomicBool::new(false));

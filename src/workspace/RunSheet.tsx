@@ -2,22 +2,23 @@ import { archiveControl } from "../lib/archiveRuns";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useBackend } from "../backend/useBackend";
 import { itemKey } from "../lib/filter";
-import type { Run, RunEvent, RunOutcome, RunReview } from "../types";
+import type { Run, RunEvent, RunOutcome } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { Icon, KIND_ICON } from "./AgentIcons";
-import { Box, BoxTitle, Btn, CodeBox, Details, MONO_BLOCK, Sec, SheetFrame } from "./AgentSheet";
+import { Box, BoxTitle, Btn, CodeBox, Details, Sec, SheetFrame } from "./AgentSheet";
 import { StateChip, useSlotQueue } from "./AgentParts";
 import { KIND_LABEL, agentGroups, ageText, formatTokens, ordinal, progressText, quietMinutes, quietText, repoName, runTitle, slotPosition } from "./agentsLogic";
 import { useStateView } from "./useStateView";
 import { openTicketByKey } from "./jump";
 import { failureHelp, retryEnabled, type FailureAct } from "./failureHelp";
+import { CloneActions } from "./CloneActions";
 import { failureAction } from "./failureActions";
-import { PromptParts, ReadOnlyExtras, ReadOnlyLine, ReportExtras } from "./RunPrompt";
+import { PromptParts, ReadOnlyExtras, ReadOnlyLine } from "./RunPrompt";
 import { RunTimeline } from "./RunTimeline";
 import { RunWhere, useDisk } from "./RunWhere";
 import { RunCleanup } from "./RunCleanup";
 import { cleanupReason } from "./cleanupLogic";
-import { answerable, sheetTopOn, mayTouch, readOnlyNote, buildFromPlanOptions, canStartNow, reviewThisControl, reviewThisOptions, pendingBreakdownOn, pipAsks, stopControl } from "./runSheetLogic";
+import { answerable, sheetTopOn, mayTouch, readOnlyNote, canStartNow, pendingBreakdownOn, pipAsks, stopControl } from "./runSheetLogic";
 import { showDraft } from "./draftTicket";
 import { RunAnswer } from "./RunAnswer";
 import { PermissionAsk, PermissionSent } from "./PermissionAsk";
@@ -25,10 +26,9 @@ import { permissionConfirmation, type PermissionAnswered } from "./runsStore";
 import { RunContinuation } from "./RunContinuation";
 import { Changes, Found, type ResultActions } from "./RunResult";
 import { openOnGithub } from "./githubUi";
-import { askPip } from "./askPip";
+import { askPip, askPipInWorkstream } from "./askPip";
 import { followOutcome } from "./followOutcome";
 import { browseList, useRuns } from "./runsStore";
-import { useRunSetup } from "./runSetupStore";
 import { usePrefs } from "./prefs";
 import { useWorkstreams } from "./workstreamsStore";
 import { labelsByRun } from "../lib/workstreamStage";
@@ -48,7 +48,6 @@ export interface RunSheetActions extends ResultActions {
   copied(): void;
   openTicket(): void;
   reveal(path: string): void;
-  loadBrief(): void;
   /** Archives the run; absent where it can't be offered. */
   archive?(): void;
 }
@@ -65,7 +64,6 @@ export interface RunSheetViewProps {
   onWide(): void;
   events: readonly RunEvent[] | null;
   disk: number | null | "unknown";
-  brief: RunReview | "loading" | "unavailable" | null;
   confirmStop: boolean;
   outcome: RunOutcome | null;
   /** Cached tickets the blocker picker searches. */
@@ -187,7 +185,7 @@ function Attention({ run, label, permissionAnswered, opened, answering, slotPlac
  */
 export function waitingText(run: Run, place: number | null = null): string {
   if (run.slotWaitSince && !run.spec.workstream) return `It is approved and starts on its own when one of the running agents finishes${place ? ` (${ordinal(place)} in line)` : ""}. Stop it if you no longer want it.`;
-  if (run.spec.workstream) return "It is approved and launches on its own once a slot is free and its workstream isn't paused. Until then it waits.";
+  if (run.spec.workstream) return `${run.proposalId ? "It is approved and" : "Pip started it, and it"} launches on its own once a slot is free and its workstream isn't paused. Until then it waits.`;
   return "It is approved but has not been launched, as after a restart. Nothing runs until you start it.";
 }
 
@@ -206,8 +204,9 @@ function FailureBox({ run, opened, on }: { run: Run; opened: boolean; on: RunShe
           <p className="m-0 font-semibold text-ws-ink">{help.summary}</p>
           <p className="m-0 text-ws-ink2">{help.detail}</p>
           <div className="flex flex-wrap items-center gap-2">
+            {help.kind === "noClone" && <CloneActions run={run} />}
             {help.primary && (
-              <Btn tone={stepDone ? "plain" : "primary"} icon={help.primary.act === "terminal" ? "term" : help.primary.act === "install" ? "ext" : "play"} onClick={() => on.fix(help.primary!.act)}>
+              <Btn tone={stepDone ? "plain" : "primary"} icon={help.primary.act === "terminal" ? "term" : "ext"} onClick={() => on.fix(help.primary!.act)}>
                 {help.primary.label}
               </Btn>
             )}
@@ -279,24 +278,18 @@ function Facts({ run, now, ticketTitle, on }: { run: Run; now: number; ticketTit
   );
 }
 
-/** The brief and what Gossamr added; the read-only rules are the ones the run was launched with, so a run from before they existed shows none. */
-function BriefBody({ brief, readOnly }: { brief: RunSheetViewProps["brief"]; readOnly?: Run["readOnly"] }): ReactNode {
-  if (brief === null || brief === "loading") return <p className="m-0 text-ws-ink3">Loading…</p>;
-  if (brief === "unavailable") return <p className="m-0 text-ws-ink3">The brief couldn&apos;t be read.</p>;
+/** What the agent was told, and the read-only rules it was launched with; a run from before they existed shows none. */
+function BriefBody({ run }: { run: Run }): ReactNode {
   return (
     <>
-      <PromptParts review={brief} />
-      <Details summary="What Gossamr added for the model">
-        <pre className={MONO_BLOCK}>{brief.guard}</pre>
-        <ReadOnlyExtras readOnly={readOnly} />
-        <ReportExtras report={brief.report} />
-      </Details>
+      <PromptParts run={run} />
+      <ReadOnlyExtras readOnly={run.readOnly} />
     </>
   );
 }
 
 /** The whole sheet as a function of what it is shown; `RunSheet` loads the data and connects the actions. */
-export function RunSheetView({ run, now, ticketTitle, place, label, wide, onWide, events, disk, brief, confirmStop, outcome, tickets, pickBlocker, waitingBreakdown, drafting, answering, opened, answerSent = false, permissionAnswered = null, cleanup = null, slotPlace = null, stoppedHere = false, on }: RunSheetViewProps) {
+export function RunSheetView({ run, now, ticketTitle, place, label, wide, onWide, events, disk, confirmStop, outcome, tickets, pickBlocker, waitingBreakdown, drafting, answering, opened, answerSent = false, permissionAnswered = null, cleanup = null, slotPlace = null, stoppedHere = false, on }: RunSheetViewProps) {
   const view = useStateView(run, now);
   const stop = stopControl(run);
   const title = runTitle(run, ticketTitle);
@@ -411,9 +404,8 @@ export function RunSheetView({ run, now, ticketTitle, place, label, wide, onWide
         </ul>
       </Sec>
 
-      <Details summary="The brief as it was sent" onToggle={(open) => open && on.loadBrief()}>
-        <BriefBody brief={brief} readOnly={run.readOnly} />
-        <p className="m-0 text-xs text-ws-ink3 [overflow-wrap:anywhere]">What you approved: {run.digest.slice(0, 16)}</p>
+      <Details summary="What the agent was told">
+        <BriefBody run={run} />
       </Details>
     </SheetFrame>
   );
@@ -433,7 +425,6 @@ export function RunSheet({ id }: { id: string }) {
   const ticket = useWorkspace((s) => (run?.item ? s.items[itemKey(run.item)] : undefined));
   const [wide, setWide] = useState(false);
   const [events, setEvents] = useState<RunEvent[] | null>(null);
-  const [brief, setBrief] = useState<RunSheetViewProps["brief"]>(null);
   const [confirmStop, setConfirmStop] = useState(false);
   const [stoppedHere, setStoppedHere] = useState(false);
   const [outcome, setOutcome] = useState<RunOutcome | null>(null);
@@ -457,7 +448,6 @@ export function RunSheet({ id }: { id: string }) {
   useEffect(() => {
     setConfirmStop(false);
     setStoppedHere(false);
-    setBrief(null);
     setEvents(null);
     setOutcome(null);
     setPickBlocker(false);
@@ -526,13 +516,11 @@ export function RunSheet({ id }: { id: string }) {
     draftTicket: () => void store.draftTicket(id),
     buildFromPlan: () => {
       store.closeSheet();
-      void useRunSetup.getState().begin(buildFromPlanOptions(run));
+      void askPipInWorkstream(run, pipAsks.build(run));
     },
     reviewThis: () => {
-      const change = outcome?.change;
-      if (!change || !reviewThisControl(run, change).enabled) return;
       store.closeSheet();
-      void useRunSetup.getState().begin(reviewThisOptions(run, change));
+      void askPipInWorkstream(run, pipAsks.review(run));
     },
     draftPlanComment: () => void store.draftPlanComment(id),
     openPlanDraft: () => store.showDraft(run.item),
@@ -568,12 +556,7 @@ export function RunSheet({ id }: { id: string }) {
       void openTicketByKey(run.createdItem.key);
     },
     openChange: (url) => void openOnGithub(url),
-    loadBrief: () => {
-      if (brief !== null || !backend) return;
-      setBrief("loading");
-      backend.runsReview(run.proposalId).then(setBrief, () => setBrief("unavailable"));
-    },
   };
-  return <RunSheetView run={run} now={now} ticketTitle={ticket?.title ?? null} place={place} label={label} wide={wide} onWide={() => setWide((w) => !w)} events={events} disk={disk} brief={brief} confirmStop={confirmStop} outcome={outcome} tickets={tickets} pickBlocker={pickBlocker} waitingBreakdown={waitingOn !== null} drafting={drafting} answering={answering} opened={opened} answerSent={sentAt !== undefined && sentAt === run.lastProgressAt} permissionAnswered={permissionConfirmation(run, permissionAnswered)} cleanup={cleanupReason(run, now, { disk: typeof disk === "number" ? disk : null, change: outcome?.change ?? null })} slotPlace={slotPosition(run, slotLine)} stoppedHere={stoppedHere} on={on} />;
+  return <RunSheetView run={run} now={now} ticketTitle={ticket?.title ?? null} place={place} label={label} wide={wide} onWide={() => setWide((w) => !w)} events={events} disk={disk} confirmStop={confirmStop} outcome={outcome} tickets={tickets} pickBlocker={pickBlocker} waitingBreakdown={waitingOn !== null} drafting={drafting} answering={answering} opened={opened} answerSent={sentAt !== undefined && sentAt === run.lastProgressAt} permissionAnswered={permissionConfirmation(run, permissionAnswered)} cleanup={cleanupReason(run, now, { disk: typeof disk === "number" ? disk : null, change: outcome?.change ?? null })} slotPlace={slotPosition(run, slotLine)} stoppedHere={stoppedHere} on={on} />;
 }
 

@@ -1,4 +1,5 @@
 import { repeatedComments, safeToBatch } from "../lib/needs";
+import { isRunDraft } from "../lib/proposals";
 import { byQueue, REVIEW_POSTED, reviewPosted, STAGE_LABEL } from "../lib/workstreamStage";
 import type { CodeChange, Proposal, ReviewView, Run, RunKind, WorkstreamEvent } from "../types";
 import { liveCounts, liveWords, needsPerson, runApproved, stateView, stoppedAtLimit, type Tone } from "./agentsLogic";
@@ -152,9 +153,7 @@ export function stepChips(runs: readonly Run[], events: readonly (Pick<Workstrea
     const view = newest ? stateView(newest, now, runApproved(newest, proposals)) : null;
     const waiting = kind === "build" && !!waitingForPr && newest?.state === "done";
     const review = kind === "review" && newest ? shownVerdict(newest, verdicts) : null;
-    const pendingDrafts = (drafts[kind] ?? []).filter((p) => p.state.type === "pending");
-    // A run asking a question that has a reply drafted waits on the person once, as the tray counts it.
-    const answered = new Set(pendingDrafts.flatMap((p) => (p.intent.type === "runAnswer" ? [p.intent.runId] : [])));
+    const pendingDrafts = (drafts[kind] ?? []).filter((p) => p.state.type === "pending" && !isRunDraft(p.intent));
     const pending = pendingDrafts.length;
     return {
       kind,
@@ -164,7 +163,7 @@ export function stepChips(runs: readonly Run[], events: readonly (Pick<Workstrea
       state: waiting ? "waiting for PR" : (view?.label ?? null),
       tone: waiting ? "warn" : (view?.tone ?? null),
       verdict: review ? (review.verdict !== "pass" && newest && reviewPosted(events, newest) ? REVIEW_POSTED : verdictChip(review)) : null,
-      needsYou: pending + own.filter((r) => (needsPerson(r) || stoppedAtLimit(r)) && !(r.state === "needsAnswer" && answered.has(r.id))).length,
+      needsYou: pending + own.filter((r) => (needsPerson(r) || stoppedAtLimit(r))).length,
       pr: kind === "build" ? buildPullRequest(own, changes) : null,
     };
   });

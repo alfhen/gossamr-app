@@ -210,8 +210,37 @@ impl Actor {
     }
 }
 
+/// The audit lines that open and close a question Pip asked the person (`ask_person`): Pip's `pip_asked` carries the
+/// question, and the person's next message in the workstream's conversation, or dismissing it, is a `pip_ask_cleared`.
+pub const PIP_ASKED: &str = "pip_asked";
+pub const PIP_ASK_CLEARED: &str = "pip_ask_cleared";
+
+/// The most of a question Pip asks that is kept.
+pub const PIP_ASK_LIMIT: usize = 500;
+
+/// A question Pip asked the person that they haven't answered or dismissed.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PipAsk {
+    pub question: String,
+    pub at: DateTime<Utc>,
+}
+
+/// The question still open in `events` (oldest first): the newest `pip_asked` line, unless a `pip_ask_cleared` follows it.
+pub fn open_pip_ask(events: &[WorkstreamEvent]) -> Option<PipAsk> {
+    let mut open = None;
+    for e in events {
+        match e.action.as_str() {
+            PIP_ASKED => open = Some(PipAsk { question: e.detail.clone().unwrap_or_default(), at: e.at }),
+            PIP_ASK_CLEARED => open = None,
+            _ => {}
+        }
+    }
+    open
+}
+
 /// One line of a workstream's append-only audit. `seq` is given when it is stored. Text a person or Pip wrote is never
-/// kept here, only its digest or length.
+/// kept here, only its digest or length; the one exception is the sanitised question of a `pip_asked` line.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkstreamEvent {

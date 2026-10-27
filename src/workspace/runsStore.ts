@@ -2,7 +2,7 @@ import { create } from "zustand";
 import type { Backend } from "../backend/types";
 import { targetOf } from "../lib/proposals";
 import { labelsByRun } from "../lib/workstreamStage";
-import type { CleanupResult, ClearFilter, DeleteResult, ItemRef, PlanComment, Proposal, Run, RunsEnvironment } from "../types";
+import type { CleanupResult, ClearFilter, DeleteResult, ItemRef, PlanComment, Proposal, Run } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { clearSentence } from "../lib/archiveRuns";
 import { INSTALL_URL, failureHelp, type FailureAct } from "./failureHelp";
@@ -52,7 +52,6 @@ interface RunsState {
   archivedOpen: boolean;
   status: "idle" | "loading" | "ready" | "error";
   error: string | null;
-  environment: RunsEnvironment | null;
   filters: AgentFilters;
   selectedId: string | null;
   /**
@@ -70,7 +69,7 @@ interface RunsState {
   drafting: string | null;
   /** Runs whose answer is on its way to the agent. */
   answering: ReadonlySet<string>;
-  /** Runs the person just started and has not been told the outcome of: a launch that fails is announced and opened. */
+  /** Runs Pip started that have not left the queue: a launch that fails is announced. */
   launching: ReadonlySet<string>;
   sheet: RunSheetTarget | null;
   /** The order the run sheet browses in, taken when it opened; see `browseList`. */
@@ -83,16 +82,11 @@ interface RunsState {
    * command in Terminal. `copied` says whether the command reached the clipboard.
    */
   permissionAnswered: Readonly<Record<string, PermissionAnswered>>;
-  /** The ticket picker for starting an agent without a ticket open. */
-  picking: boolean;
   init(backend: Backend): void;
   dispose(): void;
   reload(): Promise<void>;
   /** Loads again from wherever the store stands: from scratch when it has no backend (a hot reload resets it), else a re-read. */
   recover(): void;
-  /** Watches a run just started until it leaves the queue; if it failed to launch, says why and opens it. */
-  watchLaunch(id: string): void;
-  checkEnvironment(): Promise<void>;
   setFilter(patch: Partial<AgentFilters>): void;
   clearFilters(): void;
   select(id: string | null): void;
@@ -102,7 +96,6 @@ interface RunsState {
   closeSheet(): void;
   /** Shows a ticket's drafts, where a draft is approved, and closes the run sheet over it. */
   showDraft(item: ItemRef | null): void;
-  setPicking(open: boolean): void;
   /** Moves the run sheet to the next (`1`) or previous (`-1`) run, in the order the Agents view lists them, grouped as it is. */
   browse(delta: 1 | -1): void;
   stop(id: string): Promise<void>;
@@ -170,7 +163,7 @@ export function permissionConfirmation(run: Pick<Run, "lastProgressAt" | "permis
   return run.state === "needsPermission" && run.permissionAllowed?.command === answered.command ? answered : null;
 }
 
-const idle = { runs: [] as Run[], archived: [] as Run[], launching: new Set<string>() as ReadonlySet<string>, status: "idle" as const, error: null, environment: null, selectedId: null, sheet: null as RunSheetTarget | null, browseOrder: null, picking: false };
+const idle = { runs: [] as Run[], archived: [] as Run[], launching: new Set<string>() as ReadonlySet<string>, status: "idle" as const, error: null, selectedId: null, sheet: null as RunSheetTarget | null, browseOrder: null };
 
 // Set by needsActions, which can read Needs you; this store cannot import it without a cycle.
 let noticeOpener: ((runId: string) => void) | null = null;
@@ -197,12 +190,14 @@ function forgetRecovered(dismissed: ReadonlySet<string>, runs: readonly Run[]): 
   return kept;
 }
 
-/** A run the person started that failed before it got a session: say why, with the way on, and open it. Once it has moved on it is no longer watched. */
+/** A run Pip started that failed before it got a session: say why, with the way on. Once it has moved on it is no longer watched. */
 function announceFailedLaunches(get: () => RunsState, set: (patch: Partial<RunsState>) => void) {
   const { launching, runs } = get();
-  if (!launching.size) return;
+  const watching = new Set(launching);
+  for (const r of runs) if (r.createdBy === "pip" && (r.state === "queued" || r.state === "launching")) watching.add(r.id);
+  if (!watching.size) return;
   const still = new Set<string>();
-  for (const id of launching) {
+  for (const id of watching) {
     const run = runs.find((r) => r.id === id);
     if (!run) continue;
     if (run.state === "queued" || run.state === "launching") {
@@ -213,7 +208,6 @@ function announceFailedLaunches(get: () => RunsState, set: (patch: Partial<RunsS
     const reason = failureHelp(run)?.summary ?? run.error ?? "no reason was given";
     const where = run.item?.key ? ` on ${run.item.key}` : "";
     useToasts.getState().push(`The agent${where} didn't start. ${reason}`, "error", { label: "Fix it", run: () => get().openRun(id) });
-    if (!get().sheet) get().openRun(id);
   }
   set({ launching: still });
 }
@@ -304,7 +298,6 @@ export const useRuns = create<RunsState>((set, get) => ({
     const offOpen = backend.onOpenRun((id) => (noticeOpener ? noticeOpener(id) : get().openRun(id)));
     stop = () => (offChanged(), offOpen());
     void get().reload();
-    void get().checkEnvironment();
   },
 
   dispose() {
@@ -343,18 +336,6 @@ export const useRuns = create<RunsState>((set, get) => ({
     if (get().backend !== backend) return get().init(backend);
     set({ status: "loading", error: null });
     void get().reload();
-    void get().checkEnvironment();
-  },
-
-  watchLaunch(id) {
-    set({ launching: new Set([...get().launching, id]) });
-  },
-
-  async checkEnvironment() {
-    const { backend } = get();
-    if (!backend) return;
-    const environment = await backend.runsEnvironment();
-    if (get().backend === backend) set({ environment });
   },
 
   setFilter: (patch) => set((s) => ({ filters: { ...s.filters, ...patch } })),
@@ -375,10 +356,6 @@ export const useRuns = create<RunsState>((set, get) => ({
     get().closeSheet();
     if (item) openDraftsOn(item);
   },
-  setPicking(picking) {
-    set({ picking });
-  },
-
   browse(delta) {
     const { sheet, browseOrder } = get();
     if (sheet?.type !== "run") return;

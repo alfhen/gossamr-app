@@ -50,8 +50,8 @@ const draft = (intent: Intent, state: ProposalState = { type: "pending" }): Prop
   run: null,
 });
 
-const INLINE = new Set(["comment", "transition", "subtasks", "create", "link", "update", "runAnswer"]);
-const EDITABLE = new Set(["comment", "rewrite", "subtasks", "create", "followUp", "runAnswer", "startRun", "githubReview"]);
+const INLINE = new Set(["comment", "transition", "subtasks", "create", "link", "update"]);
+const EDITABLE = new Set(["comment", "rewrite", "subtasks", "create", "githubReview"]);
 const KEYS = ["a", "e", "d", "s", "Enter", "o", "x", "A", "ArrowUp", " "];
 
 /** What each key should do, written out once so the table below reads as the rule. */
@@ -126,19 +126,12 @@ describe("the focused card's hint and shortcuts", () => {
   it("offers approve only where a approves", () => {
     expect(draftKeyHint(draft(INTENTS.comment))).toBe("a approve · e edit · d s skip · ↵ open");
     expect(draftKeyHint(draft(INTENTS.transition))).toBe("a approve · d s skip · ↵ open");
-    expect(draftKeyHint(draft(INTENTS.startRun))).toBe("e edit · d s skip · ↵ open");
+    expect(draftKeyHint(draft(INTENTS.startRun))).toBe("d s skip · ↵ open");
     expect(draftKeyHint(draft(INTENTS.rewrite))).toBe("e edit · d s skip · ↵ open");
     expect(draftKeyHint(draft(INTENTS.comment, { type: "applied" }))).toBe("↵ open");
     expect(draftKeyShortcuts(draft(INTENTS.comment))).toBe("a e d s Enter o");
     expect(draftKeyShortcuts(draft(INTENTS.transition))).toBe("a d s Enter o");
     expect(draftKeyShortcuts(draft(INTENTS.comment, { type: "skipped" }))).toBe("Enter o");
-  });
-
-  it("offers to send an answer, and nothing but skip once its run stopped asking", () => {
-    expect(draftKeyHint(draft(INTENTS.runAnswer))).toBe("a send · e edit · d s skip · ↵ open");
-    expect(draftKeyHint(draft(INTENTS.runAnswer), "approve")).toBe("↵ send this reply · any other key cancels");
-    expect(draftKeyHint(draft(INTENTS.runAnswer), null, false)).toBe("e edit · d s skip · ↵ open");
-    expect(draftKeyShortcuts(draft(INTENTS.runAnswer))).toBe("a e d s Enter o");
   });
 
   it("says what Enter confirms while an approval waits for it; a skip waits for nothing", () => {
@@ -297,7 +290,7 @@ describe("onDraftCardKey", () => {
     expect(a.ask).not.toHaveBeenCalledWith("approve");
   });
 
-  it("opens a run draft on a, and has nothing to approve with", () => {
+  it("opens a run draft from before on a, and has nothing to approve with", () => {
     const a = acts();
     press(a, draft(INTENTS.startRun), ["a"]);
     expect(a.open).toHaveBeenCalledTimes(1);
@@ -310,25 +303,6 @@ describe("onDraftCardKey", () => {
     expect(press(a, draft(INTENTS.comment), ["a", "j"])).toBe(false);
     expect(a.asking).toBeNull();
     expect(a.typed).toEqual([]);
-  });
-
-  it("sends an answer only on the Enter after a, the card showing its whole reply meanwhile", () => {
-    const a = acts();
-    expect(draftKeyAction(draft(INTENTS.runAnswer), "a")).toBe("approve");
-    expect(press(a, draft(INTENTS.runAnswer), ["a"])).toBe(true);
-    expect(a.asking).toBe("approve");
-    expect(a.approve).not.toHaveBeenCalled();
-    expect(press(a, draft(INTENTS.runAnswer), ["Enter"])).toBe(true);
-    expect(a.approve).toHaveBeenCalledTimes(1);
-    expect(a.open).not.toHaveBeenCalled();
-  });
-
-  it("never sends an answer a card has no send for, as when its run stopped asking", () => {
-    const a = acts();
-    const { approve, ...rest } = a;
-    for (const k of ["a", "Enter"]) onDraftCardKey(key(k, card()), draft(INTENTS.runAnswer), a.asking, rest);
-    expect(a.ask).not.toHaveBeenCalledWith("approve");
-    expect(approve).not.toHaveBeenCalled();
   });
 
   it("does nothing when the card has no handler for the action", () => {

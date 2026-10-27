@@ -8,13 +8,12 @@ export type DraftKeyAction = "approve" | "skip" | "open" | "edit";
 export const DRAFT_CARD = "article[data-draft]";
 
 /**
- * Drafts the card may approve in place. A rewrite is approved after its diff is read, a run after its prompt is read and a
- * follow-up after its message is read, so those only open. An answer's card shows its whole reply, so it is sent from there.
+ * Drafts the card may approve in place. A rewrite is approved after its diff is read, so it only opens.
  */
-const INLINE: ReadonlySet<Proposal["intent"]["type"]> = new Set(["comment", "transition", "subtasks", "create", "link", "update", "runAnswer"]);
+const INLINE: ReadonlySet<Proposal["intent"]["type"]> = new Set(["comment", "transition", "subtasks", "create", "link", "update"]);
 
 /** Drafts with something to edit: a transition or a link is only approved or skipped, and says nothing to change. */
-const EDITABLE: ReadonlySet<Proposal["intent"]["type"]> = new Set(["comment", "rewrite", "subtasks", "create", "followUp", "runAnswer", "startRun", "githubReview"]);
+const EDITABLE: ReadonlySet<Proposal["intent"]["type"]> = new Set(["comment", "rewrite", "subtasks", "create", "githubReview"]);
 
 /**
  * The one key model (`keyMap.ts`) on a draft: Enter and o open; a approves where the card can, or opens where approving
@@ -44,15 +43,14 @@ export type Asking = "approve";
 
 /**
  * The one line a focused card shows about its keys, or what it asks while the approval waits to be confirmed. `canApprove`
- * false leaves a out, for an answer whose run isn't asking any more or a review the token can't post; true lets a review
- * be posted. An answer is sent rather than approved, and a review posted. The words are the model's (`keyMap.ts`).
+ * false leaves a out, for a review the token can't post; true lets a review be posted. A review is posted rather than
+ * approved. The words are the model's (`keyMap.ts`).
  */
 export function draftKeyHint(p: Proposal, asking: Asking | null = null, canApprove = p.intent.type !== "githubReview"): string {
-  const answer = p.intent.type === "runAnswer";
   const review = p.intent.type === "githubReview";
-  if (asking) return `↵ ${answer ? "send this reply" : review ? "post this review" : "approve"} · any other key cancels`;
+  if (asking) return `↵ ${review ? "post this review" : "approve"} · any other key cancels`;
   const keys: string[] = [];
-  if (canApprove && draftKeyAction(p, "a", canApprove) === "approve") keys.push(answer ? "a send" : review ? "a post" : "a approve");
+  if (canApprove && draftKeyAction(p, "a", canApprove) === "approve") keys.push(review ? "a post" : "a approve");
   if (draftKeyAction(p, "e")) keys.push("e edit");
   if (draftKeyAction(p, "s")) keys.push("d s skip");
   keys.push("↵ open");

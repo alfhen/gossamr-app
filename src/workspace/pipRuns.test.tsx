@@ -134,41 +134,36 @@ describe("the sample Pip and agents", () => {
     expect(s.text).toContain("Waiting on you");
     expect(s.text).toContain("DEVOPS-471");
     expect(s.draft).toBeNull();
-    expect(s.runDraft ?? null).toBeNull();
+    expect(s.start ?? null).toBeNull();
     expect(agentSummary([], NOW)).toContain("no agent runs");
   });
 
   it("keeps a request to investigate on the investigation path, and takes the ticket the person named over the open one", () => {
     const open = { connectionId: "mock", externalId: "CA-402", key: "CA-402" };
     const mixed = scriptPip("which agents are running, investigate CA-406", { ...blank, item: open }, [], new MockBackend().runs.list());
-    expect(mixed.steps).toEqual(["Looked up CA-406", "Drafted an agent run"]);
-    expect(mixed.runDraft?.item).toEqual({ connectionId: "mock", externalId: "CA-406", key: "CA-406" });
-    expect(scriptPip("investigate CA-402", { ...blank, item: open }).runDraft?.item).toBe(open);
-    expect(scriptPip("start an agent", { ...blank, item: open }).runDraft?.item).toBe(open);
-    expect(scriptPip("which agents are running?", { ...blank, item: open }).runDraft ?? null).toBeNull();
+    expect(mixed.steps).toEqual(["Looked up CA-406", "Opened a workstream on CA-406", "Started an agent"]);
+    expect(mixed.start?.item).toEqual({ connectionId: "mock", externalId: "CA-406", key: "CA-406" });
+    expect(scriptPip("investigate CA-402", { ...blank, item: open }).start?.item).toBe(open);
+    expect(scriptPip("start an agent", { ...blank, item: open }).start?.item).toBe(open);
+    expect(scriptPip("which agents are running?", { ...blank, item: open }).start ?? null).toBeNull();
   });
 
-  it("proposes an investigation as a draft with a focus note and says it has not started", async () => {
+  it("starts an investigation with a focus note, opening the ticket's workstream, and tells the person", async () => {
     const item = { connectionId: "mock", externalId: "CA-402", key: "CA-402" };
     const s = scriptPip("Start an agent on CA-402 and look at the retry loop", { ...blank, item });
-    expect(s.runDraft).toEqual({ item, kind: "investigate", fromRun: null, focus: "the retry loop" });
-    expect(s.text).toContain("It has not started");
+    expect(s.start).toMatchObject({ item, role: "investigate", fromRun: null, brief: "the retry loop", open: { item } });
+    expect(s.text).toContain("It shows under Agents");
 
-    const backend = new MockBackend();
+    const backend = new MockBackend({ runs: { seed: "empty" } });
     await useWorkspace.getState().init(backend);
     const events: ClaudeEvent[] = [];
     const off = mockPipEvents.on((_, e) => events.push(e));
-    const before = backend.runs.list().length;
     const req: AskRequest = { requestId: "req-1", prompt: "investigate CA-402, focus on the retry loop", context: { ...blank, item }, sessionId: null };
     await mockAsk(req, backend, 0);
     off();
-    const drafts = backend.proposals.list();
-    const draft = drafts.find((p) => p.intent.type === "startRun" && p.origin.type === "chat");
-    expect(draft?.createdBy).toBe("pip");
-    expect(draft?.state.type).toBe("pending");
-    if (draft?.intent.type !== "startRun") throw new Error("no run draft");
-    expect(draft.intent.spec.focus).toBe("the retry loop");
-    expect(draft.intent.spec.kind).toBe("investigate");
-    expect(backend.runs.list().length).toBe(before);
+    const [run] = backend.runs.list();
+    expect(run).toMatchObject({ createdBy: "pip", state: "queued", spec: { kind: "investigate", focus: "the retry loop" }, origin: { type: "chat", requestId: "req-1" } });
+    expect(backend.workstreams.forItem("CA-402")?.id).toBe(run.spec.workstream);
+    expect(backend.proposals.list().filter((p) => p.intent.type === "startRun")).toEqual([]);
   });
 });

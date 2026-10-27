@@ -5,8 +5,6 @@ import { advanceRuns, askPip, jiraWrites, mockRuns, needsPane, openAgents, openA
 // draft is posted (G17), an edited draft reopening as a preview with Edit (G26), and the rail being a named region (G27).
 
 const SAMPLE = "runs=empty&prSurface=manual";
-const setup = (page: Page) => page.getByRole("dialog", { name: "Start an agent" });
-const runCards = (page: Page, key: string) => pipPane(page).getByRole("article", { name: `Start an agent: ${key}` });
 const newest = async (page: Page, kind: string) => (await mockRuns(page)).find((r) => r.kind === kind) ?? null;
 
 /** Pip has finished its turn. A turn can take a while on a busy runner, so this waits longer than the default. */
@@ -14,14 +12,10 @@ async function settled(page: Page) {
   await expect(pipPane(page).getByRole("button", { name: "Stop" })).toHaveCount(0, { timeout: 30_000 });
 }
 
-/** Asks Pip for `what` on CA-401 and starts it from the setup sheet, as the person does. */
+/** Asks Pip for `what` on CA-401 which starts it. */
 async function startStep(page: Page, what: string) {
   await askPip(page, what);
   await settled(page);
-  await runCards(page, "CA-401").last().getByRole("button", { name: "Review and start →" }).click();
-  await expect(setup(page)).toBeVisible();
-  await setup(page).getByRole("button", { name: "Start agent" }).click();
-  await expect(setup(page)).toHaveCount(0);
 }
 
 async function finish(page: Page, id: string) {

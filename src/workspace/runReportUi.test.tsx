@@ -1,10 +1,9 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MockBackend } from "../backend/mock";
-import type { ReportView, ResultSource, Run, RunOutcome, RunReview } from "../types";
+import type { ReportView, ResultSource, Run, RunOutcome } from "../types";
 import { RunSheetView, type RunSheetActions, type RunSheetViewProps } from "./RunSheet";
 import { reportNotes } from "./runSheetLogic";
-import { RunSetupView, type SetupViewProps } from "./RunSetup";
 
 const NOW = Date.parse("2026-09-30T12:00:00Z");
 const iso = (minutesAgo: number) => new Date(NOW - minutesAgo * 60_000).toISOString();
@@ -14,10 +13,10 @@ const report = (over: Partial<ReportView> = {}): ReportView => ({ offered: true,
 const outcome = (source: ResultSource | null, over: Partial<RunOutcome> = {}): RunOutcome => ({ note: { text: "add a backoff.", fromMarker: source !== "whole" }, keys: [], change: null, draft: null, ticket: null, ticketDraft: null, subtasks: [], subtasksDraft: null, source, ...over });
 
 const actions = (): RunSheetActions =>
-  ({ close: vi.fn(), attach: vi.fn(), askStop: vi.fn(), cancelStop: vi.fn(), stop: vi.fn(), startNow: vi.fn(), answer: vi.fn(), adoptSession: vi.fn(() => Promise.resolve()), retry: vi.fn(), fix: vi.fn(), copied: vi.fn(), openTicket: vi.fn(), reveal: vi.fn(), loadBrief: vi.fn(), draftComment: vi.fn(), askPip: vi.fn(), openDraft: vi.fn(), pickBlocker: vi.fn(), cancelBlocker: vi.fn(), draftBlocker: vi.fn(), openChange: vi.fn(), draftTicket: vi.fn(), openTicketDraft: vi.fn(), finishWithPip: vi.fn(), openCreated: vi.fn(), askPipBreakdown: vi.fn(), buildFromPlan: vi.fn(), draftPlanComment: vi.fn(), openPlanDraft: vi.fn(), reviewThis: vi.fn() }) as RunSheetActions;
+  ({ close: vi.fn(), attach: vi.fn(), askStop: vi.fn(), cancelStop: vi.fn(), stop: vi.fn(), startNow: vi.fn(), answer: vi.fn(), adoptSession: vi.fn(() => Promise.resolve()), retry: vi.fn(), fix: vi.fn(), copied: vi.fn(), openTicket: vi.fn(), reveal: vi.fn(), draftComment: vi.fn(), askPip: vi.fn(), openDraft: vi.fn(), pickBlocker: vi.fn(), cancelBlocker: vi.fn(), draftBlocker: vi.fn(), openChange: vi.fn(), draftTicket: vi.fn(), openTicketDraft: vi.fn(), finishWithPip: vi.fn(), openCreated: vi.fn(), askPipBreakdown: vi.fn(), buildFromPlan: vi.fn(), draftPlanComment: vi.fn(), openPlanDraft: vi.fn(), reviewThis: vi.fn() }) as RunSheetActions;
 
 const sheet = (r: Run, o: RunOutcome | null, over: Partial<RunSheetViewProps> = {}) =>
-  renderToStaticMarkup(<RunSheetView run={r} now={NOW} ticketTitle="Retry failed payment webhooks" place={null} wide={false} onWide={vi.fn()} events={[]} disk={null} brief={null} confirmStop={false} outcome={o} tickets={[]} pickBlocker={false} drafting={false} answering={false} opened={false} on={actions()} {...over} />);
+  renderToStaticMarkup(<RunSheetView run={r} now={NOW} ticketTitle="Retry failed payment webhooks" place={null} wide={false} onWide={vi.fn()} events={[]} disk={null} confirmStop={false} outcome={o} tickets={[]} pickBlocker={false} drafting={false} answering={false} opened={false} on={actions()} {...over} />);
 
 beforeEach(() => {
   vi.stubGlobal("localStorage", { getItem: () => null, setItem: () => {}, removeItem: () => {} });
@@ -80,62 +79,5 @@ describe("what the sheet says about the report tool", () => {
     expect(reportNotes(outcome("structured", { report: report({ status: "blocked" }) }))).toEqual(["It reports it could not finish."]);
     expect(reportNotes(outcome("structured", { report: report({ calls: 3, rejections: 1, revision: 2 }) }))).toEqual(["It called the tool 3 times: 1 refused, 2 recorded."]);
     expect(reportNotes(outcome("structured", { report: report() }))).toEqual([]);
-  });
-});
-
-describe("the setup sheet", () => {
-  const review = (): RunReview => ({
-    digest: "d",
-    prompt: "prompt",
-    instruction: "Investigate this work.",
-    focus: null,
-    ticketBlock: null,
-    guard: "guard text",
-    report: { allowed: "mcp__gossamr__report, mcp__gossamr__ask", guard: "Gossamr gives you tools that only reach Gossamr." },
-    spec: { kind: "investigate", repo: "acme/web", clonePath: "/Users/sample/Code/web", base: "main", name: "ca-1-x-ab12", instruction: "Investigate this work.", report: true },
-  });
-  const props = (over: Partial<SetupViewProps> = {}): SetupViewProps => ({
-    item: null,
-    ticketTitle: null,
-    kind: "investigate",
-    kindEditable: true,
-    pr: null,
-    prs: { status: "idle", query: "", choices: [], error: null },
-    repo: "acme/web",
-    repos: ["acme/web"],
-    shortage: null,
-    reposError: null,
-    repoEditable: true,
-    ticketless: false,
-    project: null,
-    projects: [],
-    choice: { clones: [{ path: "/Users/sample/Code/web", branch: "main", dirty: false, defaultBranch: "main" }], picked: null, fresh: null },
-    review: review(),
-    preflight: null,
-    phase: "ready",
-    busy: false,
-    error: null,
-    cloning: false,
-    cloneError: null,
-    changed: false,
-    fromPip: false,
-    instruction: "Investigate this work.",
-    onInstruction: vi.fn(),
-    base: "main",
-    onBase: vi.fn(),
-    wide: false,
-    onWide: vi.fn(),
-    on: { close: vi.fn(), discard: vi.fn(), start: vi.fn(), chooseRepo: vi.fn(), chooseClone: vi.fn(), cloneFresh: vi.fn(), retryRepos: vi.fn(), openSettings: vi.fn(), dismissChanged: vi.fn(), commit: vi.fn(), chooseKind: vi.fn(), chooseProject: vi.fn(), searchPrs: vi.fn(), choosePr: vi.fn(), setAllowPush: vi.fn() },
-    ...over,
-  });
-  const html = (p: SetupViewProps) => renderToStaticMarkup(<RunSetupView {...p} />);
-
-  it("has no switch for the report and shows the exact extras every launch adds", () => {
-    const out = html(props());
-    expect(out).not.toContain("Let the agent report its result to Gossamr");
-    expect(out).toContain("data-report-extras");
-    expect(out).toContain("mcp__gossamr__report, mcp__gossamr__ask");
-    expect(out).toContain("Gossamr gives you tools that only reach Gossamr.");
-    expect(out).toContain("never on the command line");
   });
 });

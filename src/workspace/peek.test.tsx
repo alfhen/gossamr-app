@@ -12,7 +12,7 @@ import { FilterNote, PipFilterNote } from "./PipExtras";
 import { ContextChip } from "./PipPane";
 import { DraftPreview } from "./DraftPreview";
 import { WorkDocView } from "./WorkDocView";
-import { TicketAgentsView, WorkstreamLine } from "./AgentMenu";
+import { TicketAgentsView, WorkstreamLine } from "./TicketAgents";
 import { useWorkView } from "./workViewStore";
 import { useTabs } from "./tabsStore";
 import { openOnAgents } from "./workstreamsStore";
@@ -270,22 +270,21 @@ describe("WorkDocView", () => {
 });
 
 describe("the workstream control", () => {
-  const item = { connectionId: "mock", externalId: "CA-401", key: "CA-401" };
   const view = { workstream: { id: "ws-1", connectionId: "mock", itemKey: "CA-401", repo: null, title: "CA-401 Retry", pipSession: null, pausedReason: null, notes: null, createdAt: "2026-10-01T10:00:00Z", closedAt: null, basis: null }, stage: "intake" as const, runs: [], labels: [], budget: { autoTurns: { used: 0, limit: 6 }, wakes: { used: 0, limit: 12 }, level: "ok" as const } };
   const noop = () => {};
 
   it("offers Close behind a confirm that says the agents and drafts are kept", () => {
-    const asking = renderToStaticMarkup(<WorkstreamControl item={item} workstream={view} onStart={noop} onOpen={noop} onAskClose={noop} onClose={noop} />);
+    const asking = renderToStaticMarkup(<WorkstreamControl workstream={view} onOpen={noop} onAskClose={noop} onClose={noop} />);
     expect(asking).toContain("Close…");
     expect(asking).not.toContain("Close workstream");
-    const confirming = renderToStaticMarkup(<WorkstreamControl item={item} workstream={view} onStart={noop} onOpen={noop} confirmingClose onAskClose={noop} onClose={noop} />);
+    const confirming = renderToStaticMarkup(<WorkstreamControl workstream={view} onOpen={noop} confirmingClose onAskClose={noop} onClose={noop} />);
     expect(confirming).toContain('aria-label="Close this workstream"');
     expect(confirming).toContain("Its agents and drafts are kept in General.");
     // And what Close does to an agent that is running or still queued (G24).
     expect(confirming).toContain(CLOSE_RUNS_NOTE);
     expect(confirming).toContain("Close workstream");
     expect(confirming).toContain("Keep");
-    expect(renderToStaticMarkup(<WorkstreamControl item={item} workstream={null} onStart={noop} onOpen={noop} onAskClose={noop} />)).toContain("Start a workstream");
+    expect(renderToStaticMarkup(<WorkstreamControl workstream={null} onOpen={noop} onAskClose={noop} />)).toBe("");
   });
 });
 

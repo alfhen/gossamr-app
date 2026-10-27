@@ -23,7 +23,7 @@ const run = (id: string, kind: RunKind, state: RunState, over: Partial<Run> = {}
   ...over,
 });
 
-const view = (id: string, key: string | null, over: { pausedReason?: PauseReason | null; stage?: WorkstreamStage; runs?: string[]; createdAt?: string; title?: string } = {}): WorkstreamView => ({
+const view = (id: string, key: string | null, over: { pausedReason?: PauseReason | null; stage?: WorkstreamStage; runs?: string[]; createdAt?: string; title?: string; closedAt?: string | null; pipAsk?: WorkstreamView["pipAsk"] } = {}): WorkstreamView => ({
   workstream: {
     id,
     connectionId: "mock",
@@ -34,9 +34,10 @@ const view = (id: string, key: string | null, over: { pausedReason?: PauseReason
     pausedReason: over.pausedReason ?? null,
     notes: null,
     createdAt: over.createdAt ?? iso(600),
-    closedAt: null,
+    closedAt: over.closedAt ?? null,
     basis: null,
   },
+  ...(over.pipAsk ? { pipAsk: over.pipAsk } : {}),
   stage: over.stage ?? "intake",
   runs: over.runs ?? [],
   labels: (over.runs ?? []).map((r, n) => [r, `R${n + 1}`]),
@@ -80,7 +81,6 @@ describe("needs: every kind", () => {
         workstreams: [ws1, view("ws-2", "CA-402", { pausedReason: "ceiling", createdAt: iso(50) })],
         proposals: [
           draft("d-comment", comment("CA-401"), 20),
-          draft("d-start", startRun("CA-401", "investigate", "ws-1"), 25),
           draft("d-review", review(), 26),
           draft("d-desc", rewrite("CA-401"), 27),
           draft("d-plan", rewrite("CA-401"), 28, { origin: { type: "run", runId: "r-plan", shortId: null, workstream: "ws-1" } }),
@@ -107,9 +107,8 @@ describe("needs: every kind", () => {
       paused: "unblock",
       draft: "approve",
       review: "approve",
-      runStart: "approve",
     });
-    expect(list).toHaveLength(11);
+    expect(list).toHaveLength(10);
     expect(by("plan")[0].target).toEqual({ type: "draft", id: "d-plan" });
     // The run's label is a parenthesis, not the subject: "R1 plan wrote the plan" reads wrong once the run is brought into a workstream (G12).
     expect(by("plan")[0].why).toMatch(/^An agent wrote the plan for CA-401 \(run R\d+\); approving/);
@@ -119,7 +118,6 @@ describe("needs: every kind", () => {
     expect(by("permission")[0].title).toBe("R2 asks to run a command");
     expect(by("failure")[0].title).toBe("R3 failed");
     expect(by("stoppedAtLimit")[0].title).toBe("R4 stopped at its limit");
-    expect(by("runStart")[0].title).toBe("Start Investigate");
     expect(by("draft")[0].target).toEqual({ type: "draft", id: "d-comment" });
     expect(by("review")[0].title).toBe("Draft review");
   });
@@ -128,7 +126,7 @@ describe("needs: every kind", () => {
     const list = needs(
       input({
         workstreams: [view("ws-1", "CA-401", { runs: ["r1", "r2", "r3", "r4", "r5", "r6", "r7"], pausedReason: "person" })],
-        proposals: [draft("d1", comment("CA-401"), 20), draft("d2", startRun("CA-401", "build", "ws-1"), 25), draft("d3", review(), 26), draft("d4", rewrite("CA-401"), 27), draft("d5", subtasks("CA-401"), 28)],
+        proposals: [draft("d1", comment("CA-401"), 20), draft("d3", review(), 26), draft("d4", rewrite("CA-401"), 27), draft("d5", subtasks("CA-401"), 28)],
         runs: [
           run("r1", "triage", "needsAnswer", { needs: "Which cache?" }),
           run("r2", "build", "needsPermission", { needs: "approve Bash: git push origin ca-401" }),
@@ -277,23 +275,12 @@ describe("needs: a triage's description update", () => {
 describe("needs: folding", () => {
   const ws = view("ws-1", "CA-401", { runs: ["r1", "r-b", "r-rev"] });
 
-  it("folds a runAnswer draft into its question: one need, which goes to the reply", () => {
+  it("ignores the history of drafts that started or messaged an agent: only a question the run asks is a need", () => {
     const asking = run("r1", "triage", "needsAnswer", { needs: "Which cache?" });
-    const list = needs(input({ workstreams: [ws], runs: [asking], proposals: [draft("reply", answer("r1"), 3), draft("newer", answer("r1"), 1)] }));
-    expect(list.map((n) => [n.key, n.kind, n.target])).toEqual([
-      ["draft:reply", "question", { type: "draft", id: "reply" }],
-      // A second answer for the same run is not folded: it is its own draft until the first is dealt with.
-      ["draft:newer", "draft", { type: "draft", id: "newer" }],
-    ]);
-    expect(list[0].runId).toBe("r1");
-    expect(list[0].title).toBe("R1 asks a question · Pip suggests a reply");
-    expect(list[0].primary.id).toBe("approve");
-    expect(needs(input({ workstreams: [ws], runs: [asking], proposals: [{ ...draft("reply", answer("r1"), 3), createdBy: "user" }] }))[0].title).toBe("R1 asks a question · a reply is drafted");
-  });
-
-  it("does not fold an answer for a run that isn't asking any more", () => {
-    const list = needs(input({ workstreams: [ws], runs: [run("r1", "triage", "working")], proposals: [draft("reply", answer("r1"), 3)] }));
-    expect(kinds(list)).toEqual(["draft"]);
+    const list = needs(input({ workstreams: [ws], runs: [asking], proposals: [draft("reply", answer("r1"), 3), draft("start", startRun("CA-401", "build", "ws-1"), 2)] }));
+    expect(list.map((n) => [n.key, n.kind, n.target])).toEqual([["run:r1", "question", { type: "run", id: "r1" }]]);
+    expect(list[0].primary.id).toBe("answer");
+    expect(needs(input({ workstreams: [ws], runs: [run("r1", "triage", "working")], proposals: [draft("reply", answer("r1"), 3)] }))).toEqual([]);
   });
 
   it("never shows a retired, superseded, applied, skipped or applying draft", () => {
@@ -450,13 +437,12 @@ describe("needs: where a need is", () => {
     expect(needsIn(list, null)).toBe(3);
   });
 
-  it("gives a ticket no cache holds the title its run or run draft kept in its snapshot, so every need reads KEY · Title", () => {
+  it("gives a ticket no cache holds the title its run kept in its snapshot, so every need reads KEY · Title", () => {
     expect(titleFromTicketBlock("SUP-9: Export timeout\nKind: task | Status: Open", "SUP-9")).toBe("Export timeout");
     expect(titleFromTicketBlock("SUP-90: Something else", "SUP-9")).toBeNull();
     expect(titleFromTicketBlock(null, "SUP-9")).toBeNull();
     const failed = run("f", "investigate", "failed", { item: ref("SUP-9"), spec: { ...base.spec, kind: "investigate", workstream: null, ticketBlock: "SUP-9: Export timeout\nDescription: none." } });
-    const start = draft("s", { type: "startRun", item: ref("WEB-120"), spec: { ...base.spec, kind: "investigate", ticketBlock: "WEB-120: Login redirect" } } as unknown as Intent, 2);
-    expect(needs(input({ runs: [failed], proposals: [start] })).map((n) => n.head)).toEqual(["SUP-9 · Export timeout", "WEB-120 · Login redirect"]);
+    expect(needs(input({ runs: [failed] })).map((n) => n.head)).toEqual(["SUP-9 · Export timeout"]);
     // A cached title still comes first.
     expect(needs(input({ runs: [failed], titleOf: (k) => (k === "SUP-9" ? "Export times out" : null) }))[0].head).toBe("SUP-9 · Export times out");
   });
@@ -520,7 +506,7 @@ describe("needGroups", () => {
     const [g] = needGroups(list);
     expect(g.safeBatch.map((n) => n.key)).toEqual(["draft:c1", "draft:c2", "draft:c3"]);
     expect([...BATCHABLE].sort()).toEqual(["comment", "subtasks", "transition"]);
-    const others = needs(input({ workstreams: [ws1], proposals: [draft("a", startRun("CA-401", "build", "ws-1"), 5), draft("b", review(), 4), draft("c", rewrite("CA-401"), 3)] }));
+    const others = needs(input({ workstreams: [ws1], proposals: [draft("a", rewrite("CA-401"), 5), draft("b", review(), 4), draft("c", rewrite("CA-401"), 3)] }));
     expect(needGroups(others)[0].safeBatch).toEqual([]);
     expect(others.every((n) => !n.batchable)).toBe(true);
     expect(list.filter((n) => n.batchable).map((n) => n.key).sort()).toEqual(["draft:c1", "draft:c2", "draft:c3", "draft:g1", "draft:o1"]);
@@ -574,22 +560,27 @@ describe("higherPriority", () => {
   });
 });
 
-describe("review nits", () => {
-  const why = (kind: RunKind) => needs(input({ workstreams: [view("ws-1", "CA-401")], proposals: [draft("d", startRun("CA-401", kind, "ws-1"), 5)] })).find((n) => n.kind === "runStart")?.why;
+describe("Pip asks you", () => {
+  const ws = (over: Parameters<typeof view>[2] = {}) => view("ws-1", "CA-401", { pipAsk: { question: "Which clone should I use for the build?", at: iso(7) }, ...over });
 
-  it("says \"an\" before a kind that starts with a vowel", () => {
-    expect(why("investigate")).toContain("drafted an Investigate agent for CA-401");
-    expect(why("build")).toContain("drafted a Build agent for CA-401");
+  it("is a Decide need from ask_person, in its workstream, opening the conversation", () => {
+    const [n] = needs(input({ workstreams: [ws()] }));
+    expect(n).toMatchObject({ key: "pip-ask:ws-1", group: "decide", kind: "pipAsk", workstreamId: "ws-1", title: "Pip asks you", target: { type: "workstream" } });
+    expect(n.why).toBe("Pip asks: “Which clone should I use for the build?”");
+    expect([n.primary.id, n.secondary.map((a) => a.id)]).toEqual(["reply", ["dismiss"]]);
+    expect(n.at).toBe(ws().pipAsk!.at);
   });
 
-  it("ranks a failed run by when it ended, not by its last progress", () => {
-    const list = needs(
-      input({
-        workstreams: [view("ws-1", "CA-401")],
-        runs: [run("r-a", "build", "failed", { lastProgressAt: iso(1), endedAt: iso(50) }), run("r-b", "verify", "failed", { lastProgressAt: iso(60), endedAt: iso(10) })],
-      }),
-    );
-    expect(list.map((n) => n.key)).toEqual(["run:r-a", "run:r-b"]);
+  it("is gone once the question is answered or dismissed, and never for a closed workstream", () => {
+    expect(needs(input({ workstreams: [ws({ pipAsk: null })] }))).toEqual([]);
+    expect(needs(input({ workstreams: [ws({ pipAsk: undefined })] }))).toEqual([]);
+    const closed = view("ws-1", "CA-401", { closedAt: iso(1), pipAsk: { question: "Still there?", at: iso(7) } });
+    expect(needs(input({ workstreams: [closed] }))).toEqual([]);
+  });
+
+  it("ranks with the decisions, ahead of what is stuck and what waits for approval", () => {
+    const list = needs(input({ workstreams: [ws()], runs: [run("r1", "build", "needsPermission", { needs: "approve Bash: git push" })], proposals: [draft("d1", comment("CA-401"), 20)] }));
+    expect(list.map((n) => n.kind)).toEqual(["pipAsk", "permission", "draft"]);
   });
 });
 
@@ -630,10 +621,6 @@ describe("the chip on a row (G6)", () => {
   });
 
   it("is the verb of the need's main button in Approve, so the tag and the button agree (G34)", () => {
-    expect(chipLabel({ group: "approve", kind: "runStart" })).toBe("Review");
-    const start = needs(input({ proposals: [draft("d-start", startRun("CA-401", "investigate", "ws-1"), 5)] })).find((n) => n.kind === "runStart")!;
-    expect(start.primary.label).toBe("Review and start");
-    expect(chipLabel(start)).toBe("Review");
     expect(chipLabel({ group: "approve", kind: "draft", primary: { label: "Send answer" } })).toBe("Send");
     expect(chipLabel({ group: "approve", kind: "draft", primary: { label: "Approve" } })).toBe("Approve");
     expect(chipLabel({ group: "unblock", kind: "question", primary: { label: "Send answer" } })).toBe("Unblock");

@@ -213,6 +213,7 @@ pub struct Polled {
 impl RunService {
     pub async fn poll(&self) -> Polled {
         let polled = self.poll_with(Utc::now).await;
+        self.deliver_queued().await;
         self.announce_notices(Utc::now()).await;
         polled
     }
@@ -220,6 +221,7 @@ impl RunService {
     /// One look at `claude agents` for every unfinished run of the signed-in account, at the time `now`.
     pub async fn poll_at(&self, now: DateTime<Utc>) -> Polled {
         let polled = self.poll_with(|| now).await;
+        self.deliver_queued().await;
         self.announce_notices(now).await;
         polled
     }
@@ -336,11 +338,17 @@ impl RunService {
                 needs.entry(Some(v.workstream.id.clone())).or_default().push(Need { group: Group::Unblock, run_id: None, what: "It is paused until you resume it".to_owned(), since: v.workstream.created_at });
             }
         }
-        // Every pending draft waits for approval, a plan or description rewrite as a decision. A reply drafted to a run's
-        // question is part of that question.
+        // A question Pip asked the person is a choice only they make.
+        for v in &views {
+            if let Some(ask) = &v.pip_ask {
+                let what = format!("Pip asks: {}", cut(&ask.question.split_whitespace().collect::<Vec<_>>().join(" "), 100));
+                needs.entry(Some(v.workstream.id.clone())).or_default().push(Need { group: Group::Decide, run_id: None, what, since: ask.at });
+            }
+        }
+        // Every pending draft waits for approval, a plan or description rewrite as a decision.
         for draft in &drafts {
             let workstream = draft.workstream().map(str::to_owned);
-            if closed(&workstream) || matches!(draft.intent, Intent::RunAnswer { .. }) {
+            if closed(&workstream) {
                 continue;
             }
             let from = match &draft.origin {
@@ -349,7 +357,6 @@ impl RunService {
             };
             let (group, what) = match &draft.intent {
                 Intent::Rewrite { .. } => (Group::Decide, "A description update waits for your approval".to_owned()),
-                Intent::StartRun { .. } => (Group::Approve, "A run waits for you to start it".to_owned()),
                 _ => match from.as_deref().and_then(|id| label_of(id, &workstream)) {
                     Some(name) => (Group::Approve, format!("{name} left a draft for you")),
                     None => (Group::Approve, "A draft waits for your approval".to_owned()),
@@ -520,20 +527,6 @@ impl RunService {
             // Where the run is filed is the person's to change while this poll looked (Bring them here, its Undo).
             self.core.save_observed_run(&run).await?;
             touched = true;
-        }
-        // An answer Pip suggested has nothing left to answer once the run finished or stopped without one, or moved on
-        // from the question it answers: answered in Terminal, or asking another. Each draft is held to the question the
-        // run asks now, not the one it asked last poll, so a run that was unclear in between still lets go of the
-        // answers to what it asked before. Only `answer` takes a run out of a question with the drafts left to it, and it
-        // decides them itself. A run that is only unclear for now keeps them.
-        let question = super::answer::asked(run.needs.as_deref());
-        if run.state != RunState::Unknown && (run.state != before.state || question != super::answer::asked(before.needs.as_deref())) {
-            let why = if ended { super::answer::NOT_ASKING } else { super::answer::MOVED_ON };
-            match self.core.retire_answer_drafts_not_for(run_id, run.state == RunState::NeedsAnswer, question.as_deref(), why).await {
-                Ok(0) => {}
-                Ok(_) => (self.drafted)(&run.connection_id),
-                Err(e) => eprintln!("couldn't retire the answers suggested for run {run_id}: {e}"),
-            }
         }
         if reopened {
             if let Err(e) = self.core.report_stale(run_id).await {

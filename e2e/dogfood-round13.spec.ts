@@ -47,17 +47,11 @@ test.describe("a comment draft for a keyboard and a screen reader (G4, G5, G6)",
 });
 
 test.describe("the palette's focus (G8)", () => {
-  test("stays in the search through a mouse pick of Start a workstream…, and What Jira saw from me opens on its heading", async ({ page }) => {
+  test("What Jira saw from me opens on its heading", async ({ page }) => {
     test.setTimeout(90_000);
     await openApp(page, "runs=empty");
     await page.keyboard.press("ControlOrMeta+k");
-    await page.keyboard.type("start");
     const dialog = page.getByRole("dialog", { name: "Command palette" });
-    await dialog.getByRole("option", { name: /Start a workstream…/ }).click();
-    await expect(dialog.getByRole("combobox")).toBeFocused();
-    await page.keyboard.press("Escape");
-    await expect(dialog).toHaveCount(0);
-    await page.keyboard.press("ControlOrMeta+k");
     await page.keyboard.type("What Jira saw");
     await dialog.getByRole("option", { name: /What Jira saw from me/ }).click();
     await expect(page.locator("[data-jira-sent]").getByRole("heading", { level: 1, name: "What Jira saw from me" })).toBeFocused();

@@ -51,12 +51,12 @@ export async function peekTicket(page: Page, key: string) {
 }
 
 /**
- * Peeks `key` and presses 'Start a workstream' there, then waits for the Pip pane to show the workstream's own
+ * Peeks `key` and presses 'Ask Pip' there, then waits for the Pip pane to show the workstream's own
  * conversation, still at intake.
  */
 export async function startWorkstream(page: Page, key: string) {
   await peekTicket(page, key);
-  await peekSheet(page).getByRole("button", { name: "Start a workstream" }).click();
+  await peekSheet(page).getByRole("button", { name: "Ask Pip" }).click();
   await expect(pipConversation(page)).toHaveText(new RegExp(`^Workstream: ${key} .* · Intake$`));
 }
 
@@ -98,6 +98,7 @@ interface Handle {
   launches(): MockLaunch[];
   workstreamEvents(): { workstreamId: string; actor: string; action: string; runId: string | null; detail?: string | null }[];
   scriptNext(kind: string, script: Script): void;
+  startAgent(key: string, kind: string, over?: { fromRun?: string; brief?: string }): string;
   askRun(id: string, question: string): void;
   askPermission(id: string, needs: string): void;
   blockRun(id: string): void;
@@ -167,6 +168,17 @@ export const scriptNextRun = (page: Page, kind: string, script: Script) =>
       mock.scriptNext(kind, script);
     },
     { kind, script, missing: NO_MOCK },
+  );
+
+/** Starts an agent of `kind` on ticket `key` as Pip's start_agent does and returns its run id; a build or review follows `over.fromRun`. */
+export const startAgent = (page: Page, key: string, kind: string, over: { fromRun?: string; brief?: string } = {}) =>
+  page.evaluate(
+    ({ key, kind, over, missing }) => {
+      const mock = (globalThis as Mocked).__gossamrMock;
+      if (!mock) throw new Error(missing);
+      return mock.startAgent(key, kind, over);
+    },
+    { key, kind, over, missing: NO_MOCK },
   );
 
 /** Has working run `id` ask the person `question`, as a run stopping to ask does (`MockRuns.ask`). */
@@ -562,31 +574,6 @@ export async function finishOnHome(page: Page, id: string) {
   await homeSettled(page);
 }
 
-/** Pip's run drafts on ticket `key` in the drawer's conversation, oldest first. */
-export const homeRunCards = (page: Page, key: string) => homeConversationRegion(page).getByRole("article", { name: `Start an agent: ${key}` });
-
-/**
- * Opens the 'Review and start' of run draft `card` and returns the review as shown: in place under a card on Agents
- * (the decision pane, a workstream's detail), or, from the Pip drawer's narrow card, the setup sheet. `by: "keyboard"`
- * presses Enter on the card instead of clicking its button; the card must have keyboard focus then.
- */
-export async function inlineStart(page: Page, card: Locator, by: "click" | "keyboard" = "click") {
-  // The drawer's card opens the setup sheet; the same draft read in place is the one Needs you opens.
-  if (by === "click" && (await card.evaluate((el) => !!el.closest("[data-pip-root]")))) {
-    await openNeedOfKind(page, "runStart");
-    card = needsPane(page);
-  }
-  const inPlace = card.getByRole("group", { name: "Review and start" });
-  const setup = page.getByRole("dialog", { name: "Start an agent" });
-  const review = inPlace.or(setup);
-  if (by === "click") await card.getByRole("button", { name: /^Review and start( →)?$/ }).click();
-  else await page.keyboard.press("Enter");
-  await expect(review).toBeVisible();
-  // Open in place, the review has its own Start and Hide; the card's own button is hidden meanwhile.
-  if (await inPlace.count()) await expect(card.getByRole("button", { name: "Review and start", exact: true })).toHaveCount(0);
-  return review;
-}
-
 /**
  * Asserts that something has keyboard focus and shows it: a focus outline; for Pip's input, which draws its ring as
  * its border, the border in Pip's colour; for a pane's resize handle, its lit bar. Returns a short description of the focused element.
@@ -617,33 +604,19 @@ export async function expectVisibleFocus(page: Page) {
   return seen.what;
 }
 
-const agentSetup = (page: Page) => page.getByRole("dialog", { name: "Start an agent" });
-/** The Agents view's cards; Pip's strip of agents shows runs too, and only the view counts. */
-const agentCards = (page: Page) => page.locator('main article[data-run-id]:not(aside[aria-label="Pip"] *):not(#workstream-sheet *)');
-const agentRunIds = async (page: Page) => (await agentCards(page).evaluateAll((els) => els.map((e) => e.getAttribute("data-run-id")))).filter((id): id is string => !!id);
-
 /**
- * Starts a Review of CA-402's build (pull request #218 in acme/webshop) from Review this, as review-verdict.spec does,
- * advances it to done, and opens CA-402's peek, where its GitHub review draft waits. `query` is added to the page's.
+ * Starts a Review of CA-402's build (pull request #218 in acme/webshop), as Pip's start_agent does, advances it to done,
+ * and opens CA-402's peek, where its GitHub review draft waits. `query` is added to the page's.
  */
 export async function reviewedDraft(page: Page, query = "") {
   await page.goto(`/?mockRepos=14${query}`);
   await page.getByRole("button", { name: "Start watching" }).click();
   await showWorkspace(page);
   await expect(page.getByText("CA-401", { exact: true }).first()).toBeVisible();
-  await page.getByRole("button", { name: /^Agents/ }).click();
-  await expect(agentCards(page).first()).toBeVisible();
-  const before = await agentRunIds(page);
-  const build = agentCards(page).filter({ hasText: "Build" }).filter({ hasText: "CA-402" });
-  await build.getByRole("button", { name: "Review this" }).click();
-  await expect(agentSetup(page)).toBeVisible();
-  await agentSetup(page).getByRole("button", { name: "Start agent" }).click();
-  await expect(agentSetup(page)).toHaveCount(0);
-  await expect.poll(async () => (await agentRunIds(page)).length).toBe(before.length + 1);
-  const id = (await agentRunIds(page)).find((r) => !before.includes(r))!;
+  const build = (await mockRuns(page)).find((r) => r.kind === "build" && r.key === "CA-402")!;
+  const id = await startAgent(page, "CA-402", "review", { fromRun: build.id });
   await advanceRuns(page, 3, id);
-  await expect(agentCards(page).and(page.locator(`[data-run-id="${id}"]`))).toHaveAttribute("data-state", "done");
-  await page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "All projects" }).click();
+  await expect.poll(async () => (await mockRuns(page)).find((r) => r.id === id)?.state).toBe("done");
   await peekTicket(page, "CA-402");
   const review = peekSheet(page).getByRole("article", { name: "GitHub review of acme/webshop#218" });
   await expect(review).toHaveCount(1);

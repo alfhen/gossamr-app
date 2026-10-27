@@ -6,7 +6,6 @@ import type { Run, RunState, WorkstreamView } from "../types";
 import { AgentCard, RunLabel, onActivate } from "./AgentCard";
 import { AgentRow } from "./AgentRow";
 import { FailureNext, OpenInTerminal } from "./AgentParts";
-import { AgentsBanners } from "./AgentsBanners";
 import { AgentsIntro } from "./AgentsEmpty";
 import { AgentsScreen, StopAll, keyAction, type AgentsActions, type AgentsScreenProps } from "./AgentsView";
 import { NO_FILTERS } from "./agentsLogic";
@@ -41,13 +40,12 @@ const on = (): AgentsActions => ({
   toggleEarlier: vi.fn(),
   setIntro: vi.fn(),
   dismissIntro: vi.fn(),
-  checkEnvironment: vi.fn(),
   retry: vi.fn(),
   fix: vi.fn(),
   retryLaunch: vi.fn(),
   copied: vi.fn(),
   stopAll: vi.fn(),
-  startAgent: vi.fn(),
+  askPip: vi.fn(),
   openSafety: vi.fn(),
 });
 
@@ -57,7 +55,7 @@ const screen = (over: Partial<AgentsScreenProps> = {}) =>
       runs={eight()}
       status="ready"
       error={null}
-      environment={{ claude: "ok", version: "2.1.286" }}
+     
       filters={NO_FILTERS}
       selectedId={null}
       earlierOpen={false}
@@ -117,7 +115,7 @@ describe("a failed launch on a card", () => {
   it.each([
     ["notSignedIn", "Claude isn't signed in.", ["Open Terminal to sign in", "Retry"], true],
     ["claudeMissing", "Claude Code isn't installed, or Gossamr can't find it.", ["Open the install page", "Retry"], false],
-    ["noClone", "The clone this run was set up for can't be used any more.", ["Start it again and choose a clone", "Retry"], false],
+    ["noClone", "The clone this run was set up for can't be used any more.", ["Clone it", "Choose clone", "Retry"], false],
     ["capReached", "Too many agents are running at once.", ["Retry"], false],
   ])("gives %s its own line and next step", (type, line, expected, gated) => {
     const out = card(failed(type));
@@ -209,7 +207,7 @@ describe("grouped by workstream", () => {
   });
 
   it("groups by Workstream when no grouping is asked for", () => {
-    const out = renderToStaticMarkup(<AgentsScreen runs={eight()} status="ready" error={null} environment={{ claude: "ok", version: "2.1.286" }} filters={NO_FILTERS} selectedId={null} earlierOpen={false} introShown={false} view="cards" stopping={false} opened={new Set()} now={NOW} ticketTitle={() => null} on={on()} />);
+    const out = renderToStaticMarkup(<AgentsScreen runs={eight()} status="ready" error={null} filters={NO_FILTERS} selectedId={null} earlierOpen={false} introShown={false} view="cards" stopping={false} opened={new Set()} now={NOW} ticketTitle={() => null} on={on()} />);
     expect(out).toMatch(/aria-pressed="true"[^>]*>Workstream</);
     expect(out).toContain("data-workstream-group");
     expect(out).not.toContain("data-lane=");
@@ -424,7 +422,9 @@ describe("empty, first-run and errors", () => {
   it("says there are no agents once the explainer is dismissed", () => {
     const out = screen({ runs: [] });
     expect(out).toContain("No agents yet");
-    expect(out).toContain("Nothing runs until you approve it.");
+    expect(out).toContain("When Pip starts one it appears here");
+    expect(out).toContain("You can stop any of them.");
+    expect(out).not.toMatch(/approve/i);
     expect(out).toContain("Nothing running");
   });
 
@@ -437,7 +437,7 @@ describe("empty, first-run and errors", () => {
   it("states the limits honestly in the explainer", () => {
     const out = renderToStaticMarkup(<AgentsIntro onDismiss={vi.fn()} />).replace(/&#x27;/g, "'");
     for (const phrase of [
-      "You approve each one first.",
+      "Pip starts an agent when you ask, and tells you about any it starts on its own.",
       "A Build runs as you, with your own Claude settings: anything your Claude can do, it can do.",
       "Read-only steps are signed in as you but run without your settings.",
       "Investigate, Triage, Plan, Review and Verify are read-only: Claude Code itself refuses their file edits and writing commands, and your own and the repository's allow rules don't apply.",
@@ -456,28 +456,6 @@ describe("empty, first-run and errors", () => {
   it("waits quietly for the first read", () => {
     expect(screen({ runs: [], status: "loading" })).toContain("Loading agents…");
     expect(screen({ runs: [], status: "idle" })).toContain("Loading agents…");
-  });
-
-  it("explains a missing Claude with the install command and a way to check again", () => {
-    const out = renderToStaticMarkup(<AgentsBanners environment={{ claude: "missing", version: null }} loadError={null} onCheckAgain={vi.fn()} onRetry={vi.fn()} />);
-    expect(out).toContain("installed on this Mac");
-    expect(out).toContain("curl -fsSL https://claude.ai/install.sh | bash");
-    expect(out).toContain("Check again");
-    expect(out).toContain('role="alert"');
-  });
-
-  it("explains a signed-out Claude", () => {
-    const out = renderToStaticMarkup(<AgentsBanners environment={{ claude: "signedOut", version: "2.1.286" }} loadError={null} onCheckAgain={vi.fn()} onRetry={vi.fn()} />);
-    expect(out).toContain("signed in");
-    expect(out).toContain("/login");
-    expect(out).not.toContain("installed on this Mac");
-  });
-
-  it("shows no banner when Claude is fine or the check could not be made", () => {
-    for (const claude of ["ok", "unknown"] as const) {
-      expect(renderToStaticMarkup(<AgentsBanners environment={{ claude, version: null }} loadError={null} onCheckAgain={vi.fn()} onRetry={vi.fn()} />)).toBe("");
-    }
-    expect(renderToStaticMarkup(<AgentsBanners environment={null} loadError={null} onCheckAgain={vi.fn()} onRetry={vi.fn()} />)).toBe("");
   });
 
   it("shows why the runs could not be read, with Retry, and keeps what it had", () => {

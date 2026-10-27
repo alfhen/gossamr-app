@@ -38,12 +38,12 @@ pub struct StopAll {
     pub waiting: usize,
 }
 
-/// An approved run queued only because the cap was full: it has no session, and it would start on its own.
+/// A run queued only because the cap was full: it has no session, and it would start on its own.
 fn waits_for_slot(run: &Run) -> bool {
     run.state == RunState::Queued && run.slot_wait_since.is_some() && run.short_id.is_none()
 }
 
-/// An approved run that hasn't launched: queued with no session, whether it waits for a slot or not. Under the launch
+/// A run that hasn't launched: queued with no session, whether it waits for a slot or not. Under the launch
 /// lock nothing can launch it, so it is withdrawn (stopped before it started) without asking Claude anything.
 fn withdrawable(run: &Run) -> bool {
     run.state == RunState::Queued && run.short_id.is_none()
@@ -221,10 +221,15 @@ impl RunService {
     /// hasn't launched, waiting for a slot or not, has no session yet, so it is withdrawn: marked stopped before it
     /// started, without asking Claude anything (the person's Cancel).
     pub async fn stop(&self, run_id: &str) -> Result<Run> {
+        self.stop_as(run_id, Actor::Person).await
+    }
+
+    /// `stop`, recorded as `by`'s. Whoever it is, the supervisor takes the stop for a deliberate one and wakes nobody.
+    pub async fn stop_as(&self, run_id: &str, by: Actor) -> Result<Run> {
         let _turn = self.launching.lock().await;
         let mut run = self.load(run_id).await?;
         if withdrawable(&run) {
-            self.withdraw(&mut run).await?;
+            self.withdraw(&mut run, by).await?;
             return Ok(run);
         }
         if !can_stop(run.state) {
@@ -243,7 +248,7 @@ impl RunService {
         }
         self.reset_counts(&run.id);
         // Before the run reads as stopped, so the waker never takes it for a stop from outside.
-        self.note_person(&run, "run_stopped", None).await;
+        self.note_by(&run, by, "run_stopped", None).await;
         self.store(&run).await?;
         Ok(run)
     }
@@ -269,16 +274,16 @@ impl RunService {
 
     /// Marks a run waiting for a slot stopped before it started; there is no session, so Claude isn't asked. Called with
     /// the launch lock held, so nothing launches it in between.
-    async fn withdraw(&self, run: &mut Run) -> Result<()> {
+    async fn withdraw(&self, run: &mut Run, by: Actor) -> Result<()> {
         Self::stopped(run);
         run.slot_wait_since = None;
         run.error = Some(NOT_STARTED.into());
-        self.note_person(run, "run_stopped", None).await;
+        self.note_by(run, by, "run_stopped", None).await;
         self.store(run).await?;
         Ok(())
     }
 
-    /// Stops the runs Gossamr started, in any account, and, in this one, the approved runs waiting for a slot, all under
+    /// Stops the runs Gossamr started, in any account, and, in this one, the queued runs waiting for a slot, all under
     /// one hold of the launch lock: the slots it frees are never taken by a waiting run. A session that isn't in the run
     /// index is never touched.
     pub async fn stop_all(&self) -> Result<StopAll> {
@@ -323,7 +328,7 @@ impl RunService {
             if !waits_for_slot(&run) {
                 continue;
             }
-            match self.withdraw(&mut run).await {
+            match self.withdraw(&mut run, Actor::Person).await {
                 Ok(()) => tally.waiting += 1,
                 Err(e) => {
                     eprintln!("couldn't stop waiting run {}: {e}", run.id);

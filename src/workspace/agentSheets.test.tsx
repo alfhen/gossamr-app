@@ -1,22 +1,17 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MockBackend } from "../backend/mock";
-import { itemRef } from "../backend/mockConnector";
-import { renderPrompt } from "../backend/mockRuns";
-import type { AgentSettings, CodeChange, ItemRef, Preflight, ReadOnly, Run, RunEvent, RunReview, RunSpec, RunState, WorkstreamView } from "../types";
-import { AgentMenuView, TicketAgentRows, TicketAgentsView } from "./AgentMenu";
+import type { AgentSettings, Run, RunEvent, RunSpec, RunState, WorkstreamView } from "../types";
+import { TicketAgentRows, TicketAgentsView } from "./TicketAgents";
 import { AgentsIntro } from "./AgentsEmpty";
 import { AgentsSettingsView, type CleanupOffer } from "./AgentsSettings";
-import { RunSetupView, setupBlock, type SetupViewProps } from "./RunSetup";
 import { sheetFocusTarget } from "./AgentSheet";
 import { focusDecision, READ_ONLY_STEP_NOTE } from "./PermissionAsk";
 import { RunSheetView, type RunSheetActions, type RunSheetViewProps } from "./RunSheet";
 import { INSTRUCTIONS } from "../backend/mockRunKinds";
-import { RunPreflight } from "./RunPreflight";
-import { COPY, MAY_TOUCH, SAFETY_SUMMARY, prChoices, sheetTopOn } from "./runSheetLogic";
+import { COPY, MAY_TOUCH, SAFETY_SUMMARY, sheetTopOn } from "./runSheetLogic";
 import { PipLauncher } from "./PipExtras";
 import { useRuns } from "./runsStore";
-import { useRunSetup } from "./runSetupStore";
 import { placesOf } from "./RunWhere";
 import { offsetText } from "./RunTimeline";
 
@@ -27,10 +22,17 @@ const seeded = () => new MockBackend().runs.list();
 
 const run = (state: RunState, over: Partial<Run> = {}): Run => ({ ...seeded()[0], id: `r-${state}`, state, needs: null, lastDetail: null, tokens: 212_000, result: null, error: null, shortId: "1000a000", lastProgressAt: iso(1), queuedAt: iso(10), endedAt: null, ...over });
 
-const actions = (): RunSheetActions => ({ close: vi.fn(), attach: vi.fn(), askStop: vi.fn(), cancelStop: vi.fn(), stop: vi.fn(), startNow: vi.fn(), answer: vi.fn(), adoptSession: vi.fn(() => Promise.resolve()), retry: vi.fn(), fix: vi.fn(), copied: vi.fn(), openTicket: vi.fn(), reveal: vi.fn(), loadBrief: vi.fn(), draftComment: vi.fn(), askPip: vi.fn(), openDraft: vi.fn(), pickBlocker: vi.fn(), cancelBlocker: vi.fn(), draftBlocker: vi.fn(), openChange: vi.fn(), draftTicket: vi.fn(), openTicketDraft: vi.fn(), finishWithPip: vi.fn(), openCreated: vi.fn(), askPipBreakdown: vi.fn(), buildFromPlan: vi.fn(), draftPlanComment: vi.fn(), openPlanDraft: vi.fn(), reviewThis: vi.fn() });
+const actions = (): RunSheetActions => ({ close: vi.fn(), attach: vi.fn(), askStop: vi.fn(), cancelStop: vi.fn(), stop: vi.fn(), startNow: vi.fn(), answer: vi.fn(), adoptSession: vi.fn(() => Promise.resolve()), retry: vi.fn(), fix: vi.fn(), copied: vi.fn(), openTicket: vi.fn(), reveal: vi.fn(), draftComment: vi.fn(), askPip: vi.fn(), openDraft: vi.fn(), pickBlocker: vi.fn(), cancelBlocker: vi.fn(), draftBlocker: vi.fn(), openChange: vi.fn(), draftTicket: vi.fn(), openTicketDraft: vi.fn(), finishWithPip: vi.fn(), openCreated: vi.fn(), askPipBreakdown: vi.fn(), buildFromPlan: vi.fn(), draftPlanComment: vi.fn(), openPlanDraft: vi.fn(), reviewThis: vi.fn() });
 
 const sheet = (r: Run, over: Partial<RunSheetViewProps> = {}) =>
-  renderToStaticMarkup(<RunSheetView run={r} now={NOW} ticketTitle="Retry failed payment webhooks" place={{ index: 2, total: 8 }} wide={false} onWide={vi.fn()} events={[]} disk={null} brief={null} confirmStop={false} outcome={null} tickets={[]} pickBlocker={false} drafting={false} answering={false} opened={false} on={actions()} {...over} />);
+  renderToStaticMarkup(<RunSheetView run={r} now={NOW} ticketTitle="Retry failed payment webhooks" place={{ index: 2, total: 8 }} wide={false} onWide={vi.fn()} events={[]} disk={null} confirmStop={false} outcome={null} tickets={[]} pickBlocker={false} drafting={false} answering={false} opened={false} on={actions()} {...over} />);
+
+const attrsOf = (html: string, label: string) => new RegExp(`<button([^>]*)>(?:(?!</button>)[\\s\\S])*?${label}</button>`).exec(html)?.[1];
+const disabled = (html: string, label: string) => {
+  const attrs = attrsOf(html, label);
+  expect(attrs, `a "${label}" button`).toBeDefined();
+  return /disabled=""/.test(attrs!);
+};
 
 const buttons = (html: string) => [...html.matchAll(/<button[^>]*>([\s\S]*?)<\/button>/g)].map((m) => m[1].replace(/<[^>]+>/g, "").trim());
 
@@ -268,10 +270,10 @@ describe("the run sheet, by state", () => {
       expect(disabled(html, "Retry")).toBe(false);
     });
 
-    it("points a missing clone at starting the agent again with a clone chosen", () => {
+    it("offers Clone it and Choose clone for a missing clone, and Pip starts the agent again", () => {
       const html = sheet(failedOf("noClone"));
-      expect(buttons(html)).toContain("Start it again and choose a clone");
-      expect(html).toContain("choose a clone of acme/storefront");
+      expect(buttons(html)).toEqual(expect.arrayContaining(["Clone it", "Choose clone"]));
+      expect(html).toContain("choose a clone of it, and Pip starts the agent again");
       expect(html).not.toContain("Or run this");
     });
 
@@ -280,7 +282,7 @@ describe("the run sheet, by state", () => {
       expect(html).toContain("Too many agents are running at once.");
       expect(html).toContain("3 agents are already running");
       expect(buttons(html).filter((b) => b === "Retry")).toHaveLength(1);
-      expect(buttons(html)).not.toContain("Start it again and choose a clone");
+      expect(buttons(html)).not.toContain("Clone it");
     });
 
     it("wires the buttons to the actions", () => {
@@ -399,309 +401,19 @@ describe("what it did", () => {
   });
 });
 
-describe("the brief as it was sent", () => {
-  it("is read when opened and shows the same prompt parts as the setup sheet", () => {
+describe("what the agent was told", () => {
+  it("is on the sheet from the run's own spec, with Pip's focus note apart from the instruction", () => {
     const spec: RunSpec = { ...seeded()[0].spec, focus: "Look at the retry loop.", ticketBlock: "CA-1: t" };
-    const brief: RunReview = { digest: "abc", prompt: renderPrompt(spec), instruction: spec.instruction, focus: spec.focus ?? null, ticketBlock: spec.ticketBlock ?? null, guard: "GUARD TEXT", spec };
-    const html = sheet(run("working"), { brief });
+    const html = sheet(run("working", { spec }));
+    expect(html).toContain("What the agent was told");
     expect(html).toContain("Focus · written by Pip");
-    expect(html).toContain("GUARD TEXT");
-    expect(html).toContain("What you approved:");
-    expect(sheet(run("working"), { brief: "loading" })).toContain("Loading…");
-  });
-});
-
-const ok: Preflight = { rows: [{ level: "green", text: "Claude Code 2.1.286" }, { level: "amber", text: "Clone is dirty" }], blocking: false };
-
-const reviewOf = (over: Partial<RunSpec> = {}): RunReview => {
-  const spec: RunSpec = { ...seeded()[0].spec, name: "ca-401-fix-ab12", ...over };
-  return { digest: "mock-1", prompt: renderPrompt(spec), instruction: spec.instruction, focus: spec.focus ?? null, ticketBlock: spec.ticketBlock ?? null, guard: "GUARD TEXT", spec };
-};
-
-const setup = (over: Partial<SetupViewProps> = {}) => {
-  const review = over.review === undefined ? reviewOf() : over.review;
-  const props: SetupViewProps = {
-    item: itemRef("CA-401"),
-    ticketTitle: "Welcome flow refresh",
-    kind: "investigate",
-    kindEditable: true,
-    pr: null,
-    prs: { status: "idle", query: "", choices: [], error: null },
-    repo: "acme/storefront",
-    repos: ["acme/storefront", "acme/payments"],
-    shortage: null,
-    reposError: null,
-    repoEditable: true,
-    ticketless: false,
-    project: null,
-    projects: [],
-    choice: { clones: [{ path: "/Users/sample/Code/storefront", branch: "main", dirty: false, defaultBranch: "main" }], picked: null, fresh: null },
-    review,
-    preflight: ok,
-    phase: "ready",
-    busy: false,
-    error: null,
-    cloning: false,
-    cloneError: null,
-    changed: false,
-    fromPip: false,
-    instruction: review?.instruction ?? "",
-    onInstruction: vi.fn(),
-    base: "main",
-    onBase: vi.fn(),
-    wide: false,
-    onWide: vi.fn(),
-    on: { close: vi.fn(), discard: vi.fn(), start: vi.fn(), chooseRepo: vi.fn(), chooseClone: vi.fn(), cloneFresh: vi.fn(), retryRepos: vi.fn(), openSettings: vi.fn(), dismissChanged: vi.fn(), commit: vi.fn(), chooseKind: vi.fn(), chooseProject: vi.fn(), searchPrs: vi.fn(), choosePr: vi.fn(), setAllowPush: vi.fn() },
-    ...over,
-  };
-  return renderToStaticMarkup(<RunSetupView {...props} />);
-};
-
-/** The attributes of the button whose label is `label`. */
-const attrsOf = (html: string, label: string) => new RegExp(`<button([^>]*)>(?:(?!</button>)[\\s\\S])*?${label}</button>`).exec(html)?.[1];
-const disabled = (html: string, label: string) => {
-  const attrs = attrsOf(html, label);
-  expect(attrs, `a "${label}" button`).toBeDefined();
-  return /disabled=""/.test(attrs!);
-};
-
-describe("the setup sheet", () => {
-  it("shows the prompt as the backend rendered it, in labelled parts", () => {
-    const review = reviewOf({ focus: "Look at the retry loop.", ticketBlock: "CA-401: Welcome flow refresh\n\nBody text" });
-    const html = setup({ review });
-    expect(html).toContain("Which branch it starts from");
-    expect(html).toContain("What to do (you can edit this)");
-    expect(html).toContain("Ticket from Jira, with its comments");
-    expect(html).toContain("Show the whole prompt as one piece");
-    expect(html).toContain('data-copy="' + review.prompt.replace(/&/g, "&amp;").replace(/'/g, "&#x27;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;") + '"');
-  });
-
-  it("shows Pip's focus note in a box of its own, labelled as Pip's, apart from the instruction", () => {
-    const html = setup({ review: reviewOf({ focus: "Look at the retry loop.", focusFromRun: "run-9" }), fromPip: true });
-    expect(html).toContain('aria-label="Focus note from Pip"');
-    expect(html).toContain("Focus · written by Pip");
-    expect(html).toContain("Written after reading the output of run run-9");
-    expect(html).toContain("Sent apart from the instruction, as data, not instructions. 23 of 300 characters.");
-    expect(html).toContain("Proposed by Pip");
-    const textarea = /<textarea[\s\S]*?<\/textarea>/.exec(html)![0];
-    expect(textarea).not.toContain("Look at the retry loop.");
-    expect(setup({ review: reviewOf() })).not.toContain("Focus · written by Pip");
-  });
-
-  it("leads with what the agent can do, and keeps the technical checks and the command behind a closed Technical details (G22)", () => {
-    const green: Preflight = { rows: [{ level: "green", text: "Agents run as you, in your permission mode: auto" }], blocking: false };
-    const html = setup({ preflight: green });
-    const details = html.indexOf("Technical details");
-    expect(details).toBeGreaterThan(-1);
-    // What it may do comes before the prompt and before the checks, and the details stay closed while every check is fine.
-    expect(html.indexOf("What agents can do")).toBeLessThan(html.indexOf("The prompt"));
-    expect(html.indexOf("What agents can do")).toBeLessThan(details);
-    expect(html).toMatch(/<details class="group"[^>]*><summary[^>]*>[^]*?Technical details/);
-    expect(/<details class="group" open=""[^>]*><summary[^>]*>(?:(?!<\/summary>)[^])*Technical details/.test(html)).toBe(false);
-    // The checks and the command are still in the page, inside it.
-    const inside = html.slice(details);
-    expect(inside).toContain('aria-label="Checks before you approve"');
-    expect(inside).toContain("Agents run as you, in your permission mode: auto");
-    expect(inside).toContain("Show the exact command");
-    const redRow: Preflight = { rows: [{ level: "red", text: "Not signed in to Claude." }], blocking: true };
-    // A row that blocks or warns opens it, so nothing to act on is hidden.
-    expect(setup({ preflight: redRow })).toMatch(/<details class="group" open=""[^>]*><summary[^>]*>(?:(?!<\/summary>)[^])*Technical details/);
-  });
-
-  it("puts the read-only line first in what agents can do (G22)", () => {
-    const readOnly: ReadOnly = { mode: "dontAsk", allow: ["Read"], deny: ["Edit"], guard: "g", settingSources: "", strictMcpConfig: true };
-    const html = setup({ review: { ...reviewOf(), readOnly } });
-    const box = html.slice(html.indexOf("What agents can do"));
-    expect(box.indexOf("data-read-only")).toBeGreaterThan(-1);
-    expect(box.indexOf("data-read-only")).toBeLessThan(box.indexOf("signed in as you"));
-  });
-
-  it("turns Start off, with the red row as the reason, and leaves it on for amber rows", () => {
-    expect(disabled(setup(), "Start agent")).toBe(false);
-    const red: Preflight = { rows: [{ level: "red", text: "3 agents are running, the most Gossamr starts at once (3)." }], blocking: true };
-    const html = setup({ preflight: red });
-    expect(disabled(html, "Start agent")).toBe(true);
-    expect(html).toContain("3 agents are running, the most Gossamr starts at once (3).");
-    expect(html).toContain("Blocks starting");
-  });
-
-  it("says plainly when there is no clone, and turns Start off", () => {
-    const html = setup({ choice: { clones: [], picked: null, fresh: null }, review: null, preflight: null });
-    expect(html).toContain("No clone of acme/storefront found");
-    expect(html).toContain("~/Code, ~/Developer and ~/src");
-    expect(disabled(html, "Start agent")).toBe(true);
-  });
-
-  describe("with no clone, the fresh copy", () => {
-    const fresh = { path: "/Users/sample/Gossamr/agents/acme/storefront", command: "git clone https://github.com/acme/storefront.git /Users/sample/Gossamr/agents/acme/storefront", ghFallback: true, occupied: false };
-    const none = (over: Partial<SetupViewProps> = {}, f = fresh) => setup({ choice: { clones: [], picked: null, fresh: f }, review: null, preflight: null, ...over });
-
-    it("shows the folder and the exact command before anything is cloned", () => {
-      const html = none();
-      expect(html).toContain("Or use a fresh copy in ~/Gossamr/agents/acme/storefront");
-      expect(html).toContain('data-copy="git clone https://github.com/acme/storefront.git /Users/sample/Gossamr/agents/acme/storefront"');
-      expect(html).toContain("the repository&#x27;s own hooks don&#x27;t run");
-      expect(html).toContain("gh repo clone");
-      expect(html).toContain("trust it once: the checks below offer a button that opens Terminal there");
-      expect(disabled(html, "Clone into ~/Gossamr/agents/acme/storefront")).toBe(false);
-      expect(disabled(html, "Start agent")).toBe(true);
-    });
-
-    it("leaves out the gh sentence when gh isn't there, and the whole offer when there is none", () => {
-      expect(none({}, { ...fresh, ghFallback: false })).not.toContain("gh repo clone");
-      expect(setup({ choice: { clones: [], picked: null, fresh: null }, review: null, preflight: null })).not.toContain("fresh copy");
-    });
-
-    it("says so when something else is in the way, and offers no clone", () => {
-      const html = none({}, { ...fresh, occupied: true });
-      expect(html).toContain("isn&#x27;t a clone of acme/storefront");
-      expect(html).not.toContain("git clone https");
-      expect(disabled(html, "Clone into ~/Gossamr/agents/acme/storefront")).toBe(true);
-    });
-
-    it("shows progress and, on failure, the reason and the command that usually fixes sign-in", () => {
-      expect(disabled(none({ cloning: true }), "Cloning…")).toBe(true);
-      const html = none({ cloneError: "Git couldn't sign in to GitHub: terminal prompts disabled" });
-      expect(html).toContain('role="alert"');
-      expect(html).toContain("terminal prompts disabled");
-      expect(html).toContain('data-copy="gh auth setup-git"');
-    });
-  });
-
-  it("asks which repository when none is chosen", () => {
-    const html = setup({ repo: null, review: null, choice: null, preflight: null });
-    expect(html).toContain("Choose a repository…");
-    expect(html).toContain("Choose a repository first");
-  });
-
-  describe("the kind picker", () => {
-    const kinds = (html: string) => /role="group" aria-label="Kind of work"[\s\S]*?<\/div>/.exec(html)![0];
-    const pressed = (html: string, kind: string) => new RegExp(`aria-pressed="(true|false)"[^>]*>(?:(?!</button>)[\\s\\S])*?<b[^>]*>${kind}</b>`).exec(html)?.[1];
-
-    it("offers all six kinds, none marked as coming later, with the chosen one pressed", () => {
-      const html = setup();
-      expect(html).not.toContain("Coming later");
-      expect(kinds(html).match(/<button[^>]*aria-pressed/g)).toHaveLength(6);
-      expect(pressed(kinds(html), "Investigate")).toBe("true");
-      expect(pressed(kinds(html), "Triage")).toBe("false");
-      expect(kinds(html)).not.toContain('disabled=""');
-    });
-
-    it("turns Build off without a ticket, and says why", () => {
-      const html = setup({ item: null });
-      expect(kinds(html)).toContain("Needs a ticket");
-      expect(/<button[^>]*disabled=""[^>]*title="Build needs a ticket"/.test(html)).toBe(true);
-    });
-
-    it("locks the kinds the person didn't pick when the draft isn't this sheet's own", () => {
-      const html = kinds(setup({ kindEditable: false }));
-      expect(html.match(/<button[^>]*disabled=""/g)).toHaveLength(5);
-      expect(pressed(html, "Investigate")).toBe("true");
-    });
-
-    it("shows the push option only for Build, off, with the honest sentence", () => {
-      expect(setup()).not.toContain("Push its branch and open a draft pull request");
-      const html = setup({ kind: "build", review: reviewOf({ kind: "build", allowPush: false }) });
-      expect(html).toContain("Push its branch and open a draft pull request");
-      expect(html).toContain("On by default");
-      expect(html).toContain("never mark it ready and never merge it");
-      expect(/<input type="checkbox"[^>]*checked=""/.test(html)).toBe(false);
-      expect(html).toContain("not a lock");
-      expect(html).toContain("nothing technical stops a push whether this is ticked or not");
-      const on = setup({ kind: "build", review: reviewOf({ kind: "build", allowPush: true }) });
-      expect(/<input type="checkbox"[^>]*checked=""/.test(on)).toBe(true);
-    });
-
-    it("names the permission mode from the pre-flight beside the push option", () => {
-      const preflight: Preflight = { rows: [{ level: "green", text: "Agents run as you, in your permission mode: auto" }], blocking: false };
-      expect(setup({ kind: "build", preflight })).toContain("your own permission mode (auto)");
-    });
-  });
-
-  describe("the pull request picker for a review", () => {
-    const MOCK_PR = new MockBackend().github.code.changes.find((c) => c.kind === "pullRequest" && c.state === "open")!;
-    const change = (n: number, over: Partial<CodeChange> = {}): CodeChange => ({ ...MOCK_PR, repo: "acme/storefront", headRepo: null, number: n, externalId: `pr:acme/storefront#${n}`, title: `Pull request ${n}`, ...over });
-    const prs = (choices: CodeChange[]): SetupViewProps["prs"] => ({ status: "ready", query: "CA-401", choices: prChoices(choices, "acme/storefront"), error: null });
-    const picker = (p: Partial<SetupViewProps> = {}) => setup({ kind: "review", review: null, preflight: null, ...p });
-
-    it("is not shown for the other kinds", () => {
-      expect(setup()).not.toContain("Pull request to review");
-    });
-
-    it("lists a same-repository open pull request as choosable, and says why a fork and a closed one are not, and takes a draft one", () => {
-      const html = picker({ prs: prs([change(1, { headRepo: "acme/storefront" }), change(2, { headRepo: "mallory/storefront" }), change(3, { state: "closed" }), change(4, { state: "draft", headRepo: "acme/storefront" })]) });
-      const row = (n: number) => new RegExp(`<button[^>]*role="radio"[^>]*>(?:(?!</button>)[\\s\\S])*?Pull request ${n}</span>(?:(?!</button>)[\\s\\S])*</button>`).exec(html)![0];
-      expect(row(1)).not.toContain('disabled=""');
-      expect(row(2)).toContain('disabled=""');
-      expect(row(2)).toContain("From a fork");
-      expect(row(3)).toContain("Closed");
-      expect(row(4)).toContain("Draft pull request");
-      expect(row(4)).not.toContain('disabled=""');
-    });
-
-    it("says that a pull request with an unknown head repository is checked on GitHub", () => {
-      expect(picker({ prs: prs([change(1)]) })).toContain("Checked on GitHub when you choose it");
-    });
-
-    it("holds Start until a pull request is chosen", () => {
-      const html = picker({ prs: prs([change(1)]) });
-      expect(disabled(html, "Start agent")).toBe(true);
-      expect(html).toContain("Choose the pull request to review");
-    });
-
-    it("says when nothing matches or the search failed", () => {
-      expect(picker({ prs: prs([]) })).toContain("No pull request in acme/storefront matches");
-      expect(picker({ prs: { status: "failed", query: "x", choices: [], error: "rate limited" } })).toContain("Couldn&#x27;t search for pull requests: rate limited");
-    });
-  });
-
-  it("asks for a second look when the draft changed, and holds Start until it is read", () => {
-    const html = setup({ changed: true });
-    expect(html).toContain("This draft changed. Read it again.");
-    expect(disabled(html, "Start agent")).toBe(true);
-    expect(html).toContain("I&#x27;ve read it");
-  });
-
-  it("shows what happens on Start and the exact command, with every part quoted", () => {
-    const html = setup();
-    expect(html).toContain("What happens when you press Start");
-    expect(html).toContain("Show the exact command");
-    expect(html).toContain("claude --bg --name &#x27;CA-401 investigate&#x27; --worktree &#x27;ca-401-fix-ab12&#x27;");
-    expect(html).toContain("Starts right away. You can stop it once it&#x27;s working.");
-  });
-
-  it("names the branch the run will use", () => {
-    expect(setup()).toContain("worktree-ca-401-fix-ab12");
-  });
-});
-
-describe("what ⌘↵ may start", () => {
-  const props = (over: Partial<SetupViewProps> = {}) => {
-    const review = reviewOf();
-    return { review, preflight: ok, phase: "ready" as const, busy: false, changed: false, choice: null, repo: "acme/storefront", instruction: review.instruction, base: "main", kind: "investigate" as const, item: itemRef("CA-401") as ItemRef | null, pr: null as number | null, ...over };
-  };
-
-  it("is nothing while the checks have a red row, so the shortcut cannot get past a disabled button", () => {
-    const red: Preflight = { rows: [{ level: "red", text: "Not signed in to Claude." }], blocking: true };
-    expect(setupBlock(props({ preflight: red }))).toBe("Not signed in to Claude.");
-    expect(setupBlock(props())).toBeNull();
-  });
-
-  it("is nothing for a cleared instruction, an unread change or a draft that is still being made", () => {
-    expect(setupBlock(props({ instruction: "" }))).toMatch(/Write/);
-    expect(setupBlock(props({ changed: true }))).toMatch(/change/);
-    expect(setupBlock(props({ review: null, phase: "preparing" }))).toMatch(/ready/);
+    expect(html).toContain("Look at the retry loop.");
+    expect(html).not.toContain("What you approved:");
   });
 });
 
 describe("the honest wording", () => {
   const phrases = ["run as you", "not a lock"];
-
-  it("is in the setup sheet, with what the agent receives", () => {
-    const html = setup();
-    for (const p of [...phrases, "exactly what the agent receives"]) expect(html).toContain(p);
-    expect(html).toContain("This is a request to the model, not a block.");
-  });
 
   it("is in the first-run text", () => {
     const html = renderToStaticMarkup(<AgentsIntro onDismiss={vi.fn()} />);
@@ -717,8 +429,6 @@ describe("the honest wording", () => {
     expect(times(/Investigate, Triage, Plan, Review and Verify/g)).toBe(1);
     expect(times(/may run the repository/g)).toBe(1);
     for (const p of ["your own Claude settings", "Gossamr adds no fence of its own", "What a Build may touch", "your Claude settings decide"]) expect(html).toContain(p);
-    // Nothing about the setup sheet, which this sheet doesn't show.
-    expect(html).not.toContain("exactly what the agent receives");
     expect(html).not.toMatch(/never write to jira|can&#x27;t write to jira/i);
   });
 });
@@ -776,22 +486,7 @@ describe("safety and settings", () => {
   });
 });
 
-describe("the Agent menu on a ticket", () => {
-  it("offers every kind but Review, and says you approve before anything starts", () => {
-    const html = renderToStaticMarkup(<AgentMenuView ticketKey="CA-401" open onOpen={vi.fn()} onStart={vi.fn()} />);
-    expect(html).toContain('role="menu"');
-    for (const shown of ["Investigate this ticket", "Triage this ticket", "Build this", "Verify the change"]) expect(html).toContain(shown);
-    expect(html).toContain("approve before anything starts");
-    expect(html).not.toContain("Review the PR");
-    expect(renderToStaticMarkup(<AgentMenuView ticketKey="CA-401" open={false} onOpen={vi.fn()} onStart={vi.fn()} />)).not.toContain('role="menu"');
-  });
-
-  it("offers Review the PR only with a linked pull request, and names it", () => {
-    const html = renderToStaticMarkup(<AgentMenuView ticketKey="CA-402" open onOpen={vi.fn()} onStart={vi.fn()} reviewPr={{ number: 212, title: "CA-402: Cache the category tree" }} />);
-    expect(html).toContain("Review the PR");
-    expect(html).toContain("#212 CA-402: Cache the category tree");
-  });
-
+describe("the agents on a ticket", () => {
   it("lists the runs on the ticket and opens one", () => {
     const html = renderToStaticMarkup(<TicketAgentRows runs={[run("working", { lastDetail: "Reading the cart module" })]} now={NOW} title="A ticket" onOpen={vi.fn()} />);
     expect(html).toContain("A ticket");
@@ -838,21 +533,19 @@ describe("the Agent menu on a ticket", () => {
 });
 
 describe("what an agent sheet keeps clear", () => {
-  it("hides the Pip launcher while a run sheet or the setup sheet is open, so Start agent is never under it", () => {
+  it("hides the Pip launcher while a run sheet is open, so its buttons are never under it", () => {
     // A static render reads each store's initial state.
     const runs = useRuns.getInitialState() as { sheet: unknown };
-    const setup = useRunSetup.getInitialState() as { open: boolean };
-    const launcher = (sheet: unknown, open: boolean) => {
-      [runs.sheet, setup.open] = [sheet, open];
+    const launcher = (sheet: unknown) => {
+      runs.sheet = sheet;
       return renderToStaticMarkup(<PipLauncher />);
     };
     try {
-      expect(launcher(null, false)).toContain("data-pip-launcher");
-      expect(launcher({ type: "run", id: "r1" }, false)).toBe("");
-      expect(launcher({ type: "safety" }, false)).toBe("");
-      expect(launcher(null, true)).toBe("");
+      expect(launcher(null)).toContain("data-pip-launcher");
+      expect(launcher({ type: "run", id: "r1" })).toBe("");
+      expect(launcher({ type: "safety" })).toBe("");
     } finally {
-      [runs.sheet, setup.open] = [null, false];
+      runs.sheet = null;
     }
   });
 
@@ -890,16 +583,5 @@ describe("start review copy (G13)", () => {
     expect(INSTRUCTIONS.investigate).not.toContain("The note is posted to the ticket");
     expect(COPY.readOnlyNote).toContain("every command outside its read-only rules");
     expect(COPY.readOnlyNote).not.toContain("rules above");
-  });
-
-  it("ticks real checks, and leaves the facts (what runs, the clone) without a tick", () => {
-    const preflight: Preflight = { rows: [{ level: "green", text: "What runs: abc123def456" }, { level: "green", text: "Clone: /Users/sample/Code/web on main." }, { level: "green", text: "Claude Code 2.1.286" }], blocking: false };
-    const html = renderToStaticMarkup(<RunPreflight preflight={preflight} checking={false} />);
-    const rows = html.split("<li ").slice(1);
-    expect(rows).toHaveLength(3);
-    expect(rows[0]).not.toContain("<svg");
-    expect(rows[1]).not.toContain("<svg");
-    expect(rows[2]).toContain("<svg");
-    expect(rows[2]).toContain("Fine: ");
   });
 });

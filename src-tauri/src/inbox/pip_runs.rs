@@ -1,7 +1,7 @@
-//! What Pip may do with agent runs: read the signed-in account's runs, and draft one for the person to approve. The
-//! spec of a drafted run is built here from what Rust knows; Pip supplies only the ticket, the kind and a focus note, or,
-//! for an investigation with no ticket, a watched repository and the question. A build or review Pip drafts only as the
-//! successor of a finished run, and everything it carries from that run is filled in here.
+//! What Pip may do with agent runs: read the signed-in account's runs, and start one. The spec of a started run is
+//! built here from what Rust knows; Pip supplies only the ticket, the kind and a focus note, or, for an investigation
+//! with no ticket, a watched repository and the question. A build or review follows a finished run, and everything it
+//! carries from that run is filled in here.
 
 use chrono::Utc;
 
@@ -9,24 +9,14 @@ use super::ticket_context::snapshot;
 use super::Core;
 use crate::auth::Scope;
 use crate::domain::{
-    default_instruction, pip_chain_kinds, pip_kinds, Basis, ClonePlan, CodeChangeKind, ContainerRef, Intent, Proposal, ProposalQuery, Run, RunEvent, RunKind, RunQuery, RunSpec, RunState, StateKind,
+    default_instruction, pip_chain_kinds, pip_kinds, Actor, ClonePlan, CodeChangeKind, ContainerRef, ItemRef, Run, RunEvent, RunKind, RunQuery, RunSpec, WorkstreamEvent,
 };
 use crate::error::{Error, Result};
-use crate::proposals::{self, Draft};
+use crate::proposals;
 use crate::tracker::Connection;
 
 fn refuse(message: impl Into<String>) -> Error {
     Error::Proposal(message.into())
-}
-
-/// The part of a run request that makes two drafts the same ask; the name differs every time.
-fn same_ask(a: &RunSpec, b: &RunSpec) -> bool {
-    (a.kind, &a.repo, &a.focus, &a.focus_from_run, &a.findings_from_run) == (b.kind, &b.repo, &b.focus, &b.focus_from_run, &b.findings_from_run)
-}
-
-/// Two chained drafts are the same ask when they follow the same run as the same kind, whatever their focus.
-fn same_chain(a: &RunSpec, b: &RunSpec) -> bool {
-    a.kind == b.kind && (a.plan_from_run.is_some() || a.build_from_run.is_some()) && (&a.plan_from_run, &a.build_from_run) == (&b.plan_from_run, &b.build_from_run)
 }
 
 /// The words a refusal uses for what a chained kind must follow.
@@ -43,6 +33,43 @@ pub struct PipRunAsk {
     pub kind: RunKind,
     pub focus: Option<String>,
     pub from_run: Option<String>,
+}
+
+/// Which Pip turn starts a run, and the key that makes the start happen at most once.
+pub struct PipStart<'a> {
+    pub request_id: &'a str,
+    pub key: &'a str,
+    /// The turn is a wake, which Gossamr started, not a message from the person.
+    pub wake: bool,
+}
+
+/// The spec of a run Pip starts or follows another with: the kind's own template and the clone `plan` found, and nothing of
+/// Pip's, before the rest of it is filled in.
+fn blank_spec(kind: RunKind, repo: String, clone_path: std::path::PathBuf, plan: ClonePlan, workstream: Option<&str>) -> RunSpec {
+    RunSpec {
+        kind,
+        repo,
+        clone_path,
+        base: plan.base,
+        name: plan.name,
+        instruction: default_instruction(kind).into(),
+        focus: None,
+        focus_from_run: None,
+        ticket_block: None,
+        pr: None,
+        pr_sha: None,
+        plan: None,
+        plan_from_run: None,
+        plan_approved: false,
+        build_account: None,
+        build_from_run: None,
+        findings: None,
+        findings_from_run: None,
+        allow_push: false,
+        project: None,
+        report: true,
+        workstream: workstream.map(Into::into),
+    }
 }
 
 impl Core {
@@ -65,13 +92,16 @@ impl Core {
 
     /// The repository an agent on `key` would work in, and the ticket's title: the one repository its linked pull
     /// requests and branches are in, or with no links the only repository that is watched. When that isn't a single
-    /// answer the person has to choose.
-    pub async fn pip_run_target(&self, scope: &Scope, key: &str) -> Result<(String, String)> {
+    /// answer, Pip's `repo` settles it when it names a watched repository.
+    pub async fn pip_run_target(&self, scope: &Scope, key: &str, repo: Option<&str>) -> Result<(String, String)> {
         let item = Self::item(scope, key);
         let work = self
             .with_db_for(scope, |db| db.item(&item))
             .await?
             .ok_or_else(|| refuse(format!("{key} isn't in the cache, so there is nothing to base a run on")))?;
+        if let Some(named) = repo {
+            return Ok((self.watched_repo_named(named)?, work.title));
+        }
         let mut repos: Vec<String> = Vec::new();
         for link in self.dev_links(&item)?.iter().filter(|l| matches!(l.change.kind, CodeChangeKind::PullRequest | CodeChangeKind::Branch)) {
             if !repos.iter().any(|r| r.eq_ignore_ascii_case(&link.change.repo)) {
@@ -85,7 +115,7 @@ impl Core {
             [only] => Ok((only.clone(), work.title)),
             [] => Err(refuse("No repository is watched, so there is nowhere to run an agent. Ask the person to watch one in Settings.")),
             several => Err(refuse(format!(
-                "It isn't clear which repository to use ({}). Ask the person which repository; they can start the agent from the ticket themselves.",
+                "It isn't clear which repository to use ({}): pass repo, or ask the person which one.",
                 several.join(", ")
             ))),
         }
@@ -94,14 +124,8 @@ impl Core {
     /// The watched repository `repo` names (spelling case is forgiven) and the project a ticket from an investigation
     /// there lands in: the repository's usual one, else the first watched. Pip never names either path or project.
     pub async fn pip_ticketless_target(&self, scope: &Scope, repo: &str) -> Result<(String, ContainerRef)> {
-        let names = self.watched_repo_names()?;
-        if names.is_empty() {
-            return Err(refuse("No repository is watched, so there is nowhere to run an agent. Ask the person to watch one in Settings."));
-        }
-        let Some(repo) = names.iter().find(|n| n.eq_ignore_ascii_case(repo.trim())) else {
-            return Err(refuse(format!("{} isn't a repository the user watches. The watched ones are: {}.", repo.trim(), names.join(", "))));
-        };
-        let project = match self.repo_project(repo).await? {
+        let repo = self.watched_repo_named(repo)?;
+        let project = match self.repo_project(&repo).await? {
             Some(project) => project,
             None => self
                 .containers_in(scope)
@@ -111,122 +135,80 @@ impl Core {
                 .map(|c| c.container_ref)
                 .ok_or_else(|| refuse("No project is watched, so a ticket from this investigation would have nowhere to go. Ask the person to watch one in Settings."))?,
         };
-        Ok((repo.clone(), project))
+        Ok((repo, project))
     }
 
-    /// An investigation with no ticket that Pip proposes while answering `request_id`. `prompt` is the one thing of
-    /// Pip's that becomes the instruction, in full, for the person to read and edit; the clone, branch and project are
-    /// Rust's. It ends as a draft ticket in `project` once approved and finished, like one the person started. Asked in
-    /// a workstream's conversation, the run belongs to that workstream, which must be an open one with no ticket.
-    #[allow(clippy::too_many_arguments)]
-    pub async fn draft_ticketless_run_as_pip(&self, scope: &Scope, request_id: &str, workstream: Option<&str>, prompt: String, repo: String, project: ContainerRef, plan: ClonePlan) -> Result<Proposal> {
+    /// The watched repository `repo` names, spelling case forgiven.
+    fn watched_repo_named(&self, repo: &str) -> Result<String> {
+        let names = self.watched_repo_names()?;
+        if names.is_empty() {
+            return Err(refuse("No repository is watched, so there is nowhere to run an agent. Ask the person to watch one in Settings."));
+        }
+        names.iter().find(|n| n.eq_ignore_ascii_case(repo.trim())).cloned().ok_or_else(|| refuse(format!("{} isn't a repository the user watches. The watched ones are: {}.", repo.trim(), names.join(", "))))
+    }
+
+    /// The spec of an investigation with no ticket that Pip starts. `prompt` is the one thing of Pip's that becomes the
+    /// instruction, in full; the clone, branch and project are Rust's. It ends as a draft ticket in `project`, like one
+    /// the person started. Asked in a workstream's conversation, the run belongs to that workstream, which must be an
+    /// open one with no ticket.
+    pub(crate) async fn build_pip_ticketless_run(&self, scope: &Scope, workstream: &str, prompt: String, repo: String, project: ContainerRef, plan: ClonePlan) -> Result<RunSpec> {
         self.require_watched_repo(&repo)?;
         let clone_path = self.resolve_clone(&plan.path)?;
         let connection_id = Connection::jira_id(scope);
-        let spec = RunSpec {
-            kind: RunKind::Investigate,
-            repo,
-            clone_path,
-            base: plan.base,
-            name: plan.name,
-            instruction: prompt,
-            focus: None,
-            focus_from_run: None,
-            ticket_block: None,
-            pr: None,
-            pr_sha: None,
-            plan: None,
-            plan_from_run: None,
-            plan_approved: false,
-            build_account: None,
-            build_from_run: None,
-            findings: None,
-            findings_from_run: None,
-            allow_push: false,
-            project: Some(project),
-            report: true,
-            workstream: workstream.map(Into::into),
-        };
-        let at = Utc::now();
-        self.with_db_for(scope, |db| {
-            if let Some(ws) = workstream {
-                super::workstreams::require_linkable(db, &connection_id, ws, None)?;
-            }
-            let query = ProposalQuery { states: Some(vec![StateKind::Pending, StateKind::Applying]), ..Default::default() };
-            let same = db.proposals(&query)?.into_iter().find(|p| matches!(&p.intent, Intent::StartRun { item: None, spec: s, .. } if (s.kind, &s.repo, &s.instruction) == (spec.kind, &spec.repo, &spec.instruction)));
-            if let Some(same) = same {
-                return Err(refuse(format!("An identical draft is already open (proposal {}). Don't propose it again; see list_proposals.", same.id)));
-            }
-            proposals::create(db, Draft::from_pip(request_id, workstream, Intent::StartRun { connection_id, item: None, spec }, None), at)
-        })
-        .await
+        let mut spec = blank_spec(RunKind::Investigate, repo, clone_path, plan, Some(workstream));
+        spec.instruction = prompt;
+        spec.project = Some(project);
+        self.with_db_for(scope, |db| super::workstreams::require_linkable(db, &connection_id, workstream, None)).await?;
+        Ok(spec)
     }
 
-    /// A run Pip proposes while answering `request_id`. Its prompt is the kind's own template, its ticket text the cached
-    /// ticket, its clone and branch what `plan` found; only `focus` and `from_run` are Pip's words. Nothing starts: the
-    /// person reads the exact prompt and approves it in the setup sheet. Asked in a workstream's conversation, the run
-    /// belongs to that workstream, which must be an open one on the same ticket. A triage or plan carries what an
-    /// investigation found, as Gossamr reads it from that run: the one `from_run` names when it is a finished
-    /// investigation on this ticket, else the workstream's newest.
-    pub async fn draft_run_as_pip(&self, scope: &Scope, request_id: &str, workstream: Option<&str>, ask: PipRunAsk, repo: String, plan: ClonePlan) -> Result<Proposal> {
+    /// The spec of a run on a ticket that Pip starts. Its prompt is the kind's own template, its ticket text the cached
+    /// ticket, its clone and branch what `plan` found; only `focus`, `from_run` and `pr` are Pip's words. The run belongs
+    /// to `workstream`, which must be an open one on the same ticket. A triage or plan carries what an investigation
+    /// found, as Gossamr reads it from that run: the one `from_run` names when it is a finished investigation on this
+    /// ticket, else the workstream's newest. A review or verify of a pull request has its head commit pinned, and a pull
+    /// request from a fork is refused.
+    pub(crate) async fn build_pip_run(&self, scope: &Scope, workstream: &str, ask: PipRunAsk, pr: Option<u64>, repo: String, plan: ClonePlan) -> Result<(RunSpec, ItemRef)> {
         let PipRunAsk { key, kind, focus, from_run } = ask;
         let key = key.as_str();
-        if !pip_kinds().contains(&kind) {
-            return Err(refuse("Pip can only propose investigations, triage, plans and checks"));
+        let reads_pr = matches!(kind, RunKind::Review | RunKind::Verify);
+        if !(pip_kinds().contains(&kind) || (kind == RunKind::Review && pr.is_some())) {
+            return Err(refuse("Pip can only start investigations, triage, plans, checks and a review of a pull request"));
         }
-        let instruction = default_instruction(kind);
+        if pr.is_some() && !reads_pr {
+            return Err(refuse("only a review or a verify takes a pull request"));
+        }
+        if kind == RunKind::Review && focus.is_some() {
+            return Err(refuse("A review judges the change on its own; it takes no focus note."));
+        }
         self.require_watched_repo(&repo)?;
         let clone_path = self.resolve_clone(&plan.path)?;
         let item = Self::item(scope, key);
         let links = self.ticket_dev_links(&item);
         let connection_id = Connection::jira_id(scope);
-        let mut spec = RunSpec {
-            kind,
-            repo,
-            clone_path,
-            base: plan.base,
-            name: plan.name,
-            instruction: instruction.into(),
-            focus,
-            focus_from_run: from_run.clone(),
-            ticket_block: None,
-            pr: None,
-            pr_sha: None,
-            plan: None,
-            plan_from_run: None,
-            plan_approved: false,
-            build_account: None,
-            build_from_run: None,
-            findings: None,
-            findings_from_run: None,
-            allow_push: false,
-            project: None,
-            report: true,
-            workstream: workstream.map(Into::into),
-        };
+        let mut spec = blank_spec(kind, repo, clone_path, plan, Some(workstream));
+        spec.focus = focus;
+        spec.focus_from_run = from_run.clone();
         if matches!(kind, RunKind::Triage | RunKind::Plan) {
-            self.attach_pip_findings(scope, workstream, &item, from_run.as_deref(), &mut spec).await?;
+            self.attach_pip_findings(scope, Some(workstream), &item, from_run.as_deref(), &mut spec).await?;
         }
-        let at = Utc::now();
+        if let Some(number) = pr {
+            spec.pr = Some(number);
+            let change = self.review_target(&spec).await?;
+            spec.base = change.base_ref.unwrap_or(spec.base);
+            spec.pr_sha = change.sha;
+        }
         self.with_db_for(scope, |db| {
             let work = db.item(&item)?.ok_or_else(|| refuse(format!("{key} isn't in the cache, so there is nothing to base a run on")))?;
-            if let Some(ws) = workstream {
-                super::workstreams::require_linkable(db, &connection_id, ws, Some(&item))?;
-            }
+            super::workstreams::require_linkable(db, &connection_id, workstream, Some(&item))?;
             spec.ticket_block = Some(snapshot(db, &work, &links, false));
-            let query = ProposalQuery { states: Some(vec![StateKind::Pending, StateKind::Applying]), item: Some(item.clone()), ..Default::default() };
-            let same = db.proposals(&query)?.into_iter().find(|p| matches!(&p.intent, Intent::StartRun { spec: s, .. } if same_ask(s, &spec)));
-            if let Some(same) = same {
-                return Err(refuse(format!("An identical draft is already open (proposal {}). Don't propose it again; see list_proposals.", same.id)));
-            }
-            let mut draft = Draft::from_pip(request_id, workstream, Intent::StartRun { connection_id, item: Some(item.clone()), spec }, None);
-            draft.basis = Some(Basis::of(&work));
-            proposals::create(db, draft, at)
+            Ok(())
         })
-        .await
+        .await?;
+        Ok((spec, item))
     }
 
-    /// Fills a triage or plan Pip drafts with what an investigation found. `from_run` counts when it names a finished
+    /// Fills a triage or plan Pip starts with what an investigation found. `from_run` counts when it names a finished
     /// investigation on this ticket in the same workstream, and then a failure to read it is Pip's to hear; otherwise the
     /// newest finished investigation on this ticket in the conversation's workstream, if any, is used when it can be read.
     async fn attach_pip_findings(&self, scope: &Scope, workstream: Option<&str>, item: &crate::domain::ItemRef, from_run: Option<&str>, spec: &mut RunSpec) -> Result<()> {
@@ -260,7 +242,7 @@ impl Core {
     /// the ticket's title, to plan a clone from.
     pub async fn pip_chain_source(&self, scope: &Scope, workstream: Option<&str>, key: &str, kind: RunKind, from_run: Option<&str>) -> Result<(Run, String)> {
         let Some(&(_, needed)) = pip_chain_kinds().iter().find(|(k, _)| *k == kind) else {
-            return Err(refuse(format!("a {} isn't drafted as the successor of a run", kind.as_str())));
+            return Err(refuse(format!("a {} doesn't follow another run", kind.as_str())));
         };
         let Some(id) = from_run else {
             return Err(refuse(format!("A {} can only follow {}: pass from_run with that run's id from list_runs.", kind.as_str(), source_words(kind))));
@@ -297,17 +279,16 @@ impl Core {
         Ok((source, work.title))
     }
 
-    /// A build or review Pip proposes while answering `request_id`, as the successor of the finished run `ask.from_run`.
-    /// It runs the same handoff steps as the person's `draft_run`, so what it carries comes from that run and its drafts,
-    /// never from Pip: a build the plan the person settled on the ticket (approved, or skipped for the run's own answer;
-    /// refused before that) and a review the builder's account and the pull request pinned to its commit. Its repository
-    /// is the source run's and its clone what `plan` found. Pip's own words are only a focus note, and a review takes none. A build in a workstream may push
-    /// its branch and open a draft pull request; outside one it may not. The draft is Pip's, never the person's, and
-    /// nothing starts until the person approves it in the setup sheet.
-    pub async fn draft_chain_run_as_pip(&self, scope: &Scope, request_id: &str, workstream: Option<&str>, ask: PipRunAsk, plan: ClonePlan) -> Result<Proposal> {
+    /// The spec of a build or review Pip starts as the successor of the finished run `ask.from_run`. It carries what
+    /// comes from that run and its drafts, never from Pip:
+    /// a build the plan the person settled on the ticket (approved, or skipped for the run's own answer; refused before
+    /// that) and a review the builder's account and the pull request pinned to its commit. Its repository is the source
+    /// run's and its clone what `plan` found. Pip's own words are only a focus note, and a review takes none. A build
+    /// always pushes its branch and opens a draft pull request.
+    pub(crate) async fn build_pip_chain_run(&self, scope: &Scope, workstream: &str, ask: PipRunAsk, plan: ClonePlan) -> Result<(RunSpec, ItemRef)> {
         let PipRunAsk { key, kind, focus, from_run } = ask;
         let key = key.as_str();
-        let (source, _) = self.pip_chain_source(scope, workstream, key, kind, from_run.as_deref()).await?;
+        let (source, _) = self.pip_chain_source(scope, Some(workstream), key, kind, from_run.as_deref()).await?;
         if kind == RunKind::Review && focus.is_some() {
             return Err(refuse("A review judges the change on its own; it takes no focus note."));
         }
@@ -315,7 +296,7 @@ impl Core {
         self.require_watched_repo(&repo)?;
         let clone_path = self.resolve_clone(&plan.path)?;
         let item = Self::item(scope, key);
-        let mut spec = chain_spec(kind, repo, clone_path, plan, workstream);
+        let mut spec = blank_spec(kind, repo, clone_path, plan, Some(workstream));
         self.fill_chain_slots(scope, &source, &item, &mut spec).await?;
         if kind == RunKind::Build {
             spec.focus_from_run = focus.as_ref().map(|_| source.id.clone());
@@ -323,19 +304,63 @@ impl Core {
         }
         let links = self.ticket_dev_links(&item);
         let connection_id = Connection::jira_id(scope);
-        let at = Utc::now();
-        self.with_db_for(scope, |db| {
-            let work = chain_ticket(db, &connection_id, &item, &links, &mut spec)?;
-            let query = ProposalQuery { states: Some(vec![StateKind::Pending, StateKind::Applying]), item: Some(item.clone()), ..Default::default() };
-            let same = db.proposals(&query)?.into_iter().find(|p| matches!(&p.intent, Intent::StartRun { spec: s, .. } if same_chain(s, &spec)));
-            if let Some(same) = same {
-                return Err(refuse(format!("An identical draft is already open (proposal {}). Don't propose it again; see list_proposals.", same.id)));
+        self.with_db_for(scope, |db| chain_ticket(db, &connection_id, &item, &links, &mut spec).map(drop)).await?;
+        Ok((spec, item))
+    }
+
+    /// Stores the queued run for `spec` as started by Pip, and returns it with whether it is new. A run already started
+    /// under `start.key` (an MCP retry of the same call) comes back instead, unchanged, and nothing is recorded again.
+    /// The workstream's audit says Pip started it, in which turn kind, and as what.
+    pub(crate) async fn commit_pip_run(&self, scope: &Scope, start: &PipStart<'_>, item: Option<ItemRef>, spec: RunSpec) -> Result<(Run, bool)> {
+        let connection_id = Connection::jira_id(scope);
+        let file = super::db_file(&self.connection(scope)?);
+        let workstream = spec.workstream.clone();
+        let kind = spec.kind;
+        let id = proposals::new_id()?;
+        let run = Run::started_by_pip(id, connection_id.clone(), item.clone(), spec, file, start.request_id, Utc::now());
+        self.with_db_atomically_for(scope, |db| {
+            if let Some(ws) = workstream.as_deref() {
+                super::workstreams::require_startable(db, &connection_id, ws, item.as_ref())?;
             }
-            let mut draft = Draft::from_pip(request_id, workstream, Intent::StartRun { connection_id, item: Some(item.clone()), spec }, None);
-            draft.basis = Some(Basis::of(&work));
-            proposals::create(db, draft, at)
+            let (run, fresh) = db.insert_started_run(&run, start.key)?;
+            if let (true, Some(ws)) = (fresh, workstream.as_deref()) {
+                let how = if start.wake { "wake turn" } else { "conversation" };
+                db.append_workstream_event(&WorkstreamEvent::new(ws, Actor::Pip, "agent_started", run.queued_at).run(&run.id).detail(format!("{} · {how}", kind.as_str())))?;
+            }
+            Ok((run, fresh))
         })
         .await
+    }
+
+    /// Keeps Pip's `text` for the run until its next `ask` call or the end of its turn. A message already waiting is replaced.
+    pub async fn queue_run_message(&self, run_id: &str, text: &str) -> Result<()> {
+        let at = Utc::now();
+        self.with_proposals(|db| db.put_run_message(run_id, text, at)).await
+    }
+
+    pub async fn restore_run_message(&self, run_id: &str, text: &str) -> Result<()> {
+        let at = Utc::now();
+        self.with_proposals(|db| db.restore_run_message(run_id, text, at)).await
+    }
+
+    /// The message waiting for the run, removed as it is taken.
+    pub async fn take_run_message(&self, run_id: &str) -> Result<Option<String>> {
+        self.with_proposals(|db| db.take_run_message(run_id)).await
+    }
+
+    pub async fn run_message(&self, run_id: &str) -> Result<Option<String>> {
+        self.with_proposals(|db| db.run_message(run_id)).await
+    }
+
+    /// The runs with a message waiting, oldest first.
+    pub async fn runs_with_messages(&self) -> Result<Vec<String>> {
+        self.with_proposals(|db| db.run_messages_waiting()).await
+    }
+
+    /// The run already started under `key`, if any.
+    pub(crate) async fn run_started_as(&self, scope: &Scope, key: &str) -> Result<Option<Run>> {
+        let connection_id = Connection::jira_id(scope);
+        Ok(self.with_db_for(scope, |db| db.run_by_start_key(key)).await?.filter(|r| r.connection_id == connection_id))
     }
 
     /// Fills what a run that follows the finished run `source` carries from it, as Core reads it, never from a caller: a
@@ -382,35 +407,6 @@ impl Core {
 /// would check the base branch instead of the change.
 pub const VERIFY_UNPINNED: &str = "that review has no pull request pinned to the commit it read, so a verify after it would check the base branch instead of the change";
 
-/// The spec of a run that follows another before its handoffs are filled: the kind's own template, the source's
-/// repository, the clone `plan` found, and nothing of Pip's.
-fn chain_spec(kind: RunKind, repo: String, clone_path: std::path::PathBuf, plan: ClonePlan, workstream: Option<&str>) -> RunSpec {
-    RunSpec {
-        kind,
-        repo,
-        clone_path,
-        base: plan.base,
-        name: plan.name,
-        instruction: default_instruction(kind).into(),
-        focus: None,
-        focus_from_run: None,
-        ticket_block: None,
-        pr: None,
-        pr_sha: None,
-        plan: None,
-        plan_from_run: None,
-        plan_approved: false,
-        build_account: None,
-        build_from_run: None,
-        findings: None,
-        findings_from_run: None,
-        allow_push: false,
-        project: None,
-        report: true,
-        workstream: workstream.map(Into::into),
-    }
-}
-
 /// The ticket a chained run is about, from the cache: checked against the run's workstream, with its text set as the
 /// spec's ticket block.
 fn chain_ticket(db: &crate::db::Db, connection_id: &str, item: &crate::domain::ItemRef, links: &[crate::domain::DevLink], spec: &mut RunSpec) -> Result<crate::domain::WorkItem> {
@@ -422,171 +418,60 @@ fn chain_ticket(db: &crate::db::Db, connection_id: &str, item: &crate::domain::I
     Ok(work)
 }
 
+#[cfg(test)]
 impl Core {
-    /// Marks a follow-up as sent: applied, with the run it resumed.
-    pub async fn follow_up_sent(&self, id: &str, run_id: &str) -> Result<Proposal> {
-        self.with_proposals(|db| {
-            let mut p = db.proposal(id)?.ok_or_else(|| refuse("that draft no longer exists"))?;
-            p.state = crate::domain::ProposalState::Applied;
-            p.run = Some(run_id.to_string());
-            p.error = None;
-            p.updated_at = Utc::now();
-            db.save_proposal(&p)?;
-            proposals::record(db, &p, crate::domain::Actor::Person, "draft_approved", p.updated_at);
-            Ok(p)
-        })
-        .await
-    }
-
-    /// Keeps a follow-up pending with the reason sending it failed, so the person can try again. `kept_on_run` is the message that
-    /// now waits on the stopped run, as it was when the send began, which is what lets a retry (even of an edited message) go ahead.
-    pub async fn follow_up_failed(&self, id: &str, why: &str, kept_on_run: Option<&str>) -> Result<()> {
-        self.with_proposals(|db| {
-            if let Some(mut p) = db.proposal(id)? {
-                if let Some(sent) = kept_on_run {
-                    let mut attempted = p.intent.clone();
-                    if let Intent::FollowUp { message, .. } = &mut attempted {
-                        *message = sent.to_string();
-                    }
-                    p.revisions.push(crate::domain::Revision { at: Utc::now(), note: proposals::SEND_FAILED_NOTE.into(), intent: attempted });
-                }
-                p.error = Some(why.to_string());
-                p.updated_at = Utc::now();
-                db.save_proposal(&p)?;
+    /// Queues a run for `spec` the way a Pip start does, for tests that need a run and not the tool call: the clone is
+    /// resolved, what the spec follows is read from the run it names, and the ticket text from the cache.
+    pub async fn queue_test_run(&self, mut spec: RunSpec, item: Option<ItemRef>) -> Result<Run> {
+        let scope = self.scope().await?;
+        self.require_watched_repo(&spec.repo)?;
+        spec.report = true;
+        spec.clone_path = self.resolve_clone(&spec.clone_path)?;
+        if spec.instruction.trim().is_empty() {
+            spec.instruction = if spec.project.is_some() { "Look into this: ".into() } else { default_instruction(spec.kind).into() };
+        }
+        if spec.kind == RunKind::Build && spec.workstream.is_some() {
+            spec.allow_push = true;
+        }
+        spec.build_account = None;
+        if let Some(from) = spec.build_from_run.take() {
+            if item.is_none() {
+                return Err(refuse("A review of a build needs a ticket"));
             }
+            spec.build_from_run = Some(self.attach_build_account(&mut spec, &from, item.as_ref()).await?);
+        }
+        if spec.kind == RunKind::Verify {
+            spec.pr = None;
+            spec.pr_sha = None;
+        }
+        if spec.kind == RunKind::Review {
+            let change = self.review_target(&spec).await?;
+            spec.base = change.base_ref.unwrap_or(spec.base);
+            spec.pr_sha = change.sha;
+        }
+        spec.plan = None;
+        spec.plan_approved = false;
+        if let Some(from) = spec.plan_from_run.take() {
+            if item.is_none() {
+                return Err(refuse("Build needs a ticket"));
+            }
+            spec.plan_from_run = Some(self.attach_plan(&mut spec, &from, item.as_ref()).await?);
+        }
+        spec.findings = None;
+        if let Some(from) = spec.findings_from_run.take() {
+            if item.is_none() {
+                return Err(refuse("Findings from an investigation need a ticket"));
+            }
+            spec.findings_from_run = Some(self.attach_findings(&mut spec, &from, item.as_ref()).await?);
+        }
+        let links = item.as_ref().map(|i| self.ticket_dev_links(i)).unwrap_or_default();
+        self.with_db_for(&scope, |db| {
+            spec.ticket_block = item.as_ref().map(|i| db.item(i)).transpose()?.flatten().map(|w| snapshot(db, &w, &links, spec.plan.is_some()));
             Ok(())
         })
-        .await
-    }
-
-    /// A follow-up Pip proposes for a finished run while answering `request_id`: the exact message the person will read,
-    /// edit and send. Nothing is sent; approving the draft resumes the run. Refused unless the run belongs to the
-    /// account and can be sent back, and when one is already waiting for it. The draft belongs to the run's workstream,
-    /// if it has one, whichever conversation asked.
-    pub async fn propose_follow_up_as_pip(&self, scope: &Scope, request_id: &str, run_id: &str, message: &str, reason: Option<&str>) -> Result<Proposal> {
-        let message = crate::runs::result::scrub(message).trim().to_string();
-        let flat = |t: &str| crate::runs::result::scrub(t).split_whitespace().collect::<Vec<_>>().join(" ");
-        let reason = match reason.map(flat).filter(|r| !r.is_empty()) {
-            Some(r) => r.chars().take(proposals::FOLLOW_UP_REASON_LIMIT).collect(),
-            None => flat(message.lines().next().unwrap_or_default()).chars().take(proposals::FOLLOW_UP_REASON_LIMIT).collect(),
-        };
-        let run = self.run_in(scope, run_id).await?.ok_or_else(|| refuse(format!("there is no run {run_id} for this account")))?;
-        if let Some(why) = run.follow_up_blocker() {
-            return Err(refuse(format!("Run {run_id} can't be sent back: {why}.")));
-        }
-        let connection_id = Connection::jira_id(scope);
-        let intent = Intent::FollowUp { connection_id, run_id: run.id.clone(), short_id: run.short_id.as_ref().map(ToString::to_string), item: run.item.clone(), message, reason };
-        let at = Utc::now();
-        self.with_db_for(scope, |db| {
-            let query = ProposalQuery { states: Some(vec![StateKind::Pending, StateKind::Applying]), ..Default::default() };
-            let open = db.proposals(&query)?.into_iter().find(|p| matches!(&p.intent, Intent::FollowUp { run_id: r, .. } if *r == run.id));
-            if let Some(open) = open {
-                return Err(refuse(format!("A follow-up for run {} is already waiting (proposal {}). Revise it or leave it to the user; see list_proposals.", run.id, open.id)));
-            }
-            // It belongs to the run's workstream, whichever conversation Pip drafted it in.
-            proposals::create(db, Draft::from_pip(request_id, run.spec.workstream.as_deref(), intent, None), at)
-        })
-        .await
-    }
-
-    /// An answer Pip suggests to a run that is asking a question, while answering `request_id`: the exact message the
-    /// person reads, may edit and sends. Nothing is sent; approving the draft answers the run the way the person's own
-    /// answer does. Refused unless the run belongs to the account and is waiting for an answer. The draft keeps what the
-    /// run asked and belongs to the run's workstream, if it has one, whichever conversation asked; there a newer answer
-    /// replaces Pip's older one, and outside one a second is refused while the first waits.
-    pub async fn propose_answer_as_pip(&self, scope: &Scope, request_id: &str, run_id: &str, message: &str) -> Result<Proposal> {
-        let message = crate::runs::result::scrub(message).trim().to_string();
-        let run = self.run_in(scope, run_id).await?.ok_or_else(|| refuse(format!("there is no run {run_id} for this account")))?;
-        if run.state != RunState::NeedsAnswer {
-            return Err(refuse(format!("Run {run_id} is {}, so it isn't waiting for an answer.", run.state.as_str())));
-        }
-        let question = crate::runs::answer::asked(run.needs.as_deref());
-        let connection_id = Connection::jira_id(scope);
-        let intent = Intent::RunAnswer { connection_id, run_id: run.id.clone(), short_id: run.short_id.as_ref().map(ToString::to_string), item: run.item.clone(), message, question };
-        let at = Utc::now();
-        self.with_db_for(scope, |db| {
-            if run.spec.workstream.is_none() {
-                let query = ProposalQuery { states: Some(vec![StateKind::Pending]), ..Default::default() };
-                if let Some(open) = db.proposals(&query)?.into_iter().find(|p| matches!(&p.intent, Intent::RunAnswer { run_id: r, .. } if *r == run.id)) {
-                    return Err(refuse(format!("An answer for run {} is already waiting (proposal {}). Revise it or leave it to the user; see list_proposals.", run.id, open.id)));
-                }
-            }
-            proposals::create(db, Draft::from_pip(request_id, run.spec.workstream.as_deref(), intent, None), at)
-        })
-        .await
-    }
-
-    /// Marks an answer draft as sent: applied, with the run it answered, by the person. `sent` is the text that went,
-    /// which is recorded as the person's revision when it differs from the draft's.
-    pub async fn answer_draft_sent(&self, id: &str, run_id: &str, sent: &str) -> Result<Proposal> {
-        self.with_proposals(|db| {
-            let mut p = db.proposal(id)?.ok_or_else(|| refuse("that draft no longer exists"))?;
-            let at = Utc::now();
-            if let Intent::RunAnswer { message, .. } = &p.intent {
-                if message.trim() != sent.trim() {
-                    let mut went = p.intent.clone();
-                    if let Intent::RunAnswer { message, .. } = &mut went {
-                        *message = sent.trim().to_string();
-                    }
-                    p.revisions.push(crate::domain::Revision { at, note: proposals::EDITED_NOTE.into(), intent: went.clone() });
-                    p.intent = went;
-                }
-            }
-            p.state = crate::domain::ProposalState::Applied;
-            p.run = Some(run_id.to_string());
-            p.error = None;
-            p.updated_at = at;
-            db.save_proposal(&p)?;
-            proposals::record(db, &p, crate::domain::Actor::Person, "draft_approved", at);
-            Ok(p)
-        })
-        .await
-    }
-
-    /// Keeps an answer draft pending with the reason sending it failed, so the person can try again. A draft decided
-    /// meanwhile is left as it is.
-    pub async fn answer_draft_failed(&self, id: &str, why: &str) -> Result<()> {
-        self.with_proposals(|db| {
-            if let Some(mut p) = db.proposal(id)?.filter(|p| p.state == crate::domain::ProposalState::Pending) {
-                p.error = Some(why.to_string());
-                p.updated_at = Utc::now();
-                db.save_proposal(&p)?;
-            }
-            Ok(())
-        })
-        .await
-    }
-
-    /// Retires the pending answer drafts for `run_id` but `except`, with `reason`: the run was answered, or stopped
-    /// asking. Returns how many there were.
-    pub async fn retire_answer_drafts(&self, run_id: &str, except: Option<&str>, reason: &str) -> Result<usize> {
-        self.retire_answers_where(run_id, reason, |p, _| Some(p.id.as_str()) != except).await
-    }
-
-    /// Retires the pending answer drafts for `run_id` that don't answer what it asks now, with `reason`: every one when
-    /// it isn't `asking`, else those that kept another `question` than the one it asks, as `answer::asked` keeps it. A
-    /// draft that kept no question stays only while the run asks one without words, as when it was drafted. Returns
-    /// how many there were.
-    pub async fn retire_answer_drafts_not_for(&self, run_id: &str, asking: bool, question: Option<&str>, reason: &str) -> Result<usize> {
-        self.retire_answers_where(run_id, reason, |_, kept| !asking || kept != question).await
-    }
-
-    /// Retires the pending answer drafts for `run_id` that `retire` picks, given each with the question it kept.
-    async fn retire_answers_where(&self, run_id: &str, reason: &str, retire: impl Fn(&Proposal, Option<&str>) -> bool) -> Result<usize> {
-        self.with_proposals(|db| {
-            let query = ProposalQuery { states: Some(vec![StateKind::Pending]), ..Default::default() };
-            let open: Vec<Proposal> = db
-                .proposals(&query)?
-                .into_iter()
-                .filter(|p| matches!(&p.intent, Intent::RunAnswer { run_id: r, question, .. } if r == run_id && retire(p, question.as_deref())))
-                .collect();
-            let at = Utc::now();
-            for p in &open {
-                let retired = proposals::retire(db, &p.id, reason, at)?;
-                proposals::record(db, &retired, crate::domain::Actor::Supervisor, "draft_retired", at);
-            }
-            Ok(open.len())
-        })
-        .await
+        .await?;
+        let key = format!("test:{}", proposals::new_id()?);
+        let start = PipStart { request_id: "test", key: &key, wake: false };
+        self.commit_pip_run(&scope, &start, item, spec).await.map(|(run, _)| run)
     }
 }

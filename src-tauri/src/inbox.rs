@@ -31,7 +31,7 @@ mod review_drafts;
 mod rewrites;
 mod ticket_context;
 mod workstreams;
-pub use pip_runs::PipRunAsk;
+pub use pip_runs::{PipRunAsk, PipStart};
 #[cfg(test)]
 pub(crate) use workstreams::{basis_of, drifted};
 pub use ticket_context::TicketRead;

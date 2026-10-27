@@ -359,9 +359,7 @@ async fn real_approved_run_launches_into_its_worktree_is_adopted_by_retry_then_s
     let svc = RunService::new(fx.core.clone(), Arc::new(tools), RunIndex::load(&fx.dir.join("index")), vec![], Arc::new(|_| {}));
 
     let spec = RunSpec { clone_path: clone.canonicalize().unwrap(), name: "ce-4-spike-0a1b".into(), base: "feature".into(), ..crate::domain::fixtures::run_spec() };
-    let draft = fx.core.draft_run(spec, Some(fx.item("CA-1"))).await.unwrap();
-    let digest = fx.core.runs_review(&draft.id).await.unwrap().digest;
-    let run = fx.core.runs_approve(&draft.id, &digest).await.unwrap();
+    let run = fx.core.queue_test_run(spec, Some(fx.item("CA-1"))).await.unwrap();
     svc.start_now(&run.id).await.unwrap();
 
     let mut run = fx.core.run(&run.id).await.unwrap().unwrap();
@@ -412,9 +410,7 @@ async fn real_signed_out_session_is_tracked_as_a_system_block_then_stops_and_a_f
 
     let foreign = s.launch("foreign-0a1b").await;
     let spec = RunSpec { clone_path: clone.canonicalize().unwrap(), name: "ce-5-track-0a1b".into(), base: "feature".into(), ..crate::domain::fixtures::run_spec() };
-    let draft = fx.core.draft_run(spec, Some(fx.item("CA-1"))).await.unwrap();
-    let digest = fx.core.runs_review(&draft.id).await.unwrap().digest;
-    let run = fx.core.runs_approve(&draft.id, &digest).await.unwrap();
+    let run = fx.core.queue_test_run(spec, Some(fx.item("CA-1"))).await.unwrap();
     svc.start_now(&run.id).await.unwrap();
     let id = fx.core.run(&run.id).await.unwrap().unwrap().short_id.expect("a short id");
     s.launched.push(id.clone());
@@ -584,7 +580,7 @@ async fn real_agent_tools_are_called_from_a_background_session_and_the_token_sta
     let core = rig.fx.core.clone();
     let bound = crate::agent::mcp::bind(dir.join("agents")).await.expect("bind");
     let channel = bound.channel();
-    let _server = crate::agent::mcp::McpServer::start_on(bound, core.clone(), rig.svc.clone(), Arc::new(|_| {}), Arc::new(|_, _, _| {})).expect("server");
+    let _server = crate::agent::mcp::McpServer::start_on(bound, core.clone(), rig.svc.clone(), Arc::new(|_| {}), Arc::new(|_| {}), Arc::new(|_, _, _| {})).expect("server");
     let run = rig.launched(1).await;
     let token = new_token().unwrap();
     core.report_reserve(&run.id, &token_hash(&token), crate::domain::REPORT_TOOL_VERSION).await.unwrap();

@@ -1,18 +1,24 @@
-//! Lets Pip's run tools ask where a run would go. It answers with a clone and a name and cannot start anything.
+//! What Pip's agent tools ask of the run service: where a run would go, and to start, message and stop one.
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 
+use super::cli::CliError;
+use super::failure::Failure;
+use super::launcher::RunLauncher;
+use super::message::Delivery;
 use super::service::RunService;
-use crate::agent::RunPlanner;
-use crate::domain::ClonePlan;
+use crate::agent::AgentDriver;
+use crate::domain::{Actor, ClonePlan, Run};
+use crate::error::Result;
 
 #[async_trait]
-impl RunPlanner for RunService {
-    async fn plan(&self, repo: &str, key: &str, title: &str) -> Result<ClonePlan, String> {
+impl AgentDriver for RunService {
+    async fn plan(&self, repo: &str, key: &str, title: &str) -> std::result::Result<ClonePlan, String> {
         let choice = self.clones(repo).await.map_err(|e| e.to_string())?;
-        // The person's pick is listed first. Without one, the first by path: the draft is still theirs to read and edit.
+        // The person's pick is listed first. Without one, the first by path.
         let clone = match &choice.picked {
             Some(_) => choice.clones.first(),
             None => choice.clones.iter().min_by(|a, b| a.path.cmp(&b.path)),
@@ -21,6 +27,51 @@ impl RunPlanner for RunService {
         let path: PathBuf = clone.path.clone();
         let name = self.suggest_name(&path, key, title).await.map_err(|e| e.to_string())?;
         Ok(ClonePlan { path, base: clone.default_branch.clone().unwrap_or_else(|| clone.branch.clone()), name })
+    }
+
+    async fn unready(&self) -> Option<String> {
+        let tc = match self.toolchain().await {
+            Ok(tc) => tc,
+            Err(e) => return Some(e.to_string()),
+        };
+        match tc.cli.auth_status().await {
+            Ok(auth) if !auth.logged_in => Some(Failure::NotSignedIn.to_string()),
+            Err(CliError::Spawn(e)) if e.kind() == std::io::ErrorKind::NotFound => Some(Failure::ClaudeMissing.to_string()),
+            _ => None,
+        }
+    }
+
+    async fn begin(self: Arc<Self>, run_id: String) -> Result<Run> {
+        let run = match self.note_slot_wait(&run_id).await {
+            Ok(noted) => noted,
+            Err(e) => {
+                eprintln!("couldn't check the slots for run {run_id}: {e}");
+                self.load(&run_id).await?
+            }
+        };
+        (self.changed)(&run.connection_id);
+        let launcher = self.clone();
+        tokio::spawn(async move {
+            // A failed launch is recorded on the run itself; an error here means it couldn't be recorded.
+            if let Err(e) = launcher.launch(&run_id).await {
+                eprintln!("couldn't start run {run_id}: {e}");
+            }
+        });
+        Ok(run)
+    }
+
+    async fn message(&self, run_id: &str, text: &str) -> Result<(Run, Delivery)> {
+        self.message_agent(run_id, text, Actor::Pip).await
+    }
+
+    async fn stop(self: Arc<Self>, run_id: String) -> Result<Run> {
+        let stopped = self.stop_as(&run_id, Actor::Pip).await?;
+        tokio::spawn(async move {
+            if let Err(e) = self.launch_waiting().await {
+                eprintln!("couldn't start the runs waiting for a slot: {e}");
+            }
+        });
+        Ok(stopped)
     }
 }
 

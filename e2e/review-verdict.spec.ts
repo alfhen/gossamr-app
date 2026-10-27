@@ -1,7 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
-import { advanceRuns, githubWrites, jiraWrites, showWorkspace, openApp, peekSheet, peekTicket } from "./support/app";
+import { advanceRuns, githubWrites, jiraWrites, mockRuns, showWorkspace, openApp, peekSheet, peekTicket, startAgent } from "./support/app";
 
-const setup = (page: Page) => page.getByRole("dialog", { name: "Start an agent" });
 /** The Agents view's cards; Pip's strip of agents shows runs too, and only the view counts. */
 const cards = (page: Page) => page.locator('main article[data-run-id]:not(aside[aria-label="Pip"] *)');
 const sheet = (page: Page) => page.locator("#agent-sheet");
@@ -9,15 +8,7 @@ const sheet = (page: Page) => page.locator("#agent-sheet");
 /** The ids of the runs the Agents view shows. */
 const runIds = async (page: Page) => (await cards(page).evaluateAll((els) => els.map((e) => e.getAttribute("data-run-id")))).filter((id): id is string => !!id);
 
-/** Presses Review this on the finished CA-402 build's card. */
-async function reviewTheBuild(page: Page) {
-  const build = cards(page).filter({ hasText: "Build" }).filter({ hasText: "CA-402" });
-  await build.getByRole("button", { name: "Review this" }).click();
-  await expect(setup(page)).toBeVisible();
-  await expect(setup(page)).toBeVisible();
-}
-
-test("a Review the person starts from Review this finishes with a blocking verdict shown on its card and sheet, reported to Gossamr", async ({ page }) => {
+test("a Review Pip starts for the finished build finishes with a blocking verdict shown on its card and sheet, reported to Gossamr", async ({ page }) => {
   // A signed-in GitHub connection, so the code host knows the build's pull request #218 (`?mockRepos`, src/backend/mockWatch.ts).
   await page.goto("/?mockRepos=14");
   await page.getByRole("button", { name: "Start watching" }).click();
@@ -27,21 +18,8 @@ test("a Review the person starts from Review this finishes with a blocking verdi
   await expect(cards(page).first()).toBeVisible();
   const before = await runIds(page);
 
-  await reviewTheBuild(page);
-  // The adversarial instruction is what the person approves. Every run reports, so there is no switch for it; the prompt
-  // asks for the tool if it is there, and the written verdict is read when it is not.
-  await expect(setup(page).getByRole("checkbox", { name: "Let the agent report its result to Gossamr" })).toHaveCount(0);
-  const whole = setup(page).locator("details").filter({ hasText: "Show the whole prompt as one piece" });
-  await whole.locator("summary").click();
-  const prompt = whole.locator("pre");
-  await expect(prompt).toContainText("Your job is to show that the change is not ready");
-  await expect(prompt).toContainText("'Verdict: pass' (only when you tried and found nothing blocking) or 'Verdict: blocking'");
-  await expect(prompt).toContainText("it never comments on, approves, requests changes on or otherwise changes the pull request");
-  await expect(prompt).toContainText("Review pull request #218 in acme/webshop");
-  await expect(prompt).toContainText("If the Gossamr tool `report` is available");
-  await expect(prompt).toContainText("verdict ('pass' or 'blocking', required)");
-  await setup(page).getByRole("button", { name: "Start agent" }).click();
-  await expect(setup(page)).toHaveCount(0);
+  const build = (await mockRuns(page)).find((r) => r.kind === "build" && r.key === "CA-402")!;
+  await startAgent(page, "CA-402", "review", { fromRun: build.id });
 
   await expect.poll(async () => (await runIds(page)).length).toBe(before.length + 1);
   const id = (await runIds(page)).find((r) => !before.includes(r))!;

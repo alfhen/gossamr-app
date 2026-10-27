@@ -21,30 +21,28 @@ async function homeWorkstream(page: Page, key = "CA-401") {
   await expect(homeConversation(page)).toHaveText(new RegExp(`^Workstream: ${key} `));
 }
 
-test("Needs you: Pip's investigation draft waits in the list and on its row, opens its decision, and leaves once skipped", async ({ page }) => {
+test("Needs you: Pip's question waits in the list and on its row, opens its decision, and leaves once dismissed", async ({ page }) => {
   await openApp(page, SAMPLE);
   await homeWorkstream(page);
   const row = workstreamGroup(page, "CA-401");
   await expect(row.locator('[data-status="paused"]')).toHaveCount(0);
 
-  await askPip(page, "investigate this");
+  await askPip(page, "ask me which database to use");
   await settled(page);
-  const item = needOfKind(page, "runStart");
+  const item = needOfKind(page, "pipAsk");
   await expect(item).toHaveCount(1);
-  await expect(item).toContainText("drafted an Investigate agent for CA-401");
-  await expect(item.locator("[data-needs-you-chip]")).toHaveText("Review");
+  await expect(item).toContainText("Which database to use?");
   await expect(row.locator("[data-status]")).toHaveText("Needs you");
   await expect(row.locator("[data-status-detail]")).toHaveText("· 1 waiting");
 
-  // From General, the need selects the workstream again and opens its decision, with the draft's own Skip.
+  // From General, the need selects the workstream again and opens its decision, with its own Dismiss.
   await closeWorkstreamSheet(page);
   await expect(homeConversation(page)).toHaveText("General");
-  await openNeedOfKind(page, "runStart");
-  await expect(needsPane(page)).toContainText("it starts only when you approve it.");
-  await expect(needsPane(page)).toContainText("If you wait: Nothing starts until you approve it.");
+  await openNeedOfKind(page, "pipAsk");
+  await expect(needsPane(page).locator("[data-pip-ask]")).toHaveText("Which database to use?");
 
-  // Skipped there, it leaves the list and the badge, and the pane has nothing left to open.
-  await needsPane(page).getByRole("button", { name: "Skip" }).click();
+  // Dismissed there, it leaves the list and the badge, and the pane has nothing left to open.
+  await needsPane(page).getByRole("button", { name: "Dismiss" }).click();
   await expect(item).toHaveCount(0);
   await expect(row.locator('[data-status="needs-you"]')).toHaveCount(0);
   await expect(needsPane(page)).toHaveCount(0);
@@ -86,8 +84,9 @@ test("Needs you: a pause is a need with Resume as its decision, whether the pers
 test("Needs you from the board: the rail's Agents popover lists the same rows and opens their decisions on Agents", async ({ page }) => {
   await openApp(page, SAMPLE);
   await homeWorkstream(page);
-  await askPip(page, "investigate this");
+  await askPip(page, "ask me which database to use");
   await settled(page);
+  await expect(needsYouCount(page)).toHaveText("1", { timeout: 15_000 });
   await pauseAtCeiling(page, "CA-401");
   const total = Number(await needsYouCount(page).innerText());
   expect(total).toBe(2);
@@ -101,7 +100,7 @@ test("Needs you from the board: the rail's Agents popover lists the same rows an
   const popover = page.getByRole("dialog", { name: "Needs you" });
   await expect(popover.locator("[data-needs-you-count]")).toHaveText(String(total));
   await expect(popover.locator("[data-needs-you-group]")).toHaveCount(1);
-  expect((await popover.locator("[data-needs-you-group]").allTextContents()).map(withoutAge)[0]).toContain("Pip was woken too often today, so Gossamr paused it");
+  expect((await popover.locator("[data-needs-you-group]").allTextContents()).map(withoutAge)[0]).toContain("Pip asks: “Which database to use?”");
 
   // Esc closes it and leaves the board as it was.
   await page.keyboard.press("Escape");
@@ -114,7 +113,7 @@ test("Needs you from the board: the rail's Agents popover lists the same rows an
   await expect(popover).toHaveCount(0);
   await expect(agentsHome(page)).toBeVisible();
   await expect(needsPane(page)).toBeVisible();
-  await expect(needsPane(page)).toHaveAttribute("data-kind", "paused");
+  await expect(needsPane(page)).toHaveAttribute("data-kind", "pipAsk");
 });
 
 /** Runs a palette command: opens the palette, types `query` and picks the entry named `name`. */
@@ -125,7 +124,7 @@ async function palette(page: Page, query: string, name: string | RegExp) {
   await expect(page.getByRole("dialog", { name: "Command palette" })).toHaveCount(0);
 }
 
-test("the palette: 'Ask Pip to plan CA-401' lands on its workstream with a Plan draft and nothing started", async ({ page }) => {
+test("the palette: 'Ask Pip to plan CA-401' lands on its workstream and Pip starts the plan", async ({ page }) => {
   await openApp(page, SAMPLE);
   await openAgents(page);
   await openPip(page);
@@ -136,10 +135,8 @@ test("the palette: 'Ask Pip to plan CA-401' lands on its workstream with a Plan 
   await expect(homeConversation(page)).toHaveText(/^Workstream: CA-401 .* · Intake$/);
   await expect(homeConversationRegion(page).getByText("plan CA-401", { exact: true })).toBeVisible();
   await settled(page);
-  await expect(homeConversationRegion(page)).toContainText("I drafted a plan of CA-401");
-  await expect(homeConversationRegion(page).getByRole("article", { name: "Start an agent: CA-401" })).toHaveCount(1);
-  await expect(stepChip(page, "plan").locator("[data-step-needs-you]")).toHaveText("1 needs you");
-  expect(await mockRuns(page)).toEqual([]);
+  await expect.poll(async () => (await mockRuns(page)).map((r) => r.kind)).toEqual(["plan"]);
+  await expect(stepChip(page, "plan").locator('[data-run-label="R1"]')).toBeVisible();
 
   // From General, the palette finds the workstream again by its key.
   await closeWorkstreamSheet(page);

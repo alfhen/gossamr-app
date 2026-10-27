@@ -42,9 +42,7 @@ async fn stop_cancels_a_queued_run_and_is_refused_while_one_launches() {
 async fn stopping_a_run_waiting_for_a_slot_marks_it_stopped_without_asking_claude() {
     let rig = crate::runs::rig::ready_with(|s| s.with_cap(1)).await;
     let (running, ws) = rig.launched_in_workstream(1).await;
-    let draft = rig.fx.core.draft_run(RunSpec { workstream: Some(ws.clone()), ..rig.spec(2) }, Some(rig.fx.item("CA-1"))).await.unwrap();
-    let digest = rig.fx.core.runs_review(&draft.id).await.unwrap().digest;
-    let waiting = rig.fx.core.runs_approve(&draft.id, &digest).await.unwrap();
+    let waiting = rig.fx.core.queue_test_run(RunSpec { workstream: Some(ws.clone()), ..rig.spec(2) }, Some(rig.fx.item("CA-1"))).await.unwrap();
     rig.svc.start_now(&waiting.id).await.unwrap();
     assert!(rig.get(&waiting).await.slot_wait_since.is_some());
 
@@ -96,9 +94,7 @@ async fn stopping_a_workstream_holds_it_and_stops_only_its_stoppable_runs() {
     assert_eq!(ws, same);
     let outside = rig.launched(3).await;
     rig.poll().await;
-    let draft = rig.fx.core.draft_run(RunSpec { workstream: Some(ws.clone()), ..rig.spec(4) }, Some(rig.fx.item("CA-1"))).await.unwrap();
-    let digest = rig.fx.core.runs_review(&draft.id).await.unwrap().digest;
-    let queued = rig.fx.core.runs_approve(&draft.id, &digest).await.unwrap();
+    let queued = rig.fx.core.queue_test_run(RunSpec { workstream: Some(ws.clone()), ..rig.spec(4) }, Some(rig.fx.item("CA-1"))).await.unwrap();
     assert_eq!(rig.get(&queued).await.state, RunState::Queued);
 
     let tally = rig.svc.stop_workstream(&rig.fx.scope, &ws).await.unwrap();

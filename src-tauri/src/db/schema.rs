@@ -329,7 +329,52 @@ WHERE NOT EXISTS (
   WHERE e.workstream_id = r.ws AND e.actor = 'supervisor' AND e.action = 'wake' AND e.run_id = r.id AND e.detail = r.key
 );";
 
-const STEPS: &[&str] = &[INBOX, CACHE, PROPOSALS, WATCH, CODE, LINKS, RUNS, RUN_REPORTS, PIP_TURNS, WORKSTREAMS, PROPOSAL_WORKSTREAMS, GENERAL_CONVERSATION, RUN_ARCHIVE, WAKE_LEDGER];
+/// A run no longer needs a draft: `proposal_id` may be empty, and `start_key` is what makes a start happen at most once
+/// (an approved draft's id, or the key Gossamr derives from a Pip turn and a call). Rows from before take their draft's
+/// id as the key. Messages Pip has queued for a run that is still working wait in `run_messages`, apart from the run's
+/// own value, which the tracker rewrites.
+const RUN_START_KEYS: &str = "
+CREATE TABLE runs_next (
+  id TEXT PRIMARY KEY,
+  proposal_id TEXT,
+  start_key TEXT NOT NULL,
+  connection_id TEXT NOT NULL,
+  item_id TEXT, item_key TEXT,
+  kind TEXT NOT NULL, repo TEXT NOT NULL,
+  expected_worktree TEXT NOT NULL,
+  short_id TEXT, session_id TEXT,
+  state TEXT NOT NULL,
+  queued_at TEXT NOT NULL, last_progress_at TEXT NOT NULL, ended_at TEXT,
+  data TEXT NOT NULL,
+  archived_at TEXT
+) WITHOUT ROWID;
+INSERT INTO runs_next (id, proposal_id, start_key, connection_id, item_id, item_key, kind, repo, expected_worktree, short_id, session_id, state, queued_at, last_progress_at, ended_at, data, archived_at)
+  SELECT id, proposal_id, proposal_id, connection_id, item_id, item_key, kind, repo, expected_worktree, short_id, session_id, state, queued_at, last_progress_at, ended_at, data, archived_at FROM runs;
+DROP TABLE runs;
+ALTER TABLE runs_next RENAME TO runs;
+CREATE UNIQUE INDEX runs_start ON runs(start_key);
+CREATE UNIQUE INDEX runs_proposal ON runs(proposal_id) WHERE proposal_id IS NOT NULL;
+CREATE UNIQUE INDEX runs_worktree ON runs(expected_worktree);
+CREATE UNIQUE INDEX runs_short ON runs(short_id) WHERE short_id IS NOT NULL;
+CREATE INDEX runs_state ON runs(state, queued_at);
+CREATE INDEX runs_item ON runs(connection_id, item_id);
+CREATE INDEX runs_archived ON runs(archived_at);
+CREATE TABLE run_messages (
+  run_id TEXT PRIMARY KEY,
+  text TEXT NOT NULL,
+  queued_at TEXT NOT NULL
+) WITHOUT ROWID;";
+
+/// Pip starts and messages agents itself, so drafts to start a run, send a follow-up or answer a question are no longer
+/// made. Those still waiting are retired; decided ones stay as history.
+const RETIRE_AGENT_DRAFTS: &str = "
+UPDATE proposals SET state = 'retired',
+  updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now'),
+  data = json_set(data, '$.state', json_object('type', 'retired', 'reason', 'Pip starts and messages agents directly now'),
+    '$.updatedAt', strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+  WHERE state = 'pending' AND json_valid(data) AND json_extract(data, '$.intent.type') IN ('startRun', 'followUp', 'runAnswer');";
+
+const STEPS: &[&str] = &[INBOX, CACHE, PROPOSALS, WATCH, CODE, LINKS, RUNS, RUN_REPORTS, PIP_TURNS, WORKSTREAMS, PROPOSAL_WORKSTREAMS, GENERAL_CONVERSATION, RUN_ARCHIVE, WAKE_LEDGER, RUN_START_KEYS, RETIRE_AGENT_DRAFTS];
 
 pub fn migrate(conn: &mut Connection) -> Result<()> {
     let applied: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
@@ -356,7 +401,7 @@ mod tests {
         let mut conn = Connection::open_in_memory().unwrap();
         migrate(&mut conn).unwrap();
         let names = tables(&conn);
-        for t in ["tickets", "events", "activity", "seen", "meta", "items", "containers", "workflows", "cache_events", "sync_state", "proposals", "watch_settings", "watched_containers", "container_catalog", "code_changes", "http_cache", "item_links", "runs", "run_events", "run_reports", "run_report_tokens", "pip_turns", "workstreams", "workstream_events"] {
+        for t in ["tickets", "events", "activity", "seen", "meta", "items", "containers", "workflows", "cache_events", "sync_state", "proposals", "watch_settings", "watched_containers", "container_catalog", "code_changes", "http_cache", "item_links", "runs", "run_events", "run_reports", "run_report_tokens", "run_messages", "pip_turns", "workstreams", "workstream_events"] {
             assert!(names.contains(&t.to_string()), "missing {t}");
         }
         assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), STEPS.len() as i64);
@@ -730,5 +775,87 @@ mod tests {
         assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), STEPS.len() as i64);
         migrate(&mut conn).unwrap();
         assert_eq!(conn.query_row("SELECT count(*) FROM runs", [], |r| r.get::<_, i64>(0)).unwrap(), 1);
+    }
+
+    #[test]
+    fn a_file_from_before_pip_started_agents_keeps_every_run_and_may_now_hold_one_with_no_draft() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        for step in &STEPS[..14] {
+            conn.execute_batch(step).unwrap();
+        }
+        conn.pragma_update(None, "user_version", 14).unwrap();
+        let insert = |id: &str, draft: &str, worktree: &str, short: Option<&str>| {
+            conn.execute(
+                "INSERT INTO runs (id, proposal_id, connection_id, item_id, item_key, kind, repo, expected_worktree, short_id, session_id, state, queued_at, last_progress_at, data)
+                 VALUES (?1, ?2, 'c', '10', 'CA-1', 'build', 'a/b', ?3, ?4, 's', 'done', 't', 't', '{\"id\":\"x\"}')",
+                rusqlite::params![id, draft, worktree, short],
+            )
+            .unwrap();
+        };
+        insert("r1", "p1", "/w1", Some("aa11bb22"));
+        insert("r2", "p2", "/w2", None);
+        conn.execute("UPDATE runs SET archived_at = '2026-10-01T00:00:00Z' WHERE id = 'r2'", []).unwrap();
+
+        migrate(&mut conn).unwrap();
+
+        let row = |id: &str| conn.query_row("SELECT proposal_id, start_key, short_id, archived_at, data FROM runs WHERE id = ?1", [id], |r| Ok((r.get::<_, Option<String>>(0)?, r.get::<_, String>(1)?, r.get::<_, Option<String>>(2)?, r.get::<_, Option<String>>(3)?, r.get::<_, String>(4)?))).unwrap();
+        assert_eq!(row("r1"), (Some("p1".into()), "p1".into(), Some("aa11bb22".into()), None, "{\"id\":\"x\"}".into()));
+        assert_eq!(row("r2").3.as_deref(), Some("2026-10-01T00:00:00Z"), "an archived run stays archived");
+        assert_eq!(row("r2").1, "p2");
+        assert!(tables(&conn).contains(&"run_messages".to_string()));
+
+        let add = |id: &str, draft: Option<&str>, key: &str, worktree: &str| {
+            conn.execute(
+                "INSERT INTO runs (id, proposal_id, start_key, connection_id, kind, repo, expected_worktree, state, queued_at, last_progress_at, data) VALUES (?1, ?2, ?3, 'c', 'build', 'a/b', ?4, 'queued', 't', 't', '{}')",
+                rusqlite::params![id, draft, key, worktree],
+            )
+        };
+        add("r3", None, "pip:one", "/w3").unwrap();
+        add("r4", None, "pip:two", "/w4").unwrap();
+        assert!(add("r5", None, "pip:one", "/w5").is_err(), "a start key starts one run");
+        assert!(add("r6", Some("p1"), "other", "/w6").is_err(), "a draft still starts one run");
+        assert!(add("r7", Some("p7"), "p1", "/w7").is_err(), "and an old row's key is its draft's id");
+        assert!(add("r8", None, "pip:three", "/w1").is_err(), "the worktree is still unique");
+        for index in ["runs_start", "runs_proposal", "runs_worktree", "runs_short", "runs_state", "runs_item", "runs_archived"] {
+            assert_eq!(conn.query_row("SELECT count(*) FROM sqlite_master WHERE type = 'index' AND name = ?1", [index], |r| r.get::<_, i64>(0)).unwrap(), 1, "{index}");
+        }
+        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), STEPS.len() as i64);
+        migrate(&mut conn).unwrap();
+        assert_eq!(conn.query_row("SELECT count(*) FROM runs", [], |r| r.get::<_, i64>(0)).unwrap(), 4);
+    }
+
+    #[test]
+    fn waiting_drafts_to_start_message_or_answer_an_agent_are_retired_and_everything_else_stays() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        for step in &STEPS[..15] {
+            conn.execute_batch(step).unwrap();
+        }
+        conn.pragma_update(None, "user_version", 15).unwrap();
+        let add = |id: &str, state: &str, kind: &str| {
+            let data = format!(r#"{{"id":"{id}","state":{{"type":"{state}"}},"updatedAt":"2026-01-01T00:00:00Z","intent":{{"type":"{kind}"}}}}"#);
+            conn.execute("INSERT INTO proposals (id, connection_id, state, created_at, updated_at, data) VALUES (?1, 'c', ?2, 't', 't', ?3)", rusqlite::params![id, state, data]).unwrap();
+        };
+        add("start", "pending", "startRun");
+        add("follow", "pending", "followUp");
+        add("answer", "pending", "runAnswer");
+        add("comment", "pending", "comment");
+        add("sent", "applied", "startRun");
+
+        migrate(&mut conn).unwrap();
+
+        let row = |id: &str| conn.query_row("SELECT state, data FROM proposals WHERE id = ?1", [id], |r| Ok((r.get::<_, String>(0)?, serde_json::from_str::<serde_json::Value>(&r.get::<_, String>(1)?).unwrap()))).unwrap();
+        for id in ["start", "follow", "answer"] {
+            let (state, data) = row(id);
+            assert_eq!(state, "retired", "{id}");
+            assert_eq!(data["state"], serde_json::json!({ "type": "retired", "reason": "Pip starts and messages agents directly now" }));
+            let read: crate::domain::Proposal = serde_json::from_value(serde_json::json!({
+                "id": id, "createdAt": "2026-01-01T00:00:00Z", "updatedAt": data["updatedAt"], "origin": { "type": "board" }, "createdBy": "user",
+                "intent": { "type": "runAnswer", "connectionId": "c", "runId": "r", "item": null, "message": "Yes." }, "label": null, "basis": null, "state": data["state"], "error": null
+            })).unwrap();
+            assert_eq!(read.state, crate::domain::ProposalState::Retired("Pip starts and messages agents directly now".into()));
+        }
+        assert_eq!(row("comment").0, "pending");
+        assert_eq!(row("sent").0, "applied");
+        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), STEPS.len() as i64);
     }
 }

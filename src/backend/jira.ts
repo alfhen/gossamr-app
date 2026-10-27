@@ -7,12 +7,10 @@ import type {
   AssignedElsewhere,
   CacheChanged,
   CatalogPage,
-  ContainerRef,
   Intent,
   ItemRef,
   Person,
   PlanComment,
-  Preflight,
   Proposal,
   ProposalEdit,
   ProposalQuery,
@@ -22,8 +20,6 @@ import type {
   Run,
   RunEvent,
   RunQuery,
-  RunReview,
-  RunSpec,
   RunOutcome,
   RunsChanged,
   AgentSettings,
@@ -65,7 +61,6 @@ import type {
   WorkstreamView,
   WorkstreamsChanged,
 } from "../types";
-import { readEnvironment } from "./runsEnvironment";
 import type { Backend, ReadScope } from "./types";
 
 /** The Jira site and account this backend acts for. */
@@ -279,14 +274,6 @@ export class JiraBackend implements Backend {
     return invoke<Run | null>("runs_get", { id });
   }
 
-  runsReview(proposalId: string) {
-    return invoke<RunReview>("runs_review", { proposalId });
-  }
-
-  runsApprove(proposalId: string, digest: string) {
-    return invoke<Run>("runs_approve", { proposalId, digest });
-  }
-
   runsStop(id: string) {
     return invoke<Run>("runs_stop", { id });
   }
@@ -301,14 +288,6 @@ export class JiraBackend implements Backend {
 
   runsAllowPermissionOnce(id: string, command: string) {
     return invoke<Run>("runs_allow_permission_once", { id, command });
-  }
-
-  runsSendFollowUp(proposalId: string, message: string) {
-    return invoke<Run>("runs_send_follow_up", { proposalId, message });
-  }
-
-  runsAnswerDraft(proposalId: string, message: string) {
-    return invoke<Run>("runs_answer_draft", { proposalId, message });
   }
 
   runsAdoptSession(id: string, session: string) {
@@ -327,24 +306,8 @@ export class JiraBackend implements Backend {
     return invoke<void>("runs_trust_folder", { id });
   }
 
-  runsTrustPath(path: string) {
-    return invoke<void>("runs_trust_path", { path });
-  }
-
   runsSignIn(id: string) {
     return invoke<void>("runs_sign_in", { id });
-  }
-
-  runsPreflight(spec: RunSpec | null) {
-    return invoke<Preflight>("runs_preflight", { spec });
-  }
-
-  runsDraft(spec: RunSpec, item: ItemRef | null) {
-    return invoke<Proposal>("runs_draft", { spec, item });
-  }
-
-  runsRepos() {
-    return invoke<string[]>("runs_repos");
   }
 
   runsClones(repo: string) {
@@ -357,10 +320,6 @@ export class JiraBackend implements Backend {
 
   runsPickClone(repo: string, path: string) {
     return invoke<void>("runs_pick_clone", { repo, path });
-  }
-
-  runsSuggestName(clonePath: string, key: string, title: string) {
-    return invoke<string>("runs_suggest_name", { clonePath, key, title });
   }
 
   runsOutcome(id: string) {
@@ -379,20 +338,8 @@ export class JiraBackend implements Backend {
     return invoke<PlanComment>("runs_draft_plan_comment", { id });
   }
 
-  runsRefreshPlan(id: string) {
-    return invoke<Proposal>("runs_refresh_plan", { id });
-  }
-
-  runsRefreshBuildAccount(id: string) {
-    return invoke<Proposal>("runs_refresh_build_account", { id });
-  }
-
   runsDraftTicket(id: string) {
     return invoke<Proposal>("runs_draft_ticket", { id });
-  }
-
-  runsRepoProject(repo: string) {
-    return invoke<ContainerRef | null>("runs_repo_project", { repo });
   }
 
   runsDraftBlocker(id: string, blockerKey: string) {
@@ -413,10 +360,6 @@ export class JiraBackend implements Backend {
 
   revealPath(path: string) {
     return revealItemInDir(path);
-  }
-
-  runsEnvironment() {
-    return readEnvironment(() => this.runsPreflight(null));
   }
 
   runsDisk(id: string) {
@@ -509,6 +452,10 @@ export class JiraBackend implements Backend {
 
   workstreamsResume(id: string) {
     return invoke<Workstream>("workstreams_resume", { id });
+  }
+
+  workstreamsDismissAsk(id: string) {
+    return invoke<boolean>("workstreams_dismiss_ask", { id });
   }
 
   workstreamsUndo(id: string, undo: WorkstreamUndo) {

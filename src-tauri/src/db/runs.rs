@@ -4,10 +4,10 @@
 #![allow(dead_code)]
 
 use rusqlite::types::Value as Sql;
-use rusqlite::{params, params_from_iter, ErrorCode, OptionalExtension, Transaction, TransactionBehavior};
+use rusqlite::{params, params_from_iter, ErrorCode, OptionalExtension};
 
 use super::{stamp, Db};
-use crate::domain::{Intent, Proposal, ProposalState, Run, RunEvent, RunQuery, RunState};
+use crate::domain::{Run, RunEvent, RunQuery, RunState};
 use crate::error::{Error, Result};
 
 const EVENTS_PER_RUN: u32 = 500;
@@ -17,14 +17,17 @@ fn path_text(run: &Run) -> String {
     run.expected_worktree.to_string_lossy().into_owned()
 }
 
-fn insert(conn: &rusqlite::Connection, run: &Run) -> rusqlite::Result<usize> {
+/// `start_key` defaults to the run's own id; the legacy draft id is stored when there was one.
+fn insert(conn: &rusqlite::Connection, run: &Run, start_key: Option<&str>) -> rusqlite::Result<usize> {
+    let draft = Some(run.proposal_id.as_str()).filter(|p| !p.is_empty());
     conn.execute(
-        "INSERT INTO runs (id, proposal_id, connection_id, item_id, item_key, kind, repo, expected_worktree, short_id, session_id,
+        "INSERT INTO runs (id, proposal_id, start_key, connection_id, item_id, item_key, kind, repo, expected_worktree, short_id, session_id,
            state, queued_at, last_progress_at, ended_at, data)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
         params![
             run.id,
-            run.proposal_id,
+            draft,
+            start_key.or(draft).unwrap_or(&run.id),
             run.connection_id,
             run.item.as_ref().map(|i| i.external_id.clone()),
             run.item.as_ref().map(|i| i.key.clone()),
@@ -55,7 +58,7 @@ pub const ARCHIVABLE: [RunState; 4] = [RunState::Done, RunState::Failed, RunStat
 fn clash(e: rusqlite::Error) -> Error {
     match &e {
         rusqlite::Error::SqliteFailure(f, _) if f.code == ErrorCode::ConstraintViolation => {
-            Error::Proposal("a run for this draft, session or worktree already exists".into())
+            Error::Proposal("a run for this draft, start, session or worktree already exists".into())
         }
         _ => e.into(),
     }
@@ -63,7 +66,62 @@ fn clash(e: rusqlite::Error) -> Error {
 
 impl Db {
     pub fn insert_run(&self, run: &Run) -> Result<()> {
-        insert(&self.conn, run).map(|_| ()).map_err(clash)
+        insert(&self.conn, run, None).map(|_| ()).map_err(clash)
+    }
+
+    /// Inserts a run Pip started under `start_key`, unless one was already started under it: that run is returned
+    /// instead, with `false`. The check and the insert are one statement's worth of work under the database's own lock,
+    /// so two calls with the same key can't both start.
+    pub fn insert_started_run(&self, run: &Run, start_key: &str) -> Result<(Run, bool)> {
+        self.atomically(|db| {
+            if let Some(existing) = db.run_by_start_key(start_key)? {
+                return Ok((existing, false));
+            }
+            insert(&db.conn, run, Some(start_key)).map_err(clash)?;
+            Ok((run.clone(), true))
+        })
+    }
+
+    pub fn run_by_start_key(&self, start_key: &str) -> Result<Option<Run>> {
+        self.run_where("start_key = ?1", start_key)
+    }
+
+    /// Keeps `text` for the run's next `ask` call or the end of its turn, replacing one already waiting.
+    pub fn put_run_message(&self, run_id: &str, text: &str, at: chrono::DateTime<chrono::Utc>) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO run_messages (run_id, text, queued_at) VALUES (?1, ?2, ?3)
+             ON CONFLICT(run_id) DO UPDATE SET text = excluded.text, queued_at = excluded.queued_at",
+            params![run_id, text, stamp(at)],
+        )?;
+        Ok(())
+    }
+
+    /// Puts back a message that was taken but not delivered, unless a newer one is waiting.
+    pub fn restore_run_message(&self, run_id: &str, text: &str, at: chrono::DateTime<chrono::Utc>) -> Result<()> {
+        self.conn.execute("INSERT OR IGNORE INTO run_messages (run_id, text, queued_at) VALUES (?1, ?2, ?3)", params![run_id, text, stamp(at)])?;
+        Ok(())
+    }
+
+    /// The message waiting for the run, if any, and removes it.
+    pub fn take_run_message(&self, run_id: &str) -> Result<Option<String>> {
+        self.atomically(|db| {
+            let text: Option<String> = db.conn.query_row("SELECT text FROM run_messages WHERE run_id = ?1", params![run_id], |r| r.get(0)).optional()?;
+            if text.is_some() {
+                db.conn.execute("DELETE FROM run_messages WHERE run_id = ?1", params![run_id])?;
+            }
+            Ok(text)
+        })
+    }
+
+    pub fn run_message(&self, run_id: &str) -> Result<Option<String>> {
+        Ok(self.conn.query_row("SELECT text FROM run_messages WHERE run_id = ?1", params![run_id], |r| r.get(0)).optional()?)
+    }
+
+    /// The ids of the runs with a message waiting, oldest message first.
+    pub fn run_messages_waiting(&self) -> Result<Vec<String>> {
+        let mut stmt = self.conn.prepare("SELECT run_id FROM run_messages ORDER BY queued_at, run_id")?;
+        let rows = stmt.query_map([], |r| r.get(0))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
     /// Replaces a stored run. Returns false when there is none with that id.
@@ -88,10 +146,6 @@ impl Db {
 
     pub fn run(&self, id: &str) -> Result<Option<Run>> {
         self.run_where("id = ?1", id)
-    }
-
-    pub fn run_by_proposal(&self, proposal_id: &str) -> Result<Option<Run>> {
-        self.run_where("proposal_id = ?1", proposal_id)
     }
 
     fn run_where(&self, clause: &str, arg: &str) -> Result<Option<Run>> {
@@ -161,7 +215,7 @@ impl Db {
             if !archived {
                 return Ok(false);
             }
-            for table in ["run_events", "run_reports", "run_report_tokens"] {
+            for table in ["run_events", "run_reports", "run_report_tokens", "run_messages"] {
                 db.conn.execute(&format!("DELETE FROM {table} WHERE run_id = ?1"), params![id])?;
             }
             Ok(db.conn.execute("DELETE FROM runs WHERE id = ?1", params![id])? > 0)
@@ -209,47 +263,6 @@ impl Db {
         })?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
-
-    /// Approves a `StartRun` draft in one transaction: the proposal becomes `Applied` and its run is inserted as
-    /// `Queued`, or neither happens. Refuses when the stored spec no longer has the digest the person read. The unique
-    /// indexes on the run mean a second approval, from another window or after a crash, can't make a second run.
-    pub fn approve_start_run(&self, proposal_id: &str, expected_digest: &str, make: impl FnOnce(&Proposal) -> Run) -> Result<Run> {
-        // Immediate: take the write lock before reading, so the digest checked is the one that gets approved.
-        let tx = Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)?;
-        let data: Option<String> =
-            tx.query_row("SELECT data FROM proposals WHERE id = ?1", params![proposal_id], |r| r.get(0)).optional()?;
-        let mut p: Proposal = match data {
-            Some(d) => serde_json::from_str(&d)?,
-            None => return Err(Error::Proposal("that draft no longer exists".into())),
-        };
-        if p.state != ProposalState::Pending {
-            return Err(crate::proposals::not_pending(&p));
-        }
-        let Intent::StartRun { spec, .. } = &p.intent else {
-            return Err(Error::Proposal("that draft doesn't start a run".into()));
-        };
-        let spec = spec.clone();
-        if spec.digest() != expected_digest {
-            return Err(Error::Proposal("This draft changed after you read it. Review it again.".into()));
-        }
-        let mut run = make(&p);
-        run.proposal_id = p.id.clone();
-        run.digest = spec.digest();
-        run.expected_worktree = spec.worktree();
-        run.spec = spec;
-        run.state = RunState::Queued;
-        p.state = ProposalState::Applied;
-        p.run = Some(run.id.clone());
-        p.error = None;
-        p.updated_at = run.queued_at;
-        tx.execute(
-            "UPDATE proposals SET state = ?2, updated_at = ?3, data = ?4 WHERE id = ?1",
-            params![p.id, p.state.kind().as_str(), stamp(p.updated_at), serde_json::to_string(&p)?],
-        )?;
-        insert(&tx, &run).map_err(clash)?;
-        tx.commit()?;
-        Ok(run)
-    }
 }
 
 #[cfg(test)]
@@ -258,176 +271,52 @@ mod tests {
 
     use super::*;
     use crate::domain::fixtures::{item_ref, now, run_spec};
-    use crate::domain::{CreatedBy, Origin, ProposalQuery, StateKind};
-    use crate::proposals::{self, Draft};
-
-    fn start_run(name: &str) -> Intent {
-        let spec = crate::domain::RunSpec { name: name.into(), ..run_spec() };
-        Intent::StartRun { connection_id: "c".into(), item: Some(item_ref("1")), spec }
-    }
-
-    fn drafted(db: &Db, name: &str) -> Proposal {
-        let draft = Draft { origin: Origin::Board, created_by: CreatedBy::User, intent: start_run(name), label: None, basis: None };
-        proposals::create(db, draft, now()).unwrap()
-    }
-
-    fn digest_of(p: &Proposal) -> String {
-        match &p.intent {
-            Intent::StartRun { spec, .. } => spec.digest(),
-            other => panic!("{other:?}"),
-        }
-    }
-
-    fn approve(db: &Db, p: &Proposal, digest: &str) -> Result<Run> {
-        db.approve_start_run(&p.id, digest, |p| {
-            let Intent::StartRun { spec, .. } = &p.intent else { panic!() };
-            Run::queued(format!("run-{}", p.id), p.id.clone(), "c".into(), p.target().cloned(), spec.clone(), "inbox.sqlite".into(), now())
-        })
-    }
 
     fn count_runs(db: &Db) -> usize {
         db.runs(&RunQuery::default()).unwrap().len()
     }
 
-    #[test]
-    fn approving_marks_the_proposal_applied_and_queues_one_run_bound_to_it() {
-        let db = Db::in_memory().unwrap();
-        let p = drafted(&db, "eng-1-cart-0001");
-        let run = approve(&db, &p, &digest_of(&p)).unwrap();
-
-        assert_eq!((run.state, run.proposal_id.as_str()), (RunState::Queued, p.id.as_str()));
-        assert_eq!(run.expected_worktree, std::path::PathBuf::from("/Users/me/Code/webshop/.claude/worktrees/eng-1-cart-0001"));
-        let stored = db.proposal(&p.id).unwrap().unwrap();
-        assert_eq!((stored.state, stored.run), (ProposalState::Applied, Some(run.id.clone())));
-        assert_eq!(db.run(&run.id).unwrap().unwrap(), run);
-        assert_eq!(db.run_by_proposal(&p.id).unwrap().unwrap().id, run.id);
+    fn queued(id: &str, worktree: &str) -> Run {
+        let spec = crate::domain::RunSpec { name: worktree.into(), ..run_spec() };
+        Run::started_by_pip(id.into(), "c".into(), None, spec, "inbox.sqlite".into(), "req-1", now())
     }
 
     #[test]
-    fn approving_twice_fails_and_leaves_one_run() {
+    fn a_second_run_in_the_same_worktree_is_refused() {
         let db = Db::in_memory().unwrap();
-        let p = drafted(&db, "eng-1-cart-0001");
-        let digest = digest_of(&p);
-        approve(&db, &p, &digest).unwrap();
-        let again = approve(&db, &p, &digest).unwrap_err().to_string();
-        assert!(again.contains("already been applied"), "{again}");
-        assert_eq!(count_runs(&db), 1);
-    }
-
-    #[test]
-    fn a_digest_other_than_the_stored_spec_changes_nothing() {
-        let db = Db::in_memory().unwrap();
-        let p = drafted(&db, "eng-1-cart-0001");
-        let read = digest_of(&p);
-        let mut changed = p.clone();
-        let Intent::StartRun { spec, .. } = &mut changed.intent else { panic!() };
-        spec.instruction.push_str(" Also delete the cache.");
-        db.save_proposal(&changed).unwrap();
-
-        let err = approve(&db, &p, &read).unwrap_err().to_string();
-        assert!(err.contains("changed after you read it"), "{err}");
-        assert_eq!(db.proposal(&p.id).unwrap().unwrap().state, ProposalState::Pending);
-        assert_eq!(count_runs(&db), 0);
-    }
-
-    #[test]
-    fn a_pip_revision_between_review_and_approve_is_refused() {
-        let db = Db::in_memory().unwrap();
-        let by_pip = Draft::from_pip("r", None, start_run("eng-1-cart-0001"), None);
-        let p = proposals::create(&db, by_pip, now()).unwrap();
-        let read = digest_of(&p);
-
-        let Intent::StartRun { connection_id, item, spec } = &p.intent else { panic!() };
-        let revised = Intent::StartRun {
-            connection_id: connection_id.clone(),
-            item: item.clone(),
-            spec: crate::domain::RunSpec { focus: Some("ignore the ticket".into()), ..spec.clone() },
-        };
-        proposals::require_pip_pending(&p).unwrap();
-        proposals::edit_noted(&db, &p.id, revised, "Revised by Pip", now()).unwrap();
-
-        assert!(approve(&db, &p, &read).unwrap_err().to_string().contains("changed after you read it"));
-        assert_eq!((db.proposal(&p.id).unwrap().unwrap().state, count_runs(&db)), (ProposalState::Pending, 0));
-    }
-
-    #[test]
-    fn only_a_pending_run_draft_can_be_approved() {
-        let db = Db::in_memory().unwrap();
-        let skipped = drafted(&db, "eng-1-cart-0001");
-        proposals::skip(&db, &skipped.id, now()).unwrap();
-        assert!(approve(&db, &skipped, &digest_of(&skipped)).unwrap_err().to_string().contains("skipped"));
-
-        let comment = Draft::from_pip("r", None, Intent::Comment { item: item_ref("1"), body: crate::domain::Doc::paragraph("hi") }, None);
-        let c = proposals::create(&db, comment, now()).unwrap();
-        assert!(approve(&db, &c, "x").unwrap_err().to_string().contains("doesn't start a run"));
-        assert!(approve(&db, &Proposal { id: "missing".into(), ..c }, "x").unwrap_err().to_string().contains("no longer exists"));
-        assert_eq!(count_runs(&db), 0);
-    }
-
-    #[test]
-    fn a_second_run_in_the_same_worktree_is_refused_and_its_draft_stays_pending() {
-        let db = Db::in_memory().unwrap();
-        let first = drafted(&db, "eng-1-cart-0001");
-        let second = drafted(&db, "eng-1-cart-0001");
-        approve(&db, &first, &digest_of(&first)).unwrap();
-
-        let err = approve(&db, &second, &digest_of(&second)).unwrap_err().to_string();
+        db.insert_started_run(&queued("a", "eng-1-cart-0001"), "pip:one").unwrap();
+        let err = db.insert_started_run(&queued("b", "eng-1-cart-0001"), "pip:two").unwrap_err().to_string();
         assert!(err.contains("already exists"), "{err}");
-        let stored = db.proposal(&second.id).unwrap().unwrap();
-        assert_eq!((stored.state, stored.run), (ProposalState::Pending, None));
         assert_eq!(count_runs(&db), 1);
     }
 
     #[test]
-    fn a_run_per_proposal_and_a_session_id_per_run_are_enforced_by_the_table() {
+    fn a_session_id_per_run_and_a_draft_per_old_run_are_enforced_by_the_table() {
         let db = Db::in_memory().unwrap();
-        let p = drafted(&db, "eng-1-cart-0001");
-        let spec = || run_spec();
-        let run = |id: &str, proposal: &str, name: &str| {
-            let mut r = Run::queued(id.into(), proposal.into(), "c".into(), None, crate::domain::RunSpec { name: name.into(), ..spec() }, "f".into(), now());
+        let run = |id: &str, draft: &str, name: &str| {
+            let mut r = Run::queued(id.into(), draft.into(), "c".into(), None, crate::domain::RunSpec { name: name.into(), ..run_spec() }, "f".into(), now());
             r.short_id = crate::runs::cli::ShortId::parse("0123abcd");
             r
         };
-        db.insert_run(&run("a", &p.id, "name-one")).unwrap();
-        assert!(db.insert_run(&run("b", &p.id, "name-two")).is_err(), "one run per proposal");
-        assert!(db.insert_run(&run("c", "other", "name-three")).is_err(), "one run per short id");
+        db.insert_run(&run("a", "p1", "name-one")).unwrap();
+        assert!(db.insert_run(&run("b", "p1", "name-two")).is_err(), "one run per old draft");
+        assert!(db.insert_run(&run("c", "p2", "name-three")).is_err(), "one run per short id");
     }
 
     #[test]
-    fn a_crash_after_the_commit_leaves_a_queued_run_that_a_restart_does_not_touch() {
+    fn a_queued_run_survives_a_restart_untouched() {
         let dir = std::env::temp_dir().join(format!("gossamr-runs-{}", std::process::id()));
         let file = dir.join("inbox.sqlite");
-        let (p, run) = {
+        let run = {
             let db = Db::open(&file).unwrap();
-            let p = drafted(&db, "eng-1-cart-0001");
-            (p.clone(), approve(&db, &p, &digest_of(&p)).unwrap())
+            db.insert_started_run(&queued("a", "eng-1-cart-0001"), "pip:one").unwrap().0
         };
 
         let db = Db::open(&file).unwrap();
         assert_eq!(db.release_interrupted(now()).unwrap(), 0);
         assert_eq!(db.run(&run.id).unwrap().unwrap().state, RunState::Queued);
-        let stored = db.proposal(&p.id).unwrap().unwrap();
-        assert_eq!((stored.state, stored.run), (ProposalState::Applied, Some(run.id.clone())));
-        assert!(approve(&db, &p, &digest_of(&p)).is_err());
         assert_eq!(count_runs(&db), 1);
         std::fs::remove_dir_all(&dir).unwrap();
-    }
-
-    #[test]
-    fn release_interrupted_skips_run_drafts_but_still_releases_other_writes() {
-        let db = Db::in_memory().unwrap();
-        let mut run_draft = drafted(&db, "eng-1-cart-0001");
-        run_draft.state = ProposalState::Applying;
-        db.save_proposal(&run_draft).unwrap();
-        let comment = Draft::from_pip("r", None, Intent::Comment { item: item_ref("1"), body: crate::domain::Doc::paragraph("hi") }, None);
-        let c = proposals::create(&db, comment, now()).unwrap();
-        proposals::begin(&db, &c.id, now()).unwrap();
-
-        assert_eq!(db.release_interrupted(now()).unwrap(), 1);
-        assert_eq!(db.proposal(&run_draft.id).unwrap().unwrap().state, ProposalState::Applying);
-        assert_eq!(db.proposal(&c.id).unwrap().unwrap().state, ProposalState::Pending);
-        let applying = ProposalQuery { states: Some(vec![StateKind::Applying]), ..Default::default() };
-        assert_eq!(db.proposals(&applying).unwrap().len(), 1);
     }
 
     #[test]
@@ -473,8 +362,7 @@ mod tests {
     #[test]
     fn a_saved_run_replaces_the_stored_one_and_its_columns() {
         let db = Db::in_memory().unwrap();
-        let p = drafted(&db, "eng-1-cart-0001");
-        let mut run = approve(&db, &p, &digest_of(&p)).unwrap();
+        let mut run = db.insert_started_run(&queued("a", "eng-1-cart-0001"), "pip:one").unwrap().0;
         run.state = RunState::Working;
         run.short_id = crate::runs::cli::ShortId::parse("0123abcd");
         run.tokens = Some(10);
@@ -570,5 +458,60 @@ mod tests {
         let count = |table: &str| db.conn.query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r.get::<_, i64>(0)).unwrap();
         assert_eq!((count("run_reports"), count("run_report_tokens")), (1, 1));
         assert!(!db.delete_archived_run("a").unwrap());
+    }
+
+    fn started(id: &str) -> Run {
+        let spec = crate::domain::RunSpec { name: format!("name-{id}"), ..run_spec() };
+        Run::started_by_pip(id.into(), "c".into(), None, spec, "f".into(), "req-1", now())
+    }
+
+    #[test]
+    fn a_start_key_starts_one_run_and_a_second_call_with_it_gets_the_first_back() {
+        let db = Db::in_memory().unwrap();
+        let (first, fresh) = db.insert_started_run(&started("r1"), "pip:aa").unwrap();
+        assert!(fresh);
+        assert_eq!(db.run("r1").unwrap().unwrap(), first);
+        assert_eq!(db.run_by_start_key("pip:aa").unwrap().unwrap().id, "r1");
+
+        let (again, fresh) = db.insert_started_run(&started("r2"), "pip:aa").unwrap();
+        assert_eq!((fresh, again.id.as_str()), (false, "r1"));
+        assert!(db.run("r2").unwrap().is_none());
+        db.insert_started_run(&started("r3"), "pip:bb").unwrap();
+        assert_eq!(count_runs(&db), 2);
+    }
+
+    #[test]
+    fn an_old_runs_start_key_is_its_drafts_id_and_cannot_be_used_to_start_another() {
+        let db = Db::in_memory().unwrap();
+        let mut old = Run::queued("old".into(), "p1".into(), "c".into(), None, crate::domain::RunSpec { name: "eng-1-cart-0001".into(), ..run_spec() }, "f".into(), now());
+        old.state = RunState::Done;
+        db.insert_run(&old).unwrap();
+        assert_eq!(db.run_by_start_key("p1").unwrap().unwrap().id, "old");
+        assert!(!db.insert_started_run(&started("r1"), "p1").unwrap().1);
+        assert_eq!(count_runs(&db), 1);
+    }
+
+    #[test]
+    fn a_message_for_a_run_waits_until_taken_and_a_newer_one_replaces_it() {
+        let db = Db::in_memory().unwrap();
+        assert_eq!(db.take_run_message("r1").unwrap(), None);
+        db.put_run_message("r1", "First.", now()).unwrap();
+        db.put_run_message("r1", "Second.", now()).unwrap();
+        db.put_run_message("r2", "Other.", now() + Duration::seconds(1)).unwrap();
+        assert_eq!(db.run_message("r1").unwrap().as_deref(), Some("Second."));
+        assert_eq!(db.run_messages_waiting().unwrap(), ["r1", "r2"]);
+        assert_eq!(db.take_run_message("r1").unwrap().as_deref(), Some("Second."));
+        assert_eq!(db.take_run_message("r1").unwrap(), None, "taken once");
+        assert_eq!(db.run_messages_waiting().unwrap(), ["r2"]);
+    }
+
+    #[test]
+    fn deleting_an_archived_run_takes_its_waiting_message_too() {
+        let db = Db::in_memory().unwrap();
+        stored(&db, "a", RunState::Done);
+        db.put_run_message("a", "Never sent.", now()).unwrap();
+        db.archive_runs(&["a".into()], now()).unwrap();
+        assert!(db.delete_archived_run("a").unwrap());
+        assert!(db.run_message("a").unwrap().is_none());
     }
 }

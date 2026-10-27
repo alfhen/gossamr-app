@@ -3,7 +3,7 @@ import type { Run, RunSpec } from "../types";
 import { MockBackend } from "./mock";
 import { itemRef } from "./mockConnector";
 import { mockPipTurns } from "./mockPipTurns";
-import { mockDigest } from "./mockRuns";
+import { mockDigest, renderPrompt } from "./mockRuns";
 import { MOCK_WORKSTREAMS_KEY, MockWorkstreams, NOTES_LIMIT, WAKES_PER_WORKSTREAM_PER_DAY, lastDriftOf, waitingForPr } from "./mockWorkstreams";
 import { driftLine } from "./mockPip";
 
@@ -18,7 +18,7 @@ afterAll(() => vi.unstubAllGlobals());
 
 const CA401 = itemRef("CA-401");
 
-/** A run the person drafts on CA-401 in a sample clone, as the setup sheet does. */
+/** A run on CA-401 in a sample clone, as Pip's start_agent does. */
 const spec = (over: Partial<RunSpec> = {}): RunSpec => ({
   kind: "investigate",
   repo: "acme/storefront",
@@ -130,17 +130,17 @@ describe("mock workstreams", () => {
 describe("runs and drafts in a mock workstream", () => {
   beforeEach(() => saved.clear());
 
-  it("links a run the person drafts, only to an open workstream of the same ticket", async () => {
+  it("links a run Pip starts, only to an open workstream of the same ticket", async () => {
     const backend = new MockBackend();
     const ws = await backend.workstreamsOpen(CA401);
-    await expect(backend.runsDraft(spec({ workstream: ws.id }), itemRef("CA-402"))).rejects.toThrow(`workstream ${ws.id} is about another ticket`);
-    await expect(backend.runsDraft(spec({ workstream: "ws-404" }), CA401)).rejects.toThrow("there is no workstream ws-404");
-    await expect(backend.runsDraft(spec({ workstream: "" }), CA401)).rejects.toThrow("1 to 64 characters");
-    const draft = await backend.runsDraft(spec({ workstream: ws.id }), CA401);
-    expect(draft.intent.type === "startRun" && draft.intent.spec.workstream).toBe(ws.id);
-    expect((await backend.proposalsList({ workstream: ws.id })).map((p) => p.id)).toEqual([draft.id]);
+    expect(() => backend.runs.start(spec({ workstream: ws.id }), itemRef("CA-402"))).toThrow(`workstream ${ws.id} is about another ticket`);
+    expect(() => backend.runs.start(spec({ workstream: "ws-404" }), CA401)).toThrow("there is no workstream ws-404");
+    expect(() => backend.runs.start(spec({ workstream: "" }), CA401)).toThrow("1 to 64 characters");
+    const run = backend.runs.start(spec({ workstream: ws.id }), CA401);
+    expect(run.spec.workstream).toBe(ws.id);
+    expect((await backend.runsList({ workstream: ws.id })).map((r) => r.id)).toEqual([run.id]);
     await backend.workstreamsClose(ws.id);
-    await expect(backend.runsDraft(spec({ workstream: ws.id }), CA401)).rejects.toThrow("is closed");
+    expect(() => backend.runs.start(spec({ workstream: ws.id, name: "ca-401-closed" }), CA401)).toThrow("is closed");
   });
 
   it("counts the workstream in the digest only when it is set", () => {
@@ -149,13 +149,11 @@ describe("runs and drafts in a mock workstream", () => {
     expect(mockDigest({ ...plain, workstream: "ws-1" })).not.toBe(mockDigest(plain));
   });
 
-  it("follows a run from approval to done: the stage moves, the result draft is the agent's, and the audit says who did what", async () => {
+  it("follows a run from start to done: the stage moves, the result draft is the agent's, and the audit says who did what", async () => {
     const backend = new MockBackend({ runs: { seed: "empty" } });
     backend.supervisor.dispose();
     const ws = await backend.workstreamsOpen(CA401);
-    const draft = await backend.runsDraft(spec({ workstream: ws.id }), CA401);
-    const { digest } = await backend.runsReview(draft.id);
-    const run = await backend.runsApprove(draft.id, digest);
+    const run = backend.runs.start(spec({ workstream: ws.id }), CA401);
     const stageNow = async () => (await backend.workstreamsGet(ws.id))?.stage;
     expect(await backend.workstreamsGet(ws.id)).toMatchObject({ stage: "investigate", runs: [run.id], labels: [[run.id, "R1"]] });
     expect(await backend.runsList({ workstream: ws.id })).toHaveLength(1);
@@ -171,28 +169,25 @@ describe("runs and drafts in a mock workstream", () => {
     const events = await backend.workstreamsEvents(ws.id);
     expect(events.map((e) => [e.actor, e.action])).toEqual([
       ["person", "opened"],
-      ["person", "draft_created"],
-      ["person", "run_approved"],
+      ["pip", "agent_started"],
       ["run", "draft_created"],
       ["person", "draft_skipped"],
     ]);
-    expect(events[2]).toMatchObject({ runId: run.id, proposalId: draft.id, digest });
-    expect(events[3].proposalId).toBe(left[0].id);
+    expect(events[1]).toMatchObject({ runId: run.id, detail: "investigate · conversation" });
+    expect(events[2].proposalId).toBe(left[0].id);
   });
 
   it("records the person stopping and answering a run of the workstream, and nothing for other runs", async () => {
     const backend = new MockBackend({ runs: { seed: "empty" } });
     const ws = await backend.workstreamsOpen(CA401);
-    const draft = await backend.runsDraft(spec({ workstream: ws.id }), CA401);
-    const run = await backend.runsApprove(draft.id, (await backend.runsReview(draft.id)).digest);
+    const run = backend.runs.start(spec({ workstream: ws.id }), CA401);
     backend.runs.advance(run.id);
     backend.runs.advance(run.id);
     await backend.runsStop(run.id);
     expect((await backend.workstreamsEvents(ws.id)).slice(-1)[0]).toMatchObject({ actor: "person", action: "run_stopped", runId: run.id });
     expect((await backend.workstreamsGet(ws.id))?.stage).toBe("investigate");
 
-    const asking = await backend.runsDraft(spec({ workstream: ws.id }), CA401);
-    const second = await backend.runsApprove(asking.id, (await backend.runsReview(asking.id)).digest);
+    const second = backend.runs.start(spec({ workstream: ws.id }), CA401);
     backend.runs.advance(second.id);
     backend.runs.advance(second.id);
     backend.runs.ask(second.id, "Which cache?");
@@ -201,8 +196,7 @@ describe("runs and drafts in a mock workstream", () => {
     expect(answered).toMatchObject({ actor: "person", action: "run_answered", runId: second.id, detail: "22" });
     expect(JSON.stringify(await backend.workstreamsEvents(ws.id))).not.toContain("second one");
 
-    const other = await backend.runsDraft(spec(), itemRef("CA-402"));
-    const loose = await backend.runsApprove(other.id, (await backend.runsReview(other.id)).digest);
+    const loose = backend.runs.start(spec(), itemRef("CA-402"));
     backend.runs.advance(loose.id);
     backend.runs.advance(loose.id);
     const before = (await backend.workstreamsEvents(ws.id)).length;
@@ -215,8 +209,7 @@ describe("runs and drafts in a mock workstream", () => {
     try {
       const backend = new MockBackend({ runs: { seed: "empty", untrusted: true } });
       const ws = await backend.workstreamsOpen(CA401);
-      const draft = await backend.runsDraft(spec({ workstream: ws.id }), CA401);
-      const run = await backend.runsApprove(draft.id, (await backend.runsReview(draft.id)).digest);
+      const run = backend.runs.start(spec({ workstream: ws.id }), CA401);
       await expect(backend.runsRetryLaunch(run.id)).rejects.toThrow("This run is queued and has nothing to retry.");
       vi.advanceTimersByTime(1_000);
       expect((await backend.runsGet(run.id))?.state).toBe("failed");
@@ -231,8 +224,7 @@ describe("runs and drafts in a mock workstream", () => {
 
   it("refuses to stop or retry a finished run with the backend's words", async () => {
     const backend = new MockBackend({ runs: { seed: "empty" } });
-    const draft = await backend.runsDraft(spec(), CA401);
-    const run = await backend.runsApprove(draft.id, (await backend.runsReview(draft.id)).digest);
+    const run = backend.runs.start(spec(), CA401);
     backend.runs.advance(run.id);
     await expect(backend.runsStop(run.id)).rejects.toThrow("It can be stopped once it is working.");
     for (let n = 0; n < 2; n++) backend.runs.advance(run.id);
@@ -242,8 +234,7 @@ describe("runs and drafts in a mock workstream", () => {
 
   it("cancels a queued run that hasn't launched, as the backend withdraws it: stopped before it started, and recorded (N8)", async () => {
     const backend = new MockBackend({ runs: { seed: "empty" } });
-    const draft = await backend.runsDraft(spec(), CA401);
-    const run = await backend.runsApprove(draft.id, (await backend.runsReview(draft.id)).digest);
+    const run = backend.runs.start(spec(), CA401);
     expect(run.state).toBe("queued");
     const cancelled = await backend.runsStop(run.id);
     expect([cancelled.state, cancelled.error, cancelled.endedAt !== null]).toEqual(["stopped", "Stopped before it started", true]);
@@ -254,15 +245,13 @@ describe("runs and drafts in a mock workstream", () => {
   it("never gives a new run the id of one from before a reload that the audit or a draft still names", async () => {
     const first = new MockBackend({ runs: { seed: "empty" } });
     const ws = await first.workstreamsOpen(CA401);
-    const draft = await first.runsDraft(spec({ workstream: ws.id }), CA401);
-    const before = await first.runsApprove(draft.id, (await first.runsReview(draft.id)).digest);
+    const before = first.runs.start(spec({ workstream: ws.id }), CA401);
 
     const again = new MockBackend({ runs: { seed: "empty" } });
     expect(await again.runsList()).toHaveLength(0);
-    const next = await again.runsDraft(spec({ workstream: ws.id }), CA401);
-    const after = await again.runsApprove(next.id, (await again.runsReview(next.id)).digest);
+    const after = again.runs.start(spec({ workstream: ws.id }), CA401);
     expect(after.id).not.toBe(before.id);
-    const approved = (await again.workstreamsEvents(ws.id)).filter((e) => e.action === "run_approved").map((e) => e.runId);
+    const approved = (await again.workstreamsEvents(ws.id)).filter((e) => e.action === "agent_started").map((e) => e.runId);
     expect(approved).toEqual([before.id, after.id]);
   });
 
@@ -274,22 +263,44 @@ describe("runs and drafts in a mock workstream", () => {
     }
   });
 
-  it("stamps what Pip drafts in a workstream's conversation with the workstream", async () => {
+  it("stamps what Pip drafts in a workstream's conversation with the workstream, and starts agents there", async () => {
     const backend = new MockBackend({ runs: { seed: "empty" } });
     const ws = await backend.workstreamsOpen(CA401);
     mockPipTurns.begin(`ws:${ws.id}`, "ws-ask-1", "investigate this", { imageCount: 0 });
-    mockPipTurns.begin("general", "general-ask-1", "investigate this", { imageCount: 0 });
-    const inWorkstream = await backend.pipRunDraft(CA401, "investigate", null, null, "ws-ask-1");
-    expect(inWorkstream.origin).toEqual({ type: "chat", requestId: "ws-ask-1", workstream: ws.id });
-    expect(inWorkstream.intent.type === "startRun" && inWorkstream.intent.spec.workstream).toBe(ws.id);
+    const run = backend.pipStartAgent(ws.id, "investigate", null, null, null, "ws-ask-1");
+    expect(run).toMatchObject({ createdBy: "pip", origin: { type: "chat", requestId: "ws-ask-1", workstream: ws.id }, spec: { workstream: ws.id } });
     const comment = await backend.pipDraft({ type: "comment", item: CA401, body: { blocks: [] } }, null, "ws-ask-1");
     expect(comment.origin).toEqual({ type: "chat", requestId: "ws-ask-1", workstream: ws.id });
-    const general = await backend.pipRunDraft(CA401, "investigate", null, null, "general-ask-1");
-    expect(general.origin).toEqual({ type: "chat", requestId: "general-ask-1" });
-    expect(general.intent.type === "startRun" && general.intent.spec.workstream).toBeUndefined();
-    await expect(backend.pipRunDraft(itemRef("CA-402"), "investigate", null, null, "ws-ask-1")).rejects.toThrow("about another ticket");
-    expect((await backend.workstreamsEvents(ws.id)).filter((e) => e.action === "draft_created").map((e) => e.actor)).toEqual(["pip", "pip"]);
+    expect(() => backend.pipStartAgent(ws.id, "build", null, null, null, "ws-ask-1")).toThrow(/finished plan/);
+    expect((await backend.workstreamsEvents(ws.id)).map((e) => [e.actor, e.action])).toEqual([
+      ["person", "opened"],
+      ["pip", "agent_started"],
+      ["pip", "draft_created"],
+    ]);
     mockPipTurns.clear();
+  });
+
+  it("holds Pip's question open until the person writes in the conversation or dismisses it", async () => {
+    const backend = new MockBackend({ runs: { seed: "empty" } });
+    const ws = await backend.workstreamsOpen(CA401);
+    expect((await backend.workstreamsGet(ws.id))?.pipAsk).toBeUndefined();
+    backend.pipAskPerson(ws.id, "Which clone should I use?");
+    expect((await backend.workstreamsGet(ws.id))?.pipAsk).toMatchObject({ question: "Which clone should I use?" });
+    backend.pipAskPerson(ws.id, "And which branch?");
+    expect((await backend.workstreamsGet(ws.id))?.pipAsk?.question).toBe("And which branch?");
+    expect(backend.pipAskAnswered(ws.id)).toBe(true);
+    expect((await backend.workstreamsGet(ws.id))?.pipAsk).toBeUndefined();
+    expect(backend.pipAskAnswered(ws.id)).toBe(false);
+    backend.pipAskPerson(ws.id, "Again?");
+    expect(await backend.workstreamsDismissAsk(ws.id)).toBe(true);
+    expect((await backend.workstreamsGet(ws.id))?.pipAsk).toBeUndefined();
+    expect((await backend.workstreamsEvents(ws.id)).filter((e) => e.action.startsWith("pip_ask")).map((e) => [e.actor, e.action, e.detail])).toEqual([
+      ["pip", "pip_asked", "Which clone should I use?"],
+      ["pip", "pip_asked", "And which branch?"],
+      ["person", "pip_ask_cleared", "answered"],
+      ["pip", "pip_asked", "Again?"],
+      ["person", "pip_ask_cleared", "dismissed"],
+    ]);
   });
 });
 
@@ -301,14 +312,13 @@ describe("a workstream's build waiting for its pull request", () => {
   async function finishedBuild(prSurfaceMs: number | null) {
     const b = new MockBackend({ runs: { seed: "empty", prSurfaceMs } });
     const ws = await b.workstreamsOpen(CA401);
-    const made = await b.runsDraft(spec({ kind: "build", workstream: ws.id }), CA401);
-    const run = await b.runsApprove(made.id, (await b.runsReview(made.id)).digest);
+    const run = b.runs.start(spec({ kind: "build", workstream: ws.id }), CA401);
     for (let i = 0; i < 3; i++) b.runs.advance(run.id);
     mockPipTurns.begin(`ws:${ws.id}`, `ws-pr-${run.id}`, "review it", { imageCount: 0 });
     return { b, ws: ws.id, build: b.runs.get(run.id)!, request: `ws-pr-${run.id}` };
   }
 
-  it("waits until the code host shows the draft pull request the build opened, then lets Pip draft the review pinned to it", async () => {
+  it("waits until the code host shows the draft pull request the build opened, then lets Pip start the review pinned to it", async () => {
     const { b, ws, build, request } = await finishedBuild(null);
     expect(build).toMatchObject({ state: "done", spec: { allowPush: true }, branch: `worktree-${build.spec.name}` });
     expect(build.result).toContain("opened a draft pull request");
@@ -316,7 +326,7 @@ describe("a workstream's build waiting for its pull request", () => {
     expect((await b.workstreamsGet(ws))?.waitingForPr).toBe(build.id);
     expect((await b.workstreamsGet(ws))?.stage).toBe("build");
     expect((await b.runsOutcome(build.id)).change).toBeNull();
-    await expect(b.pipRunDraft(CA401, "review", build.id, null, request)).rejects.toThrow(/^that build has no pull request in this repository yet\. Gossamr asked GitHub/);
+    expect(() => b.pipStartAgent(ws, "review", null, null, build.id, request)).toThrow(/^that build has no pull request in this repository yet\. Gossamr asked GitHub/);
     const runs = b.runs.list().length;
 
     let told = 0;
@@ -333,12 +343,10 @@ describe("a workstream's build waiting for its pull request", () => {
     expect(change.sha).toMatch(/^[0-9a-f]{40}$/);
     expect(b.github.code.changes.some((c) => c.externalId === change.externalId)).toBe(true);
 
-    const review = await b.pipRunDraft(CA401, "review", build.id, null, request);
-    const reviewSpec = review.intent.type === "startRun" ? review.intent.spec : null;
-    expect(reviewSpec).toMatchObject({ kind: "review", pr: 300, prSha: change.sha, buildFromRun: build.id, report: true, workstream: ws });
-    expect((await b.runsReview(review.id)).prompt).toContain(`Review pull request #300 in acme/storefront at commit ${change.sha}.`);
-    // Drafting reads; nothing started on its own.
-    expect(b.runs.list().length).toBe(runs);
+    const review = b.pipStartAgent(ws, "review", null, null, build.id, request) as Run;
+    expect(review.spec).toMatchObject({ kind: "review", pr: 300, prSha: change.sha, buildFromRun: build.id, report: true, workstream: ws });
+    expect(renderPrompt(review.spec)).toContain(`Review pull request #300 in acme/storefront at commit ${change.sha}.`);
+    expect(b.runs.list().length).toBe(runs + 1);
   });
 
   it("shows the pull request after a moment on its own", async () => {
@@ -406,8 +414,7 @@ describe("pausing a mock workstream", () => {
     const backend = new MockBackend({ runs: { seed: "empty" } });
     const ws = await backend.workstreamsOpen(CA401);
     const approve = async (workstream: string | null) => {
-      const draft = await backend.runsDraft(spec(workstream ? { workstream } : {}), CA401);
-      return backend.runsApprove(draft.id, (await backend.runsReview(draft.id)).digest);
+      return backend.runs.start(spec(workstream ? { workstream } : {}), CA401);
     };
     const working = await approve(ws.id);
     const outside = await approve(null);

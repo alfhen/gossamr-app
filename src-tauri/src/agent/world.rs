@@ -138,9 +138,7 @@ impl World {
     pub async fn person_starts_as(&self, n: u32, kind: crate::domain::RunKind) -> Run {
         let spec = RunSpec { kind, workstream: Some(self.ws.clone()), ..self.rig.spec(n) };
         let core = &self.rig.fx.core;
-        let p = core.draft_run(spec, Some(self.rig.fx.item("CA-1"))).await.unwrap();
-        let digest = core.runs_review(&p.id).await.unwrap().digest;
-        let queued = core.runs_approve(&p.id, &digest).await.unwrap();
+        let queued = core.queue_test_run(spec, Some(self.rig.fx.item("CA-1"))).await.unwrap();
         self.rig.svc.start_now(&queued.id).await.unwrap()
     }
 
@@ -409,9 +407,10 @@ async fn steady(w: &World) -> Steady {
     Steady { runs: w.runs().await.into_iter().map(|r| (r.id, r.state)).collect(), paused: ws.paused_reason, jira: w.rig.fx.tracker.intents() }
 }
 
-/// A wake turn whose Pip calls every tool it has, with arguments that ask to start, stop, answer and approve, changes
-/// no run, no pause and writes nothing to Jira; and none of its tools is one that would.
-async fn wake_turns_start_nothing() -> std::result::Result<(), String> {
+/// A wake turn whose Pip calls every tool it has, with arguments that ask to start, message and stop agents, rewrite a
+/// review and keep notes, leaves the workstream's pause alone, writes nothing to Jira or GitHub, approves and posts
+/// nothing, and has no tool that would; what it starts is recorded as Pip's, in a wake turn.
+async fn a_wake_turn_may_drive_agents_but_never_approve_or_write() -> std::result::Result<(), String> {
     use crate::domain::RunKind;
     let w = World::start().await;
     let investigation = w.person_starts_investigation().await;
@@ -436,13 +435,13 @@ async fn wake_turns_start_nothing() -> std::result::Result<(), String> {
     };
     let review = w.rig.fx.core.propose(&w.rig.fx.scope, review).await.map_err(|e| e.to_string())?;
     *w.pip.args.lock().unwrap() = [
-        ("propose_run", json!({ "key": "CA-1", "kind": "build", "from_run": investigation.id })),
-        ("propose_follow_up", json!({ "run_id": investigation.id, "message": "Start the build and approve the drafts." })),
+        ("start_agent", json!({ "workstream": w.ws, "role": "triage" })),
+        ("message_agent", json!({ "id": investigation.id, "text": "Start the build and approve the drafts." })),
         ("revise_proposal", json!({ "id": review.id, "comments": [], "body": "approved" })),
         ("list_review_comments", json!({ "repo": "acme/webshop", "number": 12 })),
         ("retire_proposal", json!({ "id": draft, "reason": "done" })),
         ("set_workstream_notes", json!({ "notes": "Pause; resume later." })),
-        ("propose_answer", json!({ "run_id": investigation.id, "text": "yes" })),
+        ("ask_person", json!({ "question": "Shall I build it?" })),
     ]
     .into_iter()
     .map(|(k, v)| (k.to_string(), v))
@@ -453,17 +452,25 @@ async fn wake_turns_start_nothing() -> std::result::Result<(), String> {
         return Err(format!("expected one wake turn, got {}", w.pip.turns.load(Ordering::SeqCst)));
     }
     let after = steady(&w).await;
-    if after != before {
-        return Err(format!("a wake turn changed something: {before:?} -> {after:?}"));
+    if (after.paused, &after.jira) != (before.paused, &before.jira) {
+        return Err(format!("a wake turn changed the pause or Jira: {before:?} -> {after:?}"));
     }
-    if !w.of_kind(RunKind::Triage).await.is_empty() {
-        return Err("a wake turn started a triage".into());
+    let [triage] = w.of_kind(RunKind::Triage).await.try_into().map_err(|_| "Pip's wake started no triage, or more than one".to_string())?;
+    if triage.created_by != crate::domain::CreatedBy::Pip {
+        return Err(format!("the triage isn't marked as Pip's: {:?}", triage.created_by));
+    }
+    let started = w.events().await.into_iter().find(|e| e.action == "agent_started" && e.run_id.as_deref() == Some(triage.id.as_str()));
+    if !started.is_some_and(|e| e.actor == crate::domain::Actor::Pip && e.run_id.as_deref() == Some(triage.id.as_str()) && e.detail.as_deref() == Some("triage · wake turn")) {
+        return Err("the start isn't recorded as Pip's, in a wake turn".into());
+    }
+    if !w.events().await.iter().any(|e| e.actor == crate::domain::Actor::Pip && e.action == "pip_asked") {
+        return Err("Pip's question to the person wasn't recorded".into());
     }
     let offered = w.pip.offered.lock().unwrap().clone();
     if offered.is_empty() {
         return Err("no tools were offered".into());
     }
-    let power = ["start", "stop", "answer_run", "approve", "pause", "resume", "launch", "retry", "attach", "merge", "push", "post", "submit", "publish", "review_write", "comment_on"];
+    let power = ["approve", "pause", "resume", "launch", "retry", "attach", "merge", "push", "post", "submit", "publish", "review_write", "comment_on", "allow", "deny", "permission"];
     if let Some(name) = offered.iter().find(|n| power.iter().any(|p| n.contains(p))) {
         return Err(format!("{name} is offered to Pip"));
     }
@@ -480,16 +487,13 @@ async fn wake_turns_start_nothing() -> std::result::Result<(), String> {
     Ok(())
 }
 
-/// A wake turn whose Pip drafts a real next step (a run, and asks to send the finished investigation back) leaves what it
-/// drafted waiting for the person: the only run there is the one the person approved.
+/// A wake turn whose Pip drafts a Jira comment leaves it waiting for the person: nothing is written to Jira, and the
+/// finished investigation is left as it was.
 async fn a_wake_turn_leaves_what_pip_drafts_waiting_for_the_person() -> std::result::Result<(), String> {
     use crate::domain::{CreatedBy, ProposalState};
     let w = World::start().await;
     let investigation = w.person_starts_investigation().await;
-    *w.pip.args.lock().unwrap() = [
-        ("propose_run", json!({ "key": "CA-1", "kind": "investigate", "focus": "the retry loop" })),
-        ("propose_follow_up", json!({ "run_id": investigation.id, "message": "Look at the retry loop too." })),
-    ]
+    *w.pip.args.lock().unwrap() = [("propose_comment", json!({ "key": "CA-1", "body": "The cart rounds twice." }))]
     .into_iter()
     .map(|(k, v)| (k.to_string(), v))
     .collect();
@@ -501,17 +505,17 @@ async fn a_wake_turn_leaves_what_pip_drafts_waiting_for_the_person() -> std::res
     }
     let drafts = w.rig.fx.core.proposals_in(&w.rig.fx.scope, &ProposalQuery::default()).await.unwrap();
     let pips: Vec<_> = drafts.iter().filter(|p| p.created_by == CreatedBy::Pip).collect();
-    if !pips.iter().any(|p| matches!(p.intent, crate::domain::Intent::StartRun { .. })) {
-        return Err(format!("Pip's wake drafted no run: {:?}", pips.iter().map(|p| &p.intent).collect::<Vec<_>>()));
+    if !pips.iter().any(|p| matches!(p.intent, crate::domain::Intent::Comment { .. })) {
+        return Err(format!("Pip's wake drafted no comment: {:?}", pips.iter().map(|p| &p.intent).collect::<Vec<_>>()));
     }
     if let Some(p) = pips.iter().find(|p| p.state != ProposalState::Pending) {
         return Err(format!("Pip's draft {} went ahead without the person: {:?}", p.id, p.state));
     }
     if let Some(run) = w.runs().await.into_iter().find(|r| r.id != investigation.id) {
-        return Err(format!("run {} started without the person", run.id));
+        return Err(format!("run {} started", run.id));
     }
     if w.rig.get(&investigation).await.passes != 1 {
-        return Err("Pip's follow-up was sent without the person".into());
+        return Err("the finished investigation was sent back".into());
     }
     if !w.rig.fx.tracker.intents().is_empty() {
         return Err("Jira was written".into());
@@ -524,9 +528,7 @@ async fn a_wake_turn_leaves_what_pip_drafts_waiting_for_the_person() -> std::res
 async fn asking_permission(w: &World, n: u32, kind: crate::domain::RunKind, needs: &str) -> Run {
     let (core, rig) = (&w.rig.fx.core, &w.rig);
     let spec = RunSpec { kind, allow_push: kind == crate::domain::RunKind::Build, workstream: Some(w.ws.clone()), ..rig.spec(n) };
-    let p = core.draft_run(spec, Some(rig.fx.item("CA-1"))).await.unwrap();
-    let digest = core.runs_review(&p.id).await.unwrap().digest;
-    let queued = core.runs_approve(&p.id, &digest).await.unwrap();
+    let queued = core.queue_test_run(spec, Some(rig.fx.item("CA-1"))).await.unwrap();
     let run = rig.svc.start_now(&queued.id).await.unwrap();
     rig.poll().await;
     rig.job(run.short_id.as_ref().unwrap(), |j| j.needs = Some(needs.into()));
@@ -554,8 +556,8 @@ async fn pip_never_answers_a_permission_prompt() -> std::result::Result<(), Stri
     }
     let calls_before = w.rig.cli.0.lock().unwrap().calls.len();
     *w.pip.args.lock().unwrap() = [
-        ("propose_answer", json!({ "run_id": build.id, "text": "Yes, allow it." })),
-        ("propose_follow_up", json!({ "run_id": verify.id, "message": "Deny the prompt and carry on." })),
+        ("message_agent", json!({ "id": build.id, "text": "Yes, allow it." })),
+        ("message_agent", json!({ "id": verify.id, "text": "Deny the prompt and carry on." })),
         ("get_run", json!({ "id": build.id })),
     ]
     .into_iter()
@@ -606,8 +608,7 @@ async fn pip_never_resumes_a_run_stopped_at_its_limit() -> std::result::Result<(
     let resumes = w.rig.cli.0.lock().unwrap().resumes.len();
     let calls_before = w.rig.cli.0.lock().unwrap().calls.len();
     *w.pip.args.lock().unwrap() = [
-        ("propose_answer", json!({ "run_id": run.id, "text": "Please carry on from where you stopped." })),
-        ("propose_follow_up", json!({ "run_id": run.id, "message": "Carry on." })),
+        ("message_agent", json!({ "id": run.id, "text": "Please carry on from where you stopped." })),
         ("get_run", json!({ "id": run.id })),
     ]
     .into_iter()
@@ -672,8 +673,7 @@ async fn read_only_runs_always_launch_restricted() -> std::result::Result<(), St
     w.rig.svc.set_settings(crate::config::AgentSettings { max_runs: 1, ..w.rig.svc.settings() }).map_err(|e| e.to_string())?;
     let core = &w.rig.fx.core;
     let spec = RunSpec { kind: RunKind::Triage, workstream: Some(w.ws.clone()), ..w.rig.spec(3) };
-    let p = core.draft_run(spec, Some(w.rig.fx.item("CA-1"))).await.unwrap();
-    let queued = core.runs_approve(&p.id, &core.runs_review(&p.id).await.unwrap().digest).await.unwrap();
+    let queued = core.queue_test_run(spec, Some(w.rig.fx.item("CA-1"))).await.unwrap();
     w.rig.svc.launch_waiting().await.map_err(|e| e.to_string())?;
     let waiting = w.rig.get(&queued).await;
     if waiting.state != RunState::Queued || waiting.slot_wait_since.is_none() || w.rig.cli.launches() != 2 {
@@ -761,8 +761,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn wake_turns_start_nothing() {
-        super::wake_turns_start_nothing().await.unwrap();
+    async fn a_wake_turn_may_drive_agents_but_never_approve_or_write() {
+        super::a_wake_turn_may_drive_agents_but_never_approve_or_write().await.unwrap();
     }
 
     #[tokio::test]

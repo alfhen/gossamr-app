@@ -3,7 +3,7 @@ import type { Run } from "../types";
 export const INSTALL_COMMAND = "curl -fsSL https://claude.ai/install.sh | bash";
 export const INSTALL_URL = "https://code.claude.com/docs/en/setup";
 
-export type FailureAct = "terminal" | "install" | "start";
+export type FailureAct = "terminal" | "install";
 
 export interface FailureHelp {
   kind: "untrustedFolder" | "notSignedIn" | "claudeMissing" | "noClone" | "capReached";
@@ -61,8 +61,8 @@ export function failureHelp(run: Run): FailureHelp | null {
       return {
         kind: "noClone",
         summary: "The clone this run was set up for can't be used any more.",
-        detail: `${sentence(run.error, "The folder is gone or isn't a clone of the repository.")} Start the agent again and choose a clone of ${run.spec.repo}.`,
-        primary: { label: "Start it again and choose a clone", act: "start" },
+        detail: `${sentence(run.error, "The folder is gone or isn't a clone of the repository.")} Clone ${run.spec.repo} or choose a clone of it, and Pip starts the agent again.`,
+        primary: null,
         command: null,
         retryNeedsTerminal: false,
       };

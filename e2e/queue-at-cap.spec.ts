@@ -1,7 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
-import { advanceRuns, expectToast, showWorkspace, mockRuns, openTechnical, peekSheet, peekTicket } from "./support/app";
+import { advanceRuns, expectToast, showWorkspace, mockRuns, startAgent } from "./support/app";
 
-const setup = (page: Page) => page.getByRole("dialog", { name: "Start an agent" });
 /** A run's card or row in the Agents view; Pip's strip of agents shows runs too, and only the view counts. */
 const agentRun = (page: Page, id: string) => page.locator(`main [data-run-id="${id}"]:not(aside[aria-label="Pip"] *)`).first();
 const LIVE = ["launching", "working", "needsAnswer", "needsPermission", "systemBlocked"];
@@ -9,30 +8,9 @@ const LIVE = ["launching", "working", "needsAnswer", "needsPermission", "systemB
 /** How many of the sample backend's runs take a slot. */
 const live = async (page: Page) => (await mockRuns(page)).filter((r) => LIVE.includes(r.state)).length;
 
-/** Opens the setup sheet for an investigation of `key` from its peek's Agent menu. */
-async function openSetup(page: Page, key: string) {
-  const board = page.getByRole("button", { name: "All projects", exact: true });
-  if (await board.isVisible()) await board.click();
-  await peekTicket(page, key);
-  await peekSheet(page).getByRole("button", { name: "Agent", exact: true }).click();
-  await page.getByRole("menuitem", { name: /^Investigate this ticket/ }).click();
-  await expect(setup(page)).toBeVisible();
-  await expect(setup(page)).toContainText(key);
-  await setup(page).getByRole("combobox", { name: "Repository" }).selectOption("acme/webshop");
-  await openTechnical(setup(page));
-  await expect(setup(page).getByRole("group", { name: "Checks before you approve" })).toContainText("What runs");
-}
-
-/** Starts the agent the setup sheet shows, and returns its run's id; the newest run is first in the sample backend. */
-async function start(page: Page): Promise<string> {
-  const before = (await mockRuns(page)).length;
-  const button = setup(page).getByRole("button", { name: "Start agent" });
-  await expect(button).toBeEnabled();
-  await button.click();
-  await expect(setup(page)).toHaveCount(0);
-  await expect.poll(async () => (await mockRuns(page)).length).toBe(before + 1);
-  const id = (await mockRuns(page))[0].id;
-  // Starting from the peek leaves the person on the board; the rail goes to the Agents view, where the run's sheet may be open.
+/** Starts an investigation on `key` as Pip does and returns its run's id, with the Agents view showing. */
+async function start(page: Page, key: string): Promise<string> {
+  const id = await startAgent(page, key, "investigate");
   await page.getByRole("button", { name: /^Agents/ }).click();
   const sheet = page.getByRole("dialog", { name: "Agent run" });
   if (await sheet.isVisible()) await page.keyboard.press("Escape");
@@ -40,26 +18,20 @@ async function start(page: Page): Promise<string> {
 }
 
 test("with three agents running a 4th approved run waits for a slot, never over the cap, and launches when one finishes", async ({ page }) => {
-  // A signed-in GitHub connection, so the setup sheet has repositories to run in (`?mockRepos`, src/backend/mockWatch.ts).
+  // A signed-in GitHub connection, so there are repositories to run in (`?mockRepos`, src/backend/mockWatch.ts).
   await page.goto("/?runs=empty&runsCap=3&mockRepos=14");
   await page.getByRole("button", { name: "Start watching" }).click();
   await showWorkspace(page);
   await expect(page.getByText("CA-401", { exact: true }).first()).toBeVisible();
   const running: string[] = [];
   for (const key of ["CA-401", "CA-402", "CA-403"]) {
-    await openSetup(page, key);
-    await expect(setup(page).locator('[data-level="green"]', { hasText: /agent slots in use \(including ones waiting on you\)$/ })).toBeVisible();
-    running.push(await start(page));
+    running.push(await start(page, key));
   }
   for (const id of running) await advanceRuns(page, 2, id);
   expect((await mockRuns(page)).filter((r) => running.includes(r.id)).map((r) => r.state)).toEqual(["working", "working", "working"]);
 
-  // The 4th: the checks say it will wait, and Start stays on.
-  await openSetup(page, "CA-404");
-  const wait = setup(page).locator('[data-level="amber"]', { hasText: "3 of 3 agent slots are in use, including ones waiting on you. This one will wait for a slot and start when one finishes." });
-  await expect(wait).toBeVisible();
-  await expect(setup(page).locator('[data-level="red"]')).toHaveCount(0);
-  const fourth = await start(page);
+  // The 4th waits for a slot.
+  const fourth = await start(page, "CA-404");
   await expect(agentRun(page, fourth)).toContainText("Waiting for a slot · 1st in line");
   expect((await mockRuns(page)).find((r) => r.id === fourth)?.state).toBe("queued");
 
@@ -90,17 +62,14 @@ test("a run waiting for a slot can be stopped from its sheet, and Stop all stops
   await expect(page.getByText("CA-401", { exact: true }).first()).toBeVisible();
   const running: string[] = [];
   for (const key of ["CA-401", "CA-402", "CA-403"]) {
-    await openSetup(page, key);
-    running.push(await start(page));
+    running.push(await start(page, key));
   }
   for (const id of running) await advanceRuns(page, 2, id);
   const waiting: string[] = [];
   for (const key of ["CA-404", "CA-405"]) {
-    await openSetup(page, key);
-    waiting.push(await start(page));
+    waiting.push(await start(page, key));
   }
-  // Announced as waiting, not as started, and counted apart from the running ones.
-  await expectToast(page, "Approved the agent on CA-405. Every slot is taken, so it waits and starts when one of the running agents finishes.");
+  // Counted apart from the running ones.
   await expect(page.locator("main")).toContainText("3 running · 2 waiting for a slot");
 
   // From its sheet the second in line says it starts on its own, offers no Start now, and can be stopped.

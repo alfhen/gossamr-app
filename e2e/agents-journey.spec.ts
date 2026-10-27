@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { pauseAtCeiling, advanceRuns, agentsHome, askPip, closeWorkstreamSheet, expandNeedsYou, expectPeekInPlace, finishOnHome, githubWrites, homeConversation, homeConversationRegion, homeRunCards, homeSettled, inlineStart, jiraWrites, mockRuns, needRow, needsPane, needsPaneHeading, needsYouCount, needsYouTray, openAgents, openApp, peekSheet, selectWorkstream, startWorkstream, stepChip, stepRail, surfacePullRequests, workstreamEvents, workstreamGroup, openNeedRow, needsStack, openRunOf } from "./support/app";
+import { pauseAtCeiling, advanceRuns, agentsHome, askPip, closeWorkstreamSheet, expandNeedsYou, expectPeekInPlace, finishOnHome, githubWrites, homeConversation, homeConversationRegion, homeSettled, jiraWrites, mockRuns, needRow, needsPane, needsPaneHeading, needsYouCount, needsYouTray, openAgents, openApp, peekSheet, selectWorkstream, startWorkstream, stepChip, stepRail, surfacePullRequests, workstreamEvents, workstreamGroup, openNeedRow, needsStack, openRunOf } from "./support/app";
 
 // Pull requests are shown only when a test says: the setting the phase's scenarios share.
 // GitHub is signed in with a catalog small enough to be watched whole, so the agents' repository is watched, as the
@@ -9,13 +9,10 @@ const SAMPLE = "runs=empty&prSurface=manual&mockRepos=12";
 /** The newest run of `kind`, as the sample backend holds it. */
 const newest = async (page: Page, kind: string) => (await mockRuns(page)).find((r) => r.kind === kind) ?? null;
 
-/** Asks Pip for `what` on CA-401 and starts the draft in place, as the person does. */
+/** Asks Pip for `what` on CA-401, which starts the agent. */
 async function startOnHome(page: Page, what: string) {
   await askPip(page, what);
   await homeSettled(page);
-  const review = await inlineStart(page, homeRunCards(page, "CA-401").last());
-  await review.getByRole("button", { name: "Start agent" }).click();
-  await expect(review).toHaveCount(0);
 }
 
 /** The state line a step chip shows. */
@@ -38,7 +35,7 @@ async function homeWorkstream(page: Page) {
   return ws;
 }
 
-test("intake to a build's pull request on Pip home: the person talks to Pip and starts each step, approves the plan, and Pip is woken for each finish", async ({ page }) => {
+test("intake to a build's pull request on Pip home: the person asks Pip for each step, approves the plan, and Pip is woken for each finish", async ({ page }) => {
   test.setTimeout(120_000);
   await openApp(page, SAMPLE);
   await homeWorkstream(page);
@@ -47,21 +44,9 @@ test("intake to a build's pull request on Pip home: the person talks to Pip and 
   await expect(row.locator("[data-stage]")).toHaveText("Intake");
   await expect(stepRail(page).getByRole("switch", { name: "Manage this workstream" })).toHaveCount(0);
 
-  // Asking Pip to investigate makes a draft, in the conversation and under Investigate.
+  // Asking Pip to investigate starts the agent: nothing waits on the person.
   await askPip(page, "investigate this");
   await homeSettled(page);
-  await expect(homeRunCards(page, "CA-401")).toHaveCount(1);
-  await expect(stepChip(page, "investigate").locator("[data-step-needs-you]")).toHaveText("1 needs you");
-  await expect(row.locator("[data-status]")).toHaveText("Needs you");
-  await expect(row.locator("[data-status-detail]")).toHaveText("· 1 waiting");
-  await expect(needsYouTray(page).locator("[data-needs-you-count]")).toHaveText("1");
-
-  // Read in place and started there: no sheet, still Pip home.
-  const review = await inlineStart(page, homeRunCards(page, "CA-401").last());
-  await expect(review.locator("[data-inline-prompt]")).toBeVisible();
-  await review.getByRole("button", { name: "Start agent" }).click();
-  await expect(page.getByRole("dialog", { name: "Start an agent" })).toHaveCount(0);
-  await expect(review).toHaveCount(0);
   await expect(agentsHome(page)).toBeVisible();
   await expect(needsYouTray(page).locator("[data-needs-you-count]")).toHaveText("0");
   const r1 = (await newest(page, "investigate"))!;
@@ -114,12 +99,8 @@ test("intake to a build's pull request on Pip home: the person talks to Pip and 
   await expect(peekSheet(page)).toHaveCount(0);
   expect(await newest(page, "build")).toBeNull();
 
-  // The approved plan is built on the person's say-so, from the full setup sheet; finished, the build waits for its pull request.
-  await askPip(page, "build it");
-  await homeSettled(page);
-  await homeRunCards(page, "CA-401").last().getByRole("button", { name: "Review and start →" }).click();
-  await page.getByRole("dialog", { name: "Start an agent" }).getByRole("button", { name: "Start agent" }).click();
-  await expect(page.getByRole("dialog", { name: "Start an agent" })).toHaveCount(0);
+  // The approved plan is built on the person's say-so; finished, the build waits for its pull request.
+  await startOnHome(page, "build it");
   const r4 = (await newest(page, "build"))!;
   await finishOnHome(page, r4.id);
   await expect(chipState(page, "build")).toHaveText("waiting for PR");
@@ -134,32 +115,32 @@ test("intake to a build's pull request on Pip home: the person talks to Pip and 
   expect(await githubWrites(page)).toEqual([]);
 });
 
-test("the Needs you list ranks a pause ahead of a draft to approve, opens each in the pane, and each leaves once dealt with", async ({ page }) => {
+test("the Needs you list ranks a question from Pip ahead of a pause, opens each in the pane, and each leaves once dealt with", async ({ page }) => {
   await openApp(page, SAMPLE);
   await homeWorkstream(page);
   const row = workstreamGroup(page, "CA-401");
   await expect(needsYouCount(page)).toHaveText("0");
 
-  await askPip(page, "investigate this");
+  await askPip(page, "ask me which database to use");
   await homeSettled(page);
-  // Pip can still be idle just after the click, before its turn starts; a pause then would cancel the turn before it drafts.
-  // The draft's need being there is the sign the turn is done. Pip's scripted turn can take longer than the default wait
+  // Pip can still be idle just after the click, before its turn starts; a pause then would cancel the turn before it asks.
+  // The question's need being there is the sign the turn is done. Pip's scripted turn can take longer than the default wait
   // on a loaded CI runner, so this one wait is given more time; what it checks is unchanged.
   await expect(needsYouCount(page)).toHaveText("1", { timeout: 15_000 });
   await pauseAtCeiling(page, "CA-401");
   await expect(row.locator("[data-status]")).toHaveText("Needs you");
   await expect(row.locator("[data-status-detail]")).toHaveText("· 2 waiting");
-  // One row for the workstream; what is stuck (the pause) ranks ahead of a draft to approve, however old each is (R2).
+  // One row for the workstream; a question for the person ranks ahead of what is stuck (the pause), however old each is (R2).
   await expandNeedsYou(page, "CA-401");
   const titles = needsStack(page).locator("[data-needs-you-need-title]");
-  await expect(titles).toHaveText(["Paused: Pip was woken too often today", "Start Investigate"]);
+  await expect(titles).toHaveText(["Pip asks you", "Paused: Pip was woken too often today"]);
 
-  // From General, the draft's need selects the workstream again and opens its decision; skipped there, it leaves.
+  // From General, the question's need selects the workstream again and opens its decision; dismissed there, it leaves.
   await closeWorkstreamSheet(page);
-  await openNeedRow(page, "Start Investigate");
-  await expect(needsPane(page)).toContainText("drafted an Investigate agent for CA-401");
-  await needsPane(page).getByRole("button", { name: "Skip" }).click();
-  await expect(needRow(page, "Start Investigate")).toHaveCount(0);
+  await openNeedRow(page, "Pip asks you");
+  await expect(needsPane(page)).toContainText("Which database to use?");
+  await needsPane(page).getByRole("button", { name: "Dismiss" }).click();
+  await expect(needRow(page, "Pip asks you")).toHaveCount(0);
   await expect(row.locator("[data-status]")).toHaveText("Paused");
   await expect(row.locator("[data-status-detail]")).toHaveText("· Pip was woken too often today");
 

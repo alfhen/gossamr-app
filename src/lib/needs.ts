@@ -28,10 +28,10 @@ export type NeedKind =
   | "paused"
   | "draft"
   | "review"
-  | "runStart";
+  | "pipAsk";
 
 /** What the person can do about a need, as the keys and the pane's buttons name it. */
-export type NeedActionId = "approve" | "allow" | "deny" | "dismiss" | "edit" | "retry" | "resume" | "answer" | "open";
+export type NeedActionId = "approve" | "allow" | "deny" | "dismiss" | "edit" | "retry" | "resume" | "answer" | "reply" | "open";
 
 export interface ActionSpec {
   id: NeedActionId;
@@ -50,7 +50,7 @@ export interface Need {
   group: NeedGroupKind;
   kind: NeedKind;
   workstreamId: string | null;
-  /** The run it is about, for a need that is a run's (a question with a drafted reply included). */
+  /** The run it is about, for a need that is a run's. */
   runId?: string;
   /** The ticket it is about, when it has one. */
   ticketKey?: string;
@@ -116,16 +116,15 @@ export const GROUP_LABEL: Record<NeedGroupKind, string> = { decide: "Decide", un
 
 /**
  * The chip on one need's row: its group's name, except in Approve, where it is the verb of the need's main button, so the tag
- * and the button say the same thing: "Post" for a GitHub review ("Post review"), "Send" for an answer, "Review" for an agent to start
- * ("Review and start"). The group itself stays Approve.
+ * and the button say the same thing: "Post" for a GitHub review ("Post review"). The group itself stays Approve.
  */
 export const chipLabel = (need: Pick<Need, "group" | "kind"> & { primary?: Pick<ActionSpec, "label"> }): string => {
   if (need.group !== "approve") return GROUP_LABEL[need.group];
   const verb = need.primary?.label.split(" ")[0];
-  return verb || (need.kind === "review" ? "Post" : need.kind === "runStart" ? "Review" : GROUP_LABEL.approve);
+  return verb || (need.kind === "review" ? "Post" : GROUP_LABEL.approve);
 };
 
-/** Drafts that may be approved together: pending comments, moves and subtasks. A description rewrite is read in its diff first, and a run or follow-up after its prompt or message, so never. */
+/** Drafts that may be approved together: pending comments, moves and subtasks. A description rewrite is read in its diff first, so never. */
 export const BATCHABLE: ReadonlySet<Intent["type"]> = new Set(["comment", "transition", "subtasks"]);
 
 /** Whether `p` may be approved with the others in "Approve N safe drafts": a batchable kind. */
@@ -169,7 +168,12 @@ export function byRank(a: Pick<Need, "group" | "at" | "key">, b: Pick<Need, "gro
   return GROUP_RANK[a.group] - GROUP_RANK[b.group] || Date.parse(a.at) - Date.parse(b.at) || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0);
 }
 
-const DRAFT_TEXT: Record<Exclude<Intent["type"], "startRun">, string> = {
+/** The draft kinds that start or message an agent, which Pip does directly now: stored ones are history and never need the person. */
+const AGENT_DRAFTS: ReadonlySet<Intent["type"]> = new Set(["startRun", "followUp", "runAnswer"]);
+
+type Drafted = Exclude<Intent["type"], "startRun" | "followUp" | "runAnswer">;
+
+const DRAFT_TEXT: Record<Drafted, string> = {
   comment: "Draft comment",
   transition: "Draft move",
   subtasks: "Draft subtasks",
@@ -177,13 +181,11 @@ const DRAFT_TEXT: Record<Exclude<Intent["type"], "startRun">, string> = {
   link: "Draft link",
   update: "Draft change",
   rewrite: "Draft rewrite",
-  followUp: "Draft follow-up",
-  runAnswer: "Draft answer",
   githubReview: "Draft review",
 };
 
 /** What a draft is, for "Pip drafted <this>." */
-const DRAFT_WHAT: Record<Exclude<Intent["type"], "startRun">, (key: string | undefined) => string> = {
+const DRAFT_WHAT: Record<Drafted, (key: string | undefined) => string> = {
   comment: (k) => (k ? `a comment on ${k}` : "a comment"),
   transition: (k) => (k ? `a move of ${k}` : "a move"),
   subtasks: (k) => (k ? `subtasks under ${k}` : "subtasks"),
@@ -191,8 +193,6 @@ const DRAFT_WHAT: Record<Exclude<Intent["type"], "startRun">, (key: string | und
   link: (k) => (k ? `a link on ${k}` : "a link"),
   update: (k) => (k ? `a change to ${k}` : "a change"),
   rewrite: (k) => (k ? `a new description for ${k}` : "a new description"),
-  followUp: () => "a follow-up for a run",
-  runAnswer: () => "an answer for a run",
   githubReview: () => "a GitHub review",
 };
 
@@ -221,7 +221,7 @@ function workstreamTitles(workstreams: readonly WorkstreamView[]): Map<string, s
 }
 
 /**
- * A ticket's title from the snapshot of it a run or a run draft carries ("KEY: title" on its first line, as the backend
+ * A ticket's title from the snapshot of it a run carries ("KEY: title" on its first line, as the backend
  * writes it), for a ticket outside the watched projects that no cache holds; null when the snapshot doesn't say.
  */
 export function titleFromTicketBlock(block: string | null | undefined, key: string): string | null {
@@ -229,25 +229,14 @@ export function titleFromTicketBlock(block: string | null | undefined, key: stri
   return first.startsWith(`${key}: `) ? first.slice(key.length + 2).trim() || null : null;
 }
 
-/** The titles runs and run drafts kept of their tickets, by key: the last resort for a ticket's title. */
-function snapshotTitles(runs: readonly Run[], proposals: readonly Proposal[]): Map<string, string> {
+/** The titles runs kept of their tickets, by key: the last resort for a ticket's title. */
+function snapshotTitles(runs: readonly Run[]): Map<string, string> {
   const out = new Map<string, string>();
   const add = (key: string | null | undefined, block: string | null | undefined) => {
     const title = key && !out.has(key) ? titleFromTicketBlock(block, key) : null;
     if (key && title) out.set(key, title);
   };
   for (const r of runs) add(r.item?.key, r.spec.ticketBlock);
-  for (const p of proposals) if (p.intent.type === "startRun") add(p.intent.item?.key, p.intent.spec.ticketBlock);
-  return out;
-}
-
-/** The pending answer drafts for runs still asking, by run id, the oldest when there are several: each run's question carries its one. */
-function answersByRun(proposals: readonly Proposal[], runs: readonly Run[]): Map<string, Proposal> {
-  const asking = new Set(runs.filter((r) => r.state === "needsAnswer").map((r) => r.id));
-  const out = new Map<string, Proposal>();
-  for (const p of [...proposals].sort((a, b) => a.createdAt.localeCompare(b.createdAt))) {
-    if (live(p) && p.intent.type === "runAnswer" && asking.has(p.intent.runId) && !out.has(p.intent.runId)) out.set(p.intent.runId, p);
-  }
   return out;
 }
 
@@ -265,7 +254,7 @@ const action = (id: NeedActionId, label: string): ActionSpec => ({ id, label });
 const sentence = (text: string) => clip(text).replace(/[.!?…]+$/, "") + ".";
 
 /** The draft intents whose card has an Edit. */
-const EDITABLE: ReadonlySet<Intent["type"]> = new Set(["comment", "rewrite", "create", "subtasks", "githubReview", "followUp", "runAnswer"]);
+const EDITABLE: ReadonlySet<Intent["type"]> = new Set(["comment", "rewrite", "create", "subtasks", "githubReview"]);
 
 /** A comment draft with no run behind it, told apart by its first words (a secret masked first): `Draft comment: “Thanks for the…”`. */
 function commentTitle(body: Parameters<typeof docText>[0]): string {
@@ -299,17 +288,16 @@ export function latestRuns(runs: readonly Pick<Run, "id" | "item" | "spec" | "qu
 /**
  * Everything waiting on the person across the open workstreams and General, highest rank first: a decision (a plan or
  * description to approve, a ticket the triage found not clear enough to plan), then what is stuck (a permission, a question,
- * a sign-in, a failure, a run stopped at its limit, a paused workstream), then drafts to approve (a Jira draft, a GitHub
- * review, a run to start). Within a group, oldest first.
+ * a sign-in, a failure, a run stopped at its limit, a paused workstream, a question Pip asked), then drafts to approve (a
+ * Jira draft, a GitHub review). Within a group, oldest first.
  *
- * One thing is one need: a run asking a question that has a drafted reply is the question; a retired or superseded draft
- * never shows. A failure or a limit stop is a need only
+ * A retired or superseded draft never shows. A failure or a limit stop is a need only
  * while it is the latest run of its kind on its ticket (`latestRuns`), and stays until the person deals with it: Retry, a
  * fix, a resume, or a Dismiss (`dismissed`); looking at it clears nothing. A finished run is a state, not a need.
  */
 export function needs({ workstreams, runs, proposals, dismissed, pausedAt, titleOf }: NeedsInput): Need[] {
   const kept = workstreamTitles(workstreams);
-  const snapped = snapshotTitles(runs, proposals);
+  const snapped = snapshotTitles(runs);
   const titleFor = (key: string | null | undefined) => (key ? titleOf?.(key)?.trim() || kept.get(key) || snapped.get(key) : undefined);
   const open = workstreams.filter((v) => v.workstream.closedAt === null);
   const byId = new Map(open.map((v) => [v.workstream.id, v]));
@@ -328,42 +316,25 @@ export function needs({ workstreams, runs, proposals, dismissed, pausedAt, title
   };
   const out: Need[] = [];
   const latest = latestRuns(runs);
-  const answers = answersByRun(proposals, runs);
-  const carried = new Set([...answers.values()].map((p) => p.id));
 
   const repeated = new Set(repeatedComments([...proposals].sort((a, b) => a.createdAt.localeCompare(b.createdAt) || (a.id < b.id ? -1 : 1))).map((p) => p.id));
   for (const p of proposals) {
-    if (!live(p) || carried.has(p.id)) continue;
+    if (!live(p) || AGENT_DRAFTS.has(p.intent.type)) continue;
     const workstreamId = draftWorkstream(p, open);
     const ws = workstreamId ? byId.get(workstreamId) : undefined;
     const target = { type: "draft", id: p.id } as const;
     const key = targetOf(p.intent)?.key;
     const base = { key: `draft:${p.id}`, at: p.createdAt, target, ...where(workstreamId, key) };
-    if (p.intent.type === "startRun") {
-      const kind = STAGE_LABEL[p.intent.spec.kind];
-      const maker = p.createdBy === "pip" ? "Pip" : p.createdBy === "agent" ? "An agent" : "You";
-      out.push({
-        ...base,
-        group: "approve",
-        kind: "runStart",
-        title: `Start ${kind}`,
-        why: `${maker} drafted ${/^[aeiou]/i.test(kind) ? "an" : "a"} ${kind} agent${key ? ` for ${key}` : ""}; it starts only when you approve it.`,
-        ifYouWait: "Nothing starts until you approve it.",
-        primary: action("open", "Review and start"),
-        secondary: [action("dismiss", "Skip")],
-        batchable: false,
-      });
-      continue;
-    }
     // A draft a run left says which run, so a review's comments can be told apart: "R5 review · comment".
     const from = p.origin.type === "run" ? p.origin.runId : null;
     const label = from && ws?.labels.find(([id]) => id === from)?.[1];
     const step = from ? runs.find((r) => r.id === from)?.spec.kind : undefined;
     // "GitHub review", not "review": beside a Review run's stage it would read "Review · review".
-    const what = p.intent.type === "githubReview" ? "GitHub review" : DRAFT_TEXT[p.intent.type].replace(/^Draft /, "");
-    const title = label ? (step ? `${label} ${STAGE_LABEL[step].toLowerCase()} · ${what}` : `${label} ${what}`) : step ? `${STAGE_LABEL[step]} · ${what}` : p.intent.type === "comment" && !from ? commentTitle(p.intent.body) : DRAFT_TEXT[p.intent.type];
+    const intent = p.intent.type as Drafted;
+    const what = intent === "githubReview" ? "GitHub review" : DRAFT_TEXT[intent].replace(/^Draft /, "");
+    const title = label ? (step ? `${label} ${STAGE_LABEL[step].toLowerCase()} · ${what}` : `${label} ${what}`) : step ? `${STAGE_LABEL[step]} · ${what}` : p.intent.type === "comment" && !from ? commentTitle(p.intent.body) : DRAFT_TEXT[intent];
     const by = label ? (step ? `${label} ${STAGE_LABEL[step].toLowerCase()}` : label) : p.createdBy === "pip" ? "Pip" : p.createdBy === "agent" ? "An agent" : "You";
-    const drafted = `${by} drafted ${DRAFT_WHAT[p.intent.type](key)}.`;
+    const drafted = `${by} drafted ${DRAFT_WHAT[intent](key)}.`;
     const edit = EDITABLE.has(p.intent.type) ? [action("edit", "Edit")] : [];
     if (p.intent.type === "rewrite") {
       // A plan run's description update is how the plan is approved; any other rewrite is read in its diff first.
@@ -392,7 +363,7 @@ export function needs({ workstreams, runs, proposals, dismissed, pausedAt, title
       title,
       why: drafted,
       ifYouWait: review ? "Nothing is posted to GitHub until you choose." : "Nothing is written to Jira until you approve it.",
-      primary: action("approve", review ? "Post review" : p.intent.type === "runAnswer" ? "Send answer" : p.intent.type === "followUp" ? "Send back" : p.intent.type === "comment" ? "Post comment" : "Approve"),
+      primary: action("approve", review ? "Post review" : p.intent.type === "comment" ? "Post comment" : "Approve"),
       secondary: [...edit, action("dismiss", "Skip")],
       batchable: safeToBatch(p) && !repeated.has(p.id),
     });
@@ -406,22 +377,7 @@ export function needs({ workstreams, runs, proposals, dismissed, pausedAt, title
     const key = run.item?.key;
     const base = { key: `run:${run.id}`, runId: run.id, at, target: { type: "run", id: run.id } as const, ...where(ws?.workstream.id ?? null, key) };
     const stays = base.ticketKey ? `nothing else in ${base.ticketKey} moves` : "nothing else it blocks moves";
-    const answer = answers.get(run.id);
-    if (answer) {
-      out.push({
-        ...base,
-        key: `draft:${answer.id}`,
-        target: { type: "draft", id: answer.id },
-        group: "unblock",
-        kind: "question",
-        title: `${name} asks a question · ${answer.createdBy === "pip" ? "Pip suggests a reply" : "a reply is drafted"}`,
-        why: `${name} asks: “${clip(run.needs ?? "", 90)}” ${answer.createdBy === "pip" ? "Pip suggests a reply." : "A reply is drafted."}`,
-        ifYouWait: `The run stays paused; ${stays}.`,
-        primary: action("approve", "Send answer"),
-        secondary: [action("edit", "Edit"), action("dismiss", "Skip")],
-        batchable: false,
-      });
-    } else if (run.state === "needsAnswer") {
+    if (run.state === "needsAnswer") {
       out.push({
         ...base,
         group: "unblock",
@@ -491,6 +447,25 @@ export function needs({ workstreams, runs, proposals, dismissed, pausedAt, title
         batchable: false,
       });
     }
+  }
+
+  for (const v of open) {
+    if (!v.pipAsk) continue;
+    const id = v.workstream.id;
+    out.push({
+      key: `pip-ask:${id}`,
+      group: "decide",
+      kind: "pipAsk",
+      ...where(id, v.workstream.itemKey),
+      title: "Pip asks you",
+      why: `Pip asks: “${clip(v.pipAsk.question, 140)}”`,
+      ifYouWait: "Pip waits for your answer in the conversation.",
+      at: v.pipAsk.at,
+      primary: action("reply", "Answer in Pip"),
+      secondary: [action("dismiss", "Dismiss")],
+      target: { type: "workstream" },
+      batchable: false,
+    });
   }
 
   for (const v of open) {

@@ -1,8 +1,9 @@
 //! Gossamr's one MCP server (streamable HTTP, JSON responses only), for Pip and for the agents it runs.
 //!
-//! Pip gets read tools plus proposal tools. A proposal is stored as a draft for the user to approve; nothing here
-//! writes to a tracker. That keeps "Pip never changes anything without your approval" true regardless of what the
-//! model decides. An agent gets four tools of its own (`agent_tools`) and never sees Pip's.
+//! Pip gets read tools, draft tools and agent tools. A draft is stored for the user to approve; nothing here writes
+//! to a tracker. That keeps "Pip never changes a tracker without your approval" true regardless of what the model
+//! decides. Starting, messaging and stopping agents are not drafts: they are Pip's own actions, recorded as Pip's. An
+//! agent gets four tools of its own (`agent_tools`) and never sees Pip's.
 
 use std::mem::discriminant;
 use std::path::PathBuf;
@@ -21,7 +22,7 @@ use crate::auth::Scope;
 use crate::error::{Error, Result};
 use super::agent_tools::{self, AgentSide};
 use super::context::draft_line;
-use super::{McpEndpoint, RunPlanner};
+use super::{AgentDriver, McpEndpoint};
 use crate::domain::{ASK_TOOL, ContainerRef, DiffSide, Doc, Filter, Intent, ItemKind, ItemRef, NewItem, Proposal, ProposalQuery, ReviewComment, StateKind, Transitions};
 use crate::inbox::{Core, TextSeen};
 use crate::model::CachedTicket;
@@ -51,18 +52,20 @@ pub struct PipRun {
     /// The title and description of each ticket (key upper-cased) the run was shown or read. A rewrite starts from
     /// what Pip saw, so one drafted without a read, or after the ticket moved on, is refused.
     pub read: std::collections::HashMap<String, TextSeen>,
-    /// How far into each run's result (characters from the start, with no gap) Pip has been shown in this request. A
-    /// follow-up for the run needs it to reach the end.
-    pub read_runs: std::collections::HashMap<String, usize>,
     /// The workstream whose conversation the request belongs to, if any. Drafts of a workstream are revised only from
     /// its own conversation.
     pub workstream: Option<String>,
+    /// How many agents Pip has started in this request.
+    pub starts: u32,
+    /// The request is a wake turn (Gossamr asked Pip, the person didn't): what it was woken for. A wake given back and
+    /// run again has the same facts, so an agent it started comes back instead of starting twice.
+    pub wake: Option<String>,
 }
 
 impl PipRun {
     #[cfg(test)]
     pub fn new(scope: Scope) -> Self {
-        Self { scope, handed: Default::default(), read: Default::default(), read_runs: Default::default(), workstream: None }
+        Self { scope, handed: Default::default(), read: Default::default(), workstream: None, starts: 0, wake: None }
     }
 
     /// A request asked in workstream `id`'s conversation.
@@ -84,9 +87,11 @@ pub(super) struct McpState {
     pub core: Arc<Core>,
     pub tokens: Tokens,
     pub sink: ChangeSink,
+    /// Told the connection id whenever a workstream changed, so the page re-reads it.
+    pub workstreams: ChangeSink,
     pub view: ViewSink,
     pub runs: PipRuns,
-    pub planner: Arc<dyn RunPlanner>,
+    pub driver: Arc<dyn AgentDriver>,
 }
 
 /// One server, two kinds of caller. Pip reaches its tools at `/mcp/{request_id}` with a token that lives in memory for
@@ -157,19 +162,19 @@ pub struct McpServer {
 impl McpServer {
     /// A server on any free port, with nothing remembered.
     #[cfg(test)]
-    pub async fn start(core: Arc<Core>, planner: Arc<dyn RunPlanner>, sink: ChangeSink, view: ViewSink) -> std::io::Result<Self> {
+    pub async fn start(core: Arc<Core>, driver: Arc<dyn AgentDriver>, sink: ChangeSink, view: ViewSink) -> std::io::Result<Self> {
         let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
         let port = listener.local_addr()?.port();
         let channel = Arc::new(AgentChannel::new(port, std::env::temp_dir().join(format!("gossamr-agents-{port}"))));
-        Self::start_on(Bound { listener, channel }, core, planner, sink, view)
+        Self::start_on(Bound { listener, channel }, core, driver, sink, Arc::new(|_| {}), view)
     }
 
-    pub fn start_on(bound: Bound, core: Arc<Core>, planner: Arc<dyn RunPlanner>, sink: ChangeSink, view: ViewSink) -> std::io::Result<Self> {
+    pub fn start_on(bound: Bound, core: Arc<Core>, driver: Arc<dyn AgentDriver>, sink: ChangeSink, workstreams: ChangeSink, view: ViewSink) -> std::io::Result<Self> {
         let Bound { listener, channel } = bound;
         let port = channel.port();
         let runs: PipRuns = Arc::default();
         let tokens = Tokens::default();
-        let pip = Arc::new(McpState { core: core.clone(), tokens: tokens.clone(), sink, view, runs: runs.clone(), planner });
+        let pip = Arc::new(McpState { core: core.clone(), tokens: tokens.clone(), sink, workstreams, view, runs: runs.clone(), driver });
         let state = Arc::new(Serving {
             pip,
             agents: AgentSide::new(core),
@@ -411,8 +416,8 @@ fn tool_list() -> Vec<Value> {
         ),
         tool(
             "revise_proposal",
-            "Change one of YOUR OWN pending drafts, or the pending comment, new ticket or subtask breakdown an agent run drafted for the user from its result (its text; for a ticket its type; for a breakdown only the summaries). Never anything else the user made, nor a description update carrying a run's Gossamr Plan: a build follows that plan, so only the user changes it. Pass the field that fits its kind: body for a comment, the message of a follow-up for a run or the answer to a run's question, status_id for a transition, summaries for subtasks, title, description and/or kind (task, bug, story or epic) for a new item, title and/or description (the complete new text) for a ticket text edit, focus and/or kind (investigate, triage, plan or verify) for an agent run on a ticket, prompt for an investigation with no ticket. For a GitHub review draft pass body for its new summary and/or comments for the COMPLETE new list of inline comments (each {path, line, side, body}, side RIGHT unless it is on a deleted line; comments you leave out are dropped, and a new one must sit on a line the pull request's diff shows, as get_proposal lists them); it stays a draft the user posts. An agent run or review the user has edited is theirs and can't be revised.",
-            json!({ "id": id, "body": { "type": "string" }, "comments": review_comments, "status_id": { "type": "string" }, "summaries": summaries, "title": { "type": "string" }, "description": { "type": "string" }, "focus": { "type": "string" }, "kind": { "type": "string" }, "prompt": { "type": "string" } }),
+            "Change one of YOUR OWN pending drafts, or the pending comment, new ticket or subtask breakdown an agent run drafted for the user from its result (its text; for a ticket its type; for a breakdown only the summaries). Never anything else the user made, nor a description update carrying a run's Gossamr Plan: a build follows that plan, so only the user changes it. Pass the field that fits its kind: body for a comment, status_id for a transition, summaries for subtasks, title, description and/or kind (task, bug, story or epic) for a new item, title and/or description (the complete new text) for a ticket text edit. For a GitHub review draft pass body for its new summary and/or comments for the COMPLETE new list of inline comments (each {path, line, side, body}, side RIGHT unless it is on a deleted line; comments you leave out are dropped, and a new one must sit on a line the pull request's diff shows, as get_proposal lists them); it stays a draft the user posts. A review the user has edited is theirs and can't be revised.",
+            json!({ "id": id, "body": { "type": "string" }, "comments": review_comments, "status_id": { "type": "string" }, "summaries": summaries, "title": { "type": "string" }, "description": { "type": "string" }, "kind": { "type": "string" } }),
             &["id"],
         ),
         tool(
@@ -740,23 +745,6 @@ async fn run_tool(st: &McpState, run: &PipRun, run_id: &str, name: &str, args: &
                         flattened: flattened.clone(),
                     }
                 }
-                Intent::StartRun { connection_id, item, spec } => super::runs::revised(connection_id, item, spec, args)?,
-                Intent::FollowUp { connection_id, run_id, short_id, item, reason, .. } => Intent::FollowUp {
-                    connection_id: connection_id.clone(),
-                    run_id: run_id.clone(),
-                    short_id: short_id.clone(),
-                    item: item.clone(),
-                    message: crate::runs::result::scrub(required(args, "body")?).trim().to_string(),
-                    reason: reason.clone(),
-                },
-                Intent::RunAnswer { connection_id, run_id, short_id, item, question, .. } => Intent::RunAnswer {
-                    connection_id: connection_id.clone(),
-                    run_id: run_id.clone(),
-                    short_id: short_id.clone(),
-                    item: item.clone(),
-                    message: crate::runs::result::scrub(required(args, "body")?).trim().to_string(),
-                    question: question.clone(),
-                },
                 _ => return Err("this kind of draft can't be revised".into()),
             };
             let revised = core.revise_as_pip(scope, run.workstream.as_deref(), id, intent).await.map_err(|e| e.to_string())?;
@@ -955,7 +943,7 @@ mod tests {
         let seen = views.clone();
         let runs: PipRuns = Arc::default();
         runs.lock().unwrap().insert("run-1".into(), PipRun::new(fx.scope.clone()));
-        let st = McpState { core: fx.core.clone(), tokens: Tokens::default(), sink: Arc::new(move |_| { counter.fetch_add(1, Ordering::SeqCst); }), view: Arc::new(move |run, f, note| seen.lock().unwrap().push((run.into(), f.clone(), note.into()))), runs, planner: crate::agent::runs::testing::FakePlanner::unused() };
+        let st = McpState { core: fx.core.clone(), tokens: Tokens::default(), sink: Arc::new(move |_| { counter.fetch_add(1, Ordering::SeqCst); }), workstreams: Arc::new(|_| {}), view: Arc::new(move |run, f, note| seen.lock().unwrap().push((run.into(), f.clone(), note.into()))), runs, driver: crate::agent::runs::testing::FakePlanner::unused() };
         Rig { fx, st, changes, views }
     }
 
@@ -1117,8 +1105,9 @@ mod tests {
         let said = revise["description"].as_str().unwrap();
         let fields = said.split("Pass the field that fits its kind: ").nth(1).unwrap();
         let body = fields.split(", status_id").next().unwrap();
-        for kind in ["a comment", "a follow-up for a run", "the answer to a run's question"] {
-            assert!(body.contains(kind), "{kind}: {body}");
+        assert!(body.contains("a comment"), "{body}");
+        for gone in ["follow-up", "answer to a run", "agent run on a ticket", "prompt for"] {
+            assert!(!said.contains(gone), "{gone}: {said}");
         }
     }
 

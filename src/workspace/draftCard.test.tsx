@@ -9,7 +9,6 @@ import { KeyHint } from "./KeyHint";
 import { DraftPreview, draftPreviewBody } from "./DraftPreview";
 
 const spec: RunSpec = { kind: "investigate", repo: "acme/web", clonePath: "/Users/sample/Code/web", base: "main", name: "ca-412-fix-ab12", instruction: "Investigate this work." };
-const BEFORE = "Read the exact prompt and checks, then start it. Nothing runs before that.";
 
 const runDraft = (state: Proposal["state"]): Proposal => ({
   id: "p1",
@@ -29,20 +28,22 @@ const runDraft = (state: Proposal["state"]): Proposal => ({
 
 const commentDraft = (id: string): Proposal => ({ ...runDraft({ type: "pending" }), id, intent: { type: "comment", item: itemRef("CA-412"), body: docFromText("Original text") } });
 
-describe("a startRun draft once the agent started (G13)", () => {
+describe("a draft that started an agent, from before Pip did that directly", () => {
   beforeEach(() => {
     vi.stubGlobal("localStorage", { getItem: () => null, setItem: () => {}, removeItem: () => {} });
   });
-  const card = (p: Proposal) => renderToStaticMarkup(<DraftCard proposal={p} statusName={null} people={[]} working={false} error={null} onApprove={vi.fn()} onSkip={vi.fn()} onReview={vi.fn()} />);
+  const card = (p: Proposal) => renderToStaticMarkup(<DraftCard proposal={p} statusName={null} people={[]} working={false} error={null} onApprove={vi.fn()} onSkip={vi.fn()} />);
 
-  it("keeps the pre-start sentence while pending and says it started once applied, on the card and in the preview", () => {
-    expect(card(runDraft({ type: "pending" }))).toContain(BEFORE);
-    expect(draftPreviewBody(runDraft({ type: "pending" }), null)).toContain(BEFORE.replace(" and checks", ""));
-    const applied = runDraft({ type: "applied" });
-    expect(card(applied)).not.toContain("Nothing runs before that");
-    expect(card(applied)).toContain("Started: see its run in the steps.");
-    expect(draftPreviewBody(applied, null)).not.toContain("Nothing runs before that");
-    expect(draftPreviewBody(applied, null)).toContain("Started: see its run in the steps.");
+  it("is read-only history: its title and instruction, how it ended, and no button that approves, starts or skips it", () => {
+    for (const state of [{ type: "pending" }, { type: "applied" }, { type: "skipped" }] as const) {
+      const out = card(runDraft(state));
+      expect(out).toContain("Agent run: CA-412");
+      expect(out).toContain("Investigate this work.");
+      expect(out).toContain("kept only as history");
+      expect(out).not.toContain("<button");
+      expect(out).not.toContain("Review and start");
+    }
+    expect(draftPreviewBody(runDraft({ type: "applied" }), null)).toContain("kept as history");
   });
 });
 
@@ -74,10 +75,10 @@ describe("a skipped draft's unsaved edit (G2)", () => {
     }
     settleKeptEdits("c3", "applied");
     expect(keptEditsOfDraft("c3")).toBeUndefined();
-    keepEditsOfDraft("c4", { message: "Try again" });
+    keepEditsOfDraft("c4", { body: { text: "Try again", mentions: [] } });
     settleKeptEdits("c4", "retired");
     expect(keptEditsOfDraft("c4")).toBeUndefined();
-    keepEditsOfDraft("c5", { message: "Typed" });
+    keepEditsOfDraft("c5", { body: { text: "Typed", mentions: [] } });
     keepEditsOfDraft("c5", {});
     expect(keptEditsOfDraft("c5")).toBeUndefined();
   });
@@ -162,17 +163,17 @@ describe("the Start-an-agent card's name (G28)", () => {
   });
 
   it("is labelled by its heading, so its title is read once", () => {
-    const out = renderToStaticMarkup(<DraftCard proposal={runDraft({ type: "pending" })} statusName={null} people={[]} working={false} error={null} onApprove={vi.fn()} onSkip={vi.fn()} onReview={vi.fn()} />);
+    const out = renderToStaticMarkup(<DraftCard proposal={commentDraft("p1")} statusName={null} people={[]} working={false} error={null} onApprove={vi.fn()} onSkip={vi.fn()} />);
     const id = out.match(/aria-labelledby="([^"]+)"/)![1];
-    expect(out).toMatch(new RegExp(`<h3 id="${id}"[^>]*>Start an agent: CA-412</h3>`));
-    expect(out).not.toContain('aria-label="Start an agent');
+    expect(out).toMatch(new RegExp(`<h3 id="${id}"[^>]*>Comment on CA-412</h3>`));
+    expect(out).not.toContain('aria-label="Comment on');
   });
 
   it("is so in the preview too, with no status role for the key hint", () => {
-    const out = renderToStaticMarkup(<DraftPreview proposal={runDraft({ type: "pending" })} statusName={null} targetTitle={null} onOpen={vi.fn()} onApprove={vi.fn()} onSkip={vi.fn()} />);
+    const out = renderToStaticMarkup(<DraftPreview proposal={commentDraft("p1")} statusName={null} targetTitle={null} onOpen={vi.fn()} onApprove={vi.fn()} onSkip={vi.fn()} />);
     const id = out.match(/aria-labelledby="([^"]+)"/)![1];
-    expect(out).toMatch(new RegExp(`<h3 id="${id}"[^>]*>Start an agent: CA-412</h3>`));
-    expect(out).not.toContain('aria-label="Start an agent');
+    expect(out).toMatch(new RegExp(`<h3 id="${id}"[^>]*>Comment on CA-412</h3>`));
+    expect(out).not.toContain('aria-label="Comment on');
     expect(out).not.toContain('role="status"');
   });
 });

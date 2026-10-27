@@ -153,35 +153,6 @@ test("a second draft reached with the arrows is skipped with s, at once", async 
   await expect(stateOf(first)).toHaveText("Draft");
 });
 
-test("a on a run draft opens its setup and starts nothing", async ({ page }) => {
-  await openApp(page);
-  await page.getByRole("button", { name: /^Agents/ }).click();
-  // Pip's strip of agents shows runs too; only the Agents view counts.
-  const runs = page.locator('[data-run-id]:not(aside[aria-label="Pip"] *)');
-  await expect(runs.first()).toBeVisible();
-  const before = await runs.count();
-
-  await openPip(page);
-  await askPip(page, "investigate CA-401");
-  const draft = card(page, "Start an agent: CA-401");
-  await expect(draft).toBeVisible();
-  await expect(pipPane(page).getByRole("button", { name: "Stop" })).toHaveCount(0);
-
-  const setup = page.getByRole("dialog", { name: "Start an agent" });
-  await page.locator(PIP_INPUT).press("ArrowUp");
-  await expect(draft).toBeFocused();
-  await expect(draft).toContainText("e edit · d s skip · ↵ open");
-  await expect(draft).not.toContainText("a approve");
-  await page.keyboard.press("a");
-  await expect(setup).toBeVisible();
-  await expect(setup).toContainText("CA-401");
-
-  await setup.getByRole("button", { name: /^(Cancel|Close)$/ }).first().click();
-  await expect(setup).toHaveCount(0);
-  await expect(stateOf(draft)).toHaveText("Draft");
-  await expect(runs).toHaveCount(before);
-});
-
 test("the pane keeps its header and input", async ({ page }) => {
   await openApp(page);
   await openPip(page);

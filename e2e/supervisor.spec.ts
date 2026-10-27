@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { advanceRuns, askPip, editTicket, jiraWrites, mockRuns, openApp, pausedBanner, peekSheet, pipConversation, paneSettled as settled, pipPane, startWorkstream, surfacePullRequests, wakeTurns, wakes, workstreamEvents } from "./support/app";
+import { advanceRuns, askPip, editTicket, openAgents, selectWorkstream, jiraWrites, mockRuns, openApp, pausedBanner, peekSheet, pipConversation, paneSettled as settled, pipPane, startWorkstream, surfacePullRequests, wakeTurns, wakes, workstreamEvents } from "./support/app";
 
 // The sample supervisor wakes Pip once for each finished run of a workstream that isn't paused, and starts nothing itself.
 // Pull requests show only when a test says. `pipPace=1` makes the sample Pip answer at once: nothing here is about how fast
@@ -7,20 +7,14 @@ import { advanceRuns, askPip, editTicket, jiraWrites, mockRuns, openApp, pausedB
 // wait has on a machine that is busy.
 const SAMPLE = "runs=empty&prSurface=manual&pipPace=1";
 
-const setup = (page: Page) => page.getByRole("dialog", { name: "Start an agent" });
-const runCards = (page: Page, key: string) => pipPane(page).getByRole("article", { name: `Start an agent: ${key}` });
 
-/** Asks Pip for an investigation of `key`, opens its draft and starts it, as the person does. */
-async function startInvestigation(page: Page, key = "CA-401") {
+/** Asks Pip for an investigation of `key`, which starts it. */
+async function startInvestigation(page: Page) {
   // The wake the last finish queued is answered first: asked while it runs, the question sets it aside and it is answered
   // again behind the question, two turns instead of one.
   await settled(page);
   await askPip(page, "investigate this");
   await settled(page);
-  await runCards(page, key).last().getByRole("button", { name: "Review and start →" }).click();
-  await expect(setup(page)).toBeVisible();
-  await setup(page).getByRole("button", { name: "Start agent" }).click();
-  await expect(setup(page)).toHaveCount(0);
 }
 
 /** The newest run of `kind`, as the sample backend holds it. */
@@ -143,7 +137,8 @@ test("Esc closes only the menu or confirmation that is open: the pane, the peek 
 
   // With no peek, where Esc would otherwise close the pane.
   await startInvestigation(page);
-  await page.getByRole("button", { name: /^Agents/ }).click();
+  await openAgents(page);
+  await selectWorkstream(page, "CA-401");
   await expect(peekSheet(page)).toHaveCount(0);
   await stays();
   await more.click();

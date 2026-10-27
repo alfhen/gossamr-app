@@ -1,4 +1,4 @@
-//! What starts an approved run. The approval commits first; starting is a separate step that belongs to the run.
+//! What starts a queued run. Queuing commits first; starting is a separate step that belongs to the run.
 
 use async_trait::async_trait;
 

@@ -14,6 +14,8 @@ pub mod supervisor;
 pub mod workstream;
 
 #[cfg(test)]
+mod real_tests;
+#[cfg(test)]
 pub(crate) mod world;
 
 use std::collections::{HashMap, HashSet};
@@ -26,7 +28,8 @@ use tokio::sync::mpsc;
 use crate::auth::Scope;
 use crate::claude::ClaudeCodeProvider;
 use crate::db::PipTurn;
-use crate::domain::{ClonePlan, ProposalQuery, StateKind};
+use crate::domain::{ClonePlan, ProposalQuery, Run, StateKind};
+use crate::runs::message::Delivery;
 use crate::error::{Error, Result};
 use crate::inbox::Core;
 use context::ScreenContext;
@@ -34,7 +37,7 @@ use images::ImageInput;
 use mcp::McpServer;
 use queue::{Enqueued, QueueItem, Removed, TurnQueue};
 use sandbox::Sandbox;
-use supervisor::{event_line, fact_keys, WakeFacts, WAKE_REQUEST};
+use supervisor::{event_line, fact_keys, wake_identity, WakeFacts, WAKE_REQUEST};
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(tag = "type", rename_all = "camelCase", rename_all_fields = "camelCase")]
@@ -105,12 +108,29 @@ pub struct AgentRequest {
     pub images: Vec<ImageInput>,
 }
 
-/// What Pip's run tools need from the agent-run service, and nothing that starts, stops or answers a run.
+/// What Pip's agent tools need from the agent-run service: where a run would be set up, and to start, message and stop
+/// one. Everything but `plan` is Pip's own action and is recorded as Pip's.
 #[async_trait]
-pub trait RunPlanner: Send + Sync {
+pub trait AgentDriver: Send + Sync {
     /// Where a run in `repo` would be set up: the clone to use, its default branch and a fresh worktree name for
     /// ticket `key` titled `title`. The error is in words Pip can pass on.
     async fn plan(&self, repo: &str, key: &str, title: &str) -> std::result::Result<ClonePlan, String>;
+
+    /// Why no agent could start now because of Claude itself (missing, or signed out), in words Pip can pass on; `None`
+    /// when it can, or when that can't be told.
+    async fn unready(&self) -> Option<String> {
+        None
+    }
+
+    /// Hands the queued run to the launcher in the background: first marked as waiting for a slot
+    /// when the cap or an earlier run holds it back. Returns the run as it then stands.
+    async fn begin(self: Arc<Self>, run_id: String) -> Result<Run>;
+
+    /// Sends Pip's `text` to the agent, by what it is doing; see `runs::message`.
+    async fn message(&self, run_id: &str, text: &str) -> Result<(Run, Delivery)>;
+
+    /// Stops the agent, and lets a run waiting for its slot take it.
+    async fn stop(self: Arc<Self>, run_id: String) -> Result<Run>;
 }
 
 pub type EventStream = mpsc::UnboundedReceiver<AgentEvent>;
@@ -378,6 +398,11 @@ impl AgentService {
         // Kept as waiting until its provider has started, so a reload shows it either way.
         recorded(self.core.pip_turn_begin(&scope, &req.conversation, &req.request_id, &req.prompt, &meta, "queued").await);
         let workstream = workstream_of_conversation(&req.conversation).map(str::to_string);
+        if let Some(id) = workstream.as_ref().filter(|_| meta.shown.is_none()) {
+            // What the person types answers a question Pip asked in this workstream, if one is open; a line the page
+            // wrote for them (`shown`) doesn't.
+            recorded(self.core.clear_pip_ask(&scope, id, "answered").await.map(drop));
+        }
         let mut again = Vec::new();
         if workstream.is_some() {
             let waiting = self.queue.lock().expect("lock poisoned").waiting_wakes(&req.conversation);
@@ -629,7 +654,8 @@ impl AgentService {
 
         // Registered before the run starts, since the agent may call the tools straight away.
         let workstream_id = workstream.map(|w| w.workstream.id);
-        let pip = mcp::PipRun { scope: scope.clone(), handed, read, read_runs: Default::default(), workstream: workstream_id.clone() };
+        let wake = self.wakes.lock().expect("lock poisoned").get(&run_id).map(|w| wake_identity(&w.facts));
+        let pip = mcp::PipRun { scope: scope.clone(), handed, read, workstream: workstream_id.clone(), starts: 0, wake };
         self.mcp.runs.lock().expect("lock poisoned").insert(run_id.clone(), pip);
         self.live.lock().expect("lock poisoned").insert(run_id.clone(), LiveTurn::default());
         recorded(self.core.pip_turn_status(&scope, &run_id, "running").await);
@@ -836,6 +862,26 @@ mod tests {
             assert_eq!(t.looking.as_deref(), Some("the board"));
             tokio::time::sleep(Duration::from_millis(20)).await;
             assert!(matches!(seen.lock().unwrap().last(), Some(AgentEvent::Done { usage: Some(_), .. })), "the page is told the usage too");
+        }
+
+        #[tokio::test]
+        async fn the_persons_next_message_in_a_workstream_clears_the_question_pip_asked_there_and_nothing_else_does() {
+            let fx = fixture().await;
+            let ws = fx.core.open_workstream(&fx.scope, Some(fx.item("CA-1")), None).await.unwrap().id;
+            fx.core.pip_asks_person(&fx.scope, &ws, "Shall I build it?").await.unwrap();
+            let svc = service(&fx, Fake { events: vec![text("Fine.")], gate: None, refuse: false }).await;
+            let open = || async { fx.core.workstream(&fx.scope, &ws).await.unwrap().unwrap().pip_ask };
+
+            svc.ask(ask("q1"), Arc::new(|_| {})).await.unwrap();
+            settled(&svc, "q1").await;
+            assert!(open().await.is_some(), "a message in General is about nothing Pip asked");
+
+            let mut in_workstream = ask("q2");
+            in_workstream.conversation = format!("ws:{ws}");
+            svc.ask(in_workstream, Arc::new(|_| {})).await.unwrap();
+            assert_eq!(open().await, None);
+            let cleared: Vec<_> = fx.core.workstream_events(&fx.scope, &ws).await.unwrap().into_iter().filter(|e| e.action == "pip_ask_cleared").map(|e| (e.actor, e.detail)).collect();
+            assert_eq!(cleared, [(crate::domain::Actor::Person, Some("answered".to_string()))]);
         }
 
         #[tokio::test]

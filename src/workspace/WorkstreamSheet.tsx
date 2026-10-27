@@ -8,7 +8,6 @@ import { WorkstreamHeadExtras, rowTitle } from "./AgentsHome";
 import { lightboxOpen } from "./PipImages";
 import { popoverOpen } from "./Popover";
 import { usePrefs } from "./prefs";
-import { useRunSetup } from "./runSetupStore";
 import { useRuns } from "./runsStore";
 import { useTabs } from "./tabsStore";
 import { isTypingTarget } from "./workKeys";
@@ -101,7 +100,7 @@ function useDetailEsc() {
     const onKey = (ev: KeyboardEvent) => {
       if (ev.key !== "Escape" || ev.defaultPrevented || ev.metaKey || ev.ctrlKey || ev.altKey) return;
       const runs = useRuns.getState();
-      if (runs.sheet !== null || runs.picking || useRunSetup.getState().open) return;
+      if (runs.sheet !== null) return;
       const field = ev.target as HTMLElement | null;
       if (usePrefs.getState().paletteOpen || pickerOpen() || popoverOpen() || lightboxOpen() || useTabs.getState().selected !== null || isTypingTarget(field) || field?.closest?.("[data-esc-local]")) return;
       ev.preventDefault();

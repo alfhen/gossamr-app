@@ -2,10 +2,7 @@ import { useMemo, type ReactNode } from "react";
 import { needsIn } from "../lib/needs";
 import type { WorkstreamView } from "../types";
 import { StatusPill, useWorkstreamStatus } from "./StatusPill";
-import { START_WORKSTREAM } from "./commands";
 import { DecisionShownContext, decisionShown } from "./decisionShown";
-import { InlineStartContext } from "./InlineStart";
-import { usePrefs } from "./prefs";
 import { groupId } from "./needsActions";
 import { useNeedsYou } from "./useNeeds";
 import { useWorkView } from "./workViewStore";
@@ -19,7 +16,7 @@ export function rowTitle(ws: Pick<WorkstreamView["workstream"], "itemKey" | "tit
 
 /**
  * Wraps what shows a workstream or a decision so that the one open in a workstream's Needs you is not shown a second time (the
- * timeline, the step rail, the controls), and run drafts that need nothing chosen are read and started in place.
+ * timeline, the step rail, the controls).
  */
 export function DecisionScope({ children }: { children: ReactNode }) {
   const needs = useNeedsYou();
@@ -31,9 +28,7 @@ export function DecisionScope({ children }: { children: ReactNode }) {
     return decisionShown(need && groupId(need.workstreamId) === open ? need : null);
   }, [needs, deciding, open]);
   return (
-    <InlineStartContext.Provider value={true}>
-      <DecisionShownContext.Provider value={decided}>{children}</DecisionShownContext.Provider>
-    </InlineStartContext.Provider>
+    <DecisionShownContext.Provider value={decided}>{children}</DecisionShownContext.Provider>
   );
 }
 
@@ -61,21 +56,15 @@ export function WorkstreamHeadExtras({ view }: { view: WorkstreamView }) {
 }
 
 /** What the list says before there is any workstream: what one is, in a line. */
-export const NO_WORKSTREAMS = "No workstreams yet. A workstream follows one ticket from investigation to a reviewed pull request, with Pip keeping track.";
+export const NO_WORKSTREAMS = "No workstreams yet. Ask Pip about a ticket to start one.";
 
-/** "Start a workstream…" and "Show closed", the two ways to the workstreams the list doesn't show. */
+/** "Show closed", the way to the workstreams the list doesn't show. */
 export function WorkstreamTools({ showClosed, onShowClosed }: { showClosed: boolean; onShowClosed(on: boolean): void }) {
   const button = "rounded-md px-2 py-px text-sm text-ws-ink2 hover:bg-ws-hover focus-visible:outline-2 focus-visible:outline-ws-pip";
   return (
-    <>
-      {/* The palette, already asking for a workstream: the person types the ticket, and its 'Start a workstream on' starts it. */}
-      <button type="button" data-start-workstream onClick={() => usePrefs.getState().setPaletteOpen(true, START_WORKSTREAM)} className={button}>
-        Start a workstream…
-      </button>
-      <button type="button" data-show-closed aria-pressed={showClosed} onClick={() => onShowClosed(!showClosed)} className={button}>
-        {showClosed ? "Hide closed" : "Show closed"}
-      </button>
-    </>
+    <button type="button" data-show-closed aria-pressed={showClosed} onClick={() => onShowClosed(!showClosed)} className={button}>
+      {showClosed ? "Hide closed" : "Show closed"}
+    </button>
   );
 }
 

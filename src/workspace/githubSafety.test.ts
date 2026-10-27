@@ -23,9 +23,9 @@ describe("what the app says it does on GitHub (G5, G6)", () => {
   it("calls the build's branch rule a request, in Pip's intro", () => {
     expect(GENERAL_INTRO).toContain(BUILD_ON_GITHUB);
     expect(GENERAL_INTRO).not.toContain("is told to push");
-    // As the safety sheet says it: runs as the person, in a workstream or with Pushing ticked, a request and not a lock.
+    // As the safety sheet says it: runs as the person, a request and not a lock.
     expect(BUILD_ON_GITHUB).toContain("runs as you");
-    expect(BUILD_ON_GITHUB).toContain("In a workstream or with Pushing ticked");
+    expect(BUILD_ON_GITHUB).not.toContain("Pushing ticked");
     expect(BUILD_ON_GITHUB).toContain("a request, not a lock");
   });
 

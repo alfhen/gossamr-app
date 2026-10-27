@@ -4,7 +4,7 @@
 //! It hears about runs from the run tracker (`RunNotifier::notify`, called while `RunService.launching` is held, so it
 //! only ever spawns) and from its own periodic sweep, which catches what the tracker never says: a run stopped from
 //! outside Gossamr, a run finishing again after a continuation that drafted nothing, a run that finished while the
-//! workstream was paused, a build's pull request turning up. A run the person stopped wakes nobody.
+//! workstream was paused, a build's pull request turning up. A run the person or Pip stopped wakes nobody.
 //!
 //! A wake is Pip's ordinary turn in the workstream's conversation, asked with a prompt Rust writes from ids, kinds,
 //! states, counts and parsed flags only (`event_line`), never an agent's words. Each `(workstream, run, state)` wakes
@@ -37,8 +37,8 @@ pub const BACKOFF_FIRST: Duration = Duration::from_secs(60);
 pub const BACKOFF_MAX: Duration = Duration::from_secs(60 * 60);
 
 /// What Pip is asked in a wake turn, after the `[Event]` block that says what happened.
-pub const WAKE_REQUEST: &str = "Nobody wrote this: Gossamr woke you because of the [Event] above. Read what you need, draft the \
-     next step if one is due, and reply in at most three short lines.";
+pub const WAKE_REQUEST: &str = "Nobody wrote this: Gossamr woke you because of the [Event] above. Read what you need, take the next \
+     step the person asked for if one is due, tell the person in your reply about any agent you start, and reply in at most three short lines.";
 
 /// What a run did that wakes Pip.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -94,14 +94,15 @@ impl WakeState {
         })
     }
 
-    /// A run at rest, or waiting on the person, as the sweep finds it; `None` while it is under way, or after a stop
-    /// Gossamr made at a limit. A question asked while the workstream was paused is noticed this way once it is
+    /// A run at rest, or waiting on the person, as the sweep finds it; `None` while it is under way, after a stop
+    /// Gossamr made at a limit, or while it is stopped only to be woken with a message (a failed wake leaves the reason on
+    /// the run, so that one is reported). A question asked while the workstream was paused is noticed this way once it is
     /// resumed, keyed by when it was asked.
     pub fn of_run(run: &Run) -> Option<Self> {
         match run.state {
             RunState::Done => Some(WakeState::Done),
             RunState::Failed => Some(WakeState::Failed),
-            RunState::Stopped if run.stopped_by_limit => None,
+            RunState::Stopped if run.stopped_by_limit || (run.unsent_answer.is_some() && run.error.is_none()) => None,
             RunState::Stopped => Some(WakeState::Stopped),
             RunState::NeedsAnswer => Some(WakeState::NeedsAnswer),
             RunState::NeedsPermission => Some(WakeState::NeedsPermission),
@@ -239,6 +240,13 @@ pub fn fact_keys(facts: &WakeFacts) -> Vec<(String, String)> {
     facts.facts.iter().map(|f| (f.run.clone(), f.key().to_string())).collect()
 }
 
+/// What a wake turn is for, the same for any wake of the same facts.
+pub fn wake_identity(facts: &WakeFacts) -> String {
+    let mut keys: Vec<String> = fact_keys(facts).into_iter().map(|(run, key)| format!("{run}\0{key}")).collect();
+    keys.sort();
+    format!("{}\0{}", facts.workstream, keys.join("\0"))
+}
+
 /// Whether a turn ended because the person's subscription said no: a rate or usage limit, or sign-in trouble.
 pub fn is_quota_error(message: &str) -> bool {
     let m = message.to_ascii_lowercase();
@@ -291,9 +299,9 @@ pub fn reached_pip(status: &str, error: Option<&str>) -> bool {
     status != "queued" && !error.is_some_and(|e| e == WAKE_PAUSED || e == REMOVED || e == crate::db::NEVER_RAN || e.starts_with(WAKE_NOT_STARTED) || is_quota_error(e))
 }
 
-/// Whether the person stopped `run` since it last carried on.
-fn stopped_by_person(events: &[WorkstreamEvent], run: &Run) -> bool {
-    events.iter().any(|e| e.actor == Actor::Person && e.action == "run_stopped" && e.run_id.as_deref() == Some(run.id.as_str()) && run.continued_at.is_none_or(|at| e.at >= at))
+/// Whether the person or Pip stopped `run` since it last carried on.
+fn stopped_on_purpose(events: &[WorkstreamEvent], run: &Run) -> bool {
+    events.iter().any(|e| matches!(e.actor, Actor::Person | Actor::Pip) && e.action == "run_stopped" && e.run_id.as_deref() == Some(run.id.as_str()) && run.continued_at.is_none_or(|at| e.at >= at))
 }
 
 /// Whether Pip was told, in the wake with key `key`, that the build `run` is still waiting for its pull request.
@@ -395,7 +403,7 @@ impl Supervisor {
             let mut facts = Vec::new();
             for run in &runs {
                 let Some(state) = WakeState::of_run(run) else { continue };
-                if state == WakeState::Stopped && stopped_by_person(&events, run) {
+                if state == WakeState::Stopped && stopped_on_purpose(&events, run) {
                     continue;
                 }
                 if is_new(&WakeFact::new(run, state)) {

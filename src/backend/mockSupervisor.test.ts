@@ -73,12 +73,10 @@ function world(options: MockOptions = { githubRepos: 12 }) {
   return { b, supervisor, wakes };
 }
 
-/** The person starts a `kind` run on `item` in workstream `ws`, as the setup sheet does. */
+/** A `kind` run on `item` in workstream `ws`, as Pip's start_agent does. */
 async function start(b: MockBackend, ws: string, kind: RunKind, item: ItemRef | null = CA401): Promise<Run> {
   const spec: RunSpec = { kind, repo: "acme/storefront", clonePath: "/Users/sample/Code/storefront", base: "main", name: `${(item?.key ?? "none").toLowerCase()}-${Math.random().toString(16).slice(2, 8)}`, instruction: "", focus: null, focusFromRun: null, ticketBlock: null, workstream: ws };
-  const draft = await b.runsDraft(spec, item);
-  const { digest } = await b.runsReview(draft.id);
-  return b.runsApprove(draft.id, digest);
+  return b.runs.start(spec, item);
 }
 
 const investigate = (b: MockBackend, ws: string, item: ItemRef | null = CA401) => start(b, ws, "investigate", item);

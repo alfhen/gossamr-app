@@ -1,15 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useBackend } from "../backend/useBackend";
-import { itemKey } from "../lib/filter";
-import { useWorkspace } from "../workspaceStore";
 import { agentId } from "./AgentCard";
 import { AgentsSettingsView } from "./AgentsSettings";
 import { pickerOpen } from "./AgentSheet";
-import { agentTicketChoices } from "./commands";
-import { PaletteView } from "./Palette";
-import { RunSetup } from "./RunSetup";
 import { RunSheet } from "./RunSheet";
-import { useRunSetup } from "./runSetupStore";
 import { stoppable } from "./agentsLogic";
 import { sheetKey } from "./runSheetLogic";
 import { useRuns } from "./runsStore";
@@ -81,46 +75,10 @@ function Settings() {
   return <AgentsSettingsView runs={runs} stopping={stopping} keepRunning={keepRunning ?? (stoppable(runs).length || null)} settings={settings} settingsSaving={settingsSaving} cleanup={cleanup} onSettings={save} onCleanup={() => void cleanAll()} onStopAll={() => void useRuns.getState().stopAll()} onClose={() => useRuns.getState().closeSheet()} />;
 }
 
-/** Asks which ticket to start an agent on. Picking opens the setup sheet; nothing is drafted before that. */
-export function AgentTicketPicker() {
-  const items = useWorkspace((s) => s.items);
-  const [query, setQuery] = useState("");
-  const [active, setActive] = useState(0);
-  const [opener] = useState(() => document.activeElement as HTMLElement | null);
-  useEffect(() => () => void (opener?.isConnected && opener.focus()), [opener]);
-  const results = useMemo(
-    () =>
-      agentTicketChoices(Object.values(items), query, (item) => {
-        useRuns.getState().setPicking(false);
-        void useRunSetup.getState().begin({ item: item?.item ?? null });
-      }),
-    [items, query],
-  );
-  const close = () => useRuns.getState().setPicking(false);
-  return (
-    <PaletteView
-      query={query}
-      results={results}
-      active={Math.min(active, Math.max(0, results.length - 1))}
-      placeholder="Which ticket should the agent work on?"
-      empty="No ticket matches. Choose “Investigate something” to describe a question of your own."
-      hints={["↑↓ move", "↵ choose", "esc close"]}
-      onQuery={(q) => (setQuery(q), setActive(0))}
-      onActive={setActive}
-      onRun={(c) => c.run()}
-      onClose={close}
-    />
-  );
-}
-
 /** Whichever sheet the Agents feature has open over the screen, and the keys that go with it. */
 export function AgentSheets() {
-  const setupOpen = useRunSetup((s) => s.open);
-  const setupItem = useRunSetup((s) => s.item);
   const sheet = useRuns((s) => s.sheet);
-  const picking = useRuns((s) => s.picking);
-  const ticketTitle = useWorkspace((s) => (setupItem ? (s.items[itemKey(setupItem)]?.title ?? null) : null));
-  const runSheetOpen = !setupOpen && sheet !== null;
+  const runSheetOpen = sheet !== null;
 
   // Closing a sheet that browsed from run to run has lost its opener; the run it ended on is the next best place.
   const wasOpen = useRef(false);
@@ -147,10 +105,5 @@ export function AgentSheets() {
     return () => window.removeEventListener("keydown", onKey, true);
   }, [runSheetOpen]);
 
-  return (
-    <>
-      {setupOpen ? <RunSetup ticketTitle={ticketTitle} /> : sheet?.type === "run" ? <RunSheet key={sheet.id} id={sheet.id} /> : sheet?.type === "safety" ? <Settings /> : null}
-      {picking && <AgentTicketPicker />}
-    </>
-  );
+  return sheet?.type === "run" ? <RunSheet key={sheet.id} id={sheet.id} /> : sheet?.type === "safety" ? <Settings /> : null;
 }

@@ -1,5 +1,5 @@
 import { itemKey, YOUR_TURN } from "../lib/filter";
-import type { ContainerRef, Intent, PersonRef, RunKind, WorkContainer, WorkFilter, WorkItem, WorkstreamView } from "../types";
+import type { ContainerRef, Intent, WorkContainer, WorkFilter, WorkItem, WorkstreamView } from "../types";
 import type { SavedView } from "./filters";
 import { THEMES, THEME_LABEL, type ThemeMode } from "./prefs";
 import { CODE_FILTERS, CODE_FILTER_LABEL } from "../lib/devLinks";
@@ -43,15 +43,11 @@ export interface CommandActions {
   openPull(ref: PullRef): void;
   newTab(): void;
   newTicket(): void;
-  /** Asks which ticket to start a workstream on, in the palette itself (the step Agents' 'Start a workstream…' opens). */
-  chooseWorkstream(): void;
   togglePip(): void;
-  startAgent(): void;
-  startAgentOn(item: WorkItem, kind: RunKind): void;
   /** Shows what needs the person: Agents with the Needs you filter on and the most urgent need open. */
   showNeedsYou(): void;
   openAgentSafety(): void;
-  /** Opens (or finds) the workstream on the ticket the peek shows and shows its conversation in Pip. */
+  /** Opens (or finds) the workstream on the ticket the peek shows and shows its conversation in Pip, ready for a question about the ticket. */
   startWorkstream(): void;
   /** Asks, in the peek, to confirm closing the workstream on the ticket the peek shows. */
   closeWorkstream(): void;
@@ -61,10 +57,8 @@ export interface CommandActions {
   openAgents(): void;
   /** Shows open workstream `id` on Agents. */
   openWorkstream(id: string): void;
-  /** Opens (or finds) the workstream on `item`, shows it on Agents and asks Pip to plan it: Pip only drafts, nothing starts. */
+  /** Opens (or finds) the workstream on `item`, shows it on Agents and asks Pip to plan it. */
   askPipToPlan(item: WorkItem): void;
-  /** Starts a workstream on `item` and shows its conversation in the Pip pane. */
-  startWorkstreamOn(item: WorkItem): void;
   /** Opens "What Jira saw from me": everything Gossamr posted to Jira. */
   openJiraSent(): void;
 }
@@ -138,8 +132,6 @@ export function buildCommands(containers: readonly WorkContainer[], savedViews: 
     { id: "github:connect", group: "GitHub", icon: "↗", label: ctx.github ? "Connect another GitHub account" : "Connect GitHub", keywords: "sign in token pull requests code", run: a.connectGithub },
     ...(ctx.github ? [{ id: "github:repos", group: "GitHub" as const, icon: "⚙", label: "Manage repositories", keywords: "github watch unwatch repos code", run: a.manageRepositories }] : []),
     ...THEMES.map((t): Command => ({ id: `theme:${t}`, group: "Theme", icon: "◐", label: `Theme: ${THEME_LABEL[t]}`, keywords: "appearance colours", run: () => a.setTheme(t) })),
-    { id: "workstream:choose", group: "Workstreams", icon: "◇", label: "Start a workstream…", hint: "starts no agent and posts nothing", keywords: "start new workstream ticket conversation", stay: true, run: a.chooseWorkstream },
-    { id: "agents:start", group: "Agents", icon: ">_", label: "Start an agent…", hint: "n · runs Claude on a ticket", keywords: "run claude investigate background task", run: a.startAgent },
     { id: "agents:needs", group: "Agents", icon: "✋", label: "Show what needs me", hint: ctx.needsYou ? `${ctx.needsYou} waiting` : undefined, keywords: "needs you agents waiting permission question blocked failed drafts approve decide", run: a.showNeedsYou },
     { id: "agents:stop", group: "Agents", icon: "■", label: "Stop all agents…", keywords: "agents halt kill end everything", run: a.openAgentSafety },
     { id: "agents:safety", group: "Agents", icon: "⛨", label: "Agent safety and settings", keywords: "agents touch permissions", run: a.openAgentSafety },
@@ -149,9 +141,9 @@ export function buildCommands(containers: readonly WorkContainer[], savedViews: 
             id: "workstream:start",
             group: "Agents" as const,
             icon: "◇",
-            label: ctx.ticket.workstream ? `Open the workstream on ${ctx.ticket.key}` : `Start a workstream on ${ctx.ticket.key}`,
+            label: ctx.ticket.workstream ? `Open the workstream on ${ctx.ticket.key}` : `Ask Pip about ${ctx.ticket.key}`,
             hint: ctx.ticket.workstream ? "in Pip" : undefined,
-            keywords: "workstream pip conversation track ticket",
+            keywords: "workstream pip conversation track ticket agent investigate plan build start",
             run: a.startWorkstream,
           },
           ...(ctx.ticket.workstream
@@ -232,34 +224,6 @@ export function ticketCommands(items: readonly WorkItem[], query: string, jump: 
     .map(({ item }): Command => ({ id: `ticket:${itemKey(item.item)}`, group: "Tickets", icon: "·", label: item.title, hint: item.item.key, run: () => jump(item) }));
 }
 
-const AGENT_VERBS: { kind: RunKind; words: RegExp; label: string }[] = [
-  { kind: "investigate", words: /\b(?:investigate|investigation)\b/i, label: "Investigate" },
-  { kind: "triage", words: /^\s*triage\b/i, label: "Triage" },
-  { kind: "plan", words: /^\s*plan\b/i, label: "Plan" },
-  { kind: "build", words: /^\s*build\b/i, label: "Build" },
-  { kind: "review", words: /^\s*review\b/i, label: "Review the PR on" },
-  { kind: "verify", words: /^\s*(?:verify|check)\b/i, label: "Verify" },
-];
-const AGENT_WORDS = /\b(?:investigate|investigation|triage|plan|build|review|verify|check|agent|start)\b/gi;
-
-/**
- * "Investigate <ticket>" entries for a query that asks for one: it names the action, and the rest of the words find
- * the ticket. Without such a word the tickets stay plain jumps. The other kinds are offered only when the query
- * starts with their word, since "review" and "build" are also ordinary words in a ticket title. A bare "agent"
- * means investigate.
- */
-export function agentCommands(items: readonly WorkItem[], query: string, run: (item: WorkItem, kind: RunKind) => void, limit = 5): Command[] {
-  const verb = AGENT_VERBS.find((v) => v.words.test(query)) ?? (/\bagent/i.test(query) ? AGENT_VERBS[0] : null);
-  if (!verb) return [];
-  const rest = query.replace(AGENT_WORDS, " ").trim();
-  const found = rest ? ticketCommands(items, rest, () => {}, limit).map((c) => c.id.slice("ticket:".length)) : [...items].sort((a, b) => b.updated.localeCompare(a.updated)).slice(0, limit).map((i) => itemKey(i.item));
-  const byKey = new Map(items.map((i) => [itemKey(i.item), i]));
-  return found.flatMap((id) => {
-    const item = byKey.get(id);
-    return item ? [{ id: `${verb.kind}:${id}`, group: "Agents" as const, icon: ">_", label: `${verb.label} ${item.item.key}  ${item.title}`, hint: "agent", keywords: "start an agent", run: () => run(item, verb.kind) }] : [];
-  });
-}
-
 /** "Open the workstream on KEY" for each open workstream whose key or title matches the query; nothing for an empty one. */
 export function workstreamCommands(list: readonly WorkstreamView[], query: string, a: Pick<CommandActions, "openWorkstream">, limit = 5): Command[] {
   const q = query.trim().toLowerCase().replace(/^(?:open\s+)?(?:the\s+)?(?:workstream\s+(?:on\s+)?)?/, "");
@@ -287,67 +251,8 @@ export function workstreamCommands(list: readonly WorkstreamView[], query: strin
 }
 
 /**
- * "Start a workstream on KEY" for a query like "start a workstream on ca-401" or "workstream checkout", the rest of the
- * words finding the ticket as `ticketCommands` does: from anywhere, without peeking the ticket first.
- * A ticket whose workstream is open already is left to `workstreamCommands`. Asked with no ticket yet ("start a workstream
- * on ", as Agents' 'Start a workstream…' asks), it offers a few to start with: the person's own open tickets (`me`),
- * then the other open ones, newest first.
- */
-export function startWorkstreamCommands(items: readonly WorkItem[], query: string, open: readonly WorkstreamView[], a: Pick<CommandActions, "startWorkstreamOn">, limit = 3, me: readonly PersonRef[] = []): Command[] {
-  // "start CA-408" or "start on ca-408" names the ticket without the word workstream; plain "start" and free words stay as they are.
-  const bare = /^\s*start\s+(?:on\s+)?(.+)$/i.exec(query);
-  const asked = /^\s*(?:start\s+)?(?:a\s+)?workstream(?:\s+(?:on\b\s*)?(.*))?$/i.exec(query) ?? (bare && ticketKeyOf(bare[1]) ? bare : null);
-  if (!asked) return [];
-  const rest = asked[1]?.trim() ?? "";
-  const taken = new Set(open.filter((v) => v.workstream.closedAt === null && v.workstream.itemKey).map((v) => `${v.workstream.connectionId}:${v.workstream.itemKey}`));
-  const free = (item: WorkItem) => !taken.has(`${item.item.connectionId}:${item.item.key}`);
-  const start = (item: WorkItem): Command => ({ id: `workstream:start:${itemKey(item.item)}`, group: "Workstreams", icon: "◇", label: `Start a workstream on ${item.item.key}`, hint: item.title, keywords: "workstream pip conversation track ticket", run: () => a.startWorkstreamOn(item) });
-  // "start a workstream" alone, or "start a workstream on " still being typed: the tickets it could be on.
-  if (!rest) {
-    const mine = (item: WorkItem) => !!item.assignee && me.some((m) => m.connectionId === item.assignee!.connectionId && m.accountId === item.assignee!.accountId);
-    return items
-      .filter((i) => i.status.category !== "done" && free(i))
-      .sort((x, y) => Number(mine(y)) - Number(mine(x)) || y.updated.localeCompare(x.updated))
-      .slice(0, SUGGESTED_TICKETS)
-      .map(start);
-  }
-  const byKey = new Map(items.map((i) => [itemKey(i.item), i]));
-  return ticketCommands(items, rest, () => {}, limit + taken.size)
-    .flatMap((c) => {
-      const item = byKey.get(c.id.slice("ticket:".length));
-      // A Done ticket is not started from here either, typed or not: the step says why instead.
-      return item && item.status.category !== "done" && free(item) ? [start(item)] : [];
-    })
-    .slice(0, limit);
-}
-
-/**
- * What the workstream step says when nothing matches: for a typed ticket key, why that one can't be started (Done, a
- * workstream open already, or not loaded here), else that no ticket matches the words. `known` is the ticket as the full
- * cache, or a live read, has it when `items` (what the person watches) lacks it: a Done ticket of an unwatched project is
- * still said to be Done, not one of three possible reasons.
- */
-export function noStartableTicket(items: readonly WorkItem[], query: string, open: readonly WorkstreamView[], known: Pick<WorkItem, "item" | "status"> | null = null): string {
-  const q = query.trim();
-  if (!q) return "Every open ticket has a workstream already.";
-  const key = ticketKeyOf(q);
-  if (!key) return `No ticket without a workstream matches “${q}”.`;
-  const found = items.find((i) => i.item.key.toUpperCase() === key);
-  if (!found) return known?.item.key.toUpperCase() === key && known.status.category === "done" ? `${known.item.key} is Done in Jira.` : `No open ticket ${key} here. It may be Done, already have a workstream, or not be loaded.`;
-  if (found.status.category === "done") return `${found.item.key} is Done in Jira.`;
-  const taken = open.some((v) => v.workstream.closedAt === null && v.workstream.itemKey === found.item.key && v.workstream.connectionId === found.item.connectionId);
-  return taken ? `${found.item.key} has a workstream already.` : `No ticket without a workstream matches “${q}”.`;
-}
-
-/** How many tickets 'Start a workstream…' offers before anything is typed. */
-export const SUGGESTED_TICKETS = 5;
-
-/** What Agents' 'Start a workstream…' opens the palette with: the words its 'Start a workstream on KEY' entries answer to. */
-export const START_WORKSTREAM = "start a workstream on ";
-
-/**
- * "Ask Pip to plan KEY" for a query that starts with "plan", the rest of the words finding the ticket as `agentCommands`
- * does. It only asks: Pip drafts the plan run, which waits for the person.
+ * "Ask Pip to plan KEY" for a query that starts with "plan", the rest of the words finding the ticket as `ticketCommands`
+ * does. It only asks: Pip decides whether to start the plan.
  */
 export function askToPlanCommands(items: readonly WorkItem[], query: string, a: Pick<CommandActions, "askPipToPlan">, limit = 3): Command[] {
   if (!/^\s*plan\b/i.test(query)) return [];
@@ -356,21 +261,8 @@ export function askToPlanCommands(items: readonly WorkItem[], query: string, a: 
   const byKey = new Map(items.map((i) => [itemKey(i.item), i]));
   return found.flatMap((id) => {
     const item = byKey.get(id);
-    return item ? [{ id: `askplan:${id}`, group: "Ask Pip" as const, icon: "✦", label: `Ask Pip to plan ${item.item.key}`, hint: "drafts only", keywords: "pip plan workstream", run: () => a.askPipToPlan(item) }] : [];
+    return item ? [{ id: `askplan:${id}`, group: "Ask Pip" as const, icon: "✦", label: `Ask Pip to plan ${item.item.key}`, hint: "Pip starts it", keywords: "pip plan workstream", run: () => a.askPipToPlan(item) }] : [];
   });
-}
-
-/** The ticket picker for "Start an agent…": no ticket first, then the ones that match, or the latest when nothing is typed. */
-export function agentTicketChoices(items: readonly WorkItem[], query: string, pick: (item: WorkItem | null) => void, limit = 8): Command[] {
-  const none: Command = { id: "agent:none", group: "Agents", icon: "·", label: "Investigate something (no ticket)", hint: "↵", keywords: "without none free form question prompt", run: () => pick(null) };
-  const q = query.trim();
-  const tickets = q
-    ? ticketCommands(items, q, pick, limit)
-    : [...items]
-        .sort((a, b) => b.updated.localeCompare(a.updated))
-        .slice(0, limit)
-        .map((item): Command => ({ id: `ticket:${itemKey(item.item)}`, group: "Tickets", icon: "·", label: item.title, hint: item.item.key, run: () => pick(item) }));
-  return [...tickets, ...(q && !/^\s*(no|investigate)\b/i.test(q) ? [] : [none])];
 }
 
 /** Projects the person doesn't watch that match the search, each a way to start watching it. */

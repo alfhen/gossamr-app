@@ -4,7 +4,6 @@ import type { Mention } from "../lib/mentions";
 export interface KeptEdits {
   body?: { text: string; mentions: Mention[] };
   rewrite?: { title: string; text: string };
-  message?: string;
   /** Which proposed subtasks were still ticked, when any was unticked. */
   picked?: boolean[];
 }

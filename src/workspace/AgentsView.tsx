@@ -3,7 +3,7 @@ import { isArchivable } from "../lib/archiveRuns";
 import { itemKey } from "../lib/filter";
 import type { Need } from "../lib/needs";
 import { labelsByRun, stageText } from "../lib/workstreamStage";
-import type { ReviewView, Run, RunsEnvironment, WorkstreamView } from "../types";
+import type { ReviewView, Run, WorkstreamView } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { AgentCard, agentId, type AgentItemProps } from "./AgentCard";
 import { Icon } from "./AgentIcons";
@@ -47,11 +47,11 @@ import { failureAction } from "./failureActions";
 import type { FailureAct } from "./failureHelp";
 import { AGENTS_VIEWS, usePrefs, type AgentsViewMode } from "./prefs";
 import { useBuildChanges, useReviewVerdicts } from "./reviewVerdicts";
-import { useRunSetup } from "./runSetupStore";
 import { showDraft as showTicketDraft } from "./draftTicket";
-import { RESUME_TEXT, breakdownTarget, buildFromPlanControl, buildFromPlanOptions, commentControl, reviewThisControl, reviewThisOptions, resumable, runBreakdownDraftOf, runDescriptionDraftOf, runDraftOf, runTicketDraftOf, shownVerdict } from "./runSheetLogic";
+import { RESUME_TEXT, breakdownTarget, buildFromPlanControl, commentControl, pipAsks, reviewThisControl, resumable, runBreakdownDraftOf, runDescriptionDraftOf, runDraftOf, runTicketDraftOf, shownVerdict } from "./runSheetLogic";
 import { setNoticeOpener, useRuns } from "./runsStore";
-import { useWorkstreams } from "./workstreamsStore";
+import { askPipInWorkstream } from "./askPip";
+import { focusPip, useWorkstreams } from "./workstreamsStore";
 import { stableGroups } from "./stableOrder";
 import { useNow } from "./useNow";
 import { agentKey } from "./agentKeys";
@@ -160,14 +160,13 @@ export interface AgentsActions {
   archive?(id: string): void;
   setIntro(open: boolean): void;
   dismissIntro(): void;
-  checkEnvironment(): void;
   retry(): void;
   /** The step a failed launch needs: Terminal, or the install page. */
   fix(id: string, act: FailureAct): void;
   retryLaunch(id: string): void;
   copied(id: string): void;
   stopAll(): void;
-  startAgent(): void;
+  askPip(): void;
   openSafety(): void;
   /** Opens a need's decision at the top of its workstream's detail, from a run's "In Needs you" pill. */
   openNeed?(need: Need): void;
@@ -339,7 +338,6 @@ export interface AgentsScreenProps {
   runs: readonly Run[];
   status: "idle" | "loading" | "ready" | "error";
   error: string | null;
-  environment: RunsEnvironment | null;
   filters: AgentFilters;
   selectedId: string | null;
   earlierOpen: boolean;
@@ -388,7 +386,7 @@ export interface AgentsScreenProps {
 }
 
 /** The whole screen as a function of its state; `AgentsView` connects it to the stores. */
-export function AgentsScreen({ runs, status, error, environment, filters, selectedId, earlierOpen, introShown, view, group = "workstream", workstreams = NO_WORKSTREAMS, openWorkstream = null, needed, tools, closedSection, side, stopping, clear, archivedSection, opened, needsYou, inNeeds, asking, now, ticketTitle, draftReady, breakdownReady, descriptionReady, reviewThis, reviewOf, on, onOrder }: AgentsScreenProps) {
+export function AgentsScreen({ runs, status, error, filters, selectedId, earlierOpen, introShown, view, group = "workstream", workstreams = NO_WORKSTREAMS, openWorkstream = null, needed, tools, closedSection, side, stopping, clear, archivedSection, opened, needsYou, inNeeds, asking, now, ticketTitle, draftReady, breakdownReady, descriptionReady, reviewThis, reviewOf, on, onOrder }: AgentsScreenProps) {
   const footer = useFooterHeight();
   // While the pointer is over the list or focus is in it, cards keep their places; the normal sort applies once both leave.
   const [hovered, setHovered] = useState(false);
@@ -479,9 +477,9 @@ export function AgentsScreen({ runs, status, error, environment, filters, select
           </h1>
           <SummaryChips runs={runs} now={now} needsYou={needsYou ?? 0} filters={filters} group={group} on={on} />
           <span className="flex-1" />
-          <button type="button" onClick={on.startAgent} className={`${BUTTON} border-ws-pip bg-ws-pip font-semibold text-ws-on-pip hover:bg-ws-pip hover:brightness-110`}>
-            <Icon name="play" />
-            Start an agent
+          <button type="button" onClick={on.askPip} className={`${BUTTON} border-ws-pip bg-ws-pip font-semibold text-ws-on-pip hover:bg-ws-pip hover:brightness-110`}>
+            <Icon name="spark" />
+            Ask Pip
           </button>
           <button type="button" onClick={on.openSafety} className={BUTTON}>
             <Icon name="shield" />
@@ -501,7 +499,7 @@ export function AgentsScreen({ runs, status, error, environment, filters, select
             onBlur={(ev) => setFocused(!!ev.relatedTarget && ev.currentTarget.contains(ev.relatedTarget as Node))}
             className="grid gap-5.5"
           >
-            <AgentsBanners environment={environment} loadError={status === "error" ? error : null} onCheckAgain={on.checkEnvironment} onRetry={on.retry} />
+            <AgentsBanners loadError={status === "error" ? error : null} onRetry={on.retry} />
             {introShown && <AgentsIntro onDismiss={on.dismissIntro} />}
             {waiting ? (
               <p role="status" className="m-0 py-10 text-center text-ws-ink3">
@@ -530,7 +528,7 @@ export function AgentsScreen({ runs, status, error, environment, filters, select
         </div>
         <footer ref={footer} className="@container flex h-8 shrink-0 items-center gap-4 border-t border-ws-sep bg-ws-win px-6 text-xs text-ws-ink3">
           <p className="m-0 min-w-0 flex-1 truncate">
-            <kbd className={KBD}>j</kbd> <kbd className={KBD}>k</kbd> move · <kbd className={KBD}>↵</kbd> open · <kbd className={KBD}>n</kbd> start an agent · <kbd className={KBD}>Esc</kbd> clear
+            <kbd className={KBD}>j</kbd> <kbd className={KBD}>k</kbd> move · <kbd className={KBD}>↵</kbd> open · <kbd className={KBD}>n</kbd> ask Pip · <kbd className={KBD}>Esc</kbd> clear
             <span className="hidden @xl:inline">
               {" "}
               · <kbd className={KBD}>F6</kbd> regions · <kbd className={KBD}>⌘K</kbd> jump · <kbd className={KBD}>⌘J</kbd> Pip
@@ -550,7 +548,7 @@ const actions: AgentsActions = {
   attach: (id) => void useRuns.getState().attach(id),
   draftComment: (id) => void useRuns.getState().draftComment(id),
   resume: (id) => void useRuns.getState().answer(id, RESUME_TEXT),
-  buildFromPlan: (run) => void useRunSetup.getState().begin(buildFromPlanOptions(run)),
+  buildFromPlan: (run) => void askPipInWorkstream(run, pipAsks.build(run)),
   openDraft: (run) => {
     if (run.item) return useRuns.getState().showDraft(run.item);
     const draft = runTicketDraftOf(useWorkspace.getState().proposals, run.id);
@@ -573,13 +571,12 @@ const actions: AgentsActions = {
   archive: (id) => void useRuns.getState().archive([id]),
   setIntro: (open) => useRuns.getState().setIntroOpen(open),
   dismissIntro: () => useRuns.getState().setIntroOpen(false),
-  checkEnvironment: () => void useRuns.getState().checkEnvironment(),
   retry: () => useRuns.getState().recover(),
   fix: failureAction,
   retryLaunch: (id) => void useRuns.getState().retryLaunch(id),
   copied: (id) => useRuns.getState().noteCopied(id),
   stopAll: () => void useRuns.getState().stopAll(),
-  startAgent: () => useRuns.getState().setPicking(true),
+  askPip: () => focusPip(),
   openSafety: () => useRuns.getState().openSafety(),
   openNeed,
   openWorkstream: (id) => useWorkView.getState().openWorkstream(id),
@@ -590,7 +587,6 @@ export function AgentsView() {
   const archived = useRuns((s) => s.archived);
   const status = useRuns((s) => s.status);
   const error = useRuns((s) => s.error);
-  const environment = useRuns((s) => s.environment);
   const filters = useRuns((s) => s.filters);
   const selectedId = useRuns((s) => s.selectedId);
   const earlierOpen = useRuns((s) => s.earlierOpen);
@@ -634,9 +630,9 @@ export function AgentsView() {
       }
       if (ev.defaultPrevented || ev.metaKey || ev.ctrlKey || ev.altKey || target.closest?.("input, textarea, select, [contenteditable], [role=dialog], #peek-sheet, #workstream-sheet")) return;
       if (ev.key === "n") {
-        if (useRuns.getState().sheet || useRunSetup.getState().open) return;
+        if (useRuns.getState().sheet) return;
         ev.preventDefault();
-        useRuns.getState().setPicking(true);
+        actions.askPip();
         return;
       }
       // The one key model on a run's card: o opens it, a, d, s and e act as on its row in Needs you.
@@ -686,7 +682,6 @@ export function AgentsView() {
         runs={runs}
         status={status}
         error={error}
-        environment={environment}
         filters={filters}
         selectedId={selectedId}
         earlierOpen={earlierOpen}
@@ -713,7 +708,7 @@ export function AgentsView() {
         descriptionReady={(run) => !!runDescriptionDraftOf(proposals, run.id)}
         reviewThis={(run) => {
           const change = changes[run.id] ?? null;
-          return change && reviewThisControl(run, change).enabled ? () => void useRunSetup.getState().begin(reviewThisOptions(run, change)) : undefined;
+          return change && reviewThisControl(run, change).enabled ? () => void askPipInWorkstream(run, pipAsks.review(run)) : undefined;
         }}
         reviewOf={(run) => shownVerdict(run, verdicts)}
         on={actions}

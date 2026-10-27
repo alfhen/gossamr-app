@@ -4,6 +4,7 @@ import { scriptPip } from "../backend/mockPip";
 import type { Run, RunState, ScreenContext } from "../types";
 import { NO_FILTERS, type AgentFilters } from "./agentsLogic";
 import { placeholderFor } from "./PipConversation";
+import { pipAsks } from "./runSheetLogic";
 import { buildScreenContext, contextLabel, contextLines, screenLine, type Screen } from "./screenContext";
 import { activeTab, loadTabs, useTabs } from "./tabsStore";
 
@@ -118,5 +119,26 @@ describe("the sample Pip on the Agents screen", () => {
   it("describes the open run", () => {
     const s = scriptPip("what's going on here?", ctx({ run: "b" }), [], [run("b", "working", { lastDetail: "Reading the cart code" })], NOW);
     expect(s.text).toContain("Its state: working. Reading the cart code");
+  });
+});
+
+describe("starting an agent again after a clone is found", () => {
+  const blank: ScreenContext = { view: null, item: null, selection: [], filter: null, notes: [] } as unknown as ScreenContext;
+  const failed = (kind: Run["spec"]["kind"], spec: Partial<Run["spec"]> = {}) => run("f", "failed", { item: { connectionId: "mock", externalId: "CA-1", key: "CA-1" }, spec: { ...seed[0].spec, kind, workstream: "w1", ...spec } });
+  const ws = { id: "w1", item: { connectionId: "mock", externalId: "CA-1", key: "CA-1" } };
+
+  it("names the run, its kind and what it followed", () => {
+    expect(pipAsks.again(failed("investigate")).prompt).toBe(`Start the investigate agent of run f again. ${seed[0].spec.repo} has a clone now.`);
+    expect(pipAsks.again(failed("build", { planFromRun: "p1" })).prompt).toContain("Start the build agent of run f again, following run p1.");
+    expect(pipAsks.again(failed("review", { buildFromRun: "b1" })).prompt).toContain("review agent of run f again, following run b1.");
+    expect(pipAsks.again(failed("review", { pr: 12 })).prompt).toContain("review agent of run f again, on pull request 12.");
+  });
+
+  it("is answered by starting that kind again, not an investigation", () => {
+    const build = failed("build", { planFromRun: "p1" });
+    const script = scriptPip(pipAsks.again(build).prompt, blank, [], [build], NOW, [], null, ws);
+    expect(script.start).toMatchObject({ role: "build", fromRun: "p1", item: ws.item, repo: null });
+    const other = scriptPip(pipAsks.again(build).prompt, blank, [], [{ ...build, id: "g" }], NOW, [], null, ws);
+    expect(other.start ?? null).toBeNull();
   });
 });

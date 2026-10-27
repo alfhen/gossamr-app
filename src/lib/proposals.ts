@@ -35,11 +35,10 @@ export function targetOf(intent: Intent): ItemRef | null {
  * A few words of what a draft says, to name it in a line that has no card beside it (the Undo for a skip); masked, null for a draft
  * with no words of its own. `edited` is what the person typed into the card, which names it better than the stored text.
  */
-export function draftExcerpt(intent: Intent, max = 40, edited?: { body?: { text: string }; message?: string }): string | null {
+export function draftExcerpt(intent: Intent, max = 40, edited?: { body?: { text: string } }): string | null {
   const text =
     intent.type === "comment" ? (edited?.body?.text ?? docText(intent.body))
     : intent.type === "create" ? intent.fields.title
-    : intent.type === "runAnswer" || intent.type === "followUp" ? (edited?.message ?? intent.message)
     : "";
   const flat = maskSecrets(text).replace(/\s+/g, " ").trim();
   if (!flat) return null;
@@ -47,7 +46,7 @@ export function draftExcerpt(intent: Intent, max = 40, edited?: { body?: { text:
 }
 
 /** What names a draft in a line with no card beside it: its excerpt, or for one with no words of its own what its card is titled ("Update the description of CA-401"); null when neither says more than the ticket. */
-export function draftSaid(intent: Intent, edited?: { body?: { text: string }; message?: string }): string | null {
+export function draftSaid(intent: Intent, edited?: { body?: { text: string } }): string | null {
   const said = draftExcerpt(intent, undefined, edited);
   if (said) return said;
   switch (intent.type) {
@@ -106,7 +105,7 @@ export function reviewEditProblem(was: ReviewText, next: ReviewText): string | n
   return null;
 }
 
-/** The drafts a screen that can only approve with `proposalsApprove` may offer: a run is approved with `runsApprove` after its prompt is shown, a follow-up with `runsSendFollowUp`, an answer with `runsAnswerDraft`, and a review is posted to GitHub with its own button. */
+/** The drafts a screen that can only approve with `proposalsApprove` may offer: not the history of agent drafts, and a review is posted to GitHub with its own button. */
 export function withoutRunDrafts(proposals: Proposal[]): Proposal[] {
   return proposals.filter((p) => !isRunDraft(p.intent) && !isReviewDraft(p.intent));
 }
@@ -166,7 +165,7 @@ export const REPLACED_REASON = "Replaced by a newer draft";
 
 /**
  * What a newer draft of the same kind replaces in a workstream: one move, one description update, one triage update and
- * one breakdown per ticket, one answer per run, and one review per pull request. Comments accumulate, and the other kinds have rules of their own. As
+ * one breakdown per ticket, and one review per pull request. Comments accumulate, and the other kinds have rules of their own. As
  * `Intent::supersession_key`.
  */
 export function supersessionKey(intent: Intent): string | null {
@@ -177,8 +176,6 @@ export function supersessionKey(intent: Intent): string | null {
       return `${intent.type}:${intent.item.externalId}`;
     case "subtasks":
       return `subtasks:${intent.parent.externalId}`;
-    case "runAnswer":
-      return `runAnswer:${intent.runId}`;
     case "githubReview":
       return `githubReview:${intent.repo.toLowerCase()}#${intent.number}`;
     case "comment":
@@ -186,6 +183,7 @@ export function supersessionKey(intent: Intent): string | null {
     case "link":
     case "startRun":
     case "followUp":
+    case "runAnswer":
       return null;
     default:
       return unreachable(intent);

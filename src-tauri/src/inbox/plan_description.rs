@@ -527,24 +527,20 @@ mod tests {
         let made = fx.core.auto_draft_run_plan_description(&plan.id).await.unwrap().unwrap();
         let Intent::Rewrite { body: Some(b), .. } = &made.intent else { panic!() };
         fx.edit_item("CA-1", |item| item.body = b.to.clone()).await;
-        let block_of = |p: &Proposal| match &p.intent {
-            Intent::StartRun { spec, .. } => spec.ticket_block.clone().unwrap(),
-            other => panic!("{other:?}"),
-        };
-        let build = fx.core.draft_run(RunSpec { kind: RunKind::Build, instruction: String::new(), plan_from_run: Some(plan.id.clone()), ..next_spec(&fx) }, Some(fx.item("CA-1"))).await.unwrap();
+        let block_of = |run: &Run| run.spec.ticket_block.clone().unwrap();
+        let build = fx.core.queue_test_run(RunSpec { kind: RunKind::Build, instruction: String::new(), plan_from_run: Some(plan.id.clone()), ..next_spec(&fx) }, Some(fx.item("CA-1"))).await.unwrap();
         let block = block_of(&build);
         assert!(block.contains("Gossamr Plan: left out here") && !block.contains("Round in one place."), "{block}");
-        let verify = fx.core.draft_run(RunSpec { kind: RunKind::Verify, instruction: String::new(), ..next_spec(&fx) }, Some(fx.item("CA-1"))).await.unwrap();
+        let verify = fx.core.queue_test_run(RunSpec { kind: RunKind::Verify, instruction: String::new(), ..next_spec(&fx) }, Some(fx.item("CA-1"))).await.unwrap();
         let block = block_of(&verify);
         assert!(block.contains("Gossamr Plan (the agreed plan") && block.contains("Round in one place.") && block.contains("1. Fix the rounding."), "{block}");
         // The agent reads the plan in full and as text, not as a folded tag, and the description it reads is without the plan.
         assert!(!block.contains("<details>") && !block.contains("<summary>") && block.contains("Description:\nHi\n\nGossamr Plan (the agreed plan"), "{block}");
         // A ticket that still carries the older heading section gives the agent the same plan.
         fx.edit_item("CA-1", |item| item.body = Doc::from_markdown("Hi\n\n## Gossamr Plan\n\nDrafted by an agent on 2026-10-01. Old.\n\n1. Fix the rounding.", &[])).await;
-        let old = block_of(&fx.core.draft_run(RunSpec { kind: RunKind::Verify, instruction: String::new(), ..next_spec(&fx) }, Some(fx.item("CA-1"))).await.unwrap());
+        let old = block_of(&fx.core.queue_test_run(RunSpec { kind: RunKind::Verify, instruction: String::new(), ..RunSpec { name: "eng-1-verify-again".into(), ..next_spec(&fx) } }, Some(fx.item("CA-1"))).await.unwrap());
         assert!(old.contains("Description:\nHi\n\nGossamr Plan (the agreed plan") && old.contains("1. Fix the rounding."), "{old}");
-        let review = fx.core.runs_review(&build.id).await.unwrap();
-        assert!(review.ticket_block.as_deref().unwrap().contains("left out here") && review.prompt.matches("Round in one place.").count() == 1, "one copy of the plan in the prompt");
+        assert!(build.spec.ticket_block.as_deref().unwrap().contains("left out here") && crate::domain::render_prompt(&build.spec).matches("Round in one place.").count() == 1, "one copy of the plan in the prompt");
     }
 
     #[tokio::test]

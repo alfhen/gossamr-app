@@ -6,6 +6,9 @@ const KIND_NOUN: Record<RunKind, string> = { investigate: "investigation", triag
 
 type Named = Pick<Run, "spec" | "item">;
 
+/** The part of a run's id the screen shows on its card, row and sheet: its first 8 characters, or all of a short one. */
+export const runRef = (run: Pick<Run, "id">) => (run.id.length <= 12 ? run.id : run.id.slice(0, 8));
+
 /**
  * A run as the person knows it: by ticket and step ("the CA-402 review"), or by repository when it has no ticket ("the
  * investigation on acme/webshop"). Never its id.
