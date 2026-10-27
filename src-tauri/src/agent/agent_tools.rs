@@ -173,7 +173,8 @@ impl AgentSide {
                 continue;
             }
             let stored = self.core.report_stored(&other.id).await?;
-            let block = describe(label, other, stored.as_ref().and_then(|s| s.current()), RUN_CHARS.min(left));
+            let pull = self.core.pull_head_of(other).ok().flatten();
+            let block = describe(label, other, stored.as_ref().and_then(|s| s.current()), pull, RUN_CHARS.min(left));
             left = left.saturating_sub(block.chars().count());
             shown.push(block);
         }
@@ -192,13 +193,21 @@ fn fenced(text: &str) -> String {
     format!("<<<TICKET\n{}\nTICKET>>>", without_markers(text.trim()))
 }
 
-fn describe(label: &str, run: &Run, report: Option<&Report>, limit: usize) -> String {
-    let head = format!("{label} · run {} · {} · {}", run.id, run.spec.kind.as_str(), run.state.as_str());
+fn describe(label: &str, run: &Run, report: Option<&Report>, pull: Option<(u64, Option<String>)>, limit: usize) -> String {
+    let head = format!("{label} · run {} · {} · {}", run.id, run.spec.role.as_str(), run.state.as_str());
     let account = match report {
         Some(report) => quoted(&report_text(report), limit, false).map(|text| format!("Reported through Gossamr ({}):\n{text}", if report.status == ReportStatus::Done { "done" } else { "blocked" })),
-        None => run.summary.as_deref().and_then(|summary| quoted(summary, limit.min(600), true)).map(|summary| format!("No report; its one-line summary: {summary}")),
+        None => match run.result.as_deref().filter(|_| run.result_complete) {
+            Some(answer) => quoted(answer, limit, false).map(|text| format!("No report; its written answer:\n{text}")),
+            None => run.summary.as_deref().and_then(|summary| quoted(summary, limit.min(600), true)).map(|summary| format!("No report; its one-line summary: {summary}")),
+        },
     };
-    format!("{head}\n{}", account.unwrap_or_else(|| "Nothing from it yet.".into()))
+    let mut lines = vec![head];
+    if let Some((number, sha)) = pull {
+        lines.push(format!("Pull request: #{number} in {}{}", run.spec.repo, sha.map(|sha| format!(" at commit {sha}")).unwrap_or_default()));
+    }
+    lines.push(account.unwrap_or_else(|| "Nothing from it yet.".into()));
+    lines.join("\n")
 }
 
 fn report_text(report: &Report) -> String {

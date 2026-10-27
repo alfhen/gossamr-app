@@ -8,7 +8,7 @@ use serde::Serialize;
 use super::run_results::{label_of, RunDraft};
 use super::{ticket_of, Core};
 use crate::model::CachedTicket;
-use crate::domain::{Basis, BodyChange, CreatedBy, Doc, Intent, ItemRef, Origin, Proposal, ProposalQuery, ProposalState, Run, RunKind, RunState, WorkItem, DESCRIPTION_LIMIT, PLAN_HEADING, PLAN_LIMIT};
+use crate::domain::{Basis, BodyChange, CreatedBy, Doc, Intent, ItemRef, Origin, Proposal, ProposalQuery, ProposalState, ResultKind, Run, RunState, WorkItem, DESCRIPTION_LIMIT, PLAN_HEADING, PLAN_LIMIT};
 use crate::error::{Error, Result};
 use crate::proposals::{self, Draft};
 use crate::runs::result::{fit, plan_without_note};
@@ -31,16 +31,6 @@ pub struct PlanDescription {
 
 fn refuse(message: impl Into<String>) -> Error {
     Error::Proposal(message.into())
-}
-
-/// How the intro paragraph `intro` writes starts, and how it started before it stopped naming the run ("Drafted by an agent
-/// run (1000addd) on ..."). An approved section is matched by these, not by the whole sentence, so a draft written on
-/// another day, or by an earlier version, is still recognised and replaced.
-const INTRO_STARTS: [&str; 2] = ["Drafted by an agent on", "Drafted by an agent run"];
-
-/// Whether `text` is the intro paragraph Gossamr put at the top of a plan section, in this version's words or an earlier one's.
-fn is_intro(text: &str) -> bool {
-    INTRO_STARTS.iter().any(|s| text.trim_start().starts_with(s))
 }
 
 fn intro(run: &Run) -> String {
@@ -90,18 +80,6 @@ fn from_run(p: &Proposal, run_id: &str) -> bool {
     matches!(&p.origin, Origin::Run { run_id: r, .. } if r == run_id) && is_plan_rewrite(p)
 }
 
-/// The `Gossamr Plan` section a description draft ends with, as Markdown, without the intro paragraph Gossamr put at its
-/// top. Empty when nothing but the intro is left.
-fn plan_text_of(p: &Proposal) -> Option<String> {
-    let Intent::Rewrite { body: Some(b), .. } = &p.intent else { return None };
-    let mut section = b.to.plan_section()?;
-    let first = section.blocks.first().map(|b| Doc { blocks: vec![b.clone()] }.plain_text());
-    if first.is_some_and(|text| is_intro(&text)) {
-        section.blocks.remove(0);
-    }
-    Some(section.to_markdown().trim().to_string())
-}
-
 fn section_of(p: &Proposal) -> Option<String> {
     match &p.intent {
         Intent::Rewrite { body: Some(b), .. } => b.to.plan_section().map(|s| s.to_markdown()),
@@ -120,7 +98,7 @@ enum Made {
 impl Core {
     async fn plan_description_for(&self, id: &str) -> Result<(Run, ItemRef, String)> {
         let run = self.run(id).await?.ok_or_else(|| refuse("that run no longer exists"))?;
-        if run.spec.kind != RunKind::Plan {
+        if !run.spec.is(ResultKind::Plan) {
             return Err(refuse("only a plan run has a plan to add to a description"));
         }
         if run.state != RunState::Done {
@@ -211,7 +189,7 @@ impl Core {
 
     /// What the run sheet shows: the draft this run made, or what stops one.
     pub(super) async fn plan_description_of(&self, run: &Run) -> Result<Option<PlanDescription>> {
-        let Some(item) = run.item.clone().filter(|_| run.spec.kind == RunKind::Plan && run.state == RunState::Done) else { return Ok(None) };
+        let Some(item) = run.item.clone().filter(|_| run.spec.is(ResultKind::Plan) && run.state == RunState::Done) else { return Ok(None) };
         let found = self.proposals(&ProposalQuery { item: Some(item.clone()), ..Default::default() }).await?;
         let draft = found.into_iter().find(|p| from_run(p, &run.id)).map(|p| RunDraft { id: p.id, state: p.state });
         let unavailable = match (&draft, self.resolved_of(run).await?.complete()) {
@@ -222,42 +200,6 @@ impl Core {
             _ => None,
         };
         Ok(Some(PlanDescription { draft, unavailable }))
-    }
-
-    /// The plan as the person settled it on the ticket: the newest description draft from `run` that was applied, with
-    /// the edits the person made before approving it and without Gossamr's intro paragraph. `None` when no such draft
-    /// was applied, so a build falls back to the run's own answer. Waiting, skipped, retired and failed drafts don't count,
-    /// and nor does one Pip revised that the person didn't edit after: a build is told a person wrote what it follows.
-    pub(super) async fn approved_plan_of(&self, run: &Run) -> Result<Option<String>> {
-        let newest = self.plan_drafts_of(run).await?.into_iter().filter(|p| p.state == ProposalState::Applied).max_by_key(|p| (p.updated_at, p.created_at));
-        Ok(newest.filter(|p| !proposals::revised_by_pip_unedited(p)).and_then(|p| plan_text_of(&p)).filter(|text| !text.is_empty()))
-    }
-
-    /// Every Gossamr Plan description draft `run` left, whatever its state.
-    async fn plan_drafts_of(&self, run: &Run) -> Result<Vec<Proposal>> {
-        let Some(item) = run.item.clone() else { return Ok(Vec::new()) };
-        let found = self.proposals(&ProposalQuery { item: Some(item), ..Default::default() }).await?;
-        Ok(found.into_iter().filter(|p| from_run(p, &run.id)).collect())
-    }
-
-    /// Why Pip may not yet draft a build from the plan of `run`, worded for Pip; `None` once the person settled it: they
-    /// approved its Gossamr Plan description draft, or skipped it and so chose the run's own answer.
-    pub(super) async fn plan_unsettled(&self, run: &Run) -> Result<Option<String>> {
-        if self.approved_plan_of(run).await?.is_some() {
-            return Ok(None);
-        }
-        let newest = self.plan_drafts_of(run).await?.into_iter().max_by_key(|p| (p.updated_at, p.created_at));
-        let ask = "Ask the person to settle the plan, or to draft the build themselves from the plan run's sheet.";
-        Ok(match newest.map(|p| p.state) {
-            Some(ProposalState::Skipped) => None,
-            Some(ProposalState::Pending | ProposalState::Applying) => Some("the person hasn't settled the plan yet: they approve or skip the Gossamr Plan draft first".into()),
-            Some(ProposalState::Applied) => Some(format!("the plan approved on the ticket carries text Pip wrote or is empty, so the person didn't settle it. {ask}")),
-            Some(ProposalState::Retired(why)) => Some(format!("the Gossamr Plan draft of that run was retired ({why}) before the person decided on it. {ask}")),
-            None => {
-                let why = self.plan_description_of(run).await?.and_then(|d| d.unavailable).map(|why| format!(" {why}")).unwrap_or_default();
-                Some(format!("the plan of that run hasn't been put to the person on the ticket.{why} {ask}"))
-            }
-        })
     }
 
     /// Why a description draft can't be made now, without making one.
@@ -318,14 +260,6 @@ mod tests {
         assert!(fx.tracker.intents().is_empty(), "a draft writes nothing");
         let status = fx.core.auto_draft_run_comment(&run.id).await.unwrap();
         assert!(status.is_some(), "the status comment is still drafted");
-    }
-
-    #[test]
-    fn the_intro_names_neither_the_run_nor_the_app_and_the_old_one_is_still_recognised() {
-        assert!(is_intro("Drafted by an agent on 2026-10-11. A person read and approved it before it was added here."));
-        assert!(is_intro("  Drafted by an agent run (1000addd) on 2026-10-11. A person read and approved it in Gossamr before it was added here."));
-        assert!(is_intro("Drafted by an agent run on 2025-01-01. Something else."));
-        assert!(!is_intro("Drafted by someone else."));
     }
 
     #[tokio::test]
@@ -468,12 +402,12 @@ mod tests {
     #[tokio::test]
     async fn only_a_complete_finished_plan_run_on_a_ticket_makes_one() {
         let fx = fixture_watching(&["acme/webshop"]).await;
-        let triage = approved(&fx, crate::domain::RunSpec { kind: RunKind::Triage, ..next_spec(&fx) }, Some(fx.item("CA-1")), PLAN, |_| {}).await;
-        let working = approved(&fx, crate::domain::RunSpec { kind: RunKind::Plan, ..next_spec(&fx) }, Some(fx.item("CA-1")), PLAN, |r| r.state = RunState::Working).await;
-        let summary = approved(&fx, crate::domain::RunSpec { kind: RunKind::Plan, ..next_spec(&fx) }, Some(fx.item("CA-1")), "One line.", |r| r.result_complete = false).await;
+        let triage = approved(&fx, crate::domain::RunSpec { role: ResultKind::Triage.role(), ..next_spec(&fx) }, Some(fx.item("CA-1")), PLAN, |_| {}).await;
+        let working = approved(&fx, crate::domain::RunSpec { role: ResultKind::Plan.role(), ..next_spec(&fx) }, Some(fx.item("CA-1")), PLAN, |r| r.state = RunState::Working).await;
+        let summary = approved(&fx, crate::domain::RunSpec { role: ResultKind::Plan.role(), ..next_spec(&fx) }, Some(fx.item("CA-1")), "One line.", |r| r.result_complete = false).await;
         let only_note = plan_with(&fx, "For Jira:\nJust a note.").await;
         for run in [&triage, &working, &summary] {
-            assert!(fx.core.auto_draft_run_plan_description(&run.id).await.unwrap().is_none(), "{:?}", run.spec.kind);
+            assert!(fx.core.auto_draft_run_plan_description(&run.id).await.unwrap().is_none(), "{:?}", run.spec.role);
             assert!(fx.core.draft_run_plan_description(&run.id).await.is_err());
         }
         assert!(fx.core.run_outcome(&triage.id).await.unwrap().plan_description.is_none());
@@ -520,7 +454,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_build_that_carries_the_plan_is_not_shown_the_ticket_copy_of_it_but_a_verify_or_review_is() {
+    async fn an_agent_is_shown_the_plan_on_the_ticket_in_full_and_as_text() {
         use crate::domain::RunSpec;
         let fx = fixture_watching(&["acme/webshop"]).await;
         let plan = plan_with(&fx, PLAN).await;
@@ -528,38 +462,14 @@ mod tests {
         let Intent::Rewrite { body: Some(b), .. } = &made.intent else { panic!() };
         fx.edit_item("CA-1", |item| item.body = b.to.clone()).await;
         let block_of = |run: &Run| run.spec.ticket_block.clone().unwrap();
-        let build = fx.core.queue_test_run(RunSpec { kind: RunKind::Build, instruction: String::new(), plan_from_run: Some(plan.id.clone()), ..next_spec(&fx) }, Some(fx.item("CA-1"))).await.unwrap();
-        let block = block_of(&build);
-        assert!(block.contains("Gossamr Plan: left out here") && !block.contains("Round in one place."), "{block}");
-        let verify = fx.core.queue_test_run(RunSpec { kind: RunKind::Verify, instruction: String::new(), ..next_spec(&fx) }, Some(fx.item("CA-1"))).await.unwrap();
-        let block = block_of(&verify);
+        let reviewer = fx.core.queue_test_run(RunSpec { role: ResultKind::Review.role(), ..next_spec(&fx) }, Some(fx.item("CA-1"))).await.unwrap();
+        let block = block_of(&reviewer);
         assert!(block.contains("Gossamr Plan (the agreed plan") && block.contains("Round in one place.") && block.contains("1. Fix the rounding."), "{block}");
-        // The agent reads the plan in full and as text, not as a folded tag, and the description it reads is without the plan.
         assert!(!block.contains("<details>") && !block.contains("<summary>") && block.contains("Description:\nHi\n\nGossamr Plan (the agreed plan"), "{block}");
         // A ticket that still carries the older heading section gives the agent the same plan.
         fx.edit_item("CA-1", |item| item.body = Doc::from_markdown("Hi\n\n## Gossamr Plan\n\nDrafted by an agent on 2026-10-01. Old.\n\n1. Fix the rounding.", &[])).await;
-        let old = block_of(&fx.core.queue_test_run(RunSpec { kind: RunKind::Verify, instruction: String::new(), ..RunSpec { name: "eng-1-verify-again".into(), ..next_spec(&fx) } }, Some(fx.item("CA-1"))).await.unwrap());
+        let old = block_of(&fx.core.queue_test_run(RunSpec { name: "eng-1-verify-again".into(), ..next_spec(&fx) }, Some(fx.item("CA-1"))).await.unwrap());
         assert!(old.contains("Description:\nHi\n\nGossamr Plan (the agreed plan") && old.contains("1. Fix the rounding."), "{old}");
-        assert!(build.spec.ticket_block.as_deref().unwrap().contains("left out here") && crate::domain::render_prompt(&build.spec).matches("Round in one place.").count() == 1, "one copy of the plan in the prompt");
-    }
-
-    #[tokio::test]
-    async fn only_an_applied_draft_is_the_settled_plan_and_one_left_with_only_the_intro_is_none() {
-        let fx = fixture_watching(&["acme/webshop"]).await;
-        let run = plan_with(&fx, PLAN).await;
-        let made = fx.core.auto_draft_run_plan_description(&run.id).await.unwrap().unwrap();
-        assert_eq!(fx.core.approved_plan_of(&run).await.unwrap(), None, "a waiting draft isn't settled");
-        let (_, to) = rewrite_of(&made);
-        let intro_only = format!("Hi\n\n## Gossamr Plan\n\n{}", to.plan_section().unwrap().blocks.first().map(|b| Doc { blocks: vec![b.clone()] }.to_markdown()).unwrap());
-        fx.core.edit_proposal(&made.id, &Edit::Rewrite { title: None, body: Some(intro_only) }).await.unwrap();
-        assert_eq!(fx.core.approve_proposal(&made.id).await.unwrap().state, ProposalState::Applied);
-        assert_eq!(fx.core.approved_plan_of(&run).await.unwrap(), None, "nothing but the intro is no plan");
-
-        let other = plan_with(&fx, "1. Another idea.").await;
-        let next = fx.core.auto_draft_run_plan_description(&other.id).await.unwrap().unwrap();
-        assert_eq!(fx.core.approve_proposal(&next.id).await.unwrap().state, ProposalState::Applied);
-        assert_eq!(fx.core.approved_plan_of(&other).await.unwrap().as_deref(), Some("1. Another idea."));
-        assert_eq!(fx.core.approved_plan_of(&run).await.unwrap(), None, "another run's draft is not this run's plan");
     }
 
     #[tokio::test]

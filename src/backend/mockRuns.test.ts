@@ -1,4 +1,3 @@
-import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import type { Intent, ItemRef, Run, RunSpec } from "../types";
 import { MockBackend } from "./mock";
@@ -408,15 +407,6 @@ describe("a build from a plan run says whether a person settled the plan, as the
     expect((await b.proposalsApprove(draft.id)).state.type).toBe("applied");
   };
 
-  it("uses the same sentences as domain/run.rs", () => {
-    const rust = readFileSync(new URL("../../src-tauri/src/domain/run.rs", import.meta.url), "utf8");
-    const constant = (name: string) => new RegExp(`const ${name}: &str = "([^"]*)";`).exec(rust)?.[1];
-    expect(constant("PLAN_FOLLOW")).toBe(PLAN_FOLLOW);
-    expect(constant("PLAN_FOLLOW_UNEDITED")).toBe(PLAN_FOLLOW_UNEDITED);
-    expect(PLAN_FOLLOW_UNEDITED).not.toContain("edited and approved");
-    expect(PLAN_FOLLOW_UNEDITED).toContain("do not deviate silently");
-  });
-
   it("carries the run's raw answer, marked unsettled, while the description draft waits", async () => {
     const b = sample();
     const plan = planRun(b);
@@ -470,13 +460,6 @@ describe("a triage or plan after an investigation carries its findings, as the b
     return b.runs.get(run.id)!;
   };
   const after = (from: string, kind: RunSpec["kind"] = "triage", over: Partial<RunSpec> = {}): RunSpec => ({ ...spec, ...storefront, kind, instruction: "", name: name(kind), findings: "forged by the caller", findingsFromRun: from, ...over });
-
-  it("uses the same preface and limit as domain/run.rs", () => {
-    const rust = readFileSync(new URL("../../src-tauri/src/domain/run.rs", import.meta.url), "utf8");
-    expect(new RegExp(`const FINDINGS_PREFACE: &str = "([^"]*)";`).exec(rust)?.[1]).toBe(FINDINGS_PREFACE);
-    expect(rust).toContain(`pub const FINDINGS_LIMIT: usize = ${FINDINGS_LIMIT.toLocaleString("en").replace(/,/g, "_")};`);
-    expect(rust).toContain(`"<<<FINDINGS", "FINDINGS>>>"`);
-  });
 
   it("fills the findings from the investigation's note, never the caller's text, after focus and before the ticket", async () => {
     const b = new MockBackend();

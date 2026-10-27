@@ -12,7 +12,6 @@ export const READ_ONLY_REFUSES = "This run is read-only, so this command would b
 /** Why Allow isn't offered for a request Gossamr may not have whole. */
 export const NOT_EXACT = "Gossamr can't show this request whole, so it doesn't offer Allow. Open it in Terminal to read it there.";
 export const HAS_COMMAND_INSIDE = "This command has a command inside it, so Gossamr can't check what it runs: Gossamr doesn't allow this.";
-export const PUSH_NOT_APPROVED = "This Build wasn't approved to push: Gossamr doesn't allow this.";
 export const DRAFT_PR_ONLY = "A Build opens only a draft pull request, with --draft: Gossamr doesn't allow this.";
 export const NEVER_MERGES = "A Build never merges, readies, reviews or closes its pull request: Gossamr doesn't allow this.";
 export const NO_GOSSAMR_TOOLS = "A run never uses Gossamr's own tools: Gossamr doesn't allow this.";
@@ -64,7 +63,7 @@ const refusal = (allow: AllowKind, why: string | null): string | null =>
 /** Whether Allow once is offered for the run's prompt. A read-only run comes first, so its prompt always says why it is refused. */
 export function permissionOffer(
   run: Pick<Run, "needs" | "readOnly"> & {
-    spec: Pick<RunSpec, "kind" | "allowPush" | "name">;
+    spec: Pick<RunSpec, "kind" | "name">;
     /** Where the run's checkout is; without it, only relative paths count as inside it. */
     expectedWorktree?: string;
   },
@@ -104,7 +103,7 @@ function insideCheckout(path: string, worktree: string): boolean {
  * `runs/permission.rs`: git and push in any spelling is a push, allowed only as the whole command `git push origin
  * <its branch>`, and a command whose words Gossamr can't read as the shell will isn't offered Allow.
  */
-function forbidden(spec: Pick<RunSpec, "allowPush" | "name">, ask: PermissionAsk): string | null {
+function forbidden(spec: Pick<RunSpec, "name">, ask: PermissionAsk): string | null {
   const tool = ask.tool.toLowerCase();
   if (tool.startsWith("mcp__gossamr")) return NO_GOSSAMR_TOOLS;
   if (tool.startsWith("mcp__")) return NO_OTHER_SERVERS;
@@ -127,11 +126,10 @@ function forbidden(spec: Pick<RunSpec, "allowPush" | "name">, ask: PermissionAsk
     return NO_GIT_SETTINGS;
   // A push in any spelling, or a word git may be made to read as one, through a variable, a glob or braces.
   if (plain.includes("git") && (plain.includes("push") || /[$*?[{]/.test(command))) {
-    if (!spec.allowPush) return PUSH_NOT_APPROVED;
     return ownBranchPush(command.split(/\s+/).filter(Boolean), spec.name) ? null : ownBranchOnly(spec.name);
   }
   for (const words of segments) {
-    const why = forbiddenSegment(spec, words);
+    const why = forbiddenSegment(words);
     if (why) return why;
   }
   return /\\(?!\n)/.test(command) ? HAS_ESCAPES : null;
@@ -161,20 +159,17 @@ const WRAPPERS = ["xargs", "env", "exec", "command", "builtin", "sudo", "doas", 
 const interpreter = (name: string) => INTERPRETERS.includes(name.replace(/[\d.]+$/, ""));
 
 /** What Gossamr forbids in one command of a Bash line, by its unquoted words: GitHub writes and code it can't read. */
-function forbiddenSegment(spec: Pick<RunSpec, "allowPush" | "name">, words: readonly string[]): string | null {
+function forbiddenSegment(words: readonly string[]): string | null {
   const at = words.findIndex((w) => program(w) === "gh");
-  return (at >= 0 ? github(spec, words.slice(at + 1)) : null) ?? (runsCode(words) ? HAS_COMMAND_INSIDE : null);
+  return (at >= 0 ? github(words.slice(at + 1)) : null) ?? (runsCode(words) ? HAS_COMMAND_INSIDE : null);
 }
 
 /** `gh` with `rest` after it: only the draft pull request the Build may open and reads. `gh api` writes or may, whatever its method. */
-function github(spec: Pick<RunSpec, "allowPush">, rest: readonly string[]): string | null {
+function github(rest: readonly string[]): string | null {
   const [group = "", verb = ""] = rest;
   if (group === "api") return rest.some((w) => w.toLowerCase().includes("merge")) ? NEVER_MERGES : GITHUB_READS_ONLY;
   if (group === "pr" && ["merge", "ready", "review", "close"].includes(verb)) return NEVER_MERGES;
-  if (group === "pr" && verb === "create") {
-    if (!spec.allowPush) return PUSH_NOT_APPROVED;
-    return rest.includes("--draft") ? null : DRAFT_PR_ONLY;
-  }
+  if (group === "pr" && verb === "create") return rest.includes("--draft") ? null : DRAFT_PR_ONLY;
   const reads =
     (["pr", "issue"].includes(group) && ["view", "list", "status", "diff", "checks"].includes(verb)) ||
     (group === "run" && ["view", "list", "watch"].includes(verb)) ||

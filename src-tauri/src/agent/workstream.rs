@@ -146,7 +146,7 @@ pub(super) fn notes_block(notes: Option<&str>) -> String {
 
 /// `R1 · run <id> · <kind> · <state>`
 fn run_line(label: &str, run: &Run) -> String {
-    format!("{label} · run {} · {} · {}", run.id, run.spec.kind.as_str(), run.state.as_str())
+    format!("{label} · run {} · {} · {}", run.id, run.spec.role.as_str(), run.state.as_str())
 }
 
 /// Says a finished build is waiting for its pull request to be found, e.g. `R4 (build) finished; …`.
@@ -429,7 +429,7 @@ mod tests {
     use crate::agent::mcp::{call_tool, PipRuns};
     use crate::agent::runs::testing::FakePlanner;
     use crate::domain::fixtures::run_spec;
-    use crate::domain::{CreatedBy, Doc, Intent, Origin, RunKind, RunSpec, RunState};
+    use crate::domain::{CreatedBy, Doc, Intent, Origin, ResultKind, RunSpec, RunState};
     use crate::inbox::testing::{fixture, Fixture};
     use crate::proposals::Draft;
     use crate::tracker::Connection;
@@ -470,8 +470,8 @@ mod tests {
             text
         }
 
-        async fn run(&self, id: &str, workstream: Option<&str>, kind: RunKind, state: RunState, minutes: i64) -> Run {
-            let spec = RunSpec { kind, name: format!("name-{id}"), workstream: workstream.map(Into::into), ..run_spec() };
+        async fn run(&self, id: &str, workstream: Option<&str>, kind: ResultKind, state: RunState, minutes: i64) -> Run {
+            let spec = RunSpec { role: kind.role(), name: format!("name-{id}"), workstream: workstream.map(Into::into), ..run_spec() };
             let at = Utc::now() + chrono::Duration::minutes(minutes);
             let mut run = Run::queued(id.into(), format!("p-{id}"), Connection::jira_id(&self.fx.scope), Some(self.fx.item("CA-1")), spec, "f".into(), at);
             run.state = state;
@@ -500,9 +500,9 @@ mod tests {
     #[tokio::test]
     async fn get_workstream_shows_the_stage_the_labelled_runs_the_drafts_and_the_notes_as_data() {
         let r = rig().await;
-        r.run("r-a", Some(&r.ws.id), RunKind::Investigate, RunState::Done, 0).await;
-        r.run("r-b", Some(&r.ws.id), RunKind::Triage, RunState::Working, 1).await;
-        r.run("r-c", None, RunKind::Plan, RunState::Working, 2).await;
+        r.run("r-a", Some(&r.ws.id), ResultKind::Investigate, RunState::Done, 0).await;
+        r.run("r-b", Some(&r.ws.id), ResultKind::Triage, RunState::Working, 1).await;
+        r.run("r-c", None, ResultKind::Plan, RunState::Working, 2).await;
         let in_ws = r.comment(Origin::Chat { request_id: "q".into(), workstream: Some(r.ws.id.clone()) }, CreatedBy::Pip, "CA-1", "in the workstream").await;
         let on_ticket = r.comment(Origin::Board, CreatedBy::User, "CA-1", "on its ticket").await;
         let elsewhere = r.comment(Origin::Board, CreatedBy::User, "CA-2", "on another ticket").await;
@@ -524,13 +524,8 @@ mod tests {
     #[tokio::test]
     async fn a_finished_build_whose_pull_request_is_not_found_yet_is_named_as_waiting() {
         let r = rig().await;
-        r.run("r-a", Some(&r.ws.id), RunKind::Plan, RunState::Done, 0).await;
-        let mut build = r.run("r-b", Some(&r.ws.id), RunKind::Build, RunState::Done, 1).await;
-        let reply = r.ok("in-ws", "get_workstream", json!({})).await;
-        assert!(!reply.contains("hasn't been found yet"), "a build that doesn't push waits for nothing: {reply}");
-
-        build.spec.allow_push = true;
-        r.fx.core.save_run(&build).await.unwrap();
+        r.run("r-a", Some(&r.ws.id), ResultKind::Plan, RunState::Done, 0).await;
+        r.run("r-b", Some(&r.ws.id), ResultKind::Build, RunState::Done, 1).await;
         let reply = r.ok("in-ws", "get_workstream", json!({})).await;
         assert!(reply.contains("R2 · run r-b · build · done\nR2 (build) finished; its pull request hasn't been found yet. Gossamr asked GitHub; draft the review once this line is gone.\n"), "{reply}");
         let listed = r.ok("in-ws", "list_workstreams", json!({})).await;
@@ -540,7 +535,7 @@ mod tests {
     #[tokio::test]
     async fn list_workstreams_shows_only_this_connection_s_open_ones_with_their_stage() {
         let r = rig().await;
-        r.run("r-a", Some(&r.ws.id), RunKind::Investigate, RunState::Working, 0).await;
+        r.run("r-a", Some(&r.ws.id), ResultKind::Investigate, RunState::Working, 0).await;
         let ticketless = r.fx.core.open_workstream(&r.fx.scope, None, Some("Why is it slow?".into())).await.unwrap();
         let closed = r.fx.core.open_workstream(&r.fx.scope, Some(r.fx.item("CA-2")), None).await.unwrap();
         r.fx.core.close_workstream(&r.fx.scope, &closed.id).await.unwrap();

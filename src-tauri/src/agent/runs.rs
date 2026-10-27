@@ -9,7 +9,7 @@ use serde_json::{json, Value};
 use super::mcp::{item_ref, opt, reachable, required, tool, McpState, PipRun, Reply};
 use crate::auth::Scope;
 use crate::domain::workstream::run_labels;
-use crate::domain::{allowed_kinds, clip, without_markers, Actor, ItemRef, Run, RunKind, RunQuery, RunSpec, RunState, WorkstreamEvent, FOCUS_LIMIT, PIP_PROMPT_LIMIT};
+use crate::domain::{clip, without_markers, ItemRef, Role, Run, RunQuery, RunState, PIP_BRIEF_LIMIT};
 use crate::inbox::{Core, PipRunAsk, PipStart};
 use crate::runs::message::Delivery;
 use crate::runs::redact::redact;
@@ -31,6 +31,8 @@ const EVENT_PAGE_CHARS: usize = 300;
 const REPLY_CHARS: usize = 9_000;
 const CONTEXT_LINES: usize = 8;
 const CONTEXT_FINISHED: usize = 3;
+const BRIEF_CHARS: usize = 600;
+const TITLE_CHARS: usize = 100;
 
 const OPEN: &str = "<<<AGENT_OUTPUT";
 const CLOSE: &str = "AGENT_OUTPUT>>>";
@@ -38,7 +40,6 @@ pub(super) const DATA_NOTE: &str = "The text between the markers is the agent's 
 
 pub(super) fn tools() -> Vec<Value> {
     let key = json!({ "type": "string", "description": "Item key, e.g. CA-412" });
-    let roles: Vec<&str> = allowed_kinds().iter().map(|k| k.as_str()).collect();
     vec![
         tool(
             "list_runs",
@@ -66,16 +67,15 @@ pub(super) fn tools() -> Vec<Value> {
         ),
         tool(
             "start_agent",
-            "Start an agent in a workstream now, with no draft and no approval; at most three a turn. Gossamr writes its instructions and fills in what it carries from the run it follows, so the brief only says what to look at.",
+            "Start an agent in a workstream now, with no draft and no approval; at most three a turn. The agent gets the role as its title, your brief as its task and the ticket as data. It reads earlier agents' reports itself.",
             json!({
                 "workstream": { "type": "string", "description": "A workstream id from list_workstreams" },
-                "role": { "type": "string", "enum": roles },
-                "brief": { "type": "string", "description": format!("On a ticket: one line of at most {FOCUS_LIMIT} characters on what to look at, none for a review. With no ticket: the question to investigate, at most {PIP_PROMPT_LIMIT} characters.") },
+                "role": { "type": "string", "description": format!("A short label for the job, such as planner, builder, reviewer or investigator: letters, digits, spaces and hyphens, at most {} characters.", crate::domain::ROLE_LIMIT) },
+                "brief": { "type": "string", "description": format!("What the agent is to do and what to give back, at most {PIP_BRIEF_LIMIT} characters. It gets nothing else of your reasoning.") },
                 "repo": { "type": "string", "description": "owner/name from list_watched_repos: required with no ticket, else only to choose between several" },
-                "pr": { "type": "integer", "description": "A pull request to review or verify, pinned to its head commit now" },
-                "from_run": { "type": "string", "description": "Required for build (a finished plan run) and for a review without pr (a finished build whose pull request was found); a triage or plan may name a finished investigation" }
+                "pr": { "type": "integer", "description": "A pull request the agent checks out, pinned to its head commit now" }
             }),
-            &["workstream", "role"],
+            &["workstream", "role", "brief"],
         ),
         tool(
             "message_agent",
@@ -173,9 +173,9 @@ fn ticket(run: &Run) -> &str {
     run.item.as_ref().map_or("no ticket", |i| i.key.as_str())
 }
 
-/// `<id> · <KEY or "no ticket"> · <kind> · <state> · <last action> · <age>`
+/// `<id> · <KEY or "no ticket"> · <role> · <state> · <last action> · <age>`
 pub(super) fn run_line(run: &Run, now: DateTime<Utc>) -> String {
-    let mut parts = vec![run.id.clone(), ticket(run).to_string(), run.spec.kind.as_str().into(), run.state.as_str().into()];
+    let mut parts = vec![run.id.clone(), ticket(run).to_string(), run.spec.role.as_str().into(), run.state.as_str().into()];
     parts.extend(run.last_detail.as_deref().and_then(|d| quoted(d, DETAIL_CHARS, true)));
     parts.push(age(run, now));
     parts.join(" · ")
@@ -310,7 +310,7 @@ async fn get(st: &McpState, pip: &PipRun, args: &Value) -> Reply {
 
     let mut out = vec![
         DATA_NOTE.to_string(),
-        format!("Run {} · {} · {} · {} · {}", run.id, ticket(&run), run.spec.kind.as_str(), run.state.as_str(), age(&run, Utc::now())),
+        format!("Run {} · {} · {} · {} · {}", run.id, ticket(&run), run.spec.role.as_str(), run.state.as_str(), age(&run, Utc::now())),
     ];
     if let Some(last) = run.last_detail.as_deref().and_then(|t| quoted(t, DETAIL_CHARS, true)) {
         out.push(format!("Last action: {last}"));
@@ -319,8 +319,8 @@ async fn get(st: &McpState, pip: &PipRun, args: &Value) -> Reply {
     if let Some(n) = run.tokens {
         out.push(format!("Used {}", tokens(n)));
     }
-    if let Some(focus) = &run.spec.focus {
-        out.push(format!("Focus note the run was given: {}", quoted(focus, 300, true).unwrap_or_default()));
+    if let Some(brief) = quoted(&run.spec.brief, BRIEF_CHARS, true) {
+        out.push(format!("Brief the run was given: {brief}"));
     }
     if let Some(needs) = run.needs.as_deref().and_then(|t| quoted(t, NEEDS_CHARS, false)) {
         out.push(format!("It is waiting for the user: {needs}"));
@@ -411,39 +411,24 @@ async fn get_events(st: &McpState, pip: &PipRun, args: &Value) -> Reply {
     Ok(format!("{DATA_NOTE}\nRun {} steps {} to {end} of {}, oldest first:\n{}\n{more}", run.id, offset + 1, events.len(), lines.join("\n")))
 }
 
-/// A focus note as the run takes it: one line of plain text within the limit.
-pub(super) fn valid_focus(text: &str) -> std::result::Result<String, String> {
-    let note = text.trim();
-    let length = note.chars().count();
-    if length > FOCUS_LIMIT {
-        return Err(format!("focus is {length} characters; the most is {FOCUS_LIMIT}. Shorten it to the one thing the agent should look at."));
-    }
-    if note.chars().any(char::is_control) {
-        return Err("focus must be one line of plain text".into());
-    }
-    Ok(note.to_string())
-}
-
-/// Pip's question for a run with no ticket as the run takes it: plain text in full, with the markers that frame data in
-/// the prompt removed so it can't close or open one. The person sees this exact text.
-pub(super) fn valid_prompt(text: &str) -> std::result::Result<String, String> {
+/// Pip's brief as the run takes it: plain text in full, with the markers that frame data in the prompt removed so it can't
+/// close or open one.
+pub(super) fn valid_brief(text: &str) -> std::result::Result<String, String> {
     let clean = without_markers(&text.replace("\r\n", "\n"));
-    let prompt = clean.trim();
-    let length = prompt.chars().count();
-    if prompt.is_empty() {
-        return Err("prompt is empty; write the question the agent should look into".into());
+    let brief = clean.trim();
+    let length = brief.chars().count();
+    if brief.is_empty() {
+        return Err("brief is empty; write what the agent is to do and what to give back".into());
     }
-    if length > PIP_PROMPT_LIMIT {
-        return Err(format!("prompt is {length} characters; the most is {PIP_PROMPT_LIMIT}. Shorten it to the question itself."));
+    if length > PIP_BRIEF_LIMIT {
+        return Err(format!("brief is {length} characters; the most is {PIP_BRIEF_LIMIT}. Shorten it to what the agent needs."));
     }
-    if prompt.chars().any(|c| c.is_control() && c != '\n' && c != '\t') {
-        return Err("prompt must be plain text".into());
+    if brief.chars().any(|c| c.is_control() && c != '\n' && c != '\t') {
+        return Err("brief must be plain text".into());
     }
-    Ok(prompt.to_string())
+    Ok(brief.to_string())
 }
 
-const START_BUILD_NEEDS_PLAN: &str = "A build can only follow a finished plan run: pass from_run with the plan run's id from list_runs.";
-const START_REVIEW_NEEDS_TARGET: &str = "A review needs a pull request: pass pr, or from_run with the id of a finished build whose pull request has been found.";
 /// The most agents Pip may start in one turn.
 pub const MAX_STARTS_PER_TURN: u32 = 3;
 
@@ -474,15 +459,15 @@ async fn name_of(st: &McpState, pip: &PipRun, run: &Run) -> String {
 async fn start(st: &McpState, pip: &PipRun, request_id: &str, args: &Value) -> Reply {
     let scope = &pip.scope;
     let ws_id = required(args, "workstream")?;
-    let role = required(args, "role")?.to_ascii_lowercase();
-    let kind = RunKind::parse(&role).ok_or_else(|| format!("role must be {}, not {role}", allowed_kinds().iter().map(|k| k.as_str()).collect::<Vec<_>>().join(", ")))?;
-    let (brief, repo, from_run, pr) = (opt(args, "brief"), opt(args, "repo"), opt(args, "from_run"), pull_number(args)?);
-    let key = start_key(pip, request_id, &json!([ws_id, role, brief, repo.map(str::to_ascii_lowercase), from_run, pr]));
+    let role = Role::parse(required(args, "role")?)?;
+    let brief = valid_brief(required(args, "brief")?)?;
+    let (repo, pr) = (opt(args, "repo"), pull_number(args)?);
+    let key = start_key(pip, request_id, &json!([ws_id, role.as_str(), brief, repo.map(str::to_ascii_lowercase), pr]));
     if let Some(run) = st.core.run_started_as(scope, &key).await.map_err(|e| e.to_string())? {
         return Ok(format!("Already started: {} (run {}).", name_of(st, pip, &run).await, run.id));
     }
     take_start(st, request_id)?;
-    let made = start_checked(st, pip, request_id, &key, ws_id, kind, StartArgs { brief, repo, from_run, pr }).await;
+    let made = start_checked(st, pip, request_id, &key, ws_id, PipRunAsk { role, brief, pr }, repo).await;
     if made.is_err() {
         give_back_start(st, request_id);
     }
@@ -506,14 +491,7 @@ fn give_back_start(st: &McpState, request_id: &str) {
     }
 }
 
-struct StartArgs<'a> {
-    brief: Option<&'a str>,
-    repo: Option<&'a str>,
-    from_run: Option<&'a str>,
-    pr: Option<u64>,
-}
-
-async fn start_checked(st: &McpState, pip: &PipRun, request_id: &str, key: &str, ws_id: &str, kind: RunKind, asked: StartArgs<'_>) -> Reply {
+async fn start_checked(st: &McpState, pip: &PipRun, request_id: &str, key: &str, ws_id: &str, ask: PipRunAsk, repo: Option<&str>) -> Reply {
     let scope = &pip.scope;
     let view = st.core.workstream(scope, ws_id).await.map_err(|e| e.to_string())?.ok_or_else(|| format!("There is no workstream {ws_id} for this account."))?;
     let ws = &view.workstream;
@@ -527,13 +505,17 @@ async fn start_checked(st: &McpState, pip: &PipRun, request_id: &str, key: &str,
     if let Some(why) = st.driver.unready().await {
         return Err(why);
     }
-    let (item, spec) = match ws.item_key.as_deref() {
+    let role = ask.role.clone();
+    let (repo, ticket, title) = match ws.item_key.as_deref() {
         Some(ticket) => {
             reachable(st, pip, ticket).await?;
-            start_on_ticket(st, pip, ws_id, ticket, kind, asked).await?
+            let (repo, title) = st.core.pip_run_target(scope, ticket, repo).await.map_err(|e| e.to_string())?;
+            (repo, Some(ticket), title)
         }
-        None => (None, start_without_ticket(st, pip, ws_id, kind, asked).await?),
+        None => (st.core.watched_repo_named(repo.ok_or("repo is required with no ticket")?).map_err(|e| e.to_string())?, None, plain_line(&ask.brief, TITLE_CHARS)),
     };
+    let plan = st.driver.plan(&repo, ticket.unwrap_or_default(), &title).await?;
+    let (spec, item) = st.core.build_pip_run(scope, ws_id, ticket, ask, repo, plan).await.map_err(|e| e.to_string())?;
     let repo = spec.repo.clone();
     let start = PipStart { request_id, key, wake: pip.wake.is_some() };
     let (run, fresh) = st.core.commit_pip_run(scope, &start, item, spec).await.map_err(|e| format!("Couldn't start it: {e}"))?;
@@ -551,78 +533,7 @@ async fn start_checked(st: &McpState, pip: &PipRun, request_id: &str, key: &str,
     (st.workstreams)(&run.connection_id);
     let on = run.item.as_ref().map_or_else(|| format!("in {repo} with no ticket"), |i| format!("on {} in {repo}", i.key));
     let wait = if run.slot_wait_since.is_some() { " It waits for a free slot." } else { "" };
-    Ok(format!("Started {name} (run {}): {} {on}.{wait}", run.id, kind.as_str()))
-}
-
-async fn start_on_ticket(st: &McpState, pip: &PipRun, ws_id: &str, ticket: &str, kind: RunKind, asked: StartArgs<'_>) -> std::result::Result<(Option<ItemRef>, RunSpec), String> {
-    let scope = &pip.scope;
-    let StartArgs { brief, repo, from_run, pr } = asked;
-    let focus = brief.map(valid_focus).transpose()?;
-    let from_run = match from_run {
-        None => None,
-        Some(id) => {
-            let earlier = st.core.run_in(scope, id).await.map_err(|e| e.to_string())?.ok_or_else(|| format!("There is no run {id} for this account. Call list_runs to see the ids."))?;
-            if let Some(item) = &earlier.item {
-                reachable(st, pip, &item.key).await?;
-            }
-            Some(earlier.id)
-        }
-    };
-    let ask = PipRunAsk { key: ticket.to_string(), kind, focus, from_run: from_run.clone() };
-    let chain = match kind {
-        RunKind::Build if from_run.is_none() => return Err(START_BUILD_NEEDS_PLAN.into()),
-        RunKind::Review if from_run.is_none() && pr.is_none() => return Err(START_REVIEW_NEEDS_TARGET.into()),
-        RunKind::Review if from_run.is_some() && pr.is_some() => return Err("Pass pr or from_run for a review, not both.".into()),
-        RunKind::Build | RunKind::Review => from_run.is_some(),
-        _ => false,
-    };
-    let built = if chain {
-        start_chained(st, pip, ws_id, ask, repo).await?
-    } else {
-        let (repo, title) = st.core.pip_run_target(scope, ticket, repo).await.map_err(|e| e.to_string())?;
-        let plan = st.driver.plan(&repo, ticket, &title).await?;
-        st.core.build_pip_run(scope, ws_id, ask, pr, repo, plan).await.map_err(|e| e.to_string())?
-    };
-    Ok((Some(built.1), built.0))
-}
-
-/// A build or review that follows a finished run, in the repository of that run. A step Gossamr refuses is recorded as
-/// Pip's, without its text: asking again and again for one trips the workstream's pause.
-async fn start_chained(st: &McpState, pip: &PipRun, ws_id: &str, ask: PipRunAsk, repo: Option<&str>) -> std::result::Result<(RunSpec, ItemRef), String> {
-    let scope = &pip.scope;
-    let (key, kind) = (ask.key.clone(), ask.kind);
-    let refused = |why: String| async move {
-        let event = WorkstreamEvent::new(ws_id, Actor::Pip, "chain_refused", Utc::now()).detail(kind.as_str());
-        if let Err(e) = st.core.record_workstream_event(scope, event).await {
-            eprintln!("couldn't record a refused chain step in workstream {ws_id}: {e}");
-        }
-        Err::<(RunSpec, ItemRef), String>(why)
-    };
-    let (source, title) = match st.core.pip_chain_source(scope, Some(ws_id), &key, kind, ask.from_run.as_deref()).await {
-        Ok(found) => found,
-        Err(e) => return refused(e.to_string()).await,
-    };
-    if repo.is_some_and(|r| !r.eq_ignore_ascii_case(&source.spec.repo)) {
-        return Err(format!("A {} runs in the repository of the run it follows, {}.", kind.as_str(), source.spec.repo));
-    }
-    let plan = st.driver.plan(&source.spec.repo, &key, &title).await?;
-    st.core.build_pip_chain_run(scope, ws_id, ask, plan).await.map_err(|e| e.to_string())
-}
-
-/// An investigation in a workstream that has no ticket: its repository and its question are Pip's, the clone and the
-/// project a ticket from its findings lands in are Gossamr's.
-async fn start_without_ticket(st: &McpState, pip: &PipRun, ws_id: &str, kind: RunKind, asked: StartArgs<'_>) -> std::result::Result<RunSpec, String> {
-    let scope = &pip.scope;
-    if kind != RunKind::Investigate {
-        return Err(format!("Only an investigation can run in a workstream with no ticket; {} needs one.", kind.as_str()));
-    }
-    if asked.from_run.is_some() || asked.pr.is_some() {
-        return Err("A run with no ticket takes only repo and brief.".into());
-    }
-    let prompt = valid_prompt(asked.brief.ok_or("brief is required with no ticket: the question to investigate")?)?;
-    let (repo, project) = st.core.pip_ticketless_target(scope, asked.repo.ok_or("repo is required with no ticket")?).await.map_err(|e| e.to_string())?;
-    let plan = st.driver.plan(&repo, "", &prompt).await?;
-    st.core.build_pip_ticketless_run(scope, ws_id, prompt, repo, project, plan).await.map_err(|e| e.to_string())
+    Ok(format!("Started {name} (run {}): {} {on}.{wait}", run.id, role.as_str()))
 }
 
 /// A workstream's conversation, and a wake in it, drive only that workstream's agents. General drives any.
@@ -729,7 +640,7 @@ mod tests {
     use super::*;
     use crate::agent::mcp::{call_tool, PipRuns};
     use crate::domain::fixtures::run_spec;
-    use crate::domain::{ContainerRef, RunEvent, Proposal, ProposalQuery};
+    use crate::domain::{ContainerRef, Proposal, ProposalQuery, RunEvent, RunSpec};
     use crate::inbox::testing::{fixture_watching, Fixture};
 
     struct Rig {
@@ -827,9 +738,9 @@ mod tests {
         let schema = tools().into_iter().find(|t| t["name"] == "start_agent").unwrap();
         let mut fields: Vec<&str> = schema["inputSchema"]["properties"].as_object().unwrap().keys().map(String::as_str).collect();
         fields.sort();
-        assert_eq!(fields, ["brief", "from_run", "pr", "repo", "role", "workstream"], "no clone, base, name, project or ticket text");
-        assert_eq!(schema["inputSchema"]["required"], json!(["workstream", "role"]));
-        assert_eq!(schema["inputSchema"]["properties"]["role"]["enum"], json!(["investigate", "triage", "plan", "build", "review", "verify"]));
+        assert_eq!(fields, ["brief", "pr", "repo", "role", "workstream"], "no clone, base, name, project, ticket text or earlier run");
+        assert_eq!(schema["inputSchema"]["required"], json!(["workstream", "role", "brief"]));
+        assert!(schema["inputSchema"]["properties"]["role"].get("enum").is_none(), "a role is free text");
         assert_eq!(label("start_agent").as_deref(), Some("Started an agent"));
         assert!(!names.iter().any(|n| n.starts_with("propose_")));
     }
@@ -964,7 +875,7 @@ mod tests {
         let (before_result, _) = reply.split_once("Result: ").unwrap();
         assert!(before_result.contains("For Jira section, as the run reported it through Gossamr's report tool") && before_result.contains("Needs the DBA."), "{reply}");
         assert!(!before_result.contains("the written note") && reply.contains("The run reports it could not finish."), "{reply}");
-        assert_eq!((reply.matches(OPEN).count(), reply.matches(CLOSE).count()), (2, 2), "one pair for the note, one for the result: what the agent wrote can't close them");
+        assert_eq!((reply.matches(OPEN).count(), reply.matches(CLOSE).count()), (3, 3), "one pair for the brief, one for the note, one for the result: what the agent wrote can't close them");
     }
 
     #[tokio::test]

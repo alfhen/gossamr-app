@@ -45,8 +45,6 @@ pub struct Scripted {
     pub version: String,
     pub logged_in: bool,
     pub bg: bool,
-    /// Whether `--help` lists the flags a read-only run needs.
-    pub read_only: bool,
     pub config_dir: std::path::PathBuf,
     pub outcome: Outcome,
     /// How long a launch takes, so overlapping launches can be told apart.
@@ -93,7 +91,6 @@ impl FakeCli {
             version: "2.1.286 (Claude Code)".into(),
             logged_in: true,
             bg: true,
-            read_only: true,
             config_dir: std::env::temp_dir().join("gossamr-fake-claude-config"),
             outcome: Outcome::Starts,
             delay: Duration::ZERO,
@@ -168,10 +165,6 @@ impl ClaudeCli for FakeCli {
 
     async fn supports_bg(&self) -> CliResult<bool> {
         Ok(self.0.lock().unwrap().bg)
-    }
-
-    async fn supports_read_only(&self) -> CliResult<bool> {
-        Ok(self.0.lock().unwrap().read_only)
     }
 
     async fn launch(&self, req: &LaunchRequest) -> CliResult<Launched> {

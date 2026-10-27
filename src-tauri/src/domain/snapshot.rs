@@ -41,8 +41,6 @@ pub struct TicketFacts {
     pub description: String,
     /// The `Gossamr Plan` section as Markdown, kept out of the description's budget.
     pub plan: Option<String>,
-    /// The run this block is for is told the same plan in full elsewhere, so the section is not repeated.
-    pub plan_followed: bool,
     /// Oldest first. `None` when the cache holds no comments for the ticket at all.
     pub comments: Option<Vec<SnapComment>>,
 }
@@ -56,7 +54,7 @@ pub struct SnapComment {
 
 pub fn ticket_snapshot(facts: &TicketFacts) -> String {
     let plan = plan(facts);
-    let limit = TICKET_BLOCK_BASE + if plan.is_some() && !facts.plan_followed { PLAN_SECTION_BUDGET } else { 0 };
+    let limit = TICKET_BLOCK_BASE + if plan.is_some() { PLAN_SECTION_BUDGET } else { 0 };
     let mut parts = vec![head(facts), description(facts)];
     parts.extend(plan);
     parts.push(comments(facts));
@@ -66,9 +64,6 @@ pub fn ticket_snapshot(facts: &TicketFacts) -> String {
 fn plan(f: &TicketFacts) -> Option<String> {
     let text = sanitize(f.plan.as_deref()?);
     let text = text.trim();
-    if f.plan_followed {
-        return Some(format!("{PLAN_HEADING}: left out here, because the plan this run follows is given above."));
-    }
     if text.is_empty() {
         return None;
     }
@@ -230,7 +225,6 @@ mod tests {
             code: vec!["pull request acme/webshop#12 (open): Fix total".into()],
             description: "Totals ignore the discount.".into(),
             plan: None,
-            plan_followed: false,
             comments: Some(vec![comment("Kim Ode", 28, "Seen on staging."), comment("Sam Lee", 30, "Fixing now.")]),
         }
     }
@@ -401,16 +395,6 @@ mod tests {
         f.description = "Ω".repeat(20_000);
         f.comments = Some((0..10).map(|n| comment("Kim", 1 + n, &"Ж".repeat(2_000))).collect());
         assert!(ticket_snapshot(&f).chars().count() <= TICKET_BLOCK_BASE);
-    }
-
-    #[test]
-    fn a_run_that_follows_the_same_plan_is_not_shown_it_twice() {
-        let mut f = facts();
-        with_plan(&mut f, "1. Fix cart.rs");
-        f.plan_followed = true;
-        let text = ticket_snapshot(&f);
-        assert!(!text.contains("Fix cart.rs"));
-        assert!(text.contains("Gossamr Plan: left out here, because the plan this run follows is given above."));
     }
 
     #[test]

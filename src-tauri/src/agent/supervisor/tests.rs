@@ -132,8 +132,8 @@ impl T {
     }
 
     /// Stores a run of `kind` linked to the workstream, at rest in `state`, changed by `edit`.
-    async fn run(&self, id: &str, kind: RunKind, state: RunState, edit: impl FnOnce(&mut Run)) -> Run {
-        let spec = RunSpec { kind, workstream: Some(self.ws.clone()), name: format!("ca-1-{id}"), ..run_spec() };
+    async fn run(&self, id: &str, kind: ResultKind, state: RunState, edit: impl FnOnce(&mut Run)) -> Run {
+        let spec = RunSpec { role: kind.role(), workstream: Some(self.ws.clone()), name: format!("ca-1-{id}"), ..run_spec() };
         let mut run = Run::queued(id.into(), format!("p-{id}"), Connection::jira_id(&self.fx.scope), Some(self.fx.item("CA-1")), spec, "f".into(), Utc::now());
         run.state = state;
         run.ended_at = Some(Utc::now());
@@ -263,9 +263,9 @@ fn the_shared_plan_recommended_fixtures_pass() {
 
 #[test]
 fn merged_facts_give_one_line_each_and_the_request_names_no_ticket() {
-    let fact = |run: &str, kind, state| WakeFact { run: run.into(), kind, state, mark: String::new(), plan_recommended: None, open_questions: None, verdict: None, blocking: 0, drafts: 0, waiting_for_pr: false };
-    let mut facts = WakeFacts { workstream: "w1".into(), facts: vec![fact("r1", RunKind::Investigate, WakeState::Done)] };
-    facts.merge(&WakeFacts { workstream: "w1".into(), facts: vec![fact("r1", RunKind::Investigate, WakeState::Done), fact("r2", RunKind::Triage, WakeState::Failed)] });
+    let fact = |run: &str, kind: ResultKind, state| WakeFact { run: run.into(), role: kind.role(), state, mark: String::new(), plan_recommended: None, open_questions: None, verdict: None, blocking: 0, drafts: 0, waiting_for_pr: false };
+    let mut facts = WakeFacts { workstream: "w1".into(), facts: vec![fact("r1", ResultKind::Investigate, WakeState::Done)] };
+    facts.merge(&WakeFacts { workstream: "w1".into(), facts: vec![fact("r1", ResultKind::Investigate, WakeState::Done), fact("r2", ResultKind::Triage, WakeState::Failed)] });
     assert_eq!(event_line(&facts), "[Event] run r1 (investigate) Done\n[Event] run r2 (triage) Failed");
     assert!(keys_in(WAKE_REQUEST).is_empty());
 }
@@ -314,7 +314,7 @@ fn a_fact_is_keyed_by_its_state_and_a_finish_after_a_continuation_is_another() {
 #[tokio::test]
 async fn a_run_finishing_wakes_pip_once_whatever_repeats_it() {
     let t = setup().await;
-    let run = t.run("r1", RunKind::Investigate, RunState::Done, |_| {}).await;
+    let run = t.run("r1", ResultKind::Investigate, RunState::Done, |_| {}).await;
     t.sup.notify(&run, Attention::Done);
     t.until("woken", |turns| turns.iter().any(|w| w.kind == "wake" && w.status == "done")).await;
     t.sup.notify(&run, Attention::Done);
@@ -338,10 +338,10 @@ async fn a_run_finishing_wakes_pip_once_whatever_repeats_it() {
 #[tokio::test]
 async fn a_stop_from_outside_and_a_silent_finish_after_a_continuation_are_caught_by_the_sweep() {
     let t = setup().await;
-    let first = t.run("r1", RunKind::Investigate, RunState::Done, |_| {}).await;
+    let first = t.run("r1", ResultKind::Investigate, RunState::Done, |_| {}).await;
     t.noticed(&first, Attention::Done).await;
     // Neither of these is ever told: a stop nobody here asked for, and a finish again after carrying on that drafted nothing.
-    t.run("r2", RunKind::Triage, RunState::Stopped, |_| {}).await;
+    t.run("r2", ResultKind::Triage, RunState::Stopped, |_| {}).await;
     t.fx.core.save_run(&Run { continued_at: Some(Utc::now()), ..t.fx.core.run("r1").await.unwrap().unwrap() }).await.unwrap();
     assert_eq!(t.wake_turns().await.len(), 1);
     t.sweep().await;
@@ -359,9 +359,9 @@ async fn a_stop_from_outside_and_a_silent_finish_after_a_continuation_are_caught
 #[tokio::test]
 async fn a_stop_the_person_asked_for_wakes_nobody_and_a_stop_at_a_limit_neither() {
     let t = setup().await;
-    let stopped = t.run("r1", RunKind::Investigate, RunState::Stopped, |_| {}).await;
+    let stopped = t.run("r1", ResultKind::Investigate, RunState::Stopped, |_| {}).await;
     t.fx.core.record_run_action_by(&stopped, Actor::Person, "run_stopped", None).await.unwrap();
-    t.run("r2", RunKind::Triage, RunState::Stopped, |r| r.stopped_by_limit = true).await;
+    t.run("r2", ResultKind::Triage, RunState::Stopped, |r| r.stopped_by_limit = true).await;
     t.sup.clone().on_run(t.fx.core.run("r2").await.unwrap().unwrap(), Attention::Limit).await;
     t.sweep().await;
     assert!(t.wake_turns().await.is_empty() && t.wakes().await.is_empty(), "{:?}", t.wakes().await);
@@ -375,9 +375,9 @@ async fn a_stop_the_person_asked_for_wakes_nobody_and_a_stop_at_a_limit_neither(
 #[tokio::test]
 async fn a_stop_pip_made_wakes_nobody_and_neither_does_a_stop_that_is_only_the_start_of_a_resume() {
     let t = setup().await;
-    let stopped = t.run("r1", RunKind::Investigate, RunState::Stopped, |_| {}).await;
+    let stopped = t.run("r1", ResultKind::Investigate, RunState::Stopped, |_| {}).await;
     t.fx.core.record_run_action_by(&stopped, Actor::Pip, "run_stopped", None).await.unwrap();
-    t.run("r2", RunKind::Triage, RunState::Stopped, |r| r.unsent_answer = Some("Use staging.".into())).await;
+    t.run("r2", ResultKind::Triage, RunState::Stopped, |r| r.unsent_answer = Some("Use staging.".into())).await;
     t.sweep().await;
     assert!(t.wake_turns().await.is_empty() && t.wakes().await.is_empty(), "{:?}", t.wakes().await);
 
@@ -390,7 +390,7 @@ async fn a_stop_pip_made_wakes_nobody_and_neither_does_a_stop_that_is_only_the_s
 #[tokio::test]
 async fn a_finished_build_asks_for_a_code_sync_once_and_wakes_pip_again_when_its_pull_request_turns_up() {
     let t = setup_in(crate::inbox::testing::fixture_watching(&["acme/webshop"]).await).await;
-    let build = t.run("b1", RunKind::Build, RunState::Done, |r| r.spec.allow_push = true).await;
+    let build = t.run("b1", ResultKind::Build, RunState::Done, |_| {}).await;
     let synced = |t: &T| {
         let core = t.fx.core.clone();
         async move { tokio::time::timeout(Duration::from_millis(30), core.wake.notified()).await.is_ok() }
@@ -417,7 +417,7 @@ async fn a_finished_build_asks_for_a_code_sync_once_and_wakes_pip_again_when_its
 #[tokio::test]
 async fn a_pull_request_that_was_there_when_the_build_finished_is_no_second_wake() {
     let t = setup_in(crate::inbox::testing::fixture_watching(&["acme/webshop"]).await).await;
-    let build = t.run("b1", RunKind::Build, RunState::Done, |r| r.spec.allow_push = true).await;
+    let build = t.run("b1", ResultKind::Build, RunState::Done, |_| {}).await;
     let mut change = crate::codehost::links::tests::pr(12, &format!("worktree-{}", build.spec.name), "T", "");
     change.state = crate::domain::CodeChangeState::Open;
     t.fx.core.with_code_db("github:ann", |db| db.upsert_code_changes(&[change], "2026-09-29T00:00:00Z")).unwrap();
@@ -434,7 +434,7 @@ async fn a_wake_that_fails_before_its_sink_hears_of_it_gives_its_facts_back_once
     signed_out.core.sign_out().await.unwrap();
     let svc = service(&signed_out, &Fake::default()).await;
     let sup = supervisor(&t.fx, &svc, &t.emitted);
-    let r1 = t.run("r1", RunKind::Investigate, RunState::Done, |_| {}).await;
+    let r1 = t.run("r1", ResultKind::Investigate, RunState::Done, |_| {}).await;
     sup.clone().on_run(r1, Attention::Done).await;
     assert_eq!(t.actions().await.iter().filter(|(_, a, _)| a == "wake_dropped").count(), 1);
     assert!(t.wake_turns().await.is_empty());
@@ -464,7 +464,7 @@ async fn a_drafted_ticket_wakes_pip_in_a_ticketless_workstream() {
 #[tokio::test]
 async fn paused_and_closed_workstreams_are_not_woken_and_mark_nothing() {
     let t = setup().await;
-    let run = t.run("r1", RunKind::Investigate, RunState::Done, |_| {}).await;
+    let run = t.run("r1", ResultKind::Investigate, RunState::Done, |_| {}).await;
     t.pause().await;
     t.noticed(&run, Attention::Done).await;
     t.sweep().await;
@@ -475,7 +475,7 @@ async fn paused_and_closed_workstreams_are_not_woken_and_mark_nothing() {
     t.sweep().await;
     assert_eq!(t.wake_turns().await.len(), 1);
     t.fx.core.close_workstream(&t.fx.scope, &t.ws).await.unwrap();
-    let late = t.run("r2", RunKind::Triage, RunState::Done, |_| {}).await;
+    let late = t.run("r2", ResultKind::Triage, RunState::Done, |_| {}).await;
     t.noticed(&late, Attention::Done).await;
     assert_eq!(t.wake_turns().await.len(), 1, "a closed workstream is never woken");
 }
@@ -483,11 +483,11 @@ async fn paused_and_closed_workstreams_are_not_woken_and_mark_nothing() {
 #[tokio::test]
 async fn after_a_restart_only_what_pip_was_not_woken_for_wakes_it() {
     let t = setup().await;
-    let before = t.run("r1", RunKind::Investigate, RunState::Done, |_| {}).await;
+    let before = t.run("r1", ResultKind::Investigate, RunState::Done, |_| {}).await;
     t.noticed(&before, Attention::Done).await;
     assert_eq!(t.wake_turns().await.len(), 1);
     // The app closes; a run finishes meanwhile; the app opens again with a supervisor that remembers nothing.
-    t.run("r2", RunKind::Triage, RunState::Done, |_| {}).await;
+    t.run("r2", ResultKind::Triage, RunState::Done, |_| {}).await;
     t.fx.core.close_db();
     assert_eq!(t.workstream().await.paused_reason, None, "a restart pauses nothing");
     let fake = Fake::default();
@@ -537,12 +537,12 @@ async fn a_person_s_message_goes_ahead_of_a_waiting_wake_and_pre_empts_a_running
     let (sink, conversation) = (Arc::new(|_| {}) as crate::agent::UpdateSink, t.conversation());
     // The person's question runs; a wake waits behind it; the person writes again.
     t.svc.ask(ask("q1", &conversation), sink.clone()).await.unwrap();
-    let r1 = t.run("r1", RunKind::Investigate, RunState::Done, |_| {}).await;
+    let r1 = t.run("r1", ResultKind::Investigate, RunState::Done, |_| {}).await;
     t.sup.clone().on_run(r1, Attention::Done).await;
     let waiting = t.wake_turns().await;
     assert_eq!(waiting.iter().map(|w| w.status.as_str()).collect::<Vec<_>>(), ["queued"]);
     // A second fact while one waits is merged into it.
-    let r2 = t.run("r2", RunKind::Triage, RunState::Done, |_| {}).await;
+    let r2 = t.run("r2", ResultKind::Triage, RunState::Done, |_| {}).await;
     t.sup.clone().on_run(r2, Attention::Done).await;
     let merged = t.wake_turns().await;
     assert_eq!(merged.len(), 1);
@@ -564,7 +564,7 @@ async fn a_person_s_message_goes_ahead_of_a_waiting_wake_and_pre_empts_a_running
 
     // Now a wake runs, and the person writes: it is stopped and its facts are queued again behind the message.
     t.fake.0.hold.store(true, Ordering::SeqCst);
-    let r3 = t.run("r3", RunKind::Plan, RunState::Done, |_| {}).await;
+    let r3 = t.run("r3", ResultKind::Plan, RunState::Done, |_| {}).await;
     t.sup.clone().on_run(r3, Attention::Done).await;
     t.until("a wake running", |turns| turns.iter().any(|w| w.kind == "wake" && w.status == "running")).await;
     let running = t.wake_turns().await.into_iter().find(|w| w.status == "running").unwrap();
@@ -587,12 +587,12 @@ async fn a_wake_merged_into_one_waiting_tells_the_page_through_the_waiting_wake(
     let t = setup().await;
     t.fake.0.hold.store(true, Ordering::SeqCst);
     t.svc.ask(ask("q1", &t.conversation()), Arc::new(|_| {})).await.unwrap();
-    let r1 = t.run("r1", RunKind::Investigate, RunState::Done, |_| {}).await;
+    let r1 = t.run("r1", ResultKind::Investigate, RunState::Done, |_| {}).await;
     t.sup.clone().on_run(r1, Attention::Done).await;
     let waiting = t.wake_turns().await[0].request_id.clone();
     let queued = |emitted: &Emitted| emitted.lock().unwrap().iter().filter(|(c, u)| *c == t.conversation() && matches!(u.event, AgentEvent::Queued { ahead: 1 })).map(|(_, u)| u.request_id.clone()).collect::<Vec<_>>();
     assert_eq!(queued(&t.emitted), std::slice::from_ref(&waiting));
-    let r2 = t.run("r2", RunKind::Triage, RunState::Done, |_| {}).await;
+    let r2 = t.run("r2", ResultKind::Triage, RunState::Done, |_| {}).await;
     t.sup.clone().on_run(r2, Attention::Done).await;
     assert_eq!(t.wake_turns().await.len(), 1, "merged");
     // The page hears of the waiting wake again, so it reads the merged lines it now has.
@@ -607,7 +607,7 @@ async fn pausing_cancels_the_workstream_s_turns_and_leaves_the_general_conversat
     t.fake.0.hold.store(true, Ordering::SeqCst);
     let sink: crate::agent::UpdateSink = Arc::new(|_| {});
     t.svc.ask(ask("q1", &t.conversation()), sink.clone()).await.unwrap();
-    let run = t.run("r1", RunKind::Investigate, RunState::Done, |_| {}).await;
+    let run = t.run("r1", ResultKind::Investigate, RunState::Done, |_| {}).await;
     t.sup.clone().on_run(run, Attention::Done).await;
     t.svc.ask(ask("g1", crate::agent::GENERAL_CONVERSATION), sink.clone()).await.unwrap();
     t.pause().await;
@@ -626,13 +626,13 @@ async fn pausing_cancels_the_workstream_s_turns_and_leaves_the_general_conversat
 async fn a_workstream_woken_too_often_in_a_day_is_paused_at_its_ceiling_and_resuming_wakes_it_again() {
     let t = setup().await;
     for n in 1..=WAKES_PER_WORKSTREAM_PER_DAY {
-        let run = t.run(&format!("r{n}"), RunKind::Investigate, RunState::Done, |_| {}).await;
+        let run = t.run(&format!("r{n}"), ResultKind::Investigate, RunState::Done, |_| {}).await;
         t.noticed(&run, Attention::Done).await;
     }
     assert_eq!(t.wake_turns().await.len() as u32, WAKES_PER_WORKSTREAM_PER_DAY);
     assert_eq!(t.workstream().await.paused_reason, None);
 
-    let over = t.run("over", RunKind::Investigate, RunState::Done, |_| {}).await;
+    let over = t.run("over", ResultKind::Investigate, RunState::Done, |_| {}).await;
     t.noticed(&over, Attention::Done).await;
     assert_eq!(t.workstream().await.paused_reason, Some(PauseReason::Ceiling));
     assert_eq!(t.wake_turns().await.len() as u32, WAKES_PER_WORKSTREAM_PER_DAY, "no turn for the one over");
@@ -654,7 +654,7 @@ async fn pip_woken_too_often_in_a_day_across_workstreams_pauses_the_workstream_t
     for n in 0..WAKE_TURNS_PER_DAY {
         t.fx.core.pip_wake_begin(&t.fx.scope, "ws:elsewhere", &format!("seed{n}"), "[Event] run x (build) Done", &[], "done").await.unwrap();
     }
-    let run = t.run("r1", RunKind::Investigate, RunState::Done, |_| {}).await;
+    let run = t.run("r1", ResultKind::Investigate, RunState::Done, |_| {}).await;
     t.noticed(&run, Attention::Done).await;
     assert_eq!(t.workstream().await.paused_reason, Some(PauseReason::Ceiling));
     assert!(t.wake_turns().await.is_empty());
@@ -674,7 +674,7 @@ async fn wake_turns_that_never_reached_pip_count_toward_no_ceiling() {
         t.fx.core.pip_wake_begin(&t.fx.scope, &t.conversation(), &id, "[Event] run x (build) Done", &[], "queued").await.unwrap();
         t.fx.core.pip_turn_finish(&t.fx.scope, &id, "", false, Some(crate::agent::WAKE_PAUSED), None, None).await.unwrap();
     }
-    let run = t.run("r1", RunKind::Investigate, RunState::Done, |_| {}).await;
+    let run = t.run("r1", ResultKind::Investigate, RunState::Done, |_| {}).await;
     t.noticed(&run, Attention::Done).await;
     assert_eq!(t.workstream().await.paused_reason, None);
     assert!(t.wake_turns().await.iter().any(|w| w.status == "done"));
@@ -685,7 +685,7 @@ async fn a_wake_waiting_behind_the_person_when_gossamr_closes_is_woken_for_again
     let t = setup().await;
     t.fake.0.hold.store(true, Ordering::SeqCst);
     t.svc.ask(ask("q1", &t.conversation()), Arc::new(|_| {})).await.unwrap();
-    let run = t.run("r0", RunKind::Investigate, RunState::Done, |_| {}).await;
+    let run = t.run("r0", ResultKind::Investigate, RunState::Done, |_| {}).await;
     t.sup.clone().on_run(run, Attention::Done).await;
     t.until("a wake waiting", |turns| turns.iter().any(|w| w.kind == "wake" && w.status == "queued")).await;
     let waiting = t.wake_turns().await[0].request_id.clone();
@@ -723,7 +723,7 @@ async fn a_wake_that_hits_the_quota_gives_its_facts_back_and_holds_wakes_off_for
     let t = setup().await;
     *t.fake.0.fail.lock().unwrap() = Some("Claude AI usage limit reached".into());
     tokio::time::pause();
-    let run = t.run("r1", RunKind::Investigate, RunState::Done, |_| {}).await;
+    let run = t.run("r1", ResultKind::Investigate, RunState::Done, |_| {}).await;
     t.noticed(&run, Attention::Done).await;
     backing_off(&t, Duration::from_secs(120)).await;
     assert_eq!(t.workstream().await.paused_reason, None, "the quota pauses nothing");
@@ -733,7 +733,7 @@ async fn a_wake_that_hits_the_quota_gives_its_facts_back_and_holds_wakes_off_for
     assert_eq!(t.sup.quota_state(&t.ws), Some((true, Duration::from_secs(120))));
     assert_eq!(t.wake_turns().await.len(), 1);
     // Meanwhile a fact that comes in waits rather than meeting the quota again.
-    let other = t.run("r2", RunKind::Triage, RunState::Done, |_| {}).await;
+    let other = t.run("r2", ResultKind::Triage, RunState::Done, |_| {}).await;
     t.noticed(&other, Attention::Done).await;
     t.sweep().await;
     assert_eq!(t.wake_turns().await.len(), 1);
@@ -771,7 +771,7 @@ async fn a_wake_that_hits_the_quota_gives_its_facts_back_and_holds_wakes_off_for
 /// A wake that hits the quota, with the backoff running.
 async fn quota_missed(t: &T) -> Run {
     *t.fake.0.fail.lock().unwrap() = Some("Claude AI usage limit reached".into());
-    let run = t.run("r1", RunKind::Investigate, RunState::Done, |_| {}).await;
+    let run = t.run("r1", ResultKind::Investigate, RunState::Done, |_| {}).await;
     t.noticed(&run, Attention::Done).await;
     backing_off(t, Duration::from_secs(120)).await;
     *t.fake.0.fail.lock().unwrap() = None;
@@ -817,11 +817,11 @@ async fn a_wake_waiting_when_the_quota_said_no_never_runs_and_gives_its_facts_ba
     let t = setup().await;
     t.fake.0.hold.store(true, Ordering::SeqCst);
     *t.fake.0.fail.lock().unwrap() = Some("Claude AI usage limit reached".into());
-    let r1 = t.run("r1", RunKind::Investigate, RunState::Done, |_| {}).await;
+    let r1 = t.run("r1", ResultKind::Investigate, RunState::Done, |_| {}).await;
     t.sup.clone().on_run(r1, Attention::Done).await;
     t.until("a wake running", |turns| turns.iter().any(|w| w.kind == "wake" && w.status == "running")).await;
     // A fact arrives while it runs, and waits behind it.
-    let r2 = t.run("r2", RunKind::Triage, RunState::Done, |_| {}).await;
+    let r2 = t.run("r2", ResultKind::Triage, RunState::Done, |_| {}).await;
     t.sup.clone().on_run(r2, Attention::Done).await;
     t.fake.open_all();
     t.idle().await;
@@ -836,7 +836,7 @@ async fn a_wake_merged_into_a_waiting_one_that_ends_paused_gives_every_fact_back
     t.fake.0.hold.store(true, Ordering::SeqCst);
     t.svc.ask(ask("q1", &t.conversation()), Arc::new(|_| {})).await.unwrap();
     for id in ["a", "b"] {
-        let run = t.run(id, RunKind::Investigate, RunState::Done, |_| {}).await;
+        let run = t.run(id, ResultKind::Investigate, RunState::Done, |_| {}).await;
         t.sup.clone().on_run(run, Attention::Done).await;
     }
     assert_eq!(t.wake_turns().await.len(), 1, "b was merged into a");
@@ -907,7 +907,7 @@ async fn pip_is_told_the_ticket_changed_without_any_of_its_text() {
     t.sweep().await;
     t.fx.edit_item("CA-1", |i| i.body = Doc::paragraph(&format!("{SENTINEL} CA-77 rewritten"))).await;
     t.sweep().await;
-    let run = t.run("r1", RunKind::Investigate, RunState::Done, |_| {}).await;
+    let run = t.run("r1", ResultKind::Investigate, RunState::Done, |_| {}).await;
     t.noticed(&run, Attention::Done).await;
     let woken = t.wake_turns().await;
     assert_eq!(woken.len(), 1);
@@ -1007,14 +1007,14 @@ async fn approving_a_comment_or_a_move_takes_back_only_what_it_wrote_and_someone
 async fn the_wake_prompt_carries_no_ticket_key_and_none_of_the_result() {
     const SENTINEL: &str = "SENTINEL-RESULT-TEXT";
     let t = setup().await;
-    let triage = t.run("r1", RunKind::Triage, RunState::Done, |r| {
+    let triage = t.run("r1", ResultKind::Triage, RunState::Done, |r| {
         r.result = Some(format!("{SENTINEL} touches CA-77 and ENG-9.\n\nFor Jira:\nIt is CA-78.\n\nPlan recommended: yes"));
         r.summary = Some(format!("{SENTINEL} CA-79"));
         r.result_complete = true;
     })
     .await;
     t.noticed(&triage, Attention::Drafted).await;
-    let review = t.run("r2", RunKind::Review, RunState::Done, |r| {
+    let review = t.run("r2", ResultKind::Review, RunState::Done, |r| {
         r.result = Some(format!("- [blocking] src/a.rs:4: {SENTINEL} CA-80 breaks\n\nVerdict: blocking"));
         r.result_complete = true;
     })
@@ -1113,7 +1113,7 @@ async fn a_wake_that_couldn_t_start_gives_its_facts_back_for_the_next_sweep() {
     let server = McpServer::start(t.fx.core.clone(), FakePlanner::unused(), Arc::new(|_| {}), Arc::new(|_, _, _| {})).await.unwrap();
     let svc = Arc::new(AgentService::with_provider(t.fx.core.clone(), server, ClaudeCodeProvider::standing_in(Arc::new(NotInstalled))));
     let sup = supervisor(&t.fx, &svc, &t.emitted);
-    let r1 = t.run("r1", RunKind::Investigate, RunState::Done, |_| {}).await;
+    let r1 = t.run("r1", ResultKind::Investigate, RunState::Done, |_| {}).await;
     sup.clone().on_run(r1, Attention::Done).await;
     for _ in 0..100 {
         if t.actions().await.iter().any(|(_, a, _)| a == "wake_dropped") {
@@ -1136,7 +1136,7 @@ async fn a_wake_waiting_when_the_workstream_is_paused_never_runs_and_is_woken_fo
     let t = setup().await;
     t.fake.0.hold.store(true, Ordering::SeqCst);
     t.svc.ask(ask("q1", &t.conversation()), Arc::new(|_| {})).await.unwrap();
-    let r0 = t.run("r0", RunKind::Investigate, RunState::Done, |_| {}).await;
+    let r0 = t.run("r0", ResultKind::Investigate, RunState::Done, |_| {}).await;
     t.sup.clone().on_run(r0, Attention::Done).await;
     t.until("a wake waiting", |turns| turns.iter().any(|w| w.kind == "wake" && w.status == "queued")).await;
     t.pause().await;
@@ -1159,7 +1159,7 @@ async fn a_wake_queued_before_a_pause_lands_never_starts() {
     let t = setup().await;
     t.fake.0.hold.store(true, Ordering::SeqCst);
     t.svc.ask(ask("q1", &t.conversation()), Arc::new(|_| {})).await.unwrap();
-    let r0 = t.run("r0", RunKind::Investigate, RunState::Done, |_| {}).await;
+    let r0 = t.run("r0", ResultKind::Investigate, RunState::Done, |_| {}).await;
     t.sup.clone().on_run(r0, Attention::Done).await;
     // The pause is written but, as in the gap before `cancel_workstream_turns` runs, nothing has been stopped yet.
     t.pause().await;
@@ -1174,7 +1174,7 @@ async fn a_wake_queued_before_a_pause_lands_never_starts() {
 async fn a_question_asked_while_paused_wakes_pip_once_the_workstream_is_resumed() {
     let t = setup().await;
     t.pause().await;
-    let asking = t.run("r1", RunKind::Investigate, RunState::NeedsAnswer, |r| r.ended_at = None).await;
+    let asking = t.run("r1", ResultKind::Investigate, RunState::NeedsAnswer, |r| r.ended_at = None).await;
     t.noticed(&asking, Attention::Needs).await;
     assert!(t.wake_turns().await.is_empty());
     t.resume().await;

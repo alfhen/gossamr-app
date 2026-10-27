@@ -103,21 +103,21 @@ impl Rig {
     }
 
     /// Queued with the report paragraph asked for and launched; the service must have been built with `reporting` to offer the tools.
-    pub async fn launched_reporting(&self, n: u32, kind: crate::domain::RunKind) -> Run {
-        let queued = self.fx.core.queue_test_run(RunSpec { kind, report: true, ..self.spec(n) }, Some(self.fx.item("CA-1"))).await.unwrap();
+    pub async fn launched_reporting(&self, n: u32, kind: crate::domain::ResultKind) -> Run {
+        let queued = self.fx.core.queue_test_run(RunSpec { role: kind.role(), report: true, ..self.spec(n) }, Some(self.fx.item("CA-1"))).await.unwrap();
         self.svc.start_now(&queued.id).await.unwrap()
     }
 
     /// Like `launched`, for a run of another kind on the ticket.
-    pub async fn launched_as(&self, n: u32, kind: crate::domain::RunKind) -> Run {
-        let queued = self.fx.core.queue_test_run(RunSpec { kind, ..self.spec(n) }, Some(self.fx.item("CA-1"))).await.unwrap();
+    pub async fn launched_as(&self, n: u32, kind: crate::domain::ResultKind) -> Run {
+        let queued = self.fx.core.queue_test_run(RunSpec { role: kind.role(), ..self.spec(n) }, Some(self.fx.item("CA-1"))).await.unwrap();
         self.svc.start_now(&queued.id).await.unwrap()
     }
 
-    /// An investigation with no ticket, started to end as a draft ticket in the fixture's first project.
+    /// A run with no ticket, started as an earlier release did to end as a draft ticket in the fixture's first project.
     pub async fn launched_ticketless(&self, n: u32) -> Run {
         let project = self.fx.core.containers_in(&self.fx.scope).await.unwrap()[0].container_ref.clone();
-        let spec = RunSpec { project: Some(project), instruction: String::new(), ..self.spec(n) };
+        let spec = RunSpec { earlier: crate::domain::LegacySpec { project: Some(project), ..Default::default() }, ..self.spec(n) };
         let queued = self.fx.core.queue_test_run(spec, None).await.unwrap();
         self.svc.start_now(&queued.id).await.unwrap()
     }

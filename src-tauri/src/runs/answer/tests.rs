@@ -168,7 +168,7 @@ async fn an_answer_that_was_stopped_on_its_way_can_be_sent_again() {
 }
 
 /// A run asking a question, of `kind`.
-async fn asking_as(kind: crate::domain::RunKind) -> (Rig, Run) {
+async fn asking_as(kind: crate::domain::ResultKind) -> (Rig, Run) {
     let mut rig = ready().await;
     rig.svc = std::sync::Arc::new(std::sync::Arc::into_inner(rig.svc).expect("sole owner").with_timing(FAST));
     let run = rig.launched_as(1, kind).await;
@@ -182,6 +182,11 @@ async fn asking_as(kind: crate::domain::RunKind) -> (Rig, Run) {
     (rig, run)
 }
 
+/// What an earlier release launched its read-only runs with.
+fn restricted() -> crate::domain::ReadOnly {
+    crate::domain::ReadOnly { mode: "dontAsk".into(), allow: vec![], deny: vec!["Edit".into()], guard: "g".into(), setting_sources: Some(String::new()), strict_mcp_config: true }
+}
+
 fn copy_state(rig: &Rig) -> Option<Option<String>> {
     let cli = rig.cli.0.lock().unwrap();
     cli.sessions.iter().find(|e| e.id.as_deref().is_some_and(|i| i.starts_with('c'))).map(|e| e.state.clone())
@@ -189,7 +194,7 @@ fn copy_state(rig: &Rig) -> Option<Option<String>> {
 
 #[tokio::test]
 async fn a_resume_that_starts_a_copy_of_a_build_stops_the_copy_and_keeps_the_run_stopped() {
-    let (rig, run) = asking_as(crate::domain::RunKind::Build).await;
+    let (rig, run) = asking_as(crate::domain::ResultKind::Build).await;
     rig.cli.with(|s| s.resume = Resume::Copies);
     let why = rig.svc.answer(&run.id, "Yes").await.unwrap_err().to_string();
     assert!(why.contains("started a copy") && why.contains("was stopped") && !why.contains("read-only"), "{why}");
@@ -200,11 +205,12 @@ async fn a_resume_that_starts_a_copy_of_a_build_stops_the_copy_and_keeps_the_run
     assert!(matches!(copies.as_slice(), [(copy, false)] if copy.starts_with('c')), "the copy is remembered so it is never taken for another run's session: {copies:?}");
 }
 
-/// A copy is a new job from the resume command line, without the flags the run was launched with, so a read-only run's
-/// copy would run unrestricted: it is removed, not only stopped.
+/// A copy is a new job from the resume command line, without the flags the run was launched with, so the copy of a run an
+/// earlier release restricted would run unrestricted: it is removed, not only stopped.
 #[tokio::test]
 async fn a_resume_that_starts_a_copy_of_a_read_only_run_stops_and_removes_the_copy() {
-    let (rig, run) = asking_as(crate::domain::RunKind::Triage).await;
+    let (rig, run) = asking_as(crate::domain::ResultKind::Triage).await;
+    let run = rig.set(&run, |r| r.read_only = Some(restricted())).await;
     rig.cli.with(|s| s.resume = Resume::Copies);
     let why = rig.svc.answer(&run.id, "Yes").await.unwrap_err().to_string();
     assert!(why.contains("started a copy") && why.contains("stopped and removed") && why.contains("read-only restriction"), "{why}");
@@ -215,7 +221,8 @@ async fn a_resume_that_starts_a_copy_of_a_read_only_run_stops_and_removes_the_co
     assert!(matches!(copies.as_slice(), [(copy, true)] if copy.starts_with('c')), "{copies:?}");
 
     // A copy Claude refuses to remove is called out, and kept for cleanup to retry.
-    let (rig, run) = asking_as(crate::domain::RunKind::Investigate).await;
+    let (rig, run) = asking_as(crate::domain::ResultKind::Investigate).await;
+    rig.set(&run, |r| r.read_only = Some(restricted())).await;
     rig.cli.with(|s| s.resume = Resume::Copies);
     rig.cli.with(|s| s.rm_refusals = vec!["boom".into()]);
     let why = rig.svc.answer(&run.id, "Yes").await.unwrap_err().to_string();

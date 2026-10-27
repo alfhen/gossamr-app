@@ -8,7 +8,7 @@ use chrono::Utc;
 
 use super::run_results::label_of;
 use super::{ticket_of, Core};
-use crate::domain::{Basis, BodyChange, CreatedBy, Intent, ItemRef, Origin, Proposal, ProposalQuery, ProposalState, Run, RunKind, RunState, DESCRIPTION_LIMIT};
+use crate::domain::{Basis, BodyChange, CreatedBy, Intent, ItemRef, Origin, Proposal, ProposalQuery, ProposalState, ResultKind, Run, RunState, DESCRIPTION_LIMIT};
 use crate::error::Result;
 use crate::proposals::{self, Draft};
 use crate::tracker::{self, Connection};
@@ -39,7 +39,7 @@ impl Core {
     /// retired when this one replaces it, except one the person edited: that stays, and no second is made beside it.
     pub async fn auto_draft_run_triage(&self, id: &str) -> Result<Option<Proposal>> {
         let Some(run) = self.run(id).await? else { return Ok(None) };
-        let (RunKind::Triage, RunState::Done, Some(item)) = (run.spec.kind, run.state, run.item.clone()) else { return self.auto_draft_run_comment(id).await };
+        let (true, RunState::Done, Some(item)) = (run.spec.is(ResultKind::Triage), run.state, run.item.clone()) else { return self.auto_draft_run_comment(id).await };
         let resolved = self.resolved_of(&run).await?;
         let questions = resolved.readiness.as_ref().filter(|r| !r.ready).map(|r| r.questions.clone()).unwrap_or_default();
         let note = resolved.note.clone().filter(|n| n.from_marker && !n.text.is_empty()).map(|n| n.text).unwrap_or_default();
@@ -104,7 +104,7 @@ mod tests {
     const READY: &str = "A day.\n\nReady to plan: yes\n\nFor Jira:\nSize: 3 points (about a day). The answers in the ticket's comments were used, so no questions are open.";
 
     async fn triage_with(fx: &Fixture, result: &str) -> Run {
-        approved(fx, crate::domain::RunSpec { kind: RunKind::Triage, ..next_spec(fx) }, Some(fx.item("CA-1")), result, |_| {}).await
+        approved(fx, crate::domain::RunSpec { role: ResultKind::Triage.role(), ..next_spec(fx) }, Some(fx.item("CA-1")), result, |_| {}).await
     }
 
     /// The drafts about the ticket's text: not the drafts that started the runs.
@@ -149,7 +149,7 @@ mod tests {
     #[tokio::test]
     async fn another_kind_of_run_still_drafts_its_note_as_a_comment() {
         let fx = fixture_watching(&["acme/webshop"]).await;
-        let run = approved(&fx, crate::domain::RunSpec { kind: RunKind::Investigate, ..next_spec(&fx) }, Some(fx.item("CA-1")), "Found it.\n\nFor Jira:\nThe consumer retries without backoff.", |_| {}).await;
+        let run = approved(&fx, crate::domain::RunSpec { role: ResultKind::Investigate.role(), ..next_spec(&fx) }, Some(fx.item("CA-1")), "Found it.\n\nFor Jira:\nThe consumer retries without backoff.", |_| {}).await;
         let made = fx.core.auto_draft_run_triage(&run.id).await.unwrap().expect("drafted");
         assert!(matches!(made.intent, Intent::Comment { .. }) && !made.is_triage_description());
     }

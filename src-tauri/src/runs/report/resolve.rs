@@ -2,7 +2,7 @@
 //! answer as the parsers read it. One source per run, never a mixture, and the source is said wherever the result is.
 
 use super::{Finding, Report, ReportStatus, ResultSource, ReviewVerdict, StoredReport};
-use crate::domain::{Run, RunKind};
+use crate::domain::{ResultKind, Run};
 use crate::runs::result::{jira_note, plan_recommended, readiness, review_verdict, subtask_proposals, ticket_keys, ticket_proposal, JiraNote, Readiness, TicketProposal};
 
 #[derive(Clone, Debug, PartialEq)]
@@ -52,7 +52,7 @@ fn keys_of(texts: &[&str], own: Option<&str>) -> Vec<String> {
 
 pub fn resolve(run: &Run, stored: Option<&StoredReport>) -> Resolved {
     let mut resolved = read(run, stored);
-    if run.spec.kind == RunKind::Review {
+    if run.spec.is(ResultKind::Review) {
         let reported = stored.and_then(StoredReport::current).and_then(|r| r.verdict.map(|v| (v, r.findings.clone())));
         let written = || run.result.as_deref().filter(|_| run.result_complete).and_then(review_verdict);
         resolved.verdict_structured = reported.is_some();
@@ -60,7 +60,7 @@ pub fn resolve(run: &Run, stored: Option<&StoredReport>) -> Resolved {
             (resolved.verdict, resolved.findings) = (Some(verdict), findings);
         }
     }
-    if run.spec.kind == RunKind::Triage && run.item.is_some() {
+    if run.spec.is(ResultKind::Triage) && run.item.is_some() {
         let reported = stored.and_then(StoredReport::current).and_then(|r| r.plan_recommended);
         let written = || run.result.as_deref().filter(|_| run.result_complete).and_then(plan_recommended);
         resolved.plan_recommended = reported.or_else(written);
@@ -84,7 +84,7 @@ fn read(run: &Run, stored: Option<&StoredReport>) -> Resolved {
         }),
         note: result.map(jira_note),
         ticket: result.filter(|_| !on_ticket).and_then(ticket_proposal),
-        subtasks: result.filter(|_| run.spec.kind == RunKind::Triage && on_ticket).map(subtask_proposals).unwrap_or_default(),
+        subtasks: result.filter(|_| run.spec.is(ResultKind::Triage) && on_ticket).map(subtask_proposals).unwrap_or_default(),
         keys: result.map(|r| keys_of(&[r], own.as_deref())).unwrap_or_default(),
         plan: None,
         status: None,
@@ -104,7 +104,7 @@ fn structured(run: &Run, report: &Report, result: Option<&str>, own: Option<&str
         source: Some(ResultSource::Structured),
         note,
         ticket: report.new_ticket.clone().filter(|_| !on_ticket),
-        subtasks: if run.spec.kind == RunKind::Triage && on_ticket { report.subtasks.clone() } else { Vec::new() },
+        subtasks: if run.spec.is(ResultKind::Triage) && on_ticket { report.subtasks.clone() } else { Vec::new() },
         keys: keys_of(&texts, own),
         plan: report.plan.clone(),
         status: Some(report.status),

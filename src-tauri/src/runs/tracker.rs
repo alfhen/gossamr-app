@@ -18,7 +18,7 @@ use super::redact::redact;
 use super::service::{belongs_to, RunService};
 use super::state::{self, map_state, parse_at, progress_at};
 use super::toolchain::Toolchain;
-use crate::domain::{Intent, Origin, ProposalQuery, ProposalState, Run, RunEvent, RunKind, RunQuery, RunState, StateKind};
+use crate::domain::{Intent, Origin, ProposalQuery, ProposalState, ResultKind, Run, RunEvent, RunQuery, RunState, StateKind};
 use crate::notify::Notice;
 
 pub const POLL_BUSY: Duration = Duration::from_secs(4);
@@ -534,12 +534,12 @@ impl RunService {
             }
         }
         let drafted = if run.state == RunState::Done && before.state != RunState::Done && settings.draft_on_finish { self.draft_for(&run).await } else { None };
-        if run.state == RunState::Done && before.state != RunState::Done && run.spec.kind == RunKind::Review {
+        if run.state == RunState::Done && before.state != RunState::Done && run.spec.is(ResultKind::Review) {
             reviewed.push(run.clone());
         }
         // A workstream's build pushed its branch and opened a draft pull request; a review of it waits until a code
         // sync has found that, so one is asked for now rather than at the next interval.
-        if run.state == RunState::Done && before.state != RunState::Done && run.spec.kind == RunKind::Build && run.spec.allow_push && run.spec.workstream.is_some() {
+        if run.state == RunState::Done && before.state != RunState::Done && run.spec.is(ResultKind::Build) && run.spec.workstream.is_some() {
             self.core.request_code_sync();
         }
         if run.short_id != before.short_id || reopened {
@@ -577,7 +577,7 @@ impl RunService {
             if self.logged(run, self.core.draft_run_subtasks(&run.id).await) {
                 why = Some(Attention::Breakdown);
             }
-            if run.spec.kind == RunKind::Plan && self.logged(run, self.core.auto_draft_run_plan_description(&run.id).await) {
+            if run.spec.is(ResultKind::Plan) && self.logged(run, self.core.auto_draft_run_plan_description(&run.id).await) {
                 why = Some(Attention::PlanDrafted);
             }
         } else if self.logged(run, self.core.auto_draft_run_ticket(&run.id).await) {

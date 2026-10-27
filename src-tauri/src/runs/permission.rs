@@ -18,9 +18,9 @@
 //!   writes an allow rule anywhere.
 //!
 //! The policy (`offer`): Allow is offered only for the exact tool and command the agent asked for, never a pattern,
-//! and only when the request reached Gossamr whole. A read-only run never gets it: Claude Code refuses anything that
-//! isn't on its exact allow list, and the deny list beats that. A Build gets it except for what Gossamr itself forbids
-//! a Build: pushing anything but its own branch, opening a pull request that isn't a draft, merging, readying,
+//! and only when the request reached Gossamr whole. A run an earlier release launched read-only never gets it: Claude
+//! Code refuses anything that isn't on its exact allow list, and the deny list beats that. Any other run gets it except
+//! for what Gossamr itself forbids it: pushing anything but its own branch, opening a pull request that isn't a draft, merging, readying,
 //! reviewing or closing one or any other write to GitHub, changing git's settings, remotes or hooks, Gossamr's own
 //! tools and another server's. The check is conservative, since Gossamr reads the command as text and the shell does
 //! not: a command that mentions git and push in any spelling is a push, and only the whole command `git push origin
@@ -39,7 +39,7 @@ use serde::Serialize;
 use super::answer::back_at_work;
 use super::cli::is_uuid;
 use super::service::{belongs_to, RunService};
-use crate::domain::{PermissionAllowed, Run, RunEvent, RunKind, RunState};
+use crate::domain::{PermissionAllowed, Run, RunEvent, RunState};
 use crate::error::{Error, Result};
 
 /// What a read-only run's prompt says instead of Allow.
@@ -47,7 +47,6 @@ pub const READ_ONLY_REFUSES: &str = "This run is read-only, so this command woul
 /// Why Allow isn't offered for a request Gossamr may not have whole.
 pub const NOT_EXACT: &str = "Gossamr can't show this request whole, so it doesn't offer Allow. Open it in Terminal to read it there.";
 pub const HAS_COMMAND_INSIDE: &str = "This command has a command inside it, so Gossamr can't check what it runs: Gossamr doesn't allow this.";
-pub const PUSH_NOT_APPROVED: &str = "This Build wasn't approved to push: Gossamr doesn't allow this.";
 pub const DRAFT_PR_ONLY: &str = "A Build opens only a draft pull request, with --draft: Gossamr doesn't allow this.";
 pub const NEVER_MERGES: &str = "A Build never merges, readies, reviews or closes its pull request: Gossamr doesn't allow this.";
 pub const NO_GOSSAMR_TOOLS: &str = "A run never uses Gossamr's own tools: Gossamr doesn't allow this.";
@@ -144,7 +143,7 @@ fn not_whole(needs: &str, ask: &PermissionAsk) -> bool {
 pub fn offer(run: &Run) -> (Option<PermissionAsk>, Allow) {
     let needs = run.needs.as_deref().unwrap_or_default();
     let ask = parse(needs);
-    if run.spec.kind.read_only() || run.read_only.is_some() {
+    if run.read_only.is_some() {
         return (ask, Allow::ReadOnly);
     }
     let Some(ask) = ask else { return (None, Allow::NotExact) };
@@ -161,7 +160,6 @@ pub fn offer(run: &Run) -> (Option<PermissionAsk>, Allow) {
 
 /// What Gossamr forbids a Build. `None` when it may be allowed. Tool names are read in any case, as Claude Code's are.
 fn forbidden(run: &Run, ask: &PermissionAsk) -> Option<String> {
-    debug_assert_eq!(run.spec.kind, RunKind::Build);
     let tool = ask.tool.to_ascii_lowercase();
     if tool.starts_with("mcp__gossamr") {
         return Some(NO_GOSSAMR_TOOLS.into());
@@ -189,13 +187,10 @@ fn forbidden(run: &Run, ask: &PermissionAsk) -> Option<String> {
     }
     // A push in any spelling, or a word git may be made to read as one, through a variable, a glob or braces.
     if plain.contains("git") && (plain.contains("push") || command.contains(['$', '*', '?', '[', '{'])) {
-        if !run.spec.allow_push {
-            return Some(PUSH_NOT_APPROVED.into());
-        }
         let tokens: Vec<&str> = command.split_whitespace().collect();
         return (!own_branch_push(&tokens, &run.spec.name)).then(|| own_branch_only(&run.spec.name));
     }
-    if let Some(why) = segments.iter().find_map(|words| forbidden_segment(run, words)) {
+    if let Some(why) = segments.iter().find_map(|words| forbidden_segment(words)) {
         return Some(why);
     }
     command.match_indices('\\').any(|(at, _)| !command[at + 1..].starts_with('\n')).then(|| HAS_ESCAPES.into())
@@ -233,14 +228,14 @@ fn interpreter(name: &str) -> bool {
 }
 
 /// What Gossamr forbids in one command of a Bash line, by its unquoted words: GitHub writes and code it can't read.
-fn forbidden_segment(run: &Run, words: &[&str]) -> Option<String> {
+fn forbidden_segment(words: &[&str]) -> Option<String> {
     let at = words.iter().position(|w| program(w) == "gh");
-    at.and_then(|at| github(run, &words[at + 1..])).or_else(|| runs_code(words).then(|| HAS_COMMAND_INSIDE.into()))
+    at.and_then(|at| github(&words[at + 1..])).or_else(|| runs_code(words).then(|| HAS_COMMAND_INSIDE.into()))
 }
 
 /// `gh` with `rest` after it: only the draft pull request the Build may open and reads. Anything else, `gh api`
 /// included whatever its method, writes or may write to GitHub.
-fn github(run: &Run, rest: &[&str]) -> Option<String> {
+fn github(rest: &[&str]) -> Option<String> {
     let (group, verb) = (rest.first().copied().unwrap_or_default(), rest.get(1).copied().unwrap_or_default());
     if group == "api" {
         return Some(if rest.iter().any(|w| w.to_lowercase().contains("merge")) { NEVER_MERGES } else { GITHUB_READS_ONLY }.into());
@@ -249,9 +244,6 @@ fn github(run: &Run, rest: &[&str]) -> Option<String> {
         return Some(NEVER_MERGES.into());
     }
     if group == "pr" && verb == "create" {
-        if !run.spec.allow_push {
-            return Some(PUSH_NOT_APPROVED.into());
-        }
         return (!rest.contains(&"--draft")).then(|| DRAFT_PR_ONLY.into());
     }
     let reads = matches!(

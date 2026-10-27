@@ -1,7 +1,7 @@
 use serde_json::{json, Value};
 
 use super::*;
-use crate::domain::{Intent, Run, RunKind, RunSpec, RunState, REPORT_TOOL_VERSION};
+use crate::domain::{Intent, Run, ResultKind, RunSpec, RunState, REPORT_TOOL_VERSION};
 use crate::inbox::run_results::tests::{approved, body_of, next_spec, project, run_with};
 use crate::inbox::testing::{fixture_watching, Fixture};
 use crate::runs::report::{new_token, token_hash, ReportStatus, ResultSource, MAX_CALLS, MAX_REJECTIONS};
@@ -232,7 +232,7 @@ async fn a_refused_call_changes_nothing_but_the_counts() {
 #[tokio::test]
 async fn a_triage_drafts_its_breakdown_from_the_report_even_when_the_text_has_none() {
     let fx = fixture_watching(&["acme/webshop"]).await;
-    let (run, token) = open(&fx, RunSpec { kind: RunKind::Triage, ..next_spec(&fx) }, Some(fx.item("CA-1"))).await;
+    let (run, token) = open(&fx, RunSpec { role: ResultKind::Triage.role(), ..next_spec(&fx) }, Some(fx.item("CA-1"))).await;
     call(&fx, &run, &token, json!({ "status": "done", "note": "Too big for one.", "subtasks": ["Split the consumer", "Add the backoff", "split the consumer"] })).await;
     let done = finish(&fx, &run, Some("Prose with no subtasks.\n\nFor Jira: x")).await;
     assert_eq!(fx.core.run_outcome(&done.id).await.unwrap().subtasks, ["Split the consumer", "Add the backoff"]);
@@ -244,7 +244,7 @@ async fn a_triage_drafts_its_breakdown_from_the_report_even_when_the_text_has_no
 #[tokio::test]
 async fn an_investigation_without_a_ticket_drafts_its_ticket_from_the_report() {
     let fx = fixture_watching(&["acme/webshop"]).await;
-    let spec = RunSpec { instruction: String::new(), project: Some(project(&fx).await), ..next_spec(&fx) };
+    let spec = RunSpec { earlier: crate::domain::LegacySpec { project: Some(project(&fx).await), ..Default::default() }, ..next_spec(&fx) };
     let (run, token) = open(&fx, spec, None).await;
     assert!(matches!(call(&fx, &run, &token, json!({ "status": "done", "note": "n" })).await, Reply::Invalid(_)), "a ticketless run reports a ticket");
     let args = json!({ "status": "done", "newTicket": { "title": "Add a backoff to the consumer", "kind": "bug", "body": "It spins." } });
@@ -261,7 +261,7 @@ async fn an_investigation_without_a_ticket_drafts_its_ticket_from_the_report() {
 #[tokio::test]
 async fn a_plan_run_carries_the_plan_it_reported() {
     let fx = fixture_watching(&["acme/webshop"]).await;
-    let (run, token) = open(&fx, RunSpec { kind: RunKind::Plan, ..next_spec(&fx) }, Some(fx.item("CA-1"))).await;
+    let (run, token) = open(&fx, RunSpec { role: ResultKind::Plan.role(), ..next_spec(&fx) }, Some(fx.item("CA-1"))).await;
     call(&fx, &run, &token, json!({ "status": "done", "note": "Plan attached.", "plan": "## Approach\n\n1. Reported step." })).await;
     let done = finish(&fx, &run, Some("## Approach\n\n1. Written step.\n\nFor Jira: Plan attached.")).await;
     let comment = fx.core.draft_run_plan_comment(&done.id).await.unwrap();

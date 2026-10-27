@@ -126,7 +126,7 @@ impl RunService {
                     self.notifier.notify(&found, why);
                 }
             }
-            if found.spec.kind == crate::domain::RunKind::Review {
+            if found.spec.is(crate::domain::ResultKind::Review) {
                 self.draft_review(&found).await;
             }
         }

@@ -143,7 +143,7 @@ fn body_of(p: &Proposal) -> String {
         }
         Intent::Transition { item, to } => format!("Move {} to status {to}{}", item.key, p.label.as_ref().map(|l| format!(" ({l})")).unwrap_or_default()),
         Intent::StartRun { item, spec, .. } => {
-            format!("An earlier draft to start a {} agent on {} in {}. It is history now: start agents with start_agent.\n\nInstruction:\n{}", spec.kind.as_str(), item.as_ref().map_or("no ticket", |i| i.key.as_str()), spec.repo, spec.instruction)
+            format!("An earlier draft to start a {} agent on {} in {}. It is history now: start agents with start_agent.\n\nInstruction:\n{}", spec.role.as_str(), item.as_ref().map_or("no ticket", |i| i.key.as_str()), spec.repo, spec.brief)
         }
         Intent::FollowUp { run_id, message, reason, .. } => format!("An earlier draft follow-up for run {run_id}. It is history now: send messages with message_agent.\n\nWhy: {reason}\n\nMessage:\n{message}"),
         Intent::RunAnswer { run_id, message, .. } => format!("An earlier draft answer for run {run_id}. It is history now: send messages with message_agent.\n\nAnswer:\n{message}"),

@@ -6,7 +6,7 @@
 //! outside Gossamr, a run finishing again after a continuation that drafted nothing, a run that finished while the
 //! workstream was paused, a build's pull request turning up. A run the person or Pip stopped wakes nobody.
 //!
-//! A wake is Pip's ordinary turn in the workstream's conversation, asked with a prompt Rust writes from ids, kinds,
+//! A wake is Pip's ordinary turn in the workstream's conversation, asked with a prompt Rust writes from ids, roles,
 //! states, counts and parsed flags only (`event_line`), never an agent's words. Each `(workstream, run, state)` wakes
 //! Pip at most once: it is recorded as a `wake` line in the workstream's audit, which is also what a restart rebuilds
 //! from. A paused workstream gets no wakes. Too many wakes pause it (`Core::admit_wake`). A wake the subscription
@@ -22,7 +22,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{AgentEvent, AgentService, Update, WakeSink, REMOVED, WAKE_NOT_STARTED, WAKE_PAUSED};
 use crate::auth::Scope;
-use crate::domain::{Actor, Origin, ProposalQuery, Run, RunKind, RunState, StateKind, Workstream, WorkstreamEvent};
+use crate::domain::{Actor, Origin, ProposalQuery, ResultKind, Role, Run, RunState, StateKind, Workstream, WorkstreamEvent};
 use crate::error::{Error, Result};
 use crate::inbox::Core;
 use crate::runs::report::{ReviewVerdict, Severity};
@@ -112,13 +112,14 @@ impl WakeState {
     }
 }
 
-/// One thing that happened to a run, as Pip is told it: ids, kinds, states, counts and parsed flags, nothing an agent
+/// One thing that happened to a run, as Pip is told it: ids, roles, states, counts and parsed flags, nothing an agent
 /// wrote.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WakeFact {
     pub run: String,
-    pub kind: RunKind,
+    #[serde(alias = "kind")]
+    pub role: Role,
     pub state: WakeState,
     /// The state part of the idempotency key: the state, and for one reached again after the person carried on, when.
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -142,7 +143,7 @@ pub struct WakeFact {
 impl WakeFact {
     /// The fact `state` of `run` with no flags yet; its mark tells a finish after a continuation from the first one.
     pub fn new(run: &Run, state: WakeState) -> Self {
-        WakeFact { run: run.id.clone(), kind: run.spec.kind, state, mark: mark(run, state), plan_recommended: None, open_questions: None, verdict: None, blocking: 0, drafts: 0, waiting_for_pr: false }
+        WakeFact { run: run.id.clone(), role: run.spec.role.clone(), state, mark: mark(run, state), plan_recommended: None, open_questions: None, verdict: None, blocking: 0, drafts: 0, waiting_for_pr: false }
     }
 
     /// The state part of `(workstream, run, state)`.
@@ -203,7 +204,7 @@ fn fact_line(f: &WakeFact) -> String {
         Some(id) => format!("run {id}"),
         None => "a run".to_string(),
     };
-    let mut line = format!("[Event] {run} ({}) {}", f.kind.as_str(), f.state.words());
+    let mut line = format!("[Event] {run} ({}) {}", f.role.as_str(), f.state.words());
     if let Some(yes) = f.plan_recommended {
         line.push_str(if yes { "; plan recommended: yes" } else { "; plan recommended: no" });
     }
@@ -230,7 +231,7 @@ fn fact_line(f: &WakeFact) -> String {
     line
 }
 
-/// The wake prompt's event lines, one per fact. Only ids, kinds, states, counts and parsed flags.
+/// The wake prompt's event lines, one per fact. Only ids, roles, states, counts and parsed flags.
 pub fn event_line(facts: &WakeFacts) -> String {
     facts.facts.iter().map(fact_line).collect::<Vec<_>>().join("\n")
 }
@@ -431,11 +432,11 @@ impl Supervisor {
             return fact;
         }
         if let Ok(resolved) = self.core.resolved_of(run).await {
-            if run.spec.kind == RunKind::Triage {
+            if run.spec.is(ResultKind::Triage) {
                 fact.plan_recommended = resolved.plan_recommended;
                 fact.open_questions = resolved.readiness.as_ref().filter(|r| !r.ready).map(|r| r.questions.len() as u32);
             }
-            if run.spec.kind == RunKind::Review {
+            if run.spec.is(ResultKind::Review) {
                 fact.verdict = resolved.verdict;
                 fact.blocking = resolved.findings.iter().filter(|f| f.severity == Severity::Blocking).count() as u32;
             }
@@ -444,7 +445,7 @@ impl Supervisor {
         if let Ok(drafts) = self.core.proposals_in(scope, &open).await {
             fact.drafts = drafts.iter().filter(|p| matches!(&p.origin, Origin::Run { run_id, .. } if *run_id == run.id)).count() as u32;
         }
-        if run.spec.kind == RunKind::Build && run.spec.allow_push && matches!(self.core.pull_head_of(run), Ok(None)) {
+        if run.spec.is(ResultKind::Build) && run.spec.workstream.is_some() && matches!(self.core.pull_head_of(run), Ok(None)) {
             fact.waiting_for_pr = true;
         }
         fact

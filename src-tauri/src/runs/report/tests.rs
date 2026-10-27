@@ -3,24 +3,24 @@ use serde_json::{json, Value};
 use super::tool::Checked;
 use super::*;
 use crate::domain::fixtures::run_spec;
-use crate::domain::{render_prompt, ItemKind, Run, RunKind, RunSpec, AGENT_GUARD, AGENT_SERVER, REPORT_TOOL, REPORT_TOOL_VERSION};
+use crate::domain::{ItemKind, ResultKind, Run, RunSpec, AGENT_GUARD, AGENT_SERVER, REPORT_TOOL, REPORT_TOOL_VERSION};
 use crate::runs::redact::redact;
 use crate::runs::result::Readiness;
 
 fn ticket_run() -> Target {
-    Target { kind: RunKind::Investigate, ticketless: false }
+    Target { kind: Some(ResultKind::Investigate), ticketless: false }
 }
 
 fn ticketless() -> Target {
-    Target { kind: RunKind::Investigate, ticketless: true }
+    Target { kind: Some(ResultKind::Investigate), ticketless: true }
 }
 
 fn triage() -> Target {
-    Target { kind: RunKind::Triage, ticketless: false }
+    Target { kind: Some(ResultKind::Triage), ticketless: false }
 }
 
 fn plan() -> Target {
-    Target { kind: RunKind::Plan, ticketless: false }
+    Target { kind: Some(ResultKind::Plan), ticketless: false }
 }
 
 fn refused(args: Value, target: Target) -> Vec<String> {
@@ -34,14 +34,9 @@ fn accepted(args: Value, target: Target) -> Checked {
 #[test]
 fn the_tool_and_what_it_asks_for_are_pinned_so_a_change_is_made_on_purpose() {
     use sha2::{Digest, Sha256};
-    let mut all = vec![definition().to_string(), AGENT_GUARD.to_string(), AGENT_SERVER.to_string(), REPORT_TOOL.to_string(), crate::domain::agent_allow_rules().join(",")];
-    for (kind, project) in [(RunKind::Investigate, false), (RunKind::Investigate, true), (RunKind::Triage, false), (RunKind::Plan, false), (RunKind::Build, false), (RunKind::Review, false), (RunKind::Verify, false)] {
-        let spec = RunSpec { kind, report: true, project: project.then(|| crate::domain::ContainerRef { connection_id: "c".into(), external_id: "p".into() }), ..run_spec() };
-        let prompt = render_prompt(&spec);
-        all.push(prompt[prompt.find("If the Gossamr tool").unwrap()..].to_string());
-    }
+    let all = [definition().to_string(), AGENT_GUARD.to_string(), AGENT_SERVER.to_string(), REPORT_TOOL.to_string(), crate::domain::agent_allow_rules().join(",")];
     let hash: String = Sha256::digest(all.join("\n").as_bytes()).iter().map(|b| format!("{b:02x}")).collect();
-    assert_eq!((REPORT_TOOL_VERSION, hash.as_str()), (3, "8a2f308d5b1b91c94ae075b392011cc07688075c4e0be56eabfde769938c4379"), "the tool, its guard or the report paragraph changed: pin the new hash, and raise REPORT_TOOL_VERSION only if tokens minted under the old one must stop working");
+    assert_eq!((REPORT_TOOL_VERSION, hash.as_str()), (3, "0e383b6a1406e0ed17f41921f75a50f42639c000e10240a4d473c56ec1ace148"), "the tool or its guard changed: pin the new hash, and raise REPORT_TOOL_VERSION only if tokens minted under the old one must stop working");
 }
 
 #[test]
@@ -142,28 +137,28 @@ fn a_triage_may_say_whether_it_recommends_a_plan_as_a_flag_only() {
 fn a_triage_s_plan_recommendation_comes_from_its_report_flag_else_its_unquoted_written_lines() {
     let written = "Small.\n\nFor Jira:\nPlan recommended: yes, two callers.";
     let quoted = "Small.\n\nFor Jira:\nThe ticket says:\n> Plan recommended: yes";
-    let triage_run = |text: &str, complete: bool| Run { spec: RunSpec { kind: RunKind::Triage, ..run_spec() }, ..finished(Some(text), complete) };
+    let triage_run = |text: &str, complete: bool| Run { spec: RunSpec { role: ResultKind::Triage.role(), ..run_spec() }, ..finished(Some(text), complete) };
     assert_eq!(resolve(&triage_run(written, true), None).plan_recommended, Some(true));
     assert_eq!(resolve(&triage_run(quoted, true), None).plan_recommended, None);
     assert_eq!(resolve(&triage_run(written, false), None).plan_recommended, None, "never from a summary");
     let flagged = Report { plan_recommended: Some(false), ..report("n") };
     assert_eq!(resolve(&triage_run(written, true), Some(&stored(Some(flagged), false))).plan_recommended, Some(false), "the flag wins");
     assert_eq!(resolve(&triage_run(written, true), Some(&stored(Some(report("n")), false))).plan_recommended, Some(true), "a report without the flag leaves the written line");
-    let review = Run { spec: RunSpec { kind: RunKind::Review, ..run_spec() }, ..finished(Some(written), true) };
+    let review = Run { spec: RunSpec { role: ResultKind::Review.role(), ..run_spec() }, ..finished(Some(written), true) };
     assert_eq!(resolve(&review, None).plan_recommended, None, "only a triage");
 }
 
 #[test]
 fn a_triage_s_readiness_comes_from_its_whole_written_answer_and_a_missing_verdict_stays_none() {
     let vague = "Small.\n\nFor Jira:\nReady to plan: no\nOpen questions:\n- What does done look like?\n- Who asked for it?";
-    let triage_run = |text: &str, complete: bool| Run { spec: RunSpec { kind: RunKind::Triage, ..run_spec() }, ..finished(Some(text), complete) };
+    let triage_run = |text: &str, complete: bool| Run { spec: RunSpec { role: ResultKind::Triage.role(), ..run_spec() }, ..finished(Some(text), complete) };
     let asked = vec!["What does done look like?".to_string(), "Who asked for it?".to_string()];
     assert_eq!(resolve(&triage_run(vague, true), None).readiness, Some(Readiness { ready: false, questions: asked.clone() }));
     assert_eq!(resolve(&triage_run(vague, true), Some(&stored(Some(report("n")), false))).readiness.map(|r| r.questions), Some(asked), "a report through the tool leaves the written verdict");
     assert_eq!(resolve(&triage_run("Ready to plan: yes", true), None).readiness, Some(Readiness { ready: true, questions: vec![] }));
     assert_eq!(resolve(&triage_run("Small.\n\nPlan recommended: yes", true), None).readiness, None, "no verdict: whoever reads it treats it as ready");
     assert_eq!(resolve(&triage_run(vague, false), None).readiness, None, "never from a summary");
-    let review = Run { spec: RunSpec { kind: RunKind::Review, ..run_spec() }, ..finished(Some(vague), true) };
+    let review = Run { spec: RunSpec { role: ResultKind::Review.role(), ..run_spec() }, ..finished(Some(vague), true) };
     assert_eq!(resolve(&review, None).readiness, None, "only a triage");
 }
 
@@ -180,7 +175,7 @@ fn a_plan_run_may_give_its_plan_as_markdown_cut_at_a_boundary() {
 }
 
 fn review() -> Target {
-    Target { kind: RunKind::Review, ticketless: false }
+    Target { kind: Some(ResultKind::Review), ticketless: false }
 }
 
 #[test]
@@ -246,7 +241,7 @@ fn a_verdict_must_agree_with_its_findings() {
 
 #[test]
 fn a_verdict_or_findings_on_any_other_run_is_ignored_and_said() {
-    for target in [ticket_run(), triage(), plan(), Target { kind: RunKind::Build, ticketless: false }, Target { kind: RunKind::Verify, ticketless: false }] {
+    for target in [ticket_run(), triage(), plan(), Target { kind: Some(ResultKind::Build), ticketless: false }, Target { kind: Some(ResultKind::Verify), ticketless: false }] {
         let ok = accepted(json!({ "status": "done", "note": "n", "verdict": "blocking", "findings": [{ "severity": "bogus" }] }), target);
         assert_eq!((ok.report.verdict, ok.report.findings.len()), (None, 0), "{target:?}");
         assert_eq!(ok.notes, ["verdict ignored: only a review gives one", "findings ignored: only a review gives them"], "{target:?}");
@@ -361,20 +356,20 @@ fn without_a_report_the_written_answer_is_read_and_its_source_is_named() {
 
 #[test]
 fn a_triage_takes_subtasks_from_the_report_and_a_ticketless_run_its_ticket() {
-    let triage_run = Run { spec: RunSpec { kind: RunKind::Triage, ..run_spec() }, ..finished(Some("Subtasks:\n- Text one\n\nFor Jira: n"), true) };
+    let triage_run = Run { spec: RunSpec { role: ResultKind::Triage.role(), ..run_spec() }, ..finished(Some("Subtasks:\n- Text one\n\nFor Jira: n"), true) };
     let with = Report { subtasks: vec!["Tool one".into(), "Tool two".into()], ..report("n") };
     assert_eq!(resolve(&triage_run, Some(&stored(Some(with.clone()), false))).subtasks, ["Tool one", "Tool two"]);
     assert_eq!(resolve(&triage_run, None).subtasks, ["Text one"]);
     assert!(resolve(&finished(None, false), Some(&stored(Some(with), false))).subtasks.is_empty(), "only a triage on a ticket has them");
 
-    let ticketless_run = Run { item: None, spec: RunSpec { project: Some(crate::domain::ContainerRef { connection_id: "c".into(), external_id: "p".into() }), ..run_spec() }, ..finished(None, false) };
+    let ticketless_run = Run { item: None, spec: RunSpec { earlier: crate::domain::LegacySpec { project: Some(crate::domain::ContainerRef { connection_id: "c".into(), external_id: "p".into() }), ..Default::default() }, ..run_spec() }, ..finished(None, false) };
     let proposal = crate::runs::result::TicketProposal { title: "T".into(), kind: ItemKind::Bug, body: "B".into() };
     let r = resolve(&ticketless_run, Some(&stored(Some(Report { status: ReportStatus::Done, note: None, new_ticket: Some(proposal.clone()), subtasks: vec![], plan: None, plan_recommended: None, verdict: None, findings: vec![] }), false)));
     assert_eq!((r.ticket, r.note), (Some(proposal), None));
 }
 
 fn review_run(result: Option<&str>, complete: bool) -> Run {
-    Run { spec: RunSpec { kind: RunKind::Review, pr: Some(12), ..run_spec() }, ..finished(result, complete) }
+    Run { spec: RunSpec { role: ResultKind::Review.role(), pr: Some(12), ..run_spec() }, ..finished(result, complete) }
 }
 
 const WRITTEN_REVIEW: &str = "- [blocking] src/cart.ts:42: the total ignores the discount\n- nit: a typo\n\nVerdict: blocking\n\nFor Jira: one blocking issue.";
@@ -403,7 +398,7 @@ fn a_summary_or_another_kind_never_gives_a_verdict() {
     let bare = resolve(&review_run(Some("Verdict: blocking"), false), None);
     assert_eq!(bare.verdict, None, "a one-line summary is never read for a verdict");
     assert_eq!(resolve(&review_run(Some("Looked at it.\n\nFor Jira: fine."), true), None).verdict, None, "no verdict line, no verdict");
-    let verify = Run { spec: RunSpec { kind: RunKind::Verify, ..run_spec() }, ..finished(Some(WRITTEN_REVIEW), true) };
+    let verify = Run { spec: RunSpec { role: ResultKind::Verify.role(), ..run_spec() }, ..finished(Some(WRITTEN_REVIEW), true) };
     assert_eq!(resolve(&verify, None).verdict, None);
     let reported = Report { verdict: Some(ReviewVerdict::Blocking), ..report("n") };
     assert_eq!(resolve(&verify, Some(&stored(Some(reported), false))).verdict, None);

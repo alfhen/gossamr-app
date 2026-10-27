@@ -206,8 +206,8 @@ impl RunService {
                 // A copy is a new job built from the resume command line, so it has none of the flags the run was launched
                 // with: a read-only run's copy runs unrestricted. It is removed as well as stopped, and the person is told
                 // plainly if neither worked.
-                let removed = run.spec.kind.read_only() && matches!(self.remove_session(tc, &copy.short_id).await, Ok(super::cleanup::Removal::Gone));
-                let copy_note = match (stopped || removed, run.spec.kind.read_only()) {
+                let removed = run.read_only.is_some() && matches!(self.remove_session(tc, &copy.short_id).await, Ok(super::cleanup::Removal::Gone));
+                let copy_note = match (stopped || removed, run.read_only.is_some()) {
                     (true, false) => "it was stopped".to_owned(),
                     (true, true) if removed => "it was stopped and removed, because a copy doesn't keep the read-only restriction".to_owned(),
                     (true, true) => format!("it was stopped; remove it with `claude rm {}`, because a copy doesn't keep the read-only restriction", copy.short_id),

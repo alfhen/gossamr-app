@@ -1,9 +1,7 @@
-import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import type { RunSpec } from "../types";
 import { MockBackend } from "./mock";
 import { itemRef } from "./mockConnector";
-import { INSTRUCTIONS, reportParagraph } from "./mockRunKinds";
 import { resolveResult, reviewVerdict, reviewView, type MockReportRow } from "./mockRunResult";
 import { renderPrompt, SCRIPTED_RESULT } from "./mockRuns";
 
@@ -125,61 +123,6 @@ describe("asking for the tool", () => {
 });
 
 describe("an adversarial review", () => {
-  const rust = readFileSync(new URL("../../src-tauri/src/domain/run.rs", import.meta.url), "utf8");
-  const note = /"(Finish your answer with a short, factual note[^"]*)"/.exec(rust)![1];
-
-  it("is told what domain/run.rs tells it, word for word", () => {
-    const review = /pub const REVIEW_INSTRUCTION: &str = concat!\("([^"]*)", status_note!\(\)\);/.exec(rust)![1];
-    expect(INSTRUCTIONS.review).toBe(`${review}${note}`);
-    expect(INSTRUCTIONS.review).toContain("not ready");
-  });
-
-  const earlier = /macro_rules! earlier_notes \{\s*\(\) => \{\s*"([^"]*)"/.exec(rust)![1];
-  const answers = /macro_rules! comment_answers \{\s*\(\) => \{\s*"([^"]*)"/.exec(rust)![1];
-  const triageForm = /macro_rules! triage_form \{\s*\(\) => \{\s*"([^"]*)"/.exec(rust)![1];
-
-  it("tells the investigation, triage and plan notes to cover only what earlier notes on the ticket do not, and no other kind", () => {
-    for (const kind of ["investigate", "triage", "plan"] as const) expect(INSTRUCTIONS[kind].endsWith(`${earlier}${note}`), kind).toBe(true);
-    for (const kind of ["verify", "build", "review"] as const) expect(INSTRUCTIONS[kind], kind).not.toContain("compared with them");
-    expect(earlier).toContain("cover only what is new compared with them");
-  });
-
-  it("tells a triage and a plan that answers in the ticket's comments count as answers, and no other kind", () => {
-    expect(answers).toContain("Answers in the ticket's comments, for example from the reporter, count as answers: use them, and list as open only what is still unanswered.");
-    for (const kind of ["triage", "plan"] as const) expect(INSTRUCTIONS[kind].endsWith(`${answers}${earlier}${note}`), kind).toBe(true);
-    for (const kind of ["investigate", "verify", "build", "review"] as const) expect(INSTRUCTIONS[kind], kind).not.toContain(answers);
-  });
-
-  it("asks a triage for its size as story points with a plain meaning and for the open questions it mentions by name, and no other kind", () => {
-    expect(INSTRUCTIONS.triage).toContain(triageForm);
-    expect(triageForm).toContain("'Size: 8 points (about a week)', never a bare 'Size 8'");
-    expect(triageForm).toContain("list each one by name");
-    for (const kind of ["investigate", "plan", "verify", "build", "review"] as const) expect(INSTRUCTIONS[kind], kind).not.toContain("story points");
-    expect(SCRIPTED_RESULT.triage).toContain("Size: 8 points (about a week)");
-    expect(SCRIPTED_RESULT.triage).not.toMatch(/Size 8/);
-  });
-
-  it("and every other kind end with the same note sentence, which tells the agent to write for people who do not use the app", () => {
-    for (const kind of ["investigate", "triage", "plan", "verify", "build", "review"] as const) {
-      expect(INSTRUCTIONS[kind].endsWith(note), kind).toBe(true);
-      for (const rule of ["for people who do not use Gossamr", "name no runs, workstreams, worktrees, Pip, Gossamr or other app internals", "point at nothing only the app holds", "a neutral voice without 'I' or 'we'", "say only what is new since the last comment on the ticket"]) {
-        expect(INSTRUCTIONS[kind].split(rule).length - 1, `${kind}: ${rule}`).toBe(1);
-      }
-    }
-    const plan = /pub const PLAN_INSTRUCTION: &str = concat!\("((?:[^"\\]|\\.)*)", comment_answers!\(\), earlier_notes!\(\), status_note!\(\)\);/.exec(rust)![1].replace(/\\"/g, '"');
-    expect(INSTRUCTIONS.plan).toBe(`${plan}${answers}${earlier}${note}`);
-    expect(INSTRUCTIONS.plan).not.toContain("attached to the run");
-  });
-
-  it("is asked for a verdict and findings in the report paragraph, as report_paragraph is, and no other kind is", () => {
-    const fields = [...rust.slice(rust.indexOf("fn report_paragraph"), rust.indexOf("/// The exact text handed to the agent")).matchAll(/fields\.push\("([^"]*)"\.into\(\)\)/g)].map((m) => m[1]);
-    const verdict = fields.find((f) => f.startsWith("verdict ("))!;
-    const findings = fields.find((f) => f.startsWith("findings ("))!;
-    expect(verdict && findings).toBeTruthy();
-    expect(reportParagraph({ kind: "review" })).toContain(`note (the text you would put under 'For Jira:'); ${verdict}; ${findings}.`);
-    for (const kind of ["investigate", "triage", "plan", "build", "verify"] as const) expect(reportParagraph({ kind })).not.toContain("verdict");
-  });
-
   it("reads the last Verdict line outside a code fence and the severity lines before it, as review_verdict does", () => {
     const answer = "Ran it.\n\n- [nit] src/a.ts:3: a typo\n- **blocking**: src/consumer/retry.ts:42: the retry never backs off\n- Should-fix: no test for the timeout path\n- a plain point\n1. [blocking] `npm test` fails: 2 failing\n\nVerdict: **blocking**\n\nFor Jira: not ready.";
     const found = reviewVerdict(answer)!;

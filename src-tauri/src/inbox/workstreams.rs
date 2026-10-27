@@ -13,7 +13,7 @@ use crate::auth::Scope;
 use crate::db::Db;
 use crate::agent::supervisor::WakeFact;
 use crate::domain::workstream::{open_pip_ask, review_blocking, run_labels, stage, PauseReason, PipAsk, Stage, PIP_ASKED, PIP_ASK_CLEARED, PIP_ASK_LIMIT, WorkstreamBasis, BASIS_ASSIGNEE, BASIS_DESCRIPTION, BASIS_STATUS, BASIS_SUMMARY, WAKES_PER_WORKSTREAM_PER_DAY, WAKE_TURNS_PER_DAY};
-use crate::domain::{has_markers, Actor, Category, ItemRef, Proposal, ProposalQuery, ProposalState, Run, RunKind, RunQuery, RunState, StateKind, WorkItem, Workstream, WorkstreamEvent};
+use crate::domain::{has_markers, Actor, Category, ItemRef, Proposal, ProposalQuery, ProposalState, ResultKind, Run, RunQuery, RunState, StateKind, WorkItem, Workstream, WorkstreamEvent};
 use crate::error::{Error, Result};
 use crate::proposals;
 use crate::runs::report::{resolve, ReviewVerdict};
@@ -25,8 +25,6 @@ pub const NOTES_LIMIT: usize = 2_048;
 pub const NOTES_OPEN: &str = "<<<PIP_NOTES";
 pub const NOTES_CLOSE: &str = "PIP_NOTES>>>";
 const TITLE_LIMIT: usize = 200;
-/// Told to Pip wherever a finished build's pull request hasn't been found yet: a review needs it pinned.
-pub const WAITING_FOR_PR_HINT: &str = "Gossamr asked GitHub for it; draft the review once get_workstream no longer says the build is waiting for its pull request.";
 fn refuse(message: impl Into<String>) -> Error {
     Error::Proposal(message.into())
 }
@@ -113,7 +111,7 @@ pub struct WorkstreamView {
 /// else its written answer. A review with no verdict is left out.
 fn verdicts_of(db: &Db, runs: &[Run]) -> Result<HashMap<String, ReviewVerdict>> {
     let mut verdicts = HashMap::new();
-    for run in runs.iter().filter(|r| r.spec.kind == RunKind::Review && r.state == RunState::Done) {
+    for run in runs.iter().filter(|r| r.spec.is(ResultKind::Review) && r.state == RunState::Done) {
         if let Some(verdict) = resolve(run, db.report(&run.id)?.as_ref()).verdict {
             verdicts.insert(run.id.clone(), verdict);
         }
@@ -179,11 +177,10 @@ fn waiting_for(build: &Run, lookup: Result<Option<u64>>) -> Option<String> {
     }
 }
 
-/// The newest finished build among `runs` that pushes a branch, when no review was queued after it: the one whose pull
-/// request a review needs.
-fn pushed_build(runs: &[Run]) -> Option<&Run> {
-    let build = runs.iter().filter(|r| r.spec.kind == RunKind::Build && r.state == RunState::Done && r.spec.allow_push).max_by(|a, b| (a.queued_at, &a.id).cmp(&(b.queued_at, &b.id)))?;
-    let reviewed = runs.iter().any(|r| r.spec.kind == RunKind::Review && ((r.queued_at, &r.id) > (build.queued_at, &build.id) || r.spec.build_from_run.as_deref() == Some(build.id.as_str())));
+/// The newest finished build among `runs`, when no review was queued after it: the one whose pull request a review needs.
+fn unreviewed_build(runs: &[Run]) -> Option<&Run> {
+    let build = runs.iter().filter(|r| r.spec.is(ResultKind::Build) && r.state == RunState::Done).max_by(|a, b| (a.queued_at, &a.id).cmp(&(b.queued_at, &b.id)))?;
+    let reviewed = runs.iter().any(|r| r.spec.is(ResultKind::Review) && ((r.queued_at, &r.id) > (build.queued_at, &build.id) || r.spec.earlier.build_from_run.as_deref() == Some(build.id.as_str())));
     (!reviewed).then_some(build)
 }
 
@@ -352,7 +349,7 @@ impl Core {
         let mut view = WorkstreamView::of(workstream, runs, verdicts);
         view.pip_ask = pip_ask;
         view.adoptable = Some(adoptable).filter(|a| view.workstream.closed_at.is_none() && !a.is_empty());
-        if let Some(build) = pushed_build(runs) {
+        if let Some(build) = unreviewed_build(runs) {
             view.waiting_for_pr = waiting_for(build, self.pull_request_of(build));
         }
         Ok(view)
@@ -749,15 +746,15 @@ impl Core {
 mod tests {
     use super::*;
     use crate::domain::fixtures::run_spec;
-    use crate::domain::{CreatedBy, Origin, RunKind, RunSpec, RunState};
+    use crate::domain::{CreatedBy, Origin, ResultKind, RunSpec, RunState};
     use crate::inbox::testing::{fixture, Fixture};
 
     fn actions(events: &[WorkstreamEvent]) -> Vec<(Actor, &str)> {
         events.iter().map(|e| (e.actor, e.action.as_str())).collect()
     }
 
-    async fn insert_run(fx: &Fixture, id: &str, workstream: Option<&str>, kind: RunKind, state: RunState) -> Run {
-        let spec = RunSpec { kind, name: format!("name-{id}"), workstream: workstream.map(Into::into), ..run_spec() };
+    async fn insert_run(fx: &Fixture, id: &str, workstream: Option<&str>, kind: ResultKind, state: RunState) -> Run {
+        let spec = RunSpec { role: kind.role(), name: format!("name-{id}"), workstream: workstream.map(Into::into), ..run_spec() };
         let mut run = Run::queued(id.into(), format!("p-{id}"), Connection::jira_id(&fx.scope), Some(fx.item("CA-1")), spec, "f".into(), Utc::now());
         run.state = state;
         fx.core.with_db_for(&fx.scope, |db| db.insert_run(&run)).await.unwrap();
@@ -765,7 +762,7 @@ mod tests {
     }
 
     /// A run linked to `ws`, queued `at` seconds after the epoch so the order is fixed, changed by `edit`.
-    async fn insert_at(fx: &Fixture, id: &str, ws: &str, kind: RunKind, state: RunState, at: i64, edit: impl FnOnce(&mut Run)) -> Run {
+    async fn insert_at(fx: &Fixture, id: &str, ws: &str, kind: ResultKind, state: RunState, at: i64, edit: impl FnOnce(&mut Run)) -> Run {
         let mut run = insert_run(fx, id, Some(ws), kind, state).await;
         run.queued_at = chrono::DateTime::from_timestamp(1_800_000_000 + at, 0).unwrap();
         edit(&mut run);
@@ -781,11 +778,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_finished_pushing_build_waits_for_its_pull_request_until_a_sync_caches_it() {
+    async fn a_finished_build_waits_for_its_pull_request_until_a_sync_caches_it() {
         let fx = crate::inbox::testing::fixture_watching(&["acme/webshop"]).await;
         let ws = fx.core.open_workstream(&fx.scope, Some(fx.item("CA-1")), None).await.unwrap();
-        insert_at(&fx, "r-plan", &ws.id, RunKind::Plan, RunState::Done, 0, |_| {}).await;
-        let build = insert_at(&fx, "r-build", &ws.id, RunKind::Build, RunState::Done, 10, |r| r.spec.allow_push = true).await;
+        insert_at(&fx, "r-plan", &ws.id, ResultKind::Plan, RunState::Done, 0, |_| {}).await;
+        let build = insert_at(&fx, "r-build", &ws.id, ResultKind::Build, RunState::Done, 10, |_| {}).await;
         assert_eq!(waiting(&fx, &ws.id).await.as_deref(), Some("r-build"));
         let view = fx.core.workstream(&fx.scope, &ws.id).await.unwrap().unwrap();
         assert_eq!(view.stage, Stage::Build, "the stage is left as the runs give it");
@@ -802,30 +799,27 @@ mod tests {
     #[tokio::test]
     async fn a_failed_pull_request_lookup_leaves_the_view_without_the_flag() {
         let fx = fixture().await;
-        let build = insert_run(&fx, "r-build", None, RunKind::Build, RunState::Done).await;
+        let build = insert_run(&fx, "r-build", None, ResultKind::Build, RunState::Done).await;
         assert_eq!(waiting_for(&build, Ok(None)).as_deref(), Some("r-build"));
         assert_eq!(waiting_for(&build, Ok(Some(301))), None);
         assert_eq!(waiting_for(&build, Err(crate::error::Error::NotSignedIn)), None, "an advisory lookup never fails the view");
     }
 
     #[tokio::test]
-    async fn a_build_reviewed_since_or_one_that_does_not_push_waits_for_nothing() {
+    async fn a_build_reviewed_since_or_one_still_working_waits_for_nothing() {
         let fx = crate::inbox::testing::fixture_watching(&["acme/webshop"]).await;
         let ws = fx.core.open_workstream(&fx.scope, Some(fx.item("CA-1")), None).await.unwrap();
-        insert_at(&fx, "r-local", &ws.id, RunKind::Build, RunState::Done, 0, |_| {}).await;
-        assert_eq!(waiting(&fx, &ws.id).await, None, "a build that doesn't push opens no pull request");
-
-        insert_at(&fx, "r-working", &ws.id, RunKind::Build, RunState::Working, 5, |r| r.spec.allow_push = true).await;
+        insert_at(&fx, "r-working", &ws.id, ResultKind::Build, RunState::Working, 5, |_| {}).await;
         assert_eq!(waiting(&fx, &ws.id).await, None, "an unfinished build isn't waiting yet");
 
-        insert_at(&fx, "r-push", &ws.id, RunKind::Build, RunState::Done, 10, |r| r.spec.allow_push = true).await;
-        assert_eq!(waiting(&fx, &ws.id).await.as_deref(), Some("r-push"));
-        insert_at(&fx, "r-review", &ws.id, RunKind::Review, RunState::Queued, 20, |_| {}).await;
+        insert_at(&fx, "r-done", &ws.id, ResultKind::Build, RunState::Done, 10, |_| {}).await;
+        assert_eq!(waiting(&fx, &ws.id).await.as_deref(), Some("r-done"));
+        insert_at(&fx, "r-review", &ws.id, ResultKind::Review, RunState::Queued, 20, |_| {}).await;
         assert_eq!(waiting(&fx, &ws.id).await, None, "a review was queued after it");
 
         let other = fx.core.open_workstream(&fx.scope, None, Some("Another".into())).await.unwrap();
-        insert_at(&fx, "r-other", &other.id, RunKind::Build, RunState::Done, 30, |r| r.spec.allow_push = true).await;
-        insert_at(&fx, "r-older-review", &other.id, RunKind::Review, RunState::Done, 0, |r| r.spec.build_from_run = Some("r-other".into())).await;
+        insert_at(&fx, "r-other", &other.id, ResultKind::Build, RunState::Done, 30, |_| {}).await;
+        insert_at(&fx, "r-older-review", &other.id, ResultKind::Review, RunState::Done, 0, |r| r.spec.earlier.build_from_run = Some("r-other".into())).await;
         assert_eq!(waiting(&fx, &other.id).await, None, "a review of that very build counts whenever it was queued");
     }
 
@@ -881,8 +875,8 @@ mod tests {
     #[tokio::test]
     async fn opening_leaves_a_tickets_runs_and_drafts_in_general_and_the_view_offers_them() {
         let fx = fixture().await;
-        let general = insert_run(&fx, "r1", None, RunKind::Plan, RunState::Done).await;
-        insert_run(&fx, "r2", None, RunKind::Build, RunState::Working).await;
+        let general = insert_run(&fx, "r1", None, ResultKind::Plan, RunState::Done).await;
+        insert_run(&fx, "r2", None, ResultKind::Build, RunState::Working).await;
         let draft = draft_on_ca1(&fx, Origin::chat("q1")).await;
         let ws = fx.core.open_workstream(&fx.scope, Some(fx.item("CA-1")), None).await.unwrap();
         assert_eq!(workstream_of_run(&fx, &general.id).await, None, "opening moves nothing");
@@ -900,8 +894,8 @@ mod tests {
     #[tokio::test]
     async fn bringing_them_here_moves_only_what_is_in_general_audits_it_and_the_view_then_reads_them() {
         let fx = fixture().await;
-        let plan = insert_run(&fx, "r1", None, RunKind::Plan, RunState::Done).await;
-        insert_run(&fx, "elsewhere", Some("ws-other"), RunKind::Build, RunState::Done).await;
+        let plan = insert_run(&fx, "r1", None, ResultKind::Plan, RunState::Done).await;
+        insert_run(&fx, "elsewhere", Some("ws-other"), ResultKind::Build, RunState::Done).await;
         let chat = draft_on_ca1(&fx, Origin::chat("q1")).await;
         let board = draft_on_ca1(&fx, Origin::Board).await;
         let ws = fx.core.open_workstream(&fx.scope, Some(fx.item("CA-1")), None).await.unwrap();
@@ -945,7 +939,7 @@ mod tests {
     #[tokio::test]
     async fn what_the_tracker_saw_while_a_run_was_brought_in_keeps_it_where_it_was_put() {
         let fx = fixture().await;
-        let run = insert_run(&fx, "r1", None, RunKind::Plan, RunState::Working).await;
+        let run = insert_run(&fx, "r1", None, ResultKind::Plan, RunState::Working).await;
         let ws = fx.core.open_workstream(&fx.scope, Some(fx.item("CA-1")), None).await.unwrap();
         // The tracker read the run before the person brought it in, and saves what it saw after.
         let seen = Run { state: RunState::Done, ..run.clone() };
@@ -959,7 +953,7 @@ mod tests {
     #[tokio::test]
     async fn only_an_open_workstream_on_a_ticket_offers_or_takes_them() {
         let fx = fixture().await;
-        insert_run(&fx, "r1", None, RunKind::Plan, RunState::Done).await;
+        insert_run(&fx, "r1", None, ResultKind::Plan, RunState::Done).await;
         let ticketless = fx.core.open_workstream(&fx.scope, None, Some("Why is it slow?".into())).await.unwrap();
         assert!(fx.core.workstream(&fx.scope, &ticketless.id).await.unwrap().unwrap().adoptable.is_none());
         assert!(fx.core.adopt_into_workstream(&fx.scope, &ticketless.id).await.unwrap_err().to_string().contains("no ticket"));
@@ -974,7 +968,7 @@ mod tests {
     #[tokio::test]
     async fn undoing_bringing_them_here_puts_them_back_in_general_only_right_after() {
         let fx = fixture().await;
-        let plan = insert_run(&fx, "r1", None, RunKind::Plan, RunState::Done).await;
+        let plan = insert_run(&fx, "r1", None, ResultKind::Plan, RunState::Done).await;
         let chat = draft_on_ca1(&fx, Origin::chat("q1")).await;
         let ws = fx.core.open_workstream(&fx.scope, Some(fx.item("CA-1")), None).await.unwrap();
         let moved = fx.core.adopt_into_workstream(&fx.scope, &ws.id).await.unwrap();
@@ -994,7 +988,7 @@ mod tests {
         assert!(fx.core.undo_workstream(&fx.scope, &ws.id, &undo).await.is_err());
         assert_eq!(workstream_of_run(&fx, &plan.id).await.as_deref(), Some(ws.id.as_str()));
         fx.core.resume_workstream(&fx.scope, &ws.id).await.unwrap();
-        let other = insert_run(&fx, "r2", None, RunKind::Build, RunState::Done).await;
+        let other = insert_run(&fx, "r2", None, ResultKind::Build, RunState::Done).await;
         let again = fx.core.adopt_into_workstream(&fx.scope, &ws.id).await.unwrap();
         assert_eq!(again.runs, std::slice::from_ref(&other.id));
         let late = Utc::now() + chrono::Duration::seconds(UNDO_WINDOW_SECS + 5);
@@ -1083,9 +1077,9 @@ mod tests {
     async fn a_view_has_its_linked_runs_their_labels_and_the_stage_they_give() {
         let fx = fixture().await;
         let ws = fx.core.open_workstream(&fx.scope, Some(fx.item("CA-1")), None).await.unwrap();
-        insert_run(&fx, "r-a", Some(&ws.id), RunKind::Investigate, RunState::Done).await;
-        insert_run(&fx, "r-b", Some(&ws.id), RunKind::Triage, RunState::Working).await;
-        insert_run(&fx, "r-c", None, RunKind::Build, RunState::Working).await;
+        insert_run(&fx, "r-a", Some(&ws.id), ResultKind::Investigate, RunState::Done).await;
+        insert_run(&fx, "r-b", Some(&ws.id), ResultKind::Triage, RunState::Working).await;
+        insert_run(&fx, "r-c", None, ResultKind::Build, RunState::Working).await;
 
         let view = fx.core.workstream(&fx.scope, &ws.id).await.unwrap().unwrap();
         assert_eq!(view.stage, Stage::Triage);
@@ -1100,8 +1094,8 @@ mod tests {
     async fn a_stopped_workstream_run_appends_run_stopped_and_one_outside_a_workstream_records_nothing() {
         let fx = fixture().await;
         let ws = fx.core.open_workstream(&fx.scope, Some(fx.item("CA-1")), None).await.unwrap();
-        let linked = insert_run(&fx, "r-a", Some(&ws.id), RunKind::Investigate, RunState::Stopped).await;
-        let loose = insert_run(&fx, "r-b", None, RunKind::Investigate, RunState::Stopped).await;
+        let linked = insert_run(&fx, "r-a", Some(&ws.id), ResultKind::Investigate, RunState::Stopped).await;
+        let loose = insert_run(&fx, "r-b", None, ResultKind::Investigate, RunState::Stopped).await;
         fx.core.record_run_action_by(&linked, Actor::Person, "run_stopped", None).await.unwrap();
         fx.core.record_run_action_by(&loose, Actor::Person, "run_stopped", None).await.unwrap();
         fx.core.record_run_action_by(&linked, Actor::Person, "run_answered", Some("12".into())).await.unwrap();
@@ -1261,15 +1255,15 @@ mod tests {
                 r.result_complete = true;
             }
         };
-        insert_at(&fx, "r-build", &ws.id, RunKind::Build, RunState::Done, 0, |_| {}).await;
-        insert_at(&fx, "r-review", &ws.id, RunKind::Review, RunState::Done, 10, written("- [blocking] src/cart.ts:42: The total skips the discount.\nVerdict: blocking")).await;
+        insert_at(&fx, "r-build", &ws.id, ResultKind::Build, RunState::Done, 0, |_| {}).await;
+        insert_at(&fx, "r-review", &ws.id, ResultKind::Review, RunState::Done, 10, written("- [blocking] src/cart.ts:42: The total skips the discount.\nVerdict: blocking")).await;
         let view = fx.core.workstream(&fx.scope, &ws.id).await.unwrap().unwrap();
         assert_eq!((view.stage, view.review_blocking), (Stage::Review, true));
         assert_eq!(serde_json::to_value(&view).unwrap()["reviewBlocking"], true);
         let listed = fx.core.workstreams(&fx.scope, false).await.unwrap().into_iter().find(|v| v.workstream.id == ws.id).unwrap();
         assert_eq!((listed.stage, listed.review_blocking), (Stage::Review, true), "the list and the single view agree");
 
-        insert_at(&fx, "r-review2", &ws.id, RunKind::Review, RunState::Done, 20, written("Verdict: pass")).await;
+        insert_at(&fx, "r-review2", &ws.id, ResultKind::Review, RunState::Done, 20, written("Verdict: pass")).await;
         let view = fx.core.workstream(&fx.scope, &ws.id).await.unwrap().unwrap();
         assert_eq!((view.stage, view.review_blocking), (Stage::Done, false));
         assert!(serde_json::to_value(&view).unwrap().get("reviewBlocking").is_none(), "left out when false");

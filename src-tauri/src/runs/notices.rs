@@ -178,7 +178,7 @@ fn digest(waiting: &[&Waiting], name_of: &dyn Fn(&Key) -> String) -> Option<Outg
 pub fn stuck_runs(runs: &[Run], now: DateTime<Utc>) -> Vec<&Run> {
     let work = |r: &Run| {
         let place = r.item.as_ref().map_or_else(|| format!("{}\n{}", r.connection_id, r.spec.repo), |i| format!("{}\n{}", i.connection_id, i.external_id));
-        (place, format!("{:?}", r.spec.kind))
+        (place, r.spec.role.as_str().to_string())
     };
     let mut newest: BTreeMap<(String, String), (DateTime<Utc>, &str)> = BTreeMap::new();
     for r in runs {
@@ -460,11 +460,11 @@ mod tests {
     mod stuck {
         use super::*;
         use crate::domain::fixtures::run_spec;
-        use crate::domain::{ItemRef, RunKind};
+        use crate::domain::{ItemRef, ResultKind};
 
-        fn run(id: &str, kind: RunKind, state: RunState, queued: i64, ended: Option<i64>) -> Run {
+        fn run(id: &str, kind: ResultKind, state: RunState, queued: i64, ended: Option<i64>) -> Run {
             let mut spec = run_spec();
-            spec.kind = kind;
+            spec.role = kind.role();
             let mut r = Run::queued(id.into(), "p".into(), "c".into(), Some(ItemRef { connection_id: "c".into(), external_id: "1".into(), key: "CA-1".into() }), spec, "db".into(), t(queued));
             r.state = state;
             r.ended_at = ended.map(t);
@@ -477,49 +477,49 @@ mod tests {
 
         #[test]
         fn a_recent_failure_and_a_limit_stop_are_stuck() {
-            let mut limit = run("limit", RunKind::Build, RunState::Stopped, 0, Some(10));
+            let mut limit = run("limit", ResultKind::Build, RunState::Stopped, 0, Some(10));
             limit.stopped_by_limit = true;
-            let runs = [run("failed", RunKind::Plan, RunState::Failed, 0, Some(10)), limit];
+            let runs = [run("failed", ResultKind::Plan, RunState::Failed, 0, Some(10)), limit];
             assert_eq!(ids(&runs, 60), ["failed", "limit"]);
         }
 
         #[test]
         fn finished_stopped_by_you_and_waiting_runs_are_not() {
             let runs = [
-                run("done", RunKind::Plan, RunState::Done, 0, Some(10)),
-                run("stopped", RunKind::Build, RunState::Stopped, 0, Some(10)),
-                run("asking", RunKind::Triage, RunState::NeedsAnswer, 0, None),
+                run("done", ResultKind::Plan, RunState::Done, 0, Some(10)),
+                run("stopped", ResultKind::Build, RunState::Stopped, 0, Some(10)),
+                run("asking", ResultKind::Triage, RunState::NeedsAnswer, 0, None),
             ];
             assert!(ids(&runs, 60).is_empty());
         }
 
         #[test]
         fn several_failures_of_one_kind_on_a_ticket_are_one_on_the_latest_run() {
-            let runs = [run("p1", RunKind::Plan, RunState::Failed, 0, Some(10)), run("p3", RunKind::Plan, RunState::Failed, 200, Some(210)), run("p2", RunKind::Plan, RunState::Failed, 100, Some(110))];
+            let runs = [run("p1", ResultKind::Plan, RunState::Failed, 0, Some(10)), run("p3", ResultKind::Plan, RunState::Failed, 200, Some(210)), run("p2", ResultKind::Plan, RunState::Failed, 100, Some(110))];
             assert_eq!(ids(&runs, 300), ["p3"]);
         }
 
         #[test]
         fn a_newer_run_in_any_state_supersedes_it_but_another_kind_does_not() {
             for state in [RunState::Working, RunState::Done, RunState::Queued, RunState::Failed] {
-                let runs = [run("old", RunKind::Plan, RunState::Failed, 0, Some(10)), run("new", RunKind::Plan, state, 100, None)];
+                let runs = [run("old", ResultKind::Plan, RunState::Failed, 0, Some(10)), run("new", ResultKind::Plan, state, 100, None)];
                 assert!(!ids(&runs, 150).contains(&"old"), "{state:?}");
             }
-            let runs = [run("old", RunKind::Plan, RunState::Failed, 0, Some(10)), run("other", RunKind::Build, RunState::Done, 100, Some(120))];
+            let runs = [run("old", ResultKind::Plan, RunState::Failed, 0, Some(10)), run("other", ResultKind::Build, RunState::Done, 100, Some(120))];
             assert_eq!(ids(&runs, 150), ["old"]);
         }
 
         #[test]
         fn tickets_of_different_connections_sharing_a_key_do_not_supersede_each_other() {
-            let mut newer = run("new", RunKind::Plan, RunState::Done, 100, Some(120));
+            let mut newer = run("new", ResultKind::Plan, RunState::Done, 100, Some(120));
             newer.item = Some(ItemRef { connection_id: "other".into(), external_id: "9".into(), key: "CA-1".into() });
-            let runs = [run("old", RunKind::Plan, RunState::Failed, 0, Some(10)), newer];
+            let runs = [run("old", ResultKind::Plan, RunState::Failed, 0, Some(10)), newer];
             assert_eq!(ids(&runs, 150), ["old"]);
         }
 
         #[test]
         fn a_failure_left_for_longer_than_the_news_window_is_not_news() {
-            let runs = [run("old", RunKind::Plan, RunState::Failed, 0, Some(0))];
+            let runs = [run("old", ResultKind::Plan, RunState::Failed, 0, Some(0))];
             assert_eq!(ids(&runs, 29 * 60), ["old"]);
             assert!(ids(&runs, 31 * 60).is_empty());
         }

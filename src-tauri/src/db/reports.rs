@@ -97,7 +97,7 @@ impl Db {
         let stored: Option<(String, String)> = tx.query_row("SELECT state, data FROM runs WHERE id = ?1", params![run_id], |r| Ok((r.get(0)?, r.get(1)?))).optional()?;
         let Some((_, data)) = stored.filter(|(state, _)| OPEN.contains(&state.as_str())) else { return Ok(Reply::Unavailable) };
         let Ok(run) = serde_json::from_str::<Run>(&data) else { return Ok(Reply::Unavailable) };
-        let target = Target { kind: run.spec.kind, ticketless: run.spec.ends_as_ticket() };
+        let target = Target { kind: run.spec.result_kind().filter(|k| *k != crate::domain::ResultKind::Review || run.spec.pr.is_some()), ticketless: run.spec.ends_as_ticket() };
 
         let mut row = row_of(&tx, run_id)?.unwrap_or(StoredReport { report: None, revision: 0, calls: 0, rejections: 0, stale: false, first_at: None, last_at: None });
         if row.calls >= MAX_CALLS || row.rejections >= MAX_REJECTIONS {

@@ -630,7 +630,7 @@ const BREAKDOWN_ANSWER: &str = "Sizing: large.\n\nSubtasks:\n- Add a backoff to 
 #[tokio::test]
 async fn a_triage_that_proposes_a_breakdown_leaves_subtasks_beside_its_description_update_and_a_restart_does_not_make_another() {
     let rig = ready().await;
-    let run = rig.launched_as(1, crate::domain::RunKind::Triage).await;
+    let run = rig.launched_as(1, crate::domain::ResultKind::Triage).await;
     rig.poll().await;
     finish_with(&rig, &run, BREAKDOWN_ANSWER);
     rig.poll().await;
@@ -661,7 +661,7 @@ async fn a_triage_that_proposes_a_breakdown_leaves_subtasks_beside_its_descripti
 #[tokio::test]
 async fn only_a_triage_with_a_subtasks_section_proposes_one_and_the_setting_applies() {
     let rig = ready().await;
-    let plain = rig.launched_as(1, crate::domain::RunKind::Triage).await;
+    let plain = rig.launched_as(1, crate::domain::ResultKind::Triage).await;
     rig.poll().await;
     finish_with(&rig, &plain, "It fits as one piece.\n\nFor Jira:\nSmall; do it as one ticket.");
     rig.poll().await;
@@ -677,7 +677,7 @@ async fn only_a_triage_with_a_subtasks_section_proposes_one_and_the_setting_appl
 
     let rig = ready().await;
     rig.svc.set_settings(crate::config::AgentSettings { draft_on_finish: false, ..rig.svc.settings() }).unwrap();
-    let triage = rig.launched_as(1, crate::domain::RunKind::Triage).await;
+    let triage = rig.launched_as(1, crate::domain::ResultKind::Triage).await;
     rig.poll().await;
     finish_with(&rig, &triage, BREAKDOWN_ANSWER);
     rig.poll().await;
@@ -695,7 +695,7 @@ const SECOND_PLAN_ANSWER: &str = "## Approach\n\nRound twice.\n\nFor Jira:\nPlan
 #[tokio::test]
 async fn a_plan_that_finishes_leaves_its_status_comment_and_a_description_update_and_says_so_once() {
     let rig = ready().await;
-    let run = rig.launched_as(1, crate::domain::RunKind::Plan).await;
+    let run = rig.launched_as(1, crate::domain::ResultKind::Plan).await;
     rig.poll().await;
     finish_with(&rig, &run, PLAN_ANSWER);
     rig.poll().await;
@@ -717,7 +717,7 @@ async fn a_plan_that_finishes_leaves_its_status_comment_and_a_description_update
 #[tokio::test]
 async fn a_continued_plan_that_finishes_again_replaces_the_waiting_description_update() {
     let rig = ready().await;
-    let run = rig.launched_as(1, crate::domain::RunKind::Plan).await;
+    let run = rig.launched_as(1, crate::domain::ResultKind::Plan).await;
     rig.poll().await;
     finish_with(&rig, &run, PLAN_ANSWER);
     rig.poll().await;
@@ -737,7 +737,7 @@ async fn a_continued_plan_that_finishes_again_replaces_the_waiting_description_u
 async fn a_plan_on_a_tracker_that_cannot_edit_text_notifies_like_any_other_and_the_setting_applies() {
     let rig = ready().await;
     rig.fx.tracker.cannot_edit_text.store(true, std::sync::atomic::Ordering::SeqCst);
-    let run = rig.launched_as(1, crate::domain::RunKind::Plan).await;
+    let run = rig.launched_as(1, crate::domain::ResultKind::Plan).await;
     rig.poll().await;
     finish_with(&rig, &run, PLAN_ANSWER);
     rig.poll().await;
@@ -746,7 +746,7 @@ async fn a_plan_on_a_tracker_that_cannot_edit_text_notifies_like_any_other_and_t
 
     let rig = ready().await;
     rig.svc.set_settings(crate::config::AgentSettings { draft_on_finish: false, ..rig.svc.settings() }).unwrap();
-    let run = rig.launched_as(1, crate::domain::RunKind::Plan).await;
+    let run = rig.launched_as(1, crate::domain::ResultKind::Plan).await;
     rig.poll().await;
     finish_with(&rig, &run, PLAN_ANSWER);
     rig.poll().await;
@@ -1362,9 +1362,9 @@ async fn sync_requested(rig: &Rig) -> bool {
 }
 
 /// Approved and launched in a workstream opened on the ticket, as a run of `kind`.
-async fn launched_in_workstream_as(rig: &Rig, n: u32, kind: RunKind) -> Run {
+async fn launched_in_workstream_as(rig: &Rig, n: u32, kind: ResultKind) -> Run {
     let ws = rig.fx.core.open_workstream(&rig.fx.scope, Some(rig.fx.item("CA-1")), None).await.unwrap();
-    let spec = crate::domain::RunSpec { kind, workstream: Some(ws.id.clone()), ..rig.spec(n) };
+    let spec = crate::domain::RunSpec { role: kind.role(), workstream: Some(ws.id.clone()), ..rig.spec(n) };
     let queued = rig.fx.core.queue_test_run(spec, Some(rig.fx.item("CA-1"))).await.unwrap();
     rig.svc.start_now(&queued.id).await.unwrap()
 }
@@ -1386,20 +1386,19 @@ async fn finishing_requests_a_sync(rig: &Rig, run: &Run) -> bool {
 #[tokio::test]
 async fn a_workstream_build_that_finishes_asks_for_a_code_sync_so_its_pull_request_is_found() {
     let rig = ready().await;
-    let run = launched_in_workstream_as(&rig, 1, RunKind::Build).await;
-    assert!(run.spec.allow_push, "a workstream's build always pushes");
+    let run = launched_in_workstream_as(&rig, 1, ResultKind::Build).await;
     assert!(finishing_requests_a_sync(&rig, &run).await);
 }
 
 #[tokio::test]
-async fn other_kinds_and_builds_outside_a_workstream_ask_for_no_code_sync() {
+async fn other_roles_and_builds_outside_a_workstream_ask_for_no_code_sync() {
     let rig = ready().await;
-    let plan = launched_in_workstream_as(&rig, 1, RunKind::Plan).await;
+    let plan = launched_in_workstream_as(&rig, 1, ResultKind::Plan).await;
     assert!(!finishing_requests_a_sync(&rig, &plan).await, "a plan in a workstream");
 
     let rig = ready().await;
-    let build = rig.launched_as(2, RunKind::Build).await;
-    assert!(!build.spec.allow_push && build.spec.workstream.is_none());
+    let build = rig.launched_as(2, ResultKind::Build).await;
+    assert!(build.spec.workstream.is_none());
     assert!(!finishing_requests_a_sync(&rig, &build).await, "a build outside a workstream");
 }
 

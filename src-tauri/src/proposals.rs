@@ -403,32 +403,32 @@ fn comment_run_id(p: &Proposal) -> Option<&str> {
 }
 
 /// What a new run comment does to an older pending one: the same ticket in the same workstream, made by an agent run
-/// of the same kind (`kind_of` says the kind of a run by its id; a run it can't find supersedes nothing). A Review's
-/// comment never retires an Investigate's, whose findings the person has not read yet. The person's edit keeps it;
-/// anything else is replaced. `None` when it is another ticket, workstream or kind, a plan's comment, or not pending
+/// of the same role (`role_of` says the role of a run by its id; a run it can't find supersedes nothing). A reviewer's
+/// comment never retires an investigator's, whose findings the person has not read yet. The person's edit keeps it;
+/// anything else is replaced. `None` when it is another ticket, workstream or role, a plan's comment, or not pending
 /// (one being posted, or posted, is never touched), or when its last post failed (`error` is set): it is back in
 /// Pending for the person to retry, and a newer comment doesn't take it away.
-pub fn run_comment_supersession(older: &Proposal, newer: &Proposal, kind_of: impl Fn(&str) -> Option<crate::domain::RunKind>) -> Option<std::result::Result<(), &'static str>> {
+pub fn run_comment_supersession(older: &Proposal, newer: &Proposal, role_of: impl Fn(&str) -> Option<crate::domain::Role>) -> Option<std::result::Result<(), &'static str>> {
     let ws = newer.workstream()?;
     let same = is_run_comment(older) && is_run_comment(newer) && older.workstream() == Some(ws) && older.target() == newer.target();
     if !same || older.id == newer.id || older.state != ProposalState::Pending || older.error.is_some() {
         return None;
     }
-    let (on, to) = (kind_of(comment_run_id(older)?)?, kind_of(comment_run_id(newer)?)?);
+    let (on, to) = (role_of(comment_run_id(older)?)?, role_of(comment_run_id(newer)?)?);
     if on != to {
         return None;
     }
     Some(if person_edited(older) { Err(KEPT_EDITED) } else { Ok(()) })
 }
 
-/// A new comment an agent run left replaces the older pending ones of the same ticket and run kind in its workstream, so
+/// A new comment an agent run left replaces the older pending ones of the same ticket and run role in its workstream, so
 /// a second round's reworded comment doesn't pile up beside the first. Writes nothing.
 fn tidy_run_comments(db: &Db, p: &Proposal) -> Result<Tidied> {
     let pending = db.proposals(&ProposalQuery { states: Some(vec![StateKind::Pending]), ..Default::default() })?;
     let mut tidied = Tidied::default();
     for older in pending {
-        let kind_of = |run_id: &str| db.run(run_id).ok().flatten().map(|r| r.spec.kind);
-        match run_comment_supersession(&older, p, kind_of) {
+        let role_of = |run_id: &str| db.run(run_id).ok().flatten().map(|r| r.spec.role);
+        match run_comment_supersession(&older, p, role_of) {
             Some(Ok(())) => tidied.replaced.push(older),
             Some(Err(why)) => tidied.kept.push((older, why)),
             None => {}
@@ -584,14 +584,9 @@ pub fn left_by_run(p: &Proposal) -> bool {
 }
 
 /// Whether the draft is a description update carrying a `Gossamr Plan` section that an agent run left: the plan a build
-/// follows once the person approves it.
+/// is made from once the person approves it.
 pub fn is_run_plan_rewrite(p: &Proposal) -> bool {
     matches!(p.origin, Origin::Run { .. }) && matches!(&p.intent, Intent::Rewrite { body: Some(b), .. } if b.to.plan_section().is_some()) && !p.is_triage_description()
-}
-
-/// Whether Pip changed the draft's text and the person never edited it after: what it says is partly Pip's words.
-pub fn revised_by_pip_unedited(p: &Proposal) -> bool {
-    p.revisions.iter().any(|r| r.note == REVISED_BY_PIP) && !person_edited(p)
 }
 
 /// What Pip may revise: its own pending drafts, and a pending comment, new ticket, breakdown into subtasks or description
@@ -832,7 +827,7 @@ mod tests {
     }
 
     #[test]
-    fn a_run_comment_is_replaced_only_by_one_of_a_run_of_the_same_kind_that_can_be_found() {
+    fn a_run_comment_is_replaced_only_by_one_of_a_run_of_the_same_role_that_can_be_found() {
         let db = Db::in_memory().unwrap();
         let comment = |id: &str, run: &str| {
             let mut p = made(&db, comment_draft("1"));
@@ -842,14 +837,13 @@ mod tests {
             p
         };
         let (older, newer) = (comment("a", "run-a"), comment("b", "run-b"));
-        let verdict = |known: &'static [(&'static str, crate::domain::RunKind)]| {
-            run_comment_supersession(&older, &newer, move |id| known.iter().find(|(r, _)| *r == id).map(|(_, k)| *k))
+        let verdict = |known: &'static [(&'static str, &'static str)]| {
+            run_comment_supersession(&older, &newer, move |id| known.iter().find(|(r, _)| *r == id).map(|(_, role)| crate::domain::Role::parse(role).unwrap()))
         };
-        use crate::domain::RunKind::{Investigate, Review};
-        assert_eq!(verdict(&[("run-a", Review), ("run-b", Review)]), Some(Ok(())));
-        assert_eq!(verdict(&[("run-a", Investigate), ("run-b", Review)]), None, "another kind");
-        assert_eq!(verdict(&[("run-b", Review)]), None, "the older run is gone");
-        assert_eq!(verdict(&[("run-a", Review)]), None, "the newer run is gone");
+        assert_eq!(verdict(&[("run-a", "reviewer"), ("run-b", "reviewer")]), Some(Ok(())));
+        assert_eq!(verdict(&[("run-a", "investigator"), ("run-b", "reviewer")]), None, "another role");
+        assert_eq!(verdict(&[("run-b", "reviewer")]), None, "the older run is gone");
+        assert_eq!(verdict(&[("run-a", "reviewer")]), None, "the newer run is gone");
     }
 
     #[test]
@@ -863,10 +857,10 @@ mod tests {
             p
         };
         let (mut older, newer) = (comment("a", "run-a"), comment("b", "run-b"));
-        let kind_of = |_: &str| Some(crate::domain::RunKind::Review);
-        assert_eq!(run_comment_supersession(&older, &newer, kind_of), Some(Ok(())));
+        let role_of = |_: &str| Some(crate::domain::ResultKind::Review.role());
+        assert_eq!(run_comment_supersession(&older, &newer, role_of), Some(Ok(())));
         older.error = Some("Jira is down".into());
-        assert_eq!(run_comment_supersession(&older, &newer, kind_of), None);
+        assert_eq!(run_comment_supersession(&older, &newer, role_of), None);
     }
 
     fn subtasks_draft(summaries: &[&str]) -> Draft {
@@ -1161,7 +1155,7 @@ mod tests {
     fn a_draft_to_start_message_or_answer_an_agent_is_refused() {
         let db = Db::in_memory().unwrap();
         let intents = [
-            Intent::StartRun { connection_id: "c".into(), item: Some(item_ref("1")), spec: crate::domain::fixtures::run_spec() },
+            Intent::StartRun { connection_id: "c".into(), item: Some(item_ref("1")), spec: crate::domain::fixtures::run_spec().into() },
             Intent::FollowUp { connection_id: "c".into(), run_id: "run-1".into(), short_id: None, item: Some(item_ref("1")), message: "More.".into(), reason: "open questions".into() },
             Intent::RunAnswer { connection_id: "c".into(), run_id: "run-1".into(), short_id: None, item: Some(item_ref("1")), message: "Use staging.".into(), question: None },
         ];

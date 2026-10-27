@@ -21,7 +21,7 @@ fn path_text(run: &Run) -> String {
 fn insert(conn: &rusqlite::Connection, run: &Run, start_key: Option<&str>) -> rusqlite::Result<usize> {
     let draft = Some(run.proposal_id.as_str()).filter(|p| !p.is_empty());
     conn.execute(
-        "INSERT INTO runs (id, proposal_id, start_key, connection_id, item_id, item_key, kind, repo, expected_worktree, short_id, session_id,
+        "INSERT INTO runs (id, proposal_id, start_key, connection_id, item_id, item_key, role, repo, expected_worktree, short_id, session_id,
            state, queued_at, last_progress_at, ended_at, data)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
         params![
@@ -31,7 +31,7 @@ fn insert(conn: &rusqlite::Connection, run: &Run, start_key: Option<&str>) -> ru
             run.connection_id,
             run.item.as_ref().map(|i| i.external_id.clone()),
             run.item.as_ref().map(|i| i.key.clone()),
-            run.spec.kind.as_str(),
+            run.spec.role.as_str(),
             run.spec.repo,
             path_text(run),
             run.short_id.as_ref().map(|s| s.as_str().to_owned()),
@@ -489,6 +489,41 @@ mod tests {
         assert_eq!(db.run_by_start_key("p1").unwrap().unwrap().id, "old");
         assert!(!db.insert_started_run(&started("r1"), "p1").unwrap().1);
         assert_eq!(count_runs(&db), 1);
+    }
+
+    #[test]
+    fn a_run_stored_with_a_kind_and_the_fields_of_its_kind_reads_as_a_role_and_keeps_them() {
+        let db = Db::in_memory().unwrap();
+        let mut run = serde_json::to_value(Run::queued("old".into(), "p1".into(), "c".into(), None, run_spec(), "f".into(), now())).unwrap();
+        run["spec"] = serde_json::json!({
+            "kind": "review", "repo": "acme/webshop", "clonePath": "/Users/me/Code/webshop", "base": "main", "name": "eng-1-cart-0001",
+            "instruction": "Review the pull request.", "buildAccount": "Rounded.", "buildFromRun": "b1", "pr": 12, "prSha": "a1b2c3d4e5f6", "allowPush": false
+        });
+        run["state"] = "done".into();
+        run["readOnly"] = serde_json::json!({ "mode": "dontAsk", "allow": [], "deny": ["Edit"], "guard": "read-only" });
+        db.execute_batch(&format!(
+            "INSERT INTO runs (id, proposal_id, start_key, connection_id, role, repo, expected_worktree, state, queued_at, last_progress_at, data) VALUES ('old', 'p1', 'p1', 'c', 'review', 'acme/webshop', '/w', 'done', 't', 't', '{}')",
+            run.to_string().replace('\'', "''")
+        ))
+        .unwrap();
+        let read = db.run("old").unwrap().unwrap();
+        assert_eq!((read.spec.role.as_str(), read.spec.brief.as_str(), read.spec.pr), ("review", "Review the pull request.", Some(12)));
+        assert_eq!((read.spec.earlier.build_account.as_deref(), read.spec.earlier.build_from_run.as_deref()), (Some("Rounded."), Some("b1")));
+        assert!(read.read_only.is_some());
+        db.save_run(&read).unwrap();
+        let again = db.run("old").unwrap().unwrap();
+        assert_eq!(again, read, "saved and read again it is the same run, under its new names");
+        let json: String = db.conn.query_row("SELECT data FROM runs WHERE id = 'old'", [], |r| r.get(0)).unwrap();
+        assert!(json.contains("\"role\":\"review\"") && !json.contains("\"kind\":\"review\""), "{json}");
+    }
+
+    #[test]
+    fn a_new_run_is_stored_under_its_role() {
+        let db = Db::in_memory().unwrap();
+        let spec = crate::domain::RunSpec { role: crate::domain::Role::parse("Code Reviewer").unwrap(), name: "eng-1-cart-0002".into(), ..run_spec() };
+        db.insert_run(&Run::queued("r".into(), String::new(), "c".into(), None, spec, "f".into(), now())).unwrap();
+        let role: String = db.conn.query_row("SELECT role FROM runs WHERE id = 'r'", [], |r| r.get(0)).unwrap();
+        assert_eq!(role, "code reviewer");
     }
 
     #[test]

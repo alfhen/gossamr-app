@@ -3,8 +3,7 @@ use std::sync::Mutex;
 
 use super::*;
 use crate::domain::fixtures::run_spec;
-use crate::domain::RunSpec;
-use crate::domain::{RunFailure, READ_ONLY_GUARD};
+use crate::domain::{ResultKind, RunFailure, RunSpec};
 use crate::codehost::github::testserver::{pull_reply, Reply};
 use crate::inbox::testing::{fixture_watching, fixture_watching_with, Fixture};
 use crate::runs::cli::{ClaudeCli, SystemCli};
@@ -105,9 +104,9 @@ async fn a_queued_run_launches_into_its_worktree_with_the_prompt_the_person_appr
     assert_eq!((req.name.as_str(), req.worktree.as_str()), ("Gossamr: CA-1 investigate", "eng-1-fix-cart-0001"));
     assert_eq!(run.spec.name, "eng-1-fix-cart-0001", "the stored name stays the plain slug");
     assert_eq!(run.digest, run.spec.digest(), "the session title is not part of what was approved");
-    assert_eq!(req.guard, format!("{GUARD} {READ_ONLY_GUARD}"), "an investigation is read-only");
+    assert_eq!(req.guard, GUARD);
     assert_eq!(req.prompt, render_prompt(&run.spec));
-    assert!(req.prompt.starts_with("Your worktree starts at the clone's current HEAD"));
+    assert!(req.prompt.starts_with("You are working as an investigate on CA-1.") && req.prompt.contains("Your worktree starts at the clone's current HEAD"));
     assert_eq!(run.expected_worktree, rig.clone.join(".claude/worktrees/eng-1-fix-cart-0001"));
 
     let [entry] = rig.svc.index.live().try_into().unwrap();
@@ -116,7 +115,7 @@ async fn a_queued_run_launches_into_its_worktree_with_the_prompt_the_person_appr
 }
 
 fn build_spec(rig: &Rig, n: u32) -> RunSpec {
-    RunSpec { kind: RunKind::Build, instruction: crate::domain::default_instruction(RunKind::Build).into(), ..rig.spec(n) }
+    RunSpec { role: ResultKind::Build.role(), brief: "Make the change.".into(), ..rig.spec(n) }
 }
 
 async fn approved(rig: &Rig, spec: RunSpec) -> Run {
@@ -128,87 +127,47 @@ fn last_launch(rig: &Rig) -> LaunchRequest {
 }
 
 #[tokio::test]
-async fn a_read_only_run_launches_with_the_restriction_it_records_and_a_build_with_none() {
-    let rig = ready().await;
-    let queued = rig.queued(1).await;
-    assert_eq!(queued.read_only, None, "nothing is recorded before the launch");
-    rig.svc.launch(&queued.id).await.unwrap();
-    let run = rig.get(&queued).await;
-    let expected = run.spec.read_only().expect("an investigation is read-only");
-    assert_eq!(run.read_only.as_ref(), Some(&expected));
-    let req = last_launch(&rig);
-    assert_eq!(req.read_only.as_ref(), Some(&expected));
-    assert!(req.guard.contains(READ_ONLY_GUARD) && req.guard.starts_with(GUARD));
-    assert_eq!(run.digest, run.spec.digest());
-
-    let build = approved(&rig, build_spec(&rig, 2)).await;
-    rig.svc.launch(&build.id).await.unwrap();
-    let req = last_launch(&rig);
-    assert_eq!((req.read_only.as_ref(), req.guard.as_str()), (None, GUARD), "a build keeps exactly what it had");
-    assert_eq!(rig.get(&build).await.read_only, None);
-}
-
-#[tokio::test]
-async fn every_read_only_kind_carries_the_restriction_into_its_launch() {
+async fn a_run_of_any_role_launches_in_the_persons_own_configuration_and_records_no_restriction() {
     let rig = build(None, |s| s.with_cap(6)).await;
-    for (n, kind) in [(1, RunKind::Triage), (2, RunKind::Plan), (3, RunKind::Verify)] {
-        let run = approved(&rig, RunSpec { kind, instruction: crate::domain::default_instruction(kind).into(), ..rig.spec(n) }).await;
+    for (n, kind) in [(1, ResultKind::Investigate), (2, ResultKind::Plan), (3, ResultKind::Verify), (4, ResultKind::Build)] {
+        let run = approved(&rig, RunSpec { role: kind.role(), ..rig.spec(n) }).await;
         rig.svc.launch(&run.id).await.unwrap();
         let req = last_launch(&rig);
-        assert_eq!(req.read_only, run.spec.read_only(), "{kind:?}");
-        assert!(req.read_only.as_ref().is_some_and(|ro| ro.mode == "dontAsk" && ro.deny.iter().any(|r| r == "Bash(git push *)")), "{kind:?}");
-        assert_eq!(rig.get(&run).await.state, RunState::Launching, "{kind:?}");
+        assert_eq!(req.guard, GUARD, "{kind:?}");
+        let launched = rig.get(&run).await;
+        assert_eq!((launched.state, launched.read_only), (RunState::Launching, None), "{kind:?}");
+        assert_eq!(launched.digest, run.spec.digest());
     }
 }
 
 #[tokio::test]
-async fn a_retried_read_only_run_launches_with_the_restriction_again() {
-    let rig = ready().await;
+async fn a_retried_run_and_one_that_waited_for_a_slot_launch_the_same_way() {
+    let rig = build(None, |s| s.with_cap(1)).await;
     rig.cli.with(|s| s.outcome = Outcome::Exits);
     let run = rig.queued(1).await;
     rig.svc.launch(&run.id).await.unwrap();
     assert_eq!(rig.get(&run).await.state, RunState::Failed);
     rig.cli.with(|s| s.outcome = Outcome::Starts);
     let again = rig.svc.retry_launch(&run.id).await.unwrap();
-    assert_eq!(again.state, RunState::Launching);
-    let launches = rig.cli.0.lock().unwrap().launches.clone();
-    assert_eq!(launches.len(), 2);
-    assert!(launches.iter().all(|l| l.read_only == run.spec.read_only() && l.read_only.is_some()));
-    assert_eq!(again.read_only, run.spec.read_only());
-}
+    assert_eq!((again.state, again.read_only.clone()), (RunState::Launching, None));
 
-#[tokio::test]
-async fn a_read_only_run_that_waited_for_a_slot_launches_with_the_restriction() {
-    let rig = build(None, |s| s.with_cap(1)).await;
-    let build_run = approved(&rig, build_spec(&rig, 1)).await;
-    rig.svc.launch(&build_run.id).await.unwrap();
     let waiting = rig.queued(2).await;
     rig.svc.launch(&waiting.id).await.unwrap();
     assert!(rig.get(&waiting).await.slot_wait_since.is_some());
-    rig.set(&build_run, |r| r.state = RunState::Done).await;
-    rig.svc.index.mark_terminal(&build_run.id).unwrap();
+    rig.set(&again, |r| r.state = RunState::Done).await;
+    rig.svc.index.mark_terminal(&again.id).unwrap();
     assert_eq!(rig.svc.launch_waiting().await.unwrap(), std::slice::from_ref(&waiting.id));
-    let req = last_launch(&rig);
-    assert_eq!(req.read_only, waiting.spec.read_only());
-    assert!(req.read_only.is_some() && req.guard.contains(READ_ONLY_GUARD));
-    assert_eq!(rig.get(&waiting).await.read_only, waiting.spec.read_only());
+    assert_eq!(rig.cli.0.lock().unwrap().launches.iter().map(|l| l.guard.as_str()).collect::<Vec<_>>(), [GUARD; 3]);
 }
 
 #[tokio::test]
-async fn a_read_only_run_never_launches_on_a_claude_without_the_restriction_and_a_build_still_does() {
+async fn a_run_stored_with_the_restriction_of_an_earlier_release_is_launched_without_it_and_says_so() {
     let rig = ready().await;
-    rig.cli.with(|s| s.read_only = false);
-    let run = rig.queued(1).await;
-    rig.svc.launch(&run.id).await.unwrap();
-    let failed = rig.get(&run).await;
-    assert_eq!((failed.state, failed.error.as_deref()), (RunState::Failed, Some(Failure::CantRestrict.to_string().as_str())));
-    assert!(!Failure::CantRestrict.to_string().contains("background agents"), "--bg works; only the restriction is missing");
-    assert_eq!((failed.read_only, rig.cli.launches()), (None, 0), "nothing reached the CLI");
-
-    let build = approved(&rig, build_spec(&rig, 2)).await;
-    rig.svc.launch(&build.id).await.unwrap();
-    assert_eq!(rig.get(&build).await.state, RunState::Launching, "a build needs nothing new");
-    assert_eq!(rig.cli.launches(), 1);
+    let queued = rig.queued(1).await;
+    rig.set(&queued, |r| r.read_only = Some(crate::domain::ReadOnly { mode: "dontAsk".into(), allow: vec![], deny: vec!["Edit".into()], guard: "g".into(), setting_sources: None, strict_mcp_config: false })).await;
+    rig.svc.launch(&queued.id).await.unwrap();
+    assert_eq!(rig.get(&queued).await.read_only, None, "the record is what it was launched with");
+    assert_eq!(last_launch(&rig).guard, GUARD);
 }
 
 #[tokio::test]
@@ -860,7 +819,6 @@ mod through_the_real_spawner {
 
     const FAKE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/test-support/fake-claude.sh");
     /// Never passed: none of these would make a run safer than the person's own setup, and some would loosen it.
-    /// `--setting-sources` and `--strict-mcp-config` narrow it, and are passed for a read-only kind only.
     const FORBIDDEN: [&str; 4] = [
         "--dangerously-skip-permissions",
         "--settings",
@@ -868,8 +826,8 @@ mod through_the_real_spawner {
         "--session-id",
     ];
 
-    /// Passed only for a read-only kind, once each; a Build gets none of them.
-    const READ_ONLY_FLAGS: [&str; 5] = ["--permission-mode", "--setting-sources", "--strict-mcp-config", "--allowedTools", "--disallowedTools"];
+    /// Never passed either: they replace the person's own mode, settings and MCP servers.
+    const RESTRICTING_FLAGS: [&str; 4] = ["--permission-mode", "--setting-sources", "--strict-mcp-config", "--disallowedTools"];
 
     struct Real {
         rig: Rig,
@@ -926,25 +884,12 @@ mod through_the_real_spawner {
         let log = calls(&real);
         assert!(!FORBIDDEN.iter().any(|flag| log.lines().any(|l| l == *flag)), "{log}");
         let launch = log.split("---\n").find(|call| call.contains("\n--bg\n")).unwrap();
-        let ro = run.spec.read_only().unwrap();
         let expected = format!(
-            "cwd={}\n--bg\n--name\nGossamr: CA-1 investigate\n--worktree\neng-1-fix-cart-0001\n--permission-mode\ndontAsk\n--setting-sources\n\n--strict-mcp-config\n--allowedTools\n{}\n--disallowedTools\n{}\n--append-system-prompt\n{GUARD} {READ_ONLY_GUARD}\n--\n",
+            "cwd={}\n--bg\n--name\nGossamr: CA-1 investigate\n--worktree\neng-1-fix-cart-0001\n--append-system-prompt\n{GUARD}\n--\n",
             real.rig.clone.display(),
-            ro.allow.join("\n"),
-            ro.deny.join("\n"),
         );
         assert!(launch.starts_with(&expected), "{launch}");
-        assert!(launch.lines().any(|l| l == "Bash(git push *)"), "a rule with spaces is one argument");
-        for flag in READ_ONLY_FLAGS {
-            assert_eq!(launch.lines().filter(|l| *l == flag).count(), 1, "{flag}");
-        }
-
-        let build = RunSpec { kind: RunKind::Build, ..real.rig.spec(2) };
-        let build = real.rig.fx.core.queue_test_run(build, Some(real.rig.fx.item("CA-1"))).await.unwrap();
-        real.rig.svc.launch(&build.id).await.unwrap();
-        let after = calls(&real);
-        let built = after.split("---\n").filter(|call| call.contains("\n--bg\n")).nth(1).unwrap();
-        assert!(built.contains("\n--append-system-prompt\n") && !READ_ONLY_FLAGS.iter().chain(FORBIDDEN.iter()).any(|flag| built.lines().any(|l| l == *flag)), "a build is launched as before: {built}");
+        assert!(!RESTRICTING_FLAGS.iter().any(|flag| launch.lines().any(|l| l == *flag)), "the person's own settings apply: {launch}");
 
         let seen: BTreeSet<String> = std::fs::read_to_string(real.scenario_dir.join("env.last")).unwrap().lines().map(String::from).collect();
         let captured: BTreeSet<String> = ["PATH", "HOME", "FAKE_CLAUDE_SCENARIO"].map(String::from).into();
@@ -961,7 +906,7 @@ mod through_the_real_spawner {
         let real = real().await;
         let run = real.rig.queued(1).await;
         let spec = &run.spec;
-        let request = LaunchRequest { cwd: spec.clone_path.clone(), name: "x".into(), worktree: spec.name.clone(), guard: GUARD.into(), prompt: "p".into(), agent: None, read_only: None };
+        let request = LaunchRequest { cwd: spec.clone_path.clone(), name: "x".into(), worktree: spec.name.clone(), guard: GUARD.into(), prompt: "p".into(), agent: None };
         let started = real.cli.launch(&request).await.unwrap();
         real.rig.set(&run, |r| {
             r.state = RunState::Failed;
@@ -993,14 +938,14 @@ mod through_the_real_spawner {
     }
 }
 
-mod kinds {
+mod roles {
     use super::*;
 
     const PULL: &str = "/repos/acme/webshop/pulls/12";
 
-    fn of(rig: &Rig, kind: RunKind, n: u32) -> RunSpec {
-        let pr = (kind == RunKind::Review).then_some(12);
-        RunSpec { kind, pr, instruction: String::new(), ..rig.spec(n) }
+    fn of(rig: &Rig, kind: ResultKind, n: u32) -> RunSpec {
+        let pr = (kind == ResultKind::Review).then_some(12);
+        RunSpec { role: kind.role(), pr, ..rig.spec(n) }
     }
 
     async fn approved(rig: &Rig, spec: RunSpec) -> Run {
@@ -1008,10 +953,10 @@ mod kinds {
     }
 
     #[tokio::test]
-    async fn every_kind_launches_through_the_cli_with_the_prompt_that_was_approved() {
+    async fn every_role_launches_through_the_cli_with_the_prompt_it_was_given() {
         let same = || pull_reply(12, "open", Some("acme/webshop"), "main");
         let rig = build_with(vec![(PULL, vec![same()])], None, |s| s.with_cap(10)).await;
-        for (n, kind) in [RunKind::Triage, RunKind::Plan, RunKind::Verify, RunKind::Build, RunKind::Review].into_iter().enumerate() {
+        for (n, kind) in [ResultKind::Triage, ResultKind::Plan, ResultKind::Verify, ResultKind::Build, ResultKind::Review].into_iter().enumerate() {
             let run = approved(&rig, of(&rig, kind, n as u32 + 1)).await;
             rig.svc.launch(&run.id).await.unwrap();
             let req = rig.cli.0.lock().unwrap().launches.last().unwrap().clone();
@@ -1022,66 +967,27 @@ mod kinds {
     }
 
     #[tokio::test]
-    async fn a_review_is_checked_again_just_before_launch_and_never_spawns_for_a_fork() {
+    async fn a_run_on_a_pull_request_launches_told_to_check_out_the_commit_it_was_pinned_to() {
+        let rig = build_with(vec![(PULL, vec![crate::codehost::github::testserver::draft_pull_reply(12, Some("acme/webshop"), "main")])], None, |s| s.with_cap(10)).await;
+        let run = approved(&rig, of(&rig, ResultKind::Review, 1)).await;
+        assert_eq!((run.spec.pr, run.spec.pr_sha.as_deref()), (Some(12), Some("a1b2c3d4e5f6")));
+        rig.svc.launch(&run.id).await.unwrap();
+        let req = rig.cli.0.lock().unwrap().launches.last().unwrap().clone();
+        assert_eq!(req.prompt, render_prompt(&run.spec));
+        assert!(req.prompt.contains("`git fetch origin pull/12/head` then `git checkout --detach a1b2c3d4e5f6`") && req.prompt.contains("stop and report blocked"), "{}", req.prompt);
+    }
+
+    #[tokio::test]
+    async fn a_run_on_a_pull_request_is_checked_again_just_before_launch_and_never_spawns_for_a_fork() {
         let same = pull_reply(12, "open", Some("acme/webshop"), "main");
         let fork = pull_reply(12, "open", Some("mallory/webshop"), "main");
         let rig = build_with(vec![(PULL, vec![same, fork])], None, |s| s).await;
-        let run = approved(&rig, of(&rig, RunKind::Review, 1)).await;
+        let run = approved(&rig, of(&rig, ResultKind::Review, 1)).await;
         rig.svc.launch(&run.id).await.unwrap();
         let after = rig.get(&run).await;
         assert_eq!(after.state, RunState::Failed);
         assert!(after.error.unwrap().contains("comes from a fork"));
         assert_eq!(rig.cli.launches(), 0);
-    }
-
-    #[tokio::test]
-    async fn a_build_from_a_plan_launches_with_the_plan_it_follows() {
-        let rig = build_with(vec![], None, |s| s.with_cap(10)).await;
-        let mut plan = approved(&rig, of(&rig, RunKind::Plan, 1)).await;
-        plan.state = RunState::Done;
-        plan.result = Some("## Approach\n\nRound once.\n\nFor Jira:\nPlan attached to the run.".into());
-        plan.result_complete = true;
-        rig.fx.core.save_run(&plan).await.unwrap();
-
-        let build = RunSpec { plan_from_run: Some(plan.id.clone()), ..of(&rig, RunKind::Build, 2) };
-        let run = rig.fx.core.queue_test_run(build, Some(rig.fx.item("CA-1"))).await.unwrap();
-        rig.svc.launch(&run.id).await.unwrap();
-        let req = rig.cli.0.lock().unwrap().launches.last().unwrap().clone();
-        assert_eq!(req.prompt, render_prompt(&run.spec));
-        assert!(req.prompt.contains("<<<PLAN\n## Approach\n\nRound once.") && req.prompt.contains("do not deviate silently") && req.prompt.contains("do not push"));
-        assert!(req.prompt.contains("planning run's own answer") && !req.prompt.contains("edited and approved"));
-    }
-
-    #[tokio::test]
-    async fn a_build_that_may_push_launches_told_to_open_a_draft_pull_request() {
-        let rig = build_with(vec![], None, |s| s.with_cap(10)).await;
-        let run = approved(&rig, RunSpec { allow_push: true, ..of(&rig, RunKind::Build, 1) }).await;
-        rig.svc.launch(&run.id).await.unwrap();
-        let req = rig.cli.0.lock().unwrap().launches.last().unwrap().clone();
-        assert_eq!(req.prompt, render_prompt(&run.spec));
-        assert!(req.prompt.contains("`gh pr create --draft`") && req.prompt.contains("never merge it") && req.prompt.contains("under 'For Jira:'"));
-        let quiet = approved(&rig, of(&rig, RunKind::Build, 2)).await;
-        rig.svc.launch(&quiet.id).await.unwrap();
-        assert!(!rig.cli.0.lock().unwrap().launches.last().unwrap().prompt.contains("gh pr create"));
-    }
-
-    #[tokio::test]
-    async fn a_review_from_a_build_launches_with_the_account_it_carries() {
-        let rig = build_with(vec![(PULL, vec![crate::codehost::github::testserver::draft_pull_reply(12, Some("acme/webshop"), "main")])], None, |s| s.with_cap(10)).await;
-        let mut build = approved(&rig, RunSpec { allow_push: true, ..of(&rig, RunKind::Build, 1) }).await;
-        build.state = RunState::Done;
-        build.result = Some("Rounded once and added a test.\n\nFor Jira:\nDraft PR #12 opened.".into());
-        build.result_complete = true;
-        rig.fx.core.save_run(&build).await.unwrap();
-        let pr = crate::codehost::links::tests::pr(12, &format!("worktree-{}", build.spec.name), "T", "");
-        rig.fx.core.with_code_db("github:ann", |db| db.upsert_code_changes(&[pr], "2026-09-29T00:00:00Z")).unwrap();
-
-        let review = RunSpec { build_from_run: Some(build.id.clone()), ..of(&rig, RunKind::Review, 2) };
-        let run = rig.fx.core.queue_test_run(review, Some(rig.fx.item("CA-1"))).await.unwrap();
-        rig.svc.launch(&run.id).await.unwrap();
-        let req = rig.cli.0.lock().unwrap().launches.last().unwrap().clone();
-        assert_eq!(req.prompt, render_prompt(&run.spec));
-        assert!(req.prompt.contains("<<<BUILD\nRounded once and added a test.") && req.prompt.contains("at commit a1b2c3d4e5f6") && req.prompt.contains("claim to check"));
     }
 
 }

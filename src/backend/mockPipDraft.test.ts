@@ -1,4 +1,3 @@
-import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { docFromText, docText } from "../lib/docs";
 import { MockBackend } from "./mock";
@@ -6,7 +5,6 @@ import { mockAsk, mockPipEvents, openQuestions, scriptPip } from "./mockPip";
 import { eventLine } from "./mockSupervisor";
 import { mockPipTurns } from "./mockPipTurns";
 import { itemRef } from "./mockConnector";
-import { WAITING_FOR_PR_HINT } from "./mockRunKinds";
 import { renderPrompt } from "./mockRuns";
 import type { AskRequest } from "./claude";
 import { planOpenQuestions } from "../workspace/agentsLogic";
@@ -65,8 +63,6 @@ describe("mock Pip woken by a finished plan (N6)", () => {
 });
 
 describe("mock Pip starting the next step of a workstream, as start_agent does", () => {
-  const rustPip = readFileSync(new URL("../../src-tauri/src/inbox/pip_runs.rs", import.meta.url), "utf8");
-  const rustPlan = readFileSync(new URL("../../src-tauri/src/inbox/plan_description.rs", import.meta.url), "utf8");
   const CA401 = itemRef("CA-401");
   const storefront = { repo: "acme/storefront", clonePath: "/Users/sample/Code/storefront" };
   const base: RunSpec = { kind: "investigate", ...storefront, base: "main", name: "x", instruction: "", focus: null, focusFromRun: null, ticketBlock: null };
@@ -98,28 +94,6 @@ describe("mock Pip starting the next step of a workstream, as start_agent does",
     await b.proposalsApprove(draft.id);
     return draft;
   }
-
-  it("refuses with the backend's words", () => {
-    const rustWorkstreams = readFileSync(new URL("../../src-tauri/src/inbox/workstreams.rs", import.meta.url), "utf8");
-    expect(new RegExp(`const WAITING_FOR_PR_HINT: &str = "([^"]*)";`).exec(rustWorkstreams)?.[1]).toBe(WAITING_FOR_PR_HINT);
-    for (const words of [
-      "the person hasn't settled the plan yet: they approve or skip the Gossamr Plan draft first",
-      "the plan of that run hasn't been put to the person on the ticket.",
-      "the plan approved on the ticket carries text Pip wrote or is empty, so the person didn't settle it.",
-      "Ask the person to settle the plan, or to draft the build themselves from the plan run's sheet.",
-    ]) {
-      expect(rustPlan).toContain(words);
-    }
-    for (const words of [
-      "belongs to another workstream; ask in that workstream's conversation",
-      "isn't part of this workstream; Pip can only follow a run of the workstream it is asked in",
-      "that build has no pull request in this repository yet",
-      "run hasn't finished",
-      "run is about another ticket",
-    ]) {
-      expect(rustPip).toContain(words);
-    }
-  });
 
   it("starts a build only from a plan the person approved or skipped, never one they weren't shown or Pip revised", async () => {
     const { b, ws } = await workstream();

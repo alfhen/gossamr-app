@@ -5,7 +5,7 @@
 use serde_json::{json, Value};
 
 use super::{Finding, Report, ReportStatus, ReviewVerdict, Severity};
-use crate::domain::{RunKind, REPORT_TOOL};
+use crate::domain::{ResultKind, REPORT_TOOL};
 use crate::runs::result::{cut, declines_breakdown, fit, one_line, plain, sanitize, title_cut, TicketProposal, BODY_LIMIT, NOTE_LIMIT, SUBTASK_MAX};
 
 /// Calls and refusals a run may make in total; past either the tool records nothing more.
@@ -69,7 +69,7 @@ pub fn definition() -> Value {
 /// What the run is, as far as the rules depend on it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Target {
-    pub kind: RunKind,
+    pub kind: Option<ResultKind>,
     /// An investigation that ends as a new ticket rather than as a note on one.
     pub ticketless: bool,
 }
@@ -160,7 +160,7 @@ pub fn check(args: &Value, target: Target) -> Result<Checked, Vec<String>> {
 
     let mut subtasks = Vec::new();
     match object.get("subtasks").filter(|v| !v.is_null()) {
-        Some(_) if target.kind != RunKind::Triage || target.ticketless => notes.push("subtasks ignored: only a triage on a ticket proposes them".to_string()),
+        Some(_) if target.kind != Some(ResultKind::Triage) || target.ticketless => notes.push("subtasks ignored: only a triage on a ticket proposes them".to_string()),
         Some(raw) => subtasks = subtasks_of(&structured(raw), &mut problems, &mut notes),
         None => {}
     }
@@ -168,7 +168,7 @@ pub fn check(args: &Value, target: Target) -> Result<Checked, Vec<String>> {
     // Read only as a flag: it decides whether a Plan starts on its own, so prose never stands in for it.
     let mut plan_recommended = None;
     match object.get("planRecommended").filter(|v| !v.is_null()) {
-        Some(_) if target.kind != RunKind::Triage || target.ticketless => notes.push("planRecommended ignored: only a triage on a ticket gives one".to_string()),
+        Some(_) if target.kind != Some(ResultKind::Triage) || target.ticketless => notes.push("planRecommended ignored: only a triage on a ticket gives one".to_string()),
         Some(Value::Bool(b)) => plan_recommended = Some(*b),
         Some(_) => problems.push("planRecommended: must be true or false.".into()),
         None => {}
@@ -176,7 +176,7 @@ pub fn check(args: &Value, target: Target) -> Result<Checked, Vec<String>> {
 
     let mut plan = None;
     if let Some(raw) = object.get("plan").filter(|v| !v.is_null()) {
-        if target.kind != RunKind::Plan {
+        if target.kind != Some(ResultKind::Plan) {
             notes.push("plan ignored: only a plan run gives one".to_string());
         } else if let Some(text) = text_of("plan", raw, &mut problems) {
             let clean = sanitize(&text).trim().to_string();
@@ -195,7 +195,7 @@ pub fn check(args: &Value, target: Target) -> Result<Checked, Vec<String>> {
     let (mut verdict, mut findings) = (None, Vec::new());
     let given_verdict = object.get("verdict").filter(|v| !v.is_null());
     let given_findings = object.get("findings").filter(|v| !v.is_null());
-    if target.kind == RunKind::Review {
+    if target.kind == Some(ResultKind::Review) {
         verdict = match given_verdict.and_then(Value::as_str) {
             Some("pass") => Some(ReviewVerdict::Pass),
             Some("blocking") => Some(ReviewVerdict::Blocking),

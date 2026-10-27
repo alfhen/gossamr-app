@@ -6,7 +6,6 @@ import { DENIED_MESSAGE, parsePermission, permissionOffer, readAs, READ_ONLY_REF
 interface Case {
   case: string;
   kind: string;
-  allowPush: boolean;
   name: string;
   readOnly: boolean;
   needs: string;
@@ -25,7 +24,7 @@ const RESTRICTED: ReadOnly = { mode: "dontAsk", allow: ["Bash(git fetch origin m
 function runOf(c: Case) {
   let needs = c.needs;
   while ([...needs].length < (c.padTo ?? 0)) needs += "x";
-  return { needs, readOnly: c.readOnly ? RESTRICTED : null, spec: { kind: c.kind as RunKind, allowPush: c.allowPush, name: c.name }, expectedWorktree: c.worktree };
+  return { needs, readOnly: c.readOnly ? RESTRICTED : null, spec: { kind: c.kind as RunKind, name: c.name }, expectedWorktree: c.worktree };
 }
 
 describe("a permission prompt, on the fixtures the Rust side also runs", () => {
