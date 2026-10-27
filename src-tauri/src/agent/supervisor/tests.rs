@@ -355,7 +355,7 @@ async fn a_stop_from_outside_and_a_silent_finish_after_a_continuation_are_caught
 async fn a_stop_the_person_asked_for_wakes_nobody_and_a_stop_at_a_limit_neither() {
     let t = setup().await;
     let stopped = t.run("r1", RunKind::Investigate, RunState::Stopped, |_| {}).await;
-    t.fx.core.record_run_action(&stopped, "run_stopped", None).await.unwrap();
+    t.fx.core.record_run_action_by(&stopped, Actor::Person, "run_stopped", None).await.unwrap();
     t.run("r2", RunKind::Triage, RunState::Stopped, |r| r.stopped_by_limit = true).await;
     t.sup.clone().on_run(t.fx.core.run("r2").await.unwrap().unwrap(), Attention::Limit).await;
     t.sweep().await;
@@ -365,6 +365,21 @@ async fn a_stop_the_person_asked_for_wakes_nobody_and_a_stop_at_a_limit_neither(
     t.fx.core.save_run(&Run { continued_at: Some(Utc::now() + chrono::Duration::seconds(5)), ..t.fx.core.run("r1").await.unwrap().unwrap() }).await.unwrap();
     t.sweep().await;
     assert_eq!(t.wakes().await.len(), 1);
+}
+
+#[tokio::test]
+async fn a_stop_pip_made_wakes_nobody_and_neither_does_a_stop_that_is_only_the_start_of_a_resume() {
+    let t = setup().await;
+    let stopped = t.run("r1", RunKind::Investigate, RunState::Stopped, |_| {}).await;
+    t.fx.core.record_run_action_by(&stopped, Actor::Pip, "run_stopped", None).await.unwrap();
+    t.run("r2", RunKind::Triage, RunState::Stopped, |r| r.unsent_answer = Some("Use staging.".into())).await;
+    t.sweep().await;
+    assert!(t.wake_turns().await.is_empty() && t.wakes().await.is_empty(), "{:?}", t.wakes().await);
+
+    // The message that was to wake r2 failed for good and the person cleared it: a stop nobody asked for is news again.
+    t.fx.core.save_run(&Run { unsent_answer: None, ..t.fx.core.run("r2").await.unwrap().unwrap() }).await.unwrap();
+    t.sweep().await;
+    assert_eq!(t.wakes().await, [("r2".to_string(), "stopped".to_string())]);
 }
 
 #[tokio::test]

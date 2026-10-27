@@ -6,7 +6,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use super::{ContainerRef, ItemRef};
+use super::{ContainerRef, CreatedBy, ItemRef, Origin};
 use crate::error::{Error, Result};
 use crate::runs::cli::ShortId;
 
@@ -241,12 +241,12 @@ pub fn allowed_kinds() -> &'static [RunKind] {
     &[RunKind::Investigate, RunKind::Triage, RunKind::Plan, RunKind::Build, RunKind::Review, RunKind::Verify]
 }
 
-/// The kinds Pip may propose: the ones that change nothing.
+/// The kinds Pip may start with no run before them: the ones that change nothing.
 pub fn pip_kinds() -> &'static [RunKind] {
     &[RunKind::Investigate, RunKind::Triage, RunKind::Plan, RunKind::Verify]
 }
 
-/// The kinds Pip may draft only as the successor of a finished run, each with the kind that run must be: a Build only
+/// The kinds Pip starts only as the successor of a finished run, each with the kind that run must be: a Build only
 /// with `from_run` a Done Plan run in the same workstream, on the same ticket and repository; a Review only with
 /// `from_run` a Done Build run whose pull request has been found.
 pub fn pip_chain_kinds() -> &'static [(RunKind, RunKind)] {
@@ -858,6 +858,8 @@ pub struct Continuation {
 #[serde(rename_all = "camelCase")]
 pub struct Run {
     pub id: String,
+    /// The draft the person approved to start it; empty for a run Pip started directly.
+    #[serde(default)]
     pub proposal_id: String,
     pub connection_id: String,
     pub item: Option<ItemRef>,
@@ -947,6 +949,12 @@ pub struct Run {
     /// the digest is untouched.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub permission_allowed: Option<PermissionAllowed>,
+    /// Who started it: the person, by approving a draft, or Pip, directly.
+    #[serde(default)]
+    pub created_by: CreatedBy,
+    /// The Pip turn that started it, when Pip did.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<Origin>,
 }
 
 /// The exact command the person chose to allow once, and when.
@@ -1042,7 +1050,15 @@ impl Run {
             unapproved_auto_start: None,
             read_only: None,
             permission_allowed: None,
+            created_by: CreatedBy::User,
+            origin: None,
         }
+    }
+
+    /// A run Pip started while answering `request_id`, in the conversation of `workstream`. It has no draft behind it.
+    pub fn started_by_pip(id: String, connection_id: String, item: Option<ItemRef>, spec: RunSpec, db_file: String, request_id: &str, at: DateTime<Utc>) -> Self {
+        let origin = Origin::Chat { request_id: request_id.into(), workstream: spec.workstream.clone() };
+        Run { created_by: CreatedBy::Pip, origin: Some(origin), ..Run::queued(id, String::new(), connection_id, item, spec, db_file, at) }
     }
 }
 
@@ -1893,6 +1909,21 @@ mod tests {
         let run: Run = serde_json::from_value(json).unwrap();
         assert_eq!((run.waited_secs, run.waiting_since, run.stopped_by_limit), (0, None, false));
         assert!(run.earlier_sessions.is_empty() && run.possible_continuations.is_empty());
+    }
+
+    #[test]
+    fn a_run_stored_before_pip_started_agents_reads_as_the_persons_and_one_pip_started_keeps_its_turn() {
+        let mut json = serde_json::to_value(Run::queued("r".into(), "p".into(), "c".into(), None, spec(), "f".into(), Utc::now())).unwrap();
+        for key in ["createdBy", "origin"] {
+            json.as_object_mut().unwrap().remove(key);
+        }
+        let old: Run = serde_json::from_value(json).unwrap();
+        assert_eq!((old.created_by, old.origin.clone(), old.proposal_id.as_str()), (CreatedBy::User, None, "p"));
+        assert!(serde_json::to_value(&old).unwrap().get("origin").is_none(), "a person's run stores no origin");
+
+        let by_pip = Run::started_by_pip("r2".into(), "c".into(), None, RunSpec { workstream: Some("w1".into()), ..spec() }, "f".into(), "req-1", Utc::now());
+        assert_eq!((by_pip.created_by, by_pip.proposal_id.as_str(), by_pip.origin.clone()), (CreatedBy::Pip, "", Some(Origin::Chat { request_id: "req-1".into(), workstream: Some("w1".into()) })));
+        assert_eq!(serde_json::from_value::<Run>(serde_json::to_value(&by_pip).unwrap()).unwrap(), by_pip);
     }
 
     #[test]

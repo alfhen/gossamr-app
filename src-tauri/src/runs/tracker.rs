@@ -213,6 +213,7 @@ pub struct Polled {
 impl RunService {
     pub async fn poll(&self) -> Polled {
         let polled = self.poll_with(Utc::now).await;
+        self.deliver_queued().await;
         self.announce_notices(Utc::now()).await;
         polled
     }
@@ -220,6 +221,7 @@ impl RunService {
     /// One look at `claude agents` for every unfinished run of the signed-in account, at the time `now`.
     pub async fn poll_at(&self, now: DateTime<Utc>) -> Polled {
         let polled = self.poll_with(|| now).await;
+        self.deliver_queued().await;
         self.announce_notices(now).await;
         polled
     }
@@ -334,6 +336,13 @@ impl RunService {
         for v in &views {
             if v.workstream.paused_reason.is_some() {
                 needs.entry(Some(v.workstream.id.clone())).or_default().push(Need { group: Group::Unblock, run_id: None, what: "It is paused until you resume it".to_owned(), since: v.workstream.created_at });
+            }
+        }
+        // A question Pip asked the person is a choice only they make.
+        for v in &views {
+            if let Some(ask) = &v.pip_ask {
+                let what = format!("Pip asks: {}", cut(&ask.question.split_whitespace().collect::<Vec<_>>().join(" "), 100));
+                needs.entry(Some(v.workstream.id.clone())).or_default().push(Need { group: Group::Decide, run_id: None, what, since: ask.at });
             }
         }
         // Every pending draft waits for approval, a plan or description rewrite as a decision. A reply drafted to a run's

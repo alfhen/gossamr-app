@@ -2,7 +2,8 @@
 //!
 //! A call is the run's own and no one else's: its token is checked against the run on every request, and what comes back
 //! is only what the run was already allowed to know. Nothing here writes to Jira, to the repository or to another run;
-//! `report` stores one validated report on the calling run and `ask` waits for a person's answer.
+//! `report` stores one validated report on the calling run, and `ask` waits for an answer from the person or Pip, or
+//! returns the message Pip queued for the run.
 
 use std::sync::Arc;
 
@@ -18,6 +19,7 @@ use crate::inbox::{Core, TicketRead};
 use crate::runs::agent_config::plain_id;
 use crate::runs::answer;
 use crate::runs::ask::{AlreadyAsking, Outcome};
+use crate::runs::message::take_for_ask;
 use crate::runs::report::{self, token_hash, Report, ReportStatus, ReviewVerdict, Severity, UNAVAILABLE};
 use crate::tracker::Connection;
 
@@ -108,6 +110,9 @@ impl AgentSide {
     async fn ask(&self, run: &Run, args: &Value) -> Result<String, String> {
         let question = opt(args, "question").map(crate::runs::result::sanitize).map(|q| crate::domain::clip(q.trim(), QUESTION_CHARS)).filter(|q| !q.is_empty());
         let Some(question) = question else { return Err("question: required, what you need decided or answered.".into()) };
+        if let Some(text) = take_for_ask(&self.core, run).await {
+            return Ok(answer::message(&text));
+        }
         let asks = self.core.asks();
         let waiting = asks.open(&run.id, &question).map_err(|AlreadyAsking| ALREADY_ASKING.to_owned())?;
         match waiting.until(asks.wait()).await {

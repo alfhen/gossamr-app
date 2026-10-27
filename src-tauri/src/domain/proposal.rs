@@ -285,9 +285,10 @@ impl Basis {
 
 /// Who drafted a proposal. `Agent` is a run's result turned into a draft by Gossamr; drafts stored before it existed
 /// say `User` for that, and are treated alike wherever it matters. Drafts stored as `autopilot` read as `User`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum CreatedBy {
+    #[default]
     #[serde(alias = "autopilot")]
     User,
     Pip,

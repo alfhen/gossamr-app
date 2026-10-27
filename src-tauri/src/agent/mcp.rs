@@ -1,8 +1,9 @@
 //! Gossamr's one MCP server (streamable HTTP, JSON responses only), for Pip and for the agents it runs.
 //!
-//! Pip gets read tools plus proposal tools. A proposal is stored as a draft for the user to approve; nothing here
-//! writes to a tracker. That keeps "Pip never changes anything without your approval" true regardless of what the
-//! model decides. An agent gets four tools of its own (`agent_tools`) and never sees Pip's.
+//! Pip gets read tools, draft tools and agent tools. A draft is stored for the user to approve; nothing here writes
+//! to a tracker. That keeps "Pip never changes a tracker without your approval" true regardless of what the model
+//! decides. Starting, messaging and stopping agents are not drafts: they are Pip's own actions, recorded as Pip's. An
+//! agent gets four tools of its own (`agent_tools`) and never sees Pip's.
 
 use std::mem::discriminant;
 use std::path::PathBuf;
@@ -21,7 +22,7 @@ use crate::auth::Scope;
 use crate::error::{Error, Result};
 use super::agent_tools::{self, AgentSide};
 use super::context::draft_line;
-use super::{McpEndpoint, RunPlanner};
+use super::{AgentDriver, McpEndpoint};
 use crate::domain::{ASK_TOOL, ContainerRef, DiffSide, Doc, Filter, Intent, ItemKind, ItemRef, NewItem, Proposal, ProposalQuery, ReviewComment, StateKind, Transitions};
 use crate::inbox::{Core, TextSeen};
 use crate::model::CachedTicket;
@@ -51,18 +52,19 @@ pub struct PipRun {
     /// The title and description of each ticket (key upper-cased) the run was shown or read. A rewrite starts from
     /// what Pip saw, so one drafted without a read, or after the ticket moved on, is refused.
     pub read: std::collections::HashMap<String, TextSeen>,
-    /// How far into each run's result (characters from the start, with no gap) Pip has been shown in this request. A
-    /// follow-up for the run needs it to reach the end.
-    pub read_runs: std::collections::HashMap<String, usize>,
     /// The workstream whose conversation the request belongs to, if any. Drafts of a workstream are revised only from
     /// its own conversation.
     pub workstream: Option<String>,
+    /// How many agents Pip has started in this request.
+    pub starts: u32,
+    /// The request is a wake turn: Gossamr asked Pip, the person didn't.
+    pub wake: bool,
 }
 
 impl PipRun {
     #[cfg(test)]
     pub fn new(scope: Scope) -> Self {
-        Self { scope, handed: Default::default(), read: Default::default(), read_runs: Default::default(), workstream: None }
+        Self { scope, handed: Default::default(), read: Default::default(), workstream: None, starts: 0, wake: false }
     }
 
     /// A request asked in workstream `id`'s conversation.
@@ -84,9 +86,11 @@ pub(super) struct McpState {
     pub core: Arc<Core>,
     pub tokens: Tokens,
     pub sink: ChangeSink,
+    /// Told the connection id whenever a workstream changed, so the page re-reads it.
+    pub workstreams: ChangeSink,
     pub view: ViewSink,
     pub runs: PipRuns,
-    pub planner: Arc<dyn RunPlanner>,
+    pub driver: Arc<dyn AgentDriver>,
 }
 
 /// One server, two kinds of caller. Pip reaches its tools at `/mcp/{request_id}` with a token that lives in memory for
@@ -157,19 +161,19 @@ pub struct McpServer {
 impl McpServer {
     /// A server on any free port, with nothing remembered.
     #[cfg(test)]
-    pub async fn start(core: Arc<Core>, planner: Arc<dyn RunPlanner>, sink: ChangeSink, view: ViewSink) -> std::io::Result<Self> {
+    pub async fn start(core: Arc<Core>, driver: Arc<dyn AgentDriver>, sink: ChangeSink, view: ViewSink) -> std::io::Result<Self> {
         let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
         let port = listener.local_addr()?.port();
         let channel = Arc::new(AgentChannel::new(port, std::env::temp_dir().join(format!("gossamr-agents-{port}"))));
-        Self::start_on(Bound { listener, channel }, core, planner, sink, view)
+        Self::start_on(Bound { listener, channel }, core, driver, sink, Arc::new(|_| {}), view)
     }
 
-    pub fn start_on(bound: Bound, core: Arc<Core>, planner: Arc<dyn RunPlanner>, sink: ChangeSink, view: ViewSink) -> std::io::Result<Self> {
+    pub fn start_on(bound: Bound, core: Arc<Core>, driver: Arc<dyn AgentDriver>, sink: ChangeSink, workstreams: ChangeSink, view: ViewSink) -> std::io::Result<Self> {
         let Bound { listener, channel } = bound;
         let port = channel.port();
         let runs: PipRuns = Arc::default();
         let tokens = Tokens::default();
-        let pip = Arc::new(McpState { core: core.clone(), tokens: tokens.clone(), sink, view, runs: runs.clone(), planner });
+        let pip = Arc::new(McpState { core: core.clone(), tokens: tokens.clone(), sink, workstreams, view, runs: runs.clone(), driver });
         let state = Arc::new(Serving {
             pip,
             agents: AgentSide::new(core),
@@ -955,7 +959,7 @@ mod tests {
         let seen = views.clone();
         let runs: PipRuns = Arc::default();
         runs.lock().unwrap().insert("run-1".into(), PipRun::new(fx.scope.clone()));
-        let st = McpState { core: fx.core.clone(), tokens: Tokens::default(), sink: Arc::new(move |_| { counter.fetch_add(1, Ordering::SeqCst); }), view: Arc::new(move |run, f, note| seen.lock().unwrap().push((run.into(), f.clone(), note.into()))), runs, planner: crate::agent::runs::testing::FakePlanner::unused() };
+        let st = McpState { core: fx.core.clone(), tokens: Tokens::default(), sink: Arc::new(move |_| { counter.fetch_add(1, Ordering::SeqCst); }), workstreams: Arc::new(|_| {}), view: Arc::new(move |run, f, note| seen.lock().unwrap().push((run.into(), f.clone(), note.into()))), runs, driver: crate::agent::runs::testing::FakePlanner::unused() };
         Rig { fx, st, changes, views }
     }
 

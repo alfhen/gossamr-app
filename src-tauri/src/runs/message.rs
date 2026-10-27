@@ -1,0 +1,138 @@
+//! Pip's messages to an agent. What happens to one depends on what the agent is doing: a question it waits on in `ask`
+//! is answered at once, a session that has stopped or finished is resumed, and an agent that is still working gets the
+//! message when it next asks or when its turn ends. The stop, settle and resume are the answer's and the follow-up's.
+
+use chrono::Utc;
+
+use super::answer::checked;
+use super::cli::is_uuid;
+use super::service::{belongs_to, RunService};
+use crate::domain::{Actor, Run, RunEvent, RunState};
+use crate::error::{Error, Result};
+
+/// What became of a message to an agent.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Delivery {
+    /// It answered a question the agent was waiting on.
+    Answered,
+    /// The agent's session was woken with it.
+    Resumed,
+    /// The agent is working; it gets the message at its next `ask` or when its turn ends.
+    Queued,
+}
+
+fn refuse(message: impl Into<String>) -> Error {
+    Error::Proposal(message.into())
+}
+
+fn at_rest(state: RunState) -> bool {
+    matches!(state, RunState::Done | RunState::Failed | RunState::Stopped)
+}
+
+impl RunService {
+    /// Sends `text` to run `run_id` as `by`. Refused for a run that hasn't started, failed, waits at a permission prompt
+    /// or for a sign-in, was stopped at a limit, or has a session open in Terminal.
+    pub async fn message_agent(&self, run_id: &str, text: &str, by: Actor) -> Result<(Run, Delivery)> {
+        let text = checked(text)?;
+        let run = self.load(run_id).await?;
+        let asking = !at_rest(run.state) && self.core.asks().question(run_id).is_some();
+        match run.state {
+            _ if asking => self.answer_as(run_id, text, by).await.map(|r| (r, Delivery::Answered)),
+            RunState::Queued | RunState::Launching => Err(refuse("It hasn't started working yet; message it once it is working.")),
+            RunState::Failed => Err(refuse("It failed, so there is nothing to message.")),
+            RunState::Unknown => Err(refuse("Gossamr can't find its session right now.")),
+            RunState::NeedsPermission => Err(refuse("It is waiting at a permission prompt; the person answers it in Terminal.")),
+            RunState::SystemBlocked => Err(refuse("Claude needs the person to sign in, in Terminal.")),
+            RunState::NeedsAnswer => self.answer_as(run_id, text, by).await.map(|r| (r, Delivery::Answered)),
+            RunState::Working => {
+                self.core.queue_run_message(run_id, text).await?;
+                self.note_by(&run, by, "agent_message_queued", Some(text.chars().count().to_string())).await;
+                Ok((run, Delivery::Queued))
+            }
+            RunState::Stopped if run.stopped_by_limit => Err(refuse("Gossamr stopped it at its limit; only the person resumes it.")),
+            RunState::Stopped if run.unsent_answer.is_some() => Err(refuse("A message is still waiting to be sent to it; the person sends it again from the run.")),
+            RunState::Done | RunState::Stopped => self.resume_with(run_id, text, by).await.map(|r| (r, Delivery::Resumed)),
+        }
+    }
+
+    /// Wakes the finished or stopped session of `run_id` with `text`, as the follow-up does, unless a session is open on
+    /// it in Terminal: stopping that would end what the person is doing there.
+    async fn resume_with(&self, run_id: &str, text: &str, by: Actor) -> Result<Run> {
+        let _turn = self.launching.lock().await;
+        let mut run = self.load(run_id).await?;
+        if !matches!(run.state, RunState::Done | RunState::Stopped) {
+            return Err(refuse(format!("This run is {}, so it can't be resumed.", run.state.as_str())));
+        }
+        if run.short_id.is_none() || !run.session_id.as_deref().is_some_and(is_uuid) {
+            return Err(refuse("It has no session to resume."));
+        }
+        let tc = self.toolchain().await?;
+        let listed = tc.cli.agents(true).await?;
+        if listed.iter().find(|e| belongs_to(e, &run)).is_some_and(|e| !matches!(e.state.as_deref(), Some("stopped" | "done"))) {
+            return Err(refuse("A session is open on it in Terminal, so the person is in it."));
+        }
+        if let Some(why) = self.another_pass(&mut run, text, false).await? {
+            return Err(Error::Claude(why));
+        }
+        let event = RunEvent {
+            run_id: run.id.clone(),
+            seq: 0,
+            at: run.last_progress_at,
+            kind: "follow_up".into(),
+            text: if by == Actor::Pip { "Pip sent a message".into() } else { "You sent a message".into() },
+            detail: Some(format!("Pass {}.", run.passes)),
+        };
+        if let Err(e) = self.core.append_run_events(&run.id, &[event]).await {
+            eprintln!("couldn't record the message to run {}: {e}", run.id);
+        }
+        self.note_by(&run, by, "run_resumed", Some(text.chars().count().to_string())).await;
+        Ok(run)
+    }
+
+    /// Hands each run's waiting message to it once it can have it: a run that is done, or ended its turn with a question,
+    /// is sent it as an answer or by resume. One that is still working, or waits on a permission prompt or sign-in,
+    /// keeps it. One that failed or was stopped has no one to take it, so it is dropped and the workstream's audit says so.
+    pub(super) async fn deliver_queued(&self) {
+        let Ok(waiting) = self.core.runs_with_messages().await else { return };
+        for id in waiting {
+            let Ok(Some(text)) = self.core.run_message(&id).await else { continue };
+            let Ok(run) = self.load(&id).await else {
+                let _ = self.core.take_run_message(&id).await;
+                continue;
+            };
+            let sent = match run.state {
+                RunState::Done => self.resume_with(&id, &text, Actor::Pip).await.map(drop),
+                RunState::NeedsAnswer => self.answer_as(&id, &text, Actor::Pip).await.map(drop),
+                RunState::Stopped if run.unsent_answer.is_some() => continue,
+                RunState::Failed | RunState::Stopped => Err(refuse(format!("the run is {}", run.state.as_str()))),
+                _ => continue,
+            };
+            if let Err(e) = self.core.take_run_message(&id).await {
+                eprintln!("couldn't take the message waiting for run {id}: {e}");
+            }
+            if let Err(e) = sent {
+                eprintln!("couldn't deliver the message waiting for run {id}: {e}");
+                self.note_by(&run, Actor::Pip, "agent_message_dropped", Some(e.to_string())).await;
+            }
+        }
+    }
+}
+
+/// When a queued message reaches its run at its next `ask`: it answers that call, so the run never waits.
+pub async fn take_for_ask(core: &crate::inbox::Core, run: &Run) -> Option<String> {
+    let text = core.take_run_message(&run.id).await.ok().flatten()?;
+    let event = RunEvent { run_id: run.id.clone(), seq: 0, at: Utc::now(), kind: "answered".into(), text: "Pip answered".into(), detail: None };
+    if let Err(e) = core.append_run_events(&run.id, &[event]).await {
+        eprintln!("couldn't record the answer: {e}");
+    }
+    if let Err(e) = core.record_run_action_by(run, Actor::Pip, "run_answered", Some(text.chars().count().to_string())).await {
+        eprintln!("couldn't record the answer to run {} in its workstream: {e}", run.id);
+    }
+    if let Err(e) = core.report_stale(&run.id).await {
+        eprintln!("couldn't mark the report of run {} as older than the answer: {e}", run.id);
+    }
+    Some(text)
+}
+
+#[cfg(test)]
+mod tests;

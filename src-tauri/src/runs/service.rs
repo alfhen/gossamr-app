@@ -25,7 +25,7 @@ use super::toolchain::{Toolchain, ToolchainSource};
 use super::control::{MacTerminal, Terminal};
 use super::tracker::{Attention, NoNotices, RunNotifier};
 use crate::config::{AgentSettings, AppConfig};
-use crate::domain::{render_prompt, Run, RunKind, RunQuery, RunSpec, RunState, GUARD, AGENT_GUARD};
+use crate::domain::{render_prompt, Actor, Run, RunKind, RunQuery, RunSpec, RunState, GUARD, AGENT_GUARD};
 use crate::error::{Error, Result};
 use crate::inbox::Core;
 
@@ -593,7 +593,12 @@ impl RunService {
     /// The action itself already happened, so a failure to record it is logged rather than reported as the action
     /// failing.
     pub(super) async fn note_person(&self, run: &Run, action: &str, detail: Option<String>) {
-        if let Err(e) = self.core.record_run_action(run, action, detail).await {
+        self.note_by(run, Actor::Person, action, detail).await;
+    }
+
+    /// `note_person` for something `by` did, which is Pip when it drove the run.
+    pub(super) async fn note_by(&self, run: &Run, by: Actor, action: &str, detail: Option<String>) {
+        if let Err(e) = self.core.record_run_action_by(run, by, action, detail).await {
             eprintln!("couldn't record {action} for run {} in its workstream: {e}", run.id);
         }
     }

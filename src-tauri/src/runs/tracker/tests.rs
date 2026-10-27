@@ -1430,3 +1430,42 @@ async fn an_allow_once_is_forgotten_when_the_run_moves_on_or_asks_something_else
     let working = rig.get(&run).await;
     assert_eq!((working.state, working.permission_allowed), (RunState::Working, None));
 }
+
+#[derive(Default)]
+struct Announced(std::sync::Mutex<Vec<(String, String, Option<String>)>>);
+
+impl RunNotifier for Announced {
+    fn notify(&self, _run: &Run, _why: Attention) {}
+
+    fn announce(&self, notice: &crate::runs::notices::Outgoing) -> bool {
+        self.0.lock().unwrap().push((notice.notice.title.clone(), notice.notice.body.clone(), notice.open_run.clone()));
+        true
+    }
+}
+
+#[tokio::test]
+async fn a_question_pip_asks_is_a_need_that_notifies_once_and_clears_when_answered_or_dismissed() {
+    let told = Arc::new(Announced::default());
+    let rig = crate::runs::rig::ready_with({
+        let told = told.clone();
+        move |svc| svc.with_notifier(told)
+    })
+    .await;
+    let ws = rig.fx.core.open_workstream(&rig.fx.scope, Some(rig.fx.item("CA-1")), None).await.unwrap().id;
+    let notices = || told.0.lock().unwrap().clone();
+
+    rig.poll().await;
+    assert!(notices().is_empty(), "nothing waits");
+    rig.fx.core.pip_asks_person(&rig.fx.scope, &ws, "Shall I build it, or\nplan first?").await.unwrap();
+    rig.poll().await;
+    assert_eq!(notices(), [("CA-1 is waiting on you".to_string(), "Pip asks: Shall I build it, or plan first?".to_string(), None)]);
+    rig.poll().await;
+    assert_eq!(notices().len(), 1, "a need that keeps waiting is told once");
+
+    assert!(rig.fx.core.clear_pip_ask(&rig.fx.scope, &ws, "answered").await.unwrap());
+    rig.poll().await;
+    rig.fx.core.pip_asks_person(&rig.fx.scope, &ws, "And the review?").await.unwrap();
+    rig.poll().await;
+    assert_eq!(notices().len(), 2, "once nothing waited, the next question is news again");
+    assert_eq!(notices()[1].1, "Pip asks: And the review?");
+}

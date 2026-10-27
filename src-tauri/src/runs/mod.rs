@@ -13,6 +13,7 @@ pub mod control;
 pub mod env;
 pub mod failure;
 mod follow_up;
+pub mod message;
 mod final_answer;
 mod finder;
 mod offer;

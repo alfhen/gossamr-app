@@ -137,6 +137,35 @@ impl Db {
         })
     }
 
+    /// The question Pip asked the person that is still open, by workstream, for `connection_id`'s open workstreams.
+    pub fn pip_asks(&self, connection_id: &str) -> Result<std::collections::HashMap<String, crate::domain::workstream::PipAsk>> {
+        use crate::domain::workstream::{open_pip_ask, PIP_ASKED, PIP_ASK_CLEARED};
+        let mut stmt = self.conn.prepare(
+            "SELECT e.workstream_id, e.seq, e.at, e.actor, e.action, e.detail FROM workstream_events e
+             JOIN workstreams w ON w.id = e.workstream_id
+             WHERE w.connection_id = ?1 AND w.closed_at IS NULL AND e.action IN (?2, ?3) ORDER BY e.workstream_id, e.seq",
+        )?;
+        let rows = stmt.query_map(params![connection_id, PIP_ASKED, PIP_ASK_CLEARED], |r| {
+            Ok(WorkstreamEvent {
+                workstream_id: r.get(0)?,
+                seq: r.get(1)?,
+                at: parse_at(&r.get::<_, String>(2)?),
+                actor: Actor::parse(&r.get::<_, String>(3)?).unwrap_or(Actor::Run),
+                action: r.get(4)?,
+                run_id: None,
+                proposal_id: None,
+                digest: None,
+                detail: r.get(5)?,
+            })
+        })?;
+        let mut by_workstream: std::collections::HashMap<String, Vec<WorkstreamEvent>> = std::collections::HashMap::new();
+        for e in rows {
+            let e = e?;
+            by_workstream.entry(e.workstream_id.clone()).or_default().push(e);
+        }
+        Ok(by_workstream.into_iter().filter_map(|(id, events)| open_pip_ask(&events).map(|ask| (id, ask))).collect())
+    }
+
     /// A workstream's audit, oldest first.
     pub fn workstream_events(&self, workstream_id: &str) -> Result<Vec<WorkstreamEvent>> {
         let mut stmt = self.conn.prepare(

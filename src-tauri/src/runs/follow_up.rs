@@ -83,7 +83,7 @@ impl RunService {
     /// Sends `run` back for another pass with `message`: stops its session if it is still alive, resumes it with the
     /// message, and on success stores it working on its next pass. `again` resends to a session that was already stopped
     /// on the way. `Ok(Some(why))` when the session couldn't be woken; the run is then left for the caller to store.
-    async fn another_pass(&self, run: &mut Run, message: &str, again: bool) -> Result<Option<String>> {
+    pub(super) async fn another_pass(&self, run: &mut Run, message: &str, again: bool) -> Result<Option<String>> {
         let id = run.short_id.clone().ok_or_else(|| refuse("This run has no session to resume."))?;
         let session = run.session_id.clone().filter(|s| is_uuid(s)).ok_or_else(|| refuse("This run has no session to resume."))?;
         let tc = self.toolchain().await?;

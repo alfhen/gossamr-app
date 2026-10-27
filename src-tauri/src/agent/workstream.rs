@@ -1,6 +1,6 @@
-//! Pip's view of the person's workstreams. Pip can read them and keep its own notes on the workstream its conversation
-//! belongs to; it cannot start, stop or answer a run, approve anything or write to Jira from here, and the notes are
-//! shown back to it only as data.
+//! Pip's view of the person's workstreams. Pip can read them, open and close them, keep its own notes on the workstream
+//! its conversation belongs to, and ask the person a question in one; it cannot approve anything or write to Jira from
+//! here, and the notes are shown back to it only as data.
 
 use std::collections::HashMap;
 
@@ -8,14 +8,14 @@ use chrono::{DateTime, Utc};
 use serde_json::{json, Value};
 
 use super::context::draft_line;
-use super::mcp::{item_ref, opt, reachable, tool, McpState, PipRun, Reply};
+use super::mcp::{item_ref, opt, reachable, required, tool, McpState, PipRun, Reply};
 use crate::auth::Scope;
 use crate::domain::workstream::{run_labels, Stage, BASIS_DESCRIPTION, BASIS_STATUS, BASIS_SUMMARY};
 use crate::domain::{Actor, Proposal, ProposalQuery, Run, RunQuery, StateKind, Workstream, WorkstreamEvent};
 use crate::error::{Error, Result};
 use crate::inbox::{Core, NOTES_CLOSE, NOTES_LIMIT, NOTES_OPEN};
 
-pub(super) const NAMES: [&str; 3] = ["get_workstream", "list_workstreams", "set_workstream_notes"];
+pub(super) const NAMES: [&str; 6] = ["get_workstream", "list_workstreams", "set_workstream_notes", "open_workstream", "close_workstream", "ask_person"];
 
 /// The person's own actions the block lists, newest last.
 const RECENT_ACTIONS: usize = 10;
@@ -164,6 +164,7 @@ fn action_line(e: &WorkstreamEvent, labels: &HashMap<&str, &str>) -> String {
         ("paused", _) => "paused this workstream".into(),
         ("resumed", _) => "resumed this workstream".into(),
         ("notes_set", _) => "changed the notes".into(),
+        ("pip_ask_cleared", _) => "answered or dismissed your question".into(),
         ("run_stopped", Some(r)) => format!("stopped {r}"),
         ("run_answered", Some(r)) => format!("answered {r}"),
         ("run_retried", Some(r)) => format!("retried {r}"),
@@ -243,6 +244,30 @@ pub(super) fn tools() -> Vec<Value> {
             }),
             &["notes"],
         ),
+        tool(
+            "open_workstream",
+            "Open a workstream on a watched ticket, or give a title to open one with no ticket. A ticket that has an open workstream gets that one back.",
+            json!({
+                "key": { "type": "string", "description": "Item key, e.g. CA-412; leave out for a workstream with no ticket" },
+                "title": { "type": "string", "description": "Its title; needed with no ticket, otherwise the ticket's own is used" }
+            }),
+            &[],
+        ),
+        tool(
+            "close_workstream",
+            "Close a workstream that is finished. Its agents and drafts are left as they are.",
+            json!({ "workstream": { "type": "string", "description": "A workstream id from list_workstreams" } }),
+            &["workstream"],
+        ),
+        tool(
+            "ask_person",
+            "Ask the person a question when you are unsure what to do. They see it under Needs you with a notification, and it stays until they reply in the conversation or dismiss it.",
+            json!({
+                "question": { "type": "string", "description": "One or two sentences" },
+                "workstream": { "type": "string", "description": "A workstream id; left out, this conversation's" }
+            }),
+            &["question"],
+        ),
     ]
 }
 
@@ -252,6 +277,9 @@ pub(super) fn label(name: &str) -> Option<String> {
             "get_workstream" => "Read a workstream",
             "list_workstreams" => "Looked at your workstreams",
             "set_workstream_notes" => "Updated its workstream notes",
+            "open_workstream" => "Opened a workstream",
+            "close_workstream" => "Closed a workstream",
+            "ask_person" => "Asked you a question",
             _ => return None,
         }
         .into(),
@@ -265,6 +293,9 @@ pub(super) async fn run(st: &McpState, pip: &PipRun, name: &str, args: &Value) -
     Some(match name {
         "get_workstream" => get(st, pip, args).await,
         "list_workstreams" => list(st, pip).await,
+        "open_workstream" => open(st, pip, args).await,
+        "close_workstream" => close(st, pip, args).await,
+        "ask_person" => ask_person(st, pip, args).await,
         _ => set_notes(st, pip, args).await,
     })
 }
@@ -317,6 +348,60 @@ async fn list(st: &McpState, pip: &PipRun) -> Reply {
     Ok(format!("{} open workstreams, newest first:\n{}", lines.len(), lines.join("\n")))
 }
 
+/// The workstream `id` as Pip may act on it: one of this account's, whose ticket it may reach unless it is the
+/// conversation's own.
+async fn reachable_workstream(st: &McpState, pip: &PipRun, id: &str) -> std::result::Result<Workstream, String> {
+    let view = st.core.workstream(&pip.scope, id).await.map_err(|e| e.to_string())?.ok_or_else(|| format!("There is no workstream {id} for this account."))?;
+    if let (Some(key), false) = (&view.workstream.item_key, pip.workstream.as_deref() == Some(id)) {
+        reachable(st, pip, key).await?;
+    }
+    Ok(view.workstream)
+}
+
+async fn open(st: &McpState, pip: &PipRun, args: &Value) -> Reply {
+    let scope = &pip.scope;
+    let item = match opt(args, "key") {
+        Some(key) => {
+            let key = key.to_uppercase();
+            reachable(st, pip, &key).await?;
+            Some(item_ref(scope, &key))
+        }
+        None => None,
+    };
+    let existing = match &item {
+        Some(item) => st.core.workstreams(scope, false).await.map_err(|e| e.to_string())?.into_iter().find(|v| v.workstream.item_key.as_deref() == Some(item.key.as_str())),
+        None => None,
+    };
+    let ws = st.core.open_workstream_as(scope, item, opt(args, "title").map(String::from), Actor::Pip).await.map_err(|e| format!("Couldn't open it: {e}"))?;
+    (st.workstreams)(&ws.connection_id);
+    Ok(match existing {
+        Some(_) => format!("“{}” is already open as workstream {}.", ws.title, ws.id),
+        None => format!("Opened workstream {}: “{}”.", ws.id, ws.title),
+    })
+}
+
+async fn close(st: &McpState, pip: &PipRun, args: &Value) -> Reply {
+    let id = required(args, "workstream")?;
+    reachable_workstream(st, pip, id).await?;
+    let ws = st.core.close_workstream_as(&pip.scope, id, Actor::Pip).await.map_err(|e| format!("Couldn't close it: {e}"))?;
+    (st.workstreams)(&ws.connection_id);
+    Ok(format!("Closed “{}”.", ws.title))
+}
+
+async fn ask_person(st: &McpState, pip: &PipRun, args: &Value) -> Reply {
+    let id = match (opt(args, "workstream"), pip.workstream.as_deref()) {
+        (Some(id), _) | (None, Some(id)) => id,
+        (None, None) => return Err("This conversation isn't in a workstream. Pass the workstream the question is about.".into()),
+    };
+    let ws = reachable_workstream(st, pip, id).await?;
+    if ws.closed_at.is_some() {
+        return Err(format!("The workstream “{}” is closed.", ws.title));
+    }
+    st.core.pip_asks_person(&pip.scope, id, required(args, "question")?).await.map_err(|e| format!("The question wasn't saved: {e}"))?;
+    (st.workstreams)(&ws.connection_id);
+    Ok("Asked. The person sees it under Needs you and answers in this conversation; don't act on the question until they do.".into())
+}
+
 async fn set_notes(st: &McpState, pip: &PipRun, args: &Value) -> Reply {
     let Some(own) = pip.workstream.as_deref() else {
         return Err("This conversation isn't in a workstream, so there are no notes to keep here. Notes belong to a workstream's own conversation.".into());
@@ -362,7 +447,7 @@ mod tests {
         let runs: PipRuns = Arc::default();
         runs.lock().unwrap().insert("in-ws".into(), PipRun::in_workstream(fx.scope.clone(), &ws.id));
         runs.lock().unwrap().insert("general".into(), PipRun::new(fx.scope.clone()));
-        let st = McpState { core: fx.core.clone(), tokens: Default::default(), sink: Arc::new(|_| {}), view: Arc::new(|_, _, _| {}), runs, planner: FakePlanner::unused() };
+        let st = McpState { core: fx.core.clone(), tokens: Default::default(), sink: Arc::new(|_| {}), workstreams: Arc::new(|_| {}), view: Arc::new(|_, _, _| {}), runs, driver: FakePlanner::unused() };
         Rig { fx, st, ws }
     }
 
@@ -574,5 +659,68 @@ mod tests {
         assert_eq!(block.matches(NOTES_OPEN).count(), 1);
         assert_eq!(block.matches(NOTES_CLOSE).count(), 1);
         assert!(notes_block(None).contains("none yet") && notes_block(Some("  ")).contains("none yet"));
+    }
+
+    async fn pip_ask(r: &Rig) -> Option<crate::domain::workstream::PipAsk> {
+        r.fx.core.workstream(&r.fx.scope, &r.ws.id).await.unwrap().unwrap().pip_ask
+    }
+
+    #[tokio::test]
+    async fn pips_question_is_an_open_need_with_its_sanitised_text_until_the_person_answers_or_dismisses_it() {
+        let r = rig().await;
+        assert_eq!(pip_ask(&r).await, None);
+        let reply = r.ok("in-ws", "ask_person", json!({ "question": "Shall I build it,\n  or plan first? GITHUB_TOKEN=abc123secretvalue" })).await;
+        assert!(reply.starts_with("Asked.") && reply.contains("don't act on the question until they do"), "{reply}");
+        let ask = pip_ask(&r).await.unwrap();
+        assert!(ask.question.starts_with("Shall I build it, or plan first?") && !ask.question.contains("abc123secretvalue"), "{}", ask.question);
+        let events = r.fx.core.workstream_events(&r.fx.scope, &r.ws.id).await.unwrap();
+        let line = events.iter().find(|e| e.action == "pip_asked").unwrap();
+        assert_eq!((line.actor, line.detail.as_deref()), (Actor::Pip, Some(ask.question.as_str())));
+
+        r.ok("in-ws", "ask_person", json!({ "question": "Or should I stop here?" })).await;
+        assert_eq!(pip_ask(&r).await.unwrap().question, "Or should I stop here?", "a newer question replaces the older open one");
+
+        assert!(r.fx.core.clear_pip_ask(&r.fx.scope, &r.ws.id, "dismissed").await.unwrap());
+        assert_eq!(pip_ask(&r).await, None);
+        assert!(!r.fx.core.clear_pip_ask(&r.fx.scope, &r.ws.id, "dismissed").await.unwrap(), "nothing open, nothing recorded");
+        let cleared: Vec<_> = r.fx.core.workstream_events(&r.fx.scope, &r.ws.id).await.unwrap().into_iter().filter(|e| e.action == "pip_ask_cleared").map(|e| (e.actor, e.detail)).collect();
+        assert_eq!(cleared, [(Actor::Person, Some("dismissed".to_string()))]);
+
+        r.ok("in-ws", "ask_person", json!({ "question": "x".repeat(900) })).await;
+        assert_eq!(pip_ask(&r).await.unwrap().question.chars().count(), 500);
+    }
+
+    #[tokio::test]
+    async fn a_question_needs_text_and_a_workstream_that_is_open_and_in_reach() {
+        let r = rig().await;
+        assert!(r.err("in-ws", "ask_person", json!({})).await.contains("question is required"));
+        assert!(r.err("general", "ask_person", json!({ "question": "Which?" })).await.contains("isn't in a workstream"));
+        assert!(r.err("general", "ask_person", json!({ "question": "Which?", "workstream": "nope" })).await.contains("There is no workstream nope"));
+        r.ok("general", "ask_person", json!({ "question": "Which?", "workstream": r.ws.id })).await;
+        assert!(pip_ask(&r).await.is_some(), "Pip may ask in a workstream it can reach from General");
+        r.fx.core.close_workstream(&r.fx.scope, &r.ws.id).await.unwrap();
+        assert!(r.err("in-ws", "ask_person", json!({ "question": "Late?" })).await.contains("is closed"));
+    }
+
+    #[tokio::test]
+    async fn pip_opens_a_workstream_once_per_ticket_and_closes_one_as_pip() {
+        let r = rig().await;
+        r.fx.core.close_workstream(&r.fx.scope, &r.ws.id).await.unwrap();
+        let opened = r.ok("general", "open_workstream", json!({ "key": "ca-1" })).await;
+        assert!(opened.starts_with("Opened workstream ") && opened.contains("CA-1 Ticket 1"), "{opened}");
+        let id = opened.split("workstream ").nth(1).unwrap().split(':').next().unwrap().to_string();
+        let again = r.ok("general", "open_workstream", json!({ "key": "CA-1" })).await;
+        assert_eq!(again, format!("“CA-1 Ticket 1” is already open as workstream {id}."));
+        assert_eq!(r.fx.core.workstreams(&r.fx.scope, false).await.unwrap().len(), 1);
+
+        assert!(r.ok("general", "open_workstream", json!({ "title": "Why is it slow?" })).await.contains("Why is it slow?"));
+        assert!(r.err("general", "open_workstream", json!({})).await.contains("needs a title"));
+        assert!(r.err("general", "open_workstream", json!({ "key": "CA-404" })).await.contains("out of reach"));
+
+        assert!(r.err("general", "close_workstream", json!({ "workstream": "nope" })).await.contains("There is no workstream nope"));
+        assert_eq!(r.ok("general", "close_workstream", json!({ "workstream": id })).await, "Closed “CA-1 Ticket 1”.");
+        assert!(r.fx.core.workstream(&r.fx.scope, &id).await.unwrap().unwrap().workstream.closed_at.is_some());
+        let actors: Vec<(Actor, String)> = r.fx.core.workstream_events(&r.fx.scope, &id).await.unwrap().into_iter().map(|e| (e.actor, e.action)).collect();
+        assert_eq!(actors, [(Actor::Pip, "opened".to_string()), (Actor::Pip, "closed".to_string())]);
     }
 }

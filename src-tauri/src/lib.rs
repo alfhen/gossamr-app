@@ -678,6 +678,15 @@ async fn workstreams_close(app: AppHandle, core: State<'_, CoreState>, agent: St
     Ok(ws)
 }
 
+/// The person dismisses a question Pip asked in the workstream.
+#[tauri::command]
+async fn workstreams_dismiss_ask(app: AppHandle, core: State<'_, CoreState>, id: String) -> Result<bool> {
+    let scope = core.scope().await?;
+    let cleared = core.clear_pip_ask(&scope, &id, "dismissed").await?;
+    workstreams_changed(&app, &Connection::jira_id(&scope));
+    Ok(cleared)
+}
+
 /// Reopens a closed workstream (the page's Undo of Close, and a closed row's Reopen).
 #[tauri::command]
 async fn workstreams_reopen(app: AppHandle, core: State<'_, CoreState>, id: String) -> Result<Workstream> {
@@ -1199,12 +1208,13 @@ pub fn run() {
                 .with_agent_channel(bound.channel());
             let service = Arc::new(service);
             let handle = app.handle().clone();
-            let view_handle = handle.clone();
+            let (view_handle, ws_handle) = (handle.clone(), handle.clone());
             let mcp = agent::mcp::McpServer::start_on(
                 bound,
                 core.clone(),
                 service.clone(),
                 Arc::new(move |connection_id| proposals_changed(&handle, connection_id)),
+                Arc::new(move |connection_id| workstreams_changed(&ws_handle, connection_id)),
                 Arc::new(move |request_id, filter, note| pip_view(&view_handle, request_id, filter, note)),
             )?;
             app.manage::<LauncherState>(service.clone());
@@ -1326,6 +1336,7 @@ pub fn run() {
             workstreams_list,
             workstreams_close,
             workstreams_reopen,
+            workstreams_dismiss_ask,
             workstreams_adopt,
             workstreams_set_notes,
             workstreams_events,

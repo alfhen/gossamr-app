@@ -1,4 +1,5 @@
-//! Sending the person's answer to an agent that asked a question: stop its session, then wake it with the answer.
+//! Sending an answer, the person's or Pip's, to an agent that asked a question: stop its session, then wake it with the
+//! answer.
 //!
 //! `claude` can't deliver a message to a running session, and a flag on `--resume` makes it start a copy, so the
 //! only message that carries is `--bg --resume <session id> -- <message>` on a session that has stopped.
@@ -10,7 +11,7 @@ use chrono::Utc;
 use super::cli::is_uuid;
 use super::limits;
 use super::service::{belongs_to, RunService};
-use crate::domain::{EarlierSession, Intent, ProposalState, Run, RunEvent, RunState};
+use crate::domain::{Actor, EarlierSession, Intent, ProposalState, Run, RunEvent, RunState};
 use crate::error::{Error, Result};
 
 pub const MAX_ANSWER_CHARS: usize = 4_000;
@@ -38,7 +39,7 @@ fn refuse(message: impl Into<String>) -> Error {
     Error::Proposal(message.into())
 }
 
-fn checked(text: &str) -> Result<&str> {
+pub(super) fn checked(text: &str) -> Result<&str> {
     let text = text.trim();
     if text.is_empty() {
         return Err(refuse("Write an answer first."));
@@ -79,7 +80,12 @@ impl RunService {
     /// a failure leaves the run `Stopped` with the reason and the answer kept on it, so nothing the person wrote is
     /// lost. Once it has gone, the answers Pip suggested for the run that are still waiting are retired.
     pub async fn answer(&self, run_id: &str, text: &str) -> Result<Run> {
-        self.answer_keeping(run_id, text, None).await
+        self.answer_as(run_id, text, Actor::Person).await
+    }
+
+    /// `answer`, recorded as `by`'s.
+    pub async fn answer_as(&self, run_id: &str, text: &str, by: Actor) -> Result<Run> {
+        self.answer_keeping(run_id, text, None, by).await
     }
 
     /// Sends the answer draft `proposal_id` that the person read as `read`: the draft must still be a pending answer
@@ -105,7 +111,7 @@ impl RunService {
                 return Err(refuse("The run is asking something else now, so this answer doesn't fit it."));
             }
         }
-        match self.answer_keeping(run_id, read, Some(proposal_id)).await {
+        match self.answer_keeping(run_id, read, Some(proposal_id), Actor::Person).await {
             Ok(run) => {
                 self.core.answer_draft_sent(proposal_id, &run.id, read).await?;
                 Ok(run)
@@ -120,13 +126,13 @@ impl RunService {
     }
 
     /// `answer`, retiring the run's other waiting answer drafts but `keep` once it has gone.
-    async fn answer_keeping(&self, run_id: &str, text: &str, keep: Option<&str>) -> Result<Run> {
+    async fn answer_keeping(&self, run_id: &str, text: &str, keep: Option<&str>, by: Actor) -> Result<Run> {
         let text = checked(text)?;
         let _turn = self.launching.lock().await;
         let mut run = self.load(run_id).await?;
         if self.core.asks().question(run_id).is_some() {
             if !matches!(run.state, RunState::Done | RunState::Failed | RunState::Stopped) {
-                return self.answer_ask(run, text, keep).await;
+                return self.answer_ask(run, text, keep, by).await;
             }
             self.core.asks().cancel(run_id);
         }
@@ -162,7 +168,7 @@ impl RunService {
 
         let failure = self.wake(&tc, &mut run, &id, &session, text, !again).await;
         match failure {
-            None => self.answered(run, text, keep).await,
+            None => self.answered(run, text, keep, by).await,
             Some(why) => {
                 run.error = Some(why.clone());
                 run.unsent_answer = Some(text.to_owned());
@@ -174,7 +180,7 @@ impl RunService {
 
     /// Hands the answer to the agent waiting in its `ask` call, which carries on in the same turn: nothing is stopped or
     /// resumed.
-    async fn answer_ask(&self, run: Run, text: &str, keep: Option<&str>) -> Result<Run> {
+    async fn answer_ask(&self, run: Run, text: &str, keep: Option<&str>, by: Actor) -> Result<Run> {
         let gone = || refuse("It isn't waiting for an answer any more. Look again in a moment.");
         if self.core.asks().question(&run.id).is_none() {
             return Err(gone());
@@ -193,29 +199,30 @@ impl RunService {
             return Err(gone());
         }
         self.remember(&run);
-        self.after_answer(run, text, keep, now).await
+        self.after_answer(run, text, keep, now, by).await
     }
 
     /// Records that the run has its answer and is working again.
-    async fn answered(&self, mut run: Run, text: &str, keep: Option<&str>) -> Result<Run> {
+    async fn answered(&self, mut run: Run, text: &str, keep: Option<&str>, by: Actor) -> Result<Run> {
         let now = Utc::now();
         back_at_work(&mut run, now);
         self.remember(&run);
         self.store(&run).await?;
-        self.after_answer(run, text, keep, now).await
+        self.after_answer(run, text, keep, now, by).await
     }
 
     /// What follows an answer once the run is stored as working: none of it undoes the answer if it fails.
-    async fn after_answer(&self, run: Run, text: &str, keep: Option<&str>, now: chrono::DateTime<Utc>) -> Result<Run> {
+    pub(super) async fn after_answer(&self, run: Run, text: &str, keep: Option<&str>, now: chrono::DateTime<Utc>, by: Actor) -> Result<Run> {
         if let Err(e) = self.core.report_stale(&run.id).await {
             eprintln!("couldn't mark the report of run {} as older than your answer: {e}", run.id);
         }
-        let event = RunEvent { run_id: run.id.clone(), seq: 0, at: now, kind: "answered".into(), text: "You answered".into(), detail: None };
+        let said = if by == Actor::Pip { "Pip answered" } else { "You answered" };
+        let event = RunEvent { run_id: run.id.clone(), seq: 0, at: now, kind: "answered".into(), text: said.into(), detail: None };
         if let Err(e) = self.core.append_run_events(&run.id, &[event]).await {
             eprintln!("couldn't record the answer: {e}");
         }
         // Only the length: the answer's text stays with the run.
-        self.note_person(&run, "run_answered", Some(text.chars().count().to_string())).await;
+        self.note_by(&run, by, "run_answered", Some(text.chars().count().to_string())).await;
         match self.core.retire_answer_drafts(&run.id, keep, ANSWERED).await {
             Ok(0) => {}
             Ok(_) => (self.drafted)(&run.connection_id),

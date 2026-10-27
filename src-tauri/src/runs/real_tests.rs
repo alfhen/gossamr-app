@@ -584,7 +584,7 @@ async fn real_agent_tools_are_called_from_a_background_session_and_the_token_sta
     let core = rig.fx.core.clone();
     let bound = crate::agent::mcp::bind(dir.join("agents")).await.expect("bind");
     let channel = bound.channel();
-    let _server = crate::agent::mcp::McpServer::start_on(bound, core.clone(), rig.svc.clone(), Arc::new(|_| {}), Arc::new(|_, _, _| {})).expect("server");
+    let _server = crate::agent::mcp::McpServer::start_on(bound, core.clone(), rig.svc.clone(), Arc::new(|_| {}), Arc::new(|_| {}), Arc::new(|_, _, _| {})).expect("server");
     let run = rig.launched(1).await;
     let token = new_token().unwrap();
     core.report_reserve(&run.id, &token_hash(&token), crate::domain::REPORT_TOOL_VERSION).await.unwrap();

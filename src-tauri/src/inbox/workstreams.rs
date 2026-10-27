@@ -12,7 +12,7 @@ use super::Core;
 use crate::auth::Scope;
 use crate::db::Db;
 use crate::agent::supervisor::WakeFact;
-use crate::domain::workstream::{review_blocking, run_labels, stage, PauseReason, Stage, WorkstreamBasis, BASIS_ASSIGNEE, BASIS_DESCRIPTION, BASIS_STATUS, BASIS_SUMMARY, WAKES_PER_WORKSTREAM_PER_DAY, WAKE_TURNS_PER_DAY};
+use crate::domain::workstream::{open_pip_ask, review_blocking, run_labels, stage, PauseReason, PipAsk, Stage, PIP_ASKED, PIP_ASK_CLEARED, PIP_ASK_LIMIT, WorkstreamBasis, BASIS_ASSIGNEE, BASIS_DESCRIPTION, BASIS_STATUS, BASIS_SUMMARY, WAKES_PER_WORKSTREAM_PER_DAY, WAKE_TURNS_PER_DAY};
 use crate::domain::{has_markers, Actor, Category, ItemRef, Proposal, ProposalQuery, ProposalState, Run, RunKind, RunQuery, RunState, StateKind, WorkItem, Workstream, WorkstreamEvent};
 use crate::error::{Error, Result};
 use crate::proposals;
@@ -104,6 +104,9 @@ pub struct WorkstreamView {
     /// bring them here. Never moved without the person asking (`adopt_into_workstream`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub adoptable: Option<Adoptable>,
+    /// A question Pip asked the person (`ask_person`) that they haven't answered or dismissed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pip_ask: Option<PipAsk>,
 }
 
 /// The verdicts of the finished reviews among `runs`, by run id, each as its sheet resolves it: from its current report,
@@ -129,6 +132,7 @@ impl WorkstreamView {
             workstream,
             waiting_for_pr: None,
             adoptable: None,
+            pip_ask: None,
         }
     }
 }
@@ -266,6 +270,11 @@ impl Core {
     /// Opens a workstream on a cached ticket of `scope`'s connection, or with no ticket when `item` is `None` and a title
     /// is given. A ticket that already has an open workstream gets that one back, unchanged.
     pub async fn open_workstream(&self, scope: &Scope, item: Option<ItemRef>, title: Option<String>) -> Result<Workstream> {
+        self.open_workstream_as(scope, item, title, Actor::Person).await
+    }
+
+    /// `open_workstream`, recorded as opened by `actor`.
+    pub async fn open_workstream_as(&self, scope: &Scope, item: Option<ItemRef>, title: Option<String>, actor: Actor) -> Result<Workstream> {
         let connection_id = Connection::jira_id(scope);
         if item.as_ref().is_some_and(|i| i.connection_id != connection_id) {
             return Err(refuse("that item belongs to another connection"));
@@ -298,7 +307,7 @@ impl Core {
                 basis,
             };
             db.insert_workstream(&ws)?;
-            db.append_workstream_event(&WorkstreamEvent::new(&ws.id, Actor::Person, "opened", at))?;
+            db.append_workstream_event(&WorkstreamEvent::new(&ws.id, actor, "opened", at))?;
             Ok(ws)
         })
         .await
@@ -319,16 +328,18 @@ impl Core {
                     }
                     None => Adoptable::default(),
                 };
-                Ok(Some((ws, runs, verdicts, adoptable)))
+                let pip_ask = open_pip_ask(&db.workstream_events(&ws.id)?);
+                Ok(Some((ws, runs, verdicts, adoptable, pip_ask)))
             })
             .await?;
-        found.map(|(ws, runs, verdicts, adoptable)| self.view_of(ws, &runs, &verdicts, adoptable)).transpose()
+        found.map(|(ws, runs, verdicts, adoptable, pip_ask)| self.view_of(ws, &runs, &verdicts, adoptable, pip_ask)).transpose()
     }
 
     /// A workstream's view from its runs, with the build still waiting for its pull request. The pull request is read
     /// from the code cache, so it is looked up outside the account's database.
-    fn view_of(&self, workstream: Workstream, runs: &[Run], verdicts: &HashMap<String, ReviewVerdict>, adoptable: Adoptable) -> Result<WorkstreamView> {
+    fn view_of(&self, workstream: Workstream, runs: &[Run], verdicts: &HashMap<String, ReviewVerdict>, adoptable: Adoptable, pip_ask: Option<PipAsk>) -> Result<WorkstreamView> {
         let mut view = WorkstreamView::of(workstream, runs, verdicts);
+        view.pip_ask = pip_ask;
         view.adoptable = Some(adoptable).filter(|a| view.workstream.closed_at.is_none() && !a.is_empty());
         if let Some(build) = pushed_build(runs) {
             view.waiting_for_pr = waiting_for(build, self.pull_request_of(build));
@@ -339,11 +350,11 @@ impl Core {
     /// `scope`'s workstreams, newest first, each with its stage; closed ones only when asked for.
     pub async fn workstreams(&self, scope: &Scope, include_closed: bool) -> Result<Vec<WorkstreamView>> {
         let connection_id = Connection::jira_id(scope);
-        let (workstreams, runs, verdicts, pending) = self
+        let (workstreams, runs, verdicts, pending, mut asks) = self
             .with_db_for(scope, |db| {
                 let runs = db.runs(&RunQuery { connection_id: Some(connection_id.clone()), ..Default::default() })?;
                 let linked: Vec<Run> = runs.iter().filter(|r| r.spec.workstream.is_some()).cloned().collect();
-                Ok((db.workstreams(&connection_id, include_closed)?, runs, verdicts_of(db, &linked)?, pending_drafts(db)?))
+                Ok((db.workstreams(&connection_id, include_closed)?, runs, verdicts_of(db, &linked)?, pending_drafts(db)?, db.pip_asks(&connection_id)?))
             })
             .await?;
         workstreams
@@ -352,7 +363,8 @@ impl Core {
                 let linked: Vec<Run> = runs.iter().filter(|r| r.spec.workstream.as_deref() == Some(ws.id.as_str())).cloned().collect();
                 let item_runs: Vec<Run> = runs.iter().filter(|r| ws.item_key.as_deref().is_some_and(|key| r.item.as_ref().is_some_and(|i| i.key == key))).cloned().collect();
                 let adoptable = adoptable_of(&ws, &item_runs, &pending);
-                self.view_of(ws, &linked, &verdicts, adoptable)
+                let pip_ask = asks.remove(&ws.id);
+                self.view_of(ws, &linked, &verdicts, adoptable, pip_ask)
             })
             .collect()
     }
@@ -365,6 +377,11 @@ impl Core {
 
     /// Closes a workstream. Its runs and drafts are left as they are; closing it again changes nothing.
     pub async fn close_workstream(&self, scope: &Scope, id: &str) -> Result<Workstream> {
+        self.close_workstream_as(scope, id, Actor::Person).await
+    }
+
+    /// `close_workstream`, recorded as closed by `actor`.
+    pub async fn close_workstream_as(&self, scope: &Scope, id: &str, actor: Actor) -> Result<Workstream> {
         let connection_id = Connection::jira_id(scope);
         let at = Utc::now();
         self.with_db_atomically_for(scope, |db| {
@@ -372,7 +389,7 @@ impl Core {
             if ws.closed_at.is_none() {
                 ws.closed_at = Some(at);
                 db.save_workstream(&ws)?;
-                db.append_workstream_event(&WorkstreamEvent::new(&ws.id, Actor::Person, "closed", at))?;
+                db.append_workstream_event(&WorkstreamEvent::new(&ws.id, actor, "closed", at))?;
             }
             Ok(ws)
         })
@@ -667,19 +684,53 @@ impl Core {
         .await
     }
 
-    /// Records something the person did to a run (`run_stopped`, `run_answered`, `run_retried`) in its workstream's
-    /// audit. A run with no workstream, or of an account that isn't signed in now, records nothing.
-    pub async fn record_run_action(&self, run: &Run, action: &str, detail: Option<String>) -> Result<()> {
+    /// Records something `actor` did to a run (`run_stopped`, `run_answered`, `run_retried`) in its workstream's audit. A
+    /// run with no workstream, or of an account that isn't signed in now, records nothing.
+    pub async fn record_run_action_by(&self, run: &Run, actor: Actor, action: &str, detail: Option<String>) -> Result<()> {
         let Some(id) = run.spec.workstream.as_deref() else { return Ok(()) };
         let scope = self.scope().await?;
         if Connection::jira_id(&scope) != run.connection_id {
             return Ok(());
         }
-        let mut event = WorkstreamEvent::new(id, Actor::Person, action, Utc::now()).run(&run.id);
+        let mut event = WorkstreamEvent::new(id, actor, action, Utc::now()).run(&run.id);
         if let Some(detail) = detail {
             event = event.detail(detail);
         }
         self.record_workstream_event(&scope, event).await.map(|_| ())
+    }
+
+    /// Records a question Pip asks the person in open workstream `id`: the sanitised question, cut to `PIP_ASK_LIMIT`.
+    /// It stays open until the person answers it in the workstream's conversation or dismisses it, and a newer one
+    /// replaces it.
+    pub async fn pip_asks_person(&self, scope: &Scope, id: &str, question: &str) -> Result<PipAsk> {
+        let question = crate::domain::clip(&flat(question), PIP_ASK_LIMIT);
+        if question.is_empty() {
+            return Err(refuse("a question can't be empty"));
+        }
+        let connection_id = Connection::jira_id(scope);
+        let at = Utc::now();
+        self.with_db_atomically_for(scope, |db| {
+            open(db, &connection_id, id)?;
+            db.append_workstream_event(&WorkstreamEvent::new(id, Actor::Pip, PIP_ASKED, at).detail(&question))?;
+            Ok(PipAsk { question, at })
+        })
+        .await
+    }
+
+    /// The person answered or dismissed what Pip asked in workstream `id`; nothing is recorded when none is open.
+    /// `how` is `answered` or `dismissed`. Returns whether a question was open.
+    pub async fn clear_pip_ask(&self, scope: &Scope, id: &str, how: &str) -> Result<bool> {
+        let connection_id = Connection::jira_id(scope);
+        let at = Utc::now();
+        self.with_db_atomically_for(scope, |db| {
+            owned(db, &connection_id, id)?;
+            if open_pip_ask(&db.workstream_events(id)?).is_none() {
+                return Ok(false);
+            }
+            db.append_workstream_event(&WorkstreamEvent::new(id, Actor::Person, PIP_ASK_CLEARED, at).detail(how))?;
+            Ok(true)
+        })
+        .await
     }
 }
 
@@ -1040,11 +1091,11 @@ mod tests {
         let ws = fx.core.open_workstream(&fx.scope, Some(fx.item("CA-1")), None).await.unwrap();
         let linked = insert_run(&fx, "r-a", Some(&ws.id), RunKind::Investigate, RunState::Stopped).await;
         let loose = insert_run(&fx, "r-b", None, RunKind::Investigate, RunState::Stopped).await;
-        fx.core.record_run_action(&linked, "run_stopped", None).await.unwrap();
-        fx.core.record_run_action(&loose, "run_stopped", None).await.unwrap();
-        fx.core.record_run_action(&linked, "run_answered", Some("12".into())).await.unwrap();
+        fx.core.record_run_action_by(&linked, Actor::Person, "run_stopped", None).await.unwrap();
+        fx.core.record_run_action_by(&loose, Actor::Person, "run_stopped", None).await.unwrap();
+        fx.core.record_run_action_by(&linked, Actor::Person, "run_answered", Some("12".into())).await.unwrap();
         let elsewhere = Run { connection_id: "jira:elsewhere:someone".into(), ..linked.clone() };
-        fx.core.record_run_action(&elsewhere, "run_retried", None).await.unwrap();
+        fx.core.record_run_action_by(&elsewhere, Actor::Person, "run_retried", None).await.unwrap();
 
         let events = fx.core.workstream_events(&fx.scope, &ws.id).await.unwrap();
         assert_eq!(actions(&events), [(Actor::Person, "opened"), (Actor::Person, "run_stopped"), (Actor::Person, "run_answered")]);

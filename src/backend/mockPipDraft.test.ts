@@ -120,7 +120,6 @@ describe("mock Pip drafting the next step of a workstream, as propose_run does",
       "that build has no pull request in this repository yet",
       "run hasn't finished",
       "run is about another ticket",
-      "An identical draft is already open (proposal",
     ]) {
       expect(rustPip).toContain(words);
     }
