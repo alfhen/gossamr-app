@@ -96,6 +96,12 @@ impl Db {
         Ok(())
     }
 
+    /// Puts back a message that was taken but not delivered, unless a newer one is waiting.
+    pub fn restore_run_message(&self, run_id: &str, text: &str, at: chrono::DateTime<chrono::Utc>) -> Result<()> {
+        self.conn.execute("INSERT OR IGNORE INTO run_messages (run_id, text, queued_at) VALUES (?1, ?2, ?3)", params![run_id, text, stamp(at)])?;
+        Ok(())
+    }
+
     /// The message waiting for the run, if any, and removes it.
     pub fn take_run_message(&self, run_id: &str) -> Result<Option<String>> {
         self.atomically(|db| {

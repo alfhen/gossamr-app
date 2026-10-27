@@ -262,10 +262,7 @@ pub(super) fn tools() -> Vec<Value> {
         tool(
             "ask_person",
             "Ask the person a question when you are unsure what to do. They see it under Needs you with a notification, and it stays until they reply in the conversation or dismiss it.",
-            json!({
-                "question": { "type": "string", "description": "One or two sentences" },
-                "workstream": { "type": "string", "description": "A workstream id; left out, this conversation's" }
-            }),
+            json!({ "question": { "type": "string", "description": "One or two sentences" } }),
             &["question"],
         ),
     ]
@@ -394,9 +391,8 @@ async fn close(st: &McpState, pip: &PipRun, args: &Value) -> Reply {
 }
 
 async fn ask_person(st: &McpState, pip: &PipRun, args: &Value) -> Reply {
-    let id = match (opt(args, "workstream"), pip.workstream.as_deref()) {
-        (Some(id), _) | (None, Some(id)) => id,
-        (None, None) => return Err("This conversation isn't in a workstream. Pass the workstream the question is about.".into()),
+    let Some(id) = pip.workstream.as_deref() else {
+        return Err("This conversation isn't in a workstream, so the person's reply would not reach the question. Ask from the workstream's own conversation.".into());
     };
     let ws = reachable_workstream(st, pip, id).await?;
     if ws.closed_at.is_some() {
@@ -696,13 +692,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_question_needs_text_and_a_workstream_that_is_open_and_in_reach() {
+    async fn a_question_needs_text_and_a_workstream_conversation_that_is_open() {
         let r = rig().await;
         assert!(r.err("in-ws", "ask_person", json!({})).await.contains("question is required"));
         assert!(r.err("general", "ask_person", json!({ "question": "Which?" })).await.contains("isn't in a workstream"));
-        assert!(r.err("general", "ask_person", json!({ "question": "Which?", "workstream": "nope" })).await.contains("There is no workstream nope"));
-        r.ok("general", "ask_person", json!({ "question": "Which?", "workstream": r.ws.id })).await;
-        assert!(pip_ask(&r).await.is_some(), "Pip may ask in a workstream it can reach from General");
+        assert!(pip_ask(&r).await.is_none(), "General's question was refused");
+        r.ok("in-ws", "ask_person", json!({ "question": "Which?" })).await;
+        assert!(pip_ask(&r).await.is_some());
         r.fx.core.close_workstream(&r.fx.scope, &r.ws.id).await.unwrap();
         assert!(r.err("in-ws", "ask_person", json!({ "question": "Late?" })).await.contains("is closed"));
     }

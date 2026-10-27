@@ -95,13 +95,14 @@ impl WakeState {
     }
 
     /// A run at rest, or waiting on the person, as the sweep finds it; `None` while it is under way, after a stop
-    /// Gossamr made at a limit, or while it is stopped only to be woken with a message. A question asked while the workstream was paused is noticed this way once it is
+    /// Gossamr made at a limit, or while it is stopped only to be woken with a message (a failed wake leaves the reason on
+    /// the run, so that one is reported). A question asked while the workstream was paused is noticed this way once it is
     /// resumed, keyed by when it was asked.
     pub fn of_run(run: &Run) -> Option<Self> {
         match run.state {
             RunState::Done => Some(WakeState::Done),
             RunState::Failed => Some(WakeState::Failed),
-            RunState::Stopped if run.stopped_by_limit || run.unsent_answer.is_some() => None,
+            RunState::Stopped if run.stopped_by_limit || (run.unsent_answer.is_some() && run.error.is_none()) => None,
             RunState::Stopped => Some(WakeState::Stopped),
             RunState::NeedsAnswer => Some(WakeState::NeedsAnswer),
             RunState::NeedsPermission => Some(WakeState::NeedsPermission),

@@ -295,6 +295,11 @@ fn a_fact_is_keyed_by_its_state_and_a_finish_after_a_continuation_is_another() {
     run.stopped_by_limit = true;
     assert_eq!(WakeState::of_run(&run), None, "a stop Gossamr made at a limit wakes nobody");
     assert_eq!(WakeState::of_attention(&run, Attention::Limit), None);
+    run.stopped_by_limit = false;
+    run.unsent_answer = Some("Use staging.".into());
+    assert_eq!(WakeState::of_run(&run), None, "a stop on the way to a resume wakes nobody");
+    run.error = Some("The session didn't show as stopped.".into());
+    assert_eq!(WakeState::of_run(&run), Some(WakeState::Stopped), "a resume that failed is news");
     run.state = RunState::Working;
     assert_eq!(WakeState::of_run(&run), None, "a run under way is no fact for the sweep");
     run.state = RunState::SystemBlocked;

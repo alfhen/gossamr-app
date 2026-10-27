@@ -75,11 +75,11 @@ async fn a_message_to_a_working_agent_is_queued_outside_the_run_and_a_newer_one_
 async fn a_queued_message_is_the_answer_to_the_agents_next_ask_and_only_once() {
     let (rig, run, ws) = working().await;
     rig.svc.message_agent(&run.id, "Use staging.", Actor::Pip).await.unwrap();
-    assert_eq!(take_for_ask(&rig.fx.core, &run).await.as_deref(), Some("Use staging."));
-    assert_eq!(take_for_ask(&rig.fx.core, &run).await, None);
+    assert_eq!(take_for_ask(&rig.fx.core, &run, "Which database?").await.as_deref(), Some("Use staging."));
+    assert_eq!(take_for_ask(&rig.fx.core, &run, "Again?").await, None);
     assert_eq!(pip_lines(&rig, &ws).await.last(), Some(&("run_answered".to_string(), Some("12".to_string()))));
     let events = rig.fx.core.run_events(&run.id).await.unwrap();
-    assert_eq!(events.last().map(|e| e.text.as_str()), Some("Pip answered"));
+    assert_eq!(events.last().map(|e| (e.text.as_str(), e.detail.as_deref())), Some(("Pip answered", Some("It asked: Which database?"))));
 }
 
 #[tokio::test]
@@ -262,4 +262,42 @@ async fn a_resume_with_no_free_slot_is_refused_and_a_queued_message_waits_for_on
     with_cap(&rig, 2);
     rig.svc.deliver_queued().await;
     assert_eq!((rig.get(&run).await.state, rig.fx.core.run_message(&run.id).await.unwrap()), (RunState::Working, None));
+}
+
+#[tokio::test]
+async fn a_finished_session_the_person_attached_to_is_not_resumed() {
+    let (rig, run, _) = working().await;
+    ends_turn(&rig, &run, "done");
+    rig.session(&run, |e| {
+        e.status = Some("idle".into());
+        e.pid = Some(4242);
+    });
+    rig.set(&run, |r| (r.state, r.ended_at) = (RunState::Done, Some(chrono::Utc::now()))).await;
+    let why = rig.svc.message_agent(&run.id, "Hello.", Actor::Pip).await.unwrap_err().to_string();
+    assert!(why.contains("open on it in Terminal"), "{why}");
+    assert!(calls(&rig).is_empty());
+}
+
+#[tokio::test]
+async fn a_queued_message_whose_delivery_failed_for_now_is_kept_and_a_newer_one_is_not_overwritten() {
+    let (rig, run, _) = working().await;
+    rig.svc.message_agent(&run.id, "Carry on.", Actor::Pip).await.unwrap();
+    ends_turn(&rig, &run, "done");
+    rig.set(&run, |r| (r.state, r.ended_at) = (RunState::Done, Some(chrono::Utc::now()))).await;
+    rig.cli.with(|s| s.resume = Resume::Exits);
+    rig.svc.deliver_queued().await;
+    assert_eq!(rig.fx.core.run_message(&run.id).await.unwrap().as_deref(), Some("Carry on."), "a wake that failed is tried again");
+
+    rig.fx.core.queue_run_message(&run.id, "Newer.").await.unwrap();
+    rig.fx.core.restore_run_message(&run.id, "Older.").await.unwrap();
+    assert_eq!(rig.fx.core.run_message(&run.id).await.unwrap().as_deref(), Some("Newer."));
+}
+
+#[tokio::test]
+async fn pips_answer_never_resumes_an_agent_gossamr_stopped_at_its_limit() {
+    let (rig, run, _) = working().await;
+    rig.set(&run, |r| (r.state, r.stopped_by_limit, r.ended_at) = (RunState::Stopped, true, Some(chrono::Utc::now()))).await;
+    let why = rig.svc.answer_as(&run.id, "Go on.", Actor::Pip).await.unwrap_err().to_string();
+    assert!(why.contains("only the person resumes it"), "{why}");
+    assert!(rig.get(&run).await.stopped_by_limit);
 }

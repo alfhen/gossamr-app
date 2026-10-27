@@ -12,16 +12,12 @@ export const COPY = {
   readOnlyNote: "Claude Code refuses file edits and every command outside its read-only rules, whatever your own permission mode. It reads none of your or the repository's Claude settings and loads none of your MCP servers, so their allow rules don't apply.",
   readOnlyTestsNote: "The repository's tests run as the repository wrote them, so their code can write inside the run's worktree.",
   readOnlySteps: "Investigate, Triage, Plan, Review and Verify are read-only: Claude Code itself refuses their file edits and writing commands, and they run without your own or the repository's Claude settings. Review and Verify may run the repository's tests, whose code runs as written. A Build changes code in its worktree, and what it is told about Jira and pushing is a request, not a lock.",
-  receives: "The prompt, the focus note and the ticket text below are exactly what the agent receives.",
-  guardNote: "This is a request to the model, not a block.",
-  startsNow: "Starts right away. You can stop it once it's working.",
-  changed: "This draft changed. Read it again.",
 } as const;
 
 /** The three lines at the top of the safety sheet, true for each kind: what read-only steps may do, what a Build may do, and what always waits for the person. */
 export const SAFETY_SUMMARY: readonly { icon: "check" | "hand" | "lock"; text: string }[] = [
   { icon: "check", text: "Investigate, Triage, Plan, Review and Verify only read: Claude Code refuses their edits and writes. Review and Verify may run the repository's tests." },
-  { icon: "hand", text: "Build changes code in its own worktree and runs with your own Claude settings, which decide whether it can push a branch or open a pull request. Its prompt asks it to push to a draft pull request, always in a workstream and elsewhere only when Pushing is ticked, and to stay out of Jira; both are requests, not locks." },
+  { icon: "hand", text: "Build changes code in its own worktree and runs with your own Claude settings, which decide whether it can push a branch or open a pull request. Its prompt asks it to push to a draft pull request, and to stay out of Jira; both are requests, not locks." },
   { icon: "lock", text: "Gossamr posts to Jira or GitHub only what you approve. A Build runs with your Claude settings and could reach Jira or GitHub on its own: your Claude settings, not Gossamr, decide that." },
 ];
 
@@ -308,7 +304,7 @@ export function reviewThisControl(run: BuiltRun, change: Pick<CodeChange, "kind"
   if (run.resultComplete === false) return no(`${SUMMARY_ONLY} A review can only follow a build Gossamr has read in full.`);
   if (!change || change.kind !== "pullRequest" || change.number == null) {
     // A build asked to push opened its own draft pull request; only a sync hasn't found it yet.
-    if (run.spec.allowPush) return no("Its draft pull request hasn't been found on GitHub yet. Gossamr asked for a sync when it finished; Review this turns on once it shows.");
+    if (run.spec.allowPush) return no("Its draft pull request hasn't been found on GitHub yet. Gossamr asked for a sync when it finished; Ask Pip to review turns on once it shows.");
     return no("This build has no pull request yet. Push it and open one, or ask it to, then review it.");
   }
   if (change.repo.toLowerCase() !== run.spec.repo.toLowerCase() || (change.headRepo && change.headRepo.toLowerCase() !== run.spec.repo.toLowerCase())) return no("Its pull request isn't from a branch in the same repository, which Gossamr doesn't review yet.");

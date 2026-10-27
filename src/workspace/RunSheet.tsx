@@ -185,7 +185,7 @@ function Attention({ run, label, permissionAnswered, opened, answering, slotPlac
  */
 export function waitingText(run: Run, place: number | null = null): string {
   if (run.slotWaitSince && !run.spec.workstream) return `It is approved and starts on its own when one of the running agents finishes${place ? ` (${ordinal(place)} in line)` : ""}. Stop it if you no longer want it.`;
-  if (run.spec.workstream) return "It is approved and launches on its own once a slot is free and its workstream isn't paused. Until then it waits.";
+  if (run.spec.workstream) return `${run.proposalId ? "It is approved and" : "Pip started it, and it"} launches on its own once a slot is free and its workstream isn't paused. Until then it waits.`;
   return "It is approved but has not been launched, as after a restart. Nothing runs until you start it.";
 }
 

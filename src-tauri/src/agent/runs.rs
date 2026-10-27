@@ -517,11 +517,15 @@ async fn start_checked(st: &McpState, pip: &PipRun, request_id: &str, key: &str,
     let scope = &pip.scope;
     let view = st.core.workstream(scope, ws_id).await.map_err(|e| e.to_string())?.ok_or_else(|| format!("There is no workstream {ws_id} for this account."))?;
     let ws = &view.workstream;
+    in_reach_of_conversation(pip, Some(ws_id))?;
     if ws.closed_at.is_some() {
         return Err(format!("The workstream “{}” is closed.", ws.title));
     }
     if ws.paused_reason.is_some() {
         return Err(format!("The workstream “{}” is paused; only the person resumes it.", ws.title));
+    }
+    if let Some(why) = st.driver.unready().await {
+        return Err(why);
     }
     let (item, spec) = match ws.item_key.as_deref() {
         Some(ticket) => {
@@ -621,8 +625,17 @@ async fn start_without_ticket(st: &McpState, pip: &PipRun, ws_id: &str, kind: Ru
     st.core.build_pip_ticketless_run(scope, ws_id, prompt, repo, project, plan).await.map_err(|e| e.to_string())
 }
 
+/// A workstream's conversation, and a wake in it, drive only that workstream's agents. General drives any.
+fn in_reach_of_conversation(pip: &PipRun, workstream: Option<&str>) -> std::result::Result<(), String> {
+    match (pip.workstream.as_deref(), workstream) {
+        (Some(own), other) if other != Some(own) => Err(format!("This conversation drives the agents of workstream {own} only.")),
+        _ => Ok(()),
+    }
+}
+
 async fn message(st: &McpState, pip: &PipRun, request_id: &str, args: &Value) -> Reply {
     let run = visible_run(st, pip, args).await?;
+    in_reach_of_conversation(pip, run.spec.workstream.as_deref())?;
     let text = crate::runs::result::scrub(required(args, "text")?).trim().to_string();
     let name = name_of(st, pip, &run).await;
     let resumes = matches!(run.state, RunState::Done | RunState::Stopped);
@@ -644,6 +657,7 @@ async fn message(st: &McpState, pip: &PipRun, request_id: &str, args: &Value) ->
 
 async fn stop(st: &McpState, pip: &PipRun, args: &Value) -> Reply {
     let run = visible_run(st, pip, args).await?;
+    in_reach_of_conversation(pip, run.spec.workstream.as_deref())?;
     let name = name_of(st, pip, &run).await;
     st.driver.clone().stop(run.id.clone()).await.map_err(|e| e.to_string())?;
     (st.workstreams)(&run.connection_id);

@@ -116,6 +116,12 @@ pub trait AgentDriver: Send + Sync {
     /// ticket `key` titled `title`. The error is in words Pip can pass on.
     async fn plan(&self, repo: &str, key: &str, title: &str) -> std::result::Result<ClonePlan, String>;
 
+    /// Why no agent could start now because of Claude itself (missing, or signed out), in words Pip can pass on; `None`
+    /// when it can, or when that can't be told.
+    async fn unready(&self) -> Option<String> {
+        None
+    }
+
     /// Hands the queued run to the launcher in the background: first marked as waiting for a slot
     /// when the cap or an earlier run holds it back. Returns the run as it then stands.
     async fn begin(self: Arc<Self>, run_id: String) -> Result<Run>;
@@ -392,8 +398,9 @@ impl AgentService {
         // Kept as waiting until its provider has started, so a reload shows it either way.
         recorded(self.core.pip_turn_begin(&scope, &req.conversation, &req.request_id, &req.prompt, &meta, "queued").await);
         let workstream = workstream_of_conversation(&req.conversation).map(str::to_string);
-        if let Some(id) = &workstream {
-            // The person's message answers a question Pip asked in this workstream, if one is open.
+        if let Some(id) = workstream.as_ref().filter(|_| meta.shown.is_none()) {
+            // What the person types answers a question Pip asked in this workstream, if one is open; a line the page
+            // wrote for them (`shown`) doesn't.
             recorded(self.core.clear_pip_ask(&scope, id, "answered").await.map(drop));
         }
         let mut again = Vec::new();

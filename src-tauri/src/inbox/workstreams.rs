@@ -266,6 +266,17 @@ pub(super) fn require_linkable(db: &Db, connection_id: &str, id: &str, item: Opt
     Ok(())
 }
 
+/// `require_linkable`, and the workstream isn't paused: the check for starting an agent, made in the same transaction
+/// that stores the run.
+pub(super) fn require_startable(db: &Db, connection_id: &str, id: &str, item: Option<&ItemRef>) -> Result<()> {
+    require_linkable(db, connection_id, id, item)?;
+    let ws = owned(db, connection_id, id)?;
+    if ws.paused_reason.is_some() {
+        return Err(refuse(format!("The workstream “{}” is paused; only the person resumes it.", ws.title)));
+    }
+    Ok(())
+}
+
 impl Core {
     /// Opens a workstream on a cached ticket of `scope`'s connection, or with no ticket when `item` is `None` and a title
     /// is given. A ticket that already has an open workstream gets that one back, unchanged.

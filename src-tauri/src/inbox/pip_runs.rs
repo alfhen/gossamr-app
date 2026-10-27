@@ -320,7 +320,7 @@ impl Core {
         let run = Run::started_by_pip(id, connection_id.clone(), item.clone(), spec, file, start.request_id, Utc::now());
         self.with_db_atomically_for(scope, |db| {
             if let Some(ws) = workstream.as_deref() {
-                super::workstreams::require_linkable(db, &connection_id, ws, item.as_ref())?;
+                super::workstreams::require_startable(db, &connection_id, ws, item.as_ref())?;
             }
             let (run, fresh) = db.insert_started_run(&run, start.key)?;
             if let (true, Some(ws)) = (fresh, workstream.as_deref()) {
@@ -336,6 +336,11 @@ impl Core {
     pub async fn queue_run_message(&self, run_id: &str, text: &str) -> Result<()> {
         let at = Utc::now();
         self.with_proposals(|db| db.put_run_message(run_id, text, at)).await
+    }
+
+    pub async fn restore_run_message(&self, run_id: &str, text: &str) -> Result<()> {
+        let at = Utc::now();
+        self.with_proposals(|db| db.restore_run_message(run_id, text, at)).await
     }
 
     /// The message waiting for the run, removed as it is taken.

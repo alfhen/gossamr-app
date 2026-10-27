@@ -6,7 +6,7 @@
 use chrono::Utc;
 
 use super::answer::checked;
-use super::cli::is_uuid;
+use super::cli::{is_uuid, AgentEntry};
 use super::limits;
 use super::service::{belongs_to, RunService};
 use crate::domain::{Actor, Run, RunEvent, RunState};
@@ -25,6 +25,9 @@ pub enum Delivery {
 
 /// What a resume says when every slot is taken, so the queued message waits instead of being dropped.
 const NO_SLOT: &str = "Every agent slot is taken; try again when one finishes.";
+
+const IN_TERMINAL: &str = "A session is open on it in Terminal, so the person is in it.";
+const NOT_WAITING: &str = "It isn't waiting for an answer any more. Look again in a moment.";
 
 fn refuse(message: impl Into<String>) -> Error {
     Error::Proposal(message.into())
@@ -96,8 +99,13 @@ impl RunService {
         }
         let tc = self.toolchain().await?;
         let listed = tc.cli.agents(true).await?;
-        if listed.iter().find(|e| belongs_to(e, &run)).is_some_and(|e| !matches!(e.state.as_deref(), Some("stopped" | "done"))) {
-            return Err(refuse("A session is open on it in Terminal, so the person is in it."));
+        let attached = |e: &AgentEntry| match e.state.as_deref() {
+            Some("stopped") => false,
+            Some("done") => e.pid.is_some(),
+            _ => true,
+        };
+        if listed.iter().find(|e| belongs_to(e, &run)).is_some_and(attached) {
+            return Err(refuse(IN_TERMINAL));
         }
         if let Some(why) = self.another_pass(&mut run, text).await? {
             return Err(Error::Claude(why));
@@ -150,43 +158,62 @@ impl RunService {
 
     /// Hands each run's waiting message to it once it can have it: a run that is done, or ended its turn with a question,
     /// is sent it as an answer or by resume. One that is still working, or waits on a permission prompt or sign-in,
-    /// keeps it, as does one whose workstream is closed or paused, or a resume with no free slot. One that failed or was stopped has no one to take it, so it is dropped and the workstream's audit says so.
+    /// keeps it, as does one whose workstream is closed or paused, or a resume with no free slot. One that failed or was
+    /// stopped has no one to take it, so it is dropped and the workstream's audit says so. The message is taken before it
+    /// is sent, so one queued meanwhile isn't lost, and put back when the send failed for a reason that passes.
     pub(super) async fn deliver_queued(&self) {
         let Ok(waiting) = self.core.runs_with_messages().await else { return };
         for id in waiting {
-            let Ok(Some(text)) = self.core.run_message(&id).await else { continue };
+            let Ok(Some(_)) = self.core.run_message(&id).await else { continue };
             let Ok(run) = self.load(&id).await else {
                 let _ = self.core.take_run_message(&id).await;
                 continue;
             };
-            if matches!(run.state, RunState::Done | RunState::NeedsAnswer) && self.workstream_hold(&run).await.is_some() {
+            let ready = match run.state {
+                RunState::Done | RunState::NeedsAnswer => self.workstream_hold(&run).await.is_none(),
+                RunState::Failed => true,
+                RunState::Stopped => run.unsent_answer.is_none(),
+                _ => false,
+            };
+            if !ready {
                 continue;
             }
+            let Ok(Some(text)) = self.core.take_run_message(&id).await else { continue };
             let sent = match run.state {
                 RunState::Done => self.resume_with(&id, &text, Actor::Pip).await.map(drop),
                 RunState::NeedsAnswer => self.answer_as(&id, &text, Actor::Pip).await.map(drop),
-                RunState::Stopped if run.unsent_answer.is_some() => continue,
-                RunState::Failed | RunState::Stopped => Err(refuse(format!("the run is {}", run.state.as_str()))),
-                _ => continue,
+                _ => Err(refuse(format!("the run is {}", run.state.as_str()))),
             };
-            if matches!(&sent, Err(Error::Proposal(why)) if why == NO_SLOT) {
+            let Err(e) = sent else { continue };
+            eprintln!("couldn't deliver the message waiting for run {id}: {e}");
+            if self.load(&id).await.is_ok_and(|r| r.unsent_answer.is_some()) {
                 continue;
             }
-            if let Err(e) = self.core.take_run_message(&id).await {
-                eprintln!("couldn't take the message waiting for run {id}: {e}");
-            }
-            if let Err(e) = sent {
-                eprintln!("couldn't deliver the message waiting for run {id}: {e}");
+            if retryable(&e) {
+                if let Err(e) = self.core.restore_run_message(&id, &text).await {
+                    eprintln!("couldn't keep the message waiting for run {id}: {e}");
+                }
+            } else {
                 self.note_by(&run, Actor::Pip, "agent_message_dropped", Some(e.to_string())).await;
             }
         }
     }
 }
 
-/// When a queued message reaches its run at its next `ask`: it answers that call, so the run never waits.
-pub async fn take_for_ask(core: &crate::inbox::Core, run: &Run) -> Option<String> {
+/// Whether a failed delivery is worth trying again on a later poll.
+fn retryable(e: &Error) -> bool {
+    match e {
+        Error::Proposal(why) => [NO_SLOT, IN_TERMINAL, NOT_WAITING].contains(&why.as_str()),
+        Error::Claude(_) => true,
+        _ => false,
+    }
+}
+
+/// When a queued message reaches its run at its next `ask`: it is the result of that call, so the run never waits.
+/// The question is kept on the run's steps, as nobody else sees it.
+pub async fn take_for_ask(core: &crate::inbox::Core, run: &Run, question: &str) -> Option<String> {
     let text = core.take_run_message(&run.id).await.ok().flatten()?;
-    let event = RunEvent { run_id: run.id.clone(), seq: 0, at: Utc::now(), kind: "answered".into(), text: "Pip answered".into(), detail: None };
+    let event = RunEvent { run_id: run.id.clone(), seq: 0, at: Utc::now(), kind: "answered".into(), text: "Pip answered".into(), detail: Some(format!("It asked: {question}")) };
     if let Err(e) = core.append_run_events(&run.id, &[event]).await {
         eprintln!("couldn't record the answer: {e}");
     }

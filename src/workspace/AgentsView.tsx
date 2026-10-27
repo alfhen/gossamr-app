@@ -528,7 +528,7 @@ export function AgentsScreen({ runs, status, error, filters, selectedId, earlier
         </div>
         <footer ref={footer} className="@container flex h-8 shrink-0 items-center gap-4 border-t border-ws-sep bg-ws-win px-6 text-xs text-ws-ink3">
           <p className="m-0 min-w-0 flex-1 truncate">
-            <kbd className={KBD}>j</kbd> <kbd className={KBD}>k</kbd> move · <kbd className={KBD}>↵</kbd> open · <kbd className={KBD}>n</kbd> start an agent · <kbd className={KBD}>Esc</kbd> clear
+            <kbd className={KBD}>j</kbd> <kbd className={KBD}>k</kbd> move · <kbd className={KBD}>↵</kbd> open · <kbd className={KBD}>n</kbd> ask Pip · <kbd className={KBD}>Esc</kbd> clear
             <span className="hidden @xl:inline">
               {" "}
               · <kbd className={KBD}>F6</kbd> regions · <kbd className={KBD}>⌘K</kbd> jump · <kbd className={KBD}>⌘J</kbd> Pip

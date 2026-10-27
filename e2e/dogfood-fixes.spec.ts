@@ -114,7 +114,7 @@ test.describe("starting an agent from the peek (D1)", () => {
   test("Pip's intro says nothing is posted to Jira until the person approves", async ({ page }) => {
     await openApp(page);
     await openPip(page);
-    await expect(pipPane(page)).toContainText("Nothing is posted to Jira until you approve it. On GitHub, a Build runs as you. In a workstream or with Pushing ticked, it is asked to push only its branch to a draft pull request: a request, not a lock; see Agent safety.");
+    await expect(pipPane(page)).toContainText("Nothing is posted to Jira until you approve it. On GitHub, a Build runs as you. It is asked to push only its branch to a draft pull request: a request, not a lock; see Agent safety.");
     await expect(pipPane(page)).not.toContainText("Nothing changes until you approve");
   });
 });

@@ -24,7 +24,7 @@ use super::toolchain::{Toolchain, ToolchainSource};
 use super::control::{MacTerminal, Terminal};
 use super::tracker::{Attention, NoNotices, RunNotifier};
 use crate::config::{AgentSettings, AppConfig};
-use crate::domain::{render_prompt, Actor, Run, RunKind, RunQuery, RunState, GUARD, AGENT_GUARD};
+use crate::domain::{render_prompt, Actor, Run, RunEvent, RunKind, RunQuery, RunState, GUARD, AGENT_GUARD};
 use crate::error::{Error, Result};
 use crate::inbox::Core;
 
@@ -441,8 +441,8 @@ impl RunService {
         if !eligible {
             return Ok((run, false));
         }
-        // Only a person reaches `start`, so starting a run an earlier release queued on its own is their approval of it;
-        // without this, one sent to wait for a slot would never pass `workstream_runs`.
+        // Starting a run an earlier release queued on its own is the person's approval of it; without this, one sent to
+        // wait for a slot would never pass `workstream_runs`.
         if run.unapproved_auto_start.take().is_some() {
             self.store(&run).await?;
         }
@@ -598,8 +598,14 @@ impl RunService {
 
     /// `note_person` for something `by` did, which is Pip when it drove the run.
     pub(super) async fn note_by(&self, run: &Run, by: Actor, action: &str, detail: Option<String>) {
-        if let Err(e) = self.core.record_run_action_by(run, by, action, detail).await {
+        if let Err(e) = self.core.record_run_action_by(run, by, action, detail.clone()).await {
             eprintln!("couldn't record {action} for run {} in its workstream: {e}", run.id);
+        }
+        if by == Actor::Pip && run.spec.workstream.is_none() && matches!(action, "run_stopped" | "agent_message_queued") {
+            let event = RunEvent { run_id: run.id.clone(), seq: 0, at: Utc::now(), kind: action.into(), text: format!("Pip: {}", action.replace('_', " ")), detail };
+            if let Err(e) = self.core.append_run_events(&run.id, &[event]).await {
+                eprintln!("couldn't record {action} on run {}: {e}", run.id);
+            }
         }
     }
 
@@ -726,8 +732,15 @@ impl RunService {
 
 #[async_trait]
 impl RunLauncher for RunService {
-    /// Starts a freshly queued run. A run that isn't queued is left alone, so calling this twice never starts two.
+    /// Starts a freshly queued run. A run that isn't queued is left alone, so calling this twice never starts two; one in a
+    /// workstream that has been paused or closed stays queued until `launch_waiting` finds it open.
     async fn launch(&self, run_id: &str) -> Result<()> {
+        let held = self.load(run_id).await.ok().filter(|r| r.state == RunState::Queued && r.spec.workstream.is_some());
+        if let Some(run) = held {
+            if !self.workstream_runs(&run).await {
+                return Ok(());
+            }
+        }
         self.start_in_line(run_id).await.map(drop)
     }
 }

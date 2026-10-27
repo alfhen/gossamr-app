@@ -79,6 +79,9 @@ impl RunService {
             }
             self.core.asks().cancel(run_id);
         }
+        if by == Actor::Pip && run.state == RunState::Stopped && run.stopped_by_limit {
+            return Err(refuse("Gossamr stopped it at its limit; only the person resumes it."));
+        }
         let again = run.state == RunState::Stopped && (run.unsent_answer.is_some() || run.stopped_by_limit);
         if run.state != RunState::NeedsAnswer && !again {
             return Err(refuse(match run.state {

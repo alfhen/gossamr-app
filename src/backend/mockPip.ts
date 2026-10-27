@@ -854,7 +854,7 @@ export async function mockAsk(req: AskRequest, drafter: Partial<PipDrafter> | nu
   mockPipTurns.begin(req.conversation ?? GENERAL_CONVERSATION, req.requestId, req.prompt, req.meta ?? { imageCount: req.images?.length ?? 0 }, "running", new Date(), undefined, req.kind ?? "user");
   const item = wsId ? (drafter?.pipWorkstreamItem?.(wsId) ?? null) : null;
   const workstream = wsId ? { id: wsId, item, lastDrift: drafter?.pipWorkstreamDrift?.(wsId) ?? null } : null;
-  if (wsId && req.kind !== "wake") await drafter?.pipAskAnswered?.(wsId);
+  if (wsId && req.kind !== "wake" && !req.meta?.shown) await drafter?.pipAskAnswered?.(wsId);
   const script = scriptPip(req.prompt, req.context, req.images, drafter?.pipRuns?.() ?? [], Date.now(), drafter?.pipDrafts?.() ?? [], discussing.get(session) ?? null, workstream);
   if (script.discussed) discussing.set(session, script.discussed);
   emit(req.requestId, { type: "started", sessionId: session });

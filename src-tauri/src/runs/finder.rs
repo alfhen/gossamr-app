@@ -5,6 +5,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
+use super::cli::CliError;
+use super::failure::Failure;
 use super::launcher::RunLauncher;
 use super::message::Delivery;
 use super::service::RunService;
@@ -25,6 +27,18 @@ impl AgentDriver for RunService {
         let path: PathBuf = clone.path.clone();
         let name = self.suggest_name(&path, key, title).await.map_err(|e| e.to_string())?;
         Ok(ClonePlan { path, base: clone.default_branch.clone().unwrap_or_else(|| clone.branch.clone()), name })
+    }
+
+    async fn unready(&self) -> Option<String> {
+        let tc = match self.toolchain().await {
+            Ok(tc) => tc,
+            Err(e) => return Some(e.to_string()),
+        };
+        match tc.cli.auth_status().await {
+            Ok(auth) if !auth.logged_in => Some(Failure::NotSignedIn.to_string()),
+            Err(CliError::Spawn(e)) if e.kind() == std::io::ErrorKind::NotFound => Some(Failure::ClaudeMissing.to_string()),
+            _ => None,
+        }
     }
 
     async fn begin(self: Arc<Self>, run_id: String) -> Result<Run> {

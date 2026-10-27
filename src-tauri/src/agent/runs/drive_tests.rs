@@ -408,9 +408,10 @@ async fn a_ticket_out_of_reach_is_refused_until_the_person_hands_it_over() {
     let d = drive().await;
     let out = d.workstream_out_of_reach().await;
     let args = json!({ "workstream": out, "role": "investigate" });
-    assert!(d.err("in-ws", "start_agent", args.clone()).await.contains("out of reach"));
-    d.st.runs.lock().unwrap().get_mut("in-ws").unwrap().handed = ["OTH-1".to_string()].into();
-    assert!(d.ok("in-ws", "start_agent", args).await.contains("OTH-1"));
+    d.join_general("general");
+    assert!(d.err("general", "start_agent", args.clone()).await.contains("out of reach"));
+    d.st.runs.lock().unwrap().get_mut("general").unwrap().handed = ["OTH-1".to_string()].into();
+    assert!(d.ok("general", "start_agent", args).await.contains("OTH-1"));
 }
 
 #[tokio::test]
@@ -585,4 +586,33 @@ async fn stop_agent_stops_it_as_pip_and_a_run_waiting_for_the_slot_takes_the_slo
     let again = d.err("in-ws", "stop_agent", json!({ "id": first.id })).await;
     assert!(again.contains("is stopped, so there is nothing to stop"), "{again}");
     assert!(d.err("in-ws", "stop_agent", json!({})).await.contains("id is required"));
+}
+
+#[tokio::test]
+async fn a_workstreams_conversation_drives_only_its_own_agents_and_general_drives_any() {
+    let d = drive().await;
+    let other = d.rig.fx.core.open_workstream(&d.rig.fx.scope, Some(d.rig.fx.item("CA-2")), None).await.unwrap().id;
+    d.join_general("general");
+    let reply = d.ok("general", "start_agent", json!({ "workstream": other, "role": "investigate", "brief": "the other ticket" })).await;
+    let run = d.run_named(&reply).await;
+
+    let elsewhere = d.err("in-ws", "start_agent", json!({ "workstream": other, "role": "investigate", "brief": "more" })).await;
+    assert!(elsewhere.contains("drives the agents of workstream"), "{elsewhere}");
+    assert!(d.err("in-ws", "message_agent", json!({ "id": run.id, "text": "Hi" })).await.contains("drives the agents of workstream"));
+    assert!(d.err("in-ws", "stop_agent", json!({ "id": run.id })).await.contains("drives the agents of workstream"));
+}
+
+#[tokio::test]
+async fn an_agent_queued_for_a_workstream_that_is_paused_is_not_launched_until_it_is_resumed() {
+    use crate::runs::launcher::RunLauncher;
+    let d = drive().await;
+    let spec = RunSpec { workstream: Some(d.ws.clone()), ..d.rig.spec(1) };
+    let queued = d.rig.fx.core.queue_test_run(spec, Some(d.rig.fx.item("CA-1"))).await.unwrap();
+    d.rig.fx.core.pause_workstream(&d.rig.fx.scope, &d.ws, PauseReason::Person, Actor::Person).await.unwrap();
+    d.rig.svc.launch(&queued.id).await.unwrap();
+    assert_eq!((d.run_by_id(&queued.id).await.state, d.rig.cli.launches()), (RunState::Queued, 0));
+
+    d.rig.fx.core.resume_workstream(&d.rig.fx.scope, &d.ws).await.unwrap();
+    d.rig.svc.launch_waiting().await.unwrap();
+    assert_eq!(d.rig.cli.launches(), 1);
 }
