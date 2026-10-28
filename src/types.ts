@@ -313,7 +313,7 @@ export interface FeedPage {
   next: FeedCursor | null;
 }
 
-/** Emitted as the `cache-changed` event when a sync or a write changed what the cache holds. */
+/** The `cache` topic of the `changed` event, when a sync or a write changed what the cache holds. */
 export interface CacheChanged {
   connectionId: string;
 }
@@ -484,7 +484,7 @@ export type ProposalEdit =
   /** A review draft's summary and comments, as the person rewords and drops them; the ones left out stay as they are. A person's edit never moves a comment or adds one. */
   | { type: "githubReview"; summary?: string; comments?: ReviewComment[] };
 
-/** Emitted as the `proposals-changed` event when a draft was created, edited, applied, revised or retired. */
+/** The `proposals` topic of the `changed` event, when a draft was created, edited, applied, revised or retired. */
 export interface ProposalsChanged {
   connectionId: string;
 }
@@ -803,12 +803,12 @@ export interface WorkstreamEvent {
   detail: string | null;
 }
 
-/** Emitted as the `workstreams-changed` event when a workstream was opened, closed or changed. */
+/** The `workstreams` topic of the `changed` event, when a workstream was opened, closed or changed. */
 export interface WorkstreamsChanged {
   connectionId: string;
 }
 
-/** Emitted as the `runs-changed` event. */
+/** The `runs` topic of the `changed` event. */
 export interface RunsChanged {
   connectionId: string;
 }
@@ -1121,43 +1121,7 @@ export interface CodeRef {
   number: number;
 }
 
-export interface CodeFile {
-  repo: string;
-  path: string;
-  /** The ref asked for; empty for the default branch. */
-  reference: string;
-  text: string;
-  /** Bytes of the whole file, which may be more than `text` holds. */
-  size: number;
-  /** `text` is cut at 60,000 characters. */
-  truncated: boolean;
-}
-
-export interface TreeEntry {
-  name: string;
-  path: string;
-  kind: "file" | "dir" | "symlink" | "submodule";
-  size: number;
-}
-
-export interface CodeHit {
-  repo: string;
-  path: string;
-  url: string;
-  fragments: string[];
-}
-
-export interface CodeCommitQuery {
-  /** A branch, tag or commit; the default branch when absent. */
-  reference?: string | null;
-  /** RFC 3339. */
-  since?: string | null;
-  /** Only commits whose message contains this, ignoring case, such as a ticket key. */
-  query?: string | null;
-  limit?: number;
-}
-
-/** Emitted as `dev-links-changed` when a sync or a live search changed which work items are linked to code. */
+/** The `devLinks` topic of the `changed` event, when a sync or a live search changed which work items are linked to code. */
 export interface DevLinksChanged {
   connectionId: string;
 }

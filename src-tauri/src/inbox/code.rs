@@ -600,6 +600,7 @@ impl Core {
     }
 
     /// Pull request and notification events across the GitHub connections, newest first.
+    #[cfg(test)]
     pub fn code_events(&self, limit: usize) -> Result<Vec<Event>> {
         let mut out = Vec::new();
         for id in self.code.connection_ids() {
@@ -661,19 +662,6 @@ impl Core {
     pub async fn code_pull_change(&self, repo: &str, number: u64) -> Result<CodeChange> {
         let (id, repo) = self.code_connection_for(repo)?;
         self.code_host(&id).await?.pull_request_change(&repo, number).await
-    }
-
-    /// Pull requests, branches and commits in the watched repositories that match `query`, newest first.
-    pub async fn code_search(&self, query: &str) -> Result<Vec<CodeChange>> {
-        let mut out = Vec::new();
-        for id in self.code.connection_ids() {
-            let repos = self.watched_repos(&id)?;
-            if !repos.is_empty() {
-                out.extend(self.code_host(&id).await?.search(query, &repos).await?);
-            }
-        }
-        out.sort_by_key(|c| std::cmp::Reverse(c.updated_at));
-        Ok(out)
     }
 
     /// The connection that watches `repo` (compared without regard to case) and the repository as it is spelled there.

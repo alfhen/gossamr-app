@@ -212,6 +212,7 @@ impl Core {
         .await
     }
 
+    #[cfg(test)]
     pub async fn proposal(&self, id: &str) -> Result<Option<Proposal>> {
         self.with_proposals(|db| db.proposal(id)).await
     }

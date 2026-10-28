@@ -29,7 +29,7 @@ describe("taking a skip back (the mock of unskip)", () => {
     expect(skipped.state.type).toBe("skipped");
     const back = await backend.proposalsUnskip(p.id);
     expect({ ...back, updatedAt: p.updatedAt }).toEqual({ ...p, updatedAt: p.updatedAt });
-    expect((await backend.proposalsGet(p.id))?.state.type).toBe("pending");
+    expect((await backend.proposals.get(p.id))?.state.type).toBe("pending");
     expect(await lines(backend, ws.id)).toEqual([
       ["person", "opened", null],
       ["pip", "draft_created", null],
@@ -69,6 +69,6 @@ describe("taking a skip back (the mock of unskip)", () => {
     await backend.proposalsSkip(p.id);
     vi.setSystemTime(Date.now() + UNSKIP_WINDOW_MS + 1);
     await expect(backend.proposalsUnskip(p.id)).rejects.toThrow(/too long ago/);
-    expect((await backend.proposalsGet(p.id))?.state.type).toBe("skipped");
+    expect((await backend.proposals.get(p.id))?.state.type).toBe("skipped");
   });
 });

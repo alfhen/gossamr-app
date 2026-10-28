@@ -208,9 +208,9 @@ describe("posting a review draft to the mock GitHub", () => {
     }
   });
 
-  it("serves the pull request's files to the review card", async () => {
+  it("serves the pull request's files with its diff to the review card", async () => {
     const { backend } = await reviewed();
-    expect((await backend.codePullFiles(GH, "acme/webshop", 218)).map((f) => f.path)).toEqual(["src/consumer/retry.ts", "src/consumer/index.ts"]);
-    await expect(backend.codePullFiles(GH, "acme/webshop", 999)).rejects.toThrow("couldn't find pull request #999");
+    expect((await backend.codePullDiff(GH, "acme/webshop", 218)).files.map((f) => f.path)).toEqual(["src/consumer/retry.ts", "src/consumer/index.ts"]);
+    await expect(backend.codePullDiff(GH, "acme/webshop", 999)).rejects.toThrow("couldn't find pull request #999");
   });
 });

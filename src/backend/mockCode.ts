@@ -1,9 +1,6 @@
 import type {
   ChangedFile,
   CodeChange,
-  CodeCommitQuery,
-  CodeFile,
-  CodeHit,
   CodeRef,
   DevLink,
   DevLinksChanged,
@@ -11,18 +8,9 @@ import type {
   LinkSource,
   PersonRef,
   PullRequestDetail,
-  TreeEntry,
-  WorkEvent,
 } from "../types";
 
 const CONFIDENCE: Record<LinkSource, number> = { branch: 0.95, title: 0.9, commit: 0.85, body: 0.6 };
-const ROUTES_TS = "import { route } from './router';\n\nexport const checkout = route('/checkout', async (req) => {\n  return gateway.forward(req);\n});\n";
-const FILES: Record<string, string> = {
-  "README.md": "# webshop\n\nThe storefront. Checkout goes through the gateway.\n",
-  "src/gateway/routes.ts": ROUTES_TS,
-  "src/cart/round.ts": "export const round = (n: number) => Math.round(n * 100) / 100;\n",
-};
-
 /** What sample pull request #218 changes in its consumer: its new side shows lines 14–21 and 38–45 of retry.ts. */
 const RETRY_PATCH = [
   '@@ -14,6 +14,8 @@ import { Message } from "./message";',
@@ -362,82 +350,5 @@ export class MockCode {
   /** Whether commit `sha` is still part of pull request `number`: a force-push (`movePullHead`) drops the one it replaced. */
   hasCommit(repo: string, number: number, sha: string): boolean {
     return !this.dropped.has(`${repo.toLowerCase()}#${number}@${sha}`);
-  }
-
-  /** Matches words of the query in titles, bodies and branch names; a work item key must appear whole. */
-  search(query: string): CodeChange[] {
-    const q = query.trim().toLowerCase();
-    if (!q) return [];
-    const key = /^[a-z][a-z0-9_]+-\d+$/.test(q);
-    const named = (text: string) => (key ? new RegExp(`(^|[^a-z0-9])${q}($|[^a-z0-9])`).test(text.toLowerCase()) : text.toLowerCase().includes(q));
-    return this.changes
-      .filter((c) => this.watched(c.repo) && [c.title, c.body, c.headRef].some(named))
-      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
-  }
-
-  events(limit = 100): WorkEvent[] {
-    const at = (h: number) => hoursAgo(this.now, h);
-    const ev = (id: string, kind: WorkEvent["kind"], h: number, change: CodeChange, text: string): WorkEvent => ({
-      id: `${change.externalId}:${id}`,
-      connectionId: this.connectionId,
-      at: at(h),
-      kind,
-      subject: { type: "codeChange", repo: change.repo, number: change.number ?? 0 },
-      actor: change.author,
-      payload: { text, repo: change.repo, number: change.number, title: change.title, url: change.url },
-    });
-    const [p208, merged, p212] = this.changes;
-    return [
-      ev("checks-failed:sha2080000", "checkFailed", 3, p208, `Checks failed on acme/webshop#208: ${p208.title}`),
-      ev("review:501", "reviewSubmitted", 10, p208, `bob requested changes on acme/webshop#208: ${p208.title}`),
-      ev("merged", "prMerged", 30, merged, `priya merged acme/gateway#14: ${merged.title}`),
-      ev("review-requested", "reviewRequested", 48, p212, `ada asked you to review acme/webshop#212: ${p212.title}`),
-      ev("opened", "prOpened", 120, p208, `ada opened acme/webshop#208: ${p208.title}`),
-    ]
-      .filter((e) => e.subject.type === "codeChange" && this.watched(e.subject.repo))
-      .slice(0, limit);
-  }
-
-  file(repo: string, path: string, reference: string | null): CodeFile {
-    this.require(repo);
-    const text = FILES[path.replace(/^\/+|\/+$/g, "")];
-    if (text === undefined) throw new Error("GitHub couldn't find that, or the token can't see it.");
-    return { repo, path, reference: reference ?? "", text, size: text.length, truncated: false };
-  }
-
-  tree(repo: string, path: string): TreeEntry[] {
-    this.require(repo);
-    const dir = path.replace(/^\/+|\/+$/g, "");
-    const prefix = dir ? `${dir}/` : "";
-    const entries = new Map<string, TreeEntry>();
-    for (const [full, text] of Object.entries(FILES)) {
-      if (!full.startsWith(prefix)) continue;
-      const rest = full.slice(prefix.length);
-      const [name, ...more] = rest.split("/");
-      entries.set(name, more.length ? { name, path: `${prefix}${name}`, kind: "dir", size: 0 } : { name, path: full, kind: "file", size: text.length });
-    }
-    if (!entries.size) throw new Error("GitHub couldn't find that, or the token can't see it.");
-    return [...entries.values()].sort((a, b) => Number(a.kind !== "dir") - Number(b.kind !== "dir") || a.name.localeCompare(b.name));
-  }
-
-  commits(repo: string, opts: CodeCommitQuery): CodeChange[] {
-    this.require(repo);
-    const text = opts.query?.toLowerCase();
-    const since = opts.since ? Date.parse(opts.since) : 0;
-    return this.changes
-      .filter((c) => c.kind === "commit" && c.repo === repo && Date.parse(c.updatedAt) >= since && (!text || `${c.title}\n${c.body}`.toLowerCase().includes(text)))
-      .slice(0, opts.limit || 30);
-  }
-
-  searchCode(query: string, repos?: string[]): CodeHit[] {
-    for (const r of repos ?? []) this.require(r);
-    const q = query.trim().toLowerCase();
-    if (!q) return [];
-    const scope = repos ?? ["acme/webshop"].filter((r) => this.watched(r));
-    return scope.flatMap((repo) =>
-      Object.entries(FILES)
-        .filter(([, text]) => text.toLowerCase().includes(q))
-        .map(([path, text]) => ({ repo, path, url: `https://github.com/${repo}/blob/main/${path}`, fragments: text.split("\n").filter((l) => l.toLowerCase().includes(q)) })),
-    );
   }
 }

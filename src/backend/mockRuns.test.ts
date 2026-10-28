@@ -54,7 +54,7 @@ describe("mock runs", () => {
     expect(run).toMatchObject({ state: "queued", proposalId: "", createdBy: "pip", digest: mockDigest({ ...spec, ...run.spec }), expectedWorktree: "/Users/sample/Code/storefront/.claude/worktrees/ca-412-fix-ab12" });
     expect(run.origin).toMatchObject({ type: "chat", workstream: ws });
     expect(backend.workstreams.events(ws).filter((e) => e.action === "agent_started")).toEqual([expect.objectContaining({ actor: "pip", runId: run.id, detail: "investigator · conversation" })]);
-    expect((await backend.runsGet(run.id))?.id).toBe(run.id);
+    expect((await backend.runs.get(run.id))?.id).toBe(run.id);
     expect(() => queue(backend, { workstream: ws }, itemRef("CA-401"))).toThrow(/already uses that worktree/);
   });
 
@@ -164,7 +164,7 @@ describe("mock runs", () => {
     expect((await backend.runsOutcome(run.id)).report).toMatchObject({ offered: false });
   });
 
-  it("emits runs-changed and open-run", async () => {
+  it("tells listeners the runs changed and which run a notification opens", async () => {
     const backend = new MockBackend();
     const changes: string[] = [];
     const opened: string[] = [];

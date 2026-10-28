@@ -24,10 +24,6 @@ import type {
   AgentSettings,
   CleanupResult,
   Snapshot,
-  CodeChange,
-  CodeCommitQuery,
-  CodeFile,
-  CodeHit,
   CodeRef,
   ConnectionInfo,
   DevLink,
@@ -43,10 +39,8 @@ import type {
   Footprint,
   PullRequestDetail,
   ReviewAccess,
-  ChangedFile,
   PullDiff,
   Stray,
-  TreeEntry,
   WatchChange,
   WatchChanged,
   WatchMode,
@@ -60,38 +54,26 @@ import type {
   WorkstreamView,
   WorkstreamsChanged,
 } from "../types";
+import { EVENTS, onChanged } from "./events";
 import type { Backend, ReadScope } from "./types";
-
-/** The Jira site and account this backend acts for. */
-export interface Scope {
-  cloudId: string;
-  accountId: string;
-}
 
 /**
  * Talks to the Rust core, which syncs Jira into a local SQLite cache and emits a `snapshot` event on every change.
- * Writes carry `scope`, so a write started for one account is refused if someone else has signed in meanwhile.
  */
 export class JiraBackend implements Backend {
   readonly kind = "jira" as const;
-
-  constructor(private readonly scope: Scope) {}
 
   load() {
     return invoke<Snapshot>("snapshot");
   }
 
   subscribe(listener: (s: Snapshot) => void) {
-    const pending = listen<Snapshot>("snapshot", (e) => listener(e.payload));
+    const pending = listen<Snapshot>(EVENTS.snapshot, (e) => listener(e.payload));
     return () => void pending.then((unlisten) => unlisten());
   }
 
   mentionable(key: string, query: string) {
     return invoke<Person[]>("mentionable", { key, query });
-  }
-
-  createSubtasks(key: string, summaries: string[]) {
-    return invoke<{ created: string[]; error: string | null }>("create_subtasks", { scope: this.scope, key, summaries });
   }
 
   setUnread(id: string, unread: boolean) {
@@ -103,11 +85,11 @@ export class JiraBackend implements Backend {
   }
 
   cacheItem(item: ItemRef) {
-    return invoke<WorkItem | null>("cache_item", { item });
+    return invoke<WorkItem | null>("cache_item", { item, live: false });
   }
 
   peekItem(item: ItemRef) {
-    return invoke<WorkItem | null>("peek_item", { item });
+    return invoke<WorkItem | null>("cache_item", { item, live: true });
   }
 
   cacheContainers(opts: ReadScope = {}) {
@@ -139,11 +121,11 @@ export class JiraBackend implements Backend {
   }
 
   githubConnectToken(token: string) {
-    return invoke<ConnectionInfo>("github_connect_token", { token });
+    return invoke<ConnectionInfo>("github_connect", { source: { via: "token", token } });
   }
 
   githubImportGhToken() {
-    return invoke<ConnectionInfo>("github_import_gh_token");
+    return invoke<ConnectionInfo>("github_connect", { source: { via: "ghCli" } });
   }
 
   githubDeviceStart() {
@@ -151,7 +133,7 @@ export class JiraBackend implements Backend {
   }
 
   githubDevicePoll() {
-    return invoke<ConnectionInfo>("github_device_poll");
+    return invoke<ConnectionInfo>("github_connect", { source: { via: "device" } });
   }
 
   githubDisconnect(connectionId: string) {
@@ -159,24 +141,19 @@ export class JiraBackend implements Backend {
   }
 
   devLinks(item: ItemRef) {
-    return invoke<DevLink[]>("dev_links", { item });
+    return invoke<DevLink[]>("dev_links", { item, live: false });
   }
 
   devLinksLive(item: ItemRef) {
-    return invoke<DevLink[]>("dev_links_live", { item });
+    return invoke<DevLink[]>("dev_links", { item, live: true });
   }
 
   onDevLinksChanged(listener: (change: DevLinksChanged) => void) {
-    const pending = listen<DevLinksChanged>("dev-links-changed", (e) => listener(e.payload));
-    return () => void pending.then((unlisten) => unlisten());
+    return onChanged("devLinks", listener);
   }
 
   codePullRequest(reference: CodeRef) {
     return invoke<PullRequestDetail>("code_pull_request", { reference });
-  }
-
-  codePullFiles(connectionId: string, repo: string, number: number) {
-    return invoke<ChangedFile[]>("code_pull_files", { connectionId, repo, number });
   }
 
   codePullDiff(connectionId: string, repo: string, number: number) {
@@ -185,30 +162,6 @@ export class JiraBackend implements Backend {
 
   codeReviewAccess(connectionId: string, repo: string) {
     return invoke<ReviewAccess>("code_review_access", { connectionId, repo });
-  }
-
-  codeSearch(query: string) {
-    return invoke<CodeChange[]>("code_search", { query });
-  }
-
-  codeEvents(limit?: number) {
-    return invoke<WorkEvent[]>("code_events", { limit });
-  }
-
-  codeFile(connectionId: string, repo: string, path: string, reference: string | null = null) {
-    return invoke<CodeFile>("code_file", { connectionId, repo, path, reference });
-  }
-
-  codeTree(connectionId: string, repo: string, path: string, reference: string | null = null) {
-    return invoke<TreeEntry[]>("code_tree", { connectionId, repo, path, reference });
-  }
-
-  codeCommits(connectionId: string, repo: string, opts: CodeCommitQuery = {}) {
-    return invoke<CodeChange[]>("code_commits", { connectionId, repo, reference: opts.reference ?? null, since: opts.since ?? null, query: opts.query ?? null, limit: opts.limit });
-  }
-
-  codeSearchCode(connectionId: string, query: string, repos?: string[]) {
-    return invoke<CodeHit[]>("code_search_code", { connectionId, query, repos });
   }
 
   cacheEvents(item: ItemRef) {
@@ -224,16 +177,11 @@ export class JiraBackend implements Backend {
   }
 
   onCacheChanged(listener: (change: CacheChanged) => void) {
-    const pending = listen<CacheChanged>("cache-changed", (e) => listener(e.payload));
-    return () => void pending.then((unlisten) => unlisten());
+    return onChanged("cache", listener);
   }
 
   proposalsList(query: ProposalQuery = {}) {
     return invoke<Proposal[]>("proposals_list", { query });
-  }
-
-  proposalsGet(id: string) {
-    return invoke<Proposal | null>("proposals_get", { id });
   }
 
   proposalsCreate(intent: Intent, label: string | null = null) {
@@ -245,11 +193,11 @@ export class JiraBackend implements Backend {
   }
 
   proposalsSkip(id: string) {
-    return invoke<Proposal>("proposals_skip", { id });
+    return invoke<Proposal>("proposals_skip", { id, undo: false });
   }
 
   proposalsUnskip(id: string) {
-    return invoke<Proposal>("proposals_unskip", { id });
+    return invoke<Proposal>("proposals_skip", { id, undo: true });
   }
 
   proposalsApprove(id: string) {
@@ -261,16 +209,11 @@ export class JiraBackend implements Backend {
   }
 
   onProposalsChanged(listener: (change: ProposalsChanged) => void) {
-    const pending = listen<ProposalsChanged>("proposals-changed", (e) => listener(e.payload));
-    return () => void pending.then((unlisten) => unlisten());
+    return onChanged("proposals", listener);
   }
 
   runsList(query: RunQuery = {}) {
     return invoke<Run[]>("runs_list", { query });
-  }
-
-  runsGet(id: string) {
-    return invoke<Run | null>("runs_get", { id });
   }
 
   runsStop(id: string) {
@@ -290,19 +233,19 @@ export class JiraBackend implements Backend {
   }
 
   runsAttach(id: string) {
-    return invoke<void>("runs_attach", { id });
+    return invoke<void>("runs_open_terminal", { id, purpose: { type: "session" } });
   }
 
   runsTrustFolder(id: string) {
-    return invoke<void>("runs_trust_folder", { id });
+    return invoke<void>("runs_open_terminal", { id, purpose: { type: "trust" } });
   }
 
   runsAcceptMode(id: string, mode: "auto" | "bypass") {
-    return invoke<void>("runs_accept_mode", { id, mode });
+    return invoke<void>("runs_open_terminal", { id, purpose: { type: "mode", mode } });
   }
 
   runsSignIn(id: string) {
-    return invoke<void>("runs_sign_in", { id });
+    return invoke<void>("runs_open_terminal", { id, purpose: { type: "signIn" } });
   }
 
   runsClones(repo: string) {
@@ -326,7 +269,7 @@ export class JiraBackend implements Backend {
   }
 
   runsStartNow(id: string) {
-    return invoke<Run>("runs_start_now", { id });
+    return invoke<Run>("runs_start", { id, retry: false });
   }
 
   runsKeepRunning() {
@@ -342,7 +285,7 @@ export class JiraBackend implements Backend {
   }
 
   runsSettings() {
-    return invoke<AgentSettings>("runs_settings");
+    return invoke<AgentSettings>("agent_settings", { settings: null });
   }
 
   setNeedsBadge(count: number) {
@@ -350,7 +293,7 @@ export class JiraBackend implements Backend {
   }
 
   runsSetSettings(settings: AgentSettings) {
-    return invoke<AgentSettings>("runs_set_settings", { settings });
+    return invoke<AgentSettings>("agent_settings", { settings });
   }
 
   runsCleanup(id: string) {
@@ -358,11 +301,11 @@ export class JiraBackend implements Backend {
   }
 
   runsArchive(ids: string[]) {
-    return invoke<string[]>("runs_archive", { ids });
+    return invoke<string[]>("runs_archive", { ids, restore: false });
   }
 
   runsRestore(id: string) {
-    return invoke<void>("runs_restore", { id });
+    return invoke<string[]>("runs_archive", { ids: [id], restore: true }).then(() => {});
   }
 
   runsClearPreview(filter: ClearFilter) {
@@ -382,16 +325,15 @@ export class JiraBackend implements Backend {
   }
 
   runsRetryLaunch(id: string) {
-    return invoke<Run>("runs_retry_launch", { id });
+    return invoke<Run>("runs_start", { id, retry: true });
   }
 
   onRunsChanged(listener: (change: RunsChanged) => void) {
-    const pending = listen<RunsChanged>("runs-changed", (e) => listener(e.payload));
-    return () => void pending.then((unlisten) => unlisten());
+    return onChanged("runs", listener);
   }
 
   onOpenRun(listener: (runId: string) => void) {
-    const pending = listen<{ runId: string }>("open-run", (e) => listener(e.payload.runId));
+    const pending = listen<{ runId: string }>(EVENTS.openRun, (e) => listener(e.payload.runId));
     return () => void pending.then((unlisten) => unlisten());
   }
 
@@ -399,26 +341,18 @@ export class JiraBackend implements Backend {
     return invoke<Workstream>("workstreams_open", { item, title: title ?? null });
   }
 
-  workstreamsGet(id: string) {
-    return invoke<WorkstreamView | null>("workstreams_get", { id });
-  }
-
   workstreamsList(includeClosed = false) {
     return invoke<WorkstreamView[]>("workstreams_list", { includeClosed });
   }
 
   workstreamsClose(id: string) {
-    return invoke<Workstream>("workstreams_close", { id });
+    return invoke<Workstream>("workstreams_set_state", { id, state: "close" });
   }
   workstreamsReopen(id: string) {
-    return invoke<Workstream>("workstreams_reopen", { id });
+    return invoke<Workstream>("workstreams_set_state", { id, state: "reopen" });
   }
   workstreamsAdopt(id: string) {
     return invoke<Adoptable>("workstreams_adopt", { id });
-  }
-
-  workstreamsSetNotes(id: string, notes: string) {
-    return invoke<Workstream>("workstreams_set_notes", { id, notes });
   }
 
   workstreamsEvents(id: string) {
@@ -426,11 +360,11 @@ export class JiraBackend implements Backend {
   }
 
   workstreamsPause(id: string) {
-    return invoke<Workstream>("workstreams_pause", { id });
+    return invoke<Workstream>("workstreams_set_state", { id, state: "pause" });
   }
 
   workstreamsResume(id: string) {
-    return invoke<Workstream>("workstreams_resume", { id });
+    return invoke<Workstream>("workstreams_set_state", { id, state: "resume" });
   }
 
   workstreamsDismissAsk(id: string) {
@@ -446,8 +380,7 @@ export class JiraBackend implements Backend {
   }
 
   onWorkstreamsChanged(listener: (change: WorkstreamsChanged) => void) {
-    const pending = listen<WorkstreamsChanged>("workstreams-changed", (e) => listener(e.payload));
-    return () => void pending.then((unlisten) => unlisten());
+    return onChanged("workstreams", listener);
   }
 
   watchGet() {
@@ -455,11 +388,11 @@ export class JiraBackend implements Backend {
   }
 
   watchSetMode(connectionId: string, mode: WatchMode) {
-    return invoke<void>("watch_set_mode", { connectionId, mode });
+    return invoke<void>("watch_set", { connectionId, mode });
   }
 
   watchSetContainers(connectionId: string, changes: WatchChange[]) {
-    return invoke<void>("watch_set_containers", { connectionId, changes });
+    return invoke<void>("watch_set", { connectionId, changes });
   }
 
   watchCatalog(connectionId: string, query: string, cursor: string | null = null) {
@@ -479,13 +412,11 @@ export class JiraBackend implements Backend {
   }
 
   onWatchChanged(listener: (change: WatchChanged) => void) {
-    const pending = listen<WatchChanged>("watch-changed", (e) => listener(e.payload));
-    return () => void pending.then((unlisten) => unlisten());
+    return onChanged("watch", listener);
   }
 
   onAssignedElsewhere(listener: (found: AssignedElsewhere) => void) {
-    const pending = listen<AssignedElsewhere>("watch-assigned-elsewhere", (e) => listener(e.payload));
-    return () => void pending.then((unlisten) => unlisten());
+    return onChanged("assignedElsewhere", ({ connectionId, strays }) => listener({ connectionId, strays: strays ?? [] }));
   }
 
   async reconnectJira() {

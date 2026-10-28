@@ -17,26 +17,28 @@ mod runs;
 mod secrets;
 mod sync;
 mod tracker;
+mod wire;
 
 use std::sync::Arc;
 use std::time::Duration;
 
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{AppHandle, Manager, State};
 use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_opener::OpenerExt;
 
-use auth::{Auth, AuthStatus, DeviceStart, OAuthApp, Scope};
+use auth::{Auth, AuthStatus, DeviceStart, OAuthApp};
 use agent::{AgentService, AskOutcome, AskRequest};
 use tracker::{Connection, Move};
 use inbox::{CatalogPage, CodeRef, ConnectionInfo, Core, Edit, WatchState, WorkstreamView};
 use error::{Error, Result};
 use domain::{
-    CodeChange, CodeFile, CodeHit, CommitQuery, Comment, Container, DevLink, Event, FeedPage, FeedQuery, Filter, Footprint, Identity, Intent, ItemRef, Proposal, ProposalQuery, PullRequestDetail, Run, RunEvent, RunQuery, Stray,
-    TreeEntry, WatchChange, WatchMode, WorkItem, Workstream, WorkstreamEvent,
+    Comment, Container, DevLink, Event, FeedPage, FeedQuery, Filter, Footprint, Identity, Intent, ItemRef, Proposal, ProposalQuery, PullRequestDetail, Run, RunEvent, RunQuery, Stray,
+    WatchChange, WatchMode, WorkItem, Workstream, WorkstreamEvent,
 };
 use model::Snapshot;
 use runs::service::CloneChoice;
 use sync::Trigger;
+use wire::Topic;
 
 /// How often the scheduler checks whether a sync is due. Waking from sleep is noticed within one tick.
 const TICK: Duration = Duration::from_secs(15);
@@ -50,7 +52,7 @@ type RunsState = Arc<runs::service::RunService>;
 /// Sends the latest snapshot to the window. Failures only mean there is nothing to show yet (e.g. signed out).
 async fn publish(app: &AppHandle, core: &Core) {
     let Ok(snap) = core.snapshot().await else { return };
-    let _ = app.emit("snapshot", snap);
+    wire::snapshot(app, snap);
 }
 
 #[tauri::command]
@@ -62,51 +64,46 @@ fn set_needs_badge(app: AppHandle, count: usize) {
 
 /// Tells the page the cache changed, so views over it can re-read.
 fn cache_changed(app: &AppHandle, connection_id: &str) {
-    let _ = app.emit("cache-changed", serde_json::json!({ "connectionId": connection_id }));
+    wire::changed(app, Topic::Cache, connection_id);
 }
 
 /// Tells the page a run was created or changed.
 fn runs_changed(app: &AppHandle, connection_id: &str) {
-    let _ = app.emit("runs-changed", serde_json::json!({ "connectionId": connection_id }));
+    wire::changed(app, Topic::Runs, connection_id);
 }
 
 /// Tells the page which work items' code links changed, so it can re-read them.
 fn dev_links_changed(app: &AppHandle, connection_id: &str) {
-    let _ = app.emit("dev-links-changed", serde_json::json!({ "connectionId": connection_id }));
+    wire::changed(app, Topic::DevLinks, connection_id);
 }
 
 /// Tells the page what is watched changed, so it can re-read the settings along with everything they scope.
 fn watch_changed(app: &AppHandle, connection_id: &str) {
-    let _ = app.emit("watch-changed", serde_json::json!({ "connectionId": connection_id }));
-}
-
-/// Tells the page about open items assigned to the person in containers they don't watch. It never watches them.
-fn assigned_elsewhere(app: &AppHandle, connection_id: &str, strays: &[Stray]) {
-    let _ = app.emit("watch-assigned-elsewhere", serde_json::json!({ "connectionId": connection_id, "strays": strays }));
+    wire::changed(app, Topic::Watch, connection_id);
 }
 
 /// Tells the page the stored drafts changed, so it can re-read them.
 fn proposals_changed(app: &AppHandle, connection_id: &str) {
-    let _ = app.emit("proposals-changed", serde_json::json!({ "connectionId": connection_id }));
+    wire::changed(app, Topic::Proposals, connection_id);
 }
 
 /// Tells the page a workstream was opened, closed or changed, so it can re-read them.
 fn workstreams_changed(app: &AppHandle, connection_id: &str) {
-    let _ = app.emit("workstreams-changed", serde_json::json!({ "connectionId": connection_id }));
+    wire::changed(app, Topic::Workstreams, connection_id);
 }
 
-/// A wake turn's event, which no page asked for: sent as `claude` like any turn's, with the conversation it belongs to
+/// A wake turn's event, which no page asked for: sent as `pip` like any turn's, with the conversation it belongs to
 /// and `kind: wake`, so the page can show a turn it didn't start.
 fn wake_update(app: &AppHandle, conversation: &str, update: agent::Update) {
     let Ok(mut payload) = serde_json::to_value(&update) else { return };
     payload["conversation"] = conversation.into();
     payload["kind"] = "wake".into();
-    let _ = app.emit("claude", payload);
+    wire::pip(app, payload);
 }
 
-/// Asks the page to narrow the view the person is looking at.
+/// Asks the page to narrow the view the person is looking at. It is an event of the turn that asked, with its request id.
 fn pip_view(app: &AppHandle, request_id: &str, filter: &domain::Filter, note: &str) {
-    let _ = app.emit("pip-view", serde_json::json!({ "requestId": request_id, "filter": filter, "note": note }));
+    wire::pip(app, serde_json::json!({ "requestId": request_id, "type": "view", "filter": filter, "note": note }));
 }
 
 /// A system notification chosen by `runs::notices`. Focusing the window soon after opens the run it points at
@@ -218,20 +215,19 @@ async fn cache_search(core: State<'_, CoreState>, filter: Filter, include_unwatc
     core.cache_search(&filter, include_unwatched.unwrap_or(false)).await
 }
 
+/// A watched item from the cache. With `live`, any item, read from the tracker without storing it and flagged `unwatched` when its container isn't watched.
 #[tauri::command]
-async fn cache_item(core: State<'_, CoreState>, item: ItemRef) -> Result<Option<WorkItem>> {
-    core.cache_item(&item).await
+async fn cache_item(core: State<'_, CoreState>, item: ItemRef, live: bool) -> Result<Option<WorkItem>> {
+    if live {
+        core.peek_item(&item).await
+    } else {
+        core.cache_item(&item).await
+    }
 }
 
 #[tauri::command]
 async fn cache_containers(core: State<'_, CoreState>, include_unwatched: Option<bool>) -> Result<Vec<Container>> {
     core.cache_containers(include_unwatched.unwrap_or(false)).await
-}
-
-/// Reads an item live, without storing it, flagged `unwatched` when its container isn't watched.
-#[tauri::command]
-async fn peek_item(core: State<'_, CoreState>, item: ItemRef) -> Result<Option<WorkItem>> {
-    core.peek_item(&item).await
 }
 
 #[tauri::command]
@@ -246,16 +242,15 @@ async fn watch_edited(app: &AppHandle, core: &Core, connection_id: &str) {
     publish(app, core).await;
 }
 
+/// Sets what a connection watches: its mode, and the containers watched, unwatched, pinned or set to a depth.
 #[tauri::command]
-async fn watch_set_mode(app: AppHandle, core: State<'_, CoreState>, connection_id: String, mode: WatchMode) -> Result<()> {
-    core.watch_set_mode(&connection_id, mode).await?;
-    watch_edited(&app, &core, &connection_id).await;
-    Ok(())
-}
-
-#[tauri::command]
-async fn watch_set_containers(app: AppHandle, core: State<'_, CoreState>, connection_id: String, changes: Vec<WatchChange>) -> Result<()> {
-    core.watch_set_containers(&connection_id, &changes).await?;
+async fn watch_set(app: AppHandle, core: State<'_, CoreState>, connection_id: String, mode: Option<WatchMode>, changes: Option<Vec<WatchChange>>) -> Result<()> {
+    if let Some(mode) = mode {
+        core.watch_set_mode(&connection_id, mode).await?;
+    }
+    if let Some(changes) = changes {
+        core.watch_set_containers(&connection_id, &changes).await?;
+    }
     watch_edited(&app, &core, &connection_id).await;
     Ok(())
 }
@@ -320,18 +315,25 @@ async fn connections_list(core: State<'_, CoreState>) -> Result<Vec<ConnectionIn
     core.connections().await
 }
 
-/// The account a pasted token belongs to is connected, and its repositories become watchable.
-#[tauri::command]
-async fn github_connect_token(app: AppHandle, core: State<'_, CoreState>, token: String) -> Result<ConnectionInfo> {
-    let connected = core.github_connect_token(&token).await?;
-    watch_changed(&app, &connected.id);
-    Ok(connected)
+/// How a GitHub account is connected: a pasted token, the token `gh auth token` prints (run now, because the person
+/// asked), or the code `github_device_start` showed once it was authorised in the browser.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", tag = "via")]
+enum GithubSource {
+    Token { token: String },
+    GhCli,
+    Device,
 }
 
-/// Runs `gh auth token` now, because the person asked, and connects with what it prints.
+/// Connects the account `source` names, and its repositories become watchable. Device resolves when the code was
+/// authorised, or fails when it expired or was denied.
 #[tauri::command]
-async fn github_import_gh_token(app: AppHandle, core: State<'_, CoreState>) -> Result<ConnectionInfo> {
-    let connected = core.github_import_gh_token().await?;
+async fn github_connect(app: AppHandle, core: State<'_, CoreState>, source: GithubSource) -> Result<ConnectionInfo> {
+    let connected = match source {
+        GithubSource::Token { token } => core.github_connect_token(&token).await?,
+        GithubSource::GhCli => core.github_import_gh_token().await?,
+        GithubSource::Device => core.github_device_poll().await?,
+    };
     watch_changed(&app, &connected.id);
     Ok(connected)
 }
@@ -342,18 +344,10 @@ fn github_sign_in_options(core: State<'_, CoreState>) -> auth::SignInOptions {
     core.code_sign_in_options()
 }
 
-/// Starts the device flow: show `userCode` and open `verificationUri`, then call `github_device_poll`.
+/// Starts the device flow: show `userCode` and open `verificationUri`, then call `github_connect` with `via: device`.
 #[tauri::command]
 async fn github_device_start(core: State<'_, CoreState>) -> Result<DeviceStart> {
     core.github_device_start().await
-}
-
-/// Resolves when the code was authorised (or fails when it expired or was denied).
-#[tauri::command]
-async fn github_device_poll(app: AppHandle, core: State<'_, CoreState>) -> Result<ConnectionInfo> {
-    let connected = core.github_device_poll().await?;
-    watch_changed(&app, &connected.id);
-    Ok(connected)
 }
 
 #[tauri::command]
@@ -363,24 +357,16 @@ async fn github_disconnect(app: AppHandle, core: State<'_, CoreState>, connectio
     Ok(())
 }
 
-/// The pull requests, branches and commits that name a work item, from the cache. Instant; only watched repositories.
+/// The pull requests, branches and commits that name a work item, from the cache: instant, and only watched repositories.
+/// With `live`, searches the watched repositories for the item's key first and caches what it finds.
 #[tauri::command]
-fn dev_links(core: State<'_, CoreState>, item: ItemRef) -> Result<Vec<DevLink>> {
-    core.dev_links(&item)
-}
-
-/// Searches the watched repositories for the item's key, caches what it finds, and returns the links.
-#[tauri::command]
-async fn dev_links_live(app: AppHandle, core: State<'_, CoreState>, item: ItemRef) -> Result<Vec<DevLink>> {
+async fn dev_links(app: AppHandle, core: State<'_, CoreState>, item: ItemRef, live: bool) -> Result<Vec<DevLink>> {
+    if !live {
+        return core.dev_links(&item);
+    }
     let (links, changed) = core.dev_links_live(&item).await?;
     changed.iter().for_each(|id| dev_links_changed(&app, id));
     Ok(links)
-}
-
-/// Pull request and notification events of the GitHub connections, newest first, for the Activity feed.
-#[tauri::command]
-fn code_events(core: State<'_, CoreState>, limit: Option<usize>) -> Result<Vec<Event>> {
-    core.code_events(limit.unwrap_or(EVENT_LIMIT))
 }
 
 #[tauri::command]
@@ -389,51 +375,8 @@ async fn code_pull_request(core: State<'_, CoreState>, reference: CodeRef) -> Re
 }
 
 #[tauri::command]
-async fn code_search(core: State<'_, CoreState>, query: String) -> Result<Vec<CodeChange>> {
-    core.code_search(&query).await
-}
-
-#[tauri::command]
-async fn code_file(core: State<'_, CoreState>, connection_id: String, repo: String, path: String, reference: Option<String>) -> Result<CodeFile> {
-    core.code_file(&connection_id, &repo, &path, reference.as_deref()).await
-}
-
-#[tauri::command]
-async fn code_tree(core: State<'_, CoreState>, connection_id: String, repo: String, path: String, reference: Option<String>) -> Result<Vec<TreeEntry>> {
-    core.code_tree(&connection_id, &repo, &path, reference.as_deref()).await
-}
-
-/// Commits of a branch or ref, newest first. `since` is RFC 3339; `query` filters by message text such as a ticket key.
-#[tauri::command]
-async fn code_commits(
-    core: State<'_, CoreState>,
-    connection_id: String,
-    repo: String,
-    reference: Option<String>,
-    since: Option<String>,
-    query: Option<String>,
-    limit: Option<usize>,
-) -> Result<Vec<CodeChange>> {
-    let since = since
-        .map(|s| chrono::DateTime::parse_from_rfc3339(&s).map(|d| d.with_timezone(&chrono::Utc)).map_err(|_| Error::Api { status: 400, message: format!("not a valid time: {s}") }))
-        .transpose()?;
-    core.code_commits(&connection_id, &CommitQuery { repo, reference, since, path: None, text: query, limit: limit.unwrap_or(0) }).await
-}
-
-/// GitHub code search, limited to watched repositories (all of them when `repos` is left out).
-#[tauri::command]
-async fn code_search_code(core: State<'_, CoreState>, connection_id: String, query: String, repos: Option<Vec<String>>) -> Result<Vec<CodeHit>> {
-    core.code_search_code(&connection_id, &query, repos.as_deref()).await
-}
-
-#[tauri::command]
 async fn proposals_list(core: State<'_, CoreState>, query: Option<ProposalQuery>) -> Result<Vec<Proposal>> {
     core.proposals(&query.unwrap_or_default()).await
-}
-
-#[tauri::command]
-async fn proposals_get(core: State<'_, CoreState>, id: String) -> Result<Option<Proposal>> {
-    core.proposal(&id).await
 }
 
 /// Drafts a write the person made by hand. It stays a draft until `proposals_approve`.
@@ -451,28 +394,18 @@ async fn proposals_edit(app: AppHandle, core: State<'_, CoreState>, id: String, 
     Ok(edited)
 }
 
+/// Skips a draft. With `undo`, the person's Undo of a skip: a draft skipped a moment ago is pending again. Refused for a
+/// skip that old, or a draft in any other state.
 #[tauri::command]
-async fn proposals_skip(app: AppHandle, core: State<'_, CoreState>, id: String) -> Result<Proposal> {
-    let skipped = core.skip_proposal(&id).await?;
+async fn proposals_skip(app: AppHandle, core: State<'_, CoreState>, id: String, undo: bool) -> Result<Proposal> {
+    let done = if undo { core.unskip_proposal(&id).await? } else { core.skip_proposal(&id).await? };
     let connection = Connection::jira_id(&core.scope().await?);
     proposals_changed(&app, &connection);
     // A draft in a workstream is a line in its audit, which its timeline's counts read.
-    if skipped.workstream().is_some() {
+    if done.workstream().is_some() {
         workstreams_changed(&app, &connection);
     }
-    Ok(skipped)
-}
-
-/// The person's Undo of a skip: a draft skipped a moment ago is pending again. Refused for a skip that old, or a draft in any other state.
-#[tauri::command]
-async fn proposals_unskip(app: AppHandle, core: State<'_, CoreState>, id: String) -> Result<Proposal> {
-    let back = core.unskip_proposal(&id).await?;
-    let connection = Connection::jira_id(&core.scope().await?);
-    proposals_changed(&app, &connection);
-    if back.workstream().is_some() {
-        workstreams_changed(&app, &connection);
-    }
-    Ok(back)
+    Ok(done)
 }
 
 /// Applies the draft. A failed attempt still returns it, back to pending with `error` set.
@@ -514,27 +447,19 @@ async fn code_review_access(core: State<'_, CoreState>, connection_id: String, r
     core.code_review_access(&connection_id, &repo).await
 }
 
-/// The files a pull request changes, with patches long enough to show a review draft's comments in place.
-#[tauri::command]
-async fn code_pull_files(core: State<'_, CoreState>, connection_id: String, repo: String, number: u64) -> Result<Vec<domain::ChangedFile>> {
-    core.code_pull_files(&connection_id, &repo, number).await
-}
-
 /// A pull request with the files it changes and their patches, for review drafts.
 #[tauri::command]
 async fn code_pull_diff(core: State<'_, CoreState>, connection_id: String, repo: String, number: u64) -> Result<codehost::PullDiff> {
     core.code_pull_diff(&connection_id, &repo, number).await
 }
 
-/// How many agents run at once, the terminal to open and the notices.
+/// How many agents run at once, the terminal to open and the notices. With `settings`, saves them first, clamped.
 #[tauri::command]
-fn runs_settings(runs: State<'_, RunsState>) -> config::AgentSettings {
-    runs.settings()
-}
-
-#[tauri::command]
-fn runs_set_settings(runs: State<'_, RunsState>, settings: config::AgentSettings) -> Result<config::AgentSettings> {
-    runs.set_settings(settings)
+fn agent_settings(runs: State<'_, RunsState>, settings: Option<config::AgentSettings>) -> Result<config::AgentSettings> {
+    match settings {
+        Some(settings) => runs.set_settings(settings),
+        None => Ok(runs.settings()),
+    }
 }
 
 /// Removes a finished run's worktree with `claude rm`, never forcing it.
@@ -543,15 +468,17 @@ async fn runs_cleanup(runs: State<'_, RunsState>, id: String) -> Result<runs::cl
     runs.cleanup(&id).await
 }
 
-/// Archives runs that are over. They leave the Agents view and Needs you but stay in the database.
+/// Archives runs that are over: they leave the Agents view and Needs you but stay in the database. With `restore`, brings
+/// them back. Returns the ids it archived, or with `restore` the ids it was given.
 #[tauri::command]
-async fn runs_archive(runs: State<'_, RunsState>, ids: Vec<String>) -> Result<Vec<String>> {
-    runs.archive(&ids).await
-}
-
-#[tauri::command]
-async fn runs_restore(runs: State<'_, RunsState>, id: String) -> Result<()> {
-    runs.restore(&id).await
+async fn runs_archive(runs: State<'_, RunsState>, ids: Vec<String>, restore: bool) -> Result<Vec<String>> {
+    if !restore {
+        return runs.archive(&ids).await;
+    }
+    for id in &ids {
+        runs.restore(id).await?;
+    }
+    Ok(ids)
 }
 
 /// Which runs "Clear finished" would archive for `filter`, and how many it leaves out and why.
@@ -578,16 +505,15 @@ async fn runs_delete(runs: State<'_, RunsState>, id: String, remove_worktree: bo
     runs.delete(&id, remove_worktree).await
 }
 
-/// Starts a run that is still queued, as after a restart.
+/// Starts a run that is still queued, as after a restart. With `retry`, launches one whose launch failed, looking for its
+/// session first and starting one only if there is none.
 #[tauri::command]
-async fn runs_start_now(runs: State<'_, RunsState>, id: String) -> Result<Run> {
-    runs.start_now(&id).await
-}
-
-/// Looks for the session of a run whose launch failed, and starts one only if there is none.
-#[tauri::command]
-async fn runs_retry_launch(runs: State<'_, RunsState>, id: String) -> Result<Run> {
-    runs.retry_launch(&id).await
+async fn runs_start(runs: State<'_, RunsState>, id: String, retry: bool) -> Result<Run> {
+    if retry {
+        runs.retry_launch(&id).await
+    } else {
+        runs.start_now(&id).await
+    }
 }
 
 /// Opens a workstream on a cached ticket, or with no ticket and a title. A ticket with an open one gets that one back.
@@ -598,21 +524,35 @@ async fn workstreams_open(app: AppHandle, core: State<'_, CoreState>, item: Opti
     Ok(ws)
 }
 
-#[tauri::command]
-async fn workstreams_get(core: State<'_, CoreState>, id: String) -> Result<Option<WorkstreamView>> {
-    core.workstream(&core.scope().await?, &id).await
-}
-
 /// The signed-in account's workstreams with their derived stages, newest first.
 #[tauri::command]
 async fn workstreams_list(core: State<'_, CoreState>, include_closed: Option<bool>) -> Result<Vec<WorkstreamView>> {
     core.workstreams(&core.scope().await?, include_closed.unwrap_or(false)).await
 }
 
+/// What the person does to a workstream's state: close it, reopen a closed one (the page's Undo of Close, and a closed
+/// row's Reopen), pause it (nothing wakes Pip in it; its runs carry on), or resume it, whatever paused it.
+#[derive(serde::Deserialize, Clone, Copy)]
+#[serde(rename_all = "camelCase")]
+enum WorkstreamState {
+    Close,
+    Reopen,
+    Pause,
+    Resume,
+}
+
 #[tauri::command]
-async fn workstreams_close(app: AppHandle, core: State<'_, CoreState>, agent: State<'_, AgentState>, id: String) -> Result<Workstream> {
-    let ws = core.close_workstream(&core.scope().await?, &id).await?;
-    agent.cancel_workstream_turns(&id).await;
+async fn workstreams_set_state(app: AppHandle, core: State<'_, CoreState>, agent: State<'_, AgentState>, id: String, state: WorkstreamState) -> Result<Workstream> {
+    let scope = core.scope().await?;
+    let ws = match state {
+        WorkstreamState::Close => core.close_workstream(&scope, &id).await?,
+        WorkstreamState::Reopen => core.reopen_workstream(&scope, &id).await?,
+        WorkstreamState::Pause => core.pause_workstream(&scope, &id, domain::workstream::PauseReason::Person, domain::Actor::Person).await?,
+        WorkstreamState::Resume => core.resume_workstream(&scope, &id).await?,
+    };
+    if matches!(state, WorkstreamState::Close | WorkstreamState::Pause) {
+        agent.cancel_workstream_turns(&id).await;
+    }
     workstreams_changed(&app, &ws.connection_id);
     Ok(ws)
 }
@@ -624,14 +564,6 @@ async fn workstreams_dismiss_ask(app: AppHandle, core: State<'_, CoreState>, id:
     let cleared = core.clear_pip_ask(&scope, &id, "dismissed").await?;
     workstreams_changed(&app, &Connection::jira_id(&scope));
     Ok(cleared)
-}
-
-/// Reopens a closed workstream (the page's Undo of Close, and a closed row's Reopen).
-#[tauri::command]
-async fn workstreams_reopen(app: AppHandle, core: State<'_, CoreState>, id: String) -> Result<Workstream> {
-    let ws = core.reopen_workstream(&core.scope().await?, &id).await?;
-    workstreams_changed(&app, &ws.connection_id);
-    Ok(ws)
 }
 
 /// The person's "Bring them here": the runs and drafts on the workstream's ticket that are in no workstream move into it.
@@ -647,31 +579,6 @@ async fn workstreams_adopt(app: AppHandle, core: State<'_, CoreState>, id: Strin
     Ok(moved)
 }
 
-/// The person's change to a workstream's notes.
-#[tauri::command]
-async fn workstreams_set_notes(app: AppHandle, core: State<'_, CoreState>, id: String, notes: String) -> Result<Workstream> {
-    let ws = core.set_workstream_notes(&core.scope().await?, &id, &notes, domain::Actor::Person).await?;
-    workstreams_changed(&app, &ws.connection_id);
-    Ok(ws)
-}
-
-/// The person pauses a workstream: nothing wakes Pip in it; its runs carry on.
-#[tauri::command]
-async fn workstreams_pause(app: AppHandle, core: State<'_, CoreState>, agent: State<'_, AgentState>, id: String) -> Result<Workstream> {
-    let ws = core.pause_workstream(&core.scope().await?, &id, domain::workstream::PauseReason::Person, domain::Actor::Person).await?;
-    agent.cancel_workstream_turns(&id).await;
-    workstreams_changed(&app, &ws.connection_id);
-    Ok(ws)
-}
-
-/// The person resumes a workstream, whatever paused it.
-#[tauri::command]
-async fn workstreams_resume(app: AppHandle, core: State<'_, CoreState>, id: String) -> Result<Workstream> {
-    let ws = core.resume_workstream(&core.scope().await?, &id).await?;
-    workstreams_changed(&app, &ws.connection_id);
-    Ok(ws)
-}
-
 /// The person's Undo of "Bring them here", a moment after it. Refused once anything else happened in it, or after a minute.
 #[tauri::command]
 async fn workstreams_undo(app: AppHandle, core: State<'_, CoreState>, id: String, undo: inbox::WorkstreamUndo) -> Result<Workstream> {
@@ -681,21 +588,6 @@ async fn workstreams_undo(app: AppHandle, core: State<'_, CoreState>, id: String
     runs_changed(&app, &ws.connection_id);
     proposals_changed(&app, &ws.connection_id);
     Ok(ws)
-}
-
-/// The person stops a workstream: pauses it, then stops each of its runs that can be stopped.
-#[tauri::command]
-async fn workstreams_stop(app: AppHandle, core: State<'_, CoreState>, runs: State<'_, RunsState>, agent: State<'_, AgentState>, id: String) -> Result<runs::control::StopAll> {
-    let scope = core.scope().await?;
-    let result = runs.stop_workstream(&scope, &id).await;
-    if result.is_ok() {
-        use_freed_slot(&runs);
-    }
-    agent.cancel_workstream_turns(&id).await;
-    let connection_id = Connection::jira_id(&scope);
-    workstreams_changed(&app, &connection_id);
-    runs_changed(&app, &connection_id);
-    result
 }
 
 /// A workstream's audit, oldest first.
@@ -749,31 +641,46 @@ async fn runs_stop_all(runs: State<'_, RunsState>) -> Result<runs::control::Stop
     runs.stop_all().await
 }
 
-/// Opens Terminal in the run's worktree, attached to its session.
+/// The person stops a workstream: pauses it, then stops each of its runs that can be stopped.
 #[tauri::command]
-async fn runs_attach(runs: State<'_, RunsState>, id: String) -> Result<()> {
-    runs.attach(&id).await
+async fn workstreams_stop(app: AppHandle, core: State<'_, CoreState>, runs: State<'_, RunsState>, agent: State<'_, AgentState>, id: String) -> Result<runs::control::StopAll> {
+    let scope = core.scope().await?;
+    let result = runs.stop_workstream(&scope, &id).await;
+    if result.is_ok() {
+        use_freed_slot(&runs);
+    }
+    agent.cancel_workstream_turns(&id).await;
+    let connection_id = Connection::jira_id(&scope);
+    workstreams_changed(&app, &connection_id);
+    runs_changed(&app, &connection_id);
+    result
 }
 
-/// Opens Terminal in the run's clone running `claude`, so the person can accept Claude's trust question there. Only for
-/// a run that failed because the folder isn't trusted; the folder is the one stored with the run.
-#[tauri::command]
-async fn runs_trust_folder(runs: State<'_, RunsState>, id: String) -> Result<()> {
-    runs.open_claude(&id, runs::control::Purpose::Trust).await
+/// What Terminal is opened for.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", tag = "type")]
+enum TerminalFor {
+    /// The run's worktree, attached to its session.
+    Session,
+    /// The run's clone running `claude`, so the person can accept Claude's trust question there. Only for a run that
+    /// failed because the folder isn't trusted; the folder is the one stored with the run.
+    Trust,
+    /// The run's clone running `claude`, so the person can sign in. Only for a run that failed because Claude isn't signed in.
+    SignIn,
+    /// The run's clone running `claude` in the permission mode `--bg` refused, so the person can accept it once. Only for
+    /// a run that failed because of that mode.
+    Mode { mode: domain::RefusedMode },
 }
 
-/// Opens Terminal in the run's clone running `claude` in the permission mode `--bg` refused, so the person can accept
-/// it once. Only for a run that failed because of that mode.
+/// Opens Terminal for a run.
 #[tauri::command]
-async fn runs_accept_mode(runs: State<'_, RunsState>, id: String, mode: domain::RefusedMode) -> Result<()> {
-    runs.open_claude(&id, runs::control::Purpose::Mode(mode)).await
-}
-
-/// Opens Terminal in the run's clone running `claude`, so the person can sign in. Only for a run that failed because
-/// Claude isn't signed in.
-#[tauri::command]
-async fn runs_sign_in(runs: State<'_, RunsState>, id: String) -> Result<()> {
-    runs.open_claude(&id, runs::control::Purpose::SignIn).await
+async fn runs_open_terminal(runs: State<'_, RunsState>, id: String, purpose: TerminalFor) -> Result<()> {
+    match purpose {
+        TerminalFor::Session => runs.attach(&id).await,
+        TerminalFor::Trust => runs.open_claude(&id, runs::control::Purpose::Trust).await,
+        TerminalFor::SignIn => runs.open_claude(&id, runs::control::Purpose::SignIn).await,
+        TerminalFor::Mode { mode } => runs.open_claude(&id, runs::control::Purpose::Mode(mode)).await,
+    }
 }
 
 /// Bytes the run's session folder uses; a lower bound if counting took too long.
@@ -785,12 +692,6 @@ async fn runs_disk(runs: State<'_, RunsState>, id: String) -> Result<u64> {
 #[tauri::command]
 async fn runs_events(runs: State<'_, RunsState>, id: String) -> Result<Vec<RunEvent>> {
     runs.events(&id).await
-}
-
-/// The run a recent notification was about, once, for a page that missed the `open-run` event.
-#[tauri::command]
-fn runs_open_pending(open: State<'_, Arc<runs::tracker::OpenOnFocus>>) -> Option<String> {
-    open.take(std::time::Instant::now())
 }
 
 /// How many agents are still running in any account, for the sign-out and quit messages.
@@ -814,11 +715,6 @@ async fn runs_list(core: State<'_, CoreState>, query: Option<RunQuery>) -> Resul
 }
 
 #[tauri::command]
-async fn runs_get(core: State<'_, CoreState>, id: String) -> Result<Option<Run>> {
-    core.run(&id).await
-}
-
-#[tauri::command]
 fn sync_now(core: State<'_, CoreState>) {
     core.wake.notify_one();
 }
@@ -836,36 +732,10 @@ async fn mentionable(core: State<'_, CoreState>, key: String, query: String) -> 
 }
 
 #[tauri::command]
-async fn create_subtasks(
-    app: AppHandle,
-    core: State<'_, CoreState>,
-    scope: Scope,
-    key: String,
-    summaries: Vec<String>,
-) -> Result<model::CreatedSubtasks> {
-    let created = core.create_subtasks(&scope, &key, &summaries).await?;
-    cache_changed(&app, &Connection::jira_id(&scope));
-    publish(&app, &core).await;
-    Ok(created)
-}
-
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ClaudeSessions {
-    /// The session to continue for this ticket, when Pip can resume it.
-    last: Option<String>,
-}
-
-#[tauri::command]
-async fn claude_sessions(core: State<'_, CoreState>, key: String) -> Result<ClaudeSessions> {
-    Ok(ClaudeSessions { last: core.claude_session_for(&key).await? })
-}
-
-#[tauri::command]
 async fn ask_claude(app: AppHandle, agent: State<'_, AgentState>, request: AskRequest) -> Result<AskOutcome> {
     agent
         .ask(request, Arc::new(move |u| {
-            let _ = app.emit("claude", u);
+            wire::pip(&app, u);
         }))
         .await
 }
@@ -933,7 +803,7 @@ fn spawn_sync_loop(app: AppHandle, core: CoreState) {
             }
             // A failed check is tried again at the next interval; nothing depends on it.
             if let Ok(Some((connection_id, strays))) = core.radar_if_due().await {
-                assigned_elsewhere(&app, &connection_id, &strays);
+                wire::assigned_elsewhere(&app, &connection_id, &strays);
             }
             trigger = tokio::select! {
                 _ = tokio::time::sleep(TICK) => Trigger::Timer,
@@ -986,7 +856,7 @@ pub fn run() {
                     runs.focus.notify_one();
                 }
                 if let Some(run_id) = app.try_state::<Arc<runs::tracker::OpenOnFocus>>().and_then(|open| open.take(std::time::Instant::now())) {
-                    let _ = app.emit("open-run", serde_json::json!({ "runId": run_id }));
+                    wire::open_run(app, &run_id);
                 }
             }
         })
@@ -1065,10 +935,8 @@ pub fn run() {
             cache_search,
             cache_item,
             cache_containers,
-            peek_item,
             watch_get,
-            watch_set_mode,
-            watch_set_containers,
+            watch_set,
             watch_catalog,
             watch_suggestions,
             watch_unwatched_assigned,
@@ -1082,42 +950,27 @@ pub fn run() {
             cache_transitions,
             connections_list,
             dev_links,
-            dev_links_live,
-            code_events,
             code_pull_request,
-            code_search,
-            code_file,
-            code_tree,
-            code_commits,
-            code_search_code,
             code_review_access,
-            code_pull_files,
             code_pull_diff,
-            github_connect_token,
-            github_import_gh_token,
+            github_connect,
             github_sign_in_options,
             github_device_start,
-            github_device_poll,
             github_disconnect,
             proposals_list,
-            proposals_get,
             proposals_create,
             proposals_edit,
             proposals_skip,
-            proposals_unskip,
             proposals_approve,
             proposals_post_review,
-            runs_settings,
-            runs_set_settings,
+            agent_settings,
             runs_cleanup,
             runs_archive,
-            runs_restore,
             runs_clear_preview,
             runs_clear,
             runs_worktree_info,
             runs_delete,
-            runs_start_now,
-            runs_retry_launch,
+            runs_start,
             runs_clones,
             runs_clone_fresh,
             runs_pick_clone,
@@ -1125,35 +978,23 @@ pub fn run() {
             runs_answer,
             runs_adopt_session,
             runs_stop_all,
-            runs_attach,
-            runs_trust_folder,
-            runs_accept_mode,
-            runs_sign_in,
+            workstreams_stop,
+            runs_open_terminal,
             runs_disk,
             runs_events,
-            runs_open_pending,
             runs_keep_running,
             runs_list,
             runs_outcome,
-            runs_get,
             workstreams_open,
-            workstreams_get,
             workstreams_list,
-            workstreams_close,
-            workstreams_reopen,
+            workstreams_set_state,
             workstreams_dismiss_ask,
             workstreams_adopt,
-            workstreams_set_notes,
             workstreams_events,
-            workstreams_pause,
-            workstreams_resume,
             workstreams_undo,
-            workstreams_stop,
             sync_now,
             set_unread,
             mentionable,
-            create_subtasks,
-            claude_sessions,
             ask_claude,
             cancel_claude,
             pip_turns

@@ -803,7 +803,7 @@ const running = new Map<string, () => void>();
 const discussing = new Map<string, string>();
 
 export const mockPipEvents = {
-  /** Tells every listener about `e`, as the app's `claude` event does; a wake's events say where they belong (`meta`). */
+  /** Tells every listener about `e`, as the app's `pip` event does; a wake's events say where they belong (`meta`). */
   emit(requestId: string, e: ClaudeEvent, meta?: EventMeta) {
     listeners.forEach((l) => l(requestId, e, meta));
   },

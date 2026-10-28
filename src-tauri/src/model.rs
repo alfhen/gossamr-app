@@ -280,10 +280,3 @@ pub struct Uploaded {
     pub height: Option<u32>,
 }
 
-/// Keys created, in the order the summaries were given. `error` is set when creation stopped part-way.
-#[derive(Clone, Debug, Serialize)]
-pub struct CreatedSubtasks {
-    pub created: Vec<String>,
-    pub error: Option<String>,
-}
-

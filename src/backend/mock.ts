@@ -7,7 +7,6 @@ import type {
   AssignedElsewhere,
   CacheChanged,
   CatalogPage,
-  CodeCommitQuery,
   CodeRef,
   DevLinksChanged,
   FeedQuery,
@@ -464,10 +463,6 @@ export class MockBackend implements Backend {
     return this.workstreams.open(item, title ?? null);
   }
 
-  async workstreamsGet(id: string) {
-    return this.workstreams.get(id);
-  }
-
   async workstreamsList(includeClosed = false) {
     return this.workstreams.list(includeClosed);
   }
@@ -486,15 +481,11 @@ export class MockBackend implements Backend {
     return this.workstreams.adopt(id);
   }
 
-  async workstreamsSetNotes(id: string, notes: string) {
-    return this.workstreams.setNotes(id, notes, "person");
-  }
-
   async workstreamsEvents(id: string) {
     return this.workstreams.events(id);
   }
 
-  /** Pauses a workstream and stops Pip's turns in its conversation, as `workstreams_pause` does; its runs carry on. */
+  /** Pauses a workstream and stops Pip's turns in its conversation, as `workstreams_set_state` with `pause` does; its runs carry on. */
   async workstreamsPause(id: string) {
     const paused = this.workstreams.pause(id, "person", "person");
     mockCancelTurns((c) => c === workstreamConversation(id));
@@ -548,10 +539,6 @@ export class MockBackend implements Backend {
 
   runsList(query?: RunQuery) {
     return Promise.resolve(this.runs.list(query));
-  }
-
-  async runsGet(id: string) {
-    return this.runs.get(id);
   }
 
   async runsStop(id: string) {
@@ -674,10 +661,6 @@ export class MockBackend implements Backend {
 
   proposalsList(query?: ProposalQuery): Promise<Proposal[]> {
     return Promise.resolve(this.proposals.list(query));
-  }
-
-  async proposalsGet(id: string) {
-    return this.proposals.get(id);
   }
 
   proposalsCreate(intent: Intent, label: string | null = null) {
@@ -887,7 +870,10 @@ export class MockBackend implements Backend {
   /** Someone force-pushes pull request `number` of `repo`: its head is a new commit whose diff lacks the lines it showed, and the old one is gone from it, as `MockCode.movePullHead`. */
   movePullHead(repo: string, number: number) {
     const moved = this.github.code.movePullHead(repo, number);
-    if (moved) this.proposals.touch();
+    if (moved) {
+      this.proposals.touch();
+      this.cacheListeners.forEach((l) => l({ connectionId: GITHUB_CONNECTION }));
+    }
     return moved;
   }
 
@@ -1093,18 +1079,13 @@ export class MockBackend implements Backend {
     return this.github.code.pullRequest(ref);
   }
 
-  async codePullFiles(_connectionId: string, repo: string, number: number) {
-    this.requireWatched(repo);
-    const files = this.github.code.pullFiles(repo, number);
-    if (!files) throw new Error(`GitHub couldn't find pull request #${number} in ${repo}, or the token can't see it.`);
-    return files;
-  }
-
-  async codePullDiff(connectionId: string, repo: string, number: number) {
+  async codePullDiff(_connectionId: string, repo: string, number: number) {
     this.requireWatched(repo);
     const change = this.github.code.change(repo, number);
     if (!change) throw new Error(`GitHub couldn't find pull request #${number} in ${repo}, or the token can't see it.`);
-    return { change: { ...change }, files: await this.codePullFiles(connectionId, repo, number) };
+    const files = this.github.code.pullFiles(repo, number);
+    if (!files) throw new Error(`GitHub couldn't find pull request #${number} in ${repo}, or the token can't see it.`);
+    return { change: { ...change }, files };
   }
 
   async codeReviewAccess(_connectionId: string, repo: string) {
@@ -1115,30 +1096,6 @@ export class MockBackend implements Backend {
   /** As `Core::require_watched`: a repository that isn't watched is never read, nor written to. */
   private requireWatched(repo: string) {
     if (!this.github.isWatched(repo)) throw new Error(`${repo} isn't one of the repositories you watch, so it isn't read.`);
-  }
-
-  async codeSearch(query: string) {
-    return this.github.code.search(query);
-  }
-
-  async codeEvents(limit?: number) {
-    return this.github.code.events(limit);
-  }
-
-  async codeFile(_connectionId: string, repo: string, path: string, reference: string | null = null) {
-    return this.github.code.file(repo, path, reference);
-  }
-
-  async codeTree(_connectionId: string, repo: string, path: string) {
-    return this.github.code.tree(repo, path);
-  }
-
-  async codeCommits(_connectionId: string, repo: string, opts: CodeCommitQuery = {}) {
-    return this.github.code.commits(repo, opts);
-  }
-
-  async codeSearchCode(_connectionId: string, query: string, repos?: string[]) {
-    return this.github.code.searchCode(query, repos);
   }
 
   async githubSignInOptions() {
@@ -1194,7 +1151,7 @@ export class MockBackend implements Backend {
     });
   }
 
-  async createSubtasks(key: string, summaries: string[]) {
+  private async createSubtasks(key: string, summaries: string[]) {
     const project = key.split("-")[0];
     let next = Math.max(...Object.keys(this.snap.tickets).map((k) => Number(k.split("-")[1]) || 0), 0) + 1;
     const keys = summaries.map(() => `${project}-${next++}`);
