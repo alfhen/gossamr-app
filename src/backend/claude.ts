@@ -20,7 +20,7 @@ export type ClaudeEvent =
   | { type: "running" };
 
 /**
- * Where a `claude` event belongs besides its request id. The app sends it with every event of a turn the person didn't
+ * Where a `pip` event belongs besides its request id. The app sends it with every event of a turn the person didn't
  * start: a wake, `kind: wake`, in its workstream's `conversation`. `prompt` is the wake's event lines when the backend
  * says them; without it the page reads them from the stored turn.
  */

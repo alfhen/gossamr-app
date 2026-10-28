@@ -108,7 +108,9 @@ mod tests {
     fn nothing_but_this_module_emits_to_the_page() {
         let mut files = Vec::new();
         sources(&Path::new(env!("CARGO_MANIFEST_DIR")).join("src"), &mut files);
-        let emitting: Vec<_> = files.iter().filter(|(path, text)| !path.ends_with("wire.rs") && (text.contains(".emit(") || text.contains(".emit_to(") || text.contains(".emit_filter("))).map(|(p, _)| p.as_str()).collect();
+        let own = Path::new(env!("CARGO_MANIFEST_DIR")).join("src").join("wire.rs").display().to_string();
+        let calls = [".emit(", ".emit_to(", ".emit_str(", ".emit_filter(", "Emitter::emit"];
+        let emitting: Vec<_> = files.iter().filter(|(path, text)| *path != own && calls.iter().any(|c| text.contains(c))).map(|(p, _)| p.as_str()).collect();
         assert!(emitting.is_empty(), "these emit events of their own: {emitting:?}");
     }
 

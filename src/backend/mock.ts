@@ -485,7 +485,7 @@ export class MockBackend implements Backend {
     return this.workstreams.events(id);
   }
 
-  /** Pauses a workstream and stops Pip's turns in its conversation, as `workstreams_pause` does; its runs carry on. */
+  /** Pauses a workstream and stops Pip's turns in its conversation, as `workstreams_set_state` with `pause` does; its runs carry on. */
   async workstreamsPause(id: string) {
     const paused = this.workstreams.pause(id, "person", "person");
     mockCancelTurns((c) => c === workstreamConversation(id));

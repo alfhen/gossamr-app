@@ -38,6 +38,23 @@ describe("following a pull request's diff", () => {
     expect(sha(seen[seen.length - 1])).toBe("new");
   });
 
+  it("reads at most twice for two triggers in quick succession, and the last read wins", async () => {
+    const b = backend();
+    const seen: PullDiffState[] = [];
+    const stop = followPullDiff(b.fake, GH, "acme/webshop", 218, (s) => seen.push(s));
+    await settle();
+    b.read.mockClear();
+
+    b.push("newer");
+    b.tell(GH);
+    b.tell(GH);
+    b.tell(GH);
+    await settle();
+    stop();
+    expect(b.read).toHaveBeenCalledTimes(2);
+    expect(sha(seen[seen.length - 1])).toBe("newer");
+  });
+
   it("ignores a cache change of another connection", async () => {
     const b = backend();
     const stop = followPullDiff(b.fake, GH, "acme/webshop", 218, () => {});

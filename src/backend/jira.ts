@@ -376,7 +376,7 @@ export class JiraBackend implements Backend {
   }
 
   workstreamsStop(id: string) {
-    return invoke<{ stopped: number; failed: number }>("runs_stop_all", { workstreamId: id });
+    return invoke<{ stopped: number; failed: number }>("workstreams_stop", { id });
   }
 
   onWorkstreamsChanged(listener: (change: WorkstreamsChanged) => void) {

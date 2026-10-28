@@ -170,14 +170,14 @@ fn use_freed_slot(service: &RunsState) {
     });
 }
 
-/// Whether Jira is set up and who is signed in. With `client_id` and `client_secret`, saves the OAuth app first.
 #[tauri::command]
-async fn auth_status(core: State<'_, CoreState>, client_id: Option<String>, client_secret: Option<String>) -> Result<AuthStatus> {
-    match (client_id, client_secret) {
-        (Some(client_id), Some(client_secret)) => core.auth.save_app(OAuthApp { client_id, client_secret })?,
-        (None, None) => {}
-        _ => return Err(Error::Auth("the OAuth app needs both its client id and its secret".into())),
-    }
+async fn auth_status(core: State<'_, CoreState>) -> Result<AuthStatus> {
+    core.auth.status().await
+}
+
+#[tauri::command]
+async fn save_oauth_app(core: State<'_, CoreState>, client_id: String, client_secret: String) -> Result<AuthStatus> {
+    core.auth.save_app(OAuthApp { client_id, client_secret })?;
     core.auth.status().await
 }
 
@@ -217,8 +217,8 @@ async fn cache_search(core: State<'_, CoreState>, filter: Filter, include_unwatc
 
 /// A watched item from the cache. With `live`, any item, read from the tracker without storing it and flagged `unwatched` when its container isn't watched.
 #[tauri::command]
-async fn cache_item(core: State<'_, CoreState>, item: ItemRef, live: Option<bool>) -> Result<Option<WorkItem>> {
-    if live.unwrap_or(false) {
+async fn cache_item(core: State<'_, CoreState>, item: ItemRef, live: bool) -> Result<Option<WorkItem>> {
+    if live {
         core.peek_item(&item).await
     } else {
         core.cache_item(&item).await
@@ -360,8 +360,8 @@ async fn github_disconnect(app: AppHandle, core: State<'_, CoreState>, connectio
 /// The pull requests, branches and commits that name a work item, from the cache: instant, and only watched repositories.
 /// With `live`, searches the watched repositories for the item's key first and caches what it finds.
 #[tauri::command]
-async fn dev_links(app: AppHandle, core: State<'_, CoreState>, item: ItemRef, live: Option<bool>) -> Result<Vec<DevLink>> {
-    if !live.unwrap_or(false) {
+async fn dev_links(app: AppHandle, core: State<'_, CoreState>, item: ItemRef, live: bool) -> Result<Vec<DevLink>> {
+    if !live {
         return core.dev_links(&item);
     }
     let (links, changed) = core.dev_links_live(&item).await?;
@@ -397,8 +397,8 @@ async fn proposals_edit(app: AppHandle, core: State<'_, CoreState>, id: String, 
 /// Skips a draft. With `undo`, the person's Undo of a skip: a draft skipped a moment ago is pending again. Refused for a
 /// skip that old, or a draft in any other state.
 #[tauri::command]
-async fn proposals_skip(app: AppHandle, core: State<'_, CoreState>, id: String, undo: Option<bool>) -> Result<Proposal> {
-    let done = if undo.unwrap_or(false) { core.unskip_proposal(&id).await? } else { core.skip_proposal(&id).await? };
+async fn proposals_skip(app: AppHandle, core: State<'_, CoreState>, id: String, undo: bool) -> Result<Proposal> {
+    let done = if undo { core.unskip_proposal(&id).await? } else { core.skip_proposal(&id).await? };
     let connection = Connection::jira_id(&core.scope().await?);
     proposals_changed(&app, &connection);
     // A draft in a workstream is a line in its audit, which its timeline's counts read.
@@ -469,10 +469,10 @@ async fn runs_cleanup(runs: State<'_, RunsState>, id: String) -> Result<runs::cl
 }
 
 /// Archives runs that are over: they leave the Agents view and Needs you but stay in the database. With `restore`, brings
-/// them back. Returns the ids it changed.
+/// them back. Returns the ids it archived, or with `restore` the ids it was given.
 #[tauri::command]
-async fn runs_archive(runs: State<'_, RunsState>, ids: Vec<String>, restore: Option<bool>) -> Result<Vec<String>> {
-    if !restore.unwrap_or(false) {
+async fn runs_archive(runs: State<'_, RunsState>, ids: Vec<String>, restore: bool) -> Result<Vec<String>> {
+    if !restore {
         return runs.archive(&ids).await;
     }
     for id in &ids {
@@ -508,8 +508,8 @@ async fn runs_delete(runs: State<'_, RunsState>, id: String, remove_worktree: bo
 /// Starts a run that is still queued, as after a restart. With `retry`, launches one whose launch failed, looking for its
 /// session first and starting one only if there is none.
 #[tauri::command]
-async fn runs_start(runs: State<'_, RunsState>, id: String, retry: Option<bool>) -> Result<Run> {
-    if retry.unwrap_or(false) {
+async fn runs_start(runs: State<'_, RunsState>, id: String, retry: bool) -> Result<Run> {
+    if retry {
         runs.retry_launch(&id).await
     } else {
         runs.start_now(&id).await
@@ -635,13 +635,15 @@ async fn runs_adopt_session(runs: State<'_, RunsState>, id: String, session: Str
 }
 
 /// Stops every run Gossamr started, in any account, and the runs waiting for a slot, and nothing else. Nothing is
-/// started in the slots it frees. With `workstream_id`, the person stops that workstream instead: it is paused, then each
-/// of its runs that can be stopped is.
+/// started in the slots it frees.
 #[tauri::command]
-async fn runs_stop_all(app: AppHandle, core: State<'_, CoreState>, runs: State<'_, RunsState>, agent: State<'_, AgentState>, workstream_id: Option<String>) -> Result<runs::control::StopAll> {
-    let Some(id) = workstream_id else {
-        return runs.stop_all().await;
-    };
+async fn runs_stop_all(runs: State<'_, RunsState>) -> Result<runs::control::StopAll> {
+    runs.stop_all().await
+}
+
+/// The person stops a workstream: pauses it, then stops each of its runs that can be stopped.
+#[tauri::command]
+async fn workstreams_stop(app: AppHandle, core: State<'_, CoreState>, runs: State<'_, RunsState>, agent: State<'_, AgentState>, id: String) -> Result<runs::control::StopAll> {
     let scope = core.scope().await?;
     let result = runs.stop_workstream(&scope, &id).await;
     if result.is_ok() {
@@ -926,6 +928,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             set_needs_badge,
             auth_status,
+            save_oauth_app,
             sign_in,
             sign_out,
             snapshot,
@@ -975,6 +978,7 @@ pub fn run() {
             runs_answer,
             runs_adopt_session,
             runs_stop_all,
+            workstreams_stop,
             runs_open_terminal,
             runs_disk,
             runs_events,

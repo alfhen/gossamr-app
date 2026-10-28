@@ -12,16 +12,32 @@ export type PullDiffState = { status: "loading" } | { status: "error"; error: st
 export function followPullDiff(backend: Backend, connectionId: string, repo: string, number: number, onState: (state: PullDiffState) => void): () => void {
   let current = true;
   let seen = false;
-  const read = () =>
-    backend.codePullDiff(connectionId, repo, number).then(
-      (diff) => {
-        seen = true;
-        if (current) onState({ status: "ready", diff });
-      },
-      (e: unknown) => {
-        if (current && !seen) onState({ status: "error", error: e instanceof Error ? e.message : String(e) });
-      },
-    );
+  let reading = false;
+  let again = false;
+  // One read at a time, and a trigger that arrives during one earns exactly one more, so an older answer never lands after a newer one.
+  const read = async () => {
+    if (reading) {
+      again = true;
+      return;
+    }
+    reading = true;
+    try {
+      do {
+        again = false;
+        await backend.codePullDiff(connectionId, repo, number).then(
+          (diff) => {
+            seen = true;
+            if (current) onState({ status: "ready", diff });
+          },
+          (e: unknown) => {
+            if (current && !seen) onState({ status: "error", error: e instanceof Error ? e.message : String(e) });
+          },
+        );
+      } while (again && current);
+    } finally {
+      reading = false;
+    }
+  };
   onState({ status: "loading" });
   void read();
   const offs = [

@@ -22,7 +22,7 @@ export interface AuthStatus {
 
 export const auth = {
   status: () => invoke<AuthStatus>("auth_status"),
-  saveApp: (clientId: string, clientSecret: string) => invoke<AuthStatus>("auth_status", { clientId, clientSecret }),
+  saveApp: (clientId: string, clientSecret: string) => invoke<AuthStatus>("save_oauth_app", { clientId, clientSecret }),
   signIn: () => invoke<AuthStatus>("sign_in"),
   signOut: () => invoke<void>("sign_out"),
 };

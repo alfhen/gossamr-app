@@ -25,8 +25,11 @@ describe("the desktop backend's wiring", () => {
   it("invokes only commands lib.rs registers", () => {
     const commands = registered();
     expect(commands.size).toBeGreaterThan(50);
-    const invoked = [...read("./jira.ts").matchAll(/invoke(?:<[^(]*>)?\(\s*"([a-z0-9_]+)"/g)].map((m) => m[1]);
+    const front = sources(new URL("../", import.meta.url)).join("\n");
+    const invoked = [...front.matchAll(/invoke(?:<[^(]*>)?\(\s*"([a-z0-9_]+)"/g)].map((m) => m[1]);
     expect(invoked).toContain("proposals_post_review");
+    expect(invoked).toContain("save_oauth_app");
+    expect(invoked).toContain("ask_claude");
     expect(invoked.filter((c) => !commands.has(c))).toEqual([]);
   });
 
