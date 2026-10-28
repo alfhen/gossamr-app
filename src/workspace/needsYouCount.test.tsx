@@ -60,7 +60,7 @@ function seed(runs: Run[], proposals: Proposal[]) {
 
 afterEach(() => {
   seed([], []);
-  Object.assign(useActivity.getInitialState(), { chip: "all", unread: 0, codeUnread: 0 });
+  Object.assign(useActivity.getInitialState(), { filter: "all", unread: 0 });
 });
 
 describe("one count of what needs you", () => {
@@ -75,7 +75,7 @@ describe("one count of what needs you", () => {
     const n = list.length;
     expect(list.map((x) => x.kind).sort()).toEqual(["plan", "question"]);
 
-    expect(renderToStaticMarkup(<Rail />)).toContain(`Agents, ${needsYouText(n)}`);
+    expect(renderToStaticMarkup(<Rail />)).toContain(`Work, ${needsYouText(n)}`);
 
     expect(renderToStaticMarkup(<NeedsYouList needs={list} />)).toMatch(new RegExp(`data-needs-you-count[^>]*>${n}<`));
     expect(Number(/(\d+) needs? you/.exec(composerFooter(runs, n, NOW))?.[1])).toBe(n);
@@ -85,9 +85,9 @@ describe("one count of what needs you", () => {
   it("counts the failures once, on the latest run, and drops them once a newer run has followed", () => {
     seed(failures, []);
     expect(currentNeeds().map((x) => [x.kind, x.runId])).toEqual([["failure", "p3"]]);
-    expect(renderToStaticMarkup(<Rail />)).toContain("Agents, 1 thing needs you");
+    expect(renderToStaticMarkup(<Rail />)).toContain("Work, 1 thing needs you");
     seed([...failures, run("again", "working", "plan", 1)], []);
     expect(currentNeeds()).toEqual([]);
-    expect(renderToStaticMarkup(<Rail />)).toContain('aria-label="Agents"');
+    expect(renderToStaticMarkup(<Rail />)).toContain('aria-label="Work"');
   });
 });

@@ -34,7 +34,7 @@ const on = (): AgentsActions => ({
   buildFromPlan: vi.fn(),
   filter: vi.fn(),
   clearFilters: vi.fn(),
-  toggleEarlier: vi.fn(),
+  stop: vi.fn(),
   setIntro: vi.fn(),
   dismissIntro: vi.fn(),
   retry: vi.fn(),
@@ -54,9 +54,7 @@ const screen = (over: Partial<AgentsScreenProps> = {}) =>
       error={null}
       filters={NO_FILTERS}
       selectedId={null}
-      earlierOpen={false}
       introShown={false}
-      group="state"
       stopping={false}
       opened={new Set()}
       now={NOW}
@@ -138,7 +136,7 @@ describe("a failed launch on a card", () => {
   });
 });
 
-describe("grouped by workstream", () => {
+describe("the Work screen groups agents by workstream", () => {
   const ws: WorkstreamView = {
     workstream: { id: "ws-1", connectionId: "mock", itemKey: "CA-401", repo: null, title: "CA-401 Retry the payment", pipSession: null, pausedReason: null, notes: null, createdAt: iso(60), closedAt: null, basis: null },
     stage: "investigate",
@@ -147,25 +145,26 @@ describe("grouped by workstream", () => {
   };
   const linked = () => run("working", { id: "w1", queuedAt: iso(1), spec: { ...eight()[0].spec, role: "investigate", workstream: "ws-1" } });
 
-  it("shows workstreams without a grouping control", () => {
-    const out = screen({ group: "workstream" });
+  it("has one filter and no grouping or state controls", () => {
+    const out = screen();
     expect(out).toContain("data-workstream-group");
+    expect(out).toContain('data-chip="needs"');
+    expect(out.match(/data-chip="/g)).toHaveLength(1);
     expect(out).not.toContain('aria-label="Group by"');
+    expect(out).not.toContain("data-lane=");
+    expect(out).not.toMatch(/<select/);
   });
 
-  it("shows a workstream with its title, stage chip and R labels, and the other runs under No workstream", () => {
-    const out = screen({ runs: [...eight(), linked()], group: "workstream", workstreams: [ws] });
+  it("shows a workstream with its title and R labels, and the other runs under No workstream", () => {
+    const out = screen({ runs: [...eight(), linked()], workstreams: [ws] });
     expect(out.match(/data-workstream-group="([^"]+)"/g)).toEqual(['data-workstream-group="ws-1"', 'data-workstream-group="none"']);
     expect(out).toMatch(/<h3[^>]*><b[^>]*>CA-401<\/b><span[^>]*>Retry the payment<\/span><\/h3>/);
     expect(out).toContain('data-run-label="R1"');
     expect(out).toContain(">No workstream</h3>");
-    expect(out).not.toContain("data-lane=");
-    // Every run is reachable; nothing folds in this grouping.
+    // Every run is reachable; nothing folds.
     expect(articles(out)).toHaveLength(9);
     expect(out).toContain('aria-setsize="9"');
   });
-
-
 });
 
 describe("the Agents screen as the operations view", () => {
@@ -225,6 +224,15 @@ describe("cards", () => {
     expect(card(stopped)).not.toContain("limit");
   });
 
+  it("gives a running agent's row Open in Terminal and Stop, and a waiting one only Stop beside its own Terminal button", () => {
+    const row = (r: Run) => renderToStaticMarkup(<AgentCard run={r} now={NOW} selected={false} position={1} total={1} ticketTitle={null} onOpen={vi.fn()} onAttach={vi.fn()} onStop={vi.fn()} failure={{ opened: false, on: { act: vi.fn(), retry: vi.fn(), copied: vi.fn() } }} />);
+    expect(buttonsOf(row(run("working", { shortId: "1000a000" })))).toEqual(["Open in Terminal", "Stop"]);
+    const waiting = buttonsOf(row(run("needsAnswer", { needs: "Keep the rounding?", shortId: "1000a000" })));
+    expect(waiting.filter((b) => b === "Open in Terminal")).toHaveLength(1);
+    expect(waiting).toContain("Stop");
+    expect(buttonsOf(row(run("done", { shortId: "1000a000" })))).toEqual(["Open in Terminal"]);
+  });
+
   it("shows a question with Open in Terminal and no answer box", () => {
     const html = card(run("needsAnswer", { needs: "Should the refund path keep the old rounding?", shortId: "1000a000" }));
     expect(html).toContain("Should the refund path keep the old rounding?");
@@ -278,7 +286,7 @@ describe("cards", () => {
   it("shows Terminal and Stop on work rows", () => {
     const out = screen();
     expect(out).toContain("Open in Terminal");
-    expect(out).toContain("<summary class=\"cursor-pointer\">Stop</summary>");
+    expect(out).toMatch(/<button[^>]*>(?:<svg[\s\S]*?<\/svg>)?Stop<\/button>/);
   });
 
   it("names the branch worktree-<name>", () => {
@@ -388,19 +396,19 @@ describe("the rail", () => {
     set([]);
   });
 
-  it("has no house icon: Agents is the one button, and the one count is its badge", () => {
+  it("has no house icon: Work is the one button, and the one count is its badge", () => {
     set(eight());
     const out = renderToStaticMarkup(<Rail />);
     expect(out).not.toContain("Pip home");
     expect(out).not.toContain("⌂");
-    expect(out.match(/aria-label="Agents[^"]*"/g)).toHaveLength(1);
+    expect(out.match(/aria-label="Work(, [^"]*)?"/g)).toHaveLength(1);
   });
 
-  it("puts the one count in Agents' label and shows it as its badge", () => {
+  it("puts the one count in Work's label and shows it as its badge", () => {
     set(eight());
-    const [, label, inner] = button(renderToStaticMarkup(<Rail />), /Agents/);
+    const [, label, inner] = button(renderToStaticMarkup(<Rail />), /Work/);
     // A permission, a question and a failure; the run that has been quiet for 45 minutes is not a need.
-    expect(label).toBe("Agents, 3 things need you");
+    expect(label).toBe("Work, 3 things need you");
     expect(inner).toContain('aria-label="3 things need you" title="3 things need you"');
     expect(inner).toContain(">3<");
     expect(inner).toContain("bg-ws-pip");
@@ -409,17 +417,17 @@ describe("the rail", () => {
   it("keeps a failed run in the count however long it is looked at, until it is dismissed", () => {
     const failedRun = eight().find((r) => r.state === "failed")!;
     set(eight());
-    expect(button(renderToStaticMarkup(<Rail />), /Agents/)[1]).toBe("Agents, 3 things need you");
+    expect(button(renderToStaticMarkup(<Rail />), /Work/)[1]).toBe("Work, 3 things need you");
     set(eight(), [failedRun.id]);
-    expect(button(renderToStaticMarkup(<Rail />), /Agents/)[1]).toBe("Agents, 2 things need you");
+    expect(button(renderToStaticMarkup(<Rail />), /Work/)[1]).toBe("Work, 2 things need you");
   });
 
   it("says thing for one and drops the badge at zero", () => {
     set([run("needsAnswer")]);
-    expect(button(renderToStaticMarkup(<Rail />), /Agents/)[1]).toBe("Agents, 1 thing needs you");
+    expect(button(renderToStaticMarkup(<Rail />), /Work/)[1]).toBe("Work, 1 thing needs you");
     set([run("working", { lastProgressAt: new Date(NOW + 4 * 60_000).toISOString() }), run("done", { id: "d" })]);
-    const [, label, inner] = button(renderToStaticMarkup(<Rail />), /Agents/);
-    expect(label).toBe("Agents");
+    const [, label, inner] = button(renderToStaticMarkup(<Rail />), /Work/);
+    expect(label).toBe("Work");
     expect(inner).not.toContain("bg-ws-pip");
   });
 
@@ -429,13 +437,11 @@ describe("the rail", () => {
     expect(Object.keys(railBadgeText)).toEqual(["agents"]);
   });
 
-  it("has no badge on Activity, however much is unread", () => {
+  it("has no badge on Inbox, however much is unread", () => {
     useActivity.getInitialState().unread = 28;
-    useActivity.getInitialState().codeUnread = 3;
-    const [, label, inner] = button(renderToStaticMarkup(<Rail />), /Activity/);
+    const [, label, inner] = button(renderToStaticMarkup(<Rail />), /Inbox/);
     useActivity.getInitialState().unread = 0;
-    useActivity.getInitialState().codeUnread = 0;
-    expect(label).toBe("Activity");
+    expect(label).toBe("Inbox");
     expect(inner).not.toContain("bg-ws-pip");
     expect(inner).not.toMatch(/>\d+</);
   });
@@ -443,8 +449,8 @@ describe("the rail", () => {
   it("sits beside Activity in the bottom group", () => {
     set([]);
     const out = renderToStaticMarkup(<Rail />);
-    expect(out.indexOf('aria-label="Activity"')).toBeLessThan(out.indexOf('aria-label="Agents"'));
-    expect(out.indexOf('aria-label="Agents"')).toBeLessThan(out.indexOf('aria-label="Settings"'));
+    expect(out.indexOf('aria-label="Inbox"')).toBeLessThan(out.indexOf('aria-label="Work"'));
+    expect(out.indexOf('aria-label="Work"')).toBeLessThan(out.indexOf('aria-label="Settings"'));
   });
 });
 
@@ -463,7 +469,7 @@ describe("a run in Needs you", () => {
 
   it("is told only for the runs Needs you lists, and the header counts Needs you's one count", () => {
     const out = screen({ needsYou: 4, inNeeds: new Map() });
-    expect(out).toMatch(/data-chip="needs"[^>]*>Needs you <span data-chip-count[^>]*>4</);
+    expect(out).toMatch(/data-chip="needs"[^>]*>Needs you<span data-chip-count[^>]*>4</);
     expect(out).not.toContain("In Needs you");
     expect(out).not.toContain('data-lane="needs"');
     expect(out).not.toContain(">Needs you</h3>");

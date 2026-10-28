@@ -6,7 +6,7 @@ import type { Run, WorkstreamView } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { ClosedWorkstreams, WorkstreamHeadExtras, WorkstreamTools, rowTitle } from "./AgentsHome";
 import { AgentsScreen, type AgentsActions } from "./AgentsView";
-import { NO_FILTERS } from "./agentsLogic";
+import { NO_FILTERS, needsScope } from "./agentsLogic";
 import { loadPrefs, usePrefs } from "./prefs";
 import { useRuns } from "./runsStore";
 import { loadTabs, useTabs } from "./tabsStore";
@@ -61,10 +61,10 @@ describe("old work preferences", () => {
 
 describe("a workstream in the Agents list", () => {
   const actions = (): AgentsActions =>
-    ({ select: noop, open: noop, attach: noop, draftComment: noop, buildFromPlan: noop, resume: noop, filter: noop, clearFilters: noop, setGroup: noop, toggleEarlier: noop, setIntro: noop, dismissIntro: noop, retry: noop, fix: noop, retryLaunch: noop, copied: noop, stopAll: noop, askPip: noop, openSafety: noop, openWorkstream: vi.fn() }) as AgentsActions;
+    ({ select: noop, open: noop, attach: noop, draftComment: noop, buildFromPlan: noop, resume: noop, filter: noop, clearFilters: noop, stop: noop, setIntro: noop, dismissIntro: noop, retry: noop, fix: noop, retryLaunch: noop, copied: noop, stopAll: noop, askPip: noop, openSafety: noop, openWorkstream: vi.fn() }) as AgentsActions;
   const screen = (workstreams: WorkstreamView[], runs: Run[] = [], over: Record<string, unknown> = {}) =>
     renderToStaticMarkup(
-      <AgentsScreen runs={runs} status="ready" error={null} filters={NO_FILTERS} selectedId={null} earlierOpen={false} introShown={false} stopping={false} opened={new Set()} now={NOW} ticketTitle={() => null} on={actions()} workstreams={workstreams} {...over} />,
+      <AgentsScreen runs={runs} status="ready" error={null} filters={NO_FILTERS} selectedId={null} introShown={false} stopping={false} opened={new Set()} now={NOW} ticketTitle={() => null} on={actions()} workstreams={workstreams} {...over} />,
     );
 
   it("is a group even with no agent yet, with its ticket key, its stage and a button that opens it", () => {
@@ -81,7 +81,7 @@ describe("a workstream in the Agents list", () => {
   });
 
   it("is not listed with a filter on, which hides the groups that have no agent to match it", () => {
-    const html = screen([view("ws-1", "CA-401")], [], { filters: { ...NO_FILTERS, repo: "acme/none" } });
+    const html = screen([view("ws-1", "CA-401")], [], { filters: { needs: true }, needed: needsScope([]) });
     expect(html).not.toContain('data-workstream-group="ws-1"');
   });
 
@@ -100,10 +100,10 @@ describe("a workstream in the Agents list", () => {
 });
 
 describe("what needs you, in the Agents list and its detail", () => {
-  const actions = (): AgentsActions => ({ select: noop, open: noop, attach: noop, draftComment: noop, buildFromPlan: noop, resume: noop, filter: noop, clearFilters: noop, setGroup: noop, toggleEarlier: noop, setIntro: noop, dismissIntro: noop, retry: noop, fix: noop, retryLaunch: noop, copied: noop, stopAll: noop, askPip: noop, openSafety: noop, openWorkstream: vi.fn() }) as AgentsActions;
+  const actions = (): AgentsActions => ({ select: noop, open: noop, attach: noop, draftComment: noop, buildFromPlan: noop, resume: noop, filter: noop, clearFilters: noop, stop: noop, setIntro: noop, dismissIntro: noop, retry: noop, fix: noop, retryLaunch: noop, copied: noop, stopAll: noop, askPip: noop, openSafety: noop, openWorkstream: vi.fn() }) as AgentsActions;
   const screen = (over: Record<string, unknown> = {}) =>
     renderToStaticMarkup(
-      <AgentsScreen runs={[]} status="ready" error={null} filters={NO_FILTERS} selectedId={null} earlierOpen={false} introShown={false} stopping={false} opened={new Set()} now={NOW} ticketTitle={() => null} on={actions()} {...over} />,
+      <AgentsScreen runs={[]} status="ready" error={null} filters={NO_FILTERS} selectedId={null} introShown={false} stopping={false} opened={new Set()} now={NOW} ticketTitle={() => null} on={actions()} {...over} />,
     );
   afterEach(() => seed(useWorkView, { deciding: null, batch: null }));
   const held = view("ws-1", "CA-401", { pausedReason: "ceiling" });
@@ -129,7 +129,7 @@ describe("what needs you, in the Agents list and its detail", () => {
   it("is the same count on the Needs you chip as the rail badge says, and the chip is a toggle that is on with the filter", () => {
     seed(useWorkstreams, { list: [held, calm] });
     const off = screen({ workstreams: [held, calm], needsYou: 1 });
-    expect(off).toMatch(/data-chip="needs"[^>]*>Needs you <span data-chip-count[^>]*>1</);
+    expect(off).toMatch(/data-chip="needs"[^>]*>Needs you<span data-chip-count[^>]*>1</);
     const on = screen({ workstreams: [held, calm], needsYou: 1, filters: { ...NO_FILTERS, needs: true } });
     expect(on).toMatch(/data-chip="needs"[^>]*aria-pressed="true"/);
   });

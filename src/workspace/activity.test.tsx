@@ -2,8 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MockBackend } from "../backend/mock";
 import type { FeedEntry } from "../types";
-import { ChipBar, DayHeading, EmptyNote, FeedRow, PipFeedRow, type FeedRowProps } from "./ActivityView";
-import { toWorkstreamEntries } from "./activityLogic";
+import { DayHeading, EmptyNote, FeedRow, MentionsFilter, type FeedRowProps } from "./ActivityView";
 import { useActivity } from "./activityStore";
 
 const entry = (over: Partial<FeedEntry> = {}): FeedEntry => ({
@@ -80,29 +79,12 @@ describe("FeedRow", () => {
   });
 });
 
-describe("the chips and notes", () => {
-  it("offers one filter for mentions", () => {
-    const out = renderToStaticMarkup(<ChipBar chip="mentions" counts={{}} onChange={vi.fn()} />);
-    expect(out).toContain("All");
-    expect(out).toContain("Mentions");
-    expect(out).not.toContain("Your turn");
-    expect(out).not.toContain("Comments");
+describe("the filter and notes", () => {
+  it("offers one filter, for mentions, and nothing else", () => {
+    const out = renderToStaticMarkup(<MentionsFilter filter="mentions" onChange={vi.fn()} />);
+    expect(out.match(/<button/g)).toHaveLength(1);
     expect(out).toMatch(/aria-pressed="true"[^>]*>Mentions/);
-  });
-
-  it("shows a workstream's audit line with its ticket and a way to Agents, newest first", () => {
-    const ws = { workstream: { id: "w1", connectionId: "mock", itemKey: "CA-401", title: "CA-401 Retry", closedAt: null }, stage: "triage", runs: ["r1", "r2"], labels: [["r1", "R1"], ["r2", "R2"]] } as unknown as Parameters<typeof toWorkstreamEntries>[1][number];
-    const line = (seq: number, at: string, actor: "person" | "supervisor", action: string, runId: string | null, detail: string | null = null) => ({ workstreamId: "w1", seq, at, actor, action, runId, proposalId: null, digest: null, detail });
-    const [newest, older] = toWorkstreamEntries({ w1: [line(1, "2026-09-30T10:00:00Z", "person", "opened", null), line(2, "2026-09-30T11:00:00Z", "supervisor", "wake", "r2", "r2|done")] }, [ws]);
-    expect(newest.text).toBe("Pip picked up R2");
-    expect(older.text).toBe("You opened the workstream");
-    const html = renderToStaticMarkup(<PipFeedRow entry={newest} ticketTitle="Retry failed webhooks" now={new Date("2026-09-30T12:00:00Z")} position={1} total={2} onOpen={vi.fn()} />);
-    expect(html).toContain('data-source="pip"');
-    expect(html).toContain('data-action="wake"');
-    expect(html).toContain("Pip picked up R2");
-    expect(html).toContain("CA-401");
-    expect(html).toContain("Retry failed webhooks");
-    expect(html).toContain("Open in Agents");
+    expect(renderToStaticMarkup(<MentionsFilter filter="all" onChange={vi.fn()} />)).toMatch(/aria-pressed="false"/);
   });
 
   it("renders a day heading and a status note", () => {
@@ -121,7 +103,7 @@ describe("the activity store on the mock", () => {
 
   beforeEach(async () => {
     backend = new MockBackend();
-    useActivity.setState({ chip: "all", container: null });
+    useActivity.setState({ filter: "all" });
     useActivity.getState().init(backend);
     await flush();
   });
@@ -133,14 +115,14 @@ describe("the activity store on the mock", () => {
     expect(s.unread).toBeGreaterThan(3);
   });
 
-  it("filters by chip and by project", async () => {
-    useActivity.getState().setChip("assigned");
+  it("narrows to mentions and back", async () => {
+    useActivity.getState().setFilter("mentions");
     await flush();
-    expect(useActivity.getState().entries.every((e) => e.kind === "assigned")).toBe(true);
-    useActivity.getState().setChip("all");
-    useActivity.getState().showProject({ connectionId: "mock", externalId: "SUP" });
+    expect(useActivity.getState().entries.length).toBeGreaterThan(0);
+    expect(useActivity.getState().entries.every((e) => e.mention)).toBe(true);
+    useActivity.getState().setFilter("all");
     await flush();
-    expect(useActivity.getState().entries.every((e) => e.item.key.startsWith("SUP-"))).toBe(true);
+    expect(useActivity.getState().entries.some((e) => !e.mention)).toBe(true);
   });
 
   it("marks one entry read at once and keeps it read after the backend answers", async () => {
@@ -161,15 +143,6 @@ describe("the activity store on the mock", () => {
     expect(await backend.cacheFeedUnread()).toBe(0);
     expect(useActivity.getState().unread).toBe(0);
     expect(useActivity.getState().entries.every((e) => !e.unread)).toBe(true);
-  });
-
-  it("shows only unread entries under Needs me and empties once they are read", async () => {
-    useActivity.getState().setChip("needsMe");
-    await flush();
-    expect(useActivity.getState().entries.length).toBeGreaterThan(0);
-    await useActivity.getState().markAllRead();
-    await flush();
-    expect(useActivity.getState().entries).toEqual([]);
   });
 
   it("reports a failed load and recovers on retry", async () => {
@@ -212,46 +185,5 @@ describe("the activity store on the mock", () => {
     await useActivity.getState().loadMore();
     expect(useActivity.getState().entries.map((e) => e.id)).toEqual(all.slice(0, 10).map((e) => e.id));
     expect(useActivity.getState().next).toBeNull();
-  });
-});
-
-describe("marking everything read with GitHub events in the feed", () => {
-  const container = { connectionId: "mock", externalId: "CA" };
-
-  async function start(state: Partial<ReturnType<typeof useActivity.getState>> = {}) {
-    const backend = new MockBackend({ githubRepos: 10 });
-    useActivity.setState({ chip: "all", source: "all", container: null, codeRead: new Set(), ...state });
-    useActivity.getState().init(backend);
-    await flush();
-    return backend;
-  }
-
-  it("marks the GitHub events too when no project is chosen", async () => {
-    await start();
-    expect(useActivity.getState().codeUnread).toBeGreaterThan(0);
-    await useActivity.getState().markAllRead();
-    expect(useActivity.getState().codeUnread).toBe(0);
-  });
-
-  it("leaves GitHub events alone when a project is chosen and the page named none of them", async () => {
-    await start({ container });
-    const before = useActivity.getState().codeUnread;
-    await useActivity.getState().markAllRead();
-    expect(useActivity.getState().codeUnread).toBe(before);
-    const ids = useActivity.getState().codeEvents.slice(0, 1).map((e) => e.id);
-    await useActivity.getState().markAllRead(ids);
-    expect(useActivity.getState().codeUnread).toBeLessThan(before);
-  });
-
-  it("leaves GitHub events alone on the Jira source, and Jira entries alone on the GitHub source", async () => {
-    const backend = await start({ source: "jira" });
-    const before = useActivity.getState().codeUnread;
-    await useActivity.getState().markAllRead();
-    expect(useActivity.getState().codeUnread).toBe(before);
-    useActivity.setState({ source: "github" });
-    const jiraBefore = await backend.cacheFeedUnread();
-    await useActivity.getState().markAllRead();
-    expect(useActivity.getState().codeUnread).toBe(0);
-    expect(await backend.cacheFeedUnread()).toBe(jiraBefore);
   });
 });

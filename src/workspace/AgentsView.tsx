@@ -10,23 +10,7 @@ import { ArchivedSection } from "./ArchivedSection";
 import { ClearFinished } from "./ClearFinished";
 import { AgentsBanners } from "./AgentsBanners";
 import { AgentsEmpty, AgentsIntro, NoMatch } from "./AgentsEmpty";
-import {
-  agentGroups,
-  laneCount,
-  laneIsFolded,
-  navOrder,
-  stepRun,
-  slotWaiters,
-  stopAllText,
-  stoppable,
-  needsScope,
-  type AgentFilters,
-  type NeedsScope,
-  type AgentsGroup,
-  type LaneGroup,
-  type LaneId,
-  type WorkstreamGroup,
-} from "./agentsLogic";
+import { agentGroups, stepRun, slotWaiters, stopAllText, stoppable, needsScope, type AgentFilters, type NeedsScope, type WorkstreamGroup } from "./agentsLogic";
 import { useFooterHeight } from "./CanvasFooter";
 import { failureAction } from "./failureActions";
 import type { FailureAct } from "./failureHelp";
@@ -121,7 +105,7 @@ export interface AgentsActions {
   openDescription?(run: Run): void;
   filter(patch: Partial<AgentFilters>): void;
   clearFilters(): void;
-  toggleEarlier(): void;
+  stop(id: string): void;
   archive?(id: string): void;
   setIntro(open: boolean): void;
   dismissIntro(): void;
@@ -139,29 +123,41 @@ export interface AgentsActions {
   openWorkstream?(id: string): void;
 }
 
-/** The Work screen has one filter, using the shared Needs you count. */
-function SummaryChips({ needsYou, filters, on }: { needsYou: number; filters: AgentFilters; on: AgentsActions }) {
+/** The Work screen's one filter: Needs you, with the same count as the rail badge. */
+function NeedsFilter({ needsYou, filters, on }: { needsYou: number; filters: AgentFilters; on: AgentsActions }) {
   return (
     <div role="group" aria-label="Show" data-summary-chips>
-      <button type="button" data-chip="needs" aria-pressed={filters.needs} onClick={() => on.filter({ needs: !filters.needs })} className={`rounded-full border px-2.5 py-px text-sm font-semibold ${filters.needs ? "border-ws-pip bg-ws-pip text-ws-on-pip" : "border-ws-pip text-ws-ink hover:bg-ws-hover"}`}>
-        Needs you <span data-chip-count data-needs-you-count>{needsYou}</span>
+      <button
+        type="button"
+        data-chip="needs"
+        aria-pressed={filters.needs}
+        onClick={() => on.filter({ needs: !filters.needs })}
+        className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-px text-sm leading-normal font-semibold whitespace-nowrap focus-visible:outline-2 focus-visible:outline-ws-pip ${filters.needs ? "border-ws-pip bg-ws-pip text-ws-on-pip" : "border-ws-pip text-ws-ink hover:bg-ws-hover"}`}
+      >
+        Needs you
+        <span data-chip-count data-needs-you-count>
+          {needsYou}
+        </span>
+        {needsYou === 0 && <span className="sr-only">Nothing needs you.</span>}
       </button>
     </div>
   );
 }
 
-function Toolbar({ tools }: { tools?: ReactNode }) {
-  return <div className="flex flex-wrap items-center gap-2 border-b border-ws-sep px-6 py-1.5">{tools}</div>;
+function Toolbar({ introShown, tools, on }: { introShown: boolean; tools?: ReactNode; on: AgentsActions }) {
+  return (
+    <div className="flex flex-wrap items-center gap-2 border-b border-ws-sep px-6 py-1.5">
+      {tools}
+      <span className="flex-1" />
+      <button type="button" aria-pressed={introShown} onClick={() => on.setIntro(!introShown)} className="inline-flex items-center gap-1.5 rounded-md px-2 py-px text-sm text-ws-ink2 hover:bg-ws-hover">
+        <Icon name="info" />
+        How agents work
+      </button>
+    </div>
+  );
 }
 
-function Lane({ group, now, folded, onToggle, children }: { group: LaneGroup; now: number; folded: boolean; onToggle?: () => void; children: ReactNode }) {
-  return <section aria-label={group.title} data-lane={group.lane} className="grid gap-2.5">
-    <div className="flex items-center gap-2"><h3 className="m-0 text-xs font-semibold text-ws-ink2">{group.title}</h3><span data-lane-count>{laneCount(group.lane, group.runs, now)}</span>{onToggle && <button type="button" onClick={onToggle}>{folded ? "Show" : "Hide"}</button>}</div>
-    {!folded && children}
-  </section>;
-}
-
-/** A workstream's runs in the Agents view, under its title and the stage they give it; its detail opens from the heading. */
+/** A workstream's runs on the Work screen, under its title and its one status word; its detail opens from the heading. */
 function WorkstreamSection({ group, view, current, onOpen, children }: { group: WorkstreamGroup; view?: WorkstreamView; current: boolean; onOpen?(id: string): void; children: ReactNode }) {
   const needs = useNeedsYou();
   const mine = needsIn(needs, group.id);
@@ -205,11 +201,8 @@ export interface AgentsScreenProps {
   error: string | null;
   filters: AgentFilters;
   selectedId: string | null;
-  earlierOpen: boolean;
   introShown: boolean;
-  /** How runs are grouped; by workstream when absent. */
-  group?: AgentsGroup;
-  /** The open workstreams, for their titles and where they stand when grouped by workstream. */
+  /** The open workstreams, for their titles and where they stand. */
   workstreams?: readonly WorkstreamView[];
   /** The workstream whose detail is open, if any. */
   openWorkstream?: string | null;
@@ -250,30 +243,28 @@ export interface AgentsScreenProps {
 }
 
 /** The whole screen as a function of its state; `AgentsView` connects it to the stores. */
-export function AgentsScreen({ runs, status, error, filters, selectedId, earlierOpen, introShown, group = "workstream", workstreams = NO_WORKSTREAMS, openWorkstream = null, needed, tools, closedSection, side, stopping, clear, archivedSection, opened, needsYou, inNeeds, asking, now, ticketTitle, draftReady, breakdownReady, descriptionReady, reviewThis, reviewOf, on, onOrder }: AgentsScreenProps) {
+export function AgentsScreen({ runs, status, error, filters, selectedId, introShown, workstreams = NO_WORKSTREAMS, openWorkstream = null, needed, tools, closedSection, side, stopping, clear, archivedSection, opened, needsYou, inNeeds, asking, now, ticketTitle, draftReady, breakdownReady, descriptionReady, reviewThis, reviewOf, on, onOrder }: AgentsScreenProps) {
   const footer = useFooterHeight();
   // While the pointer is over the list or focus is in it, cards keep their places; the normal sort applies once both leave.
   const [hovered, setHovered] = useState(false);
   const [focused, setFocused] = useState(false);
   const frozen = hovered || focused;
-  const sorted = useMemo(() => agentGroups(group, runs, workstreams, filters, earlierOpen, now, needed), [group, runs, workstreams, filters, earlierOpen, now, needed]);
-  const shownBefore = useRef<{ group: AgentsGroup; lanes: LaneGroup[] | null; workstreams: WorkstreamGroup[] | null } | null>(null);
-  const { lanes, workstreams: wsGroups, order } = useMemo(() => {
-    const before = shownBefore.current?.group === group ? shownBefore.current : null;
+  const sorted = useMemo(() => agentGroups(runs, workstreams, filters, needed), [runs, workstreams, filters, needed]);
+  const shownBefore = useRef<WorkstreamGroup[] | null>(null);
+  const { workstreams: wsGroups, order } = useMemo(() => {
+    const before = shownBefore.current;
     if (!frozen || !before) return sorted;
-    const lanes = sorted.lanes && stableGroups(before.lanes ?? [], sorted.lanes, true, (g) => g.lane);
-    const workstreams = sorted.workstreams && stableGroups(before.workstreams ?? [], sorted.workstreams, true, (g) => g.id ?? "none");
-    return { lanes, workstreams, order: navOrder((lanes ?? workstreams) as readonly { runs: readonly Run[]; lane?: LaneId }[], earlierOpen, filters) };
-  }, [sorted, frozen, group, earlierOpen, filters]);
+    const kept = stableGroups(before, sorted.workstreams, true, (g) => g.id ?? "none");
+    return { workstreams: kept, order: kept.flatMap((g) => g.runs.map((r) => r.id)) };
+  }, [sorted, frozen]);
   // Recorded once committed, so a render React discards never becomes the order the next frozen render keeps.
   useLayoutEffect(() => {
-    shownBefore.current = { group, lanes, workstreams: wsGroups };
-  }, [group, lanes, wsGroups]);
+    shownBefore.current = wsGroups;
+  }, [wsGroups]);
   // Published in the commit, not after paint: j and k read this from a native window listener, which a passive effect can trail by one event.
   useLayoutEffect(() => onOrder?.(order), [order, onOrder]);
   // A workstream with no run yet is a group too, so the list is not empty while one exists.
-  const shown = (lanes ?? wsGroups ?? []).reduce((n, g) => n + g.runs.length, 0) + (wsGroups?.filter((g) => g.runs.length === 0).length ?? 0);
-  // A run's short name in its workstream shows in the lanes too, as it does in the conversation that uses it.
+  const shown = wsGroups.reduce((n, g) => n + g.runs.length, 0) + wsGroups.filter((g) => g.runs.length === 0).length;
 
   const props = (run: Run, at: number, label?: string): AgentItemProps => ({
     run,
@@ -285,7 +276,7 @@ export function AgentsScreen({ runs, status, error, filters, selectedId, earlier
     label,
     onOpen: () => on.open(run.id),
     onAttach: () => on.attach(run.id),
-    onStop: () => void useRuns.getState().stop(run.id),
+    onStop: () => on.stop(run.id),
     draftReady: !!draftReady?.(run),
     breakdownReady: !!breakdownReady?.(run),
     onOpenDraft: on.openDraft ? () => on.openDraft?.(run) : undefined,
@@ -303,7 +294,7 @@ export function AgentsScreen({ runs, status, error, filters, selectedId, earlier
   });
 
   let position = 0;
-  /** A group's runs as cards. */
+  /** A workstream's runs as rows. */
   const items = (title: string, list: readonly Run[], labels: Record<string, string> = {}) => (
     <div role="group" aria-label={title} className="grid gap-2">
       {list.map((r) => (
@@ -329,7 +320,7 @@ export function AgentsScreen({ runs, status, error, filters, selectedId, earlier
           <h1 ref={title} tabIndex={-1} className="m-0 rounded text-base font-semibold focus-visible:outline-2 focus-visible:outline-ws-pip">
             Work
           </h1>
-          <SummaryChips needsYou={needsYou ?? 0} filters={filters} on={on} />
+          <NeedsFilter needsYou={needsYou ?? 0} filters={filters} on={on} />
           <span className="flex-1" />
           <button type="button" onClick={on.askPip} className={`${BUTTON} border-ws-pip bg-ws-pip font-semibold text-ws-on-pip hover:bg-ws-pip hover:brightness-110`}>
             <Icon name="spark" />
@@ -342,7 +333,7 @@ export function AgentsScreen({ runs, status, error, filters, selectedId, earlier
           {clear}
           <StopAll count={stoppable(runs).length} waiting={slotWaiters(runs).length} busy={stopping} onStop={on.stopAll} />
         </header>
-        <Toolbar tools={tools} />
+        <Toolbar introShown={introShown} tools={tools} on={on} />
         <div className="min-h-0 flex-1 overflow-y-auto pt-5 pr-[max(24px,var(--ws-launcher-gutter,0px))] pb-[max(80px,var(--ws-launcher-clear,0px))] pl-6">
           <div
             data-agents-list
@@ -363,17 +354,11 @@ export function AgentsScreen({ runs, status, error, filters, selectedId, earlier
               !introShown && status !== "error" && <AgentsEmpty />
             ) : shown === 0 ? (
               <NoMatch hidden={runs.length} onClear={on.clearFilters} />
-            ) : wsGroups ? (
+            ) : (
               wsGroups.map((g) => (
                 <WorkstreamSection key={g.id ?? "none"} group={g} view={g.id ? workstreams.find((w) => w.workstream.id === g.id) : undefined} current={(g.id ?? NO_WORKSTREAM_ID) === openWorkstream} onOpen={on.openWorkstream}>
                   {g.runs.length ? items(g.title, g.runs, g.labels) : <p data-workstream-empty className="m-0 text-sm text-ws-ink3">{filters.needs ? "Open it to see what needs you." : "No agents on this workstream yet."}</p>}
                 </WorkstreamSection>
-              ))
-            ) : (
-              (lanes ?? []).map((g) => (
-                <Lane key={g.lane} group={g} now={now} folded={laneIsFolded(g.lane, earlierOpen, filters)} onToggle={g.lane === "earlier" ? on.toggleEarlier : undefined}>
-                  {items(g.title, g.runs)}
-                </Lane>
               ))
             )}
             {!waiting && closedSection}
@@ -418,7 +403,7 @@ const actions: AgentsActions = {
   },
   filter: (patch) => useRuns.getState().setFilter(patch),
   clearFilters: () => useRuns.getState().clearFilters(),
-  toggleEarlier: () => useRuns.getState().setEarlierOpen(!useRuns.getState().earlierOpen),
+  stop: (id) => void useRuns.getState().stop(id),
   archive: (id) => void useRuns.getState().archive([id]),
   setIntro: (open) => useRuns.getState().setIntroOpen(open),
   dismissIntro: () => useRuns.getState().setIntroOpen(false),
@@ -440,7 +425,6 @@ export function AgentsView() {
   const error = useRuns((s) => s.error);
   const filters = useRuns((s) => s.filters);
   const selectedId = useRuns((s) => s.selectedId);
-  const earlierOpen = useRuns((s) => s.earlierOpen);
   const introOpen = useRuns((s) => s.introOpen);
   const stopping = useRuns((s) => s.stopping);
   const opened = useRuns((s) => s.terminalOpened);
@@ -448,7 +432,6 @@ export function AgentsView() {
   const asking = useWorkView((s) => s.asking);
   const needed = useMemo(() => needsScope(needs), [needs]);
   const inNeeds = useMemo(() => new Map(needs.flatMap((n) => (n.runId ? [[n.runId, n] as const] : []))), [needs]);
-  const group = "workstream" as const;
   const workstreams = useWorkstreams((s) => s.list);
   const closed = useWorkstreams((s) => s.closed);
   const showClosed = useWorkView((s) => s.showClosed);
@@ -534,9 +517,7 @@ export function AgentsView() {
         error={error}
         filters={filters}
         selectedId={selectedId}
-        earlierOpen={earlierOpen}
         introShown={introOpen}
-        group={group}
         workstreams={workstreams}
         openWorkstream={openWorkstream}
         needed={needed}

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { MockBackend } from "../backend/mock";
 import { scriptPip } from "../backend/mockPip";
 import type { Run, RunState, ScreenContext } from "../types";
-import { NO_FILTERS, type AgentFilters } from "./agentsLogic";
+import { NO_FILTERS, needsScope, type AgentFilters } from "./agentsLogic";
 import { placeholderFor } from "./PipConversation";
 import { pipAsks } from "./runSheetLogic";
 import { buildScreenContext, contextLabel, contextLines, screenLine, type Screen } from "./screenContext";
@@ -12,6 +12,8 @@ const NOW = Date.parse("2026-09-30T12:00:00Z");
 const seed = new MockBackend().runs.list();
 const run = (id: string, state: RunState, over: Partial<Run> = {}): Run => ({ ...seed[0], id, state, needs: null, lastDetail: null, endedAt: null, lastProgressAt: new Date(NOW - 60_000).toISOString(), queuedAt: new Date(NOW - 600_000).toISOString(), ...over });
 const RUNS = [run("a", "needsAnswer"), run("b", "working"), run("c", "done"), run("d", "stopped")];
+
+const needed = needsScope([{ runId: "a", workstreamId: null }]);
 
 const screen = (over: Partial<Screen> = {}, filters: AgentFilters = NO_FILTERS, openRun: string | null = null, runs: readonly Run[] = RUNS): Screen => {
   useTabs.setState(loadTabs());
@@ -23,25 +25,23 @@ const screen = (over: Partial<Screen> = {}, filters: AgentFilters = NO_FILTERS, 
     containers: {},
     selected: null,
     marked: ["mock:X-1"],
-    activity: { chip: "all", container: null },
-    agents: { openRun, waiting: 1, needsYou: 2, runs, filters, earlierOpen: false, now: NOW },
+    activity: { filter: "all" },
+    agents: { openRun, waiting: 1, needsYou: 2, runs, filters, needed, now: NOW },
     ...over,
   };
 };
 
 describe("the Agents screen", () => {
-  it("is named with its filter and the runs shown, leaving the folded Earlier lane out", () => {
-    expect(screenLine(screen())).toBe("Agents · All · 3 runs");
-    expect(screenLine(screen({}, { ...NO_FILTERS, lane: "bad" }))).toBe("Agents · Failed or stuck · 1 run");
-    expect(screenLine(screen({}, { lane: "earlier", repo: "all", ticket: "all" }))).toBe("Agents · Earlier · 1 run");
-    expect(screenLine(screen({}, { ...NO_FILTERS, ticket: "NOPE-1" }))).toBe("Agents · NOPE-1 · 0 runs");
-    expect(screenLine(screen({ agents: undefined }))).toBe("Agents");
+  it("is named with its filter and the runs shown", () => {
+    expect(screenLine(screen())).toBe("Work · All · 4 runs");
+    expect(screenLine(screen({}, { needs: true }))).toBe("Work · Needs you · 1 run");
+    expect(screenLine(screen({ agents: undefined }))).toBe("Work");
   });
 
   it("sends no board data, but the open run, the waiting count and the runs by state", () => {
     const board = { ...screen().tab, filter: { type: "mine" } as const };
     const ctx = buildScreenContext(screen({ tab: board, shown: [], items: {} }, NO_FILTERS, "c"));
-    expect(ctx).toEqual({ view: "Agents · All · 3 runs", item: null, filter: null, selection: [], run: "c", runsWaiting: 1, runsSummary: "2 need you · 1 running · 1 ready to review · 1 failed or stuck" });
+    expect(ctx).toEqual({ view: "Work · All · 4 runs", item: null, filter: null, selection: [], run: "c", runsWaiting: 1, runsSummary: "2 need you · 1 running" });
     expect(buildScreenContext(screen()).run).toBeNull();
   });
 
@@ -51,7 +51,7 @@ describe("the Agents screen", () => {
     expect("runsSummary" in board).toBe(false);
     const withRuns = buildScreenContext(screen({ route: "workspace" }));
     expect("runsSummary" in withRuns).toBe(false);
-    expect(buildScreenContext(screen({ route: "activity" })).view).toBe("Activity · All · All projects");
+    expect(buildScreenContext(screen({ route: "activity" })).view).toBe("Inbox · All");
     expect(buildScreenContext(screen({ route: "settings" })).view).toBe("Settings");
   });
 
@@ -59,9 +59,9 @@ describe("the Agents screen", () => {
     const ctx = buildScreenContext(screen({}, NO_FILTERS, "c"));
     const words = { titleOf: () => null, describeFilter: () => "", runOf: (id: string) => (id === "c" ? "Investigate CA-1 · Ready to review" : null) };
     expect(contextLines(ctx, null, words)).toEqual([
-      "Screen: Agents · All · 3 runs",
+      "Screen: Work · All · 4 runs",
       "Open agent run: Investigate CA-1 · Ready to review",
-      "Runs shown: 2 need you · 1 running · 1 ready to review · 1 failed or stuck",
+      "Runs shown: 2 need you · 1 running",
       "Agents waiting on you: 1",
     ]);
   });
@@ -71,7 +71,7 @@ describe("the Agents screen", () => {
     const ctx = buildScreenContext(screen({}, NO_FILTERS, "b"));
     expect(contextLabel(ctx, null, words.titleOf, words.runOf)).toEqual({ kind: "Agent run", label: "Investigate CA-1 · Working" });
     expect(contextLabel({ ...ctx, item: { connectionId: "m", externalId: "CA-1", key: "CA-1" } }, null, words.titleOf, words.runOf).kind).toBe("Ticket");
-    expect(contextLabel(buildScreenContext(screen()), null, words.titleOf, words.runOf)).toEqual({ kind: "Screen", label: "Agents · All · 3 runs" });
+    expect(contextLabel(buildScreenContext(screen()), null, words.titleOf, words.runOf)).toEqual({ kind: "Screen", label: "Work · All · 4 runs" });
   });
 });
 
@@ -89,7 +89,7 @@ describe("the placeholder on the Agents screen", () => {
 });
 
 describe("the sample Pip on the Agents screen", () => {
-  const ctx = (over: Partial<ScreenContext>): ScreenContext => ({ view: "Agents · All · 3 runs", item: null, filter: null, selection: [], ...over });
+  const ctx = (over: Partial<ScreenContext>): ScreenContext => ({ view: "Work · All · 4 runs", item: null, filter: null, selection: [], ...over });
 
   it("sums up the runs when asked what is going on, instead of talking about tickets", () => {
     const s = scriptPip("what's going on here?", ctx({}), [], RUNS, NOW);

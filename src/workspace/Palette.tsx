@@ -305,7 +305,7 @@ export function Palette() {
   const watch = useWorkspace((s) => s.watch);
   const proposals = useWorkspace((s) => s.proposals);
   const github = useWorkspace((s) => s.connections.some((c) => c.kind === "github"));
-  const unread = useActivity((s) => s.unread + s.codeUnread);
+  const unread = useActivity((s) => s.unread);
   const needingMe = useNeedsYou().length;
   const savedViews = useTabs((s) => s.savedViews);
   const selected = useTabs((s) => s.selected);

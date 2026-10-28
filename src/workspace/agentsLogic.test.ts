@@ -4,32 +4,21 @@ import type { Proposal, Run, RunState, WorkstreamView } from "../types";
 import {
   APPROVE_PLAN,
   planOpenQuestions,
-  ALL,
   NO_FILTERS,
-  LANE_IDS,
   QUIET_MINUTES,
-  CHIPS,
-  activeChip,
   agentGroups,
   applyFilters,
-  chipCounts,
-  chipFilters,
   needsScope,
   needsAttention,
   yourAgents,
-  filterOptions,
   formatTokens,
-  groupRuns,
   groupRunsByWorkstream,
   NO_WORKSTREAM_TITLE,
-  laneIsFolded,
   ordinal,
   slotPosition,
   slotQueue,
   slotText,
   stoppedText,
-  laneOf,
-  navOrder,
   permissionRequest,
   progressText,
   quietMinutes,
@@ -44,7 +33,6 @@ import {
   stopAllText,
   stoppable,
   summaryLine,
-  type LaneId,
 } from "./agentsLogic";
 
 const NOW = Date.parse("2026-09-30T12:00:00Z");
@@ -56,29 +44,9 @@ const sample = (): Run[] => new MockBackend().runs.list();
 const base = sample()[0];
 const run = (state: RunState, over: Partial<Run> = {}): Run => ({ ...base, id: `r-${state}`, state, needs: null, lastDetail: null, tokens: null, lastProgressAt: iso(1), queuedAt: iso(10), endedAt: null, ...over });
 
-describe("lanes", () => {
-  const expected: Record<RunState, LaneId> = {
-    queued: "running",
-    launching: "running",
-    working: "running",
-    // Waiting on the person is stuck; there is no Needs you lane any more, the strip on the Agents view is where it is decided.
-    needsAnswer: "bad",
-    needsPermission: "bad",
-    systemBlocked: "bad",
-    done: "done",
-    failed: "bad",
-    unknown: "bad",
-    stopped: "earlier",
-  };
-
-  it.each(Object.entries(expected))("puts %s in %s", (state, lane) => {
-    expect(laneOf(run(state as RunState), NOW)).toBe(lane);
-  });
-
-  it("moves a working run to Failed or stuck at 30 minutes of quiet, not at 29", () => {
+describe("quiet runs", () => {
+  it("calls a working run quiet at 30 minutes without progress, not at 29", () => {
     expect(QUIET_MINUTES).toBe(30);
-    expect(laneOf(run("working", { lastProgressAt: iso(29) }), NOW)).toBe("running");
-    expect(laneOf(run("working", { lastProgressAt: iso(30) }), NOW)).toBe("bad");
     expect(quietMinutes(run("working", { lastProgressAt: iso(29.9) }), NOW)).toBeNull();
     expect(quietMinutes(run("working", { lastProgressAt: iso(30) }), NOW)).toBe(30);
   });
@@ -87,13 +55,6 @@ describe("lanes", () => {
     for (const state of ["queued", "launching", "needsAnswer", "needsPermission", "done", "failed", "stopped"] as const) {
       expect(quietMinutes(run(state, { lastProgressAt: iso(600) }), NOW)).toBeNull();
     }
-    expect(laneOf(run("needsAnswer", { lastProgressAt: iso(600) }), NOW)).toBe("bad");
-  });
-
-  it("keeps a stopped run that may be continued out of Earlier, since it is in Needs you", () => {
-    expect(laneOf(run("stopped"), NOW)).toBe("earlier");
-    expect(laneOf(run("stopped", { possibleContinuations: [] }), NOW)).toBe("earlier");
-    expect(laneOf(run("stopped", { possibleContinuations: [{ shortId: "abc12345" }] }), NOW)).toBe("bad");
   });
 
   it("says quiet in minutes, then in hours, then in days, and never stuck", () => {
@@ -101,17 +62,6 @@ describe("lanes", () => {
     expect(quietText(180)).toBe("Quiet for 3 h");
     expect(quietText(247 * 60)).toBe("Quiet for 10 days");
     expect(quietText(40)).not.toMatch(/stuck/i);
-  });
-
-  it("puts the eight scripted runs in the lanes the prototype shows", () => {
-    const groups = groupRuns(sample(), NO_FILTERS, NOW);
-    expect(groups.map((g) => [g.lane, g.runs.length])).toEqual([
-      ["running", 2],
-      ["done", 2],
-      ["bad", 4],
-    ]);
-    expect(groups.find((g) => g.lane === "bad")!.runs.map((r) => r.state).sort()).toEqual(["failed", "needsAnswer", "needsPermission", "working"]);
-    expect(LANE_IDS).not.toContain("needs");
   });
 });
 
@@ -175,7 +125,6 @@ describe("the runs that wait on the person", () => {
 
   it("counts nothing that stopped: it is over, or the person's to dismiss", () => {
     const stopped = run("stopped", { id: "s", error: "Stopped before it started" });
-    expect(laneOf(stopped, NOW)).toBe("earlier");
     expect(needsAttention(stopped, none)).toBe(false);
     expect(yourAgents([stopped], none)).toEqual([]);
   });
@@ -211,41 +160,12 @@ describe("sorting", () => {
   });
 });
 
-describe("filters", () => {
-  it("narrows by lane, repo and ticket, all of which must match", () => {
+describe("the Needs you filter", () => {
+  it("lets every run through while it is off, and only the runs that hold a need while it is on", () => {
     const runs = sample();
-    expect(applyFilters(runs, { ...NO_FILTERS, lane: "bad" }, NOW)).toHaveLength(4);
-    expect(applyFilters(runs, { ...NO_FILTERS, repo: "acme/payments" }, NOW).map((r) => r.item?.key)).toEqual(["SUP-12"]);
-    expect(applyFilters(runs, { ...NO_FILTERS, ticket: "WEB-108" }, NOW)).toHaveLength(1);
-    expect(applyFilters(runs, { lane: "bad", repo: "acme/payments", ticket: ALL }, NOW)).toHaveLength(0);
-  });
-
-  it("filters by the lane a run is in now, so a quiet one is under Failed or stuck", () => {
-    const quiet = applyFilters(sample(), { ...NO_FILTERS, lane: "bad" }, NOW).filter((r) => r.state === "working");
-    expect(quiet.map((r) => r.item?.key)).toEqual(["CA-377"]);
-  });
-
-  it("offers the repos and tickets of every run, sorted, whatever is filtered", () => {
-    const { repos, tickets } = filterOptions(sample());
-    expect(repos).toEqual(["acme/payments", "acme/storefront"]);
-    expect(tickets).toEqual(["CA-377", "CA-409", "DEVOPS-455", "DEVOPS-471", "SUP-9", "SUP-12", "WEB-97", "WEB-108"]);
-  });
-});
-
-describe("folding and walking", () => {
-  const stopped = [run("stopped", { id: "s1" }), run("working", { id: "w1" }), run("needsAnswer", { id: "n1" })];
-
-  it("folds Earlier until it is opened or a filter is on", () => {
-    expect(laneIsFolded("earlier", false, NO_FILTERS)).toBe(true);
-    expect(laneIsFolded("earlier", true, NO_FILTERS)).toBe(false);
-    expect(laneIsFolded("earlier", false, { ...NO_FILTERS, lane: "earlier" })).toBe(false);
-    expect(laneIsFolded("bad", false, NO_FILTERS)).toBe(false);
-  });
-
-  it("walks the lanes in order and skips a folded one", () => {
-    const groups = groupRuns(stopped, NO_FILTERS, NOW);
-    expect(navOrder(groups, false, NO_FILTERS)).toEqual(["w1", "n1"]);
-    expect(navOrder(groups, true, NO_FILTERS)).toEqual(["w1", "n1", "s1"]);
+    const scope = needsScope([{ runId: runs[1].id, workstreamId: null }]);
+    expect(applyFilters(runs, NO_FILTERS, scope)).toHaveLength(runs.length);
+    expect(applyFilters(runs, { needs: true }, scope).map((r) => r.id)).toEqual([runs[1].id]);
   });
 
   it("moves with j and k, stays at the ends, and starts at either end from nothing", () => {
@@ -296,14 +216,12 @@ describe("words on a card", () => {
 
 describe("the header", () => {
   it("sums up the runs", () => {
-    // "Need you" is Needs you's one count, the same the rail badge and the composer give; failed or stuck is the lane of
-    // that name card for card, the quiet run and the runs waiting on the person among them (N3).
-    expect(summaryLine(sample(), NOW)).toBe("2 running · 2 ready to review · 4 failed or stuck (1 quiet)");
-    expect(summaryLine(sample(), NOW, 5)).toBe("5 need you · 2 running · 2 ready to review · 4 failed or stuck (1 quiet)");
+    expect(summaryLine(sample(), NOW)).toBe("2 running · 1 quiet");
+    expect(summaryLine(sample(), NOW, 5)).toBe("5 need you · 2 running · 1 quiet");
     expect(summaryLine(sample(), NOW, 1)).toMatch(/^1 needs you · /);
     expect(summaryLine([], NOW)).toBe("Nothing running");
     expect(summaryLine([run("stopped")], NOW)).toBe("Nothing running");
-    expect(summaryLine([run("needsAnswer"), run("unknown")], NOW, 2)).toBe("2 need you · 2 failed or stuck");
+    expect(summaryLine([run("needsAnswer"), run("unknown")], NOW, 2)).toBe("2 need you");
   });
 
   it("offers Stop all only for runs it could stop", () => {
@@ -330,71 +248,57 @@ describe("grouping by workstream", () => {
   ];
   const workstreams = [view("ws-a", "CA-401 Retry the payment", "plan"), view("ws-b", "CA-402 Cart totals", "investigate")];
 
-  it("puts each workstream's runs under its title and stage, and the rest under No workstream, last", () => {
-    const groups = groupRunsByWorkstream(runs, workstreams, NO_FILTERS, NOW);
-    expect(groups.map((g) => [g.id, g.title, g.stage, g.runs.map((r) => r.id)])).toEqual([
-      ["ws-b", "CA-402 Cart totals", "investigate", ["b1"]],
-      ["ws-a", "CA-401 Retry the payment", "plan", ["a2", "a1"]],
-      [null, NO_WORKSTREAM_TITLE, null, ["loose2", "loose1"]],
+  it("puts each workstream's runs under its title, and the rest under No workstream, last", () => {
+    const groups = groupRunsByWorkstream(runs, workstreams, NO_FILTERS);
+    expect(groups.map((g) => [g.id, g.title, g.runs.map((r) => r.id)])).toEqual([
+      ["ws-b", "CA-402 Cart totals", ["b1"]],
+      ["ws-a", "CA-401 Retry the payment", ["a2", "a1"]],
+      [null, NO_WORKSTREAM_TITLE, ["loose2", "loose1"]],
     ]);
-  });
-
-  it("takes the stage from the workstream's view, and from the runs only without one", () => {
-    const reviewed = [inWs("done", "r1", "ws-r", 10, { spec: { ...base.spec, role: "review", workstream: "ws-r" } })];
-    const [blocking] = groupRunsByWorkstream(reviewed, [view("ws-r", "CA-403", "review", {})], NO_FILTERS, NOW);
-    expect(blocking.stage).toBe("review");
-    const [closed] = groupRunsByWorkstream(reviewed, [], NO_FILTERS, NOW);
-    expect(closed.stage).toBe("review");
   });
 
   it("orders workstreams by their latest activity", () => {
     const later = [...runs, inWs("queued", "a3", "ws-a", 1, { spec: { ...base.spec, role: "build", workstream: "ws-a" } })];
-    expect(groupRunsByWorkstream(later, workstreams, NO_FILTERS, NOW).map((g) => g.id)).toEqual(["ws-a", "ws-b", null]);
+    expect(groupRunsByWorkstream(later, workstreams, NO_FILTERS).map((g) => g.id)).toEqual(["ws-a", "ws-b", null]);
   });
 
   it("labels runs R1, R2 by queue time over all of the workstream's runs, so a filter never renumbers them", () => {
-    const [, a] = groupRunsByWorkstream(runs, workstreams, NO_FILTERS, NOW);
+    const [, a] = groupRunsByWorkstream(runs, workstreams, NO_FILTERS);
     expect(a.labels).toEqual({ a1: "R1", a2: "R2" });
-    const running = groupRunsByWorkstream(runs, workstreams, { ...NO_FILTERS, lane: "running" }, NOW);
-    const ws = running.find((g) => g.id === "ws-a")!;
+    const only = groupRunsByWorkstream(runs, workstreams, { needs: true }, needsScope([{ runId: "a2", workstreamId: "ws-a" }]));
+    const ws = only.find((g) => g.id === "ws-a")!;
     expect(ws.runs.map((r) => r.id)).toEqual(["a2"]);
     expect(ws.labels.a2).toBe("R2");
-    // The stage still counts the run the filter hides.
-    expect(ws.stage).toBe("plan");
   });
 
-  it("leaves out a group the filters empty, and has no No workstream group when every run is in one", () => {
-    expect(groupRunsByWorkstream(runs, workstreams, { ...NO_FILTERS, lane: "bad" }, NOW).map((g) => g.id)).toEqual([null]);
-    expect(groupRunsByWorkstream(runs.slice(0, 3), workstreams, NO_FILTERS, NOW).map((g) => g.id)).toEqual(["ws-b", "ws-a"]);
-    expect(groupRunsByWorkstream([], [], NO_FILTERS, NOW)).toEqual([]);
+  it("has no No workstream group when every run is in a workstream", () => {
+    expect(groupRunsByWorkstream(runs.slice(0, 3), workstreams, NO_FILTERS).map((g) => g.id)).toEqual(["ws-b", "ws-a"]);
+    expect(groupRunsByWorkstream([], [], NO_FILTERS)).toEqual([]);
   });
 
-  it("lists an open workstream with no run yet, newest first among the empty, only while no filter is on and never a closed one", () => {
+  it("lists an open workstream with no run yet, only while the filter is off and never a closed one", () => {
     const quiet = view("ws-c", "CA-403 No agents yet", "intake");
     const gone = { ...view("ws-d", "CA-404 Closed", "intake"), workstream: { ...view("ws-d", "CA-404 Closed", "intake").workstream, closedAt: iso(1) } } as WorkstreamView;
-    const groups = groupRunsByWorkstream(runs, [...workstreams, quiet, gone], NO_FILTERS, NOW);
+    const groups = groupRunsByWorkstream(runs, [...workstreams, quiet, gone], NO_FILTERS);
     expect(groups.map((g) => g.id)).toContain("ws-c");
     expect(groups.map((g) => g.id)).not.toContain("ws-d");
-    expect(groups.find((g) => g.id === "ws-c")).toMatchObject({ title: "CA-403 No agents yet", stage: "intake", runs: [] });
-    expect(groupRunsByWorkstream(runs, [...workstreams, quiet], { ...NO_FILTERS, lane: "bad" }, NOW).map((g) => g.id)).not.toContain("ws-c");
+    expect(groups.find((g) => g.id === "ws-c")).toMatchObject({ title: "CA-403 No agents yet", runs: [] });
+    expect(groupRunsByWorkstream(runs, [...workstreams, quiet], { needs: true }, needsScope([])).map((g) => g.id)).not.toContain("ws-c");
   });
 
   it("still groups the runs of a workstream it has no title for, by its id", () => {
-    const groups = groupRunsByWorkstream(runs, [workstreams[0]], NO_FILTERS, NOW);
+    const groups = groupRunsByWorkstream(runs, [workstreams[0]], NO_FILTERS);
     expect(groups.find((g) => g.id === "ws-b")?.title).toBe("Workstream ws-b");
   });
 
-  it("walks runs in group order with j and k, in either grouping, and never folds a workstream", () => {
+  it("walks runs in group order with j and k, the newest first within each group", () => {
     const stoppedLoose = inWs("stopped", "s1", null, 2);
     const stoppedInWs = inWs("stopped", "s2", "ws-b", 3);
-    const all = [...runs, stoppedLoose, stoppedInWs];
-    expect(navOrder(groupRunsByWorkstream(all, workstreams, NO_FILTERS, NOW), false, NO_FILTERS)).toEqual(["s2", "b1", "a2", "a1", "loose2", "s1", "loose1"]);
-    expect(navOrder(groupRuns(all, NO_FILTERS, NOW), false, NO_FILTERS)).toEqual(["b1", "a2", "loose2", "a1", "loose1"]);
-    expect(navOrder(groupRuns(all, NO_FILTERS, NOW), true, NO_FILTERS)).toEqual(["b1", "a2", "loose2", "a1", "loose1", "s1", "s2"]);
+    expect(agentGroups([...runs, stoppedLoose, stoppedInWs], workstreams, NO_FILTERS).order).toEqual(["s2", "b1", "a2", "a1", "loose2", "s1", "loose1"]);
   });
 });
 
-describe("the summary chips and the Needs you filter", () => {
+describe("the Needs you filter on the Work screen", () => {
   const view = (id: string): WorkstreamView =>
     ({ workstream: { id, connectionId: "mock", itemKey: null, repo: null, title: `WS ${id}`, pipSession: null, pausedReason: null, notes: null, createdAt: iso(600), closedAt: null, basis: null }, stage: "intake", runs: [], labels: [] }) as unknown as WorkstreamView;
   const inWs = (state: RunState, id: string, workstream: string | null) => run(state, { id, queuedAt: iso(50), spec: { ...base.spec, workstream } });
@@ -406,23 +310,11 @@ describe("the summary chips and the Needs you filter", () => {
   ];
   const scope = needsScope(needs);
   const workstreams = [view("ws-a"), view("ws-b"), view("ws-c")];
-
-  it("turns each chip into filters, and reads them back; All is the default and clears the other three", () => {
-    expect(activeChip(NO_FILTERS)).toBe("all");
-    expect(CHIPS.map((c) => activeChip({ ...NO_FILTERS, ...chipFilters(c) }))).toEqual(["needs", "review", "bad", "all"]);
-    expect(activeChip({ ...NO_FILTERS, lane: "running" })).toBeNull();
-    expect({ ...NO_FILTERS, ...chipFilters("all") }).toEqual(NO_FILTERS);
-    expect(chipFilters("needs")).toEqual({ needs: true, lane: "all" });
-  });
-
-  it("counts Needs you as the one count, and the other two as their lanes", () => {
-    expect(chipCounts(runs, NOW, needs.length)).toEqual({ needs: 3, review: 1, bad: 2 });
-  });
+  const on = { needs: true };
 
   it("keeps only the runs that hold a need, and every workstream that holds one even with no run of it", () => {
-    const on = { ...NO_FILTERS, needs: true };
-    expect(applyFilters(runs, on, NOW, scope).map((r) => r.id)).toEqual(["q", "loose"]);
-    const groups = groupRunsByWorkstream(runs, workstreams, on, NOW, scope);
+    expect(applyFilters(runs, on, scope).map((r) => r.id)).toEqual(["q", "loose"]);
+    const groups = groupRunsByWorkstream(runs, workstreams, on, scope);
     expect(groups.map((g) => [g.id, g.runs.map((r) => r.id)])).toEqual([
       ["ws-a", ["q"]],
       ["ws-c", []],
@@ -431,16 +323,13 @@ describe("the summary chips and the Needs you filter", () => {
     expect(groups.map((g) => g.id)).not.toContain("ws-b");
   });
 
-  it("shows No workstream for a need that has no run, and nothing extra once another filter is on", () => {
-    const bare = groupRunsByWorkstream([], workstreams, { ...NO_FILTERS, needs: true }, NOW, needsScope([{ workstreamId: null }]));
+  it("shows No workstream for a need that has no run", () => {
+    const bare = groupRunsByWorkstream([], workstreams, on, needsScope([{ workstreamId: null }]));
     expect(bare.map((g) => g.id)).toEqual([null]);
-    expect(groupRunsByWorkstream(runs, workstreams, { ...NO_FILTERS, needs: true, repo: "acme/none" }, NOW, scope)).toEqual([]);
   });
 
-  it("walks only the runs the filter shows, in either grouping", () => {
-    const on = { ...NO_FILTERS, needs: true };
-    expect(agentGroups("workstream", runs, workstreams, on, false, NOW, scope).order).toEqual(["q", "loose"]);
-    expect(agentGroups("state", runs, workstreams, on, false, NOW, scope).order.sort()).toEqual(["loose", "q"]);
+  it("walks only the runs the filter shows", () => {
+    expect(agentGroups(runs, workstreams, on, scope).order).toEqual(["q", "loose"]);
   });
 });
 

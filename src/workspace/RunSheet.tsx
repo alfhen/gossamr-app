@@ -382,8 +382,6 @@ export function RunSheet({ id }: { id: string }) {
   const run = useRuns((s) => s.runs.find((r) => r.id === id));
   const runs = useRuns((s) => s.runs);
   const filters = useRuns((s) => s.filters);
-  const earlierOpen = useRuns((s) => s.earlierOpen);
-  const group = "workstream";
   const workstreams = useWorkstreams((s) => s.list);
   const slotLine = useSlotQueue();
   const label = useMemo(() => labelsByRun(runs).get(id), [runs, id]);
@@ -439,10 +437,10 @@ export function RunSheet({ id }: { id: string }) {
   }, [backend, id, progress]);
 
   const place = useMemo(() => {
-    const order = browseList(browseOrder, agentGroups(group, runs, workstreams, filters, earlierOpen, now).order);
+    const order = browseList(browseOrder, agentGroups(runs, workstreams, filters).order);
     const at = order.indexOf(id);
     return at < 0 ? null : { index: at + 1, total: order.length };
-  }, [group, runs, workstreams, filters, earlierOpen, id, now, browseOrder]);
+  }, [runs, workstreams, filters, id, browseOrder]);
 
   const tickets = useMemo(() => Object.values(items).map((i) => ({ key: i.item.key, title: i.title })), [items]);
   if (!run) return null;

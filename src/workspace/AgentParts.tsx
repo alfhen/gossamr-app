@@ -1,10 +1,11 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import type { Run } from "../types";
 import { Icon, STATE_ICON } from "./AgentIcons";
 import { useDecisionShown } from "./decisionShown";
 import { CloneActions } from "./CloneActions";
 import { failureHelp, retryEnabled, type FailureAct } from "./failureHelp";
-import { createdFrom } from "./runSheetLogic";
+import { createdFrom, stopControl } from "./runSheetLogic";
+import { ownKey } from "./agentKeys";
 import { useRuns } from "./runsStore";
 import { useWorkstreams } from "./workstreamsStore";
 import { PermissionAsk } from "./PermissionAsk";
@@ -50,6 +51,50 @@ export function OpenInTerminal({ run, onOpen, filled = true }: { run: Run; onOpe
       <Icon name="term" />
       Open in Terminal
     </button>
+  );
+}
+
+/** The states whose body has its own way into Terminal (or a failure's own step). */
+const BODY_HAS_TERMINAL: readonly Run["state"][] = ["needsAnswer", "needsPermission", "systemBlocked", "unknown", "failed"];
+
+/** What an agent's row offers beside its state: Open in Terminal where its body has no such button, and Stop, asked once as the run sheet does. */
+export function RowActions({ run, now, onAttach, onStop }: { run: Run; now: number; onAttach(): void; onStop(): void }) {
+  const [asking, setAsking] = useState(false);
+  const stop = stopControl(run);
+  const terminal = !BODY_HAS_TERMINAL.includes(run.state) && quietMinutes(run, now) === null;
+  if (!terminal && !stop.shown) return null;
+  const small = `${BUTTON} border-ws-sep2 text-ws-ink hover:bg-ws-hover`;
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      {terminal && <OpenInTerminal run={run} onOpen={onAttach} filled={false} />}
+      {stop.shown &&
+        (asking ? (
+          <span
+            role="group"
+            aria-label={stop.label === "Cancel" ? "Cancel this run" : "Stop this agent"}
+            data-esc-local
+            onClick={(ev) => ev.stopPropagation()}
+            onKeyDown={(ev) => {
+              if (ev.key === "Escape") (ev.stopPropagation(), setAsking(false));
+              else ownKey(ev);
+            }}
+            className="inline-flex flex-wrap items-center gap-2 text-sm"
+          >
+            <span className="text-ws-ink2">{stop.ask ?? "Stop this agent? Its work is kept."}</span>
+            <button type="button" autoFocus onClick={() => (setAsking(false), onStop())} className={`${BUTTON} border-ws-blocked bg-ws-blocked font-semibold text-white`}>
+              {stop.yes ?? "Yes, stop"}
+            </button>
+            <button type="button" onClick={() => setAsking(false)} className={small}>
+              {stop.label === "Cancel" ? "Keep it" : "Keep going"}
+            </button>
+          </span>
+        ) : (
+          <button type="button" disabled={!stop.enabled} title={stop.title} onClick={(ev) => (ev.stopPropagation(), setAsking(true))} onKeyDown={ownKey} className={`${BUTTON} border-ws-blocked text-ws-blocked hover:bg-ws-blocked-soft`}>
+            <Icon name="stop" />
+            {stop.label}
+          </button>
+        ))}
+    </div>
   );
 }
 

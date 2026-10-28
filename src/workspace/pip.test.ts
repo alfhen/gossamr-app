@@ -3,6 +3,7 @@ import { MockBackend } from "../backend/mock";
 import { mockAsk, mockPipEvents, scriptPip } from "../backend/mockPip";
 import { claude, type AskRequest, type ClaudeEvent } from "../backend/claude";
 import { ALL } from "../lib/filter";
+import { NO_FILTERS } from "./agentsLogic";
 import type { ScreenContext, WorkEvent, WorkstreamView } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { useClaude } from "../claudeStore";
@@ -36,7 +37,7 @@ beforeEach(async () => {
 
 const screen = (tab: Tab, selected: string | null = null, marked: string[] = [], route: Route = "workspace") => ({
   route,
-  activity: { chip: "all" as const, container: null },
+  activity: { filter: "all" as const },
   tab,
   shown: Object.values(ws().items).slice(0, 12),
   items: ws().items,
@@ -78,10 +79,10 @@ describe("screen context by route", () => {
     expect(buildScreenContext(s)).toEqual({ view: "Settings", item: null, filter: null, selection: [] });
   });
 
-  it("says Agents on Agents, never the workspace tab's view, and sends no board filter or ticked cards", () => {
+  it("says Work on Work, never the workspace tab's view, and sends no board filter or ticked cards", () => {
     const s = screen(tab, null, ["mock:DEVOPS-471"], "agents");
-    expect(screenLine(s)).toBe("Agents");
-    expect(buildScreenContext(s)).toEqual({ view: "Agents", item: null, filter: null, selection: [] });
+    expect(screenLine(s)).toBe("Work");
+    expect(buildScreenContext(s)).toEqual({ view: "Work", item: null, filter: null, selection: [] });
   });
 
   it("names the workstream whose detail is open on Agents, and nothing for General or one that is closed", () => {
@@ -93,28 +94,27 @@ describe("screen context by route", () => {
     expect(openWorkstreamLine("w2", [open, closed])).toBeUndefined();
     expect(openWorkstreamLine("gone", [open])).toBeUndefined();
     const s = { ...screen(tab0, null, [], "agents"), workstream: openWorkstreamLine("w1", [open]) };
-    expect(screenLine(s)).toBe("Agents · Workstream: CA-401 Fix the cart");
+    expect(screenLine(s)).toBe("Work · Workstream: CA-401 Fix the cart");
     expect(screenLine({ ...s, route: "workspace" })).toBe("Board · All projects · 12 items");
   });
 
   it("names the runs on Agents, sends no board filter or ticked cards, and keeps a ticket peeked over it", () => {
-    const agents = { openRun: null, waiting: 0, needsYou: 0, runs: [], filters: { lane: "all", repo: "all", ticket: "all" } as const, earlierOpen: false, now: 0 };
+    const agents = { openRun: null, waiting: 0, needsYou: 0, runs: [], filters: NO_FILTERS, now: 0 };
     const s = { ...screen(tab, "mock:DEVOPS-471", ["mock:DEVOPS-471", "mock:DEVOPS-473"], "agents"), agents };
     const ctx = buildScreenContext(s);
-    expect(ctx.view).toBe("Agents · All · 0 runs");
+    expect(ctx.view).toBe("Work · All · 0 runs");
     expect(ctx.item?.key).toBe("DEVOPS-471");
     expect(ctx).toMatchObject({ filter: null, selection: [] });
   });
 
-  it("names the feed filter and project on Activity and keeps the open item", () => {
-    const devops = Object.values(ws().containers).find((c) => c.key === "DEVOPS")!;
-    const s = { ...screen(tab, "mock:DEVOPS-471", ["mock:DEVOPS-473"], "activity"), activity: { chip: "mentions" as const, container: devops.ref } };
-    expect(screenLine(s)).toBe("Activity · Mentions · DEVOPS");
+  it("names the feed filter on Inbox and keeps the open item", () => {
+    const s = { ...screen(tab, "mock:DEVOPS-471", ["mock:DEVOPS-473"], "activity"), activity: { filter: "mentions" as const } };
+    expect(screenLine(s)).toBe("Inbox · Mentions");
     const ctx = buildScreenContext(s);
-    expect(ctx.view).toBe("Activity · Mentions · DEVOPS");
+    expect(ctx.view).toBe("Inbox · Mentions");
     expect(ctx.item?.key).toBe("DEVOPS-471");
     expect(ctx).toMatchObject({ filter: null, selection: [] });
-    expect(screenLine({ ...s, activity: { chip: "drafts", container: null } })).toBe("Activity · Drafts · All projects");
+    expect(screenLine({ ...s, activity: { filter: "all" } })).toBe("Inbox · All");
   });
 });
 

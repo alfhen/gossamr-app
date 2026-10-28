@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MockBackend } from "../backend/mock";
 import type { Run } from "../types";
 import { renderToStaticMarkup } from "react-dom/server";
-import { laneOf, stateView, stoppedText } from "./agentsLogic";
+import { stateView, stoppedText } from "./agentsLogic";
 import { cleanable } from "./cleanupLogic";
 import { RunCleanupView } from "./RunCleanup";
 import { useRuns } from "./runsStore";
@@ -14,9 +14,8 @@ const base = (): Run => new MockBackend().runs.list()[0];
 const stopped = (over: Partial<Run> = {}): Run => ({ ...base(), state: "stopped", needs: null, unsentAnswer: null, suggestedReply: null, lastProgressAt: new Date(NOW - 60_000).toISOString(), ...over });
 
 describe("a stopped run", () => {
-  it("is called Stopped, sits with the earlier ones, and says where it stopped", () => {
+  it("is called Stopped and says where it stopped", () => {
     expect(stateView(stopped(), NOW)).toMatchObject({ label: "Stopped", tone: "muted" });
-    expect(laneOf(stopped(), NOW)).toBe("earlier");
     expect(stoppedText(stopped({ lastDetail: "Reading the cart" }))).toBe("Reading the cart");
     expect(stoppedText(stopped({ lastDetail: null }))).toBe("Stopped before it finished");
   });

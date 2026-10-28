@@ -2,7 +2,6 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MockBackend } from "../backend/mock";
 import type { Run } from "../types";
-import { toRunEntries } from "./activityLogic";
 import { AgentCard } from "./AgentCard";
 import { buildFromPlanControl } from "./runSheetLogic";
 
@@ -13,11 +12,9 @@ const plan: Run = backend.runs.list().find((r) => r.spec.role === "planner")!;
 beforeEach(() => vi.stubGlobal("localStorage", { getItem: () => null, setItem: () => {}, removeItem: () => {} }));
 
 describe("every surface shows the plan run's role", () => {
-  it("names the role on the card and in Activity", () => {
+  it("names the role on the card", () => {
     const card = renderToStaticMarkup(<AgentCard run={plan} now={NOW} selected={false} position={1} total={1} ticketTitle={null} onOpen={vi.fn()} onAttach={vi.fn()} failure={{ opened: false, on: { act: vi.fn(), retry: vi.fn(), copied: vi.fn() } }} />);
     expect(card).toContain(">Planner<");
-    const entries = toRunEntries([plan], new Set<string>(), NOW, new Set<string>(), new Set<string>());
-    expect(entries.map((e) => e.text).join("\n")).toContain("Planner agent started");
   });
 });
 

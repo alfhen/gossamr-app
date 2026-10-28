@@ -3,13 +3,12 @@ import { archiveControl } from "../lib/archiveRuns";
 import { roleLabel } from "../lib/roles";
 import type { ReviewView, Run } from "../types";
 import { Icon } from "./AgentIcons";
-import { RunBody, StateChip, TONE, type FailureState } from "./AgentParts";
+import { RowActions, RunBody, StateChip, TONE, type FailureState } from "./AgentParts";
 import { ownKey } from "./agentKeys";
 import { ageSince, ageText, branchOf, formatTokens, repoName, runTitle } from "./agentsLogic";
 import { useStateView } from "./useStateView";
 import { runRef } from "../lib/runNames";
 import { verdictChip, verdictText } from "./runSheetLogic";
-import { stopControl } from "./runSheetLogic";
 
 export const agentId = (id: string) => `agent-${id}`;
 
@@ -175,15 +174,8 @@ export function AgentCard({ run, now, selected, position, total, ticketTitle, la
         <RunRef run={run} className="ml-auto shrink-0" />
       </p>
       <KeyAsking text={asking} />
-      {run.lastDetail?.trim() && <p data-last-message className="m-0 line-clamp-2 text-sm text-ws-ink2">{run.lastDetail.trim()}</p>}
       <RunBody run={run} now={now} onAttach={onAttach} failure={failure} />
-      {onStop && <div className="flex flex-wrap gap-2 text-sm">
-        <button type="button" onClick={(ev) => (ev.stopPropagation(), onAttach())} onKeyDown={ownKey} className="rounded-md border border-ws-sep2 px-2 py-px hover:bg-ws-hover">Open in Terminal</button>
-        {onStop && stopControl(run).shown && <details onClick={(ev) => ev.stopPropagation()} className="rounded-md border border-ws-sep2 px-2 py-px">
-          <summary className="cursor-pointer">Stop</summary>
-          <span>Stop this agent? </span><button type="button" onClick={onStop} className="font-semibold text-ws-blocked">Yes, stop</button>
-        </details>}
-      </div>}
+      {onStop && <RowActions run={run} now={now} onAttach={onAttach} onStop={onStop} />}
       <div className="flex flex-wrap items-center gap-2 empty:hidden">
         {draftReady && onOpenDraft ? (
           <button

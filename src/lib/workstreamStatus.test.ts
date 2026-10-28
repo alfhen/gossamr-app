@@ -41,7 +41,14 @@ describe("workstreamStatus: every state", () => {
   });
 
   it("Failed: a failed agent is named before a running one", () => {
-    expect(at(view(), [], { runs: [run("failed", "triage"), run("working", "build", { id: "r2" })] })).toMatchObject({ state: "failed", detail: "Triage" });
+    expect(at(view(), [], { runs: [run("failed", "triage"), run("working", "build", { id: "r2" })] })).toMatchObject({ state: "failed", word: "Failed", detail: "Triage" });
+  });
+
+  it("Failed: stays while a dismissed failure is the last word on its work, but not once a newer run of that role follows or it is archived", () => {
+    const failed = run("failed", "build", { id: "r1", queuedAt: ago(1) });
+    expect(at(view({ runs: ["r1"] }), [], { runs: [failed] }).state).toBe("failed");
+    expect(at(view({ runs: ["r1", "r2"] }), [], { runs: [failed, run("done", "build", { id: "r2", queuedAt: ago(0.5) })] }).state).toBe("idle");
+    expect(at(view({ runs: ["r1"] }), [], { runs: [{ ...failed, archivedAt: ago(0.1) }] }).state).toBe("idle");
   });
 
   it("Idle: otherwise, however long nothing has happened", () => {
@@ -56,11 +63,14 @@ describe("workstreamStatus: priority", () => {
   const more: StatusMore = { runs: [run("working")] };
 
   it("goes Needs you, Failed, Running, Done, Idle, each beating all the ones after it", () => {
-    expect(at(paused, [need, need], more).state).toBe("needs-you");
-    expect(at(paused, [need], more).state).toBe("needs-you");
-    expect(at(view(), [], { runs: [run("failed")] }).state).toBe("failed");
-    expect(at(view(), [], more).state).toBe("running");
-    expect(at(view({ stage: "done" }), [], {}).state).toBe("done");
+    const failed = run("failed", "plan", { id: "r2" });
+    const everything: StatusMore = { runs: [run("working"), failed] };
+    const closed = view({ runs: ["r1", "r2"] }, { closedAt: ago(1) });
+    expect(at(paused, [need], everything).state).toBe("needs-you");
+    expect(at(closed, [need], everything).state).toBe("needs-you");
+    expect(at(closed, [], everything).state).toBe("failed");
+    expect(at(closed, [], more).state).toBe("running");
+    expect(at(closed, [], {}).state).toBe("done");
     expect(at(view(), [], {}).state).toBe("idle");
   });
 

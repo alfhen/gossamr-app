@@ -112,11 +112,11 @@ export function buildCommands(containers: readonly WorkContainer[], savedViews: 
     ...VIEW_MODES.map(
       (v): Command => ({ id: `mode:${v}`, group: "Layout", icon: "▦", label: `Show ${VIEW_LABEL[v]}`, hint: ctx.view === v ? "current" : undefined, keywords: "switch view layout", run: () => a.setView(v) }),
     ),
-    { id: "app:activity", group: "Go to", icon: "→", label: "Open activity", hint: ctx.unreadActivity ? `${ctx.unreadActivity} new` : undefined, keywords: "feed events", run: a.openActivity },
+    { id: "app:activity", group: "Go to", icon: "→", label: "Open Inbox", hint: ctx.unreadActivity ? `${ctx.unreadActivity} new` : undefined, keywords: "feed events", run: a.openActivity },
     { id: "app:drafts", group: "Go to", icon: "→", label: "Open drafts", keywords: "pip proposals review waiting", run: a.openDrafts },
     { id: "app:settings", group: "Go to", icon: "⚙", label: "Open settings", keywords: "preferences", run: a.openSettings },
     // Before "Stop all agents…" in the list, so the query "agents" lands here first.
-    ...(!ctx.onAgents ? [{ id: "app:agents", group: "Go to" as const, icon: "→", label: "Open Agents", keywords: "agents running capacity operations stop all workstreams needs you", run: a.openAgents }] : []),
+    ...(!ctx.onAgents ? [{ id: "app:agents", group: "Go to" as const, icon: "→", label: "Open Work", keywords: "agents running capacity operations stop all workstreams needs you", run: a.openAgents }] : []),
     ...FILTERS.map(
       (f): Command => ({ id: `filter:${f.id}`, group: "Filters", icon: "⏷", label: `Filter: ${f.label}`, keywords: f.keywords, run: () => a.addFilter(f.filter) }),
     ),

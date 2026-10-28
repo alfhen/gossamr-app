@@ -1,8 +1,8 @@
 import type { ContainerRef, ItemRef, Run, ScreenContext, WorkContainer, WorkItem, WorkstreamView } from "../types";
 import { projectOf } from "./filters";
 import { containerKey, withoutCode } from "../lib/filter";
-import { CHIP_LABEL, type ActivityChip } from "./activityLogic";
-import { LANES, groupRuns, isFiltered, laneIsFolded, repoName, summaryLine, type AgentFilters } from "./agentsLogic";
+import { FILTER_LABEL, type InboxFilter } from "./activityLogic";
+import { applyFilters, isFiltered, summaryLine, type AgentFilters, type NeedsScope } from "./agentsLogic";
 import { VIEW_LABEL, type Route, type Tab } from "./tabsStore";
 
 export interface Screen {
@@ -16,15 +16,15 @@ export interface Screen {
   containers: Record<string, WorkContainer>;
   selected: string | null;
   marked: readonly string[];
-  /** The Activity feed's filter chip and project. */
-  activity: { chip: ActivityChip; container: ContainerRef | null };
-  /** The Agents view's runs and filters, the run open in the run sheet and how many agents wait on the person. */
+  /** The Inbox's filter. */
+  activity: { filter: InboxFilter };
+  /** The Work screen's runs and filters, the run open in the run sheet and how many agents wait on the person. */
   agents?: AgentsScene;
-  /** The workstream whose detail is open on the Agents view, as `openWorkstreamLine` names it. */
+  /** The workstream whose detail is open on the Work screen, as `openWorkstreamLine` names it. */
   workstream?: string;
 }
 
-/** "Workstream: " and the title of the open workstream whose detail is shown on Agents; undefined while none is. */
+/** "Workstream: " and the title of the open workstream whose detail is shown on Work; undefined while none is. */
 export function openWorkstreamLine(selected: string | null, list: readonly WorkstreamView[]): string | undefined {
   const ws = selected ? list.find((v) => v.workstream.id === selected && v.workstream.closedAt === null)?.workstream : undefined;
   return ws ? `Workstream: ${ws.title}` : undefined;
@@ -38,34 +38,32 @@ export interface AgentsScene {
   needsYou: number;
   runs: readonly Run[];
   filters: AgentFilters;
-  earlierOpen: boolean;
+  /** Which runs hold a need, for the Needs you filter. */
+  needed?: NeedsScope;
   now: number;
 }
 
-/** The runs the Agents view lists: filtered, minus a folded Earlier lane. */
-export const runsShown = (a: AgentsScene): Run[] => groupRuns(a.runs, a.filters, a.now).filter((g) => !laneIsFolded(g.lane, a.earlierOpen, a.filters)).flatMap((g) => g.runs);
+/** The runs the Work screen lists, after its filter. */
+export const runsShown = (a: AgentsScene): Run[] => applyFilters(a.runs, a.filters, a.needed);
 
-function agentsFilterText(f: AgentFilters): string {
-  if (!isFiltered(f)) return "All";
-  return [f.lane !== "all" && LANES[f.lane].title, f.repo !== "all" && repoName(f.repo), f.ticket !== "all" && f.ticket].filter(Boolean).join(", ");
-}
+const agentsFilterText = (f: AgentFilters) => (isFiltered(f) ? "Needs you" : "All");
 
 const plural = (n: number, noun = "item") => `${n} ${noun}${n === 1 ? "" : "s"}`;
 
 const projectName = (containers: Screen["containers"], project: ContainerRef | null) => (project ? (containers[containerKey(project)]?.key ?? "Project") : "All projects");
 
 /**
- * What the person is looking at, as a line: "Board · DEVOPS · 12 items", "Activity · Mentions · DEVOPS", "Agents · Needs
- * you · 3 runs", "Agents · All · 3 runs · Workstream: CA-401 Fix the cart" or "Settings".
+ * What the person is looking at, as a line: "Board · DEVOPS · 12 items", "Inbox · Mentions", "Work · Needs
+ * you · 3 runs", "Work · All · 3 runs · Workstream: CA-401 Fix the cart" or "Settings".
  */
 export function screenLine(s: Pick<Screen, "route" | "tab" | "shown" | "containers" | "activity" | "agents" | "workstream">): string {
   if (s.route === "settings") return "Settings";
-  if (s.route === "agents") return [s.agents ? `Agents · ${agentsFilterText(s.agents.filters)} · ${plural(runsShown(s.agents).length, "run")}` : "Agents", s.workstream].filter(Boolean).join(" · ");
-  if (s.route === "activity") return `Activity · ${CHIP_LABEL[s.activity.chip]} · ${projectName(s.containers, s.activity.container)}`;
+  if (s.route === "agents") return [s.agents ? `Work · ${agentsFilterText(s.agents.filters)} · ${plural(runsShown(s.agents).length, "run")}` : "Work", s.workstream].filter(Boolean).join(" · ");
+  if (s.route === "activity") return `Inbox · ${FILTER_LABEL[s.activity.filter]}`;
   return `${VIEW_LABEL[s.tab.view]} · ${projectName(s.containers, projectOf(s.tab.filter))} · ${plural(s.shown.length)}`;
 }
 
-/** The context Pip is asked with. The open item is included only if it is still in the cache; on Settings there is no open item, and Activity and Agents have no view filter or ticked cards. */
+/** The context Pip is asked with. The open item is included only if it is still in the cache; on Settings there is no open item, and Inbox and Work have no view filter or ticked cards. */
 export function buildScreenContext(s: Screen): ScreenContext {
   const open = s.route !== "settings" && s.selected ? (s.items[s.selected] ?? s.peeked?.[s.selected]) : undefined;
   const onBoard = s.route === "workspace";

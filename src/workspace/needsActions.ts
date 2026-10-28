@@ -5,7 +5,6 @@ import { liveDraft } from "./draftLive";
 import { keptEditsOfDraft } from "./DraftCard";
 import { draftDecisions } from "./DraftPreview";
 import { NO_WORKSTREAM_ID, setPaneIntent, takePaneIntent, useWorkView } from "./workViewStore";
-import { ALL } from "./agentsLogic";
 import { useRuns } from "./runsStore";
 import { currentNeeds } from "./useNeeds";
 import { useTabs } from "./tabsStore";
@@ -30,7 +29,7 @@ function showAgents() {
 /** The Agents view with the Needs you filter on and the detail of workstream `workstreamId` (null: No workstream) open. */
 export function showGroup(workstreamId: string | null) {
   showAgents();
-  useRuns.getState().setFilter({ needs: true, lane: ALL });
+  useRuns.getState().setFilter({ needs: true });
   useWorkView.getState().openWorkstream(groupId(workstreamId));
 }
 

@@ -76,18 +76,18 @@ describe("a command word outranks tickets", () => {
   };
 
   it("names a command by a word of its title or keywords, whole or begun", () => {
-    const open = commands.find((c) => c.label === "Open Agents")!;
-    for (const q of ["runn", "agents", "oper", "stop all", "open agents"]) expect(namesCommand(open, q), q).toBe(true);
+    const open = commands.find((c) => c.label === "Open Work")!;
+    for (const q of ["runn", "agents", "oper", "stop all", "open work"]) expect(namesCommand(open, q), q).toBe(true);
     expect(namesCommand(open, "payment")).toBe(false);
     expect(namesCommand(open, "ents")).toBe(false);
     expect(namesCommand(open, "  ")).toBe(false);
   });
 
   it("puts the commands a command word names above the tickets it also matches", () => {
-    // "running" is a keyword of Open Agents: it comes before the ticket whose title has "runs" nowhere near it, and "agents" before the ticket that says it.
-    expect(order("running")[0]).toBe("Open Agents");
+    // "running" is a keyword of Open Work: it comes before the ticket whose title has "runs" nowhere near it, and "agents" before the ticket that says it.
+    expect(order("running")[0]).toBe("Open Work");
     const agents = order("agents");
-    expect(agents.indexOf("Open Agents")).toBeLessThan(agents.indexOf("Timeline of agents is blank"));
+    expect(agents.indexOf("Open Work")).toBeLessThan(agents.indexOf("Timeline of agents is blank"));
   });
 
   it("keeps fuzzy ticket search, and a ticket key typed first", () => {

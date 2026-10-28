@@ -98,11 +98,11 @@ describe("the strip of live runs", () => {
 describe("what Pip is told about agents", () => {
   const screen = (agents?: Screen["agents"]): Screen => {
     useTabs.setState(loadTabs());
-    return { route: "workspace", tab: activeTab(useTabs.getState()), shown: [], items: {}, containers: {}, selected: null, marked: [], activity: { chip: "all", container: null }, agents };
+    return { route: "workspace", tab: activeTab(useTabs.getState()), shown: [], items: {}, containers: {}, selected: null, marked: [], activity: { filter: "all" }, agents };
   };
 
   it("includes the open run and how many agents wait while agents are on, and neither when they are off", () => {
-    const on = buildScreenContext(screen({ openRun: "r1", waiting: 2, needsYou: 3, runs: [], filters: NO_FILTERS, earlierOpen: false, now: NOW }));
+    const on = buildScreenContext(screen({ openRun: "r1", waiting: 2, needsYou: 3, runs: [], filters: NO_FILTERS, now: NOW }));
     expect([on.run, on.runsWaiting]).toEqual(["r1", 2]);
     const off = buildScreenContext(screen());
     expect("run" in off || "runsWaiting" in off).toBe(false);
@@ -152,7 +152,7 @@ describe("the sample Pip and agents", () => {
     const item = { connectionId: "mock", externalId: "CA-402", key: "CA-402" };
     const s = scriptPip("Start an agent on CA-402 and look at the retry loop", { ...blank, item });
     expect(s.start).toMatchObject({ item, role: "investigator", brief: expect.stringContaining("the retry loop"), open: { item } });
-    expect(s.text).toContain("It shows under Agents");
+    expect(s.text).toContain("It shows on Work");
 
     const backend = new MockBackend({ runs: { seed: "empty" } });
     await useWorkspace.getState().init(backend);
