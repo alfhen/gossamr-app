@@ -303,7 +303,8 @@ export function ReviewDraft({
     approve: canPost && approvable ? () => post() : undefined,
     skip: open && !working ? onSkip : undefined,
     edit: open ? () => requestAnimationFrame(() => card.current?.querySelector<HTMLElement>("textarea")?.focus()) : undefined,
-    open: () => void openOnGithub(`https://github.com/${review.repo}/pull/${review.number}`),
+    open: open ? () => requestAnimationFrame(() => (card.current?.querySelector<HTMLElement>('[aria-label^="Comment on "]') ?? card.current?.querySelector<HTMLElement>("textarea"))?.focus()) : undefined,
+    openHint: "edit review",
     canApprove: canPost,
   });
   const change = (i: number, next: Partial<Held>) => {

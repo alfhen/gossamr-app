@@ -34,7 +34,6 @@ const on = (): AgentsActions => ({
   buildFromPlan: vi.fn(),
   filter: vi.fn(),
   clearFilters: vi.fn(),
-  setView: vi.fn(),
   setGroup: vi.fn(),
   toggleEarlier: vi.fn(),
   setIntro: vi.fn(),
@@ -54,12 +53,10 @@ const screen = (over: Partial<AgentsScreenProps> = {}) =>
       runs={eight()}
       status="ready"
       error={null}
-     
       filters={NO_FILTERS}
       selectedId={null}
       earlierOpen={false}
       introShown={false}
-      view="cards"
       group="state"
       stopping={false}
       opened={new Set()}
@@ -135,8 +132,8 @@ describe("a failed launch on a card", () => {
     expect(buttonsOf(out)).toEqual([]);
   });
 
-  it("shows the short line in the list row too", () => {
-    const out = screen({ runs: failures(), view: "list" });
+  it("shows the short line on each failure card", () => {
+    const out = screen({ runs: failures() });
     expect(out).toContain("Claude asks you once per folder before it will work there.");
     expect(out).toContain("Too many agents are running at once.");
   });
@@ -206,7 +203,7 @@ describe("grouped by workstream", () => {
   });
 
   it("groups by Workstream when no grouping is asked for", () => {
-    const out = renderToStaticMarkup(<AgentsScreen runs={eight()} status="ready" error={null} filters={NO_FILTERS} selectedId={null} earlierOpen={false} introShown={false} view="cards" stopping={false} opened={new Set()} now={NOW} ticketTitle={() => null} on={on()} />);
+    const out = renderToStaticMarkup(<AgentsScreen runs={eight()} status="ready" error={null} filters={NO_FILTERS} selectedId={null} earlierOpen={false} introShown={false} stopping={false} opened={new Set()} now={NOW} ticketTitle={() => null} on={on()} />);
     expect(out).toMatch(/aria-pressed="true"[^>]*>Workstream</);
     expect(out).toContain("data-workstream-group");
     expect(out).not.toContain("data-lane=");
@@ -226,10 +223,7 @@ describe("grouped by workstream", () => {
     expect(out).toContain('aria-setsize="9"');
   });
 
-  it("labels the run in list mode too", () => {
-    const out = screen({ runs: [linked()], group: "workstream", workstreams: [ws], view: "list" });
-    expect(out).toContain('data-run-label="R1"');
-  });
+
 });
 
 describe("the Agents screen as the operations view", () => {
@@ -352,16 +346,6 @@ describe("cards", () => {
 
   it("names the branch worktree-<name>", () => {
     expect(card(run("working"))).toContain(`worktree-${run("working").spec.name}`);
-  });
-});
-
-describe("list mode", () => {
-  it("is one row per run under a single header of column names", () => {
-    const out = screen({ view: "list" });
-    expect(articles(out)).toHaveLength(8);
-    expect(out.match(/>Ticket</g)).toHaveLength(1);
-    expect(out).toContain('aria-pressed="true"');
-    expect(out).toContain("git push origin HEAD");
   });
 });
 

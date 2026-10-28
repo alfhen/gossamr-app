@@ -1,6 +1,6 @@
 import { docText } from "./docs";
 import { maskSecrets } from "./riskyText";
-import type { BasisField, Intent, ItemRef, Proposal, ProposalMaker, ReviewComment } from "../types";
+import type { BasisField, Intent, ItemRef, Proposal, ReviewComment } from "../types";
 
 /** Fails to compile when a switch over a union misses a case, and throws if one slips through at run time. */
 export function unreachable(value: never): never {
@@ -216,18 +216,4 @@ export function keptOlderReviews(proposal: Proposal, all: readonly Proposal[]): 
 /** Whether an agent run left this draft for the person. Drafts stored before `agent` existed say `user`. */
 export function leftByRun(p: Proposal): boolean {
   return p.origin.type === "run" && (p.createdBy === "agent" || p.createdBy === "user");
-}
-
-/** Who made a draft, as a short phrase. */
-export function makerName(by: ProposalMaker): string {
-  switch (by) {
-    case "user":
-      return "You";
-    case "pip":
-      return "Pip";
-    case "agent":
-      return "An agent run";
-    default:
-      return unreachable(by);
-  }
 }

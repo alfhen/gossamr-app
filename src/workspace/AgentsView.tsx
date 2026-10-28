@@ -7,7 +7,6 @@ import type { ReviewView, Run, WorkstreamView } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { AgentCard, agentId, type AgentItemProps } from "./AgentCard";
 import { Icon } from "./AgentIcons";
-import { AgentRow, AgentRowHeader } from "./AgentRow";
 import { ArchivedSection } from "./ArchivedSection";
 import { ClearFinished } from "./ClearFinished";
 import { AgentsBanners } from "./AgentsBanners";
@@ -45,7 +44,7 @@ import {
 import { useFooterHeight } from "./CanvasFooter";
 import { failureAction } from "./failureActions";
 import type { FailureAct } from "./failureHelp";
-import { AGENTS_VIEWS, usePrefs, type AgentsViewMode } from "./prefs";
+import { usePrefs } from "./prefs";
 import { useBuildChanges, useReviewVerdicts } from "./reviewVerdicts";
 import { showDraft as showTicketDraft } from "./draftTicket";
 import { breakdownTarget, buildFromPlanControl, commentControl, pipAsks, reviewThisControl, runBreakdownDraftOf, runDescriptionDraftOf, runDraftOf, runTicketDraftOf, shownVerdict } from "./runSheetLogic";
@@ -66,7 +65,6 @@ import { needsIn } from "../lib/needs";
 
 const KBD = "font-sans text-[11px] rounded border border-ws-sep2 bg-ws-bar px-1";
 const BUTTON = "inline-flex items-center gap-1.5 rounded-md border border-ws-sep2 px-2.5 py-px text-sm leading-normal whitespace-nowrap hover:bg-ws-hover disabled:cursor-not-allowed disabled:opacity-45";
-const VIEW_LABEL: Record<AgentsViewMode, string> = { cards: "Cards", list: "List" };
 const GROUP_LABEL: Record<AgentsGroup, string> = { state: "State", workstream: "Workstream" };
 
 export { useNow };
@@ -152,7 +150,6 @@ export interface AgentsActions {
   openDescription?(run: Run): void;
   filter(patch: Partial<AgentFilters>): void;
   clearFilters(): void;
-  setView(view: AgentsViewMode): void;
   setGroup(group: AgentsGroup): void;
   toggleEarlier(): void;
   archive?(id: string): void;
@@ -217,24 +214,10 @@ function SummaryChips({ runs, now, needsYou, filters, group, on }: { runs: reado
   );
 }
 
-function Toolbar({ runs, filters, view, group, introShown, tools, on }: { runs: readonly Run[]; filters: AgentFilters; view: AgentsViewMode; group: AgentsGroup; introShown: boolean; tools?: ReactNode; on: AgentsActions }) {
+function Toolbar({ runs, filters, group, introShown, tools, on }: { runs: readonly Run[]; filters: AgentFilters; group: AgentsGroup; introShown: boolean; tools?: ReactNode; on: AgentsActions }) {
   const { repos, tickets } = useMemo(() => filterOptions(runs), [runs]);
   return (
     <div className="flex flex-wrap items-center gap-2 border-b border-ws-sep px-6 py-1.5">
-      <div role="group" aria-label="Layout" className="inline-flex gap-0.5 rounded-[7px] border border-ws-sep2 p-0.5">
-        {AGENTS_VIEWS.map((v) => (
-          <button
-            key={v}
-            type="button"
-            aria-pressed={view === v}
-            onClick={() => on.setView(v)}
-            className={`inline-flex items-center gap-1.5 rounded-[5px] px-2 py-px text-sm ${view === v ? "bg-ws-sel font-semibold text-ws-ink" : "text-ws-ink2 hover:bg-ws-hover"}`}
-          >
-            <Icon name={v === "cards" ? "grid" : "list"} />
-            {VIEW_LABEL[v]}
-          </button>
-        ))}
-      </div>
       <span className="inline-flex items-center gap-1.5 text-sm text-ws-ink3">
         Group by
         <span role="group" aria-label="Group by" className="inline-flex gap-0.5 rounded-[7px] border border-ws-sep2 p-0.5">
@@ -340,7 +323,6 @@ export interface AgentsScreenProps {
   selectedId: string | null;
   earlierOpen: boolean;
   introShown: boolean;
-  view: AgentsViewMode;
   /** How runs are grouped; by workstream when absent. */
   group?: AgentsGroup;
   /** The open workstreams, for their titles and where they stand when grouped by workstream. */
@@ -384,7 +366,7 @@ export interface AgentsScreenProps {
 }
 
 /** The whole screen as a function of its state; `AgentsView` connects it to the stores. */
-export function AgentsScreen({ runs, status, error, filters, selectedId, earlierOpen, introShown, view, group = "workstream", workstreams = NO_WORKSTREAMS, openWorkstream = null, needed, tools, closedSection, side, stopping, clear, archivedSection, opened, needsYou, inNeeds, asking, now, ticketTitle, draftReady, breakdownReady, descriptionReady, reviewThis, reviewOf, on, onOrder }: AgentsScreenProps) {
+export function AgentsScreen({ runs, status, error, filters, selectedId, earlierOpen, introShown, group = "workstream", workstreams = NO_WORKSTREAMS, openWorkstream = null, needed, tools, closedSection, side, stopping, clear, archivedSection, opened, needsYou, inNeeds, asking, now, ticketTitle, draftReady, breakdownReady, descriptionReady, reviewThis, reviewOf, on, onOrder }: AgentsScreenProps) {
   const footer = useFooterHeight();
   // While the pointer is over the list or focus is in it, cards keep their places; the normal sort applies once both leave.
   const [hovered, setHovered] = useState(false);
@@ -438,22 +420,14 @@ export function AgentsScreen({ runs, status, error, filters, selectedId, earlier
   });
 
   let position = 0;
-  /** A group's runs as rows or cards, whichever the layout is. */
-  const items = (title: string, list: readonly Run[], header: boolean, labels: Record<string, string> = {}) =>
-    view === "list" ? (
-      <div role="group" aria-label={title} className="overflow-hidden rounded-[10px] border border-ws-sep">
-        {header && <AgentRowHeader />}
-        {list.map((r) => (
-          <AgentRow key={r.id} {...props(r, ++position, labels[r.id])} />
-        ))}
-      </div>
-    ) : (
-      <div role="group" aria-label={title} className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,340px),1fr))] gap-3">
-        {list.map((r) => (
-          <AgentCard key={r.id} {...props(r, ++position, labels[r.id])} />
-        ))}
-      </div>
-    );
+  /** A group's runs as cards. */
+  const items = (title: string, list: readonly Run[], labels: Record<string, string> = {}) => (
+    <div role="group" aria-label={title} className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,340px),1fr))] gap-3">
+      {list.map((r) => (
+        <AgentCard key={r.id} {...props(r, ++position, labels[r.id])} />
+      ))}
+    </div>
+  );
   const title = useRef<HTMLHeadingElement>(null);
   const root = useRef<HTMLDivElement>(null);
   // The screen opens from the rail or the palette, which leave the keyboard in Pip's composer: a frame later the heading takes it, unless it is already inside the view.
@@ -485,7 +459,7 @@ export function AgentsScreen({ runs, status, error, filters, selectedId, earlier
           {clear}
           <StopAll count={stoppable(runs).length} waiting={slotWaiters(runs).length} busy={stopping} onStop={on.stopAll} />
         </header>
-        <Toolbar runs={runs} filters={filters} view={view} group={group} introShown={introShown} tools={tools} on={on} />
+        <Toolbar runs={runs} filters={filters} group={group} introShown={introShown} tools={tools} on={on} />
         <div className="min-h-0 flex-1 overflow-y-auto pt-5 pr-[max(24px,var(--ws-launcher-gutter,0px))] pb-[max(80px,var(--ws-launcher-clear,0px))] pl-6">
           <div
             data-agents-list
@@ -507,15 +481,15 @@ export function AgentsScreen({ runs, status, error, filters, selectedId, earlier
             ) : shown === 0 ? (
               <NoMatch hidden={runs.length} onClear={on.clearFilters} />
             ) : wsGroups ? (
-              wsGroups.map((g, gi) => (
+              wsGroups.map((g) => (
                 <WorkstreamSection key={g.id ?? "none"} group={g} view={g.id ? workstreams.find((w) => w.workstream.id === g.id) : undefined} current={(g.id ?? NO_WORKSTREAM_ID) === openWorkstream} onOpen={on.openWorkstream}>
-                  {g.runs.length ? items(g.title, g.runs, gi === 0, g.labels) : <p data-workstream-empty className="m-0 text-sm text-ws-ink3">{filters.needs ? "Open it to see what needs you." : "No agents on this workstream yet."}</p>}
+                  {g.runs.length ? items(g.title, g.runs, g.labels) : <p data-workstream-empty className="m-0 text-sm text-ws-ink3">{filters.needs ? "Open it to see what needs you." : "No agents on this workstream yet."}</p>}
                 </WorkstreamSection>
               ))
             ) : (
-              (lanes ?? []).map((g, gi) => (
+              (lanes ?? []).map((g) => (
                 <Lane key={g.lane} group={g} now={now} folded={laneIsFolded(g.lane, earlierOpen, filters)} onToggle={g.lane === "earlier" && !filtered ? on.toggleEarlier : undefined}>
-                  {items(g.title, g.runs, gi === 0, labels)}
+                  {items(g.title, g.runs, labels)}
                 </Lane>
               ))
             )}
@@ -561,7 +535,6 @@ const actions: AgentsActions = {
   },
   filter: (patch) => useRuns.getState().setFilter(patch),
   clearFilters: () => useRuns.getState().clearFilters(),
-  setView: (view) => usePrefs.getState().setAgentsView(view),
   setGroup: (group) => usePrefs.getState().setAgentsGroup(group),
   toggleEarlier: () => useRuns.getState().setEarlierOpen(!useRuns.getState().earlierOpen),
   archive: (id) => void useRuns.getState().archive([id]),
@@ -593,7 +566,6 @@ export function AgentsView() {
   const asking = useWorkView((s) => s.asking);
   const needed = useMemo(() => needsScope(needs), [needs]);
   const inNeeds = useMemo(() => new Map(needs.flatMap((n) => (n.runId ? [[n.runId, n] as const] : []))), [needs]);
-  const view = usePrefs((s) => s.agentsView);
   const group = usePrefs((s) => s.agentsGroup);
   const workstreams = useWorkstreams((s) => s.list);
   const closed = useWorkstreams((s) => s.closed);
@@ -682,7 +654,6 @@ export function AgentsView() {
         selectedId={selectedId}
         earlierOpen={earlierOpen}
         introShown={introOpen}
-        view={view}
         group={group}
         workstreams={workstreams}
         openWorkstream={openWorkstream}

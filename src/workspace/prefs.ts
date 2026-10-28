@@ -9,9 +9,6 @@ export const THEMES = ["auto", "light", "dark"] as const;
 export type ThemeMode = (typeof THEMES)[number];
 export const THEME_LABEL: Record<ThemeMode, string> = { auto: "Match system", light: "Light", dark: "Dark" };
 
-export const AGENTS_VIEWS = ["cards", "list"] as const;
-export type AgentsViewMode = (typeof AGENTS_VIEWS)[number];
-
 interface Prefs {
   theme: ThemeMode;
   pipOpen: boolean;
@@ -24,8 +21,7 @@ interface Prefs {
   peekCollapsed: Collapsed;
   /** Board column order the person chose, per project. */
   columnOrder: ColumnOrders;
-  agentsView: AgentsViewMode;
-  /** Whether the Agents view groups runs by state (its lanes) or by workstream. */
+  /** Kept until step 7b replaces the grouping used by run keyboard order and the workstream sheet. */
   agentsGroup: AgentsGroup;
   setTheme(theme: ThemeMode): void;
   setPipOpen(open: boolean): void;
@@ -36,13 +32,12 @@ interface Prefs {
   setPeekSection(id: PeekSectionId, collapsed: boolean): void;
   /** Saves the order of a project's columns; `null` goes back to the default. */
   setColumnOrder(container: string, ids: string[] | null): void;
-  setAgentsView(view: AgentsViewMode): void;
   setAgentsGroup(group: AgentsGroup): void;
 }
 
 const KEY = "gossamr-prefs";
 
-export function loadPrefs(): Pick<Prefs, "theme" | "pipOpen" | "peekWidth" | "pipWidth" | "columnOrder" | "agentsView" | "agentsGroup"> {
+export function loadPrefs(): Pick<Prefs, "theme" | "pipOpen" | "peekWidth" | "pipWidth" | "columnOrder" | "agentsGroup"> {
   const raw = readStored(KEY) as Partial<Record<keyof Prefs, unknown>> | null;
   return {
     theme: THEMES.find((t) => t === raw?.theme) ?? "auto",
@@ -50,7 +45,6 @@ export function loadPrefs(): Pick<Prefs, "theme" | "pipOpen" | "peekWidth" | "pi
     peekWidth: storedWidth(raw?.peekWidth, PEEK_DEFAULT),
     pipWidth: storedWidth(raw?.pipWidth, PIP_DEFAULT),
     columnOrder: parseColumnOrders(raw?.columnOrder),
-    agentsView: AGENTS_VIEWS.find((v) => v === raw?.agentsView) ?? "cards",
     // Stored as `agentsGroupBy`, so that everyone starts on Workstream once; `agentsGroup` held the old default.
     agentsGroup: AGENTS_GROUPS.find((g) => g === (raw as Record<string, unknown> | null)?.agentsGroupBy) ?? "workstream",
   };
@@ -72,11 +66,10 @@ export const usePrefs = create<Prefs>((set) => ({
       const { [container]: _dropped, ...rest } = s.columnOrder;
       return { columnOrder: ids ? { ...rest, [container]: ids } : rest };
     }),
-  setAgentsView: (agentsView) => set({ agentsView }),
   setAgentsGroup: (agentsGroup) => set({ agentsGroup }),
 }));
 
-usePrefs.subscribe(({ theme, peekWidth, pipWidth, columnOrder, agentsView, agentsGroup }) => writeStored(KEY, { theme, peekWidth, pipWidth, columnOrder, agentsView, agentsGroupBy: agentsGroup }));
+usePrefs.subscribe(({ theme, peekWidth, pipWidth, columnOrder, agentsGroup }) => writeStored(KEY, { theme, peekWidth, pipWidth, columnOrder, agentsGroupBy: agentsGroup }));
 
 export function applyTheme(theme: ThemeMode, root: HTMLElement = document.documentElement) {
   if (theme === "auto") root.removeAttribute("data-theme");

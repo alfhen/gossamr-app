@@ -45,7 +45,7 @@ test("an edited comment and a dropped one change exactly what is posted, and the
   expect(await jiraWrites(page)).toEqual(jira);
 });
 
-test("a token that can't post says why, offers GitHub instead, and a then Enter posts nothing", async ({ page }) => {
+test("a token that can't post says why, and the preview opens the review draft without posting", async ({ page }) => {
   const review = await reviewedDraft(page, "&mockReviewAccess=none");
   await expect(review.locator('[data-review-access="cant-post"]')).toHaveText("This GitHub token can't post reviews on acme/webshop (it lacks write access to its pull requests).");
   await expect(review.getByRole("button", { name: "Approve" })).toHaveCount(0);
@@ -59,19 +59,29 @@ test("a token that can't post says why, offers GitHub instead, and a then Enter 
   await review.getByRole("button", { name: "Open on GitHub" }).click();
   expect(await page.evaluate(() => (window as unknown as { __opened: string[] }).__opened)).toEqual(["https://github.com/acme/webshop/pull/218"]);
   await expect(page.getByRole("dialog", { name: /^Pull request / })).toHaveCount(0);
+  await review.focus();
+  await page.keyboard.press("Enter");
+  const comment = review.getByRole("textbox", { name: `Comment on ${RETRY}:42` });
+  await expect(comment).toBeFocused();
+  await comment.fill("Still a draft");
+  await page.keyboard.press("o");
+  await expect(comment).toHaveValue("Still a drafto");
+  expect(await page.evaluate(() => (window as unknown as { __opened: string[] }).__opened)).toHaveLength(1);
+  await page.getByRole("button", { name: "Close details" }).click();
 
-  // From its preview card, a can't post it: it only opens the draft, so Enter then confirms nothing.
+  // From its preview card, a can't post it: the button opens the full draft with its diff hunks.
   const card = await previewCard(page);
   await expect(card.locator("[data-key-hint]")).toHaveText("e edit · d s skip · ↵ open");
-  await expect(card.getByRole("button", { name: "Open on GitHub →" })).toBeVisible();
-  await page.keyboard.press("a");
-  await page.keyboard.press("Enter");
-  // The mock GitHub refuses such a post before keeping it, so no write proves nothing; it counts every post asked of it,
-  // which a key asks for as it is handled. None was, so nothing is on its way back as an error on the draft or a toast.
+  await card.getByRole("button", { name: "Review draft →" }).click();
+  const reopened = page.locator("#peek-sheet").getByRole("article", { name: "GitHub review of acme/webshop#218" });
+  await expect(reopened).toBeVisible();
+  await expect(reopened.locator("[data-review-hunk]")).toHaveCount(2);
+  expect(await page.evaluate(() => (window as unknown as { __opened: string[] }).__opened)).toHaveLength(1);
+  // The mock counts every attempted GitHub post, including one it refuses.
   await expect.poll(() => githubPostsTried(page)).toBe(0);
   await expect(page.getByText("Couldn't post that draft")).toHaveCount(0);
   await expect(page.getByText("can't write to pull requests")).toHaveCount(0);
-  await expect(review.getByRole("alert")).toHaveCount(0);
+  await expect(reopened.getByRole("alert")).toHaveCount(0);
   await expect(card).toHaveAttribute("data-state", "pending");
   expect(await githubWrites(page)).toEqual([]);
 });

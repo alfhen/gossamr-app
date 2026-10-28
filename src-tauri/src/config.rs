@@ -26,9 +26,9 @@ pub const MAX_RUNS: std::ops::RangeInclusive<usize> = 1..=6;
 pub struct AgentSettings {
     pub max_runs: usize,
     pub terminal: TerminalChoice,
-    /// Which system notifications about runs the person gets (`runs::notices`).
+    /// Kept until step 7b replaces the run notices that read it.
     pub notifications: NoticeMode,
-    /// Minutes between digest notifications, when `notifications` is a digest.
+    /// Kept until step 7b replaces the digest notices that read it.
     pub digest_minutes: u32,
 }
 

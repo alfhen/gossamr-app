@@ -46,14 +46,14 @@ export type Asking = "approve";
  * false leaves a out, for a review the token can't post; true lets a review be posted. A review is posted rather than
  * approved. The words are the model's (`keyMap.ts`).
  */
-export function draftKeyHint(p: Proposal, asking: Asking | null = null, canApprove = p.intent.type !== "githubReview"): string {
+export function draftKeyHint(p: Proposal, asking: Asking | null = null, canApprove = p.intent.type !== "githubReview", openHint = "open"): string {
   const review = p.intent.type === "githubReview";
   if (asking) return `↵ ${review ? "post this review" : "approve"} · any other key cancels`;
   const keys: string[] = [];
   if (canApprove && draftKeyAction(p, "a", canApprove) === "approve") keys.push(review ? "a post" : "a approve");
   if (draftKeyAction(p, "e")) keys.push("e edit");
   if (draftKeyAction(p, "s")) keys.push("d s skip");
-  keys.push("↵ open");
+  keys.push(`↵ ${openHint}`);
   return keys.join(" · ");
 }
 

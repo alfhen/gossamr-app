@@ -18,6 +18,8 @@ export interface CardKeyActs {
   edit?(): void;
   /** Enter and o: shows the draft where it lives, or goes to the card's main button. */
   open?(): void;
+  /** The words for Enter's action when the card stays open. */
+  openHint?: string;
   /** a on a draft that is approved only once read: goes to the card's main button, which the person then presses. */
   primary?(): void;
   /** Whether a GitHub review may be posted from here (the token can). */
@@ -82,5 +84,5 @@ export function useCardKeys(p: Proposal, acts: CardKeyActs) {
       onDraftCardKey(ev, p, asking, { approve: acts.approve, skip: acts.skip, edit: acts.edit, open: acts.open, primary: acts.primary, ask: setAsking, canApprove });
     },
   };
-  return { props, asking, hint: focused && p.state.type === "pending" ? draftKeyHint(p, asking, canApprove) : null };
+  return { props, asking, hint: focused && p.state.type === "pending" ? draftKeyHint(p, asking, canApprove, acts.openHint) : null };
 }

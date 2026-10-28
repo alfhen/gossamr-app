@@ -7,7 +7,7 @@ import type { Proposal, ReviewAccess } from "../types";
 import { DraftCard, EDIT_KEPT_NOTE, focusWhenDrawn, showPause, type DraftCardProps } from "./DraftCard";
 import { riskNote } from "../lib/riskyText";
 import { docFromText } from "../lib/docs";
-import { draftPreviewBody } from "./DraftPreview";
+import { DraftPreview, draftPreviewBody } from "./DraftPreview";
 import { sameCommit, type PullDiffState } from "./reviewDiff";
 import { sample } from "./reviewSample";
 import { scriptPip } from "../backend/mockPip";
@@ -210,11 +210,19 @@ describe("a GitHub review draft's card", () => {
     expect(render(draft(), canPost)).not.toContain("data-review-maybe-posted");
   });
 
-  it("with a token that can't post, has no Post review, says why, and its Open on GitHub opens GitHub", () => {
+  it("with a token that can't post, shows the reason and an explicitly labelled GitHub button", () => {
     const html = render(draft(), cantPost);
     expect(html).not.toContain(">Post review<");
     expect(html).toContain("This GitHub token can&#x27;t post reviews on acme/webshop (it lacks write access to its pull requests).");
     expect(html).toMatch(/<button[^>]*>Open on GitHub<\/button>/);
+  });
+
+  it("labels the compact review action as opening the draft while access is loading or posting is unavailable", () => {
+    const preview = (access?: boolean) => renderToStaticMarkup(<DraftPreview proposal={draft()} statusName={null} targetTitle={null} canPost={access} onOpen={vi.fn()} />);
+    expect(preview()).toMatch(/<button[^>]*>Review draft →<\/button>/);
+    expect(preview(false)).toMatch(/<button[^>]*>Review draft →<\/button>/);
+    expect(preview(true)).toMatch(/<button[^>]*>Review and post →<\/button>/);
+    expect(preview()).not.toContain("Open on GitHub");
   });
 
   it("offers Discuss with Pip, which asks about this draft by its id and only to change it when asked", () => {
