@@ -99,8 +99,8 @@ describe("a GitHub review draft's card", () => {
     expect(html).toMatch(/data-hunk-target=""[^>]*>(?:(?!<\/div>).)*42<\/span><span class="min-w-0 pr-2 whitespace-pre-wrap \[overflow-wrap:anywhere\]">\+ {4}try \{ return await handle\(message\); \} catch \{ continue; \}<\/span>/);
     expect(html).toMatch(/data-hunk-target=""[^>]*>(?:(?!<\/div>).)*17<\/span><span class="min-w-0 pr-2 whitespace-pre-wrap \[overflow-wrap:anywhere\]">\+const MAX = 5;<\/span>/);
     expect(html).toMatch(/<textarea id="review-summary-r1"[^>]*>Gossamr review of #218 at a1b2c3d4: blocking.<\/textarea>/);
-    expect(html).toMatch(/<button[^>]*>Post review \(2 comments\)<\/button>/);
-    expect(html).toMatch(/<button[^>]*>Discard<\/button>/);
+    expect(html).toMatch(/<button[^>]*>Approve<\/button>/);
+    expect(html).toMatch(/<button[^>]*>Skip<\/button>/);
     expect(html).toMatch(/<button[^>]*>Open PR view<\/button>/);
     expect(html).not.toContain("data-review-moved");
   });
@@ -206,9 +206,9 @@ describe("a GitHub review draft's card", () => {
     const unsure = render(draft({ maybePosted: sent }), canPost);
     expect(unsure).toMatch(/data-review-maybe-posted[^>]*>This review may already be on GitHub: Gossamr sent it at a1b2c3d4/);
     expect(unsure).not.toContain("Post anyway");
-    expect(unsure).toMatch(/<button[^>]*>Post review \(2 comments\)<\/button>/);
+    expect(unsure).toMatch(/<button[^>]*>Approve<\/button>/);
     const checked = render(draft({ maybePosted: { ...sent, checkedAt: "2026-10-01T10:02:00Z" }, error: REVIEW_NOT_FOUND_NOTE }), canPost);
-    expect(checked).toMatch(/<button[^>]*data-review-post-anyway[^>]*>Post anyway<\/button>/);
+    expect(checked).toMatch(/<button[^>]*data-review-post-anyway[^>]*>Post again<\/button>/);
     expect(checked).toContain("If it isn&#x27;t there, Post anyway sends it.");
     expect(render(draft({ maybePosted: { ...sent, checkedAt: "2026-10-01T10:02:00Z" } }), cantPost)).not.toContain("Post anyway");
     expect(render(draft(), canPost)).not.toContain("data-review-maybe-posted");
@@ -258,7 +258,7 @@ describe("a GitHub review draft's card", () => {
     const html = renderToStaticMarkup(<DraftCard proposal={draft()} statusName={null} people={[]} working={false} error={null} onApprove={vi.fn()} onSkip={vi.fn()} access={canPost} />);
     expect(html).toContain("data-github-review");
     expect(html).toContain("Loading the diff…");
-    expect(html).toMatch(/<button[^>]*>Post review \(2 comments\)<\/button>/);
+    expect(html).toMatch(/<button[^>]*>Approve<\/button>/);
   });
 });
 

@@ -40,7 +40,7 @@ test.describe("the GitHub review card says what it posts (R13, R4)", () => {
 
   test("once posted, the card says how many comments it went with", async ({ page }) => {
     const review = await reviewedDraft(page);
-    await review.getByRole("button", { name: /^Post review/ }).click();
+    await review.getByRole("button", { name: "Approve" }).click();
     await expect(review.locator("[data-review-posted-with]")).toHaveText(/^Posted with \d+ comments?$/);
   });
 });

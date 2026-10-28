@@ -92,7 +92,7 @@ test("intake to a build's pull request on Pip home: the person asks Pip for each
   // The draft takes the keyboard in the peek, and the window stays where it was around it.
   await expect(peekSheet(page).getByRole("article", { name: "Update the description of CA-401" }).filter({ hasText: "Gossamr Plan" })).toBeFocused();
   await expectPeekInPlace(page);
-  await peekSheet(page).getByRole("article", { name: "Update the description of CA-401" }).filter({ hasText: "Gossamr Plan" }).getByRole("button", { name: "Update description" }).click();
+  await peekSheet(page).getByRole("article", { name: "Update the description of CA-401" }).filter({ hasText: "Gossamr Plan" }).getByRole("button", { name: "Approve" }).click();
   await expect(rewrite).toHaveCount(0);
   expect((await jiraWrites(page)).map((w) => [w.type, w.key])).toEqual([["rewrite", "CA-401"]]);
   await page.keyboard.press("Escape");

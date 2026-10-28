@@ -112,8 +112,8 @@ impl World {
         all
     }
 
-    pub async fn of_kind(&self, kind: crate::domain::ResultKind) -> Vec<Run> {
-        self.runs().await.into_iter().filter(|r| r.spec.is(kind)).collect()
+    pub async fn of_kind(&self, kind: &str) -> Vec<Run> {
+        self.runs().await.into_iter().filter(|r| r.spec.role.work() == kind).collect()
     }
 
     pub async fn events(&self) -> Vec<WorkstreamEvent> {
@@ -131,12 +131,12 @@ impl World {
 
     /// The person approves investigation `n` in the workstream, and it starts.
     pub async fn person_starts(&self, n: u32) -> Run {
-        self.person_starts_as(n, crate::domain::ResultKind::Investigate).await
+        self.person_starts_as(n, "investigate").await
     }
 
     /// The person approves a run of `kind`, numbered `n`, in the workstream, and it starts.
-    pub async fn person_starts_as(&self, n: u32, kind: crate::domain::ResultKind) -> Run {
-        let spec = RunSpec { role: kind.role(), workstream: Some(self.ws.clone()), ..self.rig.spec(n) };
+    pub async fn person_starts_as(&self, n: u32, kind: &str) -> Run {
+        let spec = RunSpec { role: crate::domain::Role::parse(kind).unwrap(), workstream: Some(self.ws.clone()), ..self.rig.spec(n) };
         let core = &self.rig.fx.core;
         let queued = core.queue_test_run(spec, Some(self.rig.fx.item("CA-1"))).await.unwrap();
         self.rig.svc.start_now(&queued.id).await.unwrap()
@@ -182,8 +182,7 @@ impl World {
 /// exactly once, when and as the person approves the plan's description draft, and nothing starts that the person
 /// didn't start.
 async fn a_workstream_the_person_drives_writes_jira_once() -> std::result::Result<(), String> {
-    use crate::domain::ResultKind;
-    let w = World::start().await;
+        let w = World::start().await;
     let (core, fx) = (&w.rig.fx.core, &w.rig.fx);
     let jira = |expected: usize, at: &str| {
         let got = fx.tracker.intents();
@@ -194,10 +193,31 @@ async fn a_workstream_the_person_drives_writes_jira_once() -> std::result::Resul
     let investigation = w.finish(&investigation, FOUND).await;
     w.sweep().await;
     jira(0, "after the investigation finished")?;
-    let plan = w.person_starts_as(2, ResultKind::Plan).await;
+    let plan = w.person_starts_as(2, "plan").await;
     let plan = w.finish(&plan, PLANNED).await;
     w.sweep().await;
     jira(0, "after the plan finished")?;
+
+    // Finishing drafts nothing. Pip saves the plan as a description draft; the person approves it.
+    let cached = core.cache_item(&fx.item("CA-1")).await.unwrap().ok_or("CA-1 isn't cached")?;
+    let intent = Intent::Rewrite {
+        item: fx.item("CA-1"),
+        title: None,
+        body: Some(crate::domain::BodyChange { from: cached.body.clone(), to: crate::domain::Doc::paragraph("## Plan\n\n1. Fix the rounding") }),
+        flattened: vec![],
+    };
+    core.propose(
+        &fx.scope,
+        crate::proposals::Draft {
+            origin: Origin::Run { run_id: plan.id.clone(), short_id: plan.short_id.as_ref().map(|id| id.as_str().to_string()), workstream: Some(w.ws.clone()) },
+            created_by: crate::domain::CreatedBy::Agent,
+            intent,
+            label: None,
+            basis: None,
+        },
+    )
+    .await
+    .map_err(|e| e.to_string())?;
 
     // The person approves the plan's description draft: the only Jira write there is.
     let draft = core.proposals_in(&fx.scope, &ProposalQuery::default()).await.unwrap().into_iter().find(|p| matches!(&p.origin, Origin::Run { run_id, .. } if *run_id == plan.id) && matches!(p.intent, Intent::Rewrite { .. })).ok_or("no plan description draft")?;
@@ -218,7 +238,7 @@ async fn a_workstream_the_person_drives_writes_jira_once() -> std::result::Resul
     if runs.len() != 2 || runs.iter().any(|r| r.id != investigation.id && r.id != plan.id) {
         return Err(format!("something started that the person didn't start: {:?}", runs.iter().map(|r| (&r.id, &r.spec.role)).collect::<Vec<_>>()));
     }
-    if !w.of_kind(ResultKind::Build).await.is_empty() {
+    if !w.of_kind("build").await.is_empty() {
         return Err("a build started after the plan was approved".into());
     }
     if jira(1, "at the end")? != written {
@@ -238,16 +258,15 @@ async fn a_workstream_the_person_drives_writes_jira_once() -> std::result::Resul
 /// calls: every request GitHub sees is a read, and the review's draft is the only one waiting. Only the person's
 /// approval posts it, as exactly one comment review, and approving again sends nothing. Jira is never written.
 async fn a_review_is_posted_to_github_only_on_the_persons_approval() -> std::result::Result<(), String> {
-    use crate::domain::ResultKind;
-    let w = World::start().await;
+        let w = World::start().await;
     let (core, fx) = (&w.rig.fx.core, &w.rig.fx);
-    let build = w.person_starts_as(1, ResultKind::Build).await;
+    let build = w.person_starts_as(1, "build").await;
     let build = w.finish(&build, BUILT).await;
-    let spec = RunSpec { role: ResultKind::Review.role(), pr: Some(12), pr_sha: Some(FIRST.into()), report: true, workstream: Some(w.ws.clone()), ..w.rig.spec(2) };
+    let spec = RunSpec { role: crate::domain::Role::parse("review").unwrap(), pr: Some(12), pr_sha: Some(FIRST.into()), report: true, workstream: Some(w.ws.clone()), ..w.rig.spec(2) };
     let mut review = Run::queued("rev1".into(), "p-rev1".into(), build.connection_id.clone(), build.item.clone(), spec, "f".into(), chrono::Utc::now());
     (review.state, review.ended_at, review.result, review.result_complete) = (RunState::Done, Some(chrono::Utc::now()), Some(PASSING.into()), true);
     fx.insert_run(&review).await;
-    let made = core.auto_draft_run_review(&review.id).await.map_err(|e| e.to_string())?.ok_or("the review left no GitHub draft")?;
+    let made = core.draft_review(&fx.scope, crate::domain::Origin::Chat { request_id: "review-world".into(), workstream: Some(w.ws.clone()) }, crate::inbox::code::GithubReviewDraft { run_id: review.id.clone(), repo: review.spec.repo.clone(), number: 12, reviewed_sha: FIRST.into(), summary: "Looks good to merge.".into(), comments: vec![] }).await.map_err(|e| e.to_string())?;
     w.sweep().await;
     w.sweep().await;
     if w.pip.turns.load(Ordering::SeqCst) == 0 {
@@ -281,8 +300,8 @@ async fn a_review_is_posted_to_github_only_on_the_persons_approval() -> std::res
     let body: Value = serde_json::from_str(&post.body).map_err(|e| e.to_string())?;
     let comments = body["comments"].as_array().cloned().unwrap_or_default();
     let inline: Vec<_> = comments.iter().map(|c| (c["path"].as_str().unwrap_or(""), c["line"].as_u64().unwrap_or(0), c["side"].as_str().unwrap_or(""), c["body"].as_str().unwrap_or(""))).collect();
-    if body["event"] != "COMMENT" || body["commit_id"] != FIRST || inline != [("src/cart.ts", 3, "RIGHT", "**Nit:** naming")] {
-        return Err(format!("the review posted isn't the review's comment review at the commit it read: {body}"));
+    if body["event"] != "COMMENT" || body["commit_id"] != FIRST || body["body"] != "Looks good to merge." || !inline.is_empty() {
+        return Err(format!("the review posted isn't the draft the person approved: {body}"));
     }
     if core.post_review_draft(&draft.id, draft.revisions.len(), false).await.is_ok() || writes().len() != 1 {
         return Err("approving the posted review again sent it again".into());
@@ -400,8 +419,7 @@ async fn steady(w: &World) -> Steady {
 /// review and keep notes, leaves the workstream's pause alone, writes nothing to Jira or GitHub, approves and posts
 /// nothing, and has no tool that would; what it starts is recorded as Pip's, in a wake turn.
 async fn a_wake_turn_may_drive_agents_but_never_approve_or_write() -> std::result::Result<(), String> {
-    use crate::domain::ResultKind;
-    let w = World::start().await;
+        let w = World::start().await;
     let investigation = w.person_starts_investigation().await;
     let investigation = w.finish(&investigation, FOUND).await;
     let draft = w.rig.fx.core.proposals_in(&w.rig.fx.scope, &ProposalQuery::default()).await.unwrap().into_iter().next().map(|p| p.id).unwrap_or_default();
@@ -444,7 +462,7 @@ async fn a_wake_turn_may_drive_agents_but_never_approve_or_write() -> std::resul
     if (after.paused, &after.jira) != (before.paused, &before.jira) {
         return Err(format!("a wake turn changed the pause or Jira: {before:?} -> {after:?}"));
     }
-    let [triage] = w.of_kind(ResultKind::Triage).await.try_into().map_err(|_| "Pip's wake started no triage, or more than one".to_string())?;
+    let [triage] = w.of_kind("triage").await.try_into().map_err(|_| "Pip's wake started no triage, or more than one".to_string())?;
     if triage.created_by != crate::domain::CreatedBy::Pip {
         return Err(format!("the triage isn't marked as Pip's: {:?}", triage.created_by));
     }
@@ -514,9 +532,9 @@ async fn a_wake_turn_leaves_what_pip_drafts_waiting_for_the_person() -> std::res
 
 /// A run of `kind` in the world's workstream, approved by the person and launched, waiting on a permission prompt for
 /// `needs`.
-async fn asking_permission(w: &World, n: u32, kind: crate::domain::ResultKind, needs: &str) -> Run {
+async fn asking_permission(w: &World, n: u32, kind: &str, needs: &str) -> Run {
     let (core, rig) = (&w.rig.fx.core, &w.rig);
-    let spec = RunSpec { role: kind.role(), workstream: Some(w.ws.clone()), ..rig.spec(n) };
+    let spec = RunSpec { role: crate::domain::Role::parse(kind).unwrap(), workstream: Some(w.ws.clone()), ..rig.spec(n) };
     let queued = core.queue_test_run(spec, Some(rig.fx.item("CA-1"))).await.unwrap();
     let run = rig.svc.start_now(&queued.id).await.unwrap();
     rig.poll().await;
@@ -534,10 +552,9 @@ async fn asking_permission(w: &World, n: u32, kind: crate::domain::ResultKind, n
 /// The sessions are never stopped, woken or attached, the runs keep waiting with nothing allowed, and the audit has no
 /// permission line: only the person answers a permission prompt.
 async fn pip_never_answers_a_permission_prompt() -> std::result::Result<(), String> {
-    use crate::domain::ResultKind;
-    let w = World::start().await;
-    let build = asking_permission(&w, 1, ResultKind::Build, &format!("approve Bash: git push -u origin worktree-{}", w.rig.spec(1).name)).await;
-    let verify = asking_permission(&w, 2, ResultKind::Verify, "approve Bash: rm -rf node_modules").await;
+        let w = World::start().await;
+    let build = asking_permission(&w, 1, "build", &format!("approve Bash: git push -u origin worktree-{}", w.rig.spec(1).name)).await;
+    let verify = asking_permission(&w, 2, "verify", "approve Bash: rm -rf node_modules").await;
     for run in [&build, &verify] {
         if run.state != RunState::NeedsPermission {
             return Err(format!("run {} isn't waiting on its prompt: {:?}", run.id, run.state));
@@ -585,10 +602,9 @@ async fn pip_never_answers_a_permission_prompt() -> std::result::Result<(), Stri
 /// Every run the person starts in the workstream, whatever its role, is launched in the person's own configuration. A
 /// run approved while the cap is full waits for a slot and, launched from the queue, is launched the same way.
 async fn runs_always_launch_unrestricted() -> std::result::Result<(), String> {
-    use crate::domain::ResultKind;
-    let w = World::start().await;
+        let w = World::start().await;
     w.pip.quiet.store(true, Ordering::SeqCst);
-    for (n, kind) in [(1, ResultKind::Investigate), (2, ResultKind::Triage), (3, ResultKind::Plan)] {
+    for (n, kind) in [(1, "investigate"), (2, "triage"), (3, "plan")] {
         w.person_starts_as(n, kind).await;
     }
     let runs = w.runs().await;
@@ -607,7 +623,7 @@ async fn runs_always_launch_unrestricted() -> std::result::Result<(), String> {
     let other = w.person_starts(2).await;
     w.rig.svc.set_settings(crate::config::AgentSettings { max_runs: 1, ..w.rig.svc.settings() }).map_err(|e| e.to_string())?;
     let core = &w.rig.fx.core;
-    let spec = RunSpec { role: ResultKind::Triage.role(), workstream: Some(w.ws.clone()), ..w.rig.spec(3) };
+    let spec = RunSpec { role: crate::domain::Role::parse("triage").unwrap(), workstream: Some(w.ws.clone()), ..w.rig.spec(3) };
     let queued = core.queue_test_run(spec, Some(w.rig.fx.item("CA-1"))).await.unwrap();
     w.rig.svc.launch_waiting().await.map_err(|e| e.to_string())?;
     let waiting = w.rig.get(&queued).await;
@@ -669,19 +685,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_finished_review_leaves_its_github_review_draft_even_with_drafting_on_finish_turned_off() {
+    async fn a_finished_review_leaves_no_draft_and_posts_nothing() {
         let w = World::start().await;
         w.rig.svc.set_settings(crate::config::AgentSettings { draft_on_finish: false, ..w.rig.svc.settings() }).unwrap();
         let run = w.rig.launched(7).await;
         w.rig
             .set(&run, |r| {
-                (r.spec.role, r.spec.pr, r.spec.pr_sha) = (crate::domain::ResultKind::Review.role(), Some(12), Some(FIRST.into()));
+                (r.spec.role, r.spec.pr, r.spec.pr_sha) = (crate::domain::Role::parse("review").unwrap(), Some(12), Some(FIRST.into()));
             })
             .await;
         let done = w.finish(&run, BLOCKING).await;
         let drafts = w.rig.fx.core.proposals_in(&w.rig.fx.scope, &ProposalQuery::default()).await.unwrap();
-        let of_run: Vec<_> = drafts.iter().filter(|p| matches!(&p.origin, Origin::Run { run_id, .. } if *run_id == done.id)).map(|p| p.intent.clone()).collect();
-        assert!(matches!(of_run.as_slice(), [Intent::GithubReview { number: 12, commit_sha, .. }] if commit_sha == FIRST), "only the review draft, which nothing else makes: {of_run:?}");
+        let of_run: Vec<_> = drafts.iter().filter(|p| matches!(&p.origin, Origin::Run { run_id, .. } if *run_id == done.id)).collect();
+        assert!(of_run.is_empty(), "finishing a review drafts nothing; Pip drafts: {of_run:?}");
         assert!(w.rig.fx.github_seen().iter().all(|(method, _)| method == "GET"), "nothing was posted");
     }
 

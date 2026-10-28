@@ -76,7 +76,7 @@ function Body({ view }: { view: WorkstreamView }) {
       <div className="flex flex-wrap items-center gap-2">
         <WorkstreamHeadExtras view={view} />
         <span data-stage className="text-sm text-ws-ink3">
-          {stageText(view.stage, view.waitingForPr, view.reviewBlocking)}
+          {stageText(view.stage, view.waitingForPr)}
         </span>
         <span className="flex-1" />
         {ws.itemKey && (

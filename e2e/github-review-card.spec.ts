@@ -31,7 +31,7 @@ test("an edited comment and a dropped one change exactly what is posted, and the
   await review.getByRole("button", { name: `Drop comment on ${RETRY}:17` }).click();
   expect(await githubWrites(page)).toEqual([]);
 
-  await review.getByRole("button", { name: "Post review" }).click();
+  await review.getByRole("button", { name: "Approve" }).click();
   await expect.poll(async () => (await githubWrites(page)).length).toBe(1);
   const [write] = await githubWrites(page);
   expect(write).toMatchObject({ repo: "acme/webshop", number: 218, event: "COMMENT", commitId: "a1b2c3d4e5f6" });
@@ -49,7 +49,7 @@ test("an edited comment and a dropped one change exactly what is posted, and the
 test("a token that can't post says why, offers the PR view with the review's comments inline instead, and a then Enter posts nothing", async ({ page }) => {
   const review = await reviewedDraft(page, "&mockReviewAccess=none");
   await expect(review.locator('[data-review-access="cant-post"]')).toHaveText("This GitHub token can't post reviews on acme/webshop (it lacks write access to its pull requests).");
-  await expect(review.getByRole("button", { name: "Post review" })).toHaveCount(0);
+  await expect(review.getByRole("button", { name: "Approve" })).toHaveCount(0);
 
   const open = review.getByRole("button", { name: "Open PR view" });
   await open.click();
@@ -86,7 +86,7 @@ test("after the pull request moves on the card warns before posting, and the pos
   await expect(review.locator("[data-review-hunk]")).toHaveCount(2);
   expect(await movePullHead(page, "acme/webshop", 218)).toBe(true);
   await expect(review.locator("[data-review-moved]")).toHaveText(/^The pull request has moved on since this review: reviewed a1b2c3d4, now at moved\w*\. GitHub may mark these comments outdated\.$/);
-  await review.getByRole("button", { name: "Post review" }).click();
+  await review.getByRole("button", { name: "Approve" }).click();
   await expect(review.locator("[data-review-outdated]")).toHaveText("Outdated");
   await expect(review.getByRole("alert")).toContainText("no longer match the pull request; it is outdated");
   expect(await githubWrites(page)).toEqual([]);

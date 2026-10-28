@@ -5,7 +5,6 @@
 //! decides. Starting, messaging and stopping agents are not drafts: they are Pip's own actions, recorded as Pip's. An
 //! agent gets four tools of its own (`agent_tools`) and never sees Pip's.
 
-use std::mem::discriminant;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -23,7 +22,7 @@ use crate::error::{Error, Result};
 use super::agent_tools::{self, AgentSide};
 use super::context::draft_line;
 use super::{AgentDriver, McpEndpoint};
-use crate::domain::{ASK_TOOL, ContainerRef, DiffSide, Doc, Filter, Intent, ItemKind, ItemRef, NewItem, Proposal, ProposalQuery, ReviewComment, StateKind, Transitions};
+use crate::domain::{ASK_TOOL, ContainerRef, DiffSide, Doc, Filter, Intent, ItemKind, ItemRef, LinkKind, NewItem, Origin, Patch, Proposal, ProposalQuery, ReviewComment, StateKind, Transitions};
 use crate::inbox::{Core, TextSeen};
 use crate::model::CachedTicket;
 use crate::proposals::{self, Draft};
@@ -346,6 +345,22 @@ fn tool_list() -> Vec<Value> {
     let text = |d: &str| json!({ "type": "string", "description": d });
     vec![
         tool(
+            "draft",
+            "Save one write for the person to approve, edit or skip. Nothing is posted. A newer pending draft of the same kind and target replaces the older one unless the person edited it. For github_review name the reviewer run and the exact reviewed_sha, summary and optional inline comments; lines outside that commit's diff go into the summary. For rewrite, read the ticket with get_item first and give its complete new description. Use item_kind for the type of a new ticket, link_kind for a link, and patch for update fields.",
+            json!({
+                "kind": { "type": "string", "enum": ["comment", "transition", "create", "update", "rewrite", "link", "subtasks", "github_review"] },
+                "key": key, "body": text("Comment text"), "status_id": text("Target status from list_next_statuses"),
+                "container": text("Project id from list_containers"), "title": text("New title"), "description": text("Complete description"),
+                "item_kind": { "type": "string", "enum": ["task", "bug", "story", "epic"] }, "parent": text("Parent ticket key"),
+                "patch": { "type": "object", "description": "Fields to update: assignee (PersonRef), parent (ItemRef), priority (Priority). Leave unchanged fields out." },
+                "to": text("Other ticket key for a link"), "link_kind": { "type": "string", "enum": ["blocks", "relates", "duplicates"] },
+                "summaries": summaries,
+                "run_id": text("Reviewer agent id"), "repo": text("owner/name"), "number": { "type": "integer", "minimum": 1 },
+                "reviewed_sha": text("Commit the reviewer read"), "summary": text("Review summary"), "comments": review_comments
+            }),
+            &["kind"],
+        ),
+        tool(
             "search_items",
             "Find items in the watched projects. Give a filter, plain text, or both. Returns up to 50 with key, status, assignee and title.",
             json!({ "filter": { "type": "object", "description": FILTER_HELP }, "text": text("Plain-text search over titles, keys and descriptions"), "limit": { "type": "integer" } }),
@@ -416,7 +431,7 @@ fn tool_list() -> Vec<Value> {
         ),
         tool(
             "revise_proposal",
-            "Change one of YOUR OWN pending drafts, or the pending comment, new ticket or subtask breakdown an agent run drafted for the user from its result (its text; for a ticket its type; for a breakdown only the summaries). Never anything else the user made, nor a description update carrying a run's Gossamr Plan: a build follows that plan, so only the user changes it. Pass the field that fits its kind: body for a comment, status_id for a transition, summaries for subtasks, title, description and/or kind (task, bug, story or epic) for a new item, title and/or description (the complete new text) for a ticket text edit. For a GitHub review draft pass body for its new summary and/or comments for the COMPLETE new list of inline comments (each {path, line, side, body}, side RIGHT unless it is on a deleted line; comments you leave out are dropped, and a new one must sit on a line the pull request's diff shows, as get_proposal lists them); it stays a draft the user posts. A review the user has edited is theirs and can't be revised.",
+            "Change one of YOUR OWN pending drafts, or the pending comment, new ticket or subtask breakdown an agent run drafted for the user from its result (its text; for a ticket its type; for a breakdown only the summaries). Never anything else the user made. A description rewrite carrying a Gossamr Plan follows the same rules as other rewrites. Pass the field that fits its kind: body for a comment, status_id for a transition, summaries for subtasks, title, description and/or kind (task, bug, story or epic) for a new item, title and/or description (the complete new text) for a ticket text edit. For a GitHub review draft pass body for its new summary and/or comments for the COMPLETE new list of inline comments (each {path, line, side, body}, side RIGHT unless it is on a deleted line; comments you leave out are dropped, and a new one must sit on a line the pull request's diff shows, as get_proposal lists them); it stays a draft the user posts. A review the user has edited is theirs and can't be revised.",
             json!({ "id": id, "body": { "type": "string" }, "comments": review_comments, "status_id": { "type": "string" }, "summaries": summaries, "title": { "type": "string" }, "description": { "type": "string" }, "kind": { "type": "string" } }),
             &["id"],
         ),
@@ -536,7 +551,69 @@ pub(super) async fn reachable(st: &McpState, run: &PipRun, key: &str) -> std::re
 async fn run_tool(st: &McpState, run: &PipRun, run_id: &str, name: &str, args: &Value) -> Reply {
     let core = &st.core;
     let scope = &run.scope;
+    let mut draft_args;
+    let (name, args) = if name == "draft" {
+        let name = match required(args, "kind")? {
+            "comment" => "propose_comment",
+            "transition" => "propose_transition",
+            "create" => "propose_create",
+            "rewrite" => "propose_description_edit",
+            "subtasks" => "propose_subtasks",
+            "update" => "draft_update",
+            "link" => "draft_link",
+            "github_review" => {
+                let input = crate::inbox::code::GithubReviewDraft {
+                    run_id: required(args, "run_id")?.into(),
+                    repo: required(args, "repo")?.into(),
+                    number: args["number"].as_u64().filter(|n| *n > 0).ok_or("number must be a positive integer")?,
+                    reviewed_sha: required(args, "reviewed_sha")?.into(),
+                    summary: required(args, "summary")?.into(),
+                    comments: if args.get("comments").is_some() { review_comments_of(args)? } else { vec![] },
+                };
+                let origin = Origin::Chat { request_id: run_id.into(), workstream: run.workstream.clone() };
+                let made = core.draft_review(scope, origin, input).await.map_err(|e| e.to_string())?;
+                (st.sink)(&Connection::jira_id(scope));
+                return Ok(saved("for the pull request", "in your open drafts", &made.id));
+            }
+            _ => return Err("kind must name one of the eight write kinds".into()),
+        };
+        draft_args = args.clone();
+        if name == "propose_create" {
+            draft_args["kind"] = args.get("item_kind").cloned().unwrap_or(json!("task"));
+        }
+        (name, &draft_args)
+    } else {
+        (name, args)
+    };
     match name {
+        "draft_update" => {
+            let key = required(args, "key")?;
+            reachable(st, run, key).await?;
+            let patch: Patch = serde_json::from_value(structured(args, "patch")).map_err(|e| format!("patch isn't valid: {e}"))?;
+            if let Some(parent) = &patch.parent {
+                reachable(st, run, &parent.key).await?;
+                if parent.connection_id != Connection::jira_id(scope) {
+                    return Err("the parent belongs to another connection".into());
+                }
+            }
+            if patch.assignee.as_ref().is_some_and(|person| person.connection_id != Connection::jira_id(scope)) {
+                return Err("the assignee belongs to another connection".into());
+            }
+            propose(st, run, run_id, Intent::Update { item: item_ref(scope, key), patch }, None).await
+        }
+        "draft_link" => {
+            let key = required(args, "key")?;
+            let to = required(args, "to")?;
+            reachable(st, run, key).await?;
+            reachable(st, run, to).await?;
+            let kind = match required(args, "link_kind")? {
+                "blocks" => LinkKind::Blocks,
+                "relates" => LinkKind::Relates,
+                "duplicates" => LinkKind::Duplicates,
+                _ => return Err("link_kind must be blocks, relates or duplicates".into()),
+            };
+            propose(st, run, run_id, Intent::Link { from: item_ref(scope, key), to: item_ref(scope, to), kind }, None).await
+        }
         "search_items" => {
             let raw = structured(args, "filter");
             let filter = match (Some(&raw).filter(|f| !f.is_null()), opt(args, "text")) {
@@ -791,8 +868,7 @@ async fn transition(st: &McpState, scope: &Scope, key: &str, status_id: &str) ->
     Ok((Intent::Transition { item: item_ref(scope, key), to: found.id }, found.name))
 }
 
-/// Stores the draft, unless the same one is already open. Other open drafts of the same kind on the item are named in
-/// the reply so the model can revise one instead of piling up. A draft made in a workstream's conversation belongs to
+/// Stores the draft and names older drafts it replaced or left for the person's decision. A draft made in a workstream's conversation belongs to
 /// that workstream, unless it is about another ticket than the workstream's: that one is listed and audited as made
 /// outside any workstream.
 async fn propose(st: &McpState, run: &PipRun, run_id: &str, intent: Intent, label: Option<String>) -> Reply {
@@ -807,12 +883,9 @@ async fn propose(st: &McpState, run: &PipRun, run_id: &str, intent: Intent, labe
     };
     let query = ProposalQuery { states: Some(open_states()), item: intent.target().cloned(), ..Default::default() };
     let open: Vec<Proposal> = st.core.proposals_in(scope, &query).await.map_err(|e| e.to_string())?;
-    if let Some(same) = open.iter().find(|p| p.intent == intent) {
-        return Err(format!("An identical draft is already open (proposal {}). Don't propose it again; see list_proposals.", same.id));
-    }
     let similar: Vec<&str> = open
         .iter()
-        .filter(|p| discriminant(&p.intent) == discriminant(&intent) && intent.target().is_some())
+        .filter(|p| p.intent.supersession_key() == intent.supersession_key())
         .map(|p| p.id.as_str())
         .collect();
     let (target, place) = match intent.target() {
@@ -825,7 +898,6 @@ async fn propose(st: &McpState, run: &PipRun, run_id: &str, intent: Intent, labe
     let made = st.core.propose(scope, Draft::from_pip(run_id, workstream, intent, label)).await.map_err(|e| format!("Couldn't save the draft: {e}"))?;
     (st.sink)(&Connection::jira_id(scope));
     let mut reply = saved(&target, &place, &made.id);
-    // A newer draft of the same kind replaces Pip's older one in a workstream; that one isn't open any more.
     let replaced: Vec<String> = match similar.is_empty() {
         true => Vec::new(),
         false => {
@@ -841,7 +913,7 @@ async fn propose(st: &McpState, run: &PipRun, run_id: &str, intent: Intent, labe
         many => reply.push_str(&format!(" It replaces your earlier drafts {}, now retired.", many.join(", "))),
     }
     if !similar.is_empty() {
-        reply.push_str(&format!(" Note: other open drafts of this kind exist on the item ({}); revise or retire yours if this replaces one.", similar.join(", ")));
+        reply.push_str(&format!(" Note: earlier drafts still need the person's decision ({}); their edits and unfinished posting attempts stay intact.", similar.join(", ")));
     }
     Ok(reply)
 }
@@ -859,6 +931,7 @@ pub fn tool_label(name: &str, input: &Value) -> Option<String> {
         "list_proposals" => "Checked the open drafts".into(),
         "get_proposal" => "Read a draft in full".into(),
         "set_view_filter" => "Filtered the view".into(),
+        "draft" => format!("Drafted {}", s("kind").replace('_', " ")),
         "propose_comment" => format!("Drafted a comment on {}", s("key")),
         "propose_transition" => format!("Suggested a transition for {}", s("key")),
         "propose_subtasks" => format!("Suggested subtasks for {}", s("key")),
@@ -1078,7 +1151,7 @@ mod tests {
         let mut want = [
             "search_items", "get_item", "list_containers", "find_containers", "get_workflow", "list_next_statuses", "list_proposals", "get_proposal",
             "propose_comment", "propose_transition", "propose_subtasks", "propose_create", "propose_description_edit", "revise_proposal", "retire_proposal",
-            "set_view_filter",
+            "set_view_filter", "draft",
         ]
         .map(String::from)
         .into_iter()
@@ -1243,24 +1316,51 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_identical_open_draft_is_refused_and_a_similar_one_is_flagged() {
+    async fn the_unified_draft_tool_keeps_writes_pending_and_validates_each_payload() {
+        let r = rig().await;
+        for args in [
+            json!({ "kind": "comment", "key": "CA-1", "body": "A report summary" }),
+            json!({ "kind": "transition", "key": "CA-1", "status_id": "10001" }),
+            json!({ "kind": "subtasks", "key": "CA-1", "summaries": ["First step"] }),
+            json!({ "kind": "update", "key": "CA-1", "patch": { "assignee": { "connectionId": Connection::jira_id(&r.fx.scope), "accountId": "ann" } } }),
+            json!({ "kind": "link", "key": "CA-1", "to": "CA-2", "link_kind": "blocks" }),
+        ] {
+            r.ok("draft", args).await;
+        }
+        let containers = r.ok("list_containers", json!({})).await;
+        let container = containers.split(" · ").next().unwrap();
+        r.ok("draft", json!({ "kind": "create", "container": container, "title": "A task", "item_kind": "bug" })).await;
+        r.ok("get_item", json!({ "key": "CA-1" })).await;
+        r.ok("draft", json!({ "kind": "rewrite", "key": "CA-1", "title": "A clearer title" })).await;
+        let drafts = r.drafts().await;
+        assert_eq!(drafts.len(), 7);
+        assert!(drafts.iter().all(|p| p.created_by == CreatedBy::Pip && p.state == ProposalState::Pending));
+        assert!(r.fx.tracker.intents().is_empty());
+        assert!(r.err("draft", json!({ "kind": "github_review" })).await.contains("run_id is required"));
+        assert!(r.err("draft", json!({ "kind": "link", "key": "CA-1", "to": "CA-2", "link_kind": "implementedBy" })).await.contains("link_kind"));
+        assert!(r.err("draft", json!({ "kind": "update", "key": "CA-1", "patch": { "assignee": { "connectionId": "elsewhere", "accountId": "ann" } } })).await.contains("another connection"));
+        let schema = tool_list().into_iter().find(|tool| tool["name"] == "draft").unwrap();
+        assert_eq!(schema["inputSchema"]["properties"]["kind"]["enum"].as_array().unwrap().len(), 8);
+    }
+
+    #[tokio::test]
+    async fn a_new_comment_replaces_the_older_one_even_when_its_words_are_identical() {
         let r = rig().await;
         let first = id_in(&r.ok("propose_comment", json!({ "key": "CA-1", "body": "Ship it" })).await);
 
-        let again = r.err("propose_comment", json!({ "key": "CA-1", "body": "Ship it" })).await;
-        assert!(again.contains(&first) && again.contains("identical"), "{again}");
+        let again = r.ok("propose_comment", json!({ "key": "CA-1", "body": "Ship it" })).await;
+        assert!(again.contains(&first) && again.contains("replaces"), "{again}");
 
         let other_item = r.ok("propose_comment", json!({ "key": "CA-2", "body": "Ship it" })).await;
         assert!(!other_item.contains("Note:"));
         let similar = r.ok("propose_comment", json!({ "key": "CA-1", "body": "Ship it soon" })).await;
-        assert!(similar.contains("Note:") && similar.contains(&first), "{similar}");
+        assert!(similar.contains("replaces") && similar.contains(&id_in(&again)), "{similar}");
 
-        r.fx.core.skip_proposal(&first).await.unwrap();
         r.ok("propose_comment", json!({ "key": "CA-1", "body": "Ship it" })).await;
     }
 
     #[tokio::test]
-    async fn a_newer_draft_of_the_same_kind_in_a_workstream_says_which_one_it_replaced_and_a_refusal_passes_through() {
+    async fn a_newer_draft_names_the_one_it_replaced_and_keeps_the_persons_edit_alongside() {
         let r = rig().await;
         let ws = r.fx.core.open_workstream(&r.fx.scope, Some(r.fx.item("CA-1")), None).await.unwrap();
         r.st.runs.lock().unwrap().insert("in-ws".into(), PipRun::in_workstream(r.fx.scope.clone(), &ws.id));
@@ -1279,8 +1379,9 @@ mod tests {
 
         let mine = id_in(&second);
         r.fx.core.edit_proposal(&mine, &crate::inbox::Edit::Subtasks { summaries: vec!["mine".into()] }).await.unwrap();
-        let (refused, failed) = call("propose_subtasks", json!({ "key": "CA-1", "summaries": ["c"] })).await;
-        assert!(failed && refused.contains(&format!("the user edited draft {mine}")), "{refused}");
+        let (saved, failed) = call("propose_subtasks", json!({ "key": "CA-1", "summaries": ["c"] })).await;
+        assert!(!failed && saved.contains(&mine), "{saved}");
+        assert_eq!(r.stored(&mine).await.state, ProposalState::Pending);
     }
 
     #[tokio::test]
@@ -1316,9 +1417,10 @@ mod tests {
     #[tokio::test]
     async fn list_proposals_shows_everyone_s_drafts_and_marks_the_ones_pip_may_change() {
         let r = rig().await;
-        let mine = id_in(&r.ok("propose_comment", json!({ "key": "CA-1", "body": "mine" })).await);
+        // The person's drafts are older, so Pip's comment stays beside them instead of retiring them.
         let users = r.draft_by(CreatedBy::User, "the user's").await;
         let skipped = r.draft_by(CreatedBy::User, "skipped one").await;
+        let mine = id_in(&r.ok("propose_comment", json!({ "key": "CA-1", "body": "mine" })).await);
         r.fx.core.skip_proposal(&skipped.id).await.unwrap();
         r.ok("propose_subtasks", json!({ "key": "CA-2", "summaries": ["x"] })).await;
 
@@ -1340,8 +1442,9 @@ mod tests {
     #[tokio::test]
     async fn pip_may_revise_and_retire_only_its_own_pending_drafts() {
         let r = rig().await;
-        let mine = id_in(&r.ok("propose_comment", json!({ "key": "CA-1", "body": "first try" })).await);
+        // The person's draft is older, so it stays beside Pip's comment on the same ticket.
         let users = r.draft_by(CreatedBy::User, "the user's words").await;
+        let mine = id_in(&r.ok("propose_comment", json!({ "key": "CA-1", "body": "first try" })).await);
         let before = r.drafts().await;
 
         let revise = r.err("revise_proposal", json!({ "id": users.id, "body": "hijacked" })).await;
@@ -1385,8 +1488,9 @@ mod tests {
     #[tokio::test]
     async fn pip_may_revise_the_pending_comment_a_run_left_but_nothing_else_the_person_made() {
         let r = rig().await;
-        let left = r.draft_from(from_run(), CreatedBy::User, "From the run").await;
+        // The person's own comment is older, so the run's comment does not retire it.
         let by_hand = r.draft_by(CreatedBy::User, "typed by the person").await;
+        let left = r.draft_from(from_run(), CreatedBy::User, "From the run").await;
         let before = r.stored(&by_hand.id).await;
 
         let reply = r.ok("revise_proposal", json!({ "id": left.id, "body": "Reworked with the full result" })).await;
@@ -1665,9 +1769,10 @@ mod tests {
         assert!(r.err("propose_description_edit", json!({ "key": "CA-1" })).await.contains("a new title, a new description, or both"));
         assert!(r.err("propose_description_edit", json!({ "key": "CA-1", "description": "Hi" })).await.contains("nothing to draft"));
         let first = r.ok("propose_description_edit", json!({ "key": "CA-1", "description": "Hi again" })).await;
-        let again = r.err("propose_description_edit", json!({ "key": "CA-1", "description": "Hi again" })).await;
-        assert!(again.contains("identical") && again.contains(&id_in(&first)), "{again}");
-        assert_eq!(r.drafts().await.len(), 1);
+        let again = r.ok("propose_description_edit", json!({ "key": "CA-1", "description": "Hi again" })).await;
+        assert!(again.contains("replaces") && again.contains(&id_in(&first)), "{again}");
+        assert_eq!(r.stored(&id_in(&first)).await.state, ProposalState::Retired(proposals::REPLACED_REASON.into()));
+        assert_eq!(r.stored(&id_in(&again)).await.state, ProposalState::Pending);
     }
 
     #[tokio::test]

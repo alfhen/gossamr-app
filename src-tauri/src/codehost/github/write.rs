@@ -15,9 +15,7 @@ use crate::runs::redact::redact;
 const EVENT: &str = "COMMENT";
 
 /// What a 403 refusing a review says when GitHub said the token can't reach the resource: the token can't write to pull
-/// requests in `repo`. Only a refusal in these words is remembered as the repository not taking reviews
-/// (`GithubHost::post_review`); a rate limit, a single sign-on demand or any other 403 (an archived or locked repository,
-/// say) keeps GitHub's own words, and says nothing lasting about the token's access.
+/// requests in `repo`. A rate limit, a single sign-on demand or any other 403 keeps GitHub's own words.
 pub(super) fn no_write_access(repo: &str) -> String {
     format!("GitHub refused to post the review: the token can't write to pull requests in {repo}. Open the PR view instead, or reconnect GitHub with write access.")
 }

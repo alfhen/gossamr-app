@@ -4,8 +4,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use super::{PersonRef, ResultKind, Run, RunState};
-use crate::runs::report::ReviewVerdict;
+use super::{PersonRef, Run, RunState};
 
 /// Why a workstream is paused. A workstream stored with any other reason reads as paused by the person.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -113,73 +112,42 @@ pub enum Stage {
     Done,
 }
 
-fn rank(kind: ResultKind) -> u8 {
-    match kind {
-        ResultKind::Investigate => 0,
-        ResultKind::Triage => 1,
-        ResultKind::Plan => 2,
-        ResultKind::Build => 3,
-        ResultKind::Review => 4,
-        ResultKind::Verify => 5,
+fn rank(role: &str) -> u8 {
+    match role {
+        "investigate" => 0,
+        "triage" => 1,
+        "plan" => 2,
+        "review" => 4,
+        "verify" => 5,
+        _ => 3,
     }
 }
 
-fn of_kind(kind: ResultKind) -> Stage {
-    match kind {
-        ResultKind::Investigate => Stage::Investigate,
-        ResultKind::Triage => Stage::Triage,
-        ResultKind::Plan => Stage::Plan,
-        ResultKind::Build => Stage::Build,
-        ResultKind::Review => Stage::Review,
-        ResultKind::Verify => Stage::Verify,
+fn of_role(role: &str) -> Stage {
+    match role {
+        "investigate" => Stage::Investigate,
+        "triage" => Stage::Triage,
+        "plan" => Stage::Plan,
+        "review" => Stage::Review,
+        "verify" => Stage::Verify,
+        _ => Stage::Build,
     }
-}
-
-/// A role the stages don't know counts as a build.
-fn kind_of(run: &Run) -> ResultKind {
-    run.spec.result_kind().unwrap_or(ResultKind::Build)
 }
 
 fn in_progress(state: RunState) -> bool {
     !matches!(state, RunState::Done | RunState::Failed | RunState::Stopped)
 }
 
-/// The stage of a workstream whose linked runs are `runs`, in any order, `verdict` giving a finished review's verdict.
-/// Roles are read as the kinds Investigate < Triage < Plan < Build < Review < Verify, and the first rule that applies decides:
-///
-/// 1. No runs: `Intake`.
-/// 2. Any run in progress (queued, launching, working, waiting on the person, blocked, or unknown): the furthest kind
-///    among those.
-/// 3. Else any run done: the furthest kind that finished, except that a finished Verify is `Done`, and when that kind
-///    is Review the newest finished review decides: `Done` when it passed, else (blocking, or no verdict) `Review`.
-/// 4. Else (every run failed or was stopped): the kind of the run queued last.
-///
-/// Mirrored by `src/lib/workstreamStage.ts`; both run `src/lib/workstreamStage.fixtures.json`.
-pub fn stage(runs: &[Run], verdict: impl Fn(&Run) -> Option<ReviewVerdict>) -> Stage {
-    let furthest = |pick: fn(RunState) -> bool| runs.iter().filter(|r| pick(r.state)).map(kind_of).max_by_key(|k| rank(*k));
-    if let Some(kind) = furthest(in_progress) {
-        return of_kind(kind);
+pub fn stage(runs: &[Run]) -> Stage {
+    let furthest = |pick: fn(RunState) -> bool| runs.iter().filter(|run| pick(run.state)).map(|run| run.spec.role.work()).max_by_key(|role| rank(role));
+    if let Some(role) = furthest(in_progress) {
+        return of_role(role);
     }
-    match furthest(|s| s == RunState::Done) {
-        Some(ResultKind::Verify) => Stage::Done,
-        Some(ResultKind::Review) => match newest_review(runs).and_then(verdict) {
-            Some(ReviewVerdict::Pass) => Stage::Done,
-            _ => Stage::Review,
-        },
-        Some(kind) => of_kind(kind),
-        None => runs.iter().max_by(|a, b| (a.queued_at, &a.id).cmp(&(b.queued_at, &b.id))).map_or(Stage::Intake, |r| of_kind(kind_of(r))),
+    match furthest(|state| state == RunState::Done) {
+        Some("verify") => Stage::Done,
+        Some(role) => of_role(role),
+        None => runs.iter().max_by(|left, right| (left.queued_at, &left.id).cmp(&(right.queued_at, &right.id))).map_or(Stage::Intake, |run| of_role(run.spec.role.work())),
     }
-}
-
-/// The finished review among `runs` queued last.
-fn newest_review(runs: &[Run]) -> Option<&Run> {
-    runs.iter().filter(|r| r.spec.is(ResultKind::Review) && r.state == RunState::Done).max_by(|a, b| (a.queued_at, &a.id).cmp(&(b.queued_at, &b.id)))
-}
-
-/// Whether the workstream of `runs` stands at Review because its newest finished review asked for changes: nothing is
-/// in progress and no verification finished. Its chip then reads "Review · changes needed".
-pub fn review_blocking(runs: &[Run], verdict: impl Fn(&Run) -> Option<ReviewVerdict>) -> bool {
-    stage(runs, &verdict) == Stage::Review && !runs.iter().any(|r| in_progress(r.state)) && newest_review(runs).and_then(verdict) == Some(ReviewVerdict::Blocking)
 }
 
 /// Short names for the runs of a workstream, `R1` for the first queued: by when each was queued, ties by id. Pip's
@@ -302,54 +270,13 @@ mod tests {
 
     /// The stage with no review's verdict known.
     fn unjudged(runs: &[Run]) -> Stage {
-        stage(runs, |_| None)
+        stage(runs)
     }
 
-    fn run(id: &str, kind: ResultKind, state: RunState, mins: i64) -> Run {
-        let mut r = Run::queued(id.into(), format!("p-{id}"), "c".into(), None, RunSpec { role: kind.role(), ..run_spec() }, "f".into(), at(mins));
+    fn run(id: &str, kind: &str, state: RunState, mins: i64) -> Run {
+        let mut r = Run::queued(id.into(), format!("p-{id}"), "c".into(), None, RunSpec { role: Role::parse(kind).unwrap(), ..run_spec() }, "f".into(), at(mins));
         r.state = state;
         r
-    }
-
-    #[test]
-    fn matches_the_fixtures_the_frontend_mirror_also_runs() {
-        let cases: serde_json::Value = serde_json::from_str(include_str!("../../../src/lib/workstreamStage.fixtures.json")).unwrap();
-        let cases = cases.as_array().unwrap();
-        assert!(cases.len() >= 9);
-        for case in cases {
-            let verdicts: HashMap<String, ReviewVerdict> = case["runs"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .enumerate()
-                .filter_map(|(n, r)| serde_json::from_value(r["verdict"].clone()).ok().map(|v| (format!("r{n}"), v)))
-                .collect();
-            let runs: Vec<Run> = case["runs"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .enumerate()
-                .map(|(n, r)| {
-                    let role = Role::parse(r["role"].as_str().unwrap()).unwrap();
-                    let state: RunState = serde_json::from_value(r["state"].clone()).unwrap();
-                    let queued: DateTime<Utc> = serde_json::from_value(r["queuedAt"].clone()).unwrap();
-                    let mut run = run(&format!("r{n}"), ResultKind::Plan, state, 0);
-                    run.spec.role = role;
-                    run.queued_at = queued;
-                    run
-                })
-                .collect();
-            let expected: Stage = serde_json::from_value(case["stage"].clone()).unwrap();
-            assert_eq!(stage(&runs, |r| verdicts.get(&r.id).copied()), expected, "{}", case["name"]);
-            let blocking: bool = case["reviewBlocking"].as_bool().unwrap_or(false);
-            assert_eq!(review_blocking(&runs, |r| verdicts.get(&r.id).copied()), blocking, "{}", case["name"]);
-            // Where a case gives labels, they are the label of each run in the order listed.
-            if let Some(labels) = case["labels"].as_array() {
-                let given = run_labels(&runs);
-                let named: Vec<&str> = runs.iter().map(|r| given.iter().find(|(id, _)| *id == r.id).unwrap().1.as_str()).collect();
-                assert_eq!(named, labels.iter().map(|l| l.as_str().unwrap()).collect::<Vec<_>>(), "{}", case["name"]);
-            }
-        }
     }
 
     #[test]
@@ -359,74 +286,61 @@ mod tests {
 
     #[test]
     fn queued_investigate_is_investigate() {
-        assert_eq!(unjudged(&[run("a", ResultKind::Investigate, RunState::Queued, 0)]), Stage::Investigate);
+        assert_eq!(unjudged(&[run("a", "investigate", RunState::Queued, 0)]), Stage::Investigate);
     }
 
     #[test]
     fn done_investigate_then_working_triage_is_triage() {
-        let runs = [run("a", ResultKind::Investigate, RunState::Done, 0), run("b", ResultKind::Triage, RunState::Working, 1)];
+        let runs = [run("a", "investigate", RunState::Done, 0), run("b", "triage", RunState::Working, 1)];
         assert_eq!(unjudged(&runs), Stage::Triage);
         assert_eq!(unjudged(&runs[..1]), Stage::Investigate, "a finished investigation alone is not done");
     }
 
     #[test]
     fn failed_runs_do_not_hold_the_stage_back() {
-        let runs = [run("a", ResultKind::Investigate, RunState::Failed, 0), run("b", ResultKind::Plan, RunState::Working, 1)];
+        let runs = [run("a", "investigate", RunState::Failed, 0), run("b", "plan", RunState::Working, 1)];
         assert_eq!(unjudged(&runs), Stage::Plan);
-        let runs = [run("a", ResultKind::Triage, RunState::Done, 0), run("b", ResultKind::Investigate, RunState::Failed, 1)];
+        let runs = [run("a", "triage", RunState::Done, 0), run("b", "investigate", RunState::Failed, 1)];
         assert_eq!(unjudged(&runs), Stage::Triage);
     }
 
     #[test]
     fn a_build_waiting_on_the_person_is_build() {
-        let runs = [run("a", ResultKind::Plan, RunState::Done, 0), run("b", ResultKind::Build, RunState::NeedsAnswer, 1)];
+        let runs = [run("a", "plan", RunState::Done, 0), run("b", "build", RunState::NeedsAnswer, 1)];
         assert_eq!(unjudged(&runs), Stage::Build);
     }
 
     #[test]
-    fn a_finished_review_is_done_only_when_its_newest_one_passed() {
-        let verdicts = |pass: &'static [&'static str]| move |r: &Run| Some(if pass.contains(&r.id.as_str()) { ReviewVerdict::Pass } else { ReviewVerdict::Blocking });
-        let runs = [run("a", ResultKind::Build, RunState::Done, 0), run("b", ResultKind::Review, RunState::Done, 1)];
-        assert_eq!(stage(&runs, verdicts(&["b"])), Stage::Done);
-        assert_eq!(stage(&runs, verdicts(&[])), Stage::Review);
-        assert!(review_blocking(&runs, verdicts(&[])) && !review_blocking(&runs, verdicts(&["b"])));
-        assert_eq!(unjudged(&runs), Stage::Review, "a review with no verdict is not done");
-        assert!(!review_blocking(&runs, |_| None));
-        let rounds = [run("b", ResultKind::Review, RunState::Done, 1), run("c", ResultKind::Review, RunState::Done, 2)];
-        assert_eq!(stage(&rounds, verdicts(&["c"])), Stage::Done, "blocking, then a newer pass");
-        assert_eq!(stage(&rounds, verdicts(&["b"])), Stage::Review, "a pass, then a newer blocking one");
-        let again = [run("b", ResultKind::Review, RunState::Done, 1), run("c", ResultKind::Review, RunState::Working, 2)];
-        assert_eq!(stage(&again, verdicts(&[])), Stage::Review);
-        assert!(!review_blocking(&again, verdicts(&[])), "a review in progress is not blocking yet");
-        assert_eq!(unjudged(&[run("a", ResultKind::Review, RunState::Working, 0)]), Stage::Review);
-        let verified = [run("b", ResultKind::Review, RunState::Done, 1), run("c", ResultKind::Verify, RunState::Done, 2)];
-        assert_eq!(stage(&verified, verdicts(&[])), Stage::Done, "a finished verification is done whatever the review said");
-        assert!(!review_blocking(&verified, verdicts(&[])));
+    fn a_review_report_is_not_parsed_to_decide_the_workstreams_stage() {
+        let mut review = run("review", "reviewer", RunState::Done, 0);
+        review.result = Some("Verdict: pass".into());
+        review.result_complete = true;
+        assert_eq!(stage(&[review]), Stage::Review);
     }
 
     #[test]
     fn verify_done_is_done() {
-        assert_eq!(unjudged(&[run("a", ResultKind::Verify, RunState::Done, 0)]), Stage::Done);
-        assert_eq!(unjudged(&[run("a", ResultKind::Verify, RunState::Queued, 0)]), Stage::Verify);
+        assert_eq!(unjudged(&[run("a", "verify", RunState::Done, 0)]), Stage::Done);
+        assert_eq!(unjudged(&[run("a", "verify", RunState::Queued, 0)]), Stage::Verify);
     }
 
     #[test]
     fn all_stopped_falls_back_to_last_kind() {
-        let runs = [run("a", ResultKind::Plan, RunState::Stopped, 0), run("b", ResultKind::Triage, RunState::Failed, 2), run("c", ResultKind::Investigate, RunState::Stopped, 1)];
+        let runs = [run("a", "plan", RunState::Stopped, 0), run("b", "triage", RunState::Failed, 2), run("c", "investigate", RunState::Stopped, 1)];
         assert_eq!(unjudged(&runs), Stage::Triage);
-        let tied = [run("b", ResultKind::Plan, RunState::Stopped, 0), run("a", ResultKind::Triage, RunState::Stopped, 0)];
+        let tied = [run("b", "plan", RunState::Stopped, 0), run("a", "triage", RunState::Stopped, 0)];
         assert_eq!(unjudged(&tied), Stage::Plan, "ties go to the larger id");
     }
 
     #[test]
     fn unknown_counts_as_in_progress() {
-        let runs = [run("a", ResultKind::Review, RunState::Done, 0), run("b", ResultKind::Triage, RunState::Unknown, 1)];
+        let runs = [run("a", "review", RunState::Done, 0), run("b", "triage", RunState::Unknown, 1)];
         assert_eq!(unjudged(&runs), Stage::Triage);
     }
 
     #[test]
     fn run_labels_number_by_queue_time_then_id() {
-        let runs = [run("z", ResultKind::Plan, RunState::Done, 5), run("b", ResultKind::Triage, RunState::Done, 1), run("a", ResultKind::Investigate, RunState::Done, 1)];
+        let runs = [run("z", "plan", RunState::Done, 5), run("b", "triage", RunState::Done, 1), run("a", "investigate", RunState::Done, 1)];
         let labels = run_labels(&runs);
         assert_eq!(labels, [("a".to_string(), "R1".to_string()), ("b".into(), "R2".into()), ("z".into(), "R3".into())]);
         assert!(run_labels(&[]).is_empty());

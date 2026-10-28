@@ -40,7 +40,7 @@ test.describe("The plan reads Approved once its draft is posted (G17)", () => {
     await page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "All projects" }).click();
     await peekTicket(page, "CA-401");
     const plan = peekSheet(page).getByRole("article", { name: "Update the description of CA-401" }).filter({ hasText: "Gossamr Plan" });
-    await plan.getByRole("button", { name: "Update description" }).click();
+    await plan.getByRole("button", { name: "Approve" }).click();
     await expect(plan).toHaveCount(0);
     await expect(pipConversation(page)).toHaveText(/^Workstream: CA-401 /);
     expect(await newest(page, "build")).toBeNull();
@@ -76,7 +76,7 @@ test.describe("an edited draft reopens as a preview (G26)", () => {
     await expect(needsPane(page).locator("textarea").first()).toBeFocused();
     await draft.getByRole("button", { name: "Done editing" }).click();
     await expect(draft.getByRole("button", { name: "Edit" })).toBeFocused();
-    await draft.getByRole("button", { name: "Post comment" }).click();
+    await draft.getByRole("button", { name: "Approve" }).click();
     await expect.poll(async () => (await jiraWrites(page)).map((w) => w.text)).toEqual([expect.stringContaining("Kept after the card left.")]);
   });
 });

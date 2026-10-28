@@ -27,7 +27,7 @@ test.describe("the pause before posting edited text (G19)", () => {
     await openApp(page, "runs=empty");
     const draft = await draftOn(page, "CA-408");
     await addLine(page, draft, "cc @everyone\nPassword: hunter2");
-    await draft.getByRole("button", { name: "Post comment" }).click();
+    await draft.getByRole("button", { name: "Approve" }).click();
     const pause = draft.locator("[data-post-pause]");
     await expect(pause).toContainText("Your edit mentions everyone");
     await expect(pause).toContainText("looks like a password, key or token");
@@ -42,14 +42,14 @@ test.describe("the pause before posting edited text (G19)", () => {
     await openApp(page, "runs=empty");
     const draft = await draftOn(page, "CA-408");
     await addLine(page, draft, "cc @everyone");
-    await draft.getByRole("button", { name: "Post comment" }).click();
+    await draft.getByRole("button", { name: "Approve" }).click();
     await expect(draft.locator("[data-post-pause]")).toBeVisible();
     await draft.getByRole("button", { name: "Keep editing" }).click();
     const text = needsPane(page).locator("textarea").first();
     await text.fill((await text.inputValue()).replace("cc @everyone", "cc @Mette Lund"));
     await draft.getByRole("button", { name: "Done editing" }).click();
     await expect(draft.locator("[data-post-pause]")).toHaveCount(0);
-    await draft.getByRole("button", { name: "Post comment" }).click();
+    await draft.getByRole("button", { name: "Approve" }).click();
     await expect.poll(async () => (await jiraWrites(page)).length).toBe(1);
   });
 });

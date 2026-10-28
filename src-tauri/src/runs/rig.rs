@@ -47,7 +47,6 @@ pub struct Rig {
     pub notices: Arc<Notices>,
     pub opened: Arc<Opened>,
     pub changes: Arc<Mutex<Vec<String>>>,
-    pub drafted: Arc<Mutex<Vec<String>>>,
 }
 
 pub async fn ready() -> Rig {
@@ -71,8 +70,6 @@ pub async fn ready_on(fx: Fixture, tune: impl FnOnce(RunService) -> RunService) 
     let tools = FixedToolchain(Ok(Toolchain { cli: cli.clone(), env }));
     let (notices, opened, changes) = (Arc::new(Notices::default()), Arc::new(Opened::default()), Arc::new(Mutex::new(Vec::new())));
     let seen = changes.clone();
-    let drafted = Arc::new(Mutex::new(Vec::new()));
-    let told = drafted.clone();
     let svc = RunService::new(
         fx.core.clone(),
         Arc::new(tools),
@@ -80,11 +77,10 @@ pub async fn ready_on(fx: Fixture, tune: impl FnOnce(RunService) -> RunService) 
         vec![fx.home.clone()],
         Arc::new(move |id| seen.lock().unwrap().push(id.to_string())),
     )
-    .with_drafted(Arc::new(move |id| told.lock().unwrap().push(id.to_string())))
     .with_notifier(notices.clone())
     .with_terminal(opened.clone())
     .with_home(fx.home.canonicalize().unwrap());
-    Rig { fx, svc: Arc::new(tune(svc)), cli, clone, notices, opened, changes, drafted }
+    Rig { fx, svc: Arc::new(tune(svc)), cli, clone, notices, opened, changes }
 }
 
 pub fn line(at: &str, state: &str, text: &str) -> TimelineLine {
@@ -103,14 +99,14 @@ impl Rig {
     }
 
     /// Queued with the report paragraph asked for and launched; the service must have been built with `reporting` to offer the tools.
-    pub async fn launched_reporting(&self, n: u32, kind: crate::domain::ResultKind) -> Run {
-        let queued = self.fx.core.queue_test_run(RunSpec { role: kind.role(), report: true, ..self.spec(n) }, Some(self.fx.item("CA-1"))).await.unwrap();
+    pub async fn launched_reporting(&self, n: u32, kind: &str) -> Run {
+        let queued = self.fx.core.queue_test_run(RunSpec { role: crate::domain::Role::parse(kind).unwrap(), report: true, ..self.spec(n) }, Some(self.fx.item("CA-1"))).await.unwrap();
         self.svc.start_now(&queued.id).await.unwrap()
     }
 
     /// Like `launched`, for a run of another kind on the ticket.
-    pub async fn launched_as(&self, n: u32, kind: crate::domain::ResultKind) -> Run {
-        let queued = self.fx.core.queue_test_run(RunSpec { role: kind.role(), ..self.spec(n) }, Some(self.fx.item("CA-1"))).await.unwrap();
+    pub async fn launched_as(&self, n: u32, kind: &str) -> Run {
+        let queued = self.fx.core.queue_test_run(RunSpec { role: crate::domain::Role::parse(kind).unwrap(), ..self.spec(n) }, Some(self.fx.item("CA-1"))).await.unwrap();
         self.svc.start_now(&queued.id).await.unwrap()
     }
 

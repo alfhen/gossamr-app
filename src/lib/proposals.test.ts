@@ -1,9 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Intent, Proposal, RunSpec } from "../types";
-import { draftExcerpt, draftsForTurn, earlierDrafts, inWorkstreamPane, supersession, supersessionKey, targetOf, withoutRunDrafts } from "./proposals";
-import fixtures from "./draftHygiene.fixtures.json";
+import { draftExcerpt, draftsForTurn, earlierDrafts, inWorkstreamPane, supersessionKey, targetOf, withoutRunDrafts } from "./proposals";
 import { docFromText } from "./docs";
-import { isRunPlanRewrite } from "../backend/mockProposals";
 
 const ref = (key: string) => ({ connectionId: "c", externalId: key, key });
 
@@ -101,43 +99,6 @@ describe("inWorkstreamPane and retired drafts", () => {
   });
 });
 
-/** A draft as `draftHygiene.fixtures.json` describes it; `src-tauri/src/proposals.rs` builds the same. */
-type FixtureDraft = { by: Proposal["createdBy"]; origin: "chat" | "run" | "board"; workstream: string | null; intent: Intent; edited?: boolean; planRewrite?: boolean; state?: "skipped" };
-
-const PLAN_BODY = { blocks: [{ type: "heading", level: 2, content: [{ type: "text", text: "Gossamr Plan", marks: [] }] }] };
-
-function fixtureDraft(d: FixtureDraft, id: string): Proposal {
-  const origin: Proposal["origin"] =
-    d.origin === "chat" ? { type: "chat", requestId: "r", workstream: d.workstream } : d.origin === "run" ? { type: "run", runId: "run-1", shortId: null, workstream: d.workstream } : { type: "board" };
-  const intent = (d.planRewrite && d.intent.type === "rewrite" ? { ...d.intent, body: { from: { blocks: [] }, to: PLAN_BODY, fromText: "old", toText: "## Gossamr Plan" } } : d.intent) as Intent;
-  return proposal(id, intent, {
-    origin,
-    createdBy: d.by,
-    state: d.state === "skipped" ? { type: "skipped" } : { type: "pending" },
-    revisions: d.edited ? [{ at: "2026-09-29T12:00:00Z", note: "Edited", intent }] : [],
-  });
-}
-
-describe("draft hygiene fixtures, as proposals.rs runs them", () => {
-  for (const c of fixtures as unknown as ({ name: string; kind: "key"; a: Intent; b: Intent; same: boolean } | { name: string; kind: "decide"; older: FixtureDraft; newer: FixtureDraft; expect: string })[]) {
-    it(c.name, () => {
-      if (c.kind === "key") {
-        const a = supersessionKey(c.a);
-        expect(a !== null && a === supersessionKey(c.b)).toBe(c.same);
-      } else {
-        expect(supersession(fixtureDraft(c.older, "old"), fixtureDraft(c.newer, "new"), isRunPlanRewrite).type).toBe(c.expect);
-      }
-    });
-  }
-
-  it("names the edited draft when it refuses Pip", () => {
-    const older = proposal("1", { type: "transition", item: ref("A-1"), to: "x" }, { origin: { type: "chat", requestId: "r", workstream: "w" }, revisions: [{ at: "t", note: "Edited", intent: { type: "transition", item: ref("A-1"), to: "y" } }] });
-    const newer = proposal("2", { type: "transition", item: ref("A-1"), to: "z" }, { origin: { type: "chat", requestId: "r", workstream: "w" } });
-    const verdict = supersession(older, newer, () => false);
-    expect(verdict.type === "refuse" && verdict.reason).toContain("the user edited draft 1 of the same kind on A-1");
-  });
-});
-
 const githubReview = (repo: string, item: ReturnType<typeof ref> | null = ref("CA-1")): Intent => ({
   type: "githubReview",
   connectionId: "github:ada",
@@ -154,27 +115,12 @@ describe("GitHub review drafts", () => {
   it("are grouped under their run's ticket and keyed by pull request, whatever the case of its repository", () => {
     expect(targetOf(githubReview("acme/webshop"))?.key).toBe("CA-1");
     expect(targetOf(githubReview("acme/webshop", null))).toBeNull();
-    expect(supersessionKey(githubReview("Acme/WebShop"))).toBe("githubReview:acme/webshop#218");
+    expect(supersessionKey(githubReview("Acme/WebShop"))).toBe('githubReview:["github:ada","acme/webshop",218]');
   });
 
   it("are left out for screens that approve with proposalsApprove", () => {
     const all = [proposal("1", subtasks("A-1")), proposal("2", githubReview("acme/webshop"))];
     expect(withoutRunDrafts(all).map((p) => p.id)).toEqual(["1"]);
-  });
-});
-
-describe("a triage's description update and a plan's", () => {
-  const ref = (key: string) => ({ connectionId: "c", externalId: key, key });
-  const fromRun = (id: string, run: string, over: Partial<Proposal> = {}) =>
-    proposal(id, { type: "comment", item: ref("A-1"), body: { blocks: [] } } as unknown as Intent, { origin: { type: "run", runId: run, shortId: null, workstream: "ws-1" }, createdBy: "agent", ...over });
-
-  it("leaves a triage's description update and a plan's alone: neither replaces the other, though both rewrite the description", () => {
-    const rewrite = (id: string) => fromRun(id, "t1", { createdBy: "agent", intent: { type: "rewrite", item: ref("A-1"), title: null, body: { from: { blocks: [] }, to: { blocks: [] }, fromText: "", toText: "x" }, flattened: [] } });
-    const [triage, plan] = [rewrite("1"), rewrite("2")];
-    const isTriage = (p: Proposal) => p.id === "1";
-    expect(supersession(triage, plan, () => false, isTriage).type).toBe("unrelated");
-    expect(supersession(plan, triage, () => false, isTriage).type).toBe("unrelated");
-    expect(supersession(triage, rewrite("3"), () => false, (p) => p.id !== "2").type).toBe("supersede");
   });
 });
 
@@ -184,4 +130,3 @@ describe("draftExcerpt with an edit", () => {
     expect(draftExcerpt(comment, 40, { body: { text: "Edited" } })).toBe("Edited");
   });
 });
-

@@ -1,5 +1,5 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
-import { askPip, homeConversation, homeConversationRegion, mockRuns, openAgents, openApp, openPip, peekSheet, peekTicket, PIP_INPUT, pipIdle, pipPane, reviewedDraft, selectWorkstream, startWorkstream, stepRail } from "./support/app";
+import { askPip, homeConversation, homeConversationRegion, keepComments, mockRuns, openAgents, openApp, openPip, peekSheet, peekTicket, PIP_INPUT, pipIdle, pipPane, reviewedDraft, selectWorkstream, startWorkstream, stepRail } from "./support/app";
 
 // The UX polish pass: what the person reads (no ids, tools or machinery words), where things sit (nothing covers
 // anything), draft action bars, and how a new workstream opens.
@@ -19,9 +19,9 @@ test.describe("hidden machinery", () => {
     await expect(comment).toHaveCount(1);
     const draftId = await comment.evaluate((el) => el.closest("[data-draft]")?.getAttribute("data-draft") ?? el.getAttribute("data-draft"));
 
-    await comment.getByRole("button", { name: "Discuss with Pip" }).click();
+    await comment.getByRole("button", { name: "Ask Pip" }).click();
     await expect(pipPane(page)).toBeVisible();
-    await expect(lastBubble(page)).toHaveText("Discuss this draft");
+    await expect(lastBubble(page)).toHaveText("Ask Pip about this draft");
     await settled(page);
 
     const text = await pipPane(page).innerText();
@@ -39,11 +39,11 @@ test.describe("hidden machinery", () => {
     const draftId = await comment.getAttribute("data-draft");
     // The comment card names its run; that name opens the run's sheet.
     await comment.locator("[data-provenance=run]").getByRole("button", { name: "the CA-402 review" }).click();
-    const sheet = page.getByRole("dialog").filter({ has: page.getByRole("button", { name: "Discuss with Pip" }) });
+    const sheet = page.getByRole("dialog", { name: "Agent run" });
     await expect(sheet).toHaveCount(1);
-    await sheet.getByRole("button", { name: "Discuss with Pip" }).click();
+    await sheet.getByRole("button", { name: "Ask Pip" }).click();
     await expect(pipPane(page)).toBeVisible();
-    await expect(lastBubble(page)).toHaveText("Discuss this draft");
+    await expect(lastBubble(page)).toHaveText("Ask Pip about this report");
     await settled(page);
     const text = await pipPane(page).innerText();
     expect(text).not.toMatch(TOOL_NAME);
@@ -307,7 +307,7 @@ test.describe("draft action bar", () => {
     await openApp(page);
     await peekTicket(page, "CA-401");
     const card = peekSheet(page).getByRole("article", { name: "Update the description of CA-401" });
-    const bar = barOf(card, "Update description");
+    const bar = barOf(card, "Approve");
     await expect(bar).toBeVisible();
     const view = await box(scroller(page));
     const c = await box(card);
@@ -325,18 +325,19 @@ test.describe("draft action bar", () => {
     await expectSolid(bar);
   });
 
-  test("the GitHub review's Post review bar and the comment draft's Post comment bar sit flush with their cards' bottoms", async ({ page }) => {
+  test("the GitHub review's Approve bar and the comment draft's Approve bar sit flush with their cards' bottoms", async ({ page }) => {
     const review = await reviewedDraft(page);
-    await expectFlushAtEnd(page, review, barOf(review, /^Post review/));
+    await expectFlushAtEnd(page, review, barOf(review, "Approve"));
 
     // The review run's own comment draft, and one Pip writes: each is a short card.
     const comments = peekSheet(page).getByRole("article", { name: "Comment on CA-402" });
     const before = await comments.count();
     await openPip(page);
+    if (before > 0) await keepComments(page);
     await askPip(page, "Draft a comment");
     await expect(comments).toHaveCount(before + 1);
     await expect(pipPane(page).getByRole("button", { name: "Stop" })).toHaveCount(0);
-    for (let i = 0; i <= before; i++) await expectFlushAtEnd(page, comments.nth(i), barOf(comments.nth(i), "Post comment"));
+    for (let i = 0; i <= before; i++) await expectFlushAtEnd(page, comments.nth(i), barOf(comments.nth(i), "Approve"));
   });
 
   test("a keyboard-focused draft card in the Pip pane shows its whole focus ring", async ({ page }) => {
@@ -344,6 +345,7 @@ test.describe("draft action bar", () => {
     await peekTicket(page, "CA-401");
     await openPip(page);
     for (let i = 0; i < 3; i++) {
+      if (i > 0) await keepComments(page);
       await askPip(page, "Draft a comment");
       await expect(pipPane(page).getByRole("article", { name: "Comment on CA-401" })).toHaveCount(i + 1);
       await expect(pipPane(page).getByRole("button", { name: "Stop" })).toHaveCount(0);

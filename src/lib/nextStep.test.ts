@@ -29,7 +29,6 @@ interface Over {
   pausedReason?: PauseReason | null;
   stage?: WorkstreamStage;
   waitingForPr?: string | null;
-  reviewBlocking?: boolean;
   closedAt?: string | null;
 }
 
@@ -52,7 +51,6 @@ const view = (runs: Run[], over: Over = {}): WorkstreamView => ({
   runs: runs.map((r) => r.id),
   labels: runs.map((r, n) => [r.id, `R${n + 1}`]),
   waitingForPr: over.waitingForPr ?? null,
-  reviewBlocking: over.reviewBlocking ?? false,
 });
 
 const needsOf = (v: WorkstreamView, runs: Run[], proposals: Proposal[] = []): Need[] => buildNeeds({ workstreams: [v], runs, proposals, dismissed: new Set() });

@@ -21,13 +21,10 @@ use crate::tracker::{self, Connection, Move, Registry, WorkTracker};
 
 pub(crate) mod code;
 mod drafts;
-mod run_results;
+mod run_outcome;
 mod pip_runs;
 mod pip_turns;
-mod plan_description;
-mod triage_description;
 mod report;
-mod review_drafts;
 mod rewrites;
 mod ticket_context;
 mod workstreams;
@@ -41,8 +38,7 @@ mod watch;
 
 pub use code::{CodeRef, CodeService};
 pub use drafts::Edit;
-pub use plan_description::PlanDescription;
-pub use run_results::{PlanComment, RunOutcome, SUMMARY_ONLY};
+pub use run_outcome::{RunOutcome, SUMMARY_ONLY};
 pub use watch::{CatalogPage, WatchState};
 
 /// Events this old drop out of the inbox unless they are still unread.

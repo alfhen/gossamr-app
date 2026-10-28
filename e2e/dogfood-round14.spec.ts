@@ -51,7 +51,7 @@ test.describe("approving from the list, the last need and the pause (G1, G6, G8)
   test("posting the only need from the pane says what was posted", async ({ page }) => {
     test.setTimeout(120_000);
     const draft = await commentDraft(page);
-    await draft.getByRole("button", { name: "Post comment" }).click();
+    await draft.getByRole("button", { name: "Approve" }).click();
     await expectToast(page, "Posted to Jira: Draft comment: “Checking in on this one. Is…” on CA-408.");
   });
 
@@ -62,7 +62,7 @@ test.describe("approving from the list, the last need and the pause (G1, G6, G8)
     const text = needsPane(page).locator("textarea").first();
     await text.fill(`${await text.inputValue()}\n\nPassword: hunter2`);
     await draft.getByRole("button", { name: "Done editing" }).click();
-    await draft.getByRole("button", { name: "Post comment" }).click();
+    await draft.getByRole("button", { name: "Approve" }).click();
     const pause = draft.locator("[data-post-pause]");
     await expect(pause.getByRole("button", { name: "Keep editing" })).toBeFocused();
     await page.keyboard.press("Escape");

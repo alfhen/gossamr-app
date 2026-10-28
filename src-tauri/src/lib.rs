@@ -815,45 +815,7 @@ async fn runs_outcome(core: State<'_, CoreState>, runs: State<'_, RunsState>, id
     core.run_outcome(&id).await
 }
 
-/// Drafts a comment from a finished run's `For Jira:` part. A draft only: the person edits and approves it.
-#[tauri::command]
-async fn runs_draft_comment(app: AppHandle, core: State<'_, CoreState>, id: String) -> Result<Proposal> {
-    let made = core.draft_run_comment(&id).await?;
-    proposals_changed(&app, &Connection::jira_id(&core.scope().await?));
-    Ok(made)
-}
 
-/// Drafts the whole plan of a finished Plan run as a comment on its ticket. A draft only: the person edits and approves it.
-#[tauri::command]
-async fn runs_draft_plan_comment(app: AppHandle, core: State<'_, CoreState>, id: String) -> Result<inbox::PlanComment> {
-    let made = core.draft_run_plan_comment(&id).await?;
-    proposals_changed(&app, &Connection::jira_id(&core.scope().await?));
-    Ok(made)
-}
-
-/// Drafts the ticket's description with the plan of a finished Plan run added. A draft only: the person reads the diff and approves it.
-#[tauri::command]
-async fn runs_draft_plan_description(app: AppHandle, core: State<'_, CoreState>, id: String) -> Result<Proposal> {
-    let made = core.draft_run_plan_description(&id).await?;
-    proposals_changed(&app, &Connection::jira_id(&core.scope().await?));
-    Ok(made)
-}
-
-/// Drafts a new ticket from a finished run that has no ticket. A draft only: the person edits and approves it.
-#[tauri::command]
-async fn runs_draft_ticket(app: AppHandle, core: State<'_, CoreState>, id: String) -> Result<Proposal> {
-    let made = core.draft_run_ticket(&id).await?;
-    proposals_changed(&app, &Connection::jira_id(&core.scope().await?));
-    Ok(made)
-}
-
-/// Drafts a link saying the run's ticket is blocked by `blocker_key`. A draft only.
-#[tauri::command]
-async fn runs_draft_blocker(app: AppHandle, core: State<'_, CoreState>, id: String, blocker_key: String) -> Result<Proposal> {
-    let made = core.draft_run_blocker(&id, &blocker_key).await?;
-    proposals_changed(&app, &Connection::jira_id(&core.scope().await?));
-    Ok(made)
-}
 
 #[tauri::command]
 async fn runs_list(core: State<'_, CoreState>, query: Option<RunQuery>) -> Result<Vec<Run>> {
@@ -1054,7 +1016,6 @@ pub fn run() {
 
             let config = config::AppConfig::load(&core.data_dir());
             let runs_handle = app.handle().clone();
-            let drafted_handle = app.handle().clone();
             let open_on_focus = Arc::new(runs::tracker::OpenOnFocus::default());
             app.manage(open_on_focus.clone());
             let bound = tauri::async_runtime::block_on(agent::mcp::bind(runs::agent_config::config_dir(&core.data_dir())))?;
@@ -1075,7 +1036,6 @@ pub fn run() {
                     Arc::new(move |connection_id| runs_changed(&runs_handle, connection_id)),
                 )
                 .with_notifier(Arc::new(agent::supervisor::FanoutNotifier(vec![notices, supervisor.clone()])))
-                .with_drafted(Arc::new(move |connection_id| proposals_changed(&drafted_handle, connection_id)))
                 .with_settings(config.agents)
                 .with_agent_channel(bound.channel());
             let service = Arc::new(service);
@@ -1184,11 +1144,6 @@ pub fn run() {
             runs_keep_running,
             runs_list,
             runs_outcome,
-            runs_draft_comment,
-            runs_draft_blocker,
-            runs_draft_plan_comment,
-            runs_draft_plan_description,
-            runs_draft_ticket,
             runs_get,
             workstreams_open,
             workstreams_get,

@@ -1,18 +1,11 @@
 import { docFromText, docText, quoteAfterFirst } from "../lib/docs";
 import { canJoinWorkstream, withWorkstream } from "../lib/workstreamAdopt";
-import { capRefusal, isRunComment, isRunReview, leftByRun, offTheDiff, PLAN_IS_THE_USERS, REPLACED_REASON, REVIEW_CHANGED, REVIEW_IS_THE_USERS, REVIEW_MAYBE_POSTED_NOTE, REVIEW_NOT_FOUND_NOTE, REVIEW_OUTDATED_NOTE, reviewEditProblem, reviewSupersession, runCommentSupersession, supersession, targetOf, WORKSTREAM_PENDING_CAP, workstreamOf } from "../lib/proposals";
+import { leftByRun, offTheDiff, REPLACED_REASON, REVIEW_CHANGED, REVIEW_IS_THE_USERS, REVIEW_MAYBE_POSTED_NOTE, REVIEW_NOT_FOUND_NOTE, REVIEW_OUTDATED_NOTE, reviewEditProblem, supersession, targetOf, workstreamOf } from "../lib/proposals";
 import { commentable } from "../lib/diffHunks";
 import { bodyChange, markdownOf } from "./mockMarkdown";
-import { planSectionOf } from "./mockPlanSection";
-import { isTriageDescription, triageSectionOf, withoutTriageSection } from "./mockTriageSection";
 import { readStored, writeStored } from "../workspace/storage";
 import { AnswerLostError, ReviewOutdatedError } from "./mockGithub";
 import type { ChangedFile, Intent, ItemRef, MaybePosted, PostedReview, Proposal, ProposalEdit, ProposalOrigin, ProposalQuery, ProposalsChanged, ReviewComment, WorkItemKind, WorkstreamActor } from "../types";
-
-/** A description update carrying a `Gossamr Plan` section that an agent run left: the plan a build follows once the person approves it. As `is_run_plan_rewrite` in `proposals.rs`. */
-const TRIAGE_KEEPS_THE_REST = "a Triage description draft can change only its Triage section; the rest of the description, the Gossamr Plan included, stays as it is";
-
-export const isRunPlanRewrite = (p: Proposal) => p.origin.type === "run" && p.intent.type === "rewrite" && !!p.intent.body && !!planSectionOf(p.intent.body.to) && !isTriageDescription(p);
 
 /** Pip changed the draft's text and the person never edited it after. As `revised_by_pip_unedited` in `proposals.rs`. */
 export const revisedByPipUnedited = (p: Proposal) => p.revisions.some((r) => r.note === "Revised by Pip") && !p.revisions.some((r) => r.note === "Edited");
@@ -98,7 +91,7 @@ export class MockProposals {
       if (!intent.fields.title.trim()) return Promise.reject(new Error("a new item needs a title"));
       if (intent.container.connectionId !== CONNECTION) return Promise.reject(new Error("that item belongs to another connection"));
     } else if (intent.type === "startRun" || intent.type === "followUp" || intent.type === "runAnswer") return Promise.reject(new Error(AGENTS_DIRECT));
-    else if (intent.type === "githubReview") return Promise.reject(new Error("a review draft is made from a review run's findings"));
+    else if (intent.type === "githubReview") return Promise.reject(new Error("ask Pip to draft a GitHub review with the reviewed commit"));
     else if (!targetOf(intent)) return Promise.reject(new Error("a draft made by hand has to be about an existing item"));
     if (intent.type === "transition" && !intent.to.trim()) return Promise.reject(new Error("a transition needs a target status"));
     const problem = intent.type === "rewrite" ? rewriteProblem(intent) : null;
@@ -140,39 +133,15 @@ export class MockProposals {
     return p;
   }
 
-  /**
-   * The older drafts `p` replaces in its workstream, and the ones it leaves standing with why; throws when it would
-   * replace one the person owns, or when Pip already has the workstream's share waiting. A review an agent run left is
-   * tidied by its pull request instead, in any workstream or none (`tidy_reviews`), and a comment one left by its ticket in its workstream (`tidy_run_comments`). As `tidy` in `proposals.rs`.
-   */
-  private tidy(p: Proposal): { replaced: Proposal[]; kept: { proposal: Proposal; why: string }[] } {
-    const byTicket = p.createdBy === "agent" && isRunComment(p);
-    if (isRunReview(p) || byTicket) {
-      const replaced: Proposal[] = [];
-      const kept: { proposal: Proposal; why: string }[] = [];
-      for (const older of this.drafts.filter((d) => d.state.type === "pending")) {
-        const verdict = byTicket ? runCommentSupersession(older, p, this.runRole) : reviewSupersession(older, p);
-        if (verdict === "supersede") replaced.push(older);
-        else if (verdict) kept.push({ proposal: older, why: verdict });
-      }
-      return { replaced, kept };
-    }
-    return { replaced: this.tidyWorkstream(p), kept: [] };
-  }
-
-  private tidyWorkstream(p: Proposal): Proposal[] {
-    const ws = workstreamOf(p);
-    if (!ws || (p.createdBy === "user" && p.origin.type !== "run")) return [];
-    const open = this.drafts.filter((d) => (d.state.type === "pending" || d.state.type === "applying") && workstreamOf(d) === ws);
+  private tidy(proposal: Proposal): { replaced: Proposal[]; kept: { proposal: Proposal; why: string }[] } {
     const replaced: Proposal[] = [];
-    for (const older of open) {
-      const verdict = supersession(older, p, isRunPlanRewrite, isTriageDescription);
-      if (verdict.type === "refuse") throw new Error(verdict.reason);
+    const kept: { proposal: Proposal; why: string }[] = [];
+    for (const older of this.drafts) {
+      const verdict = supersession(older, proposal);
       if (verdict.type === "supersede") replaced.push(older);
+      else if (verdict.type === "alongside") kept.push({ proposal: older, why: verdict.reason });
     }
-    // What a run reported is never refused; Pip is told to settle what is waiting first.
-    if (p.createdBy === "pip" && open.length - replaced.length >= WORKSTREAM_PENDING_CAP) throw new Error(capRefusal(ws));
-    return replaced;
+    return { replaced, kept };
   }
 
   /** Once one move of a ticket is approved, the other pending moves of it drafted before then are retired, whoever made them. As `retire_moved_siblings` in `proposals.rs`. */
@@ -250,6 +219,15 @@ export class MockProposals {
     this.drafts = [...before.reverse().map((p) => ({ ...p, id: `mock-${++this.seq}` })).reverse(), ...this.drafts];
     this.kept = { key, which };
     this.changed();
+  }
+
+  /**
+   * Records that the person edited pending draft `id`, without changing what it would post. A newer draft of the same
+   * kind then stays beside it, which is the rule `supersession` applies to an `Edited` revision.
+   */
+  noteEdited(id: string): Proposal {
+    const p = this.pending(id);
+    return this.edited(p, p.intent);
   }
 
   /** The person's change to a draft, kept as an `Edited` revision as the backend keeps every edit. */
@@ -346,8 +324,6 @@ export class MockProposals {
     }
     if (p.intent.type === "rewrite") {
       if (p.revisions.some((r) => r.note === "Edited")) throw new Error("the user edited this description draft, so Pip can't change it any more");
-      // A build follows the plan the person approves here and is told a person settled it, so none of it may be Pip's.
-      if (leftByRun(p) && isRunPlanRewrite(p)) throw new Error(PLAN_IS_THE_USERS);
       if (p.createdBy !== "pip" && !leftByRun(p)) throw new Error("that draft wasn't made by Pip or from an agent run's result, so Pip can't change it");
       ownWorkstream();
       const was = p.intent;
@@ -357,10 +333,6 @@ export class MockProposals {
         title: was.title && title !== undefined ? { ...was.title, to: title.split(/\s+/).filter(Boolean).join(" ") } : was.title,
         body: was.body && description !== undefined ? bodyChange(was.body.from, description.trim()) : was.body,
       };
-      // As `edit_noted`: a revision of a Triage description draft keeps its Triage section and leaves the rest, the plan included, as it was.
-      const now = (intent as Extract<Intent, { type: "rewrite" }>).body;
-      const rest = (b: typeof was.body) => (b ? markdownOf(withoutTriageSection(b.to)) : null);
-      if (isTriageDescription(p) && (!now || !triageSectionOf(now.to) || rest(was.body) !== rest(now))) throw new Error(TRIAGE_KEEPS_THE_REST);
       const problem = rewriteProblem(intent as Extract<Intent, { type: "rewrite" }>);
       if (problem) throw new Error(problem);
       return this.set(id, { intent, revisions: [...p.revisions, { at: new Date().toISOString(), note: "Revised by Pip", intent }], error: null });
@@ -400,8 +372,8 @@ export class MockProposals {
 
   /**
    * The person's Undo of a skip, as `unskip` in `proposals.rs`: a draft skipped within `UNSKIP_WINDOW_MS` is pending again,
-   * as it was; a pending one is returned as it is, and any other state or an older skip is refused. Its workstream's audit
-   * gets an `undone` line of its own after the skip's.
+   * as it was, and a later unedited draft of the same kind and target is retired. A pending one is returned as it is, and
+   * any other state or an older skip is refused. Its workstream's audit gets an `undone` line of its own after the skip's.
    */
   async unskip(id: string) {
     const p = this.get(id);
@@ -410,8 +382,13 @@ export class MockProposals {
     if (p.state.type !== "skipped") throw new Error("only a skipped draft can be brought back");
     if (Date.now() - Date.parse(p.updatedAt) > UNSKIP_WINDOW_MS) throw new Error("that draft was skipped too long ago to bring back");
     const back = this.set(id, { state: { type: "pending" } });
+    const { replaced, kept } = this.tidy(back);
+    this.drafts = this.drafts.map((d) => (replaced.includes(d) ? { ...d, state: { type: "retired" as const, reason: REPLACED_REASON }, supersededBy: back.id, updatedAt: back.updatedAt } : d));
     this.audit(back, "person", "undone", "draft_skipped");
-    return back;
+    const beside = (old: Proposal, action: string) => this.audit(old, "person", action, back.id, workstreamOf(old) ? undefined : workstreamOf(back));
+    for (const old of replaced) beside(this.get(old.id)!, "draft_superseded");
+    for (const { proposal, why } of kept) beside(proposal, why);
+    return this.get(id)!;
   }
 
   /**

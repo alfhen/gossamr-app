@@ -34,7 +34,7 @@ test("G20: when the pane moves on by itself it says so for a few seconds, and th
   await pauseAtCeiling(page, "CA-401");
   await expect(needsStack(page)).toContainText("Paused: Pip was woken too often today");
   const pane = needsPane(page);
-  await pane.getByRole("button", { name: "Post comment" }).click();
+  await pane.getByRole("button", { name: "Approve" }).click();
   await expect(pane).toHaveAttribute("data-kind", "paused");
   const line = page.locator("[data-needs-advanced]");
   await expect(line).toHaveText(/^Posted to Jira: Draft comment: “[^”]+” on CA-401\. Now: CA-401 · Paused: Pip was woken too often today$/);

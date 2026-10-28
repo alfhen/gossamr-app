@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { askPip, openApp, openPip, PIP_INPUT, pipPane } from "./support/app";
+import { askPip, keepComments, openApp, openPip, PIP_INPUT, pipPane } from "./support/app";
 
 // The comment the sample Pip drafts when asked for one on the open ticket (scriptPip in src/backend/mockPip.ts).
 const NUDGE = "Checking in on this one. Is it still on track, or does anything need to move?";
@@ -19,6 +19,7 @@ async function onCa401(page: Page) {
 /** Asks the sample Pip for a comment on the open ticket and waits for the new draft card. */
 async function askForComment(page: Page) {
   const before = await card(page, "Comment on CA-401").count();
+  if (before > 0) await keepComments(page);
   await askPip(page, "Draft a comment");
   await expect(card(page, "Comment on CA-401")).toHaveCount(before + 1);
   await expect(pipPane(page).getByRole("button", { name: "Stop" })).toHaveCount(0);

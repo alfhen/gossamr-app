@@ -1,8 +1,7 @@
 import { describe, expect, it } from "vitest";
-import type { Intent, ItemRef, Run, RunSpec } from "../types";
+import type { ItemRef, Run, RunSpec } from "../types";
 import { MockBackend } from "./mock";
 import { itemRef } from "./mockConnector";
-import { commentText, jiraNote } from "./mockRunResult";
 import { MockWorkstreams } from "./mockWorkstreams";
 import { AGENT_GUARD, GUARD as GUARD_TEXT, mockDigest, renderPrompt } from "./mockRuns";
 
@@ -279,110 +278,6 @@ describe("mock runs with every role", () => {
     expect(refusal(backend, review(190), itemRef("CA-402"))).toContain("is closed");
     expect(refusal(backend, review(999), itemRef("CA-402"))).toContain("wasn't found");
     expect(prepared(backend, review(212), itemRef("CA-402"))).toMatchObject({ pr: 212, prSha: "sha2120000", base: "main" });
-  });
-
-  it("leaves one GitHub review draft when a review finishes, with inline comments at the lines the diff shows, and the next round's replaces it", async () => {
-    const backend = new MockBackend({ githubRepos: 14 });
-    await backend.watchSetMode("github:ada", "everything");
-    const ws = backend.workstreams.open(itemRef("CA-402")).id;
-    let round = 0;
-    const reviewOf218 = async () => {
-      const run = queue(backend, { ...webshop, role: "reviewer", pr: 218, workstream: ws, name: `ca-402-review-${++round}` }, itemRef("CA-402"));
-      for (let i = 0; i < 3; i++) backend.runs.advance(run.id);
-      expect(backend.runs.get(run.id)?.state).toBe("done");
-      return run;
-    };
-    const reviews = () => backend.proposals.list().filter((p) => p.intent.type === "githubReview");
-    const first = await reviewOf218();
-    expect(reviews()).toHaveLength(1);
-    const [draft] = reviews();
-    const intent = draft.intent as Extract<Intent, { type: "githubReview" }>;
-    expect(intent).toMatchObject({ connectionId: "github:ada", item: itemRef("CA-402"), runId: first.id, repo: "acme/webshop", number: 218, commitSha: "a1b2c3d4e5f6" });
-    expect(intent.comments.map((c) => `${c.path}:${c.line}:${c.side}`)).toEqual(["src/consumer/retry.ts:42:RIGHT", "src/consumer/retry.ts:17:RIGHT"]);
-    expect(intent.summary).toContain("Findings without a line in the diff:\n- **Should fix:** no test covers the timeout path. (src/consumer/retry.test.ts)");
-    expect(draft).toMatchObject({ createdBy: "agent", state: { type: "pending" }, origin: { type: "run", runId: first.id, workstream: ws } });
-    // The Jira comment draft from the same review is still made, and nothing was written anywhere.
-    expect(backend.proposals.list().some((p) => p.intent.type === "comment" && p.origin.type === "run" && p.origin.runId === first.id)).toBe(true);
-    expect(backend.proposals.writes).toEqual([]);
-    await expect(backend.proposalsApprove(draft.id)).rejects.toThrow("A review is posted to GitHub with its own button");
-    expect(backend.proposals.writes).toEqual([]);
-
-    const second = await reviewOf218();
-    const after = reviews();
-    expect(after.map((p) => [(p.intent as { runId: string }).runId, p.state.type])).toEqual([
-      [second.id, "pending"],
-      [first.id, "retired"],
-    ]);
-    expect(after[1].supersededBy).toBe(after[0].id);
-  });
-
-  it("leaves one pending comment draft when a second run finishes with the same note for the ticket", async () => {
-    const backend = new MockBackend();
-    const finish = async (n: string) => {
-      const run = queue(backend, { ...storefront, role: "investigator", name: `ca-401-${n}-0001` }, itemRef("CA-401"));
-      for (let i = 0; i < 3; i++) backend.runs.advance(run.id);
-      expect(backend.runs.get(run.id)?.state).toBe("done");
-      return run;
-    };
-    const comments = () => backend.proposals.list().filter((p) => p.intent.type === "comment" && p.state.type === "pending");
-    const first = await finish("one");
-    expect(comments()).toHaveLength(1);
-    await finish("two");
-    expect(comments().map((p) => p.origin.type === "run" && p.origin.runId)).toEqual([first.id]);
-    // Once it is decided, the next run's comment is drafted again.
-    await backend.proposalsSkip(comments()[0].id);
-    await finish("three");
-    expect(comments()).toHaveLength(1);
-  });
-
-  it("replaces a pending comment draft a reworded one from a later round of the same role supersedes, never an edited one, another ticket's or another role's", async () => {
-    const backend = new MockBackend({ githubRepos: 14 });
-    await backend.watchSetMode("github:ada", "everything");
-    let n = 0;
-    const finish = async (key: string, ws: string, kind: "investigator" | "reviewer", reworded = false) => {
-      const over = kind === "reviewer" ? { ...webshop, pr: 218 } : storefront;
-      const run = queue(backend, { ...over, role: kind, workstream: ws, name: `${key.toLowerCase()}-${kind}-${++n}` }, itemRef(key));
-      if (reworded) backend.runs.scriptNext("review", { verdict: "pass" });
-      for (let i = 0; i < 3; i++) backend.runs.advance(run.id);
-      expect(backend.runs.get(run.id)?.state).toBe("done");
-      return run;
-    };
-    const comment = (runId: string) => backend.proposals.list().find((p) => p.intent.type === "comment" && p.origin.type === "run" && p.origin.runId === runId)!;
-    const stateOf = (id: string) => backend.proposals.get(id)?.state.type;
-    const ws = backend.workstreams.open(itemRef("CA-402")).id;
-    const elsewhere = backend.workstreams.open(itemRef("CA-403")).id;
-    const investigation = comment((await finish("CA-402", ws, "investigator")).id);
-    const first = comment((await finish("CA-402", ws, "reviewer")).id);
-    const other = comment((await finish("CA-403", elsewhere, "reviewer")).id);
-    // Another role's comment on the same ticket is something else the person has not read: both wait.
-    expect([stateOf(investigation.id), stateOf(first.id), stateOf(other.id)]).toEqual(["pending", "pending", "pending"]);
-    // The same words are not drafted again.
-    await finish("CA-402", ws, "reviewer");
-    expect(backend.proposals.list({ states: ["pending"] }).filter((p) => p.intent.type === "comment" && p.intent.item.key === "CA-402").map((p) => p.id)).toEqual([first.id, investigation.id]);
-    // A reworded comment of the same role replaces the older, which is retired in favour of the newer.
-    const second = comment((await finish("CA-402", ws, "reviewer", true)).id);
-    expect(second.id).not.toBe(first.id);
-    expect(backend.proposals.get(first.id)).toMatchObject({ state: { type: "retired", reason: "Replaced by a newer draft" }, supersededBy: second.id });
-    expect([stateOf(investigation.id), stateOf(other.id), stateOf(second.id)]).toEqual(["pending", "pending", "pending"]);
-    expect(backend.workstreams.events(ws).map((e) => e.action)).toContain("draft_superseded");
-    // The person's edit is theirs; the newer draft waits beside it.
-    await backend.proposalsEdit(second.id, { type: "comment", body: "My own words.", mentions: [] });
-    const third = comment((await finish("CA-402", ws, "reviewer")).id);
-    expect(third.id).not.toBe(second.id);
-    expect([stateOf(second.id), stateOf(third.id)]).toEqual(["pending", "pending"]);
-    expect(backend.workstreams.events(ws).map((e) => e.action)).toContain("draft_kept_edited");
-  });
-
-  it("leaves the GitHub review draft of a finished review with drafting on finish off, and no Jira draft", async () => {
-    const backend = new MockBackend({ githubRepos: 14 });
-    await backend.watchSetMode("github:ada", "everything");
-    await backend.runsSetSettings({ ...(await backend.runsSettings()), draftOnFinish: false });
-    const run = queue(backend, { ...webshop, role: "reviewer", pr: 218 }, itemRef("CA-402"));
-    for (let i = 0; i < 3; i++) backend.runs.advance(run.id);
-    expect(backend.runs.get(run.id)?.state).toBe("done");
-    const fromRun = backend.proposals.list().filter((p) => p.origin.type === "run" && p.origin.runId === run.id);
-    expect(fromRun.map((p) => p.intent.type)).toEqual(["githubReview"]);
-    expect(backend.proposals.writes).toEqual([]);
   });
 
 });
@@ -675,23 +570,16 @@ describe("the base brief around Pip's, as render_prompt", () => {
 
 // The sample's workstreams, as the backend holds them: what this file's runs make of a workstream's stage.
 describe("the sample's workstreams, reviewed", () => {
-  it("gives the stage from each finished review's verdict: blocking is review with changes needed, a pass is done", () => {
+  it("stays on Review after a review finishes", () => {
     const at = (n: number) => new Date(Date.UTC(2026, 8, 30, 10, n)).toISOString();
     const runs: Run[] = [];
     const store = new MockWorkstreams(() => runs, () => "title");
     const ws = store.open(null, "reviewed");
     const reviewRun = (id: string, n: number) => ({ id, state: "done", queuedAt: at(n), spec: { role: "review", workstream: ws.id } }) as Run;
-    const verdicts: Record<string, "pass" | "blocking"> = { r1: "blocking" };
-    store.verdictOf = (r) => verdicts[r.id] ?? null;
     runs.push(reviewRun("r1", 1));
-    expect(store.get(ws.id)).toMatchObject({ stage: "review", reviewBlocking: true });
-    runs.push(reviewRun("r2", 2));
-    verdicts.r2 = "pass";
-    expect(store.get(ws.id)?.stage).toBe("done");
-    expect(store.get(ws.id)?.reviewBlocking).toBeUndefined();
-    delete verdicts.r2;
     expect(store.get(ws.id)).toMatchObject({ stage: "review" });
-    expect(store.get(ws.id)?.reviewBlocking).toBeUndefined();
+    runs.push(reviewRun("r2", 2));
+    expect(store.get(ws.id)?.stage).toBe("review");
   });
 
 });
@@ -709,28 +597,5 @@ describe("a run asking permission", () => {
     expect(b.runs.get(run.id)).toEqual(asking);
     expect(b.runs.attached).toEqual([]);
     expect(() => b.runs.messageAgent(run.id, "Go on.")).toThrow(/permission prompt/);
-  });
-});
-
-describe("the comment drafted from a run opens by saying what the agent did, as intro in inbox/run_results.rs", () => {
-  it("says a triage was triaged, and keeps the fallback for a kind with no arm of its own", () => {
-    const note = jiraNote("For Jira:\nSmall change.");
-    expect(commentText(note, null, "triage")).toMatch(/^Triaged with an agent\.\n\n/);
-    expect(commentText(note, null, "plan")).toMatch(/^Planned with an agent\./);
-    expect(commentText(note, null, "review")).toMatch(/^Reviewed with an agent\./);
-    expect(commentText(note, null, "verify")).toMatch(/^Worked on with an agent\./);
-  });
-
-  it("names the pull request a review read, unless the note does, as comment_text does (G3)", () => {
-    const note = jiraNote("For Jira:\nTwo findings.");
-    expect(commentText(note, null, "review", false, false, 7)).toBe("Reviewed with an agent.\n\nTwo findings.\n\nPull request #7");
-    // With the run's repository known, the line carries the pull request's page rather than a bare number (G11).
-    expect(commentText(note, null, "review", false, false, 7, "acme/storefront")).toBe("Reviewed with an agent.\n\nTwo findings.\n\nPull request: https://github.com/acme/storefront/pull/7");
-    expect(commentText(note, null, "review", false, false, 7, "not a repo")).toContain("Pull request #7");
-    expect(commentText(jiraNote("For Jira:\nFine in #7."), null, "review", false, false, 7, "acme/storefront")).not.toContain("Pull request");
-    expect(commentText(jiraNote("For Jira:\nFine in #7."), null, "review", false, false, 7)).not.toContain("Pull request #7");
-    expect(commentText(jiraNote("For Jira:\nFollows #70."), null, "review", false, false, 7)).toContain("Pull request #7");
-    expect(commentText(note, null, "review")).not.toContain("Pull request");
-    expect(commentText(note, null, "investigate", false, false, 7)).not.toContain("Pull request");
   });
 });

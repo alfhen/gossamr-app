@@ -12,7 +12,7 @@ async function discuss(page: Page, review: Locator) {
   await review.getByRole("button", { name: "Discuss with Pip" }).click();
   await expect(pipPane(page)).toBeVisible();
   await expect(pipPane(page)).toContainText("I read the review of acme/webshop#218 in full, with the diff around each comment");
-  await expect(pipPane(page).locator('[data-turn-kind="user"]').last()).toContainText("Discuss this review");
+  await expect(pipPane(page).locator('[data-turn-kind="user"]').last()).toContainText("Ask Pip about this draft");
   await settled(page);
 }
 
@@ -41,7 +41,7 @@ test("Pip softens and drops review comments only in the draft, and posting sends
   await expect(review.locator(`[data-review-comment="${AT_42}"]`)).toHaveCount(1);
   expect(await githubWrites(page)).toEqual([]);
 
-  await review.getByRole("button", { name: "Post review" }).click();
+  await review.getByRole("button", { name: "Approve" }).click();
   await expect.poll(async () => (await githubWrites(page)).length).toBe(1);
   const [write] = await githubWrites(page);
   expect(write).toMatchObject({ repo: "acme/webshop", number: 218, event: "COMMENT", commitId: "a1b2c3d4e5f6" });
@@ -82,7 +82,7 @@ test("Pip revising a draft the person is editing keeps their unsaved words on th
   await expect(review.getByRole("button", { name: "Discuss with Pip" })).toBeEnabled();
   expect(await githubWrites(page)).toEqual([]);
 
-  await review.getByRole("button", { name: "Post review" }).click();
+  await review.getByRole("button", { name: "Approve" }).click();
   await expect.poll(async () => (await githubWrites(page)).length).toBe(1);
   const [write] = await githubWrites(page);
   expect(write.comments.map((c) => [`${c.path}:${c.line}`, c.body])).toEqual([[AT_17, "My own words about MAX."]]);

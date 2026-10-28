@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { closeWorkstreamSheet, advanceRuns, askPip, expandNeedsYou, expectToast, finishOnHome, githubWrites, homeConversation, homeConversationRegion, homeSettled, jiraWrites, showWorkspace, mockRuns, needsPane, openAgents, openApp, openPip, peekSheet, peekTicket, PIP_INPUT, pipConversation, pipPane, reviewedDraft, scriptNextRun, startAgent, selectWorkstream, startWorkstream, stepChip, surfacePullRequests, wakes, workstreamGroup, openNeedRow, openRunOf, paneSettled as settled } from "./support/app";
+import { closeWorkstreamSheet, advanceRuns, askPip, expandNeedsYou, expectToast, finishOnHome, githubWrites, homeConversation, homeConversationRegion, homeSettled, jiraWrites, keepComments, showWorkspace, mockRuns, needsPane, openAgents, openApp, openPip, peekSheet, peekTicket, PIP_INPUT, pipConversation, pipPane, reviewedDraft, scriptNextRun, startAgent, selectWorkstream, startWorkstream, stepChip, surfacePullRequests, wakes, workstreamGroup, openNeedRow, openRunOf, paneSettled as settled } from "./support/app";
 
 // Pull requests show only when a test says.
 const SAMPLE = "runs=empty&prSurface=manual";
@@ -41,7 +41,7 @@ async function toFinishedReview(page: Page, before: () => Promise<void> = async 
   await page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "All projects" }).click();
   await peekTicket(page, "CA-401");
   const plan = peekSheet(page).getByRole("article", { name: "Update the description of CA-401" }).filter({ hasText: "Gossamr Plan" });
-  await plan.getByRole("button", { name: "Update description" }).click();
+  await plan.getByRole("button", { name: "Approve" }).click();
   await expect(plan).toHaveCount(0);
   await expect(pipConversation(page)).toHaveText(/^Workstream: CA-401 /);
   await runStep(page, "build it", "build");
@@ -72,28 +72,28 @@ async function homeStage(page: Page) {
 }
 
 test.describe("workstream stage (D3, D10, D18)", () => {
-  test("a blocking review reads 'Review · changes needed' on the peek, the pane, the Pip home row and its header, never Done", async ({ page }) => {
+  test("a finished review reads Review on the peek, the pane, the Pip home row and its header", async ({ page }) => {
     test.setTimeout(120_000);
-    // The sample's review blocks by default, and nothing sends the build back: the blocking review is where the workstream stops.
+    // Nothing sends the build back: the review is where the workstream stops.
     await toFinishedReview(page);
     expect((await mockRuns(page)).filter((r) => r.step === "build").map((r) => r.state)).toEqual(["done"]);
-    await expect(await peekStage(page)).toHaveText("Review · changes needed");
-    await expect(pipConversation(page)).toHaveText(/^Workstream: CA-401 .* · Review · changes needed$/);
+    await expect(await peekStage(page)).toHaveText("Review");
+    await expect(pipConversation(page)).toHaveText(/^Workstream: CA-401 .* · Review$/);
     const { row, header } = await homeStage(page);
-    await expect(row.locator("[data-stage]")).toHaveText("Review · changes needed");
+    await expect(row.locator("[data-stage]")).toHaveText("Review");
     await expect(row).not.toContainText("Done");
-    await expect(header).toHaveText(/^Workstream: CA-401 .* · Review · changes needed$/);
+    await expect(header).toHaveText(/^Workstream: CA-401 .* · Review$/);
     expect((await jiraWrites(page)).map((w) => w.type)).toEqual(["rewrite"]);
   });
 
-  test("a passing review reads Done", async ({ page }) => {
+  test("a review whose report says it passes stays on Review", async ({ page }) => {
     test.setTimeout(120_000);
     await toFinishedReview(page, () => scriptNextRun(page, "review", { verdict: "pass" }));
-    await expect(wakes(page).last()).toContainText("passed");
-    await expect(await peekStage(page)).toHaveText("Done");
+    await expect(wakes(page).last()).toContainText("finished");
+    await expect(await peekStage(page)).toHaveText("Review");
     const { row, header } = await homeStage(page);
-    await expect(row.locator("[data-stage]")).toHaveText("Done");
-    await expect(header).toHaveText(/^Workstream: CA-401 .* · Done$/);
+    await expect(row.locator("[data-stage]")).toHaveText("Review");
+    await expect(header).toHaveText(/^Workstream: CA-401 .* · Review$/);
   });
 
 });
@@ -297,6 +297,7 @@ test.describe("draft cards: click, Esc, a and s (D2, D7, D23, D28)", () => {
     await peekTicket(page, "CA-401");
     await openPip(page);
     for (let i = 1; i <= 2; i++) {
+      if (i > 1) await keepComments(page);
       await askPip(page, "Draft a comment");
       await expect(pipPane(page).getByRole("article", { name: "Comment on CA-401" })).toHaveCount(i);
       await settled(page);
@@ -337,6 +338,7 @@ test.describe("draft cards: click, Esc, a and s (D2, D7, D23, D28)", () => {
     await askPip(page, "investigate this");
     await homeSettled(page);
     await finishOnHome(page, (await newest(page, "investigate"))!.id);
+    await keepComments(page);
     await askPip(page, "triage this");
     await homeSettled(page);
     await finishOnHome(page, (await newest(page, "triage"))!.id);
@@ -440,7 +442,7 @@ test.describe("review card (D9, D20, D21, D32)", () => {
     await expect(view).toHaveCount(0);
     await expect(box).toHaveValue(mine);
 
-    await review.getByRole("button", { name: "Post review" }).click();
+    await review.getByRole("button", { name: "Approve" }).click();
     await expect.poll(async () => (await githubWrites(page)).length).toBe(1);
     const [write] = await githubWrites(page);
     expect(write.event).toBe("COMMENT");
@@ -499,7 +501,7 @@ test.describe("Discuss with Pip on a review (D22)", () => {
     const review = await reviewedDraft(page);
     await review.getByRole("button", { name: "Discuss with Pip" }).click();
     const drafts = pipPane(page).getByRole("region", { name: "Drafts" });
-    await expect(pipPane(page).getByText("Discuss this review")).toBeInViewport();
+    await expect(pipPane(page).getByText("Ask Pip about this draft")).toBeInViewport();
     const others = drafts.locator("[data-other-tickets]");
     await expect(others).toHaveText(/^▸ \+\d+ drafts? on other tickets$/);
     await expect(others).toHaveAttribute("aria-expanded", "false");
@@ -531,7 +533,7 @@ test.describe("description diff (D31)", () => {
     await peekTicket(page, "CA-401");
     const first = await planFromPeek(page);
     const update = peekSheet(page).getByRole("article", { name: "Update the description of CA-401" });
-    await update.getByRole("button", { name: "Update description" }).click();
+    await update.getByRole("button", { name: "Approve" }).click();
     await expect(update).toHaveCount(0);
 
     const second = await planFromPeek(page);

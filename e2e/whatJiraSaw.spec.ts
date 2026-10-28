@@ -36,14 +36,14 @@ test.describe("What Jira saw from me", () => {
 
     // CA-408's comment is posted as drafted; CA-409's after the person added a line of their own.
     const first = await draftOn(page, "CA-408");
-    await first.getByRole("button", { name: "Post comment" }).click();
+    await first.getByRole("button", { name: "Approve" }).click();
     await expect.poll(async () => (await jiraWrites(page)).length).toBe(1);
     const second = await draftOn(page, "CA-409");
     await second.getByRole("button", { name: "Edit" }).click();
     const text = needsPane(page).locator("textarea").first();
     await text.fill(`${await text.inputValue()}\n\nThe Black Friday send is next week.`);
     await second.getByRole("button", { name: "Done editing" }).click();
-    await second.getByRole("button", { name: "Post comment" }).click();
+    await second.getByRole("button", { name: "Approve" }).click();
     await expect.poll(async () => (await jiraWrites(page)).length).toBe(2);
 
     await runCommand(page, "what jira saw", "What Jira saw from me");

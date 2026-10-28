@@ -293,8 +293,6 @@ export interface WorkstreamGroup {
   stage: WorkstreamStage | null;
   /** The workstream's build whose pull request hasn't been found yet, if any. */
   waitingForPr?: string | null;
-  /** The workstream's newest finished review asked for changes. */
-  reviewBlocking?: boolean;
   runs: Run[];
   /** Run id to its short name in the workstream (`R1` for the first queued), counted over all its runs so a filter never renumbers them. */
   labels: Record<string, string>;
@@ -324,7 +322,7 @@ export function groupRunsByWorkstream(runs: readonly Run[], workstreams: readonl
     const mine = sortRuns(all.filter((r) => shown.has(r.id)));
     if (!mine.length && !(bareNeeds && needed!.workstreams.has(id))) continue;
     // The view knows each review's verdict; without one (a closed workstream) the runs alone give the stage.
-    const staged = view ? { stage: view.stage, reviewBlocking: view.reviewBlocking ?? false } : { stage: stage(all), reviewBlocking: false };
+    const staged = view ? { stage: view.stage } : { stage: stage(all) };
     groups.push({ id, title: view?.workstream.title ?? `Workstream ${id}`, itemKey: view?.workstream.itemKey ?? null, ...staged, waitingForPr: view?.waitingForPr ?? null, runs: mine, labels: Object.fromEntries(runLabels(all)) });
   }
   const started = new Map<string, string>();
@@ -333,7 +331,7 @@ export function groupRunsByWorkstream(runs: readonly Run[], workstreams: readonl
       const ws = view.workstream;
       if (ws.closedAt !== null || linked.has(ws.id) || (bareNeeds && !needed!.workstreams.has(ws.id))) continue;
       started.set(ws.id, ws.createdAt);
-      groups.push({ id: ws.id, title: ws.title, itemKey: ws.itemKey, stage: view.stage, reviewBlocking: view.reviewBlocking ?? false, waitingForPr: view.waitingForPr ?? null, runs: [], labels: {} });
+      groups.push({ id: ws.id, title: ws.title, itemKey: ws.itemKey, stage: view.stage, waitingForPr: view.waitingForPr ?? null, runs: [], labels: {} });
     }
   }
   const latest = (g: WorkstreamGroup) => (g.runs[0] ? ageSince(g.runs[0]) : (started.get(g.id ?? "") ?? ""));

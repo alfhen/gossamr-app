@@ -35,7 +35,7 @@ test("one review of a pull request waits at a time, except one the person edited
   await expect(second.locator("[data-review-kept-older]")).toHaveText(/^An older review of #\d+ that you edited is still waiting; this one didn't replace it\.$/);
 
   // The person posts their edited one; the next review replaces the second and leaves the posted one as it is.
-  await peekSheet(page).locator(`article[data-draft="${d1.id}"]`).getByRole("button", { name: "Post review" }).click();
+  await peekSheet(page).locator(`article[data-draft="${d1.id}"]`).getByRole("button", { name: "Approve" }).click();
   await expect.poll(async () => (await githubWrites(page)).length).toBe(1);
   const r3 = await reviewAgain(page);
   await expect.poll(async () => (await pendingReviewDrafts(page)).map((d) => d.runId)).toEqual([r3]);

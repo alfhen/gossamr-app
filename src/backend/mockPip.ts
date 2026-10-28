@@ -1,11 +1,10 @@
 import { and } from "../lib/filter";
-import { REVIEW_IS_THE_USERS, WORKSTREAM_PENDING_CAP, capRefusal, isRunDraft, leftByRun, targetOf } from "../lib/proposals";
+import { REVIEW_IS_THE_USERS, isRunDraft, leftByRun, targetOf } from "../lib/proposals";
 import { docFromText, docText } from "../lib/docs";
 import type { Intent, ItemRef, Proposal, ReviewComment, Run, ScreenContext, WorkFilter } from "../types";
 import { roleLabel, stepOf, type Step } from "../lib/roles";
 import { APPROVE_PLAN, liveCounts, liveWords, needsPerson, planOpenQuestions, resultHeadline, runTitle, stateView } from "../workspace/agentsLogic";
 import type { ImageData } from "../lib/pipImages";
-import { jiraNote, subtaskProposals } from "./mockRunResult";
 import type { AskRequest, ClaudeEvent, EventMeta } from "./claude";
 import { mockPipTurns, mockUsage } from "./mockPipTurns";
 import { GENERAL_CONVERSATION, workstreamOfConversation } from "../lib/conversations";
@@ -442,7 +441,7 @@ const FINDINGS_SHOWN = 5;
 function findings(runs: readonly Run[]): string {
   const done = runs.filter((r) => r.state === "done");
   if (!done.length) return "No agent has finished yet.";
-  const line = (r: Run) => `- **${r.item?.key ?? r.spec.repo}** ${resultHeadline(jiraNote(r.result ?? "").text) ?? "finished without a written answer"}`;
+  const line = (r: Run) => `- **${r.item?.key ?? r.spec.repo}** ${resultHeadline(r.result ?? "") ?? "finished without a written answer"}`;
   return `${done.length} ${done.length === 1 ? "run has" : "runs have"} finished:\n${done.slice(0, FINDINGS_SHOWN).map(line).join("\n")}${done.length > FINDINGS_SHOWN ? `\n…and ${done.length - FINDINGS_SHOWN} more.` : ""}`;
 }
 
@@ -527,7 +526,7 @@ export function scriptPip(prompt: string, context: ScreenContext, images: ImageD
   const proposed = proposesBreakdown.exec(q)?.[1];
   const breakdownRun = proposed ? runs.find((r) => r.id.toLowerCase() === proposed) : undefined;
   if (breakdownRun?.item) {
-    const summaries = subtaskProposals(breakdownRun.result ?? "");
+    const summaries = ["Make the change", "Test the change", "Check the result"];
     if (!summaries.length) return { steps: ["Read the run"], text: `The run doesn't propose a breakdown, so I left **${breakdownRun.item.key}** as one piece.`, filter: null, draft: null };
     return {
       steps: ["Read the run", `Drafted subtasks on ${breakdownRun.item.key}`],
@@ -620,7 +619,7 @@ export function scriptPip(prompt: string, context: ScreenContext, images: ImageD
   const asked = /draft a jira comment from run (\S+?):/.exec(q)?.[1];
   const forRun = asked ? runs.find((r) => r.id.toLowerCase() === asked) : undefined;
   if (forRun?.item) {
-    const note = jiraNote(forRun.result ?? "").text;
+    const note = forRun.result ?? "";
     const item = forRun.item;
     return {
       steps: ["Read the run", `Drafted a comment on ${item.key}`],
@@ -636,7 +635,7 @@ export function scriptPip(prompt: string, context: ScreenContext, images: ImageD
       steps: ["Read the run", `Drafted a comment on ${item.key}`],
       text: `I drafted a short comment on **${item.key}** from what the run found. It isn't posted; approve, edit or skip it below.`,
       filter: null,
-      draft: { intent: { type: "comment", item, body: docFromText(jiraNote(openRun.result ?? "").text || "It finished without a written answer.") }, label: "From an agent run" },
+      draft: { intent: { type: "comment", item, body: docFromText(openRun.result || "It finished without a written answer.") }, label: "From an agent run" },
     };
   }
   if (/\bfinished runs\b.*\bfind\b/.test(q)) return { steps: ["Read the finished runs"], text: findings(runs), filter: null, draft: null };
@@ -868,7 +867,7 @@ export async function mockAsk(req: AskRequest, drafter: Partial<PipDrafter> | nu
     // draft cap, which is addressed to it, in the person's words.
     const refusal = (e: unknown) => {
       const why = e instanceof Error ? e.message : String(e);
-      return wsId && why === capRefusal(wsId) ? `this workstream already has ${WORKSTREAM_PENDING_CAP} drafts waiting for you. Decide some and I'll draft more` : why;
+      return why;
     };
     if (!stopped && script.draft) {
       const refused = await drafter?.pipDraft?.(script.draft.intent, script.draft.label, req.requestId).then(() => null, refusal);

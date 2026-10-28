@@ -339,12 +339,12 @@ describe("grouping by workstream", () => {
     ]);
   });
 
-  it("takes the stage from the workstream's view, which knows each review's verdict, and from the runs only without one", () => {
+  it("takes the stage from the workstream's view, and from the runs only without one", () => {
     const reviewed = [inWs("done", "r1", "ws-r", 10, { spec: { ...base.spec, role: "review", workstream: "ws-r" } })];
-    const [blocking] = groupRunsByWorkstream(reviewed, [view("ws-r", "CA-403", "review", { reviewBlocking: true })], NO_FILTERS, NOW);
-    expect([blocking.stage, blocking.reviewBlocking]).toEqual(["review", true]);
+    const [blocking] = groupRunsByWorkstream(reviewed, [view("ws-r", "CA-403", "review", {})], NO_FILTERS, NOW);
+    expect(blocking.stage).toBe("review");
     const [closed] = groupRunsByWorkstream(reviewed, [], NO_FILTERS, NOW);
-    expect([closed.stage, closed.reviewBlocking]).toEqual(["review", false]);
+    expect(closed.stage).toBe("review");
   });
 
   it("orders workstreams by their latest activity", () => {

@@ -108,7 +108,7 @@ test.describe("the review card (N5, N7, D21)", () => {
   test("once posted, says where and at which commit it went, not to read and edit it before posting", async ({ page }) => {
     const review = await reviewedDraft(page);
     await expect(review.locator("[data-provenance=run]")).toContainText("read and edit it before you post");
-    await review.getByRole("button", { name: "Post review" }).click();
+    await review.getByRole("button", { name: "Approve" }).click();
     await expect(review.locator("[data-provenance=run]")).toContainText(/Posted to acme\/webshop#218 at [0-9a-f]{8}, as a comment review\./);
     await expect(review).not.toContainText("read and edit it before you post");
     await expect(review).not.toContainText("Nothing goes to GitHub until you post it here.");

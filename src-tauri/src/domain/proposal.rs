@@ -175,30 +175,17 @@ impl Intent {
         }
     }
 
-    /// What a newer draft of the same kind replaces in a workstream: one move, one description update, one triage
-    /// update and one breakdown per ticket, and one review per pull request (its repository compared without regard
-    /// to case). Comments legitimately accumulate, and new tickets and links have rules of their own, so they have no key.
     pub fn supersession_key(&self) -> Option<(&'static str, String)> {
+        let item_key = |item: &ItemRef| serde_json::json!([item.connection_id, item.external_id]).to_string();
         match self {
-            Intent::Transition { item, .. } => Some(("transition", item.external_id.clone())),
-            Intent::Rewrite { item, .. } => Some(("rewrite", item.external_id.clone())),
-            Intent::Update { item, .. } => Some(("update", item.external_id.clone())),
-            Intent::Subtasks { parent, .. } => Some(("subtasks", parent.external_id.clone())),
-            Intent::GithubReview { repo, number, .. } => Some(("githubReview", format!("{}#{number}", repo.to_lowercase()))),
-            Intent::Comment { .. } | Intent::Create { .. } | Intent::Link { .. } | Intent::StartRun { .. } | Intent::FollowUp { .. } | Intent::RunAnswer { .. } => None,
-        }
-    }
-
-    /// Whether this draft changes every field `older`, of the same kind and key, changes, so nothing is lost when it
-    /// replaces it. A triage update sets the assignee, epic and priority apart, and a rewrite the title and description
-    /// apart; the other kinds replace one thing whole.
-    pub fn covers(&self, older: &Intent) -> bool {
-        match (self, older) {
-            (Intent::Update { patch: new, .. }, Intent::Update { patch: old, .. }) => {
-                (old.assignee.is_none() || new.assignee.is_some()) && (old.parent.is_none() || new.parent.is_some()) && (old.priority.is_none() || new.priority.is_some())
-            }
-            (Intent::Rewrite { title: nt, body: nb, .. }, Intent::Rewrite { title: ot, body: ob, .. }) => (ot.is_none() || nt.is_some()) && (ob.is_none() || nb.is_some()),
-            _ => true,
+            Intent::Comment { item, .. } => Some(("comment", item_key(item))),
+            Intent::Transition { item, .. } => Some(("transition", item_key(item))),
+            Intent::Rewrite { item, .. } => Some(("rewrite", item_key(item))),
+            Intent::Update { item, .. } => Some(("update", item_key(item))),
+            Intent::Subtasks { parent, .. } => Some(("subtasks", item_key(parent))),
+            Intent::Link { from, to, .. } => Some(("link", serde_json::json!([item_key(from), item_key(to)]).to_string())),
+            Intent::GithubReview { connection_id, repo, number, .. } => Some(("githubReview", serde_json::json!([connection_id, repo.to_lowercase(), number]).to_string())),
+            Intent::Create { .. } | Intent::StartRun { .. } | Intent::FollowUp { .. } | Intent::RunAnswer { .. } => None,
         }
     }
 }
@@ -407,15 +394,6 @@ pub struct Revised {
 }
 
 impl Proposal {
-    /// Whether the draft is a description update an agent run left that adds or replaces the description's `Triage` section
-    /// and leaves its `Gossamr Plan` section as it was: what a finished Triage drafts in place of a comment. A plan's
-    /// description update, which may carry a `Triage` section along, is not one.
-    pub fn is_triage_description(&self) -> bool {
-        matches!(self.origin, Origin::Run { .. })
-            && matches!(&self.intent, Intent::Rewrite { title: None, body: Some(b), .. }
-                if b.to.triage_section().is_some_and(|t| b.from.triage_section().as_ref() != Some(&t)) && b.to.plan_section() == b.from.plan_section())
-    }
-
     /// The existing item the proposal is about, if any.
     pub fn target(&self) -> Option<&ItemRef> {
         self.intent.target()
@@ -974,7 +952,6 @@ mod tests {
         assert_eq!(json["comments"][0]["line"], 42);
         assert_eq!(serde_json::from_value::<Intent>(json).unwrap(), intent);
         assert_eq!(intent.target(), Some(&item_ref("1")));
-        assert!(intent.covers(&review("acme/webshop", 218)));
     }
 
     #[test]
@@ -988,7 +965,7 @@ mod tests {
     #[test]
     fn one_review_per_pull_request_whatever_the_case_of_its_repository() {
         let key = |r: &str, n| review(r, n).supersession_key();
-        assert_eq!(key("acme/webshop", 218), Some(("githubReview", "acme/webshop#218".to_string())));
+        assert_eq!(key("acme/webshop", 218), Some(("githubReview", serde_json::json!(["github:ann", "acme/webshop", 218]).to_string())));
         assert_eq!(key("Acme/WebShop", 218), key("acme/webshop", 218));
         assert_ne!(key("acme/webshop", 219), key("acme/webshop", 218));
         assert_ne!(key("acme/other", 218), key("acme/webshop", 218));

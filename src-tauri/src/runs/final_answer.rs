@@ -114,23 +114,12 @@ impl RunService {
             .collect()
     }
 
-    /// The same, for the polling loop, and when the answer arrives the drafts a finishing run would have made.
     pub(super) async fn collect_answers(&self, tc: &Toolchain, waiting: &[Run]) {
         for run in waiting {
-            if !self.refresh_with(tc, run).await {
-                continue;
-            }
-            let Ok(Some(found)) = self.core.run(&run.id).await else { continue };
-            if self.settings().draft_on_finish {
-                if let Some(why) = self.draft_for(&found).await {
-                    self.notifier.notify(&found, why);
-                }
-            }
-            if found.spec.pinned_review() {
-                self.draft_review(&found).await;
-            }
+            self.refresh_with(tc, run).await;
         }
     }
+
 }
 
 #[cfg(test)]

@@ -1,3 +1,4 @@
+import { reviewText, SAMPLE_REVIEW_COMMENTS, SAMPLE_REVIEW_SUMMARY } from "./mockReviewDraft";
 import type { ClearFilter } from "../types";
 import { isTauri } from "@tauri-apps/api/core";
 import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
@@ -28,6 +29,7 @@ import type {
   ProposalQuery,
   ProposalsChanged,
   ReviewComment,
+  Run,
   RunQuery,
   RunsChanged,
   AgentSettings,
@@ -39,13 +41,16 @@ import type {
   WorkstreamUndo,
   WorkstreamsChanged,
 } from "../types";
+import { stepOf } from "../lib/roles";
 import { fold } from "../lib/mentions";
 import { docFromText, docText } from "../lib/docs";
 import { ticketBlockText } from "./mockTicket";
-import { bodyChange, markdownOf } from "./mockMarkdown";
+import { bodyChange, docFromMarkdown, markdownOf } from "./mockMarkdown";
 import { MOCK_CONNECTION, MockConnector, PEOPLE, itemRef } from "./mockConnector";
 import { basisFieldsOf, targetOf, workstreamOf } from "../lib/proposals";
 import { workstreamConversation, workstreamOfConversation } from "../lib/conversations";
+import { assemblePlan } from "./mockPlanSection";
+import { withTriageSection } from "./mockTriageSection";
 import { MockSupervisor } from "./mockSupervisor";
 import { mockCancelTurns, mockCancelWakes, mockPipIdle, mockQueueWake } from "./mockPipQueue";
 import { holdMockPip } from "./mockPip";
@@ -382,20 +387,24 @@ export class MockBackend implements Backend {
       return ticketBlockText({ item: w, comments: this.connector.comments(ref), people: this.connector.people, titleOf: (r) => this.connector.item(r)?.title ?? null, code: this.github.code.devLinks(ref) });
     };
     this.runs.ticketDoc = (ref) => this.connector.item(ref)?.body ?? null;
+    // The sample Pip drafts from a finished report when the sample asks it to. The app does not: a real run waits for Pip.
+    const sampleDrafts = typeof options.runs === "object" && !!options.runs?.planDescription;
+    if (sampleDrafts) {
+      this.runs.onFinished = (run) => this.draftFinished(run);
+      for (const run of this.runs.list()) if (run.state === "done" && stepOf(run.spec.role) === "plan") this.draftFinished(run, false);
+    }
     this.runs.pullRequest = (repo, number) => this.github.code.change(repo, number);
     this.runs.pullFiles = (repo, number) => this.github.code.pullFiles(repo, number);
     this.runs.codeConnectionFor = (repo) => (this.github.isWatched(repo) ? GITHUB_CONNECTION : null);
     // A draft pull request a build opened turns up on the code host, which ends its workstream's wait for it.
     this.runs.onPullRequest = (change) => this.github.code.addPullRequest(change);
     this.workstreams.prOf = (runId) => this.runs.pullRequestOf(runId);
-    this.workstreams.verdictOf = (run) => this.runs.resolvedOf(run.id)?.verdict ?? null;
     this.workstreams.ticketOf = (key) => this.connector.item(itemRef(key));
     // What the person just wrote is the workstream's basis now, so the supervisor doesn't take an approved write for a change.
     this.proposals.onWritten = (p) => {
       const ws = workstreamOf(p);
       if (ws) this.workstreams.rebase(ws, basisFieldsOf(p.intent));
     };
-    this.runs.seedPlanDescriptions();
     this.supervisor = new MockSupervisor({
       runs: this.runs,
       workstreams: this.workstreams,
@@ -404,6 +413,7 @@ export class MockBackend implements Backend {
       cancelWakes: mockCancelWakes,
     });
     exposeMockClock({
+      draftReview: (runId, reviewedSha, summary, comments) => { this.draftReview(runId, reviewedSha, summary, comments); },
       runs: this.runs,
       workstreams: this.workstreams,
       proposals: this.proposals,
@@ -592,26 +602,6 @@ export class MockBackend implements Backend {
     return this.runs.outcome(id);
   }
 
-  async runsDraftComment(id: string) {
-    return this.runs.draftComment(id);
-  }
-
-  async runsDraftPlanComment(id: string) {
-    return this.runs.draftPlanComment(id);
-  }
-
-  async runsDraftPlanDescription(id: string) {
-    return this.runs.draftPlanDescription(id);
-  }
-
-  async runsDraftTicket(id: string) {
-    return this.runs.draftTicket(id);
-  }
-
-  async runsDraftBlocker(id: string, blockerKey: string) {
-    return this.runs.draftBlocker(id, blockerKey);
-  }
-
   async runsEvents(id: string) {
     return this.runs.events(id);
   }
@@ -718,7 +708,81 @@ export class MockBackend implements Backend {
     return this.proposals.list({ states: ["pending"] });
   }
 
+  /**
+   * What the sample Pip leaves when `run` finishes: a plan or a thin triage updates the description, a review leaves
+   * the sample review, and the For Jira note becomes a comment. `comment` is false for a plan already finished in the
+   * sample, which leaves only its description.
+   */
+  private draftFinished(run: Run, comment = true) {
+    if (!run.item) return;
+    const step = stepOf(run.spec.role);
+    const result = run.result ?? "";
+    if (step === "plan") this.draftPlan(run);
+    else if (step === "triage" && result.includes("Ready to plan: no")) {
+      this.draftTriage(run, result);
+      comment = false;
+    } else if (step === "review") this.draftSampleReview(run);
+    if (comment) this.draftNote(run, result);
+  }
+
+  private leftBy(run: Run) {
+    return { type: "run" as const, runId: run.id, shortId: run.shortId ?? null, workstream: run.spec.workstream ?? null };
+  }
+
+  private keep(intent: Intent, run: Run) {
+    const already = this.proposals.list({ states: ["pending"] }).some((p) => p.origin.type === "run" && p.origin.runId === run.id && p.intent.type === intent.type);
+    if (already) return;
+    try {
+      this.proposals.fromRun(intent, run.shortId ? `From agent run ${run.shortId}` : "From an agent run", this.leftBy(run));
+    } catch {
+      // The description already reads as this plan, so there is nothing to update.
+    }
+  }
+
+  private draftPlan(run: Run) {
+    const body = run.item ? this.connector.item(run.item)?.body : null;
+    if (!body) return;
+    const made = assemblePlan(run, body, docFromMarkdown);
+    if ("problem" in made || markdownOf(made.to) === markdownOf(body)) return;
+    this.keep({ type: "rewrite", item: run.item!, title: null, body: bodyChange(body, markdownOf(made.to)), flattened: [] }, run);
+  }
+
+  private draftTriage(run: Run, result: string) {
+    const body = run.item ? this.connector.item(run.item)?.body : null;
+    if (!body) return;
+    const note = result.split("\nFor Jira:\n")[1]?.trim() ?? "";
+    const questions = (result.split("Open questions:\n")[1]?.split(/\n\n/)[0] ?? "").split("\n").filter((line) => line.startsWith("- ")).map((line) => line.slice(2).trim());
+    const to = withTriageSection(body, note, questions);
+    if (markdownOf(to) === markdownOf(body)) return;
+    this.keep({ type: "rewrite", item: run.item!, title: null, body: bodyChange(body, markdownOf(to)), flattened: [] }, run);
+  }
+
+  private draftSampleReview(run: Run) {
+    const { repo, pr, prSha } = run.spec;
+    if (!run.item || !pr || !prSha || !this.github.isWatched(repo)) return;
+    const files = this.github.code.change(repo, pr)?.sha === prSha ? this.github.code.pullFiles(repo, pr) : null;
+    const text = reviewText(SAMPLE_REVIEW_SUMMARY, SAMPLE_REVIEW_COMMENTS, files);
+    this.keep({ type: "githubReview", connectionId: GITHUB_CONNECTION, item: run.item, runId: run.id, repo, number: pr, commitSha: prSha, ...text }, run);
+  }
+
+  private draftNote(run: Run, result: string) {
+    const note = result.split("\nFor Jira:\n")[1]?.trim();
+    if (!note || !run.item) return;
+    this.keep({ type: "comment", item: run.item, body: docFromText(note) }, run);
+  }
+
   /** Revises a draft the way `revise_proposal` does, from the conversation `requestId` was asked in: a draft of a workstream only from that workstream's. */
+  draftReview(runId: string, reviewedSha: string, summary: string, comments: ReviewComment[]) {
+    const run = this.runs.get(runId);
+    if (!run) throw new Error("that run no longer exists");
+    if (!reviewedSha.trim() || !summary.trim()) throw new Error("a review needs its reviewed commit and summary");
+    const { repo, pr } = run.spec;
+    if (!pr || !this.github.isWatched(repo)) throw new Error("the review needs a watched pull request");
+    const files = this.github.code.change(repo, pr)?.sha === reviewedSha ? this.github.code.pullFiles(repo, pr) : null;
+    const text = reviewText(summary, comments, files);
+    return this.proposals.draft({ type: "githubReview", connectionId: GITHUB_CONNECTION, item: run.item, runId, repo, number: pr, commitSha: reviewedSha, ...text }, "Review from Pip", undefined, run.spec.workstream ?? undefined);
+  }
+
   async pipRevise(id: string, change: string | { body?: string; title?: string; description?: string; summaries?: string[]; comments?: ReviewComment[] }, requestId?: string) {
     const draft = this.proposals.get(id);
     // A review draft's new comments are checked against the pull request's diff at the commit reviewed, which only this

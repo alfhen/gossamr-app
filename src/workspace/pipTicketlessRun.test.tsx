@@ -54,17 +54,14 @@ describe("the sample Pip starts an investigation with no ticket", () => {
     useWorkspace.getState().dispose();
   });
 
-  it("carries the exact question into the brief, and ends as a draft ticket in the picked project that the person approves", async () => {
+  it("carries the exact question into the brief, and finishing leaves no ticket draft", async () => {
     const backend = new MockBackend({ runs: { seed: "empty" } });
     const run = start(backend, `  ${QUESTION}  `, "ACME/Storefront");
     expect(run.spec.brief).toBe(QUESTION);
     expect(run.item).toBeNull();
     for (let i = 0; i < 4; i++) backend.runs.advance(run.id);
-    const tickets = backend.proposals.list().filter((p) => p.intent.type === "create" && p.origin.type === "run");
-    expect(tickets).toHaveLength(1);
-    if (tickets[0].intent.type !== "create") throw new Error("shape");
-    expect(tickets[0].intent.container).toEqual(backend.runs.repoProject(REPO));
-    expect(tickets[0].state.type).toBe("pending");
+    expect(backend.proposals.list().filter((p) => p.intent.type === "create")).toEqual([]);
+    expect(backend.proposals.writes).toEqual([]);
   });
 
   it("refuses an unwatched repository and a brief that is empty, too long or hostile, and starts nothing", () => {

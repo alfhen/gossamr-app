@@ -1,7 +1,7 @@
-//! The report an agent hands Gossamr through the `report` tool as data, instead of Gossamr reading prose.
+//! The prose report an agent hands Gossamr through the `report` tool as data.
 //!
 //! A call only ever produces a validated, sanitised `Report` stored on the run. It writes nothing to Jira, to the
-//! repository or to any other run, and drafts are made from a stored report exactly as they are from the written answer.
+//! repository or to any other run. Pip reads it and drafts what follows.
 
 mod resolve;
 mod tool;
@@ -10,9 +10,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 pub use resolve::{resolve, Resolved};
-pub use tool::{check, definition, Target, FINDINGS_MAX, FINDING_TEXT_LIMIT, MAX_CALLS, MAX_REJECTIONS};
-
-use super::result::TicketProposal;
+pub use tool::{check, definition, MAX_CALLS, MAX_REJECTIONS};
 
 /// What an agent says about how its run ended. It never changes the run's state: the session listing decides that.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -27,65 +25,9 @@ pub enum ReportStatus {
 #[serde(rename_all = "camelCase")]
 pub struct Report {
     pub status: ReportStatus,
-    /// The text for the ticket; absent for a run that proposes a new ticket instead.
+    /// Absent in older reports that supplied only structured fields.
     #[serde(default)]
     pub note: Option<String>,
-    #[serde(default)]
-    pub new_ticket: Option<TicketProposal>,
-    #[serde(default)]
-    pub subtasks: Vec<String>,
-    #[serde(default)]
-    pub plan: Option<String>,
-    /// For a Triage on a ticket: whether it recommends a written plan before anyone builds. A report stored before
-    /// triages gave one reads as `None`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub plan_recommended: Option<bool>,
-    /// For a Review: whether it found the change ready. A report stored before reviews gave one reads as `None`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub verdict: Option<ReviewVerdict>,
-    /// For a Review: what it found, most severe first.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub findings: Vec<Finding>,
-}
-
-/// A review's conclusion. `Blocking` means it found at least one finding that has to be fixed before the change is ready.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum ReviewVerdict {
-    Pass,
-    Blocking,
-}
-
-/// How much a review finding matters, most severe first so a sort puts blocking ones on top.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum Severity {
-    Blocking,
-    ShouldFix,
-    Nit,
-}
-
-impl Severity {
-    pub fn parse(text: &str) -> Option<Self> {
-        match text.trim().to_ascii_lowercase().replace([' ', '_'], "-").as_str() {
-            "blocking" | "blocker" => Some(Severity::Blocking),
-            "should-fix" | "shouldfix" => Some(Severity::ShouldFix),
-            "nit" => Some(Severity::Nit),
-            _ => None,
-        }
-    }
-}
-
-/// One thing a review found, and what it rests on. The text is the agent's and only ever shown; only the severity is
-/// counted.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Finding {
-    pub severity: Severity,
-    pub text: String,
-    /// The file and line, the command and its output, or the acceptance point the finding rests on.
-    #[serde(default, rename = "where")]
-    pub where_: Option<String>,
 }
 
 /// A run's stored report with how it came about.
@@ -114,8 +56,6 @@ impl StoredReport {
 pub enum ResultSource {
     /// The agent reported it through the tool.
     Structured,
-    /// Read from the `For Jira:` section of the written answer.
-    Section,
     /// The agent marked no section, so this is its whole answer, shortened.
     Whole,
     /// Only Claude's one-line summary could be read.

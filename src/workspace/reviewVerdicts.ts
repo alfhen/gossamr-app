@@ -3,25 +3,8 @@ import { stepOf } from "../lib/roles";
 import type { CodeChange, ReviewView, Run } from "../types";
 import { useRuns } from "./runsStore";
 
-/** The verdict of each finished review, read from its outcome once it is done and again whenever it changes. */
-export function useReviewVerdicts(runs: readonly Run[]) {
-  const backend = useRuns((s) => s.backend);
-  const [verdicts, setVerdicts] = useState<Record<string, ReviewView | null>>({});
-  const asked = useRef(new Map<string, string>());
-  useEffect(() => {
-    if (!backend) return;
-    for (const run of runs) {
-      if (stepOf(run.spec.role) !== "review" || run.state !== "done") continue;
-      const version = `${run.lastProgressAt}|${run.endedAt ?? ""}`;
-      if (asked.current.get(run.id) === version) continue;
-      asked.current.set(run.id, version);
-      backend.runsOutcome(run.id).then(
-        (outcome) => setVerdicts((v) => ({ ...v, [run.id]: outcome.review ?? null })),
-        () => asked.current.delete(run.id),
-      );
-    }
-  }, [backend, runs]);
-  return verdicts;
+export function useReviewVerdicts(_runs: readonly Run[]): Record<string, ReviewView | null> {
+  return {};
 }
 
 const CHANGE_RECHECK_MS = 30_000;

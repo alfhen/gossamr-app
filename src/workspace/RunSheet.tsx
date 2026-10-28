@@ -19,14 +19,13 @@ import { RunTimeline } from "./RunTimeline";
 import { RunWhere, useDisk } from "./RunWhere";
 import { RunCleanup } from "./RunCleanup";
 import { cleanupReason } from "./cleanupLogic";
-import { answerable, sheetTopOn, canStartNow, pendingBreakdownOn, pipAsks, stopControl } from "./runSheetLogic";
-import { showDraft } from "./draftTicket";
+import { answerable, sheetTopOn, canStartNow, stopControl } from "./runSheetLogic";
 import { RunAnswer } from "./RunAnswer";
 import { PermissionAsk } from "./PermissionAsk";
 import { RunContinuation } from "./RunContinuation";
 import { Changes, Found, type ResultActions } from "./RunResult";
 import { openOnGithub } from "./githubUi";
-import { askPip, askPipInWorkstream } from "./askPip";
+import { askPip } from "./askPip";
 import { followOutcome } from "./followOutcome";
 import { browseList, useRuns } from "./runsStore";
 import { usePrefs } from "./prefs";
@@ -277,7 +276,7 @@ function Facts({ run, now, ticketTitle, on }: { run: Run; now: number; ticketTit
 }
 
 /** The whole sheet as a function of what it is shown; `RunSheet` loads the data and connects the actions. */
-export function RunSheetView({ run, now, ticketTitle, place, label, wide, onWide, events, disk, confirmStop, outcome, tickets, pickBlocker, waitingBreakdown, drafting, answering, opened, answerSent = false, cleanup = null, slotPlace = null, stoppedHere = false, on }: RunSheetViewProps) {
+export function RunSheetView({ run, now, ticketTitle, place, label, wide, onWide, events, disk, confirmStop, outcome, answering, opened, answerSent = false, cleanup = null, slotPlace = null, stoppedHere = false, on }: RunSheetViewProps) {
   const view = useStateView(run, now);
   const stop = stopControl(run);
   const title = runTitle(run, ticketTitle);
@@ -361,7 +360,7 @@ export function RunSheetView({ run, now, ticketTitle, place, label, wide, onWide
 
       <RunContinuation key={`continue-${run.id}`} run={run} adopt={on.adoptSession} />
       {attention && <Attention run={run} label={label} opened={opened} answering={answering} slotPlace={slotPlace} on={on} />}
-      {run.state === "done" && <Found run={run} outcome={outcome} tickets={tickets} pickBlocker={pickBlocker} waitingBreakdown={waitingBreakdown} drafting={drafting} on={on} />}
+      {run.state === "done" && <Found run={run} outcome={outcome} on={on} />}
       {outcome?.change && <Changes change={outcome.change} on={on} />}
 
       <Sec title="What it did" count={events ? `${events.length} ${events.length === 1 ? "entry" : "entries"}` : undefined}>
@@ -397,7 +396,6 @@ export function RunSheet({ id }: { id: string }) {
   const [outcome, setOutcome] = useState<RunOutcome | null>(null);
   const [pickBlocker, setPickBlocker] = useState(false);
   const items = useWorkspace((s) => s.items);
-  const waitingOn = useWorkspace((s) => pendingBreakdownOn(s.proposals, run?.item ?? null)?.id ?? null);
   const drafting = useRuns((s) => s.drafting !== null);
   const answering = useRuns((s) => s.answering.has(id));
   const [now, setNow] = useState(() => Date.now());
@@ -469,60 +467,11 @@ export function RunSheet({ id }: { id: string }) {
       void openTicketByKey(run.item.key);
     },
     reveal: (path) => void backend?.revealPath(path).catch(() => {}),
-    draftComment: () => void store.draftComment(id),
     askPip: () => {
-      const draftId = outcome?.draft?.state.type === "pending" ? outcome.draft.id : null;
-      askPip(pipAsks.comment(run, draftId));
+      askPip({ prompt: `Read agent run ${run.id} with get_run and get_run_result, then help me decide what to draft from its report. Nothing is posted until I approve a draft.`, shown: "Ask Pip about this report" });
       store.closeSheet();
-    },
-    openDraft: () => store.showDraft(run.item),
-    pickBlocker: () => setPickBlocker(true),
-    cancelBlocker: () => setPickBlocker(false),
-    draftBlocker: (key) => void store.draftBlocker(id, key),
-    draftTicket: () => void store.draftTicket(id),
-    buildFromPlan: () => {
-      store.closeSheet();
-      void askPipInWorkstream(run, pipAsks.build(run));
-    },
-    reviewThis: () => {
-      store.closeSheet();
-      void askPipInWorkstream(run, pipAsks.review(run));
-    },
-    draftPlanComment: () => void store.draftPlanComment(id),
-    openPlanDraft: () => store.showDraft(run.item),
-    draftPlanDescription: () => void store.draftPlanDescription(id),
-    openPlanDescription: () => store.showDraft(run.item),
-    discussPlanDescription: () => {
-      const draft = outcome?.planDescription?.draft;
-      if (draft?.state.type !== "pending") return;
-      askPip(pipAsks.planDescription(run, draft.id));
-      store.closeSheet();
-    },
-    openTicketDraft: () => {
-      if (!outcome?.ticketDraft) return;
-      store.closeSheet();
-      showDraft(outcome.ticketDraft.id);
-    },
-    finishWithPip: () => {
-      const draft = outcome?.ticketDraft;
-      if (draft?.state.type !== "pending") return;
-      askPip(pipAsks.finish(run, draft.id));
-      store.closeSheet();
-      showDraft(draft.id);
-    },
-    askPipDescription: () => (askPip(pipAsks.description(run)), store.closeSheet()),
-    askPipBreakdown: () => {
-      const draftId = outcome?.subtasksDraft?.state.type === "pending" ? outcome.subtasksDraft.id : waitingOn;
-      askPip(pipAsks.breakdown(run, draftId));
-      store.closeSheet();
-    },
-    openCreated: () => {
-      if (!run.createdItem) return;
-      store.closeSheet();
-      void openTicketByKey(run.createdItem.key);
     },
     openChange: (url) => void openOnGithub(url),
   };
-  return <RunSheetView run={run} now={now} ticketTitle={ticket?.title ?? null} place={place} label={label} wide={wide} onWide={() => setWide((w) => !w)} events={events} disk={disk} confirmStop={confirmStop} outcome={outcome} tickets={tickets} pickBlocker={pickBlocker} waitingBreakdown={waitingOn !== null} drafting={drafting} answering={answering} opened={opened} answerSent={sentAt !== undefined && sentAt === run.lastProgressAt} cleanup={cleanupReason(run, now, { disk: typeof disk === "number" ? disk : null, change: outcome?.change ?? null })} slotPlace={slotPosition(run, slotLine)} stoppedHere={stoppedHere} on={on} />;
+  return <RunSheetView run={run} now={now} ticketTitle={ticket?.title ?? null} place={place} label={label} wide={wide} onWide={() => setWide((w) => !w)} events={events} disk={disk} confirmStop={confirmStop} outcome={outcome} tickets={tickets} pickBlocker={pickBlocker} waitingBreakdown={false} drafting={drafting} answering={answering} opened={opened} answerSent={sentAt !== undefined && sentAt === run.lastProgressAt} cleanup={cleanupReason(run, now, { disk: typeof disk === "number" ? disk : null, change: outcome?.change ?? null })} slotPlace={slotPosition(run, slotLine)} stoppedHere={stoppedHere} on={on} />;
 }
-

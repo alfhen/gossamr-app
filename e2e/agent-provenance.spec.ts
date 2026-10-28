@@ -21,7 +21,7 @@ test("a draft a run left shows it was drafted by an agent and can still be appro
   const from = draft.locator("[data-provenance=run]");
   await expect(from).toContainText("From the CA-401 plan");
   await expect(from).not.toContainText(/\b[0-9a-f]{8}\b/);
-  await expect(draft.getByRole("button", { name: "Update description" })).toBeEnabled();
+  await expect(draft.getByRole("button", { name: "Approve" })).toBeEnabled();
   await from.getByRole("button", { name: "the CA-401 plan" }).click();
   await expect(page.getByRole("dialog", { name: "Agent run" })).toBeVisible();
 });

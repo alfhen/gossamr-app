@@ -3,7 +3,7 @@ use std::sync::Mutex;
 
 use super::*;
 use crate::domain::fixtures::run_spec;
-use crate::domain::{ResultKind, RunFailure, RunSpec};
+use crate::domain::{RunFailure, RunSpec};
 use crate::codehost::github::testserver::{pull_reply, Reply};
 use crate::inbox::testing::{fixture_watching, fixture_watching_with, Fixture};
 use crate::runs::cli::{ClaudeCli, SystemCli};
@@ -115,7 +115,7 @@ async fn a_queued_run_launches_into_its_worktree_with_the_prompt_the_person_appr
 }
 
 fn build_spec(rig: &Rig, n: u32) -> RunSpec {
-    RunSpec { role: ResultKind::Build.role(), brief: "Make the change.".into(), ..rig.spec(n) }
+    RunSpec { role: crate::domain::Role::parse("build").unwrap(), brief: "Make the change.".into(), ..rig.spec(n) }
 }
 
 async fn approved(rig: &Rig, spec: RunSpec) -> Run {
@@ -129,8 +129,8 @@ fn last_launch(rig: &Rig) -> LaunchRequest {
 #[tokio::test]
 async fn a_run_of_any_role_launches_in_the_persons_own_configuration_and_records_no_restriction() {
     let rig = build(None, |s| s.with_cap(6)).await;
-    for (n, kind) in [(1, ResultKind::Investigate), (2, ResultKind::Plan), (3, ResultKind::Verify), (4, ResultKind::Build)] {
-        let run = approved(&rig, RunSpec { role: kind.role(), ..rig.spec(n) }).await;
+    for (n, kind) in [(1, "investigate"), (2, "plan"), (3, "verify"), (4, "build")] {
+        let run = approved(&rig, RunSpec { role: crate::domain::Role::parse(kind).unwrap(), ..rig.spec(n) }).await;
         rig.svc.launch(&run.id).await.unwrap();
         let req = last_launch(&rig);
         assert_eq!(req.guard, GUARD, "{kind:?}");
@@ -933,9 +933,9 @@ mod roles {
 
     const PULL: &str = "/repos/acme/webshop/pulls/12";
 
-    fn of(rig: &Rig, kind: ResultKind, n: u32) -> RunSpec {
-        let pr = (kind == ResultKind::Review).then_some(12);
-        RunSpec { role: kind.role(), pr, ..rig.spec(n) }
+    fn of(rig: &Rig, kind: &str, n: u32) -> RunSpec {
+        let pr = (kind == "review").then_some(12);
+        RunSpec { role: crate::domain::Role::parse(kind).unwrap(), pr, ..rig.spec(n) }
     }
 
     async fn approved(rig: &Rig, spec: RunSpec) -> Run {
@@ -946,11 +946,11 @@ mod roles {
     async fn every_role_launches_through_the_cli_with_the_prompt_it_was_given() {
         let same = || pull_reply(12, "open", Some("acme/webshop"), "main");
         let rig = build_with(vec![(PULL, vec![same()])], None, |s| s.with_cap(10)).await;
-        for (n, kind) in [ResultKind::Triage, ResultKind::Plan, ResultKind::Verify, ResultKind::Build, ResultKind::Review].into_iter().enumerate() {
+        for (n, kind) in ["triage", "plan", "verify", "build", "review"].into_iter().enumerate() {
             let run = approved(&rig, of(&rig, kind, n as u32 + 1)).await;
             rig.svc.launch(&run.id).await.unwrap();
             let req = rig.cli.0.lock().unwrap().launches.last().unwrap().clone();
-            assert_eq!(req.name, format!("Gossamr: CA-1 {}", kind.as_str()));
+            assert_eq!(req.name, format!("Gossamr: CA-1 {}", kind));
             assert_eq!(req.prompt, render_prompt(&run.spec));
             assert_eq!(rig.get(&run).await.state, RunState::Launching, "{kind:?}");
         }
@@ -959,7 +959,7 @@ mod roles {
     #[tokio::test]
     async fn a_run_on_a_pull_request_launches_told_to_check_out_the_commit_it_was_pinned_to() {
         let rig = build_with(vec![(PULL, vec![crate::codehost::github::testserver::draft_pull_reply(12, Some("acme/webshop"), "main")])], None, |s| s.with_cap(10)).await;
-        let run = approved(&rig, of(&rig, ResultKind::Review, 1)).await;
+        let run = approved(&rig, of(&rig, "review", 1)).await;
         assert_eq!((run.spec.pr, run.spec.pr_sha.as_deref()), (Some(12), Some("a1b2c3d4e5f6")));
         rig.svc.launch(&run.id).await.unwrap();
         let req = rig.cli.0.lock().unwrap().launches.last().unwrap().clone();
@@ -972,7 +972,7 @@ mod roles {
         let same = pull_reply(12, "open", Some("acme/webshop"), "main");
         let fork = pull_reply(12, "open", Some("mallory/webshop"), "main");
         let rig = build_with(vec![(PULL, vec![same, fork])], None, |s| s).await;
-        let run = approved(&rig, of(&rig, ResultKind::Review, 1)).await;
+        let run = approved(&rig, of(&rig, "review", 1)).await;
         rig.svc.launch(&run.id).await.unwrap();
         let after = rig.get(&run).await;
         assert_eq!(after.state, RunState::Failed);

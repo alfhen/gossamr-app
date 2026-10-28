@@ -49,7 +49,7 @@ describe("DraftCard", () => {
     const out = card(proposal({}), { onShow: vi.fn() });
     expect(out).toContain("Comment on DEVOPS-471");
     expect(out).toContain("Looks good.");
-    for (const label of ["Post comment", "Edit", "Skip", "Show me"]) expect(out).toContain(label);
+    for (const label of ["Approve", "Edit", "Skip", "Show me"]) expect(out).toContain(label);
   });
 
   it("previews a transition with the target status", () => {
@@ -61,7 +61,7 @@ describe("DraftCard", () => {
   it("lists subtasks as checkboxes and counts the ones it will create", () => {
     const out = card(proposal({ intent: { type: "subtasks", parent: { connectionId: "mock", externalId: "WEB-108", key: "WEB-108" }, summaries: ["One", "Two"] } }));
     expect(out.match(/type="checkbox"/g)).toHaveLength(2);
-    expect(out).toContain("Create 2 subtasks");
+    expect(out).toContain("Approve");
   });
 
   it("previews a new item", () => {
@@ -72,7 +72,7 @@ describe("DraftCard", () => {
     );
     expect(out).toContain("New task");
     expect(out).toContain("Rotate keys");
-    expect(out).toContain("Create task");
+    expect(out).toContain("Approve");
   });
 
   it("offers no buttons once it is decided, and says why a draft went stale", () => {

@@ -9,7 +9,6 @@ import type {
   Intent,
   ItemRef,
   Person,
-  PlanComment,
   Proposal,
   ProposalEdit,
   ProposalQuery,
@@ -197,16 +196,6 @@ export interface Backend {
   runsEvents(id: string): Promise<RunEvent[]>;
   /** The part of the result meant for Jira, the tickets it names, and the pull request or branch the run produced. */
   runsOutcome(id: string): Promise<RunOutcome>;
-  /** Drafts a comment from the result. A draft only: nothing is posted until it is approved. */
-  runsDraftComment(id: string): Promise<Proposal>;
-  /** Drafts the whole plan of a finished Plan run as a comment, cut at a sentence with a note when it is too long for Jira. A draft only. */
-  runsDraftPlanComment(id: string): Promise<PlanComment>;
-  /** Drafts the ticket's description with the plan of a finished Plan run added. A draft only. */
-  runsDraftPlanDescription(id: string): Promise<Proposal>;
-  /** Drafts a new ticket from a finished run that has no ticket: the one its `New ticket:` section proposes, else its answer for the person to edit. A draft only; a run gets one. */
-  runsDraftTicket(id: string): Promise<Proposal>;
-  /** Drafts a link saying the run's ticket is blocked by `blockerKey`. A draft only. */
-  runsDraftBlocker(id: string, blockerKey: string): Promise<Proposal>;
   /** Starts a run that is still queued, as after a restart. */
   runsStartNow(id: string): Promise<Run>;
   /** How many agents carry on if the app quits or the person signs out. */

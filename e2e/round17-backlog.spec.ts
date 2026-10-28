@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { askPip, expandNeedsYou, homeSettled, jiraWrites, needRow, needsPane, needsYouCount, needsYouRow, openAgents, openApp, pipCommentDraft, selectWorkstream, startWorkstream, needsStack } from "./support/app";
+import { askPip, expandNeedsYou, homeSettled, jiraWrites, keepComments, needRow, needsPane, needsYouCount, needsYouRow, openAgents, openApp, pipCommentDraft, selectWorkstream, startWorkstream, needsStack } from "./support/app";
 
 // Backlog items of the seventeenth dogfood round: a draft that holds a secret saying so before Post (G22) and the skip Undo
 // naming its draft (G27).
@@ -20,7 +20,7 @@ test.describe("a draft that holds a secret says so before Post (G22)", () => {
     await draft.getByRole("button", { name: "Done editing" }).click();
     await expect(draft).toContainText("hunter22secret");
     await expect(draft.locator("[data-secret-note]")).toContainText("This holds something that looks like a secret. Gossamr will pause before posting it.");
-    await draft.getByRole("button", { name: "Post comment" }).click();
+    await draft.getByRole("button", { name: "Approve" }).click();
     await expect(draft.locator("[data-post-pause]")).toBeVisible();
     expect(await jiraWrites(page)).toEqual([]);
   });
@@ -35,6 +35,8 @@ test.describe("the skip Undo names the draft (G27)", () => {
     await selectWorkstream(page, "CA-401");
     await askPip(page, "Draft a comment");
     await homeSettled(page);
+    // The person edited the first, so the second stays beside it instead of replacing it.
+    await keepComments(page);
     await askPip(page, "Draft a comment");
     await homeSettled(page);
     await askPip(page, "move it to QA");

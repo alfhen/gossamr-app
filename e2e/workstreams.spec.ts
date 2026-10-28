@@ -32,7 +32,7 @@ test("Ask Pip in the peek opens its own conversation in Pip, at intake", async (
   // Another ticket has none: the pane goes back to General.
   await peekTicket(page, "CA-402");
   await expect(pipConversation(page)).toHaveText("General");
-  await expect(peekSheet(page).getByRole("button", { name: "Ask Pip" })).toBeVisible();
+  await expect(peekSheet(page).locator("[data-ask-pip]")).toBeVisible();
 });
 
 test("Open in Pip puts the cursor in the workstream's conversation, and Close, once confirmed, gives the ticket General back", async ({ page }) => {
@@ -55,7 +55,7 @@ test("Open in Pip puts the cursor in the workstream's conversation, and Close, o
   await peek.getByRole("button", { name: "Close…" }).click();
   await confirm.getByRole("button", { name: "Close workstream" }).click();
   await expect(pipConversation(page)).toHaveText("General");
-  await expect(peek.getByRole("button", { name: "Ask Pip" })).toBeVisible();
+  await expect(peek.locator("[data-ask-pip]")).toBeVisible();
   expect(await page.evaluate((key) => (JSON.parse(localStorage.getItem(key) ?? "{}") as { events?: { action: string }[] }).events?.map((e) => e.action), STORE)).toEqual(["opened", "closed"]);
 });
 

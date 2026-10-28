@@ -105,23 +105,18 @@ test("in one workstream Pip starts an investigator, a triager, a planner, a buil
   await expect(await told(page, review)).toContainText("then checks out pull request");
   await closeSheet(page);
   await advanceRuns(page, 3);
-  await expect(await stageChip(page)).toHaveText("Review · changes needed");
+  await expect(await stageChip(page)).toHaveText("Review");
 
-  // Its blocking verdict is on the Agents card and the run sheet.
+  // The report is prose: the card and the sheet carry no verdict.
   await page.getByRole("button", { name: /^Agents/ }).click();
   // The review is the workstream's fifth run.
   const card = agentCards(page).filter({ has: page.locator('[data-run-label="R5"]') });
   await expect(card).toHaveAttribute("data-state", "done");
-  const verdict = card.locator("[data-verdict]");
-  await expect(verdict).toHaveAttribute("data-verdict", "blocking");
-  await expect(verdict).toHaveAttribute("data-blocking-count", "1");
-  await expect(verdict).toHaveText("Blocking · 1");
+  await expect(card.locator("[data-verdict]")).toHaveCount(0);
   await card.click();
   const sheet = page.locator("#agent-sheet");
-  await expect(sheet.locator("p[data-verdict]")).toHaveAttribute("data-verdict", "blocking");
-  await expect(sheet.locator("p[data-verdict]")).toContainText("Blocking: 1 blocking finding");
-  const findings = sheet.getByRole("list", { name: "Findings" }).locator("li");
-  await expect(findings).toHaveCount(3);
-  await expect(findings.nth(0)).toHaveAttribute("data-severity", "blocking");
+  await expect(sheet.locator("[data-verdict]")).toHaveCount(0);
+  await expect(sheet.getByRole("list", { name: "Findings" })).toHaveCount(0);
+  await expect(sheet).toContainText("the retry loop never backs off");
   expect(await runCount(page)).toBe(before + 1);
 });

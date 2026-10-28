@@ -17,7 +17,7 @@ use super::redact::redact;
 use super::service::{belongs_to, RunService};
 use super::state::{self, map_state, parse_at, progress_at};
 use super::toolchain::Toolchain;
-use crate::domain::{Intent, Origin, ProposalQuery, ProposalState, ResultKind, Run, RunEvent, RunQuery, RunState, StateKind};
+use crate::domain::{Intent, Origin, ProposalQuery, ProposalState, Run, RunEvent, RunQuery, RunState, StateKind};
 use crate::notify::Notice;
 
 pub const POLL_BUSY: Duration = Duration::from_secs(4);
@@ -43,14 +43,6 @@ const REPLY_KEPT: usize = 1_000;
 pub enum Attention {
     Needs,
     Done,
-    /// Finished, and a comment for its ticket is waiting as a draft.
-    Drafted,
-    /// Finished, and a new ticket from its result is waiting as a draft.
-    DraftedTicket,
-    /// Finished, and a breakdown into subtasks is waiting as a draft.
-    Breakdown,
-    /// A Plan run finished, and a description update that adds its plan is waiting as a draft.
-    PlanDrafted,
     Failed,
 }
 
@@ -117,10 +109,6 @@ pub fn notice_text(run: &Run, why: Attention) -> Notice {
             };
             Notice { title: format!("{topic} needs you"), body }
         }
-        Attention::Drafted => Notice { title: format!("Draft ready on {topic}"), body: "An agent finished. Read its comment before anything is posted".into() },
-        Attention::PlanDrafted => Notice { title: format!("Plan finished on {topic}"), body: "Description update ready. Read it before anything is written to the ticket".into() },
-        Attention::Breakdown => Notice { title: format!("Breakdown proposed on {topic}"), body: "An agent finished. Read the subtasks before anything is created".into() },
-        Attention::DraftedTicket => Notice { title: "Draft ticket ready".into(), body: format!("An agent finished in {topic}. Read the ticket before anything is created") },
         Attention::Done => Notice { title: format!("{topic} finished"), body: "Open it to see what it found".into() },
         Attention::Failed => {
             let title = match run.error.as_deref() {
@@ -258,9 +246,8 @@ impl RunService {
         for id in self.adopt_continuations(&entries, &finished, now).await {
             changed.insert(id);
         }
-        let mut reviewed = Vec::new();
         for listed in runs.iter().chain(&finished) {
-            match self.track(&tc, config_dir.as_deref(), &entries, &listed.id, now, &mut reviewed).await {
+            match self.track(&tc, config_dir.as_deref(), &entries, &listed.id, now).await {
                 Ok(Some(connection_id)) => {
                     changed.insert(connection_id);
                 }
@@ -268,12 +255,8 @@ impl RunService {
                 Err(e) => eprintln!("couldn't track run {}: {e}", listed.id),
             }
         }
-        // A review's GitHub draft reads the pull request, which can take a while, so launches don't wait for it.
         drop(turn);
         changed.iter().for_each(|c| (self.changed)(c));
-        for run in &reviewed {
-            self.draft_review(run).await;
-        }
         Polled { busy }
     }
 
@@ -405,9 +388,7 @@ impl RunService {
     }
 
     /// Applies one run's observation. Returns its connection when anything about it changed.
-    /// A run pinned to a pull request that reached Done is added to `reviewed`, for its GitHub review draft to be made once the launch lock is
-    /// let go (`draft_review`).
-    async fn track(&self, tc: &Toolchain, config_dir: Option<&Path>, entries: &[AgentEntry], run_id: &str, now: DateTime<Utc>, reviewed: &mut Vec<Run>) -> crate::error::Result<Option<String>> {
+    async fn track(&self, tc: &Toolchain, config_dir: Option<&Path>, entries: &[AgentEntry], run_id: &str, now: DateTime<Utc>) -> crate::error::Result<Option<String>> {
         let Some(before) = self.core.run(run_id).await? else { return Ok(None) };
         if before.state == RunState::Failed || before.worktree_removed_at.is_some() {
             return Ok(None);
@@ -477,7 +458,6 @@ impl RunService {
             run.result = answer.or_else(|| run.summary.clone());
         }
         run.error = matches!(seen.state, RunState::Failed | RunState::Unknown).then(|| seen.error.clone()).flatten();
-        let settings = self.settings();
         let ended = matches!(run.state, RunState::Done | RunState::Failed | RunState::Stopped);
         if ended {
             run.ended_at.get_or_insert(now);
@@ -501,13 +481,9 @@ impl RunService {
                 eprintln!("couldn't mark the report of run {run_id} as older than the follow-up: {e}");
             }
         }
-        let drafted = if run.state == RunState::Done && before.state != RunState::Done && settings.draft_on_finish { self.draft_for(&run).await } else { None };
-        if run.state == RunState::Done && before.state != RunState::Done && run.spec.pinned_review() {
-            reviewed.push(run.clone());
-        }
         // A workstream's build pushed its branch and opened a draft pull request; a review of it waits until a code
         // sync has found that, so one is asked for now rather than at the next interval.
-        if run.state == RunState::Done && before.state != RunState::Done && run.spec.is(ResultKind::Build) && run.spec.workstream.is_some() {
+        if run.state == RunState::Done && before.state != RunState::Done && run.spec.workstream.is_some() {
             self.core.request_code_sync();
         }
         if run.short_id != before.short_id || reopened {
@@ -521,55 +497,12 @@ impl RunService {
         if run.state != before.state {
             match run.state {
                 RunState::NeedsAnswer | RunState::NeedsPermission | RunState::SystemBlocked => self.notify_run(&run, Attention::Needs),
-                // Finishing again after the person carried on is only worth a notice when it makes a draft.
-                RunState::Done if before.continued_at.is_none() || drafted.is_some() => self.notify_run(&run, drafted.unwrap_or(Attention::Done)),
+                RunState::Done if before.continued_at.is_none() => self.notify_run(&run, Attention::Done),
                 RunState::Failed => self.notify_run(&run, Attention::Failed),
                 _ => {}
             }
         }
         Ok(touched.then(|| run.connection_id.clone()))
-    }
-
-    /// The drafts a finished run leaves, by what it reported: a comment on its ticket from its note, its proposed
-    /// breakdown, the description update that adds its plan; or a new ticket when it has none. The GitHub review draft
-    /// of a run that reviewed a pull request is made apart (`draft_review`). `None` when nothing was made. A failure is only logged: the run's result is already
-    /// saved, and the sheet's own button still drafts it.
-    pub(super) async fn draft_for(&self, run: &Run) -> Option<Attention> {
-        let mut why = None;
-        if run.item.is_some() {
-            if self.logged(run, self.core.auto_draft_run_triage(&run.id).await) {
-                why = Some(Attention::Drafted);
-            }
-            if self.logged(run, self.core.draft_run_subtasks(&run.id).await) {
-                why = Some(Attention::Breakdown);
-            }
-            if self.logged(run, self.core.auto_draft_run_plan_description(&run.id).await) {
-                why = Some(Attention::PlanDrafted);
-            }
-        } else if self.logged(run, self.core.auto_draft_run_ticket(&run.id).await) {
-            why = Some(Attention::DraftedTicket);
-        }
-        if why.is_some() {
-            (self.drafted)(&run.connection_id);
-        }
-        why
-    }
-
-    /// The GitHub review draft a finished Review leaves, which only the person's approval posts. It is made whatever
-    /// `draft_on_finish` says, since nothing else makes one: it writes nothing anywhere until then. It reads the pull
-    /// request, so it is never called with the launch lock held. A failure is only logged.
-    pub(super) async fn draft_review(&self, run: &Run) {
-        if self.logged(run, self.core.auto_draft_run_review(&run.id).await) {
-            (self.drafted)(&run.connection_id);
-        }
-    }
-
-    fn logged(&self, run: &Run, made: crate::error::Result<Option<crate::domain::Proposal>>) -> bool {
-        made.unwrap_or_else(|e| {
-            eprintln!("couldn't draft from run {}: {e}", run.id);
-            None
-        })
-        .is_some()
     }
 
     pub async fn events(&self, run_id: &str) -> crate::error::Result<Vec<RunEvent>> {

@@ -56,8 +56,31 @@ export async function peekTicket(page: Page, key: string) {
  */
 export async function startWorkstream(page: Page, key: string) {
   await peekTicket(page, key);
-  await peekSheet(page).getByRole("button", { name: "Ask Pip" }).click();
+  await peekSheet(page).locator("[data-ask-pip]").click();
   await expect(pipConversation(page)).toHaveText(new RegExp(`^Workstream: ${key} .* · Intake$`));
+}
+
+/**
+ * Marks every pending comment draft as edited by the person. A newer comment on the same ticket then stays beside it,
+ * which is how two of Pip's comments can both be waiting.
+ */
+export async function keepComments(page: Page) {
+  const ids = await page.locator('article[data-draft][data-state="pending"]').evaluateAll((els) => [
+    ...new Set(
+      els.flatMap((el) => {
+        const id = el.getAttribute("data-draft");
+        const title = el.querySelector("h3")?.textContent ?? "";
+        return id && title.startsWith("Comment on") ? [id] : [];
+      }),
+    ),
+  ]);
+  for (const id of ids) {
+    await page.evaluate((draftId) => {
+      const mock = (globalThis as { __gossamrMock?: { noteEdited(id: string): void } }).__gossamrMock;
+      if (!mock) throw new Error("the sample backend's clock isn't there; is this a dev build in mock mode?");
+      mock.noteEdited(draftId);
+    }, id);
+  }
 }
 
 /**

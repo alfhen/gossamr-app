@@ -23,7 +23,7 @@ use crate::domain::{
     ChangedFile, CodeChange, CodeFile, CodeHit, CommitQuery, ContainerPage, ContainerQuery, ContainerRef, Footprint, PostedReview, PullRequestDetail,
     ReviewComment, TreeEntry,
 };
-use crate::error::{Error, Result};
+use crate::error::Result;
 
 pub use self::http::error_message;
 
@@ -43,14 +43,11 @@ pub struct GithubHost {
     connection_id: String,
     login: String,
     owners: Mutex<Option<Vec<String>>>,
-    /// Repositories (lowercased) where GitHub refused a review with a 403, with the sentence that says so. That refusal
-    /// outranks whatever the token's scopes and permissions suggest.
-    refused_reviews: Mutex<HashMap<String, String>>,
 }
 
 impl GithubHost {
     pub fn new(http: reqwest::Client, base: &str, token: &str, connection_id: &str, login: &str, db: Arc<Mutex<Db>>) -> Self {
-        Self { api: Api::new(http, base, token, connection_id, db), connection_id: connection_id.into(), login: login.into(), owners: Mutex::new(None), refused_reviews: Mutex::new(HashMap::new()) }
+        Self { api: Api::new(http, base, token, connection_id, db), connection_id: connection_id.into(), login: login.into(), owners: Mutex::new(None) }
     }
 
     /// The person's login and the organisations they belong to, which is where a repository search looks.
@@ -124,8 +121,7 @@ fn footprint_row<'a>(rows: &'a mut HashMap<String, Footprint>, connection_id: &s
 /// token carries (`None` for a fine-grained token or an app). A classic token needs the `repo` scope, or `public_repo`
 /// on a public repository, and read access; the others need write access to the repository. For a fine-grained token
 /// those permissions are the person's role, not what the token was granted, so a token without `pull_requests: write`
-/// reads as able to post until its first post is refused with a 403, which `refused_reviews` then keeps for the host's
-/// life.
+/// reads as able to post even when a post would be refused with a 403.
 fn review_access_of(repo: &Repo, scopes: Option<&[String]>) -> ReviewAccess {
     let permissions = repo.permissions.as_ref();
     let has = |s: &str| scopes.is_some_and(|all| all.iter().any(|x| x == s));
@@ -273,9 +269,6 @@ impl CodeHost for GithubHost {
     }
 
     async fn review_access(&self, repo: &str) -> Result<ReviewAccess> {
-        if let Some(reason) = self.refused_reviews.lock().expect("access lock poisoned").get(&repo.to_lowercase()) {
-            return Ok(ReviewAccess { can_post: false, reason: Some(reason.clone()) });
-        }
         let (found, page): (Repo, _) = self.api.json(&format!("/repos/{repo}")).await?;
         Ok(review_access_of(&found, page.scopes.as_deref()))
     }
@@ -292,14 +285,7 @@ impl CodeHost for GithubHost {
     }
 
     async fn post_review(&self, repo: &str, number: u64, commit_sha: &str, summary: &str, comments: &[ReviewComment]) -> Result<PostedReview> {
-        let posted = write::post_review(&self.api, repo, number, commit_sha, summary, comments).await;
-        if let Err(Error::CodeHost { status: 403, message }) = &posted {
-            // Only the refusal of write access lasts; one asking for single sign-on is gone once the person authorises it.
-            if *message == write::no_write_access(repo) {
-                self.refused_reviews.lock().expect("access lock poisoned").insert(repo.to_lowercase(), message.clone());
-            }
-        }
-        posted
+        write::post_review(&self.api, repo, number, commit_sha, summary, comments).await
     }
 }
 
