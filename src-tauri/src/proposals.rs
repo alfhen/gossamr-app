@@ -258,20 +258,27 @@ pub fn create(db: &Db, draft: Draft, at: DateTime<Utc>) -> Result<Proposal> {
         maybe_posted: None,
     };
     // Everything that can refuse the draft is decided before anything is written.
-    let Tidied { replaced, kept } = tidy(db, &p)?;
     db.insert_proposal(&p)?;
     record(db, &p, actor_of(p.created_by), "draft_created", at);
+    settle(db, &p, at)?;
+    Ok(p)
+}
+
+/// Retires the pending drafts `p` replaces, and records the ones it leaves standing. `create` and `unskip` both do this,
+/// so bringing a skip back cannot leave two unedited drafts of the same kind and target pending.
+fn settle(db: &Db, p: &Proposal, at: DateTime<Utc>) -> Result<()> {
+    let Tidied { replaced, kept } = tidy(db, p)?;
     for mut old in replaced {
         old.state = ProposalState::Retired(REPLACED_REASON.into());
         old.superseded_by = Some(p.id.clone());
         old.updated_at = at;
         db.save_proposal(&old)?;
-        record_beside(db, &old, &p, "draft_superseded", at);
+        record_beside(db, &old, p, "draft_superseded", at);
     }
     for (old, action) in kept {
-        record_beside(db, &old, &p, action, at);
+        record_beside(db, &old, p, action, at);
     }
-    Ok(p)
+    Ok(())
 }
 
 /// Records `action` on the older draft `old` that the new draft `new` replaced or left standing, with the new one's id:
@@ -295,6 +302,7 @@ pub const REPLACED_REASON: &str = "Replaced by a newer draft";
 pub const KEPT_EDITED: &str = "draft_kept_edited";
 pub const KEPT_MAYBE_POSTED: &str = "draft_kept_maybe_posted";
 pub const KEPT_PARTIAL: &str = "draft_kept_partial";
+pub const KEPT_UNCONFIRMED: &str = "draft_kept_unconfirmed";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Supersession {
@@ -311,10 +319,17 @@ pub fn supersession(older: &Proposal, newer: &Proposal) -> Supersession {
     if older.intent.supersession_key().as_ref() != Some(&key) {
         return Supersession::Unrelated;
     }
-    if person_owned(older) || older.maybe_posted.is_some() || !older.created.is_empty() {
+    if person_owned(older) || older.maybe_posted.is_some() || !older.created.is_empty() || attempt_unconfirmed(older) {
         return Supersession::Alongside;
     }
     Supersession::Supersede
+}
+
+/// The last attempt may have written something: the app closed while it was being applied, or the tracker answered
+/// after the write was sent. A refusal that says nothing was written, or that this tracker can't edit text, is not
+/// one of these, so the next draft of the same kind replaces it.
+fn attempt_unconfirmed(p: &Proposal) -> bool {
+    p.error.as_deref().is_some_and(|e| !e.contains("nothing was written") && !e.contains("can't change a ticket's title or description"))
 }
 
 #[derive(Debug, Default)]
@@ -330,7 +345,15 @@ fn tidy(db: &Db, p: &Proposal) -> Result<Tidied> {
         match supersession(&older, p) {
             Supersession::Supersede => tidied.replaced.push(older),
             Supersession::Alongside => {
-                let reason = if person_owned(&older) { KEPT_EDITED } else if older.maybe_posted.is_some() { KEPT_MAYBE_POSTED } else { KEPT_PARTIAL };
+                let reason = if person_owned(&older) {
+                    KEPT_EDITED
+                } else if older.maybe_posted.is_some() {
+                    KEPT_MAYBE_POSTED
+                } else if !older.created.is_empty() {
+                    KEPT_PARTIAL
+                } else {
+                    KEPT_UNCONFIRMED
+                };
                 tidied.kept.push((older, reason));
             }
             Supersession::Unrelated => {}
@@ -488,7 +511,8 @@ pub fn skip(db: &Db, id: &str, at: DateTime<Utc>) -> Result<Proposal> {
 pub const UNSKIP_WINDOW_SECS: i64 = 60;
 
 /// The person's Undo of a skip: a draft skipped within `UNSKIP_WINDOW_SECS` goes back to pending, as it was (a skip changes
-/// nothing else). One that is pending already is returned as it is; any other state, or a skip that old, is refused.
+/// nothing else). A later unedited draft of the same kind and target is retired, so the two are not both pending. One
+/// that is pending already is returned as it is; any other state, or a skip that old, is refused.
 pub fn unskip(db: &Db, id: &str, at: DateTime<Utc>) -> Result<Proposal> {
     let mut p = load(db, id)?;
     match p.state {
@@ -502,6 +526,7 @@ pub fn unskip(db: &Db, id: &str, at: DateTime<Utc>) -> Result<Proposal> {
     p.state = ProposalState::Pending;
     p.updated_at = at;
     db.save_proposal(&p)?;
+    settle(db, &p, at)?;
     Ok(p)
 }
 
@@ -879,6 +904,41 @@ mod tests {
         let back = db.proposal(&p.id).unwrap().unwrap();
         assert_eq!(back.state, ProposalState::Pending);
         assert!(back.error.unwrap().contains("Check whether it went through"));
+    }
+
+    #[test]
+    fn a_draft_whose_post_may_have_gone_through_is_not_replaced() {
+        let db = Db::in_memory().unwrap();
+        let p = made(&db, comment_draft("1"));
+        begin(&db, &p.id, now()).unwrap();
+        db.release_interrupted(now()).unwrap();
+        let newer = made(&db, comment_draft("1"));
+        assert_eq!(load(&db, &p.id).unwrap().state, ProposalState::Pending, "the warning stays for the person to check");
+        assert_eq!(load(&db, &newer.id).unwrap().state, ProposalState::Pending);
+    }
+
+    #[test]
+    fn a_rewrite_that_wrote_nothing_is_replaced_by_the_next_draft() {
+        let db = Db::in_memory().unwrap();
+        let p = made(&db, Draft::from_pip("r", None, rewrite(Some(("Old", "New")), None), None));
+        let mut stored = load(&db, &p.id).unwrap();
+        stored.error = Some("CA-1 changed since this was drafted, so nothing was written. Skip this draft and ask Pip to draft it again from the current text.".into());
+        db.save_proposal(&stored).unwrap();
+        let newer = made(&db, Draft::from_pip("r", None, rewrite(Some(("Old", "Better")), None), None));
+        assert!(matches!(load(&db, &p.id).unwrap().state, ProposalState::Retired(reason) if reason == REPLACED_REASON));
+        assert_eq!(load(&db, &newer.id).unwrap().state, ProposalState::Pending);
+    }
+
+    #[test]
+    fn bringing_a_skip_back_retires_the_later_draft_of_the_same_kind() {
+        let db = Db::in_memory().unwrap();
+        let first = made(&db, comment_draft("1"));
+        let at = now();
+        skip(&db, &first.id, at).unwrap();
+        let second = made(&db, comment_draft("1"));
+        unskip(&db, &first.id, at + chrono::Duration::seconds(8)).unwrap();
+        assert_eq!(load(&db, &first.id).unwrap().state, ProposalState::Pending);
+        assert!(matches!(load(&db, &second.id).unwrap().state, ProposalState::Retired(reason) if reason == REPLACED_REASON));
     }
 
     fn cache(db: &Db, items: &[crate::domain::WorkItem]) {

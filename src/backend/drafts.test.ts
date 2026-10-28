@@ -71,6 +71,23 @@ describe("one supersession rule for eight write kinds", () => {
     const partial = proposal(intents[6], { created: [other] });
     expect(supersession(partial, proposal(intents[6], { id: "new" })).type).toBe("alongside");
   });
+
+  it("keeps a draft whose post may have gone through, and still replaces one that wrote nothing", () => {
+    const interrupted = proposal(intents[0], { createdBy: "pip", error: "Gossamr closed while this was being applied. Check whether it went through before trying again." });
+    expect(supersession(interrupted, proposal(intents[0], { id: "new", createdBy: "pip" }))).toMatchObject({ type: "alongside", reason: "draft_kept_unconfirmed" });
+    const refused = proposal(intents[4], { createdBy: "pip", error: "CA-1 changed since this was drafted, so nothing was written." });
+    expect(supersession(refused, proposal(intents[4], { id: "new", createdBy: "pip" })).type).toBe("supersede");
+  });
+
+  it("bringing a skip back retires the later draft of the same kind", async () => {
+    const drafts = new MockProposals(async () => []);
+    const first = drafts.draft(intents[0]);
+    await drafts.skip(first.id);
+    const second = drafts.draft(intents[0]);
+    await drafts.unskip(first.id);
+    expect(drafts.get(first.id)?.state.type).toBe("pending");
+    expect(drafts.get(second.id)?.state).toEqual({ type: "retired", reason: "Replaced by a newer draft" });
+  });
 });
 
 describe("review comments at the reviewed commit", () => {

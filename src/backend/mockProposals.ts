@@ -372,8 +372,8 @@ export class MockProposals {
 
   /**
    * The person's Undo of a skip, as `unskip` in `proposals.rs`: a draft skipped within `UNSKIP_WINDOW_MS` is pending again,
-   * as it was; a pending one is returned as it is, and any other state or an older skip is refused. Its workstream's audit
-   * gets an `undone` line of its own after the skip's.
+   * as it was, and a later unedited draft of the same kind and target is retired. A pending one is returned as it is, and
+   * any other state or an older skip is refused. Its workstream's audit gets an `undone` line of its own after the skip's.
    */
   async unskip(id: string) {
     const p = this.get(id);
@@ -382,8 +382,13 @@ export class MockProposals {
     if (p.state.type !== "skipped") throw new Error("only a skipped draft can be brought back");
     if (Date.now() - Date.parse(p.updatedAt) > UNSKIP_WINDOW_MS) throw new Error("that draft was skipped too long ago to bring back");
     const back = this.set(id, { state: { type: "pending" } });
+    const { replaced, kept } = this.tidy(back);
+    this.drafts = this.drafts.map((d) => (replaced.includes(d) ? { ...d, state: { type: "retired" as const, reason: REPLACED_REASON }, supersededBy: back.id, updatedAt: back.updatedAt } : d));
     this.audit(back, "person", "undone", "draft_skipped");
-    return back;
+    const beside = (old: Proposal, action: string) => this.audit(old, "person", action, back.id, workstreamOf(old) ? undefined : workstreamOf(back));
+    for (const old of replaced) beside(this.get(old.id)!, "draft_superseded");
+    for (const { proposal, why } of kept) beside(proposal, why);
+    return this.get(id)!;
   }
 
   /**

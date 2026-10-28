@@ -160,6 +160,8 @@ export function inWorkstreamPane(p: Proposal, ws: { id: string; itemKey: string 
 export const REPLACED_REASON = "Replaced by a newer draft";
 export const KEPT_EDITED = "draft_kept_edited";
 export const KEPT_MAYBE_POSTED = "draft_kept_maybe_posted";
+export const KEPT_PARTIAL = "draft_kept_partial";
+export const KEPT_UNCONFIRMED = "draft_kept_unconfirmed";
 export const PLAN_COMMENT_LABEL = "Plan from agent run";
 
 export function supersessionKey(intent: Intent): string | null {
@@ -187,23 +189,27 @@ export function supersessionKey(intent: Intent): string | null {
   }
 }
 
-export type Supersession = { type: "unrelated" } | { type: "supersede" } | { type: "alongside"; reason: typeof KEPT_EDITED | typeof KEPT_MAYBE_POSTED | "draft_kept_partial" };
+export type Supersession = { type: "unrelated" } | { type: "supersede" } | { type: "alongside"; reason: typeof KEPT_EDITED | typeof KEPT_MAYBE_POSTED | typeof KEPT_PARTIAL | typeof KEPT_UNCONFIRMED };
+
+/** A refusal that says the write never started. The next draft of the same kind replaces it. Mirrors `attempt_unconfirmed` in `proposals.rs`. */
+const wroteNothing = (error: string) => error.includes("nothing was written") || error.includes("can't change a ticket's title or description");
 
 export function supersession(older: Proposal, newer: Proposal): Supersession {
   const key = supersessionKey(newer.intent);
   if (!key || older.id === newer.id || older.state.type !== "pending" || supersessionKey(older.intent) !== key) return { type: "unrelated" };
   if ((older.createdBy === "user" && older.origin.type !== "run") || older.revisions.some((revision) => revision.note === "Edited")) return { type: "alongside", reason: KEPT_EDITED };
-  if (older.intent.type === "githubReview" && older.maybePosted) return { type: "alongside", reason: KEPT_MAYBE_POSTED };
-  if (older.intent.type === "subtasks" && older.created.length > 0) return { type: "alongside", reason: "draft_kept_partial" };
+  if (older.maybePosted) return { type: "alongside", reason: KEPT_MAYBE_POSTED };
+  if (older.created.length > 0) return { type: "alongside", reason: KEPT_PARTIAL };
+  if (older.error && !wroteNothing(older.error)) return { type: "alongside", reason: KEPT_UNCONFIRMED };
   return { type: "supersede" };
 }
 
-export function keptOlderReviews(proposal: Proposal, all: readonly Proposal[]): { proposal: Proposal; why: typeof KEPT_EDITED | typeof KEPT_MAYBE_POSTED }[] {
+export function keptOlderReviews(proposal: Proposal, all: readonly Proposal[]): { proposal: Proposal; why: typeof KEPT_EDITED | typeof KEPT_MAYBE_POSTED | typeof KEPT_UNCONFIRMED }[] {
   if (proposal.intent.type !== "githubReview") return [];
   return all.flatMap((older) => {
     if (older.createdAt > proposal.createdAt) return [];
     const verdict = supersession(older, proposal);
-    return verdict.type === "alongside" && verdict.reason !== "draft_kept_partial" ? [{ proposal: older, why: verdict.reason }] : [];
+    return verdict.type === "alongside" && verdict.reason !== KEPT_PARTIAL ? [{ proposal: older, why: verdict.reason }] : [];
   });
 }
 
