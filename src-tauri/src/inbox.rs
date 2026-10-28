@@ -338,8 +338,7 @@ impl Core {
         Some(result)
     }
 
-    /// Fetches what changed since the last sync (or everything, when due), stores it in the cache, and returns the
-    /// events that are new and unread.
+    /// Fetches what changed since the last sync (or everything, when due) and stores it in the cache.
     pub async fn sync(&self) -> Result<Synced> {
         let (site, me) = self.identity().await?;
         let scope = Scope::of(&site, &me);
@@ -359,7 +358,7 @@ impl Core {
         let pulled = sync::pull(tracker.as_ref(), &connection_id, plan, &state, &known_epics, &unread_after, started, &watch).await?;
 
         self.with_db_for(&scope, |db| {
-            let stored = sync::store(db, &connection_id, &me.account_id, &pulled, plan, started, &unread_after, previous.is_some())?;
+            let stored = sync::store(db, &connection_id, &me.account_id, &pulled, plan, started, &unread_after)?;
             db.set_meta(LAST_SYNC, &stamp(started))?;
             let containers_changed = pulled.containers.is_some();
             // A draft that can't be re-judged must not stop the items from syncing.

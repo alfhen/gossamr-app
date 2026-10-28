@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Timelike, Utc};
 
-use super::notices::{stuck_runs, Group, Key, Need, Outgoing, Settings as NoticeSettings, Waiting, GENERAL};
+use super::notices::{stuck_runs, Key, Need, Outgoing, Settings as NoticeSettings, Waiting, GENERAL};
 use super::cli::{AgentEntry, JobInfo, ShortId};
 use super::redact::redact;
 use super::service::{belongs_to, RunService};
@@ -283,7 +283,7 @@ impl RunService {
         let closed = |id: &Option<String>| id.as_deref().is_some_and(|id| closed_ids.contains(id));
         let label_of = |id: &str, ws: &Option<String>| ws.as_deref().and_then(view_of).and_then(|v| v.labels.iter().find(|(run, _)| run == id)).map(|(_, l)| l.clone());
         let mut needs: BTreeMap<Key, Vec<Need>> = BTreeMap::new();
-        // A run's question, permission or sign-in is something to unblock.
+        // A run's question, permission prompt or sign-in. The state is in the key: a run that asks again another way is new.
         for run in &runs {
             let ws = run.spec.workstream.clone();
             if closed(&ws) {
@@ -298,7 +298,7 @@ impl RunService {
                     None => format!("{name} has a question"),
                 },
             };
-            needs.entry(ws).or_default().push(Need { key: format!("run:{}", run.id), group: Group::Unblock, run_id: Some(run.id.clone()), what, since: run.last_progress_at });
+            needs.entry(ws).or_default().push(Need { key: format!("run:{}:{:?}", run.id, run.state), run_id: Some(run.id.clone()), what, since: run.last_progress_at });
         }
         // A failure is stuck until dealt with, but only the latest run of its kind on its ticket.
         let Ok(all) = self.core.runs_list(&RunQuery::default()).await else { return };
@@ -309,22 +309,22 @@ impl RunService {
             }
             let name = label_of(&run.id, &ws).unwrap_or_else(|| topic(run).to_owned());
             let what = format!("{name} failed");
-            needs.entry(ws).or_default().push(Need { key: format!("run:{}", run.id), group: Group::Unblock, run_id: Some(run.id.clone()), what, since: run.ended_at.unwrap_or(run.last_progress_at) });
+            needs.entry(ws).or_default().push(Need { key: format!("run:{}:failed", run.id), run_id: Some(run.id.clone()), what, since: run.ended_at.unwrap_or(run.last_progress_at) });
         }
         // A paused workstream waits to be resumed.
         for v in &views {
             if v.workstream.paused_reason.is_some() {
-                needs.entry(Some(v.workstream.id.clone())).or_default().push(Need { key: format!("paused:{}", v.workstream.id), group: Group::Unblock, run_id: None, what: "It is paused until you resume it".to_owned(), since: v.workstream.created_at });
+                needs.entry(Some(v.workstream.id.clone())).or_default().push(Need { key: format!("paused:{}", v.workstream.id), run_id: None, what: "It is paused until you resume it".to_owned(), since: v.workstream.created_at });
             }
         }
-        // A question Pip asked the person is a choice only they make.
+        // A question Pip asked the person.
         for v in &views {
             if let Some(ask) = &v.pip_ask {
                 let what = format!("Pip asks: {}", cut(&ask.question.split_whitespace().collect::<Vec<_>>().join(" "), 100));
-                needs.entry(Some(v.workstream.id.clone())).or_default().push(Need { key: format!("pip-ask:{}", v.workstream.id), group: Group::Decide, run_id: None, what, since: ask.at });
+                needs.entry(Some(v.workstream.id.clone())).or_default().push(Need { key: format!("pip-ask:{}", v.workstream.id), run_id: None, what, since: ask.at });
             }
         }
-        // Every pending draft waits for approval, a plan or description rewrite as a decision.
+        // Every pending draft waits for approval.
         for draft in &drafts {
             let workstream = draft.workstream().map(str::to_owned);
             if closed(&workstream) {
@@ -334,14 +334,14 @@ impl RunService {
                 Origin::Run { run_id, .. } => Some(run_id.clone()),
                 _ => None,
             };
-            let (group, what) = match &draft.intent {
-                Intent::Rewrite { .. } => (Group::Decide, "A description update waits for your approval".to_owned()),
+            let what = match &draft.intent {
+                Intent::Rewrite { .. } => "A description update waits for your approval".to_owned(),
                 _ => match from.as_deref().and_then(|id| label_of(id, &workstream)) {
-                    Some(name) => (Group::Approve, format!("{name} left a draft for you")),
-                    None => (Group::Approve, "A draft waits for your approval".to_owned()),
+                    Some(name) => format!("{name} left a draft for you"),
+                    None => "A draft waits for your approval".to_owned(),
                 },
             };
-            needs.entry(workstream).or_default().push(Need { key: format!("draft:{}", draft.id), group, run_id: from, what, since: draft.created_at });
+            needs.entry(workstream).or_default().push(Need { key: format!("draft:{}", draft.id), run_id: from, what, since: draft.created_at });
         }
         let waiting: Vec<Waiting> = needs.into_iter().map(|(key, needs)| Waiting { key, needs }).collect();
         let name_of = |key: &Key| match key.as_deref() {
@@ -350,7 +350,7 @@ impl RunService {
         };
         // A notice counts as told only once it is delivered, so one that fails is offered again at the next poll.
         let watching = self.notifier.watching();
-        self.notices.lock().expect("notices lock poisoned").tick(now, &settings, watching, &waiting, &name_of, &mut |notice| self.notifier.announce(notice));
+        self.notices.lock().expect("notices lock poisoned").tick(&settings, watching, &waiting, &name_of, &mut |notice| self.notifier.announce(notice));
     }
 
     /// Runs that finished or were stopped lately and still have a worktree: their session may be open at its prompt, or
