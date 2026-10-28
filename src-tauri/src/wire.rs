@@ -109,7 +109,7 @@ mod tests {
         let mut files = Vec::new();
         sources(&Path::new(env!("CARGO_MANIFEST_DIR")).join("src"), &mut files);
         let own = Path::new(env!("CARGO_MANIFEST_DIR")).join("src").join("wire.rs").display().to_string();
-        let calls = [".emit(", ".emit_to(", ".emit_str(", ".emit_filter(", "Emitter::emit"];
+        let calls = [".emit(", ".emit::<", ".emit_to(", ".emit_to::<", ".emit_str(", ".emit_filter(", ".emit_filter::<", "Emitter::emit"];
         let emitting: Vec<_> = files.iter().filter(|(path, text)| *path != own && calls.iter().any(|c| text.contains(c))).map(|(p, _)| p.as_str()).collect();
         assert!(emitting.is_empty(), "these emit events of their own: {emitting:?}");
     }
