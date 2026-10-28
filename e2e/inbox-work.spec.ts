@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { advanceRuns, agentsHome, closePipDrawer, groupOpen, mockRuns, needsPane, needsStack, needsYouCount, openAgents, openApp, openNeedOfKind, pauseAtCeiling, startWorkstream, workstreamGroup, workstreamSheet } from "./support/app";
+import { advanceRuns, agentsHome, askPip, closePipDrawer, expandNeedsYou, groupOpen, homeSettled, mockRuns, needOfKind, needRow, needsPane, needsStack, needsYouCount, openAgents, openApp, openNeedOfKind, pauseAtCeiling, selectWorkstream, startWorkstream, workstreamGroup, workstreamSheet } from "./support/app";
 
 // The Inbox and Work screens (docs/simplification-proposal.md, 7.1): Inbox is one list of watched-ticket activity with one
 // filter; Work is each workstream with its agents, one status word per workstream and one filter, Needs you.
@@ -93,6 +93,30 @@ test.describe("Work", () => {
     await expect(needsStack(page).locator("[data-needs-pane]").first()).toHaveAttribute("data-open", "true");
   });
 
+  test("lists a failed agent, a Pip question and a pending draft under the Needs you filter", async ({ page }) => {
+    await openApp(page, "runs=failures&prSurface=manual");
+    await startWorkstream(page, "CA-401");
+    await openAgents(page);
+    await selectWorkstream(page, "CA-401");
+    // The question last: Pip's next message would answer it.
+    await askPip(page, "Draft a comment");
+    await homeSettled(page);
+    await askPip(page, "ask me which database to use");
+    await homeSettled(page);
+    await closePipDrawer(page);
+    await filter(page).click();
+    await expect(filter(page)).toHaveAttribute("aria-pressed", "true");
+
+    await expect(workstreamGroup(page, "CA-401")).toBeVisible();
+    await expandNeedsYou(page, "CA-401");
+    await expect(needOfKind(page, "pipAsk")).toContainText("Which database to use?");
+    await expect(needRow(page, /Draft comment/)).toHaveCount(1);
+
+    await expandNeedsYou(page, "General");
+    await expect(workstreamSheet(page)).toHaveAttribute("aria-label", "No workstream");
+    await expect(needOfKind(page, "failure")).toBeVisible();
+  });
+
   test("opens from the rail's Needs you popover with the filter on and that need open", async ({ page }) => {
     await withNeeds(page);
     await expect(filter(page)).toHaveAttribute("aria-pressed", "false");
@@ -138,6 +162,26 @@ test.describe("Work", () => {
     await expect(page.locator("#agent-sheet")).toBeVisible();
   });
 
+  test("keeps an agent where it is while focus is in the list, and moves it once focus leaves", async ({ page }) => {
+    await openApp(page);
+    await openAgents(page);
+    const shownIds = () => agentsHome(page).locator("article[data-run-id]").evaluateAll((els) => els.map((e) => e.getAttribute("data-run-id")));
+    const before = await shownIds();
+    const working = (await mockRuns(page)).filter((r) => r.state === "working" && before.includes(r.id));
+    const target = working.map((r) => r.id).sort((a, b) => before.indexOf(b)! - before.indexOf(a)!)[0];
+    const other = before.find((id) => id !== target)!;
+    await agentsHome(page).locator(`article[data-run-id="${other}"]`).focus();
+    await expect(page.locator("[data-agents-list]")).toHaveAttribute("data-frozen", "true");
+    await advanceRuns(page, 1, target);
+    await expect(agentsHome(page).locator(`article[data-run-id="${target}"]`)).toHaveAttribute("data-state", "done");
+    expect(await shownIds()).toEqual(before);
+    await agentsHome(page).getByRole("button", { name: "Ask Pip", exact: true }).focus();
+    await expect.poll(shownIds).not.toEqual(before);
+    const after = await shownIds();
+    expect([...after].sort()).toEqual([...before].sort());
+    expect(after.indexOf(target)).toBeLessThan(before.indexOf(target));
+  });
+
   test("keeps an agent where it is while the pointer is over the list, and moves it once the pointer leaves", async ({ page }) => {
     await openApp(page);
     await openAgents(page);
@@ -175,6 +219,15 @@ test.describe("Settings", () => {
     await expect(notifications).not.toBeChecked();
     await notifications.check();
     await expect(notifications).toBeChecked();
+    await notifications.uncheck();
+    await expect(notifications).not.toBeChecked();
+    // Saved, not only drawn: closing the dialog and opening it again reads the stored value.
+    await page.keyboard.press("Escape");
+    await expect(safety).toHaveCount(0);
+    await page.keyboard.press("ControlOrMeta+k");
+    await page.getByRole("dialog", { name: "Command palette" }).getByRole("combobox").fill("agents safety");
+    await page.keyboard.press("Enter");
+    await expect(page.getByRole("dialog", { name: "Agents safety and settings" }).getByRole("checkbox", { name: "Notifications" })).not.toBeChecked();
   });
 });
 

@@ -3,7 +3,7 @@ import { itemKey } from "../lib/filter";
 import { relativeTime } from "../lib/views";
 import type { FeedEntry } from "../types";
 import { nameOf, useWorkspace } from "../workspaceStore";
-import { FILTER_LABEL, groupByDay, inInbox, initials, stepIndex, verb, type InboxFilter } from "./activityLogic";
+import { FILTER_LABEL, groupByDay, initials, stepIndex, verb, type InboxFilter } from "./activityLogic";
 import { useActivity } from "./activityStore";
 import { showMe } from "./jump";
 import { useTabs } from "./tabsStore";
@@ -125,8 +125,7 @@ export function ActivityView() {
   const sentinel = useRef<HTMLDivElement>(null);
   const list = useRef<HTMLDivElement>(null);
 
-  const shown = useMemo(() => entries.filter(inInbox), [entries]);
-  const groups = useMemo(() => groupByDay(shown, now), [shown, now]);
+  const groups = useMemo(() => groupByDay(entries, now), [entries, now]);
 
   useEffect(() => setNow(new Date()), [entries]);
 
@@ -143,8 +142,8 @@ export function ActivityView() {
     void useActivity.getState().markRead(e.unread ? [e.id] : []);
   };
 
-  const shownRef = useRef(shown);
-  shownRef.current = shown;
+  const shownRef = useRef(entries);
+  shownRef.current = entries;
 
   useEffect(() => {
     const onKey = (ev: globalThis.KeyboardEvent) => {
@@ -214,7 +213,7 @@ export function ActivityView() {
                         selected={selected === key}
                         openable={!!item}
                         position={++position}
-                        total={shown.length}
+                        total={entries.length}
                         onOpen={() => open(e)}
                         onMarkRead={() => void useActivity.getState().markRead([e.id])}
                         onShow={() => (open(e), showMe(e.item))}

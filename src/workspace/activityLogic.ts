@@ -5,11 +5,12 @@ export type InboxFilter = "all" | "mentions";
 
 export const FILTER_LABEL: Record<InboxFilter, string> = { all: "All", mentions: "Mentions" };
 
-export const queryFor = (filter: InboxFilter): FeedQuery => (filter === "mentions" ? { mentionsOnly: true } : {});
-
-const INBOX_KINDS: readonly FeedEntry["kind"][] = ["commentAdded", "statusChanged", "assigned"];
-
 /** What the Inbox lists: comments (mentions among them), status changes and assignments on watched tickets. */
+export const INBOX_KINDS: FeedEntry["kind"][] = ["commentAdded", "statusChanged", "assigned"];
+
+/** Only the kinds the Inbox lists are asked for, so a page is never made of entries it would hide, and the unread count and Mark all read agree with the list. */
+export const queryFor = (filter: InboxFilter): FeedQuery => ({ kinds: INBOX_KINDS, ...(filter === "mentions" ? { mentionsOnly: true } : {}) });
+
 export const inInbox = (e: Pick<FeedEntry, "kind">) => INBOX_KINDS.includes(e.kind);
 
 export interface DayGroup<T extends { at: string } = FeedEntry> {

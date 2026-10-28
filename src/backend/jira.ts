@@ -219,8 +219,8 @@ export class JiraBackend implements Backend {
     return invoke<FeedPage>("cache_feed", { query });
   }
 
-  cacheFeedUnread() {
-    return invoke<number>("cache_feed_unread");
+  cacheFeedUnread(kinds?: FeedQuery["kinds"]) {
+    return invoke<number>("cache_feed_unread", { kinds });
   }
 
   onCacheChanged(listener: (change: CacheChanged) => void) {

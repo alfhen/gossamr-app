@@ -16,7 +16,7 @@ function NeedsPane({ needs: list }: { needs: readonly Need[] }) {
   return <WorkstreamNeeds needs={list} workstreamId={batch !== null ? (batch === "general" ? null : batch) : owner!.workstreamId} />;
 }
 import { NeedsYouList, firstText, groupText, hasMoreBelow } from "./NeedsYou";
-import { slotWaiters, stopAllLabel, stoppable, summaryLine, yourAgents } from "./agentsLogic";
+import { needsAttention, slotWaiters, stopAllLabel, stoppable, summaryLine, yourAgents } from "./agentsLogic";
 import { arm, confirmArmed, disarm, keyPlan, openInWorkstream, openNeed } from "./needsActions";
 import { BATCH_TITLE, composerFooter } from "./workViewLogic";
 import { useWorkView } from "./workViewStore";
@@ -552,7 +552,10 @@ describe("every count of needs you and of agents, from one fixture (D4, D5, N3)"
       expect(railBadgeText.agents(n)).toBe(needsYouText(n));
       expect(Number(/(\d+) needs? you/.exec(composerFooter(runs, n, at))?.[1])).toBe(n);
       expect(renderToStaticMarkup(<Launcher needs={n} onOpen={() => {}} />)).toContain(`Ask Pip, ${needsYouText(n)}`);
-      expect(summaryLine(runs, at, n)).toMatch(new RegExp(`^${n} need you · `));
+      // The header's count, worked out from the runs and drafts themselves rather than from the list's.
+      const counted = runs.filter((r) => needsAttention(r, dismissed)).length + proposals.length;
+      expect(counted).toBe(n);
+      expect(summaryLine(runs, at, counted)).toMatch(new RegExp(`^${n} need you · `));
       // Its agent part: the run needs among them, and Agents has no badge of its own.
       const waiting = list.filter((x) => x.runId);
       expect(n).toBe(waiting.length + proposals.length);
@@ -561,7 +564,7 @@ describe("every count of needs you and of agents, from one fixture (D4, D5, N3)"
       const strip = renderToStaticMarkup(<PipRunStripView runs={runs} now={at} dismissed={dismissed} titleOf={() => null} onOpen={() => {}} onSeeAll={() => {}} />);
       expect(Number(/data-strip-count[^>]*>\d+ of (\d+)</.exec(strip)?.[1])).toBe(mine.length);
       // The header's need count is that same one list.
-      expect(Number(/^(\d+) needs? you/.exec(summaryLine(runs, at, n))?.[1] ?? 0)).toBe(n);
+      expect(Number(/^(\d+) needs? you/.exec(summaryLine(runs, at, counted))?.[1] ?? 0)).toBe(n);
       // Stop all counts a set of its own, and says so.
       expect(stopAllLabel(stoppable(runs).length + slotWaiters(runs).length)).toMatch(/^Stop all \(\d+ stoppable\)$/);
     });

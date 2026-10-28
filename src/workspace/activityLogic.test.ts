@@ -40,9 +40,9 @@ describe("grouping the feed by day", () => {
 });
 
 describe("the Inbox filter", () => {
-  it("is everything or only mentions, and asks the feed for nothing more", () => {
-    expect(queryFor("all")).toEqual({});
-    expect(queryFor("mentions")).toEqual({ mentionsOnly: true });
+  it("is everything or only mentions, of the kinds the Inbox lists and nothing more", () => {
+    expect(queryFor("all")).toEqual({ kinds: ["commentAdded", "statusChanged", "assigned"] });
+    expect(queryFor("mentions")).toEqual({ kinds: ["commentAdded", "statusChanged", "assigned"], mentionsOnly: true });
     expect(FILTER_LABEL).toEqual({ all: "All", mentions: "Mentions" });
   });
 

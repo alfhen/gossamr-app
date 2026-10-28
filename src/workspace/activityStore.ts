@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import type { Backend } from "../backend/types";
 import type { FeedCursor, FeedEntry } from "../types";
-import { queryFor, withRead, type InboxFilter } from "./activityLogic";
+import { INBOX_KINDS, queryFor, withRead, type InboxFilter } from "./activityLogic";
 import { messageOf, useToasts } from "./toasts";
 
 interface ActivityState {
@@ -41,7 +41,7 @@ export const useActivity = create<ActivityState>((set, get) => ({
     set({ backend, ...idle });
     const refresh = () => {
       void get().reload();
-      backend.cacheFeedUnread().then((unread) => get().backend === backend && set({ unread }), () => {});
+      backend.cacheFeedUnread(INBOX_KINDS).then((unread) => get().backend === backend && set({ unread }), () => {});
     };
     stop = backend.onCacheChanged(refresh);
     refresh();
@@ -108,7 +108,7 @@ export const useActivity = create<ActivityState>((set, get) => ({
     if (!backend) return;
     let page;
     try {
-      page = await backend.cacheFeed({ unreadOnly: true, limit: MARK_ALL_LIMIT });
+      page = await backend.cacheFeed({ kinds: INBOX_KINDS, unreadOnly: true, limit: MARK_ALL_LIMIT });
     } catch (e) {
       useToasts.getState().push(`Couldn't mark read: ${messageOf(e)}`);
       return;

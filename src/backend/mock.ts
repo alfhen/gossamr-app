@@ -1052,8 +1052,8 @@ export class MockBackend implements Backend {
     return this.connector.feed(query);
   }
 
-  async cacheFeedUnread() {
-    return this.connector.feedUnread();
+  async cacheFeedUnread(kinds?: FeedQuery["kinds"]) {
+    return this.connector.feedUnread(kinds);
   }
 
   async cachePeople() {

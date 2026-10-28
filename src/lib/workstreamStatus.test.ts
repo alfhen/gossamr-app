@@ -44,11 +44,23 @@ describe("workstreamStatus: every state", () => {
     expect(at(view(), [], { runs: [run("failed", "triage"), run("working", "build", { id: "r2" })] })).toMatchObject({ state: "failed", word: "Failed", detail: "Triage" });
   });
 
-  it("Failed: stays while a dismissed failure is the last word on its work, but not once a newer run of that role follows or it is archived", () => {
+  it("Failed: stays while a failure is the last word on its work, but not once a newer run of that role follows, it is archived or the person dismissed it", () => {
     const failed = run("failed", "build", { id: "r1", queuedAt: ago(1) });
     expect(at(view({ runs: ["r1"] }), [], { runs: [failed] }).state).toBe("failed");
+    expect(at(view({ runs: ["r1"] }), [], { runs: [failed], dismissed: new Set(["r1"]) }).state).toBe("idle");
     expect(at(view({ runs: ["r1", "r2"] }), [], { runs: [failed, run("done", "build", { id: "r2", queuedAt: ago(0.5) })] }).state).toBe("idle");
     expect(at(view({ runs: ["r1"] }), [], { runs: [{ ...failed, archivedAt: ago(0.1) }] }).state).toBe("idle");
+  });
+
+  it("a dismissed failure does not outrank a running agent or a closed workstream", () => {
+    const dismissed = new Set(["r1"]);
+    const failed = run("failed", "build", { id: "r1", queuedAt: ago(2) });
+    expect(at(view({ runs: ["r1", "r2"] }), [], { runs: [failed, run("working", "plan", { id: "r2" })], dismissed })).toMatchObject({ state: "running", detail: "Plan" });
+    expect(at(view({ runs: ["r1"] }, { closedAt: ago(1) }), [], { runs: [failed], dismissed }).state).toBe("done");
+  });
+
+  it("a run whose session is lost counts as failed, as proposal 5.4 has it", () => {
+    expect(at(view(), [], { runs: [run("unknown", "build")] })).toMatchObject({ state: "failed", detail: "Build" });
   });
 
   it("Idle: otherwise, however long nothing has happened", () => {

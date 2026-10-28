@@ -58,9 +58,11 @@ pub struct Outgoing {
 }
 
 /// The items already announced that still wait; one that is dealt with is forgotten, so it notifies again if it returns.
+/// The caller keeps the set across restarts (`seen`, `restore`), so a restart announces only what is new since.
 #[derive(Default)]
 pub struct Board {
     seen: BTreeSet<String>,
+    restored: bool,
 }
 
 fn waiting_notice(name: &str, need: &Need) -> Outgoing {
@@ -68,6 +70,23 @@ fn waiting_notice(name: &str, need: &Need) -> Outgoing {
 }
 
 impl Board {
+    /// Whether the set of announced items was loaded yet.
+    pub fn restored(&self) -> bool {
+        self.restored
+    }
+
+    /// Takes the items announced before this launch. With no record at all (the first launch with this record), what
+    /// waits now counts as announced, so an upgrade does not announce everything that was already open.
+    pub fn restore(&mut self, record: Option<BTreeSet<String>>, waiting: &[Waiting]) {
+        self.seen = record.unwrap_or_else(|| waiting.iter().flat_map(|w| w.needs.iter().map(|n| n.key.clone())).collect());
+        self.restored = true;
+    }
+
+    /// The items announced and still waiting, as kept between launches.
+    pub fn seen(&self) -> &BTreeSet<String> {
+        &self.seen
+    }
+
     /// What to show now. `waiting` is everything in Needs you at this poll. `watching` is the person looking at the app:
     /// nothing is shown, but what they could see counts as announced, as it does with notifications off. `deliver` shows a
     /// notice and says whether it got through: an item counts as announced only once it was, so a failed one is offered
@@ -86,7 +105,7 @@ impl Board {
     }
 }
 
-/// The failed runs that are Needs you and news: the latest run of their role's work on their ticket (their repository when
+/// The failed runs (a lost session counts as failed, as proposal 5.4 has it) that are Needs you and news: the latest run of their role's work on their ticket (their repository when
 /// they have none), not archived, ended within `FAILURE_NEWS`. A newer run in any state supersedes an older one, as
 /// `latestRuns` in `src/lib/needs.ts` does for the page's list.
 pub fn stuck_runs(runs: &[Run], now: DateTime<Utc>) -> Vec<&Run> {
@@ -102,8 +121,8 @@ pub fn stuck_runs(runs: &[Run], now: DateTime<Utc>) -> Vec<&Run> {
         }
     }
     runs.iter()
-        .filter(|r| r.state == RunState::Failed && r.archived_at.is_none())
-        .filter(|r| r.ended_at.is_some_and(|at| now - at <= FAILURE_NEWS))
+        .filter(|r| matches!(r.state, RunState::Failed | RunState::Unknown) && r.archived_at.is_none())
+        .filter(|r| now - r.ended_at.unwrap_or(r.last_progress_at) <= FAILURE_NEWS)
         .filter(|r| newest[&work(r)].1 == r.id)
         .collect()
 }

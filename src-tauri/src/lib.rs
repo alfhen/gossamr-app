@@ -291,8 +291,8 @@ async fn cache_feed(core: State<'_, CoreState>, query: FeedQuery) -> Result<Feed
 }
 
 #[tauri::command]
-async fn cache_feed_unread(core: State<'_, CoreState>) -> Result<usize> {
-    core.cache_feed_unread().await
+async fn cache_feed_unread(core: State<'_, CoreState>, kinds: Option<Vec<domain::EventKind>>) -> Result<usize> {
+    core.cache_feed_unread(&kinds.unwrap_or_default()).await
 }
 
 #[tauri::command]

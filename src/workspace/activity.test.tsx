@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MockBackend } from "../backend/mock";
 import type { FeedEntry } from "../types";
 import { DayHeading, EmptyNote, FeedRow, MentionsFilter, type FeedRowProps } from "./ActivityView";
+import { INBOX_KINDS, inInbox } from "./activityLogic";
 import { useActivity } from "./activityStore";
 
 const entry = (over: Partial<FeedEntry> = {}): FeedEntry => ({
@@ -134,15 +135,44 @@ describe("the activity store on the mock", () => {
     await done;
     await flush();
     expect(useActivity.getState().entries.find((e) => e.id === first.id)!.unread).toBe(false);
-    expect(await backend.cacheFeedUnread()).toBe(before - 1);
+    expect(await backend.cacheFeedUnread(INBOX_KINDS)).toBe(before - 1);
   });
 
   it("marks everything read, including entries past the loaded page", async () => {
     await useActivity.getState().markAllRead();
     await flush();
-    expect(await backend.cacheFeedUnread()).toBe(0);
+    expect(await backend.cacheFeedUnread(INBOX_KINDS)).toBe(0);
     expect(useActivity.getState().unread).toBe(0);
     expect(useActivity.getState().entries.every((e) => !e.unread)).toBe(true);
+  });
+
+  /** Recent field changes by a teammate: in the feed and unread, but not something the Inbox lists. */
+  const addHidden = async (n: number) => {
+    for (let i = 0; i < n; i++) backend.connector["record"]("WEB-101", "fieldChanged", "sam", new Date(Date.now() + 60_000 * (i + 1)).toISOString(), { text: "Priority" });
+    useActivity.getState().init(backend);
+    await flush();
+  };
+
+  it("asks the backend only for the kinds the Inbox lists, so newer entries it would hide never fill the page", async () => {
+    await addHidden(5);
+    const spy = vi.spyOn(backend, "cacheFeed");
+    await useActivity.getState().reload();
+    expect(spy).toHaveBeenLastCalledWith({ kinds: INBOX_KINDS });
+    const all = (await backend.cacheFeed({ limit: 200 })).entries;
+    expect(all.slice(0, 5).every((e) => !inInbox(e))).toBe(true);
+    expect(useActivity.getState().entries.length).toBeGreaterThan(10);
+    expect(useActivity.getState().entries.every(inInbox)).toBe(true);
+  });
+
+  it("counts unread only among the kinds the Inbox lists, and Mark all read leaves the others alone", async () => {
+    await addHidden(3);
+    const unreadShown = (await backend.cacheFeed({ unreadOnly: true, kinds: INBOX_KINDS, limit: 200 })).entries.length;
+    expect(useActivity.getState().unread).toBe(unreadShown);
+    expect(await backend.cacheFeedUnread()).toBe(unreadShown + 3);
+    await useActivity.getState().markAllRead();
+    await flush();
+    expect(await backend.cacheFeedUnread(INBOX_KINDS)).toBe(0);
+    expect(await backend.cacheFeedUnread()).toBe(3);
   });
 
   it("reports a failed load and recovers on retry", async () => {

@@ -59,9 +59,11 @@ test("G24: the timeline keeps the entry being read in place when a draft above i
   // At the end it stays at the end.
   await expect.poll(() => body.evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight)).toBeLessThan(25);
   // Scrolled up to an entry, that entry keeps its place as an entry above it changes height (the browser's own anchoring is off here, so it is the timeline's that is tested).
-  await body.evaluate((el) => {
+  // Two frames after the scroll, so the timeline has handled its scroll event and noted the entry before the pad goes in.
+  await body.evaluate(async (el) => {
     el.style.overflowAnchor = "none";
     el.scrollTop = el.scrollHeight / 2;
+    await new Promise<void>((done) => requestAnimationFrame(() => requestAnimationFrame(() => done())));
   });
   const reading = await body.evaluate((el) => {
     const top = el.getBoundingClientRect().top;

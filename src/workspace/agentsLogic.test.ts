@@ -119,8 +119,14 @@ describe("the runs that wait on the person", () => {
   });
 
   it("leave out queued, done and stopped runs", () => {
-    const runs = [run("queued", { id: "c" }), run("done", { id: "e" }), run("stopped", { id: "f" }), run("unknown", { id: "g" })];
+    const runs = [run("queued", { id: "c" }), run("done", { id: "e" }), run("stopped", { id: "f" })];
     expect(runs.filter((r) => needsAttention(r, none))).toEqual([]);
+  });
+
+  it("count a run whose session is lost as failed, until it is dismissed", () => {
+    const runs = [run("unknown", { id: "g" })];
+    expect(runs.filter((r) => needsAttention(r, none)).map((r) => r.id)).toEqual(["g"]);
+    expect(runs.filter((r) => needsAttention(r, new Set(["g"])))).toEqual([]);
   });
 
   it("counts nothing that stopped: it is over, or the person's to dismiss", () => {

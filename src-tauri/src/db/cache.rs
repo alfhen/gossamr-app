@@ -7,7 +7,7 @@ use serde::Serialize;
 
 use super::watch::in_list;
 use super::Db;
-use crate::domain::{Container, ContainerRef, Event, FeedEntry, FeedPage, FeedQuery, Filter, FilterContext, ItemRef, Subject, Visible, WorkItem, Workflow};
+use crate::domain::{Container, ContainerRef, Event, EventKind, FeedEntry, FeedPage, FeedQuery, Filter, FilterContext, ItemRef, Subject, Visible, WorkItem, Workflow};
 use crate::domain::Transitions;
 use crate::error::Result;
 
@@ -384,8 +384,8 @@ impl Db {
         Ok(FeedPage { entries, next })
     }
 
-    /// How many events in the connection are unread.
-    pub fn feed_unread(&self, connection_id: &str, visible: &Visible) -> Result<usize> {
+    /// How many events in the connection are unread, of `kinds` (every kind when empty), as `feed` counts them.
+    pub fn feed_unread(&self, connection_id: &str, kinds: &[EventKind], visible: &Visible) -> Result<usize> {
         let (join, ids) = match visible {
             Visible::All => (String::new(), &[][..]),
             Visible::Only(ids) => (
@@ -393,12 +393,15 @@ impl Db {
                 ids.as_slice(),
             ),
         };
+        let marks = vec!["?"; kinds.len()].join(",");
+        let of_kinds = if kinds.is_empty() { String::new() } else { format!(" AND c.kind IN ({marks})") };
         let sql = format!(
             "SELECT count(*) FROM cache_events c LEFT JOIN events e ON e.id = c.id {join}
-             WHERE c.connection_id = ? AND c.item_id IS NOT NULL AND COALESCE(e.unread, 0) = 1"
+             WHERE c.connection_id = ? AND c.item_id IS NOT NULL AND COALESCE(e.unread, 0) = 1{of_kinds}"
         );
         // The join's placeholders come first in the statement, so their values do too.
-        let args = ids.iter().map(String::as_str).chain(std::iter::once(connection_id));
+        let kind_names: Vec<String> = kinds.iter().map(name_of).collect();
+        let args = ids.iter().map(String::as_str).chain(std::iter::once(connection_id)).chain(kind_names.iter().map(String::as_str));
         let n: i64 = self.conn.query_row(&sql, rusqlite::params_from_iter(args), |r| r.get(0))?;
         Ok(n as usize)
     }
@@ -553,8 +556,8 @@ mod tests {
         let ids = |v: &Visible, q: &FeedQuery| db.feed("c", q, v).unwrap().entries.into_iter().map(|e| e.id).collect::<Vec<_>>();
         assert_eq!(ids(&p, &FeedQuery::default()), ["e2", "e1"], "no events of q, and none of an item that left the cache");
         assert_eq!(ids(&p, &FeedQuery { unread_only: true, ..Default::default() }), ["e2"]);
-        assert_eq!((db.feed_unread("c", &Visible::All).unwrap(), db.feed_unread("c", &p).unwrap()), (3, 1));
-        assert_eq!(db.feed_unread("c", &Visible::Only(vec![])).unwrap(), 0);
+        assert_eq!((db.feed_unread("c", &[], &Visible::All).unwrap(), db.feed_unread("c", &[], &p).unwrap()), (3, 1));
+        assert_eq!(db.feed_unread("c", &[], &Visible::Only(vec![])).unwrap(), 0);
     }
 
     #[test]
@@ -705,6 +708,23 @@ mod tests {
     }
 
     #[test]
+    fn the_unread_count_covers_the_kinds_asked_for_as_the_feed_lists_them() {
+        let db = feed_db();
+        let actor = serde_json::to_string(&crate::model::Person { account_id: "sam".into(), name: "Sam".into(), avatar_url: None }).unwrap();
+        for id in ["e2", "e4", "e5"] {
+            db.conn
+                .execute("INSERT INTO events (id, ticket_key, kind, actor, at, text, unread) VALUES (?1, 'K', 'status', ?2, 't', 'x', 1)", params![id, actor])
+                .unwrap();
+        }
+        let count = |kinds: &[EventKind]| db.feed_unread("c", kinds, &Visible::All).unwrap();
+        let listed = |kinds: &[EventKind]| db.feed("c", &FeedQuery { kinds: kinds.to_vec(), unread_only: true, ..Default::default() }, &Visible::All).unwrap().entries.len();
+        for kinds in [&[][..], &[EventKind::Assigned], &[EventKind::CommentAdded, EventKind::StatusChanged]] {
+            assert_eq!(count(kinds), listed(kinds), "{kinds:?}");
+        }
+        assert_eq!((count(&[]), count(&[EventKind::Assigned]), count(&[EventKind::CommentAdded, EventKind::StatusChanged])), (3, 1, 2));
+    }
+
+    #[test]
     fn read_state_comes_from_the_inbox_row_with_the_same_id() {
         let db = feed_db();
         let actor = serde_json::to_string(&crate::model::Person { account_id: "sam".into(), name: "Sam".into(), avatar_url: None }).unwrap();
@@ -716,20 +736,20 @@ mod tests {
                 )
                 .unwrap();
         }
-        assert_eq!(db.feed_unread("c", &Visible::All).unwrap(), 1);
+        assert_eq!(db.feed_unread("c", &[], &Visible::All).unwrap(), 1);
         let about_code = Event { subject: Subject::CodeChange { repo: "r".into(), number: 1 }, ..feed_event("pr1", "1", EventKind::PrOpened, 30, serde_json::json!({})) };
         db.insert_cache_events(&[about_code]).unwrap();
         db.conn
             .execute("INSERT INTO events (id, ticket_key, kind, actor, at, text, unread) VALUES ('pr1', 'K', 'comment', '{}', 't', 'x', 1)", [])
             .unwrap();
-        assert_eq!(db.feed_unread("c", &Visible::All).unwrap(), 1, "an event the feed can't show doesn't count");
+        assert_eq!(db.feed_unread("c", &[], &Visible::All).unwrap(), 1, "an event the feed can't show doesn't count");
         assert_eq!(feed_ids(&db, &FeedQuery { unread_only: true, ..Default::default() }), ["e2"]);
         let page = db.feed("c", &FeedQuery::default(), &Visible::All).unwrap();
         let e2 = page.entries.iter().find(|e| e.id == "e2").unwrap();
         assert!(e2.unread && e2.actor_name.as_deref() == Some("Sam"));
         assert!(!page.entries.iter().find(|e| e.id == "e1").unwrap().unread, "events without an inbox row arrive read");
         db.set_unread("e2", false).unwrap();
-        assert_eq!(db.feed_unread("c", &Visible::All).unwrap(), 0);
+        assert_eq!(db.feed_unread("c", &[], &Visible::All).unwrap(), 0);
         db.set_done("e3", Some("2026-09-29T12:00:00Z")).unwrap();
         assert!(db.feed("c", &FeedQuery::default(), &Visible::All).unwrap().entries.iter().find(|e| e.id == "e3").unwrap().done);
     }

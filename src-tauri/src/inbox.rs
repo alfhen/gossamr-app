@@ -53,6 +53,7 @@ const CACHE_BACKFILLED: &str = "cache_backfilled";
 const EVENTS_BACKFILLED: &str = "events_backfilled";
 const PIP_SESSIONS: &str = "pip_sessions";
 const OWN_SESSIONS_KEPT: usize = 50;
+const ANNOUNCED_NEEDS: &str = "announced_needs";
 
 /// Events after this are new since the previous sync (or, before the first sync, from the last 24 hours).
 fn unread_cutoff(last_sync: Option<&str>) -> String {
@@ -657,10 +658,11 @@ impl Core {
         .await
     }
 
-    pub async fn cache_feed_unread(&self) -> Result<usize> {
+    /// How many feed entries are unread, of `kinds` (every kind when empty).
+    pub async fn cache_feed_unread(&self, kinds: &[crate::domain::EventKind]) -> Result<usize> {
         let scope = self.scope().await?;
         let id = self.connection(&scope)?.id;
-        self.with_db_for(&scope, |db| db.feed_unread(&id, &db.watch_set(&id)?.visible())).await
+        self.with_db_for(&scope, |db| db.feed_unread(&id, kinds, &db.watch_set(&id)?.visible())).await
     }
 
     /// `scope` is the account the user was looking at when they approved; the write is refused if that has changed.
@@ -676,6 +678,15 @@ impl Core {
         }
         self.after_write(scope, key).await;
         Ok(CreatedSubtasks { created, error: error.map(|e| e.to_string()) })
+    }
+
+    /// The Needs you items already announced by a system notice, kept between launches; `None` before any were recorded.
+    pub async fn announced_needs(&self, scope: &Scope) -> Result<Option<std::collections::BTreeSet<String>>> {
+        self.with_db_for(scope, |db| Ok(db.meta(ANNOUNCED_NEEDS)?.and_then(|s| serde_json::from_str(&s).ok()))).await
+    }
+
+    pub async fn remember_announced_needs(&self, scope: &Scope, keys: &std::collections::BTreeSet<String>) -> Result<()> {
+        self.with_db_for(scope, |db| db.set_meta(ANNOUNCED_NEEDS, &serde_json::to_string(keys)?)).await
     }
 
     /// Records a session started in Pip's sandbox folder, and as the one to continue for `key` when there is one.

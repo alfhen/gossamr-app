@@ -136,6 +136,15 @@ describe("a failed launch on a card", () => {
   });
 });
 
+describe("the Work screen marks the selected agent", () => {
+  it("marks the selected run", () => {
+    const id = eight()[0].id;
+    const out = screen({ selectedId: id });
+    expect(out.match(/aria-current="true"/g)).toHaveLength(1);
+    expect(out).toContain(`data-run-id="${id}"`);
+  });
+});
+
 describe("the Work screen groups agents by workstream", () => {
   const ws: WorkstreamView = {
     workstream: { id: "ws-1", connectionId: "mock", itemKey: "CA-401", repo: null, title: "CA-401 Retry the payment", pipSession: null, pausedReason: null, notes: null, createdAt: iso(60), closedAt: null, basis: null },

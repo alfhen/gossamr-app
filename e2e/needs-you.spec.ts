@@ -240,7 +240,7 @@ test("a failure stays in Needs you after Agents is opened, and only a Dismiss (o
   await expect(needsYouCount(page)).toHaveText(String(count - 1));
 });
 
-test("a sign-in reads 'needs you to sign in to Claude'; an unclear run, a quiet one and a possible continuation are not in the list", async ({ page }) => {
+test("a sign-in reads 'needs you to sign in to Claude'; a lost run counts as failed; a quiet one and a possible continuation are not in the list", async ({ page }) => {
   await onHome(page, "runs=stuck");
   await expandGeneral(page);
   const signed = await runOn(page, "SUP-12");
@@ -250,8 +250,8 @@ test("a sign-in reads 'needs you to sign in to Claude'; an unclear run, a quiet 
 
   await expect(need(page, /SUP-12.*needs you to sign in to Claude/)).toHaveCount(1);
   await expect(need(page, /SUP-12/)).not.toContainText(/permission/i);
-  // The sample's stuck runs: the run Gossamr lost track of, the two that may have carried on elsewhere and the run quiet for 40 minutes are states, not needs.
-  await expect(need(page, /WEB-108.*can't read/)).toHaveCount(0);
+  // The run Gossamr lost track of counts as failed (proposal 5.4); the two that may have carried on elsewhere and the run quiet for 40 minutes are states, not needs.
+  await expect(need(page, /WEB-108.*failed/)).toHaveCount(1);
   await expect(need(page, /CA-278/)).toHaveCount(0);
   await expect(need(page, /CA-279/)).toHaveCount(0);
   await expect(need(page, /CA-377/)).toHaveCount(0);
