@@ -1,7 +1,6 @@
 import type { ClearFilter, ClearPreview, DeleteResult, WorktreeInfo } from "../types";
 import type {
   Adoptable,
-  AssignedElsewhere,
   CacheChanged,
   CatalogPage,
   CloneChoice,
@@ -274,8 +273,8 @@ export interface Backend {
   watchDismissAssigned(connectionId: string, containerId: string): Promise<void>;
   /** Called when the watch settings changed, by the person or by the app choosing for a small catalog. */
   onWatchChanged(listener: (change: WatchChanged) => void): () => void;
-  /** Called when a periodic check finds newly assigned items in unwatched containers. */
-  onAssignedElsewhere(listener: (found: AssignedElsewhere) => void): () => void;
+  /** Called when a periodic check finds newly assigned items in unwatched containers; `watchUnwatchedAssigned` has them. */
+  onStraysChanged(listener: (change: WatchChanged) => void): () => void;
   syncNow(): Promise<void>;
   /** Runs the Jira sign-in again for the signed-in account, keeping its local data. Rejects when the person doesn't finish it. */
   reconnectJira(): Promise<void>;

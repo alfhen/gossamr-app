@@ -442,13 +442,16 @@ describe("items assigned in projects that aren't watched", () => {
   it("raises one when the backend announces new ones", async () => {
     const b = await watchOnlyCa();
     useToasts.setState({ toasts: [] });
-    const listeners: ((f: { connectionId: string; strays: never[] }) => void)[] = [];
-    b.onAssignedElsewhere = (l) => (listeners.push(l as never), () => {});
+    const listeners: ((c: { connectionId: string }) => void)[] = [];
+    b.onStraysChanged = (l) => (listeners.push(l), () => {});
     await s().init(b);
-    const stray = { container: { connectionId: "mock", externalId: "SUP" }, containerName: "Support", keys: ["SUP-12"] };
-    listeners.forEach((l) => l({ connectionId: "mock", strays: [stray] as never }));
-    expect(s().strays).toContainEqual(stray);
-    expect(useToasts.getState().toasts[0].text).toContain("SUP-12 in Support");
+    await flush();
+    useWorkspace.setState({ strays: [] });
+    useToasts.setState({ toasts: [] });
+    listeners.forEach((l) => l({ connectionId: "mock" }));
+    await flush();
+    expect(s().strays.length).toBeGreaterThan(0);
+    expect(useToasts.getState().toasts[0].text).toContain("which you're not watching");
   });
 });
 

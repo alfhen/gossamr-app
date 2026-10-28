@@ -60,48 +60,48 @@ fn set_needs_badge(app: AppHandle, count: usize) {
     }
 }
 
-/// Tells the page the cache changed, so views over it can re-read.
+/// Tells the page something it reads changed, so it can read it again. One event, `changed`, for every topic: `cache`,
+/// `runs`, `devLinks`, `watch`, `strays` (items assigned in containers that aren't watched) and `proposals`, `workstreams`.
+/// The payload names the connection and never carries the data; the page asks for that.
+fn changed(app: &AppHandle, topic: &str, connection_id: &str) {
+    let _ = app.emit("changed", serde_json::json!({ "topic": topic, "connectionId": connection_id }));
+}
+
 fn cache_changed(app: &AppHandle, connection_id: &str) {
-    let _ = app.emit("cache-changed", serde_json::json!({ "connectionId": connection_id }));
+    changed(app, "cache", connection_id);
 }
 
-/// Tells the page a run was created or changed.
 fn runs_changed(app: &AppHandle, connection_id: &str) {
-    let _ = app.emit("runs-changed", serde_json::json!({ "connectionId": connection_id }));
+    changed(app, "runs", connection_id);
 }
 
-/// Tells the page which work items' code links changed, so it can re-read them.
 fn dev_links_changed(app: &AppHandle, connection_id: &str) {
-    let _ = app.emit("dev-links-changed", serde_json::json!({ "connectionId": connection_id }));
+    changed(app, "devLinks", connection_id);
 }
 
-/// Tells the page what is watched changed, so it can re-read the settings along with everything they scope.
 fn watch_changed(app: &AppHandle, connection_id: &str) {
-    let _ = app.emit("watch-changed", serde_json::json!({ "connectionId": connection_id }));
+    changed(app, "watch", connection_id);
 }
 
-/// Tells the page about open items assigned to the person in containers they don't watch. It never watches them.
-fn assigned_elsewhere(app: &AppHandle, connection_id: &str, strays: &[Stray]) {
-    let _ = app.emit("watch-assigned-elsewhere", serde_json::json!({ "connectionId": connection_id, "strays": strays }));
+fn strays_changed(app: &AppHandle, connection_id: &str) {
+    changed(app, "strays", connection_id);
 }
 
-/// Tells the page the stored drafts changed, so it can re-read them.
 fn proposals_changed(app: &AppHandle, connection_id: &str) {
-    let _ = app.emit("proposals-changed", serde_json::json!({ "connectionId": connection_id }));
+    changed(app, "proposals", connection_id);
 }
 
-/// Tells the page a workstream was opened, closed or changed, so it can re-read them.
 fn workstreams_changed(app: &AppHandle, connection_id: &str) {
-    let _ = app.emit("workstreams-changed", serde_json::json!({ "connectionId": connection_id }));
+    changed(app, "workstreams", connection_id);
 }
 
-/// A wake turn's event, which no page asked for: sent as `claude` like any turn's, with the conversation it belongs to
+/// A wake turn's event, which no page asked for: sent as `pip` like any turn's, with the conversation it belongs to
 /// and `kind: wake`, so the page can show a turn it didn't start.
 fn wake_update(app: &AppHandle, conversation: &str, update: agent::Update) {
     let Ok(mut payload) = serde_json::to_value(&update) else { return };
     payload["conversation"] = conversation.into();
     payload["kind"] = "wake".into();
-    let _ = app.emit("claude", payload);
+    let _ = app.emit("pip", payload);
 }
 
 /// Asks the page to narrow the view the person is looking at.
@@ -865,7 +865,7 @@ async fn claude_sessions(core: State<'_, CoreState>, key: String) -> Result<Clau
 async fn ask_claude(app: AppHandle, agent: State<'_, AgentState>, request: AskRequest) -> Result<AskOutcome> {
     agent
         .ask(request, Arc::new(move |u| {
-            let _ = app.emit("claude", u);
+            let _ = app.emit("pip", u);
         }))
         .await
 }
@@ -932,8 +932,8 @@ fn spawn_sync_loop(app: AppHandle, core: CoreState) {
                 publish(&app, &core).await;
             }
             // A failed check is tried again at the next interval; nothing depends on it.
-            if let Ok(Some((connection_id, strays))) = core.radar_if_due().await {
-                assigned_elsewhere(&app, &connection_id, &strays);
+            if let Ok(Some((connection_id, _))) = core.radar_if_due().await {
+                strays_changed(&app, &connection_id);
             }
             trigger = tokio::select! {
                 _ = tokio::time::sleep(TICK) => Trigger::Timer,

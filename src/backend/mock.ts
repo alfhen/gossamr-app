@@ -4,7 +4,6 @@ import { isTauri } from "@tauri-apps/api/core";
 import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
 import type {
   ChangedFile,
-  AssignedElsewhere,
   CacheChanged,
   CatalogPage,
   CodeCommitQuery,
@@ -1040,7 +1039,7 @@ export class MockBackend implements Backend {
   }
 
   /** The sample data has no background check to run, so nothing is ever announced. */
-  onAssignedElsewhere(_listener: (found: AssignedElsewhere) => void) {
+  onStraysChanged(_listener: (change: WatchChanged) => void) {
     return () => {};
   }
 

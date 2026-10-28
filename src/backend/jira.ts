@@ -4,7 +4,6 @@ import { listen } from "@tauri-apps/api/event";
 import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
 import type {
   Adoptable,
-  AssignedElsewhere,
   CacheChanged,
   CatalogPage,
   Intent,
@@ -72,6 +71,12 @@ export interface Scope {
  * Talks to the Rust core, which syncs Jira into a local SQLite cache and emits a `snapshot` event on every change.
  * Writes carry `scope`, so a write started for one account is refused if someone else has signed in meanwhile.
  */
+/** The one `changed` event, as the page hears one topic of it: the payload names the connection and never carries data. */
+function onChanged<T extends { connectionId: string }>(topic: string, listener: (change: T) => void) {
+  const pending = listen<T & { topic: string }>("changed", (e) => e.payload.topic === topic && listener(e.payload));
+  return () => void pending.then((unlisten) => unlisten());
+}
+
 export class JiraBackend implements Backend {
   readonly kind = "jira" as const;
 
@@ -167,8 +172,7 @@ export class JiraBackend implements Backend {
   }
 
   onDevLinksChanged(listener: (change: DevLinksChanged) => void) {
-    const pending = listen<DevLinksChanged>("dev-links-changed", (e) => listener(e.payload));
-    return () => void pending.then((unlisten) => unlisten());
+    return onChanged<DevLinksChanged>("devLinks", listener);
   }
 
   codePullRequest(reference: CodeRef) {
@@ -224,8 +228,7 @@ export class JiraBackend implements Backend {
   }
 
   onCacheChanged(listener: (change: CacheChanged) => void) {
-    const pending = listen<CacheChanged>("cache-changed", (e) => listener(e.payload));
-    return () => void pending.then((unlisten) => unlisten());
+    return onChanged<CacheChanged>("cache", listener);
   }
 
   proposalsList(query: ProposalQuery = {}) {
@@ -261,8 +264,7 @@ export class JiraBackend implements Backend {
   }
 
   onProposalsChanged(listener: (change: ProposalsChanged) => void) {
-    const pending = listen<ProposalsChanged>("proposals-changed", (e) => listener(e.payload));
-    return () => void pending.then((unlisten) => unlisten());
+    return onChanged<ProposalsChanged>("proposals", listener);
   }
 
   runsList(query: RunQuery = {}) {
@@ -386,8 +388,7 @@ export class JiraBackend implements Backend {
   }
 
   onRunsChanged(listener: (change: RunsChanged) => void) {
-    const pending = listen<RunsChanged>("runs-changed", (e) => listener(e.payload));
-    return () => void pending.then((unlisten) => unlisten());
+    return onChanged<RunsChanged>("runs", listener);
   }
 
   onOpenRun(listener: (runId: string) => void) {
@@ -446,8 +447,7 @@ export class JiraBackend implements Backend {
   }
 
   onWorkstreamsChanged(listener: (change: WorkstreamsChanged) => void) {
-    const pending = listen<WorkstreamsChanged>("workstreams-changed", (e) => listener(e.payload));
-    return () => void pending.then((unlisten) => unlisten());
+    return onChanged<WorkstreamsChanged>("workstreams", listener);
   }
 
   watchGet() {
@@ -479,13 +479,11 @@ export class JiraBackend implements Backend {
   }
 
   onWatchChanged(listener: (change: WatchChanged) => void) {
-    const pending = listen<WatchChanged>("watch-changed", (e) => listener(e.payload));
-    return () => void pending.then((unlisten) => unlisten());
+    return onChanged<WatchChanged>("watch", listener);
   }
 
-  onAssignedElsewhere(listener: (found: AssignedElsewhere) => void) {
-    const pending = listen<AssignedElsewhere>("watch-assigned-elsewhere", (e) => listener(e.payload));
-    return () => void pending.then((unlisten) => unlisten());
+  onStraysChanged(listener: (change: WatchChanged) => void) {
+    return onChanged<WatchChanged>("strays", listener);
   }
 
   async reconnectJira() {

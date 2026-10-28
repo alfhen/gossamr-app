@@ -172,12 +172,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       get().refreshWatch().catch((e) => get().report("Couldn't load what you watch", e));
       void get().refreshStrays();
     });
-    const offStrays = backend.onAssignedElsewhere((found) => {
-      const before = get().strays;
-      const after = [...before.filter((s) => s.container.connectionId !== found.connectionId), ...found.strays];
-      set({ strays: after });
-      announceStrays(newStrays(before, after));
-    });
+    const offStrays = backend.onStraysChanged(() => void get().refreshStrays(true));
     stop = () => {
       offStrays();
       offCache();

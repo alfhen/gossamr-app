@@ -20,6 +20,19 @@ describe("the desktop backend's wiring", () => {
     expect(invoked.filter((c) => !commands.has(c))).toEqual([]);
   });
 
+  it("listens only to events lib.rs emits, and to its topics of `changed`", () => {
+    const lib = read("../../src-tauri/src/lib.rs");
+    const emitted = new Set([...lib.matchAll(/app\.emit\("([a-z-]+)"/g)].map((m) => m[1]));
+    const heard = [...(read("./jira.ts") + read("./claude.ts")).matchAll(/listen<[^(]*>\(\s*"([a-z-]+)"/g)].map((m) => m[1]);
+    expect(heard.filter((e) => !emitted.has(e))).toEqual([]);
+    // One event for everything the page reads again, as the proposal's four events have it (section 8).
+    expect([...emitted].filter((e) => e.endsWith("-changed") || e === "watch-assigned-elsewhere")).toEqual([]);
+    const sent = new Set([...lib.matchAll(/changed\(app, "([A-Za-z]+)"/g)].map((m) => m[1]));
+    const asked = [...read("./jira.ts").matchAll(/onChanged<\w+>\("([A-Za-z]+)"/g)].map((m) => m[1]);
+    expect(asked.length).toBe(7);
+    expect(asked.filter((t) => !sent.has(t))).toEqual([]);
+  });
+
   it("sends a review draft's post, files, diff and access with the argument names the commands take", () => {
     const jira = read("./jira.ts");
     expect(jira).toContain('invoke<Proposal>("proposals_post_review", { id, revisions, postAnyway })');

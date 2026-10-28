@@ -131,7 +131,7 @@ export const claude = {
   /** Every event of every turn, with where it belongs when the turn is one the page didn't ask (a wake). */
   onEvent(cb: (requestId: string, e: ClaudeEvent, meta?: EventMeta) => void) {
     if (scripted) return mockPipEvents.on(cb);
-    const p = listen<{ requestId: string } & EventMeta & ClaudeEvent>("claude", ({ payload }) => {
+    const p = listen<{ requestId: string } & EventMeta & ClaudeEvent>("pip", ({ payload }) => {
       const { requestId, conversation, kind, prompt, ...event } = payload;
       const meta: EventMeta = { ...(conversation ? { conversation } : {}), ...(kind ? { kind } : {}), ...(prompt ? { prompt } : {}) };
       cb(requestId, event as ClaudeEvent, Object.keys(meta).length ? meta : undefined);

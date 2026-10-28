@@ -164,7 +164,7 @@ describe("mock runs", () => {
     expect((await backend.runsOutcome(run.id)).report).toMatchObject({ offered: false });
   });
 
-  it("emits runs-changed and open-run", async () => {
+  it("emits a runs change and open-run", async () => {
     const backend = new MockBackend();
     const changes: string[] = [];
     const opened: string[] = [];

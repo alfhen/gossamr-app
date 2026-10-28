@@ -313,7 +313,7 @@ export interface FeedPage {
   next: FeedCursor | null;
 }
 
-/** Emitted as the `cache-changed` event when a sync or a write changed what the cache holds. */
+/** Emitted as the `changed` event, topic `cache`, when a sync or a write changed what the cache holds. */
 export interface CacheChanged {
   connectionId: string;
 }
@@ -484,7 +484,7 @@ export type ProposalEdit =
   /** A review draft's summary and comments, as the person rewords and drops them; the ones left out stay as they are. A person's edit never moves a comment or adds one. */
   | { type: "githubReview"; summary?: string; comments?: ReviewComment[] };
 
-/** Emitted as the `proposals-changed` event when a draft was created, edited, applied, revised or retired. */
+/** Emitted as the `changed` event, topic `proposals`, when a draft was created, edited, applied, revised or retired. */
 export interface ProposalsChanged {
   connectionId: string;
 }
@@ -803,12 +803,12 @@ export interface WorkstreamEvent {
   detail: string | null;
 }
 
-/** Emitted as the `workstreams-changed` event when a workstream was opened, closed or changed. */
+/** Emitted as the `changed` event, topic `workstreams`, when a workstream was opened, closed or changed. */
 export interface WorkstreamsChanged {
   connectionId: string;
 }
 
-/** Emitted as the `runs-changed` event. */
+/** Emitted as the `changed` event, topic `runs`. */
 export interface RunsChanged {
   connectionId: string;
 }
@@ -991,11 +991,6 @@ export interface WatchChanged {
   connectionId: string;
 }
 
-export interface AssignedElsewhere {
-  connectionId: string;
-  strays: Stray[];
-}
-
 /** Which ways of connecting GitHub work in this build and on this Mac. */
 export interface GithubSignInOptions {
   /** A client id is configured, so the browser device flow can be used. */
@@ -1157,7 +1152,7 @@ export interface CodeCommitQuery {
   limit?: number;
 }
 
-/** Emitted as `dev-links-changed` when a sync or a live search changed which work items are linked to code. */
+/** Emitted as the `changed` event, topic `devLinks`, when a sync or a live search changed which work items are linked to code. */
 export interface DevLinksChanged {
   connectionId: string;
 }
