@@ -187,7 +187,7 @@ describe("mock Pip woken by an agent that asks a question, as ask_person does", 
     await mockAsk({ requestId: "wake-asks", prompt, context: { screen: "board", item: CA401, selection: [] } as unknown as ScreenContext, conversation: `ws:${ws}`, kind: "wake" } as AskRequest, b, 0);
     stop();
     expect(said).toBe("R1 asks: “Should the refund path keep the old rounding?” I asked you what to tell it.");
-    expect((await b.workstreamsGet(ws))?.pipAsk?.question).toBe("R1 asks: “Should the refund path keep the old rounding?” What should I tell it?");
+    expect((await b.workstreams.get(ws))?.pipAsk?.question).toBe("R1 asks: “Should the refund path keep the old rounding?” What should I tell it?");
     // Nothing started, stopped or answered: the runs are as they were, and no draft was made.
     expect(b.runs.list().map((r) => [r.id, r.state])).toEqual(runsBefore);
     expect(b.proposals.list({ states: ["pending"] })).toEqual([]);

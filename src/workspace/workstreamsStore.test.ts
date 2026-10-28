@@ -402,14 +402,14 @@ describe("closing, reopening and bringing a ticket's runs here (G23, G17)", () =
     const run = backend.runs.start({ role: "investigate", repo: "acme/storefront", clonePath: "/Users/sample/Code/storefront", base: "main", name: "ca-401-adopt-1a2b", brief: "" }, CA401);
     const ws = (await useWorkstreams.getState().start(CA401))!;
     expect(useWorkstreams.getState().forItem("CA-401")?.adoptable).toEqual({ runs: [run.id], drafts: [] });
-    expect((await backend.runsGet(run.id))?.spec.workstream).toBeUndefined();
+    expect((await backend.runs.get(run.id))?.spec.workstream).toBeUndefined();
     expect(await useWorkstreams.getState().adopt(ws.workstream.id)).toBe(true);
     expect(useWorkstreams.getState().forItem("CA-401")).toMatchObject({ stage: "investigate", runs: [run.id] });
     expect(useWorkstreams.getState().forItem("CA-401")?.adoptable).toBeUndefined();
     const offer = undoLog.latest();
     expect(offer?.text).toBe("Brought 1 run on CA-401 into the workstream.");
     expect(await undoLog.run(offer!.id)).toBe("undone");
-    expect((await backend.runsGet(run.id))?.spec.workstream).toBeUndefined();
+    expect((await backend.runs.get(run.id))?.spec.workstream).toBeUndefined();
     expect(useWorkstreams.getState().forItem("CA-401")?.adoptable).toEqual({ runs: [run.id], drafts: [] });
     // Nothing left to bring: the person is told, and no Undo is offered.
     await backend.workstreamsAdopt(ws.workstream.id);

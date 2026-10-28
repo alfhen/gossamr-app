@@ -11,9 +11,9 @@ use crate::db::{stamp, Db};
 use crate::error::{Error, Result};
 use crate::events::{changes_since, derive, my_actions, NewEvent};
 use crate::domain::{
-    Comment, Container, ContainerRef, Event, FeedPage, FeedQuery, Filter, FilterContext, Identity, Intent, ItemRef, PersonRef, Visible, WorkItem, Workflow,
+    Comment, Container, ContainerRef, Event, FeedPage, FeedQuery, Filter, FilterContext, Identity, ItemRef, PersonRef, Visible, WorkItem, Workflow,
 };
-use crate::model::{CachedTicket, CreatedSubtasks, Person, Snapshot, Status, Ticket, Transition};
+use crate::model::{CachedTicket, Person, Snapshot, Status, Ticket, Transition};
 use crate::proposals;
 use crate::runs::ask::Asks;
 use crate::sync::{self, Schedule, Trigger, CLOCK_SKEW_MINUTES};
@@ -665,21 +665,6 @@ impl Core {
         self.with_db_for(&scope, |db| db.feed_unread(&id, kinds, &db.watch_set(&id)?.visible())).await
     }
 
-    /// `scope` is the account the user was looking at when they approved; the write is refused if that has changed.
-    /// A failure part-way still reports what was created, so a retry can skip those and not duplicate them.
-    pub async fn create_subtasks(&self, scope: &Scope, key: &str, summaries: &[String]) -> Result<CreatedSubtasks> {
-        let intent = Intent::Subtasks { parent: Self::item(scope, key), summaries: summaries.to_vec() };
-        let tracker::Applied { created, error } = self.tracker(scope)?.apply(&intent).await?;
-        let created: Vec<String> = created.into_iter().map(|r| r.key).collect();
-        if created.is_empty() {
-            if let Some(e) = error {
-                return Err(e);
-            }
-        }
-        self.after_write(scope, key).await;
-        Ok(CreatedSubtasks { created, error: error.map(|e| e.to_string()) })
-    }
-
     /// The Needs you items already announced by a system notice, kept between launches; `None` before any were recorded.
     pub async fn announced_needs(&self, scope: &Scope) -> Result<Option<std::collections::BTreeSet<String>>> {
         self.with_db_for(scope, |db| Ok(db.meta(ANNOUNCED_NEEDS)?.and_then(|s| serde_json::from_str(&s).ok()))).await
@@ -715,18 +700,6 @@ impl Core {
         })
         .await
     }
-
-    /// The session to continue for `key`, if it is one Pip can resume.
-    pub async fn claude_session_for(&self, key: &str) -> Result<Option<String>> {
-        let last = self
-            .with_db(|db| Ok(db.meta(&format!("claude:{key}"))?.and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())))
-            .await?
-            .and_then(|v| v["id"].as_str().map(String::from));
-        match last {
-            Some(id) if self.is_pip_session(&id).await? => Ok(Some(id)),
-            _ => Ok(None),
-        }
-    }
 }
 
 /// Everyone a ticket names, including those who only appear in its history.
@@ -757,12 +730,10 @@ mod tests {
             .await
             .unwrap();
         assert!(!fx.core.is_pip_session("old-1").await.unwrap());
-        assert_eq!(fx.core.claude_session_for("CA-1").await.unwrap(), None);
 
         fx.core.remember_claude_session(Some("CA-1"), "new-1").await.unwrap();
         fx.core.remember_claude_session(None, "ws-1").await.unwrap();
         assert!(fx.core.is_pip_session("new-1").await.unwrap() && fx.core.is_pip_session("ws-1").await.unwrap());
-        assert_eq!(fx.core.claude_session_for("CA-1").await.unwrap().as_deref(), Some("new-1"));
         assert!(!fx.core.is_pip_session("old-1").await.unwrap());
     }
 

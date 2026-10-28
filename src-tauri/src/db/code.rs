@@ -174,6 +174,7 @@ impl Db {
     }
 
     /// The code events of the connection, newest first.
+    #[cfg(test)]
     pub fn code_events(&self, connection_id: &str, limit: usize) -> Result<Vec<crate::domain::Event>> {
         let mut stmt = self.conn.prepare("SELECT data FROM cache_events WHERE connection_id = ?1 AND item_id IS NULL ORDER BY at DESC, id LIMIT ?2")?;
         let rows = stmt.query_map(params![connection_id, limit as i64], |r| r.get::<_, String>(0))?;

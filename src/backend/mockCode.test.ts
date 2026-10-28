@@ -50,12 +50,10 @@ describe("the mock's development links", () => {
     await watching(b, ["acme/gateway"]);
     expect((await b.devLinks(ticket("DEVOPS-471"))).map((l) => l.change.repo)).toEqual(["acme/gateway"]);
     expect(await b.devLinks(ticket("CA-208"))).toEqual([]);
-    expect(await b.codeSearch("CA-208")).toEqual([]);
-    expect((await b.codeEvents()).every((e) => e.subject.type === "codeChange" && e.subject.repo === "acme/gateway")).toBe(true);
   });
 });
 
-describe("the mock's reads for the Activity feed and Pip's tools", () => {
+describe("the mock's pull request reads", () => {
   it("reads a pull request with its files, commits and reviews", async () => {
     const b = backend();
     const d = await b.codePullRequest({ connectionId: GH, repo: "acme/webshop", number: 208 });
@@ -64,42 +62,9 @@ describe("the mock's reads for the Activity feed and Pip's tools", () => {
     await expect(b.codePullRequest({ connectionId: GH, repo: "acme/webshop", number: 1 })).rejects.toThrow("couldn't find");
   });
 
-  it("searches by key exactly and by words loosely", async () => {
-    const b = backend();
-    expect((await b.codeSearch("CA-208")).map((c) => c.externalId)).toEqual(["pr:acme/webshop#208", "commit:acme/webshop@9999999ccccccc"]);
-    expect(await b.codeSearch("CA-20")).toEqual([]);
-    expect((await b.codeSearch("category")).map((c) => c.number)).toEqual([218, 212]);
-    expect(await b.codeSearch("  ")).toEqual([]);
-  });
-
-  it("lists events newest first with code subjects", async () => {
-    const events = await backend().codeEvents();
-    expect(events.map((e) => e.kind)).toEqual(["checkFailed", "reviewSubmitted", "prMerged", "reviewRequested", "prOpened"]);
-    expect(events.every((e) => e.subject.type === "codeChange")).toBe(true);
-    expect(await backend().codeEvents(2)).toHaveLength(2);
-  });
-
-  it("reads files, directories, commits and code only inside watched repositories", async () => {
+  it("reads a pull request only inside a watched repository", async () => {
     const b = backend();
     await watching(b, ["acme/webshop"]);
-    expect((await b.codeFile(GH, "acme/webshop", "src/gateway/routes.ts")).text).toContain("checkout");
-    expect((await b.codeTree(GH, "acme/webshop", "")).map((e) => [e.name, e.kind])).toEqual([["src", "dir"], ["README.md", "file"]]);
-    expect((await b.codeTree(GH, "acme/webshop", "src")).map((e) => e.name)).toEqual(["cart", "gateway"]);
-    expect((await b.codeCommits(GH, "acme/webshop", { query: "ca-208" })).map((c) => c.title)).toEqual(["CA-208 hotfix for gateway timeout"]);
-    expect(await b.codeCommits(GH, "acme/webshop", { since: new Date(Date.now() + 1000).toISOString() })).toEqual([]);
-    const hits = await b.codeSearchCode(GH, "checkout");
-    expect(hits.map((h) => h.path)).toEqual(["README.md", "src/gateway/routes.ts"]);
-    expect(hits[1].fragments.length).toBeGreaterThan(0);
-
-    for (const read of [
-      () => b.codeFile(GH, "acme/gateway", "README.md"),
-      () => b.codeTree(GH, "acme/gateway", ""),
-      () => b.codeCommits(GH, "acme/gateway"),
-      () => b.codeSearchCode(GH, "x", ["acme/gateway"]),
-      () => b.codePullRequest({ connectionId: GH, repo: "acme/gateway", number: 14 }),
-    ]) {
-      await expect(read()).rejects.toThrow("isn't one of the repositories you watch");
-    }
-    await expect(b.codeFile(GH, "acme/webshop", "nope.txt")).rejects.toThrow("couldn't find");
+    await expect(b.codePullRequest({ connectionId: GH, repo: "acme/gateway", number: 14 })).rejects.toThrow("isn't one of the repositories you watch");
   });
 });

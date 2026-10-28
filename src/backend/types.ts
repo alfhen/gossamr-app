@@ -21,12 +21,7 @@ import type {
   AgentSettings,
   CleanupResult,
   Snapshot,
-  ChangedFile,
   PullDiff,
-  CodeChange,
-  CodeCommitQuery,
-  CodeFile,
-  CodeHit,
   CodeRef,
   ConnectionInfo,
   DevLink,
@@ -39,7 +34,6 @@ import type {
   PullRequestDetail,
   ReviewAccess,
   Stray,
-  TreeEntry,
   WatchChange,
   WatchChanged,
   WatchMode,
@@ -70,9 +64,6 @@ export interface Backend {
   subscribe(listener: (snap: Snapshot) => void): () => void;
   /** People who can see the ticket and match the query, for @mention suggestions. */
   mentionable(ticketKey: string, query: string): Promise<Person[]>;
-  /** Creates sub-tasks under a ticket and returns their keys. */
-  /** Stops at the first failure; `created` lists the keys made before it, in order. */
-  createSubtasks(ticketKey: string, summaries: string[]): Promise<{ created: string[]; error: string | null }>;
   setUnread(eventId: string, unread: boolean): Promise<void>;
   /** Items in the local cache that match the filter, newest first. Works offline. Only watched containers unless `includeUnwatched`. */
   cacheSearch(filter: WorkFilter, opts?: ReadScope): Promise<WorkItem[]>;
@@ -115,24 +106,10 @@ export interface Backend {
   onDevLinksChanged(listener: (change: DevLinksChanged) => void): () => void;
   /** A pull request with its files, recent commits and reviews. Watched repositories only. */
   codePullRequest(ref: CodeRef): Promise<PullRequestDetail>;
-  /** The files a pull request changes with patches long enough to show a review draft's comments in place. Watched repositories only. */
-  codePullFiles(connectionId: string, repo: string, number: number): Promise<ChangedFile[]>;
   /** A pull request in a watched repository with the files it changes and their patches, for review draft hunks. Reads only. */
   codePullDiff(connectionId: string, repo: string, number: number): Promise<PullDiff>;
   /** Whether the token may post a review on a watched repository, and why not when it can't. Reads only. */
   codeReviewAccess(connectionId: string, repo: string): Promise<ReviewAccess>;
-  /** Pull requests, branches and commits in watched repositories matching the text; a work item key matches exactly. */
-  codeSearch(query: string): Promise<CodeChange[]>;
-  /** Pull request and notification events, newest first, for the Activity feed. `subject.type` is `codeChange`. */
-  codeEvents(limit?: number): Promise<WorkEvent[]>;
-  /** A text file at a ref, cut at 60,000 characters. Binary and huge files are refused. Watched repositories only. */
-  codeFile(connectionId: string, repo: string, path: string, reference?: string | null): Promise<CodeFile>;
-  /** A directory listing, folders first. Watched repositories only. */
-  codeTree(connectionId: string, repo: string, path: string, reference?: string | null): Promise<TreeEntry[]>;
-  /** Commits of a branch or ref, newest first, optionally filtered by message text. Watched repositories only. */
-  codeCommits(connectionId: string, repo: string, opts?: CodeCommitQuery): Promise<CodeChange[]>;
-  /** GitHub code search limited to watched repositories; `repos` narrows it further and must be watched. */
-  codeSearchCode(connectionId: string, query: string, repos?: string[]): Promise<CodeHit[]>;
   /** Events recorded for an item, newest first. */
   cacheEvents(ref: ItemRef): Promise<WorkEvent[]>;
   /** Events across every item, newest first, one page at a time. Reading state (`unread`) is the inbox's, so `setUnread` marks an entry read. */
@@ -143,7 +120,6 @@ export interface Backend {
   onCacheChanged(listener: (change: CacheChanged) => void): () => void;
   /** Drafted writes, newest first. They survive a restart. */
   proposalsList(query?: ProposalQuery): Promise<Proposal[]>;
-  proposalsGet(id: string): Promise<Proposal | null>;
   /** Drafts a write the person made by hand, such as dropping a card on a column. Nothing is written until it is approved. */
   proposalsCreate(intent: Intent, label?: string | null): Promise<Proposal>;
   /** Replaces a pending draft's payload. */
@@ -171,7 +147,6 @@ export interface Backend {
   onProposalsChanged(listener: (change: ProposalsChanged) => void): () => void;
   /** Background agent runs, newest first. */
   runsList(query?: RunQuery): Promise<Run[]>;
-  runsGet(id: string): Promise<Run | null>;
   /** Stops a working run; rejects until it is working. */
   runsStop(id: string): Promise<Run>;
   /** Answers a run that is asking a question: hands the answer to the agent waiting in its ask call, or stops its session and wakes it when its turn ended. Also sends again an answer that was stopped on its way. */
@@ -229,8 +204,6 @@ export interface Backend {
   onOpenRun(listener: (runId: string) => void): () => void;
   /** Opens a workstream on a cached ticket, or with no ticket and a title. A ticket that has an open one gets that one back. */
   workstreamsOpen(item: ItemRef | null, title?: string): Promise<Workstream>;
-  /** One workstream with the stage its runs give it; null when it isn't the signed-in account's. */
-  workstreamsGet(id: string): Promise<WorkstreamView | null>;
   /** The signed-in account's workstreams with their stages, newest first; closed ones only when asked for. */
   workstreamsList(includeClosed?: boolean): Promise<WorkstreamView[]>;
   /** Closes a workstream; its runs and drafts stay as they are. */
@@ -239,8 +212,6 @@ export interface Backend {
   workstreamsReopen(id: string): Promise<Workstream>;
   /** The person's "Bring them here": the runs and pending drafts on the workstream's ticket that are in no workstream move into it, audited as `adopted`. Returns what moved, for `workstreamsUndo`. Refused when there are none. */
   workstreamsAdopt(id: string): Promise<Adoptable>;
-  /** Replaces the notes of an open workstream; blank clears them. At most 2 KB, and no data markers. */
-  workstreamsSetNotes(id: string, notes: string): Promise<Workstream>;
   /** A workstream's append-only audit, oldest first. */
   workstreamsEvents(id: string): Promise<WorkstreamEvent[]>;
   /** The person pauses an open workstream: nothing wakes Pip in it; its runs carry on. */

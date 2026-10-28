@@ -7,11 +7,7 @@ import { mockPipEvents, type PipDrafter } from "./mockPip";
 import { mockQueueAsk, mockQueueCancel, mockResume } from "./mockPipQueue";
 import { mockPipTurns } from "./mockPipTurns";
 import { mockOptionsFromUrl } from "./mockWatch";
-
-export interface ClaudeSessions {
-  /** The session to continue for the ticket, when the backend can resume it. */
-  last: string | null;
-}
+import { EVENTS } from "./events";
 
 export type ClaudeEvent =
   | { type: "started"; sessionId: string }
@@ -95,12 +91,15 @@ export interface AskRequest {
   kind?: "user" | "wake";
 }
 
-/** Emitted as the `pip-view` event when Pip narrows the view the person is looking at. */
+/** Sent in the `pip` event, as the turn's own, when Pip narrows the view the person is looking at. */
 export interface PipView {
   requestId: string;
   filter: WorkFilter;
   note: string;
 }
+
+/** What the `pip` event carries: the events of a turn, and its request to narrow the view. */
+type PipWire = { requestId: string } & EventMeta & (ClaudeEvent | { type: "view" });
 
 /** The browser build has no assistant to run, so it gets a scripted one that drafts into the sample backend. */
 const scripted = !isTauri();
@@ -113,7 +112,6 @@ function scriptedDrafter(): Partial<PipDrafter> | null {
 }
 
 export const claude = {
-  sessions: (key: string) => invoke<ClaudeSessions>("claude_sessions", { key }),
   /** Sends a question. It runs now, or waits its turn behind the one Pip is answering in the same conversation. */
   ask: (request: AskRequest): Promise<AskOutcome> =>
     scripted
@@ -125,13 +123,16 @@ export const claude = {
   cancel: (requestId: string) => (scripted ? Promise.resolve(mockQueueCancel(requestId)) : invoke<void>("cancel_claude", { requestId })),
   onPipView(cb: (view: PipView) => void) {
     if (scripted) return mockPipEvents.onView((requestId, filter, note) => cb({ requestId, filter, note }));
-    const p = listen<PipView>("pip-view", ({ payload }) => cb(payload));
+    const p = listen<PipView & { type: string }>(EVENTS.pip, ({ payload }) => {
+      if (payload.type === "view") cb({ requestId: payload.requestId, filter: payload.filter, note: payload.note });
+    });
     return () => void p.then((un) => un());
   },
   /** Every event of every turn, with where it belongs when the turn is one the page didn't ask (a wake). */
   onEvent(cb: (requestId: string, e: ClaudeEvent, meta?: EventMeta) => void) {
     if (scripted) return mockPipEvents.on(cb);
-    const p = listen<{ requestId: string } & EventMeta & ClaudeEvent>("claude", ({ payload }) => {
+    const p = listen<PipWire>(EVENTS.pip, ({ payload }) => {
+      if (payload.type === "view") return;
       const { requestId, conversation, kind, prompt, ...event } = payload;
       const meta: EventMeta = { ...(conversation ? { conversation } : {}), ...(kind ? { kind } : {}), ...(prompt ? { prompt } : {}) };
       cb(requestId, event as ClaudeEvent, Object.keys(meta).length ? meta : undefined);

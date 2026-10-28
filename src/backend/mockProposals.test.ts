@@ -29,7 +29,7 @@ describe("mock proposals", () => {
     await backend.proposalsSkip(a.id);
     expect((await backend.proposalsList({ states: ["pending"] })).map((p) => p.id)).toEqual([b.id]);
     expect((await backend.proposalsList({ item: ref })).map((p) => p.id)).toEqual([a.id]);
-    expect(await backend.proposalsGet("nope")).toBeNull();
+    expect(await backend.proposals.get("nope")).toBeNull();
   });
 
   it("refuses to skip an applied draft but skipping twice is harmless", async () => {

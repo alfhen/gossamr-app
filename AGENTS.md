@@ -16,6 +16,7 @@ It is a Tauri 2 app: a Rust backend in `src-tauri/` and a React, TypeScript and 
 | Path | What is there |
 | --- | --- |
 | `src-tauri/src/lib.rs` | App setup and every Tauri command (`generate_handler!`) |
+| `src-tauri/src/wire.rs` | The four events Rust sends the page, and the topics of `changed` |
 | `src-tauri/src/domain/` | Shared types: items, proposals (drafts), runs, workstreams. `domain/run.rs` holds the agent's base brief (`render_prompt`) |
 | `src-tauri/src/db/` | SQLite. `db/schema.rs` holds the migrations |
 | `src-tauri/src/tracker/`, `codehost/`, `auth/` | Jira, GitHub and their sign-in |
@@ -66,7 +67,8 @@ pnpm e2e
 
 ## How to change things
 
-- **A new Tauri command:** register it in `lib.rs`, add it to `Backend` in `src/backend/types.ts`, and implement it in `jira.ts` and the mock. `src/backend/wiring.test.ts` fails if the front end calls a command `lib.rs` does not register.
+- **A new Tauri command:** prefer a parameter on an existing one when it is a variant of the same operation. Otherwise register it in `lib.rs`, add it to `Backend` in `src/backend/types.ts`, and implement it in `jira.ts` and the mock. `src/backend/wiring.test.ts` fails if the front end calls a command `lib.rs` does not register.
+- **A new thing the page re-reads:** the page hears four events (`changed`, `pip`, `snapshot`, `open-run`), all sent from `src-tauri/src/wire.rs`. Add a `Topic` there and in `src/backend/events.ts`, and listen to it through `onChanged`; do not add a fifth event. A Rust test and `src/backend/wiring.test.ts` fail if one appears.
 - **A schema change:** add a new step to the end of `STEPS` in `src-tauri/src/db/schema.rs`. Never edit a step that has shipped, because `PRAGMA user_version` counts the steps applied.
 - **Types across the boundary:** Rust structs sent to the front end use `#[serde(rename_all = "camelCase")]` and match the TypeScript types field for field.
 - **Agent behaviour:** check it against `docs/agents-cli-findings.md`. If the CLI behaves differently, write down what you saw there.
