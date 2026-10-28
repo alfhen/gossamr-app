@@ -108,7 +108,7 @@ test("in one workstream Pip starts an investigator, a triager, a planner, a buil
   await expect(await stageChip(page)).toHaveText("Review");
 
   // The report is prose: the card and the sheet carry no verdict.
-  await page.getByRole("button", { name: /^Agents/ }).click();
+  await page.getByRole("button", { name: /^Work(,|$)/ }).click();
   // The review is the workstream's fifth run.
   const card = agentCards(page).filter({ has: page.locator('[data-run-label="R5"]') });
   await expect(card).toHaveAttribute("data-state", "done");

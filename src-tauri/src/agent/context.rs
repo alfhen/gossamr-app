@@ -26,7 +26,7 @@ pub struct ScreenContext {
     pub run: Option<String>,
     /// How many agents wait on the person, as the page counts them.
     pub runs_waiting: usize,
-    /// The runs the Agents view lists, by state, as the page counts them.
+    /// The runs the Work screen lists, by state, as the page counts them.
     pub runs_summary: Option<String>,
     /// Set by Core, not the page: the open item is in a project the user doesn't watch.
     #[serde(skip)]
@@ -160,8 +160,8 @@ fn assistant_prompt(edits_text: bool) -> String {
          list_watched_repos names them. They only read, and only in watched repositories: when one is refused, ask the user \
          to watch that repository rather than guessing. When you say what was done on a ticket, link the pull requests you \
          found, by their URL, and say when a result was cut short. \
-         When the screen is Agents, the person is looking at their agent runs and not at a board: there is no ticket list \
-         or ticked ticket. The Agents screen line counts the runs after the person's filter, while the agent runs block \
+         When the screen is Work, the person is looking at their workstreams and agent runs and not at a board: there is no ticket list \
+         or ticked ticket. The Work screen line counts the runs after the person's filter, while the agent runs block \
          can list runs outside it. Use list_runs and get_run for the run ids in the block. \
          You can see the user's agent runs: list_runs, get_run, get_run_result and get_run_events only read them. get_run shows the start of an agent's prose report; before you write or change anything from a run, read the rest with get_run_result (it says where the next page starts) and never say a result was cut off while more can be fetched. When a run has left a comment or a new-ticket draft for the user, you may change its text (a ticket's title, description and type) with revise_proposal if they ask; they still approve it. A review's findings reach the pull request only as a GitHub review draft the user approves in Gossamr: read it with get_proposal and the pull request's existing comments with list_review_comments, and when asked, reword, drop or add a comment (at a line the diff shows) with revise_proposal; it stays a draft, you can't post it, and once the user has edited it it is theirs. A description rewrite carrying a Gossamr Plan is a draft like any other; the person still approves it. start_agent starts an agent in a workstream at once: there is no draft to approve, so start one only when the person's \
          instruction or the workstream's plan calls for it. Give the workstream, a role (a short label such as planner, builder, \
@@ -666,14 +666,14 @@ mod tests {
     #[test]
     fn an_agents_screen_names_the_runs_shown_and_the_prompt_says_it_is_not_a_board() {
         let runs = [a_run("r1", crate::domain::RunState::Working), a_run("r2", crate::domain::RunState::NeedsAnswer)];
-        let ctx: ScreenContext = serde_json::from_str(r#"{"view":"Agents · Needs you · 1 run","runsSummary":"1 needs you","runsWaiting":1,"selection":[]}"#).unwrap();
+        let ctx: ScreenContext = serde_json::from_str(r#"{"view":"Work · Needs you · 1 run","runsSummary":"1 needs you","runsWaiting":1,"selection":[]}"#).unwrap();
         let p = compose(&ctx, None, &[], &[], &runs, None, "hi");
-        assert!(p.contains("View: Agents · Needs you · 1 run\nRuns shown: 1 needs you\nAgents waiting on the person: 1"), "{p}");
+        assert!(p.contains("View: Work · Needs you · 1 run\nRuns shown: 1 needs you\nAgents waiting on the person: 1"), "{p}");
         assert!(!p.contains("Applied filter") && !p.contains("Selected:") && !p.contains("Open item"));
         assert!(p.contains("[Agent runs: your agents.") && p.contains("r1") && p.contains("r2"), "{p}");
         let prompt = system_prompt(true);
-        assert!(prompt.contains("When the screen is Agents") && prompt.contains("not at a board") && prompt.contains("run ids in the block") && prompt.contains("outside it"));
-        assert!(system_prompt(true).contains("When the screen is Agents"));
+        assert!(prompt.contains("When the screen is Work") && prompt.contains("not at a board") && prompt.contains("run ids in the block") && prompt.contains("outside it"));
+        assert!(system_prompt(true).contains("When the screen is Work"));
     }
 
     #[test]

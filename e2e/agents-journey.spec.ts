@@ -41,7 +41,6 @@ test("intake to a build's pull request on Pip home: the person asks Pip for each
   await homeWorkstream(page);
   const row = workstreamGroup(page, "CA-401");
   await expect(row).toHaveAttribute("aria-current", "true");
-  await expect(row.locator("[data-stage]")).toHaveText("Intake");
   await expect(stepRail(page).getByRole("switch", { name: "Manage this workstream" })).toHaveCount(0);
 
   // Asking Pip to investigate starts the agent: nothing waits on the person.
@@ -141,8 +140,8 @@ test("the Needs you list ranks a question from Pip ahead of a pause, opens each 
   await expect(needsPane(page)).toContainText("Which database to use?");
   await needsPane(page).getByRole("button", { name: "Dismiss" }).click();
   await expect(needRow(page, "Pip asks you")).toHaveCount(0);
-  await expect(row.locator("[data-status]")).toHaveText("Paused");
-  await expect(row.locator("[data-status-detail]")).toHaveText("· Pip was woken too often today");
+  await expect(row.locator("[data-status]")).toHaveText("Needs you");
+  await expect(row.locator("[data-status-detail]")).toHaveText("· 1 waiting");
 
   // The pane moved on to the pause, with its heading focused (no key lands on Resume by accident); Resume clears the need and the badge.
   await expect(needsPane(page)).toHaveAttribute("data-kind", "paused");

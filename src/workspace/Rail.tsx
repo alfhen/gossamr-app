@@ -224,7 +224,7 @@ function RailBadge({ count, what }: { count: number; what: string }) {
   );
 }
 
-/** What the rail badge counts, as its tooltip says and as the button's name ends ("Agents, 3 things need you"). Activity has none: what needs you is counted once, on Agents. */
+/** What the rail badge counts, as its tooltip says and as the button's name ends ("Work, 3 things need you"). Inbox has none: what needs you is counted once, on Work. */
 export const railBadgeText = {
   agents: needsYouText,
 };
@@ -243,7 +243,7 @@ function AgentsButton({ current }: { current: boolean }) {
   return (
     <div ref={root} className="relative">
       <RailButton
-        label={count > 0 ? `Agents, ${railBadgeText.agents(count)}` : "Agents"}
+        label={count > 0 ? `Work, ${railBadgeText.agents(count)}` : "Work"}
         tip={!open}
         current={current}
         // A click goes to Agents; what needs the person opens beside it from the context menu (right-click or Shift+F10).
@@ -319,7 +319,7 @@ export function Rail() {
         <ViewsButton />
       </nav>
       <div className="flex shrink-0 flex-col items-center gap-2 border-t border-ws-sep pt-2.5">
-        <RailButton label="Activity" current={route === "activity"} onClick={() => setRoute("activity")} className={`text-lg ${plain(route === "activity")}`}>
+        <RailButton label="Inbox" current={route === "activity"} onClick={() => setRoute("activity")} className={`text-lg ${plain(route === "activity")}`}>
           <BellIcon />
         </RailButton>
         <AgentsButton current={route === "agents"} />

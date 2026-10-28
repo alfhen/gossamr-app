@@ -6,8 +6,8 @@ import { agentsHome, closeWorkstreamSheet, groupOpen, needsStack, workstreamShee
 
 
 /** The rail's Pip home and Agents buttons. */
-const homeButton = (page: Page) => page.locator("[data-rail]").getByRole("button", { name: /^Agents/ });
-const agentsButton = (page: Page) => page.getByRole("button", { name: /^Agents/ });
+const homeButton = (page: Page) => page.locator("[data-rail]").getByRole("button", { name: /^Work(,|$)/ });
+const agentsButton = (page: Page) => page.getByRole("button", { name: /^Work(,|$)/ });
 
 /** Pip home's composer footer, which says how many need the person. */
 const footer = (page: Page) => homeConversationRegion(page).locator("[data-composer-footer]");
@@ -75,7 +75,7 @@ test("a workstream's needs are one stack at the top of its detail, most urgent f
 
   // The one count: the chip, the rail's badge and the composer say the same six.
   await expect(needsYouCount(page)).toHaveText("6");
-  await expect(homeButton(page)).toHaveAccessibleName("Agents, 6 things need you");
+  await expect(homeButton(page)).toHaveAccessibleName("Work, 6 things need you");
   await expect(homeButton(page).locator('[aria-label="6 things need you"]')).toHaveText("6");
   await expect(footer(page)).toHaveText(/ · 6 need you$/);
   await expect(workstreamGroup(page, "CA-401").locator("[data-status]")).toHaveText("Needs you");
@@ -163,7 +163,7 @@ test("approving a draft from the pane writes it to Jira, and focus goes to the n
   await expect(needsYouTray(page)).toContainText("Nothing needs you.");
   await expect(pane).toHaveCount(0);
   await expect(needsStack(page)).toHaveCount(0);
-  await expect(homeButton(page)).toHaveAccessibleName("Agents");
+  await expect(homeButton(page)).toHaveAccessibleName("Work");
   await expect(footer(page)).toHaveText(/nothing needs you$/);
 });
 
@@ -215,7 +215,7 @@ test("a failure stays in Needs you after Agents is opened, and only a Dismiss (o
   await closeWorkstreamSheet(page);
   await expect(page.locator('main article[data-run-id][data-state="failed"]').first()).toBeVisible();
   await page.waitForTimeout(400);
-  await expect(page.locator("[data-rail]").getByRole("button", { name: /^Agents/ })).toHaveAccessibleName(`Agents, ${count} things need you`);
+  await expect(page.locator("[data-rail]").getByRole("button", { name: /^Work(,|$)/ })).toHaveAccessibleName(`Work, ${count} things need you`);
   // Its card says it is in Needs you, and the pill goes to the need.
   const card = page.locator('main article[data-run-id][data-state="failed"]');
   await expect(card.first().locator("[data-in-needs-you]")).toBeVisible();
@@ -229,7 +229,7 @@ test("a failure stays in Needs you after Agents is opened, and only a Dismiss (o
   await needsPane(page).getByRole("button", { name: "Dismiss" }).click();
   await expect(need(page, /SUP-9/)).toHaveCount(0);
   await expect(needsYouCount(page)).toHaveText(String(count - 1));
-  await chip(page, "all").click();
+  await chip(page, "needs").click();
   await closeWorkstreamSheet(page);
   await expect(page.locator('main article[data-run-id][data-state="failed"]').first()).toBeVisible();
   await expect(page.locator('main article[data-run-id][data-state="failed"]').first().locator("[data-in-needs-you]")).toHaveCount(0);

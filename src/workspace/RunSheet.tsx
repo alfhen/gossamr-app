@@ -28,7 +28,6 @@ import { openOnGithub } from "./githubUi";
 import { askPip } from "./askPip";
 import { followOutcome } from "./followOutcome";
 import { browseList, useRuns } from "./runsStore";
-import { usePrefs } from "./prefs";
 import { useWorkstreams } from "./workstreamsStore";
 import { labelsByRun } from "../lib/workstreamStage";
 import { RunLabel, RunRef } from "./AgentCard";
@@ -383,8 +382,6 @@ export function RunSheet({ id }: { id: string }) {
   const run = useRuns((s) => s.runs.find((r) => r.id === id));
   const runs = useRuns((s) => s.runs);
   const filters = useRuns((s) => s.filters);
-  const earlierOpen = useRuns((s) => s.earlierOpen);
-  const group = usePrefs((s) => s.agentsGroup);
   const workstreams = useWorkstreams((s) => s.list);
   const slotLine = useSlotQueue();
   const label = useMemo(() => labelsByRun(runs).get(id), [runs, id]);
@@ -440,10 +437,10 @@ export function RunSheet({ id }: { id: string }) {
   }, [backend, id, progress]);
 
   const place = useMemo(() => {
-    const order = browseList(browseOrder, agentGroups(group, runs, workstreams, filters, earlierOpen, now).order);
+    const order = browseList(browseOrder, agentGroups(runs, workstreams, filters).order);
     const at = order.indexOf(id);
     return at < 0 ? null : { index: at + 1, total: order.length };
-  }, [group, runs, workstreams, filters, earlierOpen, id, now, browseOrder]);
+  }, [runs, workstreams, filters, id, browseOrder]);
 
   const tickets = useMemo(() => Object.values(items).map((i) => ({ key: i.item.key, title: i.title })), [items]);
   if (!run) return null;

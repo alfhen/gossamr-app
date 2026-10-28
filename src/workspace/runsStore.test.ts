@@ -6,10 +6,9 @@ import { NO_FILTERS, agentGroups } from "./agentsLogic";
 import { useWorkstreams } from "./workstreamsStore";
 import { useTabs } from "./tabsStore";
 import { useToasts } from "./toasts";
-import { usePrefs } from "./prefs";
 import { answerKey, keepAnswer, keptAnswer } from "./keptAnswers";
 import { browseList, useRuns } from "./runsStore";
-import { laneOf, needsAttention } from "./agentsLogic";
+import { needsAttention } from "./agentsLogic";
 
 const memory = () => {
   const data = new Map<string, string>();
@@ -23,7 +22,7 @@ let backend: MockBackend;
 
 beforeEach(() => {
   vi.stubGlobal("localStorage", memory());
-  useRuns.setState({ dismissed: new Set(), filters: NO_FILTERS, earlierOpen: false, introOpen: false, stopping: false });
+  useRuns.setState({ dismissed: new Set(), filters: NO_FILTERS, introOpen: false, stopping: false });
   useToasts.getState().clear();
   useTabs.getState().setRoute("workspace");
   backend = new MockBackend();
@@ -100,7 +99,7 @@ describe("the runs store", () => {
 
   it("opens a run from a notification: shows the view, selects it and clears the filters", async () => {
     await settle();
-    s().setFilter({ repo: "acme/payments" });
+    s().setFilter({ needs: true });
     const offer = vi.fn();
     const off = backend.onOpenRun(offer);
     backend.runs.open("run-seed-3");
@@ -111,10 +110,9 @@ describe("the runs store", () => {
     expect(offer).toHaveBeenCalledWith("run-seed-3");
   });
 
-  it("combines filters and clears them", () => {
-    s().setFilter({ lane: "bad" });
-    s().setFilter({ repo: "acme/payments" });
-    expect(s().filters).toEqual({ lane: "bad", repo: "acme/payments", ticket: "all" });
+  it("sets the Needs you filter and clears it", () => {
+    s().setFilter({ needs: true });
+    expect(s().filters).toEqual({ needs: true });
     s().clearFilters();
     expect(s().filters).toEqual(NO_FILTERS);
   });
@@ -173,10 +171,10 @@ describe("the run sheet", () => {
 
   it("stays on the board when opened from a ticket, keeping the filters", async () => {
     await settle();
-    s().setFilter({ repo: "acme/payments" });
+    s().setFilter({ needs: true });
     s().openRun("run-seed-3", { stay: true });
     expect(useTabs.getState().route).toBe("workspace");
-    expect(s().filters.repo).toBe("acme/payments");
+    expect(s().filters.needs).toBe(true);
     useTabs.getState().setRoute("settings");
     s().openRun("run-seed-3", { stay: true });
     expect(useTabs.getState().route).toBe("agents");
@@ -185,7 +183,7 @@ describe("the run sheet", () => {
   it("browses with j and k in the order the view lists the runs, and stops at the ends", async () => {
     await settle();
     // The first run of the view's own order: from there k has nowhere to go.
-    const first = s().runs.find((r) => r.id === agentGroups("state", s().runs, [], NO_FILTERS, false, Date.now()).order[0])!;
+    const first = s().runs.find((r) => r.id === agentGroups(s().runs, [], NO_FILTERS).order[0])!;
     s().openRun(first.id);
     s().browse(-1);
     expect(s().sheet).toEqual({ type: "run", id: first.id });
@@ -197,29 +195,23 @@ describe("the run sheet", () => {
     expect(s().sheet).toEqual({ type: "run", id: first.id });
   });
 
-  it("browses in group order when the view groups by workstream, as the list on screen is", async () => {
+  it("browses in group order, a workstream's runs together, as the list on screen is", async () => {
     const ws = await backend.workstreamsOpen(itemRef("CA-401"));
     const run = backend.runs.start({ role: "investigate", repo: "acme/storefront", clonePath: "/Users/sample/Code/storefront", base: "main", name: "ca-401-browse-1a2b", brief: "", workstream: ws.id }, itemRef("CA-401"));
-    // Finished, it is in the Done lane by state, behind the runs still working, and first by workstream.
+    // Finished, it is still the workstream with the latest activity, so first.
     for (let i = 0; i < 3; i++) backend.runs.advance(run.id);
     useWorkstreams.getState().init(backend);
     await s().reload();
     await vi.waitFor(() => expect(useWorkstreams.getState().list).toHaveLength(1));
-    usePrefs.setState({ agentsGroup: "workstream" });
     try {
-      // The sample's clock stands at 12:00 on 30 September 2026.
-      const soon = Date.parse("2026-09-30T12:05:00Z");
-      const byWorkstream = agentGroups("workstream", s().runs, useWorkstreams.getState().list, NO_FILTERS, false, soon).order;
-      const byState = agentGroups("state", s().runs, [], NO_FILTERS, false, soon).order;
+      const byWorkstream = agentGroups(s().runs, useWorkstreams.getState().list, NO_FILTERS).order;
       expect(byWorkstream[0]).toBe(run.id);
-      expect(byState.indexOf(run.id)).toBeGreaterThan(0);
       s().openRun(run.id);
       s().browse(-1);
       expect(s().sheet).toEqual({ type: "run", id: run.id });
       s().browse(1);
       expect(s().sheet).toEqual({ type: "run", id: byWorkstream[1] });
     } finally {
-      usePrefs.setState({ agentsGroup: "state" });
       useWorkstreams.getState().dispose();
     }
   });
@@ -395,7 +387,7 @@ describe("the run sheet", () => {
       expect(s().answered[run.id]).toBe(now.lastProgressAt);
     });
 
-    it("keeps the run sheet's place in the browse order when the answered run changes lane", async () => {
+    it("keeps the run sheet's place in the browse order when the answered run changes state", async () => {
       const run = await asking();
       s().openRun(run.id);
       const before = [...s().browseOrder!];
@@ -403,12 +395,8 @@ describe("the run sheet", () => {
       await s().answer(run.id, "Yes, keep it.");
       await settle();
       expect(s().runs.find((r) => r.id === run.id)?.state).toBe("working");
-      // It has moved from Failed or stuck to Running; the sheet still walks the order it opened with.
-      const live = agentGroups("state", s().runs, [], NO_FILTERS, false, Date.now()).order;
-      // The sample's clock stands at 12:00 on 30 September 2026.
-      const soon = Date.parse("2026-09-30T12:05:00Z");
-      expect(laneOf(run, soon)).toBe("bad");
-      expect(laneOf(s().runs.find((r) => r.id === run.id)!, soon)).toBe("running");
+      // It moved from asking to working; the sheet still walks the order it opened with.
+      const live = agentGroups(s().runs, [], NO_FILTERS).order;
       expect(browseList(s().browseOrder, live).indexOf(run.id)).toBe(at);
       s().browse(1);
       expect(s().sheet).toEqual({ type: "run", id: before[at + 1] });

@@ -6,7 +6,7 @@ import type { Run, WorkstreamView } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { ClosedWorkstreams, WorkstreamHeadExtras, WorkstreamTools, rowTitle } from "./AgentsHome";
 import { AgentsScreen, type AgentsActions } from "./AgentsView";
-import { NO_FILTERS } from "./agentsLogic";
+import { NO_FILTERS, needsScope } from "./agentsLogic";
 import { loadPrefs, usePrefs } from "./prefs";
 import { useRuns } from "./runsStore";
 import { loadTabs, useTabs } from "./tabsStore";
@@ -48,35 +48,23 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe("the Agents view's default", () => {
-  it("groups by workstream for a profile with nothing stored", () => {
-    expect(loadPrefs()).toMatchObject({ agentsGroup: "workstream" });
-  });
-
-  it("starts everyone on Workstream once: the grouping the old default stored does not carry over, the one chosen since does", () => {
-    localStorage.setItem("gossamr-prefs", JSON.stringify({ agentsGroup: "state" }));
-    expect(loadPrefs().agentsGroup).toBe("workstream");
-    localStorage.setItem("gossamr-prefs", JSON.stringify({ agentsGroupBy: "state" }));
-    expect(loadPrefs().agentsGroup).toBe("state");
-    usePrefs.getState().setAgentsGroup("workstream");
-    expect(JSON.parse(localStorage.getItem("gossamr-prefs")!)).toMatchObject({ agentsGroupBy: "workstream" });
-  });
-
-  it("reads a profile that still stores keys no longer used", () => {
-    localStorage.setItem("gossamr-prefs", JSON.stringify({ startOnAgents: false, startOnPipHome: false, agentsIntroSeen: true, agentsView: "list", agentsGroupBy: "state" }));
-    expect(loadPrefs()).toMatchObject({ agentsGroup: "state" });
-    expect(loadPrefs()).not.toHaveProperty("agentsView");
-    usePrefs.getState().setAgentsGroup("workstream");
-    expect(JSON.parse(localStorage.getItem("gossamr-prefs")!)).not.toHaveProperty("agentsView");
+describe("old work preferences", () => {
+  it("ignores removed grouping choices when loading and saving preferences", () => {
+    localStorage.setItem("gossamr-prefs", JSON.stringify({ agentsGroup: "state", agentsGroupBy: "state", agentsView: "list" }));
+    expect(loadPrefs()).not.toHaveProperty("agentsGroup");
+    usePrefs.getState().setTheme("dark");
+    const saved = JSON.parse(localStorage.getItem("gossamr-prefs")!);
+    expect(saved).not.toHaveProperty("agentsGroupBy");
+    expect(saved).not.toHaveProperty("agentsView");
   });
 });
 
 describe("a workstream in the Agents list", () => {
   const actions = (): AgentsActions =>
-    ({ select: noop, open: noop, attach: noop, draftComment: noop, buildFromPlan: noop, resume: noop, filter: noop, clearFilters: noop, setGroup: noop, toggleEarlier: noop, setIntro: noop, dismissIntro: noop, retry: noop, fix: noop, retryLaunch: noop, copied: noop, stopAll: noop, askPip: noop, openSafety: noop, openWorkstream: vi.fn() }) as AgentsActions;
+    ({ select: noop, open: noop, attach: noop, draftComment: noop, buildFromPlan: noop, resume: noop, filter: noop, clearFilters: noop, stop: noop, setIntro: noop, dismissIntro: noop, retry: noop, fix: noop, retryLaunch: noop, copied: noop, stopAll: noop, askPip: noop, openSafety: noop, openWorkstream: vi.fn() }) as AgentsActions;
   const screen = (workstreams: WorkstreamView[], runs: Run[] = [], over: Record<string, unknown> = {}) =>
     renderToStaticMarkup(
-      <AgentsScreen runs={runs} status="ready" error={null} filters={NO_FILTERS} selectedId={null} earlierOpen={false} introShown={false} stopping={false} opened={new Set()} now={NOW} ticketTitle={() => null} on={actions()} workstreams={workstreams} {...over} />,
+      <AgentsScreen runs={runs} status="ready" error={null} filters={NO_FILTERS} selectedId={null} introShown={false} stopping={false} opened={new Set()} now={NOW} ticketTitle={() => null} on={actions()} workstreams={workstreams} {...over} />,
     );
 
   it("is a group even with no agent yet, with its ticket key, its stage and a button that opens it", () => {
@@ -93,7 +81,7 @@ describe("a workstream in the Agents list", () => {
   });
 
   it("is not listed with a filter on, which hides the groups that have no agent to match it", () => {
-    const html = screen([view("ws-1", "CA-401")], [], { filters: { ...NO_FILTERS, repo: "acme/none" } });
+    const html = screen([view("ws-1", "CA-401")], [], { filters: { needs: true }, needed: needsScope([]) });
     expect(html).not.toContain('data-workstream-group="ws-1"');
   });
 
@@ -112,10 +100,10 @@ describe("a workstream in the Agents list", () => {
 });
 
 describe("what needs you, in the Agents list and its detail", () => {
-  const actions = (): AgentsActions => ({ select: noop, open: noop, attach: noop, draftComment: noop, buildFromPlan: noop, resume: noop, filter: noop, clearFilters: noop, setGroup: noop, toggleEarlier: noop, setIntro: noop, dismissIntro: noop, retry: noop, fix: noop, retryLaunch: noop, copied: noop, stopAll: noop, askPip: noop, openSafety: noop, openWorkstream: vi.fn() }) as AgentsActions;
+  const actions = (): AgentsActions => ({ select: noop, open: noop, attach: noop, draftComment: noop, buildFromPlan: noop, resume: noop, filter: noop, clearFilters: noop, stop: noop, setIntro: noop, dismissIntro: noop, retry: noop, fix: noop, retryLaunch: noop, copied: noop, stopAll: noop, askPip: noop, openSafety: noop, openWorkstream: vi.fn() }) as AgentsActions;
   const screen = (over: Record<string, unknown> = {}) =>
     renderToStaticMarkup(
-      <AgentsScreen runs={[]} status="ready" error={null} filters={NO_FILTERS} selectedId={null} earlierOpen={false} introShown={false} stopping={false} opened={new Set()} now={NOW} ticketTitle={() => null} on={actions()} {...over} />,
+      <AgentsScreen runs={[]} status="ready" error={null} filters={NO_FILTERS} selectedId={null} introShown={false} stopping={false} opened={new Set()} now={NOW} ticketTitle={() => null} on={actions()} {...over} />,
     );
   afterEach(() => seed(useWorkView, { deciding: null, batch: null }));
   const held = view("ws-1", "CA-401", { pausedReason: "ceiling" });
@@ -141,11 +129,9 @@ describe("what needs you, in the Agents list and its detail", () => {
   it("is the same count on the Needs you chip as the rail badge says, and the chip is a toggle that is on with the filter", () => {
     seed(useWorkstreams, { list: [held, calm] });
     const off = screen({ workstreams: [held, calm], needsYou: 1 });
-    expect(off).toMatch(/data-chip="needs" aria-pressed="false"[^>]*>Needs you<span data-chip-count[^>]*>1</);
-    expect(off).toMatch(/data-chip="all" aria-pressed="true"/);
+    expect(off).toMatch(/data-chip="needs"[^>]*>Needs you<span data-chip-count[^>]*>1</);
     const on = screen({ workstreams: [held, calm], needsYou: 1, filters: { ...NO_FILTERS, needs: true } });
-    expect(on).toMatch(/data-chip="needs" aria-pressed="true"/);
-    expect(on).toMatch(/data-chip="all" aria-pressed="false"/);
+    expect(on).toMatch(/data-chip="needs"[^>]*aria-pressed="true"/);
   });
 
   it("shows the decision at the top of the detail, under Needs you, above the steps", () => {
@@ -202,10 +188,10 @@ describe("what a workstream's heading says of where it stands", () => {
     expect(html).not.toContain("data-needs-you-badge");
   });
 
-  it("says a paused workstream is paused", () => {
+  it("says a paused workstream needs you", () => {
     const paused = view("ws-1", "CA-401", { pausedReason: "person" });
     seed(useWorkstreams, { list: [paused] });
-    expect(renderToStaticMarkup(<WorkstreamHeadExtras view={paused} />)).toMatch(/data-status="paused"[^>]*>Paused/);
+    expect(renderToStaticMarkup(<WorkstreamHeadExtras view={paused} />)).toMatch(/data-status="needs-you"[^>]*>Needs you/);
   });
 });
 

@@ -72,7 +72,7 @@ async function homeStage(page: Page) {
 }
 
 test.describe("workstream stage (D3, D10, D18)", () => {
-  test("a finished review reads Review on the peek, the pane, the Pip home row and its header", async ({ page }) => {
+  test("a finished review reads Review on the peek, the pane, the Work row and its header", async ({ page }) => {
     test.setTimeout(120_000);
     // Nothing sends the build back: the review is where the workstream stops.
     await toFinishedReview(page);
@@ -80,7 +80,6 @@ test.describe("workstream stage (D3, D10, D18)", () => {
     await expect(await peekStage(page)).toHaveText("Review");
     await expect(pipConversation(page)).toHaveText(/^Workstream: CA-401 .* · Review$/);
     const { row, header } = await homeStage(page);
-    await expect(row.locator("[data-stage]")).toHaveText("Review");
     await expect(row).not.toContainText("Done");
     await expect(header).toHaveText(/^Workstream: CA-401 .* · Review$/);
     expect((await jiraWrites(page)).map((w) => w.type)).toEqual(["rewrite"]);
@@ -91,11 +90,9 @@ test.describe("workstream stage (D3, D10, D18)", () => {
     await toFinishedReview(page, () => scriptNextRun(page, "review", { verdict: "pass" }));
     await expect(wakes(page).last()).toContainText("finished");
     await expect(await peekStage(page)).toHaveText("Review");
-    const { row, header } = await homeStage(page);
-    await expect(row.locator("[data-stage]")).toHaveText("Review");
+    const { header } = await homeStage(page);
     await expect(header).toHaveText(/^Workstream: CA-401 .* · Review$/);
   });
-
 });
 
 const runSheet = (page: Page) => page.getByRole("dialog", { name: "Agent run" });
@@ -121,7 +118,7 @@ test.describe("starting an agent from the peek (D1)", () => {
 test.describe("sheets and launcher (D16, D24)", () => {
   test("stopping a run from a sheet scrolled down brings its title and the Stopped pill back into view", async ({ page }) => {
     await openApp(page);
-    await page.getByRole("button", { name: /^Agents/ }).click();
+    await page.getByRole("button", { name: /^Work(,|$)/ }).click();
     await page.locator('[data-run-id]').filter({ hasText: "WEB-108" }).first().click();
     await expect(runSheet(page)).toBeVisible();
     await expect(runSheet(page).locator("[data-state]").first()).toHaveAttribute("data-state", "working");
@@ -227,8 +224,7 @@ test.describe("agent counts and tray (D4, D27)", () => {
     await expect(strip.locator("article[data-run-id]")).toHaveCount(3);
     await expect(strip.locator('article[data-state="failed"]')).toContainText("SUP-9");
     await strip.getByRole("button", { name: "See all in Agents" }).click();
-    // The Agents view, with its layout and grouping switches.
-    await expect(page.getByRole("group", { name: "Group by" })).toBeVisible();
+    await expect(page.locator("[data-workstream-group]").first()).toBeVisible();
   });
 
 });
@@ -237,39 +233,6 @@ test.describe("agent counts and tray (D4, D27)", () => {
 const focusIn = (page: Page, selector: string) => page.evaluate((s) => !!document.activeElement?.closest(s), selector);
 
 test.describe("Your turn and Needs you name different things (D5)", () => {
-  test("the Jira inbox is Your turn on the tab, the ticket pill, the Activity chip and the palette; Needs you is left to Pip home", async ({ page }) => {
-    await openApp(page);
-    // The tab, and the pill on a ticket waiting on the person's reply, which says why.
-    const tab = page.getByRole("tab", { name: /^Your turn/ });
-    await expect(tab).toBeVisible();
-    await expect(page.getByRole("tab", { name: /^Needs me/ })).toHaveCount(0);
-    await tab.click();
-    const list = page.getByRole("listbox", { name: "Items" });
-    const pill = list.locator("[data-your-turn]").first();
-    await expect(pill).toHaveText("Your turn");
-    await expect(pill).toHaveAttribute("title", /^Your turn: an unread update, an unanswered mention, or a comment on your ticket/);
-    await expect(list.getByText("Needs you", { exact: true })).toHaveCount(0);
-
-    // The palette finds it by its new name and its old one.
-    await page.keyboard.press("ControlOrMeta+k");
-    const dialog = page.getByRole("dialog", { name: "Command palette" });
-    await dialog.getByRole("combobox").fill("needs me");
-    await expect(dialog.getByRole("option", { name: /Filter: Your turn/ })).toBeVisible();
-    await page.keyboard.press("Escape");
-    await expect(dialog).toHaveCount(0);
-
-    // Activity's chip carries the same name and the badge's count, and lists the same needs; its feed rows carry no pill.
-    await page.getByRole("button", { name: /^Activity/ }).click();
-    const chips = page.getByRole("group", { name: "Show" });
-    await chips.getByRole("button", { name: /^Your turn/ }).click();
-    await expect(chips.getByRole("button", { name: /^Needs me/ })).toHaveCount(0);
-    const badge = Number(/^Agents, (\d+) /.exec((await page.locator("[data-rail]").getByRole("button", { name: /^Agents/ }).getAttribute("aria-label")) ?? "")?.[1] ?? 0);
-    await expect(page.locator("[data-needs-you-count]")).toHaveText(String(badge));
-    if (badge) await expect(chips.getByRole("button", { name: /^Your turn/ })).toHaveText(new RegExp(`${badge}$`));
-    await chips.getByRole("button", { name: /^All/ }).click();
-    await expect(page.getByRole("feed", { name: "Activity" }).locator("[data-your-turn]")).toHaveCount(0);
-  });
-
   test("the rail's one badge names what it counts, in its tooltip and in its button's name, and Activity has none", async ({ page }) => {
     await openApp(page);
     const named = async (button: RegExp, badge: RegExp) => {
@@ -279,9 +242,9 @@ test.describe("Your turn and Needs you name different things (D5)", () => {
       await expect(tip).toHaveAttribute("title", badge);
       return (await tip.getAttribute("title"))!;
     };
-    await named(/^Agents, \d+ things? needs? you$/, /^\d+ things? needs? you$/);
+    await named(/^Work, \d+ things? needs? you$/, /^\d+ things? needs? you$/);
     // The bell is a link to Activity, with no number.
-    const activity = page.getByRole("button", { name: "Activity", exact: true });
+    const activity = page.getByRole("button", { name: "Inbox", exact: true });
     await expect(activity).toBeVisible();
     await expect(activity.locator("[title]")).toHaveCount(0);
   });

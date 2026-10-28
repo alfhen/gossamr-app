@@ -30,7 +30,7 @@ async function start(seed: "failures" | "busy") {
 
 beforeEach(() => {
   vi.stubGlobal("localStorage", memory());
-  useRuns.setState({ dismissed: new Set(), filters: NO_FILTERS, earlierOpen: false, archivedOpen: false });
+  useRuns.setState({ dismissed: new Set(), filters: NO_FILTERS, archivedOpen: false });
   useToasts.getState().clear();
 });
 

@@ -288,6 +288,15 @@ describe("needs: folding", () => {
     const list = needs(input({ workstreams: [closed], proposals: [draft("d", comment("CA-409"), 5, { workstream: "ws-9" })] }));
     expect(list.map((n) => [n.key, n.workstreamId])).toEqual([["draft:d", null]]);
   });
+
+  it("counts an agent's question and a draft in a closed workstream under General, as the notices in Rust do", () => {
+    const closed = view("ws-9", "CA-409", { closedAt: iso(1), runs: ["r1"] });
+    const list = needs(input({ workstreams: [closed], runs: [run("r1", "build", "needsPermission", { spec: { ...base.spec, workstream: "ws-9" }, needs: "approve Bash: git push" })], proposals: [draft("d", comment("CA-409"), 5, { workstream: "ws-9" })] }));
+    expect(list.map((n) => [n.key, n.workstreamId])).toEqual([
+      ["run:r1", null],
+      ["draft:d", null],
+    ]);
+  });
 });
 
 describe("needs: failures persist until they are dealt with", () => {
@@ -334,9 +343,9 @@ describe("needs: the runs that are never a need", () => {
     expect(only(run("r1", "build", "launching"))).toEqual([]);
   });
 
-  it("leaves out a run that has been quiet, one in a state Gossamr cannot read, and one that may have carried on elsewhere", () => {
+  it("leaves out a run that has been quiet, one whose session is not listed until the backend calls it failed, and one that may have carried on elsewhere", () => {
     expect(only(run("r1", "build", "working", { lastProgressAt: iso(300) }))).toEqual([]);
-    expect(only(run("r1", "build", "unknown"))).toEqual([]);
+    expect(only(run("r1", "build", "unknown", { error: "This session isn't listed any more" }))).toEqual([]);
     expect(only(run("r1", "build", "stopped", { possibleContinuations: [{ shortId: "abc12345" }] }))).toEqual([]);
   });
 });

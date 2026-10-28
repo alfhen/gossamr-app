@@ -10,7 +10,6 @@ import { openTicketByKey, showMe } from "./jump";
 import { forgetSettledAnswers } from "./keptAnswers";
 import { readStored, writeStored } from "./storage";
 import { messageOf, useToasts } from "./toasts";
-import { usePrefs } from "./prefs";
 import { offerUndo } from "./undo";
 import { useTabs } from "./tabsStore";
 import { useWorkstreams } from "./workstreamsStore";
@@ -30,7 +29,7 @@ export type RunSheetTarget = { type: "run"; id: string } | { type: "safety" };
 
 /**
  * The order j and k walk through: the one the sheet opened with (`snapshot`), runs gone from it dropped and new ones
- * added at the end, so a run that changes lane while its sheet is open keeps its place; the live order without one.
+ * added at the end, so a run that changes state while its sheet is open keeps its place; the live order without one.
  */
 export function browseList(snapshot: readonly string[] | null, live: readonly string[]): string[] {
   if (!snapshot) return [...live];
@@ -59,7 +58,6 @@ interface RunsState {
   terminalOpened: ReadonlySet<string>;
   /** Whether the person has the explainer open. */
   introOpen: boolean;
-  earlierOpen: boolean;
   stopping: boolean;
   /** The run a draft is being made from, so its buttons wait. */
   drafting: string | null;
@@ -112,7 +110,6 @@ interface RunsState {
   cleanup(id: string): Promise<CleanupResult | null>;
   /** Cleans up each run in turn and says how many Claude removed and what it kept. */
   cleanupAll(ids: readonly string[]): Promise<{ removed: number; refused: string[] }>;
-  setEarlierOpen(open: boolean): void;
   setArchivedOpen(open: boolean): void;
   /** Archives runs that are over, with an Undo that restores them. */
   archive(ids: readonly string[]): Promise<boolean>;
@@ -138,7 +135,7 @@ export const setNoticeOpener = (open: (runId: string) => void, scope?: () => Nee
 export const currentNeedsScope = () => scopeSource();
 
 /** The order the Agents view lists runs in right now, grouped as it is. */
-const liveOrder = (s: Pick<RunsState, "runs" | "filters" | "earlierOpen">) => agentGroups(usePrefs.getState().agentsGroup, s.runs, useWorkstreams.getState().list, s.filters, s.earlierOpen, Date.now(), currentNeedsScope()).order;
+const liveOrder = (s: Pick<RunsState, "runs" | "filters">) => agentGroups(s.runs, useWorkstreams.getState().list, s.filters, currentNeedsScope()).order;
 
 /** A run that was dismissed and has moved on (it retried, was resumed, carried on) starts over: if it fails or stops again, Needs you has it again. */
 const DISMISSABLE: readonly Run["state"][] = ["failed", "stopped", "unknown"];
@@ -201,7 +198,6 @@ export const useRuns = create<RunsState>((set, get) => ({
   dismissed: loadDismissed(),
   terminalOpened: new Set<string>(),
   introOpen: false,
-  earlierOpen: false,
   archivedOpen: false,
   stopping: false,
   drafting: null,
@@ -449,7 +445,6 @@ export const useRuns = create<RunsState>((set, get) => ({
     return tally;
   },
 
-  setEarlierOpen: (earlierOpen) => set({ earlierOpen }),
   setArchivedOpen: (archivedOpen) => set({ archivedOpen }),
 
   async archive(ids) {

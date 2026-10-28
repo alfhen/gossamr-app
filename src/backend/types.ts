@@ -137,8 +137,8 @@ export interface Backend {
   cacheEvents(ref: ItemRef): Promise<WorkEvent[]>;
   /** Events across every item, newest first, one page at a time. Reading state (`unread`) is the inbox's, so `setUnread` marks an entry read. */
   cacheFeed(query: FeedQuery): Promise<FeedPage>;
-  /** How many feed entries are unread. */
-  cacheFeedUnread(): Promise<number>;
+  /** How many feed entries are unread, of `kinds` (every kind when none are given), as `cacheFeed` counts them. */
+  cacheFeedUnread(kinds?: FeedQuery["kinds"]): Promise<number>;
   /** Called when a sync or a write changed the cache, so views over it can re-read. Returns an unsubscribe function. */
   onCacheChanged(listener: (change: CacheChanged) => void): () => void;
   /** Drafted writes, newest first. They survive a restart. */
@@ -202,6 +202,8 @@ export interface Backend {
   runsKeepRunning(): Promise<number>;
   revealPath(path: string): Promise<void>;
   runsSettings(): Promise<AgentSettings>;
+  /** Sets the Dock badge from the same Needs you list the page shows. */
+  setNeedsBadge(count: number): Promise<void>;
   /** Saves the limits, clamped by the backend, and returns what was saved. */
   runsSetSettings(settings: AgentSettings): Promise<AgentSettings>;
   /** Removes a finished run's worktree with `claude rm`. Never forces: Claude refuses unpushed work and says so. */

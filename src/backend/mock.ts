@@ -626,6 +626,8 @@ export class MockBackend implements Backend {
     return this.runs.settings();
   }
 
+  async setNeedsBadge(_count: number) {}
+
   async runsSetSettings(settings: AgentSettings) {
     return this.runs.setSettings(settings);
   }
@@ -1050,8 +1052,8 @@ export class MockBackend implements Backend {
     return this.connector.feed(query);
   }
 
-  async cacheFeedUnread() {
-    return this.connector.feedUnread();
+  async cacheFeedUnread(kinds?: FeedQuery["kinds"]) {
+    return this.connector.feedUnread(kinds);
   }
 
   async cachePeople() {

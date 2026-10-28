@@ -293,8 +293,8 @@ function moveScript(prompt: string, context: ScreenContext, workstream: PipWorks
   };
 }
 
-/** Whether the screen line is the Agents view's, "Agents" and then what it shows (`screenLine` in src/workspace/screenContext.ts). */
-const onAgents = (view: string | null | undefined) => view === "Agents" || !!view?.startsWith("Agents · ");
+/** Whether the screen line is the Work screen's, "Work" and then what it shows (`screenLine` in src/workspace/screenContext.ts). */
+const onAgents = (view: string | null | undefined) => view === "Work" || !!view?.startsWith("Work · ");
 
 const asksToApprovePlan = /^\s*approve the plan\b/i;
 const asksWhileAway = /\bwhile i was away\b/i;
@@ -425,7 +425,7 @@ export function agentSummary(runs: readonly Run[], now: number): string {
   const line = (r: Run) => `- **${r.item?.key ?? r.spec.repo}** ${stateView(r, now).label.toLowerCase()}${r.lastDetail ? `: ${r.lastDetail}` : r.needs ? `: ${r.needs}` : ""}`;
   const part = (title: string, list: readonly Run[]) => (list.length ? `${title}\n${list.slice(0, 5).map(line).join("\n")}` : "");
   return [
-    // Counted as the Agents view's summary and Pip's footer count them, quiet runs apart.
+    // Counted as the Work screen's summary and Pip's footer count them, quiet runs apart.
     `You have ${runs.length} agent ${runs.length === 1 ? "run" : "runs"}: ${[`${waiting.length} waiting on you`, ...(liveWords(live).length ? liveWords(live) : ["none running"]), ...(live.quiet ? [`${live.quiet} quiet`] : []), `${done.length} ready to review`].join(", ")}.`,
     part("Waiting on you", waiting),
     part("Working", going),
@@ -655,7 +655,7 @@ export function scriptPip(prompt: string, context: ScreenContext, images: ImageD
       const open = !workstream || workstream.item?.key !== item.key ? { item, title: item.key } : undefined;
       return {
         steps: [`Looked up ${item.key}`, ...(open ? [`Opened a workstream on ${item.key}`] : []), "Started an agent"],
-        text: `I started an investigation of **${item.key}**${focus ? ` with a focus note: “${focus}”` : ""}.${open ? " I opened a workstream for it." : ""} It shows under Agents, and I'll tell you when it finishes.`,
+        text: `I started an investigation of **${item.key}**${focus ? ` with a focus note: “${focus}”` : ""}.${open ? " I opened a workstream for it." : ""} It shows on Work, and I'll tell you when it finishes.`,
         filter: null,
         draft: null,
         start: { item, role: "investigator", brief: focus ? `Look into ${item.key} and report what you found. Focus on ${focus}.` : `Look into ${item.key} and report what you found.`, repo: null, ...(open ? { open } : {}) },
@@ -678,7 +678,7 @@ export function scriptPip(prompt: string, context: ScreenContext, images: ImageD
     const filter = context.filter ? and(context.filter, wanted.filter) : wanted.filter;
     return {
       steps: ["Searched the items"],
-      // On Agents no board is on screen: the filter lands on the workspace tab, there when the person goes back.
+      // On Work no board is on screen: the filter lands on the workspace tab, there when the person goes back.
       text: `${wanted.note}. ${onAgents(context.view) ? "I filtered your workspace tab for you; it is there when you go back to it. Undo it below if that wasn't what you meant." : "I filtered this view for you; undo it below if that wasn't what you meant."}`,
       filter: { filter, note: wanted.note },
       draft: null,
@@ -749,7 +749,7 @@ export function scriptPip(prompt: string, context: ScreenContext, images: ImageD
       draft: null,
     };
   }
-  if (context.view?.startsWith("Agents")) return { steps: ["Looked at your agents"], text: agentSummary(runs, now), filter: null, draft: null };
+  if (context.view?.startsWith("Work")) return { steps: ["Looked at your agents"], text: agentSummary(runs, now), filter: null, draft: null };
   const where = context.view ?? "the workspace";
   const open = context.item ? ` and **${context.item.key}** is open` : "";
   return {

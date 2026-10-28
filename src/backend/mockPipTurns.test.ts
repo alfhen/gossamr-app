@@ -227,7 +227,7 @@ describe("mockAsk", () => {
       await mockAsk({ requestId, prompt, sessionId: null, context, conversation, meta: { imageCount: 0 } }, backend, 0);
       return openMockPipTurns().turns(conversation).find((t) => t.requestId === requestId)?.text ?? "";
     };
-    const home: ScreenContext = { view: "Agents · All · 0 runs", item: null, filter: null, selection: [] };
+    const home: ScreenContext = { view: "Work · All · 0 runs", item: null, filter: null, selection: [] };
     const general = await answer("home-1", "Catch me up", "general", home);
     expect(general).toMatch(/^You have no agent runs\. Ask me to start one\./);
     expect(general).not.toMatch(/stale|blocked/);

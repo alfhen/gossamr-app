@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { DIGEST_MINUTES, type AgentSettings, type NoticeMode, type Run } from "../types";
+import { type AgentSettings, type Run } from "../types";
 import { Box, Btn, Sec, SheetFrame } from "./AgentSheet";
 import { roleLabel } from "../lib/roles";
 import { slotWaiters, stopAllLabel, stopAllText, stoppable } from "./agentsLogic";
@@ -177,60 +177,13 @@ function AgentsForm({ settings, disabled, onSave }: { settings: AgentSettings; d
   );
 }
 
-const NOTICE_MODES: readonly { value: NoticeMode; label: string }[] = [
-  { value: "workstream", label: "Each workstream" },
-  { value: "digest", label: "Digest" },
-  { value: "off", label: "Off" },
-];
-
-/** The settings with the digest interval read from `text`, or null when it says nothing new (or nothing a number). It stays between 1 minute and a day. */
-export function withDigestMinutes(settings: AgentSettings, text: string): AgentSettings | null {
-  const n = Number(text);
-  if (text.trim() === "" || !Number.isFinite(n)) return null;
-  const minutes = Math.min(1_440, Math.max(1, Math.round(n)));
-  return minutes === (settings.digestMinutes ?? DIGEST_MINUTES) ? null : { ...settings, digestMinutes: minutes };
-}
-
-/** Which system notifications to show: one per workstream that starts waiting on you, a digest every so often, or none. */
+/** System notices for new things in Needs you. */
 function NotificationsForm({ settings, disabled, onSave }: { settings: AgentSettings; disabled: boolean; onSave(next: AgentSettings): void }) {
-  const mode = settings.notifications ?? "workstream";
-  const [minutes, setMinutes] = useState(String(settings.digestMinutes ?? DIGEST_MINUTES));
-  const save = () => {
-    const next = withDigestMinutes(settings, minutes);
-    if (next) onSave(next);
-    else setMinutes(String(settings.digestMinutes ?? DIGEST_MINUTES));
-  };
   return (
-    <div className="grid gap-2">
-      <label className="flex flex-wrap items-center gap-2">
-        <span className="min-w-[210px]">Notifications</span>
-        <select disabled={disabled} aria-label="Notifications" value={mode} onChange={(e) => onSave({ ...settings, notifications: e.target.value as NoticeMode })} className={FIELD.replace("w-20", "w-40")}>
-          {NOTICE_MODES.map((m) => (
-            <option key={m.value} value={m.value}>
-              {m.label}
-            </option>
-          ))}
-        </select>
-        <span className="text-sm text-ws-ink3">
-          {mode === "workstream" ? "one when a workstream starts waiting on you, none while it already does" : mode === "digest" ? "one summary of the workstreams that wait on you" : "no system notifications about agents"}
-        </span>
-      </label>
-      {mode === "digest" && (
-        <label className="flex flex-wrap items-center gap-2">
-          <span className="min-w-[210px]">Digest every (minutes)</span>
-          <input
-            disabled={disabled}
-            aria-label="Digest every this many minutes"
-            inputMode="numeric"
-            value={minutes}
-            onChange={(e) => setMinutes(e.target.value)}
-            onBlur={save}
-            onKeyDown={(ev) => ev.key === "Enter" && ev.currentTarget.blur()}
-            className={FIELD}
-          />
-          <span className="text-sm text-ws-ink3">at most one notification in that time</span>
-        </label>
-      )}
-    </div>
+    <label className="flex flex-wrap items-center gap-2">
+      <span className="min-w-[210px]">Notifications</span>
+      <input type="checkbox" aria-label="Notifications" disabled={disabled} checked={settings.notifications !== "off"} onChange={(e) => onSave({ ...settings, notifications: e.target.checked ? "workstream" : "off" })} />
+      <span className="text-sm text-ws-ink3">New things in Needs you</span>
+    </label>
   );
 }

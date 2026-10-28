@@ -22,6 +22,7 @@ import { GENERAL_CONVERSATION, PIP_INPUT_ID, PipPane } from "./PipPane";
 import { usePaneWidths } from "./PaneResizers";
 import { applyTheme, usePrefs } from "./prefs";
 import { useRuns } from "./runsStore";
+import { useNeedsYou } from "./useNeeds";
 import { togglePip, useWorkstreams } from "./workstreamsStore";
 import { Rail } from "./Rail";
 import { TABBABLE, nextRegion, regionStep, wrapTab, type WorkspaceRegion } from "./workKeys";
@@ -180,6 +181,15 @@ function useRouteAnnounce(screen: Route) {
   }, [screen]);
 }
 
+/** Keeps the Dock badge at how many items wait in Needs you. A leaf, so a change in the count does not render the whole app. */
+function NeedsBadge({ backend }: { backend: Backend }) {
+  const count = useNeedsYou().length;
+  useEffect(() => {
+    void backend.setNeedsBadge(count);
+  }, [backend, count]);
+  return null;
+}
+
 export function Workspace({ backend }: { backend: Backend }) {
   const status = useWorkspace((s) => s.status);
   const error = useWorkspace((s) => s.error);
@@ -283,6 +293,7 @@ export function Workspace({ backend }: { backend: Backend }) {
       {/* Clipped, not hidden: an overflow-hidden root is still a scroll container, and a scrollIntoView or focus() deep inside
           (a card in the peek, say) would scroll the whole app up under the person. A clipped one never scrolls. */}
       <div className="ws-root grid h-full overflow-clip bg-ws-win text-ws-ink" style={{ gridTemplateColumns: `58px minmax(0,1fr)${paneShown ? ` ${pipWidth}px` : ""}` }}>
+        <NeedsBadge backend={backend} />
         <Rail />
         <main
           id={MAIN_ID}

@@ -11,7 +11,7 @@ const live = async (page: Page) => (await mockRuns(page)).filter((r) => LIVE.inc
 /** Starts an investigation on `key` as Pip does and returns its run's id, with the Agents view showing. */
 async function start(page: Page, key: string): Promise<string> {
   const id = await startAgent(page, key, "investigate");
-  await page.getByRole("button", { name: /^Agents/ }).click();
+  await page.getByRole("button", { name: /^Work(,|$)/ }).click();
   const sheet = page.getByRole("dialog", { name: "Agent run" });
   if (await sheet.isVisible()) await page.keyboard.press("Escape");
   return id;
@@ -69,8 +69,8 @@ test("a run waiting for a slot can be stopped from its sheet, and Stop all stops
   for (const key of ["CA-404", "CA-405"]) {
     waiting.push(await start(page, key));
   }
-  // Counted apart from the running ones.
-  await expect(page.locator("main")).toContainText("3 running · 2 waiting for a slot");
+  // Each says it waits for a slot, apart from the running ones.
+  for (const id of waiting) await expect(agentRun(page, id)).toContainText("Waiting for a slot");
 
   // From its sheet the second in line says it starts on its own, offers no Start now, and can be stopped.
   await agentRun(page, waiting[1]).click();

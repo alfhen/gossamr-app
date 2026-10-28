@@ -547,8 +547,8 @@ export class MockConnector {
     return { entries, next: after.length > limit && last ? { at: last.at, id: last.id } : null };
   }
 
-  feedUnread(): number {
-    return this.feed({ unreadOnly: true, limit: 200 }).entries.length;
+  feedUnread(kinds?: FeedQuery["kinds"]): number {
+    return this.feed({ unreadOnly: true, kinds, limit: 200 }).entries.length;
   }
 
   /** Marks a feed entry read or unread; false when the id isn't one of this connector's events. */

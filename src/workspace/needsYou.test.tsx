@@ -16,13 +16,12 @@ function NeedsPane({ needs: list }: { needs: readonly Need[] }) {
   return <WorkstreamNeeds needs={list} workstreamId={batch !== null ? (batch === "general" ? null : batch) : owner!.workstreamId} />;
 }
 import { NeedsYouList, firstText, groupText, hasMoreBelow } from "./NeedsYou";
-import { NO_FILTERS, groupRuns, slotWaiters, stopAllLabel, stoppable, summaryLine, yourAgents } from "./agentsLogic";
+import { needsAttention, slotWaiters, stopAllLabel, stoppable, summaryLine, yourAgents } from "./agentsLogic";
 import { arm, confirmArmed, disarm, keyPlan, openInWorkstream, openNeed } from "./needsActions";
 import { BATCH_TITLE, composerFooter } from "./workViewLogic";
 import { useWorkView } from "./workViewStore";
 import { PipRunStripView } from "./PipRunCard";
 import { railBadgeText } from "./Rail";
-import { usePrefs } from "./prefs";
 import { useRuns } from "./runsStore";
 import { loadTabs, useTabs } from "./tabsStore";
 import { useToasts } from "./toasts";
@@ -311,7 +310,6 @@ describe("opening a need", () => {
     expect(useTabs.getState().route).toBe("agents");
     expect(useWorkView.getState()).toMatchObject({ selected: home(need("run:r-perm")), deciding: "run:r-perm", asking: null });
     expect(useRuns.getState().filters.needs).toBe(true);
-    expect(usePrefs.getState().agentsGroup).toBe("workstream");
   });
 
   it("from another route goes to Agents first, wherever the need is", () => {
@@ -332,7 +330,7 @@ describe("opening a need", () => {
     useRuns.getState().clearFilters();
     openInWorkstream(need("draft:c1"));
     expect(useWorkView.getState()).toMatchObject({ selected: "ws-1", focusTarget: { type: "draft", id: "c1" } });
-    expect(useRuns.getState().filters.needs).toBeUndefined();
+    expect(useRuns.getState().filters.needs).toBe(false);
     expect(useRuns.getState().sheet).toBeNull();
     openInWorkstream(need("paused:ws-2"));
     expect(useWorkView.getState()).toMatchObject({ selected: "ws-2", focusTarget: { type: "workstream" } });
@@ -554,7 +552,10 @@ describe("every count of needs you and of agents, from one fixture (D4, D5, N3)"
       expect(railBadgeText.agents(n)).toBe(needsYouText(n));
       expect(Number(/(\d+) needs? you/.exec(composerFooter(runs, n, at))?.[1])).toBe(n);
       expect(renderToStaticMarkup(<Launcher needs={n} onOpen={() => {}} />)).toContain(`Ask Pip, ${needsYouText(n)}`);
-      expect(summaryLine(runs, at, n)).toMatch(new RegExp(`^${n} need you · `));
+      // The header's count, worked out from the runs and drafts themselves rather than from the list's.
+      const counted = runs.filter((r) => needsAttention(r, dismissed)).length + proposals.length;
+      expect(counted).toBe(n);
+      expect(summaryLine(runs, at, counted)).toMatch(new RegExp(`^${n} need you · `));
       // Its agent part: the run needs among them, and Agents has no badge of its own.
       const waiting = list.filter((x) => x.runId);
       expect(n).toBe(waiting.length + proposals.length);
@@ -562,9 +563,8 @@ describe("every count of needs you and of agents, from one fixture (D4, D5, N3)"
       const mine = yourAgents(runs, dismissed);
       const strip = renderToStaticMarkup(<PipRunStripView runs={runs} now={at} dismissed={dismissed} titleOf={() => null} onOpen={() => {}} onSeeAll={() => {}} />);
       expect(Number(/data-strip-count[^>]*>\d+ of (\d+)</.exec(strip)?.[1])).toBe(mine.length);
-      // Failed or stuck in the header is the lane of that name, card for card (N3).
-      const bad = groupRuns(runs, NO_FILTERS, at).find((g) => g.lane === "bad")?.runs.length ?? 0;
-      expect(Number(/(\d+) failed or stuck/.exec(summaryLine(runs, at, n))?.[1])).toBe(bad);
+      // The header's need count is that same one list.
+      expect(Number(/^(\d+) needs? you/.exec(summaryLine(runs, at, counted))?.[1] ?? 0)).toBe(n);
       // Stop all counts a set of its own, and says so.
       expect(stopAllLabel(stoppable(runs).length + slotWaiters(runs).length)).toMatch(/^Stop all \(\d+ stoppable\)$/);
     });

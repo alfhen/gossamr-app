@@ -53,6 +53,7 @@ const CACHE_BACKFILLED: &str = "cache_backfilled";
 const EVENTS_BACKFILLED: &str = "events_backfilled";
 const PIP_SESSIONS: &str = "pip_sessions";
 const OWN_SESSIONS_KEPT: usize = 50;
+const ANNOUNCED_NEEDS: &str = "announced_needs";
 
 /// Events after this are new since the previous sync (or, before the first sync, from the last 24 hours).
 fn unread_cutoff(last_sync: Option<&str>) -> String {
@@ -174,7 +175,6 @@ pub struct Core {
 /// What a sync left behind.
 pub struct Synced {
     pub connection_id: String,
-    pub new_events: Vec<NewEvent>,
     /// Whether any cached item was added or changed.
     pub changed: bool,
     /// Whether reconciling the drafts against the fresh cache revised or retired any.
@@ -339,8 +339,7 @@ impl Core {
         Some(result)
     }
 
-    /// Fetches what changed since the last sync (or everything, when due), stores it in the cache, and returns the
-    /// events that are new and unread.
+    /// Fetches what changed since the last sync (or everything, when due) and stores it in the cache.
     pub async fn sync(&self) -> Result<Synced> {
         let (site, me) = self.identity().await?;
         let scope = Scope::of(&site, &me);
@@ -360,14 +359,13 @@ impl Core {
         let pulled = sync::pull(tracker.as_ref(), &connection_id, plan, &state, &known_epics, &unread_after, started, &watch).await?;
 
         self.with_db_for(&scope, |db| {
-            let stored = sync::store(db, &connection_id, &me.account_id, &pulled, plan, started, &unread_after, previous.is_some())?;
+            let stored = sync::store(db, &connection_id, &me.account_id, &pulled, plan, started, &unread_after)?;
             db.set_meta(LAST_SYNC, &stamp(started))?;
             let containers_changed = pulled.containers.is_some();
             // A draft that can't be re-judged must not stop the items from syncing.
             let revised = proposals::reconcile_pending(db, &identity_of(&connection_id, &me), Utc::now()).unwrap_or_default();
             Ok(Synced {
                 connection_id: connection_id.clone(),
-                new_events: stored.new_events,
                 changed: stored.upserted.any() || containers_changed,
                 proposals_changed: revised > 0,
                 watch_changed,
@@ -660,10 +658,11 @@ impl Core {
         .await
     }
 
-    pub async fn cache_feed_unread(&self) -> Result<usize> {
+    /// How many feed entries are unread, of `kinds` (every kind when empty).
+    pub async fn cache_feed_unread(&self, kinds: &[crate::domain::EventKind]) -> Result<usize> {
         let scope = self.scope().await?;
         let id = self.connection(&scope)?.id;
-        self.with_db_for(&scope, |db| db.feed_unread(&id, &db.watch_set(&id)?.visible())).await
+        self.with_db_for(&scope, |db| db.feed_unread(&id, kinds, &db.watch_set(&id)?.visible())).await
     }
 
     /// `scope` is the account the user was looking at when they approved; the write is refused if that has changed.
@@ -679,6 +678,15 @@ impl Core {
         }
         self.after_write(scope, key).await;
         Ok(CreatedSubtasks { created, error: error.map(|e| e.to_string()) })
+    }
+
+    /// The Needs you items already announced by a system notice, kept between launches; `None` before any were recorded.
+    pub async fn announced_needs(&self, scope: &Scope) -> Result<Option<std::collections::BTreeSet<String>>> {
+        self.with_db_for(scope, |db| Ok(db.meta(ANNOUNCED_NEEDS)?.and_then(|s| serde_json::from_str(&s).ok()))).await
+    }
+
+    pub async fn remember_announced_needs(&self, scope: &Scope, keys: &std::collections::BTreeSet<String>) -> Result<()> {
+        self.with_db_for(scope, |db| db.set_meta(ANNOUNCED_NEEDS, &serde_json::to_string(keys)?)).await
     }
 
     /// Records a session started in Pip's sandbox folder, and as the one to continue for `key` when there is one.

@@ -252,7 +252,7 @@ test.describe("no overlap", () => {
     expect(await buttons.count()).toBeGreaterThan(5);
     for (const b of await buttons.all()) expect((await b.getAttribute("aria-label"))?.trim()).toBeTruthy();
 
-    for (const name of ["Search and jump", "All projects", /^Agents/, "Settings", "Pip"]) {
+    for (const name of ["Search and jump", "All projects", /^Work/, "Settings", "Pip"]) {
       const button = rail(page).getByRole("button", { name, exact: typeof name === "string" });
       await button.hover();
       const label = (await button.getAttribute("aria-label"))!;

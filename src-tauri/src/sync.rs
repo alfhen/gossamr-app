@@ -123,13 +123,9 @@ pub async fn pull(
 
 pub struct Stored {
     pub upserted: Upserted,
-    /// Inbox events that are new since the last sync and unread, or none on a connection's first sync.
-    pub new_events: Vec<NewEvent>,
 }
 
-/// Writes a pull to the cache and advances the connection's cursor. `announce` is false for a connection's first
-/// sync, so connecting doesn't fire a burst of notifications.
-#[allow(clippy::too_many_arguments)]
+/// Writes a pull to the cache and advances the connection's cursor.
 pub fn store(
     db: &Db,
     connection_id: &str,
@@ -138,7 +134,6 @@ pub fn store(
     plan: Plan,
     started: DateTime<Utc>,
     unread_after: &str,
-    announce: bool,
 ) -> Result<Stored> {
     let at = stamp(started);
     let tickets = tickets_of(&pulled.tracked)?;
@@ -147,7 +142,7 @@ pub fn store(
     let upserted = db.upsert_items(&items, &at)?;
 
     let derived: Vec<NewEvent> = tickets.iter().flat_map(|t| derive(t, me)).collect();
-    let fresh = db.insert_events(&derived, unread_after)?;
+    db.insert_events(&derived, unread_after)?;
     db.insert_cache_events(&derived.iter().filter_map(|e| domain_event(connection_id, e)).collect::<Vec<_>>())?;
     db.insert_activity(&tickets.iter().flat_map(|t| my_actions(t, me)).collect::<Vec<_>>())?;
 
@@ -181,7 +176,7 @@ pub fn store(
     let refused: Vec<String> = pulled.inaccessible.iter().map(|c| c.external_id.clone()).collect();
     db.set_inaccessible(connection_id, &refused, true)?;
     db.save_sync_state(connection_id, &state)?;
-    Ok(Stored { upserted, new_events: if announce { fresh } else { Vec::new() } })
+    Ok(Stored { upserted })
 }
 
 /// An inbox event as the neutral event it is, or `None` when its timestamp can't be read.
@@ -458,13 +453,12 @@ mod tests {
             let db = &db;
             async move {
                 let pulled = pull(fake, CONNECTION, plan, &state, &[], "2000-01-01T00:00:00Z", started, &WatchSet::default()).await.unwrap();
-                store(db, CONNECTION, "me", &pulled, plan, started, "2000-01-01T00:00:00Z", true).unwrap()
+                store(db, CONNECTION, "me", &pulled, plan, started, "2000-01-01T00:00:00Z").unwrap()
             }
         };
 
         let first = run(Plan::Full, "2026-09-29T10:00:00Z").await;
         assert_eq!(first.upserted.inserted, 2);
-        assert_eq!(first.new_events.len(), 2);
         let state = db.sync_state(CONNECTION).unwrap();
         assert_eq!(state.cursor.as_deref(), Some("2026-09-29T10:00:00Z"));
         assert_eq!(state.full_at.as_deref(), Some("2026-09-29T10:00:00Z"));
@@ -473,7 +467,6 @@ mod tests {
 
         let second = run(Plan::Since { minutes: 15 }, "2026-09-29T10:05:00Z").await;
         assert!(!second.upserted.any(), "the same items again change nothing");
-        assert!(second.new_events.is_empty(), "events are reported once");
         let state = db.sync_state(CONNECTION).unwrap();
         assert_eq!(state.cursor.as_deref(), Some("2026-09-29T10:05:00Z"));
         assert_eq!(state.full_at.as_deref(), Some("2026-09-29T10:00:00Z"), "only a full pull refreshes every item");
@@ -481,13 +474,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn the_first_sync_of_a_connection_announces_nothing() {
+    async fn the_first_sync_of_a_connection_stores_events() {
         let db = Db::in_memory().unwrap();
         let fake = Fake { followed: vec![item("CA-1", false)], ..Default::default() };
         let pulled = pull(&fake, CONNECTION, Plan::Full, &SyncState::default(), &[], "h", at(NOW), &WatchSet::default()).await.unwrap();
-        let stored = store(&db, CONNECTION, "me", &pulled, Plan::Full, at(NOW), "2000-01-01T00:00:00Z", false).unwrap();
-        assert!(stored.new_events.is_empty());
-        assert_eq!(db.events("2000-01-01T00:00:00Z").unwrap().len(), 2, "still stored, just not announced");
+        store(&db, CONNECTION, "me", &pulled, Plan::Full, at(NOW), "2000-01-01T00:00:00Z").unwrap();
+        assert_eq!(db.events("2000-01-01T00:00:00Z").unwrap().len(), 2, "events are stored for the inbox");
     }
 
     #[tokio::test]
@@ -496,7 +488,7 @@ mod tests {
         db.upsert_items(&[item("CA-9", false)], "2026-01-01T00:00:00Z").unwrap();
         let fake = Fake { followed: vec![item("CA-1", false)], ..Default::default() };
         let pulled = pull(&fake, CONNECTION, Plan::Full, &SyncState::default(), &[], "h", at(NOW), &WatchSet::default()).await.unwrap();
-        store(&db, CONNECTION, "me", &pulled, Plan::Full, at(NOW), "2000-01-01T00:00:00Z", true).unwrap();
+        store(&db, CONNECTION, "me", &pulled, Plan::Full, at(NOW), "2000-01-01T00:00:00Z").unwrap();
         let left = db.items_synced_since(CONNECTION, "", &Visible::All).unwrap();
         assert_eq!(left.iter().map(|i| i.item.key.as_str()).collect::<Vec<_>>(), ["CA-1"]);
     }
@@ -509,10 +501,10 @@ mod tests {
         db.begin_pip_turn("workspace", "recent", "p", &meta, "done", "2026-09-01T00:00:00.000Z").unwrap();
         let fake = Fake::default();
         let pulled = pull(&fake, CONNECTION, Plan::Since { minutes: 30 }, &SyncState::default(), &[], "h", at(NOW), &WatchSet::default()).await.unwrap();
-        store(&db, CONNECTION, "me", &pulled, Plan::Since { minutes: 30 }, at(NOW), "2000-01-01T00:00:00Z", true).unwrap();
+        store(&db, CONNECTION, "me", &pulled, Plan::Since { minutes: 30 }, at(NOW), "2000-01-01T00:00:00Z").unwrap();
         assert_eq!(db.pip_turns("workspace").unwrap().len(), 2);
         let pulled = pull(&fake, CONNECTION, Plan::Full, &SyncState::default(), &[], "h", at(NOW), &WatchSet::default()).await.unwrap();
-        store(&db, CONNECTION, "me", &pulled, Plan::Full, at(NOW), "2000-01-01T00:00:00Z", true).unwrap();
+        store(&db, CONNECTION, "me", &pulled, Plan::Full, at(NOW), "2000-01-01T00:00:00Z").unwrap();
         let left: Vec<String> = db.pip_turns("workspace").unwrap().into_iter().map(|t| t.request_id).collect();
         assert_eq!(left, ["recent"]);
     }
@@ -566,7 +558,7 @@ mod tests {
         let scope = db.watch_set(CONNECTION).unwrap();
         let fake = Fake { refuse: vec![ContainerRef { connection_id: CONNECTION.into(), external_id: "OLD".into() }], ..Default::default() };
         let pulled = pull(&fake, CONNECTION, Plan::Full, &SyncState::default(), &[], "h", at(NOW), &scope).await.unwrap();
-        store(&db, CONNECTION, "me", &pulled, Plan::Full, at(NOW), "2000-01-01T00:00:00Z", true).unwrap();
+        store(&db, CONNECTION, "me", &pulled, Plan::Full, at(NOW), "2000-01-01T00:00:00Z").unwrap();
         let set = db.watch_set(CONNECTION).unwrap();
         let flag = |id: &str| set.watch(id).unwrap().inaccessible;
         assert_eq!((flag("CA"), flag("GONE"), flag("OLD")), (false, true, true));
@@ -580,7 +572,7 @@ mod tests {
         db.apply_watch_changes(CONNECTION, &[WatchChange { container_id: "WEB".into(), watched: Some(false), ..Default::default() }], "2026-09-28T00:00:00Z").unwrap();
         let fake = Fake::default();
         let pulled = pull(&fake, CONNECTION, Plan::Full, &SyncState::default(), &[], "h", at(NOW), &db.watch_set(CONNECTION).unwrap()).await.unwrap();
-        store(&db, CONNECTION, "me", &pulled, Plan::Full, at(NOW), "2000-01-01T00:00:00Z", true).unwrap();
+        store(&db, CONNECTION, "me", &pulled, Plan::Full, at(NOW), "2000-01-01T00:00:00Z").unwrap();
         let set = db.watch_set(CONNECTION).unwrap();
         assert!(!set.watch("WEB").unwrap().inaccessible, "it wasn't looked up, so it wasn't found missing");
 
@@ -601,7 +593,7 @@ mod tests {
         let scope = db.watch_set(CONNECTION).unwrap();
         let fake = Fake { followed: vec![in_container(item("CA-1", false), "CA")], ..Default::default() };
         let pulled = pull(&fake, CONNECTION, Plan::Full, &SyncState::default(), &[], "h", at(NOW), &scope).await.unwrap();
-        store(&db, CONNECTION, "me", &pulled, Plan::Full, at(NOW), "2000-01-01T00:00:00Z", true).unwrap();
+        store(&db, CONNECTION, "me", &pulled, Plan::Full, at(NOW), "2000-01-01T00:00:00Z").unwrap();
         let mut left: Vec<String> = db.items_synced_since(CONNECTION, "", &Visible::All).unwrap().into_iter().map(|i| i.item.key).collect();
         left.sort();
         assert_eq!(left, ["CA-1", "RECENT-1"], "unwatched long ago and never watched go; unwatched this week stays");
@@ -613,7 +605,7 @@ mod tests {
         db.upsert_items(&[in_container(item("X-1", false), "X")], "2026-09-10T00:00:00Z").unwrap();
         let fake = Fake::default();
         let pulled = pull(&fake, CONNECTION, Plan::Full, &SyncState::default(), &[], "h", at(NOW), &WatchSet::default()).await.unwrap();
-        store(&db, CONNECTION, "me", &pulled, Plan::Full, at(NOW), "2000-01-01T00:00:00Z", true).unwrap();
+        store(&db, CONNECTION, "me", &pulled, Plan::Full, at(NOW), "2000-01-01T00:00:00Z").unwrap();
         assert_eq!(db.items_synced_since(CONNECTION, "", &Visible::All).unwrap().len(), 1);
     }
 
@@ -653,7 +645,7 @@ mod tests {
         let fake = Fake { followed: vec![crate::tracker::item_from_ticket(&Connection::jira(&crate::auth::Scope { cloud_id: "site".into(), account_id: "me".into() }, "Site"), &t)], ..Default::default() };
         let run = async {
             let pulled = pull(&fake, CONNECTION, Plan::Full, &SyncState::default(), &[], "h", at(NOW), &WatchSet::default()).await.unwrap();
-            store(&db, CONNECTION, "me", &pulled, Plan::Full, at(NOW), "2000-01-01T00:00:00Z", true).unwrap();
+            store(&db, CONNECTION, "me", &pulled, Plan::Full, at(NOW), "2000-01-01T00:00:00Z").unwrap();
         };
         tokio::runtime::Builder::new_current_thread().build().unwrap().block_on(run);
         let item = ItemRef { connection_id: CONNECTION.into(), external_id: "CA-1".into(), key: "CA-1".into() };

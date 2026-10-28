@@ -3,8 +3,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MockBackend } from "../backend/mock";
 import { itemRef } from "../backend/mockConnector";
 import type { CodeChange, Proposal, Run, RunOutcome, RunState } from "../types";
-import { RunFeedRow } from "./ActivityView";
-import { toRunEntries } from "./activityLogic";
 import { DraftCard } from "./DraftCard";
 import { DraftPreview } from "./DraftPreview";
 import { RunSheetView, type RunSheetActions, type RunSheetViewProps } from "./RunSheet";
@@ -129,26 +127,5 @@ describe("a draft made from a run", () => {
     expect(html).toContain("From <b>the CA-402 run</b>");
     const preview = renderToStaticMarkup(<DraftPreview proposal={link} statusName={null} targetTitle={null} onOpen={vi.fn()} />);
     expect(preview).toContain("CA-402 blocks CA-412");
-  });
-});
-
-describe("an agent row in Activity", () => {
-  it("names what happened, the ticket, and that it opens the run", () => {
-    const [entry] = toRunEntries([run("done", { result: "The lag comes from one consumer." })], new Set(), NOW).filter((e) => e.kind === "finished");
-    const html = renderToStaticMarkup(<RunFeedRow entry={entry} ticketTitle="Retry failed payment webhooks" now={new Date(NOW)} selected={false} position={1} total={3} onOpen={vi.fn()} onMarkRead={vi.fn()} />);
-    expect(html).toContain('data-source="agents"');
-    expect(html).toContain("Investigator agent finished: The lag comes from one consumer.");
-    expect(html).toContain("Retry failed payment webhooks");
-    expect(html).toContain("Open run");
-    expect(html).toContain("Mark read");
-    expect(html).toContain('data-unread="true"');
-    expect(html).toContain(">Finished<");
-  });
-
-  it("drops the unread marks once read", () => {
-    const [entry] = toRunEntries([run("done")], new Set(["run:r-done:done"]), NOW).filter((e) => e.kind === "finished");
-    const html = renderToStaticMarkup(<RunFeedRow entry={entry} ticketTitle={null} now={new Date(NOW)} selected={false} position={1} total={1} onOpen={vi.fn()} onMarkRead={vi.fn()} />);
-    expect(html).not.toContain("data-unread");
-    expect(html).not.toContain("Mark read");
   });
 });

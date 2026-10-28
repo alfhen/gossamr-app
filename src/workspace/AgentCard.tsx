@@ -3,7 +3,7 @@ import { archiveControl } from "../lib/archiveRuns";
 import { roleLabel } from "../lib/roles";
 import type { ReviewView, Run } from "../types";
 import { Icon } from "./AgentIcons";
-import { RunBody, StateChip, TONE, type FailureState } from "./AgentParts";
+import { RowActions, RunBody, StateChip, TONE, type FailureState } from "./AgentParts";
 import { ownKey } from "./agentKeys";
 import { ageSince, ageText, branchOf, formatTokens, repoName, runTitle } from "./agentsLogic";
 import { useStateView } from "./useStateView";
@@ -24,6 +24,7 @@ export interface AgentItemProps {
   label?: string;
   onOpen(): void;
   onAttach(): void;
+  onStop?(): void;
   /** Present on a finished run that has something to post. */
   onDraftComment?(): void;
   /** Present on a finished plan run that can be built from. */
@@ -132,7 +133,7 @@ export function RoleChip({ role }: { role: string }) {
   );
 }
 
-export function AgentCard({ run, now, selected, position, total, ticketTitle, label, onOpen, onAttach, onDraftComment, onBuildFromPlan, onReviewThis, onArchive, draftReady, breakdownReady, onOpenDraft, onOpenBreakdown, descriptionReady, onOpenDescription, review, failure, onOpenNeed, asking }: AgentItemProps) {
+export function AgentCard({ run, now, selected, position, total, ticketTitle, label, onOpen, onAttach, onStop, onDraftComment, onBuildFromPlan, onReviewThis, onArchive, draftReady, breakdownReady, onOpenDraft, onOpenBreakdown, descriptionReady, onOpenDescription, review, failure, onOpenNeed, asking }: AgentItemProps) {
   const view = useStateView(run, now);
   const tone = TONE[view.tone];
   const title = runTitle(run, ticketTitle);
@@ -174,6 +175,7 @@ export function AgentCard({ run, now, selected, position, total, ticketTitle, la
       </p>
       <KeyAsking text={asking} />
       <RunBody run={run} now={now} onAttach={onAttach} failure={failure} />
+      {onStop && <RowActions run={run} now={now} onAttach={onAttach} onStop={onStop} />}
       <div className="flex flex-wrap items-center gap-2 empty:hidden">
         {draftReady && onOpenDraft ? (
           <button

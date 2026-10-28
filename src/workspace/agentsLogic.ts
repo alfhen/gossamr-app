@@ -1,21 +1,11 @@
 import { humanDuration } from "../lib/runNames";
 import { relativeTime } from "../lib/views";
 import { roleLabel, stepOf } from "../lib/roles";
-import { runLabels, stage } from "../lib/workstreamStage";
-import type { Proposal, Run, RunState, WorkstreamStage, WorkstreamView } from "../types";
+import { runLabels } from "../lib/workstreamStage";
+import type { Proposal, Run, RunState, WorkstreamView } from "../types";
 
 export const QUIET_MINUTES = 30;
 const MINUTE = 60_000;
-
-export const LANE_IDS = ["running", "done", "bad", "earlier"] as const;
-export type LaneId = (typeof LANE_IDS)[number];
-
-export const LANES: Record<LaneId, { title: string; why: string }> = {
-  running: { title: "Running", why: "Working in the background" },
-  done: { title: "Done, ready to review", why: "Look over what it found" },
-  bad: { title: "Failed or stuck", why: "Not going anywhere without you. What needs you is also in Needs you." },
-  earlier: { title: "Earlier", why: "Stopped by you or from Terminal" },
-};
 
 const NEEDS: readonly RunState[] = ["needsAnswer", "needsPermission", "systemBlocked"];
 
@@ -28,29 +18,6 @@ export function quietMinutes(run: Pick<Run, "state" | "lastProgressAt">, now: nu
   if (Number.isNaN(since)) return null;
   const minutes = Math.floor((now - since) / MINUTE);
   return minutes >= QUIET_MINUTES ? minutes : null;
-}
-
-export function laneOf(run: Run, now: number): LaneId {
-  switch (run.state) {
-    // A run waiting on the person is stuck until they answer; a workstream's Needs you (its detail on the Agents view) is where it is decided.
-    case "needsAnswer":
-    case "needsPermission":
-    case "systemBlocked":
-      return "bad";
-    case "queued":
-    case "launching":
-      return "running";
-    case "working":
-      return quietMinutes(run, now) === null ? "running" : "bad";
-    case "done":
-      return "done";
-    case "failed":
-    case "unknown":
-      return "bad";
-    case "stopped":
-      // A stopped run that may be continued stays among the live ones rather than folded away with the earlier ones.
-      return run.possibleContinuations?.length ? "bad" : "earlier";
-  }
 }
 
 export type Tone = "pip" | "accent" | "done" | "warn" | "blocked" | "muted";
@@ -212,12 +179,9 @@ export function progressText(run: Pick<Run, "state" | "lastDetail"> & Partial<Pi
   return "No update from it yet";
 }
 
+/** The Work screen's one filter: only what has something waiting on the person, Needs you's one list. */
 export interface AgentFilters {
-  lane: LaneId | "all";
-  repo: string;
-  ticket: string;
-  /** Only what has something waiting on the person: Needs you's one list, as a filter. */
-  needs?: boolean;
+  needs: boolean;
 }
 
 /** Which runs and workstreams hold a need (src/lib/needs.ts), for the Needs you filter; `loose` is a need that belongs to no workstream. */
@@ -235,51 +199,16 @@ export function needsScope(needs: readonly { runId?: string | null; workstreamId
   };
 }
 
-export const ALL = "all";
-export const NO_FILTERS: AgentFilters = { lane: ALL, repo: ALL, ticket: ALL };
+export const NO_FILTERS: AgentFilters = { needs: false };
+export const isFiltered = (f: AgentFilters) => f.needs;
 
-export const isFiltered = (f: AgentFilters) => f.lane !== ALL || f.repo !== ALL || f.ticket !== ALL || !!f.needs;
-
-export function applyFilters(runs: readonly Run[], f: AgentFilters, now: number, needed?: NeedsScope): Run[] {
-  return runs.filter((r) => (f.lane === ALL || laneOf(r, now) === f.lane) && (f.repo === ALL || r.spec.repo === f.repo) && (f.ticket === ALL || r.item?.key === f.ticket) && (!f.needs || !needed || needed.runs.has(r.id)));
-}
-
-/** The repos and ticket keys the filters can offer, from every run rather than the filtered ones. */
-export function filterOptions(runs: readonly Run[]): { repos: string[]; tickets: string[] } {
-  const repos = new Set<string>();
-  const tickets = new Set<string>();
-  for (const r of runs) {
-    repos.add(r.spec.repo);
-    if (r.item) tickets.add(r.item.key);
-  }
-  const byText = (a: string, b: string) => a.localeCompare(b, undefined, { numeric: true });
-  return { repos: [...repos].sort(byText), tickets: [...tickets].sort(byText) };
-}
+/** The runs the filter lets through; with Needs you on, the runs that hold a need (all of them when the need scope is not known yet). */
+export const applyFilters = (runs: readonly Run[], f: AgentFilters, needed?: NeedsScope): Run[] => (f.needs && needed ? runs.filter((r) => needed.runs.has(r.id)) : [...runs]);
 
 /** Newest activity first: a run that ended counts from its end, one still going from when it was queued. */
 export function sortRuns(runs: readonly Run[]): Run[] {
   return [...runs].sort((a, b) => ageSince(b).localeCompare(ageSince(a)) || a.id.localeCompare(b.id));
 }
-
-export interface LaneGroup {
-  lane: LaneId;
-  title: string;
-  why: string;
-  runs: Run[];
-}
-
-/** The lanes that have runs, in lane order, each sorted. */
-export function groupRuns(runs: readonly Run[], filters: AgentFilters, now: number, needed?: NeedsScope): LaneGroup[] {
-  const shown = applyFilters(runs, filters, now, needed);
-  return LANE_IDS.map((lane) => ({ lane, ...LANES[lane], runs: sortRuns(shown.filter((r) => laneOf(r, now) === lane)) })).filter((g) => g.runs.length > 0);
-}
-
-/** Whether a lane shows its runs: Earlier is folded away until it is opened or something is filtered. */
-export const laneIsFolded = (lane: LaneId, earlierOpen: boolean, filters: AgentFilters) => lane === "earlier" && !earlierOpen && !isFiltered(filters);
-
-/** How the Agents view groups runs: by lane, or by the workstream each belongs to. */
-export const AGENTS_GROUPS = ["state", "workstream"] as const;
-export type AgentsGroup = (typeof AGENTS_GROUPS)[number];
 
 export const NO_WORKSTREAM_TITLE = "No workstream";
 
@@ -289,25 +218,20 @@ export interface WorkstreamGroup {
   title: string;
   /** The ticket the workstream is about, when it has one. */
   itemKey?: string | null;
-  /** Derived from every run of the workstream, filtered or not; null for the runs that belong to none. */
-  stage: WorkstreamStage | null;
-  /** The workstream's build whose pull request hasn't been found yet, if any. */
-  waitingForPr?: string | null;
   runs: Run[];
   /** Run id to its short name in the workstream (`R1` for the first queued), counted over all its runs so a filter never renumbers them. */
   labels: Record<string, string>;
 }
 
 /**
- * One group per workstream with runs the filters let through, the one with the latest activity first, then the runs in
+ * One group per workstream with runs the filter lets through, the one with the latest activity first, then the runs in
  * no workstream last as "No workstream". A workstream missing from `workstreams` (a closed one) is still a group, named by
- * its id. Runs are sorted as in the lanes. With no filter on, an open workstream that has no run yet is a group too, so
- * every workstream can be opened from here.
+ * its id. With no filter on, an open workstream that has no run yet is a group too, so every workstream can be opened
+ * from here; with Needs you on, so is any workstream or No workstream that holds a need, even when none of its runs is the
+ * need: the need is in its detail.
  */
-export function groupRunsByWorkstream(runs: readonly Run[], workstreams: readonly WorkstreamView[], filters: AgentFilters, now: number, needed?: NeedsScope): WorkstreamGroup[] {
-  const shown = new Set(applyFilters(runs, filters, now, needed).map((r) => r.id));
-  // With only Needs you on, a workstream or No workstream that holds a need is a group even when none of its runs is the need: the need is in its detail.
-  const bareNeeds = !!filters.needs && !!needed && filters.lane === ALL && filters.repo === ALL && filters.ticket === ALL;
+export function groupRunsByWorkstream(runs: readonly Run[], workstreams: readonly WorkstreamView[], filters: AgentFilters, needed?: NeedsScope): WorkstreamGroup[] {
+  const shown = new Set(runs.filter((r) => !filters.needs || !needed || needed.runs.has(r.id)).map((r) => r.id));
   const byId = new Map(workstreams.map((w) => [w.workstream.id, w]));
   const linked = new Map<string, Run[]>();
   const loose: Run[] = [];
@@ -317,42 +241,30 @@ export function groupRunsByWorkstream(runs: readonly Run[], workstreams: readonl
     else if (shown.has(r.id)) loose.push(r);
   }
   const groups: WorkstreamGroup[] = [];
+  const holdsNeed = (id: string) => !filters.needs || !needed || needed.workstreams.has(id);
   for (const [id, all] of linked) {
     const view = byId.get(id);
     const mine = sortRuns(all.filter((r) => shown.has(r.id)));
-    if (!mine.length && !(bareNeeds && needed!.workstreams.has(id))) continue;
-    // The view knows each review's verdict; without one (a closed workstream) the runs alone give the stage.
-    const staged = view ? { stage: view.stage } : { stage: stage(all) };
-    groups.push({ id, title: view?.workstream.title ?? `Workstream ${id}`, itemKey: view?.workstream.itemKey ?? null, ...staged, waitingForPr: view?.waitingForPr ?? null, runs: mine, labels: Object.fromEntries(runLabels(all)) });
+    if (!mine.length && !(filters.needs && needed?.workstreams.has(id))) continue;
+    groups.push({ id, title: view?.workstream.title ?? `Workstream ${id}`, itemKey: view?.workstream.itemKey ?? null, runs: mine, labels: Object.fromEntries(runLabels(all)) });
   }
   const started = new Map<string, string>();
-  if (!isFiltered(filters) || bareNeeds) {
-    for (const view of workstreams) {
-      const ws = view.workstream;
-      if (ws.closedAt !== null || linked.has(ws.id) || (bareNeeds && !needed!.workstreams.has(ws.id))) continue;
-      started.set(ws.id, ws.createdAt);
-      groups.push({ id: ws.id, title: ws.title, itemKey: ws.itemKey, stage: view.stage, waitingForPr: view.waitingForPr ?? null, runs: [], labels: {} });
-    }
+  for (const view of workstreams) {
+    const ws = view.workstream;
+    if (ws.closedAt !== null || linked.has(ws.id) || !holdsNeed(ws.id)) continue;
+    started.set(ws.id, ws.createdAt);
+    groups.push({ id: ws.id, title: ws.title, itemKey: ws.itemKey, runs: [], labels: {} });
   }
   const latest = (g: WorkstreamGroup) => (g.runs[0] ? ageSince(g.runs[0]) : (started.get(g.id ?? "") ?? ""));
   groups.sort((a, b) => latest(b).localeCompare(latest(a)) || a.title.localeCompare(b.title));
-  if (loose.length || (bareNeeds && needed!.loose)) groups.push({ id: null, title: NO_WORKSTREAM_TITLE, stage: null, runs: sortRuns(loose), labels: {} });
+  if (loose.length || (filters.needs && needed?.loose)) groups.push({ id: null, title: NO_WORKSTREAM_TITLE, runs: sortRuns(loose), labels: {} });
   return groups;
 }
 
-/** The groups the Agents view shows and the order j and k walk their runs, for either grouping; the run sheet browses in the same order. */
-export function agentGroups(group: AgentsGroup, runs: readonly Run[], workstreams: readonly WorkstreamView[], filters: AgentFilters, earlierOpen: boolean, now: number, needed?: NeedsScope) {
-  if (group === "workstream") {
-    const groups = groupRunsByWorkstream(runs, workstreams, filters, now, needed);
-    return { lanes: null, workstreams: groups, order: navOrder(groups, earlierOpen, filters) };
-  }
-  const lanes = groupRuns(runs, filters, now, needed);
-  return { lanes, workstreams: null, order: navOrder(lanes, earlierOpen, filters) };
-}
-
-/** Run ids in the order j and k walk them: every group in order, minus a folded lane. Workstream groups never fold. */
-export function navOrder(groups: readonly { runs: readonly Run[]; lane?: LaneId }[], earlierOpen: boolean, filters: AgentFilters): string[] {
-  return groups.filter((g) => !g.lane || !laneIsFolded(g.lane, earlierOpen, filters)).flatMap((g) => g.runs.map((r) => r.id));
+/** The groups the Work screen shows and the order j and k walk their runs; the run sheet browses in the same order. */
+export function agentGroups(runs: readonly Run[], workstreams: readonly WorkstreamView[], filters: AgentFilters, needed?: NeedsScope) {
+  const groups = groupRunsByWorkstream(runs, workstreams, filters, needed);
+  return { workstreams: groups, order: groups.flatMap((g) => g.runs.map((r) => r.id)) };
 }
 
 /** Where j (1) or k (-1) goes from `current`; with nothing current j starts at the first and k at the last. */
@@ -393,53 +305,13 @@ export function liveCounts(runs: readonly Run[], now: number): { running: number
 export const liveWords = (c: ReturnType<typeof liveCounts>) => [c.running && `${c.running} running`, c.queued && `${c.queued} queued`, c.waiting && `${c.waiting} waiting for a slot`].filter((w): w is string => !!w);
 
 /**
- * The count beside a lane's title. The Running lane holds queued runs too, so it says them apart with `liveCounts`
- * ("2 running · 1 queued"), and its running number is the one the summary and Pip's footer give; any other lane
- * gives how many runs it holds.
- */
-export const laneCount = (lane: LaneId, runs: readonly Run[], now: number): string => (lane === "running" ? liveWords(liveCounts(runs, now)).join(" · ") || "0" : String(runs.length));
-
-/** The summary's filter chips, in the order they show. All is the default and clears the other three. */
-export const CHIPS = ["needs", "review", "bad", "all"] as const;
-export type Chip = (typeof CHIPS)[number];
-
-export const CHIP_LABEL: Record<Chip, string> = { needs: "Needs you", review: "Ready to review", bad: "Failed or stuck", all: "All" };
-
-/** The chip a set of filters has on; null when the State filter holds a lane no chip names (Running, Earlier). */
-export function activeChip(f: AgentFilters): Chip | null {
-  if (f.needs) return "needs";
-  return f.lane === ALL ? "all" : f.lane === "done" ? "review" : f.lane === "bad" ? "bad" : null;
-}
-
-/** The filters a chip sets, leaving the repo and ticket filters as they are. */
-export const chipFilters = (chip: Chip): Partial<AgentFilters> => ({ needs: chip === "needs" || undefined, lane: chip === "review" ? "done" : chip === "bad" ? "bad" : ALL });
-
-/** The number on each chip: Needs you's one count (`needsYou`, the rail badge's), and the lanes of the other two, card for card. */
-export function chipCounts(runs: readonly Run[], now: number, needsYou: number): Record<Exclude<Chip, "all">, number> {
-  const count = (lane: LaneId) => runs.filter((r) => laneOf(r, now) === lane).length;
-  return { needs: needsYou, review: count("done"), bad: count("bad") };
-}
-
-/** What the summary says besides the chips: "2 running · 1 queued", with the quiet ones apart. */
-export function liveSummary(runs: readonly Run[], now: number): string {
-  const live = liveCounts(runs, now);
-  return [...liveWords(live), live.quiet ? `${live.quiet} quiet` : ""].filter(Boolean).join(" · ");
-}
-
-/**
- * The Agents view's summary: "2 need you · 2 running · 2 ready to review · 3 failed or stuck (1 quiet)". Need you is
- * Needs you's one count (`needsYou`, as the rail badge and the composer give it); running, queued and waiting for a slot are
- * `liveCounts`, as Pip's footer counts; ready to review and failed or stuck are the lanes of those names, card for card.
+ * The Work screen's summary for Pip: "2 need you · 2 running". Need you is Needs you's one count (`needsYou`, as the rail
+ * badge and the composer give it); running, queued and waiting for a slot are `liveCounts`, as Pip's footer counts.
  */
 export function summaryLine(runs: readonly Run[], now: number, needsYou = 0): string {
-  if (!runs.length) return "Nothing running";
-  const count = (lane: LaneId) => runs.filter((r) => laneOf(r, now) === lane).length;
+  if (!runs.length) return needsYou ? `${needsYou} ${needsYou === 1 ? "needs" : "need"} you` : "Nothing running";
   const live = liveCounts(runs, now);
-  const done = count("done");
-  const bad = count("bad");
-  return [needsYou && `${needsYou} ${needsYou === 1 ? "needs" : "need"} you`, ...liveWords(live), done && `${done} ready to review`, bad && `${bad} failed or stuck${live.quiet ? ` (${live.quiet} quiet)` : ""}`]
-    .filter(Boolean)
-    .join(" · ") || "Nothing running";
+  return [needsYou && `${needsYou} ${needsYou === 1 ? "needs" : "need"} you`, ...liveWords(live), live.quiet && `${live.quiet} quiet`].filter(Boolean).join(" · ") || "Nothing running";
 }
 
 /** Runs Stop all would reach in this account: the ones that can be stopped. */

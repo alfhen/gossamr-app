@@ -47,15 +47,17 @@ type AgentState = Arc<AgentService>;
 type LauncherState = Arc<dyn runs::launcher::RunLauncher>;
 type RunsState = Arc<runs::service::RunService>;
 
-/// Sends the latest snapshot to the window and updates the Dock badge. Failures only mean there is nothing to
-/// show yet (e.g. signed out).
+/// Sends the latest snapshot to the window. Failures only mean there is nothing to show yet (e.g. signed out).
 async fn publish(app: &AppHandle, core: &Core) {
     let Ok(snap) = core.snapshot().await else { return };
-    if let Some(win) = app.get_webview_window("main") {
-        let unread = snap.inbox_unread(&inbox::now_iso());
-        let _ = win.set_badge_count((unread > 0).then_some(unread as i64));
-    }
     let _ = app.emit("snapshot", snap);
+}
+
+#[tauri::command]
+fn set_needs_badge(app: AppHandle, count: usize) {
+    if let Some(win) = app.get_webview_window("main") {
+        let _ = win.set_badge_count((count > 0).then_some(count as i64));
+    }
 }
 
 /// Tells the page the cache changed, so views over it can re-read.
@@ -105,17 +107,6 @@ fn wake_update(app: &AppHandle, conversation: &str, update: agent::Update) {
 /// Asks the page to narrow the view the person is looking at.
 fn pip_view(app: &AppHandle, request_id: &str, filter: &domain::Filter, note: &str) {
     let _ = app.emit("pip-view", serde_json::json!({ "requestId": request_id, "filter": filter, "note": note }));
-}
-
-/// Shows native notifications for new events, unless the window is focused and the user can already see them.
-fn announce(app: &AppHandle, events: &[events::NewEvent]) {
-    let focused = app.get_webview_window("main").and_then(|w| w.is_focused().ok()).unwrap_or(false);
-    if focused {
-        return;
-    }
-    for n in notify::notices(events) {
-        let _ = app.notification().builder().title(n.title).body(n.body).show();
-    }
 }
 
 /// A system notification chosen by `runs::notices`. Focusing the window soon after opens the run it points at
@@ -300,8 +291,8 @@ async fn cache_feed(core: State<'_, CoreState>, query: FeedQuery) -> Result<Feed
 }
 
 #[tauri::command]
-async fn cache_feed_unread(core: State<'_, CoreState>) -> Result<usize> {
-    core.cache_feed_unread().await
+async fn cache_feed_unread(core: State<'_, CoreState>, kinds: Option<Vec<domain::EventKind>>) -> Result<usize> {
+    core.cache_feed_unread(&kinds.unwrap_or_default()).await
 }
 
 #[tauri::command]
@@ -901,7 +892,6 @@ fn spawn_sync_loop(app: AppHandle, core: CoreState) {
                 match result {
                     Ok(synced) => {
                         core.set_error(None);
-                        announce(&app, &synced.new_events);
                         if synced.changed {
                             cache_changed(&app, &synced.connection_id);
                         }
@@ -1066,6 +1056,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            set_needs_badge,
             auth_status,
             save_oauth_app,
             sign_in,

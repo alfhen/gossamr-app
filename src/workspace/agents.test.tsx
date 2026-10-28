@@ -34,8 +34,7 @@ const on = (): AgentsActions => ({
   buildFromPlan: vi.fn(),
   filter: vi.fn(),
   clearFilters: vi.fn(),
-  setGroup: vi.fn(),
-  toggleEarlier: vi.fn(),
+  stop: vi.fn(),
   setIntro: vi.fn(),
   dismissIntro: vi.fn(),
   retry: vi.fn(),
@@ -55,9 +54,7 @@ const screen = (over: Partial<AgentsScreenProps> = {}) =>
       error={null}
       filters={NO_FILTERS}
       selectedId={null}
-      earlierOpen={false}
       introShown={false}
-      group="state"
       stopping={false}
       opened={new Set()}
       now={NOW}
@@ -69,7 +66,7 @@ const screen = (over: Partial<AgentsScreenProps> = {}) =>
 
 describe("opening Agents (G9)", () => {
   it("makes the h1 a place focus can be sent to, and sends it there as the screen mounts", () => {
-    expect(screen()).toMatch(/<h1 tabindex="-1"[^>]*>\s*Agents\s*<\/h1>/);
+    expect(screen()).toMatch(/<h1 tabindex="-1"[^>]*>\s*Work\s*<\/h1>/);
     expect(readFileSync(new URL("./AgentsView.tsx", import.meta.url), "utf8")).toMatch(/requestAnimationFrame\([\s\S]{0,200}title\.current\?\.focus\(\)/);
   });
 });
@@ -139,38 +136,7 @@ describe("a failed launch on a card", () => {
   });
 });
 
-describe("the lanes", () => {
-  it("shows the scripted runs in three lanes with a card each, and no Needs you lane", () => {
-    const out = screen({ needsYou: 4 });
-    expect(out.match(/data-lane="(\w+)"/g)).toEqual(['data-lane="running"', 'data-lane="done"', 'data-lane="bad"']);
-    for (const heading of ["Running", "Done, ready to review", "Failed or stuck"]) expect(out).toContain(`>${heading}</h3>`);
-    expect(out).not.toContain(">Needs you</h3>");
-    expect(articles(out)).toHaveLength(8);
-    const chip = (name: string) => new RegExp(`data-chip="${name}"[^>]*>[^<]*<span data-chip-count[^>]*>(\\d+)<`).exec(out)?.[1];
-    expect([chip("needs"), chip("review"), chip("bad")]).toEqual(["4", "2", "4"]);
-    expect(out).toContain("2 running · 1 quiet");
-  });
-
-  it("folds Earlier and says how many are in it", () => {
-    const stopped = run("stopped", { id: "s1" });
-    const out = screen({ runs: [...eight(), stopped] });
-    expect(out).toContain('data-lane="earlier"');
-    expect(out).toContain(">Earlier</h3>");
-    expect(out).toContain("Show");
-    expect(out).toContain('aria-expanded="false"');
-    expect(articles(out)).toHaveLength(8);
-    const open = screen({ runs: [...eight(), stopped], earlierOpen: true });
-    expect(articles(open)).toHaveLength(9);
-    expect(open).toContain("Hide");
-  });
-
-  it("numbers the runs it lets j and k reach, leaving out a folded lane", () => {
-    const out = screen({ runs: [...eight(), run("stopped", { id: "s1" })] });
-    expect(out).toContain('aria-setsize="8"');
-    expect(out).toContain('aria-posinset="8"');
-    expect(out).not.toContain('aria-posinset="9"');
-  });
-
+describe("the Work screen marks the selected agent", () => {
   it("marks the selected run", () => {
     const id = eight()[0].id;
     const out = screen({ selectedId: id });
@@ -179,7 +145,7 @@ describe("the lanes", () => {
   });
 });
 
-describe("grouped by workstream", () => {
+describe("the Work screen groups agents by workstream", () => {
   const ws: WorkstreamView = {
     workstream: { id: "ws-1", connectionId: "mock", itemKey: "CA-401", repo: null, title: "CA-401 Retry the payment", pipSession: null, pausedReason: null, notes: null, createdAt: iso(60), closedAt: null, basis: null },
     stage: "investigate",
@@ -188,42 +154,26 @@ describe("grouped by workstream", () => {
   };
   const linked = () => run("working", { id: "w1", queuedAt: iso(1), spec: { ...eight()[0].spec, role: "investigate", workstream: "ws-1" } });
 
-  it("says on the workstream's stage chip that its build waits for its pull request", () => {
-    const out = screen({ runs: [linked()], group: "workstream", workstreams: [{ ...ws, waitingForPr: "b9" }] });
-    expect(out).toMatch(/data-stage="investigate" data-waiting-for-pr="b9"[^>]*>Investigate · waiting for PR</);
-    expect(screen({ runs: [linked()], group: "workstream", workstreams: [ws] })).not.toContain("waiting for PR");
-  });
-
-  it("offers Group by, with State and its lanes while State is chosen", () => {
+  it("has one filter and no grouping or state controls", () => {
     const out = screen();
-    expect(out).toContain('aria-label="Group by"');
-    expect(out).toMatch(/aria-pressed="true"[^>]*>State</);
-    expect(out).toContain("data-lane=");
-    expect(out).not.toContain("data-workstream-group");
-  });
-
-  it("groups by Workstream when no grouping is asked for", () => {
-    const out = renderToStaticMarkup(<AgentsScreen runs={eight()} status="ready" error={null} filters={NO_FILTERS} selectedId={null} earlierOpen={false} introShown={false} stopping={false} opened={new Set()} now={NOW} ticketTitle={() => null} on={on()} />);
-    expect(out).toMatch(/aria-pressed="true"[^>]*>Workstream</);
     expect(out).toContain("data-workstream-group");
+    expect(out).toContain('data-chip="needs"');
+    expect(out.match(/data-chip="/g)).toHaveLength(1);
+    expect(out).not.toContain('aria-label="Group by"');
     expect(out).not.toContain("data-lane=");
+    expect(out).not.toMatch(/<select/);
   });
 
-  it("shows a workstream with its title, stage chip and R labels, and the other runs under No workstream", () => {
-    const out = screen({ runs: [...eight(), linked()], group: "workstream", workstreams: [ws] });
-    expect(out).toMatch(/aria-pressed="true"[^>]*>Workstream</);
+  it("shows a workstream with its title and R labels, and the other runs under No workstream", () => {
+    const out = screen({ runs: [...eight(), linked()], workstreams: [ws] });
     expect(out.match(/data-workstream-group="([^"]+)"/g)).toEqual(['data-workstream-group="ws-1"', 'data-workstream-group="none"']);
     expect(out).toMatch(/<h3[^>]*><b[^>]*>CA-401<\/b><span[^>]*>Retry the payment<\/span><\/h3>/);
-    expect(out).toContain('data-stage="investigate"');
     expect(out).toContain('data-run-label="R1"');
     expect(out).toContain(">No workstream</h3>");
-    expect(out).not.toContain("data-lane=");
-    // Every run is reachable; nothing folds in this grouping.
+    // Every run is reachable; nothing folds.
     expect(articles(out)).toHaveLength(9);
     expect(out).toContain('aria-setsize="9"');
   });
-
-
 });
 
 describe("the Agents screen as the operations view", () => {
@@ -283,6 +233,15 @@ describe("cards", () => {
     expect(card(stopped)).not.toContain("limit");
   });
 
+  it("gives a running agent's row Open in Terminal and Stop, and a waiting one only Stop beside its own Terminal button", () => {
+    const row = (r: Run) => renderToStaticMarkup(<AgentCard run={r} now={NOW} selected={false} position={1} total={1} ticketTitle={null} onOpen={vi.fn()} onAttach={vi.fn()} onStop={vi.fn()} failure={{ opened: false, on: { act: vi.fn(), retry: vi.fn(), copied: vi.fn() } }} />);
+    expect(buttonsOf(row(run("working", { shortId: "1000a000" })))).toEqual(["Open in Terminal", "Stop"]);
+    const waiting = buttonsOf(row(run("needsAnswer", { needs: "Keep the rounding?", shortId: "1000a000" })));
+    expect(waiting.filter((b) => b === "Open in Terminal")).toHaveLength(1);
+    expect(waiting).toContain("Stop");
+    expect(buttonsOf(row(run("done", { shortId: "1000a000" })))).toEqual(["Open in Terminal"]);
+  });
+
   it("shows a question with Open in Terminal and no answer box", () => {
     const html = card(run("needsAnswer", { needs: "Should the refund path keep the old rounding?", shortId: "1000a000" }));
     expect(html).toContain("Should the refund path keep the old rounding?");
@@ -333,48 +292,14 @@ describe("cards", () => {
     expect(html).not.toMatch(/[$€£]|\bkr\b|≈/);
   });
 
-  it("has no Stop or Nudge on any card; Stop all is in the header only", () => {
+  it("shows Terminal and Stop on work rows", () => {
     const out = screen();
-    // The one exception: a permission prompt can be answered by abandoning the run, and says so.
-    for (const a of articles(out)) {
-      expect(a.replace(/>Stop the run \(abandons it\)</g, "><")).not.toMatch(/Stop|Nudge/);
-      if (a.includes("Stop the run")) expect(a).toContain('data-state="needsPermission"');
-    }
-    expect(out).toContain("Stop all");
-    expect(out).not.toContain("Nudge");
+    expect(out).toContain("Open in Terminal");
+    expect(out).toMatch(/<button[^>]*>(?:<svg[\s\S]*?<\/svg>)?Stop<\/button>/);
   });
 
   it("names the branch worktree-<name>", () => {
     expect(card(run("working"))).toContain(`worktree-${run("working").spec.name}`);
-  });
-});
-
-describe("filters", () => {
-  it("shows only the runs in the chosen lane", () => {
-    const out = screen({ filters: { ...NO_FILTERS, lane: "bad" } });
-    expect(articles(out)).toHaveLength(4);
-    expect(out).toContain(">Clear<");
-    expect(out.match(/data-lane="(\w+)"/g)).toEqual(['data-lane="bad"']);
-  });
-
-  it("narrows by repo and by ticket", () => {
-    expect(articles(screen({ filters: { ...NO_FILTERS, repo: "acme/payments" } }))).toHaveLength(1);
-    expect(articles(screen({ filters: { ...NO_FILTERS, ticket: "WEB-108" } }))).toHaveLength(1);
-  });
-
-  it("lists every repo and ticket in the menus, whatever is filtered", () => {
-    const out = screen({ filters: { ...NO_FILTERS, repo: "acme/payments" } });
-    expect(out).toContain('aria-label="Filter by repo"');
-    expect(out).toContain('<option value="acme/storefront">');
-    expect(out).toContain('<option value="DEVOPS-471">');
-  });
-
-  it("says nothing matches and offers Clear filters", () => {
-    const out = screen({ filters: { lane: "bad", repo: "acme/payments", ticket: "all" } });
-    expect(out).toContain("No agents match these filters");
-    expect(out).toContain("8 runs are hidden by the filters above.");
-    expect(out).toContain("Clear filters");
-    expect(articles(out)).toHaveLength(0);
   });
 });
 
@@ -385,7 +310,6 @@ describe("empty, first-run and errors", () => {
     expect(out).toContain("When Pip starts one it appears here");
     expect(out).toContain("You can stop any of them.");
     expect(out).not.toMatch(/approve/i);
-    expect(out).toContain("Nothing running");
   });
 
   it("shows the explainer instead of the empty state on a first visit", () => {
@@ -481,19 +405,19 @@ describe("the rail", () => {
     set([]);
   });
 
-  it("has no house icon: Agents is the one button, and the one count is its badge", () => {
+  it("has no house icon: Work is the one button, and the one count is its badge", () => {
     set(eight());
     const out = renderToStaticMarkup(<Rail />);
     expect(out).not.toContain("Pip home");
     expect(out).not.toContain("⌂");
-    expect(out.match(/aria-label="Agents[^"]*"/g)).toHaveLength(1);
+    expect(out.match(/aria-label="Work(, [^"]*)?"/g)).toHaveLength(1);
   });
 
-  it("puts the one count in Agents' label and shows it as its badge", () => {
+  it("puts the one count in Work's label and shows it as its badge", () => {
     set(eight());
-    const [, label, inner] = button(renderToStaticMarkup(<Rail />), /Agents/);
+    const [, label, inner] = button(renderToStaticMarkup(<Rail />), /Work/);
     // A permission, a question and a failure; the run that has been quiet for 45 minutes is not a need.
-    expect(label).toBe("Agents, 3 things need you");
+    expect(label).toBe("Work, 3 things need you");
     expect(inner).toContain('aria-label="3 things need you" title="3 things need you"');
     expect(inner).toContain(">3<");
     expect(inner).toContain("bg-ws-pip");
@@ -502,17 +426,17 @@ describe("the rail", () => {
   it("keeps a failed run in the count however long it is looked at, until it is dismissed", () => {
     const failedRun = eight().find((r) => r.state === "failed")!;
     set(eight());
-    expect(button(renderToStaticMarkup(<Rail />), /Agents/)[1]).toBe("Agents, 3 things need you");
+    expect(button(renderToStaticMarkup(<Rail />), /Work/)[1]).toBe("Work, 3 things need you");
     set(eight(), [failedRun.id]);
-    expect(button(renderToStaticMarkup(<Rail />), /Agents/)[1]).toBe("Agents, 2 things need you");
+    expect(button(renderToStaticMarkup(<Rail />), /Work/)[1]).toBe("Work, 2 things need you");
   });
 
   it("says thing for one and drops the badge at zero", () => {
     set([run("needsAnswer")]);
-    expect(button(renderToStaticMarkup(<Rail />), /Agents/)[1]).toBe("Agents, 1 thing needs you");
+    expect(button(renderToStaticMarkup(<Rail />), /Work/)[1]).toBe("Work, 1 thing needs you");
     set([run("working", { lastProgressAt: new Date(NOW + 4 * 60_000).toISOString() }), run("done", { id: "d" })]);
-    const [, label, inner] = button(renderToStaticMarkup(<Rail />), /Agents/);
-    expect(label).toBe("Agents");
+    const [, label, inner] = button(renderToStaticMarkup(<Rail />), /Work/);
+    expect(label).toBe("Work");
     expect(inner).not.toContain("bg-ws-pip");
   });
 
@@ -522,13 +446,11 @@ describe("the rail", () => {
     expect(Object.keys(railBadgeText)).toEqual(["agents"]);
   });
 
-  it("has no badge on Activity, however much is unread", () => {
+  it("has no badge on Inbox, however much is unread", () => {
     useActivity.getInitialState().unread = 28;
-    useActivity.getInitialState().codeUnread = 3;
-    const [, label, inner] = button(renderToStaticMarkup(<Rail />), /Activity/);
+    const [, label, inner] = button(renderToStaticMarkup(<Rail />), /Inbox/);
     useActivity.getInitialState().unread = 0;
-    useActivity.getInitialState().codeUnread = 0;
-    expect(label).toBe("Activity");
+    expect(label).toBe("Inbox");
     expect(inner).not.toContain("bg-ws-pip");
     expect(inner).not.toMatch(/>\d+</);
   });
@@ -536,8 +458,8 @@ describe("the rail", () => {
   it("sits beside Activity in the bottom group", () => {
     set([]);
     const out = renderToStaticMarkup(<Rail />);
-    expect(out.indexOf('aria-label="Activity"')).toBeLessThan(out.indexOf('aria-label="Agents"'));
-    expect(out.indexOf('aria-label="Agents"')).toBeLessThan(out.indexOf('aria-label="Settings"'));
+    expect(out.indexOf('aria-label="Inbox"')).toBeLessThan(out.indexOf('aria-label="Work"'));
+    expect(out.indexOf('aria-label="Work"')).toBeLessThan(out.indexOf('aria-label="Settings"'));
   });
 });
 

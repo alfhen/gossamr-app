@@ -3,7 +3,7 @@ import { ROUTE_NAME, routeHeading, routeTitle } from "./routeTitle";
 
 describe("route titles (G29)", () => {
   it("names the browser tab after the screen, then the app", () => {
-    expect(routeTitle("agents")).toBe("Agents — Gossamr");
+    expect(routeTitle("agents")).toBe("Work — Gossamr");
     expect(routeTitle("settings")).toBe("Settings — Gossamr");
   });
 

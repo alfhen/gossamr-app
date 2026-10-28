@@ -139,16 +139,16 @@ describe("header and rail", () => {
     expect(out).toContain("data-tauri-drag-region");
   });
 
-  it("shows Activity as a bell, not a lightning bolt", () => {
+  it("shows Inbox as a bell, not a lightning bolt", () => {
     const out = renderToStaticMarkup(<Rail />);
-    const activity = /<button[^>]*aria-label="Activity"[^>]*>(.*?)<\/button>/s.exec(out)![1];
+    const activity = /<button[^>]*aria-label="Inbox"[^>]*>(.*?)<\/button>/s.exec(out)![1];
     expect(activity).toContain("<svg");
     expect(activity).not.toContain("⚡");
   });
 
-  it("renders a 58px icon rail with labelled buttons and the activity, settings and Pip cluster", () => {
+  it("renders a 58px icon rail with labelled buttons and the inbox, settings and Pip cluster", () => {
     const out = renderToStaticMarkup(<Rail />);
-    for (const label of ["Search and jump", "All projects", "Views", "Activity", "Settings", "Pip"]) expect(out).toContain(`aria-label="${label}"`);
+    for (const label of ["Search and jump", "All projects", "Views", "Inbox", "Settings", "Pip"]) expect(out).toContain(`aria-label="${label}"`);
     expect(out).toContain('aria-label="DevOps"');
     expect(out).toContain("DE</button>");
     expect(out).toContain("data-tauri-drag-region");
@@ -163,8 +163,8 @@ describe("header and rail", () => {
     expect(out).toContain('aria-label="More projects"');
     const list = out.indexOf('aria-label="Projects"');
     expect(out.slice(out.lastIndexOf("<div", list), list)).toContain("overflow-y-auto");
-    expect(out.indexOf('aria-label="Activity"')).toBeGreaterThan(out.indexOf('aria-label="Project 7"'));
-    expect(out).toMatch(/<div class="flex shrink-0[^"]*border-t[^"]*"><span class="[^"]*\brelative\b[^"]*"><button[^>]*aria-label="Activity"/);
+    expect(out.indexOf('aria-label="Inbox"')).toBeGreaterThan(out.indexOf('aria-label="Project 7"'));
+    expect(out).toMatch(/<div class="flex shrink-0[^"]*border-t[^"]*"><span class="[^"]*\brelative\b[^"]*"><button[^>]*aria-label="Inbox"/);
   });
 
   it("shows a tooltip only where it was asked for", () => {

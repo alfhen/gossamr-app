@@ -4,7 +4,7 @@ import type { CodeChange, Intent, ItemRef, PauseReason, Proposal, ProposalState,
 import { agentSummary } from "../backend/mockPip";
 import { needs } from "../lib/needs";
 import { docFromText } from "../lib/docs";
-import { NO_FILTERS, groupRuns, laneCount, laneOf, summaryLine } from "./agentsLogic";
+import { summaryLine } from "./agentsLogic";
 import { repeatedComments } from "../lib/needs";
 import { setLiveDraft } from "./draftLive";
 import { keepEditsOfDraft } from "./DraftCard";
@@ -280,20 +280,16 @@ describe("composerFooter", () => {
     expect(counts(footer)).toEqual(counts(summaryLine(runs, NOW)));
     // And the sample's Pip, asked what the agents are doing, says the same.
     expect(counts(agentSummary(runs, NOW).split("\n")[0])).toEqual(counts(footer));
-    // The Agents view's Running lane, which holds the queued runs too, says the same numbers apart.
-    const running = groupRuns(runs, NO_FILTERS, NOW).find((g) => g.lane === "running")!;
-    expect(laneCount("running", running.runs, NOW)).toBe("3 running · 1 queued · 1 waiting for a slot");
-    expect(counts(laneCount("running", running.runs, NOW))).toEqual({ ...counts(footer), quiet: 0 });
-    // A run waiting on the person is in no count of runs at work: it is one of the failed or stuck, and in Needs you.
-    expect(laneOf(runs[6], NOW)).toBe("bad");
+    // A run waiting on the person is in no count of runs at work: it is in Needs you.
+    expect(counts(summaryLine([runs[6]], NOW))).toEqual({ running: 0, quiet: 0, queued: 0, "waiting for a slot": 0 });
   });
 
-  it("counts by the same clock on every screen: a run that goes quiet leaves running in the footer, the summary and the lane at once", () => {
+  it("counts by the same clock on every screen: a run that goes quiet leaves running in the footer and the summary at once", () => {
     const later = NOW + 40 * 60_000;
     const runs = [run("a", "investigate", "working", { lastProgressAt: iso(1) })];
     for (const [at, running] of [[NOW, 1], [later, 0]] as const) {
       const n = (line: string) => Number(/(\d+) (?:agents? )?running/.exec(line)?.[1] ?? 0);
-      expect([n(composerFooter(runs, 0, at)), n(summaryLine(runs, at)), n(laneCount("running", runs.filter((r) => laneOf(r, at) === "running"), at))]).toEqual([running, running, running]);
+      expect([n(composerFooter(runs, 0, at)), n(summaryLine(runs, at))]).toEqual([running, running]);
     }
   });
 });

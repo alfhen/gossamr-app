@@ -14,7 +14,7 @@ export function stableOrder(previous: readonly string[], sorted: readonly string
 
 /**
  * Groups of runs (lanes or workstreams) as they should show. Unfrozen that is `fresh`. Frozen, every run stays in the group
- * and the place it was shown in, with its current data; runs that are gone drop out, groups left empty go, and new runs
+ * and the place it was shown in, with its current data; runs that are gone drop out, groups left empty go unless the fresh list still has them without runs, and new runs
  * join their group at its end (a group that is new comes last). A group that was empty and still is (a workstream with no
  * run yet) stays where it is.
  */
@@ -31,7 +31,7 @@ export function stableGroups<G extends { runs: Run[] }>(previous: readonly G[], 
     const now = freshOf.get(key);
     const joining = (now?.runs ?? []).filter((r) => !shownBefore.has(r.id));
     const ids = stableOrder(g.runs.map((r) => r.id), [...g.runs.map((r) => r.id).filter((id) => byId.has(id)), ...joining.map((r) => r.id)], true);
-    if (ids.length || (now && !g.runs.length && !now.runs.length)) out.push({ ...(now ?? g), runs: ids.map((id) => byId.get(id) as Run) });
+    if (ids.length || (now && !now.runs.length)) out.push({ ...(now ?? g), runs: ids.map((id) => byId.get(id) as Run) });
   }
   for (const g of fresh) {
     const runs = g.runs.filter((r) => !shownBefore.has(r.id));

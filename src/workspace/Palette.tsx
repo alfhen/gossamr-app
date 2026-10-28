@@ -194,7 +194,11 @@ export function appActions(): CommandActions {
     // A ticket opened from here takes the keyboard into its peek, not back to the board behind it.
     openTicket: (key) => void openTicketByKey(key).then((shown) => shown && focusPeekOf(key)),
     openActivity: () => tabs.setRoute("activity"),
-    openDrafts: () => (useActivity.getState().setChip("drafts"), tabs.setRoute("activity")),
+    openDrafts: () => {
+      const draft = currentNeeds().find((need) => need.target.type === "draft");
+      if (draft) openNeed(draft);
+      else (tabs.setRoute("agents"), useRuns.getState().setFilter({ needs: true }));
+    },
     connectGithub: () => useGithubUi.getState().openConnect(),
     manageRepositories: () => tabs.openSettings("watching"),
     openPull: (ref) => void openPull(ref),
@@ -301,7 +305,7 @@ export function Palette() {
   const watch = useWorkspace((s) => s.watch);
   const proposals = useWorkspace((s) => s.proposals);
   const github = useWorkspace((s) => s.connections.some((c) => c.kind === "github"));
-  const unread = useActivity((s) => s.unread + s.codeUnread);
+  const unread = useActivity((s) => s.unread);
   const needingMe = useNeedsYou().length;
   const savedViews = useTabs((s) => s.savedViews);
   const selected = useTabs((s) => s.selected);
