@@ -14,7 +14,7 @@ test("a Review Pip starts for the finished build finishes as prose and leaves a 
   await page.getByRole("button", { name: "Start watching" }).click();
   await showWorkspace(page);
   await expect(page.getByText("CA-401", { exact: true }).first()).toBeVisible();
-  await page.getByRole("button", { name: /^Agents/ }).click();
+  await page.getByRole("button", { name: /^Work(,|$)/ }).click();
   await expect(cards(page).first()).toBeVisible();
   const before = await runIds(page);
 
@@ -64,7 +64,7 @@ test("a Review Pip starts for the finished build finishes as prose and leaves a 
 
 test("a seeded review shows its report as prose", async ({ page }) => {
   await openApp(page);
-  await page.getByRole("button", { name: /^Agents/ }).click();
+  await page.getByRole("button", { name: /^Work(,|$)/ }).click();
   // CA-408's seeded review wrote a numbered list and no Verdict line.
   const review = cards(page).filter({ hasText: "Review" }).filter({ hasText: "CA-408" });
   await expect(review).toBeVisible();

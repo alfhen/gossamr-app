@@ -72,7 +72,7 @@ async function homeStage(page: Page) {
 }
 
 test.describe("workstream stage (D3, D10, D18)", () => {
-  test("a finished review reads Review on the peek, the pane, the Pip home row and its header", async ({ page }) => {
+  test("a finished review reads Review on the peek, the pane, the Work row and its header", async ({ page }) => {
     test.setTimeout(120_000);
     // Nothing sends the build back: the review is where the workstream stops.
     await toFinishedReview(page);
@@ -80,7 +80,6 @@ test.describe("workstream stage (D3, D10, D18)", () => {
     await expect(await peekStage(page)).toHaveText("Review");
     await expect(pipConversation(page)).toHaveText(/^Workstream: CA-401 .* · Review$/);
     const { row, header } = await homeStage(page);
-    await expect(row.locator("[data-stage]")).toHaveText("Review");
     await expect(row).not.toContainText("Done");
     await expect(header).toHaveText(/^Workstream: CA-401 .* · Review$/);
     expect((await jiraWrites(page)).map((w) => w.type)).toEqual(["rewrite"]);
@@ -91,11 +90,9 @@ test.describe("workstream stage (D3, D10, D18)", () => {
     await toFinishedReview(page, () => scriptNextRun(page, "review", { verdict: "pass" }));
     await expect(wakes(page).last()).toContainText("finished");
     await expect(await peekStage(page)).toHaveText("Review");
-    const { row, header } = await homeStage(page);
-    await expect(row.locator("[data-stage]")).toHaveText("Review");
+    const { header } = await homeStage(page);
     await expect(header).toHaveText(/^Workstream: CA-401 .* · Review$/);
   });
-
 });
 
 const runSheet = (page: Page) => page.getByRole("dialog", { name: "Agent run" });
@@ -121,7 +118,7 @@ test.describe("starting an agent from the peek (D1)", () => {
 test.describe("sheets and launcher (D16, D24)", () => {
   test("stopping a run from a sheet scrolled down brings its title and the Stopped pill back into view", async ({ page }) => {
     await openApp(page);
-    await page.getByRole("button", { name: /^Agents/ }).click();
+    await page.getByRole("button", { name: /^Work(,|$)/ }).click();
     await page.locator('[data-run-id]').filter({ hasText: "WEB-108" }).first().click();
     await expect(runSheet(page)).toBeVisible();
     await expect(runSheet(page).locator("[data-state]").first()).toHaveAttribute("data-state", "working");
@@ -245,9 +242,9 @@ test.describe("Your turn and Needs you name different things (D5)", () => {
       await expect(tip).toHaveAttribute("title", badge);
       return (await tip.getAttribute("title"))!;
     };
-    await named(/^Agents, \d+ things? needs? you$/, /^\d+ things? needs? you$/);
+    await named(/^Work, \d+ things? needs? you$/, /^\d+ things? needs? you$/);
     // The bell is a link to Activity, with no number.
-    const activity = page.getByRole("button", { name: "Activity", exact: true });
+    const activity = page.getByRole("button", { name: "Inbox", exact: true });
     await expect(activity).toBeVisible();
     await expect(activity.locator("[title]")).toHaveCount(0);
   });

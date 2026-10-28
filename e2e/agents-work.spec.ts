@@ -1,8 +1,8 @@
 import { expect, test, type Page } from "@playwright/test";
 import { agentsHome, askPip, closeWorkstreamSheet, pauseAtCeiling, homeConversation, homeConversationRegion, homeSettled, jiraWrites, keepComments, mockRuns, needOfKind, needsPane, needsPaneHeading, needsYouCount, needsYouTray, openAgents, openApp, openNeedOfKind, openPip, pipPane, selectWorkstream, startWorkstream, stepChip, stepRail, workstreamGroup } from "./support/app";
 
-/** The rail's Agents button. */
-const homeButton = (page: Page) => page.locator("[data-rail]").getByRole("button", { name: /^Agents/ });
+/** The rail's Work button. */
+const homeButton = (page: Page) => page.locator("[data-rail]").getByRole("button", { name: /^Work(,|$)/ });
 
 // Pull requests are shown only when a test says: the setting the phase's scenarios share.
 const SAMPLE = "runs=empty&prSurface=manual";
@@ -60,8 +60,8 @@ test("Needs you: a pause is a need with Resume as its decision, whether the pers
   const banner = pipPane(page).locator("[data-paused-banner]");
   await expect(banner).toContainText("Paused. Pip isn't woken until you resume it.");
   await expect(paused).toHaveCount(1);
-  await expect(row.locator("[data-status]")).toHaveText("Paused");
-  await expect(row.locator("[data-status-detail]")).toHaveCount(0);
+  await expect(row.locator("[data-status]")).toHaveText("Needs you");
+  await expect(row.locator("[data-status-detail]")).toHaveText("· 1 waiting");
   await banner.getByRole("button", { name: "Resume" }).click();
   await expect(banner).toHaveCount(0);
   await expect(paused).toHaveCount(0);
@@ -69,8 +69,8 @@ test("Needs you: a pause is a need with Resume as its decision, whether the pers
   await pauseAtCeiling(page, "CA-401");
   await expect(paused).toHaveCount(1);
   await expect(paused).toContainText("Paused: Pip was woken too often today");
-  await expect(row.locator("[data-status]")).toHaveText("Paused");
-  await expect(row.locator("[data-status-detail]")).toHaveText("· Pip was woken too often today");
+  await expect(row.locator("[data-status]")).toHaveText("Needs you");
+  await expect(row.locator("[data-status-detail]")).toHaveText("· 1 waiting");
   await closeWorkstreamSheet(page);
   await openNeedOfKind(page, "paused");
   const resume = needsPane(page).locator("[data-paused-banner]").getByRole("button", { name: "Resume" });
@@ -81,7 +81,7 @@ test("Needs you: a pause is a need with Resume as its decision, whether the pers
   await expect(row.locator('[data-status="needs-you"]')).toHaveCount(0);
 });
 
-test("Needs you from the board: the rail's Agents popover lists the same rows and opens their decisions on Agents", async ({ page }) => {
+test("Needs you from the board: the rail's Work popover lists the same rows and opens their decisions on Agents", async ({ page }) => {
   await openApp(page, SAMPLE);
   await homeWorkstream(page);
   await askPip(page, "ask me which database to use");
@@ -91,11 +91,11 @@ test("Needs you from the board: the rail's Agents popover lists the same rows an
   const total = Number(await needsYouCount(page).innerText());
   expect(total).toBe(2);
 
-  // Back on the board, the Agents button counts them, and its menu shows the same list.
+  // Back on the board, the Work button counts them, and its menu shows the same list.
   await page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "All projects" }).click();
   await expect(agentsHome(page)).toHaveCount(0);
   const button = homeButton(page);
-  await expect(button).toHaveAccessibleName(`Agents, ${total} things need you`);
+  await expect(button).toHaveAccessibleName(`Work, ${total} things need you`);
   await button.click({ button: "right" });
   const popover = page.getByRole("dialog", { name: "Needs you" });
   await expect(popover.locator("[data-needs-you-count]")).toHaveText(String(total));

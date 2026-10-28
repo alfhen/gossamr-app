@@ -821,7 +821,7 @@ export interface AgentSettings {
   notifications?: NoticeMode;
 }
 
-/** One notification when a workstream starts waiting on you, one summary every so often, or none. */
+/** System notices for each new thing in Needs you ("workstream", the stored name), or none. */
 export type NoticeMode = "workstream" | "off";
 
 /** What `claude rm` said: it removed the worktree, or refused and explained in its own words. */

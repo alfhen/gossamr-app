@@ -140,8 +140,8 @@ test("the Needs you list ranks a question from Pip ahead of a pause, opens each 
   await expect(needsPane(page)).toContainText("Which database to use?");
   await needsPane(page).getByRole("button", { name: "Dismiss" }).click();
   await expect(needRow(page, "Pip asks you")).toHaveCount(0);
-  await expect(row.locator("[data-status]")).toHaveText("Paused");
-  await expect(row.locator("[data-status-detail]")).toHaveText("· Pip was woken too often today");
+  await expect(row.locator("[data-status]")).toHaveText("Needs you");
+  await expect(row.locator("[data-status-detail]")).toHaveText("· 1 waiting");
 
   // The pane moved on to the pause, with its heading focused (no key lands on Resume by accident); Resume clears the need and the badge.
   await expect(needsPane(page)).toHaveAttribute("data-kind", "paused");

@@ -74,7 +74,7 @@ test.describe("a queued run (N8)", () => {
     await startAgent(page, "CA-401", "investigate");
     await expect.poll(async () => (await mockRuns(page)).map((r) => r.state)).toEqual(["queued"]);
     const [queued] = await mockRuns(page);
-    await railButton(page, /^Agents/).click();
+    await railButton(page, /^Work/).click();
     await page.locator(`main article[data-run-id="${queued.id}"]`).click();
     await expect(runSheet(page)).toBeVisible();
     await runSheet(page).getByRole("button", { name: "Cancel", exact: true }).click();
@@ -95,7 +95,7 @@ test.describe("a free role", () => {
     await startAgent(page, "CA-401", "code auditor");
     await expect.poll(async () => (await mockRuns(page)).map((r) => r.role)).toEqual(["code auditor"]);
     const [run] = await mockRuns(page);
-    await railButton(page, /^Agents/).click();
+    await railButton(page, /^Work/).click();
     const card = page.locator(`main article[data-run-id="${run.id}"]`);
     await expect(card).toContainText("Code auditor");
     await card.click();

@@ -11,10 +11,10 @@ test.describe("a folder to trust keeps waiting on the person (R5)", () => {
     await openApp(page);
     await openAgents(page);
     const count = await needsYouCount(page).innerText();
-    await railButton(page, /^Agents/).click();
+    await railButton(page, /^Work/).click();
     await expect(needsYouCount(page)).toHaveText(count);
-    // The rail's Agents badge is the one count.
-    await expect(railButton(page, /^Agents/)).toHaveAccessibleName(`Agents, ${count} things need you`);
+    // The rail's Work badge is the one count.
+    await expect(railButton(page, /^Work/)).toHaveAccessibleName(`Work, ${count} things need you`);
     // Back on Pip home, the folder to trust is still a need, and the count has not moved.
     await openAgents(page);
     await expect(needsYouCount(page)).toHaveText(count);

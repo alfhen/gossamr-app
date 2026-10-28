@@ -26,11 +26,11 @@ test.describe("The description update says who it writes as (G8)", () => {
   });
 });
 
-test.describe("Opening Agents (G9)", () => {
-  test("puts the keyboard on the Agents heading, not in Pip's composer", async ({ page }) => {
+test.describe("Opening Work (G9)", () => {
+  test("puts the keyboard on the Work heading, not in Pip's composer", async ({ page }) => {
     await openApp(page);
-    await page.getByRole("button", { name: /^Agents/ }).click();
-    await expect(page.getByRole("heading", { level: 1, name: "Agents" })).toBeFocused();
+    await page.getByRole("button", { name: /^Work(,|$)/ }).click();
+    await expect(page.getByRole("heading", { level: 1, name: "Work" })).toBeFocused();
   });
 });
 

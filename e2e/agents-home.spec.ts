@@ -1,19 +1,17 @@
 import { expect, test, type Page } from "@playwright/test";
 import { agentsHome, closeWorkstreamSheet, pauseAtCeiling, needsChip, needsPane, needsPaneHeading, needsYouCount, needsYouTray, openNeedOfKind, openAgents, openApp, pipConversation, pipPane, selectWorkstream, startWorkstream, workstreamGroup, workstreamOpen, workstreamSheet, groupOpen } from "./support/app";
 
-// Agents is the one work view (docs/needs-you.md): the summary chips (Needs you is a filter), every workstream with its
-// agents under them, and a workstream's detail as a sheet beside the Pip drawer. There is no separate Pip home.
+// Work is the one work screen (docs/needs-you.md): one filter (Needs you), every workstream with its agents under it,
+// and a workstream's detail as a sheet beside the Pip drawer. There is no separate Pip home.
 
+const agentsButton = (page: Page) => page.getByRole("button", { name: /^Work(,|$)/ });
 
-const agentsButton = (page: Page) => page.getByRole("button", { name: /^Agents/ });
-
-test("the app opens on Agents, with the summary chips in the header, All on, and the workstreams grouped by default", async ({ page }) => {
+test("the app opens on Work, with one Needs you filter in the header, off, and the workstreams listed", async ({ page }) => {
   await page.goto("/");
   await expect(agentsHome(page)).toBeVisible();
-  await expect(page).toHaveTitle("Agents — Gossamr");
+  await expect(page).toHaveTitle("Work — Gossamr");
   const chips = page.getByRole("group", { name: "Show" });
-  await expect(chips).toBeVisible();
-  await expect(chips.getByRole("button", { name: "All" })).toHaveAttribute("aria-pressed", "true");
+  await expect(chips.getByRole("button")).toHaveCount(1);
   await expect(needsChip(page)).toHaveAttribute("aria-pressed", "false");
   await expect(needsYouTray(page).locator("[data-needs-you-count]")).not.toHaveText("0");
   await expect(agentsHome(page).locator("[data-lane]")).toHaveCount(0);
@@ -32,16 +30,16 @@ test("there is no Pip home: no rail button, no ⌘0, no palette entry", async ({
   await palette.getByLabel("Search commands and tickets").fill("pip home");
   await expect(palette.getByText(/Pip home/)).toHaveCount(0);
   await palette.getByLabel("Search commands and tickets").fill("open agents");
-  await expect(palette.getByText("Open Agents", { exact: true })).toBeVisible();
+  await expect(palette.getByText("Open Work", { exact: true })).toBeVisible();
 });
 
-test("the rail's one badge is the one count, on Agents", async ({ page }) => {
+test("the rail's one badge is the one count, on Work", async ({ page }) => {
   await openApp(page);
   await expect(agentsButton(page)).toHaveCount(1);
   await openAgents(page);
   const count = Number(await needsYouCount(page).innerText());
   expect(count).toBeGreaterThan(0);
-  await expect(agentsButton(page)).toHaveAccessibleName(new RegExp(`^Agents, ${count} things? needs? you`));
+  await expect(agentsButton(page)).toHaveAccessibleName(new RegExp(`^Work, ${count} things? needs? you`));
   await expect(page.getByRole("navigation", { name: "Workspace" })).toBeVisible();
 });
 
@@ -104,7 +102,7 @@ test("a workstream is a group with its status and an Open button; its detail is 
   await expect(pipPane(page)).toBeVisible();
 });
 
-test("Esc in the sheet puts it away, and leaving Agents does too", async ({ page }) => {
+test("Esc in the sheet puts it away, and leaving Work does too", async ({ page }) => {
   await openApp(page);
   await startWorkstream(page, "CA-401");
   await openAgents(page);
@@ -117,7 +115,7 @@ test("Esc in the sheet puts it away, and leaving Agents does too", async ({ page
 
   await workstreamOpen(page, "CA-401").click();
   await expect(workstreamSheet(page)).toBeVisible();
-  await page.getByRole("button", { name: "Activity" }).click();
+  await page.getByRole("button", { name: "Inbox", exact: true }).click();
   await expect(workstreamSheet(page)).toHaveCount(0);
   await openAgents(page);
   await expect(workstreamSheet(page)).toHaveCount(0);
@@ -127,7 +125,7 @@ async function closePipDrawerIfOpen(page: Page) {
   if (await pipPane(page).count()) await pipPane(page).getByRole("button", { name: "Close Pip" }).click();
 }
 
-test("the palette's 'Open the workstream' and 'Show what needs me' land on Agents", async ({ page }) => {
+test("the palette's 'Open the workstream' and 'Show what needs me' land on Work", async ({ page }) => {
   await openApp(page);
   await startWorkstream(page, "CA-401");
   await page.keyboard.press("ControlOrMeta+k");
@@ -139,7 +137,7 @@ test("the palette's 'Open the workstream' and 'Show what needs me' land on Agent
   await expect(pipConversation(page)).toHaveText(/^Workstream: CA-401 /);
 
   await closeWorkstreamSheet(page);
-  await page.getByRole("button", { name: "Activity" }).click();
+  await page.getByRole("button", { name: "Inbox", exact: true }).click();
   await page.keyboard.press("ControlOrMeta+k");
   await palette.getByLabel("Search commands and tickets").fill("what needs me");
   await palette.getByText("Show what needs me", { exact: true }).click();

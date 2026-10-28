@@ -29,16 +29,16 @@ test.describe("Needs-you titles wrap (F10)", () => {
   });
 });
 
-test.describe("keys inside the open decision, the palette's Agents and Undo (F2, F8, F9, F13)", () => {
+test.describe("keys inside the open decision, the palette's Work and Undo (F2, F8, F9, F13)", () => {
   const palette = (page: Page) => page.getByRole("dialog", { name: "Command palette" });
 
-  test("'agents' in the palette finds Open Agents first, and it opens the Agents screen", async ({ page }) => {
+  test("'agents' in the palette finds Open Work first, and it opens the Work screen", async ({ page }) => {
     await openApp(page);
     await page.keyboard.press("ControlOrMeta+k");
     await page.keyboard.type("agents");
-    await expect(palette(page).getByRole("option").first()).toContainText("Open Agents");
+    await expect(palette(page).getByRole("option").first()).toContainText("Open Work");
     await page.keyboard.press("Enter");
-    await expect(page.locator("main").getByRole("heading", { name: "Agents", exact: true })).toBeVisible();
+    await expect(page.locator("main").getByRole("heading", { name: "Work", exact: true })).toBeVisible();
   });
 
   test("a need in no workstream has no link to a workstream", async ({ page }) => {

@@ -29,7 +29,7 @@ export type RunSheetTarget = { type: "run"; id: string } | { type: "safety" };
 
 /**
  * The order j and k walk through: the one the sheet opened with (`snapshot`), runs gone from it dropped and new ones
- * added at the end, so a run that changes lane while its sheet is open keeps its place; the live order without one.
+ * added at the end, so a run that changes state while its sheet is open keeps its place; the live order without one.
  */
 export function browseList(snapshot: readonly string[] | null, live: readonly string[]): string[] {
   if (!snapshot) return [...live];

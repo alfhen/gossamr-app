@@ -82,10 +82,10 @@ test("after Pip starts a run in the workstream's conversation, the Agents view k
   await expect(pipConversation(page)).toHaveText(/^Workstream: CA-401 .+ · Investigate$/);
 });
 
-test("Agents groups runs by workstream, with its stage and R1, and the rest under No workstream", async ({ page }) => {
+test("Work groups runs by workstream, with R1, and the rest under No workstream", async ({ page }) => {
   await openApp(page);
   await startInvestigation(page);
-  await page.getByRole("button", { name: /^Agents/ }).click();
+  await page.getByRole("button", { name: /^Work(,|$)/ }).click();
   await expect(agentRuns(page).first()).toBeVisible();
 
   const groups = page.locator("[data-workstream-group]");
@@ -97,7 +97,4 @@ test("Agents groups runs by workstream, with its stage and R1, and the rest unde
   const none = page.locator('[data-workstream-group="none"]');
   await expect(none.locator("h3").first()).toHaveText("No workstream");
   await expect(none.locator("[data-run-id]").first()).toBeVisible();
-  await expect(page.locator("[data-lane]")).toHaveCount(0);
-
-
 });

@@ -29,7 +29,7 @@ test("a plan the person edited and approved on the ticket is one folded line the
   await page.keyboard.press("Escape");
 
   const id = await startAgent(page, "CA-401", "builder", { brief: "Build CA-401 following the plan on the ticket." });
-  await page.getByRole("button", { name: /^Agents/ }).click();
+  await page.getByRole("button", { name: /^Work(,|$)/ }).click();
   await page.locator(`main article[data-run-id="${id}"]`).first().click();
   const told = page.locator("#agent-sheet").locator("details").filter({ hasText: "What the agent was told" });
   await told.locator("> summary").first().click();

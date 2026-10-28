@@ -151,7 +151,7 @@ test.describe("B8: one label for approving drafts together, and its preview open
 test.describe("B11: Ctrl+0 goes to Pip home from the Agents screen with a card's button focused", () => {
   test("from a card's own button, and from the card", async ({ page }) => {
     await openApp(page, "runs=kinds&prSurface=manual");
-    await page.getByRole("button", { name: /^Agents/ }).click();
+    await page.getByRole("button", { name: /^Work(,|$)/ }).click();
     const button = page.locator("main article[data-run-id] button", { hasText: "Draft comment" }).first();
     await expect(button).toBeVisible();
     await button.focus();
@@ -159,7 +159,7 @@ test.describe("B11: Ctrl+0 goes to Pip home from the Agents screen with a card's
     await page.keyboard.press("ControlOrMeta+0");
     await expect(agentsHome(page)).toBeVisible();
 
-    await page.getByRole("button", { name: /^Agents/ }).click();
+    await page.getByRole("button", { name: /^Work(,|$)/ }).click();
     const card = page.locator("main article[data-run-id]").first();
     await card.focus();
     await page.keyboard.press("ControlOrMeta+0");
@@ -168,7 +168,7 @@ test.describe("B11: Ctrl+0 goes to Pip home from the Agents screen with a card's
 
   test("plain keys on a card's button still stay with the button", async ({ page }) => {
     await openApp(page, "runs=kinds&prSurface=manual");
-    await page.getByRole("button", { name: /^Agents/ }).click();
+    await page.getByRole("button", { name: /^Work(,|$)/ }).click();
     const button = page.locator("main article[data-run-id] button", { hasText: "Draft comment" }).first();
     await button.focus();
     await page.keyboard.press("j");
@@ -176,20 +176,11 @@ test.describe("B11: Ctrl+0 goes to Pip home from the Agents screen with a card's
   });
 });
 
-test.describe("B12: the Pip launcher keeps clear of the Agents screen's cards and its Earlier link", () => {
-  test("no card and no lane link stands under the launcher, at the top of the list or the bottom", async ({ page }) => {
+test.describe("B12: the Pip launcher keeps clear of the Work screen's cards", () => {
+  test("no card stands under the launcher, at the top of the list or the bottom", async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await openApp(page, "runs=kinds&prSurface=manual");
-    await page.getByRole("button", { name: /^Agents/ }).click();
-    // A run the person stops goes under Earlier, folded, with its "Show" link at the lane's right end.
-    await page.locator("main [data-run-id]").filter({ hasText: "WEB-108" }).first().click();
-    const sheet = page.getByRole("dialog", { name: "Agent run" });
-    await sheet.getByRole("button", { name: "Stop", exact: true }).click();
-    await sheet.getByRole("group", { name: "Stop this agent" }).getByRole("button", { name: "Yes, stop" }).dispatchEvent("click");
-    await expect(sheet.locator("[data-state]").first()).toHaveAttribute("data-state", "stopped");
-    await page.keyboard.press("Escape");
-    await expect(sheet).toHaveCount(0);
-
+    await page.getByRole("button", { name: /^Work(,|$)/ }).click();
     const launcher = page.locator("[data-pip-launcher]");
     await expect(launcher).toBeVisible();
     const last = page.locator("main article[data-run-id]").last();

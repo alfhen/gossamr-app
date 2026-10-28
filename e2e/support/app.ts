@@ -3,9 +3,9 @@ import { expect, type Locator, type Page } from "@playwright/test";
 /** The id of Pip's message input (PIP_INPUT_ID in src/workspace/PipPane.tsx). */
 export const PIP_INPUT = "#pip-input";
 
-/** The app lands on Agents once it is ready; this leaves it for the ticket screen, where most specs start. */
+/** The app lands on Work once it is ready; this leaves it for the ticket screen, where most specs start. */
 export async function showWorkspace(page: Page) {
-  await expect(page).toHaveTitle("Agents — Gossamr");
+  await expect(page).toHaveTitle("Work — Gossamr");
   await page.getByRole("button", { name: "All projects" }).click();
   await page.mouse.move(700, 500);
   await expect(page).toHaveTitle("Tickets — Gossamr");
@@ -13,8 +13,8 @@ export async function showWorkspace(page: Page) {
 
 /**
  * Opens the workspace in mock mode and waits for the sample tickets. `query` goes through as the page's search string, so mock
- * flags such as `runs=empty` reach mockOptionsFromUrl. The app lands on Agents; the specs here start on the workspace
- * (`showWorkspace`) and go to Agents when they mean to.
+ * flags such as `runs=empty` reach mockOptionsFromUrl. The app lands on Work; the specs here start on the workspace
+ * (`showWorkspace`) and go to Work when they mean to.
  */
 export async function openApp(page: Page, query = "") {
   await page.goto(query ? `/?${query.replace(/^\?/, "")}` : "/");
@@ -370,16 +370,16 @@ export const wakeTurns = (page: Page) => wakes(page).count();
 /** The banner saying why the pane's workstream is paused, with its Resume. */
 export const pausedBanner = (page: Page) => pipPane(page).locator("[data-paused-banner]");
 
-/** The Agents view (src/workspace/AgentsView.tsx): the summary chips, the workstreams with their agents, and a workstream's detail beside them. */
+/** The Work screen (src/workspace/AgentsView.tsx): its one filter, the workstreams with their agents, and a workstream's detail beside them. */
 export const agentsHome = (page: Page) => page.locator("[data-agents-home]");
 
 /**
- * Opens Agents from the rail and waits for the view. Just after a load the button does nothing until the settings that
+ * Opens Work from the rail and waits for the view. Just after a load the button does nothing until the settings that
  * enable agents have arrived, so it is pressed again until the view shows. The Pip drawer is left as it is.
  */
 export async function openAgents(page: Page) {
   await expect(async () => {
-    if (!(await agentsHome(page).count())) await page.locator("[data-rail]").getByRole("button", { name: /^Agents/ }).click({ timeout: 1_000 });
+    if (!(await agentsHome(page).count())) await page.locator("[data-rail]").getByRole("button", { name: /^Work(,|$)/ }).click({ timeout: 1_000 });
     await expect(agentsHome(page)).toBeVisible({ timeout: 1_000 });
   }).toPass({ timeout: 10_000 });
 }
@@ -390,10 +390,10 @@ export async function closePipDrawer(page: Page) {
   await expect(pipPane(page)).toHaveCount(0);
 }
 
-/** A workstream's detail, the sheet over the Agents view. */
+/** A workstream's detail, the sheet over the Work screen. */
 export const workstreamSheet = (page: Page) => page.locator("#workstream-sheet");
 
-/** The group of the open workstream on ticket `key` in the Agents list: its heading, status and agents. */
+/** The group of the open workstream on ticket `key` on the Work screen: its heading, status and agents. */
 export const workstreamGroup = (page: Page, key: string) => agentsHome(page).locator("[data-workstream-group]").filter({ has: page.locator("h3", { hasText: key }) });
 
 /** The button that opens the detail of the workstream on ticket `key`. */
@@ -420,7 +420,7 @@ export async function closeWorkstreamSheet(page: Page) {
 export const homeConversation = (page: Page) => pipPane(page).locator("h2[data-pip-conversation]");
 
 /**
- * The peek over Agents sits in the window as it opened: nothing around it scrolled (a card focused in it once scrolled
+ * The peek over Work sits in the window as it opened: nothing around it scrolled (a card focused in it once scrolled
  * the app's root, pushing the title bar, the conversation's header and the peek's own Close out of the top of the window
  * and leaving a blank band at the bottom), its Close and the conversation's header on screen.
  */
@@ -440,16 +440,16 @@ export async function expectPeekInPlace(page: Page) {
 /** Pip's composer input, the only Pip input on screen. */
 export const homeComposer = (page: Page) => page.locator(PIP_INPUT);
 
-/** The summary at the top of the Agents view: its filter chips (Needs you, Ready to review, Failed or stuck, All). */
+/** The header's filter group on the Work screen, which holds the one Needs you filter. */
 export const needsYouTray = (page: Page) => agentsHome(page).locator("[data-summary-chips]");
 
-/** The Needs you chip: a toggle that filters the list, with the one count. */
+/** The Needs you filter: a toggle that narrows the list, with the one count. */
 export const needsChip = (page: Page) => agentsHome(page).locator('[data-chip="needs"]');
 
 /** The Needs you list's one count, as its chip says it. */
 export const needsYouCount = (page: Page) => needsYouTray(page).locator("[data-needs-you-count]");
 
-/** The group of the workstream on ticket `key` in the Agents list, or No workstream's (`key` "General"). */
+/** The group of the workstream on ticket `key` on the Work screen, or No workstream's (`key` "General"). */
 export const needsYouRow = (page: Page, key: string) => (key === "General" ? agentsHome(page).locator('[data-workstream-group="none"]') : workstreamGroup(page, key));
 
 /** The button that opens the detail of the workstream on ticket `key`, or of No workstream (`key` "General"). */
@@ -462,7 +462,7 @@ export const needsStack = (page: Page) => workstreamSheet(page).locator("[data-w
 export const needRow = (page: Page, name: string | RegExp) => workstreamSheet(page).locator("[data-needs-pane]").filter({ hasText: name }).locator("[data-need-row]");
 
 /**
- * With a workstream open on Agents, asks Pip for a comment on its ticket and opens that draft in the decision pane.
+ * With a workstream open on Work, asks Pip for a comment on its ticket and opens that draft in the decision pane.
  * Returns the draft's card; nothing is posted.
  */
 export async function pipCommentDraft(page: Page, key: string) {
@@ -476,11 +476,11 @@ export async function pipCommentDraft(page: Page, key: string) {
 export const needOfKind = (page: Page, kind: string) => workstreamSheet(page).locator(`[data-needs-pane][data-kind="${kind}"] [data-need-row]`).first();
 
 /**
- * Opens the rail's Needs you popover (a right click on the Agents button), which lists every need from any screen, and
+ * Opens the rail's Needs you popover (a right click on the Work button), which lists every need from any screen, and
  * presses the first row `pick` finds: the way a notification, the badge or a link takes the person to a need.
  */
 export async function openNeedFromBadge(page: Page, pick: (list: Locator) => Locator) {
-  await page.locator("[data-rail]").getByRole("button", { name: /^Agents/ }).click({ button: "right" });
+  await page.locator("[data-rail]").getByRole("button", { name: /^Work(,|$)/ }).click({ button: "right" });
   const popover = page.getByRole("dialog", { name: "Needs you" });
   await expect(popover).toBeVisible();
   const more = popover.locator('[data-needs-you-more][aria-expanded="false"]');
@@ -489,7 +489,7 @@ export async function openNeedFromBadge(page: Page, pick: (list: Locator) => Loc
   await pick(rows).first().click();
 }
 
-/** Opens the sheet of the run on ticket `key` from its card in the Agents list, with the keyboard as j and Enter would. */
+/** Opens the sheet of the run on ticket `key` from its row on the Work screen, with the keyboard as j and Enter would. */
 export async function openRunOf(page: Page, key: string) {
   const card = agentsHome(page).locator("article[data-run-id]").filter({ hasText: key }).first();
   await card.focus();

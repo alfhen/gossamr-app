@@ -12,7 +12,7 @@ const NUDGE_DRAFT = "Draft a comment";
 const toast = (page: Page) => page.locator("[data-toast]");
 const undo = (page: Page) => toast(page).getByRole("button", { name: "Undo" });
 
-const agentsButton = (page: Page) => page.getByRole("button", { name: /^Agents/ });
+const agentsButton = (page: Page) => page.getByRole("button", { name: /^Work(,|$)/ });
 
 /** A workstream on CA-401, opened on Pip home. */
 async function workstreamOnHome(page: Page) {

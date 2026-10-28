@@ -195,7 +195,9 @@ export function Workspace({ backend }: { backend: Backend }) {
   const choiceConnection = useWorkspace((s) => s.connections.find((c) => c.id === choice?.connectionId));
   const hasGithub = useWorkspace((s) => s.connections.some((c) => c.kind === "github"));
   const needs = useNeedsYou();
-  useEffect(() => { void backend.setNeedsBadge(needs.length); }, [backend, needs.length]);
+  useEffect(() => {
+    void backend.setNeedsBadge(needs.length);
+  }, [backend, needs.length]);
   useGlobalKeys();
   useRegionKeys();
   usePipView();
