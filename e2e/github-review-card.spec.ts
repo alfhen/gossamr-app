@@ -2,7 +2,6 @@ import { expect, test, type Locator, type Page } from "@playwright/test";
 import { githubPostsTried, githubWrites, jiraWrites, movePullHead, openPip, pipPane, reviewedDraft } from "./support/app";
 
 const RETRY = "src/consumer/retry.ts";
-const pullView = (page: Page) => page.getByRole("dialog", { name: "Pull request acme/webshop#218" });
 
 /** The review draft's preview card in the Pip pane, focused from the keyboard so it takes its keys. */
 async function previewCard(page: Page): Promise<Locator> {
@@ -46,29 +45,25 @@ test("an edited comment and a dropped one change exactly what is posted, and the
   expect(await jiraWrites(page)).toEqual(jira);
 });
 
-test("a token that can't post says why, offers the PR view with the review's comments inline instead, and a then Enter posts nothing", async ({ page }) => {
+test("a token that can't post says why, offers GitHub instead, and a then Enter posts nothing", async ({ page }) => {
   const review = await reviewedDraft(page, "&mockReviewAccess=none");
   await expect(review.locator('[data-review-access="cant-post"]')).toHaveText("This GitHub token can't post reviews on acme/webshop (it lacks write access to its pull requests).");
   await expect(review.getByRole("button", { name: "Approve" })).toHaveCount(0);
 
-  const open = review.getByRole("button", { name: "Open PR view" });
-  await open.click();
-  const view = pullView(page);
-  await expect(view).toBeVisible();
-  await expect(view.getByRole("heading", { level: 2 })).toHaveText("CA-402: Cache the category tree (agent)");
-  await expect(view.getByRole("navigation", { name: "Files" }).getByRole("listitem")).toHaveCount(2);
-  await expect(view.locator('[data-pull-file="src/consumer/retry.ts"] [data-diff-line]').first()).toBeVisible();
-  await expect(view.getByRole("note", { name: `Comment on ${RETRY}:42` })).toContainText("the retry loop never backs off");
-  await expect(view.getByRole("note", { name: `Comment on ${RETRY}:17` })).toBeVisible();
-  await expect(view.locator("[data-pull-summary]")).toContainText("no test covers the timeout path. (src/consumer/retry.test.ts)");
-  await page.keyboard.press("Escape");
-  await expect(view).toHaveCount(0);
-  await expect(open).toBeFocused();
+  await expect(review.locator("[data-review-hunk]")).toHaveCount(2);
+  await page.evaluate(() => {
+    const w = window as unknown as { __opened: string[]; open: (url: string) => null };
+    w.__opened = [];
+    w.open = (url: string) => (w.__opened.push(String(url)), null);
+  });
+  await review.getByRole("button", { name: "Open on GitHub" }).click();
+  expect(await page.evaluate(() => (window as unknown as { __opened: string[] }).__opened)).toEqual(["https://github.com/acme/webshop/pull/218"]);
+  await expect(page.getByRole("dialog", { name: /^Pull request / })).toHaveCount(0);
 
   // From its preview card, a can't post it: it only opens the draft, so Enter then confirms nothing.
   const card = await previewCard(page);
   await expect(card.locator("[data-key-hint]")).toHaveText("e edit · d s skip · ↵ open");
-  await expect(card.getByRole("button", { name: "Open PR view →" })).toBeVisible();
+  await expect(card.getByRole("button", { name: "Open on GitHub →" })).toBeVisible();
   await page.keyboard.press("a");
   await page.keyboard.press("Enter");
   // The mock GitHub refuses such a post before keeping it, so no write proves nothing; it counts every post asked of it,

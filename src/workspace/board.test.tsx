@@ -5,7 +5,6 @@ import { statusId } from "../backend/mockConnector";
 import { ALL } from "../lib/filter";
 import type { WorkItem } from "../types";
 import { itemsByFilter, useWorkspace } from "../workspaceStore";
-import { AgeView } from "./AgeView";
 import { BoardView } from "./BoardView";
 import { BulkBar } from "./BulkBar";
 import { GhostCard, ItemCard, type ItemCardProps } from "./ItemCard";
@@ -214,27 +213,5 @@ describe("BoardView", () => {
 
   it("says when nothing matches", () => {
     expect(board([])).toContain("Nothing matches this filter");
-  });
-});
-
-describe("AgeView", () => {
-  it("ranks open tickets as bars by default, longest quiet first, without finished ones", () => {
-    sync();
-    const out = renderToStaticMarkup(<AgeView tab={{ ...tab(), view: "age" }} items={itemsByFilter(s(), ALL)} />);
-    expect(out).toContain('aria-label="Open tickets by days quiet"');
-    expect(out).not.toContain("DEVOPS-478");
-    const days = [...out.matchAll(/quiet for (\d+) days/g)].map((m) => Number(m[1]));
-    expect(days.length).toBeGreaterThan(3);
-    expect(days).toEqual([...days].sort((a, b) => b - a));
-  });
-
-  it("has a column per age bucket, holds open items only, and lets cards wither, when the person picked columns", () => {
-    vi.stubGlobal("localStorage", { getItem: (k: string) => (k === "gossamr-age-layout" ? JSON.stringify("columns") : null), setItem: () => {}, removeItem: () => {} });
-    sync();
-    const out = renderToStaticMarkup(<AgeView tab={{ ...tab(), view: "age" }} items={itemsByFilter(s(), ALL)} />);
-    for (const label of ["Fresh", "This week", "Stale", "Forgotten"]) expect(out).toContain(`aria-label="${label},`);
-    expect(out).toContain("ws-wither");
-    expect(out).not.toContain('draggable="true"');
-    expect(out).not.toContain("DEVOPS-478");
   });
 });

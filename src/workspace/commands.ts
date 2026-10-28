@@ -59,8 +59,6 @@ export interface CommandActions {
   openWorkstream(id: string): void;
   /** Opens (or finds) the workstream on `item`, shows it on Agents and asks Pip to plan it. */
   askPipToPlan(item: WorkItem): void;
-  /** Opens "What Jira saw from me": everything Gossamr posted to Jira. */
-  openJiraSent(): void;
 }
 
 /** What the screen shows right now, for the hints beside entries. */
@@ -116,7 +114,6 @@ export function buildCommands(containers: readonly WorkContainer[], savedViews: 
     ),
     { id: "app:activity", group: "Go to", icon: "→", label: "Open activity", hint: ctx.unreadActivity ? `${ctx.unreadActivity} new` : undefined, keywords: "feed events", run: a.openActivity },
     { id: "app:drafts", group: "Go to", icon: "→", label: "Open drafts", keywords: "pip proposals review waiting", run: a.openDrafts },
-    { id: "app:jira-sent", group: "Go to", icon: "→", label: "What Jira saw from me", keywords: "posted sent wrote comments moves transitions descriptions subtasks audit history", run: a.openJiraSent },
     { id: "app:settings", group: "Go to", icon: "⚙", label: "Open settings", keywords: "preferences", run: a.openSettings },
     // Before "Stop all agents…" in the list, so the query "agents" lands here first.
     ...(!ctx.onAgents ? [{ id: "app:agents", group: "Go to" as const, icon: "→", label: "Open Agents", keywords: "agents running capacity operations stop all workstreams needs you", run: a.openAgents }] : []),

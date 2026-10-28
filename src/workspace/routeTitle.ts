@@ -6,7 +6,6 @@ export const ROUTE_NAME: Record<Route, string> = {
   activity: "Activity",
   agents: "Agents",
   settings: "Settings",
-  sent: "What Jira saw from me",
 };
 
 /** The browser tab's title on `route`: "Agents — Gossamr". */

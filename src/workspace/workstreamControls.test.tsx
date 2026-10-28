@@ -3,14 +3,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MockBackend } from "../backend/mock";
 import { itemRef } from "../backend/mockConnector";
 import { useClaude } from "../claudeStore";
-import type { PauseReason, WatchState, WorkstreamView } from "../types";
+import type { PauseReason, WorkstreamView } from "../types";
 import { useWorkspace } from "../workspaceStore";
-import { useToasts } from "./toasts";
 import { DecisionShownContext, decisionShown } from "./decisionShown";
 import { CLOSE_HINT, CLOSE_RUNS_NOTE, CloseConfirm, MORE_HINT, NextStepLine, PAUSE_HINT, PausedBanner, StopConfirm, WorkstreamControlsView, controlActions, pauseFocusTarget, tabWithin, type ControlActions } from "./WorkstreamControls";
 import { useWorkstreams } from "./workstreamsStore";
-import { NO_PULL_VIEW, pullViewOrGithub } from "./StepRail";
-import { usePullView } from "./pullViewStore";
 
 const memory = () => {
   const data = new Map<string, string>();
@@ -216,37 +213,6 @@ describe("the controls call the person's own commands", () => {
     await vi.waitFor(() => expect(calls.stop).toHaveBeenCalledWith(id));
     await vi.waitFor(() => expect(shown()?.pausedReason).toBe("person"));
     expect(Object.values(calls).every((c) => c.mock.calls.every(([first]) => first === id))).toBe(true);
-  });
-});
-
-describe("the Review step's PR view with no GitHub connection (D17)", () => {
-  const openUrl = vi.fn(() => Promise.resolve());
-  const watching = (connectionId: string): WatchState => ({ connectionId, mode: "selected", needsChoice: false, catalogSize: null, watches: [] });
-  beforeEach(() => {
-    openUrl.mockClear();
-    useToasts.getState().clear();
-    useWorkspace.setState({ backend: { openUrl } as never, proposals: {}, watch: [] });
-  });
-  afterEach(() => {
-    useToasts.getState().clear();
-    usePullView.setState({ target: null, opener: null });
-    useWorkspace.setState({ backend: null, watch: [] });
-  });
-
-  it("says so in a note and opens the pull request on GitHub, rather than doing nothing", () => {
-    pullViewOrGithub("acme/storefront", 519);
-    expect(usePullView.getState().target).toBeNull();
-    expect(useToasts.getState().toasts.map((t) => [t.text, t.tone])).toEqual([[NO_PULL_VIEW, "info"]]);
-    expect(NO_PULL_VIEW).toBe("Connect GitHub to see this pull request in Gossamr. Opened it on GitHub instead.");
-    expect(openUrl).toHaveBeenCalledWith("https://github.com/acme/storefront/pull/519");
-  });
-
-  it("with a code host watched, opens the in-app view and nothing else", () => {
-    useWorkspace.setState({ watch: [watching("github:ada")] });
-    pullViewOrGithub("acme/storefront", 519);
-    expect(usePullView.getState().target).toEqual({ connectionId: "github:ada", repo: "acme/storefront", number: 519, proposalId: null });
-    expect(useToasts.getState().toasts).toEqual([]);
-    expect(openUrl).not.toHaveBeenCalled();
   });
 });
 

@@ -5,7 +5,6 @@ import { TicketLinksContext } from "../components/ticketLinks";
 import type { WorkFilter } from "../types";
 import { useItemsByFilter, useWorkspace } from "../workspaceStore";
 import { ActivityView } from "./ActivityView";
-import { JiraSentView } from "./JiraSentView";
 import { AgentSheets } from "./AgentSheets";
 import { AgentsView } from "./AgentsView";
 import { useActivity } from "./activityStore";
@@ -18,7 +17,6 @@ import { FilterBar } from "./FilterBar";
 import { useActiveTab } from "./hooks";
 import { MAIN_ID, Palette } from "./Palette";
 import { PeekSheet } from "./PeekSheet";
-import { PullView } from "./PullView";
 import { FilterNote, LAUNCHER_CLEAR, LAUNCHER_GUTTER, PipLauncher, SelectionAsk, usePipView } from "./PipExtras";
 import { GENERAL_CONVERSATION, PIP_INPUT_ID, PipPane } from "./PipPane";
 import { usePaneWidths } from "./PaneResizers";
@@ -301,7 +299,6 @@ export function Workspace({ backend }: { backend: Backend }) {
             <div className="min-h-0 flex-1">
               {route === "workspace" && <Canvas />}
               {route === "activity" && <ActivityView />}
-              {route === "sent" && <JiraSentView />}
               {route === "agents" && <AgentsView />}
               {route === "settings" && <Settings />}
             </div>
@@ -316,7 +313,6 @@ export function Workspace({ backend }: { backend: Backend }) {
         {paletteOpen && <Palette />}
       </div>
       <ConnectGithubDialog />
-      <PullView />
     </TicketLinksContext.Provider>
   );
 }

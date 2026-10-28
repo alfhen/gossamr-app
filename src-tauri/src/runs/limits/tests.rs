@@ -7,7 +7,7 @@ use crate::runs::rig::ready;
 async fn settings_are_clamped_saved_and_read_back_by_a_new_start() {
     let rig = ready().await;
     assert_eq!(rig.svc.settings(), AgentSettings::default());
-    let saved = rig.svc.set_settings(AgentSettings { max_runs: 40, terminal: TerminalChoice::ITerm, draft_on_finish: false, ..AgentSettings::default() }).unwrap();
+    let saved = rig.svc.set_settings(AgentSettings { max_runs: 40, terminal: TerminalChoice::ITerm, ..AgentSettings::default() }).unwrap();
     assert_eq!(saved.max_runs, 6);
     assert_eq!(rig.svc.settings(), saved);
     assert_eq!(AppConfig::load(&rig.fx.core.data_dir()).agents, saved);

@@ -549,7 +549,7 @@ async fn refused_reviews_read_plainly_without_caching_a_tokens_access() {
     let host = host(&server);
     assert!(host.review_access("acme/webshop").await.unwrap().can_post, "a fine-grained token with push may post");
     let err = host.post_review("acme/webshop", 218, "a1b2c3d4e5f6", "s", &[]).await.unwrap_err();
-    assert_eq!(err.to_string(), "GitHub refused to post the review: the token can't write to pull requests in acme/webshop. Open the PR view instead, or reconnect GitHub with write access.");
+    assert_eq!(err.to_string(), "GitHub refused to post the review: the token can't write to pull requests in acme/webshop. Open the PR on GitHub instead, or reconnect GitHub with write access.");
     let access = host.review_access("acme/webshop").await.unwrap();
     assert!(access.can_post, "a failed post is not stored as a token pre-check: {access:?}");
     let err = host.post_review("acme/webshop", 219, "a1b2c3d4e5f6", "s", &[]).await.unwrap_err();

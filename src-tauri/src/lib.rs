@@ -529,7 +529,7 @@ async fn code_pull_files(core: State<'_, CoreState>, connection_id: String, repo
     core.code_pull_files(&connection_id, &repo, number).await
 }
 
-/// A pull request with the files it changes and their patches, for the in-app pull request view.
+/// A pull request with the files it changes and their patches, for review drafts.
 #[tauri::command]
 async fn code_pull_diff(core: State<'_, CoreState>, connection_id: String, repo: String, number: u64) -> Result<codehost::PullDiff> {
     core.code_pull_diff(&connection_id, &repo, number).await

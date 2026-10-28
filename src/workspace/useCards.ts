@@ -37,7 +37,7 @@ export async function approveEach(ids: readonly string[], approve: (id: string) 
   return { ok: ids.length - failed.length, failed };
 }
 
-/** Everything the board and the age view share: what a card shows, what its actions do, and the bulk actions. */
+/** The board's cards: what a card shows, what its actions do, and the bulk actions. */
 export function useCards(items: readonly WorkItem[], order: readonly string[]) {
   const allItems = useWorkspace((s) => s.items);
   const containers = useWorkspace((s) => s.containers);

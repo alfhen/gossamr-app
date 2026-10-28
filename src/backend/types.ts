@@ -117,7 +117,7 @@ export interface Backend {
   codePullRequest(ref: CodeRef): Promise<PullRequestDetail>;
   /** The files a pull request changes with patches long enough to show a review draft's comments in place. Watched repositories only. */
   codePullFiles(connectionId: string, repo: string, number: number): Promise<ChangedFile[]>;
-  /** A pull request in a watched repository with the files it changes and their patches, for the in-app pull request view. Reads only. */
+  /** A pull request in a watched repository with the files it changes and their patches, for review draft hunks. Reads only. */
   codePullDiff(connectionId: string, repo: string, number: number): Promise<PullDiff>;
   /** Whether the token may post a review on a watched repository, and why not when it can't. Reads only. */
   codeReviewAccess(connectionId: string, repo: string): Promise<ReviewAccess>;

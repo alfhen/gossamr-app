@@ -1006,7 +1006,7 @@ impl Core {
         self.revise_as_pip(scope, workstream, id, intent).await
     }
 
-    /// Pull request `number` in a watched repository with the files it changes, for the in-app pull request view.
+    /// Pull request `number` in a watched repository with the files it changes, for review drafts.
     pub async fn code_pull_diff(&self, connection_id: &str, repo: &str, number: u64) -> Result<crate::codehost::PullDiff> {
         self.require_watched(connection_id, repo)?;
         self.code_host(connection_id).await?.pull_diff(repo, number).await

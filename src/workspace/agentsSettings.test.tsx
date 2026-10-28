@@ -4,7 +4,7 @@ import { MockBackend } from "../backend/mock";
 import type { AgentSettings } from "../types";
 import { AgentsSettingsView, withDigestMinutes } from "./AgentsSettings";
 
-const SETTINGS: AgentSettings = { maxRuns: 3, terminal: "terminal", draftOnFinish: true };
+const SETTINGS: AgentSettings = { maxRuns: 3, terminal: "terminal" };
 const view = (settings: AgentSettings | null, settingsSaving = false) =>
   renderToStaticMarkup(<AgentsSettingsView runs={[]} stopping={false} keepRunning={0} settings={settings} settingsSaving={settingsSaving} cleanup={null} onSettings={vi.fn()} onCleanup={vi.fn()} onStopAll={vi.fn()} onClose={vi.fn()} />);
 

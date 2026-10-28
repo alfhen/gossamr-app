@@ -26,8 +26,6 @@ pub const MAX_RUNS: std::ops::RangeInclusive<usize> = 1..=6;
 pub struct AgentSettings {
     pub max_runs: usize,
     pub terminal: TerminalChoice,
-    /// Draft a Jira comment on the run's ticket when it finishes with a `For Jira:` section.
-    pub draft_on_finish: bool,
     /// Which system notifications about runs the person gets (`runs::notices`).
     pub notifications: NoticeMode,
     /// Minutes between digest notifications, when `notifications` is a digest.
@@ -39,7 +37,6 @@ impl Default for AgentSettings {
         Self {
             max_runs: 3,
             terminal: TerminalChoice::Terminal,
-            draft_on_finish: true,
             notifications: NoticeMode::Workstream,
             digest_minutes: DIGEST_MINUTES,
         }
@@ -51,7 +48,6 @@ impl AgentSettings {
         Self {
             max_runs: self.max_runs.clamp(*MAX_RUNS.start(), *MAX_RUNS.end()),
             terminal: self.terminal,
-            draft_on_finish: self.draft_on_finish,
             notifications: self.notifications,
             digest_minutes: self.digest_minutes.clamp(1, DIGEST_MINUTES_MAX),
         }
@@ -106,16 +102,17 @@ mod tests {
     }
 
     #[test]
-    fn a_config_saved_with_the_old_report_setting_still_loads_and_drops_it() {
+    fn a_config_with_removed_settings_still_loads_and_drops_them() {
         let dir = std::env::temp_dir().join(format!("gossamr-config-report-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join(FILE), r#"{"agents":{"maxRuns":2,"reportResult":true,"draftOnFinish":false},"pickedClones":{"acme/webshop":"/Users/me/Code/webshop"}}"#).unwrap();
+        std::fs::write(dir.join(FILE), r#"{"agents":{"maxRuns":2,"reportResult":true,"draftOnFinish":false,"wallClockMinutes":10,"tokenCap":100,"autostart":{"triagePlan":true},"managerTurnsPerDay":6},"pickedClones":{"acme/webshop":"/Users/me/Code/webshop"}}"#).unwrap();
         let loaded = AppConfig::load(&dir);
-        assert_eq!((loaded.agents.max_runs, loaded.agents.draft_on_finish), (2, false));
+        assert_eq!(loaded.agents.max_runs, 2);
         assert_eq!(loaded.picked_clones.len(), 1);
         loaded.save(&dir).unwrap();
-        assert!(!std::fs::read_to_string(dir.join(FILE)).unwrap().contains("reportResult"));
+        let saved = std::fs::read_to_string(dir.join(FILE)).unwrap();
+        assert!(["reportResult", "draftOnFinish", "wallClockMinutes", "tokenCap", "autostart", "managerTurnsPerDay"].iter().all(|key| !saved.contains(key)), "{saved}");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -141,11 +138,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("gossamr-config-limits-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        assert_eq!(AppConfig::load(&dir).agents, AgentSettings { max_runs: 3, terminal: TerminalChoice::Terminal, draft_on_finish: true, notifications: NoticeMode::Workstream, digest_minutes: 30 });
-        std::fs::write(dir.join(FILE), r#"{"agents":{"draftOnFinish":false}}"#).unwrap();
-        assert!(!AppConfig::load(&dir).agents.draft_on_finish);
-        std::fs::write(dir.join(FILE), r#"{"agents":{"maxRuns":2}}"#).unwrap();
-        assert!(AppConfig::load(&dir).agents.draft_on_finish, "an older config keeps the default");
+        assert_eq!(AppConfig::load(&dir).agents, AgentSettings { max_runs: 3, terminal: TerminalChoice::Terminal, notifications: NoticeMode::Workstream, digest_minutes: 30 });
         std::fs::write(dir.join(FILE), r#"{"agents":{"maxRuns":99,"wallClockMinutes":4294967295,"tokenCap":0,"terminal":"iTerm"}}"#).unwrap();
         let loaded = AppConfig::load(&dir).agents;
         assert_eq!((loaded.max_runs, loaded.terminal), (6, TerminalChoice::ITerm), "keys of the removed limits are ignored");
@@ -166,7 +159,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join(FILE), r#"{"agents":{"maxRuns":2,"draftOnFinish":false,"autostart":{"triagePlan":false,"reviewVerify":true},"managerTurnsPerDay":9999}}"#).unwrap();
         let loaded = AppConfig::load(&dir).agents;
-        assert_eq!((loaded.max_runs, loaded.draft_on_finish), (2, false));
+        assert_eq!(loaded.max_runs, 2);
         AppConfig::load(&dir).save(&dir).unwrap();
         let saved = std::fs::read_to_string(dir.join(FILE)).unwrap();
         assert!(!saved.contains("autostart") && !saved.contains("managerTurnsPerDay"), "{saved}");

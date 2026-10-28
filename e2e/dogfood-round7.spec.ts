@@ -1,8 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
-import { agentsHome, homeConversation, jiraWrites, needOfKind, needsPane, needsYouCount, openAgents, openJiraSent, openApp, selectWorkstream, startWorkstream, openNeedOfKind } from "./support/app";
+import { agentsHome, homeConversation, jiraWrites, needOfKind, needsPane, needsYouCount, openAgents, openApp, selectWorkstream, startWorkstream, openNeedOfKind } from "./support/app";
 
-// Fixes from the seventh dogfood round: approving from the Decide pane and Esc leaving the Sent and Settings views.
-
+// Fixes from the seventh dogfood round: approving from the Decide pane and Esc leaving Settings.
 
 /** A workstream on CA-401, opened on Pip home. */
 async function workstreamOnHome(page: Page) {
@@ -33,17 +32,11 @@ test.describe("approving from the Decide pane (G1)", () => {
 });
 
 test.describe("keyboard: Esc (G7, G12)", () => {
-  test("Esc leaves the Sent and Settings views for Pip home, from <body>", async ({ page }) => {
+  test("Esc leaves Settings for Pip home, from <body>", async ({ page }) => {
     test.setTimeout(90_000);
     await page.setViewportSize({ width: 1440, height: 900 });
     await openApp(page, "runs=empty");
     await openAgents(page);
-    await openJiraSent(page);
-    await page.locator("body").click({ position: { x: 1, y: 1 } });
-    await page.keyboard.press("Escape");
-    await expect(page.locator("[data-jira-sent]")).toHaveCount(0);
-    await expect(agentsHome(page)).toBeVisible();
-
     await page.locator("aside", { has: page.getByRole("navigation", { name: "Workspace" }) }).getByRole("button", { name: "Settings" }).click();
     await expect(page.getByRole("heading", { name: "Settings", level: 1 })).toBeVisible();
     await page.locator("body").click({ position: { x: 1, y: 1 } });

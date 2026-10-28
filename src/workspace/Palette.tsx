@@ -229,7 +229,6 @@ export function appActions(): CommandActions {
     openAgents: showAllRuns,
     openWorkstream: openOnAgents,
     askPipToPlan: (item) => void askPipToPlan(item),
-    openJiraSent: () => tabs.setRoute("sent"),
   };
 }
 

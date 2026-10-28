@@ -17,7 +17,7 @@ const EVENT: &str = "COMMENT";
 /// What a 403 refusing a review says when GitHub said the token can't reach the resource: the token can't write to pull
 /// requests in `repo`. A rate limit, a single sign-on demand or any other 403 keeps GitHub's own words.
 pub(super) fn no_write_access(repo: &str) -> String {
-    format!("GitHub refused to post the review: the token can't write to pull requests in {repo}. Open the PR view instead, or reconnect GitHub with write access.")
+    format!("GitHub refused to post the review: the token can't write to pull requests in {repo}. Open the PR on GitHub instead, or reconnect GitHub with write access.")
 }
 
 /// The error a refused review becomes, worded for the person. A 422 whose errors name a line, a position or the commit

@@ -1300,7 +1300,7 @@ export class MockRuns {
     };
   }
 
-  private limits: AgentSettings = { maxRuns: 3, terminal: "terminal", draftOnFinish: true, notifications: "workstream", digestMinutes: DIGEST_MINUTES };
+  private limits: AgentSettings = { maxRuns: 3, terminal: "terminal", notifications: "workstream", digestMinutes: DIGEST_MINUTES };
   /** Run ids whose worktree holds work that was never pushed; `claude rm` refuses these. */
   readonly unpushed = new Set<string>();
 
@@ -1311,8 +1311,8 @@ export class MockRuns {
   setSettings(settings: AgentSettings): AgentSettings {
     const clamp = (n: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, Math.round(n) || 0));
     this.limits = {
-      ...settings,
       maxRuns: clamp(settings.maxRuns, 1, 6),
+      terminal: settings.terminal,
       // A settings sheet from before these existed sends none; the defaults fill in, as the backend's serde does.
       notifications: settings.notifications ?? "workstream",
       digestMinutes: clamp(settings.digestMinutes ?? DIGEST_MINUTES, 1, 1_440),

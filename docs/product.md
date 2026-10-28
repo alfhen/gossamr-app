@@ -2,6 +2,8 @@
 
 Gossamr is a macOS work aide for Jira and GitHub. It keeps tickets and pull requests in a local cache, so you can read the last synced work offline. Pip helps you work through it.
 
+Tickets have Board and List views. Pull requests open on GitHub; review drafts keep their own diff hunks in Gossamr. Ask Pip about what Gossamr posted; it can read the audit.
+
 ## Workstreams and agents
 
 A workstream holds one ticket or one ticketless task, its conversation with Pip, notes, agents and drafts. Tell Pip what you want done. It starts, messages and stops Claude Code agents within that workstream and wakes when an agent has something to report. You can pause a workstream or stop an agent yourself.

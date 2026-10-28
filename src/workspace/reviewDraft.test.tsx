@@ -8,11 +8,11 @@ import { DraftCard, EDIT_KEPT_NOTE, focusWhenDrawn, showPause, type DraftCardPro
 import { riskNote } from "../lib/riskyText";
 import { docFromText } from "../lib/docs";
 import { draftPreviewBody } from "./DraftPreview";
-import { usePullView, type PullDiffState } from "./pullViewStore";
+import { sameCommit, type PullDiffState } from "./reviewDiff";
 import { sample } from "./reviewSample";
 import { scriptPip } from "../backend/mockPip";
 import type { ScreenContext } from "../types";
-import { editThenPost, editThenPullView, settlesEdit, followDraft, hasMarkdown, keptOlderNote, SUMMARY, MARKDOWN_HINT, postedLine, postedWith, postLabel, postsWhat, pullViewOf, ReviewDraft, reviewEdit, reviewRisks, ReviewHunk, reviewWithPipPrompt, toggleDropped, type Held } from "./ReviewDraft";
+import { editThenPost, followDraft, hasMarkdown, keptOlderNote, MARKDOWN_HINT, postedLine, postedWith, postLabel, postsWhat, ReviewDraft, reviewEdit, reviewRisks, ReviewHunk, reviewWithPipPrompt, toggleDropped, type Held } from "./ReviewDraft";
 
 vi.mock("../components/autoHeight", async (original) => ({ ...(await original<typeof import("../components/autoHeight")>()), useAutoHeight: vi.fn() }));
 
@@ -46,7 +46,6 @@ const render = (p: Proposal, access: ReviewAccess | null, diff: PullDiffState = 
 beforeEach(() => vi.stubGlobal("localStorage", { getItem: () => null, setItem: () => {}, removeItem: () => {} }));
 afterEach(() => {
   vi.unstubAllGlobals();
-  usePullView.setState({ target: null, opener: null });
 });
 
 /** The static markup of a draft card's action bar, and whatever the card renders after it. */
@@ -73,6 +72,13 @@ function expectPinnedBar(html: string) {
 }
 
 describe("a GitHub review draft's preview", () => {
+  it("tells the reviewed commit from a moved head at either length", () => {
+    expect(sameCommit("a1b2c3d4e5f6", "a1b2c3d4e5f6a7b8")).toBe(true);
+    expect(sameCommit("A1B2C3D4E5F6A7", "a1b2c3d4e5f6")).toBe(true);
+    expect(sameCommit("a1b2c3d4e5f6", "moved1a2b3c")).toBe(false);
+    expect(sameCommit("", "a1b2c3d4")).toBe(false);
+  });
+
   it("shows the summary exactly as it will be posted, its last line included", () => {
     const summary = "Not ready yet.\n\nDrafted by a Gossamr agent reviewing CA-402; posted only after a person approved it in Gossamr.";
     const body = draftPreviewBody(draft({ intent: { ...intent, summary } }), null);
@@ -101,7 +107,7 @@ describe("a GitHub review draft's card", () => {
     expect(html).toMatch(/<textarea id="review-summary-r1"[^>]*>Gossamr review of #218 at a1b2c3d4: blocking.<\/textarea>/);
     expect(html).toMatch(/<button[^>]*>Approve<\/button>/);
     expect(html).toMatch(/<button[^>]*>Skip<\/button>/);
-    expect(html).toMatch(/<button[^>]*>Open PR view<\/button>/);
+    expect(html).toMatch(/<button[^>]*>Open on GitHub<\/button>/);
     expect(html).not.toContain("data-review-moved");
   });
 
@@ -174,16 +180,6 @@ describe("a GitHub review draft's card", () => {
     expect(followDraft(intent, { ...intent, summary: "Pip's summary.", comments: [at(42, "Pip's words.")] }, intent.summary, intent.comments.map((c) => ({ ...c, dropped: false })))).toEqual({ summary: "Pip's summary.", comments: [{ ...at(42, "Pip's words."), dropped: false }] });
   });
 
-  it("keeps what the person typed back during a save, even when it matches the draft before the save", () => {
-    // The card saved summary B and comment 42 as B; while the save was on its way the person typed both back to A.
-    const saved = { ...intent, summary: "B summary.", comments: [at(42, "B words."), intent.comments[1]] };
-    const back = intent.comments.map((c) => ({ ...c, dropped: false }));
-    const kept = followDraft(intent, saved, intent.summary, back, new Set([SUMMARY, `${intent.comments[0].path}:42:${intent.comments[0].side}`]));
-    expect(kept).toEqual({ summary: intent.summary, comments: back });
-    // Without the save's touched fields, the same values would read as untouched and take the saved draft.
-    expect(followDraft(intent, saved, intent.summary, back).summary).toBe("B summary.");
-  });
-
   it("marks a draft the person edited, and says when a revision was Pip's", () => {
     const edited = render(draft({ revisions: [{ at: "2026-10-01T10:05:00Z", note: "Edited", intent }] }), canPost);
     expect(edited).toMatch(/data-review-edited[^>]*>Edited</);
@@ -214,16 +210,11 @@ describe("a GitHub review draft's card", () => {
     expect(render(draft(), canPost)).not.toContain("data-review-maybe-posted");
   });
 
-  it("with a token that can't post, has no Post review, says why, and its Open PR view opens the pull request view with this draft", () => {
+  it("with a token that can't post, has no Post review, says why, and its Open on GitHub opens GitHub", () => {
     const html = render(draft(), cantPost);
     expect(html).not.toContain(">Post review<");
     expect(html).toContain("This GitHub token can&#x27;t post reviews on acme/webshop (it lacks write access to its pull requests).");
-    expect(html).toMatch(/<button[^>]*>Open PR view<\/button>/);
-    const open = vi.spyOn(usePullView.getState(), "open");
-    usePullView.setState({ open });
-    pullViewOf(draft())();
-    expect(open).toHaveBeenCalledWith({ connectionId: "github:sample", repo: "acme/webshop", number: 218, proposalId: "r1" });
-    expect(usePullView.getState().target).toEqual({ connectionId: "github:sample", repo: "acme/webshop", number: 218, proposalId: "r1" });
+    expect(html).toMatch(/<button[^>]*>Open on GitHub<\/button>/);
   });
 
   it("offers Discuss with Pip, which asks about this draft by its id and only to change it when asked", () => {
@@ -263,28 +254,6 @@ describe("a GitHub review draft's card", () => {
 });
 
 describe("a GitHub review draft's card in the peek (D9, D20, D21, D32)", () => {
-  it("Open PR view saves the person's unsent edit first, takes it into the store, and only then opens the view", async () => {
-    const order: string[] = [];
-    const saved = draft({ intent: { ...intent, summary: "My words." }, revisions: [{ at: "2026-10-01T10:01:00Z", note: "Edited" }] as Proposal["revisions"] });
-    const saveEdit = vi.fn(async () => (order.push("save"), saved));
-    const took = vi.fn(() => order.push("took"));
-    const open = vi.fn(() => order.push("open"));
-    await editThenPullView(draft(), { type: "githubReview", summary: "My words." }, { saveEdit, took, open });
-    expect(saveEdit).toHaveBeenCalledWith("r1", { type: "githubReview", summary: "My words." });
-    expect(took).toHaveBeenCalledWith(saved);
-    expect(order).toEqual(["save", "took", "open"]);
-    // With nothing edited, it only opens.
-    order.length = 0;
-    await editThenPullView(draft(), null, { saveEdit, took, open });
-    expect(order).toEqual(["open"]);
-    // A refused edit opens nothing, so the view never shows words the card doesn't.
-    order.length = 0;
-    await expect(editThenPullView(draft(), { type: "githubReview", summary: "" }, { saveEdit: () => Promise.reject(new Error("no")), took, open })).rejects.toThrow("no");
-    expect(order).toEqual([]);
-    // Text typed while the save was on its way stays an unsent edit, so the saved draft arriving can't overwrite it.
-    expect(settlesEdit(3, 3)).toBe(true);
-    expect(settlesEdit(3, 4)).toBe(false);
-  });
 
   it("says beside Post that it posts the inline comments and the summary as a comment review, never a verdict", () => {
     expect(postsWhat(2)).toBe("Posts 2 inline comments and the summary as a comment review (not Approve or Request changes), at the reviewed commit.");

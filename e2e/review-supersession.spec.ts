@@ -16,13 +16,8 @@ test("one review of a pull request waits at a time, except one the person edited
   const first = await reviewedDraft(page);
   const [d1] = await pendingReviewDrafts(page);
 
-  // The person edits the first review; saving it for the PR view posts nothing.
   await first.getByRole("textbox", { name: "Review summary" }).fill("Mine: the retry loop still needs a back-off.");
-  await first.getByRole("button", { name: "Open PR view" }).click();
-  const view = page.getByRole("dialog", { name: /^Pull request / });
-  await expect(view).toBeVisible();
-  await page.keyboard.press("Escape");
-  await expect(view).toHaveCount(0);
+  await first.getByRole("button", { name: "Discuss with Pip" }).click();
   await expect.poll(async () => (await reviewDrafts(page)).find((d) => d.id === d1.id)?.edited).toBe(true);
 
   // A newer review leaves the edited one standing beside it, and its card says so.

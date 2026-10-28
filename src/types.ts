@@ -817,8 +817,6 @@ export interface RunsChanged {
 export interface AgentSettings {
   maxRuns: number;
   terminal: "terminal" | "iTerm";
-  /** Draft a Jira comment on the run's ticket when it finishes with a `For Jira:` section. */
-  draftOnFinish: boolean;
   /** Which system notifications about runs to show; a backend that sent none has "workstream". */
   notifications?: NoticeMode;
   /** Minutes between digest notifications. */
@@ -1077,7 +1075,7 @@ export interface DevLink {
   confidence: number;
 }
 
-/** A pull request with the files it changes, for the in-app pull request view. Mirrors `codehost::PullDiff`. */
+/** A pull request with the files it changes, for review draft hunks. Mirrors `codehost::PullDiff`. */
 export interface PullDiff {
   change: CodeChange;
   files: ChangedFile[];

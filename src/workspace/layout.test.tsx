@@ -117,10 +117,10 @@ describe("header and rail", () => {
     Object.assign(useTabs.getInitialState(), useTabs.getState());
   });
 
-  it("puts Board, Map, List and Age in the segmented control and marks the current one", () => {
-    const out = renderToStaticMarkup(<ViewSegment view="map" onChange={vi.fn()} />);
-    expect(out.match(/<button[^>]*>(\w+)<\/button>/g)?.map((b) => b.replace(/<[^>]*>/g, ""))).toEqual(["Board", "Map", "List", "Age"]);
-    expect(out).toMatch(/aria-pressed="true"[^>]*>Map</);
+  it("puts Board and List in the segmented control and marks the current one", () => {
+    const out = renderToStaticMarkup(<ViewSegment view="board" onChange={vi.fn()} />);
+    expect(out.match(/<button[^>]*>(\w+)<\/button>/g)?.map((b) => b.replace(/<[^>]*>/g, ""))).toEqual(["Board", "List"]);
+    expect(out).toMatch(/aria-pressed="true"[^>]*>Board</);
   });
 
   it("shows the project as a title with a switcher instead of a select", () => {

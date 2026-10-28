@@ -5,8 +5,6 @@ import { ALL } from "../lib/filter";
 import type { Proposal, WorkItem, Workflow } from "../types";
 import { itemsByFilter, useWorkspace } from "../workspaceStore";
 import {
-  AGE_BUCKETS,
-  ageColumns,
   approvableTransitions,
   blockedKeys,
   boardSections,
@@ -255,15 +253,6 @@ describe("blocked and age", () => {
     expect([1, 2, 3, 5, 7, 10, 30].map(at)).toEqual([0, 1, 2, 3, 4, 5, 5]);
     expect([4.9, 6.9, 9.9].map((d) => at(d))).toEqual([2, 3, 4]);
     expect(witherOf(quiet(30, "done"), now)).toBe(0);
-  });
-
-  it("puts open items in age columns, the quietest first, and leaves finished work out", () => {
-    const list = [quiet(1), quiet(2), quiet(6), quiet(7), quiet(13), quiet(14), quiet(40), quiet(50, "done")];
-    const cols = ageColumns(list, now);
-    expect(cols.map((c) => c.bucket.id)).toEqual(AGE_BUCKETS.map((b) => b.id));
-    expect(cols.map((c) => c.items.length)).toEqual([1, 2, 2, 2]);
-    expect(cols[3].items.map((i) => i.updated)).toEqual([list[6].updated, list[5].updated]);
-    expect(cols.flatMap((c) => c.items)).not.toContain(list[7]);
   });
 });
 

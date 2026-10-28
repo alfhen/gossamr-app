@@ -4,12 +4,11 @@ import type { ContainerRef, WorkFilter } from "../types";
 import { BUILT_IN_VIEWS, projectOf, sameProject, scopeTo, showsEntry, withProject, type SavedView } from "./filters";
 import { readStored, writeStored } from "./storage";
 
-export const VIEW_MODES = ["board", "list", "map", "age"] as const;
+export const VIEW_MODES = ["board", "list"] as const;
 export type ViewMode = (typeof VIEW_MODES)[number];
-export const VIEW_LABEL: Record<ViewMode, string> = { board: "Board", list: "List", map: "Map", age: "Age" };
+export const VIEW_LABEL: Record<ViewMode, string> = { board: "Board", list: "List" };
 
-/** `sent` is "What Jira saw from me", reached from ⌘K. */
-export type Route = "workspace" | "activity" | "agents" | "settings" | "sent";
+export type Route = "workspace" | "activity" | "agents" | "settings";
 
 /** A part of Settings that something else can open directly. */
 export type SettingsSection = "watching";

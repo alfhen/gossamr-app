@@ -125,9 +125,16 @@ describe("cleaning up through the store", () => {
 });
 
 describe("the mock settings", () => {
+  it("ignores removed settings sent by an older client", async () => {
+    const backend = new MockBackend();
+    const older = { maxRuns: 2, terminal: "iTerm", draftOnFinish: false, reportResult: true, wallClockMinutes: 30, tokenCap: 100 } as const;
+    await backend.runsSetSettings(older);
+    expect(await backend.runsSettings()).toEqual({ maxRuns: 2, terminal: "iTerm", notifications: "workstream", digestMinutes: 30 });
+  });
+
   it("govern how many runs run at once: another waits for a slot", async () => {
     const backend = new MockBackend({ runs: { seed: "empty" } });
-    await backend.runsSetSettings({ maxRuns: 1, terminal: "terminal", draftOnFinish: true });
+    await backend.runsSetSettings({ maxRuns: 1, terminal: "terminal" });
     const spec = { role: "investigator", repo: "acme/storefront", clonePath: "/Users/sample/Code/storefront", base: "main", brief: "Look into it." };
     const first = backend.runs.start({ ...spec, name: "ca-401-slot-a" }, { connectionId: "mock", externalId: "CA-401", key: "CA-401" });
     backend.runs.advance(first.id);
@@ -137,8 +144,8 @@ describe("the mock settings", () => {
 
   it("clamps like the backend and returns what it kept", async () => {
     const backend = new MockBackend();
-    const saved = await backend.runsSetSettings({ maxRuns: 40, terminal: "iTerm", draftOnFinish: false });
-    expect(saved).toEqual({ maxRuns: 6, terminal: "iTerm", draftOnFinish: false, notifications: "workstream", digestMinutes: 30 });
+    const saved = await backend.runsSetSettings({ maxRuns: 40, terminal: "iTerm" });
+    expect(saved).toEqual({ maxRuns: 6, terminal: "iTerm", notifications: "workstream", digestMinutes: 30 });
     expect(await backend.runsSettings()).toEqual(saved);
   });
 });

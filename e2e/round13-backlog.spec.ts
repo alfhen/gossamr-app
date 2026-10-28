@@ -8,7 +8,6 @@ import { agentsHome, expandAllNeeds, expectToast, homeConversationRegion, homeSe
 
 const toast = (page: Page) => page.locator("[data-toast]");
 const allProjects = (page: Page) => page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "All projects" }).click();
-const palette = (page: Page) => page.getByRole("dialog", { name: "Command palette" });
 
 /** A workstream on `key`, begun from its peek. */
 async function begin(page: Page, key: string) {
@@ -110,18 +109,4 @@ test.describe("a comment draft (G26, G29)", () => {
     expect(await jiraWrites(page)).toEqual([]);
   });
 
-  test("once posted, the sent page says who drafted it once, and where it came from", async ({ page }) => {
-    test.setTimeout(120_000);
-    const draft = await commentDraft(page);
-    await draft.getByRole("button", { name: "Approve" }).click();
-    await expect.poll(async () => (await jiraWrites(page)).length).toBe(1);
-    await page.keyboard.press("ControlOrMeta+k");
-    await palette(page).getByRole("combobox").fill("what jira saw");
-    await page.keyboard.press("Enter");
-    const entry = page.locator("[data-jira-sent] [data-sent-entry]").first();
-    await expect(entry).toBeVisible();
-    await expect(entry.locator("[data-sent-edited]")).toHaveText("Pip drafted it; posted without changes.");
-    await expect(entry.locator("[data-sent-from]")).toContainText("from Pip, in the workstream");
-    await expect(entry.locator("[data-sent-from]")).not.toContainText("Gossamr");
-  });
 });

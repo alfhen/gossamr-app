@@ -185,51 +185,10 @@ export function blockedKeys(all: readonly WorkItem[]): Set<string> {
   return new Set(all.filter(test).map((i) => itemKey(i.item)));
 }
 
-export interface AgeBucket {
-  id: string;
-  label: string;
-  hint: string;
-  /** Days without an update from which an item belongs here. */
-  from: number;
-}
-
-export const AGE_BUCKETS: readonly AgeBucket[] = [
-  { id: "fresh", label: "Fresh", hint: "Updated in the last 2 days", from: 0 },
-  { id: "week", label: "This week", hint: "2 to 6 days quiet", from: 2 },
-  { id: "stale", label: "Stale", hint: "7 to 13 days quiet", from: 7 },
-  { id: "forgotten", label: "Forgotten", hint: "2 weeks or more", from: 14 },
-];
-
 export const daysQuiet = (item: WorkItem, now: Date) => Math.max(0, Math.floor((now.getTime() - new Date(item.updated).getTime()) / 86_400_000));
 
 /** Finished work doesn't dry out. */
 export const witherOf = (item: WorkItem, now: Date): WitherLevel => (item.status.category === "done" ? 0 : witherLevel(item.updated, now, WITHER_DAYS.ticket));
-
-/** Open items in columns by how long they have been quiet, the quietest first within each. */
-export function ageColumns(items: readonly WorkItem[], now: Date): { bucket: AgeBucket; items: WorkItem[] }[] {
-  const open = items.filter((i) => i.status.category !== "done");
-  return AGE_BUCKETS.map((bucket, at) => {
-    const upTo = AGE_BUCKETS[at + 1]?.from ?? Infinity;
-    const inside = open.filter((i) => daysQuiet(i, now) >= bucket.from && daysQuiet(i, now) < upTo);
-    return { bucket, items: inside.sort((a, b) => a.updated.localeCompare(b.updated)) };
-  });
-}
-
-export interface AgeBar {
-  item: WorkItem;
-  days: number;
-  /** Bar length as a percentage of the quietest item, never below a sliver so a fresh ticket still shows. */
-  width: number;
-}
-
-/** Open items, the longest quiet first, each with its bar scaled to the longest. */
-export function ageBars(items: readonly WorkItem[], now: Date): AgeBar[] {
-  const open = items.filter((i) => i.status.category !== "done").map((item) => ({ item, days: daysQuiet(item, now) }));
-  const longest = Math.max(1, ...open.map((o) => o.days));
-  return open
-    .sort((a, b) => b.days - a.days || a.item.item.key.localeCompare(b.item.item.key, undefined, { numeric: true }))
-    .map((o) => ({ ...o, width: Math.max(3, (o.days / longest) * 100) }));
-}
 
 /** What moving from `status` allows, for the workflow line's hover; unknown where the tracker reveals moves per item. */
 export function moveHint(wf: Workflow, status: StatusDef): string | undefined {

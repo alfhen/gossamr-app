@@ -109,7 +109,6 @@ async function openWatching(page: Page) {
   await expect(page.getByText("CA-401", { exact: true }).first()).toBeVisible();
 }
 
-
 test.describe("starting an agent from the peek (D1)", () => {
   test("Pip's intro says nothing is posted to Jira until the person approves", async ({ page }) => {
     await openApp(page);
@@ -237,7 +236,6 @@ test.describe("agent counts and tray (D4, D27)", () => {
 /** Whether the focused element sits inside `selector`. */
 const focusIn = (page: Page, selector: string) => page.evaluate((s) => !!document.activeElement?.closest(s), selector);
 
-
 test.describe("Your turn and Needs you name different things (D5)", () => {
   test("the Jira inbox is Your turn on the tab, the ticket pill, the Activity chip and the palette; Needs you is left to Pip home", async ({ page }) => {
     await openApp(page);
@@ -288,7 +286,6 @@ test.describe("Your turn and Needs you name different things (D5)", () => {
     await expect(activity.locator("[title]")).toHaveCount(0);
   });
 });
-
 
 test.describe("draft cards: click, Esc, a and s (D2, D7, D23, D28)", () => {
   /** Two comment drafts on CA-401 in the pane, with the peek closed again. */
@@ -428,20 +425,11 @@ test.describe("plan approval (D19)", () => {
 const RETRY = "src/consumer/retry.ts";
 
 test.describe("review card (D9, D20, D21, D32)", () => {
-  test("Open PR view shows the edit still in the comment box, and posting sends it", async ({ page }) => {
+  test("posting sends the edit in the comment box", async ({ page }) => {
     const review = await reviewedDraft(page);
     const box = review.getByRole("textbox", { name: `Comment on ${RETRY}:17` });
     const mine = "Nit: rename MAX to MAX_ATTEMPTS so it says what it limits.";
     await box.fill(mine);
-    await review.getByRole("button", { name: "Open PR view" }).click();
-    const view = page.getByRole("dialog", { name: "Pull request acme/webshop#218" });
-    await expect(view.getByRole("note", { name: `Comment on ${RETRY}:17` })).toContainText(mine);
-    // Saving the edit for the view posted nothing.
-    expect(await githubWrites(page)).toEqual([]);
-    await page.keyboard.press("Escape");
-    await expect(view).toHaveCount(0);
-    await expect(box).toHaveValue(mine);
-
     await review.getByRole("button", { name: "Approve" }).click();
     await expect.poll(async () => (await githubWrites(page)).length).toBe(1);
     const [write] = await githubWrites(page);
@@ -475,8 +463,8 @@ test.describe("review card (D9, D20, D21, D32)", () => {
   });
 });
 
-test.describe("PR view without GitHub (D17)", () => {
-  test("with no GitHub connection, the Review step's PR view says so and opens the pull request on GitHub", async ({ page }) => {
+test.describe("opening a reviewed PR (D17)", () => {
+  test("with no GitHub connection, the Review step opens the pull request on GitHub", async ({ page }) => {
     test.setTimeout(120_000);
     await toFinishedReview(page);
     await page.evaluate(() => {
@@ -486,10 +474,9 @@ test.describe("PR view without GitHub (D17)", () => {
     });
     await openAgents(page);
     await selectWorkstream(page, "CA-401");
-    const open = stepChip(page, "review").getByRole("button", { name: /^PR view of acme\/storefront#\d+$/ });
-    const name = (await open.getAttribute("aria-label"))!.replace(/^PR view of /, "");
+    const open = stepChip(page, "review").getByRole("button", { name: /^Open acme\/storefront#\d+ on GitHub$/ });
+    const name = (await open.getAttribute("aria-label"))!.replace(/^Open | on GitHub$/g, "");
     await open.click();
-    await expectToast(page, "Connect GitHub to see this pull request in Gossamr. Opened it on GitHub instead.");
     const [repo, number] = name.split("#");
     expect(await page.evaluate(() => (window as unknown as { __opened: string[] }).__opened)).toEqual([`https://github.com/${repo}/pull/${number}`]);
     await expect(page.getByRole("dialog", { name: /^Pull request / })).toHaveCount(0);

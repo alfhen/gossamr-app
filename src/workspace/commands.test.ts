@@ -10,7 +10,7 @@ const items = await new MockBackend().cacheSearch({ type: "and", filters: [] });
 
 const actions = () => {
   const a = Object.fromEntries(
-    ["goToProject", "openSavedView", "setView", "addFilter", "clearFilters", "setTheme", "openSettings", "manageProjects", "watch", "openTicket", "openActivity", "openDrafts", "newTab", "newTicket", "togglePip", "showNeedsYou", "openAgentSafety", "startWorkstream", "closeWorkstream", "jumpToItem", "askPip", "openAgents", "openWorkstream", "askPipToPlan", "startWorkstreamOn", "openJiraSent"].map((k) => [k, vi.fn()]),
+    ["goToProject", "openSavedView", "setView", "addFilter", "clearFilters", "setTheme", "openSettings", "manageProjects", "watch", "openTicket", "openActivity", "openDrafts", "newTab", "newTicket", "togglePip", "showNeedsYou", "openAgentSafety", "startWorkstream", "closeWorkstream", "jumpToItem", "askPip", "openAgents", "openWorkstream", "askPipToPlan", "startWorkstreamOn"].map((k) => [k, vi.fn()]),
   );
   return a as unknown as CommandActions & Record<keyof CommandActions, ReturnType<typeof vi.fn>>;
 };
@@ -22,6 +22,11 @@ describe("palette commands", () => {
 
   it("lists everything for an empty query", () => {
     expect(rankCommands(commands, "  ")).toHaveLength(commands.length);
+  });
+
+  it("offers only Board and List layouts and no Jira-sent page", () => {
+    expect(commands.filter((command) => command.group === "Layout").map((command) => command.id)).toEqual(["mode:board", "mode:list"]);
+    expect(commands.some((command) => command.id === "app:jira-sent")).toBe(false);
   });
 
   it("finds projects by name or key", () => {
@@ -39,10 +44,10 @@ describe("palette commands", () => {
   });
 
   it("switches view, theme and settings", () => {
-    rankCommands(commands, "show map")[0].run();
+    rankCommands(commands, "show board")[0].run();
     rankCommands(commands, "theme dark")[0].run();
     rankCommands(commands, "settings")[0].run();
-    expect(a.setView).toHaveBeenCalledWith("map");
+    expect(a.setView).toHaveBeenCalledWith("board");
     expect(a.setTheme).toHaveBeenCalledWith("dark");
     expect(a.openSettings).toHaveBeenCalled();
   });
@@ -369,20 +374,5 @@ describe("Agents in the palette", () => {
     const on = (workstream: boolean) => buildCommands(containers, BUILT_IN_VIEWS, actions(), { ...ctx, ticket: { key: "CA-401", workstream } });
     expect(on(false).find((c) => c.id === "workstream:start")?.label).toBe("Ask Pip about CA-401");
     expect(on(true).find((c) => c.id === "workstream:start")?.label).toBe("Open the workstream on CA-401");
-  });
-});
-
-describe("the habits in the palette", () => {
-  const ctx = { project: null, view: null, unreadActivity: 0 };
-
-  it("offers 'What Jira saw from me' always, and finds it by what it shows", () => {
-    const a = actions();
-    const all = buildCommands(containers, BUILT_IN_VIEWS, a, ctx);
-    const sent = all.find((c) => c.id === "app:jira-sent")!;
-    expect(sent).toMatchObject({ group: "Go to", label: "What Jira saw from me" });
-    expect(rankCommands(all, "jira saw")[0].id).toBe("app:jira-sent");
-    expect(rankCommands(all, "posted")[0].id).toBe("app:jira-sent");
-    sent.run();
-    expect(a.openJiraSent).toHaveBeenCalled();
   });
 });
