@@ -4,9 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MockBackend } from "../backend/mock";
 import type { Run, RunState, WorkstreamView } from "../types";
 import { AgentCard, RunLabel, onActivate } from "./AgentCard";
-import { AgentRow } from "./AgentRow";
 import { FailureNext, OpenInTerminal } from "./AgentParts";
-import { AgentsIntro } from "./AgentsEmpty";
 import { AgentsScreen, StopAll, keyAction, type AgentsActions, type AgentsScreenProps } from "./AgentsView";
 import { NO_FILTERS } from "./agentsLogic";
 
@@ -35,8 +33,6 @@ const on = (): AgentsActions => ({
   filter: vi.fn(),
   clearFilters: vi.fn(),
   stop: vi.fn(),
-  setIntro: vi.fn(),
-  dismissIntro: vi.fn(),
   retry: vi.fn(),
   fix: vi.fn(),
   retryLaunch: vi.fn(),
@@ -54,7 +50,6 @@ const screen = (over: Partial<AgentsScreenProps> = {}) =>
       error={null}
       filters={NO_FILTERS}
       selectedId={null}
-      introShown={false}
       stopping={false}
       opened={new Set()}
       now={NOW}
@@ -304,34 +299,10 @@ describe("cards", () => {
 });
 
 describe("empty, first-run and errors", () => {
-  it("says there are no agents once the explainer is dismissed", () => {
+  it("says there are no agents in one line, and teaches nothing", () => {
     const out = screen({ runs: [] });
-    expect(out).toContain("No agents yet");
-    expect(out).toContain("When Pip starts one it appears here");
-    expect(out).toContain("You can stop any of them.");
-    expect(out).not.toMatch(/approve/i);
-  });
-
-  it("shows the explainer instead of the empty state on a first visit", () => {
-    const out = screen({ runs: [], introShown: true });
-    expect(out).toContain("Agents are Claude Code sessions that work in the background");
-    expect(out).not.toContain("No agents yet");
-  });
-
-  it("states the limits honestly in the explainer", () => {
-    const out = renderToStaticMarkup(<AgentsIntro onDismiss={vi.fn()} />).replace(/&#x27;/g, "'");
-    for (const phrase of [
-      "Pip starts an agent when you ask, and tells you about any it starts on its own.",
-      "Agents run with your own Claude Code settings: anything your Claude can do, they can do.",
-      "They are told not to write to Jira, but that is a request, not a lock.",
-      "They work in their own worktree of your clone, so your own files and branch are not touched.",
-      "Stop any run from its details, or Stop all above.",
-      "Agents you start from Terminal are not shown here, and Gossamr's runs also show in your own",
-      "claude agents",
-    ]) {
-      expect(out).toContain(phrase);
-    }
-    expect(out).not.toMatch(/never write to Jira/i);
+    expect(out).toContain("No agents yet. Ask Pip to start one.");
+    expect(out).not.toMatch(/approve|How agents work|Claude Code/i);
   });
 
   it("waits quietly for the first read", () => {
@@ -464,7 +435,7 @@ describe("the rail", () => {
 });
 
 describe("a run in Needs you", () => {
-  it("shows an 'In Needs you' pill on its card and its row, which opens the need rather than the run", () => {
+  it("shows an 'In Needs you' pill on its card, which opens the need rather than the run", () => {
     const asking = run("needsAnswer");
     const open = vi.fn();
     const onOpen = vi.fn();
@@ -472,8 +443,6 @@ describe("a run in Needs you", () => {
     expect(withPill).toContain("data-in-needs-you");
     expect(withPill).toContain(">In Needs you<");
     expect(card(asking)).not.toContain("In Needs you");
-    const row = renderToStaticMarkup(<AgentRow run={asking} now={NOW} selected={false} position={1} total={1} ticketTitle={null} onOpen={onOpen} onAttach={vi.fn()} onOpenNeed={open} failure={{ opened: false, on: { act: vi.fn(), retry: vi.fn(), copied: vi.fn() } }} />);
-    expect(row).toContain(">In Needs you<");
   });
 
   it("is told only for the runs Needs you lists, and the header counts Needs you's one count", () => {
@@ -498,13 +467,11 @@ describe("motion", () => {
 describe("opening a run", () => {
   const props = (onOpen: () => void) => ({ run: run("done"), now: NOW, selected: false, position: 1, total: 1, ticketTitle: null, onOpen, onAttach: vi.fn(), failure: { opened: false, on: { act: vi.fn(), retry: vi.fn(), copied: vi.fn() } } });
 
-  it("opens the run when a card or a row is clicked, not only when Enter is pressed", () => {
+  it("opens the run when a card is clicked, not only when Enter is pressed", () => {
     const open = vi.fn();
     const card = AgentCard(props(open)) as { props: { onClick: () => void } };
     card.props.onClick();
-    const row = AgentRow(props(open)) as { props: { onClick: () => void } };
-    row.props.onClick();
-    expect(open).toHaveBeenCalledTimes(2);
+    expect(open).toHaveBeenCalledTimes(1);
   });
 });
 

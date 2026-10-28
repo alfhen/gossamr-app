@@ -22,7 +22,7 @@ let backend: MockBackend;
 
 beforeEach(() => {
   vi.stubGlobal("localStorage", memory());
-  useRuns.setState({ dismissed: new Set(), filters: NO_FILTERS, introOpen: false, stopping: false });
+  useRuns.setState({ dismissed: new Set(), filters: NO_FILTERS, stopping: false });
   useToasts.getState().clear();
   useTabs.getState().setRoute("workspace");
   backend = new MockBackend();

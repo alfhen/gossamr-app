@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isTypingTarget, needsKey, nextRegion, regionStep, wrapTab, type KeyEventLike, type NeedsKeyState } from "./workKeys";
+import { needsKey, nextRegion, regionStep, wrapTab, type KeyEventLike, type NeedsKeyState } from "./workKeys";
 
 const key = (k: string, over: Partial<KeyEventLike> = {}): KeyEventLike => ({ key: k, metaKey: false, ctrlKey: false, altKey: false, shiftKey: false, target: null, ...over });
 const at = (over: Partial<NeedsKeyState> = {}): NeedsKeyState => ({ overlay: false, count: 4, at: 1, kind: "group", ...over });
@@ -36,14 +36,6 @@ describe("needsKey: plain keys stay out of fields and overlays", () => {
     expect(needsKey(key("z", { ctrlKey: true, altKey: true }), at())).toBeNull();
     expect(needsKey(key("z", { ctrlKey: true, target: el("TEXTAREA") }), at())).toBeNull();
     expect(needsKey(key("z", { ctrlKey: true }), at({ overlay: true }))).toBeNull();
-  });
-
-  it("tells typing targets apart", () => {
-    expect(isTypingTarget(el("INPUT"))).toBe(true);
-    expect(isTypingTarget(el("textarea"))).toBe(true);
-    expect(isTypingTarget(el("SPAN", true))).toBe(true);
-    expect(isTypingTarget(el("BUTTON"))).toBe(false);
-    expect(isTypingTarget(null)).toBe(false);
   });
 });
 

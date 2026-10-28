@@ -31,7 +31,7 @@ async function homeWorkstream(page: Page) {
   const ws = (await workstreamEvents(page))[0].workstreamId;
   await openAgents(page);
   await selectWorkstream(page, "CA-401");
-  await expect(homeConversation(page)).toHaveText(/^Workstream: CA-401 .* · Intake$/);
+  await expect(homeConversation(page)).toHaveText(/^Workstream: CA-401 .+$/);
   return ws;
 }
 

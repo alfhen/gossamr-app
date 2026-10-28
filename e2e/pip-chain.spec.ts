@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { advanceRuns, askPip, detailsOf, openApp, paneSettled as settled, peekSheet, peekTicket, pipConversation, pipPane, startWorkstream, stepOf, surfacePullRequests } from "./support/app";
+import { advanceRuns, askPip, detailsOf, openApp, paneSettled as settled, peekSheet, peekTicket, pipPane, startWorkstream, stepOf, surfacePullRequests } from "./support/app";
 
 // The rest of the refusal of a review whose build's pull request isn't found yet, as WAITING_FOR_PR_HINT in src-tauri/src/inbox/workstreams.rs.
 const NO_PR_YET = "that build has no pull request yet. Gossamr asked GitHub for it";
@@ -47,13 +47,13 @@ const runCount = async (page: Page) => (await runIds(page)).length;
 /** The Agents view's cards; Pip's strip of agents shows runs too, and only the view counts. */
 const agentCards = (page: Page) => page.locator('main article[data-run-id]:not(aside[aria-label="Pip"] *)');
 
-/** The stage chip of CA-401's workstream on its peek, at the head of its agents. */
+/** The status of CA-401's workstream on its peek, at the head of its agents. */
 async function stageChip(page: Page) {
   if (!(await peekSheet(page).isVisible())) {
     await page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "All projects" }).click();
     await peekTicket(page, "CA-401");
   }
-  return peekSheet(page).locator("#peek-agents [data-stage]");
+  return peekSheet(page).locator("#peek-agents [data-header-status]");
 }
 
 test("in one workstream Pip starts an investigator, a triager, a planner, a builder that opens a draft pull request, and a reviewer of it, each with its own brief", async ({ page }) => {
@@ -86,18 +86,16 @@ test("in one workstream Pip starts an investigator, a triager, a planner, a buil
 
   // Finished, its draft pull request not found yet: the workstream waits for it and the review is refused.
   const chip = await stageChip(page);
-  await expect(chip).toHaveText("Build · waiting for PR");
-  await expect(chip).toHaveAttribute("data-waiting-for-pr", /.+/);
-  await expect(pipConversation(page)).toHaveText(/^Workstream: CA-401 .* · Build · waiting for PR$/);
+  await expect(chip).toContainText("waiting for PR");
+  await expect(chip.locator("[data-waiting-for-pr]")).toHaveAttribute("data-waiting-for-pr", /.+/);
   await ask(page, "review it");
   await expect(pipPane(page)).toContainText(`I couldn't start it: ${NO_PR_YET}`);
   expect(await runCount(page)).toBe(before);
 
   // The code host shows it, as a sync would find it: the wait ends, and nothing started on its own.
   expect(await surfacePullRequests(page)).toBe(true);
-  await expect(chip).toHaveText("Build");
-  await expect(chip).not.toHaveAttribute("data-waiting-for-pr");
-  await expect(pipConversation(page)).toHaveText(/^Workstream: CA-401 .* · Build$/);
+  await expect(chip).not.toContainText("waiting for PR");
+  await expect(chip.locator("[data-waiting-for-pr]")).toHaveCount(0);
   expect(await runCount(page)).toBe(before);
 
   // The review checks out the build's pull request.
@@ -105,7 +103,7 @@ test("in one workstream Pip starts an investigator, a triager, a planner, a buil
   await expect(await told(page, review)).toContainText("then checks out pull request");
   await closeSheet(page);
   await advanceRuns(page, 3);
-  await expect(await stageChip(page)).toHaveText("Review");
+  await expect(await stageChip(page)).toContainText("Needs you");
 
   // The report is prose: the card and the sheet carry no verdict.
   await page.getByRole("button", { name: /^Work(,|$)/ }).click();

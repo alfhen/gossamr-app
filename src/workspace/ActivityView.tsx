@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { itemKey } from "../lib/filter";
+import { pressed, stepOf } from "../lib/keys";
 import { relativeTime } from "../lib/views";
 import type { FeedEntry } from "../types";
 import { nameOf, useWorkspace } from "../workspaceStore";
@@ -148,8 +149,8 @@ export function ActivityView() {
   useEffect(() => {
     const onKey = (ev: globalThis.KeyboardEvent) => {
       const target = ev.target as HTMLElement;
-      if (ev.metaKey || ev.ctrlKey || ev.altKey || target.closest?.("input, textarea, select, [contenteditable], [role=dialog], #peek-sheet")) return;
-      const delta = ev.key === "j" ? 1 : ev.key === "k" ? -1 : 0;
+      if (target.closest?.("[role=dialog], #peek-sheet")) return;
+      const delta = stepOf(ev, "inbox");
       if (delta) {
         const articles = [...(list.current?.querySelectorAll<HTMLElement>("article[id^='feed-']") ?? [])];
         if (!articles.length) return;
@@ -157,7 +158,7 @@ export function ActivityView() {
         const to = articles[stepIndex(articles.indexOf(target.closest("article") as HTMLElement), delta, articles.length)];
         to?.focus();
         to?.scrollIntoView({ block: "nearest" });
-      } else if (ev.key === "m") {
+      } else if (pressed(ev, "inbox", "markRead")) {
         const id = target.closest?.("article")?.id.replace(/^feed-/, "");
         const entry = shownRef.current.find((e) => e.id === id);
         if (entry?.unread) {

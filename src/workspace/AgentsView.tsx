@@ -9,7 +9,7 @@ import { Icon } from "./AgentIcons";
 import { ArchivedSection } from "./ArchivedSection";
 import { ClearFinished } from "./ClearFinished";
 import { AgentsBanners } from "./AgentsBanners";
-import { AgentsEmpty, AgentsIntro, NoMatch } from "./AgentsEmpty";
+import { AgentsEmpty, NoMatch } from "./AgentsEmpty";
 import { agentGroups, stepRun, slotWaiters, stopAllText, stoppable, needsScope, type AgentFilters, type NeedsScope, type WorkstreamGroup } from "./agentsLogic";
 import { useFooterHeight } from "./CanvasFooter";
 import { failureAction } from "./failureActions";
@@ -26,13 +26,13 @@ import { agentKey } from "./agentKeys";
 import { ClosedWorkstreams, DecisionScope, NeedsBadge, WorkstreamHeadExtras, WorkstreamTools, rowTitle } from "./AgentsHome";
 import { WorkstreamSheet } from "./WorkstreamSheet";
 import { arm, confirmArmed, disarm, keyPlan, openNeed, openRunOrNeed } from "./needsActions";
-import { isTypingTarget } from "./workKeys";
+import { isTypingTarget, keysOf, pressed } from "../lib/keys";
+import { ShortcutHint } from "./ShortcutHint";
 import { undoLatest } from "./undo";
 import { NO_WORKSTREAM_ID, useWorkView } from "./workViewStore";
 import { currentNeeds, useNeedsYou } from "./useNeeds";
 import { needsIn } from "../lib/needs";
 
-const KBD = "font-sans text-[11px] rounded border border-ws-sep2 bg-ws-bar px-1";
 const BUTTON = "inline-flex items-center gap-1.5 rounded-md border border-ws-sep2 px-2.5 py-px text-sm leading-normal whitespace-nowrap hover:bg-ws-hover disabled:cursor-not-allowed disabled:opacity-45";
 
 export { useNow };
@@ -46,11 +46,12 @@ export type KeyAction = { type: "select"; id: string } | { type: "clear" };
 
 /** What j, k and Esc do on the list; null when the key is not ours or there is nothing to do. */
 export function keyAction(key: string, current: string | null, order: readonly string[]): KeyAction | null {
-  if (key === "j" || key === "k") {
-    const id = stepRun(order, current, key === "j" ? 1 : -1);
+  const [next, prev, back] = [keysOf("list", "next")[0], keysOf("list", "prev")[0], keysOf("list", "back")[0]];
+  if (key === next || key === prev) {
+    const id = stepRun(order, current, key === next ? 1 : -1);
     return id ? { type: "select", id } : null;
   }
-  return key === "Escape" && current ? { type: "clear" } : null;
+  return key === back && current ? { type: "clear" } : null;
 }
 
 /** Stop all, with `count` agents working or waiting on the person and `waiting` approved runs waiting for a slot. */
@@ -107,8 +108,6 @@ export interface AgentsActions {
   clearFilters(): void;
   stop(id: string): void;
   archive?(id: string): void;
-  setIntro(open: boolean): void;
-  dismissIntro(): void;
   retry(): void;
   /** The step a failed launch needs: Terminal, or the install page. */
   fix(id: string, act: FailureAct): void;
@@ -139,19 +138,6 @@ function NeedsFilter({ needsYou, filters, on }: { needsYou: number; filters: Age
           {needsYou}
         </span>
         {needsYou === 0 && <span className="sr-only">Nothing needs you.</span>}
-      </button>
-    </div>
-  );
-}
-
-function Toolbar({ introShown, tools, on }: { introShown: boolean; tools?: ReactNode; on: AgentsActions }) {
-  return (
-    <div className="flex flex-wrap items-center gap-2 border-b border-ws-sep px-6 py-1.5">
-      {tools}
-      <span className="flex-1" />
-      <button type="button" aria-pressed={introShown} onClick={() => on.setIntro(!introShown)} className="inline-flex items-center gap-1.5 rounded-md px-2 py-px text-sm text-ws-ink2 hover:bg-ws-hover">
-        <Icon name="info" />
-        How agents work
       </button>
     </div>
   );
@@ -201,7 +187,6 @@ export interface AgentsScreenProps {
   error: string | null;
   filters: AgentFilters;
   selectedId: string | null;
-  introShown: boolean;
   /** The open workstreams, for their titles and where they stand. */
   workstreams?: readonly WorkstreamView[];
   /** The workstream whose detail is open, if any. */
@@ -243,7 +228,7 @@ export interface AgentsScreenProps {
 }
 
 /** The whole screen as a function of its state; `AgentsView` connects it to the stores. */
-export function AgentsScreen({ runs, status, error, filters, selectedId, introShown, workstreams = NO_WORKSTREAMS, openWorkstream = null, needed, tools, closedSection, side, stopping, clear, archivedSection, opened, needsYou, inNeeds, asking, now, ticketTitle, draftReady, breakdownReady, descriptionReady, reviewThis, reviewOf, on, onOrder }: AgentsScreenProps) {
+export function AgentsScreen({ runs, status, error, filters, selectedId, workstreams = NO_WORKSTREAMS, openWorkstream = null, needed, tools, closedSection, side, stopping, clear, archivedSection, opened, needsYou, inNeeds, asking, now, ticketTitle, draftReady, breakdownReady, descriptionReady, reviewThis, reviewOf, on, onOrder }: AgentsScreenProps) {
   const footer = useFooterHeight();
   // While the pointer is over the list or focus is in it, cards keep their places; the normal sort applies once both leave.
   const [hovered, setHovered] = useState(false);
@@ -333,7 +318,7 @@ export function AgentsScreen({ runs, status, error, filters, selectedId, introSh
           {clear}
           <StopAll count={stoppable(runs).length} waiting={slotWaiters(runs).length} busy={stopping} onStop={on.stopAll} />
         </header>
-        <Toolbar introShown={introShown} tools={tools} on={on} />
+        {tools && <div className="flex flex-wrap items-center gap-2 border-b border-ws-sep px-6 py-1.5">{tools}</div>}
         <div className="min-h-0 flex-1 overflow-y-auto pt-5 pr-[max(24px,var(--ws-launcher-gutter,0px))] pb-[max(80px,var(--ws-launcher-clear,0px))] pl-6">
           <div
             data-agents-list
@@ -345,13 +330,12 @@ export function AgentsScreen({ runs, status, error, filters, selectedId, introSh
             className="grid gap-5.5"
           >
             <AgentsBanners loadError={status === "error" ? error : null} onRetry={on.retry} />
-            {introShown && <AgentsIntro onDismiss={on.dismissIntro} />}
             {waiting ? (
               <p role="status" className="m-0 py-10 text-center text-ws-ink3">
                 Loading agents…
               </p>
             ) : runs.length === 0 && shown === 0 ? (
-              !introShown && status !== "error" && <AgentsEmpty />
+              status !== "error" && <AgentsEmpty />
             ) : shown === 0 ? (
               <NoMatch hidden={runs.length} onClear={on.clearFilters} />
             ) : (
@@ -366,14 +350,7 @@ export function AgentsScreen({ runs, status, error, filters, selectedId, introSh
           </div>
         </div>
         <footer ref={footer} className="@container flex h-8 shrink-0 items-center gap-4 border-t border-ws-sep bg-ws-win px-6 text-xs text-ws-ink3">
-          <p className="m-0 min-w-0 flex-1 truncate">
-            <kbd className={KBD}>j</kbd> <kbd className={KBD}>k</kbd> move · <kbd className={KBD}>↵</kbd> open · <kbd className={KBD}>n</kbd> ask Pip · <kbd className={KBD}>Esc</kbd> clear
-            <span className="hidden @xl:inline">
-              {" "}
-              · <kbd className={KBD}>F6</kbd> regions · <kbd className={KBD}>⌘K</kbd> jump · <kbd className={KBD}>⌘J</kbd> Pip
-            </span>
-          </p>
-          <span className="hidden shrink-0 @3xl:inline">Agents use your own Claude settings and account</span>
+          <ShortcutHint on="work" />
         </footer>
     </div>
     {side}
@@ -405,8 +382,6 @@ const actions: AgentsActions = {
   clearFilters: () => useRuns.getState().clearFilters(),
   stop: (id) => void useRuns.getState().stop(id),
   archive: (id) => void useRuns.getState().archive([id]),
-  setIntro: (open) => useRuns.getState().setIntroOpen(open),
-  dismissIntro: () => useRuns.getState().setIntroOpen(false),
   retry: () => useRuns.getState().recover(),
   fix: failureAction,
   retryLaunch: (id) => void useRuns.getState().retryLaunch(id),
@@ -425,7 +400,6 @@ export function AgentsView() {
   const error = useRuns((s) => s.error);
   const filters = useRuns((s) => s.filters);
   const selectedId = useRuns((s) => s.selectedId);
-  const introOpen = useRuns((s) => s.introOpen);
   const stopping = useRuns((s) => s.stopping);
   const opened = useRuns((s) => s.terminalOpened);
   const needs = useNeedsYou();
@@ -456,13 +430,13 @@ export function AgentsView() {
     const onKey = (ev: KeyboardEvent) => {
       const target = ev.target as HTMLElement;
       // Ctrl+Z undoes the newest offer (or says there is none), unless the person is typing or something sits over the page.
-      if ((ev.metaKey || ev.ctrlKey) && !ev.altKey && !ev.shiftKey && ev.key.toLowerCase() === "z") {
-        if (ev.defaultPrevented || isTypingTarget(target) || target.closest?.("[role=dialog], #peek-sheet")) return;
+      if (pressed(ev, "work", "undo")) {
+        if (ev.defaultPrevented || target.closest?.("[role=dialog], #peek-sheet")) return;
         ev.preventDefault();
         return undoLatest();
       }
-      if (ev.defaultPrevented || ev.metaKey || ev.ctrlKey || ev.altKey || target.closest?.("input, textarea, select, [contenteditable], [role=dialog], #peek-sheet, #workstream-sheet")) return;
-      if (ev.key === "n") {
+      if (ev.defaultPrevented || ev.metaKey || ev.ctrlKey || ev.altKey || isTypingTarget(target) || target.closest?.("[role=dialog], #peek-sheet, #workstream-sheet")) return;
+      if (pressed(ev, "work", "ask")) {
         if (useRuns.getState().sheet) return;
         ev.preventDefault();
         actions.askPip();
@@ -517,7 +491,6 @@ export function AgentsView() {
         error={error}
         filters={filters}
         selectedId={selectedId}
-        introShown={introOpen}
         workstreams={workstreams}
         openWorkstream={openWorkstream}
         needed={needed}

@@ -132,7 +132,7 @@ test("the palette: 'Ask Pip to plan CA-401' lands on its workstream and Pip star
 
   await palette(page, "plan ca-401", /^Ask Pip to plan CA-401/);
   await expect(workstreamGroup(page, "CA-401")).toHaveAttribute("aria-current", "true");
-  await expect(homeConversation(page)).toHaveText(/^Workstream: CA-401 .* · Intake$/);
+  await expect(homeConversation(page)).toHaveText(/^Workstream: CA-401 .+$/);
   await expect(homeConversationRegion(page).getByText("plan CA-401", { exact: true })).toBeVisible();
   await settled(page);
   await expect.poll(async () => (await mockRuns(page)).map((r) => r.step)).toEqual(["plan"]);

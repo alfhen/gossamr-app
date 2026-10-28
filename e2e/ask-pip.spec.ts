@@ -8,7 +8,7 @@ test("Ask Pip on a ticket starts an investigation agent, which shows on the Work
   await startWorkstream(page, "CA-401");
   await openAgents(page);
   await selectWorkstream(page, "CA-401");
-  await expect(homeConversation(page)).toHaveText(/^Workstream: CA-401 .* · Intake$/);
+  await expect(homeConversation(page)).toHaveText(/^Workstream: CA-401 .+$/);
   await askPip(page, "investigate this");
   await homeSettled(page);
 
@@ -26,7 +26,7 @@ test("a question from Pip waits in Needs you and clears when it is answered in t
   await startWorkstream(page, "CA-401");
   await openAgents(page);
   await selectWorkstream(page, "CA-401");
-  await expect(homeConversation(page)).toHaveText(/^Workstream: CA-401 .* · Intake$/);
+  await expect(homeConversation(page)).toHaveText(/^Workstream: CA-401 .+$/);
   await askPip(page, "ask me which database to use");
   await homeSettled(page);
 

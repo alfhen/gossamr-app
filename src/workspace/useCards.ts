@@ -80,7 +80,7 @@ export function useCards(items: readonly WorkItem[], order: readonly string[]) {
       setMenuFor(null);
       await useWorkspace.getState().draftTransition(item.item, to);
       useTabs.getState().select(itemKey(item.item));
-      say(`Drafted ${item.item.key} → ${to.name}. Nothing changes until you approve.`);
+      say(`Drafted ${item.item.key} → ${to.name}.`);
     });
 
   const decide = (id: string, what: "approve" | "skip") =>

@@ -74,15 +74,6 @@ export const WAITING_FOR_PR = "waiting for PR";
 /** Said instead of the blocking verdict once the person posted the review to GitHub. */
 export const REVIEW_POSTED = "Review posted";
 
-/**
- * The stage as its chip says it: the role's name, or "Build · waiting for PR" while a build waits for its pull request.
- * A review's verdict is not part of the stage.
- */
-export function stageText(stage: WorkstreamStage, waitingForPr?: string | null): string {
-  if (waitingForPr) return `${STAGE_LABEL[stage]} · ${WAITING_FOR_PR}`;
-  return STAGE_LABEL[stage];
-}
-
 export const STAGE_LABEL: Record<WorkstreamStage, string> = {
   intake: "Intake",
   investigate: "Investigate",

@@ -1,3 +1,5 @@
+import { SHORTCUTS } from "../lib/keys";
+
 /**
  * One keyboard model for every list that holds things to act on: the Needs you list, draft cards (in the conversation, the
  * step rail, Activity's Drafts and the ticket peek), the Agents list, a workstream's timeline. The same key means the same thing wherever it is
@@ -21,17 +23,8 @@ interface Binding {
   keys: readonly string[];
 }
 
-/** Every binding, in the order the footer names them. */
-export const KEY_BINDINGS: readonly Binding[] = [
-  { intent: "next", keys: ["j", "ArrowDown"] },
-  { intent: "prev", keys: ["k", "ArrowUp"] },
-  { intent: "open", keys: ["Enter", "o"] },
-  { intent: "approve", keys: ["a"] },
-  { intent: "edit", keys: ["e"] },
-  { intent: "dismiss", keys: ["d"] },
-  { intent: "skip", keys: ["s"] },
-  { intent: "back", keys: ["Escape"] },
-];
+/** Every binding, in the order the footer names them: the list scope of the one table (`lib/keys.ts`). */
+export const KEY_BINDINGS: readonly Binding[] = SHORTCUTS.filter((s) => s.scope === "list").map((s) => ({ intent: s.id as KeyIntent, keys: s.keys }));
 
 const BY_KEY = new Map(KEY_BINDINGS.flatMap((b) => b.keys.map((k) => [k, b.intent] as const)));
 

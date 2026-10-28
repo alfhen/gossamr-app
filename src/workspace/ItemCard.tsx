@@ -1,5 +1,6 @@
 import { useEffect, useRef, type DragEvent, type KeyboardEvent, type MouseEvent } from "react";
 import { Cobweb } from "../components/Cobweb";
+import { pressed } from "../lib/keys";
 import { witherClass, type WitherLevel } from "../lib/views";
 import type { CodeSummary } from "../lib/devLinks";
 import type { StatusDef, WorkItem, WorkPriority } from "../types";
@@ -76,7 +77,7 @@ export function ItemCard(p: ItemCardProps) {
     if (ev.key === "Enter" || ev.key === " ") {
       ev.preventDefault();
       p.onSelect(selectHow(ev));
-    } else if (ev.key === "m" || ev.key === "ContextMenu") {
+    } else if (pressed(ev, "canvas", "menu")) {
       ev.preventDefault();
       p.onMenu(true);
     }

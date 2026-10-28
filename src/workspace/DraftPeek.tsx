@@ -193,10 +193,11 @@ export function DraftPeekView({ proposal: p, fields, containers, people, working
           ) : (
             <>
               {open && revision && <p className="m-0 font-semibold text-ws-pip">↻ {revision.note}</p>}
-              <p id={`draft-reassure-${p.id}`} className="m-0 text-ws-ink2">
-                <b className="font-semibold text-ws-ink">Nothing is created until you choose Create {fields.kind}.</b>
-                {open && place && place.total > 1 ? " Either way, the next draft opens." : ""}
-              </p>
+              {open && place && place.total > 1 && (
+                <p className="m-0 text-ws-ink2">
+                  Either way, the next draft opens.
+                </p>
+              )}
             </>
           )}
         </div>
@@ -215,7 +216,6 @@ export function DraftPeekView({ proposal: p, fields, containers, people, working
               disabled={working || state.type === "applying" || !fields.title.trim()}
               onClick={onCreate}
               aria-keyshortcuts="Meta+Enter Control+Enter"
-              aria-describedby={`draft-reassure-${p.id}`}
               className="inline-flex items-center gap-2 rounded-lg bg-ws-pip px-4 py-2 text-base font-semibold text-ws-on-pip shadow-sm hover:brightness-110 disabled:opacity-45"
             >
               {working || state.type === "applying" ? (

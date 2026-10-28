@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { askPip, openApp, openPip, peekSheet, peekTicket, pipConversation, pipPane, startWorkstream, showWorkspace } from "./support/app";
+import { askPip, openAgents, openApp, openPip, peekSheet, peekTicket, pipConversation, pipPane, selectWorkstream, startWorkstream, showWorkspace, workstreamGroup } from "./support/app";
 
 /** Where the sample backend keeps workstreams (MOCK_WORKSTREAMS_KEY in src/backend/mockWorkstreams.ts). */
 const STORE = "gossamr-mock-workstreams";
@@ -19,14 +19,14 @@ async function askAndWait(page: Page, question: string) {
   await expect(pipPane(page).getByRole("button", { name: "Stop" })).toHaveCount(0);
 }
 
-test("Ask Pip in the peek opens its own conversation in Pip, at intake", async ({ page }) => {
+test("Ask Pip in the peek opens its own conversation in Pip", async ({ page }) => {
   await openApp(page);
   await startWorkstream(page, "CA-401");
-  await expect(pipConversation(page)).toHaveText(/^Workstream: CA-401 .+ · Intake$/);
+  await expect(pipConversation(page)).toHaveText(/^Workstream: CA-401 .+$/);
   const peek = peekSheet(page);
-  await expect(peek.getByText("Workstream · Intake")).toBeVisible();
+  await expect(peek.locator("[data-workstream] [data-status]").first()).toBeVisible();
   await expect(peek.locator("#peek-agents").getByText(/^Workstream: CA-401 /)).toBeVisible();
-  await expect(peek.locator("#peek-agents [data-stage=intake]")).toHaveText("Intake");
+  await expect(peek.locator("#peek-agents [data-header-status] [data-status]")).toBeVisible();
   expect((await kept(page)).workstreams?.map((w) => w.itemKey)).toEqual(["CA-401"]);
 
   // Another ticket has none: the pane goes back to General.
@@ -68,7 +68,7 @@ test("the palette asks Pip to plan the peeked ticket, which opens its workstream
   await palette.getByText("Ask Pip to plan CA-402", { exact: true }).click();
   await expect(palette).toHaveCount(0);
   // The plan shows its workstream on Agents, and Pip starts the plan agent at once, so the stage may be past Intake.
-  await expect(pipConversation(page)).toHaveText(/^Workstream: CA-402 .+ · \w+$/);
+  await expect(pipConversation(page)).toHaveText(/^Workstream: CA-402 .+$/);
   await expect(page.getByRole("region", { name: /^CA-402 / })).toBeVisible();
 
   // On a ticket that has one, the palette offers to open it instead.
@@ -104,11 +104,11 @@ test("a workstream's conversation is apart from General, and both survive a relo
   await expect(pipPane(page).getByText(WORKSTREAM_QUESTION, { exact: true })).toHaveCount(0);
 
   await peekTicket(page, "CA-401");
-  await expect(pipConversation(page)).toHaveText(/^Workstream: CA-401 .+ · Intake$/);
+  await expect(pipConversation(page)).toHaveText(/^Workstream: CA-401 .+$/);
   await expect(pipPane(page).getByText(WORKSTREAM_QUESTION, { exact: true })).toBeVisible();
   await expect(pipPane(page).getByText(ANSWER)).toBeVisible();
   await expect(pipPane(page).getByText(GENERAL_QUESTION, { exact: true })).toHaveCount(0);
-  await expect(peekSheet(page).getByText("Workstream · Intake")).toBeVisible();
+  await expect(peekSheet(page).locator("[data-workstream] [data-status]").first()).toBeVisible();
 });
 
 type Kept = { workstreams?: { id: string; pausedReason: string | null }[]; events?: { workstreamId: string; actor: string; action: string; detail: string | null }[] };
@@ -133,4 +133,19 @@ test("a reload or a restart leaves an open workstream as it was: nothing is paus
   await peekSheet(again).getByRole("button", { name: "Open in Pip" }).click();
   await expect(pipConversation(again)).toHaveText(/^Workstream: CA-401 /);
   await askAndWait(again, WORKSTREAM_QUESTION);
+});
+
+test("the close confirm opens on Keep, so Enter twice never closes the workstream", async ({ page }) => {
+  test.setTimeout(90_000);
+  await openApp(page, "runs=empty");
+  await startWorkstream(page, "CA-401");
+  await openAgents(page);
+  await selectWorkstream(page, "CA-401");
+  const controls = pipPane(page).locator("[data-workstream-controls]");
+  await controls.getByRole("button", { name: "Close…" }).click();
+  const ask = controls.getByRole("group", { name: "Close this workstream" });
+  await expect(ask.getByRole("button", { name: "Keep" })).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(ask).toHaveCount(0);
+  await expect(workstreamGroup(page, "CA-401")).toHaveCount(1);
 });

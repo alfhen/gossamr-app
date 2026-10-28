@@ -267,7 +267,7 @@ export function BoardView({ tab, items }: CanvasProps) {
           </section>
         ))}
       </div>
-      <CanvasFooter cards={cards} view="board" />
+      <CanvasFooter cards={cards} />
     </div>
   );
 }

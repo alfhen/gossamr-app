@@ -26,7 +26,7 @@ import { useRuns } from "./runsStore";
 import { useTabs } from "./tabsStore";
 import { PeekNotice } from "./WatchNotices";
 import { WorkDocView } from "./WorkDocView";
-import { stageText } from "../lib/workstreamStage";
+import { HeaderStatus } from "./StatusPill";
 import { focusPip, useItemWorkstream, useWorkstreams } from "./workstreamsStore";
 import { useToasts } from "./toasts";
 
@@ -427,11 +427,11 @@ function Composer({ item, disabled, reply, onCancelReply }: { item: WorkItem; di
         onSubmit={() => void submit()}
         ticketKey={item.item.key}
         people={people}
-        placeholder={reply ? "Write your reply. It becomes a draft you approve." : "Write a comment. It becomes a draft you approve."}
+        placeholder={reply ? "Write your reply." : "Write a comment."}
       />
       <div className="flex items-center gap-2 px-2 pb-2">
         <span role="status" className="pl-1 text-sm text-ws-ink3">
-          {problem ?? (sent ? "Drafted above. Nothing is posted until you approve." : "")}
+          {problem ?? (sent ? "Drafted above." : "")}
         </span>
         <button type="button" disabled={!ready || disabled} onClick={() => void submit()} className="ml-auto rounded-md bg-ws-pip px-2.5 py-1 text-sm font-semibold text-ws-on-pip disabled:opacity-45">
           {reply ? "Draft reply" : "Draft comment"}
@@ -459,7 +459,7 @@ export function WorkstreamControl({ workstream, onOpen, confirmingClose = false,
   return (
     <span data-workstream={workstream.workstream.id} className="inline-flex items-center gap-2 rounded-md bg-ws-pip-soft px-2.5 py-0.5 text-sm text-ws-pip">
       <span title={workstream.workstream.title}>
-        <span aria-hidden>◆ </span>Workstream · <b data-stage={workstream.stage} data-waiting-for-pr={workstream.waitingForPr || undefined}>{stageText(workstream.stage, workstream.waitingForPr)}</b>
+        <span aria-hidden>◆ </span>Workstream · <HeaderStatus view={workstream} />
       </span>
       <button type="button" onClick={onOpen} className="font-semibold underline">
         Open in Pip
@@ -707,7 +707,7 @@ function OpenPeek({ item, motion, wide, onWide, onMotionEnd }: { item: WorkItem 
     setMenuOpen(false);
     try {
       await useWorkspace.getState().draftTransition(ref, to);
-      setNotice(`Drafted ${ref.key} → ${to.name}. Nothing changes until you approve.`);
+      setNotice(`Drafted ${ref.key} → ${to.name}.`);
     } catch (e) {
       setNotice(e instanceof Error ? e.message : String(e));
     }

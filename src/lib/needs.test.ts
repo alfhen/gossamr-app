@@ -143,8 +143,8 @@ describe("needs: every kind", () => {
     const permission = list.find((n) => n.kind === "permission")!;
     expect(permission.why).toBe("R2 wants to run `git push origin ca-401`.");
     expect(permission.ifYouWait).toBe("The run stays paused; nothing else in CA-401 moves.");
-    expect(list.find((n) => n.kind === "draft" && n.target.type === "draft" && n.target.id === "d1")!.ifYouWait).toBe("Nothing is written to Jira until you approve it.");
-    expect(list.find((n) => n.kind === "review")!.ifYouWait).toBe("Nothing is posted to GitHub until you choose.");
+    expect(list.find((n) => n.kind === "draft" && n.target.type === "draft" && n.target.id === "d1")!.ifYouWait).toBe("It stays here until you decide.");
+    expect(list.find((n) => n.kind === "review")!.ifYouWait).toBe("It stays here until you decide.");
     expect(list.find((n) => n.kind === "question")!.why).toBe("R1 asks: “Which cache?”");
   });
 
@@ -249,7 +249,7 @@ describe("needs: a triage's description update", () => {
     const own = draft("d-own", rewrite("CA-401"), 1, { workstream: "ws-1" });
     const list = needs(input({ workstreams: [view("ws-1", "CA-401", { runs: ["t-1", "p-1"] })], runs: [triage, plan], proposals: [note, approved, own] }));
     const by = (key: string) => list.find((n) => n.key === key)!;
-    expect(by("draft:d-note")).toMatchObject({ group: "approve", kind: "description", batchable: false, ifYouWait: "Nothing is written to Jira until you approve it." });
+    expect(by("draft:d-note")).toMatchObject({ group: "approve", kind: "description", batchable: false, ifYouWait: "It stays here until you decide." });
     expect(by("draft:d-plan")).toMatchObject({ group: "decide", kind: "plan", title: "Approve the plan" });
     expect(by("draft:d-own")).toMatchObject({ group: "decide", kind: "description" });
     expect(safeToBatch(note)).toBe(false);

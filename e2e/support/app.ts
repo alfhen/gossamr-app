@@ -57,7 +57,7 @@ export async function peekTicket(page: Page, key: string) {
 export async function startWorkstream(page: Page, key: string) {
   await peekTicket(page, key);
   await peekSheet(page).locator("[data-ask-pip]").click();
-  await expect(pipConversation(page)).toHaveText(new RegExp(`^Workstream: ${key} .* · Intake$`));
+  await expect(pipConversation(page)).toHaveText(new RegExp(`^Workstream: ${key} .+$`));
 }
 
 /**

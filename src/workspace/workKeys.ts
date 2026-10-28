@@ -1,3 +1,4 @@
+import { isTypingTarget, pressed } from "../lib/keys";
 import { PIP_INPUT_ID } from "./draftKeys";
 import { keyIntent } from "./keyMap";
 
@@ -49,15 +50,6 @@ export interface KeyEventLike {
   target: unknown;
 }
 
-/** Whether `target` takes typing: an input, a textarea, a select or anything editable. Plain keys are never shortcuts there. */
-export function isTypingTarget(target: unknown): boolean {
-  if (!target || typeof target !== "object") return false;
-  const el = target as { tagName?: unknown; isContentEditable?: unknown; closest?: (s: string) => unknown };
-  if (el.isContentEditable === true) return true;
-  if (typeof el.tagName === "string" && /^(INPUT|TEXTAREA|SELECT)$/i.test(el.tagName)) return true;
-  return typeof el.closest === "function" && !!el.closest("[contenteditable]:not([contenteditable=false])");
-}
-
 /** Whether F6 may leave `target`: Pip's composer, or a single-line input, which F6 types nothing in. */
 function f6Leaves(target: unknown, key: string): boolean {
   if (!isTypingTarget(target)) return true;
@@ -71,7 +63,7 @@ function f6Leaves(target: unknown, key: string): boolean {
  * types in a field or while something is open over the page.
  */
 export function needsKey(ev: KeyEventLike, state: NeedsKeyState): NeedsKeyAction | null {
-  if ((ev.metaKey || ev.ctrlKey) && !ev.altKey && !ev.shiftKey && ev.key.toLowerCase() === "z") return state.overlay || isTypingTarget(ev.target) ? null : { type: "undo" };
+  if (pressed(ev, "work", "undo")) return state.overlay ? null : { type: "undo" };
   if (ev.metaKey || ev.ctrlKey || ev.altKey || ev.shiftKey) return null;
   if (state.overlay || isTypingTarget(ev.target)) return null;
   // Inside the open decision the same keys act on the need it shows.
@@ -149,7 +141,7 @@ export function nextRegion(present: readonly WorkspaceRegion[], current: Workspa
 
 /** F6 forward, Shift+F6 back, and nothing for any other key, in the workspace layout. */
 export function regionStep(ev: Pick<KeyEventLike, "key" | "metaKey" | "ctrlKey" | "altKey" | "shiftKey" | "target">): 1 | -1 | 0 {
-  if (ev.key !== "F6" || ev.metaKey || ev.ctrlKey || ev.altKey) return 0;
+  if (!pressed(ev, "app", "regions")) return 0;
   if (!f6Leaves(ev.target, ev.key)) return 0;
   return ev.shiftKey ? -1 : 1;
 }

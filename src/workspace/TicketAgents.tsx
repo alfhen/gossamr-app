@@ -1,5 +1,5 @@
 import { itemKey } from "../lib/filter";
-import { stageText } from "../lib/workstreamStage";
+import { HeaderStatus } from "./StatusPill";
 import type { ItemRef, Run, WorkstreamView } from "../types";
 import { RunLabel } from "./AgentCard";
 import { StateChip } from "./AgentParts";
@@ -20,9 +20,7 @@ export function WorkstreamLine({ workstream, onOpen }: { workstream: WorkstreamV
         ◆
       </span>
       <span className="min-w-0 truncate">Workstream: {workstream.workstream.title}</span>
-      <span className="shrink-0 rounded-full bg-ws-pip-soft px-2 text-xs font-semibold text-ws-pip" data-stage={workstream.stage} data-waiting-for-pr={workstream.waitingForPr || undefined}>
-        {stageText(workstream.stage, workstream.waitingForPr)}
-      </span>
+      <HeaderStatus view={workstream} />
       {onOpen && (
         <button
           type="button"

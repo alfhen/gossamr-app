@@ -527,7 +527,7 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
               </span>
             )}{" "}
             <FromRun proposal={p} onOpen={onOpenRun ? () => onOpenRun((p.origin as { runId: string }).runId) : undefined} />
-            {youEdited ? ". You edited it; read it before you approve." : ". The words are the agent's. Read and edit them before you approve."}
+            {youEdited ? ". You edited it." : ". The words are the agent's."}
           </p>
         )}
         {p.state.type === "retired" && <p className="m-0 text-sm text-ws-ink3">{p.state.reason}</p>}

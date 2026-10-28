@@ -28,17 +28,17 @@ test("Pip starts an Investigate run in a workstream; the run and its result draf
   await startInvestigation(page);
 
   const agents = peekAgents(page);
-  const stageChip = agents.locator("[data-workstream] [data-stage]");
+  const status = agents.locator("[data-workstream] [data-header-status] [data-status]");
   await expect(agents.getByText(/^Workstream: CA-401 /)).toBeVisible();
   await expect(agents.locator('[data-run-label="R1"]')).toHaveText("R1");
-  await expect(stageChip).toHaveText("Investigate");
-  await expect(pipConversation(page)).toHaveText(/^Workstream: CA-401 .+ · Investigate$/);
+  await expect(status).toHaveText("Running");
+  await expect(pipConversation(page)).toHaveText(/^Workstream: CA-401 .+$/);
 
   // Queued, launching, working, done.
   await advanceRuns(page, 3);
   await expect(agents.locator("button[data-state=done]")).toBeVisible();
-  // A finished investigation leaves the workstream at Investigate; only a finished review or verify is Done.
-  await expect(stageChip).toHaveText("Investigate");
+  // The finished investigation left a draft, which waits on the person; only a finished review or verify is Done.
+  await expect(status).toHaveText("Needs you");
 
   const result = peekSheet(page).locator("#peek-drafts").locator('article:has([data-created-by="agent"])');
   await expect(result.first()).toBeVisible();
@@ -49,14 +49,13 @@ test("Pip starts an Investigate run in a workstream; the run and its result draf
   // A triage Pip starts joins the workstream as R2 and moves the stage on as it is queued.
   await askPip(page, "triage this");
   await settled(page);
-  await expect(pipConversation(page)).toHaveText(/^Workstream: CA-401 .+ · Triage$/);
+  await expect(pipConversation(page)).toHaveText(/^Workstream: CA-401 .+$/);
   if (!(await peekSheet(page).isVisible())) await peekTicket(page, "CA-401");
-  await expect(stageChip).toHaveText("Triage");
+  await expect(status).toHaveText("Needs you");
   await expect(agents.locator('[data-run-label="R2"]')).toBeVisible();
   await advanceRuns(page, 3);
   await expect(agents.locator("button[data-state=done]")).toHaveCount(2);
-  // A finished triage is further along than a finished investigation.
-  await expect(stageChip).toHaveText("Triage");
+  await expect(status).toHaveText("Needs you");
 });
 
 test("after Pip starts a run in the workstream's conversation, the Agents view keeps that conversation and names the run R1", async ({ page }) => {
@@ -66,7 +65,7 @@ test("after Pip starts a run in the workstream's conversation, the Agents view k
   await selectWorkstream(page, "CA-401");
 
   // The pane is still the workstream's, and the run shows R1 and the id to type elsewhere.
-  await expect(pipConversation(page)).toHaveText(/^Workstream: CA-401 .+ · Investigate$/);
+  await expect(pipConversation(page)).toHaveText(/^Workstream: CA-401 .+$/);
   const card = agentRuns(page).first();
   const ref = (await card.locator("[data-run-ref]").getAttribute("data-run-ref"))!;
   const runId = await card.getAttribute("data-run-id");
@@ -79,7 +78,7 @@ test("after Pip starts a run in the workstream's conversation, the Agents view k
   const sheet = page.getByRole("dialog", { name: "Agent run" });
   await expect(sheet.locator('[data-run-label="R1"]')).toBeVisible();
   await expect(sheet.locator(`[data-run-ref="${ref}"]`)).toBeVisible();
-  await expect(pipConversation(page)).toHaveText(/^Workstream: CA-401 .+ · Investigate$/);
+  await expect(pipConversation(page)).toHaveText(/^Workstream: CA-401 .+$/);
 });
 
 test("Work groups runs by workstream, with R1, and the rest under No workstream", async ({ page }) => {

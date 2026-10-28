@@ -162,7 +162,7 @@ test("the pane keeps its header and input", async ({ page }) => {
   await expect(pane.getByText("powered by Claude")).toBeVisible();
   await expect(pane.getByRole("button", { name: "Close Pip" })).toBeVisible();
   await expect(pane.locator('header button[aria-controls="pip-seeing"]')).toBeVisible();
-  await expect(pane.getByText("I follow along as you move around.")).toBeVisible();
+  await expect(pane.getByText("Ask me about a ticket, or tell me what to show or draft.")).toBeVisible();
   await expect(page.locator(PIP_INPUT)).toBeFocused();
   await expect(page.locator(PIP_INPUT)).toHaveAttribute("aria-label", "Ask Pip");
   await expect(pane.getByRole("button", { name: "Ask" })).toBeDisabled();

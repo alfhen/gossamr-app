@@ -1,7 +1,6 @@
 import { useEffect } from "react";
 import { itemKey } from "../lib/filter";
 import { needsIn } from "../lib/needs";
-import { stageText } from "../lib/workstreamStage";
 import type { WorkstreamView } from "../types";
 import { Btn, SheetFrame, pickerOpen } from "./AgentSheet";
 import { WorkstreamHeadExtras, rowTitle } from "./AgentsHome";
@@ -10,7 +9,7 @@ import { popoverOpen } from "./Popover";
 import { usePrefs } from "./prefs";
 import { useRuns } from "./runsStore";
 import { useTabs } from "./tabsStore";
-import { isTypingTarget } from "./workKeys";
+import { isTypingTarget } from "../lib/keys";
 import { StepRail } from "./StepRail";
 import { openTicketByKey } from "./jump";
 import { NO_WORKSTREAM_ID, useWorkView, type WorkViewFocus } from "./workViewStore";
@@ -75,9 +74,6 @@ function Body({ view }: { view: WorkstreamView }) {
     <>
       <div className="flex flex-wrap items-center gap-2">
         <WorkstreamHeadExtras view={view} />
-        <span data-stage className="text-sm text-ws-ink3">
-          {stageText(view.stage, view.waitingForPr)}
-        </span>
         <span className="flex-1" />
         {ws.itemKey && (
           <Btn tone="ghost" data-workstream-ticket onClick={() => openTicket(ws.itemKey!)}>

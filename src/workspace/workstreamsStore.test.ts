@@ -74,9 +74,8 @@ describe("the workstreams store", () => {
     expect(useWorkstreams.getState().forItem("CA-401", "jira")).toBeNull();
     expect(useWorkstreams.getState().forItem("CA-402")).toBeNull();
     expect(usePrefs.getState().pipOpen).toBe(true);
-    expect(conversationTitle(started)).toMatch(/^Workstream: CA-401 .+ · Intake$/);
+    expect(conversationTitle(started)).toMatch(/^Workstream: CA-401 [^·]+$/);
     expect(conversationTitle(null)).toBe("General");
-    expect(conversationTitle({ ...started!, stage: "build", waitingForPr: "r4" })).toMatch(/^Workstream: CA-401 .+ · Build · waiting for PR$/);
   });
 
   it("refreshes when the backend says a workstream changed, and is cleared with the conversations", async () => {

@@ -1,3 +1,4 @@
+import { showOf } from "../lib/keys";
 import { itemKey, YOUR_TURN } from "../lib/filter";
 import type { ContainerRef, Intent, WorkContainer, WorkFilter, WorkItem, WorkstreamView } from "../types";
 import type { SavedView } from "./filters";
@@ -159,7 +160,7 @@ export function buildCommands(containers: readonly WorkContainer[], savedViews: 
         ]
       : []),
     { id: "app:tab", group: "App", icon: "▫", label: "New tab", hint: "Workspace", run: a.newTab },
-    { id: "app:pip", group: "App", icon: "✦", label: "Toggle Pip", hint: "⌘J", keywords: "assistant chat claude", run: a.togglePip },
+    { id: "app:pip", group: "App", icon: "✦", label: "Toggle Pip", hint: showOf("app", "pip"), keywords: "assistant chat claude", run: a.togglePip },
   ];
 }
 

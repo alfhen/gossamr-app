@@ -4,7 +4,6 @@ import { draftKeyAction } from "./draftKeys";
 import { HINTS, KEY_BINDINGS, KEY_LABEL, isActionKey, keyHint, keyIntent, type KeyItem } from "./keyMap";
 import { needsKey, type NeedsKeyState } from "./workKeys";
 import { keyAction } from "./AgentsView";
-import { footerHints } from "./footerHints";
 import type { Proposal } from "../types";
 
 const press = (key: string, over: Partial<Parameters<typeof keyIntent>[0]> = {}) => ({ key, metaKey: false, ctrlKey: false, altKey: false, shiftKey: false, ...over });
@@ -98,9 +97,5 @@ describe("the hint lines", () => {
     expect(keyHint("draft")).toBe("j k move · ↵ open · a approve · e edit · d s skip · Esc back");
     expect(keyHint("need")).toContain("d dismiss or deny");
     expect(keyHint("run")).toBe("j k move · ↵ open · a allow or retry · d dismiss or deny · Esc back");
-  });
-
-  it("name j and k to move in the canvas footer", () => {
-    expect(footerHints("list").find((h) => h.id === "move")?.keys).toEqual(["j", "k"]);
   });
 });

@@ -11,6 +11,7 @@ import { useActivity } from "./activityStore";
 import { CANVASES } from "./canvases";
 import { useStepKeys } from "./browse";
 import { itemKey, usesCode, withoutCode } from "../lib/filter";
+import { pressed } from "../lib/keys";
 import { workspaceTicketLinks } from "./jump";
 import { workConnections } from "./domains";
 import { FilterBar } from "./FilterBar";
@@ -57,7 +58,7 @@ function Canvas() {
     const waiting = !connection || connection.syncing || (!connection.lastSyncAt && !connection.error);
     return (
       <div role="status" className="grid h-full place-items-center p-10 text-center text-ws-ink3">
-        <p>{waiting ? "Fetching your tickets for the first time. This can take a minute." : "No tickets are cached yet. Use Sync now in Settings to try again."}</p>
+        <p>{waiting ? "Fetching your tickets…" : "No tickets cached yet. Sync from Settings."}</p>
       </div>
     );
   }
@@ -140,12 +141,11 @@ function useRegionKeys() {
 function useGlobalKeys() {
   useEffect(() => {
     const onKey = (ev: KeyboardEvent) => {
-      if (!(ev.metaKey || ev.ctrlKey) || ev.altKey || ev.shiftKey) return;
       const prefs = usePrefs.getState();
-      if (ev.key === "k") {
+      if (pressed(ev, "app", "jump")) {
         ev.preventDefault();
         prefs.setPaletteOpen(!prefs.paletteOpen);
-      } else if (ev.key === "j") {
+      } else if (pressed(ev, "app", "pip")) {
         ev.preventDefault();
         togglePip();
       }

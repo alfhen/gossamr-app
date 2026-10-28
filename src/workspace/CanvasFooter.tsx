@@ -2,7 +2,6 @@ import { useLayoutEffect, useRef } from "react";
 import { BulkBar } from "./BulkBar";
 import { NoticeLine } from "./Notice";
 import { ShortcutHint } from "./ShortcutHint";
-import type { ViewMode } from "./tabsStore";
 import type { useCards } from "./useCards";
 
 export const FOOTER_HEIGHT_VAR = "--ws-footer-h";
@@ -27,7 +26,7 @@ export function useFooterHeight() {
 }
 
 /** The bar every canvas ends with: notice, bulk actions, then the key hints on a fixed-height line. */
-export function CanvasFooter({ cards, view }: { cards: ReturnType<typeof useCards>; view: ViewMode }) {
+export function CanvasFooter({ cards }: { cards: ReturnType<typeof useCards> }) {
   const ref = useFooterHeight();
   return (
     <footer ref={ref} className="@container shrink-0 border-t border-ws-sep bg-ws-win">
@@ -46,7 +45,7 @@ export function CanvasFooter({ cards, view }: { cards: ReturnType<typeof useCard
         />
       )}
       <div className="flex h-8 items-center gap-4 px-6 text-xs text-ws-ink3">
-        <ShortcutHint view={view} />
+        <ShortcutHint on="canvas" />
       </div>
     </footer>
   );

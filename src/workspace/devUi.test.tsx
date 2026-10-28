@@ -79,7 +79,7 @@ describe("the Development section", () => {
   it("shows a branch without a pull request with a hint and no expander", () => {
     const out = view({ links: [link(change({ kind: "branch", externalId: "branch:acme/webshop:feature/CA-209", number: null, title: "feature/CA-209_cache-warmup", state: "open", checks: "none", review: "none", additions: null, deletions: null, changedFiles: null }))] });
     expect(out).toContain("Branch");
-    expect(out).toContain("No pull request yet. Open one on GitHub");
+    expect(out).toContain("No pull request yet.");
     expect(out).not.toContain("aria-expanded");
   });
 

@@ -109,7 +109,7 @@ describe("a draft made from a run", () => {
     expect(html).toMatch(/From <button[^>]*title="Open the run this draft came from"[^>]*>the CA-412 run<\/button>/);
     expect(html).not.toContain("1000a000");
     expect(html).not.toContain("font-mono");
-    expect(html).toContain("The words are the agent&#x27;s. Read and edit them before you approve.");
+    expect(html).toContain("The words are the agent&#x27;s.");
     expect(html).toContain("Approve");
     expect(html).toContain("Edit");
   });

@@ -396,7 +396,7 @@ test.describe("workstream start", () => {
     await startWorkstream(page, "CA-401");
     await openAgents(page);
     await selectWorkstream(page, "CA-401");
-    await expect(homeConversation(page)).toHaveText(/^Workstream: CA-401 .* · Intake$/);
+    await expect(homeConversation(page)).toHaveText(/^Workstream: CA-401 .+$/);
 
     // The same intro as in the pane.
     const region = homeConversationRegion(page);

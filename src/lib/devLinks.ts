@@ -141,7 +141,7 @@ const PROVENANCE: Record<LinkSource, string> = {
 
 export const provenanceHint = (source: LinkSource) => PROVENANCE[source];
 
-export const NO_PR_HINT = "No pull request yet. Open one on GitHub to get it reviewed.";
+export const NO_PR_HINT = "No pull request yet.";
 
 const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? "" : "s"}`;
 

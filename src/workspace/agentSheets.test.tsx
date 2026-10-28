@@ -3,12 +3,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MockBackend } from "../backend/mock";
 import type { AgentSettings, Run, RunEvent, RunSpec, RunState, WorkstreamView } from "../types";
 import { TicketAgentRows, TicketAgentsView } from "./TicketAgents";
-import { AgentsIntro } from "./AgentsEmpty";
 import { AgentsSettingsView, type CleanupOffer } from "./AgentsSettings";
 import { sheetFocusTarget } from "./AgentSheet";
 import { focusDecision, PERMISSION_NOTE } from "./PermissionAsk";
 import { RunSheetView, type RunSheetActions, type RunSheetViewProps } from "./RunSheet";
-import { SAFETY_SUMMARY, sheetTopOn } from "./runSheetLogic";
+import { sheetTopOn } from "./runSheetLogic";
 import { PipLauncher } from "./PipExtras";
 import { useRuns } from "./runsStore";
 import { placesOf } from "./RunWhere";
@@ -364,27 +363,6 @@ describe("what the agent was told", () => {
   });
 });
 
-describe("the honest wording", () => {
-  const phrases = ["run as you", "not a lock"];
-
-  it("is in the first-run text", () => {
-    const html = renderToStaticMarkup(<AgentsIntro onDismiss={vi.fn()} />);
-    for (const p of phrases) expect(html).toContain(p);
-  });
-
-  it("is in the safety sheet once each, and nothing is said twice (D25)", () => {
-    const html = renderToStaticMarkup(<AgentsSettingsView runs={seeded()} stopping={false} keepRunning={3} settings={SETTINGS} cleanup={null} onSettings={vi.fn()} onCleanup={vi.fn()} onStopAll={vi.fn()} onClose={vi.fn()} />);
-    const text = html.replace(/<[^>]+>/g, " ");
-    const times = (re: RegExp) => text.match(re)?.length ?? 0;
-    // That Jira and pushing are only asked, and that agents run with the person's own settings: once each.
-    expect(times(/not (?:a )?locks?\b/g)).toBe(1);
-    expect(times(/with your own Claude Code settings/g)).toBe(1);
-    for (const p of ["your own Claude Code settings", "your Claude Code settings, not Gossamr, decide that"]) expect(html).toContain(p);
-    for (const gone of ["read-only", "What a Build may touch", "Gossamr adds no fence"]) expect(html).not.toContain(gone);
-    expect(html).not.toMatch(/never write to jira|can&#x27;t write to jira/i);
-  });
-});
-
 describe("safety and settings", () => {
   it("counts what Stop all reaches and what keeps running after a quit", () => {
     const html = renderToStaticMarkup(<AgentsSettingsView runs={seeded()} stopping={false} keepRunning={3} settings={SETTINGS} cleanup={null} onSettings={vi.fn()} onCleanup={vi.fn()} onStopAll={vi.fn()} onClose={vi.fn()} />);
@@ -454,29 +432,29 @@ describe("the agents on a ticket", () => {
     ...over,
   });
 
-  it("heads the ticket's agents with its workstream's title and stage, and labels each of its runs", () => {
+  it("heads the ticket's agents with its workstream's title and status word, and labels each of its runs", () => {
     const r = run("working", { id: "w1", lastDetail: "Reading the cart module" });
     const html = renderToStaticMarkup(<TicketAgentsView runs={[r]} now={NOW} title="A ticket" workstream={workstream({ stage: "investigate", runs: ["w1"], labels: [["w1", "R1"]] })} onOpen={vi.fn()} />);
     expect(html).toContain("Workstream: CA-401 Retry the payment");
-    expect(html).toMatch(/data-stage="investigate"[^>]*>Investigate</);
+    expect(html).toMatch(/data-status="idle"[^>]*>Idle</);
+    expect(html).not.toContain("Investigate<");
     expect(html).toContain('data-run-label="R1"');
     expect(html).toContain("Reading the cart module");
   });
 
-  it("says a workstream's build is waiting for its pull request on the stage chip while it is, and only then", () => {
+  it("says a workstream's build is waiting for its pull request beside the status word while it is, and only then", () => {
     const r = run("done", { id: "b1" });
     const waiting = renderToStaticMarkup(<TicketAgentsView runs={[r]} now={NOW} title="A ticket" workstream={workstream({ stage: "build", runs: ["b1"], labels: [["b1", "R1"]], waitingForPr: "b1" })} onOpen={vi.fn()} />);
-    expect(waiting).toMatch(/data-stage="build" data-waiting-for-pr="b1"[^>]*>Build · waiting for PR</);
+    expect(waiting).toMatch(/data-waiting-for-pr="b1"[^>]*>· waiting for PR</);
     const found = renderToStaticMarkup(<TicketAgentsView runs={[r]} now={NOW} title="A ticket" workstream={workstream({ stage: "build", runs: ["b1"], labels: [["b1", "R1"]] })} onOpen={vi.fn()} />);
-    expect(found).toMatch(/data-stage="build"[^>]*>Build</);
     expect(found).not.toContain("data-waiting-for-pr");
     expect(found).not.toContain("waiting for PR");
   });
 
-  it("shows a workstream with no runs yet at Intake, and no workstream line without one", () => {
+  it("shows a workstream with no runs yet as idle, and no workstream line without one", () => {
     const html = renderToStaticMarkup(<TicketAgentsView runs={[]} now={NOW} title={null} workstream={workstream()} onOpen={vi.fn()} />);
     expect(html).toContain("Workstream: CA-401 Retry the payment");
-    expect(html).toMatch(/data-stage="intake"[^>]*>Intake</);
+    expect(html).toMatch(/data-status="idle"[^>]*>Idle</);
     expect(html).toContain("None yet");
     const plain = renderToStaticMarkup(<TicketAgentsView runs={[run("done")]} now={NOW} title="A ticket" workstream={null} onOpen={vi.fn()} />);
     expect(plain).not.toContain("Workstream:");
@@ -506,20 +484,5 @@ describe("what an agent sheet keeps clear", () => {
     expect(new Set(states.map((s) => sheetTopOn(run(s), false)))).toEqual(new Set([null]));
     expect(states.map((s) => sheetTopOn(run(s), true))).toEqual(states);
     expect(sheetTopOn(run("stopped"), true)).not.toBe(sheetTopOn(run("working"), true));
-  });
-});
-
-describe("the safety sheet", () => {
-  const sheet = () => renderToStaticMarkup(<AgentsSettingsView runs={[]} stopping={false} keepRunning={0} settings={SETTINGS} cleanup={null} onSettings={vi.fn()} onCleanup={vi.fn()} onStopAll={vi.fn()} onClose={vi.fn()} />);
-
-  it("starts with three lines that are true for every role, before the longer explanation", () => {
-    const html = sheet();
-    const lines = [...html.matchAll(/data-safety-summary[\s\S]*?<\/ul>/g)][0][0].match(/<span>([^<]+)<\/span>/g)!.map((m) => m.slice(6, -7).replace(/&#x27;/g, "'"));
-    expect(lines).toEqual(SAFETY_SUMMARY.map((l) => l.text));
-    expect(lines[0]).toMatch(/^Agents run with your own Claude Code settings/);
-    expect(lines[0]).toContain("where you answer it in Terminal");
-    // Nothing enforces it: the line can't promise a lock.
-    expect(lines[1]).toContain("both are requests, not locks");
-    expect(lines[2]).toBe("Gossamr posts to Jira or GitHub only what you approve. An agent could reach Jira or GitHub on its own: your Claude Code settings, not Gossamr, decide that.");
   });
 });

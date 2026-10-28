@@ -54,16 +54,16 @@ async function toFinishedReview(page: Page, before: () => Promise<void> = async 
   return review;
 }
 
-/** The stage chip of CA-401's workstream at the head of its agents on its peek. */
+/** The status word of CA-401's workstream at the head of its agents on its peek. */
 async function peekStage(page: Page) {
   if (!(await peekSheet(page).isVisible())) {
     await page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "All projects" }).click();
     await peekTicket(page, "CA-401");
   }
-  return peekSheet(page).locator("#peek-agents [data-stage]");
+  return peekSheet(page).locator("#peek-agents [data-header-status] [data-status]");
 }
 
-/** What Pip home says of CA-401's workstream: its row's stage and status, and the conversation's header once it is opened. */
+/** What Work says of CA-401's workstream: its row, and the conversation's header once it is opened. */
 async function homeStage(page: Page) {
   await openAgents(page);
   const row = workstreamGroup(page, "CA-401");
@@ -71,27 +71,27 @@ async function homeStage(page: Page) {
   return { row, header: homeConversation(page) };
 }
 
-test.describe("workstream stage (D3, D10, D18)", () => {
-  test("a finished review reads Review on the peek, the pane, the Work row and its header", async ({ page }) => {
+test.describe("workstream status (D3, D10, D18)", () => {
+  test("a finished review reads Needs you, not Done, on the peek, the pane, the Work row and its header", async ({ page }) => {
     test.setTimeout(120_000);
     // Nothing sends the build back: the review is where the workstream stops.
     await toFinishedReview(page);
     expect((await mockRuns(page)).filter((r) => r.step === "build").map((r) => r.state)).toEqual(["done"]);
-    await expect(await peekStage(page)).toHaveText("Review");
-    await expect(pipConversation(page)).toHaveText(/^Workstream: CA-401 .* · Review$/);
+    await expect(await peekStage(page)).toHaveText("Needs you");
+    await expect(pipPane(page).locator("[data-header-status] [data-status]")).toHaveText("Needs you");
     const { row, header } = await homeStage(page);
     await expect(row).not.toContainText("Done");
-    await expect(header).toHaveText(/^Workstream: CA-401 .* · Review$/);
+    await expect(header.locator("xpath=..").locator("[data-header-status] [data-status]")).toHaveText("Needs you");
     expect((await jiraWrites(page)).map((w) => w.type)).toEqual(["rewrite"]);
   });
 
-  test("a review whose report says it passes stays on Review", async ({ page }) => {
+  test("a review whose report says it passes leaves the workstream on Needs you", async ({ page }) => {
     test.setTimeout(120_000);
     await toFinishedReview(page, () => scriptNextRun(page, "review", { verdict: "pass" }));
     await expect(wakes(page).last()).toContainText("finished");
-    await expect(await peekStage(page)).toHaveText("Review");
+    await expect(await peekStage(page)).toHaveText("Needs you");
     const { header } = await homeStage(page);
-    await expect(header).toHaveText(/^Workstream: CA-401 .* · Review$/);
+    await expect(header.locator("xpath=..").locator("[data-header-status] [data-status]")).toHaveText("Needs you");
   });
 });
 
@@ -106,14 +106,6 @@ async function openWatching(page: Page) {
   await expect(page.getByText("CA-401", { exact: true }).first()).toBeVisible();
 }
 
-test.describe("starting an agent from the peek (D1)", () => {
-  test("Pip's intro says nothing is posted to Jira until the person approves", async ({ page }) => {
-    await openApp(page);
-    await openPip(page);
-    await expect(pipPane(page)).toContainText("Nothing is posted to Jira until you approve it. On GitHub, agents run with your own Claude Code settings; see Agent safety.");
-    await expect(pipPane(page)).not.toContainText("Nothing changes until you approve");
-  });
-});
 
 test.describe("sheets and launcher (D16, D24)", () => {
   test("stopping a run from a sheet scrolled down brings its title and the Stopped pill back into view", async ({ page }) => {

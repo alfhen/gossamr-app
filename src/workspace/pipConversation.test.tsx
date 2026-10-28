@@ -199,13 +199,13 @@ describe("PipConversation", () => {
     expect(html).toMatch(/Drafts waiting <span class="font-normal">1<\/span>/);
     expect(html.indexOf('data-draft="p-old"')).toBeLessThan(html.indexOf("Draft a comment on CA-412"));
     expect(html.indexOf('data-draft="p-new"')).toBeGreaterThan(html.indexOf("I drafted a short comment."));
-    expect(html).not.toContain("I follow along as you move around");
+    expect(html).not.toContain("Ask me about a ticket");
   });
 
   it("shows the welcome line with no turns, and reads another conversation by its key", () => {
     setTurns({ "CA-9": { sessionId: null, turns: [turn("r9", "Other question", "Other answer")] } });
     const empty = renderToStaticMarkup(<PipConversation conversation={GENERAL_CONVERSATION} proposals={[]} />);
-    expect(empty).toContain("I follow along as you move around");
+    expect(empty).toContain("Ask me about a ticket");
     expect(empty).not.toContain("Other question");
     expect(renderToStaticMarkup(<PipConversation conversation="CA-9" proposals={[]} />)).toContain("Other answer");
   });
@@ -228,9 +228,9 @@ describe("PipConversation", () => {
     const intro = /<p data-empty-workstream="true"[^>]*>([^<]*)<\/p>/.exec(ws)?.[1] ?? "";
     expect(intro).toBe("Everything for this ticket stays here: its agents, drafts and our conversation.");
     expect(ws).not.toContain("/stop");
-    expect(ws).not.toContain("I follow along as you move around");
+    expect(ws).not.toContain("Ask me about a ticket");
     const general = renderToStaticMarkup(<PipConversation conversation={GENERAL_CONVERSATION} proposals={[]} />);
-    expect(general).toContain("I follow along as you move around");
+    expect(general).toContain("Ask me about a ticket");
     expect(general).not.toContain("data-empty-workstream");
   });
 

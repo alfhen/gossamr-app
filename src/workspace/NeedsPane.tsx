@@ -546,10 +546,10 @@ function BatchDecision({ gid, needs }: { gid: string; needs: readonly Need[] }) 
             </span>
           </div>
           <p data-needs-why className="m-0 text-sm font-semibold text-ws-ink [overflow-wrap:anywhere]">
-            These drafts may go together. Each is written to Jira as its card shows it.
+            These drafts may go together.
           </p>
           <p data-needs-if-you-wait className="m-0 text-sm text-ws-ink2 [overflow-wrap:anywhere]">
-            <span className="font-semibold">If you wait:</span> Nothing is posted until you choose.
+            <span className="font-semibold">If you wait:</span> They stay here until you decide.
           </p>
         </div>
         <button

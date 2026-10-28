@@ -22,7 +22,7 @@ import { useDecisionShown } from "./decisionShown";
 import { LiveDraftPreview, openLiveDraft } from "./DraftPreview";
 import { GENERAL_INTRO, TurnView, workstreamIntro } from "./PipConversation";
 import { openNeed } from "./needsActions";
-import { isTypingTarget } from "./workKeys";
+import { isTypingTarget } from "../lib/keys";
 import { useReviewVerdicts } from "./reviewVerdicts";
 import { useRuns } from "./runsStore";
 import { ENTRY_FOCUS, TIMELINE_ENTRY, anchoredScrollTop, firstShowing, followsEnd, nearBottom, readingAnchor, revealEntry, stepIndex, timelineKeyAction, timelineStop, type ReadingAnchor } from "./timelineKeys";

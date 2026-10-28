@@ -140,7 +140,7 @@ test("approving a draft from the pane writes it to Jira, and focus goes to the n
   await need(page, /Draft comment/).click();
   const pane = needsPane(page);
   await expect(pane).toContainText("drafted a comment on CA-401.");
-  await expect(pane).toContainText("Nothing is written to Jira until you approve it.");
+  await expect(pane).toContainText("It stays here until you decide.");
   await expect(pane.locator("article[data-draft]")).toBeVisible();
   expect(await jiraWrites(page)).toEqual([]);
 

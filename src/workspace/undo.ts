@@ -158,7 +158,7 @@ export function offerUndo(offer: UndoOffer): number {
 }
 
 /** What Ctrl+Z says when the log holds nothing: the footer promises it undoes, so silence would read as broken (G8). */
-export const NOTHING_TO_UNDO = "Nothing to undo. What was posted to Jira stays posted.";
+export const NOTHING_TO_UNDO = "Nothing to undo.";
 
 /** Ctrl+Z: undoes the newest good offer, or says there is nothing to undo through the toast's polite live region. */
 export function undoLatest(): void {

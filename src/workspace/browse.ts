@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { create } from "zustand";
+import { stepOf } from "../lib/keys";
 import { stepKey } from "./peekLogic";
 import { usePrefs } from "./prefs";
 import { useTabs } from "./tabsStore";
@@ -24,14 +25,14 @@ export function useCanvasOrder(order: readonly string[]) {
   }, [order]);
 }
 
-const typing = (t: EventTarget | null) => t instanceof HTMLElement && (t.isContentEditable || !!t.closest("input, textarea, select, [contenteditable], [role=dialog]"));
+const inDialog = (t: EventTarget | null) => t instanceof HTMLElement && !!t.closest("[role=dialog]");
 
 /** Mounted once under the canvases: j and k select the next or previous item, which opens it in the peek sheet. */
 export function useStepKeys(fallback: readonly string[]) {
   useEffect(() => {
     const onKey = (ev: KeyboardEvent) => {
-      const step = ev.key === "j" ? 1 : ev.key === "k" ? -1 : 0;
-      if (!step || ev.defaultPrevented || ev.metaKey || ev.ctrlKey || ev.altKey || typing(ev.target) || usePrefs.getState().paletteOpen) return;
+      const step = stepOf(ev, "canvas");
+      if (!step || ev.defaultPrevented || inDialog(ev.target) || usePrefs.getState().paletteOpen) return;
       const tabs = useTabs.getState();
       if (tabs.route !== "workspace") return;
       const next = stepKey(useBrowse.getState().order ?? fallback, tabs.selected, step);
