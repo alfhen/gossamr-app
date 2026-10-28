@@ -309,7 +309,7 @@ export const liveWords = (c: ReturnType<typeof liveCounts>) => [c.running && `${
  * badge and the composer give it); running, queued and waiting for a slot are `liveCounts`, as Pip's footer counts.
  */
 export function summaryLine(runs: readonly Run[], now: number, needsYou = 0): string {
-  if (!runs.length) return "Nothing running";
+  if (!runs.length) return needsYou ? `${needsYou} ${needsYou === 1 ? "needs" : "need"} you` : "Nothing running";
   const live = liveCounts(runs, now);
   return [needsYou && `${needsYou} ${needsYou === 1 ? "needs" : "need"} you`, ...liveWords(live), live.quiet && `${live.quiet} quiet`].filter(Boolean).join(" · ") || "Nothing running";
 }

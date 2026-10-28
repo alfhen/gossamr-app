@@ -2,7 +2,7 @@
 
 Gossamr is a macOS work aide for Jira and GitHub. It keeps tickets and pull requests in a local cache, so you can read the last synced work offline. Pip helps you work through it.
 
-Inbox shows today's mentions, comments, status changes and assignments on watched tickets. It has one Mentions filter. Tickets have Board and List views. Work shows workstreams with their agents and one Needs you filter. Pull requests open on GitHub; review drafts keep their own diff hunks in Gossamr. Ask Pip about what Gossamr posted; it can read the audit.
+Inbox shows mentions, comments, status changes and assignments on watched tickets, newest first, with older days under their own headings. It has one Mentions filter. Tickets have Board and List views. Work shows workstreams with their agents and one Needs you filter. Pull requests open on GitHub; review drafts keep their own diff hunks in Gossamr. Ask Pip about what Gossamr posted; it can read the audit.
 
 ## Workstreams and agents
 

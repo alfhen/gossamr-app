@@ -44,7 +44,9 @@ export function StatusPill({ status, title, detail = false, describe = true, hin
 
 /** The status of `view` from the stores, for where only the workstream is at hand (the header). */
 export function useWorkstreamStatus(view: WorkstreamView): WorkstreamStatus {
-  const runs = useRuns((s) => s.runs);
+  const active = useRuns((s) => s.runs);
+  const archived = useRuns((s) => s.archived);
+  const runs = useMemo(() => [...active, ...archived], [active, archived]);
   const dismissed = useRuns((s) => s.dismissed);
   const needs = useNeedsYou();
   return useMemo(() => workstreamStatus(view, needs, { runs, dismissed }), [view, needs, runs, dismissed]);

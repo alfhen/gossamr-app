@@ -45,6 +45,12 @@ describe("the Agents screen", () => {
     expect(buildScreenContext(screen()).run).toBeNull();
   });
 
+  it("sends the Needs you count when the filter shows no runs", () => {
+    const ctx = buildScreenContext(screen({}, { needs: true }, null, [run("b", "working")]));
+    expect(ctx.runsSummary).toBe("2 need you");
+    expect(contextLines(ctx, null, { titleOf: () => null, describeFilter: () => "" })).toContain("Runs shown: 2 need you");
+  });
+
   it("leaves the board, activity and settings output alone", () => {
     const board = buildScreenContext(screen({ route: "workspace", agents: undefined }));
     expect(board.view).toMatch(/ · All projects · 0 items$/);

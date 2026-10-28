@@ -50,6 +50,8 @@ describe("workstreamStatus: every state", () => {
     expect(at(view({ runs: ["r1"] }), [], { runs: [failed], dismissed: new Set(["r1"]) }).state).toBe("idle");
     expect(at(view({ runs: ["r1", "r2"] }), [], { runs: [failed, run("done", "build", { id: "r2", queuedAt: ago(0.5) })] }).state).toBe("idle");
     expect(at(view({ runs: ["r1"] }), [], { runs: [{ ...failed, archivedAt: ago(0.1) }] }).state).toBe("idle");
+    const newerArchived = run("done", "build", { id: "r2", queuedAt: ago(0.5), archivedAt: ago(0.1) });
+    expect(at(view({ runs: ["r1"] }), [], { runs: [failed, newerArchived] }).state).toBe("idle");
   });
 
   it("a dismissed failure does not outrank a running agent or a closed workstream", () => {

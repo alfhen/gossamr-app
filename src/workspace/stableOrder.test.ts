@@ -52,4 +52,8 @@ describe("stableGroups", () => {
     expect(ids(stableGroups(before, [group("w2", run("a"))], true, keyOf))).toEqual(["w2:a"]);
     expect(ids(stableGroups(before, [group("w1", run("n")), group("w2", run("a"))], true, keyOf))).toEqual(["w1:n", "w2:a"]);
   });
+
+  it("keeps a group whose runs all left while the fresh list still has it with no runs", () => {
+    expect(ids(stableGroups([group("w1", run("a"))], [group("w1")], true, keyOf))).toEqual(["w1:"]);
+  });
 });

@@ -77,7 +77,7 @@ export function buildScreenContext(s: Screen): ScreenContext {
     filter: filtered ? filter : null,
     selection: onBoard ? s.marked.flatMap((k) => (s.items[k] ? [s.items[k].item] : [])) : [],
     ...(s.agents ? { run: s.agents.openRun, runsWaiting: s.agents.waiting } : {}),
-    ...(shown.length && s.agents ? { runsSummary: summaryLine(shown, s.agents.now, s.agents.needsYou) } : {}),
+    ...(s.route === "agents" && s.agents && (shown.length || s.agents.needsYou) ? { runsSummary: summaryLine(shown, s.agents.now, s.agents.needsYou) } : {}),
   };
 }
 
