@@ -177,7 +177,7 @@ test("draft cards in the conversation: j and k move, d skips at once and Undo re
   await expect(first).toHaveAttribute("data-state", "pending");
 });
 
-test("the Activity Drafts list and the ticket's peek take the same keys on their full cards", async ({ page }) => {
+test("draft cards in the ticket peek take the same keys", async ({ page }) => {
   const pending = await commentDrafts(page, 2);
   await expect(pending).toHaveCount(2);
 
@@ -198,32 +198,7 @@ test("the Activity Drafts list and the ticket's peek take the same keys on their
   await expect(inPeek).toHaveCount(2);
   await toast(page).getByRole("button", { name: "Dismiss" }).click().catch(() => undefined);
 
-  // Activity's Drafts list: the same cards, the same keys.
-  await page.keyboard.press("Escape");
-  await page.keyboard.press("ControlOrMeta+k");
-  await page.keyboard.type("Open drafts");
-  await page.keyboard.press("Enter");
-  const list = page.getByRole("list", { name: "Drafts waiting for you" });
-  const drafts = list.getByRole("article", { name: "Comment on CA-401" });
-  await expect(drafts).toHaveCount(2);
-  await drafts.first().focus();
-  await expect(drafts.first().locator("[data-key-hint]")).toHaveText(/^a approve · e edit · d s skip/);
-  await page.keyboard.press("j");
-  await expect(drafts.nth(1)).toBeFocused();
-  await page.keyboard.press("k");
-  await expect(drafts.first()).toBeFocused();
-  await page.keyboard.press("d");
-  await expect(drafts).toHaveCount(1);
-  await expectToast(page, "Skipped the draft on CA-401");
-  await undo(page).click();
-  await expect(drafts).toHaveCount(2);
-  // a asks for Enter on these too: it writes to Jira.
-  await drafts.first().focus();
-  await page.keyboard.press("a");
-  await expect(drafts.first().locator("[data-key-hint]")).toHaveText("↵ approve · any other key cancels");
-  await page.keyboard.press("x");
-  await expect(drafts.first().locator("[data-key-hint]")).toHaveText(/^a approve/);
-  expect(await jiraWrites(page)).toEqual([]);
+
 });
 
 /** A working build in a workstream on CA-401, started by Pip when asked. */

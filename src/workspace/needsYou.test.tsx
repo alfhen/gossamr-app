@@ -22,7 +22,6 @@ import { BATCH_TITLE, composerFooter } from "./workViewLogic";
 import { useWorkView } from "./workViewStore";
 import { PipRunStripView } from "./PipRunCard";
 import { railBadgeText } from "./Rail";
-import { usePrefs } from "./prefs";
 import { useRuns } from "./runsStore";
 import { loadTabs, useTabs } from "./tabsStore";
 import { useToasts } from "./toasts";
@@ -311,7 +310,6 @@ describe("opening a need", () => {
     expect(useTabs.getState().route).toBe("agents");
     expect(useWorkView.getState()).toMatchObject({ selected: home(need("run:r-perm")), deciding: "run:r-perm", asking: null });
     expect(useRuns.getState().filters.needs).toBe(true);
-    expect(usePrefs.getState().agentsGroup).toBe("workstream");
   });
 
   it("from another route goes to Agents first, wherever the need is", () => {

@@ -41,7 +41,6 @@ test("intake to a build's pull request on Pip home: the person asks Pip for each
   await homeWorkstream(page);
   const row = workstreamGroup(page, "CA-401");
   await expect(row).toHaveAttribute("aria-current", "true");
-  await expect(row.locator("[data-stage]")).toHaveText("Intake");
   await expect(stepRail(page).getByRole("switch", { name: "Manage this workstream" })).toHaveCount(0);
 
   // Asking Pip to investigate starts the agent: nothing waits on the person.

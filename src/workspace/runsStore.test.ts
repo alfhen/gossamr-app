@@ -6,7 +6,6 @@ import { NO_FILTERS, agentGroups } from "./agentsLogic";
 import { useWorkstreams } from "./workstreamsStore";
 import { useTabs } from "./tabsStore";
 import { useToasts } from "./toasts";
-import { usePrefs } from "./prefs";
 import { answerKey, keepAnswer, keptAnswer } from "./keptAnswers";
 import { browseList, useRuns } from "./runsStore";
 import { laneOf, needsAttention } from "./agentsLogic";
@@ -205,7 +204,6 @@ describe("the run sheet", () => {
     useWorkstreams.getState().init(backend);
     await s().reload();
     await vi.waitFor(() => expect(useWorkstreams.getState().list).toHaveLength(1));
-    usePrefs.setState({ agentsGroup: "workstream" });
     try {
       // The sample's clock stands at 12:00 on 30 September 2026.
       const soon = Date.parse("2026-09-30T12:05:00Z");
@@ -219,7 +217,6 @@ describe("the run sheet", () => {
       s().browse(1);
       expect(s().sheet).toEqual({ type: "run", id: byWorkstream[1] });
     } finally {
-      usePrefs.setState({ agentsGroup: "state" });
       useWorkstreams.getState().dispose();
     }
   });

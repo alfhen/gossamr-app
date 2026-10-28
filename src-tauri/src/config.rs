@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::error::Result;
-use crate::runs::notices::{NoticeMode, DIGEST_MINUTES, DIGEST_MINUTES_MAX};
+use crate::runs::notices::NoticeMode;
 
 const FILE: &str = "config.json";
 
@@ -26,10 +26,7 @@ pub const MAX_RUNS: std::ops::RangeInclusive<usize> = 1..=6;
 pub struct AgentSettings {
     pub max_runs: usize,
     pub terminal: TerminalChoice,
-    /// Kept until step 7b replaces the run notices that read it.
     pub notifications: NoticeMode,
-    /// Kept until step 7b replaces the digest notices that read it.
-    pub digest_minutes: u32,
 }
 
 impl Default for AgentSettings {
@@ -38,7 +35,6 @@ impl Default for AgentSettings {
             max_runs: 3,
             terminal: TerminalChoice::Terminal,
             notifications: NoticeMode::Workstream,
-            digest_minutes: DIGEST_MINUTES,
         }
     }
 }
@@ -49,7 +45,6 @@ impl AgentSettings {
             max_runs: self.max_runs.clamp(*MAX_RUNS.start(), *MAX_RUNS.end()),
             terminal: self.terminal,
             notifications: self.notifications,
-            digest_minutes: self.digest_minutes.clamp(1, DIGEST_MINUTES_MAX),
         }
     }
 }
@@ -138,7 +133,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("gossamr-config-limits-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        assert_eq!(AppConfig::load(&dir).agents, AgentSettings { max_runs: 3, terminal: TerminalChoice::Terminal, notifications: NoticeMode::Workstream, digest_minutes: 30 });
+        assert_eq!(AppConfig::load(&dir).agents, AgentSettings { max_runs: 3, terminal: TerminalChoice::Terminal, notifications: NoticeMode::Workstream });
         std::fs::write(dir.join(FILE), r#"{"agents":{"maxRuns":99,"wallClockMinutes":4294967295,"tokenCap":0,"terminal":"iTerm"}}"#).unwrap();
         let loaded = AppConfig::load(&dir).agents;
         assert_eq!((loaded.max_runs, loaded.terminal), (6, TerminalChoice::ITerm), "keys of the removed limits are ignored");
@@ -167,21 +162,15 @@ mod tests {
     }
 
     #[test]
-    fn the_notification_choice_defaults_to_each_workstream_clamps_the_digest_and_round_trips() {
+    fn old_notification_settings_load_without_the_digest_field() {
         let dir = std::env::temp_dir().join(format!("gossamr-config-notices-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join(FILE), r#"{"agents":{"maxRuns":2}}"#).unwrap();
-        let older = AppConfig::load(&dir).agents;
-        assert_eq!((older.notifications, older.digest_minutes), (NoticeMode::Workstream, 30), "an older config gets the defaults");
-        std::fs::write(dir.join(FILE), r#"{"agents":{"notifications":"digest","digestMinutes":0}}"#).unwrap();
-        let loaded = AppConfig::load(&dir).agents;
-        assert_eq!((loaded.notifications, loaded.digest_minutes), (NoticeMode::Digest, 1));
-        std::fs::write(dir.join(FILE), r#"{"agents":{"digestMinutes":99999}}"#).unwrap();
-        assert_eq!(AppConfig::load(&dir).agents.digest_minutes, DIGEST_MINUTES_MAX);
-        let chosen = AppConfig { agents: AgentSettings { notifications: NoticeMode::Off, digest_minutes: 45, ..AgentSettings::default() }, ..AppConfig::default() };
-        chosen.save(&dir).unwrap();
-        assert_eq!(AppConfig::load(&dir), chosen);
+        std::fs::write(dir.join(FILE), r#"{"agents":{"notifications":"digest","digestMinutes":45}}"#).unwrap();
+        let loaded = AppConfig::load(&dir);
+        assert_eq!(loaded.agents.notifications, NoticeMode::Workstream);
+        loaded.save(&dir).unwrap();
+        assert!(!std::fs::read_to_string(dir.join(FILE)).unwrap().contains("digest"));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

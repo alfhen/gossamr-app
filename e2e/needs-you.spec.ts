@@ -229,7 +229,7 @@ test("a failure stays in Needs you after Agents is opened, and only a Dismiss (o
   await needsPane(page).getByRole("button", { name: "Dismiss" }).click();
   await expect(need(page, /SUP-9/)).toHaveCount(0);
   await expect(needsYouCount(page)).toHaveText(String(count - 1));
-  await chip(page, "all").click();
+  await chip(page, "needs").click();
   await closeWorkstreamSheet(page);
   await expect(page.locator('main article[data-run-id][data-state="failed"]').first()).toBeVisible();
   await expect(page.locator('main article[data-run-id][data-state="failed"]').first().locator("[data-in-needs-you]")).toHaveCount(0);

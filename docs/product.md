@@ -2,7 +2,7 @@
 
 Gossamr is a macOS work aide for Jira and GitHub. It keeps tickets and pull requests in a local cache, so you can read the last synced work offline. Pip helps you work through it.
 
-Tickets have Board and List views. Pull requests open on GitHub; review drafts keep their own diff hunks in Gossamr. Ask Pip about what Gossamr posted; it can read the audit.
+Inbox shows today's mentions, comments, status changes and assignments on watched tickets. It has one Mentions filter. Tickets have Board and List views. Work shows workstreams with their agents and one Needs you filter. Pull requests open on GitHub; review drafts keep their own diff hunks in Gossamr. Ask Pip about what Gossamr posted; it can read the audit.
 
 ## Workstreams and agents
 
@@ -29,4 +29,4 @@ A GitHub review names its reviewer agent and the commit it reviewed. Inline comm
 - Secrets stay in the macOS Keychain. Each agent's private MCP config is the sole on-disk token exception, and that token expires when the run ends.
 - Nothing in a keyboard shortcut should act while you type in an input or text area.
 
-The remaining refactor work is tracked in [the simplification proposal](simplification-proposal.md), not in this product description. UI consolidation and the Linear adapter are later steps. [The CLI findings](agents-cli-findings.md) record what has actually been checked against Claude Code.
+The remaining refactor work is tracked in [the simplification proposal](simplification-proposal.md). The event and command merge, copy pass and Linear adapter remain later steps. [The CLI findings](agents-cli-findings.md) record what has actually been checked against Claude Code.

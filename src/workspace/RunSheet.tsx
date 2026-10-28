@@ -28,7 +28,6 @@ import { openOnGithub } from "./githubUi";
 import { askPip } from "./askPip";
 import { followOutcome } from "./followOutcome";
 import { browseList, useRuns } from "./runsStore";
-import { usePrefs } from "./prefs";
 import { useWorkstreams } from "./workstreamsStore";
 import { labelsByRun } from "../lib/workstreamStage";
 import { RunLabel, RunRef } from "./AgentCard";
@@ -384,7 +383,7 @@ export function RunSheet({ id }: { id: string }) {
   const runs = useRuns((s) => s.runs);
   const filters = useRuns((s) => s.filters);
   const earlierOpen = useRuns((s) => s.earlierOpen);
-  const group = usePrefs((s) => s.agentsGroup);
+  const group = "workstream";
   const workstreams = useWorkstreams((s) => s.list);
   const slotLine = useSlotQueue();
   const label = useMemo(() => labelsByRun(runs).get(id), [runs, id]);

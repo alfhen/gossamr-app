@@ -626,6 +626,8 @@ export class MockBackend implements Backend {
     return this.runs.settings();
   }
 
+  async setNeedsBadge(_count: number) {}
+
   async runsSetSettings(settings: AgentSettings) {
     return this.runs.setSettings(settings);
   }

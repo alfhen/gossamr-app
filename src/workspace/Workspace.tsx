@@ -22,6 +22,7 @@ import { GENERAL_CONVERSATION, PIP_INPUT_ID, PipPane } from "./PipPane";
 import { usePaneWidths } from "./PaneResizers";
 import { applyTheme, usePrefs } from "./prefs";
 import { useRuns } from "./runsStore";
+import { useNeedsYou } from "./useNeeds";
 import { togglePip, useWorkstreams } from "./workstreamsStore";
 import { Rail } from "./Rail";
 import { TABBABLE, nextRegion, regionStep, wrapTab, type WorkspaceRegion } from "./workKeys";
@@ -193,6 +194,8 @@ export function Workspace({ backend }: { backend: Backend }) {
   const choice = useWorkspace((s) => s.watch.find((w) => w.needsChoice));
   const choiceConnection = useWorkspace((s) => s.connections.find((c) => c.id === choice?.connectionId));
   const hasGithub = useWorkspace((s) => s.connections.some((c) => c.kind === "github"));
+  const needs = useNeedsYou();
+  useEffect(() => { void backend.setNeedsBadge(needs.length); }, [backend, needs.length]);
   useGlobalKeys();
   useRegionKeys();
   usePipView();

@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { agentsHome, closeWorkstreamSheet, pauseAtCeiling, needsChip, needsPane, needsPaneHeading, needsYouCount, needsYouTray, openNeedOfKind, openAgents, openApp, pipConversation, pipPane, selectWorkstream, startWorkstream, workstreamGroup, workstreamOpen, workstreamSheet, groupOpen, showWorkspace } from "./support/app";
+import { agentsHome, closeWorkstreamSheet, pauseAtCeiling, needsChip, needsPane, needsPaneHeading, needsYouCount, needsYouTray, openNeedOfKind, openAgents, openApp, pipConversation, pipPane, selectWorkstream, startWorkstream, workstreamGroup, workstreamOpen, workstreamSheet, groupOpen } from "./support/app";
 
 // Agents is the one work view (docs/needs-you.md): the summary chips (Needs you is a filter), every workstream with its
 // agents under them, and a workstream's detail as a sheet beside the Pip drawer. There is no separate Pip home.
@@ -16,7 +16,6 @@ test("the app opens on Agents, with the summary chips in the header, All on, and
   await expect(chips.getByRole("button", { name: "All" })).toHaveAttribute("aria-pressed", "true");
   await expect(needsChip(page)).toHaveAttribute("aria-pressed", "false");
   await expect(needsYouTray(page).locator("[data-needs-you-count]")).not.toHaveText("0");
-  await expect(page.getByRole("group", { name: "Group by" }).getByRole("button", { name: "Workstream" })).toHaveAttribute("aria-pressed", "true");
   await expect(agentsHome(page).locator("[data-lane]")).toHaveCount(0);
   await expect(agentsHome(page).locator("[data-workstream-group]").first()).toBeVisible();
 });
@@ -82,7 +81,6 @@ test("a workstream is a group with its status and an Open button; its detail is 
   const group = workstreamGroup(page, "CA-401");
   await expect(group).toBeVisible();
   await expect(group.locator("[data-status]")).toBeVisible();
-  await expect(group.locator("[data-stage]")).toHaveText("Intake");
 
   await selectWorkstream(page, "CA-401");
   const sheet = workstreamSheet(page);
@@ -189,15 +187,3 @@ test("Show closed is in the toolbar", async ({ page }) => {
   await expect(workstreamGroup(page, "CA-401")).toBeVisible();
 });
 
-test("Agents keeps the State grouping when it is chosen, and the choice is kept", async ({ page }) => {
-  await openApp(page);
-  await openAgents(page);
-  const group = page.getByRole("group", { name: "Group by" });
-  await group.getByRole("button", { name: "State" }).click();
-  await expect(agentsHome(page).locator("[data-lane]").first()).toBeVisible();
-  await page.reload();
-  await showWorkspace(page);
-  await expect(page.getByText("CA-401", { exact: true }).first()).toBeVisible();
-  await openAgents(page);
-  await expect(page.getByRole("group", { name: "Group by" }).getByRole("button", { name: "State" })).toHaveAttribute("aria-pressed", "true");
-});

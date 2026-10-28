@@ -1,14 +1,13 @@
 import { renderToStaticMarkup } from "react-dom/server";
+import { useActivity } from "./activityStore";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MockBackend } from "../backend/mock";
 import { docFromText } from "../lib/docs";
 import type { Intent, Proposal, Run } from "../types";
 import { useWorkspace } from "../workspaceStore";
-import { ActivityView } from "./ActivityView";
 import { NeedsYouList } from "./NeedsYou";
 import { Launcher } from "./PipExtras";
 import { Rail } from "./Rail";
-import { useActivity } from "./activityStore";
 import { composerFooter } from "./workViewLogic";
 import { useRuns } from "./runsStore";
 import { currentNeeds, needsYouText } from "./useNeeds";
@@ -70,18 +69,13 @@ describe("one count of what needs you", () => {
   // Three plan runs failed for the same untrusted folder; a question, a plan a finished run drafted, and a finished build.
   const runs = [...failures, run("q", "needsAnswer", "triage", 20, { needs: "Which cache?" }), run("b", "done", "build", 10), run("pd", "done", "plan", 3)];
 
-  it("is the same on the house badge, the Activity Your turn chip and list, the composer and the launcher", () => {
+  it("is the same on the house badge, the composer and the launcher", () => {
     seed(runs.filter((r) => r.state !== "failed"), [planDraft("pd")]);
     const list = currentNeeds();
     const n = list.length;
     expect(list.map((x) => x.kind).sort()).toEqual(["plan", "question"]);
 
     expect(renderToStaticMarkup(<Rail />)).toContain(`Agents, ${needsYouText(n)}`);
-
-    Object.assign(useActivity.getInitialState(), { chip: "needsMe", unread: 28, codeUnread: 3 });
-    const activity = renderToStaticMarkup(<ActivityView />);
-    expect(activity).toMatch(new RegExp(`Your turn<span[^>]*>${n}</span>`));
-    expect(activity).toMatch(new RegExp(`data-needs-you-count[^>]*>${n}<`));
 
     expect(renderToStaticMarkup(<NeedsYouList needs={list} />)).toMatch(new RegExp(`data-needs-you-count[^>]*>${n}<`));
     expect(Number(/(\d+) needs? you/.exec(composerFooter(runs, n, NOW))?.[1])).toBe(n);

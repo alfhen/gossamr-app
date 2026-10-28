@@ -18,9 +18,8 @@ describe("workstreamStatus: every state", () => {
     expect(at(view(), [{ workstreamId: "w2" }, { workstreamId: null }]).state).toBe("idle");
   });
 
-  it("Paused: the pause is the only need, and its reason is the detail when it has one", () => {
-    expect(at(view({}, { pausedReason: "person" }), [need])).toMatchObject({ state: "paused", word: "Paused", detail: null });
-    expect(at(view({}, { pausedReason: "ceiling" }), [need])).toMatchObject({ state: "paused", detail: "Pip was woken too often today" });
+  it("a paused workstream needs you", () => {
+    expect(at(view({}, { pausedReason: "person" }), [need])).toMatchObject({ state: "needs-you", word: "Needs you", detail: "1 waiting" });
   });
 
   it("Needs you: a pause beside another need is counted with it", () => {
@@ -41,10 +40,14 @@ describe("workstreamStatus: every state", () => {
     expect(at(view({ stage: "done" }))).toMatchObject({ state: "done", word: "Done", detail: null });
   });
 
-  it("Idle: otherwise, saying a failed last run, however long nothing has happened", () => {
+  it("Failed: a failed agent is named before a running one", () => {
+    expect(at(view(), [], { runs: [run("failed", "triage"), run("working", "build", { id: "r2" })] })).toMatchObject({ state: "failed", detail: "Triage" });
+  });
+
+  it("Idle: otherwise, however long nothing has happened", () => {
     expect(at(view())).toMatchObject({ state: "idle", word: "Idle", detail: null });
     expect(at(view({}, { createdAt: ago(30) }))).toMatchObject({ state: "idle", detail: null });
-    expect(at(view(), [], { runs: [run("failed", "triage")] }).detail).toBe("Triage failed");
+    expect(at(view(), [], { runs: [run("failed", "triage")] }).state).toBe("failed");
   });
 });
 
@@ -52,16 +55,17 @@ describe("workstreamStatus: priority", () => {
   const paused = view({}, { pausedReason: "person" });
   const more: StatusMore = { runs: [run("working")] };
 
-  it("goes Needs you, Paused, Running, Done, Idle, each beating all the ones after it", () => {
+  it("goes Needs you, Failed, Running, Done, Idle, each beating all the ones after it", () => {
     expect(at(paused, [need, need], more).state).toBe("needs-you");
-    expect(at(paused, [need], more).state).toBe("paused");
+    expect(at(paused, [need], more).state).toBe("needs-you");
+    expect(at(view(), [], { runs: [run("failed")] }).state).toBe("failed");
     expect(at(view(), [], more).state).toBe("running");
     expect(at(view({ stage: "done" }), [], {}).state).toBe("done");
     expect(at(view(), [], {}).state).toBe("idle");
   });
 
   it("is always one of the five words", () => {
-    expect(Object.values(STATUS_WORD).sort()).toEqual(["Done", "Idle", "Needs you", "Paused", "Running"]);
+    expect(Object.values(STATUS_WORD).sort()).toEqual(["Done", "Failed", "Idle", "Needs you", "Running"]);
   });
 });
 

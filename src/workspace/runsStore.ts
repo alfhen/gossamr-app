@@ -10,7 +10,6 @@ import { openTicketByKey, showMe } from "./jump";
 import { forgetSettledAnswers } from "./keptAnswers";
 import { readStored, writeStored } from "./storage";
 import { messageOf, useToasts } from "./toasts";
-import { usePrefs } from "./prefs";
 import { offerUndo } from "./undo";
 import { useTabs } from "./tabsStore";
 import { useWorkstreams } from "./workstreamsStore";
@@ -138,7 +137,7 @@ export const setNoticeOpener = (open: (runId: string) => void, scope?: () => Nee
 export const currentNeedsScope = () => scopeSource();
 
 /** The order the Agents view lists runs in right now, grouped as it is. */
-const liveOrder = (s: Pick<RunsState, "runs" | "filters" | "earlierOpen">) => agentGroups(usePrefs.getState().agentsGroup, s.runs, useWorkstreams.getState().list, s.filters, s.earlierOpen, Date.now(), currentNeedsScope()).order;
+const liveOrder = (s: Pick<RunsState, "runs" | "filters" | "earlierOpen">) => agentGroups("workstream", s.runs, useWorkstreams.getState().list, s.filters, s.earlierOpen, Date.now(), currentNeedsScope()).order;
 
 /** A run that was dismissed and has moved on (it retried, was resumed, carried on) starts over: if it fails or stops again, Needs you has it again. */
 const DISMISSABLE: readonly Run["state"][] = ["failed", "stopped", "unknown"];

@@ -9,6 +9,7 @@ import { ageSince, ageText, branchOf, formatTokens, repoName, runTitle } from ".
 import { useStateView } from "./useStateView";
 import { runRef } from "../lib/runNames";
 import { verdictChip, verdictText } from "./runSheetLogic";
+import { stopControl } from "./runSheetLogic";
 
 export const agentId = (id: string) => `agent-${id}`;
 
@@ -24,6 +25,7 @@ export interface AgentItemProps {
   label?: string;
   onOpen(): void;
   onAttach(): void;
+  onStop?(): void;
   /** Present on a finished run that has something to post. */
   onDraftComment?(): void;
   /** Present on a finished plan run that can be built from. */
@@ -132,7 +134,7 @@ export function RoleChip({ role }: { role: string }) {
   );
 }
 
-export function AgentCard({ run, now, selected, position, total, ticketTitle, label, onOpen, onAttach, onDraftComment, onBuildFromPlan, onReviewThis, onArchive, draftReady, breakdownReady, onOpenDraft, onOpenBreakdown, descriptionReady, onOpenDescription, review, failure, onOpenNeed, asking }: AgentItemProps) {
+export function AgentCard({ run, now, selected, position, total, ticketTitle, label, onOpen, onAttach, onStop, onDraftComment, onBuildFromPlan, onReviewThis, onArchive, draftReady, breakdownReady, onOpenDraft, onOpenBreakdown, descriptionReady, onOpenDescription, review, failure, onOpenNeed, asking }: AgentItemProps) {
   const view = useStateView(run, now);
   const tone = TONE[view.tone];
   const title = runTitle(run, ticketTitle);
@@ -173,7 +175,15 @@ export function AgentCard({ run, now, selected, position, total, ticketTitle, la
         <RunRef run={run} className="ml-auto shrink-0" />
       </p>
       <KeyAsking text={asking} />
+      {run.lastDetail?.trim() && <p data-last-message className="m-0 line-clamp-2 text-sm text-ws-ink2">{run.lastDetail.trim()}</p>}
       <RunBody run={run} now={now} onAttach={onAttach} failure={failure} />
+      {onStop && <div className="flex flex-wrap gap-2 text-sm">
+        <button type="button" onClick={(ev) => (ev.stopPropagation(), onAttach())} onKeyDown={ownKey} className="rounded-md border border-ws-sep2 px-2 py-px hover:bg-ws-hover">Open in Terminal</button>
+        {onStop && stopControl(run).shown && <details onClick={(ev) => ev.stopPropagation()} className="rounded-md border border-ws-sep2 px-2 py-px">
+          <summary className="cursor-pointer">Stop</summary>
+          <span>Stop this agent? </span><button type="button" onClick={onStop} className="font-semibold text-ws-blocked">Yes, stop</button>
+        </details>}
+      </div>}
       <div className="flex flex-wrap items-center gap-2 empty:hidden">
         {draftReady && onOpenDraft ? (
           <button

@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { advanceRuns, askPip, openAgents, openApp, selectWorkstream, paneSettled as settled, peekSheet, peekTicket, pipConversation, pipPane, startWorkstream, showWorkspace } from "./support/app";
+import { advanceRuns, askPip, openAgents, openApp, selectWorkstream, paneSettled as settled, peekSheet, peekTicket, pipConversation, pipPane, startWorkstream } from "./support/app";
 
 const peekAgents = (page: Page) => peekSheet(page).locator("#peek-agents");
 /** The Agents view's runs; Pip's strip of agents shows runs too, and only the view counts. */
@@ -88,14 +88,10 @@ test("Agents groups runs by workstream, with its stage and R1, and the rest unde
   await page.getByRole("button", { name: /^Agents/ }).click();
   await expect(agentRuns(page).first()).toBeVisible();
 
-  const groupBy = page.getByRole("group", { name: "Group by" });
-  await expect(groupBy.getByRole("button", { name: "Workstream" })).toHaveAttribute("aria-pressed", "true");
-
   const groups = page.locator("[data-workstream-group]");
   await expect(groups.first()).toHaveAttribute("data-workstream-group", /^(?!none$)/);
   const mine = groups.first();
   await expect(mine.locator("h3").first()).toHaveText(/^CA-401/);
-  await expect(mine.locator("[data-stage]")).toHaveText("Investigate");
   await expect(mine.locator('[data-run-label="R1"]')).toBeVisible();
   await expect(mine.locator("[data-run-id]")).toHaveCount(1);
   const none = page.locator('[data-workstream-group="none"]');
@@ -103,14 +99,5 @@ test("Agents groups runs by workstream, with its stage and R1, and the rest unde
   await expect(none.locator("[data-run-id]").first()).toBeVisible();
   await expect(page.locator("[data-lane]")).toHaveCount(0);
 
-  // The choice is kept, and State brings the lanes back.
-  await page.reload();
-  await showWorkspace(page);
-  await expect(page.getByText("CA-401", { exact: true }).first()).toBeVisible();
-  await page.getByRole("button", { name: /^Agents/ }).click();
-  await expect(page.getByRole("group", { name: "Group by" }).getByRole("button", { name: "Workstream" })).toHaveAttribute("aria-pressed", "true");
-  await expect(page.locator("[data-workstream-group]").first()).toBeVisible();
-  await page.getByRole("group", { name: "Group by" }).getByRole("button", { name: "State" }).click();
-  await expect(page.locator("[data-lane]").first()).toBeVisible();
-  await expect(page.locator("[data-workstream-group]")).toHaveCount(0);
+
 });

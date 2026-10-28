@@ -174,7 +174,6 @@ pub struct Core {
 /// What a sync left behind.
 pub struct Synced {
     pub connection_id: String,
-    pub new_events: Vec<NewEvent>,
     /// Whether any cached item was added or changed.
     pub changed: bool,
     /// Whether reconciling the drafts against the fresh cache revised or retired any.
@@ -367,7 +366,6 @@ impl Core {
             let revised = proposals::reconcile_pending(db, &identity_of(&connection_id, &me), Utc::now()).unwrap_or_default();
             Ok(Synced {
                 connection_id: connection_id.clone(),
-                new_events: stored.new_events,
                 changed: stored.upserted.any() || containers_changed,
                 proposals_changed: revised > 0,
                 watch_changed,

@@ -1,4 +1,4 @@
-import { DIGEST_MINUTES, type AgentSettings, type ChangedFile, type WorkDoc, type CleanupResult, type CloneChoice, type ContainerRef, type FreshCopy, type CodeChange, type ItemRef, type LocalClone, Run, RunEvent, RunFailure, RunQuery, RunOutcome, RunSpec, RunsChanged, RunState } from "../types";
+import { type AgentSettings, type ChangedFile, type WorkDoc, type CleanupResult, type CloneChoice, type ContainerRef, type FreshCopy, type CodeChange, type ItemRef, type LocalClone, Run, RunEvent, RunFailure, RunQuery, RunOutcome, RunSpec, RunsChanged, RunState } from "../types";
 import type { ClearFilter, ClearPreview, DeleteResult, WorktreeInfo } from "../types";
 import { isArchivable, runsWithPendingDrafts, selectClearable } from "../lib/archiveRuns";
 import { containerRef, itemRef } from "./mockConnector";
@@ -1300,7 +1300,7 @@ export class MockRuns {
     };
   }
 
-  private limits: AgentSettings = { maxRuns: 3, terminal: "terminal", notifications: "workstream", digestMinutes: DIGEST_MINUTES };
+  private limits: AgentSettings = { maxRuns: 3, terminal: "terminal", notifications: "workstream" };
   /** Run ids whose worktree holds work that was never pushed; `claude rm` refuses these. */
   readonly unpushed = new Set<string>();
 
@@ -1315,7 +1315,6 @@ export class MockRuns {
       terminal: settings.terminal,
       // A settings sheet from before these existed sends none; the defaults fill in, as the backend's serde does.
       notifications: settings.notifications ?? "workstream",
-      digestMinutes: clamp(settings.digestMinutes ?? DIGEST_MINUTES, 1, 1_440),
     };
     return this.limits;
   }

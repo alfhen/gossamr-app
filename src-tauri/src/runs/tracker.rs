@@ -268,11 +268,11 @@ impl RunService {
     /// Looks at everything that waits on the person and sends the system notifications that are due (`notices`).
     pub(super) async fn announce_notices(&self, now: DateTime<Utc>) {
         let settings = self.settings();
-        let settings = NoticeSettings { mode: settings.notifications, digest_every: chrono::Duration::minutes(i64::from(settings.digest_minutes)) };
+        let settings = NoticeSettings { mode: settings.notifications };
         let asking = [RunState::NeedsAnswer, RunState::NeedsPermission, RunState::SystemBlocked];
         let Ok(runs) = self.core.runs_list(&RunQuery { states: Some(asking.to_vec()), ..RunQuery::default() }).await else { return };
         let Ok(drafts) = self.core.proposals(&ProposalQuery { states: Some(vec![StateKind::Pending]), ..ProposalQuery::default() }).await else { return };
-        let drafts: Vec<_> = drafts.into_iter().filter(|p| p.state == ProposalState::Pending).collect();
+        let drafts: Vec<_> = drafts.into_iter().filter(|p| p.state == ProposalState::Pending && p.superseded_by.is_none() && !matches!(&p.intent, Intent::StartRun { .. } | Intent::FollowUp { .. } | Intent::RunAnswer { .. })).collect();
         // The open workstreams give names, run labels and pauses; the closed ones are only told apart by id,
         // so what belongs to one is skipped without loading it.
         let (views, closed_ids) = match self.core.scope().await {
@@ -298,7 +298,7 @@ impl RunService {
                     None => format!("{name} has a question"),
                 },
             };
-            needs.entry(ws).or_default().push(Need { group: Group::Unblock, run_id: Some(run.id.clone()), what, since: run.last_progress_at });
+            needs.entry(ws).or_default().push(Need { key: format!("run:{}", run.id), group: Group::Unblock, run_id: Some(run.id.clone()), what, since: run.last_progress_at });
         }
         // A failure is stuck until dealt with, but only the latest run of its kind on its ticket.
         let Ok(all) = self.core.runs_list(&RunQuery::default()).await else { return };
@@ -309,19 +309,19 @@ impl RunService {
             }
             let name = label_of(&run.id, &ws).unwrap_or_else(|| topic(run).to_owned());
             let what = format!("{name} failed");
-            needs.entry(ws).or_default().push(Need { group: Group::Unblock, run_id: Some(run.id.clone()), what, since: run.ended_at.unwrap_or(run.last_progress_at) });
+            needs.entry(ws).or_default().push(Need { key: format!("run:{}", run.id), group: Group::Unblock, run_id: Some(run.id.clone()), what, since: run.ended_at.unwrap_or(run.last_progress_at) });
         }
         // A paused workstream waits to be resumed.
         for v in &views {
             if v.workstream.paused_reason.is_some() {
-                needs.entry(Some(v.workstream.id.clone())).or_default().push(Need { group: Group::Unblock, run_id: None, what: "It is paused until you resume it".to_owned(), since: v.workstream.created_at });
+                needs.entry(Some(v.workstream.id.clone())).or_default().push(Need { key: format!("paused:{}", v.workstream.id), group: Group::Unblock, run_id: None, what: "It is paused until you resume it".to_owned(), since: v.workstream.created_at });
             }
         }
         // A question Pip asked the person is a choice only they make.
         for v in &views {
             if let Some(ask) = &v.pip_ask {
                 let what = format!("Pip asks: {}", cut(&ask.question.split_whitespace().collect::<Vec<_>>().join(" "), 100));
-                needs.entry(Some(v.workstream.id.clone())).or_default().push(Need { group: Group::Decide, run_id: None, what, since: ask.at });
+                needs.entry(Some(v.workstream.id.clone())).or_default().push(Need { key: format!("pip-ask:{}", v.workstream.id), group: Group::Decide, run_id: None, what, since: ask.at });
             }
         }
         // Every pending draft waits for approval, a plan or description rewrite as a decision.
@@ -341,7 +341,7 @@ impl RunService {
                     None => (Group::Approve, "A draft waits for your approval".to_owned()),
                 },
             };
-            needs.entry(workstream).or_default().push(Need { group, run_id: from, what, since: draft.created_at });
+            needs.entry(workstream).or_default().push(Need { key: format!("draft:{}", draft.id), group, run_id: from, what, since: draft.created_at });
         }
         let waiting: Vec<Waiting> = needs.into_iter().map(|(key, needs)| Waiting { key, needs }).collect();
         let name_of = |key: &Key| match key.as_deref() {

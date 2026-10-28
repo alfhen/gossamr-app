@@ -384,12 +384,6 @@ export async function openAgents(page: Page) {
   }).toPass({ timeout: 10_000 });
 }
 
-/** Groups the Agents list by state, its lanes, which Agents does not do by default (it groups by workstream). */
-export async function groupByState(page: Page) {
-  await page.getByRole("group", { name: "Group by" }).getByRole("button", { name: "State" }).click();
-  await expect(agentsHome(page).locator("[data-lane]").first()).toBeVisible();
-}
-
 /** Closes the Pip drawer when it is open. */
 export async function closePipDrawer(page: Page) {
   if (await pipPane(page).count()) await pipPane(page).getByRole("button", { name: "Close Pip" }).click();

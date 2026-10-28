@@ -227,8 +227,7 @@ test.describe("agent counts and tray (D4, D27)", () => {
     await expect(strip.locator("article[data-run-id]")).toHaveCount(3);
     await expect(strip.locator('article[data-state="failed"]')).toContainText("SUP-9");
     await strip.getByRole("button", { name: "See all in Agents" }).click();
-    // The Agents view, with its layout and grouping switches.
-    await expect(page.getByRole("group", { name: "Group by" })).toBeVisible();
+    await expect(page.locator("[data-workstream-group]").first()).toBeVisible();
   });
 
 });
@@ -237,39 +236,6 @@ test.describe("agent counts and tray (D4, D27)", () => {
 const focusIn = (page: Page, selector: string) => page.evaluate((s) => !!document.activeElement?.closest(s), selector);
 
 test.describe("Your turn and Needs you name different things (D5)", () => {
-  test("the Jira inbox is Your turn on the tab, the ticket pill, the Activity chip and the palette; Needs you is left to Pip home", async ({ page }) => {
-    await openApp(page);
-    // The tab, and the pill on a ticket waiting on the person's reply, which says why.
-    const tab = page.getByRole("tab", { name: /^Your turn/ });
-    await expect(tab).toBeVisible();
-    await expect(page.getByRole("tab", { name: /^Needs me/ })).toHaveCount(0);
-    await tab.click();
-    const list = page.getByRole("listbox", { name: "Items" });
-    const pill = list.locator("[data-your-turn]").first();
-    await expect(pill).toHaveText("Your turn");
-    await expect(pill).toHaveAttribute("title", /^Your turn: an unread update, an unanswered mention, or a comment on your ticket/);
-    await expect(list.getByText("Needs you", { exact: true })).toHaveCount(0);
-
-    // The palette finds it by its new name and its old one.
-    await page.keyboard.press("ControlOrMeta+k");
-    const dialog = page.getByRole("dialog", { name: "Command palette" });
-    await dialog.getByRole("combobox").fill("needs me");
-    await expect(dialog.getByRole("option", { name: /Filter: Your turn/ })).toBeVisible();
-    await page.keyboard.press("Escape");
-    await expect(dialog).toHaveCount(0);
-
-    // Activity's chip carries the same name and the badge's count, and lists the same needs; its feed rows carry no pill.
-    await page.getByRole("button", { name: /^Activity/ }).click();
-    const chips = page.getByRole("group", { name: "Show" });
-    await chips.getByRole("button", { name: /^Your turn/ }).click();
-    await expect(chips.getByRole("button", { name: /^Needs me/ })).toHaveCount(0);
-    const badge = Number(/^Agents, (\d+) /.exec((await page.locator("[data-rail]").getByRole("button", { name: /^Agents/ }).getAttribute("aria-label")) ?? "")?.[1] ?? 0);
-    await expect(page.locator("[data-needs-you-count]")).toHaveText(String(badge));
-    if (badge) await expect(chips.getByRole("button", { name: /^Your turn/ })).toHaveText(new RegExp(`${badge}$`));
-    await chips.getByRole("button", { name: /^All/ }).click();
-    await expect(page.getByRole("feed", { name: "Activity" }).locator("[data-your-turn]")).toHaveCount(0);
-  });
-
   test("the rail's one badge names what it counts, in its tooltip and in its button's name, and Activity has none", async ({ page }) => {
     await openApp(page);
     const named = async (button: RegExp, badge: RegExp) => {

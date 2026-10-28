@@ -345,6 +345,10 @@ export class JiraBackend implements Backend {
     return invoke<AgentSettings>("runs_settings");
   }
 
+  setNeedsBadge(count: number) {
+    return invoke<void>("set_needs_badge", { count });
+  }
+
   runsSetSettings(settings: AgentSettings) {
     return invoke<AgentSettings>("runs_set_settings", { settings });
   }

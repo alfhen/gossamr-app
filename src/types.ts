@@ -819,13 +819,10 @@ export interface AgentSettings {
   terminal: "terminal" | "iTerm";
   /** Which system notifications about runs to show; a backend that sent none has "workstream". */
   notifications?: NoticeMode;
-  /** Minutes between digest notifications. */
-  digestMinutes?: number;
 }
 
 /** One notification when a workstream starts waiting on you, one summary every so often, or none. */
-export type NoticeMode = "workstream" | "digest" | "off";
-export const DIGEST_MINUTES = 30;
+export type NoticeMode = "workstream" | "off";
 
 /** What `claude rm` said: it removed the worktree, or refused and explained in its own words. */
 export type CleanupResult = { type: "removed" } | { type: "refused"; message: string };

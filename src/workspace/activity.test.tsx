@@ -81,18 +81,13 @@ describe("FeedRow", () => {
 });
 
 describe("the chips and notes", () => {
-  it("lists every filter and presses the chosen one, with counts", () => {
-    const out = renderToStaticMarkup(<ChipBar chip="mentions" counts={{ needsMe: 3, drafts: 2 }} onChange={vi.fn()} />);
-    for (const label of ["All", "Your turn", "Mentions", "Comments", "Status changes", "Assigned to me", "Drafts"]) expect(out).toContain(label);
-    expect(out.match(/aria-pressed="true"/g)).toHaveLength(1);
+  it("offers one filter for mentions", () => {
+    const out = renderToStaticMarkup(<ChipBar chip="mentions" counts={{}} onChange={vi.fn()} />);
+    expect(out).toContain("All");
+    expect(out).toContain("Mentions");
+    expect(out).not.toContain("Your turn");
+    expect(out).not.toContain("Comments");
     expect(out).toMatch(/aria-pressed="true"[^>]*>Mentions/);
-    expect(out).toContain('ml-1 font-normal">3<');
-    expect(out).toContain('ml-1 font-normal">2<');
-  });
-
-  it("offers 'Pip & agents' as the last chip", () => {
-    const on = renderToStaticMarkup(<ChipBar chip="pip" counts={{}} onChange={vi.fn()} />);
-    expect(on).toMatch(/aria-pressed="true"[^>]*><span aria-hidden="true">◆ <\/span>Pip &amp; agents/);
   });
 
   it("shows a workstream's audit line with its ticket and a way to Agents, newest first", () => {

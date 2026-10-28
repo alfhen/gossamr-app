@@ -1,5 +1,5 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
-import { pauseAtCeiling, agentsHome, askPip, expandNeedsYou, groupByState, homeSettled, jiraWrites, keepComments, needRow, needsPane, needsYouCount, needsYouTray, openAgents, openApp, pipPane, selectWorkstream, startWorkstream, stepRail, openNeedOfKind, groupOpen, needsStack } from "./support/app";
+import { pauseAtCeiling, agentsHome, askPip, expandNeedsYou, homeSettled, jiraWrites, keepComments, needRow, needsPane, needsYouCount, needsYouTray, openAgents, openApp, pipPane, selectWorkstream, startWorkstream, stepRail, openNeedOfKind, groupOpen, needsStack } from "./support/app";
 
 // A few layout and keyboard scenarios of Pip home (docs/needs-you.md).
 
@@ -192,13 +192,11 @@ test.describe("B12: the Pip launcher keeps clear of the Agents screen's cards an
 
     const launcher = page.locator("[data-pip-launcher]");
     await expect(launcher).toBeVisible();
-    await groupByState(page);
-    const show = page.locator('[data-lane="earlier"]').getByRole("button", { name: "Show" });
-    await expect(show).toBeVisible();
+    const last = page.locator("main article[data-run-id]").last();
     const scroller = page.locator("main [data-agents-list]").locator("xpath=..");
     const clear = async (what: string) => {
       const l = await boxOf(launcher.getByRole("button", { name: /^Ask Pip/ }));
-      const targets = [show, ...(await page.locator("main article[data-run-id]").all())];
+      const targets = await page.locator("main article[data-run-id]").all();
       for (const t of targets) {
         const b = await boxOf(t);
         const over = b.x < l.x + l.width && b.x + b.width > l.x && b.y < l.y + l.height && b.y + b.height > l.y;
@@ -211,8 +209,8 @@ test.describe("B12: the Pip launcher keeps clear of the Agents screen's cards an
     await scroller.evaluate((el) => (el.scrollTop = el.scrollHeight));
     await clear("bottom");
     // The last row also ends above the launcher, with room.
-    const last = await boxOf(show);
+    const lastBox = await boxOf(last);
     const l = await boxOf(launcher.getByRole("button", { name: /^Ask Pip/ }));
-    expect(last.y + last.height).toBeLessThanOrEqual(l.y);
+    expect(lastBox.y + lastBox.height).toBeLessThanOrEqual(l.y);
   });
 });

@@ -123,12 +123,9 @@ pub async fn pull(
 
 pub struct Stored {
     pub upserted: Upserted,
-    /// Inbox events that are new since the last sync and unread, or none on a connection's first sync.
-    pub new_events: Vec<NewEvent>,
 }
 
-/// Writes a pull to the cache and advances the connection's cursor. `announce` is false for a connection's first
-/// sync, so connecting doesn't fire a burst of notifications.
+/// Writes a pull to the cache and advances the connection's cursor.
 #[allow(clippy::too_many_arguments)]
 pub fn store(
     db: &Db,
@@ -138,7 +135,7 @@ pub fn store(
     plan: Plan,
     started: DateTime<Utc>,
     unread_after: &str,
-    announce: bool,
+    _announce: bool,
 ) -> Result<Stored> {
     let at = stamp(started);
     let tickets = tickets_of(&pulled.tracked)?;
@@ -147,7 +144,7 @@ pub fn store(
     let upserted = db.upsert_items(&items, &at)?;
 
     let derived: Vec<NewEvent> = tickets.iter().flat_map(|t| derive(t, me)).collect();
-    let fresh = db.insert_events(&derived, unread_after)?;
+    db.insert_events(&derived, unread_after)?;
     db.insert_cache_events(&derived.iter().filter_map(|e| domain_event(connection_id, e)).collect::<Vec<_>>())?;
     db.insert_activity(&tickets.iter().flat_map(|t| my_actions(t, me)).collect::<Vec<_>>())?;
 
@@ -181,7 +178,7 @@ pub fn store(
     let refused: Vec<String> = pulled.inaccessible.iter().map(|c| c.external_id.clone()).collect();
     db.set_inaccessible(connection_id, &refused, true)?;
     db.save_sync_state(connection_id, &state)?;
-    Ok(Stored { upserted, new_events: if announce { fresh } else { Vec::new() } })
+    Ok(Stored { upserted })
 }
 
 /// An inbox event as the neutral event it is, or `None` when its timestamp can't be read.
@@ -464,7 +461,6 @@ mod tests {
 
         let first = run(Plan::Full, "2026-09-29T10:00:00Z").await;
         assert_eq!(first.upserted.inserted, 2);
-        assert_eq!(first.new_events.len(), 2);
         let state = db.sync_state(CONNECTION).unwrap();
         assert_eq!(state.cursor.as_deref(), Some("2026-09-29T10:00:00Z"));
         assert_eq!(state.full_at.as_deref(), Some("2026-09-29T10:00:00Z"));
@@ -473,7 +469,6 @@ mod tests {
 
         let second = run(Plan::Since { minutes: 15 }, "2026-09-29T10:05:00Z").await;
         assert!(!second.upserted.any(), "the same items again change nothing");
-        assert!(second.new_events.is_empty(), "events are reported once");
         let state = db.sync_state(CONNECTION).unwrap();
         assert_eq!(state.cursor.as_deref(), Some("2026-09-29T10:05:00Z"));
         assert_eq!(state.full_at.as_deref(), Some("2026-09-29T10:00:00Z"), "only a full pull refreshes every item");
@@ -481,13 +476,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn the_first_sync_of_a_connection_announces_nothing() {
+    async fn the_first_sync_of_a_connection_stores_events() {
         let db = Db::in_memory().unwrap();
         let fake = Fake { followed: vec![item("CA-1", false)], ..Default::default() };
         let pulled = pull(&fake, CONNECTION, Plan::Full, &SyncState::default(), &[], "h", at(NOW), &WatchSet::default()).await.unwrap();
-        let stored = store(&db, CONNECTION, "me", &pulled, Plan::Full, at(NOW), "2000-01-01T00:00:00Z", false).unwrap();
-        assert!(stored.new_events.is_empty());
-        assert_eq!(db.events("2000-01-01T00:00:00Z").unwrap().len(), 2, "still stored, just not announced");
+        store(&db, CONNECTION, "me", &pulled, Plan::Full, at(NOW), "2000-01-01T00:00:00Z", false).unwrap();
+        assert_eq!(db.events("2000-01-01T00:00:00Z").unwrap().len(), 2, "events are stored for the inbox");
     }
 
     #[tokio::test]
