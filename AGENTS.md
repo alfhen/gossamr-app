@@ -24,7 +24,7 @@ It is a Tauri 2 app: a Rust backend in `src-tauri/` and a React, TypeScript and 
 | `src-tauri/src/runs/` | Agent runs: launch, track, answer, stop, clean up (`claude --bg --worktree`) |
 | `src-tauri/src/inbox/` | Draft storage and approval, prose run outcomes, workstreams |
 | `src/backend/` | The `Backend` interface (`types.ts`), the desktop one (`jira.ts`) and the in-browser mock (`mock*.ts`) |
-| `src/workspace/` | The workspace UI: board, peek, Pip pane, Agents |
+| `src/workspace/` | The workspace UI: Board and List, peek, Pip pane, Agents, review draft hunks |
 | `src/lib/` | Pure front-end logic |
 | `e2e/` | Playwright tests against the mock |
 

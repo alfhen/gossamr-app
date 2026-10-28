@@ -24,7 +24,7 @@ test.describe("a folder to trust keeps waiting on the person (R5)", () => {
 });
 
 test.describe("the GitHub review card says what it posts (R13, R4)", () => {
-  test("the text boxes keep their Markdown and a rendered preview shows what GitHub will, in the card and the pull request view", async ({ page }) => {
+  test("the text boxes keep their Markdown and a rendered preview shows what GitHub will, in the card", async ({ page }) => {
     const review = await reviewedDraft(page);
     const comment = review.getByRole("textbox", { name: /^Comment on / }).first();
     await expect(comment).toHaveValue(/\*\*/);
@@ -32,10 +32,6 @@ test.describe("the GitHub review card says what it posts (R13, R4)", () => {
     await expect(preview).toBeVisible();
     expect(await preview.innerText()).not.toMatch(/\*\*/);
     await expect(preview.locator("b").first()).toBeVisible();
-    await review.getByRole("button", { name: "Open PR view" }).click();
-    const banner = page.locator("[data-pull-summary]");
-    await expect(banner).toBeVisible();
-    expect(await banner.innerText()).not.toMatch(/\*\*|`|^#/m);
   });
 
   test("once posted, the card says how many comments it went with", async ({ page }) => {
@@ -44,4 +40,3 @@ test.describe("the GitHub review card says what it posts (R13, R4)", () => {
     await expect(review.locator("[data-review-posted-with]")).toHaveText(/^Posted with \d+ comments?$/);
   });
 });
-

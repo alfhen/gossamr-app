@@ -63,17 +63,20 @@ describe("the Agents view's default", () => {
   });
 
   it("reads a profile that still stores keys no longer used", () => {
-    localStorage.setItem("gossamr-prefs", JSON.stringify({ startOnAgents: false, startOnPipHome: false, agentsIntroSeen: true, agentsGroupBy: "state" }));
+    localStorage.setItem("gossamr-prefs", JSON.stringify({ startOnAgents: false, startOnPipHome: false, agentsIntroSeen: true, agentsView: "list", agentsGroupBy: "state" }));
     expect(loadPrefs()).toMatchObject({ agentsGroup: "state" });
+    expect(loadPrefs()).not.toHaveProperty("agentsView");
+    usePrefs.getState().setAgentsGroup("workstream");
+    expect(JSON.parse(localStorage.getItem("gossamr-prefs")!)).not.toHaveProperty("agentsView");
   });
 });
 
 describe("a workstream in the Agents list", () => {
   const actions = (): AgentsActions =>
-    ({ select: noop, open: noop, attach: noop, draftComment: noop, buildFromPlan: noop, resume: noop, filter: noop, clearFilters: noop, setView: noop, setGroup: noop, toggleEarlier: noop, setIntro: noop, dismissIntro: noop, retry: noop, fix: noop, retryLaunch: noop, copied: noop, stopAll: noop, askPip: noop, openSafety: noop, openWorkstream: vi.fn() }) as AgentsActions;
+    ({ select: noop, open: noop, attach: noop, draftComment: noop, buildFromPlan: noop, resume: noop, filter: noop, clearFilters: noop, setGroup: noop, toggleEarlier: noop, setIntro: noop, dismissIntro: noop, retry: noop, fix: noop, retryLaunch: noop, copied: noop, stopAll: noop, askPip: noop, openSafety: noop, openWorkstream: vi.fn() }) as AgentsActions;
   const screen = (workstreams: WorkstreamView[], runs: Run[] = [], over: Record<string, unknown> = {}) =>
     renderToStaticMarkup(
-      <AgentsScreen runs={runs} status="ready" error={null} filters={NO_FILTERS} selectedId={null} earlierOpen={false} introShown={false} view="cards" stopping={false} opened={new Set()} now={NOW} ticketTitle={() => null} on={actions()} workstreams={workstreams} {...over} />,
+      <AgentsScreen runs={runs} status="ready" error={null} filters={NO_FILTERS} selectedId={null} earlierOpen={false} introShown={false} stopping={false} opened={new Set()} now={NOW} ticketTitle={() => null} on={actions()} workstreams={workstreams} {...over} />,
     );
 
   it("is a group even with no agent yet, with its ticket key, its stage and a button that opens it", () => {
@@ -109,10 +112,10 @@ describe("a workstream in the Agents list", () => {
 });
 
 describe("what needs you, in the Agents list and its detail", () => {
-  const actions = (): AgentsActions => ({ select: noop, open: noop, attach: noop, draftComment: noop, buildFromPlan: noop, resume: noop, filter: noop, clearFilters: noop, setView: noop, setGroup: noop, toggleEarlier: noop, setIntro: noop, dismissIntro: noop, retry: noop, fix: noop, retryLaunch: noop, copied: noop, stopAll: noop, askPip: noop, openSafety: noop, openWorkstream: vi.fn() }) as AgentsActions;
+  const actions = (): AgentsActions => ({ select: noop, open: noop, attach: noop, draftComment: noop, buildFromPlan: noop, resume: noop, filter: noop, clearFilters: noop, setGroup: noop, toggleEarlier: noop, setIntro: noop, dismissIntro: noop, retry: noop, fix: noop, retryLaunch: noop, copied: noop, stopAll: noop, askPip: noop, openSafety: noop, openWorkstream: vi.fn() }) as AgentsActions;
   const screen = (over: Record<string, unknown> = {}) =>
     renderToStaticMarkup(
-      <AgentsScreen runs={[]} status="ready" error={null} filters={NO_FILTERS} selectedId={null} earlierOpen={false} introShown={false} view="cards" stopping={false} opened={new Set()} now={NOW} ticketTitle={() => null} on={actions()} {...over} />,
+      <AgentsScreen runs={[]} status="ready" error={null} filters={NO_FILTERS} selectedId={null} earlierOpen={false} introShown={false} stopping={false} opened={new Set()} now={NOW} ticketTitle={() => null} on={actions()} {...over} />,
     );
   afterEach(() => seed(useWorkView, { deciding: null, batch: null }));
   const held = view("ws-1", "CA-401", { pausedReason: "ceiling" });

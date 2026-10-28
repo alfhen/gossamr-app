@@ -10,7 +10,7 @@ export function escIsElsewhere(ev: Pick<KeyboardEvent, "key" | "defaultPrevented
   return isTypingTarget(ev.target) || (typeof el?.closest === "function" && !!el.closest("[data-esc-local], [role=dialog], [role=menu], [role=listbox]"));
 }
 
-/** Esc on a full page (Sent, Settings) goes back to Agents, wherever the keyboard is on the page (including <body>). */
+/** Esc on Settings goes back to Agents, wherever the keyboard is on the page (including <body>). */
 export function useEscBack() {
   useEffect(() => {
     const onKey = (ev: KeyboardEvent) => {

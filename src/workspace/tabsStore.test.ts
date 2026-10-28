@@ -24,7 +24,7 @@ describe("workspace tabs", () => {
   it("keeps a filter and a view mode per tab", () => {
     s().setFilter({ type: "blocked" });
     s().setView("board");
-    const second = s().openTab({ filter: { type: "mine" }, view: "age" });
+    const second = s().openTab({ filter: { type: "mine" }, view: "list" });
     expect(activeTab(s()).id).toBe(second);
     s().activate(s().tabs[0].id);
     expect(activeTab(s())).toMatchObject({ filter: { type: "blocked" }, view: "board" });
@@ -32,8 +32,8 @@ describe("workspace tabs", () => {
 
   it("survives a restart with the same tabs, filters, views and active tab", () => {
     s().setProject(containerRef("WEB"));
-    s().setView("map");
-    const second = s().openTab({ filter: { type: "stale", days: 5 }, view: "age" });
+    s().setView("board");
+    const second = s().openTab({ filter: { type: "stale", days: 5 }, view: "list" });
     const before = { tabs: s().tabs, activeId: s().activeId };
 
     const saved = localStorage.getItem("gossamr-tabs")!;
@@ -61,6 +61,19 @@ describe("workspace tabs", () => {
     const loaded = loadTabs();
     expect(loaded.tabs).toEqual([{ id: "x", title: null, filter: { type: "blocked" }, view: "list" }]);
     expect(loaded.activeId).toBe("x");
+  });
+
+  it("falls back to List for stored Map and Age tabs and opens their saved filters", () => {
+    localStorage.setItem("gossamr-tabs", JSON.stringify({
+      tabs: ["map", "age"].map((view) => ({ id: view, view, title: view, filter: { type: "mine" } })),
+      activeId: "age",
+      savedViews: [{ id: "old", name: "Old Map", view: "map", filter: { type: "blocked" } }],
+    }));
+    reload();
+    expect(s().tabs.map((tab) => tab.view)).toEqual(["list", "list"]);
+    expect(activeTab(s()).id).toBe("age");
+    s().openSavedView(s().savedViews[0]);
+    expect(activeTab(s())).toMatchObject({ view: "list", filter: { type: "blocked" } });
   });
 
   it("does not duplicate a chip added twice", () => {
@@ -260,4 +273,3 @@ describe("ticking cards", () => {
     expect(s().marked).toEqual([]);
   });
 });
-

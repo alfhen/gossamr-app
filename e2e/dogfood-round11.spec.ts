@@ -1,8 +1,8 @@
 import { expect, test } from "@playwright/test";
-import { githubWrites, jiraWrites, needRow, needsPane, openAgents, openApp, openJiraSent, peekSheet, pipCommentDraft, pipPane, reviewedDraft, selectWorkstream, startWorkstream, openNeedRow } from "./support/app";
+import { githubWrites, jiraWrites, needRow, needsPane, openAgents, openApp, peekSheet, pipCommentDraft, pipPane, reviewedDraft, selectWorkstream, startWorkstream, openNeedRow } from "./support/app";
 
-// Fixes from the eleventh dogfood round: the pause before a GitHub review with @everyone or a secret (G1), What Jira saw from
-// me saying GitHub reviews are not listed (G2), and the chip "Post" on a review draft (G6).
+// Fixes from the eleventh dogfood round: the pause before a GitHub review with @everyone or a secret (G1),
+// and the chip "Post" on a review draft (G6).
 
 test.describe("a GitHub review with risky words (G1)", () => {
   test("pauses on @everyone in the summary, posts nothing until Post it anyway, and Esc keeps the edit", async ({ page }) => {
@@ -52,17 +52,6 @@ test.describe("a GitHub review with risky words (G1)", () => {
   });
 });
 
-test.describe("What Jira saw from me and GitHub reviews (G2)", () => {
-  test("says the GitHub reviews are not listed and where they show", async ({ page }) => {
-    await openApp(page, "runs=empty");
-    await openJiraSent(page);
-    const sent = page.locator("[data-jira-sent]");
-    await expect(sent.getByRole("heading", { name: "What Jira saw from me" })).toBeVisible();
-    await expect(sent).toContainText("GitHub reviews Gossamr posted are not listed here; each shows in its workstream's timeline as “You posted an agent's GitHub review”.");
-    await expect(sent).toContainText("No posts to Jira from Gossamr are on record here.");
-  });
-});
-
 test.describe("the chip on a GitHub review draft (G6)", () => {
   test("reads Post, not Approve, while its group stays Approve", async ({ page }) => {
     test.setTimeout(90_000);
@@ -76,7 +65,6 @@ test.describe("the chip on a GitHub review draft (G6)", () => {
     await expect(row.locator("[data-needs-you-chip]")).toHaveText("Post");
   });
 });
-
 
 // Keyboard and screen-reader fixes (G5, G7 to G14).
 
@@ -137,4 +125,3 @@ test.describe("Esc at the posting pause (G14)", () => {
     expect(await jiraWrites(page)).toEqual([]);
   });
 });
-

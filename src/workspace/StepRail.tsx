@@ -16,10 +16,8 @@ import { useDraftsRev } from "./draftLive";
 import { BATCH_TITLE, EDITED_ASIDE, batchable, draftEdited, editedPending, batchToApprove, freezeBatch, nextStep, retiredStepDrafts, stepBatchLabel, stepChips, stepDrafts, type BatchSnapshot, type StepChip, type StepGroup } from "./workViewLogic";
 import { useWorkView } from "./workViewStore";
 import { openOnGithub } from "./githubUi";
-import { openPullView, usePullView } from "./pullViewStore";
 import { useBuildChanges, useReviewVerdicts } from "./reviewVerdicts";
 import { useRuns } from "./runsStore";
-import { useToasts } from "./toasts";
 import { approveEach } from "./useCards";
 import { useDecisionShown } from "./decisionShown";
 import { WorkstreamControls } from "./WorkstreamControls";
@@ -229,22 +227,11 @@ function StepPullRequest({ pr, onOpen }: { pr: NonNullable<StepChip["pr"]>; onOp
   );
 }
 
-/** What the rail's PR view says when no GitHub connection is known to read the pull request from. */
-export const NO_PULL_VIEW = "Connect GitHub to see this pull request in Gossamr. Opened it on GitHub instead.";
-
-/**
- * The Review step's PR view: the pull request in Gossamr when a GitHub connection can read it; else, said so in a note, its
- * page on GitHub, rather than nothing at all.
- */
-export function pullViewOrGithub(repo: string, number: number) {
-  openPullView({ repo, number });
-  const shown = usePullView.getState().target;
-  if (shown?.repo === repo && shown.number === number) return;
-  useToasts.getState().push(NO_PULL_VIEW, "info");
-  openOnGithub(`https://github.com/${repo}/pull/${number}`);
+/** The pull request the Review step read. */
+function openReviewedPull(repo: string, number: number) {
+  void openOnGithub(`https://github.com/${repo}/pull/${number}`);
 }
 
-/** The pull request the Review step read, with a button that shows it in Gossamr. */
 function ReviewedPull({ repo, number, onOpen }: { repo: string; number: number; onOpen(): void }) {
   return (
     <p data-step-review-pr className="m-0 flex min-w-0 items-baseline gap-1.5 px-2.5 text-xs text-ws-ink3">
@@ -254,10 +241,10 @@ function ReviewedPull({ repo, number, onOpen }: { repo: string; number: number; 
       <button
         type="button"
         onClick={onOpen}
-        aria-label={`PR view of ${repo}#${number}`}
+        aria-label={`Open ${repo}#${number} on GitHub`}
         className="shrink-0 rounded border border-ws-sep2 px-1.5 font-semibold text-ws-pip hover:bg-ws-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip"
       >
-        PR view
+        Open on GitHub
       </button>
     </p>
   );
@@ -279,8 +266,8 @@ export interface StepRailViewProps {
   approve(id: string): Promise<{ error?: string | null }>;
   /** Opens the build's pull request on GitHub. */
   onOpenPr?(url: string): void;
-  /** Opens the pull request a review read in the in-app view, with its pending review draft when there is one; on GitHub when no connection can read it. */
-  onPullView?(repo: string, number: number): void;
+  /** Opens the pull request a review read on GitHub. */
+  onOpenReviewedPull?(repo: string, number: number): void;
   /** Steps shown open at first; a test passes its own. */
   initialOpen?: readonly StepGroup[];
   /** A run to show: the step it is in opens, as when a wake turn's header names it. */
@@ -333,7 +320,7 @@ export function PlanApproval({ questions }: { questions: readonly string[] }) {
   );
 }
 
-export function StepRailView({ view, runs, events, verdicts, changes = NO_CHANGES, proposals, now, titleOf, onOpenRun, approve, onOpenPr = (url) => void openOnGithub(url), onPullView = pullViewOrGithub, initialOpen = [], reveal = null }: StepRailViewProps) {
+export function StepRailView({ view, runs, events, verdicts, changes = NO_CHANGES, proposals, now, titleOf, onOpenRun, approve, onOpenPr = (url) => void openOnGithub(url), onOpenReviewedPull = openReviewedPull, initialOpen = [], reveal = null }: StepRailViewProps) {
   const [open, setOpen] = useState<ReadonlySet<StepGroup>>(() => new Set(initialOpen));
   const chips = useMemo(() => stepChips([...runs], events, verdicts, proposals, { now, waitingForPr: view.waitingForPr, changes }), [runs, events, verdicts, proposals, now, view.waitingForPr, changes]);
   const next = nextStep(chips);
@@ -416,7 +403,7 @@ export function StepRailView({ view, runs, events, verdicts, changes = NO_CHANGE
               </button>
               {chip.kind === "plan" && planWaits(drafts.plan) && <PlanApproval questions={planOpenQuestions(planResultFor(waitingPlan(drafts.plan), runs, chip.newest))} />}
               {chip.pr && <StepPullRequest pr={chip.pr} onOpen={onOpenPr} />}
-              {chip.kind === "review" && chip.newest?.spec.pr && <ReviewedPull repo={chip.newest.spec.repo} number={chip.newest.spec.pr} onOpen={() => onPullView(chip.newest!.spec.repo, chip.newest!.spec.pr!)} />}
+              {chip.kind === "review" && chip.newest?.spec.pr && <ReviewedPull repo={chip.newest.spec.repo} number={chip.newest.spec.pr} onOpen={() => onOpenReviewedPull(chip.newest!.spec.repo, chip.newest!.spec.pr!)} />}
               {shown && (
                 <div id={panel} className="grid gap-1.5 pl-2">
                   {chip.runs.map((run) => (

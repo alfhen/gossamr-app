@@ -51,7 +51,7 @@ const PRIORITY: Partial<Record<WorkPriority, { glyph: string; label: string; ton
 
 export const cardId = (key: string) => `card-${key}`;
 
-/** A ticket as a card: shared by the board and the age view. */
+/** A ticket as a card on the board. */
 export function ItemCard(p: ItemCardProps) {
   const { item } = p;
   const days = daysQuiet(item, p.now);

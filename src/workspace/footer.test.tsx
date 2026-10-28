@@ -18,10 +18,10 @@ describe("canvas footer hints", () => {
   });
 
   it("renders one left-aligned truncating line, hiding lower ranks at narrow widths", () => {
-    const out = renderToStaticMarkup(<ShortcutHint view="map" />);
+    const out = renderToStaticMarkup(<ShortcutHint view="board" />);
     expect(out).toContain("truncate");
     expect(out).not.toContain("text-center");
-    expect(out).toContain("Scroll to zoom");
+    expect(out).toContain("Drag a card");
     expect(out).toContain("hidden @md:inline");
     expect(out).toContain("⌘J");
   });

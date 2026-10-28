@@ -199,7 +199,7 @@ describe("posting a review draft to the mock GitHub", () => {
     expect([backend.github.tried, backend.github.writes.length]).toEqual([2, 1]);
   });
 
-  it("serves every sample pull request's diff for the PR view, with the files, additions and deletions its stats say", async () => {
+  it("serves every sample pull request's diff for review drafts, with the files, additions and deletions its stats say", async () => {
     const { backend } = await reviewed();
     for (const change of backend.github.code.changes.filter((c) => c.kind === "pullRequest")) {
       const { files } = await backend.codePullDiff(GH, change.repo, change.number!);
@@ -208,7 +208,7 @@ describe("posting a review draft to the mock GitHub", () => {
     }
   });
 
-  it("serves the pull request's files to the card and the PR view", async () => {
+  it("serves the pull request's files to the review card", async () => {
     const { backend } = await reviewed();
     expect((await backend.codePullFiles(GH, "acme/webshop", 218)).map((f) => f.path)).toEqual(["src/consumer/retry.ts", "src/consumer/index.ts"]);
     await expect(backend.codePullFiles(GH, "acme/webshop", 999)).rejects.toThrow("couldn't find pull request #999");

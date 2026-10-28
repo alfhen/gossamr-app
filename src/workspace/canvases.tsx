@@ -1,9 +1,7 @@
 import type { ComponentType } from "react";
 import type { WorkItem } from "../types";
-import { AgeView } from "./AgeView";
 import { BoardView } from "./BoardView";
 import { ListView } from "./ListView";
-import { MapView } from "./MapView";
 import type { Tab, ViewMode } from "./tabsStore";
 
 export interface CanvasProps {
@@ -16,6 +14,4 @@ export interface CanvasProps {
 export const CANVASES: Record<ViewMode, ComponentType<CanvasProps>> = {
   list: ListView,
   board: BoardView,
-  map: MapView,
-  age: AgeView,
 };

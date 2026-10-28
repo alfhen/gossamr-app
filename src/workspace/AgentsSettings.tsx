@@ -151,7 +151,7 @@ export function AgentsSettingsView({ runs, stopping, keepRunning, settings, sett
 
 const FIELD = "w-20 rounded-md border border-ws-sep2 bg-ws-win px-2 py-1 text-sm text-ws-ink";
 
-/** How many agents run at once, whether a finished one drafts a comment, and the terminal that opens sessions. */
+/** How many agents run at once and the terminal that opens sessions. */
 function AgentsForm({ settings, disabled, onSave }: { settings: AgentSettings; disabled: boolean; onSave(next: AgentSettings): void }) {
   return (
     <div className="grid gap-2">

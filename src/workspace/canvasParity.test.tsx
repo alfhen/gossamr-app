@@ -4,15 +4,12 @@ import { MockBackend } from "../backend/mock";
 import { ALL, itemKey, YOUR_TURN_WHY } from "../lib/filter";
 import type { FeedEntry, StatusDef, WorkItem } from "../types";
 import { itemsByFilter, useWorkspace } from "../workspaceStore";
-import { AgeLayoutToggle, AgeRow } from "./AgeView";
-import { ageBars, moveHint } from "./boardLogic";
+import { moveHint } from "./boardLogic";
 import { WorkflowLine } from "./BoardView";
 import { AgeChip, AttentionDot, StatusPill } from "./CanvasBits";
 import { ageLevel, initials, progressOf, selectHow, showsAge, statusTone, unreadItems } from "./canvasShared";
 import { GroupHeader, ListRow } from "./ListView";
 import { listGroups, selectionAfterCollapse, visibleOrder } from "./listLogic";
-import { MapKey, MapSvg, type MapSvgProps } from "./MapView";
-import { FIT, layoutMap } from "./mapLayout";
 import { stepKey } from "./peekLogic";
 import type { BoardSection } from "./boardLogic";
 
@@ -231,36 +228,6 @@ describe("GroupHeader", () => {
   });
 });
 
-describe("age ranking", () => {
-  it("ranks open items longest quiet first and scales the bars to the longest", () => {
-    const items = [item("A-1", { updated: daysAgo(2) }), item("A-2", { updated: daysAgo(10) }), item("A-3", { updated: daysAgo(5) }), item("A-4", { status: status("Done", "done"), updated: daysAgo(40) })];
-    const bars = ageBars(items, NOW);
-    expect(bars.map((b) => b.item.item.key)).toEqual(["A-2", "A-3", "A-1"]);
-    expect(bars.map((b) => b.width)).toEqual([100, 50, 20]);
-  });
-
-  it("keeps a sliver for a fresh ticket and breaks ties by key", () => {
-    const bars = ageBars([item("A-10", { updated: daysAgo(1) }), item("A-9", { updated: daysAgo(1) }), item("A-1", { updated: daysAgo(100) })], NOW);
-    expect(bars.map((b) => b.item.item.key)).toEqual(["A-1", "A-9", "A-10"]);
-    expect(bars[1].width).toBe(3);
-  });
-
-  it("draws a bar coloured by age with the days at its end", () => {
-    const bar = ageBars([item("A-1", { updated: daysAgo(8) })], NOW)[0];
-    const out = renderToStaticMarkup(<AgeRow bar={bar} needsMe={false} unread={false} selected={false} marked={false} onSelect={vi.fn()} />);
-    expect(out).toContain("bg-ws-blocked");
-    expect(out).toContain("width:100%");
-    expect(out).toContain(">8d<");
-    expect(out).toContain("quiet for 8 days");
-  });
-
-  it("offers ranked and columns, with the current one pressed", () => {
-    const out = renderToStaticMarkup(<AgeLayoutToggle layout="ranked" onChange={vi.fn()} />);
-    expect(out).toMatch(/aria-pressed="true"[^>]*>Ranked</);
-    expect(out).toMatch(/aria-pressed="false"[^>]*>Columns</);
-  });
-});
-
 describe("board workflow line", () => {
   const section = (): BoardSection => {
     const c = s().containers["mock:DEVOPS"];
@@ -294,62 +261,5 @@ describe("markers on the other canvases", () => {
     expect(renderToStaticMarkup(<AttentionDot needsMe unread />)).toContain("bg-ws-pip");
     expect(renderToStaticMarkup(<AgeChip days={12} />)).toContain("text-ws-blocked");
     expect(renderToStaticMarkup(<StatusPill status={status("In Review", "active")} />)).toContain("bg-ws-review-soft");
-  });
-});
-
-describe("map marks", () => {
-  const props = (items: WorkItem[], over: Partial<MapSvgProps> = {}): MapSvgProps => ({
-    layout: layoutMap(items, {}, s().containers),
-    viewport: FIT,
-    selected: null,
-    marked: [],
-    focused: null,
-    hovered: null,
-    blocked: new Set(),
-    needsMe: new Set(),
-    now: NOW,
-    drafts: {},
-    onNode: vi.fn(),
-    onHover: vi.fn(),
-    onCluster: vi.fn(),
-    ...over,
-  });
-  const render = (p: MapSvgProps) => renderToStaticMarkup(<MapSvg {...p} />);
-
-  it("puts a web on a node quiet for 5 days and a spider at 7, and nothing on a fresh or finished one", () => {
-    const out = render(props([item("A-1", { updated: daysAgo(5) }), item("A-2", { updated: daysAgo(8) }), item("A-3", { updated: daysAgo(1) }), item("A-4", { status: status("Done", "done"), updated: daysAgo(30) })]));
-    expect((out.match(/data-stale="web"/g) ?? []).length).toBe(1);
-    expect((out.match(/data-stale="spider"/g) ?? []).length).toBe(1);
-  });
-
-  it("dims a stale node and dashes the outline of a forgotten one", () => {
-    const out = render(props([item("A-2", { updated: daysAgo(8) })]));
-    expect(out).toContain('opacity="0.7"');
-    expect(out).toContain('fill-opacity="0.55"');
-    expect(out).toContain('stroke-dasharray="3 2"');
-    const fresh = render(props([item("A-3", { updated: daysAgo(1) })]));
-    expect(fresh).not.toContain('fill-opacity="0.55"');
-  });
-
-  it("pulses a ring on a node that needs the person, and says so in its label", () => {
-    const out = render(props([item("A-1"), item("A-2")], { needsMe: new Set(["mock:A-1"]) }));
-    expect((out.match(/data-pulse/g) ?? []).length).toBe(1);
-    expect(out).toContain("ws-ring");
-    expect(out).toMatch(/aria-label="A-1 [^"]*your turn/);
-  });
-
-  it("fills review statuses purple", () => {
-    const out = render(props([item("A-1", { status: status("In Review", "active") })]));
-    expect(out).toContain("fill-ws-review");
-  });
-
-  it("lists review and the web and spider thresholds in the key", () => {
-    const out = renderToStaticMarkup(<MapKey />);
-    expect(out).toContain("Review / QA");
-    expect(out).toContain("5d+");
-    expect(out).toContain("7d+");
-    expect(out).toContain(`title="${YOUR_TURN_WHY}"`);
-    expect(out).toContain("Your turn");
-    expect(out).not.toContain("Needs you");
   });
 });

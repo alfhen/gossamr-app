@@ -9,7 +9,7 @@ import { draftSummary, draftTitle, linkSentence, useEditedDraft } from "./DraftC
 import { collapsible, draftFacts, isCreate, showDraft } from "./draftTicket";
 import { showMe } from "./jump";
 import { useRepoReviewAccess, useReviewAccess } from "./reviewAccess";
-import { openPullView, sameCommit, usePullDiff } from "./pullViewStore";
+import { sameCommit, usePullDiff } from "./reviewDiff";
 import { FROM_INPUT, PIP_INPUT_ID, PIP_ROOT, draftKeyHint, draftKeyShortcuts, focusAfterLeaving, onDraftCardKey, setDraftEditIntent, type Asking } from "./draftKeys";
 import { usePip } from "./pipStore";
 import { focusPeekDraft } from "./peekDrafts";
@@ -95,8 +95,6 @@ interface Props {
   onApprove?(): void;
   /** For a GitHub review, whether the token may post it, so a posts it in place; otherwise a opens. */
   canPost?: boolean;
-  /** For a GitHub review the token can't post, what its button does instead: opens the in-app pull request view. */
-  onPullView?(): void;
   /** What the s key does on a focused card. */
   onSkip?(): void;
 }
@@ -134,7 +132,7 @@ export function DraftPreview(props: Props) {
   );
 }
 
-function DraftPreviewCard({ proposal: p, statusName, targetTitle, onOpen, onApprove, onSkip, canPost = false, onPullView }: Props) {
+function DraftPreviewCard({ proposal: p, statusName, targetTitle, onOpen, onApprove, onSkip, canPost }: Props) {
   /** Focused from the keyboard: only then does the card take its keys and show them. */
   const [armed, setArmed] = useState(false);
   const [asking, setAsking] = useState<Asking | null>(null);
@@ -159,11 +157,9 @@ function DraftPreviewCard({ proposal: p, statusName, targetTitle, onOpen, onAppr
   const now = usePullDiff(review && canApprove && armed ? review.connectionId : null, review?.repo ?? null, review?.number ?? null);
   const head = now.status === "ready" ? now.diff.change.sha : null;
   const warning = !review || !armed ? null : p.error === REVIEW_OUTDATED_NOTE ? REVIEW_OUTDATED_NOTE : p.maybePosted ? "This review may already be on GitHub; posting looks for it there first and sends nothing while Gossamr can't be sure." : head && !sameCommit(head, review.commitSha) ? `The pull request has moved on since this review: reviewed ${review.commitSha.slice(0, 8)}, now at ${head.slice(0, 8)}. GitHub may mark these comments outdated.` : null;
-  /** A review the token can't post is read in the pull request view rather than posted. */
-  const toPullView = p.intent.type === "githubReview" && !canPost && !!onPullView;
-  const go = pending ? (p.intent.type === "githubReview" ? (toPullView ? "Open PR view →" : "Review and post →") : target ? `Review on ${target.key} →` : "Review draft →") : (target ?? made) ? `Open ${(target ?? made)!.key} →` : "";
+  const go = pending ? (p.intent.type === "githubReview" ? (canPost ? "Review and post →" : "Review draft →") : target ? `Review on ${target.key} →` : "Review draft →") : (target ?? made) ? `Open ${(target ?? made)!.key} →` : "";
   const create = isCreate(p) ? p : null;
-  // A secret in a draft's text shows masked on the card, as on What Jira saw from me; the card being edited keeps the real text.
+  // A secret in a draft's text shows masked on the card; the card being edited keeps the real text.
   // A comment the person edited and has not posted shows its words as edited, with a note that it is.
   const { edited, text: typed } = useEditedDraft(p.id);
   const changed = pending && edited;
@@ -264,7 +260,7 @@ function DraftPreviewCard({ proposal: p, statusName, targetTitle, onOpen, onAppr
             (pending ? (
               <button
                 type="button"
-                onClick={toPullView ? onPullView : onOpen}
+                onClick={onOpen}
                 className="ml-auto shrink-0 rounded-md bg-ws-pip px-2.5 py-1 text-sm font-semibold text-ws-on-pip hover:brightness-110 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip"
               >
                 {go}
@@ -351,8 +347,7 @@ export function LiveDraftPreview({ proposal: p }: { proposal: Proposal }) {
       proposal={p}
       statusName={statusName}
       targetTitle={item?.title ?? null}
-      canPost={!!access?.canPost}
-      onPullView={review ? () => openPullView({ connectionId: review.connectionId, repo: review.repo, number: review.number, proposalId: p.id }) : undefined}
+      canPost={access?.canPost}
       onOpen={() => openLiveDraft(p, { inline: useTabs.getState().route === "agents" })}
       onApprove={approve}
       onSkip={skip}

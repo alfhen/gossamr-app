@@ -687,7 +687,6 @@ mod tests {
     #[tokio::test]
     async fn a_finished_review_leaves_no_draft_and_posts_nothing() {
         let w = World::start().await;
-        w.rig.svc.set_settings(crate::config::AgentSettings { draft_on_finish: false, ..w.rig.svc.settings() }).unwrap();
         let run = w.rig.launched(7).await;
         w.rig
             .set(&run, |r| {

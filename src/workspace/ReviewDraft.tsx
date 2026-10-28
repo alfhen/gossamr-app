@@ -11,7 +11,8 @@ import type { ChangedFile, DiffSide, Proposal, ProposalEdit, ReviewComment } fro
 import { showPause, type DraftCardProps } from "./DraftCard";
 import { useCardKeys } from "./draftCardKeys";
 import { PEEK_DRAFT_MARGIN, peekFocusAfterLeaving } from "./peekDrafts";
-import { openPullView, sameCommit, usePullDiff, type PullDiffState } from "./pullViewStore";
+import { sameCommit, usePullDiff, type PullDiffState } from "./reviewDiff";
+import { openOnGithub } from "./githubUi";
 import { takesBackendText } from "./RewriteDiff";
 import { FromRun } from "./RunProvenance";
 import { useWorkspace } from "../workspaceStore";
@@ -30,8 +31,6 @@ export interface Held extends ReviewComment {
 
 const placeOf = (c: Pick<ReviewComment, "path" | "line">) => `${c.path}:${c.line}`;
 const keyOf = (c: ReviewComment) => `${c.path}:${c.line}:${c.side}`;
-/** The summary's name among the fields a person touched (`followDraft`); a comment's is its place. */
-export const SUMMARY = "summary";
 const held = (r: Review): Held[] => r.comments.map((c) => ({ ...c, dropped: false }));
 
 /** Comment `i` dropped, or restored when it was dropped; a dropped comment keeps its words until the edit is sent. */
@@ -50,19 +49,17 @@ export async function editThenPost<T>(id: string, edit: ProposalEdit | null, see
 /**
  * What the card holds once the draft changed under the person's unsaved edit, from `was` to `now` (Pip revised it, say):
  * the comments `now` has, with the person's words and drops kept on those they had changed, and their summary when they
- * had changed it. A comment the draft no longer has is gone; one it gained comes as it is. `touched` names the fields the
- * person changed while a save was on its way ("summary", or a comment's place): theirs are kept even when they typed
- * them back to what `was` had, since `now` is the save of their earlier words.
+ * had changed it. A comment the draft no longer has is gone; one it gained comes as it is.
  */
-export function followDraft(was: Review, now: Review, summary: string, comments: readonly Held[], touched: ReadonlySet<string> = new Set()): { summary: string; comments: Held[] } {
+export function followDraft(was: Review, now: Review, summary: string, comments: readonly Held[]): { summary: string; comments: Held[] } {
   const mine = new Map(comments.map((c) => [keyOf(c), c]));
   const before = new Map(was.comments.map((c) => [keyOf(c), c]));
   return {
-    summary: touched.has(SUMMARY) || summary !== was.summary ? summary : now.summary,
+    summary: summary !== was.summary ? summary : now.summary,
     comments: now.comments.map((c) => {
       const held = mine.get(keyOf(c));
       const old = before.get(keyOf(c));
-      return held && (touched.has(keyOf(c)) || (old && (held.dropped || held.body !== old.body))) ? { ...c, body: held.body, dropped: held.dropped } : { ...c, dropped: false };
+      return held && old && (held.dropped || held.body !== old.body) ? { ...c, body: held.body, dropped: held.dropped } : { ...c, dropped: false };
     }),
   };
 }
@@ -98,24 +95,6 @@ export function reviewWithPipPrompt(p: Proposal): string {
   const run = p.origin.type === "run" ? p.origin.runId : r.runId;
   return `Let's talk about the GitHub review draft ${p.id} of ${r.repo}#${r.number}, drafted from agent run ${run}. Read it in full with get_proposal and the pull request's existing comments with list_review_comments, then tell me what you would change. Revise the draft only if I ask you to; it stays a draft I post myself, so don't say anything has been posted.`;
 }
-
-/** What the card's Open PR view does: shows the pull request in Gossamr with this draft's comments in place. */
-export const pullViewOf = (p: Proposal) => () => {
-  const r = p.intent as Review;
-  openPullView({ connectionId: r.connectionId, repo: r.repo, number: r.number, proposalId: p.id });
-};
-
-/**
- * Open PR view with the person's unsent edit: saved first, the same save Post review makes, and taken into the store, so
- * the view shows the words the card does. A refused edit rejects and opens nothing.
- */
-export async function editThenPullView(p: Proposal, edit: ProposalEdit | null, to: { saveEdit(id: string, edit: ProposalEdit): Promise<Proposal>; took(saved: Proposal): void; open(): void }): Promise<void> {
-  if (edit) to.took(await to.saveEdit(p.id, edit));
-  to.open();
-}
-
-/** Whether a finished save leaves the card with no unsent edit: only when nothing was typed after the save began. */
-export const settlesEdit = (editsAtStart: number, editsNow: number) => editsNow === editsAtStart;
 
 /** What Post review sends, said beside it: how many inline comments, and that it is a comment review, never a verdict. */
 export function postsWhat(comments: number): string {
@@ -214,7 +193,7 @@ export function ReviewHunk({ file, line, side, context = 2 }: { file: ChangedFil
 /**
  * A GitHub review draft's card: its summary and each comment over the lines it is about, all editable, with comments
  * that can be dropped. Post review saves the person's edit first, then posts it as one comment review, and only when the
- * token may post; otherwise the card says why and shows the review in the in-app pull request view instead.
+ * token may post; otherwise the card says why and offers to open the pull request on GitHub instead.
  */
 export function ReviewDraft({
   proposal: p,
@@ -242,14 +221,10 @@ export function ReviewDraft({
   const edited = useRef(false);
   const attempting = useRef(working);
   attempting.current = working;
-  /** Fields the person changed while Open PR view's save was on its way, kept over the saved draft when it arrives. */
-  const keep = useRef<ReadonlySet<string>>(new Set());
   /** The draft as the card last took it from the backend. */
   const base = useRef(review);
   /** The draft changed under the person's unsaved edit, which the card then merged in (`followDraft`). */
   const [followed, setFollowed] = useState(false);
-  /** Why Open PR view's save of the person's edit was refused. */
-  const [saveError, setSaveError] = useState<string | null>(null);
   // Pip may revise the draft while the card is open, and a sent edit comes back from the backend: follow it, and once the
   // person has typed, merge it with what they typed rather than keep a list the draft no longer has.
   useEffect(() => {
@@ -263,8 +238,7 @@ export function ReviewDraft({
       return;
     }
     if (was.summary === review.summary && JSON.stringify(was.comments) === JSON.stringify(review.comments)) return;
-    const next = followDraft(was, review, summary, comments, keep.current);
-    keep.current = new Set();
+    const next = followDraft(was, review, summary, comments);
     setFollowed(true);
     setSummary(next.summary);
     setComments(next.comments);
@@ -287,7 +261,7 @@ export function ReviewDraft({
   const head = diff.status === "ready" ? diff.diff.change.sha : null;
   const state = p.state.type;
   const open = state === "pending" || state === "applying";
-  const shownError = error ?? saveError ?? p.error;
+  const shownError = error ?? p.error;
   // Read-only text is shown masked, as every Jira surface does; the editable boxes keep the text as it is.
   const shownSummary = maskSecrets(review.summary);
   const shownBodies = comments.map((c) => maskSecrets(c.body));
@@ -301,42 +275,6 @@ export function ReviewDraft({
   const kept = comments.filter((c) => !c.dropped).map(({ path, line, side, body }) => ({ path, line, side, body }));
   const problem = edit ? reviewEditProblem(review, { summary, comments: kept }) : null;
   const canPost = !!access?.canPost;
-  // Open PR view is saving the person's edit. A ref, set at once, so a second click in the same tick can't save and open twice.
-  const savingNow = useRef(false);
-  /** How many edits the person has made; a save only settles the edits made before it started. */
-  const edits = useRef(0);
-  /** The fields changed since the save began, while one is on its way. */
-  const touching = useRef<Set<string> | null>(null);
-  function markEdited(field: string) {
-    edited.current = true;
-    edits.current++;
-    touching.current?.add(field);
-  }
-  const pullView = () => {
-    // Not disabled while it saves: a disabled button would drop the focus the view gives back on closing.
-    if (savingNow.current) return;
-    savingNow.current = true;
-    const backend = useWorkspace.getState().backend;
-    setSaveError(null);
-    const editsAtStart = edits.current;
-    touching.current = new Set();
-    editThenPullView(p, backend ? edit : null, {
-      saveEdit: (id, e) => backend!.proposalsEdit(id, e),
-      // What the backend now holds is what the card showed when the save began. Text typed since stays an unsent edit, so the
-      // saved draft arriving is merged with it rather than replacing it.
-      took: (saved) => {
-        if (settlesEdit(editsAtStart, edits.current)) edited.current = false;
-        else keep.current = new Set(touching.current);
-        useWorkspace.setState((s) => ({ proposals: { ...s.proposals, [saved.id]: saved } }));
-      },
-      open: pullViewOf(p),
-    })
-      .catch((e) => setSaveError(e instanceof Error ? e.message : String(e)))
-      .finally(() => {
-        savingNow.current = false;
-        touching.current = null;
-      });
-  };
   const hint = `review-markdown-${p.id}`;
   // Edited words that mention everyone or look like a secret wait for a second press, as on the other drafts: a confirm the person can pass, never a block.
   const [pause, setPause] = useState<{ risks: Risk[]; quote: RiskQuotes } | null>(null);
@@ -365,11 +303,12 @@ export function ReviewDraft({
     approve: canPost && approvable ? () => post() : undefined,
     skip: open && !working ? onSkip : undefined,
     edit: open ? () => requestAnimationFrame(() => card.current?.querySelector<HTMLElement>("textarea")?.focus()) : undefined,
-    open: pullView,
+    open: open ? () => requestAnimationFrame(() => (card.current?.querySelector<HTMLElement>('[aria-label^="Comment on "]') ?? card.current?.querySelector<HTMLElement>("textarea"))?.focus()) : undefined,
+    openHint: "edit review",
     canApprove: canPost,
   });
   const change = (i: number, next: Partial<Held>) => {
-    markEdited(keyOf(comments[i]));
+    edited.current = true;
     setComments((was) => was.map((c, j) => (j === i ? { ...c, ...next } : c)));
   };
 
@@ -446,7 +385,7 @@ export function ReviewDraft({
               disabled={working || state === "applying"}
               rows={Math.min(12, Math.max(3, summary.split("\n").length + 1))}
               onChange={(e) => {
-                markEdited(SUMMARY);
+                edited.current = true;
                 setSummary(e.target.value);
               }}
               className="w-full scroll-mb-16 resize-none rounded-md border border-ws-sep2 bg-ws-win px-2 py-1.5 text-base font-normal [overflow-wrap:anywhere]"
@@ -470,7 +409,7 @@ export function ReviewDraft({
                       {c.side === "LEFT" && <span className="font-sans font-normal text-ws-ink3"> (old side)</span>}
                     </span>
                     {open && (
-                      <button type="button" disabled={working} aria-label={`${c.dropped ? "Restore" : "Drop"} comment on ${place}`} onClick={() => (markEdited(keyOf(c)), setComments((was) => toggleDropped(was, i)))} className={`${button} ml-auto shrink-0 py-0.5 text-xs`}>
+                      <button type="button" disabled={working} aria-label={`${c.dropped ? "Restore" : "Drop"} comment on ${place}`} onClick={() => (edited.current = true, setComments((was) => toggleDropped(was, i)))} className={`${button} ml-auto shrink-0 py-0.5 text-xs`}>
                         {c.dropped ? "Restore" : "Drop comment"}
                       </button>
                     )}
@@ -548,16 +487,7 @@ export function ReviewDraft({
         )}
         {pause && open && <PostingPause risks={pause.risks} quote={pause.quote} where="the pull request" subject="Your edit" anyway="Post it anyway" working={working || state === "applying" || !!problem} onKeep={keepEditing} onPost={() => post()} />}
         <div data-draft-actions className="sticky bottom-0 z-[1] -mx-3 -mb-2.5 flex flex-wrap items-center justify-end gap-2 border-t border-ws-sep bg-ws-win px-3 py-2">
-          <button
-            type="button"
-            data-review-pull-view
-            disabled={open && !!problem}
-            title={open && problem ? problem : open && edit ? "Your edit is saved first, so the view shows what you see here." : undefined}
-            onClick={pullView}
-            className={`${open && !canPost ? primary : button} ${open && !canPost ? "" : "mr-auto"}`}
-          >
-            Open PR view
-          </button>
+          <button type="button" onClick={() => void openOnGithub(`https://github.com/${review.repo}/pull/${review.number}`)} className={`${button} mr-auto`}>Open on GitHub</button>
           {open && (
             <>
               <button type="button" data-draft-edit disabled={working} onClick={() => card.current?.querySelector<HTMLTextAreaElement>("textarea")?.focus()} className={button}>Edit</button>

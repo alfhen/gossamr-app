@@ -11,13 +11,12 @@ export const initials = (name: string) =>
 
 export type AgeLevel = 0 | 1 | 2 | 3;
 
-/** Days quiet that turn the age chip amber, orange and red; the map webs and spiders start at the last two. */
+/** Days quiet that turn the age chip amber, orange and red. */
 export const AGE_FROM = [3, 5, 7] as const;
 
 export const ageLevel = (days: number): AgeLevel => AGE_FROM.filter((d) => days >= d).length as AgeLevel;
 
 export const AGE_TEXT: Record<AgeLevel, string> = { 0: "text-ws-ink3", 1: "text-ws-warn", 2: "text-[#d2701f]", 3: "text-ws-blocked" };
-export const AGE_FILL: Record<AgeLevel, string> = { 0: "bg-ws-ink3", 1: "bg-ws-warn", 2: "bg-[#d2701f]", 3: "bg-ws-blocked" };
 
 /** Whether an age chip is worth showing: open work that has been quiet for at least two days. */
 export const showsAge = (item: WorkItem, days: number) => item.status.category !== "done" && days >= 2;

@@ -9,7 +9,7 @@ import { TabBar } from "./TabBar";
 import { useTabs, VIEW_LABEL, type ViewMode } from "./tabsStore";
 
 /** The order the prototype shows the canvases in. */
-export const SEGMENT_ORDER: readonly ViewMode[] = ["board", "map", "list", "age"];
+export const SEGMENT_ORDER: readonly ViewMode[] = ["board", "list"];
 
 export function ViewSegment({ view, onChange }: { view: ViewMode; onChange(view: ViewMode): void }) {
   return (

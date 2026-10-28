@@ -214,7 +214,7 @@ export class MockGithub {
   reviewAccess(repo: string): ReviewAccess {
     const sample = this.repos.find((r) => r.key.toLowerCase() === repo.toLowerCase());
     const reason = (why: string) => ({ canPost: false, reason: `This GitHub token can't post reviews on ${repo} (${why}).` });
-    if (this.refused.has(repo.toLowerCase())) return { canPost: false, reason: `GitHub refused to post the review: the token can't write to pull requests in ${repo}. Open the PR view instead, or reconnect GitHub with write access.` };
+    if (this.refused.has(repo.toLowerCase())) return { canPost: false, reason: `GitHub refused to post the review: the token can't write to pull requests in ${repo}. Open the PR on GitHub instead, or reconnect GitHub with write access.` };
     if (this.reviewWrites === "none") return reason("it lacks write access to its pull requests");
     if (!sample || sample.kind === "pull") return reason("it lacks write access to its pull requests");
     return { canPost: true, reason: null };
@@ -230,7 +230,7 @@ export class MockGithub {
     const { repo, number } = intent;
     if (this.reviewWrites === "none" || !this.reviewAccess(repo).canPost) {
       this.refused.add(repo.toLowerCase());
-      throw new Error(`GitHub refused to post the review: the token can't write to pull requests in ${repo}. Open the PR view instead, or reconnect GitHub with write access.`);
+      throw new Error(`GitHub refused to post the review: the token can't write to pull requests in ${repo}. Open the PR on GitHub instead, or reconnect GitHub with write access.`);
     }
     const head = this.code.headSha(repo, number);
     if (!head) throw new Error(`GitHub couldn't find pull request #${number} in ${repo}, or the token can't see it.`);

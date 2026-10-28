@@ -384,15 +384,6 @@ export async function openAgents(page: Page) {
   }).toPass({ timeout: 10_000 });
 }
 
-/** Opens "What Jira saw from me" from the palette. */
-export async function openJiraSent(page: Page) {
-  await page.keyboard.press("ControlOrMeta+k");
-  const palette = page.getByRole("dialog", { name: "Command palette" });
-  await palette.getByRole("combobox").fill("what jira saw");
-  await palette.getByRole("option", { name: /^What Jira saw from me/ }).click();
-  await expect(page.locator("[data-jira-sent]")).toBeVisible();
-}
-
 /** Groups the Agents list by state, its lanes, which Agents does not do by default (it groups by workstream). */
 export async function groupByState(page: Page) {
   await page.getByRole("group", { name: "Group by" }).getByRole("button", { name: "State" }).click();

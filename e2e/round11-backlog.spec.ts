@@ -4,11 +4,10 @@ import { askPip, closeWorkstreamSheet, homeSettled, needsPane, needsPaneHeading,
 // Backlog items of the eleventh dogfood round: dates in the timeline (G22), where opening a need lands (G28) and the screens'
 // names and headings (G29).
 
-
 const SAMPLE = "runs=empty&prSurface=manual&pipPace=1";
 const VAGUE = "CA-408";
 
-test.describe("dates in the timeline and What Jira saw from me (G22)", () => {
+test.describe("dates in the timeline (G22)", () => {
   test("an entry from an earlier day sits under its date, and a timeline of today's entries has none", async ({ page }) => {
     await openApp(page, SAMPLE);
     await startWorkstream(page, VAGUE);
@@ -67,4 +66,3 @@ test.describe("opening a need (G28)", () => {
     }
   });
 });
-

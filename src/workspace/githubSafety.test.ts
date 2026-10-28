@@ -28,7 +28,4 @@ describe("what the app says it does on GitHub (G5, G6)", () => {
     expect(AGENTS_ON_GITHUB).not.toContain("Build");
   });
 
-  it("says What Jira saw lists only what Gossamr posted", () => {
-    expect(source("JiraSentView.tsx")).toContain("It lists only what Gossamr posted. A Build runs with your Claude settings and could reach Jira on its own; see Agent safety.");
-  });
 });

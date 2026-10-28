@@ -8,7 +8,6 @@ import { BranchIcon, ChecksMark, CommitIcon, PullIcon, ReviewChip, StatePill } f
 import { useDev } from "./devStore";
 import { codeWatch } from "./domains";
 import { openOnGithub, useGithubUi } from "./githubUi";
-import { openPullView } from "./pullViewStore";
 import { SectionCard } from "./PeekParts";
 import { keyInitials } from "./projects";
 import { useTabs } from "./tabsStore";
@@ -146,11 +145,6 @@ export function PullDetail({ change, state, now, onOpen, onRetry }: { change: Co
         </>
       )}
       <div className="flex flex-wrap gap-2">
-        {change.number != null && (
-          <button type="button" onClick={() => openPullView({ connectionId: change.connectionId, repo: change.repo, number: change.number! })} className={small}>
-            View in Gossamr
-          </button>
-        )}
         <button type="button" onClick={onOpen} className={small}>
           Open on GitHub
         </button>

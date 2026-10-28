@@ -1,6 +1,6 @@
 import fixtures from "../lib/diffHunks.fixtures.json";
 import type { ChangedFile, CodeChange, PullDiff } from "../types";
-import type { PullDiffState } from "./pullViewStore";
+import type { PullDiffState } from "./reviewDiff";
 
 const patches = fixtures.patches as Record<string, string>;
 

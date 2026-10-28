@@ -10,7 +10,6 @@ export interface FooterHint {
 
 const LEAD: Partial<Record<ViewMode, FooterHint>> = {
   board: { id: "drag", rank: 2, keys: [], text: "Drag a card to draft a status change." },
-  map: { id: "zoom", rank: 2, keys: [], text: "Scroll to zoom, drag to pan." },
 };
 
 const COMMON: FooterHint[] = [
